@@ -1,0 +1,135 @@
+# 16 — Technology Choices
+
+> **Principle: do not reinvent existing solutions.** Build only what is business logic unique to this product. Everything else is a mature, well-maintained library.
+
+Each decision below states the alternatives considered and **what would change our mind**, so a future reader can tell whether a decision is still valid rather than merely inherited.
+
+---
+
+## ADR-001
+
+### OCI client library — `go-containerregistry` vs `oras-go/v2`
+
+**Status: OPEN. Closed by measurement at M3** ([17](17-delivery-plan.md)).
+
+The most consequential library choice in the system. It gets a full section rather than a table row because the candidates are genuinely close, the obvious argument against ORAS is wrong, and the honest tiebreaker is empirical.
+
+**The design does not depend on the outcome.** [05](05-transfer-engine.md) and [08](08-verification.md) are written against the `Repository` interface in [06](06-registry-abstraction.md) §2, and [15](15-code-layout.md) §4 requires that swapping the library touch only `internal/registry/`. This ADR is a leaf decision by construction.
+
+#### The argument that is wrong, recorded so it is not re-raised
+
+> *"oras-go only does whole-artifact copies, so it cannot express a per-blob job model."*
+
+**This is false.** Below `oras.Copy`/`ExtendedCopy`, oras-go v2 exposes every primitive the layer-as-job model needs:
+
+```go
+repo.Blobs().Exists(ctx, desc)          // dedupe check
+repo.Blobs().Fetch(ctx, desc)           // streaming read
+repo.Blobs().Push(ctx, desc, reader)    // streaming write
+repo.Mount(ctx, desc, fromRepo, ...)    // cross-repository mount
+repo.Referrers(ctx, desc, artifactType) // OCI 1.1
+```
+
+Both libraries can express our unit of work. The decision must rest on something else.
+
+#### The case for `oras-go/v2`
+
+1. **Artifact-native.** Its model is `ocispec.Descriptor` plus a manifest graph, agnostic to content type. `go-containerregistry`'s ergonomic surface is `v1.Image`/`v1.Layer` — container-shaped. **Our packages explicitly contain Helm charts and configuration bundles**, which is precisely the case ORAS exists to serve. GGCR handles arbitrary manifests through raw `remote.Get`/`remote.Put`, but that is working against the grain of its high-level API.
+2. **`registry.Repository` is essentially the interface we specified.** [06](06-registry-abstraction.md) §2 is modelled on it. GGCR's `remote` package is free functions plus options rather than an interface, so substituting or faking it requires an adapter we would write ourselves.
+3. **OCI 1.1 conformance lands there first**, including referrers with the fallback tag schema — directly relevant to [08](08-verification.md) §3.
+
+#### The case for `go-containerregistry`
+
+1. **One OCI type system shared with cosign.** Cosign's registry-facing packages (`cosign/pkg/oci/remote` — signature discovery via referrers or the `sha256-<digest>.sig` tag convention) are built on `name.Reference`, `v1.Image`, `v1.Hash`. Choosing ORAS for transfer means carrying **both dependency trees** and converting `ocispec.Descriptor` ↔ `v1.Descriptor`/`v1.Hash` at every point where verification meets transfer — which in this design is every source pre-check and every destination post-check ([08](08-verification.md) §4). Two OCI type systems in one binary is a durable source of digest-handling bugs. **This is a correctness argument, not a convenience one.**
+2. `remote.WriteLayer` is a single call providing mount attempt, retry, and digest verification — roughly 30 lines of explicit orchestration in oras-go. *Convenience.*
+3. `pkg/registry` ships an in-memory OCI registry as an `http.Handler`, so engine tests need neither Docker nor testcontainers ([15](15-code-layout.md) §5). *Convenience.*
+
+#### The limit of the deciding argument
+
+`sigstore-go` itself is bundle-centric and largely GGCR-neutral; it is **cosign's registry packages** that pull GGCR. [08](08-verification.md) §3.3 asks whether signature *discovery* can be hand-rolled against `Repository.Referrers` — which is only the two mechanisms in [08](08-verification.md) §3.1–3.2, both of which our interface must expose anyway.
+
+If it can, the remaining cosign surface is bundle and certificate verification, which barely touches registry types, and **argument 1 above mostly evaporates.** That is exactly why this ADR stays open rather than being decided from the armchair.
+
+#### M3 spike — the procedure that closes it
+
+Both backends prototyped behind [06](06-registry-abstraction.md) §2, run against a real 30–60 GB package containing container images, a Helm chart, and a configuration bundle, against at least two of the four target registries.
+
+**Criteria fixed in advance, so the result cannot be rationalized afterwards:**
+
+| Criterion | Weight | Measured how |
+|---|---|---|
+| Sustained throughput; CPU and allocations per GB | High | Same package, same concurrency, both backends |
+| Mount + `Exists` fast-path hit rate | High | Fraction of blobs completing with zero bytes moved |
+| Non-image artifact handling (Helm, config bundle) | High | Lines of workaround code; raw-manifest escape hatches needed |
+| Cosign integration cost | High | Conversion code at the verify boundary; binary size with both trees |
+| Resumable/chunked upload control | Medium | Behaviour under injected mid-blob disconnect ([05](05-transfer-engine.md) §4.6) |
+| Registry-specific auth (ACR, Artifactory, Quay) | Medium | Whether vendor deltas fit the shared transport ([06](06-registry-abstraction.md) §5) |
+| Test ergonomics | Low | Docker required for unit tests, yes/no |
+
+**Ties break toward `go-containerregistry`** on the cosign type-system argument.
+
+**The losing backend is deleted, not maintained.** A permanently dual-backend registry layer would be exactly the over-engineering this design exists to avoid, and would double the conformance-testing surface forever.
+
+*API-surface caveat:* exact signatures for both libraries are to be confirmed against pinned versions at implementation time. The reasoning above is version-stable; the illustrative call signatures are not normative.
+
+---
+
+## 2. Decision table
+
+| Concern | Choice | Alternatives | Rationale | What would change our mind |
+|---|---|---|---|---|
+| **Database** | PostgreSQL | MySQL, CockroachDB, SQLite-only | `SKIP LOCKED`, partitioning, advisory locks, `JSONB` — every one of which this design uses ([03](03-persistence.md) §1) | Multi-region active-active |
+| **Queue** | Postgres table | Kafka, RabbitMQ, Redis, NATS | Volume is trivial; atomicity with state is not ([04](04-queue-and-scheduling.md) §1) | >10 k jobs/s, or external consumers |
+| **DB driver** | `pgx/v5` | `lib/pq`, `database/sql` + driver | Native protocol, better performance, first-class `COPY` and `LISTEN` if ever needed | — |
+| **SQL generation** | `sqlc` | GORM, ent, squirrel, raw | Compile-time-checked SQL from real `.sql` files. **No ORM**: our hardest queries are hand-tuned dequeues where an ORM is an obstacle, not a help | — |
+| **Dev database** | `modernc.org/sqlite` | `mattn/go-sqlite3` | **Pure Go, so `CGO_ENABLED=0` still builds a static distroless binary** ([14](14-deployment-and-development.md) §6). The cgo driver would force a fatter production image for a development convenience | — |
+| **Migrations** | `goose` | golang-migrate, atlas, dbmate | Embeddable via `embed.FS`, per-dialect directories, `NO TRANSACTION` for `CREATE INDEX CONCURRENTLY` ([03](03-persistence.md) §9) | — |
+| **HTTP router** | `chi` | stdlib `net/http`, gin, echo | `net/http`-compatible, mature middleware, no framework lock-in. **Go 1.22+ stdlib routing is now a credible alternative**; chi wins on middleware ecosystem alone, and this is a low-regret decision either way | Middleware needs shrink |
+| **CLI** | `cobra` + `koanf` | urfave/cli, kingpin, viper | kubectl-shaped grammar users already know ([13](13-cli.md)). **`koanf` over `viper`**: lighter, no global state, explicit precedence | — |
+| **Config parsing** | `sigs.k8s.io/yaml` + `go-playground/validator` | Raw yaml.v3 | Kubernetes-consistent YAML→JSON semantics, so a document behaves the same whether it is a ConfigMap or a file | — |
+| **Signing** | `sigstore-go` + cosign verify | notation-go, both | Ecosystem default ([08](08-verification.md) §2). Notary Project is behind the `Verifier` seam | A vendor requiring Notary Project |
+| **Retry** | `cenkalti/backoff/v4` | hashicorp/go-retryablehttp, hand-rolled | Full jitter, context-aware, composable. `go-retryablehttp` is transport-level and would sit awkwardly under our per-error-class caps ([10](10-state-machines.md) §6) | — |
+| **Metrics** | `prometheus/client_golang` | OTel metrics | Native Prometheus; prometheus-adapter needs it for HPA ([09](09-api.md) §9.2) | Org-wide OTel-only mandate |
+| **Tracing** | OpenTelemetry + `otelhttp` | Jaeger client, Zipkin | The standard; vendor-neutral | — |
+| **Logging** | `log/slog` | zap, zerolog | Stdlib, structured, zero dependencies. Fast enough — logging is not on the hot path; blob copying is | Profiling shows logging cost |
+| **Email** | `wneessen/go-mail` | `net/smtp`, gomail | `net/smtp` is frozen and lacks modern auth and TLS handling. Actively maintained | — |
+| **Teams** | Adaptive Cards → Power Automate workflow URL | O365 connector webhook | **O365 connectors are retired.** See §3 | — |
+| **Leader election** | `pg_advisory_lock` | k8s Lease + client-go | No client-go, no RBAC, works in local dev ([04](04-queue-and-scheduling.md) §9) | Coordinator without a database |
+| **Testing** | `testcontainers-go`, `testify` | dockertest, hand-rolled | Standard, hermetic ([15](15-code-layout.md) §5) | — |
+| **Arch linting** | `go-arch-lint` | Convention only | Dependency rules nobody checks decay ([15](15-code-layout.md) §3) | — |
+
+## 3. Traps worth naming
+
+Failure modes that are easy to hit and expensive to diagnose.
+
+**Microsoft Teams — O365 connectors are retired.** Most tutorials and much existing code still use `https://outlook.office.com/webhook/...`. That path no longer works in current tenants. The supported mechanism is an **Adaptive Card posted to a Power Automate workflow URL**, which has a different URL shape and a different payload envelope. Config calls the field `webhookUrlRef` and the documentation says which kind ([02](02-configuration.md) §4).
+
+**`CGO_ENABLED=0` and SQLite.** The obvious SQLite driver (`mattn/go-sqlite3`) requires cgo, which breaks the static distroless build. `modernc.org/sqlite` is pure Go. Getting this wrong means discovering at image-build time that a development convenience has compromised the production artifact.
+
+**HTTP/2 for large blob transfers.** Go enables h2 automatically over TLS, and it is the wrong default here — flow-control windows and head-of-line blocking on a shared connection throttle multi-GB bodies ([05](05-transfer-engine.md) §5). This must be explicitly disabled; it will not announce itself, it will just be slow.
+
+**`int64` in JSON.** Byte counts exceed 2^53. Serialize as strings (AIP-141), or lose precision silently on values large enough to be rare in testing and routine in production ([09](09-api.md) §3).
+
+**`subPath` volume mounts.** They do not receive ConfigMap or Secret updates, which would silently break config reload and VSO credential rotation ([14](14-deployment-and-development.md) §3.1).
+
+**Liveness probes that check dependencies.** Turns a database blip into a fleet-wide crash-loop ([09](09-api.md) §9.1).
+
+## 4. What we are deliberately not adding
+
+| Not using | Why |
+|---|---|
+| Redis | Nothing needs a cache. Placements are in Postgres and are small |
+| Kafka / RabbitMQ / NATS | The queue is a table ([04](04-queue-and-scheduling.md) §1) |
+| controller-runtime / CRDs | Config is ConfigMaps; Flux is already the reconciler ([02](02-configuration.md) §2) |
+| An ORM | The critical queries are hand-tuned; an ORM obstructs them |
+| gRPC | One HTTP API serves CLI, workers, and Prometheus. A second protocol would need a second auth story, a second error model, and a second client |
+| A service mesh | Two services and a database. mTLS between them is not worth a mesh |
+| An object store | Nothing is stored. Bytes stream registry to registry ([05](05-transfer-engine.md) §4.3) |
+| A workflow engine (Temporal, Argo) | The state machines are ten states across five machines ([10](10-state-machines.md)); an engine would be larger than the thing it orchestrates |
+| A separate scheduler service | It is a 10-second tick on the leader ([04](04-queue-and-scheduling.md) §10) |
+
+**Each row is a component that does not need upgrading, monitoring, securing, or explaining to the next on-call engineer.** The requirement was explicit that infrastructure stay simple; this table is where that requirement is actually honoured, and it is worth re-reading before adding anything.
+
+## 5. Go version
+
+Go 1.24+ (latest stable at implementation). Used deliberately: generics for the state machine ([10](10-state-machines.md) §1) and typed stores, `log/slog`, `errors.Join`, and range-over-func iterators for paginated registry listings.

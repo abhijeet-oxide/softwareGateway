@@ -33,6 +33,7 @@ A cloud-native platform that continuously discovers software packages published 
 
 | If you are… | Read |
 |---|---|
+| **Wondering what this tool actually does** | **[Functional Overview](../FUNCTIONAL-OVERVIEW.md)** — start there, not here |
 | Reviewing the architecture | 00 → 01 → 04 → 05 → 11 |
 | Implementing the Coordinator | 03 → 04 → 09 → 10 → 07 |
 | Implementing the Worker | 05 → 06 → 04 §4 → 11 |

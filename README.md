@@ -26,9 +26,13 @@ Three binaries, one PostgreSQL database, nothing else.
 
 Artifact bytes flow only between registries. They never enter the Coordinator, never land on a worker's disk, and never pass through the database.
 
-## Design documentation
+## Documentation
 
-**[Read the design →](docs/design/README.md)**
+**New here? [Read the Functional Overview →](docs/FUNCTIONAL-OVERVIEW.md)**
+
+What the tool does, the logical components and where they run, the file-level code layout, the CLI grouped by task, and ten day-in-the-life scenarios showing what operating it actually looks like.
+
+**Building it? [Read the design →](docs/design/README.md)**
 
 Eighteen documents covering component responsibilities, the full data model and SQL schema, queue and scheduling algorithms, the transfer engine, API surface, state machines, failure recovery, observability, deployment, and technology choices — each major decision recorded with the alternatives considered and what would change our mind.
 

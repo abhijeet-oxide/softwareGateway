@@ -26,17 +26,31 @@ This is the practical companion to [`docs/design/`](design/README.md). The desig
 | Tool | Version | Needed for |
 |---|---|---|
 | **Go** | **1.25+** | everything. Non-negotiable: `prometheus/client_golang` and the OpenTelemetry SDK both require it |
+| **Task** | 3.x | the task runner. `go install github.com/go-task/task/v3/cmd/task@latest` |
 | `git` | any | version stamping in the binary |
-| `make` | any | convenience only — every target is a `go` command you can run directly |
-| `golangci-lint` | v2.x | `make lint`. **v2, not v1** — the config file uses the v2 schema and a v1 binary rejects it |
+| `golangci-lint` | v2.x | `task lint`. **v2, not v1** — the config uses the v2 schema and a v1 binary rejects it |
 | Docker | any | **not required.** Only for Postgres and the integration suite |
 
 ```bash
 go version        # must be >= 1.25
-git --version
+task --version    # 3.x
 ```
 
-**There is no CGO anywhere.** SQLite is `modernc.org/sqlite`, a pure-Go translation, so `CGO_ENABLED=0` works on every platform and there is no C toolchain to install.
+Installing Task:
+
+```bash
+go install github.com/go-task/task/v3/cmd/task@latest   # any platform, needs Go
+brew install go-task                                     # macOS
+winget install Task.Task                                 # Windows
+```
+
+Everything Task runs is a plain `go` command. If you would rather not install it, `task --list` shows every task and `task --dry <name>` prints the commands without running them — copy and paste as you like.
+
+### Why Task and not Make
+
+The Makefile it replaced needed `bash` and `find`, so **PowerShell and cmd could not run it at all** — a Windows developer had to install Git Bash or WSL before their first build. Task ships its own shell interpreter, so the same tasks behave identically on Linux, macOS and Windows. CI now proves that on a `windows-latest` runner on every commit, which is the part that had been asserted and never tested.
+
+**There is no CGO in a shipped binary.** SQLite is `modernc.org/sqlite`, a pure-Go translation, so builds set `CGO_ENABLED=0` and there is no C toolchain to install. Tests are the exception: `go test -race` requires cgo, so `CGO_ENABLED=0` is set on the build tasks only, never globally.
 
 ---
 
@@ -45,77 +59,46 @@ git --version
 ### The short version
 
 ```bash
-make build      # → bin/coordinator, bin/worker, bin/transferctl
+task build          # → bin/coordinator, bin/worker, bin/transferctl
 ```
 
-On Windows this produces `bin/coordinator.exe`, `bin/worker.exe`, `bin/transferctl.exe`. **You should not have to rename anything.** If you are renaming binaries by hand, you are on a build from before this was fixed — pull and rebuild.
+On Windows this produces `bin/coordinator.exe`, `bin/worker.exe`, `bin/transferctl.exe`. **You never have to rename anything.** If you are, you are on a build from before this was fixed — pull and rebuild.
 
 <details>
 <summary><b>Why the <code>.exe</code> problem existed, if you hit it</b></summary>
 
-`go build` appends `.exe` on Windows **only when you do not pass `-o`**. The Makefile passed `-o bin/transferctl`, so Go wrote exactly that name — an extensionless file Windows refuses to execute.
+`go build` appends `.exe` on Windows **only when you do not pass `-o`**. The old Makefile passed `-o bin/transferctl`, so Go wrote exactly that — an extensionless file Windows refuses to execute.
 
-The Makefile now asks the toolchain for `GOOS` and appends the suffix itself:
+Task has a built-in `{{exeExt}}`, but it keys off the **runtime** OS, so `GOOS=windows task build` on Linux would have reintroduced the same bug. The Taskfile resolves the suffix against the *target* instead:
 
-```make
-GOOS ?= $(shell go env GOOS)
-ifeq ($(GOOS),windows)
-EXE := .exe
-else
-EXE :=
-endif
+```yaml
+TARGET_OS: '{{default OS (env "GOOS")}}'
+EXE: '{{if eq .TARGET_OS "windows"}}.exe{{end}}'
 ```
 
-Because it reads `GOOS` rather than sniffing the host, `GOOS=windows make build` also cross-compiles correctly from Linux or macOS.
+CI now asserts every Windows binary carries `.exe` and that no unsuffixed one exists, so this cannot come back silently.
 </details>
 
-### Windows specifically
-
-The Makefile uses `bash` and `find`, so **plain `cmd.exe` and PowerShell cannot run it.** Two options:
-
-**Option A — use a Unix shell (recommended).** Git Bash ships with Git for Windows; WSL works too.
+### Everyday tasks
 
 ```bash
-make build
-./bin/transferctl.exe version
+task                        # list every task with its description
+task build                  # all three binaries
+task build:transferctl      # just one
+task build:all              # cross-compile: 3 OSes × 2 arches × 3 binaries
+task clean                  # remove bin/, dist/, the dev database, coverage
 ```
 
-**Option B — skip Make entirely.** These are the only commands the Makefile actually runs:
+`task build` skips work when nothing changed. Unlike make, Task compares **checksums rather than timestamps**, so `touch` alone will not trigger a pointless rebuild while a real edit always does.
 
-```powershell
-# PowerShell — no Make needed
-$env:CGO_ENABLED = "0"
-go build -o bin/coordinator.exe ./cmd/coordinator
-go build -o bin/worker.exe      ./cmd/worker
-go build -o bin/transferctl.exe ./cmd/transferctl
-
-.\bin\transferctl.exe version
-```
-
-Or skip the build step altogether while developing:
-
-```powershell
-go run ./cmd/transferctl version
-```
-
-### Cross-compiling for everything
+### Cross-compiling
 
 ```bash
-make build-all      # → dist/{linux,darwin,windows}-{amd64,arm64}/
+task build:all              # → dist/{linux,darwin,windows}-{amd64,arm64}/
+GOOS=windows task build     # just one target, into bin/
 ```
 
-Six platform/arch combinations, three binaries each. Useful for handing a colleague a binary without asking them to install Go.
-
-### Build targets
-
-| Command | What it does |
-|---|---|
-| `make build` | three binaries for your platform into `bin/` |
-| `make build-all` | cross-compile for linux/darwin/windows × amd64/arm64 into `dist/` |
-| `make clean` | remove `bin/`, `dist/`, the dev database and coverage output |
-| `make docker` | build all three container images |
-
-If `make build` appears to do nothing, that is correct — the targets have proper source prerequisites and Make skips work when nothing changed. Touch a `.go` file or run `make clean build` to force it.
+Useful for handing a colleague a binary without asking them to install Go.
 
 ---
 
@@ -345,7 +328,7 @@ A full annotated example with verification, notifications, promotion targets and
 SQLite, no containers, no cluster:
 
 ```bash
-make dev-coordinator
+task dev:coordinator
 # or: go run ./cmd/coordinator --config ./dev/config.yaml
 ```
 
@@ -425,11 +408,12 @@ transferctl config validate ./products || exit $?   # 6 if any file is invalid
 ## 5. Test
 
 ```bash
-make test          # go test -race ./...   — the one to run before pushing
-make test-short    # without the race detector, faster
-make cover         # with a coverage summary
-make lint          # golangci-lint (v2)
-make check         # fmt + vet + lint + test — everything CI runs
+task test          # go test -race ./...   — the one to run before pushing
+task test:short    # without the race detector, faster
+task cover         # with a coverage summary
+task lint          # golangci-lint (v2)
+task check         # fmt + vet + lint + test
+task ci            # exactly what the pipeline runs, including the tidy check
 ```
 
 ### The unit suite does not need Docker
@@ -441,10 +425,14 @@ The fake registry does token auth, `Link`-header pagination, manifest `HEAD`/`GE
 ### Running a subset
 
 ```bash
-go test ./internal/discovery/                     # one package
-go test ./internal/discovery/ -run TestSupersession -v
-go test -race ./internal/discovery/               # the loop tests are concurrent; run these with -race
+task test:pkg -- ./internal/discovery/            # one package, with -race
+task test:run -- TestSupersession                 # everything matching a pattern, verbose
+
+# or plain go, which is all the tasks above are
+go test -race ./internal/discovery/
 ```
+
+The loop tests are genuinely concurrent — run those with `-race`, which both task shortcuts do.
 
 ### Writing tests
 
@@ -471,7 +459,7 @@ Transport: transport.Config{
 ### Integration tests
 
 ```bash
-make test-integration     # requires Docker
+task test:integration     # requires Docker
 ```
 
 Build-tagged `integration`, excluded from the default run.
@@ -485,7 +473,7 @@ From a fresh clone to seeing a package discovered, with no vendor account and no
 **1 — Build.**
 
 ```bash
-make build
+task build
 ```
 
 **2 — Point a product at a registry you control.** For a real trial, `docker run -d -p 5000:5000 registry:2` and push an image; if Docker is unavailable, use any registry you can reach.
@@ -562,13 +550,13 @@ export SWGW_ENDPOINT=http://localhost:8080
 ## 7. Troubleshooting
 
 **`bin/transferctl` will not run on Windows / has no `.exe`**
-Pull and rebuild; the Makefile now appends the suffix. If you cannot use Make, build directly: `go build -o bin/transferctl.exe ./cmd/transferctl`.
+Pull and rebuild — `task build` appends the suffix, and CI asserts it. If you would rather not install Task: `go build -o bin/transferctl.exe ./cmd/transferctl`.
 
-**`make: /bin/bash: No such file or directory` on Windows**
-The Makefile needs a Unix shell. Use Git Bash or WSL, or run the `go build` commands directly ([§2](#windows-specifically)).
+**`task build` does nothing**
+Correct — nothing changed. Task compares checksums, so it rebuilds on a real edit and skips a `touch`. `task clean build` forces it.
 
-**`make build` does nothing**
-Correct — nothing changed. `make clean build` forces it.
+**`task: command not found`**
+Install it: `go install github.com/go-task/task/v3/cmd/task@latest`, then make sure `$(go env GOPATH)/bin` is on your `PATH`. Or skip it — `task --dry <name>` prints the underlying `go` commands.
 
 **Products are not loading; the log shows `/etc/softwaregateway/products`**
 Your `configDir` did not apply. The key is top-level `configDir`, not `paths.products`. Confirm with `--config` pointing at the right file.

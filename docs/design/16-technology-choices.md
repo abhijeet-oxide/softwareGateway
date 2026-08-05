@@ -187,3 +187,20 @@ This is the right behaviour — a registry blip should be absorbed by the transp
 ### Registry backends self-register
 
 `internal/registry/factory.go` holds a name-to-constructor map that backends populate from `init`. The abstraction does not import its implementations, so `generic` — and later `acr`, `artifactory`, `quay` — can be added without editing the interface they implement. The cost is that something must import the backend for its side effect; `internal/discovery/clients.go` does, with a comment saying why.
+
+### Task replaced make
+
+*Planned:* a Makefile ([14](14-deployment-and-development.md) §5.3).
+
+*Actual:* `Taskfile.yml` and [Task](https://taskfile.dev).
+
+*Why:* the Makefile required `bash` and `find`, so on Windows it could not run at all — PowerShell and cmd were both out, and a Windows developer had to install Git Bash or WSL before their first build. The cross-platform claim was asserted and never tested, which is how `go build -o <name>` shipping binaries without a `.exe` suffix survived: nothing on any pipeline built for Windows.
+
+Task ships its own POSIX shell interpreter, so one definition runs identically on Linux, macOS and Windows. CI gained a `windows-latest` job that builds and tests there on every commit, and an assertion that every cross-compiled Windows binary carries `.exe` and no unsuffixed one exists.
+
+*Two bugs the migration itself introduced and the verification caught*, both worth recording because they are easy to repeat:
+
+- Task's built-in `{{exeExt}}` keys off the **runtime** OS, not `GOOS`. Using it would have made `GOOS=windows task build` produce an extensionless binary — reintroducing the exact bug being fixed. The Taskfile derives the suffix from `{{default OS (env "GOOS")}}` instead.
+- A Taskfile-level `env: CGO_ENABLED: '0'` broke the entire test suite: `go test -race` requires cgo. Shipped binaries are still static; the variable is set on the build tasks only.
+
+*What would change our mind:* nothing likely. The cost is one tool to install, via a single `go install` — cheaper than the Git Bash prerequisite it replaced.

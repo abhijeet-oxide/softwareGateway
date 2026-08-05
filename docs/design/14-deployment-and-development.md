@@ -252,9 +252,9 @@ Requires `prometheus-adapter` to expose the metric.
 
 ```bash
 git clone … && cd softwareGateway
-make dev-registry                     # local OCI registry with a seeded test package
-go run ./cmd/coordinator --config ./dev/config.yaml    # SQLite at ./dev/swgw.db
-go run ./cmd/worker      --config ./dev/config.yaml    # second terminal
+task dev:registry                     # local OCI registry with a seeded test package
+task dev:coordinator                  # SQLite at ./dev/swgw.db
+task dev:worker                       # second terminal
 go run ./cmd/transferctl health --endpoint http://localhost:8080
 ```
 
@@ -289,20 +289,38 @@ services:
 
 Two registries so a real end-to-end transfer can be exercised locally.
 
-### 5.3 Make targets
+### 5.3 Tasks
 
-| Target | Does |
+The task runner is [Task](https://taskfile.dev) (`Taskfile.yml`), not make. `task` alone lists everything.
+
+| Task | Does |
 |---|---|
-| `make build` | All three binaries into `bin/` |
-| `make test` | Unit tests, in-memory registry, no Docker |
-| `make test-integration` | Postgres + registries via testcontainers |
-| `make test-chaos` | The cockroach suite ([11](11-resiliency-and-backpressure.md) §5) |
-| `make lint` | `golangci-lint` |
-| `make migrate-*` | goose up / down / status |
-| `make dev-registry` | Local registry seeded with a multi-arch test package |
-| `make dev-seed` | Sample products and secrets into `./dev/` |
+| `task build` | All three binaries into `bin/` |
+| `task build:all` | Cross-compile linux/darwin/windows × amd64/arm64 into `dist/` |
+| `task test` | Unit tests with `-race`, in-process registry, **no Docker** |
+| `task test:short` | The same without the race detector |
+| `task test:pkg -- <pkg>` | One package |
+| `task test:integration` | Postgres + registries via testcontainers |
+| `task lint` | `golangci-lint` (v2) |
+| `task check` | fmt, vet, lint, test |
+| `task ci` | Exactly what the pipeline runs |
+| `task dev:coordinator` / `dev:worker` | Run against SQLite |
+| `task dev:registry` | Local registry seeded with a multi-arch test package |
+| `task validate` | Validate `./dev/products` |
 
-**`make test` must not require Docker.** Unit tests run against an in-memory OCI registry ([06](06-registry-abstraction.md) §8) and SQLite. A test suite that needs containers is a test suite developers run less often, and the difference compounds.
+> **Decision — Task over make.**
+>
+> *Alternative:* keep the Makefile.
+>
+> *Rejected because* it needed `bash` and `find`, so **PowerShell and cmd could not run it at all** — a Windows developer had to install Git Bash or WSL before their first build, and the "cross-platform" claim was never tested. Task ships its own POSIX shell interpreter (`mvdan/sh`), so one definition runs identically on all three platforms; CI now includes a `windows-latest` job that proves it on every commit.
+>
+> *It also removed a class of bug.* `go build -o <name>` does not append `.exe` on Windows, which is exactly how binaries shipped unrunnable and had to be renamed by hand. The suffix is now derived from the target platform, and CI asserts it.
+>
+> *What would change our mind:* nothing likely. The one real cost is a tool to install, and it is a single `go install` — cheaper than the Git Bash prerequisite it replaced.
+
+**`task test` must not require Docker.** Unit tests run against an in-process OCI registry ([06](06-registry-abstraction.md) §8) and SQLite. A test suite that needs containers is a test suite developers run less often, and the difference compounds.
+
+**`CGO_ENABLED=0` is set on build tasks only, never globally.** Shipped binaries are static — SQLite is pure Go — but `go test -race` requires cgo, so a global setting would silently break the entire suite.
 
 ## 6. Container images
 

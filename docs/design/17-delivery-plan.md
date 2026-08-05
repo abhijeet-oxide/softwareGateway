@@ -20,7 +20,7 @@ Skeleton, configuration, schema. Nothing transfers yet.
 - API skeleton: middleware chain including the **no-op auth slot** ([09](09-api.md) §10.1), `/healthz`, `/readyz`, `/metrics`, error model
 - `transferctl health`, `version`, `config validate`
 
-**Acceptance:** `transferctl config validate ./dev/products/` catches every error class in [13](13-cli.md) §9. Coordinator starts against SQLite with no setup. Two Coordinators elect one leader. `make test` passes without Docker.
+**Acceptance:** `transferctl config validate ./dev/products/` catches every error class in [13](13-cli.md) §9. Coordinator starts against SQLite with no setup. Two Coordinators elect one leader. `task test` passes without Docker.
 
 ### M2 — Discovery
 

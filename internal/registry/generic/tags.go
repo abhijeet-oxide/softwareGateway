@@ -54,13 +54,18 @@ func (r *Repository) ListTags(ctx context.Context, last string, limit int) ([]st
 	defer closeBody(resp)
 
 	if resp.StatusCode != http.StatusOK {
-		// A repository with no tags yet is a normal state, not a failure —
-		// some registries 404 rather than returning an empty list. Reporting
-		// it as an error would make an empty repository look broken and would
-		// back discovery off for no reason.
-		if resp.StatusCode == http.StatusNotFound {
-			return nil, "", nil
-		}
+		// A 404 is reported as ErrNotFound rather than flattened into an empty
+		// list.
+		//
+		// An earlier version swallowed it, on the grounds that a repository
+		// with no tags yet is a normal state. That put policy in the wrong
+		// place: it also made a TYPO'D REPOSITORY PATH — the most common
+		// configuration mistake there is — indistinguishable from an empty
+		// repository, so `products check` could only ever warn about it.
+		//
+		// The client reports what the registry said. Discovery, which does not
+		// want a missing repository to back off a source, treats ErrNotFound as
+		// empty at its own layer.
 		return nil, "", r.wrap("list tags", "", resp.StatusCode, resp, registry.ClassifyStatus(resp.StatusCode))
 	}
 

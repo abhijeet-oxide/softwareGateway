@@ -425,6 +425,14 @@ func (s *Scanner) listTags(ctx context.Context, client registry.Source) ([]strin
 	for page := 0; page < maxPages; page++ {
 		tags, next, err := client.ListTags(ctx, last, tagPageSize)
 		if err != nil {
+			// A repository with no tags yet is a normal state, and so is one
+			// that vanished between the catalog listing and this scan. Neither
+			// should back off the source. The CLIENT reports the 404 faithfully
+			// so `products check` can call a typo'd path what it is; deciding
+			// that discovery tolerates it belongs here.
+			if errors.Is(err, registry.ErrNotFound) {
+				return all, nil
+			}
 			return nil, fmt.Errorf("list tags for %s: %w", client.Name(), err)
 		}
 		all = append(all, tags...)

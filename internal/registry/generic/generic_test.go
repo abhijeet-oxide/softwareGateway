@@ -153,18 +153,49 @@ func (r *repeatingLister) ListTags(_ context.Context, _ string, _ int) ([]string
 	return []string{"v1.0.0", "v1.1.0"}, fmt.Sprintf("cursor-%d", r.calls), nil
 }
 
-func TestEmptyRepositoryIsNotAnError(t *testing.T) {
-	// Some registries 404 a repository with no tags. That is a normal state,
-	// not a failure: reporting it as one would make an empty repository look
-	// broken and back discovery off for no reason.
+// A 404 from tags/list is reported as ErrNotFound, not flattened into an empty
+// list.
+//
+// An earlier version swallowed it, so that a repository with no tags looked
+// normal. That put the policy in the wrong layer: it also made a TYPO'D
+// REPOSITORY PATH indistinguishable from an empty repository, so
+// `transferctl products check` could only ever warn about the single most
+// common configuration mistake there is.
+//
+// The client now reports what the registry said. Discovery tolerates
+// ErrNotFound at its own layer, because a missing repository must not back off
+// a source — that decision belongs to the caller, and it is tested there.
+func TestMissingRepositoryIsReportedNotSwallowed(t *testing.T) {
 	fake := fakeregistry.New()
 	t.Cleanup(fake.Close)
+
+	repo := newRepo(t, fake, "vendor-a/does-not-exist", transport.Config{})
+
+	_, _, err := repo.ListTags(t.Context(), "", 100)
+	if err == nil {
+		t.Fatal("a missing repository must be reported, not returned as an empty list")
+	}
+	if !errors.Is(err, registry.ErrNotFound) {
+		t.Errorf("expected ErrNotFound so callers can distinguish a typo from an "+
+			"empty repository, got %v", err)
+	}
+}
+
+// A repository that exists and has no tags is genuinely empty — a normal state
+// for a vendor repository awaiting its first release.
+func TestExistingRepositoryWithNoTagsIsEmptyNotAnError(t *testing.T) {
+	fake := fakeregistry.New()
+	t.Cleanup(fake.Close)
+
+	// Seeding a manifest with no tag creates the repository without tagging.
+	fake.AddManifest("vendor-a/empty", "", []byte(`{"schemaVersion":2}`),
+		registry.MediaTypeOCIManifest)
 
 	repo := newRepo(t, fake, "vendor-a/empty", transport.Config{})
 
 	tags, next, err := repo.ListTags(t.Context(), "", 100)
 	if err != nil {
-		t.Fatalf("an empty repository must not be an error: %v", err)
+		t.Fatalf("an existing empty repository must not be an error: %v", err)
 	}
 	if len(tags) != 0 || next != "" {
 		t.Fatalf("expected no tags, got %v / %q", tags, next)

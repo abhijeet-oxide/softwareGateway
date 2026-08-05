@@ -167,6 +167,21 @@ func (c *Client) DiscoverPackages(ctx context.Context, product, source string) (
 	return &out, err
 }
 
+// CheckConnectivity probes a product's registries, or every product's when
+// product is empty.
+//
+// Slow by nature: it makes real calls to third-party registries. Deliberately
+// separate from HealthCheck, which must not depend on them.
+func (c *Client) CheckConnectivity(ctx context.Context, product string) (*CheckConnectivityResponse, error) {
+	// The colon is an AIP-136 structural separator and must NOT be escaped.
+	path := "/api/v1/products:checkConnectivity"
+	if product != "" {
+		path = "/api/v1/products/" + url.PathEscape(product) + ":checkConnectivity"
+	}
+	var out CheckConnectivityResponse
+	return &out, c.post(ctx, path, struct{}{}, &out)
+}
+
 func (c *Client) post(ctx context.Context, path string, in, out any) error {
 	body, err := json.Marshal(in)
 	if err != nil {

@@ -107,9 +107,20 @@ func (c *Checker) CheckProduct(ctx context.Context, p *product.Product) ProductR
 		filtered   bool
 	}
 
+	// A disabled product is not probed at all: there is nothing to diagnose
+	// about configuration that is deliberately not running, and reporting
+	// failures for it would bury the products that ARE running.
+	if !p.IsEnabled() {
+		res.Status = StatusSkipped
+		return res
+	}
+
 	var jobs []job
 
 	for _, s := range p.Spec.Sources {
+		if !s.IsEnabled() {
+			continue
+		}
 		if s.EnumeratesRepositories() {
 			// A source that names no repositories finds them from the catalog,
 			// so the thing to probe is the registry itself and whether this
@@ -132,6 +143,9 @@ func (c *Checker) CheckProduct(ctx context.Context, p *product.Product) ProductR
 		}
 	}
 	for _, t := range p.Spec.Targets {
+		if !t.IsEnabled() {
+			continue
+		}
 		jobs = append(jobs, job{
 			name: t.Name, role: string(product.RoleTarget), registry: t.Registry,
 			repository: t.Repository, anonymous: t.Anonymous, creds: t.CredentialsRef,
@@ -550,6 +564,7 @@ func probeTransport(cfg registry.ClientConfig) transport.Config {
 		CABundle:              cfg.CABundle,
 		HTTPSProxy:            cfg.HTTPSProxy,
 		NoProxy:               cfg.NoProxy,
+		DirectConnect:         cfg.DirectConnect,
 		ConnectTimeout:        5 * time.Second,
 		ResponseHeaderTimeout: 10 * time.Second,
 		UserAgent:             cfg.UserAgent,
@@ -583,10 +598,19 @@ func applyNetwork(
 			cfg.CABundle = []byte(bundle.Reveal())
 		}
 		if n.Proxy != nil {
-			if n.Proxy.HTTPSProxy != "" {
+			switch {
+			case n.Proxy.Direct:
+				// Clears any inherited proxy. Without this the only way to say
+				// "everything through the corporate proxy except this one
+				// registry" is to repeat the host in noProxy at every level.
+				cfg.HTTPSProxy = ""
+				cfg.NoProxy = nil
+				cfg.DirectConnect = true
+			case n.Proxy.HTTPSProxy != "":
 				cfg.HTTPSProxy = n.Proxy.HTTPSProxy
+				cfg.DirectConnect = false
 			}
-			if len(n.Proxy.NoProxy) > 0 {
+			if len(n.Proxy.NoProxy) > 0 && !n.Proxy.Direct {
 				cfg.NoProxy = n.Proxy.NoProxy
 			}
 		}

@@ -182,6 +182,7 @@ func toAPIProduct(p *product.Product) v1.Product {
 		Description: p.Metadata.Description,
 		Owner:       p.Metadata.Owner,
 		Labels:      p.Metadata.Labels,
+		Enabled:     p.IsEnabled(),
 		ConfigHash:  p.ConfigHash,
 		Sources:     make([]v1.Repository, 0, len(p.Spec.Sources)),
 		Targets:     make([]v1.Repository, 0, len(p.Spec.Targets)),
@@ -190,6 +191,7 @@ func toAPIProduct(p *product.Product) v1.Product {
 	for _, s := range p.Spec.Sources {
 		r := v1.Repository{
 			Name:                s.Name,
+			Enabled:             s.IsEnabled(),
 			Registry:            s.Registry,
 			Repositories:        s.DeclaredRepositories(),
 			RepositoryDiscovery: s.EnumeratesRepositories(),
@@ -217,6 +219,7 @@ func toAPIProduct(p *product.Product) v1.Product {
 	for _, t := range p.Spec.Targets {
 		out.Targets = append(out.Targets, v1.Repository{
 			Name:          t.Name,
+			Enabled:       t.IsEnabled(),
 			Registry:      t.Registry,
 			Repository:    t.Repository,
 			Repositories:  []string{t.Repository},

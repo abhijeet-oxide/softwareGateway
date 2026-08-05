@@ -95,6 +95,10 @@ type Product struct {
 	Owner       string            `json:"owner,omitempty"`
 	Labels      map[string]string `json:"labels,omitempty"`
 
+	// Enabled reports whether the product runs. A disabled product is still
+	// loaded, validated and listed — it simply does nothing.
+	Enabled bool `json:"enabled"`
+
 	Sources []Repository `json:"sources"`
 	Targets []Repository `json:"targets"`
 
@@ -109,7 +113,9 @@ type Product struct {
 // Repository is the API view of a source or target.
 // Credentials are never included, in any form.
 type Repository struct {
-	Name     string `json:"name"`
+	Name string `json:"name"`
+	// Enabled reports whether this source or target participates.
+	Enabled  bool   `json:"enabled"`
 	Registry string `json:"registry"`
 	// Repository is the single repository path, for a target or a
 	// single-repository source. Empty when a source covers several.

@@ -63,6 +63,10 @@ type Config struct {
 	// Proxy settings.
 	HTTPSProxy string
 	NoProxy    []string
+	// DirectConnect bypasses proxies entirely, including any the environment
+	// sets. Distinct from an empty HTTPSProxy, which falls back to
+	// HTTPS_PROXY.
+	DirectConnect bool
 
 	// Timeouts. Note there is no overall request timeout: a large manifest is
 	// not slow, and in M3 a multi-gigabyte blob certainly is not. Stalls are
@@ -207,6 +211,13 @@ func tlsConfigFor(cfg Config) (*tls.Config, error) {
 }
 
 func proxyFor(cfg Config) (func(*http.Request) (*url.URL, error), error) {
+	if cfg.DirectConnect {
+		// Explicitly direct: not even the environment's proxy applies. A
+		// repository that asked to bypass the proxy means it, and silently
+		// honouring HTTPS_PROXY here would make the setting a no-op in exactly
+		// the deployment that needs it — one with a cluster-wide proxy.
+		return func(*http.Request) (*url.URL, error) { return nil, nil }, nil
+	}
 	if cfg.HTTPSProxy == "" {
 		// Fall back to the environment so a cluster-wide proxy still applies.
 		return http.ProxyFromEnvironment, nil

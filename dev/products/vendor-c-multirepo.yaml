@@ -102,12 +102,38 @@ spec:
         tagFilters:
           include: ['^v\d+\.\d+\.\d+$']
         maxRepositories: 100
-      # Per-source network settings override the product's where set, so one
-      # vendor reachable by a different route does not mean duplicating the
-      # whole block.
+      # Per-source network settings override the product's where set.
+      #
+      # `direct: true` bypasses the product-level proxy entirely — and the
+      # environment's, too. "Everything through the corporate proxy except this
+      # one internal registry" is the normal shape, and repeating the host in
+      # noProxy at every level is easy to get subtly wrong.
       network:
         proxy:
-          noProxy: ["internal.example.com"]
+          direct: true
+
+      # Signing trust for THIS vendor. Two vendors do not share a signing
+      # identity, so cosign replaces the product's wholesale rather than
+      # merging — a trust configuration assembled from two documents is one
+      # nobody can audit. The scalars (policy, atSource) still inherit.
+      #
+      # Executes in M5; validated now so it is correct when it arrives.
+      verification:
+        enabled: true
+        atSource: true
+        policy: warn          # still onboarding their signing
+        cosign:
+          mode: key
+          key:
+            publicKeyRef:
+              secretName: internal-registry
+              key: password   # a stand-in; a real deployment projects a PEM
+
+  # A target that is being decommissioned. `enabled: false` stops it receiving
+  # transfers without throwing away the configuration or its history.
+  #
+  # Validation rejects an autoDownload rule pointing at a disabled target,
+  # because that would otherwise fail the first time a package matched it.
 
   targets:
     - name: internal

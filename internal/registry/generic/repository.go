@@ -67,6 +67,7 @@ func FromClientConfig(c registry.ClientConfig) Config {
 			CABundle:              c.CABundle,
 			HTTPSProxy:            c.HTTPSProxy,
 			NoProxy:               c.NoProxy,
+			DirectConnect:         c.DirectConnect,
 			ConnectTimeout:        c.ConnectTimeout,
 			ResponseHeaderTimeout: c.ResponseHeaderTimeout,
 			UserAgent:             c.UserAgent,

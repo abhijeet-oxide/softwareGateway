@@ -446,3 +446,51 @@ SWGW_CONFIG_DIR=./dev go run ./cmd/coordinator
 ```
 
 with `database.driver: sqlite` as the development default — zero setup. See [14](14-deployment-and-development.md) §5.
+
+
+---
+
+## Enablement
+
+Every level of the document has an `enabled` switch, defaulting to **true** so a document that says nothing is on.
+
+| Field | Effect |
+|---|---|
+| `metadata.enabled` | the whole product runs or does not |
+| `spec.sources[].enabled` | the source exists or does not |
+| `spec.sources[].discovery.enabled` | the source is polled or not — it still exists |
+| `spec.targets[].enabled` | the target receives transfers or does not |
+
+> **Decision — disable rather than delete.**
+>
+> *Alternative:* remove the document to pause a product, which is what the design originally required.
+>
+> *Rejected because* deleting loses exactly what you most want back: the registries, credentials, filters and rules that were working. Re-creating them from memory during an incident is how a "temporary" pause becomes a subtly different configuration — and the difference is usually discovered later, by a package that quietly stopped being replicated.
+>
+> *What a disabled product still does:* it loads, it VALIDATES, and it appears in `products list` marked `DISABLED`. Validating it is the point — a mistake is reported now rather than found on the day someone re-enables it. Its `products` and `repositories` rows are DEACTIVATED, never deleted, so the packages and transfer history referencing them survive ([03](03-persistence.md) §4).
+>
+> *What would change our mind:* nothing likely. The cost is one field and a state column.
+
+**`enabled` versus `discovery.enabled` on a source** is a real distinction, not a duplicate. `enabled: false` removes the source from every purpose; `discovery.enabled: false` stops the polling while leaving the source usable for an explicit transfer request — which is what a failover mirror needs, since it must stay reachable but must not double-discover every tag the primary already found.
+
+Validation rejects the combinations that would otherwise fail silently:
+
+- every source disabled while the product is enabled — the product would discover nothing while appearing active
+- `autoDownload` enabled with no enabled target — rules would match and have nowhere to send
+- an auto-download rule naming a disabled target — this one fails the first time a package matches it, potentially weeks after the edit
+
+## Inheritance
+
+Three blocks are declared at product level and overridden per repository. The merge rule differs by block, and the difference is deliberate.
+
+| Block | Where | Merge |
+|---|---|---|
+| `network.caBundleRef` | product, source, target | set wins, unset inherits |
+| `network.proxy` | product, source, target | set wins; `direct: true` clears everything inherited |
+| `network.timeouts` | product, source, target | field by field |
+| `verification` scalars | product, source, target | field by field |
+| `verification.cosign` | product, source, target | **replaces wholesale** |
+
+**Why `cosign` is atomic.** It is one coherent trust decision — a mode plus the identity or key that mode requires. Merging field by field would silently produce combinations nobody wrote: a product's keyless `certificateIdentity` paired with a repository's `key` mode, or a Fulcio issuer left over from a block that no longer applies. A trust configuration assembled from two documents is one nobody can audit, and auditability is the entire point of verification.
+
+**Why `proxy.direct` exists.** A product-level proxy is inherited, and "everything through the corporate proxy except this one internal registry" is the normal shape. Without an explicit switch the only way to express it is to repeat the registry's own hostname in `noProxy` at every level — which works, and is easy to get subtly wrong when the host has a port or an alias. `direct: true` also bypasses `HTTPS_PROXY` from the environment: a repository that asked to go direct means it, and honouring a cluster-wide setting anyway would make the option a no-op in precisely the deployment that needs it.

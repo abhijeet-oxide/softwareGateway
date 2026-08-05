@@ -50,6 +50,10 @@ type ReconcileResult struct {
 	Deactivated  int
 	ProductsSeen int
 	ReposSeen    int
+	// Disabled counts rows switched off by `enabled: false` rather than by
+	// having been removed from configuration. Worth separating in the log: one
+	// is a deliberate pause, the other is a deletion.
+	Disabled int
 }
 
 // Reconcile makes the catalog tables match the loaded configuration.
@@ -75,8 +79,17 @@ func (c *Catalog) Reconcile(ctx context.Context, products []*product.Product) (R
 		if err != nil {
 			return res, err
 		}
-		activeProducts[productID] = true
 		res.ProductsSeen++
+
+		// A DISABLED product keeps its row — its packages and transfer history
+		// reference it — but is left out of the active set, so deactivation
+		// below switches it off. Deleting the row instead would orphan exactly
+		// the history somebody disabled the product to preserve.
+		if !p.IsEnabled() {
+			res.Disabled++
+			continue
+		}
+		activeProducts[productID] = true
 
 		ref := ProductRef{ID: productID, Name: p.Metadata.Name, Repositories: map[string]int64{}}
 
@@ -85,9 +98,14 @@ func (c *Catalog) Reconcile(ctx context.Context, products []*product.Product) (R
 			if err != nil {
 				return res, err
 			}
-			activeRepos[repoID] = true
 			ref.Repositories[r.Name] = repoID
 			res.ReposSeen++
+
+			if !r.Enabled {
+				res.Disabled++
+				continue
+			}
+			activeRepos[repoID] = true
 		}
 
 		res.Products[p.Metadata.Name] = ref

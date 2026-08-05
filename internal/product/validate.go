@@ -84,8 +84,64 @@ func (p *Product) Validate(resolver *SecretResolver) error {
 	errs = append(errs, p.validateVerification(resolver)...)
 	errs = append(errs, p.validateNotifications(resolver)...)
 	errs = append(errs, validateNetwork("spec.network", &p.Spec.Network, resolver)...)
+	errs = append(errs, p.validateEnablement()...)
 
 	return errs.ErrOrNil()
+}
+
+// validateEnablement checks the relationships `enabled: false` can break.
+//
+// A DISABLED product is validated exactly like an enabled one — the point of
+// disabling rather than deleting is that the configuration stays correct and
+// re-enabling is safe. So these rules apply either way.
+func (p *Product) validateEnablement() Errors {
+	var errs Errors
+
+	// Every source disabled means the product discovers nothing while looking
+	// configured. If that is intended, disable the product and say so.
+	if len(p.Spec.Sources) > 0 && len(p.EnabledSources()) == 0 && p.IsEnabled() {
+		errs = append(errs, Error{
+			"spec.sources",
+			"every source is disabled",
+			"this product would discover nothing while appearing active — " +
+				"disable the product itself with `metadata.enabled: false` instead",
+		})
+	}
+
+	if len(p.Spec.Targets) > 0 && len(p.EnabledTargets()) == 0 && p.IsEnabled() &&
+		p.Spec.AutoDownload.Enabled {
+		errs = append(errs, Error{
+			"spec.targets",
+			"every target is disabled but autoDownload is enabled",
+			"rules would match packages and have nowhere to send them",
+		})
+	}
+
+	// A rule pointing at a disabled target is the failure that only shows up
+	// when a package matches — potentially weeks later.
+	enabled := map[string]bool{}
+	for _, t := range p.EnabledTargets() {
+		enabled[t.Name] = true
+	}
+	declared := map[string]bool{}
+	for _, t := range p.Spec.Targets {
+		declared[t.Name] = true
+	}
+
+	for i, r := range p.Spec.AutoDownload.Rules {
+		for j, name := range r.Targets {
+			if declared[name] && !enabled[name] {
+				errs = append(errs, Error{
+					fmt.Sprintf("spec.autoDownload.rules[%d].targets[%d]", i, j),
+					fmt.Sprintf("%q is disabled", name),
+					"re-enable the target, or point the rule somewhere else — " +
+						"otherwise this rule fails the first time a package matches it",
+				})
+			}
+		}
+	}
+
+	return errs
 }
 
 // validateSourceRepositories checks the repository set a source declares.
@@ -313,6 +369,7 @@ func (p *Product) validateSources(resolver *SecretResolver) Errors {
 			}
 		}
 		errs = append(errs, validateNetwork(path+".network", s.Network, resolver)...)
+		errs = append(errs, validateCosign(path+".verification", s.Verification, resolver)...)
 
 		if d := s.Discovery.Interval.Duration(); d < 0 {
 			errs = append(errs, Error{path + ".discovery.interval", "must not be negative", ""})
@@ -336,6 +393,8 @@ func (p *Product) validateTargets(resolver *SecretResolver) Errors {
 		// pushed, and "push to whatever the catalog contains" is not a thing.
 		errs = append(errs, validateRepoCommon(path, t.Name, t.Registry, t.Repository,
 			t.Type, t.Anonymous, t.CredentialsRef, resolver, true)...)
+		errs = append(errs, validateNetwork(path+".network", t.Network, resolver)...)
+		errs = append(errs, validateCosign(path+".verification", t.Verification, resolver)...)
 
 		if prev, dup := seen[t.Name]; dup && t.Name != "" {
 			errs = append(errs, Error{path + ".name", fmt.Sprintf("%q duplicates spec.targets[%d]", t.Name, prev), ""})
@@ -430,8 +489,24 @@ func (p *Product) validateAutoDownload() Errors {
 // validateVerification catches the third headline error class: a keyless
 // policy with no identity constraint.
 func (p *Product) validateVerification(resolver *SecretResolver) Errors {
+	return validateVerificationAt("spec.verification", p.Spec.Verification, resolver)
+}
+
+// validateCosign checks a per-repository verification override.
+//
+// The same rules as the product's, at a different path — extracted rather than
+// duplicated, because the keyless-identity check below is the one that stops a
+// trust configuration that looks secure and is not, and two copies of it would
+// eventually differ.
+func validateCosign(path string, v *Verification, resolver *SecretResolver) Errors {
+	if v == nil {
+		return nil
+	}
+	return validateVerificationAt(path, *v, resolver)
+}
+
+func validateVerificationAt(path string, v Verification, resolver *SecretResolver) Errors {
 	var errs Errors
-	v := p.Spec.Verification
 	if !v.Enabled {
 		return nil
 	}
@@ -439,14 +514,14 @@ func (p *Product) validateVerification(resolver *SecretResolver) Errors {
 	switch v.Policy {
 	case PolicyEnforce, PolicyWarn:
 	case "":
-		errs = append(errs, Error{"spec.verification.policy", "required when verification is enabled", "one of enforce, warn"})
+		errs = append(errs, Error{path + ".policy", "required when verification is enabled", "one of enforce, warn"})
 	default:
-		errs = append(errs, Error{"spec.verification.policy", fmt.Sprintf("%q is not one of enforce, warn", v.Policy), ""})
+		errs = append(errs, Error{path + ".policy", fmt.Sprintf("%q is not one of enforce, warn", v.Policy), ""})
 	}
 
 	if !v.AtSource && !v.AtDestination {
 		errs = append(errs, Error{
-			"spec.verification",
+			path,
 			"neither atSource nor atDestination is set",
 			"verification is enabled but would never run",
 		})
@@ -455,7 +530,7 @@ func (p *Product) validateVerification(resolver *SecretResolver) Errors {
 	switch v.Cosign.Mode {
 	case CosignKeylessMode:
 		if v.Cosign.Keyless == nil {
-			errs = append(errs, Error{"spec.verification.cosign.keyless", "required in keyless mode", ""})
+			errs = append(errs, Error{path + ".cosign.keyless", "required in keyless mode", ""})
 			break
 		}
 		// THE important one. A keyless policy without an identity constraint
@@ -464,32 +539,32 @@ func (p *Product) validateVerification(resolver *SecretResolver) Errors {
 		// here prevents a configuration that looks secure and is not.
 		if v.Cosign.Keyless.CertificateIdentity == "" {
 			errs = append(errs, Error{
-				"spec.verification.cosign.keyless.certificateIdentity",
+				path + ".cosign.keyless.certificateIdentity",
 				"required in keyless mode",
 				"without it, any valid Sigstore signature would be accepted — it would prove someone signed the artifact, not that the vendor did",
 			})
 		}
 		if v.Cosign.Keyless.CertificateOidcIssuer == "" {
 			errs = append(errs, Error{
-				"spec.verification.cosign.keyless.certificateOidcIssuer",
+				path + ".cosign.keyless.certificateOidcIssuer",
 				"required in keyless mode",
 				"without it, an identity from any OIDC issuer would be accepted",
 			})
 		}
-		errs = append(errs, validateSecretRef("spec.verification.cosign.keyless.rekorPublicKeysRef", v.Cosign.Keyless.RekorPublicKeysRef, resolver)...)
-		errs = append(errs, validateSecretRef("spec.verification.cosign.keyless.fulcioCertsRef", v.Cosign.Keyless.FulcioCertsRef, resolver)...)
+		errs = append(errs, validateSecretRef(path+".cosign.keyless.rekorPublicKeysRef", v.Cosign.Keyless.RekorPublicKeysRef, resolver)...)
+		errs = append(errs, validateSecretRef(path+".cosign.keyless.fulcioCertsRef", v.Cosign.Keyless.FulcioCertsRef, resolver)...)
 
 	case CosignKeyMode:
 		if v.Cosign.Key == nil || v.Cosign.Key.PublicKeyRef == nil {
-			errs = append(errs, Error{"spec.verification.cosign.key.publicKeyRef", "required in key mode", ""})
+			errs = append(errs, Error{path + ".cosign.key.publicKeyRef", "required in key mode", ""})
 		} else {
-			errs = append(errs, validateSecretRef("spec.verification.cosign.key.publicKeyRef", v.Cosign.Key.PublicKeyRef, resolver)...)
+			errs = append(errs, validateSecretRef(path+".cosign.key.publicKeyRef", v.Cosign.Key.PublicKeyRef, resolver)...)
 		}
 
 	case "":
-		errs = append(errs, Error{"spec.verification.cosign.mode", "required when verification is enabled", "one of keyless, key"})
+		errs = append(errs, Error{path + ".cosign.mode", "required when verification is enabled", "one of keyless, key"})
 	default:
-		errs = append(errs, Error{"spec.verification.cosign.mode", fmt.Sprintf("%q is not one of keyless, key", v.Cosign.Mode), ""})
+		errs = append(errs, Error{path + ".cosign.mode", fmt.Sprintf("%q is not one of keyless, key", v.Cosign.Mode), ""})
 	}
 
 	return errs

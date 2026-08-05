@@ -425,6 +425,55 @@ Why first-match rather than all-match: two rules matching one tag with different
 
 `enabled: false` turns the rules off without deleting them — useful while investigating whether a vendor's tagging changed.
 
+#### Turning things off without deleting them
+
+`enabled: false` at three levels. Every one defaults to **true**, so a document
+that says nothing is on.
+
+```yaml
+metadata:
+  name: vendor-a
+  enabled: false          # the whole product stops
+
+spec:
+  sources:
+    - name: primary
+      enabled: false      # this source stops entirely
+      discovery:
+        enabled: false    # ...or just stop POLLING it (see below)
+  targets:
+    - name: decommissioned
+      enabled: false      # stops receiving transfers
+```
+
+**Why not just delete the file?** Because deleting loses the thing you most want back — the exact registries, credentials, filters and rules that were working. Re-creating it from memory during an incident is how a "temporary" pause becomes a subtly different configuration.
+
+A disabled product is still **loaded, validated and listed**. It just does nothing:
+
+```
+NAME     STATE      SOURCES   REPOSITORIES   TARGETS   DISCOVERY  ...
+live     active     1         1              1         1 of 1
+paused   DISABLED   1         1              1         1 of 1
+
+1 product(s) disabled: still configured and validated, but not running.
+Re-enable with `metadata.enabled: true`; their discovered packages are kept.
+```
+
+Validation still runs on it, deliberately — a mistake is reported now rather than discovered on the day someone re-enables it. Already-discovered packages are kept, and the catalog row is deactivated rather than deleted, so the transfer history that references it survives.
+
+`transferctl products check` reports a disabled product as `[skip]` rather than probing it: there is nothing to diagnose about configuration that is deliberately not running.
+
+**`enabled: false` vs `discovery.enabled: false` on a source** — a real distinction:
+
+| | Effect |
+|---|---|
+| `enabled: false` | the source does not exist for any purpose |
+| `discovery.enabled: false` | the source exists and can be transferred from on request, but is not polled |
+
+Use the first when a vendor relationship is paused. Use the second for a failover mirror that must stay usable but must not double-discover every tag.
+
+Validation catches the combinations that would fail silently: every source disabled while the product is on, `autoDownload` enabled with no enabled target, and a rule pointing at a disabled target — that last one would otherwise fail the first time a package matched it, potentially weeks later.
+
 #### TLS: private and internal CAs
 
 Put the CA bundle in a secret and point `network.caBundleRef` at it. It works at product level and per source or target:
@@ -452,12 +501,87 @@ spec:
 
 The bundle is a PEM file at `<configDir>/secrets/internal-ca/ca.crt`, projected by VSO in-cluster.
 
+**Per-repository proxies.** Different registries routinely need different routes. Set fields win, unset ones inherit:
+
+```yaml
+spec:
+  network:
+    proxy:
+      httpsProxy: http://corporate-proxy:3128     # the default for everything
+
+  sources:
+    - name: vendor-behind-other-proxy
+      network:
+        proxy:
+          httpsProxy: http://dmz-proxy:8080       # a different one
+
+    - name: internal-registry
+      network:
+        proxy:
+          direct: true                            # no proxy at all
+```
+
+`direct: true` exists because a product-level proxy is **inherited**, and "everything through the corporate proxy except this one internal registry" is the normal shape. It also ignores `HTTPS_PROXY` from the environment — a repository that asked to bypass the proxy means it, and silently honouring a cluster-wide setting would make the option a no-op in exactly the deployment that needs it.
+
+Targets take the same block: a destination inside the datacentre and a vendor outside it need different routes.
+
+#### Signing trust per repository
+
+Two vendors do not share a signing identity, so `verification` sits on sources and targets as well as on the product:
+
+```yaml
+spec:
+  verification:                          # the default for everything
+    enabled: true
+    policy: enforce
+    atSource: true
+    cosign:
+      mode: keyless
+      keyless:
+        certificateIdentity: 'https://github.com/vendor-a/...'
+        certificateOidcIssuer: 'https://token.actions.githubusercontent.com'
+
+  sources:
+    - name: vendor-b
+      verification:
+        enabled: true
+        atSource: true
+        policy: warn                     # still onboarding their signing
+        cosign:
+          mode: key                      # they use a key, not keyless
+          key:
+            publicKeyRef: {secretName: vendor-b-cosign}
+```
+
+The merge is deliberately asymmetric:
+
+- **Scalars inherit.** `policy`, `transferSignatures` and the rest are overridden individually, so a product states its posture once.
+- **`cosign` replaces wholesale.** It is one coherent trust decision — a mode plus the identity or key that mode requires. Merging it field by field would silently produce combinations nobody wrote: a product's keyless certificate identity paired with a repository's key mode. A trust configuration assembled from two documents is one nobody can audit.
+
+Every rule that applies to the product's cosign block applies to a repository's — including the important one, that keyless mode without `certificateIdentity` is rejected, because it would verify that *someone* signed the artifact rather than that the vendor did.
+
+> Verification **executes** in M5. This is the configuration for it, validated now so it is correct when the machinery arrives.
+
 Two properties worth knowing:
 
 - It is **appended to the system roots, never replacing them.** A product that adds a private CA still needs to reach public registries and Sigstore.
 - **There is deliberately no `insecureSkipVerify`.** Disabling verification is never the right fix, and an option to do it gets set in production "temporarily" exactly once. Supply the CA instead.
 
 A complete example is in [`dev/products/vendor-c-multirepo.yaml`](../dev/products/vendor-c-multirepo.yaml).
+
+#### Why `metadata.name` must be lowercase
+
+Because it becomes a **Kubernetes object name**. Products are ConfigMaps, and RFC 1123 requires lowercase alphanumerics and hyphens — an uppercase product name simply cannot be applied to a cluster. Everything else (API paths, metric labels, database rows) would tolerate mixed case; the cluster will not, and finding that out at `kubectl apply` rather than at `config validate` is a worse experience.
+
+`displayName` is the field for human-facing casing, and it has no restrictions:
+
+```yaml
+metadata:
+  name: vendor-a-platform             # the machine identity
+  displayName: "Vendor A Platform Suite"   # what people read
+```
+
+`displayName` is what `products describe` shows.
 
 #### Credentials
 

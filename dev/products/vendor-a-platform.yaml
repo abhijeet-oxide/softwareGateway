@@ -1,0 +1,116 @@
+apiVersion: softwaregateway.io/v1alpha1
+kind: Product
+
+metadata:
+  name: vendor-a-platform
+  displayName: "Vendor A Platform Suite"
+  description: "Core platform, shipped quarterly. Sample product for local development."
+  owner: platform-infra@example.com
+  labels:
+    tier: critical
+    vendor: vendor-a
+
+spec:
+  sources:
+    - name: primary
+      registry: registry.vendor-a.example.com
+      repository: platform/suite
+      credentialsRef:
+        secretName: vendor-a-registry
+      discovery:
+        enabled: true
+        interval: 15m
+        tagFilters:
+          include: ['^v\d+\.\d+\.\d+$']
+          exclude: ['-(rc|beta|alpha)\.']
+      rateLimits:
+        maxConcurrentDownloads: 16
+        maxConnections: 32
+        requestsPerSecond: 50
+        burst: 100
+
+    - name: mirror
+      registry: registry-eu.vendor-a.example.com
+      repository: platform/suite
+      credentialsRef:
+        secretName: vendor-a-registry
+      discovery:
+        # Failover only — enabling discovery here would double-discover every
+        # tag, since both repositories serve the same content.
+        enabled: false
+      rateLimits:
+        maxConcurrentDownloads: 8
+        maxConnections: 16
+
+  targets:
+    - name: lab
+      registry: internal.example.com
+      repository: vendor-a/platform
+      type: generic
+      credentialsRef:
+        secretName: internal-registry
+      default: true
+      rateLimits:
+        maxConcurrentUploads: 24
+        maxConcurrentDownloads: 24
+        maxConnections: 64
+        requestsPerSecond: 200
+        burst: 400
+
+    - name: production
+      # Same registry as lab, different repository — so a lab→production
+      # promotion can use cross-repository mount and move almost no bytes.
+      registry: internal.example.com
+      repository: vendor-a/platform-prod
+      type: generic
+      credentialsRef:
+        secretName: internal-registry
+      promotionOnly: true
+      rateLimits:
+        maxConcurrentUploads: 12
+        maxConcurrentDownloads: 12
+        maxConnections: 32
+
+  autoDownload:
+    enabled: true
+    rules:
+      # Evaluated in order; first match wins.
+      - name: ga-releases
+        tagPattern: '^v\d+\.\d+\.\d+$'
+        targets: [lab]
+        priority: 100
+        verifyBeforeTransfer: true
+
+      - name: release-candidates
+        tagPattern: '^v\d+\.\d+\.\d+-rc\.\d+$'
+        targets: [lab]
+        priority: 10
+
+  verification:
+    enabled: true
+    policy: enforce
+    atSource: true
+    atDestination: true
+    transferSignatures: true
+    cosign:
+      mode: keyless
+      keyless:
+        # Both constraints are REQUIRED. Without certificateIdentity, any valid
+        # Sigstore signature would be accepted — proving someone signed the
+        # artifact, not that the vendor did.
+        certificateIdentity: 'https://github.com/vendor-a/platform/.github/workflows/release.yaml@refs/heads/main'
+        certificateOidcIssuer: 'https://token.actions.githubusercontent.com'
+
+  notifications:
+    enabled: true
+    channels:
+      - name: platform-email
+        type: email
+        email:
+          recipients:
+            - platform-infra@example.com
+    subscriptions:
+      - events: [PackageDiscovered]
+        channels: [platform-email]
+      - events: [TransferFailed, VerificationFailed]
+        channels: [platform-email]

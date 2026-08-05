@@ -13,7 +13,7 @@ Milestones are sized so each ends at something **demonstrable**, not at "the per
 Skeleton, configuration, schema. Nothing transfers yet.
 
 - `cmd/{coordinator,worker,transferctl}` building and running
-- Package layout and dependency rules with `go-arch-lint` in CI ([15](15-code-layout.md) §3)
+- Package layout and dependency rules enforced by `depguard` inside golangci-lint ([15](15-code-layout.md) §3)
 - Product config loader: parsing, validation, `fsnotify` reload, secret resolution ([02](02-configuration.md))
 - Full schema and migrations, both dialects ([03](03-persistence.md))
 - `platform/`: logging, metrics, tracing, health, backoff, state machine, leader election
@@ -146,7 +146,7 @@ A milestone is complete when **all** hold:
 
 1. Acceptance criteria demonstrated on real infrastructure, not only in tests.
 2. Unit and integration tests pass in CI; coverage on new domain packages ≥ 70%.
-3. `golangci-lint` and `go-arch-lint` clean.
+3. `golangci-lint` clean (which includes the `depguard` dependency-direction rules).
 4. Metrics and audit events emitted for new behaviour ([12](12-observability-and-audit.md)).
 5. Every state persisted has a `CHECK` constraint and a transition table entry ([10](10-state-machines.md)).
 6. Design documents updated where implementation diverged — **the divergence is written down, not silently absorbed.**

@@ -1,0 +1,126 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  # prometheus/client_golang and the OTel stack require Go 1.25, which raised
+  # the module's floor from the 1.24 originally planned. See docs/design/16 §5.
+  GO_VERSION: "1.25"
+
+jobs:
+  build:
+    name: Build and test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache: true
+
+      - name: Verify go.mod is tidy
+        run: |
+          go mod tidy
+          git diff --exit-code go.mod go.sum \
+            || { echo "::error::go.mod/go.sum are not tidy — run 'go mod tidy'"; exit 1; }
+
+      - name: Build
+        run: go build ./...
+
+      - name: Vet
+        run: go vet ./...
+
+      # Unit tests MUST NOT require Docker. They run against SQLite and an
+      # in-memory registry, because a suite that needs containers is a suite
+      # developers run less often — and the difference compounds.
+      - name: Test
+        run: go test -race ./...
+
+      - name: Verify binaries run
+        run: |
+          go run ./cmd/coordinator --version
+          go run ./cmd/worker --version
+          go run ./cmd/transferctl version --client
+
+  lint:
+    name: Lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache: true
+
+      - uses: golangci/golangci-lint-action@v6
+        with:
+          # v2 config schema; a v1 config fails against a v2 binary.
+          version: v2.5.0
+
+  config:
+    name: Validate product configuration
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache: true
+
+      # The compensation for configuring products as ConfigMaps rather than
+      # CRDs: there is no admission webhook, so the same validator the
+      # Coordinator runs at load runs here, before the pull request merges.
+      - name: Validate sample products
+        run: go run ./cmd/transferctl config validate ./dev/products
+
+      # The validator must actually reject bad configuration. A validator that
+      # passes everything is worse than none, because it is trusted.
+      - name: Confirm the validator rejects the broken fixture
+        run: |
+          if go run ./cmd/transferctl config validate ./dev/products-invalid; then
+            echo "::error::the broken fixture was accepted — the validator is not working"
+            exit 1
+          fi
+          echo "validator correctly rejected the broken fixture"
+
+  schema:
+    name: Schema boots end to end
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache: true
+
+      # Proves the zero-setup development path stays working: no cluster, no
+      # containers, no manual migration step.
+      - name: Coordinator boots on SQLite and serves its probes
+        run: |
+          go run ./cmd/coordinator --config ./dev/config.yaml &
+          COORD=$!
+          trap 'kill $COORD 2>/dev/null || true' EXIT
+
+          for i in $(seq 1 40); do
+            if curl -fsS http://localhost:8080/readyz >/dev/null 2>&1; then
+              break
+            fi
+            sleep 0.5
+          done
+
+          curl -fsS http://localhost:8080/healthz
+          curl -fsS http://localhost:8080/readyz
+          curl -fsS http://localhost:8080/metrics | grep -q 'softwaregateway_build_info'
+          curl -fsS http://localhost:8080/api/v1/products | grep -q 'vendor-a-platform'
+          echo "coordinator booted, migrated and served products"

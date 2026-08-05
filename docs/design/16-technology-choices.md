@@ -86,7 +86,7 @@ Both backends prototyped behind [06](06-registry-abstraction.md) §2, run agains
 | **Migrations** | `goose` | golang-migrate, atlas, dbmate | Embeddable via `embed.FS`, per-dialect directories, `NO TRANSACTION` for `CREATE INDEX CONCURRENTLY` ([03](03-persistence.md) §9) | — |
 | **HTTP router** | `chi` | stdlib `net/http`, gin, echo | `net/http`-compatible, mature middleware, no framework lock-in. **Go 1.22+ stdlib routing is now a credible alternative**; chi wins on middleware ecosystem alone, and this is a low-regret decision either way | Middleware needs shrink |
 | **CLI** | `cobra` + `koanf` | urfave/cli, kingpin, viper | kubectl-shaped grammar users already know ([13](13-cli.md)). **`koanf` over `viper`**: lighter, no global state, explicit precedence | — |
-| **Config parsing** | `sigs.k8s.io/yaml` + `go-playground/validator` | Raw yaml.v3 | Kubernetes-consistent YAML→JSON semantics, so a document behaves the same whether it is a ConfigMap or a file | — |
+| **Config parsing** | `sigs.k8s.io/yaml`, hand-rolled validation | Raw yaml.v3; `go-playground/validator` | Kubernetes-consistent YAML→JSON semantics, so a document behaves the same whether it is a ConfigMap or a file. **Validation is hand-rolled — see the M1 note below** | — |
 | **Signing** | `sigstore-go` + cosign verify | notation-go, both | Ecosystem default ([08](08-verification.md) §2). Notary Project is behind the `Verifier` seam | A vendor requiring Notary Project |
 | **Retry** | `cenkalti/backoff/v4` | hashicorp/go-retryablehttp, hand-rolled | Full jitter, context-aware, composable. `go-retryablehttp` is transport-level and would sit awkwardly under our per-error-class caps ([10](10-state-machines.md) §6) | — |
 | **Metrics** | `prometheus/client_golang` | OTel metrics | Native Prometheus; prometheus-adapter needs it for HPA ([09](09-api.md) §9.2) | Org-wide OTel-only mandate |
@@ -96,7 +96,7 @@ Both backends prototyped behind [06](06-registry-abstraction.md) §2, run agains
 | **Teams** | Adaptive Cards → Power Automate workflow URL | O365 connector webhook | **O365 connectors are retired.** See §3 | — |
 | **Leader election** | `pg_advisory_lock` | k8s Lease + client-go | No client-go, no RBAC, works in local dev ([04](04-queue-and-scheduling.md) §9) | Coordinator without a database |
 | **Testing** | `testcontainers-go`, `testify` | dockertest, hand-rolled | Standard, hermetic ([15](15-code-layout.md) §5) | — |
-| **Arch linting** | `go-arch-lint` | Convention only | Dependency rules nobody checks decay ([15](15-code-layout.md) §3) | — |
+| **Arch linting** | `depguard` (inside golangci-lint) | `go-arch-lint`; convention only | Dependency rules nobody checks decay ([15](15-code-layout.md) §3). **Changed from `go-arch-lint` during M1 — see below** | — |
 
 ## 3. Traps worth naming
 
@@ -132,4 +132,32 @@ Failure modes that are easy to hit and expensive to diagnose.
 
 ## 5. Go version
 
-Go 1.24+ (latest stable at implementation). Used deliberately: generics for the state machine ([10](10-state-machines.md) §1) and typed stores, `log/slog`, `errors.Join`, and range-over-func iterators for paginated registry listings.
+**Go 1.25+.** Used deliberately: generics for the state machine ([10](10-state-machines.md) §1) and typed stores, `log/slog`, `errors.Join`, `t.Context()` in tests, and range-over-func iterators for paginated registry listings.
+
+> **Revised during M1 from the 1.24 originally specified.** `prometheus/client_golang` and the OpenTelemetry stack now declare `go 1.25`, so `go mod tidy` raised the module directive. Pinning the observability stack backwards to preserve 1.24 would mean running behind on metrics and tracing for no benefit, so 1.25 is the floor. Container images build on `golang:1.25` and CI pins the same.
+
+---
+
+## 6. Divergences recorded during implementation
+
+Doc 17 §4 item 6 requires that implementation divergences be written down rather than silently absorbed. These were found while building M1.
+
+### `go-playground/validator` was dropped
+
+*Planned:* struct-tag validation for product configuration.
+
+*Actual:* hand-rolled validation in `internal/product/validate.go`.
+
+*Why:* the three error classes that justify the validator's existence ([13](13-cli.md) §9) are a non-compiling `tagPattern`, a rule naming an undeclared target, and keyless verification with no `certificateIdentity`. All three are semantic or cross-field, and **none is expressible as a struct tag.** The library would have covered only the trivial field checks — each about three lines by hand — while still needing its messages translated into the `spec.path[i].field` form the CLI prints. Hand-rolling produced better errors *and* removed a dependency, which is what §4 of this document asks for.
+
+### `depguard` replaced `go-arch-lint`
+
+*Planned:* `go-arch-lint` enforcing the dependency direction rules in [15](15-code-layout.md) §3.
+
+*Actual:* `depguard` rules inside the existing `golangci-lint` pass.
+
+*Why:* it encodes the same rules — platform never imports a domain package, domain never imports `api`, store never imports domain — with no additional tool to install in CI and no second config format. One lint invocation, one place to look when it fails.
+
+### `revive`'s `exported` rule is disabled
+
+It fired ~50 times, almost entirely on state-machine and enum constants whose names already carry their meaning. `// JobPending is the pending state` is the restatement-of-identifier noise that teaches readers to skip comments. The narrative lives in package doc comments and in this document set. Types and functions with non-obvious behaviour are documented regardless — enforced by review, which can tell explanation from repetition.

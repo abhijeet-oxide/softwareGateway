@@ -1,0 +1,36 @@
+# syntax=docker/dockerfile:1
+#
+# Coordinator image. See docs/design/14-deployment-and-development.md section 6.
+#
+# golang:1.25 rather than 1.24: prometheus/client_golang and the OTel stack
+# require Go 1.25, which raised the module's floor. Recorded in docs/design/16.
+
+FROM golang:1.25 AS build
+WORKDIR /src
+
+# Dependencies first so a source-only change does not re-download the module
+# graph on every build.
+COPY go.mod go.sum ./
+RUN go mod download
+
+COPY . .
+
+ARG VERSION=dev
+ARG COMMIT=unknown
+ARG BUILD_DATE=unknown
+
+# CGO_ENABLED=0 produces a static binary for distroless. This is only possible
+# because the SQLite driver is modernc.org/sqlite (pure Go); the cgo driver
+# would force a glibc base image for what is a development-only convenience.
+RUN CGO_ENABLED=0 go build -trimpath \
+      -ldflags="-s -w \
+        -X github.com/abhijeet-oxide/softwareGateway/internal/platform/version.Version=${VERSION} \
+        -X github.com/abhijeet-oxide/softwareGateway/internal/platform/version.Commit=${COMMIT} \
+        -X github.com/abhijeet-oxide/softwareGateway/internal/platform/version.Date=${BUILD_DATE}" \
+      -o /out/coordinator ./cmd/coordinator
+
+FROM gcr.io/distroless/static-debian12:nonroot
+COPY --from=build /out/coordinator /coordinator
+USER nonroot:nonroot
+EXPOSE 8080
+ENTRYPOINT ["/coordinator"]

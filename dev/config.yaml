@@ -1,0 +1,65 @@
+# Local development configuration.
+#
+# The zero-setup path: SQLite, no cluster, no containers.
+#
+#   go run ./cmd/coordinator --config ./dev/config.yaml
+#   go run ./cmd/worker      --config ./dev/config.yaml
+#   go run ./cmd/transferctl health
+#
+# The same loader reads this file and ./dev/products as a plain directory that
+# it reads as projected volumes in Kubernetes — which is the payoff for
+# choosing volume mounts over the Kubernetes API. See docs/design/02 section 3.
+apiVersion: softwaregateway.io/v1alpha1
+kind: SystemConfig
+
+# Root for products/ and secrets/. In-cluster this is /etc/softwaregateway.
+configDir: ./dev
+
+server:
+  address: :8080
+  shutdownGracePeriod: 15s
+
+database:
+  # SQLite is the DEVELOPMENT default and is not supported in production; the
+  # Coordinator warns about it at startup. For Postgres:
+  #   docker compose up -d postgres
+  #   SWGW_DATABASE_DRIVER=postgres \
+  #   SWGW_DATABASE_DSN='postgres://swgw:swgw@localhost:5432/swgw?sslmode=disable' \
+  #     go run ./cmd/coordinator --config ./dev/config.yaml
+  driver: sqlite
+  dsn: ./dev/swgw.db
+
+coordinator:
+  leaderElection:
+    enabled: true
+    lockID: 1
+    retryInterval: 10s
+  scheduler:
+    tickInterval: 10s
+  reaper:
+    tickInterval: 30s
+    leaseDuration: 2m
+  queue:
+    maxLeaseBatchSize: 32
+  gc:
+    tickInterval: 1h
+    batchSize: 5000
+
+worker:
+  coordinatorEndpoint: http://localhost:8080
+  address: :8081
+  maxConcurrentJobs: 8
+  copyBufferSize: 1048576
+  heartbeatInterval: 20s
+
+observability:
+  log:
+    level: info
+    # `text` is easier to read at a terminal; production uses json.
+    format: text
+  metrics:
+    enabled: true
+    path: /metrics
+  tracing:
+    enabled: false
+    sampleRatio: 0.05

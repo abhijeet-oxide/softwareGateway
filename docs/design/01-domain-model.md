@@ -122,7 +122,9 @@ Dry run is likewise not a separate implementation: it is the planner's output, r
 
 This is a small table doing disproportionate work. It answers, without a network call: *does this exact content already exist in this exact destination?*
 
-Its value compounds. Version 2.14.0 of a product shares most of its base layers with 2.13.0, so the second replication of a product typically moves a fraction of its nominal size. Across products sharing common base images, the effect is larger still.
+Its value compounds. Version 2.14.0 of a product shares most of its base layers with 2.13.0, so the second replication of a product typically moves a fraction of its nominal size.
+
+**Placements are scoped to a repository, not to a registry.** Two products replicating into *different* repositories do not share placement rows, even when they share base layers and even on the same registry — a blob present in one repository is genuinely not present in the other. What serves that case is **cross-repository mount** ([05](05-transfer-engine.md) §4.2), which relocates the blob server-side for zero bytes. And a physical repository belongs to exactly one product ([03](03-persistence.md) §4), so the "two products sharing one repository" case does not arise.
 
 **Trust model.** A placement is a cache of a fact about a remote registry, and remote registries can have content deleted out from under us by garbage collection or an administrator. The design treats a placement as *strong evidence, not proof*:
 

@@ -1,0 +1,34 @@
+# syntax=docker/dockerfile:1
+#
+# Worker image. See docs/design/14-deployment-and-development.md section 3.2.
+#
+# The worker holds NO database credentials and writes NOTHING to disk. The
+# deployment runs it with readOnlyRootFilesystem and no writable volume, which
+# makes invariant I5 ("bytes never touch worker disk") enforced by the platform
+# rather than by code review — a worker cannot buffer a blob because there is
+# nowhere to put it.
+
+FROM golang:1.25 AS build
+WORKDIR /src
+
+COPY go.mod go.sum ./
+RUN go mod download
+
+COPY . .
+
+ARG VERSION=dev
+ARG COMMIT=unknown
+ARG BUILD_DATE=unknown
+
+RUN CGO_ENABLED=0 go build -trimpath \
+      -ldflags="-s -w \
+        -X github.com/abhijeet-oxide/softwareGateway/internal/platform/version.Version=${VERSION} \
+        -X github.com/abhijeet-oxide/softwareGateway/internal/platform/version.Commit=${COMMIT} \
+        -X github.com/abhijeet-oxide/softwareGateway/internal/platform/version.Date=${BUILD_DATE}" \
+      -o /out/worker ./cmd/worker
+
+FROM gcr.io/distroless/static-debian12:nonroot
+COPY --from=build /out/worker /worker
+USER nonroot:nonroot
+EXPOSE 8081
+ENTRYPOINT ["/worker"]

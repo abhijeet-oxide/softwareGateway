@@ -21,6 +21,9 @@ type retryTransport struct {
 	next     http.RoundTripper
 	policy   backoff.Policy
 	attempts int
+	// maxElapsed bounds the TOTAL time one request may spend across all of its
+	// attempts. See DefaultRetryMaxElapsed.
+	maxElapsed time.Duration
 }
 
 // maxAttempts matches the transient class in docs/design/10 §6.
@@ -31,10 +34,15 @@ func newRetryTransport(next http.RoundTripper, cfg Config) http.RoundTripper {
 	if attempts <= 0 {
 		attempts = maxAttempts
 	}
+	elapsed := cfg.RetryMaxElapsed
+	if elapsed <= 0 {
+		elapsed = DefaultRetryMaxElapsed
+	}
 	return &retryTransport{
-		next:     next,
-		policy:   backoff.Policy{Base: cfg.RetryBaseDelay, Cap: cfg.RetryMaxDelay},
-		attempts: attempts,
+		next:       next,
+		policy:     backoff.Policy{Base: cfg.RetryBaseDelay, Cap: cfg.RetryMaxDelay},
+		attempts:   attempts,
+		maxElapsed: elapsed,
 	}
 }
 
@@ -44,8 +52,23 @@ func (t *retryTransport) RoundTrip(r *http.Request) (*http.Response, error) {
 	// would send a truncated request, which is worse than not retrying.
 	rewindable := r.Body == nil || r.Body == http.NoBody || r.GetBody != nil
 
+	started := time.Now()
+
 	var lastErr error
 	for attempt := 0; attempt < t.attempts; attempt++ {
+		if attempt > 0 && t.exhausted(started) {
+			// The attempt COUNT is the wrong bound on its own. Against a server
+			// that accepts the connection and never answers, every attempt costs
+			// the full ResponseHeaderTimeout, so eight attempts is four minutes
+			// for ONE request — and discovery makes two of those per tag.
+			// Measured in the field: a scan sat on a single tag for over two
+			// minutes and had 47 more repositories to go.
+			//
+			// A time budget bounds the pathological case without shortening the
+			// schedule for the transient one it exists for, where attempts
+			// return quickly and the budget is never reached.
+			break
+		}
 		if attempt > 0 {
 			req, err := rewind(r, attempt)
 			if err != nil {
@@ -76,7 +99,7 @@ func (t *retryTransport) RoundTrip(r *http.Request) (*http.Response, error) {
 			}
 
 		case retryableStatus(resp.StatusCode):
-			if !rewindable || attempt == t.attempts-1 {
+			if !rewindable || attempt == t.attempts-1 || t.exhausted(started) {
 				return resp, nil
 			}
 			delay := t.delayFor(resp, attempt)
@@ -177,4 +200,9 @@ func sleep(ctx context.Context, d time.Duration) error {
 	case <-t.C:
 		return nil
 	}
+}
+
+// exhausted reports whether the request has spent its whole retry budget.
+func (t *retryTransport) exhausted(started time.Time) bool {
+	return t.maxElapsed > 0 && time.Since(started) >= t.maxElapsed
 }

@@ -3,6 +3,7 @@ package api
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"strconv"
@@ -259,6 +260,21 @@ func (s *Server) productExists(w http.ResponseWriter, r *http.Request, name stri
 		return false
 	}
 	if _, ok := s.deps.Products.Get(name); !ok {
+		// A product that FAILED TO LOAD is not the same as one that does not
+		// exist, and reporting both as NOT_FOUND sent operators looking for a
+		// typo in the name. It happens routinely while someone is editing the
+		// document: the watcher reloads a half-written file, validation fails,
+		// and the product drops out of the registry until the next save.
+		for _, bad := range s.deps.Products.Invalid() {
+			if bad.Name != name {
+				continue
+			}
+			Error(w, r, v1.CodeFailedPrecondition,
+				fmt.Sprintf("product %q exists but failed to load, so it is not running: %s "+
+					"(from %s). Fix the document and it will be picked up on the next reload",
+					name, bad.Err, bad.File))
+			return false
+		}
 		NotFound(w, r, "product", name)
 		return false
 	}

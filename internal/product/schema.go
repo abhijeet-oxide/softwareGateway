@@ -251,10 +251,68 @@ type Discovery struct {
 	// likely to be a misconfiguration than a real change, and adopting them all
 	// would point thousands of scanners at one registry.
 	MaxRepositories int `json:"maxRepositories,omitempty"`
+
+	// Concurrency bounds how much of a scan runs in parallel.
+	Concurrency Concurrency `json:"concurrency,omitempty"`
 }
 
 // DefaultMaxRepositories caps catalog adoption when unset.
 const DefaultMaxRepositories = 200
+
+// Concurrency bounds the parallelism of one scan.
+//
+// A scan used to be strictly sequential — one repository at a time, one tag at
+// a time — which is fine for a handful of repositories on a fast registry and
+// useless for a real vendor catalogue. Measured: 48 repositories, 28 admitted
+// tags in the first one, and after two minutes the scan was still on the first
+// tag of the first repository.
+//
+// Bounded rather than unlimited, and bounded in TWO places, because they cost
+// different things. Repositories each have their own client, so parallelism
+// there multiplies connections and token exchanges against the registry. Tags
+// within a repository share one client, so they are bounded by that client's
+// connection pool and rate limiter and are the cheaper axis to widen.
+type Concurrency struct {
+	// Repositories scanned at once. Default DefaultRepositoryConcurrency.
+	Repositories int `json:"repositories,omitempty"`
+	// Tags resolved at once WITHIN one repository. Default
+	// DefaultTagConcurrency.
+	Tags int `json:"tags,omitempty"`
+}
+
+// Concurrency defaults. Conservative: a vendor registry is someone else's
+// infrastructure and the cost of being impolite falls on them, so these are
+// numbers that make a scan minutes rather than hours without looking like an
+// attack. Raise them for a registry you own.
+const (
+	DefaultRepositoryConcurrency = 4
+	DefaultTagConcurrency        = 8
+
+	// maxConcurrency caps whatever configuration asks for. A typo of 1000 must
+	// not become a thousand concurrent connections to a vendor.
+	maxConcurrency = 64
+)
+
+// EffectiveRepositories returns the repository concurrency to use.
+func (c Concurrency) EffectiveRepositories() int {
+	return clampConcurrency(c.Repositories, DefaultRepositoryConcurrency)
+}
+
+// EffectiveTags returns the tag concurrency to use.
+func (c Concurrency) EffectiveTags() int {
+	return clampConcurrency(c.Tags, DefaultTagConcurrency)
+}
+
+func clampConcurrency(v, fallback int) int {
+	switch {
+	case v <= 0:
+		return fallback
+	case v > maxConcurrency:
+		return maxConcurrency
+	default:
+		return v
+	}
+}
 
 // EffectiveMaxRepositories returns the configured cap or the default.
 func (d Discovery) EffectiveMaxRepositories() int {

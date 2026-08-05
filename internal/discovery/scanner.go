@@ -77,6 +77,9 @@ type Scanner struct {
 	mu      sync.Mutex
 	clients map[string]registry.Source
 
+	// writeMu serialises package-recording transactions. See recordPackage.
+	writeMu sync.Mutex
+
 	// progress is the live counter for the scan currently running, read by the
 	// status endpoint while the scan is in flight.
 	progress progressTracker
@@ -263,44 +266,78 @@ func (s *Scanner) Scan(ctx context.Context) (ScanResult, error) {
 		p.RepositoriesTotal = len(set.Repositories)
 	})
 
-	for _, repoPath := range set.Repositories {
+	// Repositories in parallel, bounded.
+	//
+	// Sequential was the original shape and it does not survive contact with a
+	// real catalogue: 48 repositories with 28 admitted tags in the first one,
+	// two network round trips per tag, and a scan that had not finished the
+	// FIRST tag after two minutes. Nothing about a scan requires ordering —
+	// repositories are independent, and the unique constraints, not the
+	// iteration order, are what make a re-scan idempotent.
+	//
+	// Bounded because each repository has its own client, so parallelism here
+	// multiplies connections and token exchanges against someone else's
+	// registry.
+	type repoOutcome struct {
+		path string
+		sub  repoResult
+		err  error
+	}
+
+	limit := s.sourceCfg.Discovery.Concurrency.EffectiveRepositories()
+	sem := make(chan struct{}, limit)
+	outcomes := make([]repoOutcome, len(set.Repositories))
+	var wg sync.WaitGroup
+
+	for i, repoPath := range set.Repositories {
 		if err := ctx.Err(); err != nil {
 			return res, err
 		}
 
-		s.progress.update(func(p *ScanProgress) {
-			p.Phase = PhaseListingTags
-			p.CurrentRepository = repoPath
-			p.TagsTotal = 0
-			p.TagsResolved = 0
-		})
+		wg.Add(1)
+		go func(i int, repoPath string) {
+			defer wg.Done()
+			sem <- struct{}{}
+			defer func() { <-sem }()
 
-		sub, err := s.scanRepository(ctx, repoPath)
+			s.progress.update(func(p *ScanProgress) {
+				p.Phase = PhaseListingTags
+				p.CurrentRepository = repoPath
+			})
 
-		s.progress.update(func(p *ScanProgress) {
-			p.RepositoriesDone++
-			p.TagsListed += sub.TagsListed
-			p.New += sub.New
-			p.Errors += len(sub.TagErrors)
-			if err != nil {
-				p.Errors++
-			}
-		})
+			sub, err := s.scanRepository(ctx, repoPath)
+			outcomes[i] = repoOutcome{path: repoPath, sub: sub, err: err}
 
-		if err != nil {
+			s.progress.update(func(p *ScanProgress) {
+				p.RepositoriesDone++
+				p.TagsListed += sub.TagsListed
+				p.New += sub.New
+				p.Errors += len(sub.TagErrors)
+				if err != nil {
+					p.Errors++
+				}
+			})
+		}(i, repoPath)
+	}
+	wg.Wait()
+
+	// Aggregated in the ORIGINAL order, after the fact, so the result and the
+	// logs are identical run to run even though the work was not.
+	for _, o := range outcomes {
+		if o.err != nil {
 			res.RepositoryErrors = append(res.RepositoryErrors,
-				RepositoryError{Repository: repoPath, Err: err})
-			s.log.WarnContext(ctx, "repository scan failed", "repository", repoPath, "error", err)
+				RepositoryError{Repository: o.path, Err: o.err})
+			s.log.WarnContext(ctx, "repository scan failed", "repository", o.path, "error", o.err)
 			continue
 		}
 
 		res.Repositories++
-		res.TagsListed += sub.TagsListed
-		res.TagsAdmitted += sub.TagsAdmitted
-		res.New += sub.New
-		res.Superseded += sub.Superseded
-		res.Requests += sub.Requests
-		res.TagErrors = append(res.TagErrors, sub.TagErrors...)
+		res.TagsListed += o.sub.TagsListed
+		res.TagsAdmitted += o.sub.TagsAdmitted
+		res.New += o.sub.New
+		res.Superseded += o.sub.Superseded
+		res.Requests += o.sub.Requests
+		res.TagErrors = append(res.TagErrors, o.sub.TagErrors...)
 	}
 
 	// Retire discovery-managed rows for repositories that have left the
@@ -366,41 +403,74 @@ func (s *Scanner) scanRepository(ctx context.Context, repoPath string) (repoResu
 	}
 	res.TagsListed = len(tags)
 
-	admitted := 0
+	admitted := make([]string, 0, len(tags))
 	for _, tag := range tags {
 		if s.tagFilter.admits(tag) {
-			admitted++
+			admitted = append(admitted, tag)
 		}
 	}
+	res.TagsAdmitted = len(admitted)
+
 	s.progress.update(func(p *ScanProgress) {
 		p.Phase = PhaseResolving
-		p.TagsTotal = admitted
+		p.TagsTotal += len(admitted)
 	})
 
-	for _, tag := range tags {
+	// Tags in parallel, sharing this repository's client — and therefore its
+	// connection pool, its rate limiter and its cached token. That is what makes
+	// this the cheap axis to widen: the registry sees one client whose
+	// configured limits still hold, not N clients each with its own budget.
+	//
+	// Each tag costs two round trips at minimum (HEAD, then the manifest tree),
+	// so a repository with 28 tags was 56 sequential round trips against a
+	// registry across a WAN. There is no ordering requirement between tags:
+	// supersession is per (repository, tag), and two different tags never touch
+	// the same row.
+	type tagOut struct {
+		tag     string
+		outcome tagOutcome
+		err     error
+	}
+
+	limit := s.sourceCfg.Discovery.Concurrency.EffectiveTags()
+	sem := make(chan struct{}, limit)
+	outs := make([]tagOut, len(admitted))
+	var wg sync.WaitGroup
+
+	for i, tag := range admitted {
 		if err := ctx.Err(); err != nil {
 			return res, err
 		}
-		if !s.tagFilter.admits(tag) {
-			continue
-		}
-		res.TagsAdmitted++
-		s.progress.update(func(p *ScanProgress) { p.TagsResolved++ })
 
-		outcome, err := s.scanTag(ctx, client, repoID, repoPath, tag)
-		if err != nil {
+		wg.Add(1)
+		go func(i int, tag string) {
+			defer wg.Done()
+			sem <- struct{}{}
+			defer func() { <-sem }()
+
+			outcome, err := s.scanTag(ctx, client, repoID, repoPath, tag)
+			outs[i] = tagOut{tag: tag, outcome: outcome, err: err}
+			s.progress.update(func(p *ScanProgress) { p.TagsResolved++ })
+		}(i, tag)
+	}
+	wg.Wait()
+
+	// Aggregated in configuration order after the fact, so two runs of the same
+	// scan produce the same result and the same log order.
+	for _, o := range outs {
+		if o.err != nil {
 			// Collected, not returned. One bad artifact must not stop discovery
 			// of the rest — that is how a single vendor mistake would otherwise
 			// stall every release behind it.
-			res.TagErrors = append(res.TagErrors, TagError{Repository: repoPath, Tag: tag, Err: err})
+			res.TagErrors = append(res.TagErrors, TagError{Repository: repoPath, Tag: o.tag, Err: o.err})
 			s.log.WarnContext(ctx, "tag scan failed",
-				"repository", repoPath, "tag", tag, "error", err)
+				"repository", repoPath, "tag", o.tag, "error", o.err)
 			continue
 		}
-		if outcome.isNew {
+		if o.outcome.isNew {
 			res.New++
-			res.Superseded += outcome.superseded
-			res.Requests += outcome.requests
+			res.Superseded += o.outcome.superseded
+			res.Requests += o.outcome.requests
 		}
 	}
 	return res, nil
@@ -560,6 +630,18 @@ func (s *Scanner) recordPackage(
 	ctx context.Context, client registry.Source, repoID int64,
 	repoPath, tag string, desc registry.Descriptor, t tree,
 ) (tagOutcome, error) {
+	// One writer at a time within a source.
+	//
+	// Everything expensive — the HEAD, the existence check, the manifest tree
+	// fetch — already happened outside this call and runs fully in parallel.
+	// What is left is a short local transaction, and serialising it costs
+	// nothing measurable while removing a whole class of problem: SQLite
+	// serialises writers anyway and returns SQLITE_BUSY rather than queueing,
+	// and on Postgres concurrent inserts into the same repository's rows would
+	// contend on the unique index for no gain.
+	s.writeMu.Lock()
+	defer s.writeMu.Unlock()
+
 	tx, err := s.packages.DB().BeginTx(ctx, nil)
 	if err != nil {
 		return tagOutcome{}, fmt.Errorf("begin package transaction: %w", err)

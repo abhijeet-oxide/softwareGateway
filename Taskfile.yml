@@ -1,0 +1,300 @@
+# softwareGateway task runner.
+#
+# Replaces the Makefile. Two reasons, both practical rather than fashionable:
+#
+#   1. It runs on Windows. The Makefile needed bash and `find`, so PowerShell
+#      and cmd could not use it at all — a Windows developer had to install Git
+#      Bash or WSL before running a single command. Task ships its own shell
+#      interpreter (mvdan/sh), so every task below behaves identically on
+#      Linux, macOS and Windows.
+#   2. `{{exeExt}}` removes a whole class of bug. `go build -o <name>` does not
+#      append `.exe` on Windows, which is exactly how binaries ended up
+#      unrunnable and renamed by hand.
+#
+# Install:  go install github.com/go-task/task/v3/cmd/task@latest
+#           (or brew install go-task, winget install Task.Task)
+#
+# See docs/design/14-deployment-and-development.md section 5.3.
+
+version: '3'
+
+vars:
+  MODULE: github.com/abhijeet-oxide/softwareGateway
+  BINARIES: coordinator worker transferctl
+  DEV_CONFIG: ./dev/config.yaml
+
+  # The executable suffix, resolved against the TARGET platform.
+  #
+  # Task's built-in {{exeExt}} keys off the RUNTIME OS, so `GOOS=windows task
+  # build` on Linux would produce an extensionless binary — silently
+  # reintroducing the exact bug this replaced. GOOS wins when set; otherwise
+  # fall back to the host.
+  TARGET_OS: '{{default OS (env "GOOS")}}'
+  EXE: '{{if eq .TARGET_OS "windows"}}.exe{{end}}'
+
+  # Version stamping. `sh:` runs at parse time; the `|| echo` fallbacks keep
+  # this working in a tarball with no git history, which is how a release build
+  # from a source archive would otherwise fail.
+  VERSION:
+    sh: git describe --tags --always --dirty 2>/dev/null || echo dev
+  COMMIT:
+    sh: git rev-parse --short HEAD 2>/dev/null || echo unknown
+  DATE:
+    sh: date -u +%Y-%m-%dT%H:%M:%SZ
+
+  LDFLAGS: >-
+    -s -w
+    -X {{.MODULE}}/internal/platform/version.Version={{.VERSION}}
+    -X {{.MODULE}}/internal/platform/version.Commit={{.COMMIT}}
+    -X {{.MODULE}}/internal/platform/version.Date={{.DATE}}
+
+# CGO_ENABLED is deliberately NOT set globally.
+#
+# Shipped binaries are built with CGO_ENABLED=0 — SQLite is modernc.org/sqlite,
+# a pure-Go translation, which is what makes a static binary and a scratch
+# container image possible. But `go test -race` REQUIRES cgo, so a global
+# CGO_ENABLED=0 silently breaks the entire test suite:
+#
+#   go: -race requires cgo; enable cgo by setting CGO_ENABLED=1
+#
+# It is therefore set per-task, on the build tasks only.
+
+tasks:
+
+  default:
+    desc: List available tasks
+    silent: true
+    cmds:
+      - task --list
+
+  # ------------------------------------------------------------------ build --
+
+  build:
+    desc: Build all three binaries into bin/
+    deps: [build:coordinator, build:worker, build:transferctl]
+
+  build:*:
+    desc: Build one binary (task build:transferctl)
+    vars:
+      BIN: '{{index .MATCH 0}}'
+    env:
+      CGO_ENABLED: '0'
+    # sources/generates give Task the same up-to-date checking make had, so a
+    # no-op rebuild stays free. The explicit list matters: without it the
+    # binary would be considered current forever and you would be testing a
+    # stale build — a bug this repository has already had once.
+    sources:
+      - 'cmd/{{.BIN}}/**/*.go'
+      - 'internal/**/*.go'
+      - 'pkg/**/*.go'
+      - 'db/**/*.sql'
+      - 'db/**/*.go'
+      - go.mod
+      - go.sum
+    generates:
+      - 'bin/{{.BIN}}{{.EXE}}'
+    cmds:
+      - go build -trimpath -ldflags="{{.LDFLAGS}}" -o bin/{{.BIN}}{{.EXE}} ./cmd/{{.BIN}}
+
+  build:all:
+    desc: Cross-compile every binary for linux, darwin and windows (amd64 + arm64)
+    env:
+      CGO_ENABLED: '0'
+    cmds:
+      - for:
+          matrix:
+            OS: [linux, darwin, windows]
+            ARCH: [amd64, arm64]
+            BIN: [coordinator, worker, transferctl]
+        cmd: >-
+          GOOS={{.ITEM.OS}} GOARCH={{.ITEM.ARCH}}
+          go build -trimpath -ldflags="{{.LDFLAGS}}"
+          -o dist/{{.ITEM.OS}}-{{.ITEM.ARCH}}/{{.ITEM.BIN}}{{if eq .ITEM.OS "windows"}}.exe{{end}}
+          ./cmd/{{.ITEM.BIN}}
+      - cmd: echo "binaries in dist/"
+        silent: true
+
+  clean:
+    desc: Remove build output and the local database
+    cmds:
+      # `rm -rf` works on Windows too: Task interprets commands with its own
+      # shell rather than handing them to cmd.exe.
+      - rm -rf bin dist coverage.out
+      - rm -rf dev/swgw.db dev/swgw.db-shm dev/swgw.db-wal
+
+  # ------------------------------------------------------------------- test --
+
+  test:
+    desc: Run unit tests with the race detector (no Docker required)
+    # NOTE: unit tests MUST NOT require Docker. They run against SQLite and an
+    # in-process OCI registry, because a suite that needs containers is a suite
+    # developers run less often — and the difference compounds.
+    cmds:
+      - go test -race ./...
+
+  test:short:
+    desc: Run unit tests without the race detector
+    cmds:
+      - go test ./...
+
+  test:pkg:
+    desc: 'Test one package (task test:pkg -- ./internal/discovery/)'
+    cmds:
+      - go test -race {{.CLI_ARGS | default "./..."}}
+
+  test:run:
+    desc: 'Run tests matching a pattern (task test:run -- TestSupersession)'
+    cmds:
+      - go test -race -run '{{.CLI_ARGS}}' -v ./...
+
+  test:integration:
+    desc: Run integration tests (requires Docker)
+    cmds:
+      - go test -tags=integration ./test/integration/...
+
+  cover:
+    desc: Run tests with coverage and print a summary
+    cmds:
+      - go test -coverprofile=coverage.out ./...
+      - go tool cover -func=coverage.out | tail -1
+
+  cover:html:
+    desc: Open the coverage report in a browser
+    deps: [cover]
+    cmds:
+      - go tool cover -html=coverage.out
+
+  # ------------------------------------------------------------------- lint --
+
+  lint:
+    desc: Run golangci-lint (requires v2 — a v1 binary rejects the v2 config)
+    cmds:
+      - golangci-lint run
+
+  lint:fix:
+    desc: Run golangci-lint with autofix
+    cmds:
+      - golangci-lint run --fix
+
+  fmt:
+    desc: Format all Go source
+    cmds:
+      - gofmt -w ./cmd ./internal ./pkg
+
+  vet:
+    desc: Run go vet
+    cmds:
+      - go vet ./...
+
+  tidy:
+    desc: Tidy and verify module dependencies
+    cmds:
+      - go mod tidy
+      - go mod verify
+
+  check:
+    desc: Everything CI runs — fmt, vet, lint, test
+    cmds:
+      - task: fmt
+      - task: vet
+      - task: lint
+      - task: test
+
+  ci:
+    desc: What the pipeline runs (adds a tidy check that fails on drift)
+    cmds:
+      - task: tidy:check
+      - task: vet
+      - task: lint
+      - task: test
+      - task: validate
+      - task: validate:rejects-broken
+
+  tidy:check:
+    desc: Fail if go.mod or go.sum would change
+    cmds:
+      - go mod tidy
+      - |
+        git diff --exit-code go.mod go.sum || {
+          echo "go.mod/go.sum are not tidy — run 'task tidy'"
+          exit 1
+        }
+
+  # -------------------------------------------------------------------- dev --
+
+  dev:coordinator:
+    desc: Run the Coordinator against SQLite (zero setup)
+    cmds:
+      - go run ./cmd/coordinator --config {{.DEV_CONFIG}}
+
+  dev:worker:
+    desc: Run a Worker
+    cmds:
+      - go run ./cmd/worker --config {{.DEV_CONFIG}}
+
+  dev:postgres:
+    desc: Start PostgreSQL for development
+    cmds:
+      - docker compose up -d postgres
+      - cmd: |
+          echo "Then run the Coordinator against it:"
+          echo "  SWGW_DATABASE_DRIVER=postgres \\"
+          echo "  SWGW_DATABASE_DSN='postgres://swgw:swgw@localhost:5432/swgw?sslmode=disable' \\"
+          echo "    task dev:coordinator"
+        silent: true
+
+  dev:registry:
+    desc: Start two local OCI registries (source and destination)
+    cmds:
+      - docker compose up -d registry registry-dest
+      - cmd: |
+          echo "source      localhost:5000"
+          echo "destination localhost:5001"
+        silent: true
+
+  dev:down:
+    desc: Stop all development containers
+    cmds:
+      - docker compose down -v
+
+  # ----------------------------------------------------------------- config --
+
+  validate:
+    desc: Validate the sample product configuration
+    cmds:
+      - go run ./cmd/transferctl config validate ./dev/products
+
+  validate:rejects-broken:
+    desc: Confirm the validator actually rejects bad configuration
+    # A validator that passes everything is worse than none, because it is
+    # trusted. This asserts the negative case.
+    cmds:
+      - |
+        if go run ./cmd/transferctl config validate ./dev/products-invalid; then
+          echo "the broken fixture was ACCEPTED — the validator is not working"
+          exit 1
+        fi
+        echo "validator correctly rejected the broken fixture"
+
+  # --------------------------------------------------------------- database --
+
+  migrate:status:
+    desc: Explain how migrations are applied
+    silent: true
+    cmds:
+      - echo "Migrations are applied automatically at Coordinator startup."
+      - echo "There is no separate migrate step by design — a binary and a schema"
+      - echo "that can disagree is a class of outage worth designing out."
+
+  # ----------------------------------------------------------------- docker --
+
+  docker:
+    desc: Build all container images
+    cmds:
+      - for: { var: BINARIES, split: ' ' }
+        cmd: >-
+          docker build
+          --build-arg VERSION={{.VERSION}}
+          --build-arg COMMIT={{.COMMIT}}
+          -f build/Dockerfile.{{.ITEM}}
+          -t softwaregateway-{{.ITEM}}:{{.VERSION}} .

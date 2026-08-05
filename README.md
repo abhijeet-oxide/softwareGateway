@@ -4,7 +4,9 @@ Gateway for replicating OCI artifacts from one repository to another.
 
 A cloud-native platform that continuously discovers software packages published to vendor OCI registries and replicates them into internal registries — optimized for throughput on 30–60 GB packages, resilient to any single failure, and operable without reading the source.
 
-> **Status: design phase.** This repository currently contains the system design only. No implementation yet — see [17 — Delivery Plan](docs/design/17-delivery-plan.md).
+> **Status: M2 complete — discovery works end to end.** Point it at an OCI registry and it finds what is published, records packages with their artifact trees, and evaluates auto-download rules. **Byte transfer lands in M3**, so a transfer request currently stays `pending` — expected, not a bug. See the [delivery plan](docs/design/17-delivery-plan.md).
+>
+> **Get it running:** [Developer Guide →](docs/DEVELOPER-GUIDE.md)
 
 ## What it does
 
@@ -27,6 +29,10 @@ Three binaries, one PostgreSQL database, nothing else.
 Artifact bytes flow only between registries. They never enter the Coordinator, never land on a worker's disk, and never pass through the database.
 
 ## Documentation
+
+**Running it? [Read the Developer Guide →](docs/DEVELOPER-GUIDE.md)**
+
+How to build (including Windows), configure the two separate kinds of configuration, test without Docker, and run it — plus a worked example that goes from a fresh clone to a discovered package.
 
 **New here? [Read the Functional Overview →](docs/FUNCTIONAL-OVERVIEW.md)**
 

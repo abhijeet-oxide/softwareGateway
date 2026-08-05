@@ -11,6 +11,7 @@ package config
 import (
 	"fmt"
 	"os"
+	"sort"
 	"strings"
 	"time"
 
@@ -199,12 +200,45 @@ func Load(path string) (SystemConfig, error) {
 		}
 	}
 
-	// SWGW_DATABASE_DSN -> database.dsn
+	// SWGW_DATABASE_DSN -> database.dsn, SWGW_DATABASE_MAXOPENCONNS ->
+	// database.maxOpenConns.
+	//
+	// The second form is why this needs a lookup table rather than a string
+	// transform. An environment variable cannot carry case, so the naive
+	// mapping produces `database.maxopenconns` — which is a DIFFERENT koanf key
+	// from `database.maxOpenConns` and therefore binds to nothing. The override
+	// was silently ignored, which is the worst possible failure for a
+	// configuration mechanism: the operator sets the variable, sees no error,
+	// and gets the default.
+	//
+	// Resolving against the canonical keys makes every setting reachable and
+	// makes an unknown variable detectable.
+	canonical := canonicalKeys(k.Keys())
+	var unknown []string
+
 	err := k.Load(env.Provider(EnvPrefix, ".", func(s string) string {
-		return strings.ReplaceAll(strings.ToLower(strings.TrimPrefix(s, EnvPrefix)), "_", ".")
+		flat := strings.ReplaceAll(strings.ToLower(strings.TrimPrefix(s, EnvPrefix)), "_", ".")
+		if key, ok := canonical[flat]; ok {
+			return key
+		}
+		unknown = append(unknown, s)
+		// Returning "" tells koanf to skip the variable. Passing the unmatched
+		// key through would reintroduce the silent-no-op this exists to fix.
+		return ""
 	}), nil)
 	if err != nil {
 		return SystemConfig{}, fmt.Errorf("load environment: %w", err)
+	}
+	if len(unknown) > 0 {
+		// Fail rather than warn. A typo'd SWGW_ variable means the operator
+		// believes they have changed something they have not, and finding that
+		// out during an incident is far more expensive than at startup.
+		sort.Strings(unknown)
+		return SystemConfig{}, fmt.Errorf(
+			"unknown environment variable(s): %s (no such configuration key; "+
+				"names are SWGW_ plus the config path with dots as underscores, "+
+				"e.g. SWGW_DATABASE_MAXOPENCONNS for database.maxOpenConns)",
+			strings.Join(unknown, ", "))
 	}
 
 	var cfg SystemConfig
@@ -220,6 +254,19 @@ func Load(path string) (SystemConfig, error) {
 		return SystemConfig{}, err
 	}
 	return cfg, nil
+}
+
+// canonicalKeys maps each lowercased config path to its real, cased form.
+//
+// Built from the defaults, which by construction contain every key the struct
+// defines — so a key that exists in the schema is reachable from the
+// environment, and one that does not is detected as a typo.
+func canonicalKeys(keys []string) map[string]string {
+	out := make(map[string]string, len(keys))
+	for _, k := range keys {
+		out[strings.ToLower(k)] = k
+	}
+	return out
 }
 
 // Validate rejects configurations that cannot work.

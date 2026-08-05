@@ -14,6 +14,12 @@ env:
   # the module's floor from the 1.24 originally planned. See docs/design/16 §5.
   GO_VERSION: "1.25"
 
+# Every job below invokes the SAME task a developer runs locally. That is the
+# point of moving off make: a pipeline that reimplements the build in YAML
+# drifts from what developers run, and the drift is only discovered when CI
+# passes and the laptop does not — or the reverse. One definition, one file,
+# both places.
+
 jobs:
   build:
     name: Build and test
@@ -26,29 +32,116 @@ jobs:
           go-version: ${{ env.GO_VERSION }}
           cache: true
 
+      - uses: go-task/setup-task@v1
+        with:
+          version: 3.x
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
+
       - name: Verify go.mod is tidy
-        run: |
-          go mod tidy
-          git diff --exit-code go.mod go.sum \
-            || { echo "::error::go.mod/go.sum are not tidy — run 'go mod tidy'"; exit 1; }
+        run: task tidy:check
 
       - name: Build
-        run: go build ./...
+        run: task build
 
       - name: Vet
-        run: go vet ./...
+        run: task vet
 
       # Unit tests MUST NOT require Docker. They run against SQLite and an
-      # in-memory registry, because a suite that needs containers is a suite
+      # in-process registry, because a suite that needs containers is a suite
       # developers run less often — and the difference compounds.
       - name: Test
-        run: go test -race ./...
+        run: task test
 
+      # The built binaries, not `go run`: this is the artefact that ships, and
+      # a build that produces something unrunnable must fail here.
       - name: Verify binaries run
         run: |
-          go run ./cmd/coordinator --version
-          go run ./cmd/worker --version
-          go run ./cmd/transferctl version --client
+          ./bin/coordinator --version
+          ./bin/worker --version
+          ./bin/transferctl version --client
+
+  cross-compile:
+    name: Cross-compile every platform
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache: true
+
+      - uses: go-task/setup-task@v1
+        with:
+          version: 3.x
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build for linux, darwin and windows
+        run: task build:all
+
+      # Windows binaries MUST carry .exe. Without it the file is not executable
+      # on Windows and has to be renamed by hand — a bug this repository
+      # shipped once already, so it is now asserted rather than assumed.
+      - name: Assert Windows binaries have the .exe suffix
+        run: |
+          missing=0
+          for arch in amd64 arm64; do
+            for bin in coordinator worker transferctl; do
+              if [ ! -f "dist/windows-$arch/$bin.exe" ]; then
+                echo "::error::dist/windows-$arch/$bin.exe is missing"
+                missing=1
+              fi
+              if [ -f "dist/windows-$arch/$bin" ]; then
+                echo "::error::dist/windows-$arch/$bin has no .exe suffix"
+                missing=1
+              fi
+            done
+          done
+          if [ "$missing" = "0" ]; then
+            echo "all Windows binaries correctly suffixed"
+          fi
+          exit $missing
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: binaries
+          path: dist/
+          retention-days: 7
+
+  windows:
+    name: Build and test on Windows
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache: true
+
+      - uses: go-task/setup-task@v1
+        with:
+          version: 3.x
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
+
+      # The reason this job exists. The Makefile needed bash and `find`, so it
+      # could not run here at all — Windows support was asserted, never tested,
+      # and the .exe bug survived because nothing checked. Task ships its own
+      # shell interpreter, so the same tasks run natively in PowerShell.
+      - name: Build
+        run: task build
+
+      - name: The binaries are runnable without renaming
+        run: |
+          ./bin/coordinator.exe --version
+          ./bin/worker.exe --version
+          ./bin/transferctl.exe version --client
+
+      # Without the race detector: it needs cgo and a C toolchain, which is a
+      # slow and fragile thing to require of a Windows runner. The Linux job
+      # runs -race, which is where race coverage belongs.
+      - name: Test
+        run: task test:short
 
   lint:
     name: Lint
@@ -61,9 +154,12 @@ jobs:
           go-version: ${{ env.GO_VERSION }}
           cache: true
 
+      # The action rather than `task lint`: it manages the golangci-lint
+      # version and its own result cache, which a plain invocation does not.
+      # The version is pinned because the config uses the v2 schema and a v1
+      # binary rejects it.
       - uses: golangci/golangci-lint-action@v6
         with:
-          # v2 config schema; a v1 config fails against a v2 binary.
           version: v2.5.0
 
   config:
@@ -77,21 +173,21 @@ jobs:
           go-version: ${{ env.GO_VERSION }}
           cache: true
 
+      - uses: go-task/setup-task@v1
+        with:
+          version: 3.x
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
+
       # The compensation for configuring products as ConfigMaps rather than
       # CRDs: there is no admission webhook, so the same validator the
       # Coordinator runs at load runs here, before the pull request merges.
       - name: Validate sample products
-        run: go run ./cmd/transferctl config validate ./dev/products
+        run: task validate
 
       # The validator must actually reject bad configuration. A validator that
       # passes everything is worse than none, because it is trusted.
       - name: Confirm the validator rejects the broken fixture
-        run: |
-          if go run ./cmd/transferctl config validate ./dev/products-invalid; then
-            echo "::error::the broken fixture was accepted — the validator is not working"
-            exit 1
-          fi
-          echo "validator correctly rejected the broken fixture"
+        run: task validate:rejects-broken
 
   schema:
     name: Schema boots end to end

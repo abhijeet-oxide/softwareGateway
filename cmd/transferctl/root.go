@@ -33,6 +33,29 @@ const (
 	exitPartialFailure = 6
 )
 
+// Request timeouts. Two defaults, because the commands are not the same kind
+// of operation.
+//
+// Most of what transferctl does is a database read behind an HTTP handler, and
+// 30 seconds is generous. But `products check` opens TLS connections to every
+// vendor registry a product declares, and `packages discover` runs a full scan
+// — through a corporate proxy, against a registry on the other side of a WAN
+// link, both are routinely minutes. One shared 30-second default made those
+// two commands fail almost every time, and fail with
+//
+//	coordinator unreachable: context deadline exceeded (Client.Timeout exceeded
+//	while awaiting headers)
+//
+// which blames the Coordinator for being slow to answer a question that is
+// genuinely slow to answer.
+const (
+	defaultTimeout = 30 * time.Second
+	// slowTimeout applies to commands that reach third-party registries. Not
+	// unlimited: a hung connection should still end in an error rather than a
+	// terminal that never returns.
+	slowTimeout = 10 * time.Minute
+)
+
 type globalOptions struct {
 	endpoint string
 	output   string
@@ -62,8 +85,9 @@ func newRootCommand() *cobra.Command {
 	root.PersistentFlags().StringVar(&opts.token, "token",
 		os.Getenv("SWGW_TOKEN"),
 		"bearer token (accepted now; the Coordinator is unauthenticated in v1)")
-	root.PersistentFlags().DurationVar(&opts.timeout, "timeout", 30*time.Second,
-		"per-request timeout")
+	root.PersistentFlags().DurationVar(&opts.timeout, "timeout",
+		envDurationOr("SWGW_TIMEOUT", defaultTimeout),
+		"per-request timeout (raised automatically for commands that contact registries)")
 
 	root.AddCommand(
 		newVersionCommand(),
@@ -78,8 +102,30 @@ func newRootCommand() *cobra.Command {
 func main() {
 	if err := newRootCommand().Execute(); err != nil {
 		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+		if hint := hintFor(err); hint != "" {
+			fmt.Fprintf(os.Stderr, "\n%s\n", hint)
+		}
 		os.Exit(exitCodeFor(err))
 	}
+}
+
+// hintFor adds the next step for failures whose message does not imply one.
+//
+// A timeout is the case that matters. The underlying message says the deadline
+// was exceeded while awaiting headers, which reads like a broken server and is
+// usually a slow one — so say which knob turns, since nobody guesses a flag
+// they have not needed before.
+func hintFor(err error) string {
+	if errors.Is(err, v1.ErrTimeout) {
+		return "The Coordinator accepted the connection but had not answered yet. If the\n" +
+			"work is genuinely slow — a check across many registries, or a scan of a\n" +
+			"large one — raise the deadline:\n\n" +
+			"  transferctl --timeout 15m ...\n" +
+			"  SWGW_TIMEOUT=15m transferctl ...\n\n" +
+			"The scan itself keeps running on the Coordinator; only this client stopped\n" +
+			"waiting for the answer."
+	}
+	return ""
 }
 
 // exitCodeFor maps an error to an exit code.
@@ -91,7 +137,11 @@ func exitCodeFor(err error) int {
 	if err == nil {
 		return exitOK
 	}
-	if errors.Is(err, v1.ErrUnreachable) {
+	// A timeout shares exit code 3 with an unreachable Coordinator: from a
+	// script's point of view both mean "no answer came back", and splitting them
+	// would break pipelines that already branch on 3. The MESSAGE is where they
+	// differ, and the message is what a human acts on.
+	if errors.Is(err, v1.ErrUnreachable) || errors.Is(err, v1.ErrTimeout) {
 		return exitUnreachable
 	}
 
@@ -132,4 +182,36 @@ func envOr(key, fallback string) string {
 		return v
 	}
 	return fallback
+}
+
+// envDurationOr reads a duration from the environment.
+//
+// An unparseable value falls back to the default rather than failing: a bad
+// SWGW_TIMEOUT should not stop `transferctl version` from working, and the
+// resolved value is visible in --help.
+func envDurationOr(key string, fallback time.Duration) time.Duration {
+	v := strings.TrimSpace(os.Getenv(key))
+	if v == "" {
+		return fallback
+	}
+	d, err := time.ParseDuration(v)
+	if err != nil || d <= 0 {
+		return fallback
+	}
+	return d
+}
+
+// contactsRegistries raises the timeout for a command that talks to third-party
+// registries through the Coordinator.
+//
+// Applied only when the operator has NOT chosen a timeout themselves, by flag
+// or by SWGW_TIMEOUT. An explicit `--timeout 5s` means five seconds, including
+// on a slow command — quietly overriding it would make the flag a suggestion.
+func contactsRegistries(cmd *cobra.Command) {
+	cmd.PreRun = func(c *cobra.Command, _ []string) {
+		if c.Flags().Changed("timeout") || strings.TrimSpace(os.Getenv("SWGW_TIMEOUT")) != "" {
+			return
+		}
+		opts.timeout = slowTimeout
+	}
 }

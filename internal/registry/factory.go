@@ -32,6 +32,15 @@ type ClientConfig struct {
 	CABundle   []byte
 	HTTPSProxy string
 	NoProxy    []string
+	// DirectConnect bypasses proxies entirely, including any the ENVIRONMENT
+	// sets. Distinct from an empty HTTPSProxy, which falls back to
+	// HTTPS_PROXY — the fallback is right by default and wrong when a
+	// repository has explicitly asked to go direct.
+	DirectConnect bool
+
+	// InsecureSkipVerify disables certificate verification for this
+	// repository. See product.TLS for why it exists and what it does not fix.
+	InsecureSkipVerify bool
 
 	ConnectTimeout        time.Duration
 	ResponseHeaderTimeout time.Duration

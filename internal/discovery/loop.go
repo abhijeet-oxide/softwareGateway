@@ -68,6 +68,13 @@ type SourceSpec struct {
 	// Catalog enumerates the registry. Nil when repositoryDiscovery is off.
 	Catalog  CatalogLister
 	Interval time.Duration
+
+	// InsecureTLS records that this source's clients do not verify certificates.
+	//
+	// Carried on the spec purely so the controller can say so out loud at every
+	// reconcile. A security downgrade that is only visible by reading the
+	// ConfigMap is one that outlives the incident it was added for.
+	InsecureTLS bool
 }
 
 // key identifies a worker. Product plus source name, because a source name is

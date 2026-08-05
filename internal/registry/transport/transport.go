@@ -57,12 +57,25 @@ type Config struct {
 
 	// CABundle is additional trusted CA material, appended to the system pool.
 	CABundle []byte
-	// InsecureSkipVerify is deliberately absent. Disabling verification is
-	// never the right fix; supply a CA bundle instead.
+
+	// InsecureSkipVerify disables certificate verification: chain, expiry and
+	// hostname all stop being checked.
+	//
+	// An earlier revision of this file said this would never exist. That was
+	// too strong — a CA bundle fixes an untrusted chain and nothing else, and
+	// an expired or wrong-hostname certificate on a registry being migrated is
+	// a real situation. It remains the wrong answer to most problems, and
+	// notably does NOT fix "x509: negative serial number", which fails during
+	// PARSING before verification runs.
+	InsecureSkipVerify bool
 
 	// Proxy settings.
 	HTTPSProxy string
 	NoProxy    []string
+	// DirectConnect bypasses proxies entirely, including any the environment
+	// sets. Distinct from an empty HTTPSProxy, which falls back to
+	// HTTPS_PROXY.
+	DirectConnect bool
 
 	// Timeouts. Note there is no overall request timeout: a large manifest is
 	// not slow, and in M3 a multi-gigabyte blob certainly is not. Stalls are
@@ -190,8 +203,15 @@ func baseTransport(cfg Config) (*http.Transport, error) {
 }
 
 func tlsConfigFor(cfg Config) (*tls.Config, error) {
+	//nolint:gosec // G402: deliberate, opt-in per repository, and logged loudly
+	// by the caller. See the field's documentation.
+	base := &tls.Config{
+		MinVersion:         tls.VersionTLS12,
+		InsecureSkipVerify: cfg.InsecureSkipVerify,
+	}
+
 	if len(cfg.CABundle) == 0 {
-		return &tls.Config{MinVersion: tls.VersionTLS12}, nil
+		return base, nil
 	}
 
 	// Append to the system pool rather than replacing it: a product that adds
@@ -203,10 +223,18 @@ func tlsConfigFor(cfg Config) (*tls.Config, error) {
 	if !pool.AppendCertsFromPEM(cfg.CABundle) {
 		return nil, fmt.Errorf("caBundle for %s contains no usable PEM certificates", cfg.Registry)
 	}
-	return &tls.Config{MinVersion: tls.VersionTLS12, RootCAs: pool}, nil
+	base.RootCAs = pool
+	return base, nil
 }
 
 func proxyFor(cfg Config) (func(*http.Request) (*url.URL, error), error) {
+	if cfg.DirectConnect {
+		// Explicitly direct: not even the environment's proxy applies. A
+		// repository that asked to bypass the proxy means it, and silently
+		// honouring HTTPS_PROXY here would make the setting a no-op in exactly
+		// the deployment that needs it — one with a cluster-wide proxy.
+		return func(*http.Request) (*url.URL, error) { return nil, nil }, nil
+	}
 	if cfg.HTTPSProxy == "" {
 		// Fall back to the environment so a cluster-wide proxy still applies.
 		return http.ProxyFromEnvironment, nil

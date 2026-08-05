@@ -140,12 +140,27 @@ func applyNetwork(
 			cfg.CABundle = []byte(bundle.Reveal())
 		}
 		if n.Proxy != nil {
-			if n.Proxy.HTTPSProxy != "" {
+			switch {
+			case n.Proxy.Direct:
+				// Clears any inherited proxy. Without this the only way to say
+				// "everything through the corporate proxy except this one
+				// registry" is to repeat the host in noProxy at every level.
+				cfg.HTTPSProxy = ""
+				cfg.NoProxy = nil
+				cfg.DirectConnect = true
+			case n.Proxy.HTTPSProxy != "":
 				cfg.HTTPSProxy = n.Proxy.HTTPSProxy
+				cfg.DirectConnect = false
 			}
-			if len(n.Proxy.NoProxy) > 0 {
+			if len(n.Proxy.NoProxy) > 0 && !n.Proxy.Direct {
 				cfg.NoProxy = n.Proxy.NoProxy
 			}
+		}
+		if n.TLS.SetsSkipVerify() {
+			// Explicit at either level wins, including an explicit false — a
+			// product that disables verification globally must still be able to
+			// keep it on for the one registry with a good certificate.
+			cfg.InsecureSkipVerify = n.TLS.SkipsVerify()
 		}
 		if d := time.Duration(n.Timeouts.Connect); d > 0 {
 			cfg.ConnectTimeout = d
@@ -192,6 +207,14 @@ func SourceSpecs(
 	var errs []error
 
 	for _, p := range products {
+		// A disabled product is loaded, validated and listed — it simply does
+		// not run. Skipping here rather than at load is what lets `products
+		// list` and `products describe` still show it, which is the point of
+		// disabling rather than deleting.
+		if !p.IsEnabled() {
+			continue
+		}
+
 		ref, ok := catalog[p.Metadata.Name]
 		if !ok {
 			errs = append(errs, fmt.Errorf("product %q has no catalog rows: reconciliation has not run", p.Metadata.Name))
@@ -199,7 +222,10 @@ func SourceSpecs(
 		}
 
 		for _, src := range p.Spec.Sources {
-			if !src.Discovery.IsEnabled() {
+			// Two switches, two meanings: `enabled: false` removes the source
+			// entirely, `discovery.enabled: false` keeps it usable for explicit
+			// transfers but stops the polling.
+			if !src.IsEnabled() || !src.Discovery.IsEnabled() {
 				continue
 			}
 
@@ -220,13 +246,14 @@ func SourceSpecs(
 			}
 
 			specs = append(specs, SourceSpec{
-				Product:    p,
-				ProductID:  ref.ID,
-				SourceName: src.Name,
-				RepoIDs:    ref.Repositories,
-				NewClient:  newClient,
-				Catalog:    catalogClient,
-				Interval:   interval,
+				Product:     p,
+				ProductID:   ref.ID,
+				SourceName:  src.Name,
+				RepoIDs:     ref.Repositories,
+				NewClient:   newClient,
+				Catalog:     catalogClient,
+				Interval:    interval,
+				InsecureTLS: product.SkipsTLSVerification(p.Spec.Network, src.Network),
 			})
 		}
 	}

@@ -7,8 +7,10 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/url"
+	"os"
 	"strconv"
 	"strings"
 	"time"
@@ -19,6 +21,17 @@ import (
 // to exit code 3 so a script can tell "the service is down" from "you asked
 // for something invalid".
 var ErrUnreachable = errors.New("coordinator unreachable")
+
+// ErrTimeout means the Coordinator was reached but did not answer within the
+// client's timeout.
+//
+// Separate from ErrUnreachable because they call for opposite actions. "The
+// Coordinator is down" means go and look at the Coordinator; "it is still
+// working on your request" means give it longer. Reporting both as
+// unreachable — which is what this client used to do — sends operators to
+// investigate a healthy service, and is exactly the confusion `products check`
+// and `packages discover` produced against their 30-second default.
+var ErrTimeout = errors.New("the request timed out")
 
 // Client talks to the Coordinator API.
 //
@@ -182,6 +195,28 @@ func (c *Client) CheckConnectivity(ctx context.Context, product string) (*CheckC
 	return &out, c.post(ctx, path, struct{}{}, &out)
 }
 
+// transportError classifies a failure to get any response at all.
+//
+// The distinction is worth the code because the two cases are diagnosed in
+// opposite directions, and because Go's own message for a client timeout —
+// "context deadline exceeded (Client.Timeout exceeded while awaiting headers)"
+// — names neither the timeout that was in force nor the flag that changes it.
+func (c *Client) transportError(err error) error {
+	var nerr net.Error
+	timedOut := errors.Is(err, context.DeadlineExceeded) ||
+		errors.Is(err, os.ErrDeadlineExceeded) ||
+		(errors.As(err, &nerr) && nerr.Timeout())
+
+	if !timedOut {
+		return fmt.Errorf("%w: %s: %w", ErrUnreachable, c.endpoint, err)
+	}
+	if c.http.Timeout > 0 {
+		return fmt.Errorf("%w after %s: %s did not answer in time: %w",
+			ErrTimeout, c.http.Timeout, c.endpoint, err)
+	}
+	return fmt.Errorf("%w: %s did not answer in time: %w", ErrTimeout, c.endpoint, err)
+}
+
 func (c *Client) post(ctx context.Context, path string, in, out any) error {
 	body, err := json.Marshal(in)
 	if err != nil {
@@ -201,7 +236,7 @@ func (c *Client) post(ctx context.Context, path string, in, out any) error {
 
 	resp, err := c.http.Do(req)
 	if err != nil {
-		return fmt.Errorf("%w: %s: %w", ErrUnreachable, c.endpoint, err)
+		return c.transportError(err)
 	}
 	defer func() {
 		_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 1<<20))
@@ -233,7 +268,7 @@ func (c *Client) get(ctx context.Context, path string, out any) error {
 
 	resp, err := c.http.Do(req)
 	if err != nil {
-		return fmt.Errorf("%w: %s: %w", ErrUnreachable, c.endpoint, err)
+		return c.transportError(err)
 	}
 	defer func() {
 		// Drain before closing so the connection can be reused rather than

@@ -42,10 +42,15 @@ func newProductsListCommand() *cobra.Command {
 					return nil
 				}
 				tw := newTabWriter(w)
-				fmt.Fprintln(tw, "NAME\tSOURCES\tREPOSITORIES\tTARGETS\tDISCOVERY\tAUTO-DOWNLOAD\tVERIFICATION\tOWNER")
+				fmt.Fprintln(tw, "NAME\tSTATE\tSOURCES\tREPOSITORIES\tTARGETS\tDISCOVERY\tAUTO-DOWNLOAD\tVERIFICATION\tOWNER")
+				disabled := 0
 				for _, p := range resp.Products {
-					fmt.Fprintf(tw, "%s\t%d\t%s\t%d\t%s\t%s\t%s\t%s\n",
+					if !p.Enabled {
+						disabled++
+					}
+					fmt.Fprintf(tw, "%s\t%s\t%d\t%s\t%d\t%s\t%s\t%s\t%s\n",
 						p.ProductID,
+						enabledState(p.Enabled),
 						len(p.Sources),
 						sourceRepositorySummary(p.Sources),
 						len(p.Targets),
@@ -57,6 +62,11 @@ func newProductsListCommand() *cobra.Command {
 				}
 				if err := tw.Flush(); err != nil {
 					return err
+				}
+				if disabled > 0 {
+					fmt.Fprintln(w)
+					fmt.Fprintf(w, "%d product(s) disabled: still configured and validated, but not running.\n", disabled)
+					fmt.Fprintln(w, "Re-enable with `metadata.enabled: true`; their discovered packages are kept.")
 				}
 				fmt.Fprintln(w)
 				fmt.Fprintln(w, "transferctl products describe <name>   full configuration")
@@ -82,6 +92,14 @@ func newProductsDescribeCommand() *cobra.Command {
 			})
 		},
 	}
+}
+
+// enabledState renders the on/off state as an alignable token.
+func enabledState(enabled bool) string {
+	if enabled {
+		return "active"
+	}
+	return "DISABLED"
 }
 
 // repositoryList renders a source's repositories for a detail view.
@@ -137,7 +155,7 @@ func discoverySummary(sources []v1.Repository) string {
 }
 
 func newProductsCheckCommand() *cobra.Command {
-	return &cobra.Command{
+	cmd := &cobra.Command{
 		Use:   "check [product]",
 		Short: "Test that configured registries are reachable and credentials work",
 		Long: "Probes every repository a product declares: DNS and TLS, whether the\n" +
@@ -166,6 +184,12 @@ func newProductsCheckCommand() *cobra.Command {
 			})
 		},
 	}
+
+	// Every repository of every product, each a TLS handshake and at least two
+	// round trips to a third party. The default 30 seconds is not enough and
+	// never was.
+	contactsRegistries(cmd)
+	return cmd
 }
 
 func renderConnectivity(w io.Writer, resp *v1.CheckConnectivityResponse) error {
@@ -180,6 +204,10 @@ func renderConnectivity(w io.Writer, resp *v1.CheckConnectivityResponse) error {
 			fmt.Fprintln(w)
 		}
 		fmt.Fprintf(w, "%s  %s\n", checkMark(p.Status), p.Product)
+		if p.Status == v1.CheckSkipped && len(p.Repositories) == 0 {
+			fmt.Fprintln(w, "      disabled — nothing probed")
+			continue
+		}
 
 		for _, r := range p.Repositories {
 			ref := r.Registry
@@ -244,6 +272,9 @@ func checkMark(s v1.CheckStatus) string {
 
 func renderProductDetail(w io.Writer, p *v1.Product) error {
 	fmt.Fprintf(w, "Product      %s\n", p.ProductID)
+	if !p.Enabled {
+		fmt.Fprintln(w, "State        DISABLED — configured and validated, but not running")
+	}
 	if p.DisplayName != "" {
 		fmt.Fprintf(w, "Display      %s\n", p.DisplayName)
 	}
@@ -258,14 +289,15 @@ func renderProductDetail(w io.Writer, p *v1.Product) error {
 
 	fmt.Fprintln(w, "Sources")
 	tw := newTabWriter(w)
-	fmt.Fprintln(tw, "  NAME\tREGISTRY\tREPOSITORIES\tTYPE\tDISCOVERY\tDOWNLOADS")
+	fmt.Fprintln(tw, "  NAME\tSTATE\tREGISTRY\tREPOSITORIES\tTYPE\tDISCOVERY\tDOWNLOADS")
 	for _, s := range p.Sources {
-		discovery := "disabled"
+		discovery := "off"
 		if s.Discovery != nil && s.Discovery.Enabled {
 			discovery = fmt.Sprintf("every %ds", s.Discovery.IntervalSeconds)
 		}
-		fmt.Fprintf(tw, "  %s\t%s\t%s\t%s\t%s\t%d\n",
-			s.Name, s.Registry, repositoryList(s), s.Type, discovery, s.RateLimits.MaxConcurrentDownloads)
+		fmt.Fprintf(tw, "  %s\t%s\t%s\t%s\t%s\t%s\t%d\n",
+			s.Name, enabledState(s.Enabled), s.Registry, repositoryList(s), s.Type,
+			discovery, s.RateLimits.MaxConcurrentDownloads)
 	}
 	if err := tw.Flush(); err != nil {
 		return err
@@ -274,10 +306,10 @@ func renderProductDetail(w io.Writer, p *v1.Product) error {
 	fmt.Fprintln(w)
 	fmt.Fprintln(w, "Targets")
 	tw = newTabWriter(w)
-	fmt.Fprintln(tw, "  NAME\tREGISTRY\tREPOSITORY\tTYPE\tDEFAULT\tPROMOTION-ONLY\tUPLOADS")
+	fmt.Fprintln(tw, "  NAME\tSTATE\tREGISTRY\tREPOSITORY\tTYPE\tDEFAULT\tPROMOTION-ONLY\tUPLOADS")
 	for _, t := range p.Targets {
-		fmt.Fprintf(tw, "  %s\t%s\t%s\t%s\t%s\t%s\t%d\n",
-			t.Name, t.Registry, t.Repository, t.Type,
+		fmt.Fprintf(tw, "  %s\t%s\t%s\t%s\t%s\t%s\t%s\t%d\n",
+			t.Name, enabledState(t.Enabled), t.Registry, t.Repository, t.Type,
 			yesNo(t.Default), yesNo(t.PromotionOnly), t.RateLimits.MaxConcurrentUploads)
 	}
 	if err := tw.Flush(); err != nil {

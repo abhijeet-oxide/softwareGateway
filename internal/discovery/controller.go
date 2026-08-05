@@ -27,6 +27,18 @@ type Controller struct {
 	secrets  *product.SecretResolver
 	log      *slog.Logger
 
+	// reconcileMu serialises whole reconciles.
+	//
+	// Separate from mu, which guards the fields below and is released while the
+	// loop starts and stops. Without it two reconciles can interleave: SetLeader
+	// runs on the leader-election goroutine and SetConfig on the config watcher,
+	// so a reload landing as leadership is acquired had both observe
+	// started=false and both call Start — the second failing with "discovery
+	// loop is already running". The worse ordering is silent: one reconcile
+	// stops the loop while the other is mid-Start, leaving started=true with
+	// nothing polling.
+	reconcileMu sync.Mutex
+
 	mu       sync.Mutex
 	ctx      context.Context
 	leader   bool
@@ -105,6 +117,9 @@ func (c *Controller) SetConfig(products []*product.Product, catalog map[string]P
 
 // reconcile brings the loop in line with the desired state.
 func (c *Controller) reconcile() {
+	c.reconcileMu.Lock()
+	defer c.reconcileMu.Unlock()
+
 	c.mu.Lock()
 	ctx, leader, products, cat, started := c.ctx, c.leader, c.products, c.catalog, c.started
 	c.mu.Unlock()
@@ -136,6 +151,20 @@ func (c *Controller) reconcile() {
 	if len(specs) == 0 {
 		c.log.Info("discovery: no enabled sources to poll")
 		return
+	}
+
+	for _, s := range specs {
+		if !s.InsecureTLS {
+			continue
+		}
+		// Repeated on every reconcile, not just the first. A warning logged once
+		// at startup scrolls away; one that reappears whenever configuration
+		// changes is one somebody eventually removes the cause of.
+		c.log.Warn("discovery: TLS CERTIFICATE VERIFICATION IS DISABLED for this source — "+
+			"the connection is encrypted but not authenticated",
+			"product", s.Product.Metadata.Name,
+			"source", s.SourceName,
+			"setting", "network.tls.insecureSkipVerify")
 	}
 
 	if err := c.loop.Start(ctx, specs, c.packages); err != nil {

@@ -171,6 +171,8 @@ One `http.Client` per repository, built from product configuration, carrying eve
 
 `Retry-After` is honoured when present. A registry telling us how long to wait is better information than our backoff formula, and ignoring it is a good way to get an IP blocked.
 
+**TLS lives at the bottom of the stack, and has two knobs.** `network.caBundleRef` appends a private CA to the system pool — appends, not replaces, because a product that adds an internal CA still needs to reach public registries and Sigstore. `network.tls.insecureSkipVerify` turns verification off entirely for one repository; it is opt-in, logged on every reload, and reported by `products check`. Neither of them fixes `x509: negative serial number`, which fails while parsing the certificate before any verification runs — see [02 §TLS](02-configuration.md#tls-two-different-failures-two-different-fixes).
+
 ## 6. Registry implementations
 
 ### 6.1 Generic (default)

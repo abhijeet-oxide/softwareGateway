@@ -44,6 +44,19 @@ type Metadata struct {
 	Description string            `json:"description,omitempty"`
 	Owner       string            `json:"owner,omitempty"`
 	Labels      map[string]string `json:"labels,omitempty"`
+
+	// Enabled turns the whole product off without deleting its configuration.
+	// Defaults to true; use Product.IsEnabled rather than reading it.
+	//
+	// Deleting a document to pause a product loses the thing you most want
+	// back: the exact registries, credentials, filters and rules that were
+	// working. Re-creating it from memory during an incident is how a
+	// "temporary" pause becomes a subtly different configuration.
+	//
+	// A disabled product still loads and still VALIDATES, so a mistake in it is
+	// reported now rather than discovered on the day someone re-enables it.
+	// Its already-discovered packages are kept.
+	Enabled *bool `json:"enabled,omitempty"`
 }
 
 type Spec struct {
@@ -68,6 +81,19 @@ type Source struct {
 	Name     string `json:"name"`
 	Registry string `json:"registry"`
 
+	// Enabled turns this source off entirely. Defaults to true.
+	//
+	// Distinct from `discovery.enabled`, and the difference is worth knowing:
+	//
+	//	enabled: false             the source does not exist for any purpose
+	//	discovery.enabled: false   the source exists and can be transferred
+	//	                           from on request, but is not polled
+	//
+	// Use this one when a vendor relationship is paused; use discovery.enabled
+	// when you only want to stop the polling — a failover mirror, say, which
+	// must stay usable but must not double-discover every tag.
+	Enabled *bool `json:"enabled,omitempty"`
+
 	// Repository names a single repository. Equivalent to a one-element
 	// Repositories, and kept because the single-repository case is the common
 	// one and `repository: platform/suite` reads better than a list of one.
@@ -88,7 +114,17 @@ type Source struct {
 	CredentialsRef *CredentialsRef `json:"credentialsRef,omitempty"`
 	Discovery      Discovery       `json:"discovery,omitempty"`
 	RateLimits     RateLimits      `json:"rateLimits,omitempty"`
-	Network        *Network        `json:"network,omitempty"`
+
+	// Network overrides the product's TLS trust, proxy and timeouts for this
+	// source. Set fields win; unset ones inherit.
+	Network *Network `json:"network,omitempty"`
+
+	// Verification overrides the product's signing trust for this source.
+	//
+	// Two vendors do not share a signing identity, and a product that pulls
+	// from both cannot express that with one product-level block. The scalar
+	// settings inherit; `cosign` replaces wholesale — see Product.VerificationFor.
+	Verification *Verification `json:"verification,omitempty"`
 }
 
 // EnumeratesRepositories reports whether this source finds its repositories
@@ -139,14 +175,30 @@ type Filters struct {
 // Target is an internal, read-write repository: a replication destination and
 // a promotion endpoint in both directions.
 type Target struct {
-	Name           string          `json:"name"`
-	Registry       string          `json:"registry"`
-	Repository     string          `json:"repository"`
+	Name       string `json:"name"`
+	Registry   string `json:"registry"`
+	Repository string `json:"repository"`
+
+	// Enabled turns this target off without deleting it. Defaults to true.
+	//
+	// A destination being decommissioned, or one whose registry is down for
+	// maintenance, should stop receiving transfers without its configuration —
+	// and its history — being thrown away.
+	Enabled        *bool           `json:"enabled,omitempty"`
 	Type           RegistryType    `json:"type,omitempty"`
 	Anonymous      bool            `json:"anonymous,omitempty"`
 	CredentialsRef *CredentialsRef `json:"credentialsRef,omitempty"`
 	RateLimits     RateLimits      `json:"rateLimits,omitempty"`
-	Network        *Network        `json:"network,omitempty"`
+
+	// Network overrides the product's TLS trust, proxy and timeouts for this
+	// target. A destination inside the datacentre and a vendor outside it
+	// routinely need different routes.
+	Network *Network `json:"network,omitempty"`
+
+	// Verification overrides the product's signing trust for this target,
+	// used for destination-side checks after a push.
+	Verification *Verification `json:"verification,omitempty"`
+
 	// Default marks the target used when a request names none.
 	Default bool `json:"default,omitempty"`
 	// PromotionOnly rejects direct replication, so a production registry can
@@ -396,12 +448,79 @@ var KnownEvents = []string{
 type Network struct {
 	CABundleRef *SecretRef `json:"caBundleRef,omitempty"`
 	Proxy       *Proxy     `json:"proxy,omitempty"`
+	TLS         *TLS       `json:"tls,omitempty"`
 	Timeouts    Timeouts   `json:"timeouts,omitempty"`
+}
+
+// TLS overrides certificate handling for one repository.
+type TLS struct {
+	// InsecureSkipVerify disables certificate verification entirely: the
+	// chain, the expiry and the hostname all stop being checked.
+	//
+	// An earlier revision of this file said this option would never exist,
+	// because supplying a CA bundle is the right fix. That was too strong.
+	// caBundleRef fixes an UNTRUSTED chain; it does nothing for a certificate
+	// that is expired, carries the wrong hostname, or belongs to a registry
+	// being migrated — and an operator who genuinely needs to move bytes past
+	// one of those today should not have to patch the binary.
+	//
+	// It is nonetheless the wrong answer to most problems. In particular it
+	// does NOT fix "x509: negative serial number": that failure happens while
+	// PARSING the server's certificate, before any verification runs, so
+	// skipping verification changes nothing. Measured, not assumed — see
+	// tls.allowNegativeSerialNumbers in the system configuration for the fix.
+	//
+	// Every client built with this set logs a warning naming the repository,
+	// and `transferctl products check` reports it. It should be visible in a
+	// way that makes leaving it on uncomfortable.
+	//
+	// A pointer so that silence and `false` are different things. A product-level
+	// tls block is INHERITED by every source and target; without the pointer a
+	// source could never turn it back off, because an omitted field and an
+	// explicit `false` would look identical.
+	InsecureSkipVerify *bool `json:"insecureSkipVerify,omitempty"`
+}
+
+// SetsSkipVerify reports whether this block states a choice at all.
+//
+// Nil receiver is safe: `network.tls` is optional at every level, and the
+// callers walk a chain of possibly-absent blocks.
+func (t *TLS) SetsSkipVerify() bool {
+	return t != nil && t.InsecureSkipVerify != nil
+}
+
+// SkipsVerify reports whether verification is disabled. Absent means enabled —
+// the safe direction, and the only defensible default.
+func (t *TLS) SkipsVerify() bool {
+	return t != nil && t.InsecureSkipVerify != nil && *t.InsecureSkipVerify
+}
+
+// SkipsTLSVerification resolves the effective setting for one repository: the
+// product's network block, overridden by the repository's own where it states
+// a choice.
+//
+// One function rather than the rule being re-derived at each call site, because
+// this is a security-relevant decision and two call sites disagreeing about it
+// is exactly the bug that would not be noticed.
+func SkipsTLSVerification(base Network, override *Network) bool {
+	skip := base.TLS.SkipsVerify()
+	if override != nil && override.TLS.SetsSkipVerify() {
+		skip = override.TLS.SkipsVerify()
+	}
+	return skip
 }
 
 type Proxy struct {
 	HTTPSProxy string   `json:"httpsProxy,omitempty"`
 	NoProxy    []string `json:"noProxy,omitempty"`
+	// Direct ignores any inherited proxy and connects straight out.
+	//
+	// Needed because a product-level proxy is INHERITED, and "everything goes
+	// through the corporate proxy except this one internal registry" is the
+	// normal shape. Without it the only way to express that is to repeat the
+	// registry's own hostname in noProxy at every level — which works, and is
+	// easy to get subtly wrong when the host has a port or an alias.
+	Direct bool `json:"direct,omitempty"`
 }
 
 // Timeouts are per request. Blob transfers are governed by IdleStall rather
@@ -462,12 +581,16 @@ func (p Product) Repositories() []RepositoryRef {
 				name = s.Name + "/" + repo
 			}
 			out = append(out, RepositoryRef{
-				Role: RoleSource, Name: name, Registry: s.Registry, Repository: repo, Type: s.Type,
+				Role: RoleSource, Name: name, Registry: s.Registry, Repository: repo,
+				Type: s.Type, Enabled: p.IsEnabled() && s.IsEnabled(),
 			})
 		}
 	}
 	for _, t := range p.Spec.Targets {
-		out = append(out, RepositoryRef{Role: RoleTarget, Name: t.Name, Registry: t.Registry, Repository: t.Repository, Type: t.Type})
+		out = append(out, RepositoryRef{
+			Role: RoleTarget, Name: t.Name, Registry: t.Registry, Repository: t.Repository,
+			Type: t.Type, Enabled: p.IsEnabled() && t.IsEnabled(),
+		})
 	}
 	return out
 }
@@ -487,18 +610,26 @@ type RepositoryRef struct {
 	Registry   string
 	Repository string
 	Type       RegistryType
+	// Enabled is the resolved state: false when the repository itself is
+	// disabled, or when the product containing it is.
+	Enabled bool
 }
 
 // DefaultTarget returns the target marked default, or the sole target when
 // there is exactly one. Reports false when a request must name a target.
+// DefaultTarget returns the target used when a request names none.
+//
+// Disabled targets are not candidates: silently replicating into a destination
+// somebody switched off would defeat the point of the switch.
 func (p Product) DefaultTarget() (Target, bool) {
-	for _, t := range p.Spec.Targets {
+	enabled := p.EnabledTargets()
+	for _, t := range enabled {
 		if t.Default {
 			return t, true
 		}
 	}
-	if len(p.Spec.Targets) == 1 && !p.Spec.Targets[0].PromotionOnly {
-		return p.Spec.Targets[0], true
+	if len(enabled) == 1 && !enabled[0].PromotionOnly {
+		return enabled[0], true
 	}
 	return Target{}, false
 }
@@ -511,6 +642,87 @@ func (p Product) Target(name string) (Target, bool) {
 		}
 	}
 	return Target{}, false
+}
+
+// IsEnabled reports whether the product participates at all.
+//
+// Absent means enabled: a document that says nothing about it is on, which is
+// what every existing configuration means and what a new one will expect.
+func (p Product) IsEnabled() bool {
+	return p.Metadata.Enabled == nil || *p.Metadata.Enabled
+}
+
+// IsEnabled reports whether this source participates at all.
+func (s Source) IsEnabled() bool { return s.Enabled == nil || *s.Enabled }
+
+// IsEnabled reports whether this target participates at all.
+func (t Target) IsEnabled() bool { return t.Enabled == nil || *t.Enabled }
+
+// EnabledTargets returns the targets that are on.
+func (p Product) EnabledTargets() []Target {
+	out := make([]Target, 0, len(p.Spec.Targets))
+	for _, t := range p.Spec.Targets {
+		if t.IsEnabled() {
+			out = append(out, t)
+		}
+	}
+	return out
+}
+
+// EnabledSources returns the sources that are on.
+func (p Product) EnabledSources() []Source {
+	out := make([]Source, 0, len(p.Spec.Sources))
+	for _, s := range p.Spec.Sources {
+		if s.IsEnabled() {
+			out = append(out, s)
+		}
+	}
+	return out
+}
+
+// VerificationFor returns the verification settings in force for one
+// repository.
+//
+// The merge is deliberately asymmetric, because the two halves behave
+// differently:
+//
+//   - The SCALARS (enabled, policy, atSource, atDestination,
+//     transferSignatures) inherit from the product and are overridden
+//     individually. A product says "enforce, at source" once; a repository
+//     that needs `warn` while a vendor's signing is being onboarded overrides
+//     that one field.
+//
+//   - `cosign` REPLACES WHOLESALE. It is one coherent trust decision — a mode
+//     plus the identity or key that mode requires — and merging it field by
+//     field would silently produce combinations nobody wrote: a product's
+//     keyless certificate identity paired with a repository's key mode, or a
+//     Fulcio issuer left over from a block that no longer applies. A trust
+//     configuration assembled from two documents is one nobody can audit.
+func (p Product) VerificationFor(override *Verification) Verification {
+	v := p.Spec.Verification
+	if override == nil {
+		return v
+	}
+
+	// Scalars: an explicitly set field wins. Booleans cannot distinguish
+	// "false" from "unset", so `enabled` and the two `at*` flags are taken
+	// from the override whenever a verification block is present at all —
+	// writing one and having it ignored would be worse than the alternative.
+	v.Enabled = override.Enabled
+	v.AtSource = override.AtSource
+	v.AtDestination = override.AtDestination
+	if override.Policy != "" {
+		v.Policy = override.Policy
+	}
+	if override.TransferSignatures != nil {
+		v.TransferSignatures = override.TransferSignatures
+	}
+
+	// Cosign is atomic.
+	if override.Cosign.Mode != "" || override.Cosign.Keyless != nil || override.Cosign.Key != nil {
+		v.Cosign = override.Cosign
+	}
+	return v
 }
 
 // Source looks up a source by name.

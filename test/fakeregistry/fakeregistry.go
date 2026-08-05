@@ -230,6 +230,17 @@ func (r *Registry) AddImage(repoPath, tag string, layers ...Layer) string {
 // platforms and childDigests are parallel slices; a child with an empty
 // platform string gets no platform field.
 func (r *Registry) AddIndex(repoPath, tag string, childDigests, platforms []string) string {
+	return r.AddAnnotatedIndex(repoPath, tag, childDigests, platforms, nil)
+}
+
+// AddAnnotatedIndex adds an index carrying annotations.
+//
+// Real vendor bundles are annotated — a release date, a product name, a
+// per-child type — and a fake registry that never sets any would let a whole
+// class of parsing bug through untested.
+func (r *Registry) AddAnnotatedIndex(
+	repoPath, tag string, childDigests, platforms []string, annotations map[string]string,
+) string {
 	manifests := make([]map[string]any, 0, len(childDigests))
 
 	r.mu.Lock()
@@ -252,11 +263,15 @@ func (r *Registry) AddIndex(repoPath, tag string, childDigests, platforms []stri
 	}
 	r.mu.Unlock()
 
-	raw, err := json.Marshal(map[string]any{
+	index := map[string]any{
 		"schemaVersion": 2,
 		"mediaType":     "application/vnd.oci.image.index.v1+json",
 		"manifests":     manifests,
-	})
+	}
+	if len(annotations) > 0 {
+		index["annotations"] = annotations
+	}
+	raw, err := json.Marshal(index)
 	if err != nil {
 		panic("fakeregistry: marshal index: " + err.Error())
 	}

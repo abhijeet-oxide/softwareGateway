@@ -289,8 +289,18 @@ type Package struct {
 	ArtifactCount int  `json:"artifactCount"`
 	BlobCount     *int `json:"blobCount,omitempty"`
 
-	State        PackageState `json:"state"`
-	DiscoveredAt string       `json:"discoveredAt"`
+	State PackageState `json:"state"`
+	// DiscoveredAt is when WE first saw it. An observation.
+	DiscoveredAt string `json:"discoveredAt"`
+	// PublishedAt is when the VENDOR says it was built, from the standard
+	// org.opencontainers.image.created annotation. A claim, not an observation
+	// — and omitted entirely when the publisher set none, which the OCI spec
+	// permits.
+	//
+	// Kept separate from DiscoveredAt rather than folded into one "date",
+	// because "published in March, we only noticed in July" is a fact worth
+	// being able to see.
+	PublishedAt string `json:"publishedAt,omitempty"`
 
 	// SupersededBy names the package that replaced this one. Set only when the
 	// SAME TAG was re-pushed with different content; different tags never
@@ -322,6 +332,13 @@ type Artifact struct {
 	Platform string `json:"platform,omitempty"`
 	// Depth is 0 for the root; an index's children are 1.
 	Depth int `json:"depth"`
+	// Annotations is the artifact's annotation map, verbatim.
+	//
+	// Kept whole so a vendor's own keys — com.nokia.ncd.orb.type, say — reach
+	// a caller without this API knowing they exist. The standard
+	// org.opencontainers.* keys are in here too; only `created` is also
+	// promoted to a column, because only it is worth sorting by.
+	Annotations map[string]string `json:"annotations,omitempty"`
 	// Fetched reports whether we hold this manifest's bytes.
 	//
 	// Discovery fetches the tag's own manifest and records the children its

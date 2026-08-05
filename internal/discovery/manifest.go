@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strings"
+	"time"
 
 	"github.com/abhijeet-oxide/softwareGateway/internal/registry"
 )
@@ -63,6 +65,11 @@ type tree struct {
 	// BlobCount is distinct blob digests, on the same basis, and nil on the
 	// same condition.
 	BlobCount *int
+
+	// PublishedAt is the root manifest's org.opencontainers.image.created, a
+	// STANDARD OCI annotation. Nil when the publisher set none, which the spec
+	// permits — so it is useful where present and never relied upon.
+	PublishedAt *string
 }
 
 // manifestBody is the subset of a manifest or index we parse.
@@ -77,6 +84,14 @@ type manifestBody struct {
 	Layers       []registry.Descriptor `json:"layers"`
 	Manifests    []registry.Descriptor `json:"manifests"`
 	Subject      *registry.Descriptor  `json:"subject"`
+	// Annotations describe the artifact itself — when it was built, who
+	// published it, what release it belongs to.
+	//
+	// These were parsed and discarded until it was pointed out that discovery
+	// already holds them. A child descriptor's annotations were kept (they are
+	// part of registry.Descriptor); the manifest's OWN were not, and those are
+	// where org.opencontainers.image.created lives.
+	Annotations map[string]string `json:"annotations"`
 }
 
 // fetchPackage fetches the tag's OWN manifest, and nothing else.
@@ -137,6 +152,7 @@ func fetchPackage(
 	}
 
 	t.TotalBytes, t.BlobCount = measure(t.Artifacts)
+	t.PublishedAt = publishedAt(t.Artifacts)
 	return t, nil
 }
 
@@ -178,6 +194,21 @@ func appendArtifact(
 	}
 	if body.ArtifactType != "" {
 		desc.ArtifactType = body.ArtifactType
+	}
+
+	// The manifest's own annotations belong to the manifest, and merge UNDER
+	// whatever the referencing descriptor said: an index describing its child
+	// is making a claim about that child, and the child describing itself is
+	// the more direct source.
+	if len(body.Annotations) > 0 {
+		merged := make(map[string]string, len(body.Annotations)+len(desc.Annotations))
+		for k, v := range desc.Annotations {
+			merged[k] = v
+		}
+		for k, v := range body.Annotations {
+			merged[k] = v
+		}
+		desc.Annotations = merged
 	}
 
 	a := artifact{Descriptor: desc, Raw: raw, Parent: parent, Depth: depth}
@@ -251,4 +282,31 @@ func measure(artifacts []artifact) (*int64, *int) {
 		}
 	}
 	return &totalBytes, &blobCount
+}
+
+// publishedAt reads the vendor's declared build time off the ROOT manifest.
+//
+// The root only: an index's children each carry their own created time, and
+// the package's date is the release's, not the earliest component's. Reading
+// the root is also the only one of them that is stable — a bundle's children
+// can be rebuilt independently.
+//
+// Validated as RFC 3339 before it is believed. It is a free-text annotation
+// written by whoever published the artifact, so a value that is not a
+// timestamp is dropped rather than stored for something downstream to trip
+// over.
+func publishedAt(artifacts []artifact) *string {
+	if len(artifacts) == 0 {
+		return nil
+	}
+	v, ok := artifacts[0].Descriptor.Annotations[registry.AnnotationCreated]
+	if !ok || strings.TrimSpace(v) == "" {
+		return nil
+	}
+	t, err := time.Parse(time.RFC3339, strings.TrimSpace(v))
+	if err != nil {
+		return nil
+	}
+	out := t.UTC().Format(time.RFC3339)
+	return &out
 }

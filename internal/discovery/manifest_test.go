@@ -301,3 +301,94 @@ func TestInspectFillsInWhatDiscoveryListed(t *testing.T) {
 		t.Errorf("a second inspection duplicated artifacts: %d rows, want 3", got)
 	}
 }
+
+// TestStandardCreatedAnnotationBecomesPublishedAt covers the one annotation
+// promoted to a column.
+//
+// org.opencontainers.image.created is defined by the OCI image spec under the
+// reserved org.opencontainers. namespace — it is not any one vendor's key,
+// which is what makes it safe to build on. It is also OPTIONAL, so nothing may
+// require it.
+func TestStandardCreatedAnnotationBecomesPublishedAt(t *testing.T) {
+	h := newHarness(t, baseDoc)
+
+	child := h.reg.AddImage(testRepoPath, "", fakeregistry.NewLayer("a"))
+	h.reg.AddAnnotatedIndex(testRepoPath, "v1.0.0", []string{child}, []string{"linux/amd64"},
+		map[string]string{
+			"org.opencontainers.image.created": "2024-06-12T17:56:19Z",
+			"org.opencontainers.image.vendor":  "Nokia",
+			// A vendor's own key must survive without this project knowing it.
+			"com.nokia.ncd.orb.rb.version": "23.8.1076",
+		})
+
+	if res := h.scan(); res.New != 1 {
+		t.Fatalf("expected 1 new package, got %d", res.New)
+	}
+
+	pkg, err := h.packages.GetPackage(t.Context(), "vendor-a", "v1.0.0")
+	if err != nil {
+		t.Fatalf("get package: %v", err)
+	}
+	if pkg.PublishedAt == nil {
+		t.Fatal("published_at was not recorded from org.opencontainers.image.created")
+	}
+	if *pkg.PublishedAt != "2024-06-12T17:56:19Z" {
+		t.Errorf("published_at = %q, want the vendor's declared build time", *pkg.PublishedAt)
+	}
+	// Not conflated with our own observation.
+	if pkg.DiscoveredAt == *pkg.PublishedAt {
+		t.Error("published_at and discovered_at must stay distinct: one is the " +
+			"vendor's claim, the other is when we saw it")
+	}
+
+	arts, err := h.packages.ListArtifacts(t.Context(), pkg.ID)
+	if err != nil {
+		t.Fatalf("list artifacts: %v", err)
+	}
+	if got := arts[0].Annotations["com.nokia.ncd.orb.rb.version"]; got != "23.8.1076" {
+		t.Errorf("a vendor's own annotation was lost: got %q", got)
+	}
+	if got := arts[0].Annotations["org.opencontainers.image.vendor"]; got != "Nokia" {
+		t.Errorf("standard annotations must be kept too: got %q", got)
+	}
+}
+
+// A package with no created annotation must record nothing rather than
+// inventing a date. The spec makes it optional, so absence is normal.
+func TestMissingCreatedAnnotationLeavesPublishedAtUnset(t *testing.T) {
+	h := newHarness(t, baseDoc)
+	h.reg.AddImage(testRepoPath, "v1.0.0", fakeregistry.NewLayer("a"))
+
+	if res := h.scan(); res.New != 1 {
+		t.Fatalf("expected 1 new package, got %d", res.New)
+	}
+	pkg, err := h.packages.GetPackage(t.Context(), "vendor-a", "v1.0.0")
+	if err != nil {
+		t.Fatalf("get package: %v", err)
+	}
+	if pkg.PublishedAt != nil {
+		t.Errorf("published_at = %q; a missing annotation must stay missing", *pkg.PublishedAt)
+	}
+}
+
+// The annotation is free text written by whoever published the artifact, so a
+// value that is not a timestamp must be dropped rather than stored for
+// something downstream to trip over.
+func TestUnparseableCreatedAnnotationIsIgnored(t *testing.T) {
+	h := newHarness(t, baseDoc)
+
+	child := h.reg.AddImage(testRepoPath, "", fakeregistry.NewLayer("a"))
+	h.reg.AddAnnotatedIndex(testRepoPath, "v1.0.0", []string{child}, nil,
+		map[string]string{"org.opencontainers.image.created": "last Tuesday"})
+
+	if res := h.scan(); res.New != 1 {
+		t.Fatalf("expected 1 new package, got %d", res.New)
+	}
+	pkg, err := h.packages.GetPackage(t.Context(), "vendor-a", "v1.0.0")
+	if err != nil {
+		t.Fatalf("get package: %v", err)
+	}
+	if pkg.PublishedAt != nil {
+		t.Errorf("published_at = %q; an unparseable date must be dropped", *pkg.PublishedAt)
+	}
+}

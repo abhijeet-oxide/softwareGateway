@@ -337,3 +337,50 @@ The consequence is that inspect runs on the **leader**, and a follower answers `
 Discovery wrote the children as rows with no bytes. Inspect fills the same rows in — `ON CONFLICT ... DO UPDATE`, with `raw = COALESCE(EXCLUDED.raw, package_artifacts.raw)` so a re-run cannot blank a manifest already held — and adds anything deeper for the first time.
 
 All in **one transaction**, because a half-expanded package is the worst outcome available: it would carry a size that omits most of its bytes, with nothing marking it partial. Either the whole tree is known or none of it is.
+
+---
+
+## 14. What the tag's manifest is for
+
+Discovery fetches exactly one manifest per newly discovered tag. It is worth being specific about what that buys, because it is more than a digest.
+
+From that single response:
+
+- **the digest** — identity, and what makes supersession work when a vendor re-pushes a tag;
+- **the media type** — index or single artifact, which decides everything else;
+- **the child list** — each child's digest, size, media type and platform, so a listing can say what a package contains without fetching any of it;
+- **the annotations** — on the manifest itself and on each child descriptor.
+
+The annotations were being parsed and thrown away. A real vendor index carries a great deal in them:
+
+```json
+"annotations": {
+  "org.opencontainers.image.created": "2024-06-12T17:56:19Z",
+  "org.opencontainers.image.vendor":  "Nokia",
+  "com.nokia.ncd.orb.rb.name":        "CFX-5000-k8s",
+  "com.nokia.ncd.orb.rb.version":     "23.8.1076"
+}
+```
+
+and per child:
+
+```json
+"org.opencontainers.image.ref.name": "cfx-5000-product/crdb-redisio:9.0.3",
+"com.nokia.ncd.orb.type":            "helmchart"
+```
+
+### One key promoted, the rest kept whole
+
+`org.opencontainers.image.created` becomes a column, `packages.published_at`. That key is defined by the **OCI image spec**, under the reserved `org.opencontainers.` namespace — it is not any one vendor's, which is exactly what makes it safe to build on. Every registry and build tool that sets it agrees on its meaning: the date and time the artifact was built, RFC 3339.
+
+It earns a column because it is the one you want to sort and filter by. Everything else — including a vendor's own `com.nokia.ncd.*` keys — is stored verbatim as JSON on the artifact, so it reaches an operator without this project knowing those keys exist. The alternative is a column per vendor, which does not end.
+
+Three properties, all of which the spec forces:
+
+**It is optional.** A registry that sets no annotations is fully conformant, so `published_at` is nullable and nothing may require it.
+
+**It is free text.** Whoever published the artifact wrote it. A value that is not RFC 3339 is dropped rather than stored for something downstream to trip over.
+
+**It is a claim, not an observation.** The vendor says this is when it was built; we cannot verify that. So it is kept strictly separate from `discovered_at`, which is a fact about us. Folding them into one "date" would lose the ability to say which — and *"published in March, we only noticed in July"* is precisely the sort of thing worth being able to see.
+
+Read from the **root manifest only**. An index's children each carry their own created time, and a package's date is the release's, not its earliest component's — the children can be rebuilt independently.

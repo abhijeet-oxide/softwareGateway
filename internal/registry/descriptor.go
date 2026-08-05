@@ -130,6 +130,36 @@ var ManifestAcceptTypes = []string{
 }
 
 // IsIndex reports whether a media type is a multi-manifest index.
+// Standard OCI annotation keys.
+//
+// Defined by the image spec's annotations document, under the reserved
+// `org.opencontainers.` namespace — NOT by any one vendor. Every registry and
+// build tool that sets them agrees on their meaning, which is what makes them
+// safe to promote to first-class columns while a vendor's own keys stay
+// generic strings.
+//
+// All of them are OPTIONAL. A registry that sets none is fully conformant, so
+// nothing here may be required.
+const (
+	// AnnotationCreated is the date and time the artifact was BUILT, RFC 3339.
+	//
+	// Vendor-declared, and worth remembering that it is: it is whatever the
+	// publisher wrote, not something we observed or can verify. Kept distinct
+	// from our own discovered_at, which is a fact about us.
+	AnnotationCreated = "org.opencontainers.image.created"
+	// AnnotationVendor names the organisation that published it.
+	AnnotationVendor = "org.opencontainers.image.vendor"
+	// AnnotationVersion is the publisher's own version string, which is often
+	// more meaningful than the tag it happens to sit under.
+	AnnotationVersion = "org.opencontainers.image.version"
+	// AnnotationTitle is a human-readable name.
+	AnnotationTitle = "org.opencontainers.image.title"
+	// AnnotationRefName names what a child of an index actually is —
+	// "product/component:1.2.3" — which is the difference between a listing of
+	// digests and a listing a person can read.
+	AnnotationRefName = "org.opencontainers.image.ref.name"
+)
+
 func IsIndex(mediaType string) bool {
 	return mediaType == MediaTypeOCIIndex || mediaType == MediaTypeDockerList
 }

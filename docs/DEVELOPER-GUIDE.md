@@ -1058,6 +1058,13 @@ There was also a third cause, and it was the worst of the three: **every reposit
 
 If it is still slow after that, the requests themselves are slow: turn on request tracing (above), and `transferctl products check` times a real manifest fetch.
 
+**`packages list` is ordered by `PUBLISHED`, not by when we found it**
+Newest release first, by the vendor's own declared build date — which is the order a person thinks about releases in. Discovery order is not the same thing: a backfill, a re-scan after an outage, or adding a repository years after its first release all produce a discovery order with nothing to do with release order.
+
+Packages whose publisher set no date fall to the **end**, then order by when we found them.
+
+Columns showing `n/a` mean the value genuinely is not known — not zero, and not empty. `SIZE` and `BLOBS` read `n/a` until something walks the tree; `transferctl packages inspect` fills them in.
+
 **Where does `Published` come from, and why is it sometimes missing?**
 From `org.opencontainers.image.created` on the tag's manifest — a **standard OCI annotation**, not a vendor extension, so it works anywhere it is set. It is optional in the spec, so a publisher that sets none simply has no published date, and we record nothing rather than inventing one.
 

@@ -62,6 +62,12 @@ func (l *Loader) Load() (LoadResult, error) {
 	}
 
 	names := make(map[string]string) // product name -> file, for duplicate detection
+	// physical repository -> "product/repositoryName", so a repository claimed
+	// by two products is rejected. The repositories table has a unique index on
+	// (registry_host, repository_path) and a NOT NULL product_id, so a shared
+	// repository cannot be represented: reconciliation would flip ownership
+	// between the two products on every config reload.
+	physical := make(map[string]string)
 
 	files := make([]string, 0, len(entries))
 	for _, e := range entries {
@@ -101,11 +107,53 @@ func (l *Loader) Load() (LoadResult, error) {
 			})
 			continue
 		}
+
+		if clashes := crossProductRepositoryClashes(p, physical); len(clashes) > 0 {
+			res.Invalid = append(res.Invalid, InvalidProduct{File: path, Name: p.Metadata.Name, Err: clashes})
+			continue
+		}
+
 		names[p.Metadata.Name] = path
+		for _, ref := range p.Repositories() {
+			physical[physicalKey(ref.Registry, ref.Repository)] = p.Metadata.Name + "/" + ref.Name
+		}
 		res.Valid = append(res.Valid, p)
 	}
 
 	return res, nil
+}
+
+// crossProductRepositoryClashes reports repositories this product declares that
+// another product has already claimed.
+//
+// A physical repository belongs to exactly one product: `repositories` is
+// uniquely indexed on (registry_host, repository_path) and its product_id is
+// NOT NULL. Two products naming the same registry and path cannot both be
+// stored, and reconciling them would flip ownership back and forth on every
+// configuration reload — a silent, confusing failure. It is rejected here
+// instead, before merge.
+func crossProductRepositoryClashes(p *Product, claimed map[string]string) Errors {
+	var errs Errors
+
+	for i, s := range p.Spec.Sources {
+		if owner, taken := claimed[physicalKey(s.Registry, s.Repository)]; taken {
+			errs = append(errs, Error{
+				fmt.Sprintf("spec.sources[%d]", i),
+				fmt.Sprintf("%s/%s is already declared by %s", s.Registry, s.Repository, owner),
+				"one physical repository belongs to exactly one product; give each product its own repository path",
+			})
+		}
+	}
+	for i, t := range p.Spec.Targets {
+		if owner, taken := claimed[physicalKey(t.Registry, t.Repository)]; taken {
+			errs = append(errs, Error{
+				fmt.Sprintf("spec.targets[%d]", i),
+				fmt.Sprintf("%s/%s is already declared by %s", t.Registry, t.Repository, owner),
+				"one physical repository belongs to exactly one product; give each product its own repository path",
+			})
+		}
+	}
+	return errs
 }
 
 // LoadFile reads and validates one document. The returned Product is non-nil

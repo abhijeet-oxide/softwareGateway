@@ -22,6 +22,7 @@ import (
 	"golang.org/x/sync/errgroup"
 
 	"github.com/abhijeet-oxide/softwareGateway/internal/api"
+	"github.com/abhijeet-oxide/softwareGateway/internal/catalog"
 	"github.com/abhijeet-oxide/softwareGateway/internal/platform/config"
 	"github.com/abhijeet-oxide/softwareGateway/internal/platform/health"
 	"github.com/abhijeet-oxide/softwareGateway/internal/platform/leader"
@@ -116,6 +117,7 @@ func run() error {
 	resolver := product.NewSecretResolver(cfg.SecretsDir())
 	loader := product.NewLoader(cfg.ProductsDir(), resolver)
 	products := product.NewRegistry()
+	cat := catalog.NewCatalog(st)
 
 	watcher := product.NewWatcher(cfg.ProductsDir(), loader, products, product.WatchOptions{
 		Logger: logger,
@@ -130,6 +132,23 @@ func run() error {
 				mreg.ConfigLoadErrors.WithLabelValues(name).Set(1)
 			}
 			mreg.ConfigLastReload.SetToCurrentTime()
+
+			// Give the loaded configuration database identity. `packages`
+			// carries foreign keys to `products` and `repositories`, so
+			// discovery cannot record anything until these rows exist.
+			//
+			// A reconcile failure is logged, not fatal: the API and the
+			// already-loaded configuration keep working, and the next reload
+			// retries. Refusing to serve because one product's repository is
+			// contested would be a worse outcome than continuing.
+			reconcileCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+			defer cancel()
+			if r, err := cat.Reconcile(reconcileCtx, res.Valid); err != nil {
+				logger.Error("catalog: reconcile failed; database catalog may be stale", "error", err)
+			} else {
+				logger.Info("catalog: reconciled",
+					"products", r.ProductsSeen, "repositories", r.ReposSeen, "deactivated", r.Deactivated)
+			}
 		},
 	})
 

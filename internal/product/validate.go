@@ -79,11 +79,75 @@ func (p *Product) Validate(resolver *SecretResolver) error {
 	errs = append(errs, p.validateMetadata()...)
 	errs = append(errs, p.validateSources(resolver)...)
 	errs = append(errs, p.validateTargets(resolver)...)
+	errs = append(errs, p.validatePhysicalRepositories()...)
 	errs = append(errs, p.validateAutoDownload()...)
 	errs = append(errs, p.validateVerification(resolver)...)
 	errs = append(errs, p.validateNotifications(resolver)...)
 
 	return errs.ErrOrNil()
+}
+
+// validatePhysicalRepositories rejects two declarations of the same physical
+// repository within one product.
+//
+// `repositories` carries a unique index on (registry_host, repository_path)
+// and a NOT NULL product_id, so one physical repository is owned by exactly
+// one declaration. Two entries naming the same registry and path — whether two
+// sources, two targets, or one of each — cannot both be stored, and reconciling
+// them would make one silently overwrite the other on every config reload.
+//
+// Catching it here turns a confusing runtime behaviour into a clear
+// pre-merge error. See also Loader.Load, which enforces the same rule ACROSS
+// products.
+func (p *Product) validatePhysicalRepositories() Errors {
+	var errs Errors
+
+	type origin struct {
+		path string
+		role Role
+	}
+	seen := map[string]origin{}
+
+	for i, s := range p.Spec.Sources {
+		key := physicalKey(s.Registry, s.Repository)
+		path := fmt.Sprintf("spec.sources[%d]", i)
+		if prev, dup := seen[key]; dup {
+			errs = append(errs, Error{
+				path,
+				fmt.Sprintf("%s/%s is already declared by %s", s.Registry, s.Repository, prev.path),
+				"one physical repository may be declared once per product",
+			})
+			continue
+		}
+		seen[key] = origin{path, RoleSource}
+	}
+
+	for i, t := range p.Spec.Targets {
+		key := physicalKey(t.Registry, t.Repository)
+		path := fmt.Sprintf("spec.targets[%d]", i)
+		if prev, dup := seen[key]; dup {
+			hint := "one physical repository may be declared once per product"
+			if prev.role == RoleSource {
+				hint = "a repository cannot be both a source and a target — " +
+					"replication would read from and write to the same place"
+			}
+			errs = append(errs, Error{
+				path,
+				fmt.Sprintf("%s/%s is already declared by %s", t.Registry, t.Repository, prev.path),
+				hint,
+			})
+			continue
+		}
+		seen[key] = origin{path, RoleTarget}
+	}
+
+	return errs
+}
+
+// physicalKey identifies a repository by registry host and path — the same
+// identity the repositories_physical_idx unique index uses.
+func physicalKey(registry, repository string) string {
+	return strings.ToLower(registry) + "/" + strings.Trim(repository, "/")
 }
 
 func (p *Product) validateMetadata() Errors {

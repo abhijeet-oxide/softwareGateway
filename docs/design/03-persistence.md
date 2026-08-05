@@ -84,14 +84,19 @@ CREATE TABLE repositories (
     UNIQUE (product_id, role, name)
 );
 
--- Identity of the physical repository, independent of which products point at
--- it. Two products replicating into the same repository share placements --
--- this index is what makes cross-product dedupe work (01 section 4).
+-- One physical repository is one row. Combined with the NOT NULL product_id
+-- above, this means a repository belongs to exactly ONE product.
 CREATE UNIQUE INDEX repositories_physical_idx
     ON repositories (registry_host, repository_path);
 ```
 
-> **Note on the last index.** It enforces that one physical repository is one row, which is exactly what makes `blob_placements` shared across products. If two products both replicate into `internal.azurecr.io/shared/base`, the second one benefits from the first one's uploads. Keying placements by *config entry* instead would forfeit that silently.
+> **Note on the last index, and a constraint it implies.** Together with `product_id NOT NULL`, it means **a physical repository belongs to exactly one product** — two products cannot both declare `internal.azurecr.io/shared/base`.
+>
+> This is enforced at configuration load, within a product and across the whole directory, so the situation is rejected before merge rather than producing a silent ownership flip on every reload. See [02](02-configuration.md) §7.
+>
+> *An earlier draft of this document claimed the opposite* — that two products sharing a repository would share `blob_placements` rows. That is not representable in this row shape, and the claim was wrong. Deduplication still works exactly as designed **within** a repository, which is where essentially all of the value is: successive versions of one product share most of their base layers. Cross-*repository* reuse on the same registry is served by cross-repository mount ([05](05-transfer-engine.md) §4.2), not by placements.
+>
+> If shared repositories are ever genuinely needed, the fix is to normalize: drop `product_id` from `repositories` and add a `product_repositories` join table. Nothing else in the design would move.
 
 ## 5. Discovery and package tables
 

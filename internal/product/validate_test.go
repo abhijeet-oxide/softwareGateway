@@ -345,3 +345,47 @@ func TestPriorityRange(t *testing.T) {
 		})
 	}
 }
+
+// ---------------------------------------------------------------------------
+// One physical repository belongs to exactly one product.
+//
+// `repositories` is uniquely indexed on (registry_host, repository_path) and
+// its product_id is NOT NULL, so a shared repository is not representable.
+// Reconciling one would flip ownership on every config reload — silent and
+// baffling — so it is rejected at load instead. docs/design/03 §4.
+// ---------------------------------------------------------------------------
+
+func TestRejectsSameRepositoryTwiceWithinAProduct(t *testing.T) {
+	p := valid()
+	p.Spec.Targets = append(p.Spec.Targets, Target{
+		Name: "lab-copy", Registry: p.Spec.Targets[0].Registry,
+		Repository: p.Spec.Targets[0].Repository, Anonymous: true,
+	})
+	e := requireField(t, p.Validate(nil), "spec.targets[1]")
+	if !strings.Contains(e.Message, "already declared by") {
+		t.Fatalf("got %q", e.Message)
+	}
+}
+
+func TestRejectsRepositoryThatIsBothSourceAndTarget(t *testing.T) {
+	// Replication would read from and write to the same place.
+	p := valid()
+	p.Spec.Targets[0].Registry = p.Spec.Sources[0].Registry
+	p.Spec.Targets[0].Repository = p.Spec.Sources[0].Repository
+
+	e := requireField(t, p.Validate(nil), "spec.targets[0]")
+	if !strings.Contains(e.Hint, "both a source and a target") {
+		t.Fatalf("the hint should explain why, got %q", e.Hint)
+	}
+}
+
+func TestPhysicalKeyIsCaseInsensitiveOnRegistry(t *testing.T) {
+	// Registry hosts are DNS names and case-insensitive; a clash written with
+	// different capitalisation is still a clash.
+	if physicalKey("Registry.Example.COM", "a/b") != physicalKey("registry.example.com", "a/b") {
+		t.Fatal("registry host comparison must be case-insensitive")
+	}
+	if physicalKey("r.example.com", "/a/b/") != physicalKey("r.example.com", "a/b") {
+		t.Fatal("surrounding slashes must not create a false distinction")
+	}
+}

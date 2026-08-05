@@ -1,32 +1,42 @@
 package product
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 )
 
-const validDoc = `
+// validDocTemplate yields a product whose repositories are derived from its
+// name, so two products built from it never collide.
+//
+// A physical repository belongs to exactly one product (docs/design/03 §4), so
+// a shared fixture with hard-coded paths would be rejected — correctly — the
+// moment a test used it twice.
+const validDocTemplate = `
 apiVersion: softwaregateway.io/v1alpha1
 kind: Product
 metadata:
-  name: %s
+  name: %[1]s
 spec:
   sources:
     - name: primary
-      registry: registry.vendor-a.example.com
-      repository: platform/suite
+      registry: registry.%[1]s.example.com
+      repository: %[1]s/suite
       anonymous: true
       discovery:
         interval: 15m
   targets:
     - name: lab
-      registry: internal.azurecr.io
-      repository: vendor-a/platform
+      registry: internal.example.com
+      repository: %[1]s/lab
       anonymous: true
       default: true
 `
+
+// doc renders the template for a product name.
+func doc(name string) string { return fmt.Sprintf(validDocTemplate, name) }
 
 func writeDir(t *testing.T, files map[string]string) string {
 	t.Helper()
@@ -41,8 +51,8 @@ func writeDir(t *testing.T, files map[string]string) string {
 
 func TestLoadsValidDirectory(t *testing.T) {
 	dir := writeDir(t, map[string]string{
-		"a.yaml":    strings.Replace(validDoc, "%s", "vendor-a", 1),
-		"b.yml":     strings.Replace(validDoc, "%s", "vendor-b", 1),
+		"a.yaml":    doc("vendor-a"),
+		"b.yml":     doc("vendor-b"),
 		"notes.txt": "ignored",
 	})
 
@@ -73,7 +83,7 @@ func TestOneBadProductDoesNotBlockOthers(t *testing.T) {
 	// Fail-closed PER PRODUCT: a syntax error in vendor-b must never stop
 	// vendor-a from replicating. docs/design/02 section 7.
 	dir := writeDir(t, map[string]string{
-		"good.yaml": strings.Replace(validDoc, "%s", "vendor-a", 1),
+		"good.yaml": doc("vendor-a"),
 		"bad.yaml":  "apiVersion: softwaregateway.io/v1alpha1\nkind: Product\nthis: is: not: yaml",
 	})
 
@@ -93,7 +103,7 @@ func TestRejectsUnknownFields(t *testing.T) {
 	// A typo such as `tagPatern` would otherwise be silently ignored, leaving
 	// a rule that never matches and a user with no indication why.
 	dir := writeDir(t, map[string]string{
-		"typo.yaml": strings.Replace(validDoc, "%s", "vendor-a", 1) + `
+		"typo.yaml": doc("vendor-a") + `
   autoDownload:
     enabled: true
     rules:
@@ -116,8 +126,8 @@ func TestRejectsUnknownFields(t *testing.T) {
 
 func TestDuplicateProductNamesRejected(t *testing.T) {
 	dir := writeDir(t, map[string]string{
-		"a.yaml": strings.Replace(validDoc, "%s", "same-name", 1),
-		"b.yaml": strings.Replace(validDoc, "%s", "same-name", 1),
+		"a.yaml": doc("same-name"),
+		"b.yaml": doc("same-name"),
 	})
 
 	res, err := NewLoader(dir, nil).Load()
@@ -133,7 +143,7 @@ func TestDuplicateProductNamesRejected(t *testing.T) {
 }
 
 func TestDefaultsApplied(t *testing.T) {
-	dir := writeDir(t, map[string]string{"a.yaml": strings.Replace(validDoc, "%s", "vendor-a", 1)})
+	dir := writeDir(t, map[string]string{"a.yaml": doc("vendor-a")})
 	res, err := NewLoader(dir, nil).Load()
 	if err != nil {
 		t.Fatal(err)
@@ -156,7 +166,7 @@ func TestDefaultsApplied(t *testing.T) {
 }
 
 func TestDurationRoundTrip(t *testing.T) {
-	dir := writeDir(t, map[string]string{"a.yaml": strings.Replace(validDoc, "%s", "vendor-a", 1)})
+	dir := writeDir(t, map[string]string{"a.yaml": doc("vendor-a")})
 	res, err := NewLoader(dir, nil).Load()
 	if err != nil {
 		t.Fatal(err)
@@ -186,14 +196,14 @@ func TestRegistryRetainsPreviousVersionOnInvalidReload(t *testing.T) {
 	dir := t.TempDir()
 	reg := NewRegistry()
 
-	rewriteAndReload(t, dir, "a.yaml", strings.Replace(validDoc, "%s", "vendor-a", 1), reg)
+	rewriteAndReload(t, dir, "a.yaml", doc("vendor-a"), reg)
 	if reg.Count() != 1 {
 		t.Fatal("expected the product to load")
 	}
 
 	// A VALIDATION failure — the document parses, so the name is known.
 	rewriteAndReload(t, dir, "a.yaml",
-		strings.Replace(validDoc, "%s", "vendor-a", 1)+"\n  autoDownload:\n    enabled: true\n    rules:\n      - name: r\n        tagPattern: '^v('\n", reg)
+		doc("vendor-a")+"\n  autoDownload:\n    enabled: true\n    rules:\n      - name: r\n        tagPattern: '^v('\n", reg)
 
 	if _, ok := reg.Get("vendor-a"); !ok {
 		t.Fatal("the previous valid version must be retained after an invalid reload")
@@ -211,7 +221,7 @@ func TestRegistryRetainsPreviousVersionWhenFileNoLongerParses(t *testing.T) {
 	dir := t.TempDir()
 	reg := NewRegistry()
 
-	rewriteAndReload(t, dir, "a.yaml", strings.Replace(validDoc, "%s", "vendor-a", 1), reg)
+	rewriteAndReload(t, dir, "a.yaml", doc("vendor-a"), reg)
 	if reg.Count() != 1 {
 		t.Fatal("expected the product to load")
 	}
@@ -226,7 +236,7 @@ func TestRegistryRetainsPreviousVersionWhenFileNoLongerParses(t *testing.T) {
 	}
 
 	// And a subsequent good edit must take effect.
-	rewriteAndReload(t, dir, "a.yaml", strings.Replace(validDoc, "%s", "vendor-a", 1), reg)
+	rewriteAndReload(t, dir, "a.yaml", doc("vendor-a"), reg)
 	if len(reg.Invalid()) != 0 {
 		t.Fatalf("recovery should clear the error, got %v", reg.Invalid())
 	}
@@ -239,7 +249,7 @@ func TestRegistryDropsProductWhenFileIsRemoved(t *testing.T) {
 	dir := t.TempDir()
 	reg := NewRegistry()
 
-	rewriteAndReload(t, dir, "a.yaml", strings.Replace(validDoc, "%s", "vendor-a", 1), reg)
+	rewriteAndReload(t, dir, "a.yaml", doc("vendor-a"), reg)
 	if reg.Count() != 1 {
 		t.Fatal("expected the product to load")
 	}
@@ -292,5 +302,46 @@ func TestDefaultTargetResolution(t *testing.T) {
 	p.Spec.Targets[0].PromotionOnly = true
 	if _, ok = p.DefaultTarget(); ok {
 		t.Fatal("a promotionOnly target must never be the implicit default")
+	}
+}
+
+func TestRejectsRepositoryClaimedByAnotherProduct(t *testing.T) {
+	// Cross-product enforcement of the same rule. The second file loses, and
+	// the first still loads — fail-closed per product.
+	shared := `
+apiVersion: softwaregateway.io/v1alpha1
+kind: Product
+metadata:
+  name: %s
+spec:
+  sources:
+    - name: primary
+      registry: registry.%s.example.com
+      repository: %s/suite
+      anonymous: true
+  targets:
+    - name: lab
+      registry: internal.example.com
+      repository: shared/base
+      anonymous: true
+      default: true
+`
+	dir := writeDir(t, map[string]string{
+		"a.yaml": fmt.Sprintf(shared, "vendor-a", "vendor-a", "vendor-a"),
+		"b.yaml": fmt.Sprintf(shared, "vendor-b", "vendor-b", "vendor-b"),
+	})
+
+	res, err := NewLoader(dir, nil).Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(res.Valid) != 1 {
+		t.Fatalf("the first product should still load, got %d valid", len(res.Valid))
+	}
+	if len(res.Invalid) != 1 {
+		t.Fatalf("the clashing product must be rejected, got %d invalid", len(res.Invalid))
+	}
+	if !strings.Contains(res.Invalid[0].Err.Error(), "already declared by vendor-a/lab") {
+		t.Fatalf("the error should name the owning product and repository, got %v", res.Invalid[0].Err)
 	}
 }

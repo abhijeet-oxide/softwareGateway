@@ -53,9 +53,13 @@ Every scan lists every tag. There is no cursor, no "tags since" watermark, no ca
 
 ## 4. Re-pushed tags
 
+> **First, what supersession is *not*.** Different tags never supersede each other. `v2.13.0`, `v2.14.0` and `v2.14.1` are independent software packages that coexist indefinitely, each separately transferable, verifiable and deployable. Discovering a newer tag does nothing whatsoever to an older one — a repository holding fifty versions holds fifty active packages.
+>
+> Supersession applies to exactly one situation: **the same tag re-pushed with different content.**
+
 A vendor can re-push `v2.14.0` with different content. The tag is the same; the manifest digest is not.
 
-Because identity is `(source_repo, tag, manifest_digest)` ([01](01-domain-model.md) §2.2), this inserts a **new** package row. The previous row is marked `superseded` with `superseded_by` pointing at the new one.
+Because identity is `(source_repo, tag, manifest_digest)` ([01](01-domain-model.md) §2.2), this inserts a **new** package row. The previous row — the one carrying *the same tag* and the *old* digest — is marked `superseded` with `superseded_by` pointing at the new one. Note the `AND tag = $3` clause below: the statement cannot touch a package with a different tag.
 
 ```sql
 UPDATE packages SET state = 'superseded', superseded_by = $1, updated_at = now()

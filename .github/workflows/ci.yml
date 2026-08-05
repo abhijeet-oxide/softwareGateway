@@ -108,6 +108,55 @@ jobs:
           path: dist/
           retention-days: 7
 
+  portable:
+    name: No Unix-only commands in the Taskfile
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache: true
+
+      - uses: go-task/setup-task@v1
+        with:
+          version: 3.x
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
+
+      # Task interprets shell SYNTAX in-process, but an external command still
+      # has to exist on PATH. `date`, `rm`, `tail`, `grep`, `sed` and `awk` do
+      # not exist in PowerShell, and shelling out to one fails the whole
+      # Taskfile before any task runs:
+      #
+      #   task: Command "date -u +%Y-%m-%dT%H:%M:%SZ" failed: exit status 127
+      #
+      # This job reproduces that on Linux by stripping PATH down to what a
+      # Windows box has, so the failure is caught in seconds rather than
+      # waiting on the Windows runner below — or on a developer's laptop, which
+      # is where it was actually found.
+      - name: Run tasks with a Windows-like PATH
+        run: |
+          mkdir -p /tmp/winpath
+          for t in go gofmt git task; do
+            ln -sf "$(command -v $t)" "/tmp/winpath/$t"
+          done
+
+          for t in build vet validate validate:rejects-broken test:short; do
+            echo "--- task $t"
+            if ! env -i \
+                 PATH=/tmp/winpath \
+                 HOME="$HOME" \
+                 GOCACHE="$(go env GOCACHE)" \
+                 GOMODCACHE="$(go env GOMODCACHE)" \
+                 task "$t"; then
+              echo "::error::task $t needs a command Windows does not have."
+              echo "::error::Gate it with 'platforms:' or use a template function."
+              exit 1
+            fi
+          done
+          echo "every task ran with only go, gofmt, git and task on PATH"
+
   windows:
     name: Build and test on Windows
     runs-on: windows-latest

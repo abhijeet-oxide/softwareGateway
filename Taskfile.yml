@@ -32,15 +32,26 @@ vars:
   TARGET_OS: '{{default OS (env "GOOS")}}'
   EXE: '{{if eq .TARGET_OS "windows"}}.exe{{end}}'
 
-  # Version stamping. `sh:` runs at parse time; the `|| echo` fallbacks keep
-  # this working in a tarball with no git history, which is how a release build
-  # from a source archive would otherwise fail.
+  # Version stamping.
+  #
+  # `sh:` runs at parse time; the `|| echo` fallbacks keep this working in a
+  # tarball with no git history, which is how a release build from a source
+  # archive would otherwise fail.
   VERSION:
     sh: git describe --tags --always --dirty 2>/dev/null || echo dev
   COMMIT:
     sh: git rev-parse --short HEAD 2>/dev/null || echo unknown
-  DATE:
-    sh: date -u +%Y-%m-%dT%H:%M:%SZ
+
+  # DATE uses a TEMPLATE FUNCTION, not `date -u`.
+  #
+  # There is no `date` executable on Windows — PowerShell's `date` is a
+  # Get-Date alias, not a binary — so shelling out failed the whole Taskfile
+  # before any task could run:
+  #
+  #   task: Command "date -u +%Y-%m-%dT%H:%M:%SZ" failed: exit status 127
+  #
+  # Task evaluates this in-process, so it needs nothing on PATH at all.
+  DATE: '{{ dateInZone "2006-01-02T15:04:05Z" now "UTC" }}'
 
   LDFLAGS: >-
     -s -w
@@ -116,11 +127,16 @@ tasks:
 
   clean:
     desc: Remove build output and the local database
+    # Task interprets shell SYNTAX itself, but an external command still has to
+    # exist on PATH — and `rm` does not, in PowerShell or cmd. Hence the split.
     cmds:
-      # `rm -rf` works on Windows too: Task interprets commands with its own
-      # shell rather than handing them to cmd.exe.
-      - rm -rf bin dist coverage.out
-      - rm -rf dev/swgw.db dev/swgw.db-shm dev/swgw.db-wal
+      - cmd: rm -rf bin dist coverage.out dev/swgw.db dev/swgw.db-shm dev/swgw.db-wal
+        platforms: [linux, darwin]
+      - cmd: >-
+          powershell -NoProfile -Command
+          "Remove-Item -Recurse -Force -ErrorAction SilentlyContinue
+          bin, dist, coverage.out, dev/swgw.db, dev/swgw.db-shm, dev/swgw.db-wal"
+        platforms: [windows]
 
   # ------------------------------------------------------------------- test --
 
@@ -153,10 +169,22 @@ tasks:
       - go test -tags=integration ./test/integration/...
 
   cover:
-    desc: Run tests with coverage and print a summary
+    desc: Run tests with coverage and print the total
     cmds:
       - go test -coverprofile=coverage.out ./...
-      - go tool cover -func=coverage.out | tail -1
+      # `tail` is another command Windows does not have.
+      - cmd: go tool cover -func=coverage.out | tail -1
+        platforms: [linux, darwin]
+      - cmd: >-
+          powershell -NoProfile -Command
+          "go tool cover -func=coverage.out | Select-Object -Last 1"
+        platforms: [windows]
+
+  cover:full:
+    desc: Per-function coverage for every package
+    deps: [cover]
+    cmds:
+      - go tool cover -func=coverage.out
 
   cover:html:
     desc: Open the coverage report in a browser

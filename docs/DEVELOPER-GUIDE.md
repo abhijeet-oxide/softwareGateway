@@ -48,7 +48,16 @@ Everything Task runs is a plain `go` command. If you would rather not install it
 
 ### Why Task and not Make
 
-The Makefile it replaced needed `bash` and `find`, so **PowerShell and cmd could not run it at all** — a Windows developer had to install Git Bash or WSL before their first build. Task ships its own shell interpreter, so the same tasks behave identically on Linux, macOS and Windows. CI now proves that on a `windows-latest` runner on every commit, which is the part that had been asserted and never tested.
+The Makefile it replaced needed `bash` and `find`, so **PowerShell and cmd could not run it at all** — a Windows developer had to install Git Bash or WSL before their first build.
+
+Task interprets shell **syntax** in-process (pipes, `&&`, `if`, redirection), so those work everywhere. But an **external command still has to exist on PATH**, and that distinction matters: `date`, `rm`, `tail`, `grep`, `sed` and `awk` do not exist in PowerShell. Shelling out to one fails the whole Taskfile before any task runs:
+
+```
+task: Command "date -u +%Y-%m-%dT%H:%M:%SZ" failed: exit status 127
+"date": executable file not found in $PATH
+```
+
+The Taskfile therefore avoids them: the build timestamp comes from a template function evaluated in-process, and the two places that genuinely need `rm` and `tail` are `platforms:`-gated with PowerShell equivalents. Two CI jobs keep it that way — one runs every task with PATH stripped to `go`, `gofmt`, `git` and `task`, and one builds and tests on a real `windows-latest` runner.
 
 **There is no CGO in a shipped binary.** SQLite is `modernc.org/sqlite`, a pure-Go translation, so builds set `CGO_ENABLED=0` and there is no C toolchain to install. Tests are the exception: `go test -race` requires cgo, so `CGO_ENABLED=0` is set on the build tasks only, never globally.
 
@@ -557,6 +566,19 @@ Correct — nothing changed. Task compares checksums, so it rebuilds on a real e
 
 **`task: command not found`**
 Install it: `go install github.com/go-task/task/v3/cmd/task@latest`, then make sure `$(go env GOPATH)/bin` is on your `PATH`. Or skip it — `task --dry <name>` prints the underlying `go` commands.
+
+**`task: Command "<something>" failed: exit status 127` on Windows**
+The Taskfile is calling a Unix command PowerShell does not have. Pull first — `date` was one, and it is fixed. If you hit a new one after editing the Taskfile, either replace it with a template function or gate it:
+
+```yaml
+cmds:
+  - cmd: rm -rf bin
+    platforms: [linux, darwin]
+  - cmd: powershell -NoProfile -Command "Remove-Item -Recurse -Force bin"
+    platforms: [windows]
+```
+
+The `portable` CI job catches this on Linux without waiting for the Windows runner.
 
 **Products are not loading; the log shows `/etc/softwaregateway/products`**
 Your `configDir` did not apply. The key is top-level `configDir`, not `paths.products`. Confirm with `--config` pointing at the right file.

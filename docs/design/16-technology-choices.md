@@ -204,3 +204,13 @@ Task ships its own POSIX shell interpreter, so one definition runs identically o
 - A Taskfile-level `env: CGO_ENABLED: '0'` broke the entire test suite: `go test -race` requires cgo. Shipped binaries are still static; the variable is set on the build tasks only.
 
 *What would change our mind:* nothing likely. The cost is one tool to install, via a single `go install` — cheaper than the Git Bash prerequisite it replaced.
+
+*A third bug, found by a developer rather than by us.* The first Taskfile shelled out to `date -u` for the build timestamp. There is no `date` executable on Windows — PowerShell's `date` is a `Get-Date` alias, not a binary — so the whole Taskfile failed to parse before any task could run:
+
+```
+task: Command "date -u +%Y-%m-%dT%H:%M:%SZ" failed: exit status 127
+```
+
+The lesson is a distinction that was glossed over when this was written: **Task interprets shell SYNTAX in-process, but an external command still has to exist on PATH.** Pipes, `&&`, `if` and redirection are portable; `date`, `rm`, `tail`, `grep`, `sed` and `awk` are not. The timestamp now comes from a template function evaluated in-process, and the two commands that genuinely need `rm` and `tail` are `platforms:`-gated.
+
+It shipped because the Windows CI job had been written but had never run. There is now also a `portable` job that strips PATH to `go`, `gofmt`, `git` and `task` and runs every task — it reproduces the failure on Linux in seconds, so the class is caught without waiting on a Windows runner.

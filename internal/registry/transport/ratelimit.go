@@ -22,17 +22,27 @@ type rateLimitTransport struct {
 	limiter *rate.Limiter
 }
 
-func newRateLimitTransport(next http.RoundTripper, rps, burst int) http.RoundTripper {
+// newLimiter builds the token bucket, or nil for unlimited.
+//
+// Built once per SOURCE, not per repository: a per-repository limiter means the
+// configured requests-per-second is multiplied by the number of repositories
+// scanned in parallel, which is the opposite of what a ceiling is for.
+func newLimiter(rps, burst int) *rate.Limiter {
 	if rps <= 0 {
-		return next // unlimited
+		return nil // unlimited
 	}
 	if burst <= 0 {
 		burst = rps * 2
 	}
-	return &rateLimitTransport{
-		next:    next,
-		limiter: rate.NewLimiter(rate.Limit(rps), burst),
+	return rate.NewLimiter(rate.Limit(rps), burst)
+}
+
+// newRateLimitTransportWith wraps next with an already-built limiter.
+func newRateLimitTransportWith(next http.RoundTripper, limiter *rate.Limiter) http.RoundTripper {
+	if limiter == nil {
+		return next
 	}
+	return &rateLimitTransport{next: next, limiter: limiter}
 }
 
 func (t *rateLimitTransport) RoundTrip(r *http.Request) (*http.Response, error) {

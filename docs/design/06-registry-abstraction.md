@@ -169,6 +169,14 @@ One `http.Client` per repository, built from product configuration, carrying eve
 
 **Ordering matters and is deliberate.** The rate limiter is outermost so that *retries are rate-limited too* — otherwise a burst of retries against a struggling registry bypasses the very limit meant to protect it, which is precisely how a transient error becomes an outage.
 
+**One stack per SOURCE, not per repository.** The pool, the rate limiter and the token cache belong to the source; only the retry and auth layers are built per repository, and auth only because it derives its token scope from the repository path.
+
+This was originally per repository, and the bug it caused is worth recording because it was invisible from the configuration. Every repository built its own everything, so the configured ceilings were multiplied by however many repositories were being scanned at once: `maxConnections: 32` across sixteen parallel repositories permitted **512 concurrent connections to one host**, and `requestsPerSecond: 50` permitted **800**. Through a corporate proxy that is not a faster scan, it is a self-inflicted overload — and a document that says 32 while the process opens 512 is worse than one that says nothing.
+
+Sharing also buys one token exchange per source instead of one per repository, and warm keep-alives across repositories rather than a fresh TLS handshake for each.
+
+**Tracing sits outside everything.** The trace layer wraps the rate limiter, so the duration it reports is the cost the CALLER paid — including any wait for a rate-limit token and any retry backoff. A timer inside those layers would report a healthy 200 ms for a request that cost the scanner thirty seconds, which is exactly the lie that makes this class of problem hard to find. Failures and requests slower than ten seconds are logged at WARN regardless of level; everything else is DEBUG.
+
 `Retry-After` is honoured when present. A registry telling us how long to wait is better information than our backoff formula, and ignoring it is a good way to get an IP blocked.
 
 **TLS lives at the bottom of the stack, and has two knobs.** `network.caBundleRef` appends a private CA to the system pool — appends, not replaces, because a product that adds an internal CA still needs to reach public registries and Sigstore. `network.tls.insecureSkipVerify` turns verification off entirely for one repository; it is opt-in, logged on every reload, and reported by `products check`. Neither of them fixes `x509: negative serial number`, which fails while parsing the certificate before any verification runs — see [02 §TLS](02-configuration.md#tls-two-different-failures-two-different-fixes).

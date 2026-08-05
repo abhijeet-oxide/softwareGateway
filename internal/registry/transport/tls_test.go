@@ -110,6 +110,8 @@ func tlsConfigOf(t *testing.T, c *http.Client) *tls.Config {
 		switch v := rt.(type) {
 		case *http.Transport:
 			return v.TLSClientConfig
+		case *traceTransport:
+			rt = v.next
 		case *userAgentTransport:
 			rt = v.next
 		case *rateLimitTransport:

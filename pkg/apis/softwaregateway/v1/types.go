@@ -437,13 +437,16 @@ type DiscoverySourceState struct {
 
 	// RepositoriesTotal is zero until enumeration finishes, which itself says
 	// the scan is still waiting on /v2/_catalog.
-	RepositoriesTotal int    `json:"repositoriesTotal,omitempty"`
-	RepositoriesDone  int    `json:"repositoriesDone,omitempty"`
-	CurrentRepository string `json:"currentRepository,omitempty"`
-	TagsTotal         int    `json:"tagsTotal,omitempty"`
-	TagsResolved      int    `json:"tagsResolved,omitempty"`
-	NewPackages       int    `json:"newPackages,omitempty"`
-	Errors            int    `json:"errors,omitempty"`
+	RepositoriesTotal int `json:"repositoriesTotal,omitempty"`
+	RepositoriesDone  int `json:"repositoriesDone,omitempty"`
+	// RepositoriesInFlight is how many are being scanned right now. Without it
+	// a concurrent scan looks stalled for its first minute.
+	RepositoriesInFlight int    `json:"repositoriesInFlight,omitempty"`
+	CurrentRepository    string `json:"currentRepository,omitempty"`
+	TagsTotal            int    `json:"tagsTotal,omitempty"`
+	TagsResolved         int    `json:"tagsResolved,omitempty"`
+	NewPackages          int    `json:"newPackages,omitempty"`
+	Errors               int    `json:"errors,omitempty"`
 
 	// LastRunAt and the fields below describe the last COMPLETED scan.
 	LastRunAt        string `json:"lastRunAt,omitempty"`

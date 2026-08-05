@@ -142,7 +142,7 @@ func (c *Controller) reconcile() {
 		return
 	}
 
-	specs, errs := SourceSpecs(products, cat, c.secrets)
+	specs, errs := SourceSpecs(products, cat, c.secrets, c.log)
 	for _, err := range errs {
 		// A source that cannot be built is omitted and reported. One product's
 		// missing secret must not stop discovery for the rest of the fleet.

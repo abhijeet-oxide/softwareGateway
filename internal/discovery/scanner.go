@@ -303,12 +303,14 @@ func (s *Scanner) Scan(ctx context.Context) (ScanResult, error) {
 			s.progress.update(func(p *ScanProgress) {
 				p.Phase = PhaseListingTags
 				p.CurrentRepository = repoPath
+				p.RepositoriesInFlight++
 			})
 
 			sub, err := s.scanRepository(ctx, repoPath)
 			outcomes[i] = repoOutcome{path: repoPath, sub: sub, err: err}
 
 			s.progress.update(func(p *ScanProgress) {
+				p.RepositoriesInFlight--
 				p.RepositoriesDone++
 				p.TagsListed += sub.TagsListed
 				p.New += sub.New

@@ -33,8 +33,17 @@ type authTransport struct {
 	group singleflight.Group
 }
 
-func newAuthTransport(next http.RoundTripper, cfg Config) http.RoundTripper {
-	return &authTransport{next: next, cfg: cfg, cache: newTokenCache()}
+// newAuthTransportWithCache wraps next, sharing the given token cache.
+//
+// The cache is per SOURCE and keyed by scope, so two repositories on one
+// registry each get their own entry while sharing the machinery — and a source
+// with forty repositories performs forty token exchanges rather than forty per
+// scan.
+func newAuthTransportWithCache(next http.RoundTripper, cfg Config, cache *tokenCache) http.RoundTripper {
+	if cache == nil {
+		cache = newTokenCache()
+	}
+	return &authTransport{next: next, cfg: cfg, cache: cache}
 }
 
 func (t *authTransport) RoundTrip(r *http.Request) (*http.Response, error) {

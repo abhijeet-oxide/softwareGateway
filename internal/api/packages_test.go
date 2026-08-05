@@ -1,0 +1,473 @@
+package api
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"net/http"
+	"net/http/httptest"
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+
+	"github.com/abhijeet-oxide/softwareGateway/internal/catalog"
+	"github.com/abhijeet-oxide/softwareGateway/internal/discovery"
+	"github.com/abhijeet-oxide/softwareGateway/internal/product"
+	"github.com/abhijeet-oxide/softwareGateway/internal/store"
+	v1 "github.com/abhijeet-oxide/softwareGateway/pkg/apis/softwaregateway/v1"
+)
+
+// fakeDiscoverer stands in for the loop, so handler tests do not need a
+// registry.
+type fakeDiscoverer struct {
+	running    bool
+	result     discovery.ScanResult
+	err        error
+	lastSource string
+	calls      int
+}
+
+func (f *fakeDiscoverer) Running() bool { return f.running }
+
+func (f *fakeDiscoverer) Trigger(_ context.Context, _, source string) (discovery.ScanResult, error) {
+	f.calls++
+	f.lastSource = source
+	return f.result, f.err
+}
+
+func (f *fakeDiscoverer) TriggerProduct(_ context.Context, _ string) (discovery.ScanResult, error) {
+	f.calls++
+	f.lastSource = ""
+	return f.result, f.err
+}
+
+const testProductDoc = `
+apiVersion: softwaregateway.io/v1alpha1
+kind: Product
+metadata:
+  name: vendor-a
+spec:
+  sources:
+    - name: vendor
+      registry: registry.example.com
+      repository: vendor-a/platform
+      anonymous: true
+  targets:
+    - name: internal
+      registry: internal.example.com
+      repository: mirror/vendor-a
+      anonymous: true
+      default: true
+`
+
+// apiHarness wires a Server over a real migrated store.
+type apiHarness struct {
+	t          *testing.T
+	server     *httptest.Server
+	store      store.Store
+	packages   *store.Packages
+	discoverer *fakeDiscoverer
+	productID  int64
+	repoID     int64
+}
+
+func newAPIHarness(t *testing.T) *apiHarness {
+	t.Helper()
+	ctx := t.Context()
+
+	st, err := store.Open(ctx, store.Config{
+		Driver: store.DriverSQLite,
+		DSN:    filepath.Join(t.TempDir(), "api.db"),
+	})
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	t.Cleanup(func() { _ = st.Close() })
+	if err := store.Migrate(ctx, st, nil); err != nil {
+		t.Fatalf("migrate: %v", err)
+	}
+
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "vendor-a.yaml"), []byte(testProductDoc), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	loader := product.NewLoader(dir, product.NewSecretResolver(t.TempDir()))
+	res, err := loader.Load()
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	if len(res.Valid) != 1 {
+		t.Fatalf("expected 1 product, got %d valid / %d invalid", len(res.Valid), len(res.Invalid))
+	}
+
+	products := product.NewRegistry()
+	products.Swap(res)
+
+	rec, err := catalog.NewCatalog(st).Reconcile(ctx, res.Valid)
+	if err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+	ref := rec.Products["vendor-a"]
+
+	disc := &fakeDiscoverer{running: true}
+	packages := store.NewPackages(st)
+
+	srv := NewServer(Deps{
+		Products:  products,
+		Store:     st,
+		Packages:  packages,
+		Discovery: disc,
+		Component: "coordinator",
+	})
+
+	ts := httptest.NewServer(srv.Handler())
+	t.Cleanup(ts.Close)
+
+	return &apiHarness{
+		t: t, server: ts, store: st, packages: packages, discoverer: disc,
+		productID: ref.ID, repoID: ref.Repositories["vendor"],
+	}
+}
+
+// seedPackage inserts a package directly, so handler tests do not depend on
+// discovery.
+func (h *apiHarness) seedPackage(tag, digest string) int64 {
+	h.t.Helper()
+
+	tx, err := h.store.DB().BeginTx(h.t.Context(), nil)
+	if err != nil {
+		h.t.Fatal(err)
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	id, err := h.packages.InsertPackage(h.t.Context(), tx, store.PackageRow{
+		ProductID:      h.productID,
+		SourceRepoID:   h.repoID,
+		Tag:            tag,
+		ManifestDigest: digest,
+		MediaType:      "application/vnd.oci.image.manifest.v1+json",
+		TotalBytes:     123456789,
+		ArtifactCount:  1,
+		BlobCount:      2,
+	})
+	if err != nil {
+		h.t.Fatalf("seed package: %v", err)
+	}
+	if _, err := h.packages.InsertArtifact(h.t.Context(), tx, store.ArtifactRow{
+		PackageID: id,
+		Digest:    digest,
+		MediaType: "application/vnd.oci.image.manifest.v1+json",
+		SizeBytes: 512,
+		Raw:       []byte(`{"schemaVersion":2}`),
+	}); err != nil {
+		h.t.Fatalf("seed artifact: %v", err)
+	}
+	if err := tx.Commit(); err != nil {
+		h.t.Fatal(err)
+	}
+	return id
+}
+
+func (h *apiHarness) get(path string, out any) int {
+	h.t.Helper()
+	resp, err := http.Get(h.server.URL + path) //nolint:noctx // test client
+	if err != nil {
+		h.t.Fatalf("GET %s: %v", path, err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+
+	if out != nil {
+		if err := json.NewDecoder(resp.Body).Decode(out); err != nil {
+			h.t.Fatalf("decode %s: %v", path, err)
+		}
+	}
+	return resp.StatusCode
+}
+
+func (h *apiHarness) post(path, body string, out any) int {
+	h.t.Helper()
+	resp, err := http.Post(h.server.URL+path, "application/json", strings.NewReader(body)) //nolint:noctx // test client
+	if err != nil {
+		h.t.Fatalf("POST %s: %v", path, err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+
+	if out != nil {
+		if err := json.NewDecoder(resp.Body).Decode(out); err != nil {
+			h.t.Fatalf("decode %s: %v", path, err)
+		}
+	}
+	return resp.StatusCode
+}
+
+const digestA = "sha256:1111111111111111111111111111111111111111111111111111111111111111"
+const digestB = "sha256:2222222222222222222222222222222222222222222222222222222222222222"
+
+func TestListPackagesEmpty(t *testing.T) {
+	h := newAPIHarness(t)
+
+	var resp v1.ListPackagesResponse
+	if code := h.get("/api/v1/products/vendor-a/packages", &resp); code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", code)
+	}
+	// An empty array, never null: a client iterating the field must not have to
+	// nil-check it.
+	if resp.Packages == nil {
+		t.Error("packages must serialise as [] rather than null")
+	}
+	if len(resp.Packages) != 0 {
+		t.Errorf("expected no packages, got %d", len(resp.Packages))
+	}
+}
+
+func TestListAndGetPackage(t *testing.T) {
+	h := newAPIHarness(t)
+	h.seedPackage("v1.0.0", digestA)
+	h.seedPackage("v1.1.0", digestB)
+
+	var list v1.ListPackagesResponse
+	if code := h.get("/api/v1/products/vendor-a/packages", &list); code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", code)
+	}
+	if len(list.Packages) != 2 {
+		t.Fatalf("expected 2 packages, got %d", len(list.Packages))
+	}
+
+	// AIP-141: a byte count crosses the wire as a string, because JSON numbers
+	// are doubles and lose precision above 2^53.
+	if list.Packages[0].TotalBytes != "123456789" {
+		t.Errorf("expected totalBytes as a string, got %q", list.Packages[0].TotalBytes)
+	}
+	// AIP-126: enums are SCREAMING_SNAKE_CASE on the wire.
+	if list.Packages[0].State != v1.PackageDiscovered {
+		t.Errorf("expected DISCOVERED, got %q", list.Packages[0].State)
+	}
+	if !strings.HasPrefix(list.Packages[0].Name, "products/vendor-a/packages/") {
+		t.Errorf("expected an AIP-122 resource name, got %q", list.Packages[0].Name)
+	}
+
+	var one v1.Package
+	if code := h.get("/api/v1/products/vendor-a/packages/v1.0.0", &one); code != http.StatusOK {
+		t.Fatalf("expected 200 fetching by tag, got %d", code)
+	}
+	if one.Tag != "v1.0.0" {
+		t.Errorf("expected v1.0.0, got %q", one.Tag)
+	}
+
+	// By digest too, since that is the stable identity.
+	var byDigest v1.Package
+	if code := h.get("/api/v1/products/vendor-a/packages/"+digestB, &byDigest); code != http.StatusOK {
+		t.Fatalf("expected 200 fetching by digest, got %d", code)
+	}
+	if byDigest.Tag != "v1.1.0" {
+		t.Errorf("expected the v1.1.0 package by digest, got %q", byDigest.Tag)
+	}
+}
+
+func TestGetPackageNotFound(t *testing.T) {
+	h := newAPIHarness(t)
+
+	if code := h.get("/api/v1/products/vendor-a/packages/nope", nil); code != http.StatusNotFound {
+		t.Errorf("expected 404 for an unknown package, got %d", code)
+	}
+	if code := h.get("/api/v1/products/no-such-product/packages", nil); code != http.StatusNotFound {
+		t.Errorf("expected 404 for an unknown product, got %d", code)
+	}
+}
+
+func TestListPackagesFilters(t *testing.T) {
+	h := newAPIHarness(t)
+	h.seedPackage("v1.0.0", digestA)
+	h.seedPackage("v1.1.0", digestB)
+
+	var byTag v1.ListPackagesResponse
+	h.get("/api/v1/products/vendor-a/packages?tag=v1.0.0", &byTag)
+	if len(byTag.Packages) != 1 || byTag.Packages[0].Tag != "v1.0.0" {
+		t.Errorf("tag filter did not narrow the result: %+v", byTag.Packages)
+	}
+
+	var byState v1.ListPackagesResponse
+	h.get("/api/v1/products/vendor-a/packages?state=DISCOVERED", &byState)
+	if len(byState.Packages) != 2 {
+		t.Errorf("expected 2 discovered packages, got %d", len(byState.Packages))
+	}
+
+	var none v1.ListPackagesResponse
+	h.get("/api/v1/products/vendor-a/packages?state=SUPERSEDED", &none)
+	if len(none.Packages) != 0 {
+		t.Errorf("expected no superseded packages, got %d", len(none.Packages))
+	}
+
+	if code := h.get("/api/v1/products/vendor-a/packages?state=NONSENSE", nil); code != http.StatusBadRequest {
+		t.Errorf("expected 400 for an invalid state, got %d", code)
+	}
+	if code := h.get("/api/v1/products/vendor-a/packages?pageSize=-1", nil); code != http.StatusBadRequest {
+		t.Errorf("expected 400 for a negative pageSize, got %d", code)
+	}
+	if code := h.get("/api/v1/products/vendor-a/packages?pageToken=abc", nil); code != http.StatusBadRequest {
+		t.Errorf("expected 400 for a malformed pageToken, got %d", code)
+	}
+}
+
+func TestListPackagesPagination(t *testing.T) {
+	h := newAPIHarness(t)
+	for i := range 5 {
+		h.seedPackage("v1."+string(rune('0'+i))+".0",
+			"sha256:"+strings.Repeat(string(rune('a'+i)), 64))
+	}
+
+	var page1 v1.ListPackagesResponse
+	h.get("/api/v1/products/vendor-a/packages?pageSize=2", &page1)
+	if len(page1.Packages) != 2 {
+		t.Fatalf("expected 2 on the first page, got %d", len(page1.Packages))
+	}
+	if page1.NextPageToken == "" {
+		t.Fatal("expected a nextPageToken with more results outstanding")
+	}
+
+	var page2 v1.ListPackagesResponse
+	h.get("/api/v1/products/vendor-a/packages?pageSize=2&pageToken="+page1.NextPageToken, &page2)
+	if len(page2.Packages) != 2 {
+		t.Fatalf("expected 2 on the second page, got %d", len(page2.Packages))
+	}
+
+	var page3 v1.ListPackagesResponse
+	h.get("/api/v1/products/vendor-a/packages?pageSize=2&pageToken="+page2.NextPageToken, &page3)
+	if len(page3.Packages) != 1 {
+		t.Fatalf("expected 1 on the last page, got %d", len(page3.Packages))
+	}
+	// The last page must not promise another. Claiming one that turns out empty
+	// is how a paging client ends up in an extra round trip forever.
+	if page3.NextPageToken != "" {
+		t.Errorf("expected no token on the last page, got %q", page3.NextPageToken)
+	}
+
+	// No package appears twice across pages.
+	seen := map[string]bool{}
+	for _, p := range append(append(page1.Packages, page2.Packages...), page3.Packages...) {
+		if seen[p.PackageID] {
+			t.Errorf("package %s appeared on more than one page", p.PackageID)
+		}
+		seen[p.PackageID] = true
+	}
+}
+
+func TestListArtifacts(t *testing.T) {
+	h := newAPIHarness(t)
+	h.seedPackage("v1.0.0", digestA)
+
+	var resp v1.ListArtifactsResponse
+	if code := h.get("/api/v1/products/vendor-a/packages/v1.0.0/artifacts", &resp); code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", code)
+	}
+	if len(resp.Artifacts) != 1 {
+		t.Fatalf("expected 1 artifact, got %d", len(resp.Artifacts))
+	}
+	if resp.Artifacts[0].SizeBytes != "512" {
+		t.Errorf("expected sizeBytes as a string, got %q", resp.Artifacts[0].SizeBytes)
+	}
+	if resp.Artifacts[0].Digest != digestA {
+		t.Errorf("expected the artifact digest, got %q", resp.Artifacts[0].Digest)
+	}
+}
+
+func TestDiscoverPackages(t *testing.T) {
+	h := newAPIHarness(t)
+	h.discoverer.result = discovery.ScanResult{
+		TagsListed: 12, TagsAdmitted: 8, New: 2, Superseded: 1, Requests: 1,
+	}
+
+	var resp v1.DiscoverPackagesResponse
+	code := h.post("/api/v1/products/vendor-a/packages:discover", "", &resp)
+	if code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", code)
+	}
+	if resp.PackagesDiscovered != 2 || resp.TagsListed != 12 || resp.RequestsCreated != 1 {
+		t.Errorf("scan result not reported faithfully: %+v", resp)
+	}
+	if h.discoverer.calls != 1 {
+		t.Errorf("expected 1 trigger, got %d", h.discoverer.calls)
+	}
+	// An empty body means "every source".
+	if h.discoverer.lastSource != "" {
+		t.Errorf("expected a whole-product scan, got source %q", h.discoverer.lastSource)
+	}
+}
+
+func TestDiscoverPackagesWithSource(t *testing.T) {
+	h := newAPIHarness(t)
+
+	var resp v1.DiscoverPackagesResponse
+	code := h.post("/api/v1/products/vendor-a/packages:discover", `{"source":"vendor"}`, &resp)
+	if code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", code)
+	}
+	if h.discoverer.lastSource != "vendor" {
+		t.Errorf("expected the named source to be scanned, got %q", h.discoverer.lastSource)
+	}
+}
+
+// A follower must say WHY it is not scanning, not 404 as though the feature
+// were missing.
+func TestDiscoverOnFollowerIsAPrecondition(t *testing.T) {
+	h := newAPIHarness(t)
+	h.discoverer.running = false
+
+	code := h.post("/api/v1/products/vendor-a/packages:discover", "", nil)
+	if code != http.StatusConflict && code != http.StatusPreconditionFailed {
+		t.Errorf("expected a precondition failure, got %d", code)
+	}
+	if h.discoverer.calls != 0 {
+		t.Error("a follower must not trigger a scan")
+	}
+}
+
+func TestDiscoverPropagatesScanFailure(t *testing.T) {
+	h := newAPIHarness(t)
+	h.discoverer.err = errors.New("registry unreachable")
+
+	code := h.post("/api/v1/products/vendor-a/packages:discover", "", nil)
+	if code != http.StatusServiceUnavailable {
+		t.Errorf("expected 503 when the registry is down, got %d", code)
+	}
+}
+
+func TestDiscoverUnknownSource(t *testing.T) {
+	h := newAPIHarness(t)
+	h.discoverer.err = discovery.ErrNoSuchSource
+
+	code := h.post("/api/v1/products/vendor-a/packages:discover", `{"source":"nope"}`, nil)
+	if code != http.StatusNotFound {
+		t.Errorf("expected 404 for an unknown source, got %d", code)
+	}
+}
+
+func TestDiscoverRejectsUnknownFields(t *testing.T) {
+	h := newAPIHarness(t)
+
+	// A typo'd field must be rejected rather than silently ignored: silently
+	// scanning every source when the caller asked for one is worse than an
+	// error.
+	code := h.post("/api/v1/products/vendor-a/packages:discover", `{"sourcee":"vendor"}`, nil)
+	if code != http.StatusBadRequest {
+		t.Errorf("expected 400 for an unknown field, got %d", code)
+	}
+}
+
+// Routes must be absent, not broken, when nothing backs them.
+func TestPackageRoutesAbsentWithoutAStore(t *testing.T) {
+	srv := NewServer(Deps{Products: product.NewRegistry(), Component: "coordinator"})
+	ts := httptest.NewServer(srv.Handler())
+	t.Cleanup(ts.Close)
+
+	resp, err := http.Get(ts.URL + "/api/v1/products/vendor-a/packages") //nolint:noctx // test client
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+
+	if resp.StatusCode != http.StatusNotFound {
+		t.Errorf("expected 404 when no package store is configured, got %d", resp.StatusCode)
+	}
+}

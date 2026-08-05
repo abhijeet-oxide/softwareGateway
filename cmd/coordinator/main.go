@@ -23,6 +23,7 @@ import (
 
 	"github.com/abhijeet-oxide/softwareGateway/internal/api"
 	"github.com/abhijeet-oxide/softwareGateway/internal/catalog"
+	"github.com/abhijeet-oxide/softwareGateway/internal/discovery"
 	"github.com/abhijeet-oxide/softwareGateway/internal/platform/config"
 	"github.com/abhijeet-oxide/softwareGateway/internal/platform/health"
 	"github.com/abhijeet-oxide/softwareGateway/internal/platform/leader"
@@ -119,6 +120,12 @@ func run() error {
 	products := product.NewRegistry()
 	cat := catalog.NewCatalog(st)
 
+	packages := store.NewPackages(st)
+
+	// Discovery is leader-gated and configuration-driven. The controller owns
+	// both inputs; here we only report changes to it.
+	discoveryCtl := discovery.NewController(packages, resolver, logger, mreg)
+
 	watcher := product.NewWatcher(cfg.ProductsDir(), loader, products, product.WatchOptions{
 		Logger: logger,
 		OnReload: func(res product.LoadResult) {
@@ -143,12 +150,23 @@ func run() error {
 			// contested would be a worse outcome than continuing.
 			reconcileCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 			defer cancel()
-			if r, err := cat.Reconcile(reconcileCtx, res.Valid); err != nil {
+			r, err := cat.Reconcile(reconcileCtx, res.Valid)
+			if err != nil {
 				logger.Error("catalog: reconcile failed; database catalog may be stale", "error", err)
-			} else {
-				logger.Info("catalog: reconciled",
-					"products", r.ProductsSeen, "repositories", r.ReposSeen, "deactivated", r.Deactivated)
+				// Discovery is deliberately NOT updated: it keeps polling with
+				// the last configuration that reconciled successfully. Handing
+				// it row IDs from a failed reconcile would be worse than
+				// running slightly stale.
+				return
 			}
+			logger.Info("catalog: reconciled",
+				"products", r.ProductsSeen, "repositories", r.ReposSeen, "deactivated", r.Deactivated)
+
+			refs := make(map[string]discovery.ProductRef, len(r.Products))
+			for name, p := range r.Products {
+				refs[name] = discovery.ProductRef{ID: p.ID, Repositories: p.Repositories}
+			}
+			discoveryCtl.SetConfig(res.Valid, refs)
 		},
 	})
 
@@ -193,6 +211,7 @@ func run() error {
 				} else {
 					mreg.LeaderElected.Set(0)
 				}
+				discoveryCtl.SetLeader(isLeader)
 			},
 		})
 	} else {
@@ -204,6 +223,7 @@ func run() error {
 			} else {
 				mreg.LeaderElected.Set(0)
 			}
+			discoveryCtl.SetLeader(isLeader)
 		})
 	}
 
@@ -214,6 +234,8 @@ func run() error {
 		Health:    hreg,
 		Products:  products,
 		Store:     st,
+		Packages:  packages,
+		Discovery: discoveryCtl.Loop(),
 		Leader:    elector,
 		Component: component,
 	})
@@ -239,6 +261,7 @@ func run() error {
 
 	g.Go(func() error { return elector.Run(gctx) })
 	g.Go(func() error { return watcher.Run(gctx) })
+	g.Go(func() error { return discoveryCtl.Run(gctx) })
 
 	// Graceful shutdown: stop accepting, drain in-flight requests, then exit.
 	g.Go(func() error {

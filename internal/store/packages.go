@@ -1,0 +1,549 @@
+package store
+
+import (
+	"context"
+	"database/sql"
+	"errors"
+	"fmt"
+)
+
+// Package persistence: rows in, rows out.
+//
+// Nothing here decides what a package MEANS — whether a tag should be
+// discovered, which rule matches it, whether a re-push is interesting. That
+// belongs in internal/discovery. This file owns the SQL and nothing else.
+
+// PackageRow is a row in `packages`.
+type PackageRow struct {
+	ID             int64
+	ProductID      int64
+	SourceRepoID   int64
+	Tag            string
+	ManifestDigest string
+	MediaType      string
+	TotalBytes     int64
+	ArtifactCount  int
+	BlobCount      int
+	State          string
+	DiscoveredAt   string
+	SupersededBy   *int64
+}
+
+// ArtifactRow is a row in `package_artifacts`: one manifest in the tree.
+type ArtifactRow struct {
+	ID           int64
+	PackageID    int64
+	ParentID     *int64
+	Digest       string
+	MediaType    string
+	ArtifactType string
+	SizeBytes    int64
+	Platform     string
+	Depth        int
+	Raw          []byte
+}
+
+// BlobRef links an artifact to a blob it references.
+type BlobRef struct {
+	Digest    string
+	MediaType string
+	SizeBytes int64
+	// Kind is "config" or "layer", matching the CHECK constraint.
+	Kind string
+	// Ordinal preserves layer order, which matters: layer order is part of the
+	// image, and a manifest reassembled with layers transposed is a different
+	// image that happens to contain the same bytes.
+	Ordinal int
+}
+
+// Packages is the persistence surface discovery needs.
+//
+// Every method takes an explicit *sql.Tx rather than opening its own. Discovery
+// writes a package, its artifact tree, an audit event, a notification and
+// possibly a transfer request as ONE atomic fact — a package that exists
+// without the notification that announces it is precisely the failure the
+// outbox pattern exists to prevent (docs/design/07 §6).
+type Packages struct {
+	db      *sql.DB
+	dialect Dialect
+}
+
+// NewPackages builds the package store.
+func NewPackages(s Store) *Packages {
+	return &Packages{db: s.DB(), dialect: DialectFor(s.Driver())}
+}
+
+// DB exposes the handle so callers can open the transaction they will pass
+// back in.
+func (p *Packages) DB() *sql.DB { return p.db }
+
+// Dialect exposes the dialect for callers assembling their own statements.
+func (p *Packages) Dialect() Dialect { return p.dialect }
+
+// ErrAlreadyExists reports that a unique constraint absorbed the write.
+//
+// Not an error condition anywhere in discovery — it is the expected result of
+// re-scanning a repository, which happens every fifteen minutes forever. It is
+// an error VALUE rather than a bool return so it cannot be silently ignored by
+// a caller that forgot to check.
+var ErrAlreadyExists = errors.New("row already exists")
+
+// InsertPackage inserts a discovered package.
+//
+// Returns ErrAlreadyExists when (source_repo_id, tag, manifest_digest) is
+// already recorded. THIS is the idempotency mechanism for discovery — not an
+// application-level "have I seen this?" lookup, which would have a race between
+// the check and the insert. A repeated scan, two overlapping scans, or a scan
+// that crashed halfway and restarted all converge here (docs/design/07 §2).
+func (p *Packages) InsertPackage(ctx context.Context, tx *sql.Tx, row PackageRow) (int64, error) {
+	state := row.State
+	if state == "" {
+		state = "discovered"
+	}
+
+	query := p.dialect.Rewrite(`
+		INSERT INTO packages
+			(product_id, source_repo_id, tag, manifest_digest, media_type,
+			 total_bytes, artifact_count, blob_count, state, updated_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ` + p.dialect.Now() + `)
+		ON CONFLICT (source_repo_id, tag, manifest_digest) DO NOTHING
+		RETURNING id`)
+
+	var id int64
+	err := tx.QueryRowContext(ctx, query,
+		row.ProductID, row.SourceRepoID, row.Tag, row.ManifestDigest, row.MediaType,
+		row.TotalBytes, row.ArtifactCount, row.BlobCount, state,
+	).Scan(&id)
+
+	switch {
+	case errors.Is(err, sql.ErrNoRows):
+		// DO NOTHING suppressed the insert, so RETURNING produced no row. Both
+		// dialects behave this way, and it is the signal we want.
+		return 0, ErrAlreadyExists
+	case err != nil:
+		return 0, fmt.Errorf("insert package %s:%s: %w", row.Tag, row.ManifestDigest, err)
+	}
+	return id, nil
+}
+
+// SupersedePrior marks earlier packages carrying THE SAME TAG as superseded.
+//
+// Note `tag = ?`: the statement cannot touch a package with a different tag.
+// This is the point stressed in docs/design/07 §4 — v2.13.0 and v2.14.0 are
+// independent software versions that coexist indefinitely, and discovering one
+// does nothing to the other. Supersession is exactly one situation: the same
+// tag re-pushed with different content.
+//
+// The old row's history — what was replicated, when, to where, whether it
+// verified — is preserved. Overwriting in place would be simpler and would
+// destroy the ability to answer "which bytes did we actually ship in March".
+func (p *Packages) SupersedePrior(
+	ctx context.Context, tx *sql.Tx, sourceRepoID int64, tag string, newPackageID int64,
+) (int64, error) {
+	query := p.dialect.Rewrite(`
+		UPDATE packages
+		   SET state = 'superseded', superseded_by = ?, updated_at = ` + p.dialect.Now() + `
+		 WHERE source_repo_id = ?
+		   AND tag = ?
+		   AND id <> ?
+		   AND state <> 'superseded'`)
+
+	res, err := tx.ExecContext(ctx, query, newPackageID, sourceRepoID, tag, newPackageID)
+	if err != nil {
+		return 0, fmt.Errorf("supersede prior packages for tag %q: %w", tag, err)
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return 0, nil // not every driver reports this; not worth failing over
+	}
+	return n, nil
+}
+
+// InsertArtifact records one manifest in a package's tree.
+func (p *Packages) InsertArtifact(ctx context.Context, tx *sql.Tx, a ArtifactRow) (int64, error) {
+	query := p.dialect.Rewrite(`
+		INSERT INTO package_artifacts
+			(package_id, parent_id, digest, media_type, artifact_type,
+			 size_bytes, platform, depth, raw)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+		ON CONFLICT (package_id, digest) DO NOTHING
+		RETURNING id`)
+
+	var id int64
+	err := tx.QueryRowContext(ctx, query,
+		a.PackageID, a.ParentID, a.Digest, a.MediaType, nullable(a.ArtifactType),
+		a.SizeBytes, nullable(a.Platform), a.Depth, a.Raw,
+	).Scan(&id)
+
+	switch {
+	case errors.Is(err, sql.ErrNoRows):
+		// The same manifest can legitimately appear twice in one tree — an index
+		// listing the same digest under two platforms, say. Recording it once is
+		// correct, so resolve to the existing row rather than failing.
+		return p.artifactID(ctx, tx, a.PackageID, a.Digest)
+	case err != nil:
+		return 0, fmt.Errorf("insert artifact %s: %w", a.Digest, err)
+	}
+	return id, nil
+}
+
+func (p *Packages) artifactID(ctx context.Context, tx *sql.Tx, packageID int64, digest string) (int64, error) {
+	var id int64
+	err := tx.QueryRowContext(ctx,
+		p.dialect.Rewrite(`SELECT id FROM package_artifacts WHERE package_id = ? AND digest = ?`),
+		packageID, digest,
+	).Scan(&id)
+	if err != nil {
+		return 0, fmt.Errorf("resolve existing artifact %s: %w", digest, err)
+	}
+	return id, nil
+}
+
+// LinkBlobs records the blobs an artifact references.
+//
+// `blobs` is content-addressed and global: the same layer shared by fifty
+// packages is one row. That is what makes the placement model in M3 able to
+// answer "is this blob already at the destination" without knowing which
+// package asked.
+func (p *Packages) LinkBlobs(ctx context.Context, tx *sql.Tx, artifactID int64, refs []BlobRef) error {
+	blobUpsert := p.dialect.Rewrite(`
+		INSERT INTO blobs (digest, size_bytes, media_type)
+		VALUES (?, ?, ?)
+		ON CONFLICT (digest) DO NOTHING`)
+
+	linkInsert := p.dialect.Rewrite(`
+		INSERT INTO artifact_blobs (artifact_id, digest, kind, ordinal)
+		VALUES (?, ?, ?, ?)
+		ON CONFLICT (artifact_id, digest, kind) DO NOTHING`)
+
+	for _, r := range refs {
+		if _, err := tx.ExecContext(ctx, blobUpsert, r.Digest, r.SizeBytes, nullable(r.MediaType)); err != nil {
+			return fmt.Errorf("upsert blob %s: %w", r.Digest, err)
+		}
+		if _, err := tx.ExecContext(ctx, linkInsert, artifactID, r.Digest, r.Kind, r.Ordinal); err != nil {
+			return fmt.Errorf("link blob %s to artifact %d: %w", r.Digest, artifactID, err)
+		}
+	}
+	return nil
+}
+
+// TransferRequestRow is a row in `transfer_requests`.
+type TransferRequestRow struct {
+	ID             string
+	ProductID      int64
+	PackageID      int64
+	Operation      string
+	SourceRepoID   int64
+	Priority       int
+	IdempotencyKey string
+	RequestedBy    string
+	RequestOrigin  string
+	AutoRuleName   string
+}
+
+// CreateTransferRequest inserts a request, or returns the existing one's ID.
+//
+// UNIQUE (idempotency_key) is what makes auto-download safe to run in a loop.
+// This matters more here than anywhere else in the system: an auto-download
+// rule is the one path that creates tens of gigabytes of work with no human in
+// the loop (docs/design/07 §5).
+//
+// The bool reports whether this call created the row, so a caller can tell a
+// genuinely new request from a replay — the API surface needs it to answer 201
+// versus 200.
+func (p *Packages) CreateTransferRequest(
+	ctx context.Context, tx *sql.Tx, row TransferRequestRow,
+) (string, bool, error) {
+	query := p.dialect.Rewrite(`
+		INSERT INTO transfer_requests
+			(id, product_id, package_id, operation, source_repo_id, priority,
+			 idempotency_key, requested_by, request_origin, auto_rule_name, updated_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ` + p.dialect.Now() + `)
+		ON CONFLICT (idempotency_key) DO NOTHING
+		RETURNING id`)
+
+	var id string
+	err := tx.QueryRowContext(ctx, query,
+		row.ID, row.ProductID, row.PackageID, row.Operation, row.SourceRepoID,
+		row.Priority, row.IdempotencyKey, row.RequestedBy, row.RequestOrigin,
+		nullable(row.AutoRuleName),
+	).Scan(&id)
+
+	switch {
+	case errors.Is(err, sql.ErrNoRows):
+		existing, err := p.requestByKey(ctx, tx, row.IdempotencyKey)
+		if err != nil {
+			return "", false, err
+		}
+		return existing, false, nil
+	case err != nil:
+		return "", false, fmt.Errorf("create transfer request for package %d: %w", row.PackageID, err)
+	}
+	return id, true, nil
+}
+
+func (p *Packages) requestByKey(ctx context.Context, tx *sql.Tx, key string) (string, error) {
+	var id string
+	err := tx.QueryRowContext(ctx,
+		p.dialect.Rewrite(`SELECT id FROM transfer_requests WHERE idempotency_key = ?`), key,
+	).Scan(&id)
+	if err != nil {
+		return "", fmt.Errorf("resolve existing transfer request: %w", err)
+	}
+	return id, nil
+}
+
+// AuditRow is a row in `audit_events`.
+type AuditRow struct {
+	EventType   string
+	Actor       string
+	ActorKind   string
+	ProductName string
+	SubjectKind string
+	SubjectID   string
+	Outcome     string
+	Detail      string
+}
+
+// InsertAudit appends an audit event.
+func (p *Packages) InsertAudit(ctx context.Context, tx *sql.Tx, row AuditRow) error {
+	actor, actorKind, outcome := row.Actor, row.ActorKind, row.Outcome
+	if actor == "" {
+		actor = "system"
+	}
+	if actorKind == "" {
+		actorKind = "system"
+	}
+	if outcome == "" {
+		outcome = "success"
+	}
+
+	query := p.dialect.Rewrite(`
+		INSERT INTO audit_events
+			(event_type, actor, actor_kind, product_name, subject_kind, subject_id, outcome, detail)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?)`)
+
+	if _, err := tx.ExecContext(ctx, query,
+		row.EventType, actor, actorKind, nullable(row.ProductName),
+		nullable(row.SubjectKind), nullable(row.SubjectID), outcome, nullable(row.Detail),
+	); err != nil {
+		return fmt.Errorf("insert audit event %s: %w", row.EventType, err)
+	}
+	return nil
+}
+
+// NotificationRow is a row in the `notifications` outbox.
+type NotificationRow struct {
+	ProductID   int64
+	EventType   string
+	ChannelName string
+	ChannelType string
+	SubjectKind string
+	SubjectID   string
+	Payload     string
+	DedupeKey   string
+}
+
+// EnqueueNotification writes to the outbox.
+//
+// Written in the caller's transaction, which is the entire reason the outbox
+// exists: it is impossible to insert the package and fail to enqueue the
+// notification, or to notify about a package that was rolled back. Delivery is
+// a separate retried concern; DECIDING to notify is atomic with the fact that
+// caused it (docs/design/07 §6).
+func (p *Packages) EnqueueNotification(ctx context.Context, tx *sql.Tx, row NotificationRow) error {
+	query := p.dialect.Rewrite(`
+		INSERT INTO notifications
+			(product_id, event_type, channel_name, channel_type,
+			 subject_kind, subject_id, payload, dedupe_key)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+		ON CONFLICT (dedupe_key) DO NOTHING`)
+
+	if _, err := tx.ExecContext(ctx, query,
+		row.ProductID, row.EventType, row.ChannelName, row.ChannelType,
+		row.SubjectKind, row.SubjectID, row.Payload, row.DedupeKey,
+	); err != nil {
+		return fmt.Errorf("enqueue notification %s: %w", row.EventType, err)
+	}
+	return nil
+}
+
+// PackageExists reports whether this exact content is already recorded.
+//
+// An OPTIMISATION, not the correctness mechanism. It lets a scan where nothing
+// changed skip the manifest-tree fetch — the expensive part — for tags already
+// known. The unique constraint in InsertPackage is what actually guarantees no
+// duplicate, so a racing scan between this check and that insert is harmless.
+func (p *Packages) PackageExists(ctx context.Context, sourceRepoID int64, tag, digest string) (bool, error) {
+	query := p.dialect.Rewrite(`
+		SELECT 1 FROM packages
+		 WHERE source_repo_id = ? AND tag = ? AND manifest_digest = ?
+		 LIMIT 1`)
+
+	var one int
+	err := p.db.QueryRowContext(ctx, query, sourceRepoID, tag, digest).Scan(&one)
+	switch {
+	case errors.Is(err, sql.ErrNoRows):
+		return false, nil
+	case err != nil:
+		return false, fmt.Errorf("check package %s@%s: %w", tag, digest, err)
+	}
+	return true, nil
+}
+
+// ListPackages returns a product's packages, newest first.
+type ListPackagesFilter struct {
+	ProductName string
+	Tag         string
+	State       string
+	Limit       int
+	Offset      int
+}
+
+// ListPackages backs the packages list API and CLI.
+func (p *Packages) ListPackages(ctx context.Context, f ListPackagesFilter) ([]PackageRow, error) {
+	query := `
+		SELECT pk.id, pk.product_id, pk.source_repo_id, pk.tag, pk.manifest_digest,
+		       pk.media_type, COALESCE(pk.total_bytes, 0), COALESCE(pk.artifact_count, 0),
+		       COALESCE(pk.blob_count, 0), pk.state, pk.discovered_at, pk.superseded_by
+		  FROM packages pk
+		  JOIN products pr ON pr.id = pk.product_id
+		 WHERE pr.name = ?`
+	args := []any{f.ProductName}
+
+	if f.Tag != "" {
+		query += " AND pk.tag = ?"
+		args = append(args, f.Tag)
+	}
+	if f.State != "" {
+		query += " AND pk.state = ?"
+		args = append(args, f.State)
+	}
+
+	limit := f.Limit
+	if limit <= 0 || limit > 1000 {
+		limit = 100
+	}
+	query += " ORDER BY pk.discovered_at DESC, pk.id DESC LIMIT ? OFFSET ?"
+	args = append(args, limit, max(f.Offset, 0))
+
+	rows, err := p.db.QueryContext(ctx, p.dialect.Rewrite(query), args...)
+	if err != nil {
+		return nil, fmt.Errorf("list packages for product %q: %w", f.ProductName, err)
+	}
+	defer func() { _ = rows.Close() }()
+
+	var out []PackageRow
+	for rows.Next() {
+		var r PackageRow
+		if err := rows.Scan(
+			&r.ID, &r.ProductID, &r.SourceRepoID, &r.Tag, &r.ManifestDigest,
+			&r.MediaType, &r.TotalBytes, &r.ArtifactCount, &r.BlobCount,
+			&r.State, &r.DiscoveredAt, &r.SupersededBy,
+		); err != nil {
+			return nil, fmt.Errorf("scan package row: %w", err)
+		}
+		out = append(out, r)
+	}
+	return out, rows.Err()
+}
+
+// GetPackage returns one package by product and reference.
+//
+// ref is a tag or a digest. A tag can legitimately match several rows once it
+// has been re-pushed, so the newest non-superseded row wins — asking for
+// "v2.14.0" means the current one.
+func (p *Packages) GetPackage(ctx context.Context, productName, ref string) (PackageRow, error) {
+	query := p.dialect.Rewrite(`
+		SELECT pk.id, pk.product_id, pk.source_repo_id, pk.tag, pk.manifest_digest,
+		       pk.media_type, COALESCE(pk.total_bytes, 0), COALESCE(pk.artifact_count, 0),
+		       COALESCE(pk.blob_count, 0), pk.state, pk.discovered_at, pk.superseded_by
+		  FROM packages pk
+		  JOIN products pr ON pr.id = pk.product_id
+		 WHERE pr.name = ? AND (pk.tag = ? OR pk.manifest_digest = ?)
+		 ORDER BY CASE WHEN pk.state = 'superseded' THEN 1 ELSE 0 END,
+		          pk.discovered_at DESC, pk.id DESC
+		 LIMIT 1`)
+
+	var r PackageRow
+	err := p.db.QueryRowContext(ctx, query, productName, ref, ref).Scan(
+		&r.ID, &r.ProductID, &r.SourceRepoID, &r.Tag, &r.ManifestDigest,
+		&r.MediaType, &r.TotalBytes, &r.ArtifactCount, &r.BlobCount,
+		&r.State, &r.DiscoveredAt, &r.SupersededBy,
+	)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return PackageRow{}, ErrNotFound
+		}
+		return PackageRow{}, fmt.Errorf("get package %q/%q: %w", productName, ref, err)
+	}
+	return r, nil
+}
+
+// ErrNotFound reports that no row matched.
+var ErrNotFound = errors.New("not found")
+
+// ListArtifacts returns a package's artifact tree, parents before children.
+func (p *Packages) ListArtifacts(ctx context.Context, packageID int64) ([]ArtifactRow, error) {
+	query := p.dialect.Rewrite(`
+		SELECT id, package_id, parent_id, digest, media_type,
+		       COALESCE(artifact_type, ''), size_bytes, COALESCE(platform, ''), depth
+		  FROM package_artifacts
+		 WHERE package_id = ?
+		 ORDER BY depth, id`)
+
+	rows, err := p.db.QueryContext(ctx, query, packageID)
+	if err != nil {
+		return nil, fmt.Errorf("list artifacts for package %d: %w", packageID, err)
+	}
+	defer func() { _ = rows.Close() }()
+
+	var out []ArtifactRow
+	for rows.Next() {
+		var a ArtifactRow
+		if err := rows.Scan(&a.ID, &a.PackageID, &a.ParentID, &a.Digest, &a.MediaType,
+			&a.ArtifactType, &a.SizeBytes, &a.Platform, &a.Depth); err != nil {
+			return nil, fmt.Errorf("scan artifact row: %w", err)
+		}
+		out = append(out, a)
+	}
+	return out, rows.Err()
+}
+
+// ListTransferRequests returns the requests raised for a package.
+func (p *Packages) ListTransferRequests(ctx context.Context, packageID int64) ([]TransferRequestRow, error) {
+	query := p.dialect.Rewrite(`
+		SELECT id, product_id, package_id, operation, source_repo_id, priority,
+		       idempotency_key, requested_by, request_origin, COALESCE(auto_rule_name, '')
+		  FROM transfer_requests
+		 WHERE package_id = ?
+		 ORDER BY created_at, id`)
+
+	rows, err := p.db.QueryContext(ctx, query, packageID)
+	if err != nil {
+		return nil, fmt.Errorf("list transfer requests for package %d: %w", packageID, err)
+	}
+	defer func() { _ = rows.Close() }()
+
+	var out []TransferRequestRow
+	for rows.Next() {
+		var r TransferRequestRow
+		if err := rows.Scan(&r.ID, &r.ProductID, &r.PackageID, &r.Operation, &r.SourceRepoID,
+			&r.Priority, &r.IdempotencyKey, &r.RequestedBy, &r.RequestOrigin, &r.AutoRuleName); err != nil {
+			return nil, fmt.Errorf("scan transfer request row: %w", err)
+		}
+		out = append(out, r)
+	}
+	return out, rows.Err()
+}
+
+// nullable renders an empty string as SQL NULL.
+//
+// The columns involved are nullable and semantically optional; storing "" would
+// make "absent" and "empty" indistinguishable in every later query.
+func nullable(s string) any {
+	if s == "" {
+		return nil
+	}
+	return s
+}

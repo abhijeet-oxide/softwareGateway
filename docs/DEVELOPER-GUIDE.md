@@ -1053,7 +1053,23 @@ Both clamp at 64. Raise them for a registry you own; leave them alone for a vend
 
 There was also a retry amplification: a manifest `GET` that blew the 30s deadline was retried up to eight times, so **one unresponsive request cost up to four minutes** — and discovery makes two per tag. A 90-second total budget now bounds it.
 
-If it is still slow after that, the requests themselves are slow: `transferctl products check` probes a real manifest fetch and reports the latency.
+There was also a third cause, and it was the worst of the three: **every repository built its own connection pool and its own rate limiter**. So `maxConnections: 32` with 16 repositories in flight permitted 512 concurrent connections to one host, and `requestsPerSecond: 50` permitted 800. Through a corporate proxy that is not a faster scan — it is a self-inflicted overload, and the configuration said the opposite of what was happening. A source now has one pool, one limiter and one token cache, so those numbers mean what they say.
+
+If it is still slow after that, the requests themselves are slow: turn on request tracing (above), and `transferctl products check` times a real manifest fetch.
+
+**I have no way to see what discovery is doing**
+Turn on request tracing. Every registry request is logged with its host, path, status and duration:
+
+```yaml
+observability:
+  log:
+    level: debug
+    format: text
+```
+
+You do not need `debug` for the important half: **failed requests and slow ones (>10s) are logged at WARN regardless of level**, with the URL and how long they took. If a scan is crawling, that log says which requests are responsible.
+
+Alongside it: `transferctl packages discovery-status <product> --watch`, and `transferctl products check <product>`, which times a real `HEAD` and a real manifest `GET`.
 
 **`packages list` is empty**
 Discovery polls on its interval; the first scan happens at startup. Force one with `transferctl packages discover <product>`. If it reports `tagsListed=0`, the repository path or credentials are wrong — `transferctl health` checks reachability.

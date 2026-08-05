@@ -119,13 +119,15 @@ func describeScanning(s v1.DiscoverySourceState) string {
 		b := &strings.Builder{}
 		fmt.Fprintf(b, "%s: ", s.Source)
 		if s.RepositoriesTotal > 0 {
-			// "done of total", not "current of total": repositories are scanned
-			// in parallel, so there is no single current one and a counter that
-			// implied otherwise would be a lie about what the scan is doing.
+			// "done of total" plus in-flight, never "current of total":
+			// repositories are scanned in parallel, so there is no single current
+			// one — and without the in-flight count the first minute of a
+			// concurrent scan reads as "0 of 48", which looks like nothing
+			// happening when sixteen requests are outstanding.
 			fmt.Fprintf(b, "%d/%d repos", s.RepositoriesDone, s.RepositoriesTotal)
-		}
-		if s.CurrentRepository != "" {
-			fmt.Fprintf(b, " (…%s)", shortRepo(s.CurrentRepository))
+			if s.RepositoriesInFlight > 0 {
+				fmt.Fprintf(b, " (%d in flight)", s.RepositoriesInFlight)
+			}
 		}
 		if s.Phase == "RESOLVING_TAGS" && s.TagsTotal > 0 {
 			fmt.Fprintf(b, " · %d/%d tags", s.TagsResolved, s.TagsTotal)
@@ -162,12 +164,3 @@ func isTerminal(w io.Writer) bool {
 }
 
 func stderr() io.Writer { return os.Stderr }
-
-// shortRepo trims a repository path to its last segment, so the live line stays
-// one line on a normal terminal.
-func shortRepo(path string) string {
-	if i := strings.LastIndex(path, "/"); i >= 0 && i < len(path)-1 {
-		return path[i+1:]
-	}
-	return path
-}

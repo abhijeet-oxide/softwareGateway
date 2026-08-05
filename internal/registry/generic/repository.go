@@ -13,6 +13,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"net/url"
 	"strings"
@@ -54,10 +55,15 @@ func init() {
 
 // FromClientConfig translates the backend-neutral config into ours.
 func FromClientConfig(c registry.ClientConfig) Config {
+	shared, _ := c.Shared.(*transport.Shared)
+	log, _ := c.Logger.(*slog.Logger)
+
 	return Config{
 		Registry:   c.Registry,
 		Repository: c.Repository,
 		PlainHTTP:  c.PlainHTTP,
+		Shared:     shared,
+		Logger:     log,
 		Transport: transport.Config{
 			Username:              c.Username,
 			Password:              c.Password,
@@ -90,6 +96,15 @@ type Config struct {
 	// PlainHTTP talks to the registry over http://. For local development
 	// registries only; never for a vendor.
 	PlainHTTP bool
+
+	// Shared is the source's connection pool, rate limiter and token cache. Nil
+	// builds a standalone stack, which is right for a one-off client and wrong
+	// for one of forty repositories on the same host.
+	Shared *transport.Shared
+
+	// Logger records every request at DEBUG and slow ones at WARN. Nil disables
+	// both.
+	Logger *slog.Logger
 }
 
 // New builds a repository client.
@@ -104,10 +119,17 @@ func New(cfg Config) (*Repository, error) {
 	tcfg := cfg.Transport
 	tcfg.Registry = cfg.Registry
 	tcfg.Repository = cfg.Repository
+	tcfg.Logger = cfg.Logger
 
-	client, err := transport.New(tcfg)
-	if err != nil {
-		return nil, fmt.Errorf("build transport for %s: %w", cfg.Registry, err)
+	var client *http.Client
+	if cfg.Shared != nil {
+		client = cfg.Shared.Client(tcfg)
+	} else {
+		var err error
+		client, err = transport.New(tcfg)
+		if err != nil {
+			return nil, fmt.Errorf("build transport for %s: %w", cfg.Registry, err)
+		}
 	}
 
 	scheme := "https"

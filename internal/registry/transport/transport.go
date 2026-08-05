@@ -22,10 +22,13 @@ import (
 	"crypto/tls"
 	"crypto/x509"
 	"fmt"
+	"log/slog"
 	"net"
 	"net/http"
 	"net/url"
 	"time"
+
+	"golang.org/x/time/rate"
 )
 
 // Config describes one repository's transport.
@@ -95,6 +98,16 @@ type Config struct {
 	// UserAgent identifies us to the registry.
 	UserAgent string
 
+	// Logger records every request. Nil disables tracing entirely.
+	//
+	// At DEBUG this is a full trace of what the scan is doing on the wire; at
+	// any level it reports failures and slow requests, which is what turns
+	// "discovery is slow" into a specific host, path and duration.
+	Logger *slog.Logger
+	// SlowRequest is the threshold for the slow-request warning. Zero uses
+	// DefaultSlowRequest.
+	SlowRequest time.Duration
+
 	// Retry policy. Zero values use the defaults from docs/design/10 §6.
 	//
 	// Configurable rather than hardcoded for two reasons: tests need a fast
@@ -132,26 +145,74 @@ const (
 	DefaultRetryMaxElapsed = 90 * time.Second
 )
 
-// New builds the layered client.
-func New(cfg Config) (*http.Client, error) {
+// Shared is the part of the stack that belongs to a SOURCE rather than to one
+// repository: the connection pool, the rate limiter and the token cache.
+//
+// It exists because building a whole stack per repository quietly multiplied
+// every configured limit by the number of repositories being scanned. With
+// `maxConnections: 32` and sixteen repositories in flight, the process was
+// entitled to 512 concurrent connections to one host — and `requestsPerSecond:
+// 50` became 800. Through a corporate proxy that is not a fast scan, it is a
+// self-inflicted denial of service, and the configuration said the opposite.
+//
+// Sharing also means one token exchange for the whole source instead of one per
+// repository, and warm keep-alives across repositories rather than a fresh TLS
+// handshake for each.
+type Shared struct {
+	base    *http.Transport
+	limiter *rate.Limiter
+	tokens  *tokenCache
+}
+
+// NewShared builds the per-source parts. The repository-specific fields of cfg
+// are ignored here; pass them to Client.
+func NewShared(cfg Config) (*Shared, error) {
 	base, err := baseTransport(cfg)
 	if err != nil {
 		return nil, err
 	}
+	return &Shared{
+		base:    base,
+		limiter: newLimiter(cfg.RequestsPerSecond, cfg.Burst),
+		tokens:  newTokenCache(),
+	}, nil
+}
 
+// Client builds a client for ONE repository on top of the shared parts.
+//
+// The retry and auth layers stay per repository: retry carries no state worth
+// sharing, and auth derives its token scope from cfg.Repository. Both sit
+// between the shared limiter and the shared pool, so the layering in the
+// package comment is preserved exactly.
+func (s *Shared) Client(cfg Config) *http.Client {
 	// Innermost first, so the outermost wrapper is applied last.
-	var rt http.RoundTripper = base
-	rt = newAuthTransport(rt, cfg)
+	var rt http.RoundTripper = s.base
+	rt = newAuthTransportWithCache(rt, cfg, s.tokens)
 	rt = newRetryTransport(rt, cfg)
-	rt = newRateLimitTransport(rt, cfg.RequestsPerSecond, cfg.Burst)
+	rt = newRateLimitTransportWith(rt, s.limiter)
 	rt = newUserAgentTransport(rt, cfg.UserAgent)
+	// Outermost, so the duration reported is the cost the CALLER paid —
+	// including any wait for a rate-limit token and any retry backoff.
+	rt = newTraceTransport(rt, cfg.Logger, cfg.SlowRequest)
 
 	return &http.Client{
 		Transport: rt,
 		// No client-level Timeout: it would apply to the whole exchange
 		// including the body, capping large reads. Per-phase timeouts on the
 		// transport are the right granularity.
-	}, nil
+	}
+}
+
+// New builds a standalone client, sharing nothing.
+//
+// For one-off users — preflight probes, the catalog client — where there is no
+// second repository to share with.
+func New(cfg Config) (*http.Client, error) {
+	shared, err := NewShared(cfg)
+	if err != nil {
+		return nil, err
+	}
+	return shared.Client(cfg), nil
 }
 
 func baseTransport(cfg Config) (*http.Transport, error) {

@@ -593,7 +593,8 @@ func renderDiscoveryStatus(w io.Writer, st *v1.DiscoveryStatusResponse) error {
 			fmt.Fprintf(tw, "  Status\tSCANNING (%s)\n", humanMillis(s.ElapsedMs))
 			fmt.Fprintf(tw, "  Phase\t%s\n", humanPhase(s.Phase))
 			if s.RepositoriesTotal > 0 {
-				fmt.Fprintf(tw, "  Repositories\t%d of %d\n", s.RepositoriesDone, s.RepositoriesTotal)
+				fmt.Fprintf(tw, "  Repositories\t%d of %d done, %d in flight\n",
+					s.RepositoriesDone, s.RepositoriesTotal, s.RepositoriesInFlight)
 			}
 			if s.CurrentRepository != "" {
 				fmt.Fprintf(tw, "  Current repository\t%s\n", s.CurrentRepository)

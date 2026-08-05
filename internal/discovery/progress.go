@@ -41,6 +41,12 @@ type ScanProgress struct {
 	// informative, because it means we are still waiting on `_catalog`.
 	RepositoriesTotal int
 	RepositoriesDone  int
+	// RepositoriesInFlight is how many are being scanned RIGHT NOW.
+	//
+	// Without it a concurrent scan looks stalled for its first minute: with
+	// sixteen repositories in flight and none finished, "0 of 48 done" is
+	// accurate and reads exactly like nothing happening.
+	RepositoriesInFlight int
 	// CurrentRepository is whichever repository most recently STARTED. With
 	// concurrency there is no single current one, so it is a hint about where
 	// the scan has got to and not a position — callers should render it as

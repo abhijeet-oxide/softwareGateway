@@ -53,6 +53,26 @@ type ClientConfig struct {
 	MaxRetryAttempts int
 	RetryBaseDelay   time.Duration
 	RetryMaxDelay    time.Duration
+
+	// Shared carries per-SOURCE transport state — connection pool, rate limiter,
+	// token cache — so every repository on one registry shares one of each.
+	//
+	// Deliberately `any`. This package must not import the transport package or
+	// it would know about connection pools and TLS, which is exactly the
+	// coupling ClientConfig exists to avoid; the backend that understands the
+	// value type-asserts it, and a backend that does not simply ignores it.
+	//
+	// Nil means share nothing, which is correct for a one-off client.
+	//
+	// It matters more than it looks: without sharing, `maxConnections: 32` with
+	// sixteen repositories in flight permits 512 connections to one host and
+	// `requestsPerSecond: 50` permits 800. The configured ceiling silently
+	// became a per-repository allowance.
+	Shared any
+
+	// Logger, when set, records every registry request at DEBUG and any slow
+	// one at WARN. Typed as any for the same reason as Shared.
+	Logger any
 }
 
 // Constructor builds a Source for one repository.

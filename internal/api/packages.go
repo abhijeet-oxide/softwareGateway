@@ -424,6 +424,7 @@ func (s *Server) handleDiscoveryStatus(w http.ResponseWriter, r *http.Request) {
 			state.ElapsedMs = p.Elapsed().Milliseconds()
 			state.RepositoriesTotal = p.RepositoriesTotal
 			state.RepositoriesDone = p.RepositoriesDone
+			state.RepositoriesInFlight = p.RepositoriesInFlight
 			state.CurrentRepository = p.CurrentRepository
 			state.TagsTotal = p.TagsTotal
 			state.TagsResolved = p.TagsResolved

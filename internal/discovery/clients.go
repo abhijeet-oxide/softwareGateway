@@ -2,12 +2,14 @@ package discovery
 
 import (
 	"fmt"
+	"log/slog"
 	"strings"
 	"time"
 
 	"github.com/abhijeet-oxide/softwareGateway/internal/platform/version"
 	"github.com/abhijeet-oxide/softwareGateway/internal/product"
 	"github.com/abhijeet-oxide/softwareGateway/internal/registry"
+	"github.com/abhijeet-oxide/softwareGateway/internal/registry/transport"
 
 	// Also registers the generic backend with the factory, via its init.
 	"github.com/abhijeet-oxide/softwareGateway/internal/registry/generic"
@@ -70,12 +72,30 @@ func clientConfigFor(
 // configuration — which is what makes declaring several repositories under one
 // source correct rather than merely convenient.
 func SourceClientFactory(
-	p *product.Product, src product.Source, secrets *product.SecretResolver,
+	p *product.Product, src product.Source, secrets *product.SecretResolver, log *slog.Logger,
 ) (ClientFactory, error) {
 	base, err := clientConfigFor(p, src, secrets)
 	if err != nil {
 		return nil, err
 	}
+
+	// ONE connection pool, ONE rate limiter and ONE token cache for the whole
+	// source, built here and shared by every repository client below.
+	//
+	// Without this each repository built its own, so the configured ceilings
+	// were multiplied by however many repositories were being scanned at once:
+	// `maxConnections: 32` across sixteen parallel repositories permitted 512
+	// connections to a single host, and `requestsPerSecond: 50` permitted 800.
+	// Through a corporate proxy that is not a faster scan, it is a
+	// self-inflicted overload — and the configuration said the opposite of what
+	// was happening.
+	shared, err := transport.NewShared(transportConfigFor(base))
+	if err != nil {
+		return nil, fmt.Errorf("product %q source %q transport: %w",
+			p.Metadata.Name, src.Name, err)
+	}
+	base.Shared = shared
+	base.Logger = log
 
 	return func(repositoryPath string) (registry.Source, error) {
 		cfg := base
@@ -87,6 +107,28 @@ func SourceClientFactory(
 		}
 		return client, nil
 	}, nil
+}
+
+// transportConfigFor extracts the parts of a client config that describe the
+// SOURCE rather than one repository.
+//
+// Repository, and therefore the token scope, is deliberately absent: those
+// belong to the per-repository client built on top of the shared parts.
+func transportConfigFor(c registry.ClientConfig) transport.Config {
+	return transport.Config{
+		Registry:              c.Registry,
+		RequestsPerSecond:     c.RequestsPerSecond,
+		Burst:                 c.Burst,
+		MaxConnections:        c.MaxConnections,
+		CABundle:              c.CABundle,
+		HTTPSProxy:            c.HTTPSProxy,
+		NoProxy:               c.NoProxy,
+		DirectConnect:         c.DirectConnect,
+		InsecureSkipVerify:    c.InsecureSkipVerify,
+		ConnectTimeout:        c.ConnectTimeout,
+		ResponseHeaderTimeout: c.ResponseHeaderTimeout,
+		ForceHTTP1:            true,
+	}
 }
 
 // SourceCatalog builds a registry-scoped client for enumerating repositories.
@@ -202,7 +244,11 @@ func SourceSpecs(
 	products []*product.Product,
 	catalog map[string]ProductRef,
 	secrets *product.SecretResolver,
+	log *slog.Logger,
 ) ([]SourceSpec, []error) {
+	if log == nil {
+		log = slog.Default()
+	}
 	var specs []SourceSpec
 	var errs []error
 
@@ -229,7 +275,7 @@ func SourceSpecs(
 				continue
 			}
 
-			newClient, err := SourceClientFactory(p, src, secrets)
+			newClient, err := SourceClientFactory(p, src, secrets, log)
 			if err != nil {
 				errs = append(errs, err)
 				continue

@@ -115,3 +115,41 @@ func TestUnreachableAndTimeoutShareExitCode(t *testing.T) {
 		t.Errorf("exit code for unreachable = %d, want %d", got, exitUnreachable)
 	}
 }
+
+func TestProgressLineIsTruncatedToTerminalWidth(t *testing.T) {
+	long := strings.Repeat("x", 200)
+	got := truncate(long, 78)
+
+	if n := len([]rune(got)); n != 78 {
+		t.Errorf("truncated to %d runes, want 78 — a longer line wraps, and a "+
+			"carriage return then only rewrites the last wrapped row, which "+
+			"looks exactly like a display that has stopped updating", n)
+	}
+	if !strings.HasSuffix(got, "…") {
+		t.Error("a truncated line should say so")
+	}
+	if short := truncate("abc", 78); short != "abc" {
+		t.Errorf("a short line must pass through unchanged, got %q", short)
+	}
+}
+
+// Runes, not bytes: cutting a multi-byte character in half produces a
+// replacement glyph that shifts the line and defeats the padding.
+func TestTruncateCountsRunesNotBytes(t *testing.T) {
+	s := strings.Repeat("é", 40) // 80 bytes, 40 runes
+	if got := truncate(s, 40); got != s {
+		t.Errorf("40 runes should fit in 40 columns, got %q", got)
+	}
+}
+
+func TestProgressWidthHonoursColumns(t *testing.T) {
+	t.Setenv("COLUMNS", "120")
+	if got := progressWidth(); got != 118 {
+		t.Errorf("progressWidth = %d, want 118 (COLUMNS minus the indent)", got)
+	}
+
+	t.Setenv("COLUMNS", "nonsense")
+	if got := progressWidth(); got != 78 {
+		t.Errorf("progressWidth = %d, want the 78 fallback", got)
+	}
+}

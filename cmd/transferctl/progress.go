@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"strconv"
 	"strings"
 	"time"
 
@@ -35,6 +36,7 @@ func watchDiscovery(ctx context.Context, c *v1.Client, product string, out io.Wr
 
 	term := isTerminal(out)
 	lastWidth := 0
+	failures := 0
 
 	// A separate, short deadline per poll. A status request that hangs must not
 	// hold up the next one, and it must never be the reason the command fails —
@@ -46,12 +48,23 @@ func watchDiscovery(ctx context.Context, c *v1.Client, product string, out io.Wr
 
 		st, err := c.DiscoveryStatus(pollCtx, product)
 		if err != nil {
+			// Swallowed at first, then reported ONCE. Silently swallowing
+			// forever was the wrong call: it makes "the scan is making no
+			// progress" and "the progress endpoint is broken" look identical,
+			// which is the exact confusion this display exists to remove.
+			failures++
+			if failures == 3 {
+				fmt.Fprintf(out, "\r  (progress unavailable: %v)\n", err)
+			}
 			return
 		}
+		failures = 0
+
 		line := progressLine(st)
 		if line == "" {
 			return
 		}
+		line = truncate(line, progressWidth())
 
 		if !term {
 			// Not a terminal: no carriage-return trickery, and far less often,
@@ -60,11 +73,14 @@ func watchDiscovery(ctx context.Context, c *v1.Client, product string, out io.Wr
 			return
 		}
 		// Pad to erase whatever the previous, possibly longer, line left behind.
+		// Measured in runes, matching truncate — a byte count would over-pad a
+		// line containing a multi-byte character and wrap it anyway.
+		width := len([]rune(line))
 		pad := ""
-		if n := lastWidth - len(line); n > 0 {
+		if n := lastWidth - width; n > 0 {
 			pad = strings.Repeat(" ", n)
 		}
-		lastWidth = len(line)
+		lastWidth = width
 		fmt.Fprintf(out, "\r  %s%s", line, pad)
 	}
 
@@ -170,3 +186,36 @@ func isTerminal(w io.Writer) bool {
 }
 
 func stderr() io.Writer { return os.Stderr }
+
+// progressWidth is how wide the live line may be.
+//
+// A line longer than the terminal WRAPS, and a carriage return then only
+// rewrites the last wrapped row — leaving the earlier rows frozen on screen
+// with stale numbers. That looks exactly like a display that has stopped
+// updating, which is what it was reported as.
+//
+// COLUMNS when set, otherwise 78: narrow enough to fit the 80-column default
+// on every terminal, with room for the two-space indent.
+func progressWidth() int {
+	if v := strings.TrimSpace(os.Getenv("COLUMNS")); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 20 {
+			return n - 2
+		}
+	}
+	return 78
+}
+
+// truncate shortens s to at most n RUNES, with an ellipsis.
+//
+// Runes, not bytes: cutting a multi-byte character in half produces a
+// replacement glyph that shifts the rest of the line and defeats the padding.
+func truncate(s string, n int) string {
+	r := []rune(s)
+	if len(r) <= n {
+		return s
+	}
+	if n <= 1 {
+		return string(r[:n])
+	}
+	return string(r[:n-1]) + "…"
+}

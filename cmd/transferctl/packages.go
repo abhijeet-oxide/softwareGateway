@@ -286,6 +286,11 @@ func newPackagesDiscoverCommand() *cobra.Command {
 	}
 
 	cmd.Flags().StringVar(&source, "source", "", "scan only this source (default: every source)")
+
+	// A full scan lists every tag of every repository, then resolves each one.
+	// On a registry with a few hundred repositories that is minutes of honest
+	// work, not a stall.
+	contactsRegistries(cmd)
 	return cmd
 }
 

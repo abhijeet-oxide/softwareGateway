@@ -86,8 +86,15 @@ type Checker struct {
 }
 
 // NewChecker builds a preflight checker.
+//
+// The per-repository timeout is derived from the transport budget in
+// probeTransport rather than picked: 2 attempts of (5s connect + 10s waiting
+// for headers) is 30 seconds of legitimate work, plus retry backoff. A 15s
+// budget — what this used to be — cut off a probe that was still within its own
+// retry policy, so a registry behind a slow proxy reported a timeout the
+// transport had not yet reached.
 func NewChecker(secrets *product.SecretResolver) *Checker {
-	return &Checker{secrets: secrets, timeout: 15 * time.Second, concurrency: 8}
+	return &Checker{secrets: secrets, timeout: 45 * time.Second, concurrency: 8}
 }
 
 // CheckProduct probes every repository a product declares.
@@ -246,6 +253,23 @@ func (c *Checker) checkRepository(ctx context.Context, p *product.Product, spec 
 			skipped("reachable", "credentials could not be resolved"),
 			skipped("authenticated", "credentials could not be resolved"))
 		return res
+	}
+
+	// 1a. Certificate verification, if it has been turned off.
+	//
+	// Reported on every run, whether or not anything else passes. This is the
+	// setting that gets switched on during an incident to unblock a release and
+	// is then still on a year later; the only defence is that it is impossible
+	// to look at this report and not see it.
+	if cfg.InsecureSkipVerify {
+		res.Steps = append(res.Steps, Step{
+			Name: "certificate verification", Status: StatusWarning,
+			Detail: "DISABLED by network.tls.insecureSkipVerify",
+			Hint: "the connection is encrypted but not authenticated: anything that can " +
+				"intercept it can serve different bytes and we would not know. Prefer " +
+				"network.caBundleRef. Note this does NOT fix \"x509: negative serial " +
+				"number\" — that needs tls.allowNegativeSerialNumbers",
+		})
 	}
 
 	// 2. The registry answers /v2/, and the credential is accepted.
@@ -565,6 +589,7 @@ func probeTransport(cfg registry.ClientConfig) transport.Config {
 		HTTPSProxy:            cfg.HTTPSProxy,
 		NoProxy:               cfg.NoProxy,
 		DirectConnect:         cfg.DirectConnect,
+		InsecureSkipVerify:    cfg.InsecureSkipVerify,
 		ConnectTimeout:        5 * time.Second,
 		ResponseHeaderTimeout: 10 * time.Second,
 		UserAgent:             cfg.UserAgent,
@@ -613,6 +638,9 @@ func applyNetwork(
 			if len(n.Proxy.NoProxy) > 0 && !n.Proxy.Direct {
 				cfg.NoProxy = n.Proxy.NoProxy
 			}
+		}
+		if n.TLS.SetsSkipVerify() {
+			cfg.InsecureSkipVerify = n.TLS.SkipsVerify()
 		}
 		if d := time.Duration(n.Timeouts.Connect); d > 0 {
 			cfg.ConnectTimeout = d

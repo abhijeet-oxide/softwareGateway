@@ -156,6 +156,12 @@ func applyNetwork(
 				cfg.NoProxy = n.Proxy.NoProxy
 			}
 		}
+		if n.TLS.SetsSkipVerify() {
+			// Explicit at either level wins, including an explicit false — a
+			// product that disables verification globally must still be able to
+			// keep it on for the one registry with a good certificate.
+			cfg.InsecureSkipVerify = n.TLS.SkipsVerify()
+		}
 		if d := time.Duration(n.Timeouts.Connect); d > 0 {
 			cfg.ConnectTimeout = d
 		}
@@ -240,13 +246,14 @@ func SourceSpecs(
 			}
 
 			specs = append(specs, SourceSpec{
-				Product:    p,
-				ProductID:  ref.ID,
-				SourceName: src.Name,
-				RepoIDs:    ref.Repositories,
-				NewClient:  newClient,
-				Catalog:    catalogClient,
-				Interval:   interval,
+				Product:     p,
+				ProductID:   ref.ID,
+				SourceName:  src.Name,
+				RepoIDs:     ref.Repositories,
+				NewClient:   newClient,
+				Catalog:     catalogClient,
+				Interval:    interval,
+				InsecureTLS: product.SkipsTLSVerification(p.Spec.Network, src.Network),
 			})
 		}
 	}

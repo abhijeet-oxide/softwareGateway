@@ -493,3 +493,66 @@ func TestResultsAreStablyOrdered(t *testing.T) {
 		}
 	}
 }
+
+// TestInsecureSkipVerifyIsReportedAsAWarning: the setting has to be impossible
+// to leave switched on by accident, and the report is where an operator looks.
+//
+// The fake registry is plain HTTP, so nothing here exercises a handshake — the
+// point is only that the configuration reaches the report. The handshake itself
+// is covered in internal/registry/transport.
+func TestInsecureSkipVerifyIsReportedAsAWarning(t *testing.T) {
+	h := newHarness(t)
+	h.reg.AddImage("suite/core", "v1.0.0", fakeregistry.NewLayer("a"))
+
+	p := h.load(`
+apiVersion: softwaregateway.io/v1alpha1
+kind: Product
+metadata: {name: p}
+spec:
+  sources:
+    - name: vendor
+      registry: REGISTRY_HOST
+      repository: suite/core
+      anonymous: true
+      network:
+        tls: {insecureSkipVerify: true}
+  targets:
+    - name: internal
+      registry: REGISTRY_HOST
+      repository: mirror/p
+      anonymous: true
+      default: true
+`)
+
+	res := h.checker.CheckProduct(t.Context(), p)
+	if res.Status != StatusWarning {
+		t.Errorf("product status = %s, want WARNING", res.Status)
+	}
+
+	s := step(t, repoNamed(t, res, "vendor"), "certificate verification")
+	if s.Status != StatusWarning {
+		t.Errorf("step status = %s, want WARNING", s.Status)
+	}
+	// The correction has to travel with the warning: this is exactly where an
+	// operator chasing a negative-serial failure will read it.
+	if !strings.Contains(s.Hint, "negative serial") {
+		t.Errorf("the hint should say this does not fix negative serial numbers, got: %q", s.Hint)
+	}
+}
+
+// The step must be ABSENT, not present-and-OK, when verification is on. A step
+// that is always there trains people to stop reading it.
+func TestNoCertificateStepWhenVerificationIsOn(t *testing.T) {
+	h := newHarness(t)
+	h.reg.AddImage("suite/core", "v1.0.0", fakeregistry.NewLayer("a"))
+	h.reg.AddImage("suite/database", "v2.0.0", fakeregistry.NewLayer("b"))
+
+	res := h.checker.CheckProduct(t.Context(), h.load(anonDoc))
+	for _, r := range res.Repositories {
+		for _, s := range r.Steps {
+			if s.Name == "certificate verification" {
+				t.Errorf("%s: unexpected certificate step %+v", r.Name, s)
+			}
+		}
+	}
+}

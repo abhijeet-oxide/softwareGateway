@@ -29,6 +29,7 @@ import (
 	"github.com/abhijeet-oxide/softwareGateway/internal/platform/leader"
 	plog "github.com/abhijeet-oxide/softwareGateway/internal/platform/log"
 	"github.com/abhijeet-oxide/softwareGateway/internal/platform/metrics"
+	"github.com/abhijeet-oxide/softwareGateway/internal/platform/tlscompat"
 	"github.com/abhijeet-oxide/softwareGateway/internal/platform/tracing"
 	"github.com/abhijeet-oxide/softwareGateway/internal/platform/version"
 	"github.com/abhijeet-oxide/softwareGateway/internal/preflight"
@@ -77,6 +78,11 @@ func run() error {
 		logger.Warn("using the SQLite driver — DEVELOPMENT ONLY, not supported in production",
 			"driver", cfg.Database.Driver, "dsn", cfg.Database.DSN)
 	}
+
+	// Before any TLS connection is made, including the database's.
+	tlscompat.Apply(tlscompat.Options{
+		AllowNegativeSerialNumbers: cfg.TLS.AllowNegativeSerialNumbers,
+	}, logger)
 
 	// Signals cancel the root context; every loop below observes it.
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)

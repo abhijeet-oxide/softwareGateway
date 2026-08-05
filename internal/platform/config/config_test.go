@@ -204,3 +204,25 @@ func TestProductAndSecretDirsDeriveFromConfigDir(t *testing.T) {
 		t.Errorf("SecretsDir = %q", c.SecretsDir())
 	}
 }
+
+// TestTLSKeyIsReachableFromTheEnvironment guards the canonical-key mapping for
+// the newest setting. A camelCase key that the env provider cannot reach is
+// silently ignored, which is how tls.allowNegativeSerialNumbers would look
+// exactly like a setting that does not work.
+func TestTLSKeyIsReachableFromTheEnvironment(t *testing.T) {
+	t.Setenv("SWGW_TLS_ALLOWNEGATIVESERIALNUMBERS", "true")
+
+	cfg, err := Load("")
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	if !cfg.TLS.AllowNegativeSerialNumbers {
+		t.Error("SWGW_TLS_ALLOWNEGATIVESERIALNUMBERS did not reach the config")
+	}
+}
+
+func TestTLSDefaultsToStrict(t *testing.T) {
+	if Defaults().TLS.AllowNegativeSerialNumbers {
+		t.Error("relaxed X.509 parsing must be opt-in")
+	}
+}

@@ -234,6 +234,7 @@ database:
 | `observability.tracing.enabled` | `false` | |
 | `observability.tracing.sampleRatio` | `0.05` | must be within `[0,1]` |
 | `retention.*` | 7d–365d | M6 |
+| `tls.allowNegativeSerialNumbers` | `false` | accepts certificates whose serial number is negative. **Process-wide**, and the only fix for `x509: negative serial number` — see [below](#insecureskipverify-will-not-fix-x509-negative-serial-number) |
 
 </details>
 
@@ -525,6 +526,68 @@ spec:
 
 Targets take the same block: a destination inside the datacentre and a vendor outside it need different routes.
 
+#### Turning certificate verification off for one repository
+
+```yaml
+spec:
+  sources:
+    - name: vendor-mid-migration
+      network:
+        tls:
+          insecureSkipVerify: true
+```
+
+This stops the chain, the expiry **and** the hostname from being checked for that repository. The connection is still encrypted; it is no longer authenticated, so anything that can intercept it can serve you different bytes and nothing will notice.
+
+It inherits like every other network setting, and because it is a three-state field you can turn it back **off** below a product that turned it on:
+
+```yaml
+spec:
+  network:
+    tls: {insecureSkipVerify: true}     # the estate is a mess
+
+  sources:
+    - name: the-one-good-registry
+      network:
+        tls: {insecureSkipVerify: false}   # ...except this one
+```
+
+Omitting the field means *inherit*. Writing `false` means *verify, whatever the level above says*. That distinction is the whole reason the field is not a plain boolean.
+
+You will hear about it: the Coordinator logs a warning naming the product and source on every configuration reload, and `transferctl products check` reports a `certificate verification  WARNING` step for the repository. Setting `caBundleRef` and `insecureSkipVerify` in the **same** `network` block is rejected at validation — the bundle would never be consulted, so keeping both is dead configuration that reads as if it verifies.
+
+#### `insecureSkipVerify` will **not** fix `x509: negative serial number`
+
+If discovery fails with
+
+```
+tls: failed to parse certificate from server: x509: negative serial number
+```
+
+then skipping verification changes nothing, and neither does a CA bundle. Both were measured, not assumed — `internal/platform/tlscompat` has the test:
+
+| client | result |
+|---|---|
+| default | `tls: failed to parse certificate from server: x509: negative serial number` |
+| `insecureSkipVerify: true` | **the identical error** |
+| `tls.allowNegativeSerialNumbers: true` | connects, with verification still fully on |
+
+The reason is where the failure happens. Go's `crypto/x509` has rejected negative serial numbers since Go 1.23, and it rejects them while **parsing** the certificate — before any verification runs. `InsecureSkipVerify` turns off a step that is never reached.
+
+The fix is in system config, not product config:
+
+```yaml
+# dev/config.yaml — or SWGW_TLS_ALLOWNEGATIVESERIALNUMBERS=true
+tls:
+  allowNegativeSerialNumbers: true
+```
+
+Set it on **both** the Coordinator and the Worker. The Coordinator discovers; the Worker moves the bytes. Setting it on only one gives you a product that discovers fine and fails every transfer at the handshake.
+
+It lives in system config because it is implemented with Go's `GODEBUG` mechanism, which is per **process**. It cannot be scoped to one repository, and putting it under `network.tls` would have been a lie about its blast radius: it relaxes parsing for every registry, every Sigstore call, and every other outbound connection the process makes. Both binaries say so at startup, and the existing `GODEBUG` value is preserved rather than overwritten.
+
+RFC 5280 §4.1.2.2 requires a positive serial number, so a certificate with a negative one is genuinely malformed — usually an appliance or enterprise CA encoding a random 20-byte value without clearing the high bit. The certificate is otherwise fine. Ask whoever runs that CA to reissue; until they do, this is the switch.
+
 #### Signing trust per repository
 
 Two vendors do not share a signing identity, so `verification` sits on sources and targets as well as on the product:
@@ -673,7 +736,7 @@ Every command takes `-o json` or `-o yaml` for scripting.
 | 0 | success |
 | 1 | generic failure |
 | 2 | usage error — bad flags or arguments |
-| 3 | Coordinator unreachable — the service is down |
+| 3 | no answer — the Coordinator is unreachable, **or** it did not reply within the timeout |
 | 4 | not found |
 | 5 | failed precondition — e.g. `packages discover` on a follower |
 | 6 | partial failure — the operation ran but something in it failed |
@@ -683,6 +746,42 @@ The distinctions earn their keep in scripts. 3 versus 4 separates "the service i
 ```bash
 transferctl config validate ./products || exit $?   # 6 if any file is invalid
 ```
+
+Code 3 covers both "nothing is listening" and "it is still working on your request": from a script's point of view no answer came back either way. The *message* distinguishes them, because a human acts on them in opposite directions.
+
+### Timeouts
+
+`--timeout` bounds one request to the Coordinator. It defaults to **30 seconds**, except on the two commands that reach third-party registries through it:
+
+| Command | Default timeout |
+|---|---|
+| everything else | 30s |
+| `transferctl products check` | 10m |
+| `transferctl packages discover` | 10m |
+
+Those two are slow because the work is slow, not because anything is wrong. `products check` opens a TLS connection to every repository a product declares and runs several round trips against each; `discover` lists every tag of every repository and then resolves each one. Through a corporate proxy, against a registry across a WAN link, minutes is normal. A shared 30-second deadline made both of them fail almost every time, and fail with
+
+```
+Error: coordinator unreachable: ... context deadline exceeded
+       (Client.Timeout exceeded while awaiting headers)
+```
+
+which blames the Coordinator for being slow to answer a question that is genuinely slow to answer. It now reads:
+
+```
+Error: the request timed out after 10m0s: http://localhost:8080 did not answer in time: ...
+
+The Coordinator accepted the connection but had not answered yet. If the
+work is genuinely slow — a check across many registries, or a scan of a
+large one — raise the deadline:
+
+  transferctl --timeout 15m ...
+  SWGW_TIMEOUT=15m transferctl ...
+```
+
+Set `--timeout` or `SWGW_TIMEOUT` yourself and your value is used everywhere, including on the slow commands. An explicit deadline is a decision, not a suggestion — there are good reasons to want a short one, such as a scripted probe.
+
+**The scan does not stop when the client does.** `packages discover` triggers work on the Coordinator; giving up on the response only stops you waiting for it. Re-running the command finds the in-progress scan rather than starting a second one.
 
 ### `health` vs `products check` — two different questions
 
@@ -914,6 +1013,15 @@ Discovery polls on its interval; the first scan happens at startup. Force one wi
 
 **Discovery is slow to report a registry outage**
 Expected, and worth understanding: a hard outage takes **~2 minutes** to surface. The transport retries the transient class eight times with backoff, and only when those are exhausted does the loop's own backoff engage. Both layers are right individually and they multiply. This is why the alert is on `discovery_last_success_timestamp_seconds` staleness rather than failure rate — staleness is visible immediately.
+
+**`tls: failed to parse certificate from server: x509: negative serial number`**
+`insecureSkipVerify` does **not** fix this — measured, and the message is byte-for-byte identical with it on. The parse fails before verification runs. Set `tls.allowNegativeSerialNumbers: true` in system config, on the Coordinator *and* the Worker, and see [the section on it](#insecureskipverify-will-not-fix-x509-negative-serial-number).
+
+**`x509: certificate signed by unknown authority`**
+This one *is* a trust problem, and the right fix is `network.caBundleRef` pointing at the issuing CA's PEM. `insecureSkipVerify: true` also works and is worse: it stops checking expiry and hostname too. `transferctl products check` tells you which of the two you have.
+
+**`context deadline exceeded (Client.Timeout exceeded while awaiting headers)`**
+An older build. `products check` and `packages discover` now default to a 10-minute deadline, and a timeout no longer reports itself as an unreachable Coordinator. If you still hit it on a current build, the work really is taking longer than ten minutes: `transferctl --timeout 30m ...`. See [Timeouts](#timeouts).
 
 **`golangci-lint` rejects the config**
 You have v1. The config uses the v2 schema. Install v2.

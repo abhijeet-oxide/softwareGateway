@@ -36,6 +36,38 @@ type SystemConfig struct {
 	Worker        WorkerConfig        `koanf:"worker"`
 	Observability ObservabilityConfig `koanf:"observability"`
 	Retention     RetentionConfig     `koanf:"retention"`
+	TLS           TLSConfig           `koanf:"tls"`
+}
+
+// TLSConfig relaxes certificate handling for the WHOLE PROCESS.
+//
+// Deliberately here and not in product configuration, unlike
+// network.tls.insecureSkipVerify. These settings are implemented by Go's
+// GODEBUG mechanism, which is per process and cannot be scoped to one
+// connection — so pretending they were per repository would be a lie about
+// their blast radius. An operator concern, in the operator's config file.
+type TLSConfig struct {
+	// AllowNegativeSerialNumbers accepts certificates whose serial number is
+	// negative, which crypto/x509 has rejected since Go 1.23.
+	//
+	// This is the fix for:
+	//
+	//	tls: failed to parse certificate from server: x509: negative serial number
+	//
+	// And it is the ONLY fix. That error happens while PARSING the server's
+	// certificate — before any verification runs — so
+	// network.tls.insecureSkipVerify does not help, and neither does a CA
+	// bundle. Measured on Go 1.25.7, not reasoned about: with
+	// insecureSkipVerify alone the handshake fails with the identical message.
+	//
+	// RFC 5280 §4.1.2.2 requires a positive serial number, so a certificate
+	// with a negative one is malformed. Some appliance and enterprise CAs emit
+	// them anyway by encoding a random 20-byte value without clearing the high
+	// bit. The certificate is otherwise fine; the standard library is simply
+	// stricter than the estate.
+	//
+	// Process-wide, and logged as such at startup.
+	AllowNegativeSerialNumbers bool `koanf:"allowNegativeSerialNumbers"`
 }
 
 type ServerConfig struct {

@@ -232,6 +232,25 @@ func validateNetwork(path string, n *Network, resolver *SecretResolver) Errors {
 		}
 	}
 
+	// A CA bundle and skipped verification in the SAME block is dead
+	// configuration: nothing verifies the chain, so the bundle is never
+	// consulted. Rejected rather than tolerated, because the shape it usually
+	// takes is someone adding insecureSkipVerify to debug a TLS failure, fixing
+	// the real cause with the bundle, and never taking the escape hatch out —
+	// leaving a product that looks like it verifies and does not.
+	//
+	// Across levels this is legitimate and allowed: a product-wide caBundleRef
+	// with one source overriding it is exactly what the override exists for.
+	if n.TLS.SkipsVerify() && n.CABundleRef != nil {
+		errs = append(errs, Error{
+			path + ".tls.insecureSkipVerify",
+			"set alongside caBundleRef in the same network block",
+			"skipping verification means the CA bundle is never consulted. Remove " +
+				"one: keep caBundleRef if the bundle fixes the chain, keep " +
+				"insecureSkipVerify only if it does not",
+		})
+	}
+
 	return errs
 }
 

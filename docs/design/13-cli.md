@@ -27,12 +27,14 @@
 | 0 | Success |
 | 1 | General error |
 | 2 | Usage error |
-| 3 | Coordinator unreachable |
+| 3 | No answer: the Coordinator is unreachable, **or** it did not reply within the timeout |
 | 4 | Not found |
 | 5 | Precondition failed (illegal state transition) |
 | 6 | Operation completed with failures (e.g. `--watch` on a transfer that failed) |
 
 Code 6 matters for CI: `transferctl download --watch` must exit non-zero when the transfer fails, or a pipeline will report green on a failed replication.
+
+Code 3 deliberately covers both no-answer cases. A script branching on it wants the same thing either way — retry or fail the pipeline — and splitting them would break the ones already written. The distinction is carried in the **message**, because that is what a human acts on, and the two lead in opposite directions: "the service is down" means go and look at the Coordinator, "it has not answered yet" means give it longer.
 
 ## 2. Command tree
 
@@ -372,6 +374,22 @@ defaultProduct: vendor-a-platform
 output: table
 timeout: 30s
 ```
+
+### Two timeout defaults
+
+`--timeout` (or `SWGW_TIMEOUT`) bounds one request. It defaults to 30 seconds, except for the two commands that reach third-party registries through the Coordinator, which default to **10 minutes**:
+
+| Command | Default |
+|---|---|
+| everything else | 30s |
+| `products check` | 10m |
+| `packages discover` | 10m |
+
+Those two are slow because the work is slow. `products check` opens a TLS connection to every repository a product declares and runs several round trips against each; `discover` lists every tag of every repository and resolves each one. Through a corporate proxy, across a WAN link, minutes is the normal case — so a single 30-second default made them fail almost every time, and report it as `coordinator unreachable`, which sent operators to investigate a service that was working.
+
+The raise applies **only when the operator has not chosen a timeout**, by flag or by environment. An explicit `--timeout 5s` means five seconds even on a slow command; silently overriding it would make the flag a suggestion, and a short deadline is a legitimate choice for a scripted probe.
+
+Giving up on the response does not stop the work. `packages discover` triggers a scan on the Coordinator; a client timeout only stops us waiting for the result, and re-running the command joins the in-progress scan rather than starting a second one.
 
 ```bash
 export SWGW_ENDPOINT=http://localhost:8080

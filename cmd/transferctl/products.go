@@ -155,7 +155,7 @@ func discoverySummary(sources []v1.Repository) string {
 }
 
 func newProductsCheckCommand() *cobra.Command {
-	return &cobra.Command{
+	cmd := &cobra.Command{
 		Use:   "check [product]",
 		Short: "Test that configured registries are reachable and credentials work",
 		Long: "Probes every repository a product declares: DNS and TLS, whether the\n" +
@@ -184,6 +184,12 @@ func newProductsCheckCommand() *cobra.Command {
 			})
 		},
 	}
+
+	// Every repository of every product, each a TLS handshake and at least two
+	// round trips to a third party. The default 30 seconds is not enough and
+	// never was.
+	contactsRegistries(cmd)
+	return cmd
 }
 
 func renderConnectivity(w io.Writer, resp *v1.CheckConnectivityResponse) error {

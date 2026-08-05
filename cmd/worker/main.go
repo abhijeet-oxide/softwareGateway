@@ -30,6 +30,7 @@ import (
 	"github.com/abhijeet-oxide/softwareGateway/internal/platform/health"
 	plog "github.com/abhijeet-oxide/softwareGateway/internal/platform/log"
 	"github.com/abhijeet-oxide/softwareGateway/internal/platform/metrics"
+	"github.com/abhijeet-oxide/softwareGateway/internal/platform/tlscompat"
 	"github.com/abhijeet-oxide/softwareGateway/internal/platform/tracing"
 	"github.com/abhijeet-oxide/softwareGateway/internal/platform/version"
 )
@@ -82,6 +83,13 @@ func run() error {
 		"coordinator", cfg.Worker.CoordinatorEndpoint,
 		"max_concurrent_jobs", cfg.Worker.MaxConcurrentJobs,
 	)
+
+	// Workers pull and push blobs, so they hit the same registries the
+	// Coordinator discovers on. The setting has to be applied in both processes
+	// or discovery succeeds and every transfer fails at the handshake.
+	tlscompat.Apply(tlscompat.Options{
+		AllowNegativeSerialNumbers: cfg.TLS.AllowNegativeSerialNumbers,
+	}, logger)
 	logger.Warn("M1: the lease loop is not implemented; this worker will idle")
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)

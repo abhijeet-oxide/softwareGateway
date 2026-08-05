@@ -448,7 +448,66 @@ var KnownEvents = []string{
 type Network struct {
 	CABundleRef *SecretRef `json:"caBundleRef,omitempty"`
 	Proxy       *Proxy     `json:"proxy,omitempty"`
+	TLS         *TLS       `json:"tls,omitempty"`
 	Timeouts    Timeouts   `json:"timeouts,omitempty"`
+}
+
+// TLS overrides certificate handling for one repository.
+type TLS struct {
+	// InsecureSkipVerify disables certificate verification entirely: the
+	// chain, the expiry and the hostname all stop being checked.
+	//
+	// An earlier revision of this file said this option would never exist,
+	// because supplying a CA bundle is the right fix. That was too strong.
+	// caBundleRef fixes an UNTRUSTED chain; it does nothing for a certificate
+	// that is expired, carries the wrong hostname, or belongs to a registry
+	// being migrated — and an operator who genuinely needs to move bytes past
+	// one of those today should not have to patch the binary.
+	//
+	// It is nonetheless the wrong answer to most problems. In particular it
+	// does NOT fix "x509: negative serial number": that failure happens while
+	// PARSING the server's certificate, before any verification runs, so
+	// skipping verification changes nothing. Measured, not assumed — see
+	// tls.allowNegativeSerialNumbers in the system configuration for the fix.
+	//
+	// Every client built with this set logs a warning naming the repository,
+	// and `transferctl products check` reports it. It should be visible in a
+	// way that makes leaving it on uncomfortable.
+	//
+	// A pointer so that silence and `false` are different things. A product-level
+	// tls block is INHERITED by every source and target; without the pointer a
+	// source could never turn it back off, because an omitted field and an
+	// explicit `false` would look identical.
+	InsecureSkipVerify *bool `json:"insecureSkipVerify,omitempty"`
+}
+
+// SetsSkipVerify reports whether this block states a choice at all.
+//
+// Nil receiver is safe: `network.tls` is optional at every level, and the
+// callers walk a chain of possibly-absent blocks.
+func (t *TLS) SetsSkipVerify() bool {
+	return t != nil && t.InsecureSkipVerify != nil
+}
+
+// SkipsVerify reports whether verification is disabled. Absent means enabled —
+// the safe direction, and the only defensible default.
+func (t *TLS) SkipsVerify() bool {
+	return t != nil && t.InsecureSkipVerify != nil && *t.InsecureSkipVerify
+}
+
+// SkipsTLSVerification resolves the effective setting for one repository: the
+// product's network block, overridden by the repository's own where it states
+// a choice.
+//
+// One function rather than the rule being re-derived at each call site, because
+// this is a security-relevant decision and two call sites disagreeing about it
+// is exactly the bug that would not be noticed.
+func SkipsTLSVerification(base Network, override *Network) bool {
+	skip := base.TLS.SkipsVerify()
+	if override != nil && override.TLS.SetsSkipVerify() {
+		skip = override.TLS.SkipsVerify()
+	}
+	return skip
 }
 
 type Proxy struct {

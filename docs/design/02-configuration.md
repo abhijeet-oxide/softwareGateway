@@ -428,7 +428,12 @@ retention:                          # defaults; products may override (§4)
   discoveryHistory: 2160h
   notificationHistory: 720h
   auditHistory: 8760h
+
+tls:                                # PROCESS-WIDE X.509 relaxations. See below.
+  allowNegativeSerialNumbers: false # the only fix for "x509: negative serial number"
 ```
+
+`tls` sits here rather than under a product's `network` block because it is implemented with Go's `GODEBUG` mechanism, which is per process and cannot be scoped to one connection. It applies to the process that reads it — set it on the Coordinator *and* the Worker, or discovery succeeds and every transfer fails at the handshake. Both binaries log a warning at startup saying so.
 
 ## 9. Development
 
@@ -487,6 +492,7 @@ Three blocks are declared at product level and overridden per repository. The me
 |---|---|---|
 | `network.caBundleRef` | product, source, target | set wins, unset inherits |
 | `network.proxy` | product, source, target | set wins; `direct: true` clears everything inherited |
+| `network.tls.insecureSkipVerify` | product, source, target | **three-state**: absent inherits, `true` and `false` both win |
 | `network.timeouts` | product, source, target | field by field |
 | `verification` scalars | product, source, target | field by field |
 | `verification.cosign` | product, source, target | **replaces wholesale** |
@@ -494,3 +500,44 @@ Three blocks are declared at product level and overridden per repository. The me
 **Why `cosign` is atomic.** It is one coherent trust decision — a mode plus the identity or key that mode requires. Merging field by field would silently produce combinations nobody wrote: a product's keyless `certificateIdentity` paired with a repository's `key` mode, or a Fulcio issuer left over from a block that no longer applies. A trust configuration assembled from two documents is one nobody can audit, and auditability is the entire point of verification.
 
 **Why `proxy.direct` exists.** A product-level proxy is inherited, and "everything through the corporate proxy except this one internal registry" is the normal shape. Without an explicit switch the only way to express it is to repeat the registry's own hostname in `noProxy` at every level — which works, and is easy to get subtly wrong when the host has a port or an alias. `direct: true` also bypasses `HTTPS_PROXY` from the environment: a repository that asked to go direct means it, and honouring a cluster-wide setting anyway would make the option a no-op in precisely the deployment that needs it.
+
+**Why `insecureSkipVerify` is three-state.** Every other override is "set wins, unset inherits", which for a boolean cannot distinguish an omitted field from an explicit `false`. That distinction matters here and nowhere else: a product-level `insecureSkipVerify: true` is inherited by every source and target, and without a way to write `false` a repository with a perfectly good certificate could never opt back into verification. So the field is a pointer, and the two states are different questions — "say nothing" versus "verify, whatever the level above says".
+
+---
+
+## TLS: two different failures, two different fixes
+
+An earlier revision of `internal/registry/transport` said `InsecureSkipVerify` would never exist, on the grounds that a CA bundle is the correct fix. That was too strong, and it is recorded here as a correction rather than quietly reversed. `caBundleRef` fixes an **untrusted chain**. It does nothing for a certificate that is expired, carries the wrong hostname, or belongs to a registry mid-migration — and an operator who has to move bytes past one of those today should not have to patch the binary.
+
+So `network.tls.insecureSkipVerify` exists, per repository, with three things attached to make it hard to forget: a `WARN` line naming the product and source on every configuration reload, a `certificate verification  WARNING` step in `transferctl products check`, and a validation error if it appears alongside `caBundleRef` in the same block — where the bundle would never be consulted and is therefore dead configuration that reads as if it verifies.
+
+### What it does not fix
+
+It does not fix this:
+
+```
+tls: failed to parse certificate from server: x509: negative serial number
+```
+
+Measured on Go 1.25.7, not reasoned about — `internal/platform/tlscompat` carries the test, and it asserts the failure so that a future Go release quietly changing the behaviour breaks the build rather than the documentation:
+
+| client | result |
+|---|---|
+| default | `x509: negative serial number` |
+| `InsecureSkipVerify: true` | **the identical error** |
+| `GODEBUG=x509negativeserial=1` | connects, verification fully on |
+
+`crypto/x509` has rejected negative serial numbers since Go 1.23, and rejects them while **parsing** — before verification runs. `InsecureSkipVerify` disables a step that is never reached. Shipping it as the fix for this error would have been shipping something that looks like a fix.
+
+### Where the real fix lives, and why
+
+`tls.allowNegativeSerialNumbers`, in **system** configuration, applied by `internal/platform/tlscompat` at process start in both the Coordinator and the Worker.
+
+Not under `network.tls`, and the reason is the whole point of the split: it is implemented with Go's `GODEBUG` mechanism, which is per process. It cannot be scoped to one connection. Putting it beside `insecureSkipVerify` would have made it look per repository when it relaxes X.509 parsing for every registry, every Sigstore call and every other outbound connection the process makes. A setting whose blast radius the schema misrepresents is worse than one that is merely inconvenient to find.
+
+Two consequences follow from it being process-wide:
+
+- **Both binaries need it.** The Coordinator discovers, the Worker moves bytes. Setting it on one gives a product that discovers cleanly and fails every transfer at the handshake.
+- **The existing `GODEBUG` is preserved, not replaced.** Container images and Deployments commonly set it already. Clobbering it would silently undo whatever it was doing, and nobody would connect the breakage back to this setting.
+
+RFC 5280 §4.1.2.2 requires a positive serial number, so such a certificate is genuinely malformed — typically an appliance or enterprise CA encoding a random 20-byte value without clearing the high bit. The certificate is otherwise sound and, with the relaxation on, is verified normally. The setting is an escape hatch for an estate that cannot be reissued on our schedule, not an endorsement.

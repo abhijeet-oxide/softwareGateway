@@ -41,6 +41,10 @@ type ScanProgress struct {
 	// informative, because it means we are still waiting on `_catalog`.
 	RepositoriesTotal int
 	RepositoriesDone  int
+	// CurrentRepository is whichever repository most recently STARTED. With
+	// concurrency there is no single current one, so it is a hint about where
+	// the scan has got to and not a position — callers should render it as
+	// such.
 	CurrentRepository string
 
 	TagsListed   int

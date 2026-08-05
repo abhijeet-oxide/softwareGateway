@@ -1036,6 +1036,25 @@ spec:
 
 If the traffic goes through an inspecting proxy, that is the usual cause: a proxy that scans response bodies answers `HEAD` promptly and stalls on `GET`. `transferctl products check` now probes a real manifest fetch, so it tells you this before discovery does.
 
+**Discovery is very slow — one repository, one tag, minutes**
+Fixed. A scan used to be strictly sequential. It now runs repositories and tags in parallel, bounded:
+
+```yaml
+spec:
+  sources:
+    - name: vendor
+      discovery:
+        concurrency:
+          repositories: 4        # default 4; each has its own client
+          tags: 8                # default 8; they share one client
+```
+
+Both clamp at 64. Raise them for a registry you own; leave them alone for a vendor's.
+
+There was also a retry amplification: a manifest `GET` that blew the 30s deadline was retried up to eight times, so **one unresponsive request cost up to four minutes** — and discovery makes two per tag. A 90-second total budget now bounds it.
+
+If it is still slow after that, the requests themselves are slow: `transferctl products check` probes a real manifest fetch and reports the latency.
+
 **`packages list` is empty**
 Discovery polls on its interval; the first scan happens at startup. Force one with `transferctl packages discover <product>`. If it reports `tagsListed=0`, the repository path or credentials are wrong — `transferctl health` checks reachability.
 

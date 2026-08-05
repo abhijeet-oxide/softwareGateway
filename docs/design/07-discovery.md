@@ -228,3 +228,38 @@ The generic client speaks four endpoints, and that is the whole of what discover
 Every registry we have been pointed at — including vendor-hosted distribution registries behind corporate proxies — serves exactly these. A source that fails against them is failing on TLS, credentials, proxying or timeouts, not on protocol.
 
 That is why `registry_type` exists but has one implementation. The vendor types in [06](06-registry-abstraction.md) §6 are reserved for genuine deviations, and a new backend should be added only when a measured request differs — not because a registry has a vendor's name on it. A second implementation of the same four calls is a second place for the pagination bug to live.
+
+---
+
+## 11. Concurrency
+
+A scan used to be strictly sequential: one repository at a time, one tag at a time. That is fine for a handful of repositories on a fast registry and useless against a real vendor catalogue.
+
+Measured in the field: 48 repositories, 28 admitted tags in the first one, and after **122 seconds the scan was still on the first tag of the first repository**. Three things were compounding, and only one of them was the network.
+
+**Sequential work.** 48 repositories × ~28 tags × 2 round trips minimum is ~2,700 sequential requests across a WAN. Even at a healthy 200 ms each that is nine minutes; at a second each it is three quarters of an hour.
+
+**Retry amplification.** A manifest `GET` that blows the 30 s `ResponseHeaderTimeout` was retried up to 8 times. One unresponsive endpoint therefore cost up to **four minutes for a single request**, and discovery makes two per tag. The attempt count alone is the wrong bound: it assumes attempts fail fast, which is exactly what a timeout does not do.
+
+**The underlying stall**, which is a network or proxy problem and the operator's to fix — but the first two turned "slow" into "apparently hung".
+
+### What changed
+
+Two bounded axes, because they cost different things:
+
+| | Default | Bounded by |
+|---|---|---|
+| `discovery.concurrency.repositories` | 4 | each repository has its own client, so this multiplies connections and token exchanges against someone else's registry |
+| `discovery.concurrency.tags` | 8 | tags within a repository share one client, so they are already bounded by its connection pool and rate limiter — the cheaper axis to widen |
+
+Both are clamped to 64: a typo of `1000` must not become a thousand connections to a vendor.
+
+Nothing about a scan requires ordering. Repositories are independent; supersession is per `(repository, tag)` and two tags never touch the same row. Results are aggregated in configuration order *after* the work, so the result and the log order are identical run to run even though the execution was not.
+
+**Writes stay serial.** Everything expensive — the `HEAD`, the existence check, the manifest-tree fetch — already happened outside the transaction. What remains is a short local write, and serialising it per source costs nothing measurable while removing a class of problem: SQLite serialises writers anyway and returns `SQLITE_BUSY` rather than queueing, and on Postgres concurrent inserts for one repository would contend on the unique index for no gain.
+
+**And a retry time budget.** `RetryMaxElapsed`, 90 seconds by default — three `ResponseHeaderTimeout`s. Long enough for a genuine transient failure to be retried a couple of times, short enough that a systematically unresponsive endpoint costs seconds per request rather than minutes. It does not shorten the schedule for the case retries exist for, where attempts fail fast and the budget is never reached.
+
+### Why not unbounded
+
+The temptation is to fan out over everything at once. A vendor registry is someone else's infrastructure, the cost of being impolite falls on them, and a 429 storm makes the scan slower, not faster — the rate limiter sits outermost precisely so retries cannot bypass it ([06](06-registry-abstraction.md) §5). The defaults are chosen to make a scan minutes rather than hours without looking like an attack. Raise them for a registry you own.

@@ -104,6 +104,18 @@ type Config struct {
 	MaxRetryAttempts int
 	RetryBaseDelay   time.Duration
 	RetryMaxDelay    time.Duration
+
+	// RetryMaxElapsed bounds the TOTAL time one request may spend across all
+	// its attempts, including backoff.
+	//
+	// The attempt count alone is the wrong bound. Against a server that accepts
+	// the connection and then never answers, each attempt costs the full
+	// ResponseHeaderTimeout, so the default eight attempts is four minutes for
+	// a single request — and discovery makes two per tag. This caps the
+	// pathological case without shortening the schedule for the transient one
+	// retries exist for, where attempts fail fast and the budget is never
+	// reached.
+	RetryMaxElapsed time.Duration
 }
 
 // Defaults applied when a field is unset.
@@ -112,6 +124,12 @@ const (
 	DefaultResponseHeaderTimeout = 30 * time.Second
 	DefaultMaxConnections        = 32
 	DefaultUserAgent             = "softwaregateway"
+
+	// DefaultRetryMaxElapsed is three ResponseHeaderTimeouts' worth of budget:
+	// enough for a genuine transient failure to be retried a couple of times,
+	// short enough that a systematically unresponsive endpoint costs seconds
+	// per request rather than minutes.
+	DefaultRetryMaxElapsed = 90 * time.Second
 )
 
 // New builds the layered client.

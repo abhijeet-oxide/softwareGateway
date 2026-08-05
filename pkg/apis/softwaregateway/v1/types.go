@@ -339,13 +339,28 @@ type DiscoverPackagesRequest struct {
 	// Source limits the scan to one source. Empty scans every source of the
 	// product.
 	Source string `json:"source,omitempty"`
+
+	// Wait holds the request open until the scan finishes. Absent means true,
+	// which is the historical behaviour and the useful default for a person at
+	// a terminal.
+	//
+	// Set false to start the scan and return immediately. That matters against a
+	// registry that is slow rather than broken: a scan there can run for
+	// minutes, and holding an HTTP request open for the whole of it makes every
+	// intermediary's idle timeout part of your control plane. Progress is then
+	// read from GET .../discovery.
+	Wait *bool `json:"wait,omitempty"`
 }
+
+// ShouldWait reports the effective value of Wait. Absent means wait.
+func (r DiscoverPackagesRequest) ShouldWait() bool { return r.Wait == nil || *r.Wait }
 
 // DiscoverPackagesResponse reports what a triggered scan did.
 //
-// Returned synchronously because a scan is bounded work — one HEAD per tag —
-// and an operator triggering it after a vendor announcement wants the answer,
-// not a job ID to poll.
+// Returned synchronously by default because a scan is usually bounded work —
+// one HEAD per tag — and an operator triggering it after a vendor announcement
+// wants the answer, not a job ID to poll. `wait: false` opts out when the
+// registry is slow enough to make that a bad trade.
 type DiscoverPackagesResponse struct {
 	// Repositories is how many were scanned. A source may cover several.
 	Repositories int `json:"repositories"`
@@ -373,6 +388,71 @@ type DiscoverPackagesResponse struct {
 	// started. The data is real either way — the request waited for it — but the
 	// two are different facts and the caller is told which one it got.
 	Collapsed bool `json:"collapsed,omitempty"`
+
+	// Started is set instead of the counters when the request asked not to
+	// wait: the scan is running, and there are no results yet to report.
+	Started *DiscoverStarted `json:"started,omitempty"`
+}
+
+// DiscoverStarted reports a scan that was launched without waiting.
+type DiscoverStarted struct {
+	// Sources is how many sources began a new scan.
+	Sources int `json:"sources"`
+	// AlreadyRunning is how many were already scanning and so were left alone.
+	// Reported rather than folded into Sources: "I started four scans" and "one
+	// started, three were already going" are different answers.
+	AlreadyRunning int `json:"alreadyRunning,omitempty"`
+}
+
+// ---------------------------------------------------------------------------
+// Discovery status
+// ---------------------------------------------------------------------------
+
+// DiscoveryStatusResponse is returned by GET
+// /api/v1/products/{product}/discovery.
+//
+// It answers "what is discovery doing right now", which a synchronous scan
+// cannot: a request that blocks for two minutes and then reports a timeout
+// tells you nothing while it is blocked, and a slow registry is
+// indistinguishable from a hung one until it finally answers.
+type DiscoveryStatusResponse struct {
+	// Running reports whether the discovery loop is active on this replica. It
+	// runs on the leader only.
+	Running bool                   `json:"running"`
+	Sources []DiscoverySourceState `json:"sources"`
+}
+
+// DiscoverySourceState is one source's live and last-completed state.
+type DiscoverySourceState struct {
+	Product string `json:"product"`
+	Source  string `json:"source"`
+
+	// Scanning reports whether a scan is in flight right now.
+	Scanning bool `json:"scanning"`
+	// Phase is the stage of the running scan: ENUMERATING_REPOSITORIES,
+	// LISTING_TAGS or RESOLVING_TAGS. Empty when idle.
+	Phase string `json:"phase,omitempty"`
+	// ElapsedMs is how long the running scan has been going.
+	ElapsedMs int64 `json:"elapsedMs,omitempty"`
+
+	// RepositoriesTotal is zero until enumeration finishes, which itself says
+	// the scan is still waiting on /v2/_catalog.
+	RepositoriesTotal int    `json:"repositoriesTotal,omitempty"`
+	RepositoriesDone  int    `json:"repositoriesDone,omitempty"`
+	CurrentRepository string `json:"currentRepository,omitempty"`
+	TagsTotal         int    `json:"tagsTotal,omitempty"`
+	TagsResolved      int    `json:"tagsResolved,omitempty"`
+	NewPackages       int    `json:"newPackages,omitempty"`
+	Errors            int    `json:"errors,omitempty"`
+
+	// LastRunAt and the fields below describe the last COMPLETED scan.
+	LastRunAt        string `json:"lastRunAt,omitempty"`
+	LastError        string `json:"lastError,omitempty"`
+	LastRepositories int    `json:"lastRepositories,omitempty"`
+	LastTagsListed   int    `json:"lastTagsListed,omitempty"`
+	LastNewPackages  int    `json:"lastNewPackages,omitempty"`
+	LastDurationMs   int64  `json:"lastDurationMs,omitempty"`
+	IntervalSeconds  int    `json:"intervalSeconds,omitempty"`
 }
 
 // ---------------------------------------------------------------------------

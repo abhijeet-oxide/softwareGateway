@@ -391,6 +391,19 @@ The raise applies **only when the operator has not chosen a timeout**, by flag o
 
 Giving up on the response does not stop the work. `packages discover` triggers a scan on the Coordinator; a client timeout only stops us waiting for the result, and re-running the command joins the in-progress scan rather than starting a second one.
 
+### Progress, not a blank terminal
+
+A blocking `packages discover` now polls `GET .../discovery` on a second connection and renders a live line to **stderr** — phase, current repository, tag counters, elapsed. Stderr, not stdout, so `-o json | jq` is unaffected; and a carriage-return redraw only when stderr is a terminal, because a redirected log full of `\r` is worse than no live display.
+
+Two ways to not wait at all:
+
+```
+transferctl packages discover <product> --wait=false
+transferctl packages discovery-status <product> [--watch]
+```
+
+`discovery-status` is also the answer to "is it stuck or just slow?", which a blocking command cannot give you while it is blocked.
+
 ```bash
 export SWGW_ENDPOINT=http://localhost:8080
 transferctl --endpoint http://localhost:8080 health

@@ -1014,6 +1014,28 @@ Fixed — pull and rebuild. A trigger arriving while a scan was already running 
 **`packages discover` reports `Repositories scanned 0` and "Nothing new"**
 Those are two different things and the output now separates them. `Repositories scanned 0` means nothing was looked at, which is not a steady state. Either `discovery.repositoryFilters` rejected every candidate — the count is shown — or the source names no repositories and the registry's `/v2/_catalog` returned none. `transferctl products check` tells you which.
 
+**`packages discover` blocks for minutes with no output**
+Fixed. It now prints a live progress line to stderr — phase, which repository, tag counts, elapsed — polled from `GET /api/v1/products/{product}/discovery`. Stdout still carries only the result, so `-o json | jq` is unaffected. Two more ways to avoid staring at it:
+
+```bash
+transferctl packages discover <product> --wait=false   # start it, return now
+transferctl packages discovery-status <product> --watch # follow it
+```
+
+Stopping the client never stops the scan — it runs on the Coordinator.
+
+**`tag scan failed … net/http: timeout awaiting response headers`**
+Listing tags worked and fetching a manifest did not. Discovery does one HEAD and one GET per tag, so this fails every scan. Raise the per-repository deadline:
+
+```yaml
+spec:
+  network:
+    timeouts:
+      responseHeader: 2m
+```
+
+If the traffic goes through an inspecting proxy, that is the usual cause: a proxy that scans response bodies answers `HEAD` promptly and stalls on `GET`. `transferctl products check` now probes a real manifest fetch, so it tells you this before discovery does.
+
 **`packages list` is empty**
 Discovery polls on its interval; the first scan happens at startup. Force one with `transferctl packages discover <product>`. If it reports `tagsListed=0`, the repository path or credentials are wrong — `transferctl health` checks reachability.
 

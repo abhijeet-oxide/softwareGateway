@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"sort"
 	"sync"
 	"time"
 
@@ -287,6 +288,94 @@ func (l *Loop) TriggerProduct(ctx context.Context, productName string) (ScanResu
 	return combined, firstErr
 }
 
+// StartProduct begins a scan of every source of one product WITHOUT waiting.
+//
+// The counterpart to TriggerProduct, for a caller that wants the scan to happen
+// but does not want to hold an HTTP request open for the minutes a slow
+// registry can take. Progress is then read from Progress, and the outcome from
+// Status.
+//
+// Returns how many sources it started and how many were already scanning, so
+// the caller can say which rather than implying a fresh scan of everything.
+func (l *Loop) StartProduct(productName string) (started, alreadyRunning int, err error) {
+	l.mu.Lock()
+	var targets []*worker
+	for _, w := range l.workers {
+		if w.spec.Product.Metadata.Name == productName {
+			targets = append(targets, w)
+		}
+	}
+	l.mu.Unlock()
+
+	if len(targets) == 0 {
+		return 0, 0, fmt.Errorf("%w for product %q", ErrNoSuchSource, productName)
+	}
+
+	for _, w := range targets {
+		if w.startScan() {
+			started++
+		} else {
+			alreadyRunning++
+		}
+	}
+	return started, alreadyRunning, nil
+}
+
+// Progress reports the live state of every source of one product.
+//
+// Cheap and safe to poll: it reads a snapshot behind a mutex the scan holds
+// only long enough to bump a counter, never across a network call.
+func (l *Loop) Progress(productName string) []SourceProgress {
+	l.mu.Lock()
+	workers := make([]*worker, 0, len(l.workers))
+	for _, w := range l.workers {
+		if productName == "" || w.spec.Product.Metadata.Name == productName {
+			workers = append(workers, w)
+		}
+	}
+	l.mu.Unlock()
+
+	out := make([]SourceProgress, 0, len(workers))
+	for _, w := range workers {
+		sp := SourceProgress{
+			Product:  w.spec.Product.Metadata.Name,
+			Source:   w.spec.SourceName,
+			Progress: w.scanner.Progress(),
+			Interval: w.spec.Interval,
+		}
+
+		w.mu.Lock()
+		sp.LastRun = w.lastRun
+		sp.Last = w.last
+		if w.lastErr != nil {
+			sp.LastErr = w.lastErr.Error()
+		}
+		w.mu.Unlock()
+
+		out = append(out, sp)
+	}
+
+	sort.Slice(out, func(a, b int) bool {
+		if out[a].Product != out[b].Product {
+			return out[a].Product < out[b].Product
+		}
+		return out[a].Source < out[b].Source
+	})
+	return out
+}
+
+// SourceProgress is one source's live and last-completed state.
+type SourceProgress struct {
+	Product  string
+	Source   string
+	Progress ScanProgress
+	Interval time.Duration
+
+	LastRun time.Time
+	Last    ScanResult
+	LastErr string
+}
+
 // Status reports the last scan of every source.
 type Status struct {
 	Product  string
@@ -348,10 +437,15 @@ func (w *worker) run(ctx context.Context) {
 			return
 
 		case <-w.trigger:
-			// A wake-up, not a request. The caller has already claimed the scan
-			// through inflight, so all this arm does is run whatever is claimed —
-			// and if the caller lost the claim to a scan already running, scan
-			// returns that one's result and nothing extra happens.
+			// A wake-up, not a request: the caller already registered its claim.
+			// So the token can be STALE — if the interval timer fired at the same
+			// moment, that arm picked the claim up and ran it, and this token is
+			// left over. Acting on it anyway would start a second, redundant scan
+			// of the same source moments after the first, which is exactly the
+			// duplicate work the collapse exists to prevent.
+			if !w.hasPendingClaim() {
+				continue
+			}
 			_, err := w.scan(ctx)
 			if err == nil {
 				failures = 0
@@ -426,6 +520,31 @@ func (w *worker) triggerScan(ctx context.Context) (ScanResult, error) {
 		return ScanResult{}, fmt.Errorf("%w: discovery stopped while the scan was pending",
 			ErrNoSuchSource)
 	}
+}
+
+// startScan registers a scan and returns without waiting for it.
+//
+// Reports true when it started one, false when a scan was already running and
+// this is therefore a no-op — which the caller must be told, or "started" would
+// be a claim it cannot back up.
+func (w *worker) startScan() bool {
+	_, mine := w.joinScan()
+	if !mine {
+		return false
+	}
+	select {
+	case w.trigger <- struct{}{}:
+	default:
+	}
+	return true
+}
+
+// hasPendingClaim reports whether a scan has been registered and not yet
+// started — the only condition under which a wake-up token is still meaningful.
+func (w *worker) hasPendingClaim() bool {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return w.inflight != nil && !w.inflight.running
 }
 
 // joinScan is the caller-side claim: join a scan in progress, or register one

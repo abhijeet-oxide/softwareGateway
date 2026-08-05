@@ -323,7 +323,18 @@ func (c *Checker) checkRepository(ctx context.Context, p *product.Product, spec 
 
 	// 3. Permissions the product actually needs.
 	if spec.Repository != "" {
-		res.Steps = append(res.Steps, c.checkRead(ctx, client, spec))
+		read := c.checkRead(ctx, client, spec)
+		res.Steps = append(res.Steps, read)
+
+		// 3a. And then actually FETCH one, because listing tags and reading a
+		// manifest are different requests and a registry can serve one and not
+		// the other. Observed in the field: `tags/list` returned in
+		// milliseconds while every manifest GET through the same proxy timed
+		// out awaiting response headers, and preflight said the source was
+		// healthy. Discovery then failed on every tag.
+		if read.Status == StatusOK && spec.Role == string(product.RoleSource) {
+			res.Steps = append(res.Steps, c.checkManifest(ctx, client, spec))
+		}
 	}
 	if spec.Catalog {
 		res.Steps = append(res.Steps, c.checkCatalog(ctx, cfg, spec))
@@ -445,6 +456,62 @@ func (c *Checker) checkRead(ctx context.Context, client *generic.Repository, spe
 	default:
 		return Step{Name: readStepName(spec.Role), Status: StatusFailed, Latency: latency,
 			Detail: err.Error()}
+	}
+}
+
+// checkManifest resolves one tag and fetches its manifest.
+//
+// The step that turns "the source looks fine but discovery finds nothing" into
+// a specific answer. Discovery does one HEAD and one GET per tag, plus more for
+// the artifact tree; if either is slow or refused, every scan fails after a
+// listing that looked perfectly healthy.
+//
+// Exactly one tag, so this stays a probe rather than a scan.
+func (c *Checker) checkManifest(ctx context.Context, client *generic.Repository, spec repoSpec) Step {
+	const name = "can fetch a manifest"
+
+	tags, _, err := client.ListTags(ctx, "", 1)
+	if err != nil || len(tags) == 0 {
+		// checkRead already reported whatever went wrong here.
+		return skipped(name, "no tag was available to try")
+	}
+	tag := tags[0]
+
+	started := time.Now()
+	desc, err := client.ResolveTag(ctx, tag)
+	if err != nil {
+		return Step{Name: name, Status: StatusFailed, Latency: time.Since(started),
+			Detail: fmt.Sprintf("HEAD manifests/%s failed: %s", tag, err.Error()),
+			Hint:   manifestHint(err)}
+	}
+
+	if _, _, err := client.FetchManifest(ctx, string(desc.Digest)); err != nil {
+		// Split from the HEAD deliberately. A registry — or a proxy that
+		// inspects bodies — can answer HEAD promptly and stall on the GET, and
+		// reporting them as one step would hide which of the two is broken.
+		return Step{Name: name, Status: StatusFailed, Latency: time.Since(started),
+			Detail: fmt.Sprintf("HEAD %s succeeded, GET manifests/%s failed: %s",
+				tag, desc.Digest.Short(), err.Error()),
+			Hint: manifestHint(err)}
+	}
+
+	return Step{Name: name, Status: StatusOK, Latency: time.Since(started),
+		Detail: fmt.Sprintf("%s resolved to %s and the body was readable", tag, desc.Digest.Short())}
+}
+
+// manifestHint names the setting that addresses a manifest-fetch failure.
+func manifestHint(err error) string {
+	switch {
+	case errors.Is(err, registry.ErrTimeout):
+		return "discovery does this for EVERY tag, so a slow manifest fetch fails every " +
+			"scan. Raise network.timeouts.responseHeader, and if the traffic goes " +
+			"through an inspecting proxy, check network.proxy — a proxy that scans " +
+			"response bodies can answer HEAD quickly and stall on GET"
+	case registry.ClassOf(err) == registry.ClassAuth:
+		return "the credential can list tags but not read manifests, which some " +
+			"registries scope separately"
+	default:
+		return ""
 	}
 }
 

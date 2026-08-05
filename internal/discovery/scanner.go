@@ -76,7 +76,15 @@ type Scanner struct {
 	// cache exists to avoid.
 	mu      sync.Mutex
 	clients map[string]registry.Source
+
+	// progress is the live counter for the scan currently running, read by the
+	// status endpoint while the scan is in flight.
+	progress progressTracker
 }
+
+// Progress returns a snapshot of the scan currently running, or the zero value
+// when none is.
+func (s *Scanner) Progress() ScanProgress { return s.progress.snapshot() }
 
 // ScannerConfig builds a Scanner.
 type ScannerConfig struct {
@@ -212,6 +220,12 @@ func (s *Scanner) Scan(ctx context.Context) (ScanResult, error) {
 	started := time.Now()
 	var res ScanResult
 
+	// Progress is published from here on. The enumeration below is the first
+	// thing a caller waits on and, against a slow registry, often the longest —
+	// so the tracker starts before it, not after.
+	s.progress.begin()
+	defer s.progress.end()
+
 	// Re-resolved every scan, for the same reason the tag list is: a repository
 	// published since the last pass should be found without a restart.
 	set := resolveRepositories(ctx, s.sourceCfg, s.repoFilter, s.catalog)
@@ -244,12 +258,35 @@ func (s *Scanner) Scan(ctx context.Context) (ScanResult, error) {
 		return res, nil
 	}
 
+	s.progress.update(func(p *ScanProgress) {
+		p.Phase = PhaseListingTags
+		p.RepositoriesTotal = len(set.Repositories)
+	})
+
 	for _, repoPath := range set.Repositories {
 		if err := ctx.Err(); err != nil {
 			return res, err
 		}
 
+		s.progress.update(func(p *ScanProgress) {
+			p.Phase = PhaseListingTags
+			p.CurrentRepository = repoPath
+			p.TagsTotal = 0
+			p.TagsResolved = 0
+		})
+
 		sub, err := s.scanRepository(ctx, repoPath)
+
+		s.progress.update(func(p *ScanProgress) {
+			p.RepositoriesDone++
+			p.TagsListed += sub.TagsListed
+			p.New += sub.New
+			p.Errors += len(sub.TagErrors)
+			if err != nil {
+				p.Errors++
+			}
+		})
+
 		if err != nil {
 			res.RepositoryErrors = append(res.RepositoryErrors,
 				RepositoryError{Repository: repoPath, Err: err})
@@ -329,6 +366,17 @@ func (s *Scanner) scanRepository(ctx context.Context, repoPath string) (repoResu
 	}
 	res.TagsListed = len(tags)
 
+	admitted := 0
+	for _, tag := range tags {
+		if s.tagFilter.admits(tag) {
+			admitted++
+		}
+	}
+	s.progress.update(func(p *ScanProgress) {
+		p.Phase = PhaseResolving
+		p.TagsTotal = admitted
+	})
+
 	for _, tag := range tags {
 		if err := ctx.Err(); err != nil {
 			return res, err
@@ -337,6 +385,7 @@ func (s *Scanner) scanRepository(ctx context.Context, repoPath string) (repoResu
 			continue
 		}
 		res.TagsAdmitted++
+		s.progress.update(func(p *ScanProgress) { p.TagsResolved++ })
 
 		outcome, err := s.scanTag(ctx, client, repoID, repoPath, tag)
 		if err != nil {

@@ -116,6 +116,37 @@ func main() {
 // usually a slow one — so say which knob turns, since nobody guesses a flag
 // they have not needed before.
 func hintFor(err error) string {
+	// Matched on the message, not a sentinel, because these come back from the
+	// Coordinator as an RFC 9457 `detail` string — the classification happened
+	// on the other side of an HTTP boundary and does not survive it. Substring
+	// matching is fragile in general; it is the right trade here because the
+	// alternative is an operator reading a stack of wrapped registry errors and
+	// guessing which knob applies.
+	msg := err.Error()
+
+	switch {
+	case strings.Contains(msg, "negative serial number"):
+		return "This is a certificate the Go standard library refuses to PARSE, not one it\n" +
+			"refuses to trust — so `network.tls.insecureSkipVerify` will not help, and\n" +
+			"neither will a CA bundle. Set this in the Coordinator's and the Worker's\n" +
+			"system configuration:\n\n" +
+			"  tls:\n" +
+			"    allowNegativeSerialNumbers: true\n\n" +
+			"or SWGW_TLS_ALLOWNEGATIVESERIALNUMBERS=true. Both processes need it: the\n" +
+			"Coordinator discovers, the Worker moves the bytes."
+
+	case strings.Contains(msg, "timeout awaiting response headers"),
+		strings.Contains(msg, "no response headers within the deadline"):
+		return "The registry accepted the connection but did not answer in time. If it is\n" +
+			"slow rather than broken, raise the per-repository deadline:\n\n" +
+			"  spec:\n" +
+			"    network:\n" +
+			"      timeouts:\n" +
+			"        responseHeader: 2m\n\n" +
+			"It can go on the product, or on one source or target. If it is a proxy in\n" +
+			"between, `network.proxy` and `network.proxy.direct` are the knobs."
+	}
+
 	if errors.Is(err, v1.ErrTimeout) {
 		return "The Coordinator accepted the connection but had not answered yet. If the\n" +
 			"work is genuinely slow — a check across many registries, or a scan of a\n" +

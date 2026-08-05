@@ -26,6 +26,8 @@ type fakeDiscoverer struct {
 	err        error
 	lastSource string
 	calls      int
+	started    int
+	progress   []discovery.SourceProgress
 }
 
 func (f *fakeDiscoverer) Running() bool { return f.running }
@@ -40,6 +42,16 @@ func (f *fakeDiscoverer) TriggerProduct(_ context.Context, _ string) (discovery.
 	f.calls++
 	f.lastSource = ""
 	return f.result, f.err
+}
+
+func (f *fakeDiscoverer) StartProduct(_ string) (int, int, error) {
+	f.calls++
+	f.started++
+	return 1, 0, f.err
+}
+
+func (f *fakeDiscoverer) Progress(_ string) []discovery.SourceProgress {
+	return f.progress
 }
 
 const testProductDoc = `

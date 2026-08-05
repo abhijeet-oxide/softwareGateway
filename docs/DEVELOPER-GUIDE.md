@@ -1045,8 +1045,9 @@ spec:
     - name: vendor
       discovery:
         concurrency:
-          repositories: 4        # default 4; each has its own client
-          tags: 8                # default 8; they share one client
+          repositories: 4        # default 4
+          tags: 8                # default 8; they share the source's client
+          artifacts: 8           # default 8; siblings of one index
 ```
 
 Both clamp at 64. Raise them for a registry you own; leave them alone for a vendor's.
@@ -1056,6 +1057,9 @@ There was also a retry amplification: a manifest `GET` that blew the 30s deadlin
 There was also a third cause, and it was the worst of the three: **every repository built its own connection pool and its own rate limiter**. So `maxConnections: 32` with 16 repositories in flight permitted 512 concurrent connections to one host, and `requestsPerSecond: 50` permitted 800. Through a corporate proxy that is not a faster scan — it is a self-inflicted overload, and the configuration said the opposite of what was happening. A source now has one pool, one limiter and one token cache, so those numbers mean what they say.
 
 If it is still slow after that, the requests themselves are slow: turn on request tracing (above), and `transferctl products check` times a real manifest fetch.
+
+**Requests are succeeding but the tag counter does not move**
+A tag is only counted when its ENTIRE artifact tree has been fetched. A bundle whose index references sixty artifacts used to cost sixty sequential manifest fetches inside one tag — minutes at a time, with every request returning 200 and the counter frozen. Those siblings are now fetched in parallel (`discovery.concurrency.artifacts`), and the progress line reports `N artifacts`, which is the counter that keeps moving when nothing else does.
 
 **I have no way to see what discovery is doing**
 Turn on request tracing. Every registry request is logged with its host, path, status and duration:

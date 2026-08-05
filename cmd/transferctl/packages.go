@@ -602,6 +602,9 @@ func renderDiscoveryStatus(w io.Writer, st *v1.DiscoveryStatusResponse) error {
 			if s.TagsTotal > 0 {
 				fmt.Fprintf(tw, "  Tags resolved\t%d of %d\n", s.TagsResolved, s.TagsTotal)
 			}
+			if s.Artifacts > 0 {
+				fmt.Fprintf(tw, "  Manifests fetched\t%d\n", s.Artifacts)
+			}
 			if s.NewPackages > 0 {
 				fmt.Fprintf(tw, "  New packages so far\t%d\n", s.NewPackages)
 			}

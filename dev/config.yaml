@@ -52,6 +52,28 @@ worker:
   copyBufferSize: 1048576
   heartbeatInterval: 20s
 
+# PROCESS-WIDE X.509 relaxations.
+#
+# Here and not under a product's `network:` because these are implemented with
+# Go's GODEBUG mechanism, which is per process and cannot be scoped to one
+# connection. Putting them beside `network.tls.insecureSkipVerify` would
+# misrepresent the blast radius: they apply to every registry, every Sigstore
+# call and every other outbound connection this process makes.
+#
+# Set it on the COORDINATOR and the WORKER. The Coordinator discovers, the
+# Worker moves the bytes; setting only one gives you clean discovery and a
+# failure at the handshake on every transfer.
+tls:
+  # Accepts certificates whose serial number is negative, which crypto/x509 has
+  # rejected since Go 1.23. This is the ONLY fix for:
+  #
+  #   tls: failed to parse certificate from server: x509: negative serial number
+  #
+  # network.tls.insecureSkipVerify does NOT help — that failure happens while
+  # PARSING the certificate, before any verification runs. Measured, not
+  # assumed: internal/platform/tlscompat carries the test.
+  allowNegativeSerialNumbers: false
+
 observability:
   log:
     level: info

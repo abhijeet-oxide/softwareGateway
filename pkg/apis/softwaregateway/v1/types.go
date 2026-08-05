@@ -266,7 +266,8 @@ type Package struct {
 	// supersede each other.
 	SupersededBy string `json:"supersededBy,omitempty"`
 
-	// Source identifies where it was discovered.
+	// SourceRepository is the repository path it was discovered in, e.g.
+	// "suite/core". A product may span several.
 	SourceRepository string `json:"sourceRepository,omitempty"`
 }
 
@@ -323,6 +324,14 @@ type DiscoverPackagesRequest struct {
 // and an operator triggering it after a vendor announcement wants the answer,
 // not a job ID to poll.
 type DiscoverPackagesResponse struct {
+	// Repositories is how many were scanned. A source may cover several.
+	Repositories int `json:"repositories"`
+	// RepositoriesFromCatalog is how many came from `/v2/_catalog` rather than
+	// from configuration.
+	RepositoriesFromCatalog int `json:"repositoriesFromCatalog,omitempty"`
+	// RepositoriesFiltered is how many candidates repositoryFilters rejected.
+	RepositoriesFiltered int `json:"repositoriesFiltered,omitempty"`
+
 	TagsListed   int `json:"tagsListed"`
 	TagsAdmitted int `json:"tagsAdmitted"`
 	// PackagesDiscovered counts genuinely new packages. Zero on a re-scan is
@@ -333,4 +342,6 @@ type DiscoverPackagesResponse struct {
 	DurationMs         int64 `json:"durationMs"`
 	// TagErrors are per-tag failures that did not stop the scan.
 	TagErrors []string `json:"tagErrors,omitempty"`
+	// RepositoryErrors are per-repository failures that did not stop the scan.
+	RepositoryErrors []string `json:"repositoryErrors,omitempty"`
 }

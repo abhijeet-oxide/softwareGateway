@@ -33,7 +33,42 @@ for each enabled source repository, every `interval`:
 
 `ResolveTag` uses `HEAD` and reads the `Docker-Content-Digest` header, so the common case — a scan where nothing changed — costs one small request per tag and transfers no manifest bodies. Manifest trees are fetched only for genuinely new packages (step 4).
 
-**Repository enumeration.** We do *not* use `/v2/_catalog` to find repositories. Configuration names them explicitly ([02](02-configuration.md) §4). Catalog enumeration is slow on large registries, inconsistently paginated, frequently forbidden for the credentials a vendor issues, and would make discovery scope depend on registry-side permissions rather than on Git. Explicit configuration is more predictable and is what a GitOps-managed system should do.
+## 2.1 Repository enumeration
+
+A source covers **one registry and one or more repositories on it**. A product that ships as several components — `suite/core`, `suite/database`, `suite/frontend` — declares them under a single source, not one source each: they share a registry host, one credential and one rate-limit budget, and splitting them would duplicate all three and let the per-repository budgets multiply against a vendor that only ever sees one client.
+
+The repository set is re-resolved on **every scan**, for exactly the reason the tag set is (§3): a repository published since the last pass should be found without a restart or a configuration reload.
+
+Two ways in, one rule out:
+
+```
+explicit `repository` / `repositories`  ─┐
+                                         ├─▶ repositoryFilters ─▶ scan set
+catalog enumeration (opt-in)            ─┘
+```
+
+Filters apply to **both**, so there is one rule to learn rather than one per source of names.
+
+> **Decision — catalog enumeration is available, and off by default.**
+>
+> *An earlier revision of this document rejected `/v2/_catalog` outright.* That was too strong, and this records the correction rather than quietly rewriting it.
+>
+> *The original argument, which still holds for a vendor registry:* catalog enumeration is slow on large registries, inconsistently paginated, and frequently forbidden for the credentials a vendor issues — the credential is usually scoped to pulling a named repository, not to listing the registry. Worse, it makes discovery scope depend on registry-side permissions rather than on Git, which is the opposite of what a GitOps-managed system wants.
+>
+> *Why it is nonetheless supported:* none of that holds for an **internal registry you control**, where a product legitimately spans dozens of repositories and enumerating them by hand in YAML is its own kind of drift — a new component ships, nobody edits the ConfigMap, and it is silently not replicated.
+>
+> *How the original concerns are kept:* it is **opt-in** (`repositoryDiscovery.enabled`), so the default behaviour is unchanged and scope still comes from Git unless someone deliberately says otherwise. Validation **requires** `repositoryFilters` alongside it, because an unfiltered catalog scan of a shared registry adopts every other team's repositories. Adoption is **capped** (`maxRepositories`, default 200), because a catalog that suddenly returns thousands of entries is far more likely to be a misconfiguration than a real change. And a catalog call that fails is **not fatal**: repositories named explicitly are still scanned, and the failure is reported with the likely cause rather than as a generic error.
+>
+> *What would change our mind:* evidence that operators enable it on vendor registries and then discover their scope silently changed when the vendor adjusted permissions. The mitigation would be to refuse it for any source whose registry is not on an allow-list.
+
+**Two populations of repository rows.** `repositories.managed_by` distinguishes them, because their lifecycles differ:
+
+| `managed_by` | Created by | Deactivated by |
+|---|---|---|
+| `config` | reconciliation, from YAML | reconciliation, when the declaration is removed |
+| `discovery` | a scan, from the catalog | a scan, when it leaves the catalog |
+
+Without the distinction, every configuration reload would deactivate every discovered repository and the next scan would revive it — a flap that would churn the audit trail for no reason.
 
 ## 3. Full scan, not incremental
 

@@ -112,7 +112,9 @@ func (c *Client) ListPackages(ctx context.Context, product string, opts ListPack
 
 // ListPackagesOptions filters a package listing.
 type ListPackagesOptions struct {
-	Tag string
+	// Repository narrows to one repository path. A product may span several.
+	Repository string
+	Tag        string
 	// State is the SCREAMING_SNAKE wire form, e.g. "DISCOVERED".
 	State     string
 	PageSize  int
@@ -121,6 +123,9 @@ type ListPackagesOptions struct {
 
 func (o ListPackagesOptions) query() string {
 	q := url.Values{}
+	if o.Repository != "" {
+		q.Set("repository", o.Repository)
+	}
 	if o.Tag != "" {
 		q.Set("tag", o.Tag)
 	}

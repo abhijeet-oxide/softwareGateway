@@ -51,15 +51,22 @@ func NewLoop(log *slog.Logger, m *metrics.Registry) *Loop {
 }
 
 // SourceSpec describes one source to poll.
+//
+// A source covers one registry and one or more repositories on it, so the
+// caller supplies a client FACTORY rather than a client: the repository set is
+// not known until a scan resolves it, and catalog enumeration can return
+// repositories that did not exist when the loop started.
 type SourceSpec struct {
-	Product      *product.Product
-	ProductID    int64
-	SourceName   string
-	SourceRepoID int64
-	RepoIDs      map[string]int64
-	// Client is the registry client for this source. Built by the caller,
-	// which owns credential resolution.
-	Client   registry.Source
+	Product    *product.Product
+	ProductID  int64
+	SourceName string
+	// RepoIDs maps configured repository names to catalog row IDs, for
+	// auto-download target resolution.
+	RepoIDs map[string]int64
+	// NewClient builds a client for one repository on this source's registry.
+	NewClient ClientFactory
+	// Catalog enumerates the registry. Nil when repositoryDiscovery is off.
+	Catalog  CatalogLister
 	Interval time.Duration
 }
 
@@ -106,14 +113,14 @@ func (l *Loop) Start(ctx context.Context, specs []SourceSpec, packages *store.Pa
 	built := make(map[string]*worker, len(specs))
 	for _, spec := range specs {
 		scanner, err := NewScanner(ScannerConfig{
-			Source:       spec.Client,
-			Packages:     packages,
-			Logger:       l.log,
-			Product:      spec.Product,
-			ProductID:    spec.ProductID,
-			SourceName:   spec.SourceName,
-			SourceRepoID: spec.SourceRepoID,
-			RepoIDs:      spec.RepoIDs,
+			Packages:   packages,
+			Logger:     l.log,
+			Product:    spec.Product,
+			ProductID:  spec.ProductID,
+			SourceName: spec.SourceName,
+			NewClient:  spec.NewClient,
+			Catalog:    spec.Catalog,
+			RepoIDs:    spec.RepoIDs,
 		})
 		if err != nil {
 			return err
@@ -215,12 +222,16 @@ func (l *Loop) TriggerProduct(ctx context.Context, productName string) (ScanResu
 		if err != nil && firstErr == nil {
 			firstErr = err
 		}
+		combined.Repositories += res.Repositories
+		combined.RepositoriesFromCatalog += res.RepositoriesFromCatalog
+		combined.RepositoriesFiltered += res.RepositoriesFiltered
 		combined.TagsListed += res.TagsListed
 		combined.TagsAdmitted += res.TagsAdmitted
 		combined.New += res.New
 		combined.Superseded += res.Superseded
 		combined.Requests += res.Requests
 		combined.TagErrors = append(combined.TagErrors, res.TagErrors...)
+		combined.RepositoryErrors = append(combined.RepositoryErrors, res.RepositoryErrors...)
 		combined.Duration += res.Duration
 	}
 	return combined, firstErr
@@ -395,9 +406,13 @@ func (w *worker) scanOnce(ctx context.Context) (ScanResult, error) {
 		for range res.TagErrors {
 			w.metrics.DiscoveryErrors.WithLabelValues(productName, w.spec.SourceName, "tag").Inc()
 		}
+		for range res.RepositoryErrors {
+			w.metrics.DiscoveryErrors.WithLabelValues(productName, w.spec.SourceName, "repository").Inc()
+		}
 	}
 
 	w.log.DebugContext(ctx, "discovery scan complete",
+		"repositories", res.Repositories, "fromCatalog", res.RepositoriesFromCatalog,
 		"tags", res.TagsListed, "admitted", res.TagsAdmitted,
 		"new", res.New, "superseded", res.Superseded, "requests", res.Requests,
 		"tagErrors", len(res.TagErrors), "duration", res.Duration)

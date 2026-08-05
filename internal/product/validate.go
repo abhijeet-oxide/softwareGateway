@@ -83,8 +83,114 @@ func (p *Product) Validate(resolver *SecretResolver) error {
 	errs = append(errs, p.validateAutoDownload()...)
 	errs = append(errs, p.validateVerification(resolver)...)
 	errs = append(errs, p.validateNotifications(resolver)...)
+	errs = append(errs, validateNetwork("spec.network", &p.Spec.Network, resolver)...)
 
 	return errs.ErrOrNil()
+}
+
+// validateSourceRepositories checks the repository set a source declares.
+func validateSourceRepositories(path string, s Source) Errors {
+	var errs Errors
+
+	declared := s.DeclaredRepositories()
+
+	// A source must get its repositories from somewhere. Silently scanning
+	// nothing is the failure mode this prevents: the product would appear
+	// healthy and discover no packages, forever.
+	if len(declared) == 0 && !s.RepositoryDiscovery.Enabled {
+		errs = append(errs, Error{
+			path,
+			"no repositories declared",
+			"set `repository: <path>`, `repositories: [<path>, ...]`, " +
+				"or `repositoryDiscovery.enabled: true`",
+		})
+	}
+
+	// Catalog enumeration without filters adopts every repository on the
+	// registry. On a shared internal registry that is every other team's too.
+	if s.RepositoryDiscovery.Enabled &&
+		len(s.RepositoryFilters.Include) == 0 && len(s.RepositoryFilters.Exclude) == 0 {
+		errs = append(errs, Error{
+			path + ".repositoryDiscovery",
+			"enabled with no repositoryFilters",
+			"an unfiltered catalog scan adopts EVERY repository on the registry, " +
+				"including other teams'. Add repositoryFilters.include to scope it",
+		})
+	}
+
+	if n := s.RepositoryDiscovery.MaxRepositories; n < 0 {
+		errs = append(errs, Error{path + ".repositoryDiscovery.maxRepositories", "must not be negative", ""})
+	}
+
+	for i, r := range s.Repositories {
+		if strings.TrimSpace(r) == "" {
+			errs = append(errs, Error{fmt.Sprintf("%s.repositories[%d]", path, i), "must not be empty", ""})
+		}
+	}
+
+	// A repository listed twice is harmless — DeclaredRepositories dedupes —
+	// but it is always a mistake worth surfacing, usually a copy-paste.
+	seen := map[string]bool{}
+	if s.Repository != "" {
+		seen[strings.Trim(s.Repository, "/")] = true
+	}
+	for i, r := range s.Repositories {
+		key := strings.Trim(strings.TrimSpace(r), "/")
+		if key == "" {
+			continue
+		}
+		if seen[key] {
+			errs = append(errs, Error{
+				fmt.Sprintf("%s.repositories[%d]", path, i),
+				fmt.Sprintf("%q is declared more than once", key), ""})
+			continue
+		}
+		seen[key] = true
+	}
+
+	return errs
+}
+
+// validateNetwork checks a network block's secret references.
+//
+// Previously unchecked, which meant a typo in caBundleRef surfaced as a TLS
+// failure against the vendor at the first scan rather than as a configuration
+// error at load — a long way from the cause.
+func validateNetwork(path string, n *Network, resolver *SecretResolver) Errors {
+	if n == nil {
+		return nil
+	}
+	var errs Errors
+
+	if n.CABundleRef != nil {
+		ref := n.CABundleRef
+		key := ref.Key
+		if key == "" {
+			key = DefaultCABundleKey
+		}
+		switch {
+		case ref.SecretName == "":
+			errs = append(errs, Error{path + ".caBundleRef.secretName", "required", ""})
+		case resolver != nil && !resolver.Exists(ref.SecretName, key):
+			errs = append(errs, Error{
+				path + ".caBundleRef",
+				fmt.Sprintf("secret %q has no key %q", ref.SecretName, key),
+				"the CA bundle is a PEM file projected by VSO; the default key is " + DefaultCABundleKey,
+			})
+		}
+	}
+
+	if n.Proxy != nil && n.Proxy.HTTPSProxy != "" {
+		if !strings.Contains(n.Proxy.HTTPSProxy, "://") {
+			errs = append(errs, Error{
+				path + ".proxy.httpsProxy",
+				fmt.Sprintf("%q is not a URL", n.Proxy.HTTPSProxy),
+				"include the scheme, e.g. http://proxy.example.com:3128",
+			})
+		}
+	}
+
+	return errs
 }
 
 // validatePhysicalRepositories rejects two declarations of the same physical
@@ -109,17 +215,19 @@ func (p *Product) validatePhysicalRepositories() Errors {
 	seen := map[string]origin{}
 
 	for i, s := range p.Spec.Sources {
-		key := physicalKey(s.Registry, s.Repository)
-		path := fmt.Sprintf("spec.sources[%d]", i)
-		if prev, dup := seen[key]; dup {
-			errs = append(errs, Error{
-				path,
-				fmt.Sprintf("%s/%s is already declared by %s", s.Registry, s.Repository, prev.path),
-				"one physical repository may be declared once per product",
-			})
-			continue
+		for _, repo := range s.DeclaredRepositories() {
+			key := physicalKey(s.Registry, repo)
+			path := fmt.Sprintf("spec.sources[%d]", i)
+			if prev, dup := seen[key]; dup {
+				errs = append(errs, Error{
+					path,
+					fmt.Sprintf("%s/%s is already declared by %s", s.Registry, repo, prev.path),
+					"one physical repository may be declared once per product",
+				})
+				continue
+			}
+			seen[key] = origin{path, RoleSource}
 		}
-		seen[key] = origin{path, RoleSource}
 	}
 
 	for i, t := range p.Spec.Targets {
@@ -179,7 +287,18 @@ func (p *Product) validateSources(resolver *SecretResolver) Errors {
 	seen := map[string]int{}
 	for i, s := range p.Spec.Sources {
 		path := fmt.Sprintf("spec.sources[%d]", i)
-		errs = append(errs, validateRepoCommon(path, s.Name, s.Registry, s.Repository, s.Type, s.Anonymous, s.CredentialsRef, resolver)...)
+		// A source may name one repository, several, or none at all when it
+		// enumerates them from the catalog. validateRepoCommon checks the
+		// single-repository field, so pass the first declared one — or "" when
+		// discovery supplies them — and check the rest separately.
+		declared := s.DeclaredRepositories()
+		primary := ""
+		if len(declared) > 0 {
+			primary = declared[0]
+		}
+		errs = append(errs, validateRepoCommon(path, s.Name, s.Registry, primary,
+			s.Type, s.Anonymous, s.CredentialsRef, resolver, false)...)
+		errs = append(errs, validateSourceRepositories(path, s)...)
 
 		if prev, dup := seen[s.Name]; dup && s.Name != "" {
 			errs = append(errs, Error{path + ".name", fmt.Sprintf("%q duplicates spec.sources[%d]", s.Name, prev), ""})
@@ -197,6 +316,17 @@ func (p *Product) validateSources(resolver *SecretResolver) Errors {
 				errs = append(errs, Error{fmt.Sprintf("%s.discovery.tagFilters.exclude[%d]", path, j), invalidRegexpMessage(pat, err), ""})
 			}
 		}
+		for j, pat := range s.RepositoryFilters.Include {
+			if _, err := regexp.Compile(pat); err != nil {
+				errs = append(errs, Error{fmt.Sprintf("%s.repositoryFilters.include[%d]", path, j), invalidRegexpMessage(pat, err), ""})
+			}
+		}
+		for j, pat := range s.RepositoryFilters.Exclude {
+			if _, err := regexp.Compile(pat); err != nil {
+				errs = append(errs, Error{fmt.Sprintf("%s.repositoryFilters.exclude[%d]", path, j), invalidRegexpMessage(pat, err), ""})
+			}
+		}
+		errs = append(errs, validateNetwork(path+".network", s.Network, resolver)...)
 
 		if d := s.Discovery.Interval.Duration(); d < 0 {
 			errs = append(errs, Error{path + ".discovery.interval", "must not be negative", ""})
@@ -216,7 +346,10 @@ func (p *Product) validateTargets(resolver *SecretResolver) Errors {
 	defaults := 0
 	for i, t := range p.Spec.Targets {
 		path := fmt.Sprintf("spec.targets[%d]", i)
-		errs = append(errs, validateRepoCommon(path, t.Name, t.Registry, t.Repository, t.Type, t.Anonymous, t.CredentialsRef, resolver)...)
+		// A target is always exactly one repository — it is where bytes are
+		// pushed, and "push to whatever the catalog contains" is not a thing.
+		errs = append(errs, validateRepoCommon(path, t.Name, t.Registry, t.Repository,
+			t.Type, t.Anonymous, t.CredentialsRef, resolver, true)...)
 
 		if prev, dup := seen[t.Name]; dup && t.Name != "" {
 			errs = append(errs, Error{path + ".name", fmt.Sprintf("%q duplicates spec.targets[%d]", t.Name, prev), ""})
@@ -450,9 +583,16 @@ func (p *Product) validateNotifications(resolver *SecretResolver) Errors {
 	return errs
 }
 
+// validateRepoCommon checks the fields a source and a target share.
+//
+// repositoryRequired is false for a source, whose repository set may come from
+// `repositories` or from catalog enumeration. validateSourceRepositories owns
+// that check, so requiring it here too would report a source using
+// `repositoryDiscovery` as missing a field it deliberately does not set.
 func validateRepoCommon(
 	path, name, registry, repository string,
 	typ RegistryType, anonymous bool, creds *CredentialsRef, resolver *SecretResolver,
+	repositoryRequired bool,
 ) Errors {
 	var errs Errors
 
@@ -475,7 +615,9 @@ func validateRepoCommon(
 
 	switch {
 	case repository == "":
-		errs = append(errs, Error{path + ".repository", "required", ""})
+		if repositoryRequired {
+			errs = append(errs, Error{path + ".repository", "required", ""})
+		}
 	case strings.ContainsAny(repository, ":@"):
 		errs = append(errs, Error{path + ".repository", "must not include a tag or digest", "name the repository only"})
 	case strings.HasPrefix(repository, "/") || strings.HasSuffix(repository, "/"):

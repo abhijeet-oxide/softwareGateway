@@ -55,6 +55,7 @@ func (s *Server) handleListPackages(w http.ResponseWriter, r *http.Request) {
 	// turns out to be empty.
 	rows, err := s.deps.Packages.ListPackages(r.Context(), store.ListPackagesFilter{
 		ProductName: productName,
+		Repository:  q.Get("repository"),
 		Tag:         q.Get("tag"),
 		State:       state,
 		Limit:       pageSize + 1,
@@ -206,6 +207,10 @@ func (s *Server) handleDiscoverPackages(w http.ResponseWriter, r *http.Request) 
 	}
 
 	resp := v1.DiscoverPackagesResponse{
+		Repositories:            res.Repositories,
+		RepositoriesFromCatalog: res.RepositoriesFromCatalog,
+		RepositoriesFiltered:    res.RepositoriesFiltered,
+
 		TagsListed:         res.TagsListed,
 		TagsAdmitted:       res.TagsAdmitted,
 		PackagesDiscovered: res.New,
@@ -215,6 +220,9 @@ func (s *Server) handleDiscoverPackages(w http.ResponseWriter, r *http.Request) 
 	}
 	for _, te := range res.TagErrors {
 		resp.TagErrors = append(resp.TagErrors, te.Error())
+	}
+	for _, re := range res.RepositoryErrors {
+		resp.RepositoryErrors = append(resp.RepositoryErrors, re.Error())
 	}
 
 	WriteJSON(w, r, http.StatusOK, resp)
@@ -326,17 +334,18 @@ func decodeOptionalJSON(r *http.Request, out any) error {
 // toAPIPackage converts a stored row to the wire view.
 func toAPIPackage(productName string, row store.PackageRow) v1.Package {
 	p := v1.Package{
-		Name:           "products/" + productName + "/packages/" + strconv.FormatInt(row.ID, 10),
-		PackageID:      strconv.FormatInt(row.ID, 10),
-		Product:        productName,
-		Tag:            row.Tag,
-		ManifestDigest: row.ManifestDigest,
-		MediaType:      row.MediaType,
-		TotalBytes:     v1.Int64String(strconv.FormatInt(row.TotalBytes, 10)),
-		ArtifactCount:  row.ArtifactCount,
-		BlobCount:      row.BlobCount,
-		State:          v1.PackageState(strings.ToUpper(row.State)),
-		DiscoveredAt:   row.DiscoveredAt,
+		Name:             "products/" + productName + "/packages/" + strconv.FormatInt(row.ID, 10),
+		PackageID:        strconv.FormatInt(row.ID, 10),
+		Product:          productName,
+		Tag:              row.Tag,
+		ManifestDigest:   row.ManifestDigest,
+		MediaType:        row.MediaType,
+		TotalBytes:       v1.Int64String(strconv.FormatInt(row.TotalBytes, 10)),
+		ArtifactCount:    row.ArtifactCount,
+		BlobCount:        row.BlobCount,
+		State:            v1.PackageState(strings.ToUpper(row.State)),
+		DiscoveredAt:     row.DiscoveredAt,
+		SourceRepository: row.SourceRepository,
 	}
 	if row.SupersededBy != nil {
 		p.SupersededBy = strconv.FormatInt(*row.SupersededBy, 10)

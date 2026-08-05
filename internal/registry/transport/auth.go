@@ -38,7 +38,10 @@ func newAuthTransport(next http.RoundTripper, cfg Config) http.RoundTripper {
 }
 
 func (t *authTransport) RoundTrip(r *http.Request) (*http.Response, error) {
-	scope := scopeFor(r, t.cfg.Repository)
+	scope := t.cfg.Scope
+	if scope == "" {
+		scope = scopeFor(r, t.cfg.Repository)
+	}
 
 	// Attach a cached token if we have one. This is the whole point of the
 	// cache: without it an 850-blob package performs 850 token exchanges,

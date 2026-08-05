@@ -1,0 +1,120 @@
+# A product whose packages are spread across SEVERAL REPOSITORIES on one
+# registry, with a private CA and repository filtering.
+#
+# The other two sample products show the single-repository case. This one
+# exists to answer three questions the schema alone does not:
+#
+#   1. How do I cover more than one repository?
+#   2. How do I let the tool find repositories instead of listing them?
+#   3. Where do I put my internal CA certificate?
+
+apiVersion: softwaregateway.io/v1alpha1
+kind: Product
+
+metadata:
+  name: vendor-c-suite
+  displayName: "Vendor C Suite"
+  description: "Ships as separate repositories per component."
+  owner: platform-infra@example.com
+
+spec:
+  # ---------------------------------------------------------------------
+  # TLS trust for everything in this product.
+  #
+  # The bundle is APPENDED to the system roots, never replacing them — a
+  # product that adds a private CA still needs to reach public registries and
+  # Sigstore. There is deliberately no `insecureSkipVerify`: disabling
+  # verification is never the right fix, and an option to do it gets set in
+  # production "temporarily" exactly once.
+  #
+  # The file is a PEM bundle projected by VSO at
+  # <configDir>/secrets/internal-ca/ca.crt. Override the filename with `key`.
+  # ---------------------------------------------------------------------
+  network:
+    caBundleRef:
+      secretName: internal-ca
+      key: ca.crt
+    proxy:
+      httpsProxy: http://proxy.example.com:3128
+      noProxy: [".svc.cluster.local", "internal.example.com"]
+    timeouts:
+      connect: 10s
+      responseHeader: 30s
+
+  sources:
+    # -----------------------------------------------------------------
+    # Several repositories, named explicitly.
+    #
+    # One source, not three: they share a registry host, one credential and
+    # one rate-limit budget. Three sources would duplicate all three and let
+    # the per-repository budgets multiply against a vendor that only ever
+    # sees one client.
+    # -----------------------------------------------------------------
+    - name: components
+      registry: registry.vendor-c.example.com
+      repositories:
+        - suite/core
+        - suite/database
+        - suite/frontend
+        - suite/agent
+      credentialsRef:
+        secretName: vendor-a-registry
+      discovery:
+        enabled: true
+        interval: 15m
+        tagFilters:
+          include: ['^v\d+\.\d+\.\d+$']
+      rateLimits:
+        maxConcurrentDownloads: 16
+        requestsPerSecond: 50
+
+    # -----------------------------------------------------------------
+    # Repositories found from the registry catalog instead of listed.
+    #
+    # OFF by default and opt-in for good reason: `/v2/_catalog` is slow on
+    # large registries, inconsistently paginated, and frequently forbidden
+    # for the credentials a vendor issues — and it makes discovery scope
+    # depend on registry permissions rather than on Git.
+    #
+    # It earns its place on an INTERNAL registry you control, where a product
+    # spans dozens of repositories and listing them by hand is its own drift.
+    #
+    # repositoryFilters is REQUIRED in practice and validation says so: an
+    # unfiltered catalog scan of a shared registry adopts every other team's
+    # repositories too.
+    # -----------------------------------------------------------------
+    - name: plugins
+      registry: internal.example.com
+      credentialsRef:
+        secretName: internal-registry
+      repositoryDiscovery:
+        enabled: true
+        maxRepositories: 100
+      repositoryFilters:
+        include: ['^vendor-c/plugins/']
+        exclude: ['-test$', '-scratch$']
+      discovery:
+        enabled: true
+        interval: 30m
+      # Per-source network settings override the product's where set, so one
+      # vendor reachable by a different route does not mean duplicating the
+      # whole block.
+      network:
+        proxy:
+          noProxy: ["internal.example.com"]
+
+  targets:
+    - name: internal
+      registry: internal.example.com
+      repository: mirror/vendor-c
+      credentialsRef:
+        secretName: internal-registry
+      default: true
+
+  autoDownload:
+    enabled: true
+    rules:
+      - name: releases
+        tagPattern: '^v\d+\.\d+\.\d+$'
+        targets: [internal]
+        priority: 100

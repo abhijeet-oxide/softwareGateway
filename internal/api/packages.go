@@ -217,6 +217,7 @@ func (s *Server) handleDiscoverPackages(w http.ResponseWriter, r *http.Request) 
 		Superseded:         res.Superseded,
 		RequestsCreated:    res.Requests,
 		DurationMs:         res.Duration.Milliseconds(),
+		Collapsed:          res.Collapsed,
 	}
 	for _, te := range res.TagErrors {
 		resp.TagErrors = append(resp.TagErrors, te.Error())

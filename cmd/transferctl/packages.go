@@ -295,7 +295,16 @@ func newPackagesDiscoverCommand() *cobra.Command {
 }
 
 func renderDiscoverResult(w io.Writer, productName string, r *v1.DiscoverPackagesResponse) error {
-	fmt.Fprintf(w, "Scanned %s in %s\n", productName, humanMillis(r.DurationMs))
+	if r.Collapsed {
+		// Distinguished from a scan this command started, because the numbers
+		// look identical and the meaning is not. Without this line a request
+		// that joined a scan already under way is indistinguishable from one
+		// that ran its own.
+		fmt.Fprintf(w, "Joined a scan of %s already in progress (%s)\n",
+			productName, humanMillis(r.DurationMs))
+	} else {
+		fmt.Fprintf(w, "Scanned %s in %s\n", productName, humanMillis(r.DurationMs))
+	}
 	fmt.Fprintln(w)
 
 	tw := newTabWriter(w)
@@ -315,7 +324,26 @@ func renderDiscoverResult(w io.Writer, productName string, r *v1.DiscoverPackage
 		return err
 	}
 
-	if r.PackagesDiscovered == 0 && len(r.TagErrors) == 0 {
+	switch {
+	case r.Repositories == 0 && len(r.RepositoryErrors) == 0:
+		// NOT the steady state, and saying so was actively misleading: zero
+		// repositories scanned means nothing was looked at. Either every
+		// candidate was rejected by repositoryFilters, or the source names no
+		// repositories and the registry's catalog returned none.
+		fmt.Fprintln(w)
+		fmt.Fprintln(w, "No repositories were scanned, so nothing was looked at. This is not")
+		fmt.Fprintln(w, "the same as finding nothing.")
+		if r.RepositoriesFiltered > 0 {
+			fmt.Fprintf(w, "\n  %d candidate(s) were rejected by discovery.repositoryFilters.\n",
+				r.RepositoriesFiltered)
+		} else {
+			fmt.Fprintln(w)
+			fmt.Fprintln(w, "  Check `repositories:` on the source, or — if it names none —")
+			fmt.Fprintln(w, "  whether the registry's /v2/_catalog returns anything.")
+			fmt.Fprintln(w, "  `transferctl products check` answers both.")
+		}
+
+	case r.PackagesDiscovered == 0 && len(r.TagErrors) == 0:
 		fmt.Fprintln(w)
 		fmt.Fprintln(w, "Nothing new. A scan that finds nothing is the normal steady state,")
 		fmt.Fprintln(w, "not a failure.")

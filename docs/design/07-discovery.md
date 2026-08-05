@@ -167,4 +167,29 @@ Written **in the same transaction** as the package insert. This is why the outbo
 
 `POST /api/v1/products/{product}/packages:discover` ([09](09-api.md) §3) triggers an immediate scan, bypassing the interval. Used after a vendor announces a release and when validating configuration.
 
-Idempotent and safe: it is the same scan the loop runs. Concurrent triggers are collapsed — a scan already running for that repository returns the in-progress operation rather than starting a second one.
+Idempotent and safe: it is the same scan the loop runs. Concurrent triggers are collapsed — a request arriving while a scan is running JOINS that scan and returns its result, rather than starting a second one against the same source.
+
+### Collapsing means joining, not reporting
+
+The first implementation collapsed by handing the trigger to the worker through a one-deep buffered channel and, when it found the slot occupied, returning the worker's *last* result. That was wrong in a way that looked like success.
+
+While a scan is running the slot stays occupied for its whole duration, so any further trigger took the fallback: it returned the previous scan's numbers — or the **zero value**, when no scan had completed yet — with no error, in microseconds, having done nothing. Measured at 19µs against a worker with an occupied slot. The caller could not tell, because nothing in the response said so, and `packages discover` printed
+
+```
+Scanned vendor-a-platform in 0ms
+  Repositories scanned      0
+  ...
+Nothing new. A scan that finds nothing is the normal steady state, not a failure.
+```
+
+for a scan that never ran. The visible symptom was inconsistency: the same command sometimes took seconds and did real work, and sometimes returned instantly with zeros, depending only on whether a scan happened to be in flight — which, with the interval scan firing immediately at startup and a slow registry taking up to two minutes to fail, was often.
+
+The fix is a shared `scanCall`: the first caller registers it, everyone else waits on the same one, and all of them get that scan's real result. Execution stays on the polling goroutine so a scan is always on the same goroutine as the backoff counter and the interval timer, and a caller who gives up does not cancel a scan other callers are waiting on.
+
+The response carries `collapsed: true` when a request joined a scan rather than starting one. The numbers are real either way, but "a scan ran for you" and "you were shown a scan already under way" are different facts, and an operator watching a count they expect to change deserves to know which they are looking at.
+
+### Zero repositories is not "nothing new"
+
+A scan that resolves **no repositories** is reported distinctly from one that scanned repositories and found no new tags. The two produced identical output and are not the same event: the first means nothing was looked at.
+
+It has two causes, and the CLI names them. Either `discovery.repositoryFilters` rejected every candidate, or the source names no repositories and the registry's catalog returned none. A third cause — an enumerating source with no catalog client — used to fall through the same path silently, producing a sub-millisecond successful scan with no network call at all; it is now an error.

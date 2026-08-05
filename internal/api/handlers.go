@@ -189,18 +189,30 @@ func toAPIProduct(p *product.Product) v1.Product {
 
 	for _, s := range p.Spec.Sources {
 		r := v1.Repository{
-			Name:       s.Name,
-			Registry:   s.Registry,
-			Repository: s.Repository,
-			Type:       string(s.Type),
-			Role:       string(product.RoleSource),
-			RateLimits: toAPIRateLimits(s.RateLimits),
+			Name:                s.Name,
+			Registry:            s.Registry,
+			Repositories:        s.DeclaredRepositories(),
+			RepositoryDiscovery: s.RepositoryDiscovery.Enabled,
+			Type:                string(s.Type),
+			Role:                string(product.RoleSource),
+			RateLimits:          toAPIRateLimits(s.RateLimits),
 			Discovery: &v1.Discovery{
 				Enabled:         s.Discovery.IsEnabled(),
 				IntervalSeconds: int(s.Discovery.Interval.Duration().Seconds()),
 				IncludePatterns: s.Discovery.TagFilters.Include,
 				ExcludePatterns: s.Discovery.TagFilters.Exclude,
 			},
+		}
+		// The singular field stays populated for the single-repository case, so
+		// a client written before sources could span repositories keeps working.
+		if declared := s.DeclaredRepositories(); len(declared) == 1 {
+			r.Repository = declared[0]
+		}
+		if len(s.RepositoryFilters.Include) > 0 || len(s.RepositoryFilters.Exclude) > 0 {
+			r.RepositoryFilters = &v1.Filters{
+				Include: s.RepositoryFilters.Include,
+				Exclude: s.RepositoryFilters.Exclude,
+			}
 		}
 		out.Sources = append(out.Sources, r)
 	}
@@ -210,6 +222,7 @@ func toAPIProduct(p *product.Product) v1.Product {
 			Name:          t.Name,
 			Registry:      t.Registry,
 			Repository:    t.Repository,
+			Repositories:  []string{t.Repository},
 			Type:          string(t.Type),
 			Role:          string(product.RoleTarget),
 			Default:       t.Default,

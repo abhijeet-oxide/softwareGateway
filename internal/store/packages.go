@@ -27,6 +27,10 @@ type PackageRow struct {
 	State          string
 	DiscoveredAt   string
 	SupersededBy   *int64
+	// SourceRepository is the repository path this was discovered in. Joined
+	// on read rather than denormalised: a product may span several
+	// repositories, and a listing that does not say which is ambiguous.
+	SourceRepository string
 }
 
 // ArtifactRow is a row in `package_artifacts`: one manifest in the tree.
@@ -368,6 +372,92 @@ func (p *Packages) EnqueueNotification(ctx context.Context, tx *sql.Tx, row Noti
 	return nil
 }
 
+// EnsureRepository returns a repository row's ID, creating it if absent.
+//
+// Discovery calls this for every repository it resolves — including ones found
+// in the registry catalog, which by definition are not in configuration and so
+// have no row yet. `packages` has a foreign key to `repositories`, so the row
+// must exist before anything discovered there can be recorded.
+//
+// managedBy is 'config' or 'discovery'. It exists so reconciliation can
+// deactivate declarations a human removed without touching rows discovery
+// found — otherwise every configuration reload would deactivate every
+// discovered repository and the next scan would revive it, flapping the row
+// and churning the audit trail for no reason.
+func (p *Packages) EnsureRepository(
+	ctx context.Context, tx *sql.Tx,
+	productID int64, role, name, registryHost, repositoryPath, registryType, managedBy string,
+) (int64, error) {
+	if registryType == "" {
+		registryType = "generic"
+	}
+	if managedBy == "" {
+		managedBy = "discovery"
+	}
+
+	// Physical identity is the conflict target, matching the unique index: one
+	// registry host plus repository path is one row, whoever created it.
+	upsert := p.dialect.Rewrite(`
+		INSERT INTO repositories
+			(product_id, role, name, registry_host, repository_path, registry_type,
+			 managed_by, active, updated_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ` + p.dialect.Bool(true) + `, ` + p.dialect.Now() + `)
+		ON CONFLICT (registry_host, repository_path) DO UPDATE SET
+			active     = ` + p.dialect.Bool(true) + `,
+			updated_at = ` + p.dialect.Now() + `
+		RETURNING id`)
+
+	var id int64
+	err := tx.QueryRowContext(ctx, upsert,
+		productID, role, name, registryHost, repositoryPath, registryType, managedBy,
+	).Scan(&id)
+	if err != nil {
+		return 0, fmt.Errorf("ensure repository %s/%s: %w", registryHost, repositoryPath, err)
+	}
+	return id, nil
+}
+
+// DeactivateDiscoveredRepositories marks discovery-managed rows for a product
+// inactive when they are no longer in the registry.
+//
+// Only rows this source discovered are eligible: `managed_by = 'discovery'`
+// protects a human's declaration from being switched off because a catalog
+// call failed or a filter changed.
+func (p *Packages) DeactivateDiscoveredRepositories(
+	ctx context.Context, productID int64, registryHost string, keep []string,
+) (int64, error) {
+	query := `
+		UPDATE repositories
+		   SET active = ` + p.dialect.Bool(false) + `, updated_at = ` + p.dialect.Now() + `
+		 WHERE product_id = ?
+		   AND registry_host = ?
+		   AND managed_by = 'discovery'
+		   AND active = ` + p.dialect.Bool(true)
+
+	args := []any{productID, registryHost}
+	if len(keep) > 0 {
+		placeholders := make([]byte, 0, len(keep)*2)
+		for _, r := range keep {
+			if len(placeholders) > 0 {
+				placeholders = append(placeholders, ',')
+			}
+			placeholders = append(placeholders, '?')
+			args = append(args, r)
+		}
+		query += " AND repository_path NOT IN (" + string(placeholders) + ")"
+	}
+
+	res, err := p.db.ExecContext(ctx, p.dialect.Rewrite(query), args...)
+	if err != nil {
+		return 0, fmt.Errorf("deactivate discovered repositories on %s: %w", registryHost, err)
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return 0, nil // not every driver reports this
+	}
+	return n, nil
+}
+
 // PackageExists reports whether this exact content is already recorded.
 //
 // An OPTIMISATION, not the correctness mechanism. It lets a scan where nothing
@@ -394,10 +484,12 @@ func (p *Packages) PackageExists(ctx context.Context, sourceRepoID int64, tag, d
 // ListPackages returns a product's packages, newest first.
 type ListPackagesFilter struct {
 	ProductName string
-	Tag         string
-	State       string
-	Limit       int
-	Offset      int
+	// Repository narrows to one repository path. A product may span several.
+	Repository string
+	Tag        string
+	State      string
+	Limit      int
+	Offset     int
 }
 
 // ListPackages backs the packages list API and CLI.
@@ -405,12 +497,18 @@ func (p *Packages) ListPackages(ctx context.Context, f ListPackagesFilter) ([]Pa
 	query := `
 		SELECT pk.id, pk.product_id, pk.source_repo_id, pk.tag, pk.manifest_digest,
 		       pk.media_type, COALESCE(pk.total_bytes, 0), COALESCE(pk.artifact_count, 0),
-		       COALESCE(pk.blob_count, 0), pk.state, pk.discovered_at, pk.superseded_by
+		       COALESCE(pk.blob_count, 0), pk.state, pk.discovered_at, pk.superseded_by,
+		       COALESCE(sr.repository_path, '')
 		  FROM packages pk
 		  JOIN products pr ON pr.id = pk.product_id
+		  LEFT JOIN repositories sr ON sr.id = pk.source_repo_id
 		 WHERE pr.name = ?`
 	args := []any{f.ProductName}
 
+	if f.Repository != "" {
+		query += " AND sr.repository_path = ?"
+		args = append(args, f.Repository)
+	}
 	if f.Tag != "" {
 		query += " AND pk.tag = ?"
 		args = append(args, f.Tag)
@@ -439,7 +537,7 @@ func (p *Packages) ListPackages(ctx context.Context, f ListPackagesFilter) ([]Pa
 		if err := rows.Scan(
 			&r.ID, &r.ProductID, &r.SourceRepoID, &r.Tag, &r.ManifestDigest,
 			&r.MediaType, &r.TotalBytes, &r.ArtifactCount, &r.BlobCount,
-			&r.State, &r.DiscoveredAt, &r.SupersededBy,
+			&r.State, &r.DiscoveredAt, &r.SupersededBy, &r.SourceRepository,
 		); err != nil {
 			return nil, fmt.Errorf("scan package row: %w", err)
 		}
@@ -457,9 +555,11 @@ func (p *Packages) GetPackage(ctx context.Context, productName, ref string) (Pac
 	query := p.dialect.Rewrite(`
 		SELECT pk.id, pk.product_id, pk.source_repo_id, pk.tag, pk.manifest_digest,
 		       pk.media_type, COALESCE(pk.total_bytes, 0), COALESCE(pk.artifact_count, 0),
-		       COALESCE(pk.blob_count, 0), pk.state, pk.discovered_at, pk.superseded_by
+		       COALESCE(pk.blob_count, 0), pk.state, pk.discovered_at, pk.superseded_by,
+		       COALESCE(sr.repository_path, '')
 		  FROM packages pk
 		  JOIN products pr ON pr.id = pk.product_id
+		  LEFT JOIN repositories sr ON sr.id = pk.source_repo_id
 		 WHERE pr.name = ? AND (pk.tag = ? OR pk.manifest_digest = ?)
 		 ORDER BY CASE WHEN pk.state = 'superseded' THEN 1 ELSE 0 END,
 		          pk.discovered_at DESC, pk.id DESC
@@ -469,7 +569,7 @@ func (p *Packages) GetPackage(ctx context.Context, productName, ref string) (Pac
 	err := p.db.QueryRowContext(ctx, query, productName, ref, ref).Scan(
 		&r.ID, &r.ProductID, &r.SourceRepoID, &r.Tag, &r.ManifestDigest,
 		&r.MediaType, &r.TotalBytes, &r.ArtifactCount, &r.BlobCount,
-		&r.State, &r.DiscoveredAt, &r.SupersededBy,
+		&r.State, &r.DiscoveredAt, &r.SupersededBy, &r.SourceRepository,
 	)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {

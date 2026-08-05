@@ -3,6 +3,7 @@ package main
 import (
 	"fmt"
 	"io"
+	"strings"
 
 	"github.com/spf13/cobra"
 
@@ -18,7 +19,11 @@ func newProductsCommand() *cobra.Command {
 			"read-only over the API. An API that could mutate them would create\n" +
 			"a second source of truth that Flux would immediately revert.",
 	}
-	cmd.AddCommand(newProductsListCommand(), newProductsDescribeCommand())
+	cmd.AddCommand(
+		newProductsListCommand(),
+		newProductsDescribeCommand(),
+		newProductsCheckCommand(),
+	)
 	return cmd
 }
 
@@ -37,18 +42,26 @@ func newProductsListCommand() *cobra.Command {
 					return nil
 				}
 				tw := newTabWriter(w)
-				fmt.Fprintln(tw, "NAME\tSOURCES\tTARGETS\tAUTO-DOWNLOAD\tVERIFICATION\tOWNER")
+				fmt.Fprintln(tw, "NAME\tSOURCES\tREPOSITORIES\tTARGETS\tDISCOVERY\tAUTO-DOWNLOAD\tVERIFICATION\tOWNER")
 				for _, p := range resp.Products {
-					fmt.Fprintf(tw, "%s\t%d\t%d\t%s\t%s\t%s\n",
+					fmt.Fprintf(tw, "%s\t%d\t%s\t%d\t%s\t%s\t%s\t%s\n",
 						p.ProductID,
 						len(p.Sources),
+						sourceRepositorySummary(p.Sources),
 						len(p.Targets),
+						discoverySummary(p.Sources),
 						autoDownloadSummary(p.AutoDownload),
 						verificationSummary(p.Verification),
 						dash(p.Owner),
 					)
 				}
-				return tw.Flush()
+				if err := tw.Flush(); err != nil {
+					return err
+				}
+				fmt.Fprintln(w)
+				fmt.Fprintln(w, "transferctl products describe <name>   full configuration")
+				fmt.Fprintln(w, "transferctl products check <name>      test registry connectivity")
+				return nil
 			})
 		},
 	}
@@ -71,6 +84,164 @@ func newProductsDescribeCommand() *cobra.Command {
 	}
 }
 
+// repositoryList renders a source's repositories for a detail view.
+//
+// The full list rather than a count: `describe` is where an operator confirms
+// exactly what is being scanned, and a number does not answer that.
+func repositoryList(s v1.Repository) string {
+	switch {
+	case s.RepositoryDiscovery && len(s.Repositories) == 0:
+		return "(from catalog)"
+	case s.RepositoryDiscovery:
+		return strings.Join(s.Repositories, ", ") + ", + catalog"
+	case len(s.Repositories) == 0:
+		return dash("")
+	default:
+		return strings.Join(s.Repositories, ", ")
+	}
+}
+
+// sourceRepositorySummary counts the repositories a product's sources cover.
+//
+// Worth a column now that one source can span several: "3 sources" no longer
+// tells you how much is being scanned.
+func sourceRepositorySummary(sources []v1.Repository) string {
+	total, discovering := 0, 0
+	for _, s := range sources {
+		total += len(s.Repositories)
+		if s.RepositoryDiscovery {
+			discovering++
+		}
+	}
+	switch {
+	case discovering > 0 && total > 0:
+		return fmt.Sprintf("%d + catalog", total)
+	case discovering > 0:
+		return "from catalog"
+	default:
+		return fmt.Sprintf("%d", total)
+	}
+}
+
+func discoverySummary(sources []v1.Repository) string {
+	enabled := 0
+	for _, s := range sources {
+		if s.Discovery != nil && s.Discovery.Enabled {
+			enabled++
+		}
+	}
+	if enabled == 0 {
+		return "off"
+	}
+	return fmt.Sprintf("%d of %d", enabled, len(sources))
+}
+
+func newProductsCheckCommand() *cobra.Command {
+	return &cobra.Command{
+		Use:   "check [product]",
+		Short: "Test that configured registries are reachable and credentials work",
+		Long: "Probes every repository a product declares: DNS and TLS, whether the\n" +
+			"credential is accepted, and whether it grants the access the product\n" +
+			"needs.\n\n" +
+			"This is NOT part of `transferctl health`, deliberately. Health answers\n" +
+			"\"is the service working?\" and the same machinery backs Kubernetes\n" +
+			"readiness — if a vendor's outage made it fail, a vendor's bad afternoon\n" +
+			"would pull our own pods out of service, and you could not tell whose\n" +
+			"fault an unhealthy reading was.\n\n" +
+			"Run this after editing configuration, when onboarding a vendor, or when\n" +
+			"discovery is finding nothing and you want to know why.\n\n" +
+			"With no argument, every configured product is checked.",
+		Args: cobra.MaximumNArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			name := ""
+			if len(args) == 1 {
+				name = args[0]
+			}
+			resp, err := newClient().CheckConnectivity(cmd.Context(), name)
+			if err != nil {
+				return err
+			}
+			return render(stdout(), opts.output, resp, func(w io.Writer) error {
+				return renderConnectivity(w, resp)
+			})
+		},
+	}
+}
+
+func renderConnectivity(w io.Writer, resp *v1.CheckConnectivityResponse) error {
+	if len(resp.Products) == 0 {
+		fmt.Fprintln(w, "No products configured.")
+		return nil
+	}
+
+	failures := 0
+	for i, p := range resp.Products {
+		if i > 0 {
+			fmt.Fprintln(w)
+		}
+		fmt.Fprintf(w, "%s  %s\n", checkMark(p.Status), p.Product)
+
+		for _, r := range p.Repositories {
+			ref := r.Registry
+			if r.Repository != "" {
+				ref += "/" + r.Repository
+			}
+			fmt.Fprintf(w, "\n  %s  %s (%s)\n", checkMark(r.Status), ref, r.Role)
+			if r.Name != "" {
+				fmt.Fprintf(w, "      declared as %q\n", r.Name)
+			}
+
+			for _, s := range r.Steps {
+				line := fmt.Sprintf("      %-8s %s", string(s.Status), s.Name)
+				if s.LatencyMs > 0 {
+					line += fmt.Sprintf("  (%.0fms)", s.LatencyMs)
+				}
+				fmt.Fprintln(w, line)
+				if s.Detail != "" {
+					fmt.Fprintf(w, "               %s\n", s.Detail)
+				}
+				// The hint is the part that turns a diagnosis into a fix, so it
+				// is printed even when the run is otherwise terse.
+				if s.Hint != "" {
+					fmt.Fprintf(w, "               → %s\n", s.Hint)
+				}
+			}
+			if r.Status == v1.CheckFailed {
+				failures++
+			}
+		}
+	}
+
+	fmt.Fprintln(w)
+	switch resp.Status {
+	case v1.CheckOK:
+		fmt.Fprintln(w, "All configured repositories are reachable and authorised.")
+	case v1.CheckWarning:
+		fmt.Fprintln(w, "Reachable, with warnings above.")
+	default:
+		fmt.Fprintf(w, "%d repository/repositories cannot be used as configured.\n", failures)
+		return partialFailureError{msg: fmt.Sprintf("%d repository check(s) failed", failures)}
+	}
+	return nil
+}
+
+// checkMark renders a status as a short, alignable token.
+//
+// Text rather than colour or emoji: this output is read in terminals that
+// mangle both, and piped into logs where neither survives.
+func checkMark(s v1.CheckStatus) string {
+	switch s {
+	case v1.CheckOK:
+		return "[ ok ]"
+	case v1.CheckWarning:
+		return "[warn]"
+	case v1.CheckSkipped:
+		return "[skip]"
+	default:
+		return "[FAIL]"
+	}
+}
+
 func renderProductDetail(w io.Writer, p *v1.Product) error {
 	fmt.Fprintf(w, "Product      %s\n", p.ProductID)
 	if p.DisplayName != "" {
@@ -87,14 +258,14 @@ func renderProductDetail(w io.Writer, p *v1.Product) error {
 
 	fmt.Fprintln(w, "Sources")
 	tw := newTabWriter(w)
-	fmt.Fprintln(tw, "  NAME\tREGISTRY\tREPOSITORY\tTYPE\tDISCOVERY\tDOWNLOADS")
+	fmt.Fprintln(tw, "  NAME\tREGISTRY\tREPOSITORIES\tTYPE\tDISCOVERY\tDOWNLOADS")
 	for _, s := range p.Sources {
 		discovery := "disabled"
 		if s.Discovery != nil && s.Discovery.Enabled {
 			discovery = fmt.Sprintf("every %ds", s.Discovery.IntervalSeconds)
 		}
 		fmt.Fprintf(tw, "  %s\t%s\t%s\t%s\t%s\t%d\n",
-			s.Name, s.Registry, s.Repository, s.Type, discovery, s.RateLimits.MaxConcurrentDownloads)
+			s.Name, s.Registry, repositoryList(s), s.Type, discovery, s.RateLimits.MaxConcurrentDownloads)
 	}
 	if err := tw.Flush(); err != nil {
 		return err

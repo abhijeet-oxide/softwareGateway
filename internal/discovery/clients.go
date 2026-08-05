@@ -9,24 +9,27 @@ import (
 	"github.com/abhijeet-oxide/softwareGateway/internal/product"
 	"github.com/abhijeet-oxide/softwareGateway/internal/registry"
 
-	// Registers the generic backend. Imported for the side effect: the factory
-	// does not import backends, so something must.
-	_ "github.com/abhijeet-oxide/softwareGateway/internal/registry/generic"
+	// Also registers the generic backend with the factory, via its init.
+	"github.com/abhijeet-oxide/softwareGateway/internal/registry/generic"
 )
 
-// SourceClient builds a registry client for a configured source.
+// clientConfigFor builds the backend-neutral config for a source.
 //
 // This is where configuration meets I/O, and the only place credentials are
 // read. Secrets come from projected volume mounts written by VSO — the process
 // never talks to the Kubernetes API and never needs Secret read permission
 // (docs/design/02 §3).
-func SourceClient(p *product.Product, src product.Source, secrets *product.SecretResolver) (registry.Source, error) {
+//
+// The repository path is left empty: a source may cover several, so the caller
+// fills it in per repository.
+func clientConfigFor(
+	p *product.Product, src product.Source, secrets *product.SecretResolver,
+) (registry.ClientConfig, error) {
 	cfg := registry.ClientConfig{
-		Type:       string(src.Type),
-		Registry:   src.Registry,
-		Repository: strings.Trim(src.Repository, "/"),
-		UserAgent:  userAgent(),
-		PlainHTTP:  isPlainHTTP(src.Registry),
+		Type:      string(src.Type),
+		Registry:  src.Registry,
+		UserAgent: userAgent(),
+		PlainHTTP: isPlainHTTP(src.Registry),
 	}
 
 	limits := src.RateLimits.WithDefaults()
@@ -35,7 +38,7 @@ func SourceClient(p *product.Product, src product.Source, secrets *product.Secre
 	cfg.MaxConnections = limits.MaxConnections
 
 	if err := applyNetwork(&cfg, p, src.Network, secrets); err != nil {
-		return nil, err
+		return registry.ClientConfig{}, err
 	}
 
 	// Anonymous is explicit, not inferred from a missing credentialsRef. A
@@ -46,22 +49,69 @@ func SourceClient(p *product.Product, src product.Source, secrets *product.Secre
 	case src.CredentialsRef != nil:
 		creds, err := secrets.Credentials(*src.CredentialsRef)
 		if err != nil {
-			return nil, fmt.Errorf("product %q source %q credentials: %w",
+			return registry.ClientConfig{}, fmt.Errorf("product %q source %q credentials: %w",
 				p.Metadata.Name, src.Name, err)
 		}
 		cfg.Username = creds.Username
 		cfg.Password = creds.Password.Reveal()
 	default:
-		return nil, fmt.Errorf(
+		return registry.ClientConfig{}, fmt.Errorf(
 			"product %q source %q has neither credentialsRef nor anonymous: true",
 			p.Metadata.Name, src.Name)
 	}
 
-	client, err := registry.New(cfg)
+	return cfg, nil
+}
+
+// SourceClientFactory returns a factory that builds a client per repository.
+//
+// One factory per source, so every repository on that registry shares the
+// credential, the CA bundle, the proxy settings and the rate-limit
+// configuration — which is what makes declaring several repositories under one
+// source correct rather than merely convenient.
+func SourceClientFactory(
+	p *product.Product, src product.Source, secrets *product.SecretResolver,
+) (ClientFactory, error) {
+	base, err := clientConfigFor(p, src, secrets)
 	if err != nil {
-		return nil, fmt.Errorf("product %q source %q: %w", p.Metadata.Name, src.Name, err)
+		return nil, err
 	}
-	return client, nil
+
+	return func(repositoryPath string) (registry.Source, error) {
+		cfg := base
+		cfg.Repository = strings.Trim(repositoryPath, "/")
+		client, err := registry.New(cfg)
+		if err != nil {
+			return nil, fmt.Errorf("product %q source %q repository %q: %w",
+				p.Metadata.Name, src.Name, repositoryPath, err)
+		}
+		return client, nil
+	}, nil
+}
+
+// SourceCatalog builds a registry-scoped client for catalog enumeration.
+//
+// Returns nil when repositoryDiscovery is off, which is the default — building
+// it unconditionally would mint a second connection pool and a second token
+// scope for every source that never uses them.
+func SourceCatalog(
+	p *product.Product, src product.Source, secrets *product.SecretResolver,
+) (CatalogLister, error) {
+	if !src.RepositoryDiscovery.Enabled {
+		return nil, nil
+	}
+
+	base, err := clientConfigFor(p, src, secrets)
+	if err != nil {
+		return nil, err
+	}
+
+	c, err := generic.NewCatalog(generic.CatalogFromClientConfig(base))
+	if err != nil {
+		return nil, fmt.Errorf("product %q source %q catalog: %w",
+			p.Metadata.Name, src.Name, err)
+	}
+	return c, nil
 }
 
 // applyNetwork merges the source's network settings over the product's.
@@ -81,7 +131,7 @@ func applyNetwork(
 		if n.CABundleRef != nil {
 			key := n.CABundleRef.Key
 			if key == "" {
-				key = "ca.crt"
+				key = product.DefaultCABundleKey
 			}
 			bundle, err := secrets.Value(n.CABundleRef.SecretName, key)
 			if err != nil {
@@ -153,13 +203,12 @@ func SourceSpecs(
 				continue
 			}
 
-			repoID, ok := ref.Repositories[src.Name]
-			if !ok {
-				errs = append(errs, fmt.Errorf("product %q source %q has no catalog row", p.Metadata.Name, src.Name))
+			newClient, err := SourceClientFactory(p, src, secrets)
+			if err != nil {
+				errs = append(errs, err)
 				continue
 			}
-
-			client, err := SourceClient(p, src, secrets)
+			catalogClient, err := SourceCatalog(p, src, secrets)
 			if err != nil {
 				errs = append(errs, err)
 				continue
@@ -171,13 +220,13 @@ func SourceSpecs(
 			}
 
 			specs = append(specs, SourceSpec{
-				Product:      p,
-				ProductID:    ref.ID,
-				SourceName:   src.Name,
-				SourceRepoID: repoID,
-				RepoIDs:      ref.Repositories,
-				Client:       client,
-				Interval:     interval,
+				Product:    p,
+				ProductID:  ref.ID,
+				SourceName: src.Name,
+				RepoIDs:    ref.Repositories,
+				NewClient:  newClient,
+				Catalog:    catalogClient,
+				Interval:   interval,
 			})
 		}
 	}

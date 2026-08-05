@@ -88,13 +88,12 @@ func newHarness(t *testing.T, doc string) *harness {
 	}
 
 	scanner, err := NewScanner(ScannerConfig{
-		Source:       client,
-		Packages:     packages,
-		Product:      p,
-		ProductID:    ref.ID,
-		SourceName:   "vendor",
-		SourceRepoID: ref.Repositories["vendor"],
-		RepoIDs:      ref.Repositories,
+		Packages:   packages,
+		Product:    p,
+		ProductID:  ref.ID,
+		SourceName: "vendor",
+		NewClient:  func(string) (registry.Source, error) { return client, nil },
+		RepoIDs:    ref.Repositories,
 	})
 	if err != nil {
 		t.Fatalf("build scanner: %v", err)
@@ -726,8 +725,9 @@ func newHarnessWith(t *testing.T, doc string, reg *fakeregistry.Registry) *harne
 
 	packages := store.NewPackages(s)
 	scanner, err := NewScanner(ScannerConfig{
-		Source: client, Packages: packages, Product: p, ProductID: ref.ID,
-		SourceName: "vendor", SourceRepoID: ref.Repositories["vendor"], RepoIDs: ref.Repositories,
+		Packages: packages, Product: p, ProductID: ref.ID, SourceName: "vendor",
+		NewClient: func(string) (registry.Source, error) { return client, nil },
+		RepoIDs:   ref.Repositories,
 	})
 	if err != nil {
 		t.Fatalf("build scanner: %v", err)
@@ -760,7 +760,7 @@ func TestTagFilterSemantics(t *testing.T) {
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			f, err := compileTagFilter(tc.filters)
+			f, err := compileFilters("tagFilters", tc.filters)
 			if err != nil {
 				t.Fatalf("compile: %v", err)
 			}
@@ -772,7 +772,7 @@ func TestTagFilterSemantics(t *testing.T) {
 }
 
 func TestInvalidPatternIsRejectedAtCompileTime(t *testing.T) {
-	if _, err := compileTagFilter(product.TagFilters{Include: []string{"("}}); err == nil {
+	if _, err := compileFilters("tagFilters", product.TagFilters{Include: []string{"("}}); err == nil {
 		t.Error("expected an unclosed group to be rejected")
 	}
 	if _, err := compileRules(product.AutoDownload{

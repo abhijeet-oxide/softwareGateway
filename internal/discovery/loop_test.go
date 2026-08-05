@@ -8,6 +8,7 @@ import (
 
 	"github.com/abhijeet-oxide/softwareGateway/internal/catalog"
 	"github.com/abhijeet-oxide/softwareGateway/internal/product"
+	"github.com/abhijeet-oxide/softwareGateway/internal/registry"
 	"github.com/abhijeet-oxide/softwareGateway/internal/registry/generic"
 	"github.com/abhijeet-oxide/softwareGateway/internal/registry/transport"
 	"github.com/abhijeet-oxide/softwareGateway/internal/store"
@@ -63,13 +64,12 @@ func newLoopHarness(t *testing.T, interval time.Duration) *loopHarness {
 	t.Cleanup(loop.Stop)
 
 	err = loop.Start(ctx, []SourceSpec{{
-		Product:      p,
-		ProductID:    ref.ID,
-		SourceName:   "vendor",
-		SourceRepoID: ref.Repositories["vendor"],
-		RepoIDs:      ref.Repositories,
-		Client:       client,
-		Interval:     interval,
+		Product:    p,
+		ProductID:  ref.ID,
+		SourceName: "vendor",
+		RepoIDs:    ref.Repositories,
+		NewClient:  func(string) (registry.Source, error) { return client, nil },
+		Interval:   interval,
 	}}, store.NewPackages(s))
 	if err != nil {
 		t.Fatalf("start loop: %v", err)

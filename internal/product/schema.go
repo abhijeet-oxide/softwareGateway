@@ -8,7 +8,10 @@
 // about that product lives in that one place.
 package product
 
-import "time"
+import (
+	"strings"
+	"time"
+)
 
 // APIVersion and Kind identify the document. These exist even though products
 // are ConfigMaps rather than CRDs, so the schema is versioned and migratable
@@ -53,17 +56,107 @@ type Spec struct {
 	Retention     map[string]Duration `json:"retention,omitempty"`
 }
 
-// Source is a vendor-side, read-only repository. Polled by discovery.
+// Source is a vendor-side registry location, read-only, polled by discovery.
+//
+// A source names ONE REGISTRY and one or more repositories on it. A product
+// whose packages are spread across several repositories — one per component —
+// declares them all under a single source, because they share a registry host,
+// one credential and one rate-limit budget. Splitting them into separate
+// sources would duplicate all three and let the per-repository budgets multiply
+// against a vendor that only sees one client.
 type Source struct {
-	Name           string          `json:"name"`
-	Registry       string          `json:"registry"`
-	Repository     string          `json:"repository"`
+	Name     string `json:"name"`
+	Registry string `json:"registry"`
+
+	// Repository names a single repository. Equivalent to a one-element
+	// Repositories, and kept because the single-repository case is the common
+	// one and `repository: platform/suite` reads better than a list of one.
+	Repository string `json:"repository,omitempty"`
+
+	// Repositories names several explicitly. Use this when a product ships as
+	// separate repositories — platform/core, platform/db, platform/ui.
+	Repositories []string `json:"repositories,omitempty"`
+
+	// RepositoryDiscovery finds repositories from the registry catalog instead
+	// of naming them. Off by default; see the type's documentation for why.
+	RepositoryDiscovery RepositoryDiscovery `json:"repositoryDiscovery,omitempty"`
+
+	// RepositoryFilters narrows the repository set, however it was obtained.
+	// One rule, whether the set came from configuration or from the catalog.
+	RepositoryFilters Filters `json:"repositoryFilters,omitempty"`
+
 	Type           RegistryType    `json:"type,omitempty"`
 	Anonymous      bool            `json:"anonymous,omitempty"`
 	CredentialsRef *CredentialsRef `json:"credentialsRef,omitempty"`
 	Discovery      Discovery       `json:"discovery,omitempty"`
 	RateLimits     RateLimits      `json:"rateLimits,omitempty"`
 	Network        *Network        `json:"network,omitempty"`
+}
+
+// DeclaredRepositories returns the repositories named in configuration.
+//
+// Repository and Repositories are merged and de-duplicated, so a document may
+// use either or both without surprising overlap.
+func (s Source) DeclaredRepositories() []string {
+	out := make([]string, 0, len(s.Repositories)+1)
+	seen := map[string]bool{}
+
+	add := func(r string) {
+		r = strings.Trim(strings.TrimSpace(r), "/")
+		if r == "" || seen[r] {
+			return
+		}
+		seen[r] = true
+		out = append(out, r)
+	}
+
+	add(s.Repository)
+	for _, r := range s.Repositories {
+		add(r)
+	}
+	return out
+}
+
+// RepositoryDiscovery enumerates repositories from `/v2/_catalog`.
+//
+// OFF BY DEFAULT, deliberately. Catalog enumeration is slow on large
+// registries, inconsistently paginated, and frequently forbidden for the
+// credentials a vendor issues — and enabling it makes discovery scope depend on
+// registry-side permissions rather than on Git, which is the opposite of what a
+// GitOps-managed system wants (docs/design/07 §2).
+//
+// It exists because that argument does not hold for an INTERNAL registry you
+// control, where a product legitimately spans dozens of repositories and
+// enumerating them by hand in YAML is its own kind of drift. Pair it with
+// RepositoryFilters: an unfiltered catalog scan of a shared registry will find
+// every other team's repositories too.
+type RepositoryDiscovery struct {
+	Enabled bool `json:"enabled,omitempty"`
+	// MaxRepositories bounds what one scan will adopt. A catalog that suddenly
+	// returns thousands of repositories is far more likely to be a
+	// misconfiguration than a real change, and adopting them all would create
+	// thousands of scanners against one registry.
+	MaxRepositories int `json:"maxRepositories,omitempty"`
+}
+
+// DefaultMaxDiscoveredRepositories caps catalog adoption when unset.
+const DefaultMaxDiscoveredRepositories = 200
+
+// EffectiveMaxRepositories returns the configured cap or the default.
+func (r RepositoryDiscovery) EffectiveMaxRepositories() int {
+	if r.MaxRepositories <= 0 {
+		return DefaultMaxDiscoveredRepositories
+	}
+	return r.MaxRepositories
+}
+
+// Filters is an include/exclude pair of RE2 patterns.
+//
+// Shared by tag and repository filtering: the semantics are identical — no
+// include patterns admits everything, and exclude always wins over include.
+type Filters struct {
+	Include []string `json:"include,omitempty"`
+	Exclude []string `json:"exclude,omitempty"`
 }
 
 // Target is an internal, read-write repository: a replication destination and
@@ -114,10 +207,11 @@ func (d Discovery) IsEnabled() bool { return d.Enabled == nil || *d.Enabled }
 
 // TagFilters narrows what discovery records at all. Applied before
 // auto-download rules, so filtering also bounds scan cost.
-type TagFilters struct {
-	Include []string `json:"include,omitempty"`
-	Exclude []string `json:"exclude,omitempty"`
-}
+//
+// An alias rather than its own type: tag and repository filtering have
+// identical semantics, and two structurally identical types would invite two
+// slightly different implementations.
+type TagFilters = Filters
 
 // RateLimits are per repository and fleet-wide, not per worker.
 //
@@ -308,6 +402,9 @@ type Timeouts struct {
 	IdleStall      Duration `json:"idleStall,omitempty"`
 }
 
+// DefaultCABundleKey is the key read from a caBundleRef when none is given.
+const DefaultCABundleKey = "ca.crt"
+
 // SecretRef names a key inside a projected Kubernetes Secret.
 type SecretRef struct {
 	SecretName string `json:"secretName"`
@@ -343,7 +440,21 @@ func (c CredentialsRef) PasswordKeyOrDefault() string {
 func (p Product) Repositories() []RepositoryRef {
 	out := make([]RepositoryRef, 0, len(p.Spec.Sources)+len(p.Spec.Targets))
 	for _, s := range p.Spec.Sources {
-		out = append(out, RepositoryRef{Role: RoleSource, Name: s.Name, Registry: s.Registry, Repository: s.Repository, Type: s.Type})
+		declared := s.DeclaredRepositories()
+		for _, repo := range declared {
+			// The row NAME is the source name for a single-repository source,
+			// and "<source>/<path>" when the source covers several. The common
+			// case therefore reads exactly as it did before sources could span
+			// repositories, while the multi-repository case stays unambiguous
+			// under the (product, role, name) unique constraint.
+			name := s.Name
+			if len(declared) > 1 {
+				name = s.Name + "/" + repo
+			}
+			out = append(out, RepositoryRef{
+				Role: RoleSource, Name: name, Registry: s.Registry, Repository: repo, Type: s.Type,
+			})
+		}
 	}
 	for _, t := range p.Spec.Targets {
 		out = append(out, RepositoryRef{Role: RoleTarget, Name: t.Name, Registry: t.Registry, Repository: t.Repository, Type: t.Type})

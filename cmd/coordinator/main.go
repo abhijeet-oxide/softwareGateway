@@ -31,6 +31,7 @@ import (
 	"github.com/abhijeet-oxide/softwareGateway/internal/platform/metrics"
 	"github.com/abhijeet-oxide/softwareGateway/internal/platform/tracing"
 	"github.com/abhijeet-oxide/softwareGateway/internal/platform/version"
+	"github.com/abhijeet-oxide/softwareGateway/internal/preflight"
 	"github.com/abhijeet-oxide/softwareGateway/internal/product"
 	"github.com/abhijeet-oxide/softwareGateway/internal/store"
 )
@@ -236,6 +237,10 @@ func run() error {
 		Store:     st,
 		Packages:  packages,
 		Discovery: discoveryCtl.Loop(),
+		// Connectivity checking is deliberately NOT part of the health
+		// registry: health must not depend on third-party registries, or a
+		// vendor's outage pulls this replica out of the Service.
+		Preflight: preflight.NewChecker(resolver),
 		Leader:    elector,
 		Component: component,
 	})

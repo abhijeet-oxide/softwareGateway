@@ -273,6 +273,50 @@ Validate before committing:
 ./bin/transferctl config validate ./dev/products
 ```
 
+#### A source can cover several repositories
+
+A product whose components ship as separate repositories declares them all under **one** source — they share a registry host, one credential and one rate-limit budget:
+
+```yaml
+  sources:
+    - name: components
+      registry: registry.vendor-c.example.com
+      repositories:                     # instead of `repository:`
+        - suite/core
+        - suite/database
+        - suite/frontend
+      credentialsRef:
+        secretName: vendor-c-registry
+```
+
+`repository:` (singular) still works for the common one-repository case, and the two merge if you use both.
+
+#### Repository filters, and finding repositories automatically
+
+`repositoryFilters` narrows the repository set the same way `tagFilters` narrows tags — include, then exclude, exclude always wins:
+
+```yaml
+      repositoryFilters:
+        include: ['^suite/']
+        exclude: ['-test$', '-scratch$']
+```
+
+To have the tool **find** repositories instead of listing them, turn on catalog enumeration:
+
+```yaml
+      repositoryDiscovery:
+        enabled: true                   # uses /v2/_catalog
+        maxRepositories: 100            # default 200
+      repositoryFilters:
+        include: ['^suite/']            # required in practice — see below
+```
+
+**Off by default, and validation insists on filters when you enable it.** An unfiltered catalog scan of a shared registry adopts every other team's repositories. Three more things worth knowing:
+
+- Many **vendor** credentials cannot list a registry — they are scoped to pulling named repositories. The tool says so explicitly rather than reporting a generic 403, and **keeps scanning any repositories you named explicitly**. Catalog enumeration earns its place on an internal registry you control.
+- The repository set is **re-resolved on every scan**, so a repository published since the last pass is found without a restart or a reload.
+- Repositories found this way are marked `managed_by = discovery` in the database, so a configuration reload does not deactivate them.
+
 #### Tag filters — applied *before* any network call
 
 ```yaml
@@ -286,25 +330,103 @@ Filters bound **scan cost**, not just what gets stored: a filtered tag costs zer
 
 Patterns are RE2 (Go `regexp`) — linear time, no backtracking. A backtracking engine evaluating a user-supplied pattern inside a polling loop would be a denial-of-service vector.
 
-#### Auto-download rules — first match wins
+#### Auto-download rules
+
+This is the part that most repays reading once, because the mental model is not obvious from the schema.
+
+**A rule is not a filter. It is a routing decision.**
+
+Discovery records *every* tag that survives `tagFilters` — that is what makes the package list a complete picture of what the vendor has published. Rules answer a separate question about each newly discovered package:
+
+> Should we pull this automatically, **where** should it go, and **how urgently**?
+
+A package that matches no rule is still discovered, still listed, still describable. It simply is not fetched without someone asking. **No rules at all is a perfectly good configuration** — it means "tell me what exists, I will decide what to pull."
+
+**Why more than one rule?** Because "should we pull this automatically" rarely has one answer for a whole repository. Different *classes of release* deserve different treatment, and the class is encoded in the tag:
 
 ```yaml
   autoDownload:
     enabled: true
     rules:
-      - name: ga-releases                     # evaluated in order
+      # Evaluated top to bottom. FIRST MATCH WINS.
+
+      - name: security-hotfixes
+        tagPattern: '^v\d+\.\d+\.\d+-hotfix\.\d+$'
+        targets: [lab, production]      # straight to both
+        priority: 1000                  # ahead of everything queued
+        verifyBeforeTransfer: true
+
+      - name: ga-releases
         tagPattern: '^v\d+\.\d+\.\d+$'
-        targets: [internal]
+        targets: [lab]                  # lab only; promotion to prod is a human decision
         priority: 100
+        verifyBeforeTransfer: true
+
       - name: release-candidates
         tagPattern: '^v\d+\.\d+\.\d+-rc\.\d+$'
-        targets: [internal]
-        priority: 10
+        targets: [lab]
+        priority: 10                    # behind real releases when both are queued
+
+      # Nightlies and anything else match nothing, so they are recorded and
+      # left alone. That is the "no rule" case doing useful work.
 ```
 
-**First match wins, not all matches.** Two rules matching one tag with different priorities and different targets has no sensible interpretation, and "most specific" is not an order that exists over regexes.
+Read as a table, which is what it is:
 
-`enabled: false` disables the rules without deleting them.
+| Tag looks like | Goes to | Priority | Verified first |
+|---|---|---|---|
+| `v2.4.1-hotfix.1` | lab **and** production | 1000 | yes |
+| `v2.4.1` | lab | 100 | yes |
+| `v2.5.0-rc.3` | lab | 10 | no |
+| `nightly-2026-01-14` | *nowhere* | — | — |
+
+Three things each rule controls, and each is a real operational decision:
+
+- **`targets` — where.** A hotfix might justify going straight to production; a release candidate must never. This is how you express "auto-download, but only somewhere safe."
+- **`priority` — how urgently.** Priority orders the transfer queue. When a 40 GB nightly and a security hotfix are both waiting, priority is what decides which moves first. It matters most exactly when you are busiest.
+- **`verifyBeforeTransfer` — how carefully.** Check the vendor's signature before spending an hour on the bytes.
+
+**First match wins, and order is therefore load-bearing.** Put the *most specific* pattern first. In the example, `^v\d+\.\d+\.\d+-hotfix\.\d+$` must precede `^v\d+\.\d+\.\d+$`; reversed, a hotfix would… actually still not match the GA pattern (the `$` anchor saves it) — but with looser patterns like `^v2\.` first, everything below becomes dead code. Anchor your patterns and order most-specific-first, and this class of mistake disappears.
+
+Why first-match rather than all-match: two rules matching one tag with different targets and different priorities has no sensible combined meaning — is it priority 1000 or 10? And "most specific wins" is not an order that exists over regular expressions, so it cannot be computed. Explicit order is the only unambiguous rule.
+
+**Each match produces exactly one transfer request, forever.** The idempotency key is derived from the package, the resolved targets and the priority, so a re-scan, a Coordinator restart mid-evaluation, or two Coordinators briefly both believing they are leader all produce one request. This matters more here than anywhere else in the system: an auto-download rule is the one path that creates tens of gigabytes of work with nobody watching.
+
+`enabled: false` turns the rules off without deleting them — useful while investigating whether a vendor's tagging changed.
+
+#### TLS: private and internal CAs
+
+Put the CA bundle in a secret and point `network.caBundleRef` at it. It works at product level and per source or target:
+
+```yaml
+spec:
+  network:
+    caBundleRef:
+      secretName: internal-ca
+      key: ca.crt                       # default; override for another filename
+    proxy:
+      httpsProxy: http://proxy.example.com:3128
+      noProxy: [".svc.cluster.local", "internal.example.com"]
+    timeouts:
+      connect: 10s
+      responseHeader: 30s
+
+  sources:
+    - name: vendor
+      # ...
+      network:                          # overrides the product's where set
+        proxy:
+          noProxy: ["internal.example.com"]
+```
+
+The bundle is a PEM file at `<configDir>/secrets/internal-ca/ca.crt`, projected by VSO in-cluster.
+
+Two properties worth knowing:
+
+- It is **appended to the system roots, never replacing them.** A product that adds a private CA still needs to reach public registries and Sigstore.
+- **There is deliberately no `insecureSkipVerify`.** Disabling verification is never the right fix, and an option to do it gets set in production "temporarily" exactly once. Supply the CA instead.
+
+A complete example is in [`dev/products/vendor-c-multirepo.yaml`](../dev/products/vendor-c-multirepo.yaml).
 
 #### Credentials
 
@@ -369,13 +491,15 @@ SQLite is a development convenience and is **not supported in production** — t
 
 ```bash
 transferctl version                              # client and server versions
-transferctl health                               # deep check of every dependency
-transferctl config validate <dir>                # validate product YAML
+transferctl health                               # is the SERVICE working?
+transferctl config validate <dir>                # validate product YAML offline
 
-transferctl products list
-transferctl products describe <product>
+transferctl products list                        # every product, at a glance
+transferctl products describe <product>          # full configuration
+transferctl products check [product]             # can we reach the registries?
 
 transferctl packages list <product>              # what has been discovered
+transferctl packages list <product> --repository suite/core
 transferctl packages list <product> --tag v1.0.0
 transferctl packages list <product> --state superseded
 transferctl packages list <product> --all        # follow pagination
@@ -404,6 +528,47 @@ The distinctions earn their keep in scripts. 3 versus 4 separates "the service i
 ```bash
 transferctl config validate ./products || exit $?   # 6 if any file is invalid
 ```
+
+### `health` vs `products check` — two different questions
+
+They look similar and are deliberately not the same thing.
+
+| | `transferctl health` | `transferctl products check` |
+|---|---|---|
+| Asks | Is the **service** working? | Is my **configuration** usable? |
+| Checks | Coordinator, database, config parsed | DNS, TLS, credentials, per-repository permissions |
+| Talks to third parties | **no** | yes — that is the point |
+| Speed | milliseconds | seconds, sometimes longer |
+| Run it | constantly; it backs readiness | after editing config, onboarding a vendor, or when discovery finds nothing |
+
+**Why `health` deliberately does not probe registries.** The same machinery backs Kubernetes readiness. If a vendor's registry going down made health fail, that vendor's bad afternoon would pull *your* pods out of the Service — an outage you did not cause and cannot fix. It would also destroy health's usefulness during an incident: seeing `DEGRADED` would not tell you whether the fault was yours or someone else's.
+
+So they stay separate. `health` answers for things you own; `products check` answers for things you depend on.
+
+```
+$ transferctl products check vendor-a
+
+[FAIL]  vendor-a
+
+  [FAIL]  registry.vendor-a.example.com/platform/suite (source)
+      declared as "primary"
+      OK       credentials
+               resolved from secret vendor-a-registry as user svc-replication
+      OK       reachable  (34ms)
+      FAILED   authenticated
+               HTTP 401: UNAUTHORIZED: authentication required
+               → the username or password in secret vendor-a-registry was rejected.
+                 Check for a trailing newline in the file — it is the most common
+                 cause and the hardest to see
+      SKIPPED  can list tags
+               authentication failed
+```
+
+Checks run in dependency order and stop at the first real cause: there is no point asking whether a credential grants read access when the host does not resolve, and four failures for one cause is noise you have to work through. A **skipped** check is shown rather than hidden — "we did not check" and "it passed" must never look the same.
+
+Exit code 6 when any repository fails, so it works in CI.
+
+**What it does not check:** write access to a target. Confirming that requires an upload, and preflight will not leave artefacts in your registry. It is reported as `SKIPPED` with that reason, and the first transfer exercises it for real (M3).
 
 ### Discovery behaviour worth knowing
 

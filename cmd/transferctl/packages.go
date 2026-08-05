@@ -31,11 +31,12 @@ func newPackagesCommand() *cobra.Command {
 
 func newPackagesListCommand() *cobra.Command {
 	var (
-		tag       string
-		state     string
-		pageSize  int
-		pageToken string
-		all       bool
+		repository string
+		tag        string
+		state      string
+		pageSize   int
+		pageToken  string
+		all        bool
 	)
 
 	cmd := &cobra.Command{
@@ -45,10 +46,11 @@ func newPackagesListCommand() *cobra.Command {
 		RunE: func(cmd *cobra.Command, args []string) error {
 			client := newClient()
 			opts0 := v1.ListPackagesOptions{
-				Tag:       tag,
-				State:     strings.ToUpper(state),
-				PageSize:  pageSize,
-				PageToken: pageToken,
+				Repository: repository,
+				Tag:        tag,
+				State:      strings.ToUpper(state),
+				PageSize:   pageSize,
+				PageToken:  pageToken,
 			}
 
 			resp, err := client.ListPackages(cmd.Context(), args[0], opts0)
@@ -78,6 +80,8 @@ func newPackagesListCommand() *cobra.Command {
 		},
 	}
 
+	cmd.Flags().StringVar(&repository, "repository", "",
+		"show only packages from this repository path, e.g. suite/core")
 	cmd.Flags().StringVar(&tag, "tag", "", "show only packages with this tag")
 	cmd.Flags().StringVar(&state, "state", "", "filter by state, e.g. discovered or superseded")
 	cmd.Flags().IntVar(&pageSize, "page-size", 0, "results per page")
@@ -95,9 +99,21 @@ func renderPackageList(w io.Writer, resp *v1.ListPackagesResponse) error {
 		return nil
 	}
 
+	// The repository column appears only when the product actually spans more
+	// than one. For the common single-repository product it would be a column
+	// of identical values pushing everything else off the terminal.
+	multiRepo := spansRepositories(resp.Packages)
+
 	tw := newTabWriter(w)
-	fmt.Fprintln(tw, "TAG\tDIGEST\tSTATE\tSIZE\tARTIFACTS\tBLOBS\tDISCOVERED")
+	if multiRepo {
+		fmt.Fprintln(tw, "REPOSITORY\tTAG\tDIGEST\tSTATE\tSIZE\tARTIFACTS\tBLOBS\tDISCOVERED")
+	} else {
+		fmt.Fprintln(tw, "TAG\tDIGEST\tSTATE\tSIZE\tARTIFACTS\tBLOBS\tDISCOVERED")
+	}
 	for _, p := range resp.Packages {
+		if multiRepo {
+			fmt.Fprintf(tw, "%s\t", dash(p.SourceRepository))
+		}
 		fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%d\t%d\t%s\n",
 			p.Tag,
 			shortDigest(p.ManifestDigest),
@@ -134,6 +150,21 @@ func renderPackageList(w io.Writer, resp *v1.ListPackagesResponse) error {
 	return nil
 }
 
+// spansRepositories reports whether a listing covers more than one repository.
+func spansRepositories(pkgs []v1.Package) bool {
+	var first string
+	for i, p := range pkgs {
+		if i == 0 {
+			first = p.SourceRepository
+			continue
+		}
+		if p.SourceRepository != first {
+			return true
+		}
+	}
+	return false
+}
+
 func newPackagesDescribeCommand() *cobra.Command {
 	return &cobra.Command{
 		Use:   "describe <product> <tag-or-digest>",
@@ -166,6 +197,9 @@ func newPackagesDescribeCommand() *cobra.Command {
 func renderPackageDetail(w io.Writer, p *v1.Package, artifacts []v1.Artifact) error {
 	fmt.Fprintf(w, "Package      %s\n", p.Tag)
 	fmt.Fprintf(w, "Product      %s\n", p.Product)
+	if p.SourceRepository != "" {
+		fmt.Fprintf(w, "Repository   %s\n", p.SourceRepository)
+	}
 	fmt.Fprintf(w, "Digest       %s\n", p.ManifestDigest)
 	fmt.Fprintf(w, "Media type   %s\n", p.MediaType)
 	fmt.Fprintf(w, "State        %s\n", strings.ToLower(string(p.State)))
@@ -260,6 +294,13 @@ func renderDiscoverResult(w io.Writer, productName string, r *v1.DiscoverPackage
 	fmt.Fprintln(w)
 
 	tw := newTabWriter(w)
+	fmt.Fprintf(tw, "  Repositories scanned\t%d\n", r.Repositories)
+	if r.RepositoriesFromCatalog > 0 {
+		fmt.Fprintf(tw, "    found in the catalog\t%d\n", r.RepositoriesFromCatalog)
+	}
+	if r.RepositoriesFiltered > 0 {
+		fmt.Fprintf(tw, "    rejected by filters\t%d\n", r.RepositoriesFiltered)
+	}
 	fmt.Fprintf(tw, "  Tags listed\t%d\n", r.TagsListed)
 	fmt.Fprintf(tw, "  Tags after filters\t%d\n", r.TagsAdmitted)
 	fmt.Fprintf(tw, "  New packages\t%d\n", r.PackagesDiscovered)
@@ -282,6 +323,14 @@ func renderDiscoverResult(w io.Writer, productName string, r *v1.DiscoverPackage
 		fmt.Fprintln(w, "until the queue and workers land in the next milestone.")
 	}
 
+	if len(r.RepositoryErrors) > 0 {
+		fmt.Fprintln(w)
+		fmt.Fprintf(w, "%d repository/repositories could not be read:\n", len(r.RepositoryErrors))
+		for _, e := range r.RepositoryErrors {
+			fmt.Fprintf(w, "  %s\n", e)
+		}
+	}
+
 	if len(r.TagErrors) > 0 {
 		fmt.Fprintln(w)
 		fmt.Fprintf(w, "%d tag(s) could not be read. The rest of the scan completed:\n", len(r.TagErrors))
@@ -290,6 +339,10 @@ func renderDiscoverResult(w io.Writer, productName string, r *v1.DiscoverPackage
 		}
 		// Exit non-zero so a script notices, while still printing what worked.
 		return partialFailureError{msg: fmt.Sprintf("%d tag(s) failed during the scan", len(r.TagErrors))}
+	}
+	if len(r.RepositoryErrors) > 0 {
+		return partialFailureError{
+			msg: fmt.Sprintf("%d repository/repositories failed during the scan", len(r.RepositoryErrors))}
 	}
 	return nil
 }

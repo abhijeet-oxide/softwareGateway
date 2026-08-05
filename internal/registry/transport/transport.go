@@ -35,6 +35,14 @@ type Config struct {
 	// Repository path, used to scope tokens.
 	Repository string
 
+	// Scope overrides the derived token scope.
+	//
+	// Needed for `/v2/_catalog`, which requires `registry:catalog:*` rather
+	// than the `repository:<name>:pull` this would otherwise derive. Sending
+	// the wrong scope gets a token the registry then refuses the request with,
+	// which reads as a permissions problem rather than a client bug.
+	Scope string
+
 	// Credentials; zero value means anonymous.
 	Username string
 	Password string

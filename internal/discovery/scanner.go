@@ -14,6 +14,11 @@
 // down for a day, crashed mid-scan, or ran against a stale replica simply
 // catches up on the next pass. There is no divergent state to detect and no
 // repair path to write, because there is no state.
+//
+// A source covers ONE REGISTRY and one or more repositories on it. The
+// repository set is re-resolved on every scan for the same reason the tag set
+// is: a repository published since the last pass should be found without a
+// restart or a configuration reload.
 package discovery
 
 import (
@@ -23,6 +28,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"sync"
 	"time"
 
 	"github.com/abhijeet-oxide/softwareGateway/internal/product"
@@ -30,40 +36,64 @@ import (
 	"github.com/abhijeet-oxide/softwareGateway/internal/store"
 )
 
-// tagPageSize is the page size requested from tags/list. Registries may return
-// fewer, and some ignore it entirely.
+// tagPageSize is the page size requested from tags/list.
 const tagPageSize = 200
 
-// Scanner scans one source repository.
+// ClientFactory builds a repository client for one repository on the source's
+// registry.
 //
-// One per source, holding its compiled filters and rules so a scan does no
-// configuration work.
+// A factory rather than a prepared map because the repository set is not known
+// until a scan resolves it — catalog enumeration can return repositories that
+// did not exist when the loop started.
+type ClientFactory func(repositoryPath string) (registry.Source, error)
+
+// Scanner scans one source: one registry, one or more repositories on it.
 type Scanner struct {
-	source   registry.Source
 	packages *store.Packages
 	log      *slog.Logger
 
-	product      *product.Product
-	productID    int64
-	sourceName   string
-	sourceRepoID int64
-	// repoIDs maps a configured repository name to its catalog row ID.
-	repoIDs map[string]int64
+	product    *product.Product
+	productID  int64
+	sourceName string
+	sourceCfg  product.Source
 
-	filter tagFilter
-	rules  ruleSet
+	newClient ClientFactory
+	catalog   CatalogLister
+
+	repoFilter filter
+	tagFilter  filter
+	rules      ruleSet
+
+	// targetIDs maps configured TARGET names to catalog row IDs, for
+	// auto-download rule resolution. Read-only after construction.
+	targetIDs map[string]int64
+
+	// clients caches one client per repository path.
+	//
+	// Rebuilding per scan would discard the connection pool and the bearer
+	// token cache every fifteen minutes, turning a warm keep-alive into a fresh
+	// TLS handshake and a token exchange per repository — the cost the token
+	// cache exists to avoid.
+	mu      sync.Mutex
+	clients map[string]registry.Source
 }
 
 // ScannerConfig builds a Scanner.
 type ScannerConfig struct {
-	Source       registry.Source
-	Packages     *store.Packages
-	Logger       *slog.Logger
-	Product      *product.Product
-	ProductID    int64
-	SourceName   string
-	SourceRepoID int64
-	RepoIDs      map[string]int64
+	Packages  *store.Packages
+	Logger    *slog.Logger
+	Product   *product.Product
+	ProductID int64
+	// SourceName selects which of the product's sources this scans.
+	SourceName string
+	// NewClient builds a client for a repository on this source's registry.
+	NewClient ClientFactory
+	// Catalog enumerates the registry. May be nil when repositoryDiscovery is
+	// off, which is the default.
+	Catalog CatalogLister
+	// RepoIDs maps configured repository NAMES to catalog row IDs, used to
+	// resolve auto-download rule targets.
+	RepoIDs map[string]int64
 }
 
 // NewScanner compiles a source's filters and rules.
@@ -77,13 +107,25 @@ func NewScanner(cfg ScannerConfig) (*Scanner, error) {
 		return nil, fmt.Errorf("product %q has no source %q", cfg.Product.Metadata.Name, cfg.SourceName)
 	}
 
-	filter, err := compileTagFilter(src.Discovery.TagFilters)
+	where := fmt.Sprintf("product %q source %q", cfg.Product.Metadata.Name, cfg.SourceName)
+
+	tagFilter, err := compileFilters("discovery.tagFilters", src.Discovery.TagFilters)
 	if err != nil {
-		return nil, fmt.Errorf("product %q source %q: %w", cfg.Product.Metadata.Name, cfg.SourceName, err)
+		return nil, fmt.Errorf("%s: %w", where, err)
+	}
+	repoFilter, err := compileFilters("repositoryFilters", src.RepositoryFilters)
+	if err != nil {
+		return nil, fmt.Errorf("%s: %w", where, err)
 	}
 	rules, err := compileRules(cfg.Product.Spec.AutoDownload)
 	if err != nil {
 		return nil, fmt.Errorf("product %q: %w", cfg.Product.Metadata.Name, err)
+	}
+
+	if len(src.DeclaredRepositories()) == 0 && !src.RepositoryDiscovery.Enabled {
+		return nil, fmt.Errorf(
+			"%s names no repositories: set `repository`, `repositories`, "+
+				"or `repositoryDiscovery.enabled: true`", where)
 	}
 
 	log := cfg.Logger
@@ -92,51 +134,192 @@ func NewScanner(cfg ScannerConfig) (*Scanner, error) {
 	}
 
 	return &Scanner{
-		source:       cfg.Source,
-		packages:     cfg.Packages,
-		log:          log.With("product", cfg.Product.Metadata.Name, "source", cfg.SourceName),
-		product:      cfg.Product,
-		productID:    cfg.ProductID,
-		sourceName:   cfg.SourceName,
-		sourceRepoID: cfg.SourceRepoID,
-		repoIDs:      cfg.RepoIDs,
-		filter:       filter,
-		rules:        rules,
+		packages:   cfg.Packages,
+		log:        log.With("product", cfg.Product.Metadata.Name, "source", cfg.SourceName),
+		product:    cfg.Product,
+		productID:  cfg.ProductID,
+		sourceName: cfg.SourceName,
+		sourceCfg:  src,
+		newClient:  cfg.NewClient,
+		catalog:    cfg.Catalog,
+		repoFilter: repoFilter,
+		tagFilter:  tagFilter,
+		rules:      rules,
+		targetIDs:  cfg.RepoIDs,
+		clients:    map[string]registry.Source{},
 	}, nil
 }
 
-// ScanResult reports what one scan did.
+// ScanResult reports what one scan did, across every repository.
 type ScanResult struct {
+	// Repositories is how many were scanned.
+	Repositories int
+	// RepositoriesFromCatalog is how many of those came from `/v2/_catalog`
+	// rather than from configuration.
+	RepositoriesFromCatalog int
+	// RepositoriesFiltered is how many candidates repositoryFilters rejected.
+	RepositoriesFiltered int
+
 	TagsListed   int
 	TagsAdmitted int
 	New          int
 	Superseded   int
 	Requests     int
-	// TagErrors are per-tag failures that did not stop the scan. A malformed
-	// manifest on one tag must not hide the other forty-nine.
+
+	// TagErrors are per-tag failures that did not stop the scan.
 	TagErrors []TagError
-	Duration  time.Duration
+	// RepositoryErrors are per-repository failures that did not stop the scan.
+	// One unreachable repository must not hide the other nineteen.
+	RepositoryErrors []RepositoryError
+
+	Duration time.Duration
 }
 
 // TagError is a single tag's failure.
 type TagError struct {
-	Tag string
-	Err error
+	Repository string
+	Tag        string
+	Err        error
 }
 
-func (e TagError) Error() string { return "tag " + e.Tag + ": " + e.Err.Error() }
+func (e TagError) Error() string {
+	if e.Repository == "" {
+		return "tag " + e.Tag + ": " + e.Err.Error()
+	}
+	return e.Repository + " tag " + e.Tag + ": " + e.Err.Error()
+}
 func (e TagError) Unwrap() error { return e.Err }
 
-// Scan performs one full scan.
+// RepositoryError is a single repository's failure.
+type RepositoryError struct {
+	Repository string
+	Err        error
+}
+
+func (e RepositoryError) Error() string { return "repository " + e.Repository + ": " + e.Err.Error() }
+func (e RepositoryError) Unwrap() error { return e.Err }
+
+// Scan performs one full scan of every repository this source covers.
 //
-// Returning an error means the scan could not proceed at all — the registry was
-// unreachable or refused the tag list. Per-tag failures are collected in
-// ScanResult.TagErrors and do not stop the scan (docs/design/07 §7).
+// Returning an error means the scan could not proceed at all — the repository
+// set could not be resolved. Per-repository and per-tag failures are collected
+// and do not stop the scan (docs/design/07 §7).
 func (s *Scanner) Scan(ctx context.Context) (ScanResult, error) {
 	started := time.Now()
 	var res ScanResult
 
-	tags, err := s.listTags(ctx)
+	// Re-resolved every scan, for the same reason the tag list is: a repository
+	// published since the last pass should be found without a restart.
+	set := resolveRepositories(ctx, s.sourceCfg, s.repoFilter, s.catalog)
+	res.RepositoriesFromCatalog = set.FromCatalog
+	res.RepositoriesFiltered = set.Filtered
+
+	if set.CatalogErr != nil {
+		// Not fatal. A vendor forbidding `_catalog` is normal — the credential
+		// is usually good for pulling named repositories, not for enumerating
+		// the registry — and the repositories we WERE told about must still be
+		// scanned.
+		s.log.WarnContext(ctx, "repository discovery failed; scanning declared repositories only",
+			"error", describeCatalogError(set.CatalogErr))
+		res.RepositoryErrors = append(res.RepositoryErrors,
+			RepositoryError{Repository: "_catalog", Err: set.CatalogErr})
+	}
+	if set.Truncated {
+		s.log.WarnContext(ctx, "repository discovery hit its cap; the set is partial",
+			"max", s.sourceCfg.RepositoryDiscovery.EffectiveMaxRepositories(),
+			"hint", "narrow repositoryFilters, or raise repositoryDiscovery.maxRepositories")
+	}
+
+	if len(set.Repositories) == 0 {
+		res.Duration = time.Since(started)
+		if set.CatalogErr != nil {
+			return res, fmt.Errorf("no repositories to scan: %s", describeCatalogError(set.CatalogErr))
+		}
+		s.log.WarnContext(ctx, "no repositories to scan after filtering",
+			"filtered", set.Filtered)
+		return res, nil
+	}
+
+	for _, repoPath := range set.Repositories {
+		if err := ctx.Err(); err != nil {
+			return res, err
+		}
+
+		sub, err := s.scanRepository(ctx, repoPath)
+		if err != nil {
+			res.RepositoryErrors = append(res.RepositoryErrors,
+				RepositoryError{Repository: repoPath, Err: err})
+			s.log.WarnContext(ctx, "repository scan failed", "repository", repoPath, "error", err)
+			continue
+		}
+
+		res.Repositories++
+		res.TagsListed += sub.TagsListed
+		res.TagsAdmitted += sub.TagsAdmitted
+		res.New += sub.New
+		res.Superseded += sub.Superseded
+		res.Requests += sub.Requests
+		res.TagErrors = append(res.TagErrors, sub.TagErrors...)
+	}
+
+	// Retire discovery-managed rows for repositories that have left the
+	// catalog. Only attempted when enumeration actually succeeded: a failed
+	// catalog call must not be read as "everything disappeared".
+	if s.sourceCfg.RepositoryDiscovery.Enabled && set.CatalogErr == nil {
+		if n, err := s.packages.DeactivateDiscoveredRepositories(
+			ctx, s.productID, s.sourceCfg.Registry, set.Repositories); err != nil {
+			s.log.WarnContext(ctx, "could not retire vanished repositories", "error", err)
+		} else if n > 0 {
+			s.log.InfoContext(ctx, "retired repositories no longer in the catalog", "count", n)
+		}
+	}
+
+	res.Duration = time.Since(started)
+
+	// A scan where EVERY repository failed is a failed scan, not a successful
+	// one that found nothing.
+	//
+	// This distinction is load-bearing. Per-repository errors are collected so
+	// one unreachable repository cannot hide the other nineteen — but if none
+	// succeeded, the registry is down, and reporting success would keep
+	// `discovery_last_success_timestamp_seconds` advancing right through the
+	// outage. That gauge is the thing to alert on precisely because it catches
+	// "discovery quietly stopped finding anything" (docs/design/07 §7); letting
+	// a total outage refresh it would defeat it. It would also leave the loop's
+	// backoff disengaged, hammering a dead registry on the normal interval.
+	if res.Repositories == 0 && len(res.RepositoryErrors) > 0 {
+		return res, fmt.Errorf("every repository failed (%d of %d): %w",
+			len(res.RepositoryErrors), len(set.Repositories), res.RepositoryErrors[0].Err)
+	}
+
+	return res, nil
+}
+
+// repoResult is one repository's contribution to a scan.
+type repoResult struct {
+	TagsListed   int
+	TagsAdmitted int
+	New          int
+	Superseded   int
+	Requests     int
+	TagErrors    []TagError
+}
+
+// scanRepository scans every admitted tag in one repository.
+func (s *Scanner) scanRepository(ctx context.Context, repoPath string) (repoResult, error) {
+	var res repoResult
+
+	client, err := s.clientFor(repoPath)
+	if err != nil {
+		return res, err
+	}
+
+	repoID, err := s.ensureRepositoryRow(ctx, repoPath)
+	if err != nil {
+		return res, err
+	}
+
+	tags, err := s.listTags(ctx, client)
 	if err != nil {
 		return res, err
 	}
@@ -146,18 +329,19 @@ func (s *Scanner) Scan(ctx context.Context) (ScanResult, error) {
 		if err := ctx.Err(); err != nil {
 			return res, err
 		}
-		if !s.filter.admits(tag) {
+		if !s.tagFilter.admits(tag) {
 			continue
 		}
 		res.TagsAdmitted++
 
-		outcome, err := s.scanTag(ctx, tag)
+		outcome, err := s.scanTag(ctx, client, repoID, repoPath, tag)
 		if err != nil {
 			// Collected, not returned. One bad artifact must not stop discovery
 			// of the rest — that is how a single vendor mistake would otherwise
 			// stall every release behind it.
-			res.TagErrors = append(res.TagErrors, TagError{Tag: tag, Err: err})
-			s.log.WarnContext(ctx, "tag scan failed", "tag", tag, "error", err)
+			res.TagErrors = append(res.TagErrors, TagError{Repository: repoPath, Tag: tag, Err: err})
+			s.log.WarnContext(ctx, "tag scan failed",
+				"repository", repoPath, "tag", tag, "error", err)
 			continue
 		}
 		if outcome.isNew {
@@ -166,13 +350,70 @@ func (s *Scanner) Scan(ctx context.Context) (ScanResult, error) {
 			res.Requests += outcome.requests
 		}
 	}
-
-	res.Duration = time.Since(started)
 	return res, nil
 }
 
-// listTags pages through the whole tag list.
-func (s *Scanner) listTags(ctx context.Context) ([]string, error) {
+// clientFor returns the cached client for a repository, building it on first
+// use.
+func (s *Scanner) clientFor(repoPath string) (registry.Source, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if c, ok := s.clients[repoPath]; ok {
+		return c, nil
+	}
+	if s.newClient == nil {
+		return nil, fmt.Errorf("no client factory configured")
+	}
+	c, err := s.newClient(repoPath)
+	if err != nil {
+		return nil, err
+	}
+	s.clients[repoPath] = c
+	return c, nil
+}
+
+// ensureRepositoryRow resolves the repositories row for a path, creating it if
+// discovery found it rather than configuration declaring it.
+func (s *Scanner) ensureRepositoryRow(ctx context.Context, repoPath string) (int64, error) {
+	tx, err := s.packages.DB().BeginTx(ctx, nil)
+	if err != nil {
+		return 0, fmt.Errorf("begin repository transaction: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	// The row NAME is the source name for a single-repository source, and
+	// "<source>/<path>" when the source covers several. That keeps the common
+	// case reading exactly as it did before this feature existed, while the
+	// multi-repository case stays unambiguous under the (product, role, name)
+	// unique constraint.
+	name := s.sourceName
+	if declared := s.sourceCfg.DeclaredRepositories(); len(declared) != 1 || declared[0] != repoPath {
+		name = s.sourceName + "/" + repoPath
+	}
+
+	managedBy := "discovery"
+	for _, declared := range s.sourceCfg.DeclaredRepositories() {
+		if declared == repoPath {
+			managedBy = "config"
+			break
+		}
+	}
+
+	id, err := s.packages.EnsureRepository(ctx, tx,
+		s.productID, string(product.RoleSource), name,
+		s.sourceCfg.Registry, repoPath, string(s.sourceCfg.Type), managedBy)
+	if err != nil {
+		return 0, err
+	}
+	if err := tx.Commit(); err != nil {
+		return 0, fmt.Errorf("commit repository row: %w", err)
+	}
+	return id, nil
+}
+
+// listTags pages through the whole tag list of one repository.
+func (s *Scanner) listTags(ctx context.Context, client registry.Source) ([]string, error) {
 	var all []string
 	last := ""
 
@@ -182,9 +423,17 @@ func (s *Scanner) listTags(ctx context.Context) ([]string, error) {
 	const maxPages = 500
 
 	for page := 0; page < maxPages; page++ {
-		tags, next, err := s.source.ListTags(ctx, last, tagPageSize)
+		tags, next, err := client.ListTags(ctx, last, tagPageSize)
 		if err != nil {
-			return nil, fmt.Errorf("list tags for %s: %w", s.source.Name(), err)
+			// A repository with no tags yet is a normal state, and so is one
+			// that vanished between the catalog listing and this scan. Neither
+			// should back off the source. The CLIENT reports the 404 faithfully
+			// so `products check` can call a typo'd path what it is; deciding
+			// that discovery tolerates it belongs here.
+			if errors.Is(err, registry.ErrNotFound) {
+				return all, nil
+			}
+			return nil, fmt.Errorf("list tags for %s: %w", client.Name(), err)
 		}
 		all = append(all, tags...)
 		if next == "" || next == last {
@@ -192,7 +441,7 @@ func (s *Scanner) listTags(ctx context.Context) ([]string, error) {
 		}
 		last = next
 	}
-	return all, fmt.Errorf("list tags for %s: exceeded %d pages", s.source.Name(), maxPages)
+	return all, fmt.Errorf("list tags for %s: exceeded %d pages", client.Name(), maxPages)
 }
 
 // tagOutcome reports what one tag produced.
@@ -204,11 +453,13 @@ type tagOutcome struct {
 }
 
 // scanTag resolves one tag and records it if it is new.
-func (s *Scanner) scanTag(ctx context.Context, tag string) (tagOutcome, error) {
+func (s *Scanner) scanTag(
+	ctx context.Context, client registry.Source, repoID int64, repoPath, tag string,
+) (tagOutcome, error) {
 	// HEAD only: the body is not fetched. Discovery calls this for every tag on
 	// every scan, so the common case — nothing changed — costs one small
 	// request per tag and transfers no manifest bodies.
-	desc, err := s.source.ResolveTag(ctx, tag)
+	desc, err := client.ResolveTag(ctx, tag)
 	if err != nil {
 		if errors.Is(err, registry.ErrNotFound) {
 			// The tag was deleted between the list and the resolve. Not an
@@ -225,7 +476,7 @@ func (s *Scanner) scanTag(ctx context.Context, tag string) (tagOutcome, error) {
 	// part — the manifest-tree fetch — for content already recorded. The unique
 	// constraint inside recordPackage is what actually prevents a duplicate, so
 	// a scan racing us between this check and that insert is harmless.
-	known, err := s.packages.PackageExists(ctx, s.sourceRepoID, tag, desc.Digest.String())
+	known, err := s.packages.PackageExists(ctx, repoID, tag, desc.Digest.String())
 	if err != nil {
 		return tagOutcome{}, err
 	}
@@ -236,12 +487,12 @@ func (s *Scanner) scanTag(ctx context.Context, tag string) (tagOutcome, error) {
 	// Fetched BEFORE the transaction opens: this is network I/O of unbounded
 	// duration, and holding a database transaction across it would pin a
 	// connection and a snapshot for as long as the vendor takes to answer.
-	t, err := fetchTree(ctx, s.source, desc)
+	t, err := fetchTree(ctx, client, desc)
 	if err != nil {
 		return tagOutcome{}, err
 	}
 
-	return s.recordPackage(ctx, tag, desc, t)
+	return s.recordPackage(ctx, client, repoID, repoPath, tag, desc, t)
 }
 
 // recordPackage writes a new package and everything that follows from it, in
@@ -253,7 +504,8 @@ func (s *Scanner) scanTag(ctx context.Context, tag string) (tagOutcome, error) {
 // was rolled back, are precisely the states the outbox pattern exists to make
 // impossible (docs/design/07 §6).
 func (s *Scanner) recordPackage(
-	ctx context.Context, tag string, desc registry.Descriptor, t tree,
+	ctx context.Context, client registry.Source, repoID int64,
+	repoPath, tag string, desc registry.Descriptor, t tree,
 ) (tagOutcome, error) {
 	tx, err := s.packages.DB().BeginTx(ctx, nil)
 	if err != nil {
@@ -263,7 +515,7 @@ func (s *Scanner) recordPackage(
 
 	packageID, err := s.packages.InsertPackage(ctx, tx, store.PackageRow{
 		ProductID:      s.productID,
-		SourceRepoID:   s.sourceRepoID,
+		SourceRepoID:   repoID,
 		Tag:            tag,
 		ManifestDigest: desc.Digest.String(),
 		MediaType:      desc.MediaType,
@@ -284,21 +536,22 @@ func (s *Scanner) recordPackage(
 		return tagOutcome{}, err
 	}
 
-	// Supersede any earlier package carrying THE SAME TAG. Different tags are
-	// independent versions and are never touched (docs/design/07 §4).
-	superseded, err := s.packages.SupersedePrior(ctx, tx, s.sourceRepoID, tag, packageID)
+	// Supersede any earlier package carrying THE SAME TAG in THIS repository.
+	// Different tags are independent versions and are never touched, and
+	// neither is the same tag in a different repository (docs/design/07 §4).
+	superseded, err := s.packages.SupersedePrior(ctx, tx, repoID, tag, packageID)
 	if err != nil {
 		return tagOutcome{}, err
 	}
 
-	if err := s.writeAudit(ctx, tx, packageID, tag, desc, superseded); err != nil {
+	if err := s.writeAudit(ctx, tx, client, packageID, repoPath, tag, desc, superseded); err != nil {
 		return tagOutcome{}, err
 	}
-	if err := s.notify(ctx, tx, packageID, tag, desc, superseded); err != nil {
+	if err := s.notify(ctx, tx, client, packageID, repoPath, tag, desc, superseded); err != nil {
 		return tagOutcome{}, err
 	}
 
-	requests, err := s.applyRules(ctx, tx, packageID, tag)
+	requests, err := s.applyRules(ctx, tx, packageID, repoID, tag)
 	if err != nil {
 		return tagOutcome{}, err
 	}
@@ -308,6 +561,7 @@ func (s *Scanner) recordPackage(
 	}
 
 	s.log.InfoContext(ctx, "discovered package",
+		"repository", repoPath,
 		"tag", tag,
 		"digest", desc.Digest.Short(),
 		"artifacts", len(t.Artifacts),
@@ -375,13 +629,14 @@ func (s *Scanner) writeTree(ctx context.Context, tx *sql.Tx, packageID int64, t 
 
 // writeAudit records the discovery, and the supersession if there was one.
 func (s *Scanner) writeAudit(
-	ctx context.Context, tx *sql.Tx, packageID int64, tag string, desc registry.Descriptor, superseded int64,
+	ctx context.Context, tx *sql.Tx, client registry.Source,
+	packageID int64, repoPath, tag string, desc registry.Descriptor, superseded int64,
 ) error {
 	detail, _ := json.Marshal(map[string]any{
 		"tag":        tag,
 		"digest":     desc.Digest.String(),
 		"source":     s.sourceName,
-		"repository": s.source.Name(),
+		"repository": client.Name(),
 	})
 
 	if err := s.packages.InsertAudit(ctx, tx, store.AuditRow{
@@ -407,6 +662,7 @@ func (s *Scanner) writeAudit(
 		"newDigest":      desc.Digest.String(),
 		"packagesMarked": superseded,
 		"source":         s.sourceName,
+		"repository":     repoPath,
 	})
 	return s.packages.InsertAudit(ctx, tx, store.AuditRow{
 		EventType:   "PackageSuperseded",
@@ -420,7 +676,8 @@ func (s *Scanner) writeAudit(
 
 // notify enqueues PackageDiscovered to every subscribed channel.
 func (s *Scanner) notify(
-	ctx context.Context, tx *sql.Tx, packageID int64, tag string, desc registry.Descriptor, superseded int64,
+	ctx context.Context, tx *sql.Tx, client registry.Source,
+	packageID int64, repoPath, tag string, desc registry.Descriptor, superseded int64,
 ) error {
 	n := s.product.Spec.Notifications
 	if !n.Enabled {
@@ -430,7 +687,7 @@ func (s *Scanner) notify(
 	payload, err := json.Marshal(map[string]any{
 		"product":    s.product.Metadata.Name,
 		"source":     s.sourceName,
-		"repository": s.source.Name(),
+		"repository": client.Name(),
 		"tag":        tag,
 		"digest":     desc.Digest.String(),
 		"packageId":  packageID,
@@ -469,13 +726,15 @@ func (s *Scanner) notify(
 }
 
 // applyRules evaluates auto-download rules against a new package.
-func (s *Scanner) applyRules(ctx context.Context, tx *sql.Tx, packageID int64, tag string) (int, error) {
+func (s *Scanner) applyRules(
+	ctx context.Context, tx *sql.Tx, packageID, sourceRepoID int64, tag string,
+) (int, error) {
 	rule, ok := s.rules.match(tag)
 	if !ok {
 		return 0, nil
 	}
 
-	targetIDs, targetNames, err := resolveTargets(s.product, rule, s.repoIDs)
+	targetIDs, targetNames, err := resolveTargets(s.product, rule, s.targetIDs)
 	if err != nil {
 		// A misconfigured rule must not fail the discovery — the package is
 		// real and worth recording either way. Logged loudly instead.
@@ -492,7 +751,7 @@ func (s *Scanner) applyRules(ctx context.Context, tx *sql.Tx, packageID int64, t
 		ProductID:      s.productID,
 		PackageID:      packageID,
 		Operation:      "replicate",
-		SourceRepoID:   s.sourceRepoID,
+		SourceRepoID:   sourceRepoID,
 		Priority:       priority,
 		IdempotencyKey: key,
 		RequestedBy:    "auto_download:" + rule.Name,

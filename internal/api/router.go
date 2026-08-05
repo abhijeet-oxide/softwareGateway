@@ -18,6 +18,7 @@ import (
 	"github.com/abhijeet-oxide/softwareGateway/internal/discovery"
 	"github.com/abhijeet-oxide/softwareGateway/internal/platform/health"
 	"github.com/abhijeet-oxide/softwareGateway/internal/platform/metrics"
+	"github.com/abhijeet-oxide/softwareGateway/internal/preflight"
 	"github.com/abhijeet-oxide/softwareGateway/internal/product"
 	"github.com/abhijeet-oxide/softwareGateway/internal/store"
 )
@@ -37,6 +38,14 @@ type Discoverer interface {
 	TriggerProduct(ctx context.Context, productName string) (discovery.ScanResult, error)
 }
 
+// ConnectivityChecker probes configured registries.
+//
+// A consumer-defined interface: the API needs one method, not the checker's
+// construction (docs/design/15 §6).
+type ConnectivityChecker interface {
+	CheckProduct(ctx context.Context, p *product.Product) preflight.ProductResult
+}
+
 // Deps are the Coordinator's dependencies.
 type Deps struct {
 	Logger    *slog.Logger
@@ -46,6 +55,7 @@ type Deps struct {
 	Store     store.Store
 	Packages  *store.Packages
 	Discovery Discoverer
+	Preflight ConnectivityChecker
 	Leader    Leadership
 	Component string
 }
@@ -119,6 +129,14 @@ func (s *Server) routes() chi.Router {
 
 		r.Get("/products", s.handleListProducts)
 		r.Get("/products/{product}", s.handleGetProduct)
+
+		// AIP-136 custom methods. Connectivity checking is separate from the
+		// health check on purpose: health must not depend on third-party
+		// registries, or a vendor outage pulls this replica out of service.
+		if s.deps.Preflight != nil {
+			r.Post("/products:checkConnectivity", s.handleCheckConnectivity)
+			r.Post("/products/{product}:checkConnectivity", s.handleCheckConnectivity)
+		}
 
 		// Packages. Registered only when there is a store behind them, so a
 		// deployment without persistence returns an honest 404 rather than a

@@ -109,15 +109,32 @@ type Product struct {
 // Repository is the API view of a source or target.
 // Credentials are never included, in any form.
 type Repository struct {
-	Name          string     `json:"name"`
-	Registry      string     `json:"registry"`
-	Repository    string     `json:"repository"`
+	Name     string `json:"name"`
+	Registry string `json:"registry"`
+	// Repository is the single repository path, for a target or a
+	// single-repository source. Empty when a source covers several.
+	Repository string `json:"repository,omitempty"`
+	// Repositories is every path this covers. A source may span many; a target
+	// is always exactly one.
+	Repositories []string `json:"repositories,omitempty"`
+	// RepositoryDiscovery reports whether the set is enumerated from the
+	// registry catalog rather than declared.
+	RepositoryDiscovery bool `json:"repositoryDiscovery,omitempty"`
+	// RepositoryFilters narrows the set, however it was obtained.
+	RepositoryFilters *Filters `json:"repositoryFilters,omitempty"`
+
 	Type          string     `json:"type"`
 	Role          string     `json:"role"`
 	Default       bool       `json:"default,omitempty"`
 	PromotionOnly bool       `json:"promotionOnly,omitempty"`
 	Discovery     *Discovery `json:"discovery,omitempty"`
 	RateLimits    RateLimits `json:"rateLimits"`
+}
+
+// Filters is an include/exclude pair of RE2 patterns.
+type Filters struct {
+	Include []string `json:"include,omitempty"`
+	Exclude []string `json:"exclude,omitempty"`
 }
 
 type Discovery struct {
@@ -266,7 +283,8 @@ type Package struct {
 	// supersede each other.
 	SupersededBy string `json:"supersededBy,omitempty"`
 
-	// Source identifies where it was discovered.
+	// SourceRepository is the repository path it was discovered in, e.g.
+	// "suite/core". A product may span several.
 	SourceRepository string `json:"sourceRepository,omitempty"`
 }
 
@@ -323,6 +341,14 @@ type DiscoverPackagesRequest struct {
 // and an operator triggering it after a vendor announcement wants the answer,
 // not a job ID to poll.
 type DiscoverPackagesResponse struct {
+	// Repositories is how many were scanned. A source may cover several.
+	Repositories int `json:"repositories"`
+	// RepositoriesFromCatalog is how many came from `/v2/_catalog` rather than
+	// from configuration.
+	RepositoriesFromCatalog int `json:"repositoriesFromCatalog,omitempty"`
+	// RepositoriesFiltered is how many candidates repositoryFilters rejected.
+	RepositoriesFiltered int `json:"repositoriesFiltered,omitempty"`
+
 	TagsListed   int `json:"tagsListed"`
 	TagsAdmitted int `json:"tagsAdmitted"`
 	// PackagesDiscovered counts genuinely new packages. Zero on a re-scan is
@@ -333,4 +359,63 @@ type DiscoverPackagesResponse struct {
 	DurationMs         int64 `json:"durationMs"`
 	// TagErrors are per-tag failures that did not stop the scan.
 	TagErrors []string `json:"tagErrors,omitempty"`
+	// RepositoryErrors are per-repository failures that did not stop the scan.
+	RepositoryErrors []string `json:"repositoryErrors,omitempty"`
+}
+
+// ---------------------------------------------------------------------------
+// Connectivity checks
+// ---------------------------------------------------------------------------
+
+// CheckStatus is one connectivity probe's outcome.
+type CheckStatus string
+
+const (
+	CheckOK      CheckStatus = "OK"
+	CheckFailed  CheckStatus = "FAILED"
+	CheckWarning CheckStatus = "WARNING"
+	// CheckSkipped means the probe did not apply, or an earlier one failed and
+	// made it meaningless. Reported rather than omitted: "we did not check"
+	// and "it passed" must not look the same.
+	CheckSkipped CheckStatus = "SKIPPED"
+)
+
+// CheckStep is one probe against one repository.
+type CheckStep struct {
+	Name      string      `json:"name"`
+	Status    CheckStatus `json:"status"`
+	Detail    string      `json:"detail,omitempty"`
+	Hint      string      `json:"hint,omitempty"`
+	LatencyMs float64     `json:"latencyMs,omitempty"`
+}
+
+// RepositoryCheck is every probe for one configured repository.
+type RepositoryCheck struct {
+	Name       string      `json:"name"`
+	Role       string      `json:"role"`
+	Registry   string      `json:"registry"`
+	Repository string      `json:"repository,omitempty"`
+	Status     CheckStatus `json:"status"`
+	Steps      []CheckStep `json:"steps"`
+}
+
+// ProductCheck is every repository of one product.
+type ProductCheck struct {
+	Product      string            `json:"product"`
+	Status       CheckStatus       `json:"status"`
+	Repositories []RepositoryCheck `json:"repositories"`
+}
+
+// CheckConnectivityResponse is returned by the products:checkConnectivity
+// custom method.
+//
+// Deliberately NOT part of the health check. Health answers "is the service
+// working?" and backs readiness; if a vendor's outage made it fail, a vendor's
+// bad afternoon would pull our pods out of service, and an operator could not
+// tell whose fault an unhealthy reading was. This answers a different
+// question — "is my configuration correct?" — makes real calls to third
+// parties, and is run on demand.
+type CheckConnectivityResponse struct {
+	Status   CheckStatus    `json:"status"`
+	Products []ProductCheck `json:"products"`
 }

@@ -112,7 +112,9 @@ func (c *Client) ListPackages(ctx context.Context, product string, opts ListPack
 
 // ListPackagesOptions filters a package listing.
 type ListPackagesOptions struct {
-	Tag string
+	// Repository narrows to one repository path. A product may span several.
+	Repository string
+	Tag        string
 	// State is the SCREAMING_SNAKE wire form, e.g. "DISCOVERED".
 	State     string
 	PageSize  int
@@ -121,6 +123,9 @@ type ListPackagesOptions struct {
 
 func (o ListPackagesOptions) query() string {
 	q := url.Values{}
+	if o.Repository != "" {
+		q.Set("repository", o.Repository)
+	}
 	if o.Tag != "" {
 		q.Set("tag", o.Tag)
 	}
@@ -160,6 +165,21 @@ func (c *Client) DiscoverPackages(ctx context.Context, product, source string) (
 		"/api/v1/products/"+url.PathEscape(product)+"/packages:discover",
 		DiscoverPackagesRequest{Source: source}, &out)
 	return &out, err
+}
+
+// CheckConnectivity probes a product's registries, or every product's when
+// product is empty.
+//
+// Slow by nature: it makes real calls to third-party registries. Deliberately
+// separate from HealthCheck, which must not depend on them.
+func (c *Client) CheckConnectivity(ctx context.Context, product string) (*CheckConnectivityResponse, error) {
+	// The colon is an AIP-136 structural separator and must NOT be escaped.
+	path := "/api/v1/products:checkConnectivity"
+	if product != "" {
+		path = "/api/v1/products/" + url.PathEscape(product) + ":checkConnectivity"
+	}
+	var out CheckConnectivityResponse
+	return &out, c.post(ctx, path, struct{}{}, &out)
 }
 
 func (c *Client) post(ctx context.Context, path string, in, out any) error {

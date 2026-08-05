@@ -180,15 +180,21 @@ func (c *Catalog) upsertRepository(
 		return 0, fmt.Errorf("check ownership of %s/%s: %w", r.Registry, r.Repository, err)
 	}
 
+	// managed_by is set to 'config' on both insert and update: a repository a
+	// human has now declared is a declaration, even if discovery found it first.
+	// Reconciliation then owns its lifecycle, which is what the operator means
+	// by writing it down.
 	upsert := c.dialect.Rewrite(`
 		INSERT INTO repositories
-			(product_id, role, name, registry_host, repository_path, registry_type, active, updated_at)
-		VALUES (?, ?, ?, ?, ?, ?, ` + c.dialect.Bool(true) + `, ` + c.dialect.Now() + `)
+			(product_id, role, name, registry_host, repository_path, registry_type,
+			 managed_by, active, updated_at)
+		VALUES (?, ?, ?, ?, ?, ?, 'config', ` + c.dialect.Bool(true) + `, ` + c.dialect.Now() + `)
 		ON CONFLICT (registry_host, repository_path) DO UPDATE SET
 			product_id    = excluded.product_id,
 			role          = excluded.role,
 			name          = excluded.name,
 			registry_type = excluded.registry_type,
+			managed_by    = 'config',
 			active        = ` + c.dialect.Bool(true) + `,
 			updated_at    = ` + c.dialect.Now() + `
 		RETURNING id`)
@@ -231,6 +237,15 @@ func deactivateExcept(
 ) (int, error) {
 	query := "UPDATE " + table + " SET active = " + d.Bool(false) +
 		", updated_at = " + d.Now() + " WHERE active = " + d.Bool(true)
+
+	// Repositories discovery found in the registry catalog are not in
+	// configuration and must survive reconciliation. Without this clause every
+	// reload would deactivate them and the next scan would revive them, flapping
+	// the rows and churning the audit trail for no reason. Their lifecycle
+	// belongs to discovery, which deactivates them when they leave the catalog.
+	if table == "repositories" {
+		query += " AND managed_by = 'config'"
+	}
 
 	args := make([]any, 0, len(keep))
 	if len(keep) > 0 {

@@ -553,7 +553,29 @@ func (p *Packages) ListPackages(ctx context.Context, f ListPackagesFilter) ([]Pa
 	if limit <= 0 || limit > 1000 {
 		limit = 100
 	}
-	query += " ORDER BY pk.discovered_at DESC, pk.id DESC LIMIT ? OFFSET ?"
+	// Newest RELEASE first, by the vendor's own declared build date — which is
+	// the order a person thinks about releases in, and not the same as the
+	// order we happened to notice them.
+	//
+	// The CASE is there because the two dialects DISAGREE about where NULLs go.
+	// Measured, not assumed: with a plain `published_at DESC`, SQLite sorts
+	// NULLs last and PostgreSQL sorts them FIRST. So on Postgres the packages
+	// whose publisher set no date would head the list — the least informative
+	// rows first — and nobody would notice until production, because the
+	// development default is SQLite and it looks correct there.
+	//
+	// The CASE makes both dialects agree explicitly rather than relying on a
+	// default neither of them documents as portable.
+	//
+	// Packages with no published date fall to the end and are then ordered by
+	// when we found them, which is the best available answer for a publisher
+	// that sets no annotations.
+	query += `
+		 ORDER BY CASE WHEN pk.published_at IS NULL THEN 1 ELSE 0 END,
+		          pk.published_at DESC,
+		          pk.discovered_at DESC,
+		          pk.id DESC
+		 LIMIT ? OFFSET ?`
 	args = append(args, limit, max(f.Offset, 0))
 
 	rows, err := p.db.QueryContext(ctx, p.dialect.Rewrite(query), args...)

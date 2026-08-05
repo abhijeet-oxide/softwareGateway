@@ -109,22 +109,28 @@ func renderPackageList(w io.Writer, resp *v1.ListPackagesResponse) error {
 	multiRepo := spansRepositories(resp.Packages)
 
 	tw := newTabWriter(w)
+	// PUBLISHED before DISCOVERED, matching the sort order: the list is ordered
+	// by when the vendor says a release was built, which is the order a person
+	// thinks about releases in. DISCOVERED stays because the two genuinely
+	// differ — a release published in March that we only saw in July is worth
+	// being able to notice.
 	if multiRepo {
-		fmt.Fprintln(tw, "REPOSITORY\tTAG\tDIGEST\tSTATE\tSIZE\tARTIFACTS\tBLOBS\tDISCOVERED")
+		fmt.Fprintln(tw, "REPOSITORY\tTAG\tDIGEST\tSTATE\tSIZE\tARTIFACTS\tBLOBS\tPUBLISHED\tDISCOVERED")
 	} else {
-		fmt.Fprintln(tw, "TAG\tDIGEST\tSTATE\tSIZE\tARTIFACTS\tBLOBS\tDISCOVERED")
+		fmt.Fprintln(tw, "TAG\tDIGEST\tSTATE\tSIZE\tARTIFACTS\tBLOBS\tPUBLISHED\tDISCOVERED")
 	}
 	for _, p := range resp.Packages {
 		if multiRepo {
 			fmt.Fprintf(tw, "%s\t", dash(p.SourceRepository))
 		}
-		fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%d\t%s\t%s\n",
+		fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%d\t%s\t%s\t%s\n",
 			p.Tag,
 			shortDigest(p.ManifestDigest),
 			strings.ToLower(string(p.State)),
 			humanBytesOpt(p.TotalBytes),
 			p.ArtifactCount,
 			optionalCount(p.BlobCount),
+			optionalTime(p.PublishedAt),
 			shortTime(p.DiscoveredAt),
 		)
 	}
@@ -493,7 +499,7 @@ func shortDigest(d string) string {
 // for one would be a claim nobody would think to question.
 func humanBytesOpt(v *v1.Int64String) string {
 	if v == nil {
-		return "not measured"
+		return notAvailable
 	}
 	return humanBytes(*v)
 }
@@ -690,12 +696,28 @@ func humanPhase(p string) string {
 	}
 }
 
+// notAvailable is what a column shows when the value genuinely is not known.
+//
+// One token everywhere, and deliberately not "0" or "-": those read as
+// measurements. A package whose root is an index has no measured size until
+// something walks its tree, and the table has to say that rather than imply an
+// empty package.
+const notAvailable = "n/a"
+
 // optionalCount renders a count that may not have been measured.
 func optionalCount(n *int) string {
 	if n == nil {
-		return "?"
+		return notAvailable
 	}
 	return strconv.Itoa(*n)
+}
+
+// optionalTime renders a timestamp the publisher may never have set.
+func optionalTime(v string) string {
+	if strings.TrimSpace(v) == "" {
+		return notAvailable
+	}
+	return shortTime(v)
 }
 
 func newPackagesInspectCommand() *cobra.Command {

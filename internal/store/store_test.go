@@ -6,6 +6,7 @@ import (
 	"io/fs"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"sort"
 	"strings"
 	"testing"
@@ -411,3 +412,73 @@ func extractTables(sql string) []string {
 	}
 	return out
 }
+
+// TestListPackagesOrdersByPublishedDate covers the ordering a listing is read
+// in: newest RELEASE first, by the vendor's declared build date.
+//
+// Not the same as the order we noticed them. A backfill, a re-scan after an
+// outage, or simply adding a repository years after its first release all
+// produce a discovery order that has nothing to do with release order.
+func TestListPackagesOrdersByPublishedDate(t *testing.T) {
+	s := openTestStore(t)
+	p := NewPackages(s)
+
+	mustExec(t, s.DB(), `INSERT INTO products (id,name,config_hash,config)
+	                     VALUES (1,'vendor-a','h','{}')`)
+	mustExec(t, s.DB(), `INSERT INTO repositories (id,product_id,role,name,registry_host,repository_path)
+	                     VALUES (1,1,'source','src','reg.example.com','a/b')`)
+	const productID, repoID = 1, 1
+
+	// Inserted in an order that is neither published nor reverse-published, so
+	// passing cannot be an accident of insertion order.
+	seed := []struct {
+		tag       string
+		published *string
+	}{
+		{"v2", strPtr("2024-06-12T17:56:19Z")},
+		{"v4", nil}, // publisher set no annotation
+		{"v1", strPtr("2023-01-05T09:00:00Z")},
+		{"v3", strPtr("2025-11-30T23:15:00Z")},
+	}
+	for _, sd := range seed {
+		tx, err := s.DB().BeginTx(t.Context(), nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := p.InsertPackage(t.Context(), tx, PackageRow{
+			ProductID: productID, SourceRepoID: repoID, Tag: sd.tag,
+			ManifestDigest: "sha256:" + strings.Repeat(sd.tag[1:], 64),
+			MediaType:      "application/vnd.oci.image.index.v1+json",
+			PublishedAt:    sd.published,
+		}); err != nil {
+			t.Fatalf("insert %s: %v", sd.tag, err)
+		}
+		if err := tx.Commit(); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	rows, err := p.ListPackages(t.Context(), ListPackagesFilter{ProductName: "vendor-a", Limit: 10})
+	if err != nil {
+		t.Fatalf("list: %v", err)
+	}
+
+	got := make([]string, len(rows))
+	for i, r := range rows {
+		got[i] = r.Tag
+	}
+	// v3 (2025) then v2 (2024) then v1 (2023), and the undated one LAST.
+	//
+	// Worth being straight about what this covers: it runs on SQLite, whose
+	// plain `DESC` already puts NULLs last, so it would pass with or without
+	// the CASE in the query. It pins the INTENDED order. PostgreSQL is the one
+	// that sorts NULLs first on a plain DESC and therefore needs the CASE, and
+	// that half is not covered here — there is no Postgres in the unit suite by
+	// design (it must run with Docker stopped).
+	want := []string{"v3", "v2", "v1", "v4"}
+	if !slices.Equal(got, want) {
+		t.Errorf("order = %v, want %v", got, want)
+	}
+}
+
+func strPtr(s string) *string { return &s }

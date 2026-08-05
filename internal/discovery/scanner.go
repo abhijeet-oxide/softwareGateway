@@ -664,6 +664,7 @@ func (s *Scanner) recordPackage(
 		TotalBytes:     t.TotalBytes,
 		ArtifactCount:  len(t.Artifacts),
 		BlobCount:      t.BlobCount,
+		PublishedAt:    t.PublishedAt,
 	})
 	if errors.Is(err, store.ErrAlreadyExists) {
 		// A concurrent scan won the race. Nothing to do, and nothing wrong:
@@ -743,6 +744,7 @@ func (s *Scanner) writeTree(ctx context.Context, tx *sql.Tx, packageID int64, t 
 			Platform:     a.Descriptor.Platform.String(),
 			Depth:        a.Depth,
 			Raw:          a.Raw,
+			Annotations:  a.Descriptor.Annotations,
 		})
 		if err != nil {
 			return err

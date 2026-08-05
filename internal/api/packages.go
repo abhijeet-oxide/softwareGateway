@@ -149,6 +149,7 @@ func (s *Server) handleListArtifacts(w http.ResponseWriter, r *http.Request) {
 			Platform:     a.Platform,
 			Depth:        a.Depth,
 			Fetched:      a.Fetched,
+			Annotations:  a.Annotations,
 		}
 		if a.ParentID != nil {
 			artifact.ParentID = strconv.FormatInt(*a.ParentID, 10)
@@ -381,6 +382,9 @@ func toAPIPackage(productName string, row store.PackageRow) v1.Package {
 		State:            v1.PackageState(strings.ToUpper(row.State)),
 		DiscoveredAt:     row.DiscoveredAt,
 		SourceRepository: row.SourceRepository,
+	}
+	if row.PublishedAt != nil {
+		p.PublishedAt = *row.PublishedAt
 	}
 	if row.TotalBytes != nil {
 		v := v1.Int64String(strconv.FormatInt(*row.TotalBytes, 10))

@@ -3,6 +3,7 @@ package store
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
 )
@@ -31,7 +32,16 @@ type PackageRow struct {
 	BlobCount     *int
 	State         string
 	DiscoveredAt  string
-	SupersededBy  *int64
+	// PublishedAt is when the VENDOR says the artifact was built, from the
+	// standard org.opencontainers.image.created annotation. Nil when the
+	// publisher set none, which the spec permits.
+	//
+	// Deliberately separate from DiscoveredAt: one is a claim we were handed,
+	// the other an observation we made. Merging them would lose the ability to
+	// say which — and "published in March, we only noticed in July" is exactly
+	// the sort of thing worth being able to see.
+	PublishedAt  *string
+	SupersededBy *int64
 	// SourceRepository is the repository path this was discovered in. Joined
 	// on read rather than denormalised: a product may span several
 	// repositories, and a listing that does not say which is ambiguous.
@@ -49,6 +59,12 @@ type ArtifactRow struct {
 	SizeBytes    int64
 	Platform     string
 	Depth        int
+	// Annotations is the artifact's annotation map, stored verbatim as JSON.
+	//
+	// Kept whole rather than picked apart so a vendor's own keys survive
+	// without this project knowing they exist. The alternative is a column per
+	// vendor, which does not end.
+	Annotations map[string]string
 	// Raw is the manifest exactly as served. NIL means this artifact was LISTED
 	// by its parent index and not fetched, so we have the vendor's word for its
 	// digest rather than bytes we hashed ourselves.
@@ -119,15 +135,15 @@ func (p *Packages) InsertPackage(ctx context.Context, tx *sql.Tx, row PackageRow
 	query := p.dialect.Rewrite(`
 		INSERT INTO packages
 			(product_id, source_repo_id, tag, manifest_digest, media_type,
-			 total_bytes, artifact_count, blob_count, state, updated_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ` + p.dialect.Now() + `)
+			 total_bytes, artifact_count, blob_count, published_at, state, updated_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ` + p.dialect.Now() + `)
 		ON CONFLICT (source_repo_id, tag, manifest_digest) DO NOTHING
 		RETURNING id`)
 
 	var id int64
 	err := tx.QueryRowContext(ctx, query,
 		row.ProductID, row.SourceRepoID, row.Tag, row.ManifestDigest, row.MediaType,
-		row.TotalBytes, row.ArtifactCount, row.BlobCount, state,
+		row.TotalBytes, row.ArtifactCount, row.BlobCount, row.PublishedAt, state,
 	).Scan(&id)
 
 	switch {
@@ -179,15 +195,15 @@ func (p *Packages) InsertArtifact(ctx context.Context, tx *sql.Tx, a ArtifactRow
 	query := p.dialect.Rewrite(`
 		INSERT INTO package_artifacts
 			(package_id, parent_id, digest, media_type, artifact_type,
-			 size_bytes, platform, depth, raw)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+			 size_bytes, platform, depth, raw, annotations)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT (package_id, digest) DO NOTHING
 		RETURNING id`)
 
 	var id int64
 	err := tx.QueryRowContext(ctx, query,
 		a.PackageID, a.ParentID, a.Digest, a.MediaType, nullable(a.ArtifactType),
-		a.SizeBytes, nullable(a.Platform), a.Depth, a.Raw,
+		a.SizeBytes, nullable(a.Platform), a.Depth, a.Raw, annotationsJSON(a.Annotations),
 	).Scan(&id)
 
 	switch {
@@ -512,7 +528,7 @@ func (p *Packages) ListPackages(ctx context.Context, f ListPackagesFilter) ([]Pa
 		       -- would put a wrong number in front of an operator. artifact_count
 		       -- IS coalesced because it is always known once a package exists.
 		       pk.media_type, pk.total_bytes, COALESCE(pk.artifact_count, 0),
-		       pk.blob_count, pk.state, pk.discovered_at, pk.superseded_by,
+		       pk.blob_count, pk.state, pk.discovered_at, pk.published_at, pk.superseded_by,
 		       COALESCE(sr.repository_path, '')
 		  FROM packages pk
 		  JOIN products pr ON pr.id = pk.product_id
@@ -552,7 +568,7 @@ func (p *Packages) ListPackages(ctx context.Context, f ListPackagesFilter) ([]Pa
 		if err := rows.Scan(
 			&r.ID, &r.ProductID, &r.SourceRepoID, &r.Tag, &r.ManifestDigest,
 			&r.MediaType, &r.TotalBytes, &r.ArtifactCount, &r.BlobCount,
-			&r.State, &r.DiscoveredAt, &r.SupersededBy, &r.SourceRepository,
+			&r.State, &r.DiscoveredAt, &r.PublishedAt, &r.SupersededBy, &r.SourceRepository,
 		); err != nil {
 			return nil, fmt.Errorf("scan package row: %w", err)
 		}
@@ -574,7 +590,7 @@ func (p *Packages) GetPackage(ctx context.Context, productName, ref string) (Pac
 		       -- would put a wrong number in front of an operator. artifact_count
 		       -- IS coalesced because it is always known once a package exists.
 		       pk.media_type, pk.total_bytes, COALESCE(pk.artifact_count, 0),
-		       pk.blob_count, pk.state, pk.discovered_at, pk.superseded_by,
+		       pk.blob_count, pk.state, pk.discovered_at, pk.published_at, pk.superseded_by,
 		       COALESCE(sr.repository_path, '')
 		  FROM packages pk
 		  JOIN products pr ON pr.id = pk.product_id
@@ -588,7 +604,7 @@ func (p *Packages) GetPackage(ctx context.Context, productName, ref string) (Pac
 	err := p.db.QueryRowContext(ctx, query, productName, ref, ref).Scan(
 		&r.ID, &r.ProductID, &r.SourceRepoID, &r.Tag, &r.ManifestDigest,
 		&r.MediaType, &r.TotalBytes, &r.ArtifactCount, &r.BlobCount,
-		&r.State, &r.DiscoveredAt, &r.SupersededBy, &r.SourceRepository,
+		&r.State, &r.DiscoveredAt, &r.PublishedAt, &r.SupersededBy, &r.SourceRepository,
 	)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
@@ -607,7 +623,7 @@ func (p *Packages) ListArtifacts(ctx context.Context, packageID int64) ([]Artifa
 	query := p.dialect.Rewrite(`
 		SELECT id, package_id, parent_id, digest, media_type,
 		       COALESCE(artifact_type, ''), size_bytes, COALESCE(platform, ''), depth,
-		       raw IS NOT NULL
+		       raw IS NOT NULL, annotations
 		  FROM package_artifacts
 		 WHERE package_id = ?
 		 ORDER BY depth, id`)
@@ -621,9 +637,17 @@ func (p *Packages) ListArtifacts(ctx context.Context, packageID int64) ([]Artifa
 	var out []ArtifactRow
 	for rows.Next() {
 		var a ArtifactRow
+		var annotations []byte
 		if err := rows.Scan(&a.ID, &a.PackageID, &a.ParentID, &a.Digest, &a.MediaType,
-			&a.ArtifactType, &a.SizeBytes, &a.Platform, &a.Depth, &a.Fetched); err != nil {
+			&a.ArtifactType, &a.SizeBytes, &a.Platform, &a.Depth, &a.Fetched,
+			&annotations); err != nil {
 			return nil, fmt.Errorf("scan artifact row: %w", err)
+		}
+		if len(annotations) > 0 {
+			// A malformed map is dropped rather than failing the listing: it is
+			// descriptive metadata, and an unreadable annotation must not make a
+			// package impossible to look at.
+			_ = json.Unmarshal(annotations, &a.Annotations)
 		}
 		out = append(out, a)
 	}
@@ -745,20 +769,21 @@ func (p *Packages) upsertArtifact(ctx context.Context, tx *sql.Tx, a ArtifactRow
 	query := p.dialect.Rewrite(`
 		INSERT INTO package_artifacts
 			(package_id, parent_id, digest, media_type, artifact_type,
-			 size_bytes, platform, depth, raw)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+			 size_bytes, platform, depth, raw, annotations)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT (package_id, digest) DO UPDATE SET
 			raw           = COALESCE(EXCLUDED.raw, package_artifacts.raw),
 			media_type    = EXCLUDED.media_type,
 			artifact_type = COALESCE(EXCLUDED.artifact_type, package_artifacts.artifact_type),
 			size_bytes    = EXCLUDED.size_bytes,
-			platform      = COALESCE(EXCLUDED.platform, package_artifacts.platform)
+			platform      = COALESCE(EXCLUDED.platform, package_artifacts.platform),
+			annotations   = COALESCE(EXCLUDED.annotations, package_artifacts.annotations)
 		RETURNING id`)
 
 	var id int64
 	err := tx.QueryRowContext(ctx, query,
 		a.PackageID, a.ParentID, a.Digest, a.MediaType, nullable(a.ArtifactType),
-		a.SizeBytes, nullable(a.Platform), a.Depth, a.Raw,
+		a.SizeBytes, nullable(a.Platform), a.Depth, a.Raw, annotationsJSON(a.Annotations),
 	).Scan(&id)
 	if err != nil {
 		return 0, fmt.Errorf("upsert artifact %s: %w", a.Digest, err)
@@ -787,7 +812,7 @@ func (p *Packages) GetPackageByID(ctx context.Context, id int64) (PackageRow, er
 	query := p.dialect.Rewrite(`
 		SELECT pk.id, pk.product_id, pk.source_repo_id, pk.tag, pk.manifest_digest,
 		       pk.media_type, pk.total_bytes, COALESCE(pk.artifact_count, 0),
-		       pk.blob_count, pk.state, pk.discovered_at, pk.superseded_by,
+		       pk.blob_count, pk.state, pk.discovered_at, pk.published_at, pk.superseded_by,
 		       COALESCE(sr.repository_path, '')
 		  FROM packages pk
 		  LEFT JOIN repositories sr ON sr.id = pk.source_repo_id
@@ -797,7 +822,7 @@ func (p *Packages) GetPackageByID(ctx context.Context, id int64) (PackageRow, er
 	err := p.db.QueryRowContext(ctx, query, id).Scan(
 		&r.ID, &r.ProductID, &r.SourceRepoID, &r.Tag, &r.ManifestDigest,
 		&r.MediaType, &r.TotalBytes, &r.ArtifactCount, &r.BlobCount,
-		&r.State, &r.DiscoveredAt, &r.SupersededBy, &r.SourceRepository)
+		&r.State, &r.DiscoveredAt, &r.PublishedAt, &r.SupersededBy, &r.SourceRepository)
 	if errors.Is(err, sql.ErrNoRows) {
 		return PackageRow{}, ErrNotFound
 	}
@@ -805,4 +830,20 @@ func (p *Packages) GetPackageByID(ctx context.Context, id int64) (PackageRow, er
 		return PackageRow{}, fmt.Errorf("get package %d: %w", id, err)
 	}
 	return r, nil
+}
+
+// annotationsJSON encodes an annotation map for storage, or NULL when empty.
+//
+// NULL rather than "{}" so the COALESCE in upsertArtifact can tell "this write
+// carries no annotations" from "this artifact genuinely has none", and a
+// re-inspection cannot blank what discovery recorded.
+func annotationsJSON(m map[string]string) any {
+	if len(m) == 0 {
+		return nil
+	}
+	b, err := json.Marshal(m)
+	if err != nil {
+		return nil
+	}
+	return string(b)
 }

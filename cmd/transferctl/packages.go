@@ -215,6 +215,11 @@ func renderPackageDetail(w io.Writer, p *v1.Package, artifacts []v1.Artifact) er
 		fmt.Fprintln(w, "              until a transfer walks the tree)")
 	}
 	fmt.Fprintf(w, "Discovered   %s\n", p.DiscoveredAt)
+	if p.PublishedAt != "" {
+		// Labelled as the vendor's claim, because that is what it is: an
+		// annotation whoever published the artifact wrote. Discovered is ours.
+		fmt.Fprintf(w, "Published    %s  (declared by the publisher)\n", p.PublishedAt)
+	}
 
 	if p.SupersededBy != "" {
 		fmt.Fprintln(w)
@@ -260,6 +265,12 @@ func renderArtifactTree(w io.Writer, artifacts []v1.Artifact) {
 		label := shortDigest(a.Digest)
 		if a.Platform != "" {
 			label += "  " + a.Platform
+		}
+		if name := a.Annotations["org.opencontainers.image.ref.name"]; name != "" {
+			// The one annotation worth promoting into the tree: it is the
+			// difference between a listing of digests and a listing a person
+			// can read.
+			label = name + "  " + label
 		}
 		suffix := ""
 		if !a.Fetched {

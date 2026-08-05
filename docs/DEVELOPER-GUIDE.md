@@ -1058,6 +1058,17 @@ There was also a third cause, and it was the worst of the three: **every reposit
 
 If it is still slow after that, the requests themselves are slow: turn on request tracing (above), and `transferctl products check` times a real manifest fetch.
 
+**Where does `Published` come from, and why is it sometimes missing?**
+From `org.opencontainers.image.created` on the tag's manifest — a **standard OCI annotation**, not a vendor extension, so it works anywhere it is set. It is optional in the spec, so a publisher that sets none simply has no published date, and we record nothing rather than inventing one.
+
+It is deliberately separate from `Discovered`: one is the vendor's claim about when they built it, the other is when we saw it. Both are shown, and labelled.
+
+Every other annotation — including vendor-specific ones like `com.nokia.ncd.orb.type` — is kept verbatim on the artifact and returned by `packages describe -o json`, so you can use keys this tool has never heard of:
+
+```bash
+transferctl packages describe <product> <tag> -o json | jq '.artifacts[].annotations'
+```
+
 **`packages list` shows `not measured` and `?` instead of a size**
 Expected, for a package whose root is an index — and it is one command away:
 

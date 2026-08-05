@@ -38,6 +38,13 @@ type Registry struct {
 	// API.
 	APIRequests *prometheus.CounterVec
 	APILatency  *prometheus.HistogramVec
+
+	// Discovery (docs/design/07 §7, docs/design/12 §2.3).
+	DiscoveryScans       *prometheus.CounterVec
+	DiscoveryErrors      *prometheus.CounterVec
+	DiscoveryPackages    *prometheus.CounterVec
+	DiscoveryDuration    *prometheus.HistogramVec
+	DiscoveryLastSuccess *prometheus.GaugeVec
 }
 
 // New builds the registry for a component and registers the Go runtime and
@@ -99,6 +106,45 @@ func New(component string) *Registry {
 			Help:      "API request latency by route template and method.",
 			Buckets:   prometheus.DefBuckets,
 		}, []string{"route", "method"}),
+
+		DiscoveryScans: prometheus.NewCounterVec(prometheus.CounterOpts{
+			Namespace: namespace,
+			Name:      "discovery_scans_total",
+			Help:      "Discovery scans by product, source and outcome.",
+		}, []string{"product", "source", "outcome"}),
+
+		DiscoveryErrors: prometheus.NewCounterVec(prometheus.CounterOpts{
+			Namespace: namespace,
+			Name:      "discovery_errors_total",
+			Help:      "Discovery failures by product, source and error class.",
+		}, []string{"product", "source", "class"}),
+
+		DiscoveryPackages: prometheus.NewCounterVec(prometheus.CounterOpts{
+			Namespace: namespace,
+			Name:      "discovery_packages_total",
+			Help:      "Packages recorded by discovery, by product and source.",
+		}, []string{"product", "source"}),
+
+		DiscoveryDuration: prometheus.NewHistogramVec(prometheus.HistogramOpts{
+			Namespace: namespace,
+			Name:      "discovery_scan_duration_seconds",
+			Help:      "Full-scan duration by product and source.",
+			// A scan is one HEAD per tag, so it scales with tag count rather
+			// than with bytes: seconds, not milliseconds, and the long tail is
+			// the interesting part. DefBuckets tops out at 10s and would put
+			// every slow vendor in one bucket.
+			Buckets: []float64{0.1, 0.5, 1, 2.5, 5, 10, 30, 60, 120, 300},
+		}, []string{"product", "source"}),
+
+		// THE metric to alert on, and the reason it is a timestamp rather than
+		// a counter: the dangerous failure mode is not "discovery is erroring
+		// loudly" but "discovery quietly stopped finding anything". Alert on
+		// staleness of this gauge, not on error rate.
+		DiscoveryLastSuccess: prometheus.NewGaugeVec(prometheus.GaugeOpts{
+			Namespace: namespace,
+			Name:      "discovery_last_success_timestamp_seconds",
+			Help:      "Unix time of the last successful scan, by product and source.",
+		}, []string{"product", "source"}),
 	}
 
 	reg.MustRegister(
@@ -109,6 +155,11 @@ func New(component string) *Registry {
 		m.LeaderElected,
 		m.APIRequests,
 		m.APILatency,
+		m.DiscoveryScans,
+		m.DiscoveryErrors,
+		m.DiscoveryPackages,
+		m.DiscoveryDuration,
+		m.DiscoveryLastSuccess,
 	)
 
 	info := version.Get(component)

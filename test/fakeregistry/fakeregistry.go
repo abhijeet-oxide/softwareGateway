@@ -169,6 +169,116 @@ func (r *Registry) RepushTag(repoPath, tag, newContent string) string {
 		"application/vnd.oci.image.manifest.v1+json")
 }
 
+// Layer describes a blob referenced by a seeded manifest.
+//
+// Only the descriptor is modelled: discovery records blob identity and size
+// from the manifest and never reads blob bytes, so seeding real blob content
+// would add nothing a test could observe.
+type Layer struct {
+	Digest    string
+	Size      int64
+	MediaType string
+}
+
+// NewLayer builds a layer descriptor from content, so its digest is real.
+func NewLayer(content string) Layer {
+	sum := sha256.Sum256([]byte(content))
+	return Layer{
+		Digest:    "sha256:" + hex.EncodeToString(sum[:]),
+		Size:      int64(len(content)),
+		MediaType: "application/vnd.oci.image.layer.v1.tar+gzip",
+	}
+}
+
+// AddImage seeds a genuine OCI image manifest with a config and layers.
+//
+// Used where a test needs the artifact TREE rather than just a digest: the
+// walk in internal/discovery parses config and layer descriptors out of these
+// bytes.
+func (r *Registry) AddImage(repoPath, tag string, layers ...Layer) string {
+	// The config digest is derived from the layers as well as the name, so two
+	// images differing only in their layers get different configs — as real
+	// per-platform images do. Deriving it from the tag alone would make the
+	// children of an index (seeded with no tag) share one config and quietly
+	// understate the blob count.
+	material := "config-" + repoPath + "-" + tag
+	for _, l := range layers {
+		material += "|" + l.Digest
+	}
+	config := NewLayer(material)
+
+	body := map[string]any{
+		"schemaVersion": 2,
+		"mediaType":     "application/vnd.oci.image.manifest.v1+json",
+		"config": map[string]any{
+			"mediaType": "application/vnd.oci.image.config.v1+json",
+			"digest":    config.Digest,
+			"size":      config.Size,
+		},
+		"layers": layerDescriptors(layers),
+	}
+
+	raw, err := json.Marshal(body)
+	if err != nil {
+		panic("fakeregistry: marshal image manifest: " + err.Error())
+	}
+	return r.AddManifest(repoPath, tag, raw, "application/vnd.oci.image.manifest.v1+json")
+}
+
+// AddIndex seeds an OCI index pointing at already-seeded child manifests.
+//
+// platforms and childDigests are parallel slices; a child with an empty
+// platform string gets no platform field.
+func (r *Registry) AddIndex(repoPath, tag string, childDigests, platforms []string) string {
+	manifests := make([]map[string]any, 0, len(childDigests))
+
+	r.mu.Lock()
+	rp := r.repos[repoPath]
+	for i, d := range childDigests {
+		size := 0
+		if rp != nil {
+			size = len(rp.manifests[d])
+		}
+		entry := map[string]any{
+			"mediaType": "application/vnd.oci.image.manifest.v1+json",
+			"digest":    d,
+			"size":      size,
+		}
+		if i < len(platforms) && platforms[i] != "" {
+			os, arch, _ := strings.Cut(platforms[i], "/")
+			entry["platform"] = map[string]any{"os": os, "architecture": arch}
+		}
+		manifests = append(manifests, entry)
+	}
+	r.mu.Unlock()
+
+	raw, err := json.Marshal(map[string]any{
+		"schemaVersion": 2,
+		"mediaType":     "application/vnd.oci.image.index.v1+json",
+		"manifests":     manifests,
+	})
+	if err != nil {
+		panic("fakeregistry: marshal index: " + err.Error())
+	}
+	return r.AddManifest(repoPath, tag, raw, "application/vnd.oci.image.index.v1+json")
+}
+
+func layerDescriptors(layers []Layer) []map[string]any {
+	out := make([]map[string]any, 0, len(layers))
+	for _, l := range layers {
+		mt := l.MediaType
+		if mt == "" {
+			mt = "application/vnd.oci.image.layer.v1.tar+gzip"
+		}
+		out = append(out, map[string]any{
+			"mediaType": mt,
+			"digest":    l.Digest,
+			"size":      l.Size,
+		})
+	}
+	return out
+}
+
 // RemoveTag deletes a tag.
 func (r *Registry) RemoveTag(repoPath, tag string) {
 	r.mu.Lock()
@@ -204,6 +314,18 @@ func (r *Registry) TruncateNext(pathContains string, n int) {
 	r.faults.mu.Lock()
 	defer r.faults.mu.Unlock()
 	r.faults.failNext[pathContains] = &fault{remaining: n, truncate: true}
+}
+
+// ClearFaults removes every pending fault.
+//
+// The "outage is over" half of a recovery test. Without it a test that injects
+// a generous fault count to survive the retry schedule leaves the remainder
+// queued, and the recovery it means to assert never happens — the failure looks
+// like a bug in discovery rather than in the test.
+func (r *Registry) ClearFaults() {
+	r.faults.mu.Lock()
+	defer r.faults.mu.Unlock()
+	r.faults.failNext = map[string]*fault{}
 }
 
 // takeFault consumes a pending fault for a path, if any.

@@ -41,6 +41,45 @@ type Repository struct {
 	caps     registry.Capabilities
 }
 
+// init registers this backend under its configured name.
+//
+// Registration rather than a switch in the abstraction: internal/registry does
+// not import this package, so adding a vendor backend never means editing the
+// interface it implements.
+func init() {
+	registry.Register(registry.DefaultType, func(c registry.ClientConfig) (registry.Source, error) {
+		return New(FromClientConfig(c))
+	})
+}
+
+// FromClientConfig translates the backend-neutral config into ours.
+func FromClientConfig(c registry.ClientConfig) Config {
+	return Config{
+		Registry:   c.Registry,
+		Repository: c.Repository,
+		PlainHTTP:  c.PlainHTTP,
+		Transport: transport.Config{
+			Username:              c.Username,
+			Password:              c.Password,
+			RequestsPerSecond:     c.RequestsPerSecond,
+			Burst:                 c.Burst,
+			MaxConnections:        c.MaxConnections,
+			CABundle:              c.CABundle,
+			HTTPSProxy:            c.HTTPSProxy,
+			NoProxy:               c.NoProxy,
+			ConnectTimeout:        c.ConnectTimeout,
+			ResponseHeaderTimeout: c.ResponseHeaderTimeout,
+			UserAgent:             c.UserAgent,
+			MaxRetryAttempts:      c.MaxRetryAttempts,
+			RetryBaseDelay:        c.RetryBaseDelay,
+			RetryMaxDelay:         c.RetryMaxDelay,
+			// HTTP/1.1 is forced so M2 and M3 share one transport. See the note
+			// on transport.Config.ForceHTTP1.
+			ForceHTTP1: true,
+		},
+	}
+}
+
 // Config describes one repository.
 type Config struct {
 	Registry   string

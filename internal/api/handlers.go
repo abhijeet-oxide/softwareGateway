@@ -197,7 +197,7 @@ func toAPIProduct(p *product.Product) v1.Product {
 			RepositoryDiscovery: s.EnumeratesRepositories(),
 			Type:                string(s.Type),
 			Role:                string(product.RoleSource),
-			RateLimits:          toAPIRateLimits(s.RateLimits),
+			Concurrency:         toAPIConcurrency(s.Concurrency),
 			Discovery: &v1.Discovery{
 				Enabled:         s.Discovery.IsEnabled(),
 				IntervalSeconds: int(s.Discovery.Interval.Duration().Seconds()),
@@ -227,7 +227,7 @@ func toAPIProduct(p *product.Product) v1.Product {
 			Role:          string(product.RoleTarget),
 			Default:       t.Default,
 			PromotionOnly: t.PromotionOnly,
-			RateLimits:    toAPIRateLimits(t.RateLimits),
+			Concurrency:   toAPIConcurrency(t.Concurrency),
 		})
 	}
 
@@ -252,12 +252,9 @@ func toAPIProduct(p *product.Product) v1.Product {
 	return out
 }
 
-func toAPIRateLimits(r product.RateLimits) v1.RateLimits {
-	return v1.RateLimits{
-		MaxConcurrentDownloads: r.MaxConcurrentDownloads,
-		MaxConcurrentUploads:   r.MaxConcurrentUploads,
-		MaxConnections:         r.MaxConnections,
-		RequestsPerSecond:      r.RequestsPerSecond,
-		Burst:                  r.Burst,
+func toAPIConcurrency(c product.Concurrency) v1.Concurrency {
+	return v1.Concurrency{
+		PerRegistry:       c.PerRegistry,
+		RequestsPerSecond: c.RequestsPerSecond,
 	}
 }

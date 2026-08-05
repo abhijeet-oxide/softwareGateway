@@ -34,6 +34,13 @@ type Product struct {
 	// ConfigHash is the sha256 of the canonical document bytes, recorded so an
 	// audit record from March still resolves to the config in force in March.
 	ConfigHash string `json:"-"`
+
+	// Deprecations lists superseded keys this document still uses.
+	//
+	// Warnings, not errors: a document that keeps working is worth more than a
+	// tidy schema, and an operator who has just been paged is not the person to
+	// hand a migration to. `transferctl config check` reports them.
+	Deprecations []string `json:"-"`
 }
 
 type Metadata struct {
@@ -113,7 +120,14 @@ type Source struct {
 	Anonymous      bool            `json:"anonymous,omitempty"`
 	CredentialsRef *CredentialsRef `json:"credentialsRef,omitempty"`
 	Discovery      Discovery       `json:"discovery,omitempty"`
-	RateLimits     RateLimits      `json:"rateLimits,omitempty"`
+
+	// Concurrency overrides the application-level limit for this one registry.
+	// Almost always absent — see the Concurrency type.
+	Concurrency Concurrency `json:"concurrency,omitempty"`
+
+	// RateLimits is the superseded block. Accepted and folded into Concurrency;
+	// see LegacyRateLimits.
+	RateLimits LegacyRateLimits `json:"rateLimits,omitempty"`
 
 	// Network overrides the product's TLS trust, proxy and timeouts for this
 	// source. Set fields win; unset ones inherit.
@@ -188,7 +202,12 @@ type Target struct {
 	Type           RegistryType    `json:"type,omitempty"`
 	Anonymous      bool            `json:"anonymous,omitempty"`
 	CredentialsRef *CredentialsRef `json:"credentialsRef,omitempty"`
-	RateLimits     RateLimits      `json:"rateLimits,omitempty"`
+
+	// Concurrency overrides the application-level limit for this one registry.
+	Concurrency Concurrency `json:"concurrency,omitempty"`
+
+	// RateLimits is the superseded block. Accepted and folded into Concurrency.
+	RateLimits LegacyRateLimits `json:"rateLimits,omitempty"`
 
 	// Network overrides the product's TLS trust, proxy and timeouts for this
 	// target. A destination inside the datacentre and a vendor outside it
@@ -252,66 +271,165 @@ type Discovery struct {
 	// would point thousands of scanners at one registry.
 	MaxRepositories int `json:"maxRepositories,omitempty"`
 
-	// Concurrency bounds how much of a scan runs in parallel.
-	Concurrency Concurrency `json:"concurrency,omitempty"`
+	// Concurrency is the superseded per-scan block. Accepted and folded into the
+	// source's Concurrency; see LegacyScanConcurrency.
+	Concurrency LegacyScanConcurrency `json:"concurrency,omitempty"`
 }
 
 // DefaultMaxRepositories caps catalog adoption when unset.
 const DefaultMaxRepositories = 200
 
-// Concurrency bounds the parallelism of one scan.
+// Concurrency bounds how hard softwareGateway works ONE REGISTRY.
 //
-// A scan used to be strictly sequential — one repository at a time, one tag at
-// a time — which is fine for a handful of repositories on a fast registry and
-// useless for a real vendor catalogue. Measured: 48 repositories, 28 admitted
-// tags in the first one, and after two minutes the scan was still on the first
-// tag of the first repository.
+// It replaced seven interacting numbers with two, and the argument for that is
+// worth keeping. A source used to carry `rateLimits.maxConcurrentDownloads`,
+// `maxConcurrentUploads`, `maxConnections`, `requestsPerSecond` and `burst`,
+// plus `discovery.concurrency.repositories` and `.tags` — set per source, per
+// target, in every product document. Nobody could predict what a change to one
+// of them would do, because the answer depended on the other six.
 //
-// Bounded rather than unlimited, and bounded in TWO places, because they cost
-// different things. Repositories each have their own client, so parallelism
-// there multiplies connections and token exchanges against the registry. Tags
-// within a repository share one client, so they are bounded by that client's
-// connection pool and rate limiter and are the cheaper axis to widen.
+// Worse, they were not independent. Every request a scan makes goes through one
+// connection pool, so THE POOL IS THE CONCURRENCY LIMIT: point more goroutines
+// at a pool of 32 and you get 32 in-flight requests and a queue. The old
+// defaults hid this by agreeing with each other — 4 repositories × 8 tags = 32
+// = maxConnections — an agreement nobody wrote down and any edit would break.
+// A pool sized above the worker count is idle sockets; below it is goroutines
+// blocked on a semaphore they cannot see.
+//
+// So there is one number. PerRegistry is the connection pool size AND the
+// number of in-flight requests, because those are the same thing.
+//
+// It belongs at the APPLICATION level: `concurrency.perRegistry` in system
+// configuration is what a product inherits, and the per-source block below
+// exists for the case that actually comes up — one fragile vendor that needs a
+// smaller number than the rest of the fleet.
 type Concurrency struct {
-	// Repositories scanned at once. Default DefaultRepositoryConcurrency.
-	Repositories int `json:"repositories,omitempty"`
-	// Tags resolved at once WITHIN one repository. Default
-	// DefaultTagConcurrency.
-	Tags int `json:"tags,omitempty"`
+	// PerRegistry is the number of requests in flight against one registry, and
+	// the size of the connection pool serving them. Zero inherits the
+	// application-level value.
+	PerRegistry int `json:"perRegistry,omitempty"`
+
+	// RequestsPerSecond is a politeness ceiling ON TOP of PerRegistry, for a
+	// vendor that rate-limits by rate rather than by connection count. Zero —
+	// the usual case — means no artificial limit, and PerRegistry alone bounds
+	// the load.
+	//
+	// Burst is deliberately not configurable. It was a third number whose only
+	// sensible value is a small multiple of the rate, so it is derived.
+	RequestsPerSecond int `json:"requestsPerSecond,omitempty"`
 }
 
-// Concurrency defaults. Conservative: a vendor registry is someone else's
-// infrastructure and the cost of being impolite falls on them, so these are
-// numbers that make a scan minutes rather than hours without looking like an
-// attack. Raise them for a registry you own.
 const (
-	DefaultRepositoryConcurrency = 4
-	DefaultTagConcurrency        = 8
+	// DefaultPerRegistry is what the fleet uses unless system configuration says
+	// otherwise.
+	//
+	// 32 rather than a rounder, more cautious number because it is what the
+	// system already did: the old defaults multiplied out to exactly 32 in-flight
+	// requests against a source, and this change is meant to alter the SHAPE of
+	// the configuration, not the load it produces. Lower it for a vendor that
+	// complains; raise it for a registry you own.
+	DefaultPerRegistry = 32
 
-	// maxConcurrency caps whatever configuration asks for. A typo of 1000 must
-	// not become a thousand concurrent connections to a vendor.
-	maxConcurrency = 64
+	// maxPerRegistry caps whatever configuration asks for. A typo of 1000 must
+	// not become a thousand concurrent connections to someone else's registry.
+	maxPerRegistry = 128
 )
 
-// EffectiveRepositories returns the repository concurrency to use.
-func (c Concurrency) EffectiveRepositories() int {
-	return clampConcurrency(c.Repositories, DefaultRepositoryConcurrency)
-}
-
-// EffectiveTags returns the tag concurrency to use.
-func (c Concurrency) EffectiveTags() int {
-	return clampConcurrency(c.Tags, DefaultTagConcurrency)
-}
-
-func clampConcurrency(v, fallback int) int {
-	switch {
-	case v <= 0:
-		return fallback
-	case v > maxConcurrency:
-		return maxConcurrency
-	default:
-		return v
+// Resolve fills unset fields from the application-level defaults and clamps the
+// result, so every consumer reads a number that is already correct.
+func (c Concurrency) Resolve(app Concurrency) Concurrency {
+	if c.PerRegistry <= 0 {
+		c.PerRegistry = app.PerRegistry
 	}
+	if c.PerRegistry <= 0 {
+		c.PerRegistry = DefaultPerRegistry
+	}
+	if c.PerRegistry > maxPerRegistry {
+		c.PerRegistry = maxPerRegistry
+	}
+	if c.RequestsPerSecond <= 0 {
+		c.RequestsPerSecond = app.RequestsPerSecond
+	}
+	if c.RequestsPerSecond < 0 {
+		c.RequestsPerSecond = 0
+	}
+	return c
+}
+
+// Burst is the token-bucket burst for RequestsPerSecond.
+//
+// Derived rather than configured: twice the sustained rate absorbs the natural
+// clumping of a scan without letting a long idle period bank enough tokens to
+// arrive as a flood. Zero when there is no rate limit, which the limiter reads
+// as "unlimited".
+func (c Concurrency) Burst() int {
+	if c.RequestsPerSecond <= 0 {
+		return 0
+	}
+	return c.RequestsPerSecond * 2
+}
+
+// LegacyRateLimits is the superseded `rateLimits` block.
+//
+// Still parsed, because operators have these in live ConfigMaps and silently
+// ignoring a number someone deliberately set is worse than either honouring it
+// or rejecting it. Folded into Concurrency by Source.resolveConcurrency, which
+// also records a deprecation so `transferctl config check` can say so.
+type LegacyRateLimits struct {
+	MaxConcurrentDownloads int `json:"maxConcurrentDownloads,omitempty"`
+	MaxConcurrentUploads   int `json:"maxConcurrentUploads,omitempty"`
+	MaxConnections         int `json:"maxConnections,omitempty"`
+	RequestsPerSecond      int `json:"requestsPerSecond,omitempty"`
+	Burst                  int `json:"burst,omitempty"`
+}
+
+// set reports whether any field was configured.
+func (r LegacyRateLimits) set() bool { return r != LegacyRateLimits{} }
+
+// LegacyScanConcurrency is the superseded `discovery.concurrency` block.
+type LegacyScanConcurrency struct {
+	Repositories int `json:"repositories,omitempty"`
+	Tags         int `json:"tags,omitempty"`
+}
+
+func (c LegacyScanConcurrency) set() bool { return c != LegacyScanConcurrency{} }
+
+// foldLegacy merges superseded blocks into an explicit Concurrency and reports
+// what it did, for the deprecation notice.
+//
+// Explicit `concurrency` always wins: a document that has been migrated must not
+// have a stale `rateLimits` block quietly override the new one.
+func foldLegacy(c Concurrency, r LegacyRateLimits, scan LegacyScanConcurrency, where string) (Concurrency, []string) {
+	var notes []string
+
+	if c.PerRegistry <= 0 {
+		switch {
+		case r.MaxConnections > 0:
+			// The closest analogue by construction: maxConnections WAS the pool,
+			// and the pool was always the real ceiling.
+			c.PerRegistry = r.MaxConnections
+		case r.MaxConcurrentDownloads > 0:
+			c.PerRegistry = r.MaxConcurrentDownloads
+		case r.MaxConcurrentUploads > 0:
+			c.PerRegistry = r.MaxConcurrentUploads
+		case scan.Repositories > 0 || scan.Tags > 0:
+			// The old pair multiplied: R repositories each running T tags meant
+			// up to R×T requests in flight. Carrying the product forward keeps
+			// the load the operator actually tuned for.
+			c.PerRegistry = max(scan.Repositories, 1) * max(scan.Tags, 1)
+		}
+	}
+	if c.RequestsPerSecond <= 0 && r.RequestsPerSecond > 0 {
+		c.RequestsPerSecond = r.RequestsPerSecond
+	}
+
+	if r.set() {
+		notes = append(notes, where+".rateLimits is superseded by "+where+".concurrency")
+	}
+	if scan.set() {
+		notes = append(notes, where+".discovery.concurrency is superseded by "+where+".concurrency")
+	}
+	return c, notes
 }
 
 // EffectiveMaxRepositories returns the configured cap or the default.
@@ -333,44 +451,11 @@ func (d Discovery) IsEnabled() bool { return d.Enabled == nil || *d.Enabled }
 // slightly different implementations.
 type TagFilters = Filters
 
-// RateLimits are per repository and fleet-wide, not per worker.
-//
-// Fleet-wide matters: a per-worker limit would silently multiply by the
-// replica count and flatten a vendor registry the moment HPA scaled out.
-// The Coordinator divides these across active workers.
-type RateLimits struct {
-	MaxConcurrentDownloads int `json:"maxConcurrentDownloads,omitempty"`
-	MaxConcurrentUploads   int `json:"maxConcurrentUploads,omitempty"`
-	MaxConnections         int `json:"maxConnections,omitempty"`
-	RequestsPerSecond      int `json:"requestsPerSecond,omitempty"`
-	Burst                  int `json:"burst,omitempty"`
-}
-
 // Defaults from docs/design/02 section 5.3.
 const (
-	DefaultMaxConcurrentDownloads = 8
-	DefaultMaxConcurrentUploads   = 8
-	DefaultMaxConnections         = 32
-	DefaultDiscoveryInterval      = 15 * time.Minute
-	DefaultRulePriority           = 50
+	DefaultDiscoveryInterval = 15 * time.Minute
+	DefaultRulePriority      = 50
 )
-
-// WithDefaults fills unset limits.
-func (r RateLimits) WithDefaults() RateLimits {
-	if r.MaxConcurrentDownloads == 0 {
-		r.MaxConcurrentDownloads = DefaultMaxConcurrentDownloads
-	}
-	if r.MaxConcurrentUploads == 0 {
-		r.MaxConcurrentUploads = DefaultMaxConcurrentUploads
-	}
-	if r.MaxConnections == 0 {
-		r.MaxConnections = DefaultMaxConnections
-	}
-	if r.Burst == 0 && r.RequestsPerSecond > 0 {
-		r.Burst = r.RequestsPerSecond * 2
-	}
-	return r
-}
 
 type AutoDownload struct {
 	Enabled bool   `json:"enabled,omitempty"`

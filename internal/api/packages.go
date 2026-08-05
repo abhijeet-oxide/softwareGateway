@@ -95,13 +95,8 @@ func (s *Server) handleGetPackage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	row, err := s.deps.Packages.GetPackage(r.Context(), productName, ref)
-	if errors.Is(err, store.ErrNotFound) {
-		NotFound(w, r, "package", ref)
-		return
-	}
-	if err != nil {
-		s.internal(w, r, "get package", err)
+	row, ok := s.resolvePackage(w, r, productName, ref)
+	if !ok {
 		return
 	}
 
@@ -122,13 +117,8 @@ func (s *Server) handleListArtifacts(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	pkg, err := s.deps.Packages.GetPackage(r.Context(), productName, ref)
-	if errors.Is(err, store.ErrNotFound) {
-		NotFound(w, r, "package", ref)
-		return
-	}
-	if err != nil {
-		s.internal(w, r, "get package", err)
+	pkg, ok := s.resolvePackage(w, r, productName, ref)
+	if !ok {
 		return
 	}
 
@@ -456,6 +446,44 @@ func (s *Server) handleDiscoveryStatus(w http.ResponseWriter, r *http.Request) {
 	WriteJSON(w, r, http.StatusOK, resp)
 }
 
+// resolvePackage finds one package, or explains why it cannot.
+//
+// Centralised because every package endpoint needs the same three outcomes and
+// a handler that quietly picked the first match would be wrong in a way nobody
+// would report — the caller gets a real package and believes it asked for that
+// one.
+func (s *Server) resolvePackage(w http.ResponseWriter, r *http.Request, productName, ref string) (store.PackageRow, bool) {
+	// `?repository=` scopes the lookup, as does the `repo:tag` form of the
+	// reference itself. Either is enough; both agreeing is fine.
+	parsed := store.ParsePackageRef(ref)
+	if repo := strings.TrimSpace(r.URL.Query().Get("repository")); repo != "" {
+		parsed.Repository = strings.Trim(repo, "/")
+	}
+
+	pkg, err := s.deps.Packages.GetPackageRef(r.Context(), productName, parsed)
+
+	var ambiguous *store.AmbiguousReferenceError
+	switch {
+	case errors.As(err, &ambiguous):
+		// The scoped form is quoted rather than the `?repository=` query
+		// parameter, because this message is read at a terminal far more often
+		// than in a response body, and a CLI user has nowhere to put a query
+		// parameter. Both work; only one of them is advice a person can follow
+		// without translating it first.
+		Error(w, r, v1.CodeInvalidArgument, fmt.Sprintf(
+			"%s. Name one, for example: %s:%s",
+			ambiguous.Error(), ambiguous.Repositories[0], parsed.Tag))
+		return store.PackageRow{}, false
+	case errors.Is(err, store.ErrNotFound):
+		NotFound(w, r, "package", ref)
+		return store.PackageRow{}, false
+	case err != nil:
+		s.internal(w, r, "get package", err)
+		return store.PackageRow{}, false
+	}
+	return pkg, true
+}
+
 // POST /api/v1/products/{product}/packages/{package}:inspect.
 //
 // Expands one package's manifest tree: fetches the artifacts discovery only
@@ -476,13 +504,8 @@ func (s *Server) handleInspectPackage(w http.ResponseWriter, r *http.Request) {
 	}
 	ref := chi.URLParam(r, "package")
 
-	pkg, err := s.deps.Packages.GetPackage(r.Context(), productName, ref)
-	if errors.Is(err, store.ErrNotFound) {
-		NotFound(w, r, "package", ref)
-		return
-	}
-	if err != nil {
-		s.internal(w, r, "get package", err)
+	pkg, ok := s.resolvePackage(w, r, productName, ref)
+	if !ok {
 		return
 	}
 
@@ -514,4 +537,44 @@ func (s *Server) handleInspectPackage(w http.ResponseWriter, r *http.Request) {
 		Blobs:           res.Blobs,
 		TotalBytes:      v1.Int64String(strconv.FormatInt(res.TotalBytes, 10)),
 	})
+}
+
+// POST /api/v1/products:discover.
+//
+// Scans every product discovery is polling. The definition of "everything"
+// comes from the loop rather than from the caller, so it cannot disagree with
+// which products are actually enabled.
+//
+// Always non-blocking. A fleet-wide scan against slow registries is minutes to
+// hours of work, and holding an HTTP request open for it would make every
+// intermediary's idle timeout part of the control plane. Progress comes from
+// GET .../discovery per product.
+func (s *Server) handleDiscoverAll(w http.ResponseWriter, r *http.Request) {
+	if s.deps.Discovery == nil || !s.deps.Discovery.Running() {
+		Error(w, r, v1.CodeFailedPrecondition,
+			"discovery is not running on this replica: it runs on the leader, "+
+				"and this replica is a follower or discovery is disabled")
+		return
+	}
+
+	products := s.deps.Discovery.Products()
+	resp := v1.DiscoverAllResponse{Products: []v1.DiscoverAllProduct{}}
+
+	for _, name := range products {
+		started, running, err := s.deps.Discovery.StartProduct(name)
+		entry := v1.DiscoverAllProduct{
+			Product: name, Sources: started, AlreadyRunning: running,
+		}
+		if err != nil {
+			// Reported per product rather than failing the whole call. One
+			// product's broken source must not stop the other thirty being
+			// scanned — the same rule discovery itself follows.
+			entry.Error = err.Error()
+		}
+		resp.Products = append(resp.Products, entry)
+		resp.Started += started
+		resp.AlreadyRunning += running
+	}
+
+	WriteJSON(w, r, http.StatusOK, resp)
 }

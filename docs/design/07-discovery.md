@@ -173,7 +173,7 @@ Idempotent and safe: it is the same scan the loop runs. Concurrent triggers are 
 
 The first implementation collapsed by handing the trigger to the worker through a one-deep buffered channel and, when it found the slot occupied, returning the worker's *last* result. That was wrong in a way that looked like success.
 
-While a scan is running the slot stays occupied for its whole duration, so any further trigger took the fallback: it returned the previous scan's numbers — or the **zero value**, when no scan had completed yet — with no error, in microseconds, having done nothing. Measured at 19µs against a worker with an occupied slot. The caller could not tell, because nothing in the response said so, and `packages discover` printed
+While a scan is running the slot stays occupied for its whole duration, so any further trigger took the fallback: it returned the previous scan's numbers — or the **zero value**, when no scan had completed yet — with no error, in microseconds, having done nothing. Measured at 19µs against a worker with an occupied slot. The caller could not tell, because nothing in the response said so, and `discover` printed
 
 ```
 Scanned vendor-a-platform in 0ms
@@ -198,11 +198,11 @@ It has two causes, and the CLI names them. Either `discovery.repositoryFilters` 
 
 ## 9. Knowing what a scan is doing
 
-A scan is synchronous by default, and against a slow registry that meant `packages discover` showed a blank terminal for two and a half minutes and then reported a timeout. Everything the operator needed — that we had reached the registry, which repository we were on, that the counters were moving — existed in the process and was never exposed. A slow scan and a hung one looked identical.
+A scan is synchronous by default, and against a slow registry that meant `discover` showed a blank terminal for two and a half minutes and then reported a timeout. Everything the operator needed — that we had reached the registry, which repository we were on, that the counters were moving — existed in the process and was never exposed. A slow scan and a hung one looked identical.
 
 `GET /api/v1/products/{product}/discovery` reports, per source: whether a scan is running, its phase (`ENUMERATING_REPOSITORIES`, `LISTING_TAGS`, `RESOLVING_TAGS`), how long it has been going, repositories done of total, the current repository, tags resolved of admitted, and the outcome of the last completed scan.
 
-It is a read of in-memory counters behind their own mutex — deliberately not the scanner's, which is held across client construction, so a status request never waits on a TLS handshake. Safe to poll every second, which is what `transferctl packages discover` does on a second connection while the scan request blocks. The live line goes to **stderr**; stdout carries the result, so `-o json` stays pipeable.
+It is a read of in-memory counters behind their own mutex — deliberately not the scanner's, which is held across client construction, so a status request never waits on a TLS handshake. Safe to poll every second, which is what `transferctl discover` does on a second connection while the scan request blocks. The live line goes to **stderr**; stdout carries the result, so `-o json` stays pipeable.
 
 `RepositoriesTotal` is zero until enumeration finishes, and that is information rather than a gap: it means the scan is still waiting on `/v2/_catalog`.
 
@@ -245,31 +245,34 @@ Measured in the field: 48 repositories, 28 admitted tags in the first one, and a
 
 ### What changed
 
-Three bounded axes, because they cost different things:
+**One bound, applied to the whole scan, sized to the connection pool.**
 
-| | Default | Bounded by |
+| | Default | Meaning |
 |---|---|---|
-| `discovery.concurrency.repositories` | 4 | repositories are independent; they share the source's pool and limiter |
-| `discovery.concurrency.tags` | 8 | tags within a repository share one client, so they are already bounded by its connection pool and rate limiter |
-| `discovery.concurrency.artifacts` | 8 | siblings of one index — the narrowest axis, and the one that was invisible |
+| `concurrency.perRegistry` | 32 | requests in flight against one registry, and the size of the pool serving them |
 
-**The artifact axis was the last serial bottleneck, and the one that looked like a hang.** A tag's manifest tree was walked strictly one manifest at a time. A product bundle whose index references sixty artifacts therefore cost sixty *sequential* round trips inside a single tag — two and a half minutes at 2.5 s each, during which the tag counter did not move at all while every one of those requests succeeded. From the outside, "hundreds of requests returning 200 and no progress" is indistinguishable from a hang.
+This was three separately configured axes — repositories, tags, and briefly artifacts — and that was the wrong shape. Every request they gated went through **one connection pool**, so the real ceiling was `min(pool, R × T)`, and the defaults hid it by agreeing: `4 × 8 = 32 = maxConnections`. Change any one of the three and the system silently becomes either socket-starved or over-provisioned, with no error and no way to tell from the outside which. See [02](02-configuration.md) §5.3.
 
-The walk is still breadth-first and still level by level, so parents are recorded before their children and `Artifact.Parent` — an *index* into the artifact slice — stays correct. Only the fetches within one level run in parallel; the bookkeeping that appends to the tree runs on one goroutine in level order. A test asserts the parallel walk produces a tree byte-identical to the sequential one, because a reordering there would silently reparent artifacts rather than fail.
+**Two flat phases, not a tree.** A single semaphore cannot be nested — the outer holders would deadlock waiting for slots the inner work needs — so a scan is now:
 
-Progress now also reports `artifacts`, the count of manifests fetched. It is the counter that keeps moving when nothing else does.
+1. **List**: resolve each repository and page its tags, bounded. Produces a flat work list of `(repository, tag)` pairs.
+2. **Resolve**: fetch each pair's manifest, bounded by the same limit.
 
-Both are clamped to 64: a typo of `1000` must not become a thousand connections to a vendor.
+That fell out of the fix, and it is an improvement on its own in two ways. The **total tag count is known before any manifest is fetched**, so progress reports a denominator that does not move as it goes — previously `TagsTotal` grew while `TagsResolved` chased it, which is the least useful shape a progress bar can have. And **tags across all repositories now share one pool**: a repository with three tags no longer leaves most of the budget idle while the repository with three hundred waits its turn behind it.
 
-Nothing about a scan requires ordering. Repositories are independent; supersession is per `(repository, tag)` and two tags never touch the same row. Results are aggregated in configuration order *after* the work, so the result and the log order are identical run to run even though the execution was not.
+The artifact axis is gone entirely, because the walk it bounded is gone: discovery fetches the tag's own manifest and records what that manifest lists, without fetching the artifacts (§12). `packages describe --expand` walks the rest on demand, with the same bound.
 
-**Writes stay serial.** Everything expensive — the `HEAD`, the existence check, the manifest-tree fetch — already happened outside the transaction. What remains is a short local write, and serialising it per source costs nothing measurable while removing a class of problem: SQLite serialises writers anyway and returns `SQLITE_BUSY` rather than queueing, and on Postgres concurrent inserts for one repository would contend on the unique index for no gain.
+Clamped to 128: a typo of `1000` must not become a thousand connections to a vendor.
+
+Nothing about a scan requires ordering. Repositories are independent; supersession is per `(repository, tag)` and two tags never touch the same row. Results are aggregated in work-list order *after* the work, so the result and the log order are identical run to run even though the execution was not.
+
+**Writes stay serial.** Everything expensive — the `HEAD`, the existence check, the manifest fetch — already happened outside the transaction. What remains is a short local write, and serialising it per source costs nothing measurable while removing a class of problem: SQLite serialises writers anyway and returns `SQLITE_BUSY` rather than queueing, and on Postgres concurrent inserts for one repository would contend on the unique index for no gain.
 
 **And a retry time budget.** `RetryMaxElapsed`, 90 seconds by default — three `ResponseHeaderTimeout`s. Long enough for a genuine transient failure to be retried a couple of times, short enough that a systematically unresponsive endpoint costs seconds per request rather than minutes. It does not shorten the schedule for the case retries exist for, where attempts fail fast and the budget is never reached.
 
 ### Why not unbounded
 
-The temptation is to fan out over everything at once. A vendor registry is someone else's infrastructure, the cost of being impolite falls on them, and a 429 storm makes the scan slower, not faster — the rate limiter sits outermost precisely so retries cannot bypass it ([06](06-registry-abstraction.md) §5). The defaults are chosen to make a scan minutes rather than hours without looking like an attack. Raise them for a registry you own.
+The temptation is to fan out over everything at once. A vendor registry is someone else's infrastructure, the cost of being impolite falls on them, and a 429 storm makes the scan slower, not faster — the rate limiter sits outermost precisely so retries cannot bypass it ([06](06-registry-abstraction.md) §5). The default is chosen to make a scan minutes rather than hours without looking like an attack. Raise it for a registry you own; lower it for one vendor that complains, using the per-source override.
 
 ---
 
@@ -316,7 +319,7 @@ Discovery answers one question — **what is new** — and stops there. Everythi
 | Runs | on an interval, unattended | on demand, for one package |
 | Answers | is there something new? | what is in it, and how big? |
 
-`POST /api/v1/products/{product}/packages/{package}:inspect` walks the tree: it fetches the artifacts discovery only listed, records their blobs, and measures the transfer size. `transferctl packages inspect <product> <tag>` is the same thing.
+`POST /api/v1/products/{product}/packages/{package}:inspect` walks the tree: it fetches the artifacts discovery only listed, records their blobs, and measures the transfer size. `transferctl packages describe <product> <package> --expand` is the same thing.
 
 An AIP-136 custom method rather than a GET, because it has side effects — it writes artifacts, blobs and a measured size. Idempotent all the same: **the tree under a digest cannot change**, so a second call fetches nothing and says `alreadyExpanded`.
 

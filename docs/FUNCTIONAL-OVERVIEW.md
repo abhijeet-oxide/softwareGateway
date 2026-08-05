@@ -330,7 +330,8 @@ transferctl workers list    # fleet status and granted concurrency
 transferctl products list
 transferctl packages list --product vendor-a-platform
 transferctl packages describe v2.14.0 --product vendor-a-platform   # artifacts, targets, signatures
-transferctl packages discover --product vendor-a-platform           # scan now, don't wait 15m
+transferctl discover vendor-a-platform                              # scan now, don't wait 15m
+transferctl discover                                                # scan every product
 ```
 
 ### "I need this release in lab"

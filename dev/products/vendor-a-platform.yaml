@@ -23,11 +23,13 @@ spec:
         tagFilters:
           include: ['^v\d+\.\d+\.\d+$']
           exclude: ['-(rc|beta|alpha)\.']
-      rateLimits:
-        maxConcurrentDownloads: 16
-        maxConnections: 32
+      # ONE number: requests in flight against this registry, which is also
+      # the connection pool. Absent would inherit the application-level
+      # `concurrency.perRegistry`, and absent is the usual case — this one is
+      # spelled out because the vendor asked us to stay under 50 rps.
+      concurrency:
+        perRegistry: 32
         requestsPerSecond: 50
-        burst: 100
 
     - name: mirror
       registry: registry-eu.vendor-a.example.com
@@ -38,9 +40,8 @@ spec:
         # Failover only — enabling discovery here would double-discover every
         # tag, since both repositories serve the same content.
         enabled: false
-      rateLimits:
-        maxConcurrentDownloads: 8
-        maxConnections: 16
+      concurrency:
+        perRegistry: 16
 
   targets:
     - name: lab
@@ -50,12 +51,10 @@ spec:
       credentialsRef:
         secretName: internal-registry
       default: true
-      rateLimits:
-        maxConcurrentUploads: 24
-        maxConcurrentDownloads: 24
-        maxConnections: 64
+      # A registry we own, so we can be less polite than with a vendor.
+      concurrency:
+        perRegistry: 64
         requestsPerSecond: 200
-        burst: 400
 
     - name: production
       # Same registry as lab, different repository — so a lab→production
@@ -66,10 +65,8 @@ spec:
       credentialsRef:
         secretName: internal-registry
       promotionOnly: true
-      rateLimits:
-        maxConcurrentUploads: 12
-        maxConcurrentDownloads: 12
-        maxConnections: 32
+      concurrency:
+        perRegistry: 32
 
   autoDownload:
     enabled: true

@@ -34,10 +34,12 @@ func clientConfigFor(
 		PlainHTTP: isPlainHTTP(src.Registry),
 	}
 
-	limits := src.RateLimits.WithDefaults()
-	cfg.RequestsPerSecond = limits.RequestsPerSecond
-	cfg.Burst = limits.Burst
-	cfg.MaxConnections = limits.MaxConnections
+	// Already resolved against the application-level defaults by the loader, so
+	// there is nothing to fill in here — and MaxConnections is PerRegistry
+	// because the pool IS the concurrency limit. See product.Concurrency.
+	cfg.MaxConnections = src.Concurrency.PerRegistry
+	cfg.RequestsPerSecond = src.Concurrency.RequestsPerSecond
+	cfg.Burst = src.Concurrency.Burst()
 
 	if err := applyNetwork(&cfg, p, src.Network, secrets); err != nil {
 		return registry.ClientConfig{}, err

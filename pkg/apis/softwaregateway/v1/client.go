@@ -157,15 +157,43 @@ func (o ListPackagesOptions) query() string {
 // GetPackage returns one package. ref is a tag or a digest.
 func (c *Client) GetPackage(ctx context.Context, product, ref string) (*Package, error) {
 	var out Package
+	seg, query := splitPackageRef(ref)
 	return &out, c.get(ctx,
-		"/api/v1/products/"+url.PathEscape(product)+"/packages/"+url.PathEscape(ref), &out)
+		"/api/v1/products/"+url.PathEscape(product)+"/packages/"+url.PathEscape(seg)+query, &out)
 }
 
 // ListArtifacts returns a package's artifact tree.
 func (c *Client) ListArtifacts(ctx context.Context, product, ref string) (*ListArtifactsResponse, error) {
 	var out ListArtifactsResponse
+	seg, query := splitPackageRef(ref)
 	return &out, c.get(ctx,
-		"/api/v1/products/"+url.PathEscape(product)+"/packages/"+url.PathEscape(ref)+"/artifacts", &out)
+		"/api/v1/products/"+url.PathEscape(product)+"/packages/"+url.PathEscape(seg)+"/artifacts"+query, &out)
+}
+
+// splitPackageRef moves the repository of a scoped reference into the query
+// string, leaving a single path segment behind.
+//
+// A repository path contains slashes, and a slash cannot survive a URL path
+// segment: %2F is decoded before routing, so `orbs/core:v1` arrives at the
+// router as two segments and matches nothing. Percent-encoding it twice
+// "works" and is the kind of thing that breaks the first time a proxy
+// normalises the path.
+//
+// So the user-facing spelling stays `orbs/core:v1` — it is what a person has
+// in their hand — and the wire form is `/packages/v1?repository=orbs/core`.
+// A reference with no slash needs no rewriting and gets none, which keeps the
+// common single-repository URL exactly as it was.
+func splitPackageRef(ref string) (segment, query string) {
+	i := strings.LastIndex(ref, ":")
+	if i <= 0 || i == len(ref)-1 {
+		return ref, ""
+	}
+	repo, tag := ref[:i], ref[i+1:]
+	// A digest is `algorithm:hex`, not a repository and a tag.
+	if !strings.Contains(repo, "/") {
+		return ref, ""
+	}
+	return tag, "?repository=" + url.QueryEscape(strings.Trim(repo, "/"))
 }
 
 // DiscoverPackages triggers an immediate scan.
@@ -192,6 +220,16 @@ func (c *Client) discover(ctx context.Context, product string, req DiscoverPacka
 	return &out, err
 }
 
+// DiscoverAll scans every product discovery is polling.
+//
+// Never blocks: a fleet-wide scan is minutes to hours of work. Progress comes
+// from DiscoveryStatus, per product.
+func (c *Client) DiscoverAll(ctx context.Context) (*DiscoverAllResponse, error) {
+	var out DiscoverAllResponse
+	// The colon is an AIP-136 structural separator and must NOT be escaped.
+	return &out, c.post(ctx, "/api/v1/products:discover", struct{}{}, &out)
+}
+
 // InspectPackage expands one package's manifest tree and returns its size.
 //
 // Slow by nature: it reads from the source registry. Idempotent — the tree
@@ -199,8 +237,9 @@ func (c *Client) discover(ctx context.Context, product string, req DiscoverPacka
 func (c *Client) InspectPackage(ctx context.Context, product, ref string) (*InspectPackageResponse, error) {
 	var out InspectPackageResponse
 	// The colon is an AIP-136 structural separator and must NOT be escaped.
+	seg, query := splitPackageRef(ref)
 	err := c.post(ctx,
-		"/api/v1/products/"+url.PathEscape(product)+"/packages/"+url.PathEscape(ref)+":inspect",
+		"/api/v1/products/"+url.PathEscape(product)+"/packages/"+url.PathEscape(seg)+":inspect"+query,
 		struct{}{}, &out)
 	return &out, err
 }

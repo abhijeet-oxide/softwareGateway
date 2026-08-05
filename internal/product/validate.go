@@ -393,7 +393,7 @@ func (p *Product) validateSources(resolver *SecretResolver) Errors {
 		if d := s.Discovery.Interval.Duration(); d < 0 {
 			errs = append(errs, Error{path + ".discovery.interval", "must not be negative", ""})
 		}
-		errs = append(errs, validateRateLimits(path+".rateLimits", s.RateLimits)...)
+		errs = append(errs, validateConcurrency(path, s.Concurrency, s.RateLimits, s.Discovery.Concurrency)...)
 	}
 	return errs
 }
@@ -430,7 +430,7 @@ func (p *Product) validateTargets(resolver *SecretResolver) Errors {
 				})
 			}
 		}
-		errs = append(errs, validateRateLimits(path+".rateLimits", t.RateLimits)...)
+		errs = append(errs, validateConcurrency(path, t.Concurrency, t.RateLimits, LegacyScanConcurrency{})...)
 	}
 
 	if defaults > 1 {
@@ -745,29 +745,51 @@ func validateRepoCommon(
 	return errs
 }
 
-func validateRateLimits(path string, r RateLimits) Errors {
+// validateConcurrency checks the new block and the superseded ones it replaced.
+//
+// Both are checked because both are still honoured. A negative number in a
+// `rateLimits` block that is folded forward would otherwise be silently
+// discarded by the fold and never reported.
+func validateConcurrency(path string, c Concurrency, r LegacyRateLimits, scan LegacyScanConcurrency) Errors {
 	var errs Errors
-	for _, f := range []struct {
-		name string
-		v    int
-	}{
-		{"maxConcurrentDownloads", r.MaxConcurrentDownloads},
-		{"maxConcurrentUploads", r.MaxConcurrentUploads},
-		{"maxConnections", r.MaxConnections},
-		{"requestsPerSecond", r.RequestsPerSecond},
-		{"burst", r.Burst},
-	} {
-		if f.v < 0 {
-			errs = append(errs, Error{path + "." + f.name, fmt.Sprintf("%d must not be negative", f.v), ""})
+
+	negative := func(name string, v int) {
+		if v < 0 {
+			errs = append(errs, Error{path + "." + name, fmt.Sprintf("%d must not be negative", v), ""})
 		}
 	}
-	if r.RequestsPerSecond > 0 && r.Burst > 0 && r.Burst < r.RequestsPerSecond {
+
+	negative("concurrency.perRegistry", c.PerRegistry)
+	negative("concurrency.requestsPerSecond", c.RequestsPerSecond)
+
+	negative("rateLimits.maxConcurrentDownloads", r.MaxConcurrentDownloads)
+	negative("rateLimits.maxConcurrentUploads", r.MaxConcurrentUploads)
+	negative("rateLimits.maxConnections", r.MaxConnections)
+	negative("rateLimits.requestsPerSecond", r.RequestsPerSecond)
+	negative("rateLimits.burst", r.Burst)
+
+	negative("discovery.concurrency.repositories", scan.Repositories)
+	negative("discovery.concurrency.tags", scan.Tags)
+
+	// A migrated document with a stale block is a real trap: the new value wins,
+	// so the old one reads as configuration that is quietly doing nothing.
+	if c.PerRegistry > 0 && (r.set() || scan.set()) {
 		errs = append(errs, Error{
-			path + ".burst",
-			fmt.Sprintf("%d is below requestsPerSecond (%d)", r.Burst, r.RequestsPerSecond),
-			"a burst smaller than the sustained rate throttles below the configured rate",
+			path + ".rateLimits",
+			"is ignored because concurrency.perRegistry is set",
+			"delete the superseded block — leaving it in place makes the document " +
+				"claim a limit that is not in force",
 		})
 	}
+
+	if c.PerRegistry > maxPerRegistry {
+		errs = append(errs, Error{
+			path + ".concurrency.perRegistry",
+			fmt.Sprintf("%d exceeds the maximum of %d", c.PerRegistry, maxPerRegistry),
+			"this is the number of simultaneous connections to someone else's registry",
+		})
+	}
+
 	return errs
 }
 

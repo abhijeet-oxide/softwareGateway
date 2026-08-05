@@ -5,10 +5,13 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"strconv"
 	"strings"
 	"text/tabwriter"
 
 	"sigs.k8s.io/yaml"
+
+	v1 "github.com/abhijeet-oxide/softwareGateway/pkg/apis/softwaregateway/v1"
 )
 
 // render emits a value in the requested format.
@@ -67,4 +70,16 @@ func yesNo(b bool) string {
 		return "yes"
 	}
 	return "no"
+}
+
+// humanConcurrency renders the resolved limit for one registry.
+//
+// The rate appears only when there is one, because zero means "no artificial
+// limit" and printing "0/s" reads as a registry that has been throttled to a
+// standstill.
+func humanConcurrency(c v1.Concurrency) string {
+	if c.RequestsPerSecond > 0 {
+		return fmt.Sprintf("%d, %d/s", c.PerRegistry, c.RequestsPerSecond)
+	}
+	return strconv.Itoa(c.PerRegistry)
 }

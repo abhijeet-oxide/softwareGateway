@@ -266,81 +266,46 @@ func (s *Scanner) Scan(ctx context.Context) (ScanResult, error) {
 		p.RepositoriesTotal = len(set.Repositories)
 	})
 
-	// Repositories in parallel, bounded.
+	// ONE bound, applied to both phases, sized to the connection pool.
 	//
-	// Sequential was the original shape and it does not survive contact with a
-	// real catalogue: 48 repositories with 28 admitted tags in the first one,
-	// two network round trips per tag, and a scan that had not finished the
-	// FIRST tag after two minutes. Nothing about a scan requires ordering —
-	// repositories are independent, and the unique constraints, not the
-	// iteration order, are what make a re-scan idempotent.
+	// This used to be two nested semaphores — repositories outside, tags inside
+	// — with separately configured limits. The trouble is that every request
+	// they gate goes through ONE connection pool, so the real ceiling was
+	// min(pool, R×T), and the defaults hid it by agreeing: 4 × 8 = 32 =
+	// maxConnections. Change any one of the three and the system silently
+	// becomes either socket-starved or over-provisioned, with no error and no
+	// way to tell from the outside which.
 	//
-	// Bounded because each repository has its own client, so parallelism here
-	// multiplies connections and token exchanges against someone else's
-	// registry.
-	type repoOutcome struct {
-		path string
-		sub  repoResult
-		err  error
+	// So the semaphore is sized to the pool, and there is one of it. It cannot
+	// be nested — the outer holders would deadlock waiting for slots the inner
+	// work needs — which is why the scan is now two flat phases rather than a
+	// tree. That fell out of the fix and is an improvement on its own: the total
+	// tag count is known before any manifest is fetched, so progress reports a
+	// real denominator instead of one that grows as it goes.
+	limit := s.sourceCfg.Concurrency.PerRegistry
+	if limit <= 0 {
+		limit = product.DefaultPerRegistry
 	}
 
-	limit := s.sourceCfg.Discovery.Concurrency.EffectiveRepositories()
-	sem := make(chan struct{}, limit)
-	outcomes := make([]repoOutcome, len(set.Repositories))
-	var wg sync.WaitGroup
-
-	for i, repoPath := range set.Repositories {
-		if err := ctx.Err(); err != nil {
-			return res, err
-		}
-
-		wg.Add(1)
-		go func(i int, repoPath string) {
-			defer wg.Done()
-			sem <- struct{}{}
-			defer func() { <-sem }()
-
-			s.progress.update(func(p *ScanProgress) {
-				p.Phase = PhaseListingTags
-				p.CurrentRepository = repoPath
-				p.RepositoriesInFlight++
-			})
-
-			sub, err := s.scanRepository(ctx, repoPath)
-			outcomes[i] = repoOutcome{path: repoPath, sub: sub, err: err}
-
-			s.progress.update(func(p *ScanProgress) {
-				p.RepositoriesInFlight--
-				p.RepositoriesDone++
-				p.TagsListed += sub.TagsListed
-				p.New += sub.New
-				p.Errors += len(sub.TagErrors)
-				if err != nil {
-					p.Errors++
-				}
-			})
-		}(i, repoPath)
+	listed := s.listPhase(ctx, set.Repositories, limit)
+	for _, l := range listed.failures {
+		res.RepositoryErrors = append(res.RepositoryErrors,
+			RepositoryError{Repository: l.path, Err: l.err})
+		s.log.WarnContext(ctx, "repository scan failed", "repository", l.path, "error", l.err)
 	}
-	wg.Wait()
+	res.Repositories = listed.scanned
+	res.TagsListed = listed.tagsListed
+	res.TagsAdmitted = len(listed.work)
 
-	// Aggregated in the ORIGINAL order, after the fact, so the result and the
-	// logs are identical run to run even though the work was not.
-	for _, o := range outcomes {
-		if o.err != nil {
-			res.RepositoryErrors = append(res.RepositoryErrors,
-				RepositoryError{Repository: o.path, Err: o.err})
-			s.log.WarnContext(ctx, "repository scan failed", "repository", o.path, "error", o.err)
-			continue
-		}
-
-		res.Repositories++
-		res.TagsListed += o.sub.TagsListed
-		res.TagsAdmitted += o.sub.TagsAdmitted
-		res.New += o.sub.New
-		res.Superseded += o.sub.Superseded
-		res.Requests += o.sub.Requests
-		res.TagErrors = append(res.TagErrors, o.sub.TagErrors...)
+	if err := ctx.Err(); err != nil {
+		return res, err
 	}
+
+	resolved := s.resolvePhase(ctx, listed.work, limit)
+	res.New = resolved.New
+	res.Superseded = resolved.Superseded
+	res.Requests = resolved.Requests
+	res.TagErrors = resolved.TagErrors
 
 	// Retire discovery-managed rows for repositories that have left the
 	// catalog. Only attempted when enumeration actually succeeded: a failed
@@ -375,98 +340,196 @@ func (s *Scanner) Scan(ctx context.Context) (ScanResult, error) {
 	return res, nil
 }
 
-// repoResult is one repository's contribution to a scan.
-type repoResult struct {
-	TagsListed   int
-	TagsAdmitted int
-	New          int
-	Superseded   int
-	Requests     int
-	TagErrors    []TagError
+// tagWork is one tag to resolve, with everything needed to resolve it.
+//
+// The repository client and row ID are carried rather than looked up again:
+// phase one already paid for both, and re-deriving them per tag would put a
+// mutex acquisition and a database round trip in front of every manifest.
+type tagWork struct {
+	repoPath string
+	repoID   int64
+	client   registry.Source
+	tag      string
 }
 
-// scanRepository scans every admitted tag in one repository.
-func (s *Scanner) scanRepository(ctx context.Context, repoPath string) (repoResult, error) {
-	var res repoResult
+// listOutcome is what phase one produced.
+type listOutcome struct {
+	work       []tagWork
+	tagsListed int
+	scanned    int
+	failures   []repoFailure
+}
 
-	client, err := s.clientFor(repoPath)
-	if err != nil {
-		return res, err
+type repoFailure struct {
+	path string
+	err  error
+}
+
+// listPhase resolves each repository and lists its tags, bounded.
+//
+// It produces a FLAT work list. Nothing is fetched here beyond the tag lists,
+// so the phase is cheap relative to the one that follows and finishes knowing
+// the exact size of the work remaining — which is what lets progress report a
+// denominator that does not move.
+func (s *Scanner) listPhase(ctx context.Context, repos []string, limit int) listOutcome {
+	type result struct {
+		path     string
+		repoID   int64
+		client   registry.Source
+		admitted []string
+		listed   int
+		err      error
 	}
 
-	repoID, err := s.ensureRepositoryRow(ctx, repoPath)
-	if err != nil {
-		return res, err
-	}
-
-	tags, err := s.listTags(ctx, client)
-	if err != nil {
-		return res, err
-	}
-	res.TagsListed = len(tags)
-
-	admitted := make([]string, 0, len(tags))
-	for _, tag := range tags {
-		if s.tagFilter.admits(tag) {
-			admitted = append(admitted, tag)
-		}
-	}
-	res.TagsAdmitted = len(admitted)
-
-	s.progress.update(func(p *ScanProgress) {
-		p.Phase = PhaseResolving
-		p.TagsTotal += len(admitted)
-	})
-
-	// Tags in parallel, sharing this repository's client — and therefore its
-	// connection pool, its rate limiter and its cached token. That is what makes
-	// this the cheap axis to widen: the registry sees one client whose
-	// configured limits still hold, not N clients each with its own budget.
-	//
-	// Each tag costs two round trips at minimum (HEAD, then the manifest tree),
-	// so a repository with 28 tags was 56 sequential round trips against a
-	// registry across a WAN. There is no ordering requirement between tags:
-	// supersession is per (repository, tag), and two different tags never touch
-	// the same row.
-	type tagOut struct {
-		tag     string
-		outcome tagOutcome
-		err     error
-	}
-
-	limit := s.sourceCfg.Discovery.Concurrency.EffectiveTags()
+	results := make([]result, len(repos))
 	sem := make(chan struct{}, limit)
-	outs := make([]tagOut, len(admitted))
 	var wg sync.WaitGroup
 
-	for i, tag := range admitted {
-		if err := ctx.Err(); err != nil {
-			return res, err
+	for i, repoPath := range repos {
+		if ctx.Err() != nil {
+			break
 		}
 
 		wg.Add(1)
-		go func(i int, tag string) {
+		go func(i int, repoPath string) {
 			defer wg.Done()
 			sem <- struct{}{}
 			defer func() { <-sem }()
 
-			outcome, err := s.scanTag(ctx, client, repoID, repoPath, tag)
-			outs[i] = tagOut{tag: tag, outcome: outcome, err: err}
-			s.progress.update(func(p *ScanProgress) { p.TagsResolved++ })
-		}(i, tag)
+			s.progress.update(func(p *ScanProgress) {
+				p.Phase = PhaseListingTags
+				p.CurrentRepository = repoPath
+				p.RepositoriesInFlight++
+			})
+			defer s.progress.update(func(p *ScanProgress) {
+				p.RepositoriesInFlight--
+				p.RepositoriesDone++
+			})
+
+			r := result{path: repoPath}
+			defer func() { results[i] = r }()
+
+			if r.client, r.err = s.clientFor(repoPath); r.err != nil {
+				return
+			}
+			if r.repoID, r.err = s.ensureRepositoryRow(ctx, repoPath); r.err != nil {
+				return
+			}
+
+			var tags []string
+			if tags, r.err = s.listTags(ctx, r.client); r.err != nil {
+				return
+			}
+			r.listed = len(tags)
+			for _, tag := range tags {
+				if s.tagFilter.admits(tag) {
+					r.admitted = append(r.admitted, tag)
+				}
+			}
+
+			admitted := len(r.admitted)
+			listed := r.listed
+			s.progress.update(func(p *ScanProgress) {
+				p.TagsListed += listed
+				p.TagsTotal += admitted
+			})
+		}(i, repoPath)
 	}
 	wg.Wait()
 
-	// Aggregated in configuration order after the fact, so two runs of the same
-	// scan produce the same result and the same log order.
-	for _, o := range outs {
+	// Assembled in the ORIGINAL order, after the fact, so the work list — and
+	// therefore the logs — come out identical run to run even though the listing
+	// did not.
+	var out listOutcome
+	for _, r := range results {
+		if r.err != nil {
+			out.failures = append(out.failures, repoFailure{path: r.path, err: r.err})
+			s.progress.update(func(p *ScanProgress) { p.Errors++ })
+			continue
+		}
+		out.scanned++
+		out.tagsListed += r.listed
+		for _, tag := range r.admitted {
+			out.work = append(out.work, tagWork{
+				repoPath: r.path, repoID: r.repoID, client: r.client, tag: tag,
+			})
+		}
+	}
+	return out
+}
+
+// resolveResult is phase two's contribution to a scan.
+type resolveResult struct {
+	New        int
+	Superseded int
+	Requests   int
+	TagErrors  []TagError
+}
+
+// resolvePhase resolves every tag in the work list, bounded by the same limit.
+//
+// Tags across ALL repositories share one pool now, rather than one pool per
+// repository. That matters on a real catalogue: a repository with three tags no
+// longer leaves most of the budget idle while the repository with three hundred
+// waits its turn behind it.
+func (s *Scanner) resolvePhase(ctx context.Context, work []tagWork, limit int) resolveResult {
+	var res resolveResult
+	if len(work) == 0 {
+		return res
+	}
+
+	s.progress.update(func(p *ScanProgress) { p.Phase = PhaseResolving })
+
+	type tagOut struct {
+		outcome tagOutcome
+		err     error
+	}
+	outs := make([]tagOut, len(work))
+	sem := make(chan struct{}, limit)
+	var wg sync.WaitGroup
+
+	for i, w := range work {
+		if ctx.Err() != nil {
+			break
+		}
+
+		wg.Add(1)
+		go func(i int, w tagWork) {
+			defer wg.Done()
+			sem <- struct{}{}
+			defer func() { <-sem }()
+
+			// Each tag costs one HEAD when nothing changed, and one further
+			// request when it did. There is no ordering requirement between
+			// them: supersession is per (repository, tag), and two different
+			// tags never touch the same row.
+			outcome, err := s.scanTag(ctx, w.client, w.repoID, w.repoPath, w.tag)
+			outs[i] = tagOut{outcome: outcome, err: err}
+
+			s.progress.update(func(p *ScanProgress) {
+				p.TagsResolved++
+				if outcome.isNew {
+					p.New++
+				}
+				if err != nil {
+					p.Errors++
+				}
+			})
+		}(i, w)
+	}
+	wg.Wait()
+
+	// Aggregated in work-list order after the fact, so two runs of the same scan
+	// produce the same result and the same log order.
+	for i, o := range outs {
 		if o.err != nil {
 			// Collected, not returned. One bad artifact must not stop discovery
 			// of the rest — that is how a single vendor mistake would otherwise
 			// stall every release behind it.
-			res.TagErrors = append(res.TagErrors, TagError{Repository: repoPath, Tag: o.tag, Err: o.err})
+			res.TagErrors = append(res.TagErrors,
+				TagError{Repository: work[i].repoPath, Tag: work[i].tag, Err: o.err})
 			s.log.WarnContext(ctx, "tag scan failed",
-				"repository", repoPath, "tag", o.tag, "error", o.err)
+				"repository", work[i].repoPath, "tag", work[i].tag, "error", o.err)
 			continue
 		}
 		if o.outcome.isNew {
@@ -475,7 +538,7 @@ func (s *Scanner) scanRepository(ctx context.Context, repoPath string) (repoResu
 			res.Requests += o.outcome.requests
 		}
 	}
-	return res, nil
+	return res
 }
 
 // clientFor returns the cached client for a repository, building it on first

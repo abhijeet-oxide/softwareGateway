@@ -98,20 +98,20 @@ func (s *gatedSource) ResolveTag(ctx context.Context, tag string) (registry.Desc
 	return registry.Descriptor{}, fmt.Errorf("resolve %s: not implemented in this test", tag)
 }
 
-// TestRepositoriesAreScannedConcurrently pins the fix for the reported
-// symptom: 48 repositories, and after two minutes the scan had not finished the
-// first tag of the first repository, because everything ran one at a time.
-func TestRepositoriesAreScannedConcurrently(t *testing.T) {
+// TestRepositoriesAreListedConcurrently pins the fix for the reported symptom:
+// 48 repositories, and after two minutes the scan had not finished the first
+// tag of the first repository, because everything ran one at a time.
+func TestRepositoriesAreListedConcurrently(t *testing.T) {
 	const repos = 12
-	want := product.DefaultRepositoryConcurrency
+	const perRegistry = 6
 
-	g := newGate(want)
+	g := newGate(perRegistry)
 	paths := make([]string, repos)
 	for i := range paths {
 		paths[i] = fmt.Sprintf("orbs/component-%02d", i)
 	}
 
-	s := newGatedScanner(t, paths, g, func(path string) registry.Source {
+	s := newGatedScanner(t, paths, perRegistry, func(path string) registry.Source {
 		return &gatedSource{path: path, g: g}
 	})
 
@@ -127,46 +127,92 @@ func TestRepositoriesAreScannedConcurrently(t *testing.T) {
 	if total != repos {
 		t.Errorf("the gate saw %d callers, want one per repository (%d)", total, repos)
 	}
-	if peak < want {
+	if peak < perRegistry {
 		t.Errorf("peak concurrency was %d, want at least %d — repositories are still "+
-			"being scanned one at a time", peak, want)
+			"being listed one at a time", peak, perRegistry)
 	}
 }
 
-// TestTagsAreResolvedConcurrentlyWithinARepository covers the other axis. One
-// repository with many tags was 2N sequential round trips against a registry
-// across a WAN.
-func TestTagsAreResolvedConcurrentlyWithinARepository(t *testing.T) {
-	want := product.DefaultTagConcurrency
+// TestTagsAreResolvedConcurrentlyAcrossRepositories covers the property the
+// two-phase scan bought.
+//
+// Tags used to be bounded PER REPOSITORY, so a repository with three tags could
+// only ever use three of the budget while the repository with three hundred
+// waited its turn behind it. They now share one pool, which this pins: the gate
+// wants more callers inside it at once than any single repository can supply,
+// so it can only be reached by tags from different repositories overlapping.
+func TestTagsAreResolvedConcurrentlyAcrossRepositories(t *testing.T) {
+	const repos = 8
+	const tagsEach = 2
+	const perRegistry = repos * tagsEach // unreachable within one repository
 
-	tags := make([]string, want*2)
+	tags := make([]string, tagsEach)
 	for i := range tags {
 		tags[i] = fmt.Sprintf("orb_1.0.%d", i)
 	}
+	paths := make([]string, repos)
+	for i := range paths {
+		paths[i] = fmt.Sprintf("orbs/component-%02d", i)
+	}
 
-	g := newGate(want)
-	// A separate, ungated listing so only ResolveTag contends.
+	resolveGate := newGate(perRegistry)
+	// Listing is ungated: only ResolveTag contends, so the peak this measures is
+	// unambiguously the resolve phase.
 	listGate := newGate(1)
 
-	s := newGatedScanner(t, []string{"orbs/only"}, listGate, func(path string) registry.Source {
-		return &gatedSource{path: path, g: listGate, tags: tags}
+	s := newGatedScanner(t, paths, perRegistry, func(path string) registry.Source {
+		return &splitGateSource{path: path, list: listGate, resolve: resolveGate, tags: tags}
 	})
-	// Swap the resolve gate in via a wrapper.
-	s.newClient = func(path string) (registry.Source, error) {
-		return &splitGateSource{path: path, list: listGate, resolve: g, tags: tags}, nil
-	}
 
 	if _, err := s.Scan(t.Context()); err != nil {
 		t.Fatalf("scan: %v", err)
 	}
 
-	peak, total := g.stats()
-	if total != len(tags) {
-		t.Errorf("the gate saw %d resolves, want one per tag (%d)", total, len(tags))
+	peak, total := resolveGate.stats()
+	if want := repos * tagsEach; total != want {
+		t.Errorf("the gate saw %d resolves, want one per tag (%d)", total, want)
 	}
-	if peak < want {
-		t.Errorf("peak tag concurrency was %d, want at least %d — tags are still "+
-			"being resolved one at a time", peak, want)
+	if peak <= tagsEach {
+		t.Errorf("peak tag concurrency was %d, which one repository alone could reach "+
+			"(%d tags each) — tags are still bounded per repository rather than "+
+			"sharing the source's budget", peak, tagsEach)
+	}
+}
+
+// TestConcurrencyIsBoundedByPerRegistry pins the other half: the limit is a
+// limit, not a suggestion. Without a bound the scan would open one connection
+// per tag against someone else's registry.
+func TestConcurrencyIsBoundedByPerRegistry(t *testing.T) {
+	const repos = 10
+	const tagsEach = 10
+	const perRegistry = 4
+
+	tags := make([]string, tagsEach)
+	for i := range tags {
+		tags[i] = fmt.Sprintf("orb_1.0.%d", i)
+	}
+	paths := make([]string, repos)
+	for i := range paths {
+		paths[i] = fmt.Sprintf("orbs/component-%02d", i)
+	}
+
+	// want is set to the bound, so the gate releases as soon as the bound is
+	// reached rather than deadlocking against a ceiling it can never exceed.
+	resolveGate := newGate(perRegistry)
+	listGate := newGate(1)
+
+	s := newGatedScanner(t, paths, perRegistry, func(path string) registry.Source {
+		return &splitGateSource{path: path, list: listGate, resolve: resolveGate, tags: tags}
+	})
+
+	if _, err := s.Scan(t.Context()); err != nil {
+		t.Fatalf("scan: %v", err)
+	}
+
+	peak, _ := resolveGate.stats()
+	if peak > perRegistry {
+		t.Errorf("peak concurrency was %d, above the configured perRegistry of %d",
+			peak, perRegistry)
 	}
 }
 
@@ -206,7 +252,7 @@ func (c staticCatalog) ListAllRepositories(context.Context, int) ([]string, erro
 }
 
 func newGatedScanner(
-	t *testing.T, repos []string, _ *gate, newSource func(string) registry.Source,
+	t *testing.T, repos []string, perRegistry int, newSource func(string) registry.Source,
 ) *Scanner {
 	t.Helper()
 
@@ -214,6 +260,7 @@ func newGatedScanner(
 		Metadata: product.Metadata{Name: "vendor-a"},
 		Spec: product.Spec{Sources: []product.Source{{
 			Name: "primary", Registry: "registry.example.com", Anonymous: true,
+			Concurrency: product.Concurrency{PerRegistry: perRegistry},
 		}}},
 	}
 

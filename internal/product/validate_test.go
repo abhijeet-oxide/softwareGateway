@@ -237,12 +237,30 @@ func TestRejectsUnknownRegistryType(t *testing.T) {
 	}
 }
 
-func TestRejectsBurstBelowRate(t *testing.T) {
+func TestRejectsNegativeConcurrency(t *testing.T) {
 	p := valid()
-	p.Spec.Targets[0].RateLimits = RateLimits{RequestsPerSecond: 100, Burst: 10}
-	e := requireField(t, p.Validate(nil), "spec.targets[0].rateLimits.burst")
+	p.Spec.Targets[0].Concurrency = Concurrency{PerRegistry: -1}
+	requireField(t, p.Validate(nil), "spec.targets[0].concurrency.perRegistry")
+}
+
+func TestRejectsConcurrencyAboveTheCap(t *testing.T) {
+	p := valid()
+	p.Spec.Targets[0].Concurrency = Concurrency{PerRegistry: maxPerRegistry + 1}
+	e := requireField(t, p.Validate(nil), "spec.targets[0].concurrency.perRegistry")
 	if e.Hint == "" {
-		t.Fatal("should explain that this throttles below the configured rate")
+		t.Fatal("should say what this number actually opens against a third party")
+	}
+}
+
+// A migrated document that still carries the old block is a real trap: the new
+// value wins, so the stale one reads as configuration that is quietly inert.
+func TestRejectsSupersededBlockAlongsideConcurrency(t *testing.T) {
+	p := valid()
+	p.Spec.Targets[0].Concurrency = Concurrency{PerRegistry: 8}
+	p.Spec.Targets[0].RateLimits = LegacyRateLimits{MaxConnections: 64}
+	e := requireField(t, p.Validate(nil), "spec.targets[0].rateLimits")
+	if !strings.Contains(e.Message, "ignored") {
+		t.Fatalf("should say the old block is not in force, got %q", e.Message)
 	}
 }
 

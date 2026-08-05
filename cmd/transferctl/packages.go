@@ -28,6 +28,7 @@ func newPackagesCommand() *cobra.Command {
 		newPackagesDescribeCommand(),
 		newPackagesDiscoverCommand(),
 		newPackagesDiscoveryStatusCommand(),
+		newPackagesInspectCommand(),
 	)
 	return cmd
 }
@@ -684,4 +685,55 @@ func optionalCount(n *int) string {
 		return "?"
 	}
 	return strconv.Itoa(*n)
+}
+
+func newPackagesInspectCommand() *cobra.Command {
+	cmd := &cobra.Command{
+		Use:   "inspect <product> <tag-or-digest>",
+		Short: "Expand a package's contents and measure its transfer size",
+		Long: "Discovery is deliberately light: it fetches the tag's own manifest and\n" +
+			"records the artifacts that manifest lists, without fetching them. That\n" +
+			"answers \"what is new\" in two requests per tag, and it means a package's\n" +
+			"transfer size is not yet known.\n\n" +
+			"This walks the rest: it fetches the listed artifacts, records their\n" +
+			"blobs, and measures the bytes a transfer would move.\n\n" +
+			"Safe to repeat. The tree under a digest cannot change, so a second run\n" +
+			"fetches nothing and says so. A transfer performs the same walk, so you\n" +
+			"do not have to run this first — it is for deciding whether you want to.",
+		Args: cobra.ExactArgs(2),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			resp, err := newClient().InspectPackage(cmd.Context(), args[0], args[1])
+			if err != nil {
+				return err
+			}
+			return render(stdout(), opts.output, resp, func(w io.Writer) error {
+				return renderInspect(w, args[0], args[1], resp)
+			})
+		},
+	}
+
+	// It reads from the vendor's registry, so it belongs with the slow commands.
+	contactsRegistries(cmd)
+	return cmd
+}
+
+func renderInspect(w io.Writer, product, ref string, r *v1.InspectPackageResponse) error {
+	if r.AlreadyExpanded {
+		fmt.Fprintf(w, "%s %s was already expanded; nothing was fetched.\n", product, ref)
+	} else {
+		fmt.Fprintf(w, "Expanded %s %s — fetched %d manifest(s).\n", product, ref, r.Fetched)
+	}
+	fmt.Fprintln(w)
+
+	tw := newTabWriter(w)
+	fmt.Fprintf(tw, "  Artifacts\t%d\n", r.Artifacts)
+	fmt.Fprintf(tw, "  Blobs\t%d\n", r.Blobs)
+	fmt.Fprintf(tw, "  Transfer size\t%s\n", humanBytes(r.TotalBytes))
+	if err := tw.Flush(); err != nil {
+		return err
+	}
+
+	fmt.Fprintln(w)
+	fmt.Fprintf(w, "  transferctl packages describe %s %s   # the full artifact tree\n", product, ref)
+	return nil
 }

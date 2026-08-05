@@ -50,6 +50,13 @@ func (f *fakeDiscoverer) StartProduct(_ string) (int, int, error) {
 	return 1, 0, f.err
 }
 
+func (f *fakeDiscoverer) InspectPackage(
+	_ context.Context, _ *store.Packages, pkg store.PackageRow, _ string,
+) (discovery.InspectResult, error) {
+	f.calls++
+	return discovery.InspectResult{Package: pkg, Fetched: 2, Artifacts: 3, Blobs: 5}, f.err
+}
+
 func (f *fakeDiscoverer) Progress(_ string) []discovery.SourceProgress {
 	return f.progress
 }

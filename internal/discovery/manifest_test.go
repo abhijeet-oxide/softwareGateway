@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/abhijeet-oxide/softwareGateway/internal/registry"
+	"github.com/abhijeet-oxide/softwareGateway/test/fakeregistry"
 )
 
 // fakeManifests serves a fixed manifest graph and counts requests.
@@ -222,5 +223,81 @@ func TestRepeatedChildIsRecordedOnce(t *testing.T) {
 	if len(tr.Artifacts) != 2 {
 		t.Errorf("recorded %d artifacts, want 2: a repeated child is one artifact",
 			len(tr.Artifacts))
+	}
+}
+
+// TestInspectFillsInWhatDiscoveryListed is the round trip the two-stage design
+// rests on: discovery records a package cheaply, inspect completes it, and the
+// completed record is what a transfer would move.
+func TestInspectFillsInWhatDiscoveryListed(t *testing.T) {
+	h := newHarness(t, baseDoc)
+
+	shared := fakeregistry.NewLayer("shared-base")
+	amd := h.reg.AddImage(testRepoPath, "", shared, fakeregistry.NewLayer("amd"))
+	arm := h.reg.AddImage(testRepoPath, "", shared, fakeregistry.NewLayer("arm"))
+	h.reg.AddIndex(testRepoPath, "v1.0.0",
+		[]string{amd, arm}, []string{"linux/amd64", "linux/arm64"})
+
+	if res := h.scan(); res.New != 1 {
+		t.Fatalf("expected 1 new package, got %d", res.New)
+	}
+
+	// After discovery: the index fetched, its two children listed, size unknown.
+	if got := h.count(`SELECT COUNT(*) FROM package_artifacts WHERE raw IS NULL`); got != 2 {
+		t.Fatalf("expected 2 listed-but-unfetched artifacts, got %d", got)
+	}
+	if got := h.count(`SELECT COUNT(*) FROM packages WHERE total_bytes IS NULL`); got != 1 {
+		t.Fatalf("expected the size to be unknown after discovery, got %d rows", got)
+	}
+
+	pkg, err := h.packages.GetPackage(t.Context(), "vendor-a", "v1.0.0")
+	if err != nil {
+		t.Fatalf("get package: %v", err)
+	}
+
+	client, err := h.scanner.clientFor(testRepoPath)
+	if err != nil {
+		t.Fatalf("client: %v", err)
+	}
+
+	res, err := InspectPackage(t.Context(), h.packages, pkg, client, 4)
+	if err != nil {
+		t.Fatalf("inspect: %v", err)
+	}
+
+	// Two children fetched; the index itself was already held but is re-read as
+	// part of the walk, so three requests in total.
+	if res.Fetched != 3 {
+		t.Errorf("fetched %d manifests, want 3 (the index and its two children)", res.Fetched)
+	}
+	if res.AlreadyExpanded {
+		t.Error("the package was not already expanded")
+	}
+
+	// Now nothing is merely listed, and the size is real.
+	if got := h.count(`SELECT COUNT(*) FROM package_artifacts WHERE raw IS NULL`); got != 0 {
+		t.Errorf("expected every artifact to carry bytes after inspect, %d still do not", got)
+	}
+	// Two configs and three distinct layers: the shared base counts once.
+	if res.Blobs != 5 {
+		t.Errorf("got %d blobs, want 5 — the shared base layer counted once", res.Blobs)
+	}
+	if res.Package.TotalBytes == nil || *res.Package.TotalBytes <= 0 {
+		t.Errorf("expected a measured size, got %v", res.Package.TotalBytes)
+	}
+	if res.Package.BlobCount == nil || *res.Package.BlobCount != 5 {
+		t.Errorf("expected blob_count 5 on the row, got %v", res.Package.BlobCount)
+	}
+
+	// Idempotent: the tree under a digest cannot change.
+	again, err := InspectPackage(t.Context(), h.packages, pkg, client, 4)
+	if err != nil {
+		t.Fatalf("re-inspect: %v", err)
+	}
+	if again.Blobs != res.Blobs || *again.Package.TotalBytes != *res.Package.TotalBytes {
+		t.Errorf("a second inspection produced different numbers: %+v vs %+v", again, res)
+	}
+	if got := h.count(`SELECT COUNT(*) FROM package_artifacts`); got != 3 {
+		t.Errorf("a second inspection duplicated artifacts: %d rows, want 3", got)
 	}
 }

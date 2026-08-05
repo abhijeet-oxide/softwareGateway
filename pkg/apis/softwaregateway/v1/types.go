@@ -331,6 +331,26 @@ type Artifact struct {
 	Fetched bool `json:"fetched"`
 }
 
+// InspectPackageResponse reports what expanding a package found.
+//
+// Discovery stops at the tag's own manifest, so a package's transfer size is
+// unknown until something walks the tree. This is that something — and it is
+// the same walk a transfer performs, so the numbers here are the numbers a
+// transfer will move.
+type InspectPackageResponse struct {
+	Package Package `json:"package"`
+	// Fetched is manifests fetched by THIS call. Zero means the package was
+	// already expanded and the registry was not troubled again.
+	Fetched int `json:"fetched"`
+	// AlreadyExpanded reports exactly that, so a caller need not infer it from
+	// a zero.
+	AlreadyExpanded bool `json:"alreadyExpanded"`
+
+	Artifacts  int         `json:"artifacts"`
+	Blobs      int         `json:"blobs"`
+	TotalBytes Int64String `json:"totalBytes"`
+}
+
 // ListArtifactsResponse is returned by
 // GET /api/v1/products/{product}/packages/{package}/artifacts.
 type ListArtifactsResponse struct {

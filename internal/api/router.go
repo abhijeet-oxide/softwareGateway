@@ -38,6 +38,9 @@ type Discoverer interface {
 	TriggerProduct(ctx context.Context, productName string) (discovery.ScanResult, error)
 	// StartProduct begins a scan without waiting for it.
 	StartProduct(productName string) (started, alreadyRunning int, err error)
+	// InspectPackage expands one package's manifest tree on demand.
+	InspectPackage(ctx context.Context, packages *store.Packages, pkg store.PackageRow,
+		productName string) (discovery.InspectResult, error)
 	// Progress reports what every source is doing right now.
 	Progress(productName string) []discovery.SourceProgress
 }
@@ -160,6 +163,13 @@ func (s *Server) routes() chi.Router {
 			// polling progress while a scan runs must not be blocked by
 			// whatever gates the write path.
 			r.Get("/products/{product}/discovery", s.handleDiscoveryStatus)
+
+			// AIP-136 custom method: expanding a package has side effects — it
+			// writes artifacts, blobs and a measured size — so it is a POST verb
+			// rather than a GET that quietly mutates.
+			if s.deps.Packages != nil {
+				r.Post("/products/{product}/packages/{package}:inspect", s.handleInspectPackage)
+			}
 		}
 	})
 

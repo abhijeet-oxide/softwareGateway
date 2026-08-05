@@ -303,3 +303,37 @@ That is reported as unknown — `totalBytes` and `blobCount` are NULL in the dat
 A package whose root is a plain image manifest is still fully measured: its config and layer descriptors are inside the one manifest we fetched.
 
 M3's transfer walks the tree, because it must fetch those blobs anyway — and it does so against the digest recorded here, which is what makes deferring safe rather than merely cheaper.
+
+---
+
+## 13. Two stages: discover, then inspect
+
+Discovery answers one question — **what is new** — and stops there. Everything else about a package is recoverable from the digest it recorded, so it is recovered when someone actually wants it.
+
+| | Discovery | `packages:inspect` |
+|---|---|---|
+| Cost per tag | 1 request unchanged, 2 new | 1 per artifact in the tree |
+| Runs | on an interval, unattended | on demand, for one package |
+| Answers | is there something new? | what is in it, and how big? |
+
+`POST /api/v1/products/{product}/packages/{package}:inspect` walks the tree: it fetches the artifacts discovery only listed, records their blobs, and measures the transfer size. `transferctl packages inspect <product> <tag>` is the same thing.
+
+An AIP-136 custom method rather than a GET, because it has side effects — it writes artifacts, blobs and a measured size. Idempotent all the same: **the tree under a digest cannot change**, so a second call fetches nothing and says `alreadyExpanded`.
+
+### One walker, two callers
+
+`InspectPackage` is a function, not logic inside an HTTP handler, because **M3's transfer calls it too**. A transfer has to walk the tree anyway — it cannot copy blobs it has not enumerated — so it performs this expansion before moving bytes. That makes `inspect` optional rather than a required first step: it is for deciding whether you *want* the transfer, not for enabling it.
+
+The alternative was two code paths computing what a package contains, which would eventually disagree about something like whether a repeated child counts once.
+
+### It runs through the source's own client
+
+Inspect is routed through the discovery loop rather than given the API its own registry client, so it uses the same per-source stack: one connection pool, one rate limiter, one cached token, the configured proxy and CA. A second client would be invisible to the ceilings the operator set — which is precisely the bug that made scans slow ([06](06-registry-abstraction.md) §5).
+
+The consequence is that inspect runs on the **leader**, and a follower answers `FAILED_PRECONDITION` saying why rather than a 500.
+
+### Writing over what discovery listed
+
+Discovery wrote the children as rows with no bytes. Inspect fills the same rows in — `ON CONFLICT ... DO UPDATE`, with `raw = COALESCE(EXCLUDED.raw, package_artifacts.raw)` so a re-run cannot blank a manifest already held — and adds anything deeper for the first time.
+
+All in **one transaction**, because a half-expanded package is the worst outcome available: it would carry a size that omits most of its bytes, with nothing marking it partial. Either the whole tree is known or none of it is.

@@ -92,34 +92,20 @@ func (p *Product) Validate(resolver *SecretResolver) error {
 func validateSourceRepositories(path string, s Source) Errors {
 	var errs Errors
 
-	declared := s.DeclaredRepositories()
+	// Naming no repositories is VALID and is the interesting case: it means
+	// "every repository on this registry", found from the catalog. A product
+	// whose components each ship as a new repository cannot list them in
+	// advance, and requiring it would mean a new component is silently not
+	// replicated until somebody edits the ConfigMap.
+	//
+	// Scoping that with discovery.repositoryFilters is strongly advised on a
+	// shared registry, but it is not an error — a registry dedicated to one
+	// vendor needs no filter, and refusing to start would be wrong there.
+	// `transferctl products check` reports how many repositories an unfiltered
+	// source would actually adopt, which is the fact worth acting on.
 
-	// A source must get its repositories from somewhere. Silently scanning
-	// nothing is the failure mode this prevents: the product would appear
-	// healthy and discover no packages, forever.
-	if len(declared) == 0 && !s.RepositoryDiscovery.Enabled {
-		errs = append(errs, Error{
-			path,
-			"no repositories declared",
-			"set `repository: <path>`, `repositories: [<path>, ...]`, " +
-				"or `repositoryDiscovery.enabled: true`",
-		})
-	}
-
-	// Catalog enumeration without filters adopts every repository on the
-	// registry. On a shared internal registry that is every other team's too.
-	if s.RepositoryDiscovery.Enabled &&
-		len(s.RepositoryFilters.Include) == 0 && len(s.RepositoryFilters.Exclude) == 0 {
-		errs = append(errs, Error{
-			path + ".repositoryDiscovery",
-			"enabled with no repositoryFilters",
-			"an unfiltered catalog scan adopts EVERY repository on the registry, " +
-				"including other teams'. Add repositoryFilters.include to scope it",
-		})
-	}
-
-	if n := s.RepositoryDiscovery.MaxRepositories; n < 0 {
-		errs = append(errs, Error{path + ".repositoryDiscovery.maxRepositories", "must not be negative", ""})
+	if n := s.Discovery.MaxRepositories; n < 0 {
+		errs = append(errs, Error{path + ".discovery.maxRepositories", "must not be negative", ""})
 	}
 
 	for i, r := range s.Repositories {
@@ -316,14 +302,14 @@ func (p *Product) validateSources(resolver *SecretResolver) Errors {
 				errs = append(errs, Error{fmt.Sprintf("%s.discovery.tagFilters.exclude[%d]", path, j), invalidRegexpMessage(pat, err), ""})
 			}
 		}
-		for j, pat := range s.RepositoryFilters.Include {
+		for j, pat := range s.Discovery.RepositoryFilters.Include {
 			if _, err := regexp.Compile(pat); err != nil {
-				errs = append(errs, Error{fmt.Sprintf("%s.repositoryFilters.include[%d]", path, j), invalidRegexpMessage(pat, err), ""})
+				errs = append(errs, Error{fmt.Sprintf("%s.discovery.repositoryFilters.include[%d]", path, j), invalidRegexpMessage(pat, err), ""})
 			}
 		}
-		for j, pat := range s.RepositoryFilters.Exclude {
+		for j, pat := range s.Discovery.RepositoryFilters.Exclude {
 			if _, err := regexp.Compile(pat); err != nil {
-				errs = append(errs, Error{fmt.Sprintf("%s.repositoryFilters.exclude[%d]", path, j), invalidRegexpMessage(pat, err), ""})
+				errs = append(errs, Error{fmt.Sprintf("%s.discovery.repositoryFilters.exclude[%d]", path, j), invalidRegexpMessage(pat, err), ""})
 			}
 		}
 		errs = append(errs, validateNetwork(path+".network", s.Network, resolver)...)

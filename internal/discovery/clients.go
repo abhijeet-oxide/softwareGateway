@@ -89,15 +89,15 @@ func SourceClientFactory(
 	}, nil
 }
 
-// SourceCatalog builds a registry-scoped client for catalog enumeration.
+// SourceCatalog builds a registry-scoped client for enumerating repositories.
 //
-// Returns nil when repositoryDiscovery is off, which is the default — building
-// it unconditionally would mint a second connection pool and a second token
-// scope for every source that never uses them.
+// Returns nil when the source names its repositories — building it anyway would
+// mint a second connection pool and a second token scope for a source that will
+// never enumerate.
 func SourceCatalog(
 	p *product.Product, src product.Source, secrets *product.SecretResolver,
 ) (CatalogLister, error) {
-	if !src.RepositoryDiscovery.Enabled {
+	if !src.EnumeratesRepositories() {
 		return nil, nil
 	}
 

@@ -113,19 +113,13 @@ func NewScanner(cfg ScannerConfig) (*Scanner, error) {
 	if err != nil {
 		return nil, fmt.Errorf("%s: %w", where, err)
 	}
-	repoFilter, err := compileFilters("repositoryFilters", src.RepositoryFilters)
+	repoFilter, err := compileFilters("discovery.repositoryFilters", src.Discovery.RepositoryFilters)
 	if err != nil {
 		return nil, fmt.Errorf("%s: %w", where, err)
 	}
 	rules, err := compileRules(cfg.Product.Spec.AutoDownload)
 	if err != nil {
 		return nil, fmt.Errorf("product %q: %w", cfg.Product.Metadata.Name, err)
-	}
-
-	if len(src.DeclaredRepositories()) == 0 && !src.RepositoryDiscovery.Enabled {
-		return nil, fmt.Errorf(
-			"%s names no repositories: set `repository`, `repositories`, "+
-				"or `repositoryDiscovery.enabled: true`", where)
 	}
 
 	log := cfg.Logger
@@ -219,15 +213,15 @@ func (s *Scanner) Scan(ctx context.Context) (ScanResult, error) {
 		// is usually good for pulling named repositories, not for enumerating
 		// the registry — and the repositories we WERE told about must still be
 		// scanned.
-		s.log.WarnContext(ctx, "repository discovery failed; scanning declared repositories only",
+		s.log.WarnContext(ctx, "could not list the registry's repositories",
 			"error", describeCatalogError(set.CatalogErr))
 		res.RepositoryErrors = append(res.RepositoryErrors,
 			RepositoryError{Repository: "_catalog", Err: set.CatalogErr})
 	}
 	if set.Truncated {
-		s.log.WarnContext(ctx, "repository discovery hit its cap; the set is partial",
-			"max", s.sourceCfg.RepositoryDiscovery.EffectiveMaxRepositories(),
-			"hint", "narrow repositoryFilters, or raise repositoryDiscovery.maxRepositories")
+		s.log.WarnContext(ctx, "repository enumeration hit its cap; the set is partial",
+			"max", s.sourceCfg.Discovery.EffectiveMaxRepositories(),
+			"hint", "narrow discovery.repositoryFilters, or raise discovery.maxRepositories")
 	}
 
 	if len(set.Repositories) == 0 {
@@ -265,7 +259,7 @@ func (s *Scanner) Scan(ctx context.Context) (ScanResult, error) {
 	// Retire discovery-managed rows for repositories that have left the
 	// catalog. Only attempted when enumeration actually succeeded: a failed
 	// catalog call must not be read as "everything disappeared".
-	if s.sourceCfg.RepositoryDiscovery.Enabled && set.CatalogErr == nil {
+	if s.sourceCfg.EnumeratesRepositories() && set.CatalogErr == nil {
 		if n, err := s.packages.DeactivateDiscoveredRepositories(
 			ctx, s.productID, s.sourceCfg.Registry, set.Repositories); err != nil {
 			s.log.WarnContext(ctx, "could not retire vanished repositories", "error", err)

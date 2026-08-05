@@ -33,40 +33,55 @@ for each enabled source repository, every `interval`:
 
 `ResolveTag` uses `HEAD` and reads the `Docker-Content-Digest` header, so the common case — a scan where nothing changed — costs one small request per tag and transfers no manifest bodies. Manifest trees are fetched only for genuinely new packages (step 4).
 
-## 2.1 Repository enumeration
+## 2.1 Which repositories a source covers
 
-A source covers **one registry and one or more repositories on it**. A product that ships as several components — `suite/core`, `suite/database`, `suite/frontend` — declares them under a single source, not one source each: they share a registry host, one credential and one rate-limit budget, and splitting them would duplicate all three and let the per-repository budgets multiply against a vendor that only ever sees one client.
+A source is **one registry**. Which repositories on it get scanned is decided by one question, with no separate switch:
+
+```
+repositories named   ─▶ scan exactly those
+none named           ─▶ every repository on the registry,
+                        narrowed by discovery.repositoryFilters
+```
+
+> **Decision — naming no repositories IS the request to enumerate.**
+>
+> *Alternative:* a `repositoryDiscovery.enabled` flag, which an earlier revision had.
+>
+> *Rejected because* it made two fields say the same thing, and let them disagree. `repositories` listed with `enabled: false`, or nothing listed with `enabled: false`, are both configurations that look deliberate and scan nothing. A single source of truth cannot express a contradiction.
+>
+> *And the enumerating case is the one that matters.* A product whose components each ship as a **new repository** cannot list them in advance. Requiring a list means a new component is silently not replicated until somebody edits the ConfigMap — a failure with no symptom, which is the worst kind.
+
+Both filters live under `discovery`, because discovery is what they govern: a scan finds **repositories**, then **tags**, and each step gets one.
+
+```yaml
+discovery:
+  enabled: true
+  interval: 15m
+  repositoryFilters: {include: [...], exclude: [...]}
+  tagFilters:        {include: [...], exclude: [...]}
+  maxRepositories: 200
+```
 
 The repository set is re-resolved on **every scan**, for exactly the reason the tag set is (§3): a repository published since the last pass should be found without a restart or a configuration reload.
 
-Two ways in, one rule out:
-
-```
-explicit `repository` / `repositories`  ─┐
-                                         ├─▶ repositoryFilters ─▶ scan set
-catalog enumeration (opt-in)            ─┘
-```
-
-Filters apply to **both**, so there is one rule to learn rather than one per source of names.
-
-> **Decision — catalog enumeration is available, and off by default.**
+> **Decision — catalog enumeration is supported, unfiltered enumeration is a warning rather than an error.**
 >
 > *An earlier revision of this document rejected `/v2/_catalog` outright.* That was too strong, and this records the correction rather than quietly rewriting it.
 >
-> *The original argument, which still holds for a vendor registry:* catalog enumeration is slow on large registries, inconsistently paginated, and frequently forbidden for the credentials a vendor issues — the credential is usually scoped to pulling a named repository, not to listing the registry. Worse, it makes discovery scope depend on registry-side permissions rather than on Git, which is the opposite of what a GitOps-managed system wants.
+> *The original argument, which still holds for a vendor registry:* enumeration is slow on large registries, inconsistently paginated, and frequently forbidden for the credentials a vendor issues — the credential is usually scoped to pulling a named repository, not to listing the registry.
 >
-> *Why it is nonetheless supported:* none of that holds for an **internal registry you control**, where a product legitimately spans dozens of repositories and enumerating them by hand in YAML is its own kind of drift — a new component ships, nobody edits the ConfigMap, and it is silently not replicated.
+> *Why it is nonetheless supported:* none of that holds for an **internal registry you control**, which is exactly where a product spans repositories nobody can enumerate in advance.
 >
-> *How the original concerns are kept:* it is **opt-in** (`repositoryDiscovery.enabled`), so the default behaviour is unchanged and scope still comes from Git unless someone deliberately says otherwise. Validation **requires** `repositoryFilters` alongside it, because an unfiltered catalog scan of a shared registry adopts every other team's repositories. Adoption is **capped** (`maxRepositories`, default 200), because a catalog that suddenly returns thousands of entries is far more likely to be a misconfiguration than a real change. And a catalog call that fails is **not fatal**: repositories named explicitly are still scanned, and the failure is reported with the likely cause rather than as a generic error.
+> *Why unfiltered enumeration is not rejected:* on a registry dedicated to one product it is correct, and on a shared one it is a mistake — and only the operator knows which. A blanket rule would be wrong half the time. So [`transferctl products check`](13-cli.md) reports **the number that decides it**: how many repositories this source would actually adopt. A fact beats a rule when the rule cannot be right for everyone.
 >
-> *What would change our mind:* evidence that operators enable it on vendor registries and then discover their scope silently changed when the vendor adjusted permissions. The mitigation would be to refuse it for any source whose registry is not on an allow-list.
+> *What is kept from the original concerns:* adoption is capped (`maxRepositories`, default 200), because a catalog suddenly returning thousands is far more likely to be a misconfiguration than a real change. And a registry that refuses enumeration produces an error naming the fix — list the repositories — rather than a generic 403.
 
 **Two populations of repository rows.** `repositories.managed_by` distinguishes them, because their lifecycles differ:
 
 | `managed_by` | Created by | Deactivated by |
 |---|---|---|
 | `config` | reconciliation, from YAML | reconciliation, when the declaration is removed |
-| `discovery` | a scan, from the catalog | a scan, when it leaves the catalog |
+| `discovery` | a scan, from the registry | a scan, when it leaves the registry |
 
 Without the distinction, every configuration reload would deactivate every discovered repository and the next scan would revive it — a flap that would churn the audit trail for no reason.
 

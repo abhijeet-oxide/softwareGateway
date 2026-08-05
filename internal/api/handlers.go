@@ -192,7 +192,7 @@ func toAPIProduct(p *product.Product) v1.Product {
 			Name:                s.Name,
 			Registry:            s.Registry,
 			Repositories:        s.DeclaredRepositories(),
-			RepositoryDiscovery: s.RepositoryDiscovery.Enabled,
+			RepositoryDiscovery: s.EnumeratesRepositories(),
 			Type:                string(s.Type),
 			Role:                string(product.RoleSource),
 			RateLimits:          toAPIRateLimits(s.RateLimits),
@@ -208,11 +208,8 @@ func toAPIProduct(p *product.Product) v1.Product {
 		if declared := s.DeclaredRepositories(); len(declared) == 1 {
 			r.Repository = declared[0]
 		}
-		if len(s.RepositoryFilters.Include) > 0 || len(s.RepositoryFilters.Exclude) > 0 {
-			r.RepositoryFilters = &v1.Filters{
-				Include: s.RepositoryFilters.Include,
-				Exclude: s.RepositoryFilters.Exclude,
-			}
+		if f := s.Discovery.RepositoryFilters; len(f.Include) > 0 || len(f.Exclude) > 0 {
+			r.RepositoryFilters = &v1.Filters{Include: f.Include, Exclude: f.Exclude}
 		}
 		out.Sources = append(out.Sources, r)
 	}

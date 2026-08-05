@@ -117,10 +117,10 @@ type Repository struct {
 	// Repositories is every path this covers. A source may span many; a target
 	// is always exactly one.
 	Repositories []string `json:"repositories,omitempty"`
-	// RepositoryDiscovery reports whether the set is enumerated from the
-	// registry catalog rather than declared.
+	// RepositoryDiscovery reports that this source names no repositories and
+	// therefore finds them from the registry catalog.
 	RepositoryDiscovery bool `json:"repositoryDiscovery,omitempty"`
-	// RepositoryFilters narrows the set, however it was obtained.
+	// RepositoryFilters narrows the set. Its main use is the enumerated case.
 	RepositoryFilters *Filters `json:"repositoryFilters,omitempty"`
 
 	Type          string     `json:"type"`

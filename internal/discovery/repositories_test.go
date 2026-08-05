@@ -75,7 +75,7 @@ func TestRepositoryPathsAreNormalised(t *testing.T) {
 
 func TestResolveRepositoriesExplicitOnly(t *testing.T) {
 	src := product.Source{Repositories: []string{"b/two", "a/one"}}
-	f, _ := compileFilters("repositoryFilters", product.Filters{})
+	f, _ := compileFilters("discovery.repositoryFilters", product.Filters{})
 
 	res := resolveRepositories(t.Context(), src, f, nil)
 
@@ -90,9 +90,10 @@ func TestResolveRepositoriesExplicitOnly(t *testing.T) {
 }
 
 func TestResolveRepositoriesFromCatalog(t *testing.T) {
-	src := product.Source{RepositoryDiscovery: product.RepositoryDiscovery{Enabled: true}}
+	// No repositories named: the source enumerates.
+	src := product.Source{}
 	cat := &stubCatalog{repos: []string{"platform/core", "platform/db", "other/thing"}}
-	f, _ := compileFilters("repositoryFilters", product.Filters{Include: []string{`^platform/`}})
+	f, _ := compileFilters("discovery.repositoryFilters", product.Filters{Include: []string{`^platform/`}})
 
 	res := resolveRepositories(t.Context(), src, f, cat)
 
@@ -111,7 +112,7 @@ func TestResolveRepositoriesFromCatalog(t *testing.T) {
 // the set was obtained.
 func TestFiltersApplyToExplicitRepositories(t *testing.T) {
 	src := product.Source{Repositories: []string{"platform/core", "platform/core-test"}}
-	f, _ := compileFilters("repositoryFilters", product.Filters{Exclude: []string{`-test$`}})
+	f, _ := compileFilters("discovery.repositoryFilters", product.Filters{Exclude: []string{`-test$`}})
 
 	res := resolveRepositories(t.Context(), src, f, nil)
 
@@ -120,37 +121,55 @@ func TestFiltersApplyToExplicitRepositories(t *testing.T) {
 	}
 }
 
-// A catalog that refuses enumeration must not stop the declared repositories
-// from being scanned. This is the common vendor case: the credential is good
-// for pulling a named repository and not for listing the registry.
-func TestCatalogFailureKeepsDeclaredRepositories(t *testing.T) {
-	src := product.Source{
-		Repositories:        []string{"platform/core"},
-		RepositoryDiscovery: product.RepositoryDiscovery{Enabled: true},
-	}
+// A source that enumerates and cannot has nothing to fall back on, so the
+// error has to name the fix. This is the common vendor case: the credential is
+// good for pulling a named repository and not for listing the registry.
+func TestCatalogFailureIsExplainedWithTheFix(t *testing.T) {
+	src := product.Source{} // names nothing, so it enumerates
 	cat := &stubCatalog{err: registry.ErrForbidden}
-	f, _ := compileFilters("repositoryFilters", product.Filters{})
+	f, _ := compileFilters("discovery.repositoryFilters", product.Filters{})
 
 	res := resolveRepositories(t.Context(), src, f, cat)
 
-	if len(res.Repositories) != 1 || res.Repositories[0] != "platform/core" {
-		t.Fatalf("declared repositories must survive a catalog failure, got %v", res.Repositories)
+	if len(res.Repositories) != 0 {
+		t.Fatalf("nothing could be resolved, got %v", res.Repositories)
 	}
 	if res.CatalogErr == nil {
-		t.Error("the catalog failure must still be reported")
+		t.Fatal("the failure must be reported")
 	}
-	if !strings.Contains(describeCatalogError(res.CatalogErr), "credential") {
-		t.Errorf("a 403 should be explained as a credential scope problem, got: %s",
-			describeCatalogError(res.CatalogErr))
+	msg := describeCatalogError(res.CatalogErr)
+	if !strings.Contains(msg, "credential") {
+		t.Errorf("a 403 should be explained as a credential scope problem, got: %s", msg)
+	}
+	if !strings.Contains(msg, "repositories:") {
+		t.Errorf("the message must name the fix, got: %s", msg)
+	}
+}
+
+// Naming repositories means exactly those, and the catalog is not consulted at
+// all — so its permissions cannot break a source that does not need them.
+func TestNamedRepositoriesNeverConsultTheCatalog(t *testing.T) {
+	src := product.Source{Repositories: []string{"platform/core"}}
+	cat := &stubCatalog{err: registry.ErrForbidden}
+	f, _ := compileFilters("discovery.repositoryFilters", product.Filters{})
+
+	res := resolveRepositories(t.Context(), src, f, cat)
+
+	if cat.calls != 0 {
+		t.Error("a source that names its repositories must not call the catalog")
+	}
+	if res.CatalogErr != nil {
+		t.Error("a catalog it never called cannot have failed")
+	}
+	if len(res.Repositories) != 1 || res.Repositories[0] != "platform/core" {
+		t.Errorf("got %v", res.Repositories)
 	}
 }
 
 func TestCatalogCapTruncates(t *testing.T) {
-	src := product.Source{RepositoryDiscovery: product.RepositoryDiscovery{
-		Enabled: true, MaxRepositories: 2,
-	}}
+	src := product.Source{Discovery: product.Discovery{MaxRepositories: 2}}
 	cat := &stubCatalog{repos: []string{"a/1", "a/2", "a/3", "a/4"}}
-	f, _ := compileFilters("repositoryFilters", product.Filters{})
+	f, _ := compileFilters("discovery.repositoryFilters", product.Filters{})
 
 	res := resolveRepositories(t.Context(), src, f, cat)
 
@@ -165,7 +184,7 @@ func TestCatalogCapTruncates(t *testing.T) {
 func TestCatalogNotConsultedWhenDisabled(t *testing.T) {
 	src := product.Source{Repositories: []string{"a/one"}}
 	cat := &stubCatalog{repos: []string{"b/two"}}
-	f, _ := compileFilters("repositoryFilters", product.Filters{})
+	f, _ := compileFilters("discovery.repositoryFilters", product.Filters{})
 
 	res := resolveRepositories(t.Context(), src, f, cat)
 
@@ -245,7 +264,7 @@ func newMultiRepoHarness(t *testing.T, doc string) *multiRepoHarness {
 	}
 
 	var cat CatalogLister
-	if src.RepositoryDiscovery.Enabled {
+	if src.EnumeratesRepositories() {
 		c, err := generic.NewCatalog(generic.CatalogConfig{
 			Registry: reg.Host(), PlainHTTP: true, Transport: fastTransport,
 		})
@@ -441,13 +460,11 @@ spec:
     - name: vendor
       registry: REGISTRY_HOST
       anonymous: true
-      repositoryDiscovery:
-        enabled: true
-      repositoryFilters:
-        include: ['^platform/']
-        exclude: ['-test$']
       discovery:
         enabled: true
+        repositoryFilters:
+          include: ['^platform/']
+          exclude: ['-test$']
   targets:
     - name: internal
       registry: REGISTRY_HOST
@@ -530,7 +547,11 @@ func TestReconcileDoesNotTouchDiscoveredRepositories(t *testing.T) {
 	}
 }
 
-func TestScannerRejectsSourceWithNoRepositories(t *testing.T) {
+// A source that names no repositories is VALID — it enumerates. This is the
+// case that matters: a product whose components each ship as a new repository
+// cannot list them in advance, and rejecting the document would mean every new
+// component is silently not replicated until somebody edits the ConfigMap.
+func TestSourceWithNoRepositoriesIsValidAndEnumerates(t *testing.T) {
 	doc := `
 apiVersion: softwaregateway.io/v1alpha1
 kind: Product
@@ -552,17 +573,42 @@ spec:
 	if err := os.WriteFile(filepath.Join(dir, "p.yaml"), []byte(doc), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	loader := product.NewLoader(dir, product.NewSecretResolver(t.TempDir()))
-	res, err := loader.Load()
+	res, err := product.NewLoader(dir, product.NewSecretResolver(t.TempDir())).Load()
 	if err != nil {
 		t.Fatal(err)
 	}
-
-	// Validation should reject it before a scanner is ever built.
-	if len(res.Invalid) != 1 {
-		t.Fatalf("expected the document to be rejected, got %d invalid", len(res.Invalid))
+	if len(res.Invalid) != 0 {
+		t.Fatalf("naming no repositories must be valid, got: %v", res.Invalid[0].Err)
 	}
-	if !strings.Contains(res.Invalid[0].Err.Error(), "no repositories declared") {
-		t.Errorf("error should name the problem, got: %v", res.Invalid[0].Err)
+
+	src, _ := res.Valid[0].Source("vendor")
+	if !src.EnumeratesRepositories() {
+		t.Error("a source naming no repositories must enumerate them")
+	}
+
+	// And a scanner builds for it, rather than refusing at construction.
+	if _, err := NewScanner(ScannerConfig{
+		Product: res.Valid[0], ProductID: 1, SourceName: "vendor",
+	}); err != nil {
+		t.Errorf("a scanner must build for an enumerating source: %v", err)
+	}
+}
+
+// Naming repositories switches enumeration off. There is no separate flag, so
+// configuration cannot say one thing and mean another.
+func TestNamingRepositoriesDisablesEnumeration(t *testing.T) {
+	named := product.Source{Repositories: []string{"a/one"}}
+	if named.EnumeratesRepositories() {
+		t.Error("a source that names repositories must not enumerate")
+	}
+
+	singular := product.Source{Repository: "a/one"}
+	if singular.EnumeratesRepositories() {
+		t.Error("the singular form must count too")
+	}
+
+	none := product.Source{}
+	if !none.EnumeratesRepositories() {
+		t.Error("naming nothing must enumerate")
 	}
 }

@@ -363,7 +363,9 @@ func TestMissingSecretIsReportedBeforeAnyNetworkCall(t *testing.T) {
 	}
 }
 
-func TestCatalogPermissionIsCheckedWhenDiscoveryIsOn(t *testing.T) {
+// A source that names no repositories is checked for the permission it
+// actually needs: listing the registry.
+func TestCatalogPermissionIsCheckedWhenSourceEnumerates(t *testing.T) {
 	h := newHarness(t)
 	h.reg.AddImage("suite/core", "v1.0.0", fakeregistry.NewLayer("a"))
 
@@ -376,8 +378,8 @@ spec:
     - name: vendor
       registry: REGISTRY_HOST
       anonymous: true
-      repositoryDiscovery: {enabled: true}
-      repositoryFilters: {include: ['^suite/']}
+      discovery:
+        repositoryFilters: {include: ['^suite/']}
   targets:
     - name: internal
       registry: REGISTRY_HOST
@@ -387,16 +389,54 @@ spec:
 `
 	res := h.checker.CheckProduct(t.Context(), h.load(doc))
 
-	r := repoNamed(t, res, "vendor")
-	s := step(t, r, "can enumerate repositories")
+	s := step(t, repoNamed(t, res, "vendor"), "can list repositories")
 	if s.Status != StatusOK {
-		t.Errorf("catalog enumeration should succeed against this registry, got %s: %s", s.Status, s.Detail)
+		t.Errorf("listing should succeed against this registry, got %s: %s", s.Status, s.Detail)
 	}
 }
 
-// Not checked when the feature is off — probing a permission the product does
-// not need would report a failure that does not matter.
-func TestCatalogNotCheckedWhenDiscoveryIsOff(t *testing.T) {
+// Enumerating with no filters is legitimate on a dedicated registry and a
+// mistake on a shared one, and only the operator knows which. So it is not an
+// error — it is a warning carrying the number that decides it.
+func TestUnfilteredEnumerationWarnsWithTheCount(t *testing.T) {
+	h := newHarness(t)
+	h.reg.AddImage("suite/core", "v1.0.0", fakeregistry.NewLayer("a"))
+	h.reg.AddImage("otherteam/thing", "v1.0.0", fakeregistry.NewLayer("b"))
+	h.reg.AddImage("someoneelse/app", "v1.0.0", fakeregistry.NewLayer("c"))
+
+	doc := `
+apiVersion: softwaregateway.io/v1alpha1
+kind: Product
+metadata: {name: p}
+spec:
+  sources:
+    - name: vendor
+      registry: REGISTRY_HOST
+      anonymous: true
+  targets:
+    - name: internal
+      registry: REGISTRY_HOST
+      repository: mirror/p
+      anonymous: true
+      default: true
+`
+	res := h.checker.CheckProduct(t.Context(), h.load(doc))
+
+	s := step(t, repoNamed(t, res, "vendor"), "can list repositories")
+	if s.Status != StatusWarning {
+		t.Fatalf("an unfiltered enumeration should warn, got %s", s.Status)
+	}
+	if !strings.Contains(s.Detail, "3 repositories") {
+		t.Errorf("the count is the fact that decides it; got %q", s.Detail)
+	}
+	if !strings.Contains(s.Hint, "repositoryFilters") {
+		t.Errorf("the hint should name the fix, got %q", s.Hint)
+	}
+}
+
+// Not checked when the source names its repositories — probing a permission
+// the product does not need would report a failure that does not matter.
+func TestCatalogNotCheckedWhenRepositoriesAreNamed(t *testing.T) {
 	h := newHarness(t)
 	h.reg.AddImage("suite/core", "v1.0.0", fakeregistry.NewLayer("a"))
 	h.reg.AddImage("suite/database", "v2.0.0", fakeregistry.NewLayer("b"))
@@ -405,8 +445,8 @@ func TestCatalogNotCheckedWhenDiscoveryIsOff(t *testing.T) {
 
 	for _, r := range res.Repositories {
 		for _, s := range r.Steps {
-			if s.Name == "can enumerate repositories" {
-				t.Error("catalog permission must not be probed when repositoryDiscovery is off")
+			if s.Name == "can list repositories" {
+				t.Error("registry-listing permission must not be probed when repositories are named")
 			}
 		}
 	}

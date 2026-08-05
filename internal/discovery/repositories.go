@@ -96,26 +96,31 @@ type RepositorySet struct {
 	Truncated bool
 	// CatalogErr records a catalog enumeration that failed.
 	//
-	// NOT fatal: a source that also names repositories explicitly keeps
-	// scanning those. A vendor forbidding `_catalog` — which is common, since
-	// the credential is usually good for pulling a named repository and not for
-	// enumerating the registry — must not stop the repositories we were told
-	// about from being scanned.
+	// A source that enumerates has nothing else to fall back on, so this is
+	// where the scan's failure comes from. The message matters: a vendor
+	// forbidding `_catalog` is common — the credential is usually good for
+	// pulling a named repository and not for enumerating the registry — and
+	// the fix is to name the repositories, which is what describeCatalogError
+	// says.
 	CatalogErr error
 }
 
 // resolveRepositories determines which repositories a source should scan.
 //
-// Two ways in, one rule out:
+// One question decides it: did configuration name any?
 //
-//	explicit `repository`/`repositories`  ─┐
-//	                                       ├─▶ repositoryFilters ─▶ scan set
-//	catalog enumeration (opt-in)          ─┘
+//	repositories named   ─▶ scan exactly those
+//	none named           ─▶ every repository on the registry,
+//	                        narrowed by discovery.repositoryFilters
 //
-// Filters apply to BOTH, so there is one rule to learn rather than one per
-// source of names. Filtering an explicitly named repository is unusual but
-// consistent — and useful when a document lists a broad set and carves out a
-// few.
+// There is no separate "enable discovery" switch. Naming nothing IS the
+// statement "I do not know them yet, find them" — which is the case that
+// matters, because a product whose components each ship as a new repository
+// cannot list them in advance.
+//
+// Filters are applied either way, so there is one rule rather than one per
+// origin. Their real use is the enumerated case, where they are what keeps a
+// shared registry's other tenants out of scope.
 func resolveRepositories(
 	ctx context.Context, src product.Source, f filter, catalog CatalogLister,
 ) RepositorySet {
@@ -124,8 +129,8 @@ func resolveRepositories(
 	candidates := src.DeclaredRepositories()
 	declared := len(candidates)
 
-	if src.RepositoryDiscovery.Enabled && catalog != nil {
-		maxRepos := src.RepositoryDiscovery.EffectiveMaxRepositories()
+	if src.EnumeratesRepositories() && catalog != nil {
+		maxRepos := src.Discovery.EffectiveMaxRepositories()
 		found, err := catalog.ListAllRepositories(ctx, maxRepos)
 		switch {
 		case err != nil:
@@ -175,12 +180,12 @@ func describeCatalogError(err error) string {
 	case err == nil:
 		return ""
 	case errors.Is(err, registry.ErrUnauthorized), errors.Is(err, registry.ErrForbidden):
-		return "the registry refused catalog enumeration: the credential is probably " +
-			"scoped to pulling named repositories rather than listing the registry. " +
-			"Name the repositories under `repositories:` instead"
+		return "the registry refused to list its repositories: this credential is " +
+			"probably scoped to pulling named repositories rather than enumerating " +
+			"the registry. Name them under `repositories:` instead"
 	case errors.Is(err, registry.ErrNotFound):
-		return "the registry does not implement /v2/_catalog. " +
-			"Name the repositories under `repositories:` instead"
+		return "the registry does not implement /v2/_catalog, so its repositories " +
+			"cannot be discovered. Name them under `repositories:` instead"
 	default:
 		return err.Error()
 	}

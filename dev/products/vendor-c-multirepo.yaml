@@ -5,7 +5,8 @@
 # exists to answer three questions the schema alone does not:
 #
 #   1. How do I cover more than one repository?
-#   2. How do I let the tool find repositories instead of listing them?
+#   2. What if I do not know the repositories yet — a new one appears every
+#      time a component is published?
 #   3. Where do I put my internal CA certificate?
 
 apiVersion: softwaregateway.io/v1alpha1
@@ -69,33 +70,38 @@ spec:
         requestsPerSecond: 50
 
     # -----------------------------------------------------------------
-    # Repositories found from the registry catalog instead of listed.
+    # NO REPOSITORIES NAMED — the interesting case.
     #
-    # OFF by default and opt-in for good reason: `/v2/_catalog` is slow on
-    # large registries, inconsistently paginated, and frequently forbidden
-    # for the credentials a vendor issues — and it makes discovery scope
-    # depend on registry permissions rather than on Git.
+    # Naming none means "every repository on this registry", found from the
+    # catalog on every scan. This is what you want when you cannot know the
+    # set in advance: each new plugin ships as a NEW repository, and listing
+    # them by hand means a plugin is silently not replicated until somebody
+    # remembers to edit this file.
     #
-    # It earns its place on an INTERNAL registry you control, where a product
-    # spans dozens of repositories and listing them by hand is its own drift.
+    # There is no `enabled` switch for it. Naming nothing IS the statement,
+    # so configuration cannot say one thing and mean another.
     #
-    # repositoryFilters is REQUIRED in practice and validation says so: an
-    # unfiltered catalog scan of a shared registry adopts every other team's
-    # repositories too.
+    # discovery.repositoryFilters is what keeps the scope to ours on a
+    # registry shared with other teams. It is not mandatory — a registry
+    # dedicated to one product needs no filter — but `transferctl products
+    # check` reports how many repositories an unfiltered source would adopt,
+    # which is the fact worth knowing.
     # -----------------------------------------------------------------
     - name: plugins
       registry: internal.example.com
       credentialsRef:
         secretName: internal-registry
-      repositoryDiscovery:
-        enabled: true
-        maxRepositories: 100
-      repositoryFilters:
-        include: ['^vendor-c/plugins/']
-        exclude: ['-test$', '-scratch$']
       discovery:
         enabled: true
         interval: 30m
+        # Both filters live here because discovery is what they govern: a scan
+        # finds REPOSITORIES, then TAGS, and each step gets a filter.
+        repositoryFilters:
+          include: ['^vendor-c/plugins/']
+          exclude: ['-test$', '-scratch$']
+        tagFilters:
+          include: ['^v\d+\.\d+\.\d+$']
+        maxRepositories: 100
       # Per-source network settings override the product's where set, so one
       # vendor reachable by a different route does not mean duplicating the
       # whole block.

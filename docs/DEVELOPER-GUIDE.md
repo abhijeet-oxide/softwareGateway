@@ -273,49 +273,80 @@ Validate before committing:
 ./bin/transferctl config validate ./dev/products
 ```
 
-#### A source can cover several repositories
+#### Repositories: name one, name several, or name none
 
-A product whose components ship as separate repositories declares them all under **one** source — they share a registry host, one credential and one rate-limit budget:
+A source is **one registry**. Which repositories on it get scanned is decided by one question: *did you name any?*
 
 ```yaml
   sources:
+    # One.
+    - name: vendor
+      registry: registry.vendor-a.example.com
+      repository: platform/suite
+
+    # Several — a product whose components ship separately.
     - name: components
       registry: registry.vendor-c.example.com
-      repositories:                     # instead of `repository:`
+      repositories:
         - suite/core
         - suite/database
         - suite/frontend
-      credentialsRef:
-        secretName: vendor-c-registry
+
+    # NONE — "I do not know them yet, find them."
+    - name: plugins
+      registry: internal.example.com
+      discovery:
+        repositoryFilters:
+          include: ['^vendor-c/plugins/']
 ```
 
-`repository:` (singular) still works for the common one-repository case, and the two merge if you use both.
+**Naming none is the important case.** If every new component ships as a *new* repository, you cannot list them in advance — and listing them by hand means a component is silently not replicated until somebody remembers to edit the ConfigMap. Naming nothing means "every repository on this registry", re-resolved on **every scan**, so a repository published five minutes ago is found on the next pass. No restart, no reload.
 
-#### Repository filters, and finding repositories automatically
+There is deliberately **no `enabled` switch** for this. Naming nothing *is* the statement. A separate flag would let configuration say one thing and mean another — repositories listed with discovery off, or nothing listed with discovery off, which scans nothing while looking configured.
 
-`repositoryFilters` narrows the repository set the same way `tagFilters` narrows tags — include, then exclude, exclude always wins:
+Declaring several under one source rather than one source each is also deliberate: they share a registry host, one credential and one rate-limit budget. Three sources would duplicate all three and let the per-repository budgets multiply against a vendor that only ever sees one client.
+
+#### Both filters live under `discovery`
+
+Because discovery is what they govern. A scan finds **repositories**, then **tags**, and each step gets a filter:
 
 ```yaml
-      repositoryFilters:
-        include: ['^suite/']
-        exclude: ['-test$', '-scratch$']
+      discovery:
+        enabled: true
+        interval: 15m
+        repositoryFilters:                    # which repositories to scan
+          include: ['^suite/']
+          exclude: ['-test$', '-scratch$']
+        tagFilters:                           # which tags within them to record
+          include: ['^v\d+\.\d+\.\d+$']
+        maxRepositories: 200                  # safety bound; default 200
 ```
 
-To have the tool **find** repositories instead of listing them, turn on catalog enumeration:
+`repositoryFilters` matters most for a source that names nothing. On a registry shared with other teams it is what keeps the scope to yours — without it, *every* repository on that host gets scanned.
 
-```yaml
-      repositoryDiscovery:
-        enabled: true                   # uses /v2/_catalog
-        maxRepositories: 100            # default 200
-      repositoryFilters:
-        include: ['^suite/']            # required in practice — see below
+It is **not mandatory**, because a registry dedicated to one vendor genuinely needs no filter and refusing to start there would be wrong. Instead, `transferctl products check` reports the number that decides it:
+
+```
+WARNING  can list repositories
+         47 repositories on this registry, and no repositoryFilters
+         → every one of them will be scanned. Correct if this registry is
+           dedicated to this product; on a shared registry add
+           discovery.repositoryFilters.include to scope it
 ```
 
-**Off by default, and validation insists on filters when you enable it.** An unfiltered catalog scan of a shared registry adopts every other team's repositories. Three more things worth knowing:
+Both filters are RE2 (Go `regexp`) — include, then exclude, exclude always wins, and no include patterns admits everything.
 
-- Many **vendor** credentials cannot list a registry — they are scoped to pulling named repositories. The tool says so explicitly rather than reporting a generic 403, and **keeps scanning any repositories you named explicitly**. Catalog enumeration earns its place on an internal registry you control.
-- The repository set is **re-resolved on every scan**, so a repository published since the last pass is found without a restart or a reload.
-- Repositories found this way are marked `managed_by = discovery` in the database, so a configuration reload does not deactivate them.
+#### When the registry will not list its repositories
+
+Many **vendor** credentials cannot enumerate a registry — they are scoped to pulling named repositories. A source that names none has nothing to fall back on, so the scan fails, and the message says what to do:
+
+```
+the registry refused to list its repositories: this credential is probably
+scoped to pulling named repositories rather than enumerating the registry.
+Name them under `repositories:` instead
+```
+
+That is the practical split: **name repositories for a vendor registry, name none for an internal one you control.** `products check` tells you which you have before discovery ever runs.
 
 #### Tag filters — applied *before* any network call
 

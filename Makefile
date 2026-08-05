@@ -16,6 +16,20 @@ LDFLAGS := -s -w \
 BINARIES := coordinator worker transferctl
 DEV_CONFIG := ./dev/config.yaml
 
+# Windows needs the .exe suffix, and `go build -o <name>` does NOT add it —
+# Go only appends .exe when -o is omitted or names a directory. Without this,
+# a Windows build produces `bin/transferctl` with no extension, which the shell
+# refuses to execute and which you then have to rename by hand.
+#
+# GOOS is asked of the toolchain rather than guessed from the host, so
+# `GOOS=windows make build` cross-compiles correctly from Linux or macOS too.
+GOOS ?= $(shell go env GOOS)
+ifeq ($(GOOS),windows)
+EXE := .exe
+else
+EXE :=
+endif
+
 .PHONY: help
 help: ## Show this help
 	@grep -hE '^[a-zA-Z_-]+:.*?## ' $(MAKEFILE_LIST) \
@@ -30,15 +44,30 @@ help: ## Show this help
 SOURCES := $(shell find cmd internal pkg db -type f \( -name '*.go' -o -name '*.sql' \) 2>/dev/null) go.mod go.sum
 
 .PHONY: build
-build: $(addprefix bin/,$(BINARIES)) ## Build all three binaries into bin/
+build: $(addsuffix $(EXE),$(addprefix bin/,$(BINARIES))) ## Build all three binaries into bin/
 
-bin/%: $(SOURCES)
+bin/%$(EXE): $(SOURCES)
 	@mkdir -p bin
 	CGO_ENABLED=0 go build -trimpath -ldflags="$(LDFLAGS)" -o $@ ./cmd/$*
 
+.PHONY: build-all
+build-all: ## Cross-compile every binary for linux, darwin and windows (amd64 + arm64)
+	@for os in linux darwin windows; do \
+		for arch in amd64 arm64; do \
+			ext=""; [ "$$os" = "windows" ] && ext=".exe"; \
+			out="dist/$$os-$$arch"; mkdir -p $$out; \
+			for b in $(BINARIES); do \
+				echo "  $$os/$$arch  $$b$$ext"; \
+				CGO_ENABLED=0 GOOS=$$os GOARCH=$$arch \
+					go build -trimpath -ldflags="$(LDFLAGS)" -o $$out/$$b$$ext ./cmd/$$b || exit 1; \
+			done; \
+		done; \
+	done
+	@echo "binaries in dist/"
+
 .PHONY: clean
 clean: ## Remove build output and the local database
-	rm -rf bin/ dev/swgw.db dev/swgw.db-shm dev/swgw.db-wal coverage.out
+	rm -rf bin/ dist/ dev/swgw.db dev/swgw.db-shm dev/swgw.db-wal coverage.out
 
 ## ----------------------------------------------------------------- test ----
 

@@ -1,0 +1,256 @@
+// Package transport builds the HTTP client every registry implementation
+// shares.
+//
+// See docs/design/06 §5. The layering is:
+//
+//	rate limiter        outermost
+//	  retry
+//	    auth
+//	      http.Transport
+//
+// The RATE LIMITER IS OUTERMOST, and that ordering is the point: it means
+// retries are rate-limited too. With retry outside the limiter, a burst of
+// failures against a struggling registry would bypass the very limit meant to
+// protect it — which is precisely how a transient error becomes an outage.
+//
+// Every cross-cutting concern lives here rather than in a registry
+// implementation. A vendor backend that had to re-implement rate limiting
+// would be a design failure.
+package transport
+
+import (
+	"crypto/tls"
+	"crypto/x509"
+	"fmt"
+	"net"
+	"net/http"
+	"net/url"
+	"time"
+)
+
+// Config describes one repository's transport.
+type Config struct {
+	// Registry host, used for the token cache key and for logging.
+	Registry string
+	// Repository path, used to scope tokens.
+	Repository string
+
+	// Credentials; zero value means anonymous.
+	Username string
+	Password string
+
+	// RequestsPerSecond and Burst configure the token bucket. Zero rps means
+	// unlimited.
+	RequestsPerSecond int
+	Burst             int
+
+	// MaxConnections caps the connection pool.
+	MaxConnections int
+
+	// CABundle is additional trusted CA material, appended to the system pool.
+	CABundle []byte
+	// InsecureSkipVerify is deliberately absent. Disabling verification is
+	// never the right fix; supply a CA bundle instead.
+
+	// Proxy settings.
+	HTTPSProxy string
+	NoProxy    []string
+
+	// Timeouts. Note there is no overall request timeout: a large manifest is
+	// not slow, and in M3 a multi-gigabyte blob certainly is not. Stalls are
+	// caught by ResponseHeaderTimeout and, for bodies, by a stall detector.
+	ConnectTimeout        time.Duration
+	ResponseHeaderTimeout time.Duration
+
+	// ForceHTTP1 disables HTTP/2.
+	//
+	// For M2's small JSON requests h2 would be fine. It is forced off anyway so
+	// that M2 and M3 share one transport: h2 multiplexes every stream onto one
+	// TCP connection, and for multi-gigabyte blob bodies its flow-control
+	// windows and head-of-line blocking under-perform many parallel HTTP/1.1
+	// connections. See docs/design/05 §5.
+	ForceHTTP1 bool
+
+	// UserAgent identifies us to the registry.
+	UserAgent string
+
+	// Retry policy. Zero values use the defaults from docs/design/10 §6.
+	//
+	// Configurable rather than hardcoded for two reasons: tests need a fast
+	// policy so a persistent-failure case does not spend two minutes in
+	// backoff, and a deployment behind a flaky link may legitimately want a
+	// different schedule from one on a reliable network.
+	MaxRetryAttempts int
+	RetryBaseDelay   time.Duration
+	RetryMaxDelay    time.Duration
+}
+
+// Defaults applied when a field is unset.
+const (
+	DefaultConnectTimeout        = 10 * time.Second
+	DefaultResponseHeaderTimeout = 30 * time.Second
+	DefaultMaxConnections        = 32
+	DefaultUserAgent             = "softwaregateway"
+)
+
+// New builds the layered client.
+func New(cfg Config) (*http.Client, error) {
+	base, err := baseTransport(cfg)
+	if err != nil {
+		return nil, err
+	}
+
+	// Innermost first, so the outermost wrapper is applied last.
+	var rt http.RoundTripper = base
+	rt = newAuthTransport(rt, cfg)
+	rt = newRetryTransport(rt, cfg)
+	rt = newRateLimitTransport(rt, cfg.RequestsPerSecond, cfg.Burst)
+	rt = newUserAgentTransport(rt, cfg.UserAgent)
+
+	return &http.Client{
+		Transport: rt,
+		// No client-level Timeout: it would apply to the whole exchange
+		// including the body, capping large reads. Per-phase timeouts on the
+		// transport are the right granularity.
+	}, nil
+}
+
+func baseTransport(cfg Config) (*http.Transport, error) {
+	maxConns := cfg.MaxConnections
+	if maxConns <= 0 {
+		maxConns = DefaultMaxConnections
+	}
+	connectTimeout := cfg.ConnectTimeout
+	if connectTimeout <= 0 {
+		connectTimeout = DefaultConnectTimeout
+	}
+	headerTimeout := cfg.ResponseHeaderTimeout
+	if headerTimeout <= 0 {
+		headerTimeout = DefaultResponseHeaderTimeout
+	}
+
+	tlsConfig, err := tlsConfigFor(cfg)
+	if err != nil {
+		return nil, err
+	}
+
+	proxy, err := proxyFor(cfg)
+	if err != nil {
+		return nil, err
+	}
+
+	t := &http.Transport{
+		Proxy:           proxy,
+		TLSClientConfig: tlsConfig,
+
+		DialContext: (&net.Dialer{
+			Timeout:   connectTimeout,
+			KeepAlive: 30 * time.Second,
+		}).DialContext,
+
+		TLSHandshakeTimeout:   10 * time.Second,
+		ResponseHeaderTimeout: headerTimeout,
+		ExpectContinueTimeout: 1 * time.Second,
+
+		// Go defaults to 2 idle connections per host. With concurrent work
+		// against one registry that serializes almost everything behind
+		// connection churn.
+		MaxIdleConns:        maxConns,
+		MaxIdleConnsPerHost: maxConns,
+		MaxConnsPerHost:     maxConns,
+		IdleConnTimeout:     90 * time.Second,
+
+		// Blobs are already gzip or zstd compressed. Attempting again burns
+		// CPU, and transparent decompression would change the bytes and break
+		// the digest. Manifests are small enough that compression is noise.
+		DisableCompression: true,
+
+		WriteBufferSize: 64 * 1024,
+		ReadBufferSize:  64 * 1024,
+	}
+
+	if cfg.ForceHTTP1 {
+		// Setting a non-nil empty TLSNextProto is how Go is told not to
+		// negotiate h2.
+		t.ForceAttemptHTTP2 = false
+		t.TLSNextProto = map[string]func(string, *tls.Conn) http.RoundTripper{}
+	} else {
+		t.ForceAttemptHTTP2 = true
+	}
+
+	return t, nil
+}
+
+func tlsConfigFor(cfg Config) (*tls.Config, error) {
+	if len(cfg.CABundle) == 0 {
+		return &tls.Config{MinVersion: tls.VersionTLS12}, nil
+	}
+
+	// Append to the system pool rather than replacing it: a product that adds
+	// a private CA still needs to reach public registries and Sigstore.
+	pool, err := x509.SystemCertPool()
+	if err != nil || pool == nil {
+		pool = x509.NewCertPool()
+	}
+	if !pool.AppendCertsFromPEM(cfg.CABundle) {
+		return nil, fmt.Errorf("caBundle for %s contains no usable PEM certificates", cfg.Registry)
+	}
+	return &tls.Config{MinVersion: tls.VersionTLS12, RootCAs: pool}, nil
+}
+
+func proxyFor(cfg Config) (func(*http.Request) (*url.URL, error), error) {
+	if cfg.HTTPSProxy == "" {
+		// Fall back to the environment so a cluster-wide proxy still applies.
+		return http.ProxyFromEnvironment, nil
+	}
+
+	proxyURL, err := url.Parse(cfg.HTTPSProxy)
+	if err != nil {
+		return nil, fmt.Errorf("parse httpsProxy %q: %w", cfg.HTTPSProxy, err)
+	}
+
+	noProxy := make(map[string]bool, len(cfg.NoProxy))
+	for _, h := range cfg.NoProxy {
+		noProxy[h] = true
+	}
+
+	return func(r *http.Request) (*url.URL, error) {
+		host := r.URL.Hostname()
+		if noProxy[host] {
+			return nil, nil
+		}
+		// Suffix entries such as ".svc.cluster.local".
+		for entry := range noProxy {
+			if len(entry) > 0 && entry[0] == '.' && len(host) > len(entry) &&
+				host[len(host)-len(entry):] == entry {
+				return nil, nil
+			}
+		}
+		return proxyURL, nil
+	}, nil
+}
+
+// userAgentTransport stamps a User-Agent on every request.
+//
+// Outermost because it must apply to auth-token fetches too — a registry
+// operator diagnosing load wants to see who is calling, including for the
+// token endpoint.
+type userAgentTransport struct {
+	next http.RoundTripper
+	ua   string
+}
+
+func newUserAgentTransport(next http.RoundTripper, ua string) http.RoundTripper {
+	if ua == "" {
+		ua = DefaultUserAgent
+	}
+	return &userAgentTransport{next: next, ua: ua}
+}
+
+func (t *userAgentTransport) RoundTrip(r *http.Request) (*http.Response, error) {
+	if r.Header.Get("User-Agent") == "" {
+		r = r.Clone(r.Context())
+		r.Header.Set("User-Agent", t.ua)
+	}
+	return t.next.RoundTrip(r)
+}

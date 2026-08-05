@@ -278,15 +278,6 @@ type Concurrency struct {
 	// Tags resolved at once WITHIN one repository. Default
 	// DefaultTagConcurrency.
 	Tags int `json:"tags,omitempty"`
-	// Artifacts fetched at once within ONE TAG's manifest tree. Default
-	// DefaultArtifactConcurrency.
-	//
-	// The third axis, and the one that was invisible. A product bundle whose
-	// index references sixty artifacts cost sixty SEQUENTIAL manifest fetches
-	// inside a single tag — two and a half minutes at 2.5s each, during which
-	// the tag counter did not move and hundreds of requests succeeded. From the
-	// outside that is indistinguishable from a hang.
-	Artifacts int `json:"artifacts,omitempty"`
 }
 
 // Concurrency defaults. Conservative: a vendor registry is someone else's
@@ -296,10 +287,6 @@ type Concurrency struct {
 const (
 	DefaultRepositoryConcurrency = 4
 	DefaultTagConcurrency        = 8
-	// DefaultArtifactConcurrency is the siblings of one index fetched at once.
-	// They are children of a single manifest, so this is the narrowest axis and
-	// the one least likely to surprise a registry.
-	DefaultArtifactConcurrency = 8
 
 	// maxConcurrency caps whatever configuration asks for. A typo of 1000 must
 	// not become a thousand concurrent connections to a vendor.
@@ -314,11 +301,6 @@ func (c Concurrency) EffectiveRepositories() int {
 // EffectiveTags returns the tag concurrency to use.
 func (c Concurrency) EffectiveTags() int {
 	return clampConcurrency(c.Tags, DefaultTagConcurrency)
-}
-
-// EffectiveArtifacts returns the artifact-tree concurrency to use.
-func (c Concurrency) EffectiveArtifacts() int {
-	return clampConcurrency(c.Artifacts, DefaultArtifactConcurrency)
 }
 
 func clampConcurrency(v, fallback int) int {

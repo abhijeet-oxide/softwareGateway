@@ -117,13 +117,13 @@ func renderPackageList(w io.Writer, resp *v1.ListPackagesResponse) error {
 		if multiRepo {
 			fmt.Fprintf(tw, "%s\t", dash(p.SourceRepository))
 		}
-		fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%d\t%d\t%s\n",
+		fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%d\t%s\t%s\n",
 			p.Tag,
 			shortDigest(p.ManifestDigest),
 			strings.ToLower(string(p.State)),
-			humanBytes(p.TotalBytes),
+			humanBytesOpt(p.TotalBytes),
 			p.ArtifactCount,
-			p.BlobCount,
+			optionalCount(p.BlobCount),
 			shortTime(p.DiscoveredAt),
 		)
 	}
@@ -206,8 +206,13 @@ func renderPackageDetail(w io.Writer, p *v1.Package, artifacts []v1.Artifact) er
 	fmt.Fprintf(w, "Digest       %s\n", p.ManifestDigest)
 	fmt.Fprintf(w, "Media type   %s\n", p.MediaType)
 	fmt.Fprintf(w, "State        %s\n", strings.ToLower(string(p.State)))
-	fmt.Fprintf(w, "Size         %s across %d artifact(s) and %d blob(s)\n",
-		humanBytes(p.TotalBytes), p.ArtifactCount, p.BlobCount)
+	fmt.Fprintf(w, "Size         %s across %d artifact(s) and %s blob(s)\n",
+		humanBytesOpt(p.TotalBytes), p.ArtifactCount, optionalCount(p.BlobCount))
+	if p.TotalBytes == nil {
+		fmt.Fprintln(w, "             (this package's root is an index; discovery records what it")
+		fmt.Fprintln(w, "              lists without fetching it, so the layer bytes are not known")
+		fmt.Fprintln(w, "              until a transfer walks the tree)")
+	}
 	fmt.Fprintf(w, "Discovered   %s\n", p.DiscoveredAt)
 
 	if p.SupersededBy != "" {
@@ -255,8 +260,14 @@ func renderArtifactTree(w io.Writer, artifacts []v1.Artifact) {
 		if a.Platform != "" {
 			label += "  " + a.Platform
 		}
-		fmt.Fprintf(w, "%s%s  %s  %s\n",
-			indent, label, humanBytes(a.SizeBytes), shortMediaType(a.MediaType))
+		suffix := ""
+		if !a.Fetched {
+			// The distinction is worth showing: a fetched manifest was verified
+			// against its digest, a listed one has the vendor's word for it.
+			suffix = "  (listed, not fetched)"
+		}
+		fmt.Fprintf(w, "%s%s  %s  %s%s\n",
+			indent, label, humanBytes(a.SizeBytes), shortMediaType(a.MediaType), suffix)
 		for _, c := range children[a.ArtifactID] {
 			draw(c, indent+"    ")
 		}
@@ -463,6 +474,18 @@ func shortDigest(d string) string {
 //
 // Binary units, because registries, image tooling and every other number an
 // operator compares this against use them.
+// humanBytesOpt renders a byte count that may not have been measured.
+//
+// Nil is "not measured", not zero. A package whose root is an index has its
+// layer bytes recorded only when something walks the tree, and printing "0 B"
+// for one would be a claim nobody would think to question.
+func humanBytesOpt(v *v1.Int64String) string {
+	if v == nil {
+		return "not measured"
+	}
+	return humanBytes(*v)
+}
+
 func humanBytes(v v1.Int64String) string {
 	n, err := strconv.ParseInt(string(v), 10, 64)
 	if err != nil {
@@ -653,4 +676,12 @@ func humanPhase(p string) string {
 	default:
 		return p
 	}
+}
+
+// optionalCount renders a count that may not have been measured.
+func optionalCount(n *int) string {
+	if n == nil {
+		return "?"
+	}
+	return strconv.Itoa(*n)
 }

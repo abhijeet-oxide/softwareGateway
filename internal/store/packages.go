@@ -21,12 +21,17 @@ type PackageRow struct {
 	Tag            string
 	ManifestDigest string
 	MediaType      string
-	TotalBytes     int64
-	ArtifactCount  int
-	BlobCount      int
-	State          string
-	DiscoveredAt   string
-	SupersededBy   *int64
+	// TotalBytes and BlobCount are NIL when not yet measured, which is the case
+	// for a package whose root is an index: discovery records what the index
+	// lists without fetching it, so the layer bytes underneath are unknown
+	// until a transfer walks the tree. Nil rather than zero — a wrong size is
+	// worse than an absent one, because nobody questions a number.
+	TotalBytes    *int64
+	ArtifactCount int
+	BlobCount     *int
+	State         string
+	DiscoveredAt  string
+	SupersededBy  *int64
 	// SourceRepository is the repository path this was discovered in. Joined
 	// on read rather than denormalised: a product may span several
 	// repositories, and a listing that does not say which is ambiguous.
@@ -44,7 +49,13 @@ type ArtifactRow struct {
 	SizeBytes    int64
 	Platform     string
 	Depth        int
-	Raw          []byte
+	// Raw is the manifest exactly as served. NIL means this artifact was LISTED
+	// by its parent index and not fetched, so we have the vendor's word for its
+	// digest rather than bytes we hashed ourselves.
+	Raw []byte
+	// Fetched is `raw IS NOT NULL`, read back without the bytes themselves — a
+	// listing must not load every manifest body to report which ones we hold.
+	Fetched bool
 }
 
 // BlobRef links an artifact to a blob it references.
@@ -587,7 +598,8 @@ var ErrNotFound = errors.New("not found")
 func (p *Packages) ListArtifacts(ctx context.Context, packageID int64) ([]ArtifactRow, error) {
 	query := p.dialect.Rewrite(`
 		SELECT id, package_id, parent_id, digest, media_type,
-		       COALESCE(artifact_type, ''), size_bytes, COALESCE(platform, ''), depth
+		       COALESCE(artifact_type, ''), size_bytes, COALESCE(platform, ''), depth,
+		       raw IS NOT NULL
 		  FROM package_artifacts
 		 WHERE package_id = ?
 		 ORDER BY depth, id`)
@@ -602,7 +614,7 @@ func (p *Packages) ListArtifacts(ctx context.Context, packageID int64) ([]Artifa
 	for rows.Next() {
 		var a ArtifactRow
 		if err := rows.Scan(&a.ID, &a.PackageID, &a.ParentID, &a.Digest, &a.MediaType,
-			&a.ArtifactType, &a.SizeBytes, &a.Platform, &a.Depth); err != nil {
+			&a.ArtifactType, &a.SizeBytes, &a.Platform, &a.Depth, &a.Fetched); err != nil {
 			return nil, fmt.Errorf("scan artifact row: %w", err)
 		}
 		out = append(out, a)

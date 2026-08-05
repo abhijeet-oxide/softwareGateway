@@ -159,9 +159,9 @@ func (h *apiHarness) seedPackage(tag, digest string) int64 {
 		Tag:            tag,
 		ManifestDigest: digest,
 		MediaType:      "application/vnd.oci.image.manifest.v1+json",
-		TotalBytes:     123456789,
+		TotalBytes:     int64Ptr(123456789),
 		ArtifactCount:  1,
-		BlobCount:      2,
+		BlobCount:      intPtr(2),
 	})
 	if err != nil {
 		h.t.Fatalf("seed package: %v", err)
@@ -248,8 +248,8 @@ func TestListAndGetPackage(t *testing.T) {
 
 	// AIP-141: a byte count crosses the wire as a string, because JSON numbers
 	// are doubles and lose precision above 2^53.
-	if list.Packages[0].TotalBytes != "123456789" {
-		t.Errorf("expected totalBytes as a string, got %q", list.Packages[0].TotalBytes)
+	if list.Packages[0].TotalBytes == nil || *list.Packages[0].TotalBytes != "123456789" {
+		t.Errorf("expected totalBytes as a string, got %q", derefBytes(list.Packages[0].TotalBytes))
 	}
 	// AIP-126: enums are SCREAMING_SNAKE_CASE on the wire.
 	if list.Packages[0].State != v1.PackageDiscovered {
@@ -482,4 +482,14 @@ func TestPackageRoutesAbsentWithoutAStore(t *testing.T) {
 	if resp.StatusCode != http.StatusNotFound {
 		t.Errorf("expected 404 when no package store is configured, got %d", resp.StatusCode)
 	}
+}
+
+func int64Ptr(v int64) *int64 { return &v }
+func intPtr(v int) *int       { return &v }
+
+func derefBytes(v *v1.Int64String) string {
+	if v == nil {
+		return "<not measured>"
+	}
+	return string(*v)
 }

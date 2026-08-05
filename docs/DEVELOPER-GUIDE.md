@@ -1047,7 +1047,6 @@ spec:
         concurrency:
           repositories: 4        # default 4
           tags: 8                # default 8; they share the source's client
-          artifacts: 8           # default 8; siblings of one index
 ```
 
 Both clamp at 64. Raise them for a registry you own; leave them alone for a vendor's.
@@ -1058,8 +1057,13 @@ There was also a third cause, and it was the worst of the three: **every reposit
 
 If it is still slow after that, the requests themselves are slow: turn on request tracing (above), and `transferctl products check` times a real manifest fetch.
 
+**`packages list` shows `not measured` and `?` instead of a size**
+Expected, for a package whose root is an index. Discovery fetches the tag's own manifest and records the children the index lists, without a request each — so the layer bytes underneath are not known until a transfer walks the tree. It is reported as absent rather than summed from what we hold, because a total missing the layers would understate a bundle by nearly all of it, and a wrong size is worse than a missing one.
+
+A package whose root is a plain image manifest still shows a real size: its config and layers are inside the one manifest we fetched.
+
 **Requests are succeeding but the tag counter does not move**
-A tag is only counted when its ENTIRE artifact tree has been fetched. A bundle whose index references sixty artifacts used to cost sixty sequential manifest fetches inside one tag — minutes at a time, with every request returning 200 and the counter frozen. Those siblings are now fetched in parallel (`discovery.concurrency.artifacts`), and the progress line reports `N artifacts`, which is the counter that keeps moving when nothing else does.
+Largely gone: a newly discovered tag now costs two requests (a `HEAD` then one `GET`) whatever it contains, and an unchanged one costs a single `HEAD`. Discovery no longer walks the artifact tree — see [design 07 §12](design/07-discovery.md). The progress line also reports `N artifacts`, which keeps moving when nothing else does.
 
 **I have no way to see what discovery is doing**
 Turn on request tracing. Every registry request is logged with its host, path, status and duration:

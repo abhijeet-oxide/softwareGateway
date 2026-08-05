@@ -6,6 +6,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"sort"
+	"strings"
 )
 
 // Package persistence: rows in, rows out.
@@ -599,13 +601,122 @@ func (p *Packages) ListPackages(ctx context.Context, f ListPackagesFilter) ([]Pa
 	return out, rows.Err()
 }
 
+// AmbiguousReferenceError reports that a reference matched packages in more
+// than one REPOSITORY.
+//
+// A product routinely spans dozens of repositories, and a vendor's version tag
+// —`orb_23.8.1076` — appears in many of them. Picking one silently is the worst
+// available behaviour: the caller gets a real package, believes it asked for
+// that package, and is wrong. This makes the caller say which.
+type AmbiguousReferenceError struct {
+	Ref string
+	// Repositories are the ones the reference matched, sorted.
+	Repositories []string
+}
+
+func (e *AmbiguousReferenceError) Error() string {
+	return fmt.Sprintf("%q matches packages in %d repositories (%s)",
+		e.Ref, len(e.Repositories), strings.Join(e.Repositories, ", "))
+}
+
+// PackageRef is a parsed package reference.
+type PackageRef struct {
+	// Repository scopes the lookup. Empty means "any, but refuse if ambiguous".
+	Repository string
+	Tag        string
+	Digest     string
+}
+
+// ParsePackageRef reads the reference forms a person actually types.
+//
+//	orb_23.8.1076                      a tag
+//	sha256:ccbd37…                     a digest
+//	orbs/cfx-5000-k8s:orb_23.8.1076    a repository and a tag
+//
+// The last form exists because a bare tag is ambiguous across a product's
+// repositories, and making someone pass a separate flag to disambiguate is
+// worse than letting them paste the thing they already have.
+//
+// A digest is recognised by its `algorithm:hex` shape BEFORE the repository
+// split is attempted, so `sha256:…` is never mistaken for a repository called
+// "sha256".
+func ParsePackageRef(s string) PackageRef {
+	s = strings.TrimSpace(s)
+
+	if algo, hex, ok := strings.Cut(s, ":"); ok && isDigestAlgorithm(algo) && hex != "" {
+		return PackageRef{Digest: s}
+	}
+	// Split at the LAST colon: a repository path may contain slashes but a tag
+	// may not contain a colon.
+	if i := strings.LastIndex(s, ":"); i > 0 && i < len(s)-1 {
+		return PackageRef{Repository: strings.Trim(s[:i], "/"), Tag: s[i+1:]}
+	}
+	return PackageRef{Tag: s}
+}
+
+func isDigestAlgorithm(a string) bool {
+	switch a {
+	case "sha256", "sha512":
+		return true
+	default:
+		return false
+	}
+}
+
 // GetPackage returns one package by product and reference.
 //
-// ref is a tag or a digest. A tag can legitimately match several rows once it
-// has been re-pushed, so the newest non-superseded row wins — asking for
-// "v2.14.0" means the current one.
-func (p *Packages) GetPackage(ctx context.Context, productName, ref string) (PackageRow, error) {
-	query := p.dialect.Rewrite(`
+// A tag matching several rows in ONE repository is the re-push case, and the
+// newest non-superseded row wins: asking for "v2.14.0" means the current one.
+//
+// A tag matching rows in SEVERAL repositories is a different situation
+// entirely, and returns AmbiguousReferenceError rather than choosing. Scope it
+// with a repository, either in the reference or in ref.Repository.
+func (p *Packages) GetPackage(ctx context.Context, productName, refStr string) (PackageRow, error) {
+	return p.GetPackageRef(ctx, productName, ParsePackageRef(refStr))
+}
+
+// GetPackageRef is GetPackage with an already-parsed reference.
+func (p *Packages) GetPackageRef(ctx context.Context, productName string, ref PackageRef) (PackageRow, error) {
+	rows, err := p.matchPackages(ctx, productName, ref)
+	if err != nil {
+		return PackageRow{}, err
+	}
+	if len(rows) == 0 {
+		return PackageRow{}, ErrNotFound
+	}
+
+	repos := map[string]bool{}
+	for _, r := range rows {
+		repos[r.SourceRepository] = true
+	}
+	if len(repos) > 1 {
+		names := make([]string, 0, len(repos))
+		for r := range repos {
+			names = append(names, r)
+		}
+		sort.Strings(names)
+		return PackageRow{}, &AmbiguousReferenceError{Ref: ref.String(), Repositories: names}
+	}
+
+	// One repository: the ordering already put the current row first.
+	return rows[0], nil
+}
+
+// String renders a reference the way a person would type it back.
+func (r PackageRef) String() string {
+	switch {
+	case r.Digest != "":
+		return r.Digest
+	case r.Repository != "":
+		return r.Repository + ":" + r.Tag
+	default:
+		return r.Tag
+	}
+}
+
+// matchPackages returns every row a reference matches, current ones first.
+func (p *Packages) matchPackages(ctx context.Context, productName string, ref PackageRef) ([]PackageRow, error) {
+	query := `
 		SELECT pk.id, pk.product_id, pk.source_repo_id, pk.tag, pk.manifest_digest,
 		       -- total_bytes and blob_count are NOT coalesced: NULL is a real
 		       -- value here, meaning "not yet measured", and folding it to 0
@@ -617,24 +728,44 @@ func (p *Packages) GetPackage(ctx context.Context, productName, ref string) (Pac
 		  FROM packages pk
 		  JOIN products pr ON pr.id = pk.product_id
 		  LEFT JOIN repositories sr ON sr.id = pk.source_repo_id
-		 WHERE pr.name = ? AND (pk.tag = ? OR pk.manifest_digest = ?)
-		 ORDER BY CASE WHEN pk.state = 'superseded' THEN 1 ELSE 0 END,
-		          pk.discovered_at DESC, pk.id DESC
-		 LIMIT 1`)
+		 WHERE pr.name = ?`
 
-	var r PackageRow
-	err := p.db.QueryRowContext(ctx, query, productName, ref, ref).Scan(
-		&r.ID, &r.ProductID, &r.SourceRepoID, &r.Tag, &r.ManifestDigest,
-		&r.MediaType, &r.TotalBytes, &r.ArtifactCount, &r.BlobCount,
-		&r.State, &r.DiscoveredAt, &r.PublishedAt, &r.SupersededBy, &r.SourceRepository,
-	)
-	if err != nil {
-		if errors.Is(err, sql.ErrNoRows) {
-			return PackageRow{}, ErrNotFound
-		}
-		return PackageRow{}, fmt.Errorf("get package %q/%q: %w", productName, ref, err)
+	args := []any{productName}
+	switch {
+	case ref.Digest != "":
+		query += " AND pk.manifest_digest = ?"
+		args = append(args, ref.Digest)
+	default:
+		query += " AND pk.tag = ?"
+		args = append(args, ref.Tag)
 	}
-	return r, nil
+	if ref.Repository != "" {
+		query += " AND sr.repository_path = ?"
+		args = append(args, ref.Repository)
+	}
+	query += `
+		 ORDER BY CASE WHEN pk.state = 'superseded' THEN 1 ELSE 0 END,
+		          pk.discovered_at DESC, pk.id DESC`
+
+	rows, err := p.db.QueryContext(ctx, p.dialect.Rewrite(query), args...)
+	if err != nil {
+		return nil, fmt.Errorf("match package %q: %w", ref, err)
+	}
+	defer func() { _ = rows.Close() }()
+
+	var out []PackageRow
+	for rows.Next() {
+		var r PackageRow
+		if err := rows.Scan(
+			&r.ID, &r.ProductID, &r.SourceRepoID, &r.Tag, &r.ManifestDigest,
+			&r.MediaType, &r.TotalBytes, &r.ArtifactCount, &r.BlobCount,
+			&r.State, &r.DiscoveredAt, &r.PublishedAt, &r.SupersededBy, &r.SourceRepository,
+		); err != nil {
+			return nil, fmt.Errorf("scan package row: %w", err)
+		}
+		out = append(out, r)
+	}
+	return out, rows.Err()
 }
 
 // ErrNotFound reports that no row matched.

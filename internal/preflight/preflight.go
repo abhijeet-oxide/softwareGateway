@@ -109,7 +109,7 @@ func (c *Checker) CheckProduct(ctx context.Context, p *product.Product) ProductR
 		anonymous  bool
 		creds      *product.CredentialsRef
 		network    *product.Network
-		limits     product.RateLimits
+		limits     product.Concurrency
 		catalog    bool
 		filtered   bool
 	}
@@ -135,7 +135,7 @@ func (c *Checker) CheckProduct(ctx context.Context, p *product.Product) ProductR
 			jobs = append(jobs, job{
 				name: s.Name, role: string(product.RoleSource), registry: s.Registry,
 				anonymous: s.Anonymous, creds: s.CredentialsRef, network: s.Network,
-				limits: s.RateLimits, catalog: true,
+				limits: s.Concurrency, catalog: true,
 				filtered: len(s.Discovery.RepositoryFilters.Include) > 0 ||
 					len(s.Discovery.RepositoryFilters.Exclude) > 0,
 			})
@@ -145,7 +145,7 @@ func (c *Checker) CheckProduct(ctx context.Context, p *product.Product) ProductR
 			jobs = append(jobs, job{
 				name: s.Name, role: string(product.RoleSource), registry: s.Registry,
 				repository: repo, anonymous: s.Anonymous, creds: s.CredentialsRef,
-				network: s.Network, limits: s.RateLimits,
+				network: s.Network, limits: s.Concurrency,
 			})
 		}
 	}
@@ -156,7 +156,7 @@ func (c *Checker) CheckProduct(ctx context.Context, p *product.Product) ProductR
 		jobs = append(jobs, job{
 			name: t.Name, role: string(product.RoleTarget), registry: t.Registry,
 			repository: t.Repository, anonymous: t.Anonymous, creds: t.CredentialsRef,
-			network: t.Network, limits: t.RateLimits,
+			network: t.Network, limits: t.Concurrency,
 		})
 	}
 
@@ -177,7 +177,7 @@ func (c *Checker) CheckProduct(ctx context.Context, p *product.Product) ProductR
 			results[i] = c.checkRepository(jobCtx, p, repoSpec{
 				Name: j.name, Role: j.role, Registry: j.registry, Repository: j.repository,
 				Anonymous: j.anonymous, Credentials: j.creds, Network: j.network,
-				RateLimits: j.limits, Catalog: j.catalog, Filtered: j.filtered,
+				Concurrency: j.limits, Catalog: j.catalog, Filtered: j.filtered,
 			})
 		}(i, j)
 	}
@@ -219,7 +219,7 @@ type repoSpec struct {
 	Anonymous   bool
 	Credentials *product.CredentialsRef
 	Network     *product.Network
-	RateLimits  product.RateLimits
+	Concurrency product.Concurrency
 	// Catalog means this source enumerates its repositories.
 	Catalog bool
 	// Filtered means discovery.repositoryFilters is set. Used to warn about an
@@ -370,9 +370,13 @@ func (c *Checker) resolveCredentials(p *product.Product, spec repoSpec) (registr
 		PlainHTTP: isLoopback(spec.Registry),
 	}
 
-	limits := spec.RateLimits.WithDefaults()
-	cfg.RequestsPerSecond = limits.RequestsPerSecond
-	cfg.Burst = limits.Burst
+	// The rate limit is honoured — a vendor that throttles must not be probed
+	// harder than a scan would probe it — but the connection pool is fixed at 4
+	// regardless of what the source configures. A check makes a handful of
+	// requests per repository and then exits; sizing the pool for a full scan
+	// would open connections it never uses.
+	cfg.RequestsPerSecond = spec.Concurrency.RequestsPerSecond
+	cfg.Burst = spec.Concurrency.Burst()
 	cfg.MaxConnections = 4
 
 	// The CA bundle and proxy come from the product, overridden per repository.

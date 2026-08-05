@@ -72,10 +72,11 @@ func newConfigValidateCommand() *cobra.Command {
 
 // validationReport is the machine-readable form, so CI can consume -o json.
 type validationReport struct {
-	Directory  string             `json:"directory"`
-	FileCount  int                `json:"fileCount"`
-	ValidCount int                `json:"validCount"`
-	Results    []validationResult `json:"results"`
+	Directory        string             `json:"directory"`
+	FileCount        int                `json:"fileCount"`
+	ValidCount       int                `json:"validCount"`
+	DeprecationCount int                `json:"deprecationCount"`
+	Results          []validationResult `json:"results"`
 }
 
 type validationResult struct {
@@ -84,6 +85,12 @@ type validationResult struct {
 	Valid   bool              `json:"valid"`
 	Summary string            `json:"summary,omitempty"`
 	Errors  []validationError `json:"errors,omitempty"`
+
+	// Deprecations are superseded keys the document still uses. They do not
+	// make it invalid — the values are honoured — so they are reported
+	// separately and never affect the exit code. A CI job that started failing
+	// because a key was renamed is a CI job people learn to ignore.
+	Deprecations []string `json:"deprecations,omitempty"`
 }
 
 type validationError struct {
@@ -106,7 +113,9 @@ func buildValidationReport(dir string, res product.LoadResult) validationReport 
 			Valid:   true,
 			Summary: fmt.Sprintf("%d source(s), %d target(s), %d rule(s)",
 				len(p.Spec.Sources), len(p.Spec.Targets), len(p.Spec.AutoDownload.Rules)),
+			Deprecations: p.Deprecations,
 		})
+		report.DeprecationCount += len(p.Deprecations)
 	}
 
 	for _, bad := range res.Invalid {
@@ -145,6 +154,9 @@ func renderValidationReport(w io.Writer, report validationReport) error {
 	for _, r := range report.Results {
 		if r.Valid {
 			fmt.Fprintf(w, "  %-28s OK     %s\n", r.File, r.Summary)
+			for _, d := range r.Deprecations {
+				fmt.Fprintf(w, "  %-28s        deprecated: %s\n", "", d)
+			}
 			continue
 		}
 
@@ -164,5 +176,19 @@ func renderValidationReport(w io.Writer, report validationReport) error {
 
 	fmt.Fprintf(w, "\n%d file(s), %d valid, %d error(s)\n",
 		report.FileCount, report.ValidCount, report.FileCount-report.ValidCount)
+
+	if report.DeprecationCount > 0 {
+		fmt.Fprintln(w)
+		fmt.Fprintf(w, "%d deprecated key(s) in use. They still work — the values are honoured —\n",
+			report.DeprecationCount)
+		fmt.Fprintln(w, "but they are folded into `concurrency`, which replaced them:")
+		fmt.Fprintln(w)
+		fmt.Fprintln(w, "  concurrency:")
+		fmt.Fprintln(w, "    perRegistry: 32        # requests in flight, and the connection pool")
+		fmt.Fprintln(w, "    requestsPerSecond: 0   # optional; 0 means no artificial limit")
+		fmt.Fprintln(w)
+		fmt.Fprintln(w, "Usually the right move is to DELETE the old block and inherit the")
+		fmt.Fprintln(w, "application-level default rather than restate it per source.")
+	}
 	return nil
 }

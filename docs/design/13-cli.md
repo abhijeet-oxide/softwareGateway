@@ -40,17 +40,20 @@ Code 3 deliberately covers both no-answer cases. A script branching on it wants 
 
 ```
 transferctl
-├── health                      Check the Coordinator and every dependency
-├── version                     Client and server versions
+├── config
+│   └── validate <dir>          Validate product YAML -- runs in CI, pre-merge
 │
 ├── products
 │   ├── list
-│   └── describe <product>
+│   ├── describe <product>
+│   └── check [product]         Probe registries and credentials for real
+│
+├── discover [product]          Scan now, rather than waiting for the interval
+│   └── status [product]        What discovery is doing right now
 │
 ├── packages
-│   ├── list                    Discovered packages
-│   ├── describe <tag>          Artifacts, blobs, per-target status
-│   └── discover                Trigger a discovery scan now
+│   ├── list <product>          Discovered packages
+│   └── describe <product> <package> [--expand]
 │
 ├── download <tag>              Replicate source -> target(s)
 ├── promote  <tag>              Promote target -> target(s)
@@ -78,10 +81,27 @@ transferctl
 ├── audit
 │   └── list                    Query the audit trail
 │
-└── config
-    ├── view
-    └── validate <dir>          Validate product YAML -- runs in CI, pre-merge
+├── health                      Check the Coordinator and every dependency
+└── version                     Client and server versions
 ```
+
+### Why discovery is a top-level verb
+
+It was `packages discover`, and that was the wrong shape twice over.
+
+**Discovery is not an operation on packages; it is what produces them.** Burying the primary verb of the system two levels down, next to the commands that read its output, is how a CLI ends up needing a cheat sheet. `discover` sits at the top with `download`, `promote` and `verify` — the things the tool *does* — while `packages` and `products` are the things you *look at*.
+
+**And it could not express the most common operator action: scan everything.** `transferctl discover` with no argument scans every product being polled, which is what you want after a maintenance window or when you want to know what your vendors have shipped since you last looked. A shell loop over `products list` put the definition of "everything" in the caller, where it could disagree with which products were actually enabled. A fleet-wide scan never blocks; follow it with `discover status`.
+
+`packages discovery-status` moved to `discover status` for the same reason — status belongs with the thing it reports on — and with no argument it reports every product, one block each, which is the shape you want when you are looking for the one that is stuck.
+
+### Why `inspect` folded into `describe --expand`
+
+`packages inspect` and `packages describe` were two commands that answered the same question at different depths, and the split leaked an implementation detail: that discovery records a package's manifest without fetching what it lists. A user does not want to inspect and then describe; they want to see the package, and sometimes they want the size too.
+
+So `describe` gained `--expand`, which walks the tree first and then renders — the output is the expanded truth rather than a stale row plus a separate report. Without the flag, `SIZE` and `BLOBS` read `n/a` and the output says why.
+
+Both old spellings still work, hidden, because they are in scripts and in muscle memory. Breaking those to tidy a help screen is a bad trade.
 
 ## 3. Health
 
@@ -128,7 +148,7 @@ Exit code 0 healthy, 1 degraded, 3 unreachable.
 ## 4. Discovery and packages
 
 ```
-$ transferctl packages discover --product vendor-a-platform
+$ transferctl discover vendor-a-platform
 Triggered discovery for vendor-a-platform (2 source repositories)
   primary     scanning...  found 3 new packages
   mirror      skipped (discovery disabled)
@@ -383,26 +403,26 @@ timeout: 30s
 |---|---|
 | everything else | 30s |
 | `products check` | 10m |
-| `packages discover` | 10m |
+| `discover` | 10m |
 
 Those two are slow because the work is slow. `products check` opens a TLS connection to every repository a product declares and runs several round trips against each; `discover` lists every tag of every repository and resolves each one. Through a corporate proxy, across a WAN link, minutes is the normal case — so a single 30-second default made them fail almost every time, and report it as `coordinator unreachable`, which sent operators to investigate a service that was working.
 
 The raise applies **only when the operator has not chosen a timeout**, by flag or by environment. An explicit `--timeout 5s` means five seconds even on a slow command; silently overriding it would make the flag a suggestion, and a short deadline is a legitimate choice for a scripted probe.
 
-Giving up on the response does not stop the work. `packages discover` triggers a scan on the Coordinator; a client timeout only stops us waiting for the result, and re-running the command joins the in-progress scan rather than starting a second one.
+Giving up on the response does not stop the work. `discover` triggers a scan on the Coordinator; a client timeout only stops us waiting for the result, and re-running the command joins the in-progress scan rather than starting a second one.
 
 ### Progress, not a blank terminal
 
-A blocking `packages discover` now polls `GET .../discovery` on a second connection and renders a live line to **stderr** — phase, current repository, tag counters, elapsed. Stderr, not stdout, so `-o json | jq` is unaffected; and a carriage-return redraw only when stderr is a terminal, because a redirected log full of `\r` is worse than no live display.
+A blocking `discover` now polls `GET .../discovery` on a second connection and renders a live line to **stderr** — phase, current repository, tag counters, elapsed. Stderr, not stdout, so `-o json | jq` is unaffected; and a carriage-return redraw only when stderr is a terminal, because a redirected log full of `\r` is worse than no live display.
 
 Two ways to not wait at all:
 
 ```
-transferctl packages discover <product> --wait=false
-transferctl packages discovery-status <product> [--watch]
+transferctl discover <product> --wait=false
+transferctl discover status <product> [--watch]
 ```
 
-`discovery-status` is also the answer to "is it stuck or just slow?", which a blocking command cannot give you while it is blocked.
+`discover status` is also the answer to "is it stuck or just slow?", which a blocking command cannot give you while it is blocked.
 
 ```bash
 export SWGW_ENDPOINT=http://localhost:8080

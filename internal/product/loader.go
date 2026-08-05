@@ -20,13 +20,36 @@ import (
 type Loader struct {
 	dir      string
 	resolver *SecretResolver
+
+	// defaults are the application-level concurrency settings a product
+	// inherits when it says nothing.
+	//
+	// Resolved HERE, at load, rather than at each point of use. Every consumer
+	// then reads a number that is already final, which is what removes the
+	// "was this set?" question from the scanner, the client factory and
+	// preflight alike — three places that previously each had their own idea of
+	// what a zero meant.
+	defaults Concurrency
 }
 
 // NewLoader reads *.yaml and *.yml from dir. resolver may be nil to skip
 // secret-existence checks, which is what `transferctl config validate` does
 // when running offline in CI.
+//
+// Concurrency defaults to the shipped values; WithConcurrency overrides them
+// from system configuration.
 func NewLoader(dir string, resolver *SecretResolver) *Loader {
-	return &Loader{dir: dir, resolver: resolver}
+	return &Loader{
+		dir:      dir,
+		resolver: resolver,
+		defaults: Concurrency{PerRegistry: DefaultPerRegistry},
+	}
+}
+
+// WithConcurrency sets the application-level defaults products inherit.
+func (l *Loader) WithConcurrency(c Concurrency) *Loader {
+	l.defaults = c.Resolve(Concurrency{PerRegistry: DefaultPerRegistry})
+	return l
 }
 
 // LoadResult is the outcome of loading a directory.
@@ -181,17 +204,26 @@ func (l *Loader) Parse(b []byte, source string) (*Product, error) {
 	sum := sha256.Sum256(b)
 	p.ConfigHash = hex.EncodeToString(sum[:])
 
-	p.applyDefaults()
-
+	// Validated BEFORE defaults are applied, so every complaint is about
+	// something the operator actually wrote and every path in the message points
+	// at a line in their file. Defaulting first would hide a value out of range
+	// behind the clamp that fixed it, and would report a conflict between two
+	// blocks that defaulting had just manufactured.
 	if err := p.Validate(l.resolver); err != nil {
 		return &p, err
 	}
+
+	p.applyDefaults(l.defaults)
 	return &p, nil
 }
 
 // applyDefaults fills values that the schema documents as defaulted, so that
 // downstream code never has to ask "was this set?".
-func (p *Product) applyDefaults() {
+//
+// app is the application-level concurrency, from system configuration.
+func (p *Product) applyDefaults(app Concurrency) {
+	p.Deprecations = nil
+
 	for i := range p.Spec.Sources {
 		s := &p.Spec.Sources[i]
 		if s.Type == "" {
@@ -200,16 +232,23 @@ func (p *Product) applyDefaults() {
 		if s.Discovery.Interval == 0 {
 			s.Discovery.Interval = Duration(DefaultDiscoveryInterval)
 		}
-		s.RateLimits = s.RateLimits.WithDefaults()
-		// Sources are read-only; an upload budget would be meaningless.
-		s.RateLimits.MaxConcurrentUploads = 0
+
+		folded, notes := foldLegacy(s.Concurrency, s.RateLimits, s.Discovery.Concurrency,
+			"sources["+s.Name+"]")
+		s.Concurrency = folded.Resolve(app)
+		p.Deprecations = append(p.Deprecations, notes...)
 	}
+
 	for i := range p.Spec.Targets {
 		t := &p.Spec.Targets[i]
 		if t.Type == "" {
 			t.Type = RegistryGeneric
 		}
-		t.RateLimits = t.RateLimits.WithDefaults()
+
+		folded, notes := foldLegacy(t.Concurrency, t.RateLimits, LegacyScanConcurrency{},
+			"targets["+t.Name+"]")
+		t.Concurrency = folded.Resolve(app)
+		p.Deprecations = append(p.Deprecations, notes...)
 	}
 }
 

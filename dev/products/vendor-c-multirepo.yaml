@@ -65,8 +65,8 @@ spec:
         interval: 15m
         tagFilters:
           include: ['^v\d+\.\d+\.\d+$']
-      rateLimits:
-        maxConcurrentDownloads: 16
+      concurrency:
+        perRegistry: 16
         requestsPerSecond: 50
 
     # -----------------------------------------------------------------

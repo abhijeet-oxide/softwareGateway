@@ -43,6 +43,9 @@ type Discoverer interface {
 		productName string) (discovery.InspectResult, error)
 	// Progress reports what every source is doing right now.
 	Progress(productName string) []discovery.SourceProgress
+	// Products lists the products being polled, so a global scan knows what
+	// "everything" means without the caller enumerating config a second time.
+	Products() []string
 }
 
 // ConnectivityChecker probes configured registries.
@@ -158,6 +161,11 @@ func (s *Server) routes() chi.Router {
 		// with a 404 that reads like a missing feature.
 		if s.deps.Discovery != nil {
 			r.Post("/products/{product}/packages:discover", s.handleDiscoverPackages)
+			// Fleet-wide: scan every product being polled. The common operator
+			// action after a maintenance window is "go and look at everything",
+			// and making that a shell loop over `products list` puts the
+			// definition of "everything" in the wrong place.
+			r.Post("/products:discover", s.handleDiscoverAll)
 
 			// Read-only, and deliberately outside the group above: a caller
 			// polling progress while a scan runs must not be blocked by

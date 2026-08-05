@@ -101,12 +101,11 @@ data:
               include: ['^v\d+\.\d+\.\d+$']   # RE2 syntax (Go regexp)
               exclude: ['-(rc|beta|alpha)\.']
 
-          rateLimits:
-            maxConcurrentDownloads: 16        # in-flight blob GETs
-            maxConcurrentUploads: 0           # sources are read-only
-            maxConnections: 32                # transport pool ceiling
+          # Usually ABSENT: the application-level `concurrency` is inherited.
+          # Spelled out here because this vendor asked us to stay under 50 rps.
+          concurrency:
+            perRegistry: 32                   # in flight, and the pool size
             requestsPerSecond: 50             # token bucket; 0 = unlimited
-            burst: 100
 
         - name: mirror
           registry: registry-eu.vendor-a.example.com
@@ -115,9 +114,8 @@ data:
             secretName: vendor-a-registry
           discovery:
             enabled: false                    # failover only; do not double-discover
-          rateLimits:
-            maxConcurrentDownloads: 8
-            maxConnections: 16
+          concurrency:
+            perRegistry: 16
             requestsPerSecond: 25
 
       # ─────────────────────────────────────────────────────────────
@@ -131,12 +129,10 @@ data:
           type: acr                           # generic | acr | artifactory | quay
           credentialsRef:
             secretName: internal-acr
-          rateLimits:
-            maxConcurrentUploads: 24
-            maxConcurrentDownloads: 24        # non-zero: targets are promotion sources
-            maxConnections: 64
+          # A registry we own, so we can be less polite than with a vendor.
+          concurrency:
+            perRegistry: 64
             requestsPerSecond: 200
-            burst: 400
           default: true                       # used when a request names no target
 
         - name: production
@@ -145,10 +141,8 @@ data:
           type: acr
           credentialsRef:
             secretName: internal-acr
-          rateLimits:
-            maxConcurrentUploads: 12          # deliberately conservative
-            maxConcurrentDownloads: 12
-            maxConnections: 32
+          concurrency:
+            perRegistry: 32                   # deliberately conservative
             requestsPerSecond: 100
           # Promotion-only: replication may not target this directly.
           promotionOnly: true
@@ -282,25 +276,42 @@ Types, defaults, and validation rules. Validation is enforced at load (§7) and 
 | `type` | enum | no | `generic` | `generic`, `acr`, `artifactory`, `quay` ([06](06-registry-abstraction.md)) |
 | `anonymous` | bool | no | `false` | Mutually exclusive with `credentialsRef` |
 | `credentialsRef` | object | conditional | — | Required unless `anonymous` |
-| `rateLimits` | object | no | see §5.3 | |
+| `concurrency` | object | no | inherits the application-level value | see §5.3 |
 | `network` | object | no | inherits product | Same shape as `spec.network` |
 | `default` (targets) | bool | no | `false` | At most one per product |
 | `promotionOnly` (targets) | bool | no | `false` | Rejects replication requests naming this target |
 | `discovery` (sources) | object | no | `enabled: true` | |
 
-### 5.3 `rateLimits`
+### 5.3 `concurrency`
 
-Per repository, independently configurable, exactly as required. These are **ceilings**; the adaptive controller ([11](11-resiliency-and-backpressure.md) §3) operates strictly within them and may run lower.
+One number, at the application level, overridable per source or target.
+
+```yaml
+# system configuration — what every product inherits
+concurrency:
+  perRegistry: 32
+  requestsPerSecond: 0
+```
 
 | Field | Type | Default | Meaning |
 |---|---|---|---|
-| `maxConcurrentDownloads` | int | 8 | In-flight blob GETs against this repository, fleet-wide |
-| `maxConcurrentUploads` | int | 8 | In-flight blob pushes, fleet-wide |
-| `maxConnections` | int | 32 | Transport pool ceiling per worker |
-| `requestsPerSecond` | int | 0 | Token-bucket rate; `0` = unlimited |
-| `burst` | int | 2×rps | Token-bucket burst |
+| `perRegistry` | int | 32 (from system config) | Requests in flight against one registry, **and** the size of the connection pool serving them |
+| `requestsPerSecond` | int | 0 | Optional politeness ceiling on top of it; `0` = no artificial limit |
 
-**Fleet-wide, not per-worker.** The Coordinator divides the budget across active workers and ships each worker its share in the lease response. This is why concurrency limits are meaningful even as the worker count changes under HPA — a per-worker limit would silently multiply by the replica count and flatten the vendor's registry the moment HPA scaled out.
+`burst` is derived (2×rps) and not configurable.
+
+**Why one number.** A source used to carry seven: `rateLimits.maxConcurrentDownloads`, `maxConcurrentUploads`, `maxConnections`, `requestsPerSecond`, `burst`, plus `discovery.concurrency.repositories` and `.tags` — set per source, per target, in every product document. Nobody could predict what changing one of them would do, because the answer depended on the other six.
+
+They were not independent either. Every request goes through one connection pool, so **the pool is the concurrency limit**: point more goroutines at a pool of 32 and you get 32 in-flight requests and a queue. The old defaults concealed this by agreeing with each other — 4 repositories × 8 tags = 32 = `maxConnections` — an agreement nobody wrote down and any edit would break. A pool sized above the worker count is idle sockets; below it is goroutines blocked on a semaphore they cannot see.
+
+The default is 32 rather than something rounder because it is what the old defaults multiplied out to. The simplification changed the shape of the configuration, not the load it produces.
+
+**Where it belongs.** At the application level, because it is a property of the *deployment* — the bandwidth it has, the proxy it sits behind, the politeness its vendors expect — not of any one product. The per-source block exists for the case that genuinely differs: one fragile vendor that needs a smaller number than the rest of the fleet.
+
+**Fleet-wide, not per-worker.** The Coordinator divides the budget across active workers and ships each worker its share in the lease response. A per-worker limit would silently multiply by the replica count and flatten the vendor's registry the moment HPA scaled out.
+
+**Superseded keys.** `rateLimits` and `discovery.concurrency` are still parsed and folded forward — `maxConnections` becomes `perRegistry`, and `repositories × tags` becomes `perRegistry` when that is all a document has. Silently ignoring a number someone deliberately set would be worse than either honouring it or rejecting it. `transferctl config validate` reports them as deprecations without failing, because a document that keeps working is worth more than a tidy schema.
+
 
 ### 5.4 `autoDownload.rules[]`
 
@@ -347,7 +358,7 @@ Bearer-token registries (and identity-token flows such as ACR) use the same shap
 
 **Fail closed per product, stay up overall.** A syntax error in `vendor-b.yaml` must never stop `vendor-a` from replicating.
 
-On load, each product is validated for: schema conformance, unique names, resolvable secret references, compiling regexes, referenced targets existing, `promotionOnly` not named in auto-download rules, sane rate limits (non-negative; `burst >= rps` when rps > 0), and parseable durations.
+On load, each product is validated for: schema conformance, unique names, resolvable secret references, compiling regexes, referenced targets existing, `promotionOnly` not named in auto-download rules, sane concurrency (non-negative, within the per-registry cap, and no superseded block left alongside a `concurrency` that overrides it), and parseable durations.
 
 | Outcome | Behaviour |
 |---|---|
@@ -377,6 +388,12 @@ database:
   maxOpenConns: 25
   maxIdleConns: 10
   connMaxLifetime: 1h
+
+# How hard this installation works ANY ONE registry. Every product inherits
+# it; a product may override it per source or target (§5.3).
+concurrency:
+  perRegistry: 32                  # in flight, and the connection pool size
+  requestsPerSecond: 0             # 0 = no artificial limit
 
 coordinator:
   leaderElection:

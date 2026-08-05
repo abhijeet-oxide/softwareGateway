@@ -123,7 +123,14 @@ func run() error {
 
 	// ---- product configuration ----
 	resolver := product.NewSecretResolver(cfg.SecretsDir())
-	loader := product.NewLoader(cfg.ProductsDir(), resolver)
+	// The application-level concurrency reaches products HERE, at load, so every
+	// consumer downstream reads a number that is already resolved rather than
+	// each deciding for itself what an unset value means.
+	loader := product.NewLoader(cfg.ProductsDir(), resolver).
+		WithConcurrency(product.Concurrency{
+			PerRegistry:       cfg.Concurrency.PerRegistry,
+			RequestsPerSecond: cfg.Concurrency.RequestsPerSecond,
+		})
 	products := product.NewRegistry()
 	cat := catalog.NewCatalog(st)
 

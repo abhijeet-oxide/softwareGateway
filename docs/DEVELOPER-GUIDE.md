@@ -218,6 +218,8 @@ database:
 | `database.connMaxLifetime` | `1h` | |
 | `coordinator.leaderElection.enabled` | `true` | no-op on SQLite |
 | `coordinator.leaderElection.lockID` | `1` | the `pg_advisory_lock` key |
+| `concurrency.perRegistry` | `32` | requests in flight against any one registry, and the connection pool size; every product inherits it |
+| `concurrency.requestsPerSecond` | `0` | optional politeness ceiling; `0` = no artificial limit |
 | `coordinator.leaderElection.retryInterval` | `10s` | how often a follower tries |
 | `coordinator.scheduler.tickInterval` | `10s` | M4 |
 | `coordinator.reaper.tickInterval` | `30s` | M3 |
@@ -722,10 +724,23 @@ transferctl packages list <product> --tag v1.0.0
 transferctl packages list <product> --state superseded
 transferctl packages list <product> --all        # follow pagination
 
-transferctl packages describe <product> <tag-or-digest>    # artifact tree
-transferctl packages inspect <product> <tag-or-digest>     # expand it and measure the size
-transferctl packages discover <product>          # scan now, don't wait for the interval
-transferctl packages discover <product> --source vendor
+transferctl packages describe <product> <package>          # artifact tree
+transferctl packages describe <product> <package> --expand # ... and measure the transfer size
+
+transferctl discover                             # scan EVERY product; never blocks
+transferctl discover <product>                   # scan one, and wait for it
+transferctl discover <product> --source vendor
+transferctl discover <product> --wait=false      # start it, return now
+transferctl discover status [product] [--watch]  # what it is doing right now
+```
+
+`<package>` is a tag, a digest, or `repository:tag`. A **bare tag is ambiguous**
+when a product spans several repositories — a vendor's version tag appears in
+many of them — so a tag matching more than one is refused with the list rather
+than one being picked for you. Scope it:
+
+```bash
+transferctl packages describe cfx orbs/cfx-5000-k8s:orb_23.8.1076
 ```
 
 Every command takes `-o json` or `-o yaml` for scripting.
@@ -739,7 +754,7 @@ Every command takes `-o json` or `-o yaml` for scripting.
 | 2 | usage error — bad flags or arguments |
 | 3 | no answer — the Coordinator is unreachable, **or** it did not reply within the timeout |
 | 4 | not found |
-| 5 | failed precondition — e.g. `packages discover` on a follower |
+| 5 | failed precondition — e.g. `discover` on a follower |
 | 6 | partial failure — the operation ran but something in it failed |
 
 The distinctions earn their keep in scripts. 3 versus 4 separates "the service is down" from "you asked for something that does not exist". 6 exists so CI cannot report green on a scan where half the tags failed, or on a config directory where one file is invalid:
@@ -758,7 +773,7 @@ Code 3 covers both "nothing is listening" and "it is still working on your reque
 |---|---|
 | everything else | 30s |
 | `transferctl products check` | 10m |
-| `transferctl packages discover` | 10m |
+| `transferctl discover` | 10m |
 
 Those two are slow because the work is slow, not because anything is wrong. `products check` opens a TLS connection to every repository a product declares and runs several round trips against each; `discover` lists every tag of every repository and then resolves each one. Through a corporate proxy, against a registry across a WAN link, minutes is normal. A shared 30-second deadline made both of them fail almost every time, and fail with
 
@@ -782,7 +797,7 @@ large one — raise the deadline:
 
 Set `--timeout` or `SWGW_TIMEOUT` yourself and your value is used everywhere, including on the slow commands. An explicit deadline is a decision, not a suggestion — there are good reasons to want a short one, such as a scripted probe.
 
-**The scan does not stop when the client does.** `packages discover` triggers work on the Coordinator; giving up on the response only stops you waiting for it. Re-running the command finds the in-progress scan rather than starting a second one.
+**The scan does not stop when the client does.** `discover` triggers work on the Coordinator; giving up on the response only stops you waiting for it. Re-running the command finds the in-progress scan rather than starting a second one.
 
 ### `health` vs `products check` — two different questions
 
@@ -828,7 +843,7 @@ Exit code 6 when any repository fails, so it works in CI.
 ### Discovery behaviour worth knowing
 
 - **Every scan is a full scan.** No cursor, no watermark. The OCI tag list has no ordering guarantee and no change feed, so an incremental scheme would need a full scan to reconcile anyway. The payoff: it is self-healing — a crash, an outage, or a stale replica all resolve on the next pass with no repair path.
-- **Discovery runs on the leader only.** On a follower, `packages discover` returns a precondition failure explaining why, not a 404.
+- **Discovery runs on the leader only.** On a follower, `discover` returns a precondition failure explaining why, not a 404.
 - **A scan that finds nothing is the normal steady state**, not a failure.
 - **A source is never disabled by a failure.** It backs off to at most 4× its interval and recovers on its own. A source that turned itself off is one nobody remembers to turn back on.
 
@@ -967,7 +982,7 @@ export SWGW_ENDPOINT=http://localhost:8080
 
 ./bin/transferctl packages list demo
 ./bin/transferctl packages describe demo v1.0.0
-./bin/transferctl packages discover demo          # re-scan: finds nothing, which is correct
+./bin/transferctl discover demo          # re-scan: finds nothing, which is correct
 ```
 
 **6 — Watch supersession.** Re-push the *same tag* with different content, then re-scan. A new package row appears and the old one becomes `superseded` with `superseded_by` set. Different tags never do this to each other — `v1.0.0` and `v1.1.0` coexist indefinitely.
@@ -1006,21 +1021,21 @@ Your `configDir` did not apply. The key is top-level `configDir`, not `paths.pro
 **A `SWGW_` variable seems ignored**
 It no longer can be — an unknown one fails startup by name. If you are on an older build, `SWGW_` variables for camelCase keys (`maxOpenConns`, `leaderElection`) were silently dropped. Pull and rebuild.
 
-**`packages discover` returns a precondition failure**
+**`discover` returns a precondition failure**
 Discovery runs on the leader only. Either this replica is a follower, or discovery has no enabled sources. Check the startup log for `discovery started sources=N`.
 
-**`packages discover` sometimes scans and sometimes returns instantly**
+**`discover` sometimes scans and sometimes returns instantly**
 Fixed — pull and rebuild. A trigger arriving while a scan was already running used to return the *previous* result (or zeros, if no scan had finished yet) instead of joining the running one, so the same command took seconds or 0ms depending on timing. It now joins the running scan and returns its real numbers, with `collapsed: true` in the JSON and "Joined a scan already in progress" in the table output.
 
-**`packages discover` reports `Repositories scanned 0` and "Nothing new"**
+**`discover` reports `Repositories scanned 0` and "Nothing new"**
 Those are two different things and the output now separates them. `Repositories scanned 0` means nothing was looked at, which is not a steady state. Either `discovery.repositoryFilters` rejected every candidate — the count is shown — or the source names no repositories and the registry's `/v2/_catalog` returned none. `transferctl products check` tells you which.
 
-**`packages discover` blocks for minutes with no output**
+**`discover` blocks for minutes with no output**
 Fixed. It now prints a live progress line to stderr — phase, which repository, tag counts, elapsed — polled from `GET /api/v1/products/{product}/discovery`. Stdout still carries only the result, so `-o json | jq` is unaffected. Two more ways to avoid staring at it:
 
 ```bash
-transferctl packages discover <product> --wait=false   # start it, return now
-transferctl packages discovery-status <product> --watch # follow it
+transferctl discover <product> --wait=false   # start it, return now
+transferctl discover status <product> --watch # follow it
 ```
 
 Stopping the client never stops the scan — it runs on the Coordinator.
@@ -1038,19 +1053,35 @@ spec:
 If the traffic goes through an inspecting proxy, that is the usual cause: a proxy that scans response bodies answers `HEAD` promptly and stalls on `GET`. `transferctl products check` now probes a real manifest fetch, so it tells you this before discovery does.
 
 **Discovery is very slow — one repository, one tag, minutes**
-Fixed. A scan used to be strictly sequential. It now runs repositories and tags in parallel, bounded:
+Fixed. A scan used to be strictly sequential. It now runs in two bounded phases —
+list every repository's tags, then resolve every tag — with **one** limit:
+
+```yaml
+# system configuration: what every product inherits
+concurrency:
+  perRegistry: 32          # requests in flight, AND the connection pool size
+  requestsPerSecond: 0     # optional; 0 = no artificial limit
+```
+
+Override it for one fragile vendor, on the source:
 
 ```yaml
 spec:
   sources:
     - name: vendor
-      discovery:
-        concurrency:
-          repositories: 4        # default 4
-          tags: 8                # default 8; they share the source's client
+      concurrency:
+        perRegistry: 8
 ```
 
-Both clamp at 64. Raise them for a registry you own; leave them alone for a vendor's.
+Clamped at 128. Raise it for a registry you own; leave it alone for a vendor's.
+
+This was three separate numbers (`discovery.concurrency.repositories`, `.tags`,
+and `rateLimits.maxConnections`), and they were not independent: every request
+goes through one connection pool, so **the pool was always the real ceiling**.
+The old defaults hid that by agreeing — 4 × 8 = 32 = `maxConnections` — which
+means any edit to one of them broke an agreement nobody had written down. The
+old keys still parse and are folded forward; `transferctl config validate`
+reports them.
 
 There was also a retry amplification: a manifest `GET` that blew the 30s deadline was retried up to eight times, so **one unresponsive request cost up to four minutes** — and discovery makes two per tag. A 90-second total budget now bounds it.
 
@@ -1063,7 +1094,7 @@ Newest release first, by the vendor's own declared build date — which is the o
 
 Packages whose publisher set no date fall to the **end**, then order by when we found them.
 
-Columns showing `n/a` mean the value genuinely is not known — not zero, and not empty. `SIZE` and `BLOBS` read `n/a` until something walks the tree; `transferctl packages inspect` fills them in.
+Columns showing `n/a` mean the value genuinely is not known — not zero, and not empty. `SIZE` and `BLOBS` read `n/a` until something walks the tree; `transferctl packages describe --expand` fills them in.
 
 **Where does `Published` come from, and why is it sometimes missing?**
 From `org.opencontainers.image.created` on the tag's manifest — a **standard OCI annotation**, not a vendor extension, so it works anywhere it is set. It is optional in the spec, so a publisher that sets none simply has no published date, and we record nothing rather than inventing one.
@@ -1080,10 +1111,10 @@ transferctl packages describe <product> <tag> -o json | jq '.artifacts[].annotat
 Expected, for a package whose root is an index — and it is one command away:
 
 ```bash
-transferctl packages inspect <product> <tag>
+transferctl packages describe <product> <package> --expand
 ```
 
-Discovery is deliberately light: it fetches the tag's own manifest and records the artifacts that manifest lists, without a request each. That answers "what is new" in two requests per tag, and it means the layer bytes underneath are not yet known. `inspect` walks the rest and measures it. Safe to repeat — the tree under a digest cannot change, so a second run fetches nothing and says so.
+Discovery is deliberately light: it fetches the tag's own manifest and records the artifacts that manifest lists, without a request each. That answers "what is new" in two requests per tag, and it means the layer bytes underneath are not yet known. `--expand` walks the rest and measures it. Safe to repeat — the tree under a digest cannot change, so a second run fetches nothing and says so.
 
 You do not have to run it before a transfer; a transfer performs the same walk. It is for deciding whether you want the transfer.
 
@@ -1104,10 +1135,10 @@ observability:
 
 You do not need `debug` for the important half: **failed requests and slow ones (>10s) are logged at WARN regardless of level**, with the URL and how long they took. If a scan is crawling, that log says which requests are responsible.
 
-Alongside it: `transferctl packages discovery-status <product> --watch`, and `transferctl products check <product>`, which times a real `HEAD` and a real manifest `GET`.
+Alongside it: `transferctl discover status <product> --watch`, and `transferctl products check <product>`, which times a real `HEAD` and a real manifest `GET`.
 
 **`packages list` is empty**
-Discovery polls on its interval; the first scan happens at startup. Force one with `transferctl packages discover <product>`. If it reports `tagsListed=0`, the repository path or credentials are wrong — `transferctl health` checks reachability.
+Discovery polls on its interval; the first scan happens at startup. Force one with `transferctl discover <product>`. If it reports `tagsListed=0`, the repository path or credentials are wrong — `transferctl health` checks reachability.
 
 **Discovery is slow to report a registry outage**
 Expected, and worth understanding: a hard outage takes **~2 minutes** to surface. The transport retries the transient class eight times with backoff, and only when those are exhausted does the loop's own backoff engage. Both layers are right individually and they multiply. This is why the alert is on `discovery_last_success_timestamp_seconds` staleness rather than failure rate — staleness is visible immediately.
@@ -1119,7 +1150,7 @@ Expected, and worth understanding: a hard outage takes **~2 minutes** to surface
 This one *is* a trust problem, and the right fix is `network.caBundleRef` pointing at the issuing CA's PEM. `insecureSkipVerify: true` also works and is worse: it stops checking expiry and hostname too. `transferctl products check` tells you which of the two you have.
 
 **`context deadline exceeded (Client.Timeout exceeded while awaiting headers)`**
-An older build. `products check` and `packages discover` now default to a 10-minute deadline, and a timeout no longer reports itself as an unreachable Coordinator. If you still hit it on a current build, the work really is taking longer than ten minutes: `transferctl --timeout 30m ...`. See [Timeouts](#timeouts).
+An older build. `products check` and `discover` now default to a 10-minute deadline, and a timeout no longer reports itself as an unreachable Coordinator. If you still hit it on a current build, the work really is taking longer than ten minutes: `transferctl --timeout 30m ...`. See [Timeouts](#timeouts).
 
 **`golangci-lint` rejects the config**
 You have v1. The config uses the v2 schema. Install v2.

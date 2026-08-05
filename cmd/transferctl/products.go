@@ -289,15 +289,15 @@ func renderProductDetail(w io.Writer, p *v1.Product) error {
 
 	fmt.Fprintln(w, "Sources")
 	tw := newTabWriter(w)
-	fmt.Fprintln(tw, "  NAME\tSTATE\tREGISTRY\tREPOSITORIES\tTYPE\tDISCOVERY\tDOWNLOADS")
+	fmt.Fprintln(tw, "  NAME\tSTATE\tREGISTRY\tREPOSITORIES\tTYPE\tDISCOVERY\tCONCURRENCY")
 	for _, s := range p.Sources {
 		discovery := "off"
 		if s.Discovery != nil && s.Discovery.Enabled {
 			discovery = fmt.Sprintf("every %ds", s.Discovery.IntervalSeconds)
 		}
-		fmt.Fprintf(tw, "  %s\t%s\t%s\t%s\t%s\t%s\t%d\n",
+		fmt.Fprintf(tw, "  %s\t%s\t%s\t%s\t%s\t%s\t%s\n",
 			s.Name, enabledState(s.Enabled), s.Registry, repositoryList(s), s.Type,
-			discovery, s.RateLimits.MaxConcurrentDownloads)
+			discovery, humanConcurrency(s.Concurrency))
 	}
 	if err := tw.Flush(); err != nil {
 		return err
@@ -306,11 +306,11 @@ func renderProductDetail(w io.Writer, p *v1.Product) error {
 	fmt.Fprintln(w)
 	fmt.Fprintln(w, "Targets")
 	tw = newTabWriter(w)
-	fmt.Fprintln(tw, "  NAME\tSTATE\tREGISTRY\tREPOSITORY\tTYPE\tDEFAULT\tPROMOTION-ONLY\tUPLOADS")
+	fmt.Fprintln(tw, "  NAME\tSTATE\tREGISTRY\tREPOSITORY\tTYPE\tDEFAULT\tPROMOTION-ONLY\tCONCURRENCY")
 	for _, t := range p.Targets {
-		fmt.Fprintf(tw, "  %s\t%s\t%s\t%s\t%s\t%s\t%s\t%d\n",
+		fmt.Fprintf(tw, "  %s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n",
 			t.Name, enabledState(t.Enabled), t.Registry, t.Repository, t.Type,
-			yesNo(t.Default), yesNo(t.PromotionOnly), t.RateLimits.MaxConcurrentUploads)
+			yesNo(t.Default), yesNo(t.PromotionOnly), humanConcurrency(t.Concurrency))
 	}
 	if err := tw.Flush(); err != nil {
 		return err

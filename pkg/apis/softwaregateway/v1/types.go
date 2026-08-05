@@ -129,12 +129,12 @@ type Repository struct {
 	// RepositoryFilters narrows the set. Its main use is the enumerated case.
 	RepositoryFilters *Filters `json:"repositoryFilters,omitempty"`
 
-	Type          string     `json:"type"`
-	Role          string     `json:"role"`
-	Default       bool       `json:"default,omitempty"`
-	PromotionOnly bool       `json:"promotionOnly,omitempty"`
-	Discovery     *Discovery `json:"discovery,omitempty"`
-	RateLimits    RateLimits `json:"rateLimits"`
+	Type          string      `json:"type"`
+	Role          string      `json:"role"`
+	Default       bool        `json:"default,omitempty"`
+	PromotionOnly bool        `json:"promotionOnly,omitempty"`
+	Discovery     *Discovery  `json:"discovery,omitempty"`
+	Concurrency   Concurrency `json:"concurrency"`
 }
 
 // Filters is an include/exclude pair of RE2 patterns.
@@ -150,14 +150,19 @@ type Discovery struct {
 	ExcludePatterns []string `json:"excludePatterns,omitempty"`
 }
 
-// RateLimits are fleet-wide ceilings, not per-worker. The Coordinator divides
-// them across active workers.
-type RateLimits struct {
-	MaxConcurrentDownloads int `json:"maxConcurrentDownloads"`
-	MaxConcurrentUploads   int `json:"maxConcurrentUploads"`
-	MaxConnections         int `json:"maxConnections"`
-	RequestsPerSecond      int `json:"requestsPerSecond,omitempty"`
-	Burst                  int `json:"burst,omitempty"`
+// Concurrency is the RESOLVED limit in force for one registry — the product's
+// override if it has one, otherwise the application-level default. Never the
+// raw document value, so a client reading this sees what is actually happening
+// rather than what was written down.
+//
+// Fleet-wide, not per-worker: a per-worker limit would silently multiply by the
+// replica count and flatten a vendor registry the moment HPA scaled out.
+type Concurrency struct {
+	// PerRegistry is requests in flight against this registry, which is also the
+	// connection pool size — they are the same limit.
+	PerRegistry int `json:"perRegistry"`
+	// RequestsPerSecond is an optional politeness ceiling. Zero means none.
+	RequestsPerSecond int `json:"requestsPerSecond,omitempty"`
 }
 
 type AutoDownloadSummary struct {
@@ -444,6 +449,27 @@ type DiscoverPackagesResponse struct {
 	// Started is set instead of the counters when the request asked not to
 	// wait: the scan is running, and there are no results yet to report.
 	Started *DiscoverStarted `json:"started,omitempty"`
+}
+
+// DiscoverAllResponse reports a fleet-wide scan.
+type DiscoverAllResponse struct {
+	// Started and AlreadyRunning are totals across every product.
+	Started        int `json:"started"`
+	AlreadyRunning int `json:"alreadyRunning,omitempty"`
+
+	Products []DiscoverAllProduct `json:"products"`
+}
+
+// DiscoverAllProduct is one product's outcome in a fleet-wide scan.
+type DiscoverAllProduct struct {
+	Product string `json:"product"`
+	// Sources is how many began a new scan.
+	Sources        int `json:"sources"`
+	AlreadyRunning int `json:"alreadyRunning,omitempty"`
+	// Error is set when this product could not be started. Reported per product
+	// rather than failing the whole call: one broken source must not stop the
+	// other thirty being scanned.
+	Error string `json:"error,omitempty"`
 }
 
 // DiscoverStarted reports a scan that was launched without waiting.

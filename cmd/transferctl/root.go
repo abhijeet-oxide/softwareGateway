@@ -89,12 +89,15 @@ func newRootCommand() *cobra.Command {
 		envDurationOr("SWGW_TIMEOUT", defaultTimeout),
 		"per-request timeout (raised automatically for commands that contact registries)")
 
+	// Ordered as an operator meets them, not alphabetically: configure, see what
+	// is out there, look at it, then the housekeeping.
 	root.AddCommand(
-		newVersionCommand(),
-		newHealthCommand(),
-		newProductsCommand(),
-		newPackagesCommand(),
 		newConfigCommand(),
+		newProductsCommand(),
+		newDiscoverCommand(),
+		newPackagesCommand(),
+		newHealthCommand(),
+		newVersionCommand(),
 	)
 	return root
 }

@@ -28,6 +28,7 @@ type fakeDiscoverer struct {
 	calls      int
 	started    int
 	progress   []discovery.SourceProgress
+	products   []string
 }
 
 func (f *fakeDiscoverer) Running() bool { return f.running }
@@ -60,6 +61,8 @@ func (f *fakeDiscoverer) InspectPackage(
 func (f *fakeDiscoverer) Progress(_ string) []discovery.SourceProgress {
 	return f.progress
 }
+
+func (f *fakeDiscoverer) Products() []string { return f.products }
 
 const testProductDoc = `
 apiVersion: softwaregateway.io/v1alpha1
@@ -499,4 +502,143 @@ func derefBytes(v *v1.Int64String) string {
 		return "<not measured>"
 	}
 	return string(*v)
+}
+
+// seedPackageIn inserts a package in a repository OTHER than the product's
+// configured one, so the multi-repository case can be tested. Discovery creates
+// these rows when a source enumerates a registry's catalog.
+func (h *apiHarness) seedPackageIn(repoPath, tag, digest string) int64 {
+	h.t.Helper()
+
+	tx, err := h.store.DB().BeginTx(h.t.Context(), nil)
+	if err != nil {
+		h.t.Fatal(err)
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	repoID, err := h.packages.EnsureRepository(h.t.Context(), tx, h.productID,
+		"source", "vendor/"+repoPath, "registry.example.com", repoPath, "generic", "discovery")
+	if err != nil {
+		h.t.Fatalf("ensure repository %s: %v", repoPath, err)
+	}
+
+	id, err := h.packages.InsertPackage(h.t.Context(), tx, store.PackageRow{
+		ProductID:      h.productID,
+		SourceRepoID:   repoID,
+		Tag:            tag,
+		ManifestDigest: digest,
+		MediaType:      "application/vnd.oci.image.index.v1+json",
+		ArtifactCount:  1,
+	})
+	if err != nil {
+		h.t.Fatalf("seed package %s:%s: %v", repoPath, tag, err)
+	}
+	if err := tx.Commit(); err != nil {
+		h.t.Fatal(err)
+	}
+	return id
+}
+
+// A vendor's version tag appears in many of a product's repositories. The
+// handler must refuse rather than pick, and must say what to type instead —
+// an error that states the problem without the fix is one the user then has to
+// go and research.
+func TestGetPackageRefusesAnAmbiguousTag(t *testing.T) {
+	h := newAPIHarness(t)
+	h.seedPackageIn("orbs/cfx-5000-k8s", "orb_23.8.1076", digestA)
+	h.seedPackageIn("orbs/cfx-5000-db", "orb_23.8.1076", digestB)
+
+	var prob v1.Problem
+	code := h.get("/api/v1/products/vendor-a/packages/orb_23.8.1076", &prob)
+	if code != http.StatusBadRequest {
+		t.Fatalf("expected 400 for an ambiguous reference, got %d", code)
+	}
+	if prob.Code != v1.CodeInvalidArgument {
+		t.Errorf("code = %s, want %s", prob.Code, v1.CodeInvalidArgument)
+	}
+	// The message must name every candidate AND show a reference that works,
+	// because an error that states the problem without the fix is one the user
+	// then has to go and research.
+	for _, want := range []string{
+		"orbs/cfx-5000-k8s",
+		"orbs/cfx-5000-db",
+		"orbs/cfx-5000-db:orb_23.8.1076",
+	} {
+		if !strings.Contains(prob.Detail, want) {
+			t.Errorf("the message must contain %q so the caller can act on it: %q", want, prob.Detail)
+		}
+	}
+}
+
+// A repository with no slash can be scoped in the path segment itself. This is
+// the form the router can actually route: a slash in a path segment does not
+// survive %2F decoding, which is why the client moves a slashed repository into
+// the query string instead — see splitPackageRef.
+func TestGetPackageAcceptsAScopedReferenceInThePath(t *testing.T) {
+	h := newAPIHarness(t)
+	h.seedPackageIn("cfx-5000-k8s", "orb_23.8.1076", digestA)
+	h.seedPackageIn("cfx-5000-db", "orb_23.8.1076", digestB)
+
+	var pkg v1.Package
+	code := h.get("/api/v1/products/vendor-a/packages/cfx-5000-db:orb_23.8.1076", &pkg)
+	if code != http.StatusOK {
+		t.Fatalf("expected 200 for a scoped reference, got %d", code)
+	}
+	if pkg.ManifestDigest != digestB {
+		t.Errorf("resolved to %s, want the cfx-5000-db package", pkg.ManifestDigest)
+	}
+}
+
+// The query parameter is the other way to scope, for a caller that has the
+// repository in a variable rather than in the string it was handed.
+func TestGetPackageAcceptsARepositoryQuery(t *testing.T) {
+	h := newAPIHarness(t)
+	h.seedPackageIn("orbs/cfx-5000-k8s", "orb_23.8.1076", digestA)
+	h.seedPackageIn("orbs/cfx-5000-db", "orb_23.8.1076", digestB)
+
+	var pkg v1.Package
+	code := h.get(
+		"/api/v1/products/vendor-a/packages/orb_23.8.1076?repository=orbs/cfx-5000-k8s", &pkg)
+	if code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", code)
+	}
+	if pkg.ManifestDigest != digestA {
+		t.Errorf("resolved to %s, want the cfx-5000-k8s package", pkg.ManifestDigest)
+	}
+}
+
+// The fleet-wide scan. It must never block and must never fail the whole call
+// because one product could not be started.
+func TestDiscoverAllReportsEveryProduct(t *testing.T) {
+	h := newAPIHarness(t)
+	h.discoverer.products = []string{"vendor-a"}
+
+	var resp v1.DiscoverAllResponse
+	if code := h.post("/api/v1/products:discover", "", &resp); code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", code)
+	}
+	if len(resp.Products) != 1 || resp.Products[0].Product != "vendor-a" {
+		t.Fatalf("expected one product row for vendor-a, got %+v", resp.Products)
+	}
+	if resp.Started != 1 {
+		t.Errorf("started = %d, want 1", resp.Started)
+	}
+	// Started, not waited for: a fleet-wide scan that blocked would hold an HTTP
+	// request open for as long as the slowest vendor takes.
+	if h.discoverer.started != 1 {
+		t.Errorf("the loop was asked to start %d scans, want 1", h.discoverer.started)
+	}
+}
+
+func TestDiscoverAllWithNoProducts(t *testing.T) {
+	h := newAPIHarness(t)
+	h.discoverer.products = nil
+
+	var resp v1.DiscoverAllResponse
+	if code := h.post("/api/v1/products:discover", "", &resp); code != http.StatusOK {
+		t.Fatalf("nothing to scan is not an error, got %d", code)
+	}
+	if len(resp.Products) != 0 || resp.Started != 0 {
+		t.Errorf("expected an empty result, got %+v", resp)
+	}
 }

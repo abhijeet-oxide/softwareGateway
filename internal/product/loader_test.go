@@ -153,12 +153,13 @@ func TestDefaultsApplied(t *testing.T) {
 	if p.Spec.Sources[0].Type != RegistryGeneric {
 		t.Fatalf("registry type should default to generic, got %q", p.Spec.Sources[0].Type)
 	}
-	if got := p.Spec.Targets[0].RateLimits.MaxConcurrentUploads; got != DefaultMaxConcurrentUploads {
-		t.Fatalf("target upload budget should default, got %d", got)
+	// Concurrency is resolved at load, so nothing downstream has to decide what
+	// an unset value means.
+	if got := p.Spec.Sources[0].Concurrency.PerRegistry; got != DefaultPerRegistry {
+		t.Fatalf("source concurrency should default to %d, got %d", DefaultPerRegistry, got)
 	}
-	// Sources are read-only, so an upload budget would be meaningless.
-	if got := p.Spec.Sources[0].RateLimits.MaxConcurrentUploads; got != 0 {
-		t.Fatalf("source upload budget should be zero, got %d", got)
+	if got := p.Spec.Targets[0].Concurrency.PerRegistry; got != DefaultPerRegistry {
+		t.Fatalf("target concurrency should default to %d, got %d", DefaultPerRegistry, got)
 	}
 	if p.ConfigHash == "" {
 		t.Fatal("config hash should be recorded for audit")
@@ -343,5 +344,150 @@ spec:
 	}
 	if !strings.Contains(res.Invalid[0].Err.Error(), "already declared by vendor-a/lab") {
 		t.Fatalf("the error should name the owning product and repository, got %v", res.Invalid[0].Err)
+	}
+}
+
+// The superseded blocks are still in live ConfigMaps. Silently ignoring a
+// number someone deliberately set would be worse than either honouring it or
+// rejecting it, so they are folded forward — and said out loud.
+func TestLegacyRateLimitsAreFoldedForward(t *testing.T) {
+	const legacy = `
+apiVersion: softwaregateway.io/v1alpha1
+kind: Product
+metadata:
+  name: vendor-legacy
+spec:
+  sources:
+    - name: primary
+      registry: registry.example.com
+      repository: vendor-legacy/suite
+      anonymous: true
+      rateLimits:
+        maxConnections: 12
+        requestsPerSecond: 20
+  targets:
+    - name: lab
+      registry: internal.example.com
+      repository: vendor-legacy/lab
+      anonymous: true
+      default: true
+`
+	dir := writeDir(t, map[string]string{"legacy.yaml": legacy})
+	res, err := NewLoader(dir, nil).Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(res.Invalid) > 0 {
+		t.Fatalf("a document using the old keys must still load: %v", res.Invalid[0].Err)
+	}
+
+	src := res.Valid[0].Spec.Sources[0]
+	// maxConnections WAS the pool, and the pool was always the real ceiling.
+	if got := src.Concurrency.PerRegistry; got != 12 {
+		t.Errorf("perRegistry = %d, want the old maxConnections (12)", got)
+	}
+	if got := src.Concurrency.RequestsPerSecond; got != 20 {
+		t.Errorf("requestsPerSecond = %d, want 20", got)
+	}
+	if got := src.Concurrency.Burst(); got != 40 {
+		t.Errorf("burst = %d, want twice the rate", got)
+	}
+	if len(res.Valid[0].Deprecations) == 0 {
+		t.Error("using a superseded key should be reported, not silently accepted")
+	}
+}
+
+// The old pair multiplied: R repositories each running T tags meant up to R×T
+// requests in flight. Carrying the product forward keeps the load an operator
+// actually tuned for.
+func TestLegacyScanConcurrencyFoldsToItsProduct(t *testing.T) {
+	const legacy = `
+apiVersion: softwaregateway.io/v1alpha1
+kind: Product
+metadata:
+  name: vendor-scan
+spec:
+  sources:
+    - name: primary
+      registry: registry.example.com
+      repository: vendor-scan/suite
+      anonymous: true
+      discovery:
+        concurrency:
+          repositories: 3
+          tags: 5
+  targets:
+    - name: lab
+      registry: internal.example.com
+      repository: vendor-scan/lab
+      anonymous: true
+      default: true
+`
+	dir := writeDir(t, map[string]string{"legacy.yaml": legacy})
+	res, err := NewLoader(dir, nil).Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(res.Invalid) > 0 {
+		t.Fatalf("a document using the old keys must still load: %v", res.Invalid[0].Err)
+	}
+	if got := res.Valid[0].Spec.Sources[0].Concurrency.PerRegistry; got != 15 {
+		t.Errorf("perRegistry = %d, want repositories × tags (15)", got)
+	}
+}
+
+// The application-level value is what a product inherits when it says nothing,
+// which is the whole point of moving the knob up a level.
+func TestApplicationConcurrencyIsInherited(t *testing.T) {
+	dir := writeDir(t, map[string]string{"a.yaml": doc("vendor-a")})
+	res, err := NewLoader(dir, nil).
+		WithConcurrency(Concurrency{PerRegistry: 6, RequestsPerSecond: 3}).
+		Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	src := res.Valid[0].Spec.Sources[0]
+	if src.Concurrency.PerRegistry != 6 || src.Concurrency.RequestsPerSecond != 3 {
+		t.Fatalf("source did not inherit the application default: %+v", src.Concurrency)
+	}
+	if got := res.Valid[0].Spec.Targets[0].Concurrency.PerRegistry; got != 6 {
+		t.Fatalf("target did not inherit the application default, got %d", got)
+	}
+}
+
+// A per-source override is the case the block exists for: one fragile vendor
+// that needs a smaller number than the rest of the fleet.
+func TestSourceOverridesApplicationConcurrency(t *testing.T) {
+	const overridden = `
+apiVersion: softwaregateway.io/v1alpha1
+kind: Product
+metadata:
+  name: vendor-override
+spec:
+  sources:
+    - name: primary
+      registry: registry.example.com
+      repository: vendor-override/suite
+      anonymous: true
+      concurrency:
+        perRegistry: 2
+  targets:
+    - name: lab
+      registry: internal.example.com
+      repository: vendor-override/lab
+      anonymous: true
+      default: true
+`
+	dir := writeDir(t, map[string]string{"a.yaml": overridden})
+	res, err := NewLoader(dir, nil).WithConcurrency(Concurrency{PerRegistry: 32}).Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := res.Valid[0].Spec.Sources[0].Concurrency.PerRegistry; got != 2 {
+		t.Errorf("source override = %d, want 2", got)
+	}
+	// The target said nothing, so it still inherits.
+	if got := res.Valid[0].Spec.Targets[0].Concurrency.PerRegistry; got != 32 {
+		t.Errorf("target = %d, want the inherited 32", got)
 	}
 }

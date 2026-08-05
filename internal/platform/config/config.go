@@ -37,6 +37,7 @@ type SystemConfig struct {
 	Observability ObservabilityConfig `koanf:"observability"`
 	Retention     RetentionConfig     `koanf:"retention"`
 	TLS           TLSConfig           `koanf:"tls"`
+	Concurrency   ConcurrencyConfig   `koanf:"concurrency"`
 }
 
 // TLSConfig relaxes certificate handling for the WHOLE PROCESS.
@@ -68,6 +69,25 @@ type TLSConfig struct {
 	//
 	// Process-wide, and logged as such at startup.
 	AllowNegativeSerialNumbers bool `koanf:"allowNegativeSerialNumbers"`
+}
+
+// ConcurrencyConfig is how hard this installation works any one registry.
+//
+// It lives here, at the application level, because it is an operational
+// property of the DEPLOYMENT — the bandwidth it has, the proxy it sits behind,
+// the politeness its vendors expect — and not of any one product. Every product
+// inherits it; a product may override it per source or per target for the case
+// that genuinely differs, which is one fragile vendor rather than the rule.
+//
+// See product.Concurrency for why this is one number rather than seven.
+type ConcurrencyConfig struct {
+	// PerRegistry is the number of requests in flight against one registry, and
+	// the size of the connection pool serving them.
+	PerRegistry int `koanf:"perRegistry"`
+
+	// RequestsPerSecond is an optional politeness ceiling on top of it. Zero,
+	// the default, means no artificial limit.
+	RequestsPerSecond int `koanf:"requestsPerSecond"`
 }
 
 type ServerConfig struct {
@@ -199,6 +219,13 @@ func Defaults() SystemConfig {
 			Log:     LogConfig{Level: "info", Format: "json"},
 			Metrics: MetricsConfig{Enabled: true, Path: "/metrics"},
 			Tracing: TracingConfig{Enabled: false, SampleRatio: 0.05},
+		},
+		Concurrency: ConcurrencyConfig{
+			// Matches what the previous seven knobs multiplied out to, so this
+			// simplification changes the shape of the configuration and not the
+			// load it produces.
+			PerRegistry:       32,
+			RequestsPerSecond: 0,
 		},
 		Retention: RetentionConfig{
 			CompletedJobs:       7 * 24 * time.Hour,

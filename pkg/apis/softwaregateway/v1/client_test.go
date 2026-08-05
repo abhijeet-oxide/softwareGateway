@@ -93,3 +93,38 @@ func TestCancelledContextIsNotReportedAsAnOutage(t *testing.T) {
 		t.Errorf("expected ErrTimeout for a deadline-exceeded context, got: %v", err)
 	}
 }
+
+// A slash cannot survive a URL path segment: %2F is decoded before routing, so
+// `orbs/core:v1` in the path arrives at the router as two segments and matches
+// nothing — a 404 for a package that exists. The repository moves to the query
+// string instead.
+func TestScopedReferenceMovesTheRepositoryToTheQuery(t *testing.T) {
+	cases := []struct {
+		ref          string
+		wantSegment  string
+		wantQuery    string
+		whatItCovers string
+	}{
+		{"v1.0.0", "v1.0.0", "", "a bare tag is left alone"},
+		{
+			"sha256:1111111111111111111111111111111111111111111111111111111111111111",
+			"sha256:1111111111111111111111111111111111111111111111111111111111111111", "",
+			"a digest is algorithm:hex, not repository:tag",
+		},
+		{"cfx-5000-db:v1", "cfx-5000-db:v1", "", "a repository with no slash routes as one segment"},
+		{
+			"orbs/cfx-5000-db:orb_23.8.1076",
+			"orb_23.8.1076", "?repository=orbs%2Fcfx-5000-db",
+			"a slashed repository moves to the query",
+		},
+		{"/orbs/core/:v1", "v1", "?repository=orbs%2Fcore", "surrounding slashes are trimmed"},
+	}
+
+	for _, c := range cases {
+		seg, query := splitPackageRef(c.ref)
+		if seg != c.wantSegment || query != c.wantQuery {
+			t.Errorf("splitPackageRef(%q) = (%q, %q), want (%q, %q) — %s",
+				c.ref, seg, query, c.wantSegment, c.wantQuery, c.whatItCovers)
+		}
+	}
+}

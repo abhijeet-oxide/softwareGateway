@@ -26,9 +26,8 @@ func newPackagesCommand() *cobra.Command {
 	cmd.AddCommand(
 		newPackagesListCommand(),
 		newPackagesDescribeCommand(),
-		newPackagesDiscoverCommand(),
-		newPackagesDiscoveryStatusCommand(),
 		newPackagesInspectCommand(),
+		newPackagesDiscoverAliasCommand(),
 	)
 	return cmd
 }
@@ -99,7 +98,7 @@ func renderPackageList(w io.Writer, resp *v1.ListPackagesResponse) error {
 		fmt.Fprintln(w, "No packages discovered yet.")
 		fmt.Fprintln(w)
 		fmt.Fprintln(w, "Discovery polls each source on its own interval. To scan now:")
-		fmt.Fprintln(w, "  transferctl packages discover <product>")
+		fmt.Fprintln(w, "  transferctl discover <product>")
 		return nil
 	}
 
@@ -176,12 +175,34 @@ func spansRepositories(pkgs []v1.Package) bool {
 }
 
 func newPackagesDescribeCommand() *cobra.Command {
-	return &cobra.Command{
-		Use:   "describe <product> <tag-or-digest>",
-		Short: "Show a package's artifact tree and transfer status",
-		Args:  cobra.ExactArgs(2),
+	var expand bool
+
+	cmd := &cobra.Command{
+		Use:   "describe <product> <package>",
+		Short: "Show a package's contents and transfer status",
+		Long: "<package> is a tag, a digest, or `repository:tag`.\n\n" +
+			"A bare tag is AMBIGUOUS when a product spans several repositories —\n" +
+			"a vendor's version tag appears in many of them — so a tag matching\n" +
+			"more than one is refused with the list, rather than one being picked\n" +
+			"for you. Scope it as `orbs/cfx-5000-k8s:orb_23.8.1076`.\n\n" +
+			"Discovery is deliberately light: it records what a package's manifest\n" +
+			"lists without fetching it, so the transfer size shows as n/a. --expand\n" +
+			"walks the rest and measures it. Safe to repeat, and a transfer does\n" +
+			"the same walk anyway — --expand is for deciding whether you want one.",
+		Args:    cobra.ExactArgs(2),
+		Aliases: []string{"show"},
 		RunE: func(cmd *cobra.Command, args []string) error {
 			client := newClient()
+
+			var expanded *v1.InspectPackageResponse
+			if expand {
+				// Expand FIRST, so everything printed below is the expanded
+				// truth rather than a stale row plus a separate report.
+				var err error
+				if expanded, err = client.InspectPackage(cmd.Context(), args[0], args[1]); err != nil {
+					return err
+				}
+			}
 
 			pkg, err := client.GetPackage(cmd.Context(), args[0], args[1])
 			if err != nil {
@@ -193,15 +214,24 @@ func newPackagesDescribeCommand() *cobra.Command {
 			}
 
 			combined := struct {
-				Package   *v1.Package   `json:"package"`
-				Artifacts []v1.Artifact `json:"artifacts"`
-			}{Package: pkg, Artifacts: artifacts.Artifacts}
+				Package   *v1.Package                `json:"package"`
+				Artifacts []v1.Artifact              `json:"artifacts"`
+				Expanded  *v1.InspectPackageResponse `json:"expanded,omitempty"`
+			}{Package: pkg, Artifacts: artifacts.Artifacts, Expanded: expanded}
 
 			return render(stdout(), opts.output, combined, func(w io.Writer) error {
+				renderExpanded(w, expanded)
 				return renderPackageDetail(w, pkg, artifacts.Artifacts)
 			})
 		},
 	}
+
+	cmd.Flags().BoolVar(&expand, "expand", false,
+		"fetch the artifacts discovery only listed, and measure the transfer size")
+	// --expand reaches the vendor's registry, so the command needs the slow
+	// deadline. Harmless without it: the rest is a database read.
+	contactsRegistries(cmd)
+	return cmd
 }
 
 func renderPackageDetail(w io.Writer, p *v1.Package, artifacts []v1.Artifact) error {
@@ -216,9 +246,8 @@ func renderPackageDetail(w io.Writer, p *v1.Package, artifacts []v1.Artifact) er
 	fmt.Fprintf(w, "Size         %s across %d artifact(s) and %s blob(s)\n",
 		humanBytesOpt(p.TotalBytes), p.ArtifactCount, optionalCount(p.BlobCount))
 	if p.TotalBytes == nil {
-		fmt.Fprintln(w, "             (this package's root is an index; discovery records what it")
-		fmt.Fprintln(w, "              lists without fetching it, so the layer bytes are not known")
-		fmt.Fprintln(w, "              until a transfer walks the tree)")
+		fmt.Fprintln(w, "             not measured — discovery records what this package's index")
+		fmt.Fprintln(w, "             lists without fetching it. Add --expand to walk it.")
 	}
 	fmt.Fprintf(w, "Discovered   %s\n", p.DiscoveredAt)
 	if p.PublishedAt != "" {
@@ -295,74 +324,6 @@ func renderArtifactTree(w io.Writer, artifacts []v1.Artifact) {
 	}
 }
 
-func newPackagesDiscoverCommand() *cobra.Command {
-	var (
-		source string
-		wait   bool
-	)
-
-	cmd := &cobra.Command{
-		Use:   "discover <product>",
-		Short: "Scan a product's sources now, without waiting for the interval",
-		Long: "Runs the same full scan the discovery loop runs, immediately.\n\n" +
-			"Safe to repeat: a re-scan of unchanged content discovers nothing,\n" +
-			"and concurrent triggers collapse into the running scan rather than\n" +
-			"starting a second one.\n\n" +
-			"A scan contacts the registry, so it can take minutes against a slow\n" +
-			"one. Live progress is printed to stderr while it runs. If you stop\n" +
-			"waiting, the scan continues on the Coordinator — `transferctl\n" +
-			"packages discovery-status <product>` shows where it got to.\n\n" +
-			"Use --wait=false to start the scan and return immediately.",
-		Args: cobra.ExactArgs(1),
-		RunE: func(cmd *cobra.Command, args []string) error {
-			product := args[0]
-			client := newClient()
-
-			if !wait {
-				resp, err := client.StartDiscovery(cmd.Context(), product, source)
-				if err != nil {
-					return err
-				}
-				return render(stdout(), opts.output, resp, func(w io.Writer) error {
-					return renderDiscoverStarted(w, product, resp)
-				})
-			}
-
-			// The progress watcher runs alongside the blocking request on its
-			// own connection. Stopped as soon as the scan returns, so the
-			// summary is never printed over a half-drawn progress line.
-			watchCtx, stopWatch := context.WithCancel(cmd.Context())
-			done := make(chan struct{})
-			go func() {
-				defer close(done)
-				watchDiscovery(watchCtx, client, product, stderr())
-			}()
-
-			resp, err := client.DiscoverPackages(cmd.Context(), product, source)
-
-			stopWatch()
-			<-done
-
-			if err != nil {
-				return err
-			}
-			return render(stdout(), opts.output, resp, func(w io.Writer) error {
-				return renderDiscoverResult(w, product, resp)
-			})
-		},
-	}
-
-	cmd.Flags().StringVar(&source, "source", "", "scan only this source (default: every source)")
-	cmd.Flags().BoolVar(&wait, "wait", true,
-		"wait for the scan to finish; --wait=false starts it and returns immediately")
-
-	// A full scan lists every tag of every repository, then resolves each one.
-	// On a registry with a few hundred repositories that is minutes of honest
-	// work, not a stall.
-	contactsRegistries(cmd)
-	return cmd
-}
-
 // renderDiscoverStarted reports a scan launched with --wait=false.
 func renderDiscoverStarted(w io.Writer, productName string, r *v1.DiscoverPackagesResponse) error {
 	st := r.Started
@@ -385,8 +346,8 @@ func renderDiscoverStarted(w io.Writer, productName string, r *v1.DiscoverPackag
 	}
 
 	fmt.Fprintln(w)
-	fmt.Fprintf(w, "  transferctl packages discovery-status %s     # watch it\n", productName)
-	fmt.Fprintf(w, "  transferctl packages list %s                 # results, once it finishes\n", productName)
+	fmt.Fprintf(w, "  transferctl discover status %s     # watch it\n", productName)
+	fmt.Fprintf(w, "  transferctl packages list %s       # results, once it finishes\n", productName)
 	return nil
 }
 
@@ -544,22 +505,31 @@ func shortMediaType(mt string) string {
 	return mt
 }
 
-func newPackagesDiscoveryStatusCommand() *cobra.Command {
+func newDiscoverStatusCommand() *cobra.Command {
 	var watch bool
 
 	cmd := &cobra.Command{
-		Use:     "discovery-status <product>",
-		Aliases: []string{"status"},
-		Short:   "Show what discovery is doing right now",
+		Use:   "status [product]",
+		Short: "Show what discovery is doing right now",
 		Long: "Reports the live state of every source: whether a scan is running,\n" +
 			"which phase it is in, which repository it is on, and how the last\n" +
 			"completed scan finished.\n\n" +
 			"This is the answer to \"is it stuck or just slow?\", which a blocking\n" +
-			"`packages discover` cannot give you while it is blocked.",
-		Args: cobra.ExactArgs(1),
+			"scan cannot give you while it is blocked.\n\n" +
+			"With no argument, reports every product being polled.",
+		Args: cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			product := args[0]
 			client := newClient()
+
+			product := ""
+			if len(args) == 1 {
+				product = args[0]
+			} else {
+				// No product named: report them all. Resolved here rather than
+				// server-side so the output is one block per product, which is
+				// what an operator scanning for the stuck one wants.
+				return statusForEveryProduct(cmd.Context(), client, watch)
+			}
 
 			if !watch {
 				st, err := client.DiscoveryStatus(cmd.Context(), product)
@@ -584,7 +554,7 @@ func newPackagesDiscoveryStatusCommand() *cobra.Command {
 				if err := renderDiscoveryStatus(stdout(), st); err != nil {
 					return err
 				}
-				if !anyScanning(st) {
+				if !anyScanningIn(st) {
 					return nil
 				}
 				fmt.Fprintln(stdout())
@@ -599,15 +569,6 @@ func newPackagesDiscoveryStatusCommand() *cobra.Command {
 
 	cmd.Flags().BoolVar(&watch, "watch", false, "keep printing until no scan is running")
 	return cmd
-}
-
-func anyScanning(st *v1.DiscoveryStatusResponse) bool {
-	for _, s := range st.Sources {
-		if s.Scanning {
-			return true
-		}
-	}
-	return false
 }
 
 func renderDiscoveryStatus(w io.Writer, st *v1.DiscoveryStatusResponse) error {
@@ -720,10 +681,24 @@ func optionalTime(v string) string {
 	return shortTime(v)
 }
 
+// newPackagesDiscoverAliasCommand keeps `packages discover` working.
+//
+// Hidden rather than removed: it is in scripts and in muscle memory, and
+// breaking those to tidy a help screen is a bad trade. `transferctl discover`
+// is the documented spelling.
+func newPackagesDiscoverAliasCommand() *cobra.Command {
+	cmd := newDiscoverCommand()
+	cmd.Use = "discover [product]"
+	cmd.Hidden = true
+	cmd.Short = "Deprecated: use `transferctl discover`"
+	return cmd
+}
+
 func newPackagesInspectCommand() *cobra.Command {
 	cmd := &cobra.Command{
-		Use:   "inspect <product> <tag-or-digest>",
-		Short: "Expand a package's contents and measure its transfer size",
+		Use:    "inspect <product> <package>",
+		Hidden: true,
+		Short:  "Deprecated: use `packages describe --expand`",
 		Long: "Discovery is deliberately light: it fetches the tag's own manifest and\n" +
 			"records the artifacts that manifest lists, without fetching them. That\n" +
 			"answers \"what is new\" in two requests per tag, and it means a package's\n" +
@@ -769,4 +744,74 @@ func renderInspect(w io.Writer, product, ref string, r *v1.InspectPackageRespons
 	fmt.Fprintln(w)
 	fmt.Fprintf(w, "  transferctl packages describe %s %s   # the full artifact tree\n", product, ref)
 	return nil
+}
+
+// renderExpanded reports the walk `describe --expand` performed, in one line
+// above the package it is about. The standalone `inspect` command printed a
+// summary block; here the tree below IS the detail, so a block would repeat it.
+func renderExpanded(w io.Writer, r *v1.InspectPackageResponse) {
+	if r == nil {
+		return
+	}
+	if r.AlreadyExpanded {
+		fmt.Fprintln(w, "Already expanded; nothing was fetched.")
+	} else {
+		fmt.Fprintf(w, "Expanded: fetched %d manifest(s), %d artifact(s), %d blob(s).\n",
+			r.Fetched, r.Artifacts, r.Blobs)
+	}
+	fmt.Fprintln(w)
+}
+
+// statusForEveryProduct renders discovery status across the fleet.
+//
+// One block per product rather than a merged table: an operator running this
+// is looking for the one that is stuck, and a flat list of sources from
+// different products makes that harder, not easier.
+func statusForEveryProduct(ctx context.Context, client *v1.Client, watch bool) error {
+	products, err := client.ListProducts(ctx)
+	if err != nil {
+		return err
+	}
+	if len(products.Products) == 0 {
+		fmt.Fprintln(stdout(), "No products are configured.")
+		return nil
+	}
+
+	for {
+		anyScanning := false
+		for i, p := range products.Products {
+			st, err := client.DiscoveryStatus(ctx, p.ProductID)
+			if err != nil {
+				return err
+			}
+			if i > 0 {
+				fmt.Fprintln(stdout())
+			}
+			if err := renderDiscoveryStatus(stdout(), st); err != nil {
+				return err
+			}
+			if anyScanningIn(st) {
+				anyScanning = true
+			}
+		}
+		if !watch || !anyScanning {
+			return nil
+		}
+
+		fmt.Fprintln(stdout())
+		select {
+		case <-time.After(2 * time.Second):
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	}
+}
+
+func anyScanningIn(st *v1.DiscoveryStatusResponse) bool {
+	for _, s := range st.Sources {
+		if s.Scanning {
+			return true
+		}
+	}
+	return false
 }

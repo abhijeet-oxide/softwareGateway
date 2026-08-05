@@ -288,6 +288,27 @@ func (l *Loop) TriggerProduct(ctx context.Context, productName string) (ScanResu
 	return combined, firstErr
 }
 
+// Products lists the product names the loop is polling, sorted.
+//
+// Needed by a global scan, which must know what "everything" is without the
+// caller enumerating configuration a second time and disagreeing about which
+// products are enabled.
+func (l *Loop) Products() []string {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+
+	seen := map[string]bool{}
+	for _, w := range l.workers {
+		seen[w.spec.Product.Metadata.Name] = true
+	}
+	out := make([]string, 0, len(seen))
+	for name := range seen {
+		out = append(out, name)
+	}
+	sort.Strings(out)
+	return out
+}
+
 // StartProduct begins a scan of every source of one product WITHOUT waiting.
 //
 // The counterpart to TriggerProduct, for a caller that wants the scan to happen
@@ -364,8 +385,8 @@ func (l *Loop) InspectPackage(
 		return InspectResult{}, fmt.Errorf("build client for %s: %w", pkg.SourceRepository, err)
 	}
 
-	return InspectPackage(ctx, packages, pkg, client,
-		found.spec.Product.Spec.Sources[0].Discovery.Concurrency.EffectiveTags())
+	// The same ceiling a scan uses, from the source this package came from.
+	return InspectPackage(ctx, packages, pkg, client, found.scanner.sourceCfg.Concurrency.PerRegistry)
 }
 
 // Progress reports the live state of every source of one product.

@@ -1,0 +1,30 @@
+# syntax=docker/dockerfile:1
+#
+# transferctl image, for running the CLI in CI (chiefly `config validate`).
+#
+# The CLI is a pure Coordinator API client and needs no cluster access, no
+# registry credentials and no database — so this image is safe to run anywhere.
+
+FROM golang:1.25 AS build
+WORKDIR /src
+
+COPY go.mod go.sum ./
+RUN go mod download
+
+COPY . .
+
+ARG VERSION=dev
+ARG COMMIT=unknown
+ARG BUILD_DATE=unknown
+
+RUN CGO_ENABLED=0 go build -trimpath \
+      -ldflags="-s -w \
+        -X github.com/abhijeet-oxide/softwareGateway/internal/platform/version.Version=${VERSION} \
+        -X github.com/abhijeet-oxide/softwareGateway/internal/platform/version.Commit=${COMMIT} \
+        -X github.com/abhijeet-oxide/softwareGateway/internal/platform/version.Date=${BUILD_DATE}" \
+      -o /out/transferctl ./cmd/transferctl
+
+FROM gcr.io/distroless/static-debian12:nonroot
+COPY --from=build /out/transferctl /transferctl
+USER nonroot:nonroot
+ENTRYPOINT ["/transferctl"]

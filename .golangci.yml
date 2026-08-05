@@ -1,0 +1,117 @@
+# golangci-lint configuration — SCHEMA VERSION 2.
+#
+# golangci-lint v2 changed the config format: `linters.settings` replaced the
+# top-level `linters-settings`, `run.timeout` moved, and `formatters` split out
+# of `linters`. A v1 config fails outright against a v2 binary, so the version
+# key is not optional.
+version: "2"
+
+run:
+  timeout: 5m
+  tests: true
+
+linters:
+  enable:
+    - errcheck
+    - govet
+    - staticcheck
+    - ineffassign
+    - unused
+    - revive
+    - gosec
+    # bodyclose earns its place specifically here: a leaked HTTP response body
+    # in the transfer engine leaks a connection, and at this concurrency that
+    # exhausts the pool rather than merely wasting memory.
+    - bodyclose
+    - errorlint
+    - misspell
+    - noctx
+    - nolintlint
+    - depguard
+
+  settings:
+    errcheck:
+      check-type-assertions: true
+      exclude-functions:
+        # Deferred Close on a read path cannot meaningfully fail.
+        - (io.Closer).Close
+        # Writes to a terminal in CLI renderers. A failed write to stdout is
+        # not actionable — the user cannot see the error either — and checking
+        # every call would triple the size of the rendering functions for no
+        # behavioural gain. Writes to a REAL sink (a registry, the database)
+        # go through checked paths and are not covered by this.
+        - fmt.Fprintf
+        - fmt.Fprintln
+        - fmt.Fprint
+
+    revive:
+      rules:
+        # `exported` is disabled deliberately.
+        #
+        # It fires ~50 times, almost entirely on state-machine and enum
+        # constants whose names already say everything a doc comment could:
+        # "// JobPending is the pending state" is the restatement-of-identifier
+        # noise that trains readers to skip comments. The narrative lives in
+        # the package doc comments and in docs/design/, which is where it is
+        # useful.
+        #
+        # Types and functions with non-obvious behaviour are documented
+        # regardless; that is enforced by review, not by a linter that cannot
+        # tell explanation from repetition.
+        - name: exported
+          disabled: true
+        - name: package-comments
+          disabled: true
+
+    gosec:
+      excludes:
+        # G104 duplicates errcheck.
+        - G104
+
+    # depguard encodes the dependency-direction rules from
+    # docs/design/15-code-layout.md section 3. It replaces go-arch-lint: the
+    # same rules, inside the lint pass already running, with no extra tool in
+    # CI. A rule nobody checks is a rule that decays.
+    depguard:
+      rules:
+        platform-imports-no-domain:
+          list-mode: lax
+          files:
+            - "**/internal/platform/**"
+          deny:
+            - pkg: github.com/abhijeet-oxide/softwareGateway/internal/product
+              desc: "platform must not import domain packages — it would create an import cycle and stop platform being genuinely generic"
+            - pkg: github.com/abhijeet-oxide/softwareGateway/internal/api
+              desc: "platform must not import api"
+            - pkg: github.com/abhijeet-oxide/softwareGateway/internal/store
+              desc: "platform must not import store"
+
+        domain-imports-no-api:
+          list-mode: lax
+          files:
+            - "**/internal/product/**"
+            - "**/internal/store/**"
+          deny:
+            - pkg: github.com/abhijeet-oxide/softwareGateway/internal/api
+              desc: "business logic must not know it is served over HTTP — otherwise the CLI, a future gRPC surface, or a test harness cannot reuse it"
+
+        store-imports-no-domain:
+          list-mode: lax
+          files:
+            - "**/internal/store/**"
+          deny:
+            - pkg: github.com/abhijeet-oxide/softwareGateway/internal/product
+              desc: "store returns rows; interpreting them belongs upstream"
+
+  exclusions:
+    generated: lax
+    rules:
+      # Test fixtures legitimately hard-code credentials and use weak sources.
+      - path: _test\.go
+        linters:
+          - gosec
+          - errcheck
+
+formatters:
+  enable:
+    - gofmt

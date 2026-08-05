@@ -76,7 +76,7 @@ softwareGateway/
 
 ## 3. Dependency rules
 
-Enforced in CI with `go-arch-lint` or an equivalent import linter — a rule nobody checks is a rule that decays.
+Enforced in CI by `depguard` rules inside `golangci-lint` (see `.golangci.yml`) — a rule nobody checks is a rule that decays.
 
 ```
         cmd/*

@@ -1,0 +1,49 @@
+# DELIBERATELY INVALID. Not loaded by the Coordinator — this directory exists
+# so `transferctl config validate ./dev/products-invalid/` can demonstrate the
+# three error classes from docs/design/13-cli.md section 9:
+#
+#   1. a tagPattern that does not compile
+#   2. a rule naming a target that is not declared
+#   3. keyless verification with no certificateIdentity
+#
+# The third is the one that matters most: it is syntactically valid and
+# semantically useless, and would look perfectly secure in production.
+apiVersion: softwaregateway.io/v1alpha1
+kind: Product
+
+metadata:
+  name: broken-example
+
+spec:
+  sources:
+    - name: primary
+      registry: registry.vendor-c.example.com
+      repository: analytics/suite
+      anonymous: true
+
+  targets:
+    - name: lab
+      registry: internal.example.com
+      repository: vendor-c/analytics
+      anonymous: true
+      default: true
+
+  autoDownload:
+    enabled: true
+    rules:
+      - name: ga-releases
+        # (1) unbalanced parenthesis — will not compile
+        tagPattern: '^v(\d+\.\d+'
+        # (2) 'prod' is never declared under spec.targets
+        targets: [prod]
+
+  verification:
+    enabled: true
+    policy: enforce
+    atDestination: true
+    cosign:
+      mode: keyless
+      keyless:
+        # (3) certificateIdentity is missing. Without it, ANY valid Sigstore
+        # signature from ANY signer would be accepted.
+        certificateOidcIssuer: 'https://token.actions.githubusercontent.com'

@@ -1,0 +1,244 @@
+// Command coordinator is the softwareGateway control plane.
+//
+// It owns all state and is the sole writer to the database. Two replicas run
+// for API availability; one holds a pg_advisory_lock and runs the background
+// loops. See docs/design/00-overview.md section 5.1.
+//
+// This binary contains wiring only — construct, inject, run. Logic in main is
+// untestable. See docs/design/15-code-layout.md section 3.
+package main
+
+import (
+	"context"
+	"errors"
+	"flag"
+	"fmt"
+	"net/http"
+	"os"
+	"os/signal"
+	"syscall"
+	"time"
+
+	"golang.org/x/sync/errgroup"
+
+	"github.com/abhijeet-oxide/softwareGateway/internal/api"
+	"github.com/abhijeet-oxide/softwareGateway/internal/platform/config"
+	"github.com/abhijeet-oxide/softwareGateway/internal/platform/health"
+	"github.com/abhijeet-oxide/softwareGateway/internal/platform/leader"
+	plog "github.com/abhijeet-oxide/softwareGateway/internal/platform/log"
+	"github.com/abhijeet-oxide/softwareGateway/internal/platform/metrics"
+	"github.com/abhijeet-oxide/softwareGateway/internal/platform/tracing"
+	"github.com/abhijeet-oxide/softwareGateway/internal/platform/version"
+	"github.com/abhijeet-oxide/softwareGateway/internal/product"
+	"github.com/abhijeet-oxide/softwareGateway/internal/store"
+)
+
+const component = "coordinator"
+
+func main() {
+	if err := run(); err != nil {
+		fmt.Fprintf(os.Stderr, "coordinator: %v\n", err)
+		os.Exit(1)
+	}
+}
+
+func run() error {
+	var (
+		configPath  = flag.String("config", "", "path to the system configuration file")
+		showVersion = flag.Bool("version", false, "print version and exit")
+	)
+	flag.Parse()
+
+	if *showVersion {
+		fmt.Println(version.Get(component))
+		return nil
+	}
+
+	cfg, err := config.Load(*configPath)
+	if err != nil {
+		return fmt.Errorf("load configuration: %w", err)
+	}
+
+	logger := plog.New(plog.Config{
+		Level:  cfg.Observability.Log.Level,
+		Format: cfg.Observability.Log.Format,
+	}, os.Stdout, component)
+
+	info := version.Get(component)
+	logger.Info("starting", "version", info.Version, "commit", info.Commit, "go", info.GoVersion)
+
+	// SQLite is a development convenience and is explicitly not supported in
+	// production. Say so loudly rather than letting someone discover it during
+	// an incident. See docs/design/03-persistence.md section 2.
+	if !cfg.IsProduction() {
+		logger.Warn("using the SQLite driver — DEVELOPMENT ONLY, not supported in production",
+			"driver", cfg.Database.Driver, "dsn", cfg.Database.DSN)
+	}
+
+	// Signals cancel the root context; every loop below observes it.
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+
+	mreg := metrics.New(component)
+
+	_, shutdownTracing, err := tracing.Init(ctx, tracing.Config{
+		Enabled:     cfg.Observability.Tracing.Enabled,
+		Endpoint:    cfg.Observability.Tracing.Endpoint,
+		SampleRatio: cfg.Observability.Tracing.SampleRatio,
+	}, component)
+	if err != nil {
+		return fmt.Errorf("initialise tracing: %w", err)
+	}
+	defer func() {
+		if err := shutdownTracing(context.WithoutCancel(ctx)); err != nil {
+			logger.Warn("tracing shutdown", "error", err)
+		}
+	}()
+
+	// ---- store ----
+	st, err := store.Open(ctx, store.Config{
+		Driver:          store.Driver(cfg.Database.Driver),
+		DSN:             cfg.Database.DSN,
+		MaxOpenConns:    cfg.Database.MaxOpenConns,
+		MaxIdleConns:    cfg.Database.MaxIdleConns,
+		ConnMaxLifetime: cfg.Database.ConnMaxLifetime,
+	})
+	if err != nil {
+		return fmt.Errorf("open database: %w", err)
+	}
+	defer func() { _ = st.Close() }()
+
+	if err := store.Migrate(ctx, st, logger); err != nil {
+		return fmt.Errorf("apply migrations: %w", err)
+	}
+
+	// ---- product configuration ----
+	resolver := product.NewSecretResolver(cfg.SecretsDir())
+	loader := product.NewLoader(cfg.ProductsDir(), resolver)
+	products := product.NewRegistry()
+
+	watcher := product.NewWatcher(cfg.ProductsDir(), loader, products, product.WatchOptions{
+		Logger: logger,
+		OnReload: func(res product.LoadResult) {
+			mreg.ConfigProductsLoaded.WithLabelValues().Set(float64(len(res.Valid)))
+			mreg.ConfigLoadErrors.Reset()
+			for _, bad := range res.Invalid {
+				name := bad.Name
+				if name == "" {
+					name = bad.File
+				}
+				mreg.ConfigLoadErrors.WithLabelValues(name).Set(1)
+			}
+			mreg.ConfigLastReload.SetToCurrentTime()
+		},
+	})
+
+	// A directory-level failure is fatal; individual invalid products are not.
+	// The Coordinator must stay up and serve the API even when every product
+	// is invalid — a crash-looping process cannot tell anyone why it is
+	// unhappy. See docs/design/02-configuration.md section 7.
+	if err := watcher.LoadOnce(); err != nil {
+		return fmt.Errorf("load products: %w", err)
+	}
+
+	// ---- health ----
+	hreg := health.New()
+	// Liveness is process-local ONLY. The probe signature makes a dependency
+	// call impossible; see internal/platform/health.
+	hreg.AddLiveness("process", func() error { return nil })
+	hreg.AddReadiness("database", func(ctx context.Context) health.Result {
+		ctx, cancel := context.WithTimeout(ctx, 3*time.Second)
+		defer cancel()
+		if err := st.Ping(ctx); err != nil {
+			return health.Down(err)
+		}
+		return health.OK(string(st.Driver()))
+	})
+	hreg.AddReadiness("configuration", func(context.Context) health.Result {
+		if bad := products.Invalid(); len(bad) > 0 {
+			return health.Degraded(fmt.Sprintf("%d product(s) failed to load", len(bad)))
+		}
+		return health.OK(fmt.Sprintf("%d product(s) loaded", products.Count()))
+	})
+
+	// ---- leader election ----
+	var elector leader.Interface
+	if cfg.Coordinator.LeaderElection.Enabled && st.SupportsAdvisoryLocks() {
+		elector = leader.New(st.DB(), leader.Options{
+			LockID:        cfg.Coordinator.LeaderElection.LockID,
+			RetryInterval: cfg.Coordinator.LeaderElection.RetryInterval,
+			Logger:        logger,
+			OnChange: func(isLeader bool) {
+				if isLeader {
+					mreg.LeaderElected.Set(1)
+				} else {
+					mreg.LeaderElected.Set(0)
+				}
+			},
+		})
+	} else {
+		// SQLite, or election disabled: a single process has nothing to
+		// contend with, so leadership is unconditional.
+		elector = leader.NewAlwaysLeader(func(isLeader bool) {
+			if isLeader {
+				mreg.LeaderElected.Set(1)
+			} else {
+				mreg.LeaderElected.Set(0)
+			}
+		})
+	}
+
+	// ---- HTTP ----
+	srv := api.NewServer(api.Deps{
+		Logger:    logger,
+		Metrics:   mreg,
+		Health:    hreg,
+		Products:  products,
+		Store:     st,
+		Leader:    elector,
+		Component: component,
+	})
+
+	httpServer := &http.Server{
+		Addr:              cfg.Server.Address,
+		Handler:           srv.Handler(),
+		ReadHeaderTimeout: 10 * time.Second,
+		// No WriteTimeout: it would cap long-poll and streaming responses in
+		// later milestones. Per-handler timeouts are the right granularity.
+		IdleTimeout: 120 * time.Second,
+	}
+
+	g, gctx := errgroup.WithContext(ctx)
+
+	g.Go(func() error {
+		logger.Info("http listening", "address", cfg.Server.Address)
+		if err := httpServer.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+			return fmt.Errorf("http server: %w", err)
+		}
+		return nil
+	})
+
+	g.Go(func() error { return elector.Run(gctx) })
+	g.Go(func() error { return watcher.Run(gctx) })
+
+	// Graceful shutdown: stop accepting, drain in-flight requests, then exit.
+	g.Go(func() error {
+		<-gctx.Done()
+		logger.Info("shutting down", "grace", cfg.Server.ShutdownGracePeriod)
+
+		shutdownCtx, cancel := context.WithTimeout(
+			context.WithoutCancel(gctx), cfg.Server.ShutdownGracePeriod)
+		defer cancel()
+
+		if err := httpServer.Shutdown(shutdownCtx); err != nil {
+			logger.Warn("http shutdown", "error", err)
+		}
+		return nil
+	})
+
+	if err := g.Wait(); err != nil {
+		return err
+	}
+	logger.Info("stopped")
+	return nil
+}

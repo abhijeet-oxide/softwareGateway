@@ -1,0 +1,19 @@
+# Build output
+/bin/
+/dist/
+
+# Local development state — SQLite database and journals
+/dev/*.db
+/dev/*.db-shm
+/dev/*.db-wal
+
+# Test artifacts
+*.out
+*.test
+/coverage.*
+
+# Editors
+.idea/
+.vscode/
+*.swp
+.DS_Store

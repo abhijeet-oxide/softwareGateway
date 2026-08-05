@@ -1,0 +1,47 @@
+# Local development dependencies.
+#
+# NONE of this is required for the default development path: the Coordinator
+# runs against SQLite with no containers at all. Bring these up when you need
+# behaviour SQLite cannot exercise.
+#
+#   make dev-postgres   — when the change touches SKIP LOCKED, partitioning or
+#                         advisory locks (that is, anything in docs/design/04)
+#   make dev-registry   — two registries, so a real source→destination
+#                         transfer can be exercised end to end
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: swgw
+      POSTGRES_PASSWORD: swgw
+      POSTGRES_DB: swgw
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U swgw"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    tmpfs:
+      # Development data is disposable; keeping it in tmpfs makes a reset a
+      # container restart rather than a volume prune.
+      - /var/lib/postgresql/data
+
+  # Stands in for a vendor registry.
+  registry:
+    image: registry:2
+    ports:
+      - "5000:5000"
+    environment:
+      REGISTRY_STORAGE_DELETE_ENABLED: "true"
+
+  # Stands in for an internal registry, so cross-REGISTRY transfers are
+  # exercised. Note that cross-repository mount only applies within a single
+  # registry — to exercise that path, use two repositories on this one.
+  registry-dest:
+    image: registry:2
+    ports:
+      - "5001:5000"
+    environment:
+      REGISTRY_STORAGE_DELETE_ENABLED: "true"

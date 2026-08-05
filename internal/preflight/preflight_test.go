@@ -556,3 +556,34 @@ func TestNoCertificateStepWhenVerificationIsOn(t *testing.T) {
 		}
 	}
 }
+
+// TestManifestFetchIsProbed is the step that separates "listing works" from
+// "discovery will work". A registry can serve tags/list in milliseconds and
+// stall every manifest GET behind it — observed in the field, through a proxy
+// that inspects response bodies.
+func TestManifestFetchIsProbed(t *testing.T) {
+	h := newHarness(t)
+	h.reg.AddImage("suite/core", "v1.0.0", fakeregistry.NewLayer("a"))
+	h.reg.AddImage("suite/database", "v2.0.0", fakeregistry.NewLayer("b"))
+
+	res := h.checker.CheckProduct(t.Context(), h.load(anonDoc))
+
+	src := repoNamed(t, res, "vendor")
+	s := step(t, src, "can fetch a manifest")
+	if s.Status != StatusOK {
+		t.Errorf("step = %s: %s", s.Status, s.Detail)
+	}
+
+	// A target is not probed: it has nothing to read until the first push, and
+	// a failure there would be noise on every correctly-configured destination.
+	for _, r := range res.Repositories {
+		if r.Role != string(product.RoleTarget) {
+			continue
+		}
+		for _, st := range r.Steps {
+			if st.Name == "can fetch a manifest" {
+				t.Errorf("targets must not be manifest-probed, got %+v", st)
+			}
+		}
+	}
+}

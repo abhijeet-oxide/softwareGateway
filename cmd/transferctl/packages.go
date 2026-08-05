@@ -1,10 +1,12 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"io"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/spf13/cobra"
 
@@ -25,6 +27,7 @@ func newPackagesCommand() *cobra.Command {
 		newPackagesListCommand(),
 		newPackagesDescribeCommand(),
 		newPackagesDiscoverCommand(),
+		newPackagesDiscoveryStatusCommand(),
 	)
 	return cmd
 }
@@ -264,7 +267,10 @@ func renderArtifactTree(w io.Writer, artifacts []v1.Artifact) {
 }
 
 func newPackagesDiscoverCommand() *cobra.Command {
-	var source string
+	var (
+		source string
+		wait   bool
+	)
 
 	cmd := &cobra.Command{
 		Use:   "discover <product>",
@@ -272,26 +278,87 @@ func newPackagesDiscoverCommand() *cobra.Command {
 		Long: "Runs the same full scan the discovery loop runs, immediately.\n\n" +
 			"Safe to repeat: a re-scan of unchanged content discovers nothing,\n" +
 			"and concurrent triggers collapse into the running scan rather than\n" +
-			"starting a second one.",
+			"starting a second one.\n\n" +
+			"A scan contacts the registry, so it can take minutes against a slow\n" +
+			"one. Live progress is printed to stderr while it runs. If you stop\n" +
+			"waiting, the scan continues on the Coordinator — `transferctl\n" +
+			"packages discovery-status <product>` shows where it got to.\n\n" +
+			"Use --wait=false to start the scan and return immediately.",
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			resp, err := newClient().DiscoverPackages(cmd.Context(), args[0], source)
+			product := args[0]
+			client := newClient()
+
+			if !wait {
+				resp, err := client.StartDiscovery(cmd.Context(), product, source)
+				if err != nil {
+					return err
+				}
+				return render(stdout(), opts.output, resp, func(w io.Writer) error {
+					return renderDiscoverStarted(w, product, resp)
+				})
+			}
+
+			// The progress watcher runs alongside the blocking request on its
+			// own connection. Stopped as soon as the scan returns, so the
+			// summary is never printed over a half-drawn progress line.
+			watchCtx, stopWatch := context.WithCancel(cmd.Context())
+			done := make(chan struct{})
+			go func() {
+				defer close(done)
+				watchDiscovery(watchCtx, client, product, stderr())
+			}()
+
+			resp, err := client.DiscoverPackages(cmd.Context(), product, source)
+
+			stopWatch()
+			<-done
+
 			if err != nil {
 				return err
 			}
 			return render(stdout(), opts.output, resp, func(w io.Writer) error {
-				return renderDiscoverResult(w, args[0], resp)
+				return renderDiscoverResult(w, product, resp)
 			})
 		},
 	}
 
 	cmd.Flags().StringVar(&source, "source", "", "scan only this source (default: every source)")
+	cmd.Flags().BoolVar(&wait, "wait", true,
+		"wait for the scan to finish; --wait=false starts it and returns immediately")
 
 	// A full scan lists every tag of every repository, then resolves each one.
 	// On a registry with a few hundred repositories that is minutes of honest
 	// work, not a stall.
 	contactsRegistries(cmd)
 	return cmd
+}
+
+// renderDiscoverStarted reports a scan launched with --wait=false.
+func renderDiscoverStarted(w io.Writer, productName string, r *v1.DiscoverPackagesResponse) error {
+	st := r.Started
+	if st == nil {
+		// The server answered a no-wait request with results, which means it
+		// predates the flag. Say so rather than printing nothing.
+		fmt.Fprintln(w, "The Coordinator ran the scan synchronously; it does not support --wait=false.")
+		return renderDiscoverResult(w, productName, r)
+	}
+
+	switch {
+	case st.Sources > 0 && st.AlreadyRunning > 0:
+		fmt.Fprintf(w, "Started %d scan(s) of %s; %d source(s) were already scanning.\n",
+			st.Sources, productName, st.AlreadyRunning)
+	case st.Sources > 0:
+		fmt.Fprintf(w, "Started %d scan(s) of %s.\n", st.Sources, productName)
+	default:
+		// Nothing new was started, and saying "started" would be false.
+		fmt.Fprintf(w, "%s was already being scanned; nothing new was started.\n", productName)
+	}
+
+	fmt.Fprintln(w)
+	fmt.Fprintf(w, "  transferctl packages discovery-status %s     # watch it\n", productName)
+	fmt.Fprintf(w, "  transferctl packages list %s                 # results, once it finishes\n", productName)
+	return nil
 }
 
 func renderDiscoverResult(w io.Writer, productName string, r *v1.DiscoverPackagesResponse) error {
@@ -434,4 +501,152 @@ func shortMediaType(mt string) string {
 	mt = strings.TrimPrefix(mt, "application/vnd.")
 	mt = strings.TrimSuffix(mt, "+json")
 	return mt
+}
+
+func newPackagesDiscoveryStatusCommand() *cobra.Command {
+	var watch bool
+
+	cmd := &cobra.Command{
+		Use:     "discovery-status <product>",
+		Aliases: []string{"status"},
+		Short:   "Show what discovery is doing right now",
+		Long: "Reports the live state of every source: whether a scan is running,\n" +
+			"which phase it is in, which repository it is on, and how the last\n" +
+			"completed scan finished.\n\n" +
+			"This is the answer to \"is it stuck or just slow?\", which a blocking\n" +
+			"`packages discover` cannot give you while it is blocked.",
+		Args: cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			product := args[0]
+			client := newClient()
+
+			if !watch {
+				st, err := client.DiscoveryStatus(cmd.Context(), product)
+				if err != nil {
+					return err
+				}
+				return render(stdout(), opts.output, st, func(w io.Writer) error {
+					return renderDiscoveryStatus(w, st)
+				})
+			}
+
+			// --watch prints a fresh block each interval rather than redrawing
+			// in place: a scrolling history is what you want when you are
+			// waiting to see whether a counter moves.
+			ticker := time.NewTicker(2 * time.Second)
+			defer ticker.Stop()
+			for {
+				st, err := client.DiscoveryStatus(cmd.Context(), product)
+				if err != nil {
+					return err
+				}
+				if err := renderDiscoveryStatus(stdout(), st); err != nil {
+					return err
+				}
+				if !anyScanning(st) {
+					return nil
+				}
+				fmt.Fprintln(stdout())
+				select {
+				case <-ticker.C:
+				case <-cmd.Context().Done():
+					return cmd.Context().Err()
+				}
+			}
+		},
+	}
+
+	cmd.Flags().BoolVar(&watch, "watch", false, "keep printing until no scan is running")
+	return cmd
+}
+
+func anyScanning(st *v1.DiscoveryStatusResponse) bool {
+	for _, s := range st.Sources {
+		if s.Scanning {
+			return true
+		}
+	}
+	return false
+}
+
+func renderDiscoveryStatus(w io.Writer, st *v1.DiscoveryStatusResponse) error {
+	if !st.Running {
+		fmt.Fprintln(w, "Discovery is not running on this replica.")
+		fmt.Fprintln(w)
+		fmt.Fprintln(w, "It runs on the leader only. Either this replica is a follower, or every")
+		fmt.Fprintln(w, "source is disabled. `transferctl health` shows which.")
+		return nil
+	}
+	if len(st.Sources) == 0 {
+		fmt.Fprintln(w, "No sources are being polled for this product.")
+		return nil
+	}
+
+	for i, s := range st.Sources {
+		if i > 0 {
+			fmt.Fprintln(w)
+		}
+		fmt.Fprintf(w, "%s / %s\n", s.Product, s.Source)
+
+		tw := newTabWriter(w)
+		if s.Scanning {
+			fmt.Fprintf(tw, "  Status\tSCANNING (%s)\n", humanMillis(s.ElapsedMs))
+			fmt.Fprintf(tw, "  Phase\t%s\n", humanPhase(s.Phase))
+			if s.RepositoriesTotal > 0 {
+				fmt.Fprintf(tw, "  Repositories\t%d of %d\n", s.RepositoriesDone, s.RepositoriesTotal)
+			}
+			if s.CurrentRepository != "" {
+				fmt.Fprintf(tw, "  Current repository\t%s\n", s.CurrentRepository)
+			}
+			if s.TagsTotal > 0 {
+				fmt.Fprintf(tw, "  Tags resolved\t%d of %d\n", s.TagsResolved, s.TagsTotal)
+			}
+			if s.NewPackages > 0 {
+				fmt.Fprintf(tw, "  New packages so far\t%d\n", s.NewPackages)
+			}
+			if s.Errors > 0 {
+				fmt.Fprintf(tw, "  Errors so far\t%d\n", s.Errors)
+			}
+		} else {
+			fmt.Fprintf(tw, "  Status\tidle\n")
+			if s.IntervalSeconds > 0 {
+				fmt.Fprintf(tw, "  Interval\t%s\n", (time.Duration(s.IntervalSeconds) * time.Second).String())
+			}
+		}
+
+		if s.LastRunAt != "" {
+			fmt.Fprintf(tw, "  Last scan\t%s (%s)\n", s.LastRunAt, humanMillis(s.LastDurationMs))
+			fmt.Fprintf(tw, "    repositories\t%d\n", s.LastRepositories)
+			fmt.Fprintf(tw, "    tags listed\t%d\n", s.LastTagsListed)
+			fmt.Fprintf(tw, "    new packages\t%d\n", s.LastNewPackages)
+		} else {
+			fmt.Fprintf(tw, "  Last scan\tnone has completed yet\n")
+		}
+		if err := tw.Flush(); err != nil {
+			return err
+		}
+
+		if s.LastError != "" {
+			fmt.Fprintln(w)
+			fmt.Fprintf(w, "  Last scan FAILED: %s\n", s.LastError)
+		}
+	}
+	return nil
+}
+
+// humanPhase turns the wire enum into something readable, and says what the
+// phase is waiting on — which is the part an operator actually needs.
+func humanPhase(p string) string {
+	switch p {
+	case "ENUMERATING_REPOSITORIES":
+		return "listing the registry's repositories (/v2/_catalog)"
+	case "LISTING_TAGS":
+		return "listing tags (/v2/<repo>/tags/list)"
+	case "RESOLVING_TAGS":
+		return "fetching manifests"
+	case "", "IDLE":
+		return "idle"
+	default:
+		return p
+	}
 }

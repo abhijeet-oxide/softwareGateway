@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/abhijeet-oxide/softwareGateway/internal/registry"
+	"github.com/abhijeet-oxide/softwareGateway/internal/registry/transport"
 )
 
 // maxManifestBytes bounds a manifest body.
@@ -194,7 +195,14 @@ func transportError(err error) error {
 	// *net.OpError for diagnostics can still get at it.
 	var netErr net.Error
 	if errors.As(err, &netErr) && netErr.Timeout() {
-		return fmt.Errorf("%w: %w", registry.ErrTimeout, err)
+		// The knob is named in the message because the stdlib's wording —
+		// "net/http: timeout awaiting response headers" — describes the symptom
+		// and not one thing you can do about it. A registry that is slow rather
+		// than broken is a configuration problem, and the configuration is
+		// per repository.
+		return fmt.Errorf("%w: %w (no response headers within the deadline; if this "+
+			"registry is simply slow, raise network.timeouts.responseHeader — it "+
+			"defaults to %s)", registry.ErrTimeout, err, transport.DefaultResponseHeaderTimeout)
 	}
 	return fmt.Errorf("%w: %w", registry.ErrUnavailable, err)
 }

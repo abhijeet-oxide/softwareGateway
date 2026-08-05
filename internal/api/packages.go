@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/go-chi/chi/v5"
 
@@ -185,6 +186,23 @@ func (s *Server) handleDiscoverPackages(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
+	if !body.ShouldWait() {
+		// Start and return. The caller polls GET .../discovery for progress.
+		started, running, err := s.deps.Discovery.StartProduct(productName)
+		if errors.Is(err, discovery.ErrNoSuchSource) {
+			Error(w, r, v1.CodeNotFound, err.Error())
+			return
+		}
+		if err != nil {
+			Error(w, r, v1.CodeUnavailable, err.Error())
+			return
+		}
+		WriteJSON(w, r, http.StatusOK, v1.DiscoverPackagesResponse{
+			Started: &v1.DiscoverStarted{Sources: started, AlreadyRunning: running},
+		})
+		return
+	}
+
 	var (
 		res discovery.ScanResult
 		err error
@@ -352,4 +370,62 @@ func toAPIPackage(productName string, row store.PackageRow) v1.Package {
 		p.SupersededBy = strconv.FormatInt(*row.SupersededBy, 10)
 	}
 	return p
+}
+
+// GET /api/v1/products/{product}/discovery.
+//
+// What discovery is doing right now, for this product. A read, not a verb, so
+// it is safe to poll at one-second intervals while a scan runs — which is
+// exactly what transferctl does, because a synchronous scan against a slow
+// registry otherwise shows a blank terminal for minutes and then a timeout.
+func (s *Server) handleDiscoveryStatus(w http.ResponseWriter, r *http.Request) {
+	productName := chi.URLParam(r, "product")
+	if !s.productExists(w, r, productName) {
+		return
+	}
+
+	resp := v1.DiscoveryStatusResponse{
+		Running: s.deps.Discovery != nil && s.deps.Discovery.Running(),
+		Sources: []v1.DiscoverySourceState{},
+	}
+	if !resp.Running {
+		// Not an error: discovery runs on the leader, and a follower answering
+		// "not here" is more useful than a 503.
+		WriteJSON(w, r, http.StatusOK, resp)
+		return
+	}
+
+	for _, sp := range s.deps.Discovery.Progress(productName) {
+		state := v1.DiscoverySourceState{
+			Product:         sp.Product,
+			Source:          sp.Source,
+			IntervalSeconds: int(sp.Interval.Seconds()),
+		}
+
+		if p := sp.Progress; p.Running() {
+			state.Scanning = true
+			state.Phase = string(p.Phase)
+			state.ElapsedMs = p.Elapsed().Milliseconds()
+			state.RepositoriesTotal = p.RepositoriesTotal
+			state.RepositoriesDone = p.RepositoriesDone
+			state.CurrentRepository = p.CurrentRepository
+			state.TagsTotal = p.TagsTotal
+			state.TagsResolved = p.TagsResolved
+			state.NewPackages = p.New
+			state.Errors = p.Errors
+		}
+
+		if !sp.LastRun.IsZero() {
+			state.LastRunAt = sp.LastRun.UTC().Format(time.RFC3339)
+			state.LastRepositories = sp.Last.Repositories
+			state.LastTagsListed = sp.Last.TagsListed
+			state.LastNewPackages = sp.Last.New
+			state.LastDurationMs = sp.Last.Duration.Milliseconds()
+		}
+		state.LastError = sp.LastErr
+
+		resp.Sources = append(resp.Sources, state)
+	}
+
+	WriteJSON(w, r, http.StatusOK, resp)
 }

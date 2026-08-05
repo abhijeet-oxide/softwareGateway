@@ -193,3 +193,38 @@ The response carries `collapsed: true` when a request joined a scan rather than 
 A scan that resolves **no repositories** is reported distinctly from one that scanned repositories and found no new tags. The two produced identical output and are not the same event: the first means nothing was looked at.
 
 It has two causes, and the CLI names them. Either `discovery.repositoryFilters` rejected every candidate, or the source names no repositories and the registry's catalog returned none. A third cause — an enumerating source with no catalog client — used to fall through the same path silently, producing a sub-millisecond successful scan with no network call at all; it is now an error.
+
+---
+
+## 9. Knowing what a scan is doing
+
+A scan is synchronous by default, and against a slow registry that meant `packages discover` showed a blank terminal for two and a half minutes and then reported a timeout. Everything the operator needed — that we had reached the registry, which repository we were on, that the counters were moving — existed in the process and was never exposed. A slow scan and a hung one looked identical.
+
+`GET /api/v1/products/{product}/discovery` reports, per source: whether a scan is running, its phase (`ENUMERATING_REPOSITORIES`, `LISTING_TAGS`, `RESOLVING_TAGS`), how long it has been going, repositories done of total, the current repository, tags resolved of admitted, and the outcome of the last completed scan.
+
+It is a read of in-memory counters behind their own mutex — deliberately not the scanner's, which is held across client construction, so a status request never waits on a TLS handshake. Safe to poll every second, which is what `transferctl packages discover` does on a second connection while the scan request blocks. The live line goes to **stderr**; stdout carries the result, so `-o json` stays pipeable.
+
+`RepositoriesTotal` is zero until enumeration finishes, and that is information rather than a gap: it means the scan is still waiting on `/v2/_catalog`.
+
+### `wait: false`
+
+`packages:discover` accepts `wait: false`, which registers the scan, returns immediately, and reports how many sources started versus how many were already scanning. The distinction matters — "I started four scans" and "one started, three were already going" are different answers, and only one of them is true.
+
+Holding an HTTP request open for the several minutes a slow registry can take makes every intermediary's idle timeout part of the control plane. `wait: false` is the way out; the progress endpoint is how you then follow it.
+
+---
+
+## 10. Vendor registries and why there are no vendor plugins
+
+The generic client speaks four endpoints, and that is the whole of what discovery needs:
+
+| | |
+|---|---|
+| `GET /v2/_catalog` | enumerate repositories |
+| `GET /v2/<name>/tags/list` | list tags, with RFC 8288 `Link` pagination |
+| `HEAD /v2/<name>/manifests/<ref>` | resolve a tag to a digest |
+| `GET /v2/<name>/manifests/<ref>` | fetch the manifest, verbatim |
+
+Every registry we have been pointed at — including vendor-hosted distribution registries behind corporate proxies — serves exactly these. A source that fails against them is failing on TLS, credentials, proxying or timeouts, not on protocol.
+
+That is why `registry_type` exists but has one implementation. The vendor types in [06](06-registry-abstraction.md) §6 are reserved for genuine deviations, and a new backend should be added only when a measured request differs — not because a registry has a vendor's name on it. A second implementation of the same four calls is a second place for the pagination bug to live.

@@ -36,6 +36,10 @@ type Discoverer interface {
 	Running() bool
 	Trigger(ctx context.Context, productName, sourceName string) (discovery.ScanResult, error)
 	TriggerProduct(ctx context.Context, productName string) (discovery.ScanResult, error)
+	// StartProduct begins a scan without waiting for it.
+	StartProduct(productName string) (started, alreadyRunning int, err error)
+	// Progress reports what every source is doing right now.
+	Progress(productName string) []discovery.SourceProgress
 }
 
 // ConnectivityChecker probes configured registries.
@@ -151,6 +155,11 @@ func (s *Server) routes() chi.Router {
 		// with a 404 that reads like a missing feature.
 		if s.deps.Discovery != nil {
 			r.Post("/products/{product}/packages:discover", s.handleDiscoverPackages)
+
+			// Read-only, and deliberately outside the group above: a caller
+			// polling progress while a scan runs must not be blocked by
+			// whatever gates the write path.
+			r.Get("/products/{product}/discovery", s.handleDiscoveryStatus)
 		}
 	})
 

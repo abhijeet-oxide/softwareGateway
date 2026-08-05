@@ -173,11 +173,31 @@ func (c *Client) ListArtifacts(ctx context.Context, product, ref string) (*ListA
 // The colon in the path is an AIP-136 custom method and must NOT be escaped —
 // it is a structural separator, not data.
 func (c *Client) DiscoverPackages(ctx context.Context, product, source string) (*DiscoverPackagesResponse, error) {
+	return c.discover(ctx, product, DiscoverPackagesRequest{Source: source})
+}
+
+// StartDiscovery triggers a scan without waiting for it to finish.
+//
+// For a registry slow enough that holding an HTTP request open for the whole
+// scan is a bad trade. Progress then comes from DiscoveryStatus.
+func (c *Client) StartDiscovery(ctx context.Context, product, source string) (*DiscoverPackagesResponse, error) {
+	no := false
+	return c.discover(ctx, product, DiscoverPackagesRequest{Source: source, Wait: &no})
+}
+
+func (c *Client) discover(ctx context.Context, product string, req DiscoverPackagesRequest) (*DiscoverPackagesResponse, error) {
 	var out DiscoverPackagesResponse
 	err := c.post(ctx,
-		"/api/v1/products/"+url.PathEscape(product)+"/packages:discover",
-		DiscoverPackagesRequest{Source: source}, &out)
+		"/api/v1/products/"+url.PathEscape(product)+"/packages:discover", req, &out)
 	return &out, err
+}
+
+// DiscoveryStatus reports what discovery is doing for one product right now.
+//
+// Safe to poll: it is a read of in-memory counters, not a scan.
+func (c *Client) DiscoveryStatus(ctx context.Context, product string) (*DiscoveryStatusResponse, error) {
+	var out DiscoveryStatusResponse
+	return &out, c.get(ctx, "/api/v1/products/"+url.PathEscape(product)+"/discovery", &out)
 }
 
 // CheckConnectivity probes a product's registries, or every product's when

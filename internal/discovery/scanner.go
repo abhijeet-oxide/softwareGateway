@@ -609,10 +609,14 @@ func (s *Scanner) scanTag(
 		return tagOutcome{}, nil
 	}
 
-	// Fetched BEFORE the transaction opens: this is network I/O of unbounded
-	// duration, and holding a database transaction across it would pin a
-	// connection and a snapshot for as long as the vendor takes to answer.
-	t, err := fetchTree(ctx, client, desc, s.sourceCfg.Discovery.Concurrency.EffectiveArtifacts())
+	// Fetched BEFORE the transaction opens: this is network I/O, and holding a
+	// database transaction across it would pin a connection and a snapshot for
+	// as long as the vendor takes to answer.
+	//
+	// Exactly ONE request, whatever the package contains. Together with the
+	// HEAD above, a newly discovered tag costs two round trips and an unchanged
+	// one costs a single HEAD.
+	t, err := fetchPackage(ctx, client, desc)
 	if err != nil {
 		return tagOutcome{}, err
 	}

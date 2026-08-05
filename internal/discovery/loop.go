@@ -321,6 +321,53 @@ func (l *Loop) StartProduct(productName string) (started, alreadyRunning int, er
 	return started, alreadyRunning, nil
 }
 
+// ErrNotInspectable reports that no running source can reach a package.
+var ErrNotInspectable = errors.New("no source can reach this package")
+
+// InspectPackage expands one package's manifest tree on demand.
+//
+// Routed through the loop rather than given the API its own registry client, so
+// it uses the SAME per-source stack discovery uses: one connection pool, one
+// rate limiter, one cached token, the configured proxy and CA. An inspect that
+// opened its own connections would be invisible to the ceilings the operator
+// set, which is the bug that made scans slow in the first place.
+func (l *Loop) InspectPackage(
+	ctx context.Context, packages *store.Packages, pkg store.PackageRow, productName string,
+) (InspectResult, error) {
+	if pkg.SourceRepository == "" {
+		return InspectResult{}, fmt.Errorf(
+			"%w: package %d has no source repository recorded", ErrNotInspectable, pkg.ID)
+	}
+
+	l.mu.Lock()
+	var found *worker
+	for _, w := range l.workers {
+		if w.spec.Product.Metadata.Name != productName {
+			continue
+		}
+		// The first source of the product that can build a client for this
+		// repository path. A product's sources are distinct registries, and a
+		// package belongs to exactly one of them.
+		found = w
+		break
+	}
+	l.mu.Unlock()
+
+	if found == nil {
+		return InspectResult{}, fmt.Errorf(
+			"%w: no source of product %q is running; discovery runs on the leader",
+			ErrNotInspectable, productName)
+	}
+
+	client, err := found.scanner.clientFor(pkg.SourceRepository)
+	if err != nil {
+		return InspectResult{}, fmt.Errorf("build client for %s: %w", pkg.SourceRepository, err)
+	}
+
+	return InspectPackage(ctx, packages, pkg, client,
+		found.spec.Product.Spec.Sources[0].Discovery.Concurrency.EffectiveTags())
+}
+
 // Progress reports the live state of every source of one product.
 //
 // Cheap and safe to poll: it reads a snapshot behind a mutex the scan holds

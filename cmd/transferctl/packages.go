@@ -28,6 +28,7 @@ func newPackagesCommand() *cobra.Command {
 		newPackagesDescribeCommand(),
 		newPackagesDiscoverCommand(),
 		newPackagesDiscoveryStatusCommand(),
+		newPackagesInspectCommand(),
 	)
 	return cmd
 }
@@ -117,13 +118,13 @@ func renderPackageList(w io.Writer, resp *v1.ListPackagesResponse) error {
 		if multiRepo {
 			fmt.Fprintf(tw, "%s\t", dash(p.SourceRepository))
 		}
-		fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%d\t%d\t%s\n",
+		fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%d\t%s\t%s\n",
 			p.Tag,
 			shortDigest(p.ManifestDigest),
 			strings.ToLower(string(p.State)),
-			humanBytes(p.TotalBytes),
+			humanBytesOpt(p.TotalBytes),
 			p.ArtifactCount,
-			p.BlobCount,
+			optionalCount(p.BlobCount),
 			shortTime(p.DiscoveredAt),
 		)
 	}
@@ -206,8 +207,13 @@ func renderPackageDetail(w io.Writer, p *v1.Package, artifacts []v1.Artifact) er
 	fmt.Fprintf(w, "Digest       %s\n", p.ManifestDigest)
 	fmt.Fprintf(w, "Media type   %s\n", p.MediaType)
 	fmt.Fprintf(w, "State        %s\n", strings.ToLower(string(p.State)))
-	fmt.Fprintf(w, "Size         %s across %d artifact(s) and %d blob(s)\n",
-		humanBytes(p.TotalBytes), p.ArtifactCount, p.BlobCount)
+	fmt.Fprintf(w, "Size         %s across %d artifact(s) and %s blob(s)\n",
+		humanBytesOpt(p.TotalBytes), p.ArtifactCount, optionalCount(p.BlobCount))
+	if p.TotalBytes == nil {
+		fmt.Fprintln(w, "             (this package's root is an index; discovery records what it")
+		fmt.Fprintln(w, "              lists without fetching it, so the layer bytes are not known")
+		fmt.Fprintln(w, "              until a transfer walks the tree)")
+	}
 	fmt.Fprintf(w, "Discovered   %s\n", p.DiscoveredAt)
 
 	if p.SupersededBy != "" {
@@ -255,8 +261,14 @@ func renderArtifactTree(w io.Writer, artifacts []v1.Artifact) {
 		if a.Platform != "" {
 			label += "  " + a.Platform
 		}
-		fmt.Fprintf(w, "%s%s  %s  %s\n",
-			indent, label, humanBytes(a.SizeBytes), shortMediaType(a.MediaType))
+		suffix := ""
+		if !a.Fetched {
+			// The distinction is worth showing: a fetched manifest was verified
+			// against its digest, a listed one has the vendor's word for it.
+			suffix = "  (listed, not fetched)"
+		}
+		fmt.Fprintf(w, "%s%s  %s  %s%s\n",
+			indent, label, humanBytes(a.SizeBytes), shortMediaType(a.MediaType), suffix)
 		for _, c := range children[a.ArtifactID] {
 			draw(c, indent+"    ")
 		}
@@ -463,6 +475,18 @@ func shortDigest(d string) string {
 //
 // Binary units, because registries, image tooling and every other number an
 // operator compares this against use them.
+// humanBytesOpt renders a byte count that may not have been measured.
+//
+// Nil is "not measured", not zero. A package whose root is an index has its
+// layer bytes recorded only when something walks the tree, and printing "0 B"
+// for one would be a claim nobody would think to question.
+func humanBytesOpt(v *v1.Int64String) string {
+	if v == nil {
+		return "not measured"
+	}
+	return humanBytes(*v)
+}
+
 func humanBytes(v v1.Int64String) string {
 	n, err := strconv.ParseInt(string(v), 10, 64)
 	if err != nil {
@@ -653,4 +677,63 @@ func humanPhase(p string) string {
 	default:
 		return p
 	}
+}
+
+// optionalCount renders a count that may not have been measured.
+func optionalCount(n *int) string {
+	if n == nil {
+		return "?"
+	}
+	return strconv.Itoa(*n)
+}
+
+func newPackagesInspectCommand() *cobra.Command {
+	cmd := &cobra.Command{
+		Use:   "inspect <product> <tag-or-digest>",
+		Short: "Expand a package's contents and measure its transfer size",
+		Long: "Discovery is deliberately light: it fetches the tag's own manifest and\n" +
+			"records the artifacts that manifest lists, without fetching them. That\n" +
+			"answers \"what is new\" in two requests per tag, and it means a package's\n" +
+			"transfer size is not yet known.\n\n" +
+			"This walks the rest: it fetches the listed artifacts, records their\n" +
+			"blobs, and measures the bytes a transfer would move.\n\n" +
+			"Safe to repeat. The tree under a digest cannot change, so a second run\n" +
+			"fetches nothing and says so. A transfer performs the same walk, so you\n" +
+			"do not have to run this first — it is for deciding whether you want to.",
+		Args: cobra.ExactArgs(2),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			resp, err := newClient().InspectPackage(cmd.Context(), args[0], args[1])
+			if err != nil {
+				return err
+			}
+			return render(stdout(), opts.output, resp, func(w io.Writer) error {
+				return renderInspect(w, args[0], args[1], resp)
+			})
+		},
+	}
+
+	// It reads from the vendor's registry, so it belongs with the slow commands.
+	contactsRegistries(cmd)
+	return cmd
+}
+
+func renderInspect(w io.Writer, product, ref string, r *v1.InspectPackageResponse) error {
+	if r.AlreadyExpanded {
+		fmt.Fprintf(w, "%s %s was already expanded; nothing was fetched.\n", product, ref)
+	} else {
+		fmt.Fprintf(w, "Expanded %s %s — fetched %d manifest(s).\n", product, ref, r.Fetched)
+	}
+	fmt.Fprintln(w)
+
+	tw := newTabWriter(w)
+	fmt.Fprintf(tw, "  Artifacts\t%d\n", r.Artifacts)
+	fmt.Fprintf(tw, "  Blobs\t%d\n", r.Blobs)
+	fmt.Fprintf(tw, "  Transfer size\t%s\n", humanBytes(r.TotalBytes))
+	if err := tw.Flush(); err != nil {
+		return err
+	}
+
+	fmt.Fprintln(w)
+	fmt.Fprintf(w, "  transferctl packages describe %s %s   # the full artifact tree\n", product, ref)
+	return nil
 }

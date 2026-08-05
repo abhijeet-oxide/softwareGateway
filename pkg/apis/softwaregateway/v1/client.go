@@ -192,6 +192,19 @@ func (c *Client) discover(ctx context.Context, product string, req DiscoverPacka
 	return &out, err
 }
 
+// InspectPackage expands one package's manifest tree and returns its size.
+//
+// Slow by nature: it reads from the source registry. Idempotent — the tree
+// under a digest cannot change — so a second call is cheap and honest about it.
+func (c *Client) InspectPackage(ctx context.Context, product, ref string) (*InspectPackageResponse, error) {
+	var out InspectPackageResponse
+	// The colon is an AIP-136 structural separator and must NOT be escaped.
+	err := c.post(ctx,
+		"/api/v1/products/"+url.PathEscape(product)+"/packages/"+url.PathEscape(ref)+":inspect",
+		struct{}{}, &out)
+	return &out, err
+}
+
 // DiscoveryStatus reports what discovery is doing for one product right now.
 //
 // Safe to poll: it is a read of in-memory counters, not a scan.

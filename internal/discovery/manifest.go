@@ -4,23 +4,22 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"sync"
 
 	"github.com/abhijeet-oxide/softwareGateway/internal/registry"
 )
 
-// Tree bounds. A registry we do not control decides how deep and how wide the
-// walk goes, so both are capped. Without these, one hostile or broken index
-// could turn a routine scan into thousands of requests.
+// Bounds. A registry we do not control decides how wide an index is, so the
+// listing is capped: one hostile or broken index must not become a package with
+// a million rows.
 const (
-	// maxTreeDepth allows index -> manifest, plus a margin for the nested
-	// indexes some vendors publish. Four is well past anything seen in
-	// practice.
+	// maxListedArtifacts caps the children recorded from one index. A
+	// multi-platform image has under ten; a large product bundle might have
+	// several hundred.
+	maxListedArtifacts = 512
+	// maxTreeDepth is kept for the transfer-time walk, which does traverse.
+	// Discovery no longer recurses at all, so it records exactly two levels:
+	// the index and what it lists.
 	maxTreeDepth = 4
-	// maxTreeArtifacts caps total manifests fetched for one package. A
-	// multi-platform image has under ten; a very large fat index might have
-	// fifty.
-	maxTreeArtifacts = 512
 )
 
 // artifact is one manifest in a package's tree, with its raw bytes.
@@ -54,9 +53,16 @@ type tree struct {
 	// does not transfer that layer per platform, so summing naively would
 	// overstate the cost — sometimes by several times — and make every size
 	// shown to an operator a lie.
-	TotalBytes int64
-	// BlobCount is distinct blob digests, on the same basis.
-	BlobCount int
+	//
+	// NIL when it cannot be known, which is the case for a package whose root
+	// is an INDEX: the index states the size of each child manifest, not of the
+	// layers underneath it, and discovery no longer fetches those children. Nil
+	// rather than zero, because "we have not measured this" and "this is empty"
+	// are different facts and only one of them is true.
+	TotalBytes *int64
+	// BlobCount is distinct blob digests, on the same basis, and nil on the
+	// same condition.
+	BlobCount *int
 }
 
 // manifestBody is the subset of a manifest or index we parse.
@@ -73,92 +79,61 @@ type manifestBody struct {
 	Subject      *registry.Descriptor  `json:"subject"`
 }
 
-// fetchTree walks a package's manifest tree breadth-first.
+// fetchPackage fetches the tag's OWN manifest, and nothing else.
 //
-// Called only for genuinely NEW packages. A scan where nothing changed costs
-// one HEAD per tag and fetches no manifest bodies at all (docs/design/07 §2).
-func fetchTree(
-	ctx context.Context, src registry.ManifestReader, root registry.Descriptor, concurrency int,
+// This used to walk the whole tree, fetching every child of every index. It no
+// longer does, and the argument for deferring is that NOTHING IS LOST: the root
+// digest immutably determines the entire tree, so it can be walked exactly, at
+// any time, from one digest we already hold. The traversal was a cache, and it
+// was paid for on every newly discovered tag — a bundle whose index references
+// sixty artifacts cost sixty extra round trips, and a first scan of a real
+// vendor catalogue ran into five figures of requests.
+//
+// An index already carries what a listing needs. Each child descriptor states
+// its digest, media type, size and platform, so "this package contains three
+// images, a chart and two files" is answerable from the bytes we just fetched.
+// Those children are recorded WITHOUT raw bytes, and that distinction is the
+// point: a row with bytes was fetched and verified against its digest, a row
+// without has the vendor's word for it.
+//
+// The cost of deferring is that a bundle's transfer size is not known at
+// discovery — the index states the size of each child MANIFEST, not of the
+// layers underneath it. That is reported as unknown rather than guessed. See
+// tree.TotalBytes.
+func fetchPackage(
+	ctx context.Context, src registry.ManifestReader, root registry.Descriptor,
 ) (tree, error) {
 	var t tree
 
-	// Breadth-first, LEVEL BY LEVEL, so parents are always recorded before
-	// their children and the parent index is valid by construction.
-	//
-	// A level's nodes are fetched in PARALLEL. They are the children of one
-	// index and are independent of each other; walking them one at a time was
-	// the last serial bottleneck in a scan, and the most expensive one — a
-	// product bundle with sixty artifacts cost sixty sequential round trips
-	// inside a single tag, which at 2.5s each is two and a half minutes during
-	// which the tag counter does not move at all. That is what "hundreds of
-	// requests succeeding and no progress" looked like from the outside.
-	level := []queuedChild{{desc: root, parent: -1, depth: 0}}
-
-	// Guards against an index that references itself, directly or through a
-	// cycle. A registry should not serve one; a walk that assumes it will not
-	// is a walk that hangs.
-	seen := map[registry.Digest]bool{}
-
-	if concurrency <= 0 {
-		concurrency = 1
+	desc, raw, err := src.FetchManifest(ctx, root.Digest.String())
+	if err != nil {
+		return tree{}, fmt.Errorf("fetch manifest %s: %w", root.Digest.Short(), err)
 	}
 
-	for len(level) > 0 {
-		// De-duplicate within the level before fetching, so a diamond in the
-		// graph costs one request rather than two.
-		pending := make([]queuedChild, 0, len(level))
-		for _, q := range level {
-			if seen[q.desc.Digest] {
-				continue
-			}
-			seen[q.desc.Digest] = true
-			pending = append(pending, q)
-		}
-		if len(pending) == 0 {
-			break
-		}
-		if len(t.Artifacts)+len(pending) > maxTreeArtifacts {
-			return tree{}, fmt.Errorf("manifest tree exceeds %d artifacts", maxTreeArtifacts)
-		}
+	children, err := appendArtifact(&t, root, desc, raw, -1, 0)
+	if err != nil {
+		return tree{}, err
+	}
 
-		type fetched struct {
-			q    queuedChild
-			desc registry.Descriptor
-			raw  []byte
-			err  error
+	if len(children) > maxListedArtifacts {
+		return tree{}, fmt.Errorf("index lists %d artifacts, more than the %d cap",
+			len(children), maxListedArtifacts)
+	}
+
+	// Recorded from the index's own descriptors: no request each, and the
+	// listing an operator sees is exactly what the vendor published.
+	seen := map[registry.Digest]bool{t.Artifacts[0].Descriptor.Digest: true}
+	for _, c := range children {
+		if seen[c.desc.Digest] {
+			continue
 		}
-		results := make([]fetched, len(pending))
-
-		sem := make(chan struct{}, concurrency)
-		var wg sync.WaitGroup
-		for i, q := range pending {
-			wg.Add(1)
-			go func(i int, q queuedChild) {
-				defer wg.Done()
-				sem <- struct{}{}
-				defer func() { <-sem }()
-
-				desc, raw, err := src.FetchManifest(ctx, q.desc.Digest.String())
-				results[i] = fetched{q: q, desc: desc, raw: raw, err: err}
-			}(i, q)
-		}
-		wg.Wait()
-
-		var next []queuedChild
-
-		// Processed in level order, so the artifact list and every parent index
-		// into it are identical to what the sequential walk produced.
-		for _, r := range results {
-			if r.err != nil {
-				return tree{}, fmt.Errorf("fetch manifest %s: %w", r.q.desc.Digest.Short(), r.err)
-			}
-			children, err := appendArtifact(&t, r.q.desc, r.desc, r.raw, r.q.parent, r.q.depth)
-			if err != nil {
-				return tree{}, err
-			}
-			next = append(next, children...)
-		}
-		level = next
+		seen[c.desc.Digest] = true
+		t.Artifacts = append(t.Artifacts, artifact{
+			Descriptor: c.desc,
+			Parent:     c.parent,
+			Depth:      c.depth,
+			// Raw is deliberately nil: listed, not fetched.
+		})
 	}
 
 	t.TotalBytes, t.BlobCount = measure(t.Artifacts)
@@ -246,7 +221,19 @@ func appendArtifact(
 }
 
 // measure sums distinct content, counting each digest once.
-func measure(artifacts []artifact) (totalBytes int64, blobCount int) {
+func measure(artifacts []artifact) (*int64, *int) {
+	// An artifact we listed but did not fetch has no blob list, so its bytes
+	// are unaccounted for. Reporting a total that omits them would understate a
+	// bundle's transfer cost — by nearly all of it — and a wrong size is worse
+	// than an absent one, because nobody questions a number.
+	for _, a := range artifacts {
+		if a.Raw == nil {
+			return nil, nil
+		}
+	}
+
+	var totalBytes int64
+	var blobCount int
 	counted := map[registry.Digest]bool{}
 
 	for _, a := range artifacts {
@@ -263,5 +250,5 @@ func measure(artifacts []artifact) (totalBytes int64, blobCount int) {
 			blobCount++
 		}
 	}
-	return totalBytes, blobCount
+	return &totalBytes, &blobCount
 }

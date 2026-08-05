@@ -270,3 +270,70 @@ Nothing about a scan requires ordering. Repositories are independent; supersessi
 ### Why not unbounded
 
 The temptation is to fan out over everything at once. A vendor registry is someone else's infrastructure, the cost of being impolite falls on them, and a 429 storm makes the scan slower, not faster — the rate limiter sits outermost precisely so retries cannot bypass it ([06](06-registry-abstraction.md) §5). The defaults are chosen to make a scan minutes rather than hours without looking like an attack. Raise them for a registry you own.
+
+---
+
+## 12. What a scan actually fetches
+
+Per tag, in order:
+
+| Step | Requests |
+|---|---|
+| `HEAD manifests/<tag>` → digest | 1 |
+| already known? | 0 — a DB lookup, and the scan **stops here** |
+| `GET manifests/<digest>` | 1 |
+| its children | **0** |
+
+So an unchanged tag costs **one** request and a newly discovered one costs **two**, whatever the package contains.
+
+### Why the children are not fetched
+
+Discovery used to walk the whole tree. It does not any more, and the argument is that **nothing is lost**: the root digest immutably determines the entire tree. Given a digest we already hold, the tree can be walked exactly, at any time, by whatever needs it. The traversal was a *cache* — and it was paid for on every newly discovered tag.
+
+The cost was not marginal. A bundle whose index references sixty artifacts cost sixty extra round trips inside a single tag, and a first scan of a real vendor catalogue — 48 repositories, dozens of tags each, bundles throughout — ran into five figures of requests. Discovery's cost was O(total artifacts) when the question it answers is O(tags).
+
+An index also already carries what a listing needs. Each child descriptor states its digest, media type, size and platform, so "this package contains three images, a chart and two files" is answerable from the bytes just fetched. Those children are recorded as artifact rows **without raw bytes**, and that distinction is deliberate: a row with bytes was fetched and verified against its digest, a row without has the vendor's word for it. The API reports it as `fetched`, and `packages describe` prints `(listed, not fetched)`.
+
+### The one thing that is genuinely deferred
+
+A bundle's **transfer size**. An index states the size of each child *manifest*, not of the layers underneath it, so without fetching the children the layer bytes are unknown.
+
+That is reported as unknown — `totalBytes` and `blobCount` are NULL in the database, absent from the JSON, and rendered as `not measured` and `?` — rather than summed from what we happen to hold. A total that omitted the layers would understate a bundle by nearly all of it, and **a wrong size is worse than a missing one, because nobody questions a number.**
+
+A package whose root is a plain image manifest is still fully measured: its config and layer descriptors are inside the one manifest we fetched.
+
+M3's transfer walks the tree, because it must fetch those blobs anyway — and it does so against the digest recorded here, which is what makes deferring safe rather than merely cheaper.
+
+---
+
+## 13. Two stages: discover, then inspect
+
+Discovery answers one question — **what is new** — and stops there. Everything else about a package is recoverable from the digest it recorded, so it is recovered when someone actually wants it.
+
+| | Discovery | `packages:inspect` |
+|---|---|---|
+| Cost per tag | 1 request unchanged, 2 new | 1 per artifact in the tree |
+| Runs | on an interval, unattended | on demand, for one package |
+| Answers | is there something new? | what is in it, and how big? |
+
+`POST /api/v1/products/{product}/packages/{package}:inspect` walks the tree: it fetches the artifacts discovery only listed, records their blobs, and measures the transfer size. `transferctl packages inspect <product> <tag>` is the same thing.
+
+An AIP-136 custom method rather than a GET, because it has side effects — it writes artifacts, blobs and a measured size. Idempotent all the same: **the tree under a digest cannot change**, so a second call fetches nothing and says `alreadyExpanded`.
+
+### One walker, two callers
+
+`InspectPackage` is a function, not logic inside an HTTP handler, because **M3's transfer calls it too**. A transfer has to walk the tree anyway — it cannot copy blobs it has not enumerated — so it performs this expansion before moving bytes. That makes `inspect` optional rather than a required first step: it is for deciding whether you *want* the transfer, not for enabling it.
+
+The alternative was two code paths computing what a package contains, which would eventually disagree about something like whether a repeated child counts once.
+
+### It runs through the source's own client
+
+Inspect is routed through the discovery loop rather than given the API its own registry client, so it uses the same per-source stack: one connection pool, one rate limiter, one cached token, the configured proxy and CA. A second client would be invisible to the ceilings the operator set — which is precisely the bug that made scans slow ([06](06-registry-abstraction.md) §5).
+
+The consequence is that inspect runs on the **leader**, and a follower answers `FAILED_PRECONDITION` saying why rather than a 500.
+
+### Writing over what discovery listed
+
+Discovery wrote the children as rows with no bytes. Inspect fills the same rows in — `ON CONFLICT ... DO UPDATE`, with `raw = COALESCE(EXCLUDED.raw, package_artifacts.raw)` so a re-run cannot blank a manifest already held — and adds anything deeper for the first time.
+
+All in **one transaction**, because a half-expanded package is the worst outcome available: it would carry a size that omits most of its bytes, with nothing marking it partial. Either the whole tree is known or none of it is.

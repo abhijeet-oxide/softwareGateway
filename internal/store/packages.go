@@ -21,12 +21,17 @@ type PackageRow struct {
 	Tag            string
 	ManifestDigest string
 	MediaType      string
-	TotalBytes     int64
-	ArtifactCount  int
-	BlobCount      int
-	State          string
-	DiscoveredAt   string
-	SupersededBy   *int64
+	// TotalBytes and BlobCount are NIL when not yet measured, which is the case
+	// for a package whose root is an index: discovery records what the index
+	// lists without fetching it, so the layer bytes underneath are unknown
+	// until a transfer walks the tree. Nil rather than zero — a wrong size is
+	// worse than an absent one, because nobody questions a number.
+	TotalBytes    *int64
+	ArtifactCount int
+	BlobCount     *int
+	State         string
+	DiscoveredAt  string
+	SupersededBy  *int64
 	// SourceRepository is the repository path this was discovered in. Joined
 	// on read rather than denormalised: a product may span several
 	// repositories, and a listing that does not say which is ambiguous.
@@ -44,7 +49,13 @@ type ArtifactRow struct {
 	SizeBytes    int64
 	Platform     string
 	Depth        int
-	Raw          []byte
+	// Raw is the manifest exactly as served. NIL means this artifact was LISTED
+	// by its parent index and not fetched, so we have the vendor's word for its
+	// digest rather than bytes we hashed ourselves.
+	Raw []byte
+	// Fetched is `raw IS NOT NULL`, read back without the bytes themselves — a
+	// listing must not load every manifest body to report which ones we hold.
+	Fetched bool
 }
 
 // BlobRef links an artifact to a blob it references.
@@ -496,8 +507,12 @@ type ListPackagesFilter struct {
 func (p *Packages) ListPackages(ctx context.Context, f ListPackagesFilter) ([]PackageRow, error) {
 	query := `
 		SELECT pk.id, pk.product_id, pk.source_repo_id, pk.tag, pk.manifest_digest,
-		       pk.media_type, COALESCE(pk.total_bytes, 0), COALESCE(pk.artifact_count, 0),
-		       COALESCE(pk.blob_count, 0), pk.state, pk.discovered_at, pk.superseded_by,
+		       -- total_bytes and blob_count are NOT coalesced: NULL is a real
+		       -- value here, meaning "not yet measured", and folding it to 0
+		       -- would put a wrong number in front of an operator. artifact_count
+		       -- IS coalesced because it is always known once a package exists.
+		       pk.media_type, pk.total_bytes, COALESCE(pk.artifact_count, 0),
+		       pk.blob_count, pk.state, pk.discovered_at, pk.superseded_by,
 		       COALESCE(sr.repository_path, '')
 		  FROM packages pk
 		  JOIN products pr ON pr.id = pk.product_id
@@ -554,8 +569,12 @@ func (p *Packages) ListPackages(ctx context.Context, f ListPackagesFilter) ([]Pa
 func (p *Packages) GetPackage(ctx context.Context, productName, ref string) (PackageRow, error) {
 	query := p.dialect.Rewrite(`
 		SELECT pk.id, pk.product_id, pk.source_repo_id, pk.tag, pk.manifest_digest,
-		       pk.media_type, COALESCE(pk.total_bytes, 0), COALESCE(pk.artifact_count, 0),
-		       COALESCE(pk.blob_count, 0), pk.state, pk.discovered_at, pk.superseded_by,
+		       -- total_bytes and blob_count are NOT coalesced: NULL is a real
+		       -- value here, meaning "not yet measured", and folding it to 0
+		       -- would put a wrong number in front of an operator. artifact_count
+		       -- IS coalesced because it is always known once a package exists.
+		       pk.media_type, pk.total_bytes, COALESCE(pk.artifact_count, 0),
+		       pk.blob_count, pk.state, pk.discovered_at, pk.superseded_by,
 		       COALESCE(sr.repository_path, '')
 		  FROM packages pk
 		  JOIN products pr ON pr.id = pk.product_id
@@ -587,7 +606,8 @@ var ErrNotFound = errors.New("not found")
 func (p *Packages) ListArtifacts(ctx context.Context, packageID int64) ([]ArtifactRow, error) {
 	query := p.dialect.Rewrite(`
 		SELECT id, package_id, parent_id, digest, media_type,
-		       COALESCE(artifact_type, ''), size_bytes, COALESCE(platform, ''), depth
+		       COALESCE(artifact_type, ''), size_bytes, COALESCE(platform, ''), depth,
+		       raw IS NOT NULL
 		  FROM package_artifacts
 		 WHERE package_id = ?
 		 ORDER BY depth, id`)
@@ -602,7 +622,7 @@ func (p *Packages) ListArtifacts(ctx context.Context, packageID int64) ([]Artifa
 	for rows.Next() {
 		var a ArtifactRow
 		if err := rows.Scan(&a.ID, &a.PackageID, &a.ParentID, &a.Digest, &a.MediaType,
-			&a.ArtifactType, &a.SizeBytes, &a.Platform, &a.Depth); err != nil {
+			&a.ArtifactType, &a.SizeBytes, &a.Platform, &a.Depth, &a.Fetched); err != nil {
 			return nil, fmt.Errorf("scan artifact row: %w", err)
 		}
 		out = append(out, a)
@@ -646,4 +666,143 @@ func nullable(s string) any {
 		return nil
 	}
 	return s
+}
+
+// ExpandedArtifact is one manifest of a fully walked tree.
+type ExpandedArtifact struct {
+	Row ArtifactRow
+	// Parent indexes into the tree slice; -1 for the root. Resolved to a row ID
+	// as the tree is written, which is why parents must be written first.
+	Parent int
+	Blobs  []BlobRef
+}
+
+// ExpandedTree is a package's complete contents.
+type ExpandedTree struct {
+	Artifacts []ExpandedArtifact
+	// TotalBytes and BlobCount are nil when still unmeasurable, which after a
+	// full walk should not happen — but the type carries the possibility rather
+	// than asserting it, because a walk that was truncated must not write a
+	// confident number.
+	TotalBytes *int64
+	BlobCount  *int
+}
+
+// RecordExpandedTree writes a fully walked tree over whatever was recorded
+// before, in one transaction.
+//
+// Discovery records a package's root manifest and lists its children without
+// fetching them. This fills those in: the same rows gain their raw bytes, any
+// deeper artifacts appear for the first time, blobs are linked, and the
+// package's size stops being unknown.
+//
+// One transaction because a half-expanded package is the worst outcome
+// available — it has a size that omits most of its bytes, and nothing marks it
+// as partial. Either the whole tree is known or none of it is.
+func (p *Packages) RecordExpandedTree(ctx context.Context, packageID int64, t ExpandedTree) error {
+	tx, err := p.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("begin expand transaction: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	ids := make([]int64, len(t.Artifacts))
+
+	for i, a := range t.Artifacts {
+		row := a.Row
+		row.PackageID = packageID
+		if a.Parent >= 0 {
+			row.ParentID = &ids[a.Parent]
+		}
+
+		id, err := p.upsertArtifact(ctx, tx, row)
+		if err != nil {
+			return err
+		}
+		ids[i] = id
+
+		if err := p.LinkBlobs(ctx, tx, id, a.Blobs); err != nil {
+			return err
+		}
+	}
+
+	if err := p.setPackageMeasurement(ctx, tx, packageID, len(t.Artifacts), t.TotalBytes, t.BlobCount); err != nil {
+		return err
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit expanded tree: %w", err)
+	}
+	return nil
+}
+
+// upsertArtifact inserts, or fills in an artifact discovery only listed.
+//
+// The ON CONFLICT branch is the point: discovery wrote these rows from an
+// index's descriptors with no raw bytes, and this is where they gain them. The
+// raw bytes are written with COALESCE so a re-run cannot blank a manifest we
+// already hold.
+func (p *Packages) upsertArtifact(ctx context.Context, tx *sql.Tx, a ArtifactRow) (int64, error) {
+	query := p.dialect.Rewrite(`
+		INSERT INTO package_artifacts
+			(package_id, parent_id, digest, media_type, artifact_type,
+			 size_bytes, platform, depth, raw)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+		ON CONFLICT (package_id, digest) DO UPDATE SET
+			raw           = COALESCE(EXCLUDED.raw, package_artifacts.raw),
+			media_type    = EXCLUDED.media_type,
+			artifact_type = COALESCE(EXCLUDED.artifact_type, package_artifacts.artifact_type),
+			size_bytes    = EXCLUDED.size_bytes,
+			platform      = COALESCE(EXCLUDED.platform, package_artifacts.platform)
+		RETURNING id`)
+
+	var id int64
+	err := tx.QueryRowContext(ctx, query,
+		a.PackageID, a.ParentID, a.Digest, a.MediaType, nullable(a.ArtifactType),
+		a.SizeBytes, nullable(a.Platform), a.Depth, a.Raw,
+	).Scan(&id)
+	if err != nil {
+		return 0, fmt.Errorf("upsert artifact %s: %w", a.Digest, err)
+	}
+	return id, nil
+}
+
+// setPackageMeasurement records what the walk measured.
+func (p *Packages) setPackageMeasurement(
+	ctx context.Context, tx *sql.Tx, packageID int64, artifactCount int, totalBytes *int64, blobCount *int,
+) error {
+	_, err := tx.ExecContext(ctx, p.dialect.Rewrite(`
+		UPDATE packages
+		   SET artifact_count = ?, total_bytes = ?, blob_count = ?,
+		       updated_at = `+p.dialect.Now()+`
+		 WHERE id = ?`),
+		artifactCount, totalBytes, blobCount, packageID)
+	if err != nil {
+		return fmt.Errorf("record package measurement: %w", err)
+	}
+	return nil
+}
+
+// GetPackageByID returns one package row.
+func (p *Packages) GetPackageByID(ctx context.Context, id int64) (PackageRow, error) {
+	query := p.dialect.Rewrite(`
+		SELECT pk.id, pk.product_id, pk.source_repo_id, pk.tag, pk.manifest_digest,
+		       pk.media_type, pk.total_bytes, COALESCE(pk.artifact_count, 0),
+		       pk.blob_count, pk.state, pk.discovered_at, pk.superseded_by,
+		       COALESCE(sr.repository_path, '')
+		  FROM packages pk
+		  LEFT JOIN repositories sr ON sr.id = pk.source_repo_id
+		 WHERE pk.id = ?`)
+
+	var r PackageRow
+	err := p.db.QueryRowContext(ctx, query, id).Scan(
+		&r.ID, &r.ProductID, &r.SourceRepoID, &r.Tag, &r.ManifestDigest,
+		&r.MediaType, &r.TotalBytes, &r.ArtifactCount, &r.BlobCount,
+		&r.State, &r.DiscoveredAt, &r.SupersededBy, &r.SourceRepository)
+	if errors.Is(err, sql.ErrNoRows) {
+		return PackageRow{}, ErrNotFound
+	}
+	if err != nil {
+		return PackageRow{}, fmt.Errorf("get package %d: %w", id, err)
+	}
+	return r, nil
 }

@@ -148,6 +148,7 @@ func (s *Server) handleListArtifacts(w http.ResponseWriter, r *http.Request) {
 			SizeBytes:    v1.Int64String(strconv.FormatInt(a.SizeBytes, 10)),
 			Platform:     a.Platform,
 			Depth:        a.Depth,
+			Fetched:      a.Fetched,
 		}
 		if a.ParentID != nil {
 			artifact.ParentID = strconv.FormatInt(*a.ParentID, 10)
@@ -375,12 +376,15 @@ func toAPIPackage(productName string, row store.PackageRow) v1.Package {
 		Tag:              row.Tag,
 		ManifestDigest:   row.ManifestDigest,
 		MediaType:        row.MediaType,
-		TotalBytes:       v1.Int64String(strconv.FormatInt(row.TotalBytes, 10)),
 		ArtifactCount:    row.ArtifactCount,
 		BlobCount:        row.BlobCount,
 		State:            v1.PackageState(strings.ToUpper(row.State)),
 		DiscoveredAt:     row.DiscoveredAt,
 		SourceRepository: row.SourceRepository,
+	}
+	if row.TotalBytes != nil {
+		v := v1.Int64String(strconv.FormatInt(*row.TotalBytes, 10))
+		p.TotalBytes = &v
 	}
 	if row.SupersededBy != nil {
 		p.SupersededBy = strconv.FormatInt(*row.SupersededBy, 10)
@@ -446,4 +450,64 @@ func (s *Server) handleDiscoveryStatus(w http.ResponseWriter, r *http.Request) {
 	}
 
 	WriteJSON(w, r, http.StatusOK, resp)
+}
+
+// POST /api/v1/products/{product}/packages/{package}:inspect.
+//
+// Expands one package's manifest tree: fetches the artifacts discovery only
+// listed, records their blobs, and measures the transfer size.
+//
+// Discovery deliberately stops at the tag's own manifest — it answers "what is
+// new", and the root digest immutably determines everything beneath it, so the
+// rest is recoverable whenever it is wanted (docs/design/07 §12). This is where
+// it is wanted, and it is the same walk a transfer performs, so these numbers
+// are the numbers a transfer will move.
+//
+// Idempotent: the tree under a digest cannot change, so a second call fetches
+// nothing and says so.
+func (s *Server) handleInspectPackage(w http.ResponseWriter, r *http.Request) {
+	productName := chi.URLParam(r, "product")
+	if !s.productExists(w, r, productName) {
+		return
+	}
+	ref := chi.URLParam(r, "package")
+
+	pkg, err := s.deps.Packages.GetPackage(r.Context(), productName, ref)
+	if errors.Is(err, store.ErrNotFound) {
+		NotFound(w, r, "package", ref)
+		return
+	}
+	if err != nil {
+		s.internal(w, r, "get package", err)
+		return
+	}
+
+	if s.deps.Discovery == nil || !s.deps.Discovery.Running() {
+		// Inspect reaches the registry through the source's configured client,
+		// which only the leader holds. Saying so beats a 500.
+		Error(w, r, v1.CodeFailedPrecondition,
+			"inspecting a package reads from its source registry, and the client for "+
+				"that source runs on the leader: this replica is a follower, or "+
+				"discovery is disabled")
+		return
+	}
+
+	res, err := s.deps.Discovery.InspectPackage(r.Context(), s.deps.Packages, pkg, productName)
+	if errors.Is(err, discovery.ErrNotInspectable) {
+		Error(w, r, v1.CodeFailedPrecondition, err.Error())
+		return
+	}
+	if err != nil {
+		Error(w, r, v1.CodeUnavailable, "could not expand the package: "+err.Error())
+		return
+	}
+
+	WriteJSON(w, r, http.StatusOK, v1.InspectPackageResponse{
+		Package:         toAPIPackage(productName, res.Package),
+		Fetched:         res.Fetched,
+		AlreadyExpanded: res.AlreadyExpanded,
+		Artifacts:       res.Artifacts,
+		Blobs:           res.Blobs,
+		TotalBytes:      v1.Int64String(strconv.FormatInt(res.TotalBytes, 10)),
+	})
 }

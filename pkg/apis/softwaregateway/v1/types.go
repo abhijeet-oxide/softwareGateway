@@ -277,9 +277,17 @@ type Package struct {
 	// TotalBytes counts each distinct digest ONCE. A fat index whose platforms
 	// share a base layer transfers that layer once, so summing naively would
 	// overstate the cost — sometimes several-fold.
-	TotalBytes    Int64String `json:"totalBytes"`
-	ArtifactCount int         `json:"artifactCount"`
-	BlobCount     int         `json:"blobCount"`
+	//
+	// OMITTED when not yet measured, which is the case for a package whose root
+	// is an index: discovery records what the index lists without fetching it,
+	// so the layer bytes underneath are unknown until a transfer walks the
+	// tree. Absent rather than zero — a wrong size is worse than a missing one,
+	// because nobody questions a number.
+	TotalBytes *Int64String `json:"totalBytes,omitempty"`
+	// ArtifactCount is always known: it is the root plus whatever its index
+	// lists, both of which come from bytes we already hold.
+	ArtifactCount int  `json:"artifactCount"`
+	BlobCount     *int `json:"blobCount,omitempty"`
 
 	State        PackageState `json:"state"`
 	DiscoveredAt string       `json:"discoveredAt"`
@@ -314,6 +322,33 @@ type Artifact struct {
 	Platform string `json:"platform,omitempty"`
 	// Depth is 0 for the root; an index's children are 1.
 	Depth int `json:"depth"`
+	// Fetched reports whether we hold this manifest's bytes.
+	//
+	// Discovery fetches the tag's own manifest and records the children its
+	// index lists, without a request each. A fetched manifest was verified
+	// against its digest; a listed one has the vendor's word for it, and the
+	// difference is worth being able to see.
+	Fetched bool `json:"fetched"`
+}
+
+// InspectPackageResponse reports what expanding a package found.
+//
+// Discovery stops at the tag's own manifest, so a package's transfer size is
+// unknown until something walks the tree. This is that something — and it is
+// the same walk a transfer performs, so the numbers here are the numbers a
+// transfer will move.
+type InspectPackageResponse struct {
+	Package Package `json:"package"`
+	// Fetched is manifests fetched by THIS call. Zero means the package was
+	// already expanded and the registry was not troubled again.
+	Fetched int `json:"fetched"`
+	// AlreadyExpanded reports exactly that, so a caller need not infer it from
+	// a zero.
+	AlreadyExpanded bool `json:"alreadyExpanded"`
+
+	Artifacts  int         `json:"artifacts"`
+	Blobs      int         `json:"blobs"`
+	TotalBytes Int64String `json:"totalBytes"`
 }
 
 // ListArtifactsResponse is returned by

@@ -723,6 +723,7 @@ transferctl packages list <product> --state superseded
 transferctl packages list <product> --all        # follow pagination
 
 transferctl packages describe <product> <tag-or-digest>    # artifact tree
+transferctl packages inspect <product> <tag-or-digest>     # expand it and measure the size
 transferctl packages discover <product>          # scan now, don't wait for the interval
 transferctl packages discover <product> --source vendor
 ```
@@ -1047,7 +1048,6 @@ spec:
         concurrency:
           repositories: 4        # default 4
           tags: 8                # default 8; they share the source's client
-          artifacts: 8           # default 8; siblings of one index
 ```
 
 Both clamp at 64. Raise them for a registry you own; leave them alone for a vendor's.
@@ -1058,8 +1058,21 @@ There was also a third cause, and it was the worst of the three: **every reposit
 
 If it is still slow after that, the requests themselves are slow: turn on request tracing (above), and `transferctl products check` times a real manifest fetch.
 
+**`packages list` shows `not measured` and `?` instead of a size**
+Expected, for a package whose root is an index — and it is one command away:
+
+```bash
+transferctl packages inspect <product> <tag>
+```
+
+Discovery is deliberately light: it fetches the tag's own manifest and records the artifacts that manifest lists, without a request each. That answers "what is new" in two requests per tag, and it means the layer bytes underneath are not yet known. `inspect` walks the rest and measures it. Safe to repeat — the tree under a digest cannot change, so a second run fetches nothing and says so.
+
+You do not have to run it before a transfer; a transfer performs the same walk. It is for deciding whether you want the transfer.
+
+A package whose root is a plain image manifest already shows a real size: its config and layers are inside the one manifest discovery fetched.
+
 **Requests are succeeding but the tag counter does not move**
-A tag is only counted when its ENTIRE artifact tree has been fetched. A bundle whose index references sixty artifacts used to cost sixty sequential manifest fetches inside one tag — minutes at a time, with every request returning 200 and the counter frozen. Those siblings are now fetched in parallel (`discovery.concurrency.artifacts`), and the progress line reports `N artifacts`, which is the counter that keeps moving when nothing else does.
+Largely gone: a newly discovered tag now costs two requests (a `HEAD` then one `GET`) whatever it contains, and an unchanged one costs a single `HEAD`. Discovery no longer walks the artifact tree — see [design 07 §12](design/07-discovery.md). The progress line also reports `N artifacts`, which keeps moving when nothing else does.
 
 **I have no way to see what discovery is doing**
 Turn on request tracing. Every registry request is logged with its host, path, status and duration:

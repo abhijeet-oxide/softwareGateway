@@ -4,26 +4,19 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"reflect"
 	"sync"
 	"testing"
-	"time"
 
 	"github.com/abhijeet-oxide/softwareGateway/internal/registry"
+	"github.com/abhijeet-oxide/softwareGateway/test/fakeregistry"
 )
 
-// fakeManifests serves a fixed manifest graph and records concurrency.
+// fakeManifests serves a fixed manifest graph and counts requests.
 type fakeManifests struct {
 	bodies map[registry.Digest][]byte
 
-	mu      sync.Mutex
-	current int
-	peak    int
-	calls   int
-	release chan struct{}
-	once    sync.Once
-	// want is how many concurrent callers the gate waits for.
-	want int
+	mu    sync.Mutex
+	calls int
 }
 
 func (f *fakeManifests) ResolveTag(context.Context, string) (registry.Descriptor, error) {
@@ -33,32 +26,6 @@ func (f *fakeManifests) ResolveTag(context.Context, string) (registry.Descriptor
 func (f *fakeManifests) FetchManifest(_ context.Context, ref string) (registry.Descriptor, []byte, error) {
 	f.mu.Lock()
 	f.calls++
-	f.current++
-	if f.current > f.peak {
-		f.peak = f.current
-	}
-	current := f.current
-	f.mu.Unlock()
-
-	// Hold until enough callers are inside, so peak concurrency is a property
-	// of the code rather than of the scheduler's timing.
-	//
-	// The root is fetched alone — a level of one — so the gate must not wait for
-	// company that cannot arrive. The timeout is what turns "sequential" into a
-	// readable assertion failure rather than a hang.
-	if f.release != nil {
-		if current >= f.want {
-			f.once.Do(func() { close(f.release) })
-		}
-		select {
-		case <-f.release:
-		case <-time.After(300 * time.Millisecond):
-			f.once.Do(func() { close(f.release) })
-		}
-	}
-
-	f.mu.Lock()
-	f.current--
 	f.mu.Unlock()
 
 	raw, ok := f.bodies[registry.Digest(ref)]
@@ -111,80 +78,131 @@ func indexGraph(t *testing.T, n int) (registry.Descriptor, map[registry.Digest][
 	}, bodies
 }
 
-// TestParallelTreeWalkMatchesSequential is the property that makes the
-// parallel walk safe to ship: the artifact list, its order, and every parent
-// index into it must be byte-identical to what one-at-a-time produced.
+// TestOnlyTheTagsOwnManifestIsFetched is the property the design now rests on:
+// one request per newly discovered tag, whatever the package contains.
 //
-// Order is not cosmetic here — Artifact.Parent is an INDEX into the slice, so a
-// reordering silently reparents artifacts.
-func TestParallelTreeWalkMatchesSequential(t *testing.T) {
-	root, bodies := indexGraph(t, 12)
+// The walk used to recurse, fetching every child of every index. Deferring
+// loses nothing — the root digest immutably determines the whole tree, so it
+// can be walked exactly, at any time, from a digest we already hold — and it
+// takes a bundle with sixty artifacts from sixty-one requests to one.
+func TestOnlyTheTagsOwnManifestIsFetched(t *testing.T) {
+	root, bodies := indexGraph(t, 60)
 
-	sequential, err := fetchTree(t.Context(), &fakeManifests{bodies: bodies}, root, 1)
+	f := &fakeManifests{bodies: bodies}
+	tr, err := fetchPackage(t.Context(), f, root)
 	if err != nil {
-		t.Fatalf("sequential: %v", err)
-	}
-	parallel, err := fetchTree(t.Context(), &fakeManifests{bodies: bodies}, root, 8)
-	if err != nil {
-		t.Fatalf("parallel: %v", err)
-	}
-
-	if !reflect.DeepEqual(sequential, parallel) {
-		t.Errorf("parallel walk produced a different tree\n sequential: %d artifacts\n parallel:   %d artifacts",
-			len(sequential.Artifacts), len(parallel.Artifacts))
-		for i := range sequential.Artifacts {
-			if i >= len(parallel.Artifacts) {
-				break
-			}
-			a, b := sequential.Artifacts[i], parallel.Artifacts[i]
-			if a.Descriptor.Digest != b.Descriptor.Digest || a.Parent != b.Parent || a.Depth != b.Depth {
-				t.Errorf("  artifact %d: %s parent=%d depth=%d vs %s parent=%d depth=%d",
-					i, a.Descriptor.Digest.Short(), a.Parent, a.Depth, b.Descriptor.Digest.Short(), b.Parent, b.Depth)
-			}
-		}
-	}
-
-	if len(parallel.Artifacts) != 13 {
-		t.Errorf("got %d artifacts, want 13 (one index plus twelve children)", len(parallel.Artifacts))
-	}
-}
-
-// TestTreeSiblingsAreFetchedConcurrently: a bundle whose index references sixty
-// artifacts used to cost sixty SEQUENTIAL round trips inside one tag — minutes
-// during which the tag counter did not move while every request succeeded.
-func TestTreeSiblingsAreFetchedConcurrently(t *testing.T) {
-	root, bodies := indexGraph(t, 8)
-
-	f := &fakeManifests{bodies: bodies, release: make(chan struct{}), want: 4}
-	if _, err := fetchTree(t.Context(), f, root, 4); err != nil {
 		t.Fatalf("fetch: %v", err)
 	}
 
-	f.mu.Lock()
-	peak, calls := f.peak, f.calls
-	f.mu.Unlock()
-
-	if peak < 2 {
-		t.Errorf("peak concurrency was %d; the siblings of an index are still "+
-			"being fetched one at a time", peak)
+	if f.calls != 1 {
+		t.Errorf("made %d requests, want exactly 1: the index lists its children, "+
+			"so fetching them is work we do not need to do", f.calls)
 	}
-	if calls != 9 {
-		t.Errorf("made %d fetches, want 9 (the index plus eight children)", calls)
+	if len(tr.Artifacts) != 61 {
+		t.Errorf("recorded %d artifacts, want 61 — the index plus the sixty it lists",
+			len(tr.Artifacts))
 	}
 }
 
-// A diamond — two parents referencing one child — must cost one fetch, not two.
-func TestRepeatedChildIsFetchedOnce(t *testing.T) {
+// The children must be recorded from the index's own descriptors, marked as
+// listed rather than fetched. A row with bytes was verified against its digest;
+// a row without has the vendor's word for it, and conflating them would make
+// the record claim more than it knows.
+func TestListedChildrenCarryNoBytes(t *testing.T) {
+	root, bodies := indexGraph(t, 4)
+
+	tr, err := fetchPackage(t.Context(), &fakeManifests{bodies: bodies}, root)
+	if err != nil {
+		t.Fatalf("fetch: %v", err)
+	}
+
+	if tr.Artifacts[0].Raw == nil {
+		t.Error("the root manifest was fetched and must carry its bytes")
+	}
+	if tr.Artifacts[0].Parent != -1 || tr.Artifacts[0].Depth != 0 {
+		t.Errorf("root has parent=%d depth=%d, want -1 and 0",
+			tr.Artifacts[0].Parent, tr.Artifacts[0].Depth)
+	}
+
+	for i, a := range tr.Artifacts[1:] {
+		if a.Raw != nil {
+			t.Errorf("child %d carries bytes; it was never fetched", i)
+		}
+		if a.Parent != 0 || a.Depth != 1 {
+			t.Errorf("child %d has parent=%d depth=%d, want 0 and 1", i, a.Parent, a.Depth)
+		}
+		if a.Descriptor.Digest == "" {
+			t.Errorf("child %d has no digest; the index states one", i)
+		}
+	}
+}
+
+// A size we cannot know must be reported as unknown, not as zero. The index
+// states the size of each child MANIFEST, not of the layers underneath it, so
+// summing what we hold would understate a bundle by nearly all of it.
+func TestIndexPackageReportsUnknownSize(t *testing.T) {
+	root, bodies := indexGraph(t, 3)
+
+	tr, err := fetchPackage(t.Context(), &fakeManifests{bodies: bodies}, root)
+	if err != nil {
+		t.Fatalf("fetch: %v", err)
+	}
+	if tr.TotalBytes != nil {
+		t.Errorf("TotalBytes = %d, want nil: the layer bytes were never fetched", *tr.TotalBytes)
+	}
+	if tr.BlobCount != nil {
+		t.Errorf("BlobCount = %d, want nil", *tr.BlobCount)
+	}
+}
+
+// A plain image manifest IS fully measurable from the one fetch: its config and
+// layer descriptors are inside the bytes we already have.
+func TestSingleManifestPackageIsMeasured(t *testing.T) {
 	leaf := map[string]any{
 		"mediaType": registry.MediaTypeOCIManifest,
-		"layers":    []map[string]any{{"digest": registry.NewDigestFromBytes([]byte("l")).String(), "size": 1}},
+		"config":    map[string]any{"digest": registry.NewDigestFromBytes([]byte("cfg")).String(), "size": 7},
+		"layers": []map[string]any{
+			{"digest": registry.NewDigestFromBytes([]byte("l1")).String(), "size": 100},
+			{"digest": registry.NewDigestFromBytes([]byte("l2")).String(), "size": 200},
+		},
 	}
+	raw, err := json.Marshal(leaf)
+	if err != nil {
+		t.Fatal(err)
+	}
+	d := registry.NewDigestFromBytes(raw)
+
+	f := &fakeManifests{bodies: map[registry.Digest][]byte{d: raw}}
+	tr, err := fetchPackage(t.Context(), f, registry.Descriptor{
+		Digest: d, MediaType: registry.MediaTypeOCIManifest,
+	})
+	if err != nil {
+		t.Fatalf("fetch: %v", err)
+	}
+
+	if tr.TotalBytes == nil {
+		t.Fatal("a single manifest is fully measurable from its own bytes")
+	}
+	want := int64(7 + 100 + 200 + len(raw))
+	if *tr.TotalBytes != want {
+		t.Errorf("TotalBytes = %d, want %d (config + layers + the manifest itself)",
+			*tr.TotalBytes, want)
+	}
+	if tr.BlobCount == nil || *tr.BlobCount != 3 {
+		t.Errorf("BlobCount = %v, want 3", tr.BlobCount)
+	}
+}
+
+// An index listing the same child twice must record it once.
+func TestRepeatedChildIsRecordedOnce(t *testing.T) {
+	leaf := map[string]any{"mediaType": registry.MediaTypeOCIManifest}
 	leafRaw, err := json.Marshal(leaf)
 	if err != nil {
 		t.Fatal(err)
 	}
-	leafDigest := registry.NewDigestFromBytes(leafRaw)
-	child := registry.Descriptor{Digest: leafDigest, MediaType: registry.MediaTypeOCIManifest}
+	child := registry.Descriptor{
+		Digest: registry.NewDigestFromBytes(leafRaw), MediaType: registry.MediaTypeOCIManifest,
+	}
 
 	idx := map[string]any{
 		"mediaType": registry.MediaTypeOCIIndex,
@@ -196,20 +214,90 @@ func TestRepeatedChildIsFetchedOnce(t *testing.T) {
 	}
 	idxDigest := registry.NewDigestFromBytes(idxRaw)
 
-	f := &fakeManifests{bodies: map[registry.Digest][]byte{
-		idxDigest: idxRaw, leafDigest: leafRaw,
-	}}
-	tr, err := fetchTree(t.Context(), f, registry.Descriptor{
-		Digest: idxDigest, MediaType: registry.MediaTypeOCIIndex,
-	}, 4)
+	tr, err := fetchPackage(t.Context(),
+		&fakeManifests{bodies: map[registry.Digest][]byte{idxDigest: idxRaw}},
+		registry.Descriptor{Digest: idxDigest, MediaType: registry.MediaTypeOCIIndex})
 	if err != nil {
 		t.Fatalf("fetch: %v", err)
 	}
-
-	if f.calls != 2 {
-		t.Errorf("made %d fetches, want 2: a repeated child must be fetched once", f.calls)
-	}
 	if len(tr.Artifacts) != 2 {
-		t.Errorf("got %d artifacts, want 2", len(tr.Artifacts))
+		t.Errorf("recorded %d artifacts, want 2: a repeated child is one artifact",
+			len(tr.Artifacts))
+	}
+}
+
+// TestInspectFillsInWhatDiscoveryListed is the round trip the two-stage design
+// rests on: discovery records a package cheaply, inspect completes it, and the
+// completed record is what a transfer would move.
+func TestInspectFillsInWhatDiscoveryListed(t *testing.T) {
+	h := newHarness(t, baseDoc)
+
+	shared := fakeregistry.NewLayer("shared-base")
+	amd := h.reg.AddImage(testRepoPath, "", shared, fakeregistry.NewLayer("amd"))
+	arm := h.reg.AddImage(testRepoPath, "", shared, fakeregistry.NewLayer("arm"))
+	h.reg.AddIndex(testRepoPath, "v1.0.0",
+		[]string{amd, arm}, []string{"linux/amd64", "linux/arm64"})
+
+	if res := h.scan(); res.New != 1 {
+		t.Fatalf("expected 1 new package, got %d", res.New)
+	}
+
+	// After discovery: the index fetched, its two children listed, size unknown.
+	if got := h.count(`SELECT COUNT(*) FROM package_artifacts WHERE raw IS NULL`); got != 2 {
+		t.Fatalf("expected 2 listed-but-unfetched artifacts, got %d", got)
+	}
+	if got := h.count(`SELECT COUNT(*) FROM packages WHERE total_bytes IS NULL`); got != 1 {
+		t.Fatalf("expected the size to be unknown after discovery, got %d rows", got)
+	}
+
+	pkg, err := h.packages.GetPackage(t.Context(), "vendor-a", "v1.0.0")
+	if err != nil {
+		t.Fatalf("get package: %v", err)
+	}
+
+	client, err := h.scanner.clientFor(testRepoPath)
+	if err != nil {
+		t.Fatalf("client: %v", err)
+	}
+
+	res, err := InspectPackage(t.Context(), h.packages, pkg, client, 4)
+	if err != nil {
+		t.Fatalf("inspect: %v", err)
+	}
+
+	// Two children fetched; the index itself was already held but is re-read as
+	// part of the walk, so three requests in total.
+	if res.Fetched != 3 {
+		t.Errorf("fetched %d manifests, want 3 (the index and its two children)", res.Fetched)
+	}
+	if res.AlreadyExpanded {
+		t.Error("the package was not already expanded")
+	}
+
+	// Now nothing is merely listed, and the size is real.
+	if got := h.count(`SELECT COUNT(*) FROM package_artifacts WHERE raw IS NULL`); got != 0 {
+		t.Errorf("expected every artifact to carry bytes after inspect, %d still do not", got)
+	}
+	// Two configs and three distinct layers: the shared base counts once.
+	if res.Blobs != 5 {
+		t.Errorf("got %d blobs, want 5 — the shared base layer counted once", res.Blobs)
+	}
+	if res.Package.TotalBytes == nil || *res.Package.TotalBytes <= 0 {
+		t.Errorf("expected a measured size, got %v", res.Package.TotalBytes)
+	}
+	if res.Package.BlobCount == nil || *res.Package.BlobCount != 5 {
+		t.Errorf("expected blob_count 5 on the row, got %v", res.Package.BlobCount)
+	}
+
+	// Idempotent: the tree under a digest cannot change.
+	again, err := InspectPackage(t.Context(), h.packages, pkg, client, 4)
+	if err != nil {
+		t.Fatalf("re-inspect: %v", err)
+	}
+	if again.Blobs != res.Blobs || *again.Package.TotalBytes != *res.Package.TotalBytes {
+		t.Errorf("a second inspection produced different numbers: %+v vs %+v", again, res)
+	}
+	if got := h.count(`SELECT COUNT(*) FROM package_artifacts`); got != 3 {
+		t.Errorf("a second inspection duplicated artifacts: %d rows, want 3", got)
 	}
 }

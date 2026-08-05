@@ -327,7 +327,7 @@ func TestDifferentTagsNeverSupersede(t *testing.T) {
 	}
 }
 
-func TestArtifactTreeIsWalked(t *testing.T) {
+func TestIndexChildrenAreListedNotFetched(t *testing.T) {
 	h := newHarness(t, baseDoc)
 
 	shared := fakeregistry.NewLayer("shared-base-layer")
@@ -341,9 +341,10 @@ func TestArtifactTreeIsWalked(t *testing.T) {
 		t.Fatalf("expected 1 new package, got %d", res.New)
 	}
 
-	// The index plus its two children.
+	// The index plus the two children it lists — recorded WITHOUT a request
+	// each, from the descriptors the index already carries.
 	if got := h.count(`SELECT COUNT(*) FROM package_artifacts`); got != 3 {
-		t.Errorf("expected 3 artifacts (index + 2 manifests), got %d", got)
+		t.Errorf("expected 3 artifacts (index + the 2 it lists), got %d", got)
 	}
 	if got := h.count(`SELECT COUNT(*) FROM package_artifacts WHERE depth = 1`); got != 2 {
 		t.Errorf("expected 2 child artifacts at depth 1, got %d", got)
@@ -355,18 +356,46 @@ func TestArtifactTreeIsWalked(t *testing.T) {
 		t.Errorf("expected the amd64 platform recorded, got %d", got)
 	}
 
-	// Two configs and three distinct layers: the shared base counts once.
-	if got := h.count(`SELECT COUNT(*) FROM blobs`); got != 5 {
-		t.Errorf("expected 5 distinct blobs, got %d", got)
+	// Exactly one manifest was fetched: the tag's own. The children have the
+	// vendor's word for their digests, and the record says so rather than
+	// implying we verified bytes we never saw.
+	if got := h.count(`SELECT COUNT(*) FROM package_artifacts WHERE raw IS NOT NULL`); got != 1 {
+		t.Errorf("expected 1 fetched artifact, got %d", got)
+	}
+	if got := h.count(`SELECT COUNT(*) FROM package_artifacts WHERE raw IS NULL`); got != 2 {
+		t.Errorf("expected 2 listed-but-unfetched artifacts, got %d", got)
 	}
 
-	var blobCount int
-	if err := h.store.DB().QueryRowContext(t.Context(),
-		`SELECT blob_count FROM packages LIMIT 1`).Scan(&blobCount); err != nil {
-		t.Fatal(err)
+	// No blobs, and no claimed size: the layers live inside child manifests
+	// nobody fetched. Recording zero would be a number an operator would trust.
+	if got := h.count(`SELECT COUNT(*) FROM blobs`); got != 0 {
+		t.Errorf("expected no blobs for an index package, got %d", got)
 	}
-	if blobCount != 5 {
-		t.Errorf("expected blob_count 5 (shared layer counted once), got %d", blobCount)
+	if got := h.count(`SELECT COUNT(*) FROM packages WHERE blob_count IS NULL AND total_bytes IS NULL`); got != 1 {
+		t.Errorf("expected the package's size to be recorded as unknown, got %d rows", got)
+	}
+}
+
+// A package whose root is a plain image manifest IS fully measured from that
+// one fetch: its config and layer descriptors are inside the bytes we hold.
+func TestSingleManifestPackageIsFullyMeasured(t *testing.T) {
+	h := newHarness(t, baseDoc)
+	h.reg.AddImage(testRepoPath, "v1.0.0",
+		fakeregistry.NewLayer("a"), fakeregistry.NewLayer("b"))
+
+	if res := h.scan(); res.New != 1 {
+		t.Fatalf("expected 1 new package, got %d", res.New)
+	}
+
+	if got := h.count(`SELECT COUNT(*) FROM package_artifacts WHERE raw IS NOT NULL`); got != 1 {
+		t.Errorf("expected the manifest to be fetched, got %d", got)
+	}
+	// One config plus two layers.
+	if got := h.count(`SELECT COUNT(*) FROM blobs`); got != 3 {
+		t.Errorf("expected 3 blobs, got %d", got)
+	}
+	if got := h.count(`SELECT COUNT(*) FROM packages WHERE blob_count = 3 AND total_bytes > 0`); got != 1 {
+		t.Errorf("expected a measured size, got %d rows", got)
 	}
 }
 
@@ -578,15 +607,18 @@ func TestMalformedManifestDoesNotStopTheScan(t *testing.T) {
 
 // A package must be recorded whole or not at all: the manifest tree is fetched
 // before the transaction opens, so a mid-tree failure leaves no partial row.
-func TestFailedTreeFetchLeavesNoPartialPackage(t *testing.T) {
+func TestFailedManifestFetchLeavesNoPartialPackage(t *testing.T) {
 	h := newHarness(t, baseDoc)
 
 	amd := h.reg.AddImage(testRepoPath, "", fakeregistry.NewLayer("amd"))
 	arm := h.reg.AddImage(testRepoPath, "", fakeregistry.NewLayer("arm"))
-	h.reg.AddIndex(testRepoPath, "v1.0.0", []string{amd, arm}, []string{"linux/amd64", "linux/arm64"})
+	idx := h.reg.AddIndex(testRepoPath, "v1.0.0",
+		[]string{amd, arm}, []string{"linux/amd64", "linux/arm64"})
 
-	// Fail every attempt at one child manifest, so the tree walk cannot finish.
-	h.reg.FailNext(arm, 500, 100)
+	// Fail every attempt at the tag's OWN manifest. Children are no longer
+	// fetched, so this is the only manifest request a scan makes and the only
+	// one that can leave a half-written package behind.
+	h.reg.FailNext(idx, 500, 100)
 
 	res, err := h.scanner.Scan(t.Context())
 	if err != nil {

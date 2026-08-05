@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"sync"
 
 	"github.com/abhijeet-oxide/softwareGateway/internal/registry"
 )
@@ -76,104 +77,172 @@ type manifestBody struct {
 //
 // Called only for genuinely NEW packages. A scan where nothing changed costs
 // one HEAD per tag and fetches no manifest bodies at all (docs/design/07 §2).
-func fetchTree(ctx context.Context, src registry.ManifestReader, root registry.Descriptor) (tree, error) {
+func fetchTree(
+	ctx context.Context, src registry.ManifestReader, root registry.Descriptor, concurrency int,
+) (tree, error) {
 	var t tree
 
-	// Breadth-first, so parents are always recorded before their children and
-	// the parent index is valid by construction.
-	type queued struct {
-		desc   registry.Descriptor
-		parent int
-		depth  int
-	}
-	queue := []queued{{desc: root, parent: -1, depth: 0}}
+	// Breadth-first, LEVEL BY LEVEL, so parents are always recorded before
+	// their children and the parent index is valid by construction.
+	//
+	// A level's nodes are fetched in PARALLEL. They are the children of one
+	// index and are independent of each other; walking them one at a time was
+	// the last serial bottleneck in a scan, and the most expensive one — a
+	// product bundle with sixty artifacts cost sixty sequential round trips
+	// inside a single tag, which at 2.5s each is two and a half minutes during
+	// which the tag counter does not move at all. That is what "hundreds of
+	// requests succeeding and no progress" looked like from the outside.
+	level := []queuedChild{{desc: root, parent: -1, depth: 0}}
 
 	// Guards against an index that references itself, directly or through a
 	// cycle. A registry should not serve one; a walk that assumes it will not
 	// is a walk that hangs.
 	seen := map[registry.Digest]bool{}
 
-	for len(queue) > 0 {
-		cur := queue[0]
-		queue = queue[1:]
+	if concurrency <= 0 {
+		concurrency = 1
+	}
 
-		if seen[cur.desc.Digest] {
-			continue
+	for len(level) > 0 {
+		// De-duplicate within the level before fetching, so a diamond in the
+		// graph costs one request rather than two.
+		pending := make([]queuedChild, 0, len(level))
+		for _, q := range level {
+			if seen[q.desc.Digest] {
+				continue
+			}
+			seen[q.desc.Digest] = true
+			pending = append(pending, q)
 		}
-		seen[cur.desc.Digest] = true
-
-		if len(t.Artifacts) >= maxTreeArtifacts {
+		if len(pending) == 0 {
+			break
+		}
+		if len(t.Artifacts)+len(pending) > maxTreeArtifacts {
 			return tree{}, fmt.Errorf("manifest tree exceeds %d artifacts", maxTreeArtifacts)
 		}
 
-		desc, raw, err := src.FetchManifest(ctx, cur.desc.Digest.String())
-		if err != nil {
-			return tree{}, fmt.Errorf("fetch manifest %s: %w", cur.desc.Digest.Short(), err)
+		type fetched struct {
+			q    queuedChild
+			desc registry.Descriptor
+			raw  []byte
+			err  error
 		}
+		results := make([]fetched, len(pending))
 
-		// Carry the media type and platform from the referencing descriptor when
-		// the response omits them: an index states its children's platforms, and
-		// the child manifest itself does not.
-		if desc.MediaType == "" {
-			desc.MediaType = cur.desc.MediaType
-		}
-		if desc.Platform == nil {
-			desc.Platform = cur.desc.Platform
-		}
+		sem := make(chan struct{}, concurrency)
+		var wg sync.WaitGroup
+		for i, q := range pending {
+			wg.Add(1)
+			go func(i int, q queuedChild) {
+				defer wg.Done()
+				sem <- struct{}{}
+				defer func() { <-sem }()
 
-		var body manifestBody
-		if err := json.Unmarshal(raw, &body); err != nil {
-			return tree{}, fmt.Errorf("parse manifest %s: %w: %w",
-				desc.Digest.Short(), registry.ErrMalformedResponse, err)
+				desc, raw, err := src.FetchManifest(ctx, q.desc.Digest.String())
+				results[i] = fetched{q: q, desc: desc, raw: raw, err: err}
+			}(i, q)
 		}
-		// The body's own mediaType is authoritative where present — some
-		// registries return a generic Content-Type.
-		if body.MediaType != "" {
-			desc.MediaType = body.MediaType
-		}
-		if body.ArtifactType != "" {
-			desc.ArtifactType = body.ArtifactType
-		}
+		wg.Wait()
 
-		a := artifact{Descriptor: desc, Raw: raw, Parent: cur.parent, Depth: cur.depth}
+		var next []queuedChild
 
-		switch {
-		case registry.IsIndex(desc.MediaType):
-			if cur.depth >= maxTreeDepth {
-				return tree{}, fmt.Errorf("manifest tree deeper than %d levels", maxTreeDepth)
+		// Processed in level order, so the artifact list and every parent index
+		// into it are identical to what the sequential walk produced.
+		for _, r := range results {
+			if r.err != nil {
+				return tree{}, fmt.Errorf("fetch manifest %s: %w", r.q.desc.Digest.Short(), r.err)
 			}
-			idx := len(t.Artifacts)
-			for _, child := range body.Manifests {
-				if err := child.Digest.Validate(); err != nil {
-					return tree{}, fmt.Errorf("index %s: %w", desc.Digest.Short(), err)
-				}
-				queue = append(queue, queued{desc: child, parent: idx, depth: cur.depth + 1})
+			children, err := appendArtifact(&t, r.q.desc, r.desc, r.raw, r.q.parent, r.q.depth)
+			if err != nil {
+				return tree{}, err
 			}
-
-		default:
-			// An image manifest, a Helm chart, or any other single artifact.
-			// Anything that is not an index is treated as a leaf carrying blobs,
-			// which is what the OCI artifact model asks for — new artifact types
-			// arrive constantly and none of them should need a code change here.
-			if body.Config != nil && body.Config.Digest != "" {
-				if err := body.Config.Digest.Validate(); err != nil {
-					return tree{}, fmt.Errorf("manifest %s config: %w", desc.Digest.Short(), err)
-				}
-				a.Blobs = append(a.Blobs, blobRef{Descriptor: *body.Config, Kind: "config"})
-			}
-			for i, layer := range body.Layers {
-				if err := layer.Digest.Validate(); err != nil {
-					return tree{}, fmt.Errorf("manifest %s layer %d: %w", desc.Digest.Short(), i, err)
-				}
-				a.Blobs = append(a.Blobs, blobRef{Descriptor: layer, Kind: "layer", Ordinal: i})
-			}
+			next = append(next, children...)
 		}
-
-		t.Artifacts = append(t.Artifacts, a)
+		level = next
 	}
 
 	t.TotalBytes, t.BlobCount = measure(t.Artifacts)
 	return t, nil
+}
+
+// queuedChild is a manifest referenced by an index, waiting to be walked.
+type queuedChild struct {
+	desc   registry.Descriptor
+	parent int
+	depth  int
+}
+
+// appendArtifact records one fetched manifest and returns the children to walk.
+//
+// Split out of fetchTree so the parallel fetch and the strictly-ordered
+// bookkeeping stay separate. Everything here mutates the tree and must run on
+// one goroutine, in level order, or the parent indices would point at the
+// wrong artifacts.
+func appendArtifact(
+	t *tree, from, desc registry.Descriptor, raw []byte, parent, depth int,
+) ([]queuedChild, error) {
+	// Carry the media type and platform from the referencing descriptor when
+	// the response omits them: an index states its children's platforms, and
+	// the child manifest itself does not.
+	if desc.MediaType == "" {
+		desc.MediaType = from.MediaType
+	}
+	if desc.Platform == nil {
+		desc.Platform = from.Platform
+	}
+
+	var body manifestBody
+	if err := json.Unmarshal(raw, &body); err != nil {
+		return nil, fmt.Errorf("parse manifest %s: %w: %w",
+			desc.Digest.Short(), registry.ErrMalformedResponse, err)
+	}
+	// The body's own mediaType is authoritative where present — some registries
+	// return a generic Content-Type.
+	if body.MediaType != "" {
+		desc.MediaType = body.MediaType
+	}
+	if body.ArtifactType != "" {
+		desc.ArtifactType = body.ArtifactType
+	}
+
+	a := artifact{Descriptor: desc, Raw: raw, Parent: parent, Depth: depth}
+
+	var children []queuedChild
+
+	switch {
+	case registry.IsIndex(desc.MediaType):
+		if depth >= maxTreeDepth {
+			return nil, fmt.Errorf("manifest tree deeper than %d levels", maxTreeDepth)
+		}
+		idx := len(t.Artifacts)
+		for _, child := range body.Manifests {
+			if err := child.Digest.Validate(); err != nil {
+				return nil, fmt.Errorf("index %s: %w", desc.Digest.Short(), err)
+			}
+			children = append(children, queuedChild{desc: child, parent: idx, depth: depth + 1})
+		}
+
+	default:
+		// An image manifest, a Helm chart, or any other single artifact.
+		// Anything that is not an index is treated as a leaf carrying blobs,
+		// which is what the OCI artifact model asks for — new artifact types
+		// arrive constantly and none of them should need a code change here.
+		if body.Config != nil && body.Config.Digest != "" {
+			if err := body.Config.Digest.Validate(); err != nil {
+				return nil, fmt.Errorf("manifest %s config: %w", desc.Digest.Short(), err)
+			}
+			a.Blobs = append(a.Blobs, blobRef{Descriptor: *body.Config, Kind: "config"})
+		}
+		for i, layer := range body.Layers {
+			if err := layer.Digest.Validate(); err != nil {
+				return nil, fmt.Errorf("manifest %s layer %d: %w", desc.Digest.Short(), i, err)
+			}
+			a.Blobs = append(a.Blobs, blobRef{Descriptor: layer, Kind: "layer", Ordinal: i})
+		}
+	}
+
+	t.Artifacts = append(t.Artifacts, a)
+	return children, nil
 }
 
 // measure sums distinct content, counting each digest once.

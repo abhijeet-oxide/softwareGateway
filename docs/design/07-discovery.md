@@ -245,12 +245,19 @@ Measured in the field: 48 repositories, 28 admitted tags in the first one, and a
 
 ### What changed
 
-Two bounded axes, because they cost different things:
+Three bounded axes, because they cost different things:
 
 | | Default | Bounded by |
 |---|---|---|
-| `discovery.concurrency.repositories` | 4 | each repository has its own client, so this multiplies connections and token exchanges against someone else's registry |
-| `discovery.concurrency.tags` | 8 | tags within a repository share one client, so they are already bounded by its connection pool and rate limiter — the cheaper axis to widen |
+| `discovery.concurrency.repositories` | 4 | repositories are independent; they share the source's pool and limiter |
+| `discovery.concurrency.tags` | 8 | tags within a repository share one client, so they are already bounded by its connection pool and rate limiter |
+| `discovery.concurrency.artifacts` | 8 | siblings of one index — the narrowest axis, and the one that was invisible |
+
+**The artifact axis was the last serial bottleneck, and the one that looked like a hang.** A tag's manifest tree was walked strictly one manifest at a time. A product bundle whose index references sixty artifacts therefore cost sixty *sequential* round trips inside a single tag — two and a half minutes at 2.5 s each, during which the tag counter did not move at all while every one of those requests succeeded. From the outside, "hundreds of requests returning 200 and no progress" is indistinguishable from a hang.
+
+The walk is still breadth-first and still level by level, so parents are recorded before their children and `Artifact.Parent` — an *index* into the artifact slice — stays correct. Only the fetches within one level run in parallel; the bookkeeping that appends to the tree runs on one goroutine in level order. A test asserts the parallel walk produces a tree byte-identical to the sequential one, because a reordering there would silently reparent artifacts rather than fail.
+
+Progress now also reports `artifacts`, the count of manifests fetched. It is the counter that keeps moving when nothing else does.
 
 Both are clamped to 64: a typo of `1000` must not become a thousand connections to a vendor.
 

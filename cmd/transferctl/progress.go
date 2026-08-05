@@ -132,6 +132,12 @@ func describeScanning(s v1.DiscoverySourceState) string {
 		if s.Phase == "RESOLVING_TAGS" && s.TagsTotal > 0 {
 			fmt.Fprintf(b, " · %d/%d tags", s.TagsResolved, s.TagsTotal)
 		}
+		if s.Artifacts > 0 {
+			// The counter that keeps moving while a single large tag is being
+			// walked. Without it the display sits on "1/43 tags" for minutes
+			// while hundreds of manifest fetches succeed.
+			fmt.Fprintf(b, " · %d artifacts", s.Artifacts)
+		}
 		if s.NewPackages > 0 {
 			fmt.Fprintf(b, " · %d new", s.NewPackages)
 		}

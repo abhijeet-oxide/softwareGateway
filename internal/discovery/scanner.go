@@ -612,10 +612,11 @@ func (s *Scanner) scanTag(
 	// Fetched BEFORE the transaction opens: this is network I/O of unbounded
 	// duration, and holding a database transaction across it would pin a
 	// connection and a snapshot for as long as the vendor takes to answer.
-	t, err := fetchTree(ctx, client, desc)
+	t, err := fetchTree(ctx, client, desc, s.sourceCfg.Discovery.Concurrency.EffectiveArtifacts())
 	if err != nil {
 		return tagOutcome{}, err
 	}
+	s.progress.update(func(p *ScanProgress) { p.Artifacts += len(t.Artifacts) })
 
 	return s.recordPackage(ctx, client, repoID, repoPath, tag, desc, t)
 }

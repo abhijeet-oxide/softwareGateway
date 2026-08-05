@@ -445,8 +445,11 @@ type DiscoverySourceState struct {
 	CurrentRepository    string `json:"currentRepository,omitempty"`
 	TagsTotal            int    `json:"tagsTotal,omitempty"`
 	TagsResolved         int    `json:"tagsResolved,omitempty"`
-	NewPackages          int    `json:"newPackages,omitempty"`
-	Errors               int    `json:"errors,omitempty"`
+	// Artifacts is manifests fetched so far. A single tag with a large artifact
+	// tree takes minutes, during which this is the only counter that moves.
+	Artifacts   int `json:"artifacts,omitempty"`
+	NewPackages int `json:"newPackages,omitempty"`
+	Errors      int `json:"errors,omitempty"`
 
 	// LastRunAt and the fields below describe the last COMPLETED scan.
 	LastRunAt        string `json:"lastRunAt,omitempty"`

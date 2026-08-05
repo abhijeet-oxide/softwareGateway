@@ -60,6 +60,14 @@ type ScanProgress struct {
 	// grows towards nothing in particular.
 	TagsTotal int
 
+	// Artifacts is manifests fetched across every tag so far.
+	//
+	// The counter that moves when nothing else does. A single tag with a large
+	// artifact tree can take minutes, and without this the display sat on
+	// "1/43 tags" while hundreds of requests completed successfully — which is
+	// what "so many requests succeed but the CLI reports no progress" was.
+	Artifacts int
+
 	New    int
 	Errors int
 }

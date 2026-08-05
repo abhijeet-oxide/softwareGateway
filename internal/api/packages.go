@@ -428,6 +428,7 @@ func (s *Server) handleDiscoveryStatus(w http.ResponseWriter, r *http.Request) {
 			state.CurrentRepository = p.CurrentRepository
 			state.TagsTotal = p.TagsTotal
 			state.TagsResolved = p.TagsResolved
+			state.Artifacts = p.Artifacts
 			state.NewPackages = p.New
 			state.Errors = p.Errors
 		}

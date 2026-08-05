@@ -75,15 +75,13 @@ type Source struct {
 
 	// Repositories names several explicitly. Use this when a product ships as
 	// separate repositories — platform/core, platform/db, platform/ui.
+	//
+	// LEAVING BOTH EMPTY IS THE INTERESTING CASE: it means "every repository on
+	// this registry", found from the catalog and narrowed by
+	// discovery.repositoryFilters. That is what a product needs when a new
+	// component ships as a new repository and nobody edits the ConfigMap in
+	// time — which is the normal way this goes wrong.
 	Repositories []string `json:"repositories,omitempty"`
-
-	// RepositoryDiscovery finds repositories from the registry catalog instead
-	// of naming them. Off by default; see the type's documentation for why.
-	RepositoryDiscovery RepositoryDiscovery `json:"repositoryDiscovery,omitempty"`
-
-	// RepositoryFilters narrows the repository set, however it was obtained.
-	// One rule, whether the set came from configuration or from the catalog.
-	RepositoryFilters Filters `json:"repositoryFilters,omitempty"`
 
 	Type           RegistryType    `json:"type,omitempty"`
 	Anonymous      bool            `json:"anonymous,omitempty"`
@@ -91,6 +89,18 @@ type Source struct {
 	Discovery      Discovery       `json:"discovery,omitempty"`
 	RateLimits     RateLimits      `json:"rateLimits,omitempty"`
 	Network        *Network        `json:"network,omitempty"`
+}
+
+// EnumeratesRepositories reports whether this source finds its repositories
+// from the registry rather than being told them.
+//
+// There is deliberately no `repositoryDiscovery.enabled` flag. Naming no
+// repositories IS the statement "I do not know them yet, find them" — a
+// separate switch would let configuration say one thing and mean another
+// (repositories listed AND discovery off, or none listed AND discovery off,
+// which scans nothing while looking configured).
+func (s Source) EnumeratesRepositories() bool {
+	return len(s.DeclaredRepositories()) == 0
 }
 
 // DeclaredRepositories returns the repositories named in configuration.
@@ -115,39 +125,6 @@ func (s Source) DeclaredRepositories() []string {
 		add(r)
 	}
 	return out
-}
-
-// RepositoryDiscovery enumerates repositories from `/v2/_catalog`.
-//
-// OFF BY DEFAULT, deliberately. Catalog enumeration is slow on large
-// registries, inconsistently paginated, and frequently forbidden for the
-// credentials a vendor issues — and enabling it makes discovery scope depend on
-// registry-side permissions rather than on Git, which is the opposite of what a
-// GitOps-managed system wants (docs/design/07 §2).
-//
-// It exists because that argument does not hold for an INTERNAL registry you
-// control, where a product legitimately spans dozens of repositories and
-// enumerating them by hand in YAML is its own kind of drift. Pair it with
-// RepositoryFilters: an unfiltered catalog scan of a shared registry will find
-// every other team's repositories too.
-type RepositoryDiscovery struct {
-	Enabled bool `json:"enabled,omitempty"`
-	// MaxRepositories bounds what one scan will adopt. A catalog that suddenly
-	// returns thousands of repositories is far more likely to be a
-	// misconfiguration than a real change, and adopting them all would create
-	// thousands of scanners against one registry.
-	MaxRepositories int `json:"maxRepositories,omitempty"`
-}
-
-// DefaultMaxDiscoveredRepositories caps catalog adoption when unset.
-const DefaultMaxDiscoveredRepositories = 200
-
-// EffectiveMaxRepositories returns the configured cap or the default.
-func (r RepositoryDiscovery) EffectiveMaxRepositories() int {
-	if r.MaxRepositories <= 0 {
-		return DefaultMaxDiscoveredRepositories
-	}
-	return r.MaxRepositories
 }
 
 // Filters is an include/exclude pair of RE2 patterns.
@@ -194,12 +171,45 @@ var ValidRegistryTypes = []RegistryType{
 	RegistryGeneric, RegistryACR, RegistryArtifactory, RegistryQuay,
 }
 
+// Discovery governs what a source looks for, and how often.
+//
+// Both filters live here because discovery is what they govern: a scan finds
+// REPOSITORIES and then TAGS, and each step gets a filter. Splitting them
+// across the document would make it read as though they were different kinds of
+// thing.
 type Discovery struct {
 	// Enabled defaults to true for sources; use the accessor rather than the
 	// field so the nil/zero case is handled once.
-	Enabled    *bool      `json:"enabled,omitempty"`
-	Interval   Duration   `json:"interval,omitempty"`
+	Enabled  *bool    `json:"enabled,omitempty"`
+	Interval Duration `json:"interval,omitempty"`
+
+	// RepositoryFilters narrows which repositories are scanned.
+	//
+	// Its main use is a source that names no repositories and therefore finds
+	// them all: on a registry shared with other teams, this is what keeps the
+	// scope to yours.
+	RepositoryFilters Filters `json:"repositoryFilters,omitempty"`
+
+	// TagFilters narrows which tags within those repositories are recorded.
 	TagFilters TagFilters `json:"tagFilters,omitempty"`
+
+	// MaxRepositories bounds what one scan will adopt when enumerating.
+	//
+	// A catalog that suddenly returns thousands of repositories is far more
+	// likely to be a misconfiguration than a real change, and adopting them all
+	// would point thousands of scanners at one registry.
+	MaxRepositories int `json:"maxRepositories,omitempty"`
+}
+
+// DefaultMaxRepositories caps catalog adoption when unset.
+const DefaultMaxRepositories = 200
+
+// EffectiveMaxRepositories returns the configured cap or the default.
+func (d Discovery) EffectiveMaxRepositories() int {
+	if d.MaxRepositories <= 0 {
+		return DefaultMaxRepositories
+	}
+	return d.MaxRepositories
 }
 
 // IsEnabled reports whether discovery should poll this source.

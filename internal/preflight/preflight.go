@@ -104,28 +104,30 @@ func (c *Checker) CheckProduct(ctx context.Context, p *product.Product) ProductR
 		network    *product.Network
 		limits     product.RateLimits
 		catalog    bool
+		filtered   bool
 	}
 
 	var jobs []job
 
 	for _, s := range p.Spec.Sources {
-		declared := s.DeclaredRepositories()
-		if len(declared) == 0 {
-			// A source that enumerates its repositories has none to name, so
-			// probe the registry itself and the catalog permission.
+		if s.EnumeratesRepositories() {
+			// A source that names no repositories finds them from the catalog,
+			// so the thing to probe is the registry itself and whether this
+			// credential may enumerate it.
 			jobs = append(jobs, job{
 				name: s.Name, role: string(product.RoleSource), registry: s.Registry,
 				anonymous: s.Anonymous, creds: s.CredentialsRef, network: s.Network,
-				limits: s.RateLimits, catalog: s.RepositoryDiscovery.Enabled,
+				limits: s.RateLimits, catalog: true,
+				filtered: len(s.Discovery.RepositoryFilters.Include) > 0 ||
+					len(s.Discovery.RepositoryFilters.Exclude) > 0,
 			})
 			continue
 		}
-		for _, repo := range declared {
+		for _, repo := range s.DeclaredRepositories() {
 			jobs = append(jobs, job{
 				name: s.Name, role: string(product.RoleSource), registry: s.Registry,
 				repository: repo, anonymous: s.Anonymous, creds: s.CredentialsRef,
 				network: s.Network, limits: s.RateLimits,
-				catalog: s.RepositoryDiscovery.Enabled,
 			})
 		}
 	}
@@ -154,7 +156,7 @@ func (c *Checker) CheckProduct(ctx context.Context, p *product.Product) ProductR
 			results[i] = c.checkRepository(jobCtx, p, repoSpec{
 				Name: j.name, Role: j.role, Registry: j.registry, Repository: j.repository,
 				Anonymous: j.anonymous, Credentials: j.creds, Network: j.network,
-				RateLimits: j.limits, Catalog: j.catalog,
+				RateLimits: j.limits, Catalog: j.catalog, Filtered: j.filtered,
 			})
 		}(i, j)
 	}
@@ -197,7 +199,12 @@ type repoSpec struct {
 	Credentials *product.CredentialsRef
 	Network     *product.Network
 	RateLimits  product.RateLimits
-	Catalog     bool
+	// Catalog means this source enumerates its repositories.
+	Catalog bool
+	// Filtered means discovery.repositoryFilters is set. Used to warn about an
+	// unfiltered enumeration, which is legitimate on a dedicated registry and a
+	// mistake on a shared one.
+	Filtered bool
 }
 
 // checkRepository runs the probes for one repository, in dependency order.
@@ -414,30 +421,40 @@ func (c *Checker) checkCatalog(ctx context.Context, cfg registry.ClientConfig, s
 	}
 
 	started := time.Now()
-	repos, err := cat.ListAllRepositories(ctx, 5)
+	// Deliberately over the cap a scan would use, so the report can say how
+	// much an unfiltered source would actually adopt — the fact worth acting
+	// on, rather than a blanket rule that filters are mandatory.
+	repos, err := cat.ListAllRepositories(ctx, 500)
 	latency := time.Since(started)
 
 	switch {
+	case err == nil && !spec.Filtered && len(repos) > 1:
+		return Step{Name: "can list repositories", Status: StatusWarning, Latency: latency,
+			Detail: fmt.Sprintf("%d repositories on this registry, and no repositoryFilters", len(repos)),
+			Hint: "every one of them will be scanned. Correct if this registry is " +
+				"dedicated to this product; on a shared registry add " +
+				"discovery.repositoryFilters.include to scope it"}
+
 	case err == nil:
-		return Step{Name: "can enumerate repositories", Status: StatusOK, Latency: latency,
-			Detail: fmt.Sprintf("catalog readable (%d visible in a sample)", len(repos))}
+		return Step{Name: "can list repositories", Status: StatusOK, Latency: latency,
+			Detail: fmt.Sprintf("%d repositories visible", len(repos))}
 
 	case registry.ClassOf(err) == registry.ClassAuth:
-		// The single most common configuration mistake with repositoryDiscovery,
-		// and the one whose raw error is least informative.
-		return Step{Name: "can enumerate repositories", Status: StatusFailed, Latency: latency,
-			Detail: "the registry refused catalog enumeration",
+		// The most common failure for a source that names no repositories, and
+		// the one whose raw error is least informative.
+		return Step{Name: "can list repositories", Status: StatusFailed, Latency: latency,
+			Detail: "the registry refused to list its repositories",
 			Hint: "this credential is scoped to pulling named repositories, not to " +
-				"listing the registry — common for vendor-issued credentials. " +
-				"Name the repositories under `repositories:` instead"}
+				"enumerating the registry — common for vendor-issued credentials. " +
+				"Name them under `repositories:` instead"}
 
 	case errors.Is(err, registry.ErrNotFound):
-		return Step{Name: "can enumerate repositories", Status: StatusFailed, Latency: latency,
+		return Step{Name: "can list repositories", Status: StatusFailed, Latency: latency,
 			Detail: "the registry does not implement /v2/_catalog",
 			Hint:   "name the repositories under `repositories:` instead"}
 
 	default:
-		return Step{Name: "can enumerate repositories", Status: StatusFailed, Latency: latency,
+		return Step{Name: "can list repositories", Status: StatusFailed, Latency: latency,
 			Detail: err.Error()}
 	}
 }

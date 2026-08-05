@@ -231,3 +231,106 @@ const (
 	OperationPromote   Operation = "PROMOTE"
 	OperationVerify    Operation = "VERIFY"
 )
+
+// ---------------------------------------------------------------------------
+// Packages
+// ---------------------------------------------------------------------------
+
+// Package is the API view of a discovered software package.
+//
+// Identity is (source repository, tag, manifest digest) — the digest is part of
+// it, which is why a re-pushed tag produces a second Package rather than
+// mutating the first (docs/design/01 §2.2).
+type Package struct {
+	// Name is the AIP-122 resource name: "products/{product}/packages/{package}".
+	Name      string `json:"name"`
+	PackageID string `json:"packageId"`
+	Product   string `json:"product"`
+
+	Tag            string `json:"tag"`
+	ManifestDigest string `json:"manifestDigest"`
+	MediaType      string `json:"mediaType"`
+
+	// TotalBytes counts each distinct digest ONCE. A fat index whose platforms
+	// share a base layer transfers that layer once, so summing naively would
+	// overstate the cost — sometimes several-fold.
+	TotalBytes    Int64String `json:"totalBytes"`
+	ArtifactCount int         `json:"artifactCount"`
+	BlobCount     int         `json:"blobCount"`
+
+	State        PackageState `json:"state"`
+	DiscoveredAt string       `json:"discoveredAt"`
+
+	// SupersededBy names the package that replaced this one. Set only when the
+	// SAME TAG was re-pushed with different content; different tags never
+	// supersede each other.
+	SupersededBy string `json:"supersededBy,omitempty"`
+
+	// Source identifies where it was discovered.
+	SourceRepository string `json:"sourceRepository,omitempty"`
+}
+
+// ListPackagesResponse is returned by GET /api/v1/products/{product}/packages.
+type ListPackagesResponse struct {
+	Packages      []Package `json:"packages"`
+	NextPageToken string    `json:"nextPageToken,omitempty"`
+}
+
+// Artifact is one manifest in a package's tree.
+type Artifact struct {
+	ArtifactID string `json:"artifactId"`
+	ParentID   string `json:"parentId,omitempty"`
+
+	Digest       string      `json:"digest"`
+	MediaType    string      `json:"mediaType"`
+	ArtifactType string      `json:"artifactType,omitempty"`
+	SizeBytes    Int64String `json:"sizeBytes"`
+	// Platform is "linux/amd64". Empty for non-image artifacts such as Helm
+	// charts and configuration bundles.
+	Platform string `json:"platform,omitempty"`
+	// Depth is 0 for the root; an index's children are 1.
+	Depth int `json:"depth"`
+}
+
+// ListArtifactsResponse is returned by
+// GET /api/v1/products/{product}/packages/{package}/artifacts.
+type ListArtifactsResponse struct {
+	Artifacts []Artifact `json:"artifacts"`
+}
+
+// TransferRequest is the API view of requested work.
+type TransferRequest struct {
+	RequestID string    `json:"requestId"`
+	Operation Operation `json:"operation"`
+	Priority  int       `json:"priority"`
+	State     string    `json:"state"`
+	// Origin is API, CLI, AUTO_DOWNLOAD or SCHEDULE.
+	Origin       string `json:"origin"`
+	RequestedBy  string `json:"requestedBy"`
+	AutoRuleName string `json:"autoRuleName,omitempty"`
+}
+
+// DiscoverPackagesRequest is the body of the packages:discover custom method.
+type DiscoverPackagesRequest struct {
+	// Source limits the scan to one source. Empty scans every source of the
+	// product.
+	Source string `json:"source,omitempty"`
+}
+
+// DiscoverPackagesResponse reports what a triggered scan did.
+//
+// Returned synchronously because a scan is bounded work — one HEAD per tag —
+// and an operator triggering it after a vendor announcement wants the answer,
+// not a job ID to poll.
+type DiscoverPackagesResponse struct {
+	TagsListed   int `json:"tagsListed"`
+	TagsAdmitted int `json:"tagsAdmitted"`
+	// PackagesDiscovered counts genuinely new packages. Zero on a re-scan is
+	// the expected, correct result.
+	PackagesDiscovered int   `json:"packagesDiscovered"`
+	Superseded         int   `json:"superseded"`
+	RequestsCreated    int   `json:"requestsCreated"`
+	DurationMs         int64 `json:"durationMs"`
+	// TagErrors are per-tag failures that did not stop the scan.
+	TagErrors []string `json:"tagErrors,omitempty"`
+}

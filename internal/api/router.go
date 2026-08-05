@@ -15,6 +15,7 @@ import (
 	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
 
 	"github.com/abhijeet-oxide/softwareGateway/internal/api/middleware"
+	"github.com/abhijeet-oxide/softwareGateway/internal/discovery"
 	"github.com/abhijeet-oxide/softwareGateway/internal/platform/health"
 	"github.com/abhijeet-oxide/softwareGateway/internal/platform/metrics"
 	"github.com/abhijeet-oxide/softwareGateway/internal/product"
@@ -25,6 +26,17 @@ import (
 // platform/leader; declared here so api does not import leader directly.
 type Leadership interface{ IsLeader() bool }
 
+// Discoverer triggers scans and reports whether discovery is running.
+//
+// A consumer-defined interface rather than *discovery.Loop, so the API package
+// depends on the two methods it calls instead of the whole engine (docs/design
+// /15 §6).
+type Discoverer interface {
+	Running() bool
+	Trigger(ctx context.Context, productName, sourceName string) (discovery.ScanResult, error)
+	TriggerProduct(ctx context.Context, productName string) (discovery.ScanResult, error)
+}
+
 // Deps are the Coordinator's dependencies.
 type Deps struct {
 	Logger    *slog.Logger
@@ -32,6 +44,8 @@ type Deps struct {
 	Health    *health.Registry
 	Products  *product.Registry
 	Store     store.Store
+	Packages  *store.Packages
+	Discovery Discoverer
 	Leader    Leadership
 	Component string
 }
@@ -105,6 +119,21 @@ func (s *Server) routes() chi.Router {
 
 		r.Get("/products", s.handleListProducts)
 		r.Get("/products/{product}", s.handleGetProduct)
+
+		// Packages. Registered only when there is a store behind them, so a
+		// deployment without persistence returns an honest 404 rather than a
+		// route that always fails.
+		if s.deps.Packages != nil {
+			r.Get("/products/{product}/packages", s.handleListPackages)
+			r.Get("/products/{product}/packages/{package}", s.handleGetPackage)
+			r.Get("/products/{product}/packages/{package}/artifacts", s.handleListArtifacts)
+		}
+		// AIP-136 custom method. Registered whenever discovery is wired, so a
+		// follower can answer with the reason it is not scanning rather than
+		// with a 404 that reads like a missing feature.
+		if s.deps.Discovery != nil {
+			r.Post("/products/{product}/packages:discover", s.handleDiscoverPackages)
+		}
 	})
 
 	return r

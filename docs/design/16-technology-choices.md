@@ -161,3 +161,29 @@ Doc 17 §4 item 6 requires that implementation divergences be written down rathe
 ### `revive`'s `exported` rule is disabled
 
 It fired ~50 times, almost entirely on state-machine and enum constants whose names already carry their meaning. `// JobPending is the pending state` is the restatement-of-identifier noise that teaches readers to skip comments. The narrative lives in package doc comments and in this document set. Types and functions with non-obvious behaviour are documented regardless — enforced by review, which can tell explanation from repetition.
+
+---
+
+These were found while building M2.
+
+### `sqlc` was deferred again — and this is the last time
+
+*Planned:* generated, compile-time-checked queries.
+
+*Actual:* hand-written SQL behind the `Dialect` placeholder rewriter, in `internal/store/packages.go` and `internal/catalog/catalog.go`.
+
+*Why:* M2's queries are simple — inserts with `ON CONFLICT DO NOTHING`, one filtered list, one ordered lookup — and dual-dialect codegen costs more setup than it returns on that shape. The decision is made in M3 against the real test case: the dequeue statement with `FOR UPDATE SKIP LOCKED` is hand-tuned, correctness-critical, and dialect-divergent enough that it will not go through the rewriter at all. That is where compile-time checking pays, so that is where the choice gets made — not guessed at here.
+
+*What would change our mind sooner:* a query whose column list drifts from the schema without a test catching it. None has yet, because every query in this milestone is exercised against a migrated database in a test.
+
+### The registry retry schedule and the discovery backoff compose
+
+Not a divergence from a planned choice, but a behaviour worth writing down because it surprised us in verification.
+
+A hard registry outage takes **~2 minutes** to surface as a failed scan, not ~1 second. The transport retries the transient class eight times with full-jitter backoff ([10](10-state-machines.md) §6), and only when those are exhausted does the scan return an error and the discovery loop's own backoff ([07](07-discovery.md) §7) engage. The two layers are correct individually and multiply.
+
+This is the right behaviour — a registry blip should be absorbed by the transport without the loop ever noticing — but it means `discovery_last_success_timestamp_seconds` is the metric to alert on, not scan failure rate: the failure takes minutes to appear, while the staleness is visible immediately.
+
+### Registry backends self-register
+
+`internal/registry/factory.go` holds a name-to-constructor map that backends populate from `init`. The abstraction does not import its implementations, so `generic` — and later `acr`, `artifactory`, `quay` — can be added without editing the interface they implement. The cost is that something must import the backend for its side effect; `internal/discovery/clients.go` does, with a comment saying why.

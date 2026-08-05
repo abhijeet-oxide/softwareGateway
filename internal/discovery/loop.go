@@ -88,16 +88,47 @@ type worker struct {
 	log     *slog.Logger
 	metrics *metrics.Registry
 
-	// trigger carries manual scan requests. Buffered to depth one, which is
-	// what collapses concurrent triggers: a second :discover arriving while a
-	// scan runs finds the slot occupied and returns the in-progress scan rather
-	// than queueing a redundant one (docs/design/07 §8).
-	trigger chan chan ScanResult
+	// trigger wakes the polling loop for a manual scan. It carries no payload:
+	// the scan itself is claimed through inflight, so a wake-up that arrives
+	// after someone else already started the scan is simply a no-op.
+	trigger chan struct{}
 
-	mu      sync.Mutex
+	// ctx is the loop's context, held so a scan is never bound to the lifetime
+	// of the HTTP request that asked for it. A caller giving up must stop the
+	// caller waiting, not the scan — other callers may be joined to it, and the
+	// scheduled loop certainly is.
+	ctx context.Context
+
+	mu sync.Mutex
+	// inflight is the scan currently running, if any. It is what makes
+	// concurrent triggers COLLAPSE: a second :discover joins this one and gets
+	// its real result (docs/design/07 §8).
+	//
+	// This used to be a one-deep buffered channel, and it did not work. A
+	// trigger that found the slot occupied returned w.last — the PREVIOUS
+	// scan's result, or the zero value when no scan had completed yet — with no
+	// error and no indication that nothing had run. The caller saw a successful
+	// scan of zero repositories in 0ms, and `packages discover` printed
+	// "Nothing new. A scan that finds nothing is the normal steady state, not a
+	// failure." It was not a steady state. No scan had happened at all.
+	inflight *scanCall
+
 	last    ScanResult
 	lastErr error
 	lastRun time.Time
+}
+
+// scanCall is one execution of a scan, shared by everyone waiting on it.
+type scanCall struct {
+	done chan struct{}
+	// running distinguishes "claimed by a trigger, not yet started" from
+	// "executing". Without it the polling loop cannot tell a claim it should
+	// pick up from a scan it should leave alone, and a trigger that claimed a
+	// scan nobody executes waits forever.
+	running bool // guarded by worker.mu
+
+	res ScanResult
+	err error
 }
 
 // Start begins polling. Call only on the leader.
@@ -137,11 +168,19 @@ func (l *Loop) Start(ctx context.Context, specs []SourceSpec, packages *store.Pa
 			scanner: scanner,
 			log:     l.log.With("product", spec.Product.Metadata.Name, "source", spec.SourceName),
 			metrics: l.metrics,
-			trigger: make(chan chan ScanResult, 1),
+			trigger: make(chan struct{}, 1),
 		}
 	}
 
 	loopCtx, cancel := context.WithCancel(ctx)
+
+	// Set before the workers become reachable through l.workers, so a :discover
+	// arriving in the first milliseconds cannot find a worker with no context
+	// and no way to observe shutdown.
+	for _, w := range built {
+		w.ctx = loopCtx
+	}
+
 	l.cancel = cancel
 	l.workers = built
 	l.running = true
@@ -240,6 +279,10 @@ func (l *Loop) TriggerProduct(ctx context.Context, productName string) (ScanResu
 		combined.TagErrors = append(combined.TagErrors, res.TagErrors...)
 		combined.RepositoryErrors = append(combined.RepositoryErrors, res.RepositoryErrors...)
 		combined.Duration += res.Duration
+		// Any source that was joined rather than started makes the whole
+		// response a partly-collapsed one. Reported pessimistically: claiming a
+		// fresh scan when part of it was not is the error that misleads.
+		combined.Collapsed = combined.Collapsed || res.Collapsed
 	}
 	return combined, firstErr
 }
@@ -304,21 +347,21 @@ func (w *worker) run(ctx context.Context) {
 		case <-ctx.Done():
 			return
 
-		case reply := <-w.trigger:
-			res, err := w.scanOnce(ctx)
+		case <-w.trigger:
+			// A wake-up, not a request. The caller has already claimed the scan
+			// through inflight, so all this arm does is run whatever is claimed —
+			// and if the caller lost the claim to a scan already running, scan
+			// returns that one's result and nothing extra happens.
+			_, err := w.scan(ctx)
 			if err == nil {
 				failures = 0
 			}
 			// A manual scan resets the schedule: having just scanned, the next
 			// automatic one is a full interval away.
 			resetTimer(timer, interval)
-			select {
-			case reply <- res:
-			default:
-			}
 
 		case <-timer.C:
-			_, err := w.scanOnce(ctx)
+			_, err := w.scan(ctx)
 			if err != nil {
 				failures++
 				wait := policy.Delay(failures - 1)
@@ -346,33 +389,120 @@ func resetTimer(t *time.Timer, d time.Duration) {
 
 // triggerScan asks the worker to scan now and waits for the result.
 //
-// If the trigger slot is already occupied, this call joins that pending scan
-// rather than queueing another.
+// If a scan is already running — whether started by the interval or by another
+// caller — this joins it and returns THAT scan's result, marked Collapsed. It
+// never starts a second concurrent scan against the same source, and it never
+// returns a result from a scan that has already finished: joining a running
+// scan gives fresh data, reporting a previous one does not.
 func (w *worker) triggerScan(ctx context.Context) (ScanResult, error) {
-	reply := make(chan ScanResult, 1)
+	call, mine := w.joinScan()
 
-	select {
-	case w.trigger <- reply:
-	case <-ctx.Done():
-		return ScanResult{}, ctx.Err()
-	default:
-		// A scan is already pending or running. Report its last known result
-		// rather than starting a second one.
-		w.mu.Lock()
-		last, err := w.last, w.lastErr
-		w.mu.Unlock()
-		return last, err
+	if mine {
+		// Wake the polling loop, which owns execution so that a scan is always
+		// on the same goroutine as the backoff and the schedule. Buffered to
+		// depth one and non-blocking: the claim is what matters, and a wake-up
+		// that finds the slot full means the loop is already about to look.
+		select {
+		case w.trigger <- struct{}{}:
+		default:
+		}
 	}
 
 	select {
-	case res := <-reply:
-		w.mu.Lock()
-		err := w.lastErr
-		w.mu.Unlock()
-		return res, err
+	case <-call.done:
+		res := call.res
+		res.Collapsed = !mine
+		return res, call.err
+
 	case <-ctx.Done():
+		// The caller gave up. The scan continues — it is the loop's work now,
+		// other callers may be waiting on it, and abandoning it would waste the
+		// registry round trips already spent.
 		return ScanResult{}, ctx.Err()
+
+	case <-w.loopDone():
+		// The loop stopped, most often because leadership was lost. Say so
+		// rather than waiting on a scan that will never run.
+		return ScanResult{}, fmt.Errorf("%w: discovery stopped while the scan was pending",
+			ErrNoSuchSource)
 	}
+}
+
+// joinScan is the caller-side claim: join a scan in progress, or register one
+// for the polling loop to run.
+//
+// It deliberately does NOT mark the call running. Execution belongs to the loop
+// goroutine, so that a scan is always on the same goroutine as the backoff
+// counter and the interval timer — the alternative is a scan whose failure the
+// schedule never learns about.
+func (w *worker) joinScan() (call *scanCall, mine bool) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+
+	if w.inflight != nil {
+		return w.inflight, false
+	}
+	c := &scanCall{done: make(chan struct{})}
+	w.inflight = c
+	return c, true
+}
+
+// takeScan is the loop-side claim: pick up a scan a trigger registered, or
+// start a fresh one, or report that one is already executing.
+func (w *worker) takeScan() (call *scanCall, run bool) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+
+	if w.inflight != nil {
+		if w.inflight.running {
+			return w.inflight, false
+		}
+		// Registered by a trigger and waiting for someone to run it.
+		w.inflight.running = true
+		return w.inflight, true
+	}
+
+	c := &scanCall{done: make(chan struct{}), running: true}
+	w.inflight = c
+	return c, true
+}
+
+// scan runs a scan, or waits for the one already executing.
+//
+// Called from the polling loop for both the scheduled and the triggered case,
+// so there is one path and one set of semantics rather than two that drift.
+func (w *worker) scan(ctx context.Context) (ScanResult, error) {
+	call, run := w.takeScan()
+	if !run {
+		// Already executing. Waiting rather than starting a second concurrent
+		// scan of the same source: two racing scans would double the vendor's
+		// load and contend on every insert, and the second would find exactly
+		// what the first is already finding.
+		select {
+		case <-call.done:
+			return call.res, call.err
+		case <-ctx.Done():
+			return ScanResult{}, ctx.Err()
+		}
+	}
+
+	call.res, call.err = w.scanOnce(ctx)
+
+	w.mu.Lock()
+	w.inflight = nil
+	w.mu.Unlock()
+	close(call.done)
+
+	return call.res, call.err
+}
+
+// loopDone reports the loop's shutdown channel, tolerating a worker whose
+// context has not been set yet.
+func (w *worker) loopDone() <-chan struct{} {
+	if w.ctx == nil {
+		return nil // nil channel: blocks forever, which is the right no-op here
+	}
+	return w.ctx.Done()
 }
 
 // scanOnce runs one scan and records its outcome.

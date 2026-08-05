@@ -367,6 +367,12 @@ type DiscoverPackagesResponse struct {
 	TagErrors []string `json:"tagErrors,omitempty"`
 	// RepositoryErrors are per-repository failures that did not stop the scan.
 	RepositoryErrors []string `json:"repositoryErrors,omitempty"`
+
+	// Collapsed reports that a scan was ALREADY RUNNING when this request
+	// arrived, so these numbers come from that scan rather than one this call
+	// started. The data is real either way — the request waited for it — but the
+	// two are different facts and the caller is told which one it got.
+	Collapsed bool `json:"collapsed,omitempty"`
 }
 
 // ---------------------------------------------------------------------------

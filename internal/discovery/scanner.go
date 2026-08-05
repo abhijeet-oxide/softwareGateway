@@ -167,6 +167,16 @@ type ScanResult struct {
 	RepositoryErrors []RepositoryError
 
 	Duration time.Duration
+
+	// Collapsed reports that this result came from a scan ALREADY RUNNING when
+	// the request arrived, rather than one it started.
+	//
+	// Reported rather than hidden. The numbers are real either way — the caller
+	// waited for that scan to finish — but "a scan ran for you" and "you were
+	// shown a scan that was already under way" are different facts, and an
+	// operator watching a count they expect to change deserves to know which
+	// one they are looking at.
+	Collapsed bool
 }
 
 // TagError is a single tag's failure.

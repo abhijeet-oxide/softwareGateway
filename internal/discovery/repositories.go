@@ -129,16 +129,29 @@ func resolveRepositories(
 	candidates := src.DeclaredRepositories()
 	declared := len(candidates)
 
-	if src.EnumeratesRepositories() && catalog != nil {
-		maxRepos := src.Discovery.EffectiveMaxRepositories()
-		found, err := catalog.ListAllRepositories(ctx, maxRepos)
-		switch {
-		case err != nil:
-			res.CatalogErr = err
-		default:
-			candidates = append(candidates, found...)
-			if len(found) >= maxRepos {
-				res.Truncated = true
+	if src.EnumeratesRepositories() {
+		// A source that names no repositories has nothing to scan without
+		// enumeration, so a missing catalog client is a wiring failure, not a
+		// condition to skip past.
+		//
+		// The guard here used to be `&& catalog != nil`, which silently produced
+		// zero repositories: the scan then returned success, in under a
+		// millisecond, having made no network call at all, and `packages
+		// discover` reported "Nothing new" for a source nothing had looked at.
+		if catalog == nil {
+			res.CatalogErr = errors.New(
+				"this source names no repositories, so they must come from the registry's " +
+					"catalog, but no catalog client was built for it")
+		} else {
+			maxRepos := src.Discovery.EffectiveMaxRepositories()
+			found, err := catalog.ListAllRepositories(ctx, maxRepos)
+			if err != nil {
+				res.CatalogErr = err
+			} else {
+				candidates = append(candidates, found...)
+				if len(found) >= maxRepos {
+					res.Truncated = true
+				}
 			}
 		}
 	}

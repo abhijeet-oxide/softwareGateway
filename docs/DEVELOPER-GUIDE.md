@@ -1008,6 +1008,12 @@ It no longer can be — an unknown one fails startup by name. If you are on an o
 **`packages discover` returns a precondition failure**
 Discovery runs on the leader only. Either this replica is a follower, or discovery has no enabled sources. Check the startup log for `discovery started sources=N`.
 
+**`packages discover` sometimes scans and sometimes returns instantly**
+Fixed — pull and rebuild. A trigger arriving while a scan was already running used to return the *previous* result (or zeros, if no scan had finished yet) instead of joining the running one, so the same command took seconds or 0ms depending on timing. It now joins the running scan and returns its real numbers, with `collapsed: true` in the JSON and "Joined a scan already in progress" in the table output.
+
+**`packages discover` reports `Repositories scanned 0` and "Nothing new"**
+Those are two different things and the output now separates them. `Repositories scanned 0` means nothing was looked at, which is not a steady state. Either `discovery.repositoryFilters` rejected every candidate — the count is shown — or the source names no repositories and the registry's `/v2/_catalog` returned none. `transferctl products check` tells you which.
+
 **`packages list` is empty**
 Discovery polls on its interval; the first scan happens at startup. Force one with `transferctl packages discover <product>`. If it reports `tagsListed=0`, the repository path or credentials are wrong — `transferctl health` checks reachability.
 

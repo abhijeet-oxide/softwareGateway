@@ -1,0 +1,228 @@
+// Package vendor holds the seam between what OCI standardises and what an
+// individual vendor actually does.
+//
+// The problem it solves, stated concretely. Our first real vendor publishes
+// THREE tags per release:
+//
+//	orb_23.8.1076              the payload — an index of Helm charts and images
+//	signature_orb_23.8.1076    a manifest whose only layer is a PKCS#7 blob
+//	signed_orb_23.8.1076       an index referencing both of the above
+//
+// Left alone, discovery records those as three unrelated packages: one release
+// becomes three rows, forty-eight repositories become three times the noise,
+// and — the part that actually matters — asking to transfer `orb_23.8.1076`
+// moves the payload and LEAVES THE SIGNATURE BEHIND, after which nobody can
+// ever verify what landed.
+//
+// # The concept is standard; only the mechanism is not
+//
+// "A package has artifacts that belong to it but sit outside its own manifest
+// tree" is exactly what OCI 1.1 formalises with `subject` and the referrers
+// API. Signatures, SBOMs and attestations are all that shape. What differs
+// between vendors is only HOW THE RELATIONSHIP IS DISCOVERED:
+//
+//	referrers      the signature carries `subject`; ask the registry (the standard)
+//	cosign tag     rewrite the digest as sha256-<hex>.sig and fetch it
+//	wrapper index  a third tag bundles both as siblings (pre-1.1; our vendor)
+//
+// So this package models the CONCEPT, and a Layout supplies the mechanism.
+// Everything downstream — storage, listing, planning, transfer — sees one
+// shape and cannot tell which mechanism produced it. A vendor that already
+// uses referrers needs no plugin at all, and when a vendor migrates to
+// referrers we change one file.
+//
+// # What a Layout may and may not do
+//
+// A Layout CLASSIFIES AND RELATES. It does not fetch beyond what it is handed,
+// does not push, and does not decide transfer policy. That bound is deliberate:
+// a broken Layout can mislabel a tag, but it cannot corrupt a transfer.
+//
+// # Keeping the core generic
+//
+// internal/discovery and internal/transfer depend on this package's interface
+// and are forbidden by depguard from importing any implementation. The check is
+// mechanical rather than aspirational: DELETE internal/vendors/near AND
+// EVERYTHING STILL BUILDS AND PASSES.
+package vendors
+
+import (
+	"context"
+
+	"github.com/abhijeet-oxide/softwareGateway/internal/registry"
+)
+
+// Role is what a related artifact is FOR.
+//
+// Vendor-neutral by construction: the database stores `signature`, never
+// `nokia_signature`. A vendor's naming lives in the plugin that produced the
+// row, not in the schema that holds it.
+type Role string
+
+const (
+	// RoleSignature is a detached signature over the package — cosign bundle,
+	// PKCS#7, or whatever the vendor emits. The format is a separate axis from
+	// the role, because a vendor may pair either discovery mechanism with
+	// either format.
+	RoleSignature Role = "signature"
+	// RoleSBOM is a software bill of materials.
+	RoleSBOM Role = "sbom"
+	// RoleAttestation is an in-toto or similar provenance attestation.
+	RoleAttestation Role = "attestation"
+	// RoleWrapper is an artifact that exists only to bundle a package with its
+	// related artifacts — our vendor's `signed_orb_*`.
+	//
+	// Recorded rather than discarded because it is the transfer root: pushing
+	// it at the destination is what makes the destination a faithful copy, so
+	// a consumer expecting the vendor's layout still finds it.
+	RoleWrapper Role = "wrapper"
+)
+
+// ScannedTag is one tag discovery has resolved, handed to a Layout for
+// grouping.
+//
+// Raw is the manifest EXACTLY as the registry returned it. A Layout may parse
+// it but must never re-serialize it: the digest is the hash of these bytes and
+// every signature is over that digest.
+type ScannedTag struct {
+	Tag        string
+	Descriptor registry.Descriptor
+	Raw        []byte
+	// Annotations are the manifest's own, already parsed by discovery. Most
+	// Layouts need only these and never touch Raw.
+	Annotations map[string]string
+	// Children are the descriptors an index lists. Empty for a plain manifest.
+	Children []registry.Descriptor
+}
+
+// Related is one artifact that belongs to a package but lives outside its tree.
+type Related struct {
+	Role Role
+	// Tag is where the artifact lives, when it has one. A referrers-discovered
+	// signature usually has no tag and is addressed by digest alone.
+	Tag        string
+	Descriptor registry.Descriptor
+}
+
+// Package is one release as a person thinks of it.
+//
+// The distinction between Tag and Root is the whole point of this type. Tag is
+// IDENTITY — what appears in a listing and what someone types. Root is what the
+// planner walks. For our vendor they differ: you name `orb_23.8.1076` and the
+// transfer walks `signed_orb_23.8.1076`, because only the wrapper reaches both
+// the payload and the signature. For a standard source they are the same.
+type Package struct {
+	Tag        string
+	Descriptor registry.Descriptor
+
+	// DisplayTag is the tag with this vendor's structural noise removed —
+	// `23.8.1076` for a vendor whose real tag is `orb_23.8.1076`.
+	//
+	// Set by the Layout, because the convention being removed is the vendor's
+	// and nothing else in the system may know it. Empty means "no shortening",
+	// which is what any conformant registry gets.
+	//
+	// Cosmetic ONLY: the real Tag is what is stored, transferred and returned
+	// by `-o json`, and BOTH spellings resolve as input — an abbreviation you
+	// cannot type back is a trap, not a convenience.
+	DisplayTag string
+
+	// Root is the descriptor a transfer plans from. Zero means "use
+	// Descriptor" — the ordinary case, and the reason a standard Layout can
+	// leave it alone.
+	Root registry.Descriptor
+	// RootTag names Root when it has a tag of its own, so the destination can
+	// be tagged identically to the source.
+	RootTag string
+
+	Related []Related
+}
+
+// EffectiveRoot returns the descriptor a transfer should walk.
+func (p Package) EffectiveRoot() registry.Descriptor {
+	if p.Root.Digest != "" {
+		return p.Root
+	}
+	return p.Descriptor
+}
+
+// SignatureStatus is a THREE-state answer, and the third state is the point.
+//
+// "We looked and found nothing" and "we never looked" are the same value in a
+// boolean and completely different facts when someone is deciding whether to
+// trust a package. A vendor does not sign everything — older releases and
+// hotfixes routinely go unsigned — so the distinction shows up in real data,
+// not just in theory.
+type SignatureStatus string
+
+const (
+	// SignatureSigned means a signature artifact was found. It says nothing
+	// about whether that signature is VALID; verification is a separate step.
+	SignatureSigned SignatureStatus = "signed"
+	// SignatureUnsigned means we looked for one and there was none.
+	SignatureUnsigned SignatureStatus = "unsigned"
+	// SignatureUnknown means nobody has looked — the layout is `none`, or the
+	// row predates signature discovery.
+	SignatureUnknown SignatureStatus = "unknown"
+)
+
+// Status reports whether this package carries a signature.
+func (p Package) Status(looked bool) SignatureStatus {
+	if !looked {
+		return SignatureUnknown
+	}
+	for _, r := range p.Related {
+		if r.Role == RoleSignature {
+			return SignatureSigned
+		}
+	}
+	return SignatureUnsigned
+}
+
+// Layout is how one vendor lays packages out in a repository.
+//
+// One method. Everything a Layout does — collapsing several tags into one
+// release, naming the transfer root, locating signatures — is expressible as
+// "turn the tags I scanned into the packages they actually represent".
+type Layout interface {
+	// Name is the value that selects this Layout in configuration.
+	Name() string
+
+	// Group turns a repository's scanned tags into packages.
+	//
+	// It receives EVERY admitted tag of one repository at once, because a
+	// vendor's relationships are between tags and cannot be resolved one at a
+	// time — discovery has no ordering guarantee, so seeing `orb_X` alone tells
+	// you nothing about whether a `signed_orb_X` exists.
+	//
+	// src is available for Layouts that must ask the registry (referrers).
+	// A Layout that can answer from the scanned set alone should not use it:
+	// discovery already paid for those bytes.
+	Group(ctx context.Context, src registry.Source, scanned []ScannedTag) ([]Package, error)
+
+	// LooksForSignatures reports whether this Layout actually attempts
+	// signature discovery, which is what separates "unsigned" from "unknown".
+	LooksForSignatures() bool
+}
+
+// Format is how a signature is verified once it has been found.
+//
+// A SEPARATE axis from the Layout, because the two genuinely vary
+// independently: a vendor may pair the referrers API with PKCS#7, or a wrapper
+// index with a cosign bundle. Collapsing them into one setting would force a
+// new combined value for every pairing.
+//
+// Verification itself is M5. The type exists now so configuration written today
+// stays valid, and so the value survives into storage where M5 will read it.
+type Format string
+
+const (
+	// FormatAuto infers the format from the signature's own media type —
+	// application/pkcs7-signature, a cosign bundle, and so on.
+	FormatAuto Format = "auto"
+	// FormatCosign is a Sigstore bundle, keyed or keyless.
+	FormatCosign Format = "cosign"
+	// FormatPKCS7 is CMS (RFC 5652), verified against a trusted CA root. This
+	// is what our first vendor emits, and it is NOT Sigstore — sigstore-go
+	// cannot verify it and cosign has no part in it.
+	FormatPKCS7 Format = "pkcs7"
+)

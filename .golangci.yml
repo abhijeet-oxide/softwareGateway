@@ -103,6 +103,31 @@ linters:
             - pkg: github.com/abhijeet-oxide/softwareGateway/internal/product
               desc: "store returns rows; interpreting them belongs upstream"
 
+        # The core must never know which vendor it is talking to.
+        #
+        # internal/vendors holds the Layout INTERFACE; internal/vendors/<name>
+        # holds one vendor's implementation. Everything downstream depends on
+        # the interface, and only the composition root (cmd/) names a vendor.
+        #
+        # The test this encodes is mechanical: delete internal/vendors/near and
+        # the rest must still build and pass. A Nokia assumption reaching the
+        # scanner or the planner is exactly the leak that would make that false,
+        # and it is the kind that arrives one innocent import at a time.
+        core-imports-no-vendor-implementation:
+          list-mode: lax
+          files:
+            - "**/internal/discovery/**"
+            - "**/internal/transfer/**"
+            - "**/internal/queue/**"
+            - "**/internal/worker/**"
+            - "**/internal/store/**"
+            - "**/internal/api/**"
+            - "**/internal/registry/**"
+            - "**/internal/product/**"
+          deny:
+            - pkg: github.com/abhijeet-oxide/softwareGateway/internal/vendors/near
+              desc: "vendor-specific layout must stay behind vendors.Layout — only the composition root may name a vendor"
+
   exclusions:
     generated: lax
     rules:

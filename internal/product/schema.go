@@ -125,6 +125,9 @@ type Source struct {
 	// Almost always absent — see the Concurrency type.
 	Concurrency Concurrency `json:"concurrency,omitempty"`
 
+	// Signatures describes how this vendor lays out and formats signatures.
+	Signatures Signatures `json:"signatures,omitempty"`
+
 	// RateLimits is the superseded block. Accepted and folded into Concurrency;
 	// see LegacyRateLimits.
 	RateLimits LegacyRateLimits `json:"rateLimits,omitempty"`
@@ -186,12 +189,96 @@ type Filters struct {
 	Exclude []string `json:"exclude,omitempty"`
 }
 
+// Signatures describes how a vendor publishes signatures.
+//
+// TWO independent axes, because they genuinely vary independently: a vendor may
+// pair the referrers API with PKCS#7, or a wrapper index with a cosign bundle.
+// One combined setting would need a new value for every pairing.
+//
+//	layout   WHERE the signature is:  auto | none | standard | <vendor>
+//	format   HOW it is checked:       auto | cosign | pkcs7
+//
+// Note that `layout` is deliberately NOT the source's `type`. `type` says how to
+// speak to the registry, and for every vendor we have met that is plain OCI
+// Distribution v2 — including Nokia's NEAR, whose protocol is entirely
+// standard. What differs is the publishing convention, which is this.
+//
+// Verification itself lands in M5. These settings exist now so configuration
+// written today stays valid, and so discovery can already report WHETHER a
+// package is signed — which it cannot do without knowing where to look.
+type Signatures struct {
+	// Layout selects the discovery mechanism. Empty means auto, which is
+	// standard behaviour and correct for any conformant registry.
+	Layout string `json:"layout,omitempty"`
+
+	// Format selects the verifier. Empty means auto: infer from the
+	// signature's own media type, which is reliable because the media type is
+	// exactly what distinguishes application/pkcs7-signature from a Sigstore
+	// bundle.
+	Format string `json:"format,omitempty"`
+
+	// TrustBundleRef names the Secret holding the trust material — CA roots for
+	// PKCS#7, a public key or Fulcio root for cosign.
+	//
+	// A reference, never inline: per the standing constraint, every credential
+	// and key is managed by VSO and read from a projected Secret. Read by M5.
+	TrustBundleRef *SecretRef `json:"trustBundleRef,omitempty"`
+}
+
+// RepositoryMapping decides the destination path for a replicated package.
+//
+// This is load-bearing for the actual goal, which is that a deployment keeps
+// working after replication by repointing its registry and nothing else. A Helm
+// chart referencing `orbs/cfx-5000-k8s/foo:1.2.3` resolves at the destination
+// only if that path survives the copy.
+type RepositoryMapping string
+
+const (
+	// MappingPreserve keeps the source repository path exactly.
+	//
+	//	nokia.example.com/orbs/cfx-5000-k8s  ->  internal.example.com/orbs/cfx-5000-k8s
+	//
+	// The default, because it is the only mapping under which a deployment
+	// needs no edit beyond the registry host.
+	MappingPreserve RepositoryMapping = "preserve"
+
+	// MappingPrefix preserves the path under a fixed prefix, for an internal
+	// registry shared between vendors.
+	//
+	//	nokia.example.com/orbs/cfx-5000-k8s  ->  internal.example.com/nokia/orbs/cfx-5000-k8s
+	//
+	// Still a single-value change for a deployment: the registry becomes
+	// `internal.example.com/nokia`.
+	MappingPrefix RepositoryMapping = "prefix"
+
+	// MappingFixed sends everything to one repository, from `repository`.
+	//
+	// Correct only for a source covering ONE repository. For a source spanning
+	// many it collapses them, which silently breaks cross-references between
+	// them — so validation rejects that combination rather than letting it be
+	// discovered at deployment time.
+	MappingFixed RepositoryMapping = "fixed"
+)
+
 // Target is an internal, read-write repository: a replication destination and
 // a promotion endpoint in both directions.
 type Target struct {
-	Name       string `json:"name"`
-	Registry   string `json:"registry"`
-	Repository string `json:"repository"`
+	Name     string `json:"name"`
+	Registry string `json:"registry"`
+
+	// Repository is the destination path when Repositories is `fixed`.
+	//
+	// Kept because the single-repository case is common and reads well. Ignored
+	// under `preserve` and `prefix`, where the path comes from the source.
+	Repository string `json:"repository,omitempty"`
+
+	// Repositories decides how a source path maps to a destination path.
+	// Defaults to `preserve` — see RepositoryMapping for why that default
+	// matters more than it looks.
+	Repositories RepositoryMapping `json:"repositories,omitempty"`
+
+	// RepositoryPrefix is prepended under the `prefix` mapping.
+	RepositoryPrefix string `json:"repositoryPrefix,omitempty"`
 
 	// Enabled turns this target off without deleting it. Defaults to true.
 	//
@@ -430,6 +517,42 @@ func foldLegacy(c Concurrency, r LegacyRateLimits, scan LegacyScanConcurrency, w
 		notes = append(notes, where+".discovery.concurrency is superseded by "+where+".concurrency")
 	}
 	return c, notes
+}
+
+// EffectiveMapping returns the mapping to use, defaulting to preserve.
+func (t Target) EffectiveMapping() RepositoryMapping {
+	if t.Repositories == "" {
+		// A target that names one repository and says nothing else is stating
+		// a fixed destination — honouring `preserve` there would ignore what
+		// the document plainly says.
+		if t.Repository != "" {
+			return MappingFixed
+		}
+		return MappingPreserve
+	}
+	return t.Repositories
+}
+
+// DestinationFor maps a source repository path to its destination path.
+//
+// This is what keeps a deployment working after replication: the chart
+// referencing `orbs/cfx-5000-k8s/foo:1.2.3` resolves at the destination only
+// because this returns the same path it was given.
+func (t Target) DestinationFor(sourcePath string) string {
+	sourcePath = strings.Trim(strings.TrimSpace(sourcePath), "/")
+
+	switch t.EffectiveMapping() {
+	case MappingFixed:
+		return strings.Trim(t.Repository, "/")
+	case MappingPrefix:
+		prefix := strings.Trim(t.RepositoryPrefix, "/")
+		if prefix == "" {
+			return sourcePath
+		}
+		return prefix + "/" + sourcePath
+	default:
+		return sourcePath
+	}
 }
 
 // EffectiveMaxRepositories returns the configured cap or the default.

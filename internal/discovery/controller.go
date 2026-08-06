@@ -8,6 +8,7 @@ import (
 	"github.com/abhijeet-oxide/softwareGateway/internal/platform/metrics"
 	"github.com/abhijeet-oxide/softwareGateway/internal/product"
 	"github.com/abhijeet-oxide/softwareGateway/internal/store"
+	"github.com/abhijeet-oxide/softwareGateway/internal/vendors"
 )
 
 // Controller decides WHEN discovery should be running.
@@ -26,6 +27,12 @@ type Controller struct {
 	packages *store.Packages
 	secrets  *product.SecretResolver
 	log      *slog.Logger
+
+	// layouts resolves a source's configured signature layout.
+	//
+	// Injected rather than constructed here, because which vendors exist is a
+	// decision for the composition root. This package must never import one.
+	layouts *vendors.Registry
 
 	// reconcileMu serialises whole reconciles.
 	//
@@ -51,16 +58,21 @@ type Controller struct {
 func NewController(
 	packages *store.Packages,
 	secrets *product.SecretResolver,
+	layouts *vendors.Registry,
 	log *slog.Logger,
 	m *metrics.Registry,
 ) *Controller {
 	if log == nil {
 		log = slog.Default()
 	}
+	if layouts == nil {
+		layouts = vendors.NewRegistry()
+	}
 	return &Controller{
 		loop:     NewLoop(log, m),
 		packages: packages,
 		secrets:  secrets,
+		layouts:  layouts,
 		log:      log,
 	}
 }
@@ -142,7 +154,7 @@ func (c *Controller) reconcile() {
 		return
 	}
 
-	specs, errs := SourceSpecs(products, cat, c.secrets, c.log)
+	specs, errs := SourceSpecs(products, cat, c.secrets, c.layouts, c.log)
 	for _, err := range errs {
 		// A source that cannot be built is omitted and reported. One product's
 		// missing secret must not stop discovery for the rest of the fleet.

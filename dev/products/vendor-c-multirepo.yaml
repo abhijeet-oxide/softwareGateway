@@ -138,7 +138,7 @@ spec:
   targets:
     - name: internal
       registry: internal.example.com
-      repository: mirror/vendor-c
+      repositories: preserve
       credentialsRef:
         secretName: internal-registry
       default: true

@@ -34,6 +34,7 @@ import (
 	"github.com/abhijeet-oxide/softwareGateway/internal/product"
 	"github.com/abhijeet-oxide/softwareGateway/internal/registry"
 	"github.com/abhijeet-oxide/softwareGateway/internal/store"
+	"github.com/abhijeet-oxide/softwareGateway/internal/vendors"
 )
 
 // tagPageSize is the page size requested from tags/list.
@@ -63,6 +64,11 @@ type Scanner struct {
 	repoFilter filter
 	tagFilter  filter
 	rules      ruleSet
+
+	// layout is how this vendor lays packages out. Never nil — an unset
+	// configuration resolves to the standard layout, so the scanner has no
+	// "does this source have a plugin?" branch anywhere.
+	layout vendors.Layout
 
 	// targetIDs maps configured TARGET names to catalog row IDs, for
 	// auto-download rule resolution. Read-only after construction.
@@ -105,6 +111,8 @@ type ScannerConfig struct {
 	// RepoIDs maps configured repository NAMES to catalog row IDs, used to
 	// resolve auto-download rule targets.
 	RepoIDs map[string]int64
+	// Layout groups scanned tags into packages. Nil means the standard layout.
+	Layout vendors.Layout
 }
 
 // NewScanner compiles a source's filters and rules.
@@ -138,6 +146,11 @@ func NewScanner(cfg ScannerConfig) (*Scanner, error) {
 		log = slog.Default()
 	}
 
+	layout := cfg.Layout
+	if layout == nil {
+		layout = vendors.Standard{}
+	}
+
 	return &Scanner{
 		packages:   cfg.Packages,
 		log:        log.With("product", cfg.Product.Metadata.Name, "source", cfg.SourceName),
@@ -151,6 +164,7 @@ func NewScanner(cfg ScannerConfig) (*Scanner, error) {
 		tagFilter:  tagFilter,
 		rules:      rules,
 		targetIDs:  cfg.RepoIDs,
+		layout:     layout,
 		clients:    map[string]registry.Source{},
 	}, nil
 }
@@ -466,9 +480,21 @@ type resolveResult struct {
 	TagErrors  []TagError
 }
 
-// resolvePhase resolves every tag in the work list, bounded by the same limit.
+// resolvePhase turns the flat work list into recorded packages.
 //
-// Tags across ALL repositories share one pool now, rather than one pool per
+// Four steps, and the split is what lets a vendor's several tags become the one
+// release they represent:
+//
+//	head    one HEAD per tag; which are new?
+//	fetch   one GET per NEW tag
+//	group   the source's Layout turns those tags into packages
+//	record  write each package, its relations, and anything that follows
+//
+// Grouping runs only over NEW tags, which is what keeps the steady state as
+// cheap as it was before: a re-scan where nothing changed still costs one HEAD
+// per tag and transfers no manifest bodies at all.
+//
+// Tags across ALL repositories share one pool, rather than one pool per
 // repository. That matters on a real catalogue: a repository with three tags no
 // longer leaves most of the budget idle while the repository with three hundred
 // waits its turn behind it.
@@ -480,64 +506,90 @@ func (s *Scanner) resolvePhase(ctx context.Context, work []tagWork, limit int) r
 
 	s.progress.update(func(p *ScanProgress) { p.Phase = PhaseResolving })
 
-	type tagOut struct {
-		outcome tagOutcome
-		err     error
-	}
-	outs := make([]tagOut, len(work))
-	sem := make(chan struct{}, limit)
-	var wg sync.WaitGroup
-
-	for i, w := range work {
-		if ctx.Err() != nil {
-			break
-		}
-
-		wg.Add(1)
-		go func(i int, w tagWork) {
-			defer wg.Done()
-			sem <- struct{}{}
-			defer func() { <-sem }()
-
-			// Each tag costs one HEAD when nothing changed, and one further
-			// request when it did. There is no ordering requirement between
-			// them: supersession is per (repository, tag), and two different
-			// tags never touch the same row.
-			outcome, err := s.scanTag(ctx, w.client, w.repoID, w.repoPath, w.tag)
-			outs[i] = tagOut{outcome: outcome, err: err}
-
-			s.progress.update(func(p *ScanProgress) {
-				p.TagsResolved++
-				if outcome.isNew {
-					p.New++
-				}
-				if err != nil {
-					p.Errors++
-				}
-			})
-		}(i, w)
-	}
-	wg.Wait()
-
-	// Aggregated in work-list order after the fact, so two runs of the same scan
-	// produce the same result and the same log order.
-	for i, o := range outs {
-		if o.err != nil {
+	resolved := s.headPhase(ctx, work, limit)
+	for _, r := range resolved {
+		s.progress.update(func(p *ScanProgress) { p.TagsResolved++ })
+		if r.err != nil {
 			// Collected, not returned. One bad artifact must not stop discovery
 			// of the rest — that is how a single vendor mistake would otherwise
 			// stall every release behind it.
 			res.TagErrors = append(res.TagErrors,
-				TagError{Repository: work[i].repoPath, Tag: work[i].tag, Err: o.err})
-			s.log.WarnContext(ctx, "tag scan failed",
-				"repository", work[i].repoPath, "tag", work[i].tag, "error", o.err)
-			continue
-		}
-		if o.outcome.isNew {
-			res.New++
-			res.Superseded += o.outcome.superseded
-			res.Requests += o.outcome.requests
+				TagError{Repository: r.work.repoPath, Tag: r.work.tag, Err: r.err})
+			s.log.WarnContext(ctx, "tag resolve failed",
+				"repository", r.work.repoPath, "tag", r.work.tag, "error", r.err)
+			s.progress.update(func(p *ScanProgress) { p.Errors++ })
 		}
 	}
+
+	items := s.fetchPhase(ctx, resolved, limit)
+	for _, f := range items {
+		if f.err != nil {
+			res.TagErrors = append(res.TagErrors,
+				TagError{Repository: f.work.repoPath, Tag: f.work.tag, Err: f.err})
+			s.log.WarnContext(ctx, "manifest fetch failed",
+				"repository", f.work.repoPath, "tag", f.work.tag, "error", f.err)
+			s.progress.update(func(p *ScanProgress) { p.Errors++ })
+		}
+	}
+
+	// Grouped PER REPOSITORY. A vendor's relationships are between tags of one
+	// repository, and grouping across repositories would let `orb_1.0` in one
+	// be claimed by a `signed_orb_1.0` in another.
+	byRepo := map[string][]fetched{}
+	order := []string{}
+	for _, f := range items {
+		if f.err != nil {
+			continue
+		}
+		if _, seen := byRepo[f.work.repoPath]; !seen {
+			order = append(order, f.work.repoPath)
+		}
+		byRepo[f.work.repoPath] = append(byRepo[f.work.repoPath], f)
+	}
+
+	for _, repoPath := range order {
+		group := byRepo[repoPath]
+		pkgs := s.groupPhase(ctx, group[0].work.client, scannedTagsFor(group))
+
+		// The Layout names packages by tag; this maps back to the fetched tree
+		// so recording still writes the artifacts we actually verified.
+		trees := make(map[string]fetched, len(group))
+		for _, f := range group {
+			trees[f.work.tag] = f
+		}
+
+		for _, pkg := range pkgs {
+			f, ok := trees[pkg.Tag]
+			if !ok {
+				// The Layout named a tag we did not fetch. Possible when it
+				// groups onto a payload discovered by an earlier scan — the
+				// relations still belong on that existing package.
+				if err := s.attachRelations(ctx, group[0].work, pkg); err != nil {
+					s.log.WarnContext(ctx, "could not attach related artifacts",
+						"repository", repoPath, "tag", pkg.Tag, "error", err)
+				}
+				continue
+			}
+
+			outcome, err := s.recordPackage(ctx, f.work.client, f.work.repoID,
+				f.work.repoPath, pkg.Tag, f.tree.Artifacts[0].Descriptor, f.tree, pkg)
+			if err != nil {
+				res.TagErrors = append(res.TagErrors,
+					TagError{Repository: repoPath, Tag: pkg.Tag, Err: err})
+				s.log.WarnContext(ctx, "package record failed",
+					"repository", repoPath, "tag", pkg.Tag, "error", err)
+				s.progress.update(func(p *ScanProgress) { p.Errors++ })
+				continue
+			}
+			if outcome.isNew {
+				res.New++
+				res.Superseded += outcome.superseded
+				res.Requests += outcome.requests
+				s.progress.update(func(p *ScanProgress) { p.New++ })
+			}
+		}
+	}
+
 	return res
 }
 
@@ -640,54 +692,6 @@ type tagOutcome struct {
 	requests   int
 }
 
-// scanTag resolves one tag and records it if it is new.
-func (s *Scanner) scanTag(
-	ctx context.Context, client registry.Source, repoID int64, repoPath, tag string,
-) (tagOutcome, error) {
-	// HEAD only: the body is not fetched. Discovery calls this for every tag on
-	// every scan, so the common case — nothing changed — costs one small
-	// request per tag and transfers no manifest bodies.
-	desc, err := client.ResolveTag(ctx, tag)
-	if err != nil {
-		if errors.Is(err, registry.ErrNotFound) {
-			// The tag was deleted between the list and the resolve. Not an
-			// error: the next scan will not list it.
-			return tagOutcome{}, nil
-		}
-		return tagOutcome{}, err
-	}
-	if err := desc.Digest.Validate(); err != nil {
-		return tagOutcome{}, err
-	}
-
-	// An optimisation, not the correctness mechanism. It skips the expensive
-	// part — the manifest-tree fetch — for content already recorded. The unique
-	// constraint inside recordPackage is what actually prevents a duplicate, so
-	// a scan racing us between this check and that insert is harmless.
-	known, err := s.packages.PackageExists(ctx, repoID, tag, desc.Digest.String())
-	if err != nil {
-		return tagOutcome{}, err
-	}
-	if known {
-		return tagOutcome{}, nil
-	}
-
-	// Fetched BEFORE the transaction opens: this is network I/O, and holding a
-	// database transaction across it would pin a connection and a snapshot for
-	// as long as the vendor takes to answer.
-	//
-	// Exactly ONE request, whatever the package contains. Together with the
-	// HEAD above, a newly discovered tag costs two round trips and an unchanged
-	// one costs a single HEAD.
-	t, err := fetchPackage(ctx, client, desc)
-	if err != nil {
-		return tagOutcome{}, err
-	}
-	s.progress.update(func(p *ScanProgress) { p.Artifacts += len(t.Artifacts) })
-
-	return s.recordPackage(ctx, client, repoID, repoPath, tag, desc, t)
-}
-
 // recordPackage writes a new package and everything that follows from it, in
 // one transaction.
 //
@@ -698,7 +702,7 @@ func (s *Scanner) scanTag(
 // impossible (docs/design/07 §6).
 func (s *Scanner) recordPackage(
 	ctx context.Context, client registry.Source, repoID int64,
-	repoPath, tag string, desc registry.Descriptor, t tree,
+	repoPath, tag string, desc registry.Descriptor, t tree, pkg vendors.Package,
 ) (tagOutcome, error) {
 	// One writer at a time within a source.
 	//
@@ -728,6 +732,16 @@ func (s *Scanner) recordPackage(
 		ArtifactCount:  len(t.Artifacts),
 		BlobCount:      t.BlobCount,
 		PublishedAt:    t.PublishedAt,
+
+		// What the Layout concluded. `unknown` where the layout does not look
+		// for signatures at all, which is honest — claiming `unsigned` there
+		// would be a confident answer nobody checked.
+		SignatureStatus: string(pkg.Status(s.layout.LooksForSignatures())),
+		// Empty unless the vendor bundles the payload with its signature, in
+		// which case this is the wrapper a transfer must plan from.
+		TransferRootDigest: rootDigestOf(pkg),
+		TransferRootTag:    pkg.RootTag,
+		DisplayTag:         pkg.DisplayTag,
 	})
 	if errors.Is(err, store.ErrAlreadyExists) {
 		// A concurrent scan won the race. Nothing to do, and nothing wrong:
@@ -739,6 +753,10 @@ func (s *Scanner) recordPackage(
 	}
 
 	if err := s.writeTree(ctx, tx, packageID, t); err != nil {
+		return tagOutcome{}, err
+	}
+
+	if err := s.packages.ReplaceRelations(ctx, tx, packageID, relationRows(pkg)); err != nil {
 		return tagOutcome{}, err
 	}
 

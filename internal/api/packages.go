@@ -100,7 +100,28 @@ func (s *Server) handleGetPackage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	WriteJSON(w, r, http.StatusOK, toAPIPackage(productName, row))
+	pkg := toAPIPackage(productName, row)
+
+	// Related artifacts are loaded on the SINGLE-package read only, never in a
+	// listing: a page of fifty packages would be fifty extra queries to render
+	// a column that shows a count. `signatureStatus` is on the row itself and
+	// is what a listing actually needs.
+	rels, err := s.deps.Packages.ListRelations(r.Context(), row.ID)
+	if err != nil {
+		s.internal(w, r, "list related artifacts", err)
+		return
+	}
+	for _, rel := range rels {
+		pkg.Related = append(pkg.Related, v1.RelatedArtifact{
+			Role:      strings.ToUpper(rel.Role),
+			Digest:    rel.Digest,
+			Tag:       rel.Tag,
+			MediaType: rel.MediaType,
+			SizeBytes: v1.Int64String(strconv.FormatInt(rel.SizeBytes, 10)),
+		})
+	}
+
+	WriteJSON(w, r, http.StatusOK, pkg)
 }
 
 // handleListArtifacts serves
@@ -372,6 +393,12 @@ func toAPIPackage(productName string, row store.PackageRow) v1.Package {
 		State:            v1.PackageState(strings.ToUpper(row.State)),
 		DiscoveredAt:     row.DiscoveredAt,
 		SourceRepository: row.SourceRepository,
+		DisplayTag:       row.DisplayTag,
+		SignatureStatus:  v1.SignatureStatus(strings.ToUpper(row.SignatureStatus)),
+		TransferRootTag:  row.TransferRootTag,
+	}
+	if p.SignatureStatus == "" {
+		p.SignatureStatus = v1.SignatureUnknown
 	}
 	if row.PublishedAt != nil {
 		p.PublishedAt = *row.PublishedAt
@@ -462,8 +489,16 @@ func (s *Server) resolvePackage(w http.ResponseWriter, r *http.Request, productN
 
 	pkg, err := s.deps.Packages.GetPackageRef(r.Context(), productName, parsed)
 
-	var ambiguous *store.AmbiguousReferenceError
+	var (
+		ambiguous  *store.AmbiguousReferenceError
+		ambiguousR *store.AmbiguousRepositoryError
+	)
 	switch {
+	case errors.As(err, &ambiguousR):
+		Error(w, r, v1.CodeInvalidArgument, fmt.Sprintf(
+			"%s. Name one in full, for example: %s:%s",
+			ambiguousR.Error(), ambiguousR.Paths[0], parsed.Tag))
+		return store.PackageRow{}, false
 	case errors.As(err, &ambiguous):
 		// The scoped form is quoted rather than the `?repository=` query
 		// parameter, because this message is read at a terminal far more often

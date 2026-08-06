@@ -44,6 +44,24 @@ type PackageRow struct {
 	// the sort of thing worth being able to see.
 	PublishedAt  *string
 	SupersededBy *int64
+
+	// SignatureStatus is signed | unsigned | unknown. Three values, because
+	// "we looked and found none" and "nobody looked" are different facts and a
+	// boolean cannot tell them apart — which matters when the question being
+	// answered is whether to trust something.
+	SignatureStatus string
+	// DisplayTag is Tag with the vendor's structural noise removed, or empty
+	// when none applies. Cosmetic; Tag is the identity.
+	DisplayTag string
+	// TransferRootDigest is what a transfer plans from when that is NOT this
+	// package's own manifest.
+	//
+	// Empty for the ordinary case. Set where a vendor bundles the payload and
+	// its signature under a wrapper index: only the wrapper reaches both, so
+	// planning from the payload alone would move the bytes and leave the
+	// signature behind.
+	TransferRootDigest string
+	TransferRootTag    string
 	// SourceRepository is the repository path this was discovered in. Joined
 	// on read rather than denormalised: a product may span several
 	// repositories, and a listing that does not say which is ambiguous.
@@ -137,15 +155,23 @@ func (p *Packages) InsertPackage(ctx context.Context, tx *sql.Tx, row PackageRow
 	query := p.dialect.Rewrite(`
 		INSERT INTO packages
 			(product_id, source_repo_id, tag, manifest_digest, media_type,
-			 total_bytes, artifact_count, blob_count, published_at, state, updated_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ` + p.dialect.Now() + `)
+			 total_bytes, artifact_count, blob_count, published_at, state,
+			 signature_status, transfer_root_digest, transfer_root_tag, display_tag, updated_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ` + p.dialect.Now() + `)
 		ON CONFLICT (source_repo_id, tag, manifest_digest) DO NOTHING
 		RETURNING id`)
+
+	status := row.SignatureStatus
+	if status == "" {
+		status = "unknown"
+	}
 
 	var id int64
 	err := tx.QueryRowContext(ctx, query,
 		row.ProductID, row.SourceRepoID, row.Tag, row.ManifestDigest, row.MediaType,
 		row.TotalBytes, row.ArtifactCount, row.BlobCount, row.PublishedAt, state,
+		status, nullIfEmpty(row.TransferRootDigest), nullIfEmpty(row.TransferRootTag),
+		nullIfEmpty(row.DisplayTag),
 	).Scan(&id)
 
 	switch {
@@ -531,6 +557,8 @@ func (p *Packages) ListPackages(ctx context.Context, f ListPackagesFilter) ([]Pa
 		       -- IS coalesced because it is always known once a package exists.
 		       pk.media_type, pk.total_bytes, COALESCE(pk.artifact_count, 0),
 		       pk.blob_count, pk.state, pk.discovered_at, pk.published_at, pk.superseded_by,
+		       pk.signature_status, COALESCE(pk.transfer_root_digest,''), COALESCE(pk.transfer_root_tag,''),
+		       COALESCE(pk.display_tag,''),
 		       COALESCE(sr.repository_path, '')
 		  FROM packages pk
 		  JOIN products pr ON pr.id = pk.product_id
@@ -592,7 +620,9 @@ func (p *Packages) ListPackages(ctx context.Context, f ListPackagesFilter) ([]Pa
 		if err := rows.Scan(
 			&r.ID, &r.ProductID, &r.SourceRepoID, &r.Tag, &r.ManifestDigest,
 			&r.MediaType, &r.TotalBytes, &r.ArtifactCount, &r.BlobCount,
-			&r.State, &r.DiscoveredAt, &r.PublishedAt, &r.SupersededBy, &r.SourceRepository,
+			&r.State, &r.DiscoveredAt, &r.PublishedAt, &r.SupersededBy,
+			&r.SignatureStatus, &r.TransferRootDigest, &r.TransferRootTag, &r.DisplayTag,
+			&r.SourceRepository,
 		); err != nil {
 			return nil, fmt.Errorf("scan package row: %w", err)
 		}
@@ -724,6 +754,8 @@ func (p *Packages) matchPackages(ctx context.Context, productName string, ref Pa
 		       -- IS coalesced because it is always known once a package exists.
 		       pk.media_type, pk.total_bytes, COALESCE(pk.artifact_count, 0),
 		       pk.blob_count, pk.state, pk.discovered_at, pk.published_at, pk.superseded_by,
+		       pk.signature_status, COALESCE(pk.transfer_root_digest,''), COALESCE(pk.transfer_root_tag,''),
+		       COALESCE(pk.display_tag,''),
 		       COALESCE(sr.repository_path, '')
 		  FROM packages pk
 		  JOIN products pr ON pr.id = pk.product_id
@@ -736,12 +768,28 @@ func (p *Packages) matchPackages(ctx context.Context, productName string, ref Pa
 		query += " AND pk.manifest_digest = ?"
 		args = append(args, ref.Digest)
 	default:
-		query += " AND pk.tag = ?"
-		args = append(args, ref.Tag)
+		// EITHER SPELLING RESOLVES.
+		//
+		// A listing renders the display tag — `23.8.1076` for a vendor whose
+		// real tag is `orb_23.8.1076` — and the shortened form has to be
+		// typeable back, or the abbreviation is a trap: someone copies what
+		// they see, gets "not found", and reasonably concludes the package is
+		// gone.
+		//
+		// A stored column rather than a pattern match, because the transform is
+		// the VENDOR's and this package must not know it. The Layout computed
+		// it once at discovery; here it is just another equality.
+		query += " AND (pk.tag = ? OR pk.display_tag = ?)"
+		args = append(args, ref.Tag, ref.Tag)
 	}
 	if ref.Repository != "" {
+		// Resolved first, so the shortened form a listing shows also works.
+		full, err := p.resolveRepositoryPath(ctx, productName, ref.Repository)
+		if err != nil {
+			return nil, err
+		}
 		query += " AND sr.repository_path = ?"
-		args = append(args, ref.Repository)
+		args = append(args, full)
 	}
 	query += `
 		 ORDER BY CASE WHEN pk.state = 'superseded' THEN 1 ELSE 0 END,
@@ -759,7 +807,9 @@ func (p *Packages) matchPackages(ctx context.Context, productName string, ref Pa
 		if err := rows.Scan(
 			&r.ID, &r.ProductID, &r.SourceRepoID, &r.Tag, &r.ManifestDigest,
 			&r.MediaType, &r.TotalBytes, &r.ArtifactCount, &r.BlobCount,
-			&r.State, &r.DiscoveredAt, &r.PublishedAt, &r.SupersededBy, &r.SourceRepository,
+			&r.State, &r.DiscoveredAt, &r.PublishedAt, &r.SupersededBy,
+			&r.SignatureStatus, &r.TransferRootDigest, &r.TransferRootTag, &r.DisplayTag,
+			&r.SourceRepository,
 		); err != nil {
 			return nil, fmt.Errorf("scan package row: %w", err)
 		}
@@ -966,6 +1016,8 @@ func (p *Packages) GetPackageByID(ctx context.Context, id int64) (PackageRow, er
 		SELECT pk.id, pk.product_id, pk.source_repo_id, pk.tag, pk.manifest_digest,
 		       pk.media_type, pk.total_bytes, COALESCE(pk.artifact_count, 0),
 		       pk.blob_count, pk.state, pk.discovered_at, pk.published_at, pk.superseded_by,
+		       pk.signature_status, COALESCE(pk.transfer_root_digest,''), COALESCE(pk.transfer_root_tag,''),
+		       COALESCE(pk.display_tag,''),
 		       COALESCE(sr.repository_path, '')
 		  FROM packages pk
 		  LEFT JOIN repositories sr ON sr.id = pk.source_repo_id
@@ -975,7 +1027,9 @@ func (p *Packages) GetPackageByID(ctx context.Context, id int64) (PackageRow, er
 	err := p.db.QueryRowContext(ctx, query, id).Scan(
 		&r.ID, &r.ProductID, &r.SourceRepoID, &r.Tag, &r.ManifestDigest,
 		&r.MediaType, &r.TotalBytes, &r.ArtifactCount, &r.BlobCount,
-		&r.State, &r.DiscoveredAt, &r.PublishedAt, &r.SupersededBy, &r.SourceRepository)
+		&r.State, &r.DiscoveredAt, &r.PublishedAt, &r.SupersededBy,
+		&r.SignatureStatus, &r.TransferRootDigest, &r.TransferRootTag, &r.DisplayTag,
+		&r.SourceRepository)
 	if errors.Is(err, sql.ErrNoRows) {
 		return PackageRow{}, ErrNotFound
 	}
@@ -999,4 +1053,215 @@ func annotationsJSON(m map[string]string) any {
 		return nil
 	}
 	return string(b)
+}
+
+// ---------------------------------------------------------------------------
+// related artifacts
+// ---------------------------------------------------------------------------
+
+// RelationRow is one artifact that belongs to a package without living inside
+// its manifest tree — a signature, an SBOM, an attestation, or the wrapper that
+// bundles them.
+//
+// Role is vendor-neutral by construction: `signature`, never
+// `nokia_signature`. Which mechanism found it stays in the plugin that produced
+// the row, so a vendor switching from a wrapper index to the referrers API
+// changes no stored data.
+type RelationRow struct {
+	Role      string
+	Digest    string
+	Tag       string
+	MediaType string
+	SizeBytes int64
+}
+
+// ReplaceRelations writes a package's related artifacts.
+//
+// Insert-or-ignore rather than delete-then-insert: re-deriving the same
+// relationship on a later scan must be a no-op, and deleting first would open a
+// window where a package briefly appears to have no signature — which is
+// exactly the fact a security decision reads.
+func (p *Packages) ReplaceRelations(
+	ctx context.Context, tx *sql.Tx, packageID int64, rows []RelationRow,
+) error {
+	if len(rows) == 0 {
+		return nil
+	}
+
+	query := p.dialect.Rewrite(`
+		INSERT INTO package_relations (package_id, role, digest, tag, media_type, size_bytes)
+		VALUES (?, ?, ?, ?, ?, ?)
+		ON CONFLICT (package_id, role, digest) DO NOTHING`)
+
+	for _, r := range rows {
+		if _, err := tx.ExecContext(ctx, query,
+			packageID, r.Role, r.Digest, nullIfEmpty(r.Tag), nullIfEmpty(r.MediaType), r.SizeBytes,
+		); err != nil {
+			return fmt.Errorf("insert %s relation %s: %w", r.Role, r.Digest, err)
+		}
+	}
+	return nil
+}
+
+// ListRelations returns a package's related artifacts.
+func (p *Packages) ListRelations(ctx context.Context, packageID int64) ([]RelationRow, error) {
+	query := p.dialect.Rewrite(`
+		SELECT role, digest, COALESCE(tag,''), COALESCE(media_type,''), size_bytes
+		  FROM package_relations
+		 WHERE package_id = ?
+		 ORDER BY role, digest`)
+
+	rows, err := p.db.QueryContext(ctx, query, packageID)
+	if err != nil {
+		return nil, fmt.Errorf("list relations for package %d: %w", packageID, err)
+	}
+	defer func() { _ = rows.Close() }()
+
+	var out []RelationRow
+	for rows.Next() {
+		var r RelationRow
+		if err := rows.Scan(&r.Role, &r.Digest, &r.Tag, &r.MediaType, &r.SizeBytes); err != nil {
+			return nil, fmt.Errorf("scan relation: %w", err)
+		}
+		out = append(out, r)
+	}
+	return out, rows.Err()
+}
+
+// UpdateSignatureState records what a later scan learned about an EXISTING
+// package.
+//
+// The case this exists for: a vendor publishes a release, then signs it
+// afterwards. The payload was recorded on an earlier scan, so the scan that
+// finds the signature has no new package to attach it to — only an old one to
+// correct. Without this the package would read `unsigned` forever, which is
+// worse than `unknown` because it looks like an answer.
+func (p *Packages) UpdateSignatureState(
+	ctx context.Context, tx *sql.Tx, packageID int64, status, rootDigest, rootTag string,
+) error {
+	query := p.dialect.Rewrite(`
+		UPDATE packages
+		   SET signature_status     = ?,
+		       transfer_root_digest = COALESCE(?, transfer_root_digest),
+		       transfer_root_tag    = COALESCE(?, transfer_root_tag),
+		       updated_at           = ` + p.dialect.Now() + `
+		 WHERE id = ?`)
+
+	if _, err := tx.ExecContext(ctx, query,
+		status, nullIfEmpty(rootDigest), nullIfEmpty(rootTag), packageID); err != nil {
+		return fmt.Errorf("update signature state for package %d: %w", packageID, err)
+	}
+	return nil
+}
+
+// FindPackageByTag returns the current package for a (repository, tag), or
+// ErrNotFound.
+//
+// Used when a later scan learns something about a package discovered earlier —
+// see UpdateSignatureState.
+func (p *Packages) FindPackageByTag(
+	ctx context.Context, sourceRepoID int64, tag string,
+) (int64, error) {
+	query := p.dialect.Rewrite(`
+		SELECT id FROM packages
+		 WHERE source_repo_id = ? AND tag = ? AND superseded_by IS NULL
+		 ORDER BY id DESC
+		 LIMIT 1`)
+
+	var id int64
+	err := p.db.QueryRowContext(ctx, query, sourceRepoID, tag).Scan(&id)
+	if errors.Is(err, sql.ErrNoRows) {
+		return 0, ErrNotFound
+	}
+	if err != nil {
+		return 0, fmt.Errorf("find package %s: %w", tag, err)
+	}
+	return id, nil
+}
+
+// nullIfEmpty writes SQL NULL for an empty string.
+//
+// The distinction is load-bearing for transfer_root_digest: NULL means "plan
+// from the package's own manifest", and an empty string would be a digest that
+// matches nothing.
+func nullIfEmpty(s string) any {
+	if s == "" {
+		return nil
+	}
+	return s
+}
+
+// AmbiguousRepositoryError reports that a repository reference matched more
+// than one path.
+type AmbiguousRepositoryError struct {
+	Ref   string
+	Paths []string
+}
+
+func (e *AmbiguousRepositoryError) Error() string {
+	return fmt.Sprintf("repository %q matches %d paths (%s)",
+		e.Ref, len(e.Paths), strings.Join(e.Paths, ", "))
+}
+
+// resolveRepositoryPath turns a repository reference into a full path.
+//
+// A listing shortens `orbs/cfx-5000-db` to `cfx-5000-db` by dropping the prefix
+// every row shares, so the short form has to resolve or the abbreviation is a
+// trap — someone copies what they see and gets "not found" for a package that
+// is plainly on the screen.
+//
+// Matching is on WHOLE TRAILING SEGMENTS, never a substring: `cfx-5000-db`
+// matches `orbs/cfx-5000-db` and `a/b/cfx-5000-db`, and never `orbs/x-cfx-5000-db`.
+// Two matches is a real ambiguity and is refused with both, exactly as an
+// ambiguous tag is.
+//
+// Done in Go over the product's repository rows rather than as a LIKE, because
+// a repository path may legally contain `_`, which LIKE would treat as a
+// wildcard — quietly matching `cfx_db` against `cfx-db`.
+func (p *Packages) resolveRepositoryPath(
+	ctx context.Context, productName, ref string,
+) (string, error) {
+	ref = strings.Trim(strings.TrimSpace(ref), "/")
+	if ref == "" {
+		return "", nil
+	}
+
+	query := p.dialect.Rewrite(`
+		SELECT DISTINCT r.repository_path
+		  FROM repositories r
+		  JOIN products pr ON pr.id = r.product_id
+		 WHERE pr.name = ? AND r.role = 'source'
+		 ORDER BY r.repository_path`)
+
+	rows, err := p.db.QueryContext(ctx, query, productName)
+	if err != nil {
+		return "", fmt.Errorf("resolve repository %q: %w", ref, err)
+	}
+	defer func() { _ = rows.Close() }()
+
+	var matches []string
+	for rows.Next() {
+		var path string
+		if err := rows.Scan(&path); err != nil {
+			return "", fmt.Errorf("scan repository path: %w", err)
+		}
+		if path == ref || strings.HasSuffix(path, "/"+ref) {
+			matches = append(matches, path)
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return "", err
+	}
+
+	switch len(matches) {
+	case 0:
+		// Unknown to us. Returned as given so the package lookup fails with
+		// "not found" for the thing that was asked for, rather than for a path
+		// this function invented.
+		return ref, nil
+	case 1:
+		return matches[0], nil
+	default:
+		return "", &AmbiguousRepositoryError{Ref: ref, Paths: matches}
+	}
 }

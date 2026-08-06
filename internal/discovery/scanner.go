@@ -31,6 +31,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/abhijeet-oxide/softwareGateway/internal/oci"
 	"github.com/abhijeet-oxide/softwareGateway/internal/product"
 	"github.com/abhijeet-oxide/softwareGateway/internal/registry"
 	"github.com/abhijeet-oxide/softwareGateway/internal/store"
@@ -551,7 +552,7 @@ func (s *Scanner) resolvePhase(ctx context.Context, work []tagWork, limit int) r
 		group := byRepo[repoPath]
 		pkgs := s.groupPhase(ctx, group[0].work.client, scannedTagsFor(group))
 
-		// The Layout names packages by tag; this maps back to the fetched tree
+		// The Layout names packages by tag; this maps back to the fetched oci.Tree
 		// so recording still writes the artifacts we actually verified.
 		trees := make(map[string]fetched, len(group))
 		for _, f := range group {
@@ -695,18 +696,18 @@ type tagOutcome struct {
 // recordPackage writes a new package and everything that follows from it, in
 // one transaction.
 //
-// The package, its artifact tree, the audit event, the notification and any
+// The package, its artifact oci.Tree, the audit event, the notification and any
 // auto-download request are ONE atomic fact. A package that exists without the
 // notification announcing it, or a transfer request pointing at a package that
 // was rolled back, are precisely the states the outbox pattern exists to make
 // impossible (docs/design/07 §6).
 func (s *Scanner) recordPackage(
 	ctx context.Context, client registry.Source, repoID int64,
-	repoPath, tag string, desc registry.Descriptor, t tree, pkg vendors.Package,
+	repoPath, tag string, desc registry.Descriptor, t oci.Tree, pkg vendors.Package,
 ) (tagOutcome, error) {
 	// One writer at a time within a source.
 	//
-	// Everything expensive — the HEAD, the existence check, the manifest tree
+	// Everything expensive — the HEAD, the existence check, the manifest oci.Tree
 	// fetch — already happened outside this call and runs fully in parallel.
 	// What is left is a short local transaction, and serialising it costs
 	// nothing measurable while removing a whole class of problem: SQLite
@@ -803,8 +804,8 @@ func (s *Scanner) recordPackage(
 	}, nil
 }
 
-// writeTree persists the artifact tree and its blob references.
-func (s *Scanner) writeTree(ctx context.Context, tx *sql.Tx, packageID int64, t tree) error {
+// writeTree persists the artifact oci.Tree and its blob references.
+func (s *Scanner) writeTree(ctx context.Context, tx *sql.Tx, packageID int64, t oci.Tree) error {
 	// Parents precede children in the slice — fetchTree walks breadth-first —
 	// so a child's parent row ID is always already assigned.
 	ids := make([]int64, len(t.Artifacts))

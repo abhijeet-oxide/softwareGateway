@@ -1265,3 +1265,163 @@ func (p *Packages) resolveRepositoryPath(
 		return "", &AmbiguousRepositoryError{Ref: ref, Paths: matches}
 	}
 }
+
+// ReadExpandedTree returns a package's recorded tree, and whether it is
+// COMPLETE.
+//
+// This is what makes the walk happen once. Discovery records a package's own
+// manifest and lists what it references without fetching it; expanding fetches
+// the rest. Whichever asks first — `packages describe --expand`, or a transfer
+// planning its jobs — pays for the walk, and everyone after reads this.
+//
+// It is a CACHE, not a second source of truth. The tree under a digest is
+// immutable, so a recorded tree can never be stale: content addressing is what
+// makes reuse safe here and would not make it safe for anything mutable.
+//
+// complete is false when any artifact row still lacks its bytes, which is
+// exactly the state discovery leaves behind. A caller that needs the whole tree
+// walks the registry and records the result; a caller that only needs sizes can
+// use what is here.
+func (p *Packages) ReadExpandedTree(
+	ctx context.Context, packageID int64,
+) (tree ExpandedTree, complete bool, err error) {
+	query := p.dialect.Rewrite(`
+		SELECT id, parent_id, digest, media_type, COALESCE(artifact_type,''),
+		       size_bytes, COALESCE(platform,''), depth, raw
+		  FROM package_artifacts
+		 WHERE package_id = ?
+		 ORDER BY depth, id`)
+
+	rows, err := p.db.QueryContext(ctx, query, packageID)
+	if err != nil {
+		return ExpandedTree{}, false, fmt.Errorf("read tree of package %d: %w", packageID, err)
+	}
+	defer func() { _ = rows.Close() }()
+
+	// index maps an artifact's row ID to its position, so a parent row ID
+	// becomes the slice index the tree uses. Parents come first because the
+	// query orders by depth.
+	index := map[int64]int{}
+	complete = true
+
+	for rows.Next() {
+		var (
+			id       int64
+			parentID *int64
+			a        ExpandedArtifact
+		)
+		if err := rows.Scan(&id, &parentID, &a.Row.Digest, &a.Row.MediaType,
+			&a.Row.ArtifactType, &a.Row.SizeBytes, &a.Row.Platform, &a.Row.Depth,
+			&a.Row.Raw); err != nil {
+			return ExpandedTree{}, false, fmt.Errorf("scan artifact: %w", err)
+		}
+		a.Row.ID = id
+		a.Row.Fetched = len(a.Row.Raw) > 0
+		if !a.Row.Fetched {
+			// Listed by an index but never fetched. The tree is incomplete and
+			// the caller must walk.
+			complete = false
+		}
+
+		a.Parent = -1
+		if parentID != nil {
+			if pos, ok := index[*parentID]; ok {
+				a.Parent = pos
+			}
+		}
+		index[id] = len(tree.Artifacts)
+		tree.Artifacts = append(tree.Artifacts, a)
+	}
+	if err := rows.Err(); err != nil {
+		return ExpandedTree{}, false, err
+	}
+	if len(tree.Artifacts) == 0 {
+		return ExpandedTree{}, false, nil
+	}
+
+	if err := p.attachBlobs(ctx, packageID, tree.Artifacts, index); err != nil {
+		return ExpandedTree{}, false, err
+	}
+
+	// Recomputed rather than read from the package row, so this returns the
+	// same numbers a fresh walk would and the two can be compared.
+	total, count := measureExpanded(tree.Artifacts)
+	tree.TotalBytes, tree.BlobCount = total, count
+	return tree, complete, nil
+}
+
+// attachBlobs loads the config and layer descriptors each artifact references.
+func (p *Packages) attachBlobs(
+	ctx context.Context, packageID int64, artifacts []ExpandedArtifact, index map[int64]int,
+) error {
+	query := p.dialect.Rewrite(`
+		SELECT ab.artifact_id, ab.digest, COALESCE(b.media_type,''), b.size_bytes,
+		       ab.kind, ab.ordinal
+		  FROM artifact_blobs ab
+		  JOIN package_artifacts pa ON pa.id = ab.artifact_id
+		  JOIN blobs b ON b.digest = ab.digest
+		 WHERE pa.package_id = ?
+		 ORDER BY ab.artifact_id, ab.kind, ab.ordinal`)
+
+	rows, err := p.db.QueryContext(ctx, query, packageID)
+	if err != nil {
+		return fmt.Errorf("read blobs of package %d: %w", packageID, err)
+	}
+	defer func() { _ = rows.Close() }()
+
+	for rows.Next() {
+		var (
+			artifactID int64
+			b          BlobRef
+		)
+		if err := rows.Scan(&artifactID, &b.Digest, &b.MediaType, &b.SizeBytes,
+			&b.Kind, &b.Ordinal); err != nil {
+			return fmt.Errorf("scan blob reference: %w", err)
+		}
+		pos, ok := index[artifactID]
+		if !ok {
+			continue
+		}
+		artifacts[pos].Blobs = append(artifacts[pos].Blobs, b)
+	}
+	return rows.Err()
+}
+
+// measureExpanded sums the transfer cost of a recorded tree.
+//
+// Each distinct digest counted ONCE: a fat index whose platforms share a base
+// layer does not transfer that layer per platform, and summing naively would
+// overstate the cost — sometimes several times over — making every size shown
+// to an operator, and every estimate derived from one, wrong.
+func measureExpanded(artifacts []ExpandedArtifact) (*int64, *int) {
+	seen := map[string]bool{}
+	var total int64
+
+	for _, a := range artifacts {
+		if !a.Row.Fetched {
+			// An unfetched manifest's own blobs are unknown, so no honest total
+			// exists. Nil rather than a number that is quietly too small.
+			return nil, nil
+		}
+		if !seen[a.Row.Digest] {
+			seen[a.Row.Digest] = true
+			total += a.Row.SizeBytes
+		}
+		for _, b := range a.Blobs {
+			if seen[b.Digest] {
+				continue
+			}
+			seen[b.Digest] = true
+			total += b.SizeBytes
+		}
+	}
+
+	distinct := map[string]bool{}
+	for _, a := range artifacts {
+		for _, b := range a.Blobs {
+			distinct[b.Digest] = true
+		}
+	}
+	n := len(distinct)
+	return &total, &n
+}

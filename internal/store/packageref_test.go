@@ -210,3 +210,126 @@ func hex64(seed string) string {
 	}
 	return string(out)
 }
+
+// A listing shows the display tag, so typing it back must work. Anything else
+// makes the abbreviation a trap.
+func TestDisplayTagResolves(t *testing.T) {
+	ctx := context.Background()
+	p, productID := seedPackages(t, ctx)
+	seedDisplayPackage(t, ctx, p, productID, "orbs/cfx-5000-k8s", "orb_23.8.1076", "23.8.1076")
+
+	for _, ref := range []string{"orb_23.8.1076", "23.8.1076"} {
+		row, err := p.GetPackage(ctx, "vendor-a", ref)
+		if err != nil {
+			t.Fatalf("GetPackage(%q): %v", ref, err)
+		}
+		// Whichever spelling was used, the REAL tag comes back — the identity
+		// is never the shortened form.
+		if row.Tag != "orb_23.8.1076" {
+			t.Errorf("resolved %q to tag %q, want orb_23.8.1076", ref, row.Tag)
+		}
+	}
+}
+
+// The display form must not create a NEW ambiguity: two repositories whose
+// display tags collide are exactly as ambiguous as their real tags colliding.
+func TestAmbiguousDisplayTagIsRefused(t *testing.T) {
+	ctx := context.Background()
+	p, productID := seedPackages(t, ctx)
+	seedDisplayPackage(t, ctx, p, productID, "orbs/cfx-5000-k8s", "orb_23.8.1076", "23.8.1076")
+	seedDisplayPackage(t, ctx, p, productID, "orbs/cfx-5000-db", "orb_23.8.1076", "23.8.1076")
+
+	_, err := p.GetPackage(ctx, "vendor-a", "23.8.1076")
+	var amb *AmbiguousReferenceError
+	if !errors.As(err, &amb) {
+		t.Fatalf("a display tag in two repositories must be refused, got %v", err)
+	}
+}
+
+// seedDisplayPackage inserts a package with an explicit display tag.
+func seedDisplayPackage(
+	t *testing.T, ctx context.Context, p *Packages, productID int64, repoPath, tag, display string,
+) {
+	t.Helper()
+
+	tx, err := p.DB().BeginTx(ctx, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	repoID, err := p.EnsureRepository(ctx, tx, productID, "source", repoPath,
+		"registry.example.com", repoPath, "generic", "discovery")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := p.InsertPackage(ctx, tx, PackageRow{
+		ProductID:      productID,
+		SourceRepoID:   repoID,
+		Tag:            tag,
+		DisplayTag:     display,
+		ManifestDigest: "sha256:" + hex64(repoPath+"|"+tag),
+		MediaType:      "application/vnd.oci.image.index.v1+json",
+		ArtifactCount:  1,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := tx.Commit(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// The listing drops the prefix every repository shares, so `cfx-5000-db` is
+// what a user sees and copies. It has to resolve.
+func TestShortenedRepositoryResolves(t *testing.T) {
+	ctx := context.Background()
+	p, productID := seedPackages(t, ctx)
+	seedPackage(t, ctx, p, productID, "orbs/cfx-5000-k8s", "orb_23.8.1076")
+	seedPackage(t, ctx, p, productID, "orbs/cfx-5000-db", "orb_23.8.1076")
+
+	for _, ref := range []string{
+		"orbs/cfx-5000-db:orb_23.8.1076", // full, as stored
+		"cfx-5000-db:orb_23.8.1076",      // shortened, as displayed
+	} {
+		row, err := p.GetPackage(ctx, "vendor-a", ref)
+		if err != nil {
+			t.Fatalf("GetPackage(%q): %v", ref, err)
+		}
+		if row.SourceRepository != "orbs/cfx-5000-db" {
+			t.Errorf("%q resolved to %q", ref, row.SourceRepository)
+		}
+	}
+}
+
+// Whole trailing segments only. A substring match would resolve `db` against
+// `orbs/cfx-5000-db`, which is a different repository.
+func TestRepositoryMatchesWholeSegmentsOnly(t *testing.T) {
+	ctx := context.Background()
+	p, productID := seedPackages(t, ctx)
+	seedPackage(t, ctx, p, productID, "orbs/cfx-5000-db", "v1")
+
+	if _, err := p.GetPackage(ctx, "vendor-a", "5000-db:v1"); !errors.Is(err, ErrNotFound) {
+		t.Errorf("a partial segment must not match, got %v", err)
+	}
+	if _, err := p.GetPackage(ctx, "vendor-a", "cfx-5000-db:v1"); err != nil {
+		t.Errorf("a whole trailing segment must match: %v", err)
+	}
+}
+
+// Two repositories whose short forms collide are genuinely ambiguous, and must
+// be refused with both rather than silently resolved to one.
+func TestAmbiguousShortRepositoryIsRefused(t *testing.T) {
+	ctx := context.Background()
+	p, productID := seedPackages(t, ctx)
+	seedPackage(t, ctx, p, productID, "orbs/core", "v1")
+	seedPackage(t, ctx, p, productID, "charts/core", "v1")
+
+	_, err := p.GetPackage(ctx, "vendor-a", "core:v1")
+	var amb *AmbiguousRepositoryError
+	if !errors.As(err, &amb) {
+		t.Fatalf("expected an ambiguous-repository error, got %v", err)
+	}
+	if len(amb.Paths) != 2 {
+		t.Errorf("the error must name both candidates, got %v", amb.Paths)
+	}
+}

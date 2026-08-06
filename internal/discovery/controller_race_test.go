@@ -10,6 +10,7 @@ import (
 	"github.com/abhijeet-oxide/softwareGateway/internal/platform/metrics"
 	"github.com/abhijeet-oxide/softwareGateway/internal/product"
 	"github.com/abhijeet-oxide/softwareGateway/internal/store"
+	"github.com/abhijeet-oxide/softwareGateway/internal/vendors"
 )
 
 // TestConcurrentReconcilesStartTheLoopOnce reproduces the interleaving that
@@ -38,7 +39,7 @@ func TestConcurrentReconcilesStartTheLoopOnce(t *testing.T) {
 
 	logs := &countingHandler{}
 	c := NewController(store.NewPackages(st), product.NewSecretResolver(t.TempDir()),
-		slog.New(logs), metrics.New("test"))
+		vendors.NewRegistry(), slog.New(logs), metrics.New("test"))
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()

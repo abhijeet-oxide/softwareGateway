@@ -315,6 +315,58 @@ type Package struct {
 	// SourceRepository is the repository path it was discovered in, e.g.
 	// "suite/core". A product may span several.
 	SourceRepository string `json:"sourceRepository,omitempty"`
+
+	// DisplayTag is Tag with the vendor's structural noise removed, for tables.
+	//
+	// Empty when no shortening applies. Cosmetic only: Tag is the identity, and
+	// both spellings resolve as input.
+	DisplayTag string `json:"displayTag,omitempty"`
+
+	// SignatureStatus is SIGNED, UNSIGNED or UNKNOWN.
+	//
+	// Three values, and the third is the one that matters: "we looked and found
+	// none" and "nobody looked" are the same value in a boolean and completely
+	// different facts when the question is whether to trust something. UNKNOWN
+	// is what a source whose layout does not attempt signature discovery
+	// reports — honestly, rather than claiming a confident UNSIGNED.
+	SignatureStatus SignatureStatus `json:"signatureStatus,omitempty"`
+
+	// Related are artifacts that belong to this package without living inside
+	// its manifest tree — its signature, an SBOM, an attestation, or the
+	// wrapper that bundles them.
+	Related []RelatedArtifact `json:"related,omitempty"`
+
+	// TransferRootTag names what a transfer actually walks, when that is not
+	// this package's own tag.
+	//
+	// Empty in the ordinary case. Set where a vendor bundles the payload and
+	// its signature under a wrapper: only the wrapper reaches both, so planning
+	// from the payload alone would move the bytes and leave the signature
+	// behind.
+	TransferRootTag string `json:"transferRootTag,omitempty"`
+}
+
+// SignatureStatus is AIP-126 SCREAMING_SNAKE on the wire.
+type SignatureStatus string
+
+const (
+	SignatureUnknown  SignatureStatus = "UNKNOWN"
+	SignatureSigned   SignatureStatus = "SIGNED"
+	SignatureUnsigned SignatureStatus = "UNSIGNED"
+)
+
+// RelatedArtifact is one artifact attached to a package.
+//
+// Role is vendor-neutral: SIGNATURE, never NOKIA_SIGNATURE. Which mechanism
+// found it — the referrers API, a cosign tag, a wrapper index — is an
+// implementation detail of the source's layout and deliberately not on the
+// wire, so a vendor changing convention changes no client.
+type RelatedArtifact struct {
+	Role      string      `json:"role"`
+	Digest    string      `json:"digest"`
+	Tag       string      `json:"tag,omitempty"`
+	MediaType string      `json:"mediaType,omitempty"`
+	SizeBytes Int64String `json:"sizeBytes,omitempty"`
 }
 
 // ListPackagesResponse is returned by GET /api/v1/products/{product}/packages.

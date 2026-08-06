@@ -14,6 +14,7 @@ import (
 	"github.com/abhijeet-oxide/softwareGateway/internal/product"
 	"github.com/abhijeet-oxide/softwareGateway/internal/registry"
 	"github.com/abhijeet-oxide/softwareGateway/internal/store"
+	"github.com/abhijeet-oxide/softwareGateway/internal/vendors"
 )
 
 // maxBackoffMultiple caps the backoff at four times the configured interval.
@@ -69,6 +70,10 @@ type SourceSpec struct {
 	// Catalog enumerates the registry. Nil when repositoryDiscovery is off.
 	Catalog  CatalogLister
 	Interval time.Duration
+
+	// Layout groups this source's tags into packages. Nil means the standard
+	// layout: one tag, one package.
+	Layout vendors.Layout
 
 	// InsecureTLS records that this source's clients do not verify certificates.
 	//
@@ -160,6 +165,7 @@ func (l *Loop) Start(ctx context.Context, specs []SourceSpec, packages *store.Pa
 			NewClient:  spec.NewClient,
 			Catalog:    spec.Catalog,
 			RepoIDs:    spec.RepoIDs,
+			Layout:     spec.Layout,
 		})
 		if err != nil {
 			return err

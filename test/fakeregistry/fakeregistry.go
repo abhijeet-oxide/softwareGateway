@@ -15,6 +15,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -43,10 +44,24 @@ type Registry struct {
 	// Fault injection.
 	faults faultConfig
 
+	// uploads tracks in-progress blob upload sessions.
+	uploads *uploads
+	// declineMounts makes every cross-repository mount answer 202 with an
+	// ordinary upload session, as a registry that does not support the shortcut
+	// does. Both branches need exercising: 202 is a normal outcome and a client
+	// that treats it as an error fails against half the registries in use.
+	declineMounts bool
+
 	// Counters, for asserting on behaviour rather than just outcomes.
 	TagListCalls  atomic.Int64
 	ManifestCalls atomic.Int64
 	TokenCalls    atomic.Int64
+	// MountedBlobs and UploadedBlobs separate the fast path from the slow one,
+	// so a test can assert that a promotion moved ZERO bytes rather than merely
+	// that it succeeded.
+	MountedBlobs  atomic.Int64
+	UploadedBlobs atomic.Int64
+	UploadedBytes atomic.Int64
 	pageSize      int
 }
 
@@ -57,6 +72,17 @@ type repo struct {
 	mediaTypes map[string]string
 	// tags maps tag -> digest.
 	tags map[string]string
+	// blobs maps digest -> content. Populated by seeding and by uploads.
+	blobs map[string][]byte
+}
+
+func newRepo() *repo {
+	return &repo{
+		manifests:  map[string][]byte{},
+		mediaTypes: map[string]string{},
+		tags:       map[string]string{},
+		blobs:      map[string][]byte{},
+	}
 }
 
 type faultConfig struct {
@@ -105,6 +131,7 @@ func New(opts ...Option) *Registry {
 	for _, o := range opts {
 		o(r)
 	}
+	r.uploads = newUploads()
 	r.server = httptest.NewServer(http.HandlerFunc(r.handle))
 	return r
 }
@@ -138,11 +165,7 @@ func (r *Registry) AddManifest(repoPath, tag string, content []byte, mediaType s
 
 	rp, ok := r.repos[repoPath]
 	if !ok {
-		rp = &repo{
-			manifests:  map[string][]byte{},
-			mediaTypes: map[string]string{},
-			tags:       map[string]string{},
-		}
+		rp = newRepo()
 		r.repos[repoPath] = rp
 	}
 
@@ -178,12 +201,20 @@ type Layer struct {
 	Digest    string
 	Size      int64
 	MediaType string
+	// content is what the registry serves for this digest.
+	//
+	// Unexported: a caller builds a Layer through NewLayer, which derives the
+	// digest FROM the content, so the two can never disagree. A struct literal
+	// with a hand-written digest is exactly the fixture that would make a
+	// digest-verification test pass while verifying nothing.
+	content string
 }
 
 // NewLayer builds a layer descriptor from content, so its digest is real.
 func NewLayer(content string) Layer {
 	sum := sha256.Sum256([]byte(content))
 	return Layer{
+		content:   content,
 		Digest:    "sha256:" + hex.EncodeToString(sum[:]),
 		Size:      int64(len(content)),
 		MediaType: "application/vnd.oci.image.layer.v1.tar+gzip",
@@ -206,6 +237,15 @@ func (r *Registry) AddImage(repoPath, tag string, layers ...Layer) string {
 		material += "|" + l.Digest
 	}
 	config := NewLayer(material)
+
+	// Blob CONTENT is stored, not just the descriptor. Discovery never reads a
+	// blob so M2 did not need it; a transfer moves them, and a fake with
+	// descriptors but no bytes would make every transfer test fail at the first
+	// GET.
+	r.putBlob(repoPath, config.Digest, []byte(material))
+	for _, l := range layers {
+		r.putBlob(repoPath, l.Digest, []byte(l.content))
+	}
 
 	body := map[string]any{
 		"schemaVersion": 2,
@@ -404,6 +444,12 @@ func (r *Registry) handle(w http.ResponseWriter, req *http.Request) {
 	case strings.HasSuffix(path, "/tags/list"):
 		r.handleTagList(w, req)
 
+	case strings.Contains(path, "/blobs/uploads/"):
+		r.handleUpload(w, req)
+
+	case strings.Contains(path, "/blobs/"):
+		r.handleBlob(w, req)
+
 	case strings.Contains(path, "/manifests/"):
 		r.handleManifest(w, req)
 
@@ -534,6 +580,20 @@ func (r *Registry) handleManifest(w http.ResponseWriter, req *http.Request) {
 	idx := strings.Index(req.URL.Path, "/manifests/")
 	repoPath := strings.TrimPrefix(req.URL.Path[:idx], "/v2/")
 	ref := req.URL.Path[idx+len("/manifests/"):]
+
+	if req.Method == http.MethodPut {
+		raw, err := io.ReadAll(req.Body)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, "UNKNOWN", err.Error())
+			return
+		}
+		mediaType := req.Header.Get("Content-Type")
+		if mediaType == "" {
+			mediaType = "application/vnd.oci.image.manifest.v1+json"
+		}
+		r.putManifest(w, repoPath, ref, raw, mediaType)
+		return
+	}
 
 	r.mu.RLock()
 	rp, ok := r.repos[repoPath]

@@ -35,6 +35,8 @@ import (
 	"github.com/abhijeet-oxide/softwareGateway/internal/preflight"
 	"github.com/abhijeet-oxide/softwareGateway/internal/product"
 	"github.com/abhijeet-oxide/softwareGateway/internal/store"
+	"github.com/abhijeet-oxide/softwareGateway/internal/vendors"
+	"github.com/abhijeet-oxide/softwareGateway/internal/vendors/near"
 )
 
 const component = "coordinator"
@@ -138,7 +140,16 @@ func run() error {
 
 	// Discovery is leader-gated and configuration-driven. The controller owns
 	// both inputs; here we only report changes to it.
-	discoveryCtl := discovery.NewController(packages, resolver, logger, mreg)
+	// THE ONE PLACE A VENDOR IS NAMED.
+	//
+	// Everything downstream depends on vendors.Layout and is forbidden by
+	// depguard from importing an implementation, so `grep -rn "vendor/near"`
+	// finding only this file is the mechanical form of "the core is generic".
+	// Deleting internal/vendors/near must leave the rest building and passing.
+	layouts := vendors.NewRegistry()
+	near.Register(layouts)
+
+	discoveryCtl := discovery.NewController(packages, resolver, layouts, logger, mreg)
 
 	watcher := product.NewWatcher(cfg.ProductsDir(), loader, products, product.WatchOptions{
 		Logger: logger,

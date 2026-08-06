@@ -333,7 +333,7 @@ spec:
   targets:
     - name: internal
       registry: REGISTRY_HOST
-      repository: mirror/vendor-a
+      repositories: preserve
       anonymous: true
       default: true
 `
@@ -468,7 +468,7 @@ spec:
   targets:
     - name: internal
       registry: REGISTRY_HOST
-      repository: mirror/vendor-a
+      repositories: preserve
       anonymous: true
       default: true
 `
@@ -565,7 +565,7 @@ spec:
   targets:
     - name: internal
       registry: internal.example.com
-      repository: mirror/x
+      repositories: preserve
       anonymous: true
       default: true
 `

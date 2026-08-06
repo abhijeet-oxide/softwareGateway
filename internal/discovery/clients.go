@@ -10,6 +10,7 @@ import (
 	"github.com/abhijeet-oxide/softwareGateway/internal/product"
 	"github.com/abhijeet-oxide/softwareGateway/internal/registry"
 	"github.com/abhijeet-oxide/softwareGateway/internal/registry/transport"
+	"github.com/abhijeet-oxide/softwareGateway/internal/vendors"
 
 	// Also registers the generic backend with the factory, via its init.
 	"github.com/abhijeet-oxide/softwareGateway/internal/registry/generic"
@@ -246,8 +247,12 @@ func SourceSpecs(
 	products []*product.Product,
 	catalog map[string]ProductRef,
 	secrets *product.SecretResolver,
+	layouts *vendors.Registry,
 	log *slog.Logger,
 ) ([]SourceSpec, []error) {
+	if layouts == nil {
+		layouts = vendors.NewRegistry()
+	}
 	if log == nil {
 		log = slog.Default()
 	}
@@ -277,6 +282,17 @@ func SourceSpecs(
 				continue
 			}
 
+			// An unknown layout name is fatal FOR THIS SOURCE and no other.
+			// Falling back to standard behaviour would silently disable
+			// signature discovery for a typo — invisible in every output, since
+			// every package would simply read `unknown` forever.
+			layout, err := layouts.Get(src.Signatures.Layout)
+			if err != nil {
+				errs = append(errs, fmt.Errorf("product %q source %q: %w",
+					p.Metadata.Name, src.Name, err))
+				continue
+			}
+
 			newClient, err := SourceClientFactory(p, src, secrets, log)
 			if err != nil {
 				errs = append(errs, err)
@@ -301,6 +317,7 @@ func SourceSpecs(
 				NewClient:   newClient,
 				Catalog:     catalogClient,
 				Interval:    interval,
+				Layout:      layout,
 				InsecureTLS: product.SkipsTLSVerification(p.Spec.Network, src.Network),
 			})
 		}

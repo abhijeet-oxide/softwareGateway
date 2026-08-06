@@ -107,6 +107,17 @@ func renderPackageList(w io.Writer, resp *v1.ListPackagesResponse) error {
 	// of identical values pushing everything else off the terminal.
 	multiRepo := spansRepositories(resp.Packages)
 
+	// The prefix every repository in view shares carries no information, so it
+	// goes. Derived from the rows themselves — no vendor knowledge needed.
+	repoPrefix := ""
+	if multiRepo {
+		paths := make([]string, 0, len(resp.Packages))
+		for _, p := range resp.Packages {
+			paths = append(paths, p.SourceRepository)
+		}
+		repoPrefix = commonRepositoryPrefix(paths)
+	}
+
 	tw := newTabWriter(w)
 	// PUBLISHED before DISCOVERED, matching the sort order: the list is ordered
 	// by when the vendor says a release was built, which is the order a person
@@ -114,18 +125,19 @@ func renderPackageList(w io.Writer, resp *v1.ListPackagesResponse) error {
 	// differ — a release published in March that we only saw in July is worth
 	// being able to notice.
 	if multiRepo {
-		fmt.Fprintln(tw, "REPOSITORY\tTAG\tDIGEST\tSTATE\tSIZE\tARTIFACTS\tBLOBS\tPUBLISHED\tDISCOVERED")
+		fmt.Fprintln(tw, "REPOSITORY\tTAG\tDIGEST\tSTATE\tSIGNED\tSIZE\tARTIFACTS\tBLOBS\tPUBLISHED\tDISCOVERED")
 	} else {
-		fmt.Fprintln(tw, "TAG\tDIGEST\tSTATE\tSIZE\tARTIFACTS\tBLOBS\tPUBLISHED\tDISCOVERED")
+		fmt.Fprintln(tw, "TAG\tDIGEST\tSTATE\tSIGNED\tSIZE\tARTIFACTS\tBLOBS\tPUBLISHED\tDISCOVERED")
 	}
 	for _, p := range resp.Packages {
 		if multiRepo {
-			fmt.Fprintf(tw, "%s\t", dash(p.SourceRepository))
+			fmt.Fprintf(tw, "%s\t", dash(shortRepository(p.SourceRepository, repoPrefix)))
 		}
-		fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%d\t%s\t%s\t%s\n",
-			p.Tag,
+		fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%d\t%s\t%s\t%s\n",
+			displayTag(p),
 			shortDigest(p.ManifestDigest),
 			strings.ToLower(string(p.State)),
+			signedMark(p.SignatureStatus),
 			humanBytesOpt(p.TotalBytes),
 			p.ArtifactCount,
 			optionalCount(p.BlobCount),
@@ -243,6 +255,7 @@ func renderPackageDetail(w io.Writer, p *v1.Package, artifacts []v1.Artifact) er
 	fmt.Fprintf(w, "Digest       %s\n", p.ManifestDigest)
 	fmt.Fprintf(w, "Media type   %s\n", p.MediaType)
 	fmt.Fprintf(w, "State        %s\n", strings.ToLower(string(p.State)))
+	fmt.Fprintf(w, "Signed       %s\n", describeSigned(p))
 	fmt.Fprintf(w, "Size         %s across %d artifact(s) and %s blob(s)\n",
 		humanBytesOpt(p.TotalBytes), p.ArtifactCount, optionalCount(p.BlobCount))
 	if p.TotalBytes == nil {
@@ -261,6 +274,8 @@ func renderPackageDetail(w io.Writer, p *v1.Package, artifacts []v1.Artifact) er
 		fmt.Fprintf(w, "SUPERSEDED by package %s. The vendor re-pushed this tag with different\n", p.SupersededBy)
 		fmt.Fprintln(w, "content. This row is kept so what was shipped from it stays answerable.")
 	}
+
+	renderRelated(w, p)
 
 	if len(artifacts) > 0 {
 		fmt.Fprintln(w)
@@ -814,4 +829,54 @@ func anyScanningIn(st *v1.DiscoveryStatusResponse) bool {
 		}
 	}
 	return false
+}
+
+// describeSigned explains the signature status in a sentence rather than a
+// word, because `describe` is where someone goes when the one-word answer in
+// the listing was not enough.
+func describeSigned(p *v1.Package) string {
+	switch p.SignatureStatus {
+	case v1.SignatureSigned:
+		out := "yes"
+		for _, r := range p.Related {
+			if r.Role == "SIGNATURE" {
+				out += "  (" + shortMediaType(r.MediaType) + ")"
+				if r.Tag != "" {
+					out += ", at " + r.Tag
+				}
+				break
+			}
+		}
+		// Verification is a separate question from presence, and conflating
+		// them is exactly the mistake this line exists to prevent.
+		return out + "  — present, NOT verified"
+	case v1.SignatureUnsigned:
+		return "no  — this source was checked and the publisher signed nothing"
+	default:
+		return notAvailable +
+			"  — not checked; set `signatures.layout` on the source to look"
+	}
+}
+
+// renderRelated lists the artifacts attached to a package.
+func renderRelated(w io.Writer, p *v1.Package) {
+	if len(p.Related) == 0 {
+		return
+	}
+	fmt.Fprintln(w)
+	fmt.Fprintln(w, "Related artifacts")
+	tw := newTabWriter(w)
+	for _, r := range p.Related {
+		fmt.Fprintf(tw, "  %s\t%s\t%s\t%s\n",
+			strings.ToLower(r.Role), dash(r.Tag), shortDigest(r.Digest), shortMediaType(r.MediaType))
+	}
+	_ = tw.Flush()
+
+	if p.TransferRootTag != "" {
+		fmt.Fprintln(w)
+		fmt.Fprintf(w, "  A transfer walks %s, which reaches this package AND its signature.\n",
+			p.TransferRootTag)
+		fmt.Fprintln(w, "  Transferring the payload alone would leave the signature behind, and")
+		fmt.Fprintln(w, "  destination-side verification would then be impossible.")
+	}
 }

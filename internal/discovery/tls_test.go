@@ -75,7 +75,7 @@ func TestSourceSpecCarriesInsecureFlag(t *testing.T) {
 		[]*product.Product{p},
 		map[string]ProductRef{"vendor-a": {ID: 1, Repositories: map[string]int64{"platform/suite": 1}}},
 		product.NewSecretResolver(t.TempDir()),
-		nil,
+		nil, nil,
 	)
 	if len(errs) > 0 {
 		t.Fatalf("unexpected errors: %v", errs)

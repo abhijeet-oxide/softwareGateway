@@ -1425,3 +1425,242 @@ func measureExpanded(artifacts []ExpandedArtifact) (*int64, *int) {
 	n := len(distinct)
 	return &total, &n
 }
+
+// ---------------------------------------------------------------------------
+// transfers and jobs
+// ---------------------------------------------------------------------------
+
+// JobRow is one unit of work: ONE blob to move, or ONE manifest to push.
+//
+// Never a package. That single choice produces most of the system's good
+// properties — a thousand independent jobs distribute across the whole fleet, a
+// network blip costs a retry of one blob rather than a restart of sixty
+// gigabytes, workers are stateless because a job is self-contained, and
+// deduplication is natural because the unit of work IS the unit of content
+// addressing.
+type JobRow struct {
+	ID           int64
+	TransferID   string
+	Kind         string // blob | manifest
+	Digest       string
+	SizeBytes    int64
+	MediaType    string
+	ArtifactID   *int64
+	SourceRepoID int64
+	TargetRepoID int64
+	State        string
+	Wave         int
+	Priority     int
+	Attempts     int
+	SkipReason   string
+}
+
+// InsertJob creates a job, reporting whether it was new.
+//
+// ON CONFLICT DO NOTHING against (transfer_id, kind, digest) is what makes
+// PLANNING IDEMPOTENT: a Coordinator that dies mid-plan leaves a partial job
+// set, and the replan on restart finds the existing rows free rather than
+// duplicating them.
+func (p *Packages) InsertJob(ctx context.Context, tx *sql.Tx, row JobRow) (bool, error) {
+	state := row.State
+	if state == "" {
+		state = "pending"
+	}
+
+	query := p.dialect.Rewrite(`
+		INSERT INTO jobs
+			(transfer_id, kind, digest, size_bytes, media_type, artifact_id,
+			 source_repo_id, target_repo_id, state, wave, priority, updated_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ` + p.dialect.Now() + `)
+		ON CONFLICT (transfer_id, kind, digest) DO NOTHING
+		RETURNING id`)
+
+	var id int64
+	err := tx.QueryRowContext(ctx, query,
+		row.TransferID, row.Kind, row.Digest, row.SizeBytes, nullIfEmpty(row.MediaType),
+		row.ArtifactID, row.SourceRepoID, row.TargetRepoID, state, row.Wave, row.Priority,
+	).Scan(&id)
+
+	if errors.Is(err, sql.ErrNoRows) {
+		return false, nil
+	}
+	if err != nil {
+		return false, fmt.Errorf("insert %s job %s: %w", row.Kind, row.Digest, err)
+	}
+	return true, nil
+}
+
+// PlanTotals are what a planning run recorded about a transfer.
+type PlanTotals struct {
+	JobCount           int
+	PlannedBytes       int64
+	DedupeSkippedBytes int64
+	MountableBytes     int64
+	MaxWave            int
+}
+
+// RecordPlan writes a transfer's plan totals and moves it to `ready`.
+//
+// The totals are what every progress figure and every estimate is derived from,
+// so they are written in the SAME transaction as the jobs. A transfer whose
+// totals disagreed with its jobs would report a percentage that never reaches
+// a hundred.
+func (p *Packages) RecordPlan(
+	ctx context.Context, tx *sql.Tx, transferID string, t PlanTotals,
+) error {
+	query := p.dialect.Rewrite(`
+		UPDATE transfers
+		   SET planned_job_count    = ?,
+		       planned_bytes        = ?,
+		       dedupe_skipped_bytes = ?,
+		       mountable_bytes      = ?,
+		       max_wave             = ?,
+		       current_wave         = 0,
+		       state                = 'ready',
+		       updated_at           = ` + p.dialect.Now() + `
+		 WHERE id = ?`)
+
+	if _, err := tx.ExecContext(ctx, query,
+		t.JobCount, t.PlannedBytes, t.DedupeSkippedBytes, t.MountableBytes,
+		t.MaxWave, transferID); err != nil {
+		return fmt.Errorf("record plan for transfer %s: %w", transferID, err)
+	}
+	return nil
+}
+
+// PlacedDigests reports which of these digests are already in a repository.
+//
+// A DATABASE lookup, not a network call — that is what makes planning a
+// thousand-blob package fast. Registry HEADs are deferred to the worker, where
+// they run in parallel and where a stale record is caught anyway.
+//
+// A placement is STRONG EVIDENCE, not proof: a registry's garbage collector can
+// remove content underneath us. Two defences make the optimism safe — entries
+// past their TTL are not trusted, and a manifest push failing with BLOB_UNKNOWN
+// invalidates the placements for that manifest's blobs and requeues them. The
+// registry itself tells us when the cache is wrong.
+func (p *Packages) PlacedDigests(
+	ctx context.Context, repositoryID int64, digests []string,
+) (map[string]bool, error) {
+	out := map[string]bool{}
+	if len(digests) == 0 {
+		return out, nil
+	}
+
+	// Chunked, because a package with thousands of blobs would otherwise build
+	// a statement with thousands of placeholders — which SQLite refuses outright
+	// and Postgres merely plans badly.
+	const chunk = 500
+	for start := 0; start < len(digests); start += chunk {
+		end := min(start+chunk, len(digests))
+		batch := digests[start:end]
+
+		placeholders := make([]byte, 0, len(batch)*2)
+		args := make([]any, 0, len(batch)+2)
+		args = append(args, repositoryID)
+		for i, d := range batch {
+			if i > 0 {
+				placeholders = append(placeholders, ',')
+			}
+			placeholders = append(placeholders, '?')
+			args = append(args, d)
+		}
+		args = append(args, placementTTLSeconds)
+
+		query := p.dialect.Rewrite(`
+			SELECT digest FROM blob_placements
+			 WHERE repository_id = ?
+			   AND digest IN (` + string(placeholders) + `)
+			   AND verified_at > ` + p.dialect.TimeAgo("?"))
+
+		rows, err := p.db.QueryContext(ctx, query, args...)
+		if err != nil {
+			return nil, fmt.Errorf("read placements for repository %d: %w", repositoryID, err)
+		}
+		for rows.Next() {
+			var d string
+			if err := rows.Scan(&d); err != nil {
+				_ = rows.Close()
+				return nil, fmt.Errorf("scan placement: %w", err)
+			}
+			out[d] = true
+		}
+		if err := rows.Err(); err != nil {
+			_ = rows.Close()
+			return nil, err
+		}
+		_ = rows.Close()
+	}
+	return out, nil
+}
+
+// placementTTLSeconds is how long a placement record is trusted.
+//
+// Twenty-four hours. Long enough that a repeated transfer of a product line is
+// nearly free, short enough that a registry garbage collector cannot leave us
+// confidently wrong for long. The BLOB_UNKNOWN backstop is what makes any value
+// here safe rather than merely optimistic.
+const placementTTLSeconds = 24 * 60 * 60
+
+// RecordPlacement notes that a digest is present in a repository.
+//
+// source distinguishes how we know: `transferred` (we put it there),
+// `mounted` (the registry relocated it), `observed` (a HEAD found it). The
+// distinction is worth keeping — an observed placement is the weakest evidence
+// and the first thing to doubt when something is missing.
+func (p *Packages) RecordPlacement(
+	ctx context.Context, tx *sql.Tx, repositoryID int64, digest string, size int64, source string,
+) error {
+	if _, err := tx.ExecContext(ctx, p.dialect.Rewrite(`
+		INSERT INTO blobs (digest, size_bytes) VALUES (?, ?)
+		ON CONFLICT (digest) DO NOTHING`), digest, size); err != nil {
+		return fmt.Errorf("record blob %s: %w", digest, err)
+	}
+
+	query := p.dialect.Rewrite(`
+		INSERT INTO blob_placements (repository_id, digest, size_bytes, source, verified_at)
+		VALUES (?, ?, ?, ?, ` + p.dialect.Now() + `)
+		ON CONFLICT (repository_id, digest)
+		DO UPDATE SET verified_at = ` + p.dialect.Now() + `, source = EXCLUDED.source`)
+
+	if _, err := tx.ExecContext(ctx, query, repositoryID, digest, size, source); err != nil {
+		return fmt.Errorf("record placement %s: %w", digest, err)
+	}
+	return nil
+}
+
+// CreateTransfer opens a transfer for one request and one target.
+//
+// UNIQUE (request_id, target_repo_id) makes this idempotent: a request expanded
+// twice produces one transfer per target, not two.
+func (p *Packages) CreateTransfer(ctx context.Context, tx *sql.Tx, row TransferRow) (bool, error) {
+	query := p.dialect.Rewrite(`
+		INSERT INTO transfers
+			(id, request_id, package_id, source_repo_id, target_repo_id, state, priority, updated_at)
+		VALUES (?, ?, ?, ?, ?, 'planning', ?, ` + p.dialect.Now() + `)
+		ON CONFLICT (request_id, target_repo_id) DO NOTHING
+		RETURNING id`)
+
+	var id string
+	err := tx.QueryRowContext(ctx, query, row.ID, row.RequestID, row.PackageID,
+		row.SourceRepoID, row.TargetRepoID, row.Priority).Scan(&id)
+
+	if errors.Is(err, sql.ErrNoRows) {
+		return false, nil
+	}
+	if err != nil {
+		return false, fmt.Errorf("create transfer %s: %w", row.ID, err)
+	}
+	return true, nil
+}
+
+// TransferRow is one package moving to one target.
+type TransferRow struct {
+	ID           string
+	RequestID    string
+	PackageID    int64
+	SourceRepoID int64
+	TargetRepoID int64
+	Priority     int
+	State        string
+}

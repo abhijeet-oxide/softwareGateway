@@ -45,6 +45,15 @@ var (
 	// ErrUnsupported means the registry lacks a capability. Not retryable.
 	ErrUnsupported = errors.New("unsupported by registry")
 
+	// ErrMountUnsupported means a cross-repository mount was declined.
+	//
+	// NOT a failure, and separate from ErrUnsupported so a caller cannot
+	// accidentally treat it as one. Mount is an optimisation: the specification
+	// permits a registry to answer 202 with an ordinary upload session instead,
+	// and support is uneven in practice. Streaming the blob is always correct,
+	// so this means "take the next rung of the ladder", not "this went wrong".
+	ErrMountUnsupported = errors.New("cross-repository mount declined")
+
 	// ErrMalformedResponse means the registry answered with something we
 	// cannot parse — a proxy error page in place of JSON, say.
 	ErrMalformedResponse = errors.New("malformed registry response")

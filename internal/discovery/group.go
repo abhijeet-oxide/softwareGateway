@@ -5,6 +5,7 @@ import (
 	"errors"
 	"sync"
 
+	"github.com/abhijeet-oxide/softwareGateway/internal/oci"
 	"github.com/abhijeet-oxide/softwareGateway/internal/registry"
 	"github.com/abhijeet-oxide/softwareGateway/internal/store"
 	"github.com/abhijeet-oxide/softwareGateway/internal/vendors"
@@ -87,13 +88,13 @@ func (s *Scanner) headPhase(ctx context.Context, work []tagWork, limit int) []re
 // fetched is a tag whose manifest we now hold.
 type fetched struct {
 	work tagWork
-	tree tree
+	tree oci.Tree
 	err  error
 }
 
 // fetchPhase fetches the manifest of every tag the head phase found new.
 //
-// Exactly one request per new tag, whatever the package contains — the tree
+// Exactly one request per new tag, whatever the package contains — the oci.Tree
 // walk stays deferred (see fetchPackage). Together with the HEAD, a newly
 // discovered tag costs two round trips.
 func (s *Scanner) fetchPhase(ctx context.Context, resolved []resolvedTag, limit int) []fetched {
@@ -122,7 +123,7 @@ func (s *Scanner) fetchPhase(ctx context.Context, resolved []resolvedTag, limit 
 			sem <- struct{}{}
 			defer func() { <-sem }()
 
-			t, err := fetchPackage(ctx, r.work.client, r.desc)
+			t, err := oci.FetchRoot(ctx, r.work.client, r.desc)
 			out[i] = fetched{work: r.work, tree: t, err: err}
 			if err == nil {
 				s.progress.update(func(p *ScanProgress) { p.Artifacts += len(t.Artifacts) })

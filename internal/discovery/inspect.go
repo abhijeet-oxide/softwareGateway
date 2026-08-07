@@ -3,8 +3,8 @@ package discovery
 import (
 	"context"
 	"fmt"
-	"sync"
 
+	"github.com/abhijeet-oxide/softwareGateway/internal/oci"
 	"github.com/abhijeet-oxide/softwareGateway/internal/registry"
 	"github.com/abhijeet-oxide/softwareGateway/internal/store"
 )
@@ -26,7 +26,7 @@ type InspectResult struct {
 	AlreadyExpanded bool
 }
 
-// InspectPackage walks a package's manifest tree and records what it finds.
+// InspectPackage walks a package's manifest oci.Tree and records what it finds.
 //
 // Discovery deliberately stops at the tag's own manifest: it answers "what is
 // new", and the root digest immutably determines everything beneath it, so the
@@ -35,7 +35,7 @@ type InspectResult struct {
 // before moving bytes, so a package's contents are computed one way and not
 // two.
 //
-// Idempotent. The tree under a digest cannot change, so a second inspection
+// Idempotent. The oci.Tree under a digest cannot change, so a second inspection
 // fetches nothing and returns the same answer.
 func InspectPackage(
 	ctx context.Context,
@@ -52,14 +52,48 @@ func InspectPackage(
 		return InspectResult{}, fmt.Errorf("package %d has an unusable digest: %w", pkg.ID, err)
 	}
 
-	t, fetched, err := walkTree(ctx, client, root, concurrency)
+	// THE RECORD FIRST. The tree under a digest is immutable, so a tree already
+	// walked can never be stale — content addressing is what makes this cache
+	// safe, and would not make it safe for anything mutable.
+	//
+	// This used to walk unconditionally and set AlreadyExpanded from a count
+	// that could never be zero, so the function claimed idempotence while
+	// re-fetching every manifest each time. Measured: three registry calls on
+	// the second inspection of a three-manifest package.
+	recorded, complete, err := packages.ReadExpandedTree(ctx, pkg.ID)
+	if err != nil {
+		return InspectResult{}, err
+	}
+	if complete {
+		return inspectResultFrom(ctx, packages, pkg.ID, recorded, 0, true)
+	}
+
+	t, fetched, err := oci.Walk(ctx, client, root, concurrency)
 	if err != nil {
 		return InspectResult{}, err
 	}
 
+	expanded := toStoreTree(t)
+	if err := packages.RecordExpandedTree(ctx, pkg.ID, expanded); err != nil {
+		return InspectResult{}, err
+	}
+	return inspectResultFrom(ctx, packages, pkg.ID, expanded, fetched, false)
+}
+
+// inspectResultFrom builds the answer from a tree, however it was obtained.
+//
+// One shape whether the tree came from the registry or from the record, so a
+// caller cannot tell — and cannot come to depend on — which happened. Fetched
+// is the honest difference: it is the count of manifests THIS call pulled, and
+// zero is the useful answer rather than a missing one.
+func inspectResultFrom(
+	ctx context.Context, packages *store.Packages, packageID int64,
+	t store.ExpandedTree, fetched int, cached bool,
+) (InspectResult, error) {
 	res := InspectResult{
-		Fetched:   fetched,
-		Artifacts: len(t.Artifacts),
+		Fetched:         fetched,
+		Artifacts:       len(t.Artifacts),
+		AlreadyExpanded: cached,
 	}
 	if t.TotalBytes != nil {
 		res.TotalBytes = *t.TotalBytes
@@ -68,15 +102,7 @@ func InspectPackage(
 		res.Blobs = *t.BlobCount
 	}
 
-	// Already expanded: the recorded blob count matches what the walk found and
-	// nothing was fetched. Reported rather than silently doing the same work.
-	res.AlreadyExpanded = fetched == 0
-
-	if err := packages.RecordExpandedTree(ctx, pkg.ID, toStoreTree(t)); err != nil {
-		return InspectResult{}, err
-	}
-
-	updated, err := packages.GetPackageByID(ctx, pkg.ID)
+	updated, err := packages.GetPackageByID(ctx, packageID)
 	if err != nil {
 		return InspectResult{}, err
 	}
@@ -84,93 +110,8 @@ func InspectPackage(
 	return res, nil
 }
 
-// walkTree is the recursive descent discovery no longer does.
-//
-// Breadth-first, level by level, so parents are recorded before their children
-// and each artifact's Parent — an INDEX into the slice — stays correct. A
-// level's nodes are fetched in parallel; the bookkeeping that appends to the
-// tree runs on one goroutine in level order.
-//
-// Returns the number of manifests actually fetched, which is what tells a
-// caller whether it did work or found the answer already known.
-func walkTree(
-	ctx context.Context, src registry.ManifestReader, root registry.Descriptor, concurrency int,
-) (tree, int, error) {
-	if concurrency <= 0 {
-		concurrency = 1
-	}
-
-	var t tree
-	level := []queuedChild{{desc: root, parent: -1, depth: 0}}
-	seen := map[registry.Digest]bool{}
-	fetched := 0
-
-	for len(level) > 0 {
-		pending := make([]queuedChild, 0, len(level))
-		for _, q := range level {
-			if seen[q.desc.Digest] {
-				continue
-			}
-			seen[q.desc.Digest] = true
-			pending = append(pending, q)
-		}
-		if len(pending) == 0 {
-			break
-		}
-		if len(t.Artifacts)+len(pending) > maxListedArtifacts {
-			return tree{}, fetched, fmt.Errorf(
-				"manifest tree exceeds %d artifacts", maxListedArtifacts)
-		}
-		if pending[0].depth > maxTreeDepth {
-			return tree{}, fetched, fmt.Errorf(
-				"manifest tree deeper than %d levels", maxTreeDepth)
-		}
-
-		type result struct {
-			q    queuedChild
-			desc registry.Descriptor
-			raw  []byte
-			err  error
-		}
-		results := make([]result, len(pending))
-
-		sem := make(chan struct{}, concurrency)
-		var wg sync.WaitGroup
-		for i, q := range pending {
-			wg.Add(1)
-			go func(i int, q queuedChild) {
-				defer wg.Done()
-				sem <- struct{}{}
-				defer func() { <-sem }()
-
-				desc, raw, err := src.FetchManifest(ctx, q.desc.Digest.String())
-				results[i] = result{q: q, desc: desc, raw: raw, err: err}
-			}(i, q)
-		}
-		wg.Wait()
-
-		var next []queuedChild
-		for _, r := range results {
-			if r.err != nil {
-				return tree{}, fetched, fmt.Errorf("fetch manifest %s: %w",
-					r.q.desc.Digest.Short(), r.err)
-			}
-			fetched++
-			children, err := appendArtifact(&t, r.q.desc, r.desc, r.raw, r.q.parent, r.q.depth)
-			if err != nil {
-				return tree{}, fetched, err
-			}
-			next = append(next, children...)
-		}
-		level = next
-	}
-
-	t.TotalBytes, t.BlobCount = measure(t.Artifacts)
-	return t, fetched, nil
-}
-
-// toStoreTree flattens the in-memory tree into what the store writes.
-func toStoreTree(t tree) store.ExpandedTree {
+// toStoreTree flattens the in-memory oci.Tree into what the store writes.
+func toStoreTree(t oci.Tree) store.ExpandedTree {
 	out := store.ExpandedTree{Artifacts: make([]store.ExpandedArtifact, 0, len(t.Artifacts))}
 
 	for _, a := range t.Artifacts {

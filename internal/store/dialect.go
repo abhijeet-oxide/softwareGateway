@@ -26,6 +26,14 @@ type Dialect interface {
 	Now() string
 	// Bool renders a boolean literal.
 	Bool(b bool) string
+	// TimeAgo renders "the moment N seconds before now", where N is a
+	// placeholder expression.
+	//
+	// A dialect method because the two databases have nothing in common here:
+	// Postgres subtracts an interval from a timestamp, SQLite does date
+	// arithmetic on a string. Both produce a value comparable with a stored
+	// timestamp, which is all the caller needs.
+	TimeAgo(secondsExpr string) string
 	// Name identifies the dialect.
 	Name() Driver
 }
@@ -76,7 +84,11 @@ func (postgresDialect) Rewrite(query string) string {
 	return b.String()
 }
 
-func (postgresDialect) Now() string        { return "now()" }
+func (postgresDialect) Now() string { return "now()" }
+
+func (postgresDialect) TimeAgo(secondsExpr string) string {
+	return "(now() - make_interval(secs => " + secondsExpr + "))"
+}
 func (postgresDialect) Bool(b bool) string { return map[bool]string{true: "TRUE", false: "FALSE"}[b] }
 func (postgresDialect) Name() Driver       { return DriverPostgres }
 
@@ -87,6 +99,10 @@ func (sqliteDialect) Rewrite(query string) string { return query }
 
 // Now matches the DEFAULT expression in the SQLite migration, so a value
 // written by the application sorts identically to one written by the schema.
-func (sqliteDialect) Now() string        { return "strftime('%Y-%m-%dT%H:%M:%fZ','now')" }
+func (sqliteDialect) Now() string { return "strftime('%Y-%m-%dT%H:%M:%fZ','now')" }
+
+func (sqliteDialect) TimeAgo(secondsExpr string) string {
+	return "strftime('%Y-%m-%dT%H:%M:%fZ','now', '-' || " + secondsExpr + " || ' seconds')"
+}
 func (sqliteDialect) Bool(b bool) string { return map[bool]string{true: "1", false: "0"}[b] }
 func (sqliteDialect) Name() Driver       { return DriverSQLite }

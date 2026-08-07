@@ -1,4 +1,4 @@
-package discovery
+package oci
 
 import (
 	"context"
@@ -24,8 +24,8 @@ const (
 	maxTreeDepth = 4
 )
 
-// artifact is one manifest in a package's tree, with its raw bytes.
-type artifact struct {
+// Artifact is one manifest in a package's Tree, with its raw bytes.
+type Artifact struct {
 	Descriptor registry.Descriptor
 	// Raw is the manifest exactly as the registry served it. Kept verbatim
 	// because the digest — and every signature over it — is the hash of these
@@ -36,19 +36,19 @@ type artifact struct {
 	Depth  int
 	// Blobs are the config and layer descriptors this manifest references.
 	// Empty for an index, whose children are manifests rather than blobs.
-	Blobs []blobRef
+	Blobs []BlobRef
 }
 
-type blobRef struct {
+type BlobRef struct {
 	Descriptor registry.Descriptor
 	// Kind is "config" or "layer".
 	Kind    string
 	Ordinal int
 }
 
-// tree is a flattened artifact tree, parents before children.
-type tree struct {
-	Artifacts []artifact
+// Tree is a flattened artifact Tree, parents before children.
+type Tree struct {
+	Artifacts []Artifact
 	// TotalBytes is the transfer cost, counting each distinct digest ONCE.
 	//
 	// Deduplicated deliberately: a fat index whose platforms share a base layer
@@ -96,9 +96,9 @@ type manifestBody struct {
 
 // fetchPackage fetches the tag's OWN manifest, and nothing else.
 //
-// This used to walk the whole tree, fetching every child of every index. It no
+// This used to walk the whole Tree, fetching every child of every index. It no
 // longer does, and the argument for deferring is that NOTHING IS LOST: the root
-// digest immutably determines the entire tree, so it can be walked exactly, at
+// digest immutably determines the entire Tree, so it can be walked exactly, at
 // any time, from one digest we already hold. The traversal was a cache, and it
 // was paid for on every newly discovered tag — a bundle whose index references
 // sixty artifacts cost sixty extra round trips, and a first scan of a real
@@ -115,23 +115,23 @@ type manifestBody struct {
 // discovery — the index states the size of each child MANIFEST, not of the
 // layers underneath it. That is reported as unknown rather than guessed. See
 // tree.TotalBytes.
-func fetchPackage(
+func FetchRoot(
 	ctx context.Context, src registry.ManifestReader, root registry.Descriptor,
-) (tree, error) {
-	var t tree
+) (Tree, error) {
+	var t Tree
 
 	desc, raw, err := src.FetchManifest(ctx, root.Digest.String())
 	if err != nil {
-		return tree{}, fmt.Errorf("fetch manifest %s: %w", root.Digest.Short(), err)
+		return Tree{}, fmt.Errorf("fetch manifest %s: %w", root.Digest.Short(), err)
 	}
 
 	children, err := appendArtifact(&t, root, desc, raw, -1, 0)
 	if err != nil {
-		return tree{}, err
+		return Tree{}, err
 	}
 
 	if len(children) > maxListedArtifacts {
-		return tree{}, fmt.Errorf("index lists %d artifacts, more than the %d cap",
+		return Tree{}, fmt.Errorf("index lists %d artifacts, more than the %d cap",
 			len(children), maxListedArtifacts)
 	}
 
@@ -143,7 +143,7 @@ func fetchPackage(
 			continue
 		}
 		seen[c.desc.Digest] = true
-		t.Artifacts = append(t.Artifacts, artifact{
+		t.Artifacts = append(t.Artifacts, Artifact{
 			Descriptor: c.desc,
 			Parent:     c.parent,
 			Depth:      c.depth,
@@ -170,7 +170,7 @@ type queuedChild struct {
 // one goroutine, in level order, or the parent indices would point at the
 // wrong artifacts.
 func appendArtifact(
-	t *tree, from, desc registry.Descriptor, raw []byte, parent, depth int,
+	t *Tree, from, desc registry.Descriptor, raw []byte, parent, depth int,
 ) ([]queuedChild, error) {
 	// Carry the media type and platform from the referencing descriptor when
 	// the response omits them: an index states its children's platforms, and
@@ -211,14 +211,14 @@ func appendArtifact(
 		desc.Annotations = merged
 	}
 
-	a := artifact{Descriptor: desc, Raw: raw, Parent: parent, Depth: depth}
+	a := Artifact{Descriptor: desc, Raw: raw, Parent: parent, Depth: depth}
 
 	var children []queuedChild
 
 	switch {
 	case registry.IsIndex(desc.MediaType):
 		if depth >= maxTreeDepth {
-			return nil, fmt.Errorf("manifest tree deeper than %d levels", maxTreeDepth)
+			return nil, fmt.Errorf("manifest Tree deeper than %d levels", maxTreeDepth)
 		}
 		idx := len(t.Artifacts)
 		for _, child := range body.Manifests {
@@ -237,13 +237,13 @@ func appendArtifact(
 			if err := body.Config.Digest.Validate(); err != nil {
 				return nil, fmt.Errorf("manifest %s config: %w", desc.Digest.Short(), err)
 			}
-			a.Blobs = append(a.Blobs, blobRef{Descriptor: *body.Config, Kind: "config"})
+			a.Blobs = append(a.Blobs, BlobRef{Descriptor: *body.Config, Kind: "config"})
 		}
 		for i, layer := range body.Layers {
 			if err := layer.Digest.Validate(); err != nil {
 				return nil, fmt.Errorf("manifest %s layer %d: %w", desc.Digest.Short(), i, err)
 			}
-			a.Blobs = append(a.Blobs, blobRef{Descriptor: layer, Kind: "layer", Ordinal: i})
+			a.Blobs = append(a.Blobs, BlobRef{Descriptor: layer, Kind: "layer", Ordinal: i})
 		}
 	}
 
@@ -252,7 +252,7 @@ func appendArtifact(
 }
 
 // measure sums distinct content, counting each digest once.
-func measure(artifacts []artifact) (*int64, *int) {
+func measure(artifacts []Artifact) (*int64, *int) {
 	// An artifact we listed but did not fetch has no blob list, so its bytes
 	// are unaccounted for. Reporting a total that omits them would understate a
 	// bundle's transfer cost — by nearly all of it — and a wrong size is worse
@@ -295,7 +295,7 @@ func measure(artifacts []artifact) (*int64, *int) {
 // written by whoever published the artifact, so a value that is not a
 // timestamp is dropped rather than stored for something downstream to trip
 // over.
-func publishedAt(artifacts []artifact) *string {
+func publishedAt(artifacts []Artifact) *string {
 	if len(artifacts) == 0 {
 		return nil
 	}

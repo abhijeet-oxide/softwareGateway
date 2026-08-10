@@ -1,0 +1,443 @@
+# THE REFERENCE PRODUCT.
+#
+# One document that exercises every field the schema has, annotated with why
+# each one exists. Copy it, delete what you do not need — most real products
+# are a fifth of this length, because almost everything here has a default.
+#
+# It is also the fixture `task validate` runs, so it cannot drift from the
+# validator: a field that stops being accepted breaks CI here first.
+#
+# The shape to hold in your head:
+#
+#   sources   vendor-side, READ-ONLY, polled by discovery.
+#             One source = ONE REGISTRY + one or more repositories on it.
+#   targets   yours, READ-WRITE. One target = ONE FIXED REPOSITORY.
+#             Everything replicated to a target lands under that one path.
+
+apiVersion: softwaregateway.io/v1alpha1
+kind: Product
+
+metadata:
+  # The resource ID: lowercase alphanumeric and hyphens, <=63 chars. Immutable —
+  # it appears in API paths, metric labels and every audit record.
+  name: reference
+  displayName: "Reference Product"
+  description: "Every configurable field, annotated. Copy and cut down."
+  owner: platform-infra@example.com
+  labels:
+    tier: critical
+    vendor: example
+  # Turns the whole product off without deleting it. Defaults to true.
+  #
+  # Deleting a document to pause a product loses the thing you most want back:
+  # the exact registries, filters and rules that were working. A disabled
+  # product still loads and still VALIDATES, so a mistake in it surfaces now
+  # rather than on the day someone re-enables it.
+  enabled: true
+
+spec:
+  # =====================================================================
+  # NETWORK — TLS trust, proxy and timeouts for everything in this product.
+  #
+  # Inherited by every source and target; each may override it.
+  # =====================================================================
+  network:
+    # A PEM bundle projected by VSO at <configDir>/secrets/internal-ca/ca.crt.
+    # APPENDED to the system roots, never replacing them — a product that adds
+    # a private CA still needs to reach public registries and Sigstore.
+    caBundleRef:
+      secretName: internal-ca
+      key: ca.crt
+
+    proxy:
+      httpsProxy: http://proxy.example.com:3128
+      noProxy: [".svc.cluster.local", "internal.example.com"]
+
+    # Per request, not per transfer. A blob has no total deadline: a 40 GB blob
+    # is not slow, it is large. idleStall is what catches a dead connection —
+    # bytes stopped arriving, which is a real failure at any size.
+    timeouts:
+      connect: 10s
+      responseHeader: 30s
+      idleStall: 60s
+
+    # tls.insecureSkipVerify exists and is deliberately not set here.
+    #
+    # It disables the chain, the expiry AND the hostname check. Supplying a
+    # caBundleRef is the right fix for an untrusted chain. In particular it does
+    # NOT fix "x509: negative serial number" — that failure happens while
+    # PARSING the certificate, before any verification runs, so skipping
+    # verification changes nothing. Measured, not assumed; the fix is
+    # tls.allowNegativeSerialNumbers in system configuration.
+
+  # =====================================================================
+  # SOURCES
+  # =====================================================================
+  sources:
+    # -----------------------------------------------------------------
+    # 1. The common case: one registry, one repository, credentials from a
+    #    Secret, polled every 15 minutes.
+    # -----------------------------------------------------------------
+    - name: primary
+      registry: registry.vendor.example.com
+      repository: platform/suite
+      # `generic` — plain OCI Distribution v2 — is right for every registry we
+      # have met, including vendors with elaborate publishing conventions.
+      # acr | artifactory | quay exist only for genuine protocol deviations.
+      type: generic
+      credentialsRef:
+        secretName: vendor-registry
+        # Defaults to the `username` and `password` keys; override if VSO
+        # projects the Secret with different ones.
+        usernameKey: username
+        passwordKey: password
+
+      discovery:
+        enabled: true
+        interval: 15m
+        tagFilters:
+          # RE2 (Go regexp): linear time, no backtracking. Stated explicitly
+          # because a user-supplied pattern evaluated inside a polling loop
+          # would, under a backtracking engine, be a denial-of-service vector.
+          #
+          # No include patterns admits everything. Exclude always wins.
+          include: ['^v\d+\.\d+\.\d+$']
+          exclude: ['-(rc|beta|alpha)\.']
+
+      # ONE number: requests in flight against this registry, which is ALSO the
+      # connection pool, because those are the same thing — point more
+      # goroutines at a pool of 32 and you get 32 in-flight requests and a
+      # queue. Absent inherits the application-level `concurrency.perRegistry`
+      # (32), and absent is the usual case. This one is spelled out because the
+      # vendor asked us to stay under 50 rps.
+      #
+      # requestsPerSecond is a politeness ceiling ON TOP, for a vendor that
+      # limits by rate rather than connection count. Burst is derived (2×), not
+      # configurable — it was a third number whose only sensible value is a
+      # small multiple of the rate.
+      concurrency:
+        perRegistry: 32
+        requestsPerSecond: 50
+
+    # -----------------------------------------------------------------
+    # 2. SEVERAL REPOSITORIES, named explicitly — a product that ships as one
+    #    repository per component.
+    #
+    #    One source, not four: they share a registry host, one credential and
+    #    one rate-limit budget. Four sources would duplicate all three and let
+    #    the budgets multiply against a vendor that only ever sees one client.
+    # -----------------------------------------------------------------
+    - name: components
+      registry: registry.vendor.example.com
+      repositories:
+        - suite/core
+        - suite/database
+        - suite/frontend
+        - suite/agent
+      credentialsRef:
+        secretName: vendor-registry
+      discovery:
+        enabled: true
+        interval: 15m
+        tagFilters:
+          include: ['^v\d+\.\d+\.\d+$']
+      concurrency:
+        perRegistry: 16
+        requestsPerSecond: 50
+
+    # -----------------------------------------------------------------
+    # 3. NO REPOSITORIES NAMED — the interesting case.
+    #
+    #    Naming none means "every repository on this registry", found from the
+    #    catalog on every scan. This is what you want when you cannot know the
+    #    set in advance: each new plugin ships as a NEW repository, and listing
+    #    them by hand means a plugin is silently not replicated until somebody
+    #    remembers to edit this file.
+    #
+    #    There is deliberately no `repositoryDiscovery.enabled` switch. Naming
+    #    nothing IS the statement, so configuration cannot say one thing and
+    #    mean another.
+    # -----------------------------------------------------------------
+    - name: plugins
+      registry: partner.example.com
+      credentialsRef:
+        secretName: partner-registry
+      discovery:
+        enabled: true
+        interval: 30m
+        # Both filters live here because discovery is what they govern: a scan
+        # finds REPOSITORIES, then TAGS, and each step gets a filter.
+        # repositoryFilters is what keeps the scope to ours on a registry
+        # shared with other teams.
+        repositoryFilters:
+          include: ['^example/plugins/']
+          exclude: ['-test$', '-scratch$']
+        tagFilters:
+          include: ['^v\d+\.\d+\.\d+$']
+        # Bounds what ONE scan will adopt when enumerating. A catalog that
+        # suddenly returns thousands of repositories is far likelier to be a
+        # misconfiguration than a real change, and adopting them all would
+        # point thousands of scanners at one registry. Defaults to 200.
+        maxRepositories: 100
+
+      # Per-source network settings override the product's where set.
+      #
+      # `direct: true` bypasses the product-level proxy entirely. "Everything
+      # through the corporate proxy except this one registry" is the normal
+      # shape, and repeating the host in noProxy at every level is easy to get
+      # subtly wrong when it has a port or an alias.
+      network:
+        proxy:
+          direct: true
+
+      # Signing trust for THIS vendor. Two vendors do not share a signing
+      # identity. The scalars (policy, atSource, …) inherit from the product;
+      # `cosign` REPLACES wholesale — a trust configuration assembled field by
+      # field from two documents is one nobody can audit.
+      #
+      # Executes in M5; validated now so it is correct when it arrives.
+      verification:
+        enabled: true
+        atSource: true
+        policy: warn          # still onboarding their signing
+        cosign:
+          mode: key
+          key:
+            publicKeyRef:
+              secretName: partner-signing-key
+              key: cosign.pub
+
+    # -----------------------------------------------------------------
+    # 4. A VENDOR WITH ITS OWN SIGNATURE LAYOUT, and anonymous access.
+    #
+    #    `signatures` has TWO independent axes, because they genuinely vary
+    #    independently — a vendor may pair the referrers API with PKCS#7, or a
+    #    wrapper index with a Sigstore bundle:
+    #
+    #      layout   WHERE the signature is:  auto | none | standard | near
+    #      format   HOW it is checked:       auto | cosign | pkcs7
+    #
+    #    `layout` is NOT the source's `type`. `type` says how to SPEAK to the
+    #    registry, and for every vendor we have met that is plain Distribution
+    #    v2 — including Nokia's NEAR, whose protocol is entirely standard. What
+    #    differs is the publishing convention, which is this.
+    #
+    #    `near` groups the three tags NEAR publishes per release —
+    #    orb_X, signature_orb_X and the signed_orb_X index over both — into ONE
+    #    package, and makes the index the transfer root so the signature travels
+    #    with the payload. Transferring orb_X alone would leave the signature
+    #    behind, and destination-side verification would then be impossible
+    #    forever.
+    #
+    #    Omit the whole block for a conformant registry: `auto` is correct.
+    # -----------------------------------------------------------------
+    - name: near
+      registry: near.vendor.example.com
+      repositories:
+        - orbs/cfx-5000-k8s
+        - orbs/cfx-5000-db
+      # Anonymous access — some vendors publish openly. Mutually exclusive
+      # with credentialsRef; one of the two is required.
+      anonymous: true
+      discovery:
+        enabled: true
+        interval: 30m
+      signatures:
+        layout: near
+        format: pkcs7
+        # CA roots for PKCS#7 (a public key or Fulcio root for cosign). A
+        # reference, never inline: every credential and key is managed by VSO
+        # and read from a projected Secret. Read by M5.
+        trustBundleRef:
+          secretName: vendor-signing-ca
+          key: ca.crt
+
+    # -----------------------------------------------------------------
+    # 5. A FAILOVER MIRROR — reachable, but not polled.
+    #
+    #    Note the two different switches, and the difference between them:
+    #
+    #      enabled: false            the source does not exist for any purpose
+    #      discovery.enabled: false  it can still be transferred FROM on
+    #                                request, but is not polled
+    #
+    #    Discovery is off here because both registries serve the same content,
+    #    and polling both would double-discover every tag.
+    # -----------------------------------------------------------------
+    - name: mirror
+      registry: registry-eu.vendor.example.com
+      repository: platform/suite
+      credentialsRef:
+        secretName: vendor-registry
+      discovery:
+        enabled: false
+      concurrency:
+        perRegistry: 16
+
+  # =====================================================================
+  # TARGETS
+  #
+  # A target is a PLACE: one registry, one fixed repository. Everything
+  # replicated to it lands under that path, whatever repository it came from —
+  # what follows is the registry's own addressing, tags and digests.
+  #
+  # One fixed path rather than a mapping derived from the source's, because lab
+  # is one repository and production is another, and a deployment points at one
+  # of them. Deriving the destination would mean your path changed whenever a
+  # vendor reorganised theirs.
+  #
+  # WORTH KNOWING: with several source repositories feeding one target, BLOBS
+  # never collide — they are content-addressed. TAGS can. Two repositories both
+  # publishing `v1.2.3` become one tag at the target, and the later push wins.
+  # If your vendor's tags are not globally unique, use one target per source
+  # repository.
+  # =====================================================================
+  targets:
+    - name: lab
+      registry: internal.example.com
+      repository: vendor/platform
+      type: generic
+      credentialsRef:
+        secretName: internal-registry
+      # Used when a transfer request names no target. At most one per product.
+      default: true
+      # A registry we own, so we can be less polite than with a vendor.
+      concurrency:
+        perRegistry: 64
+        requestsPerSecond: 200
+
+    - name: production
+      # Same REGISTRY as lab, different repository — so a lab→production
+      # promotion can use cross-repository mount and move almost no bytes.
+      registry: internal.example.com
+      repository: vendor/platform-prod
+      type: generic
+      credentialsRef:
+        secretName: internal-registry
+      # Rejects direct replication: production is reachable only by promotion
+      # from another target. Mutually exclusive with `default`.
+      promotionOnly: true
+      concurrency:
+        perRegistry: 32
+      # Destination-side verification can differ from the source's — this is
+      # the check that runs after the push, against what actually landed.
+      #
+      # An override block must be SELF-CONTAINED: `policy` and the whole
+      # `cosign` block are spelled out even though the product already says the
+      # same thing. Validation checks each block on its own, because a trust
+      # configuration you have to merge two documents in your head to read is
+      # one nobody can audit.
+      verification:
+        enabled: true
+        policy: enforce
+        atDestination: true
+        cosign:
+          mode: keyless
+          keyless:
+            certificateIdentity: 'https://github.com/vendor/platform/.github/workflows/release.yaml@refs/heads/main'
+            certificateOidcIssuer: 'https://token.actions.githubusercontent.com'
+
+    - name: legacy-dr
+      registry: dr.example.com
+      repository: vendor/platform
+      anonymous: true
+      # Being decommissioned. `enabled: false` stops it receiving transfers
+      # without throwing away the configuration or its history.
+      #
+      # Validation REJECTS an autoDownload rule pointing at a disabled target,
+      # because that would otherwise fail the first time a package matched.
+      enabled: false
+
+  # =====================================================================
+  # AUTO-DOWNLOAD — what to replicate without being asked.
+  # =====================================================================
+  autoDownload:
+    enabled: true
+    rules:
+      # Evaluated in order, FIRST MATCH WINS — not all-match, because two rules
+      # matching one tag with different priorities has no sensible reading.
+      - name: ga-releases
+        tagPattern: '^v\d+\.\d+\.\d+$'
+        targets: [lab]
+        priority: 100          # 0-100; defaults to 50
+        verifyBeforeTransfer: true
+
+      - name: release-candidates
+        tagPattern: '^v\d+\.\d+\.\d+-rc\.\d+$'
+        targets: [lab]
+        priority: 10
+
+      # `targets` omitted: goes to the default target. Validation rejects this
+      # if no default is declared, rather than discovering it at match time.
+      - name: near-orbs
+        tagPattern: '^orb_\d+\.\d+\.\d+$'
+        priority: 50
+
+  # =====================================================================
+  # VERIFICATION — product-wide defaults, overridable per source and target.
+  #
+  # Executes in M5. Configuration written now stays valid, and discovery
+  # already reports WHETHER a package is signed, which it cannot do without
+  # knowing where to look.
+  # =====================================================================
+  verification:
+    enabled: true
+    # enforce — a failure blocks or fails the transfer.
+    # warn    — record it, notify, and proceed. Right while onboarding a vendor
+    #           whose signing setup is not yet understood.
+    policy: enforce
+    atSource: true
+    atDestination: true
+    # Defaults to true, and should stay true: without it the destination holds
+    # unsigned copies and the chain of custody ends at our boundary.
+    transferSignatures: true
+    cosign:
+      mode: keyless
+      keyless:
+        # BOTH constraints are REQUIRED, and validation rejects the document
+        # without them. Keyless verification with no identity constraint
+        # accepts any valid Sigstore signature from anyone: it proves someone
+        # signed the artifact, not that the vendor did. That is syntactically
+        # valid, semantically useless, and would look perfectly secure in
+        # production — which is why it is an error and not a warning.
+        certificateIdentity: 'https://github.com/vendor/platform/.github/workflows/release.yaml@refs/heads/main'
+        certificateOidcIssuer: 'https://token.actions.githubusercontent.com'
+
+  # =====================================================================
+  # NOTIFICATIONS
+  # =====================================================================
+  notifications:
+    enabled: true
+    channels:
+      - name: platform-email
+        type: email
+        email:
+          recipients:
+            - platform-infra@example.com
+
+      - name: platform-teams
+        type: teams
+        teams:
+          # Must be a Power Automate WORKFLOW URL. Legacy O365 connector
+          # webhooks (outlook.office.com/webhook/...) are retired and no longer
+          # work in current tenants.
+          webhookUrlRef:
+            secretName: teams-webhook
+            key: url
+
+    subscriptions:
+      # The closed set of events: PackageDiscovered, TransferCompleted,
+      # PromotionCompleted, TransferFailed, VerificationFailed, DiscoveryFailed.
+      # An unknown name is rejected — a subscription to an event that will
+      # never fire is silence you would mistake for calm.
+      - events: [PackageDiscovered]
+        channels: [platform-email]
+      - events: [TransferFailed, VerificationFailed, DiscoveryFailed]
+        channels: [platform-email, platform-teams]
+
+  # =====================================================================
+  # RETENTION — how long history is kept, per record kind.
+  # =====================================================================
+  retention:
+    transfers: 2160h        # 90 days
+    auditEvents: 8760h      # 1 year

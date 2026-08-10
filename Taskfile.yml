@@ -296,13 +296,71 @@ tasks:
     desc: Confirm the validator actually rejects bad configuration
     # A validator that passes everything is worse than none, because it is
     # trusted. This asserts the negative case.
+    #
+    # The broken document is written to a temp directory rather than kept in
+    # the tree: dev/products/ is a reference an operator copies from, and a
+    # deliberately invalid file sitting next to it is a trap. The three error
+    # classes below are the ones from docs/design/13-cli.md section 9, and each
+    # also has a unit test in internal/product/validate_test.go asserting its
+    # exact field path — this task checks that the CLI surfaces them.
     cmds:
       - |
-        if go run ./cmd/transferctl config validate ./dev/products-invalid; then
+        DIR="$(mktemp -d)"
+        trap 'rm -rf "$DIR"' EXIT
+        cat > "$DIR/broken.yaml" <<'YAML'
+        apiVersion: softwaregateway.io/v1alpha1
+        kind: Product
+        metadata:
+          name: broken-example
+        spec:
+          sources:
+            - name: primary
+              registry: registry.vendor.example.com
+              repository: analytics/suite
+              anonymous: true
+          targets:
+            - name: lab
+              registry: internal.example.com
+              repository: vendor/analytics
+              anonymous: true
+              default: true
+          autoDownload:
+            enabled: true
+            rules:
+              - name: ga-releases
+                # (1) unbalanced parenthesis — will not compile
+                tagPattern: '^v(\d+\.\d+'
+                # (2) 'prod' is never declared under spec.targets
+                targets: [prod]
+          verification:
+            enabled: true
+            policy: enforce
+            atDestination: true
+            cosign:
+              mode: keyless
+              keyless:
+                # (3) certificateIdentity is missing. Without it, ANY valid
+                # Sigstore signature from ANY signer would be accepted. This is
+                # the one that matters most: syntactically valid, semantically
+                # useless, and it would look perfectly secure in production.
+                certificateOidcIssuer: 'https://token.actions.githubusercontent.com'
+        YAML
+        OUT="$(go run ./cmd/transferctl config validate "$DIR" 2>&1)" && {
+          echo "$OUT"
           echo "the broken fixture was ACCEPTED — the validator is not working"
           exit 1
-        fi
-        echo "validator correctly rejected the broken fixture"
+        }
+        echo "$OUT"
+        for want in \
+          'spec.autoDownload.rules[0].tagPattern' \
+          'spec.autoDownload.rules[0].targets[0]' \
+          'spec.verification.cosign.keyless.certificateIdentity'; do
+          case "$OUT" in
+            *"$want"*) ;;
+            *) echo "validator rejected the fixture but never reported $want"; exit 1 ;;
+          esac
+        done
+        echo "validator correctly rejected the broken fixture, naming all three fields"
 
   # --------------------------------------------------------------- database --
 

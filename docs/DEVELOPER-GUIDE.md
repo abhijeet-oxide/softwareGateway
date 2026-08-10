@@ -1137,6 +1137,90 @@ transferctl packages describe <product> cfx-5000-k8s:23.8.1076
 
 A source with no `vendor` gets no shortening at all. If you are seeing shortened names on a registry that has no such convention, that is the bug this gating fixed — the CLI used to guess the prefix from whatever a page of results had in common.
 
+**How do I check a package's signature? (and what does SIGNED actually mean)**
+
+Two different questions, and this build answers only the first.
+
+| | Implemented | What it tells you |
+|---|---|---|
+| Is a signature **present**? | yes | the vendor published one, and where it is |
+| Is that signature **valid**? | **no** — M5 | nothing yet |
+
+The `SIGNED` column and `signatureStatus` report **presence**, discovered by the source's vendor plugin. Nothing in this build builds a certificate chain, consults a trust root, or checks a signature against a key — so `SIGNED` means "the vendor published a signature artifact alongside this release", not "we checked it and it is theirs". `packages describe` says so in as many words, deliberately, because that column is exactly the sort of thing a release decision gets made on.
+
+The three states are worth distinguishing:
+
+| | Meaning |
+|---|---|
+| `signed` | a signature artifact was found |
+| `unsigned` | the source's plugin looked, and the vendor published none |
+| `n/a` | **nobody looked** — the source declares no `vendor`, so no plugin knows where this vendor puts signatures |
+
+`n/a` is not a weaker `no`. A source with no `vendor` reports `n/a` for everything, including releases that are in fact signed.
+
+**Every package says `no` under SIGNED, and my vendor definitely signs them**
+
+Almost always the tag filter. This is the configuration that causes it:
+
+```yaml
+discovery:
+  tagFilters:
+    include: ['^orb_']        # "track the release tags"
+```
+
+Nothing is wrong with that filter — but `signed_orb_X` and `signature_orb_X` do not match `^orb_`, and the signature lives in those tags.
+
+**A tag filter selects PACKAGES; it does not select the tags a package is made of.** The vendor plugin now pulls in the accessory tags of any release the filter admitted, exempt from the filter, and intersected with the repository's real tag list so an unsigned release costs nothing. You do not need to widen the filter — and widening it would be wrong, because it would turn the wrapper and the signature into packages of their own.
+
+Re-scan and the status corrects itself:
+
+```bash
+transferctl discover <product>
+transferctl packages list <product>
+```
+
+If it still reads `no` afterwards, the vendor genuinely published no `signed_orb_X` for that release — `no` and `n/a` are different answers, and `no` means the plugin looked.
+
+**Specifically for NEAR / orb packages**
+
+NEAR publishes three tags per release, and the signature is a tag of its own:
+
+```
+orb_23.8.1076              the payload — an index of Helm charts and images
+signature_orb_23.8.1076    one layer, media type application/pkcs7-signature
+signed_orb_23.8.1076       an index referencing both of the above
+```
+
+With `vendor: near` set on the source, discovery collapses those into one package, records the signature as a related artifact, and makes `signed_orb_X` the **transfer root** — so a transfer walks the wrapper and the signature travels with the payload. Without that, replicating `orb_23.8.1076` would move the payload and leave the signature behind, and destination-side verification would be impossible for good. To see what was recorded:
+
+```bash
+transferctl packages describe <product> orb_23.8.1076
+transferctl packages describe <product> orb_23.8.1076 -o json | jq '.package.related'
+```
+
+`packages inspect` goes one step further and records **what the signature is**, not just that it exists. Discovery can only see the wrapper's descriptor of the signature manifest; inspect fetches that manifest — it walks the wrapper anyway, because that is what a transfer walks — and records the blob a verifier actually reads:
+
+```
+Signature material
+  manifest   sha256:999283c6c656
+  blob       sha256:0720d58c3f1ccf32e9155674cbe990fc21da2f8ba9327c798b9410fb983bddfc
+  format     application/pkcs7-signature
+  size       3.0 KiB
+```
+
+That is persisted (`package_relations`, migration 00009), along with the manifest's annotations verbatim — `com.nokia.ncd.orb.type: generic_signature`, `com.nokia.rb.name`, `com.nokia.rb.version` — so verification, when it lands, reads one row instead of re-deriving Nokia's layout. It lives in the database rather than a file on disk because it is per-package state that has to survive a restart and be shared between Coordinator replicas.
+
+To check a signature by hand today, pull that blob and run it through `openssl cms`:
+
+```bash
+transferctl packages describe <product> orb_23.8.1076 -o json \
+  | jq -r '.package.related[] | select(.role=="SIGNATURE") | .blobDigest'
+# then GET /v2/<repo>/blobs/<digest> and:
+#   openssl cms -verify -in sig.p7s -inform DER -CAfile your-ca.crt -content <payload>
+```
+
+When verification lands it will be **CMS/PKCS#7 (RFC 5652)** against a CA root, configured as `signatures.format: pkcs7` and `signatures.trustBundleRef` — both of which are accepted and stored today. It is explicitly **not** Sigstore: cosign cannot verify a NEAR signature and has no part in it.
+
 **I set `vendor: near` and the tags still show `orb_`**
 The names are corrected on the next scan, not on config reload. Discovery skips a tag it has already recorded — one `HEAD`, no fetch — so the correction is a separate reconcile pass rather than a side effect of re-discovery:
 

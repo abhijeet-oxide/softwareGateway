@@ -238,6 +238,31 @@ type Layout interface {
 	// derived from the tag alone should return empty here and set DisplayTag in
 	// Group; it then forgoes reconciliation, which is the honest trade.
 	DisplayTag(tag string) string
+
+	// AccessoryTags names the OTHER tags this Layout needs in order to classify
+	// one admitted tag — NEAR's `signed_orb_X` and `signature_orb_X` for a
+	// payload `orb_X`.
+	//
+	// It exists because tag filters and vendor mechanism are different things,
+	// and conflating them made signatures invisible. `discovery.tagFilters`
+	// is how an operator says WHICH RELEASES to track: `include: ['^orb_']` is
+	// a completely reasonable way to say "the release tags, not the noise".
+	// But under a Layout, `signed_orb_X` is not noise and is not a release —
+	// it is the vendor's internal plumbing for the release that WAS admitted,
+	// and it is where the signature lives.
+	//
+	// With the two conflated, that filter silently produced a catalogue in which
+	// every package read `unsigned`: the accessory tags never entered the work
+	// list, so Group never saw them, so no signature was ever found. Nothing was
+	// wrong with the filter, and nothing in any output pointed at it.
+	//
+	// So the filter selects PACKAGES, and a Layout may pull in the tags those
+	// packages are made of. Returning a tag that does not exist is free — the
+	// scanner intersects this with the repository's real tag list.
+	//
+	// Called only for tags the filters ADMITTED, so an excluded release does not
+	// drag its accessories in behind it.
+	AccessoryTags(tag string) []string
 }
 
 // Format is how a signature is verified once it has been found.

@@ -28,7 +28,6 @@ func newDiscoverCommand() *cobra.Command {
 	)
 
 	cmd := &cobra.Command{
-		Use:   "discover [product]",
 		Short: "Scan sources for newly published packages",
 		Long: "Scans now, rather than waiting for the interval.\n\n" +
 			"With no argument, scans EVERY product being polled — the usual thing\n" +
@@ -39,7 +38,6 @@ func newDiscoverCommand() *cobra.Command {
 			"Safe to repeat. A re-scan of unchanged content discovers nothing, and\n" +
 			"a request arriving while a scan runs joins it rather than starting a\n" +
 			"second one.",
-		Args:    cobra.MaximumNArgs(1),
 		Aliases: []string{"scan"},
 		RunE: func(cmd *cobra.Command, args []string) error {
 			client := newClient()
@@ -103,6 +101,7 @@ func newDiscoverCommand() *cobra.Command {
 	// It reaches vendor registries through the Coordinator, so it belongs with
 	// the slow commands.
 	contactsRegistries(cmd)
+	takes(cmd, "discover", optionalProductArg("scans every product being polled"))
 	return cmd
 }
 

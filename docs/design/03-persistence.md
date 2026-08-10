@@ -582,3 +582,32 @@ Eviction is **least recently used**, and `raw_used_at` is bumped by the transfer
 The sweep is leader-gated (`internal/maintenance`), runs on an interval, and is safe against a concurrent inspect: whichever loses either finds the bytes or re-fetches them, and both produce the same tree.
 
 A partial index — `ON package_artifacts (raw_used_at) WHERE raw IS NOT NULL` — keeps the sweep proportional to what is *cached* rather than to how many artifacts have ever existed.
+
+## 13. Regrouping, and the accessory column
+
+Two columns exist so a source's `vendor` can be set *after* its packages were discovered.
+
+| Column | Meaning |
+|---|---|
+| `repositories.grouped_layout` | which vendor convention this repository's packages were last grouped under |
+| `packages.accessory_of` | this row turned out to be PART OF another package |
+
+### Why grouping was a one-way door
+
+A vendor Layout turns a repository's tags into the packages they represent — NEAR publishes `orb_X`, `signature_orb_X` and `signed_orb_X` for one release, and that is one package with a signature, not three packages.
+
+Grouping runs over the tags a scan finds **new**. That is deliberate, and it is what keeps the steady state cheap: a re-scan of an unchanged repository costs one `HEAD` per tag and fetches no manifest bodies at all. The consequence nobody had accounted for is that a repository scanned *before* its source declared a vendor is never grouped again — its packages keep `signature_status = 'unknown'`, carry no relations, and have **no transfer root**, so replicating one would move the payload and leave the signature behind. Re-scanning could not fix it, because re-scanning is exactly the path that skips known tags.
+
+`grouped_layout` closes it. When it disagrees with the configured vendor, the next scan clears the head phase's "known" marks for that repository, re-fetches its tags and groups them properly — once. It then agrees, and the steady state is cheap again.
+
+The trigger is the **recorded layout name**, deliberately not a symptom such as "some package still reads `unknown`". A repository can legitimately contain unsigned packages forever, and a symptom-based trigger would re-fetch every tag of it on every scan for the rest of time. Keying off the name is what makes the pass terminate.
+
+### Why an accessory needs a column rather than a deletion
+
+Under the standard layout all three NEAR tags became packages in their own right. Grouping them afterwards fixes `orb_X` and leaves the other two listed as though they were releases — most of the noise the Layout was meant to remove.
+
+They cannot simply be deleted: a transfer may reference them, and what was actually shipped has to stay answerable. `state = 'superseded'` is the wrong word — that means the same tag re-pushed with different content, and overloading it would corrupt the one question supersession answers.
+
+So `accessory_of` names the package this row turned out to be part of. Shaped like `superseded_by`: the row survives, keeps its history, stays reachable by explicit reference, and stops being listed as a release of its own. Listings exclude it unless asked (`--include-accessories`).
+
+Reversible by construction — removing a source's vendor clears the marks and the rows return to being ordinary packages, which is what makes a misconfigured vendor recoverable by fixing the configuration rather than by editing the database.

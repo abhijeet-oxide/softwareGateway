@@ -2,6 +2,7 @@ package discovery
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"sync"
 
@@ -176,6 +177,7 @@ func scannedTagsFor(items []fetched) []vendors.ScannedTag {
 // to discovering nothing — and the log says which happened.
 func (s *Scanner) groupPhase(
 	ctx context.Context, src registry.Source, scanned []vendors.ScannedTag,
+	accessory map[string]bool,
 ) []vendors.Package {
 	if len(scanned) == 0 {
 		return nil
@@ -185,7 +187,19 @@ func (s *Scanner) groupPhase(
 	if err != nil {
 		s.log.WarnContext(ctx, "layout could not group tags; recording them individually",
 			"layout", s.layout.Name(), "tags", len(scanned), "error", err)
-		return vendors.Standard{}.Fallback(scanned)
+
+		// The fallback records one package per tag — but NOT for tags the
+		// filters never admitted. Those are here only because the Layout asked
+		// for them, and turning a failed grouping into three packages per
+		// release would be a worse outcome than the noisier one this fallback
+		// exists to produce.
+		var admitted []vendors.ScannedTag
+		for _, t := range scanned {
+			if !accessory[t.Tag] {
+				admitted = append(admitted, t)
+			}
+		}
+		return vendors.Standard{}.Fallback(admitted)
 	}
 	return pkgs
 }
@@ -229,8 +243,8 @@ func relationRows(pkg vendors.Package) []store.RelationRow {
 // has no new package to attach it to — only an existing one to correct. Without
 // this the package would read `unsigned` forever, which is worse than `unknown`
 // because it looks like an answer somebody checked.
-func (s *Scanner) attachRelations(ctx context.Context, w tagWork, pkg vendors.Package) error {
-	packageID, err := s.packages.FindPackageByTag(ctx, w.repoID, pkg.Tag)
+func (s *Scanner) attachRelations(ctx context.Context, repoID int64, pkg vendors.Package, regroup bool) error {
+	packageID, err := s.packages.FindPackageByTag(ctx, repoID, pkg.Tag)
 	if err != nil {
 		// Not found is not an error here: the Layout may name a payload tag
 		// that discovery has never admitted — excluded by a tag filter, say.
@@ -249,6 +263,19 @@ func (s *Scanner) attachRelations(ctx context.Context, w tagWork, pkg vendors.Pa
 	}
 	defer func() { _ = tx.Rollback() }()
 
+	if regroup {
+		// Re-derived under a DIFFERENT convention, so the old relations are not
+		// a subset of the new ones — they may be wrong rather than merely
+		// incomplete. Deleted and rewritten inside one transaction, so no reader
+		// ever sees the package between the two and briefly believes it unsigned.
+		//
+		// Never done on the discovery path, where insert-or-ignore is what keeps
+		// re-deriving the same relationship a no-op.
+		if err := s.packages.DeleteRelations(ctx, tx, packageID); err != nil {
+			return err
+		}
+	}
+
 	if err := s.packages.ReplaceRelations(ctx, tx, packageID, relationRows(pkg)); err != nil {
 		return err
 	}
@@ -257,5 +284,50 @@ func (s *Scanner) attachRelations(ctx context.Context, w tagWork, pkg vendors.Pa
 		rootDigestOf(pkg), pkg.RootTag); err != nil {
 		return err
 	}
+
+	if regroup {
+		// The tags this package absorbed exist as packages of their own, because
+		// they were discovered before the vendor was declared and nothing was
+		// grouping then. They stop being listed as releases; they are not
+		// deleted, because a transfer may reference them and what was shipped
+		// has to stay answerable.
+		if err := s.absorbAccessories(ctx, tx, repoID, packageID, pkg); err != nil {
+			return err
+		}
+	}
 	return tx.Commit()
+}
+
+// absorbAccessories marks the package rows of a release's accessory tags.
+//
+// The Layout does not name accessories directly — it simply does not return
+// them as packages — but every one it absorbed is reachable as a related
+// artifact with a tag, which is the same set.
+func (s *Scanner) absorbAccessories(
+	ctx context.Context, tx *sql.Tx, repoID, packageID int64, pkg vendors.Package,
+) error {
+	for _, rel := range pkg.Related {
+		if rel.Tag == "" || rel.Tag == pkg.Tag {
+			continue
+		}
+		// Inside the caller's transaction, not on a pooled connection: on SQLite
+		// the open write transaction holds the database lock, so the same lookup
+		// on another connection waits for a transaction that is waiting for it.
+		accessoryID, err := s.packages.FindPackageByTagTx(ctx, tx, repoID, rel.Tag)
+		if errors.Is(err, store.ErrNotFound) {
+			// The usual case, and not a problem: this tag never became a package
+			// because grouping absorbed it when it was discovered.
+			continue
+		}
+		if err != nil {
+			return err
+		}
+		if accessoryID == packageID {
+			continue
+		}
+		if err := s.packages.MarkAccessory(ctx, tx, accessoryID, packageID); err != nil {
+			return err
+		}
+	}
+	return nil
 }

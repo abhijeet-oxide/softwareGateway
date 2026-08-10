@@ -125,7 +125,7 @@ func (p *Planner) Plan(ctx context.Context, req Request) (Plan, error) {
 		return Plan{}, errors.New("plan: transfer ID is required")
 	}
 
-	root, err := rootDescriptor(req.Package)
+	root, err := expand.Root(req.Package)
 	if err != nil {
 		return Plan{}, err
 	}
@@ -284,31 +284,6 @@ func (p *Planner) treeFor(
 			"package", req.Package.ID, "error", err)
 	}
 	return out.Tree, out.Fetched, nil
-}
-
-// rootDescriptor is what the planner walks, which is not always the package's
-// own manifest.
-//
-// Where a vendor bundles the payload with its signature under a wrapper index,
-// only the wrapper reaches both — so planning from the payload alone would move
-// the bytes and LEAVE THE SIGNATURE BEHIND. The layout plugin recorded the
-// wrapper at discovery; this is where that decision is used.
-func rootDescriptor(pkg store.PackageRow) (registry.Descriptor, error) {
-	dgst := registry.Digest(pkg.ManifestDigest)
-	mediaType := pkg.MediaType
-
-	if pkg.TransferRootDigest != "" {
-		dgst = registry.Digest(pkg.TransferRootDigest)
-		// The wrapper's media type is not recorded separately; an index is the
-		// only shape a wrapper can be, and the walk re-reads it from the
-		// response anyway.
-		mediaType = registry.MediaTypeOCIIndex
-	}
-
-	if err := dgst.Validate(); err != nil {
-		return registry.Descriptor{}, fmt.Errorf("package %d has an unusable root digest: %w", pkg.ID, err)
-	}
-	return registry.Descriptor{Digest: dgst, MediaType: mediaType}, nil
 }
 
 // distinctBlobs collects every blob the tree references, each digest once.

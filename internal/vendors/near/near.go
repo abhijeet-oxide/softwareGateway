@@ -55,6 +55,8 @@ const Name = "near"
 const (
 	prefixSigned    = "signed_"
 	prefixSignature = "signature_"
+	// prefixOrb marks a payload — NEAR's word for "release".
+	prefixOrb = "orb_"
 )
 
 // repositoryNamespace is the path segment NEAR puts every product under:
@@ -201,6 +203,34 @@ func readWrapper(s vendors.ScannedTag) (payloadTag string, sig vendors.Related, 
 	return payloadTag, sig, true
 }
 
+// AccessoryTags names the two tags NEAR publishes alongside a release.
+//
+// For `orb_23.8.1076` those are `signed_orb_23.8.1076` — the index binding the
+// release to its signature, and the digest a transfer must walk — and
+// `signature_orb_23.8.1076`, the manifest whose single layer is the PKCS#7 blob.
+//
+// This is the difference between a tag FILTER and the vendor's mechanism. An
+// operator writing `tagFilters.include: ['^orb_']` is saying "track the
+// releases", which is right; they are not saying "ignore the signatures", and
+// before this method that is what it meant. Every package came out `unsigned`,
+// with nothing in any output to suggest the filter was the reason.
+//
+// Derived from the tag string, so it costs nothing: the scanner intersects the
+// result with the repository's real tag list, and a release NEAR did not sign
+// simply has no such tag.
+//
+// Only a payload tag has accessories. A tag that is itself an accessory returns
+// none, so nothing recurses.
+func (Layout) AccessoryTags(tag string) []string {
+	if strings.HasPrefix(tag, prefixSigned) || strings.HasPrefix(tag, prefixSignature) {
+		return nil
+	}
+	if !strings.HasPrefix(tag, prefixOrb) {
+		return nil
+	}
+	return []string{prefixSigned + tag, prefixSignature + tag}
+}
+
 // DisplayTag removes the `orb_` NEAR puts in front of every version.
 //
 // Derivable from the tag string alone, with no manifest and no registry call,
@@ -230,7 +260,7 @@ func displayTag(tag string) string {
 			return ""
 		}
 	}
-	if rest, ok := strings.CutPrefix(tag, "orb_"); ok && rest != "" {
+	if rest, ok := strings.CutPrefix(tag, prefixOrb); ok && rest != "" {
 		return rest
 	}
 	return ""

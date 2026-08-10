@@ -72,6 +72,17 @@ type PackageRow struct {
 	// identity. Both spellings resolve as input.
 	DisplayRepository string
 
+	// AccessoryOf names the package this row turned out to be PART OF — a
+	// signature or a wrapper the vendor publishes as its own tag.
+	//
+	// Nil for an ordinary package. Set only by a re-grouping pass over rows
+	// recorded before their source declared a vendor: a tag discovered after
+	// that never becomes a package at all, because grouping absorbs it.
+	//
+	// The row keeps its history and stays reachable by explicit reference; it
+	// simply stops being listed as a release of its own.
+	AccessoryOf *int64
+
 	// ExpandedAt is when this package's manifest tree was last fully walked,
 	// or nil if it never has been.
 	//
@@ -623,8 +634,17 @@ type ListPackagesFilter struct {
 	Repository string
 	Tag        string
 	State      string
-	Limit      int
-	Offset     int
+	// IncludeAccessories lists the signature and wrapper rows a vendor
+	// publishes as their own tags, which are hidden by default.
+	//
+	// Hidden because they are not releases: showing them triples the length of a
+	// NEAR listing with rows nobody asked about, which is most of the noise the
+	// vendor plugin exists to remove. Available at all because a row that exists
+	// and cannot be seen is worse — somebody eventually has to find out where a
+	// signature went.
+	IncludeAccessories bool
+	Limit              int
+	Offset             int
 }
 
 // ListPackages backs the packages list API and CLI.
@@ -638,7 +658,7 @@ func (p *Packages) ListPackages(ctx context.Context, f ListPackagesFilter) ([]Pa
 		       pk.media_type, pk.total_bytes, COALESCE(pk.artifact_count, 0),
 		       pk.blob_count, pk.state, pk.discovered_at, pk.published_at, pk.superseded_by,
 		       pk.signature_status, COALESCE(pk.transfer_root_digest,''), COALESCE(pk.transfer_root_tag,''),
-		       COALESCE(pk.display_tag,''), pk.expanded_at,
+		       COALESCE(pk.display_tag,''), pk.expanded_at, pk.accessory_of,
 		       COALESCE(sr.repository_path, ''), COALESCE(sr.display_path, '')
 		  FROM packages pk
 		  JOIN products pr ON pr.id = pk.product_id
@@ -666,6 +686,9 @@ func (p *Packages) ListPackages(ctx context.Context, f ListPackagesFilter) ([]Pa
 	if f.State != "" {
 		query += " AND pk.state = ?"
 		args = append(args, f.State)
+	}
+	if !f.IncludeAccessories {
+		query += " AND pk.accessory_of IS NULL"
 	}
 
 	limit := f.Limit
@@ -711,7 +734,7 @@ func (p *Packages) ListPackages(ctx context.Context, f ListPackagesFilter) ([]Pa
 			&r.MediaType, &r.TotalBytes, &r.ArtifactCount, &r.BlobCount,
 			&r.State, &r.DiscoveredAt, &r.PublishedAt, &r.SupersededBy,
 			&r.SignatureStatus, &r.TransferRootDigest, &r.TransferRootTag, &r.DisplayTag,
-			&r.ExpandedAt, &r.SourceRepository, &r.DisplayRepository,
+			&r.ExpandedAt, &r.AccessoryOf, &r.SourceRepository, &r.DisplayRepository,
 		); err != nil {
 			return nil, fmt.Errorf("scan package row: %w", err)
 		}
@@ -844,7 +867,7 @@ func (p *Packages) matchPackages(ctx context.Context, productName string, ref Pa
 		       pk.media_type, pk.total_bytes, COALESCE(pk.artifact_count, 0),
 		       pk.blob_count, pk.state, pk.discovered_at, pk.published_at, pk.superseded_by,
 		       pk.signature_status, COALESCE(pk.transfer_root_digest,''), COALESCE(pk.transfer_root_tag,''),
-		       COALESCE(pk.display_tag,''), pk.expanded_at,
+		       COALESCE(pk.display_tag,''), pk.expanded_at, pk.accessory_of,
 		       COALESCE(sr.repository_path, ''), COALESCE(sr.display_path, '')
 		  FROM packages pk
 		  JOIN products pr ON pr.id = pk.product_id
@@ -898,7 +921,7 @@ func (p *Packages) matchPackages(ctx context.Context, productName string, ref Pa
 			&r.MediaType, &r.TotalBytes, &r.ArtifactCount, &r.BlobCount,
 			&r.State, &r.DiscoveredAt, &r.PublishedAt, &r.SupersededBy,
 			&r.SignatureStatus, &r.TransferRootDigest, &r.TransferRootTag, &r.DisplayTag,
-			&r.ExpandedAt, &r.SourceRepository, &r.DisplayRepository,
+			&r.ExpandedAt, &r.AccessoryOf, &r.SourceRepository, &r.DisplayRepository,
 		); err != nil {
 			return nil, fmt.Errorf("scan package row: %w", err)
 		}
@@ -1068,6 +1091,14 @@ func (p *Packages) upsertArtifact(ctx context.Context, tx *sql.Tx, a ArtifactRow
 		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ` + p.fetchStamps(a.Raw) + `)
 		ON CONFLICT (package_id, digest) DO UPDATE SET
 			raw           = COALESCE(EXCLUDED.raw, package_artifacts.raw),
+			-- parent_id and depth are taken from the incoming tree rather than
+			-- preserved, because a tree can legitimately be RE-ROOTED: discovery
+			-- records the payload's tree, and expanding from the vendor's wrapper
+			-- makes that same payload a child at depth 1. Keeping the old values
+			-- would leave two artifacts claiming depth 0 and a parent link
+			-- pointing at nothing.
+			parent_id     = EXCLUDED.parent_id,
+			depth         = EXCLUDED.depth,
 			media_type    = EXCLUDED.media_type,
 			artifact_type = COALESCE(EXCLUDED.artifact_type, package_artifacts.artifact_type),
 			size_bytes    = EXCLUDED.size_bytes,
@@ -1124,7 +1155,7 @@ func (p *Packages) GetPackageByID(ctx context.Context, id int64) (PackageRow, er
 		       pk.media_type, pk.total_bytes, COALESCE(pk.artifact_count, 0),
 		       pk.blob_count, pk.state, pk.discovered_at, pk.published_at, pk.superseded_by,
 		       pk.signature_status, COALESCE(pk.transfer_root_digest,''), COALESCE(pk.transfer_root_tag,''),
-		       COALESCE(pk.display_tag,''), pk.expanded_at,
+		       COALESCE(pk.display_tag,''), pk.expanded_at, pk.accessory_of,
 		       COALESCE(sr.repository_path, ''), COALESCE(sr.display_path, '')
 		  FROM packages pk
 		  LEFT JOIN repositories sr ON sr.id = pk.source_repo_id
@@ -1136,7 +1167,7 @@ func (p *Packages) GetPackageByID(ctx context.Context, id int64) (PackageRow, er
 		&r.MediaType, &r.TotalBytes, &r.ArtifactCount, &r.BlobCount,
 		&r.State, &r.DiscoveredAt, &r.PublishedAt, &r.SupersededBy,
 		&r.SignatureStatus, &r.TransferRootDigest, &r.TransferRootTag, &r.DisplayTag,
-		&r.ExpandedAt, &r.SourceRepository, &r.DisplayRepository)
+		&r.ExpandedAt, &r.AccessoryOf, &r.SourceRepository, &r.DisplayRepository)
 	if errors.Is(err, sql.ErrNoRows) {
 		return PackageRow{}, ErrNotFound
 	}
@@ -1180,6 +1211,25 @@ type RelationRow struct {
 	Tag       string
 	MediaType string
 	SizeBytes int64
+
+	// The SIGNATURE MATERIAL: the blob a verifier actually reads.
+	//
+	// Digest above names the MANIFEST that carries the signature. These name
+	// what is inside it — for NEAR, one layer of `application/pkcs7-signature`.
+	// Empty until the package has been inspected, because the manifest has to be
+	// fetched before its layers are known.
+	BlobDigest    string
+	BlobMediaType string
+	BlobSize      int64
+	// Annotations is the signature manifest's own annotation map, verbatim.
+	// A verifier reads vendor keys from it — `com.nokia.ncd.orb.type` to know
+	// what kind of signature this is, `com.nokia.rb.*` to tie it to a release —
+	// without this package knowing any of them exist.
+	Annotations map[string]string
+	// ResolvedAt separates "inspected, and this signature carries no blob" from
+	// "nobody has inspected this package yet". Empty blob digest means both, and
+	// only one of them is worth acting on.
+	ResolvedAt string
 }
 
 // ReplaceRelations writes a package's related artifacts.
@@ -1210,10 +1260,39 @@ func (p *Packages) ReplaceRelations(
 	return nil
 }
 
+// RecordRelationMaterial writes what a relation's manifest turned out to
+// contain — for a signature, the blob a verifier reads.
+//
+// Idempotent and safe to repeat: the tree under a digest cannot change, so a
+// second inspection resolves the same material. `resolved_at` is refreshed each
+// time, which is the honest reading — it says when we last confirmed it, not
+// when we first guessed.
+func (p *Packages) RecordRelationMaterial(
+	ctx context.Context, packageID int64, role, digest string, m RelationRow,
+) error {
+	query := p.dialect.Rewrite(`
+		UPDATE package_relations
+		   SET blob_digest     = ?,
+		       blob_media_type = ?,
+		       blob_size       = ?,
+		       annotations     = COALESCE(?, annotations),
+		       resolved_at     = ` + p.dialect.Now() + `
+		 WHERE package_id = ? AND role = ? AND digest = ?`)
+
+	if _, err := p.db.ExecContext(ctx, query,
+		nullIfEmpty(m.BlobDigest), nullIfEmpty(m.BlobMediaType), m.BlobSize,
+		annotationsJSON(m.Annotations), packageID, role, digest); err != nil {
+		return fmt.Errorf("record %s material for package %d: %w", role, packageID, err)
+	}
+	return nil
+}
+
 // ListRelations returns a package's related artifacts.
 func (p *Packages) ListRelations(ctx context.Context, packageID int64) ([]RelationRow, error) {
 	query := p.dialect.Rewrite(`
-		SELECT role, digest, COALESCE(tag,''), COALESCE(media_type,''), size_bytes
+		SELECT role, digest, COALESCE(tag,''), COALESCE(media_type,''), size_bytes,
+		       COALESCE(blob_digest,''), COALESCE(blob_media_type,''), blob_size,
+		       annotations, resolved_at
 		  FROM package_relations
 		 WHERE package_id = ?
 		 ORDER BY role, digest`)
@@ -1226,9 +1305,22 @@ func (p *Packages) ListRelations(ctx context.Context, packageID int64) ([]Relati
 
 	var out []RelationRow
 	for rows.Next() {
-		var r RelationRow
-		if err := rows.Scan(&r.Role, &r.Digest, &r.Tag, &r.MediaType, &r.SizeBytes); err != nil {
+		var (
+			r           RelationRow
+			annotations []byte
+			resolvedAt  *string
+		)
+		if err := rows.Scan(&r.Role, &r.Digest, &r.Tag, &r.MediaType, &r.SizeBytes,
+			&r.BlobDigest, &r.BlobMediaType, &r.BlobSize, &annotations, &resolvedAt); err != nil {
 			return nil, fmt.Errorf("scan relation: %w", err)
+		}
+		if len(annotations) > 0 {
+			// Dropped rather than fatal if malformed: it is descriptive
+			// metadata, and it must not make a package impossible to look at.
+			_ = json.Unmarshal(annotations, &r.Annotations)
+		}
+		if resolvedAt != nil {
+			r.ResolvedAt = *resolvedAt
 		}
 		out = append(out, r)
 	}
@@ -1257,6 +1349,93 @@ func (p *Packages) UpdateSignatureState(
 	if _, err := tx.ExecContext(ctx, query,
 		status, nullIfEmpty(rootDigest), nullIfEmpty(rootTag), packageID); err != nil {
 		return fmt.Errorf("update signature state for package %d: %w", packageID, err)
+	}
+	return nil
+}
+
+// GroupedLayout returns the layout name a repository's packages were last
+// grouped under, or empty when they never were.
+func (p *Packages) GroupedLayout(ctx context.Context, sourceRepoID int64) (string, error) {
+	var name string
+	err := p.db.QueryRowContext(ctx,
+		p.dialect.Rewrite(`SELECT COALESCE(grouped_layout, '') FROM repositories WHERE id = ?`),
+		sourceRepoID).Scan(&name)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", ErrNotFound
+	}
+	if err != nil {
+		return "", fmt.Errorf("read grouped layout for repository %d: %w", sourceRepoID, err)
+	}
+	return name, nil
+}
+
+// SetGroupedLayout records which convention a repository's packages are grouped
+// under.
+//
+// Written only after a grouping pass SUCCEEDS. A failed pass must leave the old
+// value, so the next scan retries rather than concluding the work was done.
+func (p *Packages) SetGroupedLayout(ctx context.Context, sourceRepoID int64, layout string) error {
+	_, err := p.db.ExecContext(ctx, p.dialect.Rewrite(
+		`UPDATE repositories SET grouped_layout = ?, updated_at = `+p.dialect.Now()+` WHERE id = ?`),
+		nullIfEmpty(layout), sourceRepoID)
+	if err != nil {
+		return fmt.Errorf("record grouped layout for repository %d: %w", sourceRepoID, err)
+	}
+	return nil
+}
+
+// MarkAccessory records that a package is part of another one — a signature or
+// a wrapper that a vendor publishes as its own tag.
+//
+// The row survives with all its history; it simply stops being listed as a
+// release in its own right. Passing 0 clears the mark, which is what removing a
+// source's vendor does.
+//
+// A package can never be its own accessory: that would hide a real release
+// behind a self-reference, and it is the shape a Layout bug would produce.
+func (p *Packages) MarkAccessory(ctx context.Context, tx *sql.Tx, packageID, partOf int64) error {
+	if packageID == partOf {
+		return fmt.Errorf("package %d cannot be an accessory of itself", packageID)
+	}
+	var owner any
+	if partOf != 0 {
+		owner = partOf
+	}
+	_, err := tx.ExecContext(ctx, p.dialect.Rewrite(
+		`UPDATE packages SET accessory_of = ? WHERE id = ?`), owner, packageID)
+	if err != nil {
+		return fmt.Errorf("mark package %d as an accessory of %d: %w", packageID, partOf, err)
+	}
+	return nil
+}
+
+// ClearAccessories un-marks every accessory in a repository.
+//
+// Run at the start of a re-grouping pass, so a repository whose vendor was
+// REMOVED gets its packages back rather than keeping marks derived from a
+// convention that no longer applies.
+func (p *Packages) ClearAccessories(ctx context.Context, sourceRepoID int64) error {
+	_, err := p.db.ExecContext(ctx, p.dialect.Rewrite(
+		`UPDATE packages SET accessory_of = NULL
+		  WHERE source_repo_id = ? AND accessory_of IS NOT NULL`), sourceRepoID)
+	if err != nil {
+		return fmt.Errorf("clear accessories in repository %d: %w", sourceRepoID, err)
+	}
+	return nil
+}
+
+// DeleteRelations removes a package's related artifacts.
+//
+// Paired with ReplaceRelations inside ONE transaction on the re-grouping path,
+// where the relations are being deliberately re-derived under a different
+// convention. Never on the discovery path: there the insert-or-ignore behaviour
+// is what keeps a package from briefly appearing to have no signature, which is
+// exactly the fact a security decision reads.
+func (p *Packages) DeleteRelations(ctx context.Context, tx *sql.Tx, packageID int64) error {
+	_, err := tx.ExecContext(ctx,
+		p.dialect.Rewrite(`DELETE FROM package_relations WHERE package_id = ?`), packageID)
+	if err != nil {
+		return fmt.Errorf("delete relations of package %d: %w", packageID, err)
 	}
 	return nil
 }
@@ -1310,6 +1489,18 @@ func (p *Packages) SetDisplayTag(ctx context.Context, packageID int64, displayTa
 	return nil
 }
 
+// rowQueryer is satisfied by both *sql.DB and *sql.Tx.
+//
+// It exists so a lookup can be run INSIDE a caller's transaction. On SQLite
+// that is not a stylistic preference: a write transaction holds the database
+// lock, and the same lookup issued on a pooled connection blocks until the
+// transaction ends — which, if the transaction is waiting for the lookup, is
+// never. That deadlock is easy to write and invisible on Postgres, which is
+// where the development default not being the production database bites.
+type rowQueryer interface {
+	QueryRowContext(ctx context.Context, query string, args ...any) *sql.Row
+}
+
 // FindPackageByTag returns the current package for a (repository, tag), or
 // ErrNotFound.
 //
@@ -1318,6 +1509,20 @@ func (p *Packages) SetDisplayTag(ctx context.Context, packageID int64, displayTa
 func (p *Packages) FindPackageByTag(
 	ctx context.Context, sourceRepoID int64, tag string,
 ) (int64, error) {
+	return p.findPackageByTag(ctx, p.db, sourceRepoID, tag)
+}
+
+// FindPackageByTagTx is FindPackageByTag inside an open transaction. See
+// rowQueryer for why the distinction is load-bearing rather than cosmetic.
+func (p *Packages) FindPackageByTagTx(
+	ctx context.Context, tx *sql.Tx, sourceRepoID int64, tag string,
+) (int64, error) {
+	return p.findPackageByTag(ctx, tx, sourceRepoID, tag)
+}
+
+func (p *Packages) findPackageByTag(
+	ctx context.Context, q rowQueryer, sourceRepoID int64, tag string,
+) (int64, error) {
 	query := p.dialect.Rewrite(`
 		SELECT id FROM packages
 		 WHERE source_repo_id = ? AND tag = ? AND superseded_by IS NULL
@@ -1325,7 +1530,7 @@ func (p *Packages) FindPackageByTag(
 		 LIMIT 1`)
 
 	var id int64
-	err := p.db.QueryRowContext(ctx, query, sourceRepoID, tag).Scan(&id)
+	err := q.QueryRowContext(ctx, query, sourceRepoID, tag).Scan(&id)
 	if errors.Is(err, sql.ErrNoRows) {
 		return 0, ErrNotFound
 	}

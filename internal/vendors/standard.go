@@ -102,6 +102,11 @@ func (Standard) DisplayRepository(string) string { return "" }
 // DisplayTag shortens nothing, for the same reason.
 func (Standard) DisplayTag(string) string { return "" }
 
+// AccessoryTags is none: a conformant registry publishes a release as one tag,
+// and anything attached to it is found through the referrers API rather than by
+// guessing at names.
+func (Standard) AccessoryTags(string) []string { return nil }
+
 // Group maps each scanned tag to one package, unchanged.
 func (Standard) Group(
 	_ context.Context, _ registry.Source, scanned []ScannedTag,

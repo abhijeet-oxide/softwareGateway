@@ -56,12 +56,13 @@ func (s *Server) handleListPackages(w http.ResponseWriter, r *http.Request) {
 	// without a second COUNT query — and without claiming a next page that
 	// turns out to be empty.
 	rows, err := s.deps.Packages.ListPackages(r.Context(), store.ListPackagesFilter{
-		ProductName: productName,
-		Repository:  q.Get("repository"),
-		Tag:         q.Get("tag"),
-		State:       state,
-		Limit:       pageSize + 1,
-		Offset:      offset,
+		ProductName:        productName,
+		Repository:         q.Get("repository"),
+		Tag:                q.Get("tag"),
+		State:              state,
+		IncludeAccessories: q.Get("includeAccessories") == "true",
+		Limit:              pageSize + 1,
+		Offset:             offset,
 	})
 	if err != nil {
 		s.internal(w, r, "list packages", err)
@@ -112,13 +113,21 @@ func (s *Server) handleGetPackage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	for _, rel := range rels {
-		pkg.Related = append(pkg.Related, v1.RelatedArtifact{
-			Role:      strings.ToUpper(rel.Role),
-			Digest:    rel.Digest,
-			Tag:       rel.Tag,
-			MediaType: rel.MediaType,
-			SizeBytes: v1.Int64String(strconv.FormatInt(rel.SizeBytes, 10)),
-		})
+		related := v1.RelatedArtifact{
+			Role:        strings.ToUpper(rel.Role),
+			Digest:      rel.Digest,
+			Tag:         rel.Tag,
+			MediaType:   rel.MediaType,
+			SizeBytes:   v1.Int64String(strconv.FormatInt(rel.SizeBytes, 10)),
+			Annotations: rel.Annotations,
+			ResolvedAt:  rel.ResolvedAt,
+		}
+		if rel.BlobDigest != "" {
+			related.BlobDigest = rel.BlobDigest
+			related.BlobMediaType = rel.BlobMediaType
+			related.BlobSize = v1.Int64String(strconv.FormatInt(rel.BlobSize, 10))
+		}
+		pkg.Related = append(pkg.Related, related)
 	}
 
 	WriteJSON(w, r, http.StatusOK, pkg)
@@ -250,6 +259,7 @@ func (s *Server) handleDiscoverPackages(w http.ResponseWriter, r *http.Request) 
 		Superseded:         res.Superseded,
 		RequestsCreated:    res.Requests,
 		Renamed:            res.Renamed,
+		Regrouped:          res.Regrouped,
 		DurationMs:         res.Duration.Milliseconds(),
 		Collapsed:          res.Collapsed,
 	}
@@ -416,6 +426,9 @@ func toAPIPackage(productName string, row store.PackageRow) v1.Package {
 	if row.SupersededBy != nil {
 		p.SupersededBy = strconv.FormatInt(*row.SupersededBy, 10)
 	}
+	if row.AccessoryOf != nil {
+		p.AccessoryOf = strconv.FormatInt(*row.AccessoryOf, 10)
+	}
 	return p
 }
 
@@ -516,7 +529,17 @@ func (s *Server) resolvePackage(w http.ResponseWriter, r *http.Request, productN
 			ambiguous.Error(), ambiguous.Repositories[0], parsed.Tag))
 		return store.PackageRow{}, false
 	case errors.Is(err, store.ErrNotFound):
-		NotFound(w, r, "package", ref)
+		// "package not found" on its own reads as "the package is gone", when
+		// the overwhelmingly likelier cause is a reference that was never going
+		// to match — a product name typed where a tag belongs, or a version
+		// without the vendor's prefix. Saying what a reference IS, and where the
+		// list is, turns three attempts into one.
+		Error(w, r, v1.CodeNotFound, fmt.Sprintf(
+			"no package of product %q matches %q. A package is identified by a TAG, "+
+				"a digest, or repository:tag — for example orb_23.8.1076, "+
+				"sha256:ccbd…, or orbs/cfx-5000-k8s:orb_23.8.1076. "+
+				"`transferctl packages list %s` shows what there is",
+			productName, ref, productName))
 		return store.PackageRow{}, false
 	case err != nil:
 		s.internal(w, r, "get package", err)
@@ -624,6 +647,8 @@ func (s *Server) handleInspectPackage(w http.ResponseWriter, r *http.Request) {
 		TotalBytes:      v1.Int64String(strconv.FormatInt(res.TotalBytes, 10)),
 		CachedManifests: res.CachedManifests,
 		CachedBytes:     v1.Int64String(strconv.FormatInt(res.CachedBytes, 10)),
+
+		SignatureResolved: res.SignatureResolved,
 	})
 }
 

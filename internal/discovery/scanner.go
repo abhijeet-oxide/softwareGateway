@@ -193,6 +193,13 @@ type ScanResult struct {
 	// question a person actually has after editing that field: "did it take?".
 	// Zero on every steady-state scan.
 	Renamed int
+	// Regrouped is how many EXISTING packages were re-grouped under a newly
+	// declared vendor — gaining their signature status, their related artifacts
+	// and their transfer root.
+	//
+	// Also zero on every steady-state scan, and also non-zero exactly once, on
+	// the first scan after the vendor changes.
+	Regrouped int
 
 	// TagErrors are per-tag failures that did not stop the scan.
 	TagErrors []TagError
@@ -324,10 +331,11 @@ func (s *Scanner) Scan(ctx context.Context) (ScanResult, error) {
 		return res, err
 	}
 
-	resolved := s.resolvePhase(ctx, listed.work, limit)
+	resolved := s.resolvePhase(ctx, listed.work, listed.tags, limit)
 	res.New = resolved.New
 	res.Superseded = resolved.Superseded
 	res.Requests = resolved.Requests
+	res.Regrouped = resolved.Regrouped
 	res.TagErrors = resolved.TagErrors
 
 	// Display names are RECONCILED on every scan, not written once at discovery.
@@ -434,6 +442,10 @@ type tagWork struct {
 	repoID   int64
 	client   registry.Source
 	tag      string
+	// accessory marks a tag pulled in by the Layout rather than admitted by the
+	// filters — NEAR's `signed_orb_X` for an admitted `orb_X`. It is fetched and
+	// handed to Group, and it must never become a package of its own.
+	accessory bool
 }
 
 // listOutcome is what phase one produced.
@@ -442,6 +454,10 @@ type listOutcome struct {
 	tagsListed int
 	scanned    int
 	failures   []repoFailure
+	// tags is every tag each repository actually has, before filtering, so a
+	// Layout's accessory tags can be intersected with reality rather than
+	// probed for with requests that mostly 404.
+	tags map[int64]map[string]bool
 }
 
 type repoFailure struct {
@@ -461,8 +477,11 @@ func (s *Scanner) listPhase(ctx context.Context, repos []string, limit int) list
 		repoID   int64
 		client   registry.Source
 		admitted []string
-		listed   int
-		err      error
+		// all is every tag the repository has, so a Layout's accessory tags can
+		// be checked against it without a request each.
+		all    map[string]bool
+		listed int
+		err    error
 	}
 
 	results := make([]result, len(repos))
@@ -505,7 +524,9 @@ func (s *Scanner) listPhase(ctx context.Context, repos []string, limit int) list
 				return
 			}
 			r.listed = len(tags)
+			r.all = make(map[string]bool, len(tags))
 			for _, tag := range tags {
+				r.all[tag] = true
 				if s.tagFilter.admits(tag) {
 					r.admitted = append(r.admitted, tag)
 				}
@@ -524,7 +545,7 @@ func (s *Scanner) listPhase(ctx context.Context, repos []string, limit int) list
 	// Assembled in the ORIGINAL order, after the fact, so the work list — and
 	// therefore the logs — come out identical run to run even though the listing
 	// did not.
-	var out listOutcome
+	out := listOutcome{tags: map[int64]map[string]bool{}}
 	for _, r := range results {
 		if r.err != nil {
 			out.failures = append(out.failures, repoFailure{path: r.path, err: r.err})
@@ -533,6 +554,7 @@ func (s *Scanner) listPhase(ctx context.Context, repos []string, limit int) list
 		}
 		out.scanned++
 		out.tagsListed += r.listed
+		out.tags[r.repoID] = r.all
 		for _, tag := range r.admitted {
 			out.work = append(out.work, tagWork{
 				repoPath: r.path, repoID: r.repoID, client: r.client, tag: tag,
@@ -547,7 +569,9 @@ type resolveResult struct {
 	New        int
 	Superseded int
 	Requests   int
-	TagErrors  []TagError
+	// Regrouped counts existing packages corrected by a re-grouping pass.
+	Regrouped int
+	TagErrors []TagError
 }
 
 // resolvePhase turns the flat work list into recorded packages.
@@ -568,7 +592,9 @@ type resolveResult struct {
 // repository. That matters on a real catalogue: a repository with three tags no
 // longer leaves most of the budget idle while the repository with three hundred
 // waits its turn behind it.
-func (s *Scanner) resolvePhase(ctx context.Context, work []tagWork, limit int) resolveResult {
+func (s *Scanner) resolvePhase(
+	ctx context.Context, work []tagWork, repoTags map[int64]map[string]bool, limit int,
+) resolveResult {
 	var res resolveResult
 	if len(work) == 0 {
 		return res
@@ -577,6 +603,35 @@ func (s *Scanner) resolvePhase(ctx context.Context, work []tagWork, limit int) r
 	s.progress.update(func(p *ScanProgress) { p.Phase = PhaseResolving })
 
 	resolved := s.headPhase(ctx, work, limit)
+
+	// A repository grouped under a DIFFERENT convention from the one configured
+	// now has to be grouped again, and the head phase has just marked all its
+	// tags `known` — which is exactly what would skip it. So the marks are
+	// cleared for those repositories only.
+	//
+	// This is what makes a source's `vendor` retroactive. Without it, declaring
+	// a vendor after a repository was scanned leaves every existing package
+	// reading `unknown`, carrying no signature relation, and — the part that
+	// actually matters — with no transfer root, so moving one would leave its
+	// signature behind. Re-scanning could never fix it, because re-scanning is
+	// the path that skips known tags.
+	regrouping := s.repositoriesToRegroup(ctx, resolved)
+	if len(regrouping) > 0 {
+		for i := range resolved {
+			if regrouping[resolved[i].work.repoID] {
+				resolved[i].known = false
+			}
+		}
+	}
+
+	// Pull in the tags the Layout needs but the filters did not admit — NEAR's
+	// `signed_orb_X` and `signature_orb_X` for an admitted `orb_X`.
+	//
+	// Only for releases that are actually being grouped: a repository where
+	// nothing is new costs nothing extra, which is what keeps the steady state
+	// one HEAD per tag. See accessoryPhase.
+	resolved = append(resolved, s.accessoryPhase(ctx, resolved, repoTags, limit)...)
+
 	for _, r := range resolved {
 		s.progress.update(func(p *ScanProgress) { p.TagsResolved++ })
 		if r.err != nil {
@@ -619,7 +674,25 @@ func (s *Scanner) resolvePhase(ctx context.Context, work []tagWork, limit int) r
 
 	for _, repoPath := range order {
 		group := byRepo[repoPath]
-		pkgs := s.groupPhase(ctx, group[0].work.client, scannedTagsFor(group))
+		repoID := group[0].work.repoID
+
+		accessory := map[string]bool{}
+		for _, f := range group {
+			if f.work.accessory {
+				accessory[f.work.tag] = true
+			}
+		}
+		pkgs := s.groupPhase(ctx, group[0].work.client, scannedTagsFor(group), accessory)
+
+		// A re-grouping pass starts by forgetting what the previous convention
+		// concluded, so removing a vendor genuinely undoes it rather than
+		// leaving marks derived from a rule that no longer applies.
+		if regrouping[repoID] {
+			if err := s.packages.ClearAccessories(ctx, repoID); err != nil {
+				s.log.WarnContext(ctx, "could not clear accessory marks",
+					"repository", repoPath, "error", err)
+			}
+		}
 
 		// The Layout names packages by tag; this maps back to the fetched oci.Tree
 		// so recording still writes the artifacts we actually verified.
@@ -634,7 +707,7 @@ func (s *Scanner) resolvePhase(ctx context.Context, work []tagWork, limit int) r
 				// The Layout named a tag we did not fetch. Possible when it
 				// groups onto a payload discovered by an earlier scan — the
 				// relations still belong on that existing package.
-				if err := s.attachRelations(ctx, group[0].work, pkg); err != nil {
+				if err := s.attachRelations(ctx, repoID, pkg, regrouping[repoID]); err != nil {
 					s.log.WarnContext(ctx, "could not attach related artifacts",
 						"repository", repoPath, "tag", pkg.Tag, "error", err)
 				}
@@ -656,11 +729,148 @@ func (s *Scanner) resolvePhase(ctx context.Context, work []tagWork, limit int) r
 				res.Superseded += outcome.superseded
 				res.Requests += outcome.requests
 				s.progress.update(func(p *ScanProgress) { p.New++ })
+				continue
+			}
+
+			// The package already existed. On an ordinary scan that means a
+			// concurrent one won the race and there is nothing to do — but on a
+			// re-grouping pass it is the WHOLE POINT: this is a package recorded
+			// under the previous convention, and its relations, signature status
+			// and transfer root are what we came to correct.
+			if regrouping[repoID] {
+				if err := s.attachRelations(ctx, repoID, pkg, true); err != nil {
+					s.log.WarnContext(ctx, "could not regroup an existing package",
+						"repository", repoPath, "tag", pkg.Tag, "error", err)
+					continue
+				}
+				res.Regrouped++
+			}
+		}
+
+		// Recorded only after the pass succeeded for this repository. A failure
+		// must leave the old value so the next scan retries, rather than
+		// concluding the work was done.
+		if regrouping[repoID] {
+			if err := s.packages.SetGroupedLayout(ctx, repoID, s.layout.Name()); err != nil {
+				s.log.WarnContext(ctx, "could not record the grouping convention",
+					"repository", repoPath, "error", err)
 			}
 		}
 	}
 
 	return res
+}
+
+// accessoryPhase resolves the tags a Layout needs but the filters did not
+// admit.
+//
+// THE BUG THIS FIXES. `discovery.tagFilters` is how an operator says which
+// RELEASES to track, and `include: ['^orb_']` is a perfectly reasonable way to
+// say "the release tags, not the noise". But under a vendor Layout, NEAR's
+// `signed_orb_X` is neither noise nor a release — it is the plumbing of the
+// release that WAS admitted, and it is where the signature lives. With the two
+// conflated, that filter produced a catalogue in which every package read
+// `unsigned`, with nothing in any output to suggest the filter was why.
+//
+// Only for tags actually being grouped — new ones, or a repository being
+// regrouped. A repository where nothing changed adds nothing, which is what
+// keeps the steady state at one HEAD per admitted tag.
+//
+// Intersected with the repository's real tag list rather than probed for: a
+// release the vendor did not sign has no signature tag, and asking would be a
+// 404 per release per scan.
+func (s *Scanner) accessoryPhase(
+	ctx context.Context, resolved []resolvedTag, repoTags map[int64]map[string]bool, limit int,
+) []resolvedTag {
+	// Tags already in the work list, so an accessory that the filters happened
+	// to admit as well is not fetched twice.
+	claimed := map[int64]map[string]bool{}
+	for _, r := range resolved {
+		if claimed[r.work.repoID] == nil {
+			claimed[r.work.repoID] = map[string]bool{}
+		}
+		claimed[r.work.repoID][r.work.tag] = true
+	}
+
+	var extra []tagWork
+	for _, r := range resolved {
+		if r.err != nil || r.gone || r.known {
+			continue
+		}
+		for _, tag := range s.layout.AccessoryTags(r.work.tag) {
+			if !repoTags[r.work.repoID][tag] || claimed[r.work.repoID][tag] {
+				continue
+			}
+			claimed[r.work.repoID][tag] = true
+			extra = append(extra, tagWork{
+				repoPath:  r.work.repoPath,
+				repoID:    r.work.repoID,
+				client:    r.work.client,
+				tag:       tag,
+				accessory: true,
+			})
+		}
+	}
+	if len(extra) == 0 {
+		return nil
+	}
+
+	s.log.InfoContext(ctx, "resolving vendor accessory tags the filters did not admit",
+		"vendor", s.layout.Name(), "tags", len(extra))
+
+	out := s.headPhase(ctx, extra, limit)
+	for i := range out {
+		// An accessory is never "known": it has no package row of its own, by
+		// design. Forcing the flag keeps it out of the existence check, whose
+		// answer would be a permanent false.
+		out[i].known = false
+	}
+	return out
+}
+
+// repositoriesToRegroup reports which repositories were grouped under a
+// different convention from the one configured now.
+//
+// Cheap: one query per repository in the scan, and it answers "no" for every
+// repository on every scan after the one that reconciles it. That termination
+// is the reason this keys off the RECORDED LAYOUT NAME rather than off a
+// symptom such as "some package still reads unknown" — a repository can
+// legitimately contain unsigned packages forever, and a symptom-based trigger
+// would re-fetch every tag of it on every scan for the rest of time.
+func (s *Scanner) repositoriesToRegroup(ctx context.Context, resolved []resolvedTag) map[int64]bool {
+	want := s.layout.Name()
+	seen := map[int64]bool{}
+	out := map[int64]bool{}
+
+	for _, r := range resolved {
+		id := r.work.repoID
+		if id == 0 || seen[id] {
+			continue
+		}
+		seen[id] = true
+
+		got, err := s.packages.GroupedLayout(ctx, id)
+		if err != nil {
+			s.log.WarnContext(ctx, "could not read the recorded grouping convention",
+				"repository", r.work.repoPath, "error", err)
+			continue
+		}
+		if got == want {
+			continue
+		}
+		out[id] = true
+		s.log.InfoContext(ctx, "regrouping a repository under a new vendor convention",
+			"repository", r.work.repoPath, "was", dashIfEmpty(got), "now", want)
+	}
+	return out
+}
+
+// dashIfEmpty renders "never grouped" for a log line.
+func dashIfEmpty(s string) string {
+	if s == "" {
+		return "(never grouped)"
+	}
+	return s
 }
 
 // clientFor returns the cached client for a repository, building it on first

@@ -14,7 +14,7 @@ import (
 )
 
 func newPackagesCommand() *cobra.Command {
-	cmd := &cobra.Command{
+	cmd := group(&cobra.Command{
 		Use:     "packages",
 		Aliases: []string{"package", "pkg"},
 		Short:   "Inspect discovered packages",
@@ -22,7 +22,7 @@ func newPackagesCommand() *cobra.Command {
 			"resolved to a specific manifest digest. Different tags are\n" +
 			"independent versions that coexist — discovering v2.14.0 does\n" +
 			"nothing to v2.13.0.",
-	}
+	})
 	cmd.AddCommand(
 		newPackagesListCommand(),
 		newPackagesDescribeCommand(),
@@ -34,16 +34,16 @@ func newPackagesCommand() *cobra.Command {
 
 func newPackagesListCommand() *cobra.Command {
 	var (
-		repository string
-		tag        string
-		state      string
-		pageSize   int
-		pageToken  string
-		all        bool
+		repository  string
+		tag         string
+		state       string
+		accessories bool
+		pageSize    int
+		pageToken   string
+		all         bool
 	)
 
 	cmd := &cobra.Command{
-		Use:   "list <product>",
 		Short: "List a product's discovered packages",
 		Long: "Where a source declares a `vendor`, the TAG and REPOSITORY columns\n" +
 			"show that vendor's shortened spelling — `cfx-5000-k8s` rather than\n" +
@@ -53,15 +53,15 @@ func newPackagesListCommand() *cobra.Command {
 			"does this.\n\n" +
 			"--repository and --tag accept EITHER spelling, so a value copied off\n" +
 			"this listing can be pasted straight back in.",
-		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			client := newClient()
 			opts0 := v1.ListPackagesOptions{
-				Repository: repository,
-				Tag:        tag,
-				State:      strings.ToUpper(state),
-				PageSize:   pageSize,
-				PageToken:  pageToken,
+				Repository:         repository,
+				Tag:                tag,
+				State:              strings.ToUpper(state),
+				IncludeAccessories: accessories,
+				PageSize:           pageSize,
+				PageToken:          pageToken,
 			}
 
 			resp, err := client.ListPackages(cmd.Context(), args[0], opts0)
@@ -96,9 +96,13 @@ func newPackagesListCommand() *cobra.Command {
 	cmd.Flags().StringVar(&tag, "tag", "",
 		"show only packages with this tag, full or shortened, e.g. orb_23.8.1076 or 23.8.1076")
 	cmd.Flags().StringVar(&state, "state", "", "filter by state, e.g. discovered or superseded")
+	cmd.Flags().BoolVar(&accessories, "include-accessories", false,
+		"also show signature and wrapper tags, which belong to a release rather than being one")
 	cmd.Flags().IntVar(&pageSize, "page-size", 0, "results per page")
 	cmd.Flags().StringVar(&pageToken, "page-token", "", "continue from a previous nextPageToken")
 	cmd.Flags().BoolVar(&all, "all", false, "fetch every page")
+
+	takes(cmd, "list", productArg())
 	return cmd
 }
 
@@ -186,7 +190,6 @@ func spansRepositories(pkgs []v1.Package) bool {
 
 func newPackagesDescribeCommand() *cobra.Command {
 	cmd := &cobra.Command{
-		Use:   "describe <product> <package>",
 		Short: "Show a package's contents and transfer status",
 		Long: "<package> is a tag, a digest, or `repository:tag`. Where a source\n" +
 			"declares a `vendor`, the shortened spellings a listing shows work\n" +
@@ -200,7 +203,6 @@ func newPackagesDescribeCommand() *cobra.Command {
 			"including the size and contents `packages inspect` gathered — so a\n" +
 			"package that has been inspected describes fully, and one that has\n" +
 			"not says so rather than guessing.",
-		Args:    cobra.ExactArgs(2),
 		Aliases: []string{"show"},
 		RunE: func(cmd *cobra.Command, args []string) error {
 			client := newClient()
@@ -224,6 +226,8 @@ func newPackagesDescribeCommand() *cobra.Command {
 			})
 		},
 	}
+
+	takes(cmd, "describe", productArg(), packageArg())
 	return cmd
 }
 
@@ -276,6 +280,7 @@ func renderPackageDetail(w io.Writer, product, ref string, p *v1.Package, artifa
 		fmt.Fprintln(w, "content. This row is kept so what was shipped from it stays answerable.")
 	}
 
+	renderSignature(w, p)
 	renderRelated(w, p)
 
 	if len(artifacts) > 0 {
@@ -417,6 +422,12 @@ func renderDiscoverResult(w io.Writer, productName string, r *v1.DiscoverPackage
 	fmt.Fprintf(tw, "  Tags after filters\t%d\n", r.TagsAdmitted)
 	fmt.Fprintf(tw, "  New packages\t%d\n", r.PackagesDiscovered)
 	fmt.Fprintf(tw, "  Superseded\t%d\n", r.Superseded)
+	if r.Regrouped > 0 {
+		// Same argument as the line below: this happens exactly once, on the
+		// first scan after a source gains a vendor, and it is what an operator
+		// is waiting to see.
+		fmt.Fprintf(tw, "  Packages regrouped\t%d\n", r.Regrouped)
+	}
 	if r.Renamed > 0 {
 		// Shown only when it happened, because it happens exactly once — on the
 		// first scan after a source's `vendor` is edited. It is the direct
@@ -557,7 +568,6 @@ func newDiscoverStatusCommand() *cobra.Command {
 	var watch bool
 
 	cmd := &cobra.Command{
-		Use:   "status [product]",
 		Short: "Show what discovery is doing right now",
 		Long: "Reports the live state of every source: whether a scan is running,\n" +
 			"which phase it is in, which repository it is on, and how the last\n" +
@@ -565,7 +575,6 @@ func newDiscoverStatusCommand() *cobra.Command {
 			"This is the answer to \"is it stuck or just slow?\", which a blocking\n" +
 			"scan cannot give you while it is blocked.\n\n" +
 			"With no argument, reports every product being polled.",
-		Args: cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			client := newClient()
 
@@ -616,6 +625,8 @@ func newDiscoverStatusCommand() *cobra.Command {
 	}
 
 	cmd.Flags().BoolVar(&watch, "watch", false, "keep printing until no scan is running")
+
+	takes(cmd, "status", optionalProductArg("reports every product being polled"))
 	return cmd
 }
 
@@ -760,7 +771,6 @@ func newPackagesDiscoverAliasCommand() *cobra.Command {
 // gathered.
 func newPackagesInspectCommand() *cobra.Command {
 	cmd := &cobra.Command{
-		Use:   "inspect <product> <package>",
 		Short: "Pull a package's full contents and measure it",
 		Long: "Discovery is deliberately light: it fetches the tag's own manifest and\n" +
 			"records the artifacts that manifest lists, WITHOUT fetching them. That\n" +
@@ -774,7 +784,6 @@ func newPackagesInspectCommand() *cobra.Command {
 			"second run fetches nothing and says so.\n\n" +
 			"You never HAVE to run this: a transfer performs the same walk if\n" +
 			"nobody has. It is for deciding whether you want one.",
-		Args: cobra.ExactArgs(2),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			resp, err := newClient().InspectPackage(cmd.Context(), args[0], args[1])
 			if err != nil {
@@ -788,6 +797,7 @@ func newPackagesInspectCommand() *cobra.Command {
 
 	// It reads from the vendor's registry, so it belongs with the slow commands.
 	contactsRegistries(cmd)
+	takes(cmd, "inspect", productArg(), packageArg())
 	return cmd
 }
 
@@ -873,6 +883,65 @@ func anyScanningIn(st *v1.DiscoveryStatusResponse) bool {
 	return false
 }
 
+// renderSignature says what is known about a package's signature, and — the
+// part that matters — what is NOT.
+//
+// Discovery answers one question: is a signature there? It finds the artifact
+// the vendor published, records its media type and its digest, and stops.
+// Nothing in this build CHECKS one: no chain is built, no trust root is
+// consulted, no digest is verified against a key. That is a separate milestone.
+//
+// It is spelled out rather than implied because "SIGNED" in a listing is
+// exactly the kind of word somebody makes a release decision on. A tool that
+// prints it without saying what it did and did not do is worse than one that
+// says nothing.
+func renderSignature(w io.Writer, p *v1.Package) {
+	if p.SignatureStatus != v1.SignatureSigned {
+		return
+	}
+	fmt.Fprintln(w)
+	fmt.Fprintln(w, "Signature")
+	fmt.Fprintln(w, "  A signature artifact was FOUND and recorded. It has NOT been verified:")
+	fmt.Fprintln(w, "  nothing in this build checks a signature against a trust root, so this")
+	fmt.Fprintln(w, "  says the vendor published one, not that it is valid or that it is theirs.")
+
+	// The MATERIAL, when it has been resolved. This is what a verifier reads,
+	// and printing it is how someone checks a signature by hand today — pull the
+	// blob by digest and run it through `openssl cms`.
+	for _, r := range p.Related {
+		if !strings.EqualFold(r.Role, "signature") {
+			continue
+		}
+		fmt.Fprintln(w)
+		switch {
+		case r.BlobDigest != "":
+			fmt.Fprintln(w, "  Signature material")
+			tw := newTabWriter(w)
+			fmt.Fprintf(tw, "    manifest\t%s\n", shortDigest(r.Digest))
+			fmt.Fprintf(tw, "    blob\t%s\n", r.BlobDigest)
+			fmt.Fprintf(tw, "    format\t%s\n", dash(r.BlobMediaType))
+			fmt.Fprintf(tw, "    size\t%s\n", humanBytes(r.BlobSize))
+			if r.ResolvedAt != "" {
+				fmt.Fprintf(tw, "    resolved\t%s\n", r.ResolvedAt)
+			}
+			_ = tw.Flush()
+		default:
+			fmt.Fprintln(w, "  The signature's contents have not been read yet — only that it")
+			fmt.Fprintln(w, "  exists. `packages inspect` fetches it and records the blob a")
+			fmt.Fprintln(w, "  verifier would check.")
+		}
+		break
+	}
+
+	if p.TransferRootTag != "" {
+		fmt.Fprintln(w)
+		fmt.Fprintf(w, "  A transfer walks %s, which reaches both this package and\n", p.TransferRootTag)
+		fmt.Fprintln(w, "  its signature, so the two travel together and the destination can be")
+		fmt.Fprintln(w, "  verified once verification exists. Moving the payload alone would")
+		fmt.Fprintln(w, "  foreclose that permanently.")
+	}
+}
+
 // describeSigned explains the signature status in a sentence rather than a
 // word, because `describe` is where someone goes when the one-word answer in
 // the listing was not enough.
@@ -913,12 +982,4 @@ func renderRelated(w io.Writer, p *v1.Package) {
 			strings.ToLower(r.Role), dash(r.Tag), shortDigest(r.Digest), shortMediaType(r.MediaType))
 	}
 	_ = tw.Flush()
-
-	if p.TransferRootTag != "" {
-		fmt.Fprintln(w)
-		fmt.Fprintf(w, "  A transfer walks %s, which reaches this package AND its signature.\n",
-			p.TransferRootTag)
-		fmt.Fprintln(w, "  Transferring the payload alone would leave the signature behind, and")
-		fmt.Fprintln(w, "  destination-side verification would then be impossible.")
-	}
 }

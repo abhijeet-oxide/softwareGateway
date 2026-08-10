@@ -129,9 +129,13 @@ type ListPackagesOptions struct {
 	Repository string
 	Tag        string
 	// State is the SCREAMING_SNAKE wire form, e.g. "DISCOVERED".
-	State     string
-	PageSize  int
-	PageToken string
+	State string
+	// IncludeAccessories lists the signature and wrapper rows a vendor
+	// publishes as their own tags, which are hidden by default because they are
+	// not releases.
+	IncludeAccessories bool
+	PageSize           int
+	PageToken          string
 }
 
 func (o ListPackagesOptions) query() string {
@@ -144,6 +148,9 @@ func (o ListPackagesOptions) query() string {
 	}
 	if o.State != "" {
 		q.Set("state", o.State)
+	}
+	if o.IncludeAccessories {
+		q.Set("includeAccessories", "true")
 	}
 	if o.PageSize > 0 {
 		q.Set("pageSize", strconv.Itoa(o.PageSize))

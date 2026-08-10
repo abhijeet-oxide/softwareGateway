@@ -53,6 +53,38 @@ type Result struct {
 	FromRecord bool
 }
 
+// Root is the descriptor a package's tree is walked from, which is NOT always
+// the package's own manifest.
+//
+// Where a vendor bundles the payload with its signature under a wrapper index,
+// only the wrapper reaches both — so walking the payload alone would move the
+// bytes and LEAVE THE SIGNATURE BEHIND. The layout plugin recorded the wrapper
+// at discovery; this is where that decision is used.
+//
+// It lives here, beside Ensure, because inspect and the planner MUST agree
+// about it. They did not: the planner honoured the transfer root while inspect
+// walked the payload, so `packages inspect` reported a transfer size that
+// excluded the signature and recorded a tree that was not the tree a transfer
+// plans from — while saying, in as many words, that those were the numbers a
+// transfer would move.
+func Root(pkg store.PackageRow) (registry.Descriptor, error) {
+	dgst := registry.Digest(pkg.ManifestDigest)
+	mediaType := pkg.MediaType
+
+	if pkg.TransferRootDigest != "" {
+		dgst = registry.Digest(pkg.TransferRootDigest)
+		// The wrapper's media type is not recorded separately; an index is the
+		// only shape a wrapper can be, and the walk re-reads it from the
+		// response anyway.
+		mediaType = registry.MediaTypeOCIIndex
+	}
+
+	if err := dgst.Validate(); err != nil {
+		return registry.Descriptor{}, fmt.Errorf("package %d has an unusable root digest: %w", pkg.ID, err)
+	}
+	return registry.Descriptor{Digest: dgst, MediaType: mediaType}, nil
+}
+
 // Ensure returns a package's complete tree, walking the registry only when the
 // record does not already hold it.
 //
@@ -78,7 +110,13 @@ func Ensure(
 	if err != nil {
 		return Result{}, err
 	}
-	if complete {
+	// Complete, AND rooted at what was asked for. The second half is not
+	// pedantry: discovery records the tree of the tag it fetched — the payload —
+	// while a transfer walks the wrapper that reaches the payload AND its
+	// signature. Judging completeness on its own let a payload-rooted tree
+	// satisfy a request for the wrapper, so the signature manifest was never
+	// fetched, its size never counted, and its contents never recorded.
+	if complete && rootedAt(recorded, root) {
 		return Result{Tree: recorded, FromRecord: true}, nil
 	}
 
@@ -105,6 +143,19 @@ func Ensure(
 		return Result{}, err
 	}
 	return Result{Tree: stored, Fetched: fetched}, nil
+}
+
+// rootedAt reports whether a recorded tree is the tree under this descriptor.
+//
+// The root is the depth-0 artifact. A tree recorded from a different root may be
+// complete and still be the wrong tree.
+func rootedAt(t store.ExpandedTree, root registry.Descriptor) bool {
+	for _, a := range t.Artifacts {
+		if a.Row.Depth == 0 {
+			return a.Row.Digest == root.Digest.String()
+		}
+	}
+	return false
 }
 
 // ToStoreTree flattens the in-memory oci.Tree into what the store writes.

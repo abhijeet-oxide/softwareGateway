@@ -397,3 +397,36 @@ Three properties, all of which the spec forces:
 **It is a claim, not an observation.** The vendor says this is when it was built; we cannot verify that. So it is kept strictly separate from `discovered_at`, which is a fact about us. Folding them into one "date" would lose the ability to say which — and *"published in March, we only noticed in July"* is precisely the sort of thing worth being able to see.
 
 Read from the **root manifest only**. An index's children each carry their own created time, and a package's date is the release's, not its earliest component's — the children can be rebuilt independently.
+
+## 14. Tag filters do not hide a vendor's mechanism
+
+`discovery.tagFilters` selects which **releases** to track. It does not, and must not, select which tags a release is *made of*.
+
+The distinction was not there originally, and the result was a catalogue in which every package read `unsigned`. The configuration that produced it is the obvious one:
+
+```yaml
+tagFilters:
+  include: ['^orb_']
+```
+
+NEAR publishes `orb_X`, `signed_orb_X` and `signature_orb_X` for one release. Only the first matches, so the other two never entered the work list, the Layout never saw them, and `Status(looked=true)` returned a confident `unsigned` for everything. Nothing in any output pointed at the filter, and the filter was not wrong.
+
+So `Layout.AccessoryTags(tag)` names the other tags a Layout needs in order to classify one admitted tag, and the scanner resolves them **exempt from the filter**. Three properties keep it honest:
+
+- **Only for admitted tags.** An excluded release does not drag its accessories in behind it.
+- **Only for tags being grouped** — new ones, or a repository being regrouped. A quiet re-scan resolves nothing extra, so the steady state stays at one `HEAD` per admitted tag.
+- **Intersected with the repository's real tag list**, which the list phase already has. A release the vendor did not sign has no signature tag, and probing for one would be a 404 per release per scan.
+
+An accessory tag is fetched and handed to `Group`; it never becomes a package. If grouping *fails*, the fallback records one package per tag — but skips accessories, because turning a failed grouping into three packages per release would be worse than the noisier output the fallback exists to produce.
+
+## 15. Inspect walks the transfer root
+
+`expand.Root` is what both `packages inspect` and the transfer planner walk from, and it is **not always the package's own manifest**: where a vendor wraps the payload and its signature in an index, only the wrapper reaches both.
+
+They disagreed. The planner honoured the transfer root; inspect walked the payload. So `packages inspect` reported a transfer size that excluded the signature, while its own help said those were the numbers a transfer would move — and the tree it recorded was not the tree a transfer plans from.
+
+Two consequences fell out of fixing it:
+
+**Completeness is judged against the requested root.** A recorded tree can be complete and still be the wrong tree: discovery records the payload's, rooted at the payload. `Ensure` now checks that the depth-0 artifact is the root that was asked for, or it walks.
+
+**A tree can be RE-ROOTED.** The payload that was depth 0 under itself becomes depth 1 under the wrapper, so the artifact upsert takes `parent_id` and `depth` from the incoming tree rather than preserving them. Preserving them left two artifacts claiming depth 0 and a parent link pointing at nothing.

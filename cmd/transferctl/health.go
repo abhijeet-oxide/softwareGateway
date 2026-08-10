@@ -11,7 +11,10 @@ import (
 
 func newHealthCommand() *cobra.Command {
 	return &cobra.Command{
-		Use:   "health",
+		Use: "health",
+		// Declared so a stray argument is refused rather than silently
+		// ignored, which reads as the command having accepted it.
+		Args:  cobra.NoArgs,
 		Short: "Check the Coordinator and every configured dependency",
 		Long: "Runs the DEEP health check: the database, the worker fleet, every\n" +
 			"configured registry, and the notification channels.\n\n" +

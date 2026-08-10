@@ -55,6 +55,15 @@ func (wrapperLayout) DisplayTag(tag string) string {
 	return rest
 }
 
+// AccessoryTags mirrors NEAR's: a payload tag needs its wrapper and its
+// signature, neither of which a release-tag filter would admit.
+func (wrapperLayout) AccessoryTags(tag string) []string {
+	if !strings.HasPrefix(tag, "orb_") {
+		return nil
+	}
+	return []string{"signed_" + tag, "signature_" + tag}
+}
+
 func (wrapperLayout) Group(
 	_ context.Context, _ registry.Source, scanned []vendors.ScannedTag,
 ) ([]vendors.Package, error) {
@@ -773,4 +782,340 @@ func listPackages(t *testing.T, packages *store.Packages) []store.PackageRow {
 		t.Fatal(err)
 	}
 	return rows
+}
+
+// THE FILTER BUG, reproduced from a live configuration.
+//
+// A NEAR source configured exactly as an operator would write it:
+//
+//	tagFilters:
+//	  include: ['^orb_']
+//
+// which says "track the release tags". Under the old code that also, silently,
+// meant "never look at a signature": `signed_orb_X` and `signature_orb_X` do
+// not match `^orb_`, so they never entered the work list, the Layout never saw
+// them, and every package in the catalogue came out `unsigned` — a confident,
+// wrong answer, with nothing in any output pointing at the filter.
+func TestTagFiltersDoNotHideSignatures(t *testing.T) {
+	reg := fakeregistry.New()
+	t.Cleanup(reg.Close)
+	seedRelease(t, reg, "orbs/cfx-5000-k8s", "23.8.1076")
+
+	s, packages, _ := filteredScanner(t, reg, "orbs/cfx-5000-k8s", "^orb_")
+
+	res, err := s.Scan(t.Context())
+	if err != nil {
+		t.Fatalf("scan: %v", err)
+	}
+	// The filter did its job: one release admitted out of three tags.
+	if res.TagsListed != 3 {
+		t.Errorf("listed %d tags, want 3", res.TagsListed)
+	}
+	if res.TagsAdmitted != 1 {
+		t.Errorf("admitted %d tags, want 1 — the filter selects releases", res.TagsAdmitted)
+	}
+	if res.New != 1 {
+		t.Fatalf("recorded %d packages, want 1", res.New)
+	}
+
+	pkg := onlyPackage(t, packages, "orb_23.8.1076")
+
+	// And the signature was still found, because a filter selects PACKAGES and
+	// the Layout is allowed to reach the tags a package is made of.
+	if pkg.SignatureStatus != "signed" {
+		t.Errorf("signature status = %q, want signed — the accessory tags were not reached", pkg.SignatureStatus)
+	}
+	if pkg.TransferRootTag != "signed_orb_23.8.1076" {
+		t.Errorf("transfer root tag = %q, want signed_orb_23.8.1076", pkg.TransferRootTag)
+	}
+
+	// The accessory tags must NOT have become packages: they were never
+	// admitted, and pulling them in is a mechanism, not a selection.
+	if got := len(listPackages(t, packages)); got != 1 {
+		t.Errorf("listed %d packages, want 1 — accessory tags must not become releases", got)
+	}
+}
+
+// A release the vendor did NOT sign must read `unsigned`, not `signed`, and
+// must not cost a request per scan looking for a tag that does not exist.
+func TestAnUnsignedReleaseStaysUnsigned(t *testing.T) {
+	reg := fakeregistry.New()
+	t.Cleanup(reg.Close)
+	// Only the payload: no wrapper, no signature.
+	reg.AddImage("orbs/cfx-5000-k8s", "orb_23.8.1076", fakeregistry.NewLayer("payload"))
+
+	s, packages, _ := filteredScanner(t, reg, "orbs/cfx-5000-k8s", "^orb_")
+	if _, err := s.Scan(t.Context()); err != nil {
+		t.Fatalf("scan: %v", err)
+	}
+
+	pkg := onlyPackage(t, packages, "orb_23.8.1076")
+	if pkg.SignatureStatus != "unsigned" {
+		t.Errorf("signature status = %q, want unsigned — the layout looked and found none",
+			pkg.SignatureStatus)
+	}
+}
+
+// The steady state must stay cheap. Accessory tags are resolved only for
+// releases actually being grouped, so a re-scan that finds nothing new must not
+// re-fetch a wrapper and a signature per release, forever.
+func TestAccessoryTagsAreNotRefetchedOnAQuietScan(t *testing.T) {
+	reg := fakeregistry.New()
+	t.Cleanup(reg.Close)
+	seedRelease(t, reg, "orbs/cfx-5000-k8s", "23.8.1076")
+
+	s, _, _ := filteredScanner(t, reg, "orbs/cfx-5000-k8s", "^orb_")
+	if _, err := s.Scan(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+
+	before := reg.ManifestCalls.Load()
+	if _, err := s.Scan(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	quiet := reg.ManifestCalls.Load() - before
+
+	// One HEAD for the admitted release, and nothing else. Two more would mean
+	// the wrapper and the signature are being re-resolved every fifteen minutes
+	// for the life of the deployment.
+	if quiet != 1 {
+		t.Errorf("a scan that found nothing new made %d manifest requests, want 1; "+
+			"accessory tags must only be resolved for releases actually being grouped", quiet)
+	}
+}
+
+// filteredScanner is groupingScanner with a real tagFilters.include, which is
+// the configuration that exposed the bug.
+func filteredScanner(
+	t *testing.T, reg *fakeregistry.Registry, repo, include string,
+) (*Scanner, *store.Packages, int64) {
+	t.Helper()
+
+	doc := fmt.Sprintf(`
+apiVersion: softwaregateway.io/v1alpha1
+kind: Product
+metadata:
+  name: vendor-a
+spec:
+  sources:
+    - name: vendor
+      registry: %s
+      repository: %s
+      anonymous: true
+      vendor: test-wrapper
+      discovery:
+        tagFilters:
+          include: ['%s']
+  targets:
+    - name: internal
+      registry: internal.example.com
+      repository: mirror/vendor-a
+      anonymous: true
+      default: true
+`, reg.Host(), repo, include)
+
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "p.yaml"), []byte(doc), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	res, err := product.NewLoader(dir, product.NewSecretResolver(t.TempDir())).Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(res.Invalid) > 0 {
+		t.Fatalf("config invalid: %v", res.Invalid[0].Err)
+	}
+	p := res.Valid[0]
+
+	st, err := store.Open(t.Context(), store.Config{
+		Driver: store.DriverSQLite, DSN: filepath.Join(t.TempDir(), "f.db"),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = st.Close() })
+	if err := store.Migrate(t.Context(), st, nil); err != nil {
+		t.Fatal(err)
+	}
+	rec, err := catalog.NewCatalog(st).Reconcile(t.Context(), res.Valid)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ref := rec.Products["vendor-a"]
+
+	newClient, err := SourceClientFactory(p, p.Spec.Sources[0], product.NewSecretResolver(t.TempDir()), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	packages := store.NewPackages(st)
+	sc, err := NewScanner(ScannerConfig{
+		Packages: packages, Product: p, ProductID: ref.ID, SourceName: "vendor",
+		NewClient: newClient, RepoIDs: ref.Repositories, Layout: wrapperLayout{},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return sc, packages, ref.ID
+}
+
+// Inspecting a signed package must record WHAT the signature is, not merely
+// that one exists.
+//
+// Discovery can only record existence: it sees the wrapper's descriptor of the
+// signature manifest and stops, because fetching that manifest is exactly the
+// walk discovery defers. So the bytes a verifier reads were recorded like any
+// other blob and were indistinguishable from a chart layer beside them.
+//
+// Verification is a later milestone. This is the material it will need,
+// captured at the only moment it is free — the walk inspect was doing anyway.
+func TestInspectRecordsTheSignatureMaterial(t *testing.T) {
+	reg := fakeregistry.New()
+	t.Cleanup(reg.Close)
+	seedRelease(t, reg, "orbs/cfx-5000-k8s", "23.8.1076")
+
+	s, packages, _ := filteredScanner(t, reg, "orbs/cfx-5000-k8s", "^orb_")
+	if _, err := s.Scan(t.Context()); err != nil {
+		t.Fatalf("scan: %v", err)
+	}
+
+	pkg := onlyPackage(t, packages, "orb_23.8.1076")
+
+	// Before inspection: the signature is known to exist, and nothing more.
+	before := signatureRelation(t, packages, pkg.ID)
+	if before.Digest == "" {
+		t.Fatal("no signature relation recorded by discovery")
+	}
+	if before.BlobDigest != "" {
+		t.Errorf("discovery claimed to know the signature blob %q without fetching the manifest",
+			before.BlobDigest)
+	}
+	if before.ResolvedAt != "" {
+		t.Errorf("resolvedAt = %q before any inspection", before.ResolvedAt)
+	}
+
+	client, err := s.clientFor("orbs/cfx-5000-k8s")
+	if err != nil {
+		t.Fatal(err)
+	}
+	res, err := InspectPackage(t.Context(), packages, pkg, client, 4)
+	if err != nil {
+		t.Fatalf("inspect: %v", err)
+	}
+	if res.SignatureResolved != 1 {
+		t.Errorf("resolved %d signatures, want 1", res.SignatureResolved)
+	}
+
+	after := signatureRelation(t, packages, pkg.ID)
+	if after.BlobDigest == "" {
+		t.Fatal("the signature blob was not recorded, so a verifier still has to " +
+			"re-derive the vendor's layout to find it")
+	}
+	if after.BlobDigest == after.Digest {
+		t.Error("the blob digest is the MANIFEST digest; the material is the layer inside it")
+	}
+	if after.BlobSize <= 0 {
+		t.Errorf("blob size = %d, want the real size", after.BlobSize)
+	}
+	if after.ResolvedAt == "" {
+		t.Error("no resolvedAt, so 'carries no blob' cannot be told from 'never inspected'")
+	}
+
+	// Idempotent: the tree under a digest cannot change, so a second inspection
+	// resolves the same material rather than a different answer.
+	if _, err := InspectPackage(t.Context(), packages, pkg, client, 4); err != nil {
+		t.Fatalf("second inspect: %v", err)
+	}
+	again := signatureRelation(t, packages, pkg.ID)
+	if again.BlobDigest != after.BlobDigest {
+		t.Errorf("a second inspection resolved a different blob: %q then %q",
+			after.BlobDigest, again.BlobDigest)
+	}
+}
+
+func signatureRelation(t *testing.T, packages *store.Packages, packageID int64) store.RelationRow {
+	t.Helper()
+	rels, err := packages.ListRelations(t.Context(), packageID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, r := range rels {
+		if r.Role == "signature" {
+			return r
+		}
+	}
+	return store.RelationRow{}
+}
+
+// Inspect must measure what a TRANSFER moves, which for a wrapped release is
+// the wrapper's tree — payload plus signature — not the payload alone.
+//
+// The two disagreed: the planner honoured the transfer root while inspect
+// walked the package's own manifest. So `packages inspect` reported a size that
+// excluded the signature while saying, in as many words, that these were the
+// numbers a transfer would move. The recorded tree was the payload's, which is
+// also why the signature manifest was never fetched and its material never
+// resolved.
+func TestInspectWalksTheTransferRoot(t *testing.T) {
+	reg := fakeregistry.New()
+	t.Cleanup(reg.Close)
+	seedRelease(t, reg, "orbs/cfx-5000-k8s", "23.8.1076")
+
+	s, packages, _ := filteredScanner(t, reg, "orbs/cfx-5000-k8s", "^orb_")
+	if _, err := s.Scan(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	pkg := onlyPackage(t, packages, "orb_23.8.1076")
+	if pkg.TransferRootDigest == "" {
+		t.Fatal("no transfer root, so this test proves nothing")
+	}
+
+	client, err := s.clientFor("orbs/cfx-5000-k8s")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := InspectPackage(t.Context(), packages, pkg, client, 4); err != nil {
+		t.Fatalf("inspect: %v", err)
+	}
+
+	artifacts, err := packages.ListArtifacts(t.Context(), pkg.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Exactly one root, and it is the wrapper.
+	var roots []string
+	byDigest := map[string]store.ArtifactRow{}
+	for _, a := range artifacts {
+		byDigest[a.Digest] = a
+		if a.Depth == 0 {
+			roots = append(roots, a.Digest)
+		}
+	}
+	if len(roots) != 1 {
+		t.Errorf("tree has %d roots (%v); re-rooting must not leave two", len(roots), roots)
+	}
+	if len(roots) == 1 && roots[0] != pkg.TransferRootDigest {
+		t.Errorf("tree root = %s, want the transfer root %s", roots[0], pkg.TransferRootDigest)
+	}
+
+	// The payload is now a CHILD of the wrapper rather than the root.
+	if payload, ok := byDigest[pkg.ManifestDigest]; !ok {
+		t.Error("the payload is missing from the tree")
+	} else if payload.Depth == 0 || payload.ParentID == nil {
+		t.Errorf("the payload is still a root (depth %d); re-rooting did not reparent it",
+			payload.Depth)
+	}
+
+	// And the measured size now includes the signature, because a transfer will
+	// move it.
+	measured := onlyPackage(t, packages, "orb_23.8.1076")
+	if measured.TotalBytes == nil {
+		t.Fatal("no measured size after inspection")
+	}
+	sig := signatureRelation(t, packages, pkg.ID)
+	if _, ok := byDigest[sig.Digest]; !ok {
+		t.Error("the signature manifest is not in the measured tree, so the reported " +
+			"transfer size is smaller than the transfer")
+	}
 }

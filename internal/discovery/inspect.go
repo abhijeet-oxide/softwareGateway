@@ -2,11 +2,11 @@ package discovery
 
 import (
 	"context"
-	"fmt"
 
 	"github.com/abhijeet-oxide/softwareGateway/internal/expand"
 	"github.com/abhijeet-oxide/softwareGateway/internal/registry"
 	"github.com/abhijeet-oxide/softwareGateway/internal/store"
+	"github.com/abhijeet-oxide/softwareGateway/internal/vendors"
 )
 
 // InspectResult reports what expanding one package found.
@@ -35,6 +35,11 @@ type InspectResult struct {
 	// store.SweepManifestCache.
 	CachedManifests int
 	CachedBytes     int64
+
+	// SignatureResolved is how many signature relations had their MATERIAL
+	// recorded — the blob a verifier reads, and the vendor annotations that say
+	// what kind of signature it is. See resolveRelationMaterial.
+	SignatureResolved int
 }
 
 // InspectPackage walks a package's manifest tree and records what it finds.
@@ -52,12 +57,14 @@ func InspectPackage(
 	client registry.ManifestReader,
 	concurrency int,
 ) (InspectResult, error) {
-	root := registry.Descriptor{
-		Digest:    registry.Digest(pkg.ManifestDigest),
-		MediaType: pkg.MediaType,
-	}
-	if err := root.Digest.Validate(); err != nil {
-		return InspectResult{}, fmt.Errorf("package %d has an unusable digest: %w", pkg.ID, err)
+	// The TRANSFER ROOT, not the package's own manifest — the same descriptor
+	// the planner walks. Where a vendor wraps the payload and its signature in
+	// an index, only the wrapper reaches both, so walking the payload would
+	// measure a transfer that excludes the signature and would never see the
+	// signature manifest at all.
+	root, err := expand.Root(pkg)
+	if err != nil {
+		return InspectResult{}, err
 	}
 
 	out, err := expand.Ensure(ctx, packages, pkg.ID, root, client, concurrency)
@@ -83,6 +90,18 @@ func InspectPackage(
 		}
 	}
 
+	// Resolve the signature material while the tree is in hand. See
+	// resolveRelationMaterial — this is the one moment the signature manifest's
+	// contents are known without paying for another request.
+	//
+	// Best effort: a package whose size was measured must not be reported as a
+	// failure because a descriptive field could not be written.
+	resolved, err := resolveRelationMaterial(ctx, packages, pkg.ID, out.Tree)
+	if err != nil {
+		return InspectResult{}, err
+	}
+	res.SignatureResolved = resolved
+
 	// Re-read the package row: the walk wrote the measured size, the blob count
 	// and expanded_at onto it, and the caller's copy predates all three.
 	updated, err := packages.GetPackageByID(ctx, pkg.ID)
@@ -91,4 +110,73 @@ func InspectPackage(
 	}
 	res.Package = updated
 	return res, nil
+}
+
+// resolveRelationMaterial records WHAT a package's signature is, now that its
+// manifest has been fetched.
+//
+// Discovery can only record that a signature EXISTS: it sees the wrapper's
+// descriptor of the signature manifest and stops there, because fetching that
+// manifest is exactly the walk discovery defers. So the bytes a verifier
+// actually reads — for NEAR, one `application/pkcs7-signature` layer — were
+// recorded like any other blob and were indistinguishable from a Helm chart
+// sitting beside them.
+//
+// The rule is vendor-neutral: a relation of role `signature` names a manifest,
+// and that manifest's LAYERS are the material. That holds for a wrapper index,
+// for a cosign tag, and for the referrers API, so a verifier reads one row
+// rather than re-deriving a vendor's layout — which is the coupling
+// internal/vendors exists to prevent.
+//
+// Verification itself is a later milestone. This is what it will need, captured
+// at the only moment it is free.
+func resolveRelationMaterial(
+	ctx context.Context, packages *store.Packages, packageID int64, tree store.ExpandedTree,
+) (int, error) {
+	relations, err := packages.ListRelations(ctx, packageID)
+	if err != nil {
+		return 0, err
+	}
+
+	// Annotations live on the artifact rows rather than in the tree, and they
+	// are half the point: a verifier reads the vendor's own keys off them.
+	artifacts, err := packages.ListArtifacts(ctx, packageID)
+	if err != nil {
+		return 0, err
+	}
+	annotations := make(map[string]map[string]string, len(artifacts))
+	for _, a := range artifacts {
+		annotations[a.Digest] = a.Annotations
+	}
+
+	blobs := make(map[string][]store.BlobRef, len(tree.Artifacts))
+	for _, a := range tree.Artifacts {
+		blobs[a.Row.Digest] = a.Blobs
+	}
+
+	resolved := 0
+	for _, rel := range relations {
+		if rel.Role != string(vendors.RoleSignature) {
+			continue
+		}
+		material := store.RelationRow{Annotations: annotations[rel.Digest]}
+
+		// The layer, not the config: a signature manifest's config is a stub —
+		// NEAR's is the two bytes `{}` — and the signature is the payload.
+		for _, b := range blobs[rel.Digest] {
+			if b.Kind == "layer" {
+				material.BlobDigest = b.Digest
+				material.BlobMediaType = b.MediaType
+				material.BlobSize = b.SizeBytes
+				break
+			}
+		}
+
+		if err := packages.RecordRelationMaterial(
+			ctx, packageID, rel.Role, rel.Digest, material); err != nil {
+			return resolved, err
+		}
+		resolved++
+	}
+	return resolved, nil
 }

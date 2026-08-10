@@ -113,13 +113,21 @@ func (s *Server) handleGetPackage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	for _, rel := range rels {
-		pkg.Related = append(pkg.Related, v1.RelatedArtifact{
-			Role:      strings.ToUpper(rel.Role),
-			Digest:    rel.Digest,
-			Tag:       rel.Tag,
-			MediaType: rel.MediaType,
-			SizeBytes: v1.Int64String(strconv.FormatInt(rel.SizeBytes, 10)),
-		})
+		related := v1.RelatedArtifact{
+			Role:        strings.ToUpper(rel.Role),
+			Digest:      rel.Digest,
+			Tag:         rel.Tag,
+			MediaType:   rel.MediaType,
+			SizeBytes:   v1.Int64String(strconv.FormatInt(rel.SizeBytes, 10)),
+			Annotations: rel.Annotations,
+			ResolvedAt:  rel.ResolvedAt,
+		}
+		if rel.BlobDigest != "" {
+			related.BlobDigest = rel.BlobDigest
+			related.BlobMediaType = rel.BlobMediaType
+			related.BlobSize = v1.Int64String(strconv.FormatInt(rel.BlobSize, 10))
+		}
+		pkg.Related = append(pkg.Related, related)
 	}
 
 	WriteJSON(w, r, http.StatusOK, pkg)
@@ -639,6 +647,8 @@ func (s *Server) handleInspectPackage(w http.ResponseWriter, r *http.Request) {
 		TotalBytes:      v1.Int64String(strconv.FormatInt(res.TotalBytes, 10)),
 		CachedManifests: res.CachedManifests,
 		CachedBytes:     v1.Int64String(strconv.FormatInt(res.CachedBytes, 10)),
+
+		SignatureResolved: res.SignatureResolved,
 	})
 }
 

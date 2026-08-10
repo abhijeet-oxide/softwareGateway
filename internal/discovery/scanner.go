@@ -331,7 +331,7 @@ func (s *Scanner) Scan(ctx context.Context) (ScanResult, error) {
 		return res, err
 	}
 
-	resolved := s.resolvePhase(ctx, listed.work, limit)
+	resolved := s.resolvePhase(ctx, listed.work, listed.tags, limit)
 	res.New = resolved.New
 	res.Superseded = resolved.Superseded
 	res.Requests = resolved.Requests
@@ -442,6 +442,10 @@ type tagWork struct {
 	repoID   int64
 	client   registry.Source
 	tag      string
+	// accessory marks a tag pulled in by the Layout rather than admitted by the
+	// filters — NEAR's `signed_orb_X` for an admitted `orb_X`. It is fetched and
+	// handed to Group, and it must never become a package of its own.
+	accessory bool
 }
 
 // listOutcome is what phase one produced.
@@ -450,6 +454,10 @@ type listOutcome struct {
 	tagsListed int
 	scanned    int
 	failures   []repoFailure
+	// tags is every tag each repository actually has, before filtering, so a
+	// Layout's accessory tags can be intersected with reality rather than
+	// probed for with requests that mostly 404.
+	tags map[int64]map[string]bool
 }
 
 type repoFailure struct {
@@ -469,8 +477,11 @@ func (s *Scanner) listPhase(ctx context.Context, repos []string, limit int) list
 		repoID   int64
 		client   registry.Source
 		admitted []string
-		listed   int
-		err      error
+		// all is every tag the repository has, so a Layout's accessory tags can
+		// be checked against it without a request each.
+		all    map[string]bool
+		listed int
+		err    error
 	}
 
 	results := make([]result, len(repos))
@@ -513,7 +524,9 @@ func (s *Scanner) listPhase(ctx context.Context, repos []string, limit int) list
 				return
 			}
 			r.listed = len(tags)
+			r.all = make(map[string]bool, len(tags))
 			for _, tag := range tags {
+				r.all[tag] = true
 				if s.tagFilter.admits(tag) {
 					r.admitted = append(r.admitted, tag)
 				}
@@ -532,7 +545,7 @@ func (s *Scanner) listPhase(ctx context.Context, repos []string, limit int) list
 	// Assembled in the ORIGINAL order, after the fact, so the work list — and
 	// therefore the logs — come out identical run to run even though the listing
 	// did not.
-	var out listOutcome
+	out := listOutcome{tags: map[int64]map[string]bool{}}
 	for _, r := range results {
 		if r.err != nil {
 			out.failures = append(out.failures, repoFailure{path: r.path, err: r.err})
@@ -541,6 +554,7 @@ func (s *Scanner) listPhase(ctx context.Context, repos []string, limit int) list
 		}
 		out.scanned++
 		out.tagsListed += r.listed
+		out.tags[r.repoID] = r.all
 		for _, tag := range r.admitted {
 			out.work = append(out.work, tagWork{
 				repoPath: r.path, repoID: r.repoID, client: r.client, tag: tag,
@@ -578,7 +592,9 @@ type resolveResult struct {
 // repository. That matters on a real catalogue: a repository with three tags no
 // longer leaves most of the budget idle while the repository with three hundred
 // waits its turn behind it.
-func (s *Scanner) resolvePhase(ctx context.Context, work []tagWork, limit int) resolveResult {
+func (s *Scanner) resolvePhase(
+	ctx context.Context, work []tagWork, repoTags map[int64]map[string]bool, limit int,
+) resolveResult {
 	var res resolveResult
 	if len(work) == 0 {
 		return res
@@ -607,6 +623,14 @@ func (s *Scanner) resolvePhase(ctx context.Context, work []tagWork, limit int) r
 			}
 		}
 	}
+
+	// Pull in the tags the Layout needs but the filters did not admit — NEAR's
+	// `signed_orb_X` and `signature_orb_X` for an admitted `orb_X`.
+	//
+	// Only for releases that are actually being grouped: a repository where
+	// nothing is new costs nothing extra, which is what keeps the steady state
+	// one HEAD per tag. See accessoryPhase.
+	resolved = append(resolved, s.accessoryPhase(ctx, resolved, repoTags, limit)...)
 
 	for _, r := range resolved {
 		s.progress.update(func(p *ScanProgress) { p.TagsResolved++ })
@@ -651,7 +675,14 @@ func (s *Scanner) resolvePhase(ctx context.Context, work []tagWork, limit int) r
 	for _, repoPath := range order {
 		group := byRepo[repoPath]
 		repoID := group[0].work.repoID
-		pkgs := s.groupPhase(ctx, group[0].work.client, scannedTagsFor(group))
+
+		accessory := map[string]bool{}
+		for _, f := range group {
+			if f.work.accessory {
+				accessory[f.work.tag] = true
+			}
+		}
+		pkgs := s.groupPhase(ctx, group[0].work.client, scannedTagsFor(group), accessory)
 
 		// A re-grouping pass starts by forgetting what the previous convention
 		// concluded, so removing a vendor genuinely undoes it rather than
@@ -728,6 +759,73 @@ func (s *Scanner) resolvePhase(ctx context.Context, work []tagWork, limit int) r
 	}
 
 	return res
+}
+
+// accessoryPhase resolves the tags a Layout needs but the filters did not
+// admit.
+//
+// THE BUG THIS FIXES. `discovery.tagFilters` is how an operator says which
+// RELEASES to track, and `include: ['^orb_']` is a perfectly reasonable way to
+// say "the release tags, not the noise". But under a vendor Layout, NEAR's
+// `signed_orb_X` is neither noise nor a release — it is the plumbing of the
+// release that WAS admitted, and it is where the signature lives. With the two
+// conflated, that filter produced a catalogue in which every package read
+// `unsigned`, with nothing in any output to suggest the filter was why.
+//
+// Only for tags actually being grouped — new ones, or a repository being
+// regrouped. A repository where nothing changed adds nothing, which is what
+// keeps the steady state at one HEAD per admitted tag.
+//
+// Intersected with the repository's real tag list rather than probed for: a
+// release the vendor did not sign has no signature tag, and asking would be a
+// 404 per release per scan.
+func (s *Scanner) accessoryPhase(
+	ctx context.Context, resolved []resolvedTag, repoTags map[int64]map[string]bool, limit int,
+) []resolvedTag {
+	// Tags already in the work list, so an accessory that the filters happened
+	// to admit as well is not fetched twice.
+	claimed := map[int64]map[string]bool{}
+	for _, r := range resolved {
+		if claimed[r.work.repoID] == nil {
+			claimed[r.work.repoID] = map[string]bool{}
+		}
+		claimed[r.work.repoID][r.work.tag] = true
+	}
+
+	var extra []tagWork
+	for _, r := range resolved {
+		if r.err != nil || r.gone || r.known {
+			continue
+		}
+		for _, tag := range s.layout.AccessoryTags(r.work.tag) {
+			if !repoTags[r.work.repoID][tag] || claimed[r.work.repoID][tag] {
+				continue
+			}
+			claimed[r.work.repoID][tag] = true
+			extra = append(extra, tagWork{
+				repoPath:  r.work.repoPath,
+				repoID:    r.work.repoID,
+				client:    r.work.client,
+				tag:       tag,
+				accessory: true,
+			})
+		}
+	}
+	if len(extra) == 0 {
+		return nil
+	}
+
+	s.log.InfoContext(ctx, "resolving vendor accessory tags the filters did not admit",
+		"vendor", s.layout.Name(), "tags", len(extra))
+
+	out := s.headPhase(ctx, extra, limit)
+	for i := range out {
+		// An accessory is never "known": it has no package row of its own, by
+		// design. Forcing the flag keeps it out of the existence check, whose
+		// answer would be a permanent false.
+		out[i].known = false
+	}
+	return out
 }
 
 // repositoriesToRegroup reports which repositories were grouped under a

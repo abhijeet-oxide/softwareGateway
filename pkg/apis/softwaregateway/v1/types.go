@@ -396,6 +396,24 @@ type RelatedArtifact struct {
 	Tag       string      `json:"tag,omitempty"`
 	MediaType string      `json:"mediaType,omitempty"`
 	SizeBytes Int64String `json:"sizeBytes,omitempty"`
+
+	// The MATERIAL, for a signature: Digest above names the manifest that
+	// carries it, and these name what is inside — the blob a verifier reads.
+	// For NEAR that is one layer of `application/pkcs7-signature`.
+	//
+	// Absent until the package has been inspected: the manifest has to be
+	// fetched before its layers are known, and discovery deliberately does not
+	// fetch it.
+	BlobDigest    string      `json:"blobDigest,omitempty"`
+	BlobMediaType string      `json:"blobMediaType,omitempty"`
+	BlobSize      Int64String `json:"blobSize,omitempty"`
+	// Annotations is the signature manifest's own annotation map, verbatim, so
+	// a client reads vendor keys this API has never heard of.
+	Annotations map[string]string `json:"annotations,omitempty"`
+	// ResolvedAt is when the material was last confirmed. Empty means nobody has
+	// inspected this package — which is a different fact from a signature that
+	// carries no blob.
+	ResolvedAt string `json:"resolvedAt,omitempty"`
 }
 
 // ListPackagesResponse is returned by GET /api/v1/products/{product}/packages.
@@ -471,6 +489,9 @@ type InspectPackageResponse struct {
 	// affects any of the ones above.
 	CachedManifests int         `json:"cachedManifests"`
 	CachedBytes     Int64String `json:"cachedBytes,omitempty"`
+	// SignatureResolved is how many signature relations had their material
+	// recorded — the blob a verifier reads, captured while the tree was in hand.
+	SignatureResolved int `json:"signatureResolved,omitempty"`
 }
 
 // ListArtifactsResponse is returned by

@@ -1091,6 +1091,14 @@ func (p *Packages) upsertArtifact(ctx context.Context, tx *sql.Tx, a ArtifactRow
 		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ` + p.fetchStamps(a.Raw) + `)
 		ON CONFLICT (package_id, digest) DO UPDATE SET
 			raw           = COALESCE(EXCLUDED.raw, package_artifacts.raw),
+			-- parent_id and depth are taken from the incoming tree rather than
+			-- preserved, because a tree can legitimately be RE-ROOTED: discovery
+			-- records the payload's tree, and expanding from the vendor's wrapper
+			-- makes that same payload a child at depth 1. Keeping the old values
+			-- would leave two artifacts claiming depth 0 and a parent link
+			-- pointing at nothing.
+			parent_id     = EXCLUDED.parent_id,
+			depth         = EXCLUDED.depth,
 			media_type    = EXCLUDED.media_type,
 			artifact_type = COALESCE(EXCLUDED.artifact_type, package_artifacts.artifact_type),
 			size_bytes    = EXCLUDED.size_bytes,
@@ -1203,6 +1211,25 @@ type RelationRow struct {
 	Tag       string
 	MediaType string
 	SizeBytes int64
+
+	// The SIGNATURE MATERIAL: the blob a verifier actually reads.
+	//
+	// Digest above names the MANIFEST that carries the signature. These name
+	// what is inside it — for NEAR, one layer of `application/pkcs7-signature`.
+	// Empty until the package has been inspected, because the manifest has to be
+	// fetched before its layers are known.
+	BlobDigest    string
+	BlobMediaType string
+	BlobSize      int64
+	// Annotations is the signature manifest's own annotation map, verbatim.
+	// A verifier reads vendor keys from it — `com.nokia.ncd.orb.type` to know
+	// what kind of signature this is, `com.nokia.rb.*` to tie it to a release —
+	// without this package knowing any of them exist.
+	Annotations map[string]string
+	// ResolvedAt separates "inspected, and this signature carries no blob" from
+	// "nobody has inspected this package yet". Empty blob digest means both, and
+	// only one of them is worth acting on.
+	ResolvedAt string
 }
 
 // ReplaceRelations writes a package's related artifacts.
@@ -1233,10 +1260,39 @@ func (p *Packages) ReplaceRelations(
 	return nil
 }
 
+// RecordRelationMaterial writes what a relation's manifest turned out to
+// contain — for a signature, the blob a verifier reads.
+//
+// Idempotent and safe to repeat: the tree under a digest cannot change, so a
+// second inspection resolves the same material. `resolved_at` is refreshed each
+// time, which is the honest reading — it says when we last confirmed it, not
+// when we first guessed.
+func (p *Packages) RecordRelationMaterial(
+	ctx context.Context, packageID int64, role, digest string, m RelationRow,
+) error {
+	query := p.dialect.Rewrite(`
+		UPDATE package_relations
+		   SET blob_digest     = ?,
+		       blob_media_type = ?,
+		       blob_size       = ?,
+		       annotations     = COALESCE(?, annotations),
+		       resolved_at     = ` + p.dialect.Now() + `
+		 WHERE package_id = ? AND role = ? AND digest = ?`)
+
+	if _, err := p.db.ExecContext(ctx, query,
+		nullIfEmpty(m.BlobDigest), nullIfEmpty(m.BlobMediaType), m.BlobSize,
+		annotationsJSON(m.Annotations), packageID, role, digest); err != nil {
+		return fmt.Errorf("record %s material for package %d: %w", role, packageID, err)
+	}
+	return nil
+}
+
 // ListRelations returns a package's related artifacts.
 func (p *Packages) ListRelations(ctx context.Context, packageID int64) ([]RelationRow, error) {
 	query := p.dialect.Rewrite(`
-		SELECT role, digest, COALESCE(tag,''), COALESCE(media_type,''), size_bytes
+		SELECT role, digest, COALESCE(tag,''), COALESCE(media_type,''), size_bytes,
+		       COALESCE(blob_digest,''), COALESCE(blob_media_type,''), blob_size,
+		       annotations, resolved_at
 		  FROM package_relations
 		 WHERE package_id = ?
 		 ORDER BY role, digest`)
@@ -1249,9 +1305,22 @@ func (p *Packages) ListRelations(ctx context.Context, packageID int64) ([]Relati
 
 	var out []RelationRow
 	for rows.Next() {
-		var r RelationRow
-		if err := rows.Scan(&r.Role, &r.Digest, &r.Tag, &r.MediaType, &r.SizeBytes); err != nil {
+		var (
+			r           RelationRow
+			annotations []byte
+			resolvedAt  *string
+		)
+		if err := rows.Scan(&r.Role, &r.Digest, &r.Tag, &r.MediaType, &r.SizeBytes,
+			&r.BlobDigest, &r.BlobMediaType, &r.BlobSize, &annotations, &resolvedAt); err != nil {
 			return nil, fmt.Errorf("scan relation: %w", err)
+		}
+		if len(annotations) > 0 {
+			// Dropped rather than fatal if malformed: it is descriptive
+			// metadata, and it must not make a package impossible to look at.
+			_ = json.Unmarshal(annotations, &r.Annotations)
+		}
+		if resolvedAt != nil {
+			r.ResolvedAt = *resolvedAt
 		}
 		out = append(out, r)
 	}

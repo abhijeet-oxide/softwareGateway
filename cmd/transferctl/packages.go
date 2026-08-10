@@ -905,6 +905,34 @@ func renderSignature(w io.Writer, p *v1.Package) {
 	fmt.Fprintln(w, "  nothing in this build checks a signature against a trust root, so this")
 	fmt.Fprintln(w, "  says the vendor published one, not that it is valid or that it is theirs.")
 
+	// The MATERIAL, when it has been resolved. This is what a verifier reads,
+	// and printing it is how someone checks a signature by hand today — pull the
+	// blob by digest and run it through `openssl cms`.
+	for _, r := range p.Related {
+		if !strings.EqualFold(r.Role, "signature") {
+			continue
+		}
+		fmt.Fprintln(w)
+		switch {
+		case r.BlobDigest != "":
+			fmt.Fprintln(w, "  Signature material")
+			tw := newTabWriter(w)
+			fmt.Fprintf(tw, "    manifest\t%s\n", shortDigest(r.Digest))
+			fmt.Fprintf(tw, "    blob\t%s\n", r.BlobDigest)
+			fmt.Fprintf(tw, "    format\t%s\n", dash(r.BlobMediaType))
+			fmt.Fprintf(tw, "    size\t%s\n", humanBytes(r.BlobSize))
+			if r.ResolvedAt != "" {
+				fmt.Fprintf(tw, "    resolved\t%s\n", r.ResolvedAt)
+			}
+			_ = tw.Flush()
+		default:
+			fmt.Fprintln(w, "  The signature's contents have not been read yet — only that it")
+			fmt.Fprintln(w, "  exists. `packages inspect` fetches it and records the blob a")
+			fmt.Fprintln(w, "  verifier would check.")
+		}
+		break
+	}
+
 	if p.TransferRootTag != "" {
 		fmt.Fprintln(w)
 		fmt.Fprintf(w, "  A transfer walks %s, which reaches both this package and\n", p.TransferRootTag)

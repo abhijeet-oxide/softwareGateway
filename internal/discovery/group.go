@@ -177,6 +177,7 @@ func scannedTagsFor(items []fetched) []vendors.ScannedTag {
 // to discovering nothing — and the log says which happened.
 func (s *Scanner) groupPhase(
 	ctx context.Context, src registry.Source, scanned []vendors.ScannedTag,
+	accessory map[string]bool,
 ) []vendors.Package {
 	if len(scanned) == 0 {
 		return nil
@@ -186,7 +187,19 @@ func (s *Scanner) groupPhase(
 	if err != nil {
 		s.log.WarnContext(ctx, "layout could not group tags; recording them individually",
 			"layout", s.layout.Name(), "tags", len(scanned), "error", err)
-		return vendors.Standard{}.Fallback(scanned)
+
+		// The fallback records one package per tag — but NOT for tags the
+		// filters never admitted. Those are here only because the Layout asked
+		// for them, and turning a failed grouping into three packages per
+		// release would be a worse outcome than the noisier one this fallback
+		// exists to produce.
+		var admitted []vendors.ScannedTag
+		for _, t := range scanned {
+			if !accessory[t.Tag] {
+				admitted = append(admitted, t)
+			}
+		}
+		return vendors.Standard{}.Fallback(admitted)
 	}
 	return pkgs
 }

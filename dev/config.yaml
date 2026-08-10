@@ -44,6 +44,20 @@ coordinator:
   gc:
     tickInterval: 1h
     batchSize: 5000
+  # The cached manifest bodies, and the only thing this system stores that
+  # would otherwise grow without limit. A package's CONTENTS — its artifacts,
+  # their sizes, the blobs they reference — are kept forever and cost a few
+  # kilobytes. The manifest BODIES are a cache in front of the source registry:
+  # large, read only when a manifest is pushed, and exactly recoverable,
+  # because a manifest is addressed by the hash of its own bytes.
+  #
+  # Set either bound to 0 to disable it; both 0 keeps everything. Lowering them
+  # is safe — the cost of a miss is re-fetching a few kilobytes at transfer
+  # time, and nothing else.
+  manifestCache:
+    budgetBytes: 536870912   # 512 MiB
+    ttl: 168h                # a week
+    sweepInterval: 15m
 
 worker:
   coordinatorEndpoint: http://localhost:8080

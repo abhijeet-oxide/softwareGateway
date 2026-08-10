@@ -129,7 +129,11 @@ type Repository struct {
 	// RepositoryFilters narrows the set. Its main use is the enumerated case.
 	RepositoryFilters *Filters `json:"repositoryFilters,omitempty"`
 
-	Type          string      `json:"type"`
+	Type string `json:"type"`
+	// Vendor is the publishing convention a SOURCE follows — `near`, or empty
+	// for a conformant registry. Separate from Type, which is how to speak to
+	// the registry: protocol and publishing convention vary independently.
+	Vendor        string      `json:"vendor,omitempty"`
 	Role          string      `json:"role"`
 	Default       bool        `json:"default,omitempty"`
 	PromotionOnly bool        `json:"promotionOnly,omitempty"`
@@ -316,11 +320,24 @@ type Package struct {
 	// "suite/core". A product may span several.
 	SourceRepository string `json:"sourceRepository,omitempty"`
 
+	// DisplayRepository is SourceRepository with the vendor's structural noise
+	// removed — `cfx-5000-k8s` for NEAR's `orbs/cfx-5000-k8s`.
+	//
+	// Empty when no shortening applies, which is what a source with no `vendor`
+	// set gets, and therefore what any conformant registry gets. Cosmetic only:
+	// SourceRepository is the identity, and both spellings resolve as input.
+	DisplayRepository string `json:"displayRepository,omitempty"`
+
 	// DisplayTag is Tag with the vendor's structural noise removed, for tables.
 	//
 	// Empty when no shortening applies. Cosmetic only: Tag is the identity, and
 	// both spellings resolve as input.
 	DisplayTag string `json:"displayTag,omitempty"`
+
+	// ExpandedAt is when this package's manifest tree was last fully walked, by
+	// `packages inspect` or by a transfer. Empty means it never has been, which
+	// is why TotalBytes and BlobCount are absent.
+	ExpandedAt string `json:"expandedAt,omitempty"`
 
 	// SignatureStatus is SIGNED, UNSIGNED or UNKNOWN.
 	//
@@ -396,13 +413,21 @@ type Artifact struct {
 	// org.opencontainers.* keys are in here too; only `created` is also
 	// promoted to a column, because only it is worth sorting by.
 	Annotations map[string]string `json:"annotations,omitempty"`
-	// Fetched reports whether we hold this manifest's bytes.
+	// Fetched reports whether this manifest was ever pulled and verified.
 	//
 	// Discovery fetches the tag's own manifest and records the children its
 	// index lists, without a request each. A fetched manifest was verified
 	// against its digest; a listed one has the vendor's word for it, and the
 	// difference is worth being able to see.
 	Fetched bool `json:"fetched"`
+	// Cached reports whether the manifest's BYTES are still held locally.
+	//
+	// A separate axis from Fetched, and only false-with-Fetched-true is
+	// interesting: it means the body was reclaimed by the manifest-cache
+	// sweeper. Nothing is lost — the artifact, its blobs and its size are all
+	// still recorded — but pushing it would re-read it from the source. See
+	// store.SweepManifestCache.
+	Cached bool `json:"cached"`
 }
 
 // InspectPackageResponse reports what expanding a package found.
@@ -423,6 +448,17 @@ type InspectPackageResponse struct {
 	Artifacts  int         `json:"artifacts"`
 	Blobs      int         `json:"blobs"`
 	TotalBytes Int64String `json:"totalBytes"`
+
+	// CachedManifests and CachedBytes describe how much of this package's
+	// manifest bodies are still held locally, out of Artifacts.
+	//
+	// The bodies are an evictable cache with a budget, not part of the record —
+	// what a package IS gets kept forever, what it was SERVED AS gets reclaimed
+	// when the cache fills. Reported so the difference is visible rather than
+	// discovered when a transfer takes longer than expected. Neither number
+	// affects any of the ones above.
+	CachedManifests int         `json:"cachedManifests"`
+	CachedBytes     Int64String `json:"cachedBytes,omitempty"`
 }
 
 // ListArtifactsResponse is returned by

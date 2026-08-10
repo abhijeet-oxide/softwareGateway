@@ -62,7 +62,7 @@ func (h *harness) repo(role, path string) int64 {
 	defer func() { _ = tx.Rollback() }()
 
 	id, err := h.packages.EnsureRepository(h.t.Context(), tx, h.productID, role, role+"-"+path,
-		"registry.example.com", path, "generic", "config")
+		"registry.example.com", path, "generic", "config", "")
 	if err != nil {
 		h.t.Fatal(err)
 	}

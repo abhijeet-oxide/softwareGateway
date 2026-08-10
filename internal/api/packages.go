@@ -160,6 +160,7 @@ func (s *Server) handleListArtifacts(w http.ResponseWriter, r *http.Request) {
 			Platform:     a.Platform,
 			Depth:        a.Depth,
 			Fetched:      a.Fetched,
+			Cached:       a.Cached,
 			Annotations:  a.Annotations,
 		}
 		if a.ParentID != nil {
@@ -382,20 +383,24 @@ func decodeOptionalJSON(r *http.Request, out any) error {
 // toAPIPackage converts a stored row to the wire view.
 func toAPIPackage(productName string, row store.PackageRow) v1.Package {
 	p := v1.Package{
-		Name:             "products/" + productName + "/packages/" + strconv.FormatInt(row.ID, 10),
-		PackageID:        strconv.FormatInt(row.ID, 10),
-		Product:          productName,
-		Tag:              row.Tag,
-		ManifestDigest:   row.ManifestDigest,
-		MediaType:        row.MediaType,
-		ArtifactCount:    row.ArtifactCount,
-		BlobCount:        row.BlobCount,
-		State:            v1.PackageState(strings.ToUpper(row.State)),
-		DiscoveredAt:     row.DiscoveredAt,
-		SourceRepository: row.SourceRepository,
-		DisplayTag:       row.DisplayTag,
-		SignatureStatus:  v1.SignatureStatus(strings.ToUpper(row.SignatureStatus)),
-		TransferRootTag:  row.TransferRootTag,
+		Name:              "products/" + productName + "/packages/" + strconv.FormatInt(row.ID, 10),
+		PackageID:         strconv.FormatInt(row.ID, 10),
+		Product:           productName,
+		Tag:               row.Tag,
+		ManifestDigest:    row.ManifestDigest,
+		MediaType:         row.MediaType,
+		ArtifactCount:     row.ArtifactCount,
+		BlobCount:         row.BlobCount,
+		State:             v1.PackageState(strings.ToUpper(row.State)),
+		DiscoveredAt:      row.DiscoveredAt,
+		SourceRepository:  row.SourceRepository,
+		DisplayRepository: row.DisplayRepository,
+		DisplayTag:        row.DisplayTag,
+		SignatureStatus:   v1.SignatureStatus(strings.ToUpper(row.SignatureStatus)),
+		TransferRootTag:   row.TransferRootTag,
+	}
+	if row.ExpandedAt != nil {
+		p.ExpandedAt = *row.ExpandedAt
 	}
 	if p.SignatureStatus == "" {
 		p.SignatureStatus = v1.SignatureUnknown
@@ -519,6 +524,51 @@ func (s *Server) resolvePackage(w http.ResponseWriter, r *http.Request, productN
 	return pkg, true
 }
 
+// packageVerbInspect is the only custom method a package currently accepts.
+const packageVerbInspect = "inspect"
+
+// handlePackageCustomMethod dispatches POST /packages/{package}:<verb>.
+//
+// The router binds `{package}` to the WHOLE segment — reference and verb — and
+// the split happens here. See the registration in router.go for why: a chi
+// partial-segment pattern splits on the first colon, and a digest reference
+// contains one, so `sha256:ccbd…:inspect` never reached the inspect handler and
+// came back as "POST is not supported".
+//
+// Splitting at the LAST colon is unambiguous for every reference form we
+// accept. A tag may not contain a colon; a digest contains exactly one, and it
+// is not the last when a verb follows. The repository half of a scoped
+// reference never appears in the path at all — it travels as `?repository=`,
+// because a slash cannot survive a path segment.
+func (s *Server) handlePackageCustomMethod(w http.ResponseWriter, r *http.Request) {
+	segment := chi.URLParam(r, "package")
+
+	i := strings.LastIndex(segment, ":")
+	if i <= 0 || i == len(segment)-1 {
+		Error(w, r, v1.CodeInvalidArgument, fmt.Sprintf(
+			"POST on a package requires a custom method: %s:%s", segment, packageVerbInspect))
+		return
+	}
+	ref, verb := segment[:i], segment[i+1:]
+
+	if verb != packageVerbInspect {
+		Error(w, r, v1.CodeInvalidArgument, fmt.Sprintf(
+			"%q is not a custom method on a package (known: %s)", verb, packageVerbInspect))
+		return
+	}
+
+	// Put the reference back where the rest of the handler chain expects it, so
+	// resolvePackage sees `sha256:ccbd…` rather than `sha256:ccbd…:inspect`.
+	if rc := chi.RouteContext(r.Context()); rc != nil {
+		for k := range rc.URLParams.Keys {
+			if rc.URLParams.Keys[k] == "package" {
+				rc.URLParams.Values[k] = ref
+			}
+		}
+	}
+	s.handleInspectPackage(w, r)
+}
+
 // POST /api/v1/products/{product}/packages/{package}:inspect.
 //
 // Expands one package's manifest tree: fetches the artifacts discovery only
@@ -571,6 +621,8 @@ func (s *Server) handleInspectPackage(w http.ResponseWriter, r *http.Request) {
 		Artifacts:       res.Artifacts,
 		Blobs:           res.Blobs,
 		TotalBytes:      v1.Int64String(strconv.FormatInt(res.TotalBytes, 10)),
+		CachedManifests: res.CachedManifests,
+		CachedBytes:     v1.Int64String(strconv.FormatInt(res.CachedBytes, 10)),
 	})
 }
 

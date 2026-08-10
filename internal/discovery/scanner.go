@@ -641,9 +641,15 @@ func (s *Scanner) ensureRepositoryRow(ctx context.Context, repoPath string) (int
 		}
 	}
 
+	// The shortened spelling for listings, from the source's vendor plugin —
+	// empty for every conformant registry, which is the point. It travels with
+	// the repository row rather than being inferred at render time, so a listing
+	// says the same thing about a repository whatever else is on the page, and
+	// so the short form can be looked up as input.
 	id, err := s.packages.EnsureRepository(ctx, tx,
 		s.productID, string(product.RoleSource), name,
-		s.sourceCfg.Registry, repoPath, string(s.sourceCfg.Type), managedBy)
+		s.sourceCfg.Registry, repoPath, string(s.sourceCfg.Type), managedBy,
+		s.layout.DisplayRepository(repoPath))
 	if err != nil {
 		return 0, err
 	}

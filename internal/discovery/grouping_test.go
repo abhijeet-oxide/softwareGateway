@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/abhijeet-oxide/softwareGateway/internal/catalog"
@@ -32,6 +33,16 @@ type wrapperLayout struct{}
 
 func (wrapperLayout) Name() string             { return "test-wrapper" }
 func (wrapperLayout) LooksForSignatures() bool { return true }
+
+// DisplayRepository strips the vendor's leading namespace, so the scanner's
+// handling of a shortened repository path is exercised rather than assumed.
+func (wrapperLayout) DisplayRepository(path string) string {
+	rest, ok := strings.CutPrefix(path, "orbs/")
+	if !ok || rest == "" {
+		return ""
+	}
+	return rest
+}
 
 func (wrapperLayout) Group(
 	_ context.Context, _ registry.Source, scanned []vendors.ScannedTag,
@@ -69,7 +80,13 @@ func (wrapperLayout) Group(
 		if accessory[s.Tag] {
 			continue
 		}
-		p := vendors.Package{Tag: s.Tag, Descriptor: s.Descriptor}
+		p := vendors.Package{
+			Tag: s.Tag, Descriptor: s.Descriptor,
+			DisplayTag: strings.TrimPrefix(s.Tag, "orb_"),
+		}
+		if p.DisplayTag == s.Tag {
+			p.DisplayTag = ""
+		}
 		if root, ok := roots[s.Tag]; ok {
 			p.Root = root.Descriptor
 			p.RootTag = root.Tag
@@ -317,4 +334,169 @@ func TestRescanWithGroupingIsIdempotent(t *testing.T) {
 	if len(list) != 2 {
 		t.Errorf("got %d packages after two scans, want 2", len(list))
 	}
+}
+
+// End to end, because this is where the shortening feature actually breaks: the
+// Layout has unit tests and the store has unit tests, and what fails is the
+// wiring between them.
+//
+// The rule under test is that shortening comes from the SOURCE declaring a
+// vendor, and reaches the row through the scanner. It used to be inferred at
+// render time from whichever prefix a page of results happened to share, which
+// meant it applied to registries that have no such convention and changed a
+// row's rendering depending on what else was on the page.
+func TestScanRecordsTheVendorShortenedNames(t *testing.T) {
+	reg := fakeregistry.New()
+	t.Cleanup(reg.Close)
+	seedRelease(t, reg, "orbs/cfx-5000-k8s", "23.8.1076")
+
+	s, packages, _ := groupingScanner(t, reg, "orbs/cfx-5000-k8s")
+	if _, err := s.Scan(t.Context()); err != nil {
+		t.Fatalf("scan: %v", err)
+	}
+
+	list, err := packages.ListPackages(t.Context(), store.ListPackagesFilter{ProductName: "vendor-a"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(list) != 1 {
+		t.Fatalf("listed %d packages, want 1", len(list))
+	}
+	pkg := list[0]
+
+	// The originals are what is stored. Everything downstream — a transfer, an
+	// audit record, `-o json` — reads these.
+	if pkg.Tag != "orb_23.8.1076" {
+		t.Errorf("stored tag = %q, want orb_23.8.1076", pkg.Tag)
+	}
+	if pkg.SourceRepository != "orbs/cfx-5000-k8s" {
+		t.Errorf("stored repository = %q, want orbs/cfx-5000-k8s", pkg.SourceRepository)
+	}
+
+	// The shortened forms sit alongside them, for rendering only.
+	if pkg.DisplayTag != "23.8.1076" {
+		t.Errorf("display tag = %q, want 23.8.1076", pkg.DisplayTag)
+	}
+	if pkg.DisplayRepository != "cfx-5000-k8s" {
+		t.Errorf("display repository = %q, want cfx-5000-k8s", pkg.DisplayRepository)
+	}
+
+	// And what a listing showed must be typeable back, or the abbreviation is a
+	// trap: someone copies what is on screen and gets "not found" for a package
+	// plainly in front of them.
+	for _, ref := range []string{
+		"orb_23.8.1076",
+		"23.8.1076",
+		"orbs/cfx-5000-k8s:orb_23.8.1076",
+		"cfx-5000-k8s:23.8.1076",
+	} {
+		row, err := packages.GetPackage(t.Context(), "vendor-a", ref)
+		if err != nil {
+			t.Errorf("GetPackage(%q): %v", ref, err)
+			continue
+		}
+		if row.ID != pkg.ID {
+			t.Errorf("GetPackage(%q) resolved to package %d, want %d", ref, row.ID, pkg.ID)
+		}
+	}
+}
+
+// The other half of the same rule: a source that declares no vendor gets no
+// shortening, whatever its repository paths happen to look like.
+func TestScanShortensNothingWithoutAVendor(t *testing.T) {
+	reg := fakeregistry.New()
+	t.Cleanup(reg.Close)
+	reg.AddImage("orbs/cfx-5000-k8s", "orb_23.8.1076", fakeregistry.NewLayer("plain"))
+
+	s, packages, _ := plainScanner(t, reg, "orbs/cfx-5000-k8s")
+	if _, err := s.Scan(t.Context()); err != nil {
+		t.Fatalf("scan: %v", err)
+	}
+
+	list, err := packages.ListPackages(t.Context(), store.ListPackagesFilter{ProductName: "vendor-a"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(list) != 1 {
+		t.Fatalf("listed %d packages, want 1", len(list))
+	}
+
+	// The paths look exactly like NEAR's. Without a source saying so, that is a
+	// coincidence and nothing may act on it.
+	if got := list[0].DisplayTag; got != "" {
+		t.Errorf("display tag = %q; a source with no vendor must not be shortened", got)
+	}
+	if got := list[0].DisplayRepository; got != "" {
+		t.Errorf("display repository = %q; a source with no vendor must not be shortened", got)
+	}
+}
+
+// plainScanner is groupingScanner with the standard layout — a source that
+// declares no vendor at all.
+func plainScanner(t *testing.T, reg *fakeregistry.Registry, repo string) (*Scanner, *store.Packages, int64) {
+	t.Helper()
+
+	doc := fmt.Sprintf(`
+apiVersion: softwaregateway.io/v1alpha1
+kind: Product
+metadata:
+  name: vendor-a
+spec:
+  sources:
+    - name: vendor
+      registry: %s
+      repository: %s
+      anonymous: true
+  targets:
+    - name: internal
+      registry: internal.example.com
+      repository: mirror/vendor-a
+      anonymous: true
+      default: true
+`, reg.Host(), repo)
+
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "p.yaml"), []byte(doc), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	res, err := product.NewLoader(dir, product.NewSecretResolver(t.TempDir())).Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(res.Invalid) > 0 {
+		t.Fatalf("config invalid: %v", res.Invalid[0].Err)
+	}
+	p := res.Valid[0]
+
+	st, err := store.Open(t.Context(), store.Config{
+		Driver: store.DriverSQLite, DSN: filepath.Join(t.TempDir(), "plain.db"),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = st.Close() })
+	if err := store.Migrate(t.Context(), st, nil); err != nil {
+		t.Fatal(err)
+	}
+	rec, err := catalog.NewCatalog(st).Reconcile(t.Context(), res.Valid)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ref := rec.Products["vendor-a"]
+
+	newClient, err := SourceClientFactory(p, p.Spec.Sources[0], product.NewSecretResolver(t.TempDir()), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	packages := store.NewPackages(st)
+	// vendors.Standard is what a source with no `vendor` resolves to.
+	s, err := NewScanner(ScannerConfig{
+		Packages: packages, Product: p, ProductID: ref.ID, SourceName: "vendor",
+		NewClient: newClient, RepoIDs: ref.Repositories, Layout: vendors.Standard{},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return s, packages, ref.ID
 }

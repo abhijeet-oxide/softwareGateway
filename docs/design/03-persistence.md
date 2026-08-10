@@ -523,3 +523,62 @@ For a deployment replicating 20 products, each ~8 packages a month, each package
 | `audit_events` | ~1 M | Partitioned; one partition dropped per month at 365 d |
 
 Steady state is a few GB. This is a small database, and that is the point: PostgreSQL is not being asked to do anything difficult, which is why it is sufficient (§1).
+
+The row counts above are the reason the row counts are not the whole story. `package_artifacts` is ~1 k rows a month and trivial *as rows* — but each one may carry a manifest verbatim in `raw`, and the bytes do not dedupe the way `blobs` does. A NEAR release bundle indexes sixty-odd artifacts at a few kilobytes of JSON each; twenty products across a few years of releases is single-digit gigabytes of manifest bodies alone, in the table the sizing table calls trivial. That is what §12 bounds.
+
+## 11. Vendor display names
+
+Two columns exist purely so a listing can be readable without any part of the system inventing what a name means:
+
+| Column | Example | Meaning |
+|---|---|---|
+| `packages.display_tag` | `23.8.1076` for `orb_23.8.1076` | The tag with the vendor's structural noise removed |
+| `repositories.display_path` | `cfx-5000-k8s` for `orbs/cfx-5000-k8s` | The same for a repository path |
+
+Both are `NULL` unless the source declares a `vendor`, so a conformant registry gets neither.
+
+**Stored rather than computed at render time**, for two reasons. The transform belongs to the vendor plugin — only it knows that `orb_` is Nokia's word for "release" and `orbs/` is where Nokia puts everything — and neither the store nor the CLI may know that. And the shortened form has to RESOLVE as input: a listing showing a name you cannot type back is a trap. With a column, matching either spelling is one more equality rather than a pattern match that would have to encode a vendor's convention in SQL.
+
+The real `tag` and `repository_path` are never touched. They are the identity, they are what a transfer uses, and they are what `-o json` returns. Shortening is a rendering decision from beginning to end.
+
+Before these columns, the repository half was done in the CLI by dropping whichever prefix every row on the page happened to share. That required no vendor knowledge — the appeal — and was wrong twice: it shortened paths on registries with no such convention, and it made one row's rendering depend on which other rows were in view.
+
+## 12. The manifest cache
+
+`package_artifacts.raw` holds a manifest verbatim, and it has to: a manifest must be pushed byte-for-byte identical, because its digest — and every signature over it — is the hash of exactly those bytes. Re-serializing from a parsed struct would change whitespace or key order and produce a different digest.
+
+It is also the only thing this schema stores that **grows without bound and can be discarded without losing a fact**. So it is treated as a cache rather than as a record.
+
+### The split
+
+| | Kept forever | Cached with a budget |
+|---|---|---|
+| What | artifacts, digests, media types, sizes, platforms, blob links, totals | the manifest bodies |
+| Size | a few kB per fully-inspected package | a few kB per *artifact* |
+| Read by | every listing, every `describe`, every plan | only a manifest push |
+| Recoverable | no | exactly — content-addressed |
+
+### What made it possible
+
+Before migration `00007`, "have we fetched this manifest?" was answered by `raw IS NOT NULL`. Under that schema, evicting the bytes would have *unlearned the walk*: the next inspect or plan would have found the tree incomplete and re-read all of it from the vendor. The cache would have been technically evictable and practically unreclaimable.
+
+`00007` separates the three concerns that column was carrying:
+
+| Column | Answers |
+|---|---|
+| `fetched_at` | was this manifest pulled and verified? — a fact, kept |
+| `raw` | are its bytes still here? — a cache, evictable |
+| `raw_bytes` | how much would evicting it free? — so a budget can be summed without reading blobs |
+| `raw_used_at` | when did something last need them? — so eviction is LRU |
+
+`packages.expanded_at` records when the whole tree was last walked, which is what `packages describe` prints and what makes "measured" distinguishable from "not measured yet" without assembling it per row.
+
+### The policy
+
+Two bounds, because they answer different questions. `coordinator.manifestCache.ttl` is *these have not been wanted in a long time*; `budgetBytes` is *this is all the space there is*. A deployment that transfers everything it discovers wants the budget to bite; one that discovers far more than it transfers wants the TTL to, and would otherwise carry a full budget of manifests nobody will ever push. Either may be set to zero to disable it, and both zero means "keep everything", which is a legitimate choice.
+
+Eviction is **least recently used**, and `raw_used_at` is bumped by the transfer planner rather than by anything that merely *looks* at a package. The access pattern that matters is "this product line is being replicated this week"; ranking by curiosity would keep alive exactly the manifests nobody is going to push. Evicting the largest first was rejected for the same reason — it would preferentially discard the packages whose re-fetch costs most.
+
+The sweep is leader-gated (`internal/maintenance`), runs on an interval, and is safe against a concurrent inspect: whichever loses either finds the bytes or re-fetches them, and both produce the same tree.
+
+A partial index — `ON package_artifacts (raw_used_at) WHERE raw IS NOT NULL` — keeps the sweep proportional to what is *cached* rather than to how many artifacts have ever existed.

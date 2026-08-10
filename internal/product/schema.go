@@ -121,6 +121,27 @@ type Source struct {
 	CredentialsRef *CredentialsRef `json:"credentialsRef,omitempty"`
 	Discovery      Discovery       `json:"discovery,omitempty"`
 
+	// Vendor names the PUBLISHING CONVENTION this source follows: `near` for a
+	// Nokia NEAR registry, empty (or `auto`) for anything conformant.
+	//
+	// It is the switch for every vendor-specific behaviour there is, and it is
+	// opt-in per source. Without it a NEAR registry is read as an ordinary one —
+	// three packages per release rather than one, no signature grouping, no
+	// shortening — and, just as importantly, a registry that is NOT NEAR gets
+	// none of NEAR's rewriting. That second half is why this field exists:
+	// `orbs/` was being trimmed off repository paths and `orb_` off tags for
+	// every source, on the strength of what a page of results happened to look
+	// like rather than on a statement about the vendor.
+	//
+	// Deliberately separate from Type, which says how to SPEAK to the registry —
+	// and for every vendor met so far, including NEAR, that is plain OCI
+	// Distribution v2. Protocol and publishing convention vary independently, so
+	// they are two fields.
+	//
+	// Supersedes `signatures.layout`, which is still accepted and means the same
+	// thing; see VendorLayout.
+	Vendor string `json:"vendor,omitempty"`
+
 	// Concurrency overrides the application-level limit for this one registry.
 	// Almost always absent — see the Concurrency type.
 	Concurrency Concurrency `json:"concurrency,omitempty"`
@@ -142,6 +163,24 @@ type Source struct {
 	// from both cannot express that with one product-level block. The scalar
 	// settings inherit; `cosign` replaces wholesale — see Product.VerificationFor.
 	Verification *Verification `json:"verification,omitempty"`
+}
+
+// VendorLayout is the layout name this source resolves to.
+//
+// `vendor` wins; `signatures.layout` is the older spelling and is still
+// honoured, so documents written before the field moved keep working unchanged.
+// The two are the same setting: `layout` was nested under `signatures` when
+// grouping tags was the only thing it controlled, and it now also decides how a
+// package is NAMED — which is not a signature concern and does not read like
+// one at the top of a document.
+//
+// Both set and disagreeing is a validation error rather than a precedence rule;
+// see validateVendor.
+func (s Source) VendorLayout() string {
+	if v := strings.TrimSpace(s.Vendor); v != "" {
+		return v
+	}
+	return strings.TrimSpace(s.Signatures.Layout)
 }
 
 // EnumeratesRepositories reports whether this source finds its repositories

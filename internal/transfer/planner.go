@@ -14,7 +14,7 @@ import (
 	"fmt"
 	"log/slog"
 
-	"github.com/abhijeet-oxide/softwareGateway/internal/oci"
+	"github.com/abhijeet-oxide/softwareGateway/internal/expand"
 	"github.com/abhijeet-oxide/softwareGateway/internal/registry"
 	"github.com/abhijeet-oxide/softwareGateway/internal/store"
 	"github.com/abhijeet-oxide/softwareGateway/internal/vendors"
@@ -259,44 +259,31 @@ func (p *Planner) Plan(ctx context.Context, req Request) (Plan, error) {
 
 // treeFor returns the package's full tree, walking only when it must.
 //
-// THE WALK HAPPENS ONCE. If `packages describe --expand` already walked this
-// package, the record holds the tree and the registry is not touched; if not,
-// this walks and RECORDS it, so a later inspect is free and the sizes an
-// estimate needs are present either way. The tree under a digest is immutable,
-// so the record can never be stale.
+// THE WALK HAPPENS ONCE, and it is the same walk `packages inspect` performs —
+// literally, via internal/expand. If somebody already inspected this package
+// the record holds the tree and the registry is not touched; if not, this walks
+// and RECORDS it, so a later inspect is free and the sizes an estimate needs
+// are present either way.
+//
+// It also marks the package's cached manifest bodies as recently used. That is
+// what makes the cache's LRU eviction rank by USE rather than by curiosity: a
+// transfer is the only thing that will actually push these bytes, so a transfer
+// touching them is the signal worth keeping them for.
 func (p *Planner) treeFor(
 	ctx context.Context, req Request, root registry.Descriptor,
 ) (store.ExpandedTree, int, error) {
-	recorded, complete, err := p.packages.ReadExpandedTree(ctx, req.Package.ID)
+	out, err := expand.Ensure(ctx, p.packages, req.Package.ID, root, req.Source, p.concurrency)
 	if err != nil {
 		return store.ExpandedTree{}, 0, err
 	}
-	if complete {
-		return recorded, 0, nil
-	}
 
-	if req.Source == nil {
-		return store.ExpandedTree{}, 0, fmt.Errorf(
-			"package %d is not expanded and no source client was supplied", req.Package.ID)
+	// Best effort: a failure to bump an LRU stamp costs a re-fetch at worst and
+	// must not fail a plan that is otherwise complete.
+	if err := p.packages.TouchManifestCache(ctx, req.Package.ID); err != nil {
+		p.log.WarnContext(ctx, "could not refresh the manifest cache stamp",
+			"package", req.Package.ID, "error", err)
 	}
-
-	t, walked, err := oci.Walk(ctx, req.Source, root, p.concurrency)
-	if err != nil {
-		return store.ExpandedTree{}, 0, fmt.Errorf("walk package %d: %w", req.Package.ID, err)
-	}
-
-	expanded := toStoreTree(t)
-	if err := p.packages.RecordExpandedTree(ctx, req.Package.ID, expanded); err != nil {
-		return store.ExpandedTree{}, 0, err
-	}
-
-	// Re-read, so the artifacts carry their database IDs — a manifest job
-	// references its artifact row, and the in-memory tree has no IDs yet.
-	stored, _, err := p.packages.ReadExpandedTree(ctx, req.Package.ID)
-	if err != nil {
-		return store.ExpandedTree{}, 0, err
-	}
-	return stored, walked, nil
+	return out.Tree, out.Fetched, nil
 }
 
 // rootDescriptor is what the planner walks, which is not always the package's
@@ -351,48 +338,5 @@ func digestsOf(blobs []store.BlobRef) []string {
 	for _, b := range blobs {
 		out = append(out, b.Digest)
 	}
-	return out
-}
-
-// toStoreTree flattens a walked tree into what the store writes.
-//
-// Duplicated from internal/discovery deliberately rather than shared: it is a
-// conversion between two packages' types, and the alternative is a third
-// package existing only to hold it. Twenty lines is cheaper than that.
-func toStoreTree(t oci.Tree) store.ExpandedTree {
-	out := store.ExpandedTree{Artifacts: make([]store.ExpandedArtifact, 0, len(t.Artifacts))}
-
-	for _, a := range t.Artifacts {
-		ea := store.ExpandedArtifact{
-			Row: store.ArtifactRow{
-				Digest:       a.Descriptor.Digest.String(),
-				MediaType:    a.Descriptor.MediaType,
-				ArtifactType: a.Descriptor.ArtifactType,
-				SizeBytes:    a.Descriptor.Size,
-				Depth:        a.Depth,
-				Raw:          a.Raw,
-			},
-			Parent: a.Parent,
-		}
-		if a.Descriptor.Platform != nil {
-			ea.Row.Platform = a.Descriptor.Platform.String()
-		}
-		if ea.Row.SizeBytes == 0 {
-			ea.Row.SizeBytes = int64(len(a.Raw))
-		}
-		for _, b := range a.Blobs {
-			ea.Blobs = append(ea.Blobs, store.BlobRef{
-				Digest:    b.Descriptor.Digest.String(),
-				MediaType: b.Descriptor.MediaType,
-				SizeBytes: b.Descriptor.Size,
-				Kind:      b.Kind,
-				Ordinal:   b.Ordinal,
-			})
-		}
-		out.Artifacts = append(out.Artifacts, ea)
-	}
-
-	out.TotalBytes = t.TotalBytes
-	out.BlobCount = t.BlobCount
 	return out
 }

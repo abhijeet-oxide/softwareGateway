@@ -53,7 +53,8 @@ transferctl
 │
 ├── packages
 │   ├── list <product>          Discovered packages
-│   └── describe <product> <package> [--expand]
+│   ├── describe <product> <package>   Everything known about one package
+│   └── inspect  <product> <package>   Pull its full contents and measure it
 │
 ├── download <tag>              Replicate source -> target(s)
 ├── promote  <tag>              Promote target -> target(s)
@@ -95,13 +96,28 @@ It was `packages discover`, and that was the wrong shape twice over.
 
 `packages discovery-status` moved to `discover status` for the same reason — status belongs with the thing it reports on — and with no argument it reports every product, one block each, which is the shape you want when you are looking for the one that is stuck.
 
-### Why `inspect` folded into `describe --expand`
+### Why `inspect` is a verb and `describe` is a read
 
-`packages inspect` and `packages describe` were two commands that answered the same question at different depths, and the split leaked an implementation detail: that discovery records a package's manifest without fetching what it lists. A user does not want to inspect and then describe; they want to see the package, and sometimes they want the size too.
+These were briefly one command: `describe --expand`, on the argument that a user does not want to inspect and then describe, they want to see the package and sometimes the size too. Two things were wrong with that.
 
-So `describe` gained `--expand`, which walks the tree first and then renders — the output is the expanded truth rather than a stale row plus a separate report. Without the flag, `SIZE` and `BLOBS` read `n/a` and the output says why.
+**A flag hid the cost.** `describe` is a database read that answers instantly. `describe --expand` opened dozens of connections to a vendor's registry and could take minutes. Those are different operations, and a boolean is not enough warning — particularly on a command whose name promises a read.
 
-Both old spellings still work, hidden, because they are in scripts and in muscle memory. Breaking those to tidy a help screen is a bad trade.
+**And it put the result in the wrong place.** Inspecting is not a rendering option. It *writes*: artifacts, their blobs, and a measured transfer size. Everything that reads the package afterwards sees them — `describe`, `list`, and a transfer alike — and a transfer that plans an already-inspected package skips the walk entirely, because it is literally the same walk (`internal/expand`).
+
+So the split is by what the command does to the world, not by how much detail it shows:
+
+- `packages inspect` is a verb. It contacts the vendor's registry, builds out what discovery deliberately left out, and records it. Idempotent — the tree under a digest cannot change, so a second run fetches nothing and says so.
+- `packages describe` is a read. It shows everything known, *including* what inspect gathered: size, blob count, the artifact tree, and when it was measured. A package nobody has inspected says so and prints the command.
+
+You never have to run `inspect`: a transfer performs the same walk if nobody has. It is for deciding whether you want one.
+
+### Shortened names, and where the rule comes from
+
+Where a source declares a `vendor`, listings show that vendor's shortened spelling — `cfx-5000-k8s` rather than `orbs/cfx-5000-k8s`, `23.8.1076` rather than `orb_23.8.1076`. The full names are what is stored, transferred and returned by `-o json`.
+
+Both spellings resolve as input, everywhere: `--repository`, `--tag`, and the `repository:tag` form a `describe` takes. An abbreviation you cannot type back is a trap — someone copies what is on their screen, gets "not found", and reasonably concludes the package is gone.
+
+The tag was already shortened this way, by the source's vendor plugin at discovery. The REPOSITORY was not: the CLI dropped whichever prefix every row on the page happened to share. That needed no vendor knowledge, which was the appeal, and it was wrong twice — it shortened paths on registries with no such convention, and it made a row say different things depending on which other rows were in view. Both now come from a source stating its vendor, computed once, stored, and rendered verbatim.
 
 ## 3. Health
 

@@ -24,6 +24,7 @@ import (
 	"github.com/abhijeet-oxide/softwareGateway/internal/api"
 	"github.com/abhijeet-oxide/softwareGateway/internal/catalog"
 	"github.com/abhijeet-oxide/softwareGateway/internal/discovery"
+	"github.com/abhijeet-oxide/softwareGateway/internal/maintenance"
 	"github.com/abhijeet-oxide/softwareGateway/internal/platform/config"
 	"github.com/abhijeet-oxide/softwareGateway/internal/platform/health"
 	"github.com/abhijeet-oxide/softwareGateway/internal/platform/leader"
@@ -151,6 +152,18 @@ func run() error {
 
 	discoveryCtl := discovery.NewController(packages, resolver, layouts, logger, mreg)
 
+	// A package's manifest BODIES are the only thing recorded here that grows
+	// without limit and can be discarded without losing a fact — they are a
+	// cache in front of the source registry, and the tree they describe is kept
+	// whatever happens to them. This is what bounds them. See
+	// internal/store/manifestcache.go.
+	cacheSweeper := maintenance.NewManifestCacheSweeper(packages,
+		store.ManifestCachePolicy{
+			BudgetBytes: cfg.Coordinator.ManifestCache.BudgetBytes,
+			TTL:         cfg.Coordinator.ManifestCache.TTL,
+		},
+		cfg.Coordinator.ManifestCache.SweepInterval, logger, mreg)
+
 	watcher := product.NewWatcher(cfg.ProductsDir(), loader, products, product.WatchOptions{
 		Logger: logger,
 		OnReload: func(res product.LoadResult) {
@@ -237,6 +250,7 @@ func run() error {
 					mreg.LeaderElected.Set(0)
 				}
 				discoveryCtl.SetLeader(isLeader)
+				cacheSweeper.SetLeader(isLeader)
 			},
 		})
 	} else {
@@ -249,6 +263,7 @@ func run() error {
 				mreg.LeaderElected.Set(0)
 			}
 			discoveryCtl.SetLeader(isLeader)
+			cacheSweeper.SetLeader(isLeader)
 		})
 	}
 
@@ -291,6 +306,7 @@ func run() error {
 	g.Go(func() error { return elector.Run(gctx) })
 	g.Go(func() error { return watcher.Run(gctx) })
 	g.Go(func() error { return discoveryCtl.Run(gctx) })
+	g.Go(func() error { return cacheSweeper.Run(gctx) })
 
 	// Graceful shutdown: stop accepting, drain in-flight requests, then exit.
 	g.Go(func() error {

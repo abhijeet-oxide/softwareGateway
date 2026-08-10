@@ -18,7 +18,9 @@ softwareGateway/
 ├── internal/                        Not importable outside this module — deliberate
 │   ├── product/                     Config model, loader, validation, watch
 │   ├── discovery/                   Scanner, dedupe, auto-download rules
+│   ├── expand/                      Walk a package's tree once, for whoever asks first
 │   ├── transfer/                    Planner, engine, dry run, progress
+│   ├── maintenance/                 Leader-gated housekeeping loops
 │   ├── registry/                    Repository interface + implementations
 │   │   ├── registry.go              THE interface (06 section 2)
 │   │   ├── transport/               Auth, token cache, rate limit, retry, CA, proxy
@@ -60,6 +62,8 @@ softwareGateway/
 |---|---|---|
 | `product` | Config schema, loading, validation, hot reload | Anything about transfers |
 | `discovery` | Scanning, package identity, auto-download evaluation | Executing transfers |
+| `expand` | Turning a discovered package into a fully known one, once | Deciding *why* someone wanted it |
+| `maintenance` | *When* a piece of housekeeping runs, and what to say about it | The housekeeping itself — that lives with the data |
 | `transfer` | Planning, waves, the streaming engine, dry run, progress | HTTP, SQL |
 | `registry` | The `Repository` interface, all registry I/O, auth, rate limiting | Business rules |
 | `queue` | Job lifecycle, leasing, priority, retry policy | What a job *means* |
@@ -87,8 +91,9 @@ Enforced in CI by `depguard` rules inside `golangci-lint` (see `.golangci.yml`) 
     └──────┬──────────────┬───────────────────┘
            ▼              ▼
     ┌─────────────────────────────────────────┐
-    │ product discovery transfer queue         │   domain
+    │ product discovery expand transfer queue  │   domain
     │ scheduler verification notification audit│
+    │ maintenance                              │
     └──────┬──────────────┬───────────────────┘
            ▼              ▼
     ┌──────────────┐  ┌───────────────────────┐

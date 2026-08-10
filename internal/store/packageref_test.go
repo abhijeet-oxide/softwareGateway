@@ -165,7 +165,7 @@ func seedPackage(
 	defer func() { _ = tx.Rollback() }()
 
 	repoID, err := p.EnsureRepository(ctx, tx, productID, "source", repoPath,
-		"registry.example.com", repoPath, "generic", "discovery")
+		"registry.example.com", repoPath, "generic", "discovery", "")
 	if err != nil {
 		t.Fatalf("ensure repository %s: %v", repoPath, err)
 	}
@@ -259,7 +259,7 @@ func seedDisplayPackage(
 	defer func() { _ = tx.Rollback() }()
 
 	repoID, err := p.EnsureRepository(ctx, tx, productID, "source", repoPath,
-		"registry.example.com", repoPath, "generic", "discovery")
+		"registry.example.com", repoPath, "generic", "discovery", "")
 	if err != nil {
 		t.Fatal(err)
 	}

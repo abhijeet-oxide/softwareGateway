@@ -45,6 +45,13 @@ type Registry struct {
 	DiscoveryPackages    *prometheus.CounterVec
 	DiscoveryDuration    *prometheus.HistogramVec
 	DiscoveryLastSuccess *prometheus.GaugeVec
+
+	// Manifest cache. Gauges rather than counters, because the question they
+	// answer is "how big is it right now, and is the budget doing anything" —
+	// not "how much churn has there been".
+	ManifestCacheBytes     prometheus.Gauge
+	ManifestCacheManifests prometheus.Gauge
+	ManifestCacheEvicted   *prometheus.CounterVec
 }
 
 // New builds the registry for a component and registers the Go runtime and
@@ -145,6 +152,28 @@ func New(component string) *Registry {
 			Name:      "discovery_last_success_timestamp_seconds",
 			Help:      "Unix time of the last successful scan, by product and source.",
 		}, []string{"product", "source"}),
+
+		ManifestCacheBytes: prometheus.NewGauge(prometheus.GaugeOpts{
+			Namespace: namespace,
+			Name:      "manifest_cache_bytes",
+			Help:      "Manifest bodies currently cached, in bytes.",
+		}),
+
+		ManifestCacheManifests: prometheus.NewGauge(prometheus.GaugeOpts{
+			Namespace: namespace,
+			Name:      "manifest_cache_manifests",
+			Help:      "Manifest bodies currently cached.",
+		}),
+
+		// `reason` is `expired` or `budget`, which is the distinction worth
+		// alerting on: steady expiry is the cache working, sustained budget
+		// eviction means the budget is smaller than the working set and every
+		// transfer is paying to re-fetch.
+		ManifestCacheEvicted: prometheus.NewCounterVec(prometheus.CounterOpts{
+			Namespace: namespace,
+			Name:      "manifest_cache_evicted_total",
+			Help:      "Manifest bodies reclaimed, by reason.",
+		}, []string{"reason"}),
 	}
 
 	reg.MustRegister(
@@ -160,6 +189,9 @@ func New(component string) *Registry {
 		m.DiscoveryPackages,
 		m.DiscoveryDuration,
 		m.DiscoveryLastSuccess,
+		m.ManifestCacheBytes,
+		m.ManifestCacheManifests,
+		m.ManifestCacheEvicted,
 	)
 
 	info := version.Get(component)

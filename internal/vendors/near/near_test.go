@@ -280,3 +280,36 @@ func TestGroupedPackageCarriesItsDisplayTag(t *testing.T) {
 		t.Errorf("tag = %q, want the real orb_23.8.1076", p.Tag)
 	}
 }
+
+// The repository half of the same idea, and the reason it moved here.
+//
+// `orbs/` used to be trimmed in the CLI by dropping whichever prefix a page of
+// results happened to share. That needed no vendor knowledge — which was the
+// appeal — and was wrong twice over: it shortened paths on registries with no
+// such convention, and it made a row say different things depending on what
+// else was on the page. The rule now comes from a source declaring
+// `vendor: near`, and it lives in the one file that is allowed to know it.
+func TestDisplayRepositoryStripsOnlyTheVendorNamespace(t *testing.T) {
+	cases := map[string]string{
+		"orbs/cfx-5000-k8s": "cfx-5000-k8s",
+		"orbs/cfx-5000-db":  "cfx-5000-db",
+		// A deeper path keeps everything below the namespace: only the leading
+		// segment is NEAR's, and the rest distinguishes one repository from
+		// another.
+		"orbs/team/cfx-5000-k8s": "team/cfx-5000-k8s",
+		// Leading and trailing slashes are noise from a hand-typed path.
+		"/orbs/cfx-5000-k8s": "cfx-5000-k8s",
+
+		// Nothing to remove: empty, which the core reads as "no shortening".
+		"cfx-5000-k8s":     "",
+		"orbs":             "",
+		"orbs/":            "",
+		"orbital/cfx-5000": "",
+		"":                 "",
+	}
+	for in, want := range cases {
+		if got := (Layout{}).DisplayRepository(in); got != want {
+			t.Errorf("DisplayRepository(%q) = %q, want %q", in, got, want)
+		}
+	}
+}

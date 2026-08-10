@@ -519,10 +519,14 @@ type DiscoverPackagesResponse struct {
 	TagsAdmitted int `json:"tagsAdmitted"`
 	// PackagesDiscovered counts genuinely new packages. Zero on a re-scan is
 	// the expected, correct result.
-	PackagesDiscovered int   `json:"packagesDiscovered"`
-	Superseded         int   `json:"superseded"`
-	RequestsCreated    int   `json:"requestsCreated"`
-	DurationMs         int64 `json:"durationMs"`
+	PackagesDiscovered int `json:"packagesDiscovered"`
+	Superseded         int `json:"superseded"`
+	RequestsCreated    int `json:"requestsCreated"`
+	// Renamed counts EXISTING packages whose display name was corrected because
+	// the source's `vendor` changed. Zero on every steady-state scan; non-zero
+	// exactly once after that field is edited.
+	Renamed    int   `json:"renamed,omitempty"`
+	DurationMs int64 `json:"durationMs"`
 	// TagErrors are per-tag failures that did not stop the scan.
 	TagErrors []string `json:"tagErrors,omitempty"`
 	// RepositoryErrors are per-repository failures that did not stop the scan.

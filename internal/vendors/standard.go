@@ -99,6 +99,9 @@ func (Standard) LooksForSignatures() bool { return false }
 // what else was on screen.
 func (Standard) DisplayRepository(string) string { return "" }
 
+// DisplayTag shortens nothing, for the same reason.
+func (Standard) DisplayTag(string) string { return "" }
+
 // Group maps each scanned tag to one package, unchanged.
 func (Standard) Group(
 	_ context.Context, _ registry.Source, scanned []ScannedTag,

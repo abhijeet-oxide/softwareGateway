@@ -219,6 +219,25 @@ type Layout interface {
 	// Cosmetic ONLY: the real path is what is stored and transferred, and BOTH
 	// spellings resolve as input.
 	DisplayRepository(path string) string
+
+	// DisplayTag is a tag with this vendor's structural noise removed —
+	// `23.8.1076` for a vendor whose real tag is `orb_23.8.1076`.
+	//
+	// The same transform Group applies when it sets Package.DisplayTag, exposed
+	// separately because it must be answerable FROM THE TAG STRING ALONE, with
+	// no manifest and no registry call.
+	//
+	// That requirement is not decoration. Discovery skips a tag it has already
+	// recorded — one HEAD, no fetch, no grouping — so a source that gains
+	// `vendor: near` after its packages were discovered would otherwise keep
+	// their unshortened names forever, and no amount of re-scanning would fix
+	// it. The scanner reconciles the stored display names against this method on
+	// every pass, which costs one query per repository and no registry traffic.
+	//
+	// Empty means "no shortening". A Layout whose shortening genuinely cannot be
+	// derived from the tag alone should return empty here and set DisplayTag in
+	// Group; it then forgoes reconciliation, which is the honest trade.
+	DisplayTag(tag string) string
 }
 
 // Format is how a signature is verified once it has been found.

@@ -1261,6 +1261,55 @@ func (p *Packages) UpdateSignatureState(
 	return nil
 }
 
+// PackageDisplayRow is a package's identity and its stored display name.
+type PackageDisplayRow struct {
+	ID         int64
+	Tag        string
+	DisplayTag string
+}
+
+// ListPackageDisplayNames returns every package in a repository with its stored
+// display tag, so a scan can check them against what the vendor plugin now says.
+//
+// Every package, not just current ones: a superseded row is still listed and
+// still has to render with the same name as its replacement.
+func (p *Packages) ListPackageDisplayNames(ctx context.Context, sourceRepoID int64) ([]PackageDisplayRow, error) {
+	query := p.dialect.Rewrite(`
+		SELECT id, tag, COALESCE(display_tag, '')
+		  FROM packages
+		 WHERE source_repo_id = ?`)
+
+	rows, err := p.db.QueryContext(ctx, query, sourceRepoID)
+	if err != nil {
+		return nil, fmt.Errorf("list display names for repository %d: %w", sourceRepoID, err)
+	}
+	defer func() { _ = rows.Close() }()
+
+	var out []PackageDisplayRow
+	for rows.Next() {
+		var r PackageDisplayRow
+		if err := rows.Scan(&r.ID, &r.Tag, &r.DisplayTag); err != nil {
+			return nil, fmt.Errorf("scan display name row: %w", err)
+		}
+		out = append(out, r)
+	}
+	return out, rows.Err()
+}
+
+// SetDisplayTag rewrites one package's display tag.
+//
+// `updated_at` is deliberately NOT touched. This is a cosmetic correction to a
+// row nothing about the package has changed in — the digest, the contents and
+// the transfer history are all untouched — and bumping the timestamp would make
+// a configuration edit look like a re-push in every audit and every diff.
+func (p *Packages) SetDisplayTag(ctx context.Context, packageID int64, displayTag string) error {
+	query := p.dialect.Rewrite(`UPDATE packages SET display_tag = ? WHERE id = ?`)
+	if _, err := p.db.ExecContext(ctx, query, nullIfEmpty(displayTag), packageID); err != nil {
+		return fmt.Errorf("set display tag for package %d: %w", packageID, err)
+	}
+	return nil
+}
+
 // FindPackageByTag returns the current package for a (repository, tag), or
 // ErrNotFound.
 //

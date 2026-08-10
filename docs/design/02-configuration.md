@@ -298,6 +298,10 @@ Shortening is cosmetic throughout. The real tag and repository path are what is 
 
 An unknown value is fatal for that source and no other, reported at startup. Falling back to standard behaviour on a typo would silently disable signature discovery, and nothing in any output would say why.
 
+**Setting it takes effect on the next scan, including for packages already discovered.** That is not free — discovery skips a tag it has already recorded, so the display names of existing packages would otherwise never be revisited and no amount of re-scanning would fix them — so a scan reconciles every stored display name against the vendor plugin, at the cost of one query per repository and no registry traffic. `transferctl discover <product>` reports `Display names corrected` when it changes any. Removing the vendor clears them again by the same route.
+
+Grouping is a different matter and is **not** retroactive: whether three tags become one package is decided when those tags are first recorded, and existing rows keep the shape they were discovered with. Only the naming is reconciled.
+
 `signatures.layout` is the older spelling of this field and still works. It was nested under `signatures` when grouping tags was all it controlled; it now also decides how a package is NAMED, which is not a signature concern. Setting both to *different* values is a validation error rather than a precedence rule — picking one silently would leave the operator's other spelling doing nothing while looking as though it does something.
 
 ### 5.3 `concurrency`

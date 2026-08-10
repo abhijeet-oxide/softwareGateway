@@ -108,8 +108,7 @@ spec:
   targets:
     - name: internal
       registry: REGISTRY_HOST
-      repositories: prefix
-      repositoryPrefix: mirror
+      repository: mirror/p
       anonymous: true
       default: true
 `
@@ -229,8 +228,7 @@ spec:
   targets:
     - name: internal
       registry: REGISTRY_HOST
-      repositories: prefix
-      repositoryPrefix: mirror
+      repository: mirror/p
       credentialsRef: {secretName: good}
       default: true
 `
@@ -272,8 +270,7 @@ spec:
   targets:
     - name: internal
       registry: REGISTRY_HOST
-      repositories: prefix
-      repositoryPrefix: mirror
+      repository: mirror/p
       credentialsRef: {secretName: good}
       default: true
 `
@@ -303,8 +300,7 @@ spec:
   targets:
     - name: internal
       registry: REGISTRY_HOST
-      repositories: prefix
-      repositoryPrefix: mirror
+      repository: mirror/p
       anonymous: true
       default: true
 `
@@ -387,8 +383,7 @@ spec:
   targets:
     - name: internal
       registry: REGISTRY_HOST
-      repositories: prefix
-      repositoryPrefix: mirror
+      repository: mirror/p
       anonymous: true
       default: true
 `
@@ -421,8 +416,7 @@ spec:
   targets:
     - name: internal
       registry: REGISTRY_HOST
-      repositories: prefix
-      repositoryPrefix: mirror
+      repository: mirror/p
       anonymous: true
       default: true
 `
@@ -525,8 +519,7 @@ spec:
   targets:
     - name: internal
       registry: REGISTRY_HOST
-      repositories: prefix
-      repositoryPrefix: mirror
+      repository: mirror/p
       anonymous: true
       default: true
 `)

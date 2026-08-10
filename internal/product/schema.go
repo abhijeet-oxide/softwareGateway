@@ -225,60 +225,23 @@ type Signatures struct {
 	TrustBundleRef *SecretRef `json:"trustBundleRef,omitempty"`
 }
 
-// RepositoryMapping decides the destination path for a replicated package.
-//
-// This is load-bearing for the actual goal, which is that a deployment keeps
-// working after replication by repointing its registry and nothing else. A Helm
-// chart referencing `orbs/cfx-5000-k8s/foo:1.2.3` resolves at the destination
-// only if that path survives the copy.
-type RepositoryMapping string
-
-const (
-	// MappingPreserve keeps the source repository path exactly.
-	//
-	//	nokia.example.com/orbs/cfx-5000-k8s  ->  internal.example.com/orbs/cfx-5000-k8s
-	//
-	// The default, because it is the only mapping under which a deployment
-	// needs no edit beyond the registry host.
-	MappingPreserve RepositoryMapping = "preserve"
-
-	// MappingPrefix preserves the path under a fixed prefix, for an internal
-	// registry shared between vendors.
-	//
-	//	nokia.example.com/orbs/cfx-5000-k8s  ->  internal.example.com/nokia/orbs/cfx-5000-k8s
-	//
-	// Still a single-value change for a deployment: the registry becomes
-	// `internal.example.com/nokia`.
-	MappingPrefix RepositoryMapping = "prefix"
-
-	// MappingFixed sends everything to one repository, from `repository`.
-	//
-	// Correct only for a source covering ONE repository. For a source spanning
-	// many it collapses them, which silently breaks cross-references between
-	// them — so validation rejects that combination rather than letting it be
-	// discovered at deployment time.
-	MappingFixed RepositoryMapping = "fixed"
-)
-
 // Target is an internal, read-write repository: a replication destination and
 // a promotion endpoint in both directions.
 type Target struct {
 	Name     string `json:"name"`
 	Registry string `json:"registry"`
 
-	// Repository is the destination path when Repositories is `fixed`.
+	// Repository is the ONE destination path for this target.
 	//
-	// Kept because the single-repository case is common and reads well. Ignored
-	// under `preserve` and `prefix`, where the path comes from the source.
-	Repository string `json:"repository,omitempty"`
-
-	// Repositories decides how a source path maps to a destination path.
-	// Defaults to `preserve` — see RepositoryMapping for why that default
-	// matters more than it looks.
-	Repositories RepositoryMapping `json:"repositories,omitempty"`
-
-	// RepositoryPrefix is prepended under the `prefix` mapping.
-	RepositoryPrefix string `json:"repositoryPrefix,omitempty"`
+	// A target is a single repository — `internal.example.com/nokia/lab` — and
+	// everything replicated to it lands under that path. What follows is the
+	// registry's own addressing: tags and digests.
+	//
+	// One path rather than a mapping from the source's, because a target IS a
+	// place: lab is one repository, production is another, and a deployment
+	// points at one of them. Deriving the destination from the source would
+	// mean the destination path changed whenever a vendor reorganised theirs.
+	Repository string `json:"repository"`
 
 	// Enabled turns this target off without deleting it. Defaults to true.
 	//
@@ -517,42 +480,6 @@ func foldLegacy(c Concurrency, r LegacyRateLimits, scan LegacyScanConcurrency, w
 		notes = append(notes, where+".discovery.concurrency is superseded by "+where+".concurrency")
 	}
 	return c, notes
-}
-
-// EffectiveMapping returns the mapping to use, defaulting to preserve.
-func (t Target) EffectiveMapping() RepositoryMapping {
-	if t.Repositories == "" {
-		// A target that names one repository and says nothing else is stating
-		// a fixed destination — honouring `preserve` there would ignore what
-		// the document plainly says.
-		if t.Repository != "" {
-			return MappingFixed
-		}
-		return MappingPreserve
-	}
-	return t.Repositories
-}
-
-// DestinationFor maps a source repository path to its destination path.
-//
-// This is what keeps a deployment working after replication: the chart
-// referencing `orbs/cfx-5000-k8s/foo:1.2.3` resolves at the destination only
-// because this returns the same path it was given.
-func (t Target) DestinationFor(sourcePath string) string {
-	sourcePath = strings.Trim(strings.TrimSpace(sourcePath), "/")
-
-	switch t.EffectiveMapping() {
-	case MappingFixed:
-		return strings.Trim(t.Repository, "/")
-	case MappingPrefix:
-		prefix := strings.Trim(t.RepositoryPrefix, "/")
-		if prefix == "" {
-			return sourcePath
-		}
-		return prefix + "/" + sourcePath
-	default:
-		return sourcePath
-	}
 }
 
 // EffectiveMaxRepositories returns the configured cap or the default.

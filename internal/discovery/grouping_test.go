@@ -145,7 +145,7 @@ spec:
   targets:
     - name: internal
       registry: internal.example.com
-      repositories: preserve
+      repository: mirror/vendor-a
       anonymous: true
       default: true
 `, reg.Host(), repo)

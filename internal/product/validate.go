@@ -411,13 +411,10 @@ func (p *Product) validateTargets(resolver *SecretResolver) Errors {
 		path := fmt.Sprintf("spec.targets[%d]", i)
 		// A target is always exactly one repository — it is where bytes are
 		// pushed, and "push to whatever the catalog contains" is not a thing.
-		// `repository` is required only under the fixed mapping. Under
-		// preserve/prefix the destination path comes from the source, and
-		// demanding one would invite a value that is silently ignored.
+		// A target is always exactly one repository — it is where bytes are
+		// pushed, and "push to whatever the catalog contains" is not a thing.
 		errs = append(errs, validateRepoCommon(path, t.Name, t.Registry, t.Repository,
-			t.Type, t.Anonymous, t.CredentialsRef, resolver,
-			t.EffectiveMapping() == MappingFixed)...)
-		errs = append(errs, p.validateMapping(path, t)...)
+			t.Type, t.Anonymous, t.CredentialsRef, resolver, true)...)
 		errs = append(errs, validateNetwork(path+".network", t.Network, resolver)...)
 		errs = append(errs, validateCosign(path+".verification", t.Verification, resolver)...)
 
@@ -441,68 +438,6 @@ func (p *Product) validateTargets(resolver *SecretResolver) Errors {
 
 	if defaults > 1 {
 		errs = append(errs, Error{"spec.targets", fmt.Sprintf("%d targets marked default, at most one is permitted", defaults), ""})
-	}
-	return errs
-}
-
-// validateMapping checks how a target maps source paths to destination paths.
-//
-// The case worth catching is a MULTI-REPOSITORY SOURCE pointed at a fixed
-// target: forty-eight source repositories collapsing into one destination path.
-// Nothing fails at transfer time — the bytes land — and the damage only shows
-// up much later, when a Helm chart referencing a sibling repository cannot
-// resolve it because everything was flattened into one. That is precisely the
-// failure that should be a config error, not a deployment mystery.
-func (p *Product) validateMapping(path string, t Target) Errors {
-	var errs Errors
-
-	switch t.EffectiveMapping() {
-	case MappingPreserve, MappingPrefix, MappingFixed:
-	default:
-		errs = append(errs, Error{
-			path + ".repositories",
-			fmt.Sprintf("%q is not one of preserve, prefix, fixed", t.Repositories), ""})
-		return errs
-	}
-
-	if t.RepositoryPrefix != "" && t.EffectiveMapping() != MappingPrefix {
-		errs = append(errs, Error{
-			path + ".repositoryPrefix",
-			"is only used when repositories is `prefix`",
-			"the value is currently ignored, which makes the document say something it does not do"})
-	}
-	if t.EffectiveMapping() == MappingPrefix && strings.Trim(t.RepositoryPrefix, "/") == "" {
-		errs = append(errs, Error{
-			path + ".repositoryPrefix", "required when repositories is `prefix`", ""})
-	}
-
-	if t.EffectiveMapping() != MappingFixed {
-		return errs
-	}
-
-	// A fixed destination is correct only when every source resolves to one
-	// repository. A source that enumerates the catalog can return any number,
-	// so it can never be safely flattened.
-	for i, s := range p.Spec.Sources {
-		if !s.IsEnabled() {
-			continue
-		}
-		declared := s.DeclaredRepositories()
-		if len(declared) > 1 {
-			errs = append(errs, Error{
-				path + ".repository",
-				fmt.Sprintf("a fixed destination cannot hold spec.sources[%d] %q, which covers %d repositories",
-					i, s.Name, len(declared)),
-				"use `repositories: preserve` so each source path is kept at the destination — " +
-					"a deployment then works by repointing the registry alone"})
-		}
-		if s.EnumeratesRepositories() {
-			errs = append(errs, Error{
-				path + ".repository",
-				fmt.Sprintf("a fixed destination cannot hold spec.sources[%d] %q, which finds its repositories from the catalog",
-					i, s.Name),
-				"the count is not known in advance, so use `repositories: preserve`"})
-		}
 	}
 	return errs
 }

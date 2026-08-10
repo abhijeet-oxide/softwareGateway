@@ -153,17 +153,11 @@ func (c *Checker) CheckProduct(ctx context.Context, p *product.Product) ProductR
 		if !t.IsEnabled() {
 			continue
 		}
-		// Which path to probe depends on the mapping. Under `fixed` it is
-		// stated outright; under `preserve`/`prefix` the destination is derived
-		// from the source, so probing a representative one is what actually
-		// exercises the credential against a path bytes will land on.
-		for _, repo := range targetProbePaths(p, t) {
-			jobs = append(jobs, job{
-				name: t.Name, role: string(product.RoleTarget), registry: t.Registry,
-				repository: repo, anonymous: t.Anonymous, creds: t.CredentialsRef,
-				network: t.Network, limits: t.Concurrency,
-			})
-		}
+		jobs = append(jobs, job{
+			name: t.Name, role: string(product.RoleTarget), registry: t.Registry,
+			repository: t.Repository, anonymous: t.Anonymous, creds: t.CredentialsRef,
+			network: t.Network, limits: t.Concurrency,
+		})
 	}
 
 	results := make([]RepositoryResult, len(jobs))
@@ -727,30 +721,4 @@ func applyNetwork(
 		}
 	}
 	return nil
-}
-
-// targetProbePaths returns the destination paths worth probing for a target.
-//
-// One per target, not one per source repository: a `products check` against a
-// source covering forty-eight repositories would otherwise open forty-eight
-// extra connections to the destination to re-verify the same credential. The
-// FIRST mapped path is representative, and per-repository write permission —
-// which some registries do enforce — is verified at transfer time, where a
-// failure is attributable to the repository that caused it.
-func targetProbePaths(p *product.Product, t product.Target) []string {
-	if t.EffectiveMapping() == product.MappingFixed {
-		return []string{t.Repository}
-	}
-	for _, s := range p.Spec.Sources {
-		if !s.IsEnabled() {
-			continue
-		}
-		if declared := s.DeclaredRepositories(); len(declared) > 0 {
-			return []string{t.DestinationFor(declared[0])}
-		}
-	}
-	// Every source enumerates, so no destination path is known before a scan.
-	// Probing the registry itself still checks DNS, TLS, the proxy and the
-	// credential — which is most of what can be wrong.
-	return []string{""}
 }

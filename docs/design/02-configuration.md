@@ -34,10 +34,10 @@ Products are read from a **directory of YAML files**, not from the Kubernetes AP
 
 ```
 /etc/softwaregateway/products/     ← projected volume: one ConfigMap per product
-    vendor-a-platform.yaml
-    vendor-b-database.yaml
+    vendor-platform.yaml
+    vendor-database.yaml
 /etc/softwaregateway/secrets/      ← projected volume: VSO-managed Secrets
-    vendor-a-registry/{username,password}
+    vendor-registry/{username,password}
     internal-registry/{username,password}
 /etc/softwaregateway/config.yaml   ← system config (§8)
 ```
@@ -459,9 +459,14 @@ The identical loader reads a plain directory, so local development needs no clus
 ```
 ./dev/
   config.yaml
-  products/vendor-a-platform.yaml
-  secrets/vendor-a-registry/{username,password}   # plain files
+  products/reference.yaml                         # every field, annotated
+  secrets/vendor-registry/{username,password}     # plain files
 ```
+
+`dev/products/reference.yaml` is deliberately the ONLY product in the tree. It
+exercises every field the schema has — which is what makes it worth copying, and
+what makes `task validate` a real check: a field that stops being accepted
+breaks CI there first.
 
 ```bash
 SWGW_CONFIG_DIR=./dev go run ./cmd/coordinator

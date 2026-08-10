@@ -45,7 +45,15 @@ func newPackagesListCommand() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "list <product>",
 		Short: "List a product's discovered packages",
-		Args:  cobra.ExactArgs(1),
+		Long: "Where a source declares a `vendor`, the TAG and REPOSITORY columns\n" +
+			"show that vendor's shortened spelling — `cfx-5000-k8s` rather than\n" +
+			"`orbs/cfx-5000-k8s`, `23.8.1076` rather than `orb_23.8.1076`. The full\n" +
+			"names are what is stored, transferred and returned by `-o json`; only\n" +
+			"the table is shortened, and only for a source that says its vendor\n" +
+			"does this.\n\n" +
+			"--repository and --tag accept EITHER spelling, so a value copied off\n" +
+			"this listing can be pasted straight back in.",
+		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			client := newClient()
 			opts0 := v1.ListPackagesOptions{
@@ -84,8 +92,9 @@ func newPackagesListCommand() *cobra.Command {
 	}
 
 	cmd.Flags().StringVar(&repository, "repository", "",
-		"show only packages from this repository path, e.g. suite/core")
-	cmd.Flags().StringVar(&tag, "tag", "", "show only packages with this tag")
+		"show only packages from this repository, full or shortened, e.g. suite/core")
+	cmd.Flags().StringVar(&tag, "tag", "",
+		"show only packages with this tag, full or shortened, e.g. orb_23.8.1076 or 23.8.1076")
 	cmd.Flags().StringVar(&state, "state", "", "filter by state, e.g. discovered or superseded")
 	cmd.Flags().IntVar(&pageSize, "page-size", 0, "results per page")
 	cmd.Flags().StringVar(&pageToken, "page-token", "", "continue from a previous nextPageToken")
@@ -107,17 +116,6 @@ func renderPackageList(w io.Writer, resp *v1.ListPackagesResponse) error {
 	// of identical values pushing everything else off the terminal.
 	multiRepo := spansRepositories(resp.Packages)
 
-	// The prefix every repository in view shares carries no information, so it
-	// goes. Derived from the rows themselves — no vendor knowledge needed.
-	repoPrefix := ""
-	if multiRepo {
-		paths := make([]string, 0, len(resp.Packages))
-		for _, p := range resp.Packages {
-			paths = append(paths, p.SourceRepository)
-		}
-		repoPrefix = commonRepositoryPrefix(paths)
-	}
-
 	tw := newTabWriter(w)
 	// PUBLISHED before DISCOVERED, matching the sort order: the list is ordered
 	// by when the vendor says a release was built, which is the order a person
@@ -131,7 +129,7 @@ func renderPackageList(w io.Writer, resp *v1.ListPackagesResponse) error {
 	}
 	for _, p := range resp.Packages {
 		if multiRepo {
-			fmt.Fprintf(tw, "%s\t", dash(shortRepository(p.SourceRepository, repoPrefix)))
+			fmt.Fprintf(tw, "%s\t", dash(displayRepository(p)))
 		}
 		fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%d\t%s\t%s\t%s\n",
 			displayTag(p),
@@ -187,34 +185,25 @@ func spansRepositories(pkgs []v1.Package) bool {
 }
 
 func newPackagesDescribeCommand() *cobra.Command {
-	var expand bool
-
 	cmd := &cobra.Command{
 		Use:   "describe <product> <package>",
 		Short: "Show a package's contents and transfer status",
-		Long: "<package> is a tag, a digest, or `repository:tag`.\n\n" +
+		Long: "<package> is a tag, a digest, or `repository:tag`. Where a source\n" +
+			"declares a `vendor`, the shortened spellings a listing shows work\n" +
+			"too — `cfx-5000-k8s:23.8.1076` and `orbs/cfx-5000-k8s:orb_23.8.1076`\n" +
+			"are the same package.\n\n" +
 			"A bare tag is AMBIGUOUS when a product spans several repositories —\n" +
 			"a vendor's version tag appears in many of them — so a tag matching\n" +
 			"more than one is refused with the list, rather than one being picked\n" +
 			"for you. Scope it as `orbs/cfx-5000-k8s:orb_23.8.1076`.\n\n" +
-			"Discovery is deliberately light: it records what a package's manifest\n" +
-			"lists without fetching it, so the transfer size shows as n/a. --expand\n" +
-			"walks the rest and measures it. Safe to repeat, and a transfer does\n" +
-			"the same walk anyway — --expand is for deciding whether you want one.",
+			"This is a READ. It shows everything known about the package,\n" +
+			"including the size and contents `packages inspect` gathered — so a\n" +
+			"package that has been inspected describes fully, and one that has\n" +
+			"not says so rather than guessing.",
 		Args:    cobra.ExactArgs(2),
 		Aliases: []string{"show"},
 		RunE: func(cmd *cobra.Command, args []string) error {
 			client := newClient()
-
-			var expanded *v1.InspectPackageResponse
-			if expand {
-				// Expand FIRST, so everything printed below is the expanded
-				// truth rather than a stale row plus a separate report.
-				var err error
-				if expanded, err = client.InspectPackage(cmd.Context(), args[0], args[1]); err != nil {
-					return err
-				}
-			}
 
 			pkg, err := client.GetPackage(cmd.Context(), args[0], args[1])
 			if err != nil {
@@ -226,31 +215,33 @@ func newPackagesDescribeCommand() *cobra.Command {
 			}
 
 			combined := struct {
-				Package   *v1.Package                `json:"package"`
-				Artifacts []v1.Artifact              `json:"artifacts"`
-				Expanded  *v1.InspectPackageResponse `json:"expanded,omitempty"`
-			}{Package: pkg, Artifacts: artifacts.Artifacts, Expanded: expanded}
+				Package   *v1.Package   `json:"package"`
+				Artifacts []v1.Artifact `json:"artifacts"`
+			}{Package: pkg, Artifacts: artifacts.Artifacts}
 
 			return render(stdout(), opts.output, combined, func(w io.Writer) error {
-				renderExpanded(w, expanded)
-				return renderPackageDetail(w, pkg, artifacts.Artifacts)
+				return renderPackageDetail(w, args[0], args[1], pkg, artifacts.Artifacts)
 			})
 		},
 	}
-
-	cmd.Flags().BoolVar(&expand, "expand", false,
-		"fetch the artifacts discovery only listed, and measure the transfer size")
-	// --expand reaches the vendor's registry, so the command needs the slow
-	// deadline. Harmless without it: the rest is a database read.
-	contactsRegistries(cmd)
 	return cmd
 }
 
-func renderPackageDetail(w io.Writer, p *v1.Package, artifacts []v1.Artifact) error {
+func renderPackageDetail(w io.Writer, product, ref string, p *v1.Package, artifacts []v1.Artifact) error {
 	fmt.Fprintf(w, "Package      %s\n", p.Tag)
+	if p.DisplayTag != "" && p.DisplayTag != p.Tag {
+		// Shown once, here, and never substituted for the real tag: `describe`
+		// is where someone comes to find out what a thing actually is, and the
+		// stored name is the answer. The short form is listed as an alias so a
+		// value copied out of a listing is recognisable as the same package.
+		fmt.Fprintf(w, "             also accepted as %s\n", p.DisplayTag)
+	}
 	fmt.Fprintf(w, "Product      %s\n", p.Product)
 	if p.SourceRepository != "" {
 		fmt.Fprintf(w, "Repository   %s\n", p.SourceRepository)
+		if p.DisplayRepository != "" && p.DisplayRepository != p.SourceRepository {
+			fmt.Fprintf(w, "             also accepted as %s\n", p.DisplayRepository)
+		}
 	}
 	fmt.Fprintf(w, "Digest       %s\n", p.ManifestDigest)
 	fmt.Fprintf(w, "Media type   %s\n", p.MediaType)
@@ -258,10 +249,20 @@ func renderPackageDetail(w io.Writer, p *v1.Package, artifacts []v1.Artifact) er
 	fmt.Fprintf(w, "Signed       %s\n", describeSigned(p))
 	fmt.Fprintf(w, "Size         %s across %d artifact(s) and %s blob(s)\n",
 		humanBytesOpt(p.TotalBytes), p.ArtifactCount, optionalCount(p.BlobCount))
-	if p.TotalBytes == nil {
+
+	// The two states a package can be in, said plainly. An inspected package
+	// reports when it was measured, so a number nobody can date does not sit
+	// beside one that can; an uninspected one says what is missing and how to
+	// get it, rather than showing `n/a` and leaving the reader to guess.
+	switch {
+	case p.ExpandedAt != "":
+		fmt.Fprintf(w, "Inspected    %s\n", p.ExpandedAt)
+	case p.TotalBytes == nil:
 		fmt.Fprintln(w, "             not measured — discovery records what this package's index")
-		fmt.Fprintln(w, "             lists without fetching it. Add --expand to walk it.")
+		fmt.Fprintln(w, "             lists without fetching it.")
+		fmt.Fprintf(w, "             transferctl packages inspect %s %s\n", product, ref)
 	}
+
 	fmt.Fprintf(w, "Discovered   %s\n", p.DiscoveredAt)
 	if p.PublishedAt != "" {
 		// Labelled as the vendor's claim, because that is what it is: an
@@ -281,6 +282,7 @@ func renderPackageDetail(w io.Writer, p *v1.Package, artifacts []v1.Artifact) er
 		fmt.Fprintln(w)
 		fmt.Fprintln(w, "Artifact tree")
 		renderArtifactTree(w, artifacts)
+		renderCacheNote(w, artifacts)
 	}
 
 	// The honest status line. A request sitting in `pending` after M2 is
@@ -294,6 +296,30 @@ func renderPackageDetail(w io.Writer, p *v1.Package, artifacts []v1.Artifact) er
 	fmt.Fprintln(w, "  a request will stay pending. That is expected, not a failure.")
 
 	return nil
+}
+
+// renderCacheNote explains a tree whose manifest bodies have been reclaimed.
+//
+// Printed only when it applies, and worded so it does not read as a problem —
+// because it is not one. Nothing about the package is unknown; the bodies are a
+// cache in front of the source registry and the sweeper reclaimed some. Without
+// the note, an operator comparing two `describe` outputs would see the same
+// package apparently lose something between them.
+func renderCacheNote(w io.Writer, artifacts []v1.Artifact) {
+	dropped := 0
+	for _, a := range artifacts {
+		if a.Fetched && !a.Cached {
+			dropped++
+		}
+	}
+	if dropped == 0 {
+		return
+	}
+	fmt.Fprintln(w)
+	fmt.Fprintf(w, "  %d of %d manifest bodies are no longer held locally. Their contents,\n",
+		dropped, len(artifacts))
+	fmt.Fprintln(w, "  sizes and blobs are recorded above and nothing is missing — the bodies")
+	fmt.Fprintln(w, "  are a bounded cache, and a transfer re-reads them from the source.")
 }
 
 // renderArtifactTree draws the manifest tree with indentation by depth.
@@ -709,20 +735,38 @@ func newPackagesDiscoverAliasCommand() *cobra.Command {
 	return cmd
 }
 
+// newPackagesInspectCommand builds out what discovery deliberately left out.
+//
+// It was briefly folded into `describe --expand`, on the argument that a user
+// wants to see a package rather than to inspect and then describe. Two things
+// were wrong with that.
+//
+// A flag hid the cost. `describe` is a database read that answers instantly;
+// `describe --expand` opens dozens of connections to a vendor's registry and
+// can take minutes. Those are different operations and a boolean is not enough
+// warning.
+//
+// And it was the wrong place for the RESULT. Inspecting is not a rendering
+// option — it writes artifacts, blobs and a measured size, and everything that
+// reads a package afterwards, `describe` and a transfer alike, sees them. So
+// inspect is a verb of its own again, and `describe` simply shows what it
+// gathered.
 func newPackagesInspectCommand() *cobra.Command {
 	cmd := &cobra.Command{
-		Use:    "inspect <product> <package>",
-		Hidden: true,
-		Short:  "Deprecated: use `packages describe --expand`",
+		Use:   "inspect <product> <package>",
+		Short: "Pull a package's full contents and measure it",
 		Long: "Discovery is deliberately light: it fetches the tag's own manifest and\n" +
-			"records the artifacts that manifest lists, without fetching them. That\n" +
-			"answers \"what is new\" in two requests per tag, and it means a package's\n" +
-			"transfer size is not yet known.\n\n" +
-			"This walks the rest: it fetches the listed artifacts, records their\n" +
-			"blobs, and measures the bytes a transfer would move.\n\n" +
-			"Safe to repeat. The tree under a digest cannot change, so a second run\n" +
-			"fetches nothing and says so. A transfer performs the same walk, so you\n" +
-			"do not have to run this first — it is for deciding whether you want to.",
+			"records the artifacts that manifest lists, WITHOUT fetching them. That\n" +
+			"answers \"what is new\" in two requests per tag rather than one per\n" +
+			"artifact, and it means a package's transfer size is not yet known.\n\n" +
+			"This builds out the rest: it fetches the listed artifacts, records\n" +
+			"their blobs, and measures the bytes a transfer would actually move.\n" +
+			"What it records is kept, so `packages describe` shows it from then on\n" +
+			"and a transfer of the same package does not repeat the walk.\n\n" +
+			"Safe and cheap to repeat. The tree under a digest cannot change, so a\n" +
+			"second run fetches nothing and says so.\n\n" +
+			"You never HAVE to run this: a transfer performs the same walk if\n" +
+			"nobody has. It is for deciding whether you want one.",
 		Args: cobra.ExactArgs(2),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			resp, err := newClient().InspectPackage(cmd.Context(), args[0], args[1])
@@ -742,9 +786,9 @@ func newPackagesInspectCommand() *cobra.Command {
 
 func renderInspect(w io.Writer, product, ref string, r *v1.InspectPackageResponse) error {
 	if r.AlreadyExpanded {
-		fmt.Fprintf(w, "%s %s was already expanded; nothing was fetched.\n", product, ref)
+		fmt.Fprintf(w, "%s %s was already inspected; nothing was fetched.\n", product, ref)
 	} else {
-		fmt.Fprintf(w, "Expanded %s %s — fetched %d manifest(s).\n", product, ref, r.Fetched)
+		fmt.Fprintf(w, "Inspected %s %s — fetched %d manifest(s).\n", product, ref, r.Fetched)
 	}
 	fmt.Fprintln(w)
 
@@ -752,6 +796,13 @@ func renderInspect(w io.Writer, product, ref string, r *v1.InspectPackageRespons
 	fmt.Fprintf(tw, "  Artifacts\t%d\n", r.Artifacts)
 	fmt.Fprintf(tw, "  Blobs\t%d\n", r.Blobs)
 	fmt.Fprintf(tw, "  Transfer size\t%s\n", humanBytes(r.TotalBytes))
+	// Cached is reported next to the totals rather than buried, because it is
+	// the one number here that can go DOWN without anything having changed
+	// about the package: the manifest bodies are a bounded cache and the
+	// sweeper reclaims the least recently used. Everything above it is
+	// permanent.
+	fmt.Fprintf(tw, "  Manifest bodies held\t%d of %d  (%s)\n",
+		r.CachedManifests, r.Artifacts, humanBytes(r.CachedBytes))
 	if err := tw.Flush(); err != nil {
 		return err
 	}
@@ -759,22 +810,6 @@ func renderInspect(w io.Writer, product, ref string, r *v1.InspectPackageRespons
 	fmt.Fprintln(w)
 	fmt.Fprintf(w, "  transferctl packages describe %s %s   # the full artifact tree\n", product, ref)
 	return nil
-}
-
-// renderExpanded reports the walk `describe --expand` performed, in one line
-// above the package it is about. The standalone `inspect` command printed a
-// summary block; here the tree below IS the detail, so a block would repeat it.
-func renderExpanded(w io.Writer, r *v1.InspectPackageResponse) {
-	if r == nil {
-		return
-	}
-	if r.AlreadyExpanded {
-		fmt.Fprintln(w, "Already expanded; nothing was fetched.")
-	} else {
-		fmt.Fprintf(w, "Expanded: fetched %d manifest(s), %d artifact(s), %d blob(s).\n",
-			r.Fetched, r.Artifacts, r.Blobs)
-	}
-	fmt.Fprintln(w)
 }
 
 // statusForEveryProduct renders discovery status across the fleet.

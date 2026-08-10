@@ -175,8 +175,19 @@ func (s *Server) routes() chi.Router {
 			// AIP-136 custom method: expanding a package has side effects — it
 			// writes artifacts, blobs and a measured size — so it is a POST verb
 			// rather than a GET that quietly mutates.
+			//
+			// Registered as the PLAIN package pattern, with the `:verb` suffix
+			// split off by the handler rather than by the router. The obvious
+			// spelling — `/packages/{package}:inspect` — is a chi partial-segment
+			// pattern whose delimiter is `:`, and it matches on the FIRST colon in
+			// the segment. That works for a tag and silently fails for a digest:
+			// `sha256:ccbd…:inspect` binds `{package}` to `sha256` and then cannot
+			// match `:inspect` against `:ccbd…`, so the request falls through to
+			// the GET-only route and comes back
+			// `INVALID_ARGUMENT: POST is not supported on …`. Splitting here
+			// costs six lines and makes every reference form work.
 			if s.deps.Packages != nil {
-				r.Post("/products/{product}/packages/{package}:inspect", s.handleInspectPackage)
+				r.Post("/products/{product}/packages/{package}", s.handlePackageCustomMethod)
 			}
 		}
 	})

@@ -202,6 +202,23 @@ type Layout interface {
 	// LooksForSignatures reports whether this Layout actually attempts
 	// signature discovery, which is what separates "unsigned" from "unknown".
 	LooksForSignatures() bool
+
+	// DisplayRepository is the repository path with this vendor's structural
+	// noise removed — `cfx-5000-k8s` for a vendor who puts every product under
+	// `orbs/`.
+	//
+	// The counterpart of Package.DisplayTag, and it exists for the same reason:
+	// the transform is the VENDOR's, and nothing outside the plugin may know it.
+	// This used to be done in the CLI by dropping the prefix every row in view
+	// happened to share, which needed no vendor knowledge and was wrong for
+	// exactly that reason — it shortened paths on registries that have no such
+	// convention, and it changed what a row said depending on which other rows
+	// were on screen.
+	//
+	// Empty means "no shortening", which is what any conformant registry gets.
+	// Cosmetic ONLY: the real path is what is stored and transferred, and BOTH
+	// spellings resolve as input.
+	DisplayRepository(path string) string
 }
 
 // Format is how a signature is verified once it has been found.

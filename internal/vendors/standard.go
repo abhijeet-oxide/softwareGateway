@@ -55,7 +55,7 @@ func (r *Registry) Get(name string) (Layout, error) {
 	}
 	l, ok := r.layouts[name]
 	if !ok {
-		return nil, fmt.Errorf("unknown signature layout %q (known: %s)",
+		return nil, fmt.Errorf("unknown vendor %q (known: %s)",
 			name, strings.Join(r.Names(), ", "))
 	}
 	return l, nil
@@ -90,6 +90,14 @@ func (Standard) Name() string { return LayoutStandard }
 // every package into a confident `unsigned`, which is exactly the false
 // negative the three-state status exists to prevent.
 func (Standard) LooksForSignatures() bool { return false }
+
+// DisplayRepository shortens nothing.
+//
+// A conformant registry has no structural noise to remove, and inventing some —
+// by dropping whatever prefix a page of results happens to share, say — would
+// make a listing say different things about the same repository depending on
+// what else was on screen.
+func (Standard) DisplayRepository(string) string { return "" }
 
 // Group maps each scanned tag to one package, unchanged.
 func (Standard) Group(

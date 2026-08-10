@@ -210,32 +210,47 @@ spec:
     # -----------------------------------------------------------------
     # 4. A VENDOR WITH ITS OWN SIGNATURE LAYOUT, and anonymous access.
     #
+    #    `vendor` is NOT the source's `type`. `type` says how to SPEAK to the
+    #    registry, and for every vendor we have met that is plain Distribution
+    #    v2 — including Nokia's NEAR, whose protocol is entirely standard. What
+    #    differs is the PUBLISHING CONVENTION, which is this. Two axes, two
+    #    fields.
+    #
+    #    `vendor: near` is the single switch for everything NEAR-specific:
+    #
+    #      * The three tags NEAR publishes per release — orb_X,
+    #        signature_orb_X and the signed_orb_X index over both — become ONE
+    #        package, with the index as the transfer root so the signature
+    #        travels with the payload. Transferring orb_X alone would leave the
+    #        signature behind and make destination-side verification impossible
+    #        forever.
+    #      * Listings drop the noise NEAR puts on every name: `orbs/` off the
+    #        repository, `orb_` off the tag. Cosmetic only — the real names are
+    #        stored, transferred and returned by -o json, and BOTH spellings
+    #        resolve as input, so anything you can see you can paste back.
+    #
+    #    OMIT IT for a conformant registry, which is most of them. Without it
+    #    this source would be read as ordinary — and, just as importantly, a
+    #    source that is not NEAR gets none of NEAR's rewriting. That is the
+    #    reason the field exists: the shortening used to be applied everywhere,
+    #    guessed from what a page of results looked like.
+    #
     #    `signatures` has TWO independent axes, because they genuinely vary
     #    independently — a vendor may pair the referrers API with PKCS#7, or a
     #    wrapper index with a Sigstore bundle:
     #
-    #      layout   WHERE the signature is:  auto | none | standard | near
+    #      vendor   WHERE the signature is:  (unset) | near
     #      format   HOW it is checked:       auto | cosign | pkcs7
     #
-    #    `layout` is NOT the source's `type`. `type` says how to SPEAK to the
-    #    registry, and for every vendor we have met that is plain Distribution
-    #    v2 — including Nokia's NEAR, whose protocol is entirely standard. What
-    #    differs is the publishing convention, which is this.
-    #
-    #    `near` groups the three tags NEAR publishes per release —
-    #    orb_X, signature_orb_X and the signed_orb_X index over both — into ONE
-    #    package, and makes the index the transfer root so the signature travels
-    #    with the payload. Transferring orb_X alone would leave the signature
-    #    behind, and destination-side verification would then be impossible
-    #    forever.
-    #
-    #    Omit the whole block for a conformant registry: `auto` is correct.
+    #    `signatures.layout` is the older spelling of `vendor` and still works;
+    #    setting both to DIFFERENT values is a validation error.
     # -----------------------------------------------------------------
     - name: near
       registry: near.vendor.example.com
       repositories:
         - orbs/cfx-5000-k8s
         - orbs/cfx-5000-db
+      vendor: near
       # Anonymous access — some vendors publish openly. Mutually exclusive
       # with credentialsRef; one of the two is required.
       anonymous: true
@@ -243,7 +258,6 @@ spec:
         enabled: true
         interval: 30m
       signatures:
-        layout: near
         format: pkcs7
         # CA roots for PKCS#7 (a public key or Fulcio root for cosign). A
         # reference, never inline: every credential and key is managed by VSO

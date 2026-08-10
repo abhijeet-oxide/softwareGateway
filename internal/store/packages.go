@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"sort"
+	"strconv"
 	"strings"
 )
 
@@ -66,6 +67,19 @@ type PackageRow struct {
 	// on read rather than denormalised: a product may span several
 	// repositories, and a listing that does not say which is ambiguous.
 	SourceRepository string
+	// DisplayRepository is SourceRepository with the vendor's structural noise
+	// removed, or empty when none applies. Cosmetic; SourceRepository is the
+	// identity. Both spellings resolve as input.
+	DisplayRepository string
+
+	// ExpandedAt is when this package's manifest tree was last fully walked,
+	// or nil if it never has been.
+	//
+	// The difference between the two states is what `packages describe` reports
+	// and what `packages inspect` changes: a package that has only been
+	// discovered knows what its own manifest lists and NOT what those artifacts
+	// contain, so its size is unknown rather than zero.
+	ExpandedAt *string
 }
 
 // ArtifactRow is a row in `package_artifacts`: one manifest in the tree.
@@ -85,13 +99,23 @@ type ArtifactRow struct {
 	// without this project knowing they exist. The alternative is a column per
 	// vendor, which does not end.
 	Annotations map[string]string
-	// Raw is the manifest exactly as served. NIL means this artifact was LISTED
-	// by its parent index and not fetched, so we have the vendor's word for its
-	// digest rather than bytes we hashed ourselves.
+	// Raw is the manifest exactly as served, when it is still CACHED.
+	//
+	// Nil means one of two different things, and Fetched is what tells them
+	// apart: either this artifact was only LISTED by its parent index and never
+	// fetched, or it was fetched and its bytes have since been evicted. See
+	// migration 00007 — the bytes are a cache in front of the source registry
+	// and the fetch is a fact, and conflating them made the cache impossible to
+	// reclaim.
 	Raw []byte
-	// Fetched is `raw IS NOT NULL`, read back without the bytes themselves — a
-	// listing must not load every manifest body to report which ones we hold.
+	// Fetched is `fetched_at IS NOT NULL`: this manifest was pulled from the
+	// registry and verified against its digest, so its blobs and its size are
+	// known. Read back without the bytes themselves — a listing must not load
+	// every manifest body to report which ones we walked.
 	Fetched bool
+	// Cached is `raw IS NOT NULL`: the bytes are still here, so pushing this
+	// manifest needs no round trip to the source.
+	Cached bool
 }
 
 // BlobRef links an artifact to a blob it references.
@@ -152,12 +176,27 @@ func (p *Packages) InsertPackage(ctx context.Context, tx *sql.Tx, row PackageRow
 		state = "discovered"
 	}
 
+	// A package discovery could already measure IS fully known, and saying so
+	// here saves an inspect that would fetch nothing.
+	//
+	// That is the case whenever the root is a plain image manifest: its config
+	// and layer descriptors are inside the one manifest discovery fetched, so
+	// there is no deeper tree to walk. An index-rooted package leaves
+	// total_bytes nil, because the index states the size of each child manifest
+	// and not of the layers beneath it — and that is exactly what `inspect`
+	// exists to resolve.
+	expanded := "NULL"
+	if row.TotalBytes != nil {
+		expanded = p.dialect.Now()
+	}
+
 	query := p.dialect.Rewrite(`
 		INSERT INTO packages
 			(product_id, source_repo_id, tag, manifest_digest, media_type,
 			 total_bytes, artifact_count, blob_count, published_at, state,
-			 signature_status, transfer_root_digest, transfer_root_tag, display_tag, updated_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ` + p.dialect.Now() + `)
+			 signature_status, transfer_root_digest, transfer_root_tag, display_tag,
+			 expanded_at, updated_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ` + expanded + `, ` + p.dialect.Now() + `)
 		ON CONFLICT (source_repo_id, tag, manifest_digest) DO NOTHING
 		RETURNING id`)
 
@@ -220,18 +259,27 @@ func (p *Packages) SupersedePrior(
 
 // InsertArtifact records one manifest in a package's tree.
 func (p *Packages) InsertArtifact(ctx context.Context, tx *sql.Tx, a ArtifactRow) (int64, error) {
+	// fetched_at and the cache stamps move together with the bytes: a row
+	// written WITH raw was fetched and is cached, a row written without was
+	// merely listed by its parent index and is neither.
+	//
+	// Written as a literal in the statement rather than as a parameter, because
+	// "now" is a dialect expression and a Go time would be formatted by the
+	// driver — which for SQLite means a string that does not sort against the
+	// ones the schema's own DEFAULT writes.
 	query := p.dialect.Rewrite(`
 		INSERT INTO package_artifacts
 			(package_id, parent_id, digest, media_type, artifact_type,
-			 size_bytes, platform, depth, raw, annotations)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+			 size_bytes, platform, depth, raw, annotations,
+			 fetched_at, raw_bytes, raw_used_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ` + p.fetchStamps(a.Raw) + `)
 		ON CONFLICT (package_id, digest) DO NOTHING
 		RETURNING id`)
 
 	var id int64
 	err := tx.QueryRowContext(ctx, query,
 		a.PackageID, a.ParentID, a.Digest, a.MediaType, nullable(a.ArtifactType),
-		a.SizeBytes, nullable(a.Platform), a.Depth, a.Raw, annotationsJSON(a.Annotations),
+		a.SizeBytes, nullable(a.Platform), a.Depth, rawOrNull(a.Raw), annotationsJSON(a.Annotations),
 	).Scan(&id)
 
 	switch {
@@ -244,6 +292,32 @@ func (p *Packages) InsertArtifact(ctx context.Context, tx *sql.Tx, a ArtifactRow
 		return 0, fmt.Errorf("insert artifact %s: %w", a.Digest, err)
 	}
 	return id, nil
+}
+
+// fetchStamps renders the `fetched_at, raw_bytes, raw_used_at` triple for a
+// write that either carries manifest bytes or does not.
+//
+// One place, because the three must agree: a row claiming fetched_at with no
+// raw_bytes would make the cache sweeper's accounting wrong, and a row carrying
+// bytes with no fetched_at would be evicted and then re-walked forever.
+func (p *Packages) fetchStamps(raw []byte) string {
+	if len(raw) == 0 {
+		return "NULL, 0, NULL"
+	}
+	now := p.dialect.Now()
+	return now + ", " + strconv.Itoa(len(raw)) + ", " + now
+}
+
+// rawOrNull writes SQL NULL for an absent manifest body.
+//
+// A zero-length []byte is not the same as nil to every driver, and the
+// distinction here is load-bearing: NULL means "not held", and an empty blob
+// would be a manifest of nothing.
+func rawOrNull(raw []byte) any {
+	if len(raw) == 0 {
+		return nil
+	}
+	return raw
 }
 
 func (p *Packages) artifactID(ctx context.Context, tx *sql.Tx, packageID int64, digest string) (int64, error) {
@@ -439,9 +513,13 @@ func (p *Packages) EnqueueNotification(ctx context.Context, tx *sql.Tx, row Noti
 // found — otherwise every configuration reload would deactivate every
 // discovered repository and the next scan would revive it, flapping the row
 // and churning the audit trail for no reason.
+// displayPath is the vendor-shortened spelling, or empty where none applies. It
+// is refreshed on every upsert rather than written once, so turning `vendor:
+// near` on — or off — takes effect on the next scan instead of only for
+// repositories discovered afterwards.
 func (p *Packages) EnsureRepository(
 	ctx context.Context, tx *sql.Tx,
-	productID int64, role, name, registryHost, repositoryPath, registryType, managedBy string,
+	productID int64, role, name, registryHost, repositoryPath, registryType, managedBy, displayPath string,
 ) (int64, error) {
 	if registryType == "" {
 		registryType = "generic"
@@ -455,16 +533,18 @@ func (p *Packages) EnsureRepository(
 	upsert := p.dialect.Rewrite(`
 		INSERT INTO repositories
 			(product_id, role, name, registry_host, repository_path, registry_type,
-			 managed_by, active, updated_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ` + p.dialect.Bool(true) + `, ` + p.dialect.Now() + `)
+			 managed_by, display_path, active, updated_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ` + p.dialect.Bool(true) + `, ` + p.dialect.Now() + `)
 		ON CONFLICT (registry_host, repository_path) DO UPDATE SET
-			active     = ` + p.dialect.Bool(true) + `,
-			updated_at = ` + p.dialect.Now() + `
+			active       = ` + p.dialect.Bool(true) + `,
+			display_path = EXCLUDED.display_path,
+			updated_at   = ` + p.dialect.Now() + `
 		RETURNING id`)
 
 	var id int64
 	err := tx.QueryRowContext(ctx, upsert,
 		productID, role, name, registryHost, repositoryPath, registryType, managedBy,
+		nullIfEmpty(displayPath),
 	).Scan(&id)
 	if err != nil {
 		return 0, fmt.Errorf("ensure repository %s/%s: %w", registryHost, repositoryPath, err)
@@ -558,21 +638,30 @@ func (p *Packages) ListPackages(ctx context.Context, f ListPackagesFilter) ([]Pa
 		       pk.media_type, pk.total_bytes, COALESCE(pk.artifact_count, 0),
 		       pk.blob_count, pk.state, pk.discovered_at, pk.published_at, pk.superseded_by,
 		       pk.signature_status, COALESCE(pk.transfer_root_digest,''), COALESCE(pk.transfer_root_tag,''),
-		       COALESCE(pk.display_tag,''),
-		       COALESCE(sr.repository_path, '')
+		       COALESCE(pk.display_tag,''), pk.expanded_at,
+		       COALESCE(sr.repository_path, ''), COALESCE(sr.display_path, '')
 		  FROM packages pk
 		  JOIN products pr ON pr.id = pk.product_id
 		  LEFT JOIN repositories sr ON sr.id = pk.source_repo_id
 		 WHERE pr.name = ?`
 	args := []any{f.ProductName}
 
+	// BOTH SPELLINGS FILTER, for the same reason both spellings resolve in
+	// GetPackageRef: a listing renders the shortened form, and a filter that
+	// accepted only the long one would reject the value the user just copied off
+	// their own screen. `--tag 23.8.1076` and `--tag orb_23.8.1076` are the same
+	// request; so are `--repository cfx-5000-k8s` and `orbs/cfx-5000-k8s`.
 	if f.Repository != "" {
+		full, err := p.resolveRepositoryPath(ctx, f.ProductName, f.Repository)
+		if err != nil {
+			return nil, err
+		}
 		query += " AND sr.repository_path = ?"
-		args = append(args, f.Repository)
+		args = append(args, full)
 	}
 	if f.Tag != "" {
-		query += " AND pk.tag = ?"
-		args = append(args, f.Tag)
+		query += " AND (pk.tag = ? OR pk.display_tag = ?)"
+		args = append(args, f.Tag, f.Tag)
 	}
 	if f.State != "" {
 		query += " AND pk.state = ?"
@@ -622,7 +711,7 @@ func (p *Packages) ListPackages(ctx context.Context, f ListPackagesFilter) ([]Pa
 			&r.MediaType, &r.TotalBytes, &r.ArtifactCount, &r.BlobCount,
 			&r.State, &r.DiscoveredAt, &r.PublishedAt, &r.SupersededBy,
 			&r.SignatureStatus, &r.TransferRootDigest, &r.TransferRootTag, &r.DisplayTag,
-			&r.SourceRepository,
+			&r.ExpandedAt, &r.SourceRepository, &r.DisplayRepository,
 		); err != nil {
 			return nil, fmt.Errorf("scan package row: %w", err)
 		}
@@ -755,8 +844,8 @@ func (p *Packages) matchPackages(ctx context.Context, productName string, ref Pa
 		       pk.media_type, pk.total_bytes, COALESCE(pk.artifact_count, 0),
 		       pk.blob_count, pk.state, pk.discovered_at, pk.published_at, pk.superseded_by,
 		       pk.signature_status, COALESCE(pk.transfer_root_digest,''), COALESCE(pk.transfer_root_tag,''),
-		       COALESCE(pk.display_tag,''),
-		       COALESCE(sr.repository_path, '')
+		       COALESCE(pk.display_tag,''), pk.expanded_at,
+		       COALESCE(sr.repository_path, ''), COALESCE(sr.display_path, '')
 		  FROM packages pk
 		  JOIN products pr ON pr.id = pk.product_id
 		  LEFT JOIN repositories sr ON sr.id = pk.source_repo_id
@@ -809,7 +898,7 @@ func (p *Packages) matchPackages(ctx context.Context, productName string, ref Pa
 			&r.MediaType, &r.TotalBytes, &r.ArtifactCount, &r.BlobCount,
 			&r.State, &r.DiscoveredAt, &r.PublishedAt, &r.SupersededBy,
 			&r.SignatureStatus, &r.TransferRootDigest, &r.TransferRootTag, &r.DisplayTag,
-			&r.SourceRepository,
+			&r.ExpandedAt, &r.SourceRepository, &r.DisplayRepository,
 		); err != nil {
 			return nil, fmt.Errorf("scan package row: %w", err)
 		}
@@ -826,7 +915,7 @@ func (p *Packages) ListArtifacts(ctx context.Context, packageID int64) ([]Artifa
 	query := p.dialect.Rewrite(`
 		SELECT id, package_id, parent_id, digest, media_type,
 		       COALESCE(artifact_type, ''), size_bytes, COALESCE(platform, ''), depth,
-		       raw IS NOT NULL, annotations
+		       fetched_at IS NOT NULL, raw IS NOT NULL, annotations
 		  FROM package_artifacts
 		 WHERE package_id = ?
 		 ORDER BY depth, id`)
@@ -842,7 +931,7 @@ func (p *Packages) ListArtifacts(ctx context.Context, packageID int64) ([]Artifa
 		var a ArtifactRow
 		var annotations []byte
 		if err := rows.Scan(&a.ID, &a.PackageID, &a.ParentID, &a.Digest, &a.MediaType,
-			&a.ArtifactType, &a.SizeBytes, &a.Platform, &a.Depth, &a.Fetched,
+			&a.ArtifactType, &a.SizeBytes, &a.Platform, &a.Depth, &a.Fetched, &a.Cached,
 			&annotations); err != nil {
 			return nil, fmt.Errorf("scan artifact row: %w", err)
 		}
@@ -967,26 +1056,33 @@ func (p *Packages) RecordExpandedTree(ctx context.Context, packageID int64, t Ex
 // The ON CONFLICT branch is the point: discovery wrote these rows from an
 // index's descriptors with no raw bytes, and this is where they gain them. The
 // raw bytes are written with COALESCE so a re-run cannot blank a manifest we
-// already hold.
+// already hold, and fetched_at with COALESCE so a re-run cannot RESET the
+// moment we learned this artifact's contents — which is what an evicted-then-
+// refetched row would otherwise do to the record.
 func (p *Packages) upsertArtifact(ctx context.Context, tx *sql.Tx, a ArtifactRow) (int64, error) {
 	query := p.dialect.Rewrite(`
 		INSERT INTO package_artifacts
 			(package_id, parent_id, digest, media_type, artifact_type,
-			 size_bytes, platform, depth, raw, annotations)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+			 size_bytes, platform, depth, raw, annotations,
+			 fetched_at, raw_bytes, raw_used_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ` + p.fetchStamps(a.Raw) + `)
 		ON CONFLICT (package_id, digest) DO UPDATE SET
 			raw           = COALESCE(EXCLUDED.raw, package_artifacts.raw),
 			media_type    = EXCLUDED.media_type,
 			artifact_type = COALESCE(EXCLUDED.artifact_type, package_artifacts.artifact_type),
 			size_bytes    = EXCLUDED.size_bytes,
 			platform      = COALESCE(EXCLUDED.platform, package_artifacts.platform),
-			annotations   = COALESCE(EXCLUDED.annotations, package_artifacts.annotations)
+			annotations   = COALESCE(EXCLUDED.annotations, package_artifacts.annotations),
+			fetched_at    = COALESCE(package_artifacts.fetched_at, EXCLUDED.fetched_at),
+			raw_bytes     = CASE WHEN EXCLUDED.raw IS NULL
+			                     THEN package_artifacts.raw_bytes ELSE EXCLUDED.raw_bytes END,
+			raw_used_at   = COALESCE(EXCLUDED.raw_used_at, package_artifacts.raw_used_at)
 		RETURNING id`)
 
 	var id int64
 	err := tx.QueryRowContext(ctx, query,
 		a.PackageID, a.ParentID, a.Digest, a.MediaType, nullable(a.ArtifactType),
-		a.SizeBytes, nullable(a.Platform), a.Depth, a.Raw, annotationsJSON(a.Annotations),
+		a.SizeBytes, nullable(a.Platform), a.Depth, rawOrNull(a.Raw), annotationsJSON(a.Annotations),
 	).Scan(&id)
 	if err != nil {
 		return 0, fmt.Errorf("upsert artifact %s: %w", a.Digest, err)
@@ -995,12 +1091,23 @@ func (p *Packages) upsertArtifact(ctx context.Context, tx *sql.Tx, a ArtifactRow
 }
 
 // setPackageMeasurement records what the walk measured.
+//
+// expanded_at is set only when the measurement is a REAL one. A truncated walk
+// leaves total_bytes nil, and stamping the package as expanded in that state
+// would tell every later caller the tree is known when it is not — which is
+// worse than the unmeasured row it replaced, because nobody questions a
+// timestamp.
 func (p *Packages) setPackageMeasurement(
 	ctx context.Context, tx *sql.Tx, packageID int64, artifactCount int, totalBytes *int64, blobCount *int,
 ) error {
+	expanded := "expanded_at"
+	if totalBytes != nil {
+		expanded = p.dialect.Now()
+	}
 	_, err := tx.ExecContext(ctx, p.dialect.Rewrite(`
 		UPDATE packages
 		   SET artifact_count = ?, total_bytes = ?, blob_count = ?,
+		       expanded_at = `+expanded+`,
 		       updated_at = `+p.dialect.Now()+`
 		 WHERE id = ?`),
 		artifactCount, totalBytes, blobCount, packageID)
@@ -1017,8 +1124,8 @@ func (p *Packages) GetPackageByID(ctx context.Context, id int64) (PackageRow, er
 		       pk.media_type, pk.total_bytes, COALESCE(pk.artifact_count, 0),
 		       pk.blob_count, pk.state, pk.discovered_at, pk.published_at, pk.superseded_by,
 		       pk.signature_status, COALESCE(pk.transfer_root_digest,''), COALESCE(pk.transfer_root_tag,''),
-		       COALESCE(pk.display_tag,''),
-		       COALESCE(sr.repository_path, '')
+		       COALESCE(pk.display_tag,''), pk.expanded_at,
+		       COALESCE(sr.repository_path, ''), COALESCE(sr.display_path, '')
 		  FROM packages pk
 		  LEFT JOIN repositories sr ON sr.id = pk.source_repo_id
 		 WHERE pk.id = ?`)
@@ -1029,7 +1136,7 @@ func (p *Packages) GetPackageByID(ctx context.Context, id int64) (PackageRow, er
 		&r.MediaType, &r.TotalBytes, &r.ArtifactCount, &r.BlobCount,
 		&r.State, &r.DiscoveredAt, &r.PublishedAt, &r.SupersededBy,
 		&r.SignatureStatus, &r.TransferRootDigest, &r.TransferRootTag, &r.DisplayTag,
-		&r.SourceRepository)
+		&r.ExpandedAt, &r.SourceRepository, &r.DisplayRepository)
 	if errors.Is(err, sql.ErrNoRows) {
 		return PackageRow{}, ErrNotFound
 	}
@@ -1205,15 +1312,19 @@ func (e *AmbiguousRepositoryError) Error() string {
 
 // resolveRepositoryPath turns a repository reference into a full path.
 //
-// A listing shortens `orbs/cfx-5000-db` to `cfx-5000-db` by dropping the prefix
-// every row shares, so the short form has to resolve or the abbreviation is a
-// trap — someone copies what they see and gets "not found" for a package that
-// is plainly on the screen.
+// A listing shortens `orbs/cfx-5000-db` to `cfx-5000-db` where the source's
+// vendor plugin says the prefix is structural, so the short form has to resolve
+// or the abbreviation is a trap — someone copies what they see and gets "not
+// found" for a package that is plainly on the screen.
 //
-// Matching is on WHOLE TRAILING SEGMENTS, never a substring: `cfx-5000-db`
-// matches `orbs/cfx-5000-db` and `a/b/cfx-5000-db`, and never `orbs/x-cfx-5000-db`.
-// Two matches is a real ambiguity and is refused with both, exactly as an
-// ambiguous tag is.
+// Two things match. The stored `display_path`, which is the exact string a
+// listing showed. And any WHOLE TRAILING SEGMENT, never a substring:
+// `cfx-5000-db` matches `orbs/cfx-5000-db` and `a/b/cfx-5000-db`, and never
+// `orbs/x-cfx-5000-db`. The second is deliberately kept even now that display
+// paths are stored — it costs nothing, and someone typing the last segment of a
+// path they can see is making a perfectly clear request whether or not a vendor
+// plugin agrees. Two matches is a real ambiguity and is refused with both,
+// exactly as an ambiguous tag is.
 //
 // Done in Go over the product's repository rows rather than as a LIKE, because
 // a repository path may legally contain `_`, which LIKE would treat as a
@@ -1227,7 +1338,7 @@ func (p *Packages) resolveRepositoryPath(
 	}
 
 	query := p.dialect.Rewrite(`
-		SELECT DISTINCT r.repository_path
+		SELECT DISTINCT r.repository_path, COALESCE(r.display_path, '')
 		  FROM repositories r
 		  JOIN products pr ON pr.id = r.product_id
 		 WHERE pr.name = ? AND r.role = 'source'
@@ -1241,11 +1352,11 @@ func (p *Packages) resolveRepositoryPath(
 
 	var matches []string
 	for rows.Next() {
-		var path string
-		if err := rows.Scan(&path); err != nil {
+		var path, display string
+		if err := rows.Scan(&path, &display); err != nil {
 			return "", fmt.Errorf("scan repository path: %w", err)
 		}
-		if path == ref || strings.HasSuffix(path, "/"+ref) {
+		if path == ref || display == ref || strings.HasSuffix(path, "/"+ref) {
 			matches = append(matches, path)
 		}
 	}
@@ -1278,16 +1389,22 @@ func (p *Packages) resolveRepositoryPath(
 // immutable, so a recorded tree can never be stale: content addressing is what
 // makes reuse safe here and would not make it safe for anything mutable.
 //
-// complete is false when any artifact row still lacks its bytes, which is
-// exactly the state discovery leaves behind. A caller that needs the whole tree
-// walks the registry and records the result; a caller that only needs sizes can
-// use what is here.
+// complete is false when any artifact row was never FETCHED, which is exactly
+// the state discovery leaves behind. Deliberately not "still holds its bytes":
+// the manifest bodies are an evictable cache (migration 00007) and a package
+// whose bytes were reclaimed is still fully known — its artifacts, blobs and
+// sizes are all recorded. Tying completeness to the bytes would mean every
+// eviction bought back a full registry walk, and the cache could never actually
+// be reclaimed.
+//
+// A caller that needs the whole tree and finds it incomplete walks the registry
+// and records the result; a caller that only needs sizes uses what is here.
 func (p *Packages) ReadExpandedTree(
 	ctx context.Context, packageID int64,
 ) (tree ExpandedTree, complete bool, err error) {
 	query := p.dialect.Rewrite(`
 		SELECT id, parent_id, digest, media_type, COALESCE(artifact_type,''),
-		       size_bytes, COALESCE(platform,''), depth, raw
+		       size_bytes, COALESCE(platform,''), depth, raw, fetched_at IS NOT NULL
 		  FROM package_artifacts
 		 WHERE package_id = ?
 		 ORDER BY depth, id`)
@@ -1312,11 +1429,11 @@ func (p *Packages) ReadExpandedTree(
 		)
 		if err := rows.Scan(&id, &parentID, &a.Row.Digest, &a.Row.MediaType,
 			&a.Row.ArtifactType, &a.Row.SizeBytes, &a.Row.Platform, &a.Row.Depth,
-			&a.Row.Raw); err != nil {
+			&a.Row.Raw, &a.Row.Fetched); err != nil {
 			return ExpandedTree{}, false, fmt.Errorf("scan artifact: %w", err)
 		}
 		a.Row.ID = id
-		a.Row.Fetched = len(a.Row.Raw) > 0
+		a.Row.Cached = len(a.Row.Raw) > 0
 		if !a.Row.Fetched {
 			// Listed by an index but never fetched. The tree is incomplete and
 			// the caller must walk.

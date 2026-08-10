@@ -57,6 +57,12 @@ const (
 	prefixSignature = "signature_"
 )
 
+// repositoryNamespace is the path segment NEAR puts every product under:
+// `orbs/cfx-5000-k8s`, `orbs/cfx-5000-db`. Structural, not informative — it is
+// on every repository of every NEAR registry, so a listing repeats it on every
+// row and it distinguishes nothing.
+const repositoryNamespace = "orbs/"
+
 // Annotations NEAR sets. The first two are OCI-reserved and mean what the spec
 // says; the third is Nokia's own and is why this file exists.
 const (
@@ -75,6 +81,24 @@ func (Layout) Name() string { return Name }
 // LooksForSignatures is true: this layout genuinely checks, so a package with
 // no signature is reported as `unsigned` rather than `unknown`.
 func (Layout) LooksForSignatures() bool { return true }
+
+// DisplayRepository removes the `orbs/` NEAR puts in front of every product.
+//
+// Only the leading segment, and only when something is left behind: `orbs` on
+// its own is a repository whose whole name is that word, and shortening it to
+// nothing would put a blank in a listing.
+//
+// This is the one place the convention is known. It used to be inferred in the
+// CLI from the prefix a page of rows happened to share — which shortened paths
+// on registries that have no such convention, and which is exactly the kind of
+// vendor knowledge this package exists to contain.
+func (Layout) DisplayRepository(path string) string {
+	rest, ok := strings.CutPrefix(strings.Trim(strings.TrimSpace(path), "/"), repositoryNamespace)
+	if !ok || rest == "" {
+		return ""
+	}
+	return rest
+}
 
 // Group collapses orb_X, signed_orb_X and signature_orb_X into one package.
 //

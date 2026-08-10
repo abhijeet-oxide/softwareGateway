@@ -49,7 +49,20 @@ Products are **read-only over the API.** Configuration comes from Git ([02](02-c
 | `GET` | `/api/v1/products/{product}/packages/{package}` | Get one, with artifacts and per-target status |
 | `GET` | `/api/v1/products/{product}/packages/{package}/artifacts` | Artifact tree |
 | `POST` | `/api/v1/products/{product}/packages:discover` | Trigger an immediate scan ([07](07-discovery.md) §8) |
+| `POST` | `/api/v1/products/{product}/packages/{package}:inspect` | Walk the manifest tree and measure it ([07](07-discovery.md) §13) |
 | `POST` | `/api/v1/products/{product}/packages/{package}:verify` | On-demand verification ([08](08-verification.md) §4) |
+
+#### Package references, and the custom-method colon
+
+`{package}` is a tag or a digest. The `repository:tag` form a person types is **not** in the path — a repository path contains slashes, `%2F` is decoded before routing, and percent-encoding it twice works right up until a proxy normalises the path. So the wire form is `/packages/{tag}?repository=orbs/core`, and the CLI does that rewrite.
+
+The custom-method colon is then split **in the handler, not by the router**, and this is worth stating because getting it wrong is silent. Registering `/packages/{package}:inspect` as a route looks correct and is: chi supports a parameter followed by literal text within a segment. But it matches at the *first* occurrence of the delimiter, and a digest reference contains a colon of its own — so `sha256:ccbd…:inspect` bound `{package}` to `sha256`, failed to match `:inspect` against `:ccbd…`, fell through to the `GET`-only route, and returned:
+
+```
+INVALID_ARGUMENT: POST is not supported on /api/v1/products/…
+```
+
+which names neither the real problem nor anything the caller could change. The route is now the plain package pattern with the verb split at the **last** colon by the handler, which is unambiguous for every reference form: a tag may not contain a colon, and a digest contains exactly one that is never last when a verb follows.
 
 ### Transfers
 

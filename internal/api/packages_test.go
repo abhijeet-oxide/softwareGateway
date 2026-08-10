@@ -517,7 +517,7 @@ func (h *apiHarness) seedPackageIn(repoPath, tag, digest string) int64 {
 	defer func() { _ = tx.Rollback() }()
 
 	repoID, err := h.packages.EnsureRepository(h.t.Context(), tx, h.productID,
-		"source", "vendor/"+repoPath, "registry.example.com", repoPath, "generic", "discovery")
+		"source", "vendor/"+repoPath, "registry.example.com", repoPath, "generic", "discovery", "")
 	if err != nil {
 		h.t.Fatalf("ensure repository %s: %v", repoPath, err)
 	}

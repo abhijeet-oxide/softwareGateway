@@ -395,8 +395,33 @@ func (p *Product) validateSources(resolver *SecretResolver) Errors {
 		}
 		errs = append(errs, validateConcurrency(path, s.Concurrency, s.RateLimits, s.Discovery.Concurrency)...)
 		errs = append(errs, validateSignatures(path+".signatures", s.Signatures, resolver)...)
+		errs = append(errs, validateVendor(path, s)...)
 	}
 	return errs
+}
+
+// validateVendor rejects a source that names its vendor twice, differently.
+//
+// `vendor` supersedes `signatures.layout` and they are the same setting, so
+// both present and agreeing is harmless — a document mid-migration. Both
+// present and DISAGREEING has no correct reading, and picking one silently
+// would mean the operator's other spelling does nothing while looking as though
+// it does.
+//
+// The NAME is not checked here: the set of valid names depends on which vendor
+// plugins the binary registers, which this package deliberately does not know.
+// The composition root resolves it and fails loudly on an unknown value.
+func validateVendor(path string, s Source) Errors {
+	vendor := strings.TrimSpace(s.Vendor)
+	layout := strings.TrimSpace(s.Signatures.Layout)
+	if vendor == "" || layout == "" || vendor == layout {
+		return nil
+	}
+	return Errors{{
+		path + ".vendor",
+		fmt.Sprintf("%q disagrees with signatures.layout %q", vendor, layout),
+		"they are the same setting under two names; keep `vendor` and delete `signatures.layout`",
+	}}
 }
 
 func (p *Product) validateTargets(resolver *SecretResolver) Errors {

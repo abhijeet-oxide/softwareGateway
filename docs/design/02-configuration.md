@@ -274,6 +274,7 @@ Types, defaults, and validation rules. Validation is enforced at load (§7) and 
 | `registry` | string | yes | — | Host, optional port. No scheme — HTTPS assumed |
 | `repository` | string | yes | — | Repository path, no tag or digest |
 | `type` | enum | no | `generic` | `generic`, `acr`, `artifactory`, `quay` ([06](06-registry-abstraction.md)) |
+| `vendor` (sources) | string | no | — | Publishing convention: `near`, or empty for anything conformant. See below |
 | `anonymous` | bool | no | `false` | Mutually exclusive with `credentialsRef` |
 | `credentialsRef` | object | conditional | — | Required unless `anonymous` |
 | `concurrency` | object | no | inherits the application-level value | see §5.3 |
@@ -281,6 +282,23 @@ Types, defaults, and validation rules. Validation is enforced at load (§7) and 
 | `default` (targets) | bool | no | `false` | At most one per product |
 | `promotionOnly` (targets) | bool | no | `false` | Rejects replication requests naming this target |
 | `discovery` (sources) | object | no | `enabled: true` | |
+
+#### `vendor` — and why it is not `type`
+
+`type` says **how to speak to the registry**, and for every vendor met so far — including Nokia's NEAR — that is plain OCI Distribution v2. `vendor` says **how the vendor publishes**, which is an entirely separate axis, and it is the single switch for every vendor-specific behaviour there is:
+
+- how a release's tags are grouped into one package (NEAR publishes three per release);
+- which of them is the transfer root, so a signature travels with its payload;
+- which part of a tag is structural noise a listing can drop (`orb_`);
+- which part of a repository path is (`orbs/`).
+
+**It is opt-in per source, and that is the point.** Without it a NEAR registry is read as an ordinary one: three packages per release, no signature grouping, no shortening. Just as importantly, a registry that is *not* NEAR gets none of NEAR's rewriting. That second half is why the field exists — `orbs/` was being trimmed off repository paths for every source on the strength of what a page of results happened to look like, rather than on a statement about the vendor.
+
+Shortening is cosmetic throughout. The real tag and repository path are what is stored, transferred and returned by `-o json`; both spellings resolve as input everywhere ([03](03-persistence.md) §11).
+
+An unknown value is fatal for that source and no other, reported at startup. Falling back to standard behaviour on a typo would silently disable signature discovery, and nothing in any output would say why.
+
+`signatures.layout` is the older spelling of this field and still works. It was nested under `signatures` when grouping tags was all it controlled; it now also decides how a package is NAMED, which is not a signature concern. Setting both to *different* values is a validation error rather than a precedence rule — picking one silently would leave the operator's other spelling doing nothing while looking as though it does something.
 
 ### 5.3 `concurrency`
 
@@ -409,6 +427,13 @@ coordinator:
   gc:
     tickInterval: 1h
     batchSize: 5000                # bounded per tick; GC never stalls transfers
+  # Bounds the CACHED MANIFEST BODIES — the only thing this system stores that
+  # grows without limit and can be discarded without losing a fact (03 §12).
+  # What a package IS stays forever; what it was SERVED AS is reclaimed.
+  manifestCache:
+    budgetBytes: 536870912         # 512 MiB; 0 disables the budget
+    ttl: 168h                      # reclaim bodies untouched for a week; 0 disables
+    sweepInterval: 15m
 
 worker:
   coordinatorEndpoint: http://coordinator.softwaregateway.svc:8080

@@ -91,62 +91,20 @@ func humanConcurrency(c v1.Concurrency) string {
 // A listing hides two kinds of noise, and NEITHER involves this package knowing
 // anything about a vendor.
 //
-// The TAG comes pre-shortened from the server as `displayTag`, computed by the
-// source's layout plugin at discovery — so `orb_23.8.1076` renders as
-// `23.8.1076` only because a plugin said that is this vendor's convention. Both
-// spellings resolve as input, so copying what you see always works.
+// Both the TAG and the REPOSITORY come pre-shortened from the server, as
+// `displayTag` and `displayRepository`, computed by the source's vendor plugin
+// at discovery — so `orbs/cfx-5000-k8s:orb_23.8.1076` renders as
+// `cfx-5000-k8s:23.8.1076` only because a plugin said those are this vendor's
+// conventions. A source with no `vendor` set gets neither, which is what any
+// conformant registry gets. Both spellings resolve as input, so copying what
+// you see always works.
 //
-// The REPOSITORY is shortened here, by dropping the prefix EVERY row shares.
-// That needs no vendor knowledge at all: if every repository in view sits under
-// `orbs/`, the segment carries no information and goes; if they differ, it
-// stays. The same argument as hiding the repository column entirely when a
-// product has only one.
-
-// commonRepositoryPrefix returns the leading path segments every repository
-// shares, including the trailing slash, or "" when they share none.
-//
-// Only whole segments — trimming `cfx-5000-` off `cfx-5000-k8s` and
-// `cfx-5000-db` would be shortening at a boundary that means nothing.
-func commonRepositoryPrefix(paths []string) string {
-	var segments []string
-	first := true
-
-	for _, p := range paths {
-		if p == "" {
-			continue
-		}
-		parts := strings.Split(p, "/")
-		// The last segment is the repository's own name and is never dropped,
-		// or a set of one would render as nothing at all.
-		parts = parts[:len(parts)-1]
-
-		if first {
-			segments = parts
-			first = false
-			continue
-		}
-		n := 0
-		for n < len(segments) && n < len(parts) && segments[n] == parts[n] {
-			n++
-		}
-		segments = segments[:n]
-		if len(segments) == 0 {
-			return ""
-		}
-	}
-	if len(segments) == 0 {
-		return ""
-	}
-	return strings.Join(segments, "/") + "/"
-}
-
-// shortRepository drops a prefix from a repository path for display.
-func shortRepository(path, prefix string) string {
-	if prefix != "" && len(path) > len(prefix) && strings.HasPrefix(path, prefix) {
-		return path[len(prefix):]
-	}
-	return path
-}
+// The repository used to be shortened HERE, by dropping the prefix every row in
+// view happened to share. That needed no vendor knowledge, which was the appeal
+// and also the bug: it trimmed paths on registries with no such convention, and
+// it made a row say different things depending on which other rows were on the
+// page. The rule now comes from a statement about the vendor rather than from
+// the shape of a result set.
 
 // signedMark renders a package's signature status for a table.
 //
@@ -175,4 +133,17 @@ func displayTag(p v1.Package) string {
 		return p.DisplayTag
 	}
 	return p.Tag
+}
+
+// displayRepository renders a package's repository for a table.
+//
+// Same contract as displayTag, and the same reason: only the source's vendor
+// plugin knows that `orbs/` is structural, so the shortened form is computed
+// there and this package cannot tell it from a path that genuinely begins with
+// those characters.
+func displayRepository(p v1.Package) string {
+	if p.DisplayRepository != "" {
+		return p.DisplayRepository
+	}
+	return p.SourceRepository
 }

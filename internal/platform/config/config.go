@@ -109,6 +109,37 @@ type CoordinatorConfig struct {
 	Reaper         ReaperConfig         `koanf:"reaper"`
 	Queue          QueueConfig          `koanf:"queue"`
 	GC             GCConfig             `koanf:"gc"`
+	ManifestCache  ManifestCacheConfig  `koanf:"manifestCache"`
+}
+
+// ManifestCacheConfig bounds the cached manifest bodies.
+//
+// A package's manifest BODIES are the only thing this system records that grows
+// without limit and can be discarded without losing a fact. Everything else it
+// knows about a package — the artifacts, their digests and sizes, the blobs
+// they reference, the totals — is a few kilobytes and is kept forever.
+//
+// The bodies are large, are read only when a manifest is PUSHED, and are
+// exactly recoverable, because a manifest is addressed by the hash of its own
+// bytes. So they are a cache, and this is its size. Over a vendor catalogue
+// accumulated across years, an unbounded one would be the largest thing in the
+// database by a wide margin.
+//
+// See internal/store/manifestcache.go.
+type ManifestCacheConfig struct {
+	// BudgetBytes is the ceiling. Zero disables the budget entirely, for a
+	// deployment that would rather spend disk than ever re-fetch.
+	BudgetBytes int64 `koanf:"budgetBytes"`
+	// TTL evicts bodies untouched for longer than this, whatever the budget
+	// says. It is what keeps a deployment that discovers far more than it
+	// transfers from carrying a full budget of manifests nobody will push.
+	// Zero disables the age pass.
+	TTL time.Duration `koanf:"ttl"`
+	// SweepInterval is how often the sweeper runs. It is a cheap query against
+	// a partial index, so this is minutes rather than hours; the point of
+	// sweeping often is that the cache stays near its budget instead of sawing
+	// between empty and over.
+	SweepInterval time.Duration `koanf:"sweepInterval"`
 }
 
 type LeaderElectionConfig struct {
@@ -207,6 +238,25 @@ func Defaults() SystemConfig {
 			},
 			Queue: QueueConfig{MaxLeaseBatchSize: 32},
 			GC:    GCConfig{TickInterval: time.Hour, BatchSize: 5000},
+			ManifestCache: ManifestCacheConfig{
+				// 512 MiB and a week.
+				//
+				// Sized against what it is FOR rather than against available
+				// disk. A manifest body is a few kilobytes, so this holds on
+				// the order of a hundred thousand of them — far more than any
+				// plausible working set of packages being replicated in a
+				// week, and a small fraction of the volume a database this
+				// system runs on would be given. The TTL is the bound that
+				// usually bites; the budget is the one that stops a bulk
+				// inspection of an entire catalogue from being unbounded.
+				//
+				// Both are safe to lower aggressively: the cost of a miss is
+				// re-fetching a few kilobytes from the source registry at
+				// transfer time, and nothing else.
+				BudgetBytes:   512 << 20,
+				TTL:           7 * 24 * time.Hour,
+				SweepInterval: 15 * time.Minute,
+			},
 		},
 		Worker: WorkerConfig{
 			CoordinatorEndpoint: "http://localhost:8080",
@@ -343,6 +393,12 @@ func (c SystemConfig) Validate() error {
 	}
 	if r := c.Observability.Tracing.SampleRatio; r < 0 || r > 1 {
 		return fmt.Errorf("observability.tracing.sampleRatio: %v is outside [0,1]", r)
+	}
+	if c.Coordinator.ManifestCache.BudgetBytes < 0 {
+		return fmt.Errorf("coordinator.manifestCache.budgetBytes: must not be negative (0 disables the budget)")
+	}
+	if c.Coordinator.ManifestCache.TTL < 0 {
+		return fmt.Errorf("coordinator.manifestCache.ttl: must not be negative (0 disables expiry)")
 	}
 	if c.Coordinator.Reaper.LeaseDuration <= c.Coordinator.Reaper.TickInterval {
 		return fmt.Errorf(

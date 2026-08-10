@@ -724,8 +724,8 @@ transferctl packages list <product> --tag v1.0.0
 transferctl packages list <product> --state superseded
 transferctl packages list <product> --all        # follow pagination
 
-transferctl packages describe <product> <package>          # artifact tree
-transferctl packages describe <product> <package> --expand # ... and measure the transfer size
+transferctl packages describe <product> <package>  # everything known: tree, size, status
+transferctl packages inspect  <product> <package>  # pull the full contents and measure them
 
 transferctl discover                             # scan EVERY product; never blocks
 transferctl discover <product>                   # scan one, and wait for it
@@ -1094,7 +1094,7 @@ Newest release first, by the vendor's own declared build date — which is the o
 
 Packages whose publisher set no date fall to the **end**, then order by when we found them.
 
-Columns showing `n/a` mean the value genuinely is not known — not zero, and not empty. `SIZE` and `BLOBS` read `n/a` until something walks the tree; `transferctl packages describe --expand` fills them in.
+Columns showing `n/a` mean the value genuinely is not known — not zero, and not empty. `SIZE` and `BLOBS` read `n/a` until something walks the tree; `transferctl packages inspect` fills them in, and `describe` shows them from then on.
 
 **Where does `Published` come from, and why is it sometimes missing?**
 From `org.opencontainers.image.created` on the tag's manifest — a **standard OCI annotation**, not a vendor extension, so it works anywhere it is set. It is optional in the spec, so a publisher that sets none simply has no published date, and we record nothing rather than inventing one.
@@ -1107,18 +1107,35 @@ Every other annotation — including vendor-specific ones like `com.nokia.ncd.or
 transferctl packages describe <product> <tag> -o json | jq '.artifacts[].annotations'
 ```
 
-**`packages list` shows `not measured` and `?` instead of a size**
+**`packages list` shows `n/a` instead of a size**
 Expected, for a package whose root is an index — and it is one command away:
 
 ```bash
-transferctl packages describe <product> <package> --expand
+transferctl packages inspect <product> <package>
 ```
 
-Discovery is deliberately light: it fetches the tag's own manifest and records the artifacts that manifest lists, without a request each. That answers "what is new" in two requests per tag, and it means the layer bytes underneath are not yet known. `--expand` walks the rest and measures it. Safe to repeat — the tree under a digest cannot change, so a second run fetches nothing and says so.
+Discovery is deliberately light: it fetches the tag's own manifest and records the artifacts that manifest lists, without a request each. That answers "what is new" in two requests per tag, and it means the layer bytes underneath are not yet known. `inspect` builds out the rest and measures it, and **records what it found** — so `packages describe` shows the size, the blob count and the full tree from then on, and a transfer of the same package does not repeat the walk.
 
-You do not have to run it before a transfer; a transfer performs the same walk. It is for deciding whether you want the transfer.
+Safe and cheap to repeat: the tree under a digest cannot change, so a second run fetches nothing and says so.
+
+You do not have to run it before a transfer; a transfer performs the same walk if nobody has. It is for deciding whether you want the transfer.
 
 A package whose root is a plain image manifest already shows a real size: its config and layers are inside the one manifest discovery fetched.
+
+**`describe` says some manifest bodies are no longer held locally**
+Also expected, and nothing is missing. A package's *contents* — its artifacts, their digests and sizes, the blobs they reference — are recorded permanently. The manifest **bodies** are a cache in front of the source registry: large, read only when a manifest is pushed, and exactly recoverable because a manifest is addressed by the hash of its own bytes. They are reclaimed least-recently-used once they pass `coordinator.manifestCache.ttl` or the cache exceeds `budgetBytes`.
+
+The cost of a reclaimed body is re-fetching a few kilobytes at transfer time. The cost of *not* reclaiming would be, over a vendor catalogue accumulated across a few years, the largest thing in the database. Watch `swgw_manifest_cache_bytes` and `swgw_manifest_cache_evicted_total{reason="budget"}`: steady expiry is the cache working, while sustained *budget* eviction means the budget is smaller than the working set and every transfer is paying to re-fetch.
+
+**A tag or repository looks different in `list` than in the registry**
+Where a source declares `vendor: near`, listings drop the noise that vendor puts on every name — `orbs/` off the repository, `orb_` off the tag. The full names are what is stored, transferred and returned by `-o json`, and **both spellings work as input**, so anything on your screen can be pasted straight back:
+
+```bash
+transferctl packages list <product> --tag 23.8.1076        # same as --tag orb_23.8.1076
+transferctl packages describe <product> cfx-5000-k8s:23.8.1076
+```
+
+A source with no `vendor` gets no shortening at all. If you are seeing shortened names on a registry that has no such convention, that is the bug this gating fixed — the CLI used to guess the prefix from whatever a page of results had in common.
 
 **Requests are succeeding but the tag counter does not move**
 Largely gone: a newly discovered tag now costs two requests (a `HEAD` then one `GET`) whatever it contains, and an unchanged one costs a single `HEAD`. Discovery no longer walks the artifact tree — see [design 07 §12](design/07-discovery.md). The progress line also reports `N artifacts`, which keeps moving when nothing else does.

@@ -282,11 +282,11 @@ func SourceSpecs(
 				continue
 			}
 
-			// An unknown layout name is fatal FOR THIS SOURCE and no other.
+			// An unknown vendor name is fatal FOR THIS SOURCE and no other.
 			// Falling back to standard behaviour would silently disable
 			// signature discovery for a typo — invisible in every output, since
 			// every package would simply read `unknown` forever.
-			layout, err := layouts.Get(src.Signatures.Layout)
+			layout, err := layouts.Get(src.VendorLayout())
 			if err != nil {
 				errs = append(errs, fmt.Errorf("product %q source %q: %w",
 					p.Metadata.Name, src.Name, err))

@@ -196,6 +196,7 @@ func toAPIProduct(p *product.Product) v1.Product {
 			Repositories:        s.DeclaredRepositories(),
 			RepositoryDiscovery: s.EnumeratesRepositories(),
 			Type:                string(s.Type),
+			Vendor:              s.VendorLayout(),
 			Role:                string(product.RoleSource),
 			Concurrency:         toAPIConcurrency(s.Concurrency),
 			Discovery: &v1.Discovery{

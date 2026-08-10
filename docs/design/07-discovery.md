@@ -260,7 +260,7 @@ This was three separately configured axes — repositories, tags, and briefly ar
 
 That fell out of the fix, and it is an improvement on its own in two ways. The **total tag count is known before any manifest is fetched**, so progress reports a denominator that does not move as it goes — previously `TagsTotal` grew while `TagsResolved` chased it, which is the least useful shape a progress bar can have. And **tags across all repositories now share one pool**: a repository with three tags no longer leaves most of the budget idle while the repository with three hundred waits its turn behind it.
 
-The artifact axis is gone entirely, because the walk it bounded is gone: discovery fetches the tag's own manifest and records what that manifest lists, without fetching the artifacts (§12). `packages describe --expand` walks the rest on demand, with the same bound.
+The artifact axis is gone entirely, because the walk it bounded is gone: discovery fetches the tag's own manifest and records what that manifest lists, without fetching the artifacts (§12). `packages inspect` walks the rest on demand, with the same bound.
 
 Clamped to 128: a typo of `1000` must not become a thousand connections to a vendor.
 
@@ -319,15 +319,25 @@ Discovery answers one question — **what is new** — and stops there. Everythi
 | Runs | on an interval, unattended | on demand, for one package |
 | Answers | is there something new? | what is in it, and how big? |
 
-`POST /api/v1/products/{product}/packages/{package}:inspect` walks the tree: it fetches the artifacts discovery only listed, records their blobs, and measures the transfer size. `transferctl packages describe <product> <package> --expand` is the same thing.
+`POST /api/v1/products/{product}/packages/{package}:inspect` walks the tree: it fetches the artifacts discovery only listed, records their blobs, and measures the transfer size. `transferctl packages inspect <product> <package>` is the same thing, and `packages describe` shows what it recorded from then on.
 
 An AIP-136 custom method rather than a GET, because it has side effects — it writes artifacts, blobs and a measured size. Idempotent all the same: **the tree under a digest cannot change**, so a second call fetches nothing and says `alreadyExpanded`.
 
 ### One walker, two callers
 
-`InspectPackage` is a function, not logic inside an HTTP handler, because **M3's transfer calls it too**. A transfer has to walk the tree anyway — it cannot copy blobs it has not enumerated — so it performs this expansion before moving bytes. That makes `inspect` optional rather than a required first step: it is for deciding whether you *want* the transfer, not for enabling it.
+`expand.Ensure` is a function in its own package, not logic inside an HTTP handler, because **the transfer planner calls it too**. A transfer has to walk the tree anyway — it cannot copy blobs it has not enumerated — so it performs this expansion before moving bytes. That makes `inspect` optional rather than a required first step: it is for deciding whether you *want* the transfer, not for enabling it.
 
-The alternative was two code paths computing what a package contains, which would eventually disagree about something like whether a repeated child counts once.
+The alternative was two code paths computing what a package contains, which would eventually disagree about something like whether a repeated child counts once. That was not hypothetical: `inspect` and the planner each had their own copy of the record-then-walk sequence and a byte-identical `toStoreTree`, held in step by convention alone. They are now one call.
+
+### What is kept, and what is only cached
+
+The walk produces two kinds of thing, and they are stored on different terms.
+
+**Kept forever**: the artifacts, their digests, media types, sizes and platforms; the blobs each references; the totals derived from them. A fully-inspected sixty-artifact bundle costs a few kilobytes of it, and every listing, every `describe` and every plan reads it.
+
+**Cached with a budget**: the manifest BODIES. They are large, they are read only when something *pushes* a manifest, and they are exactly recoverable — a manifest is addressed by the hash of its own bytes, so re-fetching one either returns the same bytes or fails the digest check. Left unbounded they would, over a vendor catalogue accumulated across years, be the largest thing in the database by a wide margin.
+
+The schema keeps the FETCH (`package_artifacts.fetched_at`) separate from the BYTES (`raw`) precisely so eviction stays cheap. Before that split, "have we walked this?" was answered by `raw IS NOT NULL`, so discarding the bytes would have unlearned the walk and the next inspect would have re-read the whole tree — the cache would have been unreclaimable in practice. See docs/design/03-persistence.md §12.
 
 ### It runs through the source's own client
 

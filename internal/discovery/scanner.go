@@ -186,6 +186,14 @@ type ScanResult struct {
 	Superseded   int
 	Requests     int
 
+	// Renamed is how many EXISTING packages had their display name corrected
+	// because the source's `vendor` changed.
+	//
+	// Reported rather than left to a log line, because it is the answer to the
+	// question a person actually has after editing that field: "did it take?".
+	// Zero on every steady-state scan.
+	Renamed int
+
 	// TagErrors are per-tag failures that did not stop the scan.
 	TagErrors []TagError
 	// RepositoryErrors are per-repository failures that did not stop the scan.
@@ -322,6 +330,18 @@ func (s *Scanner) Scan(ctx context.Context) (ScanResult, error) {
 	res.Requests = resolved.Requests
 	res.TagErrors = resolved.TagErrors
 
+	// Display names are RECONCILED on every scan, not written once at discovery.
+	//
+	// Without this, `vendor: near` would only affect tags discovered after it
+	// was set — because the phases above skip a tag already recorded, by design:
+	// one HEAD, no fetch, no grouping. A source whose packages predate the
+	// setting would keep showing `orb_23.8.1076` forever, and re-scanning would
+	// never fix it, which is exactly what a person would try.
+	//
+	// It costs one query per repository and no registry traffic, and it corrects
+	// in both directions: removing the vendor clears the names again.
+	res.Renamed = s.reconcileDisplayNames(ctx, listed.work)
+
 	// Retire discovery-managed rows for repositories that have left the
 	// catalog. Only attempted when enumeration actually succeeded: a failed
 	// catalog call must not be read as "everything disappeared".
@@ -353,6 +373,55 @@ func (s *Scanner) Scan(ctx context.Context) (ScanResult, error) {
 	}
 
 	return res, nil
+}
+
+// reconcileDisplayNames brings stored display tags in line with what the
+// source's vendor plugin says today.
+//
+// Reads once per repository and writes only what disagrees, so the steady state
+// is one cheap SELECT and no writes at all. It runs against every package in the
+// repository, including superseded ones: a superseded row is still listed, and
+// it rendering under a different name from its replacement would be worse than
+// either name alone.
+//
+// Failures are logged and swallowed. A display name is cosmetic, and failing a
+// scan over one — losing the packages that scan discovered — would be a bad
+// trade in every direction.
+func (s *Scanner) reconcileDisplayNames(ctx context.Context, work []tagWork) int {
+	repos := make(map[int64]string, len(work))
+	for _, w := range work {
+		repos[w.repoID] = w.repoPath
+	}
+
+	renamed := 0
+	for repoID, repoPath := range repos {
+		if ctx.Err() != nil {
+			return renamed
+		}
+		rows, err := s.packages.ListPackageDisplayNames(ctx, repoID)
+		if err != nil {
+			s.log.WarnContext(ctx, "could not read display names", "repository", repoPath, "error", err)
+			continue
+		}
+		for _, r := range rows {
+			want := s.layout.DisplayTag(r.Tag)
+			if want == r.DisplayTag {
+				continue
+			}
+			if err := s.packages.SetDisplayTag(ctx, r.ID, want); err != nil {
+				s.log.WarnContext(ctx, "could not update a display name",
+					"repository", repoPath, "tag", r.Tag, "error", err)
+				continue
+			}
+			renamed++
+		}
+	}
+
+	if renamed > 0 {
+		s.log.InfoContext(ctx, "corrected package display names after a vendor change",
+			"source", s.sourceName, "vendor", s.layout.Name(), "packages", renamed)
+	}
+	return renamed
 }
 
 // tagWork is one tag to resolve, with everything needed to resolve it.

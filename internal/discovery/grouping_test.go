@@ -44,6 +44,17 @@ func (wrapperLayout) DisplayRepository(path string) string {
 	return rest
 }
 
+// DisplayTag strips the vendor's release prefix, from the tag string alone —
+// which is what lets the scanner reconcile packages discovered before the
+// source declared its vendor.
+func (wrapperLayout) DisplayTag(tag string) string {
+	rest, ok := strings.CutPrefix(tag, "orb_")
+	if !ok || rest == "" {
+		return ""
+	}
+	return rest
+}
+
 func (wrapperLayout) Group(
 	_ context.Context, _ registry.Source, scanned []vendors.ScannedTag,
 ) ([]vendors.Package, error) {
@@ -82,10 +93,7 @@ func (wrapperLayout) Group(
 		}
 		p := vendors.Package{
 			Tag: s.Tag, Descriptor: s.Descriptor,
-			DisplayTag: strings.TrimPrefix(s.Tag, "orb_"),
-		}
-		if p.DisplayTag == s.Tag {
-			p.DisplayTag = ""
+			DisplayTag: wrapperLayout{}.DisplayTag(s.Tag),
 		}
 		if root, ok := roots[s.Tag]; ok {
 			p.Root = root.Descriptor
@@ -499,4 +507,111 @@ spec:
 		t.Fatal(err)
 	}
 	return s, packages, ref.ID
+}
+
+// THE BUG THIS FIXES, reproduced exactly.
+//
+// Turning `vendor: near` on had no effect on packages already in the database.
+// Display names were computed once, at discovery, and discovery SKIPS a tag it
+// has already recorded — one HEAD, no fetch, no grouping — so the rows kept
+// their unshortened names forever. Re-scanning, which is the obvious thing to
+// try, changed nothing.
+//
+// The fix reconciles stored display names against the layout on every scan,
+// which costs one query per repository and no registry traffic.
+func TestVendorSetAfterDiscoveryRenamesExistingPackages(t *testing.T) {
+	reg := fakeregistry.New()
+	t.Cleanup(reg.Close)
+	seedRelease(t, reg, "orbs/cfx-5000-k8s", "23.8.1076")
+
+	// First: scanned with no vendor, exactly as a source starts life.
+	plain, packages, _ := plainScanner(t, reg, "orbs/cfx-5000-k8s")
+	if _, err := plain.Scan(t.Context()); err != nil {
+		t.Fatalf("first scan: %v", err)
+	}
+
+	before := onlyPackage(t, packages, "orb_23.8.1076")
+	if before.DisplayTag != "" {
+		t.Fatalf("display tag = %q before a vendor was set, want empty", before.DisplayTag)
+	}
+
+	// Now the operator adds `vendor: near` and the next scan runs. Same store,
+	// same registry, same tags — only the layout differs.
+	vendored := rescanWithLayout(t, plain, wrapperLayout{})
+	res, err := vendored.Scan(t.Context())
+	if err != nil {
+		t.Fatalf("second scan: %v", err)
+	}
+
+	// Nothing new was discovered: the tags were all already known. That is the
+	// condition under which the old code did nothing at all.
+	if res.New != 0 {
+		t.Errorf("discovered %d new packages on a re-scan, want 0", res.New)
+	}
+	if res.Renamed == 0 {
+		t.Error("no display names were corrected; setting `vendor` did not take effect " +
+			"on packages that already existed")
+	}
+
+	after := onlyPackage(t, packages, "orb_23.8.1076")
+	if after.DisplayTag != "23.8.1076" {
+		t.Errorf("display tag = %q after setting the vendor, want 23.8.1076", after.DisplayTag)
+	}
+	// The stored tag is untouched. Shortening is cosmetic from beginning to end.
+	if after.Tag != "orb_23.8.1076" {
+		t.Errorf("stored tag = %q, want orb_23.8.1076 — renaming must not touch the identity", after.Tag)
+	}
+	// And the shortened form now resolves, which is the whole point of storing it.
+	if _, err := packages.GetPackage(t.Context(), "vendor-a", "23.8.1076"); err != nil {
+		t.Errorf("the corrected display tag does not resolve as input: %v", err)
+	}
+}
+
+// The correction runs in both directions: removing a vendor must clear the
+// names again, or a source that was misconfigured stays misdescribed.
+func TestRemovingTheVendorClearsDisplayNames(t *testing.T) {
+	reg := fakeregistry.New()
+	t.Cleanup(reg.Close)
+	seedRelease(t, reg, "orbs/cfx-5000-k8s", "23.8.1076")
+
+	vendored, packages, _ := groupingScanner(t, reg, "orbs/cfx-5000-k8s")
+	if _, err := vendored.Scan(t.Context()); err != nil {
+		t.Fatalf("first scan: %v", err)
+	}
+	if got := onlyPackage(t, packages, "orb_23.8.1076").DisplayTag; got != "23.8.1076" {
+		t.Fatalf("display tag = %q after a vendored scan, want 23.8.1076", got)
+	}
+
+	plain := rescanWithLayout(t, vendored, vendors.Standard{})
+	res, err := plain.Scan(t.Context())
+	if err != nil {
+		t.Fatalf("second scan: %v", err)
+	}
+	if res.Renamed == 0 {
+		t.Error("removing the vendor corrected nothing")
+	}
+	if got := onlyPackage(t, packages, "orb_23.8.1076").DisplayTag; got != "" {
+		t.Errorf("display tag = %q after removing the vendor, want empty", got)
+	}
+}
+
+// rescanWithLayout applies the config edit in place.
+//
+// In place rather than by copying: a Scanner carries mutexes and a client
+// cache, and the whole point of the test is that the STORE is the same one the
+// first scan wrote to. The loop rebuilds its scanners on a config reload; what
+// survives that reload, and what this reproduces, is the database.
+func rescanWithLayout(t *testing.T, s *Scanner, l vendors.Layout) *Scanner {
+	t.Helper()
+	s.layout = l
+	return s
+}
+
+func onlyPackage(t *testing.T, packages *store.Packages, tag string) store.PackageRow {
+	t.Helper()
+	row, err := packages.GetPackage(t.Context(), "vendor-a", tag)
+	if err != nil {
+		t.Fatalf("get package %s: %v", tag, err)
+	}
+	return row
 }

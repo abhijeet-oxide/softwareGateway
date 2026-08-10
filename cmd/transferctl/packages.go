@@ -417,6 +417,13 @@ func renderDiscoverResult(w io.Writer, productName string, r *v1.DiscoverPackage
 	fmt.Fprintf(tw, "  Tags after filters\t%d\n", r.TagsAdmitted)
 	fmt.Fprintf(tw, "  New packages\t%d\n", r.PackagesDiscovered)
 	fmt.Fprintf(tw, "  Superseded\t%d\n", r.Superseded)
+	if r.Renamed > 0 {
+		// Shown only when it happened, because it happens exactly once — on the
+		// first scan after a source's `vendor` is edited. It is the direct
+		// answer to "did my config change take effect", which is otherwise
+		// answerable only by going and looking at a listing.
+		fmt.Fprintf(tw, "  Display names corrected\t%d\n", r.Renamed)
+	}
 	fmt.Fprintf(tw, "  Transfer requests created\t%d\n", r.RequestsCreated)
 	if err := tw.Flush(); err != nil {
 		return err

@@ -1137,6 +1137,18 @@ transferctl packages describe <product> cfx-5000-k8s:23.8.1076
 
 A source with no `vendor` gets no shortening at all. If you are seeing shortened names on a registry that has no such convention, that is the bug this gating fixed — the CLI used to guess the prefix from whatever a page of results had in common.
 
+**I set `vendor: near` and the tags still show `orb_`**
+The names are corrected on the next scan, not on config reload. Discovery skips a tag it has already recorded — one `HEAD`, no fetch — so the correction is a separate reconcile pass rather than a side effect of re-discovery:
+
+```bash
+transferctl discover <product>       # look for "Display names corrected"
+transferctl packages list <product>
+```
+
+If it still shows `orb_` after a scan that reported no corrections, check that the Coordinator actually loaded the edit — `transferctl products describe <product>` shows the resolved `vendor` per source, and the loader rejects unknown fields outright, so a `vendor:` key on a build that predates it fails the whole document rather than being ignored.
+
+Note that only the NAMING is retroactive. Whether NEAR's three tags per release were collapsed into one package is decided when those tags are first recorded, and existing rows keep the shape they were discovered with.
+
 **Requests are succeeding but the tag counter does not move**
 Largely gone: a newly discovered tag now costs two requests (a `HEAD` then one `GET`) whatever it contains, and an unchanged one costs a single `HEAD`. Discovery no longer walks the artifact tree — see [design 07 §12](design/07-discovery.md). The progress line also reports `N artifacts`, which keeps moving when nothing else does.
 

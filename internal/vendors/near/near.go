@@ -148,7 +148,7 @@ func (Layout) Group(
 		}
 
 		pkg := vendors.Package{
-			Tag: s.Tag, Descriptor: s.Descriptor, DisplayTag: displayTag(s.Tag),
+			Tag: s.Tag, Descriptor: s.Descriptor, DisplayTag: Layout{}.DisplayTag(s.Tag),
 		}
 
 		if root, ok := roots[s.Tag]; ok {
@@ -200,6 +200,16 @@ func readWrapper(s vendors.ScannedTag) (payloadTag string, sig vendors.Related, 
 	}
 	return payloadTag, sig, true
 }
+
+// DisplayTag removes the `orb_` NEAR puts in front of every version.
+//
+// Derivable from the tag string alone, with no manifest and no registry call,
+// which is what lets the scanner reconcile the stored display names of packages
+// discovered BEFORE this source declared its vendor. Without that, turning
+// `vendor: near` on would only affect tags discovered afterwards — discovery
+// skips a tag it already holds — and every existing package would keep reading
+// `orb_23.8.1076` forever.
+func (Layout) DisplayTag(tag string) string { return displayTag(tag) }
 
 // displayTag removes the `orb_` the vendor puts in front of every version.
 //

@@ -249,6 +249,7 @@ func (s *Server) handleDiscoverPackages(w http.ResponseWriter, r *http.Request) 
 		PackagesDiscovered: res.New,
 		Superseded:         res.Superseded,
 		RequestsCreated:    res.Requests,
+		Renamed:            res.Renamed,
 		DurationMs:         res.Duration.Milliseconds(),
 		Collapsed:          res.Collapsed,
 	}

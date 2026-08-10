@@ -11,14 +11,14 @@ import (
 )
 
 func newProductsCommand() *cobra.Command {
-	cmd := &cobra.Command{
+	cmd := group(&cobra.Command{
 		Use:     "products",
 		Aliases: []string{"product"},
 		Short:   "Inspect configured products",
 		Long: "Products are configured in Git and applied by Flux; they are\n" +
 			"read-only over the API. An API that could mutate them would create\n" +
 			"a second source of truth that Flux would immediately revert.",
-	}
+	})
 	cmd.AddCommand(
 		newProductsListCommand(),
 		newProductsDescribeCommand(),
@@ -30,6 +30,7 @@ func newProductsCommand() *cobra.Command {
 func newProductsListCommand() *cobra.Command {
 	return &cobra.Command{
 		Use:   "list",
+		Args:  cobra.NoArgs,
 		Short: "List configured products",
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			resp, err := newClient().ListProducts(cmd.Context())
@@ -78,10 +79,8 @@ func newProductsListCommand() *cobra.Command {
 }
 
 func newProductsDescribeCommand() *cobra.Command {
-	return &cobra.Command{
-		Use:   "describe <product>",
+	cmd := &cobra.Command{
 		Short: "Show a product's sources, targets and policies",
-		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			p, err := newClient().GetProduct(cmd.Context(), args[0])
 			if err != nil {
@@ -92,6 +91,9 @@ func newProductsDescribeCommand() *cobra.Command {
 			})
 		},
 	}
+
+	takes(cmd, "describe", productArg())
+	return cmd
 }
 
 // enabledState renders the on/off state as an alignable token.
@@ -156,7 +158,6 @@ func discoverySummary(sources []v1.Repository) string {
 
 func newProductsCheckCommand() *cobra.Command {
 	cmd := &cobra.Command{
-		Use:   "check [product]",
 		Short: "Test that configured registries are reachable and credentials work",
 		Long: "Probes every repository a product declares: DNS and TLS, whether the\n" +
 			"credential is accepted, and whether it grants the access the product\n" +
@@ -169,7 +170,6 @@ func newProductsCheckCommand() *cobra.Command {
 			"Run this after editing configuration, when onboarding a vendor, or when\n" +
 			"discovery is finding nothing and you want to know why.\n\n" +
 			"With no argument, every configured product is checked.",
-		Args: cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			name := ""
 			if len(args) == 1 {
@@ -189,6 +189,7 @@ func newProductsCheckCommand() *cobra.Command {
 	// round trips to a third party. The default 30 seconds is not enough and
 	// never was.
 	contactsRegistries(cmd)
+	takes(cmd, "check", optionalProductArg("checks every configured product"))
 	return cmd
 }
 

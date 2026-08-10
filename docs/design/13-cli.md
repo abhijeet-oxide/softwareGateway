@@ -111,6 +111,38 @@ So the split is by what the command does to the world, not by how much detail it
 
 You never have to run `inspect`: a transfer performs the same walk if nobody has. It is for deciding whether you want one.
 
+### Argument errors are part of the interface
+
+Cobra's default for a missing argument is one line:
+
+```
+Error: accepts 2 arg(s), received 1
+```
+
+It names a count. It does not say what the two arguments *are*, which one is missing, what shape the missing one takes, or how to find a value for it — and it is produced by the command that already knows all four. Someone typing `transferctl packages inspect my-product` learns only that they need one more word, not that the missing word is a *tag*.
+
+So a command declares its arguments once, and that declaration produces the usage line, the `--help` section, and the error:
+
+```
+Error: transferctl packages inspect needs 2 arguments, and got 1.
+
+  transferctl packages inspect <product> <package>
+                                         ^^^^^^^^^ missing
+
+  <product>  the configured product to look in
+             list them: transferctl products list
+  <package>  a tag, a digest, or repository:tag — e.g. orb_23.8.1076, …
+             list them: transferctl packages list <product>
+```
+
+Three properties, each of which was a real failure:
+
+- **The three cannot drift.** `Use` said `<product> <package>` while the error said "accepts 2 arg(s)", and only one of those was in front of the user at the moment it mattered.
+- **A usage error exits 2**, not 1. A script that cannot tell "I called this wrong" from "the thing does not exist" retries the one that will never succeed.
+- **A mistyped subcommand fails.** `transferctl pkg inspct a b` printed the help text and exited **zero** — indistinguishable from success to anything automated. It now exits 2 and suggests `inspect`.
+
+The same reasoning applies to `NOT_FOUND`. "package not found" reads as *the package is gone*, when the likelier cause is a reference that was never going to match — a product name typed where a tag belongs, or a version without the vendor's prefix. The message names the reference forms and the command that lists what exists.
+
 ### Shortened names, and where the rule comes from
 
 Where a source declares a `vendor`, listings show that vendor's shortened spelling — `cfx-5000-k8s` rather than `orbs/cfx-5000-k8s`, `23.8.1076` rather than `orb_23.8.1076`. The full names are what is stored, transferred and returned by `-o json`.

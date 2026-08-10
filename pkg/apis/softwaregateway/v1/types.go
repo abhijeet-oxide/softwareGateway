@@ -316,6 +316,18 @@ type Package struct {
 	// supersede each other.
 	SupersededBy string `json:"supersededBy,omitempty"`
 
+	// AccessoryOf names the package this row is PART OF — a signature or a
+	// wrapper the vendor publishes as its own tag.
+	//
+	// Empty for an ordinary package, and empty for every package discovered
+	// under a vendor that groups them, because such a tag never becomes a
+	// package at all. Set only on rows recorded before their source declared a
+	// vendor, which a later scan then grouped.
+	//
+	// A row with this set is hidden from listings by default: it is not a
+	// release. It keeps its history and stays reachable by explicit reference.
+	AccessoryOf string `json:"accessoryOf,omitempty"`
+
 	// SourceRepository is the repository path it was discovered in, e.g.
 	// "suite/core". A product may span several.
 	SourceRepository string `json:"sourceRepository,omitempty"`
@@ -525,7 +537,12 @@ type DiscoverPackagesResponse struct {
 	// Renamed counts EXISTING packages whose display name was corrected because
 	// the source's `vendor` changed. Zero on every steady-state scan; non-zero
 	// exactly once after that field is edited.
-	Renamed    int   `json:"renamed,omitempty"`
+	Renamed int `json:"renamed,omitempty"`
+	// Regrouped counts EXISTING packages re-grouped under a newly declared
+	// vendor — gaining their signature status, their related artifacts and their
+	// transfer root. Same shape as Renamed: zero always, except on the one scan
+	// that follows the edit.
+	Regrouped  int   `json:"regrouped,omitempty"`
 	DurationMs int64 `json:"durationMs"`
 	// TagErrors are per-tag failures that did not stop the scan.
 	TagErrors []string `json:"tagErrors,omitempty"`

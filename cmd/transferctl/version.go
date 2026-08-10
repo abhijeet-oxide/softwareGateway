@@ -15,7 +15,10 @@ func newVersionCommand() *cobra.Command {
 	var clientOnly bool
 
 	cmd := &cobra.Command{
-		Use:   "version",
+		Use: "version",
+		// Declared so a stray argument is refused rather than silently
+		// ignored, which reads as the command having accepted it.
+		Args:  cobra.NoArgs,
 		Short: "Show client and server versions",
 		Long: "Shows the transferctl build and, unless --client is given, the\n" +
 			"Coordinator's build and applied schema version.\n\n" +

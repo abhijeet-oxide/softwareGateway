@@ -615,3 +615,162 @@ func onlyPackage(t *testing.T, packages *store.Packages, tag string) store.Packa
 	}
 	return row
 }
+
+// THE SIGNATURE HALF of the same "vendor set after the fact" problem, and the
+// more serious one.
+//
+// Grouping runs over the tags a scan finds NEW — deliberately, because that is
+// what keeps a re-scan of an unchanged repository down to one HEAD per tag. The
+// consequence: a repository scanned before its source declared a vendor was
+// never grouped again. Its packages read `unknown` forever, carried no
+// signature relation, and had NO TRANSFER ROOT — so moving one would have taken
+// the payload and left the signature behind, which is precisely what the layout
+// exists to prevent. Re-scanning could not fix it, because re-scanning is the
+// path that skips known tags.
+func TestVendorSetAfterDiscoveryRegroupsExistingPackages(t *testing.T) {
+	reg := fakeregistry.New()
+	t.Cleanup(reg.Close)
+	seedRelease(t, reg, "orbs/cfx-5000-k8s", "23.8.1076")
+
+	// Scanned with no vendor: three tags, three packages, nothing related.
+	plain, packages, _ := plainScanner(t, reg, "orbs/cfx-5000-k8s")
+	if _, err := plain.Scan(t.Context()); err != nil {
+		t.Fatalf("first scan: %v", err)
+	}
+
+	before := listPackages(t, packages)
+	if len(before) != 3 {
+		t.Fatalf("listed %d packages under the standard layout, want 3", len(before))
+	}
+	payload := onlyPackage(t, packages, "orb_23.8.1076")
+	if payload.SignatureStatus != "unknown" {
+		t.Fatalf("signature status = %q before a vendor was set, want unknown", payload.SignatureStatus)
+	}
+
+	// The operator sets `vendor: near`. The next scan finds no new tags at all.
+	vendored := rescanWithLayout(t, plain, wrapperLayout{})
+	res, err := vendored.Scan(t.Context())
+	if err != nil {
+		t.Fatalf("second scan: %v", err)
+	}
+	if res.New != 0 {
+		t.Errorf("discovered %d new packages on a re-scan, want 0", res.New)
+	}
+	if res.Regrouped == 0 {
+		t.Fatal("nothing was regrouped; setting `vendor` did not reach packages that already existed")
+	}
+
+	payload = onlyPackage(t, packages, "orb_23.8.1076")
+
+	// The three things a transfer and a security decision actually read.
+	if payload.SignatureStatus != "signed" {
+		t.Errorf("signature status = %q, want signed", payload.SignatureStatus)
+	}
+	if payload.TransferRootDigest == "" {
+		t.Error("no transfer root recorded — a transfer would move the payload without its signature")
+	}
+	if payload.TransferRootTag != "signed_orb_23.8.1076" {
+		t.Errorf("transfer root tag = %q, want signed_orb_23.8.1076", payload.TransferRootTag)
+	}
+
+	rels, err := packages.ListRelations(t.Context(), payload.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	roles := map[string]bool{}
+	for _, r := range rels {
+		roles[r.Role] = true
+	}
+	if !roles["signature"] {
+		t.Error("no signature relation attached")
+	}
+	if !roles["wrapper"] {
+		t.Error("no wrapper relation attached")
+	}
+
+	// And the two accessory tags stop being listed as releases of their own —
+	// which is most of the noise the layout exists to remove. They are not
+	// deleted: a transfer may reference them, and what was shipped has to stay
+	// answerable.
+	after := listPackages(t, packages)
+	if len(after) != 1 {
+		names := make([]string, len(after))
+		for i, p := range after {
+			names[i] = p.Tag
+		}
+		t.Errorf("listed %v after regrouping, want only the payload", names)
+	}
+	if _, err := packages.GetPackage(t.Context(), "vendor-a", "signature_orb_23.8.1076"); err != nil {
+		t.Errorf("an absorbed accessory must stay reachable by name: %v", err)
+	}
+}
+
+// The pass must run ONCE. Keying it off the recorded layout name rather than
+// off a symptom is what guarantees that — a symptom such as "some package still
+// reads unknown" is a state a repository can legitimately stay in forever, and
+// would re-fetch every tag on every scan for the rest of time.
+func TestRegroupingDoesNotRepeat(t *testing.T) {
+	reg := fakeregistry.New()
+	t.Cleanup(reg.Close)
+	seedRelease(t, reg, "orbs/cfx-5000-k8s", "23.8.1076")
+
+	plain, _, _ := plainScanner(t, reg, "orbs/cfx-5000-k8s")
+	if _, err := plain.Scan(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+
+	vendored := rescanWithLayout(t, plain, wrapperLayout{})
+	first, err := vendored.Scan(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if first.Regrouped == 0 {
+		t.Fatal("the first scan under the new vendor regrouped nothing")
+	}
+
+	second, err := vendored.Scan(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if second.Regrouped != 0 {
+		t.Errorf("regrouped %d packages on a second pass; the work must happen once",
+			second.Regrouped)
+	}
+}
+
+// Removing the vendor puts the accessories back. A repository misconfigured
+// with the wrong vendor must be recoverable by fixing the configuration.
+func TestRemovingTheVendorRestoresAccessories(t *testing.T) {
+	reg := fakeregistry.New()
+	t.Cleanup(reg.Close)
+	seedRelease(t, reg, "orbs/cfx-5000-k8s", "23.8.1076")
+
+	plain, packages, _ := plainScanner(t, reg, "orbs/cfx-5000-k8s")
+	if _, err := plain.Scan(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	vendored := rescanWithLayout(t, plain, wrapperLayout{})
+	if _, err := vendored.Scan(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if got := len(listPackages(t, packages)); got != 1 {
+		t.Fatalf("listed %d packages while vendored, want 1", got)
+	}
+
+	back := rescanWithLayout(t, vendored, vendors.Standard{})
+	if _, err := back.Scan(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if got := len(listPackages(t, packages)); got != 3 {
+		t.Errorf("listed %d packages after removing the vendor, want all 3 back", got)
+	}
+}
+
+func listPackages(t *testing.T, packages *store.Packages) []store.PackageRow {
+	t.Helper()
+	rows, err := packages.ListPackages(t.Context(), store.ListPackagesFilter{ProductName: "vendor-a"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return rows
+}

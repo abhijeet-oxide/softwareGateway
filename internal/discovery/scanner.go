@@ -193,6 +193,13 @@ type ScanResult struct {
 	// question a person actually has after editing that field: "did it take?".
 	// Zero on every steady-state scan.
 	Renamed int
+	// Regrouped is how many EXISTING packages were re-grouped under a newly
+	// declared vendor — gaining their signature status, their related artifacts
+	// and their transfer root.
+	//
+	// Also zero on every steady-state scan, and also non-zero exactly once, on
+	// the first scan after the vendor changes.
+	Regrouped int
 
 	// TagErrors are per-tag failures that did not stop the scan.
 	TagErrors []TagError
@@ -328,6 +335,7 @@ func (s *Scanner) Scan(ctx context.Context) (ScanResult, error) {
 	res.New = resolved.New
 	res.Superseded = resolved.Superseded
 	res.Requests = resolved.Requests
+	res.Regrouped = resolved.Regrouped
 	res.TagErrors = resolved.TagErrors
 
 	// Display names are RECONCILED on every scan, not written once at discovery.
@@ -547,7 +555,9 @@ type resolveResult struct {
 	New        int
 	Superseded int
 	Requests   int
-	TagErrors  []TagError
+	// Regrouped counts existing packages corrected by a re-grouping pass.
+	Regrouped int
+	TagErrors []TagError
 }
 
 // resolvePhase turns the flat work list into recorded packages.
@@ -577,6 +587,27 @@ func (s *Scanner) resolvePhase(ctx context.Context, work []tagWork, limit int) r
 	s.progress.update(func(p *ScanProgress) { p.Phase = PhaseResolving })
 
 	resolved := s.headPhase(ctx, work, limit)
+
+	// A repository grouped under a DIFFERENT convention from the one configured
+	// now has to be grouped again, and the head phase has just marked all its
+	// tags `known` — which is exactly what would skip it. So the marks are
+	// cleared for those repositories only.
+	//
+	// This is what makes a source's `vendor` retroactive. Without it, declaring
+	// a vendor after a repository was scanned leaves every existing package
+	// reading `unknown`, carrying no signature relation, and — the part that
+	// actually matters — with no transfer root, so moving one would leave its
+	// signature behind. Re-scanning could never fix it, because re-scanning is
+	// the path that skips known tags.
+	regrouping := s.repositoriesToRegroup(ctx, resolved)
+	if len(regrouping) > 0 {
+		for i := range resolved {
+			if regrouping[resolved[i].work.repoID] {
+				resolved[i].known = false
+			}
+		}
+	}
+
 	for _, r := range resolved {
 		s.progress.update(func(p *ScanProgress) { p.TagsResolved++ })
 		if r.err != nil {
@@ -619,7 +650,18 @@ func (s *Scanner) resolvePhase(ctx context.Context, work []tagWork, limit int) r
 
 	for _, repoPath := range order {
 		group := byRepo[repoPath]
+		repoID := group[0].work.repoID
 		pkgs := s.groupPhase(ctx, group[0].work.client, scannedTagsFor(group))
+
+		// A re-grouping pass starts by forgetting what the previous convention
+		// concluded, so removing a vendor genuinely undoes it rather than
+		// leaving marks derived from a rule that no longer applies.
+		if regrouping[repoID] {
+			if err := s.packages.ClearAccessories(ctx, repoID); err != nil {
+				s.log.WarnContext(ctx, "could not clear accessory marks",
+					"repository", repoPath, "error", err)
+			}
+		}
 
 		// The Layout names packages by tag; this maps back to the fetched oci.Tree
 		// so recording still writes the artifacts we actually verified.
@@ -634,7 +676,7 @@ func (s *Scanner) resolvePhase(ctx context.Context, work []tagWork, limit int) r
 				// The Layout named a tag we did not fetch. Possible when it
 				// groups onto a payload discovered by an earlier scan — the
 				// relations still belong on that existing package.
-				if err := s.attachRelations(ctx, group[0].work, pkg); err != nil {
+				if err := s.attachRelations(ctx, repoID, pkg, regrouping[repoID]); err != nil {
 					s.log.WarnContext(ctx, "could not attach related artifacts",
 						"repository", repoPath, "tag", pkg.Tag, "error", err)
 				}
@@ -656,11 +698,81 @@ func (s *Scanner) resolvePhase(ctx context.Context, work []tagWork, limit int) r
 				res.Superseded += outcome.superseded
 				res.Requests += outcome.requests
 				s.progress.update(func(p *ScanProgress) { p.New++ })
+				continue
+			}
+
+			// The package already existed. On an ordinary scan that means a
+			// concurrent one won the race and there is nothing to do — but on a
+			// re-grouping pass it is the WHOLE POINT: this is a package recorded
+			// under the previous convention, and its relations, signature status
+			// and transfer root are what we came to correct.
+			if regrouping[repoID] {
+				if err := s.attachRelations(ctx, repoID, pkg, true); err != nil {
+					s.log.WarnContext(ctx, "could not regroup an existing package",
+						"repository", repoPath, "tag", pkg.Tag, "error", err)
+					continue
+				}
+				res.Regrouped++
+			}
+		}
+
+		// Recorded only after the pass succeeded for this repository. A failure
+		// must leave the old value so the next scan retries, rather than
+		// concluding the work was done.
+		if regrouping[repoID] {
+			if err := s.packages.SetGroupedLayout(ctx, repoID, s.layout.Name()); err != nil {
+				s.log.WarnContext(ctx, "could not record the grouping convention",
+					"repository", repoPath, "error", err)
 			}
 		}
 	}
 
 	return res
+}
+
+// repositoriesToRegroup reports which repositories were grouped under a
+// different convention from the one configured now.
+//
+// Cheap: one query per repository in the scan, and it answers "no" for every
+// repository on every scan after the one that reconciles it. That termination
+// is the reason this keys off the RECORDED LAYOUT NAME rather than off a
+// symptom such as "some package still reads unknown" — a repository can
+// legitimately contain unsigned packages forever, and a symptom-based trigger
+// would re-fetch every tag of it on every scan for the rest of time.
+func (s *Scanner) repositoriesToRegroup(ctx context.Context, resolved []resolvedTag) map[int64]bool {
+	want := s.layout.Name()
+	seen := map[int64]bool{}
+	out := map[int64]bool{}
+
+	for _, r := range resolved {
+		id := r.work.repoID
+		if id == 0 || seen[id] {
+			continue
+		}
+		seen[id] = true
+
+		got, err := s.packages.GroupedLayout(ctx, id)
+		if err != nil {
+			s.log.WarnContext(ctx, "could not read the recorded grouping convention",
+				"repository", r.work.repoPath, "error", err)
+			continue
+		}
+		if got == want {
+			continue
+		}
+		out[id] = true
+		s.log.InfoContext(ctx, "regrouping a repository under a new vendor convention",
+			"repository", r.work.repoPath, "was", dashIfEmpty(got), "now", want)
+	}
+	return out
+}
+
+// dashIfEmpty renders "never grouped" for a log line.
+func dashIfEmpty(s string) string {
+	if s == "" {
+		return "(never grouped)"
+	}
+	return s
 }
 
 // clientFor returns the cached client for a repository, building it on first

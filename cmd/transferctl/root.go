@@ -193,6 +193,14 @@ func exitCodeFor(err error) int {
 	if errors.As(err, &pf) {
 		return exitPartialFailure
 	}
+
+	// A bad invocation is exit 2, not 1. A script that cannot tell "I called
+	// this wrong" from "the thing I asked about does not exist" retries the one
+	// that will never succeed.
+	var ue usageError
+	if errors.As(err, &ue) {
+		return exitUsage
+	}
 	return exitError
 }
 

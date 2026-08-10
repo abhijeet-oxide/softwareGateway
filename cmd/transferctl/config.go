@@ -12,10 +12,10 @@ import (
 )
 
 func newConfigCommand() *cobra.Command {
-	cmd := &cobra.Command{
+	cmd := group(&cobra.Command{
 		Use:   "config",
 		Short: "Work with product configuration",
-	}
+	})
 	cmd.AddCommand(newConfigValidateCommand())
 	return cmd
 }
@@ -24,7 +24,6 @@ func newConfigValidateCommand() *cobra.Command {
 	var secretsDir string
 
 	cmd := &cobra.Command{
-		Use:   "validate <directory>",
 		Short: "Validate product configuration offline",
 		Long: "Validates every product document in a directory using the SAME\n" +
 			"validator the Coordinator runs at load.\n\n" +
@@ -34,7 +33,6 @@ func newConfigValidateCommand() *cobra.Command {
 			"rather than at reconcile time.\n\n" +
 			"Secret existence is only checked when --secrets-dir is given, so\n" +
 			"this works in CI where cluster Secrets are legitimately absent.",
-		Args: cobra.ExactArgs(1),
 		RunE: func(_ *cobra.Command, args []string) error {
 			dir := args[0]
 
@@ -67,6 +65,10 @@ func newConfigValidateCommand() *cobra.Command {
 
 	cmd.Flags().StringVar(&secretsDir, "secrets-dir", "",
 		"also verify that referenced secrets exist under this directory")
+	takes(cmd, "validate", argSpec{
+		Name: "directory",
+		Help: "a directory of product documents, e.g. ./dev/products",
+	})
 	return cmd
 }
 

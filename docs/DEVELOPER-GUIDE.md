@@ -1137,6 +1137,46 @@ transferctl packages describe <product> cfx-5000-k8s:23.8.1076
 
 A source with no `vendor` gets no shortening at all. If you are seeing shortened names on a registry that has no such convention, that is the bug this gating fixed — the CLI used to guess the prefix from whatever a page of results had in common.
 
+**How do I check a package's signature? (and what does SIGNED actually mean)**
+
+Two different questions, and this build answers only the first.
+
+| | Implemented | What it tells you |
+|---|---|---|
+| Is a signature **present**? | yes | the vendor published one, and where it is |
+| Is that signature **valid**? | **no** — M5 | nothing yet |
+
+The `SIGNED` column and `signatureStatus` report **presence**, discovered by the source's vendor plugin. Nothing in this build builds a certificate chain, consults a trust root, or checks a signature against a key — so `SIGNED` means "the vendor published a signature artifact alongside this release", not "we checked it and it is theirs". `packages describe` says so in as many words, deliberately, because that column is exactly the sort of thing a release decision gets made on.
+
+The three states are worth distinguishing:
+
+| | Meaning |
+|---|---|
+| `signed` | a signature artifact was found |
+| `unsigned` | the source's plugin looked, and the vendor published none |
+| `n/a` | **nobody looked** — the source declares no `vendor`, so no plugin knows where this vendor puts signatures |
+
+`n/a` is not a weaker `no`. A source with no `vendor` reports `n/a` for everything, including releases that are in fact signed.
+
+**Specifically for NEAR / orb packages**
+
+NEAR publishes three tags per release, and the signature is a tag of its own:
+
+```
+orb_23.8.1076              the payload — an index of Helm charts and images
+signature_orb_23.8.1076    one layer, media type application/pkcs7-signature
+signed_orb_23.8.1076       an index referencing both of the above
+```
+
+With `vendor: near` set on the source, discovery collapses those into one package, records the signature as a related artifact, and makes `signed_orb_X` the **transfer root** — so a transfer walks the wrapper and the signature travels with the payload. Without that, replicating `orb_23.8.1076` would move the payload and leave the signature behind, and destination-side verification would be impossible for good. To see what was recorded:
+
+```bash
+transferctl packages describe <product> orb_23.8.1076
+transferctl packages describe <product> orb_23.8.1076 -o json | jq '.package.related'
+```
+
+When verification lands it will be **CMS/PKCS#7 (RFC 5652)** against a CA root, configured as `signatures.format: pkcs7` and `signatures.trustBundleRef` — both of which are accepted and stored today. It is explicitly **not** Sigstore: cosign cannot verify a NEAR signature and has no part in it. To check one by hand in the meantime, pull the signature blob and verify it with `openssl cms` against your CA.
+
 **I set `vendor: near` and the tags still show `orb_`**
 The names are corrected on the next scan, not on config reload. Discovery skips a tag it has already recorded — one `HEAD`, no fetch — so the correction is a separate reconcile pass rather than a side effect of re-discovery:
 

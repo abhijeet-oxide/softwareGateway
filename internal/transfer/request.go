@@ -75,10 +75,25 @@ type ProductView struct {
 
 // Catalog supplies product configuration joined to catalog row IDs.
 //
-// A consumer-defined interface: this package needs one lookup, not the product
-// loader, the secret resolver and the reconciler that produce it.
+// A consumer-defined interface: this package needs three lookups, not the
+// product loader, the secret resolver and the reconciler that produce them.
 type Catalog interface {
 	ProductView(ctx context.Context, productName string) (ProductView, error)
+
+	// RepositoryByID resolves an existing catalog row.
+	//
+	// Needed because a configured SOURCE does not map to one row: a source that
+	// enumerates the registry's catalog owns a row per repository it found,
+	// named "<source>/<path>". A package therefore knows its own row, and that
+	// row — not the configured name — is what a replication reads from.
+	RepositoryByID(ctx context.Context, repositoryID int64) (RepoView, error)
+
+	// EnsureTarget returns the catalog row for a configured target, creating it
+	// if nothing has been written there yet.
+	//
+	// A target that has never received a transfer has no row, and a request
+	// naming it must still work — the row is what the transfer points at.
+	EnsureTarget(ctx context.Context, productName string, target RepoView) (int64, error)
 }
 
 // CreateRequest is a request as a person expressed it, before resolution.
@@ -158,7 +173,7 @@ func (r *Requester) Resolve(ctx context.Context, req CreateRequest) (Resolved, e
 		return Resolved{}, err
 	}
 
-	origin, err := resolveOrigin(view, req)
+	origin, err := resolveOrigin(ctx, r.catalog, view, req)
 	if err != nil {
 		return Resolved{}, err
 	}
@@ -174,7 +189,7 @@ func (r *Requester) Resolve(ctx context.Context, req CreateRequest) (Resolved, e
 			origin.Name, origin.Name)
 	}
 
-	targets, err := resolveTargets(view, req, operation, origin)
+	targets, err := r.resolveTargets(ctx, view, req, operation, origin)
 	if err != nil {
 		return Resolved{}, err
 	}
@@ -218,8 +233,14 @@ func (r *Requester) Create(ctx context.Context, req CreateRequest) (CreateResult
 		return out, nil
 	}
 
+	if resolved.Origin.RepositoryID == 0 {
+		return out, fmt.Errorf("origin %q has no catalog row", resolved.Origin.Name)
+	}
 	targetIDs := make([]int64, 0, len(resolved.Targets))
 	for _, t := range resolved.Targets {
+		if t.RepositoryID == 0 {
+			return out, fmt.Errorf("target %q has no catalog row", t.Name)
+		}
 		targetIDs = append(targetIDs, t.RepositoryID)
 	}
 
@@ -305,33 +326,116 @@ func (r *Requester) Create(ctx context.Context, req CreateRequest) (CreateResult
 // ---------------------------------------------------------------------------
 
 // resolveOrigin finds where the bytes come from.
-func resolveOrigin(view ProductView, req CreateRequest) (RepoView, error) {
+//
+// # Why a replication does not look its origin up by name
+//
+// A configured source does not map to one repository row. A source that
+// enumerates the registry's catalog owns a row per repository it found, named
+// "<source>/<path>" — so resolving the configured name finds nothing, and a
+// name lookup here silently produced a zero row ID and a foreign-key violation
+// at insert.
+//
+// The package already knows the row it came from, and that row is
+// authoritative: a package belongs to the repository that produced it. So a
+// replication resolves its origin from the PACKAGE, and `--from` naming a
+// source is a check against that rather than a lookup.
+func resolveOrigin(
+	ctx context.Context, catalog Catalog, view ProductView, req CreateRequest,
+) (RepoView, error) {
+	// A target named explicitly, or the promotion path's source environment:
+	// both are targets, and a target is exactly one row.
 	if req.From != "" {
-		return byName(view, req.From)
+		if t, ok := targetNamed(view, req.From); ok {
+			return t, nil
+		}
+	} else if req.Promote {
+		return promotionOrigin(view)
 	}
 
-	if req.Promote {
-		// The promotion path's `from` environment. Ambiguity here is refused
-		// rather than guessed: picking one of two labs for somebody is the
-		// wrong kind of convenience.
+	origin, err := catalog.RepositoryByID(ctx, req.Row.SourceRepoID)
+	if err != nil {
+		return RepoView{}, fmt.Errorf(
+			"package %s names a repository that is no longer in the catalog: %w",
+			req.Package, err)
+	}
+
+	if req.From == "" {
+		return origin, nil
+	}
+
+	// `--from` named something. It was not a target, so it has to be the
+	// configured source this package actually came from — checked rather than
+	// looked up, so a typo is caught instead of silently ignored.
+	if configuredName(origin.Name) == req.From || origin.Name == req.From {
+		return origin, nil
+	}
+	return RepoView{}, fmt.Errorf(
+		"package %s was not discovered under %q, but under %q"+
+			"\nomit --from to copy from where it was discovered, or name a target to promote from",
+		req.Package, req.From, configuredName(origin.Name))
+}
+
+// promotionOrigin resolves the target a promotion reads from.
+func promotionOrigin(view ProductView) (RepoView, error) {
+	if hasEnvironments(view) {
 		return exactlyOneIn(view.Targets, view.PromotionFrom, "--from")
 	}
 
-	// Replication reads from where the package was discovered. The row is
-	// authoritative — a package belongs to the repository that produced it.
-	for _, s := range view.Sources {
-		if s.RepositoryID == req.Row.SourceRepoID {
-			return s, nil
+	// No target declares an environment. Rather than refuse outright, take the
+	// one deduction that is unambiguous: promotion moves OUT of a target that
+	// accepts replication and INTO one that does not, so a product with a
+	// single ordinary target and a promotionOnly one needs no configuration at
+	// all to promote between them.
+	ordinary := make([]RepoView, 0, len(view.Targets))
+	for _, t := range view.Targets {
+		if !t.PromotionOnly {
+			ordinary = append(ordinary, t)
 		}
 	}
+	if len(ordinary) == 1 {
+		return ordinary[0], nil
+	}
 	return RepoView{}, fmt.Errorf(
-		"package %s was discovered in a repository product %q no longer configures"+
-			"\nname an origin explicitly with --from", req.Package, view.Name)
+		"cannot tell which target to promote from: no target of product %q declares an "+
+			"environment, and %d could be the origin"+
+			"\nname one with --from, or set `environment:` on the targets",
+		view.Name, len(ordinary))
+}
+
+// configuredName recovers which configured entry a repository row belongs to.
+//
+// One configured source can own several rows — "<source>/<path>" per
+// enumerated repository — and the configured name is everything before the
+// first slash. A configured name may not itself contain one, which is what
+// makes the split unambiguous rather than a guess.
+func configuredName(rowName string) string {
+	if i := strings.Index(rowName, "/"); i > 0 {
+		return rowName[:i]
+	}
+	return rowName
+}
+
+func targetNamed(view ProductView, name string) (RepoView, bool) {
+	for _, t := range view.Targets {
+		if t.Name == name {
+			return t, true
+		}
+	}
+	return RepoView{}, false
+}
+
+func hasEnvironments(view ProductView) bool {
+	for _, t := range view.Targets {
+		if t.Environment != "" {
+			return true
+		}
+	}
+	return false
 }
 
 // resolveTargets finds where the bytes go.
-func resolveTargets(
-	view ProductView, req CreateRequest, operation string, origin RepoView,
+func (r *Requester) resolveTargets(
+	ctx context.Context, view ProductView, req CreateRequest, operation string, origin RepoView,
 ) ([]RepoView, error) {
 	targets, err := selectTargets(view, req, operation)
 	if err != nil {
@@ -339,6 +443,21 @@ func resolveTargets(
 	}
 	if len(targets) == 0 {
 		return nil, fmt.Errorf("product %q has no enabled target to copy to", view.Name)
+	}
+
+	// A target that has never received a transfer has no catalog row yet, and
+	// a transfer has to point at one. Created here rather than assumed: the
+	// alternative silently produced a zero ID and a foreign-key violation on
+	// insert, which named a constraint instead of the target.
+	for i := range targets {
+		if targets[i].RepositoryID != 0 {
+			continue
+		}
+		id, err := r.catalog.EnsureTarget(ctx, view.Name, targets[i])
+		if err != nil {
+			return nil, fmt.Errorf("register target %q: %w", targets[i].Name, err)
+		}
+		targets[i].RepositoryID = id
 	}
 
 	for _, t := range targets {
@@ -383,23 +502,55 @@ func selectTargets(view ProductView, req CreateRequest, operation string) ([]Rep
 		return out, nil
 
 	case operation == "promote":
-		t, err := exactlyOneIn(view.Targets, view.PromotionTo, "--to")
-		if err != nil {
-			return nil, err
+		if hasEnvironments(view) {
+			t, err := exactlyOneIn(view.Targets, view.PromotionTo, "--to")
+			if err != nil {
+				return nil, err
+			}
+			return []RepoView{t}, nil
 		}
-		return []RepoView{t}, nil
+		// No environments declared. A promotion goes INTO a target that
+		// refuses direct replication, so one promotionOnly target is
+		// unambiguous without any configuration at all.
+		var only []RepoView
+		for _, t := range view.Targets {
+			if t.PromotionOnly {
+				only = append(only, t)
+			}
+		}
+		if len(only) == 1 {
+			return only, nil
+		}
+		return nil, fmt.Errorf(
+			"cannot tell which target to promote to: no target of product %q declares an "+
+				"environment, and %d are promotionOnly"+
+				"\nname one with --to, or set `environment:` on the targets",
+			view.Name, len(only))
 
 	default:
-		// Replication with no destination named: the default target, which
-		// exists precisely so the common case needs no flag.
+		// Nothing named. Ask only what cannot be deduced.
+		//
+		// One enabled target is not a choice, so `default: true` should not be
+		// required to express it — a product with a single destination needs no
+		// flag and no configuration to say the obvious.
+		if len(view.Targets) == 1 {
+			return []RepoView{view.Targets[0]}, nil
+		}
+		// Several: the one declared default, which exists precisely for this.
 		for _, t := range view.Targets {
 			if t.Default {
 				return []RepoView{t}, nil
 			}
 		}
+		// Several, none default — but if all but one are promotionOnly, the
+		// remaining one is still the only thing a replication could mean.
+		if candidates := replicable(view.Targets); len(candidates) == 1 {
+			return candidates, nil
+		}
 		return nil, fmt.Errorf(
-			"product %q declares no default target"+
-				"\nname one with --to, or set `default: true` on a target", view.Name)
+			"product %q has %d targets and declares no default"+
+				"\nname one with --to, or set `default: true` on one of them",
+			view.Name, len(view.Targets))
 	}
 }
 
@@ -449,6 +600,17 @@ func exactlyOneIn(targets []RepoView, environment, flag string) (RepoView, error
 		return RepoView{}, fmt.Errorf("%d targets are in environment %q: %s\n%s",
 			len(matches), environment, strings.Join(names, ", "), hint)
 	}
+}
+
+// replicable is the targets a direct replication could legally reach.
+func replicable(targets []RepoView) []RepoView {
+	var out []RepoView
+	for _, t := range targets {
+		if !t.PromotionOnly {
+			out = append(out, t)
+		}
+	}
+	return out
 }
 
 func inEnvironment(targets []RepoView, environment string) []RepoView {

@@ -19,6 +19,7 @@ import (
 	"time"
 
 	"github.com/abhijeet-oxide/softwareGateway/internal/store"
+	"github.com/abhijeet-oxide/softwareGateway/internal/transfer"
 )
 
 // Defaults from docs/design/04 §4.3 and §7.1.
@@ -193,7 +194,7 @@ func (q *Queue) releaseAll(ctx context.Context, workerID string, jobs []store.Le
 			Owner:      workerID,
 			Outcome:    "failed",
 			Attempt:    j.Attempt,
-			ErrorClass: "configuration",
+			ErrorClass: transfer.ClassConfiguration,
 			ErrorMsg:   cause.Error(),
 		})
 		if err != nil {
@@ -210,6 +211,19 @@ func (q *Queue) Progress(ctx context.Context, jobID int64, workerID string, byte
 
 // Complete records a finished job and everything that follows from it.
 func (q *Queue) Complete(ctx context.Context, c store.Completion) (store.CompletionResult, error) {
+	// The attempt cap is decided HERE, from the error class, rather than being
+	// the column default for everything (docs/design/11 §2.3). A transient 5xx
+	// deserves eight attempts because registries recover; a digest mismatch
+	// deserves two because retrying rarely helps; an auth failure or a
+	// misconfigured worker deserves one, because credentials do not fix
+	// themselves and hammering an auth endpoint gets the fleet throttled.
+	//
+	// The policy existed and was never consulted, so every job got eight
+	// whatever went wrong.
+	if c.Outcome == "failed" && c.MaxAttempts == 0 {
+		c.MaxAttempts = transfer.MaxAttemptsFor(c.ErrorClass)
+	}
+
 	res, err := q.packages.CompleteJob(ctx, c)
 	if err != nil {
 		return res, err

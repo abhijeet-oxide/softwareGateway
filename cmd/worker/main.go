@@ -125,8 +125,26 @@ func run() error {
 		return fmt.Errorf("load product configuration from %s: %w", cfg.ProductsDir(), err)
 	}
 	products.Swap(loaded)
+
+	// A worker with no products can lease nothing it could execute. Refusing to
+	// start is the whole point: the alternative is what happened on the first
+	// real run — the worker came up, leased two and a half thousand jobs, and
+	// failed every one of them, consuming an attempt each time because attempts
+	// are counted at LEASE time. A worker that cannot do the work must not take
+	// it.
+	//
+	// The loader returns no error for a missing directory, which is right for
+	// the Coordinator — configuration can arrive later via the watcher — and
+	// wrong here, so the check belongs at this end.
+	if products.Count() == 0 {
+		return fmt.Errorf(
+			"no product configuration in %s: this worker would lease jobs it cannot execute"+
+				"\npoint it at the same configuration the Coordinator uses, with --config",
+			cfg.ProductsDir())
+	}
 	logger.Info("product configuration loaded",
-		"products", products.Count(), "invalid", len(products.Invalid()))
+		"products", products.Count(), "invalid", len(products.Invalid()),
+		"dir", cfg.ProductsDir())
 
 	coordinator := v1.NewClient(cfg.Worker.CoordinatorEndpoint,
 		v1.WithUserAgent("softwaregateway-worker/"+info.Version))

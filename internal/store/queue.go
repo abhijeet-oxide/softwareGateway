@@ -449,6 +449,14 @@ type Completion struct {
 	// transaction: the lease set it and the two always agree, so a second read
 	// would buy nothing.
 	Attempt int
+	// MaxAttempts caps the retries for THIS failure's error class, from
+	// docs/design/11 §2.3 — a digest mismatch is worth two attempts where a
+	// transient 5xx is worth eight.
+	//
+	// Zero means "whatever the row says", which is the column default. The cap
+	// only ever lowers it: a class-specific budget is a reason to stop sooner,
+	// never a licence to exceed what the row allows.
+	MaxAttempts int
 }
 
 // CompletionResult reports what the completion did beyond the job itself.
@@ -494,11 +502,13 @@ func (p *Packages) CompleteJob(ctx context.Context, c Completion) (CompletionRes
 		wave         int
 		owner        sql.NullString
 		state        string
+		rowMax       int
 	)
 	err = tx.QueryRowContext(ctx, p.dialect.Rewrite(`
-		SELECT transfer_id, kind, digest, size_bytes, target_repo_id, wave, lease_owner, state
+		SELECT transfer_id, kind, digest, size_bytes, target_repo_id, wave, lease_owner,
+		       state, max_attempts
 		  FROM jobs WHERE id = ?`), c.JobID).
-		Scan(&transferID, &kind, &digest, &size, &targetRepoID, &wave, &owner, &state)
+		Scan(&transferID, &kind, &digest, &size, &targetRepoID, &wave, &owner, &state, &rowMax)
 	if errors.Is(err, sql.ErrNoRows) {
 		return res, fmt.Errorf("job %d not found", c.JobID)
 	}
@@ -513,7 +523,16 @@ func (p *Packages) CompleteJob(ctx context.Context, c Completion) (CompletionRes
 	}
 	res.Applied = true
 
-	if err := p.applyJobOutcome(ctx, tx, c); err != nil {
+	// The effective cap is the LOWER of the row's budget and the class's.
+	// Computed here rather than in SQL because the two dialects spell the
+	// minimum of two scalars differently, and one Go comparison is clearer
+	// than a dialect method for it.
+	effectiveMax := rowMax
+	if c.MaxAttempts > 0 && c.MaxAttempts < effectiveMax {
+		effectiveMax = c.MaxAttempts
+	}
+
+	if err := p.applyJobOutcome(ctx, tx, c, effectiveMax); err != nil {
 		return res, err
 	}
 
@@ -560,7 +579,9 @@ func placementSource(c Completion) string {
 // returns to `pending` behind a backoff, and — crucially — keeps
 // bytes_transferred, so a retry resumes the accounting rather than restarting
 // it (docs/design/04 §11).
-func (p *Packages) applyJobOutcome(ctx context.Context, tx *sql.Tx, c Completion) error {
+func (p *Packages) applyJobOutcome(
+	ctx context.Context, tx *sql.Tx, c Completion, maxAttempts int,
+) error {
 	if c.Outcome != "failed" {
 		skip := nullIfEmpty(c.SkipReason)
 		_, err := tx.ExecContext(ctx, p.dialect.Rewrite(`
@@ -585,19 +606,19 @@ func (p *Packages) applyJobOutcome(ctx context.Context, tx *sql.Tx, c Completion
 	// the lease incremented.
 	_, err := tx.ExecContext(ctx, p.dialect.Rewrite(`
 		UPDATE jobs
-		   SET state = CASE WHEN attempts >= max_attempts THEN 'failed' ELSE 'pending' END,
+		   SET state = CASE WHEN attempts >= ? THEN 'failed' ELSE 'pending' END,
 		       last_error        = ?,
 		       last_error_class  = ?,
 		       bytes_transferred = ?,
 		       lease_owner       = NULL,
 		       lease_expires_at  = NULL,
 		       next_visible_at   = `+p.dialect.TimeAhead("?")+`,
-		       completed_at      = CASE WHEN attempts >= max_attempts
+		       completed_at      = CASE WHEN attempts >= ?
 		                                THEN `+p.dialect.Now()+` ELSE NULL END,
 		       updated_at        = `+p.dialect.Now()+`
 		 WHERE id = ?`),
-		nullIfEmpty(c.ErrorMsg), nullIfEmpty(c.ErrorClass), c.BytesTransferred,
-		retryDelay(c.Attempt).Seconds(), c.JobID)
+		maxAttempts, nullIfEmpty(c.ErrorMsg), nullIfEmpty(c.ErrorClass), c.BytesTransferred,
+		retryDelay(c.Attempt).Seconds(), maxAttempts, c.JobID)
 	if err != nil {
 		return fmt.Errorf("fail job %d: %w", c.JobID, err)
 	}

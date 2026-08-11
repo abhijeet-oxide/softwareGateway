@@ -204,7 +204,7 @@ func (l *Loop) run(ctx context.Context, id int64, job v1.LeasedJob) {
 	if err != nil {
 		l.report(ctx, id, job, transfer.Result{
 			Outcome:    transfer.OutcomeFailed,
-			ErrorClass: "configuration",
+			ErrorClass: transfer.ClassConfiguration,
 			Err:        err,
 		})
 		return

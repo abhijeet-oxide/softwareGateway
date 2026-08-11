@@ -727,6 +727,114 @@ type CheckConnectivityResponse struct {
 }
 
 // ---------------------------------------------------------------------------
+// Calibration
+// ---------------------------------------------------------------------------
+//
+// A sibling of the connectivity check and a different question: not "can we
+// reach it" but "how fast is it, and what setting would make it faster". It
+// moves real data in both directions and takes minutes, which is why it is its
+// own custom method rather than a mode of the check.
+
+// CalibrateRequest is POST /api/v1/products/{product}:calibrate.
+type CalibrateRequest struct {
+	// Source and Target name configured entries. Empty picks the product's
+	// only source, and its default target.
+	Source string `json:"source,omitempty"`
+	Target string `json:"target,omitempty"`
+	// SourceRepository overrides which repository the read probe reads.
+	SourceRepository string `json:"sourceRepository,omitempty"`
+
+	// Levels are the concurrency levels to sweep. Empty uses the default.
+	Levels []int `json:"levels,omitempty"`
+	// BudgetSeconds is how long ONE level runs.
+	BudgetSeconds float64 `json:"budgetSeconds,omitempty"`
+
+	// Write enables the target-side probe, which opens upload sessions and
+	// cancels them. Nil means the server's default, which is on.
+	Write *bool `json:"write,omitempty"`
+
+	// BundleBytes projects the measured ceiling onto a transfer size.
+	BundleBytes Int64String `json:"bundleBytes,omitempty"`
+}
+
+// CalibrateResponse is one calibration run.
+type CalibrateResponse struct {
+	Product string `json:"product"`
+	// MeasuredFrom is the host that ran the probes, and it is load-bearing: a
+	// measurement of the Coordinator's network describes the workers' network
+	// only when they share one.
+	MeasuredFrom string  `json:"measuredFrom"`
+	StartedAt    string  `json:"startedAt"`
+	DurationSec  float64 `json:"durationSeconds"`
+
+	Source CalibrationSide `json:"source"`
+	Target CalibrationSide `json:"target"`
+
+	Suggestions []CalibrationSuggestion `json:"suggestions"`
+	Notes       []string                `json:"notes,omitempty"`
+}
+
+// CalibrationSide is everything measured about one end of the path.
+type CalibrationSide struct {
+	Role       string `json:"role"`
+	Name       string `json:"name"`
+	Registry   string `json:"registry"`
+	Repository string `json:"repository,omitempty"`
+
+	Route CalibrationRoute `json:"route"`
+	RTTMs float64          `json:"rttMs,omitempty"`
+
+	Levels []CalibrationLevel `json:"levels,omitempty"`
+	// Knee is the smallest concurrency within a tenth of the best measured —
+	// the level worth configuring.
+	Knee int `json:"knee,omitempty"`
+	// StillClimbing means the sweep ended before the path did.
+	StillClimbing bool `json:"stillClimbing,omitempty"`
+	// Skipped explains why there are no measurements, when there are none.
+	Skipped string `json:"skipped,omitempty"`
+}
+
+// CalibrationRoute is what the traffic goes through, and what it would do the
+// other way.
+type CalibrationRoute struct {
+	Configured      string  `json:"configured"`
+	ProxyInUse      bool    `json:"proxyInUse"`
+	DirectTested    bool    `json:"directTested,omitempty"`
+	DirectReachable bool    `json:"directReachable,omitempty"`
+	DirectDetail    string  `json:"directDetail,omitempty"`
+	ProxiedRate     float64 `json:"proxiedRateBytesPerSecond,omitempty"`
+	DirectRate      float64 `json:"directRateBytesPerSecond,omitempty"`
+}
+
+// CalibrationLevel is one concurrency level's measurement.
+type CalibrationLevel struct {
+	Concurrency int         `json:"concurrency"`
+	Bytes       Int64String `json:"bytes"`
+	Seconds     float64     `json:"seconds"`
+	Rate        float64     `json:"rateBytesPerSecond"`
+	PerStream   float64     `json:"perStreamBytesPerSecond"`
+	Requests    int         `json:"requests"`
+	Errors      int         `json:"errors,omitempty"`
+	Throttled   int         `json:"throttled,omitempty"`
+	TTFBMs      float64     `json:"ttfbMs,omitempty"`
+	FirstError  string      `json:"firstError,omitempty"`
+}
+
+// CalibrationSuggestion is one thing to change, or one reason not to.
+type CalibrationSuggestion struct {
+	Severity string `json:"severity"`
+	// Setting is the configuration key, in the spelling the file uses. Empty
+	// for a finding with no knob behind it.
+	Setting   string `json:"setting,omitempty"`
+	Scope     string `json:"scope,omitempty"`
+	Current   string `json:"current,omitempty"`
+	Suggested string `json:"suggested,omitempty"`
+	// Evidence is the measurement the suggestion rests on. Never empty:
+	// advice without a number is the guesswork calibration replaces.
+	Evidence string `json:"evidence"`
+}
+
+// ---------------------------------------------------------------------------
 // The worker plane
 // ---------------------------------------------------------------------------
 //

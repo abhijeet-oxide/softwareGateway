@@ -51,6 +51,8 @@ transferctl
 ├── discover [product]          Scan now, rather than waiting for the interval
 │   └── status [product]        What discovery is doing right now
 │
+├── calibrate <product>         Measure the source->target path and suggest settings
+│
 ├── packages
 │   ├── list <product>          Discovered packages
 │   ├── describe <product> <package>   Everything known about one package
@@ -482,6 +484,9 @@ timeout: 30s
 | everything else | 30s |
 | `products check` | 10m |
 | `discover` | 10m |
+| `calibrate` | derived from `--budget` and `--concurrency` |
+
+`calibrate` is the exception to the exception: a fixed ten minutes is wrong in both directions, since `--budget 30s --concurrency 1,2,4,8,16,32` is a legitimate request that would blow through it, and the default sweep finishes in about a minute. It computes `2 × budget × (levels + 2) × sides + 1m` instead, which tracks whatever was asked for.
 
 Those two are slow because the work is slow. `products check` opens a TLS connection to every repository a product declares and runs several round trips against each; `discover` lists every tag of every repository and resolves each one. Through a corporate proxy, across a WAN link, minutes is the normal case — so a single 30-second default made them fail almost every time, and report it as `coordinator unreachable`, which sent operators to investigate a service that was working.
 
@@ -508,3 +513,49 @@ transferctl --endpoint http://localhost:8080 health
 ```
 
 **Auth-ready.** `--token` and `SWGW_TOKEN` are accepted and sent as `Authorization: Bearer` today; the Coordinator ignores them in v1 ([09](09-api.md) §10). When authentication is enabled, existing scripts that already set a token keep working, and `transferctl auth login` (device-code) is added for humans. The flag existing now is what makes that a non-breaking change.
+
+## 11. Calibration
+
+```
+transferctl calibrate <product> [--from source] [--to target]
+                                [--concurrency 1,2,4,8,16] [--budget 5s]
+                                [--no-write] [--bundle-size 30GiB]
+```
+
+Everything else in this CLI reports what the system did. This one runs an experiment and tells you what to change.
+
+### The problem it exists for
+
+At least six settings decide throughput, they interact, and none of them is self-evidently right: `concurrency.perRegistry`, `concurrency.requestsPerSecond`, `worker.maxConcurrentJobs`, the number of workers, `network.proxy`, and where the workers run. A configuration file states them without justifying them, so tuning is guesswork — and the guesses fail in a consistent direction. Raising concurrency against a link that is already full adds load and no bytes. Adding a worker while a proxy halves the line rate buys a second slow worker. Both look like effort and neither moves the number.
+
+Calibration measures the path and reports the knee of the curve, so the recommendation is arithmetic rather than folklore. Output is a table per side and a list of suggestions, each carrying the measurement behind it:
+
+```
+SOURCE  near  near.registry.example.net/orbs/cfx-5000-k8s
+  route              environment http://proxy.corp:8080 (nothing is configured for this registry)
+  direct route       reachable: 18.0 MiB/s direct against 2.1 MiB/s through the proxy
+  round trip         42ms
+
+  STREAMS   RATE         PER STREAM   MOVED      REQUESTS   ERRORS            TTFB
+  1         5.0 MiB/s    5.0 MiB/s    10.0 MiB   12         -                 180ms
+  2         10.0 MiB/s   5.0 MiB/s    20.0 MiB   24         -                 190ms
+> 4         18.0 MiB/s   4.5 MiB/s    36.0 MiB   44         -                 210ms
+  8         19.0 MiB/s   2.4 MiB/s    38.0 MiB   48         2 (2 throttled)   460ms
+
+Suggestions
+
+  !! network.proxy.direct  (source near)  unset (traffic goes through the proxy) -> true
+      direct moved 18.0 MiB/s against 2.1 MiB/s through the proxy — 757% faster.
+```
+
+`>` marks the knee — the level worth configuring. `!!` is a measured problem, `!` a measured improvement, unmarked a fact with no knob behind it.
+
+### It leaves nothing behind
+
+The target probe pushes real bytes into an upload session and then **cancels** it, so nothing is committed and no blob, tag or manifest appears in the destination ([05](05-transfer-engine.md) §8.1). `--no-write` skips it anyway for a target governed by a change process that this would technically violate; the cost is that only the read half is measured, and the write half is often the slower one.
+
+### What it will not tell you
+
+**Which host your workers are on.** The probes run in the Coordinator, because `transferctl` never contacts a registry itself. Every report names the measuring host for that reason: if the workers sit on a different network, the numbers describe a path no transfer takes.
+
+**A number to trust forever.** It measures a shared link on a particular afternoon. Re-run it when the answer starts to matter.

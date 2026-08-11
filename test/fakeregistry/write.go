@@ -86,9 +86,27 @@ func (r *Registry) handleUpload(w http.ResponseWriter, req *http.Request) {
 		r.appendChunk(w, req, repoPath, sessionID)
 	case http.MethodPut:
 		r.commitUpload(w, req, repoPath, sessionID)
+	case http.MethodDelete:
+		r.cancelUpload(w, sessionID)
 	default:
 		writeError(w, http.StatusMethodNotAllowed, "UNSUPPORTED", "method not allowed on uploads")
 	}
+}
+
+// cancelUpload discards a session without committing it.
+//
+// The spec's way of abandoning an upload, and the mechanism calibration relies
+// on to push real bytes at a real registry and leave nothing behind. Modelled
+// here so that the property can be ASSERTED — a test that ends with the
+// registry holding no blobs is the only proof that the probe is non-destructive.
+func (r *Registry) cancelUpload(w http.ResponseWriter, sessionID string) {
+	if _, ok := r.uploads.get(sessionID); !ok {
+		writeError(w, http.StatusNotFound, "BLOB_UPLOAD_UNKNOWN", "no such upload")
+		return
+	}
+	r.uploads.remove(sessionID)
+	r.CancelledUploads.Add(1)
+	w.WriteHeader(http.StatusNoContent)
 }
 
 // startUpload begins a session, or performs a cross-repository mount.

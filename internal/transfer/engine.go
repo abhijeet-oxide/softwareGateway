@@ -426,6 +426,11 @@ func (e *Engine) failed(err error, what string) Result {
 // missing resource, so it needs its own name to be routed differently.
 const ClassBlobUnknown = "blob_unknown"
 
+// ClassConfiguration is a job this worker cannot execute for a reason that is
+// about the WORKER rather than the registries — a product it has not loaded, a
+// credential it cannot resolve.
+const ClassConfiguration = "configuration"
+
 // classify maps an error onto the class the retry policy keys off.
 //
 // A thin wrapper over registry.ClassOf rather than a second classifier: the
@@ -451,6 +456,21 @@ func classify(err error) string {
 // one because credentials do not fix themselves and hammering an auth endpoint
 // gets us rate-limited.
 func MaxAttemptsFor(class string) int {
+	switch class {
+	case ClassConfiguration:
+		// THIS worker cannot execute the job — a missing product, an
+		// unresolvable credential. Another might, so the job is not hopeless;
+		// but retrying it eight times against the same misconfigured fleet
+		// only burns the attempts a real retry would need. One, so the failure
+		// surfaces while the job is still recoverable by fixing the worker.
+		return int(backoff.AttemptsTerminal)
+	case ClassBlobUnknown:
+		// The destination is telling us a placement record was wrong. That
+		// self-heals once the blobs are requeued, so it deserves the full
+		// budget rather than a terminal verdict.
+		return int(backoff.AttemptsTransient)
+	}
+
 	switch registry.Class(class) {
 	case registry.ClassAuth, registry.ClassNotFound, registry.ClassUnsupported:
 		return int(backoff.AttemptsTerminal)

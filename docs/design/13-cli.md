@@ -67,10 +67,10 @@ transferctl
 │   ├── describe <id>           Progress, failed jobs, timeline
 │   ├── jobs <id>               Layer-level progress
 │   ├── logs <id>               Worker logs for this transfer
+│   ├── retry <id> | --all      Requeue failed jobs and carry on (alias: resume)
 │   ├── pause <id>
 │   ├── resume <id>
 │   ├── cancel <id>
-│   ├── retry <id>
 │   └── priority <id> <value>
 │
 ├── schedules
@@ -424,8 +424,23 @@ Transfer 9c1e8f2a cancelling.
   reused by future transfers. No tag was applied.
 
 $ transferctl transfers retry 9c1e8f2a
-Requeued 2 failed jobs. Transfer 9c1e8f2a → READY.
+Requeued 2 failed job(s). Transfer 9c1e8f2a is ready.
+
+$ transferctl transfers retry --all
+ID         REQUEUED   STATE   DETAIL
+281614ab   691        ready   –
+9c1e8f2a   2          ready   –
+
+Requeued 693 job(s) across 2 transfer(s).
 ```
+
+### Retry is the outage command, and it resumes rather than restarts
+
+`--all` exists because an outage does not fail one transfer — it fails every transfer that was running, and making somebody copy IDs out of a listing to express "carry on with all of it" is busywork whose only effect is that some get missed.
+
+Requeueing resets the attempt budget and drops the backoff: the operator running the command *is* the signal that the cause is gone. What it does **not** reset is progress. Jobs that succeeded stay succeeded, and a blob that was partway through keeps its byte count, so a transfer that was 80% done before the network went picks up at 80%. Blobs that landed are found by the placement check or a `HEAD` and cost nothing the second time ([05](05-transfer-engine.md) §4.1).
+
+It will not restart a `cancelled` transfer — that was somebody's decision — or a `succeeded` one. A transfer that failed during *planning* has no jobs to requeue, and says so rather than reporting a successful retry of zero.
 
 Each message states the semantics that are easy to get wrong ([04](04-queue-and-scheduling.md) §8): pause does not kill in-flight work, priority does not preempt, cancel does not roll back. The CLI is where those semantics actually reach a user, so it says them rather than assuming the documentation was read.
 

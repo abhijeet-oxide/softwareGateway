@@ -274,6 +274,26 @@ func (c *Client) CheckConnectivity(ctx context.Context, product string) (*CheckC
 	return &out, c.post(ctx, path, struct{}{}, &out)
 }
 
+// RetryTransfer requeues one transfer's failed jobs.
+//
+// Idempotent: a transfer with nothing failed reports zero requeued rather than
+// failing, so a client that retried after a timeout is not punished for it.
+func (c *Client) RetryTransfer(ctx context.Context, id string) (*RetryTransferResponse, error) {
+	// The colon is an AIP-136 structural separator and must NOT be escaped.
+	path := "/api/v1/transfers/" + url.PathEscape(id) + ":retry"
+	var out RetryTransferResponse
+	return &out, c.post(ctx, path, struct{}{}, &out)
+}
+
+// RetryTransfers requeues the failed jobs of every transfer that has any.
+//
+// The shape an outage calls for: it does not fail one transfer, it fails every
+// transfer that was running.
+func (c *Client) RetryTransfers(ctx context.Context) (*RetryTransferResponse, error) {
+	var out RetryTransferResponse
+	return &out, c.post(ctx, "/api/v1/transfers:retry", struct{}{}, &out)
+}
+
 // Calibrate measures one source-to-target path and returns what to configure.
 //
 // The slowest call in this client by a wide margin: it moves real data in both

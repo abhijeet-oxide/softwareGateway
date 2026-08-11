@@ -291,3 +291,41 @@ func (q *Queue) Reap(ctx context.Context) ([]store.ReapedJob, error) {
 	}
 	return reaped, nil
 }
+
+// Settle marks transfers that can no longer make progress as failed.
+//
+// Paired with Reap deliberately, and run straight after it: reaping is what
+// PRODUCES the terminal failure in the case that matters. When a network outage
+// takes the workers with it, nothing completes and nothing reports — the leases
+// simply expire, and a lease expiring on a job with no attempts left fails that
+// job without any completion path running. Without this the transfer would keep
+// saying `running` with nothing running.
+func (q *Queue) Settle(ctx context.Context) ([]store.StalledTransfer, error) {
+	stalled, err := q.packages.SettleStalledTransfers(ctx)
+	if err != nil {
+		return nil, err
+	}
+	for _, t := range stalled {
+		q.log.WarnContext(ctx, "transfer stalled and cannot restart itself",
+			"transfer", t.ID, "failedJobs", t.Failed, "reason", t.Reason)
+	}
+	return stalled, nil
+}
+
+// Retry returns a transfer's failed jobs to the queue.
+func (q *Queue) Retry(ctx context.Context, transferID string) (store.RetryResult, error) {
+	res, err := q.packages.RetryTransfer(ctx, transferID)
+	if err != nil {
+		return res, err
+	}
+	if res.Requeued > 0 {
+		q.log.InfoContext(ctx, "requeued failed jobs",
+			"transfer", res.TransferID, "jobs", res.Requeued, "state", res.State)
+	}
+	return res, nil
+}
+
+// Retryable lists the transfers a fleet-wide retry would act on.
+func (q *Queue) Retryable(ctx context.Context) ([]string, error) {
+	return q.packages.RetryableTransfers(ctx)
+}

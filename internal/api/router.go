@@ -60,6 +60,11 @@ type Worker interface {
 	Progress(ctx context.Context, jobID int64, workerID string, bytes int64) error
 	Complete(ctx context.Context, c store.Completion) (store.CompletionResult, error)
 	Heartbeat(ctx context.Context, workerID string, activeJobs []int64) ([]int64, error)
+	// Retry returns one transfer's failed jobs to the queue. Here rather than
+	// on a separate interface because it is the same queue and the same
+	// invariants — a requeue that bypassed this type could reopen a wave the
+	// scheduler believes is closed.
+	Retry(ctx context.Context, transferID string) (store.RetryResult, error)
 }
 
 // Calibrator measures one source-to-target path and recommends settings.
@@ -239,6 +244,16 @@ func (s *Server) routes() chi.Router {
 			r.Get("/transfers", s.handleListTransfers)
 			r.Get("/transfers/{transfer}", s.handleGetTransfer)
 			r.Get("/transfers/{transfer}/jobs", s.handleListTransferJobs)
+
+			// Retry needs the queue behind it, so it is registered with the
+			// queue rather than with the read routes — a follower replica
+			// serves the reads and honestly 404s the write.
+			if s.deps.Queue != nil {
+				// The verb is split by the handler, not the router. See
+				// handleTransferCustomMethod.
+				r.Post("/transfers/{transfer}", s.handleTransferCustomMethod)
+				r.Post("/transfers:retry", s.handleRetryTransfers)
+			}
 		}
 
 		// ---- The worker plane (docs/design/09 §7) ----

@@ -705,7 +705,14 @@ func (p *Packages) settleTransfer(
 		return false, currentWave, state, err
 	}
 	if !drained || wave != currentWave {
-		return false, currentWave, state, nil
+		// A wave that will not drain because a job has EXHAUSTED its attempts
+		// is not a wave still working — it is a transfer that has stopped, and
+		// until this check existed it went on reporting `running` with nothing
+		// in flight for as long as anybody left it there. See
+		// SettleStalledTransfers, which is the same question asked
+		// periodically for the failures that arrive without a completion.
+		state, err = p.settleIfStalled(ctx, tx, transferID, state)
+		return false, currentWave, state, err
 	}
 
 	// Advance THROUGH empty waves rather than one step per completion. A wave

@@ -206,6 +206,11 @@ func newTransfersListCommand() *cobra.Command {
 		Args:  cobra.NoArgs,
 		Short: "List transfers, newest first",
 		RunE: func(cmd *cobra.Command, _ []string) error {
+			// One tracker per transfer, kept across redraws: a rate needs two
+			// readings, and a listing that rebuilt them every poll would never
+			// have a second one.
+			rates := rateTrackers{}
+
 			once := func(w io.Writer) (bool, error) {
 				resp, err := newClient().ListTransfers(cmd.Context(), v1.ListTransfersOptions{
 					Product: productName,
@@ -214,8 +219,11 @@ func newTransfersListCommand() *cobra.Command {
 				if err != nil {
 					return false, err
 				}
+				if watch {
+					rates.observe(resp.Transfers, time.Now())
+				}
 				if err := render(w, opts.output, resp, func(w io.Writer) error {
-					return renderTransferList(w, resp)
+					return renderTransferList(w, resp, rates)
 				}); err != nil {
 					return false, err
 				}
@@ -258,7 +266,45 @@ func allSettled(transfers []v1.Transfer) bool {
 	return true
 }
 
-func renderTransferList(w io.Writer, resp *v1.ListTransfersResponse) error {
+// rateTrackers holds one sampler per transfer, for a watch over a listing.
+type rateTrackers map[string]*rateTracker
+
+// observe records this poll's byte totals against every transfer on the page.
+func (r rateTrackers) observe(transfers []v1.Transfer, at time.Time) {
+	for i := range transfers {
+		t := &transfers[i]
+		tracker, ok := r[t.ID]
+		if !ok {
+			tracker = &rateTracker{}
+			r[t.ID] = tracker
+		}
+		tracker.observe(int64Of(t.Progress.BytesTransferred), at)
+	}
+}
+
+// watching reports whether any live rate has been measured yet, which is what
+// decides whether the footnote describes a live rate or an average.
+func (r rateTrackers) watching() bool {
+	for _, tracker := range r {
+		if tracker.smoothed > 0 {
+			return true
+		}
+	}
+	return false
+}
+
+// rateFor is the smoothed rate for one transfer, or zero when there is none —
+// no watch, or only one reading so far.
+func (r rateTrackers) rateFor(id string) float64 {
+	if tracker, ok := r[id]; ok {
+		return tracker.smoothed
+	}
+	return 0
+}
+
+func renderTransferList(
+	w io.Writer, resp *v1.ListTransfersResponse, rates rateTrackers,
+) error {
 	return func(w io.Writer) error {
 		if len(resp.Transfers) == 0 {
 			fmt.Fprintln(w, "No transfers yet.")
@@ -282,10 +328,10 @@ func renderTransferList(w io.Writer, resp *v1.ListTransfersResponse) error {
 				percentComplete(t.Progress),
 				jobProgress(t.Progress),
 				bytesProgress(t.Progress),
-				speedOf(t),
+				speedOf(t, rates.rateFor(t.ID)),
 				t.Progress.JobsInFlight,
 				elapsedOf(t),
-				etaOf(t),
+				etaOf(t, rates.rateFor(t.ID)),
 				humanBytes(t.Progress.DedupeSkippedBytes),
 			)
 		}
@@ -295,9 +341,15 @@ func renderTransferList(w io.Writer, resp *v1.ListTransfersResponse) error {
 
 		fmt.Fprintln(w)
 		fmt.Fprintln(w, "DONE is by job count, which is the measure that reaches 100% — COPIED does not,")
-		fmt.Fprintln(w, "because deduplicated content counts as planned and moves nothing. SPEED is the")
-		fmt.Fprintln(w, "average since the first job was leased; `describe --watch` adds current and peak.")
-		fmt.Fprintln(w, "ETA extrapolates that rate; `-` means nothing has moved yet to measure.")
+		fmt.Fprintln(w, "because deduplicated content counts as planned and moves nothing.")
+		if rates.watching() {
+			fmt.Fprintln(w, "SPEED is the rate over the last half minute, and ETA extrapolates it — so a")
+			fmt.Fprintln(w, "change you make now shows up within about that long.")
+		} else {
+			fmt.Fprintln(w, "SPEED is the average since the first job was leased, and ETA extrapolates it.")
+			fmt.Fprintln(w, "An average carries the whole history, so it lags a speed that changed midway;")
+			fmt.Fprintln(w, "`--watch` measures the live rate instead and uses that.")
+		}
 		fmt.Fprintln(w, "transferctl transfers describe <id>   full detail, including throughput")
 		fmt.Fprintln(w, "transferctl transfers jobs <id>       what is copying right now")
 		return nil
@@ -333,8 +385,16 @@ func bytesProgress(p v1.TransferProgress) string {
 	return humanBytes(p.BytesTransferred) + "/" + humanBytes(p.PlannedBytes)
 }
 
-// speedOf is the average rate since the first job was leased.
-func speedOf(t *v1.Transfer) string {
+// speedOf is how fast this is going: the live rate under a watch, the average
+// otherwise.
+//
+// The two are labelled differently in the footnote rather than shown in two
+// columns. A listing is a scan for the row that is wrong, and a second rate
+// column would cost the width of one that matters more.
+func speedOf(t *v1.Transfer, live float64) string {
+	if live > 0 {
+		return humanRate(live)
+	}
 	rate, ok := averageRate(t)
 	if !ok {
 		return "-"
@@ -350,13 +410,23 @@ func elapsedOf(t *v1.Transfer) string {
 	return humanDuration(d)
 }
 
-func etaOf(t *v1.Transfer) string {
+// etaOf extrapolates the remaining bytes, preferring a live rate to the average.
+//
+// live is the smoothed rate a watcher has measured, or zero when nothing is
+// watching. It is preferred because the average is cumulative and therefore
+// slow to react: after a change — a second worker, a proxy bypassed — the
+// average still mostly describes the period before it, and the person who made
+// the change is watching to find out whether it worked.
+func etaOf(t *v1.Transfer, live float64) string {
 	if t.State != v1.TransferRunning {
 		return "-"
 	}
-	d, ok := estimate(t)
+
+	d, ok := estimateAt(t, live)
 	if !ok {
-		return "-"
+		if d, ok = estimate(t); !ok {
+			return "-"
+		}
 	}
 	return "~" + humanDuration(d)
 }
@@ -444,8 +514,12 @@ func describeTransfer(w io.Writer, t *v1.Transfer, rates *rateTracker, watching 
 	if d, ok := elapsed(t); ok {
 		fmt.Fprintf(pw, "  Elapsed:\t%s\n", humanDuration(d))
 	}
-	if d, ok := estimate(t); ok && t.State == v1.TransferRunning {
-		fmt.Fprintf(pw, "  Remaining:\t~%s at the observed rate\n", humanDuration(d))
+	if t.State == v1.TransferRunning {
+		if d, ok := estimateAt(t, rates.smoothed); ok {
+			fmt.Fprintf(pw, "  Remaining:\t~%s at the current rate\n", humanDuration(d))
+		} else if d, ok := estimate(t); ok {
+			fmt.Fprintf(pw, "  Remaining:\t~%s at the average rate so far\n", humanDuration(d))
+		}
 	}
 	if err := pw.Flush(); err != nil {
 		return err
@@ -512,6 +586,11 @@ func describeThroughput(w io.Writer, t *v1.Transfer, rates *rateTracker, watchin
 	if watching {
 		if rates.current > 0 {
 			fmt.Fprintf(tw, "  Current:\t%s\tover the last sample\n", humanRate(rates.current))
+			// The one the ETA uses, so it is shown rather than left implicit:
+			// a reader comparing "remaining" against a number on this page
+			// should be able to find the number it was computed from.
+			fmt.Fprintf(tw, "  Recent:\t%s\tover the last %s — what Remaining extrapolates\n",
+				humanRate(rates.smoothed), humanDuration(smoothingWindow))
 			fmt.Fprintf(tw, "  Peak:\t%s\thighest seen while watching\n", humanRate(rates.peak))
 		} else {
 			fmt.Fprintf(tw, "  Current:\t-\tmeasured from the next sample\n")

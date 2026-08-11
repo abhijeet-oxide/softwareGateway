@@ -161,17 +161,24 @@ func run() error {
 	// to the queue passes through here: leases out, results back. Bytes do not.
 	jobQueue := queue.New(packages, cfg.Coordinator.Reaper.LeaseDuration, logger)
 
+	transferResolver := &resolverImpl{
+		products: products,
+		catalog:  cat,
+		packages: packages,
+		clients:  regclient.NewClients(products, resolver, logger),
+		log:      logger,
+	}
+	// The requester turns `transfers create` and `transfers promote` into
+	// rows; the expander plans the transfers those rows opened. Two halves of
+	// one path, sharing the resolver so an origin the API accepted is one the
+	// planner can read from.
+	requester := transfer.NewRequester(packages, transferResolver)
+
 	queueCtl := queue.NewController(jobQueue, expanderAdapter{
 		e: transfer.NewExpander(
 			packages,
 			transfer.NewPlanner(packages, cfg.Concurrency.PerRegistry, logger),
-			&resolverImpl{
-				products: products,
-				catalog:  cat,
-				packages: packages,
-				clients:  regclient.NewClients(products, resolver, logger),
-				log:      logger,
-			},
+			transferResolver,
 			0, logger),
 	}, queue.ControllerOptions{
 		ReapInterval:   cfg.Coordinator.Reaper.TickInterval,
@@ -304,6 +311,7 @@ func run() error {
 		Packages:  packages,
 		Discovery: discoveryCtl.Loop(),
 		Queue:     jobQueue,
+		Requests:  requester,
 		// Connectivity checking is deliberately NOT part of the health
 		// registry: health must not depend on third-party registries, or a
 		// vendor's outage pulls this replica out of the Service.

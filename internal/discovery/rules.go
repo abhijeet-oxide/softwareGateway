@@ -1,13 +1,8 @@
 package discovery
 
 import (
-	"crypto/sha256"
-	"encoding/hex"
 	"fmt"
 	"regexp"
-	"sort"
-	"strconv"
-	"strings"
 
 	"github.com/abhijeet-oxide/softwareGateway/internal/product"
 )
@@ -52,45 +47,6 @@ func (s ruleSet) match(tag string) (product.Rule, bool) {
 		}
 	}
 	return product.Rule{}, false
-}
-
-// idempotencyKey derives the key for an auto-created transfer request.
-//
-//	sha256(operation | package_id | sorted(target_repo_ids) | scheduled_at | priority)
-//
-// This is what makes auto-download safe to run in a loop. If discovery re-runs,
-// or the Coordinator restarts between the package insert and the request
-// creation, or leadership flaps and two Coordinators both evaluate the rules,
-// exactly one request exists (docs/design/04 §7).
-//
-// Targets are SORTED before hashing so the same set in a different
-// configuration order produces the same key — otherwise a cosmetic YAML reorder
-// would silently duplicate every pending request.
-//
-// Priority participates deliberately: re-requesting the same transfer at a
-// different priority is a distinct intent and is allowed.
-func idempotencyKey(operation string, packageID int64, targetRepoIDs []int64, scheduledAt string, priority int) string {
-	sorted := make([]int64, len(targetRepoIDs))
-	copy(sorted, targetRepoIDs)
-	sort.Slice(sorted, func(i, j int) bool { return sorted[i] < sorted[j] })
-
-	parts := make([]string, 0, len(sorted))
-	for _, id := range sorted {
-		parts = append(parts, strconv.FormatInt(id, 10))
-	}
-
-	// "|" separates fields and "," separates targets; neither can appear inside
-	// a numeric field, so no two distinct inputs can produce the same string.
-	material := strings.Join([]string{
-		operation,
-		strconv.FormatInt(packageID, 10),
-		strings.Join(parts, ","),
-		scheduledAt,
-		strconv.Itoa(priority),
-	}, "|")
-
-	sum := sha256.Sum256([]byte(material))
-	return hex.EncodeToString(sum[:])
 }
 
 // requestID derives a stable request ID from the idempotency key.

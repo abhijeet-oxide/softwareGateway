@@ -309,10 +309,18 @@ spec:
   targets:
     - name: lab
       registry: internal.example.com
+      # A PREFIX, not the destination. The vendor's own repository structure is
+      # reproduced beneath it, so an ORB's images and charts keep their names:
+      # `vendor/platform/orbs/CFX-5000-k8s/nginx`. Omit it entirely to mirror
+      # the vendor's paths at this registry's root.
       repository: vendor/platform
       type: generic
       credentialsRef:
         secretName: internal-registry
+      # Which stage this target is. Several targets may share one — `lab-eu`
+      # and `lab-us` are both the lab stage — and `transfers promote` resolves
+      # against it, refusing to guess when more than one matches.
+      environment: lab
       # Used when a transfer request names no target. At most one per product.
       default: true
       # A registry we own, so we can be less polite than with a vendor.
@@ -328,6 +336,7 @@ spec:
       type: generic
       credentialsRef:
         secretName: internal-registry
+      environment: production
       # Rejects direct replication: production is reachable only by promotion
       # from another target. Mutually exclusive with `default`.
       promotionOnly: true
@@ -361,6 +370,22 @@ spec:
       # Validation REJECTS an autoDownload rule pointing at a disabled target,
       # because that would otherwise fail the first time a package matched.
       enabled: false
+
+  # =====================================================================
+  # PROMOTION — the hop `transferctl transfers promote` takes by default.
+  #
+  # Declared rather than hard-coded, because the names of a site's stages are
+  # the site's. Omit the block entirely and it defaults to lab -> production;
+  # it only has to be written when those words are wrong.
+  #
+  # Each environment may name SEVERAL targets — `lab-eu` and `lab-us` are both
+  # the lab stage. When one does, `promote` refuses to guess and names the
+  # candidates, so an unintended push to a production registry is not one
+  # keystroke away.
+  # =====================================================================
+  promotion:
+    from: lab
+    to: production
 
   # =====================================================================
   # AUTO-DOWNLOAD — what to replicate without being asked.

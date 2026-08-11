@@ -1,0 +1,230 @@
+package transfer
+
+import (
+	"context"
+	"strings"
+	"testing"
+
+	"github.com/abhijeet-oxide/softwareGateway/internal/store"
+)
+
+// Resolution is where every combination the operator can express is decided:
+// one source to one target, one to many, one target to another, one target to
+// many. The rules are small; what they refuse matters as much as what they
+// allow, because the thing being refused is an unintended push to production.
+
+type fakeCatalog struct{ view ProductView }
+
+func (f fakeCatalog) ProductView(context.Context, string) (ProductView, error) {
+	return f.view, nil
+}
+
+// twoRegions is the shape the question was really about: several targets per
+// environment, so nothing can be resolved by "the lab one".
+func twoRegions() ProductView {
+	return ProductView{
+		Name:          "nokia",
+		PromotionFrom: "lab",
+		PromotionTo:   "production",
+		Sources: []RepoView{
+			{RepositoryID: 1, Name: "near", Role: "source", Registry: "near.nokia.com"},
+		},
+		Targets: []RepoView{
+			{RepositoryID: 10, Name: "lab-eu", Role: "target", Environment: "lab",
+				Registry: "eu.jfrog.io", Repository: "nokia-lab", Default: true},
+			{RepositoryID: 11, Name: "lab-us", Role: "target", Environment: "lab",
+				Registry: "us.jfrog.io", Repository: "nokia-lab"},
+			{RepositoryID: 20, Name: "prod-eu", Role: "target", Environment: "production",
+				Registry: "eu.jfrog.io", Repository: "nokia-prod", PromotionOnly: true},
+			{RepositoryID: 21, Name: "prod-us", Role: "target", Environment: "production",
+				Registry: "us.jfrog.io", Repository: "nokia-prod", PromotionOnly: true},
+		},
+	}
+}
+
+// oneOfEach is the simple deployment: nothing to disambiguate, so promote
+// needs no flags at all.
+func oneOfEach() ProductView {
+	v := twoRegions()
+	v.Targets = []RepoView{v.Targets[0], v.Targets[2]}
+	return v
+}
+
+func resolve(t *testing.T, view ProductView, req CreateRequest) (Resolved, error) {
+	t.Helper()
+	req.Row = store.PackageRow{ID: 7, ProductID: 1, SourceRepoID: 1}
+	r := NewRequester(nil, fakeCatalog{view: view})
+	return r.Resolve(t.Context(), req)
+}
+
+func targetNames(r Resolved) []string {
+	out := make([]string, 0, len(r.Targets))
+	for _, t := range r.Targets {
+		out = append(out, t.Name)
+	}
+	return out
+}
+
+// ---------------------------------------------------------------------------
+// Replication
+// ---------------------------------------------------------------------------
+
+// The ordinary case: no --from, no --to. The origin is where the package came
+// from and the destination is the default target.
+func TestReplicationDefaultsToDiscoveredSourceAndDefaultTarget(t *testing.T) {
+	got, err := resolve(t, twoRegions(), CreateRequest{Product: "nokia"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Operation != "replicate" {
+		t.Errorf("operation is %q, want replicate", got.Operation)
+	}
+	if got.Origin.Name != "near" {
+		t.Errorf("origin is %q, want near", got.Origin.Name)
+	}
+	if names := targetNames(got); len(names) != 1 || names[0] != "lab-eu" {
+		t.Errorf("targets are %v, want [lab-eu]", names)
+	}
+}
+
+// One source, several targets.
+func TestReplicationFansOutToNamedTargets(t *testing.T) {
+	got, err := resolve(t, twoRegions(), CreateRequest{
+		Product: "nokia", To: []string{"lab-eu", "lab-us"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if names := targetNames(got); len(names) != 2 {
+		t.Fatalf("targets are %v, want both labs", names)
+	}
+}
+
+// A production registry configured as promotionOnly must not be reachable
+// directly from a vendor. This is the guard that makes that configuration mean
+// something.
+func TestReplicationRefusesAPromotionOnlyTarget(t *testing.T) {
+	_, err := resolve(t, twoRegions(), CreateRequest{Product: "nokia", To: []string{"prod-eu"}})
+	if err == nil {
+		t.Fatal("replicating straight into a promotionOnly target was allowed")
+	}
+	if !strings.Contains(err.Error(), "promotionOnly") {
+		t.Errorf("error does not explain why: %v", err)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Promotion
+// ---------------------------------------------------------------------------
+
+// One lab, one production: the whole point of the environment key is that this
+// needs no flags.
+func TestPromoteResolvesTheEnvironmentPathWithNoFlags(t *testing.T) {
+	got, err := resolve(t, oneOfEach(), CreateRequest{Product: "nokia", Promote: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Operation != "promote" {
+		t.Errorf("operation is %q, want promote", got.Operation)
+	}
+	if got.Origin.Name != "lab-eu" {
+		t.Errorf("origin is %q, want lab-eu", got.Origin.Name)
+	}
+	if names := targetNames(got); len(names) != 1 || names[0] != "prod-eu" {
+		t.Errorf("targets are %v, want [prod-eu]", names)
+	}
+}
+
+// Several labs, several productions. Guessing here would push to a production
+// registry nobody named, so it is refused — and the error has to name the
+// candidates and the flag, or the operator is left guessing at spellings.
+func TestPromoteRefusesToGuessBetweenSeveralTargets(t *testing.T) {
+	_, err := resolve(t, twoRegions(), CreateRequest{Product: "nokia", Promote: true})
+	if err == nil {
+		t.Fatal("an ambiguous promotion was resolved rather than refused")
+	}
+	for _, want := range []string{"lab-eu", "lab-us", "--from"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("error does not mention %q: %v", want, err)
+		}
+	}
+}
+
+func TestPromoteRefusesAmbiguousDestination(t *testing.T) {
+	_, err := resolve(t, twoRegions(), CreateRequest{
+		Product: "nokia", Promote: true, From: "lab-eu",
+	})
+	if err == nil {
+		t.Fatal("an ambiguous destination was resolved rather than refused")
+	}
+	for _, want := range []string{"prod-eu", "prod-us", "--to-environment"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("error does not mention %q: %v", want, err)
+		}
+	}
+}
+
+// One target to many, said deliberately.
+func TestPromoteToAnEnvironmentFansOut(t *testing.T) {
+	got, err := resolve(t, twoRegions(), CreateRequest{
+		Product: "nokia", Promote: true, From: "lab-eu", ToEnvironment: "production",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if names := targetNames(got); len(names) != 2 {
+		t.Fatalf("targets are %v, want both production targets", names)
+	}
+}
+
+// Promotion moves between targets. A vendor source as origin is a replication
+// wearing the wrong word, and the error should say which command to use.
+func TestPromoteRefusesAVendorSource(t *testing.T) {
+	_, err := resolve(t, twoRegions(), CreateRequest{
+		Product: "nokia", Promote: true, From: "near", To: []string{"prod-eu"},
+	})
+	if err == nil {
+		t.Fatal("promoting from a vendor source was allowed")
+	}
+	if !strings.Contains(err.Error(), "transfers create") {
+		t.Errorf("error does not point at the right command: %v", err)
+	}
+}
+
+// The operation follows the origin even when nobody said "promote", so
+// `transfers create --from lab-eu` is a promotion and gets promotion's rules —
+// including access to a promotionOnly destination.
+func TestOperationIsDerivedFromTheOrigin(t *testing.T) {
+	got, err := resolve(t, twoRegions(), CreateRequest{
+		Product: "nokia", From: "lab-eu", To: []string{"prod-eu"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Operation != "promote" {
+		t.Errorf("operation is %q, want promote — the origin is a target", got.Operation)
+	}
+}
+
+// A copy from something to itself would open a transfer, lease jobs and move
+// nothing.
+func TestOriginMayNotAlsoBeADestination(t *testing.T) {
+	_, err := resolve(t, twoRegions(), CreateRequest{
+		Product: "nokia", From: "lab-eu", To: []string{"prod-eu", "lab-eu"},
+	})
+	if err == nil {
+		t.Fatal("a copy onto the origin was allowed")
+	}
+}
+
+// A name nobody configured should list what is configured rather than just
+// saying no.
+func TestUnknownNameListsWhatExists(t *testing.T) {
+	_, err := resolve(t, twoRegions(), CreateRequest{Product: "nokia", To: []string{"lab-ap"}})
+	if err == nil {
+		t.Fatal("an unconfigured target was accepted")
+	}
+	if !strings.Contains(err.Error(), "lab-eu") {
+		t.Errorf("error does not list the available names: %v", err)
+	}
+}

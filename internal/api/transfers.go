@@ -1,6 +1,7 @@
 package api
 
 import (
+	"context"
 	"fmt"
 	"net/http"
 	"strconv"
@@ -8,16 +9,117 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
+	"github.com/abhijeet-oxide/softwareGateway/internal/api/middleware"
 	"github.com/abhijeet-oxide/softwareGateway/internal/store"
+	"github.com/abhijeet-oxide/softwareGateway/internal/transfer"
 	v1 "github.com/abhijeet-oxide/softwareGateway/pkg/apis/softwaregateway/v1"
 )
 
-// Transfer READ routes. See docs/design/09-api.md §2.
+// Transfer routes. See docs/design/09-api.md §2.
 //
-// Read only, and that is the honest state of things: pause, resume, cancel,
-// retry and setPriority are specified but not built, so they are absent rather
-// than present and inert. A route that accepts a pause and does nothing is
-// worse than a 404, because the 404 is believed.
+// Create and the read routes. Pause, resume, cancel, retry and setPriority are
+// specified but not built, so they are absent rather than present and inert. A
+// route that accepts a pause and does nothing is worse than a 404, because the
+// 404 is believed.
+
+// Requests creates transfer requests.
+//
+// A consumer-defined interface: the API needs the one call, not the resolver,
+// the catalog and the planner behind it (docs/design/15 §6).
+type Requests interface {
+	Create(ctx context.Context, req transfer.CreateRequest) (transfer.CreateResult, error)
+}
+
+// handleCreateTransfer serves POST /api/v1/transfers.
+func (s *Server) handleCreateTransfer(w http.ResponseWriter, r *http.Request) {
+	var req v1.CreateTransferRequest
+	if !decodeJSON(w, r, &req) {
+		return
+	}
+
+	if req.Product == "" || req.Package == "" {
+		Error(w, r, v1.CodeInvalidArgument, "product and package are both required")
+		return
+	}
+	if len(req.To) > 0 && req.ToEnvironment != "" {
+		Error(w, r, v1.CodeInvalidArgument,
+			"to and toEnvironment name destinations two different ways; use one")
+		return
+	}
+
+	// The package is resolved HERE so a bad reference fails as NOT_FOUND
+	// naming what was looked for, rather than as a resolution error from
+	// deeper down that names a row ID nobody typed.
+	pkg, err := s.deps.Packages.GetPackage(r.Context(), req.Product, req.Package)
+	if err != nil {
+		NotFound(w, r, "package", req.Package)
+		return
+	}
+
+	create := transfer.CreateRequest{
+		Product:       req.Product,
+		Package:       req.Package,
+		Row:           pkg,
+		From:          req.From,
+		To:            req.To,
+		ToEnvironment: req.ToEnvironment,
+		Promote:       req.Promote,
+		Priority:      req.Priority,
+		RequestedBy:   middleware.IdentityFrom(r.Context()).Subject,
+		Origin:        "api",
+		ValidateOnly:  req.ValidateOnly,
+	}
+
+	res, err := s.deps.Requests.Create(r.Context(), create)
+	if err != nil {
+		requestError(w, r, err)
+		return
+	}
+
+	// 201 for a new request, 200 for a replay of one that already existed —
+	// the distinction docs/design/04 §7 asks for, so a caller can tell "I made
+	// this" from "this was already asked for". A dry run creates nothing, so
+	// it is always 200.
+	status := http.StatusCreated
+	if !res.Created || req.ValidateOnly {
+		status = http.StatusOK
+	}
+	WriteJSON(w, r, status, createTransferDTO(res))
+}
+
+// requestError maps a resolution failure onto the error model.
+//
+// Nearly every failure here is the caller naming something that does not
+// exist or cannot be used, which is INVALID_ARGUMENT rather than a server
+// fault — and the messages already say which flag settles it, so they are
+// passed through rather than replaced.
+func requestError(w http.ResponseWriter, r *http.Request, err error) {
+	Error(w, r, v1.CodeInvalidArgument, err.Error())
+}
+
+func createTransferDTO(res transfer.CreateResult) v1.CreateTransferResponse {
+	out := v1.CreateTransferResponse{
+		RequestID:   res.RequestID,
+		Created:     res.Created,
+		Operation:   strings.ToUpper(res.Operation),
+		From:        endpointViewDTO(res.Origin),
+		TransferIDs: res.TransferIDs,
+	}
+	for _, t := range res.Targets {
+		out.To = append(out.To, endpointViewDTO(t))
+	}
+	return out
+}
+
+func endpointViewDTO(v transfer.RepoView) v1.TransferEndpoint {
+	return v1.TransferEndpoint{
+		Name:        v.Name,
+		Role:        v.Role,
+		Environment: v.Environment,
+		Registry:    v.Registry,
+		Repository:  v.Repository,
+	}
+}
 
 // handleListTransfers serves GET /api/v1/transfers.
 func (s *Server) handleListTransfers(w http.ResponseWriter, r *http.Request) {

@@ -817,34 +817,6 @@ func TestInvalidPatternIsRejectedAtCompileTime(t *testing.T) {
 
 // The key must not change when targets are listed in a different order — a
 // cosmetic YAML reorder must not duplicate every pending request.
-func TestIdempotencyKeyIsOrderIndependent(t *testing.T) {
-	a := idempotencyKey("replicate", 42, []int64{3, 1, 2}, "", 50)
-	b := idempotencyKey("replicate", 42, []int64{1, 2, 3}, "", 50)
-	if a != b {
-		t.Error("target order changed the idempotency key")
-	}
-}
-
-func TestIdempotencyKeyDistinguishesIntent(t *testing.T) {
-	base := idempotencyKey("replicate", 42, []int64{1}, "", 50)
-
-	cases := map[string]string{
-		"different operation": idempotencyKey("promote", 42, []int64{1}, "", 50),
-		"different package":   idempotencyKey("replicate", 43, []int64{1}, "", 50),
-		"different target":    idempotencyKey("replicate", 42, []int64{2}, "", 50),
-		"extra target":        idempotencyKey("replicate", 42, []int64{1, 2}, "", 50),
-		"different schedule":  idempotencyKey("replicate", 42, []int64{1}, "2026-01-01T00:00:00Z", 50),
-		// Deliberate: re-requesting at a different priority is a distinct
-		// intent and is allowed (docs/design/04 §7).
-		"different priority": idempotencyKey("replicate", 42, []int64{1}, "", 10),
-	}
-	for name, key := range cases {
-		if key == base {
-			t.Errorf("%s produced the same idempotency key", name)
-		}
-	}
-}
-
 func TestFirstMatchWins(t *testing.T) {
 	set, err := compileRules(product.AutoDownload{
 		Enabled: true,

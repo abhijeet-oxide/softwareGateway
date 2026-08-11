@@ -27,6 +27,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/google/uuid"
 	"log/slog"
 	"sync"
 	"time"
@@ -35,6 +36,7 @@ import (
 	"github.com/abhijeet-oxide/softwareGateway/internal/product"
 	"github.com/abhijeet-oxide/softwareGateway/internal/registry"
 	"github.com/abhijeet-oxide/softwareGateway/internal/store"
+	"github.com/abhijeet-oxide/softwareGateway/internal/transfer"
 	"github.com/abhijeet-oxide/softwareGateway/internal/vendors"
 )
 
@@ -1255,7 +1257,7 @@ func (s *Scanner) applyRules(
 	}
 
 	priority := rule.EffectivePriority()
-	key := idempotencyKey("replicate", packageID, targetIDs, "", priority)
+	key := transfer.IdempotencyKey("replicate", packageID, sourceRepoID, targetIDs, "", priority)
 
 	id, created, err := s.packages.CreateTransferRequest(ctx, tx, store.TransferRequestRow{
 		ID:             requestID(key),
@@ -1274,6 +1276,22 @@ func (s *Scanner) applyRules(
 	}
 	if !created {
 		return 0, nil
+	}
+
+	// One transfer per target the RULE named, opened here rather than derived
+	// later. Deriving them at expansion time read current configuration and so
+	// turned a rule saying `targets: [lab]` into every enabled target.
+	for _, targetID := range targetIDs {
+		if _, err := s.packages.CreateTransfer(ctx, tx, store.TransferRow{
+			ID:           uuid.NewString(),
+			RequestID:    id,
+			PackageID:    packageID,
+			SourceRepoID: sourceRepoID,
+			TargetRepoID: targetID,
+			Priority:     priority,
+		}); err != nil {
+			return 0, err
+		}
 	}
 
 	s.log.InfoContext(ctx, "auto-download rule matched",

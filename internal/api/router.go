@@ -79,6 +79,7 @@ type Deps struct {
 	Packages  *store.Packages
 	Discovery Discoverer
 	Queue     Worker
+	Requests  Requests
 	Preflight ConnectivityChecker
 	Leader    Leadership
 	Component string
@@ -209,6 +210,12 @@ func (s *Server) routes() chi.Router {
 			// Transfers, read-only. Registered with the store rather than with
 			// the queue: a follower replica serves these perfectly well, and an
 			// operator asking "did it work" should not need to find the leader.
+			// Creating a request needs the resolver and the planner behind it,
+			// so it is registered only when those are wired. The read routes
+			// below need neither and a follower replica serves them fine.
+			if s.deps.Requests != nil {
+				r.Post("/transfers", s.handleCreateTransfer)
+			}
 			r.Get("/transfers", s.handleListTransfers)
 			r.Get("/transfers/{transfer}", s.handleGetTransfer)
 			r.Get("/transfers/{transfer}/jobs", s.handleListTransferJobs)

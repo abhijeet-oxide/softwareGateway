@@ -528,3 +528,17 @@ func (c *Client) ListTransferJobs(ctx context.Context, id string) (*ListJobsResp
 	}
 	return &out, nil
 }
+
+// CreateTransfer asks for a package to be copied.
+//
+// One call serves both `transfers create` and `transfers promote`: the
+// operation is derived server-side from what `from` resolves to, so the client
+// sends intent rather than a classification it would have to keep in step with
+// configuration it cannot see.
+func (c *Client) CreateTransfer(ctx context.Context, req CreateTransferRequest) (*CreateTransferResponse, error) {
+	var out CreateTransferResponse
+	if err := c.post(ctx, "/api/v1/transfers", req, &out); err != nil {
+		return nil, err
+	}
+	return &out, nil
+}

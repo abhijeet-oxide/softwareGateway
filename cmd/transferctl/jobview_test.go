@@ -214,3 +214,81 @@ func TestRateTrackerNeedsTwoReadings(t *testing.T) {
 func bytesOf(n int64) v1.Int64String {
 	return v1.Int64String(strconv.FormatInt(n, 10))
 }
+
+// AN ETA MUST NOTICE THAT SOMETHING CHANGED.
+//
+// The cumulative average cannot: it carries the whole history, so a transfer
+// that crawled for ten minutes and then got ten times faster needs over an hour
+// of the new speed before the average is within 10% of it. That is precisely
+// the moment somebody is watching — they have just added a worker or bypassed a
+// proxy and want to know whether it worked — and the number would still be
+// describing the period before they touched anything.
+func TestSmoothedRateFollowsAChangeTheAverageWouldNotYet(t *testing.T) {
+	var r rateTracker
+	at := time.Now()
+
+	// Ten minutes of crawling, sampled every two seconds.
+	const slow = 500 * 1024.0 // 500 KiB/s
+	bytes := int64(0)
+	for range 300 {
+		bytes += int64(slow * 2)
+		at = at.Add(2 * time.Second)
+		r.observe(bytes, at)
+	}
+	if got := r.smoothed; got < slow*0.9 || got > slow*1.1 {
+		t.Fatalf("smoothed rate over a steady period = %.0f B/s, want about %.0f", got, slow)
+	}
+
+	// Ten times faster, for one minute.
+	const fast = 5 * 1024 * 1024.0
+	for range 30 {
+		bytes += int64(fast * 2)
+		at = at.Add(2 * time.Second)
+		r.observe(bytes, at)
+	}
+
+	// The cumulative average after that minute, for comparison: 600s at 500
+	// KiB/s then 60s at 5 MiB/s is about 909 KiB/s — still under a fifth of the
+	// truth, and an ETA built on it would be five times too long.
+	average := float64(bytes) / at.Sub(at.Add(-660*time.Second)).Seconds()
+	if average > fast/3 {
+		t.Fatalf("test is not measuring what it thinks: average %.0f is already near %.0f",
+			average, fast)
+	}
+	if r.smoothed < fast*0.7 {
+		t.Errorf("smoothed rate = %.0f B/s after a minute at %.0f; it should have followed"+
+			"\n(average is still %.0f, which is the problem this exists to solve)",
+			r.smoothed, fast, average)
+	}
+	// And it is a smoothing, not just the last sample: peak is the raw one.
+	if r.smoothed > fast {
+		t.Errorf("smoothed rate %.0f exceeds the actual %.0f", r.smoothed, fast)
+	}
+}
+
+// A watcher's rate is preferred for the ETA, and the average is the fallback.
+func TestEstimateUsesTheRateItIsGiven(t *testing.T) {
+	tr := &v1.Transfer{
+		State:     v1.TransferRunning,
+		StartedAt: time.Now().Add(-100 * time.Second).Format(time.RFC3339Nano),
+		Progress: v1.TransferProgress{
+			PlannedBytes:     bytesOf(1100),
+			BytesTransferred: bytesOf(100),
+		},
+	}
+
+	// Average is 1 B/s over 100s, so 1000 remaining bytes reads as ~16m40s.
+	if got, want := etaOf(tr, 0), "~16m40s"; got != want {
+		t.Errorf("eta from the average = %q, want %q", got, want)
+	}
+	// A watcher measuring 10 B/s says 100s instead, without waiting for the
+	// average to catch up.
+	if got, want := etaOf(tr, 10), "~1m40s"; got != want {
+		t.Errorf("eta from a live rate = %q, want %q", got, want)
+	}
+	// A settled transfer has no remaining time to estimate.
+	tr.State = v1.TransferSucceeded
+	if got := etaOf(tr, 10); got != "-" {
+		t.Errorf("eta of a finished transfer = %q, want -", got)
+	}
+}

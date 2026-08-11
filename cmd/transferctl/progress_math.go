@@ -84,7 +84,30 @@ func averageRate(t *v1.Transfer) (float64, bool) {
 // measured over almost no time, which swings wildly and is believed anyway.
 func estimate(t *v1.Transfer) (time.Duration, bool) {
 	rate, ok := averageRate(t)
-	if !ok || rate <= 0 {
+	if !ok {
+		return 0, false
+	}
+	return estimateAt(t, rate)
+}
+
+// estimateAt extrapolates the remaining bytes at a rate the caller supplies.
+//
+// # Why a caller ever supplies one
+//
+// The average is a CUMULATIVE average, and that makes it slow to react by
+// construction: it carries the whole history, so a transfer that spent ten
+// minutes crawling and then got ten times faster needs well over an hour of the
+// new speed before the average is within 10% of it. Someone who has just added
+// a worker, or bypassed a proxy, is watching precisely to find out whether it
+// helped — and would be reading a number that mostly reflects the period before
+// they changed anything.
+//
+// A watcher takes samples, so it can do better: it passes the smoothed rate
+// from its rateTracker, which follows a real change within about half a minute.
+// Without --watch there is nothing but the average, and the average is honest
+// about what it is.
+func estimateAt(t *v1.Transfer, rate float64) (time.Duration, bool) {
+	if rate <= 0 {
 		return 0, false
 	}
 

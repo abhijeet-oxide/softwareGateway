@@ -29,12 +29,27 @@ import (
 // watching do not become a load problem of their own.
 const DefaultWatchInterval = 2 * time.Second
 
+// smoothingWindow is roughly how long the smoothed rate takes to follow a
+// change in the real one.
+//
+// Thirty seconds, which is a compromise between two failure modes that are both
+// worse. A raw two-second sample is far too jumpy to extrapolate an ETA from —
+// one large blob finishing makes it spike, and an ETA that swings by an hour
+// between redraws is not believed, or worse, is. The cumulative average has the
+// opposite problem: it is dragged by the whole history and takes longer to
+// forget a slow start than the slow start itself lasted.
+const smoothingWindow = 30 * time.Second
+
 // rateTracker turns successive byte totals into a throughput.
 type rateTracker struct {
 	lastBytes int64
 	lastAt    time.Time
 	current   float64
 	peak      float64
+	// smoothed is an exponentially weighted average of the samples, and it is
+	// the one an ETA should extrapolate from: responsive enough to notice a
+	// second worker starting, steady enough that the number stays readable.
+	smoothed float64
 }
 
 // observe records a sample and returns the rate since the previous one.
@@ -66,6 +81,17 @@ func (r *rateTracker) observe(bytes int64, at time.Time) {
 	if r.current > r.peak {
 		r.peak = r.current
 	}
+
+	// Weighted by the ACTUAL gap rather than by a fixed per-sample constant, so
+	// `--interval 10s` and `--interval 1s` describe the same thirty seconds of
+	// history. A poll that arrives late — a slow Coordinator, a laptop that
+	// slept — then counts for what it covers instead of for one tick.
+	if r.smoothed == 0 {
+		r.smoothed = r.current
+		return
+	}
+	alpha := seconds / (seconds + smoothingWindow.Seconds())
+	r.smoothed += alpha * (r.current - r.smoothed)
 }
 
 // watchLoop re-renders until the context is cancelled or `done` says to stop.
@@ -110,9 +136,24 @@ func watchLoop(
 // and escape sequences in that stream are noise. A rule and a timestamp make
 // successive snapshots readable instead. isTerminal is the one in progress.go,
 // which already draws a live line and had to answer the same question.
+//
+// # Why three sequences and why in this order
+//
+// `ESC[H` then `ESC[2J` was wrong, and the symptom was a table drawn without
+// its header. `2J` clears the visible screen, and terminals differ on what
+// happens to what was there: several — Windows Terminal among them — SCROLL it
+// into the scrollback rather than discarding it, which moves the cursor with
+// it. Homing first and clearing second therefore leaves the cursor somewhere
+// below the top, and the first lines written land above the viewport.
+//
+// Clear the screen, clear the scrollback (`3J`), then home the cursor, so the
+// next frame starts at a known position on a known-empty screen. `3J` also
+// stops a long watch from filling the scrollback with hundreds of near
+// identical frames, which is what makes scrolling back for real output
+// useless.
 func clearScreen(w io.Writer) {
 	if isTerminal(w) {
-		fmt.Fprint(w, "\033[H\033[2J")
+		fmt.Fprint(w, "\033[2J\033[3J\033[H")
 		return
 	}
 	fmt.Fprintf(w, "\n--- %s ---\n", time.Now().Format(time.RFC3339))

@@ -1081,17 +1081,89 @@ func (p *Packages) ListTransfers(ctx context.Context, f ListTransfersFilter) ([]
 }
 
 // GetTransfer returns one transfer.
-func (p *Packages) GetTransfer(ctx context.Context, id string) (TransferSummary, error) {
+func (p *Packages) GetTransfer(ctx context.Context, ref string) (TransferSummary, error) {
+	id, err := p.ResolveTransferID(ctx, ref)
+	if err != nil {
+		return TransferSummary{}, err
+	}
+
 	row := p.db.QueryRowContext(ctx, p.dialect.Rewrite(transferSelect+" WHERE t.id = ?"), id)
 
-	t, err := scanTransfer(row)
-	if errors.Is(err, sql.ErrNoRows) {
-		return TransferSummary{}, fmt.Errorf("transfer %s was not found", id)
+	t, scanErr := scanTransfer(row)
+	if errors.Is(scanErr, sql.ErrNoRows) {
+		return TransferSummary{}, fmt.Errorf("transfer %s was not found", ref)
 	}
-	if err != nil {
-		return TransferSummary{}, fmt.Errorf("read transfer %s: %w", id, err)
+	if scanErr != nil {
+		return TransferSummary{}, fmt.Errorf("read transfer %s: %w", ref, scanErr)
 	}
 	return t, nil
+}
+
+// ResolveTransferID accepts a full transfer ID or an unambiguous PREFIX.
+//
+// Transfers are identified by UUID, and every listing shortens them to the
+// first segment because a column of full UUIDs is unreadable. A `describe`
+// that then refused the very string `list` printed was a trap — the output
+// said `transferctl transfers describe 4d882940` and that command answered
+// NOT_FOUND.
+//
+// Prefixes resolve the way a short commit hash does: exact match first, then a
+// unique prefix, and an ambiguous one is an error naming the candidates rather
+// than a guess.
+func (p *Packages) ResolveTransferID(ctx context.Context, ref string) (string, error) {
+	ref = strings.TrimSpace(ref)
+	if ref == "" {
+		return "", errors.New("a transfer ID is required")
+	}
+
+	var exact string
+	err := p.db.QueryRowContext(ctx,
+		p.dialect.Rewrite(`SELECT id FROM transfers WHERE id = ?`), ref).Scan(&exact)
+	if err == nil {
+		return exact, nil
+	}
+	if !errors.Is(err, sql.ErrNoRows) {
+		return "", fmt.Errorf("resolve transfer %s: %w", ref, err)
+	}
+
+	// LIKE with an escaped pattern: a UUID contains none of the wildcards, but
+	// the input is user-supplied and building a pattern from it unescaped is
+	// how a listing turns into a scan.
+	rows, err := p.db.QueryContext(ctx, p.dialect.Rewrite(
+		`SELECT id FROM transfers WHERE id LIKE ? ESCAPE '\' ORDER BY created_at DESC LIMIT 10`),
+		escapeLike(ref)+"%")
+	if err != nil {
+		return "", fmt.Errorf("resolve transfer %s: %w", ref, err)
+	}
+	defer func() { _ = rows.Close() }()
+
+	var matches []string
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return "", fmt.Errorf("scan transfer ID: %w", err)
+		}
+		matches = append(matches, id)
+	}
+	if err := rows.Err(); err != nil {
+		return "", err
+	}
+
+	switch len(matches) {
+	case 1:
+		return matches[0], nil
+	case 0:
+		return "", fmt.Errorf("transfer %s was not found", ref)
+	default:
+		return "", fmt.Errorf("%s matches %d transfers: %s\nuse more of the ID",
+			ref, len(matches), strings.Join(matches, ", "))
+	}
+}
+
+// escapeLike neutralises the wildcards in a user-supplied LIKE pattern.
+func escapeLike(s string) string {
+	r := strings.NewReplacer(`\`, `\\`, "%", `\%`, "_", `\_`)
+	return r.Replace(s)
 }
 
 // JobSummary is one job as an operator sees it.
@@ -1116,9 +1188,14 @@ type JobSummary struct {
 // Ordered by wave then size, largest first within a wave: the big blobs are
 // what a person watching a stalled transfer wants at the top, and they are
 // also what the remaining time actually depends on.
-func (p *Packages) ListJobs(ctx context.Context, transferID string, limit int) ([]JobSummary, error) {
+func (p *Packages) ListJobs(ctx context.Context, ref string, limit int) ([]JobSummary, error) {
 	if limit <= 0 {
 		limit = 500
+	}
+
+	transferID, err := p.ResolveTransferID(ctx, ref)
+	if err != nil {
+		return nil, err
 	}
 
 	rows, err := p.db.QueryContext(ctx, p.dialect.Rewrite(`

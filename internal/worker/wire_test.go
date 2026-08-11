@@ -152,7 +152,7 @@ func newWireHarness(t *testing.T, src, dst *fakeregistry.Registry) *wireHarness 
 
 	h.loop = worker.NewLoop(
 		v1.NewClient(server.URL),
-		regclient.NewClients(products, product.NewSecretResolver(t.TempDir()), log),
+		regclient.NewClients(products, product.NewSecretResolver(t.TempDir()), "", log),
 		worker.Options{
 			WorkerID:          "worker-wire-1",
 			MaxConcurrentJobs: 4,

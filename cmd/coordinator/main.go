@@ -165,7 +165,7 @@ func run() error {
 		products: products,
 		catalog:  cat,
 		packages: packages,
-		clients:  regclient.NewClients(products, resolver, logger),
+		clients:  regclient.NewClients(products, resolver, cfg.ProductsDir(), logger),
 		log:      logger,
 	}
 	// The requester turns `transfers create` and `transfers promote` into

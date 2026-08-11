@@ -17,6 +17,7 @@ package regclient
 import (
 	"fmt"
 	"log/slog"
+	"sort"
 	"strings"
 	"sync"
 
@@ -45,6 +46,9 @@ type Clients struct {
 	products *product.Registry
 	secrets  *product.SecretResolver
 	log      *slog.Logger
+	// sourceDir is where the products came from, carried only so a failure to
+	// find one can say where it looked.
+	sourceDir string
 
 	mu     sync.Mutex
 	byKey  map[string]registry.Repository
@@ -52,17 +56,39 @@ type Clients struct {
 }
 
 // NewClients builds a client cache.
-func NewClients(products *product.Registry, secrets *product.SecretResolver, log *slog.Logger) *Clients {
+//
+// sourceDir is where products were loaded from. It is used for one thing —
+// telling a reader where this process looked when it cannot find a product —
+// and an empty value simply omits that from the message.
+func NewClients(
+	products *product.Registry, secrets *product.SecretResolver,
+	sourceDir string, log *slog.Logger,
+) *Clients {
 	if log == nil {
 		log = slog.Default()
 	}
 	return &Clients{
-		products: products,
-		secrets:  secrets,
-		log:      log,
-		byKey:    map[string]registry.Repository{},
-		shared:   map[string]*transport.Shared{},
+		products:  products,
+		secrets:   secrets,
+		sourceDir: sourceDir,
+		log:       log,
+		byKey:     map[string]registry.Repository{},
+		shared:    map[string]*transport.Shared{},
 	}
+}
+
+// describeLoaded names the products this process can actually see.
+func describeLoaded(reg *product.Registry) string {
+	loaded := reg.List()
+	if len(loaded) == 0 {
+		return "none"
+	}
+	names := make([]string, 0, len(loaded))
+	for _, p := range loaded {
+		names = append(names, p.Metadata.Name)
+	}
+	sort.Strings(names)
+	return strings.Join(names, ", ")
 }
 
 // For returns a repository client for one end of a job.
@@ -124,9 +150,17 @@ func (c *Clients) For(e v1.JobEndpoint) (registry.Repository, error) {
 func (c *Clients) configFor(e v1.JobEndpoint) (registry.ClientConfig, error) {
 	p, ok := c.products.Get(e.Product)
 	if !ok {
+		// Say what this process DOES have. "Not configured" alone sends the
+		// reader to the Coordinator, which is the wrong end: the Coordinator
+		// planned the job correctly and it is this process that cannot see the
+		// product. Naming the directory and what was found in it turns the
+		// message into the fix.
 		return registry.ClientConfig{}, fmt.Errorf(
-			"product %q is not configured on this worker: it has a different "+
-				"configuration mount from the Coordinator that planned this job", e.Product)
+			"product %q is not configured on this worker"+
+				"\nthis worker loaded %d product(s) from %s: %s"+
+				"\npoint it at the same configuration the Coordinator uses "+
+				"(--config, or configDir)",
+			e.Product, c.products.Count(), c.sourceDir, describeLoaded(c.products))
 	}
 
 	cfg := registry.ClientConfig{

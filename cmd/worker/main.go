@@ -133,7 +133,7 @@ func run() error {
 
 	loop := worker.NewLoop(
 		coordinator,
-		regclient.NewClients(products, secrets, logger),
+		regclient.NewClients(products, secrets, cfg.ProductsDir(), logger),
 		worker.Options{
 			WorkerID:          workerID,
 			Version:           info.Version,

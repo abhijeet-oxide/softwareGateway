@@ -363,11 +363,11 @@ Priority  100          Wave 1 of 3          Elapsed 6m27s
 ```
 $ transferctl transfers jobs 9c1e8f2a --watch
 
-STATE     KIND      SOURCE                         TARGET                                     DIGEST            SIZE       MOVED      ATTEMPTS  WAVE  DETAIL
-leased    blob      orbs/cfx-5000-k8s:1.2.3 *      sw/orbs/cfx-5000-k8s/nginx:1.2.3           sha256:4a5b8c9d…  256.0 MiB  200.1 MiB  1/8       0     held by worker-x2k4
-leased    blob      orbs/cfx-5000-k8s:24.3.1       sw/orbs/cfx-5000-k8s/cfx-core:24.3.1       sha256:7e2f1a3b…  198.4 MiB   81.3 MiB  1/8       0     held by worker-p9m2
-pending   blob      orbs/cfx-5000-k8s:24.3.1       sw/orbs/cfx-5000-k8s/cfx-core:24.3.1       sha256:3c9e1f7d…  134.2 MiB        0 B  3/8       0     -
-blocked   manifest  orbs/cfx-5000-k8s:24.3.1       sw/orbs/cfx-5000-k8s/cfx-core:24.3.1       sha256:9b3e2d1c…    2.1 KiB        0 B  -         1     -
+STATE     KIND      SOURCE                                    TARGET                                        DIGEST            SIZE       MOVED      ATTEMPTS  WAVE  DETAIL
+leased    blob      orbs/cfx-5000-k8s (mcc:25.7.2503) *       stage/orbs/cfx-5000-k8s                       sha256:4a5b8c9d…  256.0 MiB  200.1 MiB  1/8       0     held by worker-x2k4
+leased    blob      orbs/cfx-5000-k8s (mcc:25.7.2503) *       stage/cfx-5000-product/mcc:25.7.2503          sha256:4a5b8c9d…  256.0 MiB   12.0 MiB  1/8       0     held by worker-p9m2
+pending   blob      orbs/cfx-5000-k8s (mcc:25.7.2503)         stage/orbs/cfx-5000-k8s                       sha256:3c9e1f7d…  134.2 MiB        0 B  3/8       0     -
+blocked   manifest  orbs/cfx-5000-k8s:orb_23.8.1076           stage/orbs/cfx-5000-k8s:orb_23.8.1076         sha256:9b3e2d1c…    2.1 KiB        0 B  -         2     -
 
 $ transferctl transfers jobs 9c1e8f2a --state failed -o json | jq '.jobs[].digest'
 ```
@@ -378,11 +378,23 @@ and a listing shows a page of them, so the order decides what an operator ever
 sees; ordering by wave buried the handful actually moving under whatever was
 planned first.
 
-SOURCE and TARGET are the full paths, per row. A blob is nobody's idea of a
-recognisable object, so it is shown as part of the image or chart that
-references it — the vendor's own name for it, from
-`org.opencontainers.image.ref.name`. A `*` marks content several artifacts
-share, where the one named is an example rather than the whole truth.
+SOURCE and TARGET are the full paths, per row, and **a tag appears only where
+one is really there.** Three things follow from the two-site placement (§[05](05-transfer-engine.md),
+and `internal/transfer/layout.go`), and each is visible above:
+
+- One digest appears twice with two targets. That is not a duplicate: a
+  component is published inside its bundle, so the index referencing it stays
+  resolvable, AND under the name it advertises, so it can be pulled as itself.
+- The bundle-internal copy is UNTAGGED — the component's name is not that
+  repository's to claim — so its TARGET carries no tag. Borrowing the name's tag
+  to fill the column would advertise a reference the transfer never creates.
+- Everything is read from one repository, because an index may only reference
+  children co-located with it. So SOURCE is `repository:tag` only when the name
+  belongs to that repository; otherwise the vendor's name goes in parentheses,
+  saying what the content IS rather than where it sits.
+
+A `*` marks content several artifacts share, where the one named is an example
+rather than the whole truth.
 
 `--watch` re-reads every two seconds (`--interval` to change it) and stops when
 nothing is left running or runnable. `transfers list` and `transfers describe`

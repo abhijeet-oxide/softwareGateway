@@ -5,6 +5,7 @@ import (
 	"io"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/spf13/cobra"
 
@@ -196,6 +197,8 @@ func newTransfersListCommand() *cobra.Command {
 	var (
 		productName string
 		state       string
+		watch       bool
+		interval    time.Duration
 	)
 
 	cmd := &cobra.Command{
@@ -203,76 +206,175 @@ func newTransfersListCommand() *cobra.Command {
 		Args:  cobra.NoArgs,
 		Short: "List transfers, newest first",
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			resp, err := newClient().ListTransfers(cmd.Context(), v1.ListTransfersOptions{
-				Product: productName,
-				State:   state,
-			})
-			if err != nil {
-				return err
+			once := func(w io.Writer) (bool, error) {
+				resp, err := newClient().ListTransfers(cmd.Context(), v1.ListTransfersOptions{
+					Product: productName,
+					State:   state,
+				})
+				if err != nil {
+					return false, err
+				}
+				if err := render(w, opts.output, resp, func(w io.Writer) error {
+					return renderTransferList(w, resp)
+				}); err != nil {
+					return false, err
+				}
+				return allSettled(resp.Transfers), nil
 			}
-			return render(stdout(), opts.output, resp, func(w io.Writer) error {
-				if len(resp.Transfers) == 0 {
-					fmt.Fprintln(w, "No transfers yet.")
-					fmt.Fprintln(w)
-					fmt.Fprintln(w, "Transfers are created by auto-download rules when discovery finds")
-					fmt.Fprintln(w, "a matching package. `transferctl packages list` shows what has been")
-					fmt.Fprintln(w, "discovered so far.")
-					return nil
-				}
 
-				tw := newTabWriter(w)
-				fmt.Fprintln(tw, "ID\tPRODUCT\tTAG\tTARGET\tSTATE\tPROGRESS\tRUNNING\tMOVED\tSAVED")
-				for _, t := range resp.Transfers {
-					fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%s\t%d\t%s\t%s\n",
-						shortID(t.ID),
-						t.Product,
-						t.Tag,
-						t.Target,
-						strings.ToLower(string(t.State)),
-						jobProgress(t.Progress),
-						t.Progress.JobsInFlight,
-						humanBytes(t.Progress.BytesTransferred),
-						humanBytes(t.Progress.DedupeSkippedBytes),
-					)
-				}
-				if err := tw.Flush(); err != nil {
-					return err
-				}
-
-				fmt.Fprintln(w)
-				fmt.Fprintln(w, "RUNNING is how many jobs are being worked on right now.")
-				fmt.Fprintln(w, "SAVED is what deduplication avoided moving — content the destination already had.")
-				fmt.Fprintln(w, "transferctl transfers describe <id>   full detail")
-				fmt.Fprintln(w, "transferctl transfers jobs <id>       per-blob progress")
-				return nil
-			})
+			if watch {
+				return watchLoop(cmd.Context(), stdout(), interval, once)
+			}
+			_, err := once(stdout())
+			return err
 		},
 	}
 
 	cmd.Flags().StringVar(&productName, "product", "", "only this product's transfers")
 	cmd.Flags().StringVar(&state, "state", "",
 		"only this state (running, succeeded, failed, ...)")
+	cmd.Flags().BoolVarP(&watch, "watch", "w", false,
+		"re-read until every transfer has settled")
+	cmd.Flags().DurationVar(&interval, "interval", DefaultWatchInterval,
+		"how often --watch re-reads")
 	return cmd
+}
+
+// allSettled reports that nothing is left to watch.
+//
+// A watch that never ends is one somebody leaves running; ending it when the
+// work does means `--watch` can be the last line of a script.
+func allSettled(transfers []v1.Transfer) bool {
+	if len(transfers) == 0 {
+		return false
+	}
+	for _, t := range transfers {
+		switch t.State {
+		case v1.TransferSucceeded, v1.TransferFailed, v1.TransferCancelled:
+		default:
+			return false
+		}
+	}
+	return true
+}
+
+func renderTransferList(w io.Writer, resp *v1.ListTransfersResponse) error {
+	return func(w io.Writer) error {
+		if len(resp.Transfers) == 0 {
+			fmt.Fprintln(w, "No transfers yet.")
+			fmt.Fprintln(w)
+			fmt.Fprintln(w, "Transfers are created by auto-download rules when discovery finds")
+			fmt.Fprintln(w, "a matching package. `transferctl packages list` shows what has been")
+			fmt.Fprintln(w, "discovered so far.")
+			return nil
+		}
+
+		tw := newTabWriter(w)
+		fmt.Fprintln(tw,
+			"ID\tPRODUCT\tTAG\tSTATE\tDONE\tPROGRESS\tRUNNING\tELAPSED\tETA\tMOVED\tSAVED")
+		for i := range resp.Transfers {
+			t := &resp.Transfers[i]
+			fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%.0f%%\t%s\t%d\t%s\t%s\t%s\t%s\n",
+				shortID(t.ID),
+				t.Product,
+				t.Tag,
+				strings.ToLower(string(t.State)),
+				percentComplete(t.Progress),
+				jobProgress(t.Progress),
+				t.Progress.JobsInFlight,
+				elapsedOf(t),
+				etaOf(t),
+				humanBytes(t.Progress.BytesTransferred),
+				humanBytes(t.Progress.DedupeSkippedBytes),
+			)
+		}
+		if err := tw.Flush(); err != nil {
+			return err
+		}
+
+		fmt.Fprintln(w)
+		fmt.Fprintln(w, "DONE is by job count, which is the measure that reaches 100% — bytes does not,")
+		fmt.Fprintln(w, "because deduplicated content counts as planned and moves nothing.")
+		fmt.Fprintln(w, "ETA extrapolates the observed rate; `-` means nothing has moved yet to measure.")
+		fmt.Fprintln(w, "transferctl transfers describe <id>   full detail, including throughput")
+		fmt.Fprintln(w, "transferctl transfers jobs <id>       what is copying right now")
+		return nil
+	}(w)
+}
+
+func elapsedOf(t *v1.Transfer) string {
+	d, ok := elapsed(t)
+	if !ok {
+		return "-"
+	}
+	return humanDuration(d)
+}
+
+func etaOf(t *v1.Transfer) string {
+	if t.State != v1.TransferRunning {
+		return "-"
+	}
+	d, ok := estimate(t)
+	if !ok {
+		return "-"
+	}
+	return "~" + humanDuration(d)
 }
 
 func newTransfersDescribeCommand() *cobra.Command {
+	var (
+		watch    bool
+		interval time.Duration
+	)
+
 	cmd := &cobra.Command{
 		Short: "Show one transfer in full",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			t, err := newClient().GetTransfer(cmd.Context(), args[0])
-			if err != nil {
-				return err
+			// One tracker across the whole watch, so current and peak are
+			// measured over the session rather than reset on every redraw.
+			rates := &rateTracker{}
+
+			once := func(w io.Writer) (bool, error) {
+				t, err := newClient().GetTransfer(cmd.Context(), args[0])
+				if err != nil {
+					return false, err
+				}
+				rates.observe(int64Of(t.Progress.BytesTransferred), time.Now())
+
+				if err := render(w, opts.output, t, func(w io.Writer) error {
+					return describeTransfer(w, t, rates, watch)
+				}); err != nil {
+					return false, err
+				}
+				return settled(t.State), nil
 			}
-			return render(stdout(), opts.output, t, func(w io.Writer) error {
-				return describeTransfer(w, t)
-			})
+
+			if watch {
+				return watchLoop(cmd.Context(), stdout(), interval, once)
+			}
+			_, err := once(stdout())
+			return err
 		},
 	}
+
 	takes(cmd, "describe", transferArg())
+	cmd.Flags().BoolVarP(&watch, "watch", "w", false,
+		"re-read until the transfer settles, reporting live throughput")
+	cmd.Flags().DurationVar(&interval, "interval", DefaultWatchInterval,
+		"how often --watch re-reads")
 	return cmd
 }
 
-func describeTransfer(w io.Writer, t *v1.Transfer) error {
+func settled(s v1.TransferState) bool {
+	switch s {
+	case v1.TransferSucceeded, v1.TransferFailed, v1.TransferCancelled:
+		return true
+	default:
+		return false
+	}
+}
+
+func describeTransfer(w io.Writer, t *v1.Transfer, rates *rateTracker, watching bool) error {
 	tw := newTabWriter(w)
 	fmt.Fprintf(tw, "ID:\t%s\n", t.ID)
 	fmt.Fprintf(tw, "Product:\t%s\n", t.Product)
@@ -296,10 +398,20 @@ func describeTransfer(w io.Writer, t *v1.Transfer) error {
 	if p.JobsWaiting > 0 {
 		fmt.Fprintf(pw, "  Waiting:\t%d in retry backoff\n", p.JobsWaiting)
 	}
-	fmt.Fprintf(pw, "  Transferred:\t%s of %s planned\n",
-		humanBytes(p.BytesTransferred), humanBytes(p.PlannedBytes))
+	fmt.Fprintf(pw, "  Transferred:\t%s of %s planned  (%.0f%% of jobs done)\n",
+		humanBytes(p.BytesTransferred), humanBytes(p.PlannedBytes), percentComplete(p))
 	fmt.Fprintf(pw, "  Deduplicated:\t%s never moved\n", humanBytes(p.DedupeSkippedBytes))
+	if d, ok := elapsed(t); ok {
+		fmt.Fprintf(pw, "  Elapsed:\t%s\n", humanDuration(d))
+	}
+	if d, ok := estimate(t); ok && t.State == v1.TransferRunning {
+		fmt.Fprintf(pw, "  Remaining:\t~%s at the observed rate\n", humanDuration(d))
+	}
 	if err := pw.Flush(); err != nil {
+		return err
+	}
+
+	if err := describeThroughput(w, t, rates, watching); err != nil {
 		return err
 	}
 
@@ -337,6 +449,45 @@ func describeTransfer(w io.Writer, t *v1.Transfer) error {
 	return nil
 }
 
+// describeThroughput reports how fast this is actually going.
+//
+// AVERAGE is derivable from what the server holds — bytes moved over time
+// elapsed — so it is always available. CURRENT and PEAK are not: a rate needs
+// two observations and the gap between them, and the server keeps no time
+// series. The watcher takes those samples, so they appear under --watch and
+// are honestly absent without it rather than being invented from one reading.
+func describeThroughput(w io.Writer, t *v1.Transfer, rates *rateTracker, watching bool) error {
+	avg, hasAvg := averageRate(t)
+	if !hasAvg && !watching {
+		return nil
+	}
+
+	fmt.Fprintln(w)
+	fmt.Fprintln(w, "Throughput")
+	tw := newTabWriter(w)
+
+	if hasAvg {
+		fmt.Fprintf(tw, "  Average:\t%s\tover the whole transfer\n", humanRate(avg))
+	}
+	if watching {
+		if rates.current > 0 {
+			fmt.Fprintf(tw, "  Current:\t%s\tover the last sample\n", humanRate(rates.current))
+			fmt.Fprintf(tw, "  Peak:\t%s\thighest seen while watching\n", humanRate(rates.peak))
+		} else {
+			fmt.Fprintf(tw, "  Current:\t-\tmeasured from the next sample\n")
+		}
+	}
+	if err := tw.Flush(); err != nil {
+		return err
+	}
+
+	if !watching {
+		fmt.Fprintln(w)
+		fmt.Fprintln(w, "Current and peak need two readings; `--watch` takes them.")
+	}
+	return nil
+}
+
 // inFlight renders concurrency in the terms a reader is asking about.
 //
 // "3 across 1 worker" answers the question directly; a bare count leaves them
@@ -356,6 +507,8 @@ func newTransfersJobsCommand() *cobra.Command {
 	var (
 		failedOnly bool
 		state      string
+		watch      bool
+		interval   time.Duration
 	)
 
 	cmd := &cobra.Command{
@@ -371,63 +524,24 @@ func newTransfersJobsCommand() *cobra.Command {
 				state = "failed"
 			}
 
-			resp, err := newClient().ListTransferJobs(cmd.Context(), args[0], state)
-			if err != nil {
-				return err
+			once := func(w io.Writer) (bool, error) {
+				resp, err := newClient().ListTransferJobs(cmd.Context(), args[0], state)
+				if err != nil {
+					return false, err
+				}
+				if err := render(w, opts.output, resp, func(w io.Writer) error {
+					return renderJobs(w, resp.Jobs, state)
+				}); err != nil {
+					return false, err
+				}
+				return jobsSettled(resp.Jobs), nil
 			}
-			return render(stdout(), opts.output, resp, func(w io.Writer) error {
-				jobs := resp.Jobs
-				if len(jobs) == 0 {
-					if state != "" {
-						fmt.Fprintf(w, "No %s jobs.\n", state)
-						return nil
-					}
-					fmt.Fprintln(w, "This transfer has no jobs: nothing was planned for it.")
-					return nil
-				}
 
-				tw := newTabWriter(w)
-				fmt.Fprintln(tw,
-					"WAVE\tKIND\tBELONGS TO\tDIGEST\tSIZE\tSTATE\tMOVED\tATTEMPTS\tDETAIL")
-				for _, j := range jobs {
-					fmt.Fprintf(tw, "%d\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n",
-						j.Wave,
-						j.Kind,
-						belongsTo(j),
-						shortDigest(j.Digest),
-						humanBytes(j.SizeBytes),
-						strings.ToLower(string(j.State)),
-						humanBytes(j.BytesTransferred),
-						attemptsOf(j),
-						jobDetail(j),
-					)
-				}
-				if err := tw.Flush(); err != nil {
-					return err
-				}
-
-				// The paths, once, rather than repeated on every row: a
-				// transfer usually spreads over a handful of repositories and
-				// a column of near-identical paths would push everything else
-				// off the screen.
-				fmt.Fprintln(w)
-				fmt.Fprintln(w, "Copying")
-				rw := newTabWriter(w)
-				for _, route := range routesOf(jobs) {
-					fmt.Fprintf(rw, "  %s\t->\t%s\t%s\n",
-						route.from, route.to, route.tags)
-				}
-				if err := rw.Flush(); err != nil {
-					return err
-				}
-
-				fmt.Fprintln(w)
-				fmt.Fprintln(w, "BELONGS TO is the image, chart or artifact a blob is part of — a `*` marks")
-				fmt.Fprintln(w, "content shared by several, so the one named is an example.")
-				fmt.Fprintln(w, "A `skipped` job is a success carrying zero bytes: the content was already")
-				fmt.Fprintln(w, "at the destination, or the registry relocated it server-side.")
-				return nil
-			})
+			if watch {
+				return watchLoop(cmd.Context(), stdout(), interval, once)
+			}
+			_, err := once(stdout())
+			return err
 		},
 	}
 
@@ -435,7 +549,72 @@ func newTransfersJobsCommand() *cobra.Command {
 	cmd.Flags().BoolVar(&failedOnly, "failed", false, "only jobs that have failed")
 	cmd.Flags().StringVar(&state, "state", "",
 		"only this state: leased shows what is running right now")
+	cmd.Flags().BoolVarP(&watch, "watch", "w", false,
+		"re-read until no job is left running or runnable")
+	cmd.Flags().DurationVar(&interval, "interval", DefaultWatchInterval,
+		"how often --watch re-reads")
 	return cmd
+}
+
+func renderJobs(w io.Writer, jobs []v1.Job, state string) error {
+	if len(jobs) == 0 {
+		if state != "" {
+			fmt.Fprintf(w, "No %s jobs.\n", state)
+			return nil
+		}
+		fmt.Fprintln(w, "This transfer has no jobs: nothing was planned for it.")
+		return nil
+	}
+
+	// Rows arrive ordered by activity — what is running first, largest first
+	// within that — so the top of the table is what is happening rather than
+	// whatever happened to be planned first.
+	tw := newTabWriter(w)
+	fmt.Fprintln(tw,
+		"STATE\tKIND\tSOURCE\tTARGET\tDIGEST\tSIZE\tMOVED\tATTEMPTS\tWAVE\tDETAIL")
+	for _, j := range jobs {
+		fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%d\t%s\n",
+			strings.ToLower(string(j.State)),
+			j.Kind,
+			jobSource(j),
+			jobTarget(j),
+			shortDigest(j.Digest),
+			humanBytes(j.SizeBytes),
+			humanBytes(j.BytesTransferred),
+			attemptsOf(j),
+			j.Wave,
+			jobDetail(j),
+		)
+	}
+	if err := tw.Flush(); err != nil {
+		return err
+	}
+
+	fmt.Fprintln(w)
+	fmt.Fprintln(w, "SOURCE and TARGET are the full registry paths this row reads from and")
+	fmt.Fprintln(w, "writes to. A blob shows the image or chart it belongs to; a `*` marks")
+	fmt.Fprintln(w, "content shared by several, so the one named is an example.")
+	fmt.Fprintln(w, "A `skipped` job is a success carrying zero bytes: the content was already")
+	fmt.Fprintln(w, "at the destination, or the registry relocated it server-side.")
+	return nil
+}
+
+// jobsSettled reports that nothing on this page can still move.
+//
+// Blocked counts as unsettled: a manifest blocked behind its blobs is waiting
+// for work that is happening, and a watch that stopped there would quit just
+// before the interesting part.
+func jobsSettled(jobs []v1.Job) bool {
+	if len(jobs) == 0 {
+		return false
+	}
+	for _, j := range jobs {
+		switch j.State {
+		case v1.JobLeased, v1.JobPending, v1.JobBlocked:
+			return false
+		}
+	}
+	return true
 }
 
 // transferArg is the transfer ID every per-transfer command takes.
@@ -504,83 +683,86 @@ func shortID(id string) string {
 	return id
 }
 
-// belongsTo names the artifact a job is part of.
+// jobSource is the exact path a row READS FROM.
 //
-// A digest identifies content and nothing else. What a person needs in a
-// listing is which image, chart or bundle it belongs to, and the vendor
-// already wrote that down: `org.opencontainers.image.ref.name` on the manifest
-// that references it. Where the vendor named nothing — the platform manifests
-// under an index — the parent's short digest is still better than nothing,
-// because it groups the rows that travel together.
-func belongsTo(j v1.Job) string {
-	if j.Parent == nil {
-		return "-"
-	}
-
-	name := j.Parent.Ref
-	if name == "" {
-		name = shortDigest(j.Parent.Digest)
-	}
-	// Its own manifest job: the row IS the artifact, so saying it belongs to
-	// itself would be noise.
-	if j.Kind == "manifest" && j.Parent.Digest == j.Digest && j.Parent.Ref == "" {
-		return "(itself)"
-	}
-	if j.Parent.Shared {
-		name += " *"
-	}
-	return name
+// A digest identifies content and nothing else, and a repository on its own
+// only says which bundle. What a person needs is the whole thing: the
+// repository the registry serves it out of, and — for a blob, which is nobody's
+// idea of a recognisable object — the image or chart it is a layer of.
+//
+// The artifact's name is the vendor's own, from
+// `org.opencontainers.image.ref.name`, so a layer of an nginx image reads as
+// belonging to that image at that tag rather than as an anonymous digest.
+func jobSource(j v1.Job) string {
+	return jobPath(j.SourceRepository, artifactTag(j), sharedBlob(j))
 }
 
-// route is one source-to-destination pair a transfer touches.
-type route struct{ from, to, tags string }
-
-// routesOf collapses the jobs onto the distinct paths they move between.
+// jobTarget is the exact path a row WRITES TO.
 //
-// A bundle spreads over several repositories and every job repeats its pair,
-// so listing them per row would be a column of near-identical strings. Listed
-// once, they answer "what is going where" directly.
-func routesOf(jobs []v1.Job) []route {
-	index := map[string]int{}
-	var out []route
-	// Tags accumulate ACROSS the jobs of a route rather than being taken from
-	// whichever appeared first: only manifest jobs carry them, so the first
-	// job of a route is usually a blob with none, and the route would read as
-	// untagged when it is not.
-	tags := map[string]map[string]bool{}
+// The destination repository is per job rather than per transfer: a bundle's
+// components each land in their own path under the target, reproducing the
+// source's structure, and one component may be published in two places at once
+// so the index that references it stays resolvable. Each row therefore names
+// its own destination rather than a shared one.
+func jobTarget(j v1.Job) string {
+	return jobPath(j.TargetRepository, artifactTag(j), false)
+}
 
-	for _, j := range jobs {
-		if j.SourceRepository == "" && j.TargetRepository == "" {
-			continue
-		}
-		key := j.SourceRepository + "->" + j.TargetRepository
-
-		if _, ok := index[key]; !ok {
-			index[key] = len(out)
-			out = append(out, route{
-				from: dash(j.SourceRepository), to: dash(j.TargetRepository),
-			})
-			tags[key] = map[string]bool{}
-		}
-		for _, tag := range j.TargetTags {
-			tags[key][tag] = true
-		}
+// jobPath assembles one side of a row into `repository:tag`.
+func jobPath(repository, tag string, shared bool) string {
+	if repository == "" {
+		return "-"
 	}
-
-	for key, i := range index {
-		names := make([]string, 0, len(tags[key]))
-		for tag := range tags[key] {
-			names = append(names, ":"+tag)
-		}
-		sort.Strings(names)
-		out[i].tags = strings.Join(names, " ")
+	out := repository
+	if tag != "" {
+		out += ":" + tag
 	}
-
-	sort.Slice(out, func(a, b int) bool {
-		if out[a].from != out[b].from {
-			return out[a].from < out[b].from
-		}
-		return out[a].to < out[b].to
-	})
+	if shared {
+		out += " *"
+	}
 	return out
+}
+
+// artifactTag is the tag identifying what a row is part of.
+//
+// Two sources, in order. A manifest job carries the tags it will answer to
+// once pushed, which is the truth for that row. A blob carries none — blobs are
+// addressed by digest and never tagged — so it takes the tag of the artifact
+// referencing it, which is what makes "a layer of nginx:1.2.3" sayable.
+//
+// Tags are preserved unchanged by a transfer, so the same tag is correct on
+// both sides of the row.
+func artifactTag(j v1.Job) string {
+	if len(j.TargetTags) > 0 {
+		tags := append([]string(nil), j.TargetTags...)
+		sort.Strings(tags)
+		return strings.Join(tags, ",")
+	}
+	if j.Parent != nil {
+		return refTag(j.Parent.Ref)
+	}
+	return ""
+}
+
+// refTag pulls the tag out of a reference like `orbs/CFX-5000-k8s/nginx:1.2.3`.
+//
+// The colon has to come after the last slash to be a tag separator: a registry
+// host may carry a port, and `near.example.com:5000/orbs/x` is a path with no
+// tag in it at all.
+func refTag(ref string) string {
+	i := strings.LastIndex(ref, ":")
+	if i < 0 || i < strings.LastIndex(ref, "/") {
+		return ""
+	}
+	return ref[i+1:]
+}
+
+// sharedBlob reports that the artifact named for a row is one of several.
+//
+// A base layer shared by five images belongs to all of them, and the one shown
+// is an example. Marking it keeps the column honest without a column of its
+// own — the alternative is a reader concluding that deleting that one image
+// would remove the layer.
+func sharedBlob(j v1.Job) bool {
+	return j.Parent != nil && j.Parent.Shared
 }

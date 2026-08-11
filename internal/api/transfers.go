@@ -266,6 +266,7 @@ func transferDTO(t store.TransferSummary) v1.Transfer {
 		},
 		FailureReason: t.FailureReason,
 		CreatedAt:     t.CreatedAt,
+		StartedAt:     t.StartedAt,
 		CompletedAt:   t.CompletedAt,
 	}
 }

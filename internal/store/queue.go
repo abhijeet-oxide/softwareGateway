@@ -1041,7 +1041,12 @@ type TransferSummary struct {
 
 	FailureReason string
 	CreatedAt     string
-	CompletedAt   string
+	// StartedAt is when the first job was leased, not when the transfer was
+	// asked for. Elapsed and throughput are both meaningless measured from the
+	// request: a transfer that waited an hour for a worker did not spend an
+	// hour transferring.
+	StartedAt   string
+	CompletedAt string
 }
 
 // transferSelect is the shared projection, so list and get cannot disagree
@@ -1066,7 +1071,8 @@ func (p *Packages) transferSelect() string {
 	                  AND j.state = 'leased' AND j.lease_owner IS NOT NULL), 0),
 	       COALESCE((SELECT count(*) FROM jobs j WHERE j.transfer_id = t.id
 	                  AND j.state = 'pending' AND j.next_visible_at > ` + p.dialect.Now() + `), 0),
-	       COALESCE(t.failure_reason, ''), t.created_at, COALESCE(t.completed_at, '')
+	       COALESCE(t.failure_reason, ''), t.created_at, COALESCE(t.started_at, ''),
+	       COALESCE(t.completed_at, '')
 	  FROM transfers t
 	  JOIN packages pk ON pk.id = t.package_id
 	  JOIN products pr ON pr.id = pk.product_id
@@ -1081,7 +1087,7 @@ func scanTransfer(row interface{ Scan(...any) error }) (TransferSummary, error) 
 		&t.PlannedJobs, &t.PlannedBytes, &t.DedupeSkippedBytes,
 		&t.JobsDone, &t.JobsFailed, &t.JobsOutstanding, &t.BytesTransferred,
 		&t.JobsInFlight, &t.Workers, &t.JobsWaiting,
-		&t.FailureReason, &t.CreatedAt, &t.CompletedAt)
+		&t.FailureReason, &t.CreatedAt, &t.StartedAt, &t.CompletedAt)
 	return t, err
 }
 
@@ -1268,11 +1274,26 @@ type JobSummary struct {
 	ParentShared bool
 }
 
-// ListJobs returns a transfer's jobs — layer-level progress.
+// jobActivityOrder sorts what is HAPPENING to the top.
 //
-// Ordered by wave then size, largest first within a wave: the big blobs are
-// what a person watching a stalled transfer wants at the top, and they are
-// also what the remaining time actually depends on.
+// A transfer has thousands of jobs and a listing shows a page of them, so the
+// order decides what an operator ever sees. Ordering by wave put whatever
+// happened to be planned first at the top — usually blocked manifests — and
+// buried the handful actually moving.
+//
+// Running first, then what is runnable, then what is waiting, then the
+// outcomes. Within each, largest first: the big blobs are what a stalled
+// transfer is usually stalled on, and what the remaining time depends on.
+const jobActivityOrder = `CASE j.state
+	WHEN 'leased'    THEN 0
+	WHEN 'pending'   THEN 1
+	WHEN 'failed'    THEN 2
+	WHEN 'blocked'   THEN 3
+	WHEN 'succeeded' THEN 4
+	WHEN 'skipped'   THEN 5
+	ELSE 6 END`
+
+// ListJobs returns a transfer's jobs — layer-level progress.
 func (p *Packages) ListJobs(
 	ctx context.Context, ref string, state string, limit int,
 ) ([]JobSummary, error) {
@@ -1324,7 +1345,7 @@ func (p *Packages) ListJobs(
 		          WHERE ab.digest = j.digest AND a.package_id = t.package_id
 		          ORDER BY a.depth, a.id
 		          LIMIT 1))`+where+`
-		 ORDER BY j.wave, j.size_bytes DESC, j.id
+		 ORDER BY `+jobActivityOrder+`, j.size_bytes DESC, j.id
 		 LIMIT ?`), args...)
 	if err != nil {
 		return nil, fmt.Errorf("list jobs of transfer %s: %w", transferID, err)

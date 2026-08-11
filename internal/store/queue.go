@@ -113,6 +113,14 @@ const leaseColumns = `id, transfer_id, kind, digest, size_bytes, media_type,
 	artifact_id, source_repo_id, target_repo_id, attempts, wave, target_tags,
 	target_repository`
 
+// The lease CLEARS the previous attempt's error.
+//
+// An error describes the attempt that produced it. Leaving it on a job that is
+// now running again means a listing shows a live job labelled with a failure
+// that has already been superseded — which is how a fixed problem goes on
+// looking broken. It is kept while the job waits out its backoff, because
+// there the reason it is waiting is exactly what a reader wants.
+
 // leaseCandidatePredicate is the leasability test, shared by both dialects.
 //
 // The NOT EXISTS is concurrent duplicate suppression (docs/design/04 §5): if
@@ -152,6 +160,8 @@ func (p *Packages) leasePostgres(ctx context.Context, req LeaseRequest) ([]Lease
 		       lease_owner      = ?,
 		       lease_expires_at = ` + p.dialect.TimeAhead("?") + `,
 		       attempts         = attempts + 1,
+		       last_error       = NULL,
+		       last_error_class = NULL,
 		       started_at       = COALESCE(j.started_at, ` + p.dialect.Now() + `),
 		       updated_at       = ` + p.dialect.Now() + `
 		  FROM candidate c
@@ -202,6 +212,8 @@ func (p *Packages) leaseSQLite(ctx context.Context, req LeaseRequest) ([]LeasedJ
 		       lease_owner      = ?,
 		       lease_expires_at = ` + p.dialect.TimeAhead("?") + `,
 		       attempts         = attempts + 1,
+		       last_error       = NULL,
+		       last_error_class = NULL,
 		       started_at       = COALESCE(started_at, ` + p.dialect.Now() + `),
 		       updated_at       = ` + p.dialect.Now() + `
 		 WHERE id IN (` + placeholders + `)`)
@@ -584,11 +596,16 @@ func (p *Packages) applyJobOutcome(
 ) error {
 	if c.Outcome != "failed" {
 		skip := nullIfEmpty(c.SkipReason)
+		// A job that succeeded carries no error, whatever earlier attempts
+		// said. Leaving the last failure on a succeeded row makes a listing
+		// read as though it had failed.
 		_, err := tx.ExecContext(ctx, p.dialect.Rewrite(`
 			UPDATE jobs
 			   SET state             = ?,
 			       skip_reason       = ?,
 			       bytes_transferred = ?,
+			       last_error        = NULL,
+			       last_error_class  = NULL,
 			       lease_owner       = NULL,
 			       lease_expires_at  = NULL,
 			       completed_at      = `+p.dialect.Now()+`,
@@ -1011,6 +1028,16 @@ type TransferSummary struct {
 	JobsFailed       int
 	JobsOutstanding  int
 	BytesTransferred int64
+	// JobsInFlight is how many are leased RIGHT NOW, and Workers is how many
+	// distinct workers hold them. Without these, concurrency is invisible: a
+	// page of jobs ordered by size shows whichever happen to be at the top,
+	// and an operator cannot tell sixteen-way parallelism from one-at-a-time.
+	JobsInFlight int
+	Workers      int
+	// JobsWaiting is how many are in retry backoff rather than runnable. It is
+	// the difference between "the queue is saturated" and "most of this is
+	// sitting out a backoff", which look identical from a progress count.
+	JobsWaiting int
 
 	FailureReason string
 	CreatedAt     string
@@ -1019,7 +1046,8 @@ type TransferSummary struct {
 
 // transferSelect is the shared projection, so list and get cannot disagree
 // about what a transfer looks like.
-const transferSelect = `
+func (p *Packages) transferSelect() string {
+	return `
 	SELECT t.id, t.request_id, t.package_id, pr.name, pk.tag,
 	       src.registry_host || '/' || src.repository_path,
 	       dst.registry_host || '/' || dst.repository_path,
@@ -1032,12 +1060,19 @@ const transferSelect = `
 	       COALESCE((SELECT count(*) FROM jobs j WHERE j.transfer_id = t.id
 	                  AND j.state IN ('pending','blocked','leased')), 0),
 	       COALESCE((SELECT SUM(j.bytes_transferred) FROM jobs j WHERE j.transfer_id = t.id), 0),
+	       COALESCE((SELECT count(*) FROM jobs j WHERE j.transfer_id = t.id
+	                  AND j.state = 'leased'), 0),
+	       COALESCE((SELECT count(DISTINCT j.lease_owner) FROM jobs j WHERE j.transfer_id = t.id
+	                  AND j.state = 'leased' AND j.lease_owner IS NOT NULL), 0),
+	       COALESCE((SELECT count(*) FROM jobs j WHERE j.transfer_id = t.id
+	                  AND j.state = 'pending' AND j.next_visible_at > ` + p.dialect.Now() + `), 0),
 	       COALESCE(t.failure_reason, ''), t.created_at, COALESCE(t.completed_at, '')
 	  FROM transfers t
 	  JOIN packages pk ON pk.id = t.package_id
 	  JOIN products pr ON pr.id = pk.product_id
 	  JOIN repositories src ON src.id = t.source_repo_id
 	  JOIN repositories dst ON dst.id = t.target_repo_id`
+}
 
 func scanTransfer(row interface{ Scan(...any) error }) (TransferSummary, error) {
 	var t TransferSummary
@@ -1045,6 +1080,7 @@ func scanTransfer(row interface{ Scan(...any) error }) (TransferSummary, error) 
 		&t.Source, &t.Target, &t.State, &t.Priority, &t.CurrentWave, &t.MaxWave,
 		&t.PlannedJobs, &t.PlannedBytes, &t.DedupeSkippedBytes,
 		&t.JobsDone, &t.JobsFailed, &t.JobsOutstanding, &t.BytesTransferred,
+		&t.JobsInFlight, &t.Workers, &t.JobsWaiting,
 		&t.FailureReason, &t.CreatedAt, &t.CompletedAt)
 	return t, err
 }
@@ -1060,7 +1096,7 @@ type ListTransfersFilter struct {
 
 // ListTransfers returns transfers, newest first.
 func (p *Packages) ListTransfers(ctx context.Context, f ListTransfersFilter) ([]TransferSummary, error) {
-	query := transferSelect
+	query := p.transferSelect()
 	var args []any
 
 	where := " WHERE 1=1"
@@ -1108,7 +1144,7 @@ func (p *Packages) GetTransfer(ctx context.Context, ref string) (TransferSummary
 		return TransferSummary{}, err
 	}
 
-	row := p.db.QueryRowContext(ctx, p.dialect.Rewrite(transferSelect+" WHERE t.id = ?"), id)
+	row := p.db.QueryRowContext(ctx, p.dialect.Rewrite(p.transferSelect()+" WHERE t.id = ?"), id)
 
 	t, scanErr := scanTransfer(row)
 	if errors.Is(scanErr, sql.ErrNoRows) {
@@ -1202,6 +1238,34 @@ type JobSummary struct {
 	LeaseOwner       string
 	LastError        string
 	LastErrorClass   string
+
+	// Where this job reads from and writes to, as repository PATHS.
+	SourceRepository string
+	TargetRepository string
+	// TargetTags are the names this manifest will answer to once pushed.
+	TargetTags []string
+
+	// The artifact this job belongs to — what makes a digest legible.
+	//
+	// A blob on its own says nothing: `sha256:8a34…` is not something anybody
+	// can act on or recognise. The manifest that references it is, and the
+	// vendor already named that manifest in an annotation, so the layer of a
+	// Helm chart can say it is a layer of that chart.
+	//
+	// For a manifest job this is the artifact itself. For a blob it is a
+	// manifest that references it — one of possibly several, because a base
+	// layer shared by five images belongs to all of them.
+	ParentDigest    string
+	ParentMediaType string
+	// ParentRef is the vendor's own name for the parent, from
+	// org.opencontainers.image.ref.name — `orbs/CFX-5000-k8s/nginx:1.2.3`.
+	// Empty when the vendor named nothing, which is normal for the platform
+	// manifests under an index.
+	ParentRef string
+	// ParentShared reports that the parent is one of several referencing this
+	// blob, so a reader knows the attribution is an example rather than the
+	// whole truth.
+	ParentShared bool
 }
 
 // ListJobs returns a transfer's jobs — layer-level progress.
@@ -1209,7 +1273,9 @@ type JobSummary struct {
 // Ordered by wave then size, largest first within a wave: the big blobs are
 // what a person watching a stalled transfer wants at the top, and they are
 // also what the remaining time actually depends on.
-func (p *Packages) ListJobs(ctx context.Context, ref string, limit int) ([]JobSummary, error) {
+func (p *Packages) ListJobs(
+	ctx context.Context, ref string, state string, limit int,
+) ([]JobSummary, error) {
 	if limit <= 0 {
 		limit = 500
 	}
@@ -1219,14 +1285,47 @@ func (p *Packages) ListJobs(ctx context.Context, ref string, limit int) ([]JobSu
 		return nil, err
 	}
 
+	where := " WHERE j.transfer_id = ?"
+	args := []any{transferID}
+	if state != "" {
+		where += " AND j.state = ?"
+		args = append(args, state)
+	}
+	args = append(args, limit)
+
+	// The parent artifact is resolved IN THE QUERY rather than per row, because
+	// a listing of five hundred jobs would otherwise be five hundred round
+	// trips to turn digests into names.
+	//
+	// For a manifest job the artifact is on the job. For a blob it is found
+	// through artifact_blobs, scoped to this transfer's package so a digest
+	// shared with an unrelated package cannot attribute it to the wrong thing.
 	rows, err := p.db.QueryContext(ctx, p.dialect.Rewrite(`
-		SELECT id, kind, digest, size_bytes, state, COALESCE(skip_reason,''),
-		       wave, attempts, max_attempts, bytes_transferred,
-		       COALESCE(lease_owner,''), COALESCE(last_error,''), COALESCE(last_error_class,'')
-		  FROM jobs
-		 WHERE transfer_id = ?
-		 ORDER BY wave, size_bytes DESC, id
-		 LIMIT ?`), transferID, limit)
+		SELECT j.id, j.kind, j.digest, j.size_bytes, j.state, COALESCE(j.skip_reason,''),
+		       j.wave, j.attempts, j.max_attempts, j.bytes_transferred,
+		       COALESCE(j.lease_owner,''), COALESCE(j.last_error,''),
+		       COALESCE(j.last_error_class,''),
+		       COALESCE(src.repository_path,''),
+		       COALESCE(j.target_repository, dst.repository_path, ''),
+		       j.target_tags,
+		       COALESCE(pa.digest,''), COALESCE(pa.media_type,''), pa.annotations,
+		       COALESCE((SELECT count(*) FROM artifact_blobs ab2
+		                  JOIN package_artifacts a2 ON a2.id = ab2.artifact_id
+		                 WHERE ab2.digest = j.digest AND a2.package_id = t.package_id), 0)
+		  FROM jobs j
+		  JOIN transfers t ON t.id = j.transfer_id
+		  LEFT JOIN repositories src ON src.id = j.source_repo_id
+		  LEFT JOIN repositories dst ON dst.id = j.target_repo_id
+		  LEFT JOIN package_artifacts pa ON pa.id = COALESCE(
+		        j.artifact_id,
+		        (SELECT ab.artifact_id
+		           FROM artifact_blobs ab
+		           JOIN package_artifacts a ON a.id = ab.artifact_id
+		          WHERE ab.digest = j.digest AND a.package_id = t.package_id
+		          ORDER BY a.depth, a.id
+		          LIMIT 1))`+where+`
+		 ORDER BY j.wave, j.size_bytes DESC, j.id
+		 LIMIT ?`), args...)
 	if err != nil {
 		return nil, fmt.Errorf("list jobs of transfer %s: %w", transferID, err)
 	}
@@ -1234,15 +1333,41 @@ func (p *Packages) ListJobs(ctx context.Context, ref string, limit int) ([]JobSu
 
 	var out []JobSummary
 	for rows.Next() {
-		var j JobSummary
+		var (
+			j           JobSummary
+			tags        []byte
+			annotations []byte
+			referencing int
+		)
 		if err := rows.Scan(&j.ID, &j.Kind, &j.Digest, &j.SizeBytes, &j.State,
 			&j.SkipReason, &j.Wave, &j.Attempts, &j.MaxAttempts, &j.BytesTransferred,
-			&j.LeaseOwner, &j.LastError, &j.LastErrorClass); err != nil {
+			&j.LeaseOwner, &j.LastError, &j.LastErrorClass,
+			&j.SourceRepository, &j.TargetRepository, &tags,
+			&j.ParentDigest, &j.ParentMediaType, &annotations, &referencing); err != nil {
 			return nil, fmt.Errorf("scan job: %w", err)
 		}
+		j.TargetTags = decodeTags(tags)
+		j.ParentRef = refNameFrom(annotations)
+		j.ParentShared = j.Kind == "blob" && referencing > 1
 		out = append(out, j)
 	}
 	return out, rows.Err()
+}
+
+// refNameFrom pulls the vendor's own name out of an artifact's annotations.
+//
+// The same reserved key the planner derives destinations from, read here for
+// display: it is what turns `sha256:8a34…` into "a layer of
+// orbs/CFX-5000-k8s/nginx:1.2.3".
+func refNameFrom(raw []byte) string {
+	if len(raw) == 0 {
+		return ""
+	}
+	var annotations map[string]string
+	if err := json.Unmarshal(raw, &annotations); err != nil {
+		return ""
+	}
+	return annotations["org.opencontainers.image.ref.name"]
 }
 
 // tagsJSON encodes a job's destination tags.

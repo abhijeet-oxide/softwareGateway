@@ -1870,12 +1870,22 @@ type PlanTotals struct {
 	MaxWave            int
 }
 
-// RecordPlan writes a transfer's plan totals and moves it to `ready`.
+// RecordPlan writes a transfer's plan totals and opens it for work.
 //
 // The totals are what every progress figure and every estimate is derived from,
 // so they are written in the SAME transaction as the jobs. A transfer whose
 // totals disagreed with its jobs would report a percentage that never reaches
 // a hundred.
+//
+// It also opens the transfer's first WORKABLE wave, which is not always wave 0.
+// A plan whose blobs were entirely deduplicated creates no wave-0 jobs at all,
+// and every manifest is created `blocked`. Leaving current_wave at 0 in that
+// case is a deadlock: wave advancement is driven by job completion, and there
+// is no wave-0 job left to complete and drive it. The transfer would sit in
+// `ready` with a queue full of blocked manifests, forever.
+//
+// That is not a hypothetical — it is the SECOND transfer of any package, which
+// is the case deduplication exists to make fast.
 func (p *Packages) RecordPlan(
 	ctx context.Context, tx *sql.Tx, transferID string, t PlanTotals,
 ) error {
@@ -1886,7 +1896,6 @@ func (p *Packages) RecordPlan(
 		       dedupe_skipped_bytes = ?,
 		       mountable_bytes      = ?,
 		       max_wave             = ?,
-		       current_wave         = 0,
 		       state                = 'ready',
 		       updated_at           = ` + p.dialect.Now() + `
 		 WHERE id = ?`)
@@ -1895,6 +1904,48 @@ func (p *Packages) RecordPlan(
 		t.JobCount, t.PlannedBytes, t.DedupeSkippedBytes, t.MountableBytes,
 		t.MaxWave, transferID); err != nil {
 		return fmt.Errorf("record plan for transfer %s: %w", transferID, err)
+	}
+	return p.OpenFirstWave(ctx, tx, transferID)
+}
+
+// OpenFirstWave sets a transfer's current wave to the earliest one that still
+// has work, and promotes that wave's jobs from `blocked` to `pending`.
+//
+// A transfer with no outstanding work at all goes straight to `succeeded`.
+// That is the honest answer for a replan of something already transferred:
+// there is nothing to do, and parking it in `ready` would mean an operator
+// watching a transfer that will never move.
+func (p *Packages) OpenFirstWave(ctx context.Context, tx *sql.Tx, transferID string) error {
+	var first sql.NullInt64
+	if err := tx.QueryRowContext(ctx, p.dialect.Rewrite(
+		`SELECT MIN(wave) FROM jobs
+		  WHERE transfer_id = ? AND state IN ('pending','blocked','leased')`),
+		transferID).Scan(&first); err != nil {
+		return fmt.Errorf("find the first workable wave of transfer %s: %w", transferID, err)
+	}
+
+	if !first.Valid {
+		if _, err := tx.ExecContext(ctx, p.dialect.Rewrite(
+			`UPDATE transfers
+			    SET state = 'succeeded', current_wave = max_wave,
+			        completed_at = `+p.dialect.Now()+`, updated_at = `+p.dialect.Now()+`
+			  WHERE id = ?`), transferID); err != nil {
+			return fmt.Errorf("finish empty transfer %s: %w", transferID, err)
+		}
+		return nil
+	}
+
+	if _, err := tx.ExecContext(ctx, p.dialect.Rewrite(
+		`UPDATE transfers SET current_wave = ?, updated_at = `+p.dialect.Now()+
+			` WHERE id = ?`), first.Int64, transferID); err != nil {
+		return fmt.Errorf("open wave %d of transfer %s: %w", first.Int64, transferID, err)
+	}
+
+	if _, err := tx.ExecContext(ctx, p.dialect.Rewrite(
+		`UPDATE jobs SET state = 'pending', updated_at = `+p.dialect.Now()+`
+		  WHERE transfer_id = ? AND wave = ? AND state = 'blocked'`),
+		transferID, first.Int64); err != nil {
+		return fmt.Errorf("unblock wave %d of transfer %s: %w", first.Int64, transferID, err)
 	}
 	return nil
 }

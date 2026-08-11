@@ -327,6 +327,35 @@ Within its grant, a worker runs jobs in an `errgroup` with a semaphore. It reque
 
 The adaptive controller ([11](11-resiliency-and-backpressure.md) §3) moves the effective limit **within** the configured ceiling based on observed latency and error rates. Configuration sets the maximum; the controller decides how much of it is safe right now.
 
+### 8.1 Calibration — deciding those numbers by measurement
+
+The table above lists what can be turned. It does not say what to turn it *to*, and nothing in a configuration file does either: the answer depends on the link, the proxy, the vendor's own limits and the distance between the two registries, and it is different for every path. Left to guesswork the failures are systematic and all in one direction — raising concurrency against a link that is already saturated, or adding a worker while a proxy quietly halves the line rate.
+
+`POST /api/v1/products/{product}:calibrate` (`transferctl calibrate`, [13](13-cli.md) §11) measures the path instead. It is implemented in `internal/calibrate` and runs in the **Coordinator** process, for the same reason preflight does: `transferctl` is a pure API client and never opens a connection to a registry itself.
+
+**What it measures**
+
+| Probe | How | What it settles |
+|---|---|---|
+| Route | `DescribeProxy`, then a direct `/v2/` when a proxy is in force | Whether the proxy is mandatory, and what bypassing it is worth |
+| Latency | Three pings, minimum kept | Whether a single stream is bandwidth-delay limited |
+| Read | Real blobs from the source, discarded | The source ceiling and its knee |
+| Write | Real bytes into an upload session that is then **cancelled** | The target ceiling and its knee |
+
+The write probe is the part worth understanding. Distribution v2 separates the upload *session* from the *commit*: `POST …/blobs/uploads/` opens one, `PATCH` streams into it, and a blob joins the repository only when a `PUT` names its digest. Calibration never sends that `PUT` — it PATCHes, measures, and `DELETE`s the session. So the bytes cross the same proxy, TLS, front end and storage backend a transfer's bytes cross, and the repository ends the run exactly as it started. The alternative — push a real blob and delete it afterwards — needs a delete permission nothing else here uses, is visible between the two steps, and leaves an artefact behind if the process dies mid-run.
+
+**What the sweep does and does not honour**
+
+It overrides `maxConnections`, because that is the variable under test: sweeping to sixteen streams through a pool configured for four would measure the pool four times and call the result a plateau. It honours `requestsPerSecond`, because that is a promise to a vendor, and a calibration that broke it would report a throughput no honest configuration could reproduce. It stops early when a level improves on its predecessor by less than 10% — past that point each further level doubles the load on somebody else's registry to confirm something already known.
+
+**The knee, not the peak**
+
+Advice targets the smallest concurrency within a tenth of the best measured. Configuring the peak instead typically buys single-digit percent for double the concurrent load, which is a bad trade against a registry that is not ours.
+
+**What it cannot tell you**
+
+Which host the workers are on. Every report names the host that measured it, and if the workers sit on a different network the numbers describe a path no transfer takes. Dispatching the probe to a named worker is the natural next step and needs the worker's address, which the fleet does not currently report in its heartbeat.
+
 ## 9. Manifest jobs
 
 Simpler than blob jobs, and gated by waves so everything they reference already exists.

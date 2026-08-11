@@ -22,6 +22,7 @@ import (
 	"golang.org/x/sync/errgroup"
 
 	"github.com/abhijeet-oxide/softwareGateway/internal/api"
+	"github.com/abhijeet-oxide/softwareGateway/internal/calibrate"
 	"github.com/abhijeet-oxide/softwareGateway/internal/catalog"
 	"github.com/abhijeet-oxide/softwareGateway/internal/discovery"
 	"github.com/abhijeet-oxide/softwareGateway/internal/maintenance"
@@ -316,8 +317,14 @@ func run() error {
 		// registry: health must not depend on third-party registries, or a
 		// vendor's outage pulls this replica out of the Service.
 		Preflight: preflight.NewChecker(resolver),
-		Leader:    elector,
-		Component: component,
+		// Calibration runs here for the same reason preflight does: transferctl
+		// is a pure API client and must not open a connection to a registry
+		// itself. Every report says which host measured it, because that is the
+		// caveat — a Coordinator on a different network from the workers
+		// measures a path no transfer takes.
+		Calibrator: calibrate.NewCalibrator(resolver),
+		Leader:     elector,
+		Component:  component,
 	})
 
 	httpServer := &http.Server{

@@ -15,6 +15,7 @@ import (
 	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
 
 	"github.com/abhijeet-oxide/softwareGateway/internal/api/middleware"
+	"github.com/abhijeet-oxide/softwareGateway/internal/calibrate"
 	"github.com/abhijeet-oxide/softwareGateway/internal/discovery"
 	"github.com/abhijeet-oxide/softwareGateway/internal/platform/health"
 	"github.com/abhijeet-oxide/softwareGateway/internal/platform/metrics"
@@ -61,6 +62,14 @@ type Worker interface {
 	Heartbeat(ctx context.Context, workerID string, activeJobs []int64) ([]int64, error)
 }
 
+// Calibrator measures one source-to-target path and recommends settings.
+//
+// A consumer-defined interface for the same reason as ConnectivityChecker: the
+// API needs one method, not the probe machinery behind it.
+type Calibrator interface {
+	Run(ctx context.Context, p *product.Product, opts calibrate.Options) (calibrate.Report, error)
+}
+
 // ConnectivityChecker probes configured registries.
 //
 // A consumer-defined interface: the API needs one method, not the checker's
@@ -81,8 +90,11 @@ type Deps struct {
 	Queue     Worker
 	Requests  Requests
 	Preflight ConnectivityChecker
-	Leader    Leadership
-	Component string
+	// Calibrator is optional: without it the calibrate route is not
+	// registered, and a caller is told so by an honest 404.
+	Calibrator Calibrator
+	Leader     Leadership
+	Component  string
 }
 
 // Server wires the router.
@@ -162,6 +174,14 @@ func (s *Server) routes() chi.Router {
 		if s.deps.Preflight != nil {
 			r.Post("/products:checkConnectivity", s.handleCheckConnectivity)
 			r.Post("/products/{product}:checkConnectivity", s.handleCheckConnectivity)
+		}
+
+		// Calibration is per product and never fleet-wide. There is no
+		// `/products:calibrate`: measuring every product would mean saturating
+		// every vendor link this deployment has, in sequence, and the answer
+		// for one path says nothing about another.
+		if s.deps.Calibrator != nil {
+			r.Post("/products/{product}:calibrate", s.handleCalibrate)
 		}
 
 		// Packages. Registered only when there is a store behind them, so a

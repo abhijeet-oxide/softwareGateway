@@ -39,7 +39,17 @@ Google **AIP** (API Improvement Proposals) for resource naming and method shape,
 | `GET` | `/api/v1/products` | List configured products |
 | `GET` | `/api/v1/products/{product}` | Get one, with source/target/rule summary |
 
+| `POST` | `/api/v1/products:checkConnectivity` | Probe every product's registries and credentials |
+| `POST` | `/api/v1/products/{product}:checkConnectivity` | Probe one product's |
+| `POST` | `/api/v1/products/{product}:calibrate` | Measure one source-to-target path and recommend settings ([05](05-transfer-engine.md) §9) |
+
 Products are **read-only over the API.** Configuration comes from Git ([02](02-configuration.md)); an API that could mutate it would create a second source of truth that Flux would immediately revert.
+
+#### Why calibration is per product and synchronous
+
+There is deliberately no `/products:calibrate`. Calibrating everything would mean saturating every vendor link this deployment has, one after another, and the answer for one path says nothing about another — a fleet-wide verb here would be load with no information in it.
+
+It is also a plain synchronous request rather than a long-running operation, despite taking minutes. The result is a **report for a person**, not a resource for a system: nobody calibrates in a script, nobody needs the run to outlive the client, and a stored calibration is a measurement of a network as it was last Tuesday — the exact kind of stale number the feature exists to replace. Clients must raise their own timeout to cover the requested budget; `transferctl` derives one from the flags.
 
 ### Packages
 

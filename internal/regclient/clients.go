@@ -176,7 +176,19 @@ func (c *Clients) configFor(e v1.JobEndpoint) (registry.ClientConfig, error) {
 				"(--config, or configDir)",
 			e.Product, c.products.Count(), c.sourceDir, describeLoaded(c.products))
 	}
+	return ConfigFor(p, c.secrets, e)
+}
 
+// ConfigFor resolves one endpoint of one product into a client config.
+//
+// Exported because calibration needs the SAME answer a transfer would get. It
+// probes the path a job would take, and a probe that resolved its own proxy,
+// CA bundle and credential would be measuring a different route from the one it
+// is advising about — which is the specific failure this whole package exists
+// to prevent (see the package comment).
+func ConfigFor(
+	p *product.Product, secrets *product.SecretResolver, e v1.JobEndpoint,
+) (registry.ClientConfig, error) {
 	cfg := registry.ClientConfig{
 		Registry:   e.Registry,
 		Repository: strings.Trim(e.Repository, "/"),
@@ -194,7 +206,7 @@ func (c *Clients) configFor(e v1.JobEndpoint) (registry.ClientConfig, error) {
 	cfg.RequestsPerSecond = spec.limits.RequestsPerSecond
 	cfg.Burst = spec.limits.Burst()
 
-	n, err := product.ResolveNetwork(p, spec.network, c.secrets)
+	n, err := product.ResolveNetwork(p, spec.network, secrets)
 	if err != nil {
 		return registry.ClientConfig{}, fmt.Errorf("product %q %s %q: %w",
 			e.Product, e.Role, e.Name, err)
@@ -213,7 +225,7 @@ func (c *Clients) configFor(e v1.JobEndpoint) (registry.ClientConfig, error) {
 	switch {
 	case spec.anonymous:
 	case spec.creds != nil:
-		creds, err := c.secrets.Credentials(*spec.creds)
+		creds, err := secrets.Credentials(*spec.creds)
 		if err != nil {
 			return registry.ClientConfig{}, fmt.Errorf("product %q %s %q credentials: %w",
 				e.Product, e.Role, e.Name, err)

@@ -68,7 +68,11 @@ type Registry struct {
 	// same as one fetched once, from the destination's counters.
 	ServedBlobs atomic.Int64
 	ServedBytes atomic.Int64
-	pageSize    int
+	// CancelledUploads counts sessions abandoned with DELETE. Calibration's
+	// write probe is built entirely on this: it exists so a test can prove the
+	// bytes were pushed AND that nothing was committed.
+	CancelledUploads atomic.Int64
+	pageSize         int
 }
 
 type repo struct {

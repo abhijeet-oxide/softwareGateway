@@ -274,6 +274,22 @@ func (c *Client) CheckConnectivity(ctx context.Context, product string) (*CheckC
 	return &out, c.post(ctx, path, struct{}{}, &out)
 }
 
+// Calibrate measures one source-to-target path and returns what to configure.
+//
+// The slowest call in this client by a wide margin: it moves real data in both
+// directions for as long as the requested budget allows. Callers must raise
+// their timeout to match — the sweep alone is roughly budget × (levels + 2) per
+// side, and a client timeout that fires mid-run cancels the probes and reports
+// the Coordinator as unreachable.
+func (c *Client) Calibrate(
+	ctx context.Context, product string, req CalibrateRequest,
+) (*CalibrateResponse, error) {
+	// The colon is an AIP-136 structural separator and must NOT be escaped.
+	path := "/api/v1/products/" + url.PathEscape(product) + ":calibrate"
+	var out CalibrateResponse
+	return &out, c.post(ctx, path, req, &out)
+}
+
 // transportError classifies a failure to get any response at all.
 //
 // The distinction is worth the code because the two cases are diagnosed in

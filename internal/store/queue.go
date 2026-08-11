@@ -101,10 +101,75 @@ func (p *Packages) LeaseJobs(ctx context.Context, req LeaseRequest) ([]LeasedJob
 		req.Duration = 2 * time.Minute
 	}
 
+	var (
+		leased []LeasedJob
+		err    error
+	)
 	if p.dialect.Name() == DriverPostgres {
-		return p.leasePostgres(ctx, req)
+		leased, err = p.leasePostgres(ctx, req)
+	} else {
+		leased, err = p.leaseSQLite(ctx, req)
 	}
-	return p.leaseSQLite(ctx, req)
+	if err != nil {
+		return nil, err
+	}
+
+	// Handing work out is what makes a transfer RUNNING. Failing to say so was
+	// worth a write: this used to happen only when the first job COMPLETED, on
+	// the argument that keeping the dequeue free of a write to a second table
+	// was worth more. It is not. A transfer with ten blobs in flight and none
+	// finished reported `ready`, and everything gated on the state word went
+	// with it — the ETA column blanked while the speed column showed a
+	// throughput, which is a table disagreeing with itself. Multi-gigabyte
+	// blobs make that window long, and a resumed transfer starts inside it.
+	//
+	// The write is guarded on `state = 'ready'`, so it is an indexed no-op for
+	// every lease after the first.
+	if err := p.startTransfers(ctx, leased); err != nil {
+		return nil, err
+	}
+	return leased, nil
+}
+
+// startTransfers moves the transfers behind a lease batch to `running`.
+//
+// started_at is set at the same moment and only if absent, because it anchors
+// elapsed time and throughput: a transfer that waited an hour for a worker did
+// not spend an hour transferring, and a RESUMED transfer must keep the start it
+// already had rather than restarting the clock.
+func (p *Packages) startTransfers(ctx context.Context, leased []LeasedJob) error {
+	if len(leased) == 0 {
+		return nil
+	}
+
+	seen := make(map[string]bool, len(leased))
+	ids := make([]any, 0, len(leased))
+	var placeholders strings.Builder
+	for _, j := range leased {
+		if j.TransferID == "" || seen[j.TransferID] {
+			continue
+		}
+		seen[j.TransferID] = true
+		if placeholders.Len() > 0 {
+			placeholders.WriteByte(',')
+		}
+		placeholders.WriteByte('?')
+		ids = append(ids, j.TransferID)
+	}
+	if len(ids) == 0 {
+		return nil
+	}
+
+	_, err := p.db.ExecContext(ctx, p.dialect.Rewrite(
+		`UPDATE transfers
+		    SET state      = 'running',
+		        started_at = COALESCE(started_at, `+p.dialect.Now()+`),
+		        updated_at = `+p.dialect.Now()+`
+		  WHERE id IN (`+placeholders.String()+`) AND state = 'ready'`), ids...)
+	if err != nil {
+		return fmt.Errorf("start transfers for a lease batch: %w", err)
+	}
+	return nil
 }
 
 // leaseColumns is the RETURNING/SELECT list both dialects share, so the two

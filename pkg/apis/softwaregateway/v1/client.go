@@ -423,3 +423,49 @@ func codeForStatus(status int) Code {
 		return CodeInternal
 	}
 }
+
+// ---------------------------------------------------------------------------
+// The worker plane
+// ---------------------------------------------------------------------------
+//
+// These four calls are the whole of a worker's conversation with the
+// Coordinator. See docs/design/09-api.md §7.
+
+// LeaseJobs asks for work.
+//
+// An empty Jobs slice is the normal answer, not an error: it means the queue
+// has nothing this worker can take right now, and NextPollAfterSeconds says
+// when to ask again.
+func (c *Client) LeaseJobs(ctx context.Context, req LeaseRequest) (*LeaseResponse, error) {
+	var out LeaseResponse
+	if err := c.post(ctx, "/api/v1/jobs:lease", req, &out); err != nil {
+		return nil, err
+	}
+	return &out, nil
+}
+
+// ReportProgress records how far a blob has got.
+//
+// Best-effort: the caller should log a failure and carry on transferring
+// rather than abandon a job over a dropped UI signal.
+func (c *Client) ReportProgress(ctx context.Context, jobID string, req ProgressRequest) error {
+	return c.post(ctx, "/api/v1/jobs/"+jobID+":reportProgress", req, nil)
+}
+
+// CompleteJob reports a finished job. This one is not lossy.
+func (c *Client) CompleteJob(ctx context.Context, jobID string, req CompleteRequest) (*CompleteResponse, error) {
+	var out CompleteResponse
+	if err := c.post(ctx, "/api/v1/jobs/"+jobID+":complete", req, &out); err != nil {
+		return nil, err
+	}
+	return &out, nil
+}
+
+// Heartbeat renews leases and learns which are gone.
+func (c *Client) Heartbeat(ctx context.Context, workerID string, req HeartbeatRequest) (*HeartbeatResponse, error) {
+	var out HeartbeatResponse
+	if err := c.post(ctx, "/api/v1/workers/"+workerID+":heartbeat", req, &out); err != nil {
+		return nil, err
+	}
+	return &out, nil
+}

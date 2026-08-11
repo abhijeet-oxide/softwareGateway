@@ -157,10 +157,10 @@ func (e *Engine) Run(ctx context.Context, job Job, progress ProgressFunc) Result
 
 // runBlob takes the first of four fast paths that applies, cheapest first.
 //
-//	1. placement hit (database, shipped with the lease)  0 bytes, 0 RPC
-//	2. HEAD blob at destination                          0 bytes, 1 RPC
-//	3. cross-repository MOUNT                            0 bytes, 1 RPC
-//	4. stream source -> destination                      N bytes
+//  1. placement hit (database, shipped with the lease)  0 bytes, 0 RPC
+//  2. HEAD blob at destination                          0 bytes, 1 RPC
+//  3. cross-repository MOUNT                            0 bytes, 1 RPC
+//  4. stream source -> destination                      N bytes
 //
 // The best transfer is the one that does not happen: deduplication and
 // mounting routinely eliminate 30–70% of a package, which is where the largest

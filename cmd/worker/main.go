@@ -4,12 +4,10 @@
 // They lease jobs from the Coordinator over HTTP and stream blobs directly
 // between registries. See docs/design/00-overview.md section 5.2.
 //
-// M1 SCOPE: this binary starts, registers its identity, serves its own probes
-// and metrics, and idles. The lease loop, the transfer engine and heartbeating
-// arrive in M3 with the vertical slice.
-//
-// It deliberately does not pretend to do more than it does: there is no fake
-// lease loop and no stub that reports progress it never made.
+// It leases jobs from the Coordinator, streams the bytes, and reports what
+// happened. Product configuration and projected secrets are read from the same
+// mounts the Coordinator reads, which is what lets a lease response carry a
+// credential REFERENCE rather than a credential.
 package main
 
 import (
@@ -33,6 +31,10 @@ import (
 	"github.com/abhijeet-oxide/softwareGateway/internal/platform/tlscompat"
 	"github.com/abhijeet-oxide/softwareGateway/internal/platform/tracing"
 	"github.com/abhijeet-oxide/softwareGateway/internal/platform/version"
+	"github.com/abhijeet-oxide/softwareGateway/internal/product"
+	"github.com/abhijeet-oxide/softwareGateway/internal/regclient"
+	"github.com/abhijeet-oxide/softwareGateway/internal/worker"
+	v1 "github.com/abhijeet-oxide/softwareGateway/pkg/apis/softwaregateway/v1"
 )
 
 const component = "worker"
@@ -90,8 +92,6 @@ func run() error {
 	tlscompat.Apply(tlscompat.Options{
 		AllowNegativeSerialNumbers: cfg.TLS.AllowNegativeSerialNumbers,
 	}, logger)
-	logger.Warn("M1: the lease loop is not implemented; this worker will idle")
-
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
@@ -111,16 +111,50 @@ func run() error {
 		}
 	}()
 
+	// Product configuration, for resolving a job's endpoints into clients.
+	// A worker with no products configured can lease nothing it could execute,
+	// so this is fatal rather than a warning.
+	secrets := product.NewSecretResolver(cfg.SecretsDir())
+	products := product.NewRegistry()
+	loaded, err := product.NewLoader(cfg.ProductsDir(), secrets).
+		WithConcurrency(product.Concurrency{
+			PerRegistry:       cfg.Concurrency.PerRegistry,
+			RequestsPerSecond: cfg.Concurrency.RequestsPerSecond,
+		}).Load()
+	if err != nil {
+		return fmt.Errorf("load product configuration from %s: %w", cfg.ProductsDir(), err)
+	}
+	products.Swap(loaded)
+	logger.Info("product configuration loaded",
+		"products", products.Count(), "invalid", len(products.Invalid()))
+
+	coordinator := v1.NewClient(cfg.Worker.CoordinatorEndpoint,
+		v1.WithUserAgent("softwaregateway-worker/"+info.Version))
+
+	loop := worker.NewLoop(
+		coordinator,
+		regclient.NewClients(products, secrets, logger),
+		worker.Options{
+			WorkerID:          workerID,
+			Version:           info.Version,
+			MaxConcurrentJobs: cfg.Worker.MaxConcurrentJobs,
+			CopyBufferSize:    int(cfg.Worker.CopyBufferSize),
+			HeartbeatInterval: cfg.Worker.HeartbeatInterval,
+		},
+		logger,
+	)
+
 	hreg := health.New()
-	// Liveness: the main loop is ticking. In M3 this becomes a staleness check
-	// on the lease loop, which is what catches a wedged worker holding leases
-	// it will never progress — see docs/design/11 section 2.1.
+	// Liveness is deliberately NOT a check on the Coordinator. A control-plane
+	// blip must not crash-loop the fleet: a worker that cannot reach the
+	// Coordinator keeps transferring what it already holds, which is the
+	// correct behaviour (docs/design/09 §9.1).
 	hreg.AddLiveness("process", func() error { return nil })
-	// Readiness in M1 is "the process is up". In M3 it becomes "registered
-	// with the Coordinator", so a worker that cannot reach the control plane
-	// leaves rotation instead of appearing healthy.
-	hreg.AddReadiness("process", func(context.Context) health.Result {
-		return health.OK("worker running; lease loop lands in M3")
+	hreg.AddReadiness("coordinator", func(ctx context.Context) health.Result {
+		if _, err := coordinator.Version(ctx); err != nil {
+			return health.Down(err)
+		}
+		return health.OK("leasing from " + cfg.Worker.CoordinatorEndpoint)
 	})
 
 	mux := http.NewServeMux()
@@ -162,10 +196,15 @@ func run() error {
 	})
 
 	g.Go(func() error {
+		return loop.Run(gctx)
+	})
+
+	g.Go(func() error {
 		<-gctx.Done()
-		// In M3 this is where the worker stops leasing and drains in-flight
-		// blobs. A blob that outlives the grace period is killed and its lease
-		// simply expires, which is also correct — just less efficient.
+		// Stopping is not a drain protocol. In-flight blobs are abandoned and
+		// their leases expire, which the Coordinator's reaper handles as the
+		// ordinary case — it is the same path a SIGKILL takes, so it is the
+		// one that has to work anyway.
 		logger.Info("draining")
 
 		shutdownCtx, cancel := context.WithTimeout(

@@ -11,6 +11,7 @@ import (
 	"github.com/opencontainers/go-digest"
 	ocispec "github.com/opencontainers/image-spec/specs-go/v1"
 	"oras.land/oras-go/v2/errdef"
+	orasregistry "oras.land/oras-go/v2/registry"
 	"oras.land/oras-go/v2/registry/remote"
 	"oras.land/oras-go/v2/registry/remote/errcode"
 
@@ -49,17 +50,40 @@ import (
 // protocol, nothing else.
 
 // orasRepo builds an ORAS repository handle sharing our HTTP client.
+//
+// # Why the Reference is constructed rather than parsed
+//
+// `remote.NewRepository` parses a string and REJECTS anything the OCI
+// distribution spec's grammar disallows — in particular uppercase, since the
+// spec's repository grammar is lowercase-only.
+//
+// That is correct as a rule and wrong as a gate here, because we do not choose
+// these names. A vendor whose repository is `orbs/CFX-5000-k8s` has published
+// content at that path and real registries serve it; refusing to speak to it
+// would mean this tool cannot copy the very artifacts it exists to copy. The
+// failure was also badly placed: discovery uses plain net/http and validates
+// nothing, so such a repository scanned perfectly and then failed on the first
+// blob, which reads as a transfer bug rather than a naming one.
+//
+// Constructing the Reference directly skips the parse and sends the path
+// exactly as given — which is the whole contract of this tool: copy, do not
+// change. A path the destination registry genuinely will not accept still
+// fails, with that registry's own error, which is the right place for the
+// judgement.
 func (r *Repository) orasRepo() (*remote.Repository, error) {
-	repo, err := remote.NewRepository(r.registryHost + "/" + r.repoPath)
-	if err != nil {
-		return nil, fmt.Errorf("build repository handle for %s/%s: %w",
-			r.registryHost, r.repoPath, err)
+	if r.repoPath == "" {
+		return nil, fmt.Errorf("build repository handle for %s: repository path is empty",
+			r.registryHost)
 	}
-	repo.Client = r.client
-	repo.PlainHTTP = r.scheme == "http"
-	// Manifests are pushed and fetched verbatim; ORAS must not decide a size
-	// limit for content we already know the size of.
-	repo.MaxMetadataBytes = maxManifestBytes
+
+	repo := &remote.Repository{
+		Reference: orasregistry.Reference{Registry: r.registryHost, Repository: r.repoPath},
+		Client:    r.client,
+		PlainHTTP: r.scheme == "http",
+		// Manifests are pushed and fetched verbatim; ORAS must not decide a
+		// size limit for content we already know the size of.
+		MaxMetadataBytes: maxManifestBytes,
+	}
 	return repo, nil
 }
 

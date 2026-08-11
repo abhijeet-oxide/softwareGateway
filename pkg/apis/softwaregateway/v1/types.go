@@ -776,8 +776,14 @@ type LeasedJob struct {
 	// KnownPlacement is the placement fast path, resolved for this batch so
 	// the worker makes no extra call to decide it.
 	KnownPlacement bool `json:"knownPlacement,omitempty"`
-	// TagAs is set only on the manifest that completes the transfer.
-	TagAs string `json:"tagAs,omitempty"`
+	// Tags are what this manifest must be called at the destination, resolved
+	// at planning time from the source's own reference annotations. Empty for
+	// a blob, and for any manifest the source did not name.
+	Tags []string `json:"tags,omitempty"`
+	// TargetRepository is the destination path within the target registry.
+	// A bundle's components each land in their own, reproduced from the
+	// source's structure.
+	TargetRepository string `json:"targetRepository,omitempty"`
 
 	Attempt int `json:"attempt"`
 	Wave    int `json:"wave"`

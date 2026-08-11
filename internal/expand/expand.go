@@ -175,6 +175,14 @@ func ToStoreTree(t oci.Tree) store.ExpandedTree {
 				SizeBytes:    a.Descriptor.Size,
 				Depth:        a.Depth,
 				Raw:          a.Raw,
+				// Annotations are what a bundle uses to say what each of its
+				// components is CALLED — the reserved
+				// org.opencontainers.image.ref.name, merged by the walker from
+				// the referencing descriptor and the manifest's own. Dropping
+				// them here made every component of a bundle anonymous by the
+				// time the planner read the tree back, so all of them landed
+				// in one flat destination with no tag.
+				Annotations: a.Descriptor.Annotations,
 			},
 			Parent: a.Parent,
 		}

@@ -226,7 +226,7 @@ func (l *Loop) run(ctx context.Context, id int64, job v1.LeasedJob) {
 		Source:         source,
 		Target:         target,
 		KnownPlacement: job.KnownPlacement,
-		TagAs:          job.TagAs,
+		Tags:           job.Tags,
 	}, l.progressReporter(ctx, job.JobID))
 
 	l.report(ctx, id, job, res)

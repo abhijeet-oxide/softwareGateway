@@ -434,12 +434,18 @@ func (p *Product) validateTargets(resolver *SecretResolver) Errors {
 	defaults := 0
 	for i, t := range p.Spec.Targets {
 		path := fmt.Sprintf("spec.targets[%d]", i)
-		// A target is always exactly one repository — it is where bytes are
-		// pushed, and "push to whatever the catalog contains" is not a thing.
-		// A target is always exactly one repository — it is where bytes are
-		// pushed, and "push to whatever the catalog contains" is not a thing.
+		// A target's repository is OPTIONAL, and that is a deliberate revision
+		// of "a target is always exactly one repository".
+		//
+		// A bundle is not one artifact: an ORB's images, charts and generic
+		// artifacts each carry their own repository path, and the destination
+		// reproduces that structure rather than flattening it. The target's
+		// `repository` is therefore a PREFIX to nest that structure under —
+		// useful for keeping two vendors apart in one registry — and omitting
+		// it mirrors the source paths at the destination's root, so a consumer
+		// changes the hostname and nothing else.
 		errs = append(errs, validateRepoCommon(path, t.Name, t.Registry, t.Repository,
-			t.Type, t.Anonymous, t.CredentialsRef, resolver, true)...)
+			t.Type, t.Anonymous, t.CredentialsRef, resolver, false)...)
 		errs = append(errs, validateNetwork(path+".network", t.Network, resolver)...)
 		errs = append(errs, validateCosign(path+".verification", t.Verification, resolver)...)
 

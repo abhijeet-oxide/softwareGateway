@@ -33,12 +33,19 @@ import (
 // configuration is what makes "planning happens at execution time" true
 // (docs/design/04 §10).
 type Destination struct {
-	// RepositoryID is the catalog row for this target.
+	// RepositoryID is the catalog row for this target as configured.
 	RepositoryID int64
-	// Name is the configured target name, for messages.
+	// Name is the configured target name. It travels onto every destination
+	// row a bundle's structure implies, so one credential serves all of them.
 	Name string
-	// Repository is the destination path.
+	// Repository is the configured destination path, used as a PREFIX beneath
+	// which the source's structure is reproduced. Empty mirrors the source
+	// paths at the destination registry's root.
 	Repository string
+	// Registry is the destination host, and Type selects its backend. Both are
+	// needed to register the repositories a bundle spreads across.
+	Registry string
+	Type     string
 }
 
 // Resolver supplies what the expander cannot know on its own.
@@ -159,9 +166,17 @@ func (e *Expander) expandOne(ctx context.Context, req store.PendingRequest) (int
 			"package", pkg.ID, "error", err)
 	}
 
+	// The path the package was discovered in: every destination path is
+	// derived from it, so a bundle's structure is reproduced relative to where
+	// the vendor published it rather than invented.
+	sourceRepository, err := e.sourceRepositoryPath(ctx, req.SourceRepoID)
+	if err != nil {
+		return 0, 0, err
+	}
+
 	var transfers, jobs int
 	for _, dst := range destinations {
-		n, err := e.expandTo(ctx, req, pkg, source, related, dst)
+		n, err := e.expandTo(ctx, req, pkg, source, sourceRepository, related, dst)
 		if err != nil {
 			return transfers, jobs, err
 		}
@@ -186,6 +201,7 @@ func (e *Expander) expandTo(
 	req store.PendingRequest,
 	pkg store.PackageRow,
 	source registry.ManifestReader,
+	sourceRepository string,
 	related []vendors.Related,
 	dst Destination,
 ) (int, error) {
@@ -195,15 +211,22 @@ func (e *Expander) expandTo(
 	}
 
 	plan, err := e.planner.Plan(ctx, Request{
-		TransferID:       transferID,
-		RequestID:        req.ID,
-		Package:          pkg,
-		SourceRepoID:     req.SourceRepoID,
-		TargetRepoID:     dst.RepositoryID,
-		TargetRepository: dst.Repository,
-		Priority:         req.Priority,
-		Source:           source,
-		Related:          related,
+		TransferID:   transferID,
+		RequestID:    req.ID,
+		Package:      pkg,
+		SourceRepoID: req.SourceRepoID,
+		TargetRepoID: dst.RepositoryID,
+
+		ProductID:          req.ProductID,
+		TargetName:         dst.Name,
+		TargetRegistry:     dst.Registry,
+		TargetRegistryType: dst.Type,
+		TargetBasePath:     dst.Repository,
+		SourceRepository:   sourceRepository,
+
+		Priority: req.Priority,
+		Source:   source,
+		Related:  related,
 	})
 	if err != nil {
 		// A transfer that cannot be planned must not sit in `planning`
@@ -261,4 +284,22 @@ func (e *Expander) openTransfer(
 		return "", err
 	}
 	return existing, nil
+}
+
+// sourceRepositoryPath reads the path a package was discovered in.
+//
+// Read from the catalog rather than carried on the request, because the
+// request names a repository ROW and the path is that row's business — and
+// because a source whose path was edited in configuration must expand against
+// what the catalog now says rather than what a request recorded earlier.
+func (e *Expander) sourceRepositoryPath(ctx context.Context, repoID int64) (string, error) {
+	endpoints, err := e.packages.HydrateEndpoints(ctx, []int64{repoID})
+	if err != nil {
+		return "", err
+	}
+	ep, ok := endpoints[repoID]
+	if !ok {
+		return "", fmt.Errorf("source repository %d is not in the catalog", repoID)
+	}
+	return ep.Repository, nil
 }

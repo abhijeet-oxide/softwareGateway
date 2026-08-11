@@ -73,8 +73,11 @@ func TestPackageTransfersOverTheWorkerPlane(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 const (
-	sourcePath  = "vendor/suite"
-	targetPath  = "mirror/vendor/suite"
+	sourcePath = "vendor/suite"
+	// targetBase is the target's configured `repository`: a PREFIX beneath
+	// which the source's structure is reproduced.
+	targetBase  = "mirror"
+	targetPath  = targetBase + "/" + sourcePath
 	productYAML = `apiVersion: softwaregateway.io/v1alpha1
 kind: Product
 metadata:
@@ -131,7 +134,7 @@ func newWireHarness(t *testing.T, src, dst *fakeregistry.Registry) *wireHarness 
 	}
 	h.productID, _ = res.LastInsertId()
 	h.sourceID = h.repo("source", "main", src.Host(), sourcePath)
-	h.targetID = h.repo("target", "lab", dst.Host(), targetPath)
+	h.targetID = h.repo("target", "lab", dst.Host(), targetBase)
 
 	// A real Coordinator router, served over TCP.
 	server := httptest.NewServer(api.NewServer(api.Deps{
@@ -166,7 +169,7 @@ func (h *wireHarness) loadProducts() *product.Registry {
 
 	dir := h.t.TempDir()
 	body := fmt.Sprintf(productYAML,
-		h.src.Host(), sourcePath, h.dst.Host(), targetPath)
+		h.src.Host(), sourcePath, h.dst.Host(), targetBase)
 	if err := os.WriteFile(filepath.Join(dir, "vendor-a.yaml"), []byte(body), 0o600); err != nil {
 		h.t.Fatal(err)
 	}
@@ -286,7 +289,10 @@ func (h *wireHarness) plan(pkg store.PackageRow, transferID string) {
 	if _, err := transfer.NewPlanner(h.packages, 4, log).Plan(h.t.Context(), transfer.Request{
 		TransferID: transferID, RequestID: "req-" + transferID,
 		Package: pkg, SourceRepoID: h.sourceID, TargetRepoID: h.targetID,
-		TargetRepository: targetPath, Priority: 50, Source: client,
+		ProductID: h.productID, TargetName: "lab", TargetRegistry: h.dst.Host(),
+		TargetRegistryType: "generic", TargetBasePath: targetBase,
+		SourceRepository: sourcePath,
+		Priority:         50, Source: client,
 	}); err != nil {
 		h.t.Fatal(err)
 	}

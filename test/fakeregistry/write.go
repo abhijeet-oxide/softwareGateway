@@ -407,3 +407,73 @@ func (r *Registry) missingReferences(repoPath string, raw []byte) string {
 	}
 	return ""
 }
+
+// AnnotatedLayer is one file inside a generic artifact.
+//
+// The PATH lives in an annotation rather than anywhere structural, which is
+// how OCI carries a directory layout: `org.opencontainers.image.title` is the
+// reserved key, and a vendor's `CONFIGURATION/example_parameters.json` is just
+// its value. Nothing about it is special to a registry — which is precisely
+// why a transfer preserves it by copying manifest bytes verbatim rather than
+// by understanding them.
+type AnnotatedLayer struct {
+	// Title is org.opencontainers.image.title — the path within the artifact.
+	Title     string
+	Content   string
+	MediaType string
+}
+
+// AddArtifact seeds a non-image OCI artifact: a manifest whose layers are
+// arbitrary files with arbitrary media types.
+//
+// This is what NEAR's `generic_system` and `generic_custo` are, and what any
+// number of future artifact types will be. The fake needs it because a
+// transfer of one must be provable without hard-coding the vendor's shapes
+// into the test — the whole claim being that the tool does not know what an
+// ORB contains.
+func (r *Registry) AddArtifact(
+	repoPath, tag, artifactType string, layers ...AnnotatedLayer,
+) string {
+	config := NewLayer("config-" + repoPath + "-" + tag + "-" + artifactType)
+	r.putBlob(repoPath, config.Digest, []byte(config.content))
+
+	descriptors := make([]map[string]any, 0, len(layers))
+	for _, l := range layers {
+		blob := NewLayer(l.Content)
+		r.putBlob(repoPath, blob.Digest, []byte(l.Content))
+
+		mediaType := l.MediaType
+		if mediaType == "" {
+			mediaType = "application/octet-stream"
+		}
+		d := map[string]any{
+			"mediaType": mediaType,
+			"digest":    blob.Digest,
+			"size":      blob.Size,
+		}
+		if l.Title != "" {
+			d["annotations"] = map[string]string{"org.opencontainers.image.title": l.Title}
+		}
+		descriptors = append(descriptors, d)
+	}
+
+	body := map[string]any{
+		"schemaVersion": 2,
+		"mediaType":     "application/vnd.oci.image.manifest.v1+json",
+		"config": map[string]any{
+			"mediaType": "application/vnd.oci.empty.v1+json",
+			"digest":    config.Digest,
+			"size":      config.Size,
+		},
+		"layers": descriptors,
+	}
+	if artifactType != "" {
+		body["artifactType"] = artifactType
+	}
+
+	raw, err := json.Marshal(body)
+	if err != nil {
+		panic("fakeregistry: marshal artifact manifest: " + err.Error())
+	}
+	return r.AddManifest(repoPath, tag, raw, "application/vnd.oci.image.manifest.v1+json")
+}

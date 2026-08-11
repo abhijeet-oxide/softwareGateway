@@ -73,18 +73,19 @@ func (s *Server) handleLeaseJobs(w http.ResponseWriter, r *http.Request) {
 
 func leasedJobDTO(a queue.Assignment) v1.LeasedJob {
 	return v1.LeasedJob{
-		JobID:          strconv.FormatInt(a.ID, 10),
-		TransferID:     a.TransferID,
-		Kind:           a.Kind,
-		Digest:         a.Digest,
-		SizeBytes:      v1.Int64String(strconv.FormatInt(a.SizeBytes, 10)),
-		MediaType:      a.MediaType,
-		Source:         endpointDTO(a.Source),
-		Target:         endpointDTO(a.Target),
-		KnownPlacement: a.KnownPlacement,
-		TagAs:          a.TagAs,
-		Attempt:        a.Attempt,
-		Wave:           a.Wave,
+		JobID:            strconv.FormatInt(a.ID, 10),
+		TransferID:       a.TransferID,
+		Kind:             a.Kind,
+		Digest:           a.Digest,
+		SizeBytes:        v1.Int64String(strconv.FormatInt(a.SizeBytes, 10)),
+		MediaType:        a.MediaType,
+		Source:           endpointDTO(a.Source),
+		Target:           endpointDTO(a.Target),
+		KnownPlacement:   a.KnownPlacement,
+		Tags:             a.Tags,
+		TargetRepository: a.TargetRepository,
+		Attempt:          a.Attempt,
+		Wave:             a.Wave,
 	}
 }
 

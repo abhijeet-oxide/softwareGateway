@@ -348,6 +348,12 @@ The write probe is the part worth understanding. Distribution v2 separates the u
 
 It overrides `maxConnections`, because that is the variable under test: sweeping to sixteen streams through a pool configured for four would measure the pool four times and call the result a plateau. It honours `requestsPerSecond`, because that is a promise to a vendor, and a calibration that broke it would report a throughput no honest configuration could reproduce. It stops early when a level improves on its predecessor by less than 10% — past that point each further level doubles the load on somebody else's registry to confirm something already known.
 
+**Which repository is measured**
+
+One, out of however many a product spans, so the choice decides whether the numbers mean anything. `transferctl` picks the repository holding the largest discovered package and shows that choice for confirmation ([13](13-cli.md) §11); the Coordinator's own fallback, for API callers and for products nothing has been discovered from, walks the candidate repositories until one yields a blob of at least 256 KiB rather than judging a source by whichever repository sorts first. Within a repository it opens the newest-looking tags first: registries serve tags lexically, so "the first tag" reliably lands on the oldest and smallest.
+
+The write probe's path is `DestinationPath(target base, source repository)` — the same join the planner uses. Probing the target's configured repository directly does not work: a base path is a prefix, not an image repository, and an upload session opened against it returns `404` from a healthy registry.
+
 **The knee, not the peak**
 
 Advice targets the smallest concurrency within a tenth of the best measured. Configuring the peak instead typically buys single-digit percent for double the concurrent load, which is a bad trade against a registry that is not ours.

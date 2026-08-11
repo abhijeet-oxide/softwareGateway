@@ -31,9 +31,19 @@ const (
 	// config blob measures the round trip, which is already measured separately
 	// and much better.
 	minSampleBytes = 256 << 10
-	// maxTagsSampled bounds the search for blobs. A source whose first few tags
-	// are all signatures should not turn calibration into a scan.
-	maxTagsSampled = 5
+	// maxTagsListed is how many tags are fetched before choosing which to open.
+	//
+	// Registries return tags in lexical order, so the FIRST ones are the oldest
+	// spellings and frequently the smallest — an early release, a placeholder,
+	// a signature. Listing a page and choosing from it beats taking whatever
+	// came back first.
+	maxTagsListed = 100
+	// maxTagsOpened bounds the search within one repository. A repository whose
+	// newest tags are all signatures should not turn calibration into a scan.
+	maxTagsOpened = 5
+	// maxRepositoriesTried bounds the search across repositories. A product
+	// spanning forty of them should not be walked end to end to find a blob.
+	maxRepositoriesTried = 12
 )
 
 // sample is one blob the read probe will fetch.
@@ -42,23 +52,60 @@ type sample struct {
 	size   int64
 }
 
-// collectSamples finds real blobs on the source to read.
+// collectSamples finds real blobs to read, trying each candidate repository
+// until one yields something worth timing.
+//
+// # Why it walks rather than picks
+//
+// A source spanning forty repositories has no single "the" repository, and the
+// first one declared is as likely as not to be a stub. That is not
+// hypothetical: a run against a real product measured
+// `cfx-5000-product/aaa` — one tag, no blob over 256 KiB — and reported the
+// whole source as unmeasurable while thirty-nine repositories of real content
+// sat next to it.
 //
 // Real content, not a synthetic object, and that is the point: the numbers have
 // to describe the path a transfer takes, including whatever the registry does
 // with layers of this size. It also means no write ever happens to a source.
 func collectSamples(
-	ctx context.Context, cfg registry.ClientConfig, repositoryOverride string,
-) ([]sample, error) {
-	if repositoryOverride != "" {
-		cfg.Repository = repositoryOverride
+	ctx context.Context, cfg registry.ClientConfig, candidates []string,
+) ([]sample, string, error) {
+	if len(candidates) == 0 && cfg.Repository != "" {
+		candidates = []string{cfg.Repository}
 	}
+	if len(candidates) == 0 {
+		return nil, "", fmt.Errorf("no repository to read from")
+	}
+
+	var tried []string
+	for i, repository := range candidates {
+		if ctx.Err() != nil || i >= maxRepositoriesTried {
+			break
+		}
+		tried = append(tried, repository)
+
+		attempt := cfg
+		attempt.Repository = repository
+		found, err := samplesIn(ctx, attempt)
+		if err != nil || len(found) == 0 {
+			continue
+		}
+		return found, repository, nil
+	}
+
+	return nil, "", fmt.Errorf(
+		"no blob of at least %s found in %s. Name one with --source-repository",
+		humanSize(minSampleBytes), describeTried(tried, len(candidates)))
+}
+
+// samplesIn looks for readable blobs in one repository.
+func samplesIn(ctx context.Context, cfg registry.ClientConfig) ([]sample, error) {
 	client, err := repositoryClient(withConnections(cfg, 2))
 	if err != nil {
 		return nil, err
 	}
 
-	tags, _, err := client.ListTags(ctx, "", maxTagsSampled)
+	tags, _, err := client.ListTags(ctx, "", maxTagsListed)
 	if err != nil {
 		return nil, fmt.Errorf("list tags on %s: %w", cfg.Repository, err)
 	}
@@ -69,8 +116,8 @@ func collectSamples(
 	seen := map[registry.Digest]bool{}
 	var found []sample
 
-	for _, tag := range tags {
-		if ctx.Err() != nil || len(found) >= maxSamples {
+	for i, tag := range preferredTags(tags) {
+		if ctx.Err() != nil || len(found) >= maxSamples || i >= maxTagsOpened {
 			break
 		}
 		for _, b := range blobsUnderTag(ctx, client, tag) {
@@ -81,11 +128,9 @@ func collectSamples(
 			found = append(found, b)
 		}
 	}
-
 	if len(found) == 0 {
-		return nil, fmt.Errorf(
-			"no blob of at least %s found under the first %d tag(s) of %s",
-			humanSize(minSampleBytes), len(tags), cfg.Repository)
+		return nil, fmt.Errorf("no blob of at least %s in %s",
+			humanSize(minSampleBytes), cfg.Repository)
 	}
 
 	// Largest first, so a short budget spends itself on bytes rather than on
@@ -95,6 +140,40 @@ func collectSamples(
 		found = found[:maxSamples]
 	}
 	return found, nil
+}
+
+// preferredTags orders a tag list newest-looking first.
+//
+// Registries serve tags in lexical order and the spec guarantees nothing about
+// it, so "the first tag" is an arbitrary choice that reliably lands on the
+// OLDEST spelling — an early release, a placeholder, a `latest` pointing at
+// something small. Reversing gets the other end of the same ordering, which for
+// every version scheme met so far is the most recent release and therefore the
+// most representative of what a transfer will actually move.
+//
+// A heuristic, and stated as one: it changes which blobs get timed, never
+// whether the measurement is honest.
+func preferredTags(tags []string) []string {
+	out := make([]string, 0, len(tags))
+	for i := len(tags) - 1; i >= 0; i-- {
+		out = append(out, tags[i])
+	}
+	return out
+}
+
+// describeTried names the repositories the search covered, without printing
+// forty of them.
+func describeTried(tried []string, total int) string {
+	switch {
+	case len(tried) == 0:
+		return "any repository"
+	case len(tried) == 1:
+		return tried[0]
+	case len(tried) < total:
+		return fmt.Sprintf("%d of %d repositories (%s, …)", len(tried), total, tried[0])
+	default:
+		return fmt.Sprintf("any of %d repositories (%s, …)", total, tried[0])
+	}
 }
 
 // blobsUnderTag returns the layers one tag references, descending one level

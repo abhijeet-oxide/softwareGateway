@@ -10,6 +10,7 @@ import (
 	"github.com/abhijeet-oxide/softwareGateway/internal/regclient"
 	"github.com/abhijeet-oxide/softwareGateway/internal/registry"
 	"github.com/abhijeet-oxide/softwareGateway/internal/registry/generic"
+	"github.com/abhijeet-oxide/softwareGateway/internal/transfer"
 	v1 "github.com/abhijeet-oxide/softwareGateway/pkg/apis/softwaregateway/v1"
 )
 
@@ -21,6 +22,20 @@ type endpoint struct {
 	// limits are what the configuration currently asks for, kept so advice can
 	// say "you have 32, the knee is 4" rather than only "the knee is 4".
 	limits product.Concurrency
+
+	// candidates are the repositories worth trying, most promising first.
+	//
+	// A source spanning forty repositories has no single "the" repository, and
+	// picking the first one declared is how a calibration ends up measuring
+	// `cfx-5000-product/aaa` — a repository that exists, contains one tag and
+	// no blob worth timing. The probe walks this list until something is
+	// actually measurable and reports which one it used.
+	candidates []string
+
+	// basePath is the target's configured repository prefix, kept separately
+	// from cfg.Repository because a write probe must go to a path a transfer
+	// would use — base + source path — and not to the bare prefix.
+	basePath string
 }
 
 // resolveSource picks the source to read from and resolves its client config.
@@ -30,16 +45,22 @@ func (c *Calibrator) resolveSource(p *product.Product, opts Options) (endpoint, 
 		return endpoint{}, err
 	}
 
-	repo := strings.TrimSpace(opts.SourceRepository)
-	if repo == "" {
-		if declared := src.DeclaredRepositories(); len(declared) > 0 {
-			repo = declared[0]
-		}
+	// An explicit choice is the whole candidate list: somebody who named a
+	// repository meant that one, and silently falling through to another would
+	// measure a path they did not ask about.
+	candidates := src.DeclaredRepositories()
+	if named := strings.TrimSpace(opts.SourceRepository); named != "" {
+		candidates = []string{named}
+	}
+
+	first := ""
+	if len(candidates) > 0 {
+		first = candidates[0]
 	}
 
 	e := v1.JobEndpoint{
 		Product: p.Metadata.Name, Role: string(product.RoleSource),
-		Name: src.Name, Registry: src.Registry, Repository: repo, Type: string(src.Type),
+		Name: src.Name, Registry: src.Registry, Repository: first, Type: string(src.Type),
 	}
 	cfg, err := regclient.ConfigFor(p, c.secrets, e)
 	if err != nil {
@@ -48,18 +69,22 @@ func (c *Calibrator) resolveSource(p *product.Product, opts Options) (endpoint, 
 
 	// A source that enumerates its repositories names none, and a throughput
 	// probe needs one to read from. Asking the catalog is what discovery would
-	// do, so the repository probed is one this product genuinely reads.
-	if cfg.Repository == "" {
-		found, err := firstRepository(context.Background(), cfg)
+	// do, so the repositories probed are ones this product genuinely reads.
+	if len(candidates) == 0 {
+		found, err := catalogRepositories(context.Background(), cfg)
 		if err != nil {
 			return endpoint{}, fmt.Errorf(
 				"source %q names no repositories and the registry catalog could not "+
 					"supply one (%w); name one with --source-repository", src.Name, err)
 		}
-		cfg.Repository = found
+		candidates = found
+		cfg.Repository = candidates[0]
 	}
 
-	return endpoint{name: src.Name, role: product.RoleSource, cfg: cfg, limits: src.Concurrency}, nil
+	return endpoint{
+		name: src.Name, role: product.RoleSource, cfg: cfg,
+		limits: src.Concurrency, candidates: candidates,
+	}, nil
 }
 
 // resolveTarget picks the target to write to and resolves its client config.
@@ -78,11 +103,29 @@ func (c *Calibrator) resolveTarget(p *product.Product, opts Options) (endpoint, 
 	if err != nil {
 		return endpoint{}, err
 	}
-	if cfg.Repository == "" {
-		return endpoint{}, fmt.Errorf("target %q declares no repository to write to", tgt.Name)
-	}
+	return endpoint{
+		name: tgt.Name, role: product.RoleTarget, cfg: cfg,
+		limits: tgt.Concurrency, basePath: tgt.Repository,
+	}, nil
+}
 
-	return endpoint{name: tgt.Name, role: product.RoleTarget, cfg: cfg, limits: tgt.Concurrency}, nil
+// writeProbePath is where the target probe opens its upload session.
+//
+// It is `base + source path`, exactly what the planner computes for a real
+// job — not the target's configured repository, which is a PREFIX. That
+// distinction cost a run: probing `apm0014228-oci-stage` directly returned
+//
+//	404 Not Found: not found
+//
+// from a registry that was working perfectly and had just accepted sixty
+// gigabytes, because a prefix is not an image repository and cannot hold an
+// upload. Deriving it through transfer.DestinationPath is what stops the probe
+// and the transfer disagreeing about where bytes go.
+func writeProbePath(target endpoint, sourceRepository string) string {
+	if p := transfer.DestinationPath(target.basePath, sourceRepository); p != "" {
+		return p
+	}
+	return target.cfg.Repository
 }
 
 // pickSource resolves a name, or the only candidate.
@@ -154,25 +197,25 @@ func pickTarget(p *product.Product, name string) (product.Target, error) {
 		p.Metadata.Name, len(enabled), nameList(targetNames(enabled)))
 }
 
-// firstRepository asks the catalog for one repository to read from.
-func firstRepository(ctx context.Context, cfg registry.ClientConfig) (string, error) {
+// catalogRepositories asks the catalog what there is to read from.
+func catalogRepositories(ctx context.Context, cfg registry.ClientConfig) ([]string, error) {
 	cat, err := generic.NewCatalog(generic.CatalogConfig{
 		Registry:  cfg.Registry,
 		PlainHTTP: cfg.PlainHTTP,
 		Transport: transportConfig(cfg),
 	})
 	if err != nil {
-		return "", err
+		return nil, err
 	}
-	repos, err := cat.ListAllRepositories(ctx, 50)
+	repos, err := cat.ListAllRepositories(ctx, 200)
 	if err != nil {
-		return "", err
+		return nil, err
 	}
 	if len(repos) == 0 {
-		return "", fmt.Errorf("the catalog is empty")
+		return nil, fmt.Errorf("the catalog is empty")
 	}
 	sort.Strings(repos)
-	return repos[0], nil
+	return repos, nil
 }
 
 func sourceNames(ss []product.Source) []string {

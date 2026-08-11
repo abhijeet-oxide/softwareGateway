@@ -533,8 +533,26 @@ transferctl --endpoint http://localhost:8080 health
 
 ```
 transferctl calibrate <product> [--from source] [--to target]
+                                [--source-repository path] [-y]
                                 [--concurrency 1,2,4,8,16] [--budget 5s]
                                 [--no-write] [--bundle-size 30GiB]
+```
+
+It asks before it starts:
+
+```
+Calibrate cfx-5000-product
+
+  source        cfx-near  cfx-5000-product-orb-docker.swdp-us.support.nokia.com
+    repository  cfx-5000-product/admin
+                holds the largest discovered package (63.7 GiB); 41 other(s) not measured
+  target        cfx-jfrog-lab  artifact.it.att.com
+    writes to   apm0014228-oci-stage/…
+  sweep         1, 2, 4, 8, 16 streams, 5s each
+  write probe   on: real bytes, in an upload session that is cancelled, never committed
+  estimated     1m10s
+
+This moves real data against both registries. Continue? [y/N]:
 ```
 
 Everything else in this CLI reports what the system did. This one runs an experiment and tells you what to change.
@@ -565,9 +583,19 @@ Suggestions
 
 `>` marks the knee — the level worth configuring. `!!` is a measured problem, `!` a measured improvement, unmarked a fact with no knob behind it.
 
+### Which repository, and why it is shown
+
+A product spans forty repositories and a calibration measures **one**. The first version picked the first one declared, measured `cfx-5000-product/aaa` — one tag, nothing over 256 KiB — and reported the whole source as unmeasurable while the repositories holding sixty gigabytes sat next to it in the same list.
+
+The choice is now made from evidence the Coordinator already holds: the repository containing the largest **discovered** package, which is the one whose blobs a transfer will spend its time on. Where nothing has been discovered yet it says so rather than presenting an arbitrary pick as a considered one, and the Coordinator walks the candidates at run time until one yields a blob worth timing.
+
+Either way the choice is **shown, with its reason, before anything runs**. A judgement made silently inside a five-minute network test is one nobody can check.
+
+The same applies to anything mandatory that was not supplied. A product with two sources and no `--from` used to be an error; on a terminal it is now a question, with the options listed. Off a terminal it stays an error naming the flag — there is nobody to answer, and guessing is worse than stopping.
+
 ### It leaves nothing behind
 
-The target probe pushes real bytes into an upload session and then **cancels** it, so nothing is committed and no blob, tag or manifest appears in the destination ([05](05-transfer-engine.md) §8.1). `--no-write` skips it anyway for a target governed by a change process that this would technically violate; the cost is that only the read half is measured, and the write half is often the slower one.
+The target probe pushes real bytes into an upload session and then **cancels** it, so nothing is committed and no blob, tag or manifest appears in the destination ([05](05-transfer-engine.md) §8.1). It writes to `base + source path` — what the planner computes for a real job — and not to the target's configured repository, which is a *prefix*: an upload session opened against a bare prefix returns `404 Not Found` from a registry that is working perfectly. `--no-write` skips it anyway for a target governed by a change process that this would technically violate; the cost is that only the read half is measured, and the write half is often the slower one.
 
 ### What it will not tell you
 

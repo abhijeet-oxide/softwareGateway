@@ -72,9 +72,12 @@ func TestReadProbeReadsRealBlobs(t *testing.T) {
 
 	cfg := plainConfig(reg.Host(), "vendor/platform")
 
-	samples, err := collectSamples(t.Context(), cfg, "")
+	samples, chosen, err := collectSamples(t.Context(), cfg, nil)
 	if err != nil {
 		t.Fatalf("collect samples: %v", err)
+	}
+	if chosen != "vendor/platform" {
+		t.Errorf("sampled %q, want vendor/platform", chosen)
 	}
 	if len(samples) < 2 {
 		t.Fatalf("found %d sample(s); both layers are over the minimum size", len(samples))
@@ -100,7 +103,7 @@ func TestSamplesSkipBlobsTooSmallToMeasure(t *testing.T) {
 	t.Cleanup(reg.Close)
 	reg.AddImage("vendor/tiny", "1.0.0", fakeregistry.NewLayer("small"))
 
-	_, err := collectSamples(t.Context(), plainConfig(reg.Host(), "vendor/tiny"), "")
+	_, _, err := collectSamples(t.Context(), plainConfig(reg.Host(), "vendor/tiny"), nil)
 	if err == nil {
 		t.Fatal("a repository of tiny blobs was accepted as a throughput sample")
 	}
@@ -244,4 +247,93 @@ func loadProduct(t *testing.T, doc string) *product.Product {
 		t.Fatalf("document invalid: %v", res.Invalid[0].Err)
 	}
 	return res.Valid[0]
+}
+
+// A SOURCE SPANNING MANY REPOSITORIES MUST NOT BE JUDGED BY THE FIRST ONE.
+//
+// The first declared repository is as likely as not to be a stub. A real run
+// measured `cfx-5000-product/aaa` — one tag, nothing over 256 KiB — and
+// reported the entire source as unmeasurable while the repositories holding
+// sixty gigabytes sat next to it in the same list.
+func TestSamplingWalksPastAnEmptyRepository(t *testing.T) {
+	reg := fakeregistry.New()
+	t.Cleanup(reg.Close)
+
+	// Exactly the shape that broke: an alphabetically-first repository with one
+	// tiny tag, and the real content further down the list.
+	reg.AddImage("cfx-5000-product/aaa", "0.0.1", fakeregistry.NewLayer("stub"))
+	reg.AddImage("cfx-5000-product/admin", "25.7",
+		fakeregistry.NewLayer(strings.Repeat("m", 600<<10)))
+
+	cfg := plainConfig(reg.Host(), "cfx-5000-product/aaa")
+	candidates := []string{"cfx-5000-product/aaa", "cfx-5000-product/admin"}
+
+	samples, chosen, err := collectSamples(t.Context(), cfg, candidates)
+	if err != nil {
+		t.Fatalf("the search gave up on the first repository: %v", err)
+	}
+	if chosen != "cfx-5000-product/admin" {
+		t.Errorf("measured %q, want the repository with real content", chosen)
+	}
+	if len(samples) == 0 {
+		t.Error("no samples returned")
+	}
+}
+
+// And when nothing anywhere is measurable, the error names what was tried and
+// what to do about it — rather than one repository nobody chose.
+func TestSamplingSaysWhatItTriedWhenItFindsNothing(t *testing.T) {
+	reg := fakeregistry.New()
+	t.Cleanup(reg.Close)
+	reg.AddImage("a", "1", fakeregistry.NewLayer("tiny"))
+	reg.AddImage("b", "1", fakeregistry.NewLayer("tiny"))
+
+	_, _, err := collectSamples(t.Context(), plainConfig(reg.Host(), "a"), []string{"a", "b"})
+	if err == nil {
+		t.Fatal("a source of stubs was accepted as measurable")
+	}
+	if !strings.Contains(err.Error(), "2 repositories") {
+		t.Errorf("error = %q, want it to say how many were tried", err)
+	}
+	if !strings.Contains(err.Error(), "--source-repository") {
+		t.Errorf("error = %q, want it to name the flag that fixes it", err)
+	}
+}
+
+// Registries serve tags lexically, so the FIRST one is the oldest spelling and
+// routinely the smallest. The newest is the better sample and the one a
+// transfer is more likely to be moving.
+func TestNewerTagsAreOpenedFirst(t *testing.T) {
+	got := preferredTags([]string{"1.0.0", "25.6", "25.7"})
+	if got[0] != "25.7" {
+		t.Errorf("first tag opened = %q, want the last one listed", got[0])
+	}
+	if len(got) != 3 {
+		t.Errorf("tags dropped: %v", got)
+	}
+}
+
+// THE WRITE PROBE MUST GO WHERE A TRANSFER WRITES.
+//
+// A target's configured repository is a PREFIX. Opening an upload session
+// against it comes back 404 from a registry that is working perfectly, which
+// reads as a broken target rather than as a probe addressing a path that is not
+// an image repository.
+func TestWriteProbeUsesAPathATransferWouldWrite(t *testing.T) {
+	target := endpoint{
+		basePath: "apm0014228-oci-stage",
+		cfg:      registry.ClientConfig{Repository: "apm0014228-oci-stage"},
+	}
+
+	got := writeProbePath(target, "cfx-5000-product/admin")
+	if want := "apm0014228-oci-stage/cfx-5000-product/admin"; got != want {
+		t.Errorf("write probe path = %q, want %q", got, want)
+	}
+
+	// A target with no prefix mirrors the source path at the registry root,
+	// which is what the planner does with an empty base.
+	rootTarget := endpoint{cfg: registry.ClientConfig{Repository: ""}}
+	if got := writeProbePath(rootTarget, "orbs/thing"); got != "orbs/thing" {
+		t.Errorf("write probe path = %q, want the mirrored source path", got)
+	}
 }

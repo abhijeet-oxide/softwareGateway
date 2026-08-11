@@ -10,7 +10,7 @@ Each decision below states the alternatives considered and **what would change o
 
 ### OCI client library — `go-containerregistry` vs `oras-go/v2`
 
-**Status: OPEN. Closed by measurement at M3** ([17](17-delivery-plan.md)).
+**Status: CLOSED at M3 — `oras-go/v2`, adopted for the write path only.** The closure, the evidence behind it, and the two ways it diverged from the procedure planned below are in [§1.1](#11-adr-001-closure). The rest of this section is the reasoning as it stood before the decision, kept because a closure is only readable next to the argument it settles.
 
 The most consequential library choice in the system. It gets a full section rather than a table row because the candidates are genuinely close, the obvious argument against ORAS is wrong, and the honest tiebreaker is empirical.
 
@@ -71,6 +71,51 @@ Both backends prototyped behind [06](06-registry-abstraction.md) §2, run agains
 **The losing backend is deleted, not maintained.** A permanently dual-backend registry layer would be exactly the over-engineering this design exists to avoid, and would double the conformance-testing surface forever.
 
 *API-surface caveat:* exact signatures for both libraries are to be confirmed against pinned versions at implementation time. The reasoning above is version-stable; the illustrative call signatures are not normative.
+
+### 1.1 ADR-001 closure
+
+**Decision: `oras.land/oras-go/v2`, used for the write path and for `Referrers`. The read path stays on plain `net/http`.**
+
+Pinned at `v2.6.2`. Confined to `internal/registry/generic/write.go`, which is the whole of the library's footprint in the codebase — the layout property [15](15-code-layout.md) §4 asked for, verified by `depguard` and by the fact that no other package imports `oras.land/...`.
+
+#### What decided it
+
+The ADR fixed a tiebreaker in advance: **ties break toward `go-containerregistry`**, on the argument that cosign's registry packages pull GGCR's type system and carrying both is a durable source of digest-handling bugs. That argument was correctness-based and it was the strongest one on the table.
+
+**It was defused by the condition the ADR itself named.** §"The limit of the deciding argument" states that if signature *discovery* can be hand-rolled against `Repository.Referrers`, "argument 1 above mostly evaporates". [08](08-verification.md) §3.3 — recorded as **Q2** in [17](17-delivery-plan.md) §5 — asked exactly that.
+
+**Q2 is answered: yes.** `Repository.Referrers` (`internal/registry/generic/write.go`) covers both mechanisms in [08](08-verification.md) §3.1–3.2 in one call — the OCI 1.1 referrers API where the registry implements it, and the fallback tag schema where it does not, with a registry supporting neither reported as "no referrers" rather than as an error. Signature discovery therefore needs no cosign registry code, so the conversion boundary that argument 1 was about does not exist. The remaining cosign surface at M5 is bundle and certificate verification, which does not touch registry types.
+
+With the tiebreaker gone, the case for ORAS in §"The case for `oras-go/v2`" stands unopposed on the criteria that could be judged from the code: artifact-native handling of the Helm charts and configuration bundles our packages actually contain, and an interface shape [06](06-registry-abstraction.md) §2 was already modelled on.
+
+#### Why only the write path
+
+The read path — tag listing, manifest resolution, verbatim manifest fetch — was built in M2 on plain `net/http` and works against a real vendor registry through a corporate proxy, including a certificate the standard library refuses to parse and descriptors that omit `mediaType`. Rewriting proven code to remove an asymmetry would trade a known-good path for a tidier one, so it was not rewritten.
+
+Writing is where a library earns its place, and the reasons are protocol-shaped rather than aesthetic: an upload session whose `Location` may be absolute or relative, `PATCH` with `Range`, and a cross-repository mount that answers `201` when it works and `202` — an upload session, not an error — when the registry declines. Those are the parts a library has already got wrong once and fixed.
+
+**ORAS never sees a credential.** `remote.Repository.Client` is a one-method interface that our `*http.Client` satisfies directly, so the entire M2 transport stays in charge: rate limiter outermost, retry budget, single-flight token cache, CA bundle, proxy, request tracer. Adopting a library thinly is the point — it supplies the upload protocol and nothing else.
+
+#### How this diverged from the planned procedure
+
+Two divergences, recorded rather than absorbed ([17](17-delivery-plan.md) §4 item 6).
+
+**1. The second prototype was never built, so the scored criteria table was not run.** The plan was to prototype both backends behind [06](06-registry-abstraction.md) §2 and score them against the fixed table. Only the ORAS backend was built. The decision instead rests on the ADR's own named escape hatch — Q2 — which is a question the code answers definitively and which the ADR had already declared decisive. Reaching the same closure by measuring throughput on two backends would have cost the few days §"Schedule risk, stated honestly" budgeted, to re-litigate an argument that no longer had a live side.
+
+*Consequence:* "the losing backend is deleted, not maintained" is satisfied vacuously. There is no GGCR code to delete, and no dual-backend surface was ever created. The requirement's intent — one backend, one conformance-testing surface — holds.
+
+**2. Four criteria remain unmeasured**, and the closure does not pretend otherwise:
+
+| Criterion | Status |
+|---|---|
+| Sustained throughput; CPU and allocations per GB | **Unmeasured.** Needs a real 30–60 GB package; it is an M3 acceptance criterion in its own right ([17](17-delivery-plan.md) §1) and is measured there, against one backend rather than as a comparison |
+| Mount + `Exists` fast-path hit rate | **Unmeasured against a real registry.** Exercised against the in-repo fake |
+| Resumable/chunked upload control | **Not implemented.** `ResumeUpload` returns `ErrUnsupported` and an interrupted blob restarts, which is always correct because blobs are content-addressed. Deferred deliberately: [05](05-transfer-engine.md) §4.6's weak spot is that registries accept the `PATCH`/`Range` protocol without durably retaining a session, so building it against the fake would only prove the fake resumes. `upload_resume_total{result}` exists so the measurement arrives from production. This is **Q3** ([17](17-delivery-plan.md) §5), due at M4 |
+| Registry-specific auth (ACR, Artifactory, Quay) | **Unmeasured.** M4, with the vendor backends |
+
+None of these four could change the decision, because none of them bears on the argument that actually settled it. They are owed as measurements of the chosen backend, and they are tracked where they belong: in M3's acceptance criteria and in Q3.
+
+*What would change our mind:* ORAS proving materially slower per GB than GGCR on the M3 throughput run, or the M5 verification work turning out to need cosign's registry packages after all — which would mean Q2 was answered too early. Either would reopen this ADR; nothing else would.
 
 ---
 

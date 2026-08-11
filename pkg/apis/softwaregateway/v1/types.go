@@ -725,3 +725,196 @@ type CheckConnectivityResponse struct {
 	Status   CheckStatus    `json:"status"`
 	Products []ProductCheck `json:"products"`
 }
+
+// ---------------------------------------------------------------------------
+// The worker plane
+// ---------------------------------------------------------------------------
+//
+// Workers speak only to these types. They hold no database credentials, so
+// everything needed to execute a job travels in the lease response — except
+// the credential itself, which travels as a NAME the worker resolves against
+// its own projected secret volume. No secret is ever serialized here.
+//
+// See docs/design/09-api.md §7.
+
+// LeaseRequest is POST /api/v1/jobs:lease.
+type LeaseRequest struct {
+	WorkerID string `json:"workerId"`
+	// Capacity is how many more jobs this worker can take right now, already
+	// reduced by what it is holding.
+	Capacity int `json:"capacity"`
+	// ActiveJobs is how many it currently holds, for telemetry.
+	ActiveJobs int `json:"activeJobs,omitempty"`
+	// Version is the worker's build, recorded on the workers row.
+	Version string `json:"version,omitempty"`
+}
+
+// JobEndpoint is one end of a transfer.
+type JobEndpoint struct {
+	Product    string `json:"product"`
+	Name       string `json:"name"`
+	Registry   string `json:"registry"`
+	Repository string `json:"repository"`
+	Type       string `json:"type,omitempty"`
+	// Role is source or target, so the worker knows which half of the
+	// product's configuration to resolve the credential from.
+	Role string `json:"role"`
+}
+
+// LeasedJob is one unit of work.
+type LeasedJob struct {
+	JobID      string      `json:"jobId"`
+	TransferID string      `json:"transferId"`
+	Kind       string      `json:"kind"`
+	Digest     string      `json:"digest"`
+	SizeBytes  Int64String `json:"sizeBytes"`
+	MediaType  string      `json:"mediaType,omitempty"`
+
+	Source JobEndpoint `json:"source"`
+	Target JobEndpoint `json:"target"`
+
+	// KnownPlacement is the placement fast path, resolved for this batch so
+	// the worker makes no extra call to decide it.
+	KnownPlacement bool `json:"knownPlacement,omitempty"`
+	// TagAs is set only on the manifest that completes the transfer.
+	TagAs string `json:"tagAs,omitempty"`
+
+	Attempt int `json:"attempt"`
+	Wave    int `json:"wave"`
+}
+
+// LeaseResponse answers a lease request.
+type LeaseResponse struct {
+	Jobs []LeasedJob `json:"jobs"`
+	// LeaseDurationSeconds is how long these are held without renewal.
+	LeaseDurationSeconds int `json:"leaseDurationSeconds"`
+	// NextPollAfterSeconds is server-directed backoff, so an empty queue with
+	// forty workers does not become a poll storm.
+	NextPollAfterSeconds int `json:"nextPollAfterSeconds"`
+}
+
+// ProgressRequest is POST /api/v1/jobs/{job}:reportProgress.
+//
+// Lossy by design: dropping one costs nothing. `complete` is not lossy.
+type ProgressRequest struct {
+	WorkerID         string      `json:"workerId"`
+	BytesTransferred Int64String `json:"bytesTransferred"`
+}
+
+// CompleteRequest is POST /api/v1/jobs/{job}:complete.
+type CompleteRequest struct {
+	WorkerID string `json:"workerId"`
+	// Outcome is SUCCEEDED, SKIPPED, FAILED or CANCELLED.
+	Outcome          JobState    `json:"outcome"`
+	BytesTransferred Int64String `json:"bytesTransferred,omitempty"`
+	SkipReason       SkipReason  `json:"skipReason,omitempty"`
+	ErrorClass       string      `json:"errorClass,omitempty"`
+	ErrorMessage     string      `json:"errorMessage,omitempty"`
+	DurationMs       int64       `json:"durationMs,omitempty"`
+	Attempt          int         `json:"attempt,omitempty"`
+	// Placed reports that the destination now holds this content.
+	Placed bool `json:"placed,omitempty"`
+}
+
+// CompleteResponse tells the worker what its report did.
+type CompleteResponse struct {
+	// Applied is false when the lease had already expired and the result was
+	// discarded. Not an error — the expected outcome of finishing late.
+	Applied       bool          `json:"applied"`
+	TransferState TransferState `json:"transferState,omitempty"`
+	WaveAdvanced  bool          `json:"waveAdvanced,omitempty"`
+	CurrentWave   int           `json:"currentWave,omitempty"`
+}
+
+// HeartbeatRequest is POST /api/v1/workers/{worker}:heartbeat.
+type HeartbeatRequest struct {
+	ActiveJobIDs []string    `json:"activeJobIds"`
+	CPUPercent   float64     `json:"cpuPercent,omitempty"`
+	MemoryBytes  Int64String `json:"memoryBytes,omitempty"`
+}
+
+// HeartbeatResponse carries lease renewal and cancellation in one call.
+type HeartbeatResponse struct {
+	// LeasesRenewed is what the worker still holds. A job MISSING from this
+	// list has been lost — reaped and possibly redone elsewhere — and must be
+	// abandoned rather than completed.
+	LeasesRenewed []string `json:"leasesRenewed"`
+	// CancelledJobIDs is how cancellation reaches a worker: there is no push
+	// channel, so it rides the heartbeat and takes effect within one interval.
+	CancelledJobIDs []string `json:"cancelledJobIds,omitempty"`
+	DrainRequested  bool     `json:"drainRequested,omitempty"`
+}
+
+// ---------------------------------------------------------------------------
+// Transfers
+// ---------------------------------------------------------------------------
+
+// Transfer is one package moving to one destination.
+type Transfer struct {
+	ID        string `json:"id"`
+	RequestID string `json:"requestId"`
+	Product   string `json:"product"`
+	Tag       string `json:"tag"`
+	Source    string `json:"source"`
+	Target    string `json:"target"`
+
+	State    TransferState `json:"state"`
+	Priority int           `json:"priority"`
+
+	CurrentWave int `json:"currentWave"`
+	MaxWave     int `json:"maxWave"`
+
+	// Progress is always a ROLLUP over jobs, never a maintained counter
+	// (invariant I6). A counter would be a second source of truth for the same
+	// fact and would drift; this cannot.
+	Progress TransferProgress `json:"progress"`
+
+	FailureReason string `json:"failureReason,omitempty"`
+	CreatedAt     string `json:"createdAt,omitempty"`
+	CompletedAt   string `json:"completedAt,omitempty"`
+}
+
+// TransferProgress is what has happened so far, and what was planned.
+type TransferProgress struct {
+	JobsPlanned     int `json:"jobsPlanned"`
+	JobsDone        int `json:"jobsDone"`
+	JobsFailed      int `json:"jobsFailed"`
+	JobsOutstanding int `json:"jobsOutstanding"`
+
+	PlannedBytes     Int64String `json:"plannedBytes"`
+	BytesTransferred Int64String `json:"bytesTransferred"`
+	// DedupeSkippedBytes is what this transfer will NOT move because the
+	// destination already had it. Reported rather than buried: it is the
+	// number that makes the second transfer of a product line nearly free.
+	DedupeSkippedBytes Int64String `json:"dedupeSkippedBytes"`
+}
+
+// ListTransfersResponse is GET /api/v1/transfers.
+type ListTransfersResponse struct {
+	Transfers     []Transfer `json:"transfers"`
+	NextPageToken string     `json:"nextPageToken,omitempty"`
+}
+
+// Job is layer-level progress.
+type Job struct {
+	ID         string      `json:"id"`
+	Kind       string      `json:"kind"`
+	Digest     string      `json:"digest"`
+	SizeBytes  Int64String `json:"sizeBytes"`
+	State      JobState    `json:"state"`
+	SkipReason SkipReason  `json:"skipReason,omitempty"`
+	Wave       int         `json:"wave"`
+
+	Attempts         int         `json:"attempts"`
+	MaxAttempts      int         `json:"maxAttempts"`
+	BytesTransferred Int64String `json:"bytesTransferred"`
+	LeaseOwner       string      `json:"leaseOwner,omitempty"`
+	LastError        string      `json:"lastError,omitempty"`
+	LastErrorClass   string      `json:"lastErrorClass,omitempty"`
+}
+
+// ListJobsResponse is GET /api/v1/transfers/{transfer}/jobs.
+type ListJobsResponse struct {
+	TransferID string `json:"transferId"`
+	Jobs       []Job  `json:"jobs"`
+}

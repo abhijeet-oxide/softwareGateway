@@ -4,7 +4,9 @@ Gateway for replicating OCI artifacts from one repository to another.
 
 A cloud-native platform that continuously discovers software packages published to vendor OCI registries and replicates them into internal registries — optimized for throughput on 30–60 GB packages, resilient to any single failure, and operable without reading the source.
 
-> **Status: M2 complete — discovery works end to end.** Point it at an OCI registry and it finds what is published, records packages with their artifact trees, and evaluates auto-download rules. **Byte transfer lands in M3**, so a transfer request currently stays `pending` — expected, not a bug. See the [delivery plan](docs/design/17-delivery-plan.md).
+> **Status: M3 in progress — packages now transfer.** Point it at an OCI registry and it finds what is published, records packages with their artifact trees, evaluates auto-download rules, and **moves the bytes to your internal registry** — planned per blob, streamed registry-to-registry, deduplicated against what the destination already holds, and tagged only once the whole package has landed.
+>
+> Still to come in M3: chunked-upload resumption, and the pause/resume/cancel/retry controls (`transferctl transfers` is read-only for now). A 30–60 GB acceptance run against real infrastructure has not been done yet — the transfer path is proven against an in-process OCI registry, not at scale. See the [delivery plan](docs/design/17-delivery-plan.md).
 >
 > **Get it running:** [Developer Guide →](docs/DEVELOPER-GUIDE.md)
 

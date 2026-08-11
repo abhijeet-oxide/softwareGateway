@@ -1284,9 +1284,11 @@ They should not — a non-retryable error returns immediately. If a missing cred
 | M5 | Verification (cosign), notifications | |
 | M6 | GC, retention, hardening | |
 
-**What "M3 is next" means for you now.** Auto-download rules create `transfer_requests` rows and they stay `pending`, because nothing consumes the queue yet. `transferctl packages describe` says so explicitly rather than leaving you to wonder. Everything in the discovery path is real: real HTTP, real digests, real database rows.
+**What works now.** Auto-download rules create `transfer_requests` rows, the Coordinator's leader expands them into planned transfers, and workers lease the jobs and move the bytes. Run a coordinator and at least one worker and a discovered package will replicate to your configured target on its own; `transferctl transfers list` shows it happening, and `transferctl transfers jobs <id>` shows it blob by blob.
 
-M3 also closes [ADR-001](design/16-technology-choices.md) — whether to adopt `go-containerregistry` or `oras-go/v2`. It is deliberately still open: nothing built so far touches an OCI library (the registry client is plain `net/http`), so the decision gets made against measurements on the blob path, where the difference actually shows.
+**What is not there yet.** `transferctl transfers` is read-only — pause, resume, cancel, retry and priority changes are M3 work still outstanding. An interrupted upload restarts its blob rather than resuming (`ResumeUpload` returns `ErrUnsupported`; see Q3). Promotion between internal registries is M4, so a `promote` request expands into a stated error rather than being silently treated as a replication. And the M3 acceptance run — a real 30–60 GB package, with the worker's memory held to the [05](design/05-transfer-engine.md) §4.5 formula, and the `kill -9` chaos scenario — has not been done: the path is proven against an in-process registry, which is a different claim.
+
+[ADR-001](design/16-technology-choices.md#11-adr-001-closure) — whether to adopt `go-containerregistry` or `oras-go/v2` — **is now closed: `oras-go/v2`, for the write path only.** The read path you exercise during discovery is still plain `net/http`, unchanged from M2; the library appears in `internal/registry/generic/write.go` and nowhere else, so blob upload, cross-repository mount and `Referrers` go through it while tag listing and manifest resolution do not. The closure, including the four criteria it leaves unmeasured, is written up in the ADR.
 
 ---
 

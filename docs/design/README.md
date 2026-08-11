@@ -52,7 +52,7 @@ A cloud-native platform that continuously discovers software packages published 
 - **Idempotency is structural** — unique constraints, not application logic.
 - **Ordering is one integer.** Waves replace a dependency graph; a tag never appears before its blobs.
 - **Backpressure is AIMD**, chosen over cleverer controllers because it can be reasoned about at 3 a.m.
-- **The OCI client library is deliberately undecided** ([ADR-001](16-technology-choices.md#adr-001)) and closed by measurement at M3.
+- **The OCI client library decision** ([ADR-001](16-technology-choices.md#adr-001)) closed at M3 on `oras-go/v2`, for the write path only — and touched exactly one directory, which was the point of leaving it open behind an interface.
 
 ## Known limitations
 

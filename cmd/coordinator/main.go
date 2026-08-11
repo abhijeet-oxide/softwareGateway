@@ -35,7 +35,10 @@ import (
 	"github.com/abhijeet-oxide/softwareGateway/internal/platform/version"
 	"github.com/abhijeet-oxide/softwareGateway/internal/preflight"
 	"github.com/abhijeet-oxide/softwareGateway/internal/product"
+	"github.com/abhijeet-oxide/softwareGateway/internal/queue"
+	"github.com/abhijeet-oxide/softwareGateway/internal/regclient"
 	"github.com/abhijeet-oxide/softwareGateway/internal/store"
+	"github.com/abhijeet-oxide/softwareGateway/internal/transfer"
 	"github.com/abhijeet-oxide/softwareGateway/internal/vendors"
 	"github.com/abhijeet-oxide/softwareGateway/internal/vendors/near"
 )
@@ -152,6 +155,29 @@ func run() error {
 
 	discoveryCtl := discovery.NewController(packages, resolver, layouts, logger, mreg)
 
+	// ---- the queue ----
+	//
+	// The Coordinator is the SOLE database writer, so everything a worker does
+	// to the queue passes through here: leases out, results back. Bytes do not.
+	jobQueue := queue.New(packages, cfg.Coordinator.Reaper.LeaseDuration, logger)
+
+	queueCtl := queue.NewController(jobQueue, expanderAdapter{
+		e: transfer.NewExpander(
+			packages,
+			transfer.NewPlanner(packages, cfg.Concurrency.PerRegistry, logger),
+			&resolverImpl{
+				products: products,
+				catalog:  cat,
+				packages: packages,
+				clients:  regclient.NewClients(products, resolver, logger),
+				log:      logger,
+			},
+			0, logger),
+	}, queue.ControllerOptions{
+		ReapInterval:   cfg.Coordinator.Reaper.TickInterval,
+		ExpandInterval: cfg.Coordinator.Scheduler.TickInterval,
+	}, logger)
+
 	// A package's manifest BODIES are the only thing recorded here that grows
 	// without limit and can be discarded without losing a fact — they are a
 	// cache in front of the source registry, and the tree they describe is kept
@@ -264,6 +290,7 @@ func run() error {
 			}
 			discoveryCtl.SetLeader(isLeader)
 			cacheSweeper.SetLeader(isLeader)
+			queueCtl.SetLeader(isLeader)
 		})
 	}
 
@@ -276,6 +303,7 @@ func run() error {
 		Store:     st,
 		Packages:  packages,
 		Discovery: discoveryCtl.Loop(),
+		Queue:     jobQueue,
 		// Connectivity checking is deliberately NOT part of the health
 		// registry: health must not depend on third-party registries, or a
 		// vendor's outage pulls this replica out of the Service.
@@ -307,6 +335,7 @@ func run() error {
 	g.Go(func() error { return watcher.Run(gctx) })
 	g.Go(func() error { return discoveryCtl.Run(gctx) })
 	g.Go(func() error { return cacheSweeper.Run(gctx) })
+	g.Go(func() error { return queueCtl.Run(gctx) })
 
 	// Graceful shutdown: stop accepting, drain in-flight requests, then exit.
 	g.Go(func() error {

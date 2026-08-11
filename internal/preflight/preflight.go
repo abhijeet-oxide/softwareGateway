@@ -676,49 +676,20 @@ func applyNetwork(
 	cfg *registry.ClientConfig, p *product.Product, override *product.Network,
 	secrets *product.SecretResolver,
 ) error {
-	networks := []product.Network{p.Spec.Network}
-	if override != nil {
-		networks = append(networks, *override)
+	n, err := product.ResolveNetwork(p, override, secrets)
+	if err != nil {
+		return err
 	}
-
-	for _, n := range networks {
-		if n.CABundleRef != nil {
-			key := n.CABundleRef.Key
-			if key == "" {
-				key = product.DefaultCABundleKey
-			}
-			bundle, err := secrets.Value(n.CABundleRef.SecretName, key)
-			if err != nil {
-				return fmt.Errorf("caBundleRef: %w", err)
-			}
-			cfg.CABundle = []byte(bundle.Reveal())
-		}
-		if n.Proxy != nil {
-			switch {
-			case n.Proxy.Direct:
-				// Clears any inherited proxy. Without this the only way to say
-				// "everything through the corporate proxy except this one
-				// registry" is to repeat the host in noProxy at every level.
-				cfg.HTTPSProxy = ""
-				cfg.NoProxy = nil
-				cfg.DirectConnect = true
-			case n.Proxy.HTTPSProxy != "":
-				cfg.HTTPSProxy = n.Proxy.HTTPSProxy
-				cfg.DirectConnect = false
-			}
-			if len(n.Proxy.NoProxy) > 0 && !n.Proxy.Direct {
-				cfg.NoProxy = n.Proxy.NoProxy
-			}
-		}
-		if n.TLS.SetsSkipVerify() {
-			cfg.InsecureSkipVerify = n.TLS.SkipsVerify()
-		}
-		if d := time.Duration(n.Timeouts.Connect); d > 0 {
-			cfg.ConnectTimeout = d
-		}
-		if d := time.Duration(n.Timeouts.ResponseHeader); d > 0 {
-			cfg.ResponseHeaderTimeout = d
-		}
+	cfg.CABundle = n.CABundle
+	cfg.HTTPSProxy = n.HTTPSProxy
+	cfg.NoProxy = n.NoProxy
+	cfg.DirectConnect = n.DirectConnect
+	cfg.InsecureSkipVerify = n.InsecureSkipVerify
+	if n.ConnectTimeout > 0 {
+		cfg.ConnectTimeout = n.ConnectTimeout
+	}
+	if n.ResponseHeaderTimeout > 0 {
+		cfg.ResponseHeaderTimeout = n.ResponseHeaderTimeout
 	}
 	return nil
 }

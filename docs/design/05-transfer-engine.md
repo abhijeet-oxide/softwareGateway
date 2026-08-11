@@ -2,7 +2,7 @@
 
 > **Prerequisite:** [04 — Queue and Scheduling](04-queue-and-scheduling.md) · **Depends on:** [06 — Registry Abstraction](06-registry-abstraction.md)
 
-This is the throughput document — goal G1. Everything here is written against the `Repository` interface in [06](06-registry-abstraction.md), never against a specific OCI library, because [ADR-001](16-technology-choices.md#adr-001) is deliberately open.
+This is the throughput document — goal G1. Everything here is written against the `Repository` interface in [06](06-registry-abstraction.md), never against a specific OCI library. That was originally because [ADR-001](16-technology-choices.md#adr-001) was open; it is now because the abstraction is what keeps the closed decision reversible. ADR-001 closed at M3 on `oras-go/v2`, confined to the write path inside `internal/registry/generic/` — nothing in this document changed as a result, which was the design goal.
 
 ---
 

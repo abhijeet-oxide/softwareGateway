@@ -1,0 +1,283 @@
+// Package queue is the Coordinator's side of the work queue.
+//
+// It owns leasing, progress, completion and reaping — everything that decides
+// WHICH work a worker gets and what happens when it comes back. The bytes are
+// the worker's business; none pass through here.
+//
+// See docs/design/04-queue-and-scheduling.md.
+//
+// The package sits above persistence and below the API: it takes and returns
+// domain values, and knows nothing about HTTP. That is what lets the same
+// logic serve the worker plane, a test, and any later transport without being
+// reimplemented (docs/design/15 §2).
+package queue
+
+import (
+	"context"
+	"fmt"
+	"log/slog"
+	"time"
+
+	"github.com/abhijeet-oxide/softwareGateway/internal/store"
+)
+
+// Defaults from docs/design/04 §4.3 and §7.1.
+const (
+	// DefaultLeaseDuration is how long a lease is good for without renewal.
+	// Two minutes: long enough that a brief Coordinator hiccup does not strand
+	// in-flight work, short enough that a dead worker's jobs return promptly.
+	DefaultLeaseDuration = 2 * time.Minute
+	// DefaultReapInterval is how often the leader looks for expired leases.
+	DefaultReapInterval = 30 * time.Second
+	// DefaultIdlePoll is what an empty queue tells a worker to wait.
+	//
+	// Server-directed rather than worker-chosen, so forty idle workers do not
+	// become a poll storm and so the Coordinator can change the answer without
+	// redeploying the fleet.
+	DefaultIdlePoll = 5 * time.Second
+	// DefaultBusyPoll is what a worker is told when it got work — come back
+	// promptly, there may be more.
+	DefaultBusyPoll = 1 * time.Second
+)
+
+// Queue serves the worker plane.
+type Queue struct {
+	packages *store.Packages
+	log      *slog.Logger
+
+	leaseDuration time.Duration
+}
+
+// New builds a queue service.
+func New(packages *store.Packages, leaseDuration time.Duration, log *slog.Logger) *Queue {
+	if log == nil {
+		log = slog.Default()
+	}
+	if leaseDuration <= 0 {
+		leaseDuration = DefaultLeaseDuration
+	}
+	return &Queue{packages: packages, log: log, leaseDuration: leaseDuration}
+}
+
+// LeaseDuration is how long the leases this queue hands out are good for.
+func (q *Queue) LeaseDuration() time.Duration { return q.leaseDuration }
+
+// Assignment is one job as it goes to a worker, with everything needed to
+// execute it and nothing else.
+type Assignment struct {
+	store.LeasedJob
+
+	Source store.Endpoint
+	Target store.Endpoint
+
+	// KnownPlacement is the placement fast path, resolved for this batch.
+	KnownPlacement bool
+
+	// TagAs is set only on the job that completes the transfer — the
+	// top-level manifest at the top wave. Invariant I1 lives here: nothing
+	// else in the batch can make a tag appear.
+	TagAs string
+}
+
+// LeaseResult is one lease call's answer.
+type LeaseResult struct {
+	Jobs []Assignment
+	// LeaseDuration is how long the worker may hold these before renewing.
+	LeaseDuration time.Duration
+	// NextPollAfter is server-directed backoff. An idle worker is told when to
+	// come back; long-polling was considered and server-directed intervals are
+	// simpler and give the Coordinator direct control (docs/design/09 §7.1).
+	NextPollAfter time.Duration
+}
+
+// Lease hands a worker up to `capacity` jobs.
+func (q *Queue) Lease(ctx context.Context, workerID string, capacity int) (LeaseResult, error) {
+	res := LeaseResult{LeaseDuration: q.leaseDuration, NextPollAfter: DefaultIdlePoll}
+
+	jobs, err := q.packages.LeaseJobs(ctx, store.LeaseRequest{
+		Owner:    workerID,
+		Limit:    capacity,
+		Duration: q.leaseDuration,
+	})
+	if err != nil {
+		return res, err
+	}
+	if len(jobs) == 0 {
+		return res, nil
+	}
+	res.NextPollAfter = DefaultBusyPoll
+
+	assignments, err := q.hydrate(ctx, jobs)
+	if err != nil {
+		// The jobs are leased but unusable. Hand them straight back rather
+		// than letting them sit until the lease expires: a configuration
+		// problem should surface as an immediate retry, not as a two-minute
+		// stall repeated forever.
+		q.releaseAll(ctx, workerID, jobs, err)
+		return res, err
+	}
+	res.Jobs = assignments
+	return res, nil
+}
+
+// hydrate turns leased rows into executable assignments.
+//
+// Three lookups for the whole BATCH rather than per job: endpoints, placements
+// and the transfer tag. A worker holding sixteen jobs therefore costs three
+// queries, not forty-eight (docs/design/05 §4.1).
+func (q *Queue) hydrate(ctx context.Context, jobs []store.LeasedJob) ([]Assignment, error) {
+	repoIDs := make([]int64, 0, len(jobs)*2)
+	digests := make([]string, 0, len(jobs))
+	for _, j := range jobs {
+		repoIDs = append(repoIDs, j.SourceRepoID, j.TargetRepoID)
+		digests = append(digests, j.Digest)
+	}
+
+	endpoints, err := q.packages.HydrateEndpoints(ctx, repoIDs)
+	if err != nil {
+		return nil, err
+	}
+
+	// Placements are looked up per target repository, because a digest present
+	// in one destination says nothing about another.
+	placed := map[int64]map[string]bool{}
+	for _, j := range jobs {
+		if _, done := placed[j.TargetRepoID]; done {
+			continue
+		}
+		hits, err := q.packages.PlacedDigests(ctx, j.TargetRepoID, digests)
+		if err != nil {
+			return nil, err
+		}
+		placed[j.TargetRepoID] = hits
+	}
+
+	tags, err := q.transferTags(ctx, jobs)
+	if err != nil {
+		return nil, err
+	}
+
+	out := make([]Assignment, 0, len(jobs))
+	for _, j := range jobs {
+		src, ok := endpoints[j.SourceRepoID]
+		if !ok {
+			return nil, fmt.Errorf("job %d: source repository %d is not in the catalog",
+				j.ID, j.SourceRepoID)
+		}
+		dst, ok := endpoints[j.TargetRepoID]
+		if !ok {
+			return nil, fmt.Errorf("job %d: target repository %d is not in the catalog",
+				j.ID, j.TargetRepoID)
+		}
+
+		a := Assignment{
+			LeasedJob:      j,
+			Source:         src,
+			Target:         dst,
+			KnownPlacement: j.Kind == "blob" && placed[j.TargetRepoID][j.Digest],
+		}
+		if t, ok := tags[j.TransferID]; ok && j.Kind == "manifest" && j.Digest == t.digest {
+			a.TagAs = t.tag
+		}
+		out = append(out, a)
+	}
+	return out, nil
+}
+
+type transferTag struct{ tag, digest string }
+
+// transferTags resolves each transfer's destination tag once per batch.
+func (q *Queue) transferTags(
+	ctx context.Context, jobs []store.LeasedJob,
+) (map[string]transferTag, error) {
+	out := map[string]transferTag{}
+	for _, j := range jobs {
+		if j.Kind != "manifest" {
+			continue
+		}
+		if _, done := out[j.TransferID]; done {
+			continue
+		}
+		tag, dgst, err := q.packages.TransferTag(ctx, j.TransferID)
+		if err != nil {
+			return nil, err
+		}
+		out[j.TransferID] = transferTag{tag: tag, digest: dgst}
+	}
+	return out, nil
+}
+
+// releaseAll returns a batch to the queue after a hydration failure.
+//
+// Best effort by design: if this fails too, the reaper collects the jobs one
+// lease period later. Nothing is lost either way — that is the property leases
+// exist to provide.
+func (q *Queue) releaseAll(ctx context.Context, workerID string, jobs []store.LeasedJob, cause error) {
+	for _, j := range jobs {
+		_, err := q.packages.CompleteJob(ctx, store.Completion{
+			JobID:      j.ID,
+			Owner:      workerID,
+			Outcome:    "failed",
+			Attempt:    j.Attempt,
+			ErrorClass: "configuration",
+			ErrorMsg:   cause.Error(),
+		})
+		if err != nil {
+			q.log.WarnContext(ctx, "could not return an unusable job to the queue",
+				"job", j.ID, "error", err)
+		}
+	}
+}
+
+// Progress records how far a blob has got. Lossy by design.
+func (q *Queue) Progress(ctx context.Context, jobID int64, workerID string, bytes int64) error {
+	return q.packages.ReportProgress(ctx, jobID, workerID, bytes)
+}
+
+// Complete records a finished job and everything that follows from it.
+func (q *Queue) Complete(ctx context.Context, c store.Completion) (store.CompletionResult, error) {
+	res, err := q.packages.CompleteJob(ctx, c)
+	if err != nil {
+		return res, err
+	}
+	if !res.Applied {
+		// The expected outcome of a worker finishing after its lease expired.
+		// Logged at DEBUG rather than WARN: it is a designed-for event, and at
+		// WARN it would be noise on every worker restart.
+		q.log.DebugContext(ctx, "completion ignored: the lease had already expired",
+			"job", c.JobID, "worker", c.Owner)
+		return res, nil
+	}
+
+	q.log.InfoContext(ctx, "job completed",
+		"job", c.JobID,
+		"outcome", c.Outcome,
+		"skipReason", c.SkipReason,
+		"bytes", c.BytesTransferred,
+		"transferState", res.TransferState,
+		"waveAdvanced", res.WaveAdvanced,
+	)
+	return res, nil
+}
+
+// Heartbeat renews a worker's leases and reports what it may keep.
+//
+// One call carrying two signals: lease renewal, and — by omission — which jobs
+// the worker has lost and must abandon. There is no push channel to workers,
+// so this is also where cancellation would be delivered (docs/design/09 §7.4).
+func (q *Queue) Heartbeat(ctx context.Context, workerID string, activeJobs []int64) ([]int64, error) {
+	return q.packages.RenewLeases(ctx, workerID, activeJobs, q.leaseDuration)
+}
+
+// Reap returns work held by workers that stopped heartbeating.
+func (q *Queue) Reap(ctx context.Context) ([]store.ReapedJob, error) {
+	reaped, err := q.packages.ReapExpiredLeases(ctx)
+	if err != nil {
+		return nil, err
+	}
+	for _, j := range reaped {
+		q.log.WarnContext(ctx, "lease expired; job returned to the queue",
+			"job", j.ID, "transfer", j.TransferID, "state", j.State)
+	}
+	return reaped, nil
+}

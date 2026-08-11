@@ -64,3 +64,39 @@ func TestFailedCountIsADashWhenThereAreNone(t *testing.T) {
 		t.Errorf("failedJobs = %q, want 3", got)
 	}
 }
+
+// AN ETA THAT DISAPPEARS ON A MOVING TRANSFER READS AS A BROKEN ESTIMATE.
+//
+// It was gated on `state == running`, which is a different question from
+// "is there anything left to estimate". A transfer is `ready` from the moment it
+// is planned until its first job COMPLETES — long, with multi-gigabyte blobs,
+// and exactly where a resumed transfer restarts — so the table showed a
+// throughput and a blank ETA at the same time.
+func TestETAIsShownWhileWorkIsStillOutstanding(t *testing.T) {
+	moving := &v1.Transfer{
+		State:     v1.TransferReady,
+		StartedAt: time.Now().Add(-100 * time.Second).Format(time.RFC3339Nano),
+		Progress: v1.TransferProgress{
+			PlannedBytes: "1100", BytesTransferred: "100",
+		},
+	}
+
+	if got := etaOf(moving, 0); got == "-" {
+		t.Error("no ETA for a ready transfer that is moving bytes")
+	}
+	// And it agrees with the speed column, which never had the gate.
+	if got := speedOf(moving, 0); got == "-" {
+		t.Fatal("the fixture moves no bytes; the test would prove nothing")
+	}
+
+	// A settled transfer has nothing remaining, whatever its byte counts say.
+	for _, state := range []v1.TransferState{
+		v1.TransferSucceeded, v1.TransferFailed, v1.TransferCancelled,
+	} {
+		settled := *moving
+		settled.State = state
+		if got := etaOf(&settled, 10); got != "-" {
+			t.Errorf("eta of a %s transfer = %q, want -", state, got)
+		}
+	}
+}

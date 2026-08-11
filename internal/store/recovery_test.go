@@ -5,6 +5,7 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 )
 
 // What happens to a transfer when the network goes, and how it starts again.
@@ -391,3 +392,93 @@ type rowScanner struct {
 }
 
 func (r *rowScanner) Scan(dest ...any) error { return r.row.Scan(dest...) }
+
+// HANDING WORK OUT IS WHAT MAKES A TRANSFER RUNNING.
+//
+// It used to happen only when the first job COMPLETED, which is a different
+// event and can be many minutes later on a multi-gigabyte blob — so a transfer
+// with ten blobs in flight reported `ready`, and everything gated on the state
+// word went with it. A resumed transfer starts inside exactly that window.
+func TestLeasingWorkMarksTheTransferRunning(t *testing.T) {
+	h := newRecoveryHarness(t)
+	id := h.transferWithJobs(2)
+	h.exec(`UPDATE jobs SET state='pending', lease_owner=NULL, lease_expires_at=NULL
+	         WHERE transfer_id = ?`, id)
+	h.exec(`UPDATE transfers SET state='ready', started_at=NULL WHERE id = ?`, id)
+
+	leased, err := h.packages.LeaseJobs(t.Context(), LeaseRequest{
+		Owner: "worker-1", Limit: 2, Duration: time.Minute,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(leased) != 2 {
+		t.Fatalf("leased %d job(s), want 2", len(leased))
+	}
+
+	// No job has completed. The transfer is running all the same.
+	if got := h.state(id); got != "running" {
+		t.Errorf("state = %q with two jobs in flight, want running", got)
+	}
+	if h.startedAt(id) == "" {
+		t.Error("started_at was not set, so elapsed time and throughput have no anchor")
+	}
+}
+
+// A RESUMED transfer keeps the clock it already had. Restarting it would make
+// the average throughput — and the ETA built on it — describe a fraction of the
+// work as if it were all of it.
+func TestLeasingDoesNotRestartTheClockOnAResumedTransfer(t *testing.T) {
+	h := newRecoveryHarness(t)
+	id := h.transferWithJobs(1)
+	h.exec(`UPDATE jobs SET state='failed', attempts=8 WHERE transfer_id = ?`, id)
+
+	before := h.startedAt(id)
+	if before == "" {
+		t.Fatal("fixture has no started_at to preserve")
+	}
+
+	if _, err := h.packages.RetryTransfer(t.Context(), id); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := h.packages.LeaseJobs(t.Context(), LeaseRequest{
+		Owner: "worker-1", Limit: 1, Duration: time.Minute,
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	if got := h.startedAt(id); got != before {
+		t.Errorf("started_at moved from %q to %q across a retry", before, got)
+	}
+	if got := h.state(id); got != "running" {
+		t.Errorf("state = %q after the requeued job was leased, want running", got)
+	}
+}
+
+// The write must be a no-op for a transfer already running, or it is a second
+// table written on every dequeue.
+func TestLeasingDoesNotDisturbATransferAlreadyRunning(t *testing.T) {
+	h := newRecoveryHarness(t)
+	id := h.transferWithJobs(1)
+	h.exec(`UPDATE jobs SET state='pending', lease_owner=NULL WHERE transfer_id = ?`, id)
+	h.exec(`UPDATE transfers SET state='running', started_at='2026-01-01T00:00:00Z' WHERE id = ?`, id)
+
+	if _, err := h.packages.LeaseJobs(t.Context(), LeaseRequest{
+		Owner: "worker-1", Limit: 1, Duration: time.Minute,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if got := h.startedAt(id); got != "2026-01-01T00:00:00Z" {
+		t.Errorf("started_at = %q, want the original", got)
+	}
+}
+
+func (h *recoveryHarness) startedAt(transferID string) string {
+	h.t.Helper()
+	var at string
+	if err := h.query(`SELECT COALESCE(started_at,'') FROM transfers WHERE id = ?`,
+		transferID).Scan(&at); err != nil {
+		h.t.Fatal(err)
+	}
+	return at
+}

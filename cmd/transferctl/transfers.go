@@ -380,6 +380,30 @@ func bytesProgress(p v1.TransferProgress) string {
 // The two are labelled differently in the footnote rather than shown in two
 // columns. A listing is a scan for the row that is wrong, and a second rate
 // column would cost the width of one that matters more.
+// isSettled reports that a transfer has nothing left to do.
+//
+// The gate on the ETA, and it used to be `state == running` — which is a
+// different question and answered wrongly for a real transfer. A transfer is
+// `ready` from the moment it is planned until its first job COMPLETES, and with
+// multi-gigabyte blobs that window is long; a resumed one starts inside it. So a
+// transfer with ten blobs in flight showed a speed and a blank ETA at the same
+// time, which reads as the estimate being broken rather than as the state word
+// lagging.
+//
+// Asking what a transfer has LEFT rather than what it is called is also the
+// question that keeps answering itself correctly: `paused` and `verifying` are
+// states this list will meet later, and both have remaining work to estimate.
+// The states below have none, and estimate() declines the rest on its own when
+// there is no rate to extrapolate from.
+func isSettled(state v1.TransferState) bool {
+	switch state {
+	case v1.TransferSucceeded, v1.TransferFailed, v1.TransferCancelled:
+		return true
+	default:
+		return false
+	}
+}
+
 func speedOf(t *v1.Transfer, live float64) string {
 	if live > 0 {
 		return humanRate(live)
@@ -407,7 +431,7 @@ func elapsedOf(t *v1.Transfer) string {
 // average still mostly describes the period before it, and the person who made
 // the change is watching to find out whether it worked.
 func etaOf(t *v1.Transfer, live float64) string {
-	if t.State != v1.TransferRunning {
+	if isSettled(t.State) {
 		return "-"
 	}
 
@@ -503,7 +527,7 @@ func describeTransfer(w io.Writer, t *v1.Transfer, rates *rateTracker, watching 
 	if d, ok := elapsed(t); ok {
 		fmt.Fprintf(pw, "  Elapsed:\t%s\n", humanDuration(d))
 	}
-	if t.State == v1.TransferRunning {
+	if !isSettled(t.State) {
 		if d, ok := estimateAt(t, rates.smoothed); ok {
 			fmt.Fprintf(pw, "  Remaining:\t~%s at the current rate\n", humanDuration(d))
 		} else if d, ok := estimate(t); ok {

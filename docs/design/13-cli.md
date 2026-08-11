@@ -361,16 +361,34 @@ Priority  100          Wave 1 of 3          Elapsed 6m27s
 **Layer-level progress** — the required per-layer view:
 
 ```
-$ transferctl transfers jobs 9c1e8f2a --state running
+$ transferctl transfers jobs 9c1e8f2a --watch
 
-DIGEST            SIZE       PROGRESS              SPEED      WORKER        ATTEMPT
-sha256:4a5b8c9d…  256.0 MiB  [████████░░]  78.2%   12.1 MiB/s worker-x2k4   1
-sha256:7e2f1a3b…  198.4 MiB  [████░░░░░░]  41.0%   10.8 MiB/s worker-p9m2   1
-sha256:9b3e2d1c…   64.0 MiB  [█████████░]  92.5%    9.2 MiB/s worker-t4v7   1
-sha256:3c9e1f7d…  134.2 MiB  [██░░░░░░░░]  18.1%    4.1 MiB/s worker-z8n1   3
+STATE     KIND      SOURCE                         TARGET                                     DIGEST            SIZE       MOVED      ATTEMPTS  WAVE  DETAIL
+leased    blob      orbs/cfx-5000-k8s:1.2.3 *      sw/orbs/cfx-5000-k8s/nginx:1.2.3           sha256:4a5b8c9d…  256.0 MiB  200.1 MiB  1/8       0     held by worker-x2k4
+leased    blob      orbs/cfx-5000-k8s:24.3.1       sw/orbs/cfx-5000-k8s/cfx-core:24.3.1       sha256:7e2f1a3b…  198.4 MiB   81.3 MiB  1/8       0     held by worker-p9m2
+pending   blob      orbs/cfx-5000-k8s:24.3.1       sw/orbs/cfx-5000-k8s/cfx-core:24.3.1       sha256:3c9e1f7d…  134.2 MiB        0 B  3/8       0     -
+blocked   manifest  orbs/cfx-5000-k8s:24.3.1       sw/orbs/cfx-5000-k8s/cfx-core:24.3.1       sha256:9b3e2d1c…    2.1 KiB        0 B  -         1     -
 
 $ transferctl transfers jobs 9c1e8f2a --state failed -o json | jq '.jobs[].digest'
 ```
+
+Ordered by what is HAPPENING — leased, then runnable, then failed, blocked and
+the outcomes — and largest first within each. A transfer has thousands of jobs
+and a listing shows a page of them, so the order decides what an operator ever
+sees; ordering by wave buried the handful actually moving under whatever was
+planned first.
+
+SOURCE and TARGET are the full paths, per row. A blob is nobody's idea of a
+recognisable object, so it is shown as part of the image or chart that
+references it — the vendor's own name for it, from
+`org.opencontainers.image.ref.name`. A `*` marks content several artifacts
+share, where the one named is an example rather than the whole truth.
+
+`--watch` re-reads every two seconds (`--interval` to change it) and stops when
+nothing is left running or runnable. `transfers list` and `transfers describe`
+take the same pair; on `describe` it is what makes current and peak throughput
+available at all, since a rate needs two readings and the server keeps no time
+series.
 
 ## 7. Queue control
 

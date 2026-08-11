@@ -877,7 +877,11 @@ type Transfer struct {
 
 	FailureReason string `json:"failureReason,omitempty"`
 	CreatedAt     string `json:"createdAt,omitempty"`
-	CompletedAt   string `json:"completedAt,omitempty"`
+	// StartedAt is when the first job was leased, not when the transfer was
+	// asked for. Elapsed time and throughput measured from the request would
+	// count however long it waited for a worker as transfer time.
+	StartedAt   string `json:"startedAt,omitempty"`
+	CompletedAt string `json:"completedAt,omitempty"`
 }
 
 // TransferProgress is what has happened so far, and what was planned.

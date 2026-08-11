@@ -74,6 +74,11 @@ type Assignment struct {
 	// KnownPlacement is the placement fast path, resolved for this batch.
 	KnownPlacement bool
 
+	// MountFrom is a repository on the same target registry already holding
+	// this digest, resolved for this batch so the worker can mount instead of
+	// streaming. Empty when nothing nearby has it yet.
+	MountFrom string
+
 	// Tags are what this manifest must be called at the destination,
 	// resolved at planning time from the source's own annotations.
 	//
@@ -147,6 +152,10 @@ func (q *Queue) hydrate(ctx context.Context, jobs []store.LeasedJob) ([]Assignme
 	// Placements are looked up per target repository, because a digest present
 	// in one destination says nothing about another.
 	placed := map[int64]map[string]bool{}
+	// And where the destination itself does NOT have it, whether a sibling
+	// repository on the same registry does — the difference between mounting a
+	// blob and fetching it across the WAN a second time.
+	mountable := map[int64]map[string]string{}
 	for _, j := range jobs {
 		if _, done := placed[j.TargetRepoID]; done {
 			continue
@@ -156,6 +165,12 @@ func (q *Queue) hydrate(ctx context.Context, jobs []store.LeasedJob) ([]Assignme
 			return nil, err
 		}
 		placed[j.TargetRepoID] = hits
+
+		near, err := q.packages.MountableFrom(ctx, j.TargetRepoID, digests)
+		if err != nil {
+			return nil, err
+		}
+		mountable[j.TargetRepoID] = near
 	}
 
 	out := make([]Assignment, 0, len(jobs))
@@ -171,11 +186,18 @@ func (q *Queue) hydrate(ctx context.Context, jobs []store.LeasedJob) ([]Assignme
 				j.ID, j.TargetRepoID)
 		}
 
+		known := j.Kind == "blob" && placed[j.TargetRepoID][j.Digest]
+		mountFrom := ""
+		if j.Kind == "blob" && !known {
+			mountFrom = mountable[j.TargetRepoID][j.Digest]
+		}
+
 		out = append(out, Assignment{
 			LeasedJob:      j,
 			Source:         src,
 			Target:         dst,
-			KnownPlacement: j.Kind == "blob" && placed[j.TargetRepoID][j.Digest],
+			KnownPlacement: known,
+			MountFrom:      mountFrom,
 			Tags:           j.TargetTags,
 		})
 	}

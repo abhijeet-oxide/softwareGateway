@@ -240,6 +240,11 @@ func (r *Registry) handleBlob(w http.ResponseWriter, req *http.Request) {
 	}
 	w.WriteHeader(http.StatusOK)
 	_, _ = w.Write(content)
+
+	// Counted on GET only. A HEAD is the deduplication check, which is meant to
+	// happen and costs nothing; a GET is bytes leaving this registry.
+	r.ServedBlobs.Add(1)
+	r.ServedBytes.Add(int64(len(content)))
 }
 
 // putBlob stores a blob, creating the repository if needed.

@@ -124,19 +124,41 @@ const leaseColumns = `id, transfer_id, kind, digest, size_bytes, media_type,
 // leaseCandidatePredicate is the leasability test, shared by both dialects.
 //
 // The NOT EXISTS is concurrent duplicate suppression (docs/design/04 §5): if
-// another worker is already moving this exact blob to this exact repository,
-// skip it. The skipped job stays pending and is picked up moments later — by
-// which time the first has completed and written a placement, so the second
-// hits the placement fast path and moves zero bytes.
+// another worker is already moving this blob to this REGISTRY, skip it. The
+// skipped job stays pending and is picked up moments later — by which time the
+// first has completed and written a placement, so the second takes a fast path
+// and moves zero bytes.
+//
+// # Why this is per registry rather than per repository
+//
+// It was per repository, and that made the check almost useless for a bundle.
+// A component published under two names has one digest, two destination
+// repositories and therefore two jobs — created consecutively, so they have
+// adjacent ids and land in the SAME lease batch. Both streamed the blob from
+// the vendor at the same time, over the WAN, for content the registry could
+// have relocated internally in one request.
+//
+// Widening it to the registry is what makes the second job cheap: it runs after
+// the first, by which time a placement exists on a sibling repository and the
+// worker can MOUNT rather than stream. The order the two run in does not
+// matter, only that they do not run at once.
+//
+// The join is against `repositories`, which the note at the top of this file
+// warns about — the dequeue is meant to stay join-free. It is inside a NOT
+// EXISTS over `jobs_inflight_blob_idx`, so it runs only for the handful of
+// digests actually in flight, not for every candidate row.
 func (p *Packages) leaseCandidatePredicate() string {
 	return `state = 'pending'
 	   AND NOT paused
 	   AND next_visible_at <= ` + p.dialect.Now() + `
 	   AND NOT EXISTS (
 	         SELECT 1 FROM jobs inflight
+	           JOIN repositories ir ON ir.id = inflight.target_repo_id
+	           JOIN repositories jr ON jr.id = jobs.target_repo_id
 	          WHERE inflight.state = 'leased'
-	            AND inflight.target_repo_id = jobs.target_repo_id
 	            AND inflight.digest = jobs.digest
+	            AND ir.registry_host = jr.registry_host
+	            AND ir.product_id = jr.product_id
 	       )`
 }
 
@@ -1011,10 +1033,14 @@ type TransferSummary struct {
 	PackageID   int64
 	ProductName string
 	Tag         string
-	Source      string
-	Target      string
-	State       string
-	Priority    int
+	// DisplayTag is Tag with the vendor's structural noise removed — `25.7.2131`
+	// for NEAR's `orb_25.7.2131`. Empty where no shortening applies, which is
+	// every source that declares no `vendor`. Cosmetic: Tag is the identity.
+	DisplayTag string
+	Source     string
+	Target     string
+	State      string
+	Priority   int
 
 	CurrentWave int
 	MaxWave     int
@@ -1054,6 +1080,7 @@ type TransferSummary struct {
 func (p *Packages) transferSelect() string {
 	return `
 	SELECT t.id, t.request_id, t.package_id, pr.name, pk.tag,
+	       COALESCE(pk.display_tag, ''),
 	       src.registry_host || '/' || src.repository_path,
 	       dst.registry_host || '/' || dst.repository_path,
 	       t.state, t.priority, t.current_wave, t.max_wave,
@@ -1083,7 +1110,7 @@ func (p *Packages) transferSelect() string {
 func scanTransfer(row interface{ Scan(...any) error }) (TransferSummary, error) {
 	var t TransferSummary
 	err := row.Scan(&t.ID, &t.RequestID, &t.PackageID, &t.ProductName, &t.Tag,
-		&t.Source, &t.Target, &t.State, &t.Priority, &t.CurrentWave, &t.MaxWave,
+		&t.DisplayTag, &t.Source, &t.Target, &t.State, &t.Priority, &t.CurrentWave, &t.MaxWave,
 		&t.PlannedJobs, &t.PlannedBytes, &t.DedupeSkippedBytes,
 		&t.JobsDone, &t.JobsFailed, &t.JobsOutstanding, &t.BytesTransferred,
 		&t.JobsInFlight, &t.Workers, &t.JobsWaiting,

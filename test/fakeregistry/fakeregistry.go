@@ -62,7 +62,13 @@ type Registry struct {
 	MountedBlobs  atomic.Int64
 	UploadedBlobs atomic.Int64
 	UploadedBytes atomic.Int64
-	pageSize      int
+	// ServedBlobs and ServedBytes are the READ side, and they are what a test
+	// asserting "the vendor was not asked for this twice" measures. Uploads
+	// alone cannot show that: a blob fetched twice and uploaded twice looks the
+	// same as one fetched once, from the destination's counters.
+	ServedBlobs atomic.Int64
+	ServedBytes atomic.Int64
+	pageSize    int
 }
 
 type repo struct {

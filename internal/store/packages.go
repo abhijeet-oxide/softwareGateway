@@ -2011,6 +2011,93 @@ type rowQuerier interface {
 	QueryContext(ctx context.Context, query string, args ...any) (*sql.Rows, error)
 }
 
+// MountableFrom finds a SIBLING repository already holding each digest.
+//
+// # The waste this exists to remove
+//
+// A bundle's components are published in two repositories at the destination —
+// inside the bundle so its index resolves, and under their own name so they can
+// be pulled as themselves (internal/transfer/layout.go). That is one digest with
+// two destination repositories, and therefore two jobs.
+//
+// Both jobs used to stream. The placement fast path is keyed by repository, and
+// so is a HEAD, so the second job could see nothing of the first's work: it
+// fetched the same bytes from the vendor a second time and pushed them a second
+// time. Every relocated component in a bundle cost exactly twice its size over
+// the WAN — which on a real ORB is most of it.
+//
+// The registry can do this move itself. Both destinations are the same registry
+// by construction, so once one holds the blob the other can have it by
+// cross-repository MOUNT: zero bytes, one request, whatever the blob's size.
+// This is the lookup that finds the repository to mount FROM.
+//
+// Scoped to the same registry AND the same product, because those are the two
+// things that make the mount legal: a mount is registry-internal, and the
+// credential the worker will use is the target's, which is the product's.
+func (p *Packages) MountableFrom(
+	ctx context.Context, targetRepoID int64, digests []string,
+) (map[string]string, error) {
+	out := map[string]string{}
+	if len(digests) == 0 || targetRepoID == 0 {
+		return out, nil
+	}
+
+	const chunk = 500
+	for start := 0; start < len(digests); start += chunk {
+		end := min(start+chunk, len(digests))
+		batch := digests[start:end]
+
+		placeholders := make([]byte, 0, len(batch)*2)
+		args := make([]any, 0, len(batch)+2)
+		args = append(args, targetRepoID)
+		for i, d := range batch {
+			if i > 0 {
+				placeholders = append(placeholders, ',')
+			}
+			placeholders = append(placeholders, '?')
+			args = append(args, d)
+		}
+		args = append(args, placementTTLSeconds)
+
+		// ORDER BY r.id and first-wins in Go: several siblings may hold the
+		// blob, and any of them is a correct source, but a stable choice keeps
+		// two workers mounting from the same place instead of scattering.
+		query := p.dialect.Rewrite(`
+			SELECT bp.digest, r.repository_path
+			  FROM blob_placements bp
+			  JOIN repositories r   ON r.id = bp.repository_id
+			  JOIN repositories tgt ON tgt.id = ?
+			 WHERE bp.digest IN (` + string(placeholders) + `)
+			   AND r.id          <> tgt.id
+			   AND r.registry_host = tgt.registry_host
+			   AND r.product_id    = tgt.product_id
+			   AND r.repository_path <> ''
+			   AND bp.verified_at > ` + p.dialect.TimeAgo("?") + `
+			 ORDER BY r.id`)
+
+		rows, err := p.db.QueryContext(ctx, query, args...)
+		if err != nil {
+			return nil, fmt.Errorf("find mountable blobs for repository %d: %w", targetRepoID, err)
+		}
+		for rows.Next() {
+			var digest, path string
+			if err := rows.Scan(&digest, &path); err != nil {
+				_ = rows.Close()
+				return nil, fmt.Errorf("scan mountable blob: %w", err)
+			}
+			if _, seen := out[digest]; !seen {
+				out[digest] = path
+			}
+		}
+		if err := rows.Err(); err != nil {
+			_ = rows.Close()
+			return nil, err
+		}
+		_ = rows.Close()
+	}
+	return out, nil
+}
+
 func (p *Packages) placedDigests(
 	ctx context.Context, q rowQuerier, repositoryID int64, digests []string,
 ) (map[string]bool, error) {

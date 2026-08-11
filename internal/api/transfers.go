@@ -246,6 +246,7 @@ func transferDTO(t store.TransferSummary) v1.Transfer {
 		RequestID:   t.RequestID,
 		Product:     t.ProductName,
 		Tag:         t.Tag,
+		DisplayTag:  t.DisplayTag,
 		Source:      t.Source,
 		Target:      t.Target,
 		State:       v1.TransferState(strings.ToUpper(t.State)),

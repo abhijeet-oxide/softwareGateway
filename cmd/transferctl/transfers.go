@@ -271,20 +271,21 @@ func renderTransferList(w io.Writer, resp *v1.ListTransfersResponse) error {
 
 		tw := newTabWriter(w)
 		fmt.Fprintln(tw,
-			"ID\tPRODUCT\tTAG\tSTATE\tDONE\tPROGRESS\tRUNNING\tELAPSED\tETA\tMOVED\tSAVED")
+			"ID\tPRODUCT\tTAG\tSTATE\tDONE\tJOBS\tCOPIED\tSPEED\tRUNNING\tELAPSED\tETA\tSAVED")
 		for i := range resp.Transfers {
 			t := &resp.Transfers[i]
-			fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%.0f%%\t%s\t%d\t%s\t%s\t%s\t%s\n",
+			fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%.0f%%\t%s\t%s\t%s\t%d\t%s\t%s\t%s\n",
 				shortID(t.ID),
 				t.Product,
-				t.Tag,
+				transferTag(t),
 				strings.ToLower(string(t.State)),
 				percentComplete(t.Progress),
 				jobProgress(t.Progress),
+				bytesProgress(t.Progress),
+				speedOf(t),
 				t.Progress.JobsInFlight,
 				elapsedOf(t),
 				etaOf(t),
-				humanBytes(t.Progress.BytesTransferred),
 				humanBytes(t.Progress.DedupeSkippedBytes),
 			)
 		}
@@ -293,13 +294,52 @@ func renderTransferList(w io.Writer, resp *v1.ListTransfersResponse) error {
 		}
 
 		fmt.Fprintln(w)
-		fmt.Fprintln(w, "DONE is by job count, which is the measure that reaches 100% — bytes does not,")
-		fmt.Fprintln(w, "because deduplicated content counts as planned and moves nothing.")
-		fmt.Fprintln(w, "ETA extrapolates the observed rate; `-` means nothing has moved yet to measure.")
+		fmt.Fprintln(w, "DONE is by job count, which is the measure that reaches 100% — COPIED does not,")
+		fmt.Fprintln(w, "because deduplicated content counts as planned and moves nothing. SPEED is the")
+		fmt.Fprintln(w, "average since the first job was leased; `describe --watch` adds current and peak.")
+		fmt.Fprintln(w, "ETA extrapolates that rate; `-` means nothing has moved yet to measure.")
 		fmt.Fprintln(w, "transferctl transfers describe <id>   full detail, including throughput")
 		fmt.Fprintln(w, "transferctl transfers jobs <id>       what is copying right now")
 		return nil
 	}(w)
+}
+
+// transferTag prefers the vendor-shortened spelling in a table.
+//
+// NEAR puts `orb_` on the front of every tag it publishes, so a column of them
+// is a column of the same four characters. The short form comes from the SERVER,
+// computed by the source's vendor plugin, because only that plugin knows which
+// part of a tag is structural noise — this package cannot tell `orb_25.7.2131`
+// from a tag that genuinely begins that way. Both spellings resolve as input,
+// and `describe` still shows the stored name.
+func transferTag(t *v1.Transfer) string {
+	if t.DisplayTag != "" {
+		return t.DisplayTag
+	}
+	return t.Tag
+}
+
+// bytesProgress is how much of the package has actually crossed the network.
+//
+// Alongside the job count rather than instead of it, because they answer
+// different questions and diverge honestly: jobs reaches 100%, bytes stops
+// short by however much was deduplicated or mounted. Somebody watching a 30 GB
+// bundle wants the gigabytes, not only the ratio.
+func bytesProgress(p v1.TransferProgress) string {
+	planned := int64Of(p.PlannedBytes)
+	if planned <= 0 {
+		return humanBytes(p.BytesTransferred)
+	}
+	return humanBytes(p.BytesTransferred) + "/" + humanBytes(p.PlannedBytes)
+}
+
+// speedOf is the average rate since the first job was leased.
+func speedOf(t *v1.Transfer) string {
+	rate, ok := averageRate(t)
+	if !ok {
+		return "-"
+	}
+	return humanRate(rate)
 }
 
 func elapsedOf(t *v1.Transfer) string {

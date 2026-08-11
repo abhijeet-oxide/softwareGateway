@@ -49,6 +49,18 @@ spec:
       secretName: internal-ca
       key: ca.crt
 
+    # OMITTING THIS BLOCK DOES NOT MEAN "NO PROXY". It means "whatever the
+    # environment says": with nothing configured here, HTTPS_PROXY / NO_PROXY
+    # from the process environment apply, the same way curl, docker and kubectl
+    # treat them. That is usually what you want — in a proxied network it is
+    # often the only route out — but it is worth knowing, because a corporate
+    # proxy inherited this way is invisible in configuration and shows up only
+    # as a transfer running at a fraction of the available bandwidth.
+    #
+    # `proxy.direct: true` (see the `plugins` source below) is how you say NO
+    # proxy and mean it, including the environment's. Either way, each process
+    # logs the effective setting once per registry at startup — grep for
+    # `registry transport`.
     proxy:
       httpsProxy: http://proxy.example.com:3128
       noProxy: [".svc.cluster.local", "internal.example.com"]

@@ -316,3 +316,75 @@ func TestJobsCarryTheirSourceAndDestination(t *testing.T) {
 		t.Errorf("no job targets the bundle's own repository %s", targetPath)
 	}
 }
+
+// A BUNDLE MUST NOT COST TWICE ITS SIZE.
+//
+// A component that names itself outside the bundle's repository is published
+// twice at the destination — inside the bundle, so its index resolves, and
+// under its own name, so it can be pulled as itself. That is one digest and two
+// destination repositories, so it is two jobs.
+//
+// Both used to stream. The placement fast path is keyed by repository and so is
+// a HEAD, so the second job could see nothing of the first's work: it fetched
+// the same bytes from the vendor again and pushed them again. On a real ORB
+// most components are named this way, so the transfer moved close to double the
+// bundle over the WAN — measured against live registries as the difference
+// between an eleven-hour transfer and something far shorter.
+//
+// The destination can do the second copy itself, since both repositories are on
+// its own registry. This asserts the property that matters and would otherwise
+// regress silently: THE VENDOR SERVES EACH BLOB ONCE.
+func TestBundleFetchesEachBlobFromTheVendorOnce(t *testing.T) {
+	s := newSlice(t)
+
+	pkg, components := seedORB(t, s, "orb_23.8.1076")
+	s.plan(pkg, "orb-mount")
+
+	got := s.drain("worker-1", 4)
+	if got.Failed != 0 {
+		t.Fatalf("%d jobs failed, last error: %v", got.Failed, got.LastError)
+	}
+	if state := s.transferState("orb-mount"); state != "succeeded" {
+		t.Fatalf("transfer is %q, want succeeded", state)
+	}
+
+	// The bundle is intact either way — the optimization must not have cost
+	// correctness, so this is checked before anything about how it got there.
+	for _, c := range components {
+		assertTagged(t, s, c.destination, c.tag, c.digest)
+	}
+
+	// The vendor is the expensive end. Distinct blobs, fetched once each.
+	distinct := distinctBlobs(t, s, pkg)
+	if served := s.src.ServedBlobs.Load(); served > int64(distinct) {
+		t.Errorf("the vendor served %d blob GETs for %d distinct blobs"+
+			"\nthe second copy of a relocated component must mount at the destination,"+
+			"\nnot cross the network again", served, distinct)
+	}
+
+	// And the mechanism, so a regression that keeps the count down by some
+	// other means does not pass unnoticed.
+	if s.dst.MountedBlobs.Load() == 0 {
+		t.Error("no blob was mounted: a component published in two repositories" +
+			" should be relocated within the destination registry")
+	}
+}
+
+// distinctBlobs counts the blobs a transfer of this package must move, each
+// digest once however many components reference it.
+func distinctBlobs(t *testing.T, s *slice, pkg store.PackageRow) int {
+	t.Helper()
+
+	tree, _, err := s.packages.ReadExpandedTree(t.Context(), pkg.ID)
+	if err != nil {
+		t.Fatalf("read tree: %v", err)
+	}
+
+	seen := map[string]bool{}
+	for _, a := range tree.Artifacts {
+		for _, b := range a.Blobs {
+			seen[b.Digest] = true
+		}
+	}
+	return len(seen)
+}

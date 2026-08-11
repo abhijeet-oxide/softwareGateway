@@ -776,6 +776,15 @@ type LeasedJob struct {
 	// KnownPlacement is the placement fast path, resolved for this batch so
 	// the worker makes no extra call to decide it.
 	KnownPlacement bool `json:"knownPlacement,omitempty"`
+	// MountFromRepository is a repository on the TARGET registry already known
+	// to hold this digest, so the worker can ask the registry to relocate it
+	// internally instead of streaming it across the network again.
+	//
+	// This is what stops a bundle's components costing twice their size: they
+	// are published both inside the bundle and under their own name, and
+	// without this the second copy re-fetched every byte from the vendor.
+	// Advisory — a registry that declines the mount just streams.
+	MountFromRepository string `json:"mountFromRepository,omitempty"`
 	// Tags are what this manifest must be called at the destination, resolved
 	// at planning time from the source's own reference annotations. Empty for
 	// a blob, and for any manifest the source did not name.
@@ -861,8 +870,13 @@ type Transfer struct {
 	RequestID string `json:"requestId"`
 	Product   string `json:"product"`
 	Tag       string `json:"tag"`
-	Source    string `json:"source"`
-	Target    string `json:"target"`
+	// DisplayTag is Tag with the vendor's structural noise removed — `25.7.2131`
+	// for NEAR's `orb_25.7.2131`. Empty where no shortening applies, which is
+	// every source declaring no `vendor`. Cosmetic: Tag is the identity, and
+	// both spellings resolve as input.
+	DisplayTag string `json:"displayTag,omitempty"`
+	Source     string `json:"source"`
+	Target     string `json:"target"`
 
 	State    TransferState `json:"state"`
 	Priority int           `json:"priority"`

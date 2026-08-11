@@ -727,6 +727,34 @@ type CheckConnectivityResponse struct {
 }
 
 // ---------------------------------------------------------------------------
+// Retry
+// ---------------------------------------------------------------------------
+
+// RetryTransferResponse is returned by `transfers/{transfer}:retry` and by the
+// fleet-wide `transfers:retry`.
+//
+// One shape for both, so a client renders the single and the bulk case with the
+// same code. The single form returns a list of one.
+type RetryTransferResponse struct {
+	Transfers []TransferRetry `json:"transfers"`
+	// Requeued is the total across every transfer acted on.
+	Requeued int `json:"requeued"`
+}
+
+// TransferRetry is what a retry did to one transfer.
+type TransferRetry struct {
+	TransferID string `json:"transferId"`
+	Requeued   int    `json:"requeued"`
+	State      string `json:"state,omitempty"`
+	// Error explains why this one could not be retried, when it could not.
+	//
+	// Carried per transfer rather than failing the whole request: a fleet-wide
+	// retry after an outage should restart everything restartable and then say
+	// which ones it could not, not stop at the first exception.
+	Error string `json:"error,omitempty"`
+}
+
+// ---------------------------------------------------------------------------
 // Calibration
 // ---------------------------------------------------------------------------
 //

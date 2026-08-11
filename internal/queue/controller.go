@@ -118,6 +118,14 @@ func (c *Controller) reap(ctx context.Context) {
 	if len(reaped) > 0 {
 		c.log.InfoContext(ctx, "returned expired leases to the queue", "jobs", len(reaped))
 	}
+
+	// Immediately after reaping, because reaping is what turns a worker that
+	// vanished into jobs that have finally run out of attempts. A transfer that
+	// can no longer progress is marked failed here rather than being left to
+	// report `running` until somebody notices.
+	if _, err := c.queue.Settle(ctx); err != nil {
+		c.log.ErrorContext(ctx, "could not settle stalled transfers", "error", err)
+	}
 }
 
 func (c *Controller) expand(ctx context.Context) {

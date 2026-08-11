@@ -118,6 +118,10 @@ Column: `transfers.state`. **This is one machine, not two** — a promotion is a
    any non-terminal ──► cancelling ──► cancelled   (04 section 8)
 ```
 
+**`NoJobCanRun`, not `JobFailedTerminally`.** The transition fires when the transfer can no longer make progress — no job in `pending`, `blocked` or `leased`, and at least one in `failed` — rather than on the first job to exhaust its attempts. Firing on the first would report a transfer as failed while two thousand of its jobs were still copying successfully, which is a worse lie than the one this replaced. A job sitting out a retry backoff is `pending`, so a transfer mid-backoff is *waiting*, not stalled, and must not be settled.
+
+The transition is evaluated in two places, and both are needed. `CompleteJob` checks inline, so the last job to give up fails the transfer immediately. A sweep on the reaper's tick checks periodically, because the failure that matters most never reaches the completion path at all: in a network outage the workers stop answering, nothing completes, and the leases simply expire — a lease expiring on a job with no attempts left produces a `failed` job with no completion reported. Without the sweep, the case this machine exists to describe would be exactly the case it missed.
+
 | From | Event | To | Notes |
 |---|---|---|---|
 | — | `Created` | `pending` | |
@@ -130,10 +134,10 @@ Column: `transfers.state`. **This is one machine, not two** — a promotion is a
 | `ready` | `PauseRequested` | `paused` | |
 | `paused` | `ResumeRequested` | `running` | |
 | `running` | `AllWavesDrained` | `verifying` | → `succeeded` when verification is off |
-| `running` | `JobFailedTerminally` | `failed` | A job past `max_attempts` |
+| `running` | `NoJobCanRun` | `failed` | A job is past `max_attempts` **and none is left runnable** — see below |
 | `verifying` | `VerificationPassed` | `succeeded` | Terminal |
 | `verifying` | `VerificationFailed` | `failed` | Artifacts retained |
-| `failed` | `RetryRequested` | `ready` | Failed jobs reset to `pending` |
+| `failed` | `RetryRequested` | `ready` | Failed jobs reset to `pending`, `attempts` to 0 |
 | non-terminal | `CancelRequested` | `cancelling` | |
 | `cancelling` | `InFlightDrained` | `cancelled` | Terminal |
 

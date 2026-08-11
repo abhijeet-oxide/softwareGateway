@@ -28,6 +28,7 @@ func newTransfersCommand() *cobra.Command {
 		newTransfersListCommand(),
 		newTransfersDescribeCommand(),
 		newTransfersJobsCommand(),
+		newTransfersRetryCommand(),
 	)
 	return cmd
 }
@@ -302,16 +303,17 @@ func renderTransferList(
 
 		tw := newTabWriter(w)
 		fmt.Fprintln(tw,
-			"ID\tPRODUCT\tTAG\tSTATE\tDONE\tJOBS\tCOPIED\tSPEED\tRUNNING\tELAPSED\tETA\tSAVED")
+			"ID\tPRODUCT\tTAG\tSTATE\tDONE\tJOBS\tFAILED\tCOPIED\tSPEED\tRUNNING\tELAPSED\tETA\tSAVED")
 		for i := range resp.Transfers {
 			t := &resp.Transfers[i]
-			fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%.0f%%\t%s\t%s\t%s\t%d\t%s\t%s\t%s\n",
+			fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%.0f%%\t%s\t%s\t%s\t%s\t%d\t%s\t%s\t%s\n",
 				shortID(t.ID),
 				t.Product,
 				transferTag(t),
 				strings.ToLower(string(t.State)),
 				percentComplete(t.Progress),
 				jobProgress(t.Progress),
+				failedJobs(t.Progress),
 				bytesProgress(t.Progress),
 				speedOf(t, rates.rateFor(t.ID)),
 				t.Progress.JobsInFlight,
@@ -326,6 +328,21 @@ func renderTransferList(
 
 		return nil
 	}(w)
+}
+
+// failedJobs is the column that was missing.
+//
+// A transfer whose jobs are failing looked EXACTLY like one that was working:
+// the state stayed `running`, DONE crept along, and the only place a failure
+// appeared at all was `transfers jobs --failed`, which nobody runs against a
+// transfer they believe is fine. Now the count is on the row, and a dash when
+// there is nothing to report so a healthy fleet does not grow a column of
+// zeroes to read past.
+func failedJobs(p v1.TransferProgress) string {
+	if p.JobsFailed == 0 {
+		return "-"
+	}
+	return fmt.Sprint(p.JobsFailed)
 }
 
 // transferTag prefers the vendor-shortened spelling in a table.
@@ -504,6 +521,14 @@ func describeTransfer(w io.Writer, t *v1.Transfer, rates *rateTracker, watching 
 	if t.FailureReason != "" {
 		fmt.Fprintln(w)
 		fmt.Fprintf(w, "Failed: %s\n", t.FailureReason)
+		// The one place a next step earns its line: a failed transfer is not
+		// finished with, it is waiting for somebody to decide whether the
+		// cause is gone. Naming the command is the difference between that
+		// decision being acted on and the transfer being re-created from
+		// scratch, which re-copies what already landed.
+		if p.JobsFailed > 0 {
+			fmt.Fprintf(w, "Resume with: transferctl transfers retry %s\n", shortID(t.ID))
+		}
 	}
 
 	// The one thing still worth saying in prose, and only when it is true: a
@@ -726,15 +751,16 @@ func attemptsOf(j v1.Job) string {
 
 // jobProgress renders "done/planned" without pretending to a percentage when
 // nothing has been planned yet.
+//
+// The failure count used to be parenthesised in here, which put it in a cell
+// that widens the whole column and reads as a footnote to progress. It is its
+// own column now — see failedJobs — because a failure is not a kind of
+// progress.
 func jobProgress(p v1.TransferProgress) string {
 	if p.JobsPlanned == 0 {
 		return "-"
 	}
-	out := fmt.Sprintf("%d/%d", p.JobsDone, p.JobsPlanned)
-	if p.JobsFailed > 0 {
-		out += fmt.Sprintf(" (%d failed)", p.JobsFailed)
-	}
-	return out
+	return fmt.Sprintf("%d/%d", p.JobsDone, p.JobsPlanned)
 }
 
 // shortID trims a UUID to its first segment.

@@ -368,6 +368,8 @@ SELECT j.*, t.package_id, p.name AS product_name
 
 Surfaced by `transferctl transfers describe` and retried in bulk with `transfers:retry`, which resets `attempts` to 0 and `state` to `pending` for failed jobs only.
 
+**And the transfer above them has to say it has stopped.** A failed job is terminal, and the wave-drain check counts only `succeeded` and `skipped` (§3.4) — so one exhausted job means the wave never drains and the transfer never advances. That is correct about the data and was, for a while, silent: nothing moved the *transfer* to `failed` on account of its jobs, so a transfer whose every job had died went on reporting `running` with nothing in flight indefinitely. The settle check ([10](10-state-machines.md) §3) closes it, on the completion path and on the reaper's tick — the latter because an outage produces its failures through lease expiry, where no completion is ever reported.
+
 ## 12. Recovery after restart
 
 Nothing is held in Coordinator memory that cannot be reconstructed from the database. On startup:

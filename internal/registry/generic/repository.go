@@ -3,9 +3,12 @@
 // This is the default and expected path for all four supported registries;
 // vendor packages exist only for genuine deviations (docs/design/06 §6).
 //
-// It uses NO OCI client library. ADR-001 is deliberately open, and tag listing
-// plus manifest resolution need only HTTP — so M2 does not force the decision
-// that M3 will close with measurements.
+// The READ path uses no OCI client library: tag listing and manifest
+// resolution need only HTTP, and the M2 implementation works against real
+// registries through a corporate proxy. The WRITE path is oras-go/v2, adopted
+// thinly — it supplies the upload protocol and never sees a credential.
+// ADR-001 closed there; see write.go and docs/design/16 §1.1 for why the two
+// halves differ.
 package generic
 
 import (
@@ -28,10 +31,9 @@ import (
 // Safe for concurrent use: one instance is shared across all work against that
 // repository, so the connection pool and token cache are shared too.
 //
-// It implements registry.Source — identity, tag listing, manifest reading and
-// probing. It deliberately does NOT implement registry.Repository: blob and
-// write operations land in M3, and stubbing them to return "not implemented"
-// would be a lie the type system currently tells the truth about.
+// It implements registry.Repository in full — identity, tag listing, manifest
+// reading, probing, blob read and write, manifest write, and referrers. The
+// compile-time assertion is at the foot of write.go.
 type Repository struct {
 	registryHost string
 	repoPath     string

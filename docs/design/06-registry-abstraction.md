@@ -1,7 +1,7 @@
 # 06 — Registry Abstraction
 
 > **Consumed by:** [05](05-transfer-engine.md), [07](07-discovery.md), [08](08-verification.md)
-> **Special status:** [ADR-001](16-technology-choices.md#adr-001) leaves the OCI client library open until an M3 spike. **The interface in §2 is the contract both candidate backends must satisfy**, and every other document is written against it rather than against a library. This document therefore has to be right before the library choice matters.
+> **Special status:** [ADR-001](16-technology-choices.md#adr-001) closed at M3 on `oras-go/v2`, for the write path only. **The interface in §2 was the contract both candidate backends had to satisfy**, and every other document is written against it rather than against a library — which is why the closure touched one directory and no document above this one. The interface remains the boundary: it is what keeps the decision reversible now that it is made.
 
 ---
 

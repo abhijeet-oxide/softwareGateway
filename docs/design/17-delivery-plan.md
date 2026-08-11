@@ -59,6 +59,8 @@ First externally visible behaviour.
 [08](08-verification.md) §3.3 — whether signature discovery can be hand-rolled against `Repository.Referrers` — is an M3 input, since it is the condition that most weakens the cosign-alignment argument.
 
 > **Schedule risk, stated honestly:** the second prototype costs a few days before M3 completes. Bought deliberately, to close the system's most consequential library choice with evidence rather than argument.
+>
+> **What actually happened:** the second prototype was not built, and the risk above was therefore not incurred. §3.3 resolved affirmatively, which removed the tiebreaker the comparison existed to settle — so the ADR closed on that rather than on the criteria table. Recorded in full, including the four criteria left unmeasured, in the [closure](16-technology-choices.md#11-adr-001-closure).
 
 ### M4 — Operations
 
@@ -160,8 +162,8 @@ Deliberately unresolved. Each is recorded with when it must be answered, so none
 
 | # | Question | Decide by |
 |---|---|---|
-| Q1 | **[ADR-001](16-technology-choices.md#adr-001)** — OCI client library | M3 (procedure fixed) |
-| Q2 | Can signature discovery be hand-rolled against `Repository.Referrers`? ([08](08-verification.md) §3.3) | M3 — it is an ADR-001 input |
+| ~~Q1~~ | ~~**[ADR-001](16-technology-choices.md#adr-001)** — OCI client library~~ | **CLOSED at M3: `oras-go/v2`, write path only. Two divergences from the fixed procedure are recorded in the [closure](16-technology-choices.md#11-adr-001-closure)** |
+| ~~Q2~~ | ~~Can signature discovery be hand-rolled against `Repository.Referrers`?~~ ([08](08-verification.md) §3.3) | **ANSWERED at M3: yes — both mechanisms behind one `Referrers` call. This is what closed Q1** |
 | Q3 | Which registries actually honour chunked-upload resume in our environment? ([05](05-transfer-engine.md) §4.6) | M4, empirically via `upload_resume_total` |
 | Q4 | Is priority aging needed, or does alerting on `queue_oldest_pending_age_seconds` suffice? ([04](04-queue-and-scheduling.md) §6) | M7, from production behaviour |
 | Q5 | Does the dequeue need the per-target composite index? ([04](04-queue-and-scheduling.md) §4.2) | M7, triggered by `queue_lease_duration_seconds` |

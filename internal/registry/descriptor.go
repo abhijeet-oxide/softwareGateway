@@ -9,8 +9,10 @@ import (
 
 // Digest is a content address, "sha256:<64 hex>".
 //
-// Our own type rather than a library's: ADR-001 is open, and a digest crossing
-// into domain packages must not pin the library choice. It is a string so it
+// Our own type rather than a library's. That began as ADR-001 insurance; with
+// the ADR closed it is what keeps the closure reversible — a digest crossing
+// into domain packages must not pin the library choice, so the conversion to
+// and from oras-go's descriptor stays inside generic/write.go. It is a string so it
 // travels through URLs, logs, JSON and SQL without conversion — the alternative
 // (raw bytes) would cost an encode at every boundary to save 30 bytes a row.
 type Digest string

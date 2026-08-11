@@ -1286,7 +1286,7 @@ They should not — a non-retryable error returns immediately. If a missing cred
 
 **What "M3 is next" means for you now.** Auto-download rules create `transfer_requests` rows and they stay `pending`, because nothing consumes the queue yet. `transferctl packages describe` says so explicitly rather than leaving you to wonder. Everything in the discovery path is real: real HTTP, real digests, real database rows.
 
-M3 also closes [ADR-001](design/16-technology-choices.md) — whether to adopt `go-containerregistry` or `oras-go/v2`. It is deliberately still open: nothing built so far touches an OCI library (the registry client is plain `net/http`), so the decision gets made against measurements on the blob path, where the difference actually shows.
+[ADR-001](design/16-technology-choices.md#11-adr-001-closure) — whether to adopt `go-containerregistry` or `oras-go/v2` — **is now closed: `oras-go/v2`, for the write path only.** The read path you exercise during discovery is still plain `net/http`, unchanged from M2; the library appears in `internal/registry/generic/write.go` and nowhere else, so blob upload, cross-repository mount and `Referrers` go through it while tag listing and manifest resolution do not. The closure, including the four criteria it leaves unmeasured, is written up in the ADR.
 
 ---
 

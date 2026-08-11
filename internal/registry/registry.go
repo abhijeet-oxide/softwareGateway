@@ -13,9 +13,12 @@
 //  2. Consumers depend on what they use. Discovery needs TagLister and
 //     ManifestReader, not blob upload. Go idiom, and it keeps fakes small.
 //
-// Nothing here references an OCI client library: ADR-001 is open, and the
-// generic implementation is plain net/http so the decision stays open for M3
-// to close with measurements.
+// Nothing here references an OCI client library, and that has outlived the
+// reason it started. ADR-001 is now CLOSED on oras-go/v2 (docs/design/16
+// §1.1), used for the write path inside internal/registry/generic and nowhere
+// else. This file staying library-free is what keeps that decision reversible:
+// swapping the backend touches one directory, which is the property
+// docs/design/15 §4 asks for.
 package registry
 
 import (
@@ -115,8 +118,12 @@ type Source interface {
 
 // Repository is the full contract from docs/design/06 §2, reached in M3.
 //
-// Declared now so the shape is fixed and reviewable, but deliberately not yet
-// satisfied by any implementation.
+// Satisfied by generic.Repository, which asserts it at compile time. The one
+// method that is present but not implemented is ResumeUpload: it returns
+// ErrUnsupported, so an interrupted blob restarts rather than resuming. That
+// is a deliberate deferral with a stated reason (docs/design/05 §4.6, Q3), not
+// a stub standing in for missing work — restarting a content-addressed blob is
+// always correct.
 type Repository interface {
 	Source
 	BlobReader

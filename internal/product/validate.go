@@ -79,6 +79,7 @@ func (p *Product) Validate(resolver *SecretResolver) error {
 	errs = append(errs, p.validateMetadata()...)
 	errs = append(errs, p.validateSources(resolver)...)
 	errs = append(errs, p.validateTargets(resolver)...)
+	errs = append(errs, p.validatePromotion()...)
 	errs = append(errs, p.validatePhysicalRepositories()...)
 	errs = append(errs, p.validateAutoDownload()...)
 	errs = append(errs, p.validateVerification(resolver)...)
@@ -424,6 +425,53 @@ func validateVendor(path string, s Source) Errors {
 	}}
 }
 
+// validatePromotion checks the declared promotion hop against reality.
+//
+// An environment naming no target is rejected HERE rather than at promote
+// time, because the failure is a configuration one and the person who can fix
+// it is the person editing this file — not the operator who runs `promote` six
+// weeks later and gets told their product has no lab.
+func (p *Product) validatePromotion() Errors {
+	if p.Spec.Promotion == nil {
+		return nil
+	}
+
+	environments := map[string]bool{}
+	for _, t := range p.Spec.Targets {
+		if t.Environment != "" {
+			environments[t.Environment] = true
+		}
+	}
+
+	var errs Errors
+	for _, f := range []struct{ path, value string }{
+		{"spec.promotion.from", p.Spec.Promotion.From},
+		{"spec.promotion.to", p.Spec.Promotion.To},
+	} {
+		if f.value == "" {
+			continue
+		}
+		if !nameRE.MatchString(f.value) {
+			errs = append(errs, Error{f.path,
+				fmt.Sprintf("%q is not a valid environment name", f.value),
+				"lowercase alphanumeric and hyphens"})
+			continue
+		}
+		if !environments[f.value] {
+			errs = append(errs, Error{f.path,
+				fmt.Sprintf("no target declares environment %q", f.value),
+				"set `environment: " + f.value + "` on the targets in that stage"})
+		}
+	}
+
+	if p.Spec.Promotion.From != "" && p.Spec.Promotion.From == p.Spec.Promotion.To {
+		errs = append(errs, Error{"spec.promotion",
+			"from and to name the same environment",
+			"a promotion that does not change environment moves nothing"})
+	}
+	return errs
+}
+
 func (p *Product) validateTargets(resolver *SecretResolver) Errors {
 	var errs Errors
 	if len(p.Spec.Targets) == 0 {
@@ -453,6 +501,12 @@ func (p *Product) validateTargets(resolver *SecretResolver) Errors {
 			errs = append(errs, Error{path + ".name", fmt.Sprintf("%q duplicates spec.targets[%d]", t.Name, prev), ""})
 		} else if t.Name != "" {
 			seen[t.Name] = i
+		}
+
+		if t.Environment != "" && !nameRE.MatchString(t.Environment) {
+			errs = append(errs, Error{path + ".environment",
+				fmt.Sprintf("%q is not a valid environment name", t.Environment),
+				"lowercase alphanumeric and hyphens; several targets may share one"})
 		}
 
 		if t.Default {

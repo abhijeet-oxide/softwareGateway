@@ -21,11 +21,174 @@ func newTransfersCommand() *cobra.Command {
 			"the other two.",
 	})
 	cmd.AddCommand(
+		newTransfersCreateCommand(),
+		newTransfersPromoteCommand(),
 		newTransfersListCommand(),
 		newTransfersDescribeCommand(),
 		newTransfersJobsCommand(),
 	)
 	return cmd
+}
+
+// copySpec is the flag set create and promote share.
+//
+// They differ only in how an omitted origin and destination are RESOLVED, so
+// sharing the flags is not tidiness — it is what stops the two drifting into
+// subtly different spellings of the same idea.
+type copySpec struct {
+	from          string
+	to            []string
+	toEnvironment string
+	priority      int
+	dryRun        bool
+}
+
+func (c *copySpec) bind(cmd *cobra.Command, fromHelp, toHelp string) {
+	cmd.Flags().StringVar(&c.from, "from", "", fromHelp)
+	cmd.Flags().StringArrayVar(&c.to, "to", nil, toHelp)
+	cmd.Flags().StringVar(&c.toEnvironment, "to-environment", "",
+		"copy to every target in this environment")
+	cmd.Flags().IntVar(&c.priority, "priority", 0, "0-1000; higher runs first (default 50)")
+	cmd.Flags().BoolVar(&c.dryRun, "dry-run", false,
+		"resolve and check everything, create nothing")
+}
+
+func (c *copySpec) request(product, pkg string, promote bool) v1.CreateTransferRequest {
+	return v1.CreateTransferRequest{
+		Product:       product,
+		Package:       pkg,
+		From:          c.from,
+		To:            c.to,
+		ToEnvironment: c.toEnvironment,
+		Promote:       promote,
+		Priority:      c.priority,
+		ValidateOnly:  c.dryRun,
+	}
+}
+
+func newTransfersCreateCommand() *cobra.Command {
+	var spec copySpec
+
+	cmd := &cobra.Command{
+		Aliases: []string{"copy"},
+		Short:   "Copy a package to one or more targets",
+		Long: "Copies a package and everything it references — images, charts,\n" +
+			"generic artifacts — preserving every digest, repository path and\n" +
+			"tag the vendor published.\n\n" +
+			"The OPERATION is derived, never typed. --from naming a source is a\n" +
+			"replication; --from naming a target is a promotion. Omitted, it is\n" +
+			"the repository the package was discovered in.",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			if len(spec.to) > 0 && spec.toEnvironment != "" {
+				return usageError{msg: "--to and --to-environment name destinations " +
+					"two different ways; use one"}
+			}
+			return runCopy(cmd, spec.request(args[0], args[1], false), spec.dryRun)
+		},
+	}
+
+	takes(cmd, "create", productArg(), packageArg())
+	spec.bind(cmd,
+		"where to copy FROM: a source or a target (default: where the package was discovered)",
+		"a target to copy to (repeatable; default: the product's default target)")
+	return cmd
+}
+
+func newTransfersPromoteCommand() *cobra.Command {
+	var spec copySpec
+
+	cmd := &cobra.Command{
+		Short: "Promote a package from one target to another",
+		Long: "Promotion moves between YOUR targets — lab to production — rather\n" +
+			"than from a vendor. It is the same copy underneath; what differs is\n" +
+			"that the origin must be a target, and that omitting --from/--to\n" +
+			"resolves them through the product's promotion path.\n\n" +
+			"With one target in each environment neither flag is needed. With\n" +
+			"several, the ambiguity is refused rather than guessed, and the error\n" +
+			"names every candidate.\n\n" +
+			"Usually near-instant: lab and production commonly share a registry,\n" +
+			"so blobs are relocated server-side rather than moved.",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			if len(spec.to) > 0 && spec.toEnvironment != "" {
+				return usageError{msg: "--to and --to-environment name destinations " +
+					"two different ways; use one"}
+			}
+			return runCopy(cmd, spec.request(args[0], args[1], true), spec.dryRun)
+		},
+	}
+
+	takes(cmd, "promote", productArg(), packageArg())
+	spec.bind(cmd,
+		"the target to promote FROM (default: the single target in the promotion source environment)",
+		"a target to promote to (repeatable; default: the single target in the promotion destination environment)")
+	return cmd
+}
+
+// runCopy is the one request path both verbs take.
+func runCopy(cmd *cobra.Command, req v1.CreateTransferRequest, dryRun bool) error {
+	resp, err := newClient().CreateTransfer(cmd.Context(), req)
+	if err != nil {
+		return err
+	}
+
+	return render(stdout(), opts.output, resp, func(w io.Writer) error {
+		verb := "Copying"
+		if strings.EqualFold(resp.Operation, "promote") {
+			verb = "Promoting"
+		}
+
+		destinations := make([]string, 0, len(resp.To))
+		for _, t := range resp.To {
+			destinations = append(destinations, describeEndpoint(t))
+		}
+
+		fmt.Fprintf(w, "%s %s\n", verb, req.Package)
+		fmt.Fprintf(w, "  from  %s\n", describeEndpoint(resp.From))
+		for _, d := range destinations {
+			fmt.Fprintf(w, "  to    %s\n", d)
+		}
+
+		if dryRun {
+			fmt.Fprintln(w)
+			fmt.Fprintln(w, "Dry run: nothing was created.")
+			fmt.Fprintln(w, "Everything above resolved — the product, the package, the origin,")
+			fmt.Fprintln(w, "the destinations and their promotion rules. What would MOVE is not")
+			fmt.Fprintln(w, "computed here; run it and `transferctl transfers describe` reports it.")
+			return nil
+		}
+
+		fmt.Fprintln(w)
+		if !resp.Created {
+			fmt.Fprintln(w, "This was already requested; the existing request is reused.")
+		}
+		for i, id := range resp.TransferIDs {
+			name := ""
+			if i < len(resp.To) {
+				name = " -> " + resp.To[i].Name
+			}
+			fmt.Fprintf(w, "  transfer %s%s\n", shortID(id), name)
+		}
+
+		fmt.Fprintln(w)
+		fmt.Fprintln(w, "Bytes move once a worker picks the jobs up. Follow with:")
+		if len(resp.TransferIDs) > 0 {
+			fmt.Fprintf(w, "  transferctl transfers describe %s\n", shortID(resp.TransferIDs[0]))
+		}
+		return nil
+	})
+}
+
+// describeEndpoint renders a resolved end of a copy.
+func describeEndpoint(e v1.TransferEndpoint) string {
+	out := e.Name
+	if e.Environment != "" {
+		out += " (" + e.Environment + ")"
+	}
+	out += "  " + e.Registry
+	if e.Repository != "" {
+		out += "/" + e.Repository
+	}
+	return out
 }
 
 func newTransfersListCommand() *cobra.Command {

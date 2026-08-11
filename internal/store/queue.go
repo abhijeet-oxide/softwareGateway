@@ -1174,3 +1174,77 @@ func decodeTags(raw []byte) []string {
 	}
 	return out
 }
+
+// PendingTransfer is a transfer waiting to be planned.
+//
+// Transfers are created when a request is MADE, one per destination, and
+// planned later. That split is what lets a request record its own intent: the
+// destinations a rule named, or a person named, are rows rather than something
+// re-derived from configuration at expansion time — which silently promoted
+// "replicate to lab" into "replicate to every enabled target", and left
+// promotion inexpressible because its destination is not "all targets" at all.
+type PendingTransfer struct {
+	ID           string
+	RequestID    string
+	ProductID    int64
+	ProductName  string
+	PackageID    int64
+	Operation    string
+	SourceRepoID int64
+	TargetRepoID int64
+	Priority     int
+}
+
+// PendingTransfers returns transfers that have not been planned.
+//
+// `planning` is included alongside `pending`: a Coordinator that died mid-plan
+// left one there, and planning is idempotent by unique constraint, so the
+// re-plan costs nothing for the jobs that already exist.
+func (p *Packages) PendingTransfers(ctx context.Context, limit int) ([]PendingTransfer, error) {
+	if limit <= 0 {
+		limit = 50
+	}
+
+	rows, err := p.db.QueryContext(ctx, p.dialect.Rewrite(`
+		SELECT t.id, t.request_id, pr.id, pr.name, t.package_id, r.operation,
+		       t.source_repo_id, t.target_repo_id, t.priority
+		  FROM transfers t
+		  JOIN transfer_requests r ON r.id = t.request_id
+		  JOIN products pr ON pr.id = r.product_id
+		 WHERE t.state IN ('pending','planning')
+		 ORDER BY t.priority DESC, t.created_at, t.id
+		 LIMIT ?`), limit)
+	if err != nil {
+		return nil, fmt.Errorf("list pending transfers: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+
+	var out []PendingTransfer
+	for rows.Next() {
+		var t PendingTransfer
+		if err := rows.Scan(&t.ID, &t.RequestID, &t.ProductID, &t.ProductName,
+			&t.PackageID, &t.Operation, &t.SourceRepoID, &t.TargetRepoID,
+			&t.Priority); err != nil {
+			return nil, fmt.Errorf("scan pending transfer: %w", err)
+		}
+		out = append(out, t)
+	}
+	return out, rows.Err()
+}
+
+// SettleRequest marks a request expanded once every transfer it opened has
+// been planned.
+func (p *Packages) SettleRequest(ctx context.Context, requestID string) error {
+	if _, err := p.db.ExecContext(ctx, p.dialect.Rewrite(`
+		UPDATE transfer_requests
+		   SET state = 'expanded', updated_at = `+p.dialect.Now()+`
+		 WHERE id = ? AND state = 'pending'
+		   AND NOT EXISTS (
+		         SELECT 1 FROM transfers t
+		          WHERE t.request_id = transfer_requests.id
+		            AND t.state IN ('pending','planning'))`),
+		requestID); err != nil {
+		return fmt.Errorf("settle request %s: %w", requestID, err)
+	}
+	return nil
+}

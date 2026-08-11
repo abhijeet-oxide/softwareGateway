@@ -4,8 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
-
-	"github.com/google/uuid"
+	"strings"
 
 	"github.com/abhijeet-oxide/softwareGateway/internal/registry"
 	"github.com/abhijeet-oxide/softwareGateway/internal/store"
@@ -25,44 +24,21 @@ import (
 //
 // See docs/design/04 §10 and docs/design/05 §3.
 
-// Destination is one place a request expands into.
-//
-// Resolved from configuration by the caller, not read from the database: a
-// target is a configured place, and the set of them can change between a
-// request being written and being expanded. Expanding against current
-// configuration is what makes "planning happens at execution time" true
-// (docs/design/04 §10).
-type Destination struct {
-	// RepositoryID is the catalog row for this target as configured.
-	RepositoryID int64
-	// Name is the configured target name. It travels onto every destination
-	// row a bundle's structure implies, so one credential serves all of them.
-	Name string
-	// Repository is the configured destination path, used as a PREFIX beneath
-	// which the source's structure is reproduced. Empty mirrors the source
-	// paths at the destination registry's root.
-	Repository string
-	// Registry is the destination host, and Type selects its backend. Both are
-	// needed to register the repositories a bundle spreads across.
-	Registry string
-	Type     string
-}
-
 // Resolver supplies what the expander cannot know on its own.
 //
-// A consumer-defined interface: the expander needs three answers, not the
+// A consumer-defined interface: the expander needs two answers, not the
 // product loader, the secret resolver and the client factory that produce them
 // (docs/design/15 §6). It is also what keeps this package free of
-// internal/product, so a request can be expanded in a test with three closures.
+// internal/product, so a transfer can be expanded in a test with two closures.
 type Resolver interface {
-	// Destinations returns where a request should go. An empty result is not
-	// an error — a product with no enabled targets has nowhere to replicate
-	// to, which is a configuration state rather than a failure.
-	Destinations(ctx context.Context, productName string, operation string) ([]Destination, error)
-
-	// SourceReader builds a client for the request's source repository, used
-	// for the manifest walk when the package has not been expanded already.
-	SourceReader(ctx context.Context, productName string, repoID int64) (registry.ManifestReader, error)
+	// Reader builds a client for a repository row, used for the manifest walk
+	// when the package has not been expanded already.
+	//
+	// The row may be a SOURCE or a TARGET: a promotion reads from the target it
+	// is promoting out of, and the engine has never cared about roles. The row
+	// supplies the registry and the credential; the path is passed separately
+	// because a promotion reads from BENEATH its target's configured prefix.
+	Reader(ctx context.Context, repoID int64, repositoryPath string) (registry.ManifestReader, error)
 
 	// Related returns the package's signature, SBOM and wrapper artifacts, so
 	// a transfer that moves the payload does not leave the signature behind.
@@ -102,61 +78,102 @@ type ExpandResult struct {
 	Failed    int
 }
 
-// Expand processes one batch of pending requests.
+// Expand plans one batch of unplanned transfers.
 func (e *Expander) Expand(ctx context.Context) (ExpandResult, error) {
 	var res ExpandResult
 
-	pending, err := e.packages.PendingRequests(ctx, e.batch)
+	pending, err := e.packages.PendingTransfers(ctx, e.batch)
 	if err != nil {
 		return res, err
 	}
 
-	for _, req := range pending {
-		res.Requests++
+	requests := map[string]bool{}
+	for _, t := range pending {
+		res.Transfers++
+		requests[t.RequestID] = true
 
-		transfers, jobs, err := e.expandOne(ctx, req)
+		jobs, err := e.plan(ctx, t)
 		if err != nil {
-			// One request's failure must not stop the rest. A missing target,
-			// an unreachable source, a package whose tree cannot be walked —
-			// each is local to that request, and stopping the tick would let
-			// one broken product stall every other product's transfers.
+			// One transfer's failure must not stop the rest. An unreachable
+			// origin, a package whose tree cannot be walked — each is local to
+			// that transfer, and stopping the tick would let one broken
+			// product stall every other product's work.
 			res.Failed++
-			e.log.ErrorContext(ctx, "could not expand transfer request",
-				"request", req.ID, "product", req.ProductName, "error", err)
-			if err := e.packages.SetRequestState(ctx, req.ID, "failed"); err != nil {
-				e.log.ErrorContext(ctx, "could not mark the request failed",
-					"request", req.ID, "error", err)
+			e.log.ErrorContext(ctx, "could not plan transfer",
+				"transfer", t.ID, "product", t.ProductName, "error", err)
+			if err := e.packages.FailTransfer(ctx, t.ID, err.Error()); err != nil {
+				e.log.ErrorContext(ctx, "could not record the planning failure",
+					"transfer", t.ID, "error", err)
 			}
 			continue
 		}
-		res.Transfers += transfers
 		res.Jobs += jobs
+	}
+
+	// A request is expanded once every transfer it opened has been planned.
+	// Recorded separately because one request can produce several, and the
+	// request is not done until the last of them is.
+	for id := range requests {
+		res.Requests++
+		if err := e.packages.SettleRequest(ctx, id); err != nil {
+			e.log.WarnContext(ctx, "could not settle the request", "request", id, "error", err)
+		}
 	}
 	return res, nil
 }
 
-// expandOne opens and plans every transfer for one request.
-func (e *Expander) expandOne(ctx context.Context, req store.PendingRequest) (int, int, error) {
-	destinations, err := e.resolve.Destinations(ctx, req.ProductName, req.Operation)
+// plan turns one open transfer into jobs.
+//
+// The transfer row already names its origin and destination — recorded when
+// the request was made — so nothing here consults configuration to decide
+// WHERE. It decides only what has to move, which is what planning is.
+func (e *Expander) plan(ctx context.Context, t store.PendingTransfer) (int, error) {
+	pkg, err := e.packages.GetPackageByID(ctx, t.PackageID)
 	if err != nil {
-		return 0, 0, err
-	}
-	if len(destinations) == 0 {
-		return 0, 0, fmt.Errorf("product %q has no enabled target for a %s request",
-			req.ProductName, req.Operation)
+		return 0, err
 	}
 
-	pkg, err := e.packages.GetPackageByID(ctx, req.PackageID)
+	endpoints, err := e.packages.HydrateEndpoints(ctx, []int64{t.SourceRepoID, t.TargetRepoID})
 	if err != nil {
-		return 0, 0, err
+		return 0, err
+	}
+	origin, ok := endpoints[t.SourceRepoID]
+	if !ok {
+		return 0, fmt.Errorf("origin repository %d is not in the catalog", t.SourceRepoID)
+	}
+	destination, ok := endpoints[t.TargetRepoID]
+	if !ok {
+		return 0, fmt.Errorf("destination repository %d is not in the catalog", t.TargetRepoID)
 	}
 
-	source, err := e.resolve.SourceReader(ctx, req.ProductName, req.SourceRepoID)
+	// The vendor's own repository path is the canonical relative layout, and
+	// it survives every hop: a promotion reproduces the same structure under
+	// its destination's prefix that replication put under lab's.
+	relative, err := e.relativePath(ctx, pkg, origin)
 	if err != nil {
-		return 0, 0, err
+		return 0, err
 	}
 
-	related, err := e.resolve.Related(ctx, req.ProductName, pkg)
+	// Where the bytes actually are. For a replication that is the vendor's
+	// repository. For a promotion it is that path NESTED under the origin
+	// target's prefix, because that is where the previous hop put it — reading
+	// the prefix itself would find an empty repository.
+	readPath := relative
+	if t.Operation == "promote" {
+		readPath = joinPath(origin.Repository, relative)
+	}
+
+	originRepoID, err := e.ensureOrigin(ctx, t, origin, readPath)
+	if err != nil {
+		return 0, err
+	}
+
+	reader, err := e.resolve.Reader(ctx, t.SourceRepoID, readPath)
+	if err != nil {
+		return 0, err
+	}
+
+	related, err := e.resolve.Related(ctx, t.ProductName, pkg)
 	if err != nil {
 		// Not fatal. A package whose accessories could not be listed still has
 		// a payload worth moving, and failing the whole transfer over a
@@ -166,140 +183,98 @@ func (e *Expander) expandOne(ctx context.Context, req store.PendingRequest) (int
 			"package", pkg.ID, "error", err)
 	}
 
-	// The path the package was discovered in: every destination path is
-	// derived from it, so a bundle's structure is reproduced relative to where
-	// the vendor published it rather than invented.
-	sourceRepository, err := e.sourceRepositoryPath(ctx, req.SourceRepoID)
-	if err != nil {
-		return 0, 0, err
-	}
-
-	var transfers, jobs int
-	for _, dst := range destinations {
-		n, err := e.expandTo(ctx, req, pkg, source, sourceRepository, related, dst)
-		if err != nil {
-			return transfers, jobs, err
-		}
-		transfers++
-		jobs += n
-	}
-
-	if err := e.packages.SetRequestState(ctx, req.ID, "expanded"); err != nil {
-		return transfers, jobs, err
-	}
-	return transfers, jobs, nil
-}
-
-// expandTo opens one transfer and plans it.
-//
-// The transfer row is created FIRST and separately from the plan, so a
-// Coordinator that dies between the two leaves a transfer in `planning` that
-// the next tick finds and re-plans. Planning is idempotent by unique
-// constraint, so the re-plan costs nothing for the jobs that already exist.
-func (e *Expander) expandTo(
-	ctx context.Context,
-	req store.PendingRequest,
-	pkg store.PackageRow,
-	source registry.ManifestReader,
-	sourceRepository string,
-	related []vendors.Related,
-	dst Destination,
-) (int, error) {
-	transferID, err := e.openTransfer(ctx, req, dst)
-	if err != nil {
-		return 0, err
-	}
-
 	plan, err := e.planner.Plan(ctx, Request{
-		TransferID:   transferID,
-		RequestID:    req.ID,
+		TransferID:   t.ID,
+		RequestID:    t.RequestID,
 		Package:      pkg,
-		SourceRepoID: req.SourceRepoID,
-		TargetRepoID: dst.RepositoryID,
+		SourceRepoID: originRepoID,
+		TargetRepoID: t.TargetRepoID,
 
-		ProductID:          req.ProductID,
-		TargetName:         dst.Name,
-		TargetRegistry:     dst.Registry,
-		TargetRegistryType: dst.Type,
-		TargetBasePath:     dst.Repository,
-		SourceRepository:   sourceRepository,
+		ProductID:          t.ProductID,
+		TargetName:         destination.Name,
+		TargetRegistry:     destination.Registry,
+		TargetRegistryType: destination.RegistryType,
+		TargetBasePath:     destination.Repository,
+		SourceRepository:   relative,
 
-		Priority: req.Priority,
-		Source:   source,
+		Priority: t.Priority,
+		Source:   reader,
 		Related:  related,
 	})
 	if err != nil {
-		// A transfer that cannot be planned must not sit in `planning`
-		// forever: the next tick would re-plan it, fail the same way, and do
-		// so until somebody reads the logs. Naming the reason on the row is
-		// what makes `transfers describe` able to answer "why is this stuck".
-		if markErr := e.packages.FailTransfer(ctx, transferID, err.Error()); markErr != nil {
-			e.log.ErrorContext(ctx, "could not record the planning failure",
-				"transfer", transferID, "error", markErr)
-		}
-		return 0, fmt.Errorf("plan transfer to %s: %w", dst.Name, err)
+		return 0, err
 	}
 	return plan.Jobs, nil
 }
 
-// openTransfer creates the transfer row, or finds the one already there.
+// relativePath is the vendor repository a package was published in.
 //
-// UNIQUE (request_id, target_repo_id) is what makes this idempotent: a request
-// expanded twice produces one transfer per target, not two. The conflict path
-// is the normal path on a retry, not an error.
-func (e *Expander) openTransfer(
-	ctx context.Context, req store.PendingRequest, dst Destination,
+// Taken from the PACKAGE's own source row rather than from the transfer's
+// origin, and that distinction is the whole of how promotion preserves layout:
+// the origin of a promotion is a target whose path is a prefix we added, while
+// the package still knows the path the vendor used. Reproducing the vendor's
+// path under each destination's prefix is what makes lab and production hold
+// the same structure rather than production holding lab's prefix twice.
+func (e *Expander) relativePath(
+	ctx context.Context, pkg store.PackageRow, origin store.Endpoint,
 ) (string, error) {
+	endpoints, err := e.packages.HydrateEndpoints(ctx, []int64{pkg.SourceRepoID})
+	if err != nil {
+		return "", err
+	}
+	if src, ok := endpoints[pkg.SourceRepoID]; ok && src.Repository != "" {
+		return src.Repository, nil
+	}
+	// The vendor source has been removed from configuration. The origin's own
+	// path is the best remaining answer, and for a replication it is exactly
+	// right.
+	return origin.Repository, nil
+}
+
+// ensureOrigin gives the path being read from a catalog row.
+//
+// A replication reads from the vendor repository, which already has one. A
+// promotion reads from a path beneath its target's prefix, which does not —
+// and jobs carry repository IDs rather than paths, so one has to exist before
+// a job can name it.
+func (e *Expander) ensureOrigin(
+	ctx context.Context, t store.PendingTransfer, origin store.Endpoint, readPath string,
+) (int64, error) {
+	if readPath == origin.Repository {
+		return t.SourceRepoID, nil
+	}
+
 	tx, err := e.packages.DB().BeginTx(ctx, nil)
 	if err != nil {
-		return "", fmt.Errorf("begin transfer creation: %w", err)
+		return 0, fmt.Errorf("begin origin registration: %w", err)
 	}
 	defer func() { _ = tx.Rollback() }()
 
-	id := uuid.NewString()
-	created, err := e.packages.CreateTransfer(ctx, tx, store.TransferRow{
-		ID:           id,
-		RequestID:    req.ID,
-		PackageID:    req.PackageID,
-		SourceRepoID: req.SourceRepoID,
-		TargetRepoID: dst.RepositoryID,
-		Priority:     req.Priority,
-	})
+	// Named "<configured>/<path>" like every other row one configured entry
+	// owns, so the worker resolves the same credential for it — see
+	// regclient.endpointSpec.
+	id, err := e.packages.EnsureRepository(ctx, tx, t.ProductID, origin.Role,
+		origin.Name+"/"+readPath, origin.Registry, readPath,
+		origin.RegistryType, "discovery", "")
 	if err != nil {
-		return "", err
+		return 0, fmt.Errorf("register origin %q: %w", readPath, err)
 	}
 	if err := tx.Commit(); err != nil {
-		return "", fmt.Errorf("commit transfer creation: %w", err)
+		return 0, fmt.Errorf("commit origin registration: %w", err)
 	}
-
-	if created {
-		return id, nil
-	}
-
-	// Already there from an earlier attempt. Use the existing row: creating a
-	// second would violate the unique constraint and, worse, would double the
-	// work if it somehow did not.
-	existing, err := e.packages.TransferIDFor(ctx, req.ID, dst.RepositoryID)
-	if err != nil {
-		return "", err
-	}
-	return existing, nil
+	return id, nil
 }
 
-// sourceRepositoryPath reads the path a package was discovered in.
-//
-// Read from the catalog rather than carried on the request, because the
-// request names a repository ROW and the path is that row's business — and
-// because a source whose path was edited in configuration must expand against
-// what the catalog now says rather than what a request recorded earlier.
-func (e *Expander) sourceRepositoryPath(ctx context.Context, repoID int64) (string, error) {
-	endpoints, err := e.packages.HydrateEndpoints(ctx, []int64{repoID})
-	if err != nil {
-		return "", err
+// joinPath nests one repository path under another.
+func joinPath(base, rest string) string {
+	base = strings.Trim(strings.TrimSpace(base), "/")
+	rest = strings.Trim(strings.TrimSpace(rest), "/")
+	switch {
+	case base == "":
+		return rest
+	case rest == "":
+		return base
+	default:
+		return base + "/" + rest
 	}
-	ep, ok := endpoints[repoID]
-	if !ok {
-		return "", fmt.Errorf("source repository %d is not in the catalog", repoID)
-	}
-	return ep.Repository, nil
 }

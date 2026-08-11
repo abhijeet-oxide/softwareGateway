@@ -15,13 +15,12 @@ import (
 	v1 "github.com/abhijeet-oxide/softwareGateway/pkg/apis/softwaregateway/v1"
 )
 
-// resolver answers the three questions the expander cannot answer itself:
-// where a request should go, how to read its source, and what accessories
-// travel with it.
+// resolverImpl joins configuration, the catalog and the registry client
+// factory — the three things neither the planner nor the requester may import.
 //
-// It lives in the composition root because it is where configuration, the
-// catalog and the registry client factory meet — and internal/transfer must
-// depend on none of those, or the planner could not be tested without them.
+// It lives in the composition root because that is where those three meet, and
+// because internal/transfer staying free of them is what lets the planner and
+// the resolution rules be tested with literals instead of a config loader.
 type resolverImpl struct {
 	products *product.Registry
 	catalog  *catalog.Catalog
@@ -30,60 +29,67 @@ type resolverImpl struct {
 	log      *slog.Logger
 }
 
-// Destinations returns the enabled targets a request should expand into.
+// ProductView is what `transfers create` and `transfers promote` resolve
+// against: configured sources and targets, joined to their catalog rows.
 //
-// A `promote` request is deliberately NOT handled here: promotion's source is
-// another target and its destination is chosen by the request rather than by
-// "every enabled target", so treating it like replication would fan a
-// promotion out across every environment at once. It arrives with the rest of
-// promotion in M4; until then a promote request expands into nothing and says
-// so, which is a visible non-answer rather than a wrong one.
-func (r *resolverImpl) Destinations(
-	ctx context.Context, productName, operation string,
-) ([]transfer.Destination, error) {
-	if operation == "promote" {
-		return nil, fmt.Errorf(
-			"promotion is not implemented yet: a promote request cannot be expanded (M4)")
-	}
-
+// A target with no catalog row yet is included with a zero ID rather than
+// omitted — configuration declares it, so naming it must produce "nothing has
+// been written there yet" rather than "no such target".
+func (r *resolverImpl) ProductView(
+	ctx context.Context, productName string,
+) (transfer.ProductView, error) {
 	p, ok := r.products.Get(productName)
 	if !ok {
-		return nil, fmt.Errorf("product %q is not configured", productName)
+		return transfer.ProductView{}, fmt.Errorf("product %q is not configured", productName)
 	}
 
-	var out []transfer.Destination
+	from, to := p.PromotionPath()
+	view := transfer.ProductView{Name: productName, PromotionFrom: from, PromotionTo: to}
+
+	for _, s := range p.Spec.Sources {
+		if !s.IsEnabled() {
+			continue
+		}
+		id, _ := r.catalog.ResolveRepository(ctx, productName, s.Name)
+		view.Sources = append(view.Sources, transfer.RepoView{
+			RepositoryID: id,
+			Name:         s.Name,
+			Role:         string(product.RoleSource),
+			Registry:     s.Registry,
+			RegistryType: string(s.Type),
+		})
+	}
+
 	for _, t := range p.Spec.Targets {
 		if !t.IsEnabled() {
 			continue
 		}
-		// promotionOnly means a production registry is reachable only by
-		// promotion from another target, never by direct replication from a
-		// vendor. Skipping it here is what enforces that.
-		if t.PromotionOnly {
-			continue
-		}
-
-		id, err := r.catalog.ResolveRepository(ctx, productName, t.Name)
-		if err != nil {
-			return nil, err
-		}
-		out = append(out, transfer.Destination{
-			RepositoryID: id, Name: t.Name, Repository: t.Repository,
-			Registry: t.Registry, Type: string(t.Type),
+		id, _ := r.catalog.ResolveRepository(ctx, productName, t.Name)
+		view.Targets = append(view.Targets, transfer.RepoView{
+			RepositoryID:  id,
+			Name:          t.Name,
+			Role:          string(product.RoleTarget),
+			Environment:   t.Environment,
+			Registry:      t.Registry,
+			Repository:    t.Repository,
+			RegistryType:  string(t.Type),
+			PromotionOnly: t.PromotionOnly,
+			Default:       t.Default,
 		})
 	}
-	return out, nil
+	return view, nil
 }
 
-// SourceReader builds a client for the repository a request names.
+// Reader builds a client for the repository a transfer reads from.
 //
-// The repository row already carries everything needed to identify it, so this
-// resolves the row and hands it to the same client factory the worker uses.
-// Sharing that factory is the point: a source the Coordinator can walk is a
-// source a worker can pull from, and if the two disagreed the failure would
-// appear as a transfer that plans perfectly and then cannot fetch a byte.
-func (r *resolverImpl) SourceReader(
-	ctx context.Context, productName string, repoID int64,
+// The ROW supplies the registry and the credential; the PATH is passed
+// separately, because a promotion reads from beneath its origin target's
+// configured prefix rather than from the prefix itself. Sharing this factory
+// with the worker is the point: a repository the Coordinator can walk is one a
+// worker can pull from, and if the two disagreed the failure would appear as a
+// transfer that plans perfectly and then cannot fetch a byte.
+func (r *resolverImpl) Reader(
+	ctx context.Context, repoID int64, repositoryPath string,
 ) (registry.ManifestReader, error) {
 	endpoints, err := r.packages.HydrateEndpoints(ctx, []int64{repoID})
 	if err != nil {
@@ -93,12 +99,15 @@ func (r *resolverImpl) SourceReader(
 	if !ok {
 		return nil, fmt.Errorf("repository %d is not in the catalog", repoID)
 	}
+	if repositoryPath == "" {
+		repositoryPath = e.Repository
+	}
 
 	return r.clients.For(v1.JobEndpoint{
 		Product:    e.Product,
 		Name:       e.Name,
 		Registry:   e.Registry,
-		Repository: e.Repository,
+		Repository: repositoryPath,
 		Type:       e.RegistryType,
 		Role:       e.Role,
 	})

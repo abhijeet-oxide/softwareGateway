@@ -69,6 +69,7 @@ type Metadata struct {
 type Spec struct {
 	Sources       []Source            `json:"sources"`
 	Targets       []Target            `json:"targets"`
+	Promotion     *Promotion          `json:"promotion,omitempty"`
 	AutoDownload  AutoDownload        `json:"autoDownload,omitempty"`
 	Verification  Verification        `json:"verification,omitempty"`
 	Notifications Notifications       `json:"notifications,omitempty"`
@@ -307,11 +308,61 @@ type Target struct {
 	// used for destination-side checks after a push.
 	Verification *Verification `json:"verification,omitempty"`
 
+	// Environment is which stage this target represents: `lab`, `production`,
+	// whatever a site calls them.
+	//
+	// SEVERAL TARGETS MAY SHARE ONE. That is the point rather than an
+	// oversight: `lab-eu` and `lab-us` are both the lab environment, and a
+	// promotion between regions has to be expressible.
+	//
+	// Free text, because the stages a site runs are its own business. It is
+	// what `transferctl transfers promote` resolves against when no explicit
+	// --from/--to is given, and it carries no meaning otherwise — a product
+	// that never promotes can leave it unset.
+	Environment string `json:"environment,omitempty"`
+
 	// Default marks the target used when a request names none.
 	Default bool `json:"default,omitempty"`
 	// PromotionOnly rejects direct replication, so a production registry can
 	// be reachable only by promotion from another target.
 	PromotionOnly bool `json:"promotionOnly,omitempty"`
+}
+
+// Promotion declares the hop `transfers promote` takes by default.
+//
+// Declared rather than hard-coded because the names of a site's stages are the
+// site's. A deployment running dev -> qa -> production should not have to fight
+// a tool that believes in "lab".
+//
+// Omitting the block entirely keeps the common default, lab -> production. It
+// only has to be written when those words are wrong.
+type Promotion struct {
+	// From and To are ENVIRONMENT names, matched against Target.Environment.
+	// Each may resolve to several targets; `promote` then refuses to guess and
+	// asks for --from or --to.
+	From string `json:"from,omitempty"`
+	To   string `json:"to,omitempty"`
+}
+
+// The default promotion hop, used when a product declares no `promotion`.
+const (
+	DefaultPromotionFrom = "lab"
+	DefaultPromotionTo   = "production"
+)
+
+// PromotionPath returns the environments `promote` moves between.
+func (p *Product) PromotionPath() (from, to string) {
+	from, to = DefaultPromotionFrom, DefaultPromotionTo
+	if p.Spec.Promotion == nil {
+		return from, to
+	}
+	if p.Spec.Promotion.From != "" {
+		from = p.Spec.Promotion.From
+	}
+	if p.Spec.Promotion.To != "" {
+		to = p.Spec.Promotion.To
+	}
+	return from, to
 }
 
 // RegistryType selects the implementation. `generic` is the expected path for

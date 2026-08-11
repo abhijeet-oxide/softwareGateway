@@ -924,3 +924,60 @@ type ListJobsResponse struct {
 	TransferID string `json:"transferId"`
 	Jobs       []Job  `json:"jobs"`
 }
+
+// CreateTransferRequest is POST /api/v1/transfers.
+//
+// One request, one origin, several destinations. The OPERATION is not a field:
+// it is derived from what `from` resolves to — a configured source means
+// replicate, a configured target means promote — because a field that can
+// disagree with `from` is a field that eventually will.
+type CreateTransferRequest struct {
+	Product string `json:"product"`
+	// Package is a tag or a digest.
+	Package string `json:"package"`
+
+	// From names the origin. Empty means the repository the package was
+	// discovered in, or — when Promote is set — the product's promotion
+	// source environment.
+	From string `json:"from,omitempty"`
+	// To names destinations explicitly.
+	To []string `json:"to,omitempty"`
+	// ToEnvironment fans out to every target in one environment: the
+	// deliberate form of "all of them", said rather than inferred.
+	ToEnvironment string `json:"toEnvironment,omitempty"`
+
+	// Promote requires the origin to be a target and resolves omitted ends
+	// through the product's promotion path.
+	Promote bool `json:"promote,omitempty"`
+
+	Priority int `json:"priority,omitempty"`
+	// ValidateOnly checks and resolves everything, writes nothing, and returns
+	// the plan (AIP-163). This is how dry run works.
+	ValidateOnly bool `json:"validateOnly,omitempty"`
+}
+
+// TransferEndpoint is one resolved end of a request.
+type TransferEndpoint struct {
+	Name        string `json:"name"`
+	Role        string `json:"role"`
+	Environment string `json:"environment,omitempty"`
+	Registry    string `json:"registry"`
+	Repository  string `json:"repository,omitempty"`
+}
+
+// CreateTransferResponse reports what a request produced.
+type CreateTransferResponse struct {
+	RequestID string `json:"requestId,omitempty"`
+	// Created is false when an identical request already existed — a replay,
+	// not an error.
+	Created bool `json:"created"`
+
+	// Operation is REPLICATE or PROMOTE, as derived.
+	Operation string             `json:"operation"`
+	From      TransferEndpoint   `json:"from"`
+	To        []TransferEndpoint `json:"to"`
+
+	// TransferIDs are the transfers opened, one per destination, in the same
+	// order as `to`. Empty on a dry run.
+	TransferIDs []string `json:"transferIds,omitempty"`
+}

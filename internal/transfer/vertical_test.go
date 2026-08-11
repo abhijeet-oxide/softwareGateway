@@ -105,6 +105,12 @@ func newSliceOn(t *testing.T, src, dst *fakeregistry.Registry) *slice {
 	return s
 }
 
+// repo registers a configured repository.
+//
+// The row NAME is the path, because (product, role, name) is unique and a
+// product with a lab and a production target has two of the same role. In a
+// real deployment the name is the configured target's, and the paths beneath
+// it get "<configured>/<path>" — see the planner.
 func (s *slice) repo(role, host, path string) int64 {
 	s.t.Helper()
 
@@ -114,7 +120,7 @@ func (s *slice) repo(role, host, path string) int64 {
 	}
 	defer func() { _ = tx.Rollback() }()
 
-	id, err := s.packages.EnsureRepository(s.t.Context(), tx, s.productID, role, role,
+	id, err := s.packages.EnsureRepository(s.t.Context(), tx, s.productID, role, path,
 		host, path, "generic", "config", "")
 	if err != nil {
 		s.t.Fatal(err)
@@ -287,6 +293,13 @@ type drainResult struct {
 
 func (s *slice) drain(workerID string, capacity int) drainResult {
 	s.t.Helper()
+	return s.drainInto(workerID, capacity, s.dst)
+}
+
+// drainInto runs the worker loop when the destination is not the harness's
+// own — a promotion moves into a registry the first hop never touched.
+func (s *slice) drainInto(workerID string, capacity int, _ *fakeregistry.Registry) drainResult {
+	s.t.Helper()
 	ctx := s.t.Context()
 
 	out := drainResult{SkipReason: map[string]int{}}
@@ -347,6 +360,34 @@ func (s *slice) drain(workerID string, capacity int) drainResult {
 	}
 	s.t.Fatal("the queue never drained: a job stayed leasable for 100 rounds")
 	return out
+}
+
+// openTransfer records a request and one transfer, the way the requester does
+// when a person asks for a copy.
+func (s *slice) openTransfer(id string, pkg store.PackageRow, operation string, from, to int64) {
+	s.t.Helper()
+
+	if _, err := s.st.DB().ExecContext(s.t.Context(),
+		`INSERT INTO transfer_requests (id, product_id, package_id, operation, source_repo_id, idempotency_key)
+		 VALUES (?, ?, ?, ?, ?, ?)`,
+		"req-"+id, s.productID, pkg.ID, operation, from, "key-"+id); err != nil {
+		s.t.Fatal(err)
+	}
+
+	tx, err := s.st.DB().BeginTx(s.t.Context(), nil)
+	if err != nil {
+		s.t.Fatal(err)
+	}
+	defer func() { _ = tx.Rollback() }()
+	if _, err := s.packages.CreateTransfer(s.t.Context(), tx, store.TransferRow{
+		ID: id, RequestID: "req-" + id, PackageID: pkg.ID,
+		SourceRepoID: from, TargetRepoID: to, Priority: 50,
+	}); err != nil {
+		s.t.Fatal(err)
+	}
+	if err := tx.Commit(); err != nil {
+		s.t.Fatal(err)
+	}
 }
 
 func (s *slice) transferState(id string) string {

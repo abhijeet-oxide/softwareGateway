@@ -520,10 +520,15 @@ func (c *Client) GetTransfer(ctx context.Context, id string) (*Transfer, error) 
 	return &out, nil
 }
 
-// ListTransferJobs returns layer-level progress.
-func (c *Client) ListTransferJobs(ctx context.Context, id string) (*ListJobsResponse, error) {
+// ListTransferJobs returns layer-level progress, optionally for one state.
+func (c *Client) ListTransferJobs(ctx context.Context, id, state string) (*ListJobsResponse, error) {
+	path := "/api/v1/transfers/" + url.PathEscape(id) + "/jobs"
+	if state != "" {
+		path += "?state=" + url.QueryEscape(state)
+	}
+
 	var out ListJobsResponse
-	if err := c.get(ctx, "/api/v1/transfers/"+url.PathEscape(id)+"/jobs", &out); err != nil {
+	if err := c.get(ctx, path, &out); err != nil {
 		return nil, err
 	}
 	return &out, nil

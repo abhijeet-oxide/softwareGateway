@@ -220,15 +220,16 @@ func newTransfersListCommand() *cobra.Command {
 				}
 
 				tw := newTabWriter(w)
-				fmt.Fprintln(tw, "ID\tPRODUCT\tTAG\tTARGET\tSTATE\tPROGRESS\tMOVED\tSAVED")
+				fmt.Fprintln(tw, "ID\tPRODUCT\tTAG\tTARGET\tSTATE\tPROGRESS\tRUNNING\tMOVED\tSAVED")
 				for _, t := range resp.Transfers {
-					fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n",
+					fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%s\t%d\t%s\t%s\n",
 						shortID(t.ID),
 						t.Product,
 						t.Tag,
 						t.Target,
 						strings.ToLower(string(t.State)),
 						jobProgress(t.Progress),
+						t.Progress.JobsInFlight,
 						humanBytes(t.Progress.BytesTransferred),
 						humanBytes(t.Progress.DedupeSkippedBytes),
 					)
@@ -238,6 +239,7 @@ func newTransfersListCommand() *cobra.Command {
 				}
 
 				fmt.Fprintln(w)
+				fmt.Fprintln(w, "RUNNING is how many jobs are being worked on right now.")
 				fmt.Fprintln(w, "SAVED is what deduplication avoided moving — content the destination already had.")
 				fmt.Fprintln(w, "transferctl transfers describe <id>   full detail")
 				fmt.Fprintln(w, "transferctl transfers jobs <id>       per-blob progress")
@@ -289,6 +291,10 @@ func describeTransfer(w io.Writer, t *v1.Transfer) error {
 	p := t.Progress
 	fmt.Fprintf(pw, "  Jobs:\t%d done, %d outstanding, %d failed (of %d planned)\n",
 		p.JobsDone, p.JobsOutstanding, p.JobsFailed, p.JobsPlanned)
+	fmt.Fprintf(pw, "  In flight:\t%s\n", inFlight(p))
+	if p.JobsWaiting > 0 {
+		fmt.Fprintf(pw, "  Waiting:\t%d in retry backoff\n", p.JobsWaiting)
+	}
 	fmt.Fprintf(pw, "  Transferred:\t%s of %s planned\n",
 		humanBytes(p.BytesTransferred), humanBytes(p.PlannedBytes))
 	fmt.Fprintf(pw, "  Deduplicated:\t%s never moved\n", humanBytes(p.DedupeSkippedBytes))
@@ -303,20 +309,53 @@ func describeTransfer(w io.Writer, t *v1.Transfer) error {
 	}
 
 	// A transfer that is not moving and has no failure reason is the case
-	// worth explaining, because it looks identical to a broken one: waves are
-	// sequential, so nothing in wave 2 starts until wave 1 has fully drained.
+	// worth explaining, because it looks identical to a broken one.
 	if t.State == v1.TransferRunning && p.JobsOutstanding > 0 && t.MaxWave > 0 {
 		fmt.Fprintln(w)
-		fmt.Fprintf(w, "Wave %d of %d is in flight. Manifests are pushed only after every\n",
+		fmt.Fprintf(w, "Wave %d of %d. Manifests are pushed only after every blob beneath\n",
 			t.CurrentWave, t.MaxWave)
-		fmt.Fprintln(w, "blob beneath them has landed, so a tag never appears at the destination")
-		fmt.Fprintln(w, "until the whole package is there.")
+		fmt.Fprintln(w, "them has landed, so a tag never appears at the destination until the")
+		fmt.Fprintln(w, "whole package is there.")
+
+		// Nothing running is the state most likely to be mistaken for a hang,
+		// and it has two very different causes.
+		if p.JobsInFlight == 0 {
+			fmt.Fprintln(w)
+			switch {
+			case p.JobsWaiting > 0:
+				fmt.Fprintf(w,
+					"No job is running: %d are waiting out a retry backoff. They become\n",
+					p.JobsWaiting)
+				fmt.Fprintln(w, "runnable on their own; `transfers jobs <id> --failed` shows why they failed.")
+			default:
+				fmt.Fprintln(w, "No job is running and none is waiting. Check that a worker is up and")
+				fmt.Fprintln(w, "pointed at this Coordinator — `transferctl health` reports what it sees.")
+			}
+		}
 	}
 	return nil
 }
 
+// inFlight renders concurrency in the terms a reader is asking about.
+//
+// "3 across 1 worker" answers the question directly; a bare count leaves them
+// wondering whether the fleet or the queue is the limit.
+func inFlight(p v1.TransferProgress) string {
+	if p.JobsInFlight == 0 {
+		return "nothing running"
+	}
+	worker := "workers"
+	if p.Workers == 1 {
+		worker = "worker"
+	}
+	return fmt.Sprintf("%d job(s) across %d %s", p.JobsInFlight, p.Workers, worker)
+}
+
 func newTransfersJobsCommand() *cobra.Command {
-	var failedOnly bool
+	var (
+		failedOnly bool
+		state      string
+	)
 
 	cmd := &cobra.Command{
 		Short: "Show per-blob progress",
@@ -324,18 +363,22 @@ func newTransfersJobsCommand() *cobra.Command {
 			"which blob, how far, on which attempt, and — when something is\n" +
 			"stuck — which worker is holding it and what the registry said.",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			resp, err := newClient().ListTransferJobs(cmd.Context(), args[0])
+			if failedOnly && state != "" {
+				return usageError{msg: "--failed and --state name the same thing two ways; use one"}
+			}
+			if failedOnly {
+				state = "failed"
+			}
+
+			resp, err := newClient().ListTransferJobs(cmd.Context(), args[0], state)
 			if err != nil {
 				return err
 			}
 			return render(stdout(), opts.output, resp, func(w io.Writer) error {
 				jobs := resp.Jobs
-				if failedOnly {
-					jobs = filterFailed(jobs)
-				}
 				if len(jobs) == 0 {
-					if failedOnly {
-						fmt.Fprintln(w, "No failed jobs.")
+					if state != "" {
+						fmt.Fprintf(w, "No %s jobs.\n", state)
 						return nil
 					}
 					fmt.Fprintln(w, "This transfer has no jobs: nothing was planned for it.")
@@ -370,6 +413,8 @@ func newTransfersJobsCommand() *cobra.Command {
 
 	takes(cmd, "jobs", transferArg())
 	cmd.Flags().BoolVar(&failedOnly, "failed", false, "only jobs that have failed")
+	cmd.Flags().StringVar(&state, "state", "",
+		"only this state: leased shows what is running right now")
 	return cmd
 }
 
@@ -384,16 +429,6 @@ func transferArg() argSpec {
 		Help: "the transfer to look at, as shown by `transferctl transfers list`",
 		Find: "transferctl transfers list",
 	}
-}
-
-func filterFailed(jobs []v1.Job) []v1.Job {
-	out := make([]v1.Job, 0, len(jobs))
-	for _, j := range jobs {
-		if j.State == v1.JobFailed {
-			out = append(out, j)
-		}
-	}
-	return out
 }
 
 // jobDetail is the one column that explains an unexpected state.

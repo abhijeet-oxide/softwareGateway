@@ -113,6 +113,14 @@ const leaseColumns = `id, transfer_id, kind, digest, size_bytes, media_type,
 	artifact_id, source_repo_id, target_repo_id, attempts, wave, target_tags,
 	target_repository`
 
+// The lease CLEARS the previous attempt's error.
+//
+// An error describes the attempt that produced it. Leaving it on a job that is
+// now running again means a listing shows a live job labelled with a failure
+// that has already been superseded — which is how a fixed problem goes on
+// looking broken. It is kept while the job waits out its backoff, because
+// there the reason it is waiting is exactly what a reader wants.
+
 // leaseCandidatePredicate is the leasability test, shared by both dialects.
 //
 // The NOT EXISTS is concurrent duplicate suppression (docs/design/04 §5): if
@@ -152,6 +160,8 @@ func (p *Packages) leasePostgres(ctx context.Context, req LeaseRequest) ([]Lease
 		       lease_owner      = ?,
 		       lease_expires_at = ` + p.dialect.TimeAhead("?") + `,
 		       attempts         = attempts + 1,
+		       last_error       = NULL,
+		       last_error_class = NULL,
 		       started_at       = COALESCE(j.started_at, ` + p.dialect.Now() + `),
 		       updated_at       = ` + p.dialect.Now() + `
 		  FROM candidate c
@@ -202,6 +212,8 @@ func (p *Packages) leaseSQLite(ctx context.Context, req LeaseRequest) ([]LeasedJ
 		       lease_owner      = ?,
 		       lease_expires_at = ` + p.dialect.TimeAhead("?") + `,
 		       attempts         = attempts + 1,
+		       last_error       = NULL,
+		       last_error_class = NULL,
 		       started_at       = COALESCE(started_at, ` + p.dialect.Now() + `),
 		       updated_at       = ` + p.dialect.Now() + `
 		 WHERE id IN (` + placeholders + `)`)
@@ -584,11 +596,16 @@ func (p *Packages) applyJobOutcome(
 ) error {
 	if c.Outcome != "failed" {
 		skip := nullIfEmpty(c.SkipReason)
+		// A job that succeeded carries no error, whatever earlier attempts
+		// said. Leaving the last failure on a succeeded row makes a listing
+		// read as though it had failed.
 		_, err := tx.ExecContext(ctx, p.dialect.Rewrite(`
 			UPDATE jobs
 			   SET state             = ?,
 			       skip_reason       = ?,
 			       bytes_transferred = ?,
+			       last_error        = NULL,
+			       last_error_class  = NULL,
 			       lease_owner       = NULL,
 			       lease_expires_at  = NULL,
 			       completed_at      = `+p.dialect.Now()+`,
@@ -1011,6 +1028,16 @@ type TransferSummary struct {
 	JobsFailed       int
 	JobsOutstanding  int
 	BytesTransferred int64
+	// JobsInFlight is how many are leased RIGHT NOW, and Workers is how many
+	// distinct workers hold them. Without these, concurrency is invisible: a
+	// page of jobs ordered by size shows whichever happen to be at the top,
+	// and an operator cannot tell sixteen-way parallelism from one-at-a-time.
+	JobsInFlight int
+	Workers      int
+	// JobsWaiting is how many are in retry backoff rather than runnable. It is
+	// the difference between "the queue is saturated" and "most of this is
+	// sitting out a backoff", which look identical from a progress count.
+	JobsWaiting int
 
 	FailureReason string
 	CreatedAt     string
@@ -1019,7 +1046,8 @@ type TransferSummary struct {
 
 // transferSelect is the shared projection, so list and get cannot disagree
 // about what a transfer looks like.
-const transferSelect = `
+func (p *Packages) transferSelect() string {
+	return `
 	SELECT t.id, t.request_id, t.package_id, pr.name, pk.tag,
 	       src.registry_host || '/' || src.repository_path,
 	       dst.registry_host || '/' || dst.repository_path,
@@ -1032,12 +1060,19 @@ const transferSelect = `
 	       COALESCE((SELECT count(*) FROM jobs j WHERE j.transfer_id = t.id
 	                  AND j.state IN ('pending','blocked','leased')), 0),
 	       COALESCE((SELECT SUM(j.bytes_transferred) FROM jobs j WHERE j.transfer_id = t.id), 0),
+	       COALESCE((SELECT count(*) FROM jobs j WHERE j.transfer_id = t.id
+	                  AND j.state = 'leased'), 0),
+	       COALESCE((SELECT count(DISTINCT j.lease_owner) FROM jobs j WHERE j.transfer_id = t.id
+	                  AND j.state = 'leased' AND j.lease_owner IS NOT NULL), 0),
+	       COALESCE((SELECT count(*) FROM jobs j WHERE j.transfer_id = t.id
+	                  AND j.state = 'pending' AND j.next_visible_at > ` + p.dialect.Now() + `), 0),
 	       COALESCE(t.failure_reason, ''), t.created_at, COALESCE(t.completed_at, '')
 	  FROM transfers t
 	  JOIN packages pk ON pk.id = t.package_id
 	  JOIN products pr ON pr.id = pk.product_id
 	  JOIN repositories src ON src.id = t.source_repo_id
 	  JOIN repositories dst ON dst.id = t.target_repo_id`
+}
 
 func scanTransfer(row interface{ Scan(...any) error }) (TransferSummary, error) {
 	var t TransferSummary
@@ -1045,6 +1080,7 @@ func scanTransfer(row interface{ Scan(...any) error }) (TransferSummary, error) 
 		&t.Source, &t.Target, &t.State, &t.Priority, &t.CurrentWave, &t.MaxWave,
 		&t.PlannedJobs, &t.PlannedBytes, &t.DedupeSkippedBytes,
 		&t.JobsDone, &t.JobsFailed, &t.JobsOutstanding, &t.BytesTransferred,
+		&t.JobsInFlight, &t.Workers, &t.JobsWaiting,
 		&t.FailureReason, &t.CreatedAt, &t.CompletedAt)
 	return t, err
 }
@@ -1060,7 +1096,7 @@ type ListTransfersFilter struct {
 
 // ListTransfers returns transfers, newest first.
 func (p *Packages) ListTransfers(ctx context.Context, f ListTransfersFilter) ([]TransferSummary, error) {
-	query := transferSelect
+	query := p.transferSelect()
 	var args []any
 
 	where := " WHERE 1=1"
@@ -1108,7 +1144,7 @@ func (p *Packages) GetTransfer(ctx context.Context, ref string) (TransferSummary
 		return TransferSummary{}, err
 	}
 
-	row := p.db.QueryRowContext(ctx, p.dialect.Rewrite(transferSelect+" WHERE t.id = ?"), id)
+	row := p.db.QueryRowContext(ctx, p.dialect.Rewrite(p.transferSelect()+" WHERE t.id = ?"), id)
 
 	t, scanErr := scanTransfer(row)
 	if errors.Is(scanErr, sql.ErrNoRows) {
@@ -1209,7 +1245,9 @@ type JobSummary struct {
 // Ordered by wave then size, largest first within a wave: the big blobs are
 // what a person watching a stalled transfer wants at the top, and they are
 // also what the remaining time actually depends on.
-func (p *Packages) ListJobs(ctx context.Context, ref string, limit int) ([]JobSummary, error) {
+func (p *Packages) ListJobs(
+	ctx context.Context, ref string, state string, limit int,
+) ([]JobSummary, error) {
 	if limit <= 0 {
 		limit = 500
 	}
@@ -1219,14 +1257,21 @@ func (p *Packages) ListJobs(ctx context.Context, ref string, limit int) ([]JobSu
 		return nil, err
 	}
 
+	where := " WHERE transfer_id = ?"
+	args := []any{transferID}
+	if state != "" {
+		where += " AND state = ?"
+		args = append(args, state)
+	}
+	args = append(args, limit)
+
 	rows, err := p.db.QueryContext(ctx, p.dialect.Rewrite(`
 		SELECT id, kind, digest, size_bytes, state, COALESCE(skip_reason,''),
 		       wave, attempts, max_attempts, bytes_transferred,
 		       COALESCE(lease_owner,''), COALESCE(last_error,''), COALESCE(last_error_class,'')
-		  FROM jobs
-		 WHERE transfer_id = ?
+		  FROM jobs`+where+`
 		 ORDER BY wave, size_bytes DESC, id
-		 LIMIT ?`), transferID, limit)
+		 LIMIT ?`), args...)
 	if err != nil {
 		return nil, fmt.Errorf("list jobs of transfer %s: %w", transferID, err)
 	}

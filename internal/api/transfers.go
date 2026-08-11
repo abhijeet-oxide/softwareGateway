@@ -196,7 +196,13 @@ func (s *Server) handleListTransferJobs(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
-	jobs, err := s.deps.Packages.ListJobs(r.Context(), id, pageSize)
+	state, err := parseJobState(r.URL.Query().Get("state"))
+	if err != nil {
+		Error(w, r, v1.CodeInvalidArgument, err.Error())
+		return
+	}
+
+	jobs, err := s.deps.Packages.ListJobs(r.Context(), id, state, pageSize)
 	if err != nil {
 		Error(w, r, v1.CodeUnavailable, "could not list jobs: "+err.Error())
 		return
@@ -240,6 +246,9 @@ func transferDTO(t store.TransferSummary) v1.Transfer {
 			JobsDone:           t.JobsDone,
 			JobsFailed:         t.JobsFailed,
 			JobsOutstanding:    t.JobsOutstanding,
+			JobsInFlight:       t.JobsInFlight,
+			Workers:            t.Workers,
+			JobsWaiting:        t.JobsWaiting,
 			PlannedBytes:       v1.Int64String(strconv.FormatInt(t.PlannedBytes, 10)),
 			BytesTransferred:   v1.Int64String(strconv.FormatInt(t.BytesTransferred, 10)),
 			DedupeSkippedBytes: v1.Int64String(strconv.FormatInt(t.DedupeSkippedBytes, 10)),
@@ -248,6 +257,28 @@ func transferDTO(t store.TransferSummary) v1.Transfer {
 		CreatedAt:     t.CreatedAt,
 		CompletedAt:   t.CompletedAt,
 	}
+}
+
+// parseJobState validates the job state filter against the closed set.
+//
+// Checked rather than passed through, for the same reason as the transfer
+// state: an unknown value would match nothing, and an empty listing is
+// indistinguishable from a mistyped filter.
+func parseJobState(s string) (string, error) {
+	if s == "" {
+		return "", nil
+	}
+	got := strings.ToLower(s)
+	for _, valid := range []string{
+		"blocked", "pending", "leased", "succeeded", "skipped", "failed", "cancelled",
+	} {
+		if got == valid {
+			return got, nil
+		}
+	}
+	return "", fmt.Errorf(
+		"state %q is not a job state: expected one of blocked, pending, leased, "+
+			"succeeded, skipped, failed, cancelled", s)
 }
 
 // parseTransferState validates the state filter against the closed set.

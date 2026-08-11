@@ -887,6 +887,17 @@ type TransferProgress struct {
 	JobsFailed      int `json:"jobsFailed"`
 	JobsOutstanding int `json:"jobsOutstanding"`
 
+	// JobsInFlight is how many are being worked on RIGHT NOW, across Workers
+	// distinct workers. Concurrency is otherwise invisible — a page of jobs
+	// shows whichever sort to the top, and sixteen-way parallelism looks
+	// exactly like one-at-a-time.
+	JobsInFlight int `json:"jobsInFlight"`
+	Workers      int `json:"workers"`
+	// JobsWaiting is how many are sitting out a retry backoff rather than
+	// being runnable. "The queue is saturated" and "most of this is waiting"
+	// are indistinguishable from a progress count alone.
+	JobsWaiting int `json:"jobsWaiting"`
+
 	PlannedBytes     Int64String `json:"plannedBytes"`
 	BytesTransferred Int64String `json:"bytesTransferred"`
 	// DedupeSkippedBytes is what this transfer will NOT move because the

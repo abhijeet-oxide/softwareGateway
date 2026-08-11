@@ -844,3 +844,77 @@ type HeartbeatResponse struct {
 	CancelledJobIDs []string `json:"cancelledJobIds,omitempty"`
 	DrainRequested  bool     `json:"drainRequested,omitempty"`
 }
+
+// ---------------------------------------------------------------------------
+// Transfers
+// ---------------------------------------------------------------------------
+
+// Transfer is one package moving to one destination.
+type Transfer struct {
+	ID        string `json:"id"`
+	RequestID string `json:"requestId"`
+	Product   string `json:"product"`
+	Tag       string `json:"tag"`
+	Source    string `json:"source"`
+	Target    string `json:"target"`
+
+	State    TransferState `json:"state"`
+	Priority int           `json:"priority"`
+
+	CurrentWave int `json:"currentWave"`
+	MaxWave     int `json:"maxWave"`
+
+	// Progress is always a ROLLUP over jobs, never a maintained counter
+	// (invariant I6). A counter would be a second source of truth for the same
+	// fact and would drift; this cannot.
+	Progress TransferProgress `json:"progress"`
+
+	FailureReason string `json:"failureReason,omitempty"`
+	CreatedAt     string `json:"createdAt,omitempty"`
+	CompletedAt   string `json:"completedAt,omitempty"`
+}
+
+// TransferProgress is what has happened so far, and what was planned.
+type TransferProgress struct {
+	JobsPlanned     int `json:"jobsPlanned"`
+	JobsDone        int `json:"jobsDone"`
+	JobsFailed      int `json:"jobsFailed"`
+	JobsOutstanding int `json:"jobsOutstanding"`
+
+	PlannedBytes     Int64String `json:"plannedBytes"`
+	BytesTransferred Int64String `json:"bytesTransferred"`
+	// DedupeSkippedBytes is what this transfer will NOT move because the
+	// destination already had it. Reported rather than buried: it is the
+	// number that makes the second transfer of a product line nearly free.
+	DedupeSkippedBytes Int64String `json:"dedupeSkippedBytes"`
+}
+
+// ListTransfersResponse is GET /api/v1/transfers.
+type ListTransfersResponse struct {
+	Transfers     []Transfer `json:"transfers"`
+	NextPageToken string     `json:"nextPageToken,omitempty"`
+}
+
+// Job is layer-level progress.
+type Job struct {
+	ID         string      `json:"id"`
+	Kind       string      `json:"kind"`
+	Digest     string      `json:"digest"`
+	SizeBytes  Int64String `json:"sizeBytes"`
+	State      JobState    `json:"state"`
+	SkipReason SkipReason  `json:"skipReason,omitempty"`
+	Wave       int         `json:"wave"`
+
+	Attempts         int         `json:"attempts"`
+	MaxAttempts      int         `json:"maxAttempts"`
+	BytesTransferred Int64String `json:"bytesTransferred"`
+	LeaseOwner       string      `json:"leaseOwner,omitempty"`
+	LastError        string      `json:"lastError,omitempty"`
+	LastErrorClass   string      `json:"lastErrorClass,omitempty"`
+}
+
+// ListJobsResponse is GET /api/v1/transfers/{transfer}/jobs.
+type ListJobsResponse struct {
+	TransferID string `json:"transferId"`
+	Jobs       []Job  `json:"jobs"`
+}

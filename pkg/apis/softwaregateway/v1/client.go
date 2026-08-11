@@ -469,3 +469,62 @@ func (c *Client) Heartbeat(ctx context.Context, workerID string, req HeartbeatRe
 	}
 	return &out, nil
 }
+
+// ---------------------------------------------------------------------------
+// Transfers
+// ---------------------------------------------------------------------------
+
+// ListTransfersOptions filters a transfer listing.
+type ListTransfersOptions struct {
+	Product   string
+	State     string
+	PageSize  int
+	PageToken string
+}
+
+func (o ListTransfersOptions) query() string {
+	v := url.Values{}
+	if o.Product != "" {
+		v.Set("product", o.Product)
+	}
+	if o.State != "" {
+		v.Set("state", o.State)
+	}
+	if o.PageSize > 0 {
+		v.Set("pageSize", strconv.Itoa(o.PageSize))
+	}
+	if o.PageToken != "" {
+		v.Set("pageToken", o.PageToken)
+	}
+	if len(v) == 0 {
+		return ""
+	}
+	return "?" + v.Encode()
+}
+
+// ListTransfers returns transfers, newest first.
+func (c *Client) ListTransfers(ctx context.Context, opts ListTransfersOptions) (*ListTransfersResponse, error) {
+	var out ListTransfersResponse
+	if err := c.get(ctx, "/api/v1/transfers"+opts.query(), &out); err != nil {
+		return nil, err
+	}
+	return &out, nil
+}
+
+// GetTransfer returns one transfer with its progress.
+func (c *Client) GetTransfer(ctx context.Context, id string) (*Transfer, error) {
+	var out Transfer
+	if err := c.get(ctx, "/api/v1/transfers/"+url.PathEscape(id), &out); err != nil {
+		return nil, err
+	}
+	return &out, nil
+}
+
+// ListTransferJobs returns layer-level progress.
+func (c *Client) ListTransferJobs(ctx context.Context, id string) (*ListJobsResponse, error) {
+	var out ListJobsResponse
+	if err := c.get(ctx, "/api/v1/transfers/"+url.PathEscape(id)+"/jobs", &out); err != nil {
+		return nil, err
+	}
+	return &out, nil
+}

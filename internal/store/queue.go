@@ -943,3 +943,194 @@ func (p *Packages) TransferIDFor(ctx context.Context, requestID string, targetRe
 	}
 	return id, nil
 }
+
+// ---------------------------------------------------------------------------
+// Reading transfers
+// ---------------------------------------------------------------------------
+
+// TransferSummary is one transfer with its progress rolled up.
+//
+// PROGRESS IS ALWAYS A ROLLUP, never a maintained counter (invariant I6). A
+// counter incremented alongside the jobs would be a second source of truth for
+// the same fact, and the two would drift the first time a completion was
+// applied twice or a job was reaped mid-report. Deriving it costs one indexed
+// aggregate and cannot be wrong.
+type TransferSummary struct {
+	ID          string
+	RequestID   string
+	PackageID   int64
+	ProductName string
+	Tag         string
+	Source      string
+	Target      string
+	State       string
+	Priority    int
+
+	CurrentWave int
+	MaxWave     int
+
+	PlannedJobs        int
+	PlannedBytes       int64
+	DedupeSkippedBytes int64
+
+	// Rolled up from jobs.
+	JobsDone         int
+	JobsFailed       int
+	JobsOutstanding  int
+	BytesTransferred int64
+
+	FailureReason string
+	CreatedAt     string
+	CompletedAt   string
+}
+
+// transferSelect is the shared projection, so list and get cannot disagree
+// about what a transfer looks like.
+const transferSelect = `
+	SELECT t.id, t.request_id, t.package_id, pr.name, pk.tag,
+	       src.registry_host || '/' || src.repository_path,
+	       dst.registry_host || '/' || dst.repository_path,
+	       t.state, t.priority, t.current_wave, t.max_wave,
+	       t.planned_job_count, t.planned_bytes, t.dedupe_skipped_bytes,
+	       COALESCE((SELECT count(*) FROM jobs j WHERE j.transfer_id = t.id
+	                  AND j.state IN ('succeeded','skipped')), 0),
+	       COALESCE((SELECT count(*) FROM jobs j WHERE j.transfer_id = t.id
+	                  AND j.state = 'failed'), 0),
+	       COALESCE((SELECT count(*) FROM jobs j WHERE j.transfer_id = t.id
+	                  AND j.state IN ('pending','blocked','leased')), 0),
+	       COALESCE((SELECT SUM(j.bytes_transferred) FROM jobs j WHERE j.transfer_id = t.id), 0),
+	       COALESCE(t.failure_reason, ''), t.created_at, COALESCE(t.completed_at, '')
+	  FROM transfers t
+	  JOIN packages pk ON pk.id = t.package_id
+	  JOIN products pr ON pr.id = pk.product_id
+	  JOIN repositories src ON src.id = t.source_repo_id
+	  JOIN repositories dst ON dst.id = t.target_repo_id`
+
+func scanTransfer(row interface{ Scan(...any) error }) (TransferSummary, error) {
+	var t TransferSummary
+	err := row.Scan(&t.ID, &t.RequestID, &t.PackageID, &t.ProductName, &t.Tag,
+		&t.Source, &t.Target, &t.State, &t.Priority, &t.CurrentWave, &t.MaxWave,
+		&t.PlannedJobs, &t.PlannedBytes, &t.DedupeSkippedBytes,
+		&t.JobsDone, &t.JobsFailed, &t.JobsOutstanding, &t.BytesTransferred,
+		&t.FailureReason, &t.CreatedAt, &t.CompletedAt)
+	return t, err
+}
+
+// ListTransfersFilter narrows a transfer listing.
+type ListTransfersFilter struct {
+	ProductName string
+	State       string
+	PackageID   int64
+	Limit       int
+	Offset      int
+}
+
+// ListTransfers returns transfers, newest first.
+func (p *Packages) ListTransfers(ctx context.Context, f ListTransfersFilter) ([]TransferSummary, error) {
+	query := transferSelect
+	var args []any
+
+	where := " WHERE 1=1"
+	if f.ProductName != "" {
+		where += " AND pr.name = ?"
+		args = append(args, f.ProductName)
+	}
+	if f.State != "" {
+		where += " AND t.state = ?"
+		args = append(args, f.State)
+	}
+	if f.PackageID > 0 {
+		where += " AND t.package_id = ?"
+		args = append(args, f.PackageID)
+	}
+
+	limit := f.Limit
+	if limit <= 0 {
+		limit = 50
+	}
+	query += where + " ORDER BY t.created_at DESC, t.id DESC LIMIT ? OFFSET ?"
+	args = append(args, limit, f.Offset)
+
+	rows, err := p.db.QueryContext(ctx, p.dialect.Rewrite(query), args...)
+	if err != nil {
+		return nil, fmt.Errorf("list transfers: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+
+	var out []TransferSummary
+	for rows.Next() {
+		t, err := scanTransfer(rows)
+		if err != nil {
+			return nil, fmt.Errorf("scan transfer: %w", err)
+		}
+		out = append(out, t)
+	}
+	return out, rows.Err()
+}
+
+// GetTransfer returns one transfer.
+func (p *Packages) GetTransfer(ctx context.Context, id string) (TransferSummary, error) {
+	row := p.db.QueryRowContext(ctx, p.dialect.Rewrite(transferSelect+" WHERE t.id = ?"), id)
+
+	t, err := scanTransfer(row)
+	if errors.Is(err, sql.ErrNoRows) {
+		return TransferSummary{}, fmt.Errorf("transfer %s was not found", id)
+	}
+	if err != nil {
+		return TransferSummary{}, fmt.Errorf("read transfer %s: %w", id, err)
+	}
+	return t, nil
+}
+
+// JobSummary is one job as an operator sees it.
+type JobSummary struct {
+	ID               int64
+	Kind             string
+	Digest           string
+	SizeBytes        int64
+	State            string
+	SkipReason       string
+	Wave             int
+	Attempts         int
+	MaxAttempts      int
+	BytesTransferred int64
+	LeaseOwner       string
+	LastError        string
+	LastErrorClass   string
+}
+
+// ListJobs returns a transfer's jobs — layer-level progress.
+//
+// Ordered by wave then size, largest first within a wave: the big blobs are
+// what a person watching a stalled transfer wants at the top, and they are
+// also what the remaining time actually depends on.
+func (p *Packages) ListJobs(ctx context.Context, transferID string, limit int) ([]JobSummary, error) {
+	if limit <= 0 {
+		limit = 500
+	}
+
+	rows, err := p.db.QueryContext(ctx, p.dialect.Rewrite(`
+		SELECT id, kind, digest, size_bytes, state, COALESCE(skip_reason,''),
+		       wave, attempts, max_attempts, bytes_transferred,
+		       COALESCE(lease_owner,''), COALESCE(last_error,''), COALESCE(last_error_class,'')
+		  FROM jobs
+		 WHERE transfer_id = ?
+		 ORDER BY wave, size_bytes DESC, id
+		 LIMIT ?`), transferID, limit)
+	if err != nil {
+		return nil, fmt.Errorf("list jobs of transfer %s: %w", transferID, err)
+	}
+	defer func() { _ = rows.Close() }()
+
+	var out []JobSummary
+	for rows.Next() {
+		var j JobSummary
+		if err := rows.Scan(&j.ID, &j.Kind, &j.Digest, &j.SizeBytes, &j.State,
+			&j.SkipReason, &j.Wave, &j.Attempts, &j.MaxAttempts, &j.BytesTransferred,
+			&j.LeaseOwner, &j.LastError, &j.LastErrorClass); err != nil {
+			return nil, fmt.Errorf("scan job: %w", err)
+		}
+		out = append(out, j)
+	}
+	return out, rows.Err()
+}

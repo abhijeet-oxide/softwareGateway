@@ -170,40 +170,48 @@ func (s *Server) routes() chi.Router {
 			r.Get("/products/{product}/packages", s.handleListPackages)
 			r.Get("/products/{product}/packages/{package}", s.handleGetPackage)
 			r.Get("/products/{product}/packages/{package}/artifacts", s.handleListArtifacts)
-		}
-		// AIP-136 custom method. Registered whenever discovery is wired, so a
-		// follower can answer with the reason it is not scanning rather than
-		// with a 404 that reads like a missing feature.
-		if s.deps.Discovery != nil {
-			r.Post("/products/{product}/packages:discover", s.handleDiscoverPackages)
-			// Fleet-wide: scan every product being polled. The common operator
-			// action after a maintenance window is "go and look at everything",
-			// and making that a shell loop over `products list` puts the
-			// definition of "everything" in the wrong place.
-			r.Post("/products:discover", s.handleDiscoverAll)
 
-			// Read-only, and deliberately outside the group above: a caller
-			// polling progress while a scan runs must not be blocked by
-			// whatever gates the write path.
-			r.Get("/products/{product}/discovery", s.handleDiscoveryStatus)
+			// AIP-136 custom method. Registered whenever discovery is wired, so a
+			// follower can answer with the reason it is not scanning rather than
+			// with a 404 that reads like a missing feature.
+			if s.deps.Discovery != nil {
+				r.Post("/products/{product}/packages:discover", s.handleDiscoverPackages)
+				// Fleet-wide: scan every product being polled. The common operator
+				// action after a maintenance window is "go and look at everything",
+				// and making that a shell loop over `products list` puts the
+				// definition of "everything" in the wrong place.
+				r.Post("/products:discover", s.handleDiscoverAll)
 
-			// AIP-136 custom method: expanding a package has side effects — it
-			// writes artifacts, blobs and a measured size — so it is a POST verb
-			// rather than a GET that quietly mutates.
-			//
-			// Registered as the PLAIN package pattern, with the `:verb` suffix
-			// split off by the handler rather than by the router. The obvious
-			// spelling — `/packages/{package}:inspect` — is a chi partial-segment
-			// pattern whose delimiter is `:`, and it matches on the FIRST colon in
-			// the segment. That works for a tag and silently fails for a digest:
-			// `sha256:ccbd…:inspect` binds `{package}` to `sha256` and then cannot
-			// match `:inspect` against `:ccbd…`, so the request falls through to
-			// the GET-only route and comes back
-			// `INVALID_ARGUMENT: POST is not supported on …`. Splitting here
-			// costs six lines and makes every reference form work.
-			if s.deps.Packages != nil {
-				r.Post("/products/{product}/packages/{package}", s.handlePackageCustomMethod)
+				// Read-only, and deliberately outside the group above: a caller
+				// polling progress while a scan runs must not be blocked by
+				// whatever gates the write path.
+				r.Get("/products/{product}/discovery", s.handleDiscoveryStatus)
+
+				// AIP-136 custom method: expanding a package has side effects — it
+				// writes artifacts, blobs and a measured size — so it is a POST verb
+				// rather than a GET that quietly mutates.
+				//
+				// Registered as the PLAIN package pattern, with the `:verb` suffix
+				// split off by the handler rather than by the router. The obvious
+				// spelling — `/packages/{package}:inspect` — is a chi partial-segment
+				// pattern whose delimiter is `:`, and it matches on the FIRST colon in
+				// the segment. That works for a tag and silently fails for a digest:
+				// `sha256:ccbd…:inspect` binds `{package}` to `sha256` and then cannot
+				// match `:inspect` against `:ccbd…`, so the request falls through to
+				// the GET-only route and comes back
+				// `INVALID_ARGUMENT: POST is not supported on …`. Splitting here
+				// costs six lines and makes every reference form work.
+				if s.deps.Packages != nil {
+					r.Post("/products/{product}/packages/{package}", s.handlePackageCustomMethod)
+				}
 			}
+
+			// Transfers, read-only. Registered with the store rather than with
+			// the queue: a follower replica serves these perfectly well, and an
+			// operator asking "did it work" should not need to find the leader.
+			r.Get("/transfers", s.handleListTransfers)
+			r.Get("/transfers/{transfer}", s.handleGetTransfer)
+			r.Get("/transfers/{transfer}/jobs", s.handleListTransferJobs)
 		}
 
 		// ---- The worker plane (docs/design/09 §7) ----

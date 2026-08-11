@@ -46,13 +46,16 @@ func (r *resolverImpl) ProductView(
 	from, to := p.PromotionPath()
 	view := transfer.ProductView{Name: productName, PromotionFrom: from, PromotionTo: to}
 
+	// Sources carry no row ID. A source that enumerates the registry's catalog
+	// owns a row PER REPOSITORY it found, named "<source>/<path>", so there is
+	// no single row a configured source name maps to — and pretending
+	// otherwise is what produced a zero ID and a foreign-key violation. A
+	// replication resolves its origin from the package instead.
 	for _, s := range p.Spec.Sources {
 		if !s.IsEnabled() {
 			continue
 		}
-		id, _ := r.catalog.ResolveRepository(ctx, productName, s.Name)
 		view.Sources = append(view.Sources, transfer.RepoView{
-			RepositoryID: id,
 			Name:         s.Name,
 			Role:         string(product.RoleSource),
 			Registry:     s.Registry,
@@ -64,6 +67,9 @@ func (r *resolverImpl) ProductView(
 		if !t.IsEnabled() {
 			continue
 		}
+		// A target that has never received a transfer has no row yet. Zero
+		// here is not an error — the requester creates one when something is
+		// actually copied there.
 		id, _ := r.catalog.ResolveRepository(ctx, productName, t.Name)
 		view.Targets = append(view.Targets, transfer.RepoView{
 			RepositoryID:  id,
@@ -136,4 +142,82 @@ type expanderAdapter struct{ e *transfer.Expander }
 func (a expanderAdapter) Expand(ctx context.Context) (int, int, error) {
 	res, err := a.e.Expand(ctx)
 	return res.Requests, res.Jobs, err
+}
+
+// RepositoryByID resolves an existing catalog row.
+//
+// This is how a replication learns its origin: the PACKAGE names the row it
+// was discovered in, which is authoritative in a way a configured source name
+// is not — one source can own many rows.
+func (r *resolverImpl) RepositoryByID(
+	ctx context.Context, repositoryID int64,
+) (transfer.RepoView, error) {
+	endpoints, err := r.packages.HydrateEndpoints(ctx, []int64{repositoryID})
+	if err != nil {
+		return transfer.RepoView{}, err
+	}
+	e, ok := endpoints[repositoryID]
+	if !ok {
+		return transfer.RepoView{}, fmt.Errorf("repository %d is not in the catalog", repositoryID)
+	}
+	return transfer.RepoView{
+		RepositoryID: e.RepositoryID,
+		Name:         e.Name,
+		Role:         e.Role,
+		Registry:     e.Registry,
+		Repository:   e.Repository,
+		RegistryType: e.RegistryType,
+	}, nil
+}
+
+// EnsureTarget gives a configured target a catalog row.
+//
+// Created on first use rather than at reconciliation, because a target that
+// has never received anything has nothing to point at — and a transfer needs a
+// row before it can name one.
+func (r *resolverImpl) EnsureTarget(
+	ctx context.Context, productName string, target transfer.RepoView,
+) (int64, error) {
+	p, ok := r.products.Get(productName)
+	if !ok {
+		return 0, fmt.Errorf("product %q is not configured", productName)
+	}
+
+	tx, err := r.packages.DB().BeginTx(ctx, nil)
+	if err != nil {
+		return 0, fmt.Errorf("begin target registration: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	// productID comes from the loaded configuration's row, which reconciliation
+	// keeps current — the same row every other repository of this product hangs
+	// off.
+	productID, err := r.productID(ctx, p.Metadata.Name)
+	if err != nil {
+		return 0, err
+	}
+
+	id, err := r.packages.EnsureRepository(ctx, tx, productID,
+		string(product.RoleTarget), target.Name, target.Registry, target.Repository,
+		target.RegistryType, "config", "")
+	if err != nil {
+		return 0, err
+	}
+	if err := tx.Commit(); err != nil {
+		return 0, fmt.Errorf("commit target registration: %w", err)
+	}
+	return id, nil
+}
+
+// productID finds the active products row for a configured product.
+func (r *resolverImpl) productID(ctx context.Context, name string) (int64, error) {
+	var id int64
+	err := r.packages.DB().QueryRowContext(ctx,
+		r.packages.Dialect().Rewrite(
+			`SELECT id FROM products WHERE name = ? AND active = `+
+				r.packages.Dialect().Bool(true)+` LIMIT 1`), name).Scan(&id)
+	if err != nil {
+		return 0, fmt.Errorf("product %q has no active catalog row: %w", name, err)
+	}
+	return id, nil
 }

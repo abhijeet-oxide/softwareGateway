@@ -209,14 +209,16 @@ Served by `jobs_lease_expiry_idx`.
 
 Two transfers can need the same blob in the same target simultaneously (two packages sharing a base layer, replicated at once). Both jobs are independently leasable, so both could move the same 200 MB.
 
-This is **wasteful, not incorrect** — the registry is content-addressed, so the second upload is a no-op or an identical overwrite. The mitigation is therefore sized to the problem: a `NOT EXISTS` check in the dequeue (§4.1) skips a job whose `(target_repo_id, digest)` is already `leased` by someone.
+This is **wasteful, not incorrect** — the registry is content-addressed, so the second upload is a no-op or an identical overwrite. The mitigation is therefore sized to the problem: a `NOT EXISTS` check in the dequeue (§4.1) skips a job whose digest is already `leased` to the same **target registry** by someone.
 
 ```sql
 CREATE INDEX jobs_inflight_blob_idx
     ON jobs (target_repo_id, digest) WHERE state = 'leased';
 ```
 
-The skipped job stays `pending` and is picked up moments later — by which time the first has completed and written a `blob_placements` row, so the second hits the placement fast path and skips outright with zero bytes ([05](05-transfer-engine.md) §4.1).
+The skipped job stays `pending` and is picked up moments later — by which time the first has completed and written a `blob_placements` row, so the second either hits the placement fast path (same repository) or mounts from the first's repository (a sibling one), and moves zero bytes either way ([05](05-transfer-engine.md) §4.1–4.2).
+
+**Why the key is the registry and not the repository.** The check was originally `(target_repo_id, digest)`, which is the narrowest thing that suppresses a true duplicate — and it missed the case that costs the most. A bundle's components are published in two destination repositories, so one digest yields two jobs; they are created consecutively, so they have adjacent ids, so they land in the **same lease batch** and both stream from the vendor at once. Neither has placed anything for the other to use. Widening the key to the registry is what serialises them, and serialising them is what turns the second into a mount. It costs a join against `repositories` inside the `NOT EXISTS`, which runs only over the handful of digests actually in flight.
 
 > **Why not an advisory lock or a claims table.** A transaction-scoped advisory lock releases at `COMMIT` of the *lease* transaction, long before the transfer finishes, so it would not actually cover the window. A session-scoped lock or a dedicated claims table would cover it, at the cost of another lifecycle to leak on worker death. Given the failure mode is *duplicated bandwidth*, not *corruption*, a `NOT EXISTS` on an index is the proportionate answer.
 

@@ -271,20 +271,21 @@ func renderTransferList(w io.Writer, resp *v1.ListTransfersResponse) error {
 
 		tw := newTabWriter(w)
 		fmt.Fprintln(tw,
-			"ID\tPRODUCT\tTAG\tSTATE\tDONE\tPROGRESS\tRUNNING\tELAPSED\tETA\tMOVED\tSAVED")
+			"ID\tPRODUCT\tTAG\tSTATE\tDONE\tJOBS\tCOPIED\tSPEED\tRUNNING\tELAPSED\tETA\tSAVED")
 		for i := range resp.Transfers {
 			t := &resp.Transfers[i]
-			fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%.0f%%\t%s\t%d\t%s\t%s\t%s\t%s\n",
+			fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%.0f%%\t%s\t%s\t%s\t%d\t%s\t%s\t%s\n",
 				shortID(t.ID),
 				t.Product,
-				t.Tag,
+				transferTag(t),
 				strings.ToLower(string(t.State)),
 				percentComplete(t.Progress),
 				jobProgress(t.Progress),
+				bytesProgress(t.Progress),
+				speedOf(t),
 				t.Progress.JobsInFlight,
 				elapsedOf(t),
 				etaOf(t),
-				humanBytes(t.Progress.BytesTransferred),
 				humanBytes(t.Progress.DedupeSkippedBytes),
 			)
 		}
@@ -293,13 +294,52 @@ func renderTransferList(w io.Writer, resp *v1.ListTransfersResponse) error {
 		}
 
 		fmt.Fprintln(w)
-		fmt.Fprintln(w, "DONE is by job count, which is the measure that reaches 100% — bytes does not,")
-		fmt.Fprintln(w, "because deduplicated content counts as planned and moves nothing.")
-		fmt.Fprintln(w, "ETA extrapolates the observed rate; `-` means nothing has moved yet to measure.")
+		fmt.Fprintln(w, "DONE is by job count, which is the measure that reaches 100% — COPIED does not,")
+		fmt.Fprintln(w, "because deduplicated content counts as planned and moves nothing. SPEED is the")
+		fmt.Fprintln(w, "average since the first job was leased; `describe --watch` adds current and peak.")
+		fmt.Fprintln(w, "ETA extrapolates that rate; `-` means nothing has moved yet to measure.")
 		fmt.Fprintln(w, "transferctl transfers describe <id>   full detail, including throughput")
 		fmt.Fprintln(w, "transferctl transfers jobs <id>       what is copying right now")
 		return nil
 	}(w)
+}
+
+// transferTag prefers the vendor-shortened spelling in a table.
+//
+// NEAR puts `orb_` on the front of every tag it publishes, so a column of them
+// is a column of the same four characters. The short form comes from the SERVER,
+// computed by the source's vendor plugin, because only that plugin knows which
+// part of a tag is structural noise — this package cannot tell `orb_25.7.2131`
+// from a tag that genuinely begins that way. Both spellings resolve as input,
+// and `describe` still shows the stored name.
+func transferTag(t *v1.Transfer) string {
+	if t.DisplayTag != "" {
+		return t.DisplayTag
+	}
+	return t.Tag
+}
+
+// bytesProgress is how much of the package has actually crossed the network.
+//
+// Alongside the job count rather than instead of it, because they answer
+// different questions and diverge honestly: jobs reaches 100%, bytes stops
+// short by however much was deduplicated or mounted. Somebody watching a 30 GB
+// bundle wants the gigabytes, not only the ratio.
+func bytesProgress(p v1.TransferProgress) string {
+	planned := int64Of(p.PlannedBytes)
+	if planned <= 0 {
+		return humanBytes(p.BytesTransferred)
+	}
+	return humanBytes(p.BytesTransferred) + "/" + humanBytes(p.PlannedBytes)
+}
+
+// speedOf is the average rate since the first job was leased.
+func speedOf(t *v1.Transfer) string {
+	rate, ok := averageRate(t)
+	if !ok {
+		return "-"
+	}
+	return humanRate(rate)
 }
 
 func elapsedOf(t *v1.Transfer) string {
@@ -591,9 +631,14 @@ func renderJobs(w io.Writer, jobs []v1.Job, state string) error {
 	}
 
 	fmt.Fprintln(w)
-	fmt.Fprintln(w, "SOURCE and TARGET are the full registry paths this row reads from and")
-	fmt.Fprintln(w, "writes to. A blob shows the image or chart it belongs to; a `*` marks")
-	fmt.Fprintln(w, "content shared by several, so the one named is an example.")
+	fmt.Fprintln(w, "SOURCE and TARGET are the full registry paths this row reads from and writes")
+	fmt.Fprintln(w, "to. A tag is shown only where the transfer will actually create one; a name")
+	fmt.Fprintln(w, "in parentheses is what the content IS — the vendor's own name for it — where")
+	fmt.Fprintln(w, "that differs from where it sits. A `*` marks content shared by several")
+	fmt.Fprintln(w, "artifacts, so the one named is an example.")
+	fmt.Fprintln(w, "One digest appearing twice with different targets is not a duplicate: a")
+	fmt.Fprintln(w, "component is published both inside its bundle, so the index stays")
+	fmt.Fprintln(w, "resolvable, and under its own name, so it can be pulled as itself.")
 	fmt.Fprintln(w, "A `skipped` job is a success carrying zero bytes: the content was already")
 	fmt.Fprintln(w, "at the destination, or the registry relocated it server-side.")
 	return nil
@@ -686,83 +731,86 @@ func shortID(id string) string {
 // jobSource is the exact path a row READS FROM.
 //
 // A digest identifies content and nothing else, and a repository on its own
-// only says which bundle. What a person needs is the whole thing: the
-// repository the registry serves it out of, and — for a blob, which is nobody's
-// idea of a recognisable object — the image or chart it is a layer of.
+// only says which bundle. What a person needs is both: the repository the
+// registry serves the bytes out of, and — for a blob, which is nobody's idea of
+// a recognisable object — the image or chart it is a layer of, under the
+// vendor's own name for it.
 //
-// The artifact's name is the vendor's own, from
-// `org.opencontainers.image.ref.name`, so a layer of an nginx image reads as
-// belonging to that image at that tag rather than as an anonymous digest.
+// # Why the artifact's name is sometimes a suffix and sometimes a parenthesis
+//
+// Everything in a bundle is read from ONE repository, because an index may only
+// reference children co-located with it. So `repository:tag` is a reference you
+// could actually pull only when the artifact's name belongs to that same
+// repository. When a component names itself somewhere else — NEAR's ORBs name
+// theirs `cfx-5000-product/mcc:25.7.2503` — it sits in the bundle's repository
+// addressed by DIGEST alone, and printing `orbs/…:25.7.2503` would invent a
+// reference that does not resolve. The name goes in parentheses there: this is
+// what the content is, not where it is.
 func jobSource(j v1.Job) string {
-	return jobPath(j.SourceRepository, artifactTag(j), sharedBlob(j))
+	if j.SourceRepository == "" {
+		return "-"
+	}
+
+	out := j.SourceRepository
+	repo, tag := splitRef(parentRef(j))
+	if repo == "" || repo == j.SourceRepository {
+		// Named here, or not named at all: the tag is this repository's own.
+		if tag != "" {
+			out += ":" + tag
+		}
+	} else {
+		out += " (" + parentRef(j) + ")"
+	}
+
+	if j.Parent != nil && j.Parent.Shared {
+		out += " *"
+	}
+	return out
 }
 
 // jobTarget is the exact path a row WRITES TO.
 //
 // The destination repository is per job rather than per transfer: a bundle's
 // components each land in their own path under the target, reproducing the
-// source's structure, and one component may be published in two places at once
-// so the index that references it stays resolvable. Each row therefore names
-// its own destination rather than a shared one.
+// source's structure, and one component is often published in two places at
+// once — in the bundle's repository so the index referencing it stays
+// resolvable, and under its own name so it can be pulled as itself. Those are
+// two jobs over one digest, and each row names its own destination.
+//
+// The tags are the row's OWN, never the parent's. A relocated component is
+// deliberately left untagged in the bundle's repository — the name is not that
+// repository's to claim — and borrowing the parent's tag to fill the column
+// would advertise a reference the transfer is never going to create.
 func jobTarget(j v1.Job) string {
-	return jobPath(j.TargetRepository, artifactTag(j), false)
-}
-
-// jobPath assembles one side of a row into `repository:tag`.
-func jobPath(repository, tag string, shared bool) string {
-	if repository == "" {
+	if j.TargetRepository == "" {
 		return "-"
 	}
-	out := repository
-	if tag != "" {
-		out += ":" + tag
+	if len(j.TargetTags) == 0 {
+		return j.TargetRepository
 	}
-	if shared {
-		out += " *"
-	}
-	return out
+
+	tags := append([]string(nil), j.TargetTags...)
+	sort.Strings(tags)
+	return j.TargetRepository + ":" + strings.Join(tags, ",")
 }
 
-// artifactTag is the tag identifying what a row is part of.
-//
-// Two sources, in order. A manifest job carries the tags it will answer to
-// once pushed, which is the truth for that row. A blob carries none — blobs are
-// addressed by digest and never tagged — so it takes the tag of the artifact
-// referencing it, which is what makes "a layer of nginx:1.2.3" sayable.
-//
-// Tags are preserved unchanged by a transfer, so the same tag is correct on
-// both sides of the row.
-func artifactTag(j v1.Job) string {
-	if len(j.TargetTags) > 0 {
-		tags := append([]string(nil), j.TargetTags...)
-		sort.Strings(tags)
-		return strings.Join(tags, ",")
+// parentRef is the vendor's name for the artifact a row belongs to.
+func parentRef(j v1.Job) string {
+	if j.Parent == nil {
+		return ""
 	}
-	if j.Parent != nil {
-		return refTag(j.Parent.Ref)
-	}
-	return ""
+	return j.Parent.Ref
 }
 
-// refTag pulls the tag out of a reference like `orbs/CFX-5000-k8s/nginx:1.2.3`.
+// splitRef separates `orbs/CFX-5000-k8s/nginx:1.2.3` into path and tag.
 //
 // The colon has to come after the last slash to be a tag separator: a registry
 // host may carry a port, and `near.example.com:5000/orbs/x` is a path with no
 // tag in it at all.
-func refTag(ref string) string {
+func splitRef(ref string) (repository, tag string) {
 	i := strings.LastIndex(ref, ":")
 	if i < 0 || i < strings.LastIndex(ref, "/") {
-		return ""
+		return ref, ""
 	}
-	return ref[i+1:]
-}
-
-// sharedBlob reports that the artifact named for a row is one of several.
-//
-// A base layer shared by five images belongs to all of them, and the one shown
-// is an example. Marking it keeps the column honest without a column of its
-// own — the alternative is a reader concluding that deleting that one image
-// would remove the layer.
-func sharedBlob(j v1.Job) bool {
-	return j.Parent != nil && j.Parent.Shared
+	return ref[:i], ref[i+1:]
 }

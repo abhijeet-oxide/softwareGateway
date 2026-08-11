@@ -796,13 +796,22 @@ func SkipsTLSVerification(base Network, override *Network) bool {
 type Proxy struct {
 	HTTPSProxy string   `json:"httpsProxy,omitempty"`
 	NoProxy    []string `json:"noProxy,omitempty"`
-	// Direct ignores any inherited proxy and connects straight out.
+	// Direct ignores any inherited proxy and connects straight out —
+	// INCLUDING the environment's.
 	//
-	// Needed because a product-level proxy is INHERITED, and "everything goes
-	// through the corporate proxy except this one internal registry" is the
-	// normal shape. Without it the only way to express that is to repeat the
-	// registry's own hostname in noProxy at every level — which works, and is
-	// easy to get subtly wrong when the host has a port or an alias.
+	// Needed for two shapes. The first is "everything goes through the
+	// corporate proxy except this one internal registry": a product-level proxy
+	// is inherited, and without this the only way to say that is to repeat the
+	// registry's own hostname in noProxy at every level, which works and is easy
+	// to get subtly wrong when the host has a port or an alias.
+	//
+	// The second is the one that surprises people. Leaving the proxy block
+	// EMPTY does not mean "no proxy" — it falls back to HTTPS_PROXY from the
+	// process environment, as curl, docker and kubectl do. That default is
+	// right, since a cluster-wide proxy is often the only route out, but it is
+	// invisible: a registry we can reach directly gets proxied anyway, and the
+	// only symptom is throughput. This field is how a deployment says no and
+	// means it. transport.DescribeProxy logs which of the three applies.
 	Direct bool `json:"direct,omitempty"`
 }
 

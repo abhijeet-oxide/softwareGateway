@@ -14,37 +14,59 @@ import (
 // but the two are not separable in practice: an operator who cannot tell which
 // image a stuck blob belongs to cannot act on the fact that it is stuck.
 
-func TestJobPathsNameTheWholeThing(t *testing.T) {
-	job := v1.Job{
-		Kind:             "blob",
-		Digest:           "sha256:8a34bc1218e0dfa4ff0b1d9d0d0f2b3c4d5e6f708192a3b4c5d6e7f8091a2b3c",
-		SourceRepository: "orbs/cfx-5000-k8s",
-		TargetRepository: "sw-gateway/orbs/cfx-5000-k8s/nginx",
-		Parent: &v1.JobParent{
-			Digest: "sha256:aa",
-			Ref:    "orbs/CFX-5000-k8s/nginx:1.2.3",
-		},
+// A component that names itself somewhere else is the case the two-site
+// placement exists for, and the case a job row is most easily read wrongly:
+// it sits in the bundle's repository by DIGEST, and is published under its own
+// name separately. Neither column may imply a reference that does not resolve.
+func TestRelocatedComponentShowsItsNameNotAFabricatedTag(t *testing.T) {
+	source := "orbs/cfx-5000-k8s-215952-edgenac-25.7-2131"
+	parent := &v1.JobParent{
+		Digest: "sha256:aa",
+		Ref:    "cfx-5000-product/zts-docker-candidates.repo.example.net/seldon/tfserving-proxy:1.22.4",
 	}
 
-	if got, want := jobSource(job), "orbs/cfx-5000-k8s:1.2.3"; got != want {
-		t.Errorf("source = %q, want %q", got, want)
+	// The site that keeps the bundle resolvable: untagged, by construction.
+	inBundle := v1.Job{
+		Kind:             "blob",
+		SourceRepository: source,
+		TargetRepository: "apm-oci-stage/" + source,
+		Parent:           parent,
 	}
-	if got, want := jobTarget(job), "sw-gateway/orbs/cfx-5000-k8s/nginx:1.2.3"; got != want {
+	wantSource := source +
+		" (cfx-5000-product/zts-docker-candidates.repo.example.net/seldon/tfserving-proxy:1.22.4)"
+	if got := jobSource(inBundle); got != wantSource {
+		t.Errorf("source = %q, want %q", got, wantSource)
+	}
+	if got, want := jobTarget(inBundle), "apm-oci-stage/"+source; got != want {
+		t.Errorf("target = %q, want %q\n(a tag here advertises one the transfer never creates)", got, want)
+	}
+
+	// The site published under the component's own name: tagged, and the tag
+	// is the row's own rather than borrowed.
+	asItself := inBundle
+	asItself.TargetRepository =
+		"apm-oci-stage/cfx-5000-product/zts-docker-candidates.repo.example.net/seldon/tfserving-proxy"
+	asItself.TargetTags = []string{"1.22.4"}
+	if got, want := jobTarget(asItself), asItself.TargetRepository+":1.22.4"; got != want {
 		t.Errorf("target = %q, want %q", got, want)
 	}
 }
 
-func TestJobPathsPreferTheRowsOwnTags(t *testing.T) {
-	// A manifest knows the names it will answer to. Those beat the parent's,
-	// which for a manifest job is usually itself anyway.
+// Where the name DOES belong to the repository the row reads from, the tag is
+// a reference that resolves, so it is shown as one.
+func TestNameWithinItsOwnRepositoryReadsAsAReference(t *testing.T) {
 	job := v1.Job{
 		Kind:             "manifest",
 		SourceRepository: "orbs/cfx-5000-k8s",
-		TargetRepository: "sw-gateway/orbs/cfx-5000-k8s/nginx",
-		TargetTags:       []string{"latest", "1.2.3"},
+		TargetRepository: "sw-gateway/orbs/cfx-5000-k8s",
+		TargetTags:       []string{"latest", "orb_23.8.1076"},
+		Parent:           &v1.JobParent{Ref: "orbs/cfx-5000-k8s:orb_23.8.1076"},
 	}
 
-	if got, want := jobTarget(job), "sw-gateway/orbs/cfx-5000-k8s/nginx:1.2.3,latest"; got != want {
+	if got, want := jobSource(job), "orbs/cfx-5000-k8s:orb_23.8.1076"; got != want {
+		t.Errorf("source = %q, want %q", got, want)
+	}
+	if got, want := jobTarget(job), "sw-gateway/orbs/cfx-5000-k8s:latest,orb_23.8.1076"; got != want {
 		t.Errorf("target = %q, want %q", got, want)
 	}
 }
@@ -53,8 +75,8 @@ func TestSharedBlobIsMarkedNotHidden(t *testing.T) {
 	job := v1.Job{
 		Kind:             "blob",
 		SourceRepository: "orbs/cfx-5000-k8s",
-		TargetRepository: "sw-gateway/orbs/cfx-5000-k8s/nginx",
-		Parent:           &v1.JobParent{Ref: "orbs/x/nginx:1.2.3", Shared: true},
+		TargetRepository: "sw-gateway/orbs/cfx-5000-k8s",
+		Parent:           &v1.JobParent{Ref: "orbs/cfx-5000-k8s:1.2.3", Shared: true},
 	}
 
 	if got, want := jobSource(job), "orbs/cfx-5000-k8s:1.2.3 *"; got != want {
@@ -62,7 +84,7 @@ func TestSharedBlobIsMarkedNotHidden(t *testing.T) {
 	}
 	// The mark belongs to the attribution, which is a source-side fact. The
 	// destination path is exact either way.
-	if got, want := jobTarget(job), "sw-gateway/orbs/cfx-5000-k8s/nginx:1.2.3"; got != want {
+	if got, want := jobTarget(job), "sw-gateway/orbs/cfx-5000-k8s"; got != want {
 		t.Errorf("target = %q, want %q", got, want)
 	}
 }
@@ -81,16 +103,18 @@ func TestJobPathsSayNothingRatherThanGuess(t *testing.T) {
 	}
 }
 
-func TestRefTagIgnoresARegistryPort(t *testing.T) {
-	cases := map[string]string{
-		"orbs/CFX-5000-k8s/nginx:1.2.3": "1.2.3",
-		"near.example.com:5000/orbs/x":  "",
-		"orbs/x":                        "",
-		"":                              "",
+func TestSplitRefIgnoresARegistryPort(t *testing.T) {
+	cases := []struct{ ref, repository, tag string }{
+		{"orbs/CFX-5000-k8s/nginx:1.2.3", "orbs/CFX-5000-k8s/nginx", "1.2.3"},
+		{"near.example.com:5000/orbs/x", "near.example.com:5000/orbs/x", ""},
+		{"orbs/x", "orbs/x", ""},
+		{"", "", ""},
 	}
-	for ref, want := range cases {
-		if got := refTag(ref); got != want {
-			t.Errorf("refTag(%q) = %q, want %q", ref, got, want)
+	for _, c := range cases {
+		repo, tag := splitRef(c.ref)
+		if repo != c.repository || tag != c.tag {
+			t.Errorf("splitRef(%q) = %q, %q, want %q, %q",
+				c.ref, repo, tag, c.repository, c.tag)
 		}
 	}
 }

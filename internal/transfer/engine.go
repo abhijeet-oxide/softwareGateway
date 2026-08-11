@@ -81,6 +81,13 @@ type Job struct {
 	// batch so resolving sixteen jobs costs zero extra calls.
 	KnownPlacement bool
 
+	// MountFrom is a repository on the TARGET registry already holding this
+	// digest, so it can be relocated server-side instead of streamed.
+	//
+	// Advisory, and empty is ordinary. A registry that declines simply falls
+	// through to streaming, which is always correct.
+	MountFrom string
+
 	// Tags are what this manifest must be called at the destination.
 	//
 	// Plural because a bundle's components each carry their own name, and one
@@ -191,9 +198,10 @@ func (e *Engine) runBlob(ctx context.Context, job Job, progress ProgressFunc) Re
 		return e.failed(err, "stat blob at destination")
 	}
 
-	// 3. Same registry? Ask it to relocate the blob server-side. Zero bytes
-	// over the wire regardless of size — the dominant optimization for
-	// promotion, where a 45 GB move can complete in seconds.
+	// 3. Ask the registry to relocate the blob server-side. Zero bytes over the
+	// wire regardless of size — the dominant optimization for promotion, where
+	// a 45 GB move can complete in seconds, and the difference between a
+	// bundle's shared components costing their size once or twice.
 	if mounted := e.tryMount(ctx, job, dgst); mounted != nil {
 		return *mounted
 	}
@@ -214,27 +222,59 @@ func (e *Engine) runBlob(ctx context.Context, job Job, progress ProgressFunc) Re
 // a transfer. A 202 Accepted means the registry declined and opened an
 // ordinary upload session instead — a NORMAL outcome, not an error, and the
 // reason support being uneven in practice costs nothing here.
+//
+// # Two places a blob may already be, and only one of them used to be tried
+//
+// The obvious one is the SOURCE repository, when source and target happen to
+// share a registry. That is the promotion case, and it was all this did.
+//
+// The one that was missing is a SIBLING repository on the target registry.
+// Replication from a vendor never satisfies the first test — the vendor's
+// registry is not ours — so a bundle's components, which are published both
+// inside the bundle and under their own name, were streamed from the vendor
+// twice. Same digest, two destination repositories, two full copies over the
+// WAN, for content the destination registry already held and could relocate in
+// one request. The Coordinator resolves that sibling at lease time.
+//
+// Sibling first: it is the one that is nearly always available in the case that
+// costs the most, and both are a single request that either works or does not.
 func (e *Engine) tryMount(ctx context.Context, job Job, dgst registry.Digest) *Result {
-	if !sameRegistry(job.Source, job.Target) {
-		return nil
-	}
 	if !job.Target.Capabilities(ctx).SupportsMount {
 		return nil
 	}
 
-	switch err := job.Target.MountBlob(ctx, dgst, job.Source.Path()); {
+	if job.MountFrom != "" {
+		if res := e.mountFrom(ctx, job, dgst, job.MountFrom); res != nil {
+			return res
+		}
+	}
+	if sameRegistry(job.Source, job.Target) {
+		if res := e.mountFrom(ctx, job, dgst, job.Source.Path()); res != nil {
+			return res
+		}
+	}
+	return nil
+}
+
+// mountFrom asks the destination registry to relocate a blob from one of its
+// own repositories, returning nil for every outcome that means "stream it".
+func (e *Engine) mountFrom(
+	ctx context.Context, job Job, dgst registry.Digest, from string,
+) *Result {
+	switch err := job.Target.MountBlob(ctx, dgst, from); {
 	case err == nil:
 		return &Result{Outcome: OutcomeSkipped, SkipReason: SkipMounted, Placed: true}
 	case errors.Is(err, registry.ErrMountUnsupported),
 		errors.Is(err, registry.ErrUnsupported),
 		errors.Is(err, registry.ErrNotFound):
 		// Declined with a 202 and an ordinary upload session, unsupported, or
-		// the source repository does not hold it after all. Streaming is
-		// always correct, so fall through rather than fail.
+		// that repository does not hold it after all — a placement is evidence,
+		// not proof. Streaming is always correct, so fall through rather than
+		// fail.
 		return nil
 	default:
 		e.log.DebugContext(ctx, "mount failed; falling back to streaming",
-			"job", job.ID, "digest", dgst.Short(), "error", err)
+			"job", job.ID, "digest", dgst.Short(), "from", from, "error", err)
 		return nil
 	}
 }

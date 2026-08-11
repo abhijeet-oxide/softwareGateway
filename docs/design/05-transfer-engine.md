@@ -79,8 +79,10 @@ Four fast paths, ordered cheapest-first. A job takes the first that applies.
       skipped│                  ▼ 404
   exists_at_ │   ┌──────────────────────────────┐
       target │   │ 3. cross-repo MOUNT          │  0 bytes, 1 RPC
+             │   │    a. sibling dest repository│
+             │   │    b. source, if same registry│
              ├───└──────────────┬───────────────┘
-      skipped│                  ▼ not same registry / 202 fallback
+      skipped│                  ▼ nothing nearby holds it / 202 fallback
       mounted│   ┌──────────────────────────────┐
              │   │ 4. STREAM source -> dest     │  N bytes
              └───└──────────────────────────────┘
@@ -101,18 +103,26 @@ The placement set is shipped to the worker **in the lease response** rather than
 
 ### 4.2 Cross-repository mount
 
-When origin and destination are on the **same registry**, OCI Distribution allows a server-side relocation:
+Where the destination registry **already holds the blob in another of its own repositories**, OCI Distribution allows a server-side relocation:
 
 ```http
-POST /v2/<dst-repo>/blobs/uploads/?mount=<digest>&from=<src-repo>
+POST /v2/<dst-repo>/blobs/uploads/?mount=<digest>&from=<other-repo>
 ```
 
 - `201 Created` — mounted. **Zero bytes over the wire**, regardless of blob size.
 - `202 Accepted` — the registry declined and opened a normal upload session instead. Fall through to streaming, reusing the session it just handed us.
 
-This is the dominant optimization for **promotion** (lab → production within one internal registry), where a 45 GB promotion can complete in seconds. It applies to replication only when a vendor happens to share a registry with us, which is rare.
+There are **two** repositories worth trying, and they cover different cases:
 
-Support is uneven in practice, which is why `202` is treated as a normal outcome and not an error, and why the mount attempt is skipped entirely for registries known not to support it ([06](06-registry-abstraction.md) §6).
+1. **A sibling destination repository.** A bundle's components are published twice — inside the bundle so its index resolves, and under their own name so they can be pulled as themselves ([§ layout](../../internal/transfer/layout.go)). One digest, two destination repositories, two jobs. The Coordinator resolves a sibling that already holds the digest and ships its path in the lease as `mountFromRepository`, so the second job relocates rather than transfers.
+
+2. **The source repository**, when source and destination share a registry. This is the **promotion** case (lab → production within one internal registry), where a 45 GB promotion can complete in seconds.
+
+Only the second existed at first, and its test — "not the same registry, so do not mount" — passes for every replication from a vendor. So the first copy of a relocated component streamed and the second streamed as well, doubling the WAN cost of nearly every ORB. It is worth being precise about how that hid: both jobs are correct, both report success, the transfer completes, and the only symptom is duration. `TestBundleFetchesEachBlobFromTheVendorOnce` asserts the vendor serves each blob once, because nothing else would notice.
+
+Concurrent duplicate suppression ([04](04-queue-and-scheduling.md) §5) is what makes case 1 fire at all: the two jobs are created consecutively and would otherwise be leased in the same batch and stream simultaneously, before either had placed anything for the other to mount. It is therefore keyed by **registry**, not by repository.
+
+Support is uneven in practice, which is why `202` is treated as a normal outcome and not an error, and why the mount attempt is skipped entirely for registries known not to support it ([06](06-registry-abstraction.md) §6). A mount that fails for any reason falls through to streaming, which is always correct.
 
 ### 4.3 Streaming — the core loop
 

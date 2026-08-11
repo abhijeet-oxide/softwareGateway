@@ -114,11 +114,25 @@ func (c *Clients) For(e v1.JobEndpoint) (registry.Repository, error) {
 	sharedKey := e.Product + "|" + e.Registry
 	sh, ok := c.shared[sharedKey]
 	if !ok {
-		sh, err = transport.NewShared(sharedTransport(cfg))
+		shared := sharedTransport(cfg)
+		sh, err = transport.NewShared(shared)
 		if err != nil {
 			return nil, fmt.Errorf("transport for %s: %w", e.Registry, err)
 		}
 		c.shared[sharedKey] = sh
+
+		// Said out loud, once per registry, because it is otherwise invisible.
+		// An unset `httpsProxy` reads as "no proxy" and actually means "whatever
+		// the environment says", and a corporate proxy picked up that way is a
+		// throughput problem with no symptom in the configuration or the logs —
+		// it cost a real transfer most of its bandwidth before anyone thought to
+		// look. Connections is here too because it is the other number that
+		// silently decides how fast this goes.
+		c.log.Info("registry transport",
+			"registry", e.Registry, "product", e.Product,
+			"proxy", transport.DescribeProxy(shared),
+			"maxConnections", shared.MaxConnections,
+			"requestsPerSecond", shared.RequestsPerSecond)
 	}
 	cfg.Shared = sh
 	cfg.Logger = c.log

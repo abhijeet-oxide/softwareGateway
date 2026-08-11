@@ -306,6 +306,39 @@ func tlsConfigFor(cfg Config) (*tls.Config, error) {
 	return base, nil
 }
 
+// DescribeProxy says what will actually happen to this config's requests.
+//
+// It exists because the inherit-the-environment default is INVISIBLE, and that
+// cost real time to diagnose: a transfer ran at a fraction of the available
+// bandwidth because every blob was going through a corporate proxy nobody had
+// configured here. `httpsProxy` was unset, so the configuration read as "no
+// proxy" — while HTTPS_PROXY in the worker's environment quietly supplied one.
+//
+// Inheriting is still the right default: it is what curl, docker, kubectl and
+// every Go program do, and a cluster-wide proxy is often the only route out.
+// Being silent about it was the mistake. The caller logs this once per
+// registry, so the answer to "am I going through a proxy?" is in the log rather
+// than in someone's memory of how Go resolves proxies.
+func DescribeProxy(cfg Config) string {
+	switch {
+	case cfg.DirectConnect:
+		return "direct (proxy.direct is set; the environment's proxy is ignored)"
+	case cfg.HTTPSProxy != "":
+		return "configured " + cfg.HTTPSProxy
+	}
+
+	// Ask the environment the same question the transport will ask it, rather
+	// than reading the variables ourselves: httpproxy honours HTTPS_PROXY,
+	// https_proxy, NO_PROXY and the lowercase spellings, and a hand-rolled
+	// check would disagree with the transport in exactly the cases that matter.
+	probe := &http.Request{URL: &url.URL{Scheme: "https", Host: cfg.Registry}}
+	if u, err := http.ProxyFromEnvironment(probe); err == nil && u != nil {
+		return "environment " + u.String() +
+			" (nothing is configured for this registry; set proxy.direct to bypass it)"
+	}
+	return "direct (no proxy configured and none in the environment)"
+}
+
 func proxyFor(cfg Config) (func(*http.Request) (*url.URL, error), error) {
 	if cfg.DirectConnect {
 		// Explicitly direct: not even the environment's proxy applies. A

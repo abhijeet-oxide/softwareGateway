@@ -304,7 +304,13 @@ func (c *Calibrator) Run(ctx context.Context, p *product.Product, opts Options) 
 		StartedAt:    started,
 	}
 
-	rep.Source, rep.Notes = c.measureSource(ctx, src, opts, rep.Notes)
+	rep.Source, rep.Notes = c.measureSource(ctx, &src, opts, rep.Notes)
+
+	// The target probe writes to base + the source path the read probe settled
+	// on, which is a path a transfer genuinely uses. Deriving it here — after
+	// the source is known — is why the two halves are not independent.
+	tgt.cfg.Repository = writeProbePath(tgt, src.cfg.Repository)
+
 	if opts.Write {
 		rep.Target, rep.Notes = c.measureTarget(ctx, tgt, opts, rep.Notes)
 	} else {
@@ -325,7 +331,7 @@ func (c *Calibrator) Run(ctx context.Context, p *product.Product, opts Options) 
 // measureSource probes the read half: route, latency, and a concurrency sweep
 // over real blobs.
 func (c *Calibrator) measureSource(
-	ctx context.Context, s endpoint, opts Options, notes []string,
+	ctx context.Context, s *endpoint, opts Options, notes []string,
 ) (SideReport, []string) {
 	out := SideReport{
 		Role: string(product.RoleSource), Name: s.name,
@@ -333,10 +339,21 @@ func (c *Calibrator) measureSource(
 		Route: describeRoute(s.cfg),
 	}
 
-	samples, err := collectSamples(ctx, s.cfg, opts.SourceRepository)
+	samples, chosen, err := collectSamples(ctx, s.cfg, s.candidates)
 	if err != nil {
 		out.Skipped = "no blob could be found to read: " + err.Error()
 		return out, notes
+	}
+
+	// The repository the search settled on, which is not necessarily the one it
+	// started with. Recorded on the endpoint as well as the report, because the
+	// target probe derives its own path from it.
+	s.cfg.Repository = chosen
+	out.Repository = chosen
+	if len(s.candidates) > 1 {
+		notes = append(notes, fmt.Sprintf(
+			"the source spans %d repositories; %s was measured. Use --source-repository "+
+				"to measure a different one", len(s.candidates), chosen))
 	}
 	if n := len(samples); n < 2 {
 		notes = append(notes, fmt.Sprintf(

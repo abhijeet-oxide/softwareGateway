@@ -23,6 +23,7 @@ type calibrateOptions struct {
 	budget      time.Duration
 	noWrite     bool
 	bundleSize  string
+	assumeYes   bool
 }
 
 func newCalibrateCommand() *cobra.Command {
@@ -41,6 +42,10 @@ func newCalibrateCommand() *cobra.Command {
 			"pushes bytes into it and then cancels it, so no blob is committed and\n" +
 			"no tag, manifest or blob appears in the target. Use --no-write to skip\n" +
 			"it anyway, at the cost of only measuring the read half.\n\n" +
+			"A product spans many repositories and only one is measured, so the\n" +
+			"command shows which — chosen from the largest package discovery has\n" +
+			"found — and asks before it starts. --source-repository names one\n" +
+			"instead; -y skips the question.\n\n" +
 			"This is real load on both registries for a few minutes. It is not\n" +
 			"something to run on a schedule, and it is not `products check`.",
 		RunE: func(cmd *cobra.Command, args []string) error {
@@ -53,10 +58,34 @@ func newCalibrateCommand() *cobra.Command {
 				return err
 			}
 
+			client := newClient()
+
+			// Resolved and CONFIRMED before anything expensive runs. A
+			// calibration measures one repository out of many and loads two
+			// registries for minutes; both of those are worth a person's
+			// glance first.
+			plan, err := resolvePlan(cmd.Context(), client, os.Stdin, os.Stderr, args[0], o)
+			if err != nil {
+				return err
+			}
+
+			estimated := humanDuration(estimatedRuntime(levels, o.budget, !o.noWrite))
+			ok, err := confirm(os.Stdin, os.Stderr, plan, o, levels, estimated, o.assumeYes)
+			if err != nil {
+				return err
+			}
+			if !ok {
+				fmt.Fprintln(os.Stderr, "Cancelled; nothing was measured.")
+				return nil
+			}
+
 			req := v1.CalibrateRequest{
-				Source:           o.from,
-				Target:           o.to,
-				SourceRepository: o.repository,
+				// Sent explicitly, even where the server would have resolved
+				// the same thing: what was confirmed is what must be measured,
+				// and a default re-evaluated at the far end could differ.
+				Source:           plan.source.Name,
+				Target:           plan.target.Name,
+				SourceRepository: plan.repository,
 				Levels:           levels,
 				Write:            boolPtr(!o.noWrite),
 			}
@@ -71,11 +100,9 @@ func newCalibrateCommand() *cobra.Command {
 			// silent for minutes by design, and a terminal that has printed
 			// nothing for four minutes is indistinguishable from one that has
 			// hung.
-			fmt.Fprintf(os.Stderr,
-				"Calibrating %s. This moves real data and takes about %s.\n",
-				args[0], humanDuration(estimatedRuntime(levels, o.budget, !o.noWrite)))
+			fmt.Fprintf(os.Stderr, "Measuring — about %s.\n\n", estimated)
 
-			resp, err := newClient().Calibrate(cmd.Context(), args[0], req)
+			resp, err := client.Calibrate(cmd.Context(), args[0], req)
 			if err != nil {
 				return err
 			}
@@ -99,6 +126,8 @@ func newCalibrateCommand() *cobra.Command {
 		"skip the target probe, measuring only the read half")
 	cmd.Flags().StringVar(&o.bundleSize, "bundle-size", "",
 		"project the measured ceiling onto a transfer of this size, e.g. 30GiB")
+	cmd.Flags().BoolVarP(&o.assumeYes, "yes", "y", false,
+		"do not ask for confirmation before measuring")
 
 	// The default 30 seconds is not close: the sweep alone is the budget times
 	// the number of levels, per side.

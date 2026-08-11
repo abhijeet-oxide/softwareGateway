@@ -225,6 +225,17 @@ func inheritedRepository(containerOf []string, parent int, fallback string) stri
 // With a base, the source structure is nested underneath it verbatim. Without
 // one, it is mirrored at the registry root. Either way the source's own shape
 // is preserved — the base only decides what sits above it.
+// DestinationPath is where content from one source repository lands.
+//
+// Exported because calibration has to probe the SAME path a transfer writes
+// to. Probing the target's configured base directly does not work and is not a
+// near miss: a base path is a prefix, not an image repository, so an upload
+// session opened against it comes back 404 from a registry that is working
+// perfectly. One function, so a probe cannot measure a path no transfer uses.
+func DestinationPath(base, sourceRepo string) string {
+	return destinationPath(base, sourceRepo)
+}
+
 func destinationPath(base, sourceRepo string) string {
 	base = strings.Trim(strings.TrimSpace(base), "/")
 	sourceRepo = strings.Trim(strings.TrimSpace(sourceRepo), "/")

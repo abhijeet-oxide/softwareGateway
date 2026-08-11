@@ -3,6 +3,7 @@ package main
 import (
 	"fmt"
 	"io"
+	"sort"
 	"strings"
 
 	"github.com/spf13/cobra"
@@ -386,11 +387,13 @@ func newTransfersJobsCommand() *cobra.Command {
 				}
 
 				tw := newTabWriter(w)
-				fmt.Fprintln(tw, "WAVE\tKIND\tDIGEST\tSIZE\tSTATE\tMOVED\tATTEMPTS\tDETAIL")
+				fmt.Fprintln(tw,
+					"WAVE\tKIND\tBELONGS TO\tDIGEST\tSIZE\tSTATE\tMOVED\tATTEMPTS\tDETAIL")
 				for _, j := range jobs {
-					fmt.Fprintf(tw, "%d\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n",
+					fmt.Fprintf(tw, "%d\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n",
 						j.Wave,
 						j.Kind,
+						belongsTo(j),
 						shortDigest(j.Digest),
 						humanBytes(j.SizeBytes),
 						strings.ToLower(string(j.State)),
@@ -403,7 +406,24 @@ func newTransfersJobsCommand() *cobra.Command {
 					return err
 				}
 
+				// The paths, once, rather than repeated on every row: a
+				// transfer usually spreads over a handful of repositories and
+				// a column of near-identical paths would push everything else
+				// off the screen.
 				fmt.Fprintln(w)
+				fmt.Fprintln(w, "Copying")
+				rw := newTabWriter(w)
+				for _, route := range routesOf(jobs) {
+					fmt.Fprintf(rw, "  %s\t->\t%s\t%s\n",
+						route.from, route.to, route.tags)
+				}
+				if err := rw.Flush(); err != nil {
+					return err
+				}
+
+				fmt.Fprintln(w)
+				fmt.Fprintln(w, "BELONGS TO is the image, chart or artifact a blob is part of — a `*` marks")
+				fmt.Fprintln(w, "content shared by several, so the one named is an example.")
 				fmt.Fprintln(w, "A `skipped` job is a success carrying zero bytes: the content was already")
 				fmt.Fprintln(w, "at the destination, or the registry relocated it server-side.")
 				return nil
@@ -482,4 +502,85 @@ func shortID(id string) string {
 		return id[:12]
 	}
 	return id
+}
+
+// belongsTo names the artifact a job is part of.
+//
+// A digest identifies content and nothing else. What a person needs in a
+// listing is which image, chart or bundle it belongs to, and the vendor
+// already wrote that down: `org.opencontainers.image.ref.name` on the manifest
+// that references it. Where the vendor named nothing — the platform manifests
+// under an index — the parent's short digest is still better than nothing,
+// because it groups the rows that travel together.
+func belongsTo(j v1.Job) string {
+	if j.Parent == nil {
+		return "-"
+	}
+
+	name := j.Parent.Ref
+	if name == "" {
+		name = shortDigest(j.Parent.Digest)
+	}
+	// Its own manifest job: the row IS the artifact, so saying it belongs to
+	// itself would be noise.
+	if j.Kind == "manifest" && j.Parent.Digest == j.Digest && j.Parent.Ref == "" {
+		return "(itself)"
+	}
+	if j.Parent.Shared {
+		name += " *"
+	}
+	return name
+}
+
+// route is one source-to-destination pair a transfer touches.
+type route struct{ from, to, tags string }
+
+// routesOf collapses the jobs onto the distinct paths they move between.
+//
+// A bundle spreads over several repositories and every job repeats its pair,
+// so listing them per row would be a column of near-identical strings. Listed
+// once, they answer "what is going where" directly.
+func routesOf(jobs []v1.Job) []route {
+	index := map[string]int{}
+	var out []route
+	// Tags accumulate ACROSS the jobs of a route rather than being taken from
+	// whichever appeared first: only manifest jobs carry them, so the first
+	// job of a route is usually a blob with none, and the route would read as
+	// untagged when it is not.
+	tags := map[string]map[string]bool{}
+
+	for _, j := range jobs {
+		if j.SourceRepository == "" && j.TargetRepository == "" {
+			continue
+		}
+		key := j.SourceRepository + "->" + j.TargetRepository
+
+		if _, ok := index[key]; !ok {
+			index[key] = len(out)
+			out = append(out, route{
+				from: dash(j.SourceRepository), to: dash(j.TargetRepository),
+			})
+			tags[key] = map[string]bool{}
+		}
+		for _, tag := range j.TargetTags {
+			tags[key][tag] = true
+		}
+	}
+
+	for key, i := range index {
+		names := make([]string, 0, len(tags[key]))
+		for tag := range tags[key] {
+			names = append(names, ":"+tag)
+		}
+		sort.Strings(names)
+		out[i].tags = strings.Join(names, " ")
+	}
+
+	sort.Slice(out, func(a, b int) bool {
+		if out[a].from != out[b].from {
+			return out[a].from < out[b].from
+		}
+		return out[a].to < out[b].to
+	})
+	return out
 }

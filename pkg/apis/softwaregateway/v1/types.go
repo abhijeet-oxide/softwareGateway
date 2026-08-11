@@ -928,6 +928,29 @@ type Job struct {
 	LeaseOwner       string      `json:"leaseOwner,omitempty"`
 	LastError        string      `json:"lastError,omitempty"`
 	LastErrorClass   string      `json:"lastErrorClass,omitempty"`
+
+	// Where this job reads from and writes to.
+	SourceRepository string   `json:"sourceRepository,omitempty"`
+	TargetRepository string   `json:"targetRepository,omitempty"`
+	TargetTags       []string `json:"targetTags,omitempty"`
+
+	// Parent is the artifact this job belongs to — what makes a digest
+	// legible. A blob on its own is not something anybody can recognise; the
+	// image or chart that references it is.
+	Parent *JobParent `json:"parent,omitempty"`
+}
+
+// JobParent identifies the artifact a job belongs to.
+type JobParent struct {
+	Digest    string `json:"digest"`
+	MediaType string `json:"mediaType,omitempty"`
+	// Ref is the vendor's own name for it, from
+	// org.opencontainers.image.ref.name — `orbs/CFX-5000-k8s/nginx:1.2.3`.
+	Ref string `json:"ref,omitempty"`
+	// Shared reports that several artifacts reference this blob, so the
+	// attribution is an example rather than the whole truth. A base layer
+	// shared by five images belongs to all of them.
+	Shared bool `json:"shared,omitempty"`
 }
 
 // ListJobsResponse is GET /api/v1/transfers/{transfer}/jobs.

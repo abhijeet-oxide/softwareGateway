@@ -220,3 +220,99 @@ func assertTagged(t *testing.T, s *slice, repository, tag, digest string) {
 		t.Errorf("%s:%s resolves to %s, want %s", repository, tag, got, digest)
 	}
 }
+
+// A digest identifies content and nothing else. What an operator needs from a
+// job listing is which image, chart or bundle it is part of — and for a blob
+// that is not in the job at all, it is in the manifest that references it.
+func TestJobsSayWhatEachBlobBelongsTo(t *testing.T) {
+	s := newSlice(t)
+
+	pkg, components := seedORB(t, s, "orb_23.8.1076")
+	s.plan(pkg, "orb-attribution")
+
+	jobs, err := s.packages.ListJobs(t.Context(), "orb-attribution", "", 500)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(jobs) == 0 {
+		t.Fatal("the transfer planned no jobs")
+	}
+
+	// Index what the bundle called each component, so a blob's attribution can
+	// be checked against the name the vendor actually published.
+	wantRef := map[string]string{}
+	for _, c := range components {
+		wantRef[c.digest] = c.refName
+	}
+
+	var blobs, attributed, named int
+	for _, j := range jobs {
+		if j.Kind != "blob" {
+			continue
+		}
+		blobs++
+		if j.ParentDigest == "" {
+			t.Errorf("blob %s belongs to nothing: a bare digest is not actionable", j.Digest)
+			continue
+		}
+		attributed++
+
+		if ref, ok := wantRef[j.ParentDigest]; ok {
+			named++
+			if j.ParentRef != ref {
+				t.Errorf("blob %s is attributed to %q, want %q",
+					j.Digest, j.ParentRef, ref)
+			}
+		}
+	}
+
+	if blobs == 0 {
+		t.Fatal("no blob jobs were planned")
+	}
+	if attributed != blobs {
+		t.Errorf("%d of %d blobs have no parent", blobs-attributed, blobs)
+	}
+	// The components carry ref.name, so at least some blobs must resolve to a
+	// vendor-published name rather than only to a digest.
+	if named == 0 {
+		t.Error("no blob resolved to a name the vendor published")
+	}
+}
+
+// Every job has to say where it reads from and writes to, because a bundle
+// spreads across several repositories and "which one is this" is otherwise
+// unanswerable from a listing.
+func TestJobsCarryTheirSourceAndDestination(t *testing.T) {
+	s := newSlice(t)
+
+	pkg, _ := seedORB(t, s, "orb_23.8.1076")
+	s.plan(pkg, "orb-routes")
+
+	jobs, err := s.packages.ListJobs(t.Context(), "orb-routes", "", 500)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	destinations := map[string]bool{}
+	for _, j := range jobs {
+		if j.SourceRepository != sourcePath {
+			t.Errorf("job %d reads from %q, want %q", j.ID, j.SourceRepository, sourcePath)
+		}
+		if j.TargetRepository == "" {
+			t.Errorf("job %d does not say where it writes to", j.ID)
+			continue
+		}
+		destinations[j.TargetRepository] = true
+	}
+
+	// A bundle whose components carry their own names lands in more than one
+	// destination repository, and the listing has to show that rather than
+	// implying everything goes to one place.
+	if len(destinations) < 2 {
+		t.Errorf("jobs name %d destination(s) %v, want several — the components are "+
+			"published under their own names", len(destinations), destinations)
+	}
+	if !destinations[targetPath] {
+		t.Errorf("no job targets the bundle's own repository %s", targetPath)
+	}
+}

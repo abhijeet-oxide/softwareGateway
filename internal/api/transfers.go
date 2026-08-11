@@ -210,6 +210,13 @@ func (s *Server) handleListTransferJobs(w http.ResponseWriter, r *http.Request) 
 
 	out := v1.ListJobsResponse{TransferID: id, Jobs: make([]v1.Job, 0, len(jobs))}
 	for _, j := range jobs {
+		var parent *v1.JobParent
+		if j.ParentDigest != "" {
+			parent = &v1.JobParent{
+				Digest: j.ParentDigest, MediaType: j.ParentMediaType,
+				Ref: j.ParentRef, Shared: j.ParentShared,
+			}
+		}
 		out.Jobs = append(out.Jobs, v1.Job{
 			ID:               strconv.FormatInt(j.ID, 10),
 			Kind:             j.Kind,
@@ -224,6 +231,10 @@ func (s *Server) handleListTransferJobs(w http.ResponseWriter, r *http.Request) 
 			LeaseOwner:       j.LeaseOwner,
 			LastError:        j.LastError,
 			LastErrorClass:   j.LastErrorClass,
+			SourceRepository: j.SourceRepository,
+			TargetRepository: j.TargetRepository,
+			TargetTags:       j.TargetTags,
+			Parent:           parent,
 		})
 	}
 	WriteJSON(w, r, http.StatusOK, out)

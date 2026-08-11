@@ -69,6 +69,7 @@ func (r *resolverImpl) Destinations(
 		}
 		out = append(out, transfer.Destination{
 			RepositoryID: id, Name: t.Name, Repository: t.Repository,
+			Registry: t.Registry, Type: string(t.Type),
 		})
 	}
 	return out, nil

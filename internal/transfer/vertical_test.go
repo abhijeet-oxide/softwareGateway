@@ -5,6 +5,7 @@ import (
 	"io"
 	"log/slog"
 	"path/filepath"
+	"slices"
 	"testing"
 
 	"github.com/abhijeet-oxide/softwareGateway/internal/queue"
@@ -43,8 +44,15 @@ type slice struct {
 }
 
 const (
-	sourcePath = "vendor/suite"
-	targetPath = "mirror/vendor/suite"
+	// Shaped like a real vendor bundle rather than a toy: NEAR publishes every
+	// product under an `orbs/` namespace, and the destination has to reproduce
+	// that rather than flatten it.
+	sourcePath = "orbs/CFX-5000-k8s"
+	// targetBase is the target's configured `repository`: a PREFIX, not the
+	// destination. The source's structure is reproduced beneath it, so the
+	// package itself lands at targetBase + "/" + sourcePath.
+	targetBase = "nokia-lab"
+	targetPath = targetBase + "/" + sourcePath
 )
 
 // newSlice wires a Coordinator and a worker against two registries.
@@ -93,7 +101,7 @@ func newSliceOn(t *testing.T, src, dst *fakeregistry.Registry) *slice {
 	s.productID, _ = res.LastInsertId()
 
 	s.sourceID = s.repo("source", src.Host(), sourcePath)
-	s.targetID = s.repo("target", dst.Host(), targetPath)
+	s.targetID = s.repo("target", dst.Host(), targetBase)
 	return s
 }
 
@@ -156,6 +164,13 @@ func (s *slice) seedPackage(tag string) store.PackageRow {
 		s.t.Fatal(err)
 	}
 	rootDigest := s.src.AddManifest(sourcePath, tag, raw, registry.MediaTypeOCIIndex)
+	return s.recordPackage(tag, rootDigest, 3)
+}
+
+// recordPackage writes the package row the way DISCOVERY would: the root
+// fetched, its children listed but not walked.
+func (s *slice) recordPackage(tag, rootDigest string, artifacts int) store.PackageRow {
+	s.t.Helper()
 
 	tx, err := s.st.DB().BeginTx(s.t.Context(), nil)
 	if err != nil {
@@ -165,7 +180,8 @@ func (s *slice) seedPackage(tag string) store.PackageRow {
 
 	id, err := s.packages.InsertPackage(s.t.Context(), tx, store.PackageRow{
 		ProductID: s.productID, SourceRepoID: s.sourceID, Tag: tag,
-		ManifestDigest: rootDigest, MediaType: registry.MediaTypeOCIIndex, ArtifactCount: 3,
+		ManifestDigest: rootDigest, MediaType: registry.MediaTypeOCIIndex,
+		ArtifactCount: artifacts,
 	})
 	if err != nil {
 		s.t.Fatal(err)
@@ -179,6 +195,30 @@ func (s *slice) seedPackage(tag string) store.PackageRow {
 		s.t.Fatal(err)
 	}
 	return row
+}
+
+// addGeneric seeds an artifact whose layers are files at annotated paths —
+// NEAR's `generic_system` and `generic_custo` shape, described only by OCI.
+func (s *slice) addGeneric(repoPath string, files map[string]string) string {
+	s.t.Helper()
+
+	// Sorted, so the manifest bytes are deterministic and a byte-identity
+	// assertion is comparing content rather than map iteration order.
+	titles := make([]string, 0, len(files))
+	for title := range files {
+		titles = append(titles, title)
+	}
+	slices.Sort(titles)
+
+	layers := make([]fakeregistry.AnnotatedLayer, 0, len(files))
+	for _, title := range titles {
+		layers = append(layers, fakeregistry.AnnotatedLayer{
+			Title: title, Content: files[title], MediaType: "application/json",
+		})
+	}
+	// No tag: a component of a bundle is reached through the index, and the
+	// name it answers to at the destination comes from the index's annotation.
+	return s.src.AddArtifact(repoPath, "", "application/vnd.nokia.ncd.orb.generic", layers...)
 }
 
 // plan opens a transfer and plans it, returning the transfer ID.
@@ -218,7 +258,10 @@ func (s *slice) plan(pkg store.PackageRow, transferID string) transfer.Plan {
 	plan, err := planner.Plan(s.t.Context(), transfer.Request{
 		TransferID: transferID, RequestID: "req-" + transferID,
 		Package: pkg, SourceRepoID: s.sourceID, TargetRepoID: s.targetID,
-		TargetRepository: targetPath, Priority: 50, Source: sourceClient,
+		ProductID: s.productID, TargetName: "target", TargetRegistry: s.dst.Host(),
+		TargetRegistryType: "generic", TargetBasePath: targetBase,
+		SourceRepository: sourcePath,
+		Priority:         50, Source: sourceClient,
 	})
 	if err != nil {
 		s.t.Fatal(err)
@@ -272,7 +315,7 @@ func (s *slice) drain(workerID string, capacity int) drainResult {
 				Source:         s.client(a.Source),
 				Target:         s.client(a.Target),
 				KnownPlacement: a.KnownPlacement,
-				TagAs:          a.TagAs,
+				Tags:           a.Tags,
 			}, nil)
 
 			switch res.Outcome {

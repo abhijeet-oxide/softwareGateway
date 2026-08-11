@@ -190,27 +190,52 @@ type resolvedSpec struct {
 }
 
 func endpointSpec(p *product.Product, e v1.JobEndpoint) (resolvedSpec, error) {
+	name := configuredName(e.Name)
+
 	if e.Role == string(product.RoleTarget) {
 		for _, t := range p.Spec.Targets {
-			if t.Name == e.Name {
+			if t.Name == name {
 				return resolvedSpec{
 					anonymous: t.Anonymous, creds: t.CredentialsRef,
 					network: t.Network, limits: t.Concurrency,
 				}, nil
 			}
 		}
-		return resolvedSpec{}, fmt.Errorf("product %q has no target %q", p.Metadata.Name, e.Name)
+		return resolvedSpec{}, fmt.Errorf(
+			"product %q has no target %q (from repository row %q)",
+			p.Metadata.Name, name, e.Name)
 	}
 
 	for _, s := range p.Spec.Sources {
-		if s.Name == e.Name {
+		if s.Name == name {
 			return resolvedSpec{
 				anonymous: s.Anonymous, creds: s.CredentialsRef,
 				network: s.Network, limits: s.Concurrency,
 			}, nil
 		}
 	}
-	return resolvedSpec{}, fmt.Errorf("product %q has no source %q", p.Metadata.Name, e.Name)
+	return resolvedSpec{}, fmt.Errorf(
+		"product %q has no source %q (from repository row %q)",
+		p.Metadata.Name, name, e.Name)
+}
+
+// configuredName recovers which configured source or target a repository row
+// belongs to.
+//
+// One configured entry can own SEVERAL repository rows — a source that
+// enumerates the registry catalog, and a target a bundle spreads across — and
+// the (product, role, name) unique constraint means they cannot all be called
+// the same thing. Both producers use "<configured>/<path>", so the configured
+// name is everything before the first slash.
+//
+// A configured name may not itself contain a slash, which is what makes the
+// split unambiguous rather than a guess. Enforced by config validation; if it
+// ever stops being true, credential resolution is where it would show.
+func configuredName(rowName string) string {
+	if i := strings.Index(rowName, "/"); i > 0 {
+		return rowName[:i]
+	}
+	return rowName
 }
 
 // sharedTransport extracts the parts of a client config that describe the

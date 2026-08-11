@@ -81,11 +81,16 @@ type Job struct {
 	// batch so resolving sixteen jobs costs zero extra calls.
 	KnownPlacement bool
 
-	// TagAs, when set, is the tag to apply after this manifest is committed.
-	// Set only on the top-level manifest of the top wave, which is what makes
+	// Tags are what this manifest must be called at the destination.
+	//
+	// Plural because a bundle's components each carry their own name, and one
+	// artifact may legitimately answer to several. Empty is the common case: a
+	// blob has no name, and a platform manifest under an index needs none.
+	//
+	// Applied only after the manifest is committed, which is what makes
 	// invariant I1 hold: a tag never appears at the destination until
 	// everything under it is present.
-	TagAs string
+	Tags []string
 }
 
 // Result is what the worker reports back.
@@ -306,13 +311,11 @@ func (e *Engine) runManifest(ctx context.Context, job Job) Result {
 	// no-op at the registry, so this is an optimization rather than a
 	// correctness requirement — but it is the one that makes re-transferring
 	// an already-present package move ZERO bytes rather than merely few. The
-	// tag still has to be applied: the manifest being present says nothing
-	// about what the tag points at.
+	// tags still have to be applied: the manifest being present says nothing
+	// about what any tag points at.
 	if _, _, err := job.Target.FetchManifest(ctx, job.Digest); err == nil {
-		if job.TagAs != "" {
-			if err := job.Target.Tag(ctx, dgst, job.TagAs); err != nil {
-				return e.failed(err, "tag destination")
-			}
+		if err := e.applyTags(ctx, job, dgst); err != nil {
+			return e.failed(err, "tag destination")
 		}
 		return Result{Outcome: OutcomeSkipped, SkipReason: SkipExistsAtTarget}
 	}
@@ -352,13 +355,33 @@ func (e *Engine) runManifest(ctx context.Context, job Job) Result {
 	// invisible to consumers, and useful to the next transfer. This is what
 	// makes an interrupted transfer safe: a consumer sees either the old tag
 	// or the complete new one, never a half-written one.
-	if job.TagAs != "" {
-		if err := job.Target.Tag(ctx, dgst, job.TagAs); err != nil {
-			return e.failed(err, "tag destination")
-		}
+	if err := e.applyTags(ctx, job, dgst); err != nil {
+		return e.failed(err, "tag destination")
 	}
 
 	return Result{Outcome: OutcomeSucceeded, BytesMoved: int64(len(raw)), Placed: false}
+}
+
+// applyTags names a committed manifest at the destination.
+//
+// Every tag, not the first: an artifact the source published under two names
+// must answer to both, or a consumer following the vendor's documentation
+// finds half of it missing.
+//
+// A failure here fails the JOB rather than being swallowed, even though the
+// content is already safely pushed. An untagged manifest is invisible to
+// anyone who does not know its digest, which for a released component is the
+// same as not having copied it.
+func (e *Engine) applyTags(ctx context.Context, job Job, dgst registry.Digest) error {
+	for _, tag := range job.Tags {
+		if tag == "" {
+			continue
+		}
+		if err := job.Target.Tag(ctx, dgst, tag); err != nil {
+			return fmt.Errorf("apply tag %q: %w", tag, err)
+		}
+	}
+	return nil
 }
 
 // manifestBytes fetches the manifest to push and checks it hashes as claimed.

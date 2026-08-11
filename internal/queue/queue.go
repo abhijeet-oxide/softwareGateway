@@ -73,10 +73,15 @@ type Assignment struct {
 	// KnownPlacement is the placement fast path, resolved for this batch.
 	KnownPlacement bool
 
-	// TagAs is set only on the job that completes the transfer — the
-	// top-level manifest at the top wave. Invariant I1 lives here: nothing
-	// else in the batch can make a tag appear.
-	TagAs string
+	// Tags are what this manifest must be called at the destination,
+	// resolved at planning time from the source's own annotations.
+	//
+	// This used to be a single tag computed HERE, by comparing the job's
+	// digest against the package's root — which could only ever name the one
+	// artifact a person had asked for, and left every component of a bundle
+	// digest-addressed at the destination. The planner knows better and knows
+	// it earlier.
+	Tags []string
 }
 
 // LeaseResult is one lease call's answer.
@@ -152,11 +157,6 @@ func (q *Queue) hydrate(ctx context.Context, jobs []store.LeasedJob) ([]Assignme
 		placed[j.TargetRepoID] = hits
 	}
 
-	tags, err := q.transferTags(ctx, jobs)
-	if err != nil {
-		return nil, err
-	}
-
 	out := make([]Assignment, 0, len(jobs))
 	for _, j := range jobs {
 		src, ok := endpoints[j.SourceRepoID]
@@ -170,39 +170,13 @@ func (q *Queue) hydrate(ctx context.Context, jobs []store.LeasedJob) ([]Assignme
 				j.ID, j.TargetRepoID)
 		}
 
-		a := Assignment{
+		out = append(out, Assignment{
 			LeasedJob:      j,
 			Source:         src,
 			Target:         dst,
 			KnownPlacement: j.Kind == "blob" && placed[j.TargetRepoID][j.Digest],
-		}
-		if t, ok := tags[j.TransferID]; ok && j.Kind == "manifest" && j.Digest == t.digest {
-			a.TagAs = t.tag
-		}
-		out = append(out, a)
-	}
-	return out, nil
-}
-
-type transferTag struct{ tag, digest string }
-
-// transferTags resolves each transfer's destination tag once per batch.
-func (q *Queue) transferTags(
-	ctx context.Context, jobs []store.LeasedJob,
-) (map[string]transferTag, error) {
-	out := map[string]transferTag{}
-	for _, j := range jobs {
-		if j.Kind != "manifest" {
-			continue
-		}
-		if _, done := out[j.TransferID]; done {
-			continue
-		}
-		tag, dgst, err := q.packages.TransferTag(ctx, j.TransferID)
-		if err != nil {
-			return nil, err
-		}
-		out[j.TransferID] = transferTag{tag: tag, digest: dgst}
+			Tags:           j.TargetTags,
+		})
 	}
 	return out, nil
 }

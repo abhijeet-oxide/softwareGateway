@@ -33,7 +33,16 @@ type Dialect interface {
 	// Postgres subtracts an interval from a timestamp, SQLite does date
 	// arithmetic on a string. Both produce a value comparable with a stored
 	// timestamp, which is all the caller needs.
+	//
+	// N MUST BE POSITIVE. Passing a negative to mean "in the future" works in
+	// Postgres and silently produces NULL in SQLite, where the expression is
+	// built by string concatenation: '-' || -5 || ' seconds' is '--5 seconds',
+	// which strftime cannot parse and answers NULL to. Use TimeAhead instead —
+	// it exists because that bug shipped once, wrote NULL lease expiries, and
+	// left the reaper with nothing to find.
 	TimeAgo(secondsExpr string) string
+	// TimeAhead renders "the moment N seconds from now".
+	TimeAhead(secondsExpr string) string
 	// Name identifies the dialect.
 	Name() Driver
 }
@@ -89,6 +98,10 @@ func (postgresDialect) Now() string { return "now()" }
 func (postgresDialect) TimeAgo(secondsExpr string) string {
 	return "(now() - make_interval(secs => " + secondsExpr + "))"
 }
+
+func (postgresDialect) TimeAhead(secondsExpr string) string {
+	return "(now() + make_interval(secs => " + secondsExpr + "))"
+}
 func (postgresDialect) Bool(b bool) string { return map[bool]string{true: "TRUE", false: "FALSE"}[b] }
 func (postgresDialect) Name() Driver       { return DriverPostgres }
 
@@ -103,6 +116,10 @@ func (sqliteDialect) Now() string { return "strftime('%Y-%m-%dT%H:%M:%fZ','now')
 
 func (sqliteDialect) TimeAgo(secondsExpr string) string {
 	return "strftime('%Y-%m-%dT%H:%M:%fZ','now', '-' || " + secondsExpr + " || ' seconds')"
+}
+
+func (sqliteDialect) TimeAhead(secondsExpr string) string {
+	return "strftime('%Y-%m-%dT%H:%M:%fZ','now', '+' || " + secondsExpr + " || ' seconds')"
 }
 func (sqliteDialect) Bool(b bool) string { return map[bool]string{true: "1", false: "0"}[b] }
 func (sqliteDialect) Name() Driver       { return DriverSQLite }

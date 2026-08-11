@@ -196,20 +196,23 @@ func appendArtifact(
 		desc.ArtifactType = body.ArtifactType
 	}
 
-	// The manifest's own annotations belong to the manifest, and merge UNDER
-	// whatever the referencing descriptor said: an index describing its child
-	// is making a claim about that child, and the child describing itself is
-	// the more direct source.
-	if len(body.Annotations) > 0 {
-		merged := make(map[string]string, len(body.Annotations)+len(desc.Annotations))
-		for k, v := range desc.Annotations {
-			merged[k] = v
-		}
-		for k, v := range body.Annotations {
-			merged[k] = v
-		}
-		desc.Annotations = merged
-	}
+	// Annotations come from up to three places, and all three matter.
+	//
+	//	from.Annotations  what the REFERENCING descriptor said about this child
+	//	desc.Annotations  what the fetch reported
+	//	body.Annotations  what the manifest says about itself
+	//
+	// Merged in that order, so the more direct source wins: a child describing
+	// itself beats an index describing it.
+	//
+	// `from` was missing, and its absence was the expensive one. An index
+	// names each child with the reserved org.opencontainers.image.ref.name —
+	// which repository and tag that component answers to — and it says so on
+	// the CHILD DESCRIPTOR, not inside the child's own manifest. Fetching a
+	// manifest by digest returns none of that. So every component of a bundle
+	// arrived anonymous, and a transfer had nothing to reproduce the vendor's
+	// structure from.
+	desc.Annotations = mergeAnnotations(from.Annotations, desc.Annotations, body.Annotations)
 
 	a := Artifact{Descriptor: desc, Raw: raw, Parent: parent, Depth: depth}
 
@@ -249,6 +252,28 @@ func appendArtifact(
 
 	t.Artifacts = append(t.Artifacts, a)
 	return children, nil
+}
+
+// mergeAnnotations layers annotation maps, later sources winning.
+//
+// Returns nil rather than an empty map when there is nothing, so "no
+// annotations" stays one value instead of two that compare differently.
+func mergeAnnotations(sources ...map[string]string) map[string]string {
+	size := 0
+	for _, m := range sources {
+		size += len(m)
+	}
+	if size == 0 {
+		return nil
+	}
+
+	out := make(map[string]string, size)
+	for _, m := range sources {
+		for k, v := range m {
+			out[k] = v
+		}
+	}
+	return out
 }
 
 // measure sums distinct content, counting each digest once.

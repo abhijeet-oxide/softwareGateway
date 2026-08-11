@@ -10,6 +10,7 @@ package transfer
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -77,15 +78,34 @@ type Request struct {
 	RequestID  string
 
 	Package store.PackageRow
-	// SourceRepoID and TargetRepoID are catalog row IDs. The job carries them
-	// rather than names, so a worker resolving a job needs no configuration.
+	// SourceRepoID is the catalog row the package was discovered in. The job
+	// carries row IDs rather than names, so a worker resolving one needs no
+	// configuration of its own.
 	SourceRepoID int64
+	// TargetRepoID is the target's own catalog row — the destination the
+	// operator configured. It is the FALLBACK, not the answer: a bundle's
+	// components each land in their own repository, resolved from the source's
+	// structure by ResolveLayout, and each of those gets a catalog row of its
+	// own.
 	TargetRepoID int64
-	// TargetRepository is the destination PATH, already mapped from the source
-	// by the target's `repositories` setting. The planner does not do the
-	// mapping — that is configuration's job — but it records the result,
-	// because a deployment working after replication depends on it.
-	TargetRepository string
+
+	// ProductID owns any destination repository row this plan has to create.
+	ProductID int64
+	// TargetName is the configured target's name, carried onto every
+	// destination row so the worker resolves the same credential for all of
+	// them.
+	TargetName string
+	// TargetRegistry is the destination registry host.
+	TargetRegistry string
+	// TargetRegistryType selects the backend for destinations created here.
+	TargetRegistryType string
+	// TargetBasePath is the target's configured `repository`, used as a PREFIX
+	// under which the source structure is reproduced. Empty mirrors the source
+	// paths at the destination registry's root.
+	TargetBasePath string
+	// SourceRepository is the path the package was discovered in — what every
+	// destination path is derived from.
+	SourceRepository string
 
 	Priority int
 
@@ -137,15 +157,17 @@ func (p *Planner) Plan(ctx context.Context, req Request) (Plan, error) {
 
 	plan := Plan{TransferID: req.TransferID, Walked: walked}
 
-	// Distinct blobs, classified once. A package that references the same base
-	// layer from five images yields ONE blob and therefore one job — which is
-	// the whole reason the unit of work is a blob and not an image.
-	blobs := distinctBlobs(tree)
-
-	placed, err := p.packages.PlacedDigests(ctx, req.TargetRepoID, digestsOf(blobs))
-	if err != nil {
-		return Plan{}, err
-	}
+	// WHERE each artifact lands, derived from the source's own structure.
+	//
+	// A bundle is not one artifact in one repository: its components carry
+	// their own repository paths and tags in `org.opencontainers.image.ref.name`,
+	// and copying them into one flat destination would preserve every byte
+	// while destroying every name.
+	layout := ResolveLayout(tree, LayoutOptions{
+		BasePath:         req.TargetBasePath,
+		SourceRepository: req.SourceRepository,
+		RootTags:         rootTags(req),
+	})
 
 	tx, err := p.packages.DB().BeginTx(ctx, nil)
 	if err != nil {
@@ -153,42 +175,20 @@ func (p *Planner) Plan(ctx context.Context, req Request) (Plan, error) {
 	}
 	defer func() { _ = tx.Rollback() }()
 
-	for _, b := range blobs {
-		if placed[b.Digest] {
-			// Already at the destination and within its TTL. No job at all —
-			// not a job that will be skipped, which would still cost a lease, a
-			// round trip and a row.
-			plan.SkippedBlobs++
-			plan.DedupeSkippedBytes += b.SizeBytes
-			continue
-		}
-
-		created, err := p.packages.InsertJob(ctx, tx, store.JobRow{
-			TransferID:   req.TransferID,
-			Kind:         "blob",
-			Digest:       b.Digest,
-			SizeBytes:    b.SizeBytes,
-			MediaType:    b.MediaType,
-			SourceRepoID: req.SourceRepoID,
-			TargetRepoID: req.TargetRepoID,
-			// Wave 0: everything a manifest could reference must exist first.
-			Wave:     0,
-			State:    "pending",
-			Priority: req.Priority,
-		})
-		if err != nil {
-			return Plan{}, err
-		}
-		if created {
-			plan.Jobs++
-			plan.Blobs++
-			plan.PlannedBytes += b.SizeBytes
-		}
+	// Every distinct destination path gets a catalog row, so placements,
+	// deduplication and cross-repository mount all keep working unchanged —
+	// they are all keyed by repository ID, and a destination without a row
+	// would be invisible to each of them.
+	destinations, err := p.ensureDestinations(ctx, tx, req, layout)
+	if err != nil {
+		return Plan{}, err
 	}
 
-	// Manifests, deepest first. An artifact's wave is 1 + its distance from the
-	// deepest leaf, so a child manifest is pushed before the index naming it
-	// and the registry never sees a reference to something absent.
+	// Manifests first, so each blob knows which destination its owning
+	// manifest landed in. Deepest first: an artifact's wave is 1 + its
+	// distance from the deepest leaf, so a child manifest is pushed before the
+	// index naming it and the registry never sees a reference to something
+	// absent.
 	maxDepth := 0
 	for _, a := range tree.Artifacts {
 		if a.Row.Depth > maxDepth {
@@ -202,21 +202,81 @@ func (p *Planner) Plan(ctx context.Context, req Request) (Plan, error) {
 			plan.MaxWave = wave
 		}
 
+		// One job per SITE. A component that also answers to a name of its
+		// own is pushed twice — once into the repository that keeps the bundle
+		// resolvable, once under its own name — because a registry resolves a
+		// manifest only within the repository it was pushed to.
+		for _, site := range layout[a.Row.Digest].Sites {
+			targetID, ok := destinations[site.Repository]
+			if !ok {
+				return Plan{}, fmt.Errorf("no destination row for %q", site.Repository)
+			}
+
+			created, err := p.packages.InsertJob(ctx, tx, store.JobRow{
+				TransferID:       req.TransferID,
+				Kind:             "manifest",
+				Digest:           a.Row.Digest,
+				SizeBytes:        a.Row.SizeBytes,
+				MediaType:        a.Row.MediaType,
+				ArtifactID:       &a.Row.ID,
+				SourceRepoID:     req.SourceRepoID,
+				TargetRepoID:     targetID,
+				TargetRepository: site.Repository,
+				TargetTags:       site.Tags,
+				Wave:             wave,
+				// BLOCKED until its wave opens. This is what invariant I1 rests
+				// on: a tag never appears at the destination until everything
+				// under it is present, so an interrupted transfer leaves a
+				// consumer seeing the old tag or the complete new one — never a
+				// half-written one.
+				State:    "blocked",
+				Priority: req.Priority,
+			})
+			if err != nil {
+				return Plan{}, err
+			}
+			if created {
+				plan.Jobs++
+				plan.Manifests++
+				plan.PlannedBytes += a.Row.SizeBytes
+			}
+		}
+	}
+
+	// Blobs, one job per (digest, destination repository).
+	//
+	// The pair matters: a registry stores blobs per repository, so a base layer
+	// shared by two components that land in different destinations has to be
+	// pushed to both. Within one destination it is still exactly one job, which
+	// is what makes a fat index share its base layer rather than move it per
+	// platform.
+	blobs, err := p.blobTargets(ctx, tx, tree, layout, destinations)
+	if err != nil {
+		return Plan{}, err
+	}
+
+	for _, b := range blobs {
+		if b.placed {
+			// Already at that destination and within its TTL. No job at all —
+			// not a job that will be skipped, which would still cost a lease, a
+			// round trip and a row.
+			plan.SkippedBlobs++
+			plan.DedupeSkippedBytes += b.ref.SizeBytes
+			continue
+		}
+
 		created, err := p.packages.InsertJob(ctx, tx, store.JobRow{
-			TransferID:   req.TransferID,
-			Kind:         "manifest",
-			Digest:       a.Row.Digest,
-			SizeBytes:    a.Row.SizeBytes,
-			MediaType:    a.Row.MediaType,
-			ArtifactID:   &a.Row.ID,
-			SourceRepoID: req.SourceRepoID,
-			TargetRepoID: req.TargetRepoID,
-			Wave:         wave,
-			// BLOCKED until its wave opens. This is what invariant I1 rests on:
-			// a tag never appears at the destination until everything under it
-			// is present, so an interrupted transfer leaves a consumer seeing
-			// the old tag or the complete new one — never a half-written one.
-			State:    "blocked",
+			TransferID:       req.TransferID,
+			Kind:             "blob",
+			Digest:           b.ref.Digest,
+			SizeBytes:        b.ref.SizeBytes,
+			MediaType:        b.ref.MediaType,
+			SourceRepoID:     req.SourceRepoID,
+			TargetRepoID:     b.targetID,
+			TargetRepository: b.repository,
+			// Wave 0: everything a manifest could reference must exist first.
+			Wave:     0,
+			State:    "pending",
 			Priority: req.Priority,
 		})
 		if err != nil {
@@ -224,8 +284,8 @@ func (p *Planner) Plan(ctx context.Context, req Request) (Plan, error) {
 		}
 		if created {
 			plan.Jobs++
-			plan.Manifests++
-			plan.PlannedBytes += a.Row.SizeBytes
+			plan.Blobs++
+			plan.PlannedBytes += b.ref.SizeBytes
 		}
 	}
 
@@ -286,26 +346,140 @@ func (p *Planner) treeFor(
 	return out.Tree, out.Fetched, nil
 }
 
-// distinctBlobs collects every blob the tree references, each digest once.
+// ensureDestinations gives every distinct destination path a catalog row.
 //
-// DISTINCT is the point. A fat index whose platforms share a base layer must
-// transfer that layer once, not once per platform — and a plan that counted it
-// per reference would overstate the transfer, sometimes several times over, in
-// every number an operator reads.
-func distinctBlobs(t store.ExpandedTree) []store.BlobRef {
-	seen := map[string]bool{}
-	out := make([]store.BlobRef, 0, len(t.Artifacts))
+// Reusing the repositories table rather than inventing a second place to keep
+// destination paths is what makes the rest of the system need no changes:
+// blob_placements, the dedupe check, the concurrent-duplicate suppression in
+// the dequeue and the cross-repository mount are all keyed by repository ID.
+//
+// Each row carries the CONFIGURED target's name, not a generated one, so the
+// worker resolves the same credential for every destination a bundle spreads
+// across — the credential belongs to the target, and the paths beneath it are
+// the vendor's structure rather than separate configuration.
+func (p *Planner) ensureDestinations(
+	ctx context.Context, tx *sql.Tx, req Request, layout map[string]Placement,
+) (map[string]int64, error) {
+	out := make(map[string]int64)
 
-	for _, a := range t.Artifacts {
-		for _, b := range a.Blobs {
-			if seen[b.Digest] {
+	for _, place := range layout {
+		for _, site := range place.Sites {
+			if _, done := out[site.Repository]; done {
 				continue
 			}
-			seen[b.Digest] = true
-			out = append(out, b)
+
+			// The configured target keeps the row the operator declared; only
+			// the paths a bundle's structure implies are created here.
+			if site.Repository == req.TargetBasePath || site.Repository == "" {
+				out[site.Repository] = req.TargetRepoID
+				continue
+			}
+
+			// The row NAME follows the convention discovery already established
+			// for a source covering several repositories: "<configured>/<path>".
+			// The (product, role, name) unique constraint forbids reusing the
+			// target's own name for every path, and the prefix is what lets the
+			// worker resolve ONE credential for all of them — see
+			// regclient.endpointSpec.
+			id, err := p.packages.EnsureRepository(ctx, tx, req.ProductID, "target",
+				req.TargetName+"/"+site.Repository, req.TargetRegistry, site.Repository,
+				req.TargetRegistryType, "discovery", "")
+			if err != nil {
+				return nil, fmt.Errorf("register destination %q: %w", site.Repository, err)
+			}
+			out[site.Repository] = id
 		}
 	}
-	return out
+	return out, nil
+}
+
+// blobTarget is one blob bound for one destination repository.
+type blobTarget struct {
+	ref        store.BlobRef
+	repository string
+	targetID   int64
+	placed     bool
+}
+
+// blobTargets pairs every blob with the destinations its manifests land in.
+//
+// A blob follows the manifest that references it: the registry has no notion of
+// a blob existing independently of a repository, so "where does this layer go"
+// is answered entirely by "where does the manifest naming it go".
+//
+// DISTINCT per (digest, destination). A fat index whose platforms share a base
+// layer moves it once when they land together, and once per destination when
+// they do not — which is not duplication, it is the registry's storage model.
+func (p *Planner) blobTargets(
+	ctx context.Context,
+	tx *sql.Tx,
+	tree store.ExpandedTree,
+	layout map[string]Placement,
+	destinations map[string]int64,
+) ([]blobTarget, error) {
+	seen := map[string]bool{}
+	byDestination := map[string][]store.BlobRef{}
+	var order []string
+
+	for _, a := range tree.Artifacts {
+		// A blob follows its manifest to EVERY site: a registry stores blobs
+		// per repository, so a component published under two names needs its
+		// layers under both or the second manifest push fails BLOB_UNKNOWN.
+		for _, site := range layout[a.Row.Digest].Sites {
+			for _, b := range a.Blobs {
+				key := site.Repository + "|" + b.Digest
+				if seen[key] {
+					continue
+				}
+				seen[key] = true
+				if _, known := byDestination[site.Repository]; !known {
+					order = append(order, site.Repository)
+				}
+				byDestination[site.Repository] = append(byDestination[site.Repository], b)
+			}
+		}
+	}
+
+	var out []blobTarget
+	for _, repo := range order {
+		refs := byDestination[repo]
+		targetID, ok := destinations[repo]
+		if !ok {
+			return nil, fmt.Errorf("no destination row for %q", repo)
+		}
+
+		// One placement lookup per destination rather than per blob: a
+		// thousand-blob bundle spread over five repositories costs five
+		// queries, which is what keeps planning a database operation rather
+		// than a network one.
+		placed, err := p.packages.PlacedDigestsTx(ctx, tx, targetID, digestsOf(refs))
+		if err != nil {
+			return nil, err
+		}
+
+		for _, b := range refs {
+			out = append(out, blobTarget{
+				ref: b, repository: repo, targetID: targetID, placed: placed[b.Digest],
+			})
+		}
+	}
+	return out, nil
+}
+
+// rootTags is what the package's own root manifest must be called.
+//
+// The tag a person asked for, plus the wrapper tag where a vendor bundles the
+// payload with its signature under one: the transfer root IS the wrapper, and
+// a consumer expecting the vendor's layout must still find it by that name
+// after replication.
+func rootTags(req Request) []string {
+	tags := []string{req.Package.Tag}
+	for _, rel := range req.Related {
+		if rel.Role == vendors.RoleWrapper && rel.Tag != "" {
+			tags = append(tags, rel.Tag)
+		}
+	}
+	return tags
 }
 
 func digestsOf(blobs []store.BlobRef) []string {

@@ -1658,7 +1658,8 @@ func (p *Packages) ReadExpandedTree(
 ) (tree ExpandedTree, complete bool, err error) {
 	query := p.dialect.Rewrite(`
 		SELECT id, parent_id, digest, media_type, COALESCE(artifact_type,''),
-		       size_bytes, COALESCE(platform,''), depth, raw, fetched_at IS NOT NULL
+		       size_bytes, COALESCE(platform,''), depth, raw, fetched_at IS NOT NULL,
+		       annotations
 		  FROM package_artifacts
 		 WHERE package_id = ?
 		 ORDER BY depth, id`)
@@ -1677,14 +1678,22 @@ func (p *Packages) ReadExpandedTree(
 
 	for rows.Next() {
 		var (
-			id       int64
-			parentID *int64
-			a        ExpandedArtifact
+			id          int64
+			parentID    *int64
+			annotations []byte
+			a           ExpandedArtifact
 		)
 		if err := rows.Scan(&id, &parentID, &a.Row.Digest, &a.Row.MediaType,
 			&a.Row.ArtifactType, &a.Row.SizeBytes, &a.Row.Platform, &a.Row.Depth,
-			&a.Row.Raw, &a.Row.Fetched); err != nil {
+			&a.Row.Raw, &a.Row.Fetched, &annotations); err != nil {
 			return ExpandedTree{}, false, fmt.Errorf("scan artifact: %w", err)
+		}
+		// Annotations are what the planner derives a destination from: an
+		// artifact naming itself with org.opencontainers.image.ref.name says
+		// which repository and tag it must land under. Dropping them here made
+		// every artifact in a bundle look anonymous.
+		if len(annotations) > 0 {
+			_ = json.Unmarshal(annotations, &a.Row.Annotations)
 		}
 		a.Row.ID = id
 		a.Row.Cached = len(a.Row.Raw) > 0
@@ -1824,12 +1833,23 @@ type JobRow struct {
 	Priority     int
 	Attempts     int
 	SkipReason   string
+
+	// TargetTags are the tags this manifest must carry once committed.
+	//
+	// Resolved at PLANNING time from the artifact's own
+	// org.opencontainers.image.ref.name, not derived at lease time from the
+	// package row — which could only ever produce the one tag a person asked
+	// for, and so lost every component's own name.
+	TargetTags []string
+	// TargetRepository is the destination path, denormalised for diagnostics.
+	// repositories.repository_path via TargetRepoID is authoritative.
+	TargetRepository string
 }
 
 // InsertJob creates a job, reporting whether it was new.
 //
-// ON CONFLICT DO NOTHING against (transfer_id, kind, digest) is what makes
-// PLANNING IDEMPOTENT: a Coordinator that dies mid-plan leaves a partial job
+// ON CONFLICT DO NOTHING against (transfer_id, kind, digest, target_repo_id) is
+// what makes PLANNING IDEMPOTENT: a Coordinator that dies mid-plan leaves a partial job
 // set, and the replan on restart finds the existing rows free rather than
 // duplicating them.
 func (p *Packages) InsertJob(ctx context.Context, tx *sql.Tx, row JobRow) (bool, error) {
@@ -1841,15 +1861,17 @@ func (p *Packages) InsertJob(ctx context.Context, tx *sql.Tx, row JobRow) (bool,
 	query := p.dialect.Rewrite(`
 		INSERT INTO jobs
 			(transfer_id, kind, digest, size_bytes, media_type, artifact_id,
-			 source_repo_id, target_repo_id, state, wave, priority, updated_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ` + p.dialect.Now() + `)
-		ON CONFLICT (transfer_id, kind, digest) DO NOTHING
+			 source_repo_id, target_repo_id, state, wave, priority,
+			 target_tags, target_repository, updated_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ` + p.dialect.Now() + `)
+		ON CONFLICT (transfer_id, kind, digest, target_repo_id) DO NOTHING
 		RETURNING id`)
 
 	var id int64
 	err := tx.QueryRowContext(ctx, query,
 		row.TransferID, row.Kind, row.Digest, row.SizeBytes, nullIfEmpty(row.MediaType),
 		row.ArtifactID, row.SourceRepoID, row.TargetRepoID, state, row.Wave, row.Priority,
+		tagsJSON(row.TargetTags), nullIfEmpty(row.TargetRepository),
 	).Scan(&id)
 
 	if errors.Is(err, sql.ErrNoRows) {
@@ -1964,6 +1986,34 @@ func (p *Packages) OpenFirstWave(ctx context.Context, tx *sql.Tx, transferID str
 func (p *Packages) PlacedDigests(
 	ctx context.Context, repositoryID int64, digests []string,
 ) (map[string]bool, error) {
+	return p.placedDigests(ctx, p.db, repositoryID, digests)
+}
+
+// PlacedDigestsTx is the same lookup inside a caller's transaction.
+//
+// Not a convenience. SQLite is opened with SetMaxOpenConns(1), so a read
+// issued on the pool while the caller holds a write transaction waits for a
+// connection that transaction will not release until it commits — a deadlock
+// that presents as a hung planner rather than an error. The planner reads
+// placements between writing destination rows and writing jobs, so it must
+// read on its own transaction.
+//
+// It is also more correct: a plan should see one consistent snapshot, not the
+// placements as they were between two of its own writes.
+func (p *Packages) PlacedDigestsTx(
+	ctx context.Context, tx *sql.Tx, repositoryID int64, digests []string,
+) (map[string]bool, error) {
+	return p.placedDigests(ctx, tx, repositoryID, digests)
+}
+
+// rowQuerier is the read surface *sql.DB and *sql.Tx have in common.
+type rowQuerier interface {
+	QueryContext(ctx context.Context, query string, args ...any) (*sql.Rows, error)
+}
+
+func (p *Packages) placedDigests(
+	ctx context.Context, q rowQuerier, repositoryID int64, digests []string,
+) (map[string]bool, error) {
 	out := map[string]bool{}
 	if len(digests) == 0 {
 		return out, nil
@@ -1995,7 +2045,7 @@ func (p *Packages) PlacedDigests(
 			   AND digest IN (` + string(placeholders) + `)
 			   AND verified_at > ` + p.dialect.TimeAgo("?"))
 
-		rows, err := p.db.QueryContext(ctx, query, args...)
+		rows, err := q.QueryContext(ctx, query, args...)
 		if err != nil {
 			return nil, fmt.Errorf("read placements for repository %d: %w", repositoryID, err)
 		}

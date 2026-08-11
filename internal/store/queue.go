@@ -3,6 +3,7 @@ package store
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
@@ -66,6 +67,14 @@ type LeasedJob struct {
 	// Attempt is this job's attempt number, already incremented by the lease.
 	Attempt int
 	Wave    int
+
+	// TargetTags are the tags to apply once this manifest is committed,
+	// resolved at planning time from the artifact's own reference annotation.
+	// Empty for a blob, and for any manifest the source did not name.
+	TargetTags []string
+	// TargetRepository is the destination path, carried for diagnostics so a
+	// stuck job says where it was going without a join.
+	TargetRepository string
 }
 
 // LeaseJobs atomically hands up to Limit pending jobs to one worker.
@@ -101,7 +110,8 @@ func (p *Packages) LeaseJobs(ctx context.Context, req LeaseRequest) ([]LeasedJob
 // leaseColumns is the RETURNING/SELECT list both dialects share, so the two
 // implementations cannot drift in what they produce.
 const leaseColumns = `id, transfer_id, kind, digest, size_bytes, media_type,
-	artifact_id, source_repo_id, target_repo_id, attempts, wave`
+	artifact_id, source_repo_id, target_repo_id, attempts, wave, target_tags,
+	target_repository`
 
 // leaseCandidatePredicate is the leasability test, shared by both dialects.
 //
@@ -140,7 +150,7 @@ func (p *Packages) leasePostgres(ctx context.Context, req LeaseRequest) ([]Lease
 		UPDATE jobs j
 		   SET state            = 'leased',
 		       lease_owner      = ?,
-		       lease_expires_at = ` + p.dialect.TimeAgo("?") + `,
+		       lease_expires_at = ` + p.dialect.TimeAhead("?") + `,
 		       attempts         = attempts + 1,
 		       started_at       = COALESCE(j.started_at, ` + p.dialect.Now() + `),
 		       updated_at       = ` + p.dialect.Now() + `
@@ -148,9 +158,7 @@ func (p *Packages) leasePostgres(ctx context.Context, req LeaseRequest) ([]Lease
 		 WHERE j.id = c.id
 		RETURNING j.` + strings.ReplaceAll(leaseColumns, ", ", ", j."))
 
-	// TimeAgo with a negative number is time in the FUTURE. Reusing it keeps
-	// one dialect-specific timestamp expression instead of two that must agree.
-	rows, err := p.db.QueryContext(ctx, query, req.Limit, req.Owner, -req.Duration.Seconds())
+	rows, err := p.db.QueryContext(ctx, query, req.Limit, req.Owner, req.Duration.Seconds())
 	if err != nil {
 		return nil, fmt.Errorf("lease jobs for %s: %w", req.Owner, err)
 	}
@@ -186,13 +194,13 @@ func (p *Packages) leaseSQLite(ctx context.Context, req LeaseRequest) ([]LeasedJ
 	}
 
 	placeholders, args := inClause(ids)
-	args = append([]any{req.Owner, -req.Duration.Seconds()}, args...)
+	args = append([]any{req.Owner, req.Duration.Seconds()}, args...)
 
 	update := p.dialect.Rewrite(`
 		UPDATE jobs
 		   SET state            = 'leased',
 		       lease_owner      = ?,
-		       lease_expires_at = ` + p.dialect.TimeAgo("?") + `,
+		       lease_expires_at = ` + p.dialect.TimeAhead("?") + `,
 		       attempts         = attempts + 1,
 		       started_at       = COALESCE(started_at, ` + p.dialect.Now() + `),
 		       updated_at       = ` + p.dialect.Now() + `
@@ -248,12 +256,16 @@ func scanLeasedJobs(rows *sql.Rows) ([]LeasedJob, error) {
 	for rows.Next() {
 		var j LeasedJob
 		var mediaType sql.NullString
+		var tags []byte
+		var targetRepository sql.NullString
 		if err := rows.Scan(&j.ID, &j.TransferID, &j.Kind, &j.Digest, &j.SizeBytes,
 			&mediaType, &j.ArtifactID, &j.SourceRepoID, &j.TargetRepoID,
-			&j.Attempt, &j.Wave); err != nil {
+			&j.Attempt, &j.Wave, &tags, &targetRepository); err != nil {
 			return nil, fmt.Errorf("scan leased job: %w", err)
 		}
 		j.MediaType = mediaType.String
+		j.TargetTags = decodeTags(tags)
+		j.TargetRepository = targetRepository.String
 		out = append(out, j)
 	}
 	return out, rows.Err()
@@ -363,11 +375,11 @@ func (p *Packages) RenewLeases(
 	}
 
 	placeholders, idArgs := inClause(ids)
-	args := append([]any{-d.Seconds(), owner}, idArgs...)
+	args := append([]any{d.Seconds(), owner}, idArgs...)
 
 	if _, err := p.db.ExecContext(ctx, p.dialect.Rewrite(`
 		UPDATE jobs
-		   SET lease_expires_at = `+p.dialect.TimeAgo("?")+`,
+		   SET lease_expires_at = `+p.dialect.TimeAhead("?")+`,
 		       updated_at       = `+p.dialect.Now()+`
 		 WHERE lease_owner = ? AND state = 'leased' AND id IN (`+placeholders+`)`),
 		args...); err != nil {
@@ -579,13 +591,13 @@ func (p *Packages) applyJobOutcome(ctx context.Context, tx *sql.Tx, c Completion
 		       bytes_transferred = ?,
 		       lease_owner       = NULL,
 		       lease_expires_at  = NULL,
-		       next_visible_at   = `+p.dialect.TimeAgo("?")+`,
+		       next_visible_at   = `+p.dialect.TimeAhead("?")+`,
 		       completed_at      = CASE WHEN attempts >= max_attempts
 		                                THEN `+p.dialect.Now()+` ELSE NULL END,
 		       updated_at        = `+p.dialect.Now()+`
 		 WHERE id = ?`),
 		nullIfEmpty(c.ErrorMsg), nullIfEmpty(c.ErrorClass), c.BytesTransferred,
-		-retryDelay(c.Attempt).Seconds(), c.JobID)
+		retryDelay(c.Attempt).Seconds(), c.JobID)
 	if err != nil {
 		return fmt.Errorf("fail job %d: %w", c.JobID, err)
 	}
@@ -793,13 +805,13 @@ func (p *Packages) ReapExpiredLeases(ctx context.Context) ([]ReapedJob, error) {
 			   SET state             = ?,
 			       lease_owner       = NULL,
 			       lease_expires_at  = NULL,
-			       next_visible_at   = `+p.dialect.TimeAgo("?")+`,
+			       next_visible_at   = `+p.dialect.TimeAhead("?")+`,
 			       last_error        = COALESCE(last_error, 'lease expired'),
 			       last_error_class  = 'lease_expired',
 			       completed_at      = CASE WHEN ? = 'failed' THEN `+p.dialect.Now()+` ELSE NULL END,
 			       updated_at        = `+p.dialect.Now()+`
 			 WHERE id = ? AND state = 'leased'`),
-			state, -retryDelay(e.attempts).Seconds(), state, e.id); err != nil {
+			state, retryDelay(e.attempts).Seconds(), state, e.id); err != nil {
 			return nil, fmt.Errorf("reap job %d: %w", e.id, err)
 		}
 		out = append(out, ReapedJob{ID: e.id, TransferID: e.transferID, State: state})
@@ -1133,4 +1145,32 @@ func (p *Packages) ListJobs(ctx context.Context, transferID string, limit int) (
 		out = append(out, j)
 	}
 	return out, rows.Err()
+}
+
+// tagsJSON encodes a job's destination tags.
+//
+// NULL rather than `[]` for the empty case, so "this artifact carries no tag"
+// and "somebody wrote an empty list" stay distinguishable in a raw query — and
+// so the common case, a blob, costs two bytes rather than a JSON document.
+func tagsJSON(tags []string) any {
+	if len(tags) == 0 {
+		return nil
+	}
+	raw, err := json.Marshal(tags)
+	if err != nil {
+		return nil
+	}
+	return string(raw)
+}
+
+// decodeTags reads them back, tolerating absence.
+func decodeTags(raw []byte) []string {
+	if len(raw) == 0 {
+		return nil
+	}
+	var out []string
+	if err := json.Unmarshal(raw, &out); err != nil {
+		return nil
+	}
+	return out
 }

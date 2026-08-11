@@ -282,17 +282,6 @@ func (r rateTrackers) observe(transfers []v1.Transfer, at time.Time) {
 	}
 }
 
-// watching reports whether any live rate has been measured yet, which is what
-// decides whether the footnote describes a live rate or an average.
-func (r rateTrackers) watching() bool {
-	for _, tracker := range r {
-		if tracker.smoothed > 0 {
-			return true
-		}
-	}
-	return false
-}
-
 // rateFor is the smoothed rate for one transfer, or zero when there is none —
 // no watch, or only one reading so far.
 func (r rateTrackers) rateFor(id string) float64 {
@@ -308,10 +297,6 @@ func renderTransferList(
 	return func(w io.Writer) error {
 		if len(resp.Transfers) == 0 {
 			fmt.Fprintln(w, "No transfers yet.")
-			fmt.Fprintln(w)
-			fmt.Fprintln(w, "Transfers are created by auto-download rules when discovery finds")
-			fmt.Fprintln(w, "a matching package. `transferctl packages list` shows what has been")
-			fmt.Fprintln(w, "discovered so far.")
 			return nil
 		}
 
@@ -339,19 +324,6 @@ func renderTransferList(
 			return err
 		}
 
-		fmt.Fprintln(w)
-		fmt.Fprintln(w, "DONE is by job count, which is the measure that reaches 100% — COPIED does not,")
-		fmt.Fprintln(w, "because deduplicated content counts as planned and moves nothing.")
-		if rates.watching() {
-			fmt.Fprintln(w, "SPEED is the rate over the last half minute, and ETA extrapolates it — so a")
-			fmt.Fprintln(w, "change you make now shows up within about that long.")
-		} else {
-			fmt.Fprintln(w, "SPEED is the average since the first job was leased, and ETA extrapolates it.")
-			fmt.Fprintln(w, "An average carries the whole history, so it lags a speed that changed midway;")
-			fmt.Fprintln(w, "`--watch` measures the live rate instead and uses that.")
-		}
-		fmt.Fprintln(w, "transferctl transfers describe <id>   full detail, including throughput")
-		fmt.Fprintln(w, "transferctl transfers jobs <id>       what is copying right now")
 		return nil
 	}(w)
 }
@@ -532,32 +504,20 @@ func describeTransfer(w io.Writer, t *v1.Transfer, rates *rateTracker, watching 
 	if t.FailureReason != "" {
 		fmt.Fprintln(w)
 		fmt.Fprintf(w, "Failed: %s\n", t.FailureReason)
-		fmt.Fprintln(w, "`transferctl transfers jobs "+shortID(t.ID)+"` shows which job, and why.")
 	}
 
-	// A transfer that is not moving and has no failure reason is the case
-	// worth explaining, because it looks identical to a broken one.
-	if t.State == v1.TransferRunning && p.JobsOutstanding > 0 && t.MaxWave > 0 {
+	// The one thing still worth saying in prose, and only when it is true: a
+	// stalled transfer looks identical to a working one at a glance, and the
+	// two causes need different actions. One line each, because this is a
+	// diagnosis rather than an explanation of the table.
+	if t.State == v1.TransferRunning && p.JobsOutstanding > 0 && p.JobsInFlight == 0 {
 		fmt.Fprintln(w)
-		fmt.Fprintf(w, "Wave %d of %d. Manifests are pushed only after every blob beneath\n",
-			t.CurrentWave, t.MaxWave)
-		fmt.Fprintln(w, "them has landed, so a tag never appears at the destination until the")
-		fmt.Fprintln(w, "whole package is there.")
-
-		// Nothing running is the state most likely to be mistaken for a hang,
-		// and it has two very different causes.
-		if p.JobsInFlight == 0 {
-			fmt.Fprintln(w)
-			switch {
-			case p.JobsWaiting > 0:
-				fmt.Fprintf(w,
-					"No job is running: %d are waiting out a retry backoff. They become\n",
-					p.JobsWaiting)
-				fmt.Fprintln(w, "runnable on their own; `transfers jobs <id> --failed` shows why they failed.")
-			default:
-				fmt.Fprintln(w, "No job is running and none is waiting. Check that a worker is up and")
-				fmt.Fprintln(w, "pointed at this Coordinator — `transferctl health` reports what it sees.")
-			}
+		if p.JobsWaiting > 0 {
+			fmt.Fprintf(w, "Stalled: %d job(s) in retry backoff — `transfers jobs %s --failed`\n",
+				p.JobsWaiting, shortID(t.ID))
+		} else {
+			fmt.Fprintf(w, "Stalled: no job running and none waiting — check a worker is up "+
+				"(`transferctl health`)\n")
 		}
 	}
 	return nil
@@ -600,10 +560,6 @@ func describeThroughput(w io.Writer, t *v1.Transfer, rates *rateTracker, watchin
 		return err
 	}
 
-	if !watching {
-		fmt.Fprintln(w)
-		fmt.Fprintln(w, "Current and peak need two readings; `--watch` takes them.")
-	}
 	return nil
 }
 
@@ -709,17 +665,6 @@ func renderJobs(w io.Writer, jobs []v1.Job, state string) error {
 		return err
 	}
 
-	fmt.Fprintln(w)
-	fmt.Fprintln(w, "SOURCE and TARGET are the full registry paths this row reads from and writes")
-	fmt.Fprintln(w, "to. A tag is shown only where the transfer will actually create one; a name")
-	fmt.Fprintln(w, "in parentheses is what the content IS — the vendor's own name for it — where")
-	fmt.Fprintln(w, "that differs from where it sits. A `*` marks content shared by several")
-	fmt.Fprintln(w, "artifacts, so the one named is an example.")
-	fmt.Fprintln(w, "One digest appearing twice with different targets is not a duplicate: a")
-	fmt.Fprintln(w, "component is published both inside its bundle, so the index stays")
-	fmt.Fprintln(w, "resolvable, and under its own name, so it can be pulled as itself.")
-	fmt.Fprintln(w, "A `skipped` job is a success carrying zero bytes: the content was already")
-	fmt.Fprintln(w, "at the destination, or the registry relocated it server-side.")
 	return nil
 }
 

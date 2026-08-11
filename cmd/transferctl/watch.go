@@ -136,9 +136,24 @@ func watchLoop(
 // and escape sequences in that stream are noise. A rule and a timestamp make
 // successive snapshots readable instead. isTerminal is the one in progress.go,
 // which already draws a live line and had to answer the same question.
+//
+// # Why three sequences and why in this order
+//
+// `ESC[H` then `ESC[2J` was wrong, and the symptom was a table drawn without
+// its header. `2J` clears the visible screen, and terminals differ on what
+// happens to what was there: several — Windows Terminal among them — SCROLL it
+// into the scrollback rather than discarding it, which moves the cursor with
+// it. Homing first and clearing second therefore leaves the cursor somewhere
+// below the top, and the first lines written land above the viewport.
+//
+// Clear the screen, clear the scrollback (`3J`), then home the cursor, so the
+// next frame starts at a known position on a known-empty screen. `3J` also
+// stops a long watch from filling the scrollback with hundreds of near
+// identical frames, which is what makes scrolling back for real output
+// useless.
 func clearScreen(w io.Writer) {
 	if isTerminal(w) {
-		fmt.Fprint(w, "\033[H\033[2J")
+		fmt.Fprint(w, "\033[2J\033[3J\033[H")
 		return
 	}
 	fmt.Fprintf(w, "\n--- %s ---\n", time.Now().Format(time.RFC3339))

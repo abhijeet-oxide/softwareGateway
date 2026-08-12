@@ -232,3 +232,70 @@ func padded(n int) string {
 	}
 	return s
 }
+
+// The message that motivated all of this, verbatim from the production run.
+//
+// Two things in it defeated the first normaliser, and each one on its own was
+// enough to put every manifest in a group of its own:
+//
+//   - Artifactory names the blob `sha256__<hex>` in its storage layout, and a
+//     bare-hex pattern cannot match that because `_` is a word character, so
+//     there is no word boundary in front of the hex.
+//   - It echoes the destination with its own repository key stripped, so the
+//     path we sent is not the path in the message and a whole-string
+//     substitution finds nothing.
+func TestTheProductionRejectionGroupsIntoOneCause(t *testing.T) {
+	h := newFailureHarness(t)
+	id := h.transferWithJobs(0)
+
+	messages := []string{
+		"push manifest sha256:aaaa000000000000000000000000000000000000000000000000000000000001 " +
+			"artifact.it.att.com/apm0014228-oci-stage/orbs/cfx-5000-product/nokia-ims-sas: " +
+			"HTTP 400: manifest invalid: manifest invalid: map[description:Failed to copy blob " +
+			"sha256:bbbb000000000000000000000000000000000000000000000000000000000001 to " +
+			"cfx-5000-product/nokia-ims-sas/sha256:aaaa000000000000000000000000000000000000000000000000000000000001/" +
+			"sha256__dc82908b11cffc06a831a0ff2382e0d9080441a806978d087c1f6d0f2e3278ee0]: " +
+			"unsupported by registry",
+		"push manifest sha256:aaaa000000000000000000000000000000000000000000000000000000000002 " +
+			"artifact.it.att.com/apm0014228-oci-stage/orbs/cfx-5000-product/nokia-ims-rcg: " +
+			"HTTP 400: manifest invalid: manifest invalid: map[description:Failed to copy blob " +
+			"sha256:bbbb000000000000000000000000000000000000000000000000000000000002 to " +
+			"cfx-5000-product/nokia-ims-rcg/sha256:aaaa000000000000000000000000000000000000000000000000000000000002/" +
+			"sha256__5a8ead63d505514b3d5f4dbf8c0b1a0b2c3d4e5f60718293a4b5c6d7e8f90a1b]: " +
+			"unsupported by registry",
+	}
+
+	for i, message := range messages {
+		job := h.manifestJob(id, i)
+		// The path the transfer wrote to, which is NOT the path the registry
+		// echoed: Artifactory strips its own repository key.
+		h.exec(`UPDATE jobs SET target_repository = ? WHERE id = ?`,
+			"apm0014228-oci-stage/orbs/cfx-5000-product/nokia-ims-"+[]string{"sas", "rcg"}[i], job)
+		h.fail(job, "blob_unknown", strings.ReplaceAll(message,
+			"sha256:aaaa00000000000000000000000000000000000000000000000000000000000"+
+				strconv.Itoa(i+1), h.digestOf(job)))
+	}
+
+	groups, err := h.packages.FailureGroups(t.Context(), id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(groups) != 1 {
+		for _, g := range groups {
+			t.Logf("group: %s", g.Message)
+		}
+		t.Fatalf("reported %d causes for one rejection; a bundle would produce hundreds",
+			len(groups))
+	}
+	if strings.Contains(groups[0].Message, "nokia-ims-sas") {
+		t.Errorf("the destination path survived normalisation: %s", groups[0].Message)
+	}
+	if strings.Contains(groups[0].Message, "sha256__") {
+		t.Errorf("Artifactory's storage-layout digest survived normalisation: %s",
+			groups[0].Message)
+	}
+	// And what remains is the part somebody can act on.
+	if !strings.Contains(groups[0].Message, "Failed to copy blob") {
+		t.Errorf("the cause was normalised away: %s", groups[0].Message)
+	}
+}

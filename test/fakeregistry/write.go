@@ -241,6 +241,22 @@ func (r *Registry) handleBlob(w http.ResponseWriter, req *http.Request) {
 	if rp, exists := r.repos[repoPath]; exists {
 		content, ok = rp.blobs[dgst]
 	}
+	if !ok && r.globalBlobIndex && req.Method == http.MethodHead {
+		// Artifactory answers HEAD from a checksum index spanning the whole
+		// Artifactory repository, not the image path the request named. So a
+		// blob present under any path reads as present under all of them —
+		// while the manifest push, which links per path, still refuses.
+		//
+		// Reproduced rather than described, because the bug it caused was
+		// invisible in every test that asked only well-behaved questions: every
+		// blob job reported success and every manifest failed.
+		for _, rp := range r.repos {
+			if c, found := rp.blobs[dgst]; found {
+				content, ok = c, true
+				break
+			}
+		}
+	}
 	r.mu.Unlock()
 
 	if !ok {
@@ -291,6 +307,14 @@ func (r *Registry) putManifest(
 	w http.ResponseWriter, repoPath, ref string, raw []byte, mediaType string,
 ) {
 	if missing := r.missingReferences(repoPath, raw); missing != "" {
+		if r.globalBlobIndex {
+			// The same registry's spelling of the same fact: a missing blob
+			// reported as MANIFEST_INVALID with the blob named only in a
+			// free-text description. Verbatim from Artifactory.
+			writeError(w, http.StatusBadRequest, "MANIFEST_INVALID",
+				"map[description:Failed to copy blob "+missing+" to "+repoPath+"/"+ref+"]")
+			return
+		}
 		writeError(w, http.StatusBadRequest, "BLOB_UNKNOWN",
 			"manifest references "+missing+", which is not present in this repository")
 		return

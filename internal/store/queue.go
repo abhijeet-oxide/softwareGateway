@@ -73,6 +73,11 @@ type LeasedJob struct {
 	Priority int
 	SiteRank int
 
+	// ForceUpload forbids every fast path: no placement, no HEAD, no mount,
+	// just the bytes. Set by RepairMissingBlobs when the destination has been
+	// caught claiming to hold content it will not serve.
+	ForceUpload bool
+
 	// TargetTags are the tags to apply once this manifest is committed,
 	// resolved at planning time from the artifact's own reference annotation.
 	// Empty for a blob, and for any manifest the source did not name.
@@ -181,7 +186,7 @@ func (p *Packages) startTransfers(ctx context.Context, leased []LeasedJob) error
 // implementations cannot drift in what they produce.
 const leaseColumns = `id, transfer_id, kind, digest, size_bytes, media_type,
 	artifact_id, source_repo_id, target_repo_id, attempts, wave, priority,
-	site_rank, target_tags, target_repository`
+	site_rank, force_upload, target_tags, target_repository`
 
 // The lease CLEARS the previous attempt's error.
 //
@@ -393,7 +398,7 @@ func scanLeasedJobs(rows *sql.Rows) ([]LeasedJob, error) {
 		var targetRepository sql.NullString
 		if err := rows.Scan(&j.ID, &j.TransferID, &j.Kind, &j.Digest, &j.SizeBytes,
 			&mediaType, &j.ArtifactID, &j.SourceRepoID, &j.TargetRepoID,
-			&j.Attempt, &j.Wave, &j.Priority, &j.SiteRank, &tags,
+			&j.Attempt, &j.Wave, &j.Priority, &j.SiteRank, &j.ForceUpload, &tags,
 			&targetRepository); err != nil {
 			return nil, fmt.Errorf("scan leased job: %w", err)
 		}
@@ -642,7 +647,18 @@ type CompletionResult struct {
 	// anything has a dependency graph that is wrong, and nothing else would
 	// show it.
 	Promoted int
+	// Repaired is what a rejected manifest push cost the placement cache: the
+	// records withdrawn and the blob jobs sent back for a forced upload.
+	Repaired RepairResult
 }
+
+// ClassBlobUnknown is the error class the engine reports when a destination
+// rejects a manifest for content it says it does not have.
+//
+// Declared here as well as in the engine because this is the side that ACTS on
+// it, and a string compared in two packages against two separate literals is a
+// string that eventually differs in one of them.
+const ClassBlobUnknown = "blob_unknown"
 
 // CompleteJob records a finished job and everything that follows from it, in
 // ONE transaction: job state, the blob placement, the wave-drain check and any
@@ -712,6 +728,27 @@ func (p *Packages) CompleteJob(ctx context.Context, c Completion) (CompletionRes
 	if c.Placed && kind == "blob" {
 		source := placementSource(c)
 		if err := p.RecordPlacement(ctx, tx, targetRepoID, digest, size, source); err != nil {
+			return res, err
+		}
+	}
+
+	// The destination has told us a blob we recorded as present is not. That is
+	// not a failure to retry — retrying asks the same destination the same
+	// question and gets the same wrong answer — it is a cache to repair. See
+	// RepairMissingBlobs, which is the backstop docs/design/11 §2.5 promised.
+	if c.Outcome == "failed" && c.ErrorClass == ClassBlobUnknown && kind == "manifest" {
+		repair, err := p.RepairMissingBlobs(ctx, tx, c.JobID)
+		if err != nil {
+			return res, err
+		}
+		res.Repaired = repair
+	}
+
+	// A blob that actually uploaded no longer needs to distrust the
+	// destination. Left set, the flag would make every future retry re-upload
+	// for no reason.
+	if c.Outcome == "succeeded" && kind == "blob" {
+		if err := p.ClearForcedUpload(ctx, tx, c.JobID); err != nil {
 			return res, err
 		}
 	}

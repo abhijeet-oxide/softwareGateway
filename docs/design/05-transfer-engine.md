@@ -124,6 +124,28 @@ Concurrent duplicate suppression ([04](04-queue-and-scheduling.md) §5) is what 
 
 Support is uneven in practice, which is why `202` is treated as a normal outcome and not an error, and why the mount attempt is skipped entirely for registries known not to support it ([06](06-registry-abstraction.md) §6). A mount that fails for any reason falls through to streaming, which is always correct.
 
+### 4.7 Reading the destination
+
+What a registry's browser shows is not what it stores, and the gap causes the same three questions every time.
+
+**A folder per reference, not per copy.** Pushing a manifest by digest creates `<image>/sha256:…/`; applying a tag creates `<image>/<tag>/`. Two folders, one manifest. Invariant I1 makes both inevitable — the manifest is pushed by digest and the tag applied only once everything beneath it is present — and the second costs no bytes and no job, because a tag is a pointer the registry writes for itself.
+
+**A tag is not in the manifest.** It cannot be: a manifest is content-addressed, so a tag inside it would change its digest, and every signature over that digest is a signature over those exact bytes. Tags live in the registry's own index. `org.opencontainers.image.ref.name` is an annotation on the descriptor in the PARENT index — the vendor saying what to call a child — not a property of the child.
+
+**Layer entries under each manifest are links.** Artifactory materialises a `sha256__<hex>` path per layer per manifest and reports a size for each, which reads as duplication and is not: its filestore is keyed by checksum and holds one binary however many paths point at it.
+
+So a component that appears three times — under its tag, under its digest, and inside the bundle — is:
+
+| | Stored | Transferred |
+|---|---|---|
+| `cfx-5000-product/nginx/1.2.3/` | one binary | — |
+| `cfx-5000-product/nginx/sha256:…/` | same binary | — |
+| `orbs/<orb>/sha256:…/` | same binary | mount, or one upload |
+
+Two of the three are the same OCI repository and cost nothing extra. The third is a different repository, which the distribution spec requires to hold its own blob links, and that is the one blob job — a cross-repository mount where the registry supports it (§4.2).
+
+**Why the bundle repository holds content at all**, rather than just an index: an OCI index may only reference manifests the registry will serve from the index's OWN repository. `docker pull` of the bundle resolves the index and then looks for each child under the same name. A bundle repository containing only an index would be unresolvable. Its children are untagged there on purpose — the index names them by digest, and their names belong to the repositories their `ref.name` gives.
+
 #### A repository spelled two ways is one repository
 
 An `org.opencontainers.image.ref.name` annotation names an artifact. Nothing makes it agree letter for letter with the repository the artifact actually lives in, and in practice it does not: content in `orbs/cfx-5000-k8s-215952-edgenac-…` was annotated `orbs/CFX-5000-k8s-215952-edgeNAC-…:orb_25.7_…`.

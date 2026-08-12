@@ -687,7 +687,7 @@ func describeTransfer(w io.Writer, t *v1.Transfer, rates *rateTracker, watching 
 	p := t.Progress
 	fmt.Fprintf(pw, "  Jobs:\t%d done, %d outstanding, %d failed (of %d planned)\n",
 		p.JobsDone, p.JobsOutstanding, p.JobsFailed, p.JobsPlanned)
-	fmt.Fprintf(pw, "  In flight:\t%s\n", inFlight(p))
+	fmt.Fprintf(pw, "  In flight:\t%s%s\n", inFlight(p), quietFor(p))
 	if p.JobsWaiting > 0 {
 		fmt.Fprintf(pw, "  Waiting:\t%d in retry backoff\n", p.JobsWaiting)
 	}
@@ -848,6 +848,34 @@ func throughputNote(w io.Writer, t *v1.Transfer) {
 
 	fmt.Fprintln(w, "  Manifest phase: bounded by round trips, not bandwidth.")
 }
+
+// quietFor reports how long the least active in-flight job has been silent.
+//
+// Only past a threshold, because on a healthy transfer it is noise: jobs report
+// progress every couple of seconds and the answer is always "moments ago". Past
+// it, it is the whole diagnosis — a worker holding a job that has not moved in
+// hours is the one failure the lease machinery cannot see, because a lease is
+// renewed by the worker being alive rather than by the job going anywhere.
+func quietFor(p v1.TransferProgress) string {
+	if p.JobsInFlight == 0 || p.QuietestInFlight == "" {
+		return ""
+	}
+	since, err := time.Parse(time.RFC3339Nano, p.QuietestInFlight)
+	if err != nil {
+		return ""
+	}
+
+	quiet := time.Since(since)
+	if quiet < quietThreshold {
+		return ""
+	}
+	return fmt.Sprintf("; quietest silent for %s", humanDuration(quiet))
+}
+
+// quietThreshold is when silence stops being normal and starts being the
+// answer. Comfortably above the progress interval, well below the worker's
+// stall timeout, so it is a warning rather than a duplicate of it.
+const quietThreshold = 2 * time.Minute
 
 // inFlight renders concurrency in the terms a reader is asking about.
 //

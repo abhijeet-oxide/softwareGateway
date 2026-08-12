@@ -1263,6 +1263,14 @@ type TransferSummary struct {
 	// hundred megabytes it reports a hundred megabytes of phantom work, and any
 	// estimate built on it is wrong by exactly that much.
 	OutstandingBytes int64
+	// QuietestInFlight is when the least recently active in-flight job last
+	// moved: its last progress report, or the moment it was leased.
+	//
+	// "1 job in flight" says nothing about whether that job is transferring or
+	// hung, and those need opposite responses. A worker holding a job that has
+	// been silent for hours is the one shape the lease machinery cannot see —
+	// the lease is renewed by the worker being alive, not by the job moving.
+	QuietestInFlight string
 	JobsOutstanding  int
 	BytesTransferred int64
 	// JobsInFlight is how many are leased RIGHT NOW, and Workers is how many
@@ -1316,6 +1324,8 @@ func (p *Packages) transferSelect() string {
 	       COALESCE((SELECT SUM(j.size_bytes - j.bytes_transferred) FROM jobs j
 	                  WHERE j.transfer_id = t.id
 	                    AND j.state IN ('pending','blocked','leased')), 0),
+	       COALESCE((SELECT MIN(j.updated_at) FROM jobs j
+	                  WHERE j.transfer_id = t.id AND j.state = 'leased'), ''),
 	       COALESCE(t.failure_reason, ''), t.created_at, COALESCE(t.started_at, ''),
 	       COALESCE(t.completed_at, '')
 	  FROM transfers t
@@ -1331,7 +1341,7 @@ func scanTransfer(row interface{ Scan(...any) error }) (TransferSummary, error) 
 		&t.DisplayTag, &t.Source, &t.Target, &t.State, &t.Priority, &t.CurrentWave, &t.MaxWave,
 		&t.PlannedJobs, &t.PlannedBytes, &t.DedupeSkippedBytes,
 		&t.JobsDone, &t.JobsFailed, &t.JobsOutstanding, &t.BytesTransferred,
-		&t.JobsInFlight, &t.Workers, &t.JobsWaiting, &t.JobsBlocked, &t.JobsRepaired, &t.OutstandingBytes,
+		&t.JobsInFlight, &t.Workers, &t.JobsWaiting, &t.JobsBlocked, &t.JobsRepaired, &t.OutstandingBytes, &t.QuietestInFlight,
 		&t.FailureReason, &t.CreatedAt, &t.StartedAt, &t.CompletedAt)
 	return t, err
 }

@@ -1160,6 +1160,10 @@ type TransferProgress struct {
 	// still to run, less what each has already sent. NOT planned minus
 	// transferred, which counts bytes that will never move.
 	OutstandingBytes Int64String `json:"outstandingBytes,omitempty"`
+	// QuietestInFlight is when the least recently active in-flight job last
+	// moved, RFC 3339. "1 job in flight" does not distinguish a job that is
+	// transferring from one that is hung, and those need opposite responses.
+	QuietestInFlight string `json:"quietestInFlight,omitempty"`
 	// Skips is what the transfer did not move, by reason. "Done" is four
 	// different claims wearing one word, and only some of them are evidence
 	// that bytes reached the destination — see SkipBreakdown.

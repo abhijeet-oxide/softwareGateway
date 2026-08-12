@@ -158,6 +158,7 @@ func run() error {
 			MaxConcurrentJobs: cfg.Worker.MaxConcurrentJobs,
 			CopyBufferSize:    int(cfg.Worker.CopyBufferSize),
 			HeartbeatInterval: cfg.Worker.HeartbeatInterval,
+			StallTimeout:      cfg.Worker.StallTimeout,
 		},
 		logger,
 	)

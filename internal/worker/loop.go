@@ -3,6 +3,7 @@ package worker
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log/slog"
 	"strconv"
 	"sync"
@@ -50,6 +51,13 @@ type Options struct {
 	// ProgressInterval throttles progress reports. A 250 MB blob should
 	// produce a handful, not thousands.
 	ProgressInterval time.Duration
+	// StallTimeout is how long ONE job may make no progress before the worker
+	// gives up on it. Zero uses DefaultStallTimeout; negative disables it.
+	//
+	// Not a deadline: a job that is moving beats the clock and may run for
+	// hours, which an 8 GB blob on a slow link legitimately needs. See
+	// watchdog.go for why the distinction is movement rather than elapsed time.
+	StallTimeout time.Duration
 }
 
 // Loop runs jobs until its context is cancelled.
@@ -64,7 +72,7 @@ type Loop struct {
 
 	// active tracks what this worker holds, for the heartbeat to renew.
 	mu     sync.Mutex
-	active map[int64]context.CancelFunc
+	active map[int64]*watchdog
 }
 
 // Defaults for the knobs a deployment usually leaves alone.
@@ -72,6 +80,15 @@ const (
 	DefaultMaxConcurrentJobs = 16
 	DefaultHeartbeatInterval = 20 * time.Second
 	DefaultProgressInterval  = 2 * time.Second
+	// DefaultStallTimeout is how long one job may make no progress.
+	//
+	// Fifteen minutes. Long enough that an ordinary slow exchange over a
+	// high-latency proxy is never mistaken for a stall — the longest legitimate
+	// single request observed on such a link took about half that — and short
+	// enough that a registry which stops answering costs one attempt rather
+	// than a night. A job that IS moving is unaffected at any duration, because
+	// progress resets the clock.
+	DefaultStallTimeout = 15 * time.Minute
 )
 
 // NewLoop builds the worker's run loop.
@@ -96,7 +113,7 @@ func NewLoop(coord Coordinator, clients *regclient.Clients, opts Options, log *s
 		engine:  transfer.NewEngine(opts.CopyBufferSize, log),
 		log:     log,
 		sem:     semaphore.NewWeighted(int64(opts.MaxConcurrentJobs)),
-		active:  map[int64]context.CancelFunc{},
+		active:  map[int64]*watchdog{},
 	}
 }
 
@@ -187,19 +204,21 @@ func (l *Loop) dispatch(ctx context.Context, job v1.LeasedJob) {
 	}
 
 	jobCtx, cancel := context.WithCancel(ctx)
-	l.track(id, cancel)
+	dog := newWatchdog(cancel, l.stallTimeout())
+	l.track(id, dog)
 
 	go func() {
 		defer l.sem.Release(1)
 		defer l.untrack(id)
+		defer dog.stop()
 		defer cancel()
 
-		l.run(jobCtx, id, job)
+		l.run(jobCtx, id, job, dog)
 	}()
 }
 
 // run executes one job and reports the outcome.
-func (l *Loop) run(ctx context.Context, id int64, job v1.LeasedJob) {
+func (l *Loop) run(ctx context.Context, id int64, job v1.LeasedJob, dog *watchdog) {
 	source, target, err := l.endpoints(job)
 	if err != nil {
 		l.report(ctx, id, job, transfer.Result{
@@ -229,7 +248,23 @@ func (l *Loop) run(ctx context.Context, id int64, job v1.LeasedJob) {
 		RepairLevel:    job.RepairLevel,
 		MountFrom:      job.MountFromRepository,
 		Tags:           job.Tags,
-	}, l.progressReporter(ctx, job.JobID))
+	}, l.progressReporter(ctx, job.JobID, dog))
+
+	// A job the watchdog cancelled looks, from here, exactly like one cancelled
+	// by shutdown: a context error. They are opposite things — one is a
+	// registry that stopped answering and must be recorded, the other is a
+	// worker going away and must not be — so the outcome is rewritten with what
+	// only the watchdog knows.
+	if dog.tripped() {
+		res = transfer.Result{
+			Outcome:    transfer.OutcomeFailed,
+			ErrorClass: string(registry.ClassTimeout),
+			BytesMoved: res.BytesMoved,
+			Duration:   res.Duration,
+			Err: fmt.Errorf("%w: no progress for %s; abandoned so another attempt can run",
+				registry.ErrTimeout, l.stallTimeout()),
+		}
+	}
 
 	l.report(ctx, id, job, res)
 }
@@ -250,12 +285,20 @@ func (l *Loop) endpoints(job v1.LeasedJob) (source, target registry.Repository, 
 //
 // The engine reports every buffer; sending each would turn a 250 MB blob into
 // thousands of HTTP calls to report a number nobody is watching that closely.
-func (l *Loop) progressReporter(ctx context.Context, jobID string) transfer.ProgressFunc {
+func (l *Loop) progressReporter(
+	ctx context.Context, jobID string, dog *watchdog,
+) transfer.ProgressFunc {
 	var (
 		mu   sync.Mutex
 		last time.Time
 	)
 	return func(bytes int64) {
+		// BEFORE the throttle. The throttle exists to spare the Coordinator
+		// thousands of reports for one blob; the watchdog needs every one of
+		// them, because "did this move" is exactly the question it asks and a
+		// throttled beat would let a transferring blob be abandoned.
+		dog.beat()
+
 		mu.Lock()
 		if time.Since(last) < l.opts.ProgressInterval {
 			mu.Unlock()
@@ -393,11 +436,11 @@ func (l *Loop) abandonLost(ctx context.Context, held []string, res *v1.Heartbeat
 			continue
 		}
 		l.mu.Lock()
-		cancel, ok := l.active[n]
+		dog, ok := l.active[n]
 		l.mu.Unlock()
 		if ok {
 			l.log.InfoContext(ctx, "abandoning a job this worker no longer holds", "job", id)
-			cancel()
+			dog.cancel()
 		}
 	}
 }
@@ -406,10 +449,18 @@ func (l *Loop) abandonLost(ctx context.Context, held []string, res *v1.Heartbeat
 // Bookkeeping
 // ---------------------------------------------------------------------------
 
-func (l *Loop) track(id int64, cancel context.CancelFunc) {
+func (l *Loop) track(id int64, dog *watchdog) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
-	l.active[id] = cancel
+	l.active[id] = dog
+}
+
+// stallTimeout is the configured bound, or the default.
+func (l *Loop) stallTimeout() time.Duration {
+	if l.opts.StallTimeout != 0 {
+		return l.opts.StallTimeout
+	}
+	return DefaultStallTimeout
 }
 
 func (l *Loop) untrack(id int64) {

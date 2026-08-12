@@ -50,7 +50,7 @@ func TestFailuresSaysWhetherWaitingWouldHelp(t *testing.T) {
 	}{
 		{"auth", false, "credential"},
 		{"unsupported", false, "Not retryable"},
-		{"unavailable", true, "Retrying on its own"},
+		{"unavailable", true, "Retrying"},
 		{"blob_unknown", true, "Self-healing"},
 	}
 

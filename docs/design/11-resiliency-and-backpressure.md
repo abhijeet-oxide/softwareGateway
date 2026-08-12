@@ -39,6 +39,28 @@ There is no recovery subsystem, no repair job, and no reconciliation loop, becau
 
 > **Why double execution is harmless.** A worker declared dead may still be alive and mid-upload when another worker retakes its job. Both may write the same blob. This is safe because OCI blobs are content-addressed and the registry verifies the digest on commit: the loser writes identical bytes or is rejected. **Leases are safe here precisely because the workload is idempotent** — the same mechanism on a non-idempotent workload would require fencing tokens, and would be a much harder design.
 
+#### A live worker holding a job that is going nowhere
+
+The table above is about a worker that **dies**. It has nothing to say about one that is alive and stuck, and that is a different failure with none of the same defences.
+
+The heartbeat reports which job IDs a worker holds. It does not ask whether any of them is moving, so a request that never returns — a proxy that accepted a connection and went quiet, a registry that took the body and stopped — is held forever and renewed forever. The transfer reports one job in flight, zero failed, and does not move again. Observed: 2491 of 2493 jobs done, one leased manifest, and nothing to look at.
+
+The transport's own timeouts do not cover it. `ResponseHeaderTimeout` starts after the request body has been written, so a stalled **upload** is outside it, and there is deliberately no client-level timeout because that would cap a legitimate multi-hour transfer of a large blob.
+
+> **Decision — the bound is a STALL timeout, not a deadline.**
+>
+> *Rejected:* a per-job deadline. It cannot be both correct for an 8 GB blob and useful for a manifest — at the rates this system sees, that blob is an eight-hour job, so any deadline generous enough for it leaves a stuck manifest hanging for most of a day.
+>
+> *Chosen:* the worker cancels a job that has made **no progress** for `worker.stallTimeout` (default 15 minutes). What distinguishes a working job from a stuck one is movement, not elapsed time. A blob that is transferring reports progress, resets the clock, and may run as long as it needs; a blob that has stopped reports nothing, and so does a manifest that will never return.
+>
+> A manifest job reports no progress at all — it is one small request — so for it this is a flat deadline, which is the right shape: a manifest push that has not answered in fifteen minutes is not going to.
+>
+> The watchdog beat is taken **before** the progress throttle. The throttle exists to spare the Coordinator thousands of reports for one blob; the watchdog needs every one, or a transferring blob could be abandoned between throttled reports.
+
+A job cancelled this way is reported `failed` with class `timeout` and re-queued, rather than being left to the reaper — the outcome is rewritten with what only the watchdog knows, because from inside the engine a watchdog cancellation and a shutdown are the same context error and they mean opposite things.
+
+`transfers describe` reports the other half: how long the least active in-flight job has been silent, once that passes two minutes. "1 job in flight" does not distinguish a job that is transferring from one that is hung.
+
 ### 2.2 Coordinator failures
 
 | Failure | Detection | Recovery | Effect on in-flight transfers |
@@ -52,6 +74,14 @@ There is no recovery subsystem, no repair job, and no reconciliation loop, becau
 **This is the cost accepted in [00](00-overview.md) §5.2.** With a Coordinator outage longer than a lease period, workers finish what they hold and go idle. They do not crash, do not lose work, and resume leasing the moment the Coordinator returns. Two replicas plus a lease duration comfortably longer than a rolling restart make the window rare and harmless.
 
 On regaining leadership the reaper runs **immediately** rather than waiting for its tick, so leases orphaned during the outage are requeued at once.
+
+**Start order does not matter, and that is now asserted rather than assumed.** A worker started before the Coordinator exists polls until it appears; a Coordinator taken away under a running worker does not kill it. Three properties hold, one per row above, and `internal/worker` has a test for each:
+
+- The worker **does not exit** when the control plane is absent. A failed lease is a WARN and a five-second backoff, forever. Nothing in `Run` returns on it.
+- Liveness deliberately **does not check the Coordinator** — only readiness does. So Kubernetes marks the pod not-ready and stops sending it traffic it does not receive anyway, rather than restarting it. A control-plane blip that crash-looped the fleet would turn a routine rollout into an outage.
+- The worker **needs no restart** when the Coordinator returns. It leases on its next tick, and anything whose lease expired meanwhile has already been requeued by the reaper.
+
+Jobs in flight are unaffected throughout, because bytes do not pass through the Coordinator: only progress reports and completions do, and both retry.
 
 ### 2.3 Registry failures
 

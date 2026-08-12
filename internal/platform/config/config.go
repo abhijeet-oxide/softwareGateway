@@ -174,6 +174,14 @@ type WorkerConfig struct {
 	MaxConcurrentJobs   int           `koanf:"maxConcurrentJobs"`
 	CopyBufferSize      int64         `koanf:"copyBufferSize"`
 	HeartbeatInterval   time.Duration `koanf:"heartbeatInterval"`
+	// StallTimeout is how long one job may make no progress before this worker
+	// abandons it so another attempt can run. Zero uses the default; negative
+	// disables the check.
+	//
+	// It is not a deadline on the job: a job that is transferring resets the
+	// clock on every progress report, so a large blob may legitimately run for
+	// hours. It bounds only silence.
+	StallTimeout time.Duration `koanf:"stallTimeout"`
 }
 
 type ObservabilityConfig struct {
@@ -264,6 +272,7 @@ func Defaults() SystemConfig {
 			MaxConcurrentJobs:   16,
 			CopyBufferSize:      1 << 20, // 1 MiB
 			HeartbeatInterval:   20 * time.Second,
+			StallTimeout:        15 * time.Minute,
 		},
 		Observability: ObservabilityConfig{
 			Log:     LogConfig{Level: "info", Format: "json"},

@@ -464,8 +464,12 @@ Makespan is worth single-digit percent at the tail. The mount is worth up to hal
 `site_rank` (migration 00011) states what insertion order previously implied: 0 for the copy that keeps the bundle resolvable, 1 for the copy published under the component's own name. The dequeue is now
 
 ```sql
-ORDER BY priority DESC, site_rank, size_bytes DESC, id
+ORDER BY priority DESC, kind DESC, site_rank, size_bytes DESC, id
 ```
+
+**Manifests before blobs** (`'manifest' > 'blob'`, so DESC). Under the wave barrier the two never competed; per-artifact readiness (§3.5) put them in the runnable set together for the first time, and the order between them was then being decided by the size key — which sorts a kilobyte manifest last however urgent it is. Measured: a manifest whose content had landed sat behind 8 GiB of blobs. It costs one round trip, moves no bandwidth worth counting, and unblocks the index above it.
+
+Manifests cannot starve blobs in return, for a structural reason rather than a tuned one: a manifest is only runnable once its own content is present, so the supply of them is bounded by work that has already finished.
 
 Every rank-0 job is dequeued before any rank-1 job, so by the time the second copy is leased the first has either completed — leaving a placement to mount from — or is still in flight, in which case the duplicate suppression of §5 defers it. Neither path streams the same digest twice, and within a rank the largest job starts first.
 

@@ -564,68 +564,52 @@ func renderWaves(w io.Writer, waves []v1.TransferWave) error {
 // The distinction is not academic — it is the answer to "why is it re-sending
 // blobs that already succeeded?". The blobs a repair sends back are exactly the
 // ones counted on an untrusted line here.
-func renderSkips(w io.Writer, skips []v1.SkipBreakdown) {
-	for _, k := range skips {
-		fmt.Fprintf(w, "  %s:\t%s across %s, %s\n",
-			skipLabel(k.Reason), humanBytes(k.Bytes),
-			plural(k.Jobs, "job", "jobs"), skipReason(k.Reason))
-	}
-}
-
-// skipLabel gives each reason its OWN label.
+// renderNotTransferred accounts for the planned bytes that did not move.
 //
-// They used to share one — two adjacent lines both reading "Not moved:",
-// differing only in a clause at the far end — which reads as the same fact
-// printed twice rather than as two different things. They are not the same
-// thing at all: one is the registry moving content for us, the other is the
-// registry telling us it need not be moved, and only the first is something
-// that happened.
-func skipLabel(reason string) string {
-	if reason == "mounted" {
-		return "Relocated"
-	}
-	return "Already there"
-}
-
-func skipReason(reason string) string {
-	switch reason {
-	case "mounted":
-		return "the registry copied it internally — no bytes crossed the network"
-	case "placement_hit":
-		return "our own record of an earlier transfer said so; we did not re-check"
-	case "exists_at_target":
-		return "the destination answered that it already had it; we took its word"
-	default:
-		return reason
-	}
-}
-
-// skipsFootnote explains the one thing the lines above cannot say for
-// themselves: what it would MEAN for one of them to be wrong.
+// One heading with the reasons indented under it, rather than a flat line per
+// reason. They were flat, and two adjacent lines whose labels differed while
+// their meaning had to be read off a trailing clause is a layout that hides the
+// structure: these are three members of one set, and the set is "planned, and
+// not sent".
 //
-// It replaces a bare "(unverified)", which named the property without saying
-// what followed from it. A reader who has just watched a repair re-send content
-// that reported success needs the connection spelled out, not labelled.
-func skipsFootnote(w io.Writer, t *v1.Transfer) {
-	untrusted := 0
-	for _, k := range t.Progress.Skips {
-		if !k.Trusted {
-			untrusted += k.Jobs
+// Each reason gets a short qualifier because the label alone does not carry it
+// — `Deduplicated` in particular says nothing about WHEN. The qualifier is a
+// noun phrase, not a sentence: the tool states what happened and leaves the
+// reader to draw conclusions.
+func renderNotTransferred(w io.Writer, p v1.TransferProgress) {
+	type row struct{ label, amount, note string }
+	rows := []row{{
+		label:  "Deduplicated",
+		amount: humanBytes(p.DedupeSkippedBytes),
+		note:   "not queued; already at target when planned",
+	}}
+
+	for _, k := range p.Skips {
+		switch k.Reason {
+		case "mounted":
+			rows = append(rows, row{
+				label:  "Mounted",
+				amount: humanBytes(k.Bytes),
+				note: fmt.Sprintf("%s; copied within the target registry",
+					plural(k.Jobs, "job", "jobs")),
+			})
+		default:
+			rows = append(rows, row{
+				label:  "Present at target",
+				amount: humanBytes(k.Bytes),
+				note: fmt.Sprintf("%s; reported present, not re-checked",
+					plural(k.Jobs, "job", "jobs")),
+			})
 		}
 	}
-	if untrusted == 0 {
-		return
-	}
 
-	fmt.Fprintln(w)
-	fmt.Fprintf(w, "%s moved no bytes on somebody's word rather than on an action:\n",
-		plural(untrusted, "job", "jobs"))
-	fmt.Fprintln(w, "  a record of an earlier transfer, or the destination's own answer to")
-	fmt.Fprintln(w, "  \"do you have this?\". Both are usually right. Where one is not, the")
-	fmt.Fprintln(w, "  manifest push says so and the content is re-sent — which is what the")
-	fmt.Fprintln(w, "  Repaired line above counts.")
-	fmt.Fprintf(w, "  See exactly which: transferctl transfers jobs %s --state skipped\n",
-		shortID(t.ID))
+	fmt.Fprintln(w, "  Not transferred:")
+
+	tw := newTabWriter(w)
+	for _, r := range rows {
+		fmt.Fprintf(tw, "    %s\t%s\t%s\n", r.label, r.amount, r.note)
+	}
+	_ = tw.Flush()
 }
 
 // activeWaves names the waves with work that can move right now.
@@ -703,7 +687,7 @@ func describeTransfer(w io.Writer, t *v1.Transfer, rates *rateTracker, watching 
 	p := t.Progress
 	fmt.Fprintf(pw, "  Jobs:\t%d done, %d outstanding, %d failed (of %d planned)\n",
 		p.JobsDone, p.JobsOutstanding, p.JobsFailed, p.JobsPlanned)
-	fmt.Fprintf(pw, "  In flight:\t%s\n", inFlight(p))
+	fmt.Fprintf(pw, "  In flight:\t%s%s\n", inFlight(p), quietFor(p))
 	if p.JobsWaiting > 0 {
 		fmt.Fprintf(pw, "  Waiting:\t%d in retry backoff\n", p.JobsWaiting)
 	}
@@ -713,31 +697,35 @@ func describeTransfer(w io.Writer, t *v1.Transfer, rates *rateTracker, watching 
 		// that CANNOT be leased yet — a manifest is pushed only once every blob
 		// beneath it has landed. Without this the reader sees five hundred
 		// outstanding, one running, and concludes the fleet is broken.
-		fmt.Fprintf(pw, "  Blocked:\t%d waiting for their own content\n", p.JobsBlocked)
+		fmt.Fprintf(pw, "  Blocked:\t%d awaiting referenced content\n", p.JobsBlocked)
 	}
 	if p.JobsRepaired > 0 {
-		// THE LINE THAT EXPLAINS A COUNT GOING BACKWARDS.
-		//
-		// A repair returns finished jobs to the queue, so `done` falls. Watched
-		// live that looks like the tool losing track of itself — 1950, then
-		// 1937, then 1945 — and there is nothing else on the page that could
-		// account for it. Naming it turns an alarming number into a reported
-		// one.
-		fmt.Fprintf(pw, "  Repaired:\t%d job(s) re-sent after the destination "+
-			"denied holding them  (done can go down)\n", p.JobsRepaired)
+		// Shown only when it happened, and stated as a fact rather than
+		// explained. It is here because it is the only thing that makes the
+		// done count fall.
+		fmt.Fprintf(pw, "  Re-sent:\t%s; target reported content it did not hold\n",
+			plural(p.JobsRepaired, "job", "jobs"))
 	}
-	fmt.Fprintf(pw, "  Transferred:\t%s of %s planned  (%.0f%% of jobs done)\n",
+	fmt.Fprintf(pw, "  Transferred:\t%s of %s planned  (%.0f%%)\n",
 		humanBytes(p.BytesTransferred), humanBytes(p.PlannedBytes), percentComplete(p))
-	fmt.Fprintf(pw, "  Deduplicated:\t%s never moved\n", humanBytes(p.DedupeSkippedBytes))
-	renderSkips(pw, p.Skips)
+
+	// The sub-block gets a tabwriter of its own. Sharing one would align its
+	// three columns against the two above it, padding "Jobs:" to the width of
+	// "Present at target" and opening a hole down the middle of the block.
+	if err := pw.Flush(); err != nil {
+		return err
+	}
+	renderNotTransferred(w, p)
+	pw = newTabWriter(w)
+
 	if d, ok := elapsed(t); ok {
 		fmt.Fprintf(pw, "  Elapsed:\t%s\n", humanDuration(d))
 	}
 	if !isSettled(t.State) {
 		if d, ok := estimateAt(t, rates.smoothed); ok {
-			fmt.Fprintf(pw, "  Remaining:\t~%s at the current rate\n", humanDuration(d))
+			fmt.Fprintf(pw, "  Remaining:\t~%s  (current rate)\n", humanDuration(d))
 		} else if d, ok := estimate(t); ok {
-			fmt.Fprintf(pw, "  Remaining:\t~%s at the average rate so far\n", humanDuration(d))
+			fmt.Fprintf(pw, "  Remaining:\t~%s  (average rate)\n", humanDuration(d))
 		}
 	}
 	if err := pw.Flush(); err != nil {
@@ -751,8 +739,6 @@ func describeTransfer(w io.Writer, t *v1.Transfer, rates *rateTracker, watching 
 	if err := describeThroughput(w, t, rates, watching); err != nil {
 		return err
 	}
-
-	skipsFootnote(w, t)
 
 	if t.FailureReason != "" {
 		fmt.Fprintln(w)
@@ -825,7 +811,7 @@ func describeThroughput(w io.Writer, t *v1.Transfer, rates *rateTracker, watchin
 			// The one the ETA uses, so it is shown rather than left implicit:
 			// a reader comparing "remaining" against a number on this page
 			// should be able to find the number it was computed from.
-			fmt.Fprintf(tw, "  Recent:\t%s\tover the last %s — what Remaining extrapolates\n",
+			fmt.Fprintf(tw, "  Recent:\t%s\tover the last %s; used for Remaining\n",
 				humanRate(rates.smoothed), humanDuration(smoothingWindow))
 			fmt.Fprintf(tw, "  Peak:\t%s\thighest seen while watching\n", humanRate(rates.peak))
 		} else {
@@ -836,8 +822,60 @@ func describeThroughput(w io.Writer, t *v1.Transfer, rates *rateTracker, watchin
 		return err
 	}
 
+	throughputNote(w, t)
 	return nil
 }
+
+// throughputNote explains a rate that looks like a collapse and is not.
+//
+// A manifest is about a kilobyte. When the in-flight work is manifests, the
+// cost of each one is a ROUND TRIP, not its size, so the rate is bounded by
+// latency × concurrency and lands in the low kilobytes per second on a link
+// where blobs moved at hundreds. Nothing has gone wrong, nothing is
+// misconfigured, and no amount of extra bandwidth would move it — but a reader
+// watching 577 KiB/s become 1.2 KiB/s has every reason to think otherwise, and
+// would go looking for a fault that is not there.
+func throughputNote(w io.Writer, t *v1.Transfer) {
+	kinds := map[string]bool{}
+	for _, k := range t.Waves {
+		if k.Running > 0 {
+			kinds[k.Kind] = true
+		}
+	}
+	if len(kinds) != 1 || !kinds["manifest"] {
+		return
+	}
+
+	fmt.Fprintln(w, "  Manifest phase: bounded by round trips, not bandwidth.")
+}
+
+// quietFor reports how long the least active in-flight job has been silent.
+//
+// Only past a threshold, because on a healthy transfer it is noise: jobs report
+// progress every couple of seconds and the answer is always "moments ago". Past
+// it, it is the whole diagnosis — a worker holding a job that has not moved in
+// hours is the one failure the lease machinery cannot see, because a lease is
+// renewed by the worker being alive rather than by the job going anywhere.
+func quietFor(p v1.TransferProgress) string {
+	if p.JobsInFlight == 0 || p.QuietestInFlight == "" {
+		return ""
+	}
+	since, err := time.Parse(time.RFC3339Nano, p.QuietestInFlight)
+	if err != nil {
+		return ""
+	}
+
+	quiet := time.Since(since)
+	if quiet < quietThreshold {
+		return ""
+	}
+	return fmt.Sprintf("; quietest silent for %s", humanDuration(quiet))
+}
+
+// quietThreshold is when silence stops being normal and starts being the
+// answer. Comfortably above the progress interval, well below the worker's
+// stall timeout, so it is a warning rather than a duplicate of it.
+const quietThreshold = 2 * time.Minute
 
 // inFlight renders concurrency in the terms a reader is asking about.
 //
@@ -847,11 +885,8 @@ func inFlight(p v1.TransferProgress) string {
 	if p.JobsInFlight == 0 {
 		return "nothing running"
 	}
-	worker := "workers"
-	if p.Workers == 1 {
-		worker = "worker"
-	}
-	return fmt.Sprintf("%d job(s) across %d %s", p.JobsInFlight, p.Workers, worker)
+	return fmt.Sprintf("%s across %s",
+		plural(p.JobsInFlight, "job", "jobs"), plural(p.Workers, "worker", "workers"))
 }
 
 func newTransfersJobsCommand() *cobra.Command {

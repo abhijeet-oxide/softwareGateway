@@ -162,7 +162,7 @@ func (r *Registry) handleMount(w http.ResponseWriter, repoPath, dgst, fromRepo s
 	}
 
 	r.putBlob(repoPath, dgst, content)
-	r.countMount()
+	r.countMount(repoPath, dgst)
 
 	w.Header().Set("Location", "/v2/"+repoPath+"/blobs/"+dgst)
 	w.Header().Set("Docker-Content-Digest", dgst)
@@ -221,7 +221,7 @@ func (r *Registry) commitUpload(w http.ResponseWriter, req *http.Request, repoPa
 	}
 
 	r.putBlob(repoPath, got, content)
-	r.countUpload(int64(len(content)))
+	r.countUpload(repoPath, got, int64(len(content)))
 
 	w.Header().Set("Location", "/v2/"+repoPath+"/blobs/"+got)
 	w.Header().Set("Docker-Content-Digest", got)
@@ -353,11 +353,55 @@ func WithDeclinedMounts() Option {
 	return func(r *Registry) { r.declineMounts = true }
 }
 
-func (r *Registry) countMount() { r.MountedBlobs.Add(1) }
+func (r *Registry) countMount(repoPath, digest string) {
+	r.MountedBlobs.Add(1)
 
-func (r *Registry) countUpload(n int64) {
+	r.ledgerMu.Lock()
+	defer r.ledgerMu.Unlock()
+	if r.mountLedger == nil {
+		r.mountLedger = map[string]int{}
+	}
+	r.mountLedger[repoPath+"|"+digest]++
+}
+
+func (r *Registry) countUpload(repoPath, digest string, n int64) {
 	r.UploadedBlobs.Add(1)
 	r.UploadedBytes.Add(n)
+
+	r.ledgerMu.Lock()
+	defer r.ledgerMu.Unlock()
+	if r.uploadLedger == nil {
+		r.uploadLedger = map[string]int{}
+	}
+	r.uploadLedger[repoPath+"|"+digest]++
+}
+
+// Manifest returns a stored manifest's raw bytes, for assertions that need to
+// read what was actually published rather than trust the fixture's own
+// variables.
+func (r *Registry) Manifest(repoPath, dgst string) []byte {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+
+	rp, ok := r.repos[repoPath]
+	if !ok {
+		return nil
+	}
+	return rp.manifests[dgst]
+}
+
+// RemoveBlob deletes a blob from one repository.
+//
+// What a garbage collector does, and the event the whole optimistic placement
+// cache rests on being able to survive. A test cannot exercise the recovery
+// without being able to cause the loss.
+func (r *Registry) RemoveBlob(repoPath, dgst string) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	if rp, ok := r.repos[repoPath]; ok {
+		delete(rp.blobs, dgst)
+	}
 }
 
 // BlobExists reports whether a blob is present, for assertions.

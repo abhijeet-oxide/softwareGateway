@@ -158,7 +158,7 @@ func ResolveLayout(tree store.ExpandedTree, opts LayoutOptions) map[string]Place
 			// with its own reference has not thereby renamed the release.
 			sites[0].Tags = mergeTags(opts.RootTags, ref.tags())
 
-		case ref.repository == "" || ref.repository == container:
+		case ref.repository == "" || sameRepository(ref.repository, container):
 			// Named within its own container, or not named at all. The tag —
 			// where there is one — belongs right here.
 			sites[0].Tags = ref.tags()
@@ -194,7 +194,10 @@ func mergeSites(a, b []Site) []Site {
 	for _, site := range b {
 		found := false
 		for i := range out {
-			if out[i].Repository == site.Repository {
+			// Case-insensitively, so an artifact reached twice under two
+			// spellings of one repository keeps ONE site rather than growing a
+			// second that differs only in capitals. See sameRepository.
+			if sameRepository(out[i].Repository, site.Repository) {
 				out[i].Tags = mergeTags(out[i].Tags, site.Tags)
 				found = true
 				break
@@ -248,6 +251,38 @@ func destinationPath(base, sourceRepo string) string {
 	default:
 		return path.Join(base, sourceRepo)
 	}
+}
+
+// sameRepository compares two repository paths as the REGISTRY will.
+//
+// # The bug this exists for
+//
+// A vendor's `org.opencontainers.image.ref.name` names the artifact, and there
+// is nothing making it agree letter for letter with the repository the artifact
+// actually lives in. Observed: content in `orbs/cfx-5000-k8s-215952-edgenac-…`
+// annotated `orbs/CFX-5000-k8s-215952-edgeNAC-…:orb_25.7_…`. The same
+// repository, spelled twice.
+//
+// Compared byte for byte, those are two repositories, so the layout published
+// the component into its container AND "elsewhere" — and the destination grew
+// two sibling folders with the same name and different capitals, half the
+// bundle in each.
+//
+// The second one does not entirely work, either. The OCI grammar for a
+// repository name is lowercase-only, and Artifactory accepts a push to a
+// mixed-case path while issuing a token scoped to the name it normalised — so a
+// later request against the name we sent falls outside that scope and comes
+// back 401 unauthorized, on a repository the same credential has been writing
+// to for thirty hours. It surfaces at the tag, which is the last request of the
+// whole transfer.
+//
+// Case-insensitive, therefore, and only here. Reading is still verbatim: a
+// vendor that genuinely serves `orbs/CFX-5000-k8s` is served from exactly that
+// path, and mirroring it to a destination of the same name is still exactly
+// what happens. What no longer happens is one repository becoming two because
+// an annotation disagreed with itself about capitals.
+func sameRepository(a, b string) bool {
+	return strings.EqualFold(strings.Trim(a, "/"), strings.Trim(b, "/"))
 }
 
 // refName is a parsed org.opencontainers.image.ref.name.

@@ -111,13 +111,35 @@ func estimateAt(t *v1.Transfer, rate float64) (time.Duration, bool) {
 		return 0, false
 	}
 
-	planned := int64Of(t.Progress.PlannedBytes)
-	moved := int64Of(t.Progress.BytesTransferred)
-	remaining := planned - moved
+	remaining := remainingBytes(t)
 	if remaining <= 0 {
 		return 0, false
 	}
-	return time.Duration(float64(remaining)/rate) * time.Second, true
+	// Scaled INSIDE the conversion. `time.Duration(x) * time.Second` truncates
+	// x to an integer first, so anything under a second became zero and printed
+	// as "-" — an estimate of "unknown" for the one case where it is most
+	// certain.
+	return time.Duration(float64(remaining) / rate * float64(time.Second)), true
+}
+
+// remainingBytes is what is actually left to move.
+//
+// PLANNED MINUS TRANSFERRED IS NOT THAT, and the gap is not small. That
+// difference counts every byte that will never move: content the destination
+// already had, blobs the registry relocated internally, work deduplicated away
+// at plan time. A transfer 98% done with 43 manifest jobs left — about 233 KiB
+// of real work — reported a hundred megabytes remaining and, at the kilobyte
+// rate of a manifest phase, an ETA of eleven hours. Both numbers were arithmetic
+// on the wrong quantity.
+//
+// The server reports the real figure: the size of every outstanding job, less
+// what each has already sent. The old subtraction survives only as a fallback
+// for a Coordinator too old to send it.
+func remainingBytes(t *v1.Transfer) int64 {
+	if outstanding := int64Of(t.Progress.OutstandingBytes); outstanding > 0 {
+		return outstanding
+	}
+	return int64Of(t.Progress.PlannedBytes) - int64Of(t.Progress.BytesTransferred)
 }
 
 // humanRate renders bytes per second.
@@ -136,6 +158,8 @@ func humanDuration(d time.Duration) string {
 	switch {
 	case d <= 0:
 		return "-"
+	case d < time.Second:
+		return "<1s"
 	case d < time.Minute:
 		return fmt.Sprintf("%ds", int(d.Seconds()))
 	case d < time.Hour:

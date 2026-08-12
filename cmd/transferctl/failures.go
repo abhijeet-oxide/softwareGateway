@@ -114,30 +114,24 @@ func renderFailure(w io.Writer, g v1.FailureGroup) {
 func advice(g v1.FailureGroup) string {
 	switch g.Class {
 	case "auth":
-		return "Not retryable: the credential for this destination is being refused. " +
-			"Check the target's secret, then retry."
+		return "Not retryable; credential refused. Check the target's secret, then retry."
 	case "unsupported":
-		return "Not retryable: the registry rejects this content every time. " +
-			"Retrying will not change the answer — the destination or the artifact has to."
+		return "Not retryable; the registry rejects this content."
 	case "not_found":
-		return "Not retryable as-is: something the job expected at the destination is absent."
+		return "Not retryable; content the job expected at the target is absent."
 	case "blob_unknown":
-		return "Self-healing: the destination says a blob we believed was there is not. " +
-			"Those blobs are requeued automatically."
+		return "Self-healing; the affected blobs are re-queued automatically."
 	case "configuration":
-		return "Not retryable: the worker cannot execute this job — a product it has not " +
-			"loaded, or a credential it cannot resolve. Check `transferctl health`."
+		return "Not retryable; the worker cannot execute this job. Check `transferctl health`."
 	case "rate_limited":
-		return "Retrying on its own, backing off as the registry asked."
+		return "Retrying; backing off as the registry directed."
 	case "timeout", "unavailable":
-		return "Retrying on its own. If it does not recover, the network path is the thing " +
-			"to look at — `transferctl calibrate` measures it."
+		return "Retrying. If it does not recover, measure the path with `transferctl calibrate`."
 	case "integrity":
-		return "Retrying, but capped low: content did not hash as claimed, and retrying " +
-			"rarely helps."
+		return "Retrying, capped low; content did not hash as claimed."
 	default:
 		if g.Retryable {
-			return "Retrying on its own."
+			return "Retrying."
 		}
 		return "Not retryable."
 	}

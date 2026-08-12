@@ -377,6 +377,26 @@ func (q *Queue) Settle(ctx context.Context) ([]store.StalledTransfer, error) {
 	return stalled, nil
 }
 
+// Unstick promotes work in transfers that have nothing runnable at all.
+//
+// Runs BEFORE Settle, and the order is the whole point: a transfer that can be
+// unstuck is not stalled, and settling it first would report an ending to
+// something one UPDATE away from carrying on.
+func (q *Queue) Unstick(ctx context.Context) ([]store.UnstuckTransfer, error) {
+	unstuck, err := q.packages.UnstickTransfers(ctx)
+	if err != nil {
+		return nil, err
+	}
+	for _, t := range unstuck {
+		// WARN rather than INFO. This is the system catching a deadlock it
+		// should not have created, and a run that logs it regularly is a run
+		// with a bug still in it.
+		q.log.WarnContext(ctx, "transfer had nothing runnable and was unstuck",
+			"transfer", t.ID, "promoted", t.Promoted)
+	}
+	return unstuck, nil
+}
+
 // Retry returns a transfer's failed jobs to the queue.
 func (q *Queue) Retry(ctx context.Context, transferID string) (store.RetryResult, error) {
 	res, err := q.packages.RetryTransfer(ctx, transferID)

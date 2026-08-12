@@ -119,6 +119,14 @@ func (c *Controller) reap(ctx context.Context) {
 		c.log.InfoContext(ctx, "returned expired leases to the queue", "jobs", len(reaped))
 	}
 
+	// Before settling, because a transfer that can be unstuck is not stalled.
+	// `blocked` is the one job state nothing else times out — a lease expires,
+	// a backoff elapses, attempts run out — so a job waiting for an event that
+	// cannot come waits forever, and nothing notices. This is what notices.
+	if _, err := c.queue.Unstick(ctx); err != nil {
+		c.log.ErrorContext(ctx, "could not unstick transfers", "error", err)
+	}
+
 	// Immediately after reaping, because reaping is what turns a worker that
 	// vanished into jobs that have finally run out of attempts. A transfer that
 	// can no longer progress is marked failed here rather than being left to

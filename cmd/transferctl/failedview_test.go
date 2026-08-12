@@ -78,6 +78,11 @@ func TestETAIsShownWhileWorkIsStillOutstanding(t *testing.T) {
 		StartedAt: time.Now().Add(-100 * time.Second).Format(time.RFC3339Nano),
 		Progress: v1.TransferProgress{
 			PlannedBytes: "1100", BytesTransferred: "100",
+			// A transfer that is MOVING has work in flight. Byte counts alone
+			// describe a transfer that moved bytes at some point, which is a
+			// different claim and the one that produced "~1m22s" on something
+			// motionless for hours.
+			JobsInFlight: 2, JobsOutstanding: 5,
 		},
 	}
 

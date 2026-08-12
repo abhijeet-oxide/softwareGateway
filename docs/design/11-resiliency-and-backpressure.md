@@ -150,6 +150,23 @@ The cost is one full upload of the blobs of **one manifest**. What it replaces i
 
 The third row matters more than it looks. Because a Package pins `manifest_digest` at discovery ([01](01-domain-model.md) §2.2), a vendor re-pushing a tag mid-transfer cannot cause us to replicate a mixture of two versions. We finish the version we started.
 
+#### The one state nothing else times out
+
+A leased job has a lease. A pending job has a backoff. A failed job has an attempt count. **A blocked job waits for an event**, and if that event cannot come, nothing anywhere notices.
+
+It did not notice for 31 hours. A repair returned 202 manifests to `blocked` on the promise that their dependency edges would promote them again — against a transfer planned *before* those edges existed, which therefore had none. `PromoteDependents` requires an edge, so it could never fire; wave advancement could not help either, because the wave those manifests sat in could not drain while they were blocked. Every blob was done, nothing was failed, nothing was running, and the worker was healthy and idle.
+
+The specific bug is fixed at its source — repair now writes the edges it depends on, so it cannot create the black hole. `UnstickTransfers` is the general answer, and it is worth having separately because the class of bug is "a blocked job whose event never arrives", not this one instance of it.
+
+The sweep promotes a blocked job when **both** hold:
+
+1. The transfer has **nothing** in `pending` or `leased`. No work in flight that the job could legitimately be waiting for, and no repair mid-way through putting content back.
+2. The job's wave has already opened (`wave <= current_wave`) **and** no dependency of its own is outstanding.
+
+The wave test is the same guarantee `advanceWave` gives — a wave opens only once every wave below it has drained — so a job at or below the watermark has its content at the destination. The dependency test is invariant I1 stated directly. A job satisfying both is runnable by every rule the system has; the only thing keeping it blocked is that nothing thought to say so.
+
+It runs before the stall check, because **a transfer that can be unstuck is not stalled** and settling it first would report an ending to something one `UPDATE` away from carrying on. It logs at WARN: a run that reports unsticking regularly is a run with a bug still in it.
+
 ### 2.6 Poison jobs
 
 A job that reliably kills its worker would, under naive handling, loop forever and take a worker down with it each time.

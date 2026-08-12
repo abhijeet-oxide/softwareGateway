@@ -82,6 +82,7 @@ which names neither the real problem nor anything the caller could change. The r
 | `GET` | `/api/v1/transfers` | List, filterable |
 | `GET` | `/api/v1/transfers/{transfer}` | Get one, with progress |
 | `GET` | `/api/v1/transfers/{transfer}/jobs` | Layer-level progress |
+| `GET` | `/api/v1/transfers/{transfer}/failures` | Why it is failing, grouped by cause |
 | `POST` | `/api/v1/transfers/{transfer}:pause` | ([04](04-queue-and-scheduling.md) §8) |
 | `POST` | `/api/v1/transfers/{transfer}:resume` | |
 | `POST` | `/api/v1/transfers/{transfer}:cancel` | |

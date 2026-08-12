@@ -1207,6 +1207,46 @@ type ListJobsResponse struct {
 	Jobs       []Job  `json:"jobs"`
 }
 
+// FailureGroup is one distinct reason a transfer is failing.
+//
+// The job listing answers "which jobs are failing". This answers "why", which
+// is a different question with a much shorter answer: five hundred manifests
+// rejected by the destination are five hundred rows and ONE cause, and the
+// rows differ only in the digest and the path — the two parts of the message
+// that carry no information about what went wrong.
+type FailureGroup struct {
+	// Class is the retry classification, which is what decides whether a retry
+	// could help: auth, unsupported, timeout, unavailable, not_found …
+	Class string `json:"class,omitempty"`
+	// Message is the failure with the per-job parts replaced by placeholders,
+	// so one sentence stands for the whole group.
+	Message string `json:"message"`
+
+	// Failed have exhausted their attempts; Retrying will try again on their
+	// own. "Act now" versus "wait" — the distinction that makes a stalled
+	// transfer distinguishable from a working one.
+	Failed   int `json:"failed"`
+	Retrying int `json:"retrying"`
+
+	Kinds []string `json:"kinds,omitempty"`
+	Waves []int    `json:"waves,omitempty"`
+
+	// One concrete job to go and look at, and its message verbatim.
+	ExampleJobID      string `json:"exampleJobId,omitempty"`
+	ExampleDigest     string `json:"exampleDigest,omitempty"`
+	ExampleRepository string `json:"exampleRepository,omitempty"`
+	ExampleError      string `json:"exampleError,omitempty"`
+
+	// Retryable reports whether retrying could plausibly succeed.
+	Retryable bool `json:"retryable"`
+}
+
+// ListFailuresResponse is GET /api/v1/transfers/{transfer}/failures.
+type ListFailuresResponse struct {
+	TransferID string         `json:"transferId"`
+	Failures   []FailureGroup `json:"failures"`
+}
+
 // CreateTransferRequest is POST /api/v1/transfers.
 //
 // One request, one origin, several destinations. The OPERATION is not a field:

@@ -338,31 +338,100 @@ func fromOCI(d ocispec.Descriptor) registry.Descriptor {
 // classify maps an ORAS error onto our sentinel classes, so retry policy keys
 // off an error class rather than re-inspecting an HTTP status deep in the
 // stack.
+//
+// # Why this reads the OCI error CODE and not only the status
+//
+// It used to handle four statuses and let everything else through unwrapped.
+// Anything the registry rejected with a 400 — which is how several registries
+// answer a manifest they will not accept — came out `unclassified`, and
+// unclassified is treated as RETRYABLE on the reasonable theory that an
+// uncategorised failure is more likely a transient network fault than a
+// permanent one. For a manifest the destination will never accept, that theory
+// is wrong in the most expensive possible way: eight attempts, each a full
+// round trip over a slow link, per manifest, ending exactly where it started.
+//
+// So the status now goes through registry.ClassifyStatus in full, and the
+// registry's own error code is read first where there is one. The code is the
+// better signal: `MANIFEST_BLOB_UNKNOWN` means "a blob you referenced is not
+// here", which is a self-healing signal the engine routes to placement
+// invalidation — and it arrives as a 400 from some registries and a 404 from
+// others, so keying off the status alone gets it right half the time.
+//
+// The result is a *registry.Error, which carries the status and the registry's
+// own words as structured fields. That is what makes a failure legible in a
+// listing: `HTTP 400: MANIFEST_INVALID: …` reads as a cause, where the ORAS
+// string put the same information at the end of a line nobody can see.
 func (r *Repository) classify(err error, what string) error {
 	if err == nil {
 		return nil
 	}
-	switch {
-	case errors.Is(err, errdef.ErrNotFound):
-		return fmt.Errorf("%s: %w", what, registry.ErrNotFound)
-	case errors.Is(err, errdef.ErrUnsupported):
-		return fmt.Errorf("%s: %w", what, registry.ErrUnsupported)
-	}
+
+	out := &registry.Error{Op: what, Repository: r.registryHost + "/" + r.repoPath}
 
 	var respErr *errcode.ErrorResponse
 	if errors.As(err, &respErr) {
-		switch respErr.StatusCode {
-		case http.StatusUnauthorized:
-			return fmt.Errorf("%s: %w", what, registry.ErrUnauthorized)
-		case http.StatusForbidden:
-			return fmt.Errorf("%s: %w", what, registry.ErrForbidden)
-		case http.StatusNotFound:
-			return fmt.Errorf("%s: %w", what, registry.ErrNotFound)
-		case http.StatusTooManyRequests:
-			return fmt.Errorf("%s: %w", what, registry.ErrRateLimited)
+		out.StatusCode = respErr.StatusCode
+		out.Detail = detailOf(respErr)
+		out.Err = sentinelFor(respErr)
+		return out
+	}
+
+	switch {
+	case errors.Is(err, errdef.ErrNotFound):
+		out.Err = registry.ErrNotFound
+	case errors.Is(err, errdef.ErrUnsupported):
+		out.Err = registry.ErrUnsupported
+	default:
+		// Genuinely uncategorised — a transport failure, most often. Kept
+		// verbatim: the string is all there is, and truncating it here would
+		// leave the operator with a class and no cause.
+		out.Err = err
+	}
+	return out
+}
+
+// sentinelFor picks the sentinel an error response maps onto.
+//
+// The registry's own error code wins over the HTTP status, because the code
+// says WHAT was wrong and the status only says how the registry chose to
+// signal it. Where there is no code, the status is all we have.
+func sentinelFor(resp *errcode.ErrorResponse) error {
+	for _, e := range resp.Errors {
+		switch e.Code {
+		case errcode.ErrorCodeBlobUnknown, errcode.ErrorCodeManifestBlobUnknown,
+			errcode.ErrorCodeManifestUnknown, errcode.ErrorCodeNameUnknown:
+			// The destination is missing something we believed was there. On a
+			// manifest push this is the placement cache being wrong, which the
+			// engine repairs rather than retries (docs/design/11 §2.5).
+			return registry.ErrNotFound
+		case errcode.ErrorCodeUnauthorized:
+			return registry.ErrUnauthorized
+		case errcode.ErrorCodeDenied:
+			return registry.ErrForbidden
+		case errcode.ErrorCodeDigestInvalid, errcode.ErrorCodeSizeInvalid:
+			return registry.ErrDigestMismatch
+		case errcode.ErrorCodeManifestInvalid, errcode.ErrorCodeNameInvalid,
+			errcode.ErrorCodeUnsupported:
+			// Not retryable. The registry will reject these bytes every time,
+			// and eight attempts over a slow link prove it eight times.
+			return registry.ErrUnsupported
 		}
 	}
-	return fmt.Errorf("%s: %w", what, err)
+
+	if sentinel := registry.ClassifyStatus(resp.StatusCode); sentinel != nil {
+		return sentinel
+	}
+	return registry.ErrUnsupported
+}
+
+// detailOf renders what the registry actually said, in the order an operator
+// reads it: the code first, because that is the part that is actionable, then
+// the message.
+func detailOf(resp *errcode.ErrorResponse) string {
+	if len(resp.Errors) == 0 {
+		return http.StatusText(resp.StatusCode)
+	}
+	return resp.Errors.Error()
 }
 
 // newByteReader wraps bytes for a manifest push.

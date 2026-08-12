@@ -250,6 +250,7 @@ func (s *Server) routes() chi.Router {
 			r.Get("/transfers", s.handleListTransfers)
 			r.Get("/transfers/{transfer}", s.handleGetTransfer)
 			r.Get("/transfers/{transfer}/jobs", s.handleListTransferJobs)
+			r.Get("/transfers/{transfer}/failures", s.handleListTransferFailures)
 
 			// Retry needs the queue behind it, so it is registered with the
 			// queue rather than with the read routes — a follower replica

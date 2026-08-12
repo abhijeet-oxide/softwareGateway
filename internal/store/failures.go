@@ -1,0 +1,216 @@
+package store
+
+import (
+	"context"
+	"fmt"
+	"regexp"
+	"sort"
+	"strings"
+)
+
+// Why a transfer is failing, in the terms somebody can act on.
+//
+// # The problem this exists for
+//
+// A bundle has five hundred manifests. When the destination rejects them it
+// rejects all five hundred, for the same reason, and the job listing renders
+// that as five hundred rows of wrapped repository paths and truncated error
+// text. Every row is different — a different digest, a different destination —
+// and every row says the same thing. There is no width of terminal at which
+// that is readable, and no amount of scrolling that turns it into a diagnosis.
+//
+// What an operator needs is the opposite shape: the distinct CAUSES, how many
+// jobs each one is holding, one example to go and look at, and whether
+// retrying could possibly help. Usually there are two or three.
+//
+// # Why the grouping is done here and not in SQL
+//
+// GROUP BY last_error would produce one group per job, because the message
+// contains the digest and the destination path — the two things that differ
+// between otherwise identical failures. The normalisation has to happen
+// against the row, where the digest and the repository are known exactly and
+// can be substituted rather than guessed at.
+//
+// The row count is bounded by what is actually failing, and a transfer with
+// more than a few thousand failing jobs has one cause, not a paging problem.
+
+// FailureGroup is one distinct cause, and everything failing because of it.
+type FailureGroup struct {
+	// Class is the retry classification: auth, unsupported, timeout and so on.
+	// It is what decides whether a retry could help, so it leads.
+	Class string
+	// Message is the failure with the per-job parts replaced — one sentence
+	// standing for every job in the group.
+	Message string
+
+	// Failed is how many have exhausted their attempts. Retrying is how many
+	// are still going to try again on their own. The distinction is the
+	// difference between "act now" and "wait".
+	Failed   int
+	Retrying int
+
+	// Kinds are the job kinds affected — "blob", "manifest", or both.
+	Kinds []string
+	// Waves are the waves affected, lowest first.
+	Waves []int
+
+	// One example, so the reader has something concrete to go and inspect.
+	ExampleJobID      int64
+	ExampleDigest     string
+	ExampleRepository string
+	// ExampleError is that example's message VERBATIM, digest and path intact.
+	// The normalised message says what went wrong; this says where.
+	ExampleError string
+
+	// Retryable reports whether a retry could plausibly succeed. Derived from
+	// the class rather than from the message, because the class is the thing
+	// the retry policy actually keys off.
+	Retryable bool
+}
+
+// FailureGroups summarises everything failing in one transfer.
+//
+// Ordered by blast radius: the cause holding the most jobs first, because that
+// is the one worth fixing.
+func (p *Packages) FailureGroups(ctx context.Context, transferID string) ([]FailureGroup, error) {
+	rows, err := p.db.QueryContext(ctx, p.dialect.Rewrite(`
+		SELECT id, kind, digest, wave, state,
+		       COALESCE(last_error_class, ''), COALESCE(last_error, ''),
+		       COALESCE(target_repository, '')
+		  FROM jobs
+		 WHERE transfer_id = ?
+		   AND last_error IS NOT NULL AND last_error <> ''
+		   AND state IN ('failed','pending','leased','blocked')
+		 ORDER BY id`), transferID)
+	if err != nil {
+		return nil, fmt.Errorf("read the failures of transfer %s: %w", transferID, err)
+	}
+	defer func() { _ = rows.Close() }()
+
+	byCause := map[string]*FailureGroup{}
+	var order []string
+
+	for rows.Next() {
+		var (
+			id                       int64
+			kind, digest, state      string
+			wave                     int
+			class, message, repoPath string
+		)
+		if err := rows.Scan(&id, &kind, &digest, &wave, &state,
+			&class, &message, &repoPath); err != nil {
+			return nil, fmt.Errorf("scan a failure of transfer %s: %w", transferID, err)
+		}
+
+		normalised := normaliseFailure(message, digest, repoPath)
+		key := class + "\x00" + normalised
+
+		g, seen := byCause[key]
+		if !seen {
+			g = &FailureGroup{
+				Class:             class,
+				Message:           normalised,
+				ExampleJobID:      id,
+				ExampleDigest:     digest,
+				ExampleRepository: repoPath,
+				ExampleError:      message,
+				Retryable:         classIsRetryable(class),
+			}
+			byCause[key] = g
+			order = append(order, key)
+		}
+
+		if state == "failed" {
+			g.Failed++
+		} else {
+			// `pending` with an error on it is a job waiting out its backoff,
+			// which is a transfer that is still trying rather than one that has
+			// given up. Counting the two together is what made a stalled
+			// transfer indistinguishable from a working one.
+			g.Retrying++
+		}
+		g.Kinds = addOnce(g.Kinds, kind)
+		g.Waves = addWave(g.Waves, wave)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+
+	out := make([]FailureGroup, 0, len(order))
+	for _, key := range order {
+		out = append(out, *byCause[key])
+	}
+	sort.SliceStable(out, func(i, j int) bool {
+		return out[i].Failed+out[i].Retrying > out[j].Failed+out[j].Retrying
+	})
+	return out, nil
+}
+
+// digestPattern matches a digest in any of the forms an error message carries
+// it: fully qualified, and the shortened form the error strings use.
+var digestPattern = regexp.MustCompile(`\b(sha256|sha512):[0-9a-f]{6,}|\b[0-9a-f]{12,}\b`)
+
+// normaliseFailure turns one job's message into the sentence that stands for
+// every job failing the same way.
+//
+// The job's OWN digest and destination path are substituted first, because
+// those are known exactly rather than guessed at. The pattern afterwards is the
+// backstop for the digests a message names that are not the job's own — a
+// manifest push rejected for a missing LAYER names the layer, and that layer
+// differs per manifest while the cause does not.
+func normaliseFailure(message, digest, repository string) string {
+	out := strings.TrimSpace(message)
+	if out == "" {
+		return ""
+	}
+
+	if repository != "" {
+		out = strings.ReplaceAll(out, repository, "<repository>")
+	}
+	if digest != "" {
+		out = strings.ReplaceAll(out, digest, "<digest>")
+		if _, hex, found := strings.Cut(digest, ":"); found && len(hex) >= 12 {
+			out = strings.ReplaceAll(out, hex[:12], "<digest>")
+		}
+	}
+	return digestPattern.ReplaceAllString(out, "<digest>")
+}
+
+// classIsRetryable mirrors registry.Retryable without importing it.
+//
+// The store must not depend on the registry package — it holds rows, not
+// protocol knowledge — and the class strings are a stable vocabulary written
+// down in docs/design/10 §6 rather than an implementation detail. An unknown
+// class reads as retryable, which is the same benefit of the doubt the retry
+// policy itself gives.
+func classIsRetryable(class string) bool {
+	switch class {
+	case "auth", "unsupported", "not_found", "configuration":
+		return false
+	default:
+		return true
+	}
+}
+
+func addOnce(list []string, v string) []string {
+	if v == "" {
+		return list
+	}
+	for _, existing := range list {
+		if existing == v {
+			return list
+		}
+	}
+	return append(list, v)
+}
+
+func addWave(list []int, v int) []int {
+	for _, existing := range list {
+		if existing == v {
+			return list
+		}
+	}
+	list = append(list, v)
+	sort.Ints(list)
+	return list
+}

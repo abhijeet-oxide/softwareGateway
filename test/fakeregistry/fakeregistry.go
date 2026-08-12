@@ -105,6 +105,10 @@ type fault struct {
 	status     int
 	remaining  int
 	retryAfter string
+	// code and message are the registry's OWN error, as a real registry
+	// reports it. Empty means the generic injected fault.
+	code    string
+	message string
 	// truncate returns a body shorter than Content-Length claims, to exercise
 	// the mid-response disconnect path.
 	truncate bool
@@ -373,6 +377,21 @@ func (r *Registry) FailNextWithRetryAfter(pathContains string, status, n int, re
 	r.faults.failNext[pathContains] = &fault{status: status, remaining: n, retryAfter: retryAfter}
 }
 
+// RejectNext makes the next n matching requests fail with a specific OCI error
+// CODE, not merely a status.
+//
+// The code is the part that decides what a failure means: a registry answering
+// 400 with MANIFEST_BLOB_UNKNOWN is telling us something repairable, and one
+// answering 400 with MANIFEST_INVALID is telling us to stop. A fake that could
+// only produce a status could not tell those apart, and neither could a test.
+func (r *Registry) RejectNext(pathContains string, status int, code, message string, n int) {
+	r.faults.mu.Lock()
+	defer r.faults.mu.Unlock()
+	r.faults.failNext[pathContains] = &fault{
+		status: status, remaining: n, code: code, message: message,
+	}
+}
+
 // TruncateNext makes the next response for a matching path claim a longer
 // Content-Length than it sends, simulating a mid-response disconnect.
 func (r *Registry) TruncateNext(pathContains string, n int) {
@@ -434,7 +453,11 @@ func (r *Registry) handle(w http.ResponseWriter, req *http.Request) {
 		if f.retryAfter != "" {
 			w.Header().Set("Retry-After", f.retryAfter)
 		}
-		writeError(w, f.status, "INJECTED", "injected fault")
+		code, message := f.code, f.message
+		if code == "" {
+			code, message = "INJECTED", "injected fault"
+		}
+		writeError(w, f.status, code, message)
 		return
 	}
 

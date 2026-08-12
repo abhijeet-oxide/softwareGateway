@@ -28,6 +28,7 @@ func newTransfersCommand() *cobra.Command {
 		newTransfersListCommand(),
 		newTransfersDescribeCommand(),
 		newTransfersJobsCommand(),
+		newTransfersFailuresCommand(),
 		newTransfersRetryCommand(),
 	)
 	return cmd
@@ -629,12 +630,27 @@ func describeTransfer(w io.Writer, t *v1.Transfer, rates *rateTracker, watching 
 	if t.State == v1.TransferRunning && p.JobsOutstanding > 0 && p.JobsInFlight == 0 {
 		fmt.Fprintln(w)
 		if p.JobsWaiting > 0 {
-			fmt.Fprintf(w, "Stalled: %d job(s) in retry backoff — `transfers jobs %s --failed`\n",
+			fmt.Fprintf(w, "Stalled: %d job(s) in retry backoff — `transfers failures %s`\n",
 				p.JobsWaiting, shortID(t.ID))
 		} else {
 			fmt.Fprintf(w, "Stalled: no job running and none waiting — check a worker is up "+
 				"(`transferctl health`)\n")
 		}
+	}
+
+	// Failures are worth a pointer BEFORE the transfer settles, not only after.
+	// A transfer that is 92% done with eighteen failures and twenty-two in
+	// backoff still reads as `running`, and everything above this line reports
+	// on the part that is working. The one line that matters is where to look
+	// at the part that is not.
+	//
+	// It names the summary rather than the job listing on purpose: the listing
+	// answers "which jobs", and when one cause is holding five hundred
+	// manifests that answer is five hundred rows saying the same thing.
+	if t.FailureReason == "" && (p.JobsFailed > 0 || p.JobsWaiting > 0) &&
+		p.JobsInFlight > 0 {
+		fmt.Fprintln(w)
+		fmt.Fprintf(w, "Why jobs are failing: transferctl transfers failures %s\n", shortID(t.ID))
 	}
 	return nil
 }

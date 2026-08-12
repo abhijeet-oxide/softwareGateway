@@ -124,6 +124,19 @@ Concurrent duplicate suppression ([04](04-queue-and-scheduling.md) §5) is what 
 
 Support is uneven in practice, which is why `202` is treated as a normal outcome and not an error, and why the mount attempt is skipped entirely for registries known not to support it ([06](06-registry-abstraction.md) §6). A mount that fails for any reason falls through to streaming, which is always correct.
 
+#### The mount hint looks much further back than the placement skip
+
+Both read `blob_placements`, and they need different degrees of trust because being wrong costs different things.
+
+| Use | If the record is wrong | Horizon |
+|---|---|---|
+| skip (§4.1) | the content is not there, and the manifest referencing it fails | `placementTTL`, 24 h |
+| mount hint | the registry declines and the worker streams | 90 days |
+
+They shared the 24-hour TTL, and that was expensive in exactly the case where it matters most. **A vendor's bundle carries its release in its repository path** — `orbs/cfx-5000-k8s-215952-edgenac-25.7-2131_…` — so every new release lands in a brand-new destination repository that necessarily holds no placements of its own. Its components go to version-*stable* paths and dedupe normally; the bundle-internal copy has nothing to dedupe against and depends entirely on mounting from where the last release put the same digests.
+
+A release shipped more than a day after the previous one therefore found those records expired, got no mount candidate, and re-streamed the whole bundle across the WAN — for content the destination registry was holding the entire time. Nothing about correctness changes with the longer horizon: a stale hint costs one request.
+
 ### 4.3 Streaming — the core loop
 
 **Invariant I5: bytes never touch worker disk.**

@@ -199,6 +199,8 @@ const leaseColumns = `id, transfer_id, kind, digest, size_bytes, media_type,
 // # The dequeue order, and why it has three keys rather than one
 //
 //	priority DESC     what an operator asked for, first
+//	kind DESC         manifests before blobs — one round trip, and it unblocks
+//	                  the index above it ('manifest' > 'blob', see 00014)
 //	site_rank         the copy that keeps a bundle resolvable, before the copy
 //	                  published under a component's own name
 //	size_bytes DESC   largest first WITHIN a rank
@@ -225,7 +227,7 @@ const leaseColumns = `id, transfer_id, kind, digest, size_bytes, media_type,
 // having: insertion order is arbitrary with respect to size, so a
 // multi-gigabyte layer leased last runs alone while every other slot idles.
 // See docs/design/04 §13.
-const leaseOrder = ` ORDER BY priority DESC, site_rank, size_bytes DESC, id`
+const leaseOrder = ` ORDER BY priority DESC, kind DESC, site_rank, size_bytes DESC, id`
 
 // leaseCandidatePredicate is the leasability test, shared by both dialects.
 //
@@ -253,6 +255,27 @@ const leaseOrder = ` ORDER BY priority DESC, site_rank, size_bytes DESC, id`
 // warns about — the dequeue is meant to stay join-free. It is inside a NOT
 // EXISTS over `jobs_inflight_blob_idx`, so it runs only for the handful of
 // digests actually in flight, not for every candidate row.
+//
+// # Why site_rank needs a second clause, and ordering was not enough
+//
+// Ordering the dequeue by site_rank puts every rank-0 job before every rank-1
+// job, which was supposed to guarantee that the second copy of a component
+// mounts from the first. It guarantees it only when the two land in DIFFERENT
+// lease batches. Within one batch neither is leased yet, so the suppression
+// above does not fire, both are selected, both are hydrated at the same moment
+// — and the mount candidate is resolved from placements that the rank-0 job has
+// not written yet. Both stream.
+//
+// Measured on the bundle fixture with a batch of eight: some components mounted
+// and some did not, entirely according to where the batch boundary fell. That is
+// not a property anybody can reason about, and no total shows it — a blob
+// uploaded twice to two repositories looks exactly like one uploaded once and
+// mounted once, in bytes, in state and in the result.
+//
+// So a rank-1 job is not leasable while its rank-0 sibling is still OUTSTANDING,
+// rather than merely while it is leased. The second clause says that, and is
+// gated on `site_rank = 0` first so it costs nothing for the majority of jobs,
+// which are rank 0 and skip it entirely.
 func (p *Packages) leaseCandidatePredicate() string {
 	return `state = 'pending'
 	   AND NOT paused
@@ -265,7 +288,17 @@ func (p *Packages) leaseCandidatePredicate() string {
 	            AND inflight.digest = jobs.digest
 	            AND ir.registry_host = jr.registry_host
 	            AND ir.product_id = jr.product_id
-	       )`
+	       )
+	   AND (jobs.site_rank = 0 OR NOT EXISTS (
+	         SELECT 1 FROM jobs earlier
+	           JOIN repositories er ON er.id = earlier.target_repo_id
+	           JOIN repositories jr2 ON jr2.id = jobs.target_repo_id
+	          WHERE earlier.digest = jobs.digest
+	            AND earlier.site_rank < jobs.site_rank
+	            AND earlier.state IN ('pending','blocked','leased')
+	            AND er.registry_host = jr2.registry_host
+	            AND er.product_id = jr2.product_id
+	       ))`
 }
 
 // leasePostgres is the real thing: one statement, one round trip.
@@ -431,6 +464,10 @@ func sortForDispatch(jobs []LeasedJob) {
 		switch {
 		case a.Priority != b.Priority:
 			return a.Priority > b.Priority
+		case a.Kind != b.Kind:
+			// Same rule as the SQL, and the same dependence on the spelling:
+			// 'manifest' > 'blob', so descending puts manifests first.
+			return a.Kind > b.Kind
 		case a.SiteRank != b.SiteRank:
 			return a.SiteRank < b.SiteRank
 		case a.SizeBytes != b.SizeBytes:

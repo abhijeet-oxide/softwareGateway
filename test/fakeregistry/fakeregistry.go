@@ -76,6 +76,64 @@ type Registry struct {
 	// bytes were pushed AND that nothing was committed.
 	CancelledUploads atomic.Int64
 	pageSize         int
+
+	// ledger records every blob ARRIVAL, by repository and digest and by how it
+	// arrived. Counters alone cannot answer the question that matters when a
+	// component appears three times in a registry browser — "was it sent three
+	// times, or sent once and linked three times?" — because a total of one
+	// upload is equally consistent with one upload and with three that happened
+	// to overwrite each other into the same place.
+	//
+	// A LEDGER can. It records each arrival separately, so a test can assert
+	// both that the count is right and that nothing landed twice in the same
+	// place.
+	ledgerMu     sync.Mutex
+	uploadLedger map[string]int
+	mountLedger  map[string]int
+}
+
+// BlobUploads is how many times a blob was STREAMED into a repository.
+//
+// More than one is a defect however the totals look: content addressing makes a
+// second upload of identical bytes invisible in every other measure, and an
+// overwrite is exactly what "we only pushed it once" must rule out.
+func (r *Registry) BlobUploads(repoPath, digest string) int {
+	r.ledgerMu.Lock()
+	defer r.ledgerMu.Unlock()
+	return r.uploadLedger[repoPath+"|"+digest]
+}
+
+// BlobMounts is how many times a blob was RELOCATED into a repository by the
+// registry itself, moving no bytes.
+func (r *Registry) BlobMounts(repoPath, digest string) int {
+	r.ledgerMu.Lock()
+	defer r.ledgerMu.Unlock()
+	return r.mountLedger[repoPath+"|"+digest]
+}
+
+// Overwrites lists every place a blob arrived more than once.
+//
+// The assertion a caller actually wants is usually "this is empty": a registry
+// that received the same content twice for one repository did work nobody
+// asked for, and no byte total will show it.
+func (r *Registry) Overwrites() []string {
+	r.ledgerMu.Lock()
+	defer r.ledgerMu.Unlock()
+
+	var out []string
+	for key, n := range r.uploadLedger {
+		if n+r.mountLedger[key] > 1 {
+			out = append(out, fmt.Sprintf("%s arrived %d times (%d uploaded, %d mounted)",
+				key, n+r.mountLedger[key], n, r.mountLedger[key]))
+		}
+	}
+	for key, n := range r.mountLedger {
+		if r.uploadLedger[key] == 0 && n > 1 {
+			out = append(out, fmt.Sprintf("%s mounted %d times", key, n))
+		}
+	}
+	sort.Strings(out)
+	return out
 }
 
 type repo struct {

@@ -730,6 +730,37 @@ type CheckConnectivityResponse struct {
 	Products []ProductCheck `json:"products"`
 }
 
+// TransferWave is one wave's population, by state.
+//
+// Present on a single transfer, absent from a listing: forty transfers times
+// four waves is a table nobody reads, and the question it answers is always
+// asked about one transfer.
+//
+// It exists because the outstanding count mixes three populations that behave
+// completely differently — runnable, waiting out a backoff, and GATED behind a
+// wave that has not drained — and only the last one explains an idle fleet.
+type TransferWave struct {
+	Wave int `json:"wave"`
+	// Kind is blob, manifest, or mixed. Blobs are wave 0 and manifests are the
+	// rest; seeing that stated is half of understanding the ordering.
+	Kind string `json:"kind"`
+	// Current marks the wave the transfer is working on.
+	Current bool `json:"current,omitempty"`
+
+	Total   int `json:"total"`
+	Done    int `json:"done"`
+	Running int `json:"running"`
+	// Pending is leasable NOW. Waiting is pending behind a retry backoff — the
+	// same state column, an entirely different situation.
+	Pending int `json:"pending"`
+	Waiting int `json:"waiting"`
+	Blocked int `json:"blocked"`
+	Failed  int `json:"failed"`
+
+	PlannedBytes     Int64String `json:"plannedBytes"`
+	TransferredBytes Int64String `json:"transferredBytes"`
+}
+
 // ---------------------------------------------------------------------------
 // Workers
 // ---------------------------------------------------------------------------
@@ -1070,7 +1101,10 @@ type Transfer struct {
 	Progress TransferProgress `json:"progress"`
 
 	FailureReason string `json:"failureReason,omitempty"`
-	CreatedAt     string `json:"createdAt,omitempty"`
+
+	// Waves is the per-wave breakdown, on a single transfer only.
+	Waves     []TransferWave `json:"waves,omitempty"`
+	CreatedAt string         `json:"createdAt,omitempty"`
 	// StartedAt is when the first job was leased, not when the transfer was
 	// asked for. Elapsed time and throughput measured from the request would
 	// count however long it waited for a worker as transfer time.

@@ -482,3 +482,70 @@ func (h *recoveryHarness) startedAt(transferID string) string {
 	}
 	return at
 }
+
+// The per-wave breakdown, which is what makes "519 outstanding, 2 running"
+// legible: the outstanding count mixes jobs that can run with jobs that cannot.
+func TestWaveProgressSeparatesRunnableFromGated(t *testing.T) {
+	h := newRecoveryHarness(t)
+	id := h.transferWithJobs(4) // wave 0, leased by the fixture
+
+	jobs := h.jobIDs(id)
+	h.exec(`UPDATE jobs SET state='succeeded' WHERE id IN (?, ?)`, jobs[0], jobs[1])
+	h.exec(`UPDATE jobs SET state='pending', lease_owner=NULL WHERE id = ?`, jobs[2])
+	// A manifest wave above it, gated.
+	for i := range 3 {
+		h.exec(`INSERT INTO jobs (transfer_id, kind, digest, size_bytes, source_repo_id,
+		                          target_repo_id, state, wave, attempts, max_attempts)
+		         VALUES (?, 'manifest', ?, 512, ?, ?, 'blocked', 1, 0, 8)`,
+			id, "sha256:"+strings.Repeat(strconv.Itoa(i+5), 64), h.repoID, h.repoID)
+	}
+
+	waves, err := h.packages.WaveProgress(t.Context(), id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(waves) != 2 {
+		t.Fatalf("got %d wave(s), want 2", len(waves))
+	}
+
+	blobs := waves[0]
+	if blobs.Wave != 0 || blobs.Kind != "blob" {
+		t.Errorf("wave 0 = %+v, want the blob wave", blobs)
+	}
+	if blobs.Total != 4 || blobs.Done != 2 || blobs.Running != 1 || blobs.Pending != 1 {
+		t.Errorf("wave 0 = %d total, %d done, %d running, %d runnable; want 4/2/1/1",
+			blobs.Total, blobs.Done, blobs.Running, blobs.Pending)
+	}
+
+	manifests := waves[1]
+	if manifests.Kind != "manifest" || manifests.Blocked != 3 || manifests.Total != 3 {
+		t.Errorf("wave 1 = %+v, want 3 blocked manifests", manifests)
+	}
+	// The point of the whole table: nothing in wave 1 is runnable.
+	if manifests.Pending != 0 || manifests.Running != 0 {
+		t.Errorf("wave 1 reports runnable work while gated: %+v", manifests)
+	}
+}
+
+// A job sitting out a backoff is PENDING and not runnable. Counting it as
+// runnable would report work a worker cannot take.
+func TestWaveProgressSeparatesBackoffFromRunnable(t *testing.T) {
+	h := newRecoveryHarness(t)
+	id := h.transferWithJobs(2)
+
+	jobs := h.jobIDs(id)
+	h.exec(`UPDATE jobs SET state='pending', lease_owner=NULL WHERE id = ?`, jobs[0])
+	h.exec(`UPDATE jobs SET state='pending', lease_owner=NULL,
+	                        next_visible_at='2099-01-01T00:00:00Z' WHERE id = ?`, jobs[1])
+
+	waves, err := h.packages.WaveProgress(t.Context(), id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if waves[0].Pending != 1 {
+		t.Errorf("runnable = %d, want 1", waves[0].Pending)
+	}
+	if waves[0].Waiting != 1 {
+		t.Errorf("waiting = %d, want the one in backoff", waves[0].Waiting)
+	}
+}

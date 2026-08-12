@@ -351,6 +351,22 @@ VERIFIED — 5 of 5 artifacts (1.8s)
 
 ## 6. Progress
 
+`transfers describe` breaks the work down **per wave**, because the totals cannot explain an idle-looking transfer:
+
+```
+Waves
+  WAVE   KIND       DONE        RUNNING   RUNNABLE   WAITING   BLOCKED   FAILED   COPIED
+> 0      blob       1974/1976   2         -          -         -         -        61.9 GiB/62.0 GiB
+  1      manifest   0/431       -         -          -         431       -        0 B/1.8 MiB
+  2      manifest   0/78        -         -          -         78        -        0 B/332.0 KiB
+  3      manifest   0/8         -         -          -         8         -        0 B/41.0 KiB
+```
+
+"519 outstanding, 2 in flight" mixes three populations that behave completely differently — runnable now, waiting out a retry backoff, and **gated** behind a wave that has not drained — and only the last one explains why a fleet with capacity to spare is running two jobs. Per wave it is immediate: wave 0 has two blobs left; waves 1 to 3 are full and cannot start until it finishes ([04](04-queue-and-scheduling.md) §3).
+
+`>` marks the wave in progress. Everything above it is finished and everything below it cannot start. The byte columns are worth reading together: a blob wave is the whole transfer and a manifest wave is kilobytes, which is why wave 0 takes hours and the rest take seconds once they open.
+
+
 ```
 $ transferctl transfers describe 9c1e8f2a --watch
 

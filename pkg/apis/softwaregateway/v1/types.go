@@ -812,6 +812,12 @@ type CalibrationSide struct {
 	Route CalibrationRoute `json:"route"`
 	RTTMs float64          `json:"rttMs,omitempty"`
 
+	// Samples and LargestSampleBytes say what the read probe opened, so a
+	// throughput measured over signature blobs cannot be mistaken for one
+	// measured over layers.
+	Samples            int         `json:"samples,omitempty"`
+	LargestSampleBytes Int64String `json:"largestSampleBytes,omitempty"`
+
 	Levels []CalibrationLevel `json:"levels,omitempty"`
 	// Knee is the smallest concurrency within a tenth of the best measured —
 	// the level worth configuring.

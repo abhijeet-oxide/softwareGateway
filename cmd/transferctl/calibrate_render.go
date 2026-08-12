@@ -49,6 +49,10 @@ func renderCalibrationSide(w io.Writer, heading string, s v1.CalibrationSide) {
 	if s.RTTMs > 0 {
 		fmt.Fprintf(w, "  round trip         %.0fms\n", s.RTTMs)
 	}
+	if s.Samples > 0 {
+		fmt.Fprintf(w, "  read samples       %d blob(s), largest %s\n",
+			s.Samples, humanBytes(s.LargestSampleBytes))
+	}
 
 	if s.Skipped != "" {
 		fmt.Fprintf(w, "  not measured       %s\n", s.Skipped)

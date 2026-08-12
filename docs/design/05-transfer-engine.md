@@ -348,6 +348,14 @@ The write probe is the part worth understanding. Distribution v2 separates the u
 
 It overrides `maxConnections`, because that is the variable under test: sweeping to sixteen streams through a pool configured for four would measure the pool four times and call the result a plateau. It honours `requestsPerSecond`, because that is a promise to a vendor, and a calibration that broke it would report a throughput no honest configuration could reproduce. It stops early when a level improves on its predecessor by less than 10% — past that point each further level doubles the load on somebody else's registry to confirm something already known.
 
+**Finding something to measure**
+
+The read probe needs real blobs, and reaching them means descending — as far as it takes. A bundle is an **index of indexes**: the ORB lists its components, each component is a multi-platform index, and the layers are a level below that. A search that descends once lands on a component index, finds no layers because an index *has* none, and concludes that a repository holding gigabytes contains nothing worth measuring. It descends to the same depth the transfer walk does, depth-first, and stops at the first manifest that has layers — a handful of requests rather than the whole tree.
+
+Tag order matters for the same reason. Registries serve tags lexically and guarantee nothing about it, so the first tag is the oldest spelling; newest-first is the better sample. But newest-first walks straight into the signatures, which sort adjacent to the release they belong to and, for both conventions this system knows, sort *after* it — so `signature_orb_25.7` and cosign's `sha256-….sig` are pushed to the back of the queue and opened last. They are still opened: a repository holding nothing else is still measurable.
+
+And when nothing clears the 256 KiB the probe would like, it measures the largest blob there is and **says the sample was small**, rather than refusing. A number with a caveat beats a refusal citing a threshold the reader cannot see. Every report states how many blobs were sampled and how large the largest was, so a throughput measured over signature blobs cannot be mistaken for one measured over layers.
+
 **Which repository is measured**
 
 One, out of however many a product spans, so the choice decides whether the numbers mean anything. `transferctl` picks the repository holding the largest discovered package and shows that choice for confirmation ([13](13-cli.md) §11); the Coordinator's own fallback, for API callers and for products nothing has been discovered from, walks the candidate repositories until one yields a blob of at least 256 KiB rather than judging a source by whichever repository sorts first. Within a repository it opens the newest-looking tags first: registries serve tags lexically, so "the first tag" reliably lands on the oldest and smallest.

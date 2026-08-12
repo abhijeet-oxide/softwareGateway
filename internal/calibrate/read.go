@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"sort"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -38,12 +39,31 @@ const (
 	// a signature. Listing a page and choosing from it beats taking whatever
 	// came back first.
 	maxTagsListed = 100
-	// maxTagsOpened bounds the search within one repository. A repository whose
-	// newest tags are all signatures should not turn calibration into a scan.
-	maxTagsOpened = 5
+	// maxTagsOpened bounds the search within one repository.
+	//
+	// Twelve rather than a handful because the tags most likely to be opened
+	// first are the ones least worth opening: a release is published alongside
+	// its signature and attestation, those sort adjacently, and a budget of
+	// five can be spent entirely on three-kilobyte PKCS#7 blobs before reaching
+	// the release itself. deprioritiseAccessories handles the common spellings;
+	// the wider budget handles the ones it does not know.
+	maxTagsOpened = 12
 	// maxRepositoriesTried bounds the search across repositories. A product
 	// spanning forty of them should not be walked end to end to find a blob.
 	maxRepositoriesTried = 12
+
+	// maxSearchDepth is how far down a manifest tree the search will go.
+	//
+	// Four, matching the transfer walk. It has to be more than one, and
+	// assuming one was the bug: a bundle is an index of INDEXES — the ORB lists
+	// component images, each of which is a multi-platform index, and the layers
+	// live under those. One level of descent lands on a component index, finds
+	// no layers because an index has none, and concludes a repository full of
+	// gigabytes contains nothing worth measuring.
+	maxSearchDepth = 4
+	// maxChildrenPerLevel bounds the fan-out. An index listing sixty components
+	// does not need all sixty opened to find a layer.
+	maxChildrenPerLevel = 8
 )
 
 // sample is one blob the read probe will fetch.
@@ -77,7 +97,18 @@ func collectSamples(
 		return nil, "", fmt.Errorf("no repository to read from")
 	}
 
-	var tried []string
+	var (
+		tried []string
+		// best is the largest thing found so far that did NOT clear the size
+		// floor, kept as a fallback. A repository of small blobs is a poor
+		// sample and a usable one; refusing to measure it at all — which is
+		// what this did — leaves somebody with a size threshold they cannot
+		// see and no way to act on it.
+		best      []sample
+		bestRepo  string
+		bestBytes int64
+	)
+
 	for i, repository := range candidates {
 		if ctx.Err() != nil || i >= maxRepositoriesTried {
 			break
@@ -90,12 +121,23 @@ func collectSamples(
 		if err != nil || len(found) == 0 {
 			continue
 		}
-		return found, repository, nil
+		if found[0].size >= minSampleBytes {
+			return found, repository, nil
+		}
+		if found[0].size > bestBytes {
+			best, bestRepo, bestBytes = found, repository, found[0].size
+		}
 	}
 
+	if len(best) > 0 {
+		// Nothing anywhere cleared the floor, so measure the biggest there is
+		// and let the report say the sample was small. A number with a caveat
+		// beats a refusal.
+		return best, bestRepo, nil
+	}
 	return nil, "", fmt.Errorf(
-		"no blob of at least %s found in %s. Name one with --source-repository",
-		humanSize(minSampleBytes), describeTried(tried, len(candidates)))
+		"no blob at all could be read from %s. Name one with --source-repository",
+		describeTried(tried, len(candidates)))
 }
 
 // samplesIn looks for readable blobs in one repository.
@@ -117,20 +159,25 @@ func samplesIn(ctx context.Context, cfg registry.ClientConfig) ([]sample, error)
 	var found []sample
 
 	for i, tag := range preferredTags(tags) {
-		if ctx.Err() != nil || len(found) >= maxSamples || i >= maxTagsOpened {
+		if ctx.Err() != nil || i >= maxTagsOpened {
 			break
 		}
 		for _, b := range blobsUnderTag(ctx, client, tag) {
-			if seen[b.digest] || b.size < minSampleBytes {
+			if seen[b.digest] {
 				continue
 			}
 			seen[b.digest] = true
 			found = append(found, b)
 		}
+		// Enough blobs over the floor to fill the rotation: stop opening tags.
+		// Small ones are kept as well, because a repository that has only those
+		// is still measurable and the caller decides what to do about it.
+		if countOver(found, minSampleBytes) >= maxSamples {
+			break
+		}
 	}
 	if len(found) == 0 {
-		return nil, fmt.Errorf("no blob of at least %s in %s",
-			humanSize(minSampleBytes), cfg.Repository)
+		return nil, fmt.Errorf("no blob found in %s", cfg.Repository)
 	}
 
 	// Largest first, so a short budget spends itself on bytes rather than on
@@ -142,23 +189,58 @@ func samplesIn(ctx context.Context, cfg registry.ClientConfig) ([]sample, error)
 	return found, nil
 }
 
-// preferredTags orders a tag list newest-looking first.
+// preferredTags orders a tag list: newest-looking first, accessories last.
+//
+// Two heuristics, and stated as such — they change which blobs get timed, never
+// whether the measurement is honest.
 //
 // Registries serve tags in lexical order and the spec guarantees nothing about
 // it, so "the first tag" is an arbitrary choice that reliably lands on the
 // OLDEST spelling — an early release, a placeholder, a `latest` pointing at
 // something small. Reversing gets the other end of the same ordering, which for
-// every version scheme met so far is the most recent release and therefore the
-// most representative of what a transfer will actually move.
+// every version scheme met so far is the most recent release.
 //
-// A heuristic, and stated as one: it changes which blobs get timed, never
-// whether the measurement is honest.
+// Reversing alone makes the second problem worse, which is why both are here. A
+// release is published alongside its signature and attestation; those sort
+// adjacently to it and, for the two conventions this system already knows
+// about, sort AFTER it — so newest-first puts a 3 KB PKCS#7 blob at the front
+// of the queue. Signatures are still opened, last, because a repository that
+// holds nothing else is still measurable.
 func preferredTags(tags []string) []string {
-	out := make([]string, 0, len(tags))
+	reversed := make([]string, 0, len(tags))
 	for i := len(tags) - 1; i >= 0; i-- {
-		out = append(out, tags[i])
+		reversed = append(reversed, tags[i])
 	}
-	return out
+
+	out := make([]string, 0, len(reversed))
+	var accessories []string
+	for _, tag := range reversed {
+		if looksLikeAccessory(tag) {
+			accessories = append(accessories, tag)
+			continue
+		}
+		out = append(out, tag)
+	}
+	return append(out, accessories...)
+}
+
+// looksLikeAccessory recognises a tag that carries a signature or attestation
+// rather than a release.
+//
+// Two conventions, both already documented elsewhere in this system: cosign's
+// `sha256-<digest>.sig` / `.att` / `.sbom` tag schema, and the `signature_` /
+// `signed_` prefixes NEAR publishes (internal/vendors/near). Deliberately a
+// NAME test and nothing more — it only reorders a search, so a tag it
+// misjudges costs one extra fetch and a tag it misses is caught by the size
+// filter behind it.
+func looksLikeAccessory(tag string) bool {
+	lower := strings.ToLower(tag)
+	if strings.HasPrefix(lower, "sha256-") &&
+		(strings.HasSuffix(lower, ".sig") || strings.HasSuffix(lower, ".att") ||
+			strings.HasSuffix(lower, ".sbom")) {
+		return true
+	}
+	return strings.HasPrefix(lower, "signature_") || strings.HasPrefix(lower, "signed_")
 }
 
 // describeTried names the repositories the search covered, without printing
@@ -176,40 +258,75 @@ func describeTried(tried []string, total int) string {
 	}
 }
 
-// blobsUnderTag returns the layers one tag references, descending one level
-// into an index.
+// blobsUnderTag returns the layers reachable from one tag.
 //
 // An index states the size of its child MANIFESTS, not of the layers beneath
-// them, so a bundle's root yields nothing readable and one descent is required
-// to reach actual content. Errors are swallowed: this is a search for something
-// to measure, and a tag that will not resolve simply is not it — the caller
-// reports "nothing found" once, rather than one failure per tag.
+// them, so reaching actual content means descending — and descending as far as
+// it takes, which is the part this got wrong. A bundle is an index of INDEXES:
+// the ORB lists its components, each component is a multi-platform index, and
+// the layers are a level below that. Stopping after one descent landed on a
+// component index, found no layers because an index has none, and reported a
+// repository holding gigabytes as having nothing to measure.
+//
+// Errors are swallowed: this is a search for something to measure, and a tag
+// that will not resolve simply is not it — the caller reports "nothing found"
+// once, rather than one failure per tag.
 func blobsUnderTag(ctx context.Context, client *generic.Repository, tag string) []sample {
 	desc, err := client.ResolveTag(ctx, tag)
 	if err != nil {
 		return nil
 	}
+	return searchForBlobs(ctx, client, desc, 0)
+}
+
+// searchForBlobs descends a manifest tree until it finds layers.
+//
+// # Why not oci.Walk
+//
+// The transfer walk fetches the WHOLE tree — every manifest, to a bounded depth
+// — because a transfer needs every one of them. This needs a handful of blobs
+// and can stop at the first manifest that has any, so it goes depth-first and
+// returns as soon as it has something. On an ORB that is two or three requests
+// against a tree of sixty artifacts, and the difference is a calibration that
+// starts in a second rather than a minute.
+func searchForBlobs(
+	ctx context.Context, client *generic.Repository, desc registry.Descriptor, depth int,
+) []sample {
+	if depth > maxSearchDepth || ctx.Err() != nil {
+		return nil
+	}
+
 	tree, err := oci.FetchRoot(ctx, client, desc)
 	if err != nil || len(tree.Artifacts) == 0 {
 		return nil
 	}
-
 	if out := samplesOf(tree.Artifacts[0]); len(out) > 0 {
 		return out
 	}
 
-	// The root was an index. Its children are listed but not fetched, so walk
-	// into the first one that is a manifest rather than another index.
-	for _, child := range tree.Artifacts[1:] {
-		sub, err := oci.FetchRoot(ctx, client, child.Descriptor)
-		if err != nil || len(sub.Artifacts) == 0 {
-			continue
+	// An index. Its children are listed but not fetched, so open them in turn
+	// until one yields layers — of its own, or from further down.
+	children := tree.Artifacts[1:]
+	for i, child := range children {
+		if i >= maxChildrenPerLevel {
+			break
 		}
-		if out := samplesOf(sub.Artifacts[0]); len(out) > 0 {
+		if out := searchForBlobs(ctx, client, child.Descriptor, depth+1); len(out) > 0 {
 			return out
 		}
 	}
 	return nil
+}
+
+// countOver is how many samples clear the size floor.
+func countOver(samples []sample, floor int64) int {
+	n := 0
+	for _, s := range samples {
+		if s.size >= floor {
+			n++
+		}
+	}
+	return n
 }
 
 func samplesOf(a oci.Artifact) []sample {

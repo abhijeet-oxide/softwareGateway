@@ -117,9 +117,13 @@ func toAPICalibrationSide(s calibrate.SideReport) v1.CalibrationSide {
 			DirectRate:      s.Route.DirectRate,
 		},
 		RTTMs:         float64(s.RTT.Microseconds()) / 1000,
+		Samples:       s.Samples,
 		Knee:          s.Knee,
 		StillClimbing: s.StillClimbing,
 		Skipped:       s.Skipped,
+	}
+	if s.LargestSample > 0 {
+		out.LargestSampleBytes = v1.Int64String(strconv.FormatInt(s.LargestSample, 10))
 	}
 	for _, l := range s.Levels {
 		out.Levels = append(out.Levels, v1.CalibrationLevel{

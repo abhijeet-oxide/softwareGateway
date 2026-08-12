@@ -164,6 +164,15 @@ type SideReport struct {
 	// intrinsic latency, with queueing and scheduling noise removed.
 	RTT time.Duration
 
+	// Samples and LargestSample describe what the read probe actually opened.
+	//
+	// Reported because the alternative is a number nobody can check: a
+	// throughput measured over three-kilobyte signature blobs and one measured
+	// over 700 MB layers look identical in the table and mean entirely
+	// different things.
+	Samples       int
+	LargestSample int64
+
 	Levels []LevelResult
 	// Best is the level that moved the most bytes per second.
 	Best LevelResult
@@ -350,6 +359,7 @@ func (c *Calibrator) measureSource(
 	// target probe derives its own path from it.
 	s.cfg.Repository = chosen
 	out.Repository = chosen
+	out.Samples, out.LargestSample = len(samples), samples[0].size
 	if len(s.candidates) > 1 {
 		notes = append(notes, fmt.Sprintf(
 			"the source spans %d repositories; %s was measured. Use --source-repository "+
@@ -359,6 +369,16 @@ func (c *Calibrator) measureSource(
 		notes = append(notes, fmt.Sprintf(
 			"the source read probe had %d sample blob(s) to work with, so a cache "+
 				"anywhere on the path would inflate its numbers", n))
+	}
+	if samples[0].size < minSampleBytes {
+		// Measured anyway, and said out loud. A blob this small is dominated by
+		// the round trip rather than by the link, so the number below is closer
+		// to a latency measurement than a bandwidth one.
+		notes = append(notes, fmt.Sprintf(
+			"the largest blob available in %s is %s, under the %s this probe wants: "+
+				"the read figures are closer to a round-trip measurement than a "+
+				"throughput one", chosen, humanSize(samples[0].size),
+			humanSize(minSampleBytes)))
 	}
 
 	read := func(ctx context.Context, cfg registry.ClientConfig, streams int, budget time.Duration) LevelResult {

@@ -95,20 +95,46 @@ func TestReadProbeReadsRealBlobs(t *testing.T) {
 	}
 }
 
-// A config blob is a couple of hundred bytes and measures the round trip, not
-// the bandwidth. Sampling one would make every calibration of a small
-// repository report a throughput a hundred times below the truth.
-func TestSamplesSkipBlobsTooSmallToMeasure(t *testing.T) {
+// A REPOSITORY OF SMALL BLOBS IS A POOR SAMPLE AND A USABLE ONE.
+//
+// Refusing to measure it — which is what this used to do — leaves somebody
+// looking at "no blob of at least 256 KiB" for a repository they can see is
+// full of layers, with no way to act on a threshold they cannot see. Measure
+// it, and let the report carry the caveat.
+func TestATinyRepositoryIsMeasuredRatherThanRefused(t *testing.T) {
 	reg := fakeregistry.New()
 	t.Cleanup(reg.Close)
 	reg.AddImage("vendor/tiny", "1.0.0", fakeregistry.NewLayer("small"))
 
-	_, _, err := collectSamples(t.Context(), plainConfig(reg.Host(), "vendor/tiny"), nil)
-	if err == nil {
-		t.Fatal("a repository of tiny blobs was accepted as a throughput sample")
+	samples, chosen, err := collectSamples(t.Context(), plainConfig(reg.Host(), "vendor/tiny"), nil)
+	if err != nil {
+		t.Fatalf("a repository with blobs in it was refused: %v", err)
 	}
-	if !strings.Contains(err.Error(), "no blob of at least") {
-		t.Errorf("error = %q, want it to name the size floor", err)
+	if chosen != "vendor/tiny" || len(samples) == 0 {
+		t.Fatalf("samples = %d from %q", len(samples), chosen)
+	}
+	// And it is under the floor, which is what makes the caveat necessary.
+	if samples[0].size >= minSampleBytes {
+		t.Fatal("the fixture is not small; the test would prove nothing")
+	}
+}
+
+// A repository with real content anywhere beats one with only stubs, even
+// though both are measurable.
+func TestBigBlobsWinOverSmallOnes(t *testing.T) {
+	reg := fakeregistry.New()
+	t.Cleanup(reg.Close)
+	reg.AddImage("vendor/tiny", "1.0.0", fakeregistry.NewLayer("small"))
+	reg.AddImage("vendor/real", "1.0.0",
+		fakeregistry.NewLayer(strings.Repeat("r", 500<<10)))
+
+	_, chosen, err := collectSamples(t.Context(), plainConfig(reg.Host(), "vendor/tiny"),
+		[]string{"vendor/tiny", "vendor/real"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if chosen != "vendor/real" {
+		t.Errorf("measured %q, want the repository over the size floor", chosen)
 	}
 }
 
@@ -280,23 +306,61 @@ func TestSamplingWalksPastAnEmptyRepository(t *testing.T) {
 	}
 }
 
-// And when nothing anywhere is measurable, the error names what was tried and
+// When there is genuinely nothing to read, the error names what was tried and
 // what to do about it — rather than one repository nobody chose.
 func TestSamplingSaysWhatItTriedWhenItFindsNothing(t *testing.T) {
 	reg := fakeregistry.New()
 	t.Cleanup(reg.Close)
-	reg.AddImage("a", "1", fakeregistry.NewLayer("tiny"))
-	reg.AddImage("b", "1", fakeregistry.NewLayer("tiny"))
 
-	_, _, err := collectSamples(t.Context(), plainConfig(reg.Host(), "a"), []string{"a", "b"})
+	_, _, err := collectSamples(t.Context(), plainConfig(reg.Host(), "a"),
+		[]string{"empty/one", "empty/two"})
 	if err == nil {
-		t.Fatal("a source of stubs was accepted as measurable")
+		t.Fatal("a source with no content at all was accepted as measurable")
 	}
 	if !strings.Contains(err.Error(), "2 repositories") {
 		t.Errorf("error = %q, want it to say how many were tried", err)
 	}
 	if !strings.Contains(err.Error(), "--source-repository") {
 		t.Errorf("error = %q, want it to name the flag that fixes it", err)
+	}
+}
+
+// THE SHAPE THAT BROKE IT: an index of indexes.
+//
+// A bundle's root lists its components, each component is a multi-platform
+// index, and the layers live a level below THAT. A search that descends once
+// lands on a component index, finds no layers because an index has none, and
+// reports a repository holding gigabytes as having nothing worth measuring —
+// which is exactly what happened against a real ORB, with and without
+// --source-repository, while `packages inspect` listed every layer.
+func TestBlobsAreFoundUnderAnIndexOfIndexes(t *testing.T) {
+	reg := fakeregistry.New()
+	t.Cleanup(reg.Close)
+
+	// Level 3: the image that actually holds layers.
+	image := reg.AddImage("orbs/bundle", "component-linux-amd64",
+		fakeregistry.NewLayer(strings.Repeat("z", 700<<10)))
+	// Level 2: a multi-platform index over it.
+	component := reg.AddIndex("orbs/bundle", "component",
+		[]string{image}, []string{"linux/amd64"})
+	// Level 1: the bundle, listing the component index.
+	reg.AddIndex("orbs/bundle", "orb_25.7", []string{component}, []string{""})
+
+	// Only the bundle is TAGGED, which is the real shape: a vendor publishes
+	// the release, not each manifest under it. Without this the search reaches
+	// the layers by opening the leaf's own tag and never descends at all —
+	// which is how the first version of this test passed against code that
+	// could not descend.
+	reg.RemoveTag("orbs/bundle", "component-linux-amd64")
+	reg.RemoveTag("orbs/bundle", "component")
+
+	samples, _, err := collectSamples(t.Context(), plainConfig(reg.Host(), "orbs/bundle"), nil)
+	if err != nil {
+		t.Fatalf("no blob found under a nested index: %v", err)
+	}
+	if samples[0].size < minSampleBytes {
+		t.Errorf("largest sample is %d bytes; the 700 KiB layer two levels down was missed",
+			samples[0].size)
 	}
 }
 
@@ -311,6 +375,43 @@ func TestNewerTagsAreOpenedFirst(t *testing.T) {
 	if len(got) != 3 {
 		t.Errorf("tags dropped: %v", got)
 	}
+}
+
+// A SIGNATURE IS THE WORST POSSIBLE SAMPLE AND SORTS FIRST.
+//
+// `signature_orb_25.7` sorts after `orb_25.7`, and cosign's `sha256-….sig`
+// sorts after everything — so opening newest-first walks straight into a
+// handful of three-kilobyte PKCS#7 blobs and concludes the repository has
+// nothing worth measuring. They go last, and are still opened, because a
+// repository holding only signatures is still measurable.
+func TestSignatureTagsGoToTheBackOfTheQueue(t *testing.T) {
+	got := preferredTags([]string{
+		"orb_25.6", "orb_25.7", "signature_orb_25.7", "signed_orb_25.7",
+		"sha256-abc.sig", "sha256-abc.att",
+	})
+
+	if got[0] != "orb_25.7" {
+		t.Errorf("first tag opened = %q, want the newest release", got[0])
+	}
+	for _, accessory := range []string{"signature_orb_25.7", "sha256-abc.sig"} {
+		if position(got, accessory) < position(got, "orb_25.6") {
+			t.Errorf("%q is opened before a release tag: %v", accessory, got)
+		}
+	}
+	// Nothing is dropped: a repository of nothing but signatures still gets
+	// measured, with the caveat that its blobs are tiny.
+	if len(got) != 6 {
+		t.Errorf("tags dropped: %v", got)
+	}
+}
+
+func position(tags []string, want string) int {
+	for i, t := range tags {
+		if t == want {
+			return i
+		}
+	}
+	return len(tags)
 }
 
 // THE WRITE PROBE MUST GO WHERE A TRANSFER WRITES.

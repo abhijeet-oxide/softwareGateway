@@ -74,12 +74,13 @@ func TestTheRepairIsWhatMakesTheBundleSurvive(t *testing.T) {
 			"so this test would pass with the repair removed")
 	}
 
-	// And the flag does not outlive its purpose: a job that actually uploaded
-	// must stop distrusting the destination, or every future retry re-uploads.
-	stuck := s.count(`SELECT COUNT(*) FROM jobs
-	                   WHERE kind='blob' AND state='succeeded' AND force_upload <> 0`)
-	if stuck != 0 {
-		t.Errorf("%d succeeded blob job(s) still carry force_upload", stuck)
+	// The flag OUTLIVES the upload on purpose: it is the durable record that
+	// this blob has already been through the repair. Clearing it would let a
+	// destination that rejects the manifest for some other reason send the same
+	// bytes up again on every attempt.
+	if forced == 0 {
+		t.Error("no blob kept its force_upload flag; the repair has no memory and " +
+			"would re-upload on every rejection")
 	}
 }
 

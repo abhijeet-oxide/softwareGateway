@@ -405,7 +405,17 @@ func isSettled(state v1.TransferState) bool {
 	}
 }
 
+// speedOf answers "how fast is this going", which is a question about NOW.
+//
+// The average over the whole transfer is not an answer to it. A transfer with
+// nothing in flight is going at zero, whatever it averaged over the previous
+// thirty-one hours, and printing 581.9 KiB/s next to a RUNNING column reading 0
+// is the table contradicting itself on one line. The average is still a fact,
+// and `transfers describe` is where it belongs, labelled as what it is.
 func speedOf(t *v1.Transfer, live float64) string {
+	if t.Progress.JobsInFlight == 0 {
+		return "-"
+	}
 	if live > 0 {
 		return humanRate(live)
 	}
@@ -434,6 +444,26 @@ func elapsedOf(t *v1.Transfer) string {
 func etaOf(t *v1.Transfer, live float64) string {
 	if isSettled(t.State) {
 		return "-"
+	}
+
+	// NOTHING IN FLIGHT MEANS NO ESTIMATE, and the reason is the difference
+	// between an arithmetic answer and a true one. Extrapolating the remaining
+	// bytes over the average rate gave "~1m22s" for a transfer that had been
+	// motionless for hours: the arithmetic was right and the sentence was
+	// false, because it assumed a rate that no longer applied.
+	//
+	// What is printed instead says WHY there is no estimate, because that is
+	// the actionable half. A job in backoff will start again on its own; a
+	// transfer with nothing running and nothing waiting will not.
+	if t.Progress.JobsInFlight == 0 {
+		switch {
+		case t.Progress.JobsOutstanding == 0:
+			return "-"
+		case t.Progress.JobsWaiting > 0:
+			return "waiting"
+		default:
+			return "stalled"
+		}
 	}
 
 	d, ok := estimateAt(t, live)
@@ -536,34 +566,66 @@ func renderWaves(w io.Writer, waves []v1.TransferWave) error {
 // ones counted on an untrusted line here.
 func renderSkips(w io.Writer, skips []v1.SkipBreakdown) {
 	for _, k := range skips {
-		note := skipNote(k)
-		if note != "" {
-			note = "  " + note
-		}
-		fmt.Fprintf(w, "  Not moved:\t%s across %s, %s%s\n",
-			humanBytes(k.Bytes), plural(k.Jobs, "job", "jobs"), skipReason(k.Reason), note)
+		fmt.Fprintf(w, "  %s:\t%s across %s, %s\n",
+			skipLabel(k.Reason), humanBytes(k.Bytes),
+			plural(k.Jobs, "job", "jobs"), skipReason(k.Reason))
 	}
+}
+
+// skipLabel gives each reason its OWN label.
+//
+// They used to share one — two adjacent lines both reading "Not moved:",
+// differing only in a clause at the far end — which reads as the same fact
+// printed twice rather than as two different things. They are not the same
+// thing at all: one is the registry moving content for us, the other is the
+// registry telling us it need not be moved, and only the first is something
+// that happened.
+func skipLabel(reason string) string {
+	if reason == "mounted" {
+		return "Relocated"
+	}
+	return "Already there"
 }
 
 func skipReason(reason string) string {
 	switch reason {
 	case "mounted":
-		return "relocated inside the destination registry"
+		return "the registry copied it internally — no bytes crossed the network"
 	case "placement_hit":
-		return "our record said it was already there"
+		return "our own record of an earlier transfer said so; we did not re-check"
 	case "exists_at_target":
-		return "the destination said it was already there"
+		return "the destination answered that it already had it; we took its word"
 	default:
 		return reason
 	}
 }
 
-// skipNote flags the saving that is only a saving if the claim was true.
-func skipNote(k v1.SkipBreakdown) string {
-	if k.Trusted || k.Jobs == 0 {
-		return ""
+// skipsFootnote explains the one thing the lines above cannot say for
+// themselves: what it would MEAN for one of them to be wrong.
+//
+// It replaces a bare "(unverified)", which named the property without saying
+// what followed from it. A reader who has just watched a repair re-send content
+// that reported success needs the connection spelled out, not labelled.
+func skipsFootnote(w io.Writer, t *v1.Transfer) {
+	untrusted := 0
+	for _, k := range t.Progress.Skips {
+		if !k.Trusted {
+			untrusted += k.Jobs
+		}
 	}
-	return "(unverified)"
+	if untrusted == 0 {
+		return
+	}
+
+	fmt.Fprintln(w)
+	fmt.Fprintf(w, "%s moved no bytes on somebody's word rather than on an action:\n",
+		plural(untrusted, "job", "jobs"))
+	fmt.Fprintln(w, "  a record of an earlier transfer, or the destination's own answer to")
+	fmt.Fprintln(w, "  \"do you have this?\". Both are usually right. Where one is not, the")
+	fmt.Fprintln(w, "  manifest push says so and the content is re-sent — which is what the")
+	fmt.Fprintln(w, "  Repaired line above counts.")
+	fmt.Fprintf(w, "  See exactly which: transferctl transfers jobs %s --state skipped\n",
+		shortID(t.ID))
 }
 
 // activeWaves names the waves with work that can move right now.
@@ -689,6 +751,8 @@ func describeTransfer(w io.Writer, t *v1.Transfer, rates *rateTracker, watching 
 	if err := describeThroughput(w, t, rates, watching); err != nil {
 		return err
 	}
+
+	skipsFootnote(w, t)
 
 	if t.FailureReason != "" {
 		fmt.Fprintln(w)

@@ -437,6 +437,21 @@ take the same pair; on `describe` it is what makes current and peak throughput
 available at all, since a rate needs two readings and the server keeps no time
 series.
 
+### 6.0 SPEED and ETA are questions about NOW
+
+Both used to fall back to the transfer's cumulative average whenever there was no live sample, and the average is not an answer to either. A transfer with nothing in flight is going at zero, whatever it averaged over the previous thirty-one hours — so the listing printed `581.9 KiB/s` and `~1m22s` on the same line as a `RUNNING` column reading `0`, for a transfer that had been motionless for hours. The arithmetic was right and the sentence was false: it extrapolated a rate that no longer applied.
+
+With nothing in flight, `SPEED` is `-`, and `ETA` says **why** rather than shrugging:
+
+| ETA | Means |
+|---|---|
+| `~12m` | in flight, extrapolated from the live rate where one has been sampled |
+| `waiting` | nothing running, but jobs are in retry backoff — it will start again on its own |
+| `stalled` | nothing running, nothing waiting, work outstanding — it will not |
+| `-` | nothing left to do |
+
+The distinction between the last two is the actionable half. The average has not been discarded — `transfers describe` reports it under Throughput, labelled as what it is.
+
 ### 6.1 `failures` — why, as opposed to which
 
 ```
@@ -470,6 +485,32 @@ So the grouping key is the message with the per-job parts substituted out, and t
 | counts, kind, wave, class | how much is stuck, and how much is still trying |
 | `e.g.` | somewhere concrete to go and look |
 | the advice line | whether waiting would help |
+
+### 6.2 What was NOT moved, and on whose word
+
+```
+Transferred:    63.6 GiB of 63.7 GiB planned  (92% of jobs done)
+Deduplicated:   0 B never moved
+Already there:  46.8 MiB across 102 jobs, the destination answered that it already had it; we took its word
+Relocated:      114 B across 57 jobs, the registry copied it internally — no bytes crossed the network
+```
+
+Each reason gets its **own label**. They shared one — two adjacent lines both reading `Not moved:`, differing only in a clause at the far end — which reads as the same fact printed twice. They are not the same thing: `Relocated` is the registry moving content *for* us, `Already there` is the registry telling us it need not be moved, and only the first is something that happened.
+
+`Deduplicated` is a third thing again, and stays separate: it is the **plan-time** figure — blobs the planner dropped before creating a job at all. It reads `0 B` on a transfer whose every runtime skip was a claim, which is why the runtime skips needed lines of their own.
+
+A bare `(unverified)` used to mark the untrusted lines. It named the property without saying what followed from it, so it is now a footnote that does:
+
+```
+102 jobs moved no bytes on somebody's word rather than on an action:
+  a record of an earlier transfer, or the destination's own answer to
+  "do you have this?". Both are usually right. Where one is not, the
+  manifest push says so and the content is re-sent — which is what the
+  Repaired line above counts.
+  See exactly which: transferctl transfers jobs 281614ab --state skipped
+```
+
+That last line is the answer to "show me what was not copied": the job listing filtered to `skipped` names every one, with its digest, its destination and its reason.
 
 **Failed and retrying are counted apart.** A job sitting out a backoff has not given up, and the two need opposite responses — one is "act", the other is "wait". A single total hides which is which, which is exactly how a stalled transfer comes to look like a working one.
 

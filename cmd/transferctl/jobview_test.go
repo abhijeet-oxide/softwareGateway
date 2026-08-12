@@ -274,6 +274,9 @@ func TestEstimateUsesTheRateItIsGiven(t *testing.T) {
 		Progress: v1.TransferProgress{
 			PlannedBytes:     bytesOf(1100),
 			BytesTransferred: bytesOf(100),
+			// In flight, because an estimate is only meaningful for a transfer
+			// that is actually moving — see etaOf.
+			JobsInFlight: 1, JobsOutstanding: 3,
 		},
 	}
 

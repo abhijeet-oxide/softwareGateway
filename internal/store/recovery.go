@@ -68,6 +68,15 @@ type StalledTransfer struct {
 // later, which is why it exists in addition to the inline check rather than
 // instead of it.
 func (p *Packages) SettleStalledTransfers(ctx context.Context) ([]StalledTransfer, error) {
+	// Propagate permanent failures first. The reaper fails a job whose attempts
+	// are exhausted without any completion being reported, so the inline
+	// cascade in settleTransfer never runs for it — and a transfer left holding
+	// blocked jobs behind a failed dependency looks runnable to the query
+	// below and would never be settled at all.
+	if err := p.failUnreachableEverywhere(ctx); err != nil {
+		return nil, err
+	}
+
 	rows, err := p.db.QueryContext(ctx, p.dialect.Rewrite(`
 		SELECT t.id
 		  FROM transfers t
@@ -106,6 +115,52 @@ func (p *Packages) SettleStalledTransfers(ctx context.Context) ([]StalledTransfe
 		out = append(out, StalledTransfer{ID: id, Failed: failed, Reason: reason})
 	}
 	return out, nil
+}
+
+// failUnreachableEverywhere runs the dependency cascade for every live transfer
+// that holds a permanent failure.
+//
+// Scoped to transfers that actually have one, so the common case — a fleet of
+// healthy transfers — costs a single indexed query and no writes.
+func (p *Packages) failUnreachableEverywhere(ctx context.Context) error {
+	rows, err := p.db.QueryContext(ctx, p.dialect.Rewrite(`
+		SELECT DISTINCT t.id
+		  FROM transfers t
+		  JOIN jobs f ON f.transfer_id = t.id AND f.state = 'failed'
+		 WHERE t.state IN ('ready','running')
+		   AND EXISTS (SELECT 1 FROM jobs b
+		                WHERE b.transfer_id = t.id AND b.state = 'blocked')`))
+	if err != nil {
+		return fmt.Errorf("find transfers holding a permanent failure: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+
+	var ids []string
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return fmt.Errorf("scan a transfer holding a permanent failure: %w", err)
+		}
+		ids = append(ids, id)
+	}
+	if err := rows.Err(); err != nil {
+		return err
+	}
+
+	for _, id := range ids {
+		tx, err := p.db.BeginTx(ctx, nil)
+		if err != nil {
+			return fmt.Errorf("begin dependency cascade: %w", err)
+		}
+		if _, err := p.FailUnreachableJobs(ctx, tx, id); err != nil {
+			_ = tx.Rollback()
+			return err
+		}
+		if err := tx.Commit(); err != nil {
+			return fmt.Errorf("commit the dependency cascade of transfer %s: %w", id, err)
+		}
+	}
+	return nil
 }
 
 // settleIfStalled is the inline check, inside an existing transaction.
@@ -212,6 +267,11 @@ type RetryResult struct {
 	TransferID string
 	// Requeued is how many failed jobs were returned to the queue.
 	Requeued int
+	// Reblocked is how many failed only because something they depend on
+	// failed. They go back to waiting rather than to running, and are counted
+	// separately because "forty jobs requeued" when thirty-eight of them were
+	// consequences of two overstates what actually broke.
+	Reblocked int
 	// State is the transfer's state afterwards.
 	State string
 	// NoJobs distinguishes a transfer that failed before any work existed —
@@ -279,6 +339,20 @@ func (p *Packages) RetryTransfer(ctx context.Context, transferID string) (RetryR
 		return res, nil
 	}
 
+	// Consequences before causes. A job that failed only because a dependency
+	// of its own failed goes back to WAITING, not to running: its dependency is
+	// about to be requeued, not satisfied, and treating the two the same way
+	// would push a manifest whose blob is still in flight.
+	//
+	// Done first so the requeue below sees only genuine failures, and so the
+	// lowest-failed-wave calculation is not dragged down to wave 0 by a
+	// cascade that reached the whole tree.
+	reblocked, err := p.ClearDependencyFailures(ctx, tx, transferID)
+	if err != nil {
+		return res, err
+	}
+	res.Reblocked = reblocked
+
 	// The lowest wave holding a failed job. The transfer's current wave moves
 	// back to it: a wave only advances once drained, so a failure below the
 	// current wave should be impossible — and if a future change makes it
@@ -316,7 +390,7 @@ func (p *Packages) RetryTransfer(ctx context.Context, transferID string) (RetryR
 	}
 	res.Requeued = int(requeued)
 
-	if requeued == 0 {
+	if requeued == 0 && reblocked == 0 {
 		// Nothing was failed. Say so without touching the transfer: a
 		// `running` transfer must not be knocked back to `ready` by a retry
 		// that had no work to do.
@@ -325,6 +399,14 @@ func (p *Packages) RetryTransfer(ctx context.Context, transferID string) (RetryR
 			return res, fmt.Errorf("commit retry of transfer %s: %w", transferID, err)
 		}
 		return res, nil
+	}
+
+	// A job returned to `blocked` whose dependencies did in fact all succeed
+	// must not stay there. That is the case where the cascade over-reached: it
+	// fired while a sibling was still failing, and by now the sibling has been
+	// requeued and its own dependents recomputed. One sweep settles it.
+	if _, err := p.PromoteReadyJobs(ctx, tx, transferID); err != nil {
+		return res, err
 	}
 
 	// `ready` rather than `running`: nothing is in flight yet, and a worker

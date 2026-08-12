@@ -266,6 +266,10 @@ func (q *Queue) Complete(ctx context.Context, c store.Completion) (store.Complet
 		"bytes", c.BytesTransferred,
 		"transferState", res.TransferState,
 		"waveAdvanced", res.WaveAdvanced,
+		// How many artifacts this one completion made pushable. Under wave
+		// gating it was always zero until a whole wave drained; a run where it
+		// stays zero now means the dependency graph did not get written.
+		"promoted", res.Promoted,
 	)
 	return res, nil
 }

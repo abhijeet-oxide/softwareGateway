@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"sort"
 	"strings"
 	"time"
 
@@ -67,6 +68,10 @@ type LeasedJob struct {
 	// Attempt is this job's attempt number, already incremented by the lease.
 	Attempt int
 	Wave    int
+	// Priority and SiteRank travel with the job so a lease batch can be handed
+	// to the worker in the order it was selected in. See sortForDispatch.
+	Priority int
+	SiteRank int
 
 	// TargetTags are the tags to apply once this manifest is committed,
 	// resolved at planning time from the artifact's own reference annotation.
@@ -175,8 +180,8 @@ func (p *Packages) startTransfers(ctx context.Context, leased []LeasedJob) error
 // leaseColumns is the RETURNING/SELECT list both dialects share, so the two
 // implementations cannot drift in what they produce.
 const leaseColumns = `id, transfer_id, kind, digest, size_bytes, media_type,
-	artifact_id, source_repo_id, target_repo_id, attempts, wave, target_tags,
-	target_repository`
+	artifact_id, source_repo_id, target_repo_id, attempts, wave, priority,
+	site_rank, target_tags, target_repository`
 
 // The lease CLEARS the previous attempt's error.
 //
@@ -185,6 +190,37 @@ const leaseColumns = `id, transfer_id, kind, digest, size_bytes, media_type,
 // that has already been superseded — which is how a fixed problem goes on
 // looking broken. It is kept while the job waits out its backoff, because
 // there the reason it is waiting is exactly what a reader wants.
+
+// # The dequeue order, and why it has three keys rather than one
+//
+//	priority DESC     what an operator asked for, first
+//	site_rank         the copy that keeps a bundle resolvable, before the copy
+//	                  published under a component's own name
+//	size_bytes DESC   largest first WITHIN a rank
+//
+// The middle key is the interesting one, and it exists because ordering by size
+// alone was tried, measured and found to cost far more than it saved.
+//
+// A bundle publishes its components TWICE — once inside the bundle, once under
+// the component's own name — so one digest becomes two jobs of IDENTICAL size.
+// The second is nearly free: the blob is already in a sibling repository of the
+// same registry, so it is a cross-repository MOUNT rather than a transfer over
+// the WAN. But only if it runs AFTER the first. Sorting by size alone makes the
+// two adjacent, so both land in one lease batch and both stream from the
+// vendor. Measured on the bundle fixture: 16 vendor GETs for 11 distinct blobs,
+// and no mounts at all.
+//
+// site_rank states what insertion order previously left to chance. Every rank-0
+// job is dequeued before any rank-1 job, so by the time the second copy is
+// leased the first has either completed — leaving a placement to mount from —
+// or is still in flight, in which case the duplicate suppression below defers
+// it. Neither path streams the same digest twice.
+//
+// With that guaranteed, largest-first is safe within a rank, and it is worth
+// having: insertion order is arbitrary with respect to size, so a
+// multi-gigabyte layer leased last runs alone while every other slot idles.
+// See docs/design/04 §13.
+const leaseOrder = ` ORDER BY priority DESC, site_rank, size_bytes DESC, id`
 
 // leaseCandidatePredicate is the leasability test, shared by both dialects.
 //
@@ -237,8 +273,7 @@ func (p *Packages) leasePostgres(ctx context.Context, req LeaseRequest) ([]Lease
 		WITH candidate AS (
 		    SELECT id
 		      FROM jobs
-		     WHERE ` + p.leaseCandidatePredicate() + `
-		     ORDER BY priority DESC, next_visible_at, id
+		     WHERE ` + p.leaseCandidatePredicate() + leaseOrder + `
 		       FOR UPDATE SKIP LOCKED
 		     LIMIT ?
 		)
@@ -331,8 +366,7 @@ func (p *Packages) leaseSQLite(ctx context.Context, req LeaseRequest) ([]LeasedJ
 func (p *Packages) leaseCandidates(ctx context.Context, tx *sql.Tx, limit int) ([]int64, error) {
 	rows, err := tx.QueryContext(ctx, p.dialect.Rewrite(`
 		SELECT id FROM jobs
-		 WHERE `+p.leaseCandidatePredicate()+`
-		 ORDER BY priority DESC, next_visible_at, id
+		 WHERE `+p.leaseCandidatePredicate()+leaseOrder+`
 		 LIMIT ?`), limit)
 	if err != nil {
 		return nil, fmt.Errorf("select lease candidates: %w", err)
@@ -359,7 +393,8 @@ func scanLeasedJobs(rows *sql.Rows) ([]LeasedJob, error) {
 		var targetRepository sql.NullString
 		if err := rows.Scan(&j.ID, &j.TransferID, &j.Kind, &j.Digest, &j.SizeBytes,
 			&mediaType, &j.ArtifactID, &j.SourceRepoID, &j.TargetRepoID,
-			&j.Attempt, &j.Wave, &tags, &targetRepository); err != nil {
+			&j.Attempt, &j.Wave, &j.Priority, &j.SiteRank, &tags,
+			&targetRepository); err != nil {
 			return nil, fmt.Errorf("scan leased job: %w", err)
 		}
 		j.MediaType = mediaType.String
@@ -367,7 +402,38 @@ func scanLeasedJobs(rows *sql.Rows) ([]LeasedJob, error) {
 		j.TargetRepository = targetRepository.String
 		out = append(out, j)
 	}
-	return out, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+
+	sortForDispatch(out)
+	return out, nil
+}
+
+// sortForDispatch puts a lease batch back into the order it was SELECTED in.
+//
+// Neither dialect returns it that way — Postgres RETURNING is unordered, and
+// the SQLite path reads its rows back by id — and the order is not cosmetic: a
+// worker dispatches the batch in order against a bounded semaphore, so the last
+// job in the slice is the last to start. Selecting largest-first and then
+// handing the worker the batch sorted by id throws away the entire point of the
+// ordering, which is what the dequeue test caught.
+//
+// Same keys as the SQL, so there is one order and not two.
+func sortForDispatch(jobs []LeasedJob) {
+	sort.SliceStable(jobs, func(i, k int) bool {
+		a, b := jobs[i], jobs[k]
+		switch {
+		case a.Priority != b.Priority:
+			return a.Priority > b.Priority
+		case a.SiteRank != b.SiteRank:
+			return a.SiteRank < b.SiteRank
+		case a.SizeBytes != b.SizeBytes:
+			return a.SizeBytes > b.SizeBytes
+		default:
+			return a.ID < b.ID
+		}
+	})
 }
 
 // ---------------------------------------------------------------------------
@@ -571,6 +637,11 @@ type CompletionResult struct {
 	// TransferState is the transfer's state after this completion.
 	TransferState string
 	NewWave       int
+	// Promoted is how many jobs this completion made runnable by satisfying
+	// their last dependency. Reported because a transfer that never promotes
+	// anything has a dependency graph that is wrong, and nothing else would
+	// show it.
+	Promoted int
 }
 
 // CompleteJob records a finished job and everything that follows from it, in
@@ -643,6 +714,19 @@ func (p *Packages) CompleteJob(ctx context.Context, c Completion) (CompletionRes
 		if err := p.RecordPlacement(ctx, tx, targetRepoID, digest, size, source); err != nil {
 			return res, err
 		}
+	}
+
+	// Per-artifact readiness. Anything that was waiting on THIS job and is now
+	// fully satisfied becomes runnable in the same transaction that made it
+	// true — so a manifest whose last blob just landed is leasable before the
+	// worker reporting that blob has finished its round trip, rather than at
+	// the end of the wave.
+	if c.Outcome == "succeeded" || c.Outcome == "skipped" {
+		promoted, err := p.PromoteDependents(ctx, tx, c.JobID)
+		if err != nil {
+			return res, err
+		}
+		res.Promoted = promoted
 	}
 
 	advanced, newWave, transferState, err := p.settleTransfer(ctx, tx, transferID, wave)
@@ -770,6 +854,14 @@ func (p *Packages) settleTransfer(
 		return false, currentWave, state, err
 	}
 	if !drained || wave != currentWave {
+		// A job that failed permanently takes its dependents with it. Without
+		// this, per-artifact readiness would leave the transfer holding a few
+		// blocked manifests that can never run — which reads as "still
+		// working" to the stall check below, forever. See FailUnreachableJobs.
+		if _, err := p.FailUnreachableJobs(ctx, tx, transferID); err != nil {
+			return false, currentWave, state, err
+		}
+
 		// A wave that will not drain because a job has EXHAUSTED its attempts
 		// is not a wave still working — it is a transfer that has stopped, and
 		// until this check existed it went on reporting `running` with nothing

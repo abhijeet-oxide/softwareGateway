@@ -814,7 +814,13 @@ type RetryTransferResponse struct {
 type TransferRetry struct {
 	TransferID string `json:"transferId"`
 	Requeued   int    `json:"requeued"`
-	State      string `json:"state,omitempty"`
+	// Reblocked is how many jobs failed only because something they depend on
+	// failed. Those go back to WAITING rather than to running — their
+	// dependency is being requeued, not satisfied — and they are counted apart
+	// because "forty jobs requeued" when thirty-eight were consequences of two
+	// overstates what actually broke.
+	Reblocked int    `json:"reblocked,omitempty"`
+	State     string `json:"state,omitempty"`
 	// Error explains why this one could not be retried, when it could not.
 	//
 	// Carried per transfer rather than failing the whole request: a fleet-wide

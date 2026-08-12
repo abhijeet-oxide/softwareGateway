@@ -153,24 +153,27 @@ Two entries deserve attention:
 Column: `jobs.state`. The highest-volume machine — hundreds of thousands of rows.
 
 ```
-    ┌─────────┐   wave advanced    ┌─────────┐   lease    ┌────────┐
+    ┌─────────┐ dependencies met   ┌─────────┐   lease    ┌────────┐
     │ blocked ├───────────────────►│ pending │◄──────────►│ leased │
-    └─────────┘   (04 section 3.3) └────┬────┘  requeue   └───┬────┘
-       wave ≥ 1                         ▲                     │
-       at creation                      │                     ├──► succeeded   (bytes moved)
-                                        │                     ├──► skipped     (already present / mounted)
-                          retry with    │                     │
-                          backoff       └─────────────────────┤
-                                                              └──► failed      (attempts exhausted)
+    └────┬────┘   (04 section 3.5) └────┬────┘  requeue   └───┬────┘
+      has │  a dependency               ▲                     │
+   an edge│  failed for good            │                     ├──► succeeded   (bytes moved)
+   at     │                             │                     ├──► skipped     (already present / mounted)
+   creation                retry with   │                     │
+         │                 backoff      └─────────────────────┤
+         └──► failed                                          └──► failed      (attempts exhausted)
+              (class = dependency)
 
     pending | blocked | leased ──► cancelled
 ```
 
 | From | Event | To | Notes |
 |---|---|---|---|
-| — | `Created` (wave 0) | `pending` | |
-| — | `Created` (wave ≥ 1) | `blocked` | |
-| `blocked` | `WaveAdvanced` | `pending` | Bulk update ([04](04-queue-and-scheduling.md) §3.3) |
+| — | `Created`, nothing to wait for | `pending` | Every blob, and any manifest whose content is already at the destination |
+| — | `Created` with dependencies | `blocked` | One edge per blob and child manifest it references |
+| `blocked` | `DependenciesSatisfied` | `pending` | The last thing it waited for succeeded or was skipped ([04](04-queue-and-scheduling.md) §3.5) |
+| `blocked` | `WaveAdvanced` | `pending` | Bulk update ([04](04-queue-and-scheduling.md) §3.3). The backstop, for transfers planned before edges existed |
+| `blocked` | `DependencyFailed` | `failed` | `last_error_class = 'dependency'`; transitive. Distinguishable from a real failure, and reversed first by a retry ([04](04-queue-and-scheduling.md) §3.5.1) |
 | `pending` | `Leased` | `leased` | `attempts` incremented **here**, not on failure |
 | `leased` | `CompletedTransferred` | `succeeded` | Writes `blob_placements` |
 | `leased` | `CompletedExists` | `skipped` | `skip_reason = placement_hit` / `exists_at_target` |
@@ -185,7 +188,7 @@ Column: `jobs.state`. The highest-volume machine — hundreds of thousands of ro
 
 > **`skipped` is a first-class success, not an exception.** It is the state that makes deduplication measurable: `sum(size_bytes) where state='skipped'` grouped by `skip_reason` is exactly the bandwidth-saved metric ([12](12-observability-and-audit.md) §2). Folding "already present" into `succeeded` would make the system's most valuable optimization invisible, and an optimization nobody can measure is one nobody will notice regressing.
 
-**Wave-drain counts `succeeded` and `skipped` together** ([04](04-queue-and-scheduling.md) §3.4) — both mean the content is present, which is the only thing the next wave cares about.
+**A dependency is satisfied by `succeeded` OR `skipped`**, and wave-drain counts them together too ([04](04-queue-and-scheduling.md) §3.4) — both mean the content is present, which is the only thing the next wave cares about.
 
 ## 5. Verification lifecycle
 
@@ -265,6 +268,6 @@ Relationships the guards enforce jointly. These are the properties that make the
 | S1 | A transfer cannot be `succeeded` while any job is non-terminal | Wave-drain check ([04](04-queue-and-scheduling.md) §3.4) |
 | S2 | A package cannot be `verified` while any transfer is non-terminal | Package aggregation (§2) |
 | S3 | A job cannot be `leased` if its transfer is `paused` or `cancelling` | `jobs.paused` + dequeue predicate ([04](04-queue-and-scheduling.md) §4.1) |
-| S4 | A manifest job cannot be `leased` before its wave is current | `blocked` state (§4) — invariant I1 |
+| S4 | A manifest job cannot be `leased` before everything it references is present | `blocked` state (§4) + `job_dependencies` ([04](04-queue-and-scheduling.md) §3.5) — invariant I1 |
 | S5 | A terminal state is never left, except `failed` via explicit retry | Absence of edges in the tables above |
 | S6 | Every transition writes an audit event | Guard emits within the same transaction ([12](12-observability-and-audit.md) §4) |

@@ -227,3 +227,83 @@ func assertPlacements(t *testing.T, got, want map[string]Placement) {
 		t.Errorf("got %d placements, want %d", len(got), len(want))
 	}
 }
+
+// A vendor's ref.name annotation need not agree letter for letter with the
+// repository the artifact actually lives in. Observed in production: content in
+// `orbs/cfx-5000-k8s-215952-edgenac-…` annotated
+// `orbs/CFX-5000-k8s-215952-edgeNAC-…:orb_25.7_…`. The same repository, spelled
+// twice.
+//
+// Compared byte for byte, that is two repositories — so the destination grew
+// two sibling folders with the same name and different capitals, half the
+// bundle in each, and the mixed-case one returned 401 on its tag because the
+// OCI grammar for a repository name is lowercase-only and the registry scoped
+// its token to the name it normalised.
+func TestAnAnnotationThatRespellsItsOwnRepositoryDoesNotCreateASecondOne(t *testing.T) {
+	tree := store.ExpandedTree{Artifacts: []store.ExpandedArtifact{
+		{Row: store.ArtifactRow{ID: 1, Digest: "sha256:root"}, Parent: -1},
+		{
+			Row: store.ArtifactRow{ID: 2, Digest: "sha256:custo", Annotations: map[string]string{
+				// Same repository as the container, in different capitals.
+				registry.AnnotationRefName: "orbs/CFX-5000-K8s:generic_custo_23.8.1076",
+			}},
+			Parent: 0,
+		},
+	}}
+
+	got := ResolveLayout(tree, LayoutOptions{
+		SourceRepository: "orbs/cfx-5000-k8s",
+		RootTags:         []string{"orb_23.8.1076"},
+	})
+
+	custo := got["sha256:custo"]
+	if len(custo.Sites) != 1 {
+		t.Fatalf("the component landed in %d sites: %+v; a respelling of its own "+
+			"repository must not create a second one", len(custo.Sites), custo.Sites)
+	}
+	if custo.Sites[0].Repository != "orbs/cfx-5000-k8s" {
+		t.Errorf("site = %q, want the container's own spelling", custo.Sites[0].Repository)
+	}
+	// And the TAG survives untouched: the grammar for a tag permits uppercase,
+	// so lowercasing one would publish a reference the vendor never did.
+	if len(custo.Sites[0].Tags) != 1 || custo.Sites[0].Tags[0] != "generic_custo_23.8.1076" {
+		t.Errorf("tags = %v, want the vendor's own tag", custo.Sites[0].Tags)
+	}
+}
+
+// The contract that must NOT change: a vendor genuinely serving a mixed-case
+// repository is mirrored to a destination of the same name. Reading is
+// verbatim, and so is the path derived from it.
+func TestAMixedCaseSourceRepositoryIsStillMirroredVerbatim(t *testing.T) {
+	tree := store.ExpandedTree{Artifacts: []store.ExpandedArtifact{
+		{Row: store.ArtifactRow{ID: 1, Digest: "sha256:root"}, Parent: -1},
+	}}
+
+	got := ResolveLayout(tree, LayoutOptions{
+		SourceRepository: "orbs/CFX-5000-k8s",
+		RootTags:         []string{"v1"},
+	})
+	if r := got["sha256:root"].Sites[0].Repository; r != "orbs/CFX-5000-k8s" {
+		t.Errorf("site = %q, want the source's own spelling mirrored", r)
+	}
+}
+
+// Two genuinely different repositories are still two, whatever their capitals.
+func TestADifferentRepositoryStillGetsItsOwnSite(t *testing.T) {
+	tree := store.ExpandedTree{Artifacts: []store.ExpandedArtifact{
+		{Row: store.ArtifactRow{ID: 1, Digest: "sha256:root"}, Parent: -1},
+		{
+			Row: store.ArtifactRow{ID: 2, Digest: "sha256:nginx", Annotations: map[string]string{
+				registry.AnnotationRefName: "orbs/cfx-5000-k8s/nginx:1.2.3",
+			}},
+			Parent: 0,
+		},
+	}}
+
+	got := ResolveLayout(tree, LayoutOptions{
+		SourceRepository: "orbs/cfx-5000-k8s",
+	})
+	if n := len(got["sha256:nginx"].Sites); n != 2 {
+		t.Errorf("the component landed in %d sites, want its container and its own name", n)
+	}
+}

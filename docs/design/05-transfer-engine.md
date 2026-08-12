@@ -124,6 +124,18 @@ Concurrent duplicate suppression ([04](04-queue-and-scheduling.md) §5) is what 
 
 Support is uneven in practice, which is why `202` is treated as a normal outcome and not an error, and why the mount attempt is skipped entirely for registries known not to support it ([06](06-registry-abstraction.md) §6). A mount that fails for any reason falls through to streaming, which is always correct.
 
+#### A repository spelled two ways is one repository
+
+An `org.opencontainers.image.ref.name` annotation names an artifact. Nothing makes it agree letter for letter with the repository the artifact actually lives in, and in practice it does not: content in `orbs/cfx-5000-k8s-215952-edgenac-…` was annotated `orbs/CFX-5000-k8s-215952-edgeNAC-…:orb_25.7_…`.
+
+Compared byte for byte those are two repositories, so the layout published the component into its container **and** "elsewhere". The destination grew two sibling folders with the same name and different capitals, half the bundle in each.
+
+The mixed-case one does not entirely work either. The OCI grammar for a repository name is lowercase-only; Artifactory accepts a push to a mixed-case path while issuing a token scoped to the name **it** normalised, so a later request against the name we sent falls outside that scope and returns `401 unauthorized` — on a repository the same credential had been writing to for thirty hours. It surfaces at the tag, which is the last request of the entire transfer.
+
+So repository comparison in the layout is case-insensitive, and only there. **Reading is still verbatim** — a vendor genuinely serving `orbs/CFX-5000-k8s` is read from exactly that path and mirrored to a destination of the same name, which is the contract `orasRepo` exists to keep. What no longer happens is one repository becoming two because an annotation disagreed with itself about capitals.
+
+**Tags are untouched.** The grammar for a tag permits uppercase, so lowercasing one would publish a reference the vendor never did.
+
 #### The mount hint looks much further back than the placement skip
 
 Both read `blob_placements`, and they need different degrees of trust because being wrong costs different things.

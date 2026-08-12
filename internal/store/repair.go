@@ -128,6 +128,30 @@ func (p *Packages) RepairMissingBlobs(
 	// one the rejected push was against is suspect.
 	const blobsOfArtifact = `SELECT digest FROM artifact_blobs WHERE artifact_id = ?`
 
+	// WRITE THE EDGES FIRST, because the repair is about to depend on them.
+	//
+	// Blocking a manifest is only safe if something can unblock it, and what
+	// unblocks it is a dependency edge from it to the blob jobs it is waiting
+	// for. A transfer planned before those edges existed has none — so blocking
+	// its manifest is a BLACK HOLE: nothing promotes it, and wave advancement
+	// cannot help either, since the wave it sits in can never drain while it is
+	// blocked. That is a deadlock, and it happened.
+	//
+	// The repair has already computed exactly the set of edges it needs — the
+	// manifest, and the blob jobs for the artifact it describes at this
+	// destination — so it writes them rather than assuming somebody else did.
+	// Idempotent, so a transfer that already has them pays nothing.
+	if _, err := tx.ExecContext(ctx, p.dialect.Rewrite(`
+		INSERT INTO job_dependencies (job_id, depends_on_id)
+		SELECT ?, j.id
+		  FROM jobs j
+		 WHERE j.transfer_id = ? AND j.kind = 'blob' AND j.target_repo_id = ?
+		   AND j.digest IN (`+blobsOfArtifact+`)
+		ON CONFLICT DO NOTHING`),
+		jobID, transferID, targetRepoID, artifactID.Int64); err != nil {
+		return res, fmt.Errorf("record the dependencies of job %d for repair: %w", jobID, err)
+	}
+
 	deleted, err := tx.ExecContext(ctx, p.dialect.Rewrite(`
 		DELETE FROM blob_placements
 		 WHERE repository_id = ?

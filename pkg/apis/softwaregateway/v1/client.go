@@ -274,6 +274,12 @@ func (c *Client) CheckConnectivity(ctx context.Context, product string) (*CheckC
 	return &out, c.post(ctx, path, struct{}{}, &out)
 }
 
+// ListWorkers reports the fleet.
+func (c *Client) ListWorkers(ctx context.Context) (*ListWorkersResponse, error) {
+	var out ListWorkersResponse
+	return &out, c.get(ctx, "/api/v1/workers", &out)
+}
+
 // RetryTransfer requeues one transfer's failed jobs.
 //
 // Idempotent: a transfer with nothing failed reports zero requeued rather than

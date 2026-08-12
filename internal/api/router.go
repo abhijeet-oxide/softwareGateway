@@ -65,6 +65,12 @@ type Worker interface {
 	// invariants — a requeue that bypassed this type could reopen a wave the
 	// scheduler believes is closed.
 	Retry(ctx context.Context, transferID string) (store.RetryResult, error)
+
+	// RecordWorker notes what a worker reported about itself. No error: the
+	// fleet view must never be the reason a lease fails.
+	RecordWorker(ctx context.Context, id string, capacity, active int, version string)
+	// Workers reports the fleet.
+	Workers(ctx context.Context) ([]store.WorkerSummary, error)
 }
 
 // Calibrator measures one source-to-target path and recommends settings.
@@ -262,6 +268,10 @@ func (s *Server) routes() chi.Router {
 		// a control plane with no data plane, and a worker calling it should
 		// be told that plainly rather than have its jobs accepted and lost.
 		if s.deps.Queue != nil {
+			// The fleet, which until now was invisible: the workers table was
+			// created in the first migration and nothing ever wrote to it.
+			r.Get("/workers", s.handleListWorkers)
+
 			r.Post("/jobs:lease", s.handleLeaseJobs)
 			// The verb is split by the handler, not the router — see
 			// handleJobCustomMethod.

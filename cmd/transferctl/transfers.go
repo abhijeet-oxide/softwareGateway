@@ -521,6 +521,15 @@ func describeTransfer(w io.Writer, t *v1.Transfer, rates *rateTracker, watching 
 	if p.JobsWaiting > 0 {
 		fmt.Fprintf(pw, "  Waiting:\t%d in retry backoff\n", p.JobsWaiting)
 	}
+	if p.JobsBlocked > 0 {
+		// The line that answers "why is only one job running". Outstanding
+		// counts everything unfinished, and most of it is usually manifests
+		// that CANNOT be leased yet — a manifest is pushed only once every blob
+		// beneath it has landed. Without this the reader sees five hundred
+		// outstanding, one running, and concludes the fleet is broken.
+		fmt.Fprintf(pw, "  Blocked:\t%d waiting for wave %d to finish\n",
+			p.JobsBlocked, t.CurrentWave)
+	}
 	fmt.Fprintf(pw, "  Transferred:\t%s of %s planned  (%.0f%% of jobs done)\n",
 		humanBytes(p.BytesTransferred), humanBytes(p.PlannedBytes), percentComplete(p))
 	fmt.Fprintf(pw, "  Deduplicated:\t%s never moved\n", humanBytes(p.DedupeSkippedBytes))

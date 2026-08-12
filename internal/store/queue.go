@@ -1122,8 +1122,13 @@ type TransferSummary struct {
 	DedupeSkippedBytes int64
 
 	// Rolled up from jobs.
-	JobsDone         int
-	JobsFailed       int
+	JobsDone   int
+	JobsFailed int
+	// JobsBlocked are gated behind a later wave and cannot be leased yet. The
+	// number that explains an idle-looking fleet: a transfer with five hundred
+	// outstanding jobs and one running is usually four hundred and ninety-nine
+	// manifests waiting for the last blob, not a worker that is stuck.
+	JobsBlocked      int
 	JobsOutstanding  int
 	BytesTransferred int64
 	// JobsInFlight is how many are leased RIGHT NOW, and Workers is how many
@@ -1170,6 +1175,8 @@ func (p *Packages) transferSelect() string {
 	                  AND j.state = 'leased' AND j.lease_owner IS NOT NULL), 0),
 	       COALESCE((SELECT count(*) FROM jobs j WHERE j.transfer_id = t.id
 	                  AND j.state = 'pending' AND j.next_visible_at > ` + p.dialect.Now() + `), 0),
+	       COALESCE((SELECT count(*) FROM jobs j WHERE j.transfer_id = t.id
+	                  AND j.state = 'blocked'), 0),
 	       COALESCE(t.failure_reason, ''), t.created_at, COALESCE(t.started_at, ''),
 	       COALESCE(t.completed_at, '')
 	  FROM transfers t
@@ -1185,7 +1192,7 @@ func scanTransfer(row interface{ Scan(...any) error }) (TransferSummary, error) 
 		&t.DisplayTag, &t.Source, &t.Target, &t.State, &t.Priority, &t.CurrentWave, &t.MaxWave,
 		&t.PlannedJobs, &t.PlannedBytes, &t.DedupeSkippedBytes,
 		&t.JobsDone, &t.JobsFailed, &t.JobsOutstanding, &t.BytesTransferred,
-		&t.JobsInFlight, &t.Workers, &t.JobsWaiting,
+		&t.JobsInFlight, &t.Workers, &t.JobsWaiting, &t.JobsBlocked,
 		&t.FailureReason, &t.CreatedAt, &t.StartedAt, &t.CompletedAt)
 	return t, err
 }

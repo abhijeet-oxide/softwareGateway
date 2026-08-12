@@ -66,6 +66,7 @@ transferctl
 │   ├── list
 │   ├── describe <id>           Progress, failed jobs, timeline
 │   ├── jobs <id>               Layer-level progress
+│   ├── failures <id>           WHY it is failing, grouped by cause
 │   ├── logs <id>               Worker logs for this transfer
 │   ├── retry <id> | --all      Requeue failed jobs and carry on (alias: resume)
 │   ├── pause <id>
@@ -435,6 +436,44 @@ nothing is left running or runnable. `transfers list` and `transfers describe`
 take the same pair; on `describe` it is what makes current and peak throughput
 available at all, since a rate needs two readings and the server keeps no time
 series.
+
+### 6.1 `failures` — why, as opposed to which
+
+```
+$ transferctl transfers failures 28161ab
+
+18 jobs failed, 25 retrying in transfer 28161ab: 2 distinct causes.
+
+  push manifest <digest> <repository>: HTTP 400: manifest invalid: schema version 2
+  with media type application/vnd.oci.image.index.v1+json is not supported
+    18 jobs failed, 22 retrying · manifest · wave 1 · unsupported
+    e.g. sha256:1626c8c6f662 → apm0014228-oci-stage/orbs/cfx-5000-k8s/nokia-ims-mtcm
+    Not retryable: the registry rejects this content every time. Retrying will not
+    change the answer — the destination or the artifact has to.
+
+  push manifest <digest>: HTTP 504: gateway timeout
+    3 jobs retrying · manifest · waves 1, 2 · timeout
+    e.g. sha256:9a34ff012963 → apm0014228-oci-stage/orbs/cfx-5000-product/vnfmpartner
+    Retrying on its own. If it does not recover, the network path is the thing to
+    look at — `transferctl calibrate` measures it.
+
+Once the cause is gone: transferctl transfers retry 28161ab
+```
+
+**This is deliberately not a table, and the reason is the failure it was written for.** A bundle has five hundred manifests. When the destination rejects them it rejects all five hundred, for one reason. `transfers jobs --failed` renders that as five hundred rows of wrapped repository paths, each ending in a truncated message whose informative half — the status and the registry's own words — is off the right edge of the terminal. Every row differs, in the digest and the path. Every row says the same thing. There is no column width at which that becomes a diagnosis.
+
+So the grouping key is the message with the per-job parts substituted out, and the substitution is done against the ROW — where the digest and the destination path are known exactly — rather than guessed at from the text. What survives is the cause. What is printed once per cause is:
+
+| Line | Question it answers |
+|---|---|
+| the message | what went wrong |
+| counts, kind, wave, class | how much is stuck, and how much is still trying |
+| `e.g.` | somewhere concrete to go and look |
+| the advice line | whether waiting would help |
+
+**Failed and retrying are counted apart.** A job sitting out a backoff has not given up, and the two need opposite responses — one is "act", the other is "wait". A single total hides which is which, which is exactly how a stalled transfer comes to look like a working one.
+
+**The advice line is derived from the CLASS**, not from the message, because the class is what the retry policy actually keys off ([04](04-queue-and-scheduling.md) §11). If it says "not retryable", the queue agrees: those jobs will stop rather than burn their attempt budget.
 
 ## 7. Queue control
 

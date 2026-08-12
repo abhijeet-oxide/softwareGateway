@@ -576,6 +576,19 @@ func (c *Client) ListTransferJobs(ctx context.Context, id, state string) (*ListJ
 	return &out, nil
 }
 
+// ListTransferFailures summarises why a transfer is failing.
+//
+// Distinct from ListTransferJobs on purpose: that returns rows, this returns
+// causes. A bundle whose manifests are all rejected produces one cause and
+// hundreds of rows, and only one of those two is a diagnosis.
+func (c *Client) ListTransferFailures(ctx context.Context, id string) (*ListFailuresResponse, error) {
+	var out ListFailuresResponse
+	if err := c.get(ctx, "/api/v1/transfers/"+url.PathEscape(id)+"/failures", &out); err != nil {
+		return nil, err
+	}
+	return &out, nil
+}
+
 // CreateTransfer asks for a package to be copied.
 //
 // One call serves both `transfers create` and `transfers promote`: the

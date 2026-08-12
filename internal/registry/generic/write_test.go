@@ -299,3 +299,74 @@ func referencedDigests(t *testing.T, raw []byte) []registry.Digest {
 	}
 	return out
 }
+
+// A registry that will not accept these bytes will not accept them the eighth
+// time either.
+//
+// This used to come back `unclassified`, and unclassified is treated as
+// retryable on the reasonable theory that an uncategorised failure is more
+// likely transient than permanent. For a manifest the destination rejects, that
+// theory costs eight full round trips per manifest and ends exactly where it
+// started — which on a bundle of five hundred manifests over a slow link is the
+// difference between a failure and an afternoon.
+func TestARejectedManifestIsNotTreatedAsATransientFault(t *testing.T) {
+	reg := fakeregistry.New()
+	t.Cleanup(reg.Close)
+
+	src := writeRepo(t, reg, "vendor/suite")
+	srcDigest := reg.AddImage("vendor/suite", "v1.0.0", fakeregistry.NewLayer("layer"))
+	desc, raw, err := src.FetchManifest(t.Context(), srcDigest)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	dst := writeRepo(t, reg, "mirror/suite")
+	reg.RejectNext("/manifests/", 400, "MANIFEST_INVALID", "schema version is not supported", 1)
+
+	_, err = dst.PushManifest(t.Context(), desc.Digest.String(), desc.MediaType, raw)
+	if err == nil {
+		t.Fatal("a rejected manifest push reported success")
+	}
+
+	if got := registry.ClassOf(err); got != registry.ClassUnsupported {
+		t.Errorf("class = %q, want unsupported", got)
+	}
+	if registry.Retryable(err) {
+		t.Error("a manifest the registry refuses was marked retryable")
+	}
+
+	// And the operator has to be able to see WHY without opening a debugger.
+	for _, want := range []string{"400", "manifest invalid", "schema version"} {
+		if !strings.Contains(strings.ToLower(err.Error()), want) {
+			t.Errorf("error %q does not carry %q — what the registry actually said", err, want)
+		}
+	}
+}
+
+// The same status, a different meaning. Some registries report a missing blob
+// on a manifest push as 400 rather than 404, and reading the status alone gets
+// that right half the time. The self-healing path in the engine keys off this
+// classification, so getting it wrong turns a repairable placement-cache miss
+// into a permanent failure.
+func TestAMissingBlobReportedAsA400IsStillAMissingBlob(t *testing.T) {
+	reg := fakeregistry.New()
+	t.Cleanup(reg.Close)
+
+	src := writeRepo(t, reg, "vendor/suite")
+	srcDigest := reg.AddImage("vendor/suite", "v1.0.0", fakeregistry.NewLayer("layer"))
+	desc, raw, err := src.FetchManifest(t.Context(), srcDigest)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// No blobs at the destination: the fake answers 400 MANIFEST_BLOB_UNKNOWN,
+	// exactly as a real registry does.
+	dst := writeRepo(t, reg, "mirror/suite")
+	_, err = dst.PushManifest(t.Context(), desc.Digest.String(), desc.MediaType, raw)
+	if err == nil {
+		t.Fatal("a manifest whose blobs are absent was accepted")
+	}
+	if !errors.Is(err, registry.ErrNotFound) {
+		t.Errorf("error %q is not a not-found; the engine will not repair the placement", err)
+	}
+}

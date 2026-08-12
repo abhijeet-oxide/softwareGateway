@@ -66,7 +66,20 @@ Classified once at the boundary ([06](06-registry-abstraction.md) §7); retry po
 | 401/403 | `ErrUnauthorized`/`ErrForbidden` | 1 | Notification: needs a human |
 | Source blob 404 mid-transfer | `ErrNotFound` | 1 | Vendor deleted content mid-transfer. Fail loudly |
 | Digest mismatch | `ErrDigestMismatch` | 2 | Possible corruption; surfaced rather than absorbed |
+| 400 with an OCI error code | by CODE, see below | by class | The code decides, not the status |
 | Total registry outage | `ErrUnavailable` | 8, then `failed` | Backoff to a 5 m cap; `transfers:retry` resumes when the vendor returns |
+
+**The registry's own error code is read before the status.** The boundary used to classify four statuses and let everything else through, so a manifest rejected with a 400 — which is how several registries answer content they will not accept — arrived as `unclassified`. Unclassified is treated as *retryable*, on the reasonable theory that an uncategorised failure is more likely a transient network fault than a permanent one. For a manifest the destination will never accept, that theory is wrong in the most expensive available way: eight attempts, each a full round trip over a slow link, per manifest, ending exactly where it started.
+
+| OCI error code | Sentinel | Why |
+|---|---|---|
+| `BLOB_UNKNOWN`, `MANIFEST_BLOB_UNKNOWN` | `ErrNotFound` | The placement cache was wrong. Self-healing (§2.5) — and it arrives as 400 from some registries and 404 from others, so the status alone gets it right half the time |
+| `MANIFEST_UNKNOWN`, `NAME_UNKNOWN` | `ErrNotFound` | |
+| `UNAUTHORIZED` / `DENIED` | `ErrUnauthorized` / `ErrForbidden` | |
+| `DIGEST_INVALID`, `SIZE_INVALID` | `ErrDigestMismatch` | |
+| `MANIFEST_INVALID`, `NAME_INVALID`, `UNSUPPORTED` | `ErrUnsupported` | Not retryable. The registry will reject these bytes every time |
+
+The classified error carries the status and the registry's own words as structured fields rather than only in a wrapped string, which is what makes `transferctl transfers failures` able to lead with `HTTP 400: manifest invalid: …` ([13](13-cli.md) §6.1).
 
 **A registry outage lasting longer than 8 backoffs (~20 minutes) fails the transfer**, and this is deliberate. An indefinitely retrying transfer holds queue slots, hides the problem behind a green dashboard, and eventually needs a human anyway. Failing makes it visible; `transfers:retry` resumes from exactly where it stopped, because completed jobs stay completed.
 

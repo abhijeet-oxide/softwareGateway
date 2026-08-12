@@ -175,7 +175,15 @@ func (s *Server) handleGetTransfer(w http.ResponseWriter, r *http.Request) {
 		NotFound(w, r, "transfer", id)
 		return
 	}
-	WriteJSON(w, r, http.StatusOK, transferDTO(t))
+
+	dto := transferDTO(t)
+	// Only on the single-transfer read. A failure to group the waves does not
+	// fail the request: it is a breakdown of numbers already in the response,
+	// and losing it must not cost the reader the response.
+	if waves, err := s.deps.Packages.WaveProgress(r.Context(), t.ID); err == nil {
+		dto.Waves = toAPIWaves(waves, t.CurrentWave)
+	}
+	WriteJSON(w, r, http.StatusOK, dto)
 }
 
 // handleListTransferJobs serves GET /api/v1/transfers/{transfer}/jobs.
@@ -315,4 +323,20 @@ func parseTransferState(s string) (string, error) {
 	return "", fmt.Errorf(
 		"state %q is not a transfer state: expected one of pending, planning, ready, "+
 			"running, paused, verifying, succeeded, failed, cancelling, cancelled", s)
+}
+
+// toAPIWaves renders the per-wave breakdown, marking the wave in progress.
+func toAPIWaves(waves []store.WaveSummary, current int) []v1.TransferWave {
+	out := make([]v1.TransferWave, 0, len(waves))
+	for _, w := range waves {
+		out = append(out, v1.TransferWave{
+			Wave: w.Wave, Kind: w.Kind, Current: w.Wave == current,
+			Total: w.Total, Done: w.Done, Running: w.Running,
+			Pending: w.Pending, Waiting: w.Waiting,
+			Blocked: w.Blocked, Failed: w.Failed,
+			PlannedBytes:     v1.Int64String(strconv.FormatInt(w.PlannedBytes, 10)),
+			TransferredBytes: v1.Int64String(strconv.FormatInt(w.TransferredBytes, 10)),
+		})
+	}
+	return out
 }

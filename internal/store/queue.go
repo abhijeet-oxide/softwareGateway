@@ -1598,3 +1598,91 @@ func (p *Packages) SettleRequest(ctx context.Context, requestID string) error {
 	}
 	return nil
 }
+
+// WaveSummary is one wave's population, by state.
+//
+// # Why a wave needs its own row
+//
+// A transfer's totals answer "how much is left" and cannot answer "why is
+// nothing happening", because the outstanding count mixes three populations
+// that behave completely differently: jobs that can run, jobs waiting out a
+// backoff, and jobs GATED behind a wave that has not drained. Five hundred
+// outstanding with one in flight reads as a broken fleet and is usually four
+// hundred and ninety-nine manifests correctly refusing to be pushed before
+// their blobs land (invariant I1).
+//
+// Per wave, that becomes obvious at a glance: wave 0 nearly done, waves 1-3
+// full and blocked.
+type WaveSummary struct {
+	Wave int
+	// Kind is "blob", "manifest", or "mixed" where a wave holds both. In
+	// practice blobs are wave 0 and manifests are the rest, and seeing that
+	// stated is half of understanding the ordering.
+	Kind string
+
+	Total   int
+	Done    int
+	Running int
+	// Pending is leasable now; Waiting is pending behind a retry backoff. The
+	// two are the same state column and completely different situations.
+	Pending int
+	Waiting int
+	Blocked int
+	Failed  int
+
+	PlannedBytes     int64
+	TransferredBytes int64
+}
+
+// WaveProgress reports every wave of one transfer, lowest first.
+//
+// One grouped query over the jobs of one transfer, on the (transfer_id, state)
+// index. Served per transfer rather than folded into the listing: forty
+// transfers × four waves is a table nobody reads, and the question this answers
+// is always asked about one transfer.
+func (p *Packages) WaveProgress(ctx context.Context, transferID string) ([]WaveSummary, error) {
+	rows, err := p.db.QueryContext(ctx, p.dialect.Rewrite(`
+		SELECT wave,
+		       count(*),
+		       SUM(CASE WHEN state IN ('succeeded','skipped') THEN 1 ELSE 0 END),
+		       SUM(CASE WHEN state = 'leased' THEN 1 ELSE 0 END),
+		       SUM(CASE WHEN state = 'pending' THEN 1 ELSE 0 END),
+		       SUM(CASE WHEN state = 'pending'
+		                 AND next_visible_at > `+p.dialect.Now()+` THEN 1 ELSE 0 END),
+		       SUM(CASE WHEN state = 'blocked' THEN 1 ELSE 0 END),
+		       SUM(CASE WHEN state = 'failed' THEN 1 ELSE 0 END),
+		       COALESCE(SUM(size_bytes), 0),
+		       COALESCE(SUM(bytes_transferred), 0),
+		       MIN(kind), MAX(kind)
+		  FROM jobs
+		 WHERE transfer_id = ?
+		 GROUP BY wave
+		 ORDER BY wave`), transferID)
+	if err != nil {
+		return nil, fmt.Errorf("wave progress for transfer %s: %w", transferID, err)
+	}
+	defer func() { _ = rows.Close() }()
+
+	var out []WaveSummary
+	for rows.Next() {
+		var (
+			w                WaveSummary
+			minKind, maxKind string
+		)
+		if err := rows.Scan(&w.Wave, &w.Total, &w.Done, &w.Running, &w.Pending,
+			&w.Waiting, &w.Blocked, &w.Failed, &w.PlannedBytes, &w.TransferredBytes,
+			&minKind, &maxKind); err != nil {
+			return nil, fmt.Errorf("scan wave summary: %w", err)
+		}
+		// Pending counts everything in that state; Waiting is the subset behind
+		// a backoff. Subtracting leaves what a worker could take right now,
+		// which is the number that explains an idle fleet.
+		w.Pending -= w.Waiting
+		w.Kind = minKind
+		if minKind != maxKind {
+			w.Kind = "mixed"
+		}
+		out = append(out, w)
+	}
+	return out, rows.Err()
+}

@@ -488,6 +488,60 @@ func newTransfersDescribeCommand() *cobra.Command {
 	return cmd
 }
 
+// renderWaves is the breakdown that makes an idle-looking transfer legible.
+//
+// The totals cannot do this. "519 outstanding, 2 in flight" mixes three
+// populations that behave completely differently — runnable, waiting out a
+// backoff, and GATED behind a wave that has not drained — and only the last one
+// explains why a fleet with capacity to spare is running two jobs. Per wave it
+// is immediate: wave 0 has two blobs left, waves 1 to 3 are full and cannot
+// start until it finishes.
+func renderWaves(w io.Writer, waves []v1.TransferWave) error {
+	if len(waves) == 0 {
+		return nil
+	}
+
+	fmt.Fprintln(w)
+	fmt.Fprintln(w, "Waves")
+	tw := newTabWriter(w)
+	fmt.Fprintln(tw, "  WAVE\tKIND\tDONE\tRUNNING\tRUNNABLE\tWAITING\tBLOCKED\tFAILED\tCOPIED")
+	for _, k := range waves {
+		marker := "  "
+		if k.Current {
+			// The wave the transfer is actually working on. Everything above it
+			// is finished and everything below it cannot start.
+			marker = "> "
+		}
+		fmt.Fprintf(tw, "%s%d\t%s\t%d/%d\t%s\t%s\t%s\t%s\t%s\t%s\n",
+			marker, k.Wave, k.Kind, k.Done, k.Total,
+			count(k.Running), count(k.Pending), count(k.Waiting),
+			count(k.Blocked), count(k.Failed),
+			bytesOfWave(k))
+	}
+	return tw.Flush()
+}
+
+// count renders a zero as a dash, so the eye lands on the numbers that are not
+// zero — which in a wave table is nearly all of the information.
+func count(n int) string {
+	if n == 0 {
+		return "-"
+	}
+	return fmt.Sprint(n)
+}
+
+// bytesOfWave shows copied against planned for that wave.
+//
+// Manifest waves are kilobytes and blob waves are the whole transfer, which is
+// worth seeing side by side: it is why wave 0 takes hours and waves 1 to 3 take
+// seconds once they open.
+func bytesOfWave(k v1.TransferWave) string {
+	if int64Of(k.PlannedBytes) == 0 {
+		return "-"
+	}
+	return humanBytes(k.TransferredBytes) + "/" + humanBytes(k.PlannedBytes)
+}
+
 func settled(s v1.TransferState) bool {
 	switch s {
 	case v1.TransferSucceeded, v1.TransferFailed, v1.TransferCancelled:
@@ -544,6 +598,10 @@ func describeTransfer(w io.Writer, t *v1.Transfer, rates *rateTracker, watching 
 		}
 	}
 	if err := pw.Flush(); err != nil {
+		return err
+	}
+
+	if err := renderWaves(w, t.Waves); err != nil {
 		return err
 	}
 

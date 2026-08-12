@@ -77,7 +77,18 @@ Classified once at the boundary ([06](06-registry-abstraction.md) §7); retry po
 | `MANIFEST_UNKNOWN`, `NAME_UNKNOWN` | `ErrNotFound` | |
 | `UNAUTHORIZED` / `DENIED` | `ErrUnauthorized` / `ErrForbidden` | |
 | `DIGEST_INVALID`, `SIZE_INVALID` | `ErrDigestMismatch` | |
-| `MANIFEST_INVALID`, `NAME_INVALID`, `UNSUPPORTED` | `ErrUnsupported` | Not retryable. The registry will reject these bytes every time |
+| `MANIFEST_INVALID`, `NAME_INVALID`, `UNSUPPORTED` | `ErrUnsupported` | Not retryable — **unless the detail names a blob**, see below |
+
+**One registry hides a missing blob inside MANIFEST_INVALID**, so the detail decides before the code does:
+
+```
+HTTP 400: manifest invalid: map[description:Failed to copy blob sha256:… to
+orbs/cfx-5000-…/sha256:…/sha256__dc82908b11cf…]
+```
+
+That is `MANIFEST_BLOB_UNKNOWN` wearing another code, and the distinction is not cosmetic. `MANIFEST_INVALID` means "these bytes are wrong and always will be"; a missing blob means "put the blob there and this works". Reading the first as the second abandons a transfer that is one upload away from finishing — which is what happened to a 63.7 GiB bundle that moved every byte and delivered nothing.
+
+Matching on a registry's prose is exactly as unpleasant as it looks. It is confined to one function, applies only to codes that are otherwise terminal, and so the cost of being wrong is a retry rather than a wrong result. The alternative is accepting that one registry's bundles can never be replicated.
 
 The classified error carries the status and the registry's own words as structured fields rather than only in a wrapped string, which is what makes `transferctl transfers failures` able to lead with `HTTP 400: manifest invalid: …` ([13](13-cli.md) §6.1).
 
@@ -104,6 +115,22 @@ A rolled-back transaction can only lose the *record* of a completed job, causing
 | Blob deleted at destination between plan and push | `BLOB_UNKNOWN` | As stale placement |
 
 The first row is the self-healing loop that makes the placement fast path safe rather than merely fast: **the registry itself tells us when our cache is wrong**, and the cost of being wrong is one requeued blob.
+
+#### It was specified here and not built, and that is what broke
+
+The engine produced the `blob_unknown` class from the first version. Nothing anywhere consumed it. A manifest rejected for a missing blob therefore retried against a destination that went on claiming to hold the blob — eight times, and then permanently.
+
+The gap was invisible for as long as every destination answered honestly, and Artifactory does not. It answers `HEAD /v2/<path>/blobs/<digest>` from a checksum index spanning the whole Artifactory repository rather than the image path the request named, so a blob present under any path reads as present under every path. Fast path 2 believes it, skips the upload, records a placement — and the manifest push, which links per path, cannot.
+
+`store.RepairMissingBlobs` is the missing half. On a `blob_unknown` completion for a manifest job, in the same transaction:
+
+1. **Withdraw the placements** for that manifest's blobs at that destination. They caused the skip; leaving them means the next attempt skips again.
+2. **Requeue those blob jobs with `force_upload`.** Deleting the placements is not sufficient on its own — fast path 2 asks the destination directly and gets the same wrong answer, and fast path 3 asks it to mount content it says it has. A repaired job takes **no** fast path: no placement, no `HEAD`, no mount, just the bytes.
+3. **Return the manifest to `blocked`**, with its attempts and its backoff reset. Its content is not present, so it is not runnable — and per-artifact readiness ([04](04-queue-and-scheduling.md) §3.5) promotes it again on its own the moment the last repaired blob lands.
+
+The flag is cleared when the blob succeeds. Left set, it would make every future retry of that job re-upload for no reason, which is the opposite of what the fast paths are for.
+
+The cost is one full upload of the blobs of **one manifest**. What it replaces is a transfer that moved 63.7 GiB and delivered nothing.
 
 The third row matters more than it looks. Because a Package pins `manifest_digest` at discovery ([01](01-domain-model.md) §2.2), a vendor re-pushing a tag mid-transfer cannot cause us to replicate a mixture of two versions. We finish the version we started.
 

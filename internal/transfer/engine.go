@@ -14,6 +14,7 @@ import (
 
 	"github.com/abhijeet-oxide/softwareGateway/internal/platform/backoff"
 	"github.com/abhijeet-oxide/softwareGateway/internal/registry"
+	"github.com/abhijeet-oxide/softwareGateway/internal/store"
 )
 
 // The engine runs on the WORKER. It is the only place bytes move.
@@ -87,6 +88,14 @@ type Job struct {
 	// Advisory, and empty is ordinary. A registry that declines simply falls
 	// through to streaming, which is always correct.
 	MountFrom string
+
+	// ForceUpload forbids every fast path — no placement, no HEAD, no mount.
+	//
+	// Set by the Coordinator when a manifest push has already been rejected for
+	// this content: the destination has been caught claiming to hold a blob it
+	// will not serve, so its answers about that blob are no longer evidence of
+	// anything. The only thing that settles it is sending the bytes.
+	ForceUpload bool
 
 	// Tags are what this manifest must be called at the destination.
 	//
@@ -180,30 +189,41 @@ func (e *Engine) Run(ctx context.Context, job Job, progress ProgressFunc) Result
 func (e *Engine) runBlob(ctx context.Context, job Job, progress ProgressFunc) Result {
 	dgst := registry.Digest(job.Digest)
 
-	// 1. The Coordinator already believes this is there. A placement is strong
-	// evidence, not proof — a registry's garbage collector can remove content
-	// underneath us — but the TTL bounds the staleness and the BLOB_UNKNOWN
-	// backstop on manifest push catches the rest.
-	if job.KnownPlacement {
-		return Result{Outcome: OutcomeSkipped, SkipReason: SkipPlacementHit, Placed: true}
-	}
+	// Every fast path below asks somebody whether the blob is already at the
+	// destination, and this job exists because one of them was believed and was
+	// wrong. Asking again gets the same wrong answer, so the ladder is skipped
+	// entirely — see store.RepairMissingBlobs.
+	if !job.ForceUpload {
+		// 1. The Coordinator already believes this is there. A placement is
+		// strong evidence, not proof — a registry's garbage collector can
+		// remove content underneath us — but the TTL bounds the staleness and
+		// the BLOB_UNKNOWN backstop on manifest push catches the rest.
+		if job.KnownPlacement {
+			return Result{Outcome: OutcomeSkipped, SkipReason: SkipPlacementHit, Placed: true}
+		}
 
-	// 2. Ask the destination. One HEAD, and it settles the question for real.
-	if _, err := job.Target.StatBlob(ctx, dgst); err == nil {
-		return Result{Outcome: OutcomeSkipped, SkipReason: SkipExistsAtTarget, Placed: true}
-	} else if !errors.Is(err, registry.ErrNotFound) {
-		// A destination that cannot answer HEAD is a destination that will not
-		// accept an upload either. Fail rather than streaming gigabytes into
-		// what is probably an auth or connectivity problem.
-		return e.failed(err, "stat blob at destination")
-	}
+		// 2. Ask the destination. One HEAD, and it settles the question for
+		// real — on a registry that answers it per repository. Artifactory
+		// answers from a checksum index spanning its whole repository, so a
+		// blob present under any path there reads as present under all of them,
+		// which is the lie this whole flag exists to get past.
+		if _, err := job.Target.StatBlob(ctx, dgst); err == nil {
+			return Result{Outcome: OutcomeSkipped, SkipReason: SkipExistsAtTarget, Placed: true}
+		} else if !errors.Is(err, registry.ErrNotFound) {
+			// A destination that cannot answer HEAD is a destination that will
+			// not accept an upload either. Fail rather than streaming gigabytes
+			// into what is probably an auth or connectivity problem.
+			return e.failed(err, "stat blob at destination")
+		}
 
-	// 3. Ask the registry to relocate the blob server-side. Zero bytes over the
-	// wire regardless of size — the dominant optimization for promotion, where
-	// a 45 GB move can complete in seconds, and the difference between a
-	// bundle's shared components costing their size once or twice.
-	if mounted := e.tryMount(ctx, job, dgst); mounted != nil {
-		return *mounted
+		// 3. Ask the registry to relocate the blob server-side. Zero bytes over
+		// the wire regardless of size — the dominant optimization for
+		// promotion, where a 45 GB move can complete in seconds, and the
+		// difference between a bundle's shared components costing their size
+		// once or twice.
+		if mounted := e.tryMount(ctx, job, dgst); mounted != nil {
+			return *mounted
+		}
 	}
 
 	// 4. Stream.
@@ -464,7 +484,8 @@ func (e *Engine) failed(err error, what string) Result {
 // and a blob it references is missing, which is the destination telling us a
 // placement record was wrong. That is a self-healing signal rather than a
 // missing resource, so it needs its own name to be routed differently.
-const ClassBlobUnknown = "blob_unknown"
+// It must equal store.ClassBlobUnknown, which is the side that acts on it.
+const ClassBlobUnknown = store.ClassBlobUnknown
 
 // ClassConfiguration is a job this worker cannot execute for a reason that is
 // about the WORKER rather than the registries — a product it has not loaded, a

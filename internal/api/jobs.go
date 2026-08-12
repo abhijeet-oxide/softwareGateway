@@ -87,6 +87,7 @@ func leasedJobDTO(a queue.Assignment) v1.LeasedJob {
 		Source:              endpointDTO(a.Source),
 		Target:              endpointDTO(a.Target),
 		KnownPlacement:      a.KnownPlacement,
+		ForceUpload:         a.ForceUpload,
 		MountFromRepository: a.MountFrom,
 		Tags:                a.Tags,
 		TargetRepository:    a.TargetRepository,

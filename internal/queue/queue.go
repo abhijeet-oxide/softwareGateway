@@ -73,6 +73,10 @@ type Assignment struct {
 
 	// KnownPlacement is the placement fast path, resolved for this batch.
 	KnownPlacement bool
+	// ForceUpload forbids every fast path. Carried from the job row rather than
+	// resolved here: it is a repair instruction from a previous failure, not a
+	// property of this batch.
+	ForceUpload bool
 
 	// MountFrom is a repository on the same target registry already holding
 	// this digest, resolved for this batch so the worker can mount instead of
@@ -186,9 +190,12 @@ func (q *Queue) hydrate(ctx context.Context, jobs []store.LeasedJob) ([]Assignme
 				j.ID, j.TargetRepoID)
 		}
 
-		known := j.Kind == "blob" && placed[j.TargetRepoID][j.Digest]
+		// A repaired job takes no fast path, so neither of these is resolved
+		// for it — and resolving them anyway would put a placement the
+		// destination has already disproved back into the lease response.
+		known := j.Kind == "blob" && !j.ForceUpload && placed[j.TargetRepoID][j.Digest]
 		mountFrom := ""
-		if j.Kind == "blob" && !known {
+		if j.Kind == "blob" && !known && !j.ForceUpload {
 			mountFrom = mountable[j.TargetRepoID][j.Digest]
 		}
 
@@ -197,6 +204,7 @@ func (q *Queue) hydrate(ctx context.Context, jobs []store.LeasedJob) ([]Assignme
 			Source:         src,
 			Target:         dst,
 			KnownPlacement: known,
+			ForceUpload:    j.ForceUpload,
 			MountFrom:      mountFrom,
 			Tags:           j.TargetTags,
 		})

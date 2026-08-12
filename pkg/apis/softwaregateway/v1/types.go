@@ -993,6 +993,10 @@ type LeasedJob struct {
 	// KnownPlacement is the placement fast path, resolved for this batch so
 	// the worker makes no extra call to decide it.
 	KnownPlacement bool `json:"knownPlacement,omitempty"`
+	// ForceUpload forbids every fast path: no placement, no HEAD, no mount.
+	// Set when a manifest push has already been rejected for this content, so
+	// the destination's answers about it are no longer evidence.
+	ForceUpload bool `json:"forceUpload,omitempty"`
 	// MountFromRepository is a repository on the TARGET registry already known
 	// to hold this digest, so the worker can ask the registry to relocate it
 	// internally instead of streaming it across the network again.

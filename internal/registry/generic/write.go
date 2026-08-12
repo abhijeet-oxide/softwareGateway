@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strings"
 
 	"github.com/opencontainers/go-digest"
 	ocispec "github.com/opencontainers/image-spec/specs-go/v1"
@@ -412,8 +413,14 @@ func sentinelFor(resp *errcode.ErrorResponse) error {
 			return registry.ErrDigestMismatch
 		case errcode.ErrorCodeManifestInvalid, errcode.ErrorCodeNameInvalid,
 			errcode.ErrorCodeUnsupported:
-			// Not retryable. The registry will reject these bytes every time,
-			// and eight attempts over a slow link prove it eight times.
+			// MANIFEST_INVALID is where one registry hides a missing blob, so
+			// the detail decides before the code does.
+			if reportsAMissingBlob(e) {
+				return registry.ErrNotFound
+			}
+			// Otherwise not retryable. The registry will reject these bytes
+			// every time, and eight attempts over a slow link prove it eight
+			// times.
 			return registry.ErrUnsupported
 		}
 	}
@@ -422,6 +429,47 @@ func sentinelFor(resp *errcode.ErrorResponse) error {
 		return sentinel
 	}
 	return registry.ErrUnsupported
+}
+
+// missingBlobPhrases are the ways a registry says "a blob you referenced is not
+// in this repository" without using the error code reserved for saying it.
+//
+// The observed one, from Artifactory, verbatim:
+//
+//	HTTP 400: manifest invalid: map[description:Failed to copy blob sha256:… to
+//	orbs/cfx-5000-…/sha256:…/sha256__dc82908b11cf…]
+//
+// That is MANIFEST_BLOB_UNKNOWN wearing MANIFEST_INVALID's code. The
+// distinction is not cosmetic: MANIFEST_INVALID means "these bytes are wrong
+// and always will be", and a missing blob means "put the blob there and this
+// works". Reading the first as the second gives up on a transfer that is one
+// upload away from finishing.
+var missingBlobPhrases = []string{
+	"failed to copy blob",
+	"blob unknown",
+	"unknown blob",
+	"missing blob",
+	"blob not found",
+}
+
+// reportsAMissingBlob reads a registry's own prose for a missing blob.
+//
+// Matching on prose is exactly as unpleasant as it looks, and it is confined to
+// this function and to error codes that are otherwise terminal, so the cost of
+// being wrong is a retry rather than a wrong result. The alternative is
+// accepting that one registry's bundles can never be replicated, which is a
+// worse trade than a string match.
+func reportsAMissingBlob(e errcode.Error) bool {
+	text := strings.ToLower(e.Message)
+	if e.Detail != nil {
+		text += " " + strings.ToLower(fmt.Sprint(e.Detail))
+	}
+	for _, phrase := range missingBlobPhrases {
+		if strings.Contains(text, phrase) {
+			return true
+		}
+	}
+	return false
 }
 
 // detailOf renders what the registry actually said, in the order an operator

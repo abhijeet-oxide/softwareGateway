@@ -226,6 +226,7 @@ func (l *Loop) run(ctx context.Context, id int64, job v1.LeasedJob) {
 		Source:         source,
 		Target:         target,
 		KnownPlacement: job.KnownPlacement,
+		ForceUpload:    job.ForceUpload,
 		MountFrom:      job.MountFromRepository,
 		Tags:           job.Tags,
 	}, l.progressReporter(ctx, job.JobID))

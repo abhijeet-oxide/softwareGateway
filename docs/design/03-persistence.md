@@ -281,6 +281,10 @@ CREATE TABLE jobs (
     -- what lets the dequeue also order by size without losing the
     -- cross-repository mount (04 section 13.3).
     site_rank           SMALLINT    NOT NULL DEFAULT 0,
+    -- Forbid every fast path for this job: no placement, no HEAD, no mount.
+    -- Set by the repair when a destination has been caught claiming to hold a
+    -- blob it will not serve (11 section 2.5); cleared when the blob uploads.
+    force_upload        BOOLEAN     NOT NULL DEFAULT FALSE,
     priority            SMALLINT    NOT NULL DEFAULT 50,
     -- Denormalised from transfers.state so pause is a bulk UPDATE and the hot
     -- index stays join-free (04 section 8).

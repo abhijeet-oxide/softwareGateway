@@ -51,6 +51,9 @@ type Registry struct {
 	// does. Both branches need exercising: 202 is a normal outcome and a client
 	// that treats it as an error fails against half the registries in use.
 	declineMounts bool
+	// globalBlobIndex reproduces Artifactory: HEAD answers about the whole
+	// registry, manifest push links per path. See WithArtifactoryQuirks.
+	globalBlobIndex bool
 
 	// Counters, for asserting on behaviour rather than just outcomes.
 	TagListCalls  atomic.Int64
@@ -126,6 +129,22 @@ func WithBasicAuth(user, pass string) Option {
 // fetch against the realm, then a bearer-authenticated retry.
 func WithTokenAuth(user, pass string) Option {
 	return func(r *Registry) { r.username, r.password, r.tokenAuth = user, pass, true }
+}
+
+// WithArtifactoryQuirks makes the registry answer about blobs the way
+// Artifactory does.
+//
+// Two linked behaviours, and the pair is what makes the bug: HEAD on a blob
+// answers from a checksum index spanning the whole registry rather than the
+// image path asked about, and a manifest push referencing a blob that is not
+// linked under ITS path is refused as MANIFEST_INVALID with the blob named only
+// in prose.
+//
+// A transfer against this registry skips every upload, records placements for
+// content that is not where it says, and then fails every manifest — which is
+// exactly what happened to a 63.7 GiB bundle in production.
+func WithArtifactoryQuirks() Option {
+	return func(r *Registry) { r.globalBlobIndex = true }
 }
 
 // WithPageSize forces tag pagination at n per page, so Link-header handling is

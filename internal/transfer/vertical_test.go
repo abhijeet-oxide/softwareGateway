@@ -328,7 +328,7 @@ func (s *slice) drainInto(workerID string, capacity int, _ *fakeregistry.Registr
 				Source:         s.client(a.Source),
 				Target:         s.client(a.Target),
 				KnownPlacement: a.KnownPlacement,
-				ForceUpload:    a.ForceUpload,
+				RepairLevel:    a.RepairLevel,
 				MountFrom:      a.MountFrom,
 				Tags:           a.Tags,
 			}, nil)

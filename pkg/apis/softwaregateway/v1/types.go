@@ -993,10 +993,12 @@ type LeasedJob struct {
 	// KnownPlacement is the placement fast path, resolved for this batch so
 	// the worker makes no extra call to decide it.
 	KnownPlacement bool `json:"knownPlacement,omitempty"`
-	// ForceUpload forbids every fast path: no placement, no HEAD, no mount.
-	// Set when a manifest push has already been rejected for this content, so
-	// the destination's answers about it are no longer evidence.
-	ForceUpload bool `json:"forceUpload,omitempty"`
+	// RepairLevel is how much of the fast-path ladder this job may not use.
+	// 1 distrusts the placement record and the HEAD but still tries the mount;
+	// 2 streams unconditionally. Set when a manifest push has already been
+	// rejected for this content, so the destination's answers are no longer
+	// evidence.
+	RepairLevel int `json:"repairLevel,omitempty"`
 	// MountFromRepository is a repository on the TARGET registry already known
 	// to hold this digest, so the worker can ask the registry to relocate it
 	// internally instead of streaming it across the network again.
@@ -1149,6 +1151,15 @@ type TransferProgress struct {
 	// usually four hundred and ninety-nine manifests waiting for the last
 	// blob of wave 0.
 	JobsBlocked int `json:"jobsBlocked"`
+	// JobsRepaired have been sent back to the queue because the destination
+	// denied holding content it had previously reported. Surfaced because it
+	// is the only thing that makes a done count go DOWN, and progress that
+	// moves backwards with no explanation reads as a broken tool.
+	JobsRepaired int `json:"jobsRepaired,omitempty"`
+	// Skips is what the transfer did not move, by reason. "Done" is four
+	// different claims wearing one word, and only some of them are evidence
+	// that bytes reached the destination — see SkipBreakdown.
+	Skips []SkipBreakdown `json:"skips,omitempty"`
 
 	PlannedBytes     Int64String `json:"plannedBytes"`
 	BytesTransferred Int64String `json:"bytesTransferred"`
@@ -1209,6 +1220,23 @@ type JobParent struct {
 type ListJobsResponse struct {
 	TransferID string `json:"transferId"`
 	Jobs       []Job  `json:"jobs"`
+}
+
+// SkipBreakdown is one reason a transfer moved no bytes, and how much that
+// saved.
+//
+// Reported because "1976 of 1976 done" hides the difference between "we
+// streamed it" and "something told us it was already there". The second is
+// only as good as the answer it trusted, and a destination that answers about
+// its whole storage rather than the repository asked about makes it worth
+// nothing at all.
+type SkipBreakdown struct {
+	Reason string      `json:"reason"`
+	Jobs   int         `json:"jobs"`
+	Bytes  Int64String `json:"bytes"`
+	// Trusted reports whether this rests on an ACTION the registry took (a
+	// mount) rather than on a claim it or we made (a placement record, a HEAD).
+	Trusted bool `json:"trusted"`
 }
 
 // FailureGroup is one distinct reason a transfer is failing.

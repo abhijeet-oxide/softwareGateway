@@ -4,6 +4,24 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"strconv"
+)
+
+// Repair levels, in the order a repair escalates through them.
+//
+// The ladder they disable is ordered cheapest-first (docs/design/05 §4), and
+// the lying answer sits ABOVE the mount rather than below it — which is why
+// disabling the whole ladder at once is both correct and far more expensive
+// than it needs to be. See migration 00013.
+const (
+	// RepairDistrustCache skips the placement record and the HEAD, and still
+	// tries the cross-repository mount. Zero bytes when the registry relocates
+	// the blob, a stream when it declines.
+	RepairDistrustCache = 1
+	// RepairStreamOnly takes no fast path at all.
+	RepairStreamOnly = 2
+	// MaxRepairLevel is where escalation stops.
+	MaxRepairLevel = RepairStreamOnly
 )
 
 // The backstop the placement cache was always resting on.
@@ -52,9 +70,8 @@ import (
 //
 // A repair that does not help must not repeat. Two things stop it: the
 // manifest keeps its attempt count across a repair, so the ordinary budget
-// still runs out; and a blob already carrying force_upload is not requeued
-// again, because its bytes have already gone up with every fast path disabled
-// and sending them a second time cannot produce a different answer.
+// still runs out; and a blob escalates at most twice, because there is nothing
+// stronger than streaming the bytes with every fast path disabled.
 //
 // Both are needed. Without the first, each repair would reset the budget and
 // the loop would never end. Without the second, it would end only after eight
@@ -66,9 +83,9 @@ type RepairResult struct {
 	Placements int
 	// Blobs is how many blob jobs were requeued for a forced upload.
 	Blobs int
-	// AlreadyRepaired reports that this manifest's blobs had ALREADY been
-	// force-uploaded and the push was rejected anyway. Nothing was changed, and
-	// the job is allowed to fail on its own attempt budget.
+	// AlreadyRepaired reports that this manifest's blobs had ALREADY reached the
+	// top repair level and the push was rejected anyway. Nothing was changed,
+	// and the job is allowed to fail on its own attempt budget.
 	//
 	// Reported because it is the line between two things that look identical
 	// from outside and need opposite responses: "the placement cache was
@@ -122,22 +139,30 @@ func (p *Packages) RepairMissingBlobs(
 		res.Placements = int(n)
 	}
 
-	// Requeue with force_upload, and ONLY the blobs that do not already carry
-	// it. A blob still flagged was sent through this path before: its bytes
-	// went up with every fast path disabled, and the destination rejected the
-	// manifest anyway. Sending them again would upload the same bytes to the
-	// same place for the same result.
+	// ESCALATE, one level per repair, per blob.
+	//
+	// Level 1 distrusts the cache: skip the placement record and the HEAD, but
+	// still try the mount. That is the right answer for a stale placement, and
+	// it is nearly free — the copy of a component published under its own name
+	// is the same digest already sitting in a sibling repository of the same
+	// registry, so the registry relocates it internally rather than us sending
+	// it across the WAN a second time.
+	//
+	// Level 2 distrusts everything and streams. Reached only when a level-1
+	// repair did not fix the push, which means the mount reported success
+	// without materialising the blob.
 	//
 	// Per BLOB rather than per manifest, because two manifests can share a
-	// blob: one having already forced X must not stop the other from repairing
-	// its own Y.
+	// blob: one having already escalated X must not stop the other from
+	// repairing its own Y. And capped at 2, which is what BOUNDS the whole
+	// thing — see the note on RepairResult.AlreadyRepaired.
 	//
 	// The blob's attempt budget IS reset — for the blob this is a first attempt
 	// at a genuinely different operation, not a ninth attempt at the same one.
 	requeued, err := tx.ExecContext(ctx, p.dialect.Rewrite(`
 		UPDATE jobs
 		   SET state            = 'pending',
-		       force_upload     = `+p.dialect.Bool(true)+`,
+		       repair_level     = repair_level + 1,
 		       attempts         = 0,
 		       lease_owner      = NULL,
 		       lease_expires_at = NULL,
@@ -148,7 +173,7 @@ func (p *Packages) RepairMissingBlobs(
 		       updated_at       = `+p.dialect.Now()+`
 		 WHERE transfer_id = ? AND kind = 'blob' AND target_repo_id = ?
 		   AND state IN ('succeeded','skipped','failed','pending')
-		   AND force_upload = `+p.dialect.Bool(false)+`
+		   AND repair_level < `+strconv.Itoa(MaxRepairLevel)+`
 		   AND digest IN (`+blobsOfArtifact+`)`),
 		transferID, targetRepoID, artifactID.Int64)
 	if err != nil {
@@ -159,9 +184,9 @@ func (p *Packages) RepairMissingBlobs(
 	}
 
 	if res.Blobs == 0 {
-		// Every blob this manifest names has already been force-uploaded and
-		// the push was rejected regardless. The cache is not the problem, so
-		// there is nothing to repair — say so, change nothing, and let the
+		// Every blob this manifest names is already at the top level and the
+		// push was rejected regardless. The cache is not the problem, so there
+		// is nothing left to repair — say so, change nothing, and let the
 		// manifest fail on its own attempt budget. Leaving it blocked here
 		// would be a deadlock: no completion is coming to promote it.
 		res.AlreadyRepaired = true

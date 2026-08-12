@@ -350,8 +350,8 @@ func TestARepairThatDoesNotHelpIsNotRepeated(t *testing.T) {
 		t.Errorf("the blob is %q after a repair, want pending", state)
 	}
 
-	// The forced upload happens and the destination rejects the manifest
-	// anyway — the case where the placement cache was never the problem.
+	// The level-1 repair happens and the destination rejects the manifest
+	// anyway, so the next one escalates rather than giving up.
 	h.exec(`UPDATE jobs SET state='succeeded' WHERE id = ?`, blob)
 
 	tx2, err := h.st.DB().BeginTx(t.Context(), nil)
@@ -366,15 +366,39 @@ func TestARepairThatDoesNotHelpIsNotRepeated(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if !second.AlreadyRepaired {
-		t.Error("a second repair ran; the loop has no exit")
+	// The SECOND repair escalates: level 1 kept the mount, and a mount that
+	// reported success without materialising the blob is exactly the case
+	// level 2 exists for.
+	if second.AlreadyRepaired {
+		t.Error("the second repair gave up rather than escalating to a stream")
 	}
-	if second.Blobs != 0 {
-		t.Errorf("the second repair requeued %d blob(s), want none", second.Blobs)
+	if second.Blobs != 1 {
+		t.Errorf("the second repair requeued %d blob(s), want the 1 escalated", second.Blobs)
 	}
-	if state, _ := h.jobState(blob); state != "succeeded" {
-		t.Errorf("the blob was sent back for a second forced upload (%q)", state)
+	if got := h.repairLevelOf(blob); got != MaxRepairLevel {
+		t.Errorf("blob repair level = %d after two repairs, want %d", got, MaxRepairLevel)
 	}
+
+	// And the THIRD stops. There is nothing stronger than streaming with every
+	// fast path disabled, so a further repair would upload the same bytes to
+	// the same place and reset the same attempt counter, forever.
+	h.exec(`UPDATE jobs SET state='succeeded' WHERE id = ?`, blob)
+	third := h.repair(manifest)
+	if !third.AlreadyRepaired {
+		t.Error("a third repair ran; the escalation has no ceiling and the loop no exit")
+	}
+	if third.Blobs != 0 {
+		t.Errorf("the third repair requeued %d blob(s), want none", third.Blobs)
+	}
+}
+
+func (h *failureHarness) repairLevelOf(jobID int64) int {
+	h.t.Helper()
+	var level int
+	if err := h.query(`SELECT repair_level FROM jobs WHERE id = ?`, jobID).Scan(&level); err != nil {
+		h.t.Fatal(err)
+	}
+	return level
 }
 
 // Two manifests sharing a blob: one having already forced X must not stop the

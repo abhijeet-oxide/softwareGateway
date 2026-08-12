@@ -2074,6 +2074,29 @@ type rowQuerier interface {
 // Scoped to the same registry AND the same product, because those are the two
 // things that make the mount legal: a mount is registry-internal, and the
 // credential the worker will use is the target's, which is the product's.
+//
+// # Why this looks much further back than the skip does
+//
+// Both read blob_placements, and they need completely different degrees of
+// trust, because being wrong costs completely different things.
+//
+// A stale placement used as a SKIP is dangerous: it asserts the content is
+// already at the destination and moves nothing, so if the record is wrong the
+// manifest referencing it fails. That is what placementTTLSeconds bounds.
+//
+// A stale placement used as a MOUNT HINT is harmless. The mount either works —
+// which proves the record was right — or the registry declines it and the
+// worker streams, exactly as it would have with no hint at all. The cost of
+// being wrong is ONE request.
+//
+// Sharing one TTL between them therefore threw away the mount for anything more
+// than a day old, and that is not a small loss. A vendor's bundle carries its
+// release in its repository PATH, so every new release lands in a brand-new
+// destination repository that necessarily has no placements of its own. The
+// only thing that keeps its blobs from crossing the WAN again is a mount from
+// the version-stable component repositories where the last release put them —
+// and a release shipped a week after the last one found those records expired
+// and re-streamed the whole bundle.
 func (p *Packages) MountableFrom(
 	ctx context.Context, targetRepoID int64, digests []string,
 ) (map[string]string, error) {
@@ -2097,7 +2120,7 @@ func (p *Packages) MountableFrom(
 			placeholders = append(placeholders, '?')
 			args = append(args, d)
 		}
-		args = append(args, placementTTLSeconds)
+		args = append(args, mountHintHorizonSeconds)
 
 		// ORDER BY r.id and first-wins in Go: several siblings may hold the
 		// blob, and any of them is a correct source, but a stable choice keeps
@@ -2200,6 +2223,17 @@ func (p *Packages) placedDigests(
 // confidently wrong for long. The BLOB_UNKNOWN backstop is what makes any value
 // here safe rather than merely optimistic.
 const placementTTLSeconds = 24 * 60 * 60
+
+// mountHintHorizonSeconds is how far back a placement is worth CONSULTING as a
+// mount candidate.
+//
+// Ninety days rather than a day, because the two uses of this table need
+// different trust: a wrong skip loses content, a wrong mount hint costs one
+// request. See MountableFrom.
+//
+// Bounded rather than unlimited only so the query stays selective as the table
+// grows; nothing about correctness depends on the value.
+const mountHintHorizonSeconds = 90 * 24 * 60 * 60
 
 // RecordPlacement notes that a digest is present in a repository.
 //

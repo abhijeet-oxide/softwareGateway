@@ -128,10 +128,21 @@ The gap was invisible for as long as every destination answered honestly, and Ar
 2. **Requeue those blob jobs with `force_upload`.** Deleting the placements is not sufficient on its own — fast path 2 asks the destination directly and gets the same wrong answer, and fast path 3 asks it to mount content it says it has. A repaired job takes **no** fast path: no placement, no `HEAD`, no mount, just the bytes.
 3. **Return the manifest to `blocked`**, with its attempts and its backoff reset. Its content is not present, so it is not runnable — and per-artifact readiness ([04](04-queue-and-scheduling.md) §3.5) promotes it again on its own the moment the last repaired blob lands.
 
+**It escalates rather than jumping to the strongest form**, and the reason is the ORDER of the ladder in [05](05-transfer-engine.md) §4. The answer that lies is the `HEAD` at step 2, which sits **above** the mount at step 3 — so for the copy of a component published under its own name, the same digest already in a sibling repository, step 2 answered "already there" and step 3 was never reached. The mount was not declined; it was never attempted.
+
+| Level | Disables | Costs |
+|---|---|---|
+| 1 | the placement record and the `HEAD` | zero bytes when the mount works, a stream when it is declined |
+| 2 | everything | a full stream |
+
+Level 1 is the right answer for a stale placement, which is what repair is for. Level 2 is reached only when a level-1 repair did not fix the push — meaning the mount reported success without materialising the blob.
+
+Jumping straight to level 2 is correct and far more expensive than it needs to be. On the transfer this was found on it is about 1.5 GiB. On the **second** transfer of a product line it is the whole package: every blob is a placement hit, so every blob is skipped, so every manifest fails, so every blob is force-uploaded — turning the case deduplication exists to make free into a full re-upload.
+
 **What bounds it.** A repair that does not help must not repeat, and two things stop it:
 
 - The manifest **keeps its attempt count** across a repair. Only the backoff is dropped, and those look like the same decision but are opposite ones: the backoff exists to space out attempts at an operation that has not changed, and this one has, while the attempt count is the only thing that makes the loop terminate. Reset it and a repair that never helps runs forever — push, repair, re-upload, push — with every appearance of progress.
-- A blob **already carrying `force_upload` is not requeued again**. Its bytes have already gone up with every fast path disabled; sending them a second time cannot produce a different answer. The flag therefore outlives the upload rather than being cleared by it — it is the durable record that this blob has been through repair. The check is per **blob**, not per manifest, so one manifest having forced X does not stop another from repairing its own Y.
+- A blob **escalates at most twice**, because there is nothing stronger than streaming with every fast path disabled. The level therefore outlives the upload rather than being cleared by it — it is the durable record of how far this blob has been escalated. The check is per **blob**, not per manifest, so one manifest having escalated X does not stop another from repairing its own Y.
 
 Both are needed. Without the first the loop never ends; without the second it ends only after eight full re-uploads of content the destination already has.
 

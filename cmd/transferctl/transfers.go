@@ -509,8 +509,9 @@ func renderWaves(w io.Writer, waves []v1.TransferWave) error {
 	for _, k := range waves {
 		marker := "  "
 		if k.Current {
-			// The wave the transfer is actually working on. Everything above it
-			// is finished and everything below it cannot start.
+			// A wave with work that can move right now. There can be more than
+			// one: per-artifact readiness lets a manifest run before its wave
+			// opens, and a repair sends blobs back to a wave already passed.
 			marker = "> "
 		}
 		fmt.Fprintf(tw, "%s%d\t%s\t%d/%d\t%s\t%s\t%s\t%s\t%s\t%s\n",
@@ -520,6 +521,27 @@ func renderWaves(w io.Writer, waves []v1.TransferWave) error {
 			bytesOfWave(k))
 	}
 	return tw.Flush()
+}
+
+// activeWaves names the waves with work that can move right now.
+//
+// "1 of 3" while thirteen wave-0 jobs are running two lines below is a page
+// disagreeing with itself, and the reader is right to distrust the rest of it.
+// Where the transfer really is working on one wave this reads exactly as it
+// did; where it is working on two, it says so.
+func activeWaves(t *v1.Transfer) string {
+	var active []string
+	for _, k := range t.Waves {
+		if k.Current {
+			active = append(active, fmt.Sprint(k.Wave))
+		}
+	}
+	if len(active) == 0 {
+		// Nothing runnable: either finished, or everything is blocked or
+		// backing off. The watermark is then the best available answer.
+		return fmt.Sprint(t.CurrentWave)
+	}
+	return strings.Join(active, " and ")
 }
 
 // count renders a zero as a dash, so the eye lands on the numbers that are not
@@ -561,7 +583,11 @@ func describeTransfer(w io.Writer, t *v1.Transfer, rates *rateTracker, watching 
 	fmt.Fprintf(tw, "Target:\t%s\n", t.Target)
 	fmt.Fprintf(tw, "State:\t%s\n", strings.ToLower(string(t.State)))
 	fmt.Fprintf(tw, "Priority:\t%d\n", t.Priority)
-	fmt.Fprintf(tw, "Wave:\t%d of %d\n", t.CurrentWave, t.MaxWave)
+	// The WAVES table below is the honest account; this line is a one-glance
+	// summary and has to agree with it. `current_wave` alone does not: it is a
+	// watermark, and work legitimately runs above and below it — a manifest
+	// promoted before its wave opened, or a blob sent back by a repair.
+	fmt.Fprintf(tw, "Wave:\t%s of %d\n", activeWaves(t), t.MaxWave)
 	if err := tw.Flush(); err != nil {
 		return err
 	}
@@ -582,8 +608,18 @@ func describeTransfer(w io.Writer, t *v1.Transfer, rates *rateTracker, watching 
 		// that CANNOT be leased yet — a manifest is pushed only once every blob
 		// beneath it has landed. Without this the reader sees five hundred
 		// outstanding, one running, and concludes the fleet is broken.
-		fmt.Fprintf(pw, "  Blocked:\t%d waiting for wave %d to finish\n",
-			p.JobsBlocked, t.CurrentWave)
+		fmt.Fprintf(pw, "  Blocked:\t%d waiting for their own content\n", p.JobsBlocked)
+	}
+	if p.JobsRepaired > 0 {
+		// THE LINE THAT EXPLAINS A COUNT GOING BACKWARDS.
+		//
+		// A repair returns finished jobs to the queue, so `done` falls. Watched
+		// live that looks like the tool losing track of itself — 1950, then
+		// 1937, then 1945 — and there is nothing else on the page that could
+		// account for it. Naming it turns an alarming number into a reported
+		// one.
+		fmt.Fprintf(pw, "  Repaired:\t%d job(s) re-sent after the destination "+
+			"denied holding them  (done can go down)\n", p.JobsRepaired)
 	}
 	fmt.Fprintf(pw, "  Transferred:\t%s of %s planned  (%.0f%% of jobs done)\n",
 		humanBytes(p.BytesTransferred), humanBytes(p.PlannedBytes), percentComplete(p))

@@ -89,13 +89,18 @@ type Job struct {
 	// through to streaming, which is always correct.
 	MountFrom string
 
-	// ForceUpload forbids every fast path — no placement, no HEAD, no mount.
+	// RepairLevel is how much of the fast-path ladder this job may not use.
 	//
 	// Set by the Coordinator when a manifest push has already been rejected for
 	// this content: the destination has been caught claiming to hold a blob it
 	// will not serve, so its answers about that blob are no longer evidence of
-	// anything. The only thing that settles it is sending the bytes.
-	ForceUpload bool
+	// anything.
+	//
+	// It is a LEVEL rather than a flag because the lying answer sits above the
+	// mount in the ladder, not below it. Disabling everything at once would
+	// throw away a relocation the destination registry can do internally, and
+	// stream the blob across the WAN for content it is already holding.
+	RepairLevel int
 
 	// Tags are what this manifest must be called at the destination.
 	//
@@ -189,11 +194,13 @@ func (e *Engine) Run(ctx context.Context, job Job, progress ProgressFunc) Result
 func (e *Engine) runBlob(ctx context.Context, job Job, progress ProgressFunc) Result {
 	dgst := registry.Digest(job.Digest)
 
-	// Every fast path below asks somebody whether the blob is already at the
-	// destination, and this job exists because one of them was believed and was
-	// wrong. Asking again gets the same wrong answer, so the ladder is skipped
-	// entirely — see store.RepairMissingBlobs.
-	if !job.ForceUpload {
+	// A repaired job distrusts part of the ladder, because this job exists
+	// because one of those answers was believed and was wrong. HOW MUCH it
+	// distrusts is the level, and the distinction earns its keep: the answer
+	// that lied is the HEAD at step 2, which sits ABOVE the mount at step 3, so
+	// disabling the whole ladder throws away a relocation the destination
+	// registry can perform internally for zero bytes. See migration 00013.
+	if job.RepairLevel < store.RepairDistrustCache {
 		// 1. The Coordinator already believes this is there. A placement is
 		// strong evidence, not proof — a registry's garbage collector can
 		// remove content underneath us — but the TTL bounds the staleness and
@@ -216,11 +223,19 @@ func (e *Engine) runBlob(ctx context.Context, job Job, progress ProgressFunc) Re
 			return e.failed(err, "stat blob at destination")
 		}
 
-		// 3. Ask the registry to relocate the blob server-side. Zero bytes over
-		// the wire regardless of size — the dominant optimization for
-		// promotion, where a 45 GB move can complete in seconds, and the
-		// difference between a bundle's shared components costing their size
-		// once or twice.
+	}
+
+	// 3. Ask the registry to relocate the blob server-side. Zero bytes over the
+	// wire regardless of size — the dominant optimization for promotion, where
+	// a 45 GB move can complete in seconds, and the difference between a
+	// bundle's shared components costing their size once or twice.
+	//
+	// OUTSIDE the block above, so a level-1 repair still reaches it. That is
+	// the whole reason repair has levels: the sibling repository genuinely does
+	// hold the blob, and asking the registry to link it is both correct and
+	// free. Only level 2 — reached when a mount reported success without
+	// materialising anything — skips this and streams.
+	if job.RepairLevel < store.RepairStreamOnly {
 		if mounted := e.tryMount(ctx, job, dgst); mounted != nil {
 			return *mounted
 		}

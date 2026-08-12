@@ -73,10 +73,10 @@ type LeasedJob struct {
 	Priority int
 	SiteRank int
 
-	// ForceUpload forbids every fast path: no placement, no HEAD, no mount,
-	// just the bytes. Set by RepairMissingBlobs when the destination has been
-	// caught claiming to hold content it will not serve.
-	ForceUpload bool
+	// RepairLevel is how much of the fast-path ladder this job may not use,
+	// escalated by RepairMissingBlobs when the destination has been caught
+	// claiming to hold content it will not serve. Zero is ordinary.
+	RepairLevel int
 
 	// TargetTags are the tags to apply once this manifest is committed,
 	// resolved at planning time from the artifact's own reference annotation.
@@ -186,7 +186,7 @@ func (p *Packages) startTransfers(ctx context.Context, leased []LeasedJob) error
 // implementations cannot drift in what they produce.
 const leaseColumns = `id, transfer_id, kind, digest, size_bytes, media_type,
 	artifact_id, source_repo_id, target_repo_id, attempts, wave, priority,
-	site_rank, force_upload, target_tags, target_repository`
+	site_rank, repair_level, target_tags, target_repository`
 
 // The lease CLEARS the previous attempt's error.
 //
@@ -398,7 +398,7 @@ func scanLeasedJobs(rows *sql.Rows) ([]LeasedJob, error) {
 		var targetRepository sql.NullString
 		if err := rows.Scan(&j.ID, &j.TransferID, &j.Kind, &j.Digest, &j.SizeBytes,
 			&mediaType, &j.ArtifactID, &j.SourceRepoID, &j.TargetRepoID,
-			&j.Attempt, &j.Wave, &j.Priority, &j.SiteRank, &j.ForceUpload, &tags,
+			&j.Attempt, &j.Wave, &j.Priority, &j.SiteRank, &j.RepairLevel, &tags,
 			&targetRepository); err != nil {
 			return nil, fmt.Errorf("scan leased job: %w", err)
 		}
@@ -1248,7 +1248,12 @@ type TransferSummary struct {
 	// number that explains an idle-looking fleet: a transfer with five hundred
 	// outstanding jobs and one running is usually four hundred and ninety-nine
 	// manifests waiting for the last blob, not a worker that is stuck.
-	JobsBlocked      int
+	JobsBlocked int
+	// JobsRepaired have been sent back because the destination denied holding
+	// content it had reported. This is the ONLY thing that makes a done count
+	// go DOWN, and a reader watching one drop with no explanation on the page
+	// concludes the tool is broken — which is exactly what happened.
+	JobsRepaired     int
 	JobsOutstanding  int
 	BytesTransferred int64
 	// JobsInFlight is how many are leased RIGHT NOW, and Workers is how many
@@ -1297,6 +1302,8 @@ func (p *Packages) transferSelect() string {
 	                  AND j.state = 'pending' AND j.next_visible_at > ` + p.dialect.Now() + `), 0),
 	       COALESCE((SELECT count(*) FROM jobs j WHERE j.transfer_id = t.id
 	                  AND j.state = 'blocked'), 0),
+	       COALESCE((SELECT count(*) FROM jobs j WHERE j.transfer_id = t.id
+	                  AND j.repair_level > 0), 0),
 	       COALESCE(t.failure_reason, ''), t.created_at, COALESCE(t.started_at, ''),
 	       COALESCE(t.completed_at, '')
 	  FROM transfers t
@@ -1312,7 +1319,7 @@ func scanTransfer(row interface{ Scan(...any) error }) (TransferSummary, error) 
 		&t.DisplayTag, &t.Source, &t.Target, &t.State, &t.Priority, &t.CurrentWave, &t.MaxWave,
 		&t.PlannedJobs, &t.PlannedBytes, &t.DedupeSkippedBytes,
 		&t.JobsDone, &t.JobsFailed, &t.JobsOutstanding, &t.BytesTransferred,
-		&t.JobsInFlight, &t.Workers, &t.JobsWaiting, &t.JobsBlocked,
+		&t.JobsInFlight, &t.Workers, &t.JobsWaiting, &t.JobsBlocked, &t.JobsRepaired,
 		&t.FailureReason, &t.CreatedAt, &t.StartedAt, &t.CompletedAt)
 	return t, err
 }

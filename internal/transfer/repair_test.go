@@ -65,8 +65,8 @@ func TestTheRepairIsWhatMakesTheBundleSurvive(t *testing.T) {
 
 	s.drain("worker-1", 8)
 
-	// A blob forced past the fast paths is the signature of the repair.
-	forced := s.count(`SELECT COUNT(*) FROM jobs WHERE kind='blob' AND force_upload <> 0`)
+	// A blob escalated past the fast paths is the signature of the repair.
+	forced := s.count(`SELECT COUNT(*) FROM jobs WHERE kind='blob' AND repair_level > 0`)
 	uploads := s.count(`SELECT COUNT(*) FROM jobs
 	                     WHERE kind='blob' AND state='succeeded' AND bytes_transferred > 0`)
 	if forced == 0 && uploads == 0 {
@@ -74,13 +74,23 @@ func TestTheRepairIsWhatMakesTheBundleSurvive(t *testing.T) {
 			"so this test would pass with the repair removed")
 	}
 
-	// The flag OUTLIVES the upload on purpose: it is the durable record that
-	// this blob has already been through the repair. Clearing it would let a
+	// The level OUTLIVES the upload on purpose: it is the durable record of how
+	// far this blob has already been escalated. Clearing it would let a
 	// destination that rejects the manifest for some other reason send the same
 	// bytes up again on every attempt.
 	if forced == 0 {
-		t.Error("no blob kept its force_upload flag; the repair has no memory and " +
-			"would re-upload on every rejection")
+		t.Error("no blob kept a repair level; the repair has no memory and would " +
+			"escalate from scratch on every rejection")
+	}
+
+	// And the FIRST escalation must be the cheap one. A repair that jumps
+	// straight to streaming re-sends content the destination registry is
+	// holding in a sibling repository and could relocate internally — which on
+	// the second transfer of a product line is the whole package.
+	overshot := s.count(`SELECT COUNT(*) FROM jobs WHERE kind='blob' AND repair_level > 1`)
+	if overshot != 0 {
+		t.Errorf("%d blob(s) escalated past level 1 on a destination whose mount works; "+
+			"the repair is re-uploading what it could have relocated", overshot)
 	}
 }
 

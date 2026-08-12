@@ -181,7 +181,7 @@ func (s *Server) handleGetTransfer(w http.ResponseWriter, r *http.Request) {
 	// fail the request: it is a breakdown of numbers already in the response,
 	// and losing it must not cost the reader the response.
 	if waves, err := s.deps.Packages.WaveProgress(r.Context(), t.ID); err == nil {
-		dto.Waves = toAPIWaves(waves, t.CurrentWave)
+		dto.Waves = toAPIWaves(waves)
 	}
 	WriteJSON(w, r, http.StatusOK, dto)
 }
@@ -266,6 +266,7 @@ func transferDTO(t store.TransferSummary) v1.Transfer {
 			JobsDone:           t.JobsDone,
 			JobsFailed:         t.JobsFailed,
 			JobsBlocked:        t.JobsBlocked,
+			JobsRepaired:       t.JobsRepaired,
 			JobsOutstanding:    t.JobsOutstanding,
 			JobsInFlight:       t.JobsInFlight,
 			Workers:            t.Workers,
@@ -325,13 +326,28 @@ func parseTransferState(s string) (string, error) {
 			"running, paused, verifying, succeeded, failed, cancelling, cancelled", s)
 }
 
-// toAPIWaves renders the per-wave breakdown, marking the wave in progress.
-func toAPIWaves(waves []store.WaveSummary, current int) []v1.TransferWave {
+// toAPIWaves renders the per-wave breakdown, marking the waves in progress.
+//
+// PLURAL, and derived from the jobs rather than from transfers.current_wave.
+// That column is a watermark — the highest wave the drain check has opened —
+// and it stopped being a description of what is happening the moment two other
+// things became true: per-artifact readiness lets a manifest run before its
+// wave opens (docs/design/04 §3.5), and a repair sends wave-0 blobs back after
+// the watermark has moved past them (docs/design/11 §2.5).
+//
+// So a transfer legitimately has work running in wave 0 and wave 1 at once
+// while the watermark reads 1. Marking only the watermark told the reader that
+// wave 0 was finished while thirteen of its jobs were visibly running two lines
+// below, which is a table disagreeing with itself.
+func toAPIWaves(waves []store.WaveSummary) []v1.TransferWave {
 	out := make([]v1.TransferWave, 0, len(waves))
 	for _, w := range waves {
 		out = append(out, v1.TransferWave{
-			Wave: w.Wave, Kind: w.Kind, Current: w.Wave == current,
-			Total: w.Total, Done: w.Done, Running: w.Running,
+			Wave: w.Wave, Kind: w.Kind,
+			// In progress means something in it can move NOW: running, or
+			// runnable and waiting for a worker.
+			Current: w.Running > 0 || w.Pending > 0,
+			Total:   w.Total, Done: w.Done, Running: w.Running,
 			Pending: w.Pending, Waiting: w.Waiting,
 			Blocked: w.Blocked, Failed: w.Failed,
 			PlannedBytes:     v1.Int64String(strconv.FormatInt(w.PlannedBytes, 10)),

@@ -73,10 +73,10 @@ type Assignment struct {
 
 	// KnownPlacement is the placement fast path, resolved for this batch.
 	KnownPlacement bool
-	// ForceUpload forbids every fast path. Carried from the job row rather than
-	// resolved here: it is a repair instruction from a previous failure, not a
-	// property of this batch.
-	ForceUpload bool
+	// RepairLevel is how much of the fast-path ladder this job may not use.
+	// Carried from the job row rather than resolved here: it is a repair
+	// instruction from a previous failure, not a property of this batch.
+	RepairLevel int
 
 	// MountFrom is a repository on the same target registry already holding
 	// this digest, resolved for this batch so the worker can mount instead of
@@ -190,12 +190,18 @@ func (q *Queue) hydrate(ctx context.Context, jobs []store.LeasedJob) ([]Assignme
 				j.ID, j.TargetRepoID)
 		}
 
-		// A repaired job takes no fast path, so neither of these is resolved
-		// for it — and resolving them anyway would put a placement the
-		// destination has already disproved back into the lease response.
-		known := j.Kind == "blob" && !j.ForceUpload && placed[j.TargetRepoID][j.Digest]
+		// A repaired job does not get the placement back: the destination has
+		// already disproved it, and shipping it again would have the worker
+		// skip on the evidence that caused the failure.
+		//
+		// The mount candidate IS still resolved at level 1, and that is the
+		// point of having a level at all — the sibling repository really does
+		// hold the blob, and relocating it internally is what makes the repair
+		// nearly free instead of a second trip across the WAN.
+		repairing := j.Kind == "blob" && j.RepairLevel > 0
+		known := j.Kind == "blob" && !repairing && placed[j.TargetRepoID][j.Digest]
 		mountFrom := ""
-		if j.Kind == "blob" && !known && !j.ForceUpload {
+		if j.Kind == "blob" && !known && j.RepairLevel < store.RepairStreamOnly {
 			mountFrom = mountable[j.TargetRepoID][j.Digest]
 		}
 
@@ -204,7 +210,7 @@ func (q *Queue) hydrate(ctx context.Context, jobs []store.LeasedJob) ([]Assignme
 			Source:         src,
 			Target:         dst,
 			KnownPlacement: known,
-			ForceUpload:    j.ForceUpload,
+			RepairLevel:    j.RepairLevel,
 			MountFrom:      mountFrom,
 			Tags:           j.TargetTags,
 		})

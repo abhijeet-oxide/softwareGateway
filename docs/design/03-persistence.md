@@ -276,6 +276,11 @@ CREATE TABLE jobs (
                                       ('placement_hit','exists_at_target','mounted')),
 
     wave                SMALLINT    NOT NULL DEFAULT 0,
+    -- Which copy of a component this is: 0 keeps the bundle resolvable, 1 is
+    -- the copy published under the component's own name. Ordering by it is
+    -- what lets the dequeue also order by size without losing the
+    -- cross-repository mount (04 section 13.3).
+    site_rank           SMALLINT    NOT NULL DEFAULT 0,
     priority            SMALLINT    NOT NULL DEFAULT 50,
     -- Denormalised from transfers.state so pause is a bulk UPDATE and the hot
     -- index stays join-free (04 section 8).
@@ -303,6 +308,17 @@ CREATE TABLE jobs (
     -- No duplicate work within a transfer.
     UNIQUE (transfer_id, kind, digest)
 );
+
+-- What each manifest job is waiting for: one edge per blob and per child
+-- manifest it references. This IS invariant I1, stated per manifest rather
+-- than approximated by a global wave barrier (04 section 3.5). Written once at
+-- plan time; read only through the reverse index, and only for the edges of
+-- the one job that just completed.
+CREATE TABLE job_dependencies (
+    job_id        BIGINT NOT NULL REFERENCES jobs(id) ON DELETE CASCADE,
+    depends_on_id BIGINT NOT NULL REFERENCES jobs(id) ON DELETE CASCADE,
+    PRIMARY KEY (job_id, depends_on_id)
+);
 ```
 
 **Indexes, and why each exists:**
@@ -311,12 +327,17 @@ CREATE TABLE jobs (
 -- THE hot index. Partial, so it holds only leasable work: a queue with ten
 -- million completed rows still has a small index. Column order matches the
 -- dequeue ORDER BY exactly, so the planner does an index scan with no sort.
--- Note there is no `wave` column here: wave gating is resolved into the state
--- column ('blocked' vs 'pending') at plan and wave-advance time, so the
--- dequeue never needs it. See 04 section 3.3.
+-- Note there is no `wave` column here, and no join to job_dependencies:
+-- readiness is resolved into the state column ('blocked' vs 'pending') at plan
+-- time and at completion time, so the dequeue never needs either.
+-- See 04 sections 3.3 and 3.5.
 CREATE INDEX jobs_dequeue_idx
-    ON jobs (priority DESC, next_visible_at, id)
+    ON jobs (priority DESC, site_rank, size_bytes DESC, id)
     WHERE state = 'pending' AND NOT paused;
+
+-- "What was waiting on the job that just finished?" — the only question asked
+-- of the edge table on the hot path. The forward direction is the primary key.
+CREATE INDEX job_dependencies_reverse_idx ON job_dependencies (depends_on_id);
 
 -- Reaper: find expired leases (04 section 4).
 CREATE INDEX jobs_lease_expiry_idx

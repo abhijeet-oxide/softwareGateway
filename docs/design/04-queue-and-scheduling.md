@@ -62,6 +62,14 @@ OCI requires that a manifest's referenced blobs exist before the manifest is pus
 >
 > Correctness is identical for the tree shapes OCI produces. Cost is one column.
 
+> **REVISED — the edge table was built after all. See §3.5.**
+>
+> The reasoning above is sound about *correctness* and wrong about *cost*, and the error is in the phrase "correctness is identical". It is — for I1. It is not for anything else, because a wave is a **global barrier** and I1 is a **per-manifest** statement. The barrier implies I1 and is far stronger than it.
+>
+> Measured on a real 63.7 GiB bundle: at 1974 of 1976 blobs done, 517 manifests whose content was entirely present at the destination could not be written, because two unrelated blobs had not landed.
+>
+> The three costs the decision box weighed were also smaller than estimated. The edge table is ~1,000 rows per package, written once at plan time in batches of 500; the readiness computation runs against the edges of ONE job on each completion, not the transfer's; and there is still **no join on the dequeue path**, because promotion resolves into the `state` column exactly as wave advancement does. §3.3's central property is untouched.
+
 ### 3.3 Gating without a join
 
 Jobs in wave 0 are created `pending`. Jobs in waves ≥ 1 are created **`blocked`**.
@@ -103,6 +111,49 @@ Served by `jobs_transfer_state_idx`. If drained and `current_wave < max_wave`, a
 
 A `failed` job (terminal, attempts exhausted) never satisfies the drain check, so the transfer correctly stalls rather than pushing a manifest whose blobs are missing. The transfer then fails, which is the right outcome — see [11](11-resiliency-and-backpressure.md) §2.6.
 
+### 3.5 Per-artifact readiness
+
+Migration `00011_job_dependencies`. A manifest waits for its **own** content, not for every blob in the transfer.
+
+**The edge set is the invariant, stated exactly.** `job_dependencies(job_id, depends_on_id)` is written at plan time, one edge per reference:
+
+| Manifest job | depends on |
+|---|---|
+| an image or chart | every blob job for its config and layers, at the same destination repository |
+| an index | every child manifest job, at the same destination repository |
+
+Both are OCI preconditions rather than scheduling preferences: a manifest push is rejected `BLOB_UNKNOWN` if a layer it names is absent from the repository, and `MANIFEST_UNKNOWN` if a child index is.
+
+A dependency with **no job is not an edge**. The usual reason is a blob already at the destination, which the planner drops entirely rather than queueing as a skip; waiting on it would be waiting for a completion that never arrives. A manifest with no edges at all is therefore created `pending`, not `blocked` — the ordinary outcome for the second transfer of a product line.
+
+Promotion runs in the same transaction as the completion that made it true:
+
+```sql
+UPDATE jobs
+   SET state = 'pending'
+ WHERE jobs.state = 'blocked'
+   AND EXISTS (SELECT 1 FROM job_dependencies d
+                WHERE d.job_id = jobs.id AND d.depends_on_id = $1)   -- waiting on THIS job
+   AND NOT EXISTS (SELECT 1 FROM job_dependencies o
+                     JOIN jobs dep ON dep.id = o.depends_on_id
+                    WHERE o.job_id = jobs.id
+                      AND dep.state NOT IN ('succeeded','skipped')); -- and nothing else
+```
+
+The first predicate bounds the work to the handful of manifests naming this digest, served by `job_dependencies_reverse_idx`. The second is I1.
+
+**Waves stay, and they are not vestigial.** They are (a) the backstop for transfers planned before this existed, (b) what drives transfer completion in §3.4, and (c) what the dequeue and the progress rollup order by. The two mechanisms cannot disagree, because every dependency of a manifest lives in a strictly lower wave — a child has greater depth, `wave = maxDepth - depth + 1`, and blobs are wave 0 — so `advanceWave` can only ever promote jobs whose dependencies have already drained. What changed is only that a job no longer has to **wait** for its wave.
+
+#### 3.5.1 Failure has to propagate
+
+Per-artifact readiness makes the good case better and the bad case worse, and the second half is easy to miss.
+
+Under wave gating, one permanently failed blob left every manifest blocked behind the one wave, and the stall check in [11](11-resiliency-and-backpressure.md) saw a transfer with nothing runnable. With edges, the manifests that do not depend on the broken blob are promoted, run and succeed. What is left is a few jobs waiting on a dependency that is terminally `failed` — and a `blocked` job reads as "still working" to that check. The transfer would sit at `running` with nothing in flight and nothing that could ever start.
+
+So `FailUnreachableJobs` marks a blocked job whose dependency has failed as `failed` too, with `last_error_class = 'dependency'`, iterated to a fixpoint because failure is transitive. It runs inline on the completion path and in the periodic sweep — the sweep because in a real outage nothing completes at all: the reaper fails the jobs and no completion is ever reported.
+
+A retry reverses it in the right order: consequences back to `blocked` first (`ClearDependencyFailures`), then the genuine failures requeued, then one `PromoteReadyJobs` sweep. The retry response reports the two counts separately, because "forty jobs requeued" when thirty-eight were consequences of two overstates what actually broke.
+
 ## 4. Leasing
 
 ### 4.1 The dequeue statement
@@ -128,7 +179,7 @@ WITH candidate AS (
                 AND inflight.target_repo_id = jobs.target_repo_id
                 AND inflight.digest = jobs.digest
            )
-     ORDER BY priority DESC, next_visible_at, id
+     ORDER BY priority DESC, site_rank, size_bytes DESC, id
        FOR UPDATE SKIP LOCKED
      LIMIT $4
 )
@@ -156,11 +207,11 @@ The supporting index ([03](03-persistence.md) §6.1):
 
 ```sql
 CREATE INDEX jobs_dequeue_idx
-    ON jobs (priority DESC, next_visible_at, id)
+    ON jobs (priority DESC, site_rank, size_bytes DESC, id)
     WHERE state = 'pending' AND NOT paused;
 ```
 
-Column order matches `ORDER BY` exactly, so the planner scans the index in order and stops at `LIMIT` — no sort, no heap scan of the whole queue. The partial predicate keeps the index sized to *outstanding work* rather than all work ever.
+Column order matches `ORDER BY` exactly, so the planner scans the index in order and stops at `LIMIT` — no sort, no heap scan of the whole queue. The partial predicate keeps the index sized to *outstanding work* rather than all work ever. `next_visible_at` left the index when `site_rank` and `size_bytes` entered it (migration 00011): it is still a `WHERE` filter, but as a leading sort key it was ordering the queue by retry time, which is not an ordering anybody wanted — see §13.3 for what the three keys now mean.
 
 **The honest caveat:** `source_repo_id`/`target_repo_id` are not in the index, so they are filtered after the index scan. If a large backlog is concentrated on repositories that are all at their concurrency ceiling, a lease may scan many non-matching entries before finding leasable work. In normal operation the pending set is small and this is free.
 
@@ -168,7 +219,7 @@ Column order matches `ORDER BY` exactly, so the planner scans the index in order
 
 ```sql
 CREATE INDEX jobs_dequeue_by_target_idx
-    ON jobs (target_repo_id, priority DESC, next_visible_at, id)
+    ON jobs (target_repo_id, priority DESC, site_rank, size_bytes DESC, id)
     WHERE state = 'pending' AND NOT paused;
 ```
 
@@ -382,7 +433,7 @@ Nothing is held in Coordinator memory that cannot be reconstructed from the data
 
 **No recovery scan, no journal replay, no rebuild.** The queue state *is* the `jobs` table; it was never anywhere else. A Coordinator that has been down for an hour starts up and continues, and workers that stayed alive throughout kept transferring the jobs they had already leased — bytes do not flow through the Coordinator, so its absence does not stop work already in flight.
 
-## 13. Scheduling: what is measured, and what is left
+## 13. Scheduling: what limits throughput
 
 Written against a real 63.7 GiB ORB moving over a 917 ms link through a corporate proxy, because every number below came from that run rather than from reasoning.
 
@@ -392,24 +443,36 @@ Written against a real 63.7 GiB ORB moving over a 917 ms link through a corporat
 
 That reframes everything. Buffer sizes, compression, chunk sizes — none of them move a number set by window ÷ RTT. Keeping the pipe full does.
 
-### 13.2 The global wave barrier is stronger than the invariant requires
+### 13.2 The wave barrier was stronger than the invariant required
 
-Invariant I1 is per manifest: *this* manifest may be pushed once every blob and child manifest *it* references is present. The implementation is a global barrier — wave N+1 opens only when wave N has drained entirely (§3.3) — which is a much stronger statement than the invariant makes.
+Resolved in §3.5. Recorded here because the shape of the mistake is worth keeping: the barrier was correct about I1 and much stronger than it, and the cost was **not bandwidth** — manifests are kilobytes, and pushing them sooner moves no bytes sooner. The cost was:
 
-The cost is **not** bandwidth. Manifests are kilobytes; pushing them earlier moves no bytes sooner. The cost is:
+- **Nothing visible at the destination until the very end.** A transfer 99% done delivered exactly nothing, because no tag had been written.
+- **One failed blob blocked everything.** 517 manifests whose content was fully present could not be written because two unrelated blobs had not landed.
+- **A partial transfer had no durable output** beyond blobs reusable only through placement records.
 
-- **Nothing is visible at the destination until the very end.** A transfer 99% done delivers exactly nothing, because no tag has been written.
-- **One failed blob blocks everything.** 517 manifests whose content is fully present cannot be written because two unrelated blobs have not landed.
-- **A partial transfer has no durable output** beyond blobs that are only reusable through placement records.
+Per-artifact readiness fixes all three and improves throughput by nothing at all. That is the honest accounting, and it is still worth having.
 
-The fix is per-artifact readiness: a `job_dependencies` edge table written at plan time, and a manifest promoted from `blocked` to `pending` when none of its dependencies is outstanding. The wave column becomes advisory ordering rather than a gate. This is a change to the invariant everything else rests on, so it is written down here before it is written in code.
+### 13.3 Largest-first ordering needed the site ranking first
 
-### 13.3 Largest-first ordering conflicts with the mount, and the mount wins
+The dequeue ordered by insertion, which is arbitrary with respect to size: a multi-gigabyte layer leased last runs alone while every other slot idles. Largest-first (LPT) is the textbook fix, and the first attempt at it was **reverted**.
 
-The dequeue orders by insertion, which is arbitrary with respect to size: a multi-gigabyte layer leased last runs alone while every other slot idles. Largest-first (LPT) is the textbook fix and was implemented, measured, and **reverted**.
+A bundle publishes each component twice — inside the bundle and under its own name — so one digest becomes two jobs of *identical size*. The planner emits them grouped by destination repository, which put them far apart in id order, and that separation was load-bearing: the two landed in different lease batches, the first wrote a placement, and the second mounted inside the destination registry for zero bytes. Ordering by size made equal-sized jobs adjacent, so both copies landed in one batch and both streamed from the vendor. Measured on the ORB fixture: **16 vendor GETs for 11 distinct blobs, and no mounts at all.**
 
-A bundle publishes each component twice — inside the bundle and under its own name — so one digest becomes two jobs of *identical size*. The planner emits them grouped by destination repository, which puts them far apart in id order, and that separation is load-bearing: the two land in different lease batches, the first writes a placement, and the second mounts inside the destination registry for zero bytes. Ordering by size makes equal-sized jobs adjacent, so both copies land in one batch and both stream from the vendor. Measured on the ORB fixture: **16 vendor GETs for 11 distinct blobs, and no mounts at all.**
+Makespan is worth single-digit percent at the tail. The mount is worth up to half the bytes of the entire transfer — so the mount wins, and the fix is to stop leaving it to chance.
 
-Makespan is worth single-digit percent at the tail. The mount is worth up to half the bytes of the entire transfer.
+`site_rank` (migration 00011) states what insertion order previously implied: 0 for the copy that keeps the bundle resolvable, 1 for the copy published under the component's own name. The dequeue is now
 
-To have both, the planner must rank the second site explicitly — a `site_rank` on the job, 0 for the copy that keeps the bundle resolvable and 1 for the copy published under the component's own name — so the dequeue can order by `site_rank, size DESC` and every rank-1 job runs after the placement it will mount from exists. That is strictly better than today, where the mount depends on batch timing rather than on an ordering the schema states.
+```sql
+ORDER BY priority DESC, site_rank, size_bytes DESC, id
+```
+
+Every rank-0 job is dequeued before any rank-1 job, so by the time the second copy is leased the first has either completed — leaving a placement to mount from — or is still in flight, in which case the duplicate suppression of §5 defers it. Neither path streams the same digest twice, and within a rank the largest job starts first.
+
+One thing the SQL alone does not give: **neither dialect returns a lease batch in the order it was selected in.** Postgres `RETURNING` is unordered and the SQLite path reads its rows back by id. A worker dispatches the batch in order against a bounded semaphore, so handing it a batch sorted by id throws the ordering away entirely. `sortForDispatch` re-applies the same four keys in Go. This was caught by a test and would not have been caught by inspection.
+
+### 13.4 What is still open
+
+- **Chunked upload resumption.** A multi-gigabyte blob that fails at 90% restarts from zero. The `upload_state` column exists for this and is unused.
+- **Per-repository budgets.** §4.1's repository-array filter is still a comment; there is nothing to divide until the M7 backpressure controller exists.
+- **The second site of an artifact with children.** `ResolveLayout` gives a component published under its own name its layers at that site but not its child manifests, because a child inherits its parent's *container*. Where a published component is itself an index, the second copy would be pushed against a repository missing the manifests it names. Not reachable in the bundles seen so far — published components are leaf images and generic artifacts — and the dependency edges report what exists rather than papering over it.

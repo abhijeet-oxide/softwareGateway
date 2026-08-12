@@ -1834,6 +1834,17 @@ type JobRow struct {
 	Attempts     int
 	SkipReason   string
 
+	// SiteRank distinguishes the copy that keeps a bundle resolvable (0) from
+	// the copy published under a component's own name (1).
+	//
+	// It exists so the dequeue can order by size WITHIN a rank. A component
+	// published twice is two jobs of identical size, and the second is a
+	// cross-repository mount — but only if it runs after the first. Ordering by
+	// size alone makes them adjacent and both stream from the vendor; ordering
+	// by rank first guarantees the placement the second one mounts from already
+	// exists. See migration 00011.
+	SiteRank int
+
 	// TargetTags are the tags this manifest must carry once committed.
 	//
 	// Resolved at PLANNING time from the artifact's own
@@ -1846,13 +1857,18 @@ type JobRow struct {
 	TargetRepository string
 }
 
-// InsertJob creates a job, reporting whether it was new.
+// InsertJob creates a job, returning its ID and whether it was new.
 //
 // ON CONFLICT DO NOTHING against (transfer_id, kind, digest, target_repo_id) is
 // what makes PLANNING IDEMPOTENT: a Coordinator that dies mid-plan leaves a partial job
 // set, and the replan on restart finds the existing rows free rather than
 // duplicating them.
-func (p *Packages) InsertJob(ctx context.Context, tx *sql.Tx, row JobRow) (bool, error) {
+//
+// The ID comes back either way, and the conflict path pays a SELECT for it.
+// That is not tidiness: a replan has to rebuild the dependency edges between
+// jobs it did not create, and an insert that reported only "already there"
+// would leave the second half of the plan unable to name the first.
+func (p *Packages) InsertJob(ctx context.Context, tx *sql.Tx, row JobRow) (int64, bool, error) {
 	state := row.State
 	if state == "" {
 		state = "pending"
@@ -1861,9 +1877,9 @@ func (p *Packages) InsertJob(ctx context.Context, tx *sql.Tx, row JobRow) (bool,
 	query := p.dialect.Rewrite(`
 		INSERT INTO jobs
 			(transfer_id, kind, digest, size_bytes, media_type, artifact_id,
-			 source_repo_id, target_repo_id, state, wave, priority,
+			 source_repo_id, target_repo_id, state, wave, priority, site_rank,
 			 target_tags, target_repository, updated_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ` + p.dialect.Now() + `)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ` + p.dialect.Now() + `)
 		ON CONFLICT (transfer_id, kind, digest, target_repo_id) DO NOTHING
 		RETURNING id`)
 
@@ -1871,16 +1887,30 @@ func (p *Packages) InsertJob(ctx context.Context, tx *sql.Tx, row JobRow) (bool,
 	err := tx.QueryRowContext(ctx, query,
 		row.TransferID, row.Kind, row.Digest, row.SizeBytes, nullIfEmpty(row.MediaType),
 		row.ArtifactID, row.SourceRepoID, row.TargetRepoID, state, row.Wave, row.Priority,
-		tagsJSON(row.TargetTags), nullIfEmpty(row.TargetRepository),
+		row.SiteRank, tagsJSON(row.TargetTags), nullIfEmpty(row.TargetRepository),
 	).Scan(&id)
 
 	if errors.Is(err, sql.ErrNoRows) {
-		return false, nil
+		existing, err := p.jobIDFor(ctx, tx, row)
+		return existing, false, err
 	}
 	if err != nil {
-		return false, fmt.Errorf("insert %s job %s: %w", row.Kind, row.Digest, err)
+		return 0, false, fmt.Errorf("insert %s job %s: %w", row.Kind, row.Digest, err)
 	}
-	return true, nil
+	return id, true, nil
+}
+
+// jobIDFor reads back the job an insert conflicted with.
+func (p *Packages) jobIDFor(ctx context.Context, tx *sql.Tx, row JobRow) (int64, error) {
+	var id int64
+	err := tx.QueryRowContext(ctx, p.dialect.Rewrite(`
+		SELECT id FROM jobs
+		 WHERE transfer_id = ? AND kind = ? AND digest = ? AND target_repo_id = ?`),
+		row.TransferID, row.Kind, row.Digest, row.TargetRepoID).Scan(&id)
+	if err != nil {
+		return 0, fmt.Errorf("read existing %s job %s: %w", row.Kind, row.Digest, err)
+	}
+	return id, nil
 }
 
 // PlanTotals are what a planning run recorded about a transfer.
@@ -1963,9 +1993,19 @@ func (p *Packages) OpenFirstWave(ctx context.Context, tx *sql.Tx, transferID str
 		return fmt.Errorf("open wave %d of transfer %s: %w", first.Int64, transferID, err)
 	}
 
+	// The NOT EXISTS is the belt to the wave's braces. Opening a wave is a bulk
+	// promotion by wave NUMBER, and the number is only a proxy for readiness: a
+	// replan whose lower wave holds a `failed` job leaves that wave out of the
+	// MIN above, so the wave above it would be opened over a dependency that
+	// never landed. Jobs with no edges are unaffected and behave exactly as
+	// before, which is what keeps this safe for transfers planned earlier.
 	if _, err := tx.ExecContext(ctx, p.dialect.Rewrite(
 		`UPDATE jobs SET state = 'pending', updated_at = `+p.dialect.Now()+`
-		  WHERE transfer_id = ? AND wave = ? AND state = 'blocked'`),
+		  WHERE jobs.transfer_id = ? AND jobs.wave = ? AND jobs.state = 'blocked'
+		    AND NOT EXISTS (SELECT 1 FROM job_dependencies o
+		                      JOIN jobs dep ON dep.id = o.depends_on_id
+		                     WHERE o.job_id = jobs.id
+		                       AND dep.state NOT IN ('succeeded','skipped'))`),
 		transferID, first.Int64); err != nil {
 		return fmt.Errorf("unblock wave %d of transfer %s: %w", first.Int64, transferID, err)
 	}

@@ -105,7 +105,7 @@ func renderOneRetry(w io.Writer, t v1.TransferRetry) error {
 		fmt.Fprintf(w, "Transfer %s was not retried: %s\n", shortID(t.TransferID), t.Error)
 		return nil
 	}
-	if t.Requeued == 0 {
+	if t.Requeued == 0 && t.Reblocked == 0 {
 		// Not a failure, and worth distinguishing from "it worked": a transfer
 		// with nothing failed is either still running or already finished, and
 		// the retry changed nothing either way.
@@ -116,6 +116,12 @@ func renderOneRetry(w io.Writer, t v1.TransferRetry) error {
 
 	fmt.Fprintf(w, "Requeued %d failed job(s). Transfer %s is %s.\n",
 		t.Requeued, shortID(t.TransferID), t.State)
+	if t.Reblocked > 0 {
+		// Naming these separately is the difference between "forty things
+		// broke" and "two things broke and thirty-eight were waiting on them".
+		fmt.Fprintf(w, "%d more were waiting on those and go back to waiting; "+
+			"they run again as soon as their content lands.\n", t.Reblocked)
+	}
 	return nil
 }
 

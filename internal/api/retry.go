@@ -129,6 +129,7 @@ func retryDTO(res store.RetryResult) v1.TransferRetry {
 	out := v1.TransferRetry{
 		TransferID: res.TransferID,
 		Requeued:   res.Requeued,
+		Reblocked:  res.Reblocked,
 		State:      res.State,
 	}
 	if res.NoJobs {

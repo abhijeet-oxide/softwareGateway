@@ -744,15 +744,6 @@ func (p *Packages) CompleteJob(ctx context.Context, c Completion) (CompletionRes
 		res.Repaired = repair
 	}
 
-	// A blob that actually uploaded no longer needs to distrust the
-	// destination. Left set, the flag would make every future retry re-upload
-	// for no reason.
-	if c.Outcome == "succeeded" && kind == "blob" {
-		if err := p.ClearForcedUpload(ctx, tx, c.JobID); err != nil {
-			return res, err
-		}
-	}
-
 	// Per-artifact readiness. Anything that was waiting on THIS job and is now
 	// fully satisfied becomes runnable in the same transaction that made it
 	// true — so a manifest whose last blob just landed is leasable before the

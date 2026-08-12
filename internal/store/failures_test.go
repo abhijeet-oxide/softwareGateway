@@ -299,3 +299,187 @@ func TestTheProductionRejectionGroupsIntoOneCause(t *testing.T) {
 		t.Errorf("the cause was normalised away: %s", groups[0].Message)
 	}
 }
+
+// ---------------------------------------------------------------------------
+// The repair, and what stops it
+// ---------------------------------------------------------------------------
+
+// A repair that does not help must not repeat. Both stops are asserted here,
+// because either one alone leaves a loop: the manifest keeps its attempt count
+// across a repair, and a blob already force-uploaded is not sent again.
+//
+// Without them, a destination that rejects a manifest for any reason mentioning
+// a blob would loop forever — push, repair, re-upload, push — with every
+// appearance of progress and no exit.
+func TestARepairThatDoesNotHelpIsNotRepeated(t *testing.T) {
+	h := newFailureHarness(t)
+	id := h.transferWithJobs(0)
+
+	artifact, digest := h.seedArtifactWithBlob(id)
+	manifest := h.manifestJobForArtifact(id, artifact)
+	blob := h.blobJobFor(id, digest)
+
+	// Before the transaction: SQLite runs on one connection, so any statement
+	// issued outside an open tx would wait for it and neither would finish.
+	h.exec(`UPDATE jobs SET attempts = 3 WHERE id = ?`, manifest)
+
+	tx, err := h.st.DB().BeginTx(t.Context(), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	first, err := h.packages.RepairMissingBlobs(t.Context(), tx, manifest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := tx.Commit(); err != nil {
+		t.Fatal(err)
+	}
+	if first.Blobs != 1 {
+		t.Fatalf("the first repair requeued %d blob(s), want 1", first.Blobs)
+	}
+	if first.AlreadyRepaired {
+		t.Error("the first repair reported itself as already done")
+	}
+
+	// The attempt count SURVIVES. This is the bound: reset it and the budget
+	// never runs out.
+	if _, attempts := h.jobState(manifest); attempts != 3 {
+		t.Errorf("the manifest came back with %d attempts, want its budget kept at 3", attempts)
+	}
+	if state, _ := h.jobState(blob); state != "pending" {
+		t.Errorf("the blob is %q after a repair, want pending", state)
+	}
+
+	// The forced upload happens and the destination rejects the manifest
+	// anyway — the case where the placement cache was never the problem.
+	h.exec(`UPDATE jobs SET state='succeeded' WHERE id = ?`, blob)
+
+	tx2, err := h.st.DB().BeginTx(t.Context(), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := h.packages.RepairMissingBlobs(t.Context(), tx2, manifest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := tx2.Commit(); err != nil {
+		t.Fatal(err)
+	}
+
+	if !second.AlreadyRepaired {
+		t.Error("a second repair ran; the loop has no exit")
+	}
+	if second.Blobs != 0 {
+		t.Errorf("the second repair requeued %d blob(s), want none", second.Blobs)
+	}
+	if state, _ := h.jobState(blob); state != "succeeded" {
+		t.Errorf("the blob was sent back for a second forced upload (%q)", state)
+	}
+}
+
+// Two manifests sharing a blob: one having already forced X must not stop the
+// other from repairing its own Y. The bound is per blob, not per manifest.
+func TestOneManifestsRepairDoesNotBlockAnothers(t *testing.T) {
+	h := newFailureHarness(t)
+	id := h.transferWithJobs(0)
+
+	artifactA, digestA := h.seedArtifactWithBlob(id)
+	artifactB, digestB := h.seedArtifactWithBlob(id)
+	manifestA := h.manifestJobForArtifact(id, artifactA)
+	manifestB := h.manifestJobForArtifact(id, artifactB)
+	h.blobJobFor(id, digestA)
+	blobB := h.blobJobFor(id, digestB)
+
+	h.repair(manifestA)
+
+	res := h.repair(manifestB)
+	if res.Blobs != 1 || res.AlreadyRepaired {
+		t.Errorf("B's repair = %+v; A having repaired first must not stop it", res)
+	}
+	if state, _ := h.jobState(blobB); state != "pending" {
+		t.Errorf("B's blob is %q, want pending", state)
+	}
+}
+
+func (h *failureHarness) repair(manifestJob int64) RepairResult {
+	h.t.Helper()
+
+	tx, err := h.st.DB().BeginTx(h.t.Context(), nil)
+	if err != nil {
+		h.t.Fatal(err)
+	}
+	res, err := h.packages.RepairMissingBlobs(h.t.Context(), tx, manifestJob)
+	if err != nil {
+		h.t.Fatal(err)
+	}
+	if err := tx.Commit(); err != nil {
+		h.t.Fatal(err)
+	}
+	return res
+}
+
+// seedArtifactWithBlob records one artifact and one blob it references, the way
+// the walk does — the repair resolves blobs through artifact_blobs, so a
+// fixture without those rows would prove nothing.
+func (h *failureHarness) seedArtifactWithBlob(string) (artifactID int64, digest string) {
+	h.t.Helper()
+
+	h.n++
+	digest = "sha256:" + strings.Repeat("c", 60) + padded(h.n)
+	manifestDigest := "sha256:" + strings.Repeat("d", 60) + padded(h.n)
+
+	res, err := h.st.DB().ExecContext(h.t.Context(),
+		`INSERT INTO package_artifacts (package_id, digest, media_type, size_bytes, depth)
+		 VALUES (?, ?, 'application/vnd.oci.image.manifest.v1+json', 512, 1)`,
+		h.pkgID, manifestDigest)
+	if err != nil {
+		h.t.Fatal(err)
+	}
+	artifactID, err = res.LastInsertId()
+	if err != nil {
+		h.t.Fatal(err)
+	}
+
+	h.exec(`INSERT INTO blobs (digest, size_bytes, media_type)
+	         VALUES (?, 4096, 'application/octet-stream')`, digest)
+	h.exec(`INSERT INTO artifact_blobs (artifact_id, digest, kind, ordinal)
+	         VALUES (?, ?, 'layer', 0)`, artifactID, digest)
+	return artifactID, digest
+}
+
+func (h *failureHarness) manifestJobForArtifact(transferID string, artifactID int64) int64 {
+	h.t.Helper()
+
+	h.n++
+	res, err := h.st.DB().ExecContext(h.t.Context(),
+		`INSERT INTO jobs (transfer_id, kind, digest, size_bytes, artifact_id, source_repo_id,
+		                   target_repo_id, target_repository, state, wave, attempts, max_attempts)
+		 VALUES (?, 'manifest', ?, 512, ?, ?, ?, 'dest/path', 'leased', 1, 1, 8)`,
+		transferID, "sha256:"+strings.Repeat("e", 60)+padded(h.n), artifactID, h.repoID, h.repoID)
+	if err != nil {
+		h.t.Fatal(err)
+	}
+	id, err := res.LastInsertId()
+	if err != nil {
+		h.t.Fatal(err)
+	}
+	return id
+}
+
+func (h *failureHarness) blobJobFor(transferID, digest string) int64 {
+	h.t.Helper()
+
+	res, err := h.st.DB().ExecContext(h.t.Context(),
+		`INSERT INTO jobs (transfer_id, kind, digest, size_bytes, source_repo_id, target_repo_id,
+		                   state, wave, attempts, max_attempts, skip_reason)
+		 VALUES (?, 'blob', ?, 4096, ?, ?, 'skipped', 0, 1, 8, 'exists_at_target')`,
+		transferID, digest, h.repoID, h.repoID)
+	if err != nil {
+		h.t.Fatal(err)
+	}
+	id, err := res.LastInsertId()
+	if err != nil {
+		h.t.Fatal(err)
+	}
+	return id
+}

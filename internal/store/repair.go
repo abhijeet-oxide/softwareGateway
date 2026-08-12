@@ -47,6 +47,18 @@ import (
 // The cost is one full upload of the blobs of ONE manifest. The alternative,
 // which is what happened, is a transfer that moves 63.7 GiB and delivers
 // nothing.
+//
+// # What bounds it
+//
+// A repair that does not help must not repeat. Two things stop it: the
+// manifest keeps its attempt count across a repair, so the ordinary budget
+// still runs out; and a blob already carrying force_upload is not requeued
+// again, because its bytes have already gone up with every fast path disabled
+// and sending them a second time cannot produce a different answer.
+//
+// Both are needed. Without the first, each repair would reset the budget and
+// the loop would never end. Without the second, it would end only after eight
+// full re-uploads of content the destination already has.
 
 // RepairResult is what one repair did.
 type RepairResult struct {
@@ -54,6 +66,16 @@ type RepairResult struct {
 	Placements int
 	// Blobs is how many blob jobs were requeued for a forced upload.
 	Blobs int
+	// AlreadyRepaired reports that this manifest's blobs had ALREADY been
+	// force-uploaded and the push was rejected anyway. Nothing was changed, and
+	// the job is allowed to fail on its own attempt budget.
+	//
+	// Reported because it is the line between two things that look identical
+	// from outside and need opposite responses: "the placement cache was
+	// wrong", which repairs itself, and "the registry will not accept this
+	// manifest", which needs a human. Before the repair existed they were
+	// indistinguishable — both were simply a manifest that would not push.
+	AlreadyRepaired bool
 }
 
 // RepairMissingBlobs withdraws what the destination has denied having, and
@@ -100,8 +122,18 @@ func (p *Packages) RepairMissingBlobs(
 		res.Placements = int(n)
 	}
 
-	// force_upload, and the attempt budget reset: this is a first attempt at a
-	// genuinely different operation, not a ninth attempt at the same one.
+	// Requeue with force_upload, and ONLY the blobs that do not already carry
+	// it. A blob still flagged was sent through this path before: its bytes
+	// went up with every fast path disabled, and the destination rejected the
+	// manifest anyway. Sending them again would upload the same bytes to the
+	// same place for the same result.
+	//
+	// Per BLOB rather than per manifest, because two manifests can share a
+	// blob: one having already forced X must not stop the other from repairing
+	// its own Y.
+	//
+	// The blob's attempt budget IS reset — for the blob this is a first attempt
+	// at a genuinely different operation, not a ninth attempt at the same one.
 	requeued, err := tx.ExecContext(ctx, p.dialect.Rewrite(`
 		UPDATE jobs
 		   SET state            = 'pending',
@@ -116,6 +148,7 @@ func (p *Packages) RepairMissingBlobs(
 		       updated_at       = `+p.dialect.Now()+`
 		 WHERE transfer_id = ? AND kind = 'blob' AND target_repo_id = ?
 		   AND state IN ('succeeded','skipped','failed','pending')
+		   AND force_upload = `+p.dialect.Bool(false)+`
 		   AND digest IN (`+blobsOfArtifact+`)`),
 		transferID, targetRepoID, artifactID.Int64)
 	if err != nil {
@@ -126,8 +159,12 @@ func (p *Packages) RepairMissingBlobs(
 	}
 
 	if res.Blobs == 0 {
-		// Nothing to put back. Leaving the manifest blocked here would be a
-		// deadlock: there is no completion coming to promote it.
+		// Every blob this manifest names has already been force-uploaded and
+		// the push was rejected regardless. The cache is not the problem, so
+		// there is nothing to repair — say so, change nothing, and let the
+		// manifest fail on its own attempt budget. Leaving it blocked here
+		// would be a deadlock: no completion is coming to promote it.
+		res.AlreadyRepaired = true
 		return res, nil
 	}
 
@@ -135,15 +172,20 @@ func (p *Packages) RepairMissingBlobs(
 	// runnable, and the dependency edges promote it again on their own once the
 	// repaired blobs land.
 	//
-	// The backoff goes with the attempts. A retry backoff exists to space out
-	// attempts at an operation that has not changed; this one HAS changed —
-	// the content it was missing is being uploaded — so making it wait out a
-	// delay computed from the failure it no longer has adds latency and
-	// nothing else.
+	// The backoff is dropped, and the ATTEMPT COUNT IS NOT. Those look like the
+	// same decision and are opposite ones. The backoff exists to space out
+	// attempts at an operation that has not changed, and this one has — the
+	// content it was missing is being uploaded — so waiting out a delay
+	// computed from a failure it no longer has adds latency and nothing else.
+	//
+	// The attempt count is what BOUNDS the repair. Resetting it would make a
+	// repair that never helps loop forever: push, repair, re-upload, push,
+	// repair, with no exit and every appearance of progress. Keeping it means
+	// a destination that rejects the manifest for some other reason spends the
+	// same eight attempts everything else gets, and then stops.
 	if _, err := tx.ExecContext(ctx, p.dialect.Rewrite(`
 		UPDATE jobs
 		   SET state            = 'blocked',
-		       attempts         = 0,
 		       lease_owner      = NULL,
 		       lease_expires_at = NULL,
 		       next_visible_at  = `+p.dialect.Now()+`,
@@ -153,18 +195,4 @@ func (p *Packages) RepairMissingBlobs(
 		return res, fmt.Errorf("reblock manifest job %d: %w", jobID, err)
 	}
 	return res, nil
-}
-
-// ClearForcedUpload drops the flag once the blob has actually been uploaded.
-//
-// The flag exists to get one job past a destination that lied about holding
-// content. Leaving it set would make every future retry of that job re-upload
-// the blob for no reason, which is the opposite of what the fast paths are for.
-func (p *Packages) ClearForcedUpload(ctx context.Context, tx *sql.Tx, jobID int64) error {
-	_, err := tx.ExecContext(ctx, p.dialect.Rewrite(
-		`UPDATE jobs SET force_upload = `+p.dialect.Bool(false)+` WHERE id = ?`), jobID)
-	if err != nil {
-		return fmt.Errorf("clear the forced upload on job %d: %w", jobID, err)
-	}
-	return nil
 }

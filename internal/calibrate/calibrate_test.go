@@ -438,3 +438,89 @@ func TestWriteProbeUsesAPathATransferWouldWrite(t *testing.T) {
 		t.Errorf("write probe path = %q, want the mirrored source path", got)
 	}
 }
+
+// A LEVEL THAT MEASURED NOTHING MUST SAY SO.
+//
+// A row of dashes with no explanation anywhere is what a five-second budget
+// produced against a path with a 900ms round trip: the first request of every
+// level was still in flight when the level ended, the deadline path returned
+// silently, and the whole table read as a broken probe rather than as a budget
+// too short for the link.
+func TestALevelThatFinishesNothingExplainsItself(t *testing.T) {
+	reg := fakeregistry.New()
+	t.Cleanup(reg.Close)
+	reg.AddImage("vendor/platform", "1.0.0",
+		fakeregistry.NewLayer(strings.Repeat("a", 400<<10)))
+
+	cfg := plainConfig(reg.Host(), "vendor/platform")
+	samples, _, err := collectSamples(t.Context(), cfg, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// A budget no request can fit in, whatever the link.
+	res := probeRead(t.Context(), withConnections(cfg, 1), samples, 1, time.Nanosecond)
+	if res.Bytes != 0 || res.Requests != 0 {
+		t.Skip("the fake answered inside a nanosecond; nothing to assert")
+	}
+	if res.FirstError == "" {
+		t.Fatal("an empty level reported no reason at all")
+	}
+	if !strings.Contains(res.FirstError, "--budget") {
+		t.Errorf("reason %q does not name the flag that fixes it", res.FirstError)
+	}
+}
+
+// The write half has the same failure and the same fix.
+func TestAnEmptyWriteLevelExplainsItself(t *testing.T) {
+	reg := fakeregistry.New()
+	t.Cleanup(reg.Close)
+
+	res := probeWrite(t.Context(), withConnections(plainConfig(reg.Host(), "dest/lab"), 1),
+		1, time.Nanosecond)
+	if res.Requests != 0 {
+		t.Skip("the fake accepted a chunk inside a nanosecond")
+	}
+	if res.FirstError == "" {
+		t.Error("an empty write level reported no reason at all")
+	}
+	// And the session it opened for the measurement is still cancelled.
+	if reg.CancelledUploads.Load() == 0 {
+		t.Error("a level that measured nothing left its upload session open")
+	}
+}
+
+// THE BUDGET FOLLOWS THE LINK.
+//
+// A level has to outlast a few round trips or it measures handshakes. Against a
+// registry 900ms away the five-second default is five round trips, which is how
+// a whole sweep came back empty.
+func TestTheBudgetGrowsWithTheRoundTrip(t *testing.T) {
+	base := Options{Budget: 5 * time.Second}
+
+	// A fast path is left alone: it settles its answer in the first second and
+	// should not be made to wait.
+	got, notes := withBudgetFor(base, 2*time.Millisecond, "source", nil)
+	if got.Budget != base.Budget {
+		t.Errorf("budget = %s on a 2ms link, want it unchanged", got.Budget)
+	}
+	if len(notes) != 0 {
+		t.Errorf("a note was added for a fast link: %v", notes)
+	}
+
+	// A 900ms link wants nine seconds and gets them.
+	got, notes = withBudgetFor(base, 900*time.Millisecond, "source", nil)
+	if got.Budget != 9*time.Second {
+		t.Errorf("budget = %s on a 900ms link, want 9s", got.Budget)
+	}
+	if len(notes) != 1 || !strings.Contains(notes[0], "round trip") {
+		t.Errorf("notes = %v, want one explaining the change", notes)
+	}
+
+	// And it is capped, because a client is waiting on a timeout derived from
+	// the budget it asked for.
+	got, _ = withBudgetFor(base, 10*time.Second, "source", nil)
+	if got.Budget != 15*time.Second {
+		t.Errorf("budget = %s on a very slow link, want it capped at 3x", got.Budget)
+	}
+}

@@ -110,9 +110,6 @@ func probeWrite(
 		return res
 	}
 
-	runCtx, cancel := context.WithTimeout(ctx, budget)
-	defer cancel()
-
 	var (
 		sent      atomic.Int64
 		requests  atomic.Int64
@@ -131,27 +128,28 @@ func probeWrite(
 		}
 	}
 
+	// Sessions are opened BEFORE the clock starts. Opening one is a proxy
+	// CONNECT, a TLS handshake, a token exchange and a POST — four round trips
+	// that are setup rather than throughput, and on a path with a one-second
+	// round trip they consume the whole budget on their own and leave a level
+	// reporting nothing.
+	sessions := openSessions(ctx, client, cfg, streams, &failures, &throttled, note)
+	defer func() {
+		for _, s := range sessions {
+			cancelUpload(ctx, client, s)
+		}
+	}()
+
+	runCtx, cancel2 := context.WithTimeout(ctx, budget)
+	defer cancel2()
+
 	deadline, _ := runCtx.Deadline()
 	started := time.Now()
 	var wg sync.WaitGroup
-	for range streams {
+	for _, session := range sessions {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-
-			session, err := startUpload(runCtx, client, cfg)
-			if err != nil {
-				if runCtx.Err() == nil {
-					countFailure(err, &failures, &throttled)
-					note(err)
-				}
-				return
-			}
-			// Always, including on the deadline path: an abandoned session is
-			// the one piece of litter this probe could leave, and it is the
-			// registry's to garbage-collect rather than ours to create.
-			defer cancelUpload(ctx, client, session)
-
 			chunk := initialChunk
 			lastChunkTook := time.Duration(0)
 			for runCtx.Err() == nil {
@@ -202,12 +200,48 @@ func probeWrite(
 	res.Errors = int(failures.Load())
 	res.Throttled = int(throttled.Load())
 	res.TTFB = median(ttfbs)
-	res.FirstError = first
+	res.FirstError = describeEmptyLevel(first, res.Requests, res.Errors, budget)
 	res.Rate = ratePerSecond(res.Bytes, res.Duration)
 	if streams > 0 {
 		res.PerStream = res.Rate / float64(streams)
 	}
 	return res
+}
+
+// openSessions opens one upload session per stream, outside the measured
+// window, and returns those that opened.
+//
+// Every session is cancelled by the caller whether or not the measurement ran —
+// an abandoned session is the one piece of litter this probe could leave.
+func openSessions(
+	ctx context.Context, client *http.Client, cfg registry.ClientConfig, streams int,
+	failures, throttled *atomic.Int64, note func(error),
+) []*upload {
+	setupCtx, cancel := context.WithTimeout(ctx, warmupBudget)
+	defer cancel()
+
+	var (
+		mu  sync.Mutex
+		out []*upload
+		wg  sync.WaitGroup
+	)
+	for range streams {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			session, err := startUpload(setupCtx, client, cfg)
+			if err != nil {
+				countFailure(err, failures, throttled)
+				note(err)
+				return
+			}
+			mu.Lock()
+			out = append(out, session)
+			mu.Unlock()
+		}()
+	}
+	wg.Wait()
+	return out
 }
 
 // upload is one open session.

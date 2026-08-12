@@ -52,6 +52,12 @@ const (
 	// spanning forty of them should not be walked end to end to find a blob.
 	maxRepositoriesTried = 12
 
+	// warmupBudget bounds the connection-and-token phase that precedes each
+	// level. Sixty seconds: the whole point is a path slow enough that the
+	// measurement budget cannot absorb its setup, so this has to be generous or
+	// it recreates the problem it exists to remove.
+	warmupBudget = 60 * time.Second
+
 	// maxSearchDepth is how far down a manifest tree the search will go.
 	//
 	// Four, matching the transfer walk. It has to be more than one, and
@@ -354,8 +360,21 @@ func probeRead(
 	client, err := repositoryClient(cfg)
 	if err != nil {
 		res.Errors++
+		res.FirstError = err.Error()
 		return res
 	}
+
+	// Setup happens BEFORE the clock starts, and this is the difference between
+	// a measurement and a table of zeroes.
+	//
+	// Each level builds a fresh client — deliberately, so a level does not
+	// inherit the previous one's warm sockets — which means its first request
+	// pays a proxy CONNECT, a TLS handshake, a token exchange and a blob
+	// resolve before a single byte of payload moves. On a path with a 900ms
+	// round trip that is five round trips, more than the whole default budget,
+	// so every level's first request was still in flight when the deadline
+	// fired and every level reported nothing at all.
+	warmUp(ctx, client, samples[0].digest, streams)
 
 	runCtx, cancel := context.WithTimeout(ctx, budget)
 	defer cancel()
@@ -426,12 +445,55 @@ func probeRead(
 	res.Errors = int(failures.Load())
 	res.Throttled = int(throttled.Load())
 	res.TTFB = median(ttfbs)
-	res.FirstError = first
+	res.FirstError = describeEmptyLevel(first, res.Requests, res.Errors, budget)
 	res.Rate = ratePerSecond(res.Bytes, res.Duration)
 	if streams > 0 {
 		res.PerStream = res.Rate / float64(streams)
 	}
 	return res
+}
+
+// warmUp opens the connections and exchanges the token before timing starts.
+//
+// One cheap request per stream, in parallel, so the pool the measurement runs
+// against is already established. A HEAD rather than a GET: it proves the
+// connection, the TLS session and the credential without moving payload that
+// would then have to be excluded from the numbers.
+//
+// Failures are ignored. This is preparation, not a check — whatever is wrong
+// will fail again inside the measured window, where it is counted and reported.
+func warmUp(
+	ctx context.Context, client *generic.Repository, digest registry.Digest, streams int,
+) {
+	// A generous ceiling of its own, because the thing being worked around is
+	// precisely a path too slow for the measurement budget.
+	warmCtx, cancel := context.WithTimeout(ctx, warmupBudget)
+	defer cancel()
+
+	var wg sync.WaitGroup
+	for range streams {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			_, _ = client.StatBlob(warmCtx, digest)
+		}()
+	}
+	wg.Wait()
+}
+
+// describeEmptyLevel turns a silently empty level into a stated one.
+//
+// A level that completed no request and recorded no error rendered as a row of
+// dashes with no explanation anywhere — which is what a five-second budget on a
+// path with a one-second round trip produced, and it read as the probe being
+// broken rather than as the budget being too short for the link.
+func describeEmptyLevel(first string, requests, errors int, budget time.Duration) string {
+	if first != "" || requests > 0 || errors > 0 {
+		return first
+	}
+	return fmt.Sprintf(
+		"no request finished within the %s budget — the link is slower than the "+
+			"measurement window. Raise --budget", budget)
 }
 
 // counter is an io.Writer that only counts, so a copy can be measured without

@@ -387,6 +387,7 @@ func (c *Calibrator) measureSource(
 
 	cfg := s.cfg
 	out.RTT = measureRTT(ctx, cfg)
+	opts, notes = withBudgetFor(opts, out.RTT, "source", notes)
 	cfg, out.Route = compareRoutes(ctx, cfg, out.Route, opts, read)
 	out.Levels = sweep(ctx, cfg, opts, read)
 	out.Best, out.Knee, out.StillClimbing = analyseSweep(out.Levels)
@@ -414,11 +415,54 @@ func (c *Calibrator) measureTarget(
 
 	cfg := t.cfg
 	out.RTT = measureRTT(ctx, cfg)
+	opts, notes = withBudgetFor(opts, out.RTT, "target", notes)
 	cfg, out.Route = compareRoutes(ctx, cfg, out.Route, opts, write)
 	out.Levels = sweep(ctx, cfg, opts, write)
 	out.Best, out.Knee, out.StillClimbing = analyseSweep(out.Levels)
 	return out, notes
 }
+
+// withBudgetFor lengthens the per-level budget when the path is slow.
+//
+// A level has to be several round trips long to measure anything: even with the
+// connection already warm, one blob is a request and a response. Against a
+// registry 900ms away — a real, measured number, through a corporate proxy —
+// the five-second default is five round trips, and the first request of each
+// level was still in flight when the level ended. Every row read zero.
+//
+// So the budget follows the link rather than a constant. Capped at three times
+// what was asked for, because a client is waiting on a timeout derived from
+// that number and a probe that silently ran for ten minutes would be its own
+// kind of failure.
+func withBudgetFor(
+	opts Options, rtt time.Duration, side string, notes []string,
+) (Options, []string) {
+	if rtt <= 0 {
+		return opts, notes
+	}
+
+	want := time.Duration(budgetRoundTrips) * rtt
+	if want <= opts.Budget {
+		return opts, notes
+	}
+	if ceiling := 3 * opts.Budget; want > ceiling {
+		want = ceiling
+	}
+
+	notes = append(notes, fmt.Sprintf(
+		"the %s is %s away, so each level ran for %s rather than %s — a level has to "+
+			"outlast a few round trips to measure anything",
+		side, humanDuration(rtt), humanDuration(want), humanDuration(opts.Budget)))
+	opts.Budget = want
+	return opts, notes
+}
+
+// budgetRoundTrips is how many round trips a level must be able to fit.
+//
+// Ten: enough that the samples are of transfers rather than of handshakes, few
+// enough that a fast path is not made to wait for a number it settled in the
+// first second.
+const budgetRoundTrips = 10
 
 // probe is one measurement at one concurrency, on one route.
 type probe func(

@@ -52,6 +52,11 @@ func (s *Server) handleLeaseJobs(w http.ResponseWriter, r *http.Request) {
 		req.Capacity = maxLeaseCapacity
 	}
 
+	// Recorded before the lease, so a worker that asks for work and gets none
+	// still appears in the fleet. An idle worker missing from `health` is the
+	// case somebody is most likely to be looking for.
+	s.deps.Queue.RecordWorker(r.Context(), req.WorkerID, req.Capacity, req.ActiveJobs, req.Version)
+
 	res, err := s.deps.Queue.Lease(r.Context(), req.WorkerID, req.Capacity)
 	if err != nil {
 		s.deps.Logger.ErrorContext(r.Context(), "lease failed",

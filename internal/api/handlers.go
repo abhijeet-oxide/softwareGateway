@@ -72,6 +72,16 @@ func (s *Server) handleDeepHealth(w http.ResponseWriter, r *http.Request) {
 		resp.Checks = toAPIChecks(rep.Results)
 	}
 
+	// The fleet, on the report an operator already opens. A failure to read it
+	// does not change the verdict: the workers are a thing this check
+	// DESCRIBES, and a database hiccup listing them is already covered by the
+	// database check above.
+	if s.deps.Queue != nil {
+		if workers, err := s.deps.Queue.Workers(r.Context()); err == nil {
+			resp.Workers = toAPIWorkers(workers)
+		}
+	}
+
 	// Always 200: this is a diagnostic report, and its body carries the
 	// verdict. Returning 503 would make a CLI that checks status codes unable
 	// to show the operator WHICH dependency is unhappy.

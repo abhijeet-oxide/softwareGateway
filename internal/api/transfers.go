@@ -257,6 +257,7 @@ func transferDTO(t store.TransferSummary) v1.Transfer {
 			JobsPlanned:        t.PlannedJobs,
 			JobsDone:           t.JobsDone,
 			JobsFailed:         t.JobsFailed,
+			JobsBlocked:        t.JobsBlocked,
 			JobsOutstanding:    t.JobsOutstanding,
 			JobsInFlight:       t.JobsInFlight,
 			Workers:            t.Workers,

@@ -20,9 +20,21 @@ import (
 
 // fakeQueue records what the handler asked the queue to do.
 type fakeQueue struct {
-	retried []string
-	result  store.RetryResult
-	err     error
+	retried  []string
+	result   store.RetryResult
+	err      error
+	recorded []store.WorkerRow
+	workers  []store.WorkerSummary
+}
+
+func (f *fakeQueue) RecordWorker(_ context.Context, id string, capacity, active int, version string) {
+	f.recorded = append(f.recorded, store.WorkerRow{
+		ID: id, Version: version, MaxConcurrency: capacity + active, ActiveJobs: active,
+	})
+}
+
+func (f *fakeQueue) Workers(context.Context) ([]store.WorkerSummary, error) {
+	return f.workers, nil
 }
 
 func (f *fakeQueue) Lease(context.Context, string, int) (queue.LeaseResult, error) {

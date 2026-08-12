@@ -60,6 +60,10 @@ type HealthCheckResponse struct {
 	Version   string        `json:"version"`
 	Leader    bool          `json:"leader"`
 	Checks    []HealthCheck `json:"checks"`
+	// Workers is the fleet. Included here because "are the workers up?" is the
+	// first question of any incident, and a health check that answered
+	// everything except that sent the reader somewhere else to find out.
+	Workers []Worker `json:"workers,omitempty"`
 }
 
 // HealthCheck is one dependency's outcome.
@@ -727,6 +731,40 @@ type CheckConnectivityResponse struct {
 }
 
 // ---------------------------------------------------------------------------
+// Workers
+// ---------------------------------------------------------------------------
+
+// Worker is one member of the fleet, as the Coordinator last heard from it.
+//
+// Every field here already crossed the wire on a lease or a heartbeat and was
+// read for one decision and dropped. Recording it is what lets `health` answer
+// "are the workers up, and what are they doing" — a question that previously
+// had no route at all.
+type Worker struct {
+	WorkerID string `json:"workerId"`
+	Version  string `json:"version,omitempty"`
+	// MaxConcurrency is the worker's configured ceiling: what it asked for plus
+	// what it already held. The number in the operator's config file, not a
+	// remainder that shrinks as work starts.
+	MaxConcurrency int `json:"maxConcurrency"`
+	// ActiveJobs is what the WORKER says it is running.
+	ActiveJobs int `json:"activeJobs"`
+	// LeasedJobs is what the COORDINATOR has leased to it. The two disagreeing
+	// is worth seeing: a worker holding jobs the Coordinator has already reaped
+	// is about to report completions nobody will accept.
+	LeasedJobs int `json:"leasedJobs"`
+	// State is ACTIVE, DRAINING or STALE. Stale is derived from the heartbeat
+	// rather than announced — a worker that was killed never got to say so.
+	State         string `json:"state"`
+	LastHeartbeat string `json:"lastHeartbeat,omitempty"`
+}
+
+// ListWorkersResponse is returned by GET /api/v1/workers.
+type ListWorkersResponse struct {
+	Workers []Worker `json:"workers"`
+}
+
+// ---------------------------------------------------------------------------
 // Retry
 // ---------------------------------------------------------------------------
 
@@ -1057,6 +1095,16 @@ type TransferProgress struct {
 	// being runnable. "The queue is saturated" and "most of this is waiting"
 	// are indistinguishable from a progress count alone.
 	JobsWaiting int `json:"jobsWaiting"`
+
+	// JobsBlocked are gated behind a later wave: a manifest cannot be pushed
+	// until every blob beneath it has landed (invariant I1), so they are
+	// outstanding and deliberately not leasable.
+	//
+	// It is the number that explains an idle-looking fleet. Five hundred
+	// outstanding jobs with one running reads as a broken worker and is
+	// usually four hundred and ninety-nine manifests waiting for the last
+	// blob of wave 0.
+	JobsBlocked int `json:"jobsBlocked"`
 
 	PlannedBytes     Int64String `json:"plannedBytes"`
 	BytesTransferred Int64String `json:"bytesTransferred"`

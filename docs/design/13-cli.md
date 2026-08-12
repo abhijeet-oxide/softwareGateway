@@ -155,6 +155,22 @@ The tag was already shortened this way, by the source's vendor plugin at discove
 
 ## 3. Health
 
+`health` reports the Coordinator, its dependencies **and the fleet**:
+
+```
+WORKER        STATE    LOAD   VERSION   LAST SEEN    DETAIL
+INBLR1761     ACTIVE   1/32   1.4.0     4s ago       –
+INBLR1762     ACTIVE   0/16   1.3.9     9s ago       idle
+old-pod-7c9   STALE    0/16   1.3.0     31m00s ago   not heartbeating; its jobs are being returned to the queue
+```
+
+**LOAD is jobs in flight over the worker's configured ceiling** — `worker.maxConcurrentJobs`, reconstructed from what the worker asks for plus what it already holds, so a mismatch between this column and the config file means a worker running configuration nobody thinks it has.
+
+It is also the column that answers "why is only one job running". A fleet sitting at 1/32 is not a stuck worker; it is a queue with nothing leasable in it, and `transfers describe` says why — outstanding jobs blocked behind a wave cannot be leased until the wave beneath them drains ([04](04-queue-and-scheduling.md) §3).
+
+Every field here already crossed the wire on every lease and every heartbeat and was read for one decision and dropped. The `workers` table was created in the first migration and nothing wrote to it until this landed, which is why the fleet had no cardinality and a stale worker was invisible.
+
+
 ```
 $ transferctl health
 

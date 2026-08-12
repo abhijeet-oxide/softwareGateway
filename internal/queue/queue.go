@@ -276,7 +276,54 @@ func (q *Queue) Complete(ctx context.Context, c store.Completion) (store.Complet
 // the worker has lost and must abandon. There is no push channel to workers,
 // so this is also where cancellation would be delivered (docs/design/09 §7.4).
 func (q *Queue) Heartbeat(ctx context.Context, workerID string, activeJobs []int64) ([]int64, error) {
+	// A heartbeat is the only signal from a worker holding a long blob: it can
+	// go many minutes between leases and completions, so without recording it
+	// here the fleet view would call a perfectly healthy worker stale.
+	//
+	// Capacity is unknown on this path, so the stored ceiling is left as it was
+	// — the lease that set it is the caller that knows it.
+	q.recordHeartbeat(ctx, workerID, len(activeJobs))
 	return q.packages.RenewLeases(ctx, workerID, activeJobs, q.leaseDuration)
+}
+
+// RecordWorker notes what a worker just told us about itself.
+//
+// Best effort by contract: the fleet view is worth having and is worth nothing
+// at the cost of a failed lease, so the caller logs and carries on. A worker row
+// is observability — nothing in the queue reads it, and crash recovery remains
+// the reaper and a timestamp on the job.
+//
+// Capacity is what is LEFT, so the configured ceiling is capacity plus what the
+// worker already holds — the number an operator recognises from their config
+// file rather than a remainder that shrinks as work starts.
+func (q *Queue) RecordWorker(ctx context.Context, id string, capacity, active int, version string) {
+	if id == "" {
+		return
+	}
+	err := q.packages.RecordWorker(ctx, store.WorkerRow{
+		ID: id, Version: version,
+		MaxConcurrency: capacity + active, ActiveJobs: active,
+	})
+	if err != nil {
+		q.log.WarnContext(ctx, "could not record worker", "worker", id, "error", err)
+	}
+}
+
+// Workers reports the fleet.
+func (q *Queue) Workers(ctx context.Context) ([]store.WorkerSummary, error) {
+	return q.packages.ListWorkers(ctx, q.leaseDuration)
+}
+
+// recordHeartbeat refreshes liveness and the active count, keeping whatever
+// ceiling a previous lease recorded.
+func (q *Queue) recordHeartbeat(ctx context.Context, workerID string, active int) {
+	if workerID == "" {
+		return
+	}
+	if err := q.packages.TouchWorker(ctx, workerID, active); err != nil {
+		q.log.WarnContext(ctx, "could not record worker heartbeat",
+			"worker", workerID, "error", err)
+	}
 }
 
 // Reap returns work held by workers that stopped heartbeating.

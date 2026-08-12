@@ -183,6 +183,16 @@ func (s *Server) handleGetTransfer(w http.ResponseWriter, r *http.Request) {
 	if waves, err := s.deps.Packages.WaveProgress(r.Context(), t.ID); err == nil {
 		dto.Waves = toAPIWaves(waves)
 	}
+
+	if skips, err := s.deps.Packages.SkipBreakdown(r.Context(), t.ID); err == nil {
+		for _, k := range skips {
+			dto.Progress.Skips = append(dto.Progress.Skips, v1.SkipBreakdown{
+				Reason: k.Reason, Jobs: k.Jobs,
+				Bytes:   v1.Int64String(strconv.FormatInt(k.Bytes, 10)),
+				Trusted: k.Trusted,
+			})
+		}
+	}
 	WriteJSON(w, r, http.StatusOK, dto)
 }
 

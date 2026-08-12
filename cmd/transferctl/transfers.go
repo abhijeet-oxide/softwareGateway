@@ -523,6 +523,49 @@ func renderWaves(w io.Writer, waves []v1.TransferWave) error {
 	return tw.Flush()
 }
 
+// renderSkips says what the transfer did not move, and on whose word.
+//
+// "1976 of 1976 done" is four different claims wearing one word. Streaming a
+// blob is proof it arrived; a mount is something the registry DID; a placement
+// hit and a HEAD are things it or we SAID, and against a destination that
+// answers about its whole storage rather than the repository asked about, the
+// last one is worth nothing.
+//
+// The distinction is not academic — it is the answer to "why is it re-sending
+// blobs that already succeeded?". The blobs a repair sends back are exactly the
+// ones counted on an untrusted line here.
+func renderSkips(w io.Writer, skips []v1.SkipBreakdown) {
+	for _, k := range skips {
+		note := skipNote(k)
+		if note != "" {
+			note = "  " + note
+		}
+		fmt.Fprintf(w, "  Not moved:\t%s across %s, %s%s\n",
+			humanBytes(k.Bytes), plural(k.Jobs, "job", "jobs"), skipReason(k.Reason), note)
+	}
+}
+
+func skipReason(reason string) string {
+	switch reason {
+	case "mounted":
+		return "relocated inside the destination registry"
+	case "placement_hit":
+		return "our record said it was already there"
+	case "exists_at_target":
+		return "the destination said it was already there"
+	default:
+		return reason
+	}
+}
+
+// skipNote flags the saving that is only a saving if the claim was true.
+func skipNote(k v1.SkipBreakdown) string {
+	if k.Trusted || k.Jobs == 0 {
+		return ""
+	}
+	return "(unverified)"
+}
+
 // activeWaves names the waves with work that can move right now.
 //
 // "1 of 3" while thirteen wave-0 jobs are running two lines below is a page
@@ -624,6 +667,7 @@ func describeTransfer(w io.Writer, t *v1.Transfer, rates *rateTracker, watching 
 	fmt.Fprintf(pw, "  Transferred:\t%s of %s planned  (%.0f%% of jobs done)\n",
 		humanBytes(p.BytesTransferred), humanBytes(p.PlannedBytes), percentComplete(p))
 	fmt.Fprintf(pw, "  Deduplicated:\t%s never moved\n", humanBytes(p.DedupeSkippedBytes))
+	renderSkips(pw, p.Skips)
 	if d, ok := elapsed(t); ok {
 		fmt.Fprintf(pw, "  Elapsed:\t%s\n", humanDuration(d))
 	}

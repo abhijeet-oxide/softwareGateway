@@ -1156,6 +1156,10 @@ type TransferProgress struct {
 	// is the only thing that makes a done count go DOWN, and progress that
 	// moves backwards with no explanation reads as a broken tool.
 	JobsRepaired int `json:"jobsRepaired,omitempty"`
+	// Skips is what the transfer did not move, by reason. "Done" is four
+	// different claims wearing one word, and only some of them are evidence
+	// that bytes reached the destination — see SkipBreakdown.
+	Skips []SkipBreakdown `json:"skips,omitempty"`
 
 	PlannedBytes     Int64String `json:"plannedBytes"`
 	BytesTransferred Int64String `json:"bytesTransferred"`
@@ -1216,6 +1220,23 @@ type JobParent struct {
 type ListJobsResponse struct {
 	TransferID string `json:"transferId"`
 	Jobs       []Job  `json:"jobs"`
+}
+
+// SkipBreakdown is one reason a transfer moved no bytes, and how much that
+// saved.
+//
+// Reported because "1976 of 1976 done" hides the difference between "we
+// streamed it" and "something told us it was already there". The second is
+// only as good as the answer it trusted, and a destination that answers about
+// its whole storage rather than the repository asked about makes it worth
+// nothing at all.
+type SkipBreakdown struct {
+	Reason string      `json:"reason"`
+	Jobs   int         `json:"jobs"`
+	Bytes  Int64String `json:"bytes"`
+	// Trusted reports whether this rests on an ACTION the registry took (a
+	// mount) rather than on a claim it or we made (a placement record, a HEAD).
+	Trusted bool `json:"trusted"`
 }
 
 // FailureGroup is one distinct reason a transfer is failing.

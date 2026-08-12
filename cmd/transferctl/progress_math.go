@@ -115,7 +115,11 @@ func estimateAt(t *v1.Transfer, rate float64) (time.Duration, bool) {
 	if remaining <= 0 {
 		return 0, false
 	}
-	return time.Duration(float64(remaining)/rate) * time.Second, true
+	// Scaled INSIDE the conversion. `time.Duration(x) * time.Second` truncates
+	// x to an integer first, so anything under a second became zero and printed
+	// as "-" — an estimate of "unknown" for the one case where it is most
+	// certain.
+	return time.Duration(float64(remaining) / rate * float64(time.Second)), true
 }
 
 // remainingBytes is what is actually left to move.
@@ -154,6 +158,8 @@ func humanDuration(d time.Duration) string {
 	switch {
 	case d <= 0:
 		return "-"
+	case d < time.Second:
+		return "<1s"
 	case d < time.Minute:
 		return fmt.Sprintf("%ds", int(d.Seconds()))
 	case d < time.Hour:

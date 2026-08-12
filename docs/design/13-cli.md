@@ -490,31 +490,34 @@ So the grouping key is the message with the per-job parts substituted out, and t
 | `e.g.` | somewhere concrete to go and look |
 | the advice line | whether waiting would help |
 
-### 6.2 What was NOT moved, and on whose word
+### 6.2 What was not transferred
 
 ```
-Transferred:    63.6 GiB of 63.7 GiB planned  (92% of jobs done)
-Deduplicated:   0 B never moved
-Already there:  46.8 MiB across 102 jobs, the destination answered that it already had it; we took its word
-Relocated:      114 B across 57 jobs, the registry copied it internally — no bytes crossed the network
+Progress
+  Jobs:          2450 done, 43 outstanding, 0 failed (of 2493 planned)
+  In flight:     14 jobs across 1 worker
+  Blocked:       5 awaiting referenced content
+  Re-sent:       251 jobs; target reported content it did not hold
+  Transferred:   63.6 GiB of 63.7 GiB planned  (98%)
+  Not transferred:
+    Deduplicated        0 B        not queued; already at target when planned
+    Present at target   46.8 MiB   102 jobs; reported present, not re-checked
+    Mounted             114 B      57 jobs; copied within the target registry
+  Elapsed:       32h04m
+  Remaining:     ~3m  (current rate)
 ```
 
-Each reason gets its **own label**. They shared one — two adjacent lines both reading `Not moved:`, differing only in a clause at the far end — which reads as the same fact printed twice. They are not the same thing: `Relocated` is the registry moving content *for* us, `Already there` is the registry telling us it need not be moved, and only the first is something that happened.
+Three reasons a planned byte does not move, indented under one heading because they are three members of one set. They were three flat lines whose labels differed while their meaning had to be read off a trailing clause, which hid the structure.
 
-`Deduplicated` is a third thing again, and stays separate: it is the **plan-time** figure — blobs the planner dropped before creating a job at all. It reads `0 B` on a transfer whose every runtime skip was a claim, which is why the runtime skips needed lines of their own.
+| Reason | When | Evidence |
+|---|---|---|
+| `Deduplicated` | planning | a placement record; the job was never created |
+| `Present at target` | execution | the target's own answer to a `HEAD`, not re-checked |
+| `Mounted` | execution | the registry relocated it within itself |
 
-A bare `(unverified)` used to mark the untrusted lines. It named the property without saying what followed from it, so it is now a footnote that does:
+Each carries a short qualifier because the label alone does not convey it — `Deduplicated` in particular says nothing about *when*. The qualifier is a noun phrase and not a sentence: **the tool states what happened and leaves the reader to draw conclusions.** An earlier version explained at length that a `Present at target` saving rests on a claim rather than an action, which is true, belongs in this document, and does not belong on the terminal every time somebody checks progress.
 
-```
-102 jobs moved no bytes on somebody's word rather than on an action:
-  a record of an earlier transfer, or the destination's own answer to
-  "do you have this?". Both are usually right. Where one is not, the
-  manifest push says so and the content is re-sent — which is what the
-  Repaired line above counts.
-  See exactly which: transferctl transfers jobs 281614ab --state skipped
-```
-
-That last line is the answer to "show me what was not copied": the job listing filtered to `skipped` names every one, with its digest, its destination and its reason.
+`Re-sent` appears only when a repair has occurred. It is the one thing that makes the done count fall.
 
 **Failed and retrying are counted apart.** A job sitting out a backoff has not given up, and the two need opposite responses — one is "act", the other is "wait". A single total hides which is which, which is exactly how a stalled transfer comes to look like a working one.
 

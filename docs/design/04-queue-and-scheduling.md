@@ -381,3 +381,35 @@ Nothing is held in Coordinator memory that cannot be reconstructed from the data
 5. Resume loops.
 
 **No recovery scan, no journal replay, no rebuild.** The queue state *is* the `jobs` table; it was never anywhere else. A Coordinator that has been down for an hour starts up and continues, and workers that stayed alive throughout kept transferring the jobs they had already leased — bytes do not flow through the Coordinator, so its absence does not stop work already in flight.
+
+## 13. Scheduling: what is measured, and what is left
+
+Written against a real 63.7 GiB ORB moving over a 917 ms link through a corporate proxy, because every number below came from that run rather than from reasoning.
+
+### 13.1 What actually limits throughput
+
+**One stream is worth about 280 KiB/s on that path, and no amount of tuning changes it.** A TCP stream cannot exceed its window divided by the round trip; at 917 ms with the window a proxy typically allows, that is the arithmetic. The observed per-stream rate was 274 KiB/s. So aggregate throughput is *almost exactly* concurrency × 280 KiB/s, and **the only lever that matters is how many jobs are in flight**.
+
+That reframes everything. Buffer sizes, compression, chunk sizes — none of them move a number set by window ÷ RTT. Keeping the pipe full does.
+
+### 13.2 The global wave barrier is stronger than the invariant requires
+
+Invariant I1 is per manifest: *this* manifest may be pushed once every blob and child manifest *it* references is present. The implementation is a global barrier — wave N+1 opens only when wave N has drained entirely (§3.3) — which is a much stronger statement than the invariant makes.
+
+The cost is **not** bandwidth. Manifests are kilobytes; pushing them earlier moves no bytes sooner. The cost is:
+
+- **Nothing is visible at the destination until the very end.** A transfer 99% done delivers exactly nothing, because no tag has been written.
+- **One failed blob blocks everything.** 517 manifests whose content is fully present cannot be written because two unrelated blobs have not landed.
+- **A partial transfer has no durable output** beyond blobs that are only reusable through placement records.
+
+The fix is per-artifact readiness: a `job_dependencies` edge table written at plan time, and a manifest promoted from `blocked` to `pending` when none of its dependencies is outstanding. The wave column becomes advisory ordering rather than a gate. This is a change to the invariant everything else rests on, so it is written down here before it is written in code.
+
+### 13.3 Largest-first ordering conflicts with the mount, and the mount wins
+
+The dequeue orders by insertion, which is arbitrary with respect to size: a multi-gigabyte layer leased last runs alone while every other slot idles. Largest-first (LPT) is the textbook fix and was implemented, measured, and **reverted**.
+
+A bundle publishes each component twice — inside the bundle and under its own name — so one digest becomes two jobs of *identical size*. The planner emits them grouped by destination repository, which puts them far apart in id order, and that separation is load-bearing: the two land in different lease batches, the first writes a placement, and the second mounts inside the destination registry for zero bytes. Ordering by size makes equal-sized jobs adjacent, so both copies land in one batch and both stream from the vendor. Measured on the ORB fixture: **16 vendor GETs for 11 distinct blobs, and no mounts at all.**
+
+Makespan is worth single-digit percent at the tail. The mount is worth up to half the bytes of the entire transfer.
+
+To have both, the planner must rank the second site explicitly — a `site_rank` on the job, 0 for the copy that keeps the bundle resolvable and 1 for the copy published under the component's own name — so the dequeue can order by `site_rank, size DESC` and every rank-1 job runs after the placement it will mount from exists. That is strictly better than today, where the mount depends on batch timing rather than on an ordering the schema states.

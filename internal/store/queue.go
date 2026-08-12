@@ -186,6 +186,28 @@ const leaseColumns = `id, transfer_id, kind, digest, size_bytes, media_type,
 // looking broken. It is kept while the job waits out its backoff, because
 // there the reason it is waiting is exactly what a reader wants.
 
+// # Why the dequeue is NOT ordered largest-first
+//
+// Insertion order is arbitrary with respect to size, so a multi-gigabyte layer
+// leased last runs alone while every other slot idles. Largest-first (LPT) is
+// the textbook fix for that and was tried here; it is reverted, and the reason
+// is worth recording because the next person will have the same idea.
+//
+// A bundle publishes its components TWICE — once inside the bundle, once under
+// the component's own name — so one digest becomes two jobs of IDENTICAL size.
+// The planner emits them grouped by destination repository, which puts them far
+// apart in id order, which is exactly what makes the mount work: the two land in
+// different lease batches, the first writes a placement, and the second
+// relocates inside the destination registry for zero bytes. Sorting by size
+// makes equal-sized jobs adjacent, so both copies land in ONE batch and both
+// stream from the vendor. Measured: 16 vendor GETs for 11 distinct blobs, and
+// no mounts at all.
+//
+// Makespan is worth single-digit percent at the tail. The mount is worth up to
+// half the bytes of the whole transfer. Having both needs the planner to rank
+// the second site behind the first explicitly, so ordering can be by size
+// WITHIN a rank — see docs/design/04 §13.
+
 // leaseCandidatePredicate is the leasability test, shared by both dialects.
 //
 // The NOT EXISTS is concurrent duplicate suppression (docs/design/04 §5): if

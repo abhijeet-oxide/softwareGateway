@@ -836,7 +836,32 @@ func describeThroughput(w io.Writer, t *v1.Transfer, rates *rateTracker, watchin
 		return err
 	}
 
+	throughputNote(w, t)
 	return nil
+}
+
+// throughputNote explains a rate that looks like a collapse and is not.
+//
+// A manifest is about a kilobyte. When the in-flight work is manifests, the
+// cost of each one is a ROUND TRIP, not its size, so the rate is bounded by
+// latency × concurrency and lands in the low kilobytes per second on a link
+// where blobs moved at hundreds. Nothing has gone wrong, nothing is
+// misconfigured, and no amount of extra bandwidth would move it — but a reader
+// watching 577 KiB/s become 1.2 KiB/s has every reason to think otherwise, and
+// would go looking for a fault that is not there.
+func throughputNote(w io.Writer, t *v1.Transfer) {
+	kinds := map[string]bool{}
+	for _, k := range t.Waves {
+		if k.Running > 0 {
+			kinds[k.Kind] = true
+		}
+	}
+	if len(kinds) != 1 || !kinds["manifest"] {
+		return
+	}
+
+	fmt.Fprintln(w, "  Manifests are kilobytes, so this phase is bounded by round trips")
+	fmt.Fprintln(w, "  rather than bandwidth. A low rate here is expected, not a fault.")
 }
 
 // inFlight renders concurrency in the terms a reader is asking about.

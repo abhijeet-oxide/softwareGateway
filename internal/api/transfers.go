@@ -277,6 +277,7 @@ func transferDTO(t store.TransferSummary) v1.Transfer {
 			JobsFailed:         t.JobsFailed,
 			JobsBlocked:        t.JobsBlocked,
 			JobsRepaired:       t.JobsRepaired,
+			OutstandingBytes:   v1.Int64String(strconv.FormatInt(t.OutstandingBytes, 10)),
 			JobsOutstanding:    t.JobsOutstanding,
 			JobsInFlight:       t.JobsInFlight,
 			Workers:            t.Workers,

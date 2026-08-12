@@ -452,6 +452,10 @@ With nothing in flight, `SPEED` is `-`, and `ETA` says **why** rather than shrug
 
 The distinction between the last two is the actionable half. The average has not been discarded — `transfers describe` reports it under Throughput, labelled as what it is.
 
+**The estimate extrapolates the bytes actually left, not planned minus transferred.** That subtraction counts every byte that will never move: content the destination already had, blobs the registry relocated internally, work deduplicated away at plan time. Observed on a transfer 98% done with 43 manifest jobs left — about 233 KiB of real work — reporting a hundred megabytes remaining and an ETA of eleven hours. The arithmetic was right and the quantity was wrong. `TransferProgress.outstandingBytes` is the real figure: the size of every outstanding job, less what each has already sent.
+
+**A low rate during the manifest phase is expected, and `describe` says so.** A manifest is about a kilobyte, so the cost of pushing one is a round trip rather than its size, and the rate is bounded by latency × concurrency — low kilobytes per second on a link where blobs moved at hundreds. Nothing is misconfigured and no extra bandwidth would move it, but a reader watching 577 KiB/s become 1.2 KiB/s has every reason to think otherwise and would go looking for a fault that is not there.
+
 ### 6.1 `failures` — why, as opposed to which
 
 ```

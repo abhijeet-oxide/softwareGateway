@@ -53,6 +53,14 @@ There is no recovery subsystem, no repair job, and no reconciliation loop, becau
 
 On regaining leadership the reaper runs **immediately** rather than waiting for its tick, so leases orphaned during the outage are requeued at once.
 
+**Start order does not matter, and that is now asserted rather than assumed.** A worker started before the Coordinator exists polls until it appears; a Coordinator taken away under a running worker does not kill it. Three properties hold, one per row above, and `internal/worker` has a test for each:
+
+- The worker **does not exit** when the control plane is absent. A failed lease is a WARN and a five-second backoff, forever. Nothing in `Run` returns on it.
+- Liveness deliberately **does not check the Coordinator** — only readiness does. So Kubernetes marks the pod not-ready and stops sending it traffic it does not receive anyway, rather than restarting it. A control-plane blip that crash-looped the fleet would turn a routine rollout into an outage.
+- The worker **needs no restart** when the Coordinator returns. It leases on its next tick, and anything whose lease expired meanwhile has already been requeued by the reaper.
+
+Jobs in flight are unaffected throughout, because bytes do not pass through the Coordinator: only progress reports and completions do, and both retry.
+
 ### 2.3 Registry failures
 
 Classified once at the boundary ([06](06-registry-abstraction.md) §7); retry policy keys off the class ([10](10-state-machines.md) §6).

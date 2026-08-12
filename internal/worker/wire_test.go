@@ -6,9 +6,11 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -104,9 +106,34 @@ type wireHarness struct {
 	packages *store.Packages
 	loop     *worker.Loop
 
+	gate *coordinatorGate
+
 	productID int64
 	sourceID  int64
 	targetID  int64
+}
+
+// coordinatorGate makes the control plane come and go.
+//
+// A worker's relationship with the Coordinator is a POLLING one, and every
+// deployment gets the order wrong at least once: the worker starts first, or
+// the Coordinator is rolled while workers are up. Neither may need an operator.
+// This is what lets a test say so rather than the comments claiming it.
+//
+// 502 rather than a closed listener because the two are the same thing to the
+// client — a non-nil error from the call — and a socket that can be reopened on
+// the same address mid-test is a great deal of machinery for no extra coverage.
+type coordinatorGate struct {
+	up    atomic.Bool
+	inner http.Handler
+}
+
+func (g *coordinatorGate) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	if !g.up.Load() {
+		http.Error(w, "coordinator is not up yet", http.StatusBadGateway)
+		return
+	}
+	g.inner.ServeHTTP(w, r)
 }
 
 func newWireHarness(t *testing.T, src, dst *fakeregistry.Registry) *wireHarness {
@@ -136,13 +163,17 @@ func newWireHarness(t *testing.T, src, dst *fakeregistry.Registry) *wireHarness 
 	h.sourceID = h.repo("source", "main", src.Host(), sourcePath)
 	h.targetID = h.repo("target", "lab", dst.Host(), targetBase)
 
-	// A real Coordinator router, served over TCP.
-	server := httptest.NewServer(api.NewServer(api.Deps{
+	// A real Coordinator router, served over TCP — behind a gate, so a test can
+	// take the control plane away and give it back.
+	h.gate = &coordinatorGate{inner: api.NewServer(api.Deps{
 		Logger:   log,
 		Store:    st,
 		Packages: packages,
 		Queue:    queue.New(packages, 0, log),
-	}).Handler())
+	}).Handler()}
+	h.gate.up.Store(true)
+
+	server := httptest.NewServer(h.gate)
 	t.Cleanup(server.Close)
 
 	// A real product configuration file, read by the worker exactly as it
@@ -348,4 +379,98 @@ func (h *wireHarness) jobErrors(ctx context.Context, transferID string) string {
 		return "none"
 	}
 	return out
+}
+
+// A worker started before the Coordinator, and a Coordinator restarted under a
+// running worker. Neither may need an operator, and the deployment gets the
+// order wrong at least once by definition.
+//
+// What must hold, and each of these has been assumed rather than asserted:
+//
+//   - the worker does not exit when the control plane is absent. It polls.
+//   - it does not need restarting when the control plane returns.
+//   - the work it could not lease is still there, and it finishes.
+func TestAWorkerOutlivesACoordinatorThatIsNotThereYet(t *testing.T) {
+	src := fakeregistry.New()
+	t.Cleanup(src.Close)
+	dst := fakeregistry.New()
+	t.Cleanup(dst.Close)
+
+	h := newWireHarness(t, src, dst)
+	pkg := h.seedPackage("v2.14.0")
+	h.plan(pkg, "wire-late-coordinator")
+
+	// The Coordinator is not up. The worker starts anyway.
+	h.gate.up.Store(false)
+
+	ctx, cancel := context.WithTimeout(t.Context(), 60*time.Second)
+	defer cancel()
+
+	done := make(chan error, 1)
+	go func() { done <- h.loop.Run(ctx) }()
+
+	// Long enough for several failed lease attempts. The worker must still be
+	// running: a control-plane blip that killed the fleet would turn a routine
+	// restart into an outage.
+	select {
+	case err := <-done:
+		t.Fatalf("the worker exited while the Coordinator was down: %v", err)
+	case <-time.After(2 * time.Second):
+	}
+	if state := h.transferState(ctx); state == "succeeded" {
+		t.Fatal("the transfer finished with the Coordinator down; the gate is not gating")
+	}
+
+	// The control plane arrives. Nothing restarts the worker.
+	h.gate.up.Store(true)
+
+	h.waitForTransfer(ctx, "wire-late-coordinator", "succeeded")
+	cancel()
+	<-done
+}
+
+// The other order: the Coordinator goes away under a worker that is running,
+// and comes back. Jobs already in flight do not pass through the Coordinator,
+// so they carry on; what is interrupted is only the leasing.
+func TestAWorkerSurvivesACoordinatorRestartMidTransfer(t *testing.T) {
+	src := fakeregistry.New()
+	t.Cleanup(src.Close)
+	dst := fakeregistry.New()
+	t.Cleanup(dst.Close)
+
+	h := newWireHarness(t, src, dst)
+	pkg := h.seedPackage("v2.14.0")
+	h.plan(pkg, "wire-coordinator-restart")
+
+	ctx, cancel := context.WithTimeout(t.Context(), 60*time.Second)
+	defer cancel()
+
+	done := make(chan error, 1)
+	go func() { done <- h.loop.Run(ctx) }()
+
+	// Take it away mid-flight, leave it away long enough for leases to be
+	// refused and heartbeats to fail, then give it back.
+	time.Sleep(300 * time.Millisecond)
+	h.gate.up.Store(false)
+
+	select {
+	case err := <-done:
+		t.Fatalf("the worker exited when the Coordinator went away: %v", err)
+	case <-time.After(2 * time.Second):
+	}
+
+	h.gate.up.Store(true)
+
+	h.waitForTransfer(ctx, "wire-coordinator-restart", "succeeded")
+	cancel()
+	<-done
+}
+
+func (h *wireHarness) transferState(ctx context.Context) string {
+	h.t.Helper()
+
+	var state string
+	_ = h.st.DB().QueryRowContext(ctx,
+		`SELECT state FROM transfers LIMIT 1`).Scan(&state)
+	return state
 }

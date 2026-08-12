@@ -1253,7 +1253,16 @@ type TransferSummary struct {
 	// content it had reported. This is the ONLY thing that makes a done count
 	// go DOWN, and a reader watching one drop with no explanation on the page
 	// concludes the tool is broken — which is exactly what happened.
-	JobsRepaired     int
+	JobsRepaired int
+	// OutstandingBytes is what is actually LEFT to move: the size of every job
+	// still to run, less what each has already sent.
+	//
+	// Not planned minus transferred. That difference includes every byte that
+	// will never move — content the destination already had, blobs relocated
+	// internally, work deduplicated away — so on a transfer that skipped a
+	// hundred megabytes it reports a hundred megabytes of phantom work, and any
+	// estimate built on it is wrong by exactly that much.
+	OutstandingBytes int64
 	JobsOutstanding  int
 	BytesTransferred int64
 	// JobsInFlight is how many are leased RIGHT NOW, and Workers is how many
@@ -1304,6 +1313,9 @@ func (p *Packages) transferSelect() string {
 	                  AND j.state = 'blocked'), 0),
 	       COALESCE((SELECT count(*) FROM jobs j WHERE j.transfer_id = t.id
 	                  AND j.repair_level > 0), 0),
+	       COALESCE((SELECT SUM(j.size_bytes - j.bytes_transferred) FROM jobs j
+	                  WHERE j.transfer_id = t.id
+	                    AND j.state IN ('pending','blocked','leased')), 0),
 	       COALESCE(t.failure_reason, ''), t.created_at, COALESCE(t.started_at, ''),
 	       COALESCE(t.completed_at, '')
 	  FROM transfers t
@@ -1319,7 +1331,7 @@ func scanTransfer(row interface{ Scan(...any) error }) (TransferSummary, error) 
 		&t.DisplayTag, &t.Source, &t.Target, &t.State, &t.Priority, &t.CurrentWave, &t.MaxWave,
 		&t.PlannedJobs, &t.PlannedBytes, &t.DedupeSkippedBytes,
 		&t.JobsDone, &t.JobsFailed, &t.JobsOutstanding, &t.BytesTransferred,
-		&t.JobsInFlight, &t.Workers, &t.JobsWaiting, &t.JobsBlocked, &t.JobsRepaired,
+		&t.JobsInFlight, &t.Workers, &t.JobsWaiting, &t.JobsBlocked, &t.JobsRepaired, &t.OutstandingBytes,
 		&t.FailureReason, &t.CreatedAt, &t.StartedAt, &t.CompletedAt)
 	return t, err
 }

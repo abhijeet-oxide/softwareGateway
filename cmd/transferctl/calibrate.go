@@ -100,7 +100,8 @@ func newCalibrateCommand() *cobra.Command {
 			// silent for minutes by design, and a terminal that has printed
 			// nothing for four minutes is indistinguishable from one that has
 			// hung.
-			fmt.Fprintf(os.Stderr, "Measuring — about %s.\n\n", estimated)
+			fmt.Fprintf(os.Stderr, "Measuring — about %s, longer if the link is slow.\n\n",
+				estimated)
 
 			resp, err := client.Calibrate(cmd.Context(), args[0], req)
 			if err != nil {

@@ -175,7 +175,18 @@ func compareRoutes(
 		route.DirectDetail = err.Error()
 		return cfg, route
 	}
-	if err := client.Ping(ctx); err != nil {
+
+	// A SHORT deadline of its own. Where the proxy is mandatory the direct
+	// probe does not fail, it hangs — a TLS handshake to a host the network
+	// will not route to sits there until the transport's own timeout, which is
+	// thirty seconds, twice. One real run spent most of three minutes on it
+	// against an estimate of seventy seconds. A route that cannot complete a
+	// handshake in a few seconds is not one this would recommend anyway, so
+	// waiting longer buys nothing.
+	directCtx, cancel := context.WithTimeout(ctx, directProbeTimeout)
+	defer cancel()
+
+	if err := client.Ping(directCtx); err != nil {
 		// The proxy is the only way out. That is the answer, and it is worth
 		// as much as a throughput number: it stops somebody from setting
 		// proxy.direct on the strength of a benchmark and losing connectivity.
@@ -195,6 +206,9 @@ func compareRoutes(
 	}
 	return cfg, route
 }
+
+// directProbeTimeout bounds the "would bypassing the proxy work" question.
+const directProbeTimeout = 10 * time.Second
 
 // routeCompareLevel is the concurrency the head-to-head runs at.
 //

@@ -356,6 +356,14 @@ Tag order matters for the same reason. Registries serve tags lexically and guara
 
 And when nothing clears the 256 KiB the probe would like, it measures the largest blob there is and **says the sample was small**, rather than refusing. A number with a caveat beats a refusal citing a threshold the reader cannot see. Every report states how many blobs were sampled and how large the largest was, so a throughput measured over signature blobs cannot be mistaken for one measured over layers.
 
+**Setup is not throughput**
+
+Each level builds a fresh client, deliberately — a level must not inherit the previous one's warm sockets. That means its first request pays a proxy `CONNECT`, a TLS handshake, a token exchange and a blob resolve before a byte of payload moves. Against a registry 900 ms away through a corporate proxy that is five round trips, more than the whole default budget, and every level's first request was still in flight when the level ended: a complete sweep of zeroes, reported without comment.
+
+So the connections and the token are established **before the clock starts** — one `HEAD` per stream on the read side, one upload session per stream on the write side — and the per-level budget follows the link rather than a constant: ten round trips, capped at three times what was asked for, since a client is waiting on a timeout derived from that number. A level that still completes nothing says so and names `--budget`, because a row of dashes with no explanation reads as a broken probe rather than as a window too short for the path.
+
+The direct-route probe gets a short deadline of its own for the same reason. Where the proxy is mandatory it does not fail, it hangs — a handshake to a host the network will not route to sits until the transport's own thirty-second timeout, twice. A route that cannot handshake in ten seconds is not one this would recommend.
+
 **Which repository is measured**
 
 One, out of however many a product spans, so the choice decides whether the numbers mean anything. `transferctl` picks the repository holding the largest discovered package and shows that choice for confirmation ([13](13-cli.md) §11); the Coordinator's own fallback, for API callers and for products nothing has been discovered from, walks the candidate repositories until one yields a blob of at least 256 KiB rather than judging a source by whichever repository sorts first. Within a repository it opens the newest-looking tags first: registries serve tags lexically, so "the first tag" reliably lands on the oldest and smallest.

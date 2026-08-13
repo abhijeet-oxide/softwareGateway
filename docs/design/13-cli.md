@@ -490,6 +490,8 @@ So the grouping key is the message with the per-job parts substituted out, and t
 | `e.g.` | somewhere concrete to go and look |
 | the advice line | whether waiting would help |
 
+The advice reads the class, with one exception, because one class means two different things. An `auth` failure on a blob or a manifest push is a credential the destination will not accept, and "check the target's secret" is the right sentence. An `auth` failure on `apply tag` is usually not: the same credential pushed every blob and every manifest beneath that tag seconds earlier, and was refused only on the tag path, which some registries govern separately ([05](05-transfer-engine.md) §4.7). Sending that reader to the secret sends them to the one place the answer is not, so the tag case says so instead.
+
 ### 6.2 What was not transferred
 
 ```

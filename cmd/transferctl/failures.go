@@ -114,6 +114,16 @@ func renderFailure(w io.Writer, g v1.FailureGroup) {
 func advice(g v1.FailureGroup) string {
 	switch g.Class {
 	case "auth":
+		// A credential that pushed the content and is refused only on the tag
+		// is not a wrong credential, and saying "check the secret" sends the
+		// reader to the one place the answer is not. Applying a tag is a write
+		// to a path the earlier writes never touched, and on registries that
+		// separate the two — Artifactory wants Delete on the permission target
+		// to move an existing tag — it is refused separately.
+		if strings.Contains(g.Message, "apply tag") {
+			return "Not retryable; the credential may write content but not this tag. " +
+				"Check the target's permission on the tag path."
+		}
 		return "Not retryable; credential refused. Check the target's secret, then retry."
 	case "unsupported":
 		return "Not retryable; the registry rejects this content."

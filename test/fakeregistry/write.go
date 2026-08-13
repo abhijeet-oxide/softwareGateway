@@ -306,6 +306,17 @@ func (r *Registry) putBlob(repoPath, dgst string, content []byte) {
 func (r *Registry) putManifest(
 	w http.ResponseWriter, repoPath, ref string, raw []byte, mediaType string,
 ) {
+	if ref != "" && !strings.HasPrefix(ref, "sha256:") {
+		r.countTagWrite(repoPath, ref)
+		if r.denyTagOverwrite && r.tagExists(repoPath, ref) {
+			// Verbatim in shape from Artifactory: an overwrite the credential
+			// may not perform is reported as though nobody were logged in.
+			writeError(w, http.StatusUnauthorized, "UNAUTHORIZED",
+				"authentication required")
+			return
+		}
+	}
+
 	if missing := r.missingReferences(repoPath, raw); missing != "" {
 		if r.globalBlobIndex {
 			// The same registry's spelling of the same fact: a missing blob
@@ -351,6 +362,39 @@ func (r *Registry) putManifest(
 // treats it as an error fails against every registry that answers this way.
 func WithDeclinedMounts() Option {
 	return func(r *Registry) { r.declineMounts = true }
+}
+
+// WithTagOverwriteDenied refuses any PUT that would move a tag that already
+// exists, answering 401 as Artifactory does when the credential may deploy but
+// not overwrite.
+//
+// This is a real deployment, not a hypothetical: a permission target granting
+// Deploy without Delete lets a transfer create every tag it has never created
+// and refuses every tag it has, so the failure appears only on the SECOND
+// transfer of a release — the run that should have been the cheapest.
+func WithTagOverwriteDenied() Option {
+	return func(r *Registry) { r.denyTagOverwrite = true }
+}
+
+func (r *Registry) tagExists(repoPath, tag string) bool {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+
+	rp, ok := r.repos[repoPath]
+	if !ok {
+		return false
+	}
+	_, ok = rp.tags[tag]
+	return ok
+}
+
+func (r *Registry) countTagWrite(repoPath, tag string) {
+	r.ledgerMu.Lock()
+	defer r.ledgerMu.Unlock()
+	if r.tagLedger == nil {
+		r.tagLedger = map[string]int{}
+	}
+	r.tagLedger[repoPath+"|"+tag]++
 }
 
 func (r *Registry) countMount(repoPath, digest string) {

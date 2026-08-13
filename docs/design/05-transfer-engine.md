@@ -158,6 +158,23 @@ So repository comparison in the layout is case-insensitive, and only there. **Re
 
 **Tags are untouched.** The grammar for a tag permits uppercase, so lowercasing one would publish a reference the vendor never did.
 
+#### A tag already naming the content is not written again
+
+Every other step asks first. A blob present at the destination is skipped, a manifest already stored under its digest is skipped, a blob held elsewhere on the destination registry is relocated rather than sent. Tagging did none of that: it issued `PUT /v2/<repo>/manifests/<tag>` on every attempt, including for tags it had applied itself on the previous run.
+
+While it works this is invisible, because rewriting a tag to the digest it already holds leaves the registry exactly as it was. It stops being invisible when the destination declines. That PUT over an existing tag is an **overwrite**, and permission to create is not permission to overwrite — Artifactory wants Delete on the permission target for it, and answers `401 unauthorized` without one. The reported failure is identical in shape to a bad credential:
+
+```
+tag destination: apply tag "1.25.212": tag sha256:438001f263ab as 1.25.212
+  <host>/<repo>: HTTP 401: unauthorized: authentication required
+```
+
+…on a credential that had just pushed every blob and every manifest beneath that tag. So the transfer that should be the cheapest — re-running one over content already published — was the only one that could fail, and it failed as `auth`, which is terminal and does not retry.
+
+The engine now resolves the tag first and writes only if it does not already point at this digest. Comparing digests is what makes the shortcut safe: the tag either resolves to these exact bytes or it does not, and nothing weaker is being trusted. A resolve that fails for **any** reason falls through to the write, so a destination that will not answer `HEAD` is no worse off than before.
+
+This narrows the failure rather than removing it: a tag that genuinely has to move — one pointing at different content — is still an overwrite, and still needs the permission. What it removes is the whole class of refusals for tags that needed no write at all. `transferctl transfers failures` says which of the two an operator is looking at, because "check the target's secret" is the wrong advice for a credential that was only ever refused on the tag path ([13](13-cli.md) §6.1).
+
 #### The mount hint looks much further back than the placement skip
 
 Both read `blob_placements`, and they need different degrees of trust because being wrong costs different things.

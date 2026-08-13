@@ -452,11 +452,48 @@ func (e *Engine) applyTags(ctx context.Context, job Job, dgst registry.Digest) e
 		if tag == "" {
 			continue
 		}
+		if e.tagIsCurrent(ctx, job, dgst, tag) {
+			continue
+		}
 		if err := job.Target.Tag(ctx, dgst, tag); err != nil {
 			return fmt.Errorf("apply tag %q: %w", tag, err)
 		}
 	}
 	return nil
+}
+
+// tagIsCurrent reports whether the destination already names this exact
+// content by this exact tag.
+//
+// # Why a tag that is already right is not written again
+//
+// It is the same check the blob and manifest paths make, one level up: the
+// destination already holds what this job would produce, so the write is not
+// an optimization to skip but a change with no difference. Comparing DIGESTS
+// makes that airtight — the tag either resolves to these bytes or it does not,
+// and nothing weaker than the digest is being trusted.
+//
+// It also stops the tool from doing something registries are entitled to
+// refuse. `PUT /v2/<repo>/manifests/<tag>` over an existing tag is an
+// OVERWRITE, and permission to create is not permission to overwrite:
+// Artifactory requires Delete on the permission target and answers 401 without
+// it. Re-running a transfer over content already published therefore failed on
+// every tag it had already applied — the one case where a re-run should be
+// doing the least work. Blob and manifest pushes never hit it because both are
+// already skipped when the content is present; tagging was the only step that
+// wrote unconditionally.
+//
+// A resolve that fails for ANY reason falls through to the write. The shortcut
+// may only skip work on positive proof, never on an inconclusive answer, so a
+// destination that will not answer HEAD is no worse off than before.
+func (e *Engine) tagIsCurrent(
+	ctx context.Context, job Job, dgst registry.Digest, tag string,
+) bool {
+	desc, err := job.Target.ResolveTag(ctx, tag)
+	if err != nil {
+		return false
+	}
+	return desc.Digest == dgst
 }
 
 // manifestBytes fetches the manifest to push and checks it hashes as claimed.

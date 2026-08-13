@@ -54,6 +54,10 @@ type Registry struct {
 	// globalBlobIndex reproduces Artifactory: HEAD answers about the whole
 	// registry, manifest push links per path. See WithArtifactoryQuirks.
 	globalBlobIndex bool
+	// denyTagOverwrite refuses a PUT that would move an EXISTING tag, the way
+	// a registry whose credential may create but not overwrite does. See
+	// WithTagOverwriteDenied.
+	denyTagOverwrite bool
 
 	// Counters, for asserting on behaviour rather than just outcomes.
 	TagListCalls  atomic.Int64
@@ -90,6 +94,10 @@ type Registry struct {
 	ledgerMu     sync.Mutex
 	uploadLedger map[string]int
 	mountLedger  map[string]int
+	// tagLedger records every ATTEMPT to write a tag, refused ones included.
+	// Attempts rather than successes because the question it answers is
+	// whether the tool asked at all.
+	tagLedger map[string]int
 }
 
 // BlobUploads is how many times a blob was STREAMED into a repository.
@@ -109,6 +117,19 @@ func (r *Registry) BlobMounts(repoPath, digest string) int {
 	r.ledgerMu.Lock()
 	defer r.ledgerMu.Unlock()
 	return r.mountLedger[repoPath+"|"+digest]
+}
+
+// TagWrites is how many times a tag was PUT into a repository, counting
+// refusals.
+//
+// Zero is the interesting value: it says the tool looked at a tag already
+// naming the right content and left it alone, rather than rewriting it. No
+// other measure can show that, because a rewrite that succeeds leaves the
+// registry in exactly the state it was already in.
+func (r *Registry) TagWrites(repoPath, tag string) int {
+	r.ledgerMu.Lock()
+	defer r.ledgerMu.Unlock()
+	return r.tagLedger[repoPath+"|"+tag]
 }
 
 // Overwrites lists every place a blob arrived more than once.

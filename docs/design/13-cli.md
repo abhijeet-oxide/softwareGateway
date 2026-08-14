@@ -399,15 +399,22 @@ They look like five tools and they are one, because all of them are *walk two bu
 
 #### What is aligned, and by what
 
-Components are aligned by the repository half of their `ref.name` — the vendor's name for the component, which survives copying *and* survives a new release. The **tag is compared, not matched on**, because in a version-to-version comparison the tag is precisely what changed. An artifact the vendor named nothing is aligned by digest, which can only match itself; that is the honest answer for content whose only identity is its bytes.
+Components are aligned by the repository half of their `ref.name` — the vendor's name for the component, which survives copying *and* survives a new release — together with **what the artifact is**. The **tag is compared, not matched on**, because in a version-to-version comparison the tag is precisely what changed. An artifact the vendor named nothing is aligned by digest, which can only match itself; that is the honest answer for content whose only identity is its bytes.
+
+The type is in the key because a repository name is not always an identity. A NEAR wrapper names *both* its children after the bundle — `orbs/cfx-5000-k8s:orb_25.7…` and `orbs/cfx-5000-k8s:signature_orb_25.7…` — and keyed by repository alone they collided, one won, and the release's **signature disappeared from both sides** of every comparison that walked a wrapper. The type separates them and, unlike the tag, is stable from release to release.
+
+**Both ends are walked from a reference they both hold.** Resolving each end independently from the same candidate list lets them walk *different artifacts*: a destination missing the vendor's wrapper tag falls through to the payload while the source walks the wrapper, and everything downstream — a root "content difference", a signature "missing" from a destination nobody looked at it on — is an artefact of comparing two different things. The shared reference wins even where one side could offer a more complete one, and what one side has and the other does not is reported as a finding on the root instead.
 
 | Check | Catches |
 |---|---|
 | Digest, per component | a mutated or stale copy |
 | Tag, resolved on each side | the failure this system shipped with: everything pushed, the component's own tag never applied, every digest agreeing |
-| The component's own repository | a bundle that is byte-perfect while nothing in it is pullable as itself |
+| The component's own repository, **at a destination** | a bundle that is byte-perfect while nothing in it is pullable as itself |
+| Which root references each side holds | a release that is not addressable the same way in both places |
 | **Files inside the layers** | *which file changed* — see below |
 | Tags in the bundle's own repository | content nobody in this comparison put there |
+
+The third row is asked **only of an end this system wrote**. Publishing each component under its own name is something a *transfer* does at a destination (§ `internal/transfer/layout.go`); it is not required by OCI and no vendor has agreed to it. NEAR keeps its components inside the orb repository and tags them `docker_<digest>`, so the `cfx-5000-product/admin` in a NEAR component's `ref.name` is the upstream coordinate it was built from, not a path NEAR serves. Asking a vendor's registry for it returns 404 for every component of every orb — which is how a byte-perfect transfer once reported 253 differences, each reading `not published as cfx-5000-product/… on the first side`.
 
 **A partial transfer does not abort the walk.** An index naming children the registry will not serve is exactly what a transfer that stopped part-way leaves behind. `oci.WalkPartial` records each unreachable child *from its referencing descriptor* — so it keeps the name its parent gave it and still aligns against its counterpart — which is what turns "something is missing" into "`cfx-5000-product/lms` is missing", and what stops the first missing component costing the reader the other nineteen findings.
 
@@ -459,6 +466,8 @@ Four properties worth stating, each of which was a decision:
 #### One deliberate limit
 
 Extra content is reported only for the bundle's **own** repository — the orb-specific folder — where the question is well defined: an ORB gets a repository to itself, so anything else in it is genuinely unexplained. It is not asked of a component's repository, which legitimately holds every other version of that component and would report each previous release as a discrepancy.
+
+**And "extra" is judged by content, not by name.** This is a listing of the repository, not a reading of the manifest, and answering it by tag name alone was wrong wherever a vendor tags its components *inside* the bundle's repository. NEAR does exactly that — `docker_<digest>`, `helmoci_<digest>`, one per component — so a correct orb reported hundreds of "unexplained" tags, every one of them naming content the walk had just matched. They were absent from the inventory only because a component's tag comes from its `ref.name` (`2507.2131.0`), a different string for the same manifest. A tag is therefore checked against the content the bundle accounts for twice: by the digest its name embeds, which is free, and then — bounded — by what it actually resolves to, which is the only answer that does not depend on a vendor's naming convention.
 
 ## 6. Progress
 

@@ -92,6 +92,10 @@ func (c compareImpl) side(
 		spec.Label = target.Name
 		spec.BasePath = target.Repository
 		spec.Repository = transfer.DestinationPath(target.Repository, pkg.SourceRepository)
+		// A TARGET is a place this system wrote, so it is the one end that owes
+		// a component under the component's own name. A source owes nothing of
+		// the kind — see compare.SideSpec.PublishesComponentsByName.
+		spec.PublishesComponentsByName = true
 		return spec, c.factory(p.Metadata.Name, target.Name, target.Registry,
 			string(target.Type), string(product.RoleTarget)), nil
 	}
@@ -116,10 +120,22 @@ func (c compareImpl) side(
 // consumer happens to pull. The payload tag is the fallback, and it is a real
 // state rather than a failure — a destination holding only the payload is
 // exactly what a transfer that stopped early leaves behind.
+//
+// BOTH SPELLINGS OF EACH ROOT, tag and digest. A missing TAG and a missing
+// MANIFEST are different failures with different fixes, and a list carrying
+// only the wrapper's tag could not tell them apart: a destination holding the
+// wrapper untagged fell all the way through to the payload, so the comparison
+// walked the wrapper on one side and the payload on the other and called the
+// resulting digest mismatch a content difference. With the digest in the list
+// both sides walk the wrapper, and the missing tag is reported as the missing
+// tag it is.
 func referencesFor(pkg store.PackageRow) []string {
 	var refs []string
 	if pkg.TransferRootTag != "" {
 		refs = append(refs, pkg.TransferRootTag)
+	}
+	if pkg.TransferRootDigest != "" {
+		refs = append(refs, pkg.TransferRootDigest)
 	}
 	if pkg.Tag != "" {
 		refs = append(refs, pkg.Tag)

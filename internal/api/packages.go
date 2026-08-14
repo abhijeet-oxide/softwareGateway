@@ -713,8 +713,8 @@ func (s *Server) handleComparePackage(w http.ResponseWriter, r *http.Request) {
 
 	out := v1.CompareResponse{
 		Product:    productName,
-		A:          compareEndDTO(report.A),
-		B:          compareEndDTO(report.B),
+		A:          compareEndDTO(report.A, report.ReferenceA()),
+		B:          compareEndDTO(report.B, report.ReferenceB()),
 		Rows:       make([]v1.CompareRow, 0, len(report.Rows)),
 		Same:       report.Same,
 		Changed:    report.Changed,
@@ -740,8 +740,15 @@ func (s *Server) handleComparePackage(w http.ResponseWriter, r *http.Request) {
 	WriteJSON(w, r, http.StatusOK, out)
 }
 
-func compareEndDTO(s compare.SideSpec) v1.CompareEnd {
-	return v1.CompareEnd{Label: s.Label, Reference: s.String()}
+// compareEndDTO renders one end, named by WHAT IT WALKED.
+//
+// The reference is passed in rather than taken from the spec because the spec
+// holds candidates: it says what was asked for, and the report says what
+// answered. Rendering the candidate put `…:signed_orb_25.7_mp2604_2131` in the
+// header of a comparison whose second side had been walked from a digest,
+// which is the one thing a reader needs to know and the one thing it hid.
+func compareEndDTO(s compare.SideSpec, reference string) v1.CompareEnd {
+	return v1.CompareEnd{Label: s.Label, Reference: reference}
 }
 
 // compareSideDTO renders one end's account of a component, or nothing when that

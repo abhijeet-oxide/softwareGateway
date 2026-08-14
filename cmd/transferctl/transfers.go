@@ -304,23 +304,26 @@ func renderTransferList(
 
 		tw := newTabWriter(w)
 		fmt.Fprintln(tw,
-			"ID\tPRODUCT\tTAG\tSTATE\tDONE\tJOBS\tFAILED\tCOPIED\tSPEED\tRUNNING\tELAPSED\tETA\tSAVED")
+			"ID\tPRODUCT\tTAG\tFROM\tTO\tSTATE\tDONE\tJOBS\tFAILED\tCOPIED\tSAVED\t"+
+				"SPEED\tRUNNING\tELAPSED\tETA")
 		for i := range resp.Transfers {
 			t := &resp.Transfers[i]
-			fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%.0f%%\t%s\t%s\t%s\t%s\t%d\t%s\t%s\t%s\n",
+			fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%s\t%.0f%%\t%s\t%s\t%s\t%s\t%s\t%d\t%s\t%s\n",
 				shortID(t.ID),
 				t.Product,
 				transferTag(t),
+				endpointName(t.SourceName, t.Source),
+				endpointName(t.TargetName, t.Target),
 				strings.ToLower(string(t.State)),
 				percentComplete(t.Progress),
 				jobProgress(t.Progress),
 				failedJobs(t.Progress),
 				bytesProgress(t.Progress),
+				savedBytes(t.Progress),
 				speedOf(t, rates.rateFor(t.ID)),
 				t.Progress.JobsInFlight,
 				elapsedOf(t),
 				etaOf(t, rates.rateFor(t.ID)),
-				humanBytes(t.Progress.DedupeSkippedBytes),
 			)
 		}
 		if err := tw.Flush(); err != nil {
@@ -329,6 +332,36 @@ func renderTransferList(
 
 		return nil
 	}(w)
+}
+
+// endpointName is where a transfer reads from, or writes to, in one column.
+//
+// The configured name is what an operator typed into --from or --to, so it is
+// the spelling they can act on: it goes back into another command unchanged. The
+// resolved host and path is the fallback, and it is a fallback rather than the
+// first choice because it is a hundred characters wide and mostly identical
+// down the page — every row of one product shares a registry.
+func endpointName(name, resolved string) string {
+	if name != "" {
+		return name
+	}
+	if resolved == "" {
+		return "-"
+	}
+	return resolved
+}
+
+// savedBytes is what the transfer did not have to move.
+//
+// The whole saving, not the part known at planning time. Reading only
+// DedupeSkippedBytes reported `0 B` for a transfer that skipped 32 GiB, and it
+// did so in exactly the case the column exists for: on a fresh database nothing
+// is deduplicated during planning, so every byte saved is saved by a worker.
+func savedBytes(p v1.TransferProgress) string {
+	if int64Of(p.SavedBytes) == 0 {
+		return "-"
+	}
+	return humanBytes(p.SavedBytes)
 }
 
 // failedJobs is the column that was missing.
@@ -577,13 +610,18 @@ func renderWaves(w io.Writer, waves []v1.TransferWave) error {
 // noun phrase, not a sentence: the tool states what happened and leaves the
 // reader to draw conclusions.
 func renderNotTransferred(w io.Writer, p v1.TransferProgress) {
-	type row struct{ label, amount, note string }
-	rows := []row{{
-		label:  "Deduplicated",
-		amount: humanBytes(p.DedupeSkippedBytes),
-		note:   "not queued; already at target when planned",
-	}}
+	type row struct {
+		label, amount, note string
+	}
+	var rows []row
 
+	if int64Of(p.DedupeSkippedBytes) > 0 {
+		rows = append(rows, row{
+			label:  "Deduplicated",
+			amount: humanBytes(p.DedupeSkippedBytes),
+			note:   "not queued; already at target when planned",
+		})
+	}
 	for _, k := range p.Skips {
 		switch k.Reason {
 		case "mounted":
@@ -602,8 +640,6 @@ func renderNotTransferred(w io.Writer, p v1.TransferProgress) {
 			})
 		}
 	}
-
-	fmt.Fprintln(w, "  Not transferred:")
 
 	tw := newTabWriter(w)
 	for _, r := range rows {
@@ -654,6 +690,22 @@ func bytesOfWave(k v1.TransferWave) string {
 	return humanBytes(k.TransferredBytes) + "/" + humanBytes(k.PlannedBytes)
 }
 
+// describeSide names one end of a transfer both ways.
+//
+// On a single transfer there is room for both, and both are wanted: the
+// configured name is what goes back into a command, the host and path is what
+// goes into a registry browser.
+func describeSide(name, resolved string) string {
+	switch {
+	case name == "":
+		return resolved
+	case resolved == "":
+		return name
+	default:
+		return name + "  " + resolved
+	}
+}
+
 func settled(s v1.TransferState) bool {
 	switch s {
 	case v1.TransferSucceeded, v1.TransferFailed, v1.TransferCancelled:
@@ -667,9 +719,13 @@ func describeTransfer(w io.Writer, t *v1.Transfer, rates *rateTracker, watching 
 	tw := newTabWriter(w)
 	fmt.Fprintf(tw, "ID:\t%s\n", t.ID)
 	fmt.Fprintf(tw, "Product:\t%s\n", t.Product)
-	fmt.Fprintf(tw, "Package:\t%s\n", t.Tag)
-	fmt.Fprintf(tw, "Source:\t%s\n", t.Source)
-	fmt.Fprintf(tw, "Target:\t%s\n", t.Target)
+	// The vendor's shortened spelling, the same one the listing shows. `describe`
+	// printed the stored tag — `orb_25.7_mp2604_2131` where the listing said
+	// `25.7_mp2604_2131` — so the two pages named the same package differently
+	// and the reader had to work out that they agreed.
+	fmt.Fprintf(tw, "Package:\t%s\n", transferTag(t))
+	fmt.Fprintf(tw, "Source:\t%s\n", describeSide(t.SourceName, t.Source))
+	fmt.Fprintf(tw, "Target:\t%s\n", describeSide(t.TargetName, t.Target))
 	fmt.Fprintf(tw, "State:\t%s\n", strings.ToLower(string(t.State)))
 	fmt.Fprintf(tw, "Priority:\t%d\n", t.Priority)
 	// The WAVES table below is the honest account; this line is a one-glance
@@ -708,6 +764,10 @@ func describeTransfer(w io.Writer, t *v1.Transfer, rates *rateTracker, watching 
 	}
 	fmt.Fprintf(pw, "  Transferred:\t%s of %s planned  (%.0f%%)\n",
 		humanBytes(p.BytesTransferred), humanBytes(p.PlannedBytes), percentComplete(p))
+	// The TOTAL sits on the heading, aligned with Transferred above it, because
+	// those two are the pair a reader compares: what crossed the network, and
+	// what did not have to. The breakdown underneath answers the follow-up.
+	fmt.Fprintf(pw, "  Not transferred:\t%s\n", humanBytes(p.SavedBytes))
 
 	// The sub-block gets a tabwriter of its own. Sharing one would align its
 	// three columns against the two above it, padding "Jobs:" to the width of

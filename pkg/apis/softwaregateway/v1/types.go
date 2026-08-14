@@ -1100,6 +1100,11 @@ type Transfer struct {
 	DisplayTag string `json:"displayTag,omitempty"`
 	Source     string `json:"source"`
 	Target     string `json:"target"`
+	// SourceName and TargetName are the configured names an operator types into
+	// --from and --to. Source and Target are the resolved host and path: right
+	// for one transfer, far too wide for a page of them.
+	SourceName string `json:"sourceName,omitempty"`
+	TargetName string `json:"targetName,omitempty"`
 
 	State    TransferState `json:"state"`
 	Priority int           `json:"priority"`
@@ -1175,6 +1180,18 @@ type TransferProgress struct {
 	// destination already had it. Reported rather than buried: it is the
 	// number that makes the second transfer of a product line nearly free.
 	DedupeSkippedBytes Int64String `json:"dedupeSkippedBytes"`
+	// SkippedBytes was queued and then not sent: the worker found the content
+	// at the destination, or the registry relocated it internally.
+	SkippedBytes Int64String `json:"skippedBytes,omitempty"`
+	// SavedBytes is the two above added up — everything this transfer did not
+	// have to move.
+	//
+	// It exists because reporting only the first was wrong in the case that
+	// matters most. On a fresh database nothing is deduplicated at PLANNING
+	// time, by definition: every saving is discovered by a worker, so a
+	// transfer that skipped 32 GiB of content already at the target reported
+	// saving nothing at all.
+	SavedBytes Int64String `json:"savedBytes,omitempty"`
 }
 
 // ListTransfersResponse is GET /api/v1/transfers.

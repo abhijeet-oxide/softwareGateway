@@ -352,6 +352,8 @@ VERIFIED — 5 of 5 artifacts (1.8s)
 
 ## 6. Progress
 
+`transfers list` carries FROM and TO. Without them two transfers of the same package to different destinations are the same row twice: same product, same tag, same percentage. The column shows the CONFIGURED name — what an operator typed into `--from` / `--to`, and what goes back into the next command — rather than the resolved host and path, which is a hundred characters wide and identical down the page. `describe` shows both, because there it is one transfer and there is room.
+
 `transfers describe` breaks the work down **per wave**, because the totals cannot explain an idle-looking transfer:
 
 ```
@@ -500,9 +502,8 @@ Progress
   In flight:     14 jobs across 1 worker
   Blocked:       5 awaiting referenced content
   Re-sent:       251 jobs; target reported content it did not hold
-  Transferred:   63.6 GiB of 63.7 GiB planned  (98%)
-  Not transferred:
-    Deduplicated        0 B        not queued; already at target when planned
+  Transferred:      63.6 GiB of 63.7 GiB planned  (98%)
+  Not transferred:  46.8 MiB
     Present at target   46.8 MiB   102 jobs; reported present, not re-checked
     Mounted             114 B      57 jobs; copied within the target registry
   Elapsed:       32h04m
@@ -510,6 +511,10 @@ Progress
 ```
 
 Three reasons a planned byte does not move, indented under one heading because they are three members of one set. They were three flat lines whose labels differed while their meaning had to be read off a trailing clause, which hid the structure.
+
+**The total sits on the heading**, aligned with `Transferred` above it, because those two are the pair a reader compares: what crossed the network, and what did not have to. A reason that did not apply is omitted rather than printed as `0 B` — `Deduplicated 0 B` is the normal state of a first transfer and carries no information.
+
+The same total is the listing's `SAVED` column, and getting it wrong there was the whole reason this section changed. `SAVED` read `dedupeSkippedBytes` alone — the part known at PLANNING time, from placement records. On a database that has just been rebuilt there are no placement records, so that number is zero by construction and every byte the transfer saved is saved by a WORKER discovering the content already present. The column was measuring the one kind of saving that could not occur, and a transfer that skipped 32.1 GiB reported `COPIED 0 B/63.7 GiB · SAVED 0 B` — two defensible numbers that together said it had done nothing and saved nothing.
 
 | Reason | When | Evidence |
 |---|---|---|

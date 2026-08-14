@@ -148,6 +148,23 @@ Two entries deserve attention:
 - **`PlanEmpty` → `succeeded`.** When deduplication finds every blob already present, the correct outcome is success with zero jobs — not an error, and not a transfer that sits in `ready` forever waiting for work that will never be created. This is a common case for promotion ([05](05-transfer-engine.md) §6), not an edge case.
 - **`cancelling` is a real state, not a flag.** It exists because leased jobs take up to one heartbeat to abort ([09](09-api.md) §7.4). Without it, a cancel would either appear instantaneous while bytes were still moving, or appear stuck. Naming the window makes it observable.
 
+#### `AllWavesDrained` is not "the walk ran out of waves"
+
+Settling asks two questions per completion, and neither of them is *did anything fail*. `waveDrained` is asked about ONE wave — the one the completing job belongs to. `waveOccupied`, which decides whether to keep advancing, counts only work that can still move: `pending`, `blocked`, `leased`. A wave whose remaining jobs have exhausted their attempts is empty by both measures.
+
+So the advance loop walks straight past a wave holding nothing but failures, runs out of waves, and arrives at the terminal branch. That branch used to mark `succeeded` unconditionally.
+
+Per-artifact readiness ([04](04-queue-and-scheduling.md) §3.5) is what makes this the ordinary case rather than a corner. A manifest becomes runnable the moment its own content lands, long before the wave it belongs to opens — so by the time a lower wave formally drains, the waves above it are routinely already terminal, failures included. Observed:
+
+```
+STATE      DONE  JOBS       FAILED
+succeeded  100%  2486/2489  3
+```
+
+The word is not cosmetic. `succeeded` is terminal, and `RetryTransfer` refuses a terminal transfer by design, so those three failures were reported, unexplained, and unfixable at the same time — `transfers retry` answered "there is nothing to retry".
+
+The terminal branch therefore counts failed jobs across the WHOLE transfer and settles as `failed` with a reason when there are any. Across the whole transfer rather than per wave because "was this transfer successful" is not a question about where the failure happened.
+
 ## 4. Job (layer) lifecycle
 
 Column: `jobs.state`. The highest-volume machine — hundreds of thousands of rows.
@@ -265,7 +282,7 @@ Relationships the guards enforce jointly. These are the properties that make the
 
 | # | Invariant | Enforced |
 |---|---|---|
-| S1 | A transfer cannot be `succeeded` while any job is non-terminal | Wave-drain check ([04](04-queue-and-scheduling.md) §3.4) |
+| S1 | A transfer cannot be `succeeded` while any job is non-terminal **or failed** | Wave-drain check ([04](04-queue-and-scheduling.md) §3.4) + the count in §3.1 |
 | S2 | A package cannot be `verified` while any transfer is non-terminal | Package aggregation (§2) |
 | S3 | A job cannot be `leased` if its transfer is `paused` or `cancelling` | `jobs.paused` + dequeue predicate ([04](04-queue-and-scheduling.md) §4.1) |
 | S4 | A manifest job cannot be `leased` before everything it references is present | `blocked` state (§4) + `job_dependencies` ([04](04-queue-and-scheduling.md) §3.5) — invariant I1 |

@@ -368,16 +368,6 @@ func renderPackageDetail(w io.Writer, product, ref string, p *v1.Package, artifa
 		renderCacheNote(w, artifacts)
 	}
 
-	// The honest status line. A request sitting in `pending` after M2 is
-	// correct behaviour, not a stall, and saying so here is cheaper than the
-	// bug report that otherwise follows.
-	fmt.Fprintln(w)
-	fmt.Fprintln(w, "Transfer status")
-	fmt.Fprintln(w, "  Byte transfer is not implemented in this build. Discovery records")
-	fmt.Fprintln(w, "  packages and auto-download rules create transfer requests, but the")
-	fmt.Fprintln(w, "  queue and workers that execute them land in the next milestone, so")
-	fmt.Fprintln(w, "  a request will stay pending. That is expected, not a failure.")
-
 	return nil
 }
 

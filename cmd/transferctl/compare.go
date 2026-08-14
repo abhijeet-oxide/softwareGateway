@@ -317,24 +317,37 @@ func total(row v1.CompareRow) int {
 	return len(row.FilesChanged) + len(row.FilesAdded) + len(row.FilesRemoved)
 }
 
-// renderExtras names content in a bundle's own repository that the bundle does
+// renderExtras names content in a bundle's own repository that the release does
 // not account for.
 //
-// Only for the bundle's repository, where the question is well defined: an orb
-// gets a repository to itself, so anything else in it is unexplained. A
-// component's repository legitimately holds every other version of that
-// component and is deliberately not asked.
+// Only for the bundle's repository: a component's repository legitimately holds
+// every other version of that component and is deliberately not asked. What
+// counts as unexplained is decided by what each tag RESOLVES TO, so this is
+// content the release genuinely does not reach rather than a tag spelled
+// unfamiliarly.
 func renderExtras(w io.Writer, r *v1.CompareResponse) {
 	for _, side := range []struct {
-		end  v1.CompareEnd
-		tags []string
-	}{{r.A, r.ExtraTagsA}, {r.B, r.ExtraTagsB}} {
-		if len(side.tags) == 0 {
+		end       v1.CompareEnd
+		tags      []string
+		truncated bool
+	}{
+		{r.A, r.ExtraTagsA, r.ExtraTruncatedA},
+		{r.B, r.ExtraTagsB, r.ExtraTruncatedB},
+	} {
+		if len(side.tags) == 0 && !side.truncated {
 			continue
 		}
 		fmt.Fprintln(w)
 		fmt.Fprintf(w, "Also in %s, not part of this release\n", side.end.Label)
-		fmt.Fprintf(w, "  %s\n", strings.Join(side.tags, ", "))
+		if len(side.tags) > 0 {
+			fmt.Fprintf(w, "  %s\n", strings.Join(side.tags, ", "))
+		}
+		if side.truncated {
+			// A partial account presented as a whole one is worse than none:
+			// somebody would conclude the rest of the repository was checked.
+			fmt.Fprintln(w, "  (the repository holds more tags than this check "+
+				"resolves; the list above is partial)")
+		}
 	}
 }
 

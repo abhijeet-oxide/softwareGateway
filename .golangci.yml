@@ -118,6 +118,11 @@ linters:
           files:
             - "**/internal/discovery/**"
             - "**/internal/transfer/**"
+            - "**/internal/compare/**"
+            - "**/internal/expand/**"
+            - "**/internal/oci/**"
+            - "**/internal/catalog/**"
+            - "**/internal/preflight/**"
             - "**/internal/queue/**"
             - "**/internal/worker/**"
             - "**/internal/store/**"

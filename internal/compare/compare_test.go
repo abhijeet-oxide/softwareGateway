@@ -607,16 +607,16 @@ func TestUnexplainedTagsInTheBundleRepositoryAreReported(t *testing.T) {
 
 // THE OTHER HALF OF THE 253.
 //
-// NEAR tags every component inside the orb's own repository — `docker_<digest>`,
-// `helmoci_<digest>`, one per component — so a listing of that repository
-// returns hundreds of names the bundle's inventory does not contain. It does not
-// contain them because a component's Tag comes from its `ref.name`
-// (`2507.2131.0`), which is a different string for the same manifest.
+// NEAR tags every component inside the orb's own repository — one tag per
+// component, spelled from that component's digest — so a listing of that
+// repository returns hundreds of names the inventory does not contain. It does
+// not contain them because a component's Tag comes from its `ref.name`
+// (`2507.2131.0`), a different string for the same manifest.
 //
-// Judged by name they were all unexplained, and a correct orb printed a wall of
-// them under "not part of this release". Judged by CONTENT — which is what the
-// question actually means — there is nothing there the bundle does not account
-// for.
+// Judged by NAME they were all unexplained, and a correct orb printed a wall of
+// them under "not part of this release". Judged by what they point AT — which
+// is the only question OCI lets you ask about a tag — there is nothing there
+// the release does not account for.
 func TestTagsNamingContentTheBundleAccountsForAreNotUnexplained(t *testing.T) {
 	f := newFixture(t)
 	f.publish(f.src, sourcePath, release, componentsOf(release))
@@ -628,6 +628,11 @@ func TestTagsNamingContentTheBundleAccountsForAreNotUnexplained(t *testing.T) {
 		f.src.AddManifest(sourcePath, "docker_"+strings.TrimPrefix(digest, "sha256:"),
 			f.src.Manifest(sourcePath, digest), registry.MediaTypeOCIManifest)
 	}
+	// AND A SPELLING NOBODY HAS SEEN, for the same content. A check that reads
+	// tag names passes the two above and fails this one; a check that resolves
+	// them cannot tell the difference, which is the whole point.
+	f.src.AddManifest(sourcePath, "whatever-the-next-vendor-calls-it",
+		f.src.Manifest(sourcePath, f.digestOf("nginx")), registry.MediaTypeOCIManifest)
 
 	report := f.compare(f.sourceSide(release), f.targetSide(release))
 

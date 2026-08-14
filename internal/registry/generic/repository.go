@@ -278,7 +278,7 @@ func registryErrorDetail(resp *http.Response) string {
 		} `json:"errors"`
 	}
 	if err := json.Unmarshal(body, &payload); err != nil || len(payload.Errors) == 0 {
-		return ""
+		return vendorErrorDetail(body)
 	}
 
 	parts := make([]string, 0, len(payload.Errors))
@@ -293,6 +293,47 @@ func registryErrorDetail(resp *http.Response) string {
 		}
 	}
 	return strings.Join(parts, "; ")
+}
+
+// vendorErrorDetail reads an error body that is not the Distribution shape.
+//
+// A registry in front of an entitlement system answers a request for a product
+// the customer has not bought, and what it has to say is the whole diagnosis:
+//
+//	{"status":403,"ErrorType":"User Authorization",
+//	 "ErrorMessage":"No valid entitlement found for End User: 215952 and
+//	                 Product sales items: CFXC24STD03.00."}
+//
+// That is not `{"errors":[…]}`, so it parsed to nothing and the operator was
+// shown `HTTP 403: forbidden` — a status code where the registry had written a
+// sentence naming the customer, the product and the reason. Thirty-seven of
+// those look like a broken credential and are not.
+//
+// The field names are the ones seen in the wild, tried in order of specificity.
+// Anything unrecognised still yields "", which is the previous behaviour: this
+// only ever adds detail.
+func vendorErrorDetail(body []byte) string {
+	var payload struct {
+		ErrorMessage string `json:"ErrorMessage"`
+		Message      string `json:"message"`
+		Error        string `json:"error"`
+		Detail       string `json:"detail"`
+		ErrorType    string `json:"ErrorType"`
+	}
+	if err := json.Unmarshal(body, &payload); err != nil {
+		return ""
+	}
+
+	for _, candidate := range []string{
+		payload.ErrorMessage, payload.Message, payload.Error, payload.Detail,
+	} {
+		if msg := strings.TrimSpace(candidate); msg != "" {
+			return msg
+		}
+	}
+	// A type with no message is still better than nothing: "User Authorization"
+	// says which system refused.
+	return strings.TrimSpace(payload.ErrorType)
 }
 
 func closeBody(resp *http.Response) {

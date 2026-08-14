@@ -123,6 +123,32 @@ func (c *Client) ListPackages(ctx context.Context, product string, opts ListPack
 	return &out, c.get(ctx, path, &out)
 }
 
+// ComparePackage walks two places and reports what is different.
+//
+// The reference names the FIRST end's version; everything about the second is
+// in the request, because the two ends are symmetric — source against target,
+// target against target, and one place at two versions are the same call.
+func (c *Client) ComparePackage(
+	ctx context.Context, product, ref string, req CompareRequest,
+) (*CompareResponse, error) {
+	seg, query := splitPackageRef(ref)
+	// The colon before the verb is an AIP-136 structural separator and must NOT
+	// be escaped; the reference itself is escaped as one segment.
+	path := "/api/v1/products/" + url.PathEscape(product) +
+		"/packages/" + url.PathEscape(seg) + ":compare" + query
+	var out CompareResponse
+	return &out, c.post(ctx, path, req, &out)
+}
+
+// ListUnavailable returns what a product's sources would not serve.
+func (c *Client) ListUnavailable(
+	ctx context.Context, product string,
+) (*ListUnavailableResponse, error) {
+	var out ListUnavailableResponse
+	return &out, c.get(ctx,
+		"/api/v1/products/"+url.PathEscape(product)+"/unavailable", &out)
+}
+
 // ListPackagesOptions filters a package listing.
 type ListPackagesOptions struct {
 	// Repository narrows to one repository path. A product may span several.
@@ -288,6 +314,20 @@ func (c *Client) RetryTransfer(ctx context.Context, id string) (*RetryTransferRe
 	// The colon is an AIP-136 structural separator and must NOT be escaped.
 	path := "/api/v1/transfers/" + url.PathEscape(id) + ":retry"
 	var out RetryTransferResponse
+	return &out, c.post(ctx, path, struct{}{}, &out)
+}
+
+// ControlTransfer applies pause, resume or stop to one transfer.
+//
+// One method for the three because they differ only in the verb: the states
+// each admits belong to the server, which owns the state machine, and
+// duplicating that knowledge here would be a second place for it to be wrong.
+func (c *Client) ControlTransfer(
+	ctx context.Context, id, verb string,
+) (*TransferControlResponse, error) {
+	// The colon is an AIP-136 structural separator and must NOT be escaped.
+	path := "/api/v1/transfers/" + url.PathEscape(id) + ":" + verb
+	var out TransferControlResponse
 	return &out, c.post(ctx, path, struct{}{}, &out)
 }
 

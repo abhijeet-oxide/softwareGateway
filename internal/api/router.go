@@ -16,6 +16,7 @@ import (
 
 	"github.com/abhijeet-oxide/softwareGateway/internal/api/middleware"
 	"github.com/abhijeet-oxide/softwareGateway/internal/calibrate"
+	"github.com/abhijeet-oxide/softwareGateway/internal/compare"
 	"github.com/abhijeet-oxide/softwareGateway/internal/discovery"
 	"github.com/abhijeet-oxide/softwareGateway/internal/platform/health"
 	"github.com/abhijeet-oxide/softwareGateway/internal/platform/metrics"
@@ -65,12 +66,41 @@ type Worker interface {
 	// invariants — a requeue that bypassed this type could reopen a wave the
 	// scheduler believes is closed.
 	Retry(ctx context.Context, transferID string) (store.RetryResult, error)
+	// Pause, Resume and Stop are somebody intervening in a transfer that is
+	// under way. Here for the same reason as Retry: they move jobs between
+	// states the scheduler reasons about, and a path that bypassed this type
+	// could leave a wave open that the scheduler believes is closed.
+	Pause(ctx context.Context, transferID string) (store.ControlResult, error)
+	Resume(ctx context.Context, transferID string) (store.ControlResult, error)
+	Stop(ctx context.Context, transferID string) (store.ControlResult, error)
 
 	// RecordWorker notes what a worker reported about itself. No error: the
 	// fleet view must never be the reason a lease fails.
 	RecordWorker(ctx context.Context, id string, capacity, active int, version string)
 	// Workers reports the fleet.
 	Workers(ctx context.Context) ([]store.WorkerSummary, error)
+}
+
+// ComparePoint is one end of a comparison: which version, in which place.
+//
+// Two of these rather than "a package and a destination", because the ends are
+// symmetric. Source against target, target against target, and one place at two
+// versions are the same request with different arguments, and a shape that
+// privileged one end would need a second shape for each of the others.
+type ComparePoint struct {
+	Package store.PackageRow
+	// Endpoint is a configured source or target name. Empty means the
+	// repository the package was discovered in.
+	Endpoint string
+}
+
+// Comparer walks two places and reports what is different.
+//
+// A consumer-defined interface: the API needs the one call, not the client
+// factory, the registry walker and the product registry behind it
+// (docs/design/15 §6).
+type Comparer interface {
+	Compare(ctx context.Context, productName string, a, b ComparePoint) (compare.Report, error)
 }
 
 // Calibrator measures one source-to-target path and recommends settings.
@@ -104,8 +134,12 @@ type Deps struct {
 	// Calibrator is optional: without it the calibrate route is not
 	// registered, and a caller is told so by an honest 404.
 	Calibrator Calibrator
-	Leader     Leadership
-	Component  string
+	// Comparer is optional on the same terms: it reaches a destination
+	// registry through the configured client factory, which only a
+	// composition root holds.
+	Comparer  Comparer
+	Leader    Leadership
+	Component string
 }
 
 // Server wires the router.
@@ -120,8 +154,9 @@ type Server struct {
 // docs/design/09-api.md but not yet built are deliberately absent, so a caller
 // receives an honest 404 rather than a stub returning fabricated data. They
 // arrive with the features that back them. The worker plane and the transfer
-// read routes landed with M3; pause, resume, cancel and retry have not, and
-// are therefore still absent rather than present and inert.
+// read routes landed with M3, and retry, pause, resume and stop with it;
+// setPriority has not, and is therefore still absent rather than present and
+// inert.
 func NewServer(deps Deps) *Server {
 	if deps.Logger == nil {
 		deps.Logger = slog.Default()
@@ -202,6 +237,11 @@ func (s *Server) routes() chi.Router {
 			r.Get("/products/{product}/packages", s.handleListPackages)
 			r.Get("/products/{product}/packages/{package}", s.handleGetPackage)
 			r.Get("/products/{product}/packages/{package}/artifacts", s.handleListArtifacts)
+			// What the source would not serve. A sibling of the packages listing
+			// rather than part of it: these are not packages, they are the
+			// absence of packages, and folding them in would make every consumer
+			// of the listing filter them out.
+			r.Get("/products/{product}/unavailable", s.handleListUnavailable)
 
 			// AIP-136 custom method. Registered whenever discovery is wired, so a
 			// follower can answer with the reason it is not scanning rather than

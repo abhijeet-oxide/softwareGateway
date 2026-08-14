@@ -178,6 +178,55 @@ func (p Package) Status(looked bool) SignatureStatus {
 	return SignatureUnsigned
 }
 
+// Vocabulary is what a vendor's users call the things a scan counts.
+//
+// The counterpart of DisplayRepository and DisplayTag, one level up: those
+// shorten a NAME, this one names the KIND. A NEAR operator does not have
+// repositories and tags, they have orbs and orb versions, and a summary reading
+//
+//	Repositories scanned   42
+//	Tags listed            16921
+//
+// makes them translate every line before they can read it. Nothing outside a
+// Layout may know the mapping, for exactly the reason nothing outside a Layout
+// may know that `orbs/` is a prefix worth removing.
+//
+// Empty fields mean "no special word", and the caller falls back to the
+// standard OCI nouns — which is what any conformant source gets.
+type Vocabulary struct {
+	// Unit and Units name what holds versions: "repository" / "orb".
+	Unit  string
+	Units string
+	// Version and Versions name what a repository holds: "tag" / "orb version".
+	Version  string
+	Versions string
+}
+
+// Or fills in whatever this Vocabulary leaves blank from another.
+func (v Vocabulary) Or(fallback Vocabulary) Vocabulary {
+	if v.Unit == "" {
+		v.Unit = fallback.Unit
+	}
+	if v.Units == "" {
+		v.Units = fallback.Units
+	}
+	if v.Version == "" {
+		v.Version = fallback.Version
+	}
+	if v.Versions == "" {
+		v.Versions = fallback.Versions
+	}
+	return v
+}
+
+// StandardVocabulary is the OCI wording, used wherever a vendor supplies none.
+func StandardVocabulary() Vocabulary {
+	return Vocabulary{
+		Unit: "repository", Units: "repositories",
+		Version: "tag", Versions: "tags",
+	}
+}
+
 // Layout is how one vendor lays packages out in a repository.
 //
 // One method. Everything a Layout does — collapsing several tags into one
@@ -186,6 +235,10 @@ func (p Package) Status(looked bool) SignatureStatus {
 type Layout interface {
 	// Name is the value that selects this Layout in configuration.
 	Name() string
+
+	// Vocabulary is what this vendor's users call a repository and a tag. The
+	// zero value means the standard OCI nouns.
+	Vocabulary() Vocabulary
 
 	// Group turns a repository's scanned tags into packages.
 	//

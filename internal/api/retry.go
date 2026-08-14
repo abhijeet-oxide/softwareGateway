@@ -1,7 +1,9 @@
 package api
 
 import (
+	"errors"
 	"net/http"
+	"strings"
 
 	"github.com/go-chi/chi/v5"
 
@@ -42,13 +44,23 @@ func (s *Server) handleTransferCustomMethod(w http.ResponseWriter, r *http.Reque
 	switch verb {
 	case "retry":
 		s.retryTransfer(w, r, id)
+	case "pause":
+		s.controlTransfer(w, r, id, "pause")
+	case "resume":
+		s.controlTransfer(w, r, id, "resume")
+	// `stop` is the name an operator reaches for; `cancel` is the name the
+	// state machine uses. Both are accepted rather than one being right,
+	// because the alternative is somebody typing the other one and being told
+	// it does not exist.
+	case "stop", "cancel":
+		s.controlTransfer(w, r, id, "stop")
 	default:
 		// Named explicitly, because the specified-but-unbuilt verbs are the
 		// ones somebody will reach for first and a bare "unknown method" would
 		// read as a typo in the one they typed.
 		if isPlannedVerb(verb) {
 			Error(w, r, v1.CodeUnavailable,
-				":"+verb+" is specified but not built yet; :retry is available")
+				":"+verb+" is specified but not built yet")
 			return
 		}
 		Error(w, r, v1.CodeInvalidArgument, "unknown method :"+verb+" on a transfer")
@@ -56,12 +68,54 @@ func (s *Server) handleTransferCustomMethod(w http.ResponseWriter, r *http.Reque
 }
 
 func isPlannedVerb(verb string) bool {
-	switch verb {
-	case "pause", "resume", "cancel", "setPriority":
-		return true
-	default:
-		return false
+	return verb == "setPriority"
+}
+
+// controlTransfer serves :pause, :resume and :stop.
+//
+// One handler for the three because they differ only in which store call they
+// make and which states admit them — and both of those belong to the store,
+// which owns the state machine. A handler per verb would be three places to
+// keep the error mapping the same.
+func (s *Server) controlTransfer(w http.ResponseWriter, r *http.Request, ref, verb string) {
+	if s.deps.Queue == nil {
+		Error(w, r, v1.CodeUnavailable, "this Coordinator has no queue, so it cannot control work")
+		return
 	}
+
+	id, err := s.deps.Packages.ResolveTransferID(r.Context(), ref)
+	if err != nil {
+		NotFound(w, r, "transfer", ref)
+		return
+	}
+
+	var res store.ControlResult
+	switch verb {
+	case "pause":
+		res, err = s.deps.Queue.Pause(r.Context(), id)
+	case "resume":
+		res, err = s.deps.Queue.Resume(r.Context(), id)
+	default:
+		res, err = s.deps.Queue.Stop(r.Context(), id)
+	}
+	if err != nil {
+		// A verb the current state does not admit is a CONFLICT, not an
+		// error: the caller asked for something the transfer cannot satisfy,
+		// and the state is the answer (docs/design/09 §5).
+		if errors.Is(err, store.ErrIllegalTransition) {
+			Error(w, r, v1.CodeFailedPrecondition, err.Error())
+			return
+		}
+		Error(w, r, v1.CodeInternal, err.Error())
+		return
+	}
+
+	WriteJSON(w, r, http.StatusOK, v1.TransferControlResponse{
+		TransferID: res.TransferID,
+		State:      strings.ToUpper(res.State),
+		Jobs:       res.Jobs,
+		InFlight:   res.InFlight,
+	})
 }
 
 func (s *Server) retryTransfer(w http.ResponseWriter, r *http.Request, ref string) {

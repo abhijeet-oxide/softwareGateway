@@ -83,6 +83,11 @@ type Standard struct{}
 
 func (Standard) Name() string { return LayoutStandard }
 
+// Vocabulary is the OCI wording: a conformant source has repositories and tags,
+// and calling them anything else would be the invention this package exists to
+// prevent.
+func (Standard) Vocabulary() Vocabulary { return StandardVocabulary() }
+
 // LooksForSignatures is false today.
 //
 // Deliberately honest rather than optimistic. Referrers-based discovery lands

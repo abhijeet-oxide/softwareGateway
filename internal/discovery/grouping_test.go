@@ -34,6 +34,15 @@ type wrapperLayout struct{}
 func (wrapperLayout) Name() string             { return "test-wrapper" }
 func (wrapperLayout) LooksForSignatures() bool { return true }
 
+// Vocabulary exercises the path where a vendor renames the nouns, so a scan
+// summary reporting "orbs" rather than "repositories" is covered rather than
+// assumed.
+func (wrapperLayout) Vocabulary() vendors.Vocabulary {
+	return vendors.Vocabulary{
+		Unit: "orb", Units: "orbs", Version: "orb version", Versions: "orb versions",
+	}
+}
+
 // DisplayRepository strips the vendor's leading namespace, so the scanner's
 // handling of a shortened repository path is exercised rather than assumed.
 func (wrapperLayout) DisplayRepository(path string) string {

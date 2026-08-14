@@ -901,6 +901,18 @@ func (p *Packages) settleTransfer(
 		return false, 0, "", fmt.Errorf("read transfer %s: %w", transferID, err)
 	}
 
+	// A transfer somebody has stopped is not a transfer to settle, advance or
+	// declare successful — it is one waiting for its last lease to report.
+	//
+	// This has to be checked BEFORE anything below it. `stop` cancels every job
+	// not yet started, so the waves genuinely drain, and without this guard the
+	// walk would run to the end and mark a cancelled transfer `succeeded` on
+	// the strength of the work it deliberately did not do.
+	if state == "cancelling" {
+		state, err = p.closeCancellation(ctx, tx, transferID)
+		return false, currentWave, state, err
+	}
+
 	// A transfer with work in flight is running, whatever it was before. Doing
 	// this here rather than at lease time keeps the dequeue free of a write to
 	// a second table.
@@ -954,14 +966,93 @@ func (p *Packages) settleTransfer(
 		}
 	}
 
-	// Drained at the top wave. Every job is accounted for and the tag is
-	// pushed, so the transfer is done.
-	if _, err := tx.ExecContext(ctx, p.dialect.Rewrite(
-		`UPDATE transfers SET state = 'succeeded', completed_at = `+p.dialect.Now()+
-			`, updated_at = `+p.dialect.Now()+` WHERE id = ?`), transferID); err != nil {
-		return false, currentWave, state, fmt.Errorf("finish transfer %s: %w", transferID, err)
+	// Past the top wave. Everything is accounted for — but "accounted for" is
+	// not "succeeded", and the difference has to be checked HERE rather than
+	// inferred from the walk above.
+	//
+	// The walk cannot answer it. `waveDrained` is asked about ONE wave, the one
+	// the completing job belongs to, and `waveOccupied` counts only work that
+	// can still move; a wave whose remaining jobs have exhausted their attempts
+	// is empty by both measures. Per-artifact readiness makes that ordinary
+	// rather than exotic: a manifest runs as soon as its own content lands, so
+	// by the time the wave it nominally belongs to formally drains, the waves
+	// above it are frequently already terminal — failures included. The loop
+	// then walks past them into this branch and the transfer was declared
+	// `succeeded` with failed jobs sitting under it.
+	//
+	// Which is not merely a wrong word on a listing. `succeeded` is settled, and
+	// RetryTransfer refuses a settled transfer, so the three failures could not
+	// be retried and could not be explained: 100% done, FAILED 3, and
+	// "there is nothing to retry".
+	state, _, err = p.finishTransfer(ctx, tx, transferID)
+	return false, currentWave, state, err
+}
+
+// closeCancellation moves a stopping transfer to `cancelled` once the last
+// lease has reported.
+//
+// `cancelling` is a real state rather than a flag because a leased job belongs
+// to a worker and stops at that worker's next checkpoint, not the instant
+// somebody types the command. Naming the window makes it observable; closing it
+// here is what stops the window being permanent.
+func (p *Packages) closeCancellation(
+	ctx context.Context, tx *sql.Tx, transferID string,
+) (state string, err error) {
+	var inFlight int
+	if err := tx.QueryRowContext(ctx, p.dialect.Rewrite(
+		`SELECT count(*) FROM jobs WHERE transfer_id = ? AND state = 'leased'`),
+		transferID).Scan(&inFlight); err != nil {
+		return "cancelling", fmt.Errorf("count leased jobs of transfer %s: %w", transferID, err)
 	}
-	return false, currentWave, "succeeded", nil
+	if inFlight > 0 {
+		return "cancelling", nil
+	}
+
+	if _, err := tx.ExecContext(ctx, p.dialect.Rewrite(
+		`UPDATE transfers SET state = 'cancelled', completed_at = `+p.dialect.Now()+
+			`, updated_at = `+p.dialect.Now()+` WHERE id = ?`), transferID); err != nil {
+		return "cancelling", fmt.Errorf("cancel transfer %s: %w", transferID, err)
+	}
+	return "cancelled", nil
+}
+
+// finishTransfer settles a transfer whose jobs have all stopped, reporting
+// which way it went.
+//
+// One count decides it, and it is a count over the WHOLE transfer rather than
+// any wave: a transfer is successful when nothing failed, and any other rule is
+// a rule about where the failure happened, which no consumer of this cares
+// about.
+func (p *Packages) finishTransfer(
+	ctx context.Context, tx *sql.Tx, transferID string,
+) (state string, failed int, err error) {
+	if err := tx.QueryRowContext(ctx, p.dialect.Rewrite(
+		`SELECT count(*) FROM jobs WHERE transfer_id = ? AND state = 'failed'`),
+		transferID).Scan(&failed); err != nil {
+		return "", 0, fmt.Errorf("count failed jobs of transfer %s: %w", transferID, err)
+	}
+
+	if failed == 0 {
+		if _, err := tx.ExecContext(ctx, p.dialect.Rewrite(
+			`UPDATE transfers SET state = 'succeeded', failure_reason = NULL,
+			        completed_at = `+p.dialect.Now()+`, updated_at = `+p.dialect.Now()+`
+			  WHERE id = ?`), transferID); err != nil {
+			return "", 0, fmt.Errorf("finish transfer %s: %w", transferID, err)
+		}
+		return "succeeded", 0, nil
+	}
+
+	reason, err := p.failureReason(ctx, tx, transferID, failed)
+	if err != nil {
+		return "", failed, err
+	}
+	if _, err := tx.ExecContext(ctx, p.dialect.Rewrite(
+		`UPDATE transfers SET state = 'failed', failure_reason = ?,
+		        completed_at = `+p.dialect.Now()+`, updated_at = `+p.dialect.Now()+`
+		  WHERE id = ?`), reason, transferID); err != nil {
+		return "", failed, fmt.Errorf("fail transfer %s: %w", transferID, err)
+	}
+	return "failed", failed, nil
 }
 
 // waveDrained reports whether every job in a wave has reached a terminal
@@ -1268,15 +1359,33 @@ type TransferSummary struct {
 	DisplayTag string
 	Source     string
 	Target     string
+	// SourceName and TargetName are the CONFIGURED names — the `sources[].name`
+	// and `targets[].name` an operator types into --from and --to. Source and
+	// Target above are the resolved host and path, which is what a person needs
+	// when they are looking at one transfer and far too wide when they are
+	// scanning a page of them.
+	SourceName string
+	TargetName string
 	State      string
 	Priority   int
 
 	CurrentWave int
 	MaxWave     int
 
-	PlannedJobs        int
-	PlannedBytes       int64
+	PlannedJobs  int
+	PlannedBytes int64
+	// DedupeSkippedBytes was never queued: planning already knew the
+	// destination held it. SkippedBytes was queued and then not sent, because
+	// the worker found it there or the registry relocated it internally.
+	//
+	// Both are savings and they are counted separately because they are earned
+	// at different times, but a caller asking "what did this transfer save" wants
+	// the sum — and reporting only the first is how a transfer that skipped
+	// 32 GiB came to report `SAVED 0 B`. On a clean database nothing is
+	// deduplicated at planning time by definition: every saving is discovered by
+	// the worker, so the whole of it landed in the line nobody was reading.
 	DedupeSkippedBytes int64
+	SkippedBytes       int64
 
 	// Rolled up from jobs.
 	JobsDone   int
@@ -1331,6 +1440,11 @@ type TransferSummary struct {
 	CompletedAt string
 }
 
+// SavedBytes is everything this transfer did not have to move.
+func (t TransferSummary) SavedBytes() int64 {
+	return t.DedupeSkippedBytes + t.SkippedBytes
+}
+
 // transferSelect is the shared projection, so list and get cannot disagree
 // about what a transfer looks like.
 func (p *Packages) transferSelect() string {
@@ -1339,8 +1453,11 @@ func (p *Packages) transferSelect() string {
 	       COALESCE(pk.display_tag, ''),
 	       src.registry_host || '/' || src.repository_path,
 	       dst.registry_host || '/' || dst.repository_path,
+	       src.name, dst.name,
 	       t.state, t.priority, t.current_wave, t.max_wave,
 	       t.planned_job_count, t.planned_bytes, t.dedupe_skipped_bytes,
+	       COALESCE((SELECT SUM(j.size_bytes) FROM jobs j WHERE j.transfer_id = t.id
+	                  AND j.state = 'skipped'), 0),
 	       COALESCE((SELECT count(*) FROM jobs j WHERE j.transfer_id = t.id
 	                  AND j.state IN ('succeeded','skipped')), 0),
 	       COALESCE((SELECT count(*) FROM jobs j WHERE j.transfer_id = t.id
@@ -1375,8 +1492,9 @@ func (p *Packages) transferSelect() string {
 func scanTransfer(row interface{ Scan(...any) error }) (TransferSummary, error) {
 	var t TransferSummary
 	err := row.Scan(&t.ID, &t.RequestID, &t.PackageID, &t.ProductName, &t.Tag,
-		&t.DisplayTag, &t.Source, &t.Target, &t.State, &t.Priority, &t.CurrentWave, &t.MaxWave,
-		&t.PlannedJobs, &t.PlannedBytes, &t.DedupeSkippedBytes,
+		&t.DisplayTag, &t.Source, &t.Target, &t.SourceName, &t.TargetName,
+		&t.State, &t.Priority, &t.CurrentWave, &t.MaxWave,
+		&t.PlannedJobs, &t.PlannedBytes, &t.DedupeSkippedBytes, &t.SkippedBytes,
 		&t.JobsDone, &t.JobsFailed, &t.JobsOutstanding, &t.BytesTransferred,
 		&t.JobsInFlight, &t.Workers, &t.JobsWaiting, &t.JobsBlocked, &t.JobsRepaired, &t.OutstandingBytes, &t.QuietestInFlight,
 		&t.FailureReason, &t.CreatedAt, &t.StartedAt, &t.CompletedAt)

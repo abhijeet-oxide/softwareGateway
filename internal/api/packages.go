@@ -12,6 +12,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
+	"github.com/abhijeet-oxide/softwareGateway/internal/compare"
 	"github.com/abhijeet-oxide/softwareGateway/internal/discovery"
 	"github.com/abhijeet-oxide/softwareGateway/internal/store"
 	v1 "github.com/abhijeet-oxide/softwareGateway/pkg/apis/softwaregateway/v1"
@@ -22,6 +23,50 @@ const (
 	defaultPageSize = 50
 	maxPageSize     = 500
 )
+
+// handleListUnavailable serves GET /api/v1/products/{product}/unavailable.
+//
+// What a source would not serve us, and why. Its own route rather than a filter
+// on the packages listing, because these are the ABSENCE of packages: giving
+// them a state on the package list would make every consumer of that list
+// remember to exclude them.
+func (s *Server) handleListUnavailable(w http.ResponseWriter, r *http.Request) {
+	productName := chi.URLParam(r, "product")
+	if !s.productExists(w, r, productName) {
+		return
+	}
+	if s.deps.Packages == nil {
+		Error(w, r, v1.CodeUnavailable, "package storage is not configured")
+		return
+	}
+
+	pageSize, err := parsePageSize(r.URL.Query().Get("pageSize"))
+	if err != nil {
+		Error(w, r, v1.CodeInvalidArgument, err.Error())
+		return
+	}
+
+	rows, err := s.deps.Packages.ListUnavailable(r.Context(), productName, pageSize)
+	if err != nil {
+		Error(w, r, v1.CodeUnavailable, "could not list unavailable packages: "+err.Error())
+		return
+	}
+
+	out := v1.ListUnavailableResponse{Packages: make([]v1.UnavailablePackage, 0, len(rows))}
+	for _, u := range rows {
+		out.Packages = append(out.Packages, v1.UnavailablePackage{
+			Repository:        u.Repository,
+			Tag:               u.Tag,
+			DisplayRepository: u.DisplayRepository,
+			DisplayTag:        u.DisplayTag,
+			Reason:            u.Reason,
+			Detail:            u.Detail,
+			FirstSeenAt:       u.FirstSeenAt,
+			LastSeenAt:        u.LastSeenAt,
+		})
+	}
+	WriteJSON(w, r, http.StatusOK, out)
+}
 
 // handleListPackages serves GET /api/v1/products/{product}/packages.
 func (s *Server) handleListPackages(w http.ResponseWriter, r *http.Request) {
@@ -263,8 +308,20 @@ func (s *Server) handleDiscoverPackages(w http.ResponseWriter, r *http.Request) 
 		DurationMs:         res.Duration.Milliseconds(),
 		Collapsed:          res.Collapsed,
 	}
+	if v := res.Vocabulary; v.Units != "" {
+		resp.Vocabulary = &v1.ScanVocabulary{
+			Unit: v.Unit, Units: v.Units, Version: v.Version, Versions: v.Versions,
+		}
+	}
 	for _, te := range res.TagErrors {
-		resp.TagErrors = append(resp.TagErrors, te.Error())
+		resp.TagErrors = append(resp.TagErrors, v1.ScanIssue{
+			Repository:        te.Repository,
+			Tag:               te.Tag,
+			DisplayRepository: te.DisplayRepository,
+			DisplayTag:        te.DisplayTag,
+			Class:             te.Class,
+			Message:           te.Error(),
+		})
 	}
 	for _, re := range res.RepositoryErrors {
 		resp.RepositoryErrors = append(resp.RepositoryErrors, re.Error())
@@ -548,8 +605,11 @@ func (s *Server) resolvePackage(w http.ResponseWriter, r *http.Request, productN
 	return pkg, true
 }
 
-// packageVerbInspect is the only custom method a package currently accepts.
-const packageVerbInspect = "inspect"
+// The custom methods a package accepts.
+const (
+	packageVerbInspect = "inspect"
+	packageVerbCompare = "compare"
+)
 
 // handlePackageCustomMethod dispatches POST /packages/{package}:<verb>.
 //
@@ -575,9 +635,10 @@ func (s *Server) handlePackageCustomMethod(w http.ResponseWriter, r *http.Reques
 	}
 	ref, verb := segment[:i], segment[i+1:]
 
-	if verb != packageVerbInspect {
+	if verb != packageVerbInspect && verb != packageVerbCompare {
 		Error(w, r, v1.CodeInvalidArgument, fmt.Sprintf(
-			"%q is not a custom method on a package (known: %s)", verb, packageVerbInspect))
+			"%q is not a custom method on a package (known: %s, %s)",
+			verb, packageVerbInspect, packageVerbCompare))
 		return
 	}
 
@@ -590,7 +651,118 @@ func (s *Server) handlePackageCustomMethod(w http.ResponseWriter, r *http.Reques
 			}
 		}
 	}
+	if verb == packageVerbCompare {
+		s.handleComparePackage(w, r)
+		return
+	}
 	s.handleInspectPackage(w, r)
+}
+
+// POST /api/v1/products/{product}/packages/{package}:compare.
+//
+// Walks TWO places and reports what is different. The package in the path is
+// the first end; the body names the second.
+//
+// It reads no transfer record, and that is the whole point: a transfer can
+// report every job successful and leave the destination wrong — a tag that
+// failed to apply, content deleted afterwards, a bundle assembled by two
+// transfers of which one was stopped. Each of those was seen in practice.
+//
+// Both ends are symmetric, so source-against-target, target-against-target and
+// one-place-at-two-versions are the same request with different arguments.
+func (s *Server) handleComparePackage(w http.ResponseWriter, r *http.Request) {
+	productName := chi.URLParam(r, "product")
+	if !s.productExists(w, r, productName) {
+		return
+	}
+	if s.deps.Comparer == nil {
+		Error(w, r, v1.CodeUnavailable,
+			"comparing reads both registries, and the client for them is not "+
+				"configured on this replica")
+		return
+	}
+
+	var req v1.CompareRequest
+	if r.ContentLength > 0 && !decodeJSON(w, r, &req) {
+		return
+	}
+
+	pkg, ok := s.resolvePackage(w, r, productName, chi.URLParam(r, "package"))
+	if !ok {
+		return
+	}
+
+	// The second end's package. The same one unless `against` names another,
+	// which is what turns a place-to-place comparison into a version-to-version
+	// one without a second endpoint or a second shape.
+	against := pkg
+	if req.Against != "" {
+		if against, ok = s.resolvePackage(w, r, productName, req.Against); !ok {
+			return
+		}
+	}
+
+	report, err := s.deps.Comparer.Compare(r.Context(), productName,
+		ComparePoint{Package: pkg, Endpoint: req.From},
+		ComparePoint{Package: against, Endpoint: req.To})
+	if err != nil {
+		Error(w, r, v1.CodeInvalidArgument, err.Error())
+		return
+	}
+
+	out := v1.CompareResponse{
+		Product:    productName,
+		A:          compareEndDTO(report.A),
+		B:          compareEndDTO(report.B),
+		Rows:       make([]v1.CompareRow, 0, len(report.Rows)),
+		Same:       report.Same,
+		Changed:    report.Changed,
+		OnlyA:      report.OnlyA,
+		OnlyB:      report.OnlyB,
+		ExtraTagsA: report.ExtraTagsA,
+		ExtraTagsB: report.ExtraTagsB,
+	}
+	for _, row := range report.Rows {
+		out.Rows = append(out.Rows, v1.CompareRow{
+			Type:         row.Type,
+			Name:         row.Name,
+			Verdict:      string(row.Verdict),
+			A:            compareSideDTO(row.A),
+			B:            compareSideDTO(row.B),
+			Differences:  row.Differences,
+			FilesAdded:   row.FilesAdded,
+			FilesRemoved: row.FilesRemoved,
+		})
+	}
+	WriteJSON(w, r, http.StatusOK, out)
+}
+
+func compareEndDTO(s compare.SideSpec) v1.CompareEnd {
+	return v1.CompareEnd{Label: s.Label, Reference: s.String()}
+}
+
+// compareSideDTO renders one end's account of a component, or nothing when that
+// end does not have it.
+//
+// Nil rather than a zero struct with `present: false`, because "this side does
+// not have this component" is the finding, and a client should not have to read
+// a boolean to discover it.
+func compareSideDTO(item *compare.Item) *v1.CompareSide {
+	if item == nil {
+		return nil
+	}
+	out := &v1.CompareSide{
+		Digest:     item.Digest,
+		Tag:        item.Tag,
+		Size:       v1.Int64String(strconv.FormatInt(item.Size, 10)),
+		Repository: item.Repository,
+	}
+	if item.Named != nil {
+		out.NamedRepository = item.Named.Repository
+		out.NamedPresent = item.Named.Present
+		out.NamedTagDigest = item.Named.TagDigest
+	}
+	return out
 }
 
 // POST /api/v1/products/{product}/packages/{package}:inspect.

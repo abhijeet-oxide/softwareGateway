@@ -350,7 +350,83 @@ Verifying vendor-a-platform / v2.14.0 at lab (internal.azurecr.io/vendor-a/platf
 VERIFIED — 5 of 5 artifacts (1.8s)
 ```
 
+### 5.1 `compare` — what is different between two places?
+
+```
+$ transferctl compare cfx-5000-product 25.7_mp2604_2131 --to att-stage
+
+cfx-5000-product
+
+  A  near         orbs/cfx-5000-k8s:orb_25.7_mp2604_2131
+  B  att-stage    apm0014228-oci-stage/orbs/cfx-5000-k8s:orb_25.7_mp2604_2131
+
+    TYPE    COMPONENT                          A                               B
+-   image   cfx-5000-product/lms               1.25.212  sha256:438001f263ab   absent
++   chart   cfx-5000-product/charts/brandnew   absent                          2.0.0  sha256:aabbccddeeff
+~   image   cfx-5000-product/cvlk              1.0.7  sha256:4573b0b15ceb      1.0.7  sha256:8533f4a71a43
+
+Differences
+  - cfx-5000-product/lms
+      present on the first side only
+  + cfx-5000-product/charts/brandnew
+      present on the second side only
+  ~ cfx-5000-product/cvlk
+      cfx-5000-product/cvlk:1.0.7 points at sha256:8533f4a71a43 on the second side, not sha256:4573b0b15ceb
+      2 layers changed; --layers names them
+
+Also in att-stage, not part of this release
+  orb_25.6_mp2601_2011
+
+1 identical, 1 changed, 1 only in A, 1 only in B.
+38 identical not shown; --all shows every component.
+```
+
+#### Five questions, one command
+
+They look like five tools and they are one, because all of them are *walk two bundles and align their components*:
+
+| Question | Command |
+|---|---|
+| Did the transfer land? | `compare P 25.7` — or `--to stage` for a specific one |
+| Did the promotion land? | `compare P 25.7 --from lab --to prod` |
+| What changed in this release? | `compare P 25.7 25.6` |
+| Did all of the new release arrive? | `compare P 25.7 25.6 --at stage` |
+| Was anything mutated, or is anything there nobody put? | any of the above — it is the same walk |
+
+**The two ends are symmetric.** Neither is "the original". A shape that privileged one — "a package and a destination" — needs a second shape for target-against-target and a third for version-against-version, and three shapes drift.
+
+**Both ends are WALKED.** Nothing reads a transfer record, which is the point of an integrity check and is also what lets an end be a target nothing ever planned against, or a version somebody published by hand. It works uniformly because a transfer copies manifests **verbatim**: the index at a destination carries the same `org.opencontainers.image.ref.name` annotations the vendor wrote, so a component identifies itself the same way wherever it is.
+
+#### What is aligned, and by what
+
+Components are aligned by the repository half of their `ref.name` — the vendor's name for the component, which survives copying *and* survives a new release. The **tag is compared, not matched on**, because in a version-to-version comparison the tag is precisely what changed. An artifact the vendor named nothing is aligned by digest, which can only match itself; that is the honest answer for content whose only identity is its bytes.
+
+| Check | Catches |
+|---|---|
+| Digest, per component | a mutated or stale copy |
+| Tag, resolved on each side | the failure this system shipped with: everything pushed, the component's own tag never applied, every digest agreeing |
+| The component's own repository | a bundle that is byte-perfect while nothing in it is pullable as itself |
+| Layers, by title where the vendor set one | *which files changed* — a generic artifact's layers are files and the title is the path |
+| Tags in the bundle's own repository | content nobody in this comparison put there |
+
+**A partial transfer does not abort the walk.** An index naming children the registry will not serve is exactly what a transfer that stopped part-way leaves behind. `oci.WalkPartial` records each unreachable child *from its referencing descriptor* — so it keeps the name its parent gave it and still aligns against its counterpart — which is what turns "something is missing" into "`cfx-5000-product/lms` is missing", and what stops the first missing component costing the reader the other nineteen findings.
+
+#### Layout
+
+A diff, laid out as one, with the markers everybody already reads without being told: `-` only on the first end, `+` only on the second, `~` present on both and different.
+
+- **Differences first**, then agreements — and by default the agreements are not printed at all, only counted. `--all` shows them.
+- **Differences are sentences, under the table.** "`cfx-5000-product/cvlk:1.0.7` points at `sha256:8533f4a71a43` on the second side" does not fit a column, and truncating it removes the half that says what is wrong.
+- **Changed layers are counted, then named on request** (`--layers`). A release that edited one configuration file should not print forty layer digests at somebody who asked what changed.
+- **Non-zero exit when the ends differ**, so it can end a pipeline.
+
+#### One deliberate limit
+
+Extra content is reported only for the bundle's **own** repository — the orb-specific folder — where the question is well defined: an ORB gets a repository to itself, so anything else in it is genuinely unexplained. It is not asked of a component's repository, which legitimately holds every other version of that component and would report each previous release as a discrepancy.
+
 ## 6. Progress
+
+`transfers list` carries FROM and TO. Without them two transfers of the same package to different destinations are the same row twice: same product, same tag, same percentage. The column shows the CONFIGURED name — what an operator typed into `--from` / `--to`, and what goes back into the next command — rather than the resolved host and path, which is a hundred characters wide and identical down the page. `describe` shows both, because there it is one transfer and there is room.
 
 `transfers describe` breaks the work down **per wave**, because the totals cannot explain an idle-looking transfer:
 
@@ -500,9 +576,8 @@ Progress
   In flight:     14 jobs across 1 worker
   Blocked:       5 awaiting referenced content
   Re-sent:       251 jobs; target reported content it did not hold
-  Transferred:   63.6 GiB of 63.7 GiB planned  (98%)
-  Not transferred:
-    Deduplicated        0 B        not queued; already at target when planned
+  Transferred:      63.6 GiB of 63.7 GiB planned  (98%)
+  Not transferred:  46.8 MiB
     Present at target   46.8 MiB   102 jobs; reported present, not re-checked
     Mounted             114 B      57 jobs; copied within the target registry
   Elapsed:       32h04m
@@ -510,6 +585,10 @@ Progress
 ```
 
 Three reasons a planned byte does not move, indented under one heading because they are three members of one set. They were three flat lines whose labels differed while their meaning had to be read off a trailing clause, which hid the structure.
+
+**The total sits on the heading**, aligned with `Transferred` above it, because those two are the pair a reader compares: what crossed the network, and what did not have to. A reason that did not apply is omitted rather than printed as `0 B` — `Deduplicated 0 B` is the normal state of a first transfer and carries no information.
+
+The same total is the listing's `SAVED` column, and getting it wrong there was the whole reason this section changed. `SAVED` read `dedupeSkippedBytes` alone — the part known at PLANNING time, from placement records. On a database that has just been rebuilt there are no placement records, so that number is zero by construction and every byte the transfer saved is saved by a WORKER discovering the content already present. The column was measuring the one kind of saving that could not occur, and a transfer that skipped 32.1 GiB reported `COPIED 0 B/63.7 GiB · SAVED 0 B` — two defensible numbers that together said it had done nothing and saved nothing.
 
 | Reason | When | Evidence |
 |---|---|---|
@@ -529,20 +608,19 @@ Each carries a short qualifier because the label alone does not convey it — `D
 
 ```
 $ transferctl transfers pause 9c1e8f2a
-Transfer 9c1e8f2a paused.
-  14 in-flight jobs will complete; no new jobs will be leased.
+Paused 9c1e8f2a — 131 jobs will not be handed out.
+  14 jobs still in flight; they will finish.
+
+$ transferctl transfers resume 9c1e8f2a
+Resumed 9c1e8f2a — 131 jobs are leasable again.
+
+$ transferctl transfers stop 9c1e8f2a
+Stopped 9c1e8f2a — 131 jobs cancelled.
+  14 jobs still in flight; the transfer is cancelling until they report.
 
 $ transferctl transfers priority 9c1e8f2a 900
 Priority 100 → 900 for 131 pending jobs.
   In-flight jobs are unaffected.
-
-$ transferctl transfers cancel 9c1e8f2a
-Cancel transfer 9c1e8f2a (vendor-a-platform/v2.14.0 → lab, 51.4% complete)? [y/N] y
-
-Transfer 9c1e8f2a cancelling.
-  131 pending jobs cancelled; 14 in-flight jobs will abort within ~20s.
-  Blobs already transferred remain at the destination and will be
-  reused by future transfers. No tag was applied.
 
 $ transferctl transfers retry 9c1e8f2a
 Requeued 2 failed job(s). Transfer 9c1e8f2a is ready.
@@ -564,6 +642,19 @@ Requeueing resets the attempt budget and drops the backoff: the operator running
 It will not restart a `cancelled` transfer — that was somebody's decision — or a `succeeded` one. A transfer that failed during *planning* has no jobs to requeue, and says so rather than reporting a successful retry of zero.
 
 Each message states the semantics that are easy to get wrong ([04](04-queue-and-scheduling.md) §8): pause does not kill in-flight work, priority does not preempt, cancel does not roll back. The CLI is where those semantics actually reach a user, so it says them rather than assuming the documentation was read.
+
+### The three verbs differ in what they do to work already DONE
+
+Not in what they do to the work remaining, which is where the intuition goes wrong. `pause` keeps it, `resume` restores the ability to add to it, `stop` keeps it and adds nothing more — and **none of them deletes anything at the destination**. Half a bundle there is unreferenced blobs and untagged manifests: invisible to consumers, because a tag is applied only once everything beneath it is present (invariant I1), and free to the next transfer, which finds them and skips them.
+
+Two mechanisms carry this, and both are load-bearing:
+
+- **The pause is on the JOB rows, not only on the transfer.** The dequeue predicate reads `NOT paused`, so setting the flag is what actually stops work being handed out. A transfer state alone would be an intention every lease path had to remember to check.
+- **`cancelling` is a state, not a flag.** A leased job belongs to a worker and stops at that worker's next checkpoint, not the instant the command was typed. `stop` therefore reports `cancelling` while anything is in flight, and the completion path closes the window when the last lease reports — a transfer left in `cancelling` forever is indistinguishable from a hang.
+
+A verb the current state does not admit is refused with `409 FAILED_PRECONDITION` naming that state, rather than silently doing nothing: it is somebody acting on a stale listing, and telling them the state has moved is the difference between a confusing outcome and an obvious one.
+
+`stop` is the name an operator reaches for and `cancel` is the name the state machine uses; both are accepted, because the alternative is somebody typing the other one and being told it does not exist.
 
 ## 8. Worker logs
 

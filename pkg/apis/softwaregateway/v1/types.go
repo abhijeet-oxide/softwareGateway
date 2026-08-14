@@ -570,9 +570,17 @@ type DiscoverPackagesResponse struct {
 	Regrouped  int   `json:"regrouped,omitempty"`
 	DurationMs int64 `json:"durationMs"`
 	// TagErrors are per-tag failures that did not stop the scan.
-	TagErrors []string `json:"tagErrors,omitempty"`
+	//
+	// Structured rather than pre-rendered because they are not all the same
+	// KIND of thing: a source refusing content the customer has not licensed is
+	// a fact about entitlement, and a timeout is a fault. Handing the client one
+	// string per failure forced it to decide which by reading English.
+	TagErrors []ScanIssue `json:"tagErrors,omitempty"`
 	// RepositoryErrors are per-repository failures that did not stop the scan.
 	RepositoryErrors []string `json:"repositoryErrors,omitempty"`
+	// Vocabulary is what this source's vendor calls a repository and a tag, so
+	// a summary can be read without translating every line.
+	Vocabulary *ScanVocabulary `json:"vocabulary,omitempty"`
 
 	// Collapsed reports that a scan was ALREADY RUNNING when this request
 	// arrived, so these numbers come from that scan rather than one this call
@@ -583,6 +591,140 @@ type DiscoverPackagesResponse struct {
 	// Started is set instead of the counters when the request asked not to
 	// wait: the scan is running, and there are no results yet to report.
 	Started *DiscoverStarted `json:"started,omitempty"`
+}
+
+// ScanIssue is one thing a scan could not read.
+type ScanIssue struct {
+	Repository string `json:"repository,omitempty"`
+	Tag        string `json:"tag,omitempty"`
+	// DisplayRepository and DisplayTag are the VENDOR's names for the same two
+	// things — `cfx-5000-k8s` and `24.7.1186` where the paths are
+	// `orbs/cfx-5000-k8s` and `orb_24.7.1186`.
+	DisplayRepository string `json:"displayRepository,omitempty"`
+	DisplayTag        string `json:"displayTag,omitempty"`
+	// Class is what kind of issue this is, where the kind changes what should
+	// be done about it. `not_entitled` means the source refused content this
+	// customer has not licensed, which is the entitlement check working rather
+	// than anything to fix. Empty is an ordinary failure.
+	Class string `json:"class,omitempty"`
+	// Message is the failure verbatim, including whatever the registry said.
+	Message string `json:"message,omitempty"`
+}
+
+// ScanVocabulary is what a vendor's users call the things a scan counts.
+type ScanVocabulary struct {
+	Unit     string `json:"unit,omitempty"`
+	Units    string `json:"units,omitempty"`
+	Version  string `json:"version,omitempty"`
+	Versions string `json:"versions,omitempty"`
+}
+
+// CompareRequest is POST /api/v1/products/{product}/packages/{package}:compare.
+//
+// The package in the path is the FIRST end. Everything here names the second,
+// and every field is optional: the common case — "did this land at my default
+// destination?" — is an empty body.
+type CompareRequest struct {
+	// From and To are configured source or target names. An empty From means
+	// the repository the package was discovered in.
+	From string `json:"from,omitempty"`
+	To   string `json:"to,omitempty"`
+	// Against is a second package reference — a tag or a digest — making this a
+	// comparison of two VERSIONS rather than of two places. Combined with a
+	// From and To that name the same endpoint, it answers "what changed in this
+	// release"; combined with two different ones, it answers both at once.
+	Against string `json:"against,omitempty"`
+}
+
+// CompareResponse is what two places hold, aligned component by component.
+type CompareResponse struct {
+	Product string `json:"product"`
+
+	A CompareEnd `json:"a"`
+	B CompareEnd `json:"b"`
+
+	Rows []CompareRow `json:"rows"`
+
+	// Same, Changed, OnlyA and OnlyB partition Rows.
+	Same    int `json:"same"`
+	Changed int `json:"changed"`
+	OnlyA   int `json:"onlyA"`
+	OnlyB   int `json:"onlyB"`
+
+	// ExtraTagsA and ExtraTagsB are tags in each side's bundle repository that
+	// the bundle does not account for — content nobody in this comparison put
+	// there.
+	ExtraTagsA []string `json:"extraTagsA,omitempty"`
+	ExtraTagsB []string `json:"extraTagsB,omitempty"`
+}
+
+// CompareEnd identifies one side of a comparison.
+type CompareEnd struct {
+	// Label is the configured endpoint, plus the version where the two sides
+	// differ in version.
+	Label string `json:"label"`
+	// Reference is what was actually walked, as a pullable reference.
+	Reference string `json:"reference"`
+}
+
+// CompareRow is one component, on both sides.
+type CompareRow struct {
+	// Type is what the component is: index, image, chart, file, signature.
+	Type string `json:"type"`
+	// Name is the vendor's name for it, from org.opencontainers.image.ref.name.
+	Name string `json:"name"`
+	// Verdict is same | changed | only-a | only-b.
+	Verdict string       `json:"verdict"`
+	A       *CompareSide `json:"a,omitempty"`
+	B       *CompareSide `json:"b,omitempty"`
+	// Differences states each disagreement as a fact. Empty when the two sides
+	// agree.
+	Differences []string `json:"differences,omitempty"`
+	// FilesAdded and FilesRemoved name the layers that changed, where the
+	// vendor titled them — which is what makes "which files changed" answerable
+	// for a generic artifact.
+	FilesAdded   []string `json:"filesAdded,omitempty"`
+	FilesRemoved []string `json:"filesRemoved,omitempty"`
+}
+
+// CompareSide is one end's account of one component.
+type CompareSide struct {
+	Digest     string      `json:"digest"`
+	Tag        string      `json:"tag,omitempty"`
+	Size       Int64String `json:"size,omitempty"`
+	Repository string      `json:"repository,omitempty"`
+	// NamedRepository is where this component should be pullable AS ITSELF on
+	// this side, and NamedPresent whether it is. The site a consumer uses, and
+	// the one that silently fails to appear.
+	NamedRepository string `json:"namedRepository,omitempty"`
+	NamedPresent    bool   `json:"namedPresent,omitempty"`
+	// NamedTagDigest is what the component's own tag resolves to there, empty
+	// when it resolves to nothing.
+	NamedTagDigest string `json:"namedTagDigest,omitempty"`
+}
+
+// ListUnavailableResponse is GET /api/v1/products/{product}/unavailable.
+type ListUnavailableResponse struct {
+	Packages []UnavailablePackage `json:"packages"`
+}
+
+// UnavailablePackage is content a source would not serve.
+//
+// Kept and reported rather than raised as an error on every scan: a vendor
+// registry serves a catalogue spanning every customer, and refusing the
+// products this one has not bought is correct behaviour that recurs forever.
+type UnavailablePackage struct {
+	Repository        string `json:"repository"`
+	Tag               string `json:"tag"`
+	DisplayRepository string `json:"displayRepository,omitempty"`
+	DisplayTag        string `json:"displayTag,omitempty"`
+	Reason            string `json:"reason"`
+	// Detail is what the registry itself said — the sentence naming the
+	// customer and the product, which is what somebody takes to their account
+	// manager.
+	Detail      string `json:"detail,omitempty"`
+	FirstSeenAt string `json:"firstSeenAt,omitempty"`
+	LastSeenAt  string `json:"lastSeenAt,omitempty"`
 }
 
 // DiscoverAllResponse reports a fleet-wide scan.
@@ -1100,6 +1242,11 @@ type Transfer struct {
 	DisplayTag string `json:"displayTag,omitempty"`
 	Source     string `json:"source"`
 	Target     string `json:"target"`
+	// SourceName and TargetName are the configured names an operator types into
+	// --from and --to. Source and Target are the resolved host and path: right
+	// for one transfer, far too wide for a page of them.
+	SourceName string `json:"sourceName,omitempty"`
+	TargetName string `json:"targetName,omitempty"`
 
 	State    TransferState `json:"state"`
 	Priority int           `json:"priority"`
@@ -1175,6 +1322,33 @@ type TransferProgress struct {
 	// destination already had it. Reported rather than buried: it is the
 	// number that makes the second transfer of a product line nearly free.
 	DedupeSkippedBytes Int64String `json:"dedupeSkippedBytes"`
+	// SkippedBytes was queued and then not sent: the worker found the content
+	// at the destination, or the registry relocated it internally.
+	SkippedBytes Int64String `json:"skippedBytes,omitempty"`
+	// SavedBytes is the two above added up — everything this transfer did not
+	// have to move.
+	//
+	// It exists because reporting only the first was wrong in the case that
+	// matters most. On a fresh database nothing is deduplicated at PLANNING
+	// time, by definition: every saving is discovered by a worker, so a
+	// transfer that skipped 32 GiB of content already at the target reported
+	// saving nothing at all.
+	SavedBytes Int64String `json:"savedBytes,omitempty"`
+}
+
+// TransferControlResponse is what :pause, :resume or :stop did.
+type TransferControlResponse struct {
+	TransferID string `json:"transferId"`
+	// State is the transfer's state afterwards.
+	State string `json:"state"`
+	// Jobs is how many job rows the verb affected.
+	Jobs int `json:"jobs"`
+	// InFlight is how many jobs were still leased when it was applied.
+	//
+	// The number that explains a `stop` reporting `CANCELLING` rather than
+	// `CANCELLED`: a leased job belongs to a worker and stops at that worker's
+	// next checkpoint, not the instant the command was typed.
+	InFlight int `json:"inFlight,omitempty"`
 }
 
 // ListTransfersResponse is GET /api/v1/transfers.

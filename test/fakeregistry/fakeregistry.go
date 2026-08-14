@@ -313,6 +313,11 @@ type Layer struct {
 	Digest    string
 	Size      int64
 	MediaType string
+	// Annotations are the layer descriptor's own, and the one that matters is
+	// `org.opencontainers.image.title` — the path of the FILE inside a generic
+	// artifact's layer. It is what makes "which files changed" answerable, so a
+	// fake that could not carry it could not test the answer.
+	Annotations map[string]string
 	// content is what the registry serves for this digest.
 	//
 	// Unexported: a caller builds a Layer through NewLayer, which derives the
@@ -437,11 +442,15 @@ func layerDescriptors(layers []Layer) []map[string]any {
 		if mt == "" {
 			mt = "application/vnd.oci.image.layer.v1.tar+gzip"
 		}
-		out = append(out, map[string]any{
+		desc := map[string]any{
 			"mediaType": mt,
 			"digest":    l.Digest,
 			"size":      l.Size,
-		})
+		}
+		if len(l.Annotations) > 0 {
+			desc["annotations"] = l.Annotations
+		}
+		out = append(out, desc)
 	}
 	return out
 }

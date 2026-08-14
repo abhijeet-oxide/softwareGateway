@@ -159,7 +159,53 @@ Written **in the same transaction** as the package insert. This is why the outbo
 | Auth failure | Same, plus a `DiscoveryFailed` notification: this needs a human, and silently retrying a bad credential forever helps nobody |
 | Partial page failure | Keep the packages already inserted; the next full scan completes the rest (§3) |
 | Malformed manifest | Record the package as `failed` with the reason; continue the scan. One bad artifact must not stop discovery of the rest |
+| Not entitled (403 on a read) | Recorded in `unavailable_packages`, reported as a fact, and **not** an error — see §7.1 |
 | Coordinator restart mid-scan | Nothing to recover. The next scan is a full scan |
+
+### 7.1 Being refused is not failing
+
+A vendor registry serves a catalogue spanning every customer. Asking about a product this customer has not licensed gets a 403 and a sentence:
+
+```json
+{"status": 403, "ErrorType": "User Authorization",
+ "ErrorMessage": "No valid entitlement found for End User: 215952 and
+                  Product sales items: CFXC24STD03.00."}
+```
+
+That is the entitlement check **working**. It is not an outage, not a bad credential and not a configuration mistake, and there is nothing for an operator to fix. On a real catalogue it happens to dozens of ORBs on every pass, forever.
+
+Treated as a per-tag failure it made every scheduled scan exit non-zero with thirty-seven lines of
+
+```
+orbs/cfx-5000-k8s tag orb_24.7.1186: resolve tag orb_24.7.1186: HTTP 403: forbidden
+```
+
+attached — lines that differ only in the two parts carrying no information about what went wrong. A signal that fires every fifteen minutes is a signal nobody reads.
+
+So a 403 on a READ is classified `not_entitled` and handled three ways at once:
+
+| | |
+|---|---|
+| The scan | succeeds, because it did |
+| The listing | groups by ORB, versions after it, and prints the registry's own sentence once |
+| `unavailable_packages` | remembers what was refused, when it was first seen and when it was last confirmed |
+
+**401 is deliberately not included.** That is a credential which did not authenticate at all — a real fault affecting everything — and folding it in here would silence an outage.
+
+The table is what makes the fact durable and falsifiable. Discarded, "which ORBs are we not entitled to?" has no answer between scans; kept with a moving `last_seen_at`, a row that stops being refreshed is one that came back, and it is deleted the first time a scan reads it successfully. `transferctl packages unavailable <product>` is the listing.
+
+**A non-Distribution error body is now read.** The sentence above is not `{"errors":[…]}`, so it parsed to nothing and an operator was shown `HTTP 403: forbidden` — a status code where the registry had written a diagnosis naming the customer and the sales item. `vendorErrorDetail` tries `ErrorMessage`, `message`, `error`, `detail` and finally `ErrorType`; anything unrecognised still yields nothing, so it may only ever add detail.
+
+### 7.2 A scan summary counts in the vendor's nouns
+
+`DisplayRepository` and `DisplayTag` shorten a NAME. `Vocabulary` names the KIND, one level up. A NEAR operator does not have repositories and tags, they have orbs and orb versions, and
+
+```
+Repositories scanned   42
+Tags listed            16921
+```
+
+makes them translate every line before they can read it. Like every other vendor convention, the mapping lives in the Layout and nowhere else — the CLI asks the server for the words and falls back to the OCI nouns, which is what any conformant source gets.
 
 `softwaregateway_discovery_last_success_timestamp_seconds{repository}` is the metric that matters operationally: it catches the dangerous failure mode, which is not "discovery is erroring loudly" but "discovery quietly stopped finding anything". Alert on staleness, not on error rate.
 

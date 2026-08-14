@@ -162,9 +162,47 @@ type QueueConfig struct {
 	MaxLeaseBatchSize int `koanf:"maxLeaseBatchSize"`
 }
 
+// GCConfig bounds how much HISTORY the database keeps.
+//
+// Three tables grow with USE rather than with the size of the catalogue, and
+// they are the whole problem: `jobs` at roughly 2500 rows per transfer, and one
+// transfer per release per target; `worker_logs`, a row per interesting thing a
+// worker did; `audit_events`, a row per state transition. Everything else grows
+// with the CATALOGUE and is the answer to "what does this vendor publish",
+// which is the point of the system — none of it expires.
+//
+// Every duration is zero-means-keep-forever, so a deployment that wants an
+// unbounded audit trail gets one by leaving the field unset rather than by
+// finding a switch to turn something off.
+//
+// See internal/store/retention.go for what each sweep may and may not touch.
 type GCConfig struct {
 	TickInterval time.Duration `koanf:"tickInterval"`
-	BatchSize    int           `koanf:"batchSize"`
+	// BatchSize bounds one pass, so the first sweep of a database that has run
+	// unbounded for a year does not hold a lock for minutes.
+	BatchSize int `koanf:"batchSize"`
+
+	// Transfers deletes SETTLED transfers, and their jobs with them, once they
+	// have been finished for this long.
+	//
+	// Settled rather than merely old: a transfer running for a month is one
+	// somebody is watching, and deleting it out from under them would look
+	// exactly like the data loss this sweep exists to avoid being blamed for.
+	Transfers time.Duration `koanf:"transfers"`
+	// WorkerLogs expires the convenience tail. It is not a log store — cluster
+	// log aggregation remains the system of record.
+	WorkerLogs time.Duration `koanf:"workerLogs"`
+	// AuditEvents expires the audit trail. Longest of the three by default, and
+	// reasonably set to zero: an audit trail with a short retention is not an
+	// audit trail.
+	AuditEvents time.Duration `koanf:"auditEvents"`
+	// Placements expires blob placement records not confirmed in this long.
+	//
+	// Zero, and worth leaving zero. This table is the memory that makes a
+	// second transfer of a product line nearly free, losing a row costs a HEAD
+	// per blob on the next transfer, and the whole table is measured in tens of
+	// thousands of rows.
+	Placements time.Duration `koanf:"placements"`
 }
 
 type WorkerConfig struct {
@@ -245,7 +283,26 @@ func Defaults() SystemConfig {
 				LeaseDuration: 2 * time.Minute,
 			},
 			Queue: QueueConfig{MaxLeaseBatchSize: 32},
-			GC:    GCConfig{TickInterval: time.Hour, BatchSize: 5000},
+			GC: GCConfig{
+				TickInterval: time.Hour,
+				BatchSize:    5000,
+				// Ninety days of transfer history and thirty of worker logs.
+				//
+				// Chosen against what each is FOR. A settled transfer's rows
+				// answer "what did that run do", which is asked in the days
+				// after it and effectively never a quarter later; the content
+				// it moved is at the destination and what we know about the
+				// source is in the catalogue, so nothing recoverable is lost.
+				// Worker logs answer "why did that job fail", which is asked
+				// the same week.
+				//
+				// The audit trail and the placement cache are left unbounded on
+				// purpose: an audit trail with a short retention is not an audit
+				// trail, and the placements are what make a re-transfer nearly
+				// free.
+				Transfers:  90 * 24 * time.Hour,
+				WorkerLogs: 30 * 24 * time.Hour,
+			},
 			ManifestCache: ManifestCacheConfig{
 				// 512 MiB and a week.
 				//

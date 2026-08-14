@@ -410,6 +410,41 @@ func (q *Queue) Retry(ctx context.Context, transferID string) (store.RetryResult
 	return res, nil
 }
 
+// Pause stops jobs being handed out. What is already leased finishes.
+func (q *Queue) Pause(ctx context.Context, transferID string) (store.ControlResult, error) {
+	return q.control(ctx, "paused", q.packages.PauseTransfer, transferID)
+}
+
+// Resume makes a paused transfer's jobs leasable again.
+func (q *Queue) Resume(ctx context.Context, transferID string) (store.ControlResult, error) {
+	return q.control(ctx, "resumed", q.packages.ResumeTransfer, transferID)
+}
+
+// Stop gives up on the work remaining. What already landed stays there.
+func (q *Queue) Stop(ctx context.Context, transferID string) (store.ControlResult, error) {
+	return q.control(ctx, "stopped", q.packages.StopTransfer, transferID)
+}
+
+// control runs one queue-control verb and logs what it did.
+//
+// The three differ only in the store call and the word, and routing them
+// through one place is what keeps their logging — the record of somebody
+// intervening in a running transfer — from drifting into three shapes.
+func (q *Queue) control(
+	ctx context.Context, verb string,
+	apply func(context.Context, string) (store.ControlResult, error),
+	transferID string,
+) (store.ControlResult, error) {
+	res, err := apply(ctx, transferID)
+	if err != nil {
+		return res, err
+	}
+	q.log.InfoContext(ctx, "transfer "+verb,
+		"transfer", res.TransferID, "jobs", res.Jobs,
+		"in_flight", res.InFlight, "state", res.State)
+	return res, nil
+}
+
 // Retryable lists the transfers a fleet-wide retry would act on.
 func (q *Queue) Retryable(ctx context.Context) ([]string, error) {
 	return q.packages.RetryableTransfers(ctx)

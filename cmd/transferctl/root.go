@@ -98,6 +98,7 @@ func newRootCommand() *cobra.Command {
 		newCalibrateCommand(),
 		newPackagesCommand(),
 		newTransfersCommand(),
+		newCompareCommand(),
 		newHealthCommand(),
 		newVersionCommand(),
 	)

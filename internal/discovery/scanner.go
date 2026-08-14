@@ -27,10 +27,12 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"github.com/google/uuid"
 	"log/slog"
+	"net/http"
 	"sync"
 	"time"
+
+	"github.com/google/uuid"
 
 	"github.com/abhijeet-oxide/softwareGateway/internal/oci"
 	"github.com/abhijeet-oxide/softwareGateway/internal/product"
@@ -209,6 +211,10 @@ type ScanResult struct {
 	// One unreachable repository must not hide the other nineteen.
 	RepositoryErrors []RepositoryError
 
+	// Vocabulary is what this source's vendor calls a repository and a tag, so
+	// a summary can be read without translating every line.
+	Vocabulary vendors.Vocabulary
+
 	Duration time.Duration
 
 	// Collapsed reports that this result came from a scan ALREADY RUNNING when
@@ -226,7 +232,16 @@ type ScanResult struct {
 type TagError struct {
 	Repository string
 	Tag        string
-	Err        error
+	// DisplayRepository and DisplayTag are the VENDOR's names for the same two
+	// things — `cfx-5000-k8s` and `24.7.1186` where the paths are
+	// `orbs/cfx-5000-k8s` and `orb_24.7.1186`. Empty means no shortening
+	// applies, which is what a conformant registry gets.
+	DisplayRepository string
+	DisplayTag        string
+	// Class says what KIND of failure this is, where the kind changes what
+	// should be done about it. Empty means an ordinary failure.
+	Class string
+	Err   error
 }
 
 func (e TagError) Error() string {
@@ -236,6 +251,53 @@ func (e TagError) Error() string {
 	return e.Repository + " tag " + e.Tag + ": " + e.Err.Error()
 }
 func (e TagError) Unwrap() error { return e.Err }
+
+// ClassNotEntitled is a source refusing content this customer has not bought.
+//
+// It is a separate class because it is not a failure of anything. A vendor
+// registry serves a catalogue spanning every customer, and answering 403 for
+// the products this one has no licence to is the correct behaviour — the
+// entitlement check working, not a broken credential, an outage, or a mistake
+// in configuration.
+//
+// Treating it as an error made every scheduled scan of a real catalogue exit
+// non-zero forever, with thirty-seven lines of URL and status code attached,
+// which is precisely how a monitoring signal gets ignored. What an operator
+// needs is the fact, once, in the vendor's own nouns, and a scan that reports
+// success because it succeeded.
+const ClassNotEntitled = "not_entitled"
+
+// tagError records one tag's failure with everything needed to report it in the
+// vendor's own words, rather than in ours.
+//
+// The names are resolved HERE, at the moment of failure, because this is the
+// only place that holds both the paths and the Layout. Doing it later would put
+// the vendor's convention somewhere it is forbidden to be.
+func (s *Scanner) tagError(repoPath, tag string, err error) TagError {
+	return TagError{
+		Repository:        repoPath,
+		Tag:               tag,
+		DisplayRepository: s.layout.DisplayRepository(repoPath),
+		DisplayTag:        s.layout.DisplayTag(tag),
+		Class:             classifyTagError(err),
+		Err:               err,
+	}
+}
+
+// classifyTagError decides whether a failure is a fact about entitlement.
+//
+// A 403 on a READ, from a registry that fronts an entitlement system, means
+// one thing: this account may not have this product. 401 is deliberately NOT
+// included — that is a credential that did not authenticate at all, which is a
+// real fault affecting everything, and folding it in here would silence an
+// outage.
+func classifyTagError(err error) string {
+	var rerr *registry.Error
+	if errors.As(err, &rerr) && rerr.StatusCode == http.StatusForbidden {
+		return ClassNotEntitled
+	}
+	return ""
+}
 
 // RepositoryError is a single repository's failure.
 type RepositoryError struct {
@@ -253,7 +315,7 @@ func (e RepositoryError) Unwrap() error { return e.Err }
 // and do not stop the scan (docs/design/07 §7).
 func (s *Scanner) Scan(ctx context.Context) (ScanResult, error) {
 	started := time.Now()
-	var res ScanResult
+	res := ScanResult{Vocabulary: s.layout.Vocabulary().Or(vendors.StandardVocabulary())}
 
 	// Progress is published from here on. The enumeration below is the first
 	// thing a caller waits on and, against a slow registry, often the longest —
@@ -364,6 +426,12 @@ func (s *Scanner) Scan(ctx context.Context) (ScanResult, error) {
 		}
 	}
 
+	// Content the vendor would not serve is written down rather than reported
+	// and forgotten. On a catalogue spanning every customer this is dozens of
+	// orbs on every pass, forever, and the question "which ones are we not
+	// entitled to?" has no other answer.
+	s.recordUnavailable(ctx, res.TagErrors)
+
 	res.Duration = time.Since(started)
 
 	// A scan where EVERY repository failed is a failed scan, not a successful
@@ -383,6 +451,55 @@ func (s *Scanner) Scan(ctx context.Context) (ScanResult, error) {
 	}
 
 	return res, nil
+}
+
+// recordUnavailable persists the tags a source refused to serve.
+//
+// Only the classified ones. An ordinary failure — a timeout, a malformed
+// manifest — is transient or is a bug, and writing it here would turn a table
+// of "what we are not entitled to" into a table of everything that ever went
+// wrong, which is what the log is for.
+//
+// A write failure is logged and swallowed. This is bookkeeping about a scan
+// that has already happened; losing it must not cost the caller the scan.
+func (s *Scanner) recordUnavailable(ctx context.Context, failures []TagError) {
+	var rows []store.UnavailablePackage
+	for _, e := range failures {
+		if e.Class != ClassNotEntitled {
+			continue
+		}
+		rows = append(rows, store.UnavailablePackage{
+			Repository:        e.Repository,
+			Tag:               e.Tag,
+			DisplayRepository: e.DisplayRepository,
+			DisplayTag:        e.DisplayTag,
+			Reason:            store.ReasonNotEntitled,
+			Detail:            entitlementDetail(e.Err),
+		})
+	}
+	if len(rows) == 0 {
+		return
+	}
+	if err := s.packages.RecordUnavailable(ctx, s.productID, rows); err != nil {
+		s.log.WarnContext(ctx, "could not record unentitled content", "error", err)
+	}
+}
+
+// entitlementDetail is what the registry itself said, when it said anything.
+//
+// Preferred over our own rendering because the vendor's sentence names the
+// customer and the product — "No valid entitlement found for End User: 215952
+// and Product sales items: CFXC24STD03.00" — which is what somebody takes to
+// their account manager. Our rendering is a status code.
+func entitlementDetail(err error) string {
+	var rerr *registry.Error
+	if errors.As(err, &rerr) && rerr.Detail != "" {
+		return rerr.Detail
+	}
+	if err == nil {
+		return ""
+	}
+	return err.Error()
 }
 
 // reconcileDisplayNames brings stored display tags in line with what the
@@ -641,7 +758,7 @@ func (s *Scanner) resolvePhase(
 			// of the rest — that is how a single vendor mistake would otherwise
 			// stall every release behind it.
 			res.TagErrors = append(res.TagErrors,
-				TagError{Repository: r.work.repoPath, Tag: r.work.tag, Err: r.err})
+				s.tagError(r.work.repoPath, r.work.tag, r.err))
 			s.log.WarnContext(ctx, "tag resolve failed",
 				"repository", r.work.repoPath, "tag", r.work.tag, "error", r.err)
 			s.progress.update(func(p *ScanProgress) { p.Errors++ })
@@ -652,7 +769,7 @@ func (s *Scanner) resolvePhase(
 	for _, f := range items {
 		if f.err != nil {
 			res.TagErrors = append(res.TagErrors,
-				TagError{Repository: f.work.repoPath, Tag: f.work.tag, Err: f.err})
+				s.tagError(f.work.repoPath, f.work.tag, f.err))
 			s.log.WarnContext(ctx, "manifest fetch failed",
 				"repository", f.work.repoPath, "tag", f.work.tag, "error", f.err)
 			s.progress.update(func(p *ScanProgress) { p.Errors++ })
@@ -720,7 +837,7 @@ func (s *Scanner) resolvePhase(
 				f.work.repoPath, pkg.Tag, f.tree.Artifacts[0].Descriptor, f.tree, pkg)
 			if err != nil {
 				res.TagErrors = append(res.TagErrors,
-					TagError{Repository: repoPath, Tag: pkg.Tag, Err: err})
+					s.tagError(repoPath, pkg.Tag, err))
 				s.log.WarnContext(ctx, "package record failed",
 					"repository", repoPath, "tag", pkg.Tag, "error", err)
 				s.progress.update(func(p *ScanProgress) { p.Errors++ })

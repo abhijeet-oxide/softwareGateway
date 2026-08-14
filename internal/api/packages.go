@@ -712,16 +712,18 @@ func (s *Server) handleComparePackage(w http.ResponseWriter, r *http.Request) {
 	}
 
 	out := v1.CompareResponse{
-		Product:    productName,
-		A:          compareEndDTO(report.A, report.ReferenceA()),
-		B:          compareEndDTO(report.B, report.ReferenceB()),
-		Rows:       make([]v1.CompareRow, 0, len(report.Rows)),
-		Same:       report.Same,
-		Changed:    report.Changed,
-		OnlyA:      report.OnlyA,
-		OnlyB:      report.OnlyB,
-		ExtraTagsA: report.ExtraTagsA,
-		ExtraTagsB: report.ExtraTagsB,
+		Product:         productName,
+		A:               compareEndDTO(report.A, report.ReferenceA()),
+		B:               compareEndDTO(report.B, report.ReferenceB()),
+		Rows:            make([]v1.CompareRow, 0, len(report.Rows)),
+		Same:            report.Same,
+		Changed:         report.Changed,
+		OnlyA:           report.OnlyA,
+		OnlyB:           report.OnlyB,
+		ExtraTagsA:      report.ExtraTagsA,
+		ExtraTagsB:      report.ExtraTagsB,
+		ExtraTruncatedA: report.ExtraTruncatedA,
+		ExtraTruncatedB: report.ExtraTruncatedB,
 	}
 	for _, row := range report.Rows {
 		out.Rows = append(out.Rows, v1.CompareRow{

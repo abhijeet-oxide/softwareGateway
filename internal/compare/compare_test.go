@@ -607,16 +607,16 @@ func TestUnexplainedTagsInTheBundleRepositoryAreReported(t *testing.T) {
 
 // THE OTHER HALF OF THE 253.
 //
-// NEAR tags every component inside the orb's own repository — `docker_<digest>`,
-// `helmoci_<digest>`, one per component — so a listing of that repository
-// returns hundreds of names the bundle's inventory does not contain. It does not
-// contain them because a component's Tag comes from its `ref.name`
-// (`2507.2131.0`), which is a different string for the same manifest.
+// NEAR tags every component inside the orb's own repository — one tag per
+// component, spelled from that component's digest — so a listing of that
+// repository returns hundreds of names the inventory does not contain. It does
+// not contain them because a component's Tag comes from its `ref.name`
+// (`2507.2131.0`), a different string for the same manifest.
 //
-// Judged by name they were all unexplained, and a correct orb printed a wall of
-// them under "not part of this release". Judged by CONTENT — which is what the
-// question actually means — there is nothing there the bundle does not account
-// for.
+// Judged by NAME they were all unexplained, and a correct orb printed a wall of
+// them under "not part of this release". Judged by what they point AT — which
+// is the only question OCI lets you ask about a tag — there is nothing there
+// the release does not account for.
 func TestTagsNamingContentTheBundleAccountsForAreNotUnexplained(t *testing.T) {
 	f := newFixture(t)
 	f.publish(f.src, sourcePath, release, componentsOf(release))
@@ -628,6 +628,11 @@ func TestTagsNamingContentTheBundleAccountsForAreNotUnexplained(t *testing.T) {
 		f.src.AddManifest(sourcePath, "docker_"+strings.TrimPrefix(digest, "sha256:"),
 			f.src.Manifest(sourcePath, digest), registry.MediaTypeOCIManifest)
 	}
+	// AND A SPELLING NOBODY HAS SEEN, for the same content. A check that reads
+	// tag names passes the two above and fails this one; a check that resolves
+	// them cannot tell the difference, which is the whole point.
+	f.src.AddManifest(sourcePath, "whatever-the-next-vendor-calls-it",
+		f.src.Manifest(sourcePath, f.digestOf("nginx")), registry.MediaTypeOCIManifest)
 
 	report := f.compare(f.sourceSide(release), f.targetSide(release))
 
@@ -638,6 +643,38 @@ func TestTagsNamingContentTheBundleAccountsForAreNotUnexplained(t *testing.T) {
 	if !report.Identical() {
 		t.Fatalf("a faithful copy reported %d differences:\n%s",
 			report.Differences(), describe(report))
+	}
+}
+
+// A SIDE MAY HOLD MORE OF THE RELEASE THAN WAS COMPARED, and what it holds is
+// still part of the release.
+//
+// Where a destination has neither the wrapper's tag nor the wrapper, the
+// payload is what both sides can be compared from — so the signature is not in
+// the walked tree, and the vendor's `signature_orb_…` tag was reported back to
+// the vendor as content nobody had put there. The release is precisely where
+// that tag came from.
+func TestWhatAnUnwalkedRootReferencesIsStillPartOfTheRelease(t *testing.T) {
+	f := newFixture(t)
+	f.publish(f.src, sourcePath, release, componentsOf(release))
+	wrapper := f.publishWrapper(f.src, sourcePath, wrapped, release)
+
+	// The destination got the payload and its components, and nothing of the
+	// wrapper — neither the tag nor the artifact.
+	f.copyToTarget(release)
+
+	refs := []string{wrapped, wrapper, release}
+	report := f.compare(f.sourceSide(refs...), f.targetSide(refs...))
+
+	if report.ResolvedA != release || report.ResolvedB != release {
+		t.Fatalf("walked %q and %q, want the payload %q — the only reference "+
+			"both sides hold", report.ResolvedA, report.ResolvedB, release)
+	}
+	for _, tag := range report.ExtraTagsA {
+		if strings.HasPrefix(tag, "signature_") || tag == wrapped {
+			t.Errorf("%s is reported as not part of the release that publishes "+
+				"it: %v", tag, report.ExtraTagsA)
+		}
 	}
 }
 
@@ -848,7 +885,12 @@ func (f *fixture) publishWrapper(
 	if payload == "" {
 		f.t.Fatalf("no payload %s:%s to wrap", repo, payloadTag)
 	}
-	signature := reg.AddImage(repo, "", fakeregistry.NewLayer("a pkcs7 signature"))
+	// THREE TAGS PER RELEASE, which is what NEAR publishes: the payload, the
+	// signature, and the wrapper binding them. The signature carrying a tag of
+	// its own is the whole reason it can be reported as unexplained content
+	// when the comparison did not walk the wrapper.
+	signature := reg.AddImage(repo, "signature_"+payloadTag,
+		fakeregistry.NewLayer("a pkcs7 signature"))
 
 	children := []map[string]any{
 		{

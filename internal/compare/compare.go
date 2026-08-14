@@ -61,13 +61,19 @@ type SideSpec struct {
 	Label string
 	// Repository is where the bundle's root lives on this side.
 	Repository string
-	// References are candidate roots, most complete first. The first that
-	// resolves is walked.
+	// References are candidate roots, most complete first. The most complete
+	// one BOTH SIDES hold is what gets walked — see chooseRoots.
 	//
-	// Plural because a vendor may bundle the payload and its signature under a
-	// wrapper index: walking the wrapper reaches both, so it is preferred — but
-	// a destination that holds only the payload is a real and ordinary state,
-	// and falling back to it beats reporting the whole side missing.
+	// Plural because a release may be addressable several ways: a pre-1.1
+	// vendor bundling a payload with its detached signature publishes a wrapper
+	// index over both, and walking the wrapper reaches the whole release rather
+	// than the part a consumer happens to pull. A place holding only the
+	// payload is a real and ordinary state, and comparing that beats reporting
+	// the whole side missing.
+	//
+	// Each root is best given in both spellings it has, tag and digest: a
+	// missing TAG and a missing MANIFEST are different failures with different
+	// fixes, and a list carrying only the tag cannot tell them apart.
 	References []string
 	// BasePath is the prefix beneath which this side reproduces the vendor's
 	// structure — a target's configured `repository`. Empty for a source,
@@ -159,8 +165,16 @@ type Item struct {
 	// Key aligns this component with its counterpart on the other side.
 	Key string
 	// Type is what it is, in the words somebody uses: index, image, chart,
-	// file, signature.
+	// file, signature. FOR READING, never for identity — see Kind.
 	Type string
+	// Kind is what OCI says this artifact is: its `artifactType` where it has
+	// one, its media type otherwise.
+	//
+	// Verbatim, and that is the point. Type is a friendly bucketing of these
+	// values and several distinct artifacts share each bucket, so it can say
+	// two things are alike when the registry says they are not. Identity uses
+	// the specification's own answer; only the display uses ours.
+	Kind string
 	// Name is the vendor's name for it, or the bundle path where it has none.
 	Name string
 	// Tag is the name it answers to, from `ref.name` or from the root
@@ -240,16 +254,22 @@ type Report struct {
 	OnlyA   int
 	OnlyB   int
 
-	// ExtraTagsA and ExtraTagsB are tags in each side's BUNDLE repository that
-	// this bundle does not account for.
+	// ExtraTagsA and ExtraTagsB are tags in each side's BUNDLE repository
+	// pointing at content this release does not account for.
 	//
-	// Reported only for the bundle's own repository, where the question is well
-	// defined: a NEAR orb gets a repository to itself, so anything else in it
-	// is genuinely unexplained. It is deliberately not asked of a component's
-	// repository, which legitimately holds every other version of that
-	// component and would report each one as a discrepancy.
+	// Judged by what a tag RESOLVES TO, never by how it is spelled: nothing in
+	// the specification constrains how a publisher names a tag, so a
+	// name-shaped test is a test of one vendor's convention. Asked only of the
+	// bundle's own repository — a component's repository legitimately holds
+	// every other version of that component, and asking it there would report
+	// each previous release as a discrepancy.
 	ExtraTagsA []string
 	ExtraTagsB []string
+	// ExtraTruncatedA and ExtraTruncatedB say the repository listed more tags
+	// than this comparison would resolve, so the lists above are a partial
+	// account of what is unexplained rather than the whole one.
+	ExtraTruncatedA bool
+	ExtraTruncatedB bool
 }
 
 // Differences is how many rows disagree.
@@ -312,7 +332,7 @@ func Run(ctx context.Context, clientA, clientB ClientFactory, opts Options) (Rep
 		wg           sync.WaitGroup
 		invA, invB   inventory
 		errA, errB   error
-		extraA, extB []string
+		extraA, extB extras
 	)
 	wg.Add(2)
 	go func() {
@@ -335,7 +355,8 @@ func Run(ctx context.Context, clientA, clientB ClientFactory, opts Options) (Rep
 	report := Report{
 		A: opts.A, B: opts.B,
 		ResolvedA: rootA.chosen, ResolvedB: rootB.chosen,
-		ExtraTagsA: extraA, ExtraTagsB: extB,
+		ExtraTagsA: extraA.Tags, ExtraTagsB: extB.Tags,
+		ExtraTruncatedA: extraA.Truncated, ExtraTruncatedB: extB.Truncated,
 	}
 	report.Rows = align(invA, invB, notes)
 
@@ -399,7 +420,7 @@ func (inv inventory) add(item *Item) {
 func readSide(
 	ctx context.Context, client ClientFactory, spec SideSpec, choice rootChoice,
 	concurrency int,
-) (inventory, []string, error) {
+) (inventory, extras, error) {
 	root, desc, ref := choice.repo, choice.desc, choice.chosen
 
 	// TOLERANT, and this is the difference between a comparison and an error
@@ -409,7 +430,7 @@ func readSide(
 	// is the least useful possible answer to "what is missing?".
 	tree, missing, _, err := oci.WalkPartial(ctx, root, desc, concurrency)
 	if err != nil {
-		return nil, nil, fmt.Errorf("walk %s: %w", spec, err)
+		return nil, extras{}, fmt.Errorf("walk %s: %w", spec, err)
 	}
 
 	inv := make(inventory, len(tree.Artifacts)+len(missing))
@@ -429,7 +450,58 @@ func readSide(
 	}
 
 	probeNamedSites(ctx, client, inv, concurrency)
-	return inv, extraTags(ctx, root, inv, spec, concurrency), nil
+
+	tags, truncated := extraTags(ctx, root, inv, spec,
+		unwalkedRoots(ctx, root, choice, concurrency), concurrency)
+	return inv, extras{Tags: tags, Truncated: truncated}, nil
+}
+
+// extras is one side's unexplained content, and whether the question was fully
+// asked.
+type extras struct {
+	Tags      []string
+	Truncated bool
+}
+
+// unwalkedRoots is the content reachable from a root THIS SIDE HOLDS but the
+// comparison did not walk from.
+//
+// A side may hold a more complete root than the one both sides agreed on: the
+// vendor has the signed wrapper, the destination does not, so the payload is
+// what gets compared. The wrapper and the signature hanging off it are still
+// part of the release — the vendor published them as part of it — and calling
+// their tags "not part of this release" because of which root the OTHER side
+// was missing states something false about this one.
+//
+// One request per unwalked root, and only its immediate children: anything
+// deeper is reachable from the root that WAS walked, or that root would not
+// have been a fallback for this one.
+func unwalkedRoots(
+	ctx context.Context, root registry.Repository, choice rootChoice, concurrency int,
+) []string {
+	var out []string
+	for _, ref := range choice.order {
+		desc, held := choice.holds[ref]
+		if !held || ref == choice.chosen {
+			continue
+		}
+
+		// FetchRoot reads one manifest and records the children it lists,
+		// without descending — which is exactly the shape wanted here, and is
+		// the same reader the rest of the system parses manifests with.
+		tree, err := oci.FetchRoot(ctx, root, desc)
+		if err != nil {
+			out = append(out, string(desc.Digest))
+			continue
+		}
+		for _, a := range tree.Artifacts {
+			out = append(out, string(a.Descriptor.Digest))
+			for _, b := range a.Blobs {
+				out = append(out, string(b.Descriptor.Digest))
+			}
+		}
+	}
+	return out
 }
 
 // rootChoice is where one side will be walked from, and what else it holds.
@@ -671,6 +743,7 @@ func itemFrom(a oci.Artifact, spec SideSpec, rootRef string, isRoot bool) *Item 
 
 	item := &Item{
 		Type:       classify(a.Descriptor),
+		Kind:       kindOf(a.Descriptor),
 		Digest:     string(a.Descriptor.Digest),
 		Size:       a.Descriptor.Size,
 		Repository: spec.Repository,
@@ -690,21 +763,23 @@ func itemFrom(a oci.Artifact, spec SideSpec, rootRef string, isRoot bool) *Item 
 			item.Tag = rootRef
 		}
 	case ref.repository != "":
-		// The repository AND what the artifact is.
+		// The repository AND what OCI says the artifact is.
 		//
-		// The repository alone is not an identity wherever a vendor names two
-		// children after the bundle itself, and NEAR does exactly that: its
-		// wrapper's two children are `orbs/cfx-5000-k8s:orb_25.7…` and
-		// `orbs/cfx-5000-k8s:signature_orb_25.7…`, one repository and two
-		// artifacts. Keyed by repository they collided, one silently won, and
-		// the release's signature vanished from both sides of every comparison
-		// — while the tag it left behind was then reported as unexplained
-		// content in the destination.
+		// The repository alone is not an identity. `ref.name` is a full
+		// reference — repository and tag — and only its repository half is
+		// stable enough to align two releases by, so a bundle naming two
+		// children after one repository leaves the halves we keep identical.
+		// That is not hypothetical: a pre-1.1 vendor bundling a payload with
+		// its detached signature names both after the bundle, and keyed by
+		// repository alone they collided, one silently won, and the release's
+		// SIGNATURE was absent from both sides of every comparison that walked
+		// such a bundle.
 		//
-		// The type is stable across releases in the way the TAG is not, so it
-		// separates them without costing the version-to-version alignment the
-		// tag is deliberately kept out of the key for.
-		item.Key = strings.ToLower(ref.repository) + "\x00" + item.Type
+		// artifactType is the field the specification reserves for exactly this
+		// question, and unlike the tag it does not change from release to
+		// release — so it separates them at no cost to the alignment the tag is
+		// deliberately kept out of the key for.
+		item.Key = strings.ToLower(ref.repository) + "\x00" + item.Kind
 	default:
 		// Named nothing. It can only ever match itself, which is the honest
 		// answer for content whose only identity is its bytes.
@@ -802,199 +877,73 @@ func probeNamedSites(
 	wg.Wait()
 }
 
-// extraTags lists tags in the BUNDLE's repository that this bundle does not
-// account for.
+// extraTags lists tags in the BUNDLE's repository that point at content this
+// release does not account for.
 //
-// Asked only of the bundle's own repository, where the question is well
-// defined: a NEAR orb gets a repository to itself, so anything else in it is
-// unexplained and worth naming. Asking it of a component's repository would
-// report every other version of that component as a discrepancy, which is the
-// opposite of useful.
+// Asked only of the bundle's own repository. A component's repository
+// legitimately holds every other version of that component, and asking it there
+// would report each previous release as a discrepancy.
 //
 // A registry that will not list tags yields nothing rather than an error. The
 // comparison's findings do not depend on it.
 //
-// # A tag is not extra merely because the bundle does not NAME it
+// # Judged by CONTENT, never by the shape of a tag name
 //
-// This is a listing of the repository, not a reading of the manifest, and the
-// two answer different questions. The walk above already accumulated every
-// image, chart and file the orb's index references; this asks the separate
-// question of what ELSE is in the repository, and its first version answered it
-// by name alone.
+// The first version of this compared tag NAMES against the names in the
+// inventory, and that is not a question OCI lets you answer. A tag is a pointer;
+// what it points AT is the only thing that says whether the release accounts for
+// it. Nothing in the specification constrains how a publisher spells a tag, so a
+// name-shaped test is a test of one vendor's convention wearing generic clothes.
 //
-// That was wrong wherever a vendor tags its components inside the bundle's own
-// repository. NEAR does exactly that — `docker_<digest>`, `helmoci_<digest>`,
-// one per component — so a correct orb reported two hundred and fifty
-// "unexplained" tags, every one of them naming content the comparison had just
-// walked and matched. The tag names are not in the inventory because a
-// component's `Tag` comes from its `ref.name` (`2507.2131.0`), which is a
-// different string for the same manifest.
+// It failed exactly that way. NEAR tags every component inside the orb's own
+// repository — one tag per component, spelled from the component's digest — so a
+// correct orb reported hundreds of "unexplained" tags, every one of them
+// pointing at a manifest the walk had just matched. They were missing from the
+// inventory only because a component's Tag comes from its `ref.name`, which is a
+// different string for the same content.
 //
-// So a tag is checked against the CONTENT the bundle accounts for, twice: by
-// the digest its name embeds, which is free, and then by what it actually
-// resolves to, which is not and is therefore bounded. Only a tag that survives
-// both is genuinely unexplained.
+// So every listed tag is RESOLVED, and accounted for if what it resolves to is
+// in this release. That costs one HEAD per tag and needs no knowledge of any
+// vendor's spelling, which is the trade this makes deliberately: the cheap
+// answer was the wrong answer.
 func extraTags(
 	ctx context.Context, root registry.Repository, inv inventory, spec SideSpec,
-	concurrency int,
-) []string {
+	alsoAccounted []string, concurrency int,
+) (extra []string, truncated bool) {
 	lister, ok := root.(registry.TagLister)
 	if !ok {
-		return nil
+		return nil, false
 	}
+	accounted := accountedDigests(inv, alsoAccounted)
 
-	known := map[string]bool{}
-	for _, item := range inv {
-		if item.Tag != "" && sameRepo(item.Repository, spec.Repository) {
-			known[item.Tag] = true
-		}
-	}
-	for _, ref := range spec.References {
-		known[ref] = true
-	}
-	accounted := accountedDigests(inv)
-
-	var out []string
+	var listed []string
 	last := ""
 	for range 20 { // bounded: a bundle repository holding 4000 tags is not one
 		tags, next, err := lister.ListTags(ctx, last, 200)
 		if err != nil {
-			return nil
+			return nil, false
 		}
-		for _, tag := range tags {
-			if known[tag] || namesAccountedDigest(tag, accounted) {
-				continue
-			}
-			out = append(out, tag)
-		}
+		listed = append(listed, tags...)
 		if next == "" {
 			break
 		}
 		last = next
 	}
 
-	out = dropTagsIntoBundle(ctx, root, out, accounted, concurrency)
-	sort.Strings(out)
-	return out
-}
-
-// accountedDigests is every piece of content this bundle explains, indexed by
-// the first digits of its digest.
-//
-// Layers as well as manifests: a vendor that tags a component's LAYER inside
-// the bundle repository has still not put anything there the bundle does not
-// account for.
-//
-// Indexed by prefix rather than held as whole digests so a tag naming a
-// SHORTENED digest still matches — the convention is the vendor's and nothing
-// obliges it to use all sixty-four characters.
-func accountedDigests(inv inventory) map[string][]string {
-	out := map[string][]string{}
-	add := func(digest string) {
-		hex := hexOf(digest)
-		if len(hex) < minDigestHex {
-			return
-		}
-		key := hex[:minDigestHex]
-		out[key] = append(out[key], hex)
-	}
-	for _, item := range inv {
-		add(item.Digest)
-		for _, layer := range item.Layers {
-			add(layer.Digest)
-		}
-	}
-	return out
-}
-
-// minDigestHex is how much of a digest a tag must embed before that is
-// evidence rather than coincidence. Sixteen bytes: long enough that no version
-// number reaches it, short enough to match a vendor's abbreviation.
-const minDigestHex = 32
-
-// namesAccountedDigest reports whether a tag NAMES content the bundle
-// accounts for.
-func namesAccountedDigest(tag string, accounted map[string][]string) bool {
-	for _, run := range hexRuns(tag) {
-		for _, full := range accounted[run[:minDigestHex]] {
-			if strings.HasPrefix(full, run) || strings.HasPrefix(run, full) {
-				return true
-			}
-		}
-	}
-	return false
-}
-
-// hexRuns returns the maximal hexadecimal stretches of a tag that are long
-// enough to be a digest rather than a version.
-//
-// Maximal runs rather than a prefix match on a known separator, because the
-// separator is the vendor's: `docker_<digest>` and `helmoci_<digest>` are
-// NEAR's spelling, and nothing here should have to be taught the next one.
-func hexRuns(tag string) []string {
-	var (
-		out   []string
-		start = -1
-	)
-	for i := 0; i <= len(tag); i++ {
-		if i < len(tag) && isHexDigit(tag[i]) {
-			if start < 0 {
-				start = i
-			}
-			continue
-		}
-		if start >= 0 && i-start >= minDigestHex {
-			out = append(out, tag[start:i])
-		}
-		start = -1
-	}
-	return out
-}
-
-func isHexDigit(c byte) bool {
-	return c >= '0' && c <= '9' || c >= 'a' && c <= 'f' || c >= 'A' && c <= 'F'
-}
-
-func hexOf(digest string) string {
-	_, hex, ok := strings.Cut(digest, ":")
-	if !ok {
-		return digest
-	}
-	return hex
-}
-
-// maxProbedTags bounds what the name check could not settle.
-//
-// A repository holding more than this many genuinely unexplained tags has a
-// problem no number of requests will clarify, and the listing is already the
-// finding at that point.
-const maxProbedTags = 128
-
-// dropTagsIntoBundle removes the tags that turn out to point at content this
-// bundle already accounts for.
-//
-// The name check above is free and settles the vendor conventions we have seen;
-// this settles the rest by asking the registry what the tag actually resolves
-// to, which is the only answer that does not depend on a naming convention.
-//
-// A tag that cannot be resolved is KEPT. It was listed by the registry, so it
-// exists, and dropping it because a second request failed would quietly shrink
-// the finding.
-func dropTagsIntoBundle(
-	ctx context.Context, root registry.Repository, tags []string,
-	accounted map[string][]string, concurrency int,
-) []string {
-	if len(tags) == 0 || len(tags) > maxProbedTags {
-		return tags
+	if len(listed) > maxResolvedTags {
+		// REPORTED rather than absorbed. Silently treating the remainder as
+		// unexplained would invent findings, and silently dropping it would
+		// hide them; saying the question was not fully asked is the only
+		// answer that is true.
+		listed, truncated = listed[:maxResolvedTags], true
 	}
 
 	var (
-		mu   sync.Mutex
-		wg   sync.WaitGroup
-		sem  = make(chan struct{}, concurrency)
-		keep = make([]string, 0, len(tags))
+		mu  sync.Mutex
+		wg  sync.WaitGroup
+		sem = make(chan struct{}, concurrency)
 	)
-	for _, tag := range tags {
+	for _, tag := range listed {
 		wg.Add(1)
 		go func(tag string) {
 			defer wg.Done()
@@ -1002,17 +951,48 @@ func dropTagsIntoBundle(
 			defer func() { <-sem }()
 
 			desc, err := root.ResolveTag(ctx, tag)
-			if err == nil && namesAccountedDigest(hexOf(string(desc.Digest)), accounted) {
+			// A tag the registry listed and will not resolve is KEPT. It
+			// exists, so dropping it because a second request failed would
+			// quietly shrink the finding.
+			if err == nil && accounted[string(desc.Digest)] {
 				return
 			}
 
 			mu.Lock()
 			defer mu.Unlock()
-			keep = append(keep, tag)
+			extra = append(extra, tag)
 		}(tag)
 	}
 	wg.Wait()
-	return keep
+
+	sort.Strings(extra)
+	return extra, truncated
+}
+
+// maxResolvedTags bounds the requests one side's extra-content check may make.
+//
+// Generous, because the cost is one HEAD each and they run in parallel, and
+// because the alternative to asking is guessing. A repository holding more tags
+// than this is not a bundle repository, and the truncation is reported.
+const maxResolvedTags = 2000
+
+// accountedDigests is every piece of content this release explains.
+//
+// Layers as well as manifests: a vendor that tags a component's LAYER inside the
+// bundle repository has still not put anything there the release does not
+// account for.
+func accountedDigests(inv inventory, also []string) map[string]bool {
+	out := map[string]bool{}
+	for _, item := range inv {
+		out[item.Digest] = true
+		for _, layer := range item.Layers {
+			out[layer.Digest] = true
+		}
+	}
+	for _, digest := range also {
+		out[digest] = true
+	}
+	return out
 }
 
 // align pairs the two inventories by key.
@@ -1157,6 +1137,19 @@ func siteDifferences(a, b *Item) []string {
 	return out
 }
 
+// kindOf is the specification's own answer to what an artifact is.
+//
+// `artifactType` where the artifact declares one — OCI 1.1 reserves it for
+// precisely this — and the media type otherwise, which is what every artifact
+// predating 1.1 has instead. Neither is interpreted here: this is an identity,
+// and interpreting it is how an identity stops distinguishing things.
+func kindOf(desc registry.Descriptor) string {
+	if desc.ArtifactType != "" {
+		return desc.ArtifactType
+	}
+	return desc.MediaType
+}
+
 // classify says what an artifact IS, in the words somebody uses about it.
 //
 // Media type first, because that is what the specification defines and what the
@@ -1203,10 +1196,6 @@ func parseRefName(v string) refName {
 		return refName{repository: v}
 	}
 	return refName{repository: v[:i], tag: v[i+1:]}
-}
-
-func sameRepo(a, b string) bool {
-	return strings.EqualFold(strings.Trim(a, "/"), strings.Trim(b, "/"))
 }
 
 func quoteTag(tag string) string {

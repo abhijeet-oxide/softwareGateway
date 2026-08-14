@@ -660,6 +660,11 @@ type CompareResponse struct {
 	// there.
 	ExtraTagsA []string `json:"extraTagsA,omitempty"`
 	ExtraTagsB []string `json:"extraTagsB,omitempty"`
+	// ExtraTruncatedA and ExtraTruncatedB say the repository listed more tags
+	// than the comparison would resolve, so the lists above are a partial
+	// account of what is unexplained rather than the whole one.
+	ExtraTruncatedA bool `json:"extraTruncatedA,omitempty"`
+	ExtraTruncatedB bool `json:"extraTruncatedB,omitempty"`
 }
 
 // CompareEnd identifies one side of a comparison.

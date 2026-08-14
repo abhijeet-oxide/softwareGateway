@@ -73,6 +73,28 @@ type SideSpec struct {
 	// structure — a target's configured `repository`. Empty for a source,
 	// which holds the vendor's paths unprefixed.
 	BasePath string
+	// PublishesComponentsByName says this side is expected to serve each
+	// component from the repository its `ref.name` names, as well as from
+	// inside the bundle.
+	//
+	// TRUE ONLY FOR A SIDE THIS SYSTEM WROTE. That second publication is
+	// something a TRANSFER creates — see internal/transfer/layout.go, "Why a
+	// component lands in TWO places". It is not required by OCI, and it is not
+	// something a vendor has agreed to do.
+	//
+	// NEAR does not do it. Its components live inside the orb repository,
+	// tagged `docker_<digest>` and `helmoci_<digest>`; the
+	// `cfx-5000-product/admin` in a NEAR component's `ref.name` is the
+	// ORIGINAL UPSTREAM COORDINATE the vendor built from, not a path NEAR
+	// serves. Asking a NEAR registry for it therefore returns 404 for every
+	// component of every orb.
+	//
+	// Which is what this flag exists to stop. Probing both sides
+	// unconditionally reported a vendor's own layout as a defect, once per
+	// component: 253 findings, each reading `not published as
+	// cfx-5000-product/… on the first side`, on a transfer that had copied
+	// every byte correctly.
+	PublishesComponentsByName bool
 }
 
 // String renders a side as a reference somebody could paste into a pull.
@@ -199,9 +221,17 @@ type Row struct {
 	FilesTruncated bool
 }
 
+// IsRoot reports whether this row is the bundle itself rather than one of its
+// components.
+func (r Row) IsRoot() bool { return r.Key == rootKey }
+
 // Report is the whole comparison.
 type Report struct {
 	A, B SideSpec
+
+	// ResolvedA and ResolvedB are the references each side was ACTUALLY walked
+	// from, which is not always the one that was asked for.
+	ResolvedA, ResolvedB string
 
 	Rows []Row
 
@@ -225,6 +255,34 @@ type Report struct {
 // Differences is how many rows disagree.
 func (r Report) Differences() int { return r.Changed + r.OnlyA + r.OnlyB }
 
+// ReferenceA and ReferenceB render each side as a reference somebody could
+// paste into a pull — of WHAT WAS WALKED, not of what was asked for.
+//
+// The distinction is itself a finding in the case that matters. A destination
+// missing the vendor's wrapper tag is walked from its payload instead, and a
+// header still reading `…:signed_orb_25.7_mp2604_2131` would be asserting
+// something this comparison has already discovered to be false.
+func (r Report) ReferenceA() string { return walkedReference(r.A, r.ResolvedA) }
+
+// ReferenceB is ReferenceA for the second side.
+func (r Report) ReferenceB() string { return walkedReference(r.B, r.ResolvedB) }
+
+func walkedReference(spec SideSpec, resolved string) string {
+	if resolved == "" {
+		return spec.String()
+	}
+	if spec.Repository == "" {
+		return resolved
+	}
+	// A digest is joined with `@`, a tag with `:`. Both spellings are pullable
+	// and the wrong one is not, which matters because the whole point of this
+	// string is that somebody can paste it.
+	if strings.Contains(resolved, ":") {
+		return spec.Repository + "@" + resolved
+	}
+	return spec.Repository + ":" + resolved
+}
+
 // Identical reports that the two sides agree completely, extras included.
 func (r Report) Identical() bool {
 	return r.Differences() == 0 && len(r.ExtraTagsA) == 0 && len(r.ExtraTagsB) == 0
@@ -235,6 +293,15 @@ func Run(ctx context.Context, clientA, clientB ClientFactory, opts Options) (Rep
 	concurrency := opts.Concurrency
 	if concurrency <= 0 {
 		concurrency = 4
+	}
+
+	// WHAT each side is walked from, decided for BOTH SIDES AT ONCE and before
+	// either walk starts. Two independent resolutions can pick two different
+	// artifacts, and everything downstream of that compares one thing against
+	// another thing — see chooseRoots.
+	rootA, rootB, notes, err := chooseRoots(ctx, clientA, clientB, opts)
+	if err != nil {
+		return Report{}, err
 	}
 
 	// Both sides at once. They are different registries in the case that
@@ -250,11 +317,11 @@ func Run(ctx context.Context, clientA, clientB ClientFactory, opts Options) (Rep
 	wg.Add(2)
 	go func() {
 		defer wg.Done()
-		invA, extraA, errA = readSide(ctx, clientA, opts.A, concurrency)
+		invA, extraA, errA = readSide(ctx, clientA, opts.A, rootA, concurrency)
 	}()
 	go func() {
 		defer wg.Done()
-		invB, extB, errB = readSide(ctx, clientB, opts.B, concurrency)
+		invB, extB, errB = readSide(ctx, clientB, opts.B, rootB, concurrency)
 	}()
 	wg.Wait()
 
@@ -265,8 +332,12 @@ func Run(ctx context.Context, clientA, clientB ClientFactory, opts Options) (Rep
 		return Report{}, fmt.Errorf("read %s: %w", opts.B.Label, errB)
 	}
 
-	report := Report{A: opts.A, B: opts.B, ExtraTagsA: extraA, ExtraTagsB: extB}
-	report.Rows = align(invA, invB)
+	report := Report{
+		A: opts.A, B: opts.B,
+		ResolvedA: rootA.chosen, ResolvedB: rootB.chosen,
+		ExtraTagsA: extraA, ExtraTagsB: extB,
+	}
+	report.Rows = align(invA, invB, notes)
 
 	// The files inside whatever changed. Only for rows that already disagree:
 	// a component whose digest matches on both sides is byte-identical, and
@@ -291,19 +362,45 @@ func Run(ctx context.Context, clientA, clientB ClientFactory, opts Options) (Rep
 // inventory is one side's components, by key.
 type inventory map[string]*Item
 
-// readSide walks one bundle and probes each component's own site.
-func readSide(
-	ctx context.Context, client ClientFactory, spec SideSpec, concurrency int,
-) (inventory, []string, error) {
-	root, err := client(spec.Repository)
-	if err != nil {
-		return nil, nil, fmt.Errorf("build a client for %s: %w", spec.Repository, err)
+// add records one component, keeping two components that want the same key
+// apart.
+//
+// A key already held by the SAME digest is one component the bundle references
+// twice — a base image shared by two of them — and there is nothing to add.
+//
+// A key already held by DIFFERENT content is a name that does not identify one
+// artifact, and dropping either of them loses a component from the comparison
+// silently. The tag breaks the tie: it is deliberately not part of a key, since
+// version-to-version alignment depends on two releases keying alike, but where
+// a name is ambiguous the tag is the only thing left that distinguishes them.
+//
+// Deterministic across both sides, because both walk the same manifest bytes in
+// the same order.
+func (inv inventory) add(item *Item) {
+	held, seen := inv[item.Key]
+	switch {
+	case !seen:
+		inv[item.Key] = item
+	case held.Digest == item.Digest:
+		return
+	default:
+		item.Key += "\x00" + item.Tag
+		if _, taken := inv[item.Key]; !taken {
+			inv[item.Key] = item
+		}
 	}
+}
 
-	desc, ref, err := resolveRoot(ctx, root, spec.References)
-	if err != nil {
-		return nil, nil, err
-	}
+// readSide walks one bundle and probes each component's own site.
+//
+// WHAT it walks from is decided by chooseRoots and handed in, not resolved
+// here: a side that picks its own root cannot know whether the other side
+// picked the same one.
+func readSide(
+	ctx context.Context, client ClientFactory, spec SideSpec, choice rootChoice,
+	concurrency int,
+) (inventory, []string, error) {
+	root, desc, ref := choice.repo, choice.desc, choice.chosen
 
 	// TOLERANT, and this is the difference between a comparison and an error
 	// message. A transfer that stopped part-way leaves an index naming children
@@ -317,13 +414,7 @@ func readSide(
 
 	inv := make(inventory, len(tree.Artifacts)+len(missing))
 	for i, a := range tree.Artifacts {
-		item := itemFrom(a, spec, ref, i == 0)
-		// A digest appearing twice in one bundle is one component referenced
-		// twice, not two components.
-		if _, seen := inv[item.Key]; seen {
-			continue
-		}
-		inv[item.Key] = item
+		inv.add(itemFrom(a, spec, ref, i == 0))
 	}
 
 	// A component the index names and the registry will not serve. Recorded
@@ -334,39 +425,224 @@ func readSide(
 		item := itemFrom(oci.Artifact{Descriptor: m.Descriptor, Depth: m.Depth},
 			spec, ref, false)
 		item.Unreachable = summarise(m.Err)
-		if _, seen := inv[item.Key]; seen {
-			continue
-		}
-		inv[item.Key] = item
+		inv.add(item)
 	}
 
 	probeNamedSites(ctx, client, inv, concurrency)
-	return inv, extraTags(ctx, root, inv, spec), nil
+	return inv, extraTags(ctx, root, inv, spec, concurrency), nil
 }
 
-// resolveRoot finds the first candidate reference this side actually holds.
+// rootChoice is where one side will be walked from, and what else it holds.
+type rootChoice struct {
+	repo registry.Repository
+	// holds maps every candidate reference this side RESOLVES to what it
+	// resolves to. A candidate the side does not hold is simply absent, which
+	// is what makes the two sides' disagreements comparable.
+	holds map[string]registry.Descriptor
+	// order is the candidate list, most complete first.
+	order []string
+	// firstErr is why the most complete candidate failed, kept so a side
+	// holding none of them says something better than "not found".
+	firstErr error
+
+	// chosen and desc are what this side is walked from, filled in by
+	// chooseRoots once BOTH sides are known.
+	chosen string
+	desc   registry.Descriptor
+}
+
+// chooseRoots decides what each side is walked from, preferring a reference
+// BOTH sides hold.
 //
-// Reports which one it used, because the answer is part of the finding: a side
-// holding only the payload where the other holds the signed wrapper is worth
-// seeing in the header rather than silently walking two different things.
-func resolveRoot(
-	ctx context.Context, root registry.Repository, references []string,
-) (registry.Descriptor, string, error) {
-	if len(references) == 0 {
-		return registry.Descriptor{}, "", errors.New("no reference to compare from")
+// # Why this is not two independent resolutions
+//
+// It used to be: each side took the first candidate it could resolve, on its
+// own. Where a destination was missing the vendor's wrapper tag, the two ends
+// then silently walked DIFFERENT ARTIFACTS — the source's signed wrapper
+// against the destination's bare payload — and every finding downstream was an
+// artefact of that. The roots' digests differ because they are different
+// manifests, not because anything was corrupted; the signature hanging off the
+// wrapper is reported missing at a destination nobody looked for it on; and
+// the counts at the bottom describe a comparison that never happened.
+//
+// Comparing like with like is the whole contract, so the shared reference wins
+// even where one side could offer a more complete one. What that side has and
+// the other does not is then reported as a FINDING on the root — which is the
+// honest shape of it: "the destination is missing the wrapper tag" is a fact
+// about the release, and "the two roots have different digests" was never a
+// fact about anything.
+//
+// # Where the sides are MEANT to differ
+//
+// Comparing two versions gives the ends disjoint candidate lists on purpose.
+// There is nothing shared to prefer and nothing to report, so the sides keep
+// their own roots and referenceNotes stays silent.
+func chooseRoots(
+	ctx context.Context, clientA, clientB ClientFactory, opts Options,
+) (rootChoice, rootChoice, []string, error) {
+	var (
+		wg         sync.WaitGroup
+		a, b       rootChoice
+		errA, errB error
+	)
+	wg.Add(2)
+	go func() { defer wg.Done(); a, errA = probeRoot(ctx, clientA, opts.A) }()
+	go func() { defer wg.Done(); b, errB = probeRoot(ctx, clientB, opts.B) }()
+	wg.Wait()
+
+	if errA != nil {
+		return a, b, nil, fmt.Errorf("read %s: %w", opts.A.Label, errA)
+	}
+	if errB != nil {
+		return a, b, nil, fmt.Errorf("read %s: %w", opts.B.Label, errB)
 	}
 
-	var firstErr error
-	for _, reference := range references {
-		desc, err := resolveOne(ctx, root, reference)
-		if err == nil {
-			return desc, reference, nil
+	// The most complete reference both sides hold.
+	for _, ref := range a.order {
+		if _, ok := a.holds[ref]; !ok {
+			continue
 		}
-		if firstErr == nil {
-			firstErr = err
+		if _, ok := b.holds[ref]; !ok {
+			continue
+		}
+		a.chosen, b.chosen = ref, ref
+		break
+	}
+	if a.chosen == "" {
+		// Nothing in common: two versions, or a destination holding none of
+		// the references the source was found under. Each side walks the most
+		// complete thing it has, which is the only answer available.
+		a.chosen, b.chosen = firstHeld(a), firstHeld(b)
+	}
+	a.desc, b.desc = a.holds[a.chosen], b.holds[b.chosen]
+
+	return a, b, referenceNotes(a, b), nil
+}
+
+// probeRoot asks one side about EVERY candidate, not just until one answers.
+//
+// The candidates a side does not hold are half the finding, and they are only
+// knowable by asking. The cost is bounded and small — three or four manifest
+// reads against one repository — against a walk that is about to make hundreds.
+func probeRoot(
+	ctx context.Context, client ClientFactory, spec SideSpec,
+) (rootChoice, error) {
+	if len(spec.References) == 0 {
+		return rootChoice{}, errors.New("no reference to compare from")
+	}
+
+	root, err := client(spec.Repository)
+	if err != nil {
+		return rootChoice{}, fmt.Errorf("build a client for %s: %w", spec.Repository, err)
+	}
+
+	choice := rootChoice{
+		repo:  root,
+		holds: make(map[string]registry.Descriptor, len(spec.References)),
+		order: spec.References,
+	}
+
+	var (
+		mu sync.Mutex
+		wg sync.WaitGroup
+	)
+	for i, reference := range spec.References {
+		wg.Add(1)
+		go func(i int, reference string) {
+			defer wg.Done()
+			desc, err := resolveOne(ctx, root, reference)
+
+			mu.Lock()
+			defer mu.Unlock()
+			if err != nil {
+				if i == 0 {
+					choice.firstErr = err
+				}
+				return
+			}
+			choice.holds[reference] = desc
+		}(i, reference)
+	}
+	wg.Wait()
+
+	if len(choice.holds) == 0 {
+		if choice.firstErr != nil {
+			return rootChoice{}, choice.firstErr
+		}
+		return rootChoice{}, fmt.Errorf("%s holds none of %s",
+			spec.Repository, strings.Join(spec.References, ", "))
+	}
+	return choice, nil
+}
+
+// firstHeld is the most complete reference one side actually has.
+func firstHeld(c rootChoice) string {
+	for _, ref := range c.order {
+		if _, ok := c.holds[ref]; ok {
+			return ref
 		}
 	}
-	return registry.Descriptor{}, "", firstErr
+	return ""
+}
+
+// referenceNotes states, as facts, where the two sides disagree about which of
+// the SAME references they hold.
+//
+// Only references both sides were asked about can disagree. Where the two
+// candidate lists share nothing the ends are deliberately different things —
+// two versions — and there is no disagreement to report.
+func referenceNotes(a, b rootChoice) []string {
+	shared := false
+	for _, ref := range a.order {
+		if containsString(b.order, ref) {
+			shared = true
+			break
+		}
+	}
+	if !shared {
+		return nil
+	}
+
+	var out []string
+	for _, ref := range a.order {
+		if !containsString(b.order, ref) {
+			continue
+		}
+		_, hasA := a.holds[ref]
+		_, hasB := b.holds[ref]
+		switch {
+		case hasA && !hasB:
+			out = append(out, fmt.Sprintf(
+				"%s resolves on the first side and not on the second", ref))
+		case hasB && !hasA:
+			out = append(out, fmt.Sprintf(
+				"%s resolves on the second side and not on the first", ref))
+		}
+	}
+	if len(out) == 0 {
+		return nil
+	}
+
+	// What was compared INSTEAD, because a reader who has just been told a
+	// reference is missing will otherwise reasonably assume nothing was.
+	if a.chosen == b.chosen {
+		out = append(out, fmt.Sprintf(
+			"compared from %s, which both sides hold", a.chosen))
+	} else {
+		out = append(out, fmt.Sprintf(
+			"no reference is held by both sides, so %s and %s were walked — these "+
+				"are two artifacts rather than two copies of one", a.chosen, b.chosen))
+	}
+	return out
+}
+
+func containsString(values []string, want string) bool {
+	for _, v := range values {
+		if v == want {
+			return true
+		}
+	}
+	return false
 }
 
 func resolveOne(
@@ -408,13 +684,27 @@ func itemFrom(a oci.Artifact, spec SideSpec, rootRef string, isRoot bool) *Item 
 		// The bundle itself. Keyed by a constant so two versions of one orb
 		// align on their roots rather than each looking like a component the
 		// other lacks.
-		item.Key = "\x00root"
+		item.Key = rootKey
 		item.Name = spec.Repository
 		if item.Tag == "" {
 			item.Tag = rootRef
 		}
 	case ref.repository != "":
-		item.Key = strings.ToLower(ref.repository)
+		// The repository AND what the artifact is.
+		//
+		// The repository alone is not an identity wherever a vendor names two
+		// children after the bundle itself, and NEAR does exactly that: its
+		// wrapper's two children are `orbs/cfx-5000-k8s:orb_25.7…` and
+		// `orbs/cfx-5000-k8s:signature_orb_25.7…`, one repository and two
+		// artifacts. Keyed by repository they collided, one silently won, and
+		// the release's signature vanished from both sides of every comparison
+		// — while the tag it left behind was then reported as unexplained
+		// content in the destination.
+		//
+		// The type is stable across releases in the way the TAG is not, so it
+		// separates them without costing the version-to-version alignment the
+		// tag is deliberately kept out of the key for.
+		item.Key = strings.ToLower(ref.repository) + "\x00" + item.Type
 	default:
 		// Named nothing. It can only ever match itself, which is the honest
 		// answer for content whose only identity is its bytes.
@@ -431,13 +721,21 @@ func itemFrom(a oci.Artifact, spec SideSpec, rootRef string, isRoot bool) *Item 
 		})
 	}
 
-	if ref.repository != "" && !isRoot {
+	// Only where this side is expected to serve components under their own
+	// names. See SideSpec.PublishesComponentsByName: the expectation belongs to
+	// a destination this system wrote, and asking it of a vendor's registry
+	// reports the vendor's layout as a defect once per component.
+	if ref.repository != "" && !isRoot && spec.PublishesComponentsByName {
 		item.Named = &Site{
 			Repository: transfer.DestinationPath(spec.BasePath, ref.repository),
 		}
 	}
 	return item
 }
+
+// rootKey aligns the two sides' roots with each other rather than with a
+// component.
+const rootKey = "\x00root"
 
 // annotationTitle names the file inside a generic artifact's layer.
 const annotationTitle = "org.opencontainers.image.title"
@@ -515,8 +813,30 @@ func probeNamedSites(
 //
 // A registry that will not list tags yields nothing rather than an error. The
 // comparison's findings do not depend on it.
+//
+// # A tag is not extra merely because the bundle does not NAME it
+//
+// This is a listing of the repository, not a reading of the manifest, and the
+// two answer different questions. The walk above already accumulated every
+// image, chart and file the orb's index references; this asks the separate
+// question of what ELSE is in the repository, and its first version answered it
+// by name alone.
+//
+// That was wrong wherever a vendor tags its components inside the bundle's own
+// repository. NEAR does exactly that — `docker_<digest>`, `helmoci_<digest>`,
+// one per component — so a correct orb reported two hundred and fifty
+// "unexplained" tags, every one of them naming content the comparison had just
+// walked and matched. The tag names are not in the inventory because a
+// component's `Tag` comes from its `ref.name` (`2507.2131.0`), which is a
+// different string for the same manifest.
+//
+// So a tag is checked against the CONTENT the bundle accounts for, twice: by
+// the digest its name embeds, which is free, and then by what it actually
+// resolves to, which is not and is therefore bounded. Only a tag that survives
+// both is genuinely unexplained.
 func extraTags(
 	ctx context.Context, root registry.Repository, inv inventory, spec SideSpec,
+	concurrency int,
 ) []string {
 	lister, ok := root.(registry.TagLister)
 	if !ok {
@@ -532,6 +852,7 @@ func extraTags(
 	for _, ref := range spec.References {
 		known[ref] = true
 	}
+	accounted := accountedDigests(inv)
 
 	var out []string
 	last := ""
@@ -541,21 +862,166 @@ func extraTags(
 			return nil
 		}
 		for _, tag := range tags {
-			if !known[tag] {
-				out = append(out, tag)
+			if known[tag] || namesAccountedDigest(tag, accounted) {
+				continue
 			}
+			out = append(out, tag)
 		}
 		if next == "" {
 			break
 		}
 		last = next
 	}
+
+	out = dropTagsIntoBundle(ctx, root, out, accounted, concurrency)
 	sort.Strings(out)
 	return out
 }
 
+// accountedDigests is every piece of content this bundle explains, indexed by
+// the first digits of its digest.
+//
+// Layers as well as manifests: a vendor that tags a component's LAYER inside
+// the bundle repository has still not put anything there the bundle does not
+// account for.
+//
+// Indexed by prefix rather than held as whole digests so a tag naming a
+// SHORTENED digest still matches — the convention is the vendor's and nothing
+// obliges it to use all sixty-four characters.
+func accountedDigests(inv inventory) map[string][]string {
+	out := map[string][]string{}
+	add := func(digest string) {
+		hex := hexOf(digest)
+		if len(hex) < minDigestHex {
+			return
+		}
+		key := hex[:minDigestHex]
+		out[key] = append(out[key], hex)
+	}
+	for _, item := range inv {
+		add(item.Digest)
+		for _, layer := range item.Layers {
+			add(layer.Digest)
+		}
+	}
+	return out
+}
+
+// minDigestHex is how much of a digest a tag must embed before that is
+// evidence rather than coincidence. Sixteen bytes: long enough that no version
+// number reaches it, short enough to match a vendor's abbreviation.
+const minDigestHex = 32
+
+// namesAccountedDigest reports whether a tag NAMES content the bundle
+// accounts for.
+func namesAccountedDigest(tag string, accounted map[string][]string) bool {
+	for _, run := range hexRuns(tag) {
+		for _, full := range accounted[run[:minDigestHex]] {
+			if strings.HasPrefix(full, run) || strings.HasPrefix(run, full) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// hexRuns returns the maximal hexadecimal stretches of a tag that are long
+// enough to be a digest rather than a version.
+//
+// Maximal runs rather than a prefix match on a known separator, because the
+// separator is the vendor's: `docker_<digest>` and `helmoci_<digest>` are
+// NEAR's spelling, and nothing here should have to be taught the next one.
+func hexRuns(tag string) []string {
+	var (
+		out   []string
+		start = -1
+	)
+	for i := 0; i <= len(tag); i++ {
+		if i < len(tag) && isHexDigit(tag[i]) {
+			if start < 0 {
+				start = i
+			}
+			continue
+		}
+		if start >= 0 && i-start >= minDigestHex {
+			out = append(out, tag[start:i])
+		}
+		start = -1
+	}
+	return out
+}
+
+func isHexDigit(c byte) bool {
+	return c >= '0' && c <= '9' || c >= 'a' && c <= 'f' || c >= 'A' && c <= 'F'
+}
+
+func hexOf(digest string) string {
+	_, hex, ok := strings.Cut(digest, ":")
+	if !ok {
+		return digest
+	}
+	return hex
+}
+
+// maxProbedTags bounds what the name check could not settle.
+//
+// A repository holding more than this many genuinely unexplained tags has a
+// problem no number of requests will clarify, and the listing is already the
+// finding at that point.
+const maxProbedTags = 128
+
+// dropTagsIntoBundle removes the tags that turn out to point at content this
+// bundle already accounts for.
+//
+// The name check above is free and settles the vendor conventions we have seen;
+// this settles the rest by asking the registry what the tag actually resolves
+// to, which is the only answer that does not depend on a naming convention.
+//
+// A tag that cannot be resolved is KEPT. It was listed by the registry, so it
+// exists, and dropping it because a second request failed would quietly shrink
+// the finding.
+func dropTagsIntoBundle(
+	ctx context.Context, root registry.Repository, tags []string,
+	accounted map[string][]string, concurrency int,
+) []string {
+	if len(tags) == 0 || len(tags) > maxProbedTags {
+		return tags
+	}
+
+	var (
+		mu   sync.Mutex
+		wg   sync.WaitGroup
+		sem  = make(chan struct{}, concurrency)
+		keep = make([]string, 0, len(tags))
+	)
+	for _, tag := range tags {
+		wg.Add(1)
+		go func(tag string) {
+			defer wg.Done()
+			sem <- struct{}{}
+			defer func() { <-sem }()
+
+			desc, err := root.ResolveTag(ctx, tag)
+			if err == nil && namesAccountedDigest(hexOf(string(desc.Digest)), accounted) {
+				return
+			}
+
+			mu.Lock()
+			defer mu.Unlock()
+			keep = append(keep, tag)
+		}(tag)
+	}
+	wg.Wait()
+	return keep
+}
+
 // align pairs the two inventories by key.
-func align(a, b inventory) []Row {
+//
+// rootNotes are findings about the ROOTS themselves — which references each
+// side holds — and they are attached to the root's row before anything is
+// sorted, so a root the notes have just made interesting sorts with the other
+// differences rather than under the agreements.
+func align(a, b inventory, rootNotes []string) []Row {
 	keys := make(map[string]bool, len(a)+len(b))
 	for k := range a {
 		keys[k] = true
@@ -566,7 +1032,17 @@ func align(a, b inventory) []Row {
 
 	rows := make([]Row, 0, len(keys))
 	for key := range keys {
-		rows = append(rows, compareItems(a[key], b[key]))
+		row := compareItems(a[key], b[key])
+		if key == rootKey && len(rootNotes) > 0 {
+			// A reference one side holds and the other does not IS a
+			// difference — the release is not addressable the same way in both
+			// places — so it counts as one rather than being a footnote.
+			row.Differences = append(row.Differences, rootNotes...)
+			if row.Verdict == VerdictSame {
+				row.Verdict = VerdictChanged
+			}
+		}
+		rows = append(rows, row)
 	}
 
 	// Differences first, then by type, then by name. The reason somebody runs

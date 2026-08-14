@@ -28,6 +28,19 @@ const (
 	targetBase = "nokia-lab"
 	release    = "orb_23.8.1076"
 	older      = "orb_23.7.900"
+	wrapped    = "signed_orb_23.8.1076"
+
+	// componentPath is where a component's `ref.name` says it belongs, and it
+	// is DELIBERATELY NOT UNDER sourcePath.
+	//
+	// That is the real shape and the fixture used to get it wrong. A NEAR
+	// component is annotated with the coordinate the vendor BUILT it from —
+	// `cfx-5000-product/admin:2507.2131.0` — which is a different tree from the
+	// `orbs/…` repository the orb is served out of. Modelling the name as a
+	// path beneath the bundle made the source look like a place that could
+	// plausibly serve it, which is exactly the assumption that shipped a
+	// comparison reporting 253 false differences.
+	componentPath = "cfx-5000-product"
 )
 
 // ---------------------------------------------------------------------------
@@ -57,7 +70,7 @@ func TestAComponentThatIsNotPullableUnderItsOwnNameIsReported(t *testing.T) {
 	f := newFixture(t)
 	f.publish(f.src, sourcePath, release, componentsOf(release))
 	f.copyToTarget(release)
-	f.dst.RemoveTag(targetBase+"/"+sourcePath+"/nginx", "1.2.3")
+	f.dst.RemoveTag(targetBase+"/"+componentPath+"/nginx", "1.2.3")
 
 	report := f.compare(f.sourceSide(release), f.targetSide(release))
 
@@ -86,7 +99,7 @@ func TestAPartialTransferIsReportedComponentByComponent(t *testing.T) {
 	f.copyToTarget(release)
 	// A partial transfer: the bundle's index arrived, one component did not.
 	f.dst.RemoveManifest(targetBase+"/"+sourcePath, f.digestOf("nginx"))
-	f.dst.RemoveManifest(targetBase+"/"+sourcePath+"/nginx", f.digestOf("nginx"))
+	f.dst.RemoveManifest(targetBase+"/"+componentPath+"/nginx", f.digestOf("nginx"))
 
 	report := f.compare(f.sourceSide(release), f.targetSide(release))
 
@@ -106,6 +119,180 @@ func TestAPartialTransferIsReportedComponentByComponent(t *testing.T) {
 	if report.Same == 0 {
 		t.Errorf("nothing else was compared after the missing component:\n%s",
 			describe(report))
+	}
+}
+
+// THE 253 FALSE FINDINGS.
+//
+// A vendor does not publish its components under their own names — NEAR keeps
+// them inside the orb repository — and a component's `ref.name` is the upstream
+// coordinate it was built from, not a path the vendor serves. Probing the
+// source for it returns 404 for every component of every orb, and the report
+// that produced said `not published as cfx-5000-product/… on the first side`
+// two hundred and fifty-three times about a transfer that had copied every byte
+// correctly.
+//
+// The expectation belongs to the end this system WROTE. Asking it of a vendor
+// is asking whether the vendor has adopted our layout.
+func TestAVendorIsNotAskedToPublishComponentsOurWay(t *testing.T) {
+	f := newFixture(t)
+	f.publish(f.src, sourcePath, release, componentsOf(release))
+	f.copyToTarget(release)
+
+	report := f.compare(f.sourceSide(release), f.targetSide(release))
+
+	for _, row := range report.Rows {
+		for _, d := range row.Differences {
+			if strings.Contains(d, "not published as") &&
+				strings.Contains(d, "on the first side") {
+				t.Errorf("the vendor's own layout is reported as a defect: %s", d)
+			}
+		}
+	}
+	if !report.Identical() {
+		t.Fatalf("a faithful copy from a vendor-shaped source reported %d "+
+			"differences:\n%s", report.Differences(), describe(report))
+	}
+}
+
+// AND THE EXPECTATION STILL HOLDS WHERE IT BELONGS. Removing the flag entirely
+// would trade 253 false findings for the loss of the one finding this check
+// exists for.
+func TestTheDestinationIsStillHeldToIt(t *testing.T) {
+	f := newFixture(t)
+	f.publish(f.src, sourcePath, release, componentsOf(release))
+	f.copyToTarget(release)
+	f.dst.RemoveManifest(targetBase+"/"+componentPath+"/nginx", f.digestOf("nginx"))
+
+	report := f.compare(f.sourceSide(release), f.targetSide(release))
+
+	row, ok := rowFor(report, "nginx")
+	if !ok {
+		t.Fatalf("no row for the component:\n%s", describe(report))
+	}
+	if !mentions(row, "not published as") {
+		t.Errorf("a destination that did not publish a component under its own "+
+			"name was not reported: %v", row.Differences)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Which reference is each side walked from?
+// ---------------------------------------------------------------------------
+
+// TWO SIDES, ONE ARTIFACT. The destination holds the signed wrapper but not the
+// tag naming it — which is what a transfer whose final tag never landed leaves.
+//
+// Resolving each side independently walked the wrapper on one side and the
+// payload on the other, then reported the two roots' digests as a content
+// difference and the wrapper's signature as missing from a destination nobody
+// had looked for it on. Both statements were artefacts of comparing two
+// different things.
+func TestBothSidesAreWalkedFromAReferenceTheyBothHold(t *testing.T) {
+	f := newFixture(t)
+	f.publish(f.src, sourcePath, release, componentsOf(release))
+	wrapper := f.publishWrapper(f.src, sourcePath, wrapped, release)
+	f.copyToTarget(wrapped)
+
+	// The tag never landed. The content did.
+	f.dst.RemoveTag(targetBase+"/"+sourcePath, wrapped)
+
+	refs := []string{wrapped, wrapper, release}
+	report := f.compare(f.sourceSide(refs...), f.targetSide(refs...))
+
+	if report.ResolvedA != report.ResolvedB {
+		t.Fatalf("the sides were walked from %q and %q; a comparison of two "+
+			"different artifacts is not a comparison", report.ResolvedA, report.ResolvedB)
+	}
+	if report.ResolvedA != wrapper {
+		t.Errorf("walked from %q, want the wrapper %q — the most complete "+
+			"reference both sides hold", report.ResolvedA, wrapper)
+	}
+
+	root, ok := rootRow(report)
+	if !ok {
+		t.Fatalf("no row for the bundle root:\n%s", describe(report))
+	}
+	if !mentions(root, wrapped+" resolves on the first side and not on the second") {
+		t.Errorf("the missing tag is not reported as a missing tag: %v", root.Differences)
+	}
+	if mentions(root, "content differs") {
+		t.Errorf("two copies of one artifact are reported as differing content: %v",
+			root.Differences)
+	}
+	// And the signature the wrapper carries is on BOTH sides, because both
+	// sides were walked from the wrapper.
+	for _, row := range report.Rows {
+		if row.Verdict == compare.VerdictOnlyA {
+			t.Errorf("%s is reported as missing from a destination that has it:\n%s",
+				row.Name, describe(report))
+		}
+	}
+}
+
+// TWO CHILDREN, ONE NAME. NEAR's wrapper names both of its children after the
+// bundle itself — `orbs/cfx-5000-k8s:orb_25.7…` and
+// `orbs/cfx-5000-k8s:signature_orb_25.7…` — so a key built from the repository
+// alone collided, one child silently won, and the release's SIGNATURE was
+// absent from both sides of every comparison that walked a wrapper.
+//
+// It was worse than a missing row. The signature's tag was still in the
+// destination's repository and no longer accounted for by any component, so it
+// came back as unexplained content nobody had put there.
+func TestTwoComponentsNamedAfterTheBundleAreBothCompared(t *testing.T) {
+	f := newFixture(t)
+	f.publish(f.src, sourcePath, release, componentsOf(release))
+	wrapper := f.publishWrapper(f.src, sourcePath, wrapped, release)
+	f.copyToTarget(wrapped)
+
+	refs := []string{wrapped, wrapper}
+	report := f.compare(f.sourceSide(refs...), f.targetSide(refs...))
+
+	var payload, signature bool
+	for _, row := range report.Rows {
+		if row.IsRoot() || row.Name != sourcePath {
+			continue
+		}
+		switch row.Type {
+		case "index":
+			payload = true
+		case "image", "signature":
+			signature = true
+		}
+	}
+	if !payload {
+		t.Errorf("the payload the wrapper names is not a row:\n%s", describe(report))
+	}
+	if !signature {
+		t.Errorf("the signature the wrapper names is not a row — it collided with "+
+			"the payload and was dropped:\n%s", describe(report))
+	}
+	if !report.Identical() {
+		t.Fatalf("a faithful copy of a wrapped release reported %d differences "+
+			"and %v/%v unexplained:\n%s", report.Differences(),
+			report.ExtraTagsA, report.ExtraTagsB, describe(report))
+	}
+}
+
+// Comparing two VERSIONS gives the ends disjoint candidate lists on purpose.
+// There is nothing shared to prefer and nothing to report, and a note saying
+// the two sides hold different references would fire on every delta.
+func TestTwoVersionsAreNotReportedAsAReferenceDisagreement(t *testing.T) {
+	f := newFixture(t)
+	f.publish(f.src, sourcePath, older, componentsOf(older))
+	f.publish(f.src, sourcePath, release, componentsOf(release))
+
+	report := f.compare(f.sourceSide(older), f.sourceSide(release))
+
+	root, ok := rootRow(report)
+	if !ok {
+		t.Fatalf("no row for the bundle root:\n%s", describe(report))
+	}
+	for _, d := range root.Differences {
+		if strings.Contains(d, "resolves on the") {
+			t.Errorf("comparing two versions reported their versions as a "+
+				"reference disagreement: %s", d)
+		}
 	}
 }
 
@@ -376,7 +563,7 @@ func TestTwoTargetsAreComparedTheSameWay(t *testing.T) {
 	}
 
 	// Now mutate one of them, which is what a promotion check has to catch.
-	f.dst.RemoveTag(prodBase+"/"+sourcePath+"/nginx", "1.2.3")
+	f.dst.RemoveTag(prodBase+"/"+componentPath+"/nginx", "1.2.3")
 	report := f.compare(lab, prod)
 	if report.Differences() == 0 {
 		t.Fatal("a destination missing a tag matched one that has it")
@@ -418,6 +605,62 @@ func TestUnexplainedTagsInTheBundleRepositoryAreReported(t *testing.T) {
 	}
 }
 
+// THE OTHER HALF OF THE 253.
+//
+// NEAR tags every component inside the orb's own repository — `docker_<digest>`,
+// `helmoci_<digest>`, one per component — so a listing of that repository
+// returns hundreds of names the bundle's inventory does not contain. It does not
+// contain them because a component's Tag comes from its `ref.name`
+// (`2507.2131.0`), which is a different string for the same manifest.
+//
+// Judged by name they were all unexplained, and a correct orb printed a wall of
+// them under "not part of this release". Judged by CONTENT — which is what the
+// question actually means — there is nothing there the bundle does not account
+// for.
+func TestTagsNamingContentTheBundleAccountsForAreNotUnexplained(t *testing.T) {
+	f := newFixture(t)
+	f.publish(f.src, sourcePath, release, componentsOf(release))
+	f.copyToTarget(release)
+
+	// The vendor's own spelling, for content the walk has already matched.
+	for _, name := range []string{"nginx", "charts/cfx"} {
+		digest := f.digestOf(name)
+		f.src.AddManifest(sourcePath, "docker_"+strings.TrimPrefix(digest, "sha256:"),
+			f.src.Manifest(sourcePath, digest), registry.MediaTypeOCIManifest)
+	}
+
+	report := f.compare(f.sourceSide(release), f.targetSide(release))
+
+	if len(report.ExtraTagsA) != 0 {
+		t.Errorf("the vendor's own tags for content in this release are reported "+
+			"as unexplained: %v", report.ExtraTagsA)
+	}
+	if !report.Identical() {
+		t.Fatalf("a faithful copy reported %d differences:\n%s",
+			report.Differences(), describe(report))
+	}
+}
+
+// A tag whose NAME says nothing, pointing at content the bundle has. The name
+// check cannot settle this one, so it is settled by asking the registry what
+// the tag resolves to — the only answer that does not depend on a convention.
+func TestATagResolvingIntoTheBundleIsNotUnexplained(t *testing.T) {
+	f := newFixture(t)
+	f.publish(f.src, sourcePath, release, componentsOf(release))
+	f.copyToTarget(release)
+
+	digest := f.digestOf("nginx")
+	f.src.AddManifest(sourcePath, "latest", f.src.Manifest(sourcePath, digest),
+		registry.MediaTypeOCIManifest)
+
+	report := f.compare(f.sourceSide(release), f.targetSide(release))
+
+	if len(report.ExtraTagsA) != 0 {
+		t.Errorf("a tag pointing at content in this release is reported as "+
+			"unexplained: %v", report.ExtraTagsA)
+	}
+}
+
 // ---------------------------------------------------------------------------
 // Was anything mutated?
 // ---------------------------------------------------------------------------
@@ -429,7 +672,7 @@ func TestATagPointingAtSomethingElseIsReported(t *testing.T) {
 	f.publish(f.src, sourcePath, release, componentsOf(release))
 	f.copyToTarget(release)
 
-	f.dst.AddImage(targetBase+"/"+sourcePath+"/nginx", "1.2.3",
+	f.dst.AddImage(targetBase+"/"+componentPath+"/nginx", "1.2.3",
 		fakeregistry.NewLayer("a completely different image"))
 
 	report := f.compare(f.sourceSide(release), f.targetSide(release))
@@ -454,7 +697,7 @@ func TestDifferencesSortToTheTop(t *testing.T) {
 	f := newFixture(t)
 	f.publish(f.src, sourcePath, release, componentsOf(release))
 	f.copyToTarget(release)
-	f.dst.RemoveTag(targetBase+"/"+sourcePath+"/nginx", "1.2.3")
+	f.dst.RemoveTag(targetBase+"/"+componentPath+"/nginx", "1.2.3")
 
 	report := f.compare(f.sourceSide(release), f.targetSide(release))
 
@@ -537,7 +780,7 @@ func (f *fixture) publish(
 			"digest":    digest,
 			"size":      100,
 			"annotations": map[string]string{
-				registry.AnnotationRefName: repo + "/" + c.name + ":" + c.tag,
+				registry.AnnotationRefName: componentPath + "/" + c.name + ":" + c.tag,
 			},
 		})
 	}
@@ -577,12 +820,63 @@ func (f *fixture) publishComponent(
 		layers = append(layers, fakeregistry.NewLayer(c.payload))
 	}
 
-	// Inside the bundle, untagged — the index names it by digest — and under
-	// its own name with its own tag, which is where a consumer pulls it.
-	digest := reg.AddImage(repo, "", layers...)
-	reg.AddManifest(repo+"/"+c.name, c.tag, reg.Manifest(repo, digest),
-		registry.MediaTypeOCIManifest)
-	return digest
+	// INSIDE THE BUNDLE, UNTAGGED, AND NOWHERE ELSE — which is all a vendor
+	// does.
+	//
+	// This used to also publish the component under its own name, and that one
+	// line was the reason a whole class of false finding was invisible to every
+	// test here. Publishing each component separately is what a TRANSFER does
+	// at a DESTINATION (internal/transfer/layout.go). A source does not do it:
+	// NEAR keeps its components in the orb repository and tags them
+	// `docker_<digest>`. A fixture that pre-satisfied the invariant on the
+	// source made compare's probe of the source look correct, and it is not.
+	return reg.AddImage(repo, "", layers...)
+}
+
+// publishWrapper adds the signed wrapper NEAR puts over a release: an index
+// naming the payload and a detached signature, each by the reserved OCI
+// annotation.
+//
+// The children name the BUNDLE repository, not a repository of their own,
+// which is what the vendor writes — `orbs/cfx-5000-k8s:orb_23.8.1076`.
+func (f *fixture) publishWrapper(
+	reg *fakeregistry.Registry, repo, tag, payloadTag string,
+) string {
+	f.t.Helper()
+
+	payload := reg.TagDigest(repo, payloadTag)
+	if payload == "" {
+		f.t.Fatalf("no payload %s:%s to wrap", repo, payloadTag)
+	}
+	signature := reg.AddImage(repo, "", fakeregistry.NewLayer("a pkcs7 signature"))
+
+	children := []map[string]any{
+		{
+			"mediaType": registry.MediaTypeOCIIndex,
+			"digest":    payload,
+			"size":      len(reg.Manifest(repo, payload)),
+			"annotations": map[string]string{
+				registry.AnnotationRefName: repo + ":" + payloadTag,
+			},
+		},
+		{
+			"mediaType": registry.MediaTypeOCIManifest,
+			"digest":    signature,
+			"size":      len(reg.Manifest(repo, signature)),
+			"annotations": map[string]string{
+				registry.AnnotationRefName: repo + ":signature_" + payloadTag,
+			},
+		},
+	}
+
+	raw, err := json.Marshal(map[string]any{
+		"schemaVersion": 2, "mediaType": registry.MediaTypeOCIIndex,
+		"manifests": children,
+	})
+	if err != nil {
+		f.t.Fatal(err)
+	}
+	return reg.AddManifest(repo, tag, raw, registry.MediaTypeOCIIndex)
 }
 
 // copyToTarget reproduces at the destination exactly what a correct transfer
@@ -602,31 +896,61 @@ func (f *fixture) copyTo(reg *fakeregistry.Registry, base, tag string) {
 	if root == "" {
 		f.t.Fatalf("the source has no %s:%s", sourcePath, tag)
 	}
-	raw := f.src.Manifest(sourcePath, root)
+	f.copyArtifact(reg, base, root, tag)
+}
 
-	var index struct {
+// copyArtifact copies one artifact and everything beneath it.
+//
+// Children first, and recursively: a wrapper index names a payload index which
+// names the components, and a copy that only went one level deep would leave
+// the destination unable to resolve its own root. It is also what the registry
+// requires — an index may only be pushed once its children are servable.
+//
+// The named publication happens HERE, from the referencing descriptor, which is
+// where the name lives. That mirrors internal/transfer/layout.go exactly: the
+// artifact goes in its parent's repository so the bundle resolves, and again
+// under whatever its `ref.name` calls it.
+func (f *fixture) copyArtifact(
+	reg *fakeregistry.Registry, base, digest, tag string,
+) {
+	f.t.Helper()
+
+	raw := f.src.Manifest(sourcePath, digest)
+	if raw == nil {
+		f.t.Fatalf("the source has no manifest %s", digest)
+	}
+
+	var body struct {
+		MediaType string `json:"mediaType"`
 		Manifests []struct {
 			Digest      string            `json:"digest"`
+			MediaType   string            `json:"mediaType"`
 			Annotations map[string]string `json:"annotations"`
 		} `json:"manifests"`
 	}
-	if err := json.Unmarshal(raw, &index); err != nil {
+	if err := json.Unmarshal(raw, &body); err != nil {
 		f.t.Fatal(err)
 	}
 
 	dstRepo := base + "/" + sourcePath
-	for _, child := range index.Manifests {
-		body := f.src.Manifest(sourcePath, child.Digest)
-		reg.AddManifest(dstRepo, "", body, registry.MediaTypeOCIManifest)
+	for _, child := range body.Manifests {
+		f.copyArtifact(reg, base, child.Digest, "")
 
-		ref := child.Annotations[registry.AnnotationRefName]
-		repo, refTag := splitRefName(ref)
+		repo, refTag := splitRefName(child.Annotations[registry.AnnotationRefName])
 		if repo == "" {
 			continue
 		}
-		reg.AddManifest(base+"/"+repo, refTag, body, registry.MediaTypeOCIManifest)
+		reg.AddManifest(base+"/"+repo, refTag, f.src.Manifest(sourcePath, child.Digest),
+			mediaTypeOr(child.MediaType))
 	}
-	reg.AddManifest(dstRepo, tag, raw, registry.MediaTypeOCIIndex)
+	reg.AddManifest(dstRepo, tag, raw, mediaTypeOr(body.MediaType))
+}
+
+func mediaTypeOr(mediaType string) string {
+	if mediaType == "" {
+		return registry.MediaTypeOCIManifest
+	}
+	return mediaType
 }
 
 func (f *fixture) digestOf(component string) string {
@@ -638,18 +962,23 @@ func (f *fixture) digestOf(component string) string {
 	return digest
 }
 
-func (f *fixture) sourceSide(tag string) compare.SideSpec {
+// sourceSide is the vendor: it holds the vendor's paths unprefixed and owes
+// nothing under a component's own name.
+func (f *fixture) sourceSide(references ...string) compare.SideSpec {
 	return compare.SideSpec{
-		Label: "near", Repository: sourcePath, References: []string{tag},
+		Label: "near", Repository: sourcePath, References: references,
 	}
 }
 
-func (f *fixture) targetSide(tag string) compare.SideSpec {
+// targetSide is a place this system wrote, and therefore the one end that owes
+// each component under the name its `ref.name` gives it.
+func (f *fixture) targetSide(references ...string) compare.SideSpec {
 	return compare.SideSpec{
-		Label:      "lab",
-		Repository: targetBase + "/" + sourcePath,
-		References: []string{tag},
-		BasePath:   targetBase,
+		Label:                     "lab",
+		Repository:                targetBase + "/" + sourcePath,
+		References:                references,
+		BasePath:                  targetBase,
+		PublishesComponentsByName: true,
 	}
 }
 
@@ -682,6 +1011,16 @@ func (f *fixture) clientFor(spec compare.SideSpec) compare.ClientFactory {
 // ---------------------------------------------------------------------------
 // assertions
 // ---------------------------------------------------------------------------
+
+// rootRow is the bundle itself, which is the row reference findings land on.
+func rootRow(r compare.Report) (compare.Row, bool) {
+	for _, row := range r.Rows {
+		if row.IsRoot() {
+			return row, true
+		}
+	}
+	return compare.Row{}, false
+}
 
 func rowFor(r compare.Report, component string) (compare.Row, bool) {
 	for _, row := range r.Rows {

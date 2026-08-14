@@ -17,10 +17,10 @@ import (
 
 // Transfer routes. See docs/design/09-api.md §2.
 //
-// Create and the read routes. Pause, resume, cancel, retry and setPriority are
-// specified but not built, so they are absent rather than present and inert. A
-// route that accepts a pause and does nothing is worse than a 404, because the
-// 404 is believed.
+// Create and the read routes. The custom methods — retry, pause, resume, stop —
+// live in retry.go, which owns the verb split. `setPriority` is specified and
+// not built, so it is absent rather than present and inert: a route that accepts
+// a request and does nothing is worse than a 404, because the 404 is believed.
 
 // Requests creates transfer requests.
 //

@@ -3,6 +3,7 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -25,6 +26,35 @@ type fakeQueue struct {
 	err      error
 	recorded []store.WorkerRow
 	workers  []store.WorkerSummary
+
+	// controlled records the queue-control verbs applied, in order, as
+	// "verb transfer-id" — so a test can assert that :pause reached the queue
+	// as a pause rather than merely that it returned 200.
+	controlled  []string
+	controlErr  error
+	controlDone store.ControlResult
+}
+
+func (f *fakeQueue) Pause(_ context.Context, id string) (store.ControlResult, error) {
+	return f.control("pause", id)
+}
+
+func (f *fakeQueue) Resume(_ context.Context, id string) (store.ControlResult, error) {
+	return f.control("resume", id)
+}
+
+func (f *fakeQueue) Stop(_ context.Context, id string) (store.ControlResult, error) {
+	return f.control("stop", id)
+}
+
+func (f *fakeQueue) control(verb, id string) (store.ControlResult, error) {
+	f.controlled = append(f.controlled, verb+" "+id)
+	if f.controlErr != nil {
+		return store.ControlResult{}, f.controlErr
+	}
+	res := f.controlDone
+	res.TransferID = id
+	return res, nil
 }
 
 func (f *fakeQueue) RecordWorker(_ context.Context, id string, capacity, active int, version string) {
@@ -120,21 +150,72 @@ func TestRetryRouteSplitsTheVerbAtTheLastColon(t *testing.T) {
 	}
 }
 
-// The verbs that are specified but unbuilt are the ones somebody reaches for
+// A verb that is still specified but unbuilt is the one somebody reaches for
 // first. Saying so beats a bare "unknown method", which reads as a typo.
 func TestUnbuiltVerbsSayTheyAreUnbuilt(t *testing.T) {
 	ts, _, h := newRetryHarness(t)
 	full := h.seedTransfer("4d882940-1111-2222-3333-444444444444")
 
-	resp := postJSON(t, ts.URL+"/api/v1/transfers/"+full+":pause")
+	resp := postJSON(t, ts.URL+"/api/v1/transfers/"+full+":setPriority")
 	defer func() { _ = resp.Body.Close() }()
 
 	body, _ := readBody(resp)
 	if !strings.Contains(body, "not built") {
-		t.Errorf("pause returned %q, want it to say the verb is not built yet", body)
+		t.Errorf("setPriority returned %q, want it to say the verb is not built yet", body)
 	}
-	if !strings.Contains(body, "retry") {
-		t.Errorf("the message does not point at the verb that IS available: %q", body)
+}
+
+// Pause, resume and stop reach the queue as themselves.
+//
+// Asserting on the QUEUE rather than on the status code, because a handler that
+// answered 200 and did nothing would pass the weaker test — and a control verb
+// that silently does nothing is the worst possible outcome for one.
+func TestTheControlVerbsReachTheQueue(t *testing.T) {
+	for _, tc := range []struct{ verb, want string }{
+		{"pause", "pause"},
+		{"resume", "resume"},
+		{"stop", "stop"},
+		// The state machine's own name for the same thing. Both are accepted,
+		// because the alternative is somebody typing the other one and being
+		// told it does not exist.
+		{"cancel", "stop"},
+	} {
+		t.Run(tc.verb, func(t *testing.T) {
+			ts, q, h := newRetryHarness(t)
+			full := h.seedTransfer("4d882940-1111-2222-3333-444444444444")
+
+			resp := postJSON(t, ts.URL+"/api/v1/transfers/"+full+":"+tc.verb)
+			defer func() { _ = resp.Body.Close() }()
+
+			if resp.StatusCode != http.StatusOK {
+				body, _ := readBody(resp)
+				t.Fatalf("status = %d (%s), want 200", resp.StatusCode, body)
+			}
+			if len(q.controlled) != 1 || q.controlled[0] != tc.want+" "+full {
+				t.Errorf("queue saw %v, want %q", q.controlled, tc.want+" "+full)
+			}
+		})
+	}
+}
+
+// A verb the transfer's state does not admit is a CONFLICT, not a server
+// error: the caller asked for something the state cannot satisfy, and the
+// state is the answer.
+func TestControllingASettledTransferIsAConflict(t *testing.T) {
+	ts, q, h := newRetryHarness(t)
+	full := h.seedTransfer("4d882940-1111-2222-3333-444444444444")
+	q.controlErr = fmt.Errorf("%w: cannot pause a transfer that is succeeded",
+		store.ErrIllegalTransition)
+
+	resp := postJSON(t, ts.URL+"/api/v1/transfers/"+full+":pause")
+	defer func() { _ = resp.Body.Close() }()
+
+	if resp.StatusCode != http.StatusConflict {
+		t.Errorf("status = %d, want 409", resp.StatusCode)
+	}
+	body, _ := readBody(resp)
+	if !strings.Contains(body, "succeeded") {
+		t.Errorf("the response does not name the state that refused it: %q", body)
 	}
 }
 

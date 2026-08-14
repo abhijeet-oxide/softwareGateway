@@ -534,20 +534,19 @@ Each carries a short qualifier because the label alone does not convey it — `D
 
 ```
 $ transferctl transfers pause 9c1e8f2a
-Transfer 9c1e8f2a paused.
-  14 in-flight jobs will complete; no new jobs will be leased.
+Paused 9c1e8f2a — 131 jobs will not be handed out.
+  14 jobs still in flight; they will finish.
+
+$ transferctl transfers resume 9c1e8f2a
+Resumed 9c1e8f2a — 131 jobs are leasable again.
+
+$ transferctl transfers stop 9c1e8f2a
+Stopped 9c1e8f2a — 131 jobs cancelled.
+  14 jobs still in flight; the transfer is cancelling until they report.
 
 $ transferctl transfers priority 9c1e8f2a 900
 Priority 100 → 900 for 131 pending jobs.
   In-flight jobs are unaffected.
-
-$ transferctl transfers cancel 9c1e8f2a
-Cancel transfer 9c1e8f2a (vendor-a-platform/v2.14.0 → lab, 51.4% complete)? [y/N] y
-
-Transfer 9c1e8f2a cancelling.
-  131 pending jobs cancelled; 14 in-flight jobs will abort within ~20s.
-  Blobs already transferred remain at the destination and will be
-  reused by future transfers. No tag was applied.
 
 $ transferctl transfers retry 9c1e8f2a
 Requeued 2 failed job(s). Transfer 9c1e8f2a is ready.
@@ -569,6 +568,19 @@ Requeueing resets the attempt budget and drops the backoff: the operator running
 It will not restart a `cancelled` transfer — that was somebody's decision — or a `succeeded` one. A transfer that failed during *planning* has no jobs to requeue, and says so rather than reporting a successful retry of zero.
 
 Each message states the semantics that are easy to get wrong ([04](04-queue-and-scheduling.md) §8): pause does not kill in-flight work, priority does not preempt, cancel does not roll back. The CLI is where those semantics actually reach a user, so it says them rather than assuming the documentation was read.
+
+### The three verbs differ in what they do to work already DONE
+
+Not in what they do to the work remaining, which is where the intuition goes wrong. `pause` keeps it, `resume` restores the ability to add to it, `stop` keeps it and adds nothing more — and **none of them deletes anything at the destination**. Half a bundle there is unreferenced blobs and untagged manifests: invisible to consumers, because a tag is applied only once everything beneath it is present (invariant I1), and free to the next transfer, which finds them and skips them.
+
+Two mechanisms carry this, and both are load-bearing:
+
+- **The pause is on the JOB rows, not only on the transfer.** The dequeue predicate reads `NOT paused`, so setting the flag is what actually stops work being handed out. A transfer state alone would be an intention every lease path had to remember to check.
+- **`cancelling` is a state, not a flag.** A leased job belongs to a worker and stops at that worker's next checkpoint, not the instant the command was typed. `stop` therefore reports `cancelling` while anything is in flight, and the completion path closes the window when the last lease reports — a transfer left in `cancelling` forever is indistinguishable from a hang.
+
+A verb the current state does not admit is refused with `409 FAILED_PRECONDITION` naming that state, rather than silently doing nothing: it is somebody acting on a stale listing, and telling them the state has moved is the difference between a confusing outcome and an obvious one.
+
+`stop` is the name an operator reaches for and `cancel` is the name the state machine uses; both are accepted, because the alternative is somebody typing the other one and being told it does not exist.
 
 ## 8. Worker logs
 

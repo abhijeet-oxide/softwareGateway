@@ -65,6 +65,13 @@ type Worker interface {
 	// invariants — a requeue that bypassed this type could reopen a wave the
 	// scheduler believes is closed.
 	Retry(ctx context.Context, transferID string) (store.RetryResult, error)
+	// Pause, Resume and Stop are somebody intervening in a transfer that is
+	// under way. Here for the same reason as Retry: they move jobs between
+	// states the scheduler reasons about, and a path that bypassed this type
+	// could leave a wave open that the scheduler believes is closed.
+	Pause(ctx context.Context, transferID string) (store.ControlResult, error)
+	Resume(ctx context.Context, transferID string) (store.ControlResult, error)
+	Stop(ctx context.Context, transferID string) (store.ControlResult, error)
 
 	// RecordWorker notes what a worker reported about itself. No error: the
 	// fleet view must never be the reason a lease fails.

@@ -1252,6 +1252,21 @@ type TransferProgress struct {
 	SavedBytes Int64String `json:"savedBytes,omitempty"`
 }
 
+// TransferControlResponse is what :pause, :resume or :stop did.
+type TransferControlResponse struct {
+	TransferID string `json:"transferId"`
+	// State is the transfer's state afterwards.
+	State string `json:"state"`
+	// Jobs is how many job rows the verb affected.
+	Jobs int `json:"jobs"`
+	// InFlight is how many jobs were still leased when it was applied.
+	//
+	// The number that explains a `stop` reporting `CANCELLING` rather than
+	// `CANCELLED`: a leased job belongs to a worker and stops at that worker's
+	// next checkpoint, not the instant the command was typed.
+	InFlight int `json:"inFlight,omitempty"`
+}
+
 // ListTransfersResponse is GET /api/v1/transfers.
 type ListTransfersResponse struct {
 	Transfers     []Transfer `json:"transfers"`

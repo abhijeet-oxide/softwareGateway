@@ -300,6 +300,20 @@ func (c *Client) RetryTransfer(ctx context.Context, id string) (*RetryTransferRe
 	return &out, c.post(ctx, path, struct{}{}, &out)
 }
 
+// ControlTransfer applies pause, resume or stop to one transfer.
+//
+// One method for the three because they differ only in the verb: the states
+// each admits belong to the server, which owns the state machine, and
+// duplicating that knowledge here would be a second place for it to be wrong.
+func (c *Client) ControlTransfer(
+	ctx context.Context, id, verb string,
+) (*TransferControlResponse, error) {
+	// The colon is an AIP-136 structural separator and must NOT be escaped.
+	path := "/api/v1/transfers/" + url.PathEscape(id) + ":" + verb
+	var out TransferControlResponse
+	return &out, c.post(ctx, path, struct{}{}, &out)
+}
+
 // RetryTransfers requeues the failed jobs of every transfer that has any.
 //
 // The shape an outage calls for: it does not fail one transfer, it fails every

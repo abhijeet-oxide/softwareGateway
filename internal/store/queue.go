@@ -901,6 +901,18 @@ func (p *Packages) settleTransfer(
 		return false, 0, "", fmt.Errorf("read transfer %s: %w", transferID, err)
 	}
 
+	// A transfer somebody has stopped is not a transfer to settle, advance or
+	// declare successful — it is one waiting for its last lease to report.
+	//
+	// This has to be checked BEFORE anything below it. `stop` cancels every job
+	// not yet started, so the waves genuinely drain, and without this guard the
+	// walk would run to the end and mark a cancelled transfer `succeeded` on
+	// the strength of the work it deliberately did not do.
+	if state == "cancelling" {
+		state, err = p.closeCancellation(ctx, tx, transferID)
+		return false, currentWave, state, err
+	}
+
 	// A transfer with work in flight is running, whatever it was before. Doing
 	// this here rather than at lease time keeps the dequeue free of a write to
 	// a second table.
@@ -974,6 +986,34 @@ func (p *Packages) settleTransfer(
 	// "there is nothing to retry".
 	state, _, err = p.finishTransfer(ctx, tx, transferID)
 	return false, currentWave, state, err
+}
+
+// closeCancellation moves a stopping transfer to `cancelled` once the last
+// lease has reported.
+//
+// `cancelling` is a real state rather than a flag because a leased job belongs
+// to a worker and stops at that worker's next checkpoint, not the instant
+// somebody types the command. Naming the window makes it observable; closing it
+// here is what stops the window being permanent.
+func (p *Packages) closeCancellation(
+	ctx context.Context, tx *sql.Tx, transferID string,
+) (state string, err error) {
+	var inFlight int
+	if err := tx.QueryRowContext(ctx, p.dialect.Rewrite(
+		`SELECT count(*) FROM jobs WHERE transfer_id = ? AND state = 'leased'`),
+		transferID).Scan(&inFlight); err != nil {
+		return "cancelling", fmt.Errorf("count leased jobs of transfer %s: %w", transferID, err)
+	}
+	if inFlight > 0 {
+		return "cancelling", nil
+	}
+
+	if _, err := tx.ExecContext(ctx, p.dialect.Rewrite(
+		`UPDATE transfers SET state = 'cancelled', completed_at = `+p.dialect.Now()+
+			`, updated_at = `+p.dialect.Now()+` WHERE id = ?`), transferID); err != nil {
+		return "cancelling", fmt.Errorf("cancel transfer %s: %w", transferID, err)
+	}
+	return "cancelled", nil
 }
 
 // finishTransfer settles a transfer whose jobs have all stopped, reporting

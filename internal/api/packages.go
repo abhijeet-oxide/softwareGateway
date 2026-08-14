@@ -12,6 +12,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
+	"github.com/abhijeet-oxide/softwareGateway/internal/compare"
 	"github.com/abhijeet-oxide/softwareGateway/internal/discovery"
 	"github.com/abhijeet-oxide/softwareGateway/internal/store"
 	v1 "github.com/abhijeet-oxide/softwareGateway/pkg/apis/softwaregateway/v1"
@@ -23,7 +24,6 @@ const (
 	maxPageSize     = 500
 )
 
-// handleListPackages serves GET /api/v1/products/{product}/packages.
 // handleListUnavailable serves GET /api/v1/products/{product}/unavailable.
 //
 // What a source would not serve us, and why. Its own route rather than a filter
@@ -68,6 +68,7 @@ func (s *Server) handleListUnavailable(w http.ResponseWriter, r *http.Request) {
 	WriteJSON(w, r, http.StatusOK, out)
 }
 
+// handleListPackages serves GET /api/v1/products/{product}/packages.
 func (s *Server) handleListPackages(w http.ResponseWriter, r *http.Request) {
 	productName := chi.URLParam(r, "product")
 	if !s.productExists(w, r, productName) {
@@ -604,8 +605,11 @@ func (s *Server) resolvePackage(w http.ResponseWriter, r *http.Request, productN
 	return pkg, true
 }
 
-// packageVerbInspect is the only custom method a package currently accepts.
-const packageVerbInspect = "inspect"
+// The custom methods a package accepts.
+const (
+	packageVerbInspect = "inspect"
+	packageVerbCompare = "compare"
+)
 
 // handlePackageCustomMethod dispatches POST /packages/{package}:<verb>.
 //
@@ -631,9 +635,10 @@ func (s *Server) handlePackageCustomMethod(w http.ResponseWriter, r *http.Reques
 	}
 	ref, verb := segment[:i], segment[i+1:]
 
-	if verb != packageVerbInspect {
+	if verb != packageVerbInspect && verb != packageVerbCompare {
 		Error(w, r, v1.CodeInvalidArgument, fmt.Sprintf(
-			"%q is not a custom method on a package (known: %s)", verb, packageVerbInspect))
+			"%q is not a custom method on a package (known: %s, %s)",
+			verb, packageVerbInspect, packageVerbCompare))
 		return
 	}
 
@@ -646,7 +651,90 @@ func (s *Server) handlePackageCustomMethod(w http.ResponseWriter, r *http.Reques
 			}
 		}
 	}
+	if verb == packageVerbCompare {
+		s.handleComparePackage(w, r)
+		return
+	}
 	s.handleInspectPackage(w, r)
+}
+
+// POST /api/v1/products/{product}/packages/{package}:compare.
+//
+// Asks the DESTINATION what it holds, artifact by artifact, and compares its
+// answers against the source's own structure.
+//
+// It reads no transfer record, and that is the whole point: a transfer can
+// report every job successful and leave the destination wrong — a tag that
+// failed to apply, content deleted afterwards, a bundle assembled by two
+// transfers of which one was stopped. Each of those was seen in practice.
+func (s *Server) handleComparePackage(w http.ResponseWriter, r *http.Request) {
+	productName := chi.URLParam(r, "product")
+	if !s.productExists(w, r, productName) {
+		return
+	}
+	if s.deps.Comparer == nil {
+		Error(w, r, v1.CodeUnavailable,
+			"comparing reads the destination registry, and the client for it is not "+
+				"configured on this replica")
+		return
+	}
+
+	var req v1.CompareRequest
+	if r.ContentLength > 0 && !decodeJSON(w, r, &req) {
+		return
+	}
+
+	pkg, ok := s.resolvePackage(w, r, productName, chi.URLParam(r, "package"))
+	if !ok {
+		return
+	}
+
+	// Expand first, idempotently. A comparison against a half-known source
+	// would report the parts it happens to know about and silently omit the
+	// rest, which for a command whose whole job is to say whether anything is
+	// missing is the one answer worse than no answer.
+	if s.deps.Discovery != nil && s.deps.Discovery.Running() {
+		if _, err := s.deps.Discovery.InspectPackage(
+			r.Context(), s.deps.Packages, pkg, productName); err != nil {
+			Error(w, r, v1.CodeUnavailable,
+				"could not read the source's structure: "+err.Error())
+			return
+		}
+	}
+
+	report, err := s.deps.Comparer.Compare(r.Context(), productName, pkg, req.To)
+	if err != nil {
+		Error(w, r, v1.CodeInvalidArgument, err.Error())
+		return
+	}
+
+	out := v1.CompareResponse{
+		Product: productName, Package: pkg.Tag, Target: req.To,
+		Rows:       make([]v1.CompareRow, 0, len(report.Rows)),
+		Matched:    report.Matched,
+		Mismatched: report.Mismatched,
+	}
+	for _, row := range report.Rows {
+		out.Rows = append(out.Rows, v1.CompareRow{
+			Type:        row.Type,
+			Name:        row.Name,
+			Source:      compareSideDTO(row.Source),
+			Target:      compareSideDTO(row.Target),
+			Differences: row.Differences,
+		})
+	}
+	WriteJSON(w, r, http.StatusOK, out)
+}
+
+func compareSideDTO(s compare.Side) v1.CompareSide {
+	return v1.CompareSide{
+		Present:    s.Present,
+		Repository: s.Repository,
+		Digest:     s.Digest,
+		Size:       v1.Int64String(strconv.FormatInt(s.Size, 10)),
+		Tags:       s.Tags,
+		Error:      s.Error,
+	}
 }
 
 // POST /api/v1/products/{product}/packages/{package}:inspect.

@@ -123,6 +123,20 @@ func (c *Client) ListPackages(ctx context.Context, product string, opts ListPack
 	return &out, c.get(ctx, path, &out)
 }
 
+// ComparePackage asks a destination what it holds and compares it against what
+// the source published.
+func (c *Client) ComparePackage(
+	ctx context.Context, product, ref, to string,
+) (*CompareResponse, error) {
+	seg, query := splitPackageRef(ref)
+	// The colon before the verb is an AIP-136 structural separator and must NOT
+	// be escaped; the reference itself is escaped as one segment.
+	path := "/api/v1/products/" + url.PathEscape(product) +
+		"/packages/" + url.PathEscape(seg) + ":compare" + query
+	var out CompareResponse
+	return &out, c.post(ctx, path, CompareRequest{To: to}, &out)
+}
+
 // ListUnavailable returns what a product's sources would not serve.
 func (c *Client) ListUnavailable(
 	ctx context.Context, product string,

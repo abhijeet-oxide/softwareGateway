@@ -350,6 +350,43 @@ Verifying vendor-a-platform / v2.14.0 at lab (internal.azurecr.io/vendor-a/platf
 VERIFIED — 5 of 5 artifacts (1.8s)
 ```
 
+### 5.1 `compare` — did the copy actually land?
+
+```
+$ transferctl compare cfx-5000-product 25.7_mp2604_2131 --to att-stage
+
+cfx-5000-product orb_25.7_mp2604_2131 vs att-stage
+
+     TYPE    NAME                                        SOURCE                  TARGET      MATCH
+  !  image   …/cfx-5000-product/lms:1.25.212             sha256:438001f263ab     absent      no
+  !  image   …/cfx-5000-product/cvlk:1.0.7               sha256:4573b0b15ceb  2.1 KiB  …      no
+     index   …/orbs/cfx-…-edgenac-…:orb_25.7_mp2604_2131 sha256:8533f4a71a43  6.4 KiB  …      yes
+     chart   …/cfx-5000-product/charts/cfx:23.8.1076     sha256:966238c5045e  1.2 KiB  …      yes
+
+Differences
+  …/cfx-5000-product/lms:1.25.212
+    the content is not at the destination
+    1.25.212 is not at the destination
+  …/cfx-5000-product/cvlk:1.0.7
+    1.0.7 points at sha256:8533f4a71a43, not sha256:4573b0b15ceb
+
+2 of 4 matched.
+```
+
+**A transfer's own report cannot answer this question.** It reports what it DID — 2489 jobs succeeded, 63.7 GiB moved — and every one of those numbers can be true while the destination is wrong: a tag that failed to apply, content deleted afterwards, a bundle assembled by two transfers of which one was stopped. Each of those happened during this system's first real runs, and there was no way to check short of pulling things by hand.
+
+So this asks the DESTINATION, artifact by artifact, and compares its answers against the source's own structure. It reads no transfer record.
+
+| Property | Why |
+|---|---|
+| One row per artifact per SITE | A bundle publishes each component twice — inside the bundle so the index resolves, and under its own name — and those two places can independently be wrong ([05](05-transfer-engine.md) §4.7) |
+| Tags are resolved, not assumed | A tag is the only part of a copy that is not content-addressed, so it is the only part that can be wrong while every digest agrees. It is also the part that actually failed |
+| Disagreements sort first | Somebody runs this to find what is wrong; scrolling past two thousand agreeing rows to reach three defeats it |
+| Differences are sentences, under the table | "1.25.212 points at sha256:8533f4a71a43, not sha256:438001f263ab" does not fit a column, and truncating it removes the half that says what is wrong |
+| Non-zero exit when anything disagrees | So it can be the last line of a pipeline |
+
+**What it deliberately does not do** is enumerate the destination looking for extra content. A destination repository legitimately holds every other version of the same component, so "present at the target and not at the source" across a whole repository would report every previous release as a discrepancy. Where the question *is* well defined — a tag this package claims, pointing at something else — it is reported, and that is the case that catches a bad copy.
+
 ## 6. Progress
 
 `transfers list` carries FROM and TO. Without them two transfers of the same package to different destinations are the same row twice: same product, same tag, same percentage. The column shows the CONFIGURED name — what an operator typed into `--from` / `--to`, and what goes back into the next command — rather than the resolved host and path, which is a hundred characters wide and identical down the page. `describe` shows both, because there it is one transfer and there is room.

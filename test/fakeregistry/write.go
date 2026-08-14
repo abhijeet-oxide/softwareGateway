@@ -448,6 +448,29 @@ func (r *Registry) RemoveBlob(repoPath, dgst string) {
 	}
 }
 
+// RemoveManifest deletes a manifest from one repository, leaving any tag that
+// pointed at it dangling.
+//
+// The state a destination is left in when content is deleted by hand, or
+// garbage-collected out from under a tag — and the one a comparison has to
+// notice. A test cannot assert that without being able to cause it.
+func (r *Registry) RemoveManifest(repoPath, dgst string) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	rp, ok := r.repos[repoPath]
+	if !ok {
+		return
+	}
+	delete(rp.manifests, dgst)
+	delete(rp.mediaTypes, dgst)
+	for tag, target := range rp.tags {
+		if target == dgst {
+			delete(rp.tags, tag)
+		}
+	}
+}
+
 // BlobExists reports whether a blob is present, for assertions.
 func (r *Registry) BlobExists(repoPath, dgst string) bool {
 	r.mu.RLock()

@@ -619,6 +619,56 @@ type ScanVocabulary struct {
 	Versions string `json:"versions,omitempty"`
 }
 
+// CompareRequest is POST /api/v1/products/{product}/packages/{package}:compare.
+type CompareRequest struct {
+	// To is the configured target to compare against. Empty means the
+	// product's default target, and is refused when there are several and none
+	// is default: comparing against the wrong destination produces a page of
+	// confident mismatches.
+	To string `json:"to,omitempty"`
+}
+
+// CompareResponse is what the destination actually holds, against what the
+// source published.
+type CompareResponse struct {
+	Product string `json:"product"`
+	Package string `json:"package"`
+	// Target is the configured destination that was asked.
+	Target string `json:"target"`
+
+	Rows []CompareRow `json:"rows"`
+	// Matched and Mismatched partition Rows.
+	Matched    int `json:"matched"`
+	Mismatched int `json:"mismatched"`
+}
+
+// CompareRow is one artifact in one place.
+//
+// Per SITE rather than per artifact: a bundle publishes each component twice —
+// once inside the bundle so the index still resolves, and once under the
+// component's own name — and those two places can independently be wrong.
+type CompareRow struct {
+	// Type is what the artifact is: image, chart, index, file, signature.
+	Type string `json:"type"`
+	// Name is a reference somebody can go and pull, where one exists.
+	Name   string      `json:"name"`
+	Source CompareSide `json:"source"`
+	Target CompareSide `json:"target"`
+	// Differences is empty when the two sides agree. Each entry is one
+	// concrete disagreement, stated as a fact.
+	Differences []string `json:"differences,omitempty"`
+}
+
+// CompareSide is one end's account of an artifact.
+type CompareSide struct {
+	Present    bool        `json:"present"`
+	Repository string      `json:"repository,omitempty"`
+	Digest     string      `json:"digest,omitempty"`
+	Size       Int64String `json:"size,omitempty"`
+	Tags       []string    `json:"tags,omitempty"`
+	Error      string      `json:"error,omitempty"`
+}
+
 // ListUnavailableResponse is GET /api/v1/products/{product}/unavailable.
 type ListUnavailableResponse struct {
 	Packages []UnavailablePackage `json:"packages"`

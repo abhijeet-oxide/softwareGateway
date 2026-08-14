@@ -323,8 +323,11 @@ func run() error {
 		// caveat — a Coordinator on a different network from the workers
 		// measures a path no transfer takes.
 		Calibrator: calibrate.NewCalibrator(resolver),
-		Leader:     elector,
-		Component:  component,
+		// Comparison runs here for the same reason: it opens connections to the
+		// DESTINATION registry, and transferctl is a pure API client.
+		Comparer:  compareImpl{transferResolver},
+		Leader:    elector,
+		Component: component,
 	})
 
 	httpServer := &http.Server{

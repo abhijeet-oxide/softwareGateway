@@ -641,6 +641,38 @@ func TestTagsNamingContentTheBundleAccountsForAreNotUnexplained(t *testing.T) {
 	}
 }
 
+// A SIDE MAY HOLD MORE OF THE RELEASE THAN WAS COMPARED, and what it holds is
+// still part of the release.
+//
+// Where a destination has neither the wrapper's tag nor the wrapper, the
+// payload is what both sides can be compared from — so the signature is not in
+// the walked tree, and the vendor's `signature_orb_…` tag was reported back to
+// the vendor as content nobody had put there. The release is precisely where
+// that tag came from.
+func TestWhatAnUnwalkedRootReferencesIsStillPartOfTheRelease(t *testing.T) {
+	f := newFixture(t)
+	f.publish(f.src, sourcePath, release, componentsOf(release))
+	wrapper := f.publishWrapper(f.src, sourcePath, wrapped, release)
+
+	// The destination got the payload and its components, and nothing of the
+	// wrapper — neither the tag nor the artifact.
+	f.copyToTarget(release)
+
+	refs := []string{wrapped, wrapper, release}
+	report := f.compare(f.sourceSide(refs...), f.targetSide(refs...))
+
+	if report.ResolvedA != release || report.ResolvedB != release {
+		t.Fatalf("walked %q and %q, want the payload %q — the only reference "+
+			"both sides hold", report.ResolvedA, report.ResolvedB, release)
+	}
+	for _, tag := range report.ExtraTagsA {
+		if strings.HasPrefix(tag, "signature_") || tag == wrapped {
+			t.Errorf("%s is reported as not part of the release that publishes "+
+				"it: %v", tag, report.ExtraTagsA)
+		}
+	}
+}
+
 // A tag whose NAME says nothing, pointing at content the bundle has. The name
 // check cannot settle this one, so it is settled by asking the registry what
 // the tag resolves to — the only answer that does not depend on a convention.
@@ -848,7 +880,12 @@ func (f *fixture) publishWrapper(
 	if payload == "" {
 		f.t.Fatalf("no payload %s:%s to wrap", repo, payloadTag)
 	}
-	signature := reg.AddImage(repo, "", fakeregistry.NewLayer("a pkcs7 signature"))
+	// THREE TAGS PER RELEASE, which is what NEAR publishes: the payload, the
+	// signature, and the wrapper binding them. The signature carrying a tag of
+	// its own is the whole reason it can be reported as unexplained content
+	// when the comparison did not walk the wrapper.
+	signature := reg.AddImage(repo, "signature_"+payloadTag,
+		fakeregistry.NewLayer("a pkcs7 signature"))
 
 	children := []map[string]any{
 		{

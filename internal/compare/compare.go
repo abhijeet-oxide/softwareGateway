@@ -40,6 +40,7 @@ package compare
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"sort"
@@ -429,7 +430,51 @@ func readSide(
 	}
 
 	probeNamedSites(ctx, client, inv, concurrency)
-	return inv, extraTags(ctx, root, inv, spec, concurrency), nil
+	return inv, extraTags(ctx, root, inv, spec, unwalkedRoots(ctx, root, choice),
+		concurrency), nil
+}
+
+// unwalkedRoots is the content reachable from a root THIS SIDE HOLDS but the
+// comparison did not walk from.
+//
+// A side may hold a more complete root than the one both sides agreed on: the
+// vendor has the signed wrapper, the destination does not, so the payload is
+// what gets compared. The wrapper and the signature hanging off it are still
+// part of the release — the vendor published them as part of it — and calling
+// their tags "not part of this release" because of which root the OTHER side
+// was missing states something false about this one.
+//
+// One request per unwalked root, and only its immediate children: anything
+// deeper is reachable from the root that WAS walked, or that root would not
+// have been a fallback for this one.
+func unwalkedRoots(
+	ctx context.Context, root registry.Repository, choice rootChoice,
+) []string {
+	var out []string
+	for _, ref := range choice.order {
+		desc, held := choice.holds[ref]
+		if !held || ref == choice.chosen {
+			continue
+		}
+
+		out = append(out, string(desc.Digest))
+		_, raw, err := root.FetchManifest(ctx, string(desc.Digest))
+		if err != nil {
+			continue
+		}
+		var body struct {
+			Manifests []struct {
+				Digest string `json:"digest"`
+			} `json:"manifests"`
+		}
+		if err := json.Unmarshal(raw, &body); err != nil {
+			continue
+		}
+		for _, child := range body.Manifests {
+			out = append(out, child.Digest)
+		}
+	}
+	return out
 }
 
 // rootChoice is where one side will be walked from, and what else it holds.
@@ -836,7 +881,7 @@ func probeNamedSites(
 // both is genuinely unexplained.
 func extraTags(
 	ctx context.Context, root registry.Repository, inv inventory, spec SideSpec,
-	concurrency int,
+	alsoAccounted []string, concurrency int,
 ) []string {
 	lister, ok := root.(registry.TagLister)
 	if !ok {
@@ -852,7 +897,7 @@ func extraTags(
 	for _, ref := range spec.References {
 		known[ref] = true
 	}
-	accounted := accountedDigests(inv)
+	accounted := accountedDigests(inv, alsoAccounted)
 
 	var out []string
 	last := ""
@@ -888,7 +933,7 @@ func extraTags(
 // Indexed by prefix rather than held as whole digests so a tag naming a
 // SHORTENED digest still matches — the convention is the vendor's and nothing
 // obliges it to use all sixty-four characters.
-func accountedDigests(inv inventory) map[string][]string {
+func accountedDigests(inv inventory, also []string) map[string][]string {
 	out := map[string][]string{}
 	add := func(digest string) {
 		hex := hexOf(digest)
@@ -903,6 +948,9 @@ func accountedDigests(inv inventory) map[string][]string {
 		for _, layer := range item.Layers {
 			add(layer.Digest)
 		}
+	}
+	for _, digest := range also {
+		add(digest)
 	}
 	return out
 }

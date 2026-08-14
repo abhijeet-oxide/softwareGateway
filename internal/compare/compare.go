@@ -92,6 +92,14 @@ type Options struct {
 	A, B SideSpec
 	// Concurrency bounds the registry calls made against each side.
 	Concurrency int
+	// FileBudget is how many bytes of LAYER CONTENT this comparison may
+	// download in order to say which files changed rather than which layers.
+	//
+	// Zero leaves every layer opaque. It is a byte budget rather than a list of
+	// artifact types worth opening, because a budget needs no vendor plugin and
+	// degrades correctly for a vendor nobody has written one for: a four-kilobyte
+	// configuration bundle is opened, a two-gigabyte image layer is not.
+	FileBudget int64
 }
 
 // Layer is one blob a component is made of.
@@ -176,11 +184,19 @@ type Row struct {
 	A, B    *Item
 	// Differences states each disagreement as a fact. Empty for VerdictSame.
 	Differences []string
-	// FilesAdded and FilesRemoved name the layers that changed, where the
-	// vendor titled them. This is what answers "which files changed" for a
-	// generic artifact.
+	// FilesAdded, FilesRemoved and FilesChanged name the FILES inside the
+	// component's layers — the answer to "one line of one config file moved",
+	// which "two layers changed" cannot give.
+	//
+	// Three lists rather than two: an edited file is CHANGED, not added and
+	// removed, and reporting it as both would double every finding.
 	FilesAdded   []string
 	FilesRemoved []string
+	FilesChanged []string
+	// FilesTruncated says a layer was left unopened — past the budget, or not
+	// an archive — so the lists above are a partial account rather than the
+	// whole one.
+	FilesTruncated bool
 }
 
 // Report is the whole comparison.
@@ -251,6 +267,12 @@ func Run(ctx context.Context, clientA, clientB ClientFactory, opts Options) (Rep
 
 	report := Report{A: opts.A, B: opts.B, ExtraTagsA: extraA, ExtraTagsB: extB}
 	report.Rows = align(invA, invB)
+
+	// The files inside whatever changed. Only for rows that already disagree:
+	// a component whose digest matches on both sides is byte-identical, and
+	// opening it could not produce a finding.
+	inspectFiles(ctx, clientA, clientB, report.Rows, opts.FileBudget, concurrency)
+
 	for _, row := range report.Rows {
 		switch row.Verdict {
 		case VerdictSame:
@@ -607,7 +629,6 @@ func compareItems(a, b *Item) Row {
 		row.Verdict = VerdictChanged
 		row.Differences = append(row.Differences, fmt.Sprintf(
 			"content differs: %s and %s", short(a.Digest), short(b.Digest)))
-		row.FilesAdded, row.FilesRemoved = diffLayers(a.Layers, b.Layers)
 	}
 	if a.Tag != b.Tag {
 		row.Verdict = VerdictChanged
@@ -658,70 +679,6 @@ func siteDifferences(a, b *Item) []string {
 		}
 	}
 	return out
-}
-
-// diffLayers names what a change added and removed.
-//
-// By TITLE where the vendor set one, which is what makes "which files changed"
-// answerable for a generic artifact — its layers are files and the title is the
-// path. By digest otherwise, because an image layer has no name and a caller
-// still wants to know how much of it moved.
-func diffLayers(a, b []Layer) (added, removed []string) {
-	inA := map[string]Layer{}
-	for _, l := range a {
-		inA[l.Digest] = l
-	}
-	inB := map[string]Layer{}
-	for _, l := range b {
-		inB[l.Digest] = l
-	}
-
-	// A layer whose TITLE is on both sides with different bytes is a file that
-	// CHANGED, not one added and one removed. Reporting it twice would make a
-	// one-line configuration edit read as two findings.
-	titlesA := titleIndex(a)
-	titlesB := titleIndex(b)
-
-	for _, l := range b {
-		if _, same := inA[l.Digest]; same {
-			continue
-		}
-		if l.Title != "" && titlesA[l.Title] != "" {
-			added = append(added, l.Title+" (changed)")
-			continue
-		}
-		added = append(added, layerLabel(l))
-	}
-	for _, l := range a {
-		if _, same := inB[l.Digest]; same {
-			continue
-		}
-		if l.Title != "" && titlesB[l.Title] != "" {
-			continue // already reported as changed
-		}
-		removed = append(removed, layerLabel(l))
-	}
-
-	sort.Strings(added)
-	sort.Strings(removed)
-	return added, removed
-}
-
-func titleIndex(layers []Layer) map[string]string {
-	out := map[string]string{}
-	for _, l := range layers {
-		if l.Title != "" {
-			out[l.Title] = l.Digest
-		}
-	}
-	return out
-}
-
-func layerLabel(l Layer) string {
-	if l.Title != "" {
-		return l.Title
-	}
-	return short(l.Digest)
 }
 
 // classify says what an artifact IS, in the words somebody uses about it.

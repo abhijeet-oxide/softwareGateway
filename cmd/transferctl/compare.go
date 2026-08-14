@@ -24,11 +24,12 @@ import (
 
 func newCompareCommand() *cobra.Command {
 	var (
-		from    string
-		to      string
-		at      string
-		all     bool
-		verbose bool
+		from       string
+		to         string
+		at         string
+		all        bool
+		showFiles  bool
+		fileBudget int64
 	)
 
 	cmd := &cobra.Command{
@@ -41,6 +42,11 @@ func newCompareCommand() *cobra.Command {
 			"  compare P 25.7 --from lab --to prod     did the promotion land?\n" +
 			"  compare P 25.7 25.6                     what changed in the release?\n" +
 			"  compare P 25.7 25.6 --at stage          ...and did all of it arrive?\n\n" +
+			"For a component that changed, the layers are OPENED and the answer is\n" +
+			"given in FILES: `2 files changed` rather than `2 layers changed`, and\n" +
+			"--files names them. Layers past --file-budget stay opaque, which is\n" +
+			"what stops a two-gigabyte image layer being downloaded to answer a\n" +
+			"question about a four-kilobyte configuration bundle.\n\n" +
 			"By default only the DIFFERENCES are printed. --all shows every\n" +
 			"component, including the ones that agree.\n\n" +
 			"Exits non-zero when the two ends differ, so it can end a pipeline.",
@@ -54,12 +60,15 @@ func newCompareCommand() *cobra.Command {
 			}
 
 			resp, err := newClient().ComparePackage(cmd.Context(), args[0], args[1],
-				v1.CompareRequest{From: from, To: to, Against: against(args)})
+				v1.CompareRequest{
+					From: from, To: to, Against: against(args),
+					FileBudgetBytes: budgetBytes(fileBudget),
+				})
 			if err != nil {
 				return err
 			}
 			if err := render(stdout(), opts.output, resp, func(w io.Writer) error {
-				return renderCompare(w, resp, all, verbose)
+				return renderCompare(w, resp, all, showFiles)
 			}); err != nil {
 				return err
 			}
@@ -80,8 +89,11 @@ func newCompareCommand() *cobra.Command {
 		"both ends are this one place — for comparing two versions")
 	cmd.Flags().BoolVar(&all, "all", false,
 		"show every component, not only the ones that differ")
-	cmd.Flags().BoolVar(&verbose, "layers", false,
-		"for a changed component, name the layers that changed")
+	cmd.Flags().BoolVar(&showFiles, "files", false,
+		"for a changed component, name the files that changed rather than counting them")
+	cmd.Flags().Int64Var(&fileBudget, "file-budget", 0,
+		"MiB of layer content that may be downloaded to see inside layers "+
+			"(0 = the server's default, -1 = do not open any)")
 
 	// It reaches both registries through the Coordinator, so it belongs with
 	// the slow commands.
@@ -101,6 +113,20 @@ func againstArg() argSpec {
 		Optional: true,
 		Default:  "compares the same version in two places",
 	}
+}
+
+// budgetBytes turns the flag's MiB into the bytes the API takes.
+//
+// MiB in the flag because that is the unit somebody thinks in when deciding
+// whether to let a comparison pull a layer, and bytes on the wire because a
+// unit in an API field is a second thing to get wrong.
+func budgetBytes(mib int64) int64 {
+	if mib < 0 {
+		// Negative is "open nothing", and it has to survive the conversion:
+		// -1 MiB in bytes is still negative, which is what the server reads.
+		return -1
+	}
+	return mib << 20
 }
 
 func against(args []string) string {
@@ -212,7 +238,7 @@ func cell(s *v1.CompareSide) string {
 // cell is not: "cfx-5000-product/lms:1.25.212 points at sha256:8533f4a71a43 on
 // the second side" does not fit a column, and truncating it removes the half
 // that says what is wrong.
-func renderDetails(w io.Writer, r *v1.CompareResponse, layers bool) {
+func renderDetails(w io.Writer, r *v1.CompareResponse, showFiles bool) {
 	if differences(r) == 0 {
 		return
 	}
@@ -227,27 +253,68 @@ func renderDetails(w io.Writer, r *v1.CompareResponse, layers bool) {
 		for _, d := range row.Differences {
 			fmt.Fprintf(w, "      %s\n", d)
 		}
-		if layers {
-			renderFiles(w, row)
-		} else if n := len(row.FilesAdded) + len(row.FilesRemoved); n > 0 {
-			fmt.Fprintf(w, "      %s changed; --layers names them\n",
-				plural(n, "layer", "layers"))
-		}
+		renderFileChange(w, row, showFiles)
 	}
 }
 
-// renderFiles names what a change added and removed.
+// renderFileChange says what changed INSIDE a component.
 //
-// Titled where the vendor titled the layer, which for a generic artifact is the
-// path of the file inside it — so "which files changed" is answered literally
-// rather than as a count of digests.
-func renderFiles(w io.Writer, row v1.CompareRow) {
+// Counted by default and named on request, because the two answer different
+// questions. "3 files changed" is what somebody scanning a release wants; the
+// paths are what somebody who has found the interesting component wants, and
+// printing four hundred of them at the first reader would bury everything else.
+func renderFileChange(w io.Writer, row v1.CompareRow, showFiles bool) {
+	summary := fileSummary(row)
+	if summary == "" {
+		return
+	}
+
+	if !showFiles {
+		fmt.Fprintf(w, "      %s; --files names them\n", summary)
+		return
+	}
+
+	fmt.Fprintf(w, "      %s\n", summary)
+	for _, f := range row.FilesChanged {
+		fmt.Fprintf(w, "        ~ %s\n", f)
+	}
 	for _, f := range row.FilesAdded {
-		fmt.Fprintf(w, "      + %s\n", f)
+		fmt.Fprintf(w, "        + %s\n", f)
 	}
 	for _, f := range row.FilesRemoved {
-		fmt.Fprintf(w, "      - %s\n", f)
+		fmt.Fprintf(w, "        - %s\n", f)
 	}
+}
+
+// fileSummary counts the file-level change in one clause.
+//
+// The truncation note is part of it rather than a separate line, because a
+// partial list presented as a whole one is worse than no list: somebody would
+// conclude a file was untouched when it was simply never looked at.
+func fileSummary(row v1.CompareRow) string {
+	var parts []string
+	if n := len(row.FilesChanged); n > 0 {
+		parts = append(parts, fmt.Sprintf("%d changed", n))
+	}
+	if n := len(row.FilesAdded); n > 0 {
+		parts = append(parts, fmt.Sprintf("%d added", n))
+	}
+	if n := len(row.FilesRemoved); n > 0 {
+		parts = append(parts, fmt.Sprintf("%d removed", n))
+	}
+	if len(parts) == 0 {
+		return ""
+	}
+
+	out := plural(total(row), "file", "files") + ": " + strings.Join(parts, ", ")
+	if row.FilesTruncated {
+		out += " (some layers not opened)"
+	}
+	return out
+}
+
+func total(row v1.CompareRow) int {
+	return len(row.FilesChanged) + len(row.FilesAdded) + len(row.FilesRemoved)
 }
 
 // renderExtras names content in a bundle's own repository that the bundle does

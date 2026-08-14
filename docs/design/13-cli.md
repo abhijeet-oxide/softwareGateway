@@ -372,7 +372,7 @@ Differences
       present on the second side only
   ~ cfx-5000-product/cvlk
       cfx-5000-product/cvlk:1.0.7 points at sha256:8533f4a71a43 on the second side, not sha256:4573b0b15ceb
-      2 layers changed; --layers names them
+      2 files: 1 changed, 1 removed
 
 Also in att-stage, not part of this release
   orb_25.6_mp2601_2011
@@ -406,7 +406,7 @@ Components are aligned by the repository half of their `ref.name` — the vendor
 | Digest, per component | a mutated or stale copy |
 | Tag, resolved on each side | the failure this system shipped with: everything pushed, the component's own tag never applied, every digest agreeing |
 | The component's own repository | a bundle that is byte-perfect while nothing in it is pullable as itself |
-| Layers, by title where the vendor set one | *which files changed* — a generic artifact's layers are files and the title is the path |
+| **Files inside the layers** | *which file changed* — see below |
 | Tags in the bundle's own repository | content nobody in this comparison put there |
 
 **A partial transfer does not abort the walk.** An index naming children the registry will not serve is exactly what a transfer that stopped part-way leaves behind. `oci.WalkPartial` records each unreachable child *from its referencing descriptor* — so it keeps the name its parent gave it and still aligns against its counterpart — which is what turns "something is missing" into "`cfx-5000-product/lms` is missing", and what stops the first missing component costing the reader the other nineteen findings.
@@ -417,8 +417,44 @@ A diff, laid out as one, with the markers everybody already reads without being 
 
 - **Differences first**, then agreements — and by default the agreements are not printed at all, only counted. `--all` shows them.
 - **Differences are sentences, under the table.** "`cfx-5000-product/cvlk:1.0.7` points at `sha256:8533f4a71a43` on the second side" does not fit a column, and truncating it removes the half that says what is wrong.
-- **Changed layers are counted, then named on request** (`--layers`). A release that edited one configuration file should not print forty layer digests at somebody who asked what changed.
+- **Changed files are counted, then named on request** (`--files`). A release that edited one configuration file should not print four hundred paths at somebody scanning to find which component is interesting.
 - **Non-zero exit when the ends differ**, so it can end a pipeline.
+
+#### Files, not layers — and why this is OCI rather than a vendor plugin
+
+"Two layers changed" is true and useless. A release that edited one line of one configuration file and a release that rewrote everything produce the same sentence, because a layer is an archive and its digest changes when anything inside it does.
+
+So for a component that differs, the layers are **opened** and the comparison is done over the files:
+
+```
+~ cfx-5000-product/custo
+    content differs: sha256:4573b0b15ceb and sha256:8533f4a71a43
+    3 files: 1 changed, 1 added, 1 removed
+      ~ CONFIGURATION/example_parameters.json
+      + CONFIGURATION/new_site.json
+      - DOCUMENTATION/old_readme
+```
+
+**This belongs in the core, not in a vendor plugin, and the specification is why.** The OCI image specification defines a layer as a *tar archive* — the media types say so out loud, `application/vnd.oci.image.layer.v1.tar` and the same with `+gzip` — and its "Layer Changeset" section defines the `.wh.` whiteout entries that mark deletions. Reading the files inside a layer is reading the format the specification names. The other shape here is equally standard: an OCI 1.1 artifact frequently carries **one file per layer** with `org.opencontainers.image.title` naming it, which is the ORAS convention used by Helm, by cosign, and by everything else publishing non-image artifacts.
+
+A NEAR ORB happens to use both — one titled layer per file for some components, one archive containing many for others — and neither needs Nokia to be named anywhere. `vendors.Layout` gains nothing here.
+
+The one thing that *would* have been vendor knowledge is "which artifact types are worth opening", and that is answered by a **byte budget** instead:
+
+| | |
+|---|---|
+| Default | 64 MiB of layer content per comparison, `--file-budget` in MiB to change it, `-1` to open nothing |
+| Under it | opened, and the answer is in files |
+| Over it | one opaque unit, and the row says `(some layers not opened)` |
+
+A budget needs no plugin, degrades correctly for a vendor nobody has written one for, and gets the economics right by construction: a configuration bundle is kilobytes and is always opened, an image layer is hundreds of megabytes and never is — which is exactly the asymmetry, because nobody wants a file listing of an image layer.
+
+Four properties worth stating, each of which was a decision:
+
+- **The format is sniffed, not taken from the media type.** It is routinely wrong — a gzipped tar shipped under `application/octet-stream` is ordinary — and refusing to look would disable this where it is most wanted. Both formats read are self-identifying (gzip magic, tar header checksum, zip signature), and anything unrecognised **fails closed** to one opaque blob.
+- **Every layer of a changed component is read, not only the ones whose digests differ.** Layers stack, and a file can move between them without changing; reading only the differing ones would report a repacked-but-identical file as added on one side and missing on the other. A layer both sides share is fetched once and cancels out.
+- **A file's identity is its content**, hashed from the entry's bytes. Two archives of the same files differ in modification times and packing order every time they are built, and keying on anything else would report a rebuild as a change to every file in it.
+- **Decompression is bounded.** A four-kilobyte gzip stream can expand to gigabytes, and this reads archives fetched from a registry it is in the middle of doubting. The caller's budget bounds what is *downloaded*; separate entry and expansion limits bound what that download can turn into.
 
 #### One deliberate limit
 

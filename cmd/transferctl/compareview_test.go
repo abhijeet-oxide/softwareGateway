@@ -83,8 +83,8 @@ func TestDifferencesAreSpeltOutUnderTheTable(t *testing.T) {
 }
 
 // Changed files are counted by default and named on request. A release that
-// edited one configuration file should not print forty layer digests at
-// somebody who asked what changed.
+// edited one configuration file should not print four hundred paths at somebody
+// who is scanning to find which component is interesting.
 func TestChangedFilesAreCountedThenNamed(t *testing.T) {
 	var quiet, loud bytes.Buffer
 	if err := renderCompare(&quiet, mixedReport(), false, false); err != nil {
@@ -94,14 +94,21 @@ func TestChangedFilesAreCountedThenNamed(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if !strings.Contains(quiet.String(), "--layers") {
+	if !strings.Contains(quiet.String(), "--files") {
 		t.Errorf("the count does not say how to see the names:\n%s", quiet.String())
 	}
+	// COUNTED IN FILES, not in layers. "2 layers changed" is true and useless.
+	if !strings.Contains(quiet.String(), "2 files") {
+		t.Errorf("the change is not counted in files:\n%s", quiet.String())
+	}
+	if strings.Contains(quiet.String(), "layers changed") {
+		t.Errorf("the change is still reported in layers:\n%s", quiet.String())
+	}
 	if strings.Contains(quiet.String(), "CONFIGURATION/example_parameters.json") {
-		t.Errorf("file names are printed without --layers:\n%s", quiet.String())
+		t.Errorf("file names are printed without --files:\n%s", quiet.String())
 	}
 	if !strings.Contains(loud.String(), "CONFIGURATION/example_parameters.json") {
-		t.Errorf("--layers does not name the changed files:\n%s", loud.String())
+		t.Errorf("--files does not name the changed files:\n%s", loud.String())
 	}
 }
 
@@ -121,6 +128,25 @@ func TestUnexplainedContentIsReported(t *testing.T) {
 	}
 	if !strings.Contains(out, "orb_25.6_mp2601_2011") {
 		t.Errorf("the unexplained tag is not named:\n%s", out)
+	}
+}
+
+// A partial list must SAY it is partial. Presented as the whole answer,
+// somebody would conclude a file was untouched when it was never looked at.
+func TestAnIncompleteFileListSaysSo(t *testing.T) {
+	r := mixedReport()
+	for i := range r.Rows {
+		if r.Rows[i].Verdict == "changed" {
+			r.Rows[i].FilesTruncated = true
+		}
+	}
+
+	var buf bytes.Buffer
+	if err := renderCompare(&buf, r, false, false); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(buf.String(), "not opened") {
+		t.Errorf("a truncated file list does not say so:\n%s", buf.String())
 	}
 }
 
@@ -180,7 +206,7 @@ func mixedReport() *v1.CompareResponse {
 					"cfx-5000-product/cvlk:1.0.7 points at sha256:8533f4a71a43 on " +
 						"the second side, not sha256:4573b0b15ceb",
 				},
-				FilesAdded:   []string{"CONFIGURATION/example_parameters.json (changed)"},
+				FilesChanged: []string{"CONFIGURATION/example_parameters.json"},
 				FilesRemoved: []string{"DOCUMENTATION/old_readme"},
 			},
 			sameRow("mcc"),

@@ -100,7 +100,11 @@ type ComparePoint struct {
 // factory, the registry walker and the product registry behind it
 // (docs/design/15 §6).
 type Comparer interface {
-	Compare(ctx context.Context, productName string, a, b ComparePoint) (compare.Report, error)
+	// fileBudget is how many bytes of layer content the comparison may
+	// download in order to say which FILES changed rather than which layers.
+	// Zero means the server's default; negative means none.
+	Compare(ctx context.Context, productName string, a, b ComparePoint,
+		fileBudget int64) (compare.Report, error)
 }
 
 // Calibrator measures one source-to-target path and recommends settings.

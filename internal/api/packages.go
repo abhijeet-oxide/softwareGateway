@@ -704,7 +704,8 @@ func (s *Server) handleComparePackage(w http.ResponseWriter, r *http.Request) {
 
 	report, err := s.deps.Comparer.Compare(r.Context(), productName,
 		ComparePoint{Package: pkg, Endpoint: req.From},
-		ComparePoint{Package: against, Endpoint: req.To})
+		ComparePoint{Package: against, Endpoint: req.To},
+		req.FileBudgetBytes)
 	if err != nil {
 		Error(w, r, v1.CodeInvalidArgument, err.Error())
 		return
@@ -724,14 +725,16 @@ func (s *Server) handleComparePackage(w http.ResponseWriter, r *http.Request) {
 	}
 	for _, row := range report.Rows {
 		out.Rows = append(out.Rows, v1.CompareRow{
-			Type:         row.Type,
-			Name:         row.Name,
-			Verdict:      string(row.Verdict),
-			A:            compareSideDTO(row.A),
-			B:            compareSideDTO(row.B),
-			Differences:  row.Differences,
-			FilesAdded:   row.FilesAdded,
-			FilesRemoved: row.FilesRemoved,
+			Type:           row.Type,
+			Name:           row.Name,
+			Verdict:        string(row.Verdict),
+			A:              compareSideDTO(row.A),
+			B:              compareSideDTO(row.B),
+			Differences:    row.Differences,
+			FilesAdded:     row.FilesAdded,
+			FilesRemoved:   row.FilesRemoved,
+			FilesChanged:   row.FilesChanged,
+			FilesTruncated: row.FilesTruncated,
 		})
 	}
 	WriteJSON(w, r, http.StatusOK, out)

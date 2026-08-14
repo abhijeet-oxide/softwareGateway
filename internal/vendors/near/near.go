@@ -80,6 +80,17 @@ type Layout struct{}
 
 func (Layout) Name() string { return Name }
 
+// Vocabulary: NEAR's users have orbs and orb versions, not repositories and
+// tags. Nobody operating this reads "42 repositories scanned" and thinks about
+// repositories — they think about orbs, and having to translate every line of a
+// summary is the same tax as reading `orbs/` on every row.
+func (Layout) Vocabulary() vendors.Vocabulary {
+	return vendors.Vocabulary{
+		Unit: "orb", Units: "orbs",
+		Version: "orb version", Versions: "orb versions",
+	}
+}
+
 // LooksForSignatures is true: this layout genuinely checks, so a package with
 // no signature is reported as `unsigned` rather than `unknown`.
 func (Layout) LooksForSignatures() bool { return true }

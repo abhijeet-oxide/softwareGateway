@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -27,9 +28,86 @@ func newPackagesCommand() *cobra.Command {
 		newPackagesListCommand(),
 		newPackagesDescribeCommand(),
 		newPackagesInspectCommand(),
+		newPackagesUnavailableCommand(),
 		newPackagesDiscoverAliasCommand(),
 	)
 	return cmd
+}
+
+// newPackagesUnavailableCommand lists what the vendor will not serve.
+//
+// The counterpart of `packages list`, and the reason it is a separate command
+// rather than a filter on it: these are the ABSENCE of packages. A scan meets
+// them on every pass and can do nothing about them, so they belong neither in
+// the catalogue nor in an error — they belong in a listing somebody consults
+// when they are asking why a release they expected is not there.
+func newPackagesUnavailableCommand() *cobra.Command {
+	cmd := &cobra.Command{
+		Use:   "unavailable",
+		Short: "List content a source would not serve",
+		Long: "Content a scan asked for and was refused, most recently confirmed\n" +
+			"first. A vendor registry serves a catalogue spanning every customer,\n" +
+			"so being refused the products this account has not licensed is the\n" +
+			"entitlement check working rather than anything to fix.\n\n" +
+			"A row that stops being refreshed is one that came back: it is deleted\n" +
+			"the first time a scan reads it successfully.",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			resp, err := newClient().ListUnavailable(cmd.Context(), args[0])
+			if err != nil {
+				return err
+			}
+			return render(stdout(), opts.output, resp, func(w io.Writer) error {
+				return renderUnavailable(w, resp)
+			})
+		},
+	}
+
+	takes(cmd, "unavailable", productArg())
+	return cmd
+}
+
+func renderUnavailable(w io.Writer, r *v1.ListUnavailableResponse) error {
+	if len(r.Packages) == 0 {
+		fmt.Fprintln(w, "Nothing has been refused.")
+		return nil
+	}
+
+	tw := newTabWriter(w)
+	fmt.Fprintln(tw, "REPOSITORY\tVERSION\tREASON\tFIRST SEEN\tLAST SEEN")
+	for _, u := range r.Packages {
+		fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\n",
+			firstNonEmpty(u.DisplayRepository, u.Repository),
+			firstNonEmpty(u.DisplayTag, u.Tag),
+			strings.ReplaceAll(u.Reason, "_", " "),
+			shortTime(u.FirstSeenAt),
+			shortTime(u.LastSeenAt),
+		)
+	}
+	if err := tw.Flush(); err != nil {
+		return err
+	}
+
+	// The vendor's own sentence, once per distinct message. It names the end
+	// user and the sales item, which is what somebody takes to their account
+	// manager — and it is identical across dozens of rows.
+	said := map[string]bool{}
+	for _, u := range r.Packages {
+		if u.Detail == "" || said[u.Detail] {
+			continue
+		}
+		said[u.Detail] = true
+		fmt.Fprintf(w, "\n%s\n", u.Detail)
+	}
+	return nil
+}
+
+func firstNonEmpty(values ...string) string {
+	for _, v := range values {
+		if v != "" {
+			return v
+		}
+	}
+	return "-"
 }
 
 func newPackagesListCommand() *cobra.Command {
@@ -410,16 +488,35 @@ func renderDiscoverResult(w io.Writer, productName string, r *v1.DiscoverPackage
 	}
 	fmt.Fprintln(w)
 
+	// The vendor's nouns, from the SERVER's vendor plugin. A NEAR operator does
+	// not have repositories and tags, they have orbs and orb versions, and
+	// having to translate every line of a summary is the same tax as reading
+	// `orbs/` on every row of a listing.
+	words := scanWords(r.Vocabulary)
+
+	// Two populations that look alike and mean opposite things: content the
+	// vendor will not sell us, and content we could not read. The first is a
+	// standing fact about the catalogue; the second is a fault. Only the second
+	// makes the command exit non-zero.
+	var notEntitled, faults []v1.ScanIssue
+	for _, e := range r.TagErrors {
+		if e.Class == classNotEntitled {
+			notEntitled = append(notEntitled, e)
+			continue
+		}
+		faults = append(faults, e)
+	}
+
 	tw := newTabWriter(w)
-	fmt.Fprintf(tw, "  Repositories scanned\t%d\n", r.Repositories)
+	fmt.Fprintf(tw, "  %s scanned\t%d\n", sentenceCase(words.Units), r.Repositories)
 	if r.RepositoriesFromCatalog > 0 {
 		fmt.Fprintf(tw, "    found in the catalog\t%d\n", r.RepositoriesFromCatalog)
 	}
 	if r.RepositoriesFiltered > 0 {
 		fmt.Fprintf(tw, "    rejected by filters\t%d\n", r.RepositoriesFiltered)
 	}
-	fmt.Fprintf(tw, "  Tags listed\t%d\n", r.TagsListed)
-	fmt.Fprintf(tw, "  Tags after filters\t%d\n", r.TagsAdmitted)
+	fmt.Fprintf(tw, "  %s listed\t%d\n", sentenceCase(words.Versions), r.TagsListed)
+	fmt.Fprintf(tw, "  %s after filters\t%d\n", sentenceCase(words.Versions), r.TagsAdmitted)
 	fmt.Fprintf(tw, "  New packages\t%d\n", r.PackagesDiscovered)
 	fmt.Fprintf(tw, "  Superseded\t%d\n", r.Superseded)
 	if r.Regrouped > 0 {
@@ -459,18 +556,13 @@ func renderDiscoverResult(w io.Writer, productName string, r *v1.DiscoverPackage
 			fmt.Fprintln(w, "  `transferctl products check` answers both.")
 		}
 
-	case r.PackagesDiscovered == 0 && len(r.TagErrors) == 0:
+	case r.PackagesDiscovered == 0 && len(faults) == 0:
 		fmt.Fprintln(w)
 		fmt.Fprintln(w, "Nothing new. A scan that finds nothing is the normal steady state,")
 		fmt.Fprintln(w, "not a failure.")
 	}
 
-	if r.RequestsCreated > 0 {
-		fmt.Fprintln(w)
-		fmt.Fprintf(w, "%d auto-download rule match(es) created transfer requests. Byte\n", r.RequestsCreated)
-		fmt.Fprintln(w, "transfer is not implemented in this build, so they will stay pending")
-		fmt.Fprintln(w, "until the queue and workers land in the next milestone.")
-	}
+	renderNotEntitled(w, notEntitled, words)
 
 	if len(r.RepositoryErrors) > 0 {
 		fmt.Fprintln(w)
@@ -480,20 +572,164 @@ func renderDiscoverResult(w io.Writer, productName string, r *v1.DiscoverPackage
 		}
 	}
 
-	if len(r.TagErrors) > 0 {
+	if len(faults) > 0 {
 		fmt.Fprintln(w)
-		fmt.Fprintf(w, "%d tag(s) could not be read. The rest of the scan completed:\n", len(r.TagErrors))
-		for _, e := range r.TagErrors {
-			fmt.Fprintf(w, "  %s\n", e)
+		fmt.Fprintf(w, "%s could not be read. The rest of the scan completed:\n",
+			plural(len(faults), words.Version, words.Versions))
+		for _, e := range faults {
+			fmt.Fprintf(w, "  %s\n", e.Message)
 		}
 		// Exit non-zero so a script notices, while still printing what worked.
-		return partialFailureError{msg: fmt.Sprintf("%d tag(s) failed during the scan", len(r.TagErrors))}
+		return partialFailureError{
+			msg: fmt.Sprintf("%d %s failed during the scan", len(faults), words.Versions)}
 	}
 	if len(r.RepositoryErrors) > 0 {
 		return partialFailureError{
 			msg: fmt.Sprintf("%d repository/repositories failed during the scan", len(r.RepositoryErrors))}
 	}
 	return nil
+}
+
+// classNotEntitled is the server's class for a source refusing content this
+// customer has not licensed. Matched rather than re-derived from the message,
+// because the classification is the server's to make.
+const classNotEntitled = "not_entitled"
+
+// renderNotEntitled reports content the vendor will not serve this account.
+//
+// # Why this is not an error
+//
+// A vendor registry serves a catalogue spanning every customer. Asking about a
+// product this customer has not licensed gets a 403, and that is the
+// entitlement check WORKING — not an outage, not a bad credential, and nothing
+// anybody here can fix. On a real catalogue it is dozens of orbs, on every
+// scan, forever.
+//
+// Reported as failures it made every scheduled scan exit non-zero with
+// thirty-seven lines of URL and status code attached, which is precisely how a
+// monitoring signal comes to be ignored. So the scan reports success, because
+// it succeeded, and this block states the fact.
+//
+// # Why it is grouped
+//
+// Thirty-seven lines of `orbs/cfx-5000-k8s tag orb_24.7.1186: HTTP 403:
+// forbidden` differ only in the two parts that carry no information about what
+// went wrong. Grouped by orb, with the versions listed after it, the same
+// thirty-seven lines become four — and the registry's own sentence, which names
+// the customer and the product and is the thing somebody takes to their account
+// manager, is printed once instead of thirty-seven times.
+func renderNotEntitled(w io.Writer, issues []v1.ScanIssue, words v1.ScanVocabulary) {
+	if len(issues) == 0 {
+		return
+	}
+
+	byUnit := map[string][]string{}
+	var order []string
+	seen := map[string]bool{}
+	for _, e := range issues {
+		unit := issueUnit(e)
+		if !seen[unit] {
+			seen[unit] = true
+			order = append(order, unit)
+		}
+		byUnit[unit] = append(byUnit[unit], issueVersion(e))
+	}
+	sort.Strings(order)
+
+	fmt.Fprintln(w)
+	fmt.Fprintf(w, "%s could not be read: no entitlement for this account.\n",
+		plural(len(issues), words.Unit, words.Units))
+	fmt.Fprintln(w)
+
+	tw := newTabWriter(w)
+	for _, unit := range order {
+		versions := byUnit[unit]
+		sort.Strings(versions)
+		fmt.Fprintf(tw, "  %s\t%s\n", unit, strings.Join(versions, ", "))
+	}
+	_ = tw.Flush()
+
+	// The vendor's own words, once per distinct message. Ours is a status code;
+	// theirs names the end user and the sales item.
+	said := map[string]bool{}
+	for _, e := range issues {
+		detail := entitlementSentence(e.Message)
+		if detail == "" || said[detail] {
+			continue
+		}
+		said[detail] = true
+		fmt.Fprintf(w, "\n  %s\n", detail)
+	}
+}
+
+// issueUnit is the vendor's name for the repository an issue is in.
+func issueUnit(e v1.ScanIssue) string {
+	if e.DisplayRepository != "" {
+		return e.DisplayRepository
+	}
+	if e.Repository != "" {
+		return e.Repository
+	}
+	return "(unknown)"
+}
+
+// issueVersion is the vendor's name for the tag an issue is on.
+func issueVersion(e v1.ScanIssue) string {
+	if e.DisplayTag != "" {
+		return e.DisplayTag
+	}
+	return e.Tag
+}
+
+// entitlementSentence pulls the registry's own message out of a rendered
+// failure, dropping the path and status code we wrapped it in.
+//
+// Anything without a recognisable message yields "", and the block simply shows
+// no sentence — the grouping above it is the useful half either way.
+func entitlementSentence(message string) string {
+	i := strings.LastIndex(message, "HTTP 403: ")
+	if i < 0 {
+		return ""
+	}
+	rest := strings.TrimSpace(message[i+len("HTTP 403: "):])
+	// The sentinel we append — "forbidden" — is our word, not theirs.
+	rest = strings.TrimSuffix(rest, ": forbidden")
+	if rest == "" || rest == "forbidden" {
+		return ""
+	}
+	return rest
+}
+
+// scanWords fills in the standard OCI nouns wherever the source's vendor
+// supplies none, which is every conformant registry.
+func scanWords(v *v1.ScanVocabulary) v1.ScanVocabulary {
+	out := v1.ScanVocabulary{
+		Unit: "repository", Units: "repositories", Version: "tag", Versions: "tags",
+	}
+	if v == nil {
+		return out
+	}
+	if v.Unit != "" {
+		out.Unit = v.Unit
+	}
+	if v.Units != "" {
+		out.Units = v.Units
+	}
+	if v.Version != "" {
+		out.Version = v.Version
+	}
+	if v.Versions != "" {
+		out.Versions = v.Versions
+	}
+	return out
+}
+
+// sentenceCase capitalises the first letter of a label.
+func sentenceCase(s string) string {
+	if s == "" {
+		return s
+	}
+	return strings.ToUpper(s[:1]) + s[1:]
 }
 
 // ---------------------------------------------------------------------------

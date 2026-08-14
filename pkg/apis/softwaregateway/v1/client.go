@@ -123,6 +123,15 @@ func (c *Client) ListPackages(ctx context.Context, product string, opts ListPack
 	return &out, c.get(ctx, path, &out)
 }
 
+// ListUnavailable returns what a product's sources would not serve.
+func (c *Client) ListUnavailable(
+	ctx context.Context, product string,
+) (*ListUnavailableResponse, error) {
+	var out ListUnavailableResponse
+	return &out, c.get(ctx,
+		"/api/v1/products/"+url.PathEscape(product)+"/unavailable", &out)
+}
+
 // ListPackagesOptions filters a package listing.
 type ListPackagesOptions struct {
 	// Repository narrows to one repository path. A product may span several.

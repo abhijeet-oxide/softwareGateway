@@ -24,6 +24,50 @@ const (
 )
 
 // handleListPackages serves GET /api/v1/products/{product}/packages.
+// handleListUnavailable serves GET /api/v1/products/{product}/unavailable.
+//
+// What a source would not serve us, and why. Its own route rather than a filter
+// on the packages listing, because these are the ABSENCE of packages: giving
+// them a state on the package list would make every consumer of that list
+// remember to exclude them.
+func (s *Server) handleListUnavailable(w http.ResponseWriter, r *http.Request) {
+	productName := chi.URLParam(r, "product")
+	if !s.productExists(w, r, productName) {
+		return
+	}
+	if s.deps.Packages == nil {
+		Error(w, r, v1.CodeUnavailable, "package storage is not configured")
+		return
+	}
+
+	pageSize, err := parsePageSize(r.URL.Query().Get("pageSize"))
+	if err != nil {
+		Error(w, r, v1.CodeInvalidArgument, err.Error())
+		return
+	}
+
+	rows, err := s.deps.Packages.ListUnavailable(r.Context(), productName, pageSize)
+	if err != nil {
+		Error(w, r, v1.CodeUnavailable, "could not list unavailable packages: "+err.Error())
+		return
+	}
+
+	out := v1.ListUnavailableResponse{Packages: make([]v1.UnavailablePackage, 0, len(rows))}
+	for _, u := range rows {
+		out.Packages = append(out.Packages, v1.UnavailablePackage{
+			Repository:        u.Repository,
+			Tag:               u.Tag,
+			DisplayRepository: u.DisplayRepository,
+			DisplayTag:        u.DisplayTag,
+			Reason:            u.Reason,
+			Detail:            u.Detail,
+			FirstSeenAt:       u.FirstSeenAt,
+			LastSeenAt:        u.LastSeenAt,
+		})
+	}
+	WriteJSON(w, r, http.StatusOK, out)
+}
+
 func (s *Server) handleListPackages(w http.ResponseWriter, r *http.Request) {
 	productName := chi.URLParam(r, "product")
 	if !s.productExists(w, r, productName) {
@@ -263,8 +307,20 @@ func (s *Server) handleDiscoverPackages(w http.ResponseWriter, r *http.Request) 
 		DurationMs:         res.Duration.Milliseconds(),
 		Collapsed:          res.Collapsed,
 	}
+	if v := res.Vocabulary; v.Units != "" {
+		resp.Vocabulary = &v1.ScanVocabulary{
+			Unit: v.Unit, Units: v.Units, Version: v.Version, Versions: v.Versions,
+		}
+	}
 	for _, te := range res.TagErrors {
-		resp.TagErrors = append(resp.TagErrors, te.Error())
+		resp.TagErrors = append(resp.TagErrors, v1.ScanIssue{
+			Repository:        te.Repository,
+			Tag:               te.Tag,
+			DisplayRepository: te.DisplayRepository,
+			DisplayTag:        te.DisplayTag,
+			Class:             te.Class,
+			Message:           te.Error(),
+		})
 	}
 	for _, re := range res.RepositoryErrors {
 		resp.RepositoryErrors = append(resp.RepositoryErrors, re.Error())

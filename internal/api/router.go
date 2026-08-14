@@ -202,6 +202,11 @@ func (s *Server) routes() chi.Router {
 			r.Get("/products/{product}/packages", s.handleListPackages)
 			r.Get("/products/{product}/packages/{package}", s.handleGetPackage)
 			r.Get("/products/{product}/packages/{package}/artifacts", s.handleListArtifacts)
+			// What the source would not serve. A sibling of the packages listing
+			// rather than part of it: these are not packages, they are the
+			// absence of packages, and folding them in would make every consumer
+			// of the listing filter them out.
+			r.Get("/products/{product}/unavailable", s.handleListUnavailable)
 
 			// AIP-136 custom method. Registered whenever discovery is wired, so a
 			// follower can answer with the reason it is not scanning rather than

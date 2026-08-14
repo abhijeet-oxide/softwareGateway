@@ -570,9 +570,17 @@ type DiscoverPackagesResponse struct {
 	Regrouped  int   `json:"regrouped,omitempty"`
 	DurationMs int64 `json:"durationMs"`
 	// TagErrors are per-tag failures that did not stop the scan.
-	TagErrors []string `json:"tagErrors,omitempty"`
+	//
+	// Structured rather than pre-rendered because they are not all the same
+	// KIND of thing: a source refusing content the customer has not licensed is
+	// a fact about entitlement, and a timeout is a fault. Handing the client one
+	// string per failure forced it to decide which by reading English.
+	TagErrors []ScanIssue `json:"tagErrors,omitempty"`
 	// RepositoryErrors are per-repository failures that did not stop the scan.
 	RepositoryErrors []string `json:"repositoryErrors,omitempty"`
+	// Vocabulary is what this source's vendor calls a repository and a tag, so
+	// a summary can be read without translating every line.
+	Vocabulary *ScanVocabulary `json:"vocabulary,omitempty"`
 
 	// Collapsed reports that a scan was ALREADY RUNNING when this request
 	// arrived, so these numbers come from that scan rather than one this call
@@ -583,6 +591,56 @@ type DiscoverPackagesResponse struct {
 	// Started is set instead of the counters when the request asked not to
 	// wait: the scan is running, and there are no results yet to report.
 	Started *DiscoverStarted `json:"started,omitempty"`
+}
+
+// ScanIssue is one thing a scan could not read.
+type ScanIssue struct {
+	Repository string `json:"repository,omitempty"`
+	Tag        string `json:"tag,omitempty"`
+	// DisplayRepository and DisplayTag are the VENDOR's names for the same two
+	// things — `cfx-5000-k8s` and `24.7.1186` where the paths are
+	// `orbs/cfx-5000-k8s` and `orb_24.7.1186`.
+	DisplayRepository string `json:"displayRepository,omitempty"`
+	DisplayTag        string `json:"displayTag,omitempty"`
+	// Class is what kind of issue this is, where the kind changes what should
+	// be done about it. `not_entitled` means the source refused content this
+	// customer has not licensed, which is the entitlement check working rather
+	// than anything to fix. Empty is an ordinary failure.
+	Class string `json:"class,omitempty"`
+	// Message is the failure verbatim, including whatever the registry said.
+	Message string `json:"message,omitempty"`
+}
+
+// ScanVocabulary is what a vendor's users call the things a scan counts.
+type ScanVocabulary struct {
+	Unit     string `json:"unit,omitempty"`
+	Units    string `json:"units,omitempty"`
+	Version  string `json:"version,omitempty"`
+	Versions string `json:"versions,omitempty"`
+}
+
+// ListUnavailableResponse is GET /api/v1/products/{product}/unavailable.
+type ListUnavailableResponse struct {
+	Packages []UnavailablePackage `json:"packages"`
+}
+
+// UnavailablePackage is content a source would not serve.
+//
+// Kept and reported rather than raised as an error on every scan: a vendor
+// registry serves a catalogue spanning every customer, and refusing the
+// products this one has not bought is correct behaviour that recurs forever.
+type UnavailablePackage struct {
+	Repository        string `json:"repository"`
+	Tag               string `json:"tag"`
+	DisplayRepository string `json:"displayRepository,omitempty"`
+	DisplayTag        string `json:"displayTag,omitempty"`
+	Reason            string `json:"reason"`
+	// Detail is what the registry itself said — the sentence naming the
+	// customer and the product, which is what somebody takes to their account
+	// manager.
+	Detail      string `json:"detail,omitempty"`
+	FirstSeenAt string `json:"firstSeenAt,omitempty"`
+	LastSeenAt  string `json:"lastSeenAt,omitempty"`
 }
 
 // DiscoverAllResponse reports a fleet-wide scan.

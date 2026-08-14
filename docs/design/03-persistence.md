@@ -514,11 +514,26 @@ Configurable per class ([02](02-configuration.md) §4, §8). Run by the leader o
 
 | Class | Table | Default | Mechanism |
 |---|---|---|---|
-| Completed jobs | `jobs` | 7 d | Batched `DELETE` where terminal and `completed_at` older than retention |
-| Queue history | `transfers`, `transfer_requests` | 7 d | Batched `DELETE`, cascading to jobs |
-| Discovery history | `packages` | 90 d | Batched `DELETE` for `superseded`/`failed` only — **never** delete a package with transfer history |
-| Notification history | `notifications` | 30 d | Batched `DELETE` where terminal |
-| Audit history | `audit_events` | 365 d | **`DROP TABLE` on the whole partition** |
+| Transfer history | `transfers`, `transfer_requests`, `jobs` | 90 d | Batched `DELETE` of SETTLED transfers, cascading to their jobs and dependencies |
+| Worker logs | `worker_logs` | 30 d | Batched `DELETE` by `logged_at` |
+| Audit history | `audit_events` | keep | Batched `DELETE` by `occurred_at`; unset by default |
+| Placement cache | `blob_placements` | keep | Unbatched `DELETE` by `verified_at`; unset by default |
+| Discovery history | `packages` | keep | Not swept. The catalogue is the point of the system |
+
+### Built: what is swept, and what must not be
+
+Three tables grow with **use** rather than with the size of the catalogue, and they are the whole problem: `jobs` at roughly 2,500 rows per transfer and one transfer per release per target, `worker_logs` at a row per interesting thing a worker did, `audit_events` at a row per state transition. Everything else grows with the **catalogue** — one row per package, per artifact, per blob — and is the answer to "what does this vendor publish". None of it expires.
+
+Deleting a settled transfer is safe because its rows are a record of **work**, not of **content**: what actually landed is at the destination, and what we know about the source is in the catalogue. Deleting the jobs of a transfer that finished a quarter ago loses that run's per-blob byte counts and nothing else.
+
+**Settled, not merely old.** A transfer that has been running for a month is one somebody is watching, and deleting it out from under them would look exactly like the data loss this sweep exists to avoid being blamed for.
+
+Two defaults are deliberately *keep forever*, and both look like the same kind of row as the ones that expire:
+
+- **`audit_events`.** An audit trail with a short retention is not an audit trail. A deployment that wants one bounded sets the duration; leaving it unset is how it stays unbounded, rather than there being a switch to find.
+- **`blob_placements`.** This is the memory that makes a second transfer of a product line nearly free — a placement is what lets the planner skip a blob without asking the registry. Losing one costs a `HEAD` per blob at the next transfer, never a re-upload, so sweeping it is *safe*; it is simply a poor trade for a table measured in tens of thousands of rows.
+
+Every duration is zero-means-keep-forever, so opting out of a sweep is not doing anything.
 
 **Two properties GC must have, and how they are obtained:**
 

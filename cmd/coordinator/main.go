@@ -198,6 +198,20 @@ func run() error {
 		},
 		cfg.Coordinator.ManifestCache.SweepInterval, logger, mreg)
 
+	// History is the OTHER thing that grows without limit, and it grows with
+	// use rather than with the catalogue: ~2500 job rows per transfer, one
+	// transfer per release per target, forever. What it removes and what it
+	// must not is store.SweepRetention's business; this is only the schedule.
+	retentionSweeper := maintenance.NewRetentionSweeper(packages,
+		store.RetentionPolicy{
+			Transfers:   cfg.Coordinator.GC.Transfers,
+			WorkerLogs:  cfg.Coordinator.GC.WorkerLogs,
+			AuditEvents: cfg.Coordinator.GC.AuditEvents,
+			Placements:  cfg.Coordinator.GC.Placements,
+			BatchSize:   cfg.Coordinator.GC.BatchSize,
+		},
+		cfg.Coordinator.GC.TickInterval, logger)
+
 	watcher := product.NewWatcher(cfg.ProductsDir(), loader, products, product.WatchOptions{
 		Logger: logger,
 		OnReload: func(res product.LoadResult) {
@@ -285,6 +299,7 @@ func run() error {
 				}
 				discoveryCtl.SetLeader(isLeader)
 				cacheSweeper.SetLeader(isLeader)
+				retentionSweeper.SetLeader(isLeader)
 			},
 		})
 	} else {
@@ -298,6 +313,7 @@ func run() error {
 			}
 			discoveryCtl.SetLeader(isLeader)
 			cacheSweeper.SetLeader(isLeader)
+			retentionSweeper.SetLeader(isLeader)
 			queueCtl.SetLeader(isLeader)
 		})
 	}
@@ -353,6 +369,7 @@ func run() error {
 	g.Go(func() error { return watcher.Run(gctx) })
 	g.Go(func() error { return discoveryCtl.Run(gctx) })
 	g.Go(func() error { return cacheSweeper.Run(gctx) })
+	g.Go(func() error { return retentionSweeper.Run(gctx) })
 	g.Go(func() error { return queueCtl.Run(gctx) })
 
 	// Graceful shutdown: stop accepting, drain in-flight requests, then exit.

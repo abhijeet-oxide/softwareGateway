@@ -634,6 +634,10 @@ type CompareRequest struct {
 	// From and To that name the same endpoint, it answers "what changed in this
 	// release"; combined with two different ones, it answers both at once.
 	Against string `json:"against,omitempty"`
+	// FileBudgetBytes is how much layer CONTENT may be downloaded to say which
+	// files changed rather than which layers. Zero uses the server's default;
+	// negative leaves every layer opaque.
+	FileBudgetBytes int64 `json:"fileBudgetBytes,omitempty"`
 }
 
 // CompareResponse is what two places hold, aligned component by component.
@@ -680,11 +684,18 @@ type CompareRow struct {
 	// Differences states each disagreement as a fact. Empty when the two sides
 	// agree.
 	Differences []string `json:"differences,omitempty"`
-	// FilesAdded and FilesRemoved name the layers that changed, where the
-	// vendor titled them — which is what makes "which files changed" answerable
-	// for a generic artifact.
+	// FilesAdded, FilesRemoved and FilesChanged name the FILES inside the
+	// component's layers, read out of the layer archives themselves.
+	//
+	// This is the answer to "one line of one configuration file moved", which
+	// "two layers changed" cannot give. Three lists rather than two, because an
+	// edited file is CHANGED, not added and removed.
 	FilesAdded   []string `json:"filesAdded,omitempty"`
 	FilesRemoved []string `json:"filesRemoved,omitempty"`
+	FilesChanged []string `json:"filesChanged,omitempty"`
+	// FilesTruncated says a layer was left unopened — past the budget, or not
+	// an archive — so the lists above are a partial account.
+	FilesTruncated bool `json:"filesTruncated,omitempty"`
 }
 
 // CompareSide is one end's account of one component.

@@ -1,8 +1,12 @@
 package compare_test
 
 import (
+	"archive/tar"
+	"bytes"
+	"compress/gzip"
 	"context"
 	"encoding/json"
+	"sort"
 	"strings"
 	"testing"
 
@@ -186,25 +190,165 @@ func TestChangedFilesAreNamed(t *testing.T) {
 		t.Fatalf("no row for the generic artifact:\n%s", describe(report))
 	}
 
-	added := strings.Join(row.FilesAdded, " ")
-	removed := strings.Join(row.FilesRemoved, " ")
+	assertFileChange(t, row, fileChange{
+		changed: []string{"CONFIGURATION/one.json"},
+		added:   []string{"CONFIGURATION/new.json"},
+		removed: []string{"CONFIGURATION/gone.json"},
+		absent:  []string{"DOCUMENTATION/readme"},
+	})
+}
 
-	if !strings.Contains(added, "CONFIGURATION/one.json (changed)") {
-		t.Errorf("an edited file is not reported as changed: added=%v removed=%v",
-			row.FilesAdded, row.FilesRemoved)
+// THE CASE THIS WAS BUILT FOR: a component whose layer is an ARCHIVE, with the
+// files inside it.
+//
+// "Two layers changed" is true and useless — a release that edited one line and
+// a release that rewrote everything produce the same sentence, because a layer's
+// digest changes when anything inside it does. So the layer is opened and the
+// answer is given in files.
+//
+// This is OCI rather than one vendor's convention: the image specification
+// defines a layer as a tar archive and the media types say so out loud.
+func TestFilesInsideAnArchivedLayerAreCompared(t *testing.T) {
+	f := newFixture(t)
+
+	f.publish(f.src, sourcePath, older, []component{
+		{name: "custo", tag: "23.7.900", archive: map[string]string{
+			"DOCUMENTATION/readme":    "how to deploy",
+			"CONFIGURATION/one.json":  `{"replicas":1}`,
+			"CONFIGURATION/gone.json": "removed next release",
+		}},
+	})
+	f.publish(f.src, sourcePath, release, []component{
+		{name: "custo", tag: "23.8.1076", archive: map[string]string{
+			"DOCUMENTATION/readme":   "how to deploy",
+			"CONFIGURATION/one.json": `{"replicas":3}`,
+			"CONFIGURATION/new.json": "added this release",
+		}},
+	})
+
+	report := f.compare(f.sourceSide(older), f.sourceSide(release))
+
+	row, ok := rowFor(report, "custo")
+	if !ok {
+		t.Fatalf("no row for the archived artifact:\n%s", describe(report))
 	}
-	if !strings.Contains(added, "CONFIGURATION/new.json") {
-		t.Errorf("an added file is not named: %v", row.FilesAdded)
+	assertFileChange(t, row, fileChange{
+		changed: []string{"CONFIGURATION/one.json"},
+		added:   []string{"CONFIGURATION/new.json"},
+		removed: []string{"CONFIGURATION/gone.json"},
+		absent:  []string{"DOCUMENTATION/readme"},
+	})
+	// And the LAYER digest must not leak into the answer. The whole point is to
+	// stop saying "one layer changed" where a file changed.
+	if strings.Contains(strings.Join(row.FilesChanged, " "), "sha256:") {
+		t.Errorf("a layer digest is reported where a file path belongs: %v",
+			row.FilesChanged)
 	}
-	if !strings.Contains(removed, "CONFIGURATION/gone.json") {
-		t.Errorf("a removed file is not named: %v", row.FilesRemoved)
+}
+
+// A gzipped tar is the common case — `+gzip` is in the media type — and must be
+// transparent.
+func TestAGzippedArchiveIsOpenedToo(t *testing.T) {
+	f := newFixture(t)
+
+	f.publish(f.src, sourcePath, older, []component{
+		{name: "custo", tag: "23.7.900", gzip: true,
+			archive: map[string]string{"CONFIGURATION/one.json": `{"replicas":1}`}},
+	})
+	f.publish(f.src, sourcePath, release, []component{
+		{name: "custo", tag: "23.8.1076", gzip: true,
+			archive: map[string]string{"CONFIGURATION/one.json": `{"replicas":3}`}},
+	})
+
+	report := f.compare(f.sourceSide(older), f.sourceSide(release))
+
+	row, _ := rowFor(report, "custo")
+	assertFileChange(t, row, fileChange{changed: []string{"CONFIGURATION/one.json"}})
+}
+
+// WITHOUT A BUDGET nothing is opened, and the answer degrades to the layer —
+// which is the behaviour that existed before, and is what stops a comparison
+// downloading a two-gigabyte image layer.
+func TestWithoutABudgetLayersStayOpaque(t *testing.T) {
+	f := newFixture(t)
+
+	f.publish(f.src, sourcePath, older, []component{
+		{name: "custo", tag: "23.7.900",
+			archive: map[string]string{"CONFIGURATION/one.json": `{"replicas":1}`}},
+	})
+	f.publish(f.src, sourcePath, release, []component{
+		{name: "custo", tag: "23.8.1076",
+			archive: map[string]string{"CONFIGURATION/one.json": `{"replicas":3}`}},
+	})
+
+	report, err := compare.Run(context.Background(),
+		f.clientFor(f.sourceSide(older)), f.clientFor(f.sourceSide(release)),
+		compare.Options{
+			A: f.sourceSide(older), B: f.sourceSide(release), Concurrency: 4,
+			// No budget.
+		})
+	if err != nil {
+		t.Fatal(err)
 	}
-	// An untouched file must not appear at all, or a one-line edit reads as a
-	// wholesale rewrite.
-	if strings.Contains(added+removed, "DOCUMENTATION/readme") {
-		t.Errorf("an unchanged file is reported as changed: added=%v removed=%v",
-			row.FilesAdded, row.FilesRemoved)
+
+	row, ok := rowFor(report, "custo")
+	if !ok {
+		t.Fatalf("no row for the artifact:\n%s", describe(report))
 	}
+	if len(row.FilesChanged)+len(row.FilesAdded)+len(row.FilesRemoved) != 0 {
+		t.Errorf("layers were opened with no budget: %v %v %v",
+			row.FilesChanged, row.FilesAdded, row.FilesRemoved)
+	}
+	// The component is still reported as changed: the digests differ, and that
+	// is knowable without opening anything.
+	if row.Verdict != compare.VerdictChanged {
+		t.Errorf("verdict = %q, want changed", row.Verdict)
+	}
+}
+
+// fileChange is what a row is expected to say about the files inside it.
+type fileChange struct {
+	changed, added, removed []string
+	// absent must appear in none of the three: an untouched file reported as
+	// changed makes a one-line edit read as a wholesale rewrite.
+	absent []string
+}
+
+func assertFileChange(t *testing.T, row compare.Row, want fileChange) {
+	t.Helper()
+
+	for _, path := range want.changed {
+		if !contains(row.FilesChanged, path) {
+			t.Errorf("%s is not reported as changed: changed=%v added=%v removed=%v",
+				path, row.FilesChanged, row.FilesAdded, row.FilesRemoved)
+		}
+	}
+	for _, path := range want.added {
+		if !contains(row.FilesAdded, path) {
+			t.Errorf("%s is not reported as added: %v", path, row.FilesAdded)
+		}
+	}
+	for _, path := range want.removed {
+		if !contains(row.FilesRemoved, path) {
+			t.Errorf("%s is not reported as removed: %v", path, row.FilesRemoved)
+		}
+	}
+	for _, path := range want.absent {
+		all := append(append(append([]string(nil), row.FilesChanged...),
+			row.FilesAdded...), row.FilesRemoved...)
+		if contains(all, path) {
+			t.Errorf("the untouched %s is reported as a change: %v", path, all)
+		}
+	}
+}
+
+func contains(values []string, want string) bool {
+	for _, v := range values {
+		if v == want {
+			return true
+		}
+	}
+	return false
 }
 
 // ---------------------------------------------------------------------------
@@ -339,9 +483,16 @@ type component struct {
 	tag     string
 	payload string
 	chart   bool
-	// files, when set, makes this a generic artifact whose layers are titled
-	// with the paths inside it — the shape a vendor ships configuration in.
+	// files, when set, makes this an artifact with ONE TITLED LAYER PER FILE —
+	// the ORAS convention, used by Helm and cosign and everything else that
+	// publishes non-image artifacts.
 	files map[string]string
+	// archive, when set, makes this an artifact with ONE LAYER CONTAINING ALL
+	// THE FILES — a tar, which is what the OCI image specification says a layer
+	// is. This is the shape whose digest tells you nothing.
+	archive map[string]string
+	// gzip compresses that archive, as `+gzip` in the media type declares.
+	gzip bool
 }
 
 func componentsOf(version string) []component {
@@ -408,6 +559,8 @@ func (f *fixture) publishComponent(
 
 	var layers []fakeregistry.Layer
 	switch {
+	case c.archive != nil:
+		layers = append(layers, fakeregistry.NewLayer(archiveOf(c.archive, c.gzip)))
 	case c.files != nil:
 		for path, content := range c.files {
 			layer := fakeregistry.NewLayer(content)
@@ -505,7 +658,7 @@ func (f *fixture) compare(a, b compare.SideSpec) compare.Report {
 
 	report, err := compare.Run(context.Background(),
 		f.clientFor(a), f.clientFor(b),
-		compare.Options{A: a, B: b, Concurrency: 4})
+		compare.Options{A: a, B: b, Concurrency: 4, FileBudget: 8 << 20})
 	if err != nil {
 		f.t.Fatal(err)
 	}
@@ -566,6 +719,47 @@ func describe(r compare.Report) string {
 		b.WriteString("  extra in B: " + tag + "\n")
 	}
 	return b.String()
+}
+
+// archiveOf packs files into a tar, optionally gzipped — the format the OCI
+// image specification names for a layer.
+func archiveOf(files map[string]string, compress bool) string {
+	var buf bytes.Buffer
+	tw := tar.NewWriter(&buf)
+
+	paths := make([]string, 0, len(files))
+	for path := range files {
+		paths = append(paths, path)
+	}
+	sort.Strings(paths)
+
+	for _, path := range paths {
+		content := files[path]
+		if err := tw.WriteHeader(&tar.Header{
+			Name: path, Size: int64(len(content)), Mode: 0o644, Format: tar.FormatGNU,
+		}); err != nil {
+			panic(err)
+		}
+		if _, err := tw.Write([]byte(content)); err != nil {
+			panic(err)
+		}
+	}
+	if err := tw.Close(); err != nil {
+		panic(err)
+	}
+	if !compress {
+		return buf.String()
+	}
+
+	var gz bytes.Buffer
+	zw := gzip.NewWriter(&gz)
+	if _, err := zw.Write(buf.Bytes()); err != nil {
+		panic(err)
+	}
+	if err := zw.Close(); err != nil {
+		panic(err)
+	}
+	return gz.String()
 }
 
 func splitRefName(ref string) (repository, tag string) {

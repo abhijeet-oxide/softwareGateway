@@ -620,53 +620,87 @@ type ScanVocabulary struct {
 }
 
 // CompareRequest is POST /api/v1/products/{product}/packages/{package}:compare.
+//
+// The package in the path is the FIRST end. Everything here names the second,
+// and every field is optional: the common case — "did this land at my default
+// destination?" — is an empty body.
 type CompareRequest struct {
-	// To is the configured target to compare against. Empty means the
-	// product's default target, and is refused when there are several and none
-	// is default: comparing against the wrong destination produces a page of
-	// confident mismatches.
-	To string `json:"to,omitempty"`
+	// From and To are configured source or target names. An empty From means
+	// the repository the package was discovered in.
+	From string `json:"from,omitempty"`
+	To   string `json:"to,omitempty"`
+	// Against is a second package reference — a tag or a digest — making this a
+	// comparison of two VERSIONS rather than of two places. Combined with a
+	// From and To that name the same endpoint, it answers "what changed in this
+	// release"; combined with two different ones, it answers both at once.
+	Against string `json:"against,omitempty"`
 }
 
-// CompareResponse is what the destination actually holds, against what the
-// source published.
+// CompareResponse is what two places hold, aligned component by component.
 type CompareResponse struct {
 	Product string `json:"product"`
-	Package string `json:"package"`
-	// Target is the configured destination that was asked.
-	Target string `json:"target"`
+
+	A CompareEnd `json:"a"`
+	B CompareEnd `json:"b"`
 
 	Rows []CompareRow `json:"rows"`
-	// Matched and Mismatched partition Rows.
-	Matched    int `json:"matched"`
-	Mismatched int `json:"mismatched"`
+
+	// Same, Changed, OnlyA and OnlyB partition Rows.
+	Same    int `json:"same"`
+	Changed int `json:"changed"`
+	OnlyA   int `json:"onlyA"`
+	OnlyB   int `json:"onlyB"`
+
+	// ExtraTagsA and ExtraTagsB are tags in each side's bundle repository that
+	// the bundle does not account for — content nobody in this comparison put
+	// there.
+	ExtraTagsA []string `json:"extraTagsA,omitempty"`
+	ExtraTagsB []string `json:"extraTagsB,omitempty"`
 }
 
-// CompareRow is one artifact in one place.
-//
-// Per SITE rather than per artifact: a bundle publishes each component twice —
-// once inside the bundle so the index still resolves, and once under the
-// component's own name — and those two places can independently be wrong.
+// CompareEnd identifies one side of a comparison.
+type CompareEnd struct {
+	// Label is the configured endpoint, plus the version where the two sides
+	// differ in version.
+	Label string `json:"label"`
+	// Reference is what was actually walked, as a pullable reference.
+	Reference string `json:"reference"`
+}
+
+// CompareRow is one component, on both sides.
 type CompareRow struct {
-	// Type is what the artifact is: image, chart, index, file, signature.
+	// Type is what the component is: index, image, chart, file, signature.
 	Type string `json:"type"`
-	// Name is a reference somebody can go and pull, where one exists.
-	Name   string      `json:"name"`
-	Source CompareSide `json:"source"`
-	Target CompareSide `json:"target"`
-	// Differences is empty when the two sides agree. Each entry is one
-	// concrete disagreement, stated as a fact.
+	// Name is the vendor's name for it, from org.opencontainers.image.ref.name.
+	Name string `json:"name"`
+	// Verdict is same | changed | only-a | only-b.
+	Verdict string       `json:"verdict"`
+	A       *CompareSide `json:"a,omitempty"`
+	B       *CompareSide `json:"b,omitempty"`
+	// Differences states each disagreement as a fact. Empty when the two sides
+	// agree.
 	Differences []string `json:"differences,omitempty"`
+	// FilesAdded and FilesRemoved name the layers that changed, where the
+	// vendor titled them — which is what makes "which files changed" answerable
+	// for a generic artifact.
+	FilesAdded   []string `json:"filesAdded,omitempty"`
+	FilesRemoved []string `json:"filesRemoved,omitempty"`
 }
 
-// CompareSide is one end's account of an artifact.
+// CompareSide is one end's account of one component.
 type CompareSide struct {
-	Present    bool        `json:"present"`
-	Repository string      `json:"repository,omitempty"`
-	Digest     string      `json:"digest,omitempty"`
+	Digest     string      `json:"digest"`
+	Tag        string      `json:"tag,omitempty"`
 	Size       Int64String `json:"size,omitempty"`
-	Tags       []string    `json:"tags,omitempty"`
-	Error      string      `json:"error,omitempty"`
+	Repository string      `json:"repository,omitempty"`
+	// NamedRepository is where this component should be pullable AS ITSELF on
+	// this side, and NamedPresent whether it is. The site a consumer uses, and
+	// the one that silently fails to appear.
+	NamedRepository string `json:"namedRepository,omitempty"`
+	NamedPresent    bool   `json:"namedPresent,omitempty"`
+	// NamedTagDigest is what the component's own tag resolves to there, empty
+	// when it resolves to nothing.
+	NamedTagDigest string `json:"namedTagDigest,omitempty"`
 }
 
 // ListUnavailableResponse is GET /api/v1/products/{product}/unavailable.

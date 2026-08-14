@@ -350,42 +350,79 @@ Verifying vendor-a-platform / v2.14.0 at lab (internal.azurecr.io/vendor-a/platf
 VERIFIED — 5 of 5 artifacts (1.8s)
 ```
 
-### 5.1 `compare` — did the copy actually land?
+### 5.1 `compare` — what is different between two places?
 
 ```
 $ transferctl compare cfx-5000-product 25.7_mp2604_2131 --to att-stage
 
-cfx-5000-product orb_25.7_mp2604_2131 vs att-stage
+cfx-5000-product
 
-     TYPE    NAME                                        SOURCE                  TARGET      MATCH
-  !  image   …/cfx-5000-product/lms:1.25.212             sha256:438001f263ab     absent      no
-  !  image   …/cfx-5000-product/cvlk:1.0.7               sha256:4573b0b15ceb  2.1 KiB  …      no
-     index   …/orbs/cfx-…-edgenac-…:orb_25.7_mp2604_2131 sha256:8533f4a71a43  6.4 KiB  …      yes
-     chart   …/cfx-5000-product/charts/cfx:23.8.1076     sha256:966238c5045e  1.2 KiB  …      yes
+  A  near         orbs/cfx-5000-k8s:orb_25.7_mp2604_2131
+  B  att-stage    apm0014228-oci-stage/orbs/cfx-5000-k8s:orb_25.7_mp2604_2131
+
+    TYPE    COMPONENT                          A                               B
+-   image   cfx-5000-product/lms               1.25.212  sha256:438001f263ab   absent
++   chart   cfx-5000-product/charts/brandnew   absent                          2.0.0  sha256:aabbccddeeff
+~   image   cfx-5000-product/cvlk              1.0.7  sha256:4573b0b15ceb      1.0.7  sha256:8533f4a71a43
 
 Differences
-  …/cfx-5000-product/lms:1.25.212
-    the content is not at the destination
-    1.25.212 is not at the destination
-  …/cfx-5000-product/cvlk:1.0.7
-    1.0.7 points at sha256:8533f4a71a43, not sha256:4573b0b15ceb
+  - cfx-5000-product/lms
+      present on the first side only
+  + cfx-5000-product/charts/brandnew
+      present on the second side only
+  ~ cfx-5000-product/cvlk
+      cfx-5000-product/cvlk:1.0.7 points at sha256:8533f4a71a43 on the second side, not sha256:4573b0b15ceb
+      2 layers changed; --layers names them
 
-2 of 4 matched.
+Also in att-stage, not part of this release
+  orb_25.6_mp2601_2011
+
+1 identical, 1 changed, 1 only in A, 1 only in B.
+38 identical not shown; --all shows every component.
 ```
 
-**A transfer's own report cannot answer this question.** It reports what it DID — 2489 jobs succeeded, 63.7 GiB moved — and every one of those numbers can be true while the destination is wrong: a tag that failed to apply, content deleted afterwards, a bundle assembled by two transfers of which one was stopped. Each of those happened during this system's first real runs, and there was no way to check short of pulling things by hand.
+#### Five questions, one command
 
-So this asks the DESTINATION, artifact by artifact, and compares its answers against the source's own structure. It reads no transfer record.
+They look like five tools and they are one, because all of them are *walk two bundles and align their components*:
 
-| Property | Why |
+| Question | Command |
 |---|---|
-| One row per artifact per SITE | A bundle publishes each component twice — inside the bundle so the index resolves, and under its own name — and those two places can independently be wrong ([05](05-transfer-engine.md) §4.7) |
-| Tags are resolved, not assumed | A tag is the only part of a copy that is not content-addressed, so it is the only part that can be wrong while every digest agrees. It is also the part that actually failed |
-| Disagreements sort first | Somebody runs this to find what is wrong; scrolling past two thousand agreeing rows to reach three defeats it |
-| Differences are sentences, under the table | "1.25.212 points at sha256:8533f4a71a43, not sha256:438001f263ab" does not fit a column, and truncating it removes the half that says what is wrong |
-| Non-zero exit when anything disagrees | So it can be the last line of a pipeline |
+| Did the transfer land? | `compare P 25.7` — or `--to stage` for a specific one |
+| Did the promotion land? | `compare P 25.7 --from lab --to prod` |
+| What changed in this release? | `compare P 25.7 25.6` |
+| Did all of the new release arrive? | `compare P 25.7 25.6 --at stage` |
+| Was anything mutated, or is anything there nobody put? | any of the above — it is the same walk |
 
-**What it deliberately does not do** is enumerate the destination looking for extra content. A destination repository legitimately holds every other version of the same component, so "present at the target and not at the source" across a whole repository would report every previous release as a discrepancy. Where the question *is* well defined — a tag this package claims, pointing at something else — it is reported, and that is the case that catches a bad copy.
+**The two ends are symmetric.** Neither is "the original". A shape that privileged one — "a package and a destination" — needs a second shape for target-against-target and a third for version-against-version, and three shapes drift.
+
+**Both ends are WALKED.** Nothing reads a transfer record, which is the point of an integrity check and is also what lets an end be a target nothing ever planned against, or a version somebody published by hand. It works uniformly because a transfer copies manifests **verbatim**: the index at a destination carries the same `org.opencontainers.image.ref.name` annotations the vendor wrote, so a component identifies itself the same way wherever it is.
+
+#### What is aligned, and by what
+
+Components are aligned by the repository half of their `ref.name` — the vendor's name for the component, which survives copying *and* survives a new release. The **tag is compared, not matched on**, because in a version-to-version comparison the tag is precisely what changed. An artifact the vendor named nothing is aligned by digest, which can only match itself; that is the honest answer for content whose only identity is its bytes.
+
+| Check | Catches |
+|---|---|
+| Digest, per component | a mutated or stale copy |
+| Tag, resolved on each side | the failure this system shipped with: everything pushed, the component's own tag never applied, every digest agreeing |
+| The component's own repository | a bundle that is byte-perfect while nothing in it is pullable as itself |
+| Layers, by title where the vendor set one | *which files changed* — a generic artifact's layers are files and the title is the path |
+| Tags in the bundle's own repository | content nobody in this comparison put there |
+
+**A partial transfer does not abort the walk.** An index naming children the registry will not serve is exactly what a transfer that stopped part-way leaves behind. `oci.WalkPartial` records each unreachable child *from its referencing descriptor* — so it keeps the name its parent gave it and still aligns against its counterpart — which is what turns "something is missing" into "`cfx-5000-product/lms` is missing", and what stops the first missing component costing the reader the other nineteen findings.
+
+#### Layout
+
+A diff, laid out as one, with the markers everybody already reads without being told: `-` only on the first end, `+` only on the second, `~` present on both and different.
+
+- **Differences first**, then agreements — and by default the agreements are not printed at all, only counted. `--all` shows them.
+- **Differences are sentences, under the table.** "`cfx-5000-product/cvlk:1.0.7` points at `sha256:8533f4a71a43` on the second side" does not fit a column, and truncating it removes the half that says what is wrong.
+- **Changed layers are counted, then named on request** (`--layers`). A release that edited one configuration file should not print forty layer digests at somebody who asked what changed.
+- **Non-zero exit when the ends differ**, so it can end a pipeline.
+
+#### One deliberate limit
+
+Extra content is reported only for the bundle's **own** repository — the orb-specific folder — where the question is well defined: an ORB gets a repository to itself, so anything else in it is genuinely unexplained. It is not asked of a component's repository, which legitimately holds every other version of that component and would report each previous release as a discrepancy.
 
 ## 6. Progress
 

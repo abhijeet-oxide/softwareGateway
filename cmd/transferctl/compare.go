@@ -10,101 +10,210 @@ import (
 	v1 "github.com/abhijeet-oxide/softwareGateway/pkg/apis/softwaregateway/v1"
 )
 
-// Comparing what a destination holds against what the source published.
+// Comparing two places.
 //
-// A transfer reports what it DID. It says 2489 jobs succeeded and 63.7 GiB
-// moved, and every one of those numbers can be true while the destination is
-// wrong: a tag that failed to apply, content deleted afterwards, a bundle
-// assembled by two transfers of which one was stopped. There was no way to
-// check — the only way to find out was to go and pull things by hand.
+// The questions operators ask look like several tools and are one: did the
+// transfer land, did the promotion land, what changed in this release, was
+// anything mutated, is there anything there nobody put. All of them are "walk
+// two bundles and align their components", so all of them are this command with
+// different arguments.
 //
-// So this asks the destination, artifact by artifact, and compares its answers
-// against the source's own structure. It reads no transfer record.
+// Nothing here reads a transfer record. A transfer reports what it DID — 2489
+// jobs succeeded, 63.7 GiB moved — and every one of those numbers can be true
+// while the destination is wrong.
 
 func newCompareCommand() *cobra.Command {
-	var to string
+	var (
+		from    string
+		to      string
+		at      string
+		all     bool
+		verbose bool
+	)
 
 	cmd := &cobra.Command{
-		Short: "Check that a destination holds what the source published",
-		Long: "Asks the DESTINATION registry what it has, artifact by artifact, and\n" +
-			"compares it against the source's own structure — every image, chart\n" +
-			"and file, in every place the layout puts it, with its digest, its size\n" +
-			"and the tags it should answer to.\n\n" +
-			"It reads no transfer record. A transfer can report every job successful\n" +
-			"and leave the destination wrong, and this is what says so.\n\n" +
-			"Rows that DISAGREE come first, then the rows that match. Exits non-zero\n" +
-			"when anything disagrees, so it can be the last line of a pipeline.",
+		Short: "Compare a release between two places, or two releases in one",
+		Long: "Walks BOTH ends and aligns them component by component — every image,\n" +
+			"chart and file, with its digest, its size and the name it answers to.\n\n" +
+			"The ends are symmetric, so one command covers every question:\n\n" +
+			"  compare P 25.7                          did it land at the default target?\n" +
+			"  compare P 25.7 --to stage               ...at that one?\n" +
+			"  compare P 25.7 --from lab --to prod     did the promotion land?\n" +
+			"  compare P 25.7 25.6                     what changed in the release?\n" +
+			"  compare P 25.7 25.6 --at stage          ...and did all of it arrive?\n\n" +
+			"By default only the DIFFERENCES are printed. --all shows every\n" +
+			"component, including the ones that agree.\n\n" +
+			"Exits non-zero when the two ends differ, so it can end a pipeline.",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			resp, err := newClient().ComparePackage(cmd.Context(), args[0], args[1], to)
+			if at != "" && (from != "" || to != "") {
+				return usageError{msg: "--at names both ends at once; use it or " +
+					"--from/--to, not both"}
+			}
+			if at != "" {
+				from, to = at, at
+			}
+
+			resp, err := newClient().ComparePackage(cmd.Context(), args[0], args[1],
+				v1.CompareRequest{From: from, To: to, Against: against(args)})
 			if err != nil {
 				return err
 			}
 			if err := render(stdout(), opts.output, resp, func(w io.Writer) error {
-				return renderCompare(w, resp)
+				return renderCompare(w, resp, all, verbose)
 			}); err != nil {
 				return err
 			}
-			if resp.Mismatched > 0 {
+			if differences(resp) > 0 {
 				return partialFailureError{msg: fmt.Sprintf(
-					"%d of %d did not match", resp.Mismatched, len(resp.Rows))}
+					"%s differ", plural(differences(resp), "component", "components"))}
 			}
 			return nil
 		},
 	}
 
+	cmd.Flags().StringVar(&from, "from", "",
+		"the first end: a source or target name (default: where the package was discovered)")
 	cmd.Flags().StringVar(&to, "to", "",
-		"the target to compare against (default: the product's default target)")
+		"the second end: a source or target name (default: the product's default target, "+
+			"or the source when two versions are named)")
+	cmd.Flags().StringVar(&at, "at", "",
+		"both ends are this one place — for comparing two versions")
+	cmd.Flags().BoolVar(&all, "all", false,
+		"show every component, not only the ones that differ")
+	cmd.Flags().BoolVar(&verbose, "layers", false,
+		"for a changed component, name the layers that changed")
 
-	// It reaches the destination registry through the Coordinator, so it
-	// belongs with the slow commands.
+	// It reaches both registries through the Coordinator, so it belongs with
+	// the slow commands.
 	contactsRegistries(cmd)
-	takes(cmd, "compare", productArg(), packageArg())
+	takes(cmd, "compare", productArg(), packageArg(), againstArg())
 	return cmd
 }
 
-func renderCompare(w io.Writer, r *v1.CompareResponse) error {
+// againstArg is the optional second version.
+//
+// Positional rather than a flag, because `compare P 25.7 25.6` is how somebody
+// says it out loud, and the two arguments are the same kind of thing.
+func againstArg() argSpec {
+	return argSpec{
+		Name:     "against",
+		Help:     "a second version, to compare against the first",
+		Optional: true,
+		Default:  "compares the same version in two places",
+	}
+}
+
+func against(args []string) string {
+	if len(args) > 2 {
+		return args[2]
+	}
+	return ""
+}
+
+func differences(r *v1.CompareResponse) int {
+	return r.Changed + r.OnlyA + r.OnlyB
+}
+
+// renderCompare lays the comparison out as a diff, because that is what it is.
+//
+// The markers are the ones everybody already reads without being told:
+//
+//   - only on the first end
+//   - only on the second
+//     ~  present on both, and different
+//     (blank) identical
+func renderCompare(w io.Writer, r *v1.CompareResponse, all, layers bool) error {
+	fmt.Fprintf(w, "%s\n\n", r.Product)
+	fmt.Fprintf(w, "  A  %s\n", endLine(r.A))
+	fmt.Fprintf(w, "  B  %s\n", endLine(r.B))
+
 	if len(r.Rows) == 0 {
-		fmt.Fprintln(w, "Nothing to compare: the package has no artifacts recorded.")
+		fmt.Fprintln(w)
+		fmt.Fprintln(w, "Neither end has any components.")
 		return nil
 	}
 
-	fmt.Fprintf(w, "%s %s vs %s\n", r.Product, r.Package, compareTarget(r))
-	fmt.Fprintln(w)
-
-	tw := newTabWriter(w)
-	fmt.Fprintln(tw, "  \tTYPE\tNAME\tSOURCE\tTARGET\tMATCH")
-	for _, row := range r.Rows {
-		marker := "  "
-		verdict := "yes"
-		if len(row.Differences) > 0 {
-			// The rows somebody is looking for, marked so they are findable
-			// with the eye rather than only by position.
-			marker = "! "
-			verdict = "no"
-		}
-		fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%s\n",
-			marker, row.Type, row.Name,
-			describeSideOf(row.Source), describeSideOf(row.Target), verdict)
-	}
-	if err := tw.Flush(); err != nil {
-		return err
-	}
-
-	renderDifferences(w, r)
+	shown := renderRows(w, r, all)
+	renderDetails(w, r, layers)
+	renderExtras(w, r)
 
 	fmt.Fprintln(w)
-	fmt.Fprintf(w, "%d of %d matched.\n", r.Matched, len(r.Rows))
+	fmt.Fprintln(w, summaryLine(r))
+	if hidden := len(r.Rows) - shown; !all && hidden > 0 && differences(r) > 0 {
+		fmt.Fprintf(w, "%d identical not shown; --all shows every component.\n", hidden)
+	}
 	return nil
 }
 
-// renderDifferences lists what actually disagrees, under the table.
+func endLine(e v1.CompareEnd) string {
+	if e.Label == "" {
+		return e.Reference
+	}
+	return fmt.Sprintf("%-12s %s", e.Label, e.Reference)
+}
+
+// renderRows prints the table and reports how many rows it printed.
+//
+// Nothing is printed at all when there is nothing to show: an identical
+// comparison ending in a bare column header reads as a tool that failed to
+// produce output, where one line saying "Identical" reads as an answer.
+func renderRows(w io.Writer, r *v1.CompareResponse, all bool) int {
+	rows := make([]v1.CompareRow, 0, len(r.Rows))
+	for _, row := range r.Rows {
+		if row.Verdict == "same" && !all {
+			continue
+		}
+		rows = append(rows, row)
+	}
+	if len(rows) == 0 {
+		return 0
+	}
+
+	fmt.Fprintln(w)
+	tw := newTabWriter(w)
+	fmt.Fprintln(tw, " \tTYPE\tCOMPONENT\tA\tB")
+	for _, row := range rows {
+		fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\n",
+			verdictMark(row.Verdict), row.Type, row.Name,
+			cell(row.A), cell(row.B))
+	}
+	_ = tw.Flush()
+	return len(rows)
+}
+
+func verdictMark(verdict string) string {
+	switch verdict {
+	case "only-a":
+		return "-"
+	case "only-b":
+		return "+"
+	case "changed":
+		return "~"
+	default:
+		return " "
+	}
+}
+
+// cell is one end's account of a component: what it is called and what it is.
+func cell(s *v1.CompareSide) string {
+	if s == nil {
+		return "absent"
+	}
+	out := shortDigest(s.Digest)
+	if s.Tag != "" {
+		out = s.Tag + "  " + out
+	}
+	return out
+}
+
+// renderDetails states each disagreement as a sentence, under the table.
 //
 // Under it rather than in it, because a difference is a sentence and a table
-// cell is not: "1.25.212 points at sha256:8533f4a71a43, not sha256:438001f263ab"
-// does not fit a column, and truncating it removes the half that says what is
-// wrong.
-func renderDifferences(w io.Writer, r *v1.CompareResponse) {
-	if r.Mismatched == 0 {
+// cell is not: "cfx-5000-product/lms:1.25.212 points at sha256:8533f4a71a43 on
+// the second side" does not fit a column, and truncating it removes the half
+// that says what is wrong.
+func renderDetails(w io.Writer, r *v1.CompareResponse, layers bool) {
+	if differences(r) == 0 {
 		return
 	}
 
@@ -114,48 +223,70 @@ func renderDifferences(w io.Writer, r *v1.CompareResponse) {
 		if len(row.Differences) == 0 {
 			continue
 		}
-		fmt.Fprintf(w, "  %s\n", row.Name)
+		fmt.Fprintf(w, "  %s %s\n", verdictMark(row.Verdict), row.Name)
 		for _, d := range row.Differences {
-			fmt.Fprintf(w, "    %s\n", d)
+			fmt.Fprintf(w, "      %s\n", d)
+		}
+		if layers {
+			renderFiles(w, row)
+		} else if n := len(row.FilesAdded) + len(row.FilesRemoved); n > 0 {
+			fmt.Fprintf(w, "      %s changed; --layers names them\n",
+				plural(n, "layer", "layers"))
 		}
 	}
 }
 
-// describeSideOf is one end of a row in one cell: the digest and the size.
+// renderFiles names what a change added and removed.
 //
-// A dash where the content is absent, because that is the whole finding for
-// that row and it should be visible without reading the sentence underneath.
-func describeSideOf(s v1.CompareSide) string {
-	if !s.Present {
-		return "absent"
+// Titled where the vendor titled the layer, which for a generic artifact is the
+// path of the file inside it — so "which files changed" is answered literally
+// rather than as a count of digests.
+func renderFiles(w io.Writer, row v1.CompareRow) {
+	for _, f := range row.FilesAdded {
+		fmt.Fprintf(w, "      + %s\n", f)
 	}
-	out := shortDigest(s.Digest)
-	if size := int64Of(s.Size); size > 0 {
-		out += "  " + humanBytes(s.Size)
+	for _, f := range row.FilesRemoved {
+		fmt.Fprintf(w, "      - %s\n", f)
 	}
-	return out
 }
 
-// compareTarget names the destination that was asked.
-func compareTarget(r *v1.CompareResponse) string {
-	if r.Target != "" {
-		return r.Target
-	}
-	// The server resolved the product's default. Naming the repository it
-	// actually reached beats printing nothing, and the rows all carry it.
-	for _, row := range r.Rows {
-		if row.Target.Repository != "" {
-			return baseOf(row.Target.Repository)
+// renderExtras names content in a bundle's own repository that the bundle does
+// not account for.
+//
+// Only for the bundle's repository, where the question is well defined: an orb
+// gets a repository to itself, so anything else in it is unexplained. A
+// component's repository legitimately holds every other version of that
+// component and is deliberately not asked.
+func renderExtras(w io.Writer, r *v1.CompareResponse) {
+	for _, side := range []struct {
+		end  v1.CompareEnd
+		tags []string
+	}{{r.A, r.ExtraTagsA}, {r.B, r.ExtraTagsB}} {
+		if len(side.tags) == 0 {
+			continue
 		}
+		fmt.Fprintln(w)
+		fmt.Fprintf(w, "Also in %s, not part of this release\n", side.end.Label)
+		fmt.Fprintf(w, "  %s\n", strings.Join(side.tags, ", "))
 	}
-	return "the default target"
 }
 
-// baseOf is the leading path segment shared by a bundle's destinations — the
-// target's configured prefix.
-func baseOf(repository string) string {
-	if i := strings.Index(repository, "/"); i > 0 {
-		return repository[:i]
+// summaryLine is the one line somebody reads before anything else.
+func summaryLine(r *v1.CompareResponse) string {
+	if differences(r) == 0 && len(r.ExtraTagsA) == 0 && len(r.ExtraTagsB) == 0 {
+		return fmt.Sprintf("Identical: %s match.",
+			plural(r.Same, "component", "components"))
 	}
-	return repository
+
+	parts := []string{fmt.Sprintf("%d identical", r.Same)}
+	if r.Changed > 0 {
+		parts = append(parts, fmt.Sprintf("%d changed", r.Changed))
+	}
+	if r.OnlyA > 0 {
+		parts = append(parts, fmt.Sprintf("%d only in A", r.OnlyA))
+	}
+	if r.OnlyB > 0 {
+		parts = append(parts, fmt.Sprintf("%d only in B", r.OnlyB))
+	}
+	return strings.Join(parts, ", ") + "."
 }

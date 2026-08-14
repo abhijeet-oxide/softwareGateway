@@ -81,14 +81,26 @@ type Worker interface {
 	Workers(ctx context.Context) ([]store.WorkerSummary, error)
 }
 
-// Comparer checks what a destination actually holds against what a package's
-// source published.
+// ComparePoint is one end of a comparison: which version, in which place.
+//
+// Two of these rather than "a package and a destination", because the ends are
+// symmetric. Source against target, target against target, and one place at two
+// versions are the same request with different arguments, and a shape that
+// privileged one end would need a second shape for each of the others.
+type ComparePoint struct {
+	Package store.PackageRow
+	// Endpoint is a configured source or target name. Empty means the
+	// repository the package was discovered in.
+	Endpoint string
+}
+
+// Comparer walks two places and reports what is different.
 //
 // A consumer-defined interface: the API needs the one call, not the client
-// factory, the layout resolver and the product registry behind it
+// factory, the registry walker and the product registry behind it
 // (docs/design/15 §6).
 type Comparer interface {
-	Compare(ctx context.Context, productName string, pkg store.PackageRow, to string) (compare.Report, error)
+	Compare(ctx context.Context, productName string, a, b ComparePoint) (compare.Report, error)
 }
 
 // Calibrator measures one source-to-target path and recommends settings.

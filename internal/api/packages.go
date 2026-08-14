@@ -660,13 +660,16 @@ func (s *Server) handlePackageCustomMethod(w http.ResponseWriter, r *http.Reques
 
 // POST /api/v1/products/{product}/packages/{package}:compare.
 //
-// Asks the DESTINATION what it holds, artifact by artifact, and compares its
-// answers against the source's own structure.
+// Walks TWO places and reports what is different. The package in the path is
+// the first end; the body names the second.
 //
 // It reads no transfer record, and that is the whole point: a transfer can
 // report every job successful and leave the destination wrong — a tag that
 // failed to apply, content deleted afterwards, a bundle assembled by two
 // transfers of which one was stopped. Each of those was seen in practice.
+//
+// Both ends are symmetric, so source-against-target, target-against-target and
+// one-place-at-two-versions are the same request with different arguments.
 func (s *Server) handleComparePackage(w http.ResponseWriter, r *http.Request) {
 	productName := chi.URLParam(r, "product")
 	if !s.productExists(w, r, productName) {
@@ -674,7 +677,7 @@ func (s *Server) handleComparePackage(w http.ResponseWriter, r *http.Request) {
 	}
 	if s.deps.Comparer == nil {
 		Error(w, r, v1.CodeUnavailable,
-			"comparing reads the destination registry, and the client for it is not "+
+			"comparing reads both registries, and the client for them is not "+
 				"configured on this replica")
 		return
 	}
@@ -689,52 +692,77 @@ func (s *Server) handleComparePackage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Expand first, idempotently. A comparison against a half-known source
-	// would report the parts it happens to know about and silently omit the
-	// rest, which for a command whose whole job is to say whether anything is
-	// missing is the one answer worse than no answer.
-	if s.deps.Discovery != nil && s.deps.Discovery.Running() {
-		if _, err := s.deps.Discovery.InspectPackage(
-			r.Context(), s.deps.Packages, pkg, productName); err != nil {
-			Error(w, r, v1.CodeUnavailable,
-				"could not read the source's structure: "+err.Error())
+	// The second end's package. The same one unless `against` names another,
+	// which is what turns a place-to-place comparison into a version-to-version
+	// one without a second endpoint or a second shape.
+	against := pkg
+	if req.Against != "" {
+		if against, ok = s.resolvePackage(w, r, productName, req.Against); !ok {
 			return
 		}
 	}
 
-	report, err := s.deps.Comparer.Compare(r.Context(), productName, pkg, req.To)
+	report, err := s.deps.Comparer.Compare(r.Context(), productName,
+		ComparePoint{Package: pkg, Endpoint: req.From},
+		ComparePoint{Package: against, Endpoint: req.To})
 	if err != nil {
 		Error(w, r, v1.CodeInvalidArgument, err.Error())
 		return
 	}
 
 	out := v1.CompareResponse{
-		Product: productName, Package: pkg.Tag, Target: req.To,
+		Product:    productName,
+		A:          compareEndDTO(report.A),
+		B:          compareEndDTO(report.B),
 		Rows:       make([]v1.CompareRow, 0, len(report.Rows)),
-		Matched:    report.Matched,
-		Mismatched: report.Mismatched,
+		Same:       report.Same,
+		Changed:    report.Changed,
+		OnlyA:      report.OnlyA,
+		OnlyB:      report.OnlyB,
+		ExtraTagsA: report.ExtraTagsA,
+		ExtraTagsB: report.ExtraTagsB,
 	}
 	for _, row := range report.Rows {
 		out.Rows = append(out.Rows, v1.CompareRow{
-			Type:        row.Type,
-			Name:        row.Name,
-			Source:      compareSideDTO(row.Source),
-			Target:      compareSideDTO(row.Target),
-			Differences: row.Differences,
+			Type:         row.Type,
+			Name:         row.Name,
+			Verdict:      string(row.Verdict),
+			A:            compareSideDTO(row.A),
+			B:            compareSideDTO(row.B),
+			Differences:  row.Differences,
+			FilesAdded:   row.FilesAdded,
+			FilesRemoved: row.FilesRemoved,
 		})
 	}
 	WriteJSON(w, r, http.StatusOK, out)
 }
 
-func compareSideDTO(s compare.Side) v1.CompareSide {
-	return v1.CompareSide{
-		Present:    s.Present,
-		Repository: s.Repository,
-		Digest:     s.Digest,
-		Size:       v1.Int64String(strconv.FormatInt(s.Size, 10)),
-		Tags:       s.Tags,
-		Error:      s.Error,
+func compareEndDTO(s compare.SideSpec) v1.CompareEnd {
+	return v1.CompareEnd{Label: s.Label, Reference: s.String()}
+}
+
+// compareSideDTO renders one end's account of a component, or nothing when that
+// end does not have it.
+//
+// Nil rather than a zero struct with `present: false`, because "this side does
+// not have this component" is the finding, and a client should not have to read
+// a boolean to discover it.
+func compareSideDTO(item *compare.Item) *v1.CompareSide {
+	if item == nil {
+		return nil
 	}
+	out := &v1.CompareSide{
+		Digest:     item.Digest,
+		Tag:        item.Tag,
+		Size:       v1.Int64String(strconv.FormatInt(item.Size, 10)),
+		Repository: item.Repository,
+	}
+	if item.Named != nil {
+		out.NamedRepository = item.Named.Repository
+		out.NamedPresent = item.Named.Present
+		out.NamedTagDigest = item.Named.TagDigest
+	}
+	return out
 }
 
 // POST /api/v1/products/{product}/packages/{package}:inspect.

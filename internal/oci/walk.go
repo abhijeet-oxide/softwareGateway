@@ -25,9 +25,45 @@ import (
 func Walk(
 	ctx context.Context, src registry.ManifestReader, root registry.Descriptor, concurrency int,
 ) (Tree, int, error) {
+	t, _, fetched, err := walk(ctx, src, root, concurrency, false)
+	return t, fetched, err
+}
+
+// Missing is a manifest an index references and the registry would not serve.
+type Missing struct {
+	// Descriptor is what the REFERENCING index said about it — including the
+	// `org.opencontainers.image.ref.name` annotation, which is what makes a
+	// missing component identifiable rather than merely a digest.
+	Descriptor registry.Descriptor
+	Parent     int
+	Depth      int
+	Err        error
+}
+
+// WalkPartial is Walk that RECORDS an unreachable child instead of failing.
+//
+// A transfer that stopped part-way leaves exactly this: an index naming
+// children the destination does not have. For a transfer that is a fatal
+// inconsistency, which is why Walk refuses it — but for a comparison it is the
+// FINDING, and a walk that aborted on the first missing component could not
+// report the other nineteen.
+//
+// The referencing descriptor is kept for each one, so a missing component is
+// still identifiable by the name its parent gave it.
+func WalkPartial(
+	ctx context.Context, src registry.ManifestReader, root registry.Descriptor, concurrency int,
+) (Tree, []Missing, int, error) {
+	return walk(ctx, src, root, concurrency, true)
+}
+
+func walk(
+	ctx context.Context, src registry.ManifestReader, root registry.Descriptor,
+	concurrency int, tolerant bool,
+) (Tree, []Missing, int, error) {
 	if concurrency <= 0 {
 		concurrency = 1
 	}
+	var missing []Missing
 
 	var t Tree
 	level := []queuedChild{{desc: root, parent: -1, depth: 0}}
@@ -47,11 +83,11 @@ func Walk(
 			break
 		}
 		if len(t.Artifacts)+len(pending) > maxListedArtifacts {
-			return Tree{}, fetched, fmt.Errorf(
+			return Tree{}, missing, fetched, fmt.Errorf(
 				"manifest tree exceeds %d artifacts", maxListedArtifacts)
 		}
 		if pending[0].depth > maxTreeDepth {
-			return Tree{}, fetched, fmt.Errorf(
+			return Tree{}, missing, fetched, fmt.Errorf(
 				"manifest tree deeper than %d levels", maxTreeDepth)
 		}
 
@@ -81,13 +117,29 @@ func Walk(
 		var next []queuedChild
 		for _, r := range results {
 			if r.err != nil {
-				return Tree{}, fetched, fmt.Errorf("fetch manifest %s: %w",
-					r.q.desc.Digest.Short(), r.err)
+				// The ROOT is never tolerated: a side whose root is unreachable
+				// has nothing to compare, and reporting it as an empty bundle
+				// would read as "the destination has none of this" when the
+				// truth is that we could not ask.
+				if !tolerant || r.q.parent < 0 {
+					return Tree{}, missing, fetched, fmt.Errorf("fetch manifest %s: %w",
+						r.q.desc.Digest.Short(), r.err)
+				}
+				missing = append(missing, Missing{
+					Descriptor: r.q.desc, Parent: r.q.parent, Depth: r.q.depth, Err: r.err,
+				})
+				continue
 			}
 			fetched++
 			children, err := appendArtifact(&t, r.q.desc, r.desc, r.raw, r.q.parent, r.q.depth)
 			if err != nil {
-				return Tree{}, fetched, err
+				if !tolerant {
+					return Tree{}, missing, fetched, err
+				}
+				missing = append(missing, Missing{
+					Descriptor: r.q.desc, Parent: r.q.parent, Depth: r.q.depth, Err: err,
+				})
+				continue
 			}
 			next = append(next, children...)
 		}
@@ -95,5 +147,5 @@ func Walk(
 	}
 
 	t.TotalBytes, t.BlobCount = measure(t.Artifacts)
-	return t, fetched, nil
+	return t, missing, fetched, nil
 }

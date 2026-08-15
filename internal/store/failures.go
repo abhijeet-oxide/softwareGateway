@@ -76,7 +76,7 @@ func (p *Packages) FailureGroups(ctx context.Context, transferID string) ([]Fail
 	rows, err := p.db.QueryContext(ctx, p.dialect.Rewrite(`
 		SELECT id, kind, digest, wave, state,
 		       COALESCE(last_error_class, ''), COALESCE(last_error, ''),
-		       COALESCE(target_repository, '')
+		       COALESCE(target_repository, ''), target_tags
 		  FROM jobs
 		 WHERE transfer_id = ?
 		   AND last_error IS NOT NULL AND last_error <> ''
@@ -96,13 +96,14 @@ func (p *Packages) FailureGroups(ctx context.Context, transferID string) ([]Fail
 			kind, digest, state      string
 			wave                     int
 			class, message, repoPath string
+			tags                     []byte
 		)
 		if err := rows.Scan(&id, &kind, &digest, &wave, &state,
-			&class, &message, &repoPath); err != nil {
+			&class, &message, &repoPath, &tags); err != nil {
 			return nil, fmt.Errorf("scan a failure of transfer %s: %w", transferID, err)
 		}
 
-		normalised := normaliseFailure(message, digest, repoPath)
+		normalised := normaliseFailure(message, digest, repoPath, decodeTags(tags))
 		key := class + "\x00" + normalised
 
 		g, seen := byCause[key]
@@ -161,12 +162,12 @@ var digestPattern = regexp.MustCompile(
 // normaliseFailure turns one job's message into the sentence that stands for
 // every job failing the same way.
 //
-// The job's OWN digest and destination path are substituted first, because
-// those are known exactly rather than guessed at. The patterns afterwards are
-// the backstop for what a message names that is not the job's own — a manifest
-// push rejected for a missing LAYER names the layer, and that layer differs per
-// manifest while the cause does not.
-func normaliseFailure(message, digest, repository string) string {
+// The job's OWN digest, destination path and tags are substituted first,
+// because those are known exactly rather than guessed at. The patterns
+// afterwards are the backstop for what a message names that is not the job's
+// own — a manifest push rejected for a missing LAYER names the layer, and that
+// layer differs per manifest while the cause does not.
+func normaliseFailure(message, digest, repository string, tags []string) string {
 	out := strings.TrimSpace(message)
 	if out == "" {
 		return ""
@@ -181,6 +182,9 @@ func normaliseFailure(message, digest, repository string) string {
 	// before a shorter one could match inside it.
 	for _, form := range repositoryForms(repository) {
 		out = strings.ReplaceAll(out, form, "<repository>")
+	}
+	for _, tag := range tagForms(tags) {
+		out = strings.ReplaceAll(out, tag, "<tag>")
 	}
 	if digest != "" {
 		out = strings.ReplaceAll(out, digest, "<digest>")
@@ -223,6 +227,37 @@ func repositoryForms(repository string) []string {
 		}
 		out = append(out, form)
 	}
+	return out
+}
+
+// tagForms lists the job's own tags, longest first.
+//
+// # Why a tag is normalised at all
+//
+// A tag write names the tag in its error, and a release publishes several: a
+// destination refusing to write tags refused `orb_25.7_mp2604_2131` and
+// `signature_orb_25.7_mp2604_2131` for one reason, and reported them as two
+// distinct causes because the two messages differ in the one place the reader
+// least needs them to. The tag is per-job in exactly the way the digest and the
+// destination path are, and is substituted for the same reason.
+//
+// LONGEST FIRST, which here is not a refinement. NEAR's tags nest —
+// `orb_X` is a substring of `signed_orb_X` — so replacing the shorter one first
+// would leave `signed_<tag>` behind and split the group it was meant to join.
+func tagForms(tags []string) []string {
+	out := make([]string, 0, len(tags))
+	for _, tag := range tags {
+		tag = strings.TrimSpace(tag)
+		// Too short to substitute safely. A tag of `1.0` appears inside version
+		// strings, paths and digests that have nothing to do with it, and
+		// replacing it everywhere would corrupt a message rather than normalise
+		// one — the same guard, for the same reason, as repositoryForms.
+		if len(tag) < 4 {
+			continue
+		}
+		out = append(out, tag)
+	}
+	sort.SliceStable(out, func(i, j int) bool { return len(out[i]) > len(out[j]) })
 	return out
 }
 

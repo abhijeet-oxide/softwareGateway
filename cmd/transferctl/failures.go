@@ -77,32 +77,42 @@ func renderFailures(w io.Writer, resp *v1.ListFailuresResponse) error {
 	return nil
 }
 
+// renderFailure prints one cause: what it is, then why, then where, then what
+// to do about it.
+//
+// # Why the classification leads and the message does not
+//
+// The message is a sentence of arbitrary length — a registry's own words, a
+// path, a status — and it used to be the first line of the block. On a real
+// failure it wrapped across the terminal before the reader reached the counts,
+// so the two short facts that decide whether this block is worth reading at all
+// (what class of failure it is, and how much it is holding) arrived after the
+// one that does not fit. They lead now, and the message sits under them.
 func renderFailure(w io.Writer, g v1.FailureGroup) {
-	fmt.Fprintf(w, "  %s\n", g.Message)
-
-	// The counts and the shape of what is affected, on one line, indented
-	// under the cause it belongs to.
-	parts := []string{jobsAffected(g.Failed, g.Retrying)}
+	head := make([]string, 0, 4)
+	if g.Class != "" {
+		head = append(head, g.Class)
+	}
+	head = append(head, jobsAffected(g.Failed, g.Retrying))
 	if len(g.Kinds) > 0 {
-		parts = append(parts, strings.Join(g.Kinds, " and "))
+		head = append(head, strings.Join(g.Kinds, " and "))
 	}
 	if len(g.Waves) > 0 {
-		parts = append(parts, waveList(g.Waves))
+		head = append(head, waveList(g.Waves))
 	}
-	if g.Class != "" {
-		parts = append(parts, g.Class)
-	}
-	fmt.Fprintf(w, "    %s\n", strings.Join(parts, " · "))
+
+	fmt.Fprintf(w, "  %s\n", strings.Join(head, " · "))
+	fmt.Fprintf(w, "    %s\n", g.Message)
 
 	if g.ExampleDigest != "" {
 		where := shortDigest(g.ExampleDigest)
 		if g.ExampleRepository != "" {
 			where += " → " + g.ExampleRepository
 		}
-		fmt.Fprintf(w, "    e.g. %s\n", where)
+		fmt.Fprintf(w, "    Example  %s\n", where)
 	}
 
-	fmt.Fprintf(w, "    %s\n", advice(g))
+	fmt.Fprintf(w, "    Action   %s\n", advice(g))
 }
 
 // advice turns a class into the sentence an operator needs.
@@ -120,25 +130,30 @@ func advice(g v1.FailureGroup) string {
 		// to a path the earlier writes never touched, and on registries that
 		// separate the two — Artifactory wants Delete on the permission target
 		// to move an existing tag — it is refused separately.
-		if strings.Contains(g.Message, "apply tag") {
-			return "Not retryable; the credential may write content but not this tag. " +
-				"Check the target's permission on the tag path."
+		//
+		// Recognised by the leading verb of the registry's own message, which
+		// is the operation the write attempted. The message carries the rest of
+		// what the reader needs — including whether the tag already existed —
+		// so this says only what is not already on the line above it.
+		if strings.HasPrefix(g.Message, "tag ") {
+			return "Not retryable. The credential writes content to this path but " +
+				"is refused the tag; check the target's permission to write tags there."
 		}
-		return "Not retryable; credential refused. Check the target's secret, then retry."
+		return "Not retryable. The credential was refused; check the target's secret, then retry."
 	case "unsupported":
-		return "Not retryable; the registry rejects this content."
+		return "Not retryable. The registry rejects this content."
 	case "not_found":
-		return "Not retryable; content the job expected at the target is absent."
+		return "Not retryable. Content the job expected at the target is absent."
 	case "blob_unknown":
-		return "Self-healing; the affected blobs are re-queued automatically."
+		return "Self-healing. The affected blobs are re-queued automatically."
 	case "configuration":
-		return "Not retryable; the worker cannot execute this job. Check `transferctl health`."
+		return "Not retryable. The worker cannot execute this job; check `transferctl health`."
 	case "rate_limited":
-		return "Retrying; backing off as the registry directed."
+		return "Retrying, backing off as the registry directed."
 	case "timeout", "unavailable":
 		return "Retrying. If it does not recover, measure the path with `transferctl calibrate`."
 	case "integrity":
-		return "Retrying, capped low; content did not hash as claimed."
+		return "Retrying, capped low. Content did not hash as claimed."
 	default:
 		if g.Retryable {
 			return "Retrying."

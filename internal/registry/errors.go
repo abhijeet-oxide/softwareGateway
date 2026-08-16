@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"strings"
 	"time"
 )
 
@@ -102,10 +103,25 @@ func (e *Error) Error() string {
 	if e.Detail != "" {
 		msg += ": " + e.Detail
 	}
-	if e.Err != nil {
+	// The sentinel, unless the registry's own words already said it. A 401
+	// arrives as `unauthorized: authentication required`, and appending our
+	// sentinel to that produced `unauthorized: authentication required:
+	// unauthorized` — one fact stated twice, on the line an operator reads
+	// first. Suppressed only on an exact word match, so a sentinel the detail
+	// does NOT cover is still reported.
+	if e.Err != nil && !detailStates(e.Detail, e.Err) {
 		msg += ": " + e.Err.Error()
 	}
 	return msg
+}
+
+// detailStates reports whether the registry's own message already carries the
+// sentinel's word.
+func detailStates(detail string, err error) bool {
+	if detail == "" {
+		return false
+	}
+	return strings.Contains(strings.ToLower(detail), strings.ToLower(err.Error()))
 }
 
 func (e *Error) Unwrap() error { return e.Err }

@@ -507,3 +507,78 @@ func (h *failureHarness) blobJobFor(transferID, digest string) int64 {
 	}
 	return id
 }
+
+// A destination that will not accept a tag refuses every tag of the release,
+// and each refusal names the tag it was refused. Keyed on the message alone
+// that is one cause per tag — three blocks saying the same sentence about three
+// different strings — where the operator has one problem and one thing to do.
+//
+// The tags are NEAR's own, because they are the case that breaks a naive
+// substitution: `orb_25.7_mp2604_2131` is a substring of
+// `signed_orb_25.7_mp2604_2131`, so replacing the shortest first leaves
+// `signed_<tag>` behind and splits the group it was meant to join.
+func TestTagRefusalsAcrossTheReleasesTagsAreOneCause(t *testing.T) {
+	h := newFailureHarness(t)
+	id := h.transferWithJobs(0)
+
+	tags := []string{
+		"orb_25.7_mp2604_2131",
+		"signature_orb_25.7_mp2604_2131",
+		"signed_orb_25.7_mp2604_2131",
+	}
+	for i, tag := range tags {
+		job := h.manifestJob(id, i)
+		h.setTags(job, tag)
+		h.fail(job, "auth", "tag "+h.digestOf(job)+" as "+tag+" artifact.it.att.com/"+
+			h.repositoryOf(job)+": HTTP 401: unauthorized: authentication required"+
+			" (the tag does not exist at the destination, so this write would have created it)")
+	}
+
+	groups, err := h.packages.FailureGroups(t.Context(), id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(groups) != 1 {
+		for _, g := range groups {
+			t.Logf("group: %s", g.Message)
+		}
+		t.Fatalf("reported %d causes for one refusal across %d tags", len(groups), len(tags))
+	}
+
+	g := groups[0]
+	if g.Failed != len(tags) {
+		t.Errorf("the cause holds %d jobs, want %d", g.Failed, len(tags))
+	}
+	for _, tag := range tags {
+		if strings.Contains(g.Message, tag) {
+			t.Errorf("the tag %q survived normalisation: %s", tag, g.Message)
+		}
+	}
+	if !strings.Contains(g.Message, "<tag>") {
+		t.Errorf("message %q does not stand for the tags it replaced", g.Message)
+	}
+	// What the tag write would have done is the half that decides which
+	// permission to go and look at, so it must survive into the shared
+	// sentence rather than being left on the example.
+	if !strings.Contains(g.Message, "would have created it") {
+		t.Errorf("message %q lost what the refused write would have done", g.Message)
+	}
+	if g.Retryable {
+		t.Error("a refused credential was reported as worth retrying")
+	}
+}
+
+// A tag too short to substitute safely is left alone. Replacing `1.0`
+// everywhere it appears would corrupt a message rather than normalise one.
+func TestAShortTagIsNotSubstituted(t *testing.T) {
+	message := "tag <digest> as 1.0 <repository>: HTTP 401: unauthorized"
+	if got := normaliseFailure(message, "", "", []string{"1.0"}); got != message {
+		t.Errorf("normalised to %q, want it left alone", got)
+	}
+}
+
+// setTags records what a job was to name its manifest at the destination.
+func (h *failureHarness) setTags(jobID int64, tags ...string) {
+	h.t.Helper()
+	h.exec(`UPDATE jobs SET target_tags = ? WHERE id = ?`, tagsJSON(tags), jobID)
+}

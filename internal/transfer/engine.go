@@ -390,7 +390,7 @@ func (e *Engine) runManifest(ctx context.Context, job Job) Result {
 	// about what any tag points at.
 	if _, _, err := job.Target.FetchManifest(ctx, job.Digest); err == nil {
 		if err := e.applyTags(ctx, job, dgst); err != nil {
-			return e.failed(err, "tag destination")
+			return e.failed(err, "")
 		}
 		return Result{Outcome: OutcomeSkipped, SkipReason: SkipExistsAtTarget}
 	}
@@ -431,7 +431,7 @@ func (e *Engine) runManifest(ctx context.Context, job Job) Result {
 	// makes an interrupted transfer safe: a consumer sees either the old tag
 	// or the complete new one, never a half-written one.
 	if err := e.applyTags(ctx, job, dgst); err != nil {
-		return e.failed(err, "tag destination")
+		return e.failed(err, "")
 	}
 
 	return Result{Outcome: OutcomeSucceeded, BytesMoved: int64(len(raw)), Placed: false}
@@ -456,10 +456,45 @@ func (e *Engine) applyTags(ctx context.Context, job Job, dgst registry.Digest) e
 			continue
 		}
 		if err := job.Target.Tag(ctx, dgst, tag); err != nil {
-			return fmt.Errorf("apply tag %q: %w", tag, err)
+			// No `apply tag %q` prefix: the registry's own error already names
+			// the digest, the tag and the path, and restating the tag in front
+			// of it put the same string in one message twice.
+			return fmt.Errorf("%w%s", err, e.tagState(ctx, job, tag))
 		}
 	}
 	return nil
+}
+
+// tagState says what the refused tag holds at the destination RIGHT NOW.
+//
+// # Why a refusal is not self-explanatory
+//
+// `PUT /v2/<repo>/manifests/<tag>` is two operations behind one request, and a
+// registry may permit one and refuse the other: creating a tag that does not
+// exist, and MOVING one that does. Artifactory draws exactly that line —
+// creating needs Deploy, moving needs Delete on the permission target — and
+// answers 401 either way, so the status alone cannot say which rule was hit.
+//
+// The difference decides what an operator does next. A tag that does not exist
+// means the credential may not write tags at that path at all. A tag that
+// exists and points elsewhere means the credential may not MOVE it, and the
+// fix is a different permission on the same path.
+//
+// One HEAD, on the failure path only, and silent when it cannot be answered:
+// a note that might be wrong is worse than no note, and the registry's own
+// message stands on its own without this.
+func (e *Engine) tagState(ctx context.Context, job Job, tag string) string {
+	desc, err := job.Target.ResolveTag(ctx, tag)
+	switch {
+	case errors.Is(err, registry.ErrNotFound):
+		return " (the tag does not exist at the destination, so this write would have created it)"
+	case err != nil:
+		return ""
+	default:
+		return fmt.Sprintf(
+			" (the tag exists at the destination and points at %s, so this write would have moved it)",
+			desc.Digest.Short())
+	}
 }
 
 // tagIsCurrent reports whether the destination already names this exact
@@ -521,11 +556,22 @@ func (e *Engine) manifestBytes(
 }
 
 // failed classifies an error into a Result.
+// failed reports a job that could not be completed, under the step that could
+// not complete it.
+//
+// An EMPTY step is deliberate rather than an omission: where the error already
+// reads as a complete account of what was attempted — the tag writes, whose
+// message names the digest, the tag, the path and the status — a prefix adds a
+// word and no information. See applyTags.
 func (e *Engine) failed(err error, what string) Result {
+	wrapped := err
+	if what != "" {
+		wrapped = fmt.Errorf("%s: %w", what, err)
+	}
 	return Result{
 		Outcome:    OutcomeFailed,
 		ErrorClass: classify(err),
-		Err:        fmt.Errorf("%s: %w", what, err),
+		Err:        wrapped,
 	}
 }
 

@@ -1,6 +1,7 @@
 package transfer_test
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/abhijeet-oxide/softwareGateway/internal/registry"
@@ -125,5 +126,61 @@ func TestTheRefusedOverwriteIsWhatTheRerunAvoids(t *testing.T) {
 	if err == nil {
 		t.Fatal("the destination accepted a tag overwrite; the fixture is not " +
 			"reproducing the refusal and the re-run test proves nothing")
+	}
+}
+
+// A refused tag write says which of the two writes it was.
+//
+// `PUT /v2/<repo>/manifests/<tag>` is two operations behind one request —
+// creating a tag that does not exist, and MOVING one that does — and a registry
+// may permit one and refuse the other. Artifactory draws exactly that line and
+// answers 401 either way, so the status cannot say which rule was hit, and the
+// two have different fixes: one is permission to write tags at that path at
+// all, the other is permission to overwrite what is already there.
+//
+// The engine knows something the reader does not without asking: whether the
+// tag was there. One HEAD on the failure path settles it, and the answer goes
+// in the message.
+func TestARefusedTagSaysWhetherItWouldHaveCreatedTheTag(t *testing.T) {
+	src := fakeregistry.New()
+	t.Cleanup(src.Close)
+	dst := fakeregistry.New()
+	t.Cleanup(dst.Close)
+
+	s := newSliceOn(t, src, dst)
+	pkg, _ := seedORB(t, s, "orb_23.8.1076")
+
+	// Two refusals on the tag's own path: the engine's own check that the tag
+	// is not already right, and the write itself. The HEAD that follows the
+	// failure is left to get a true answer, which is the point of the test.
+	dst.RejectNext("manifests/orb_23.8.1076", 401,
+		"UNAUTHORIZED", "authentication required", 2)
+
+	s.plan(pkg, "first")
+	got := s.drain("worker-1", 8)
+	if got.Failed == 0 {
+		t.Fatal("the destination refused the release's tag and the transfer reported success")
+	}
+
+	msg := got.LastError.Error()
+	if !strings.Contains(msg, "would have created it") {
+		t.Errorf("the refusal does not say the tag was absent: %s", msg)
+	}
+	// The registry's own account is what the operator acts on, so it has to
+	// survive: the status, the tag and the path.
+	for _, want := range []string{"401", "orb_23.8.1076", targetPath} {
+		if !strings.Contains(msg, want) {
+			t.Errorf("the refusal does not name %s: %s", want, msg)
+		}
+	}
+	// One statement of the tag, not two. The engine used to prefix the
+	// registry's message with the tag the registry had already named.
+	if n := strings.Count(msg, "orb_23.8.1076"); n != 1 {
+		t.Errorf("the tag is named %d times in one message: %s", n, msg)
+	}
+	// And one statement of the refusal: the registry's words, not its words
+	// followed by our sentinel saying the same thing.
+	if n := strings.Count(strings.ToLower(msg), "unauthorized"); n != 1 {
+		t.Errorf("the refusal is stated %d times in one message: %s", n, msg)
 	}
 }

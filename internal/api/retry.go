@@ -54,6 +54,8 @@ func (s *Server) handleTransferCustomMethod(w http.ResponseWriter, r *http.Reque
 	// it does not exist.
 	case "stop", "cancel":
 		s.controlTransfer(w, r, id, "stop")
+	case "delete":
+		s.controlTransfer(w, r, id, "delete")
 	default:
 		// Named explicitly, because the specified-but-unbuilt verbs are the
 		// ones somebody will reach for first and a bare "unknown method" would
@@ -95,6 +97,8 @@ func (s *Server) controlTransfer(w http.ResponseWriter, r *http.Request, ref, ve
 		res, err = s.deps.Queue.Pause(r.Context(), id)
 	case "resume":
 		res, err = s.deps.Queue.Resume(r.Context(), id)
+	case "delete":
+		res, err = s.deps.Queue.Delete(r.Context(), id)
 	default:
 		res, err = s.deps.Queue.Stop(r.Context(), id)
 	}

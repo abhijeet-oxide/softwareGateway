@@ -47,6 +47,10 @@ func (f *fakeQueue) Stop(_ context.Context, id string) (store.ControlResult, err
 	return f.control("stop", id)
 }
 
+func (f *fakeQueue) Delete(_ context.Context, id string) (store.ControlResult, error) {
+	return f.control("delete", id)
+}
+
 func (f *fakeQueue) control(verb, id string) (store.ControlResult, error) {
 	f.controlled = append(f.controlled, verb+" "+id)
 	if f.controlErr != nil {

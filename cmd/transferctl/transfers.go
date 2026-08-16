@@ -33,6 +33,7 @@ func newTransfersCommand() *cobra.Command {
 		newTransfersPauseCommand(),
 		newTransfersResumeCommand(),
 		newTransfersStopCommand(),
+		newTransfersDeleteCommand(),
 	)
 	return cmd
 }

@@ -66,7 +66,27 @@ func newTransfersStopCommand() *cobra.Command {
 	return cmd
 }
 
-// controlRunner is the body all three share.
+func newTransfersDeleteCommand() *cobra.Command {
+	cmd := &cobra.Command{
+		Aliases: []string{"rm"},
+		Short:   "Remove a finished transfer's record",
+		Long: "Deletes the transfer and its jobs from the DATABASE. Nothing at the\n" +
+			"destination is removed, and nothing could be: what a transfer put\n" +
+			"there is content-addressed and shared with every other release using\n" +
+			"the same layers.\n\n" +
+			"Only a transfer that has finished — succeeded, failed or cancelled.\n" +
+			"A running transfer's jobs are held by a worker that is going to report\n" +
+			"on them, so `stop` it first.\n\n" +
+			"For a transfer that failed before it was planned, this is the tidy-up:\n" +
+			"there is nothing to retry and the row would otherwise sit in the\n" +
+			"listing forever.",
+		RunE: controlRunner("delete"),
+	}
+	takes(cmd, "delete", transferArg())
+	return cmd
+}
+
+// controlRunner is the body all four share.
 func controlRunner(verb string) func(*cobra.Command, []string) error {
 	return func(cmd *cobra.Command, args []string) error {
 		resp, err := newClient().ControlTransfer(cmd.Context(), args[0], verb)
@@ -92,6 +112,13 @@ func renderControl(w io.Writer, verb string, r *v1.TransferControlResponse) erro
 	case "resume":
 		fmt.Fprintf(w, "Resumed %s — %s are leasable again.\n",
 			shortID(r.TransferID), plural(r.Jobs, "job", "jobs"))
+	case "delete":
+		// What was removed, and — in the same breath — what was not. A reader
+		// who has just deleted something needs to know whether they have
+		// changed the destination, and finding that out afterwards is too late.
+		fmt.Fprintf(w, "Deleted %s — the record and %s.\n",
+			shortID(r.TransferID), plural(r.Jobs, "job", "jobs"))
+		fmt.Fprintln(w, "  Nothing at the destination was removed.")
 	default:
 		fmt.Fprintf(w, "Stopped %s — %s cancelled.\n",
 			shortID(r.TransferID), plural(r.Jobs, "job", "jobs"))

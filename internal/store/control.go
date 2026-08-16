@@ -194,3 +194,88 @@ func contains(values []string, want string) bool {
 	}
 	return false
 }
+
+// DeleteTransfer removes a transfer's RECORD, and nothing else.
+//
+// # What this is not
+//
+// It is not a rollback. Nothing at the destination is removed, and nothing
+// could be: what a transfer put there is content-addressed, shared with every
+// other release that references the same layers, and — where the transfer did
+// not finish — untagged and invisible to consumers already. A delete that
+// reached into a registry to unpick that would be the most dangerous operation
+// in this system, and it is not what anybody asking for one wants: they want
+// the row out of their listing.
+//
+// So this is bookkeeping. The transfer, its jobs and their dependency edges go;
+// the placements do not, because they describe the destination rather than the
+// transfer, and a later transfer of the same content still wants to know the
+// bytes are there.
+//
+// # Only a settled transfer
+//
+// A running transfer's jobs are LEASED — a worker holds them and will report on
+// them — and deleting the rows underneath it turns every one of those reports
+// into an update of nothing, silently. `stop` exists, it is one word, and it
+// leaves a transfer this will accept. Refusing is a second's inconvenience
+// against a class of corruption that would be very hard to explain afterwards.
+func (p *Packages) DeleteTransfer(ctx context.Context, transferID string) (ControlResult, error) {
+	res := ControlResult{TransferID: transferID}
+
+	tx, err := p.db.BeginTx(ctx, nil)
+	if err != nil {
+		return res, fmt.Errorf("begin delete: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	var state string
+	err = tx.QueryRowContext(ctx, p.dialect.Rewrite(
+		`SELECT state FROM transfers WHERE id = ?`), transferID).Scan(&state)
+	if errors.Is(err, sql.ErrNoRows) {
+		return res, fmt.Errorf("transfer %s not found", transferID)
+	}
+	if err != nil {
+		return res, fmt.Errorf("read transfer %s: %w", transferID, err)
+	}
+	res.State = state
+
+	if !contains([]string{"succeeded", "failed", "cancelled"}, state) {
+		return res, fmt.Errorf(
+			"%w: transfer %s is %s, so it still has work a worker may be holding; "+
+				"stop it first", ErrIllegalTransition, transferID, state)
+	}
+
+	// Counted before the delete, because afterwards there is nothing to count
+	// and "deleted 0 jobs" would be indistinguishable from a transfer that
+	// never had any.
+	if err := tx.QueryRowContext(ctx, p.dialect.Rewrite(
+		`SELECT count(*) FROM jobs WHERE transfer_id = ?`), transferID).Scan(&res.Jobs); err != nil {
+		return res, fmt.Errorf("count jobs of transfer %s: %w", transferID, err)
+	}
+
+	// The jobs go explicitly rather than by cascade. Both databases declare it,
+	// but SQLite enforces a foreign key only when `PRAGMA foreign_keys` is on
+	// for that connection — so relying on the declaration would leave orphaned
+	// job rows on one backend and not the other, which is the kind of
+	// difference nobody finds until a count is wrong months later.
+	if _, err := tx.ExecContext(ctx, p.dialect.Rewrite(
+		`DELETE FROM job_dependencies
+		  WHERE job_id IN (SELECT id FROM jobs WHERE transfer_id = ?)
+		     OR depends_on_id IN (SELECT id FROM jobs WHERE transfer_id = ?)`),
+		transferID, transferID); err != nil {
+		return res, fmt.Errorf("delete job edges of transfer %s: %w", transferID, err)
+	}
+	if _, err := tx.ExecContext(ctx, p.dialect.Rewrite(
+		`DELETE FROM jobs WHERE transfer_id = ?`), transferID); err != nil {
+		return res, fmt.Errorf("delete jobs of transfer %s: %w", transferID, err)
+	}
+	if _, err := tx.ExecContext(ctx, p.dialect.Rewrite(
+		`DELETE FROM transfers WHERE id = ?`), transferID); err != nil {
+		return res, fmt.Errorf("delete transfer %s: %w", transferID, err)
+	}
+
+	if err := tx.Commit(); err != nil {
+		return res, fmt.Errorf("commit delete of transfer %s: %w", transferID, err)
+	}
+	return res, nil
+}

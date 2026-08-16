@@ -317,9 +317,9 @@ func (c *Client) RetryTransfer(ctx context.Context, id string) (*RetryTransferRe
 	return &out, c.post(ctx, path, struct{}{}, &out)
 }
 
-// ControlTransfer applies pause, resume or stop to one transfer.
+// ControlTransfer applies pause, resume, stop or delete to one transfer.
 //
-// One method for the three because they differ only in the verb: the states
+// One method for the four because they differ only in the verb: the states
 // each admits belong to the server, which owns the state machine, and
 // duplicating that knowledge here would be a second place for it to be wrong.
 func (c *Client) ControlTransfer(

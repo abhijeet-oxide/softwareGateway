@@ -73,6 +73,11 @@ type Worker interface {
 	Pause(ctx context.Context, transferID string) (store.ControlResult, error)
 	Resume(ctx context.Context, transferID string) (store.ControlResult, error)
 	Stop(ctx context.Context, transferID string) (store.ControlResult, error)
+	// Delete removes a settled transfer's RECORD. Nothing at the destination
+	// is touched: what a transfer put there is content-addressed and shared,
+	// and a delete that unpicked it would be the most dangerous operation in
+	// this system. This is bookkeeping.
+	Delete(ctx context.Context, transferID string) (store.ControlResult, error)
 
 	// RecordWorker notes what a worker reported about itself. No error: the
 	// fleet view must never be the reason a lease fails.

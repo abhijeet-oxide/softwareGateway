@@ -48,8 +48,7 @@ func newTransfersFailuresCommand() *cobra.Command {
 
 func renderFailures(w io.Writer, resp *v1.ListFailuresResponse) error {
 	if len(resp.Failures) == 0 {
-		fmt.Fprintln(w, "Nothing is failing in this transfer.")
-		return nil
+		return renderTransferFailure(w, resp)
 	}
 
 	failed, retrying := 0, 0
@@ -88,6 +87,44 @@ func renderFailures(w io.Writer, resp *v1.ListFailuresResponse) error {
 // so the two short facts that decide whether this block is worth reading at all
 // (what class of failure it is, and how much it is holding) arrived after the
 // one that does not fit. They lead now, and the message sits under them.
+// renderTransferFailure answers for a transfer with no failing JOBS.
+//
+// # The answer that could not be right
+//
+// This command said "Nothing is failing in this transfer" about a transfer
+// whose state was `failed`. Both halves were working as written: the summary is
+// built from job errors, and that transfer had no jobs — it failed while being
+// PLANNED, which happens before a single job exists. An origin that cannot be
+// reached, a package whose tree will not walk, a destination path that cannot
+// be resolved: each fails the transfer and leaves nothing behind to summarise.
+//
+// The reason is on the transfer itself. It was always in `describe`; it was
+// missing from the one command whose name is a promise to report it.
+func renderTransferFailure(w io.Writer, resp *v1.ListFailuresResponse) error {
+	if resp.FailureReason == "" {
+		if resp.State == v1.TransferFailed {
+			// Failed, with nothing recorded to say why. Rare, and saying so
+			// beats "nothing is failing" — which would send the reader looking
+			// for a transfer that is fine.
+			fmt.Fprintf(w, "Transfer %s failed, and no reason was recorded.\n",
+				shortID(resp.TransferID))
+			return nil
+		}
+		fmt.Fprintln(w, "Nothing is failing in this transfer.")
+		return nil
+	}
+
+	fmt.Fprintf(w, "Transfer %s failed before any job ran.\n\n", shortID(resp.TransferID))
+	fmt.Fprintf(w, "  %s\n", resp.FailureReason)
+	fmt.Fprintln(w)
+	// What this is NOT: a job that can be requeued. Planning produced nothing to
+	// retry, so the next step is a new transfer once the cause is gone, and
+	// saying so stops a reader working through `retry` first.
+	fmt.Fprintln(w, "Nothing was queued, so there is nothing to retry: this failed while the")
+	fmt.Fprintln(w, "transfer was being planned. Once the cause is gone, create it again.")
+	return nil
+}
+
 func renderFailure(w io.Writer, g v1.FailureGroup) {
 	head := make([]string, 0, 4)
 	if g.Class != "" {

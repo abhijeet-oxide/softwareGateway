@@ -1515,8 +1515,19 @@ type FailureGroup struct {
 
 // ListFailuresResponse is GET /api/v1/transfers/{transfer}/failures.
 type ListFailuresResponse struct {
-	TransferID string         `json:"transferId"`
-	Failures   []FailureGroup `json:"failures"`
+	TransferID string `json:"transferId"`
+	// State and FailureReason are the TRANSFER's own, which is not the same
+	// question as which of its jobs are failing.
+	//
+	// A transfer can fail before it has any jobs at all — an origin that cannot
+	// be reached, a package whose tree will not walk — and its reason is then
+	// recorded on the transfer rather than on work that was never created. A
+	// summary built only from jobs answers "nothing is failing" about a
+	// transfer whose state is `failed`, which is the one answer that cannot be
+	// right.
+	State         TransferState  `json:"state,omitempty"`
+	FailureReason string         `json:"failureReason,omitempty"`
+	Failures      []FailureGroup `json:"failures"`
 }
 
 // CreateTransferRequest is POST /api/v1/transfers.

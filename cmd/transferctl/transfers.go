@@ -347,7 +347,7 @@ func renderTransferList(
 
 	rows := [][]string{{
 		"ID", "PRODUCT", "TAG", "FROM", "TO", "STATE", "DONE", "JOBS", "FAILED",
-		"COPIED", "SAVED", "TOTAL", "SPEED", "RUNNING", "ELAPSED", "ETA",
+		"COPIED", "SAVED", "PLANNED", "SPEED", "RUNNING", "ELAPSED", "ETA",
 	}}
 
 	finished := 0
@@ -369,7 +369,7 @@ func renderTransferList(
 			failedJobs(t.Progress),
 			copiedBytes(t.Progress),
 			savedBytes(t.Progress),
-			totalBytes(t.Progress),
+			plannedBytes(t.Progress),
 			speedOf(t, rates.rateFor(t.ID)),
 			fmt.Sprint(t.Progress.JobsInFlight),
 			elapsedOf(t),
@@ -514,9 +514,25 @@ func copiedBytes(p v1.TransferProgress) string {
 	return humanBytes(p.BytesTransferred)
 }
 
-// totalBytes is the size of the release: the work queued plus the work planning
-// never queued because the destination already had it.
-func totalBytes(p v1.TransferProgress) string {
+// plannedBytes is the WORK: every byte the transfer has to account for, queued
+// or already accounted for at planning time.
+//
+// PLANNED rather than TOTAL, and the rename is the point. A component of a
+// bundle is published twice — inside the bundle so its index resolves, and
+// under the name the vendor gave it — and a registry stores blobs per
+// repository, so one blob landing in two repositories is two placements and two
+// jobs. Its bytes are counted twice here, and a base layer shared by fifty
+// components is counted fifty times.
+//
+// Called TOTAL it invited the only comparison that makes it look wrong: a
+// listing reporting a 29.8 GiB orb, and a transfer of that orb reporting 63.7
+// GiB. Both are right. One is what the release weighs and the other is what the
+// transfer has to do, and only the second belongs beside COPIED and SAVED —
+// which are also per-job, and which add up to exactly this.
+//
+// The release's own size is on `describe`, next to this one, where the two can
+// be seen to be different quantities rather than inconsistent ones.
+func plannedBytes(p v1.TransferProgress) string {
 	total := packageBytes(p)
 	if total <= 0 {
 		return "-"
@@ -976,7 +992,16 @@ func describeTransfer(w io.Writer, t *v1.Transfer, rates *rateTracker, watching 
 	// printed between two byte figures, and read as arithmetic on them: `0 B of
 	// 63.7 GiB planned (100%)` cannot be true however carefully it is
 	// explained. It is on the Jobs line, which is what it measures.
-	fmt.Fprintf(pw, "  Release:\t%s\n", humanBytesOf(packageBytes(p)))
+	// BOTH totals, adjacent, because they differ by design and a reader who
+	// meets only one of them will eventually meet the other and conclude the
+	// tool cannot count. The release is every distinct digest once; the planned
+	// work counts a blob per repository it lands in, and a bundle's components
+	// land in two.
+	if content := int64Of(p.ContentBytes); content > 0 {
+		fmt.Fprintf(pw, "  Release:\t%s\tdistinct content\n", humanBytesOf(content))
+	}
+	fmt.Fprintf(pw, "  Planned:\t%s\tcontent counted once per repository it lands in\n",
+		humanBytesOf(packageBytes(p)))
 	fmt.Fprintf(pw, "  Transferred:\t%s\n", humanBytes(p.BytesTransferred))
 	// The TOTAL sits on the heading, aligned with Transferred above it, because
 	// those two are the pair a reader compares: what crossed the network, and

@@ -1357,8 +1357,25 @@ type TransferSummary struct {
 	// for NEAR's `orb_25.7.2131`. Empty where no shortening applies, which is
 	// every source that declares no `vendor`. Cosmetic: Tag is the identity.
 	DisplayTag string
-	Source     string
-	Target     string
+	// ContentBytes is the size of the RELEASE: every distinct digest in it,
+	// counted once.
+	//
+	// Deliberately not the same quantity as PlannedBytes, and the difference is
+	// not a discrepancy. A component of a bundle is published under its own
+	// name as well as inside the bundle, and a registry stores blobs PER
+	// REPOSITORY — so one blob landing in two repositories is two placements
+	// and two jobs, and its bytes are counted twice in the work. A base layer
+	// shared by fifty components is counted fifty times.
+	//
+	// Both numbers are true about different things: this is what the release
+	// weighs, PlannedBytes is what the transfer has to do. Reporting only the
+	// second made a 29.8 GiB orb read as a 63.7 GiB one.
+	//
+	// Zero where the package's size was never established — a package listed
+	// but not fully walked has no honest total.
+	ContentBytes int64
+	Source       string
+	Target       string
 	// SourceName and TargetName are the CONFIGURED names — the `sources[].name`
 	// and `targets[].name` an operator types into --from and --to. Source and
 	// Target above are the resolved host and path, which is what a person needs
@@ -1450,7 +1467,7 @@ func (t TransferSummary) SavedBytes() int64 {
 func (p *Packages) transferSelect() string {
 	return `
 	SELECT t.id, t.request_id, t.package_id, pr.name, pk.tag,
-	       COALESCE(pk.display_tag, ''),
+	       COALESCE(pk.display_tag, ''), COALESCE(pk.total_bytes, 0),
 	       src.registry_host || '/' || src.repository_path,
 	       dst.registry_host || '/' || dst.repository_path,
 	       src.name, dst.name,
@@ -1492,7 +1509,8 @@ func (p *Packages) transferSelect() string {
 func scanTransfer(row interface{ Scan(...any) error }) (TransferSummary, error) {
 	var t TransferSummary
 	err := row.Scan(&t.ID, &t.RequestID, &t.PackageID, &t.ProductName, &t.Tag,
-		&t.DisplayTag, &t.Source, &t.Target, &t.SourceName, &t.TargetName,
+		&t.DisplayTag, &t.ContentBytes,
+		&t.Source, &t.Target, &t.SourceName, &t.TargetName,
 		&t.State, &t.Priority, &t.CurrentWave, &t.MaxWave,
 		&t.PlannedJobs, &t.PlannedBytes, &t.DedupeSkippedBytes, &t.SkippedBytes,
 		&t.JobsDone, &t.JobsFailed, &t.JobsOutstanding, &t.BytesTransferred,

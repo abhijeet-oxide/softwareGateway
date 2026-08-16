@@ -193,9 +193,14 @@ func jobEstimate(t *v1.Transfer) (time.Duration, bool) {
 // The server reports the real figure: the size of every outstanding job, less
 // what each has already sent. The old subtraction survives only as a fallback
 // for a Coordinator too old to send it.
+// ABSENT, not zero. The fallback is for a Coordinator too old to send the
+// figure at all, and testing it with `> 0` fired on every transfer that had
+// genuinely finished its bytes: outstanding really was zero, the subtraction
+// then returned the whole plan minus the little that had moved, and a transfer
+// with nothing left to do reported thousands of hours remaining.
 func remainingBytes(t *v1.Transfer) int64 {
-	if outstanding := int64Of(t.Progress.OutstandingBytes); outstanding > 0 {
-		return outstanding
+	if t.Progress.OutstandingBytes != "" {
+		return int64Of(t.Progress.OutstandingBytes)
 	}
 	return int64Of(t.Progress.PlannedBytes) - int64Of(t.Progress.BytesTransferred)
 }

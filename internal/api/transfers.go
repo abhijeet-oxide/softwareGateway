@@ -291,6 +291,7 @@ func transferDTO(t store.TransferSummary) v1.Transfer {
 			JobsInFlight:       t.JobsInFlight,
 			Workers:            t.Workers,
 			JobsWaiting:        t.JobsWaiting,
+			ContentBytes:       v1.Int64String(strconv.FormatInt(t.ContentBytes, 10)),
 			PlannedBytes:       v1.Int64String(strconv.FormatInt(t.PlannedBytes, 10)),
 			BytesTransferred:   v1.Int64String(strconv.FormatInt(t.BytesTransferred, 10)),
 			DedupeSkippedBytes: v1.Int64String(strconv.FormatInt(t.DedupeSkippedBytes, 10)),

@@ -200,8 +200,8 @@ func TestTheByteColumnsAreMeasuredAgainstTheSameThing(t *testing.T) {
 	if got := copiedBytes(p); strings.Contains(got, "/") {
 		t.Errorf("COPIED = %q, want what crossed the wire without a denominator", got)
 	}
-	if got := totalBytes(p); !strings.Contains(got, "93.5 GiB") {
-		t.Errorf("TOTAL = %q, want the 93.5 GiB release", got)
+	if got := plannedBytes(p); !strings.Contains(got, "93.5 GiB") {
+		t.Errorf("PLANNED = %q, want the 93.5 GiB of work", got)
 	}
 }
 
@@ -289,5 +289,81 @@ func TestAWatchDoesNotRepeatTheHintAboutAll(t *testing.T) {
 	}
 	if !strings.Contains(once.String(), "--all") {
 		t.Errorf("a single listing lost the hint:\n%s", once.String())
+	}
+}
+
+// A transfer with nothing outstanding has nothing remaining.
+//
+// The outstanding-bytes fallback exists for a Coordinator too old to send the
+// figure, and it was reached by testing the value rather than its presence — so
+// a transfer that had genuinely finished its bytes fell through to `planned
+// minus transferred` and reported thousands of hours left with nothing to do.
+func TestNothingOutstandingIsNothingRemaining(t *testing.T) {
+	done := &v1.Transfer{
+		State:     v1.TransferRunning,
+		StartedAt: time.Now().Add(-229 * time.Second).Format(time.RFC3339Nano),
+		Progress: v1.TransferProgress{
+			PlannedBytes:     "68400000000",
+			OutstandingBytes: "0",
+			BytesTransferred: "1153434",
+			JobsPlanned:      1364, JobsDone: 1364, JobsOutstanding: 0,
+		},
+	}
+
+	if got := remainingBytes(done); got != 0 {
+		t.Errorf("remaining = %d bytes with nothing outstanding", got)
+	}
+	if d, ok := estimate(done); ok {
+		t.Errorf("estimated %s for a transfer with nothing left to do", d)
+	}
+
+	// A Coordinator that sends no figure at all still gets the old subtraction.
+	old := &v1.Transfer{
+		State:     v1.TransferRunning,
+		StartedAt: done.StartedAt,
+		Progress: v1.TransferProgress{
+			PlannedBytes:     "1000",
+			BytesTransferred: "400",
+			JobsOutstanding:  4,
+		},
+	}
+	if got := remainingBytes(old); got != 600 {
+		t.Errorf("remaining = %d, want the 600 the fallback computes", got)
+	}
+}
+
+// The release and the planned work are different quantities, and both are
+// shown so nobody has to guess which one a number is.
+//
+// A component is published inside its bundle AND under its own name, and a
+// registry stores blobs per repository — so a 29.8 GiB orb is 63.7 GiB of
+// placements. Reporting only the second made the tool look unable to count
+// against a listing that said 29.8 GiB.
+func TestDescribeSeparatesTheReleaseFromTheWork(t *testing.T) {
+	tr := &v1.Transfer{
+		ID: "b5d85331", State: v1.TransferRunning,
+		Progress: v1.TransferProgress{
+			ContentBytes: "32000000000",
+			PlannedBytes: "68400000000",
+			SavedBytes:   "68398000000", BytesTransferred: "1153434",
+		},
+	}
+
+	var buf bytes.Buffer
+	if err := describeTransfer(&buf, tr, &rateTracker{}, false); err != nil {
+		t.Fatal(err)
+	}
+	out := buf.String()
+
+	if !strings.Contains(out, "Release:") || !strings.Contains(out, "29.8 GiB") {
+		t.Errorf("describe does not report the size of the release:\n%s", out)
+	}
+	if !strings.Contains(out, "Planned:") || !strings.Contains(out, "63.7 GiB") {
+		t.Errorf("describe does not report the planned work:\n%s", out)
+	}
+	// And says why they differ, rather than leaving the reader to decide one of
+	// them is wrong.
+	if !strings.Contains(out, "per repository") {
+		t.Errorf("describe does not explain why the two differ:\n%s", out)
 	}
 }

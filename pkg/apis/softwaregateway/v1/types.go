@@ -1320,6 +1320,16 @@ type Transfer struct {
 
 // TransferProgress is what has happened so far, and what was planned.
 type TransferProgress struct {
+	// ContentBytes is the size of the RELEASE — every distinct digest counted
+	// once — which is not PlannedBytes and is not meant to be.
+	//
+	// A component is published inside its bundle AND under its own name, and a
+	// registry stores blobs per repository, so one blob landing in two
+	// repositories is two jobs and its bytes appear twice in the planned work.
+	// This is what the release weighs; PlannedBytes is what the transfer has to
+	// do. Omitted where the package's size was never established.
+	ContentBytes Int64String `json:"contentBytes,omitempty"`
+
 	JobsPlanned     int `json:"jobsPlanned"`
 	JobsDone        int `json:"jobsDone"`
 	JobsFailed      int `json:"jobsFailed"`

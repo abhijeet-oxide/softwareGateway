@@ -194,12 +194,14 @@ func TestTheByteColumnsAreMeasuredAgainstTheSameThing(t *testing.T) {
 		t.Errorf("saved %d of a %d-byte release: the columns still disagree", saved, total)
 	}
 
-	got := bytesProgress(p)
-	if strings.Contains(got, "29.8 GiB") {
-		t.Errorf("COPIED = %q, still measured against the queued work", got)
+	// COPIED states what crossed the wire and nothing else: how much of a
+	// release HAS to cross is settled one job at a time as the transfer runs,
+	// so a fraction there would state a fact nobody has yet.
+	if got := copiedBytes(p); strings.Contains(got, "/") {
+		t.Errorf("COPIED = %q, want what crossed the wire without a denominator", got)
 	}
-	if !strings.Contains(got, "93.5 GiB") {
-		t.Errorf("COPIED = %q, want it against the 93.5 GiB release", got)
+	if got := totalBytes(p); !strings.Contains(got, "93.5 GiB") {
+		t.Errorf("TOTAL = %q, want the 93.5 GiB release", got)
 	}
 }
 

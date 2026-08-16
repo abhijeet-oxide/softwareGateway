@@ -1493,10 +1493,11 @@ type FailureGroup struct {
 	Waves []int    `json:"waves,omitempty"`
 
 	// One concrete job to go and look at, and its message verbatim.
-	ExampleJobID      string `json:"exampleJobId,omitempty"`
-	ExampleDigest     string `json:"exampleDigest,omitempty"`
-	ExampleRepository string `json:"exampleRepository,omitempty"`
-	ExampleError      string `json:"exampleError,omitempty"`
+	ExampleJobID      string   `json:"exampleJobId,omitempty"`
+	ExampleDigest     string   `json:"exampleDigest,omitempty"`
+	ExampleRepository string   `json:"exampleRepository,omitempty"`
+	ExampleTags       []string `json:"exampleTags,omitempty"`
+	ExampleError      string   `json:"exampleError,omitempty"`
 
 	// Retryable reports whether retrying could plausibly succeed.
 	Retryable bool `json:"retryable"`

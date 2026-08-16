@@ -347,7 +347,7 @@ func renderTransferList(
 
 	rows := [][]string{{
 		"ID", "PRODUCT", "TAG", "FROM", "TO", "STATE", "DONE", "JOBS", "FAILED",
-		"COPIED", "SAVED", "SPEED", "RUNNING", "ELAPSED", "ETA",
+		"COPIED", "SAVED", "TOTAL", "SPEED", "RUNNING", "ELAPSED", "ETA",
 	}}
 
 	finished := 0
@@ -367,8 +367,9 @@ func renderTransferList(
 			fmt.Sprintf("%.0f%%", percentComplete(t.Progress)),
 			jobProgress(t.Progress),
 			failedJobs(t.Progress),
-			bytesProgress(t.Progress),
+			copiedBytes(t.Progress),
 			savedBytes(t.Progress),
+			totalBytes(t.Progress),
 			speedOf(t, rates.rateFor(t.ID)),
 			fmt.Sprint(t.Progress.JobsInFlight),
 			elapsedOf(t),
@@ -480,20 +481,47 @@ func transferTag(t *v1.Transfer) string {
 // different questions and diverge honestly: jobs reaches 100%, bytes stops
 // short by however much was deduplicated or mounted. Somebody watching a 30 GB
 // bundle wants the gigabytes, not only the ratio.
-// bytesProgress is what has crossed the wire, against the size of the RELEASE.
+// Three byte columns that add up, and why COPIED is not a fraction.
 //
-// Against the release rather than against the queued work, because the reader
-// compares this cell with SAVED beside it and those two must be able to add up.
-// Measured against the queued work they could not: content already at the
-// destination when the transfer was planned is counted in SAVED and was never
-// in the queue, so a row read `COPIED 490 KiB/29.8 GiB · SAVED 63.7 GiB` — a
-// transfer that had saved more than the whole of what it was moving.
-func bytesProgress(p v1.TransferProgress) string {
+// # The fraction was the problem, not its denominator
+//
+// COPIED read `X of Y`, and every candidate for Y was wrong in a way the reader
+// could see. Against the QUEUED work it produced `490 KiB/29.8 GiB · SAVED 63.7
+// GiB` — saving more than the whole of what was being moved. Against the
+// RELEASE it produced `5.4 KiB/63.7 GiB · SAVED 63.7 GiB`, which asks the
+// obvious question: if all of it was saved, what is the 63.7 GiB being copied?
+//
+// Nothing. Y does not exist. How much of a release has to cross the wire is not
+// known when the transfer starts and is not known while it runs — each job
+// settles it, one HEAD at a time — so a fraction there states a fact nobody has.
+//
+// So the row states the three quantities that are real:
+//
+//	COPIED   what has crossed the wire
+//	SAVED    what did not have to: already there, or relocated inside the target
+//	TOTAL    the release
+//
+// They add up in the only way that is true: COPIED + SAVED reaches TOTAL as the
+// transfer finishes, and the gap between them at any moment is the work not yet
+// decided either way. A reader who wants a percentage has DONE, which counts
+// jobs and reaches 100%.
+
+// copiedBytes is what has actually crossed the wire.
+func copiedBytes(p v1.TransferProgress) string {
+	if int64Of(p.BytesTransferred) == 0 {
+		return "-"
+	}
+	return humanBytes(p.BytesTransferred)
+}
+
+// totalBytes is the size of the release: the work queued plus the work planning
+// never queued because the destination already had it.
+func totalBytes(p v1.TransferProgress) string {
 	total := packageBytes(p)
 	if total <= 0 {
-		return humanBytes(p.BytesTransferred)
+		return "-"
 	}
-	return humanBytes(p.BytesTransferred) + "/" + humanBytesOf(total)
+	return humanBytesOf(total)
 }
 
 // speedOf is how fast this is going: the live rate under a watch, the average
@@ -939,19 +967,17 @@ func describeTransfer(w io.Writer, t *v1.Transfer, rates *rateTracker, watching 
 		fmt.Fprintf(pw, "  Re-sent:\t%s; target reported content it did not hold\n",
 			plural(p.JobsRepaired, "job", "jobs"))
 	}
-	// Against the RELEASE, and with no percentage on the line.
+	// The release first, then the two ways its bytes are accounted for. Three
+	// numbers that add up, rather than a fraction whose denominator nobody has:
+	// how much of a release must cross the wire is settled one job at a time as
+	// the transfer runs, so `X of Y` states a fact that does not exist yet.
 	//
-	// The percentage here was progress by JOBS, printed beside two byte
-	// figures, and it read as arithmetic on them: `0 B of 63.7 GiB planned
-	// (100%)` is a sentence that cannot be true however carefully it is
-	// explained. It belongs on the Jobs line, which is what it measures.
-	//
-	// The denominator was the queued work rather than the release, so this
-	// line and `Not transferred` below it were measured against different
-	// things and could not be added up — which is how a transfer came to
-	// report saving more than the whole of what it was moving.
-	fmt.Fprintf(pw, "  Transferred:\t%s of %s\n",
-		humanBytes(p.BytesTransferred), humanBytesOf(packageBytes(p)))
+	// The percentage that used to sit on this line was progress by JOBS,
+	// printed between two byte figures, and read as arithmetic on them: `0 B of
+	// 63.7 GiB planned (100%)` cannot be true however carefully it is
+	// explained. It is on the Jobs line, which is what it measures.
+	fmt.Fprintf(pw, "  Release:\t%s\n", humanBytesOf(packageBytes(p)))
+	fmt.Fprintf(pw, "  Transferred:\t%s\n", humanBytes(p.BytesTransferred))
 	// The TOTAL sits on the heading, aligned with Transferred above it, because
 	// those two are the pair a reader compares: what crossed the network, and
 	// what did not have to. The breakdown underneath answers the follow-up.
@@ -965,6 +991,16 @@ func describeTransfer(w io.Writer, t *v1.Transfer, rates *rateTracker, watching 
 	}
 	renderNotTransferred(w, p)
 	pw = newTabWriter(w)
+
+	// The gap, named. Transferred plus not-transferred only reaches the release
+	// once every job has settled, and until then the difference is work whose
+	// outcome nobody knows: each job decides for itself, with a HEAD at the
+	// destination, as it runs. Leaving that difference unexplained is what makes
+	// three correct numbers look like they do not add up.
+	if undecided := int64Of(p.OutstandingBytes); undecided > 0 {
+		fmt.Fprintf(pw, "  Undecided:\t%s\tqueued; not yet copied or skipped\n",
+			humanBytesOf(undecided))
+	}
 
 	if d, ok := elapsed(t); ok {
 		fmt.Fprintf(pw, "  Elapsed:\t%s\n", humanDuration(d))

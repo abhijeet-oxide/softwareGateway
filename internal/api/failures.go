@@ -45,6 +45,7 @@ func (s *Server) handleListTransferFailures(w http.ResponseWriter, r *http.Reque
 			ExampleJobID:      strconv.FormatInt(g.ExampleJobID, 10),
 			ExampleDigest:     g.ExampleDigest,
 			ExampleRepository: g.ExampleRepository,
+			ExampleTags:       g.ExampleTags,
 			ExampleError:      g.ExampleError,
 			Retryable:         g.Retryable,
 		})

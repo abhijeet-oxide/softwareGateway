@@ -23,6 +23,7 @@ require (
 	go.opentelemetry.io/otel/sdk v1.45.0
 	go.opentelemetry.io/otel/trace v1.45.0
 	golang.org/x/sync v0.22.0
+	golang.org/x/term v0.45.0
 	golang.org/x/time v0.15.0
 	modernc.org/sqlite v1.56.0
 	oras.land/oras-go/v2 v2.6.2

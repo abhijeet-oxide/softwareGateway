@@ -202,6 +202,7 @@ func newTransfersListCommand() *cobra.Command {
 	var (
 		productName string
 		state       string
+		all         bool
 		watch       bool
 		interval    time.Duration
 	)
@@ -210,6 +211,11 @@ func newTransfersListCommand() *cobra.Command {
 		Use:   "list",
 		Args:  cobra.NoArgs,
 		Short: "List transfers, newest first",
+		Long: "Shows what is still moving. A transfer that has finished with\n" +
+			"nothing left to act on is counted at the bottom rather than listed;\n" +
+			"--all lists every transfer, and so does naming a state with --state.\n\n" +
+			"A FAILED transfer is never hidden: it has finished, and it is the\n" +
+			"one thing this listing exists to put in front of somebody.",
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			// One tracker per transfer, kept across redraws: a rate needs two
 			// readings, and a listing that rebuilt them every poll would never
@@ -227,8 +233,13 @@ func newTransfersListCommand() *cobra.Command {
 				if watch {
 					rates.observe(resp.Transfers, time.Now())
 				}
+				// A state named explicitly is a state somebody asked to see, so
+				// the default hiding does not apply to it: `--state succeeded`
+				// filtering out everything succeeded would be an answer to a
+				// question nobody asked.
+				showAll := all || strings.TrimSpace(state) != ""
 				if err := render(w, opts.output, resp, func(w io.Writer) error {
-					return renderTransferList(w, resp, rates)
+					return renderTransferList(w, resp, rates, showAll)
 				}); err != nil {
 					return false, err
 				}
@@ -246,6 +257,8 @@ func newTransfersListCommand() *cobra.Command {
 	cmd.Flags().StringVar(&productName, "product", "", "only this product's transfers")
 	cmd.Flags().StringVar(&state, "state", "",
 		"only this state (running, succeeded, failed, ...)")
+	cmd.Flags().BoolVar(&all, "all", false,
+		"list transfers that have already finished, not only what is still moving")
 	cmd.Flags().BoolVarP(&watch, "watch", "w", false,
 		"re-read until every transfer has settled")
 	cmd.Flags().DurationVar(&interval, "interval", DefaultWatchInterval,
@@ -296,45 +309,93 @@ func (r rateTrackers) rateFor(id string) float64 {
 	return 0
 }
 
+// transferElastic are the columns of this listing that may be shortened to make
+// a row fit: the two holding a registry path, which is where the width in this
+// table actually is and which stays recognisable when its middle is removed.
+//
+// PRODUCT and TAG are deliberately NOT offered. They are a few characters
+// longer than their headers and identical down the page, so shortening them
+// reclaims almost nothing — and the first version of this did offer them, which
+// on a narrow terminal turned `cfx-5000-product` into `cfx-50…product` on every
+// row on the way to a row that wrapped anyway. A column should only be spent
+// where spending it buys the fit.
+var transferElastic = []int{3, 4} // FROM, TO
+
 func renderTransferList(
-	w io.Writer, resp *v1.ListTransfersResponse, rates rateTrackers,
+	w io.Writer, resp *v1.ListTransfersResponse, rates rateTrackers, showAll bool,
 ) error {
-	return func(w io.Writer) error {
-		if len(resp.Transfers) == 0 {
-			fmt.Fprintln(w, "No transfers yet.")
-			return nil
+	if len(resp.Transfers) == 0 {
+		fmt.Fprintln(w, "No transfers yet.")
+		return nil
+	}
+
+	rows := [][]string{{
+		"ID", "PRODUCT", "TAG", "FROM", "TO", "STATE", "DONE", "JOBS", "FAILED",
+		"COPIED", "SAVED", "SPEED", "RUNNING", "ELAPSED", "ETA",
+	}}
+
+	finished := 0
+	for i := range resp.Transfers {
+		t := &resp.Transfers[i]
+		if !showAll && isFinished(t) {
+			finished++
+			continue
 		}
+		rows = append(rows, []string{
+			shortID(t.ID),
+			t.Product,
+			transferTag(t),
+			endpointName(t.SourceName, t.Source),
+			endpointName(t.TargetName, t.Target),
+			strings.ToLower(string(t.State)),
+			fmt.Sprintf("%.0f%%", percentComplete(t.Progress)),
+			jobProgress(t.Progress),
+			failedJobs(t.Progress),
+			bytesProgress(t.Progress),
+			savedBytes(t.Progress),
+			speedOf(t, rates.rateFor(t.ID)),
+			fmt.Sprint(t.Progress.JobsInFlight),
+			elapsedOf(t),
+			etaOf(t, rates.rateFor(t.ID)),
+		})
+	}
+
+	if len(rows) > 1 {
+		fitCells(rows, transferElastic, terminalWidth(w))
 
 		tw := newTabWriter(w)
-		fmt.Fprintln(tw,
-			"ID\tPRODUCT\tTAG\tFROM\tTO\tSTATE\tDONE\tJOBS\tFAILED\tCOPIED\tSAVED\t"+
-				"SPEED\tRUNNING\tELAPSED\tETA")
-		for i := range resp.Transfers {
-			t := &resp.Transfers[i]
-			fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%s\t%.0f%%\t%s\t%s\t%s\t%s\t%s\t%d\t%s\t%s\n",
-				shortID(t.ID),
-				t.Product,
-				transferTag(t),
-				endpointName(t.SourceName, t.Source),
-				endpointName(t.TargetName, t.Target),
-				strings.ToLower(string(t.State)),
-				percentComplete(t.Progress),
-				jobProgress(t.Progress),
-				failedJobs(t.Progress),
-				bytesProgress(t.Progress),
-				savedBytes(t.Progress),
-				speedOf(t, rates.rateFor(t.ID)),
-				t.Progress.JobsInFlight,
-				elapsedOf(t),
-				etaOf(t, rates.rateFor(t.ID)),
-			)
+		for _, row := range rows {
+			fmt.Fprintln(tw, strings.Join(row, "\t"))
 		}
 		if err := tw.Flush(); err != nil {
 			return err
 		}
+	} else {
+		// Everything there is has finished. Saying so beats a bare column
+		// header, which reads as a command that failed to produce output.
+		fmt.Fprintln(w, "Nothing in flight.")
+	}
 
-		return nil
-	}(w)
+	if finished > 0 {
+		fmt.Fprintf(w, "%s not shown; --all lists every transfer.\n",
+			plural(finished, "finished transfer", "finished transfers"))
+	}
+	return nil
+}
+
+// isFinished reports a transfer with nothing left to act on.
+//
+// `failed` is deliberately NOT one of them. It has finished in the sense that
+// nothing more will happen to it on its own, and it is precisely what somebody
+// scanning this listing needs to see — hiding it would leave the default view
+// showing everything except the problem.
+func isFinished(t *v1.Transfer) bool {
+	switch t.State {
+	case v1.TransferSucceeded, v1.TransferCancelled:
+		return true
+	default:
+		return false
+	}
 }
 
 // endpointName is where a transfer reads from, or writes to, in one column.

@@ -37,7 +37,15 @@ import (
 type ContentRow struct {
 	MediaType    string
 	ArtifactType string
-	// Outcome is one of copied, present, failed, outstanding — see contentCase.
+	// ConfigMediaType is what the component's CONFIG blob says it is.
+	//
+	// Carried because the first two fields cannot tell a Helm chart from an
+	// image: a chart is an ordinary image manifest whose config declares it,
+	// and OCI 1.1 says the config's media type stands in for `artifactType`
+	// wherever that is absent — which is every artifact Helm has ever pushed.
+	// Without it an orb of 157 images and 97 charts reported 257 images.
+	ConfigMediaType string
+	// Outcome is one of copied, present, failed, outstanding.
 	Outcome string
 	Count   int
 }
@@ -66,7 +74,7 @@ const (
 // component appears exactly once in the result however many places it lands.
 func (p *Packages) ContentBreakdown(ctx context.Context, transferID string) ([]ContentRow, error) {
 	rows, err := p.db.QueryContext(ctx, p.dialect.Rewrite(`
-		SELECT media_type, artifact_type,
+		SELECT media_type, artifact_type, config_media_type,
 		       CASE WHEN failed      > 0 THEN 'failed'
 		            WHEN outstanding > 0 THEN 'outstanding'
 		            WHEN copied      > 0 THEN 'copied'
@@ -77,6 +85,15 @@ func (p *Packages) ContentBreakdown(ctx context.Context, transferID string) ([]C
 		        SELECT pa.id,
 		               pa.media_type                     AS media_type,
 		               COALESCE(pa.artifact_type, '')    AS artifact_type,
+		               -- What the component's config blob says it is. Already
+		               -- recorded: the walk stores a manifest's config
+		               -- alongside its layers, marked by kind.
+		               COALESCE((SELECT b.media_type
+		                           FROM artifact_blobs ab
+		                           JOIN blobs b ON b.digest = ab.digest
+		                          WHERE ab.artifact_id = pa.id
+		                            AND ab.kind = 'config'
+		                          LIMIT 1), '')          AS config_media_type,
 		               SUM(CASE WHEN j.state = 'failed' THEN 1 ELSE 0 END)      AS failed,
 		               SUM(CASE WHEN j.state IN ('pending','blocked','leased')
 		                        THEN 1 ELSE 0 END)                              AS outstanding,
@@ -90,7 +107,7 @@ func (p *Packages) ContentBreakdown(ctx context.Context, transferID string) ([]C
 		         WHERE t.id = ?
 		         GROUP BY pa.id, pa.media_type, COALESCE(pa.artifact_type, '')
 		       ) AS components
-		 GROUP BY media_type, artifact_type, outcome`), transferID)
+		 GROUP BY media_type, artifact_type, config_media_type, outcome`), transferID)
 	if err != nil {
 		return nil, fmt.Errorf("content breakdown of transfer %s: %w", transferID, err)
 	}
@@ -99,7 +116,7 @@ func (p *Packages) ContentBreakdown(ctx context.Context, transferID string) ([]C
 	var out []ContentRow
 	for rows.Next() {
 		var row ContentRow
-		if err := rows.Scan(&row.MediaType, &row.ArtifactType,
+		if err := rows.Scan(&row.MediaType, &row.ArtifactType, &row.ConfigMediaType,
 			&row.Outcome, &row.Count); err != nil {
 			return nil, fmt.Errorf("scan content breakdown: %w", err)
 		}

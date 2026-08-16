@@ -239,7 +239,9 @@ func newTransfersListCommand() *cobra.Command {
 				// question nobody asked.
 				showAll := all || strings.TrimSpace(state) != ""
 				if err := render(w, opts.output, resp, func(w io.Writer) error {
-					return renderTransferList(w, resp, rates, showAll)
+					return renderTransferList(w, resp, rates, listView{
+						all: showAll, watching: watch,
+					})
 				}); err != nil {
 					return false, err
 				}
@@ -321,8 +323,22 @@ func (r rateTrackers) rateFor(id string) float64 {
 // where spending it buys the fit.
 var transferElastic = []int{3, 4} // FROM, TO
 
+// listView is how this listing is being read, which decides what belongs on it
+// beyond the rows.
+type listView struct {
+	// all suppresses the hiding of finished transfers.
+	all bool
+	// watching says the page is being redrawn on a timer.
+	//
+	// A hint about a flag is worth printing once. Redrawn every few seconds
+	// under the reader's eyes it is a fixed line of advice they have already
+	// read and cannot act on without stopping the watch — so the footer is left
+	// off, and the rows keep the whole screen.
+	watching bool
+}
+
 func renderTransferList(
-	w io.Writer, resp *v1.ListTransfersResponse, rates rateTrackers, showAll bool,
+	w io.Writer, resp *v1.ListTransfersResponse, rates rateTrackers, view listView,
 ) error {
 	if len(resp.Transfers) == 0 {
 		fmt.Fprintln(w, "No transfers yet.")
@@ -337,7 +353,7 @@ func renderTransferList(
 	finished := 0
 	for i := range resp.Transfers {
 		t := &resp.Transfers[i]
-		if !showAll && isFinished(t) {
+		if !view.all && isFinished(t) {
 			finished++
 			continue
 		}
@@ -376,7 +392,7 @@ func renderTransferList(
 		fmt.Fprintln(w, "Nothing in flight.")
 	}
 
-	if finished > 0 {
+	if finished > 0 && !view.watching {
 		fmt.Fprintf(w, "%s not shown; --all lists every transfer.\n",
 			plural(finished, "finished transfer", "finished transfers"))
 	}
@@ -464,12 +480,20 @@ func transferTag(t *v1.Transfer) string {
 // different questions and diverge honestly: jobs reaches 100%, bytes stops
 // short by however much was deduplicated or mounted. Somebody watching a 30 GB
 // bundle wants the gigabytes, not only the ratio.
+// bytesProgress is what has crossed the wire, against the size of the RELEASE.
+//
+// Against the release rather than against the queued work, because the reader
+// compares this cell with SAVED beside it and those two must be able to add up.
+// Measured against the queued work they could not: content already at the
+// destination when the transfer was planned is counted in SAVED and was never
+// in the queue, so a row read `COPIED 490 KiB/29.8 GiB · SAVED 63.7 GiB` — a
+// transfer that had saved more than the whole of what it was moving.
 func bytesProgress(p v1.TransferProgress) string {
-	planned := int64Of(p.PlannedBytes)
-	if planned <= 0 {
+	total := packageBytes(p)
+	if total <= 0 {
 		return humanBytes(p.BytesTransferred)
 	}
-	return humanBytes(p.BytesTransferred) + "/" + humanBytes(p.PlannedBytes)
+	return humanBytes(p.BytesTransferred) + "/" + humanBytesOf(total)
 }
 
 // speedOf is how fast this is going: the live rate under a watch, the average
@@ -894,8 +918,8 @@ func describeTransfer(w io.Writer, t *v1.Transfer, rates *rateTracker, watching 
 	fmt.Fprintln(w, "Progress")
 	pw := newTabWriter(w)
 	p := t.Progress
-	fmt.Fprintf(pw, "  Jobs:\t%d done, %d outstanding, %d failed (of %d planned)\n",
-		p.JobsDone, p.JobsOutstanding, p.JobsFailed, p.JobsPlanned)
+	fmt.Fprintf(pw, "  Jobs:\t%d done, %d outstanding, %d failed (of %d planned, %.0f%%)\n",
+		p.JobsDone, p.JobsOutstanding, p.JobsFailed, p.JobsPlanned, percentComplete(p))
 	fmt.Fprintf(pw, "  In flight:\t%s%s\n", inFlight(p), quietFor(p))
 	if p.JobsWaiting > 0 {
 		fmt.Fprintf(pw, "  Waiting:\t%d in retry backoff\n", p.JobsWaiting)
@@ -915,8 +939,19 @@ func describeTransfer(w io.Writer, t *v1.Transfer, rates *rateTracker, watching 
 		fmt.Fprintf(pw, "  Re-sent:\t%s; target reported content it did not hold\n",
 			plural(p.JobsRepaired, "job", "jobs"))
 	}
-	fmt.Fprintf(pw, "  Transferred:\t%s of %s planned  (%.0f%%)\n",
-		humanBytes(p.BytesTransferred), humanBytes(p.PlannedBytes), percentComplete(p))
+	// Against the RELEASE, and with no percentage on the line.
+	//
+	// The percentage here was progress by JOBS, printed beside two byte
+	// figures, and it read as arithmetic on them: `0 B of 63.7 GiB planned
+	// (100%)` is a sentence that cannot be true however carefully it is
+	// explained. It belongs on the Jobs line, which is what it measures.
+	//
+	// The denominator was the queued work rather than the release, so this
+	// line and `Not transferred` below it were measured against different
+	// things and could not be added up — which is how a transfer came to
+	// report saving more than the whole of what it was moving.
+	fmt.Fprintf(pw, "  Transferred:\t%s of %s\n",
+		humanBytes(p.BytesTransferred), humanBytesOf(packageBytes(p)))
 	// The TOTAL sits on the heading, aligned with Transferred above it, because
 	// those two are the pair a reader compares: what crossed the network, and
 	// what did not have to. The breakdown underneath answers the follow-up.

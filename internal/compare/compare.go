@@ -742,7 +742,7 @@ func itemFrom(a oci.Artifact, spec SideSpec, rootRef string, isRoot bool) *Item 
 	ref := parseRefName(a.Descriptor.Annotations[registry.AnnotationRefName])
 
 	item := &Item{
-		Type:       classify(a.Descriptor),
+		Type:       classify(a.Descriptor, a.ConfigMediaType()),
 		Kind:       kindOf(a.Descriptor),
 		Digest:     string(a.Descriptor.Digest),
 		Size:       a.Descriptor.Size,
@@ -1156,8 +1156,12 @@ func kindOf(desc registry.Descriptor) string {
 // summary answers the same question about the same content: two classifiers
 // that disagree describe one registry as two, and leave the reader no way to
 // tell which of them is wrong.
-func classify(desc registry.Descriptor) string {
-	return oci.Classify(desc.MediaType, desc.ArtifactType)
+//
+// The CONFIG media type is passed because the descriptor alone cannot tell a
+// Helm chart from an image — both are image manifests, and only the config
+// says which. The walk has already fetched it.
+func classify(desc registry.Descriptor, configMediaType string) string {
+	return oci.Classify(desc.MediaType, desc.ArtifactType, configMediaType)
 }
 
 // refName is a parsed org.opencontainers.image.ref.name.

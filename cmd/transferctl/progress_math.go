@@ -76,17 +76,17 @@ func averageRate(t *v1.Transfer) (float64, bool) {
 	return float64(moved) / d.Seconds(), true
 }
 
-// estimate is how long the remaining bytes will take at the observed rate.
+// estimate is how long the remaining work will take at the observed rates.
 //
-// Returns false when there is no rate to extrapolate from, which is the whole
-// of the first few seconds of every transfer. Saying "unknown" then is the
-// point rather than a gap: the alternative is an ETA derived from a rate
-// measured over almost no time, which swings wildly and is believed anyway.
+// A zero byte rate is passed through rather than refused. It means nothing has
+// crossed the wire — the ordinary state of a transfer whose content is already
+// at the destination — and that transfer still has jobs completing at a
+// measurable rate, which is the thing actually governing when it finishes. The
+// first few seconds of every transfer, where neither rate exists yet, still
+// answer "unknown": an estimate from a rate measured over almost no time swings
+// wildly and is believed anyway.
 func estimate(t *v1.Transfer) (time.Duration, bool) {
-	rate, ok := averageRate(t)
-	if !ok {
-		return 0, false
-	}
+	rate, _ := averageRate(t)
 	return estimateAt(t, rate)
 }
 
@@ -107,6 +107,26 @@ func estimate(t *v1.Transfer) (time.Duration, bool) {
 // Without --watch there is nothing but the average, and the average is honest
 // about what it is.
 func estimateAt(t *v1.Transfer, rate float64) (time.Duration, bool) {
+	byBytes, hasBytes := byteEstimate(t, rate)
+	byJobs, hasJobs := jobEstimate(t)
+
+	// THE LATER OF THE TWO, because both are lower bounds and the transfer is
+	// not finished until both are satisfied. See jobEstimate for why bytes
+	// alone is not enough.
+	switch {
+	case hasBytes && hasJobs:
+		return max(byBytes, byJobs), true
+	case hasBytes:
+		return byBytes, true
+	case hasJobs:
+		return byJobs, true
+	default:
+		return 0, false
+	}
+}
+
+// byteEstimate is how long the bytes still to move will take at a given rate.
+func byteEstimate(t *v1.Transfer, rate float64) (time.Duration, bool) {
 	if rate <= 0 {
 		return 0, false
 	}
@@ -120,6 +140,44 @@ func estimateAt(t *v1.Transfer, rate float64) (time.Duration, bool) {
 	// as "-" — an estimate of "unknown" for the one case where it is most
 	// certain.
 	return time.Duration(float64(remaining) / rate * float64(time.Second)), true
+}
+
+// jobEstimate is how long the remaining JOBS will take at the rate jobs have
+// been completing.
+//
+// # Why bytes alone cannot answer this
+//
+// A transfer whose content is already at the destination moves almost nothing
+// and is not therefore almost finished: each of its remaining jobs still costs
+// a HEAD, a decision and a row, so its duration is bounded by ROUND TRIPS ×
+// jobs, and bytes do not appear in that product at all.
+//
+// Estimating such a transfer on bytes said `<1s` with 794 jobs left to run —
+// the same failure as the hours-long estimate it replaced, in the opposite
+// direction and from the same cause: one quantity being used to describe work
+// whose cost is governed by another.
+//
+// Cumulative rather than smoothed, and that is not a compromise here. Job
+// throughput is dominated by concurrency and latency, both of which hold steady
+// across a run, where byte throughput swings with the size of whatever is in
+// flight — which is exactly why the byte estimate takes a live rate and this
+// one does not need to.
+func jobEstimate(t *v1.Transfer) (time.Duration, bool) {
+	outstanding := t.Progress.JobsOutstanding
+	if outstanding <= 0 || t.Progress.JobsDone <= 0 {
+		return 0, false
+	}
+
+	d, ok := elapsed(t)
+	if !ok {
+		return 0, false
+	}
+
+	perSecond := float64(t.Progress.JobsDone) / d.Seconds()
+	if perSecond <= 0 {
+		return 0, false
+	}
+	return time.Duration(float64(outstanding) / perSecond * float64(time.Second)), true
 }
 
 // remainingBytes is what is actually left to move.
@@ -140,6 +198,26 @@ func remainingBytes(t *v1.Transfer) int64 {
 		return outstanding
 	}
 	return int64Of(t.Progress.PlannedBytes) - int64Of(t.Progress.BytesTransferred)
+}
+
+// packageBytes is the size of the RELEASE, which is not what was planned.
+//
+// # Two quantities that were being used as one
+//
+// `plannedBytes` is the work the plan QUEUED. Content the destination already
+// held when the transfer was planned is never queued at all, so it is not in
+// that number — it is in `dedupeSkippedBytes`, and the release is the sum of
+// the two.
+//
+// Using the planned figure as a denominator produced a row that could not be
+// true: `COPIED 490 KiB/29.8 GiB · SAVED 63.7 GiB`, a transfer that had saved
+// more than the whole of what it was apparently moving. Both numbers were
+// right and they were measured against different things.
+//
+// Against the release, the arithmetic closes: what crosses the wire plus what
+// did not have to equals the release, once the outstanding work is done.
+func packageBytes(p v1.TransferProgress) int64 {
+	return int64Of(p.PlannedBytes) + int64Of(p.DedupeSkippedBytes)
 }
 
 // movableBytes is how much of what is left is expected to CROSS THE WIRE.

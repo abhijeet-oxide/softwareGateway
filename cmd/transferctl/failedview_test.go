@@ -37,7 +37,7 @@ func TestTheListShowsFailedJobs(t *testing.T) {
 	}}
 
 	var buf bytes.Buffer
-	if err := renderTransferList(&buf, resp, rateTrackers{}, true); err != nil {
+	if err := renderTransferList(&buf, resp, rateTrackers{}, listView{all: true}); err != nil {
 		t.Fatal(err)
 	}
 	out := buf.String()

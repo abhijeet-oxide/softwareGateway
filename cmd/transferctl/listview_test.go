@@ -24,7 +24,7 @@ func TestFinishedTransfersAreHeldBackUntilAskedFor(t *testing.T) {
 	)
 
 	var buf bytes.Buffer
-	if err := renderTransferList(&buf, resp, rateTrackers{}, false); err != nil {
+	if err := renderTransferList(&buf, resp, rateTrackers{}, listView{}); err != nil {
 		t.Fatal(err)
 	}
 	out := buf.String()
@@ -46,7 +46,7 @@ func TestFinishedTransfersAreHeldBackUntilAskedFor(t *testing.T) {
 	}
 
 	var everything bytes.Buffer
-	if err := renderTransferList(&everything, resp, rateTrackers{}, true); err != nil {
+	if err := renderTransferList(&everything, resp, rateTrackers{}, listView{all: true}); err != nil {
 		t.Fatal(err)
 	}
 	for _, id := range []string{"218985ce", "9bc63dc2", "5a1c0000"} {
@@ -67,7 +67,7 @@ func TestAFailedTransferIsNeverHidden(t *testing.T) {
 	})
 
 	var buf bytes.Buffer
-	if err := renderTransferList(&buf, resp, rateTrackers{}, false); err != nil {
+	if err := renderTransferList(&buf, resp, rateTrackers{}, listView{}); err != nil {
 		t.Fatal(err)
 	}
 	if !strings.Contains(buf.String(), "9bc63dc2") {
@@ -83,7 +83,7 @@ func TestAListingWithNothingInFlightSaysSo(t *testing.T) {
 	})
 
 	var buf bytes.Buffer
-	if err := renderTransferList(&buf, resp, rateTrackers{}, false); err != nil {
+	if err := renderTransferList(&buf, resp, rateTrackers{}, listView{}); err != nil {
 		t.Fatal(err)
 	}
 	if !strings.Contains(buf.String(), "Nothing in flight.") {
@@ -191,7 +191,7 @@ func TestTheListingItselfLeavesARedirectedRowWhole(t *testing.T) {
 	})
 
 	var buf bytes.Buffer
-	if err := renderTransferList(&buf, resp, rateTrackers{}, false); err != nil {
+	if err := renderTransferList(&buf, resp, rateTrackers{}, listView{}); err != nil {
 		t.Fatal(err)
 	}
 	if !strings.Contains(buf.String(), resp.Transfers[0].Source) {

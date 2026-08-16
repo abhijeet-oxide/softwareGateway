@@ -755,6 +755,12 @@ func humanBytes(v v1.Int64String) string {
 	if err != nil {
 		return string(v)
 	}
+	return humanBytesOf(n)
+}
+
+// humanBytesOf renders a count this package has already computed, rather than
+// one that arrived over the wire as a string.
+func humanBytesOf(n int64) string {
 	const unit = 1024
 	if n < unit {
 		return strconv.FormatInt(n, 10) + " B"

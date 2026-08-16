@@ -170,3 +170,122 @@ func TestTheEstimateIsUnscaledUntilSomethingHasCompleted(t *testing.T) {
 		t.Errorf("movable = %d, want the outstanding bytes unscaled", got)
 	}
 }
+
+// The row that could not be true.
+//
+//	COPIED 490.1 KiB/29.8 GiB · SAVED 63.7 GiB
+//
+// A transfer that had saved more than the whole of what it was moving. Both
+// figures were right and they were measured against different things: COPIED
+// counted against the work the plan QUEUED, and content already at the
+// destination when the transfer was planned is never queued — it is in SAVED.
+func TestTheByteColumnsAreMeasuredAgainstTheSameThing(t *testing.T) {
+	// 29.8 GiB queued, 63.7 GiB never queued: a 93.5 GiB release.
+	p := v1.TransferProgress{
+		PlannedBytes:       "32000000000",
+		DedupeSkippedBytes: "68400000000",
+		SkippedBytes:       "0",
+		SavedBytes:         "68400000000",
+		BytesTransferred:   "501862",
+	}
+
+	total := packageBytes(p)
+	if saved := int64Of(p.SavedBytes); saved > total {
+		t.Errorf("saved %d of a %d-byte release: the columns still disagree", saved, total)
+	}
+
+	got := bytesProgress(p)
+	if strings.Contains(got, "29.8 GiB") {
+		t.Errorf("COPIED = %q, still measured against the queued work", got)
+	}
+	if !strings.Contains(got, "93.5 GiB") {
+		t.Errorf("COPIED = %q, want it against the 93.5 GiB release", got)
+	}
+}
+
+// A transfer that is nearly all skips is not nearly finished.
+//
+// Its remaining jobs each cost a round trip whatever they weigh, so bytes do
+// not govern its duration. Estimated on bytes alone it reported `<1s` with 794
+// jobs still to run — the same defect as the hours-long estimate before it, in
+// the opposite direction.
+func TestTheEstimateRespectsTheJobsStillToRun(t *testing.T) {
+	skipping := &v1.Transfer{
+		State:     v1.TransferRunning,
+		StartedAt: time.Now().Add(-83 * time.Second).Format(time.RFC3339Nano),
+		Progress: v1.TransferProgress{
+			PlannedBytes:     "32000000000",
+			OutstandingBytes: "300000000",
+			BytesTransferred: "501862",
+			JobsPlanned:      1364,
+			JobsDone:         570,
+			JobsOutstanding:  794,
+			JobsInFlight:     16,
+		},
+	}
+
+	got, ok := estimateAt(skipping, 11.6*1024)
+	if !ok {
+		t.Fatal("no estimate for a transfer that is plainly working")
+	}
+	// 794 jobs left at 570 in 83 seconds is a shade under two minutes. The
+	// bytes say less than a second, and the bytes are not what is left.
+	if got < time.Minute {
+		t.Errorf("estimate = %s, want about two minutes: %d jobs remain",
+			got, skipping.Progress.JobsOutstanding)
+	}
+
+	// The byte estimate still wins where the bytes are the work: the two are
+	// lower bounds and the transfer is not done until both are met.
+	heavy := &v1.Transfer{
+		State:     v1.TransferRunning,
+		StartedAt: time.Now().Add(-83 * time.Second).Format(time.RFC3339Nano),
+		Progress: v1.TransferProgress{
+			PlannedBytes:     "32000000000",
+			OutstandingBytes: "30000000000",
+			BytesTransferred: "2000000000",
+			JobsPlanned:      1364,
+			JobsDone:         570,
+			JobsOutstanding:  794,
+			JobsInFlight:     16,
+		},
+	}
+	got, ok = estimateAt(heavy, 11.6*1024)
+	if !ok {
+		t.Fatal("no estimate for a transfer moving real bytes")
+	}
+	if got < time.Hour {
+		t.Errorf("estimate = %s, want hours: 28 GiB remain at 11.6 KiB/s", got)
+	}
+}
+
+// A watch redraws the page every few seconds. A hint about a flag the reader
+// has already read, and cannot act on without stopping the watch, is not worth
+// a line of the screen each time.
+func TestAWatchDoesNotRepeatTheHintAboutAll(t *testing.T) {
+	resp := listWith(
+		transferFixture{id: "4ce3200f-1111-2222-3333-444444444444", state: "RUNNING"},
+		transferFixture{id: "9bc63dc2-1111-2222-3333-444444444444", state: "SUCCEEDED"},
+	)
+
+	var watching bytes.Buffer
+	if err := renderTransferList(&watching, resp, rateTrackers{},
+		listView{watching: true}); err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(watching.String(), "--all") {
+		t.Errorf("a watch repeated the hint about --all:\n%s", watching.String())
+	}
+	// The transfer is still hidden — only the advice about it goes.
+	if strings.Contains(watching.String(), "9bc63dc2") {
+		t.Errorf("a watch stopped hiding finished transfers:\n%s", watching.String())
+	}
+
+	var once bytes.Buffer
+	if err := renderTransferList(&once, resp, rateTrackers{}, listView{}); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(once.String(), "--all") {
+		t.Errorf("a single listing lost the hint:\n%s", once.String())
+	}
+}

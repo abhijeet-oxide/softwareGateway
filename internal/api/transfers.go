@@ -4,12 +4,14 @@ import (
 	"context"
 	"fmt"
 	"net/http"
+	"sort"
 	"strconv"
 	"strings"
 
 	"github.com/go-chi/chi/v5"
 
 	"github.com/abhijeet-oxide/softwareGateway/internal/api/middleware"
+	"github.com/abhijeet-oxide/softwareGateway/internal/oci"
 	"github.com/abhijeet-oxide/softwareGateway/internal/store"
 	"github.com/abhijeet-oxide/softwareGateway/internal/transfer"
 	v1 "github.com/abhijeet-oxide/softwareGateway/pkg/apis/softwaregateway/v1"
@@ -184,6 +186,10 @@ func (s *Server) handleGetTransfer(w http.ResponseWriter, r *http.Request) {
 		dto.Waves = toAPIWaves(waves)
 	}
 
+	if content, err := s.deps.Packages.ContentBreakdown(r.Context(), t.ID); err == nil {
+		dto.Content = toAPIContent(content)
+	}
+
 	if skips, err := s.deps.Packages.SkipBreakdown(r.Context(), t.ID); err == nil {
 		for _, k := range skips {
 			dto.Progress.Skips = append(dto.Progress.Skips, v1.SkipBreakdown{
@@ -340,6 +346,50 @@ func parseTransferState(s string) (string, error) {
 	return "", fmt.Errorf(
 		"state %q is not a transfer state: expected one of pending, planning, ready, "+
 			"running, paused, verifying, succeeded, failed, cancelling, cancelled", s)
+}
+
+// toAPIContent folds the store's rows into the kinds a person names things by.
+//
+// The FOLD is the point. The store returns media types verbatim, and several of
+// them are one kind: `application/vnd.oci.image.manifest.v1+json` and
+// `application/vnd.docker.distribution.manifest.v2+json` are both an image, and
+// a reader asked to add them up has been handed the tool's internals instead of
+// an answer. Naming them is protocol knowledge, so it comes from the one place
+// that holds it — the same function the comparison classifies with.
+func toAPIContent(rows []store.ContentRow) []v1.ContentGroup {
+	byKind := map[string]*v1.ContentGroup{}
+	for _, row := range rows {
+		kind := oci.Classify(row.MediaType, row.ArtifactType)
+		group, ok := byKind[kind]
+		if !ok {
+			group = &v1.ContentGroup{Kind: kind}
+			byKind[kind] = group
+		}
+
+		group.Total += row.Count
+		switch row.Outcome {
+		case store.ContentCopied:
+			group.Copied += row.Count
+		case store.ContentPresent:
+			group.Present += row.Count
+		case store.ContentFailed:
+			group.Failed += row.Count
+		default:
+			group.Outstanding += row.Count
+		}
+	}
+
+	out := make([]v1.ContentGroup, 0, len(byKind))
+	for _, group := range byKind {
+		out = append(out, *group)
+	}
+	// Structural first, and FIXED rather than by count: a reader comparing two
+	// transfers compares rows by position, which a table that reorders when a
+	// count changes makes impossible.
+	sort.Slice(out, func(i, j int) bool {
+		return oci.RankOf(out[i].Kind) < oci.RankOf(out[j].Kind)
+	})
+	return out
 }
 
 // toAPIWaves renders the per-wave breakdown, marking the waves in progress.

@@ -111,7 +111,7 @@ func estimateAt(t *v1.Transfer, rate float64) (time.Duration, bool) {
 		return 0, false
 	}
 
-	remaining := remainingBytes(t)
+	remaining := movableBytes(t)
 	if remaining <= 0 {
 		return 0, false
 	}
@@ -140,6 +140,60 @@ func remainingBytes(t *v1.Transfer) int64 {
 		return outstanding
 	}
 	return int64Of(t.Progress.PlannedBytes) - int64Of(t.Progress.BytesTransferred)
+}
+
+// movableBytes is how much of what is left is expected to CROSS THE WIRE.
+//
+// # The estimate this exists to stop
+//
+// Outstanding bytes is the size of the work remaining, and on a re-transfer
+// almost none of that work is a transfer. The second run of a release finds its
+// content already at the destination and skips it — thousands of jobs, sixty
+// gigabytes nominally outstanding, and perhaps eight megabytes that genuinely
+// have to move. Dividing sixty gigabytes by a rate measured while moving eight
+// megabytes produced the reported symptom: hours of ETA on a transfer that
+// finished in under a minute, and the arithmetic was correct in both halves.
+//
+// So the remaining work is scaled by the proportion of the work ALREADY DONE
+// that turned out to need moving. A transfer that has skipped 95% of what it
+// has looked at is estimated on the assumption it will go on skipping about 95%
+// — which is what the plan and the destination both imply, and what the first
+// version assumed to be 0%.
+//
+// # Why this is measured rather than asked for
+//
+// Nothing knows in advance which blobs the destination holds; that is settled
+// per job, by a HEAD or a mount, as the transfer runs. The observed ratio is
+// the only evidence there is, it improves as the run proceeds, and before there
+// is any the honest answer is the unscaled figure rather than a guess in either
+// direction.
+func movableBytes(t *v1.Transfer) int64 {
+	outstanding := remainingBytes(t)
+	if outstanding <= 0 {
+		return 0
+	}
+
+	planned := int64Of(t.Progress.PlannedBytes)
+	moved := int64Of(t.Progress.BytesTransferred)
+
+	// What the completed jobs were PLANNED to weigh, against what they actually
+	// sent. Both sides have to come from the same population or the ratio is
+	// between two unrelated quantities.
+	settled := planned - outstanding
+	if settled <= 0 || moved <= 0 {
+		// Nothing has finished yet, or nothing has moved. No ratio to apply,
+		// and inventing one in either direction would be worse than the
+		// unscaled number a reader can at least reason about.
+		return outstanding
+	}
+
+	moving := float64(moved) / float64(settled)
+	if moving >= 1 {
+		// Everything looked at so far had to move. Common, and the case where
+		// the old arithmetic was already right.
+		return outstanding
+	}
+	return int64(float64(outstanding) * moving)
 }
 
 // humanRate renders bytes per second.

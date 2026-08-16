@@ -888,6 +888,32 @@ type CheckConnectivityResponse struct {
 	Products []ProductCheck `json:"products"`
 }
 
+// ContentGroup is one kind of component and how the transfer's components of
+// that kind went.
+//
+// # Counted per COMPONENT, and why there are no bytes here
+//
+// A component published under two names is one component, not two, so these
+// count artifacts rather than jobs. Bytes are deliberately absent: a base layer
+// shared by four images belongs to all of them, and any per-kind byte total
+// either counts it four times or picks an owner arbitrarily. The transfer-level
+// byte totals are exact and are the ones to trust; these say what the transfer
+// consisted of.
+type ContentGroup struct {
+	// Kind is what these are, in the words somebody uses: index, image, chart,
+	// file, signature, artifact.
+	Kind  string `json:"kind"`
+	Total int    `json:"total"`
+	// Copied is what this transfer actually pushed. Present is what the
+	// destination already held — the pair that makes a delta transfer legible.
+	Copied  int `json:"copied"`
+	Present int `json:"present"`
+	// Failed is components with a job that has given up; Outstanding is
+	// components with work still to do.
+	Failed      int `json:"failed,omitempty"`
+	Outstanding int `json:"outstanding,omitempty"`
+}
+
 // TransferWave is one wave's population, by state.
 //
 // Present on a single transfer, absent from a listing: forty transfers times
@@ -1278,7 +1304,12 @@ type Transfer struct {
 	FailureReason string `json:"failureReason,omitempty"`
 
 	// Waves is the per-wave breakdown, on a single transfer only.
-	Waves     []TransferWave `json:"waves,omitempty"`
+	Waves []TransferWave `json:"waves,omitempty"`
+	// Content is what the transfer is made OF — images, charts, files — and how
+	// each of them went. On a single transfer only, for the same reason as
+	// Waves: it is a second table per row, and the question is always asked
+	// about one transfer.
+	Content   []ContentGroup `json:"content,omitempty"`
 	CreatedAt string         `json:"createdAt,omitempty"`
 	// StartedAt is when the first job was leased, not when the transfer was
 	// asked for. Elapsed time and throughput measured from the request would

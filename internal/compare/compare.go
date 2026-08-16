@@ -1152,27 +1152,12 @@ func kindOf(desc registry.Descriptor) string {
 
 // classify says what an artifact IS, in the words somebody uses about it.
 //
-// Media type first, because that is what the specification defines and what the
-// registry actually serves; `artifactType` second, for the OCI 1.1 artifacts
-// that use it. Never guessed from a name: a repository called `charts/` holding
-// an image is a mislabelled repository, not a chart.
+// Delegated to oci.Classify rather than answered here, because a transfer
+// summary answers the same question about the same content: two classifiers
+// that disagree describe one registry as two, and leave the reader no way to
+// tell which of them is wrong.
 func classify(desc registry.Descriptor) string {
-	switch {
-	case registry.IsIndex(desc.MediaType):
-		return "index"
-	case strings.Contains(desc.ArtifactType, "helm"),
-		strings.Contains(desc.MediaType, "helm"):
-		return "chart"
-	case strings.Contains(desc.ArtifactType, "signature"),
-		strings.Contains(desc.ArtifactType, "sig"):
-		return "signature"
-	case strings.Contains(desc.ArtifactType, "generic"):
-		return "file"
-	case desc.MediaType == "":
-		return "artifact"
-	default:
-		return "image"
-	}
+	return oci.Classify(desc.MediaType, desc.ArtifactType)
 }
 
 // refName is a parsed org.opencontainers.image.ref.name.

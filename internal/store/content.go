@@ -1,0 +1,109 @@
+package store
+
+import (
+	"context"
+	"fmt"
+)
+
+// What a transfer is made OF, as opposed to how much it weighs.
+//
+// # The question this answers
+//
+// A transfer reports `2486/2489 jobs` and `63.7 GiB`, and neither says what
+// moved. An orb is container images, Helm charts and configuration files, and
+// those are what an operator releases, verifies and is asked about — "did the
+// charts land?" is a question the byte counts cannot answer at all, and the job
+// counts answer only for somebody willing to read three thousand rows.
+//
+// # Per COMPONENT, not per job
+//
+// A component is one thing a person can name, and the jobs under it are an
+// implementation detail of moving it: a component published under two names has
+// two manifest jobs, and counting jobs would report it twice. So the rollup is
+// per artifact, and the artifact's several jobs are folded into ONE outcome —
+// the worst of them, because a component whose second site failed has not
+// arrived, whatever its first site did.
+//
+// # Rows, not names
+//
+// The media type and artifact type are returned VERBATIM and grouped upstream.
+// The store holds rows; deciding that `application/vnd.cncf.helm…` is what a
+// person calls a chart is protocol knowledge, and it already lives in exactly
+// one place (internal/oci). Duplicating it here to save a fold would be the
+// second copy that eventually disagrees.
+
+// ContentRow is one media type in one outcome, and how many components of the
+// transfer are in it.
+type ContentRow struct {
+	MediaType    string
+	ArtifactType string
+	// Outcome is one of copied, present, failed, outstanding — see contentCase.
+	Outcome string
+	Count   int
+}
+
+// Outcomes a component can be in. Ordered by precedence: the first that applies
+// to any of a component's jobs is the component's outcome.
+const (
+	// ContentFailed is a component with a job that has given up.
+	ContentFailed = "failed"
+	// ContentOutstanding is a component with work still to do — including one
+	// whose transfer has not finished planning, which has no jobs at all.
+	ContentOutstanding = "outstanding"
+	// ContentCopied is a component this transfer actually pushed.
+	ContentCopied = "copied"
+	// ContentPresent is a component the destination already held, so nothing
+	// was pushed for it. This is the number that makes a delta transfer legible:
+	// 253 present and 6 copied says what `2486 jobs` cannot.
+	ContentPresent = "present"
+)
+
+// ContentBreakdown counts a transfer's components by what they are and how they
+// went.
+//
+// One query. The inner select folds a component's jobs into counts, and the
+// outer one turns those counts into a single outcome per component — so a
+// component appears exactly once in the result however many places it lands.
+func (p *Packages) ContentBreakdown(ctx context.Context, transferID string) ([]ContentRow, error) {
+	rows, err := p.db.QueryContext(ctx, p.dialect.Rewrite(`
+		SELECT media_type, artifact_type,
+		       CASE WHEN failed      > 0 THEN 'failed'
+		            WHEN outstanding > 0 THEN 'outstanding'
+		            WHEN copied      > 0 THEN 'copied'
+		            WHEN present     > 0 THEN 'present'
+		            ELSE 'outstanding' END AS outcome,
+		       count(*)
+		  FROM (
+		        SELECT pa.id,
+		               pa.media_type                     AS media_type,
+		               COALESCE(pa.artifact_type, '')    AS artifact_type,
+		               SUM(CASE WHEN j.state = 'failed' THEN 1 ELSE 0 END)      AS failed,
+		               SUM(CASE WHEN j.state IN ('pending','blocked','leased')
+		                        THEN 1 ELSE 0 END)                              AS outstanding,
+		               SUM(CASE WHEN j.state = 'succeeded' THEN 1 ELSE 0 END)   AS copied,
+		               SUM(CASE WHEN j.state = 'skipped' THEN 1 ELSE 0 END)     AS present
+		          FROM transfers t
+		          JOIN package_artifacts pa ON pa.package_id = t.package_id
+		          LEFT JOIN jobs j
+		                 ON j.artifact_id = pa.id
+		                AND j.transfer_id = t.id
+		         WHERE t.id = ?
+		         GROUP BY pa.id, pa.media_type, COALESCE(pa.artifact_type, '')
+		       ) AS components
+		 GROUP BY media_type, artifact_type, outcome`), transferID)
+	if err != nil {
+		return nil, fmt.Errorf("content breakdown of transfer %s: %w", transferID, err)
+	}
+	defer func() { _ = rows.Close() }()
+
+	var out []ContentRow
+	for rows.Next() {
+		var row ContentRow
+		if err := rows.Scan(&row.MediaType, &row.ArtifactType,
+			&row.Outcome, &row.Count); err != nil {
+			return nil, fmt.Errorf("scan content breakdown: %w", err)
+		}
+		out = append(out, row)
+	}
+	return out, rows.Err()
+}

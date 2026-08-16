@@ -509,11 +509,27 @@ func isSettled(state v1.TransferState) bool {
 // thirty-one hours, and printing 581.9 KiB/s next to a RUNNING column reading 0
 // is the table contradicting itself on one line. The average is still a fact,
 // and `transfers describe` is where it belongs, labelled as what it is.
+// speedOf is how fast this went: the live rate while it is running, the
+// average over the whole run once it has finished.
+//
+// # Why a finished transfer has a speed at all
+//
+// It used to print a dash, on the rule that nothing in flight means no rate to
+// report. That rule is right for a transfer that is STUCK — a rate measured
+// before it stalled describes a period that has ended, and printing it invites
+// the reader to extrapolate from it — and wrong for one that has finished, where
+// the average over the whole run is not a stale sample but the answer: this is
+// what the link did, and it is the number somebody compares against the next
+// run and against the other target.
+//
+// A transfer that moved no bytes still has no rate, and says so. Dividing zero
+// by the elapsed time would print `0 B/s` for a delta transfer that did exactly
+// what it should have, which reads as a link that was not working.
 func speedOf(t *v1.Transfer, live float64) string {
-	if t.Progress.JobsInFlight == 0 {
+	if !isSettled(t.State) && t.Progress.JobsInFlight == 0 {
 		return "-"
 	}
-	if live > 0 {
+	if live > 0 && !isSettled(t.State) {
 		return humanRate(live)
 	}
 	rate, ok := averageRate(t)
@@ -614,6 +630,79 @@ func newTransfersDescribeCommand() *cobra.Command {
 	cmd.Flags().DurationVar(&interval, "interval", DefaultWatchInterval,
 		"how often --watch re-reads")
 	return cmd
+}
+
+// renderContent says what the transfer is made OF, and how each kind went.
+//
+// # The question the byte counts cannot answer
+//
+// `63.7 GiB` and `2486/2489 jobs` are both true and neither says whether the
+// charts arrived. An orb is images, charts and configuration files; those are
+// what somebody releases and what they are asked about afterwards, and until
+// this table existed the only way to count them was to read three thousand job
+// rows.
+//
+// COPIED and PRESENT are the pair that makes a re-transfer legible: `6 copied,
+// 253 present` is the whole story of a delta, and it is invisible in a jobs
+// count where both are simply `done`.
+//
+// Components, not jobs: a component published under two names is one thing a
+// person can name, and counting its jobs would report it twice.
+func renderContent(w io.Writer, content []v1.ContentGroup) error {
+	if len(content) == 0 {
+		return nil
+	}
+
+	fmt.Fprintln(w)
+	fmt.Fprintln(w, "Content")
+	tw := newTabWriter(w)
+	fmt.Fprintln(tw, "  KIND\tTOTAL\tCOPIED\tPRESENT\tFAILED\tOUTSTANDING")
+
+	var total v1.ContentGroup
+	for _, g := range content {
+		fmt.Fprintf(tw, "  %s\t%d\t%s\t%s\t%s\t%s\n",
+			kindLabel(g.Kind, g.Total), g.Total,
+			count(g.Copied), count(g.Present), count(g.Failed), count(g.Outstanding))
+
+		total.Total += g.Total
+		total.Copied += g.Copied
+		total.Present += g.Present
+		total.Failed += g.Failed
+		total.Outstanding += g.Outstanding
+	}
+
+	// A total only where there is more than one row to add up. On a single-kind
+	// transfer it would restate the line above it.
+	if len(content) > 1 {
+		fmt.Fprintf(tw, "  %s\t%d\t%s\t%s\t%s\t%s\n",
+			"all", total.Total,
+			count(total.Copied), count(total.Present),
+			count(total.Failed), count(total.Outstanding))
+	}
+	return tw.Flush()
+}
+
+// kindPlural holds the kinds whose plural is not the singular plus `s`.
+//
+// One entry, and it earns its map: appending `s` to every kind rendered
+// `indexs`, which is the sort of detail a reader notices before any of the
+// numbers and which makes them trust none of them.
+var kindPlural = map[string]string{"index": "indexes"}
+
+// kindLabel names a kind for a column of them.
+//
+// Plural where there is more than one, because `1 charts` is the same small
+// wrongness in the other direction. The plural is formed here rather than
+// carried in the API: these are a fixed set of English words, and a plural
+// field on the wire would be a second thing to keep in step with the first.
+func kindLabel(kind string, n int) string {
+	if n == 1 {
+		return kind
+	}
+	if p, ok := kindPlural[kind]; ok {
+		return p
+	}
+	return kind + "s"
 }
 
 // renderWaves is the breakdown that makes an idle-looking transfer legible.
@@ -853,6 +942,10 @@ func describeTransfer(w io.Writer, t *v1.Transfer, rates *rateTracker, watching 
 		}
 	}
 	if err := pw.Flush(); err != nil {
+		return err
+	}
+
+	if err := renderContent(w, t.Content); err != nil {
 		return err
 	}
 

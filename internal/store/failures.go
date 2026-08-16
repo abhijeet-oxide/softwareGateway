@@ -58,6 +58,14 @@ type FailureGroup struct {
 	ExampleJobID      int64
 	ExampleDigest     string
 	ExampleRepository string
+	// ExampleTags are what that example job was to NAME its manifest, which the
+	// shared sentence has replaced with `<tag>`.
+	//
+	// Normalising the tag is what lets one refusal across a release's several
+	// tags be one cause rather than three — and it took with it the one string a
+	// reader needs to reproduce the failure by hand. The example carries it
+	// back: the group says what went wrong, the example says exactly where.
+	ExampleTags []string
 	// ExampleError is that example's message VERBATIM, digest and path intact.
 	// The normalised message says what went wrong; this says where.
 	ExampleError string
@@ -114,6 +122,7 @@ func (p *Packages) FailureGroups(ctx context.Context, transferID string) ([]Fail
 				ExampleJobID:      id,
 				ExampleDigest:     digest,
 				ExampleRepository: repoPath,
+				ExampleTags:       decodeTags(tags),
 				ExampleError:      message,
 				Retryable:         classIsRetryable(class),
 			}

@@ -104,10 +104,20 @@ func renderFailure(w io.Writer, g v1.FailureGroup) {
 	fmt.Fprintf(w, "  %s\n", strings.Join(head, " · "))
 	fmt.Fprintf(w, "    %s\n", g.Message)
 
+	// The example, as a coordinate somebody can go and check by hand.
+	//
+	// The TAG is on it because the shared sentence no longer carries one — it
+	// says `<tag>` so that one refusal across a release's several tags is one
+	// cause rather than three. That grouping took with it the exact string a
+	// reader needs to reproduce the failure against the registry, and this puts
+	// it back on the one line that is about a single job.
 	if g.ExampleDigest != "" {
 		where := shortDigest(g.ExampleDigest)
 		if g.ExampleRepository != "" {
 			where += " → " + g.ExampleRepository
+		}
+		if len(g.ExampleTags) > 0 {
+			where += ":" + strings.Join(g.ExampleTags, ", :")
 		}
 		fmt.Fprintf(w, "    Example  %s\n", where)
 	}

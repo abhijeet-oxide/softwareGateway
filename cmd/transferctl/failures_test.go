@@ -101,3 +101,32 @@ func renderTo(t *testing.T, resp *v1.ListFailuresResponse) string {
 	}
 	return buf.String()
 }
+
+// The example names the tag, because the shared sentence no longer can.
+//
+// Grouping normalises the tag away — that is what makes one refusal across a
+// release's three tags one cause rather than three — and with it went the exact
+// string somebody needs to reproduce the failure against the registry by hand.
+// The example line is about a single job and carries it back.
+func TestTheExampleNamesTheTagThatWasRefused(t *testing.T) {
+	out := renderTo(t, &v1.ListFailuresResponse{
+		TransferID: "4ce320df-1111-2222-3333-444444444444",
+		Failures: []v1.FailureGroup{{
+			Class: "auth", Failed: 1, Kinds: []string{"manifest"}, Waves: []int{2},
+			Message: "tag <digest> as <tag> artifact.it.att.com/<repository>: HTTP 401: " +
+				"unauthorized: authentication required (the tag does not exist at the " +
+				"destination, so this write would have created it)",
+			ExampleDigest:     "sha256:04e1aeb8b0dbf1c2a3b4c5d6e7f8091a2b3c4d5e6f708192a3b4c5d6e7f80912",
+			ExampleRepository: "apm0014228-oci-stage/orbs/cfx-5000-k8s-215952-ncp",
+			ExampleTags:       []string{"orb_25.7_mp2604_2131"},
+		}},
+	})
+
+	if !strings.Contains(out, "orb_25.7_mp2604_2131") {
+		t.Errorf("the example does not name the refused tag:\n%s", out)
+	}
+	// A coordinate, not two facts side by side: repository, then tag.
+	if !strings.Contains(out, "apm0014228-oci-stage/orbs/cfx-5000-k8s-215952-ncp:orb_25.7_mp2604_2131") {
+		t.Errorf("the example is not a reference somebody can paste:\n%s", out)
+	}
+}

@@ -129,6 +129,16 @@ func (s *Server) handleListPackages(w http.ResponseWriter, r *http.Request) {
 // handleGetPackage serves GET /api/v1/products/{product}/packages/{package}.
 //
 // The package reference is a tag or a digest.
+// targetName is the CONFIGURED name of a transfer's destination, falling back
+// to the resolved host and path where a transfer predates the name being
+// recorded.
+func targetName(t store.TransferSummary) string {
+	if t.TargetName != "" {
+		return t.TargetName
+	}
+	return t.Target
+}
+
 func (s *Server) handleGetPackage(w http.ResponseWriter, r *http.Request) {
 	productName := chi.URLParam(r, "product")
 	ref := chi.URLParam(r, "package")
@@ -152,6 +162,28 @@ func (s *Server) handleGetPackage(w http.ResponseWriter, r *http.Request) {
 	// listing: a page of fifty packages would be fifty extra queries to render
 	// a column that shows a count. `signatureStatus` is on the row itself and
 	// is what a listing actually needs.
+	// What has been ATTEMPTED with this package, per destination. Same rule as
+	// Related: single-package read only.
+	//
+	// This is where a package's transfer history is answered from, rather than
+	// from a state on the package. A failure here carries the reason verbatim —
+	// including the digest of whatever a source refused — which is what makes an
+	// entitlement refusal debuggable weeks after the transfer that hit it.
+	if transfers, err := s.deps.Packages.ListTransfers(r.Context(), store.ListTransfersFilter{
+		PackageID: row.ID, Limit: 20,
+	}); err == nil {
+		for _, t := range transfers {
+			pkg.Transfers = append(pkg.Transfers, v1.PackageTransfer{
+				ID:            t.ID,
+				Target:        targetName(t),
+				State:         v1.TransferState(strings.ToUpper(t.State)),
+				FailureReason: t.FailureReason,
+				CreatedAt:     t.CreatedAt,
+				CompletedAt:   t.CompletedAt,
+			})
+		}
+	}
+
 	rels, err := s.deps.Packages.ListRelations(r.Context(), row.ID)
 	if err != nil {
 		s.internal(w, r, "list related artifacts", err)

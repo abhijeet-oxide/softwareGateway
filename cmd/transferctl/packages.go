@@ -119,6 +119,7 @@ func newPackagesListCommand() *cobra.Command {
 		pageSize    int
 		pageToken   string
 		all         bool
+		wide        bool
 	)
 
 	cmd := &cobra.Command{
@@ -164,7 +165,7 @@ func newPackagesListCommand() *cobra.Command {
 			}
 
 			return render(stdout(), opts.output, resp, func(w io.Writer) error {
-				return renderPackageList(w, resp)
+				return renderPackageList(w, resp, wide)
 			})
 		},
 	}
@@ -179,12 +180,27 @@ func newPackagesListCommand() *cobra.Command {
 	cmd.Flags().IntVar(&pageSize, "page-size", 0, "results per page")
 	cmd.Flags().StringVar(&pageToken, "page-token", "", "continue from a previous nextPageToken")
 	cmd.Flags().BoolVar(&all, "all", false, "fetch every page")
+	cmd.Flags().BoolVar(&wide, "wide", false,
+		"add the bookkeeping columns: STATE, which is about the CATALOGUE — "+
+			"whether the vendor has re-pushed this tag — and not about transfers")
 
 	takes(cmd, "list", productArg())
 	return cmd
 }
 
-func renderPackageList(w io.Writer, resp *v1.ListPackagesResponse) error {
+// renderPackageList prints the catalogue.
+//
+// STATE is behind --wide because it answers a question almost nobody is asking
+// here. It has exactly two values in practice — `discovered`, and `superseded`
+// once the vendor re-pushes a tag — so it is a column of one repeated word, and
+// a reader who sees a column called STATE on a page about packages reasonably
+// reads it as "has this been transferred?", which it has never meant. Where a
+// package has GOT to is a question about a package and a target, and `describe`
+// answers it per target.
+//
+// It is still on every row of `-o json`: the machine-readable form has no width
+// to spend and no reader to mislead.
+func renderPackageList(w io.Writer, resp *v1.ListPackagesResponse, wide bool) error {
 	if len(resp.Packages) == 0 {
 		fmt.Fprintln(w, "No packages discovered yet.")
 		fmt.Fprintln(w)
@@ -204,19 +220,25 @@ func renderPackageList(w io.Writer, resp *v1.ListPackagesResponse) error {
 	// thinks about releases in. DISCOVERED stays because the two genuinely
 	// differ — a release published in March that we only saw in July is worth
 	// being able to notice.
-	if multiRepo {
-		fmt.Fprintln(tw, "REPOSITORY\tTAG\tDIGEST\tSTATE\tSIGNED\tSIZE\tARTIFACTS\tBLOBS\tPUBLISHED\tDISCOVERED")
-	} else {
-		fmt.Fprintln(tw, "TAG\tDIGEST\tSTATE\tSIGNED\tSIZE\tARTIFACTS\tBLOBS\tPUBLISHED\tDISCOVERED")
+	header := "TAG\tDIGEST\tSIGNED\tSIZE\tARTIFACTS\tBLOBS\tPUBLISHED\tDISCOVERED"
+	if wide {
+		header = "TAG\tDIGEST\tSTATE\tSIGNED\tSIZE\tARTIFACTS\tBLOBS\tPUBLISHED\tDISCOVERED"
 	}
+	if multiRepo {
+		header = "REPOSITORY\t" + header
+	}
+	fmt.Fprintln(tw, header)
 	for _, p := range resp.Packages {
 		if multiRepo {
 			fmt.Fprintf(tw, "%s\t", dash(displayRepository(p)))
 		}
-		fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%d\t%s\t%s\t%s\n",
-			displayTag(p),
-			shortDigest(p.ManifestDigest),
-			strings.ToLower(string(p.State)),
+		if wide {
+			fmt.Fprintf(tw, "%s\t%s\t%s\t", displayTag(p),
+				shortDigest(p.ManifestDigest), strings.ToLower(string(p.State)))
+		} else {
+			fmt.Fprintf(tw, "%s\t%s\t", displayTag(p), shortDigest(p.ManifestDigest))
+		}
+		fmt.Fprintf(tw, "%s\t%s\t%d\t%s\t%s\t%s\n",
 			signedMark(p.SignatureStatus),
 			humanBytesOpt(p.TotalBytes),
 			p.ArtifactCount,
@@ -360,6 +382,7 @@ func renderPackageDetail(w io.Writer, product, ref string, p *v1.Package, artifa
 
 	renderSignature(w, p)
 	renderRelated(w, p)
+	renderPackageTransfers(w, p)
 
 	if len(artifacts) > 0 {
 		fmt.Fprintln(w)
@@ -369,6 +392,52 @@ func renderPackageDetail(w io.Writer, product, ref string, p *v1.Package, artifa
 	}
 
 	return nil
+}
+
+// renderPackageTransfers says what has been attempted with this package, and
+// where.
+//
+// # Why this is a list and not a state
+//
+// "Has it been transferred?" has as many answers as there are targets. A column
+// on the package could hold one of them, would be wrong the moment a second
+// target was configured, and could not say WHICH target it meant. The per-pair
+// truth already exists — one transfer row per package and destination — so this
+// reads it rather than reducing it to something smaller than the question.
+//
+// # Why the failure reason is printed in full
+//
+// It is what makes a refusal actionable weeks later. A vendor declining one
+// component of a release says so in its own words, naming the customer and the
+// sales item, and the DIGEST in that message is what turns "an entitlement is
+// missing" into "this component is the one". Neither survives being reduced to
+// a flag, and the transfer that met it is where both are recorded.
+func renderPackageTransfers(w io.Writer, p *v1.Package) {
+	if len(p.Transfers) == 0 {
+		return
+	}
+
+	fmt.Fprintln(w)
+	fmt.Fprintln(w, "Transfers")
+	tw := newTabWriter(w)
+	fmt.Fprintln(tw, "  TARGET\tSTATE\tWHEN\tID")
+	for _, t := range p.Transfers {
+		fmt.Fprintf(tw, "  %s\t%s\t%s\t%s\n",
+			dash(t.Target), strings.ToLower(string(t.State)),
+			shortTime(firstNonEmpty(t.CompletedAt, t.CreatedAt)), shortID(t.ID))
+	}
+	if err := tw.Flush(); err != nil {
+		return
+	}
+
+	// Under the table rather than in it: a reason is a sentence, and a column
+	// wide enough for one would leave the other three unreadable.
+	for _, t := range p.Transfers {
+		if t.FailureReason == "" {
+			continue
+		}
+		fmt.Fprintf(w, "  %s failed: %s\n", shortID(t.ID), t.FailureReason)
+	}
 }
 
 // renderCacheNote explains a tree whose manifest bodies have been reclaimed.

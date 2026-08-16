@@ -369,6 +369,18 @@ type Package struct {
 	// wrapper that bundles them.
 	Related []RelatedArtifact `json:"related,omitempty"`
 
+	// Transfers is what has been attempted with this package, per destination.
+	//
+	// On the SINGLE-package read only, for the reason Related is: a page of
+	// fifty packages would be fifty extra queries to render a column.
+	//
+	// It is where a package's transfer HISTORY lives, and deliberately not a
+	// state on the package itself. "Transferred" is a fact about a package and
+	// ONE target — with four targets there are four answers, and a single
+	// column could hold at most one of them and would be wrong the moment a
+	// fifth target was configured.
+	Transfers []PackageTransfer `json:"transfers,omitempty"`
+
 	// TransferRootTag names what a transfer actually walks, when that is not
 	// this package's own tag.
 	//
@@ -912,6 +924,24 @@ type ContentGroup struct {
 	// components with work still to do.
 	Failed      int `json:"failed,omitempty"`
 	Outstanding int `json:"outstanding,omitempty"`
+}
+
+// PackageTransfer is one attempt to move a package to one destination.
+type PackageTransfer struct {
+	ID     string        `json:"id"`
+	Target string        `json:"target"`
+	State  TransferState `json:"state"`
+	// FailureReason is why it failed, verbatim, INCLUDING the digest of
+	// whatever the source would not serve.
+	//
+	// The reason a vendor refuses one component of a release is the sentence
+	// that names the customer and the sales item, and the digest is what turns
+	// "an entitlement is missing" into "this component is the one". Both are
+	// wanted weeks later, which is why this is read from the transfer that
+	// recorded it rather than summarised into a flag.
+	FailureReason string `json:"failureReason,omitempty"`
+	CreatedAt     string `json:"createdAt,omitempty"`
+	CompletedAt   string `json:"completedAt,omitempty"`
 }
 
 // TransferWave is one wave's population, by state.

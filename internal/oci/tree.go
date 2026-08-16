@@ -46,6 +46,20 @@ type BlobRef struct {
 	Ordinal int
 }
 
+// ConfigMediaType is what this artifact's config blob claims the artifact is.
+//
+// Empty for an index, which has no config, and for an artifact nothing has
+// fetched. It is the field that tells a Helm chart from an image: both are
+// image manifests, and only the config differs. See Classify.
+func (a Artifact) ConfigMediaType() string {
+	for _, b := range a.Blobs {
+		if b.Kind == "config" {
+			return b.Descriptor.MediaType
+		}
+	}
+	return ""
+}
+
 // Tree is a flattened artifact Tree, parents before children.
 type Tree struct {
 	Artifacts []Artifact

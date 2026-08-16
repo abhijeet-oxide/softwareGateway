@@ -146,3 +146,51 @@ func (h *failureHarness) jobForArtifact(transferID string, artifactID int64, sta
 		transferID, "sha256:"+strings.Repeat("b", 60)+padded(h.n), artifactID,
 		h.repoID, h.repoID, state)
 }
+
+// A Helm chart is an ordinary image manifest whose CONFIG says what it is.
+//
+// This is the shape Helm has always published — `artifactType` arrived in OCI
+// 1.1 and Helm predates it — so a breakdown reading only the manifest's own two
+// fields sees an image manifest with nothing to distinguish it. It reported 257
+// images for an orb the vendor's own catalogue lists as 157 images and 97
+// charts: not a rounding difference, a whole category made invisible.
+func TestAChartIsRecognisedByItsConfig(t *testing.T) {
+	h := newFailureHarness(t)
+	id := h.transferWithJobs(0)
+
+	chart := h.seedArtifact("application/vnd.oci.image.manifest.v1+json", "")
+	h.seedConfig(chart, "application/vnd.cncf.helm.config.v1+json")
+	h.jobForArtifact(id, chart, "skipped")
+
+	image := h.seedArtifact("application/vnd.oci.image.manifest.v1+json", "")
+	h.seedConfig(image, "application/vnd.oci.image.config.v1+json")
+	h.jobForArtifact(id, image, "succeeded")
+
+	rows, err := h.packages.ContentBreakdown(t.Context(), id)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	got := map[string]string{}
+	for _, row := range rows {
+		got[row.ConfigMediaType] = row.Outcome
+	}
+	if outcome := got["application/vnd.cncf.helm.config.v1+json"]; outcome != ContentPresent {
+		t.Errorf("the chart's config was not carried through: %+v", rows)
+	}
+	if outcome := got["application/vnd.oci.image.config.v1+json"]; outcome != ContentCopied {
+		t.Errorf("the image's config was not carried through: %+v", rows)
+	}
+}
+
+// seedConfig gives a component the config blob that says what it is.
+func (h *failureHarness) seedConfig(artifactID int64, mediaType string) {
+	h.t.Helper()
+
+	h.n++
+	digest := "sha256:" + strings.Repeat("9", 60) + padded(h.n)
+	h.exec(`INSERT INTO blobs (digest, size_bytes, media_type) VALUES (?, 512, ?)`,
+		digest, mediaType)
+	h.exec(`INSERT INTO artifact_blobs (artifact_id, digest, kind, ordinal)
+	        VALUES (?, ?, 'config', 0)`, artifactID, digest)
+}

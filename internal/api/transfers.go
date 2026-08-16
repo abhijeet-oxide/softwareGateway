@@ -359,7 +359,7 @@ func parseTransferState(s string) (string, error) {
 func toAPIContent(rows []store.ContentRow) []v1.ContentGroup {
 	byKind := map[string]*v1.ContentGroup{}
 	for _, row := range rows {
-		kind := oci.Classify(row.MediaType, row.ArtifactType)
+		kind := oci.Classify(row.MediaType, row.ArtifactType, row.ConfigMediaType)
 		group, ok := byKind[kind]
 		if !ok {
 			group = &v1.ContentGroup{Kind: kind}

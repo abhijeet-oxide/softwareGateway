@@ -425,6 +425,12 @@ func (q *Queue) Stop(ctx context.Context, transferID string) (store.ControlResul
 	return q.control(ctx, "stopped", q.packages.StopTransfer, transferID)
 }
 
+// Delete removes a settled transfer's record. Nothing at the destination is
+// touched — see store.DeleteTransfer.
+func (q *Queue) Delete(ctx context.Context, transferID string) (store.ControlResult, error) {
+	return q.control(ctx, "deleted", q.packages.DeleteTransfer, transferID)
+}
+
 // control runs one queue-control verb and logs what it did.
 //
 // The three differ only in the store call and the word, and routing them

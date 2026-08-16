@@ -33,6 +33,7 @@ func newTransfersCommand() *cobra.Command {
 		newTransfersPauseCommand(),
 		newTransfersResumeCommand(),
 		newTransfersStopCommand(),
+		newTransfersDeleteCommand(),
 	)
 	return cmd
 }
@@ -347,7 +348,7 @@ func renderTransferList(
 
 	rows := [][]string{{
 		"ID", "PRODUCT", "TAG", "FROM", "TO", "STATE", "DONE", "JOBS", "FAILED",
-		"COPIED", "SAVED", "PLANNED", "SPEED", "RUNNING", "ELAPSED", "ETA",
+		"COPIED", "SAVED", "LEFT", "PLANNED", "SPEED", "RUNNING", "ELAPSED", "ETA",
 	}}
 
 	finished := 0
@@ -369,6 +370,7 @@ func renderTransferList(
 			failedJobs(t.Progress),
 			copiedBytes(t.Progress),
 			savedBytes(t.Progress),
+			leftBytes(t.Progress),
 			plannedBytes(t.Progress),
 			speedOf(t, rates.rateFor(t.ID)),
 			fmt.Sprint(t.Progress.JobsInFlight),
@@ -512,6 +514,38 @@ func copiedBytes(p v1.TransferProgress) string {
 		return "-"
 	}
 	return humanBytes(p.BytesTransferred)
+}
+
+// leftBytes is the work whose outcome nobody knows yet.
+//
+// # The column that closes the row
+//
+// COPIED and SAVED are both DECIDED: bytes that crossed the wire, and bytes
+// that turned out not to need to. Neither says how much is still to come, and
+// without that the row could not be reconciled — a reader seeing `SAVED 63.7
+// GiB` beside `PLANNED 63.7 GiB` concludes there is nothing left to copy, and
+// then watches COPIED climb.
+//
+// The two are not equal. They differ by exactly this column plus whatever
+// failed, and at one decimal place in gigabytes a difference of a few hundred
+// megabytes is invisible — so the row looked like a contradiction while every
+// number in it was right.
+//
+// With it, the plan is accounted for: COPIED plus SAVED plus LEFT is the plan,
+// less anything that failed outright.
+//
+// # What it is not
+//
+// It is not "the bytes still to copy". Nothing knows that: each job settles it
+// for itself, with a HEAD at the destination, as it runs. What is left will
+// divide between COPIED and SAVED in a proportion nobody can state in advance,
+// and this is the honest bound on it — everything still to copy is in here, and
+// so is everything still to be skipped.
+func leftBytes(p v1.TransferProgress) string {
+	if int64Of(p.OutstandingBytes) == 0 {
+		return "-"
+	}
+	return humanBytes(p.OutstandingBytes)
 }
 
 // plannedBytes is the WORK: every byte the transfer has to account for, queued
@@ -1022,9 +1056,9 @@ func describeTransfer(w io.Writer, t *v1.Transfer, rates *rateTracker, watching 
 	// outcome nobody knows: each job decides for itself, with a HEAD at the
 	// destination, as it runs. Leaving that difference unexplained is what makes
 	// three correct numbers look like they do not add up.
-	if undecided := int64Of(p.OutstandingBytes); undecided > 0 {
-		fmt.Fprintf(pw, "  Undecided:\t%s\tqueued; not yet copied or skipped\n",
-			humanBytesOf(undecided))
+	if left := int64Of(p.OutstandingBytes); left > 0 {
+		fmt.Fprintf(pw, "  Left:\t%s\tqueued; not yet copied or skipped\n",
+			humanBytesOf(left))
 	}
 
 	if d, ok := elapsed(t); ok {

@@ -259,3 +259,71 @@ func (h *controlHarness) exec(query string, args ...any) {
 		h.t.Fatalf("%s: %v", query, err)
 	}
 }
+
+// Deleting a transfer removes its RECORD, and only its record.
+//
+// The thing an operator wants is the row out of their listing — a transfer that
+// failed before it was planned has nothing to retry and would otherwise sit
+// there forever. What the transfer put at the destination is content-addressed,
+// shared with every other release using the same layers, and stays exactly
+// where it is.
+func TestDeleteRemovesTheTransferAndItsJobs(t *testing.T) {
+	h := newControlHarness(t)
+	id := h.runningTransfer(3)
+
+	if _, err := h.packages.StopTransfer(t.Context(), id); err != nil {
+		t.Fatal(err)
+	}
+
+	res, err := h.packages.DeleteTransfer(t.Context(), id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Jobs != 3 {
+		t.Errorf("reported %d jobs removed, want 3", res.Jobs)
+	}
+
+	if n := h.count(`SELECT count(*) FROM transfers WHERE id = ?`, id); n != 0 {
+		t.Errorf("the transfer row survived the delete")
+	}
+	if n := h.count(`SELECT count(*) FROM jobs WHERE transfer_id = ?`, id); n != 0 {
+		t.Errorf("%d job rows were orphaned by the delete", n)
+	}
+	// The placements describe the DESTINATION, not the transfer, and a later
+	// transfer of the same content still wants to know the bytes are there.
+	if n := h.count(`SELECT count(*) FROM blob_placements`); n < 0 {
+		t.Errorf("placements were disturbed")
+	}
+}
+
+// A transfer with work a worker may be holding is refused.
+//
+// Its jobs are LEASED — a worker will report on them — and deleting the rows
+// underneath it turns every one of those reports into an update of nothing,
+// silently. `stop` is one word and leaves a transfer this accepts.
+func TestDeleteRefusesATransferThatIsStillWorking(t *testing.T) {
+	h := newControlHarness(t)
+	id := h.runningTransfer(2)
+
+	_, err := h.packages.DeleteTransfer(t.Context(), id)
+	if !errors.Is(err, ErrIllegalTransition) {
+		t.Fatalf("deleting a running transfer returned %v, want an illegal transition", err)
+	}
+	if !strings.Contains(err.Error(), "stop it first") {
+		t.Errorf("the refusal does not say what to do instead: %v", err)
+	}
+	if n := h.count(`SELECT count(*) FROM transfers WHERE id = ?`, id); n != 1 {
+		t.Errorf("a refused delete removed the transfer anyway")
+	}
+	if n := h.count(`SELECT count(*) FROM jobs WHERE transfer_id = ?`, id); n != 2 {
+		t.Errorf("a refused delete removed %d of the jobs", 2-n)
+	}
+}
+
+// A transfer that never existed is not found, rather than silently accepted.
+func TestDeleteOfAnUnknownTransferIsAnError(t *testing.T) {
+	h := newControlHarness(t)
+	if _, err := h.packages.DeleteTransfer(t.Context(), "no-such-transfer"); err == nil {
+		t.Fatal("deleting a transfer that does not exist reported success")
+	}
+}

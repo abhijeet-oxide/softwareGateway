@@ -185,3 +185,26 @@ func TestAFailedTransferWithNoReasonSaysThat(t *testing.T) {
 		t.Errorf("the gap is not stated plainly:\n%s", out)
 	}
 }
+
+// What a delete says it did, and — in the same breath — what it did not.
+//
+// A reader who has just deleted something needs to know whether they have
+// changed the destination. Finding that out afterwards is too late.
+func TestDeleteSaysNothingAtTheDestinationWasRemoved(t *testing.T) {
+	var buf bytes.Buffer
+	if err := renderControl(&buf, "delete", &v1.TransferControlResponse{
+		TransferID: "b3174872-1111-2222-3333-444444444444",
+		State:      "FAILED",
+		Jobs:       0,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	out := buf.String()
+
+	if !strings.Contains(out, "Deleted b3174872") {
+		t.Errorf("the delete does not say what it removed:\n%s", out)
+	}
+	if !strings.Contains(out, "Nothing at the destination was removed") {
+		t.Errorf("the delete does not say what it left alone:\n%s", out)
+	}
+}

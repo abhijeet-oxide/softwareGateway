@@ -367,3 +367,63 @@ func TestDescribeSeparatesTheReleaseFromTheWork(t *testing.T) {
 		t.Errorf("describe does not explain why the two differ:\n%s", out)
 	}
 }
+
+// The row the numbers finally close on.
+//
+// Reported: `SAVED 63.7 GiB · PLANNED 63.7 GiB` with COPIED climbing through
+// kilobytes. Read as saved-equals-planned it says there is nothing left to
+// copy, and then contradicts itself by copying. The two were never equal — they
+// differ by the work still outstanding, which at one decimal place in gigabytes
+// is invisible, and which no column carried.
+func TestTheRowAccountsForTheWholePlan(t *testing.T) {
+	p := v1.TransferProgress{
+		PlannedBytes:     "68400000000",
+		SkippedBytes:     "67100000000",
+		SavedBytes:       "67100000000",
+		OutstandingBytes: "1299745000",
+		BytesTransferred: "255000",
+	}
+
+	// COPIED + SAVED + LEFT is the plan, less anything that failed outright.
+	// Exactly, with nothing failed: every byte of the plan is in one of the
+	// three, and that is the property the row is read for.
+	sum := int64Of(p.BytesTransferred) + int64Of(p.SavedBytes) + int64Of(p.OutstandingBytes)
+	if got := packageBytes(p); sum != got {
+		t.Errorf("the columns sum to %d against a plan of %d", sum, got)
+	}
+
+	if got := leftBytes(p); !strings.Contains(got, "1.2 GiB") {
+		t.Errorf("LEFT = %q, want the 1.2 GiB still outstanding", got)
+	}
+	// Nothing outstanding is a dash, not a zero: a finished transfer should not
+	// grow a column of `0 B` to read past.
+	done := p
+	done.OutstandingBytes = "0"
+	if got := leftBytes(done); got != "-" {
+		t.Errorf("LEFT = %q with nothing outstanding, want a dash", got)
+	}
+}
+
+// The list and describe use one word for one quantity. A reader moving between
+// the two pages should not have to work out that LEFT and something else are
+// the same number.
+func TestTheListAndDescribeAgreeOnWhatIsLeft(t *testing.T) {
+	tr := &v1.Transfer{
+		ID: "281dc2e4", State: v1.TransferRunning,
+		Progress: v1.TransferProgress{
+			PlannedBytes: "68400000000", SavedBytes: "67100000000",
+			OutstandingBytes: "1299745000", BytesTransferred: "255078",
+		},
+	}
+
+	var buf bytes.Buffer
+	if err := describeTransfer(&buf, tr, &rateTracker{}, false); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(buf.String(), "Left:") {
+		t.Errorf("describe does not name what is left:\n%s", buf.String())
+	}
+	if !strings.Contains(buf.String(), "1.2 GiB") {
+		t.Errorf("describe does not report the outstanding bytes:\n%s", buf.String())
+	}
+}

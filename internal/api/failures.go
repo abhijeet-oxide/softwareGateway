@@ -3,6 +3,7 @@ package api
 import (
 	"net/http"
 	"strconv"
+	"strings"
 
 	v1 "github.com/abhijeet-oxide/softwareGateway/pkg/apis/softwaregateway/v1"
 	"github.com/go-chi/chi/v5"
@@ -33,6 +34,14 @@ func (s *Server) handleListTransferFailures(w http.ResponseWriter, r *http.Reque
 	out := v1.ListFailuresResponse{
 		TransferID: id,
 		Failures:   make([]v1.FailureGroup, 0, len(groups)),
+	}
+
+	// The transfer's OWN state and reason, alongside its jobs'. A transfer that
+	// failed before planning has no failing jobs and a perfectly good reason,
+	// and this is the command whose whole purpose is to report it.
+	if t, err := s.deps.Packages.GetTransfer(r.Context(), id); err == nil {
+		out.State = v1.TransferState(strings.ToUpper(t.State))
+		out.FailureReason = t.FailureReason
 	}
 	for _, g := range groups {
 		out.Failures = append(out.Failures, v1.FailureGroup{

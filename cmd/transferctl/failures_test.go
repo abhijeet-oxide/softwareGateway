@@ -130,3 +130,58 @@ func TestTheExampleNamesTheTagThatWasRefused(t *testing.T) {
 		t.Errorf("the example is not a reference somebody can paste:\n%s", out)
 	}
 }
+
+// A transfer that failed before it had any jobs.
+//
+// The summary is built from job errors, and a transfer that fails while being
+// PLANNED has none — an origin that cannot be reached, a package whose tree
+// will not walk. It reported "Nothing is failing in this transfer" about a
+// transfer whose state was `failed`, which is the one answer that cannot be
+// right.
+func TestATransferThatFailedBeforePlanningSaysWhy(t *testing.T) {
+	out := renderTo(t, &v1.ListFailuresResponse{
+		TransferID:    "b3174872-1111-2222-3333-444444444444",
+		State:         v1.TransferFailed,
+		FailureReason: "walk orbs/cfx-5000-k8s-…-template-v0.04: fetch manifest sha256:aa…: HTTP 404: not found",
+	})
+
+	if strings.Contains(out, "Nothing is failing") {
+		t.Fatalf("a failed transfer was reported as healthy:\n%s", out)
+	}
+	if !strings.Contains(out, "HTTP 404") {
+		t.Errorf("the recorded reason is not reported:\n%s", out)
+	}
+	if !strings.Contains(out, "b3174872") {
+		t.Errorf("the block does not name the transfer:\n%s", out)
+	}
+	// And it says what to do, which is not `retry`: planning queued nothing, so
+	// there is no job to requeue.
+	if !strings.Contains(out, "nothing to retry") {
+		t.Errorf("the reader is not told that retry does not apply:\n%s", out)
+	}
+}
+
+// A transfer that is simply fine still says so.
+func TestAHealthyTransferStillReportsNothingFailing(t *testing.T) {
+	out := renderTo(t, &v1.ListFailuresResponse{
+		TransferID: "b5d85331-1111-2222-3333-444444444444",
+		State:      v1.TransferSucceeded,
+	})
+	if !strings.Contains(out, "Nothing is failing") {
+		t.Errorf("a healthy transfer was reported as failing:\n%s", out)
+	}
+}
+
+// Failed, with nothing recorded to say why. Saying that beats claiming health.
+func TestAFailedTransferWithNoReasonSaysThat(t *testing.T) {
+	out := renderTo(t, &v1.ListFailuresResponse{
+		TransferID: "b3174872-1111-2222-3333-444444444444",
+		State:      v1.TransferFailed,
+	})
+	if strings.Contains(out, "Nothing is failing") {
+		t.Fatalf("a failed transfer was reported as healthy:\n%s", out)
+	}
+	if !strings.Contains(out, "no reason was recorded") {
+		t.Errorf("the gap is not stated plainly:\n%s", out)
+	}
+}

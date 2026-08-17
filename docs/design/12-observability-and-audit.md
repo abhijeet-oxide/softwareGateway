@@ -114,7 +114,7 @@ Prometheus naming: `softwaregateway_` prefix, base units (bytes, seconds), `_tot
 
 `config_load_errors` is worth alerting on. A product whose config fails validation keeps running on its **previous** valid version ([02](02-configuration.md) §7), which is the right behaviour and also means a broken config edit can go unnoticed indefinitely — the system stays healthy while quietly ignoring what someone merged.
 
-### 2.6.1 Delegated replication (proposed, M8)
+### 2.6.1 Delegated replication (proposed — the mechanism landed at M8, these did not)
 
 | Metric | Type | Labels | Meaning |
 |---|---|---|---|

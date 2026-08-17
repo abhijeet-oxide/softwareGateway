@@ -109,12 +109,14 @@ Everything a user needs to actually run transfers.
 
 Delegation. A Quay target can stop being somewhere we push to and become somewhere that pulls for itself. Specified in [18](18-quay-replication.md).
 
+**Status: the configuration half is built; the transfer half is not.** A mirror can be declared, validated, applied, observed, drifted and synced today. What a *download* means against a delegated target — the `Strategy` seam, the destination walk, `diverged`, `warm` — is still to come, and `transfers.strategy` reads `copy` until it lands. The split is deliberate: configuring a mirror is useful on its own, and the transfer semantics need the destination walk that gives `succeeded` and `diverged` their meaning. What remains is marked below.
+
 - `replication.mode` on a target: `copy` (default, unchanged), `mirror`, `proxy` ([18](18-quay-replication.md) §5)
 - `internal/registry/quay`: the **management** API client — mirror config, proxy cache, `changestate`, robots — separate from the `/v2` data path
-- The `Strategy` seam, with the existing planner and engine moved behind it unchanged ([18](18-quay-replication.md) §7)
+- ~~The `Strategy` seam, with the existing planner and engine moved behind it unchanged~~ ([18](18-quay-replication.md) §7) — **remaining**
 - Explicit `apply` with a diff; continuous drift detection that never self-heals ([18](18-quay-replication.md) §8)
-- Observed sync history, the `diverged` outcome, and `warm` for proxy caches ([18](18-quay-replication.md) §6)
-- `targets list|describe|apply|sync|drift`, `warm`; replication routes; the `Replication` audit category and its metrics
+- Observed sync history; the `diverged` outcome and `warm` for proxy caches are **remaining** ([18](18-quay-replication.md) §6)
+- `targets list|describe|apply|sync|drift` and the replication routes; `warm`, the `Replication` audit category and its metrics are **remaining**
 
 **Acceptance:**
 - A `mode: mirror` target applies from configuration, syncs on request, and reaches `succeeded` when the destination digest matches the discovered one — and `diverged`, not `succeeded`, when the upstream tag has moved underneath it.

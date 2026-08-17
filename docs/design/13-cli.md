@@ -89,9 +89,9 @@ transferctl
 └── version                     Client and server versions
 ```
 
-### Proposed at M8: `targets` and `warm`
+### `targets` (shipped at M8) and `warm` (proposed)
 
-Delegated replication ([18](18-quay-replication.md)) adds one noun group and one verb, following the rule the tree already follows — things you *look at* are nouns, things the tool *does* are verbs:
+Delegated replication ([18](18-quay-replication.md)) adds one noun group and one verb, following the rule the tree already follows — things you *look at* are nouns, things the tool *does* are verbs. The `targets` group exists; `warm` does not yet, because it needs the transfer semantics in [18](18-quay-replication.md) §6 rather than only the configuration:
 
 ```
 ├── targets

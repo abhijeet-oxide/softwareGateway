@@ -281,7 +281,7 @@ Types, defaults, and validation rules. Validation is enforced at load (§7) and 
 | `network` | object | no | inherits product | Same shape as `spec.network` |
 | `default` (targets) | bool | no | `false` | At most one per product |
 | `promotionOnly` (targets) | bool | no | `false` | Rejects replication requests naming this target |
-| `replication` (targets) | object | no | `mode: copy` | **Proposed, M8.** Which mechanism puts content in this target: `copy` (our workers move it), `mirror` or `proxy` (Quay does). Requires `type: quay` for the latter two. Full schema, field reference and validation rules in [18](18-quay-replication.md) §5 |
+| `replication` (targets) | object | no | `mode: copy` | Which mechanism puts content in this target: `copy` (our workers move it), `mirror` or `proxy` (Quay does). Requires `type: quay` for the latter two. Full schema, field reference and validation rules in [18](18-quay-replication.md) §5 |
 | `discovery` (sources) | object | no | `enabled: true` | |
 
 #### `vendor` — and why it is not `type`

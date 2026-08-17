@@ -45,7 +45,7 @@ Google **AIP** (API Improvement Proposals) for resource naming and method shape,
 
 Products are **read-only over the API.** Configuration comes from Git ([02](02-configuration.md)); an API that could mutate it would create a second source of truth that Flux would immediately revert.
 
-#### Target replication (proposed, M8)
+#### Target replication
 
 | Method | Path | Purpose |
 |---|---|---|

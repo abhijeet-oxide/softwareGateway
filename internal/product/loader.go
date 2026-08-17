@@ -214,6 +214,10 @@ func (l *Loader) Parse(b []byte, source string) (*Product, error) {
 	}
 
 	p.applyDefaults(l.defaults)
+	// Computed after defaults so that an advisory can reason about effective
+	// values, and only once validation has passed: warning about a document
+	// that is already being rejected is noise on top of an error.
+	p.Warnings = p.computeWarnings()
 	return &p, nil
 }
 

@@ -372,6 +372,144 @@ spec:
             certificateIdentity: 'https://github.com/vendor/platform/.github/workflows/release.yaml@refs/heads/main'
             certificateOidcIssuer: 'https://token.actions.githubusercontent.com'
 
+    # -----------------------------------------------------------------
+    # 4. A QUAY TARGET THAT PULLS FOR ITSELF.
+    #
+    #    `replication` says HOW content gets in, as opposed to what goes
+    #    there. Absent — every target above — means `copy`: our workers pull
+    #    from the origin and push here. That is unchanged and is still right
+    #    for almost everything.
+    #
+    #    `mirror` hands the job to Quay. We write the configuration, Quay
+    #    pulls from the upstream on its own schedule, and the convergence
+    #    keeps working while this tool is down. What you give up is byte-level
+    #    progress: Quay reports a state, not a speed, so a mirror transfer
+    #    shows `configuring -> syncing -> succeeded` and NO percentage.
+    #    Nothing synthesises one.
+    #
+    #    Two credentials, and they are not the same credential:
+    #
+    #      credentialsRef   /v2      artifacts       a robot account
+    #      quay.apiTokenRef /api/v1  configuration   an OAuth 2 bearer token
+    #
+    #    A copy-mode Quay target needs none of this.
+    # -----------------------------------------------------------------
+    - name: ocp-prod
+      registry: quay.apps.ocp.example.com
+      # The first path segment is the Quay ORGANIZATION, and it is load-bearing:
+      # the mirror robot has to belong to it, and validation checks that.
+      repository: platform-prod/vendor-platform
+      type: quay
+      credentialsRef:
+        secretName: quay-robot
+      environment: ocp
+      quay:
+        # repo:admin scope for mirroring (org:admin for a proxy cache). The
+        # robot above authenticates /v2 and is REJECTED by /api/v1 — the most
+        # common way to get a 403 that looks like a permissions problem.
+        apiTokenRef:
+          secretName: quay-api
+          key: token
+      replication:
+        mode: mirror
+        mirror:
+          # WHERE QUAY PULLS FROM. Naming another target keeps the chain
+          # lab -> ocp-prod declared once, so it stays right when the lab
+          # path changes. `externalReference: host/path` is the escape hatch
+          # for an upstream this product does not otherwise declare.
+          from: lab
+
+          # WHAT TO SYNC — and the single most expensive field in this file.
+          #
+          # These are SHELL GLOBS. Every other pattern in this document is
+          # RE2. `^v\d+\.\d+\.\d+$` is correct three sections above and
+          # matches EXACTLY NOTHING here: the sync would succeed, the
+          # destination would stay empty, and the configuration would look
+          # perfect. Validation rejects RE2 syntax in this field for that
+          # reason.
+          #
+          # Note the second glob. Cosign signatures are tags of the form
+          # `sha256-<hex>.sig`, so a rule of just `v3.*` mirrors the images
+          # and leaves every signature behind — after which destination-side
+          # verification fails for every package, forever, with no visible
+          # cause. If you verify at the destination, mirror the signatures.
+          tags: ['v3.*', 'sha256-*.sig']
+
+          # WHEN. `interval` is Quay's sync_interval; `startAt` its
+          # sync_start_date, defaulting to the moment we first apply.
+          interval: 6h
+
+          # WHO PUSHES. Quay allows only a robot to write into a mirrored
+          # repository, and it must be in this repository's organization.
+          robot: platform-prod+swgw-mirror
+
+          # WHAT QUAY USES TO REACH THE UPSTREAM. Written INTO Quay, so these
+          # credentials leave our custody — by reference, as everywhere else.
+          sourceCredentialsRef:
+            secretName: internal-registry
+
+          # HOW QUAY REACHES IT. Quay's egress, not ours: none of this affects
+          # our own transport, and the product-level `network` block above
+          # does not affect Quay's.
+          network:
+            verifyTLS: true
+            proxy:
+              httpsProxy: http://proxy.example.com:3128
+              noProxy: ['internal.example.com', '.svc.cluster.local']
+
+          acceptUnsignedImages: false
+          skopeoTimeout: 300s      # Quay's default; its maximum is 43200s
+
+          # WHAT WE DO ABOUT IT. `apply` means "write it when asked" —
+          # `transferctl targets apply`. A config reload NEVER writes to Quay:
+          # applying a mirror flips the repository read-only and deletes
+          # whatever the glob does not match, which is not something a
+          # `kubectl apply` should be able to do. `detect` never writes at all
+          # and only reports drift.
+          manage: apply
+          # A download against this target becomes sync-now plus a wait,
+          # rather than an error saying there is nothing to push.
+          syncOnRequest: true
+
+    # -----------------------------------------------------------------
+    # 5. A PROXY CACHE — a Quay organization fronting an upstream.
+    #
+    #    Nothing is stored until somebody pulls through it, which is the
+    #    point: no schedule, no capacity planning, and content that expires.
+    #    It is NOT a replication destination and cannot be one — there is no
+    #    way to push into a cache. Validation rejects it as a rule target, as
+    #    the default target, and as a promotion destination, all at load,
+    #    because the alternative is failing on the day a rule first matches.
+    #
+    #    `transferctl warm` is how you populate one deliberately: it pulls a
+    #    package through the proxy path and discards the bytes.
+    # -----------------------------------------------------------------
+    - name: ocp-dev-cache
+      registry: quay.apps.ocp.example.com
+      # <proxy-org>/<upstream-path>. The path IS the cache layout, so
+      # `proxy.organization` must agree with its first segment.
+      repository: dev-cache/vendor/platform
+      type: quay
+      anonymous: true
+      quay:
+        apiTokenRef:
+          secretName: quay-api
+          key: token
+      replication:
+        mode: proxy
+        proxy:
+          organization: dev-cache
+          upstreamRegistry: internal.example.com
+          upstreamCredentialsRef:
+            secretName: internal-registry
+          expiration: 24h        # Quay's default; the staleness window
+          insecure: false
+          manage: apply
+          # Pull every blob of a discovered package through the proxy so the
+          # cache is warm before anyone needs it. Off by default: it costs a
+          # full pull whose bytes are thrown away.
+          prewarm: false
+
     - name: legacy-dr
       registry: dr.example.com
       repository: vendor/platform

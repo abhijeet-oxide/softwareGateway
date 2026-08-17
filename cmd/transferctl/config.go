@@ -78,6 +78,7 @@ type validationReport struct {
 	FileCount        int                `json:"fileCount"`
 	ValidCount       int                `json:"validCount"`
 	DeprecationCount int                `json:"deprecationCount"`
+	WarningCount     int                `json:"warningCount"`
 	Results          []validationResult `json:"results"`
 }
 
@@ -93,6 +94,11 @@ type validationResult struct {
 	// separately and never affect the exit code. A CI job that started failing
 	// because a key was renamed is a CI job people learn to ignore.
 	Deprecations []string `json:"deprecations,omitempty"`
+
+	// Warnings are configurations that are valid and probably not intended.
+	// Like deprecations they never affect the exit code — a warning that
+	// fails CI is a warning somebody turns off.
+	Warnings []validationError `json:"warnings,omitempty"`
 }
 
 type validationError struct {
@@ -109,6 +115,10 @@ func buildValidationReport(dir string, res product.LoadResult) validationReport 
 	}
 
 	for _, p := range res.Valid {
+		var warnings []validationError
+		for _, w := range p.Warnings {
+			warnings = append(warnings, validationError{Field: w.Field, Message: w.Message, Hint: w.Hint})
+		}
 		report.Results = append(report.Results, validationResult{
 			File:    filepath.Base(p.SourceFile),
 			Product: p.Metadata.Name,
@@ -116,8 +126,10 @@ func buildValidationReport(dir string, res product.LoadResult) validationReport 
 			Summary: fmt.Sprintf("%d source(s), %d target(s), %d rule(s)",
 				len(p.Spec.Sources), len(p.Spec.Targets), len(p.Spec.AutoDownload.Rules)),
 			Deprecations: p.Deprecations,
+			Warnings:     warnings,
 		})
 		report.DeprecationCount += len(p.Deprecations)
+		report.WarningCount += len(warnings)
 	}
 
 	for _, bad := range res.Invalid {
@@ -159,6 +171,15 @@ func renderValidationReport(w io.Writer, report validationReport) error {
 			for _, d := range r.Deprecations {
 				fmt.Fprintf(w, "  %-28s        deprecated: %s\n", "", d)
 			}
+			for _, warn := range r.Warnings {
+				fmt.Fprintf(w, "\n    WARNING  %s: %s\n", warn.Field, warn.Message)
+				if warn.Hint != "" {
+					fmt.Fprintf(w, "      %s\n", warn.Hint)
+				}
+			}
+			if len(r.Warnings) > 0 {
+				fmt.Fprintln(w)
+			}
 			continue
 		}
 
@@ -176,8 +197,12 @@ func renderValidationReport(w io.Writer, report validationReport) error {
 		fmt.Fprintln(w)
 	}
 
-	fmt.Fprintf(w, "\n%d file(s), %d valid, %d error(s)\n",
+	fmt.Fprintf(w, "\n%d file(s), %d valid, %d error(s)",
 		report.FileCount, report.ValidCount, report.FileCount-report.ValidCount)
+	if report.WarningCount > 0 {
+		fmt.Fprintf(w, ", %d warning(s)", report.WarningCount)
+	}
+	fmt.Fprintln(w)
 
 	if report.DeprecationCount > 0 {
 		fmt.Fprintln(w)

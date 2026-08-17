@@ -408,6 +408,16 @@ A proxy cache has no notion of "put this there". But there is nothing stopping *
 
 So `transferctl warm <package> --target ocp-dev-cache` (and `replication.proxy.prewarm: true` to do it automatically after discovery) walks the manifest tree through the proxy path, `GET`s every blob, and counts the bytes it discarded. This is a genuine transfer in the byte sense — it costs full bandwidth into the OCP cluster and out again to nowhere — so it is opt-in, its output says plainly that it moved *N* bytes and stored none of them locally, and it never claims the content is durably present. It buys one thing: the first real pull is fast, and a scheduled job before a release window is a defensible reason to want that.
 
+### 6.4 How a mode looks to somebody who is not reading this document
+
+The three modes are a real distinction in the engine and mostly **not** a decision the person requesting a release should be making. The interface therefore surfaces them as *what happens*, not as *what to choose* ([19](19-user-interface.md) §3.1):
+
+- A Download Rule declares the chain once — **Vendor → JFrog → Quay mirror** — which is where `mode` is actually decided, by whoever writes the product configuration.
+- A download then shows the chain as steps: *Downloading to JFrog* (measured bytes, speed, ETA, because we move them) → *Configuring Mirror to Quay* (configured-at, first sync completed, content matches — because Quay moves them) → *Verification* → *Completed*.
+- The word "mirror" appears; the words "replication mode", "delegated" and "strategy" do not.
+
+Two steps of one operation with two different kinds of truth, shown differently on purpose. §6.1 is the rule; this is what it looks like on a screen.
+
 ## 7. Where the seam goes
 
 The engine in [05](05-transfer-engine.md) is written against `Repository` ([06](06-registry-abstraction.md) §2) and must not learn about modes. The new seam is one level above it, at the point where a Transfer is planned:

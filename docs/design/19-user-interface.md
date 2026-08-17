@@ -13,6 +13,8 @@ That is not a hedge. [09](09-api.md) already says the Coordinator's REST API is 
 
 What the UI will be, stated so it can be held to: **clean, minimal, fast, fully optimised, enterprise-grade, and capable of everything the tool can do.** Deployable in-cluster, air-gapped, with no external dependency at runtime.
 
+It is called **Software Lifecycle Manager** on screen. `softwareGateway` is the engineering name of the system and appears nowhere in the interface — §3.1 explains why that is a design decision rather than branding.
+
 ## 2. Why say it now rather than at M9
 
 Because three classes of decision are cheap today and expensive later, and all three are decisions we are otherwise making by accident:
@@ -29,9 +31,27 @@ The first row is the one that cannot be retrofitted. The other two are already r
 
 Everything `transferctl` does ([13](13-cli.md) §2), because a UI that can do most of it forces users to keep a terminal open and then they never come back to the UI. Concretely: browse products and their health; see and trigger discovery; browse packages and inspect them; request replications and promotions with a dry-run preview; watch transfers live; read failures grouped by cause; control the queue (pause, resume, cancel, retry, priority); manage schedules; verify signatures; read worker logs; compare two registries; and query the audit trail.
 
-Plus the one thing the CLI does awkwardly and a UI does naturally: **comprehension at a glance** — which packages are where, which are diverged, and what is failing right now, without composing a query first.
+Plus the one thing the CLI does awkwardly and a UI does naturally: **comprehension at a glance** — which releases are where, which have diverged, and what is failing right now, without composing a query first.
 
-Screen-by-screen intent, page count, information architecture and the visual system live in the [UI generation brief](../ui/ui-generation-brief.md), which is a working document for producing mockups rather than a specification. Ten pages, six of them top-level.
+Screen-by-screen intent, layout and the visual system live in the [UI generation brief](../ui/ui-generation-brief.md), which is a working document for producing mockups rather than a specification. **Ten pages, eight of them navigable:**
+
+```
+Home · Products · Software · Download Rules · Repositories · Activity · Reports · Settings
+```
+
+with Software detail and Download reached from them. The lifecycle those pages exist to make obvious is **Discover → Review → Verify → Download & Replicate → Compare → Promote**.
+
+### 3.1 The UI speaks the user's language, not the engine's
+
+> **Decision — the interface uses product vocabulary, and the domain model stays behind the API.**
+>
+> A Product Owner looking at SBC 25.8.1 should think "this release is new and signed, I'll download it". They should not meet *package*, *transfer*, *job*, *blob*, *placement*, *wave* or *replication mode* — every one of which is load-bearing in [01](01-domain-model.md) and none of which is their problem.
+>
+> The mapping is fixed, one term to one term, in the brief's vocabulary table: **Software** is a Package, **Download** is a TransferRequest and its Transfers, **Location** is a target repository, **Saved (already present)** is deduplication, **Download Rule** is an auto-download rule together with the target's replication configuration, and **Configure Mirror to Quay** is `replication.mode: mirror` ([18](18-quay-replication.md)).
+>
+> *Why write it down rather than let it emerge:* two clients of one API will otherwise invent two vocabularies, and the day someone reads a CLI transcript next to a UI screenshot, neither of them can be trusted. The CLI keeps the domain words — its users are operators and the words are precise. The UI keeps the product words. The mapping is the contract between them.
+
+**The most consequential consequence of this: there is no Replicate action in the UI.** Downloading a release into JFrog and configuring the Quay mirror that OpenShift pulls from are one operation with several steps, presented as one operation with several steps. Internally they remain a transfer and a replication-mode apply ([18](18-quay-replication.md) §7); the user is not asked to know that, and is never asked to perform the second half themselves.
 
 ## 4. What it must never do
 
@@ -41,7 +61,11 @@ Screen-by-screen intent, page count, information architecture and the visual sys
 >
 > *Rejected because* configuration is GitOps ([02](02-configuration.md) §2): Git is the source of truth and Flux reconciles it. A UI that wrote configuration would create a second source of truth that Flux would silently revert, producing the worst failure mode in the product — a change that appears to work, works for a few minutes, and then undoes itself with nothing in any log to say why. The API already refuses this for the same reason ([09](09-api.md) §2, "Products are read-only over the API").
 >
-> *What the UI does instead:* shows the loaded configuration with its config hash and load time, shows **drift** between Git and any registry-side state it manages ([18](18-quay-replication.md) §8), and links to the repository. Requesting work — transfers, promotions, syncs, applies — is not configuration and is fully available.
+> *What the UI does instead:* shows the loaded configuration with its config hash and load time, shows **drift** between Git and any registry-side state it manages ([18](18-quay-replication.md) §8), and links to the repository. Requesting work — downloads, promotions, syncs, applies — is not configuration and is fully available.
+>
+> *Where this is hardest, and therefore where it must be designed properly:* the **Download Rules** page. A rule is the most natural thing in the product to want to edit, and the page will be judged on whether "managed in Git" reads as obvious or as broken. So a rule is a first-class object with its YAML on the page, an **Open in Git** link, a **Drift** banner when the registry disagrees with it, and an **Apply** that states its consequences first. Enabling, disabling and running a rule now are actions; changing what a rule *says* is a commit.
+>
+> *If that proves too slow in practice*, the escape hatch is a UI that opens a pull request rather than one that writes configuration — Git stays the source of truth and the change stays reviewable. That is a post-M9 question, deliberately not designed now.
 
 Also out of scope, permanently: it is not a registry browser, not a replacement for Grafana, and it serves no artifact bytes. The data path stays where [00](00-overview.md) §5 puts it.
 
@@ -68,7 +92,8 @@ G1 is absolute: shipping a UI in front of an unauthenticated API would expose tr
 - **Deployable as a static bundle**, served either by the Coordinator or by a small separate Deployment, with no server-side rendering tier and therefore no fourth binary.
 - **Fast on real data**: virtualised tables, because a transfer has thousands of job rows; server-side pagination and filtering, which the API already provides; no client-side aggregation of anything the API can aggregate.
 - **Accessible**: WCAG AA, full keyboard operation, no meaning carried by colour alone.
-- **Honest**: the rule from [18](18-quay-replication.md) §6.1 is a UI rule above all — no progress bar, percentage or ETA for work whose bytes we are not counting. A delegated mirror shows a state.
+- **Honest**: the rule from [18](18-quay-replication.md) §6.1 is a UI rule above all — no progress bar, percentage or ETA for work whose bytes we are not counting. In the download flow this is visible as a real asymmetry the design must preserve: the JFrog step reports measured bytes, speed and ETA, and the **Configure Mirror to Quay** step reports configured-at, sync-completed-at and whether the content matches. Two steps of one operation, two different kinds of truth, shown differently on purpose.
+- **AT&T enterprise visual language**, light theme first: AT&T blue for primary actions, dark navy navigation, white and light-grey content, green/red/amber carrying only success, failure and warning. A mature internal operations product rather than a generic dashboard.
 - **Boring technology**, chosen at M9 against the same criteria as [ADR-001](16-technology-choices.md#adr-001): one framework, one build, no exotic runtime, and a dependency footprint an air-gapped estate can vendor.
 
 ## 7. Delivery

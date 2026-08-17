@@ -114,6 +114,17 @@ Prometheus naming: `softwaregateway_` prefix, base units (bytes, seconds), `_tot
 
 `config_load_errors` is worth alerting on. A product whose config fails validation keeps running on its **previous** valid version ([02](02-configuration.md) §7), which is the right behaviour and also means a broken config edit can go unnoticed indefinitely — the system stays healthy while quietly ignoring what someone merged.
 
+### 2.6.1 Delegated replication (proposed, M8)
+
+| Metric | Type | Labels | Meaning |
+|---|---|---|---|
+| `mirror_sync_total` | counter | `product`, `target`, `result` | Observed Quay mirror syncs ([18](18-quay-replication.md) §7) |
+| `mirror_sync_duration_seconds` | histogram | `product`, `target` | As reported by Quay, not measured by us |
+| `mirror_config_drift` | gauge | `product`, `target` | `1` when the registry's configuration differs from Git ([18](18-quay-replication.md) §8) |
+| `proxy_cache_probe_total` | counter | `product`, `target`, `result` | Whether a package is currently cached |
+
+There is deliberately **no** byte or throughput metric for a delegated target. We do not move those bytes and cannot count them; a gauge that looked like throughput but was derived from elapsed time would be worse than the absence of one ([18](18-quay-replication.md) §6.1).
+
 ### 2.7 Build info
 
 ```
@@ -170,6 +181,7 @@ Written **in the same transaction as the change it records** ([10](10-state-mach
 | Completion | `TransferCompleted`, `TransferFailed`, `PromotionCompleted` |
 | Verification | `VerificationStarted`, `VerificationPassed`, `VerificationFailed`, `VerificationError` |
 | Config | `ConfigReloaded`, `ConfigLoadFailed`, `ProductAdded`, `ProductRemoved` |
+| Replication (proposed, M8) | `ReplicationConfigApplied`, `ReplicationConfigDrifted`, `MirrorSyncRequested`, `MirrorSyncSucceeded`, `MirrorSyncFailed`, `MirrorContentDiverged`, `ProxyCacheConfigured`, `CacheWarmed` ([18](18-quay-replication.md) §7) |
 | System | `LeadershipAcquired`, `LeadershipLost`, `MigrationApplied`, `RetentionApplied` |
 
 Not every job transition is audited — 850 `JobSucceeded` rows per package would bury the events a human cares about. **Individual job successes are metrics; job failures and user actions are audit.** The distinction is whether a human would ever ask about that specific occurrence.

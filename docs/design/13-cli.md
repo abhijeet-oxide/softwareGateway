@@ -89,6 +89,23 @@ transferctl
 └── version                     Client and server versions
 ```
 
+### Proposed at M8: `targets` and `warm`
+
+Delegated replication ([18](18-quay-replication.md)) adds one noun group and one verb, following the rule the tree already follows — things you *look at* are nouns, things the tool *does* are verbs:
+
+```
+├── targets
+│   ├── list [product]              Targets and their replication mode
+│   ├── describe <product> <target>
+│   ├── apply <product> <target>    Write the replication config to Quay (--dry-run shows the diff)
+│   ├── sync  <product> <target>    Trigger a mirror sync now, --watch to follow
+│   └── drift [product]             What differs between Git and the registry
+│
+├── warm <tag> --target <t>         Populate a proxy cache by pulling through it
+```
+
+`apply` is a separate command rather than something a config reload does, because the write is destructive — see the decision in [18](18-quay-replication.md) §8. `download` against a `mode: proxy` target is refused with an error that names `warm`, since there is nothing to push to a cache.
+
 ### Why discovery is a top-level verb
 
 It was `packages discover`, and that was the wrong shape twice over.

@@ -45,6 +45,18 @@ Google **AIP** (API Improvement Proposals) for resource naming and method shape,
 
 Products are **read-only over the API.** Configuration comes from Git ([02](02-configuration.md)); an API that could mutate it would create a second source of truth that Flux would immediately revert.
 
+#### Target replication (proposed, M8)
+
+| Method | Path | Purpose |
+|---|---|---|
+| `GET` | `/api/v1/products/{product}/targets/{target}/replication` | Desired mode and settings, what was last applied, and any drift |
+| `POST` | `/api/v1/products/{product}/targets/{target}/replication:apply` | Write it to the registry. `validateOnly=true` renders the diff only |
+| `POST` | `/api/v1/products/{product}/targets/{target}/replication:sync` | Request a mirror sync now |
+| `POST` | `/api/v1/products/{product}/targets/{target}/replication:cancelSync` | Stop an in-progress sync |
+| `GET` | `/api/v1/products/{product}/targets/{target}/syncs` | Observed sync history |
+
+These do not contradict the paragraph above: configuration still comes from Git, and `:apply` pushes what Git already says into a *third-party registry's* own configuration store. It never edits a product. See [18](18-quay-replication.md) §7–8.
+
 #### Why calibration is per product and synchronous
 
 There is deliberately no `/products:calibrate`. Calibrating everything would mean saturating every vendor link this deployment has, one after another, and the answer for one path says nothing about another — a fleet-wide verb here would be load with no information in it.

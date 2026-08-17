@@ -76,7 +76,7 @@ The UI has one vocabulary and it is the user's, not the engine's. This table is 
 | **Vendor** (Nokia) | source registry | Source repository |
 | **Location** (Vendor · JFrog · Quay · Production) | target | Target repository |
 | **Download** (includes replication) | transfer, replicate, sync, copy | TransferRequest → Transfer(s) |
-| **Download Rule** | auto-download rule, replication config | `autoDownload` rule + target `replication` block |
+| **Download Rule** | auto-download rule, replication config | `download` rule + the chain its targets declare |
 | **Saved (already present)** | dedupe, placement hit, mount | Blob placements, cross-repository mount |
 | **Configure Mirror to Quay** | mirror mode, delegated replication | Quay `replication.mode: mirror` |
 | **Verified / Signed** | cosign, sigstore, referrers | Verification |
@@ -200,7 +200,8 @@ The path **high-level difference → artifact → actual file diff** must be tra
 
 - **Rule list** — name, product, the chain as a visual flow (**Vendor → JFrog → Quay Mirror**), verification requirement, discovery/download behaviour, enabled state, last triggered, and what it last produced.
 - **Rule detail** — Product and vendor source · which versions it matches · destination JFrog repository · Quay mirror repository · verification required before or after · automatic vs manual download · enabled/disabled.
-- **Rules are managed in Git.** The page shows each rule as a first-class object with a `Managed in Git` badge, a **View YAML** panel, an **Open in Git** link, and — when the registry's actual configuration has drifted from the rule — a clear **Drift** banner naming what differs and offering **Apply**, with the consequences stated before it is pressed. Enabling and disabling, and triggering a rule now, are actions the UI performs directly; editing the rule's content is a Git change.
+- **Rules are managed in Git.** The page shows each rule as a first-class object with a `Managed in Git` badge, a **View YAML** panel, an **Open in Git** link, and — when the registry's actual configuration has drifted from the rule — a clear **Drift** banner naming what differs and offering **Apply**, with the consequences stated before it is pressed. Enabling and disabling, and triggering a rule now, are actions the UI performs directly; editing the rule's content is a Git change. When a rule is turned off from this page, it reads back as **"Suspended by alice@example.com — configuration says enabled"**, with the reason and who gave it: both facts are true and the page shows both.
+- **Show the chain as steps, and show what stops it.** A rule that requires verification before Quay is configured should say so on the rule row, because that is the sentence a Product Owner needs when asked "could a bad build reach the cluster?" — the answer is visible, not documented.
 - **Design the read/drift/apply affordances properly** — this is the page where "the UI shows configuration but Git owns it" either reads as obvious or reads as broken.
 
 ---

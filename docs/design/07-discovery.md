@@ -123,6 +123,8 @@ A re-push is a notable event: it emits a `PackageSuperseded` audit event and is 
 
 ## 5. Auto-download rules
 
+> **Proposed at [M9](17-delivery-plan.md#m9--download-rules):** this section describes what exists. [20](20-download-rules.md) is its successor — the same first-match evaluation, producing a request whose targets are **ordered** by the chain they declare, with verification as a gate between steps. Rule evaluation moves to `internal/download`; everything below stays true and stays here as the record of what M2 shipped.
+
 Evaluated against each newly discovered package, in configured order, **first match wins** ([02](02-configuration.md) §5.4).
 
 ```

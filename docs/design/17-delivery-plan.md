@@ -109,12 +109,14 @@ Everything a user needs to actually run transfers.
 
 Delegation. A Quay target can stop being somewhere we push to and become somewhere that pulls for itself. Specified in [18](18-quay-replication.md).
 
+**Status: the configuration half is built; the transfer half is not.** A mirror can be declared, validated, applied, observed, drifted and synced today. What a *download* means against a delegated target — the `Strategy` seam, the destination walk, `diverged`, `warm` — is still to come, and `transfers.strategy` reads `copy` until it lands. The split is deliberate: configuring a mirror is useful on its own, and the transfer semantics need the destination walk that gives `succeeded` and `diverged` their meaning. What remains is marked below.
+
 - `replication.mode` on a target: `copy` (default, unchanged), `mirror`, `proxy` ([18](18-quay-replication.md) §5)
 - `internal/registry/quay`: the **management** API client — mirror config, proxy cache, `changestate`, robots — separate from the `/v2` data path
-- The `Strategy` seam, with the existing planner and engine moved behind it unchanged ([18](18-quay-replication.md) §7)
+- ~~The `Strategy` seam, with the existing planner and engine moved behind it unchanged~~ ([18](18-quay-replication.md) §7) — **remaining**
 - Explicit `apply` with a diff; continuous drift detection that never self-heals ([18](18-quay-replication.md) §8)
-- Observed sync history, the `diverged` outcome, and `warm` for proxy caches ([18](18-quay-replication.md) §6)
-- `targets list|describe|apply|sync|drift`, `warm`; replication routes; the `Replication` audit category and its metrics
+- Observed sync history; the `diverged` outcome and `warm` for proxy caches are **remaining** ([18](18-quay-replication.md) §6)
+- `targets list|describe|apply|sync|drift` and the replication routes; `warm`, the `Replication` audit category and its metrics are **remaining**
 
 **Acceptance:**
 - A `mode: mirror` target applies from configuration, syncs on request, and reaches `succeeded` when the destination digest matches the discovered one — and `diverged`, not `succeeded`, when the upstream tag has moved underneath it.
@@ -125,7 +127,28 @@ Delegation. A Quay target can stop being somewhere we push to and become somewhe
 
 **Entry criterion:** Q7 below — if a mirror sync cannot be observed well enough to report honestly, this milestone does not start.
 
-### M9 — Web UI
+### M9 — Download rules
+
+The declared form of the operation the estate actually performs: vendor → JFrog → Quay, with gates, as one reviewable object. Specified in [20](20-download-rules.md).
+
+- `download.rules` replacing `autoDownload.rules`, which keeps loading unchanged ([20](20-download-rules.md) §3)
+- Chain derivation from the targets' own `mirror.from` edges — a set of destinations in, an ordered plan out ([20](20-download-rules.md) §3.5, §4)
+- `transfers.step_index` and `depends_on_transfer_id`; the `waiting` and `skipped` transfer states ([20](20-download-rules.md) §6)
+- Verification as a gate: under `enforce`, a destination that fails verification stops the steps that depend on it ([20](20-download-rules.md) §5)
+- `trigger: [discovery, manual]`, the optional window, and rule revisions in the idempotency key ([20](20-download-rules.md) §8)
+- Suspension — an audited operational override that never edits Git ([20](20-download-rules.md) §9)
+- `rules list|describe|run|suspend|resume`, `download --rule`; the `downloadRules` routes; the `Download` audit category and its metrics
+
+**Acceptance:**
+- One rule **naming only the Quay target** takes a newly discovered release from the vendor into JFrog and then into Quay, in that order, with no second command — and `transfers describe` shows two steps with two different kinds of progress and no combined percentage ([20](20-download-rules.md) §3.5, §7.1).
+- Two rules whose chains share the JFrog hop transfer that package to JFrog **once**, and the audit trail shows one transfer ([20](20-download-rules.md) §3.5).
+- With `verify.policy: enforce`, a destination whose signature check fails leaves the Quay step `skipped`, not `failed`, and **nothing was written to Quay**. This is the failure this milestone exists to make impossible.
+- Every product document that was valid at M8 is valid at M9 and produces byte-identical transfers ([20](20-download-rules.md) §3.3).
+- A rule naming a Quay target whose tag glob excludes `sha256-*.sig` is rejected by `config validate` when `verify.after` is set — the two blocks are only wrong together ([20](20-download-rules.md) §3.4).
+- `rules suspend` stops a rule within one API call, survives a Coordinator restart, and is reported as an override of what Git says. No configuration file changed.
+- Retrying a partially failed run does not re-transfer a step that already succeeded.
+
+### M10 — Web UI
 
 The second client of the same API. Direction, scope and the six gates in [19](19-user-interface.md); information architecture in the [UI generation brief](../ui/ui-generation-brief.md).
 
@@ -152,9 +175,13 @@ M3 Transfer + ADR-001  │   ← the vertical slice; the riskiest milestone, don
 M7 Scale and chaos ────┘   ← needs M3 + M4
      │
      ├── M8 Quay replication strategies   ← needs M4 (Quay) + M6 (audit, notifications)
+     │        │
+     │   M9 Download rules                ← needs M8 (the mirror step) + M5 (the gates)
      │
-     └── M9 Web UI                        ← needs Q6 (API auth) as a GATE, not a dependency
+     └── M10 Web UI                       ← needs Q6 (API auth) as a GATE, not a dependency
 ```
+
+**M9 follows M8 rather than running beside it**, even though its fan-out half needs nothing from Quay. The ordering model, the `skipped` state and the per-step rendering would all be built twice if they were built first for a chain whose steps are all copies — and the chain worth having is the one with a mirror at the end ([20](20-download-rules.md) §14).
 
 M6 depends only on M2 and can run in parallel with M4/M5 if there is capacity. M7 is deliberately last: backpressure tuning is meaningless without a real transfer path to tune, and chaos testing needs the full system.
 
@@ -202,10 +229,14 @@ Deliberately unresolved. Each is recorded with when it must be answered, so none
 | Q3 | Which registries actually honour chunked-upload resume in our environment? ([05](05-transfer-engine.md) §4.6) | M4, empirically via `upload_resume_total` |
 | Q4 | Is priority aging needed, or does alerting on `queue_oldest_pending_age_seconds` suffice? ([04](04-queue-and-scheduling.md) §6) | M7, from production behaviour |
 | Q5 | Does the dequeue need the per-target composite index? ([04](04-queue-and-scheduling.md) §4.2) | M7, triggered by `queue_lease_duration_seconds` |
-| Q6 | **When is API authentication enabled?** ([09](09-api.md) §10) | **Before any exposure beyond the cluster — a deployment gate, not a milestone. Also gate G1 for M9** |
+| Q6 | **When is API authentication enabled?** ([09](09-api.md) §10) | **Before any exposure beyond the cluster — a deployment gate, not a milestone. Also gate G1 for M10** |
 | Q7 | **Is a Quay mirror sync observable enough to report honestly?** Does `GET …/mirror` distinguish "never ran" from "running" from "failed" reliably, or must we depend on Quay's notifications? ([18](18-quay-replication.md) §13) | M8 entry — a negative answer drops `mirror` rather than shipping a status nobody can trust |
 | Q8 | Should `manage: auto` exist — continuous reconciliation of Quay config — and under what guard? ([18](18-quay-replication.md) §8) | M8 exit, from how often observed drift turns out to be legitimate |
 | Q9 | Does `warm` belong in the worker plane, since it moves real bytes and should obey the concurrency budget? ([18](18-quay-replication.md) §6.3) | M8 design |
 | Q10 | Can a mirror tag glob be generated from an `autoDownload` rule's RE2 pattern, or is the dialect gap a trap? ([18](18-quay-replication.md) §5.3) | M8 — the default answer is no |
+| Q11 | Should a rule suspension **expire by default** rather than persisting until someone remembers? ([20](20-download-rules.md) §9) | M9 design |
+| Q12 | Does anyone use a rule's `window`? It is the one field beyond the stated requirement and is deletable in isolation ([20](20-download-rules.md) §8.2) | M9 exit |
+| Q13 | Do recurring schedules belong in a rule, or does a CronJob calling `rules run` cover every real case? ([20](20-download-rules.md) §12) | M10 — the default answer is the CronJob |
+| Q14 | Is `rule_revision` the hash of the rule or of the whole product document? ([20](20-download-rules.md) §8.3) | M9 design |
 
 Q6 is the one with real consequences. v1 ships unauthenticated behind a NetworkPolicy, and that is only acceptable while the NetworkPolicy is the whole story. Adding an Ingress without first implementing [09](09-api.md) §10.2 would expose transfer control and the full audit trail to anyone who can route to it.

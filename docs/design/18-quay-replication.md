@@ -1,7 +1,18 @@
 # 18 — Quay Replication Strategies
 
 > **Prerequisites:** [01 — Domain Model](01-domain-model.md), [02 — Configuration](02-configuration.md), [05 — Transfer Engine](05-transfer-engine.md), [06 — Registry Abstraction](06-registry-abstraction.md)
-> **Status: PROPOSED. Nothing in this document is implemented.** It specifies the design and is scheduled at [M8](17-delivery-plan.md#m8--quay-replication-strategies). Where it changes an existing rule — in particular [00 §3](00-overview.md#3-non-goals)'s "not a pull-through cache or mirroring proxy" — it says so and says why.
+> **Status: PARTIALLY IMPLEMENTED at [M8](17-delivery-plan.md#m8--quay-replication-strategies).** Where it changes an existing rule — in particular [00 §3](00-overview.md#3-non-goals)'s "not a pull-through cache or mirroring proxy" — it says so and says why.
+>
+> | Section | State |
+> |---|---|
+> | §5 Configuration, validation, the glob dialect, the two credentials | **Built.** `internal/product/replication.go`, `validate_replication.go`, `warnings.go` |
+> | §7 Management client, `target_replication`, `mirror_syncs`, `transfers.strategy`, API routes, `targets` commands | **Built.** `internal/registry/quay`, `internal/replication`, `internal/store/replication.go`, migration `00016` |
+> | §8 Explicit apply with a diff, continuous drift detection that never self-heals | **Built.** Drift is computed against what we sent, and an apply is the only write |
+> | §9 The three defences against the signature trap | **Built.** Validation warning, the reference product, and `targets describe` |
+> | §6 What a transfer MEANS per mode — the `Strategy` seam, `download` against a mirror, the destination walk, `diverged`, `warm` | **Not built.** A mirror is configured, applied, observed and synced today; a *transfer* still means `copy` |
+> | §7 Metrics and audit events | **Not built** |
+>
+> `transfers.strategy` exists as a column and is always `copy` until §6 lands. The two halves are separable on purpose: configuring a mirror is useful on its own, and the transfer semantics need the destination walk that gives `succeeded` and `diverged` their meaning.
 
 ---
 
@@ -412,7 +423,7 @@ So `transferctl warm <package> --target ocp-dev-cache` (and `replication.proxy.p
 
 The three modes are a real distinction in the engine and mostly **not** a decision the person requesting a release should be making. The interface therefore surfaces them as *what happens*, not as *what to choose* ([19](19-user-interface.md) §3.1):
 
-- A Download Rule declares the chain once — **Vendor → JFrog → Quay mirror** — which is where `mode` is actually decided, by whoever writes the product configuration.
+- A Download Rule declares the chain once — **Vendor → JFrog → Quay mirror** — which is where `mode` is actually decided, by whoever writes the product configuration. [20](20-download-rules.md) specifies that rule; note that it does *not* re-declare the chain, it **derives** it from `mirror.from` above ([20](20-download-rules.md) §4), so this block stays the only place the edge is written.
 - A download then shows the chain as steps: *Downloading to JFrog* (measured bytes, speed, ETA, because we move them) → *Configuring Mirror to Quay* (configured-at, first sync completed, content matches — because Quay moves them) → *Verification* → *Completed*.
 - The word "mirror" appears; the words "replication mode", "delegated" and "strategy" do not.
 

@@ -146,9 +146,18 @@ type Deps struct {
 	// Comparer is optional on the same terms: it reaches a destination
 	// registry through the configured client factory, which only a
 	// composition root holds.
-	Comparer  Comparer
-	Leader    Leadership
-	Component string
+	Comparer Comparer
+	// Replication is optional: it needs a registry management client and the
+	// secrets behind it, which only a composition root holds. Without it the
+	// replication routes are absent and a caller gets an honest 404 rather
+	// than a route that always fails.
+	Replication Replicator
+	// ReplicationStore backs the sync history. Separate from Replication
+	// because the history is readable on a Coordinator that cannot currently
+	// reach the registry at all, and that is exactly when it is wanted.
+	ReplicationStore *store.Replication
+	Leader           Leadership
+	Component        string
 }
 
 // Server wires the router.
@@ -237,6 +246,27 @@ func (s *Server) routes() chi.Router {
 		// for one path says nothing about another.
 		if s.deps.Calibrator != nil {
 			r.Post("/products/{product}:calibrate", s.handleCalibrate)
+		}
+
+		// Target replication. These do NOT contradict "products are read-only
+		// over the API": configuration still comes from Git, and `:apply`
+		// pushes what Git already says into a third-party registry's own
+		// configuration store. Nothing here edits a product.
+		//
+		// Registered only when a composition root supplied a replicator, since
+		// the routes need a management client and the secrets behind it.
+		if s.deps.Replication != nil {
+			r.Get("/products/{product}/replication", s.handleListReplication)
+			r.Get("/products/{product}/targets/{target}/replication", s.handleGetReplication)
+			r.Post("/products/{product}/targets/{target}/replication:apply", s.handleApplyReplication)
+			r.Post("/products/{product}/targets/{target}/replication:sync", s.handleSyncReplication)
+			r.Post("/products/{product}/targets/{target}/replication:cancelSync", s.handleCancelSyncReplication)
+		}
+		// The sync HISTORY is readable without a management client, and that
+		// separation is deliberate: "what has this mirror been doing" is most
+		// wanted precisely when the registry cannot be reached.
+		if s.deps.ReplicationStore != nil {
+			r.Get("/products/{product}/targets/{target}/syncs", s.handleListSyncs)
 		}
 
 		// Packages. Registered only when there is a store behind them, so a

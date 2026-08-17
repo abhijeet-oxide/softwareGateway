@@ -281,7 +281,7 @@ Types, defaults, and validation rules. Validation is enforced at load (§7) and 
 | `network` | object | no | inherits product | Same shape as `spec.network` |
 | `default` (targets) | bool | no | `false` | At most one per product |
 | `promotionOnly` (targets) | bool | no | `false` | Rejects replication requests naming this target |
-| `replication` (targets) | object | no | `mode: copy` | **Proposed, M8.** Which mechanism puts content in this target: `copy` (our workers move it), `mirror` or `proxy` (Quay does). Requires `type: quay` for the latter two. Full schema, field reference and validation rules in [18](18-quay-replication.md) §5 |
+| `replication` (targets) | object | no | `mode: copy` | Which mechanism puts content in this target: `copy` (our workers move it), `mirror` or `proxy` (Quay does). Requires `type: quay` for the latter two. Full schema, field reference and validation rules in [18](18-quay-replication.md) §5 |
 | `discovery` (sources) | object | no | `enabled: true` | |
 
 #### `vendor` — and why it is not `type`
@@ -337,6 +337,8 @@ The default is 32 rather than something rounder because it is what the old defau
 
 
 ### 5.4 `autoDownload.rules[]`
+
+> **Proposed at [M9](17-delivery-plan.md#m9--download-rules):** the block is renamed `download` and the rule gains `sources`, `trigger`, `window` and a `verify` sub-block. `autoDownload` keeps loading and keeps meaning exactly this — the compatibility contract is in [20](20-download-rules.md) §3.3.
 
 Evaluated in order against each newly discovered package; **first match wins**, remaining rules are skipped. Ordered-first-match rather than all-match, because two rules matching the same tag with different priorities has no sensible interpretation.
 

@@ -642,3 +642,62 @@ func (c *Client) CreateTransfer(ctx context.Context, req CreateTransferRequest) 
 	}
 	return &out, nil
 }
+
+// ---------------------------------------------------------------------------
+// Target replication (docs/design/18)
+// ---------------------------------------------------------------------------
+
+// ListReplication returns every target's replication state for one product.
+func (c *Client) ListReplication(ctx context.Context, product string) (*ListReplicationResponse, error) {
+	var out ListReplicationResponse
+	return &out, c.get(ctx, "/api/v1/products/"+url.PathEscape(product)+"/replication", &out)
+}
+
+// GetReplication returns one target's replication state.
+func (c *Client) GetReplication(ctx context.Context, product, target string) (*ReplicationView, error) {
+	var out ReplicationView
+	return &out, c.get(ctx, replicationPath(product, target), &out)
+}
+
+// ApplyReplication writes a target's configuration to its registry.
+//
+// A destructive plan comes back as 409 with NeedsConfirmation set and the plan
+// in the body, so the caller can show what will happen before asking again
+// with Confirm. That is why the 409 is decoded rather than returned as an
+// error: the body is the whole point of the response.
+func (c *Client) ApplyReplication(ctx context.Context, product, target string, req ApplyReplicationRequest) (*ApplyReplicationResponse, error) {
+	var out ApplyReplicationResponse
+	err := c.post(ctx, replicationPath(product, target)+":apply", req, &out)
+	if err != nil && out.NeedsConfirmation {
+		return &out, nil
+	}
+	return &out, err
+}
+
+// SyncReplication asks the registry to sync a mirror target now.
+func (c *Client) SyncReplication(ctx context.Context, product, target string) (*SyncReplicationResponse, error) {
+	var out SyncReplicationResponse
+	return &out, c.post(ctx, replicationPath(product, target)+":sync", nil, &out)
+}
+
+// CancelSyncReplication stops an in-progress sync.
+func (c *Client) CancelSyncReplication(ctx context.Context, product, target string) (*SyncReplicationResponse, error) {
+	var out SyncReplicationResponse
+	return &out, c.post(ctx, replicationPath(product, target)+":cancelSync", nil, &out)
+}
+
+// ListSyncs returns a target's observed sync history.
+func (c *Client) ListSyncs(ctx context.Context, product, target string, pageSize int) (*ListSyncsResponse, error) {
+	path := "/api/v1/products/" + url.PathEscape(product) +
+		"/targets/" + url.PathEscape(target) + "/syncs"
+	if pageSize > 0 {
+		path += "?pageSize=" + strconv.Itoa(pageSize)
+	}
+	var out ListSyncsResponse
+	return &out, c.get(ctx, path, &out)
+}
+
+func replicationPath(product, target string) string {
+	return "/api/v1/products/" + url.PathEscape(product) +
+		"/targets/" + url.PathEscape(target) + "/replication"
+}

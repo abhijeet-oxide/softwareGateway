@@ -41,6 +41,12 @@ type Product struct {
 	// tidy schema, and an operator who has just been paged is not the person to
 	// hand a migration to. `transferctl config check` reports them.
 	Deprecations []string `json:"-"`
+
+	// Warnings lists configurations that are valid and probably not intended.
+	//
+	// Distinct from Deprecations, which are about the schema moving on. A
+	// warning is about THIS document being self-defeating — see warnings.go.
+	Warnings []Warning `json:"-"`
 }
 
 type Metadata struct {
@@ -326,6 +332,17 @@ type Target struct {
 	// PromotionOnly rejects direct replication, so a production registry can
 	// be reachable only by promotion from another target.
 	PromotionOnly bool `json:"promotionOnly,omitempty"`
+
+	// Replication says HOW content gets into this target — whether our workers
+	// push it, or the registry fetches it for itself. Absent means `copy`,
+	// which is what every target meant before this field existed. See
+	// replication.go and docs/design/18.
+	Replication *Replication `json:"replication,omitempty"`
+
+	// Quay holds the credential for this registry's CONTROL api, which is a
+	// different endpoint taking a different credential from the one in
+	// credentialsRef. Only needed by a non-copy mode.
+	Quay *QuaySettings `json:"quay,omitempty"`
 }
 
 // Promotion declares the hop `transfers promote` takes by default.

@@ -45,7 +45,7 @@ Google **AIP** (API Improvement Proposals) for resource naming and method shape,
 
 Products are **read-only over the API.** Configuration comes from Git ([02](02-configuration.md)); an API that could mutate it would create a second source of truth that Flux would immediately revert.
 
-#### Target replication (proposed, M8)
+#### Target replication
 
 | Method | Path | Purpose |
 |---|---|---|
@@ -56,6 +56,18 @@ Products are **read-only over the API.** Configuration comes from Git ([02](02-c
 | `GET` | `/api/v1/products/{product}/targets/{target}/syncs` | Observed sync history |
 
 These do not contradict the paragraph above: configuration still comes from Git, and `:apply` pushes what Git already says into a *third-party registry's* own configuration store. It never edits a product. See [18](18-quay-replication.md) §7–8.
+
+#### Download rules (proposed, M9)
+
+| Method | Path | Purpose |
+|---|---|---|
+| `GET` | `/api/v1/products/{product}/downloadRules` | Rules, their derived chains, suspension state and last run |
+| `GET` | `/api/v1/products/{product}/downloadRules/{rule}` | One, with the step order and the gates it applies |
+| `POST` | `/api/v1/products/{product}/downloadRules/{rule}:run` | Trigger. `validateOnly=true` renders the plan and moves nothing |
+| `POST` | `/api/v1/products/{product}/downloadRules/{rule}:suspend` | Stop it now. Requires a reason; never edits configuration |
+| `POST` | `/api/v1/products/{product}/downloadRules/{rule}:resume` | |
+
+Same caveat as above, and one deliberate absence: there is **no** `/downloadRules/{rule}/runs`. A run is a transfer request, and `GET /transfers?filter=rule="ga-releases"` already returns them (§3). See [20](20-download-rules.md) §10.
 
 #### Why calibration is per product and synchronous
 

@@ -82,6 +82,7 @@ func (p *Product) Validate(resolver *SecretResolver) error {
 	errs = append(errs, p.validatePromotion()...)
 	errs = append(errs, p.validatePhysicalRepositories()...)
 	errs = append(errs, p.validateAutoDownload()...)
+	errs = append(errs, p.validateReplication(resolver)...)
 	errs = append(errs, p.validateVerification(resolver)...)
 	errs = append(errs, p.validateNotifications(resolver)...)
 	errs = append(errs, validateNetwork("spec.network", &p.Spec.Network, resolver)...)
@@ -835,21 +836,39 @@ func validateRepoCommon(
 	case !anonymous && creds == nil:
 		errs = append(errs, Error{path + ".credentialsRef", "required unless anonymous is true", ""})
 	case creds != nil:
-		if creds.SecretName == "" {
-			errs = append(errs, Error{path + ".credentialsRef.secretName", "required", ""})
-		} else if resolver != nil {
-			for _, key := range []string{creds.UsernameKeyOrDefault(), creds.PasswordKeyOrDefault()} {
-				if !resolver.Exists(creds.SecretName, key) {
-					errs = append(errs, Error{
-						path + ".credentialsRef",
-						fmt.Sprintf("secret %q has no key %q", creds.SecretName, key),
-						"expected at " + resolver.Dir() + "/" + creds.SecretName + "/" + key,
-					})
-				}
-			}
-		}
+		errs = append(errs, validateCredentialsRef(path+".credentialsRef", creds, resolver)...)
 	}
 
+	return errs
+}
+
+// validateCredentialsRef checks a username/password Secret reference and that
+// the resolver can actually see both keys.
+//
+// Separate from validateRepoCommon because a credential reference is no longer
+// only a repository's own: a Quay mirror carries the credentials QUAY will use
+// to reach its upstream, which is a different credential in a different block
+// checked the same way.
+func validateCredentialsRef(path string, creds *CredentialsRef, resolver *SecretResolver) Errors {
+	if creds == nil {
+		return nil
+	}
+	if creds.SecretName == "" {
+		return Errors{{path + ".secretName", "required", ""}}
+	}
+	if resolver == nil {
+		return nil
+	}
+	var errs Errors
+	for _, key := range []string{creds.UsernameKeyOrDefault(), creds.PasswordKeyOrDefault()} {
+		if !resolver.Exists(creds.SecretName, key) {
+			errs = append(errs, Error{
+				path,
+				fmt.Sprintf("secret %q has no key %q", creds.SecretName, key),
+				"expected at " + resolver.Dir() + "/" + creds.SecretName + "/" + key,
+			})
+		}
+	}
 	return errs
 }
 

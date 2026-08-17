@@ -38,6 +38,7 @@ import (
 	"github.com/abhijeet-oxide/softwareGateway/internal/product"
 	"github.com/abhijeet-oxide/softwareGateway/internal/queue"
 	"github.com/abhijeet-oxide/softwareGateway/internal/regclient"
+	"github.com/abhijeet-oxide/softwareGateway/internal/replication"
 	"github.com/abhijeet-oxide/softwareGateway/internal/store"
 	"github.com/abhijeet-oxide/softwareGateway/internal/transfer"
 	"github.com/abhijeet-oxide/softwareGateway/internal/vendors"
@@ -155,6 +156,11 @@ func run() error {
 	near.Register(layouts)
 
 	discoveryCtl := discovery.NewController(packages, resolver, layouts, logger, mreg)
+
+	// Delegated replication: what we last wrote to a registry's own
+	// configuration, and what it did next. Only the Coordinator holds this —
+	// a worker moves bytes and has no business writing a mirror config.
+	replicationStore := store.NewReplication(st)
 
 	// ---- the queue ----
 	//
@@ -341,9 +347,14 @@ func run() error {
 		Calibrator: calibrate.NewCalibrator(resolver),
 		// Comparison runs here for the same reason: it opens connections to the
 		// DESTINATION registry, and transferctl is a pure API client.
-		Comparer:  compareImpl{transferResolver},
-		Leader:    elector,
-		Component: component,
+		Comparer: compareImpl{transferResolver},
+		// Delegated replication runs here for the same reason again: it speaks
+		// to Quay's MANAGEMENT api, which needs a credential from a projected
+		// Secret, and transferctl holds neither.
+		Replication:      replication.NewService(replication.NewResolver(resolver, logger, "softwaregateway/"+info.Version), replicationStore, logger),
+		ReplicationStore: replicationStore,
+		Leader:           elector,
+		Component:        component,
 	})
 
 	httpServer := &http.Server{

@@ -105,6 +105,37 @@ Everything a user needs to actually run transfers.
 
 **Acceptance:** all twelve chaos scenarios pass ([11](11-resiliency-and-backpressure.md) §5). HPA scales 2→20→2 under load without thrash. A registry returning 50% 429s for ten minutes completes the transfer with **zero failures** (C6). Adaptive limits converge and survive a Coordinator restart.
 
+### M8 — Quay replication strategies
+
+Delegation. A Quay target can stop being somewhere we push to and become somewhere that pulls for itself. Specified in [18](18-quay-replication.md).
+
+- `replication.mode` on a target: `copy` (default, unchanged), `mirror`, `proxy` ([18](18-quay-replication.md) §5)
+- `internal/registry/quay`: the **management** API client — mirror config, proxy cache, `changestate`, robots — separate from the `/v2` data path
+- The `Strategy` seam, with the existing planner and engine moved behind it unchanged ([18](18-quay-replication.md) §7)
+- Explicit `apply` with a diff; continuous drift detection that never self-heals ([18](18-quay-replication.md) §8)
+- Observed sync history, the `diverged` outcome, and `warm` for proxy caches ([18](18-quay-replication.md) §6)
+- `targets list|describe|apply|sync|drift`, `warm`; replication routes; the `Replication` audit category and its metrics
+
+**Acceptance:**
+- A `mode: mirror` target applies from configuration, syncs on request, and reaches `succeeded` when the destination digest matches the discovered one — and `diverged`, not `succeeded`, when the upstream tag has moved underneath it.
+- A tag glob that would exclude `sha256-*.sig` signature tags is caught by `config validate` **before** it is applied ([18](18-quay-replication.md) §9). This is the failure this milestone exists to make impossible.
+- A mirror edited by hand in the Quay UI shows as drift within one reload; `targets apply` closes it; **no config reload ever closes it by itself**.
+- A `mode: proxy` target refuses `download` with a problem detail naming `warm`; `warm` populates the cache and reports the bytes it discarded.
+- Byte columns for a delegated transfer render `—` everywhere. Nothing in any output synthesises a percentage ([18](18-quay-replication.md) §6.1).
+
+**Entry criterion:** Q7 below — if a mirror sync cannot be observed well enough to report honestly, this milestone does not start.
+
+### M9 — Web UI
+
+The second client of the same API. Direction, scope and the six gates in [19](19-user-interface.md); information architecture in the [UI generation brief](../ui/ui-generation-brief.md).
+
+- **Gate first: API authentication, identity and roles** ([09](09-api.md) §10, Q6). Nothing else in this milestone may start before it
+- OpenAPI generated from the router; server-sent events for live progress
+- Ten pages, six top-level, covering everything `transferctl` does
+- Static bundle, air-gapped, no fourth binary
+
+**Acceptance:** a first-time user replicates a package into lab without documentation. Every CLI capability is reachable in the UI. Configuration is read-only with drift visible. No delegated object shows a progress percentage or ETA anywhere.
+
 ## 2. Sequencing
 
 ```
@@ -119,6 +150,10 @@ M3 Transfer + ADR-001  │   ← the vertical slice; the riskiest milestone, don
      └── M6 Notifications, audit, retention  ← can start after M2
                        │
 M7 Scale and chaos ────┘   ← needs M3 + M4
+     │
+     ├── M8 Quay replication strategies   ← needs M4 (Quay) + M6 (audit, notifications)
+     │
+     └── M9 Web UI                        ← needs Q6 (API auth) as a GATE, not a dependency
 ```
 
 M6 depends only on M2 and can run in parallel with M4/M5 if there is capacity. M7 is deliberately last: backpressure tuning is meaningless without a real transfer path to tune, and chaos testing needs the full system.
@@ -167,6 +202,10 @@ Deliberately unresolved. Each is recorded with when it must be answered, so none
 | Q3 | Which registries actually honour chunked-upload resume in our environment? ([05](05-transfer-engine.md) §4.6) | M4, empirically via `upload_resume_total` |
 | Q4 | Is priority aging needed, or does alerting on `queue_oldest_pending_age_seconds` suffice? ([04](04-queue-and-scheduling.md) §6) | M7, from production behaviour |
 | Q5 | Does the dequeue need the per-target composite index? ([04](04-queue-and-scheduling.md) §4.2) | M7, triggered by `queue_lease_duration_seconds` |
-| Q6 | **When is API authentication enabled?** ([09](09-api.md) §10) | **Before any exposure beyond the cluster — a deployment gate, not a milestone** |
+| Q6 | **When is API authentication enabled?** ([09](09-api.md) §10) | **Before any exposure beyond the cluster — a deployment gate, not a milestone. Also gate G1 for M9** |
+| Q7 | **Is a Quay mirror sync observable enough to report honestly?** Does `GET …/mirror` distinguish "never ran" from "running" from "failed" reliably, or must we depend on Quay's notifications? ([18](18-quay-replication.md) §13) | M8 entry — a negative answer drops `mirror` rather than shipping a status nobody can trust |
+| Q8 | Should `manage: auto` exist — continuous reconciliation of Quay config — and under what guard? ([18](18-quay-replication.md) §8) | M8 exit, from how often observed drift turns out to be legitimate |
+| Q9 | Does `warm` belong in the worker plane, since it moves real bytes and should obey the concurrency budget? ([18](18-quay-replication.md) §6.3) | M8 design |
+| Q10 | Can a mirror tag glob be generated from an `autoDownload` rule's RE2 pattern, or is the dialect gap a trap? ([18](18-quay-replication.md) §5.3) | M8 — the default answer is no |
 
 Q6 is the one with real consequences. v1 ships unauthenticated behind a NetworkPolicy, and that is only acceptable while the NetworkPolicy is the whole story. Adding an Ingress without first implementing [09](09-api.md) §10.2 would expose transfer control and the full audit trail to anyone who can route to it.

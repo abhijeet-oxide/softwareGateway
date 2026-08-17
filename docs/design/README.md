@@ -28,6 +28,8 @@ A cloud-native platform that continuously discovers software packages published 
 | 15 | [Code Layout](15-code-layout.md) | Package structure, dependency rules |
 | 16 | [Technology Choices](16-technology-choices.md) | **ADR-001** and the decision table |
 | 17 | [Delivery Plan](17-delivery-plan.md) | Milestones, testing, open questions |
+| 18 | [Quay Replication Strategies](18-quay-replication.md) | `copy` / `mirror` / `proxy` per target, Quay's own mechanisms, what each promises |
+| 19 | [User Interface](19-user-interface.md) | Why v1 is CLI-only, what the UI must do, the gates before it ships |
 
 ## Reading order
 
@@ -38,6 +40,8 @@ A cloud-native platform that continuously discovers software packages published 
 | Implementing the Coordinator | 03 → 04 → 09 → 10 → 07 |
 | Implementing the Worker | 05 → 06 → 04 §4 → 11 |
 | Implementing the CLI | 13 → 09 |
+| Implementing Quay replication modes | 18 → 06 → 02 → 05 |
+| Building the UI | 19 → 09 → 13 |
 | Operating it | 02 → 12 → 14 → 11 |
 | Auditing the technology choices | 16 → 03 → 06 |
 
@@ -67,6 +71,8 @@ Stated here so they are found before they are discovered.
 | Notary Project signatures unsupported | Cosign only in v1; `Verifier` seam defined ([08](08-verification.md) §2) |
 | No multi-tenancy | One organization, one deployment. Products are not a security boundary |
 | SQLite is development-only | Not supported in production; the Coordinator warns at startup ([03](03-persistence.md) §2) |
+| Delegated replication is observed, not measured | A `mirror` target reports a sync state and no byte progress; a `proxy` target holds nothing until someone pulls ([18](18-quay-replication.md) §6) |
+| No UI in v1 | `transferctl` and Grafana are the interfaces. Direction and gates in [19](19-user-interface.md); the API-auth gate above blocks it |
 
 ## Requirement traceability
 
@@ -79,6 +85,8 @@ Every section of the original requirement, mapped to where it is specified. This
 | Declarative, GitOps, ConfigMaps + Secrets, Flux | [02](02-configuration.md) §2–3, [14](14-deployment-and-development.md) §2 |
 | Secrets via VSO, read as k8s Secrets | [02](02-configuration.md) §3, §5.5 |
 | Generic OCI + ACR + Artifactory + Quay; extensible | [06](06-registry-abstraction.md) §6, §6.5 |
+| Quay replication type selectable per target — copy, mirror, proxy | [18](18-quay-replication.md) §4–6 |
+| A UI, after a CLI-first release, over the same API | [19](19-user-interface.md) |
 | Continuous discovery, persisted, no duplicates | [07](07-discovery.md) §2–3, [03](03-persistence.md) §5 |
 | Discovery → notifications, manual and auto download | [07](07-discovery.md) §5–6 |
 | Regex auto-download rules | [02](02-configuration.md) §5.4, [07](07-discovery.md) §5 |

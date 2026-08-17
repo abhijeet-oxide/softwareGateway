@@ -34,8 +34,8 @@ Doing this by hand, or with `crane copy` in a CronJob, breaks down on all four c
 Naming these prevents scope creep later.
 
 - **Not a registry.** We do not store artifacts. We move them between registries that already exist.
-- **Not a pull-through cache or mirroring proxy.** Transfers are explicit, recorded, and auditable — not a side effect of a client pull.
-- **No graphical UI in v1.** `transferctl` and Prometheus/Grafana are the interfaces.
+- **Not a pull-through cache or mirroring proxy.** No artifact byte is ever served by us, and no transfer is ever a side effect of somebody's pull. We may, however, **configure and observe** a registry that does those things — a Quay target can delegate replication to Quay's own mirroring or proxy cache ([18](18-quay-replication.md)). The non-goal is about our data path; that is about our control plane.
+- **No graphical UI in v1.** `transferctl` and Prometheus/Grafana are the interfaces. The design is API-first and a UI follows — direction, scope and the gates before it in [19](19-user-interface.md).
 - **No vendor-side publishing.** We only read from vendor repositories.
 - **No multi-tenancy or per-user quotas in v1.** One organization, one deployment.
 - **No API authentication in v1.** The Coordinator sits behind a NetworkPolicy. The auth seam is specified in [09 — API](09-api.md) §10 but not implemented. This is an accepted, documented risk.

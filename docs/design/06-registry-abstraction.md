@@ -208,6 +208,7 @@ Deltas from generic:
 - **Robot accounts** use `org+robotname` as the username. No code difference, but a documentation trap worth naming.
 - **Rate-limit headers** are informative and feed the adaptive controller.
 - **Mount** support varies by deployment (quay.io vs Project Quay); probed, not assumed.
+- **Quay has replication mechanisms of its own** — repository mirroring and proxy cache — and they are reached over the **management API (`/api/v1`)** rather than the distribution API (`/v2`). Two protocols on one host, so two clients: this `Repository` implementation stays generic, and `internal/registry/quay` holds the management client. A target may therefore declare `replication.mode: copy | mirror | proxy`, which changes *who moves the bytes* and consequently what the system can promise about them. Specified in [18](18-quay-replication.md); nothing above this bullet changes for a `copy`-mode Quay target, which is the default.
 
 ### 6.5 Adding a fifth registry
 

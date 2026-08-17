@@ -125,6 +125,17 @@ Prometheus naming: `softwaregateway_` prefix, base units (bytes, seconds), `_tot
 
 There is deliberately **no** byte or throughput metric for a delegated target. We do not move those bytes and cannot count them; a gauge that looked like throughput but was derived from elapsed time would be worse than the absence of one ([18](18-quay-replication.md) §6.1).
 
+### 2.6.2 Download rules (proposed, M9)
+
+| Metric | Type | Labels | Meaning |
+|---|---|---|---|
+| `download_rule_matches_total` | counter | `product`, `rule` | Packages a rule matched. High cardinality in time, not in labels — this is the metric that exists *instead of* an audit event ([20](20-download-rules.md) §10) |
+| `download_run_total` | counter | `product`, `rule`, `trigger`, `result` | Runs, by how they were triggered and how they ended |
+| `download_step_skipped_total` | counter | `product`, `rule`, `target` | Steps that never ran because a predecessor did not succeed ([20](20-download-rules.md) §6) |
+| `download_rule_suspended` | gauge | `product`, `rule` | `1` while an operational suspension is in force ([20](20-download-rules.md) §9) |
+
+`download_rule_suspended` is an alerting target, not a dashboard tile: a suspension that outlives the incident it was declared for is the failure mode this metric exists to catch.
+
 ### 2.7 Build info
 
 ```
@@ -182,6 +193,7 @@ Written **in the same transaction as the change it records** ([10](10-state-mach
 | Verification | `VerificationStarted`, `VerificationPassed`, `VerificationFailed`, `VerificationError` |
 | Config | `ConfigReloaded`, `ConfigLoadFailed`, `ProductAdded`, `ProductRemoved` |
 | Replication (proposed, M8) | `ReplicationConfigApplied`, `ReplicationConfigDrifted`, `MirrorSyncRequested`, `MirrorSyncSucceeded`, `MirrorSyncFailed`, `MirrorContentDiverged`, `ProxyCacheConfigured`, `CacheWarmed` ([18](18-quay-replication.md) §7) |
+| Download (proposed, M9) | `DownloadRunRequested`, `DownloadRunCompleted`, `DownloadStepSkipped`, `DownloadRuleSuspended`, `DownloadRuleResumed` ([20](20-download-rules.md) §10). A rule *match* is deliberately not audited — it happens for every package on every scan, and burying five real events under thousands of routine ones is how an audit trail stops being read |
 | System | `LeadershipAcquired`, `LeadershipLost`, `MigrationApplied`, `RetentionApplied` |
 
 Not every job transition is audited — 850 `JobSucceeded` rows per package would bury the events a human cares about. **Individual job successes are metrics; job failures and user actions are audit.** The distinction is whether a human would ever ask about that specific occurrence.

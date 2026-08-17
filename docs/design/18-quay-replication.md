@@ -412,7 +412,7 @@ So `transferctl warm <package> --target ocp-dev-cache` (and `replication.proxy.p
 
 The three modes are a real distinction in the engine and mostly **not** a decision the person requesting a release should be making. The interface therefore surfaces them as *what happens*, not as *what to choose* ([19](19-user-interface.md) §3.1):
 
-- A Download Rule declares the chain once — **Vendor → JFrog → Quay mirror** — which is where `mode` is actually decided, by whoever writes the product configuration.
+- A Download Rule declares the chain once — **Vendor → JFrog → Quay mirror** — which is where `mode` is actually decided, by whoever writes the product configuration. [20](20-download-rules.md) specifies that rule; note that it does *not* re-declare the chain, it **derives** it from `mirror.from` above ([20](20-download-rules.md) §4), so this block stays the only place the edge is written.
 - A download then shows the chain as steps: *Downloading to JFrog* (measured bytes, speed, ETA, because we move them) → *Configuring Mirror to Quay* (configured-at, first sync completed, content matches — because Quay moves them) → *Verification* → *Completed*.
 - The word "mirror" appears; the words "replication mode", "delegated" and "strategy" do not.
 

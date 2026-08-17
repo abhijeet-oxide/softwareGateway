@@ -1,7 +1,7 @@
 # 19 — User Interface
 
 > **Prerequisites:** [09 — API](09-api.md), [13 — CLI](13-cli.md)
-> **Status: DIRECTION. Nothing here is implemented, and v1 does not include it.** Scheduled at [M9](17-delivery-plan.md#m9--web-ui), behind the authentication gate in [17](17-delivery-plan.md) Q6. Recorded now because decisions taken today either make it cheap or make it expensive, and the difference is invisible until someone tries.
+> **Status: DIRECTION. Nothing here is implemented, and v1 does not include it.** Scheduled at [M10](17-delivery-plan.md#m10--web-ui), behind the authentication gate in [17](17-delivery-plan.md) Q6. Recorded now because decisions taken today either make it cheap or make it expensive, and the difference is invisible until someone tries.
 
 ---
 
@@ -15,11 +15,11 @@ What the UI will be, stated so it can be held to: **clean, minimal, fast, fully 
 
 It is called **Software Lifecycle Manager** on screen. `softwareGateway` is the engineering name of the system and appears nowhere in the interface — §3.1 explains why that is a design decision rather than branding.
 
-## 2. Why say it now rather than at M9
+## 2. Why say it now rather than at M10
 
 Because three classes of decision are cheap today and expensive later, and all three are decisions we are otherwise making by accident:
 
-| Decision | Made well today | Discovered at M9 |
+| Decision | Made well today | Discovered at M10 |
 |---|---|---|
 | **Identity** | The `actor` field, its plumbing and its recording already exist and write `"anonymous"` ([12](12-observability-and-audit.md) §4.2) | An audit trail with a year of unattributable history |
 | **Every capability behind the API** | Already true, and enforced by the CLI being a pure client | A UI that needs an endpoint the CLI never needed, added under time pressure |
@@ -47,7 +47,7 @@ with Software detail and Download reached from them. The lifecycle those pages e
 >
 > A Product Owner looking at SBC 25.8.1 should think "this release is new and signed, I'll download it". They should not meet *package*, *transfer*, *job*, *blob*, *placement*, *wave* or *replication mode* — every one of which is load-bearing in [01](01-domain-model.md) and none of which is their problem.
 >
-> The mapping is fixed, one term to one term, in the brief's vocabulary table: **Software** is a Package, **Download** is a TransferRequest and its Transfers, **Location** is a target repository, **Saved (already present)** is deduplication, **Download Rule** is an auto-download rule together with the target's replication configuration, and **Configure Mirror to Quay** is `replication.mode: mirror` ([18](18-quay-replication.md)).
+> The mapping is fixed, one term to one term, in the brief's vocabulary table: **Software** is a Package, **Download** is a TransferRequest and its Transfers, **Location** is a target repository, **Saved (already present)** is deduplication, **Download Rule** is a rule in the product's `download` block together with the chain its targets declare ([20](20-download-rules.md)), and **Configure Mirror to Quay** is a step of that chain, from `replication.mode: mirror` ([18](18-quay-replication.md)).
 >
 > *Why write it down rather than let it emerge:* two clients of one API will otherwise invent two vocabularies, and the day someone reads a CLI transcript next to a UI screenshot, neither of them can be trusted. The CLI keeps the domain words — its users are operators and the words are precise. The UI keeps the product words. The mapping is the contract between them.
 
@@ -63,9 +63,9 @@ with Software detail and Download reached from them. The lifecycle those pages e
 >
 > *What the UI does instead:* shows the loaded configuration with its config hash and load time, shows **drift** between Git and any registry-side state it manages ([18](18-quay-replication.md) §8), and links to the repository. Requesting work — downloads, promotions, syncs, applies — is not configuration and is fully available.
 >
-> *Where this is hardest, and therefore where it must be designed properly:* the **Download Rules** page. A rule is the most natural thing in the product to want to edit, and the page will be judged on whether "managed in Git" reads as obvious or as broken. So a rule is a first-class object with its YAML on the page, an **Open in Git** link, a **Drift** banner when the registry disagrees with it, and an **Apply** that states its consequences first. Enabling, disabling and running a rule now are actions; changing what a rule *says* is a commit.
+> *Where this is hardest, and therefore where it must be designed properly:* the **Download Rules** page. A rule is the most natural thing in the product to want to edit, and the page will be judged on whether "managed in Git" reads as obvious or as broken. So a rule is a first-class object with its YAML on the page, an **Open in Git** link, a **Drift** banner when the registry disagrees with it, and an **Apply** that states its consequences first. Enabling, disabling and running a rule now are actions; changing what a rule *says* is a commit. [20](20-download-rules.md) §9 is where that line is drawn precisely: the toggle writes an audited **suspension**, and the page shows both facts — *"Suspended by alice@example.com — configuration says enabled"*.
 >
-> *If that proves too slow in practice*, the escape hatch is a UI that opens a pull request rather than one that writes configuration — Git stays the source of truth and the change stays reviewable. That is a post-M9 question, deliberately not designed now.
+> *If that proves too slow in practice*, the escape hatch is a UI that opens a pull request rather than one that writes configuration — Git stays the source of truth and the change stays reviewable. That is a post-M10 question, deliberately not designed now.
 
 Also out of scope, permanently: it is not a registry browser, not a replacement for Grafana, and it serves no artifact bytes. The data path stays where [00](00-overview.md) §5 puts it.
 
@@ -77,7 +77,7 @@ Gates, not aspirations. Each is a prerequisite with a named owner elsewhere in t
 |---|---|---|
 | G1 | **API authentication and identity.** A browser application cannot front an unauthenticated API on a NetworkPolicy — the policy *is* the security model today, and a UI exists to be reachable | [09](09-api.md) §10, [17](17-delivery-plan.md) Q6 |
 | G2 | **Authorization with roles.** Read-only for auditors, operate for engineers, apply for operators. The audit trail already records the actor; it needs one that means something | [09](09-api.md) §10.2 |
-| G3 | **An OpenAPI document generated from the router**, not hand-written, so the client cannot drift from the server | new at M9 |
+| G3 | **An OpenAPI document generated from the router**, not hand-written, so the client cannot drift from the server | new at M10 |
 | G4 | **A live-progress channel.** Server-sent events over the existing progress endpoints; polling a 2 000-job transfer from a browser is not acceptable | [09](09-api.md) §6 |
 | G5 | **CORS and CSRF posture**, decided with G1 rather than after it | with G1 |
 | G6 | **Stable error semantics** — RFC 9457 problem details with machine-readable `type` values the UI can branch on without matching prose | [09](09-api.md) §8 |
@@ -94,8 +94,8 @@ G1 is absolute: shipping a UI in front of an unauthenticated API would expose tr
 - **Accessible**: WCAG AA, full keyboard operation, no meaning carried by colour alone.
 - **Honest**: the rule from [18](18-quay-replication.md) §6.1 is a UI rule above all — no progress bar, percentage or ETA for work whose bytes we are not counting. In the download flow this is visible as a real asymmetry the design must preserve: the JFrog step reports measured bytes, speed and ETA, and the **Configure Mirror to Quay** step reports configured-at, sync-completed-at and whether the content matches. Two steps of one operation, two different kinds of truth, shown differently on purpose.
 - **AT&T enterprise visual language**, light theme first: AT&T blue for primary actions, dark navy navigation, white and light-grey content, green/red/amber carrying only success, failure and warning. A mature internal operations product rather than a generic dashboard.
-- **Boring technology**, chosen at M9 against the same criteria as [ADR-001](16-technology-choices.md#adr-001): one framework, one build, no exotic runtime, and a dependency footprint an air-gapped estate can vendor.
+- **Boring technology**, chosen at M10 against the same criteria as [ADR-001](16-technology-choices.md#adr-001): one framework, one build, no exotic runtime, and a dependency footprint an air-gapped estate can vendor.
 
 ## 7. Delivery
 
-M9, after M7. It depends on G1, which is a deployment gate rather than a milestone, so the ordering is: authentication ships, then the UI is buildable. The [UI generation brief](../ui/ui-generation-brief.md) exists now so the information architecture can be reviewed — on paper, at zero cost — long before any of that.
+M10, after M9. It depends on G1, which is a deployment gate rather than a milestone, so the ordering is: authentication ships, then the UI is buildable. The [UI generation brief](../ui/ui-generation-brief.md) exists now so the information architecture can be reviewed — on paper, at zero cost — long before any of that.

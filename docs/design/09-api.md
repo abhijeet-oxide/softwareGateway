@@ -57,6 +57,18 @@ Products are **read-only over the API.** Configuration comes from Git ([02](02-c
 
 These do not contradict the paragraph above: configuration still comes from Git, and `:apply` pushes what Git already says into a *third-party registry's* own configuration store. It never edits a product. See [18](18-quay-replication.md) §7–8.
 
+#### Download rules (proposed, M9)
+
+| Method | Path | Purpose |
+|---|---|---|
+| `GET` | `/api/v1/products/{product}/downloadRules` | Rules, their derived chains, suspension state and last run |
+| `GET` | `/api/v1/products/{product}/downloadRules/{rule}` | One, with the step order and the gates it applies |
+| `POST` | `/api/v1/products/{product}/downloadRules/{rule}:run` | Trigger. `validateOnly=true` renders the plan and moves nothing |
+| `POST` | `/api/v1/products/{product}/downloadRules/{rule}:suspend` | Stop it now. Requires a reason; never edits configuration |
+| `POST` | `/api/v1/products/{product}/downloadRules/{rule}:resume` | |
+
+Same caveat as above, and one deliberate absence: there is **no** `/downloadRules/{rule}/runs`. A run is a transfer request, and `GET /transfers?filter=rule="ga-releases"` already returns them (§3). See [20](20-download-rules.md) §10.
+
 #### Why calibration is per product and synchronous
 
 There is deliberately no `/products:calibrate`. Calibrating everything would mean saturating every vendor link this deployment has, one after another, and the answer for one path says nothing about another — a fleet-wide verb here would be load with no information in it.

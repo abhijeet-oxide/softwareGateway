@@ -30,6 +30,7 @@ A cloud-native platform that continuously discovers software packages published 
 | 17 | [Delivery Plan](17-delivery-plan.md) | Milestones, testing, open questions |
 | 18 | [Quay Replication Strategies](18-quay-replication.md) | `copy` / `mirror` / `proxy` per target, Quay's own mechanisms, what each promises |
 | 19 | [User Interface](19-user-interface.md) | Why v1 is CLI-only, what the UI must do, the gates before it ships |
+| 20 | [Download Rules](20-download-rules.md) | One declared operation from vendor to cluster: derived chains, verification gates, suspension |
 
 ## Reading order
 
@@ -41,6 +42,7 @@ A cloud-native platform that continuously discovers software packages published 
 | Implementing the Worker | 05 → 06 → 04 §4 → 11 |
 | Implementing the CLI | 13 → 09 |
 | Implementing Quay replication modes | 18 → 06 → 02 → 05 |
+| Implementing download rules | 20 → 07 → 18 → 10 → 08 |
 | Building the UI | 19 → 09 → 13 |
 | Operating it | 02 → 12 → 14 → 11 |
 | Auditing the technology choices | 16 → 03 → 06 |
@@ -73,6 +75,8 @@ Stated here so they are found before they are discovered.
 | SQLite is development-only | Not supported in production; the Coordinator warns at startup ([03](03-persistence.md) §2) |
 | Delegated replication is observed, not measured | A `mirror` target reports a sync state and no byte progress; a `proxy` target holds nothing until someone pulls ([18](18-quay-replication.md) §6) |
 | No UI in v1 | `transferctl` and Grafana are the interfaces. Direction and gates in [19](19-user-interface.md); the API-auth gate above blocks it |
+| A download rule cannot express an arbitrary workflow | The only ordering primitive is a content dependency the targets already declare. No conditionals, branches or user-defined steps — deliberately ([20](20-download-rules.md) §12) |
+| A rule suspension is state outside Git | An audited operational override, reported as an override rather than prevented. The alternative was "open a PR" as the only way to stop a bad rule at 02:00 ([20](20-download-rules.md) §9) |
 
 ## Requirement traceability
 
@@ -90,6 +94,9 @@ Every section of the original requirement, mapped to where it is specified. This
 | Continuous discovery, persisted, no duplicates | [07](07-discovery.md) §2–3, [03](03-persistence.md) §5 |
 | Discovery → notifications, manual and auto download | [07](07-discovery.md) §5–6 |
 | Regex auto-download rules | [02](02-configuration.md) §5.4, [07](07-discovery.md) §5 |
+| A download rule triggered by CLI or UI, to one target or many, with the Quay step in the chain | [20](20-download-rules.md) §3–4, §8 |
+| Verification before and after a download, enabled or disabled per rule | [20](20-download-rules.md) §5 |
+| A rule that can be turned off without a commit | [20](20-download-rules.md) §9 |
 | Notification policy per product; events; email + Teams | [02](02-configuration.md) §4, [12](12-observability-and-audit.md) §5 |
 | Download, replicate to one or many targets, concurrently | [01](01-domain-model.md) §3.2, [05](05-transfer-engine.md) §8, [09](09-api.md) §4 |
 | 30–60 GB packages, thousands of layers | [05](05-transfer-engine.md) §1 |

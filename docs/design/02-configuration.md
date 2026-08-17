@@ -338,6 +338,8 @@ The default is 32 rather than something rounder because it is what the old defau
 
 ### 5.4 `autoDownload.rules[]`
 
+> **Proposed at [M9](17-delivery-plan.md#m9--download-rules):** the block is renamed `download` and the rule gains `sources`, `trigger`, `window` and a `verify` sub-block. `autoDownload` keeps loading and keeps meaning exactly this — the compatibility contract is in [20](20-download-rules.md) §3.3.
+
 Evaluated in order against each newly discovered package; **first match wins**, remaining rules are skipped. Ordered-first-match rather than all-match, because two rules matching the same tag with different priorities has no sensible interpretation.
 
 | Field | Type | Required | Default | Rules |

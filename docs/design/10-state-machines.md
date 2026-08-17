@@ -143,6 +143,8 @@ The transition is evaluated in two places, and both are needed. `CompleteJob` ch
 
 **Terminal:** `succeeded`, `cancelled`. `failed` is retryable.
 
+> **Proposed at [M9](17-delivery-plan.md#m9--download-rules):** two states join this machine so that a download rule's steps can be ordered — `waiting` (a predecessor has not succeeded yet) and the terminal `skipped` (it never will). `skipped` is deliberately not a flavour of `failed`: a Quay step whose JFrog step failed did not fail, and no operator should go looking at Quay for the cause. Transitions, columns and the joint invariant S7 are in [20](20-download-rules.md) §6.
+
 Two entries deserve attention:
 
 - **`PlanEmpty` → `succeeded`.** When deduplication finds every blob already present, the correct outcome is success with zero jobs — not an error, and not a transfer that sits in `ready` forever waiting for work that will never be created. This is a common case for promotion ([05](05-transfer-engine.md) §6), not an edge case.

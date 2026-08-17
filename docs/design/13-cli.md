@@ -106,6 +106,23 @@ Delegated replication ([18](18-quay-replication.md)) adds one noun group and one
 
 `apply` is a separate command rather than something a config reload does, because the write is destructive — see the decision in [18](18-quay-replication.md) §8. `download` against a `mode: proxy` target is refused with an error that names `warm`, since there is nothing to push to a cache.
 
+### Proposed at M9: `rules`
+
+Download rules ([20](20-download-rules.md)) add one more noun group, following the same rule:
+
+```
+├── rules
+│   ├── list [product]                   Rules, their chains, and what is suspended
+│   ├── describe <product> <rule>        The derived step order and the gates
+│   ├── run     <product> <rule> [tag…]  Trigger now (--dry-run shows the plan)
+│   ├── suspend <product> <rule> --reason <text> [--until <duration>]
+│   └── resume  <product> <rule>
+│
+└── download <tag> [--rule <name>]       Ad-hoc, or through a named rule's chain
+```
+
+`suspend`/`resume` rather than `enable`/`disable`, because `enabled` lives in Git and this does not touch it — the distinction is the whole point of [20](20-download-rules.md) §9, and a CLI that spelled both the same would hide it.
+
 ### Why discovery is a top-level verb
 
 It was `packages discover`, and that was the wrong shape twice over.

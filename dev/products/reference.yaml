@@ -410,7 +410,7 @@ spec:
       - name: ga-releases
         tagPattern: '^v\d+\.\d+\.\d+$'
         targets: [lab]
-        priority: 100          # 0-100; defaults to 50
+        priority: 100          # 0-1000; defaults to 50
         verifyBeforeTransfer: true
 
       - name: release-candidates

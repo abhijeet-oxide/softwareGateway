@@ -130,7 +130,7 @@ Delegation. A Quay target can stop being somewhere we push to and become somewhe
 The declared form of the operation the estate actually performs: vendor → JFrog → Quay, with gates, as one reviewable object. Specified in [20](20-download-rules.md).
 
 - `download.rules` replacing `autoDownload.rules`, which keeps loading unchanged ([20](20-download-rules.md) §3)
-- Chain derivation from the targets' own `mirror.from` edges — a set of destinations in, an ordered plan out ([20](20-download-rules.md) §4)
+- Chain derivation from the targets' own `mirror.from` edges — a set of destinations in, an ordered plan out ([20](20-download-rules.md) §3.5, §4)
 - `transfers.step_index` and `depends_on_transfer_id`; the `waiting` and `skipped` transfer states ([20](20-download-rules.md) §6)
 - Verification as a gate: under `enforce`, a destination that fails verification stops the steps that depend on it ([20](20-download-rules.md) §5)
 - `trigger: [discovery, manual]`, the optional window, and rule revisions in the idempotency key ([20](20-download-rules.md) §8)
@@ -138,7 +138,8 @@ The declared form of the operation the estate actually performs: vendor → JFro
 - `rules list|describe|run|suspend|resume`, `download --rule`; the `downloadRules` routes; the `Download` audit category and its metrics
 
 **Acceptance:**
-- One rule takes a newly discovered release from the vendor into JFrog and then into Quay, in that order, with no second command — and `transfers describe` shows two steps with two different kinds of progress and no combined percentage ([20](20-download-rules.md) §7.1).
+- One rule **naming only the Quay target** takes a newly discovered release from the vendor into JFrog and then into Quay, in that order, with no second command — and `transfers describe` shows two steps with two different kinds of progress and no combined percentage ([20](20-download-rules.md) §3.5, §7.1).
+- Two rules whose chains share the JFrog hop transfer that package to JFrog **once**, and the audit trail shows one transfer ([20](20-download-rules.md) §3.5).
 - With `verify.policy: enforce`, a destination whose signature check fails leaves the Quay step `skipped`, not `failed`, and **nothing was written to Quay**. This is the failure this milestone exists to make impossible.
 - Every product document that was valid at M8 is valid at M9 and produces byte-identical transfers ([20](20-download-rules.md) §3.3).
 - A rule naming a Quay target whose tag glob excludes `sha256-*.sig` is rejected by `config validate` when `verify.after` is set — the two blocks are only wrong together ([20](20-download-rules.md) §3.4).

@@ -73,11 +73,12 @@ download:
       sources: [near, components]
 
       # ── WHERE IT PUTS IT ───────────────────────────────────────────
-      # A SET, not a sequence. The order is derived from the targets' own
-      # configuration (§4) — declaring it here would be the same chain
-      # written twice, and the day they disagreed one of them would be
-      # silently wrong.
-      targets: [jfrog-store, ocp-prod]
+      # A SET, not a sequence, and it names the destinations you care about
+      # — not every hop. `ocp-prod` mirrors from `jfrog-store`, so naming it
+      # plans both steps (§3.5). The ORDER is derived from the targets' own
+      # configuration (§4); declaring it here would be the same chain written
+      # twice, and the day the two disagreed one would be silently wrong.
+      targets: [ocp-prod]
 
       # ── WHEN IT RUNS ───────────────────────────────────────────────
       trigger: [discovery, manual]      # default [discovery]
@@ -104,7 +105,7 @@ download:
     # as everything else.
     - name: hotfix
       tagPattern: '^v\d+\.\d+\.\d+\+hotfix\.\d+$'
-      targets: [jfrog-store, ocp-prod]
+      targets: [ocp-prod]
       trigger: [manual]
       priority: 100
       verify: {before: true, after: true, policy: enforce}
@@ -119,7 +120,7 @@ download:
 | `rules[].enabled` | bool | no | `true` | The *configured* intent. See §9 for the operational override, which is a different thing on purpose |
 | `rules[].tagPattern` | RE2 | yes | — | Unchanged |
 | `rules[].sources` | []string | no | all | Names sources in this product |
-| `rules[].targets` | []string | no | default target | Unchanged in meaning; the ordering between them is new (§4) |
+| `rules[].targets` | []string | no | default target | Destinations, not hops: the set is closed over `mirror.from` (§3.5) and then ordered (§4). A document that named every hop already keeps working, because naming them is a no-op |
 | `rules[].trigger` | []enum | no | `[discovery]` | `discovery`, `manual`. `[]` is rejected — a rule that can never run is a typo, not a configuration |
 | `rules[].window` | object | no | — | `start`, `end` (`HH:MM`), `timeZone` (IANA). §8.2 |
 | `rules[].priority` | int | no | `50` | 0–1000 ([04](04-queue-and-scheduling.md) §6). Unchanged |
@@ -150,6 +151,7 @@ Beyond the field rules, the combinations that must fail at load rather than at 3
 | `targets` naming a disabled target | Already rejected today; unchanged — it would fail the first time a package matched |
 | `targets` naming a `replication.mode: proxy` target | A cache cannot be pushed to ([18](18-quay-replication.md) §5.4). The error names `warm` |
 | `targets` whose derived chain contains a cycle | `mirror.from` edges must form a forest (§4) |
+| `targets` whose closure reaches a disabled or `promotionOnly` target | The chain is planned in full (§3.5), so a hop it cannot use is as fatal as a destination it cannot use — and the error names the hop and the target that pulled it in |
 | `trigger: []`, or `trigger: [manual]` on a rule that nothing else can reach | A rule that can never run |
 | `verify.after: true` on a chain whose mirror glob excludes `sha256-*.sig` | **The important one.** Destination verification of a mirrored tag is impossible if the signatures were never mirrored ([18](18-quay-replication.md) §9). The configuration looks correct, the sync succeeds, and verification fails for every package forever |
 | `window` whose `start` equals `end` | A zero-length window never opens |
@@ -158,16 +160,27 @@ Beyond the field rules, the combinations that must fail at load rather than at 3
 
 The signature-glob check is the reason this document and [18](18-quay-replication.md) have to be validated together rather than separately: neither block is wrong on its own.
 
-### 3.5 A warning, not an error: the incomplete chain
+### 3.5 Naming the end of a chain names the chain
 
-A rule may name `ocp-prod` (which mirrors from `jfrog-store`) without naming `jfrog-store`. That looks like a mistake and often is — but it is legitimate when a different rule fills JFrog, so it cannot be an error.
+> **Decision — a rule names the destinations it cares about. Hops those destinations depend on are pulled in automatically.**
+>
+> `targets: [ocp-prod]`, where `ocp-prod` has `mirror.from: jfrog-store`, plans **both** steps. It is identical to writing `targets: [jfrog-store, ocp-prod]`.
+>
+> *Alternative considered:* require every hop to be named, and warn when one is missing. It has the virtue that a rule writes to nothing it did not mention.
+>
+> *Rejected because* it makes every rule restate the chain that [18](18-quay-replication.md) §5.1 exists to declare once, and it asks the person writing the rule to know that Quay pulls rather than gets pushed to — which is exactly the knowledge this document is trying to keep out of the rule. The person adding a target configures *how content gets into it*. The person writing a rule says *what goes where*. Requiring the second to encode the first collapses the split.
+>
+> *And the objection does not survive contact:* `mirror.from` may only name a target in the same product ([18](18-quay-replication.md) §5.2), so the hop was already declared, by the target the rule did name. Nothing arrives from outside the document.
+>
+> *Chosen:* the transitive closure over `mirror.from`, with the **full chain rendered wherever the rule is shown** — `rules describe`, `rules run --dry-run`, and the rule row in the UI. Implicit to type, never implicit to read.
+>
+> *What we lose:* the ability to say "sync Quay from whatever is already in JFrog, and do not touch JFrog". That is `transferctl targets sync` ([18](18-quay-replication.md) §7), which is the right command for it and already exists.
 
-Two responses, and both are needed:
+Two consequences that need stating, because they are where this gets expensive if ignored:
 
-1. `config validate` emits a **warning** naming the missing hop and the exact line that would add it.
-2. The mirror step performs a **precondition check at run time**: is the package present at `mirror.from`? If not, the step fails before requesting a sync, with a message that says which target is empty and which rule was expected to fill it.
+**A shared hop is transferred once, not once per rule.** Two rules whose chains both pass through `jfrog-store` must not produce two transfers of the same package to the same target. The step's identity is therefore `(package.digest, target)` and not the rule — a step whose predecessor work is already `succeeded` for that pair is satisfied by it, and a step already in flight is **joined**, not duplicated. This is the one place where the derived idempotency key (§8.3) intentionally drops `rule.name`: the request is per rule, the step is per destination, and a byte moved twice because two rules wanted it is a byte moved twice.
 
-The run-time check is the one that matters, because it also catches the case validation cannot see: the other rule exists, and did not run.
+**The precondition check stays.** A step still asks, before requesting a sync, whether the package is actually present at `mirror.from`. With the closure in place this should be unreachable — its predecessor just succeeded — which is precisely why it is worth keeping: if it ever fires, something upstream lied, and the message names the empty target rather than leaving a sync to fail obscurely inside Quay.
 
 ## 4. The chain is derived, not declared
 
@@ -189,7 +202,9 @@ targets:
   - name: ocp-prod               replication.mode: mirror, mirror.from: jfrog-store
   - name: dr-store               replication.mode: copy
 
-rule ga-releases → targets: [jfrog-store, ocp-prod, dr-store]
+rule ga-releases → targets: [ocp-prod, dr-store]
+                   (jfrog-store is pulled in by ocp-prod's mirror.from — §3.5;
+                    naming it explicitly changes nothing)
 
 derived:
 
@@ -331,6 +346,8 @@ The derived idempotency key ([04](04-queue-and-scheduling.md) §7) is what makes
 ```
 key = hash(product, package.digest, sorted(targets), rule.name, rule.revision)
 ```
+
+`sorted(targets)` is the **derived** set, after the closure in §3.5 — so a rule naming `[ocp-prod]` and one naming `[jfrog-store, ocp-prod]` key identically, because they are the same work. And the key above identifies the *request*; a **step** is identified by `(package.digest, target)` regardless of which rule asked for it, which is what stops two rules sharing a JFrog hop from transferring it twice (§3.5).
 
 `rule.revision` is the hash of the rule's own resolved fields. It is there so that **editing a rule creates a new run rather than being swallowed by the old one's key** — the failure otherwise is a person tightening `verify.policy` from `warn` to `enforce`, re-running, getting `already exists`, and concluding the stricter policy was applied when nothing ran at all.
 

@@ -27,6 +27,24 @@ func NewReplication(s Store) *Replication {
 	return &Replication{db: s.DB(), dialect: DialectFor(s.Driver())}
 }
 
+// ProductID resolves a configured product name to its row id.
+//
+// The replication tables key on the row rather than the name so a deleted
+// product takes its history with it by cascade, which is what the retention
+// story already assumes everywhere else.
+func (r *Replication) ProductID(ctx context.Context, name string) (int64, error) {
+	var id int64
+	err := r.db.QueryRowContext(ctx,
+		r.dialect.Rewrite(`SELECT id FROM products WHERE name = ?`), name).Scan(&id)
+	if errors.Is(err, sql.ErrNoRows) {
+		return 0, fmt.Errorf("product %q has no catalog row: reconciliation has not run: %w", name, ErrNoRecord)
+	}
+	if err != nil {
+		return 0, fmt.Errorf("resolve product %q: %w", name, err)
+	}
+	return id, nil
+}
+
 // TargetReplication is one target's applied state and last observation.
 type TargetReplication struct {
 	ProductID  int64

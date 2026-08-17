@@ -1616,3 +1616,191 @@ type CreateTransferResponse struct {
 	// order as `to`. Empty on a dry run.
 	TransferIDs []string `json:"transferIds,omitempty"`
 }
+
+// ---------------------------------------------------------------------------
+// Target replication (docs/design/18)
+// ---------------------------------------------------------------------------
+
+// ReplicationView is one target's replication configuration, what we last
+// wrote to the registry, and what the registry says now.
+//
+// Three timestamps and no progress fields, deliberately. A delegated target
+// reports a STATE and never a percentage: we do not move those bytes and
+// cannot count them, and a number derived from elapsed time would be worse
+// than its absence because somebody would make a decision from it.
+type ReplicationView struct {
+	Product string `json:"product"`
+	Target  string `json:"target"`
+	// Mode is copy, mirror or proxy. A target with no replication block
+	// reports copy, which is what it has always meant.
+	Mode string `json:"mode"`
+
+	// Desired is what the loaded configuration asks for, with every credential
+	// removed. Present for delegated modes only.
+	Desired *ReplicationDesired `json:"desired,omitempty"`
+
+	// Applied is what we last wrote. Absent means never applied, which is a
+	// different state from applied-and-drifted and is reported as such.
+	Applied *ReplicationApplied `json:"applied,omitempty"`
+
+	// Observed is what the registry says right now. Absent when we could not
+	// read it, and the reason is in Unreachable.
+	Observed    *ReplicationObserved `json:"observed,omitempty"`
+	Unreachable string               `json:"unreachable,omitempty"`
+
+	// PendingApply means the configuration in Git has changed since the last
+	// apply. Distinct from Drift: not having applied yet is a normal state of
+	// affairs after a merge, and somebody editing the registry by hand is not.
+	PendingApply bool `json:"pendingApply"`
+
+	Drift *ReplicationDrift `json:"drift,omitempty"`
+}
+
+// ReplicationDesired is the configured intent, with secrets removed.
+type ReplicationDesired struct {
+	// Upstream is where the registry will pull from.
+	Upstream string   `json:"upstream,omitempty"`
+	Tags     []string `json:"tags,omitempty"`
+	Interval string   `json:"interval,omitempty"`
+	Robot    string   `json:"robot,omitempty"`
+	// Manage is apply or detect: whether we ever write this configuration.
+	Manage string `json:"manage,omitempty"`
+	// SyncOnRequest reports whether a download against this target becomes a
+	// sync-now and a wait.
+	SyncOnRequest bool `json:"syncOnRequest,omitempty"`
+
+	Organization string `json:"organization,omitempty"`
+	Expiration   string `json:"expiration,omitempty"`
+	// Prewarm reports whether discovery pulls packages through the cache.
+	Prewarm bool `json:"prewarm,omitempty"`
+
+	// ConfigHash fingerprints the non-secret configuration, so a caller can
+	// compare it with Applied.ConfigHash without reading any of the fields.
+	ConfigHash string `json:"configHash"`
+}
+
+// ReplicationApplied is the record of our last successful write.
+type ReplicationApplied struct {
+	ConfigHash string `json:"configHash"`
+	At         string `json:"at,omitempty"`
+	By         string `json:"by,omitempty"`
+}
+
+// ReplicationObserved is what the registry reports.
+type ReplicationObserved struct {
+	// RepositoryState is Quay's repository state. A mirror configuration on a
+	// repository that is not in MIRROR state is inert.
+	RepositoryState string `json:"repositoryState,omitempty"`
+	// SyncStatus is our normalisation; SyncStatusRaw is the registry's own
+	// word, kept because an enum that has grown across versions must not be
+	// flattened into ours.
+	SyncStatus    string `json:"syncStatus,omitempty"`
+	SyncStatusRaw string `json:"syncStatusRaw,omitempty"`
+	// Configured reports whether the registry holds any configuration at all.
+	Configured bool     `json:"configured"`
+	Tags       []string `json:"tags,omitempty"`
+	Upstream   string   `json:"upstream,omitempty"`
+	At         string   `json:"at,omitempty"`
+}
+
+// ReplicationDrift is what differs between the configuration and the registry.
+type ReplicationDrift struct {
+	Detected bool   `json:"detected"`
+	Summary  string `json:"summary"`
+	// Absent means the registry holds no configuration: not drift from a
+	// previous apply, and reported separately because the fix differs.
+	Absent bool `json:"absent,omitempty"`
+	// StateWrong means the repository is not in the state mirroring needs.
+	StateWrong bool `json:"stateWrong,omitempty"`
+	// CredentialsRotated is derived from the hash of what we sent, never from
+	// the response: the registry redacts stored passwords.
+	CredentialsRotated bool               `json:"credentialsRotated,omitempty"`
+	Fields             []ReplicationField `json:"fields,omitempty"`
+}
+
+// ReplicationField is one field on which configuration and registry disagree.
+type ReplicationField struct {
+	Field string `json:"field"`
+	Want  string `json:"want"`
+	Got   string `json:"got"`
+}
+
+// ApplyReplicationRequest asks for the configuration to be written.
+type ApplyReplicationRequest struct {
+	// ValidateOnly renders the plan and writes nothing.
+	ValidateOnly bool `json:"validateOnly,omitempty"`
+	// Confirm must be true for a destructive apply. A plan that will make a
+	// repository read-only and delete tags the glob does not match is not
+	// something a caller should be able to do by omission.
+	Confirm bool `json:"confirm,omitempty"`
+}
+
+// ApplyReplicationResponse is what an apply did, or would do.
+type ApplyReplicationResponse struct {
+	Product string `json:"product"`
+	Target  string `json:"target"`
+	Mode    string `json:"mode"`
+
+	// Applied reports whether anything was written. False for a dry run, for a
+	// no-op, and for a destructive plan that was not confirmed.
+	Applied bool `json:"applied"`
+	// Steps is what was done, or would be, in the reader's own terms.
+	Steps []string `json:"steps"`
+	// Destructive marks a plan that makes a repository read-only or removes
+	// content. Carried separately from Steps so a client cannot render the
+	// plan without being able to render the warning.
+	Destructive bool `json:"destructive"`
+	// NeedsConfirmation means the plan is destructive and Confirm was not set.
+	NeedsConfirmation bool `json:"needsConfirmation,omitempty"`
+	NoOp              bool `json:"noOp,omitempty"`
+
+	ConfigHash string `json:"configHash,omitempty"`
+}
+
+// SyncReplicationResponse is the outcome of asking for a sync now.
+//
+// No progress, no ETA and no byte count. The registry gives us a state and, at
+// best, a completion time.
+type SyncReplicationResponse struct {
+	Product string `json:"product"`
+	Target  string `json:"target"`
+	// Requested reports that we asked. AlreadyRunning reports that a sync was
+	// already under way, which SATISFIES the request rather than failing it.
+	Requested      bool   `json:"requested"`
+	AlreadyRunning bool   `json:"alreadyRunning,omitempty"`
+	At             string `json:"at"`
+	SyncID         int64  `json:"syncId,omitempty"`
+}
+
+// MirrorSyncView is one observed sync run.
+type MirrorSyncView struct {
+	ID     int64  `json:"id"`
+	Target string `json:"target"`
+	// Status is OUR classification: requested, running, succeeded, diverged,
+	// failed or unknown. QuayStatus is the registry's own word.
+	Status     string `json:"status"`
+	QuayStatus string `json:"quayStatus,omitempty"`
+
+	RequestedAt string `json:"requestedAt,omitempty"`
+	StartedAt   string `json:"startedAt,omitempty"`
+	FinishedAt  string `json:"finishedAt,omitempty"`
+
+	// ExpectedDigest is what we asked the registry to end up holding;
+	// ObservedDigest is what a walk of the destination actually found. They
+	// differ on a `diverged` outcome, which is a fact rather than a failure.
+	ExpectedDigest string `json:"expectedDigest,omitempty"`
+	ObservedDigest string `json:"observedDigest,omitempty"`
+
+	TransferID string `json:"transferId,omitempty"`
+	Message    string `json:"message,omitempty"`
+}
+
+// ListSyncsResponse is a target's observed sync history.
+type ListSyncsResponse struct {
+	Syncs []MirrorSyncView `json:"syncs"`
+}
+
+// ListReplicationResponse is every target's replication state.
+type ListReplicationResponse struct {
+	Targets []ReplicationView `json:"targets"`
+}

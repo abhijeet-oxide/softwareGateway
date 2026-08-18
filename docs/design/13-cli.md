@@ -106,22 +106,28 @@ Delegated replication ([18](18-quay-replication.md)) adds one noun group and one
 
 `apply` is a separate command rather than something a config reload does, because the write is destructive — see the decision in [18](18-quay-replication.md) §8. `download` against a `mode: proxy` target is refused with an error that names `warm`, since there is nothing to push to a cache.
 
-### `rules` (shipped at M9)
+### `download`, `downloads` and `rules` (shipped at M9)
 
-Download rules ([20](20-download-rules.md)) add one more noun group, following the same rule:
+[20](20-download-rules.md) adds one verb and two noun groups, following the same split — a verb for the thing you do, nouns for the things you look at:
 
 ```
-├── rules
-│   ├── list [product]                   Rules, their chains, and what is suspended
-│   ├── describe <product> <rule>        The derived step order and the gates
-│   ├── run     <product> <rule> [tag…]  Trigger now (--dry-run shows the plan)
-│   ├── suspend <product> <rule> --reason <text> [--until <duration>]
-│   └── resume  <product> <rule>
+├── download <product> <package>…        Bring software in through the configured chain
+│            [--download <name>]         Which download, when a product declares several
+│            [--dry-run]                 Resolve the chain and create nothing
 │
-└── download <tag> [--rule <name>]       Ad-hoc, or through a named rule's chain
+├── downloads
+│   └── list <product>                   Downloads, their derived chains and their gates
+│
+└── rules
+    ├── list    <product>                Rules, what they match, and what they trigger
+    └── matches <product> <rule>         What this rule would pick up
 ```
 
-`suspend`/`resume` rather than `enable`/`disable`, because `enabled` lives in Git and this does not touch it — the distinction is the whole point of [20](20-download-rules.md) §9, and a CLI that spelled both the same would hide it.
+`download` takes packages and **no pattern**, which is the shape of the thing: a pattern decides what to download when nobody is asking, and here somebody is. `transferctl download vendor-a v3.2.1` is refused only if `v3.2.1` was never discovered — never because it failed to match a rule.
+
+Both noun groups are **read-only, and there is no `enable`, `disable`, `suspend` or `resume`.** Whether a rule fires lives in Git, and a command that changed it here would be a second source of truth ([20](20-download-rules.md) §9). During an incident the fast path is `transfers pause` — stop the work, not the configuration. There is also no `rules run`: running a rule by hand *is* downloading, and that is `download` with the software named.
+
+`rules matches` answers "what would this pick up" against what has already been discovered. It reads and creates nothing, which makes it the command to run before merging a pattern rather than after.
 
 ### Why discovery is a top-level verb
 
@@ -259,7 +265,7 @@ New packages:
   v2.13.4   sha256:2c26b46b…   44.8 GiB   839 blobs
   v2.13.3   sha256:fcde2b2e…   44.7 GiB   836 blobs
 
-Auto-download rules matched 3 packages -> lab (priority 100)
+Auto-download rules matched 3 packages -> download internal (lab -> ocp-prod)
 ```
 
 ```

@@ -36,7 +36,7 @@ Plus the one thing the CLI does awkwardly and a UI does naturally: **comprehensi
 Screen-by-screen intent, layout and the visual system live in the [UI generation brief](../ui/ui-generation-brief.md), which is a working document for producing mockups rather than a specification. **Ten pages, eight of them navigable:**
 
 ```
-Home · Products · Software · Download Rules · Repositories · Activity · Reports · Settings
+Home · Products · Software · Downloads · Repositories · Activity · Reports · Settings
 ```
 
 with Software detail and Download reached from them. The lifecycle those pages exist to make obvious is **Discover → Review → Verify → Download & Replicate → Compare → Promote**.
@@ -63,7 +63,7 @@ with Software detail and Download reached from them. The lifecycle those pages e
 >
 > *What the UI does instead:* shows the loaded configuration with its config hash and load time, shows **drift** between Git and any registry-side state it manages ([18](18-quay-replication.md) §8), and links to the repository. Requesting work — downloads, promotions, syncs, applies — is not configuration and is fully available.
 >
-> *Where this is hardest, and therefore where it must be designed properly:* the **Download Rules** page. A rule is the most natural thing in the product to want to edit, and the page will be judged on whether "managed in Git" reads as obvious or as broken. So a rule is a first-class object with its YAML on the page, an **Open in Git** link, a **Drift** banner when the registry disagrees with it, and an **Apply** that states its consequences first. Enabling, disabling and running a rule now are actions; changing what a rule *says* is a commit. [20](20-download-rules.md) §9 is where that line is drawn precisely: the toggle writes an audited **suspension**, and the page shows both facts — *"Suspended by alice@example.com — configuration says enabled"*.
+> *Where this is hardest, and therefore where it must be designed properly:* the **Downloads** page. A rule is the most natural thing in the product to want to edit, and the page will be judged on whether "managed in Git" reads as obvious or as broken. So a download and a rule are first-class objects with their YAML on the page, an **Open in Git** link, a **Drift** banner when the registry disagrees with the target configuration, and an **Apply** that states its consequences first. What the page *does* is run a download — naming the software, the way a person always did. What it does not do is change whether a rule fires: there is no toggle, because there is nothing behind one ([20](20-download-rules.md) §9). A rule that is off reads **"Disabled in configuration"** with a link to the line, and the honest control next to a rule that is misbehaving is **Pause the queue**, which acts on work rather than on Git.
 >
 > *If that proves too slow in practice*, the escape hatch is a UI that opens a pull request rather than one that writes configuration — Git stays the source of truth and the change stays reviewable. That is a post-M10 question, deliberately not designed now.
 

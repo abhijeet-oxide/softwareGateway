@@ -148,22 +148,32 @@ data:
           promotionOnly: true
 
       # ─────────────────────────────────────────────────────────────
-      # AUTO-DOWNLOAD — evaluated on each newly discovered package,
-      # in order; first match wins. See 07 §4.
+      # DOWNLOAD — WHAT happens when software is brought in. Targets,
+      # gates, priority; no pattern, because by the time one runs the
+      # software has been chosen. One entry is the default. See 20 §3.1.
+      # ─────────────────────────────────────────────────────────────
+      download:
+        - name: internal
+          targets: [lab]
+          priority: 100                     # 0-1000, higher first (04 §6)
+          verify: {before: true, after: true, policy: enforce}
+          default: true
+
+      # ─────────────────────────────────────────────────────────────
+      # AUTO-DOWNLOAD — WHEN a download happens by itself. Evaluated on
+      # each newly discovered package, in order; first match wins. It
+      # triggers the download above rather than performing one of its
+      # own. See 07 §4 and 20 §3.4.
       # ─────────────────────────────────────────────────────────────
       autoDownload:
         enabled: true
         rules:
           - name: ga-releases
             tagPattern: '^v\d+\.\d+\.\d+$'    # RE2
-            targets: [lab]
-            priority: 100                     # 0-1000, higher first (04 §6)
-            verifyBeforeTransfer: true
 
           - name: release-candidates
             tagPattern: '^v\d+\.\d+\.\d+-rc\.\d+$'
-            targets: [lab]
-            priority: 10
+            sources: [primary]
 
       # ─────────────────────────────────────────────────────────────
       # VERIFICATION — cosign/sigstore. See 08.
@@ -336,19 +346,44 @@ The default is 32 rather than something rounder because it is what the old defau
 **Superseded keys.** `rateLimits` and `discovery.concurrency` are still parsed and folded forward — `maxConnections` becomes `perRegistry`, and `repositories × tags` becomes `perRegistry` when that is all a document has. Silently ignoring a number someone deliberately set would be worse than either honouring it or rejecting it. `transferctl config validate` reports them as deprecations without failing, because a document that keeps working is worth more than a tidy schema.
 
 
-### 5.4 `autoDownload.rules[]`
+### 5.4 `download[]` and `autoDownload.rules[]`
 
-> **Proposed at [M9](17-delivery-plan.md#m9--download-rules):** the block is renamed `download` and the rule gains `sources`, `trigger`, `window` and a `verify` sub-block. `autoDownload` keeps loading and keeps meaning exactly this — the compatibility contract is in [20](20-download-rules.md) §3.3.
+Two blocks, because they answer two questions. `download` says **what happens** when software is brought in; `autoDownload` says **when that happens without being asked**. Full treatment in [20](20-download-rules.md) §3.
 
-Evaluated in order against each newly discovered package; **first match wins**, remaining rules are skipped. Ordered-first-match rather than all-match, because two rules matching the same tag with different priorities has no sensible interpretation.
+#### `download[]`
+
+A list. A product declaring one entry needs neither a `name` nor `default: true` — it is the default by being the only one. A product declaring several must name them and must mark exactly one default, which is what a bare `transferctl download` runs and what a rule naming none triggers.
+
+| Field | Type | Required | Default | Rules |
+|---|---|---|---|---|
+| `name` | string | only with ≥2 | — | Unique within the product |
+| `targets` | []string | no | the `default` target | Destinations, not hops: the set is closed over the targets' own `replication.mirror.from` and then ordered ([20](20-download-rules.md) §3.6). Must name declared, enabled, non-`promotionOnly`, non-`proxy` targets |
+| `verify.before` | bool | no | product/target setting | Source-side gate |
+| `verify.after` | bool | no | product/target setting | Destination-side gate |
+| `verify.policy` | enum | no | product setting | `enforce` \| `warn`. Under `enforce` a target that fails verification stops every target that mirrors from it |
+| `priority` | int | no | 50 | 0–1000 ([04](04-queue-and-scheduling.md) §6) |
+| `default` | bool | only with ≥2 | — | Exactly one, once there are several |
+
+There is **no `tagPattern` here, and there will not be one.** A download runs against software somebody has already named.
+
+#### `autoDownload.rules[]`
+
+> **Changed at [M9](17-delivery-plan.md#m9--downloads-and-auto-download):** this block is split in two. `spec.download` holds the targets, the gates and the priority and carries **no pattern**; `spec.autoDownload` keeps the tag pattern, gains `sources`, and names the download it triggers. A rule written the old way — targets and priority inline — keeps loading and keeps behaving identically; the compatibility contract is in [20](20-download-rules.md) §3.5.
+
+Evaluated in order against each newly discovered package; **first match wins**, remaining rules are skipped. Ordered-first-match rather than all-match, because two rules matching the same tag with different downloads has no sensible interpretation.
+
+A rule decides **which software**, and nothing else. Where it goes and what gates it is `spec.download` ([20](20-download-rules.md) §3.1), and a rule triggers that download rather than performing one — so the same work can be asked for by hand, with no pattern involved.
 
 | Field | Type | Required | Default | Rules |
 |---|---|---|---|---|
 | `name` | string | yes | — | Unique within the product; appears in audit records |
-| `tagPattern` | string | yes | — | RE2 (Go `regexp`). Rejected at load if it does not compile |
-| `targets` | []string | no | the `default` target | Must name declared, non-`promotionOnly` targets |
-| `priority` | int | no | 50 | 0–1000 ([04](04-queue-and-scheduling.md) §6) |
-| `verifyBeforeTransfer` | bool | no | product setting | Per-rule override |
+| `tagPattern` | string | yes | — | RE2 (Go `regexp`). Rejected at load if it does not compile. A rule without one is rejected, and the error points at `spec.download` — downloading by hand needs no rule at all |
+| `sources` | []string | no | every source | Narrows which sources the rule watches |
+| `download` | string | no | the default download | Which download to trigger |
+| `enabled` | bool | no | `true` | The only way to turn a rule off. There is deliberately no runtime override ([20](20-download-rules.md) §9) |
+| `targets` | []string | no | — | **The older spelling.** A rule carrying it describes its own download inline and keeps working unchanged; it may not also name a `download` ([20](20-download-rules.md) §3.5) |
+| `priority` | int | no | — | The older spelling, as above |
+| `verifyBeforeTransfer` | bool | no | — | The older spelling, as above |
 
 > **On regex safety:** Go's `regexp` is RE2 — linear time, no backtracking, so a pathological pattern cannot hang discovery. This is a genuine reason to state the dialect explicitly rather than saying "regular expression": with PCRE, a user-supplied pattern in a polling loop would be a denial-of-service vector.
 
@@ -535,7 +570,7 @@ Every level of the document has an `enabled` switch, defaulting to **true** so a
 Validation rejects the combinations that would otherwise fail silently:
 
 - every source disabled while the product is enabled — the product would discover nothing while appearing active
-- `autoDownload` enabled with no enabled target — rules would match and have nowhere to send
+- `autoDownload` enabled with no download and no enabled target — rules would match and have nowhere to send
 - an auto-download rule naming a disabled target — this one fails the first time a package matches it, potentially weeks after the edit
 
 ## Inheritance

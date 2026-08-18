@@ -381,6 +381,19 @@ export interface TransferControlResponse {
   state: string
   jobs: number
   inFlight?: number
+  /** Where the transfer now sits in the queue. Set by :setPriority. */
+  priority?: number
+}
+
+/**
+ * The body of :setPriority. 0-1000, higher runs first, 50 by default.
+ *
+ * Required on the wire even though 0 is a legal value — the server refuses an
+ * omitted field rather than defaulting it, because 0 means "behind everything"
+ * and guessing which of the two a caller meant is not something it can do.
+ */
+export interface SetPriorityRequest {
+  priority: number
 }
 
 export interface TransferRetry { transferId: string; requeued: number; state: string }

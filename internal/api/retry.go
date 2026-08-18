@@ -1,7 +1,11 @@
 package api
 
 import (
+	"bytes"
+	"encoding/json"
 	"errors"
+	"fmt"
+	"io"
 	"net/http"
 	"strings"
 
@@ -56,6 +60,8 @@ func (s *Server) handleTransferCustomMethod(w http.ResponseWriter, r *http.Reque
 		s.controlTransfer(w, r, id, "stop")
 	case "delete":
 		s.controlTransfer(w, r, id, "delete")
+	case "setPriority":
+		s.setTransferPriority(w, r, id)
 	default:
 		// Named explicitly, because the specified-but-unbuilt verbs are the
 		// ones somebody will reach for first and a bare "unknown method" would
@@ -69,9 +75,14 @@ func (s *Server) handleTransferCustomMethod(w http.ResponseWriter, r *http.Reque
 	}
 }
 
-func isPlannedVerb(verb string) bool {
-	return verb == "setPriority"
-}
+// isPlannedVerb names the verbs docs/design/09 §5 specifies and this server
+// does not serve yet, so a caller reaching for one is told which of the two
+// they are looking at: not built, or mistyped.
+//
+// Empty today. It is kept rather than deleted because the next specified verb
+// will want it, and the default branch below is where a reader looks for the
+// answer to "is this a typo?".
+func isPlannedVerb(string) bool { return false }
 
 // controlTransfer serves :pause, :resume and :stop.
 //
@@ -119,6 +130,79 @@ func (s *Server) controlTransfer(w http.ResponseWriter, r *http.Request, ref, ve
 		State:      strings.ToUpper(res.State),
 		Jobs:       res.Jobs,
 		InFlight:   res.InFlight,
+	})
+}
+
+// setTransferPriority serves :setPriority.
+//
+// Separate from controlTransfer because it is the one verb with a BODY, and
+// because the failure a caller is most likely to hit is a value out of range
+// rather than a state that refuses the verb.
+func (s *Server) setTransferPriority(w http.ResponseWriter, r *http.Request, ref string) {
+	if s.deps.Queue == nil {
+		Error(w, r, v1.CodeUnavailable, "this Coordinator has no queue, so it cannot reorder work")
+		return
+	}
+
+	// The body is read whole first so that an EMPTY one — the commonest way to
+	// get this wrong from a shell — is answered with what the verb wants
+	// rather than with "unexpected end of JSON input".
+	body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, maxRequestBody))
+	if err != nil {
+		Error(w, r, v1.CodeInvalidArgument, "could not read the request body: "+err.Error())
+		return
+	}
+
+	var req v1.SetPriorityRequest
+	if len(bytes.TrimSpace(body)) > 0 {
+		dec := json.NewDecoder(bytes.NewReader(body))
+		dec.DisallowUnknownFields()
+		if err := dec.Decode(&req); err != nil {
+			Error(w, r, v1.CodeInvalidArgument, "could not read the request body: "+err.Error())
+			return
+		}
+	}
+	if req.Priority == nil {
+		Error(w, r, v1.CodeInvalidArgument, fmt.Sprintf(
+			"priority is required, %d-%d (higher runs first)",
+			store.MinPriority, store.MaxPriority))
+		return
+	}
+	// Checked HERE as well as in the store. The store's check is the one that
+	// protects the database; this one is what makes the answer arrive as a
+	// refusal of the argument the caller sent, before anything is opened.
+	if *req.Priority < store.MinPriority || *req.Priority > store.MaxPriority {
+		Error(w, r, v1.CodeInvalidArgument, fmt.Sprintf(
+			"priority %d is outside %d-%d", *req.Priority,
+			store.MinPriority, store.MaxPriority))
+		return
+	}
+
+	id, err := s.deps.Packages.ResolveTransferID(r.Context(), ref)
+	if err != nil {
+		NotFound(w, r, "transfer", ref)
+		return
+	}
+
+	res, err := s.deps.Queue.SetPriority(r.Context(), id, *req.Priority)
+	if err != nil {
+		switch {
+		case errors.Is(err, store.ErrInvalidPriority):
+			Error(w, r, v1.CodeInvalidArgument, err.Error())
+		case errors.Is(err, store.ErrIllegalTransition):
+			Error(w, r, v1.CodeFailedPrecondition, err.Error())
+		default:
+			Error(w, r, v1.CodeInternal, err.Error())
+		}
+		return
+	}
+
+	WriteJSON(w, r, http.StatusOK, v1.TransferControlResponse{
+		TransferID: res.TransferID,
+		State:      strings.ToUpper(res.State),
+		Jobs:       res.Jobs,
+		InFlight:   res.InFlight,
+		Priority:   *req.Priority,
 	})
 }
 

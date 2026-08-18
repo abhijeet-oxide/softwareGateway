@@ -331,6 +331,20 @@ func (c *Client) ControlTransfer(
 	return &out, c.post(ctx, path, struct{}{}, &out)
 }
 
+// SetTransferPriority reorders what a transfer has left to do.
+//
+// Its own method rather than a verb on ControlTransfer, because it is the one
+// control verb that carries a value — and a signature that took `verb, body`
+// would let any of the others be called with a body they do not read.
+func (c *Client) SetTransferPriority(
+	ctx context.Context, id string, priority int,
+) (*TransferControlResponse, error) {
+	// The colon is an AIP-136 structural separator and must NOT be escaped.
+	path := "/api/v1/transfers/" + url.PathEscape(id) + ":setPriority"
+	var out TransferControlResponse
+	return &out, c.post(ctx, path, SetPriorityRequest{Priority: &priority}, &out)
+}
+
 // RetryTransfers requeues the failed jobs of every transfer that has any.
 //
 // The shape an outage calls for: it does not fail one transfer, it fails every

@@ -431,6 +431,17 @@ func (q *Queue) Delete(ctx context.Context, transferID string) (store.ControlRes
 	return q.control(ctx, "deleted", q.packages.DeleteTransfer, transferID)
 }
 
+// SetPriority reorders a transfer's remaining work. In-flight jobs finish where
+// they are — see store.SetTransferPriority.
+func (q *Queue) SetPriority(
+	ctx context.Context, transferID string, priority int,
+) (store.ControlResult, error) {
+	return q.control(ctx, "reprioritized",
+		func(ctx context.Context, id string) (store.ControlResult, error) {
+			return q.packages.SetTransferPriority(ctx, id, priority)
+		}, transferID)
+}
+
 // control runs one queue-control verb and logs what it did.
 //
 // The three differ only in the store call and the word, and routing them

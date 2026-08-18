@@ -120,7 +120,7 @@ which names neither the real problem nor anything the caller could change. The r
 | `POST` | `/api/v1/transfers/{transfer}:retry` | Requeue failed jobs ([10](10-state-machines.md) §3) |
 | `POST` | `/api/v1/transfers:retry` | Requeue the failed jobs of every transfer that has any |
 | `GET` | `/api/v1/workers` | The fleet: build, configured ceiling, load, last heartbeat |
-| `POST` | `/api/v1/transfers/{transfer}:setPriority` | |
+| `POST` | `/api/v1/transfers/{transfer}:setPriority` | `{"priority": 0-1000}`; reorders what has not started ([04](04-queue-and-scheduling.md) §6) |
 | `GET` | `/api/v1/transfers/{transfer}/logs` | Worker logs for this transfer, served by the Coordinator |
 
 ### Scheduled requests

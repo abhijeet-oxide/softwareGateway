@@ -7,7 +7,7 @@ import type {
   InspectPackageResponse, ListFailuresResponse, ListJobsResponse, ListPackagesResponse, ListProductsResponse,
   ListReplicationResponse, ListSyncsResponse, ListTransfersResponse, ListUnavailableResponse,
   ListWorkersResponse, Package, ReportSummary, RunDownloadRequest, RunDownloadResponse,
-  Transfer, TransferControlResponse, VersionResponse,
+  SetPriorityRequest, Transfer, TransferControlResponse, VersionResponse,
 } from './types'
 import { isLive } from '../domain/derive'
 
@@ -259,14 +259,35 @@ export function useTransferFailures(id: string | undefined) {
 export function useTransferControl(id: string) {
   const qc = useQueryClient()
   return useMutation({
-    mutationFn: (verb: 'retry' | 'pause' | 'resume' | 'stop') =>
+    mutationFn: (verb: 'retry' | 'pause' | 'resume' | 'stop' | 'delete') =>
       api.post<TransferControlResponse>(`/transfers/${encodeURIComponent(id)}:${verb}`),
-    onSuccess: () => {
-      void qc.invalidateQueries({ queryKey: ['transfer', id] })
-      void qc.invalidateQueries({ queryKey: ['failures', id] })
-      void qc.invalidateQueries({ queryKey: ['transfers'] })
-    },
+    onSuccess: () => invalidateTransfer(qc, id),
   })
+}
+
+/**
+ * Reordering the queue.
+ *
+ * Its own hook rather than another verb on the one above, because it is the one
+ * control verb that carries a value — and a mutation typed `(verb, body?)`
+ * would let any of the others be called with a body they do not read.
+ */
+export function useTransferPriority(id: string) {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: (priority: number) =>
+      api.post<TransferControlResponse>(
+        `/transfers/${encodeURIComponent(id)}:setPriority`,
+        { priority } satisfies SetPriorityRequest),
+    onSuccess: () => invalidateTransfer(qc, id),
+  })
+}
+
+/** Everything that shows a transfer, so one verb refreshes all of it. */
+function invalidateTransfer(qc: ReturnType<typeof useQueryClient>, id: string) {
+  void qc.invalidateQueries({ queryKey: ['transfer', id] })
+  void qc.invalidateQueries({ queryKey: ['failures', id] })
+  void qc.invalidateQueries({ queryKey: ['transfers'] })
 }
 
 // ---------------------------------------------------------------------------

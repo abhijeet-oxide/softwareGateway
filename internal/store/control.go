@@ -31,6 +31,9 @@ import (
 // difference between a confusing outcome and an obvious one.
 var ErrIllegalTransition = errors.New("illegal state transition")
 
+// ErrInvalidPriority is a priority outside the band the schema allows.
+var ErrInvalidPriority = errors.New("invalid priority")
+
 // ControlResult is what a pause, resume or stop did.
 type ControlResult struct {
 	TransferID string
@@ -82,6 +85,115 @@ func (p *Packages) ResumeTransfer(ctx context.Context, transferID string) (Contr
 		jobs: `UPDATE jobs SET paused = FALSE, updated_at = ` + p.dialect.Now() + `
 		        WHERE transfer_id = ? AND paused`,
 	})
+}
+
+// MinPriority and MaxPriority bound what an operator may ask for.
+//
+// The database says the same thing (docs/design/04 §6), and saying it here too
+// is not duplication for its own sake: a CHECK violation arrives as an opaque
+// constraint error naming a column, and the caller asked a question that
+// deserves an answer in the terms they asked it.
+const (
+	MinPriority = 0
+	MaxPriority = 1000
+)
+
+// SetTransferPriority reorders a transfer's remaining work.
+//
+// # It changes the JOBS, and that is the whole mechanism
+//
+// The dequeue orders by `jobs.priority` and never reads the transfer's, so a
+// change written only to the transfer row would be visible on every page and
+// affect nothing at all. The transfer's own column is updated too, because it
+// is what a listing shows and what a later step of the same request inherits.
+//
+// # Only what has not been leased
+//
+// A leased job belongs to a worker and is already moving bytes. Preempting a
+// 40 GB blob at 90% to start a higher-priority one throws away more work than
+// the reordering could recover (docs/design/04 §6), so in-flight work runs to
+// completion and the new order applies to everything behind it.
+//
+// # Why a settled transfer is refused
+//
+// There is nothing left to order. Accepting it would report a change that
+// changed nothing, which is worse than a conflict: the caller believes their
+// request took effect.
+func (p *Packages) SetTransferPriority(
+	ctx context.Context, transferID string, priority int,
+) (ControlResult, error) {
+	res := ControlResult{TransferID: transferID}
+
+	if priority < MinPriority || priority > MaxPriority {
+		return res, fmt.Errorf("%w: priority %d is outside %d-%d",
+			ErrInvalidPriority, priority, MinPriority, MaxPriority)
+	}
+
+	tx, err := p.db.BeginTx(ctx, nil)
+	if err != nil {
+		return res, fmt.Errorf("begin setPriority: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	var state string
+	err = tx.QueryRowContext(ctx, p.dialect.Rewrite(
+		`SELECT state FROM transfers WHERE id = ?`), transferID).Scan(&state)
+	if errors.Is(err, sql.ErrNoRows) {
+		return res, fmt.Errorf("transfer %s not found", transferID)
+	}
+	if err != nil {
+		return res, fmt.Errorf("read transfer %s: %w", transferID, err)
+	}
+	res.State = state
+
+	if contains([]string{"succeeded", "failed", "cancelled"}, state) {
+		return res, fmt.Errorf(
+			"%w: transfer %s is %s, so it has no work left to order",
+			ErrIllegalTransition, transferID, state)
+	}
+
+	result, err := tx.ExecContext(ctx, p.dialect.Rewrite(
+		`UPDATE jobs SET priority = ?, updated_at = `+p.dialect.Now()+`
+		  WHERE transfer_id = ? AND state IN ('pending','blocked')`),
+		priority, transferID)
+	if err != nil {
+		return res, fmt.Errorf("reprioritize jobs of transfer %s: %w", transferID, err)
+	}
+	affected, err := result.RowsAffected()
+	if err != nil {
+		return res, fmt.Errorf("count reprioritized jobs of transfer %s: %w", transferID, err)
+	}
+	res.Jobs = int(affected)
+
+	if err := tx.QueryRowContext(ctx, p.dialect.Rewrite(
+		`SELECT count(*) FROM jobs WHERE transfer_id = ? AND state = 'leased'`),
+		transferID).Scan(&res.InFlight); err != nil {
+		return res, fmt.Errorf("count leased jobs of transfer %s: %w", transferID, err)
+	}
+
+	if _, err := tx.ExecContext(ctx, p.dialect.Rewrite(
+		`UPDATE transfers SET priority = ?, updated_at = `+p.dialect.Now()+
+			` WHERE id = ?`), priority, transferID); err != nil {
+		return res, fmt.Errorf("set priority of transfer %s: %w", transferID, err)
+	}
+
+	// The REQUEST too, so the rest of a chain inherits the new order. A
+	// download of three steps creates the later transfers when the earlier ones
+	// finish, from the request's priority — raise only this transfer and the
+	// next step silently drops back to where it was, which reads as the change
+	// having been undone by something.
+	if _, err := tx.ExecContext(ctx, p.dialect.Rewrite(
+		`UPDATE transfer_requests SET priority = ?, updated_at = `+p.dialect.Now()+`
+		  WHERE id = (SELECT request_id FROM transfers WHERE id = ?)`),
+		priority, transferID); err != nil {
+		return res, fmt.Errorf("set priority of the request behind transfer %s: %w",
+			transferID, err)
+	}
+
+	if err := tx.Commit(); err != nil {
+		return res, fmt.Errorf("commit setPriority of transfer %s: %w", transferID, err)
+	}
+	return res, nil
 }
 
 // StopTransfer gives up on the work remaining.

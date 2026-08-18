@@ -205,7 +205,7 @@ func run() error {
 	}, queue.ControllerOptions{
 		ReapInterval:   cfg.Coordinator.Reaper.TickInterval,
 		ExpandInterval: cfg.Coordinator.Scheduler.TickInterval,
-	}, logger)
+	}, logger).WithStepper(replicationStore)
 
 	// A package's manifest BODIES are the only thing recorded here that grows
 	// without limit and can be discarded without losing a fact — they are a

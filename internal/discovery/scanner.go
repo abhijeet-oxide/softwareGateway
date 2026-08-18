@@ -141,7 +141,7 @@ func NewScanner(cfg ScannerConfig) (*Scanner, error) {
 	if err != nil {
 		return nil, fmt.Errorf("%s: %w", where, err)
 	}
-	rules, err := compileRules(cfg.Product.Spec.AutoDownload)
+	rules, err := compileRules(cfg.Product)
 	if err != nil {
 		return nil, fmt.Errorf("product %q: %w", cfg.Product.Metadata.Name, err)
 	}
@@ -1364,17 +1364,20 @@ func (s *Scanner) applyRules(
 		return 0, nil
 	}
 
-	targetIDs, targetNames, err := resolveTargets(s.product, rule, s.targetIDs)
+	steps, err := resolveChain(s.product, rule, s.targetIDs)
 	if err != nil {
 		// A misconfigured rule must not fail the discovery — the package is
 		// real and worth recording either way. Logged loudly instead.
-		s.log.ErrorContext(ctx, "auto-download rule could not be applied",
+		s.log.ErrorContext(ctx, "download rule could not be applied",
 			"rule", rule.Name, "tag", tag, "error", err)
 		return 0, nil
 	}
+	targetNames := stepNames(steps)
 
 	priority := rule.EffectivePriority()
-	key := transfer.IdempotencyKey("replicate", packageID, sourceRepoID, targetIDs, "", priority)
+	// The key covers the DERIVED chain, so a rule naming only the tail and one
+	// naming every hop produce the same key — they are the same work.
+	key := transfer.IdempotencyKey("replicate", packageID, sourceRepoID, stepIDs(steps), "", priority)
 
 	id, created, err := s.packages.CreateTransferRequest(ctx, tx, store.TransferRequestRow{
 		ID:             requestID(key),
@@ -1395,24 +1398,34 @@ func (s *Scanner) applyRules(
 		return 0, nil
 	}
 
-	// One transfer per target the RULE named, opened here rather than derived
-	// later. Deriving them at expansion time read current configuration and so
-	// turned a rule saying `targets: [lab]` into every enabled target.
-	for _, targetID := range targetIDs {
+	// One transfer per step of the derived chain, opened here rather than
+	// derived later. Deriving them at expansion time read current
+	// configuration and so turned a rule saying `targets: [lab]` into every
+	// enabled target.
+	//
+	// The IDs are assigned first, because a step has to name the transfer it
+	// waits for and that transfer is a row we are about to create.
+	ids := make(map[string]string, len(steps))
+	for _, step := range steps {
+		ids[step.Name] = uuid.NewString()
+	}
+	for _, step := range steps {
 		if _, err := s.packages.CreateTransfer(ctx, tx, store.TransferRow{
-			ID:           uuid.NewString(),
+			ID:           ids[step.Name],
 			RequestID:    id,
 			PackageID:    packageID,
 			SourceRepoID: sourceRepoID,
-			TargetRepoID: targetID,
+			TargetRepoID: step.RepoID,
 			Priority:     priority,
+			StepIndex:    step.Index,
+			DependsOn:    ids[step.DependsOn],
 		}); err != nil {
 			return 0, err
 		}
 	}
 
-	s.log.InfoContext(ctx, "auto-download rule matched",
-		"rule", rule.Name, "tag", tag, "targets", targetNames, "request", id, "priority", priority)
+	s.log.InfoContext(ctx, "download rule matched",
+		"rule", rule.Name, "tag", tag, "chain", targetNames, "request", id, "priority", priority)
 
 	detail, _ := json.Marshal(map[string]any{
 		"rule": rule.Name, "tag": tag, "targets": targetNames, "priority": priority,

@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"regexp"
 
+	"github.com/abhijeet-oxide/softwareGateway/internal/download"
 	"github.com/abhijeet-oxide/softwareGateway/internal/product"
 )
 
@@ -19,12 +20,12 @@ type compiledRule struct {
 }
 
 // compileRules compiles a product's auto-download rules.
-func compileRules(a product.AutoDownload) (ruleSet, error) {
-	set := ruleSet{enabled: a.Enabled}
-	for _, r := range a.Rules {
+func compileRules(p *product.Product) (ruleSet, error) {
+	set := ruleSet{enabled: p.DownloadEnabled()}
+	for _, r := range p.DownloadRules() {
 		re, err := regexp.Compile(r.TagPattern)
 		if err != nil {
-			return ruleSet{}, fmt.Errorf("autoDownload rule %q pattern %q: %w", r.Name, r.TagPattern, err)
+			return ruleSet{}, fmt.Errorf("download rule %q pattern %q: %w", r.Name, r.TagPattern, err)
 		}
 		set.rules = append(set.rules, compiledRule{rule: r, pattern: re})
 	}
@@ -32,6 +33,11 @@ func compileRules(a product.AutoDownload) (ruleSet, error) {
 }
 
 // match returns the first rule matching a tag.
+//
+// A rule that is disabled, or that does not accept the discovery trigger, is
+// skipped WITHOUT consuming the match — so a disabled `ga-releases` lets a
+// later rule see the tag rather than silently swallowing it. First-match-wins
+// is about which rule applies, not about which rule looked.
 //
 // FIRST MATCH WINS, in configured order. Not all-match: two rules matching one
 // tag with different priorities and different targets has no sensible
@@ -42,9 +48,13 @@ func (s ruleSet) match(tag string) (product.Rule, bool) {
 		return product.Rule{}, false
 	}
 	for _, c := range s.rules {
-		if c.pattern.MatchString(tag) {
-			return c.rule, true
+		if !c.pattern.MatchString(tag) {
+			continue
 		}
+		if !c.rule.IsEnabled() || !c.rule.TriggeredBy(product.TriggerDiscovery) {
+			continue
+		}
+		return c.rule, true
 	}
 	return product.Rule{}, false
 }
@@ -61,40 +71,64 @@ func requestID(key string) string {
 	return "req_" + key[:32]
 }
 
-// resolveTargets maps a rule's target names to repository row IDs.
+// resolvedStep is one hop of a rule's chain, with its catalog row resolved.
+type resolvedStep struct {
+	Name      string
+	RepoID    int64
+	Index     int
+	DependsOn string // the NAME of the step this one waits for
+}
+
+// resolveChain closes a rule's destinations over `mirror.from`, orders them,
+// and resolves each to a catalog row.
 //
-// A rule naming no targets uses the product's default target. A product with
-// several targets and no default is a configuration error caught at load, so
-// reaching here without a resolvable target means the rule names something that
-// does not exist.
-func resolveTargets(p *product.Product, rule product.Rule, repoIDs map[string]int64) ([]int64, []string, error) {
-	names := rule.Targets
-	if len(names) == 0 {
-		def, ok := p.DefaultTarget()
-		if !ok {
-			return nil, nil, fmt.Errorf(
-				"rule %q names no targets and product %q has no default target",
-				rule.Name, p.Metadata.Name)
-		}
-		names = []string{def.Name}
+// A rule names the destinations somebody cares about; the ordering comes from
+// the targets' own configuration. The derivation itself lives in
+// internal/download so that the CLI's dry run and this path cannot disagree
+// about what a rule would do — a preview computed by different code from the
+// act is a preview nobody should trust.
+func resolveChain(p *product.Product, rule product.Rule, repoIDs map[string]int64) ([]resolvedStep, error) {
+	chain, err := download.Derive(p, rule.Targets)
+	if err != nil {
+		return nil, fmt.Errorf("rule %q: %w", rule.Name, err)
 	}
 
-	ids := make([]int64, 0, len(names))
-	for _, name := range names {
-		target, ok := p.Target(name)
+	out := make([]resolvedStep, 0, len(chain.Steps))
+	for _, step := range chain.Steps {
+		target, ok := p.Target(step.Target)
 		if !ok {
-			return nil, nil, fmt.Errorf("rule %q names unknown target %q", rule.Name, name)
+			return nil, fmt.Errorf("rule %q names unknown target %q", rule.Name, step.Target)
 		}
 		if target.PromotionOnly {
-			return nil, nil, fmt.Errorf(
-				"rule %q names target %q, which is promotionOnly: it can only be reached by promotion from another target",
-				rule.Name, name)
+			return nil, fmt.Errorf(
+				"rule %q reaches target %q, which is promotionOnly: it can only be reached by promotion from another target",
+				rule.Name, step.Target)
 		}
-		id, ok := repoIDs[name]
+		id, ok := repoIDs[step.Target]
 		if !ok {
-			return nil, nil, fmt.Errorf("target %q has no catalog row: reconciliation has not run", name)
+			return nil, fmt.Errorf("target %q has no catalog row: reconciliation has not run", step.Target)
 		}
-		ids = append(ids, id)
+		out = append(out, resolvedStep{
+			Name: step.Target, RepoID: id, Index: step.Index, DependsOn: step.From,
+		})
 	}
-	return ids, names, nil
+	return out, nil
+}
+
+// stepNames renders a chain for a log line and an audit record.
+func stepNames(steps []resolvedStep) []string {
+	out := make([]string, 0, len(steps))
+	for _, s := range steps {
+		out = append(out, s.Name)
+	}
+	return out
+}
+
+// stepIDs is the repository rows a chain touches, for the idempotency key.
+func stepIDs(steps []resolvedStep) []int64 {
+	out := make([]int64, 0, len(steps))
+	for _, s := range steps {
+		out = append(out, s.RepoID)
+	}
+	return out
 }

@@ -364,13 +364,14 @@ func (p *Product) validatePromotionModes() Errors {
 // work with nowhere to go.
 func (p *Product) validateRuleModes(declared map[string]Target) Errors {
 	var errs Errors
-	for i, r := range p.Spec.AutoDownload.Rules {
+	base := p.DownloadBlockPath()
+	for i, r := range p.DownloadRules() {
 		for j, name := range r.Targets {
 			t, ok := declared[name]
 			if !ok {
 				continue // already reported by validateAutoDownload
 			}
-			path := fmt.Sprintf("spec.autoDownload.rules[%d].targets[%d]", i, j)
+			path := fmt.Sprintf("%s.rules[%d].targets[%d]", base, i, j)
 			switch t.ReplicationMode() {
 			case ReplicationProxy:
 				errs = append(errs, Error{path,

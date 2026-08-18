@@ -10,6 +10,7 @@ import (
 	"github.com/abhijeet-oxide/softwareGateway/internal/registry"
 	"github.com/abhijeet-oxide/softwareGateway/internal/store"
 	"github.com/abhijeet-oxide/softwareGateway/internal/transfer"
+	"github.com/abhijeet-oxide/softwareGateway/internal/vendors"
 	v1 "github.com/abhijeet-oxide/softwareGateway/pkg/apis/softwaregateway/v1"
 )
 
@@ -17,7 +18,14 @@ import (
 // comparison — the same three things resolverImpl joins, for the same reason:
 // this is the composition root, and internal/compare staying free of them is
 // what lets it be tested against a fake registry and literals.
-type compareImpl struct{ *resolverImpl }
+type compareImpl struct {
+	*resolverImpl
+	// layouts is what lets a comparison name a vendor's components the way the
+	// release page names them. THE COMPOSITION ROOT IS THE ONLY PLACE THIS MAY
+	// BE RESOLVED — internal/compare takes the resulting function and never
+	// learns whose it is.
+	layouts *vendors.Registry
+}
 
 // Compare walks two places and reports what is different.
 //
@@ -66,6 +74,7 @@ func (c compareImpl) Compare(
 		A: specA, B: specB,
 		Concurrency: concurrencyOf(p),
 		FileBudget:  resolveFileBudget(fileBudget),
+		Classify:    vendors.ClassifierFor(c.layouts, layoutNames(p)),
 	})
 }
 
@@ -208,6 +217,21 @@ func defaultTarget(p *product.Product) (product.Target, bool) {
 		return enabled[0], true
 	}
 	return product.Target{}, false
+}
+
+// layoutNames is the vendor layouts a product's sources declare.
+//
+// A comparison may run entirely between TARGETS, which declare no layout of
+// their own — but what sits in a target is what a source published, so the
+// source's layouts are what name it. Anything else would classify the same
+// component differently at the two ends of one comparison and report a
+// difference that is not there.
+func layoutNames(p *product.Product) []string {
+	out := make([]string, 0, len(p.Spec.Sources))
+	for _, s := range p.Spec.Sources {
+		out = append(out, s.VendorLayout())
+	}
+	return out
 }
 
 // defaultFileBudget is how much layer content a comparison downloads by default

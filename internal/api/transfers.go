@@ -14,6 +14,7 @@ import (
 	"github.com/abhijeet-oxide/softwareGateway/internal/oci"
 	"github.com/abhijeet-oxide/softwareGateway/internal/store"
 	"github.com/abhijeet-oxide/softwareGateway/internal/transfer"
+	"github.com/abhijeet-oxide/softwareGateway/internal/vendors"
 	v1 "github.com/abhijeet-oxide/softwareGateway/pkg/apis/softwaregateway/v1"
 )
 
@@ -187,7 +188,12 @@ func (s *Server) handleGetTransfer(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if content, err := s.deps.Packages.ContentBreakdown(r.Context(), t.ID); err == nil {
-		dto.Content = toAPIContent(content)
+		// The transfer's own product, so its vendor layout gets the same say
+		// here that it gets on the release page. Without it a NEAR orb's
+		// charts and files are indistinguishable from its images, and this
+		// page said `image 260` beside a release page saying 160 images,
+		// 97 charts and 2 files.
+		dto.Content = toAPIContent(content, s.artifactClassifier(t.ProductName))
 	}
 
 	if skips, err := s.deps.Packages.SkipBreakdown(r.Context(), t.ID); err == nil {
@@ -358,10 +364,21 @@ func parseTransferState(s string) (string, error) {
 // a reader asked to add them up has been handed the tool's internals instead of
 // an answer. Naming them is protocol knowledge, so it comes from the one place
 // that holds it — the same function the comparison classifies with.
-func toAPIContent(rows []store.ContentRow) []v1.ContentGroup {
+//
+// classify is passed in rather than being oci.Classify directly, because the
+// OCI fields are not always enough: a vendor whose charts are plain image
+// manifests has said so in its annotations, and only the product's layout
+// plugin can read that. The artifact listing already classifies this way, and
+// the two MUST agree — a transfer of a release breaks down into the same
+// things the release is made of.
+func toAPIContent(rows []store.ContentRow, classify vendors.Classifier) []v1.ContentGroup {
+	if classify == nil {
+		classify = vendors.OCIOnly
+	}
+
 	byKind := map[string]*v1.ContentGroup{}
 	for _, row := range rows {
-		kind := oci.Classify(row.MediaType, row.ArtifactType, row.ConfigMediaType)
+		kind := classify(row.MediaType, row.ArtifactType, row.ConfigMediaType, row.Annotations)
 		group, ok := byKind[kind]
 		if !ok {
 			group = &v1.ContentGroup{Kind: kind}

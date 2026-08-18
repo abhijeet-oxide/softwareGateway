@@ -370,3 +370,28 @@ export function transferVersion(t: Pick<Transfer, 'tag' | 'displayTag'>): string
 function titleCase(s: string): string {
   return s.charAt(0).toUpperCase() + s.slice(1)
 }
+
+/**
+ * The word a person uses for one kind of component.
+ *
+ * The API speaks the OCI vocabulary — image, chart, file, index, signature —
+ * and it speaks the SAME vocabulary on a release page and in a transfer's
+ * breakdown. Both must therefore render it the same way. The download page
+ * printed the raw token, so a release shown as 160 Images and 97 Helm Charts
+ * read as `image` and `chart` one screen later, in a table with no icons.
+ *
+ * Plural, because these name a count of things rather than one thing.
+ */
+export function kindName(kind: string): string {
+  switch (kind) {
+    case 'image': return 'Images'
+    case 'chart': return 'Helm Charts'
+    case 'file': return 'Files'
+    case 'index': return 'Index'
+    case 'signature': return 'Signatures'
+    case 'artifact': return 'Other'
+    // A kind this client has not been taught. Shown as the API named it
+    // rather than hidden — an unnamed component still moved.
+    default: return kind ? titleCase(kind) : 'Other'
+  }
+}

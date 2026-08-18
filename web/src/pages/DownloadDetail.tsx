@@ -5,13 +5,14 @@ import {
   useProduct, useSyncs, useTransfer, useTransferControl, useTransferFailures,
 } from '../api/queries'
 import { useCan } from '../auth/permissions'
-import { isLive, transferVersion } from '../domain/derive'
+import { isLive, kindName, transferVersion } from '../domain/derive'
 import {
   bytes, elapsedSeconds, formatBytes, formatCount, formatDuration, formatSpeed,
 } from '../domain/format'
 import { NA, Stat, Value } from '../components/value'
 import { MeasuredProgress, StateStrip, type StripState } from '../components/progress'
 import { RepoLink, TimeAgo } from '../components/chips'
+import { ARTIFACT_ICONS, Icon } from '../components/icons'
 import { ErrorState, PageHeader, SavedPanel } from '../components/layout'
 import { mono } from '../theme'
 
@@ -195,7 +196,22 @@ export default function DownloadDetail() {
                   dataSource={t?.content ?? []}
                   rowKey={(c) => c.kind}
                   columns={[
-                    { title: 'Type', render: (_, c) => c.kind },
+                    {
+                      title: 'Type',
+                      // The same words, and the same marks, the release page
+                      // uses for the same components. A download of a release
+                      // is that release, one screen later.
+                      render: (_, c) => {
+                        const name = kindName(c.kind)
+                        const icon = ARTIFACT_ICONS[name as keyof typeof ARTIFACT_ICONS]
+                        return (
+                          <Space size={6}>
+                            {icon && <Icon as={icon} size={15} title={name} />}
+                            {name}
+                          </Space>
+                        )
+                      },
+                    },
                     { title: 'Total', align: 'right', width: 80, render: (_, c) => <Value>{formatCount(c.total)}</Value> },
                     { title: 'Copied', align: 'right', width: 80, render: (_, c) => <Value>{formatCount(c.copied)}</Value> },
                     {

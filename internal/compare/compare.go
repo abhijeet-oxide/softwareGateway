@@ -49,6 +49,7 @@ import (
 	"github.com/abhijeet-oxide/softwareGateway/internal/oci"
 	"github.com/abhijeet-oxide/softwareGateway/internal/registry"
 	"github.com/abhijeet-oxide/softwareGateway/internal/transfer"
+	"github.com/abhijeet-oxide/softwareGateway/internal/vendors"
 )
 
 // ClientFactory builds a repository handle for one path on one side's registry.
@@ -128,6 +129,17 @@ type Options struct {
 	// degrades correctly for a vendor nobody has written one for: a four-kilobyte
 	// configuration bundle is opened, a two-gigabyte image layer is not.
 	FileBudget int64
+	// Classify names what a component IS. Nil means the OCI rules alone.
+	//
+	// Injected rather than resolved here because naming a vendor is the one
+	// thing this package may not do, and for a vendor whose charts are plain
+	// image manifests the OCI rules cannot answer: only the annotation the
+	// vendor wrote says which is which. The composition root builds it from
+	// the product's configured layouts, and the release page and the transfer
+	// breakdown are built from the same thing — a comparison that named
+	// components differently from the pages either side of it would be read as
+	// a difference in the content.
+	Classify vendors.Classifier
 }
 
 // Layer is one blob a component is made of.
@@ -337,11 +349,11 @@ func Run(ctx context.Context, clientA, clientB ClientFactory, opts Options) (Rep
 	wg.Add(2)
 	go func() {
 		defer wg.Done()
-		invA, extraA, errA = readSide(ctx, clientA, opts.A, rootA, concurrency)
+		invA, extraA, errA = readSide(ctx, clientA, opts.A, rootA, concurrency, opts.Classify)
 	}()
 	go func() {
 		defer wg.Done()
-		invB, extB, errB = readSide(ctx, clientB, opts.B, rootB, concurrency)
+		invB, extB, errB = readSide(ctx, clientB, opts.B, rootB, concurrency, opts.Classify)
 	}()
 	wg.Wait()
 
@@ -419,7 +431,7 @@ func (inv inventory) add(item *Item) {
 // picked the same one.
 func readSide(
 	ctx context.Context, client ClientFactory, spec SideSpec, choice rootChoice,
-	concurrency int,
+	concurrency int, with vendors.Classifier,
 ) (inventory, extras, error) {
 	root, desc, ref := choice.repo, choice.desc, choice.chosen
 
@@ -435,7 +447,7 @@ func readSide(
 
 	inv := make(inventory, len(tree.Artifacts)+len(missing))
 	for i, a := range tree.Artifacts {
-		inv.add(itemFrom(a, spec, ref, i == 0))
+		inv.add(itemFrom(a, spec, ref, i == 0, with))
 	}
 
 	// A component the index names and the registry will not serve. Recorded
@@ -444,7 +456,7 @@ func readSide(
 	// turns "something is missing" into "cfx-5000-product/lms is missing".
 	for _, m := range missing {
 		item := itemFrom(oci.Artifact{Descriptor: m.Descriptor, Depth: m.Depth},
-			spec, ref, false)
+			spec, ref, false, with)
 		item.Unreachable = summarise(m.Err)
 		inv.add(item)
 	}
@@ -738,11 +750,13 @@ func resolveOne(
 }
 
 // itemFrom turns one walked artifact into a comparable component.
-func itemFrom(a oci.Artifact, spec SideSpec, rootRef string, isRoot bool) *Item {
+func itemFrom(
+	a oci.Artifact, spec SideSpec, rootRef string, isRoot bool, with vendors.Classifier,
+) *Item {
 	ref := parseRefName(a.Descriptor.Annotations[registry.AnnotationRefName])
 
 	item := &Item{
-		Type:       classify(a.Descriptor, a.ConfigMediaType()),
+		Type:       classify(with, a.Descriptor, a.ConfigMediaType()),
 		Kind:       kindOf(a.Descriptor),
 		Digest:     string(a.Descriptor.Digest),
 		Size:       a.Descriptor.Size,
@@ -1152,16 +1166,21 @@ func kindOf(desc registry.Descriptor) string {
 
 // classify says what an artifact IS, in the words somebody uses about it.
 //
-// Delegated to oci.Classify rather than answered here, because a transfer
-// summary answers the same question about the same content: two classifiers
-// that disagree describe one registry as two, and leave the reader no way to
-// tell which of them is wrong.
+// Delegated rather than answered here, because a transfer summary and a release
+// page answer the same question about the same content: two classifiers that
+// disagree describe one registry as two, and leave the reader no way to tell
+// which of them is wrong.
 //
 // The CONFIG media type is passed because the descriptor alone cannot tell a
-// Helm chart from an image — both are image manifests, and only the config
-// says which. The walk has already fetched it.
-func classify(desc registry.Descriptor, configMediaType string) string {
-	return oci.Classify(desc.MediaType, desc.ArtifactType, configMediaType)
+// Helm chart from an image — both are image manifests, and only the config says
+// which. The walk has already fetched it. The ANNOTATIONS are passed for the
+// vendor whose config does not say either, which is the case that made a NEAR
+// orb's 97 charts invisible everywhere they were counted.
+func classify(with vendors.Classifier, desc registry.Descriptor, configMediaType string) string {
+	if with == nil {
+		with = vendors.OCIOnly
+	}
+	return with(desc.MediaType, desc.ArtifactType, configMediaType, desc.Annotations)
 }
 
 // refName is a parsed org.opencontainers.image.ref.name.

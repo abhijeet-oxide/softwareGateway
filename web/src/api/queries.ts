@@ -4,7 +4,7 @@ import type {
   CheckConnectivityResponse, CompareRequest, CompareResponse, DiscoverAllResponse,
   DiscoverPackagesResponse, DiscoveryStatusResponse, HealthCheckResponse, ListArtifactsResponse,
   ListAuditEventsResponse, ListAutoDownloadRulesResponse, ListDownloadsResponse,
-  ListFailuresResponse, ListJobsResponse, ListPackagesResponse, ListProductsResponse,
+  InspectPackageResponse, ListFailuresResponse, ListJobsResponse, ListPackagesResponse, ListProductsResponse,
   ListReplicationResponse, ListSyncsResponse, ListTransfersResponse, ListUnavailableResponse,
   ListWorkersResponse, Package, ReportSummary, RunDownloadRequest, RunDownloadResponse,
   Transfer, TransferControlResponse, VersionResponse,
@@ -152,13 +152,19 @@ export function useArtifacts(product: string | undefined, ref: string | undefine
   })
 }
 
-/** Expanding a package writes artifacts, blobs and a measured size. */
+/**
+ * Measure a release: walk its manifest tree and record what it is made of.
+ *
+ * Synchronous by design — the API has no progress feed for it, because the
+ * extent of the work is the thing being discovered. A caller can report that
+ * it is running and for how long, and nothing more honest than that.
+ */
 export function useInspectPackage(product: string, ref: string) {
   const qc = useQueryClient()
   return useMutation({
     mutationFn: () => {
       const { segment, query: q } = packageRef(ref)
-      return api.post(
+      return api.post<InspectPackageResponse>(
         `/products/${encodeURIComponent(product)}/packages/${encodeURIComponent(segment)}:inspect${q}`)
     },
     onSuccess: () => {

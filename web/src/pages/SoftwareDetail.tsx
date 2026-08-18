@@ -1,10 +1,10 @@
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
+import type { UseMutationResult } from '@tanstack/react-query'
 import {
-  App, Button, Card, Col, Descriptions, Modal, Row, Space, Table, Tabs, Tag, Tooltip, Typography,
+  Alert, App, Button, Card, Col, Descriptions, Modal, Row, Space, Table, Tabs, Tooltip,
+  Typography,
 } from 'antd'
-import {
-  CloudDownloadOutlined, FileOutlined, PictureOutlined, ReloadOutlined,
-} from '@ant-design/icons'
+import { CloudDownloadOutlined, ReloadOutlined } from '@ant-design/icons'
 import { Link, useNavigate, useParams } from 'react-router-dom'
 import {
   useArtifacts, useInspectPackage, usePackage, useProduct, useRunDownload,
@@ -13,8 +13,10 @@ import { useCan } from '../auth/permissions'
 import {
   deriveLifecycle, deriveLocations, deriveStatus, isLive, verification, version,
 } from '../domain/derive'
-import { bytes, formatBytes, formatCount } from '../domain/format'
+import { bytes, formatBytes, formatCount, formatDuration } from '../domain/format'
 import { NA, Value } from '../components/value'
+import { ARTIFACT_ICONS, Icon } from '../components/icons'
+import { WorkingBar } from '../components/progress'
 import {
   LocationChip, RepoLink, StatusBadge, TimeAgo, VerificationBadge,
 } from '../components/chips'
@@ -22,7 +24,8 @@ import {
   ErrorState, LifecycleIndicator, PageHeader, SavedPanel,
 } from '../components/layout'
 import { mono } from '../theme'
-import type { Artifact } from '../api/types'
+import type { Artifact, InspectPackageResponse } from '../api/types'
+import { TargetTag } from '../components/chips'
 
 /**
  * Page 3 — Software (release detail).
@@ -36,6 +39,149 @@ import type { Artifact } from '../api/types'
  *   - "Saved (already present)" lives HERE, not on Home, and is labelled an
  *     estimate before a download and a measurement after.
  */
+
+/**
+ * Measuring a release, with something to look at while it happens.
+ *
+ * # Why this is a panel and not a button
+ *
+ * Measuring walks the release's whole manifest tree against the vendor
+ * registry — for the 260-artifact releases this system is built for, that is
+ * hundreds of round trips and takes a while. The button reported none of it:
+ * it spun in place and the page changed silently, which is indistinguishable
+ * from nothing happening.
+ *
+ * # Why there is no percentage
+ *
+ * The API has no progress feed for this, and it cannot sensibly have one: the
+ * size of the tree is the thing being discovered, so there is no denominator
+ * until the work is finished. <WorkingBar> is the honest shape — it shows that
+ * work is running and how long it has been running, and states no position.
+ *
+ * What it CAN report is the outcome, and that is worth reporting in full: a
+ * measurement that fetched nothing because the tree was already recorded is a
+ * different event from one that read three hundred manifests, and both look
+ * identical if all you do is refresh the page.
+ */
+function MeasurePanel({
+  measured, artifactCount, inspect, disabled,
+}: {
+  measured: boolean
+  artifactCount?: number
+  inspect: UseMutationResult<InspectPackageResponse, Error, void, unknown>
+  disabled: boolean
+}) {
+  const [startedAt, setStartedAt] = useState<number>()
+  const [elapsed, setElapsed] = useState(0)
+
+  useEffect(() => {
+    if (!inspect.isPending || !startedAt) return
+    const t = setInterval(() => setElapsed((Date.now() - startedAt) / 1000), 200)
+    return () => clearInterval(t)
+  }, [inspect.isPending, startedAt])
+
+  const run = () => {
+    setStartedAt(Date.now())
+    setElapsed(0)
+    inspect.mutate()
+  }
+
+  if (inspect.isPending) {
+    // Measured against a registry that could not be reached: the call runs for
+    // at least ninety seconds before anything comes back. A bar that says
+    // nothing after the first minute is indistinguishable from a hang, so the
+    // wording escalates rather than repeating itself.
+    const scope = artifactCount
+      ? `Reading the manifest tree from the vendor registry — ${artifactCount} artifacts to walk.`
+      : 'Reading the manifest tree from the vendor registry.'
+    const detail =
+      elapsed > 45
+        ? `${scope} Still going. A release this size can take several minutes, and an unreachable registry looks the same from here until it times out. Leaving this page cancels the measurement.`
+        : `${scope} Large releases take a minute or two.`
+
+    return (
+      <div style={{ marginTop: 12 }}>
+        <WorkingBar label="Measuring this release" elapsedSeconds={elapsed} detail={detail} />
+      </div>
+    )
+  }
+
+  if (inspect.isError) {
+    return (
+      <Alert
+        style={{ marginTop: 12 }}
+        type="error"
+        showIcon
+        message="This release could not be measured"
+        description={
+          <Space direction="vertical" size={4}>
+            <Typography.Text>
+              {inspect.error instanceof Error ? inspect.error.message : 'The registry did not answer.'}
+            </Typography.Text>
+            <Typography.Text type="secondary">
+              Nothing was changed. The release can still be downloaded; its size will be
+              established as the download runs.
+            </Typography.Text>
+          </Space>
+        }
+        action={<Button size="small" onClick={run}>Try again</Button>}
+      />
+    )
+  }
+
+  if (inspect.isSuccess) {
+    const r = inspect.data
+    return (
+      <Alert
+        style={{ marginTop: 12 }}
+        type="success"
+        showIcon
+        message={
+          r.alreadyExpanded
+            ? 'Already measured — the vendor registry was not contacted'
+            : `Measured in ${formatDuration(elapsed) ?? 'a moment'}`
+        }
+        description={
+          <Space size={16} wrap>
+            <Typography.Text type="secondary">
+              <Value>{formatCount(r.artifacts)}</Value> artifacts
+            </Typography.Text>
+            <Typography.Text type="secondary">
+              <Value>{formatCount(r.blobs)}</Value> blobs
+            </Typography.Text>
+            <Typography.Text type="secondary">
+              <Value>{formatBytes(r.totalBytes)}</Value> total
+            </Typography.Text>
+            {!r.alreadyExpanded && (
+              <Typography.Text type="secondary">
+                <Value>{formatCount(r.fetched)}</Value> manifests read
+              </Typography.Text>
+            )}
+            {Boolean(r.signatureResolved) && (
+              <Typography.Text type="secondary">
+                <Value>{formatCount(r.signatureResolved)}</Value> signatures recorded
+              </Typography.Text>
+            )}
+          </Space>
+        }
+      />
+    )
+  }
+
+  if (measured) return null
+
+  return (
+    <Space direction="vertical" size={4} style={{ marginTop: 12 }}>
+      <Button size="small" icon={<ReloadOutlined />} disabled={disabled} onClick={run}>
+        Measure this release
+      </Button>
+      <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+        Reads the manifest tree from the vendor registry to establish what this release contains
+        and what it weighs. Nothing is downloaded.
+      </Typography.Text>
+    </Space>
+  )
+}
 
 /** Groups the artifact tree into the three kinds a user thinks in. */
 function classify(a: Artifact): 'Images' | 'Helm Charts' | 'Files' {
@@ -103,7 +249,6 @@ export default function SoftwareDetail() {
   }
 
   const savedBytes = live?.id ? undefined : undefined
-  const notExpanded = p && !p.expandedAt
 
   return (
     <>
@@ -185,18 +330,12 @@ export default function SoftwareDetail() {
                 </Descriptions.Item>
               </Descriptions>
 
-              {notExpanded && (
-                <Button
-                  size="small"
-                  icon={<ReloadOutlined />}
-                  loading={inspect.isPending}
-                  disabled={!mayOperate}
-                  onClick={() => inspect.mutate()}
-                  style={{ marginTop: 8 }}
-                >
-                  Measure this release
-                </Button>
-              )}
+              <MeasurePanel
+                measured={Boolean(p?.expandedAt)}
+                artifactCount={p?.artifactCount}
+                inspect={inspect}
+                disabled={!mayOperate || !p}
+              />
             </Card>
 
             <Card
@@ -215,7 +354,7 @@ export default function SoftwareDetail() {
                     <Card size="small">
                       <Space direction="vertical" size={0}>
                         <Space size={6}>
-                          {kind === 'Images' ? <PictureOutlined /> : <FileOutlined />}
+                          <Icon as={ARTIFACT_ICONS[kind]} size={15} title={kind} />
                           <Typography.Text type="secondary">{kind}</Typography.Text>
                         </Space>
                         <Typography.Title level={4} style={{ margin: 0 }}>
@@ -239,7 +378,12 @@ export default function SoftwareDetail() {
                 style={{ marginTop: 8 }}
                 items={(['Images', 'Helm Charts', 'Files'] as const).map((kind) => ({
                   key: kind,
-                  label: `${kind} (${groups[kind].count})`,
+                  label: (
+                    <Space size={6}>
+                      <Icon as={ARTIFACT_ICONS[kind]} title={kind} />
+                      {kind} ({groups[kind].count})
+                    </Space>
+                  ),
                   children: (
                     <Table
                       size="small"
@@ -312,10 +456,7 @@ export default function SoftwareDetail() {
                 <LocationChip locations={p ? deriveLocations(p, prod) : []} />
                 {(prod?.targets ?? []).map((t) => (
                   <div key={t.name}>
-                    <Space size={8}>
-                      <Typography.Text>{t.name}</Typography.Text>
-                      {t.environment && <Tag color={t.environment === 'production' ? 'success' : 'default'}>{t.environment}</Tag>}
-                    </Space>
+                    <TargetTag target={t} />
                     <div>
                       <RepoLink url={t.registry ? `https://${t.registry.replace(/^https?:\/\//, '')}/${t.repository ?? ''}` : undefined} />
                     </div>

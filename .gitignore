@@ -2,6 +2,9 @@
 /bin/
 /dist/
 
+# Node dependencies — the web interface vendors its own under web/
+node_modules/
+
 # Task's up-to-date checksums
 /.task/
 

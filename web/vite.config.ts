@@ -1,12 +1,23 @@
 import { defineConfig } from 'vite'
 import react from '@vitejs/plugin-react'
+import Icons from 'unplugin-icons/vite'
 
 // The Coordinator installs no CORS middleware, so the browser must reach the
 // API on its own origin. In development that means proxying rather than
 // pointing the app at http://localhost:8080 — and same-origin is the right
 // production posture anyway, so dev and prod agree.
 export default defineConfig({
-  plugins: [react()],
+  plugins: [
+    react(),
+    // Iconify, compiled at BUILD time rather than fetched at runtime.
+    //
+    // The @iconify/react runtime resolves unknown icons over the network from
+    // api.iconify.design, which in an air-gapped deployment means every icon
+    // silently fails to render. This plugin turns `~icons/simple-icons/nokia`
+    // into an inline SVG component instead, so only the icons actually used
+    // are bundled and nothing is fetched.
+    Icons({ compiler: 'jsx', jsx: 'react', scale: 1 }),
+  ],
   server: {
     port: 5173,
     proxy: {

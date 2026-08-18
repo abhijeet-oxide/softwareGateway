@@ -9,6 +9,7 @@ import { formatCount } from '../domain/format'
 import { EmptyStateCard, ErrorState, PageHeader } from '../components/layout'
 import { semantic } from '../theme'
 import type { Repository } from '../api/types'
+import { Icon, repositoryIcon } from '../components/icons'
 
 /**
  * Page 7 — Repositories.
@@ -156,7 +157,10 @@ export default function Repositories() {
                 width: 180,
                 render: (_, r) => (
                   <Space direction="vertical" size={0}>
-                    <Typography.Text strong>{r.repo.name}</Typography.Text>
+                    <Space size={6}>
+                      <Icon as={repositoryIcon(r.repo)} title={r.repo.type} />
+                      <Typography.Text strong>{r.repo.name}</Typography.Text>
+                    </Space>
                     <Typography.Text type="secondary" style={{ fontSize: 12 }}>
                       {r.product}
                     </Typography.Text>
@@ -169,7 +173,14 @@ export default function Repositories() {
                 render: (_, r) => (
                   <Space size={4} direction="vertical">
                     <Tag color={r.kind === 'Source' ? 'blue' : 'purple'}>{r.kind}</Tag>
-                    {r.repo.environment && <Tag color={r.repo.environment === 'production' ? 'success' : 'default'}>{r.repo.environment}</Tag>}
+                    {r.repo.environment && (
+                      <Tag
+                        color={r.repo.environment === 'production' ? 'green' : 'default'}
+                        style={{ marginInlineEnd: 0 }}
+                      >
+                        {r.repo.environment}
+                      </Tag>
+                    )}
                   </Space>
                 ),
               },

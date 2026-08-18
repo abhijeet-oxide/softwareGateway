@@ -16,6 +16,7 @@ import {
   EmptyStateCard, ErrorState, LifecycleIndicator, PageHeader,
 } from '../components/layout'
 import type { Product } from '../api/types'
+import { TargetTag } from '../components/chips'
 
 /**
  * Page 2 — Products.
@@ -160,12 +161,7 @@ export default function Products() {
                 width: 220,
                 render: (_, p) => (
                   <Space size={4} wrap>
-                    {(p.targets ?? []).map((t) => (
-                      <Tag key={t.name} color={t.environment === 'production' ? 'success' : 'default'}>
-                        {t.name}
-                        {t.environment ? ` · ${t.environment}` : ''}
-                      </Tag>
-                    ))}
+                    {(p.targets ?? []).map((t) => <TargetTag key={t.name} target={t} />)}
                   </Space>
                 ),
               },

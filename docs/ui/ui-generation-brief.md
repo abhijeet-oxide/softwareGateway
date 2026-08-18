@@ -1,8 +1,8 @@
-# Software Lifecycle Manager — UI generation brief
+# Software Gateway — UI generation brief
 
 > **What this file is.** A prompt to hand to a UI-generating agent (v0, Lovable, Figma AI, a coding agent) to produce screen mockups. Paste it whole. The output is images for review, not production code.
 >
-> **Product name in the UI:** *Software Lifecycle Manager*. `softwareGateway` is the engineering name and never appears on screen.
+> **Product name in the UI:** *Software Gateway*.
 >
 > **Authoritative on structure, language and layout:** this file, derived from the reviewed AT&T reference design. **Authoritative on what the system can actually do:** [19 — User Interface](../design/19-user-interface.md) (gates and constraints), [18 — Quay Replication Strategies](../design/18-quay-replication.md) (what a Quay destination does), [09 — API](../design/09-api.md) (where every number comes from).
 >
@@ -12,7 +12,7 @@
 
 ## 1. What the product does
 
-**Software Lifecycle Manager discovers vendor software releases, verifies them, downloads them into internal repositories, and tracks them through to production.**
+**Software Gateway discovers vendor software releases, verifies them, downloads them into internal repositories, and tracks them through to production.**
 
 A vendor (Nokia, for example) publishes a release — SBC 25.8.1 — as a set of container images, Helm charts and files, routinely **15–60 GB across dozens to hundreds of artifacts**. The application:
 

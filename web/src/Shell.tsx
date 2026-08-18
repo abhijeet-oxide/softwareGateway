@@ -49,7 +49,7 @@ export function Shell({ children }: { children: ReactNode }) {
       <Sider width={216} style={{ background: attNavy }}>
         <div style={{ padding: '18px 16px 14px', color: '#fff' }}>
           <Typography.Text style={{ color: '#fff', fontWeight: 700, fontSize: 15 }}>
-            Software Lifecycle Manager
+            Software Gateway
           </Typography.Text>
         </div>
 

@@ -225,8 +225,6 @@ function ComparisonReport({
   // Counted from the rows rather than from the report's totals, so the buckets
   // and their breakdowns cannot disagree with the table under them.
   const buckets = useMemo(() => summarise(report.rows), [report.rows])
-  const filesResolved = report.rows.some(
-    (r) => r.filesAdded?.length || r.filesRemoved?.length || r.filesChanged?.length)
 
   return (
     <Space direction="vertical" size={16} style={{ width: '100%' }}>
@@ -369,12 +367,25 @@ function ComparisonReport({
               render: (_, r) => {
                 const n = (r.filesAdded?.length ?? 0) + (r.filesRemoved?.length ?? 0) +
                   (r.filesChanged?.length ?? 0)
-                if (n > 0) return <Typography.Text style={{ fontSize: 12 }}>{n} changed</Typography.Text>
-                if (r.filesTruncated) {
-                  return <NA reason="A layer was left unopened — past the download budget, or not an archive — so the files inside it are unknown." />
+                if (n > 0) {
+                  return (
+                    <Space size={4}>
+                      <Typography.Text style={{ fontSize: 12 }}>{n} changed</Typography.Text>
+                      {r.filesTruncated && (
+                        <Tooltip title="Some layers of this component were left unopened, so there may be more inside them.">
+                          <Typography.Text type="warning" style={{ fontSize: 12 }}>+</Typography.Text>
+                        </Tooltip>
+                      )}
+                    </Space>
+                  )
                 }
-                if (!filesResolved) {
-                  return <NA reason="File contents were not compared. Tick 'Also compare file contents' and run it again to see which files inside a component differ." />
+                if (r.verdict === 'same') {
+                  return <Typography.Text type="secondary" style={{ fontSize: 12 }}>—</Typography.Text>
+                }
+                if (r.filesTruncated) {
+                  return (
+                    <NA reason="This component's layers are archives with no names on them. Tick 'Also compare file contents' and run it again to open them and see which files differ." />
+                  )
                 }
                 return <Typography.Text type="secondary" style={{ fontSize: 12 }}>—</Typography.Text>
               },

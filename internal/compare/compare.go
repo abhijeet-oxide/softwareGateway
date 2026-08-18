@@ -865,7 +865,15 @@ func itemFrom(
 		item.Name = a.Descriptor.Digest.Short()
 	}
 
+	// LAYERS ONLY. The config blob is metadata about the component — its
+	// entrypoint, its chart values schema — and it is not a file inside it.
+	// Counting it as one made every component's file account read as
+	// incomplete, because a config carries no title and an untitled blob is
+	// something we cannot name without opening it.
 	for _, b := range a.Blobs {
+		if b.Kind != "layer" {
+			continue
+		}
 		item.Layers = append(item.Layers, Layer{
 			Digest:    string(b.Descriptor.Digest),
 			Size:      b.Descriptor.Size,

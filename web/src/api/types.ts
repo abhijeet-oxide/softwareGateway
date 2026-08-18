@@ -330,6 +330,21 @@ export interface Transfer {
 
 export interface ListTransfersResponse { transfers: Transfer[]; nextPageToken?: string }
 
+/**
+ * The artifact a job belongs to — what makes a digest legible.
+ *
+ * A blob on its own is not something anybody can recognise. The image or chart
+ * that references it is.
+ */
+export interface JobParent {
+  digest: string
+  mediaType?: string
+  /** The vendor's own name, from org.opencontainers.image.ref.name. */
+  ref?: string
+  /** Several artifacts reference this blob, so the attribution is an example. */
+  shared?: boolean
+}
+
 export interface Job {
   id: string
   kind: string
@@ -345,9 +360,13 @@ export interface Job {
   lastErrorClass?: string
   leaseOwner?: string
   updatedAt?: string
+  sourceRepository?: string
+  targetRepository?: string
+  targetTags?: string[]
+  parent?: JobParent
 }
 
-export interface ListJobsResponse { jobs: Job[]; nextPageToken?: string }
+export interface ListJobsResponse { transferId?: string; jobs: Job[]; nextPageToken?: string }
 
 export interface FailureGroup {
   message: string

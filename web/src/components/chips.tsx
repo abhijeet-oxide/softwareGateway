@@ -73,9 +73,22 @@ const STATUS_COLOUR: Record<SoftwareStatus, string> = {
   'VERIFICATION FAILED': 'error',
 }
 
-/** The six statuses and no others. */
+/**
+ * The six statuses and no others.
+ *
+ * DOWNLOADING spins, because it is the only one of the six that describes work
+ * happening right now. Everything else is a resting place.
+ */
 export function StatusBadge({ status }: { status: SoftwareStatus }) {
-  return <Tag color={STATUS_COLOUR[status]} style={{ marginInlineEnd: 0 }}>{status}</Tag>
+  return (
+    <Tag
+      color={STATUS_COLOUR[status]}
+      icon={status === 'DOWNLOADING' ? <LoadingOutlined spin /> : undefined}
+      style={{ marginInlineEnd: 0 }}
+    >
+      {status}
+    </Tag>
+  )
 }
 
 /**

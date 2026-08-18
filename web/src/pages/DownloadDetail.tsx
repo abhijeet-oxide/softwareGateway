@@ -1,17 +1,24 @@
-import { Alert, Card, Col, Descriptions, Row, Space, Steps, Table, Tag, Tooltip, Typography } from 'antd'
+import {
+  Alert, Button, Card, Col, Descriptions, Row, Select, Space, Steps, Table, Tag, Tooltip, Typography,
+} from 'antd'
+import { LoadingOutlined } from '@ant-design/icons'
+import { useState } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
-import { useProduct, useSyncs, useTransfer, useTransferFailures } from '../api/queries'
+import {
+  useReplication, useSyncs, useTransfer, useTransferFailures, useTransferJobs,
+} from '../api/queries'
 import { isLive, kindName, transferVersion } from '../domain/derive'
 import {
   bytes, elapsedSeconds, formatBytes, formatCount, formatDuration, formatSpeed,
 } from '../domain/format'
 import { NA, Stat, Value } from '../components/value'
 import { MeasuredProgress, StateStrip, type StripState } from '../components/progress'
-import { RepoLink, TimeAgo } from '../components/chips'
+import { RepoLink, TimeAgo, TransferStateTag } from '../components/chips'
 import { ARTIFACT_ICONS, Icon } from '../components/icons'
 import { PriorityControl, QueueControls } from '../components/queuecontrols'
 import { ErrorState, PageHeader, SavedPanel } from '../components/layout'
 import { mono } from '../theme'
+import type { Job } from '../api/types'
 
 /**
  * Page 4 — Download.
@@ -29,16 +36,205 @@ import { mono } from '../theme'
  * on purpose (docs/design/18 §6.1, 19 §6).
  */
 
+/**
+ * The jobs behind a download.
+ *
+ * # Why this belongs on the page at all
+ *
+ * A download is thousands of jobs, and the summary above is a rollup of them.
+ * When it stops moving, the rollup cannot say why — "2486/2489" names nothing
+ * anybody can act on. `transferctl transfers jobs` has always been able to
+ * answer that; this is the same answer, on the page somebody is already
+ * looking at.
+ *
+ * # Collapsed by default, filtered by state
+ *
+ * Thousands of rows is not a table anybody reads top to bottom, so the panel
+ * opens on demand and the filter starts wherever the trouble is: failures if
+ * there are any, otherwise what is running right now.
+ */
+function JobsPanel({ transferId, hasFailures }: { transferId: string; hasFailures: boolean }) {
+  const [state, setState] = useState<string | undefined>(hasFailures ? 'failed' : 'leased')
+  const [open, setOpen] = useState(false)
+  const jobs = useTransferJobs(open ? transferId : undefined, state)
+  const rows = jobs.data?.jobs ?? []
+
+  return (
+    <Card
+      title="Jobs"
+      extra={
+        <Space>
+          <Select
+            size="small"
+            style={{ minWidth: 170 }}
+            value={state ?? 'all'}
+            onChange={(v) => setState(v === 'all' ? undefined : v)}
+            options={[
+              { value: 'leased', label: 'Running now' },
+              { value: 'failed', label: 'Failed' },
+              { value: 'pending', label: 'Waiting' },
+              { value: 'blocked', label: 'Blocked' },
+              { value: 'succeeded', label: 'Succeeded' },
+              { value: 'skipped', label: 'Already present' },
+              { value: 'all', label: 'Every job' },
+            ]}
+          />
+          <Button size="small" onClick={() => setOpen((v) => !v)}>
+            {open ? 'Hide' : 'Show jobs'}
+          </Button>
+        </Space>
+      }
+    >
+      {!open ? (
+        <Typography.Text type="secondary" style={{ fontSize: 13 }}>
+          One row per blob or manifest this download moves — which one is running, which failed, on
+          which attempt, and which worker is holding it.
+        </Typography.Text>
+      ) : (
+        <Table<Job>
+          size="small"
+          loading={jobs.isLoading}
+          dataSource={rows}
+          rowKey={(j) => j.id}
+          pagination={{ pageSize: 20, showSizeChanger: false, size: 'small' }}
+          scroll={{ x: 900 }}
+          locale={{
+            emptyText: (
+              <Typography.Text type="secondary">
+                No job is in that state right now.
+              </Typography.Text>
+            ),
+          }}
+          expandable={{
+            // Only where there is something to expand INTO. An expander on
+            // every row promises detail that most rows do not have.
+            rowExpandable: (j) => Boolean(j.lastError || j.parent?.ref || j.targetTags?.length),
+            expandedRowRender: (j) => (
+              <Descriptions size="small" column={1} style={{ marginBlock: 4 }}>
+                {j.parent?.ref && (
+                  <Descriptions.Item label="Part of">
+                    <span style={{ fontFamily: mono, fontSize: 12 }}>{j.parent.ref}</span>
+                    {j.parent.shared && (
+                      <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+                        {' '}— shared with other components, so this is an example
+                      </Typography.Text>
+                    )}
+                  </Descriptions.Item>
+                )}
+                <Descriptions.Item label="Digest">
+                  <span style={{ fontFamily: mono, fontSize: 11 }}>{j.digest}</span>
+                </Descriptions.Item>
+                {j.targetRepository && (
+                  <Descriptions.Item label="Into">
+                    <span style={{ fontFamily: mono, fontSize: 12 }}>
+                      {j.targetRepository}
+                      {j.targetTags?.length ? `:${j.targetTags.join(', :')}` : ''}
+                    </span>
+                  </Descriptions.Item>
+                )}
+                {j.lastError && (
+                  <Descriptions.Item label="Last error">
+                    <Typography.Text type="danger" style={{ fontSize: 12 }}>
+                      {j.lastErrorClass ? `${j.lastErrorClass}: ` : ''}{j.lastError}
+                    </Typography.Text>
+                  </Descriptions.Item>
+                )}
+              </Descriptions>
+            ),
+          }}
+          columns={[
+            {
+              title: 'What',
+              width: 230,
+              render: (_, j) => (
+                <Space direction="vertical" size={0}>
+                  <Space size={6}>
+                    <Tag style={{ marginInlineEnd: 0 }}>{j.kind}</Tag>
+                    <Typography.Text style={{ fontFamily: mono, fontSize: 11 }}>
+                      {shortDigest(j.digest)}
+                    </Typography.Text>
+                  </Space>
+                  {j.parent?.ref && (
+                    <Typography.Text type="secondary" style={{ fontSize: 11 }} ellipsis>
+                      {j.parent.ref}
+                    </Typography.Text>
+                  )}
+                </Space>
+              ),
+            },
+            { title: 'Size', width: 90, align: 'right', render: (_, j) => <Value>{formatBytes(bytes(j.sizeBytes))}</Value> },
+            { title: 'State', width: 120, render: (_, j) => <JobStateTag job={j} /> },
+            {
+              title: 'Attempts',
+              width: 90,
+              align: 'right',
+              render: (_, j) => (
+                <Typography.Text type={j.attempts > 1 ? 'warning' : undefined}>
+                  {j.attempts}/{j.maxAttempts}
+                </Typography.Text>
+              ),
+            },
+            {
+              title: 'Worker',
+              width: 150,
+              render: (_, j) => <Value>{j.leaseOwner ?? null}</Value>,
+            },
+            {
+              title: 'Moved',
+              width: 110,
+              align: 'right',
+              render: (_, j) => <Value>{formatBytes(bytes(j.bytesTransferred))}</Value>,
+            },
+          ]}
+        />
+      )}
+    </Card>
+  )
+}
+
+/** A job's state, spinning while a worker holds it. */
+function JobStateTag({ job }: { job: Job }) {
+  const colour: Record<string, string> = {
+    SUCCEEDED: 'green',
+    SKIPPED: 'default',
+    FAILED: 'error',
+    LEASED: 'processing',
+    PENDING: 'blue',
+    BLOCKED: 'warning',
+    CANCELLED: 'default',
+  }
+  // SKIPPED is not a failure and not a shrug: the destination already had it,
+  // which is the number that makes a delta download legible.
+  const label = job.state === 'SKIPPED' ? 'ALREADY THERE' : job.state
+  return (
+    <Tooltip title={job.state === 'SKIPPED' ? job.skipReason || 'The destination already held this content.' : undefined}>
+      <Tag
+        color={colour[job.state] ?? 'default'}
+        icon={job.state === 'LEASED' ? <LoadingOutlined spin /> : undefined}
+        style={{ marginInlineEnd: 0 }}
+      >
+        {label}
+      </Tag>
+    </Tooltip>
+  )
+}
+
+/** sha256:abcd… — enough to recognise, short enough for a column. */
+function shortDigest(digest: string): string {
+  const hex = digest.includes(':') ? digest.split(':')[1] ?? '' : digest
+  return hex.slice(0, 12)
+}
+
 export default function DownloadDetail() {
   const { transferId } = useParams()
   const navigate = useNavigate()
 
   const transfer = useTransfer(transferId)
   const failures = useTransferFailures(transferId)
-  const product = useProduct(transfer.data?.product)
 
   const t = transfer.data
   const syncs = useSyncs(t?.product, t?.targetName)
+  const replication = useReplication(t?.product)
 
   if (transfer.isError) {
     return (
@@ -69,6 +265,19 @@ export default function DownloadDetail() {
 
   // Step 2 reads the mirror's own state, never a byte count.
   const lastSync = syncs.data?.syncs?.[0]
+  /*
+   * Is there a mirror at all?
+   *
+   * Most deployments have none: the download ends at internal storage and
+   * nothing is delegated to a registry. Showing "Step 2 — Configuring Mirror
+   * to Quay" for those made the page describe work that was never going to
+   * happen, and left every download looking permanently half-finished.
+   *
+   * Evidence, not configuration-in-principle: a sync this target has actually
+   * reported, or a replication row the reconciler wrote for it.
+   */
+  const mirrored = Boolean(lastSync) || (replication.data?.replication ?? [])
+    .some((r) => r.target === t?.targetName)
   const mirrorState: StripState = lastSync?.state === 'succeeded'
     ? 'done'
     : lastSync?.state === 'failed'
@@ -102,16 +311,34 @@ export default function DownloadDetail() {
       + ' Raising the priority below moves it ahead of work that has not started.'
   })()
 
-  const step = failed ? (transferred ? 1 : 0) : done ? 3 : running ? 0 : 0
+  /*
+   * Which step the stepper is on, counted against the steps that EXIST.
+   *
+   * It used to be a literal 3 for "completed", which was right only while the
+   * mirror step was always there. With no mirror configured the list is one
+   * shorter and that 3 pointed past the end, leaving a finished download
+   * showing nothing as current.
+   */
+  const steps = [
+    'downloading',
+    ...(mirrored ? ['mirror'] : []),
+    'verification',
+    'completed',
+  ]
+  const step = done ? steps.indexOf('completed') : 0
 
   return (
     <>
       <PageHeader
-        title={t ? `Downloading ${t.product} ${transferVersion(t)}` : 'Download'}
-        description="What is happening to this release right now, and what it cost"
+        // Not "Downloading …": this page outlives the download, and a
+        // finished one titled in the present tense reads as still running.
+        // The state tag below says which it is.
+        title={t ? `${t.product} ${transferVersion(t)}` : 'Download'}
+        description="What happened to this release, and what it cost"
         meta={
           t && (
             <Space size={16}>
+              <TransferStateTag state={t.state} />
               <Stat title="Elapsed" value={formatDuration(elapsed)} valueStyle={{ fontSize: 18 }} />
               <Stat
                 title="ETA"
@@ -136,7 +363,16 @@ export default function DownloadDetail() {
             </Space>
           )
         }
-        extra={t && <QueueControls transfer={t} size="middle" onDeleted={() => navigate('/downloads')} />}
+        extra={
+          t && (
+            <QueueControls
+              transfer={t}
+              size="middle"
+              hasFailures={Boolean(failures.data?.failures?.length)}
+              onDeleted={() => navigate('/downloads')}
+            />
+          )
+        }
       />
 
       {waiting && (
@@ -154,8 +390,10 @@ export default function DownloadDetail() {
           current={step}
           status={failed ? 'error' : undefined}
           items={[
-            { title: 'Downloading to JFrog', description: t?.targetName ?? 'Internal storage' },
-            { title: 'Configuring Mirror to Quay', description: 'Configured by us, synced by Quay' },
+            { title: `Downloading to ${t?.targetName ?? 'internal storage'}`, description: t?.target },
+            ...(mirrored
+              ? [{ title: 'Configuring mirror', description: 'Configured by us, synced by the registry' }]
+              : []),
             { title: 'Verification', description: 'Signature checked at the destination' },
             { title: 'Completed', description: done ? 'Landed' : 'Not yet' },
           ]}
@@ -165,7 +403,7 @@ export default function DownloadDetail() {
       <Row gutter={[16, 16]}>
         <Col xs={24} xl={15}>
           <Space direction="vertical" size={16} style={{ width: '100%' }}>
-            <Card title="Step 1 — Downloading to JFrog">
+            <Card title={mirrored ? `Step 1 — downloading to ${t?.targetName ?? 'internal storage'}` : `Downloading to ${t?.targetName ?? 'internal storage'}`}>
               <Space direction="vertical" size={12} style={{ width: '100%' }}>
                 <RepoLink url={t?.target ? `https://${t.target}` : undefined} label={t?.targetName} />
 
@@ -230,38 +468,52 @@ export default function DownloadDetail() {
               </Space>
             </Card>
 
-            <Card title="Step 2 — Configuring Mirror to Quay">
-              <Space direction="vertical" size={12} style={{ width: '100%' }}>
-                <StateStrip
-                  state={mirrorState}
-                  label={
-                    mirrorState === 'done'
-                      ? 'Mirror configured and first sync completed'
-                      : mirrorState === 'failed'
-                        ? 'The mirror reported a failure'
-                        : mirrorState === 'running'
-                          ? 'Configured — waiting for Quay to finish its first sync'
-                          : 'Not configured yet'
-                  }
-                  events={[
-                    { label: 'Configured', at: lastSync?.startedAt },
-                    { label: 'First sync completed', at: lastSync?.completedAt },
-                  ]}
-                  message={
-                    lastSync?.message ??
-                    'Quay pulls this content itself once configured, so there are no bytes for us to count here — only what it reports.'
-                  }
-                />
-                {lastSync?.itemsSynced !== undefined && (
-                  <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-                    Quay reported <Value>{formatCount(lastSync.itemsSynced)}</Value> items synced.
-                  </Typography.Text>
-                )}
-              </Space>
-            </Card>
+            {mirrored && (
+              <Card title="Step 2 — configuring the mirror">
+                <Space direction="vertical" size={12} style={{ width: '100%' }}>
+                  <StateStrip
+                    state={mirrorState}
+                    label={
+                      mirrorState === 'done'
+                        ? 'Mirror configured and first sync completed'
+                        : mirrorState === 'failed'
+                          ? 'The mirror reported a failure'
+                          : mirrorState === 'running'
+                            ? 'Configured — waiting for Quay to finish its first sync'
+                            : 'Not configured yet'
+                    }
+                    events={[
+                      { label: 'Configured', at: lastSync?.startedAt },
+                      { label: 'First sync completed', at: lastSync?.completedAt },
+                    ]}
+                    message={
+                      lastSync?.message ??
+                      'Quay pulls this content itself once configured, so there are no bytes for us to count here — only what it reports.'
+                    }
+                  />
+                  {lastSync?.itemsSynced !== undefined && (
+                    <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+                      Quay reported <Value>{formatCount(lastSync.itemsSynced)}</Value> items synced.
+                    </Typography.Text>
+                  )}
+                </Space>
+              </Card>
+            )}
+
+            {t && <JobsPanel transferId={t.id} hasFailures={Boolean(failures.data?.failures?.length)} />}
 
             {failures.data?.failures?.length ? (
-              <Card title="What failed" styles={{ header: { color: '#C4262E' } }}>
+              <Card
+                title="What failed"
+                styles={{ header: { color: '#C4262E' } }}
+                // The retry belongs NEXT TO the failures, not only in the
+                // header: this is where somebody is reading when they decide
+                // to do something about them, and a retry resumes rather than
+                // restarting — nothing already moved is moved again.
+                extra={
+                  t && <QueueControls transfer={t} hasFailures onDeleted={() => navigate('/downloads')} />
+                }
+              >
                 <Table
                   size="small"
                   pagination={false}
@@ -305,19 +557,27 @@ export default function DownloadDetail() {
                   {formatSpeed(speed)}
                 </Value>
               </Descriptions.Item>
-              <Descriptions.Item label="Started"><TimeAgo at={t?.startedAt} /></Descriptions.Item>
-              <Descriptions.Item label="Completed"><TimeAgo at={t?.completedAt} /></Descriptions.Item>
-              <Descriptions.Item label="Strategy">
-                <Tooltip
-                  title={
-                    t?.strategy === 'copy'
-                      ? 'Our workers moved these bytes, so every figure here is measured.'
-                      : 'The destination registry moved these bytes. We did not count them, so no byte figure is shown.'
-                  }
-                >
-                  {t?.strategy ? <Tag>{t.strategy}</Tag> : <NA />}
+              {/*
+                Where it came FROM and where it went TO, in the summary rather
+                than in a panel of their own. They are the two facts a reader
+                checks first when a download looks wrong — the right version
+                from the wrong repository, or the right content at the wrong
+                destination, both read as "it worked" everywhere else.
+              */}
+              <Descriptions.Item label="From">
+                <Tooltip title={t?.source}>
+                  <span style={{ fontFamily: mono, fontSize: 12 }}>
+                    <Value>{t?.sourceName || t?.source}</Value>
+                  </span>
                 </Tooltip>
               </Descriptions.Item>
+              <Descriptions.Item label="Target">
+                {t?.target
+                  ? <RepoLink url={`https://${t.target}`} label={t.targetName || t.target} />
+                  : <NA />}
+              </Descriptions.Item>
+              <Descriptions.Item label="Started"><TimeAgo at={t?.startedAt} /></Descriptions.Item>
+              <Descriptions.Item label="Completed"><TimeAgo at={t?.completedAt} /></Descriptions.Item>
               <Descriptions.Item label="Priority">
                 {t ? <PriorityControl transfer={t} /> : <NA />}
               </Descriptions.Item>
@@ -328,30 +588,6 @@ export default function DownloadDetail() {
               </Descriptions.Item>
             </Descriptions>
 
-            {product.data && (
-              <Space direction="vertical" size={4} style={{ width: '100%', marginTop: 12 }}>
-                <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-                  Where this download landed
-                </Typography.Text>
-                {/*
-                  This download's OWN target, not every target the product has.
-                  Listing them all here would read as "the release reached all
-                  of these", which is a claim about work that has not run.
-                */}
-                {product.data.targets
-                  .filter((target) => target.name === t?.targetName)
-                  .map((target) => (
-                    <RepoLink
-                      key={target.name}
-                      label={target.name}
-                      url={`https://${target.registry.replace(/^https?:\/\//, '')}/${target.repository ?? ''}`}
-                    />
-                  ))}
-                {!product.data.targets.some((target) => target.name === t?.targetName) && (
-                  <Value>{t?.targetName}</Value>
-                )}
-              </Space>
-            )}
           </Card>
         </Col>
       </Row>

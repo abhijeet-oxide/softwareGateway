@@ -226,6 +226,14 @@ func (s *Service) Run(
 	return res, nil
 }
 
+// manualOrigin is what a download run by hand records as its origin.
+//
+// The column takes the INTERFACE that asked — api, cli, auto_download or
+// schedule — and nothing else passes its CHECK constraint. It used to say
+// "manual", so every manual download failed at the insert; manual-versus-
+// automatic is already carried by Trigger, which is what made that look right.
+const manualOrigin = "api"
+
 func (s *Service) open(
 	ctx context.Context, p *product.Product, productID int64,
 	d product.Download, steps []ResolvedStep, pkg store.PackageRow, actor string,
@@ -237,14 +245,21 @@ func (s *Service) open(
 	defer func() { _ = tx.Rollback() }()
 
 	id, created, err := Open(ctx, tx, s.packages, Request{
-		ProductID:      productID,
-		ProductName:    p.Metadata.Name,
-		PackageID:      pkg.ID,
-		SourceRepoID:   pkg.SourceRepoID,
-		Tag:            pkg.Tag,
-		DownloadName:   d.Name,
-		Trigger:        TriggerManual,
-		Origin:         "manual",
+		ProductID:    productID,
+		ProductName:  p.Metadata.Name,
+		PackageID:    pkg.ID,
+		SourceRepoID: pkg.SourceRepoID,
+		Tag:          pkg.Tag,
+		DownloadName: d.Name,
+		Trigger:      TriggerManual,
+		// The INTERFACE that asked, which is the only thing this column
+		// records — `api`, `cli`, `auto_download` or `schedule`, and nothing
+		// else passes its CHECK constraint. It said "manual", which is not one
+		// of them, so every download run by hand failed at the insert.
+		//
+		// Manual-versus-automatic is already carried by Trigger above, which is
+		// what made the wrong value here look plausible.
+		Origin:         manualOrigin,
 		RequestedBy:    actor,
 		Priority:       d.EffectivePriority(),
 		IdempotencyKey: KeyFor(pkg, d, steps),

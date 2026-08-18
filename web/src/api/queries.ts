@@ -341,10 +341,17 @@ export function useSyncs(product: string | undefined, target: string | undefined
 
 export function useCompare() {
   return useMutation({
-    mutationFn: ({ product, ref, body }: { product: string; ref: string; body: CompareRequest }) => {
+    mutationFn: ({ product, ref, repository, body }: {
+      product: string
+      ref: string
+      /** Scopes the left-hand reference, for the usual ambiguous tag. */
+      repository?: string
+      body: CompareRequest
+    }) => {
       const { segment, query: q } = packageRef(ref)
       return api.post<CompareResponse>(
-        `/products/${encodeURIComponent(product)}/packages/${encodeURIComponent(segment)}:compare${q}`,
+        `/products/${encodeURIComponent(product)}/packages/${encodeURIComponent(segment)}:compare` +
+        scopeQuery(q, repository),
         body)
     },
   })

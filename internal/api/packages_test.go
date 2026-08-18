@@ -10,8 +10,10 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/abhijeet-oxide/softwareGateway/internal/catalog"
+	"github.com/abhijeet-oxide/softwareGateway/internal/compare"
 	"github.com/abhijeet-oxide/softwareGateway/internal/discovery"
 	"github.com/abhijeet-oxide/softwareGateway/internal/product"
 	"github.com/abhijeet-oxide/softwareGateway/internal/store"
@@ -96,6 +98,14 @@ type apiHarness struct {
 
 func newAPIHarness(t *testing.T) *apiHarness {
 	t.Helper()
+	return newAPIHarnessWith(t, nil)
+}
+
+// newAPIHarnessWith is the same harness with the dependencies adjusted before
+// the server is built — for the handful of tests about a dependency's
+// behaviour rather than the store's.
+func newAPIHarnessWith(t *testing.T, adjust func(*Deps)) *apiHarness {
+	t.Helper()
 	ctx := t.Context()
 
 	st, err := store.Open(ctx, store.Config{
@@ -135,13 +145,17 @@ func newAPIHarness(t *testing.T) *apiHarness {
 	disc := &fakeDiscoverer{running: true}
 	packages := store.NewPackages(st)
 
-	srv := NewServer(Deps{
+	deps := Deps{
 		Products:  products,
 		Store:     st,
 		Packages:  packages,
 		Discovery: disc,
 		Component: "coordinator",
-	})
+	}
+	if adjust != nil {
+		adjust(&deps)
+	}
+	srv := NewServer(deps)
 
 	ts := httptest.NewServer(srv.Handler())
 	t.Cleanup(ts.Close)
@@ -641,4 +655,53 @@ func TestDiscoverAllWithNoProducts(t *testing.T) {
 	if len(resp.Products) != 0 || resp.Started != 0 {
 		t.Errorf("expected an empty result, got %+v", resp)
 	}
+}
+
+// A comparison that outlives its deadline says so, in terms a caller can act
+// on.
+//
+// The failure mode this exists for is not an error: a comparison of a real
+// release is hundreds of manifests read live from two registries, and when
+// those registries are slow the request simply does not come back. A caller
+// cannot tell that from a hang, and there is no progress channel to tell them
+// otherwise — so it stops, and the reply names the limit and the one knob that
+// makes the work smaller.
+func TestCompareThatRunsOutOfTimeSaysSo(t *testing.T) {
+	// Shortened for the test. The constant is minutes, because the work is
+	// real; what is being tested is the shape of the answer when it runs out.
+	original := compareDeadline
+	compareDeadline = 50 * time.Millisecond
+	t.Cleanup(func() { compareDeadline = original })
+
+	h := newAPIHarnessWith(t, func(d *Deps) {
+		d.Comparer = comparerFunc(func(
+			ctx context.Context, _ string, _, _ ComparePoint, _ int64,
+		) (compare.Report, error) {
+			<-ctx.Done()
+			return compare.Report{}, ctx.Err()
+		})
+	})
+	h.seedPackage("orb_25.7.2131", "sha256:"+strings.Repeat("a", 64))
+
+	var problem v1.Problem
+	status := h.post("/api/v1/products/vendor-a/packages/orb_25.7.2131:compare", "{}", &problem)
+
+	if status == http.StatusOK {
+		t.Fatalf("a comparison that never returned answered 200")
+	}
+	if problem.Code != v1.CodeDeadlineExceeded {
+		t.Errorf("code = %q, want %q", problem.Code, v1.CodeDeadlineExceeded)
+	}
+	if !strings.Contains(problem.Detail, "fileBudgetBytes") {
+		t.Errorf("the refusal does not say what to do about it: %s", problem.Detail)
+	}
+}
+
+// comparerFunc adapts a function to the Comparer interface.
+type comparerFunc func(context.Context, string, ComparePoint, ComparePoint, int64) (compare.Report, error)
+
+func (f comparerFunc) Compare(
+	ctx context.Context, product string, a, b ComparePoint, budget int64,
+) (compare.Report, error) {
+	return f(ctx, product, a, b, budget)
 }

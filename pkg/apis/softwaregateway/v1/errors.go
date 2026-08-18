@@ -20,6 +20,12 @@ const (
 	CodeInternal           Code = "INTERNAL"
 	CodeUnauthenticated    Code = "UNAUTHENTICATED"
 	CodePermissionDenied   Code = "PERMISSION_DENIED"
+	// CodeDeadlineExceeded is work that was still going when its time ran out.
+	//
+	// Distinct from UNAVAILABLE, which says the thing could not be reached: this
+	// says it was reached and is slow, so a caller's sensible next move is to
+	// ask for less rather than to retry the same request.
+	CodeDeadlineExceeded Code = "DEADLINE_EXCEEDED"
 )
 
 // ProblemContentType is the media type for error responses (RFC 9457).
@@ -84,6 +90,8 @@ func StatusFor(c Code) int {
 		return http.StatusTooManyRequests
 	case CodeUnavailable:
 		return http.StatusServiceUnavailable
+	case CodeDeadlineExceeded:
+		return http.StatusGatewayTimeout
 	default:
 		return http.StatusInternalServerError
 	}
@@ -110,6 +118,8 @@ func TitleFor(c Code) string {
 		return "Unauthenticated"
 	case CodePermissionDenied:
 		return "Permission denied"
+	case CodeDeadlineExceeded:
+		return "Timed out"
 	default:
 		return "Internal error"
 	}
@@ -136,6 +146,8 @@ func TypeURI(c Code) string {
 		return "https://softwaregateway.io/errors/unauthenticated"
 	case CodePermissionDenied:
 		return "https://softwaregateway.io/errors/permission-denied"
+	case CodeDeadlineExceeded:
+		return "https://softwaregateway.io/errors/deadline-exceeded"
 	default:
 		return "https://softwaregateway.io/errors/internal"
 	}

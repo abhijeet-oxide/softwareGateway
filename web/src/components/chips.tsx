@@ -72,7 +72,10 @@ export function VersionChip({
 
 const STATUS_COLOUR: Record<SoftwareStatus, string> = {
   NEW: 'blue',
-  AVAILABLE: 'default',
+  // Its own colour, not the grey of "nothing to say". A release sitting at
+  // the vendor is a real, actionable state — it is the thing somebody
+  // downloads — and grey read as disabled next to the blue of NEW.
+  AVAILABLE: 'cyan',
   DOWNLOADING: 'processing',
   DOWNLOADED: 'green',
   'READY FOR PRODUCTION': 'purple',

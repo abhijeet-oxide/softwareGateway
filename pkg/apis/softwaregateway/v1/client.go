@@ -515,6 +515,8 @@ func codeForStatus(status int) Code {
 		return CodeResourceExhausted
 	case http.StatusServiceUnavailable:
 		return CodeUnavailable
+	case http.StatusGatewayTimeout:
+		return CodeDeadlineExceeded
 	default:
 		return CodeInternal
 	}

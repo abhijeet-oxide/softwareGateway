@@ -256,10 +256,22 @@ func resolveFileBudget(requested int64) int64 {
 	}
 }
 
+// defaultCompareConcurrency is what a comparison uses when configuration names
+// no ceiling.
+//
+// It used to be NONE, and none means one: the walker clamps a non-positive
+// concurrency to a single worker. A comparison of a real orb is then ~260
+// manifests plus two probes per component, per side, one round trip at a time
+// — twenty minutes against a vendor registry, with nothing on screen but a
+// spinner. Eight is the same order as a transfer's default per-registry
+// concurrency and is polite to a registry nobody has sized for us.
+const defaultCompareConcurrency = 8
+
 // concurrencyOf is the ceiling an operator set for this product's registries.
 //
 // A comparison opens the same connections a transfer does, so it obeys the same
-// limit rather than choosing one here.
+// limit rather than choosing one here — but an ABSENT limit is not a limit of
+// one, which is what returning zero amounted to.
 func concurrencyOf(p *product.Product) int {
 	for _, s := range p.Spec.Sources {
 		if s.Concurrency.PerRegistry > 0 {
@@ -271,7 +283,7 @@ func concurrencyOf(p *product.Product) int {
 			return t.Concurrency.PerRegistry
 		}
 	}
-	return 0
+	return defaultCompareConcurrency
 }
 
 // findSource resolves a configured source by name, or the product's only one.

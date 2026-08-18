@@ -15,6 +15,7 @@ import HelmIcon from '~icons/simple-icons/helm'
 import FileIcon from '~icons/mdi/file-document-outline'
 import AnalyzeIcon from '~icons/mdi/file-tree-outline'
 import IndexIcon from '~icons/mdi/table-of-contents'
+import DownloadIcon from '~icons/mdi/tray-arrow-down'
 import SignatureIcon from '~icons/mdi/certificate-outline'
 import type { Repository } from '../api/types'
 
@@ -146,7 +147,7 @@ export const ARTIFACT_ICONS = {
 
 export type ArtifactKind = keyof typeof ARTIFACT_ICONS
 
-export { AnalyzeIcon, IndexIcon, SignatureIcon, PackageIcon, NokiaIcon, JFrogIcon, OpenShiftIcon, RocketIcon, FlaskIcon, OciIcon, DockerIcon, HelmIcon }
+export { AnalyzeIcon, DownloadIcon, IndexIcon, SignatureIcon, PackageIcon, NokiaIcon, JFrogIcon, OpenShiftIcon, RocketIcon, FlaskIcon, OciIcon, DockerIcon, HelmIcon }
 
 /**
  * Renders one of the above at text size.
@@ -156,18 +157,28 @@ export { AnalyzeIcon, IndexIcon, SignatureIcon, PackageIcon, NokiaIcon, JFrogIco
  * and a title so it is not a bare glyph to a screen reader.
  */
 export function Icon({
-  as: Component, size = 14, colour, title,
+  as: Component, size = 14, colour, title, className,
 }: {
   as: IconComponent
   size?: number
   colour?: string
   title?: string
+  /**
+   * Passed through so a caller can adopt Ant Design's own icon class.
+   *
+   * The nav needs it: Ant Design lays a menu item out around `.anticon`, which
+   * carries the gap between the mark and the label. An icon without it sat a
+   * few pixels off from the seven built-in ones on either side of it — small
+   * enough to look like a mistake rather than a difference.
+   */
+  className?: string
 }) {
   return (
     <span
       role="img"
       aria-label={title}
       title={title}
+      className={className}
       style={{
         display: 'inline-flex',
         alignItems: 'center',

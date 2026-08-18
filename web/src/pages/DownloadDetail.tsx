@@ -323,13 +323,23 @@ export default function DownloadDetail() {
     <>
       <PageHeader
         back={{ to: '/downloads', label: 'All downloads' }}
-        // All three names, because none of them identifies the download on its
-        // own: a product has many packages, and one version tag exists in
-        // every repository the product watches. Not "Downloading …" either —
-        // this page outlives the download, and the present tense on a finished
-        // one reads as still running. The state tag below says which it is.
-        title={t ? `${t.product} · ${repositoryOf(t.source)} · ${transferVersion(t)}` : 'Download'}
-        description="What happened to this release, and what it cost"
+        /*
+         * The package and the version make the title; the product goes
+         * underneath.
+         *
+         * All three are needed to identify a download — a product has many
+         * packages, and one version tag exists in every repository the product
+         * watches — but they are not equally interesting to somebody who has
+         * just clicked into one. Three names joined by dots read as a path and
+         * gave the version, the thing they came for, the least prominence.
+         *
+         * Not "Downloading …" either: this page outlives the download, and the
+         * present tense on a finished one reads as still running. The state tag
+         * says which it is.
+         */
+        title={t ? `${repositoryOf(t.source)} · ${transferVersion(t)}` : 'Download'}
+        description={t ? `${t.product} — what happened to this release, and what it cost`
+          : 'What happened to this release, and what it cost'}
         meta={
           t && (
             <Space size={16}>
@@ -380,25 +390,43 @@ export default function DownloadDetail() {
         />
       )}
 
-      <Card style={{ marginBottom: 16 }} loading={transfer.isLoading}>
+      {/*
+        A stepper, and nothing else.
+        
+        It carried a line of explanation under every step — the target's host,
+        "signature checked at the destination", "not yet" — which is three
+        sentences of small grey text saying what the step names already say.
+        Where the detail matters it is in the card for that step, one screen
+        down. Here the only question is which step this download is on.
+      */}
+      <Card style={{ marginBottom: 16 }} size="small" loading={transfer.isLoading}>
         <Steps
+          size="small"
           current={step}
           status={failed ? 'error' : undefined}
           items={[
-            { title: `Downloading to ${t?.targetName ?? 'internal storage'}`, description: t?.target },
-            ...(mirrored
-              ? [{ title: 'Configuring mirror', description: 'Configured by us, synced by the registry' }]
-              : []),
-            { title: 'Verification', description: 'Signature checked at the destination' },
-            { title: 'Completed', description: done ? 'Landed' : 'Not yet' },
+            { title: 'Downloading' },
+            ...(mirrored ? [{ title: 'Mirroring' }] : []),
+            { title: 'Verification' },
+            { title: 'Completed' },
           ]}
         />
       </Card>
 
-      <Row gutter={[16, 16]}>
-        <Col xs={24} xl={15}>
+      {/*
+        Both columns stretch, and the cards inside them fill their column, so
+        the download panel and the summary end level with each other instead of
+        leaving a ragged step down the middle of the page.
+      */}
+      <Row gutter={[16, 16]} align="stretch">
+        <Col xs={24} xl={15} style={{ display: 'flex' }}>
           <Space direction="vertical" size={16} style={{ width: '100%' }}>
-            <Card title={mirrored ? `Step 1 — downloading to ${t?.targetName ?? 'internal storage'}` : `Downloading to ${t?.targetName ?? 'internal storage'}`}>
+            <Card
+              style={{ height: '100%' }}
+              title={mirrored
+                ? `Step 1 — downloading to ${t?.targetName ?? 'internal storage'}`
+                : `Downloading to ${t?.targetName ?? 'internal storage'}`}
+            >
               <Space direction="vertical" size={12} style={{ width: '100%' }}>
                 <RepoLink url={t?.target ? `https://${t.target}` : undefined} label={t?.targetName} />
 
@@ -495,41 +523,11 @@ export default function DownloadDetail() {
               </Card>
             )}
 
-            {failures.data?.failures?.length ? (
-              <Card
-                title="Failures"
-                styles={{ header: { color: '#C4262E' } }}
-                // The retry belongs NEXT TO the failures, not only in the
-                // header: this is where somebody is reading when they decide
-                // to do something about them, and a retry resumes rather than
-                // restarting — nothing already moved is moved again.
-                extra={
-                  t && <QueueControls transfer={t} hasFailures onDeleted={() => navigate('/downloads')} />
-                }
-              >
-                <Table
-                  size="small"
-                  pagination={false}
-                  dataSource={failures.data.failures}
-                  rowKey={(f) => f.message}
-                  columns={[
-                    { title: 'Cause', render: (_, f) => f.message },
-                    { title: 'Artifacts', align: 'right', width: 90, render: (_, f) => <Value>{formatCount(f.failed)}</Value> },
-                    {
-                      title: 'Retryable',
-                      width: 110,
-                      render: (_, f) =>
-                        f.retryable ? <Tag color="blue">Worth retrying</Tag> : <Tag>Will not succeed on retry</Tag>,
-                    },
-                  ]}
-                />
-              </Card>
-            ) : null}
           </Space>
         </Col>
 
-        <Col xs={24} xl={9}>
-          <Card title="Download Summary">
+        <Col xs={24} xl={9} style={{ display: 'flex' }}>
+          <Card title="Download Summary" style={{ width: '100%' }}>
             <Descriptions column={1} size="small">
               <Descriptions.Item label="Total size">
                 <Value reason="The release has not been measured, so its full size is not known.">
@@ -590,6 +588,43 @@ export default function DownloadDetail() {
         which point the error column, the one somebody opened it for, was
         three words wide.
       */}
+      {/*
+        Failures and jobs, both full width and both below the two columns.
+        A failure's cause is a sentence from a registry — the whole sentence is
+        the useful part — and it was being wrapped into a half-width column
+        three words at a time.
+      */}
+            {failures.data?.failures?.length ? (
+        <Card
+          title="Failures"
+          styles={{ header: { color: '#C4262E' } }}
+          // The retry belongs NEXT TO the failures, not only in the
+          // header: this is where somebody is reading when they decide
+          // to do something about them, and a retry resumes rather than
+          // restarting — nothing already moved is moved again.
+          extra={
+            t && <QueueControls transfer={t} hasFailures onDeleted={() => navigate('/downloads')} />
+          }
+        >
+          <Table
+            size="small"
+            pagination={false}
+            dataSource={failures.data.failures}
+            rowKey={(f) => f.message}
+            columns={[
+              { title: 'Cause', render: (_, f) => f.message },
+              { title: 'Artifacts', align: 'right', width: 90, render: (_, f) => <Value>{formatCount(f.failed)}</Value> },
+              {
+                title: 'Retryable',
+                width: 110,
+                render: (_, f) =>
+                  f.retryable ? <Tag color="blue">Worth retrying</Tag> : <Tag>Will not succeed on retry</Tag>,
+              },
+            ]}
+          />
+        </Card>
+      ) : null}
+
       {t && (
         <div style={{ marginTop: 16 }}>
           <JobsPanel transferId={t.id} hasFailures={Boolean(failures.data?.failures?.length)} />

@@ -6,6 +6,7 @@ import (
 	"log/slog"
 
 	"github.com/abhijeet-oxide/softwareGateway/internal/catalog"
+	"github.com/abhijeet-oxide/softwareGateway/internal/platform/metrics"
 	"github.com/abhijeet-oxide/softwareGateway/internal/product"
 	"github.com/abhijeet-oxide/softwareGateway/internal/regclient"
 	"github.com/abhijeet-oxide/softwareGateway/internal/registry"
@@ -262,4 +263,32 @@ func (r *resolverImpl) ResolveAtTarget(
 		return "", err
 	}
 	return string(desc.Digest), nil
+}
+
+// replicationMetrics adapts the metric registry to the replication package's
+// narrow interface.
+//
+// An adapter rather than the registry itself, so internal/replication depends
+// on four method names rather than on Prometheus — which is what lets every
+// decision in it be tested without a registry.
+type replicationMetrics struct{ m *metrics.Registry }
+
+func (r replicationMetrics) RecordSync(product, target, result string) {
+	r.m.MirrorSyncs.WithLabelValues(product, target, result).Inc()
+}
+
+func (r replicationMetrics) RecordSyncDuration(product, target string, seconds float64) {
+	r.m.MirrorSyncDuration.WithLabelValues(product, target).Observe(seconds)
+}
+
+func (r replicationMetrics) SetDrift(product, target string, drifted bool) {
+	v := 0.0
+	if drifted {
+		v = 1
+	}
+	r.m.MirrorConfigDrift.WithLabelValues(product, target).Set(v)
+}
+
+func (r replicationMetrics) RecordProxyProbe(product, target, result string) {
+	r.m.ProxyCacheProbes.WithLabelValues(product, target, result).Inc()
 }

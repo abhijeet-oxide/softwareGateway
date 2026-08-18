@@ -223,13 +223,20 @@ const (
 type TransferState string
 
 const (
-	TransferPending    TransferState = "PENDING"
-	TransferPlanning   TransferState = "PLANNING"
-	TransferReady      TransferState = "READY"
-	TransferRunning    TransferState = "RUNNING"
-	TransferPaused     TransferState = "PAUSED"
-	TransferVerifying  TransferState = "VERIFYING"
-	TransferSucceeded  TransferState = "SUCCEEDED"
+	TransferPending  TransferState = "PENDING"
+	TransferPlanning TransferState = "PLANNING"
+	TransferReady    TransferState = "READY"
+	TransferRunning  TransferState = "RUNNING"
+	TransferPaused   TransferState = "PAUSED"
+	// TransferSyncing is a delegated transfer waiting on the registry. It has
+	// no progress and never will.
+	TransferSyncing   TransferState = "SYNCING"
+	TransferVerifying TransferState = "VERIFYING"
+	TransferSucceeded TransferState = "SUCCEEDED"
+	// TransferDiverged is terminal and is neither success nor failure: the
+	// sync completed and the destination holds a different digest than the one
+	// requested, because the upstream tag moved.
+	TransferDiverged   TransferState = "DIVERGED"
 	TransferFailed     TransferState = "FAILED"
 	TransferCancelling TransferState = "CANCELLING"
 	TransferCancelled  TransferState = "CANCELLED"
@@ -1322,6 +1329,16 @@ type Transfer struct {
 
 	State    TransferState `json:"state"`
 	Priority int           `json:"priority"`
+
+	// Strategy is HOW this transfer was performed: `copy` (our workers moved
+	// the bytes), `mirror` or `proxy` (the registry did).
+	//
+	// It is the field every byte column has to be read against. For anything
+	// but `copy` the progress numbers below are structurally zero, and that is
+	// not "nothing happened" — it is "we did not move those bytes and cannot
+	// count them". A client that renders a percentage from them is inventing
+	// one (docs/design/18 §6.1).
+	Strategy string `json:"strategy,omitempty"`
 
 	CurrentWave int `json:"currentWave"`
 	MaxWave     int `json:"maxWave"`

@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"strings"
 	"time"
 
 	"github.com/abhijeet-oxide/softwareGateway/internal/product"
@@ -23,6 +24,9 @@ type Service struct {
 	store    *store.Replication
 	log      *slog.Logger
 
+	auditor Auditor
+	metrics Metrics
+
 	// clients is a per-target cache, because building one performs TLS setup
 	// and reads a Secret from disk, and a listing touches every target.
 	clients map[string]ManagementAPI
@@ -36,6 +40,16 @@ func NewService(resolver *Resolver, st *store.Replication, log *slog.Logger) *Se
 		log = slog.Default()
 	}
 	return &Service{resolver: resolver, store: st, log: log, clients: map[string]ManagementAPI{}}
+}
+
+// WithObservability attaches the audit trail and the metric registry.
+//
+// Both optional and both nil in every test, because a decision this package
+// makes must be assertable without a database or a Prometheus registry.
+func (s *Service) WithObservability(a Auditor, m Metrics) *Service {
+	s.auditor = a
+	s.metrics = m
+	return s
 }
 
 // Status is everything known about one target's replication.
@@ -100,6 +114,7 @@ func (s *Service) Status(ctx context.Context, p *product.Product, t product.Targ
 	out.Observation = obs
 
 	s.recordObservation(ctx, p.Metadata.Name, t, obs)
+	s.reportObservation(ctx, p.Metadata.Name, t, obs)
 	return out, nil
 }
 
@@ -148,6 +163,38 @@ func (s *Service) recordObservation(ctx context.Context, productName string, t p
 		obs.Drift.Drifted(), obs.Drift.Summary(), s.resolver.Now()); err != nil {
 		s.log.Warn("record replication observation", "product", productName, "target", t.Name, "error", err)
 	}
+}
+
+// reportObservation publishes what a read found.
+//
+// Split from recordObservation because the two have different failure
+// tolerances: a metric that cannot be set is nothing, and a database write that
+// fails is worth a log line.
+func (s *Service) reportObservation(ctx context.Context, productName string, t product.Target, obs *Observation) {
+	if s.metrics != nil {
+		s.metrics.SetDrift(productName, t.Name, obs.Drift.Drifted())
+		if obs.Proxy != nil || t.ReplicationMode() == product.ReplicationProxy {
+			s.metrics.RecordProxyProbe(productName, t.Name, probeResult(obs))
+		}
+	}
+	// Audited only when it is NEWS. Drift is re-observed on every reload and
+	// from the metrics sweep; an event per observation would bury the five
+	// real ones under thousands of routine ones, which is how an audit trail
+	// stops being read. The gauge carries the steady state.
+	if obs.Drift.Drifted() && !obs.Drift.Absent {
+		s.audit(ctx, store.AuditRow{
+			EventType: AuditConfigDrifted, ActorKind: "system",
+			ProductName: productName, SubjectKind: "target", SubjectID: t.Name,
+			Outcome: "detected", Detail: obs.Drift.Summary(),
+		})
+	}
+}
+
+func probeResult(obs *Observation) string {
+	if obs.Proxy == nil {
+		return "absent"
+	}
+	return "configured"
 }
 
 // ApplyOptions govern one apply.
@@ -226,6 +273,17 @@ func (s *Service) Apply(ctx context.Context, p *product.Product, t product.Targe
 	}
 	s.recordApply(ctx, p, t, desired, opts.Actor)
 	res.Applied = true
+
+	event := AuditConfigApplied
+	if t.ReplicationMode() == product.ReplicationProxy {
+		event = AuditProxyConfigured
+	}
+	s.audit(ctx, store.AuditRow{
+		EventType: event, Actor: opts.Actor, ActorKind: "user",
+		ProductName: p.Metadata.Name, SubjectKind: "target", SubjectID: t.Name,
+		Outcome: "success",
+		Detail:  strings.Join(plan.Steps, "; "),
+	})
 	return res, nil
 }
 
@@ -282,7 +340,20 @@ func (s *Service) Sync(ctx context.Context, p *product.Product, t product.Target
 	s.log.Info("mirror sync requested",
 		"product", p.Metadata.Name, "target", t.Name, "actor", actor,
 		"alreadyRunning", res.AlreadyRunning)
+	s.audit(ctx, store.AuditRow{
+		EventType: AuditSyncRequested, Actor: actor, ActorKind: "user",
+		ProductName: p.Metadata.Name, SubjectKind: "target", SubjectID: t.Name,
+		Outcome: "success",
+		Detail:  syncDetail(res.AlreadyRunning),
+	})
 	return out, nil
+}
+
+func syncDetail(alreadyRunning bool) string {
+	if alreadyRunning {
+		return "a sync was already in progress, which satisfies the request"
+	}
+	return "the registry accepted the request"
 }
 
 // CancelSync stops an in-progress sync.

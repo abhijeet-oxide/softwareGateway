@@ -276,6 +276,7 @@ func transferDTO(t store.TransferSummary) v1.Transfer {
 		SourceName:  t.SourceName,
 		TargetName:  t.TargetName,
 		State:       v1.TransferState(strings.ToUpper(t.State)),
+		Strategy:    t.Strategy,
 		Priority:    t.Priority,
 		CurrentWave: t.CurrentWave,
 		MaxWave:     t.MaxWave,

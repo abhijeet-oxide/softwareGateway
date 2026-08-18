@@ -67,6 +67,9 @@ type Watcher struct {
 	dest     DestinationReader
 	log      *slog.Logger
 
+	auditor Auditor
+	metrics Metrics
+
 	mu     sync.Mutex
 	leader bool
 
@@ -101,6 +104,13 @@ func NewWatcher(svc *Service, st SyncRecorder, products Products, dest Destinati
 		service: svc, store: st, products: products, dest: dest, log: log,
 		batch: 25, timeout: DefaultSyncTimeout, interval: DefaultWatchInterval,
 	}
+}
+
+// WithObservability attaches the audit trail and the metric registry.
+func (w *Watcher) WithObservability(a Auditor, m Metrics) *Watcher {
+	w.auditor = a
+	w.metrics = m
+	return w
 }
 
 // WithInterval replaces the polling interval.
@@ -304,7 +314,45 @@ func (w *Watcher) settle(ctx context.Context, s store.OpenSync, outcome, raw, ob
 	w.log.InfoContext(ctx, "delegated transfer settled",
 		"transfer", s.TransferID, "target", s.TargetName,
 		"outcome", outcome, "registryStatus", raw, "message", message)
+
+	if w.metrics != nil {
+		w.metrics.RecordSync(s.Product, s.TargetName, outcome)
+		// Observed between OUR request and the registry reporting it done —
+		// which is not a measurement of the registry's own work, and the
+		// metric's help text says so. Recorded only when we know when we
+		// asked, because a duration from an unknown start is a made-up number.
+		if at, ok := quay.ParseTime(s.RequestedAt.String); ok && s.RequestedAt.Valid {
+			w.metrics.RecordSyncDuration(s.Product, s.TargetName, time.Since(at).Seconds())
+		}
+	}
+	w.audit(ctx, s, outcome, message)
 	return outcome, nil
+}
+
+// audit records the outcome as a durable business fact.
+//
+// Note the event names: every one says what we DID or OBSERVED. None of them
+// says "transferred", because we did not.
+func (w *Watcher) audit(ctx context.Context, s store.OpenSync, outcome, message string) {
+	if w.auditor == nil {
+		return
+	}
+	event := AuditSyncFailed
+	switch outcome {
+	case store.SyncSucceeded:
+		event = AuditSyncSucceeded
+	case store.SyncDiverged:
+		event = AuditContentDiverge
+	}
+	row := store.AuditRow{
+		EventType: event, ActorKind: "system",
+		ProductName: s.Product, SubjectKind: "transfer", SubjectID: s.TransferID,
+		Outcome: outcome, Detail: message,
+	}
+	if err := w.auditor.Record(ctx, row); err != nil {
+		w.log.WarnContext(ctx, "could not record a sync audit event",
+			"transfer", s.TransferID, "event", event, "error", err)
+	}
 }
 
 // expired reports whether a sync has been open longer than the bound.

@@ -183,11 +183,15 @@ func run() error {
 
 	// Delegated replication: the service, the seam the expander branches on,
 	// and the watcher that settles a transfer once the registry is done.
+	replicationAudit := replication.NewStoreAuditor(packages)
+	replicationMetric := replicationMetrics{m: mreg}
 	replicationSvc := replication.NewService(
 		replication.NewResolver(resolver, logger, "softwaregateway/"+info.Version),
-		replicationStore, logger)
+		replicationStore, logger).
+		WithObservability(replicationAudit, replicationMetric)
 	replicationWatcher := replication.NewWatcher(
-		replicationSvc, replicationStore, products, transferResolver, logger)
+		replicationSvc, replicationStore, products, transferResolver, logger).
+		WithObservability(replicationAudit, replicationMetric)
 
 	queueCtl := queue.NewController(jobQueue, expanderAdapter{
 		e: transfer.NewExpander(

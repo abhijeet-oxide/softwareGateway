@@ -174,3 +174,63 @@ func TestListingsOfferNoRuntimeOverride(t *testing.T) {
 		}
 	}
 }
+
+// A run says where the software is going before it says what it created —
+// the chain is the part an operator has to check, and it is derived rather
+// than typed.
+func TestARunPrintsTheChainItResolved(t *testing.T) {
+	var buf bytes.Buffer
+	if err := renderRunDownload(&buf, &v1.RunDownloadResponse{
+		Product: "vendor-a", Download: "internal",
+		Chain:   []string{"lab", "ocp-prod"},
+		Created: []string{"req_8f2c"},
+	}); err != nil {
+		t.Fatalf("render: %v", err)
+	}
+	out := buf.String()
+	if !strings.Contains(out, "lab → ocp-prod") {
+		t.Fatalf("chain missing:\n%s", out)
+	}
+	if !strings.Contains(out, "req_8f2c") {
+		t.Fatalf("the request id is what everything else is looked up by:\n%s", out)
+	}
+}
+
+// Re-running after a timeout must not read like an error. The work is already
+// happening, which is the answer the operator wanted.
+func TestAlreadyRequestedIsNotAnError(t *testing.T) {
+	var buf bytes.Buffer
+	if err := renderRunDownload(&buf, &v1.RunDownloadResponse{
+		Product: "vendor-a", Chain: []string{"lab"},
+		AlreadyRequested: []string{"v3.2.1"},
+	}); err != nil {
+		t.Fatalf("render: %v", err)
+	}
+	out := buf.String()
+	if !strings.Contains(out, "already requested  v3.2.1") {
+		t.Fatalf("the outcome has to be stated plainly:\n%s", out)
+	}
+	for _, forbidden := range []string{"error", "Error", "failed", "!"} {
+		if strings.Contains(out, forbidden) {
+			t.Fatalf("%q makes a normal outcome look like a problem:\n%s", forbidden, out)
+		}
+	}
+}
+
+// A dry run that printed request ids would be lying about what it did.
+func TestADryRunSaysItCreatedNothing(t *testing.T) {
+	var buf bytes.Buffer
+	if err := renderRunDownload(&buf, &v1.RunDownloadResponse{
+		Product: "vendor-a", Chain: []string{"lab", "ocp-prod"},
+		Requested: []string{"v3.2.1"}, ValidateOnly: true,
+	}); err != nil {
+		t.Fatalf("render: %v", err)
+	}
+	out := buf.String()
+	if !strings.Contains(out, "would download  v3.2.1") {
+		t.Fatalf("a dry run reports intent:\n%s", out)
+	}
+	if !strings.Contains(out, "nothing was created") {
+		t.Fatalf("and says that it is only intent:\n%s", out)
+	}
+}

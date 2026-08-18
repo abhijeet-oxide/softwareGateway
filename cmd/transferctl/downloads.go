@@ -107,6 +107,94 @@ func policySuffix(policy string) string {
 	return " (" + policy + ")"
 }
 
+// newDownloadCommand is the manual path: a person naming the software.
+//
+// A top-level VERB rather than `downloads run`, because it is the thing an
+// operator does, not a thing they look at. It takes tags and no pattern —
+// patterns decide what to download when nobody is asking, and here somebody
+// is asking, by name.
+func newDownloadCommand() *cobra.Command {
+	var (
+		which  string
+		dryRun bool
+	)
+
+	cmd := &cobra.Command{
+		Short: "Download named software through the product's configured chain",
+		Long: "Runs the SAME operation an auto-download rule runs: the same\n" +
+			"targets, the same order, the same verification gates. The only\n" +
+			"difference is who chose the software.\n\n" +
+			"There is no tag filter and no repository filter here. You named the\n" +
+			"software; a pattern asked at this point could only disagree with you.",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			resp, err := newClient().RunDownload(cmd.Context(), args[0], v1.RunDownloadRequest{
+				Tags: args[1:], Download: which, ValidateOnly: dryRun,
+			})
+			if err != nil {
+				return err
+			}
+			return render(stdout(), opts.output, resp, func(w io.Writer) error {
+				return renderRunDownload(w, resp)
+			})
+		},
+	}
+
+	takes(cmd, "download", productArg(), packageArg())
+	variadicTail(cmd)
+	cmd.Flags().StringVar(&which, "download", "",
+		"which configured download to use (default: the product's default)")
+	cmd.Flags().BoolVar(&dryRun, "dry-run", false,
+		"resolve the chain and check everything, create nothing")
+	return cmd
+}
+
+// variadicTail lets the last argument repeat, keeping the usage line and the
+// argument errors `takes` produces.
+func variadicTail(cmd *cobra.Command) {
+	fixed := cmd.Args
+	cmd.Use += "…"
+	cmd.Args = func(c *cobra.Command, args []string) error {
+		if len(args) > 2 {
+			args = args[:2]
+		}
+		return fixed(c, args)
+	}
+}
+
+func renderRunDownload(w io.Writer, resp *v1.RunDownloadResponse) error {
+	fmt.Fprintf(w, "%s  →  %s\n", downloadRunTitle(resp), strings.Join(resp.Chain, " → "))
+	fmt.Fprintln(w)
+
+	if resp.ValidateOnly {
+		for _, tag := range resp.Requested {
+			fmt.Fprintf(w, "  would download  %s\n", tag)
+		}
+		fmt.Fprintln(w, "\n--dry-run: nothing was created.")
+		return nil
+	}
+
+	for _, id := range resp.Created {
+		fmt.Fprintf(w, "  requested  %s\n", id)
+	}
+	// Not a failure, and saying so matters: an operator who re-runs a command
+	// after a timeout should read this as "it is already happening", not as an
+	// error they have to do something about.
+	for _, tag := range resp.AlreadyRequested {
+		fmt.Fprintf(w, "  already requested  %s\n", tag)
+	}
+	if len(resp.Created) == 0 && len(resp.AlreadyRequested) == 0 {
+		fmt.Fprintln(w, "  nothing to do")
+	}
+	return nil
+}
+
+func downloadRunTitle(resp *v1.RunDownloadResponse) string {
+	if resp.Download == "" {
+		return resp.Product
+	}
+	return resp.Product + " · " + resp.Download
+}
+
 // `rules` is what fires a download when nobody is asking. A pattern, and
 // nothing else about the work.
 func newRulesCommand() *cobra.Command {

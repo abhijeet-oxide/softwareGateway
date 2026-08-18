@@ -221,3 +221,45 @@ func (r *resolverImpl) productID(ctx context.Context, name string) (int64, error
 	}
 	return id, nil
 }
+
+// ResolveAtTarget answers what a tag currently points at in a target.
+//
+// This is the destination walk that turns a delegated transfer's outcome into
+// an OBSERVATION. The registry told us a sync succeeded; that says it did
+// something, not what. Resolving the tag here and comparing the digest is the
+// only way `diverged` can be told from `succeeded` at all.
+//
+// It reads through the same client factory as everything else, so a target
+// unreachable to a transfer is unreachable to this too — which is correct: a
+// confirmation that could succeed where a transfer could not would be
+// confirming the wrong thing.
+func (r *resolverImpl) ResolveAtTarget(
+	ctx context.Context, productName, targetName, tag string,
+) (string, error) {
+	p, ok := r.products.Get(productName)
+	if !ok {
+		return "", fmt.Errorf("product %q is not loaded", productName)
+	}
+	t, ok := p.Target(targetName)
+	if !ok {
+		return "", fmt.Errorf("product %q has no target %q", productName, targetName)
+	}
+
+	reader, err := r.clients.For(v1.JobEndpoint{
+		Product:    productName,
+		Name:       t.Name,
+		Registry:   t.Registry,
+		Repository: t.Repository,
+		Type:       string(t.Type),
+		Role:       "target",
+	})
+	if err != nil {
+		return "", err
+	}
+
+	desc, err := reader.ResolveTag(ctx, tag)
+	if err != nil {
+		return "", err
+	}
+	return string(desc.Digest), nil
+}

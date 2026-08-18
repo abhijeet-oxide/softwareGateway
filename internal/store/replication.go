@@ -321,3 +321,139 @@ func nullableStr(s sql.NullString) any {
 	}
 	return s.String
 }
+
+// ---------------------------------------------------------------------------
+// Delegated transfers
+//
+// A transfer whose destination registry fetches for itself creates no jobs, so
+// none of the queue's machinery applies to it. These three calls are the whole
+// of its lifecycle: it enters `syncing`, it is polled, and it settles.
+// ---------------------------------------------------------------------------
+
+// MarkSyncing records that a transfer has been handed to the registry.
+//
+// `strategy` is stored on the row so that a year-old record still says HOW the
+// content got there. Without it a settled transfer with no jobs and no bytes is
+// indistinguishable from one that failed to plan.
+func (r *Replication) MarkSyncing(ctx context.Context, transferID, strategy string) error {
+	stmt := r.dialect.Rewrite(`
+		UPDATE transfers
+		   SET state = 'syncing', strategy = ?, started_at = COALESCE(started_at, ` + r.dialect.Now() + `),
+		       updated_at = ` + r.dialect.Now() + `
+		 WHERE id = ? AND state IN ('pending','planning','failed')`)
+	if _, err := r.db.ExecContext(ctx, stmt, strategy, transferID); err != nil {
+		return fmt.Errorf("mark transfer %s syncing: %w", transferID, err)
+	}
+	return nil
+}
+
+// SettleDelegated closes a delegated transfer.
+//
+// state is `succeeded`, `diverged` or `failed`. `diverged` is deliberately not
+// a failure: the sync completed and the destination holds a different digest
+// than the one we asked for, which is a mirror faithfully following an upstream
+// tag that moved.
+func (r *Replication) SettleDelegated(ctx context.Context, transferID, state, reason string) error {
+	switch state {
+	case "succeeded", "diverged", "failed":
+	default:
+		return fmt.Errorf("settle transfer %s: %q is not a delegated outcome", transferID, state)
+	}
+	stmt := r.dialect.Rewrite(`
+		UPDATE transfers
+		   SET state = ?, failure_reason = ?, completed_at = ` + r.dialect.Now() + `,
+		       updated_at = ` + r.dialect.Now() + `
+		 WHERE id = ? AND state = 'syncing'`)
+	if _, err := r.db.ExecContext(ctx, stmt, state, nullIfBlank(reason), transferID); err != nil {
+		return fmt.Errorf("settle transfer %s as %s: %w", transferID, state, err)
+	}
+	return nil
+}
+
+// OpenSync is a delegated transfer waiting on the registry.
+type OpenSync struct {
+	SyncID      int64
+	TransferID  string
+	ProductID   int64
+	Product     string
+	TargetName  string
+	RequestedAt sql.NullString
+
+	// ExpectedDigest is what the destination should end up holding. Empty when
+	// the sync was not requested for a specific package.
+	ExpectedDigest string
+	// Tag and Repository are what to look up at the destination.
+	Tag        string
+	Repository string
+}
+
+// OpenSyncs lists delegated transfers that have not settled.
+//
+// Driven from `transfers` rather than from `mirror_syncs`, because the transfer
+// is the thing that must not be left hanging: a sync row we failed to write
+// would otherwise make a transfer invisible to the watcher forever.
+func (r *Replication) OpenSyncs(ctx context.Context, limit int) ([]OpenSync, error) {
+	if limit <= 0 {
+		limit = 50
+	}
+	query := r.dialect.Rewrite(`
+		SELECT COALESCE(ms.id, 0), t.id, pr.id, pr.name, tgt.name,
+		       ms.requested_at, COALESCE(ms.expected_digest, ''), p.tag, tgt.repository_path
+		  FROM transfers t
+		  JOIN transfer_requests req ON req.id = t.request_id
+		  JOIN products pr           ON pr.id = req.product_id
+		  JOIN packages p            ON p.id = t.package_id
+		  JOIN repositories tgt      ON tgt.id = t.target_repo_id
+		  LEFT JOIN mirror_syncs ms  ON ms.transfer_id = t.id
+		 WHERE t.state = 'syncing'
+		 ORDER BY t.updated_at
+		 LIMIT ?`)
+
+	rows, err := r.db.QueryContext(ctx, query, limit)
+	if err != nil {
+		return nil, fmt.Errorf("list open syncs: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+
+	var out []OpenSync
+	for rows.Next() {
+		var s OpenSync
+		if err := rows.Scan(&s.SyncID, &s.TransferID, &s.ProductID, &s.Product, &s.TargetName,
+			&s.RequestedAt, &s.ExpectedDigest, &s.Tag, &s.Repository); err != nil {
+			return nil, fmt.Errorf("scan open sync: %w", err)
+		}
+		out = append(out, s)
+	}
+	return out, rows.Err()
+}
+
+// LinkSync attaches a sync record to the transfer that requested it.
+func (r *Replication) LinkSync(ctx context.Context, syncID int64, transferID string) error {
+	stmt := r.dialect.Rewrite(`UPDATE mirror_syncs SET transfer_id = ?, updated_at = ` +
+		r.dialect.Now() + ` WHERE id = ?`)
+	if _, err := r.db.ExecContext(ctx, stmt, transferID, syncID); err != nil {
+		return fmt.Errorf("link sync %d to transfer %s: %w", syncID, transferID, err)
+	}
+	return nil
+}
+
+func nullIfBlank(s string) any {
+	if s == "" {
+		return nil
+	}
+	return s
+}
+
+// SetExpectedDigest records what the destination SHOULD end up holding.
+//
+// Written when the sync is requested, never later: a digest looked up after the
+// fact would be the destination compared with itself, and `diverged` would
+// become undetectable.
+func (r *Replication) SetExpectedDigest(ctx context.Context, syncID int64, digest string) error {
+	stmt := r.dialect.Rewrite(`UPDATE mirror_syncs SET expected_digest = ?, updated_at = ` +
+		r.dialect.Now() + ` WHERE id = ?`)
+	if _, err := r.db.ExecContext(ctx, stmt, digest, syncID); err != nil {
+		return fmt.Errorf("record expected digest for sync %d: %w", syncID, err)
+	}
+	return nil
+}

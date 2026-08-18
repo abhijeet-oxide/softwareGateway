@@ -90,13 +90,29 @@ var Job = New[JobState, JobEvent]("job",
 type TransferState string
 
 const (
-	TransferPending    TransferState = "pending"
-	TransferPlanning   TransferState = "planning"
-	TransferReady      TransferState = "ready"
-	TransferRunning    TransferState = "running"
-	TransferPaused     TransferState = "paused"
-	TransferVerifying  TransferState = "verifying"
-	TransferSucceeded  TransferState = "succeeded"
+	TransferPending  TransferState = "pending"
+	TransferPlanning TransferState = "planning"
+	TransferReady    TransferState = "ready"
+	TransferRunning  TransferState = "running"
+	TransferPaused   TransferState = "paused"
+	// TransferSyncing is a delegated transfer waiting on the REGISTRY.
+	//
+	// It exists because a delegated transfer creates no jobs. Without it such a
+	// transfer would sit in `running` with an empty job set, and the wave-drain
+	// check would settle it immediately — reporting success at the moment we
+	// had asked Quay to start and before anything had happened.
+	TransferSyncing   TransferState = "syncing"
+	TransferVerifying TransferState = "verifying"
+	TransferSucceeded TransferState = "succeeded"
+	// TransferDiverged is terminal, and is neither success nor failure.
+	//
+	// The registry reported a completed sync, we walked the destination, and
+	// the tag resolves to a DIFFERENT digest than the one we asked for. That is
+	// normal for a mirror whose upstream tag moved: a fact worth recording, not
+	// an error worth paging about. Folding it into `succeeded` would lose the
+	// only signal that what shipped is not what was requested; folding it into
+	// `failed` would page somebody about a mirror working as designed.
+	TransferDiverged   TransferState = "diverged"
 	TransferFailed     TransferState = "failed"
 	TransferCancelling TransferState = "cancelling"
 	TransferCancelled  TransferState = "cancelled"
@@ -121,13 +137,19 @@ const (
 	TransferCancelRequested TransferEvent = "CancelRequested"
 	TransferDrained         TransferEvent = "InFlightDrained"
 	TransferSkipVerify      TransferEvent = "VerificationDisabled"
+
+	// Delegated replication (docs/design/18 §6).
+	TransferSyncRequested TransferEvent = "SyncRequested"
+	TransferSyncSucceeded TransferEvent = "SyncSucceeded"
+	TransferSyncDiverged  TransferEvent = "SyncDiverged"
+	TransferSyncFailed    TransferEvent = "SyncFailed"
 )
 
 const TransferStateZero TransferState = ""
 
 // Transfer is the transfer and promotion lifecycle.
 var Transfer = New[TransferState, TransferEvent]("transfer",
-	[]TransferState{TransferSucceeded, TransferCancelled},
+	[]TransferState{TransferSucceeded, TransferDiverged, TransferCancelled},
 
 	Transition[TransferState, TransferEvent]{TransferStateZero, TransferCreated, TransferPending},
 	Transition[TransferState, TransferEvent]{TransferPending, TransferPlanningStarted, TransferPlanning},
@@ -151,6 +173,24 @@ var Transfer = New[TransferState, TransferEvent]("transfer",
 
 	Transition[TransferState, TransferEvent]{TransferVerifying, TransferVerifyPassed, TransferSucceeded},
 	Transition[TransferState, TransferEvent]{TransferVerifying, TransferVerifyFailed, TransferFailed},
+
+	// Delegated replication. `planning` is where the branch happens: a target
+	// whose registry fetches for itself produces no jobs, so instead of
+	// PlanCompleted it emits SyncRequested and waits to be told what the
+	// registry did.
+	//
+	// Note the absence of any transition INTO a byte-carrying state from here.
+	// A delegated transfer never becomes `running`, never has a wave, and never
+	// acquires a progress denominator — which is what makes it impossible for
+	// one to grow a percentage by accident.
+	Transition[TransferState, TransferEvent]{TransferPlanning, TransferSyncRequested, TransferSyncing},
+	Transition[TransferState, TransferEvent]{TransferSyncing, TransferSyncSucceeded, TransferSucceeded},
+	Transition[TransferState, TransferEvent]{TransferSyncing, TransferSyncDiverged, TransferDiverged},
+	Transition[TransferState, TransferEvent]{TransferSyncing, TransferSyncFailed, TransferFailed},
+	// A sync can be asked for again after it failed, which is the delegated
+	// equivalent of retrying failed jobs.
+	Transition[TransferState, TransferEvent]{TransferFailed, TransferSyncRequested, TransferSyncing},
+	Transition[TransferState, TransferEvent]{TransferSyncing, TransferCancelRequested, TransferCancelling},
 
 	Transition[TransferState, TransferEvent]{TransferFailed, TransferRetryRequested, TransferReady},
 

@@ -181,12 +181,23 @@ func run() error {
 	// planner can read from.
 	requester := transfer.NewRequester(packages, transferResolver)
 
+	// Delegated replication: the service, the seam the expander branches on,
+	// and the watcher that settles a transfer once the registry is done.
+	replicationSvc := replication.NewService(
+		replication.NewResolver(resolver, logger, "softwaregateway/"+info.Version),
+		replicationStore, logger)
+	replicationWatcher := replication.NewWatcher(
+		replicationSvc, replicationStore, products, transferResolver, logger)
+
 	queueCtl := queue.NewController(jobQueue, expanderAdapter{
 		e: transfer.NewExpander(
 			packages,
 			transfer.NewPlanner(packages, cfg.Concurrency.PerRegistry, logger),
 			transferResolver,
-			0, logger),
+			0, logger,
+		).WithDelegation(
+			replication.NewDelegation(replicationSvc, products, replicationStore),
+			replicationStore),
 	}, queue.ControllerOptions{
 		ReapInterval:   cfg.Coordinator.Reaper.TickInterval,
 		ExpandInterval: cfg.Coordinator.Scheduler.TickInterval,
@@ -306,6 +317,7 @@ func run() error {
 				discoveryCtl.SetLeader(isLeader)
 				cacheSweeper.SetLeader(isLeader)
 				retentionSweeper.SetLeader(isLeader)
+				replicationWatcher.SetLeader(isLeader)
 			},
 		})
 	} else {
@@ -320,6 +332,7 @@ func run() error {
 			discoveryCtl.SetLeader(isLeader)
 			cacheSweeper.SetLeader(isLeader)
 			retentionSweeper.SetLeader(isLeader)
+			replicationWatcher.SetLeader(isLeader)
 			queueCtl.SetLeader(isLeader)
 		})
 	}
@@ -351,7 +364,7 @@ func run() error {
 		// Delegated replication runs here for the same reason again: it speaks
 		// to Quay's MANAGEMENT api, which needs a credential from a projected
 		// Secret, and transferctl holds neither.
-		Replication:      replication.NewService(replication.NewResolver(resolver, logger, "softwaregateway/"+info.Version), replicationStore, logger),
+		Replication:      replicationSvc,
 		ReplicationStore: replicationStore,
 		Leader:           elector,
 		Component:        component,
@@ -382,6 +395,7 @@ func run() error {
 	g.Go(func() error { return cacheSweeper.Run(gctx) })
 	g.Go(func() error { return retentionSweeper.Run(gctx) })
 	g.Go(func() error { return queueCtl.Run(gctx) })
+	g.Go(func() error { return replicationWatcher.Run(gctx) })
 
 	// Graceful shutdown: stop accepting, drain in-flight requests, then exit.
 	g.Go(func() error {

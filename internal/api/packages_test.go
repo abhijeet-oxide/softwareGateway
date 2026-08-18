@@ -675,7 +675,7 @@ func TestCompareThatRunsOutOfTimeSaysSo(t *testing.T) {
 
 	h := newAPIHarnessWith(t, func(d *Deps) {
 		d.Comparer = comparerFunc(func(
-			ctx context.Context, _ string, _, _ ComparePoint, _ int64,
+			ctx context.Context, _ string, _, _ ComparePoint, _ int64, _ compare.ProgressFunc,
 		) (compare.Report, error) {
 			<-ctx.Done()
 			return compare.Report{}, ctx.Err()
@@ -698,10 +698,103 @@ func TestCompareThatRunsOutOfTimeSaysSo(t *testing.T) {
 }
 
 // comparerFunc adapts a function to the Comparer interface.
-type comparerFunc func(context.Context, string, ComparePoint, ComparePoint, int64) (compare.Report, error)
+type comparerFunc func(
+	context.Context, string, ComparePoint, ComparePoint, int64, compare.ProgressFunc,
+) (compare.Report, error)
 
 func (f comparerFunc) Compare(
 	ctx context.Context, product string, a, b ComparePoint, budget int64,
+	progress compare.ProgressFunc,
 ) (compare.Report, error) {
-	return f(ctx, product, a, b, budget)
+	return f(ctx, product, a, b, budget, progress)
+}
+
+// A comparison reports where it has got to, while it is still getting there —
+// and gives up when it stops getting anywhere.
+//
+// Both halves in one test because they are one mechanism: the report is the
+// response, so there is nothing to hand an id back in; the caller mints a
+// token, sends it, and polls a second endpoint. That side channel is what makes
+// a four-minute request distinguishable from a hung one, and it is also what
+// the server itself reads to tell slow from stopped.
+func TestAComparisonReportsProgressAndGivesUpWhenItStops(t *testing.T) {
+	// Shortened for the test. In production this is minutes: a large release
+	// read over a slow link advances continuously and never approaches it.
+	stallWas := compareStall
+	compareStall = 2 * time.Second
+	t.Cleanup(func() { compareStall = stallWas })
+
+	h := newAPIHarnessWith(t, func(d *Deps) {
+		d.Comparer = comparerFunc(func(
+			ctx context.Context, _ string, _, _ ComparePoint, _ int64, progress compare.ProgressFunc,
+		) (compare.Report, error) {
+			progress(compare.Progress{
+				Side: "vendor", Phase: compare.PhaseManifests,
+				Done: 143, Total: 261, Estimated: true,
+			})
+			progress(compare.Progress{
+				Side: "internal", Phase: compare.PhaseNames, Done: 12, Total: 261,
+			})
+			// And then nothing more: a registry that has stopped answering.
+			<-ctx.Done()
+			return compare.Report{}, ctx.Err()
+		})
+	})
+	h.seedPackage("orb_25.7.2131", "sha256:"+strings.Repeat("a", 64))
+
+	var (
+		problem v1.Problem
+		status  int
+	)
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		status = h.post("/api/v1/products/vendor-a/packages/orb_25.7.2131:compare",
+			`{"progressToken":"tok-1"}`, &problem)
+	}()
+
+	var progress v1.CompareProgressResponse
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		if h.get("/api/v1/comparisons/tok-1", &progress) == http.StatusOK &&
+			len(progress.Sides) == 2 {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("the comparison never reported any progress")
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+
+	// Sorted by side, so a bar built from this does not reorder between polls.
+	if progress.Sides[0].Side != "internal" || progress.Sides[1].Side != "vendor" {
+		t.Errorf("sides came out %s, %s — want a stable order",
+			progress.Sides[0].Side, progress.Sides[1].Side)
+	}
+	if vendor := progress.Sides[1]; vendor.Done != 143 || vendor.Total != 261 || !vendor.Estimated {
+		t.Errorf("vendor progress = %+v, want 143 of 261 and estimated", vendor)
+	}
+
+	<-done
+	if status == http.StatusOK {
+		t.Fatal("a comparison that stopped advancing answered 200")
+	}
+	// Named as a stall, not as a timeout. They are different diagnoses and send
+	// a reader to different places: one says the release is large, the other
+	// says a registry went silent.
+	if !strings.Contains(problem.Detail, "stopped making progress") {
+		t.Errorf("the refusal does not say it stalled: %s", problem.Detail)
+	}
+}
+
+// A poll for a comparison nobody is running is a 404, and that is an ANSWER:
+// progress lives in the memory of the replica running it, so a caller that
+// misses gets an honest "no position" rather than a fabricated one.
+func TestProgressForAnUnknownComparisonIsNotFound(t *testing.T) {
+	h := newAPIHarness(t)
+
+	var problem v1.Problem
+	if status := h.get("/api/v1/comparisons/nobody-asked", &problem); status != http.StatusNotFound {
+		t.Fatalf("status = %d, want 404", status)
+	}
 }

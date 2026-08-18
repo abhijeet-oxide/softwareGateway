@@ -679,6 +679,35 @@ type CompareRequest struct {
 	// files changed rather than which layers. Zero uses the server's default;
 	// negative leaves every layer opaque.
 	FileBudgetBytes int64 `json:"fileBudgetBytes,omitempty"`
+	// ProgressToken is a caller-minted id it can poll for progress while this
+	// request is still open, at GET /api/v1/comparisons/{token}.
+	//
+	// The caller mints it because the report is the response: there is nothing
+	// to hand back an id in. Omitting it costs nothing and reports nothing.
+	ProgressToken string `json:"progressToken,omitempty"`
+}
+
+// CompareProgressSide is one end's position in a comparison.
+type CompareProgressSide struct {
+	Side  string `json:"side"`
+	Phase string `json:"phase"`
+	Done  int    `json:"done"`
+	// Total is what is KNOWN so far. A manifest tree is discovered by walking
+	// it, so during that phase the denominator grows and Estimated is true.
+	Total     int  `json:"total"`
+	Estimated bool `json:"estimated,omitempty"`
+}
+
+// CompareProgressResponse is GET /api/v1/comparisons/{comparison}.
+//
+// The side channel a comparison reports through while its own request is open.
+// A 404 is a normal answer: progress lives in the memory of the replica running
+// the comparison and is dropped shortly after it finishes.
+type CompareProgressResponse struct {
+	Sides     []CompareProgressSide `json:"sides"`
+	Done      bool                  `json:"done"`
+	StartedAt string                `json:"startedAt,omitempty"`
+	UpdatedAt string                `json:"updatedAt,omitempty"`
 }
 
 // CompareResponse is what two places hold, aligned component by component.

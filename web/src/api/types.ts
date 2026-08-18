@@ -594,6 +594,35 @@ export interface CompareRequest {
    * every layer opaque.
    */
   fileBudgetBytes?: number
+  /** A caller-minted id to poll for progress while the request is open. */
+  progressToken?: string
+}
+
+/** One end's position in a comparison. */
+export interface CompareProgressSide {
+  side: string
+  phase: string
+  done: number
+  /**
+   * What is KNOWN so far. A manifest tree is discovered by walking it, so
+   * during that phase the denominator grows and `estimated` is true.
+   */
+  total: number
+  estimated?: boolean
+}
+
+/**
+ * GET /api/v1/comparisons/{token} — where a comparison has got to.
+ *
+ * Polled while the comparison's own request is still open, using the token that
+ * request carried. A 404 is a normal answer: progress lives in the memory of
+ * the replica running it.
+ */
+export interface CompareProgressResponse {
+  sides: CompareProgressSide[]
+  done: boolean
+  startedAt?: string
+  updatedAt?: string
 }
 
 export interface CompareResponse {

@@ -140,6 +140,19 @@ func (c *Client) ComparePackage(
 	return &out, c.post(ctx, path, req, &out)
 }
 
+// CompareProgress reads where a comparison has got to.
+//
+// Polled WHILE ComparePackage is still in flight, using the token that request
+// carried. A 404 is a normal answer — progress lives in the memory of the
+// replica running the comparison and is dropped shortly after it finishes — so
+// a caller treats it as "no position available", not as a failure.
+func (c *Client) CompareProgress(
+	ctx context.Context, token string,
+) (*CompareProgressResponse, error) {
+	var out CompareProgressResponse
+	return &out, c.get(ctx, "/api/v1/comparisons/"+url.PathEscape(token), &out)
+}
+
 // ListUnavailable returns what a product's sources would not serve.
 func (c *Client) ListUnavailable(
 	ctx context.Context, product string,

@@ -118,8 +118,11 @@ type Comparer interface {
 	// fileBudget is how many bytes of layer content the comparison may
 	// download in order to say which FILES changed rather than which layers.
 	// Zero means the server's default; negative means none.
+	// progress is called as the comparison proceeds, and may be nil. It is a
+	// parameter rather than a field on the implementation because a comparison
+	// is a request, and two of them in flight report separately.
 	Compare(ctx context.Context, productName string, a, b ComparePoint,
-		fileBudget int64) (compare.Report, error)
+		fileBudget int64, progress compare.ProgressFunc) (compare.Report, error)
 }
 
 // Calibrator measures one source-to-target path and recommends settings.
@@ -186,6 +189,9 @@ type Deps struct {
 type Server struct {
 	deps   Deps
 	router chi.Router
+	// comparisons is progress for comparisons in flight — see
+	// compareprogress.go for why it lives in memory.
+	comparisons *compareTracker
 }
 
 // NewServer builds the HTTP surface.
@@ -201,7 +207,7 @@ func NewServer(deps Deps) *Server {
 	if deps.Logger == nil {
 		deps.Logger = slog.Default()
 	}
-	s := &Server{deps: deps}
+	s := &Server{deps: deps, comparisons: newCompareTracker()}
 	s.router = s.routes()
 	return s
 }
@@ -369,6 +375,13 @@ func (s *Server) routes() chi.Router {
 			// them must not require finding the leader.
 			r.Get("/auditEvents", s.handleListAuditEvents)
 			r.Get("/reports/summary", s.handleReportSummary)
+
+			// A comparison's progress while its own request is open. Not under
+			// /products, because the token identifies it and the caller
+			// polling it already knows which product it asked about — and a
+			// path that repeated the product would be a second place for the
+			// two to disagree.
+			r.Get("/comparisons/{comparison}", s.handleCompareProgress)
 
 			r.Get("/transfers", s.handleListTransfers)
 			r.Get("/transfers/{transfer}", s.handleGetTransfer)

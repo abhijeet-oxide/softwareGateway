@@ -37,7 +37,10 @@ interface Row {
 export default function Overview() {
   const navigate = useNavigate()
   const products = useProducts()
-  const productList = products.data?.products ?? []
+  // Disabled products do nothing on purpose — nothing is discovered for them
+  // and nothing is downloaded — so they are noise on a page about what needs
+  // attention. The Products page is where they can be shown deliberately.
+  const productList = (products.data?.products ?? []).filter((p) => p.enabled)
 
   // One request per product. The API has no estate-wide package listing, and
   // inventing one client-side by fetching everything and sorting is exactly

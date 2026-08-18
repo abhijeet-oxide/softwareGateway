@@ -1,7 +1,6 @@
-# Software Lifecycle Manager — web interface
+# Software Gateway — web interface
 
-The browser client for the Coordinator API. `softwareGateway` is the engineering
-name of the system and appears nowhere in the interface.
+The browser client for the Coordinator API.
 
 Ten pages, eight of them navigable:
 

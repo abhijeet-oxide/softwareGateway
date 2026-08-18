@@ -13,7 +13,7 @@ That is not a hedge. [09](09-api.md) already says the Coordinator's REST API is 
 
 What the UI will be, stated so it can be held to: **clean, minimal, fast, fully optimised, enterprise-grade, and capable of everything the tool can do.** Deployable in-cluster, air-gapped, with no external dependency at runtime.
 
-It is called **Software Lifecycle Manager** on screen. `softwareGateway` is the engineering name of the system and appears nowhere in the interface — §3.1 explains why that is a design decision rather than branding.
+It is called **Software Gateway** on screen — the product owner's choice, and the same name as the system itself. An earlier draft of this document used *Software Lifecycle Manager* and kept `softwareGateway` off the interface entirely; that distinction bought nothing and is dropped. §3.1 still holds and is the part that mattered: the interface avoids the ENGINE's nouns — package, transfer, blob, wave — which is a statement about vocabulary rather than about branding.
 
 ## 2. Why say it now rather than at M10
 

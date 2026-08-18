@@ -69,15 +69,33 @@ export function SystemPanel() {
             </Typography.Text>
           </Space>
 
-          {utilisation !== undefined && (
+          {/*
+            A LEVEL, not a journey. This is how much of the fleet's capacity is
+            in use right now, and it only earns a bar while something is
+            actually running.
+
+            It used to render unconditionally, which meant an idle fleet showed
+            a bar pinned at 0% — and a progress bar that never moves reads as
+            stalled work rather than as no work. So idle is stated in words,
+            and the bar appears when there is something for it to measure.
+          */}
+          {running > 0 && utilisation !== undefined ? (
             <Tooltip title={`${running} jobs running across ${active.length} workers, out of ${capacity} configured slots.`}>
-              <Progress
-                percent={Number(utilisation.toFixed(0))}
-                size="small"
-                strokeColor={utilisation > 90 ? semantic.warning : undefined}
-                style={{ marginBottom: 4 }}
-              />
+              <div style={{ marginBottom: 4 }}>
+                <Typography.Text type="secondary" style={{ fontSize: 11 }}>
+                  Capacity in use
+                </Typography.Text>
+                <Progress
+                  percent={Number(utilisation.toFixed(0))}
+                  size="small"
+                  strokeColor={utilisation > 90 ? semantic.warning : undefined}
+                />
+              </div>
             </Tooltip>
+          ) : (
+            <Typography.Text type="secondary" style={{ fontSize: 12, display: 'block', marginBottom: 8 }}>
+              No jobs running.
+            </Typography.Text>
           )}
 
           <Table<Worker>

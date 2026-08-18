@@ -731,3 +731,103 @@ func (c *Client) RuleMatches(ctx context.Context, product, rule string) (*Matche
 	var out MatchesResponse
 	return &out, c.get(ctx, path, &out)
 }
+
+// ---------------------------------------------------------------------------
+// Audit, reports and identity
+// ---------------------------------------------------------------------------
+
+// AuditQuery narrows the audit trail. Every field is optional.
+type AuditQuery struct {
+	Product     string
+	EventType   string
+	Actor       string
+	Outcome     string
+	SubjectKind string
+	SubjectID   string
+	// Since and Until are RFC 3339. An unparseable bound is rejected by the
+	// server rather than ignored, so a filter never silently widens.
+	Since string
+	Until string
+
+	PageSize  int
+	PageToken string
+}
+
+func (q AuditQuery) values() url.Values {
+	v := url.Values{}
+	for key, val := range map[string]string{
+		"product":     q.Product,
+		"eventType":   q.EventType,
+		"actor":       q.Actor,
+		"outcome":     q.Outcome,
+		"subjectKind": q.SubjectKind,
+		"subjectId":   q.SubjectID,
+		"since":       q.Since,
+		"until":       q.Until,
+		"pageToken":   q.PageToken,
+	} {
+		if val != "" {
+			v.Set(key, val)
+		}
+	}
+	if q.PageSize > 0 {
+		v.Set("pageSize", strconv.Itoa(q.PageSize))
+	}
+	return v
+}
+
+// ListAuditEvents queries the audit trail, newest first.
+func (c *Client) ListAuditEvents(ctx context.Context, q AuditQuery) (*ListAuditEventsResponse, error) {
+	path := "/api/v1/auditEvents"
+	if v := q.values(); len(v) > 0 {
+		path += "?" + v.Encode()
+	}
+	var out ListAuditEventsResponse
+	return &out, c.get(ctx, path, &out)
+}
+
+// ReportQuery bounds a report.
+//
+// Period and Since/Until are two spellings of one window; setting both is
+// rejected rather than resolved by precedence, so a caller is never shown a
+// period they did not mean.
+type ReportQuery struct {
+	// Period is a day count such as "7d" or "30d". Defaults to 30d.
+	Period string
+	Since  string
+	Until  string
+	// Product narrows to one product. Empty reports every product the caller
+	// may see.
+	Product string
+}
+
+// ReportSummary fetches the operational rollup for a period.
+func (c *Client) ReportSummary(ctx context.Context, q ReportQuery) (*ReportSummary, error) {
+	v := url.Values{}
+	for key, val := range map[string]string{
+		"period":  q.Period,
+		"since":   q.Since,
+		"until":   q.Until,
+		"product": q.Product,
+	} {
+		if val != "" {
+			v.Set(key, val)
+		}
+	}
+	path := "/api/v1/reports/summary"
+	if len(v) > 0 {
+		path += "?" + v.Encode()
+	}
+	var out ReportSummary
+	return &out, c.get(ctx, path, &out)
+}
+
+// WhoAmI reports the calling identity and what it may do.
+//
+// On a Coordinator without authentication this answers `anonymous` with
+// `authenticated: false`, which is a fact worth being able to confirm rather
+// than infer.
+func (c *Client) WhoAmI(ctx context.Context) (*WhoAmIResponse, error) {
+	var out WhoAmIResponse
+	return &out, c.get(ctx, "/api/v1/whoami", &out)
+}

@@ -8,13 +8,15 @@ import (
 // Dialect papers over the two SQL flavours where they genuinely differ.
 //
 // The logical schema is identical across Postgres and SQLite (docs/design/03
-// section 2), and most statements are portable verbatim. Three things are not,
+// section 2), and most statements are portable verbatim. Four things are not,
 // and they are handled here rather than by duplicating every query:
 //
 //   - Placeholders. Queries are written with `?` and rewritten to `$N` for
 //     Postgres, so a query lives in one place.
 //   - "now". Postgres has now(); SQLite needs strftime.
 //   - Boolean literals. Postgres has TRUE/FALSE; SQLite stores 0/1.
+//   - Elapsed time between two stored timestamps. Postgres subtracts them into
+//     an interval; SQLite has to convert both to Julian days and scale.
 //
 // Anything beyond this — the dequeue statement, in particular — gets a
 // dialect-specific implementation rather than being contorted through here.
@@ -43,6 +45,12 @@ type Dialect interface {
 	TimeAgo(secondsExpr string) string
 	// TimeAhead renders "the moment N seconds from now".
 	TimeAhead(secondsExpr string) string
+	// SecondsBetween renders the elapsed seconds from one stored timestamp to
+	// another, as a float. NULL when either side is NULL, which is the honest
+	// answer for a transfer that never started or has not finished — callers
+	// must treat it as "unknown" rather than coercing it to zero, or an
+	// unfinished transfer would report infinite speed.
+	SecondsBetween(from, to string) string
 	// Name identifies the dialect.
 	Name() Driver
 }
@@ -102,6 +110,9 @@ func (postgresDialect) TimeAgo(secondsExpr string) string {
 func (postgresDialect) TimeAhead(secondsExpr string) string {
 	return "(now() + make_interval(secs => " + secondsExpr + "))"
 }
+func (postgresDialect) SecondsBetween(from, to string) string {
+	return "EXTRACT(EPOCH FROM (" + to + " - " + from + "))"
+}
 func (postgresDialect) Bool(b bool) string { return map[bool]string{true: "TRUE", false: "FALSE"}[b] }
 func (postgresDialect) Name() Driver       { return DriverPostgres }
 
@@ -120,6 +131,14 @@ func (sqliteDialect) TimeAgo(secondsExpr string) string {
 
 func (sqliteDialect) TimeAhead(secondsExpr string) string {
 	return "strftime('%Y-%m-%dT%H:%M:%fZ','now', '+' || " + secondsExpr + " || ' seconds')"
+}
+
+// SecondsBetween goes through julianday because SQLite has no interval type
+// and no epoch conversion for a text timestamp. The 86400 scales days to
+// seconds; the .0 keeps it floating point, so a sub-second transfer is not
+// truncated to zero and made to look infinitely fast.
+func (sqliteDialect) SecondsBetween(from, to string) string {
+	return "((julianday(" + to + ") - julianday(" + from + ")) * 86400.0)"
 }
 func (sqliteDialect) Bool(b bool) string { return map[bool]string{true: "1", false: "0"}[b] }
 func (sqliteDialect) Name() Driver       { return DriverSQLite }

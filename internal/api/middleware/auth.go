@@ -48,10 +48,22 @@ type Identity struct {
 	// Method records how the identity was established ("none", "oidc",
 	// "kubernetes", "token") so an audit record shows the trust path.
 	Method string
+
+	// Tenant is which tenant this caller belongs to. Empty means the estate,
+	// which is every deployment today. Added before tenancy exists because a
+	// field is free to carry and a signature change is not — see scope.go.
+	Tenant string
+	// Grants are scoped permissions, consulted by Can before Roles. Empty
+	// today: the anonymous identity holds admin and needs none.
+	Grants []Grant
 }
 
 // HasRole reports whether the identity holds a role. Admin implies operator
 // implies viewer, so callers test the minimum they need.
+//
+// PREFER Can: a role check cannot express "operator, on this product", so a
+// handler written against this one has to be rewritten when grants become
+// scoped. This stays because Can is built on it.
 func (i Identity) HasRole(want Role) bool {
 	for _, r := range i.Roles {
 		if r == want {

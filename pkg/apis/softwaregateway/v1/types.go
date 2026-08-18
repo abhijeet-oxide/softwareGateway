@@ -11,6 +11,8 @@
 //   - RFC 3339 UTC timestamps
 package v1
 
+import "encoding/json"
+
 // APIVersion is the served API version.
 const APIVersion = "v1"
 
@@ -134,6 +136,13 @@ type Repository struct {
 	RepositoryFilters *Filters `json:"repositoryFilters,omitempty"`
 
 	Type string `json:"type"`
+	// Environment is the stage a TARGET represents: `lab`, `production`.
+	// Empty for a source, and for a target that declares none.
+	//
+	// On the wire because it is the only thing that distinguishes production
+	// from anywhere else, and a client that cannot tell them apart cannot say
+	// whether a release has shipped.
+	Environment string `json:"environment,omitempty"`
 	// Vendor is the publishing convention a SOURCE follows — `near`, or empty
 	// for a conformant registry. Separate from Type, which is how to speak to
 	// the registry: protocol and publishing convention vary independently.
@@ -1936,4 +1945,177 @@ type MatchesResponse struct {
 	Product string   `json:"product"`
 	Rule    string   `json:"rule"`
 	Matches []string `json:"matches"`
+}
+
+// ---------------------------------------------------------------------------
+// Audit
+// ---------------------------------------------------------------------------
+
+// AuditEvent is one entry in the trail.
+//
+// The read side of a table that has been written since the first migration
+// (docs/design/12 §4). Nothing consumed it until there was an interface that
+// could show it.
+type AuditEvent struct {
+	// Name is the AIP-122 resource name: "auditEvents/{id}".
+	Name string `json:"name"`
+	ID   string `json:"id"`
+
+	OccurredAt string `json:"occurredAt"`
+	EventType  string `json:"eventType"`
+
+	// Actor is who, and ActorKind is what sort of who: user, system, worker,
+	// schedule or auto_rule. Both matter — "the system did it" and "a person
+	// did it" are the two answers this trail exists to distinguish.
+	Actor     string `json:"actor"`
+	ActorKind string `json:"actorKind"`
+
+	Product string `json:"product,omitempty"`
+	// SubjectKind and SubjectID name what the event was ABOUT, which is what
+	// makes the trail filterable down to one release.
+	SubjectKind string `json:"subjectKind,omitempty"`
+	SubjectID   string `json:"subjectId,omitempty"`
+
+	RequestID string `json:"requestId,omitempty"`
+	TraceID   string `json:"traceId,omitempty"`
+	Outcome   string `json:"outcome"`
+
+	// Detail is the producer's own JSON payload, passed through unparsed.
+	// Every event type writes a different shape, and a reader that insisted on
+	// knowing them all would need editing for each new one.
+	Detail json.RawMessage `json:"detail,omitempty"`
+}
+
+// ListAuditEventsResponse is GET /api/v1/auditEvents.
+type ListAuditEventsResponse struct {
+	AuditEvents   []AuditEvent `json:"auditEvents"`
+	NextPageToken string       `json:"nextPageToken,omitempty"`
+}
+
+// ---------------------------------------------------------------------------
+// Reports
+// ---------------------------------------------------------------------------
+
+// ReportSummary is the operational rollup for a period.
+//
+// Note what is NOT here: no verification metric, because nothing writes
+// verification records yet and a confident zero would be worse than an absence
+// (docs/design/19 §6). Nor an "average download time", which measures how big
+// the releases were rather than how the system performed.
+type ReportSummary struct {
+	// Period restates the bounds the server actually applied, so a reader
+	// never has to assume which period a figure belongs to.
+	Period ReportPeriod `json:"period"`
+
+	// Totals is every in-scope product added together.
+	Totals ReportTotals `json:"totals"`
+	// Products is the same figures per product. Present always, because a
+	// caller scoped to a subset must get their subset's numbers rather than an
+	// estate-wide total they are not entitled to see.
+	Products []ProductReport `json:"products"`
+
+	// FailureCauses groups the period's failed jobs, worst first.
+	FailureCauses []FailureCause `json:"failureCauses,omitempty"`
+	// Volume is the per-day trend, oldest first.
+	Volume []DailyVolume `json:"volume,omitempty"`
+}
+
+// ReportPeriod is the window a report covers.
+type ReportPeriod struct {
+	Since string `json:"since,omitempty"`
+	Until string `json:"until,omitempty"`
+	// Label is the requested period as typed — `7d`, `30d` — or empty for an
+	// explicit range.
+	Label string `json:"label,omitempty"`
+}
+
+// ReportTotals is one scope's figures.
+type ReportTotals struct {
+	DownloadsCompleted int `json:"downloadsCompleted"`
+	DownloadsFailed    int `json:"downloadsFailed"`
+	DownloadsCancelled int `json:"downloadsCancelled"`
+	DownloadsRunning   int `json:"downloadsRunning"`
+	Promotions         int `json:"promotions"`
+
+	BytesTransferred Int64String `json:"bytesTransferred"`
+	// SavedBytes is what did not have to move, and SavedPercent is that against
+	// what would otherwise have moved. The clearest demonstration of the
+	// system's value, so it is stated as both.
+	SavedBytes Int64String `json:"savedBytes"`
+	// SavedPercent is omitted when nothing moved and nothing was saved, since
+	// a percentage of zero is not zero percent.
+	SavedPercent *float64 `json:"savedPercent,omitempty"`
+
+	// AverageBytesPerSecond is measured over `copy` transfers ONLY — the ones
+	// whose bytes we moved and counted. OMITTED, not zero, when no such
+	// transfer completed in the period: a mirror-only period has no speed we
+	// are entitled to state (docs/design/18 §6.1).
+	AverageBytesPerSecond *Int64String `json:"averageBytesPerSecond,omitempty"`
+	// SuccessRate is completed against completed-plus-failed, 0..1. Omitted
+	// when nothing settled in the period.
+	SuccessRate *float64 `json:"successRate,omitempty"`
+}
+
+// ProductReport is one product's figures for the period.
+type ProductReport struct {
+	Product string       `json:"product"`
+	Totals  ReportTotals `json:"totals"`
+}
+
+// FailureCause is one group of failed jobs.
+type FailureCause struct {
+	Product string `json:"product"`
+	// Class is the worker's error classification, or "unclassified" where a
+	// job failed before one was assigned. Never blank, so a reader is not left
+	// wondering whether the field is missing or the value is.
+	Class string `json:"class"`
+	Jobs  int    `json:"jobs"`
+}
+
+// DailyVolume is one day of throughput.
+type DailyVolume struct {
+	Day              string      `json:"day"`
+	BytesTransferred Int64String `json:"bytesTransferred"`
+	Downloads        int         `json:"downloads"`
+}
+
+// ---------------------------------------------------------------------------
+// Identity
+// ---------------------------------------------------------------------------
+
+// WhoAmIResponse describes the calling identity and what it may do.
+//
+// # Why this exists before authentication does
+//
+// So that no client ever hardcodes a role model. A UI that decides for itself
+// which buttons an operator may press has to be edited in every place the day
+// real roles arrive; a UI that renders what this endpoint reports does not.
+//
+// Today it answers `anonymous`, method `none`, permissions `["*"]`, which is
+// exactly what the Coordinator's AnonymousAuthenticator grants. That is not
+// authentication and does not pretend to be — it is the shape authentication
+// will fill in (docs/design/09 §10).
+type WhoAmIResponse struct {
+	Subject string `json:"subject"`
+	// Method records how the identity was established: "none", "oidc",
+	// "kubernetes" or "token". A client shows "Authentication is not enabled"
+	// on "none" rather than implying a real session.
+	Method string `json:"method"`
+	// Authenticated is false whenever Method is "none". Stated as its own
+	// field so a client does not have to know which method strings count.
+	Authenticated bool `json:"authenticated"`
+
+	// Tenant is which tenant this caller belongs to. Empty until tenancy
+	// exists; a client treats empty as "the whole estate".
+	Tenant string `json:"tenant,omitempty"`
+
+	Roles []string `json:"roles,omitempty"`
+	// Permissions are the actions this caller may perform. `["*"]` means
+	// everything, which is what an unauthenticated deployment reports.
+	Permissions []string `json:"permissions"`
+
+	// Products limits what this caller may see. Empty means every product —
+	// the same convention the server-side scope filters use, so a client
+	// reading this never has to special-case the unscoped deployment.
+	Products []string `json:"products,omitempty"`
 }

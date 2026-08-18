@@ -231,6 +231,10 @@ func (s *Server) routes() chi.Router {
 	// ---- API v1 ----
 	r.Route("/api/v1", func(r chi.Router) {
 		r.Get("/system/version", s.handleVersion)
+		// Who is calling. Registered unconditionally and with no dependency:
+		// a caller must always be able to discover that they are anonymous,
+		// including on a Coordinator with no store behind it.
+		r.Get("/whoami", s.handleWhoAmI)
 		// AIP-136 custom method: a colon, because a deep health check is a
 		// verb with side effects (it makes outbound calls), not a resource.
 		r.Get("/system:healthCheck", s.handleDeepHealth)
@@ -344,6 +348,12 @@ func (s *Server) routes() chi.Router {
 			if s.deps.Requests != nil {
 				r.Post("/transfers", s.handleCreateTransfer)
 			}
+			// The audit trail, and the rollups over it. Registered with the
+			// store rather than the queue: both are records, and reading
+			// them must not require finding the leader.
+			r.Get("/auditEvents", s.handleListAuditEvents)
+			r.Get("/reports/summary", s.handleReportSummary)
+
 			r.Get("/transfers", s.handleListTransfers)
 			r.Get("/transfers/{transfer}", s.handleGetTransfer)
 			r.Get("/transfers/{transfer}/jobs", s.handleListTransferJobs)

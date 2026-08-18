@@ -1,0 +1,38 @@
+/* Global rules the component library does not cover. */
+
+html, body, #root {
+  height: 100%;
+  margin: 0;
+}
+
+/*
+ * No page scrolls horizontally at 1440px. Wide tables scroll inside their own
+ * container instead, which is what the `scroll` prop on every table sets up.
+ */
+body {
+  overflow-x: hidden;
+}
+
+/* Identifiers are monospace everywhere they appear. */
+.mono {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, 'Liberation Mono', monospace;
+  font-size: 13px;
+}
+
+/* Keyboard focus stays visible: full keyboard operation is a requirement. */
+:focus-visible {
+  outline: 2px solid #0057B8;
+  outline-offset: 2px;
+}
+
+/* A diff pane, used by Compare. */
+.diff-line {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 12px;
+  line-height: 1.6;
+  white-space: pre-wrap;
+  word-break: break-all;
+  padding: 0 8px;
+}
+.diff-add { background: #E8F5EC; }
+.diff-remove { background: #FDECEC; }

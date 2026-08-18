@@ -292,3 +292,29 @@ func (r replicationMetrics) SetDrift(product, target string, drifted bool) {
 func (r replicationMetrics) RecordProxyProbe(product, target, result string) {
 	r.m.ProxyCacheProbes.WithLabelValues(product, target, result).Inc()
 }
+
+// TargetRowIDs maps a product's configured target names to catalog row IDs.
+//
+// Needed only to RUN a rule: listing and describing one reads configuration,
+// which is why the two are separate dependencies. A target with no row means
+// reconciliation has not run, and saying that is more useful than a foreign-key
+// error three layers down.
+func (r *resolverImpl) TargetRowIDs(ctx context.Context, productName string) (map[string]int64, error) {
+	p, ok := r.products.Get(productName)
+	if !ok {
+		return nil, fmt.Errorf("product %q is not configured", productName)
+	}
+
+	out := make(map[string]int64, len(p.Spec.Targets))
+	for _, t := range p.Spec.Targets {
+		id, err := r.catalog.ResolveRepository(ctx, productName, t.Name)
+		if err != nil {
+			// Skipped rather than fatal: a rule that does not name this target
+			// can still run, and failing the whole call because an unrelated
+			// target is unreconciled would be the wrong blast radius.
+			continue
+		}
+		out[t.Name] = id
+	}
+	return out, nil
+}

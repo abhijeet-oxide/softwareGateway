@@ -1821,3 +1821,99 @@ type ListSyncsResponse struct {
 type ListReplicationResponse struct {
 	Targets []ReplicationView `json:"targets"`
 }
+
+// ---------------------------------------------------------------------------
+// Download rules (docs/design/20)
+// ---------------------------------------------------------------------------
+
+// DownloadRuleView is one rule, its derived chain and its operational state.
+type DownloadRuleView struct {
+	Product string `json:"product"`
+	Name    string `json:"name"`
+
+	TagPattern string   `json:"tagPattern"`
+	Sources    []string `json:"sources,omitempty"`
+	// Targets is what the rule NAMES. Chain is what that resolves to, closed
+	// over the targets' own `mirror.from`. They differ whenever a rule names
+	// the tail of a chain, which is the normal case.
+	Targets   []string `json:"targets,omitempty"`
+	Chain     []string `json:"chain,omitempty"`
+	ChainText string   `json:"chainText,omitempty"`
+	// ChainError is why the chain could not be derived. One broken rule must
+	// not blank a listing of ten.
+	ChainError string `json:"chainError,omitempty"`
+
+	Trigger  []string `json:"trigger,omitempty"`
+	Priority int      `json:"priority"`
+
+	// Enabled is the CONFIGURED intent, from Git. Suspended is the
+	// operational override. Both are reported because both are true, and a
+	// view showing only one is lying by omission.
+	Enabled   bool `json:"enabled"`
+	Suspended bool `json:"suspended"`
+	// Runnable is the answer to "would this act if asked", which is what a
+	// reader actually wants and neither flag gives alone.
+	Runnable bool `json:"runnable"`
+
+	SuspendedReason string `json:"suspendedReason,omitempty"`
+	SuspendedBy     string `json:"suspendedBy,omitempty"`
+	SuspendedUntil  string `json:"suspendedUntil,omitempty"`
+
+	VerifyBefore string `json:"verifyBefore,omitempty"`
+	VerifyAfter  string `json:"verifyAfter,omitempty"`
+	VerifyPolicy string `json:"verifyPolicy,omitempty"`
+
+	Window   string `json:"window,omitempty"`
+	Revision string `json:"revision"`
+}
+
+// ListDownloadRulesResponse is a product's rules.
+type ListDownloadRulesResponse struct {
+	Rules []DownloadRuleView `json:"rules"`
+}
+
+// RunDownloadRuleRequest triggers a rule by hand.
+type RunDownloadRuleRequest struct {
+	// Tags narrows the run. Empty means every discovered package the rule's
+	// pattern matches. A named tag still has to match the pattern.
+	Tags []string `json:"tags,omitempty"`
+	// ValidateOnly renders the plan and creates nothing.
+	ValidateOnly bool `json:"validateOnly,omitempty"`
+}
+
+// RunDownloadRuleResponse is what a run did, or would do.
+type RunDownloadRuleResponse struct {
+	Product string   `json:"product"`
+	Rule    string   `json:"rule"`
+	Chain   []string `json:"chain"`
+	// Matched is every package the rule selected.
+	Matched []string `json:"matched,omitempty"`
+	// Created names the requests opened; AlreadyRequested is the matches whose
+	// idempotency key already existed, which is a normal outcome rather than a
+	// failure.
+	Created          []string `json:"created,omitempty"`
+	AlreadyRequested []string `json:"alreadyRequested,omitempty"`
+	ValidateOnly     bool     `json:"validateOnly,omitempty"`
+}
+
+// SuspendDownloadRuleRequest stops a rule now.
+type SuspendDownloadRuleRequest struct {
+	// Reason is required. A suspension nobody can explain is one nobody dares
+	// lift.
+	Reason string `json:"reason"`
+	// Until is optional, RFC 3339. Absent means indefinite, which is reported
+	// as a standing complaint rather than prevented.
+	Until string `json:"until,omitempty"`
+}
+
+// SuspendDownloadRuleResponse reports the override.
+type SuspendDownloadRuleResponse struct {
+	Product   string `json:"product"`
+	Rule      string `json:"rule"`
+	Suspended bool   `json:"suspended"`
+	Reason    string `json:"reason,omitempty"`
+	Until     string `json:"until,omitempty"`
+	// Note says that configuration was NOT changed, because that is the thing
+	// a reader most needs to know and would otherwise assume either way.
+	Note string `json:"note,omitempty"`
+}

@@ -152,6 +152,12 @@ type Deps struct {
 	// replication routes are absent and a caller gets an honest 404 rather
 	// than a route that always fails.
 	Replication Replicator
+	// Rules is the download-rule surface. Optional on the same terms: without
+	// it the routes are absent and a caller gets an honest 404.
+	Rules Ruler
+	// TargetRows resolves configured target names to catalog rows, which only
+	// running a rule needs.
+	TargetRows TargetRows
 	// ReplicationStore backs the sync history. Separate from Replication
 	// because the history is readable on a Coordinator that cannot currently
 	// reach the registry at all, and that is exactly when it is wanted.
@@ -262,6 +268,17 @@ func (s *Server) routes() chi.Router {
 			r.Post("/products/{product}/targets/{target}/replication:sync", s.handleSyncReplication)
 			r.Post("/products/{product}/targets/{target}/replication:cancelSync", s.handleCancelSyncReplication)
 		}
+		// Download rules. Read-only as a collection — they are configuration —
+		// with verbs that operate: run it now, stop it now, start it again.
+		// None of them edits the rule; changing what a rule SAYS is a commit.
+		if s.deps.Rules != nil {
+			r.Get("/products/{product}/downloadRules", s.handleListDownloadRules)
+			r.Get("/products/{product}/downloadRules/{rule}", s.handleGetDownloadRule)
+			r.Post("/products/{product}/downloadRules/{rule}:run", s.handleRunDownloadRule)
+			r.Post("/products/{product}/downloadRules/{rule}:suspend", s.handleSuspendDownloadRule)
+			r.Post("/products/{product}/downloadRules/{rule}:resume", s.handleResumeDownloadRule)
+		}
+
 		// The sync HISTORY is readable without a management client, and that
 		// separation is deliberate: "what has this mirror been doing" is most
 		// wanted precisely when the registry cannot be reached.

@@ -25,6 +25,7 @@ import (
 	"github.com/abhijeet-oxide/softwareGateway/internal/calibrate"
 	"github.com/abhijeet-oxide/softwareGateway/internal/catalog"
 	"github.com/abhijeet-oxide/softwareGateway/internal/discovery"
+	"github.com/abhijeet-oxide/softwareGateway/internal/download"
 	"github.com/abhijeet-oxide/softwareGateway/internal/maintenance"
 	"github.com/abhijeet-oxide/softwareGateway/internal/platform/config"
 	"github.com/abhijeet-oxide/softwareGateway/internal/platform/health"
@@ -368,7 +369,12 @@ func run() error {
 		// Delegated replication runs here for the same reason again: it speaks
 		// to Quay's MANAGEMENT api, which needs a credential from a projected
 		// Secret, and transferctl holds neither.
-		Replication:      replicationSvc,
+		Replication: replicationSvc,
+		// Download rules read configuration and the operational overrides;
+		// running one also needs catalog rows, which is why the two are
+		// separate dependencies.
+		Rules:            download.NewService(packages, replicationStore, logger),
+		TargetRows:       transferResolver,
 		ReplicationStore: replicationStore,
 		Leader:           elector,
 		Component:        component,

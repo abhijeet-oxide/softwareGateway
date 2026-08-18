@@ -7,7 +7,8 @@ import type {
   ListAuditEventsResponse, ListAutoDownloadRulesResponse, ListDownloadsResponse,
   InspectPackageResponse, ListFailuresResponse, ListJobsResponse, ListPackagesResponse, ListProductsResponse,
   ListReplicationResponse, ListSyncsResponse, ListTransfersResponse, ListUnavailableResponse,
-  ListWorkersResponse, Package, ReportSummary, RunDownloadRequest, RunDownloadResponse,
+  ListPackageFilesResponse, ListWorkersResponse, Package, ReportSummary, RunDownloadRequest,
+  RunDownloadResponse,
   SetPriorityRequest, Transfer, TransferControlResponse, VersionResponse,
 } from './types'
 import { isLive } from '../domain/derive'
@@ -187,6 +188,25 @@ export function useArtifacts(
  * extent of the work is the thing being discovered. A caller can report that
  * it is running and for how long, and nothing more honest than that.
  */
+/**
+ * What is inside a release, as files.
+ *
+ * Read from what analysis recorded, so it troubles no registry — and it is
+ * empty until the release has been analysed, which the response says rather
+ * than leaving the page to guess.
+ */
+export function usePackageFiles(product: string | undefined, ref: string | undefined,
+  repository?: string) {
+  const { segment, query: q } = packageRef(ref ?? '')
+  return useQuery({
+    queryKey: ['package-files', product, ref, repository],
+    queryFn: () => api.get<ListPackageFilesResponse>(
+      `/products/${encodeURIComponent(product!)}/packages/${encodeURIComponent(segment)}/files`
+      + scopeQuery(q, repository)),
+    enabled: Boolean(product && ref),
+  })
+}
+
 export function useInspectPackage(product: string, ref: string, repository?: string) {
   const qc = useQueryClient()
   return useMutation({

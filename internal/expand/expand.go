@@ -199,6 +199,10 @@ func ToStoreTree(t oci.Tree) store.ExpandedTree {
 				SizeBytes: b.Descriptor.Size,
 				Kind:      b.Kind,
 				Ordinal:   b.Ordinal,
+				// What the publisher calls this layer. For a single-file
+				// artifact it is the file's name, and it is the only place
+				// that name exists — the blob itself is just bytes.
+				Title: b.Descriptor.Annotations[registry.AnnotationTitle],
 			})
 		}
 		out.Artifacts = append(out.Artifacts, ea)

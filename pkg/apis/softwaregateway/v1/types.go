@@ -687,6 +687,35 @@ type CompareRequest struct {
 	ProgressToken string `json:"progressToken,omitempty"`
 }
 
+// PackageFile is one named file inside a release.
+type PackageFile struct {
+	// Path is the publisher's own name for it — `CONFIGURATION/nodes.json`.
+	Path string `json:"path"`
+	// Component is the artifact it came from, by the name the release gives
+	// that artifact.
+	Component string      `json:"component,omitempty"`
+	SizeBytes Int64String `json:"sizeBytes"`
+	Digest    string      `json:"digest"`
+	MediaType string      `json:"mediaType,omitempty"`
+}
+
+// ListPackageFilesResponse is
+// GET /api/v1/products/{product}/packages/{package}/files.
+//
+// What is INSIDE a release, as files rather than as layers.
+type ListPackageFilesResponse struct {
+	Files []PackageFile `json:"files"`
+	// OpaqueLayers is how many layers carry no name of their own — image
+	// layers, which are archives of an unknown number of paths. They are not
+	// listed, and saying how many there are is what stops the list reading as
+	// the whole of a release's content.
+	OpaqueLayers int `json:"opaqueLayers,omitempty"`
+	// Analysed reports whether this release has been walked. Before that, the
+	// only thing known is what its index listed, and an empty file list means
+	// "nobody has looked" rather than "there are none".
+	Analysed bool `json:"analysed"`
+}
+
 // CompareProgressSide is one end's position in a comparison.
 type CompareProgressSide struct {
 	Side  string `json:"side"`

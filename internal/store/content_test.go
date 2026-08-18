@@ -246,3 +246,58 @@ func (h *failureHarness) seedAnnotations(artifactID int64, annotations string) {
 	h.exec(`UPDATE package_artifacts SET annotations = ? WHERE id = ?`,
 		annotations, artifactID)
 }
+
+// A release's files are the layers its publisher NAMED.
+//
+// `org.opencontainers.image.title` is the ORAS convention for a single-file
+// layer, and it is the only place a file's name exists — the blob is bytes. It
+// is recorded when the release is analysed, so listing files troubles no
+// registry afterwards.
+//
+// An untitled layer is a tar of an unknown number of paths. It is counted and
+// not listed, because one row called `layer sha256:…` is a summary wearing the
+// clothes of an answer.
+func TestPackageFilesListsWhatThePublisherNamed(t *testing.T) {
+	h := newFailureHarness(t)
+
+	artifact := h.seedArtifact("application/vnd.oci.image.manifest.v1+json", "")
+	h.seedAnnotations(artifact, `{"org.opencontainers.image.ref.name":"orbs/cfx/custo:25.7"}`)
+	h.seedTitledLayer(artifact, 0, "CONFIGURATION/nodes.json", 4096)
+	h.seedTitledLayer(artifact, 1, "CONFIGURATION/network.json", 2048)
+
+	image := h.seedArtifact("application/vnd.oci.image.manifest.v1+json", "")
+	h.seedTitledLayer(image, 0, "", 900_000_000)
+
+	files, opaque, err := h.packages.PackageFiles(t.Context(), h.pkgID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(files) != 2 {
+		t.Fatalf("listed %d files, want the two that were named: %+v", len(files), files)
+	}
+	if files[0].Path != "CONFIGURATION/nodes.json" || files[1].Path != "CONFIGURATION/network.json" {
+		t.Errorf("files came out %q, %q — want them in layer order",
+			files[0].Path, files[1].Path)
+	}
+	if files[0].ArtifactRef != "orbs/cfx/custo:25.7" {
+		t.Errorf("component = %q, want the artifact's own name", files[0].ArtifactRef)
+	}
+	if files[0].SizeBytes != 4096 {
+		t.Errorf("size = %d, want the layer's size", files[0].SizeBytes)
+	}
+	if opaque != 1 {
+		t.Errorf("opaque layers = %d, want the one nobody named", opaque)
+	}
+}
+
+// seedTitledLayer gives an artifact a layer, named or not.
+func (h *failureHarness) seedTitledLayer(artifactID int64, ordinal int, title string, size int64) {
+	h.t.Helper()
+
+	h.n++
+	digest := "sha256:" + strings.Repeat("7", 60) + padded(h.n)
+	h.exec(`INSERT INTO blobs (digest, size_bytes, media_type)
+	        VALUES (?, ?, 'application/vnd.oci.image.layer.v1.tar')`, digest, size)
+	h.exec(`INSERT INTO artifact_blobs (artifact_id, digest, kind, ordinal, title)
+	        VALUES (?, ?, 'layer', ?, ?)`, artifactID, digest, ordinal, nullable(title))
+}

@@ -156,3 +156,114 @@ func (p *Packages) ContentBreakdown(ctx context.Context, transferID string) ([]C
 	}
 	return out, rows.Err()
 }
+
+// annotationRefName is the OCI reserved annotation naming a component.
+//
+// Spelt out here rather than imported from internal/registry: the store holds
+// rows and depends on no protocol package, and one reserved string from a
+// published specification is a smaller thing to carry than that dependency.
+const annotationRefName = "org.opencontainers.image.ref.name"
+
+// PackageFile is one named file inside one of a package's artifacts.
+type PackageFile struct {
+	// ArtifactID and ArtifactRef locate the component the file came from —
+	// `orbs/cfx-5000-k8s/custo:25.7` — so a tree can say where a path lives.
+	ArtifactID  int64
+	ArtifactRef string
+	// Path is the publisher's own name for the layer, which for a single-file
+	// artifact IS the file's path.
+	Path      string
+	SizeBytes int64
+	Digest    string
+	MediaType string
+}
+
+// PackageFiles lists the named files of a package's artifacts.
+//
+// # What this can and cannot see
+//
+// A layer that carries `org.opencontainers.image.title` names one file, and
+// that name was recorded when the artifact was analysed. Those are these rows:
+// the configuration bundles, release notes and scripts a vendor ships, which is
+// what somebody opening a release actually wants to look at.
+//
+// A layer with NO title is a tar of an unknown number of paths. It is not
+// listed, because listing it as one entry called `layer sha256:…` would be a
+// summary wearing the clothes of an answer — and its content cannot be known
+// without downloading and unpacking it. Opaque reports how many there are, so a
+// caller can say what it is not showing.
+//
+// Ordered by artifact and then by layer order, which is the order the publisher
+// wrote them in and the order a filesystem would apply them.
+func (p *Packages) PackageFiles(ctx context.Context, packageID int64) ([]PackageFile, int, error) {
+	rows, err := p.db.QueryContext(ctx, p.dialect.Rewrite(`
+		SELECT pa.id,
+		       COALESCE(pa.annotations, ''),
+		       ab.title,
+		       COALESCE(b.size_bytes, 0),
+		       ab.digest,
+		       COALESCE(b.media_type, '')
+		  FROM package_artifacts pa
+		  JOIN artifact_blobs ab ON ab.artifact_id = pa.id
+		  LEFT JOIN blobs b ON b.digest = ab.digest
+		 WHERE pa.package_id = ?
+		   AND ab.kind = 'layer'
+		   AND ab.title IS NOT NULL
+		 ORDER BY pa.id, ab.ordinal`), packageID)
+	if err != nil {
+		return nil, 0, fmt.Errorf("list files of package %d: %w", packageID, err)
+	}
+	defer func() { _ = rows.Close() }()
+
+	var out []PackageFile
+	for rows.Next() {
+		var (
+			f           PackageFile
+			annotations []byte
+		)
+		if err := rows.Scan(&f.ArtifactID, &annotations, &f.Path,
+			&f.SizeBytes, &f.Digest, &f.MediaType); err != nil {
+			return nil, 0, fmt.Errorf("scan a package file: %w", err)
+		}
+		if len(annotations) > 0 {
+			// The OCI reserved key, not a vendor's — this is the specification
+			// saying what a component of an index is called, and every
+			// publisher that names its components uses it.
+			var a map[string]string
+			if err := json.Unmarshal(annotations, &a); err == nil {
+				f.ArtifactRef = a[annotationRefName]
+			}
+		}
+		out = append(out, f)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, 0, err
+	}
+
+	var opaque int
+	if err := p.db.QueryRowContext(ctx, p.dialect.Rewrite(`
+		SELECT count(*)
+		  FROM package_artifacts pa
+		  JOIN artifact_blobs ab ON ab.artifact_id = pa.id
+		 WHERE pa.package_id = ? AND ab.kind = 'layer' AND ab.title IS NULL`),
+		packageID).Scan(&opaque); err != nil {
+		return nil, 0, fmt.Errorf("count opaque layers of package %d: %w", packageID, err)
+	}
+	return out, opaque, nil
+}
+
+// PackageAnalysed reports whether every artifact of a package has been walked.
+//
+// The question a page asks before it says a release contains nothing: an
+// artifact that was only LISTED by its index has no blobs recorded, so a
+// release nobody analysed looks identical to one with no content. They are
+// different facts and only one of them is worth acting on.
+func (p *Packages) PackageAnalysed(ctx context.Context, packageID int64) (bool, error) {
+	var unfetched int
+	if err := p.db.QueryRowContext(ctx, p.dialect.Rewrite(
+		`SELECT count(*) FROM package_artifacts
+		  WHERE package_id = ? AND fetched_at IS NULL`), packageID).Scan(&unfetched); err != nil {
+		return false, fmt.Errorf("check whether package %d is analysed: %w", packageID, err)
+	}
+	return unfetched == 0, nil
+}

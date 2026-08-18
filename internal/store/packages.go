@@ -140,6 +140,10 @@ type BlobRef struct {
 	// image, and a manifest reassembled with layers transposed is a different
 	// image that happens to contain the same bytes.
 	Ordinal int
+	// Title is `org.opencontainers.image.title` — the publisher saying "this
+	// layer IS this file". Empty for an image layer, which is a tar of an
+	// unknown number of paths and names nothing.
+	Title string
 }
 
 // Packages is the persistence surface discovery needs.
@@ -356,15 +360,16 @@ func (p *Packages) LinkBlobs(ctx context.Context, tx *sql.Tx, artifactID int64, 
 		ON CONFLICT (digest) DO NOTHING`)
 
 	linkInsert := p.dialect.Rewrite(`
-		INSERT INTO artifact_blobs (artifact_id, digest, kind, ordinal)
-		VALUES (?, ?, ?, ?)
+		INSERT INTO artifact_blobs (artifact_id, digest, kind, ordinal, title)
+		VALUES (?, ?, ?, ?, ?)
 		ON CONFLICT (artifact_id, digest, kind) DO NOTHING`)
 
 	for _, r := range refs {
 		if _, err := tx.ExecContext(ctx, blobUpsert, r.Digest, r.SizeBytes, nullable(r.MediaType)); err != nil {
 			return fmt.Errorf("upsert blob %s: %w", r.Digest, err)
 		}
-		if _, err := tx.ExecContext(ctx, linkInsert, artifactID, r.Digest, r.Kind, r.Ordinal); err != nil {
+		if _, err := tx.ExecContext(ctx, linkInsert,
+			artifactID, r.Digest, r.Kind, r.Ordinal, nullable(r.Title)); err != nil {
 			return fmt.Errorf("link blob %s to artifact %d: %w", r.Digest, artifactID, err)
 		}
 	}

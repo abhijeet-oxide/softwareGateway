@@ -599,6 +599,29 @@ export interface CompareRequest {
 }
 
 /** One end's position in a comparison. */
+/** One named file inside a release. */
+export interface PackageFile {
+  /** The publisher's own name for it — `CONFIGURATION/nodes.json`. */
+  path: string
+  /** The artifact it came from, by that artifact's own name. */
+  component?: string
+  sizeBytes: Int64String
+  digest: string
+  mediaType?: string
+}
+
+export interface ListPackageFilesResponse {
+  files: PackageFile[]
+  /**
+   * Layers carrying no name of their own — image layers, which are archives of
+   * an unknown number of paths. Counted rather than listed.
+   */
+  opaqueLayers?: number
+  /** Whether the release has been walked. An empty list before that means
+   * "nobody has looked", not "there are none". */
+  analysed: boolean
+}
+
 export interface CompareProgressSide {
   side: string
   phase: string

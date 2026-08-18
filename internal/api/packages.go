@@ -239,6 +239,63 @@ func (s *Server) artifactClassifier(productName string) vendors.Classifier {
 	return vendors.ClassifierFor(s.deps.Vendors, names)
 }
 
+// handleListPackageFiles serves
+// GET /api/v1/products/{product}/packages/{package}/files.
+//
+// A release's contents as FILES. What a layer is called is recorded when the
+// release is analysed — `org.opencontainers.image.title`, the publisher saying
+// "this layer is this file" — so this reads what analysis already learnt and
+// troubles no registry.
+//
+// A release nobody has analysed answers with an empty list and says so. That is
+// the distinction the page turns on: "nothing is inside this" and "nobody has
+// looked inside this" are different facts, and reporting the second as the
+// first is how a release comes to show two layers where it has two hundred
+// files.
+func (s *Server) handleListPackageFiles(w http.ResponseWriter, r *http.Request) {
+	productName := chi.URLParam(r, "product")
+	if !s.productExists(w, r, productName) {
+		return
+	}
+	if s.deps.Packages == nil {
+		Error(w, r, v1.CodeUnavailable, "package storage is not configured")
+		return
+	}
+
+	pkg, ok := s.resolvePackage(w, r, productName, chi.URLParam(r, "package"))
+	if !ok {
+		return
+	}
+
+	files, opaque, err := s.deps.Packages.PackageFiles(r.Context(), pkg.ID)
+	if err != nil {
+		Error(w, r, v1.CodeUnavailable, "could not list the files: "+err.Error())
+		return
+	}
+
+	analysed, err := s.deps.Packages.PackageAnalysed(r.Context(), pkg.ID)
+	if err != nil {
+		Error(w, r, v1.CodeUnavailable, "could not tell whether this release has been analysed: "+err.Error())
+		return
+	}
+
+	out := v1.ListPackageFilesResponse{
+		Files:        make([]v1.PackageFile, 0, len(files)),
+		OpaqueLayers: opaque,
+		Analysed:     analysed,
+	}
+	for _, f := range files {
+		out.Files = append(out.Files, v1.PackageFile{
+			Path:      f.Path,
+			Component: f.ArtifactRef,
+			SizeBytes: v1.Int64String(strconv.FormatInt(f.SizeBytes, 10)),
+			Digest:    f.Digest,
+			MediaType: f.MediaType,
+		})
+	}
+	WriteJSON(w, r, http.StatusOK, out)
+}
+
 // handleListArtifacts serves
 // GET /api/v1/products/{product}/packages/{package}/artifacts.
 func (s *Server) handleListArtifacts(w http.ResponseWriter, r *http.Request) {

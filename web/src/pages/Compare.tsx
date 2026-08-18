@@ -6,7 +6,8 @@ import { SwapOutlined } from '@ant-design/icons'
 import { useSearchParams } from 'react-router-dom'
 import { useCompare, usePackages, useProduct, useProducts } from '../api/queries'
 import { version } from '../domain/derive'
-import { bytes, formatBytes, formatPercent, UNKNOWN } from '../domain/format'
+import { bytes, formatBytes, formatPercent } from '../domain/format'
+import { Value } from '../components/value'
 import { ErrorState, PageHeader } from '../components/layout'
 import { mono, semantic } from '../theme'
 import type { CompareRow } from '../api/types'
@@ -101,7 +102,7 @@ export default function Compare() {
           width: 120,
           render: (_, r) => <Tag color={CHANGE_COLOUR[r.change] ?? 'default'}>{r.change}</Tag>,
         },
-        { title: 'Size', width: 110, align: 'right', render: (_, r) => formatBytes(r.b?.sizeBytes ?? r.a?.sizeBytes) },
+        { title: 'Size', width: 110, align: 'right', render: (_, r) => <Value>{formatBytes(r.b?.sizeBytes ?? r.a?.sizeBytes)}</Value> },
         {
           title: 'Action',
           width: 90,
@@ -215,8 +216,9 @@ export default function Compare() {
               </Row>
               <Space size={16} style={{ marginTop: 12 }}>
                 <Typography.Text type="secondary">
-                  New {formatPercent(pct(report.added))} · Removed {formatPercent(pct(report.removed))} ·
-                  Changed {formatPercent(pct(report.changed))}
+                  New <Value>{formatPercent(pct(report.added))}</Value> ·
+                  Removed <Value>{formatPercent(pct(report.removed))}</Value> ·
+                  Changed <Value>{formatPercent(pct(report.changed))}</Value>
                 </Typography.Text>
               </Space>
               {report.truncated && (
@@ -238,7 +240,7 @@ export default function Compare() {
                     showInfo={false}
                     strokeColor="#0057B8"
                   />
-                  <Typography.Text>{formatBytes(report.aTotalBytes)}</Typography.Text>
+                  <Typography.Text><Value>{formatBytes(report.aTotalBytes)}</Value></Typography.Text>
                 </div>
                 <div>
                   <Typography.Text type="secondary">{report.b.reference}</Typography.Text>
@@ -251,7 +253,7 @@ export default function Compare() {
                     showInfo={false}
                     strokeColor="#98A2B3"
                   />
-                  <Typography.Text>{formatBytes(report.bTotalBytes)}</Typography.Text>
+                  <Typography.Text><Value>{formatBytes(report.bTotalBytes)}</Value></Typography.Text>
                 </div>
               </Space>
             </Card>
@@ -291,12 +293,12 @@ export default function Compare() {
                     <Space direction="vertical" size={2} style={{ width: '100%' }}>
                       <Typography.Text type="secondary" style={{ fontSize: 12 }}>Digest</Typography.Text>
                       <Typography.Text style={{ fontFamily: mono, fontSize: 11 }}>
-                        {side?.digest ?? UNKNOWN}
+                        <Value>{side?.digest}</Value>
                       </Typography.Text>
                       <Typography.Text type="secondary" style={{ fontSize: 12 }}>Size</Typography.Text>
-                      <Typography.Text>{formatBytes(side?.sizeBytes)}</Typography.Text>
+                      <Typography.Text><Value>{formatBytes(side?.sizeBytes)}</Value></Typography.Text>
                       <Typography.Text type="secondary" style={{ fontSize: 12 }}>Media type</Typography.Text>
-                      <Typography.Text style={{ fontSize: 12 }}>{side?.mediaType ?? UNKNOWN}</Typography.Text>
+                      <Typography.Text style={{ fontSize: 12 }}><Value>{side?.mediaType}</Value></Typography.Text>
                     </Space>
                   </Card>
                 </Col>

@@ -4,6 +4,7 @@ import { DownloadOutlined } from '@ant-design/icons'
 import { Link, useSearchParams } from 'react-router-dom'
 import { useAuditEvents, useProducts } from '../api/queries'
 import { TimeAgo } from '../components/chips'
+import { NA, Value } from '../components/value'
 import { EmptyStateCard, ErrorState, PageHeader } from '../components/layout'
 import { mono } from '../theme'
 import type { AuditEvent } from '../api/types'
@@ -197,7 +198,7 @@ export default function Activity() {
                       {e.subjectId}
                     </Typography.Text>
                   ) : (
-                    <Typography.Text type="secondary">—</Typography.Text>
+                    <NA />
                   ),
               },
               {
@@ -228,19 +229,19 @@ export default function Activity() {
             <Descriptions.Item label="Occurred">{open.occurredAt}</Descriptions.Item>
             <Descriptions.Item label="Actor">{open.actor} ({open.actorKind})</Descriptions.Item>
             <Descriptions.Item label="Outcome">{open.outcome}</Descriptions.Item>
-            <Descriptions.Item label="Product">{open.product || '—'}</Descriptions.Item>
+            <Descriptions.Item label="Product"><Value>{open.product}</Value></Descriptions.Item>
             <Descriptions.Item label="Subject">
-              {open.subjectKind ? `${open.subjectKind} ${open.subjectId ?? ''}` : '—'}
+              <Value>{open.subjectKind ? `${open.subjectKind} ${open.subjectId ?? ''}` : null}</Value>
             </Descriptions.Item>
             <Descriptions.Item label="Request ID">
-              <span style={{ fontFamily: mono, fontSize: 11 }}>{open.requestId || '—'}</span>
+              <span style={{ fontFamily: mono, fontSize: 11 }}><Value>{open.requestId}</Value></span>
             </Descriptions.Item>
             <Descriptions.Item label="Detail">
               {open.detail ? (
                 <pre style={{ fontFamily: mono, fontSize: 11, margin: 0, whiteSpace: 'pre-wrap' }}>
                   {JSON.stringify(open.detail, null, 2)}
                 </pre>
-              ) : '—'}
+              ) : <NA />}
             </Descriptions.Item>
           </Descriptions>
         )}

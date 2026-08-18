@@ -1,7 +1,8 @@
 import { useState } from 'react'
-import { Card, Col, Row, Segmented, Select, Space, Statistic, Table, Tag, Tooltip, Typography } from 'antd'
+import { Card, Col, Row, Segmented, Select, Space, Statistic, Table, Tag, Typography } from 'antd'
 import { useProducts, useReports } from '../api/queries'
-import { bytes, formatBytes, formatCount, formatPercent, formatSpeed, UNKNOWN } from '../domain/format'
+import { bytes, formatBytes, formatCount, formatPercent, formatSpeed } from '../domain/format'
+import { Stat, Value } from '../components/value'
 import { EmptyStateCard, ErrorState, PageHeader } from '../components/layout'
 import { semantic } from '../theme'
 
@@ -92,12 +93,11 @@ export default function Reports() {
             >
               <Row gutter={[16, 16]}>
                 <Col xs={12} md={6}>
-                  <Tooltip title="Measured over downloads whose bytes our workers moved. Downloads performed by the destination registry are excluded, because we did not count those bytes.">
-                    <Statistic
-                      title="Average download speed"
-                      value={totals?.averageBytesPerSecond ? formatSpeed(totals.averageBytesPerSecond) : UNKNOWN}
-                    />
-                  </Tooltip>
+                  <Stat
+                    title="Average download speed"
+                    value={formatSpeed(totals?.averageBytesPerSecond)}
+                    reason="No download whose bytes our workers moved completed in this period. Downloads performed by the destination registry are excluded, because we did not count those bytes."
+                  />
                   {!totals?.averageBytesPerSecond && (
                     <Typography.Text type="secondary" style={{ fontSize: 11 }}>
                       No download we timed completed in this period.
@@ -105,27 +105,28 @@ export default function Reports() {
                   )}
                 </Col>
                 <Col xs={12} md={6}>
-                  <Statistic title="Total data downloaded" value={formatBytes(totals?.bytesTransferred)} />
+                  <Stat title="Total data downloaded" value={formatBytes(totals?.bytesTransferred)} />
                 </Col>
                 <Col xs={12} md={6}>
-                  <Statistic
+                  <Stat
                     title="Saved (already present)"
                     value={formatBytes(totals?.savedBytes)}
                     valueStyle={{ color: semantic.success }}
                   />
                   <Typography.Text type="secondary" style={{ fontSize: 11 }}>
                     {totals?.savedPercent !== undefined
-                      ? `${formatPercent(totals.savedPercent)} of everything in play`
+                      ? `${formatPercent(totals.savedPercent) ?? ''} of everything in play`
                       : 'Nothing was in play to save against.'}
                   </Typography.Text>
                 </Col>
                 <Col xs={12} md={6}>
-                  <Statistic
+                  <Stat
                     title="Success rate"
-                    value={totals?.successRate !== undefined ? formatPercent(totals.successRate * 100) : UNKNOWN}
+                    value={totals?.successRate !== undefined ? formatPercent(totals.successRate * 100) : null}
+                    reason="Nothing settled in this period, so there is no rate to compute."
                   />
                   <Typography.Text type="secondary" style={{ fontSize: 11 }}>
-                    {settled > 0 ? `${formatCount(settled)} downloads settled` : 'Nothing settled in this period.'}
+                    {settled > 0 ? `${formatCount(settled) ?? settled} downloads settled` : 'Nothing settled in this period.'}
                   </Typography.Text>
                 </Col>
               </Row>
@@ -173,10 +174,10 @@ export default function Reports() {
                           />
                         </div>
                         <span style={{ width: 90, textAlign: 'right', fontSize: 12 }}>
-                          {formatBytes(value)}
+                          <Value>{formatBytes(value)}</Value>
                         </span>
                         <span style={{ width: 70, textAlign: 'right', fontSize: 12, color: '#5A6675' }}>
-                          {formatCount(v.downloads)} dl
+                          <Value>{formatCount(v.downloads)}</Value> dl
                         </span>
                       </div>
                     )
@@ -201,7 +202,7 @@ export default function Reports() {
                   columns={[
                     { title: 'Cause', render: (_, c) => <Tag>{c.class}</Tag> },
                     { title: 'Product', width: 110, render: (_, c) => c.product },
-                    { title: 'Artifacts', width: 90, align: 'right', render: (_, c) => formatCount(c.jobs) },
+                    { title: 'Artifacts', width: 90, align: 'right', render: (_, c) => <Value>{formatCount(c.jobs)}</Value> },
                   ]}
                 />
               )}
@@ -218,21 +219,19 @@ export default function Reports() {
                 scroll={{ x: 900 }}
                 columns={[
                   { title: 'Product', fixed: 'left', width: 150, render: (_, p) => p.product },
-                  { title: 'Completed', width: 110, align: 'right', render: (_, p) => formatCount(p.totals.downloadsCompleted) },
-                  { title: 'Failed', width: 90, align: 'right', render: (_, p) => formatCount(p.totals.downloadsFailed) },
-                  { title: 'Promoted', width: 100, align: 'right', render: (_, p) => formatCount(p.totals.promotions) },
-                  { title: 'Downloaded', width: 120, align: 'right', render: (_, p) => formatBytes(p.totals.bytesTransferred) },
-                  { title: 'Saved', width: 120, align: 'right', render: (_, p) => formatBytes(p.totals.savedBytes) },
+                  { title: 'Completed', width: 110, align: 'right', render: (_, p) => <Value>{formatCount(p.totals.downloadsCompleted)}</Value> },
+                  { title: 'Failed', width: 90, align: 'right', render: (_, p) => <Value>{formatCount(p.totals.downloadsFailed)}</Value> },
+                  { title: 'Promoted', width: 100, align: 'right', render: (_, p) => <Value>{formatCount(p.totals.promotions)}</Value> },
+                  { title: 'Downloaded', width: 120, align: 'right', render: (_, p) => <Value>{formatBytes(p.totals.bytesTransferred)}</Value> },
+                  { title: 'Saved', width: 120, align: 'right', render: (_, p) => <Value>{formatBytes(p.totals.savedBytes)}</Value> },
                   {
                     title: 'Avg speed',
                     width: 120,
                     align: 'right',
                     render: (_, p) =>
-                      p.totals.averageBytesPerSecond ? formatSpeed(p.totals.averageBytesPerSecond) : (
-                        <Tooltip title="No download whose bytes we moved completed for this product in this period.">
-                          <Typography.Text type="secondary">{UNKNOWN}</Typography.Text>
-                        </Tooltip>
-                      ),
+                      <Value reason="No download whose bytes we moved completed for this product in this period.">
+                        {formatSpeed(p.totals.averageBytesPerSecond)}
+                      </Value>,
                   },
                 ]}
               />

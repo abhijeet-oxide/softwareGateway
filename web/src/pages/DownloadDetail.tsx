@@ -1,4 +1,4 @@
-import { App, Button, Card, Col, Descriptions, Row, Space, Statistic, Steps, Table, Tag, Tooltip, Typography } from 'antd'
+import { App, Button, Card, Col, Descriptions, Row, Space, Steps, Table, Tag, Tooltip, Typography } from 'antd'
 import { PauseOutlined, PlayCircleOutlined, ReloadOutlined, StopOutlined } from '@ant-design/icons'
 import { useParams } from 'react-router-dom'
 import {
@@ -7,8 +7,9 @@ import {
 import { useCan } from '../auth/permissions'
 import { isLive, transferVersion } from '../domain/derive'
 import {
-  bytes, elapsedSeconds, formatBytes, formatCount, formatDuration, formatSpeed, UNKNOWN,
+  bytes, elapsedSeconds, formatBytes, formatCount, formatDuration, formatSpeed,
 } from '../domain/format'
+import { NA, Stat, Value } from '../components/value'
 import { MeasuredProgress, StateStrip, type StripState } from '../components/progress'
 import { RepoLink, TimeAgo } from '../components/chips'
 import { ErrorState, PageHeader, SavedPanel } from '../components/layout'
@@ -103,15 +104,25 @@ export default function DownloadDetail() {
         meta={
           t && (
             <Space size={16}>
-              <Statistic title="Elapsed" value={formatDuration(elapsed)} valueStyle={{ fontSize: 18 }} />
-              <Statistic
+              <Stat title="Elapsed" value={formatDuration(elapsed)} valueStyle={{ fontSize: 18 }} />
+              <Stat
                 title="ETA"
-                value={eta !== undefined && running ? formatDuration(eta) : UNKNOWN}
+                value={eta !== undefined && running ? formatDuration(eta) : null}
+                reason={
+                  running
+                    ? 'An estimate needs a measured speed and a known amount left to move. One of them is not established yet.'
+                    : 'This download is not running, so there is nothing to estimate.'
+                }
                 valueStyle={{ fontSize: 18 }}
               />
-              <Statistic
+              <Stat
                 title="Speed"
-                value={speed !== undefined && running ? formatSpeed(speed) : UNKNOWN}
+                value={speed !== undefined && running ? formatSpeed(speed) : null}
+                reason={
+                  running
+                    ? 'No bytes have been moved yet, so there is no rate to report.'
+                    : 'This download is not running, so there is no current speed.'
+                }
                 valueStyle={{ fontSize: 18 }}
               />
             </Space>
@@ -185,13 +196,13 @@ export default function DownloadDetail() {
                   rowKey={(c) => c.kind}
                   columns={[
                     { title: 'Type', render: (_, c) => c.kind },
-                    { title: 'Total', align: 'right', width: 80, render: (_, c) => formatCount(c.total) },
-                    { title: 'Copied', align: 'right', width: 80, render: (_, c) => formatCount(c.copied) },
+                    { title: 'Total', align: 'right', width: 80, render: (_, c) => <Value>{formatCount(c.total)}</Value> },
+                    { title: 'Copied', align: 'right', width: 80, render: (_, c) => <Value>{formatCount(c.copied)}</Value> },
                     {
                       title: 'Already present',
                       align: 'right',
                       width: 130,
-                      render: (_, c) => formatCount(c.present),
+                      render: (_, c) => <Value>{formatCount(c.present)}</Value>,
                     },
                     {
                       title: 'Progress',
@@ -210,8 +221,8 @@ export default function DownloadDetail() {
 
                 {saved !== undefined && saved > 0 && (
                   <SavedPanel
-                    savedBytes={formatBytes(saved)}
-                    totalBytes={content ? formatBytes(content) : undefined}
+                    savedBytes={formatBytes(saved) ?? ''}
+                    totalBytes={formatBytes(content) ?? undefined}
                   />
                 )}
               </Space>
@@ -241,7 +252,7 @@ export default function DownloadDetail() {
                 />
                 {lastSync?.itemsSynced !== undefined && (
                   <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-                    Quay reported {formatCount(lastSync.itemsSynced)} items synced.
+                    Quay reported <Value>{formatCount(lastSync.itemsSynced)}</Value> items synced.
                   </Typography.Text>
                 )}
               </Space>
@@ -256,7 +267,7 @@ export default function DownloadDetail() {
                   rowKey={(f) => f.message}
                   columns={[
                     { title: 'Cause', render: (_, f) => f.message },
-                    { title: 'Artifacts', align: 'right', width: 90, render: (_, f) => formatCount(f.failed) },
+                    { title: 'Artifacts', align: 'right', width: 90, render: (_, f) => <Value>{formatCount(f.failed)}</Value> },
                     {
                       title: 'Retryable',
                       width: 110,
@@ -274,19 +285,23 @@ export default function DownloadDetail() {
           <Card title="Download Summary">
             <Descriptions column={1} size="small">
               <Descriptions.Item label="Total size">
-                {content ? formatBytes(content) : UNKNOWN}
+                <Value reason="The release has not been measured, so its full size is not known.">
+                  {formatBytes(content)}
+                </Value>
               </Descriptions.Item>
-              <Descriptions.Item label="Downloaded">{formatBytes(transferred)}</Descriptions.Item>
+              <Descriptions.Item label="Downloaded">
+                <Value>{formatBytes(transferred)}</Value>
+              </Descriptions.Item>
               <Descriptions.Item label="Saved (already present)">
-                {saved !== undefined ? formatBytes(saved) : UNKNOWN}
+                <Value>{formatBytes(saved)}</Value>
               </Descriptions.Item>
-              <Descriptions.Item label="Total time">{formatDuration(elapsed)}</Descriptions.Item>
+              <Descriptions.Item label="Total time">
+                <Value>{formatDuration(elapsed)}</Value>
+              </Descriptions.Item>
               <Descriptions.Item label="Average speed">
-                {speed !== undefined ? formatSpeed(speed) : (
-                  <Tooltip title="A speed needs bytes we moved and a duration we timed. One of them is missing.">
-                    <Typography.Text type="secondary">{UNKNOWN}</Typography.Text>
-                  </Tooltip>
-                )}
+                <Value reason="A speed needs bytes we moved and a duration we timed. One of them is missing.">
+                  {formatSpeed(speed)}
+                </Value>
               </Descriptions.Item>
               <Descriptions.Item label="Started"><TimeAgo at={t?.startedAt} /></Descriptions.Item>
               <Descriptions.Item label="Completed"><TimeAgo at={t?.completedAt} /></Descriptions.Item>
@@ -298,12 +313,12 @@ export default function DownloadDetail() {
                       : 'The destination registry moved these bytes. We did not count them, so no byte figure is shown.'
                   }
                 >
-                  <Tag>{t?.strategy ?? UNKNOWN}</Tag>
+                  {t?.strategy ? <Tag>{t.strategy}</Tag> : <NA />}
                 </Tooltip>
               </Descriptions.Item>
               <Descriptions.Item label="Reference">
                 <Typography.Text style={{ fontFamily: mono, fontSize: 11 }} copyable>
-                  {t?.id ?? UNKNOWN}
+                  <Value>{t?.id}</Value>
                 </Typography.Text>
               </Descriptions.Item>
             </Descriptions>
@@ -328,7 +343,7 @@ export default function DownloadDetail() {
                     />
                   ))}
                 {!product.data.targets.some((target) => target.name === t?.targetName) && (
-                  <Typography.Text type="secondary">{t?.targetName ?? UNKNOWN}</Typography.Text>
+                  <Value>{t?.targetName}</Value>
                 )}
               </Space>
             )}

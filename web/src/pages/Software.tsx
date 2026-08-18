@@ -1,12 +1,13 @@
 import { useMemo } from 'react'
-import { Button, Card, Select, Space, Table, Tooltip, Typography } from 'antd'
+import { Button, Card, Select, Space, Table } from 'antd'
 import { Link, useSearchParams } from 'react-router-dom'
 import { usePackages, useProducts, useTransfers } from '../api/queries'
 import {
   deriveLocations, deriveStatus, downloadSeconds, transferIndex, verification, version,
   withTransfers,
 } from '../domain/derive'
-import { formatDuration, UNKNOWN } from '../domain/format'
+import { formatDuration } from '../domain/format'
+import { Value } from '../components/value'
 import {
   LocationChip, ProductChip, StatusBadge, TimeAgo, VerificationBadge, VersionChip,
 } from '../components/chips'
@@ -150,8 +151,8 @@ export default function Software() {
                 render: (_, r) => {
                   const s = downloadSeconds(r.pkg)
                   return s === undefined
-                    ? <Tooltip title="This release has not been downloaded."><Typography.Text type="secondary">{UNKNOWN}</Typography.Text></Tooltip>
-                    : formatDuration(s)
+                    ? <Value reason="This release has not been downloaded.">{null}</Value>
+                    : <Value>{formatDuration(s)}</Value>
                 },
               },
               {

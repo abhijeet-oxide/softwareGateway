@@ -496,32 +496,109 @@ export interface CompareResponse {
 // Discovery
 // ---------------------------------------------------------------------------
 
+/**
+ * What one source is doing, and what it last did.
+ *
+ * The richest thing this API serves and the reason the Overview can show a
+ * discovery in flight rather than a spinner: phase, repositories, tags,
+ * artifacts and new packages all move while a scan runs.
+ */
 export interface DiscoverySourceState {
+  product: string
   source: string
-  running: boolean
-  lastStartedAt?: string
-  lastCompletedAt?: string
+
+  /** Whether a scan is in flight right now. */
+  scanning: boolean
+  /** ENUMERATING_REPOSITORIES, LISTING_TAGS or RESOLVING_TAGS. Empty when idle. */
+  phase?: string
+  elapsedMs?: number
+
+  /**
+   * Zero until enumeration finishes — which itself says the scan is still
+   * waiting on the registry's catalog, and is worth showing as its own state
+   * rather than as 0%.
+   */
+  repositoriesTotal?: number
+  repositoriesDone?: number
+  /** Without this, a concurrent scan looks stalled for its first minute. */
+  repositoriesInFlight?: number
+  currentRepository?: string
+  tagsTotal?: number
+  tagsResolved?: number
+  /** Manifests fetched. On a large artifact tree this is the only counter that moves. */
+  artifacts?: number
+  newPackages?: number
+  errors?: number
+
+  /** The last COMPLETED scan. */
+  lastRunAt?: string
   lastError?: string
-  repositoriesScanned?: number
-  packagesFound?: number
+  lastRepositories?: number
+  lastTagsListed?: number
+  lastNewPackages?: number
+  lastDurationMs?: number
+  /** How often this source is polled when nobody asks. */
+  intervalSeconds?: number
 }
 
 export interface DiscoveryStatusResponse {
-  product: string
+  /** Discovery runs on the leader only; a follower answers false rather than erroring. */
   running: boolean
   sources: DiscoverySourceState[]
 }
 
-export interface DiscoverPackagesResponse {
-  product: string
-  discovered: number
-  superseded?: number
-  scanned?: number
-  issues?: { source: string; message: string }[]
+export interface ScanIssue {
+  repository?: string
+  tag?: string
+  displayRepository?: string
+  displayTag?: string
+  /** `not_entitled` is the entitlement check working, not a fault. Empty is an ordinary failure. */
+  class?: string
+  message?: string
 }
 
-export interface DiscoverAllProduct { product: string; started: boolean; alreadyRunning?: boolean; error?: string }
-export interface DiscoverAllResponse { products: DiscoverAllProduct[]; started: number; alreadyRunning: number }
+/** Reports what a triggered scan did, or that it started. */
+export interface DiscoverPackagesResponse {
+  repositories: number
+  repositoriesFromCatalog?: number
+  repositoriesFiltered?: number
+  tagsListed: number
+  tagsAdmitted: number
+  /** Genuinely new packages. Zero on a re-scan is the expected, correct result. */
+  packagesDiscovered: number
+  superseded: number
+  requestsCreated: number
+  renamed?: number
+  regrouped?: number
+  durationMs: number
+  tagErrors?: ScanIssue[]
+  repositoryErrors?: string[]
+  /** A scan was already running, so these numbers come from that one. */
+  collapsed?: boolean
+  /** Set instead of the counters when the caller asked not to wait. */
+  started?: DiscoverStarted
+}
+
+export interface DiscoverStarted {
+  /** How many sources began a NEW scan. */
+  sources: number
+  /** How many were already scanning and were left alone. A different fact. */
+  alreadyRunning?: number
+}
+
+export interface DiscoverAllProduct {
+  product: string
+  sources: number
+  alreadyRunning?: number
+  /** Per product rather than failing the call: one broken source must not stop thirty. */
+  error?: string
+}
+
+export interface DiscoverAllResponse {
+  started: number
+  alreadyRunning?: number
+  products: DiscoverAllProduct[]
+}
 
 export interface UnavailablePackage {
   repository: string

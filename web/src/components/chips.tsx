@@ -6,6 +6,7 @@ import {
   ShopOutlined, DeploymentUnitOutlined,
 } from '@ant-design/icons'
 import { Link } from 'react-router-dom'
+import { NA } from './value'
 import type { SoftwareStatus, VerificationState, Location } from '../domain/derive'
 import { formatAbsolute, formatRelative } from '../domain/format'
 import { mono, semantic } from '../theme'
@@ -113,7 +114,7 @@ const LOCATION_ICON = {
  */
 export function LocationChip({ locations }: { locations: Location[] }) {
   if (locations.length === 0) {
-    return <Typography.Text type="secondary">—</Typography.Text>
+    return <NA reason="This release has not been recorded in any location yet." />
   }
 
   // Once a release has been downloaded, where it CAME from is no longer the
@@ -147,7 +148,7 @@ export function LocationChip({ locations }: { locations: Location[] }) {
 
 /** A monospace URL that opens in a new tab. */
 export function RepoLink({ url, label }: { url?: string; label?: string }) {
-  if (!url) return <Typography.Text type="secondary">—</Typography.Text>
+  if (!url) return <NA reason="This repository declares no address we can link to." />
   return (
     <a href={url} target="_blank" rel="noreferrer" style={{ fontFamily: mono, fontSize: 13 }}>
       {label ?? url.replace(/^https?:\/\//, '')} <ExportOutlined style={{ fontSize: 10 }} />
@@ -157,7 +158,7 @@ export function RepoLink({ url, label }: { url?: string; label?: string }) {
 
 /** Relative time, with the absolute form on hover. */
 export function TimeAgo({ at }: { at?: string | null }) {
-  if (!at) return <Typography.Text type="secondary">—</Typography.Text>
+  if (!at) return <NA />
   return (
     <Tooltip title={formatAbsolute(at)}>
       <span>{formatRelative(at)}</span>

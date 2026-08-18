@@ -1,14 +1,15 @@
 import { useMemo } from 'react'
-import { Button, Card, Col, Row, Space, Statistic, Table, Tooltip, Typography } from 'antd'
-import { CloudDownloadOutlined, PlayCircleOutlined } from '@ant-design/icons'
+import { Button, Card, Col, Row, Space, Statistic, Table, Typography } from 'antd'
+import { CloudDownloadOutlined } from '@ant-design/icons'
 import { Link, useNavigate } from 'react-router-dom'
-import { useProducts, usePackages, useReports, useRunDiscovery, useTransfers } from '../api/queries'
-import { useCan } from '../auth/permissions'
+import { useProducts, usePackages, useReports, useTransfers } from '../api/queries'
 import {
   deriveLocations, deriveStatus, downloadSeconds, transferIndex, verification, version,
   withTransfers, type SoftwareStatus,
 } from '../domain/derive'
-import { formatBytes, formatCount, formatDuration, formatSpeed, UNKNOWN } from '../domain/format'
+import { formatBytes, formatCount, formatDuration, formatSpeed } from '../domain/format'
+import { Stat, Value } from '../components/value'
+import { DiscoveryPanel } from '../components/discovery'
 import {
   LocationChip, ProductChip, StatusBadge, TimeAgo, VerificationBadge, VersionChip,
 } from '../components/chips'
@@ -34,9 +35,6 @@ interface Row {
 
 export default function Overview() {
   const navigate = useNavigate()
-  const mayOperate = useCan('operate')
-  const discover = useRunDiscovery()
-
   const products = useProducts()
   const productList = products.data?.products ?? []
 
@@ -131,22 +129,13 @@ export default function Overview() {
       <PageHeader
         title="Overview"
         description="Track and manage software from vendor to production"
-        extra={
-          <Tooltip title={mayOperate ? undefined : 'You do not have permission to run discovery.'}>
-            <Button
-              type="primary"
-              icon={<PlayCircleOutlined />}
-              disabled={!mayOperate}
-              loading={discover.isPending}
-              onClick={() => discover.mutate(undefined)}
-            >
-              Run Discovery
-            </Button>
-          </Tooltip>
-        }
       />
 
       <AttentionBand items={attention} />
+
+      <div style={{ marginBottom: 16 }}>
+        <DiscoveryPanel products={productList} />
+      </div>
 
       <Row gutter={[16, 16]} style={{ marginBottom: 16 }}>
         {[
@@ -180,17 +169,8 @@ export default function Overview() {
               <div style={{ padding: 24 }}>
                 <EmptyStateCard
                   title="No software discovered yet"
-                  explanation="Discovery polls the vendor registries on a schedule. Run it now to look immediately."
-                  action={
-                    <Button
-                      type="primary"
-                      disabled={!mayOperate}
-                      loading={discover.isPending}
-                      onClick={() => discover.mutate(undefined)}
-                    >
-                      Run Discovery
-                    </Button>
-                  }
+                  explanation="Discovery polls the vendor registries on a schedule. Run it from the panel above to look immediately — its progress is reported there."
+                  action={<Link to="/products"><Button>View products</Button></Link>}
                 />
               </div>
             ) : (
@@ -240,12 +220,10 @@ export default function Overview() {
                     width: 120,
                     render: (_, r) => {
                       const s = downloadSeconds(r.pkg)
-                      return s === undefined ? (
-                        <Tooltip title="This release has not been downloaded, so there is no time to report.">
-                          <Typography.Text type="secondary">{UNKNOWN}</Typography.Text>
-                        </Tooltip>
-                      ) : (
-                        formatDuration(s)
+                      return (
+                        <Value reason="This release has not been downloaded, so there is no time to report.">
+                          {formatDuration(s)}
+                        </Value>
                       )
                     },
                   },
@@ -289,7 +267,7 @@ export default function Overview() {
                   {
                     title: 'Targets',
                     align: 'right',
-                    render: (_, p) => formatCount(p.targets?.length ?? 0),
+                    render: (_, p) => <Value>{formatCount(p.targets?.length ?? 0)}</Value>,
                   },
                   {
                     title: 'Auto-download',
@@ -306,14 +284,10 @@ export default function Overview() {
               </Typography.Text>
               <Row gutter={16} style={{ marginTop: 12 }}>
                 <Col span={12}>
-                  <Statistic
+                  <Stat
                     title="Average download speed"
-                    value={
-                      totals?.averageBytesPerSecond
-                        ? formatSpeed(totals.averageBytesPerSecond)
-                        : UNKNOWN
-                    }
-                    loading={reports.isLoading}
+                    value={formatSpeed(totals?.averageBytesPerSecond)}
+                    reason="No download whose bytes we moved completed in this period."
                   />
                   {!totals?.averageBytesPerSecond && !reports.isLoading && (
                     <Typography.Text type="secondary" style={{ fontSize: 11 }}>
@@ -322,10 +296,9 @@ export default function Overview() {
                   )}
                 </Col>
                 <Col span={12}>
-                  <Statistic
+                  <Stat
                     title="Total data downloaded"
                     value={formatBytes(totals?.bytesTransferred)}
-                    loading={reports.isLoading}
                   />
                 </Col>
               </Row>

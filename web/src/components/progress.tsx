@@ -3,7 +3,8 @@ import {
   CheckCircleFilled, ClockCircleOutlined, CloseCircleFilled, SyncOutlined,
 } from '@ant-design/icons'
 import type { Strategy } from '../api/types'
-import { formatBytes, formatSpeed, formatAbsolute, UNKNOWN } from '../domain/format'
+import { formatBytes, formatSpeed, formatAbsolute } from '../domain/format'
+import { NA } from './value'
 import { semantic } from '../theme'
 
 /**
@@ -48,16 +49,12 @@ export function MeasuredProgress({
     // Not a fallback — a refusal. A caller reaching here has asked for a bar
     // over work whose bytes nobody counted.
     return (
-      <Tooltip title="This work is performed by the destination registry, so there are no bytes for us to count. Its state is shown instead.">
-        <Typography.Text type="secondary">{UNKNOWN}</Typography.Text>
-      </Tooltip>
+      <NA reason="This work is performed by the destination registry, so there are no bytes for us to count. Its state is shown instead." />
     )
   }
   if (transferred === undefined || total === undefined || total <= 0) {
     return (
-      <Tooltip title="The size of this work has not been established yet, so there is no percentage to show.">
-        <Typography.Text type="secondary">{UNKNOWN}</Typography.Text>
-      </Tooltip>
+      <NA reason="The size of this work has not been established yet, so there is no percentage to show." />
     )
   }
 
@@ -126,7 +123,7 @@ export function StateStrip({ state, label, events = [], message }: StripProps) {
               <Tag color={e.at ? 'default' : undefined} style={{ marginInlineEnd: 0 }}>
                 {e.label}: {e.at ? new Date(e.at).toLocaleTimeString('en-GB', {
                   hour: '2-digit', minute: '2-digit',
-                }) : UNKNOWN}
+                }) : <NA />}
               </Tag>
             </Tooltip>
           ))}

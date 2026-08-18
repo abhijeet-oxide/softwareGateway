@@ -82,6 +82,59 @@ export function MeasuredProgress({
   )
 }
 
+/**
+ * A download's progress in ONE CELL: how far, how long, how much longer.
+ *
+ * The three belong together. A bar alone says how far without saying whether
+ * that took a minute or an afternoon; an elapsed column alone says how long
+ * without saying how far. And the number an operator actually wants — when it
+ * will be done — is the one that is never on screen, because it is the only
+ * one of the three that has to be derived.
+ *
+ * The ETA is derived HONESTLY or not at all: bytes we moved, over the time we
+ * spent moving them, applied to what is left. It is absent for a settled
+ * download (there is nothing left), for a delegated one (the bytes were not
+ * ours to count), and while nothing has moved yet (a rate from a zero
+ * numerator is a guess wearing a number's clothes).
+ */
+export function DownloadProgress({
+  transferred, total, strategy = 'copy', elapsedSeconds, live,
+}: {
+  transferred: number | undefined
+  total: number | undefined
+  strategy?: Strategy
+  /** Seconds spent moving bytes so far. */
+  elapsedSeconds: number | undefined
+  /** Whether this download is still going. */
+  live: boolean
+}) {
+  const speed = elapsedSeconds && transferred && elapsedSeconds > 0
+    ? transferred / elapsedSeconds
+    : undefined
+  const remaining = total !== undefined && transferred !== undefined
+    ? Math.max(0, total - transferred)
+    : undefined
+  const eta = live && speed && remaining !== undefined && remaining > 0
+    ? remaining / speed
+    : undefined
+
+  return (
+    <div style={{ minWidth: 180 }}>
+      <MeasuredProgress
+        transferred={transferred}
+        total={total}
+        strategy={strategy}
+        showText={false}
+      />
+      <Typography.Text type="secondary" style={{ fontSize: 11 }}>
+        {formatDuration(elapsedSeconds) ?? 'not started'} elapsed
+        {eta !== undefined ? ` · ~${formatDuration(eta)} left` : ''}
+        {live && eta === undefined && strategy === 'copy' ? ' · estimating…' : ''}
+      </Typography.Text>
+    </div>
+  )
+}
+
 export type StripState = 'pending' | 'running' | 'done' | 'failed'
 
 interface StripProps {

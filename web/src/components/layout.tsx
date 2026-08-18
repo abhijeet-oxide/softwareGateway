@@ -3,8 +3,8 @@ import {
   Alert, Button, Card, Empty, Input, Popover, Space, Steps, Tag, Timeline, Tooltip, Typography,
 } from 'antd'
 import {
-  CheckCircleOutlined, ClockCircleOutlined, LoadingOutlined, RocketOutlined, SearchOutlined,
-  ShopOutlined,
+  ArrowLeftOutlined, CheckCircleOutlined, ClockCircleOutlined, LoadingOutlined, RocketOutlined,
+  SearchOutlined, ShopOutlined,
 } from '@ant-design/icons'
 import { Link } from 'react-router-dom'
 import type { LifecycleStep } from '../domain/derive'
@@ -24,12 +24,21 @@ import { NA } from './value'
  */
 
 export function PageHeader({
-  title, description, extra, meta,
+  title, description, extra, meta, back,
 }: {
   title: string
   description: string
   extra?: ReactNode
   meta?: ReactNode
+  /**
+   * Where a drill-down came from.
+   *
+   * Detail pages are reached from a list and have no nav entry of their own, so
+   * without this the only way back is the browser button — and a page opened
+   * from a link has no back to press. One link, above the title, naming the
+   * list rather than saying "back".
+   */
+  back?: { to: string; label: string }
 }) {
   return (
     <div
@@ -39,6 +48,12 @@ export function PageHeader({
       }}
     >
       <div>
+        {back && (
+          <Link to={back.to} style={{ fontSize: 13 }}>
+            <ArrowLeftOutlined style={{ fontSize: 11, marginInlineEnd: 6 }} />
+            {back.label}
+          </Link>
+        )}
         <Typography.Title level={3} style={{ margin: 0 }}>{title}</Typography.Title>
         <Typography.Text type="secondary">{description}</Typography.Text>
       </div>

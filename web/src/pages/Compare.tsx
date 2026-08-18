@@ -222,7 +222,7 @@ export default function Compare() {
   if (products.isError) {
     return (
       <>
-        <PageHeader title="Compare Software" description="What is different between two versions or locations" />
+        <PageHeader title="Compare packages" description="What is different between two versions or locations" />
         <ErrorState error={products.error} retry={() => void products.refetch()} />
       </>
     )
@@ -231,7 +231,7 @@ export default function Compare() {
   return (
     <>
       <PageHeader
-        title="Compare Software"
+        title="Compare packages"
         description="What is different between two versions or locations of the same software"
       />
 

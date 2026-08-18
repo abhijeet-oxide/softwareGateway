@@ -1,5 +1,5 @@
 import {
-  Alert, Button, Card, Col, Descriptions, Row, Select, Space, Steps, Table, Tag, Tooltip, Typography,
+  Alert, Card, Col, Descriptions, Row, Select, Space, Steps, Table, Tag, Tooltip, Typography,
 } from 'antd'
 import { LoadingOutlined } from '@ant-design/icons'
 import { useState } from 'react'
@@ -7,7 +7,7 @@ import { useNavigate, useParams } from 'react-router-dom'
 import {
   useReplication, useSyncs, useTransfer, useTransferFailures, useTransferJobs,
 } from '../api/queries'
-import { isLive, kindName, transferVersion } from '../domain/derive'
+import { isLive, kindName, repositoryOf, transferVersion } from '../domain/derive'
 import {
   bytes, elapsedSeconds, formatBytes, formatCount, formatDuration, formatSpeed,
 } from '../domain/format'
@@ -55,8 +55,7 @@ import type { Job } from '../api/types'
  */
 function JobsPanel({ transferId, hasFailures }: { transferId: string; hasFailures: boolean }) {
   const [state, setState] = useState<string | undefined>(hasFailures ? 'failed' : 'leased')
-  const [open, setOpen] = useState(false)
-  const jobs = useTransferJobs(open ? transferId : undefined, state)
+  const jobs = useTransferJobs(transferId, state)
   const rows = jobs.data?.jobs ?? []
 
   return (
@@ -64,6 +63,9 @@ function JobsPanel({ transferId, hasFailures }: { transferId: string; hasFailure
       title="Jobs"
       extra={
         <Space>
+          <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+            {rows.length} shown
+          </Typography.Text>
           <Select
             size="small"
             style={{ minWidth: 170 }}
@@ -79,19 +81,10 @@ function JobsPanel({ transferId, hasFailures }: { transferId: string; hasFailure
               { value: 'all', label: 'Every job' },
             ]}
           />
-          <Button size="small" onClick={() => setOpen((v) => !v)}>
-            {open ? 'Hide' : 'Show jobs'}
-          </Button>
         </Space>
       }
     >
-      {!open ? (
-        <Typography.Text type="secondary" style={{ fontSize: 13 }}>
-          One row per blob or manifest this download moves — which one is running, which failed, on
-          which attempt, and which worker is holding it.
-        </Typography.Text>
-      ) : (
-        <Table<Job>
+      <Table<Job>
           size="small"
           loading={jobs.isLoading}
           dataSource={rows}
@@ -186,8 +179,7 @@ function JobsPanel({ transferId, hasFailures }: { transferId: string; hasFailure
               render: (_, j) => <Value>{formatBytes(bytes(j.bytesTransferred))}</Value>,
             },
           ]}
-        />
-      )}
+      />
     </Card>
   )
 }
@@ -330,10 +322,13 @@ export default function DownloadDetail() {
   return (
     <>
       <PageHeader
-        // Not "Downloading …": this page outlives the download, and a
-        // finished one titled in the present tense reads as still running.
-        // The state tag below says which it is.
-        title={t ? `${t.product} ${transferVersion(t)}` : 'Download'}
+        back={{ to: '/downloads', label: 'All downloads' }}
+        // All three names, because none of them identifies the download on its
+        // own: a product has many packages, and one version tag exists in
+        // every repository the product watches. Not "Downloading …" either —
+        // this page outlives the download, and the present tense on a finished
+        // one reads as still running. The state tag below says which it is.
+        title={t ? `${t.product} · ${repositoryOf(t.source)} · ${transferVersion(t)}` : 'Download'}
         description="What happened to this release, and what it cost"
         meta={
           t && (
@@ -500,11 +495,9 @@ export default function DownloadDetail() {
               </Card>
             )}
 
-            {t && <JobsPanel transferId={t.id} hasFailures={Boolean(failures.data?.failures?.length)} />}
-
             {failures.data?.failures?.length ? (
               <Card
-                title="What failed"
+                title="Failures"
                 styles={{ header: { color: '#C4262E' } }}
                 // The retry belongs NEXT TO the failures, not only in the
                 // header: this is where somebody is reading when they decide
@@ -557,29 +550,28 @@ export default function DownloadDetail() {
                   {formatSpeed(speed)}
                 </Value>
               </Descriptions.Item>
+              <Descriptions.Item label="Started"><TimeAgo at={t?.startedAt} /></Descriptions.Item>
+              <Descriptions.Item label="Completed"><TimeAgo at={t?.completedAt} /></Descriptions.Item>
+              <Descriptions.Item label="Priority">
+                {t ? <PriorityControl transfer={t} /> : <NA />}
+              </Descriptions.Item>
               {/*
-                Where it came FROM and where it went TO, in the summary rather
-                than in a panel of their own. They are the two facts a reader
-                checks first when a download looks wrong — the right version
-                from the wrong repository, or the right content at the wrong
-                destination, both read as "it worked" everywhere else.
+                Where it came FROM and where it went TO, at the foot of the
+                summary. They are the two facts a reader checks when a download
+                looks wrong — the right version from the wrong repository, or
+                the right content at the wrong destination, both of which read
+                as success everywhere else — and both are links, because the
+                next thing anybody does with either is go and look.
               */}
               <Descriptions.Item label="From">
-                <Tooltip title={t?.source}>
-                  <span style={{ fontFamily: mono, fontSize: 12 }}>
-                    <Value>{t?.sourceName || t?.source}</Value>
-                  </span>
-                </Tooltip>
+                {t?.source
+                  ? <RepoLink url={`https://${t.source}`} label={t.sourceName || repositoryOf(t.source)} />
+                  : <NA />}
               </Descriptions.Item>
               <Descriptions.Item label="Target">
                 {t?.target
                   ? <RepoLink url={`https://${t.target}`} label={t.targetName || t.target} />
                   : <NA />}
-              </Descriptions.Item>
-              <Descriptions.Item label="Started"><TimeAgo at={t?.startedAt} /></Descriptions.Item>
-              <Descriptions.Item label="Completed"><TimeAgo at={t?.completedAt} /></Descriptions.Item>
-              <Descriptions.Item label="Priority">
-                {t ? <PriorityControl transfer={t} /> : <NA />}
               </Descriptions.Item>
               <Descriptions.Item label="Reference">
                 <Typography.Text style={{ fontFamily: mono, fontSize: 11 }} copyable>
@@ -591,6 +583,18 @@ export default function DownloadDetail() {
           </Card>
         </Col>
       </Row>
+
+      {/*
+        Full width, below both columns. A job list is nine columns of its own
+        and was being asked to share half a page with the progress panel — at
+        which point the error column, the one somebody opened it for, was
+        three words wide.
+      */}
+      {t && (
+        <div style={{ marginTop: 16 }}>
+          <JobsPanel transferId={t.id} hasFailures={Boolean(failures.data?.failures?.length)} />
+        </div>
+      )}
     </>
   )
 }

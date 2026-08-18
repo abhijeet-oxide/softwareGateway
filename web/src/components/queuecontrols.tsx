@@ -206,20 +206,28 @@ export function PriorityControl({
   }
 
   if (!editing) {
+    // The NUMBER is the control. A "Change" button beside every value made a
+    // one-field edit look like a form, and doubled the width of a column whose
+    // content is at most four characters.
     return (
-      <Space size={6}>
-        <Tooltip title="0-1000, higher runs first. The default is 50, and downloads of equal priority run oldest first.">
-          <span>{transfer.priority}</span>
-        </Tooltip>
-        {!settled && mayOperate && (
-          <Button type="link" size="small" style={{ padding: 0 }} onClick={() => {
+      <Tooltip
+        title={
+          settled || !mayOperate
+            ? '0-1000, higher runs first. The default is 50, and downloads of equal priority run oldest first.'
+            : 'Click to change. 0-1000, higher runs first; applies to work not yet started.'
+        }
+      >
+        <Typography.Link
+          disabled={settled || !mayOperate}
+          onClick={() => {
             setValue(transfer.priority)
             setEditing(true)
-          }}>
-            Change
-          </Button>
-        )}
-      </Space>
+          }}
+          style={{ fontVariantNumeric: 'tabular-nums' }}
+        >
+          {transfer.priority}
+        </Typography.Link>
+      </Tooltip>
     )
   }
 

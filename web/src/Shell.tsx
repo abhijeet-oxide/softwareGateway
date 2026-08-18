@@ -2,9 +2,10 @@ import type { ReactNode } from 'react'
 import { Avatar, Badge, Button, Layout, Menu, Space, Tooltip, Typography } from 'antd'
 import {
   AppstoreOutlined, BarChartOutlined, BellOutlined, CloudDownloadOutlined,
-  DatabaseOutlined, FileTextOutlined, HistoryOutlined, HomeOutlined,
+  DatabaseOutlined, HistoryOutlined, HomeOutlined,
   QuestionCircleOutlined, SettingOutlined,
 } from '@ant-design/icons'
+import { Icon, PackageIcon } from './components/icons'
 import { useLocation, useNavigate } from 'react-router-dom'
 import { useIdentity } from './auth/permissions'
 import { useTransfers } from './api/queries'
@@ -25,7 +26,9 @@ const NAV = [
   // published, which is what a package IS. "Software" is the whole subject of
   // the tool and names nothing in particular. The ROUTE keeps its old spelling
   // so links already shared still open.
-  { key: '/software', icon: <FileTextOutlined />, label: 'Packages' },
+  // The same mark the pages use for a package, so the nav entry and the thing
+  // it leads to are recognisably one idea.
+  { key: '/packages', icon: <Icon as={PackageIcon} size={16} title="Packages" />, label: 'Packages' },
   { key: '/downloads', icon: <CloudDownloadOutlined />, label: 'Downloads' },
   { key: '/repositories', icon: <DatabaseOutlined />, label: 'Repositories' },
   { key: '/activity', icon: <HistoryOutlined />, label: 'Activity' },

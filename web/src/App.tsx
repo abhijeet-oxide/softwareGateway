@@ -1,5 +1,5 @@
 import { Suspense, lazy } from 'react'
-import { Navigate, Route, Routes } from 'react-router-dom'
+import { Navigate, Route, Routes, useParams, useSearchParams } from 'react-router-dom'
 import { Spin } from 'antd'
 import { Shell } from './Shell'
 
@@ -13,8 +13,8 @@ import { Shell } from './Shell'
 
 const Overview = lazy(() => import('./pages/Overview'))
 const Products = lazy(() => import('./pages/Products'))
-const Software = lazy(() => import('./pages/Software'))
-const SoftwareDetail = lazy(() => import('./pages/SoftwareDetail'))
+const Packages = lazy(() => import('./pages/Packages'))
+const PackageDetail = lazy(() => import('./pages/PackageDetail'))
 const DownloadDetail = lazy(() => import('./pages/DownloadDetail'))
 const Downloads = lazy(() => import('./pages/Downloads'))
 const Compare = lazy(() => import('./pages/Compare'))
@@ -22,6 +22,20 @@ const Repositories = lazy(() => import('./pages/Repositories'))
 const Activity = lazy(() => import('./pages/Activity'))
 const Reports = lazy(() => import('./pages/Reports'))
 const Settings = lazy(() => import('./pages/Settings'))
+
+/** Carries a bookmarked /software/{product}/{reference} onto /packages. */
+function LegacyPackageRedirect() {
+  const { product, reference } = useParams()
+  const [params] = useSearchParams()
+  const query = params.toString()
+  return (
+    <Navigate
+      replace
+      to={`/packages/${encodeURIComponent(product ?? '')}/${encodeURIComponent(reference ?? '')}` +
+          (query ? `?${query}` : '')}
+    />
+  )
+}
 
 export function App() {
   return (
@@ -31,8 +45,15 @@ export function App() {
           <Route path="/" element={<Overview />} />
           <Route path="/products" element={<Products />} />
           <Route path="/products/:product" element={<Products />} />
-          <Route path="/software" element={<Software />} />
-          <Route path="/software/:product/:reference" element={<SoftwareDetail />} />
+          <Route path="/packages" element={<Packages />} />
+          <Route path="/packages/:product/:reference" element={<PackageDetail />} />
+          {/*
+            The old spelling. Links to it exist in chat threads and tickets, so
+            it redirects rather than 404ing — and it redirects to the same path
+            under the new name so a deep link to one release still lands on it.
+          */}
+          <Route path="/software" element={<Navigate to="/packages" replace />} />
+          <Route path="/software/:product/:reference" element={<LegacyPackageRedirect />} />
           <Route path="/downloads" element={<Downloads />} />
           <Route path="/downloads/:transferId" element={<DownloadDetail />} />
           <Route path="/compare" element={<Compare />} />

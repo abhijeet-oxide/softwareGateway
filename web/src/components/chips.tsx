@@ -4,7 +4,7 @@ import {
   CheckCircleOutlined, ExportOutlined, ExclamationCircleOutlined,
   CloseCircleOutlined, LoadingOutlined, QuestionCircleOutlined,
 } from '@ant-design/icons'
-import { Icon, locationIcon, repositoryIcon, PackageIcon } from './icons'
+import { Icon, locationIcon, repositoryIcon } from './icons'
 import { Link } from 'react-router-dom'
 import { NA } from './value'
 import { releaseHref, type SoftwareStatus, type VerificationState, type Location } from '../domain/derive'
@@ -21,32 +21,38 @@ import { mono, semantic } from '../theme'
  *     tooltip.
  */
 
-/** Product icon and name. Clicks through to the product. */
+/**
+ * A product's name.
+ *
+ * No icon and no link. The icon said "product" beside a column already headed
+ * Product, and the link took a reader looking at one download to a page about
+ * everything that product has ever done — a way out of the thing they were
+ * reading, offered in every row.
+ */
 export function ProductChip({ name, display }: { name: string; display?: string }) {
-  return (
-    <Link to={`/products/${encodeURIComponent(name)}`}>
-      <Space size={6}>
-        <Icon as={PackageIcon} colour="#0057B8" title="Product" />
-        <span style={{ fontWeight: 500 }}>{display || name}</span>
-      </Space>
-    </Link>
-  )
+  return <span style={{ fontWeight: 500 }}>{display || name}</span>
 }
 
 /** A version, always monospace. Clicks through to the release. */
 export function VersionChip({
-  product, version, pkg,
+  product, version, pkg, showRepository = true,
 }: {
   product: string
   version: string
   /** The release itself, so the link can carry the repository that identifies it. */
   pkg: Pick<Package, 'tag' | 'sourceRepository' | 'displayRepository'>
+  /**
+   * Whether to repeat the repository under the version. False where the table
+   * gives the name a column of its own — the same value in two adjacent cells
+   * reads as two different facts.
+   */
+  showRepository?: boolean
 }) {
   // The repository is shown, not just linked. A vendor publishes one version
   // tag into every repository of a product, so a listing shows the same
   // version many times and the rows are only telling apart by where each one
   // came from — without it the page reads as duplicates.
-  const repository = pkg.displayRepository || pkg.sourceRepository
+  const repository = showRepository ? pkg.displayRepository || pkg.sourceRepository : undefined
 
   return (
     <Space direction="vertical" size={0}>
@@ -66,6 +72,7 @@ export function VersionChip({
 
 const STATUS_COLOUR: Record<SoftwareStatus, string> = {
   NEW: 'blue',
+  AVAILABLE: 'default',
   DOWNLOADING: 'processing',
   DOWNLOADED: 'green',
   'READY FOR PRODUCTION': 'purple',
@@ -74,7 +81,34 @@ const STATUS_COLOUR: Record<SoftwareStatus, string> = {
 }
 
 /**
- * The six statuses and no others.
+ * What the vendor calls this package — the repository it publishes into.
+ *
+ * Ellipsised, because a vendor path is long and arbitrary and the end of it is
+ * rarely the part that identifies anything; the full value is on the tooltip,
+ * so it can still be read in full.
+ */
+export function PackageName({
+  pkg, width = 240,
+}: {
+  pkg: Pick<Package, 'sourceRepository' | 'displayRepository'>
+  width?: number
+}) {
+  const name = pkg.displayRepository || pkg.sourceRepository
+  if (!name) return <NA reason="This package records no source repository." />
+  return (
+    <Tooltip title={pkg.sourceRepository}>
+      <Typography.Text
+        style={{ fontFamily: mono, fontSize: 12, maxWidth: width }}
+        ellipsis={{ tooltip: false }}
+      >
+        {name}
+      </Typography.Text>
+    </Tooltip>
+  )
+}
+
+/**
+ * The statuses and no others.
  *
  * DOWNLOADING spins, because it is the only one of the six that describes work
  * happening right now. Everything else is a resting place.

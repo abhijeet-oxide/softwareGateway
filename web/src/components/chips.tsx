@@ -2,7 +2,7 @@ import type { ReactNode } from 'react'
 import { Badge, Space, Tag, Tooltip, Typography } from 'antd'
 import {
   CheckCircleOutlined, ExportOutlined, ExclamationCircleOutlined,
-  CloseCircleOutlined, QuestionCircleOutlined,
+  CloseCircleOutlined, LoadingOutlined, QuestionCircleOutlined,
 } from '@ant-design/icons'
 import { Icon, locationIcon, repositoryIcon, PackageIcon } from './icons'
 import { Link } from 'react-router-dom'
@@ -76,6 +76,62 @@ const STATUS_COLOUR: Record<SoftwareStatus, string> = {
 /** The six statuses and no others. */
 export function StatusBadge({ status }: { status: SoftwareStatus }) {
   return <Tag color={STATUS_COLOUR[status]} style={{ marginInlineEnd: 0 }}>{status}</Tag>
+}
+
+/**
+ * A transfer's state, and whether it is MOVING.
+ *
+ * The spinner is the point. `RUNNING` and `SUCCEEDED` are two words of similar
+ * length in two similar tags, and on a page somebody is watching precisely
+ * because they want to know whether anything is happening, the difference has
+ * to be visible without reading. A spinning mark says "this is live" from
+ * across the room; a static one says the opposite just as clearly.
+ *
+ * `CANCELLING` spins too, and deliberately: it is not finished stopping. Jobs
+ * a worker holds run to their next checkpoint, and a still tag there would
+ * report a transfer as settled while bytes were still moving.
+ */
+const LIVE_STATES = ['PENDING', 'PLANNING', 'READY', 'RUNNING', 'VERIFYING', 'CANCELLING']
+
+const TRANSFER_STATE_COLOUR: Record<string, string> = {
+  SUCCEEDED: 'green',
+  FAILED: 'error',
+  CANCELLED: 'default',
+  PAUSED: 'warning',
+  RUNNING: 'processing',
+  VERIFYING: 'processing',
+  PLANNING: 'processing',
+  CANCELLING: 'warning',
+  READY: 'blue',
+  PENDING: 'blue',
+}
+
+const TRANSFER_STATE_HELP: Record<string, string> = {
+  PENDING: 'Requested. Nothing has been planned yet.',
+  PLANNING: 'Working out what has to move, by walking the release.',
+  READY: 'Planned and waiting for a worker to take the first job.',
+  RUNNING: 'Workers are moving bytes right now.',
+  PAUSED: 'Nothing new is being handed out. Work already in flight finishes.',
+  VERIFYING: 'The content is at the destination; its signature is being checked.',
+  CANCELLING: 'Stopping. Jobs a worker already holds run to their next checkpoint.',
+  CANCELLED: 'Stopped. What already reached the destination stayed there.',
+  SUCCEEDED: 'Everything planned reached the destination.',
+  FAILED: 'It stopped before finishing. Open it to see what failed.',
+}
+
+export function TransferStateTag({ state }: { state: string }) {
+  const live = LIVE_STATES.includes(state)
+  return (
+    <Tooltip title={TRANSFER_STATE_HELP[state]}>
+      <Tag
+        color={TRANSFER_STATE_COLOUR[state] ?? 'default'}
+        icon={live ? <LoadingOutlined spin /> : undefined}
+        style={{ marginInlineEnd: 0 }}
+      >
+        {state}
+      </Tag>
+    </Tooltip>
+  )
 }
 
 const VERIFICATION: Record<VerificationState, { label: string; colour: string; icon: ReactNode; help: string }> = {

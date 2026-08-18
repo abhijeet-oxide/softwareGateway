@@ -10,14 +10,15 @@ import {
 } from '../api/queries'
 import { useCan } from '../auth/permissions'
 import { isLive, transferVersion, version } from '../domain/derive'
-import { formatDuration } from '../domain/format'
+import { bytes, formatBytes, formatDuration } from '../domain/format'
 import { NA, Value } from '../components/value'
 import { elapsedSeconds } from '../domain/format'
-import { ManagedInGit, TimeAgo } from '../components/chips'
+import { ManagedInGit, ProductChip, TimeAgo, TransferStateTag } from '../components/chips'
 import { EmptyStateCard, ErrorState, PageHeader } from '../components/layout'
+import { MeasuredProgress } from '../components/progress'
 import { PriorityControl, QueueControls } from '../components/queuecontrols'
 import { mono } from '../theme'
-import type { RunDownloadResponse } from '../api/types'
+import type { RunDownloadResponse, Transfer } from '../api/types'
 
 /**
  * Page 6 — Downloads.
@@ -59,6 +60,19 @@ function chainFlow(chain: string[] | undefined) {
   )
 }
 
+/**
+ * The repository a package came from, without the registry host.
+ *
+ * The API returns a transfer's source as `host/path`, which is right for one
+ * transfer and far too wide for a column of them: the host is the same on
+ * every row and the path is the only part that identifies anything.
+ */
+function repositoryOf(source: string | undefined): string {
+  if (!source) return ''
+  const slash = source.indexOf('/')
+  return slash < 0 ? source : source.slice(slash + 1)
+}
+
 export default function Downloads() {
   const { message } = App.useApp()
   const products = useProducts()
@@ -70,7 +84,15 @@ export default function Downloads() {
   const rules = useAutoDownloadRules(product)
   const replication = useReplication(product)
   const packages = usePackages(product, { pageSize: 50 })
-  const transfers = useTransfers({ product, pageSize: 25 })
+  // ESTATE-WIDE, not per product. "What is downloading" is a question about
+  // the whole instance — a download of another product is still one of the
+  // things occupying the workers — and scoping it to whichever product the
+  // configuration cards below happen to be showing would hide exactly the row
+  // somebody came here to find.
+  const transfers = useTransfers({ pageSize: 100 })
+  const all = transfers.data?.transfers ?? []
+  const ongoing = all.filter((t) => isLive(t.state) || t.state === 'PAUSED')
+  const finished = all.filter((t) => !isLive(t.state) && t.state !== 'PAUSED')
 
   const mayOperate = useCan('operate', { product })
   const runDownload = useRunDownload(product!)
@@ -107,7 +129,7 @@ export default function Downloads() {
   if (products.isError) {
     return (
       <>
-        <PageHeader title="Downloads" description="How software gets in, and what comes in automatically" />
+        <PageHeader title="Downloads" description="What is downloading now, and what comes in automatically" />
         <ErrorState error={products.error} retry={() => void products.refetch()} />
       </>
     )
@@ -173,8 +195,164 @@ export default function Downloads() {
       <Row gutter={[16, 16]}>
         <Col span={24}>
           <Card
-            title="Download"
-            extra={<ManagedInGit />}
+            title={`Ongoing downloads${ongoing.length ? ` (${ongoing.length})` : ''}`}
+            loading={transfers.isLoading}
+            styles={{ body: { padding: ongoing.length ? 0 : undefined } }}
+          >
+            {!transfers.isLoading && ongoing.length === 0 ? (
+              <EmptyStateCard
+                title="Nothing is downloading"
+                explanation="Downloads started by hand or by an auto-download rule appear here while they run, with what has moved so far. Finished ones are listed below."
+                action={<Link to="/software"><Button type="primary">Find a package to download</Button></Link>}
+              />
+            ) : (
+              <Table<Transfer>
+                size="small"
+                pagination={false}
+                dataSource={ongoing}
+                rowKey={(t) => t.id}
+                scroll={{ x: 1120 }}
+                columns={[
+                  { title: 'Product', width: 130, render: (_, t) => <ProductChip name={t.product} /> },
+                  {
+                    // WHICH package, not just which version. A vendor
+                    // publishes one version tag into every repository of a
+                    // product, so two rows reading `25.7_mp2604_2131` are two
+                    // different packages and the repository is what says so.
+                    title: 'Package',
+                    width: 200,
+                    render: (_, t) => (
+                      <Tooltip title={t.source}>
+                        <Typography.Text style={{ fontFamily: mono, fontSize: 12 }} ellipsis>
+                          {repositoryOf(t.source)}
+                        </Typography.Text>
+                      </Tooltip>
+                    ),
+                  },
+                  {
+                    title: 'Version',
+                    width: 170,
+                    render: (_, t) => (
+                      <Link to={`/downloads/${t.id}`} style={{ fontFamily: mono }}>
+                        {transferVersion(t)}
+                      </Link>
+                    ),
+                  },
+                  { title: 'State', width: 130, render: (_, t) => <TransferStateTag state={t.state} /> },
+                  {
+                    title: 'Elapsed',
+                    width: 90,
+                    align: 'right',
+                    render: (_, t) => (
+                      <Value reason="No worker has taken a job yet, so nothing has been timed.">
+                        {formatDuration(elapsedSeconds(t.startedAt))}
+                      </Value>
+                    ),
+                  },
+                  {
+                    title: 'Progress',
+                    width: 200,
+                    render: (_, t) => (
+                      <MeasuredProgress
+                        transferred={bytes(t.progress?.bytesTransferred)}
+                        total={bytes(t.progress?.plannedBytes)}
+                        strategy={t.strategy ?? 'copy'}
+                      />
+                    ),
+                  },
+                  { title: 'Priority', width: 130, align: 'right', render: (_, t) => <PriorityControl transfer={t} /> },
+                  { title: 'Actions', width: 190, render: (_, t) => <QueueControls transfer={t} /> },
+                ]}
+              />
+            )}
+          </Card>
+        </Col>
+
+        <Col span={24}>
+          <Card title="Recent downloads" loading={transfers.isLoading}>
+            <Typography.Paragraph type="secondary" style={{ fontSize: 13 }}>
+              Downloads that have finished — succeeded, failed or stopped. Anything still running is
+              in the card above.
+            </Typography.Paragraph>
+            {!transfers.isLoading && finished.length === 0 ? (
+              <EmptyStateCard
+                title="No download has finished yet"
+                explanation="Once a download completes it is listed here with what it cost and how long it took."
+                action={<Link to="/software"><Button>Find a package to download</Button></Link>}
+              />
+            ) : (
+              <Table<Transfer>
+                size="small"
+                pagination={false}
+                dataSource={finished.slice(0, 10)}
+                rowKey={(t) => t.id}
+                scroll={{ x: 1000 }}
+                columns={[
+                  { title: 'Product', width: 130, render: (_, t) => <ProductChip name={t.product} /> },
+                  {
+                    title: 'Version',
+                    width: 180,
+                    render: (_, t) => (
+                      <Link to={`/downloads/${t.id}`} style={{ fontFamily: mono }}>
+                        {transferVersion(t)}
+                      </Link>
+                    ),
+                  },
+                  { title: 'State', width: 130, render: (_, t) => <TransferStateTag state={t.state} /> },
+                  {
+                    title: 'Took',
+                    width: 90,
+                    align: 'right',
+                    render: (_, t) => (
+                      <Value>{formatDuration(elapsedSeconds(t.startedAt, t.completedAt))}</Value>
+                    ),
+                  },
+                  { title: 'Downloaded', width: 110, align: 'right', render: (_, t) => <Value>{formatBytes(bytes(t.progress?.bytesTransferred))}</Value> },
+                  { title: 'When', width: 100, render: (_, t) => <TimeAgo at={t.completedAt || t.createdAt} /> },
+                  { title: 'Actions', width: 150, render: (_, t) => <QueueControls transfer={t} /> },
+                ]}
+              />
+            )}
+          </Card>
+        </Col>
+
+        <Col span={24}>
+          <Card
+            title="How a download runs"
+            // The product picker lives HERE rather than in the page header,
+            // because it scopes this card and the two below it and nothing
+            // else: what is downloading right now is an estate-wide question
+            // and a header control implying otherwise would be a lie about
+            // the page.
+            extra={
+              <Space>
+                <Select
+                  size="small"
+                  style={{ minWidth: 180 }}
+                  loading={products.isLoading}
+                  value={product}
+                  onChange={setSelected}
+                  options={productList.map((p) => ({ value: p.productId, label: p.displayName || p.productId }))}
+                />
+                <Tooltip
+                  title={
+                    mayOperate
+                      ? 'Downloads software you name. There is no pattern here — patterns belong to rules.'
+                      : 'You do not have permission to start a download.'
+                  }
+                >
+                  <Button
+                    size="small"
+                    icon={<CloudDownloadOutlined />}
+                    disabled={!mayOperate}
+                    onClick={() => setPicking(true)}
+                  >
+                    Download…
+                  </Button>
+                </Tooltip>
+                <ManagedInGit />
+              </Space>
+            }
             loading={downloads.isLoading}
           >
             <Typography.Paragraph type="secondary" style={{ fontSize: 13 }}>
@@ -273,55 +451,6 @@ export default function Downloads() {
           </Card>
         </Col>
 
-        <Col xs={24} xl={10}>
-          <Card title="Recent downloads" loading={transfers.isLoading}>
-            <Table
-              size="small"
-              pagination={false}
-              dataSource={(transfers.data?.transfers ?? []).slice(0, 8)}
-              rowKey={(t) => t.id}
-              columns={[
-                {
-                  title: 'Version',
-                  render: (_, t) => (
-                    <Link to={`/downloads/${t.id}`} style={{ fontFamily: mono }}>
-                      {transferVersion(t)}
-                    </Link>
-                  ),
-                },
-                { title: 'State', width: 110, render: (_, t) => <Tag color={t.state === 'SUCCEEDED' ? 'green' : t.state === 'FAILED' ? 'red' : 'blue'}>{t.state}</Tag> },
-                {
-                  title: 'Took',
-                  width: 90,
-                  align: 'right',
-                  render: (_, t) =>
-                    isLive(t.state) ? (
-                      <Value>{formatDuration(elapsedSeconds(t.startedAt))}</Value>
-                    ) : (
-                      <Value>{formatDuration(elapsedSeconds(t.startedAt, t.completedAt))}</Value>
-                    ),
-                },
-                {
-                  // The queue's own order, and the only way to change it
-                  // without stopping anything. A download waiting behind work
-                  // that matters less is the commonest complaint this page
-                  // gets, and pausing the thing in front is not the answer:
-                  // it stops work rather than reordering it.
-                  title: 'Priority',
-                  width: 130,
-                  align: 'right',
-                  render: (_, t) => <PriorityControl transfer={t} />,
-                },
-                { title: 'When', width: 90, render: (_, t) => <TimeAgo at={t.completedAt || t.createdAt} /> },
-                {
-                  title: 'Actions',
-                  width: 180,
-                  render: (_, t) => <QueueControls transfer={t} />,
-                },
-              ]}
-            />
-          </Card>
-        </Col>
       </Row>
 
       <Modal

@@ -7,7 +7,7 @@ import {
   deriveLocations, deriveStatus, downloadSeconds, releaseHref, transferIndex, verification, version,
   withTransfers, type SoftwareStatus,
 } from '../domain/derive'
-import { formatBytes, formatCount, formatDuration, formatSpeed } from '../domain/format'
+import { formatBytes, formatDuration, formatSpeed } from '../domain/format'
 import { Stat, Value } from '../components/value'
 import { DiscoveryPanel } from '../components/discovery'
 import { SystemPanel } from '../components/system'
@@ -27,6 +27,20 @@ import type { Package, Product } from '../api/types'
  * it, because that is the answer. "Saved" is deliberately NOT a card here — it
  * belongs to a release, not to the estate.
  */
+
+const SEVEN_DAYS = 7 * 24 * 60 * 60 * 1000
+
+/**
+ * When a release became available.
+ *
+ * The vendor's own publication date where there is one, and the moment we first
+ * saw it otherwise — a package discovered from a registry that records no
+ * publication time still arrived, and dropping it would make a product with a
+ * plain OCI source look permanently quiet.
+ */
+function publishedAt(pkg: Package): string {
+  return pkg.publishedAt || pkg.discoveredAt
+}
 
 interface Row {
   pkg: Package
@@ -66,10 +80,14 @@ export default function Overview() {
         out.push({ pkg, product, status: deriveStatus(pkg, product) })
       }
     })
+    // PUBLISHED RECENTLY, newest first. A dashboard answers "what is new",
+    // and a list that falls back on old releases to fill ten rows answers a
+    // different question quietly — the reader cannot tell which rows are the
+    // news and which are the padding.
+    const cutoff = new Date(Date.now() - SEVEN_DAYS).toISOString()
     return out
-      .sort((a, b) =>
-        (b.pkg.publishedAt || b.pkg.discoveredAt).localeCompare(
-          a.pkg.publishedAt || a.pkg.discoveredAt))
+      .filter((r) => publishedAt(r.pkg) >= cutoff)
+      .sort((a, b) => publishedAt(b.pkg).localeCompare(publishedAt(a.pkg)))
       .slice(0, 10)
   }, [productList, first.data, second.data, third.data, transfers.data])
 
@@ -165,16 +183,16 @@ export default function Overview() {
       <Row gutter={[16, 16]}>
         <Col xs={24} xl={17}>
           <Card
-            title="Latest Software"
-            extra={<Link to="/software">View all software</Link>}
+            title="Packages published in the last 7 days"
+            extra={<Link to="/software">View all packages</Link>}
             styles={{ body: { padding: 0 } }}
           >
             {!loading && rows.length === 0 ? (
               <div style={{ padding: 24 }}>
                 <EmptyStateCard
-                  title="No software discovered yet"
-                  explanation="Discovery polls the vendor registries on a schedule. Run it from the panel above to look immediately — its progress is reported there."
-                  action={<Link to="/products"><Button>View products</Button></Link>}
+                  title="Nothing new this week"
+                  explanation="No package was published in the last seven days. Older releases are on the Packages page; discovery runs on a schedule and its progress is reported above."
+                  action={<Link to="/software"><Button>View all packages</Button></Link>}
                 />
               </div>
             ) : (
@@ -256,32 +274,6 @@ export default function Overview() {
 
         <Col xs={24} xl={7}>
           <Space direction="vertical" size={16} style={{ width: '100%' }}>
-            <Card title="Products" extra={<Link to="/products">View all</Link>} styles={{ body: { padding: 0 } }}>
-              <Table
-                loading={products.isLoading}
-                dataSource={productList}
-                rowKey={(p) => p.productId}
-                pagination={false}
-                size="small"
-                columns={[
-                  {
-                    title: 'Product',
-                    render: (_, p) => <ProductChip name={p.productId} display={p.displayName} />,
-                  },
-                  {
-                    title: 'Targets',
-                    align: 'right',
-                    render: (_, p) => <Value>{formatCount(p.targets?.length ?? 0)}</Value>,
-                  },
-                  {
-                    title: 'Auto-download',
-                    align: 'right',
-                    render: (_, p) => (p.autoDownload?.enabled ? 'On' : 'Off'),
-                  },
-                ]}
-              />
-            </Card>
-
             <SystemPanel />
 
             <Card title="Download Performance" extra={<Link to="/reports">View report</Link>}>

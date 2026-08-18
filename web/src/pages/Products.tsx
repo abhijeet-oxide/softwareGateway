@@ -4,7 +4,7 @@ import { useParams } from 'react-router-dom'
 import { usePackages, useProducts, useTransfers } from '../api/queries'
 import { RunDiscoveryButton } from '../components/discovery'
 import {
-  deriveLifecycle, deriveLocations, deriveStatus, downloadSeconds, transferIndex,
+  deriveLifecycle, deriveLocations, deriveStatus, downloadSeconds, matches, transferIndex,
   verification, version, withTransfers,
 } from '../domain/derive'
 import { formatDuration } from '../domain/format'
@@ -13,7 +13,7 @@ import {
   LocationChip, StatusBadge, TimeAgo, VerificationBadge, VersionChip,
 } from '../components/chips'
 import {
-  EmptyStateCard, ErrorState, LifecycleIndicator, PageHeader,
+  EmptyStateCard, ErrorState, LifecycleCell, PageHeader, SearchBar,
 } from '../components/layout'
 import type { Product } from '../api/types'
 import { TargetTag } from '../components/chips'
@@ -70,9 +70,12 @@ function VersionHistory({ product }: { product: Product }) {
         { title: 'Verified', width: 140, render: (_, pkg) => <VerificationBadge state={verification(pkg)} /> },
         { title: 'Status', width: 200, render: (_, pkg) => <StatusBadge status={deriveStatus(pkg, product)} /> },
         {
+          // The stage, with the timeline one hover away. A stepper per row is
+          // four columns of furniture repeated down the page, and the part
+          // that actually differs between rows is the hardest of it to read.
           title: 'Lifecycle',
-          width: 320,
-          render: (_, pkg) => <LifecycleIndicator steps={deriveLifecycle(pkg, product)} />,
+          width: 160,
+          render: (_, pkg) => <LifecycleCell steps={deriveLifecycle(pkg, product)} />,
         },
         { title: 'Location', width: 170, render: (_, pkg) => <LocationChip locations={deriveLocations(pkg, product)} /> },
         {
@@ -94,6 +97,7 @@ export default function Products() {
   const { product: routeProduct } = useParams()
   const products = useProducts()
   const [showDisabled, setShowDisabled] = useState(false)
+  const [search, setSearch] = useState('')
 
   const [expanded, setExpanded] = useState<string[]>(routeProduct ? [routeProduct] : [])
 
@@ -113,7 +117,10 @@ export default function Products() {
   // API — it simply does nothing. That makes it worth keeping and worth hiding:
   // on a page answering "where has each product reached", something that has
   // reached nowhere on purpose is noise until somebody asks for it.
-  const rows = showDisabled ? all : all.filter((p) => p.enabled)
+  const listed = showDisabled ? all : all.filter((p) => p.enabled)
+  const rows = search.trim()
+    ? listed.filter((p) => matches(search, p.productId, p.displayName, p.description))
+    : listed
 
   return (
     <>
@@ -132,11 +139,27 @@ export default function Products() {
         extra={<RunDiscoveryButton products={rows} />}
       />
 
+      <SearchBar
+        value={search}
+        onChange={setSearch}
+        placeholder="Search products by name or description"
+        matched={rows.length}
+        total={listed.length}
+      />
+
       {!products.isLoading && rows.length === 0 ? (
         <EmptyStateCard
-          title="No products are configured"
-          explanation="Products are defined in Git and reconciled into this instance. Add one to the configuration repository and it will appear here."
-          action={<Button href="/settings">Open Settings</Button>}
+          title={search.trim() ? `Nothing matches "${search.trim()}"` : 'No products are configured'}
+          explanation={
+            search.trim()
+              ? 'No product name or description contains that. Clear the search to see everything configured.'
+              : 'Products are defined in Git and reconciled into this instance. Add one to the configuration repository and it will appear here.'
+          }
+          action={
+            search.trim()
+              ? <Button onClick={() => setSearch('')}>Clear search</Button>
+              : <Button href="/settings">Open Settings</Button>
+          }
         />
       ) : (
         <Card styles={{ body: { padding: 0 } }}>

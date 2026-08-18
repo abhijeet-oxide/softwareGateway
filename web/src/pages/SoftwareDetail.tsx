@@ -276,7 +276,7 @@ export default function SoftwareDetail() {
   if (pkg.isError) {
     return (
       <>
-        <PageHeader title="Software" description="Release detail" />
+        <PageHeader title="Package" description="Release detail" />
         <ErrorState error={pkg.error} retry={() => void pkg.refetch()} />
       </>
     )

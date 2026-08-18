@@ -1335,6 +1335,16 @@ type Transfer struct {
 	ID        string `json:"id"`
 	RequestID string `json:"requestId"`
 	Product   string `json:"product"`
+	// PackageID is WHICH package this moves, and it is the only unambiguous
+	// answer.
+	//
+	// A vendor's tag is not unique within a product: one NEAR release appears
+	// under the same tag in every repository the product watches, which for a
+	// real product is ten of them. A consumer joining a transfer listing to a
+	// package listing on (product, tag) therefore lights up ten packages for
+	// one download — which is exactly what the software page did, reporting
+	// twenty releases as DOWNLOADING when two were.
+	PackageID string `json:"packageId,omitempty"`
 	Tag       string `json:"tag"`
 	// DisplayTag is Tag with the vendor's structural noise removed — `25.7.2131`
 	// for NEAR's `orb_25.7.2131`. Empty where no shortening applies, which is

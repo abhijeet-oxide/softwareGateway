@@ -294,6 +294,14 @@ export interface Transfer {
   id: string
   requestId: string
   product: string
+  /**
+   * WHICH package this moves — the only unambiguous answer.
+   *
+   * A vendor tag is not unique within a product: one NEAR release appears under
+   * the same tag in every repository the product watches. Joining transfers to
+   * packages by (product, tag) lights up all of them for one download.
+   */
+  packageId?: string
   tag: string
   displayTag?: string
   source: string

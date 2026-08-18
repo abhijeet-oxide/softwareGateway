@@ -293,7 +293,9 @@ func (q *Queue) Complete(ctx context.Context, c store.Completion) (store.Complet
 // One call carrying two signals: lease renewal, and — by omission — which jobs
 // the worker has lost and must abandon. There is no push channel to workers,
 // so this is also where cancellation would be delivered (docs/design/09 §7.4).
-func (q *Queue) Heartbeat(ctx context.Context, workerID string, activeJobs []int64) ([]int64, error) {
+func (q *Queue) Heartbeat(
+	ctx context.Context, workerID string, activeJobs []int64,
+) (renewed []int64, cancelled []int64, err error) {
 	// A heartbeat is the only signal from a worker holding a long blob: it can
 	// go many minutes between leases and completions, so without recording it
 	// here the fleet view would call a perfectly healthy worker stale.
@@ -301,7 +303,20 @@ func (q *Queue) Heartbeat(ctx context.Context, workerID string, activeJobs []int
 	// Capacity is unknown on this path, so the stored ceiling is left as it was
 	// — the lease that set it is the caller that knows it.
 	q.recordHeartbeat(ctx, workerID, len(activeJobs))
-	return q.packages.RenewLeases(ctx, workerID, activeJobs, q.leaseDuration)
+
+	renewed, cancelled, err = q.packages.RenewLeases(
+		ctx, workerID, activeJobs, q.leaseDuration)
+	if err != nil {
+		return nil, nil, err
+	}
+	if len(cancelled) > 0 {
+		// Logged, because this is the moment a stop actually reaches the bytes
+		// — everything before it is intent — and a stop that takes minutes to
+		// land is a thing an operator will ask about.
+		q.log.InfoContext(ctx, "telling a worker to abandon stopped work",
+			"worker", workerID, "jobs", len(cancelled))
+	}
+	return renewed, cancelled, nil
 }
 
 // RecordWorker notes what a worker just told us about itself.
@@ -375,6 +390,24 @@ func (q *Queue) Settle(ctx context.Context) ([]store.StalledTransfer, error) {
 			"transfer", t.ID, "failedJobs", t.Failed, "reason", t.Reason)
 	}
 	return stalled, nil
+}
+
+// CloseCancellations settles stops that had nothing left to wait for.
+//
+// Paired with Reap for the same reason Settle is: the reaper is what produces
+// the last state change in the case that matters. A worker that dies holding
+// the final job of a stopped transfer reports nothing at all, so the inline
+// close — which runs on a completion — never runs.
+func (q *Queue) CloseCancellations(ctx context.Context) ([]store.StoppedCancellation, error) {
+	closed, err := q.packages.CloseStalledCancellations(ctx)
+	if err != nil {
+		return nil, err
+	}
+	for _, t := range closed {
+		q.log.InfoContext(ctx, "cancellation closed with nothing left in flight",
+			"transfer", t.ID)
+	}
+	return closed, nil
 }
 
 // Unstick promotes work in transfers that have nothing runnable at all.

@@ -82,7 +82,9 @@ func (f *fakeQueue) Progress(context.Context, int64, string, int64) error { retu
 func (f *fakeQueue) Complete(context.Context, store.Completion) (store.CompletionResult, error) {
 	return store.CompletionResult{}, nil
 }
-func (f *fakeQueue) Heartbeat(context.Context, string, []int64) ([]int64, error) { return nil, nil }
+func (f *fakeQueue) Heartbeat(context.Context, string, []int64) ([]int64, []int64, error) {
+	return nil, nil, nil
+}
 
 func (f *fakeQueue) Retry(_ context.Context, transferID string) (store.RetryResult, error) {
 	f.retried = append(f.retried, transferID)

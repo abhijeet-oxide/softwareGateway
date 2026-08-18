@@ -16,6 +16,7 @@ import FileIcon from '~icons/mdi/file-document-outline'
 import AnalyzeIcon from '~icons/mdi/file-tree-outline'
 import IndexIcon from '~icons/mdi/table-of-contents'
 import DownloadIcon from '~icons/mdi/tray-arrow-down'
+import LayersIcon from '~icons/mdi/layers-triple-outline'
 import SignatureIcon from '~icons/mdi/certificate-outline'
 import type { Repository } from '../api/types'
 
@@ -147,7 +148,7 @@ export const ARTIFACT_ICONS = {
 
 export type ArtifactKind = keyof typeof ARTIFACT_ICONS
 
-export { AnalyzeIcon, DownloadIcon, IndexIcon, SignatureIcon, PackageIcon, NokiaIcon, JFrogIcon, OpenShiftIcon, RocketIcon, FlaskIcon, OciIcon, DockerIcon, HelmIcon }
+export { AnalyzeIcon, DownloadIcon, IndexIcon, LayersIcon, SignatureIcon, PackageIcon, NokiaIcon, JFrogIcon, OpenShiftIcon, RocketIcon, FlaskIcon, OciIcon, DockerIcon, HelmIcon }
 
 /**
  * Renders one of the above at text size.

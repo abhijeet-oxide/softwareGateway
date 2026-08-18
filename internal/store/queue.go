@@ -588,13 +588,43 @@ func (p *Packages) TransferTag(ctx context.Context, transferID string) (tag, dig
 // finishing work another worker has since redone.
 func (p *Packages) RenewLeases(
 	ctx context.Context, owner string, ids []int64, d time.Duration,
-) ([]int64, error) {
+) (renewed []int64, cancelled []int64, err error) {
 	if len(ids) == 0 {
-		return nil, nil
+		return nil, nil, nil
 	}
 	if d <= 0 {
 		d = 2 * time.Minute
 	}
+
+	// WHICH OF THESE BELONG TO A TRANSFER SOMEBODY STOPPED.
+	//
+	// This is how a stop reaches a worker. There is no push channel: the
+	// heartbeat is the only regular call from a worker holding a long blob, so
+	// cancellation rides it, and the worker aborts within one interval.
+	//
+	// Renewing them instead — which is what happened before this existed — made
+	// `stop` mean "stop when the current blob finishes", and a forty-gigabyte
+	// blob makes that an hour. The transfer sat in `cancelling` the whole time
+	// with bytes still moving into it, which is the one thing the operator had
+	// just asked it not to do.
+	cancelled, err = p.leasesOfStoppedTransfers(ctx, owner, ids)
+	if err != nil {
+		return nil, nil, err
+	}
+	stopped := make(map[int64]bool, len(cancelled))
+	for _, id := range cancelled {
+		stopped[id] = true
+	}
+	live := make([]int64, 0, len(ids))
+	for _, id := range ids {
+		if !stopped[id] {
+			live = append(live, id)
+		}
+	}
+	if len(live) == 0 {
+		return nil, cancelled, nil
+	}
+	ids = live
 
 	placeholders, idArgs := inClause(ids)
 	args := append([]any{d.Seconds(), owner}, idArgs...)
@@ -605,7 +635,7 @@ func (p *Packages) RenewLeases(
 		       updated_at       = `+p.dialect.Now()+`
 		 WHERE lease_owner = ? AND state = 'leased' AND id IN (`+placeholders+`)`),
 		args...); err != nil {
-		return nil, fmt.Errorf("renew leases for %s: %w", owner, err)
+		return nil, nil, fmt.Errorf("renew leases for %s: %w", owner, err)
 	}
 
 	// Read back rather than trusting RowsAffected: the worker needs to know
@@ -616,7 +646,41 @@ func (p *Packages) RenewLeases(
 		  WHERE lease_owner = ? AND state = 'leased' AND id IN (`+selectPlaceholders+`)`),
 		append([]any{owner}, selectIDs...)...)
 	if err != nil {
-		return nil, fmt.Errorf("read renewed leases for %s: %w", owner, err)
+		return nil, nil, fmt.Errorf("read renewed leases for %s: %w", owner, err)
+	}
+	defer func() { _ = rows.Close() }()
+
+	for rows.Next() {
+		var id int64
+		if err := rows.Scan(&id); err != nil {
+			return nil, nil, fmt.Errorf("scan renewed lease: %w", err)
+		}
+		renewed = append(renewed, id)
+	}
+	return renewed, cancelled, rows.Err()
+}
+
+// leasesOfStoppedTransfers picks out the jobs this worker holds whose transfer
+// is no longer going anywhere.
+//
+// `cancelling` AND `cancelled`, because the two are one situation seen at
+// different moments: the second is what the first becomes when the last lease
+// reports, and a worker that missed a heartbeat can be holding a job of either.
+func (p *Packages) leasesOfStoppedTransfers(
+	ctx context.Context, owner string, ids []int64,
+) ([]int64, error) {
+	placeholders, args := inClause(ids)
+	rows, err := p.db.QueryContext(ctx, p.dialect.Rewrite(`
+		SELECT j.id
+		  FROM jobs j
+		  JOIN transfers t ON t.id = j.transfer_id
+		 WHERE j.lease_owner = ?
+		   AND j.state = 'leased'
+		   AND t.state IN ('cancelling','cancelled')
+		   AND j.id IN (`+placeholders+`)`),
+		append([]any{owner}, args...)...)
+	if err != nil {
+		return nil, fmt.Errorf("find stopped work held by %s: %w", owner, err)
 	}
 	defer func() { _ = rows.Close() }()
 
@@ -624,7 +688,7 @@ func (p *Packages) RenewLeases(
 	for rows.Next() {
 		var id int64
 		if err := rows.Scan(&id); err != nil {
-			return nil, fmt.Errorf("scan renewed lease: %w", err)
+			return nil, fmt.Errorf("scan stopped work: %w", err)
 		}
 		out = append(out, id)
 	}
@@ -1158,9 +1222,16 @@ func (p *Packages) ReapExpiredLeases(ctx context.Context) ([]ReapedJob, error) {
 	}
 	defer func() { _ = tx.Rollback() }()
 
+	// The transfer's state comes back with the job, because what an expired
+	// lease MEANS depends on it. On a live transfer the work is still wanted
+	// and goes back to the queue; on one somebody stopped it is not, and
+	// requeueing it undoes the stop by timeout — the job runs again, the
+	// transfer never empties, and `cancelling` becomes permanent.
 	rows, err := tx.QueryContext(ctx, p.dialect.Rewrite(
-		`SELECT id, transfer_id, attempts, max_attempts FROM jobs
-		  WHERE state = 'leased' AND lease_expires_at < `+p.dialect.Now()))
+		`SELECT j.id, j.transfer_id, j.attempts, j.max_attempts, t.state
+		   FROM jobs j
+		   JOIN transfers t ON t.id = j.transfer_id
+		  WHERE j.state = 'leased' AND j.lease_expires_at < `+p.dialect.Now()))
 	if err != nil {
 		return nil, fmt.Errorf("find expired leases: %w", err)
 	}
@@ -1169,11 +1240,13 @@ func (p *Packages) ReapExpiredLeases(ctx context.Context) ([]ReapedJob, error) {
 		id                    int64
 		transferID            string
 		attempts, maxAttempts int
+		transferState         string
 	}
 	var found []expired
 	for rows.Next() {
 		var e expired
-		if err := rows.Scan(&e.id, &e.transferID, &e.attempts, &e.maxAttempts); err != nil {
+		if err := rows.Scan(&e.id, &e.transferID, &e.attempts, &e.maxAttempts,
+			&e.transferState); err != nil {
 			_ = rows.Close()
 			return nil, fmt.Errorf("scan expired lease: %w", err)
 		}
@@ -1191,7 +1264,10 @@ func (p *Packages) ReapExpiredLeases(ctx context.Context) ([]ReapedJob, error) {
 	out := make([]ReapedJob, 0, len(found))
 	for _, e := range found {
 		state := "pending"
-		if e.attempts >= e.maxAttempts {
+		switch {
+		case e.transferState == "cancelling" || e.transferState == "cancelled":
+			state = "cancelled"
+		case e.attempts >= e.maxAttempts:
 			state = "failed"
 		}
 
@@ -1203,7 +1279,7 @@ func (p *Packages) ReapExpiredLeases(ctx context.Context) ([]ReapedJob, error) {
 			       next_visible_at   = `+p.dialect.TimeAhead("?")+`,
 			       last_error        = COALESCE(last_error, 'lease expired'),
 			       last_error_class  = 'lease_expired',
-			       completed_at      = CASE WHEN ? = 'failed' THEN `+p.dialect.Now()+` ELSE NULL END,
+			       completed_at      = CASE WHEN ? IN ('failed','cancelled') THEN `+p.dialect.Now()+` ELSE NULL END,
 			       updated_at        = `+p.dialect.Now()+`
 			 WHERE id = ? AND state = 'leased'`),
 			state, retryDelay(e.attempts).Seconds(), state, e.id); err != nil {

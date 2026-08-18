@@ -1,5 +1,6 @@
 import {
-  Alert, Card, Col, Descriptions, Row, Select, Space, Steps, Table, Tag, Tooltip, Typography,
+  Alert, Card, Col, Descriptions, Progress, Row, Select, Space, Steps, Table, Tag, Tooltip,
+  Typography,
 } from 'antd'
 import { LoadingOutlined } from '@ant-design/icons'
 import { useState } from 'react'
@@ -14,7 +15,9 @@ import {
 import { NA, Stat, Value } from '../components/value'
 import { MeasuredProgress, StateStrip, type StripState } from '../components/progress'
 import { RepoLink, TimeAgo, TransferStateTag } from '../components/chips'
-import { ARTIFACT_ICONS, Icon } from '../components/icons'
+import {
+  ARTIFACT_ICONS, Icon, IndexIcon, LayersIcon, OciIcon, type IconComponent,
+} from '../components/icons'
 import { PriorityControl, QueueControls } from '../components/queuecontrols'
 import { ErrorState, PageHeader, SavedPanel } from '../components/layout'
 import { mono } from '../theme'
@@ -85,103 +88,134 @@ function JobsPanel({ transferId, hasFailures }: { transferId: string; hasFailure
       }
     >
       <Table<Job>
-          size="small"
-          loading={jobs.isLoading}
-          dataSource={rows}
-          rowKey={(j) => j.id}
-          pagination={{ pageSize: 20, showSizeChanger: false, size: 'small' }}
-          scroll={{ x: 900 }}
-          locale={{
-            emptyText: (
-              <Typography.Text type="secondary">
-                No job is in that state right now.
-              </Typography.Text>
-            ),
-          }}
-          expandable={{
-            // Only where there is something to expand INTO. An expander on
-            // every row promises detail that most rows do not have.
-            rowExpandable: (j) => Boolean(j.lastError || j.parent?.ref || j.targetTags?.length),
-            expandedRowRender: (j) => (
-              <Descriptions size="small" column={1} style={{ marginBlock: 4 }}>
-                {j.parent?.ref && (
-                  <Descriptions.Item label="Part of">
-                    <span style={{ fontFamily: mono, fontSize: 12 }}>{j.parent.ref}</span>
-                    {j.parent.shared && (
-                      <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-                        {' '}— shared with other components, so this is an example
-                      </Typography.Text>
-                    )}
-                  </Descriptions.Item>
-                )}
-                <Descriptions.Item label="Digest">
-                  <span style={{ fontFamily: mono, fontSize: 11 }}>{j.digest}</span>
-                </Descriptions.Item>
-                {j.targetRepository && (
-                  <Descriptions.Item label="Into">
-                    <span style={{ fontFamily: mono, fontSize: 12 }}>
-                      {j.targetRepository}
-                      {j.targetTags?.length ? `:${j.targetTags.join(', :')}` : ''}
-                    </span>
-                  </Descriptions.Item>
-                )}
-                {j.lastError && (
-                  <Descriptions.Item label="Last error">
-                    <Typography.Text type="danger" style={{ fontSize: 12 }}>
-                      {j.lastErrorClass ? `${j.lastErrorClass}: ` : ''}{j.lastError}
+        size="small"
+        loading={jobs.isLoading}
+        dataSource={rows}
+        rowKey={(j) => j.id}
+        pagination={{ pageSize: 20, showSizeChanger: false, size: 'small' }}
+        scroll={{ x: 900 }}
+        locale={{
+          emptyText: (
+            <Typography.Text type="secondary">
+              No job is in that state right now.
+            </Typography.Text>
+          ),
+        }}
+        columns={[
+          {
+            /*
+             * Everything that identifies a job, in one cell and no expander.
+             *
+             * The expander held three things and every one of them was already
+             * on the page: the parent artifact (this IS that artifact's job),
+             * the destination (the whole page is about one destination), and
+             * the digest (which now sits here, where it belongs). What is left
+             * that a row cannot hold — the error — has a column of its own.
+             */
+            title: 'Artifact',
+            width: 320,
+            render: (_, j) => (
+              <Space size={6}>
+                <Icon as={JOB_ICONS[j.kind] ?? OciIcon} size={15} title={j.kind} />
+                <Space direction="vertical" size={0} style={{ minWidth: 0 }}>
+                  <Tooltip title={j.digest}>
+                    <Typography.Text style={{ fontFamily: mono, fontSize: 12, maxWidth: 270 }} ellipsis>
+                      {j.digest}
                     </Typography.Text>
-                  </Descriptions.Item>
-                )}
-              </Descriptions>
-            ),
-          }}
-          columns={[
-            {
-              title: 'What',
-              width: 230,
-              render: (_, j) => (
-                <Space direction="vertical" size={0}>
-                  <Space size={6}>
-                    <Tag style={{ marginInlineEnd: 0 }}>{j.kind}</Tag>
-                    <Typography.Text style={{ fontFamily: mono, fontSize: 11 }}>
-                      {shortDigest(j.digest)}
-                    </Typography.Text>
-                  </Space>
+                  </Tooltip>
                   {j.parent?.ref && (
-                    <Typography.Text type="secondary" style={{ fontSize: 11 }} ellipsis>
+                    <Typography.Text type="secondary" style={{ fontSize: 11, maxWidth: 270 }} ellipsis>
                       {j.parent.ref}
                     </Typography.Text>
                   )}
                 </Space>
-              ),
-            },
-            { title: 'Size', width: 90, align: 'right', render: (_, j) => <Value>{formatBytes(bytes(j.sizeBytes))}</Value> },
-            { title: 'State', width: 120, render: (_, j) => <JobStateTag job={j} /> },
-            {
-              title: 'Attempts',
-              width: 90,
-              align: 'right',
-              render: (_, j) => (
-                <Typography.Text type={j.attempts > 1 ? 'warning' : undefined}>
-                  {j.attempts}/{j.maxAttempts}
-                </Typography.Text>
-              ),
-            },
-            {
-              title: 'Worker',
-              width: 150,
-              render: (_, j) => <Value>{j.leaseOwner ?? null}</Value>,
-            },
-            {
-              title: 'Moved',
-              width: 110,
-              align: 'right',
-              render: (_, j) => <Value>{formatBytes(bytes(j.bytesTransferred))}</Value>,
-            },
-          ]}
+              </Space>
+            ),
+          },
+          {
+            // One cell for how far and how big. Two number columns made a
+            // reader do the division themselves, on every row.
+            title: 'Progress',
+            width: 190,
+            render: (_, j) => <JobProgress job={j} />,
+          },
+          { title: 'State', width: 130, render: (_, j) => <JobStateTag job={j} /> },
+          {
+            title: 'Attempts',
+            width: 90,
+            align: 'right',
+            render: (_, j) => (
+              <Typography.Text type={j.attempts > 1 ? 'warning' : undefined}>
+                {j.attempts}/{j.maxAttempts}
+              </Typography.Text>
+            ),
+          },
+          {
+            title: 'Worker',
+            width: 140,
+            render: (_, j) => <Value>{j.leaseOwner ?? null}</Value>,
+          },
+          {
+            // Only a failed job has one, so the column is empty for most rows —
+            // which is the point: the eye goes straight to the ones that do.
+            title: 'Error',
+            render: (_, j) =>
+              j.lastError ? (
+                <Tooltip title={j.lastError}>
+                  <Typography.Text type="danger" style={{ fontSize: 12 }} ellipsis>
+                    {j.lastErrorClass ? `${j.lastErrorClass}: ` : ''}{j.lastError}
+                  </Typography.Text>
+                </Tooltip>
+              ) : null,
+          },
+        ]}
       />
     </Card>
   )
+}
+
+/**
+ * How far this job has got, and how big it is.
+ *
+ * A bar only where a bar means something: a blob is bytes moving and has a
+ * position; a manifest is one small PUT that either happened or did not, and a
+ * 0%/100% bar for it is noise down the whole column. Both still say the size,
+ * because that is what makes a slow job legible.
+ */
+function JobProgress({ job }: { job: Job }) {
+  const size = bytes(job.sizeBytes)
+  const moved = bytes(job.bytesTransferred)
+  const running = job.state === 'LEASED'
+  const measurable = job.kind === 'blob' && size !== undefined && size > 0
+
+  return (
+    <Space direction="vertical" size={0} style={{ width: '100%' }}>
+      {measurable && (
+        <Progress
+          percent={Number(Math.min(100, ((moved ?? 0) / size) * 100).toFixed(1))}
+          size="small"
+          showInfo={false}
+          status={job.state === 'FAILED' ? 'exception' : running ? 'active' : undefined}
+        />
+      )}
+      <Typography.Text type="secondary" style={{ fontSize: 11 }}>
+        {moved !== undefined && moved > 0
+          ? `${formatBytes(moved)} of ${formatBytes(size)}`
+          : formatBytes(size) ?? ''}
+      </Typography.Text>
+    </Space>
+  )
+}
+
+/**
+ * What a job moves, as a mark.
+ *
+ * The same two words the queue uses — a manifest names things, a blob is the
+ * content itself — so the column reads without the reader translating.
+ */
+const JOB_ICONS: Record<string, IconComponent> = {
+  manifest: IndexIcon,
+  blob: LayersIcon,
 }
 
 /** A job's state, spinning while a worker holds it. */
@@ -209,12 +243,6 @@ function JobStateTag({ job }: { job: Job }) {
       </Tag>
     </Tooltip>
   )
-}
-
-/** sha256:abcd… — enough to recognise, short enough for a column. */
-function shortDigest(digest: string): string {
-  const hex = digest.includes(':') ? digest.split(':')[1] ?? '' : digest
-  return hex.slice(0, 12)
 }
 
 export default function DownloadDetail() {

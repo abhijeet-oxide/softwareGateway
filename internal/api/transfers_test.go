@@ -3,7 +3,9 @@ package api
 import (
 	"testing"
 
+	"github.com/abhijeet-oxide/softwareGateway/internal/oci"
 	"github.com/abhijeet-oxide/softwareGateway/internal/store"
+	v1 "github.com/abhijeet-oxide/softwareGateway/pkg/apis/softwaregateway/v1"
 )
 
 // The fold from media types to the words a person uses.
@@ -23,7 +25,7 @@ func TestContentGroupsFoldMediaTypesIntoKinds(t *testing.T) {
 			Outcome:      store.ContentPresent, Count: 21},
 		{MediaType: "application/vnd.oci.image.index.v1+json",
 			Outcome: store.ContentCopied, Count: 1},
-	})
+	}, nil)
 
 	if len(got) != 3 {
 		t.Fatalf("folded into %d kinds, want index, image and chart: %+v", len(got), got)
@@ -52,12 +54,57 @@ func TestAnUnknownOutcomeCountsAsOutstanding(t *testing.T) {
 	got := toAPIContent([]store.ContentRow{
 		{MediaType: "application/vnd.oci.image.manifest.v1+json",
 			Outcome: "something-new", Count: 3},
-	})
+	}, nil)
 
 	if len(got) != 1 || got[0].Outstanding != 3 {
 		t.Fatalf("unknown outcome came out %+v, want 3 outstanding", got)
 	}
 	if got[0].Copied != 0 || got[0].Present != 0 {
 		t.Errorf("an unknown outcome was counted as a result: %+v", got[0])
+	}
+}
+
+// The breakdown of a transfer and the contents of the release it moves are the
+// same set of things, counted twice. They must not be named differently.
+//
+// A NEAR orb's charts are plain OCI image manifests carrying an image config;
+// nothing in the OCI fields distinguishes them from its images, and the only
+// evidence is the annotation the vendor wrote. The release page reads it. This
+// page did not, so a download of 160 images, 97 charts and 2 files reported
+// itself as 260 images.
+func TestContentGroupsHonourTheVendorsOwnAnnotations(t *testing.T) {
+	// Stands in for the product's layout plugin, which is what supplies this
+	// in the handler. Only the annotation is vendor knowledge; the fold is not.
+	classify := func(mediaType, artifactType, configMediaType string, annotations map[string]string) string {
+		switch annotations["com.nokia.ncd.orb.type"] {
+		case "helmchart":
+			return oci.KindChart
+		case "generic_file":
+			return oci.KindFile
+		}
+		return oci.Classify(mediaType, artifactType, configMediaType)
+	}
+
+	const image = "application/vnd.oci.image.manifest.v1+json"
+	got := toAPIContent([]store.ContentRow{
+		{MediaType: image, Outcome: store.ContentCopied, Count: 160},
+		{MediaType: image, Annotations: map[string]string{"com.nokia.ncd.orb.type": "helmchart"},
+			Outcome: store.ContentCopied, Count: 97},
+		{MediaType: image, Annotations: map[string]string{"com.nokia.ncd.orb.type": "generic_file"},
+			Outcome: store.ContentPresent, Count: 2},
+	}, classify)
+
+	byKind := map[string]v1.ContentGroup{}
+	for _, g := range got {
+		byKind[g.Kind] = g
+	}
+	if g := byKind[oci.KindImage]; g.Total != 160 {
+		t.Errorf("images = %d, want 160", g.Total)
+	}
+	if g := byKind[oci.KindChart]; g.Total != 97 || g.Copied != 97 {
+		t.Errorf("charts = %+v, want 97 copied", g)
+	}
+	if g := byKind[oci.KindFile]; g.Total != 2 || g.Present != 2 {
+		t.Errorf("files = %+v, want 2 present", g)
 	}
 }

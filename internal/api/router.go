@@ -79,6 +79,10 @@ type Worker interface {
 	// and a delete that unpicked it would be the most dangerous operation in
 	// this system. This is bookkeeping.
 	Delete(ctx context.Context, transferID string) (store.ControlResult, error)
+	// SetPriority reorders what a transfer has left to do. Here for the same
+	// reason as the rest: it writes `jobs.priority`, which is the first key the
+	// dequeue orders by.
+	SetPriority(ctx context.Context, transferID string, priority int) (store.ControlResult, error)
 
 	// RecordWorker notes what a worker reported about itself. No error: the
 	// fleet view must never be the reason a lease fails.

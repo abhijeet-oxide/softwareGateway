@@ -327,3 +327,124 @@ func TestDeleteOfAnUnknownTransferIsAnError(t *testing.T) {
 		t.Fatal("deleting a transfer that does not exist reported success")
 	}
 }
+
+// Reordering a transfer writes the JOBS, because that is the column the
+// dequeue reads.
+//
+// A priority written only to the transfer row would show on every listing and
+// change nothing about what runs next — the worst shape a control verb can
+// have, since the operator watches their urgent download stay exactly where it
+// was while the page insists it is now first.
+func TestSetPriorityReordersTheJobsAndNotJustTheRow(t *testing.T) {
+	h := newControlHarness(t)
+	id := h.runningTransfer(3)
+
+	res, err := h.packages.SetTransferPriority(t.Context(), id, 900)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Jobs != 3 {
+		t.Errorf("reprioritized %d jobs, want 3", res.Jobs)
+	}
+	if n := h.count(
+		`SELECT count(*) FROM jobs WHERE transfer_id = ? AND priority = 900`, id); n != 3 {
+		t.Errorf("%d job rows carry the new priority, want 3", n)
+	}
+	if n := h.count(
+		`SELECT count(*) FROM transfers WHERE id = ? AND priority = 900`, id); n != 1 {
+		t.Error("the transfer row still shows the old priority")
+	}
+	// The request too, so a later step of the same download inherits it rather
+	// than dropping back to where it was.
+	if n := h.count(`SELECT count(*) FROM transfer_requests r
+	                   JOIN transfers t ON t.request_id = r.id
+	                  WHERE t.id = ? AND r.priority = 900`, id); n != 1 {
+		t.Error("the request behind the transfer still shows the old priority")
+	}
+}
+
+// What a worker already holds is not reordered. It is bytes in flight, and
+// preempting a blob at 90% throws away more work than the reordering recovers.
+func TestSetPriorityLeavesWorkAlreadyInFlightAlone(t *testing.T) {
+	h := newControlHarness(t)
+	id := h.runningTransfer(3)
+	leased := h.lease()
+	if len(leased) == 0 {
+		t.Fatal("the fixture leased nothing; the test would prove nothing")
+	}
+
+	res, err := h.packages.SetTransferPriority(t.Context(), id, 900)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Jobs != 0 {
+		t.Errorf("reprioritized %d jobs, want none — all three are leased", res.Jobs)
+	}
+	if n := h.count(
+		`SELECT count(*) FROM jobs WHERE transfer_id = ? AND priority = 900`, id); n != 0 {
+		t.Error("a leased job was reprioritized under the worker holding it")
+	}
+}
+
+// A settled transfer has nothing left to order, and saying so beats reporting
+// a change that changed nothing.
+func TestSetPriorityRefusesASettledTransfer(t *testing.T) {
+	h := newControlHarness(t)
+	id := h.runningTransfer(1)
+	h.exec(`UPDATE transfers SET state = 'succeeded' WHERE id = ?`, id)
+
+	_, err := h.packages.SetTransferPriority(t.Context(), id, 900)
+	if !errors.Is(err, ErrIllegalTransition) {
+		t.Fatalf("error = %v, want an illegal transition", err)
+	}
+}
+
+// The band is 0-1000 (docs/design/04 §6). Out of it, the caller is told in the
+// terms they asked rather than by a constraint violation naming a column.
+func TestSetPriorityRefusesAValueOutsideTheBand(t *testing.T) {
+	h := newControlHarness(t)
+	id := h.runningTransfer(1)
+
+	for _, priority := range []int{-1, 1001} {
+		if _, err := h.packages.SetTransferPriority(t.Context(), id, priority); !errors.Is(
+			err, ErrInvalidPriority) {
+			t.Errorf("priority %d: error = %v, want an invalid priority", priority, err)
+		}
+	}
+}
+
+// A paused transfer must not hold another transfer's work hostage.
+//
+// The dequeue makes a rank-1 job wait for the rank-0 copy of the same digest,
+// so the second lands as a cross-repository mount rather than a second stream
+// from the vendor. The clause matches across transfers on purpose — two
+// releases of one product share most of their digests — but a PAUSED job is
+// never going to run, so waiting for it waits forever.
+//
+// Reported from a real screen: two downloads of the same product, the first
+// paused by hand, the second sitting in READY with `Took N/A` and never picked
+// up. It could not resolve on its own; nothing about a paused transfer changes
+// until somebody resumes it.
+func TestAPausedJobDoesNotGateAnotherTransfersCopy(t *testing.T) {
+	h := newControlHarness(t)
+	paused := h.runningTransfer(0)
+	waiting := h.runningTransfer(0)
+
+	digest := "sha256:" + strings.Repeat("a", 64)
+	rankedJob := func(transferID string, rank int) {
+		h.exec(`INSERT INTO jobs (transfer_id, kind, digest, size_bytes, source_repo_id,
+		                          target_repo_id, state, wave, site_rank, max_attempts)
+		         VALUES (?, 'manifest', ?, 1024, ?, ?, 'pending', 0, ?, 8)`,
+			transferID, digest, h.repoID, h.repoID, rank)
+	}
+
+	rankedJob(paused, 0)
+	if _, err := h.packages.PauseTransfer(t.Context(), paused); err != nil {
+		t.Fatal(err)
+	}
+	rankedJob(waiting, 1)
+
+	if got := h.lease(); len(got) != 1 {
+		t.Fatalf("leased %d jobs, want the one in the transfer nobody paused", len(got))
+	}
+}

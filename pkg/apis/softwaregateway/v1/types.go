@@ -1462,7 +1462,17 @@ type TransferProgress struct {
 	SavedBytes Int64String `json:"savedBytes,omitempty"`
 }
 
-// TransferControlResponse is what :pause, :resume or :stop did.
+// SetPriorityRequest is the body of :setPriority.
+//
+// A required field with no useful zero: priority 0 is a real, legal value
+// meaning "behind everything", so a caller who omits the field cannot be given
+// a default without guessing which of the two they meant. The pointer is what
+// makes "not said" distinguishable from "said zero".
+type SetPriorityRequest struct {
+	Priority *int `json:"priority"`
+}
+
+// TransferControlResponse is what :pause, :resume, :stop or :setPriority did.
 type TransferControlResponse struct {
 	TransferID string `json:"transferId"`
 	// State is the transfer's state afterwards.
@@ -1475,6 +1485,10 @@ type TransferControlResponse struct {
 	// `CANCELLED`: a leased job belongs to a worker and stops at that worker's
 	// next checkpoint, not the instant the command was typed.
 	InFlight int `json:"inFlight,omitempty"`
+	// Priority is where the transfer now sits in the queue. Set by
+	// :setPriority, which is the verb whose effect is otherwise invisible —
+	// pausing something says PAUSED, reordering it says nothing at all.
+	Priority int `json:"priority,omitempty"`
 }
 
 // ListTransfersResponse is GET /api/v1/transfers.

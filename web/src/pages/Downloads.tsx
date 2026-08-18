@@ -15,6 +15,7 @@ import { NA, Value } from '../components/value'
 import { elapsedSeconds } from '../domain/format'
 import { ManagedInGit, TimeAgo } from '../components/chips'
 import { EmptyStateCard, ErrorState, PageHeader } from '../components/layout'
+import { PriorityControl, QueueControls } from '../components/queuecontrols'
 import { mono } from '../theme'
 import type { RunDownloadResponse } from '../api/types'
 
@@ -300,7 +301,23 @@ export default function Downloads() {
                       <Value>{formatDuration(elapsedSeconds(t.startedAt, t.completedAt))}</Value>
                     ),
                 },
+                {
+                  // The queue's own order, and the only way to change it
+                  // without stopping anything. A download waiting behind work
+                  // that matters less is the commonest complaint this page
+                  // gets, and pausing the thing in front is not the answer:
+                  // it stops work rather than reordering it.
+                  title: 'Priority',
+                  width: 130,
+                  align: 'right',
+                  render: (_, t) => <PriorityControl transfer={t} />,
+                },
                 { title: 'When', width: 90, render: (_, t) => <TimeAgo at={t.completedAt || t.createdAt} /> },
+                {
+                  title: 'Actions',
+                  width: 180,
+                  render: (_, t) => <QueueControls transfer={t} />,
+                },
               ]}
             />
           </Card>

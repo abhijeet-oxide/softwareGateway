@@ -3,6 +3,7 @@ package main
 import (
 	"fmt"
 	"io"
+	"strconv"
 
 	"github.com/spf13/cobra"
 
@@ -83,6 +84,48 @@ func newTransfersDeleteCommand() *cobra.Command {
 		RunE: controlRunner("delete"),
 	}
 	takes(cmd, "delete", transferArg())
+	return cmd
+}
+
+func newTransfersSetPriorityCommand() *cobra.Command {
+	cmd := &cobra.Command{
+		Aliases: []string{"priority"},
+		Short:   "Reorder what a transfer has left to do",
+		Long: "Priority is 0-1000; higher runs first, and transfers of equal\n" +
+			"priority run oldest first. The default is 50.\n\n" +
+			"Only work NOT YET STARTED is reordered. Jobs a worker already holds\n" +
+			"run to completion: preempting a forty-gigabyte blob at ninety per cent\n" +
+			"to start a more urgent one throws away more than the reordering could\n" +
+			"recover.\n\n" +
+			"The request behind the transfer is reordered too, so the later steps\n" +
+			"of a download chain inherit the new priority instead of dropping back.",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			priority, err := strconv.Atoi(args[1])
+			if err != nil {
+				return usageError{msg: fmt.Sprintf(
+					"priority %q is not a number; it is 0-1000, higher first", args[1])}
+			}
+
+			resp, err := newClient().SetTransferPriority(cmd.Context(), args[0], priority)
+			if err != nil {
+				return err
+			}
+			return render(stdout(), opts.output, resp, func(w io.Writer) error {
+				fmt.Fprintf(w, "Set %s to priority %d — %s reordered.\n",
+					shortID(resp.TransferID), priority,
+					plural(resp.Jobs, "job", "jobs"))
+				if resp.InFlight > 0 {
+					fmt.Fprintf(w, "  %s already in flight; they finish where they are.\n",
+						plural(resp.InFlight, "job", "jobs"))
+				}
+				return nil
+			})
+		},
+	}
+	takes(cmd, "set-priority", transferArg(), argSpec{
+		Name: "priority",
+		Help: "0-1000, higher runs first (the default is 50)",
+	})
 	return cmd
 }
 

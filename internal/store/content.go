@@ -2,6 +2,7 @@ package store
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 )
 
@@ -45,6 +46,20 @@ type ContentRow struct {
 	// wherever that is absent — which is every artifact Helm has ever pushed.
 	// Without it an orb of 157 images and 97 charts reported 257 images.
 	ConfigMediaType string
+	// Annotations are what the VENDOR said this component is.
+	//
+	// Carried for the same reason as ConfigMediaType and one step further out.
+	// A NEAR orb's charts are plain OCI image manifests whose config is an
+	// image config: the three fields above cannot tell them from images, and
+	// only `com.nokia.ncd.orb.type` can. Naming the key here would put vendor
+	// knowledge in the store, so the map goes out verbatim and the layout
+	// plugin reads it — the same evidence, and the same reader, that the
+	// artifact listing already classifies by.
+	//
+	// It is also a GROUPING key, which is what keeps Count honest: two
+	// components that agree on all four fields are one row, and two that
+	// disagree are two.
+	Annotations map[string]string
 	// Outcome is one of copied, present, failed, outstanding.
 	Outcome string
 	Count   int
@@ -72,9 +87,14 @@ const (
 // One query. The inner select folds a component's jobs into counts, and the
 // outer one turns those counts into a single outcome per component — so a
 // component appears exactly once in the result however many places it lands.
+//
+// The outer grouping is by what a component IS, annotations included. A vendor
+// that names its components individually therefore gets close to a row per
+// component, which is the price of being able to tell its charts from its
+// images at all; a registry that annotates nothing groups as tightly as before.
 func (p *Packages) ContentBreakdown(ctx context.Context, transferID string) ([]ContentRow, error) {
 	rows, err := p.db.QueryContext(ctx, p.dialect.Rewrite(`
-		SELECT media_type, artifact_type, config_media_type,
+		SELECT media_type, artifact_type, config_media_type, annotations,
 		       CASE WHEN failed      > 0 THEN 'failed'
 		            WHEN outstanding > 0 THEN 'outstanding'
 		            WHEN copied      > 0 THEN 'copied'
@@ -85,6 +105,7 @@ func (p *Packages) ContentBreakdown(ctx context.Context, transferID string) ([]C
 		        SELECT pa.id,
 		               pa.media_type                     AS media_type,
 		               COALESCE(pa.artifact_type, '')    AS artifact_type,
+		               pa.annotations                    AS annotations,
 		               -- What the component's config blob says it is. Already
 		               -- recorded: the walk stores a manifest's config
 		               -- alongside its layers, marked by kind.
@@ -105,9 +126,11 @@ func (p *Packages) ContentBreakdown(ctx context.Context, transferID string) ([]C
 		                 ON j.artifact_id = pa.id
 		                AND j.transfer_id = t.id
 		         WHERE t.id = ?
-		         GROUP BY pa.id, pa.media_type, COALESCE(pa.artifact_type, '')
+		         GROUP BY pa.id, pa.media_type, COALESCE(pa.artifact_type, ''),
+		                  pa.annotations
 		       ) AS components
-		 GROUP BY media_type, artifact_type, config_media_type, outcome`), transferID)
+		 GROUP BY media_type, artifact_type, config_media_type, annotations, outcome`),
+		transferID)
 	if err != nil {
 		return nil, fmt.Errorf("content breakdown of transfer %s: %w", transferID, err)
 	}
@@ -115,10 +138,19 @@ func (p *Packages) ContentBreakdown(ctx context.Context, transferID string) ([]C
 
 	var out []ContentRow
 	for rows.Next() {
-		var row ContentRow
+		var (
+			row         ContentRow
+			annotations []byte
+		)
 		if err := rows.Scan(&row.MediaType, &row.ArtifactType, &row.ConfigMediaType,
-			&row.Outcome, &row.Count); err != nil {
+			&annotations, &row.Outcome, &row.Count); err != nil {
 			return nil, fmt.Errorf("scan content breakdown: %w", err)
+		}
+		if len(annotations) > 0 {
+			// Malformed annotations leave the map nil, so the component is
+			// classified by its OCI fields alone. That is a worse answer than
+			// the vendor's, and a better one than no breakdown at all.
+			_ = json.Unmarshal(annotations, &row.Annotations)
 		}
 		out = append(out, row)
 	}

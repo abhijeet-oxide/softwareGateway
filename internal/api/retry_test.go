@@ -51,6 +51,10 @@ func (f *fakeQueue) Delete(_ context.Context, id string) (store.ControlResult, e
 	return f.control("delete", id)
 }
 
+func (f *fakeQueue) SetPriority(_ context.Context, id string, priority int) (store.ControlResult, error) {
+	return f.control(fmt.Sprintf("setPriority(%d)", priority), id)
+}
+
 func (f *fakeQueue) control(verb, id string) (store.ControlResult, error) {
 	f.controlled = append(f.controlled, verb+" "+id)
 	if f.controlErr != nil {
@@ -154,18 +158,68 @@ func TestRetryRouteSplitsTheVerbAtTheLastColon(t *testing.T) {
 	}
 }
 
-// A verb that is still specified but unbuilt is the one somebody reaches for
-// first. Saying so beats a bare "unknown method", which reads as a typo.
-func TestUnbuiltVerbsSayTheyAreUnbuilt(t *testing.T) {
-	ts, _, h := newRetryHarness(t)
+// Reordering a queue is a real verb, and its whole effect is on jobs nobody
+// can see. So the test is on what reached the QUEUE, not on the status code: a
+// handler that answered 200 and reordered nothing would be indistinguishable
+// from a working one on screen, and would leave an operator convinced their
+// urgent download was now first.
+func TestSetPriorityReachesTheQueueWithTheValue(t *testing.T) {
+	ts, q, h := newRetryHarness(t)
 	full := h.seedTransfer("4d882940-1111-2222-3333-444444444444")
 
-	resp := postJSON(t, ts.URL+"/api/v1/transfers/"+full+":setPriority")
+	resp := postBody(t, ts.URL+"/api/v1/transfers/"+full+":setPriority", `{"priority":900}`)
 	defer func() { _ = resp.Body.Close() }()
 
-	body, _ := readBody(resp)
-	if !strings.Contains(body, "not built") {
-		t.Errorf("setPriority returned %q, want it to say the verb is not built yet", body)
+	if resp.StatusCode != http.StatusOK {
+		body, _ := readBody(resp)
+		t.Fatalf("status = %d (%s), want 200", resp.StatusCode, body)
+	}
+	if want := "setPriority(900) " + full; len(q.controlled) != 1 || q.controlled[0] != want {
+		t.Errorf("queue saw %v, want %q", q.controlled, want)
+	}
+}
+
+// Priority 0 is a legal value meaning "behind everything", so it must not be
+// mistaken for "the caller said nothing" — and an omitted priority must not be
+// silently read as 0, which would send the transfer to the back of the queue.
+func TestSetPriorityDistinguishesZeroFromUnsaid(t *testing.T) {
+	for _, tc := range []struct {
+		name, body string
+		want       int
+		accepted   bool
+	}{
+		{name: "zero is a value", body: `{"priority":0}`, want: 0, accepted: true},
+		{name: "no field", body: `{}`, accepted: false},
+		{name: "no body at all", body: "", accepted: false},
+		{name: "above the band", body: `{"priority":1001}`, accepted: false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ts, q, h := newRetryHarness(t)
+			full := h.seedTransfer("4d882940-1111-2222-3333-444444444444")
+
+			resp := postBody(t, ts.URL+"/api/v1/transfers/"+full+":setPriority", tc.body)
+			defer func() { _ = resp.Body.Close() }()
+
+			body, _ := readBody(resp)
+			if tc.accepted {
+				if resp.StatusCode != http.StatusOK {
+					t.Fatalf("status = %d (%s), want 200", resp.StatusCode, body)
+				}
+				if want := fmt.Sprintf("setPriority(%d) %s", tc.want, full); q.controlled[0] != want {
+					t.Errorf("queue saw %v, want %q", q.controlled, want)
+				}
+				return
+			}
+			if resp.StatusCode != http.StatusBadRequest {
+				t.Fatalf("status = %d (%s), want 400", resp.StatusCode, body)
+			}
+			if len(q.controlled) != 0 {
+				t.Errorf("the queue was asked to do something anyway: %v", q.controlled)
+			}
+			if !strings.Contains(body, "priority") {
+				t.Errorf("the refusal does not name the field: %s", body)
+			}
+		})
 	}
 }
 
@@ -273,6 +327,24 @@ func postJSON(t *testing.T, url string) *http.Response {
 	if err != nil {
 		t.Fatal(err)
 	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return resp
+}
+
+// postBody posts a verb with a body. The bodyless postJSON above stays as it
+// is: every other control verb takes no body, and giving them one would be
+// testing a shape they do not have.
+func postBody(t *testing.T, url, body string) *http.Response {
+	t.Helper()
+	req, err := http.NewRequestWithContext(t.Context(), http.MethodPost, url,
+		strings.NewReader(body))
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.Header.Set("Content-Type", "application/json")
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		t.Fatal(err)

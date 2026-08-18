@@ -194,3 +194,55 @@ func (h *failureHarness) seedConfig(artifactID int64, mediaType string) {
 	h.exec(`INSERT INTO artifact_blobs (artifact_id, digest, kind, ordinal)
 	        VALUES (?, ?, 'config', 0)`, artifactID, digest)
 }
+
+// The vendor's own annotations reach the caller, because for some vendors they
+// are the ONLY evidence.
+//
+// A NEAR orb's charts are plain image manifests carrying an ordinary image
+// config: media type, artifact type and config media type are identical for its
+// charts and its images. The store must not try to read the annotation — naming
+// `com.nokia.ncd.orb.type` here would be vendor knowledge in the wrong place —
+// but it must carry it out, and it must not fold two components that disagree
+// about it into one row.
+func TestTheBreakdownCarriesAnnotationsOutVerbatim(t *testing.T) {
+	h := newFailureHarness(t)
+	id := h.transferWithJobs(0)
+
+	const manifest = "application/vnd.oci.image.manifest.v1+json"
+
+	chart := h.seedArtifact(manifest, "")
+	h.seedAnnotations(chart, `{"com.nokia.ncd.orb.type":"helmchart"}`)
+	h.seedConfig(chart, "application/vnd.oci.image.config.v1+json")
+	h.jobForArtifact(id, chart, "succeeded")
+
+	image := h.seedArtifact(manifest, "")
+	h.seedAnnotations(image, `{"com.nokia.ncd.orb.type":"cnfimage"}`)
+	h.seedConfig(image, "application/vnd.oci.image.config.v1+json")
+	h.jobForArtifact(id, image, "succeeded")
+
+	rows, err := h.packages.ContentBreakdown(t.Context(), id)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	got := map[string]ContentRow{}
+	for _, row := range rows {
+		got[row.Annotations["com.nokia.ncd.orb.type"]] = row
+	}
+	if len(got) != 2 {
+		t.Fatalf("two components indistinguishable but for their annotations "+
+			"came out as %d rows: %+v", len(rows), rows)
+	}
+	for _, orbType := range []string{"helmchart", "cnfimage"} {
+		if row := got[orbType]; row.Count != 1 {
+			t.Errorf("%s counted %d, want 1: %+v", orbType, row.Count, rows)
+		}
+	}
+}
+
+// seedAnnotations gives a component the annotations its vendor wrote on it.
+func (h *failureHarness) seedAnnotations(artifactID int64, annotations string) {
+	h.t.Helper()
+	h.exec(`UPDATE package_artifacts SET annotations = ? WHERE id = ?`,
+		annotations, artifactID)
+}

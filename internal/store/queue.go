@@ -276,6 +276,20 @@ const leaseOrder = ` ORDER BY priority DESC, kind DESC, site_rank, size_bytes DE
 // rather than merely while it is leased. The second clause says that, and is
 // gated on `site_rank = 0` first so it costs nothing for the majority of jobs,
 // which are rank 0 and skip it entirely.
+//
+// # A PAUSED sibling is not an earlier one
+//
+// The clause matches across transfers, deliberately: two transfers of the same
+// product line share most of their digests, and the mount is worth having
+// between them as much as within one. But "wait for the earlier copy" is only
+// sound while the earlier copy is going to run. A paused job is not, and the
+// wait becomes permanent — a second download sitting in `ready`, never leasing
+// a job and therefore never even reaching `running`, because a transfer
+// somebody paused holds a rank-0 job for the same digest. It cannot resolve on
+// its own: nothing about the paused transfer changes until a person resumes it.
+//
+// So paused jobs are excluded. The mount they would have offered is lost, which
+// costs bandwidth once; waiting for them costs the whole transfer, forever.
 func (p *Packages) leaseCandidatePredicate() string {
 	return `state = 'pending'
 	   AND NOT paused
@@ -296,6 +310,7 @@ func (p *Packages) leaseCandidatePredicate() string {
 	          WHERE earlier.digest = jobs.digest
 	            AND earlier.site_rank < jobs.site_rank
 	            AND earlier.state IN ('pending','blocked','leased')
+	            AND NOT earlier.paused
 	            AND er.registry_host = jr2.registry_host
 	            AND er.product_id = jr2.product_id
 	       ))`

@@ -1,17 +1,15 @@
-import { App, Button, Card, Col, Descriptions, Row, Space, Steps, Table, Tag, Tooltip, Typography } from 'antd'
-import { PauseOutlined, PlayCircleOutlined, ReloadOutlined, StopOutlined } from '@ant-design/icons'
-import { useParams } from 'react-router-dom'
-import {
-  useProduct, useSyncs, useTransfer, useTransferControl, useTransferFailures,
-} from '../api/queries'
-import { useCan } from '../auth/permissions'
-import { isLive, transferVersion } from '../domain/derive'
+import { Alert, Card, Col, Descriptions, Row, Space, Steps, Table, Tag, Tooltip, Typography } from 'antd'
+import { useNavigate, useParams } from 'react-router-dom'
+import { useProduct, useSyncs, useTransfer, useTransferFailures } from '../api/queries'
+import { isLive, kindName, transferVersion } from '../domain/derive'
 import {
   bytes, elapsedSeconds, formatBytes, formatCount, formatDuration, formatSpeed,
 } from '../domain/format'
 import { NA, Stat, Value } from '../components/value'
 import { MeasuredProgress, StateStrip, type StripState } from '../components/progress'
 import { RepoLink, TimeAgo } from '../components/chips'
+import { ARTIFACT_ICONS, Icon } from '../components/icons'
+import { PriorityControl, QueueControls } from '../components/queuecontrols'
 import { ErrorState, PageHeader, SavedPanel } from '../components/layout'
 import { mono } from '../theme'
 
@@ -33,13 +31,11 @@ import { mono } from '../theme'
 
 export default function DownloadDetail() {
   const { transferId } = useParams()
-  const { message } = App.useApp()
+  const navigate = useNavigate()
 
   const transfer = useTransfer(transferId)
   const failures = useTransferFailures(transferId)
   const product = useProduct(transfer.data?.product)
-  const control = useTransferControl(transferId!)
-  const mayOperate = useCan('operate', { product: transfer.data?.product })
 
   const t = transfer.data
   const syncs = useSyncs(t?.product, t?.targetName)
@@ -81,20 +77,32 @@ export default function DownloadDetail() {
         ? 'running'
         : 'pending'
 
-  const step = failed ? (transferred ? 1 : 0) : done ? 3 : running ? 0 : 0
-
-  const act = async (verb: 'retry' | 'pause' | 'resume' | 'stop') => {
-    try {
-      await control.mutateAsync(verb)
-      message.success(
-        verb === 'retry'
-          ? 'Retrying from where it stopped — work already done is not repeated.'
-          : `The download was asked to ${verb}.`,
-      )
-    } catch (e) {
-      message.error(e instanceof Error ? e.message : `The download could not ${verb}.`)
+  /*
+   * Why a download that is READY is not moving.
+   *
+   * A transfer becomes `running` when a worker leases its first job, and until
+   * then the page has a state and nothing else — which is exactly the moment
+   * somebody asks whether the thing is broken. It usually is not: the fleet is
+   * busy with higher-priority or earlier work, and this download is next.
+   *
+   * So the answer is assembled from what the transfer actually knows, and
+   * stays silent for anything running, settled or paused.
+   */
+  const waiting = (() => {
+    if (!t || t.state !== 'READY' && t.state !== 'PENDING' && t.state !== 'PLANNING') return null
+    if (t.state === 'PLANNING' || (t.state === 'PENDING' && !progress?.jobsPlanned)) {
+      return 'This download is still being planned: the release is being walked to work out what has to move.'
     }
-  }
+    const workers = progress?.workers ?? 0
+    const pending = progress?.jobsWaiting ?? progress?.jobsOutstanding ?? 0
+    return `${formatCount(pending) ?? '0'} jobs are ready to run and no worker has taken one yet`
+      + (workers > 0
+        ? `. ${formatCount(workers)} workers are busy with other work; this download starts as they free up.`
+        : '. The fleet is occupied elsewhere, or no worker is currently connected.')
+      + ' Raising the priority below moves it ahead of work that has not started.'
+  })()
+
+  const step = failed ? (transferred ? 1 : 0) : done ? 3 : running ? 0 : 0
 
   return (
     <>
@@ -128,39 +136,18 @@ export default function DownloadDetail() {
             </Space>
           )
         }
-        extra={
-          <Space>
-            {failed && (
-              <Tooltip title="Resumes from where it stopped. Artifacts already transferred are not moved again.">
-                <Button
-                  type="primary"
-                  icon={<ReloadOutlined />}
-                  disabled={!mayOperate}
-                  loading={control.isPending}
-                  onClick={() => void act('retry')}
-                >
-                  Retry
-                </Button>
-              </Tooltip>
-            )}
-            {running && t?.state !== 'PAUSED' && (
-              <Button icon={<PauseOutlined />} disabled={!mayOperate} onClick={() => void act('pause')}>
-                Pause
-              </Button>
-            )}
-            {t?.state === 'PAUSED' && (
-              <Button icon={<PlayCircleOutlined />} disabled={!mayOperate} onClick={() => void act('resume')}>
-                Resume
-              </Button>
-            )}
-            {running && (
-              <Button danger icon={<StopOutlined />} disabled={!mayOperate} onClick={() => void act('stop')}>
-                Stop
-              </Button>
-            )}
-          </Space>
-        }
+        extra={t && <QueueControls transfer={t} size="middle" onDeleted={() => navigate('/downloads')} />}
       />
+
+      {waiting && (
+        <Alert
+          style={{ marginBottom: 16 }}
+          type="info"
+          showIcon
+          message="Queued — nothing has been handed to a worker yet"
+          description={waiting}
+        />
+      )}
 
       <Card style={{ marginBottom: 16 }} loading={transfer.isLoading}>
         <Steps
@@ -195,7 +182,22 @@ export default function DownloadDetail() {
                   dataSource={t?.content ?? []}
                   rowKey={(c) => c.kind}
                   columns={[
-                    { title: 'Type', render: (_, c) => c.kind },
+                    {
+                      title: 'Type',
+                      // The same words, and the same marks, the release page
+                      // uses for the same components. A download of a release
+                      // is that release, one screen later.
+                      render: (_, c) => {
+                        const name = kindName(c.kind)
+                        const icon = ARTIFACT_ICONS[name as keyof typeof ARTIFACT_ICONS]
+                        return (
+                          <Space size={6}>
+                            {icon && <Icon as={icon} size={15} title={name} />}
+                            {name}
+                          </Space>
+                        )
+                      },
+                    },
                     { title: 'Total', align: 'right', width: 80, render: (_, c) => <Value>{formatCount(c.total)}</Value> },
                     { title: 'Copied', align: 'right', width: 80, render: (_, c) => <Value>{formatCount(c.copied)}</Value> },
                     {
@@ -315,6 +317,9 @@ export default function DownloadDetail() {
                 >
                   {t?.strategy ? <Tag>{t.strategy}</Tag> : <NA />}
                 </Tooltip>
+              </Descriptions.Item>
+              <Descriptions.Item label="Priority">
+                {t ? <PriorityControl transfer={t} /> : <NA />}
               </Descriptions.Item>
               <Descriptions.Item label="Reference">
                 <Typography.Text style={{ fontFamily: mono, fontSize: 11 }} copyable>

@@ -25,6 +25,20 @@ type Expander interface {
 	Expand(ctx context.Context) (requests, jobs int, err error)
 }
 
+// Stepper advances the chains a download rule opened.
+//
+// A consumer-defined interface, and optional: nil means no chains, which is
+// every deployment whose rules name a single destination.
+//
+// A sweep on the tick rather than a hook on completion, for the reason every
+// other recovery path here is a sweep. The interesting failure is the one
+// where nothing calls the hook — the Coordinator restarts between a step
+// succeeding and its successor being released — and a chain that only advanced
+// on an event would hang there forever.
+type Stepper interface {
+	AdvanceSteps(ctx context.Context) (released, skipped int, err error)
+}
+
 // ControllerOptions tune the two loops.
 type ControllerOptions struct {
 	// ReapInterval is how often expired leases are collected.
@@ -37,6 +51,7 @@ type ControllerOptions struct {
 type Controller struct {
 	queue    *Queue
 	expander Expander
+	stepper  Stepper
 	opts     ControllerOptions
 	log      *slog.Logger
 
@@ -136,7 +151,34 @@ func (c *Controller) reap(ctx context.Context) {
 	}
 }
 
+// WithStepper attaches the chain sweep.
+func (c *Controller) WithStepper(s Stepper) *Controller {
+	c.stepper = s
+	return c
+}
+
+// advance releases and skips the steps of a download rule's chain.
+//
+// Run BEFORE expansion on each tick, so a step released this tick is planned
+// this tick rather than waiting a whole interval for the next one — which for
+// a three-hop chain is the difference between one interval and three.
+func (c *Controller) advance(ctx context.Context) {
+	if c.stepper == nil {
+		return
+	}
+	released, skipped, err := c.stepper.AdvanceSteps(ctx)
+	if err != nil {
+		c.log.ErrorContext(ctx, "could not advance download-rule chains", "error", err)
+		return
+	}
+	if released > 0 || skipped > 0 {
+		c.log.InfoContext(ctx, "advanced download-rule chains",
+			"released", released, "skipped", skipped)
+	}
+}
+
 func (c *Controller) expand(ctx context.Context) {
+	c.advance(ctx)
 	if c.expander == nil {
 		return
 	}

@@ -6,6 +6,7 @@ import (
 	"log/slog"
 
 	"github.com/abhijeet-oxide/softwareGateway/internal/catalog"
+	"github.com/abhijeet-oxide/softwareGateway/internal/platform/metrics"
 	"github.com/abhijeet-oxide/softwareGateway/internal/product"
 	"github.com/abhijeet-oxide/softwareGateway/internal/regclient"
 	"github.com/abhijeet-oxide/softwareGateway/internal/registry"
@@ -220,4 +221,100 @@ func (r *resolverImpl) productID(ctx context.Context, name string) (int64, error
 		return 0, fmt.Errorf("product %q has no active catalog row: %w", name, err)
 	}
 	return id, nil
+}
+
+// ResolveAtTarget answers what a tag currently points at in a target.
+//
+// This is the destination walk that turns a delegated transfer's outcome into
+// an OBSERVATION. The registry told us a sync succeeded; that says it did
+// something, not what. Resolving the tag here and comparing the digest is the
+// only way `diverged` can be told from `succeeded` at all.
+//
+// It reads through the same client factory as everything else, so a target
+// unreachable to a transfer is unreachable to this too — which is correct: a
+// confirmation that could succeed where a transfer could not would be
+// confirming the wrong thing.
+func (r *resolverImpl) ResolveAtTarget(
+	ctx context.Context, productName, targetName, tag string,
+) (string, error) {
+	p, ok := r.products.Get(productName)
+	if !ok {
+		return "", fmt.Errorf("product %q is not loaded", productName)
+	}
+	t, ok := p.Target(targetName)
+	if !ok {
+		return "", fmt.Errorf("product %q has no target %q", productName, targetName)
+	}
+
+	reader, err := r.clients.For(v1.JobEndpoint{
+		Product:    productName,
+		Name:       t.Name,
+		Registry:   t.Registry,
+		Repository: t.Repository,
+		Type:       string(t.Type),
+		Role:       "target",
+	})
+	if err != nil {
+		return "", err
+	}
+
+	desc, err := reader.ResolveTag(ctx, tag)
+	if err != nil {
+		return "", err
+	}
+	return string(desc.Digest), nil
+}
+
+// replicationMetrics adapts the metric registry to the replication package's
+// narrow interface.
+//
+// An adapter rather than the registry itself, so internal/replication depends
+// on four method names rather than on Prometheus — which is what lets every
+// decision in it be tested without a registry.
+type replicationMetrics struct{ m *metrics.Registry }
+
+func (r replicationMetrics) RecordSync(product, target, result string) {
+	r.m.MirrorSyncs.WithLabelValues(product, target, result).Inc()
+}
+
+func (r replicationMetrics) RecordSyncDuration(product, target string, seconds float64) {
+	r.m.MirrorSyncDuration.WithLabelValues(product, target).Observe(seconds)
+}
+
+func (r replicationMetrics) SetDrift(product, target string, drifted bool) {
+	v := 0.0
+	if drifted {
+		v = 1
+	}
+	r.m.MirrorConfigDrift.WithLabelValues(product, target).Set(v)
+}
+
+func (r replicationMetrics) RecordProxyProbe(product, target, result string) {
+	r.m.ProxyCacheProbes.WithLabelValues(product, target, result).Inc()
+}
+
+// TargetRowIDs maps a product's configured target names to catalog row IDs.
+//
+// Needed only to RUN a rule: listing and describing one reads configuration,
+// which is why the two are separate dependencies. A target with no row means
+// reconciliation has not run, and saying that is more useful than a foreign-key
+// error three layers down.
+func (r *resolverImpl) TargetRowIDs(ctx context.Context, productName string) (map[string]int64, error) {
+	p, ok := r.products.Get(productName)
+	if !ok {
+		return nil, fmt.Errorf("product %q is not configured", productName)
+	}
+
+	out := make(map[string]int64, len(p.Spec.Targets))
+	for _, t := range p.Spec.Targets {
+		id, err := r.catalog.ResolveRepository(ctx, productName, t.Name)
+		if err != nil {
+			// Skipped rather than fatal: a rule that does not name this target
+			// can still run, and failing the whole call because an unrelated
+			// target is unreconciled would be the wrong blast radius.
+			continue
+		}
+		out[t.Name] = id
+	}
+	return out, nil
 }

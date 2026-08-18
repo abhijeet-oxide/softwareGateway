@@ -89,9 +89,9 @@ transferctl
 └── version                     Client and server versions
 ```
 
-### `targets` (shipped at M8) and `warm` (proposed)
+### `targets` (shipped at M8) and `warm` (deferred)
 
-Delegated replication ([18](18-quay-replication.md)) adds one noun group and one verb, following the rule the tree already follows — things you *look at* are nouns, things the tool *does* are verbs. The `targets` group exists; `warm` does not yet, because it needs the transfer semantics in [18](18-quay-replication.md) §6 rather than only the configuration:
+Delegated replication ([18](18-quay-replication.md)) adds one noun group and one verb, following the rule the tree already follows — things you *look at* are nouns, things the tool *does* are verbs. The `targets` group exists. `warm` does not, and its absence is a decision rather than a backlog item: it pulls a whole release at line rate, so it belongs in the worker plane and needs a third `jobs.kind` ([18](18-quay-replication.md) §6.3).
 
 ```
 ├── targets
@@ -106,7 +106,7 @@ Delegated replication ([18](18-quay-replication.md)) adds one noun group and one
 
 `apply` is a separate command rather than something a config reload does, because the write is destructive — see the decision in [18](18-quay-replication.md) §8. `download` against a `mode: proxy` target is refused with an error that names `warm`, since there is nothing to push to a cache.
 
-### Proposed at M9: `rules`
+### `rules` (shipped at M9)
 
 Download rules ([20](20-download-rules.md)) add one more noun group, following the same rule:
 

@@ -2267,16 +2267,26 @@ func (p *Packages) RecordPlacement(
 // UNIQUE (request_id, target_repo_id) makes this idempotent: a request expanded
 // twice produces one transfer per target, not two.
 func (p *Packages) CreateTransfer(ctx context.Context, tx *sql.Tx, row TransferRow) (bool, error) {
+	// A step with a predecessor opens in `waiting` rather than `planning`.
+	// Planning it now would read from a target that does not hold the content
+	// yet — the whole reason the ordering exists.
+	state := "planning"
+	if row.DependsOn != "" {
+		state = "waiting"
+	}
+
 	query := p.dialect.Rewrite(`
 		INSERT INTO transfers
-			(id, request_id, package_id, source_repo_id, target_repo_id, state, priority, updated_at)
-		VALUES (?, ?, ?, ?, ?, 'planning', ?, ` + p.dialect.Now() + `)
+			(id, request_id, package_id, source_repo_id, target_repo_id, state, priority,
+			 step_index, depends_on_transfer_id, updated_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ` + p.dialect.Now() + `)
 		ON CONFLICT (request_id, target_repo_id) DO NOTHING
 		RETURNING id`)
 
 	var id string
 	err := tx.QueryRowContext(ctx, query, row.ID, row.RequestID, row.PackageID,
-		row.SourceRepoID, row.TargetRepoID, row.Priority).Scan(&id)
+		row.SourceRepoID, row.TargetRepoID, state, row.Priority,
+		row.StepIndex, nullIfEmpty(row.DependsOn)).Scan(&id)
 
 	if errors.Is(err, sql.ErrNoRows) {
 		return false, nil
@@ -2296,4 +2306,11 @@ type TransferRow struct {
 	TargetRepoID int64
 	Priority     int
 	State        string
+
+	// StepIndex is the transfer's position in a download rule's chain. Steps
+	// sharing an index have no dependency between them and run concurrently.
+	StepIndex int
+	// DependsOn is the transfer this one waits for, empty when nothing
+	// precedes it. At most one, because `mirror.from` names one upstream.
+	DependsOn string
 }

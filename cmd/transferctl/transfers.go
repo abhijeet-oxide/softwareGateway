@@ -338,6 +338,41 @@ type listView struct {
 	watching bool
 }
 
+// delegated reports whether the REGISTRY moved this transfer's bytes.
+//
+// Read from the recorded strategy rather than inferred from an empty job list:
+// a copy transfer that has not been planned yet also has no jobs, and the two
+// must never render the same way.
+func delegated(t *v1.Transfer) bool {
+	return t.Strategy != "" && t.Strategy != "copy"
+}
+
+// dashDelegatedCells blanks the measured columns of one list row.
+//
+// The indices are the positions in the header, and they are listed rather than
+// computed so that adding a column cannot silently start reporting a synthesised
+// number for a delegated transfer.
+func dashDelegatedCells(row []string) {
+	const (
+		colDone    = 6
+		colJobs    = 7
+		colFailed  = 8
+		colCopied  = 9
+		colSaved   = 10
+		colLeft    = 11
+		colPlanned = 12
+		colSpeed   = 13
+		colRunning = 14
+		colETA     = 16
+	)
+	for _, i := range []int{colDone, colJobs, colFailed, colCopied, colSaved,
+		colLeft, colPlanned, colSpeed, colRunning, colETA} {
+		if i < len(row) {
+			row[i] = "—"
+		}
+	}
+}
+
 func renderTransferList(
 	w io.Writer, resp *v1.ListTransfersResponse, rates rateTrackers, view listView,
 ) error {
@@ -358,7 +393,7 @@ func renderTransferList(
 			finished++
 			continue
 		}
-		rows = append(rows, []string{
+		row := []string{
 			shortID(t.ID),
 			t.Product,
 			transferTag(t),
@@ -376,7 +411,16 @@ func renderTransferList(
 			fmt.Sprint(t.Progress.JobsInFlight),
 			elapsedOf(t),
 			etaOf(t, rates.rateFor(t.ID)),
-		})
+		}
+		// EVERY measured column becomes an em dash for a transfer whose bytes
+		// we did not move. They would all be structurally zero otherwise, and
+		// a zero in a byte column reads as "nothing has happened" rather than
+		// as "we cannot count this" — which is the difference between a
+		// reader waiting patiently and a reader raising an incident.
+		if delegated(t) {
+			dashDelegatedCells(row)
+		}
+		rows = append(rows, row)
 	}
 
 	if len(rows) > 1 {
@@ -970,6 +1014,61 @@ func settled(s v1.TransferState) bool {
 	}
 }
 
+// describeDelegated renders a transfer the registry performed.
+//
+// A separate rendering rather than the usual one with empty numbers, because
+// the usual one is a page of measurements and every one of them would be a
+// zero that means something other than zero. What this has instead is a state
+// and a sentence saying whose bytes they were.
+func describeDelegated(w io.Writer, t *v1.Transfer) error {
+	fmt.Fprintln(w)
+	fmt.Fprintf(w, "Delegated to the %s at %s.\n", strategyPhrase(t.Strategy),
+		endpointName(t.TargetName, t.Target))
+	fmt.Fprintln(w)
+
+	tw := newTabWriter(w)
+	fmt.Fprintf(tw, "  Progress:\t%s\n", delegatedProgress(t))
+	fmt.Fprintf(tw, "  Bytes:\t— we did not move them and cannot count them\n")
+	if t.FailureReason != "" {
+		fmt.Fprintf(tw, "  Detail:\t%s\n", t.FailureReason)
+	}
+	if err := tw.Flush(); err != nil {
+		return err
+	}
+
+	fmt.Fprintln(w)
+	fmt.Fprintf(w, "  transferctl targets describe %s %s   what the registry is configured to do\n",
+		t.Product, t.TargetName)
+	return nil
+}
+
+func strategyPhrase(strategy string) string {
+	switch strategy {
+	case "mirror":
+		return "registry's own mirror"
+	case "proxy":
+		return "registry's proxy cache"
+	default:
+		return "registry"
+	}
+}
+
+// delegatedProgress is a STATE, never a percentage.
+func delegatedProgress(t *v1.Transfer) string {
+	switch t.State {
+	case v1.TransferSyncing:
+		return "the registry is syncing; there is no percentage to report"
+	case v1.TransferSucceeded:
+		return "complete, and the destination holds the digest we asked for"
+	case v1.TransferDiverged:
+		return "complete, and the destination holds a DIFFERENT digest — the upstream tag moved"
+	case v1.TransferFailed:
+		return "the sync did not complete"
+	default:
+		return strings.ToLower(string(t.State))
+	}
+}
+
 func describeTransfer(w io.Writer, t *v1.Transfer, rates *rateTracker, watching bool) error {
 	tw := newTabWriter(w)
 	fmt.Fprintf(tw, "ID:\t%s\n", t.ID)
@@ -990,6 +1089,10 @@ func describeTransfer(w io.Writer, t *v1.Transfer, rates *rateTracker, watching 
 	fmt.Fprintf(tw, "Wave:\t%s of %d\n", activeWaves(t), t.MaxWave)
 	if err := tw.Flush(); err != nil {
 		return err
+	}
+
+	if delegated(t) {
+		return describeDelegated(w, t)
 	}
 
 	fmt.Fprintln(w)

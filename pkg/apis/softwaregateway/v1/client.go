@@ -701,3 +701,41 @@ func replicationPath(product, target string) string {
 	return "/api/v1/products/" + url.PathEscape(product) +
 		"/targets/" + url.PathEscape(target) + "/replication"
 }
+
+// ---------------------------------------------------------------------------
+// Download rules (docs/design/20)
+// ---------------------------------------------------------------------------
+
+// ListDownloadRules returns a product's rules with their derived chains.
+func (c *Client) ListDownloadRules(ctx context.Context, product string) (*ListDownloadRulesResponse, error) {
+	var out ListDownloadRulesResponse
+	return &out, c.get(ctx, "/api/v1/products/"+url.PathEscape(product)+"/downloadRules", &out)
+}
+
+// GetDownloadRule returns one rule.
+func (c *Client) GetDownloadRule(ctx context.Context, product, rule string) (*DownloadRuleView, error) {
+	var out DownloadRuleView
+	return &out, c.get(ctx, downloadRulePath(product, rule), &out)
+}
+
+// RunDownloadRule triggers a rule by hand.
+func (c *Client) RunDownloadRule(ctx context.Context, product, rule string, req RunDownloadRuleRequest) (*RunDownloadRuleResponse, error) {
+	var out RunDownloadRuleResponse
+	return &out, c.post(ctx, downloadRulePath(product, rule)+":run", req, &out)
+}
+
+// SuspendDownloadRule stops a rule now, without editing configuration.
+func (c *Client) SuspendDownloadRule(ctx context.Context, product, rule string, req SuspendDownloadRuleRequest) (*SuspendDownloadRuleResponse, error) {
+	var out SuspendDownloadRuleResponse
+	return &out, c.post(ctx, downloadRulePath(product, rule)+":suspend", req, &out)
+}
+
+// ResumeDownloadRule lifts a suspension.
+func (c *Client) ResumeDownloadRule(ctx context.Context, product, rule string) (*SuspendDownloadRuleResponse, error) {
+	var out SuspendDownloadRuleResponse
+	return &out, c.post(ctx, downloadRulePath(product, rule)+":resume", nil, &out)
+}
+
+func downloadRulePath(product, rule string) string {
+	return "/api/v1/products/" + url.PathEscape(product) + "/downloadRules/" + url.PathEscape(rule)
+}

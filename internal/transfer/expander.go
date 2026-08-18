@@ -52,9 +52,26 @@ type Expander struct {
 	resolve  Resolver
 	log      *slog.Logger
 
+	// delegation and replication are the strategy seam (delegate.go). Both nil
+	// means every destination is a copy, which is what every deployment before
+	// M8 was and what an estate with no Quay targets still is.
+	delegation  Delegation
+	replication *store.Replication
+
 	// batch bounds one tick, so a backlog of a thousand requests does not hold
 	// the leader in one loop for minutes.
 	batch int
+}
+
+// WithDelegation attaches the delegated half of the strategy seam.
+//
+// A builder rather than a constructor argument, because it is genuinely
+// optional and adding it to NewExpander would make every existing caller and
+// every test pass two nils to say "unchanged".
+func (e *Expander) WithDelegation(d Delegation, st *store.Replication) *Expander {
+	e.delegation = d
+	e.replication = st
+	return e
 }
 
 // NewExpander builds an expander.
@@ -163,6 +180,18 @@ func (e *Expander) plan(ctx context.Context, t store.PendingTransfer) (int, erro
 		readPath = joinPath(origin.Repository, relative)
 	}
 
+	// THE STRATEGY BRANCH.
+	//
+	// Asked before anything is read from a registry, because a delegated
+	// destination needs none of it: no manifest walk, no related-artifact
+	// lookup, no plan. Asking later would cost a vendor round trip to produce
+	// a plan that is then thrown away.
+	if strategy, err := e.strategyFor(ctx, t.ProductName, destination.Name); err != nil {
+		return 0, err
+	} else if strategy != StrategyCopy {
+		return 0, e.delegate(ctx, t, strategy, destination.Name, pkg)
+	}
+
 	originRepoID, err := e.ensureOrigin(ctx, t, origin, readPath)
 	if err != nil {
 		return 0, err
@@ -205,6 +234,16 @@ func (e *Expander) plan(ctx context.Context, t store.PendingTransfer) (int, erro
 		return 0, err
 	}
 	return plan.Jobs, nil
+}
+
+// strategyFor asks how content reaches a destination. No delegation
+// configured means copy, which is the answer for every target in an estate
+// with no delegated ones.
+func (e *Expander) strategyFor(ctx context.Context, productName, targetName string) (Strategy, error) {
+	if e.delegation == nil {
+		return StrategyCopy, nil
+	}
+	return e.delegation.Strategy(ctx, productName, targetName)
 }
 
 // relativePath is the vendor repository a package was published in.

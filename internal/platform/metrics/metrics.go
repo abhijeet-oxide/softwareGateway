@@ -40,6 +40,16 @@ type Registry struct {
 	APILatency  *prometheus.HistogramVec
 
 	// Discovery (docs/design/07 §7, docs/design/12 §2.3).
+	// Delegated replication (docs/design/12 §2.6.1). Note what is NOT here:
+	// any byte or throughput metric for a delegated target. We do not move
+	// those bytes and cannot count them, and a gauge that looked like
+	// throughput but was derived from elapsed time would be worse than the
+	// absence of one.
+	MirrorSyncs        *prometheus.CounterVec
+	MirrorSyncDuration *prometheus.HistogramVec
+	MirrorConfigDrift  *prometheus.GaugeVec
+	ProxyCacheProbes   *prometheus.CounterVec
+
 	DiscoveryScans       *prometheus.CounterVec
 	DiscoveryErrors      *prometheus.CounterVec
 	DiscoveryPackages    *prometheus.CounterVec
@@ -114,6 +124,34 @@ func New(component string) *Registry {
 			Buckets:   prometheus.DefBuckets,
 		}, []string{"route", "method"}),
 
+		MirrorSyncs: prometheus.NewCounterVec(prometheus.CounterOpts{
+			Namespace: namespace,
+			Name:      "mirror_sync_total",
+			Help:      "Observed registry mirror syncs by product, target and result.",
+		}, []string{"product", "target", "result"}),
+
+		MirrorSyncDuration: prometheus.NewHistogramVec(prometheus.HistogramOpts{
+			Namespace: namespace,
+			Name:      "mirror_sync_duration_seconds",
+			Help:      "How long a mirror sync took, as OBSERVED between our request and the registry reporting it done. Not a measurement of the registry's own work.",
+			// Minutes to hours, not the sub-second buckets a request would
+			// want: a mirror sync of a 45 GB release is not a fast operation
+			// and DefBuckets would put every observation in the overflow.
+			Buckets: []float64{30, 60, 300, 900, 1800, 3600, 7200, 21600, 43200},
+		}, []string{"product", "target"}),
+
+		MirrorConfigDrift: prometheus.NewGaugeVec(prometheus.GaugeOpts{
+			Namespace: namespace,
+			Name:      "mirror_config_drift",
+			Help:      "1 when a target's registry configuration differs from what Git says.",
+		}, []string{"product", "target"}),
+
+		ProxyCacheProbes: prometheus.NewCounterVec(prometheus.CounterOpts{
+			Namespace: namespace,
+			Name:      "proxy_cache_probe_total",
+			Help:      "Proxy-cache reachability probes by product, target and result.",
+		}, []string{"product", "target", "result"}),
+
 		DiscoveryScans: prometheus.NewCounterVec(prometheus.CounterOpts{
 			Namespace: namespace,
 			Name:      "discovery_scans_total",
@@ -184,6 +222,10 @@ func New(component string) *Registry {
 		m.LeaderElected,
 		m.APIRequests,
 		m.APILatency,
+		m.MirrorSyncs,
+		m.MirrorSyncDuration,
+		m.MirrorConfigDrift,
+		m.ProxyCacheProbes,
 		m.DiscoveryScans,
 		m.DiscoveryErrors,
 		m.DiscoveryPackages,

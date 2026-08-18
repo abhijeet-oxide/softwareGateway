@@ -75,6 +75,7 @@ Stated here so they are found before they are discovered.
 | SQLite is development-only | Not supported in production; the Coordinator warns at startup ([03](03-persistence.md) §2) |
 | Delegated replication is observed, not measured | A `mirror` target reports a sync state and no byte progress; a `proxy` target holds nothing until someone pulls ([18](18-quay-replication.md) §6) |
 | No UI in v1 | `transferctl` and Grafana are the interfaces. Direction and gates in [19](19-user-interface.md); the API-auth gate above blocks it |
+| `warm` is not built | A proxy cache fills when a pod pulls. Populating one deliberately moves a whole release at line rate, so it belongs in the worker plane and needs a third `jobs.kind` ([18](18-quay-replication.md) §6.3) |
 | A download rule cannot express an arbitrary workflow | The only ordering primitive is a content dependency the targets already declare. No conditionals, branches or user-defined steps — deliberately ([20](20-download-rules.md) §12) |
 | A rule suspension is state outside Git | An audited operational override, reported as an override rather than prevented. The alternative was "open a PR" as the only way to stop a bad rule at 02:00 ([20](20-download-rules.md) §9) |
 

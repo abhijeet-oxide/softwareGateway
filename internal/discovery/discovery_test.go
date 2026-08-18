@@ -807,10 +807,9 @@ func TestInvalidPatternIsRejectedAtCompileTime(t *testing.T) {
 	if _, err := compileFilters("tagFilters", product.TagFilters{Include: []string{"("}}); err == nil {
 		t.Error("expected an unclosed group to be rejected")
 	}
-	if _, err := compileRules(product.AutoDownload{
-		Enabled: true,
-		Rules:   []product.Rule{{Name: "bad", TagPattern: "["}},
-	}); err == nil {
+	if _, err := compileRules(productWithRules(
+		product.Rule{Name: "bad", TagPattern: "["},
+	)); err == nil {
 		t.Error("expected an invalid rule pattern to be rejected")
 	}
 }
@@ -818,14 +817,11 @@ func TestInvalidPatternIsRejectedAtCompileTime(t *testing.T) {
 // The key must not change when targets are listed in a different order — a
 // cosmetic YAML reorder must not duplicate every pending request.
 func TestFirstMatchWins(t *testing.T) {
-	set, err := compileRules(product.AutoDownload{
-		Enabled: true,
-		Rules: []product.Rule{
-			{Name: "rc", TagPattern: `-rc\d+$`},
-			{Name: "release", TagPattern: `^v\d+\.\d+\.\d+$`},
-			{Name: "everything", TagPattern: `.*`},
-		},
-	})
+	set, err := compileRules(productWithRules(
+		product.Rule{Name: "rc", TagPattern: `-rc\d+$`},
+		product.Rule{Name: "release", TagPattern: `^v\d+\.\d+\.\d+$`},
+		product.Rule{Name: "everything", TagPattern: `.*`},
+	))
 	if err != nil {
 		t.Fatalf("compile: %v", err)
 	}
@@ -898,5 +894,17 @@ func TestScannerRejectsUnknownSource(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "does-not-exist") {
 		t.Errorf("error should name the missing source, got: %v", err)
+	}
+}
+
+// productWithRules wraps rules in the minimum product compileRules now takes.
+//
+// It takes a product rather than the block because a rule's spelling —
+// `download` or the older `autoDownload` — is a property of the document, and
+// the compiler reads whichever one is in use.
+func productWithRules(rules ...product.Rule) *product.Product {
+	return &product.Product{
+		Metadata: product.Metadata{Name: "vendor-a"},
+		Spec:     product.Spec{Download: product.Download{Rules: rules}},
 	}
 }

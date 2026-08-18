@@ -32,8 +32,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/google/uuid"
-
+	"github.com/abhijeet-oxide/softwareGateway/internal/download"
 	"github.com/abhijeet-oxide/softwareGateway/internal/oci"
 	"github.com/abhijeet-oxide/softwareGateway/internal/product"
 	"github.com/abhijeet-oxide/softwareGateway/internal/registry"
@@ -141,7 +140,7 @@ func NewScanner(cfg ScannerConfig) (*Scanner, error) {
 	if err != nil {
 		return nil, fmt.Errorf("%s: %w", where, err)
 	}
-	rules, err := compileRules(cfg.Product.Spec.AutoDownload)
+	rules, err := compileRules(cfg.Product)
 	if err != nil {
 		return nil, fmt.Errorf("product %q: %w", cfg.Product.Metadata.Name, err)
 	}
@@ -1364,29 +1363,37 @@ func (s *Scanner) applyRules(
 		return 0, nil
 	}
 
-	targetIDs, targetNames, err := resolveTargets(s.product, rule, s.targetIDs)
+	steps, err := download.Resolve(s.product, rule, s.targetIDs)
 	if err != nil {
 		// A misconfigured rule must not fail the discovery — the package is
 		// real and worth recording either way. Logged loudly instead.
-		s.log.ErrorContext(ctx, "auto-download rule could not be applied",
+		s.log.ErrorContext(ctx, "download rule could not be applied",
 			"rule", rule.Name, "tag", tag, "error", err)
 		return 0, nil
 	}
+	targetNames := download.Names(steps)
 
 	priority := rule.EffectivePriority()
-	key := transfer.IdempotencyKey("replicate", packageID, sourceRepoID, targetIDs, "", priority)
+	// The key covers the DERIVED chain, so a rule naming only the tail and one
+	// naming every hop produce the same key — they are the same work. The
+	// rule's revision is in it too, so an EDITED rule opens a new run rather
+	// than being swallowed by the old one's key.
+	key := transfer.IdempotencyKey("replicate", packageID, sourceRepoID,
+		download.RepoIDs(steps), download.Revision(rule), priority)
 
-	id, created, err := s.packages.CreateTransferRequest(ctx, tx, store.TransferRequestRow{
-		ID:             requestID(key),
+	id, created, err := download.Open(ctx, tx, s.packages, download.Request{
 		ProductID:      s.productID,
+		ProductName:    s.product.Metadata.Name,
 		PackageID:      packageID,
-		Operation:      "replicate",
 		SourceRepoID:   sourceRepoID,
+		Tag:            tag,
+		RuleName:       rule.Name,
+		Trigger:        download.TriggerDiscovery,
+		Origin:         "auto_download",
+		RequestedBy:    "auto_download:" + rule.Name,
 		Priority:       priority,
 		IdempotencyKey: key,
-		RequestedBy:    "auto_download:" + rule.Name,
-		RequestOrigin:  "auto_download",
-		AutoRuleName:   rule.Name,
+		Steps:          steps,
 	})
 	if err != nil {
 		return 0, err
@@ -1395,39 +1402,8 @@ func (s *Scanner) applyRules(
 		return 0, nil
 	}
 
-	// One transfer per target the RULE named, opened here rather than derived
-	// later. Deriving them at expansion time read current configuration and so
-	// turned a rule saying `targets: [lab]` into every enabled target.
-	for _, targetID := range targetIDs {
-		if _, err := s.packages.CreateTransfer(ctx, tx, store.TransferRow{
-			ID:           uuid.NewString(),
-			RequestID:    id,
-			PackageID:    packageID,
-			SourceRepoID: sourceRepoID,
-			TargetRepoID: targetID,
-			Priority:     priority,
-		}); err != nil {
-			return 0, err
-		}
-	}
-
-	s.log.InfoContext(ctx, "auto-download rule matched",
-		"rule", rule.Name, "tag", tag, "targets", targetNames, "request", id, "priority", priority)
-
-	detail, _ := json.Marshal(map[string]any{
-		"rule": rule.Name, "tag": tag, "targets": targetNames, "priority": priority,
-	})
-	if err := s.packages.InsertAudit(ctx, tx, store.AuditRow{
-		EventType:   "TransferRequested",
-		Actor:       rule.Name,
-		ActorKind:   "auto_rule",
-		ProductName: s.product.Metadata.Name,
-		SubjectKind: "transfer_request",
-		SubjectID:   id,
-		Detail:      string(detail),
-	}); err != nil {
-		return 0, err
-	}
+	s.log.InfoContext(ctx, "download rule matched",
+		"rule", rule.Name, "tag", tag, "chain", targetNames, "request", id, "priority", priority)
 
 	return 1, nil
 }

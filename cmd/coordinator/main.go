@@ -25,6 +25,7 @@ import (
 	"github.com/abhijeet-oxide/softwareGateway/internal/calibrate"
 	"github.com/abhijeet-oxide/softwareGateway/internal/catalog"
 	"github.com/abhijeet-oxide/softwareGateway/internal/discovery"
+	"github.com/abhijeet-oxide/softwareGateway/internal/download"
 	"github.com/abhijeet-oxide/softwareGateway/internal/maintenance"
 	"github.com/abhijeet-oxide/softwareGateway/internal/platform/config"
 	"github.com/abhijeet-oxide/softwareGateway/internal/platform/health"
@@ -181,16 +182,31 @@ func run() error {
 	// planner can read from.
 	requester := transfer.NewRequester(packages, transferResolver)
 
+	// Delegated replication: the service, the seam the expander branches on,
+	// and the watcher that settles a transfer once the registry is done.
+	replicationAudit := replication.NewStoreAuditor(packages)
+	replicationMetric := replicationMetrics{m: mreg}
+	replicationSvc := replication.NewService(
+		replication.NewResolver(resolver, logger, "softwaregateway/"+info.Version),
+		replicationStore, logger).
+		WithObservability(replicationAudit, replicationMetric)
+	replicationWatcher := replication.NewWatcher(
+		replicationSvc, replicationStore, products, transferResolver, logger).
+		WithObservability(replicationAudit, replicationMetric)
+
 	queueCtl := queue.NewController(jobQueue, expanderAdapter{
 		e: transfer.NewExpander(
 			packages,
 			transfer.NewPlanner(packages, cfg.Concurrency.PerRegistry, logger),
 			transferResolver,
-			0, logger),
+			0, logger,
+		).WithDelegation(
+			replication.NewDelegation(replicationSvc, products, replicationStore),
+			replicationStore),
 	}, queue.ControllerOptions{
 		ReapInterval:   cfg.Coordinator.Reaper.TickInterval,
 		ExpandInterval: cfg.Coordinator.Scheduler.TickInterval,
-	}, logger)
+	}, logger).WithStepper(replicationStore)
 
 	// A package's manifest BODIES are the only thing recorded here that grows
 	// without limit and can be discarded without losing a fact — they are a
@@ -306,6 +322,7 @@ func run() error {
 				discoveryCtl.SetLeader(isLeader)
 				cacheSweeper.SetLeader(isLeader)
 				retentionSweeper.SetLeader(isLeader)
+				replicationWatcher.SetLeader(isLeader)
 			},
 		})
 	} else {
@@ -320,6 +337,7 @@ func run() error {
 			discoveryCtl.SetLeader(isLeader)
 			cacheSweeper.SetLeader(isLeader)
 			retentionSweeper.SetLeader(isLeader)
+			replicationWatcher.SetLeader(isLeader)
 			queueCtl.SetLeader(isLeader)
 		})
 	}
@@ -351,7 +369,12 @@ func run() error {
 		// Delegated replication runs here for the same reason again: it speaks
 		// to Quay's MANAGEMENT api, which needs a credential from a projected
 		// Secret, and transferctl holds neither.
-		Replication:      replication.NewService(replication.NewResolver(resolver, logger, "softwaregateway/"+info.Version), replicationStore, logger),
+		Replication: replicationSvc,
+		// Download rules read configuration and the operational overrides;
+		// running one also needs catalog rows, which is why the two are
+		// separate dependencies.
+		Rules:            download.NewService(packages, replicationStore, logger),
+		TargetRows:       transferResolver,
 		ReplicationStore: replicationStore,
 		Leader:           elector,
 		Component:        component,
@@ -382,6 +405,7 @@ func run() error {
 	g.Go(func() error { return cacheSweeper.Run(gctx) })
 	g.Go(func() error { return retentionSweeper.Run(gctx) })
 	g.Go(func() error { return queueCtl.Run(gctx) })
+	g.Go(func() error { return replicationWatcher.Run(gctx) })
 
 	// Graceful shutdown: stop accepting, drain in-flight requests, then exit.
 	g.Go(func() error {

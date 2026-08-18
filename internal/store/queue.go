@@ -1352,7 +1352,13 @@ type TransferSummary struct {
 	RequestID   string
 	PackageID   int64
 	ProductName string
-	Tag         string
+	// Strategy is HOW this transfer was performed: `copy`, `mirror` or
+	// `proxy`. Recorded on the row rather than derived from configuration, so
+	// a year-old record still says how the content got there even after the
+	// target has been reconfigured — and so that a settled transfer with no
+	// jobs and no bytes is distinguishable from one that failed to plan.
+	Strategy string
+	Tag      string
 	// DisplayTag is Tag with the vendor's structural noise removed — `25.7.2131`
 	// for NEAR's `orb_25.7.2131`. Empty where no shortening applies, which is
 	// every source that declares no `vendor`. Cosmetic: Tag is the identity.
@@ -1498,7 +1504,7 @@ func (p *Packages) transferSelect() string {
 	       COALESCE((SELECT MIN(j.updated_at) FROM jobs j
 	                  WHERE j.transfer_id = t.id AND j.state = 'leased'), ''),
 	       COALESCE(t.failure_reason, ''), t.created_at, COALESCE(t.started_at, ''),
-	       COALESCE(t.completed_at, '')
+	       COALESCE(t.completed_at, ''), t.strategy
 	  FROM transfers t
 	  JOIN packages pk ON pk.id = t.package_id
 	  JOIN products pr ON pr.id = pk.product_id
@@ -1515,7 +1521,7 @@ func scanTransfer(row interface{ Scan(...any) error }) (TransferSummary, error) 
 		&t.PlannedJobs, &t.PlannedBytes, &t.DedupeSkippedBytes, &t.SkippedBytes,
 		&t.JobsDone, &t.JobsFailed, &t.JobsOutstanding, &t.BytesTransferred,
 		&t.JobsInFlight, &t.Workers, &t.JobsWaiting, &t.JobsBlocked, &t.JobsRepaired, &t.OutstandingBytes, &t.QuietestInFlight,
-		&t.FailureReason, &t.CreatedAt, &t.StartedAt, &t.CompletedAt)
+		&t.FailureReason, &t.CreatedAt, &t.StartedAt, &t.CompletedAt, &t.Strategy)
 	return t, err
 }
 

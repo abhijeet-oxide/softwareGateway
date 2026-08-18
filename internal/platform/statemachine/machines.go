@@ -90,13 +90,45 @@ var Job = New[JobState, JobEvent]("job",
 type TransferState string
 
 const (
-	TransferPending    TransferState = "pending"
-	TransferPlanning   TransferState = "planning"
-	TransferReady      TransferState = "ready"
-	TransferRunning    TransferState = "running"
-	TransferPaused     TransferState = "paused"
-	TransferVerifying  TransferState = "verifying"
-	TransferSucceeded  TransferState = "succeeded"
+	// TransferWaiting is a step of a download rule's chain whose predecessor
+	// has not succeeded yet.
+	//
+	// Distinct from `pending`, which means "nobody has planned this yet". A
+	// waiting transfer is one nothing SHOULD plan: it has a predecessor, and
+	// planning it early would read from a target that does not hold the
+	// content yet.
+	TransferWaiting  TransferState = "waiting"
+	TransferPending  TransferState = "pending"
+	TransferPlanning TransferState = "planning"
+	TransferReady    TransferState = "ready"
+	TransferRunning  TransferState = "running"
+	TransferPaused   TransferState = "paused"
+	// TransferSyncing is a delegated transfer waiting on the REGISTRY.
+	//
+	// It exists because a delegated transfer creates no jobs. Without it such a
+	// transfer would sit in `running` with an empty job set, and the wave-drain
+	// check would settle it immediately — reporting success at the moment we
+	// had asked Quay to start and before anything had happened.
+	TransferSyncing   TransferState = "syncing"
+	TransferVerifying TransferState = "verifying"
+	TransferSucceeded TransferState = "succeeded"
+	// TransferDiverged is terminal, and is neither success nor failure.
+	//
+	// The registry reported a completed sync, we walked the destination, and
+	// the tag resolves to a DIFFERENT digest than the one we asked for. That is
+	// normal for a mirror whose upstream tag moved: a fact worth recording, not
+	// an error worth paging about. Folding it into `succeeded` would lose the
+	// only signal that what shipped is not what was requested; folding it into
+	// `failed` would page somebody about a mirror working as designed.
+	TransferDiverged TransferState = "diverged"
+	// TransferSkipped is terminal, and is NOT a flavour of failed.
+	//
+	// The Quay step of a run whose JFrog step failed did not fail: it never
+	// started, nothing was attempted against Quay, and no operator should go
+	// looking there for the cause. Collapsing the two would report two
+	// problems where there is one, and the second would point at the wrong
+	// system.
+	TransferSkipped    TransferState = "skipped"
 	TransferFailed     TransferState = "failed"
 	TransferCancelling TransferState = "cancelling"
 	TransferCancelled  TransferState = "cancelled"
@@ -121,15 +153,33 @@ const (
 	TransferCancelRequested TransferEvent = "CancelRequested"
 	TransferDrained         TransferEvent = "InFlightDrained"
 	TransferSkipVerify      TransferEvent = "VerificationDisabled"
+
+	// Download-rule chains (docs/design/20 §6).
+	TransferPredecessorSucceeded TransferEvent = "PredecessorSucceeded"
+	TransferPredecessorSettled   TransferEvent = "PredecessorSettledUnsuccessfully"
+
+	// Delegated replication (docs/design/18 §6).
+	TransferSyncRequested TransferEvent = "SyncRequested"
+	TransferSyncSucceeded TransferEvent = "SyncSucceeded"
+	TransferSyncDiverged  TransferEvent = "SyncDiverged"
+	TransferSyncFailed    TransferEvent = "SyncFailed"
 )
 
 const TransferStateZero TransferState = ""
 
 // Transfer is the transfer and promotion lifecycle.
 var Transfer = New[TransferState, TransferEvent]("transfer",
-	[]TransferState{TransferSucceeded, TransferCancelled},
+	[]TransferState{TransferSucceeded, TransferDiverged, TransferSkipped, TransferCancelled},
 
 	Transition[TransferState, TransferEvent]{TransferStateZero, TransferCreated, TransferPending},
+
+	// A step of a chain waits until its predecessor has SUCCEEDED — which,
+	// because the transfer machine only reaches `succeeded` after its own
+	// verification, is where a rule's verification gate comes from. There is
+	// no separate gate mechanism, and there does not need to be.
+	Transition[TransferState, TransferEvent]{TransferWaiting, TransferPredecessorSucceeded, TransferPending},
+	Transition[TransferState, TransferEvent]{TransferWaiting, TransferPredecessorSettled, TransferSkipped},
+	Transition[TransferState, TransferEvent]{TransferWaiting, TransferCancelRequested, TransferCancelling},
 	Transition[TransferState, TransferEvent]{TransferPending, TransferPlanningStarted, TransferPlanning},
 	Transition[TransferState, TransferEvent]{TransferPlanning, TransferPlanCompleted, TransferReady},
 	Transition[TransferState, TransferEvent]{TransferPlanning, TransferPlanFailed, TransferFailed},
@@ -151,6 +201,24 @@ var Transfer = New[TransferState, TransferEvent]("transfer",
 
 	Transition[TransferState, TransferEvent]{TransferVerifying, TransferVerifyPassed, TransferSucceeded},
 	Transition[TransferState, TransferEvent]{TransferVerifying, TransferVerifyFailed, TransferFailed},
+
+	// Delegated replication. `planning` is where the branch happens: a target
+	// whose registry fetches for itself produces no jobs, so instead of
+	// PlanCompleted it emits SyncRequested and waits to be told what the
+	// registry did.
+	//
+	// Note the absence of any transition INTO a byte-carrying state from here.
+	// A delegated transfer never becomes `running`, never has a wave, and never
+	// acquires a progress denominator — which is what makes it impossible for
+	// one to grow a percentage by accident.
+	Transition[TransferState, TransferEvent]{TransferPlanning, TransferSyncRequested, TransferSyncing},
+	Transition[TransferState, TransferEvent]{TransferSyncing, TransferSyncSucceeded, TransferSucceeded},
+	Transition[TransferState, TransferEvent]{TransferSyncing, TransferSyncDiverged, TransferDiverged},
+	Transition[TransferState, TransferEvent]{TransferSyncing, TransferSyncFailed, TransferFailed},
+	// A sync can be asked for again after it failed, which is the delegated
+	// equivalent of retrying failed jobs.
+	Transition[TransferState, TransferEvent]{TransferFailed, TransferSyncRequested, TransferSyncing},
+	Transition[TransferState, TransferEvent]{TransferSyncing, TransferCancelRequested, TransferCancelling},
 
 	Transition[TransferState, TransferEvent]{TransferFailed, TransferRetryRequested, TransferReady},
 

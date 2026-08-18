@@ -73,9 +73,14 @@ type Metadata struct {
 }
 
 type Spec struct {
-	Sources       []Source            `json:"sources"`
-	Targets       []Target            `json:"targets"`
-	Promotion     *Promotion          `json:"promotion,omitempty"`
+	Sources   []Source   `json:"sources"`
+	Targets   []Target   `json:"targets"`
+	Promotion *Promotion `json:"promotion,omitempty"`
+	// Download is the current spelling; AutoDownload is the older one and is
+	// still honoured in full. Declaring BOTH is a validation error rather than
+	// a merge: two blocks meaning the same thing, resolved by precedence, is a
+	// configuration nobody can read out loud.
+	Download      Download            `json:"download,omitempty"`
 	AutoDownload  AutoDownload        `json:"autoDownload,omitempty"`
 	Verification  Verification        `json:"verification,omitempty"`
 	Notifications Notifications       `json:"notifications,omitempty"`
@@ -614,33 +619,12 @@ const (
 	DefaultRulePriority      = 50
 )
 
+// AutoDownload is the older spelling of Download. Kept as its own type rather
+// than aliased, so a document using it round-trips exactly and the validator
+// can point at the path the reader actually wrote.
 type AutoDownload struct {
 	Enabled bool   `json:"enabled,omitempty"`
 	Rules   []Rule `json:"rules,omitempty"`
-}
-
-// Rule matches a discovered tag and creates a transfer request.
-//
-// Rules are evaluated in order and the FIRST MATCH WINS — not all-match,
-// because two rules matching one tag with different priorities has no sensible
-// interpretation.
-type Rule struct {
-	Name string `json:"name"`
-	// TagPattern is RE2 (Go regexp): linear time, no backtracking. Stated
-	// explicitly because a user-supplied pattern evaluated inside a polling
-	// loop would, under a backtracking engine, be a denial-of-service vector.
-	TagPattern           string   `json:"tagPattern"`
-	Targets              []string `json:"targets,omitempty"`
-	Priority             *int     `json:"priority,omitempty"`
-	VerifyBeforeTransfer *bool    `json:"verifyBeforeTransfer,omitempty"`
-}
-
-// EffectivePriority returns the rule's priority or the default.
-func (r Rule) EffectivePriority() int {
-	if r.Priority == nil {
-		return DefaultRulePriority
-	}
-	return *r.Priority
 }
 
 type Verification struct {

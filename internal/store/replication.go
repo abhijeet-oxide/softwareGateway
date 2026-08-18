@@ -321,3 +321,271 @@ func nullableStr(s sql.NullString) any {
 	}
 	return s.String
 }
+
+// ---------------------------------------------------------------------------
+// Delegated transfers
+//
+// A transfer whose destination registry fetches for itself creates no jobs, so
+// none of the queue's machinery applies to it. These three calls are the whole
+// of its lifecycle: it enters `syncing`, it is polled, and it settles.
+// ---------------------------------------------------------------------------
+
+// MarkSyncing records that a transfer has been handed to the registry.
+//
+// `strategy` is stored on the row so that a year-old record still says HOW the
+// content got there. Without it a settled transfer with no jobs and no bytes is
+// indistinguishable from one that failed to plan.
+func (r *Replication) MarkSyncing(ctx context.Context, transferID, strategy string) error {
+	stmt := r.dialect.Rewrite(`
+		UPDATE transfers
+		   SET state = 'syncing', strategy = ?, started_at = COALESCE(started_at, ` + r.dialect.Now() + `),
+		       updated_at = ` + r.dialect.Now() + `
+		 WHERE id = ? AND state IN ('pending','planning','failed')`)
+	if _, err := r.db.ExecContext(ctx, stmt, strategy, transferID); err != nil {
+		return fmt.Errorf("mark transfer %s syncing: %w", transferID, err)
+	}
+	return nil
+}
+
+// SettleDelegated closes a delegated transfer.
+//
+// state is `succeeded`, `diverged` or `failed`. `diverged` is deliberately not
+// a failure: the sync completed and the destination holds a different digest
+// than the one we asked for, which is a mirror faithfully following an upstream
+// tag that moved.
+func (r *Replication) SettleDelegated(ctx context.Context, transferID, state, reason string) error {
+	switch state {
+	case "succeeded", "diverged", "failed":
+	default:
+		return fmt.Errorf("settle transfer %s: %q is not a delegated outcome", transferID, state)
+	}
+	stmt := r.dialect.Rewrite(`
+		UPDATE transfers
+		   SET state = ?, failure_reason = ?, completed_at = ` + r.dialect.Now() + `,
+		       updated_at = ` + r.dialect.Now() + `
+		 WHERE id = ? AND state = 'syncing'`)
+	if _, err := r.db.ExecContext(ctx, stmt, state, nullIfBlank(reason), transferID); err != nil {
+		return fmt.Errorf("settle transfer %s as %s: %w", transferID, state, err)
+	}
+	return nil
+}
+
+// OpenSync is a delegated transfer waiting on the registry.
+type OpenSync struct {
+	SyncID      int64
+	TransferID  string
+	ProductID   int64
+	Product     string
+	TargetName  string
+	RequestedAt sql.NullString
+
+	// ExpectedDigest is what the destination should end up holding. Empty when
+	// the sync was not requested for a specific package.
+	ExpectedDigest string
+	// Tag and Repository are what to look up at the destination.
+	Tag        string
+	Repository string
+}
+
+// OpenSyncs lists delegated transfers that have not settled.
+//
+// Driven from `transfers` rather than from `mirror_syncs`, because the transfer
+// is the thing that must not be left hanging: a sync row we failed to write
+// would otherwise make a transfer invisible to the watcher forever.
+func (r *Replication) OpenSyncs(ctx context.Context, limit int) ([]OpenSync, error) {
+	if limit <= 0 {
+		limit = 50
+	}
+	query := r.dialect.Rewrite(`
+		SELECT COALESCE(ms.id, 0), t.id, pr.id, pr.name, tgt.name,
+		       ms.requested_at, COALESCE(ms.expected_digest, ''), p.tag, tgt.repository_path
+		  FROM transfers t
+		  JOIN transfer_requests req ON req.id = t.request_id
+		  JOIN products pr           ON pr.id = req.product_id
+		  JOIN packages p            ON p.id = t.package_id
+		  JOIN repositories tgt      ON tgt.id = t.target_repo_id
+		  LEFT JOIN mirror_syncs ms  ON ms.transfer_id = t.id
+		 WHERE t.state = 'syncing'
+		 ORDER BY t.updated_at
+		 LIMIT ?`)
+
+	rows, err := r.db.QueryContext(ctx, query, limit)
+	if err != nil {
+		return nil, fmt.Errorf("list open syncs: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+
+	var out []OpenSync
+	for rows.Next() {
+		var s OpenSync
+		if err := rows.Scan(&s.SyncID, &s.TransferID, &s.ProductID, &s.Product, &s.TargetName,
+			&s.RequestedAt, &s.ExpectedDigest, &s.Tag, &s.Repository); err != nil {
+			return nil, fmt.Errorf("scan open sync: %w", err)
+		}
+		out = append(out, s)
+	}
+	return out, rows.Err()
+}
+
+// LinkSync attaches a sync record to the transfer that requested it.
+func (r *Replication) LinkSync(ctx context.Context, syncID int64, transferID string) error {
+	stmt := r.dialect.Rewrite(`UPDATE mirror_syncs SET transfer_id = ?, updated_at = ` +
+		r.dialect.Now() + ` WHERE id = ?`)
+	if _, err := r.db.ExecContext(ctx, stmt, transferID, syncID); err != nil {
+		return fmt.Errorf("link sync %d to transfer %s: %w", syncID, transferID, err)
+	}
+	return nil
+}
+
+func nullIfBlank(s string) any {
+	if s == "" {
+		return nil
+	}
+	return s
+}
+
+// SetExpectedDigest records what the destination SHOULD end up holding.
+//
+// Written when the sync is requested, never later: a digest looked up after the
+// fact would be the destination compared with itself, and `diverged` would
+// become undetectable.
+func (r *Replication) SetExpectedDigest(ctx context.Context, syncID int64, digest string) error {
+	stmt := r.dialect.Rewrite(`UPDATE mirror_syncs SET expected_digest = ?, updated_at = ` +
+		r.dialect.Now() + ` WHERE id = ?`)
+	if _, err := r.db.ExecContext(ctx, stmt, digest, syncID); err != nil {
+		return fmt.Errorf("record expected digest for sync %d: %w", syncID, err)
+	}
+	return nil
+}
+
+// ---------------------------------------------------------------------------
+// Download-rule chains
+//
+// A step waits for its predecessor to reach `succeeded` — and because a
+// transfer only reaches `succeeded` after its own verification, that IS the
+// verification gate. There is no separate gate mechanism and there does not
+// need to be one.
+// ---------------------------------------------------------------------------
+
+// AdvanceSteps releases steps whose predecessor has succeeded and skips those
+// whose predecessor cannot succeed.
+//
+// Two statements rather than one, because the two outcomes are not symmetric:
+// releasing puts work into the queue, and skipping settles a transfer that will
+// never run. Reported separately so a caller can say which happened.
+//
+// A sweep rather than a hook on completion, for the reason every other
+// recovery path in this system is a sweep: the interesting failure is the one
+// where nothing calls the hook — the Coordinator restarts between a step
+// succeeding and its successor being released, and a chain that only advanced
+// on an event would hang there forever.
+func (r *Replication) AdvanceSteps(ctx context.Context) (released, skipped int, err error) {
+	release := r.dialect.Rewrite(`
+		UPDATE transfers
+		   SET state = 'planning', updated_at = ` + r.dialect.Now() + `
+		 WHERE state = 'waiting'
+		   AND depends_on_transfer_id IN (SELECT id FROM transfers WHERE state = 'succeeded')`)
+	res, err := r.db.ExecContext(ctx, release)
+	if err != nil {
+		return 0, 0, fmt.Errorf("release waiting steps: %w", err)
+	}
+	if n, err := res.RowsAffected(); err == nil {
+		released = int(n)
+	}
+
+	// `diverged` counts as unsuccessful for a chain, and that is a judgement
+	// worth stating: the destination holds content we did not ask for, so a
+	// step that would copy FROM it would propagate the wrong digest onward.
+	// The divergence is recorded and notifiable on its own step; what it must
+	// not do is quietly become the input to the next one.
+	skip := r.dialect.Rewrite(`
+		UPDATE transfers
+		   SET state = 'skipped',
+		       failure_reason = 'the step this one depends on did not succeed',
+		       completed_at = ` + r.dialect.Now() + `, updated_at = ` + r.dialect.Now() + `
+		 WHERE state = 'waiting'
+		   AND depends_on_transfer_id IN (
+		         SELECT id FROM transfers
+		          WHERE state IN ('failed','cancelled','skipped','diverged'))`)
+	res, err = r.db.ExecContext(ctx, skip)
+	if err != nil {
+		return released, 0, fmt.Errorf("skip orphaned steps: %w", err)
+	}
+	if n, err := res.RowsAffected(); err == nil {
+		skipped = int(n)
+	}
+	return released, skipped, nil
+}
+
+// Suspension is an operational override of a rule's configured `enabled`.
+type Suspension struct {
+	Product     string
+	Rule        string
+	Reason      string
+	Actor       string
+	SuspendedAt string
+	Until       sql.NullString
+}
+
+// Suspend stops a rule now, without editing Git.
+//
+// A reason is required rather than optional: a suspension nobody can explain
+// is one nobody dares lift, and an indefinite unexplained override is exactly
+// how a rule stays off for a quarter.
+func (r *Replication) Suspend(ctx context.Context, productID int64, rule, reason, actor string, until sql.NullString) error {
+	if reason == "" {
+		return fmt.Errorf("suspending %q needs a reason: an override nobody can explain is one nobody dares lift", rule)
+	}
+	stmt := r.dialect.Rewrite(`
+		INSERT INTO download_rule_suspensions
+		       (product_id, rule_name, reason, actor, suspended_at, until)
+		VALUES (?, ?, ?, ?, ` + r.dialect.Now() + `, ?)`)
+	if _, err := r.db.ExecContext(ctx, stmt, productID, rule, reason, actor, nullableStr(until)); err != nil {
+		return fmt.Errorf("suspend rule %q: %w", rule, err)
+	}
+	return nil
+}
+
+// Resume lifts a suspension. Released rather than deleted, so the history of
+// what was stopped and why survives.
+func (r *Replication) Resume(ctx context.Context, productID int64, rule, actor string) (bool, error) {
+	stmt := r.dialect.Rewrite(`
+		UPDATE download_rule_suspensions
+		   SET released_at = ` + r.dialect.Now() + `, released_by = ?
+		 WHERE product_id = ? AND rule_name = ? AND released_at IS NULL`)
+	res, err := r.db.ExecContext(ctx, stmt, actor, productID, rule)
+	if err != nil {
+		return false, fmt.Errorf("resume rule %q: %w", rule, err)
+	}
+	n, err := res.RowsAffected()
+	return n > 0, err
+}
+
+// Suspensions returns the live overrides for a product, keyed by rule.
+//
+// A suspension with an `until` in the past is not returned: it has expired, and
+// reporting an expired override as live would stop a rule nobody meant to stop.
+func (r *Replication) Suspensions(ctx context.Context, productName string) (map[string]Suspension, error) {
+	query := r.dialect.Rewrite(`
+		SELECT p.name, s.rule_name, s.reason, s.actor, s.suspended_at, s.until
+		  FROM download_rule_suspensions s
+		  JOIN products p ON p.id = s.product_id
+		 WHERE p.name = ? AND s.released_at IS NULL
+		   AND (s.until IS NULL OR s.until > ` + r.dialect.Now() + `)`)
+
+	rows, err := r.db.QueryContext(ctx, query, productName)
+	if err != nil {
+		return nil, fmt.Errorf("list suspensions: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+
+	out := map[string]Suspension{}
+	for rows.Next() {
+		var s Suspension
+		if err := rows.Scan(&s.Product, &s.Rule, &s.Reason, &s.Actor, &s.SuspendedAt, &s.Until); err != nil {
+			return nil, fmt.Errorf("scan suspension: %w", err)
+		}
+		out[s.Rule] = s
+	}
+	return out, rows.Err()
+}

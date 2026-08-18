@@ -81,7 +81,7 @@ func (p *Product) Validate(resolver *SecretResolver) error {
 	errs = append(errs, p.validateTargets(resolver)...)
 	errs = append(errs, p.validatePromotion()...)
 	errs = append(errs, p.validatePhysicalRepositories()...)
-	errs = append(errs, p.validateAutoDownload()...)
+	errs = append(errs, p.validateDownload()...)
 	errs = append(errs, p.validateReplication(resolver)...)
 	errs = append(errs, p.validateVerification(resolver)...)
 	errs = append(errs, p.validateNotifications(resolver)...)
@@ -111,10 +111,10 @@ func (p *Product) validateEnablement() Errors {
 	}
 
 	if len(p.Spec.Targets) > 0 && len(p.EnabledTargets()) == 0 && p.IsEnabled() &&
-		p.Spec.AutoDownload.Enabled {
+		p.DownloadEnabled() {
 		errs = append(errs, Error{
 			"spec.targets",
-			"every target is disabled but autoDownload is enabled",
+			"every target is disabled but download rules are enabled",
 			"rules would match packages and have nowhere to send them",
 		})
 	}
@@ -130,11 +130,12 @@ func (p *Product) validateEnablement() Errors {
 		declared[t.Name] = true
 	}
 
-	for i, r := range p.Spec.AutoDownload.Rules {
+	base := p.DownloadBlockPath()
+	for i, r := range p.DownloadRules() {
 		for j, name := range r.Targets {
 			if declared[name] && !enabled[name] {
 				errs = append(errs, Error{
-					fmt.Sprintf("spec.autoDownload.rules[%d].targets[%d]", i, j),
+					fmt.Sprintf("%s.rules[%d].targets[%d]", base, i, j),
 					fmt.Sprintf("%q is disabled", name),
 					"re-enable the target, or point the rule somewhere else — " +
 						"otherwise this rule fails the first time a package matches it",
@@ -545,72 +546,6 @@ func validateSignatures(path string, s Signatures, resolver *SecretResolver) Err
 	}
 
 	errs = append(errs, validateSecretRef(path+".trustBundleRef", s.TrustBundleRef, resolver)...)
-	return errs
-}
-
-// validateAutoDownload catches two of the three headline error classes:
-// a tagPattern that does not compile, and a rule naming an undeclared target.
-func (p *Product) validateAutoDownload() Errors {
-	var errs Errors
-	if !p.Spec.AutoDownload.Enabled && len(p.Spec.AutoDownload.Rules) == 0 {
-		return nil
-	}
-
-	declared := make(map[string]Target, len(p.Spec.Targets))
-	for _, t := range p.Spec.Targets {
-		declared[t.Name] = t
-	}
-	_, hasDefault := p.DefaultTarget()
-
-	seen := map[string]int{}
-	for i, r := range p.Spec.AutoDownload.Rules {
-		path := fmt.Sprintf("spec.autoDownload.rules[%d]", i)
-
-		if r.Name == "" {
-			errs = append(errs, Error{path + ".name", "required", "rule names appear in audit records"})
-		} else if prev, dup := seen[r.Name]; dup {
-			errs = append(errs, Error{path + ".name", fmt.Sprintf("%q duplicates rules[%d]", r.Name, prev), ""})
-		} else {
-			seen[r.Name] = i
-		}
-
-		if r.TagPattern == "" {
-			errs = append(errs, Error{path + ".tagPattern", "required", ""})
-		} else if _, err := regexp.Compile(r.TagPattern); err != nil {
-			errs = append(errs, Error{path + ".tagPattern", invalidRegexpMessage(r.TagPattern, err), ""})
-		}
-
-		if len(r.Targets) == 0 && !hasDefault {
-			errs = append(errs, Error{
-				path + ".targets",
-				"required",
-				"the product declares no default target, so every rule must name its targets explicitly",
-			})
-		}
-
-		for j, name := range r.Targets {
-			t, ok := declared[name]
-			if !ok {
-				errs = append(errs, Error{
-					fmt.Sprintf("%s.targets[%d]", path, j),
-					fmt.Sprintf("%q is not a declared target", name),
-					"add it under spec.targets, or correct the name",
-				})
-				continue
-			}
-			if t.PromotionOnly {
-				errs = append(errs, Error{
-					fmt.Sprintf("%s.targets[%d]", path, j),
-					fmt.Sprintf("%q is promotionOnly and cannot be an auto-download target", name),
-					"promotionOnly targets are reachable only by promotion from another target",
-				})
-			}
-		}
-
-		if pr := r.EffectivePriority(); pr < 0 || pr > 1000 {
-			errs = append(errs, Error{path + ".priority", fmt.Sprintf("%d is outside the range 0-1000", pr), ""})
-		}
-	}
 	return errs
 }
 

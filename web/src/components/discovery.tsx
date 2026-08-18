@@ -8,6 +8,8 @@ import {
 import { useDiscoveryStatuses, useRunDiscovery } from '../api/queries'
 import { useCan } from '../auth/permissions'
 import { formatCount, formatDuration } from '../domain/format'
+import { matches } from '../domain/derive'
+import { SearchBar } from './layout'
 import { NA, Value } from './value'
 import { TimeAgo } from './chips'
 import { semantic } from '../theme'
@@ -295,6 +297,59 @@ export function RunDiscoveryButton({
   )
 }
 
+/**
+ * Rescan ONE product, from the row that shows what it last found.
+ *
+ * Deliberately not a confirmation: a scan is read-only — it records what the
+ * vendor has published and downloads nothing — so the cost of an accidental
+ * click is one registry poll. The fleet-wide button keeps its dialog, because
+ * that one starts a scan against every registry the deployment can reach.
+ */
+function DiscoverSource({ product, scanning }: { product: string; scanning?: boolean }) {
+  const { message } = App.useApp()
+  const run = useRunDiscovery()
+  const mayOperate = useCan('operate', { product })
+
+  const start = async () => {
+    try {
+      const result = await run.mutateAsync(product)
+      const started = 'products' in result ? result.started : (result.started?.sources ?? 0)
+      const already = 'products' in result
+        ? (result.alreadyRunning ?? 0)
+        : (result.started?.alreadyRunning ?? 0)
+      message.success(
+        started > 0
+          ? `Scanning ${started} source${started === 1 ? '' : 's'} of ${product}. Progress is in this panel.`
+          : already > 0
+            ? `${product} is already being scanned — ${already} source${already === 1 ? '' : 's'} in progress.`
+            : `Nothing to scan: ${product} has no source with discovery enabled.`,
+      )
+    } catch (e) {
+      message.error(e instanceof Error ? e.message : 'Discovery could not be started.')
+    }
+  }
+
+  return (
+    <Tooltip
+      title={
+        mayOperate
+          ? `Look at ${product}'s registries now. Nothing is downloaded.`
+          : 'You do not have permission to run discovery.'
+      }
+    >
+      <Button
+        size="small"
+        icon={scanning ? <SyncOutlined spin /> : <PlayCircleOutlined />}
+        disabled={!mayOperate || scanning}
+        loading={run.isPending}
+        onClick={() => void start()}
+      >
+        {scanning ? 'Scanning' : 'Discover'}
+      </Button>
+    </Tooltip>
+  )
+}
+
 export function DiscoveryPanel({ products }: { products: Product[] }) {
   const names = products.map((p) => p.productId)
   const results = useDiscoveryStatuses(names)
@@ -304,20 +359,31 @@ export function DiscoveryPanel({ products }: { products: Product[] }) {
   // answer from "nothing is scheduled".
   const leaderElsewhere = results.length > 0 && results.every((r) => r.data && !r.data.running)
 
-  const rows: DiscoverySourceState[] = results.flatMap((r) => r.data?.sources ?? [])
-  const scanning = rows.filter((s) => s.scanning)
+  const allRows: DiscoverySourceState[] = results.flatMap((r) => r.data?.sources ?? [])
+  const scanning = allRows.filter((s) => s.scanning)
+
+  /*
+   * A product has several sources and a deployment has several products, so
+   * this table is tens of rows before anything unusual happens. Finding the
+   * one somebody wants to rescan by reading down the list is the difference
+   * between a table and a filing cabinet.
+   */
+  const [search, setSearch] = useState('')
+  const rows = search.trim()
+    ? allRows.filter((s) => matches(search, s.source, s.product, s.currentRepository))
+    : allRows
 
   // The most recent completed scan across every source — the honest answer to
   // "when did we last look", rather than a transfer's timestamp standing in for
   // one.
-  const lastRunAt = rows
+  const lastRunAt = allRows
     .map((s) => s.lastRunAt)
     .filter((t): t is string => Boolean(t))
     .sort()
     .at(-1)
 
-  const newSinceLastRun = rows.reduce((n, s) => n + (s.lastNewPackages ?? 0), 0)
-  const errors = rows.filter((s) => s.lastError)
+  const newSinceLastRun = allRows.reduce((n, s) => n + (s.lastNewPackages ?? 0), 0)
+  const errors = allRows.filter((s) => s.lastError)
 
 
   return (
@@ -351,19 +417,25 @@ export function DiscoveryPanel({ products }: { products: Product[] }) {
             Discovery runs on the leader, and this replica is a follower. Scans are still happening —
             they are simply not being run from here, so there is no progress to show.
           </Typography.Text>
-        ) : rows.length === 0 && !loading ? (
+        ) : allRows.length === 0 && !loading ? (
           <Typography.Text type="secondary">
             No source has discovery enabled in configuration, so nothing is polled automatically.
           </Typography.Text>
         ) : (
           <>
             <Space size={24} style={{ marginBottom: 12 }} wrap>
+              {/*
+                One sentence, read left to right. It used to be a label, a
+                colon and a number — "Found on the last run: 0 new releases" —
+                which reads as a form field rather than as the answer to the
+                question the panel exists for.
+              */}
               <Typography.Text type="secondary" style={{ fontSize: 13 }}>
-                Found on the last run:{' '}
+                Found{' '}
                 <Typography.Text strong>
                   <Value>{formatCount(newSinceLastRun)}</Value>
                 </Typography.Text>{' '}
-                new {newSinceLastRun === 1 ? 'release' : 'releases'}
+                new {newSinceLastRun === 1 ? 'release' : 'releases'} in the last sync
               </Typography.Text>
               {errors.length > 0 && (
                 <Typography.Text type="danger" style={{ fontSize: 13 }}>
@@ -371,6 +443,17 @@ export function DiscoveryPanel({ products }: { products: Product[] }) {
                 </Typography.Text>
               )}
             </Space>
+
+            {allRows.length > 5 && (
+              <SearchBar
+                value={search}
+                onChange={setSearch}
+                placeholder="Search sources by name, product or repository"
+                matched={rows.length}
+                total={allRows.length}
+                width={300}
+              />
+            )}
 
             <Table<DiscoverySourceState>
               size="small"
@@ -393,7 +476,7 @@ export function DiscoveryPanel({ products }: { products: Product[] }) {
                 },
                 { title: 'Status', width: 340, render: (_, s) => <SourceProgress s={s} /> },
                 {
-                  title: 'Versions seen',
+                  title: 'Packages seen',
                   width: 110,
                   align: 'right',
                   render: (_, s) => (
@@ -410,7 +493,7 @@ export function DiscoveryPanel({ products }: { products: Product[] }) {
                   },
                 },
                 {
-                  title: 'Took',
+                  title: 'Time',
                   width: 90,
                   align: 'right',
                   render: (_, s) => (
@@ -432,6 +515,14 @@ export function DiscoveryPanel({ products }: { products: Product[] }) {
                     s.lastRunAt ? <TimeAgo at={s.lastRunAt} /> : (
                       <NA reason="This source has not completed a scan since the Coordinator started." />
                     ),
+                },
+                {
+                  // Per SOURCE, where the reader is already looking at that
+                  // source's last result. Scanning the whole estate to refresh
+                  // one registry is minutes of work nobody asked for.
+                  title: 'Actions',
+                  width: 120,
+                  render: (_, s) => <DiscoverSource product={s.product} scanning={s.scanning} />,
                 },
               ]}
             />

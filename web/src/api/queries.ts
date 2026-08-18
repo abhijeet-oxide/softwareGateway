@@ -304,6 +304,46 @@ export function useDownloads(product: string | undefined) {
   })
 }
 
+/**
+ * Every product's downloads and rules at once.
+ *
+ * The Downloads page shows configuration for the whole estate rather than for
+ * whichever product a selector happens to be on: a page that answers "what
+ * comes in automatically" with one product's answer is a page that hides the
+ * rule somebody came to find. Bounded by the product count, which is 5-50.
+ */
+export function useDownloadsForAll(products: string[]) {
+  return useQueries({
+    queries: products.map((product) => ({
+      queryKey: ['downloads', product],
+      queryFn: () => api.get<ListDownloadsResponse>(
+        `/products/${encodeURIComponent(product)}/downloads`),
+      staleTime: 5 * MINUTE,
+    })),
+  })
+}
+
+export function useRulesForAll(products: string[]) {
+  return useQueries({
+    queries: products.map((product) => ({
+      queryKey: ['rules', product],
+      queryFn: () => api.get<ListAutoDownloadRulesResponse>(
+        `/products/${encodeURIComponent(product)}/autoDownloadRules`),
+      staleTime: 5 * MINUTE,
+    })),
+  })
+}
+
+export function useReplicationForAll(products: string[]) {
+  return useQueries({
+    queries: products.map((product) => ({
+      queryKey: ['replication', product],
+      queryFn: () => api.get<ListReplicationResponse>(
+        `/products/${encodeURIComponent(product)}/replication`),
+    })),
+  })
+}
+
 export function useAutoDownloadRules(product: string | undefined) {
   return useQuery({
     queryKey: ['rules', product],

@@ -25,6 +25,15 @@ import type {
 /** The six statuses from the brief, and no others. */
 export type SoftwareStatus =
   | 'NEW'
+  /**
+   * Discovered, not downloaded, and no longer news.
+   *
+   * NEW carries an implicit "look at this", and a release that has sat at the
+   * vendor for eight months is not asking for attention — a page where
+   * everything is NEW says nothing about anything. Same fact, two words,
+   * divided by the same seven days the Overview uses.
+   */
+  | 'AVAILABLE'
   | 'DOWNLOADING'
   | 'DOWNLOADED'
   | 'READY FOR PRODUCTION'
@@ -61,6 +70,20 @@ export function verification(pkg: Pick<Package, 'signatureStatus'>): Verificatio
   return 'UNKNOWN'
 }
 
+/** How long a release counts as news. The Overview's window, and this one. */
+export const RECENT_MS = 7 * 24 * 60 * 60 * 1000
+
+/** When a release became available: the vendor's date, or when we first saw it. */
+export function publishedAt(pkg: Pick<Package, 'publishedAt' | 'discoveredAt'>): string {
+  return pkg.publishedAt || pkg.discoveredAt
+}
+
+/** Published inside the recency window. */
+export function isRecent(pkg: Pick<Package, 'publishedAt' | 'discoveredAt'>): boolean {
+  const at = publishedAt(pkg)
+  return Boolean(at) && at >= new Date(Date.now() - RECENT_MS).toISOString()
+}
+
 /** Names the targets that represent production, from the product's config. */
 export function productionTargets(product: Product | undefined): Set<string> {
   const names = new Set<string>()
@@ -90,7 +113,7 @@ export function deriveStatus(pkg: Package, product?: Product): SoftwareStatus {
     // it is mid-flight, on a listing where transfers were not expanded.
     if (pkg.state === 'TRANSFERRING' || pkg.state === 'QUEUED') return 'DOWNLOADING'
     if (pkg.state === 'FAILED') return 'VERIFICATION FAILED'
-    return 'NEW'
+    return isRecent(pkg) ? 'NEW' : 'AVAILABLE'
   }
 
   const production = productionTargets(product)
@@ -371,7 +394,7 @@ export function releaseHref(
   product: string,
   pkg: Pick<Package, 'tag' | 'sourceRepository'>,
 ): string {
-  const base = `/software/${encodeURIComponent(product)}/${encodeURIComponent(pkg.tag)}`
+  const base = `/packages/${encodeURIComponent(product)}/${encodeURIComponent(pkg.tag)}`
   return pkg.sourceRepository
     ? `${base}?repository=${encodeURIComponent(pkg.sourceRepository)}`
     : base
@@ -424,4 +447,17 @@ export function matches(needle: string, ...fields: (string | undefined)[]): bool
   const q = needle.trim().toLowerCase()
   if (!q) return true
   return fields.some((f) => f?.toLowerCase().includes(q))
+}
+
+/**
+ * The repository a package came from, without the registry host.
+ *
+ * A transfer's source arrives as `host/path`, which is right for one transfer
+ * and far too wide for a column of them: the host is identical on every row
+ * and the path is the only part that identifies anything.
+ */
+export function repositoryOf(source: string | undefined): string {
+  if (!source) return ''
+  const slash = source.indexOf('/')
+  return slash < 0 ? source : source.slice(slash + 1)
 }

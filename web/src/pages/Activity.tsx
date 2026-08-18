@@ -23,7 +23,7 @@ import type { AuditEvent } from '../api/types'
 const VOICE: Record<string, (e: AuditEvent) => string> = {
   PackageDiscovered: (e) => `New ${e.product ?? 'software'} version ${e.subjectId ?? ''} discovered`.trim(),
   PackageSuperseded: (e) => `${e.subjectId ?? 'A release'} was replaced by a newer build of the same version`,
-  DownloadRunRequested: (e) => `${e.product ?? 'Software'} ${e.subjectId ?? ''} download started`.trim(),
+  DownloadRunRequested: (e) => `${e.product ?? 'Package'} ${e.subjectId ?? ''} download started`.trim(),
   ConfigDrifted: (e) => `The registry configuration for ${e.subjectId ?? 'a target'} drifted from Git`,
   SyncRequested: (e) => `Mirror sync requested for ${e.subjectId ?? 'a target'}`,
   ReplicationApplied: (e) => `Mirror configuration applied to ${e.subjectId ?? 'a target'}`,
@@ -187,7 +187,7 @@ export default function Activity() {
                   // rule would produce a link that resolves to nothing.
                   e.product && e.subjectId && e.subjectKind === 'package' ? (
                     <Link
-                      to={`/software?product=${encodeURIComponent(e.product)}&tag=${encodeURIComponent(e.subjectId)}`}
+                      to={`/packages?product=${encodeURIComponent(e.product)}&tag=${encodeURIComponent(e.subjectId)}`}
                       style={{ fontFamily: mono, fontSize: 12 }}
                       onClick={(ev) => ev.stopPropagation()}
                     >

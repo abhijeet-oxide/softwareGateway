@@ -4,8 +4,8 @@ import { CloudDownloadOutlined } from '@ant-design/icons'
 import { Link, useNavigate } from 'react-router-dom'
 import { useProducts, usePackages, useReports, useTransfers } from '../api/queries'
 import {
-  deriveLocations, deriveStatus, downloadSeconds, releaseHref, transferIndex, verification, version,
-  withTransfers, type SoftwareStatus,
+  deriveLocations, deriveStatus, downloadSeconds, isRecent, publishedAt, releaseHref, transferIndex,
+  verification, version, withTransfers, type SoftwareStatus,
 } from '../domain/derive'
 import { formatBytes, formatDuration, formatSpeed } from '../domain/format'
 import { Stat, Value } from '../components/value'
@@ -23,24 +23,10 @@ import type { Package, Product } from '../api/types'
  * Answers: what new software is available, what is downloading, and what needs
  * my attention?
  *
- * The Latest Software table is the centre of the page and the largest thing on
+ * The published-this-week table is the centre of the page and the largest thing on
  * it, because that is the answer. "Saved" is deliberately NOT a card here — it
  * belongs to a release, not to the estate.
  */
-
-const SEVEN_DAYS = 7 * 24 * 60 * 60 * 1000
-
-/**
- * When a release became available.
- *
- * The vendor's own publication date where there is one, and the moment we first
- * saw it otherwise — a package discovered from a registry that records no
- * publication time still arrived, and dropping it would make a product with a
- * plain OCI source look permanently quiet.
- */
-function publishedAt(pkg: Package): string {
-  return pkg.publishedAt || pkg.discoveredAt
-}
 
 interface Row {
   pkg: Package
@@ -84,9 +70,8 @@ export default function Overview() {
     // and a list that falls back on old releases to fill ten rows answers a
     // different question quietly — the reader cannot tell which rows are the
     // news and which are the padding.
-    const cutoff = new Date(Date.now() - SEVEN_DAYS).toISOString()
     return out
-      .filter((r) => publishedAt(r.pkg) >= cutoff)
+      .filter((r) => isRecent(r.pkg))
       .sort((a, b) => publishedAt(b.pkg).localeCompare(publishedAt(a.pkg)))
       .slice(0, 10)
   }, [productList, first.data, second.data, third.data, transfers.data])
@@ -161,11 +146,11 @@ export default function Overview() {
 
       <Row gutter={[16, 16]} style={{ marginBottom: 16 }}>
         {[
-          { title: 'New Software', value: counts.new, to: '/software?status=NEW' },
+          { title: 'New Packages', value: counts.new, to: '/packages?status=NEW' },
           { title: 'Downloading', value: counts.downloading, to: '/downloads' },
-          { title: 'Downloaded', value: counts.downloaded, to: '/software?status=DOWNLOADED' },
-          { title: 'Production Ready', value: counts.readyForProduction, to: '/software?status=READY' },
-          { title: 'Verification Issues', value: counts.verificationIssues, to: '/software?verification=failed' },
+          { title: 'Downloaded', value: counts.downloaded, to: '/packages?status=DOWNLOADED' },
+          { title: 'Production Ready', value: counts.readyForProduction, to: '/packages?status=READY' },
+          { title: 'Unverified', value: counts.verificationIssues, to: '/packages?verification=failed' },
         ].map((card) => (
           <Col key={card.title} flex="1 1 190px">
             <Card
@@ -184,7 +169,7 @@ export default function Overview() {
         <Col xs={24} xl={17}>
           <Card
             title="Packages published in the last 7 days"
-            extra={<Link to="/software">View all packages</Link>}
+            extra={<Link to="/packages">View all packages</Link>}
             styles={{ body: { padding: 0 } }}
           >
             {!loading && rows.length === 0 ? (
@@ -192,7 +177,7 @@ export default function Overview() {
                 <EmptyStateCard
                   title="Nothing new this week"
                   explanation="No package was published in the last seven days. Older releases are on the Packages page; discovery runs on a schedule and its progress is reported above."
-                  action={<Link to="/software"><Button>View all packages</Button></Link>}
+                  action={<Link to="/packages"><Button>View all packages</Button></Link>}
                 />
               </div>
             ) : (

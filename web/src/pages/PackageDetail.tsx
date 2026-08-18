@@ -28,7 +28,7 @@ import type { Artifact, InspectPackageResponse } from '../api/types'
 import { TargetTag } from '../components/chips'
 
 /**
- * Page 3 — Software (release detail).
+ * Page 3 — Package (release detail).
  *
  * Answers: everything about this one release, and what can I do with it?
  *
@@ -234,7 +234,7 @@ function artifactName(a: Artifact): string | null {
   return null
 }
 
-export default function SoftwareDetail() {
+export default function PackageDetail() {
   const { product: productName, reference } = useParams()
   const [params] = useSearchParams()
   const navigate = useNavigate()

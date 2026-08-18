@@ -14,6 +14,8 @@ import PackageIcon from '~icons/mdi/package-variant-closed'
 import HelmIcon from '~icons/simple-icons/helm'
 import FileIcon from '~icons/mdi/file-document-outline'
 import AnalyzeIcon from '~icons/mdi/file-tree-outline'
+import IndexIcon from '~icons/mdi/table-of-contents'
+import SignatureIcon from '~icons/mdi/certificate-outline'
 import type { Repository } from '../api/types'
 
 /**
@@ -135,11 +137,16 @@ export const ARTIFACT_ICONS = {
   Images: DockerIcon,
   'Helm Charts': HelmIcon,
   Files: FileIcon,
+  // The two structural kinds. An index is a table of contents — it names the
+  // release's parts and carries none of them — and a signature is an
+  // attestation, which is what a certificate mark says everywhere else.
+  Index: IndexIcon,
+  Signatures: SignatureIcon,
 } as const
 
 export type ArtifactKind = keyof typeof ARTIFACT_ICONS
 
-export { AnalyzeIcon, PackageIcon, NokiaIcon, JFrogIcon, OpenShiftIcon, RocketIcon, FlaskIcon, OciIcon, DockerIcon, HelmIcon }
+export { AnalyzeIcon, IndexIcon, SignatureIcon, PackageIcon, NokiaIcon, JFrogIcon, OpenShiftIcon, RocketIcon, FlaskIcon, OciIcon, DockerIcon, HelmIcon }
 
 /**
  * Renders one of the above at text size.

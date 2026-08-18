@@ -9,20 +9,20 @@ import {
 import { formatDuration } from '../domain/format'
 import { Value } from '../components/value'
 import {
-  LocationChip, ProductChip, StatusBadge, TimeAgo, VerificationBadge, VersionChip,
+  LocationChip, PackageName, ProductChip, StatusBadge, TimeAgo, VerificationBadge, VersionChip,
 } from '../components/chips'
 import { EmptyStateCard, ErrorState, PageHeader, SearchBar } from '../components/layout'
 
 /**
- * The Software listing — the "View all software" destination and where the
- * Overview KPI cards land.
+ * The Packages listing — where "View all packages" and the Overview KPI cards
+ * land.
  *
  * Filters compose into the URL, so a filtered view can be pasted to a
  * colleague. The product filter is a real server-side filter; the status
  * filter is derived and therefore applied here, over one page of results, and
  * says so rather than pretending to be exhaustive.
  */
-export default function Software() {
+export default function Packages() {
   const [params, setParams] = useSearchParams()
   const [search, setSearch] = useState('')
   const products = useProducts()
@@ -100,7 +100,8 @@ export default function Software() {
               value={status ?? undefined}
               onChange={(v) => update('status', v)}
               options={[
-                { value: 'NEW', label: 'New' },
+                { value: 'NEW', label: 'New (last 7 days)' },
+                { value: 'AVAILABLE', label: 'Available' },
                 { value: 'DOWNLOADING', label: 'Downloading' },
                 { value: 'DOWNLOADED', label: 'Downloaded' },
                 { value: 'READY', label: 'Ready for production' },
@@ -151,7 +152,7 @@ export default function Software() {
             dataSource={rows}
             rowKey={(r) => r.pkg.packageId}
             pagination={{ pageSize: 20, showSizeChanger: false }}
-            scroll={{ x: 1270 }}
+            scroll={{ x: 1420 }}
             columns={[
               {
                 title: 'Product',
@@ -160,10 +161,27 @@ export default function Software() {
                 render: () => product && <ProductChip name={product.productId} display={product.displayName} />,
               },
               {
+                // The package's own name, in its own column. It used to sit
+                // under the version as a subtitle, which read as a footnote —
+                // and it is not one: a product publishes one version tag into
+                // every repository it watches, so this is frequently the only
+                // thing telling two rows apart.
+                title: 'Name',
+                width: 240,
+                render: (_, r) => <PackageName pkg={r.pkg} width={220} />,
+              },
+              {
                 title: 'Version',
-                width: 190,
+                width: 160,
                 render: (_, r) =>
-                  product && <VersionChip product={product.productId} version={version(r.pkg)} pkg={r.pkg} />,
+                  product && (
+                    <VersionChip
+                      product={product.productId}
+                      version={version(r.pkg)}
+                      pkg={r.pkg}
+                      showRepository={false}
+                    />
+                  ),
               },
               { title: 'Published', width: 110, render: (_, r) => <TimeAgo at={r.pkg.publishedAt || r.pkg.discoveredAt} /> },
               { title: 'Verified', width: 145, render: (_, r) => <VerificationBadge state={verification(r.pkg)} /> },

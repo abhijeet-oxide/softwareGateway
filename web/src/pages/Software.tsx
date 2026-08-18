@@ -1,5 +1,5 @@
 import { useMemo } from 'react'
-import { Button, Card, Select, Space, Table } from 'antd'
+import { Button, Card, Select, Space, Table, Tooltip } from 'antd'
 import { Link, useSearchParams } from 'react-router-dom'
 import { usePackages, useProducts, useTransfers } from '../api/queries'
 import {
@@ -128,7 +128,7 @@ export default function Software() {
             dataSource={rows}
             rowKey={(r) => r.pkg.packageId}
             pagination={{ pageSize: 20, showSizeChanger: false }}
-            scroll={{ x: 1220 }}
+            scroll={{ x: 1270 }}
             columns={[
               {
                 title: 'Product',
@@ -159,14 +159,24 @@ export default function Software() {
               {
                 title: 'Actions',
                 fixed: 'right',
-                width: 120,
+                width: 170,
                 render: (_, r) =>
                   product && (
-                    <Link to={releaseHref(product.productId, r.pkg)}>
-                      <Button size="small" type={r.status === 'NEW' ? 'primary' : 'default'}>
-                        {r.status === 'NEW' ? 'Download' : 'View Details'}
-                      </Button>
-                    </Link>
+                    <Space size={4}>
+                      <Link to={releaseHref(product.productId, r.pkg)}>
+                        <Button size="small" type={r.status === 'NEW' ? 'primary' : 'default'}>
+                          {r.status === 'NEW' ? 'Download' : 'Details'}
+                        </Button>
+                      </Link>
+                      <Tooltip title={`Compare ${version(r.pkg)} against another version or another location`}>
+                        <Link
+                          to={`/compare?product=${encodeURIComponent(product.productId)}` +
+                              `&from=${encodeURIComponent(r.pkg.tag)}`}
+                        >
+                          <Button size="small">Compare</Button>
+                        </Link>
+                      </Tooltip>
+                    </Space>
                   ),
               },
             ]}

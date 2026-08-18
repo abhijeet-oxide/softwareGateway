@@ -493,31 +493,67 @@ export interface ListSyncsResponse { syncs: MirrorSyncView[]; nextPageToken?: st
 // Compare
 // ---------------------------------------------------------------------------
 
-export interface CompareEnd { endpoint: string; reference: string; registry?: string; repository?: string }
+export interface CompareEnd {
+  /** The configured endpoint, plus the version where the two sides differ. */
+  label: string
+  /** What was actually walked, as a pullable reference. */
+  reference: string
+}
 
 export interface CompareSide {
-  digest?: string
+  digest: string
   tag?: string
-  sizeBytes?: Int64String
-  mediaType?: string
-  platform?: string
+  size?: Int64String
+  repository?: string
+  /** Where this component should be pullable AS ITSELF on this side. */
+  namedRepository?: string
+  namedPresent?: boolean
+  namedTagDigest?: string
 }
+
+export type CompareVerdict = 'same' | 'changed' | 'only-a' | 'only-b'
 
 export interface CompareRow {
+  /** index | image | chart | file | signature */
+  type: string
+  /** The vendor's name, from org.opencontainers.image.ref.name. */
   name: string
-  kind: string
-  /** ADDED, REMOVED, CHANGED, UNCHANGED. */
-  change: string
+  verdict: CompareVerdict
   a?: CompareSide
   b?: CompareSide
-  detail?: string
+  /** Each disagreement stated as a fact. Empty when the sides agree. */
+  differences?: string[]
+  /**
+   * The FILES inside the component's layers, read out of the archives.
+   * Three lists rather than two: an edited file is changed, not added and
+   * removed.
+   */
+  filesAdded?: string[]
+  filesRemoved?: string[]
+  filesChanged?: string[]
+  /** A layer was left unopened — past the budget, or not an archive. */
+  filesTruncated?: boolean
 }
 
+/**
+ * Compares one package against another place, another version, or both.
+ *
+ * The package being compared is named in the URL; everything about the other
+ * side is here. `from` and `to` are ENDPOINTS — configured source or target
+ * names — and `against` is the other VERSION. Naming only `against` compares
+ * two versions in one place; naming only `to` compares one version in two
+ * places; naming both answers each at once.
+ */
 export interface CompareRequest {
-  to: string
-  toEndpoint?: string
-  fromEndpoint?: string
-  fileBudget?: number
+  from?: string
+  to?: string
+  against?: string
+  /**
+   * How much layer content may be downloaded to say which FILES changed
+   * rather than which layers. Zero uses the server's default; negative leaves
+   * every layer opaque.
+   */
+  fileBudgetBytes?: number
 }
 
 export interface CompareResponse {
@@ -525,13 +561,16 @@ export interface CompareResponse {
   a: CompareEnd
   b: CompareEnd
   rows: CompareRow[]
-  added: number
-  removed: number
+  /** These four partition `rows`. */
+  same: number
   changed: number
-  unchanged: number
-  aTotalBytes?: Int64String
-  bTotalBytes?: Int64String
-  truncated?: boolean
+  onlyA: number
+  onlyB: number
+  /** Tags in each side's repository the bundle does not account for. */
+  extraTagsA?: string[]
+  extraTagsB?: string[]
+  extraTruncatedA?: boolean
+  extraTruncatedB?: boolean
 }
 
 // ---------------------------------------------------------------------------

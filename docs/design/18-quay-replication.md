@@ -9,10 +9,10 @@
 > | §7 Management client, `target_replication`, `mirror_syncs`, `transfers.strategy`, API routes, `targets` commands | **Built.** `internal/registry/quay`, `internal/replication`, `internal/store/replication.go`, migration `00016` |
 > | §8 Explicit apply with a diff, continuous drift detection that never self-heals | **Built.** Drift is computed against what we sent, and an apply is the only write |
 > | §9 The three defences against the signature trap | **Built.** Validation warning, the reference product, and `targets describe` |
-> | §6 What a transfer MEANS per mode — the `Strategy` seam, `download` against a mirror, the destination walk, `diverged`, `warm` | **Not built.** A mirror is configured, applied, observed and synced today; a *transfer* still means `copy` |
-> | §7 Metrics and audit events | **Not built** |
->
-> `transfers.strategy` exists as a column and is always `copy` until §6 lands. The two halves are separable on purpose: configuring a mirror is useful on its own, and the transfer semantics need the destination walk that gives `succeeded` and `diverged` their meaning.
+> | §6 What a transfer MEANS per mode — the `Strategy` seam, `download` against a mirror, the destination walk, `succeeded`/`diverged`/`failed` | **Built.** `internal/transfer/delegate.go`, `internal/replication/watcher.go`, migration `00017` |
+> | §6.1 No progress, no speed, no ETA for a delegated transfer | **Built**, in the API DTO and in both CLI renderings |
+> | §7 Metrics and audit events | **Built** |
+> | §6.3 `warm` | **Not built, and deliberately not.** See §6.3 — it moves real bytes, and Q9 is now answered |
 
 ---
 
@@ -418,6 +418,16 @@ That produces three outcomes worth distinguishing, and they must not collapse in
 A proxy cache has no notion of "put this there". But there is nothing stopping *us* from pulling a package through the proxy endpoint and discarding the bytes: the pull populates the cache exactly as a pod's would, and afterwards the content is present for as long as the staleness window and the LRU allow.
 
 So `transferctl warm <package> --target ocp-dev-cache` (and `replication.proxy.prewarm: true` to do it automatically after discovery) walks the manifest tree through the proxy path, `GET`s every blob, and counts the bytes it discarded. This is a genuine transfer in the byte sense — it costs full bandwidth into the OCP cluster and out again to nowhere — so it is opt-in, its output says plainly that it moved *N* bytes and stored none of them locally, and it never claims the content is durably present. It buys one thing: the first real pull is fast, and a scheduled job before a release window is a defensible reason to want that.
+
+> **Decision — Q9 answered: `warm` belongs in the worker plane, and is therefore NOT part of M8.**
+>
+> *The question was* whether `warm` could run in the Coordinator alongside `calibrate` and `products check`, which already open registry connections there.
+>
+> *No.* Those two move a probe. `warm` moves the whole package — 45 GB, at full line rate, into the cluster and out again to nowhere — and [00](00-overview.md) §5 states the property this system is built around: *"artifact bytes flow only along the bottom edge. They never enter the Coordinator."* A verb that pulled a release through the control plane would break the one invariant every other decision in the design was made to protect, and it would do so on the path least likely to be load-tested.
+>
+> *What it actually needs:* a third job kind. `jobs.kind` is `blob | manifest` today, and both mean "read here, write there". A warm job means "read through this path and discard", which is a genuinely different verb — a `CHECK` constraint change on the busiest table in the schema, a planner branch and an engine branch.
+>
+> *So it waits*, rather than being built in the wrong place because it was the last item on a milestone. Everything else about proxy mode ships: the configuration, the validation that keeps a cache out of every push path, the reachability probe and its metric. What is missing is the ability to fill one deliberately, and until then a proxy cache fills the way it was designed to — when a pod pulls.
 
 ### 6.4 How a mode looks to somebody who is not reading this document
 

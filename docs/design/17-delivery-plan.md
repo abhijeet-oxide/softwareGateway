@@ -109,14 +109,14 @@ Everything a user needs to actually run transfers.
 
 Delegation. A Quay target can stop being somewhere we push to and become somewhere that pulls for itself. Specified in [18](18-quay-replication.md).
 
-**Status: the configuration half is built; the transfer half is not.** A mirror can be declared, validated, applied, observed, drifted and synced today. What a *download* means against a delegated target — the `Strategy` seam, the destination walk, `diverged`, `warm` — is still to come, and `transfers.strategy` reads `copy` until it lands. The split is deliberate: configuring a mirror is useful on its own, and the transfer semantics need the destination walk that gives `succeeded` and `diverged` their meaning. What remains is marked below.
+**Status: complete except `warm`, which Q9 moved out of this milestone on purpose** ([18](18-quay-replication.md) §6.3). A mirror can be declared, validated, applied, observed, drifted and synced; a download against a mirror target delegates, waits, walks the destination and settles as `succeeded`, `diverged` or `failed`; and no delegated object reports a byte anywhere. `warm` needs a third job kind in the worker plane, because pulling a 45 GB release through the Coordinator would break the invariant in [00](00-overview.md) §5.
 
 - `replication.mode` on a target: `copy` (default, unchanged), `mirror`, `proxy` ([18](18-quay-replication.md) §5)
 - `internal/registry/quay`: the **management** API client — mirror config, proxy cache, `changestate`, robots — separate from the `/v2` data path
-- ~~The `Strategy` seam, with the existing planner and engine moved behind it unchanged~~ ([18](18-quay-replication.md) §7) — **remaining**
+- The `Strategy` seam, one level above the planner and the engine, both unchanged ([18](18-quay-replication.md) §7)
 - Explicit `apply` with a diff; continuous drift detection that never self-heals ([18](18-quay-replication.md) §8)
-- Observed sync history; the `diverged` outcome and `warm` for proxy caches are **remaining** ([18](18-quay-replication.md) §6)
-- `targets list|describe|apply|sync|drift` and the replication routes; `warm`, the `Replication` audit category and its metrics are **remaining**
+- Observed sync history and the `diverged` outcome; `warm` deferred to the worker plane by Q9 ([18](18-quay-replication.md) §6)
+- `targets list|describe|apply|sync|drift`, the replication routes, the `Replication` audit category and its metrics
 
 **Acceptance:**
 - A `mode: mirror` target applies from configuration, syncs on request, and reaches `succeeded` when the destination digest matches the discovered one — and `diverged`, not `succeeded`, when the upstream tag has moved underneath it.
@@ -232,7 +232,7 @@ Deliberately unresolved. Each is recorded with when it must be answered, so none
 | Q6 | **When is API authentication enabled?** ([09](09-api.md) §10) | **Before any exposure beyond the cluster — a deployment gate, not a milestone. Also gate G1 for M10** |
 | Q7 | **Is a Quay mirror sync observable enough to report honestly?** Does `GET …/mirror` distinguish "never ran" from "running" from "failed" reliably, or must we depend on Quay's notifications? ([18](18-quay-replication.md) §13) | M8 entry — a negative answer drops `mirror` rather than shipping a status nobody can trust |
 | Q8 | Should `manage: auto` exist — continuous reconciliation of Quay config — and under what guard? ([18](18-quay-replication.md) §8) | M8 exit, from how often observed drift turns out to be legitimate |
-| Q9 | Does `warm` belong in the worker plane, since it moves real bytes and should obey the concurrency budget? ([18](18-quay-replication.md) §6.3) | M8 design |
+| ~~Q9~~ | ~~Does `warm` belong in the worker plane?~~ ([18](18-quay-replication.md) §6.3) | **ANSWERED at M8: yes.** It moves the whole package at line rate, and [00](00-overview.md) §5 says bytes never enter the Coordinator. It needs a third `jobs.kind`, so it left M8 rather than being built in the wrong place |
 | Q10 | Can a mirror tag glob be generated from an `autoDownload` rule's RE2 pattern, or is the dialect gap a trap? ([18](18-quay-replication.md) §5.3) | M8 — the default answer is no |
 | Q11 | Should a rule suspension **expire by default** rather than persisting until someone remembers? ([20](20-download-rules.md) §9) | M9 design |
 | Q12 | Does anyone use a rule's `window`? It is the one field beyond the stated requirement and is deletable in isolation ([20](20-download-rules.md) §8.2) | M9 exit |

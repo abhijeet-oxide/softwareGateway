@@ -272,6 +272,30 @@ Returns `200 OK` with the plan and creates nothing ([05](05-transfer-engine.md) 
 
 `validateOnly` as a parameter rather than a `/transfers:dryRun` endpoint is AIP-163, and it is what guarantees the dry run exercises the same code as the real thing.
 
+### 4.2a Progress on a long request: `:compare`
+
+A comparison reads two releases from their registries end to end. For a real one that is minutes, during which the caller has a request in flight and nothing to show for it — indistinguishable from a comparison that has silently stopped.
+
+The report **is** the response, so there is nothing to hand an operation id back in, and turning it into a stream would change the contract for every existing client to serve a progress bar. Instead the caller mints a token:
+
+```http
+POST /api/v1/products/{p}/packages/{pkg}:compare   {"progressToken": "…", …}
+GET  /api/v1/comparisons/{token}
+```
+
+The token is optional; omitting it costs nothing and reports nothing.
+
+**Progress lives in the memory of the replica running the comparison.** It is worth nothing once the report arrives, so it is not worth a table or a write per manifest — and a poll served by a different replica returns `404`, which is a normal answer meaning "no position available", not a failure. Entries are dropped shortly after the comparison finishes.
+
+Two limits bound the request, and they measure different things:
+
+| | default | what it catches |
+|---|---|---|
+| deadline | 10 minutes | a comparison that is genuinely too large |
+| stall | 90 seconds with no progress | a registry that stopped answering |
+
+Only the second can tell **slow** from **stopped**, which is why progress is reported to the server as well as to the caller: no elapsed time distinguishes a large release read slowly from a registry that has gone silent, and the two send a reader to entirely different places. A stall answers `UNAVAILABLE` naming the silence; the deadline answers `DEADLINE_EXCEEDED` naming the size.
+
 ### 4.3 Why no Operation resource
 
 AIP-151 defines a long-running-operation resource for asynchronous work. We do not use it: a **Transfer already is** the durable, addressable, pollable representation of the work, with richer state than a generic `Operation` (waves, per-job progress, dedupe accounting). Wrapping it in an `Operation` would add indirection and a second identifier for the same thing.

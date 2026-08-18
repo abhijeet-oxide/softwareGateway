@@ -7,8 +7,10 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"sort"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/go-chi/chi/v5"
@@ -728,7 +730,16 @@ func (s *Server) handlePackageCustomMethod(w http.ResponseWriter, r *http.Reques
 // Generous, because the work is real: two full manifest walks against remote
 // registries. Bounded, because an unbounded one is indistinguishable from a
 // hang — and this endpoint has no progress channel to say otherwise.
-var compareDeadline = 4 * time.Minute
+var compareDeadline = 10 * time.Minute
+
+// compareStall is how long the comparison may make NO progress before it is
+// abandoned.
+//
+// The number that tells slow from stopped. A large release read over a slow
+// link advances continuously and never approaches this; a registry that has
+// stopped answering advances not at all, and without this it would hold the
+// request open for the whole deadline saying nothing.
+var compareStall = 90 * time.Second
 
 // POST /api/v1/products/{product}/packages/{package}:compare.
 //
@@ -774,32 +785,46 @@ func (s *Server) handleComparePackage(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	// A DEADLINE, because the failure mode of this endpoint is not an error.
+	// TWO LIMITS, AND THEY MEASURE DIFFERENT THINGS.
 	//
-	// A comparison of a real orb is hundreds of manifests and two probes per
-	// component, on each side, against registries nobody has sized for us. When
-	// that is slow, the request does not fail — it runs, and the caller waits,
-	// and there is nothing to distinguish it from a hang. Better to stop and
-	// say so: the reply names the limit and what to do about it, and a caller
-	// who wants the full answer can ask for it without the file budget.
+	// The deadline bounds the whole comparison, generously: the work is real —
+	// two full manifest walks against remote registries — and a release with
+	// thousands of components legitimately takes many minutes.
+	//
+	// The stall bound is the one that catches a comparison that is not working.
+	// A registry that stops answering leaves the request running with nothing
+	// moving, and no total elapsed time can tell that apart from a large
+	// release being read slowly. Progress can: if nothing has advanced for
+	// compareStall, it is not slow, it is stopped.
 	ctx, cancel := context.WithTimeout(r.Context(), compareDeadline)
 	defer cancel()
+
+	progress := s.comparisons.start(req.ProgressToken)
+	defer s.comparisons.finish(req.ProgressToken)
+
+	stalled := s.watchForStall(ctx, cancel, req.ProgressToken)
 
 	report, err := s.deps.Comparer.Compare(ctx, productName,
 		ComparePoint{Package: pkg, Endpoint: req.From},
 		ComparePoint{Package: against, Endpoint: req.To},
-		req.FileBudgetBytes)
+		req.FileBudgetBytes, progress)
 	if err != nil {
-		if errors.Is(ctx.Err(), context.DeadlineExceeded) {
+		switch {
+		case stalled.Load():
+			Error(w, r, v1.CodeUnavailable, fmt.Sprintf(
+				"the comparison stopped making progress for %s and was "+
+					"abandoned. One of the two registries stopped answering; "+
+					"the components already read are not the problem.",
+				compareStall))
+		case errors.Is(ctx.Err(), context.DeadlineExceeded):
 			Error(w, r, v1.CodeDeadlineExceeded, fmt.Sprintf(
 				"the comparison did not finish within %s. Both releases are "+
-					"read live from their registries, and a slow registry is "+
-					"the usual cause. Retry without file contents "+
-					"(fileBudgetBytes: -1), which is the expensive part.",
+					"read live from their registries. Retry without file "+
+					"contents (fileBudgetBytes: -1), which is the expensive part.",
 				compareDeadline))
-			return
+		default:
+			Error(w, r, v1.CodeInvalidArgument, err.Error())
 		}
-		Error(w, r, v1.CodeInvalidArgument, err.Error())
 		return
 	}
 
@@ -831,6 +856,85 @@ func (s *Server) handleComparePackage(w http.ResponseWriter, r *http.Request) {
 			FilesTruncated: row.FilesTruncated,
 		})
 	}
+	WriteJSON(w, r, http.StatusOK, out)
+}
+
+// watchForStall abandons a comparison that has stopped advancing.
+//
+// Returns the flag the handler reads afterwards, because a cancelled context
+// produces the same error whatever cancelled it, and telling a caller their
+// comparison timed out when a registry actually went silent sends them to look
+// in the wrong place.
+//
+// A comparison with no progress token is not watched: nothing reports, so
+// "nothing has moved" would be true from the first second.
+func (s *Server) watchForStall(
+	ctx context.Context, cancel context.CancelFunc, token string,
+) *atomic.Bool {
+	var stalled atomic.Bool
+	if token == "" {
+		return &stalled
+	}
+
+	go func() {
+		// Three checks inside the stall window, capped so a long window does
+		// not mean a long wait after it passes.
+		interval := min(compareStall/3, 15*time.Second)
+		interval = max(interval, time.Second)
+
+		ticker := time.NewTicker(interval)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				p, ok := s.comparisons.read(token)
+				if !ok || p.Done {
+					return
+				}
+				if time.Since(p.UpdatedAt) > compareStall {
+					stalled.Store(true)
+					cancel()
+					return
+				}
+			}
+		}
+	}()
+	return &stalled
+}
+
+// handleCompareProgress serves GET /api/v1/comparisons/{token}.
+//
+// The side channel a comparison reports through while its own request is still
+// open. 404 is a normal answer, not a failure: the comparison may have finished
+// and been evicted, or be running on another replica — a caller that gets one
+// falls back to showing that work is in progress without a position.
+func (s *Server) handleCompareProgress(w http.ResponseWriter, r *http.Request) {
+	token := chi.URLParam(r, "comparison")
+
+	p, ok := s.comparisons.read(token)
+	if !ok {
+		NotFound(w, r, "comparison", token)
+		return
+	}
+
+	out := v1.CompareProgressResponse{
+		Done:      p.Done,
+		StartedAt: p.StartedAt.UTC().Format(time.RFC3339),
+		UpdatedAt: p.UpdatedAt.UTC().Format(time.RFC3339),
+		Sides:     make([]v1.CompareProgressSide, 0, len(p.Sides)),
+	}
+	for _, side := range p.Sides {
+		out.Sides = append(out.Sides, v1.CompareProgressSide{
+			Side: side.Side, Phase: side.Phase,
+			Done: side.Done, Total: side.Total, Estimated: side.Estimated,
+		})
+	}
+	// Stable order, so a bar built from this does not reorder its two rows
+	// between polls.
+	sort.Slice(out.Sides, func(i, j int) bool { return out.Sides[i].Side < out.Sides[j].Side })
+
 	WriteJSON(w, r, http.StatusOK, out)
 }
 

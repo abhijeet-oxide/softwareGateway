@@ -34,6 +34,7 @@ type compareImpl struct {
 // different arguments. Nothing here knows which of those the caller meant.
 func (c compareImpl) Compare(
 	ctx context.Context, productName string, a, b api.ComparePoint, fileBudget int64,
+	progress compare.ProgressFunc,
 ) (compare.Report, error) {
 	p, ok := c.products.Get(productName)
 	if !ok {
@@ -75,6 +76,7 @@ func (c compareImpl) Compare(
 		Concurrency: concurrencyOf(p),
 		FileBudget:  resolveFileBudget(fileBudget),
 		Classify:    vendors.ClassifierFor(c.layouts, layoutNames(p)),
+		Progress:    progress,
 	})
 }
 

@@ -1,7 +1,8 @@
 import { useMutation, useQueries, useQuery, useQueryClient } from '@tanstack/react-query'
 import { api, query, packageRef } from './client'
 import type {
-  CheckConnectivityResponse, CompareRequest, CompareResponse, DiscoverAllResponse,
+  CheckConnectivityResponse, CompareProgressResponse, CompareRequest, CompareResponse,
+  DiscoverAllResponse,
   DiscoverPackagesResponse, DiscoveryStatusResponse, HealthCheckResponse, ListArtifactsResponse,
   ListAuditEventsResponse, ListAutoDownloadRulesResponse, ListDownloadsResponse,
   InspectPackageResponse, ListFailuresResponse, ListJobsResponse, ListPackagesResponse, ListProductsResponse,
@@ -399,6 +400,29 @@ export function useSyncs(product: string | undefined, target: string | undefined
 // ---------------------------------------------------------------------------
 // Compare
 // ---------------------------------------------------------------------------
+
+/**
+ * Where a comparison has got to, polled while its own request is open.
+ *
+ * `enabled` is the token: polling starts when a comparison starts and stops
+ * when it ends. A 404 is not an error to show anybody — the comparison may be
+ * running on another replica, or may have just finished — so the query is
+ * allowed to fail quietly and the page falls back to saying that work is in
+ * progress without a position.
+ */
+export function useCompareProgress(token: string | undefined) {
+  return useQuery({
+    queryKey: ['compare-progress', token],
+    queryFn: () => api.get<CompareProgressResponse>(
+      `/comparisons/${encodeURIComponent(token!)}`),
+    enabled: Boolean(token),
+    refetchInterval: 1000,
+    retry: false,
+    // A miss is a normal answer, and an error boundary would turn it into a
+    // red panel over a comparison that is working perfectly well.
+    throwOnError: false,
+  })
+}
 
 export function useCompare() {
   return useMutation({

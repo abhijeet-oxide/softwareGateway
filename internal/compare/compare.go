@@ -45,6 +45,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"sync/atomic"
 
 	"github.com/abhijeet-oxide/softwareGateway/internal/oci"
 	"github.com/abhijeet-oxide/softwareGateway/internal/registry"
@@ -129,6 +130,14 @@ type Options struct {
 	// degrades correctly for a vendor nobody has written one for: a four-kilobyte
 	// configuration bundle is opened, a two-gigabyte image layer is not.
 	FileBudget int64
+	// Progress is called as the comparison proceeds. Nil reports nothing.
+	//
+	// A comparison of a real release is minutes of reading two registries, and
+	// a caller with no way to say what is happening can only offer an animation
+	// — which is the same thing it would offer for a comparison that had
+	// silently stopped.
+	Progress ProgressFunc
+
 	// Classify names what a component IS. Nil means the OCI rules alone.
 	//
 	// Injected rather than resolved here because naming a vendor is the one
@@ -141,6 +150,36 @@ type Options struct {
 	// a difference in the content.
 	Classify vendors.Classifier
 }
+
+// Progress is one side's position in the comparison.
+//
+// Per SIDE, because the two are walked concurrently against different
+// registries and one of them is usually the slow one — a single merged number
+// would hide which.
+type Progress struct {
+	// Side is the end's label, as it appears in the report.
+	Side string
+	// Phase is what is being done, in the words the report uses.
+	Phase string
+	// Done and Total are components. Total is what is KNOWN so far: a tree is
+	// discovered by walking it, so during the manifest phase the denominator
+	// grows as levels open.
+	Done, Total int
+	// Estimated says the total may still grow, so a caller can render the
+	// percentage as an estimate rather than as a position.
+	Estimated bool
+}
+
+// The phases a comparison passes through, named as the reader would name them.
+const (
+	PhaseManifests = "reading manifests"
+	PhaseNames     = "checking component names"
+	PhaseFiles     = "reading file contents"
+)
+
+// ProgressFunc receives progress. It is called from several goroutines and
+// must be safe for concurrent use.
+type ProgressFunc func(Progress)
 
 // Layer is one blob a component is made of.
 type Layer struct {
@@ -349,11 +388,11 @@ func Run(ctx context.Context, clientA, clientB ClientFactory, opts Options) (Rep
 	wg.Add(2)
 	go func() {
 		defer wg.Done()
-		invA, extraA, errA = readSide(ctx, clientA, opts.A, rootA, concurrency, opts.Classify)
+		invA, extraA, errA = readSide(ctx, clientA, opts.A, rootA, concurrency, opts.Classify, opts.Progress)
 	}()
 	go func() {
 		defer wg.Done()
-		invB, extB, errB = readSide(ctx, clientB, opts.B, rootB, concurrency, opts.Classify)
+		invB, extB, errB = readSide(ctx, clientB, opts.B, rootB, concurrency, opts.Classify, opts.Progress)
 	}()
 	wg.Wait()
 
@@ -431,7 +470,7 @@ func (inv inventory) add(item *Item) {
 // picked the same one.
 func readSide(
 	ctx context.Context, client ClientFactory, spec SideSpec, choice rootChoice,
-	concurrency int, with vendors.Classifier,
+	concurrency int, with vendors.Classifier, report ProgressFunc,
 ) (inventory, extras, error) {
 	root, desc, ref := choice.repo, choice.desc, choice.chosen
 
@@ -440,7 +479,15 @@ func readSide(
 	// the destination does not have; a walk that aborted on the first of them
 	// could not report the other nineteen — and "this side could not be walked"
 	// is the least useful possible answer to "what is missing?".
-	tree, missing, _, err := oci.WalkPartial(ctx, root, desc, concurrency)
+	tree, missing, _, err := oci.WalkPartialProgress(ctx, root, desc, concurrency,
+		func(p oci.Progress) {
+			if report != nil {
+				report(Progress{
+					Side: spec.Label, Phase: PhaseManifests,
+					Done: p.Fetched, Total: p.Known, Estimated: true,
+				})
+			}
+		})
 	if err != nil {
 		return nil, extras{}, fmt.Errorf("walk %s: %w", spec, err)
 	}
@@ -461,7 +508,16 @@ func readSide(
 		inv.add(item)
 	}
 
-	probeNamedSites(ctx, client, inv, concurrency)
+	// The one phase with a real denominator: the components are known by now,
+	// and each is one probe.
+	if report != nil {
+		report(Progress{Side: spec.Label, Phase: PhaseNames, Done: 0, Total: len(inv)})
+	}
+	probeNamedSites(ctx, client, inv, concurrency, func(done, total int) {
+		if report != nil {
+			report(Progress{Side: spec.Label, Phase: PhaseNames, Done: done, Total: total})
+		}
+	})
 
 	tags, truncated := extraTags(ctx, root, inv, spec,
 		unwalkedRoots(ctx, root, choice, concurrency), concurrency)
@@ -839,6 +895,7 @@ const annotationTitle = "org.opencontainers.image.title"
 // component whose own repository does not exist is a FINDING, not an error.
 func probeNamedSites(
 	ctx context.Context, client ClientFactory, inv inventory, concurrency int,
+	report func(done, total int),
 ) {
 	var (
 		mu      sync.Mutex
@@ -858,6 +915,14 @@ func probeNamedSites(
 		return c, nil
 	}
 
+	total := 0
+	for _, item := range inv {
+		if item.Named != nil {
+			total++
+		}
+	}
+
+	var done atomic.Int64
 	sem := make(chan struct{}, concurrency)
 	var wg sync.WaitGroup
 	for _, item := range inv {
@@ -869,6 +934,13 @@ func probeNamedSites(
 			defer wg.Done()
 			sem <- struct{}{}
 			defer func() { <-sem }()
+			// Counted whatever the outcome: a component whose own repository
+			// does not exist is a finding, and the probe for it happened.
+			defer func() {
+				if report != nil {
+					report(int(done.Add(1)), total)
+				}
+			}()
 
 			repo, err := clientFor(it.Named.Repository)
 			if err != nil {

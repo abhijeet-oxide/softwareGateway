@@ -1,13 +1,15 @@
 import { useEffect, useState } from 'react'
 import {
-  App, Button, Card, Checkbox, Col, Drawer, Empty, Row, Segmented, Select, Space, Statistic,
-  Table, Tag, Tooltip, Typography,
+  App, Button, Card, Checkbox, Col, Drawer, Empty, Progress, Row, Segmented, Select, Space,
+  Statistic, Table, Tag, Tooltip, Typography,
 } from 'antd'
 import { SwapOutlined } from '@ant-design/icons'
 import { useSearchParams } from 'react-router-dom'
-import { useCompare, usePackages, useProduct, useProducts } from '../api/queries'
+import {
+  useCompare, useCompareProgress, usePackages, useProduct, useProducts,
+} from '../api/queries'
 import { matches, version } from '../domain/derive'
-import { formatBytes, formatCount } from '../domain/format'
+import { formatBytes, formatCount, formatDuration } from '../domain/format'
 import { NA, Value } from '../components/value'
 import { ErrorState, PageHeader } from '../components/layout'
 import { WorkingBar } from '../components/progress'
@@ -93,6 +95,83 @@ function renderReleaseOption(option: ReleaseOption) {
   )
 }
 
+/**
+ * What the comparison is actually doing.
+ *
+ * # Why a real bar and not an animation
+ *
+ * The work is countable: each side reads a known set of manifests and then
+ * probes a known set of component names. An animation says only "something is
+ * happening", which is exactly what it would say if nothing were — and on a
+ * request that legitimately runs for minutes, that is the difference between
+ * waiting and giving up.
+ *
+ * # Per side, because one of them is the slow one
+ *
+ * The two ends are walked concurrently against different registries. A single
+ * merged number hides which of them is holding everything up, which is the
+ * first thing worth knowing when a comparison is slow.
+ *
+ * The denominator during the manifest phase is what is KNOWN — a tree is
+ * discovered by walking it — so it is marked as an estimate rather than
+ * presented as a position it has not earned.
+ */
+function ComparisonProgress({
+  token, elapsedSeconds,
+}: {
+  token: string | undefined
+  elapsedSeconds: number
+}) {
+  const progress = useCompareProgress(token)
+  const sides = progress.data?.sides ?? []
+
+  const done = sides.reduce((n, s) => n + s.done, 0)
+  const total = sides.reduce((n, s) => n + s.total, 0)
+  const estimated = sides.some((s) => s.estimated)
+  const percent = total > 0 ? Math.min(99, (done / total) * 100) : 0
+
+  // Said only once it is true, and it is a statement about this comparison
+  // rather than a warning attached to every one of them.
+  const slow = elapsedSeconds > 120
+
+  return (
+    <Space direction="vertical" size={8} style={{ width: '100%' }}>
+      {sides.length === 0 ? (
+        <WorkingBar
+          label="Analysing packages"
+          detail="This may take a while"
+          elapsedSeconds={elapsedSeconds}
+        />
+      ) : (
+        <>
+          <Progress
+            percent={Number(percent.toFixed(1))}
+            status="active"
+            format={() => `${formatCount(done)} of ${formatCount(total)}${estimated ? '+' : ''}`}
+          />
+          <Space size={24} wrap>
+            {sides.map((side) => (
+              <Typography.Text key={side.side} type="secondary" style={{ fontSize: 12 }}>
+                <strong>{side.side}</strong> — {side.phase} {formatCount(side.done)}
+                {side.total > 0 && ` of ${formatCount(side.total)}`}
+              </Typography.Text>
+            ))}
+            <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+              {formatDuration(elapsedSeconds)} elapsed
+            </Typography.Text>
+          </Space>
+        </>
+      )}
+
+      <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+        {slow
+          ? 'Analysing packages — this is taking longer than expected. Large releases with many components read slowly from their registries; the counts above are still advancing.'
+          : 'Analysing packages, this may take a while.'}
+      </Typography.Text>
+    </Space>
+  )
+}
+
 const VERDICT: Record<CompareVerdict, { label: string; colour: string }> = {
   same: { label: 'Unchanged', colour: 'default' },
   changed: { label: 'Changed', colour: 'orange' },
@@ -128,6 +207,10 @@ export default function Compare() {
   // something broken.
   const [startedAt, setStartedAt] = useState<number>()
   const [elapsed, setElapsed] = useState(0)
+  // Minted here, per run: the comparison's response is the report, so there is
+  // nothing for the server to hand an id back in. Sending one is what makes
+  // progress readable while the request is open.
+  const [token, setToken] = useState<string>()
   // The first release is almost always the one somebody means, and having to
   // pick it before the page does anything is a step with no decision in it.
   useEffect(() => {
@@ -170,6 +253,8 @@ export default function Compare() {
     if (!product || !left) return
     setStartedAt(Date.now())
     setElapsed(0)
+    const progressToken = crypto.randomUUID()
+    setToken(progressToken)
     try {
       await compare.mutateAsync({
         product,
@@ -191,6 +276,7 @@ export default function Compare() {
           // them; on a release of a few hundred components that is the whole
           // cost of the request. Asked for explicitly, below.
           fileBudgetBytes: withFiles ? 64 * 1024 * 1024 : -1,
+          progressToken,
         },
       })
     } catch (e) {
@@ -415,25 +501,8 @@ export default function Compare() {
             </Checkbox>
           </Space>
 
-          {compareRunning && (
-            <Space direction="vertical" size={4} style={{ width: '100%' }}>
-              <WorkingBar
-                label="Reading both releases from their registries"
-                detail={withFiles ? 'Opening layer archives to compare file contents' : undefined}
-                elapsedSeconds={elapsed}
-              />
-              <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-                Nothing is cached: both sides are walked live, so this takes as long as the
-                registries do. It gives up after four minutes rather than hanging.
-              </Typography.Text>
-            </Space>
-          )}
+          {compareRunning && <ComparisonProgress token={token} elapsedSeconds={elapsed} />}
 
-          <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-            {mode === 'versions'
-              ? 'Compares two releases of this product where they were discovered.'
-              : 'Compares one release in two places — the vendor against an internal repository, or one internal repository against another — which is how you confirm a download arrived intact.'}
-          </Typography.Text>
         </Space>
       </Card>
 

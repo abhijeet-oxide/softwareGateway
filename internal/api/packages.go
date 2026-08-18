@@ -1,6 +1,7 @@
 package api
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -722,6 +723,13 @@ func (s *Server) handlePackageCustomMethod(w http.ResponseWriter, r *http.Reques
 	s.handleInspectPackage(w, r)
 }
 
+// compareDeadline bounds one comparison.
+//
+// Generous, because the work is real: two full manifest walks against remote
+// registries. Bounded, because an unbounded one is indistinguishable from a
+// hang — and this endpoint has no progress channel to say otherwise.
+var compareDeadline = 4 * time.Minute
+
 // POST /api/v1/products/{product}/packages/{package}:compare.
 //
 // Walks TWO places and reports what is different. The package in the path is
@@ -766,11 +774,31 @@ func (s *Server) handleComparePackage(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	report, err := s.deps.Comparer.Compare(r.Context(), productName,
+	// A DEADLINE, because the failure mode of this endpoint is not an error.
+	//
+	// A comparison of a real orb is hundreds of manifests and two probes per
+	// component, on each side, against registries nobody has sized for us. When
+	// that is slow, the request does not fail — it runs, and the caller waits,
+	// and there is nothing to distinguish it from a hang. Better to stop and
+	// say so: the reply names the limit and what to do about it, and a caller
+	// who wants the full answer can ask for it without the file budget.
+	ctx, cancel := context.WithTimeout(r.Context(), compareDeadline)
+	defer cancel()
+
+	report, err := s.deps.Comparer.Compare(ctx, productName,
 		ComparePoint{Package: pkg, Endpoint: req.From},
 		ComparePoint{Package: against, Endpoint: req.To},
 		req.FileBudgetBytes)
 	if err != nil {
+		if errors.Is(ctx.Err(), context.DeadlineExceeded) {
+			Error(w, r, v1.CodeDeadlineExceeded, fmt.Sprintf(
+				"the comparison did not finish within %s. Both releases are "+
+					"read live from their registries, and a slow registry is "+
+					"the usual cause. Retry without file contents "+
+					"(fileBudgetBytes: -1), which is the expensive part.",
+				compareDeadline))
+			return
+		}
 		Error(w, r, v1.CodeInvalidArgument, err.Error())
 		return
 	}

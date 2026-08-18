@@ -57,7 +57,13 @@ export function PageHeader({
         <Typography.Title level={3} style={{ margin: 0 }}>{title}</Typography.Title>
         <Typography.Text type="secondary">{description}</Typography.Text>
       </div>
-      <Space size={12} wrap>
+      {/*
+        Pinned right even after wrapping. `space-between` puts this block on the
+        right while both fit on one line and hard against the LEFT margin the
+        moment they do not — so a page with a long title had its elapsed, ETA
+        and speed jump to the opposite side at one particular window width.
+      */}
+      <Space size={12} wrap style={{ marginInlineStart: 'auto' }}>
         {meta}
         {extra}
       </Space>

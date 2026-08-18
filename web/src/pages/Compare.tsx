@@ -1,17 +1,18 @@
 import { useEffect, useState } from 'react'
 import {
-  App, Button, Card, Col, Drawer, Empty, Row, Segmented, Select, Space, Statistic,
+  App, Button, Card, Checkbox, Col, Drawer, Empty, Row, Segmented, Select, Space, Statistic,
   Table, Tag, Tooltip, Typography,
 } from 'antd'
 import { SwapOutlined } from '@ant-design/icons'
 import { useSearchParams } from 'react-router-dom'
 import { useCompare, usePackages, useProduct, useProducts } from '../api/queries'
-import { version } from '../domain/derive'
+import { matches, version } from '../domain/derive'
 import { formatBytes, formatCount } from '../domain/format'
 import { NA, Value } from '../components/value'
 import { ErrorState, PageHeader } from '../components/layout'
+import { WorkingBar } from '../components/progress'
 import { mono, semantic } from '../theme'
-import type { CompareRow, CompareVerdict, Repository } from '../api/types'
+import type { CompareRow, CompareVerdict, Package, Repository } from '../api/types'
 
 /**
  * Page 5 — Compare.
@@ -54,6 +55,44 @@ function sourceNameFor(
   return undefined
 }
 
+/**
+ * How a release is identified in these selects.
+ *
+ * `repository:tag`, which is exactly the reference the API resolves — and the
+ * only unambiguous one. A vendor publishes one version tag into every
+ * repository a product watches, so a select keyed on the tag alone had ten
+ * options with the same value and the same label, and picking any of them
+ * asked the server a question it correctly refused to answer.
+ */
+function refOf(pkg: Package): string {
+  return pkg.sourceRepository ? `${pkg.sourceRepository}:${pkg.tag}` : pkg.tag
+}
+
+/** The option list for a release select: the name, the version, and both searchable. */
+function releaseOptions(releases: Package[]) {
+  return releases.map((r) => ({
+    value: refOf(r),
+    // Kept a plain string so the closed select shows one line. The two-line
+    // form is in optionRender below, where there is room for it.
+    label: `${r.displayRepository || r.sourceRepository || ''} · ${version(r)}`,
+    name: r.displayRepository || r.sourceRepository || '',
+    version: version(r),
+    tag: r.tag,
+  }))
+}
+
+type ReleaseOption = ReturnType<typeof releaseOptions>[number]
+
+/** Name above, version below — the two things that identify a release. */
+function renderReleaseOption(option: ReleaseOption) {
+  return (
+    <Space direction="vertical" size={0}>
+      <Typography.Text style={{ fontFamily: mono, fontSize: 12 }}>{option.version}</Typography.Text>
+      <Typography.Text type="secondary" style={{ fontSize: 11 }}>{option.name}</Typography.Text>
+    </Space>
+  )
+}
+
 const VERDICT: Record<CompareVerdict, { label: string; colour: string }> = {
   same: { label: 'Unchanged', colour: 'default' },
   changed: { label: 'Changed', colour: 'orange' },
@@ -82,15 +121,28 @@ export default function Compare() {
   const [toEndpoint, setToEndpoint] = useState<string>()
   const [sourceOverride, setSourceOverride] = useState<string>()
   const [open, setOpen] = useState<CompareRow>()
-
+  const [withFiles, setWithFiles] = useState(false)
+  // Elapsed while it runs. Both releases are read live from their registries,
+  // so a comparison takes as long as those registries take — and a button that
+  // says `loading` for four minutes with nothing beside it is the shape of
+  // something broken.
+  const [startedAt, setStartedAt] = useState<number>()
+  const [elapsed, setElapsed] = useState(0)
   // The first release is almost always the one somebody means, and having to
   // pick it before the page does anything is a step with no decision in it.
   useEffect(() => {
-    if (!left && releases.length > 0) setLeft(releases[0]!.tag)
+    if (!left && releases.length > 0) setLeft(refOf(releases[0]!))
   }, [releases, left])
 
   const compare = useCompare()
+  const compareRunning = compare.isPending
   const report = compare.data
+
+  useEffect(() => {
+    if (!compareRunning || !startedAt) return
+    const id = setInterval(() => setElapsed((Date.now() - startedAt) / 1000), 500)
+    return () => clearInterval(id)
+  }, [compareRunning, startedAt])
 
   const endpoints = [
     { value: '', label: 'Vendor (where it was discovered)' },
@@ -100,7 +152,7 @@ export default function Compare() {
     })),
   ]
 
-  const leftPkg = releases.find((r) => r.tag === left)
+  const leftPkg = releases.find((r) => refOf(r) === left)
   const sources = detail.data?.sources ?? []
   // Where the release was found, matched back to its configured source. The
   // default end for a version comparison, overridable below for a product
@@ -116,6 +168,8 @@ export default function Compare() {
 
   const run = async () => {
     if (!product || !left) return
+    setStartedAt(Date.now())
+    setElapsed(0)
     try {
       await compare.mutateAsync({
         product,
@@ -131,9 +185,12 @@ export default function Compare() {
           against: mode === 'versions' ? right : undefined,
           from: mode === 'versions' ? versionEnd : (fromEndpoint || undefined),
           to: mode === 'versions' ? versionEnd : (toEndpoint || undefined),
-          // Enough budget to open layer archives and say which FILES differ,
-          // which is the answer "two layers changed" cannot give.
-          fileBudgetBytes: 64 * 1024 * 1024,
+          // OFF by default, and this is the difference between a comparison
+          // that answers in seconds and one that reads like a hang. Opening
+          // layer archives to name the files inside them means downloading
+          // them; on a release of a few hundred components that is the whole
+          // cost of the request. Asked for explicitly, below.
+          fileBudgetBytes: withFiles ? 64 * 1024 * 1024 : -1,
         },
       })
     } catch (e) {
@@ -266,15 +323,20 @@ export default function Compare() {
                 {mode === 'versions' ? 'Version' : 'From'}
               </Typography.Text>
               {mode === 'versions' ? (
-                <Select
+                <Select<string, ReleaseOption>
                   style={{ width: '100%' }}
                   placeholder="Choose a release"
                   value={left}
                   onChange={setLeft}
                   showSearch
-                  optionFilterProp="label"
+                  // Over the NAME and the version both. A product has several
+                  // packages and each has many versions, so searching one of
+                  // the two finds half of what somebody types.
+                  filterOption={(input, option) =>
+                    matches(input, option?.name, option?.version, option?.tag)}
+                  optionRender={(option) => renderReleaseOption(option.data)}
                   loading={packages.isLoading}
-                  options={releases.map((r) => ({ value: r.tag, label: version(r) }))}
+                  options={releaseOptions(releases)}
                 />
               ) : (
                 <Select
@@ -295,15 +357,17 @@ export default function Compare() {
                 {mode === 'versions' ? 'Against version' : 'To'}
               </Typography.Text>
               {mode === 'versions' ? (
-                <Select
+                <Select<string, ReleaseOption>
                   style={{ width: '100%' }}
                   placeholder="Choose a release"
                   value={right}
                   onChange={setRight}
                   showSearch
-                  optionFilterProp="label"
+                  filterOption={(input, option) =>
+                    matches(input, option?.name, option?.version, option?.tag)}
+                  optionRender={(option) => renderReleaseOption(option.data)}
                   loading={packages.isLoading}
-                  options={releases.map((r) => ({ value: r.tag, label: version(r) }))}
+                  options={releaseOptions(releases)}
                 />
               ) : (
                 <Select
@@ -340,9 +404,34 @@ export default function Compare() {
             </Col>
           </Row>
 
+          <Space size={16} wrap>
+            <Checkbox checked={withFiles} onChange={(e) => setWithFiles(e.target.checked)}>
+              <Space size={6}>
+                Also compare file contents
+                <Tooltip title="Opens each side's layer archives to name the files that differ, rather than reporting that a layer changed. It downloads those archives, so it is much slower — and on a large release it is most of the time the comparison takes.">
+                  <Typography.Text type="secondary" style={{ fontSize: 12 }}>(slower)</Typography.Text>
+                </Tooltip>
+              </Space>
+            </Checkbox>
+          </Space>
+
+          {compareRunning && (
+            <Space direction="vertical" size={4} style={{ width: '100%' }}>
+              <WorkingBar
+                label="Reading both releases from their registries"
+                detail={withFiles ? 'Opening layer archives to compare file contents' : undefined}
+                elapsedSeconds={elapsed}
+              />
+              <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+                Nothing is cached: both sides are walked live, so this takes as long as the
+                registries do. It gives up after four minutes rather than hanging.
+              </Typography.Text>
+            </Space>
+          )}
+
           <Typography.Text type="secondary" style={{ fontSize: 12 }}>
             {mode === 'versions'
-              ? 'Compares two releases of this product where they were discovered. Opening layer archives to name the files that differ is included.'
+              ? 'Compares two releases of this product where they were discovered.'
               : 'Compares one release in two places — the vendor against an internal repository, or one internal repository against another — which is how you confirm a download arrived intact.'}
           </Typography.Text>
         </Space>

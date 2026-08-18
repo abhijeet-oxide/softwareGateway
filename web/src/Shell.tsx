@@ -1,11 +1,11 @@
 import type { ReactNode } from 'react'
 import { Avatar, Badge, Button, Layout, Menu, Space, Tooltip, Typography } from 'antd'
 import {
-  AppstoreOutlined, BarChartOutlined, BellOutlined, CloudDownloadOutlined,
+  AppstoreOutlined, BarChartOutlined, BellOutlined,
   DatabaseOutlined, HistoryOutlined, HomeOutlined,
   QuestionCircleOutlined, SettingOutlined,
 } from '@ant-design/icons'
-import { Icon, PackageIcon } from './components/icons'
+import { DownloadIcon, Icon, PackageIcon } from './components/icons'
 import { useLocation, useNavigate } from 'react-router-dom'
 import { useIdentity } from './auth/permissions'
 import { useTransfers } from './api/queries'
@@ -28,8 +28,16 @@ const NAV = [
   // so links already shared still open.
   // The same mark the pages use for a package, so the nav entry and the thing
   // it leads to are recognisably one idea.
-  { key: '/packages', icon: <Icon as={PackageIcon} size={16} title="Packages" />, label: 'Packages' },
-  { key: '/downloads', icon: <CloudDownloadOutlined />, label: 'Downloads' },
+  {
+    key: '/packages',
+    icon: <Icon as={PackageIcon} size={15} title="Packages" className="anticon" />,
+    label: 'Packages',
+  },
+  {
+    key: '/downloads',
+    icon: <Icon as={DownloadIcon} size={15} title="Downloads" className="anticon" />,
+    label: 'Downloads',
+  },
   { key: '/repositories', icon: <DatabaseOutlined />, label: 'Repositories' },
   { key: '/activity', icon: <HistoryOutlined />, label: 'Activity' },
   { key: '/reports', icon: <BarChartOutlined />, label: 'Reports' },

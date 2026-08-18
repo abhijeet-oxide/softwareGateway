@@ -1,7 +1,22 @@
 # 20 — Download Rules
 
 > **Prerequisites:** [07 — Discovery](07-discovery.md), [05 — Transfer Engine](05-transfer-engine.md), [18 — Quay Replication](18-quay-replication.md)
-> **Status: PROPOSED. Nothing in this document is implemented.** Scheduled at [M9](17-delivery-plan.md#m9--download-rules), after [M8](17-delivery-plan.md#m8--quay-replication-strategies). What exists today is `autoDownload.rules` — four fields, one destination set, one trigger ([07](07-discovery.md) §5) — and this document is its successor, not a second mechanism beside it.
+> **Status: IMPLEMENTED at [M9](17-delivery-plan.md#m9--download-rules)**, except the window and the scheduled trigger. `autoDownload.rules` remains its older spelling and keeps working unchanged.
+>
+> | Section | State |
+> |---|---|
+> | §2 A rule produces a TransferRequest; no new aggregate | **Held.** Nothing new was added to the domain |
+> | §3 The `download` block, its fields, the `autoDownload` alias, validation | **Built.** `internal/product/download.go`, `validate_download.go` |
+> | §3.5 Naming the tail names the chain; a shared hop is one transfer | **Built.** `internal/download/chain.go`; the key covers the derived chain |
+> | §4 Order derived from `mirror.from`, never declared in the rule | **Built** |
+> | §5 Verification as a gate, needing no gate mechanism | **Built.** A step waits for `succeeded`, which the transfer machine only reaches after verification |
+> | §6 `step_index`, `depends_on_transfer_id`, `waiting`, `skipped` | **Built.** Migration `00018` |
+> | §7 A run's rollup and per-step rendering | **Built** for the delegated asymmetry ([18](18-quay-replication.md) §6.1); the combined run view is the UI's job at [M10](17-delivery-plan.md#m10--web-ui) |
+> | §8.1 `trigger: [discovery, manual]`, one path through | **Built.** Discovery and a person share `Resolve` and `Open` |
+> | §8.2 The window | **Schema and semantics built; the scheduler binding is not.** A rule may declare one and it validates, but a run is not yet deferred to the next opening — Q12 |
+> | §8.3 Rule revisions in the idempotency key | **Built** |
+> | §9 Suspension as an audited override that never edits Git | **Built.** `download_rule_suspensions` |
+> | §10 `downloadRules` routes, `rules` commands, the `Download` audit category | **Built.** The metrics are not |
 
 ---
 

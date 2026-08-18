@@ -131,6 +131,8 @@ Delegation. A Quay target can stop being somewhere we push to and become somewhe
 
 The declared form of the operation the estate actually performs: vendor → JFrog → Quay, with gates, as one reviewable object. Specified in [20](20-download-rules.md).
 
+**Status: complete except the window's scheduler binding and the rule metrics.** A rule can be declared, validated, listed, described, run by hand and suspended; its chain is derived from `mirror.from`, its steps are ordered, and a step whose predecessor did not succeed is `skipped` rather than failed. A rule may declare a `window` and it validates, but a run is not yet deferred to the next opening — which is Q12's question anyway, and building the binding before knowing whether anyone uses the field would be the wrong order.
+
 - `download.rules` replacing `autoDownload.rules`, which keeps loading unchanged ([20](20-download-rules.md) §3)
 - Chain derivation from the targets' own `mirror.from` edges — a set of destinations in, an ordered plan out ([20](20-download-rules.md) §3.5, §4)
 - `transfers.step_index` and `depends_on_transfer_id`; the `waiting` and `skipped` transfer states ([20](20-download-rules.md) §6)

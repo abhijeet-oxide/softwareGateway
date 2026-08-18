@@ -57,7 +57,7 @@ Products are **read-only over the API.** Configuration comes from Git ([02](02-c
 
 These do not contradict the paragraph above: configuration still comes from Git, and `:apply` pushes what Git already says into a *third-party registry's* own configuration store. It never edits a product. See [18](18-quay-replication.md) §7–8.
 
-#### Download rules (proposed, M9)
+#### Download rules
 
 | Method | Path | Purpose |
 |---|---|---|

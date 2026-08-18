@@ -106,7 +106,7 @@ Delegated replication ([18](18-quay-replication.md)) adds one noun group and one
 
 `apply` is a separate command rather than something a config reload does, because the write is destructive — see the decision in [18](18-quay-replication.md) §8. `download` against a `mode: proxy` target is refused with an error that names `warm`, since there is nothing to push to a cache.
 
-### Proposed at M9: `rules`
+### `rules` (shipped at M9)
 
 Download rules ([20](20-download-rules.md)) add one more noun group, following the same rule:
 

@@ -307,7 +307,9 @@ func (s *slice) drainInto(workerID string, capacity int, _ *fakeregistry.Registr
 	// Bounded rather than `for {}`: a bug that leaves a job permanently
 	// leasable should fail this test in a second, not hang the suite.
 	for range 100 {
-		lease, err := s.q.Lease(ctx, workerID, capacity)
+		// The worker reports what it holds; this drain loop completes each
+		// batch before asking again, so it holds nothing between calls.
+		lease, err := s.q.Lease(ctx, workerID, capacity, 0)
 		if err != nil {
 			s.t.Fatalf("lease: %v", err)
 		}

@@ -292,6 +292,23 @@ Priority is set on the request, inherited by transfers and jobs, and changed at 
 >    Off by default because it makes priority non-deterministic, which is worse than starvation when starvation is not actually occurring.
 > 3. Weighted fair queueing across products was considered and rejected: it requires per-product accounting on the hot path to solve a problem that item 1 usually reveals to be a configuration error.
 
+### 6.1 Automatic retry
+
+A retryable failure is one a second attempt could plausibly fix: a timeout, a reset connection, a 503 from a registry having a bad minute. The job retries those itself while it has attempts left; when it runs out, the transfer stops.
+
+**Leaving that for a person is a policy, and it was the wrong one.** The failure is discovered at 3am, the person arrives at 9, presses Retry, and it succeeds — six hours of nothing, to perform a click a machine could have performed. So the leader sweep retries them, through the same `RetryTransfer` a person invokes, because an automatic path with its own idea of what a retry means would be a second implementation of wave reopening and dependency cascades, and the two would diverge on the day it mattered.
+
+Two bounds, and both are load-bearing:
+
+| | default | why |
+|---|---|---|
+| cooldown | 5 minutes | a registry having a bad minute is given the minute |
+| rounds | 3 | after which the transfer waits for a person |
+
+`transfers.auto_retries` counts the rounds. A **manual** retry resets it — somebody saying they have dealt with the cause — as does success, so a transfer that recovers does not carry its history into the next outage.
+
+The classes that are **not** retried are the ones where a second attempt is a second failure at a fixed interval: `auth`, `configuration`, `not_found`, `unsupported`, and `dependency` (whose cause is another job's failure and is requeued with it). Against a vendor registry, an unbounded retry of a missing credential is a denial of service with our name on it.
+
 ## 7. Idempotency
 
 Required for discovery, download, promotion, verification, retry, and notification. The approach throughout is **structural** — a unique constraint, not application logic. Application-level "check then insert" has a race; a unique index does not.
@@ -428,8 +445,13 @@ Nothing is held in Coordinator memory that cannot be reconstructed from the data
 1. Run migrations under an advisory lock ([03](03-persistence.md) §9).
 2. Load and validate configuration ([02](02-configuration.md) §7).
 3. Contend for leadership (§9).
-4. On acquiring it, run the reaper immediately — leases held by workers that died during the outage are requeued at once rather than after a full lease period.
+4. On acquiring it, **recover orphaned leases, then run the reaper**, both immediately.
+   - *Recovery* frees work whose holder is provably gone: a lease owned by a worker with no row, or one whose last heartbeat predates the lease period. Waiting out each deadline instead leaves a transfer motionless for minutes with nothing to explain it — and a transfer somebody has *stopped* sitting in `cancelling`, which is indistinguishable from a hang on the one operation an unhappy operator performs.
+   - A worker's own restart is detected earlier and more precisely than any deadline: a lease request reporting **zero active jobs** cannot be coming from a process that holds the leases this database records for it, so those are freed on that call.
+   - Work belonging to a transfer that was already stopping is **cancelled rather than requeued**. Requeueing would undo the stop by restart, which is the same fault as undoing it by timeout: a process coming back up is not new information about anybody's intent.
 5. Resume loops.
+
+The sweep also closes cancellations with nothing left in flight and retries transfers whose failures are worth another attempt (§6.1).
 
 **No recovery scan, no journal replay, no rebuild.** The queue state *is* the `jobs` table; it was never anywhere else. A Coordinator that has been down for an hour starts up and continues, and workers that stayed alive throughout kept transferring the jobs they had already leased — bytes do not flow through the Coordinator, so its absence does not stop work already in flight.
 

@@ -57,7 +57,7 @@ func (s *Server) handleLeaseJobs(w http.ResponseWriter, r *http.Request) {
 	// case somebody is most likely to be looking for.
 	s.deps.Queue.RecordWorker(r.Context(), req.WorkerID, req.Capacity, req.ActiveJobs, req.Version)
 
-	res, err := s.deps.Queue.Lease(r.Context(), req.WorkerID, req.Capacity)
+	res, err := s.deps.Queue.Lease(r.Context(), req.WorkerID, req.Capacity, req.ActiveJobs)
 	if err != nil {
 		s.deps.Logger.ErrorContext(r.Context(), "lease failed",
 			"worker", req.WorkerID, "error", err)

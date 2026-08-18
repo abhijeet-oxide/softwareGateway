@@ -75,7 +75,7 @@ func (f *fakeQueue) Workers(context.Context) ([]store.WorkerSummary, error) {
 	return f.workers, nil
 }
 
-func (f *fakeQueue) Lease(context.Context, string, int) (queue.LeaseResult, error) {
+func (f *fakeQueue) Lease(context.Context, string, int, int) (queue.LeaseResult, error) {
 	return queue.LeaseResult{}, nil
 }
 func (f *fakeQueue) Progress(context.Context, int64, string, int64) error { return nil }

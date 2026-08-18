@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"time"
 )
 
 // Getting a transfer out of the state an outage leaves it in.
@@ -413,12 +414,17 @@ func (p *Packages) RetryTransfer(ctx context.Context, transferID string) (RetryR
 	// leasing the first requeued job is what makes it running again — through
 	// the same path every other transfer takes.
 	newState := "ready"
+	// auto_retries goes back to zero. A retry is somebody saying the cause has
+	// been dealt with, and the automatic budget is for failures nobody has
+	// looked at — a transfer that has just been looked at starts again with the
+	// full allowance. AutoRetryTransfers re-increments it for its own attempts.
 	if _, err := tx.ExecContext(ctx, p.dialect.Rewrite(`
 		UPDATE transfers
 		   SET state          = ?,
 		       current_wave   = ?,
 		       failure_reason = NULL,
 		       completed_at   = NULL,
+		       auto_retries   = 0,
 		       updated_at     = `+p.dialect.Now()+`
 		 WHERE id = ?`), newState, currentWave, transferID); err != nil {
 		return res, fmt.Errorf("reopen transfer %s: %w", transferID, err)
@@ -539,6 +545,264 @@ func (p *Packages) CloseStalledCancellations(ctx context.Context) ([]StoppedCanc
 			continue
 		}
 		out = append(out, StoppedCancellation{ID: id})
+	}
+	return out, nil
+}
+
+// AutoRetried is one transfer the system restarted by itself.
+type AutoRetried struct {
+	ID string
+	// Requeued is how many jobs went back to the queue.
+	Requeued int
+	// Round is which automatic attempt this was, so a log line says whether
+	// the system is recovering or thrashing.
+	Round int
+}
+
+// AutoRetryTransfers requeues failures a second attempt could plausibly fix.
+//
+// # The failures this is for
+//
+// A registry timing out, a connection reset, a 503 while a registry has a bad
+// minute. The job retries those itself while it has attempts left; when it runs
+// out, the transfer stops and — until this existed — waited for a person to
+// notice and press Retry. Which they do, usually the next morning, and the
+// retry then succeeds, having achieved nothing a machine could not have done at
+// 3am. The classes that are NOT worth retrying — auth, configuration,
+// not-found, unsupported — are left alone, because a second attempt against a
+// missing credential is a second failure at a fixed interval.
+//
+// # Why it is bounded, and spaced
+//
+// A retry loop that never gives up is a denial of service against a vendor
+// registry with our name on it. Two bounds:
+//
+//	cooldown   nothing is retried until its failure has had time to pass
+//	maxRounds  after which the transfer stays failed and waits for a human
+//
+// A transfer that has spent its automatic retries is telling us something a
+// further attempt will not change, and the honest response is to stop and say
+// so rather than to keep trying quietly.
+//
+// The count is reset by a manual retry — somebody saying they have dealt with
+// the cause — and by success.
+func (p *Packages) AutoRetryTransfers(
+	ctx context.Context, cooldown time.Duration, maxRounds int,
+) ([]AutoRetried, error) {
+	if maxRounds <= 0 {
+		return nil, nil
+	}
+	if cooldown < 0 {
+		cooldown = 0
+	}
+
+	// Candidates first, in one query, so the retry itself runs against a small
+	// list rather than a scan per transfer.
+	//
+	// `failed` AND the live states: a partial failure under a running transfer
+	// is the same problem seen earlier, and waiting for the whole transfer to
+	// give up before retrying three timed-out blobs would hold the other two
+	// thousand jobs behind them.
+	rows, err := p.db.QueryContext(ctx, p.dialect.Rewrite(`
+		SELECT t.id, t.auto_retries
+		  FROM transfers t
+		 WHERE t.state IN ('ready','running','failed')
+		   AND t.auto_retries < ?
+		   AND EXISTS (SELECT 1 FROM jobs j
+		                WHERE j.transfer_id = t.id
+		                  AND j.state = 'failed'
+		                  AND COALESCE(j.last_error_class, '') NOT IN
+		                      ('auth','unsupported','not_found','configuration','dependency'))
+		   AND NOT EXISTS (SELECT 1 FROM jobs j
+		                    WHERE j.transfer_id = t.id
+		                      AND j.state IN ('pending','leased')
+		                      AND NOT j.paused)
+		   AND NOT EXISTS (SELECT 1 FROM jobs j
+		                    WHERE j.transfer_id = t.id
+		                      AND j.state = 'failed'
+		                      AND j.completed_at > `+p.dialect.TimeAgo("?")+`)`),
+		maxRounds, cooldown.Seconds())
+	if err != nil {
+		return nil, fmt.Errorf("find transfers worth retrying: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+
+	type candidate struct {
+		id    string
+		round int
+	}
+	var found []candidate
+	for rows.Next() {
+		var c candidate
+		if err := rows.Scan(&c.id, &c.round); err != nil {
+			return nil, fmt.Errorf("scan a transfer worth retrying: %w", err)
+		}
+		found = append(found, c)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+
+	out := make([]AutoRetried, 0, len(found))
+	for _, c := range found {
+		// The SAME requeue a person gets. An automatic path with its own idea
+		// of what a retry means is a second implementation of the hardest part
+		// of this system — wave reopening and dependency cascades — and the two
+		// would diverge on the day it mattered.
+		res, err := p.RetryTransfer(ctx, c.id)
+		if err != nil {
+			// One transfer that cannot be retried must not stop the sweep:
+			// this runs unattended, and the next tick would hit the same one.
+			continue
+		}
+		if res.Requeued == 0 {
+			continue
+		}
+
+		round := c.round + 1
+		if _, err := p.db.ExecContext(ctx, p.dialect.Rewrite(
+			`UPDATE transfers SET auto_retries = ?, updated_at = `+p.dialect.Now()+
+				` WHERE id = ?`), round, c.id); err != nil {
+			return nil, fmt.Errorf("record the automatic retry of transfer %s: %w", c.id, err)
+		}
+		out = append(out, AutoRetried{ID: c.id, Requeued: res.Requeued, Round: round})
+	}
+	return out, nil
+}
+
+// RecoveredLease is one job whose worker is not coming back for it.
+type RecoveredLease struct {
+	ID         int64
+	TransferID string
+	Owner      string
+	// State is where the job went: back to the queue, or cancelled when the
+	// transfer it belongs to was already stopping.
+	State string
+}
+
+// RecoverOrphanedLeases frees work held by workers that are gone.
+//
+// # The gap this closes
+//
+// A lease is a promise with a deadline, and the reaper collects it when the
+// deadline passes. That is the right mechanism for a worker that dies mid-blob
+// — nobody knows it is dead until it stops answering — but it is the wrong
+// mechanism for a restart, where we KNOW: the process is new, it holds nothing,
+// and the leases in the database are from a life it no longer remembers.
+// Waiting out the lease means minutes of a transfer sitting still with nothing
+// running, and for a transfer somebody has stopped it means minutes of
+// `cancelling` that looks exactly like a hang.
+//
+// Two signals, and this handles both:
+//
+//   - a worker that comes back and asks for work while holding nothing;
+//   - a Coordinator that comes back and finds leases owned by workers whose
+//     heartbeats stopped before it did.
+//
+// # Why a stopped transfer's work is cancelled rather than requeued
+//
+// Requeueing it would undo the stop by restart, which is the same fault as
+// undoing it by timeout: somebody asked for the work to end, and a process
+// coming back up is not new information about their intent.
+func (p *Packages) RecoverOrphanedLeases(
+	ctx context.Context, staleAfter time.Duration,
+) ([]RecoveredLease, error) {
+	if staleAfter <= 0 {
+		staleAfter = 2 * time.Minute
+	}
+
+	// A worker with no row at all counts as gone: the row is written on every
+	// lease and heartbeat, so its absence means nothing from that worker has
+	// reached this database in living memory.
+	return p.recoverLeases(ctx, `
+		SELECT j.id, j.transfer_id, COALESCE(j.lease_owner, ''), t.state
+		  FROM jobs j
+		  JOIN transfers t ON t.id = j.transfer_id
+		  LEFT JOIN workers w ON w.id = j.lease_owner
+		 WHERE j.state = 'leased'
+		   AND (w.id IS NULL OR w.last_heartbeat_at < `+p.dialect.TimeAgo("?")+`)`,
+		staleAfter.Seconds())
+}
+
+// RecoverWorkerLeases frees work the database thinks a worker holds and the
+// worker says it does not.
+//
+// Called when a worker asks for work while reporting nothing active — which is
+// what a restarted process looks like from here, and is a far better signal
+// than a lease deadline: it is the holder itself saying the work is not being
+// done.
+func (p *Packages) RecoverWorkerLeases(
+	ctx context.Context, owner string,
+) ([]RecoveredLease, error) {
+	if owner == "" {
+		return nil, nil
+	}
+	return p.recoverLeases(ctx, `
+		SELECT j.id, j.transfer_id, COALESCE(j.lease_owner, ''), t.state
+		  FROM jobs j
+		  JOIN transfers t ON t.id = j.transfer_id
+		 WHERE j.state = 'leased' AND j.lease_owner = ?`, owner)
+}
+
+func (p *Packages) recoverLeases(
+	ctx context.Context, query string, args ...any,
+) ([]RecoveredLease, error) {
+	rows, err := p.db.QueryContext(ctx, p.dialect.Rewrite(query), args...)
+	if err != nil {
+		return nil, fmt.Errorf("find orphaned leases: %w", err)
+	}
+
+	type held struct {
+		id            int64
+		transferID    string
+		owner         string
+		transferState string
+	}
+	var found []held
+	for rows.Next() {
+		var h held
+		if err := rows.Scan(&h.id, &h.transferID, &h.owner, &h.transferState); err != nil {
+			_ = rows.Close()
+			return nil, fmt.Errorf("scan an orphaned lease: %w", err)
+		}
+		found = append(found, h)
+	}
+	err = rows.Err()
+	_ = rows.Close()
+	if err != nil {
+		return nil, err
+	}
+
+	out := make([]RecoveredLease, 0, len(found))
+	for _, h := range found {
+		state := "pending"
+		if h.transferState == "cancelling" || h.transferState == "cancelled" {
+			state = "cancelled"
+		}
+
+		// Guarded on `state = 'leased'` so a completion that landed while this
+		// was deciding wins. The worker's own report is always the better
+		// answer; this is only for the case where none is coming.
+		res, err := p.db.ExecContext(ctx, p.dialect.Rewrite(`
+			UPDATE jobs
+			   SET state            = ?,
+			       lease_owner      = NULL,
+			       lease_expires_at = NULL,
+			       next_visible_at  = `+p.dialect.Now()+`,
+			       last_error       = COALESCE(last_error, 'the worker holding this job restarted'),
+			       last_error_class = 'lease_expired',
+			       completed_at     = CASE WHEN ? = 'cancelled' THEN `+p.dialect.Now()+` ELSE NULL END,
+			       updated_at       = `+p.dialect.Now()+`
+			 WHERE id = ? AND state = 'leased'`), state, state, h.id)
+		if err != nil {
+			return nil, fmt.Errorf("recover job %d: %w", h.id, err)
+		}
+		if n, err := res.RowsAffected(); err == nil && n == 0 {
+			continue
+		}
+		out = append(out, RecoveredLease{
+			ID: h.id, TransferID: h.transferID, Owner: h.owner, State: state,
+		})
 	}
 	return out, nil
 }

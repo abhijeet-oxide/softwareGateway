@@ -58,7 +58,9 @@ type Discoverer interface {
 // depends on the four calls the worker plane makes rather than on the reaper,
 // the wave logic and everything else the queue owns (docs/design/15 §6).
 type Worker interface {
-	Lease(ctx context.Context, workerID string, capacity int) (queue.LeaseResult, error)
+	// activeJobs is what the worker reports it is already running. It is a
+	// recovery signal as well as an accounting one — see queue.Lease.
+	Lease(ctx context.Context, workerID string, capacity, activeJobs int) (queue.LeaseResult, error)
 	Progress(ctx context.Context, jobID int64, workerID string, bytes int64) error
 	Complete(ctx context.Context, c store.Completion) (store.CompletionResult, error)
 	// Heartbeat renews what a worker holds AND tells it what to drop: a job

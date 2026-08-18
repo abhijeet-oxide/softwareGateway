@@ -3,7 +3,7 @@ import {
   CheckCircleFilled, ClockCircleOutlined, CloseCircleFilled, SyncOutlined,
 } from '@ant-design/icons'
 import type { Strategy } from '../api/types'
-import { formatBytes, formatSpeed, formatAbsolute } from '../domain/format'
+import { formatBytes, formatSpeed, formatAbsolute, formatDuration } from '../domain/format'
 import { NA } from './value'
 import { semantic } from '../theme'
 
@@ -26,6 +26,12 @@ import { semantic } from '../theme'
  *
  * MeasuredProgress refuses to render for a non-`copy` strategy, so the rule
  * cannot be broken by a caller who has not read this comment.
+ *
+ * A third case sits between them: work that IS ours and IS running, but whose
+ * extent nobody knows yet — measuring a release walks a manifest tree whose
+ * size is the thing being discovered. <WorkingBar> is for that. It animates,
+ * so it reads as activity, and it carries no number, so it cannot be read as
+ * a position.
  */
 
 interface MeasuredProps {
@@ -137,6 +143,69 @@ export function StateStrip({ state, label, events = [], message }: StripProps) {
         >
           {message}
         </Typography.Paragraph>
+      )}
+    </div>
+  )
+}
+
+
+/**
+ * Work in progress whose extent is not known.
+ *
+ * Deliberately NOT a percentage. Measuring a release walks a manifest tree to
+ * find out how big it is — the total is the answer, not the input — so any
+ * percentage would be invented. What is true and worth showing is that it is
+ * running, what it is doing, and how long it has been doing it.
+ *
+ * The stripe slides rather than fills, so it cannot be mistaken for a position
+ * at a glance. Elapsed time is the honest counterpart to a percentage: it does
+ * not say how far along, but it does tell somebody whether to keep waiting.
+ */
+export function WorkingBar({
+  label, detail, elapsedSeconds,
+}: {
+  label: string
+  detail?: string
+  elapsedSeconds?: number
+}) {
+  return (
+    <div>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 6 }}>
+        <SyncOutlined spin style={{ color: '#0057B8' }} />
+        <Typography.Text strong style={{ fontSize: 13 }}>{label}</Typography.Text>
+        {elapsedSeconds !== undefined && (
+          <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+            {formatDuration(elapsedSeconds)} elapsed
+          </Typography.Text>
+        )}
+      </div>
+
+      <div
+        role="progressbar"
+        aria-label={label}
+        aria-busy="true"
+        style={{
+          height: 6,
+          borderRadius: 3,
+          background: '#EEF2F6',
+          overflow: 'hidden',
+        }}
+      >
+        <div
+          style={{
+            height: '100%',
+            width: '35%',
+            borderRadius: 3,
+            background: '#0057B8',
+            animation: 'slm-working 1.4s ease-in-out infinite',
+          }}
+        />
+      </div>
+
+      {detail && (
+        <Typography.Text type="secondary" style={{ fontSize: 12, display: 'block', marginTop: 6 }}>
+          {detail}
+        </Typography.Text>
       )}
     </div>
   )

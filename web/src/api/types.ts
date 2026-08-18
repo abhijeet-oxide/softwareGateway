@@ -188,6 +188,26 @@ export interface Artifact {
   annotations?: Record<string, string>
 }
 
+/**
+ * What measuring a release found.
+ *
+ * `fetched` is manifests this call pulled from the registry; zero with
+ * `alreadyExpanded` means the tree was already recorded and the vendor was not
+ * troubled again. `cachedManifests` is how many bodies are still held locally
+ * out of `artifacts` — an evictable cache, not part of the record.
+ */
+export interface InspectPackageResponse {
+  package: Package
+  fetched: number
+  alreadyExpanded: boolean
+  artifacts: number
+  blobs: number
+  totalBytes: Int64String
+  cachedManifests: number
+  cachedBytes?: Int64String
+  signatureResolved?: number
+}
+
 export interface ListArtifactsResponse {
   artifacts: Artifact[]
   nextPageToken?: string

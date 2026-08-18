@@ -45,6 +45,7 @@ npm run typecheck
 | `src/domain/format.ts` | Sizes, durations, speeds, timestamps. Returns `null` when a value is unavailable. |
 | `src/components/value.tsx` | `<Value>` / `<NA>` / `<Stat>` — how the application says "we do not have this". |
 | `src/components/discovery.tsx` | The discovery panel and the one Run Discovery control. |
+| `src/components/icons.tsx` | Every icon, chosen once — brand marks for vendors and registries, ecosystem marks for artifact kinds. |
 | `src/auth/permissions.tsx` | `useCan(action, scope)`. |
 | `src/components/` | The reusable vocabulary: chips, badges, progress, page furniture. |
 
@@ -77,11 +78,32 @@ One consequence worth knowing: `package.transfers` is populated on the
 queries — so listings join it in from the transfer listing via `transferIndex`.
 Without that join every row reads `NEW`.
 
-**3. An action always reports what it did.** `POST /products:discover` answers
+**3. Icons are compiled in, not fetched.** Iconify's runtime resolves unknown
+icons over the network from `api.iconify.design`, which in an air-gapped
+deployment means every icon silently fails. `unplugin-icons` turns
+`~icons/simple-icons/nokia` into an inline SVG component at build time instead,
+so only the icons actually used are bundled and nothing is requested at
+runtime.
+
+`icons.tsx` picks them from what a thing IS, in order of reliability: the
+vendor it declares, then the registry protocol, then the environment, and only
+then its name — which an operator can rename on a whim. Container images carry
+Docker's mark and charts carry Helm's, because those are what a Product Owner
+recognises from every other tool they use.
+
+**4. An action always reports what it did.** `POST /products:discover` answers
 `{started, alreadyRunning}`, and "nothing started because four sources were
 already scanning" is a real outcome, not a no-op. Discarding it is what made
 Run Discovery look broken. There is one `<RunDiscoveryButton>` for that reason:
 a second copy would eventually be a bare `mutate()` with no feedback.
+
+Measuring a release is the same rule with a different shape. It is synchronous
+and has no progress feed — the size of the manifest tree is the thing being
+discovered, so there is no denominator until the work is done — so it gets
+`<WorkingBar>`: an animated stripe that travels rather than fills, plus elapsed
+time. It states no position, because there is none to state. Measured against
+an unreachable registry the call runs past ninety seconds, so the wording
+escalates rather than repeating itself.
 
 Discovery is started with `wait: false` and its progress is polled from
 `GET /products/{p}/discovery`, which reports phase, repositories, tags,
@@ -89,7 +111,7 @@ artifacts, new packages and errors per source. The default holds the HTTP
 request open for the whole scan — minutes against a slow registry, with every
 intermediary's idle timeout becoming part of the control plane.
 
-**4. The interface never edits configuration.** Products, downloads, rules,
+**5. The interface never edits configuration.** Products, downloads, rules,
 intervals and verification policy come from Git and are reconciled by Flux. A
 write from here would be a second source of truth that gets silently reverted
 minutes later. Configuration is shown with a `Managed in Git` badge; requesting

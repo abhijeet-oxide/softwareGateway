@@ -31,6 +31,25 @@ export const theme: ThemeConfig = {
     colorWarning: semantic.warning,
     colorInfo: attBlue,
 
+    // The semantic colours above are chosen for TEXT and icons, so they are
+    // dark enough to read. Ant Design also derives every status SURFACE from
+    // them — an Alert's background, a `color="success"` Tag's fill — and a dark
+    // green derives a dark green surface. The result was a filled slab beside
+    // the light preset tags, which is what made a production target look like a
+    // different design system from an enabled rule.
+    //
+    // So the surfaces are stated rather than derived. Foreground stays AT&T;
+    // background stays light, and matches the preset palettes everything else
+    // uses.
+    colorSuccessBg: '#F1F7F3',
+    colorSuccessBorder: '#C6E0D0',
+    colorErrorBg: '#FDF1F1',
+    colorErrorBorder: '#F2C7C9',
+    colorWarningBg: '#FDF7EA',
+    colorWarningBorder: '#EEDCAF',
+    colorInfoBg: '#EFF5FC',
+    colorInfoBorder: '#C6DCF4',
+
     // Compact and restrained: a mature internal operations product, not a
     // generic SaaS dashboard.
     borderRadius: 4,

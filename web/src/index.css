@@ -36,3 +36,17 @@ body {
 }
 .diff-add { background: #E8F5EC; }
 .diff-remove { background: #FDECEC; }
+
+/*
+ * The sliding stripe used by <WorkingBar>. It travels rather than fills, so
+ * work whose extent is unknown cannot be misread as a position.
+ */
+@keyframes slm-working {
+  0%   { transform: translateX(-100%); }
+  100% { transform: translateX(340%); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  /* Still clearly "busy", without the movement. */
+  [style*="slm-working"] { animation: none !important; width: 100% !important; opacity: 0.45; }
+}

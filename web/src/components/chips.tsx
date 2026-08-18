@@ -1,13 +1,14 @@
 import type { ReactNode } from 'react'
 import { Badge, Space, Tag, Tooltip, Typography } from 'antd'
 import {
-  AppstoreOutlined, CheckCircleOutlined, CloudServerOutlined, DatabaseOutlined,
-  ExportOutlined, ExclamationCircleOutlined, CloseCircleOutlined, QuestionCircleOutlined,
-  ShopOutlined, DeploymentUnitOutlined,
+  CheckCircleOutlined, ExportOutlined, ExclamationCircleOutlined,
+  CloseCircleOutlined, QuestionCircleOutlined,
 } from '@ant-design/icons'
+import { Icon, locationIcon, repositoryIcon, PackageIcon } from './icons'
 import { Link } from 'react-router-dom'
 import { NA } from './value'
 import type { SoftwareStatus, VerificationState, Location } from '../domain/derive'
+import type { Repository } from '../api/types'
 import { formatAbsolute, formatRelative } from '../domain/format'
 import { mono, semantic } from '../theme'
 
@@ -25,7 +26,7 @@ export function ProductChip({ name, display }: { name: string; display?: string 
   return (
     <Link to={`/products/${encodeURIComponent(name)}`}>
       <Space size={6}>
-        <AppstoreOutlined style={{ color: '#0057B8' }} />
+        <Icon as={PackageIcon} colour="#0057B8" title="Product" />
         <span style={{ fontWeight: 500 }}>{display || name}</span>
       </Space>
     </Link>
@@ -52,7 +53,7 @@ const STATUS_COLOUR: Record<SoftwareStatus, string> = {
   DOWNLOADING: 'processing',
   DOWNLOADED: 'green',
   'READY FOR PRODUCTION': 'purple',
-  PRODUCTION: 'success',
+  PRODUCTION: 'green',
   'VERIFICATION FAILED': 'error',
 }
 
@@ -64,7 +65,7 @@ export function StatusBadge({ status }: { status: SoftwareStatus }) {
 const VERIFICATION: Record<VerificationState, { label: string; colour: string; icon: ReactNode; help: string }> = {
   SIGNED: {
     label: 'Signed',
-    colour: 'success',
+    colour: 'green',
     icon: <CheckCircleOutlined />,
     help: 'The vendor signed this release and the signature was found.',
   },
@@ -99,13 +100,6 @@ export function VerificationBadge({ state }: { state: VerificationState }) {
   )
 }
 
-const LOCATION_ICON = {
-  vendor: <ShopOutlined />,
-  storage: <DatabaseOutlined />,
-  mirror: <CloudServerOutlined />,
-  production: <DeploymentUnitOutlined />,
-}
-
 /**
  * Where a release is, reading as a chain: `Vendor: Nokia`, `JFrog + Quay`.
  *
@@ -123,25 +117,29 @@ export function LocationChip({ locations }: { locations: Location[] }) {
 
   return (
     <Space size={4} wrap>
-      {shown.map((loc, i) => (
-        <span key={`${loc.name}-${i}`}>
-          {i > 0 && <span style={{ color: '#98A2B3', marginInlineEnd: 4 }}>+</span>}
-          {loc.url ? (
-            <a href={loc.url} target="_blank" rel="noreferrer">
+      {shown.map((loc, i) => {
+        const Mark = locationIcon(loc.kind, loc.name)
+        const label = locations.length === 1 ? `Vendor: ${loc.name}` : loc.name
+        return (
+          <span key={`${loc.name}-${i}`}>
+            {i > 0 && <span style={{ color: '#98A2B3', marginInlineEnd: 4 }}>+</span>}
+            {loc.url ? (
+              <a href={loc.url} target="_blank" rel="noreferrer">
+                <Space size={4}>
+                  <Icon as={Mark} title={loc.kind} />
+                  {label}
+                  <ExportOutlined style={{ fontSize: 10 }} />
+                </Space>
+              </a>
+            ) : (
               <Space size={4}>
-                {LOCATION_ICON[loc.kind]}
-                {locations.length === 1 ? `Vendor: ${loc.name}` : loc.name}
-                <ExportOutlined style={{ fontSize: 10 }} />
+                <Icon as={Mark} title={loc.kind} />
+                {label}
               </Space>
-            </a>
-          ) : (
-            <Space size={4}>
-              {LOCATION_ICON[loc.kind]}
-              {locations.length === 1 ? `Vendor: ${loc.name}` : loc.name}
-            </Space>
-          )}
-        </span>
-      ))}
+            )}
+          </span>
+        )
+      })}
     </Space>
   )
 }
@@ -178,6 +176,55 @@ export function ManagedInGit({ url }: { url?: string }) {
     <Tooltip title="This is defined in Git and reconciled into the cluster. The interface shows it and never edits it — a change made here would be silently reverted.">
       <Tag color="default" style={{ marginInlineEnd: 0 }}>
         Managed in Git{url ? ' ↗' : ''}
+      </Tag>
+    </Tooltip>
+  )
+}
+
+
+/**
+ * A target, as a tag.
+ *
+ * # Two things this fixes
+ *
+ * It read `production · production`. The environment was appended
+ * unconditionally, and most deployments name a target after the environment it
+ * represents, so the common case was the word twice. It is now shown only when
+ * it says something the name does not.
+ *
+ * And it was a filled block of dark green. Ant Design's `success` tag derives
+ * its background from `colorSuccess`, which this theme overrides with a dark
+ * AT&T green — so the status tags rendered heavy while every preset-coloured
+ * tag beside them rendered light. Preset palettes are used throughout instead,
+ * so a production target and an enabled rule look like they belong on the same
+ * page.
+ */
+export function TargetTag({ target }: { target: Repository }) {
+  const Mark = repositoryIcon(target)
+  const environment = target.environment?.toLowerCase()
+  const name = target.name.toLowerCase()
+
+  // Only when it adds something. `production · production` is noise.
+  const qualifier =
+    target.environment && environment !== name && !name.includes(environment ?? '\u0000')
+      ? target.environment
+      : undefined
+
+  return (
+    <Tooltip title={`${target.registry}${target.repository ? `/${target.repository}` : ''}`}>
+      <Tag
+        color={environment === 'production' ? 'green' : 'default'}
+        style={{ marginInlineEnd: 0 }}
+      >
+        <Space size={5}>
+          <Icon as={Mark} title={target.type} />
+          {target.name}
+          {qualifier && (
+            <Typography.Text type="secondary" style={{ fontSize: 11 }}>
+              {qualifier}
+            </Typography.Text>
+          )}
+        </Space>
       </Tag>
     </Tooltip>
   )

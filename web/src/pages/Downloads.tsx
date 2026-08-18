@@ -262,7 +262,7 @@ export default function Downloads() {
                         <Tag color="green">Enabled</Tag>
                       ) : (
                         <Tooltip title="A rule is turned off in Git and nowhere else. There is no runtime override, so there is no toggle here.">
-                          <Tag>Disabled in configuration</Tag>
+                          <Tag style={{ marginInlineEnd: 0 }}>Disabled</Tag>
                         </Tooltip>
                       ),
                   },

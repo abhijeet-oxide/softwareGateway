@@ -7,8 +7,8 @@ import {
 import { Icon, locationIcon, repositoryIcon, PackageIcon } from './icons'
 import { Link } from 'react-router-dom'
 import { NA } from './value'
-import type { SoftwareStatus, VerificationState, Location } from '../domain/derive'
-import type { Repository } from '../api/types'
+import { releaseHref, type SoftwareStatus, type VerificationState, type Location } from '../domain/derive'
+import type { Package, Repository } from '../api/types'
 import { formatAbsolute, formatRelative } from '../domain/format'
 import { mono, semantic } from '../theme'
 
@@ -35,16 +35,32 @@ export function ProductChip({ name, display }: { name: string; display?: string 
 
 /** A version, always monospace. Clicks through to the release. */
 export function VersionChip({
-  product, version, reference,
-}: { product: string; version: string; reference?: string }) {
-  const ref = reference ?? version
+  product, version, pkg,
+}: {
+  product: string
+  version: string
+  /** The release itself, so the link can carry the repository that identifies it. */
+  pkg: Pick<Package, 'tag' | 'sourceRepository' | 'displayRepository'>
+}) {
+  // The repository is shown, not just linked. A vendor publishes one version
+  // tag into every repository of a product, so a listing shows the same
+  // version many times and the rows are only telling apart by where each one
+  // came from — without it the page reads as duplicates.
+  const repository = pkg.displayRepository || pkg.sourceRepository
+
   return (
-    <Link
-      to={`/software/${encodeURIComponent(product)}/${encodeURIComponent(ref)}`}
-      style={{ fontFamily: mono }}
-    >
-      {version}
-    </Link>
+    <Space direction="vertical" size={0}>
+      <Link to={releaseHref(product, pkg)} style={{ fontFamily: mono }}>
+        {version}
+      </Link>
+      {repository && (
+        <Tooltip title={pkg.sourceRepository}>
+          <Typography.Text type="secondary" style={{ fontSize: 11 }} className="mono">
+            {repository}
+          </Typography.Text>
+        </Tooltip>
+      )}
+    </Space>
   )
 }
 
@@ -119,7 +135,9 @@ export function LocationChip({ locations }: { locations: Location[] }) {
     <Space size={4} wrap>
       {shown.map((loc, i) => {
         const Mark = locationIcon(loc.kind, loc.name)
-        const label = locations.length === 1 ? `Vendor: ${loc.name}` : loc.name
+        // Just the name. The icon already says which kind of place it is, and
+        // prefixing "Vendor:" only widened the column.
+        const label = loc.name
         return (
           <span key={`${loc.name}-${i}`}>
             {i > 0 && <span style={{ color: '#98A2B3', marginInlineEnd: 4 }}>+</span>}

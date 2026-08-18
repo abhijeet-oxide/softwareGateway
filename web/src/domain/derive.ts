@@ -337,6 +337,31 @@ export function withTransfers(pkg: Package, index: Map<string, Attempt[]>): Pack
   return found ? { ...pkg, transfers: found } : pkg
 }
 
+/**
+ * The address of one release in this interface.
+ *
+ * # Why the repository has to be carried
+ *
+ * A vendor's version tag is NOT unique within a product. NEAR publishes
+ * `orb_25.7_mp2604_2131` into every one of a product's ten repositories, so a
+ * link that names only the tag asks the API a question with ten answers and
+ * gets an ambiguity error back instead of a release.
+ *
+ * The repository rides as a query parameter rather than inside the path
+ * segment because it contains slashes — `orbs/cfx-5000-k8s` — and a slash
+ * cannot survive a path segment: %2F is decoded before routing, so the router
+ * would see two segments and match neither.
+ */
+export function releaseHref(
+  product: string,
+  pkg: Pick<Package, 'tag' | 'sourceRepository'>,
+): string {
+  const base = `/software/${encodeURIComponent(product)}/${encodeURIComponent(pkg.tag)}`
+  return pkg.sourceRepository
+    ? `${base}?repository=${encodeURIComponent(pkg.sourceRepository)}`
+    : base
+}
+
 /** The transfer equivalent, for the download pages. */
 export function transferVersion(t: Pick<Transfer, 'tag' | 'displayTag'>): string {
   return t.displayTag || t.tag

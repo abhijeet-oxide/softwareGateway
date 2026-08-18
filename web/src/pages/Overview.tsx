@@ -4,12 +4,13 @@ import { CloudDownloadOutlined } from '@ant-design/icons'
 import { Link, useNavigate } from 'react-router-dom'
 import { useProducts, usePackages, useReports, useTransfers } from '../api/queries'
 import {
-  deriveLocations, deriveStatus, downloadSeconds, transferIndex, verification, version,
+  deriveLocations, deriveStatus, downloadSeconds, releaseHref, transferIndex, verification, version,
   withTransfers, type SoftwareStatus,
 } from '../domain/derive'
 import { formatBytes, formatCount, formatDuration, formatSpeed } from '../domain/format'
 import { Stat, Value } from '../components/value'
 import { DiscoveryPanel } from '../components/discovery'
+import { SystemPanel } from '../components/system'
 import {
   LocationChip, ProductChip, StatusBadge, TimeAgo, VerificationBadge, VersionChip,
 } from '../components/chips'
@@ -105,7 +106,7 @@ export default function Overview() {
         detail: 'The vendor signature did not verify. Do not promote this release until it is explained.',
         action: {
           label: 'View release',
-          to: `/software/${encodeURIComponent(r.product.productId)}/${encodeURIComponent(r.pkg.tag)}`,
+          to: releaseHref(r.product.productId, r.pkg),
         },
       })
     }
@@ -190,9 +191,9 @@ export default function Overview() {
                   },
                   {
                     title: 'Version',
-                    width: 110,
+                    width: 170,
                     render: (_, r) => (
-                      <VersionChip product={r.product.productId} version={version(r.pkg)} reference={r.pkg.tag} />
+                      <VersionChip product={r.product.productId} version={version(r.pkg)} pkg={r.pkg} />
                     ),
                   },
                   {
@@ -233,13 +234,13 @@ export default function Overview() {
                     width: 130,
                     render: (_, r) =>
                       r.status === 'NEW' ? (
-                        <Link to={`/software/${encodeURIComponent(r.product.productId)}/${encodeURIComponent(r.pkg.tag)}`}>
+                        <Link to={releaseHref(r.product.productId, r.pkg)}>
                           <Button size="small" type="primary" icon={<CloudDownloadOutlined />}>
                             Download
                           </Button>
                         </Link>
                       ) : (
-                        <Link to={`/software/${encodeURIComponent(r.product.productId)}/${encodeURIComponent(r.pkg.tag)}`}>
+                        <Link to={releaseHref(r.product.productId, r.pkg)}>
                           <Button size="small">View Details</Button>
                         </Link>
                       ),
@@ -277,6 +278,8 @@ export default function Overview() {
                 ]}
               />
             </Card>
+
+            <SystemPanel />
 
             <Card title="Download Performance" extra={<Link to="/reports">View report</Link>}>
               <Typography.Text type="secondary" style={{ fontSize: 12 }}>

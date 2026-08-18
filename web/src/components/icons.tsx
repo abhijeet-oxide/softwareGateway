@@ -13,6 +13,7 @@ import DatabaseIcon from '~icons/mdi/database-outline'
 import PackageIcon from '~icons/mdi/package-variant-closed'
 import HelmIcon from '~icons/simple-icons/helm'
 import FileIcon from '~icons/mdi/file-document-outline'
+import AnalyzeIcon from '~icons/mdi/file-tree-outline'
 import type { Repository } from '../api/types'
 
 /**
@@ -138,7 +139,7 @@ export const ARTIFACT_ICONS = {
 
 export type ArtifactKind = keyof typeof ARTIFACT_ICONS
 
-export { PackageIcon, NokiaIcon, JFrogIcon, OpenShiftIcon, RocketIcon, FlaskIcon, OciIcon, DockerIcon, HelmIcon }
+export { AnalyzeIcon, PackageIcon, NokiaIcon, JFrogIcon, OpenShiftIcon, RocketIcon, FlaskIcon, OciIcon, DockerIcon, HelmIcon }
 
 /**
  * Renders one of the above at text size.

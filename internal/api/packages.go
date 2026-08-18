@@ -14,7 +14,9 @@ import (
 
 	"github.com/abhijeet-oxide/softwareGateway/internal/compare"
 	"github.com/abhijeet-oxide/softwareGateway/internal/discovery"
+	"github.com/abhijeet-oxide/softwareGateway/internal/oci"
 	"github.com/abhijeet-oxide/softwareGateway/internal/store"
+	"github.com/abhijeet-oxide/softwareGateway/internal/vendors"
 	v1 "github.com/abhijeet-oxide/softwareGateway/pkg/apis/softwaregateway/v1"
 )
 
@@ -212,6 +214,64 @@ func (s *Server) handleGetPackage(w http.ResponseWriter, r *http.Request) {
 
 // handleListArtifacts serves
 // GET /api/v1/products/{product}/packages/{package}/artifacts.
+// artifactClassifier returns the function that names what each artifact IS.
+//
+// The vendor's own annotations are consulted FIRST and the OCI fields second,
+// which is the opposite of the usual precedence and is deliberate. The OCI
+// rules are authoritative when the fields they read are populated; for an
+// index's children they are not, because discovery records what the index
+// listed without fetching each child, so the config media type is missing and
+// every chart looks like an image. The vendor annotation is the only evidence
+// available at that point, and it is evidence the vendor wrote about its own
+// content.
+//
+// A product with no vendor layout, or a deployment with no vendor registry,
+// gets the OCI rules alone — correct for a conformant registry.
+func (s *Server) artifactClassifier(productName string) func(store.ArtifactRow) string {
+	ociOnly := func(a store.ArtifactRow) string {
+		// No config media type: a listing must not load every manifest body,
+		// and for a child that was never fetched there is nothing to load.
+		return oci.Classify(a.MediaType, a.ArtifactType, "")
+	}
+	if s.deps.Products == nil || s.deps.Vendors == nil {
+		return ociOnly
+	}
+
+	p, ok := s.deps.Products.Get(productName)
+	if !ok {
+		return ociOnly
+	}
+
+	// A product's sources may in principle declare different layouts. Every
+	// one that names a real layout gets a say, in order, and the first to
+	// recognise an artifact wins — which for the overwhelmingly common
+	// single-vendor product is just that vendor.
+	var layouts []vendors.Layout
+	seen := map[string]bool{}
+	for _, src := range p.Spec.Sources {
+		name := src.VendorLayout()
+		if name == "" || seen[name] {
+			continue
+		}
+		seen[name] = true
+		if l, err := s.deps.Vendors.Get(name); err == nil {
+			layouts = append(layouts, l)
+		}
+	}
+	if len(layouts) == 0 {
+		return ociOnly
+	}
+
+	return func(a store.ArtifactRow) string {
+		for _, l := range layouts {
+			if kind := l.ClassifyArtifact(a.Annotations); kind != "" {
+				return kind
+			}
+		}
+		return ociOnly(a)
+	}
+}
+
 func (s *Server) handleListArtifacts(w http.ResponseWriter, r *http.Request) {
 	productName := chi.URLParam(r, "product")
 	ref := chi.URLParam(r, "package")
@@ -235,6 +295,8 @@ func (s *Server) handleListArtifacts(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	classify := s.artifactClassifier(productName)
+
 	resp := v1.ListArtifactsResponse{Artifacts: []v1.Artifact{}}
 	for _, a := range rows {
 		artifact := v1.Artifact{
@@ -242,6 +304,7 @@ func (s *Server) handleListArtifacts(w http.ResponseWriter, r *http.Request) {
 			Digest:       a.Digest,
 			MediaType:    a.MediaType,
 			ArtifactType: a.ArtifactType,
+			Kind:         classify(a),
 			SizeBytes:    v1.Int64String(strconv.FormatInt(a.SizeBytes, 10)),
 			Platform:     a.Platform,
 			Depth:        a.Depth,

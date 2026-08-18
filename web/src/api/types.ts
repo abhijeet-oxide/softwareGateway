@@ -175,17 +175,39 @@ export interface Package {
 
 export interface ListPackagesResponse { packages: Package[]; nextPageToken?: string }
 
+/** What an artifact IS, as the API classifies it. A bounded set. */
+export type ArtifactKind =
+  | 'index' | 'image' | 'chart' | 'file' | 'signature' | 'artifact'
+
 export interface Artifact {
   artifactId: string
   parentId?: string
   digest: string
   mediaType: string
   artifactType?: string
+  /**
+   * Derived server-side from the OCI fields and, where the source declares a
+   * vendor layout, from the vendor's own annotations.
+   *
+   * Group on THIS. Classifying in the client would mean the client knowing a
+   * vendor's annotation keys, and it would get charts wrong: an index's
+   * children are recorded from what the index listed, so their config media
+   * type — the field that separates a Helm chart from an image — is not
+   * available until the tree is walked.
+   */
+  kind?: ArtifactKind
   sizeBytes: Int64String
   platform?: string
   depth?: number
-  tag?: string
   annotations?: Record<string, string>
+  /**
+   * Whether this manifest was ever pulled and verified. False for a child the
+   * index merely listed — which is every child until the release is analysed,
+   * and is why its size and contents are not known.
+   */
+  fetched?: boolean
+  /** Whether the manifest BYTES are still held locally. */
+  cached?: boolean
 }
 
 /**

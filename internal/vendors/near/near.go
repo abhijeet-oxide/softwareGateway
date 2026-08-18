@@ -43,6 +43,7 @@ import (
 	"context"
 	"strings"
 
+	"github.com/abhijeet-oxide/softwareGateway/internal/oci"
 	"github.com/abhijeet-oxide/softwareGateway/internal/registry"
 	"github.com/abhijeet-oxide/softwareGateway/internal/vendors"
 )
@@ -72,11 +73,65 @@ const (
 	annOrbType = "com.nokia.ncd.orb.type"
 )
 
-// orbTypeSignature is the value marking a wrapper child as the signature.
-const orbTypeSignature = "generic_signature"
+// Values NEAR puts in `com.nokia.ncd.orb.type`, on the descriptor by which an
+// orb's index references each of its children.
+//
+// This is the only place in the system that knows an orb's parts are described
+// this way, and it is what makes a release's composition readable BEFORE
+// anything is fetched beyond the index itself.
+const (
+	// orbTypeSignature marks a wrapper child as the signature.
+	orbTypeSignature = "generic_signature"
+	// orbTypeHelmChart is a Helm chart. It is served as an ordinary image
+	// manifest with no artifactType, so without this annotation nothing
+	// distinguishes it from a container image until its config is fetched.
+	orbTypeHelmChart = "helmchart"
+	// orbTypeCNFImage is a container image — a Cloud-native Network Function.
+	orbTypeCNFImage = "cnfimage"
+	// orbTypeGenericPrefix covers NEAR's remaining `generic_*` values —
+	// `generic_custo` and friends — which are configuration and data rather
+	// than either of the above.
+	orbTypeGenericPrefix = "generic"
+)
 
 // Layout groups NEAR's three tags into one package.
 type Layout struct{}
+
+// ClassifyArtifact reads `com.nokia.ncd.orb.type` off an orb child.
+//
+// # Why this is needed and what it fixes
+//
+// An orb's index lists its parts as `application/vnd.oci.image.manifest.v1+json`
+// with no `artifactType`. Discovery records what the index says without
+// fetching each child, so the config media type — the field that normally
+// tells a Helm chart from an image — is not available. Classified on the OCI
+// fields alone, every part of every orb reads as an image: a release of 157
+// images and 97 charts reports 254 images, and Helm charts become a category
+// that cannot be seen at all.
+//
+// NEAR states what each part is on the referencing descriptor, which discovery
+// already holds. Reading it costs nothing and is correct before any deeper
+// walk has happened.
+//
+// Returns "" for anything it does not recognise, so an unfamiliar value falls
+// through to the OCI rules rather than being forced into a bucket.
+func (Layout) ClassifyArtifact(annotations map[string]string) string {
+	switch orbType := annotations[annOrbType]; {
+	case orbType == orbTypeHelmChart:
+		return oci.KindChart
+	case orbType == orbTypeCNFImage:
+		return oci.KindImage
+	case orbType == orbTypeSignature:
+		return oci.KindSignature
+	case strings.HasPrefix(orbType, orbTypeGenericPrefix):
+		// Everything else NEAR calls generic is configuration and data. The
+		// FILES inside it are layers and are not visible until the manifest is
+		// fetched and its blobs walked.
+		return oci.KindFile
+	default:
+		return ""
+	}
+}
 
 func (Layout) Name() string { return Name }
 

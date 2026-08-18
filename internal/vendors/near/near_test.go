@@ -313,3 +313,52 @@ func TestDisplayRepositoryStripsOnlyTheVendorNamespace(t *testing.T) {
 		}
 	}
 }
+
+// The bug this fixes, stated as a test.
+//
+// An orb's index lists its parts as plain image manifests with no artifactType,
+// and discovery does not fetch each one — so the config media type that would
+// separate a chart from an image is absent. Classified on the OCI fields alone
+// every part reads as an image, and Helm charts become invisible.
+func TestClassifyArtifactReadsTheOrbType(t *testing.T) {
+	var l Layout
+
+	for _, tc := range []struct {
+		name    string
+		orbType string
+		want    string
+	}{
+		{"helm chart", "helmchart", "chart"},
+		{"container image", "cnfimage", "image"},
+		{"signature", "generic_signature", "signature"},
+		{"custom data", "generic_custo", "file"},
+		{"another generic", "generic_config", "file"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got := l.ClassifyArtifact(map[string]string{
+				"com.nokia.ncd.orb.type": tc.orbType,
+			})
+			if got != tc.want {
+				t.Errorf("orb type %q classified as %q, want %q", tc.orbType, got, tc.want)
+			}
+		})
+	}
+}
+
+// An unfamiliar value defers rather than guessing: a vendor adding a type we
+// have never seen should fall through to the OCI rules, not be forced into
+// whichever bucket happened to be last.
+func TestClassifyArtifactDefersOnTheUnknown(t *testing.T) {
+	var l Layout
+
+	for _, annotations := range []map[string]string{
+		nil,
+		{},
+		{"com.nokia.ncd.orb.type": "something-new"},
+		{"org.opencontainers.image.ref.name": "orbs/x:orb_1"},
+	} {
+		if got := l.ClassifyArtifact(annotations); got != "" {
+			t.Errorf("ClassifyArtifact(%v) = %q, want \"\" so the OCI rules decide", annotations, got)
+		}
+	}
+}

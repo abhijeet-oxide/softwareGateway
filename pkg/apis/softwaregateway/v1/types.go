@@ -463,6 +463,19 @@ type Artifact struct {
 	MediaType    string      `json:"mediaType"`
 	ArtifactType string      `json:"artifactType,omitempty"`
 	SizeBytes    Int64String `json:"sizeBytes"`
+	// Kind is what this artifact IS, in the words somebody uses: index, image,
+	// chart, file, signature, artifact.
+	//
+	// Derived rather than stored, from the OCI fields and — where the source
+	// declares a vendor layout — from the vendor's own annotations. Both are
+	// needed: an index's children are recorded from what the index LISTED
+	// without fetching each one, so the config media type that normally
+	// separates a Helm chart from an image is not available, and a vendor whose
+	// parts are all `image.manifest.v1+json` would otherwise report every chart
+	// as an image.
+	//
+	// A client groups on this and needs to know nothing about any vendor.
+	Kind string `json:"kind,omitempty"`
 	// Platform is "linux/amd64". Empty for non-image artifacts such as Helm
 	// charts and configuration bundles.
 	Platform string `json:"platform,omitempty"`

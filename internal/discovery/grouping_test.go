@@ -66,6 +66,10 @@ func (wrapperLayout) DisplayTag(tag string) string {
 
 // AccessoryTags mirrors NEAR's: a payload tag needs its wrapper and its
 // signature, neither of which a release-tag filter would admit.
+// This fake classifies nothing: these tests are about GROUPING, and the OCI
+// rules are what a Layout deferring here would get.
+func (wrapperLayout) ClassifyArtifact(map[string]string) string { return "" }
+
 func (wrapperLayout) AccessoryTags(tag string) []string {
 	if !strings.HasPrefix(tag, "orb_") {
 		return nil

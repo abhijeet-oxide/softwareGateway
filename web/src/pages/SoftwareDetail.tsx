@@ -4,7 +4,7 @@ import {
   Alert, App, Button, Card, Col, Descriptions, Modal, Row, Space, Table, Tabs, Tooltip,
   Typography,
 } from 'antd'
-import { CloudDownloadOutlined, ReloadOutlined } from '@ant-design/icons'
+import { CloudDownloadOutlined } from '@ant-design/icons'
 import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom'
 import {
   useArtifacts, useInspectPackage, usePackage, useProduct, useRunDownload,
@@ -15,13 +15,13 @@ import {
 } from '../domain/derive'
 import { bytes, formatBytes, formatCount, formatDuration } from '../domain/format'
 import { NA, Value } from '../components/value'
-import { ARTIFACT_ICONS, Icon } from '../components/icons'
+import { AnalyzeIcon, ARTIFACT_ICONS, Icon } from '../components/icons'
 import { WorkingBar } from '../components/progress'
 import {
   LocationChip, RepoLink, StatusBadge, TimeAgo, VerificationBadge,
 } from '../components/chips'
 import {
-  ErrorState, LifecycleIndicator, PageHeader, SavedPanel,
+  EmptyStateCard, ErrorState, LifecycleIndicator, PageHeader, SavedPanel,
 } from '../components/layout'
 import { mono } from '../theme'
 import type { Artifact, InspectPackageResponse } from '../api/types'
@@ -41,11 +41,11 @@ import { TargetTag } from '../components/chips'
  */
 
 /**
- * Measuring a release, with something to look at while it happens.
+ * Analysing a release, with something to look at while it happens.
  *
  * # Why this is a panel and not a button
  *
- * Measuring walks the release's whole manifest tree against the vendor
+ * Analysing walks the release's whole manifest tree against the vendor
  * registry — for the 260-artifact releases this system is built for, that is
  * hundreds of round trips and takes a while. The button reported none of it:
  * it spun in place and the page changed silently, which is indistinguishable
@@ -64,9 +64,9 @@ import { TargetTag } from '../components/chips'
  * identical if all you do is refresh the page.
  */
 function MeasurePanel({
-  measured, artifactCount, inspect, disabled,
+  analysed, artifactCount, inspect, disabled,
 }: {
-  measured: boolean
+  analysed: boolean
   artifactCount?: number
   inspect: UseMutationResult<InspectPackageResponse, Error, void, unknown>
   disabled: boolean
@@ -112,15 +112,15 @@ function MeasurePanel({
         style={{ marginTop: 12 }}
         type="error"
         showIcon
-        message="This release could not be measured"
+        message="This package could not be analyzed"
         description={
           <Space direction="vertical" size={4}>
             <Typography.Text>
               {inspect.error instanceof Error ? inspect.error.message : 'The registry did not answer.'}
             </Typography.Text>
             <Typography.Text type="secondary">
-              Nothing was changed. The release can still be downloaded; its size will be
-              established as the download runs.
+              Nothing was changed. The release can still be downloaded; its size is established
+              as the download runs.
             </Typography.Text>
           </Space>
         }
@@ -138,8 +138,8 @@ function MeasurePanel({
         showIcon
         message={
           r.alreadyExpanded
-            ? 'Already measured — the vendor registry was not contacted'
-            : `Measured in ${formatDuration(elapsed) ?? 'a moment'}`
+            ? 'Already analyzed — the vendor registry was not contacted'
+            : `Analyzed in ${formatDuration(elapsed) ?? 'a moment'}`
         }
         description={
           <Space size={16} wrap>
@@ -168,27 +168,70 @@ function MeasurePanel({
     )
   }
 
-  if (measured) return null
+  if (analysed) return null
 
   return (
     <Space direction="vertical" size={4} style={{ marginTop: 12 }}>
-      <Button size="small" icon={<ReloadOutlined />} disabled={disabled} onClick={run}>
-        Measure this release
+      <Button
+        size="small"
+        icon={<Icon as={AnalyzeIcon} title="Analyze" />}
+        disabled={disabled}
+        onClick={run}
+      >
+        Analyze package
       </Button>
       <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-        Reads the manifest tree from the vendor registry to establish what this release contains
-        and what it weighs. Nothing is downloaded.
+        Walks the manifest tree in the vendor registry to establish what this release contains —
+        its files, and what each part weighs. Nothing is downloaded.
       </Typography.Text>
     </Space>
   )
 }
 
-/** Groups the artifact tree into the three kinds a user thinks in. */
-function classify(a: Artifact): 'Images' | 'Helm Charts' | 'Files' {
-  const type = `${a.artifactType ?? ''} ${a.mediaType}`.toLowerCase()
-  if (type.includes('helm')) return 'Helm Charts'
-  if (type.includes('image') || a.platform) return 'Images'
-  return 'Files'
+/**
+ * The three kinds a user thinks in, from the kind the API derived.
+ *
+ * # Why this no longer guesses
+ *
+ * It used to read the media type and call anything image-ish an image. Every
+ * part of a vendor orb is served as `image.manifest.v1+json` with no
+ * artifactType, so every chart was counted as an image and Helm Charts read
+ * zero on every release. The API now classifies — using the vendor's own
+ * annotations where the OCI fields cannot answer — and this only maps its
+ * bounded vocabulary onto the three tiles.
+ *
+ * Signatures and the index itself are not release contents and are excluded
+ * rather than swept into Files.
+ */
+function tileFor(a: Artifact): 'Images' | 'Helm Charts' | 'Files' | null {
+  switch (a.kind) {
+    case 'image': return 'Images'
+    case 'chart': return 'Helm Charts'
+    case 'file': return 'Files'
+    case 'index':
+    case 'signature':
+      return null
+    default:
+      // `artifact` — content that declared nothing about itself — and any
+      // kind this client has not been taught. Counted as Files rather than
+      // silently dropped, since it IS part of the release.
+      return a.kind ? 'Files' : null
+  }
+}
+
+/**
+ * The name a person recognises.
+ *
+ * The vendor's ref name is the only thing here that reads like a name —
+ * `cfx-5000-product/bgcf:2511.174.0`. Without it the column showed the
+ * artifact TYPE, so every row of the images tab said "Images".
+ */
+function artifactName(a: Artifact): string | null {
+  const ref = a.annotations?.['org.opencontainers.image.ref.name']
+  if (ref) return ref
+  const title = a.annotations?.['org.opencontainers.image.title']
+  if (title) return title
+  return null
 }
 
 export default function SoftwareDetail() {
@@ -213,14 +256,19 @@ export default function SoftwareDetail() {
 
   const groups = useMemo(() => {
     const out = {
-      Images: { count: 0, bytes: 0 },
-      'Helm Charts': { count: 0, bytes: 0 },
-      Files: { count: 0, bytes: 0 },
+      Images: { count: 0, bytes: 0, measured: false },
+      'Helm Charts': { count: 0, bytes: 0, measured: false },
+      Files: { count: 0, bytes: 0, measured: false },
     }
     for (const a of artifacts.data?.artifacts ?? []) {
-      const kind = classify(a)
-      out[kind].count += 1
-      out[kind].bytes += bytes(a.sizeBytes) ?? 0
+      const tile = tileFor(a)
+      if (!tile) continue
+      out[tile].count += 1
+      out[tile].bytes += bytes(a.sizeBytes) ?? 0
+      // A child the index merely listed carries the index's idea of its size,
+      // not the size of what is under it. Only a fetched manifest has been
+      // walked, and only then is the total defensible.
+      if (a.fetched) out[tile].measured = true
     }
     return out
   }, [artifacts.data])
@@ -236,6 +284,11 @@ export default function SoftwareDetail() {
 
   const p = pkg.data
   const prod = product.data
+  // Analysing walks the manifest tree. Until it has run, the index tells us
+  // what its children ARE but nothing about what is inside them — so sizes are
+  // not known, and FILES cannot be counted at all: files are layers inside
+  // those children rather than children of the index.
+  const analysed = Boolean(p?.expandedAt)
   const status = p ? deriveStatus(p, prod) : undefined
   const live = (p?.transfers ?? []).find((t) => isLive(t.state))
 
@@ -337,7 +390,7 @@ export default function SoftwareDetail() {
               </Descriptions>
 
               <MeasurePanel
-                measured={Boolean(p?.expandedAt)}
+                analysed={analysed}
                 artifactCount={p?.artifactCount}
                 inspect={inspect}
                 disabled={!mayOperate || !p}
@@ -355,28 +408,50 @@ export default function SoftwareDetail() {
               loading={artifacts.isLoading}
             >
               <Row gutter={16} style={{ marginBottom: 12 }}>
-                {(['Images', 'Helm Charts', 'Files'] as const).map((kind) => (
-                  <Col span={8} key={kind}>
-                    <Card size="small">
-                      <Space direction="vertical" size={0}>
-                        <Space size={6}>
-                          <Icon as={ARTIFACT_ICONS[kind]} size={15} title={kind} />
-                          <Typography.Text type="secondary">{kind}</Typography.Text>
+                {(['Images', 'Helm Charts', 'Files'] as const).map((kind) => {
+                  // Files are LAYERS inside the release's manifests, not
+                  // children of its index, so before the walk there is nothing
+                  // to count — which is a different statement from "there are
+                  // none", and the tile has to make that difference.
+                  const countable = kind !== 'Files' || analysed
+                  const sized = groups[kind].measured
+
+                  return (
+                    <Col span={8} key={kind}>
+                      <Card size="small">
+                        <Space direction="vertical" size={0} style={{ width: '100%' }}>
+                          <Space size={6}>
+                            <Icon as={ARTIFACT_ICONS[kind]} size={15} title={kind} />
+                            <Typography.Text type="secondary">{kind}</Typography.Text>
+                          </Space>
+
+                          {countable ? (
+                            <Typography.Title level={4} style={{ margin: 0 }}>
+                              {groups[kind].count}
+                            </Typography.Title>
+                          ) : (
+                            <div style={{ margin: '2px 0' }}>
+                              <NA reason="Files are layers inside this release's manifests. They are only listed once the release has been analysed." />
+                            </div>
+                          )}
+
+                          <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+                            {sized ? (
+                              <Value>{formatBytes(groups[kind].bytes || null)}</Value>
+                            ) : (
+                              <NA reason="The size under each artifact is only known once the manifest tree has been walked. Analyse the package to establish it." />
+                            )}
+                          </Typography.Text>
                         </Space>
-                        <Typography.Title level={4} style={{ margin: 0 }}>
-                          {groups[kind].count}
-                        </Typography.Title>
-                        <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-                          <Value>{formatBytes(groups[kind].bytes || null)}</Value>
-                        </Typography.Text>
-                      </Space>
-                    </Card>
-                  </Col>
-                ))}
+                      </Card>
+                    </Col>
+                  )
+                })}
               </Row>
 
               <Typography.Text type="secondary" style={{ fontSize: 12 }}>
                 A release is downloaded whole — individual artifacts are not selectable.
+                {!analysed && ' Analyse the package to list its files and establish its size.'}
               </Typography.Text>
 
               <Tabs
@@ -387,20 +462,56 @@ export default function SoftwareDetail() {
                   label: (
                     <Space size={6}>
                       <Icon as={ARTIFACT_ICONS[kind]} title={kind} />
-                      {kind} ({groups[kind].count})
+                      {/*
+                        No count on Files until the tree has been walked. One
+                        `generic` artifact may hold fifty files, so the number
+                        of file-kind ARTIFACTS is not the number of files, and
+                        printing it here would contradict the tile beside it.
+                      */}
+                      {kind}
+                      {(kind !== 'Files' || analysed) && ` ( ${groups[kind].count} )`}
                     </Space>
                   ),
-                  children: (
+                  children: kind === 'Files' && !analysed ? (
+                    <EmptyStateCard
+                      title="Files are not listed yet"
+                      explanation="Files live inside this release's manifests as layers, so listing them means walking the tree. Analysing the package reads it from the vendor registry and records what is there."
+                      action={
+                        <MeasurePanel
+                          analysed={analysed}
+                          artifactCount={p?.artifactCount}
+                          inspect={inspect}
+                          disabled={!mayOperate || !p}
+                        />
+                      }
+                    />
+                  ) : (
                     <Table
                       size="small"
-                      dataSource={(artifacts.data?.artifacts ?? []).filter((a) => classify(a) === kind)}
+                      dataSource={(artifacts.data?.artifacts ?? []).filter((a) => tileFor(a) === kind)}
                       rowKey={(a) => a.artifactId}
                       pagination={{ pageSize: 8, hideOnSinglePage: true }}
                       scroll={{ x: 600 }}
                       columns={[
-                        { title: 'Name', render: (_, a) => <span style={{ fontFamily: mono, fontSize: 12 }}>{a.tag || a.artifactType || kind}</span> },
+                        {
+                          title: 'Name',
+                          render: (_, a) => (
+                            <Value reason="This artifact carries no name annotation; it is identified by its digest.">
+                              {artifactName(a)}
+                            </Value>
+                          ),
+                        },
                         { title: 'Platform', width: 120, render: (_, a) => <Value>{a.platform}</Value> },
-                        { title: 'Size', width: 100, align: 'right', render: (_, a) => <Value>{formatBytes(a.sizeBytes)}</Value> },
+                        {
+                          title: 'Size',
+                          width: 100,
+                          align: 'right',
+                          render: (_, a) => (
+                            <Value reason="This manifest has not been walked, so what it holds is not known. Analyse the package to establish it.">
+                              {a.fetched ? formatBytes(a.sizeBytes) : null}
+                            </Value>
+                          ),
+                        },
                         {
                           title: 'Digest',
                           width: 200,

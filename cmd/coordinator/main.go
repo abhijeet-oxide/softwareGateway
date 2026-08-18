@@ -344,12 +344,16 @@ func run() error {
 
 	// ---- HTTP ----
 	srv := api.NewServer(api.Deps{
-		Logger:    logger,
-		Metrics:   mreg,
-		Health:    hreg,
-		Products:  products,
-		Store:     st,
-		Packages:  packages,
+		Logger:   logger,
+		Metrics:  mreg,
+		Health:   hreg,
+		Products: products,
+		Store:    st,
+		Packages: packages,
+		// The vendor layouts, so an artifact listing can report a vendor's
+		// Helm charts as charts rather than as images. See
+		// Server.artifactClassifier.
+		Vendors:   layouts,
 		Discovery: discoveryCtl.Loop(),
 		Queue:     jobQueue,
 		Requests:  requester,

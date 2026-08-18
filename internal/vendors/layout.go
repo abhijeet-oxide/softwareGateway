@@ -316,6 +316,29 @@ type Layout interface {
 	// Called only for tags the filters ADMITTED, so an excluded release does not
 	// drag its accessories in behind it.
 	AccessoryTags(tag string) []string
+
+	// ClassifyArtifact names what ONE artifact of a package is, from the
+	// annotations the vendor put on it. It returns an oci.Kind* value, or ""
+	// to defer to the OCI rules.
+	//
+	// # Why a Layout gets a say at all
+	//
+	// The OCI classification reads media type, artifact type and config media
+	// type. For an index's children, discovery records what the index LISTED
+	// and does not fetch each child — so the config is unknown, and a vendor
+	// whose charts and images are all `image.manifest.v1+json` with no
+	// artifactType classifies as image, every one of them. That is not a
+	// rounding error: a release of 157 images and 97 charts reads as 254
+	// images, and the charts become a category nobody can see.
+	//
+	// Such a vendor usually says what each child is on the referencing
+	// descriptor, which discovery already has in hand and stores. This is the
+	// hook that reads it — the vendor's key stays inside the vendor's package,
+	// and the core keeps handling a bounded, neutral set of kinds.
+	//
+	// Advisory, and bounded like everything else a Layout does: it may
+	// mislabel a row, and it cannot affect what is transferred.
+	ClassifyArtifact(annotations map[string]string) string
 }
 
 // Format is how a signature is verified once it has been found.

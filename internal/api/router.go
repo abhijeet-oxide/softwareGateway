@@ -24,6 +24,7 @@ import (
 	"github.com/abhijeet-oxide/softwareGateway/internal/product"
 	"github.com/abhijeet-oxide/softwareGateway/internal/queue"
 	"github.com/abhijeet-oxide/softwareGateway/internal/store"
+	"github.com/abhijeet-oxide/softwareGateway/internal/vendors"
 )
 
 // Leadership reports whether this replica holds the leader lock. Satisfied by
@@ -163,7 +164,13 @@ type Deps struct {
 	// reach the registry at all, and that is exactly when it is wanted.
 	ReplicationStore *store.Replication
 	Leader           Leadership
-	Component        string
+	// Vendors resolves a source's configured layout, which is what lets an
+	// artifact listing report a vendor's Helm charts as charts. Optional: a
+	// deployment without it classifies on the OCI fields alone, which is
+	// correct for a conformant registry and under-reports charts for one that
+	// relies on its own annotations.
+	Vendors   *vendors.Registry
+	Component string
 }
 
 // Server wires the router.

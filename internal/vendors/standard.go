@@ -112,6 +112,10 @@ func (Standard) DisplayTag(string) string { return "" }
 // guessing at names.
 func (Standard) AccessoryTags(string) []string { return nil }
 
+// ClassifyArtifact defers to the OCI rules, which is the whole point of a
+// conformant registry: it declares what its content is and needs no help.
+func (Standard) ClassifyArtifact(map[string]string) string { return "" }
+
 // Group maps each scanned tag to one package, unchanged.
 func (Standard) Group(
 	_ context.Context, _ registry.Source, scanned []ScannedTag,

@@ -7,8 +7,19 @@ import type { Int64String } from '../api/types'
  * dash with a reason, never as zero.
  */
 
-/** The placeholder for a value that is genuinely unknown. */
-export const UNKNOWN = '—'
+/**
+ * The words shown where a value is genuinely unavailable.
+ *
+ * Every formatter below returns `null` rather than this string, so the DECISION
+ * to say "not available" is made here and the RENDERING is made once, by
+ * <Value> in components/value.tsx — italic and secondary, so an absent value
+ * never reads as a measured one.
+ *
+ * `null` rather than a string because it makes the compiler the enforcement:
+ * a site that renders a formatter's output without handling the absent case
+ * does not typecheck.
+ */
+export const NOT_AVAILABLE = 'N/A'
 
 /** Parses an Int64String. Returns undefined for absent, which is not zero. */
 export function bytes(value: Int64String | undefined | null): number | undefined {
@@ -18,9 +29,9 @@ export function bytes(value: Int64String | undefined | null): number | undefined
 }
 
 /** Binary units to one decimal, as the brief specifies: `15.6 GB`. */
-export function formatBytes(value: Int64String | number | undefined | null): string {
+export function formatBytes(value: Int64String | number | undefined | null): string | null {
   const n = typeof value === 'number' ? value : bytes(value ?? undefined)
-  if (n === undefined) return UNKNOWN
+  if (n === undefined) return null
   if (n === 0) return '0 B'
 
   const units = ['B', 'KB', 'MB', 'GB', 'TB', 'PB']
@@ -30,16 +41,16 @@ export function formatBytes(value: Int64String | number | undefined | null): str
 }
 
 /** Speeds as `142 MB/s`. */
-export function formatSpeed(value: Int64String | number | undefined | null): string {
+export function formatSpeed(value: Int64String | number | undefined | null): string | null {
   const n = typeof value === 'number' ? value : bytes(value ?? undefined)
-  if (n === undefined) return UNKNOWN
+  if (n === undefined) return null
   return `${formatBytes(n)}/s`
 }
 
 /** Durations as `1h 56m`, and `18s` below a minute. */
-export function formatDuration(seconds: number | undefined | null): string {
+export function formatDuration(seconds: number | undefined | null): string | null {
   if (seconds === undefined || seconds === null || !Number.isFinite(seconds) || seconds < 0) {
-    return UNKNOWN
+    return null
   }
   const total = Math.floor(seconds)
   const h = Math.floor(total / 3600)
@@ -62,10 +73,10 @@ export function elapsedSeconds(from?: string | null, to?: string | null): number
 }
 
 /** Relative time — `2h ago`. The absolute form goes in the tooltip. */
-export function formatRelative(timestamp: string | undefined | null): string {
-  if (!timestamp) return UNKNOWN
+export function formatRelative(timestamp: string | undefined | null): string | null {
+  if (!timestamp) return null
   const then = Date.parse(timestamp)
-  if (Number.isNaN(then)) return UNKNOWN
+  if (Number.isNaN(then)) return null
 
   const seconds = (Date.now() - then) / 1000
   if (seconds < 0) return 'just now'
@@ -77,10 +88,10 @@ export function formatRelative(timestamp: string | undefined | null): string {
 }
 
 /** The tooltip form: `16 Aug 2026 08:30 AM`. */
-export function formatAbsolute(timestamp: string | undefined | null): string {
-  if (!timestamp) return UNKNOWN
+export function formatAbsolute(timestamp: string | undefined | null): string | null {
+  if (!timestamp) return null
   const t = Date.parse(timestamp)
-  if (Number.isNaN(t)) return UNKNOWN
+  if (Number.isNaN(t)) return null
   return new Date(t).toLocaleString('en-GB', {
     day: '2-digit', month: 'short', year: 'numeric',
     hour: '2-digit', minute: '2-digit', hour12: true,
@@ -88,13 +99,13 @@ export function formatAbsolute(timestamp: string | undefined | null): string {
 }
 
 /** A percentage to one decimal. Absent input stays absent — 0% is a claim. */
-export function formatPercent(value: number | undefined | null): string {
-  if (value === undefined || value === null || !Number.isFinite(value)) return UNKNOWN
+export function formatPercent(value: number | undefined | null): string | null {
+  if (value === undefined || value === null || !Number.isFinite(value)) return null
   return `${value.toFixed(1)}%`
 }
 
 /** Counts with a thousands separator. */
-export function formatCount(n: number | undefined | null): string {
-  if (n === undefined || n === null || !Number.isFinite(n)) return UNKNOWN
+export function formatCount(n: number | undefined | null): string | null {
+  if (n === undefined || n === null || !Number.isFinite(n)) return null
   return n.toLocaleString('en-GB')
 }

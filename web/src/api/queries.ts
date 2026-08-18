@@ -1,4 +1,4 @@
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import { useMutation, useQueries, useQuery, useQueryClient } from '@tanstack/react-query'
 import { api, query, packageRef } from './client'
 import type {
   CheckConnectivityResponse, CompareRequest, CompareResponse, DiscoverAllResponse,
@@ -52,29 +52,45 @@ export function useProduct(name: string | undefined) {
   })
 }
 
-export function useDiscoveryStatus(product: string | undefined, live: boolean) {
-  return useQuery({
-    queryKey: ['discovery', product],
-    queryFn: () => api.get<DiscoveryStatusResponse>(
-      `/products/${encodeURIComponent(product!)}/discovery`),
-    enabled: Boolean(product),
-    // Only while a scan is actually running. A finished scan is not news.
-    refetchInterval: live ? 3000 : false,
-  })
-}
-
+/**
+ * Start a scan and return immediately.
+ *
+ * `wait: false` is the important part. The default holds the HTTP request open
+ * for the whole scan, which against a slow registry means minutes of a spinner
+ * and every intermediary's idle timeout becoming part of the control plane.
+ * Starting and polling GET .../discovery is what lets the interface show the
+ * scan progressing instead of a button that appears to do nothing.
+ *
+ * Note what the response says when nothing started: `alreadyRunning`. That is
+ * not a failure and not a no-op — it is "a scan is already going" — and the
+ * caller is expected to say so rather than discard it.
+ */
 export function useRunDiscovery() {
   const qc = useQueryClient()
   return useMutation({
     mutationFn: (product?: string): Promise<DiscoverPackagesResponse | DiscoverAllResponse> =>
       product
         ? api.post<DiscoverPackagesResponse>(
-            `/products/${encodeURIComponent(product)}/packages:discover`)
+            `/products/${encodeURIComponent(product)}/packages:discover`, { wait: false })
         : api.post<DiscoverAllResponse>('/products:discover'),
     onSuccess: () => {
       void qc.invalidateQueries({ queryKey: ['packages'] })
       void qc.invalidateQueries({ queryKey: ['discovery'] })
+      void qc.invalidateQueries({ queryKey: ['audit'] })
     },
+  })
+}
+
+/** Discovery status for several products at once, for the estate view. */
+export function useDiscoveryStatuses(products: string[]) {
+  return useQueries({
+    queries: products.map((product) => ({
+      queryKey: ['discovery', product],
+      queryFn: () => api.get<DiscoveryStatusResponse>(
+        `/products/${encodeURIComponent(product)}/discovery`),
+      refetchInterval: (q: { state: { data?: DiscoveryStatusResponse } }) =>
+        (q.state.data?.sources ?? []).some((s) => s.scanning) ? 2000 : 15_000,
+    })),
   })
 }
 

@@ -42,7 +42,9 @@ npm run typecheck
 | `src/api/client.ts` | Fetch wrapper mirroring `v1/client.go`: paging, RFC 9457 problem details. |
 | `src/api/queries.ts` | Every server call, with its polling policy. |
 | `src/domain/derive.ts` | The vocabulary bridge — status, location, lifecycle. |
-| `src/domain/format.ts` | Sizes, durations, speeds, timestamps. |
+| `src/domain/format.ts` | Sizes, durations, speeds, timestamps. Returns `null` when a value is unavailable. |
+| `src/components/value.tsx` | `<Value>` / `<NA>` / `<Stat>` — how the application says "we do not have this". |
+| `src/components/discovery.tsx` | The discovery panel and the one Run Discovery control. |
 | `src/auth/permissions.tsx` | `useCan(action, scope)`. |
 | `src/components/` | The reusable vocabulary: chips, badges, progress, page furniture. |
 
@@ -60,8 +62,10 @@ started, *that* it finished and *what* it produced, but not how many bytes
 moved. A progress bar there would be a number derived from a timer, and someone
 would make a decision from it. See `docs/design/18-quay-replication.md` §6.1.
 
-The same rule is why a value we do not have renders as `—` with a reason on
-hover, never as `0`.
+The same rule is why a value we do not have renders as an italic secondary
+`N/A` — with the reason on hover — and never as `0`. Every formatter in
+`domain/format.ts` returns `string | null`, and `<Value>` turns the `null` into
+that one treatment, so a site that forgets the absent case does not typecheck.
 
 **2. Status and location are derived in exactly one place.** The API has no
 `status` field and no `location` field. `deriveStatus`, `deriveLocations` and
@@ -73,7 +77,19 @@ One consequence worth knowing: `package.transfers` is populated on the
 queries — so listings join it in from the transfer listing via `transferIndex`.
 Without that join every row reads `NEW`.
 
-**3. The interface never edits configuration.** Products, downloads, rules,
+**3. An action always reports what it did.** `POST /products:discover` answers
+`{started, alreadyRunning}`, and "nothing started because four sources were
+already scanning" is a real outcome, not a no-op. Discarding it is what made
+Run Discovery look broken. There is one `<RunDiscoveryButton>` for that reason:
+a second copy would eventually be a bare `mutate()` with no feedback.
+
+Discovery is started with `wait: false` and its progress is polled from
+`GET /products/{p}/discovery`, which reports phase, repositories, tags,
+artifacts, new packages and errors per source. The default holds the HTTP
+request open for the whole scan — minutes against a slow registry, with every
+intermediary's idle timeout becoming part of the control plane.
+
+**4. The interface never edits configuration.** Products, downloads, rules,
 intervals and verification policy come from Git and are reconciled by Flux. A
 write from here would be a second source of truth that gets silently reverted
 minutes later. Configuration is shown with a `Managed in Git` badge; requesting

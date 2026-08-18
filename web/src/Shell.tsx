@@ -3,13 +3,12 @@ import { Avatar, Badge, Button, Layout, Menu, Space, Tooltip, Typography } from 
 import {
   AppstoreOutlined, BarChartOutlined, BellOutlined, CloudDownloadOutlined,
   DatabaseOutlined, FileTextOutlined, HistoryOutlined, HomeOutlined,
-  PlayCircleOutlined, QuestionCircleOutlined, SettingOutlined,
+  QuestionCircleOutlined, SettingOutlined,
 } from '@ant-design/icons'
 import { useLocation, useNavigate } from 'react-router-dom'
-import { useIdentity, useCan } from './auth/permissions'
-import { useRunDiscovery, useTransfers } from './api/queries'
+import { useIdentity } from './auth/permissions'
+import { useTransfers } from './api/queries'
 import { attNavy } from './theme'
-import { TimeAgo } from './components/chips'
 
 const { Sider, Header, Content } = Layout
 
@@ -35,26 +34,11 @@ export function Shell({ children }: { children: ReactNode }) {
   const navigate = useNavigate()
   const { who } = useIdentity()
 
-  // Run Discovery is the estate-wide primary action, so it asks the
-  // estate-wide question — which a caller scoped to some products cannot
-  // answer, and the control disables itself rather than failing on click.
-  const mayDiscover = useCan('operate')
-  const discover = useRunDiscovery()
-
   const { data: transfers } = useTransfers({ pageSize: 100 })
   const running = (transfers?.transfers ?? []).filter(
     (t) => t.state === 'RUNNING' || t.state === 'PLANNING' || t.state === 'READY',
   ).length
   const failing = (transfers?.transfers ?? []).filter((t) => t.state === 'FAILED').length
-
-  // The most recent completion is the closest honest answer to "when did we
-  // last look", without inventing a discovery timestamp the API does not serve
-  // estate-wide.
-  const lastActivity = (transfers?.transfers ?? [])
-    .map((t) => t.completedAt)
-    .filter((t): t is string => Boolean(t))
-    .sort()
-    .at(-1)
 
   const selected = NAV.map((n) => n.key)
     .filter((k) => (k === '/' ? location.pathname === '/' : location.pathname.startsWith(k)))
@@ -89,7 +73,7 @@ export function Shell({ children }: { children: ReactNode }) {
               {(who?.subject ?? 'A').slice(0, 2).toUpperCase()}
             </Avatar>
             <div style={{ lineHeight: 1.3 }}>
-              <div style={{ color: '#fff', fontSize: 13 }}>{who?.subject ?? '—'}</div>
+              <div style={{ color: '#fff', fontSize: 13 }}>{who?.subject ?? 'Not signed in'}</div>
               <div style={{ color: 'rgba(255,255,255,0.6)', fontSize: 11 }}>
                 {who?.authenticated ? (who.roles?.join(', ') || 'Product Owner') : 'Not signed in'}
               </div>
@@ -107,28 +91,6 @@ export function Shell({ children }: { children: ReactNode }) {
           }}
         >
           <Space size={16}>
-            <Typography.Text type="secondary" style={{ fontSize: 13 }}>
-              Last activity: <TimeAgo at={lastActivity} />
-            </Typography.Text>
-
-            <Tooltip
-              title={
-                mayDiscover
-                  ? 'Poll every vendor registry now, rather than waiting for the next scheduled scan.'
-                  : 'You do not have permission to run discovery.'
-              }
-            >
-              <Button
-                type="primary"
-                icon={<PlayCircleOutlined />}
-                disabled={!mayDiscover}
-                loading={discover.isPending}
-                onClick={() => discover.mutate(undefined)}
-              >
-                Run Discovery
-              </Button>
-            </Tooltip>
-
             <Tooltip title="Documentation">
               <Button type="text" icon={<QuestionCircleOutlined />} aria-label="Help" />
             </Tooltip>

@@ -10,7 +10,8 @@ import {
 } from '../api/queries'
 import { useCan } from '../auth/permissions'
 import { isLive, transferVersion, version } from '../domain/derive'
-import { formatDuration, UNKNOWN } from '../domain/format'
+import { formatDuration } from '../domain/format'
+import { NA, Value } from '../components/value'
 import { elapsedSeconds } from '../domain/format'
 import { ManagedInGit, TimeAgo } from '../components/chips'
 import { EmptyStateCard, ErrorState, PageHeader } from '../components/layout'
@@ -44,7 +45,7 @@ import type { RunDownloadResponse } from '../api/types'
  */
 
 function chainFlow(chain: string[] | undefined) {
-  if (!chain?.length) return <Typography.Text type="secondary">{UNKNOWN}</Typography.Text>
+  if (!chain?.length) return <NA reason="This download names no targets, so there is no chain to resolve." />
   return (
     <Space size={4} wrap>
       {chain.map((step, i) => (
@@ -293,9 +294,11 @@ export default function Downloads() {
                   width: 90,
                   align: 'right',
                   render: (_, t) =>
-                    isLive(t.state)
-                      ? formatDuration(elapsedSeconds(t.startedAt))
-                      : formatDuration(elapsedSeconds(t.startedAt, t.completedAt)),
+                    isLive(t.state) ? (
+                      <Value>{formatDuration(elapsedSeconds(t.startedAt))}</Value>
+                    ) : (
+                      <Value>{formatDuration(elapsedSeconds(t.startedAt, t.completedAt))}</Value>
+                    ),
                 },
                 { title: 'When', width: 90, render: (_, t) => <TimeAgo at={t.completedAt || t.createdAt} /> },
               ]}

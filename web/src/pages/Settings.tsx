@@ -3,7 +3,8 @@ import { Alert, Button, Card, Col, Descriptions, Row, Space, Table, Tag, Tooltip
 import { ThunderboltOutlined } from '@ant-design/icons'
 import { useDeepHealth, useProducts, useVersion, useWorkers } from '../api/queries'
 import { useIdentity } from '../auth/permissions'
-import { formatCount, formatRelative, UNKNOWN } from '../domain/format'
+import { formatCount, formatRelative } from '../domain/format'
+import { Value } from '../components/value'
 import { ManagedInGit, TimeAgo } from '../components/chips'
 import { ErrorState, PageHeader } from '../components/layout'
 import { mono, semantic } from '../theme'
@@ -81,10 +82,10 @@ export default function Settings() {
               />
             ) : (
               <Descriptions column={1} size="small">
-                <Descriptions.Item label="Signed in as">{who?.subject ?? UNKNOWN}</Descriptions.Item>
-                <Descriptions.Item label="Method">{who?.method ?? UNKNOWN}</Descriptions.Item>
+                <Descriptions.Item label="Signed in as"><Value>{who?.subject}</Value></Descriptions.Item>
+                <Descriptions.Item label="Method"><Value>{who?.method}</Value></Descriptions.Item>
                 <Descriptions.Item label="Tenant">{who?.tenant || 'All'}</Descriptions.Item>
-                <Descriptions.Item label="Roles">{who?.roles?.join(', ') || UNKNOWN}</Descriptions.Item>
+                <Descriptions.Item label="Roles"><Value>{who?.roles?.join(', ')}</Value></Descriptions.Item>
               </Descriptions>
             )}
 
@@ -107,13 +108,13 @@ export default function Settings() {
           <Card title="System health" loading={version.isLoading}>
             <Descriptions column={2} size="small">
               <Descriptions.Item label="Version">
-                <span style={{ fontFamily: mono }}>{version.data?.version ?? UNKNOWN}</span>
+                <span style={{ fontFamily: mono }}><Value>{version.data?.version}</Value></span>
               </Descriptions.Item>
-              <Descriptions.Item label="Component">{version.data?.component ?? UNKNOWN}</Descriptions.Item>
+              <Descriptions.Item label="Component"><Value>{version.data?.component}</Value></Descriptions.Item>
               <Descriptions.Item label="Commit">
-                <span style={{ fontFamily: mono, fontSize: 11 }}>{version.data?.commit ?? UNKNOWN}</span>
+                <span style={{ fontFamily: mono, fontSize: 11 }}><Value>{version.data?.commit}</Value></span>
               </Descriptions.Item>
-              <Descriptions.Item label="Built">{version.data?.buildDate ?? UNKNOWN}</Descriptions.Item>
+              <Descriptions.Item label="Built"><Value>{version.data?.buildDate}</Value></Descriptions.Item>
             </Descriptions>
 
             {health.data ? (
@@ -133,7 +134,7 @@ export default function Settings() {
                         ? <Tag color="green">OK</Tag>
                         : <Tag color="red">{c.status}</Tag>,
                   },
-                  { title: 'Detail', render: (_, c) => c.detail || '—' },
+                  { title: 'Detail', render: (_, c) => <Value>{c.detail}</Value> },
                 ]}
               />
             ) : (
@@ -160,7 +161,7 @@ export default function Settings() {
                   width: 150,
                   render: (_, p) => {
                     const seconds = p.sources?.[0]?.discovery?.intervalSeconds
-                    return seconds ? `${Math.round(seconds / 60)} minutes` : UNKNOWN
+                    return <Value>{seconds ? `${Math.round(seconds / 60)} minutes` : null}</Value>
                   },
                 },
                 {
@@ -182,7 +183,7 @@ export default function Settings() {
                   width: 120,
                   render: (_, p) => (
                     <Tooltip title="Identifies the exact configuration document this instance loaded, so you can confirm which revision is in force.">
-                      <span style={{ fontFamily: mono, fontSize: 11 }}>{p.configHash?.slice(0, 12) ?? UNKNOWN}</span>
+                      <span style={{ fontFamily: mono, fontSize: 11 }}><Value>{p.configHash?.slice(0, 12)}</Value></span>
                     </Tooltip>
                   ),
                 },
@@ -222,7 +223,7 @@ export default function Settings() {
                   {
                     title: 'Load',
                     width: 110,
-                    render: (_, w) => `${formatCount(w.activeJobs)} / ${formatCount(w.maxConcurrency)}`,
+                    render: (_, w) => `${formatCount(w.activeJobs) ?? 0} / ${formatCount(w.maxConcurrency) ?? 0}`,
                   },
                   {
                     title: 'Last heard',

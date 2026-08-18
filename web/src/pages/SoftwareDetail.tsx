@@ -13,7 +13,8 @@ import { useCan } from '../auth/permissions'
 import {
   deriveLifecycle, deriveLocations, deriveStatus, isLive, verification, version,
 } from '../domain/derive'
-import { bytes, formatBytes, formatCount, UNKNOWN } from '../domain/format'
+import { bytes, formatBytes, formatCount } from '../domain/format'
+import { NA, Value } from '../components/value'
 import {
   LocationChip, RepoLink, StatusBadge, TimeAgo, VerificationBadge,
 } from '../components/chips'
@@ -160,30 +161,26 @@ export default function SoftwareDetail() {
             <Card title="Release" loading={pkg.isLoading}>
               <Descriptions column={2} size="small">
                 <Descriptions.Item label="Vendor">
-                  {prod?.sources?.[0]?.vendor || prod?.sources?.[0]?.name || UNKNOWN}
+                  <Value>{prod?.sources?.[0]?.vendor || prod?.sources?.[0]?.name}</Value>
                 </Descriptions.Item>
                 <Descriptions.Item label="Version">
-                  <span style={{ fontFamily: mono }}>{p ? version(p) : UNKNOWN}</span>
+                  <span style={{ fontFamily: mono }}><Value>{p ? version(p) : null}</Value></span>
                 </Descriptions.Item>
                 <Descriptions.Item label="Published">
-                  {p?.publishedAt ? <TimeAgo at={p.publishedAt} /> : (
-                    <Tooltip title="The publisher set no build date, which the OCI specification permits.">
-                      <Typography.Text type="secondary">{UNKNOWN}</Typography.Text>
-                    </Tooltip>
-                  )}
+                  {p?.publishedAt
+                    ? <TimeAgo at={p.publishedAt} />
+                    : <NA reason="The publisher set no build date, which the OCI specification permits." />}
                 </Descriptions.Item>
                 <Descriptions.Item label="Discovered"><TimeAgo at={p?.discoveredAt} /></Descriptions.Item>
-                <Descriptions.Item label="Artifacts">{formatCount(p?.artifactCount)}</Descriptions.Item>
+                <Descriptions.Item label="Artifacts"><Value>{formatCount(p?.artifactCount)}</Value></Descriptions.Item>
                 <Descriptions.Item label="Total size">
-                  {p?.totalBytes ? formatBytes(p.totalBytes) : (
-                    <Tooltip title="The manifest tree has not been walked yet, so the size underneath is not known. Inspect the release to measure it.">
-                      <Typography.Text type="secondary">{UNKNOWN}</Typography.Text>
-                    </Tooltip>
-                  )}
+                  <Value reason="The manifest tree has not been walked yet, so the size underneath is not known. Measure the release to establish it.">
+                    {formatBytes(p?.totalBytes)}
+                  </Value>
                 </Descriptions.Item>
                 <Descriptions.Item label="Digest" span={2}>
                   <Typography.Text copyable style={{ fontFamily: mono, fontSize: 12 }}>
-                    {p?.manifestDigest ?? UNKNOWN}
+                    <Value>{p?.manifestDigest}</Value>
                   </Typography.Text>
                 </Descriptions.Item>
               </Descriptions>
@@ -206,8 +203,8 @@ export default function SoftwareDetail() {
               title="Contents"
               extra={
                 <Typography.Text type="secondary">
-                  {formatCount(p?.artifactCount)} artifacts
-                  {p?.totalBytes ? ` · ${formatBytes(p.totalBytes)}` : ''}
+                  <Value>{formatCount(p?.artifactCount)}</Value> artifacts
+                  {p?.totalBytes ? ` · ${formatBytes(p.totalBytes) ?? ''}` : ''}
                 </Typography.Text>
               }
               loading={artifacts.isLoading}
@@ -225,7 +222,7 @@ export default function SoftwareDetail() {
                           {groups[kind].count}
                         </Typography.Title>
                         <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-                          {groups[kind].bytes ? formatBytes(groups[kind].bytes) : UNKNOWN}
+                          <Value>{formatBytes(groups[kind].bytes || null)}</Value>
                         </Typography.Text>
                       </Space>
                     </Card>
@@ -252,8 +249,8 @@ export default function SoftwareDetail() {
                       scroll={{ x: 600 }}
                       columns={[
                         { title: 'Name', render: (_, a) => <span style={{ fontFamily: mono, fontSize: 12 }}>{a.tag || a.artifactType || kind}</span> },
-                        { title: 'Platform', width: 120, render: (_, a) => a.platform || UNKNOWN },
-                        { title: 'Size', width: 100, align: 'right', render: (_, a) => formatBytes(a.sizeBytes) },
+                        { title: 'Platform', width: 120, render: (_, a) => <Value>{a.platform}</Value> },
+                        { title: 'Size', width: 100, align: 'right', render: (_, a) => <Value>{formatBytes(a.sizeBytes)}</Value> },
                         {
                           title: 'Digest',
                           width: 200,
@@ -277,8 +274,8 @@ export default function SoftwareDetail() {
             <Card title="Saved (already present)">
               {savedBytes !== undefined ? (
                 <SavedPanel
-                  savedBytes={formatBytes(savedBytes)}
-                  totalBytes={p?.totalBytes ? formatBytes(p.totalBytes) : undefined}
+                  savedBytes={formatBytes(savedBytes) ?? ''}
+                  totalBytes={formatBytes(p?.totalBytes) ?? undefined}
                 />
               ) : (
                 // No number at all rather than a number-shaped dash: how much
@@ -297,7 +294,7 @@ export default function SoftwareDetail() {
                 <VerificationBadge state={p ? verification(p) : 'UNKNOWN'} />
                 {(p?.related ?? []).filter((r) => r.role === 'SIGNATURE').map((sig) => (
                   <Descriptions key={sig.digest} column={1} size="small">
-                    <Descriptions.Item label="Signature type">{sig.blobMediaType || sig.mediaType || UNKNOWN}</Descriptions.Item>
+                    <Descriptions.Item label="Signature type"><Value>{sig.blobMediaType || sig.mediaType}</Value></Descriptions.Item>
                     <Descriptions.Item label="Confirmed"><TimeAgo at={sig.resolvedAt} /></Descriptions.Item>
                   </Descriptions>
                 ))}
@@ -345,8 +342,8 @@ export default function SoftwareDetail() {
         </Typography.Paragraph>
         <Typography.Paragraph type="secondary" style={{ marginBottom: 0 }}>
           {p?.totalBytes
-            ? `Up to ${formatBytes(p.totalBytes)} across ${formatCount(p.artifactCount)} artifacts.`
-            : `${formatCount(p?.artifactCount)} artifacts. The total size has not been measured yet.`}
+            ? `Up to ${formatBytes(p.totalBytes) ?? ''} across ${formatCount(p.artifactCount) ?? 0} artifacts.`
+            : `${formatCount(p?.artifactCount) ?? 0} artifacts. The total size has not been measured yet.`}
         </Typography.Paragraph>
       </Modal>
     </>

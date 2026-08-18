@@ -1,14 +1,14 @@
 import { useState } from 'react'
 import { Button, Card, Space, Table, Tag, Tooltip, Typography } from 'antd'
-import { PlayCircleOutlined } from '@ant-design/icons'
 import { useParams } from 'react-router-dom'
-import { usePackages, useProducts, useRunDiscovery, useTransfers } from '../api/queries'
-import { useCan } from '../auth/permissions'
+import { usePackages, useProducts, useTransfers } from '../api/queries'
+import { RunDiscoveryButton } from '../components/discovery'
 import {
   deriveLifecycle, deriveLocations, deriveStatus, downloadSeconds, transferIndex,
   verification, version, withTransfers,
 } from '../domain/derive'
-import { formatDuration, UNKNOWN } from '../domain/format'
+import { formatDuration } from '../domain/format'
+import { NA, Value } from '../components/value'
 import {
   LocationChip, StatusBadge, TimeAgo, VerificationBadge, VersionChip,
 } from '../components/chips'
@@ -30,8 +30,6 @@ import type { Product } from '../api/types'
 function VersionHistory({ product }: { product: Product }) {
   const packages = usePackages(product.productId, { pageSize: 25 })
   const transfers = useTransfers({ product: product.productId, pageSize: 200 })
-  const mayOperate = useCan('operate', { product: product.productId })
-  const discover = useRunDiscovery()
 
   if (packages.isError) {
     return <ErrorState error={packages.error} retry={() => void packages.refetch()} />
@@ -45,16 +43,7 @@ function VersionHistory({ product }: { product: Product }) {
       <EmptyStateCard
         title={`No releases discovered for ${product.displayName || product.productId}`}
         explanation="Discovery polls this product's vendor registries on a schedule. Run it now to look immediately."
-        action={
-          <Button
-            type="primary"
-            disabled={!mayOperate}
-            loading={discover.isPending}
-            onClick={() => discover.mutate(product.productId)}
-          >
-            Run Discovery
-          </Button>
-        }
+        action={<RunDiscoveryButton products={[product]} product={product.productId} />}
       />
     )
   }
@@ -91,8 +80,8 @@ function VersionHistory({ product }: { product: Product }) {
           render: (_, pkg) => {
             const s = downloadSeconds(pkg)
             return s === undefined
-              ? <Typography.Text type="secondary">{UNKNOWN}</Typography.Text>
-              : formatDuration(s)
+              ? <NA reason="This release has not been downloaded." />
+              : <Value>{formatDuration(s)}</Value>
           },
         },
       ]}
@@ -103,8 +92,6 @@ function VersionHistory({ product }: { product: Product }) {
 export default function Products() {
   const { product: routeProduct } = useParams()
   const products = useProducts()
-  const discover = useRunDiscovery()
-  const mayOperate = useCan('operate')
 
   const [expanded, setExpanded] = useState<string[]>(routeProduct ? [routeProduct] : [])
 
@@ -124,19 +111,7 @@ export default function Products() {
       <PageHeader
         title="Products"
         description="What we track, and where each product has reached"
-        extra={
-          <Tooltip title={mayOperate ? undefined : 'You do not have permission to run discovery.'}>
-            <Button
-              type="primary"
-              icon={<PlayCircleOutlined />}
-              disabled={!mayOperate}
-              loading={discover.isPending}
-              onClick={() => discover.mutate(undefined)}
-            >
-              Run Discovery
-            </Button>
-          </Tooltip>
-        }
+        extra={<RunDiscoveryButton products={rows} />}
       />
 
       {!products.isLoading && rows.length === 0 ? (
@@ -177,9 +152,9 @@ export default function Products() {
               {
                 title: 'Vendor',
                 width: 130,
-                render: (_, p) => p.sources?.[0]?.vendor || p.sources?.[0]?.name || UNKNOWN,
+                render: (_, p) => <Value>{p.sources?.[0]?.vendor || p.sources?.[0]?.name}</Value>,
               },
-              { title: 'Owner', width: 160, render: (_, p) => p.owner || UNKNOWN },
+              { title: 'Owner', width: 160, render: (_, p) => <Value>{p.owner}</Value> },
               {
                 title: 'Locations',
                 width: 220,

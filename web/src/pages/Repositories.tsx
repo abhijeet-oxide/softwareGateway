@@ -4,6 +4,8 @@ import { CheckCircleFilled, CloseCircleFilled, SafetyOutlined, ThunderboltOutlin
 import { useConnectivity, useProducts } from '../api/queries'
 import { useCan } from '../auth/permissions'
 import { RepoLink } from '../components/chips'
+import { Value } from '../components/value'
+import { formatCount } from '../domain/format'
 import { EmptyStateCard, ErrorState, PageHeader } from '../components/layout'
 import { semantic } from '../theme'
 import type { Repository } from '../api/types'
@@ -103,7 +105,7 @@ export default function Repositories() {
                         {r.repo.enabled ? 'configured' : 'not configured'}
                       </Typography.Text>
                       <Typography.Text type="secondary">
-                        Concurrency: {r.repo.concurrency?.perRegistry ?? '—'} in flight
+                        Concurrency: <Value>{formatCount(r.repo.concurrency?.perRegistry)}</Value> in flight
                         {r.repo.concurrency?.requestsPerSecond
                           ? `, ${r.repo.concurrency.requestsPerSecond}/s ceiling`
                           : ''}
@@ -130,7 +132,7 @@ export default function Repositories() {
                                 <Tag color="red">Failed</Tag>
                               ),
                           },
-                          { title: 'Detail', render: (_, s) => s.detail || '—' },
+                          { title: 'Detail', render: (_, s) => <Value>{s.detail}</Value> },
                         ]}
                       />
                     ) : (

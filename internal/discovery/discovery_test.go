@@ -899,12 +899,13 @@ func TestScannerRejectsUnknownSource(t *testing.T) {
 
 // productWithRules wraps rules in the minimum product compileRules now takes.
 //
-// It takes a product rather than the block because a rule's spelling —
-// `download` or the older `autoDownload` — is a property of the document, and
-// the compiler reads whichever one is in use.
+// It takes a product rather than the block because a rule now resolves the
+// DOWNLOAD it triggers, which is a property of the whole document.
 func productWithRules(rules ...product.Rule) *product.Product {
 	return &product.Product{
 		Metadata: product.Metadata{Name: "vendor-a"},
-		Spec:     product.Spec{Download: product.Download{Rules: rules}},
+		Spec: product.Spec{
+			AutoDownload: product.AutoDownload{Enabled: true, Rules: rules},
+		},
 	}
 }

@@ -40,35 +40,7 @@ ALTER TABLE transfer_requests ADD COLUMN rule_revision TEXT NOT NULL DEFAULT '';
 ALTER TABLE transfer_requests ADD COLUMN trigger TEXT NOT NULL DEFAULT ''
     CHECK (trigger IN ('', 'discovery', 'manual', 'schedule'));
 
--- An operational override, deliberately NOT a change to `enabled` in Git.
---
--- Git keeps intent; this stops a rule now. The alternative was "open a pull
--- request and wait for Flux" as the only way to stop a rule at 02:00 with a
--- vendor pushing broken images — and a safe path that is not the fast path is
--- a path people route around.
-CREATE TABLE download_rule_suspensions (
-    id           BIGSERIAL   PRIMARY KEY,
-    product_id   BIGINT      NOT NULL REFERENCES products(id) ON DELETE CASCADE,
-    rule_name    TEXT        NOT NULL,
-    -- Required. A suspension with no reason is one nobody can safely lift.
-    reason       TEXT        NOT NULL,
-    actor        TEXT        NOT NULL DEFAULT '',
-    suspended_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-    -- NULL means indefinite, which is reported as a standing complaint rather
-    -- than prevented: an override that outlives its incident is the failure
-    -- mode here, and making it loud beats making it impossible.
-    until        TIMESTAMPTZ,
-    released_at  TIMESTAMPTZ,
-    released_by  TEXT        NOT NULL DEFAULT ''
-);
-
--- One LIVE suspension per rule; released ones accumulate as history.
-CREATE UNIQUE INDEX download_rule_suspensions_live_idx
-    ON download_rule_suspensions (product_id, rule_name)
-    WHERE released_at IS NULL;
-
 -- +goose Down
-DROP TABLE download_rule_suspensions;
 ALTER TABLE transfer_requests DROP COLUMN trigger;
 ALTER TABLE transfer_requests DROP COLUMN rule_revision;
 UPDATE transfers SET state = 'failed', failure_reason = 'downgraded from waiting'

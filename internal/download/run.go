@@ -22,6 +22,15 @@ import (
 // steps, because there is no path that skips a step because it was asked for by
 // a human. That property is what makes the audit trail worth reading.
 
+// downloadLabel names a download for an error message. A product with one
+// download does not have to name it, so there is not always a name to use.
+func downloadLabel(d product.Download) string {
+	if d.Name != "" {
+		return d.Name
+	}
+	return "the default download"
+}
+
 // Trigger records how a run started, so a request from a rule that fired on
 // its own is distinguishable from one somebody asked for.
 type Trigger string
@@ -40,24 +49,24 @@ type ResolvedStep struct {
 	DependsOn string // the NAME of the step this one waits for
 }
 
-// Resolve closes a rule's destinations over `mirror.from`, orders them, and
-// resolves each to its catalog row.
-func Resolve(p *product.Product, rule product.Rule, repoIDs map[string]int64) ([]ResolvedStep, error) {
-	chain, err := Derive(p, rule.Targets)
+// Resolve closes a download's destinations over `mirror.from`, orders them,
+// and resolves each to its catalog row.
+func Resolve(p *product.Product, d product.Download, repoIDs map[string]int64) ([]ResolvedStep, error) {
+	chain, err := Derive(p, d.Targets)
 	if err != nil {
-		return nil, fmt.Errorf("rule %q: %w", rule.Name, err)
+		return nil, fmt.Errorf("download %q: %w", downloadLabel(d), err)
 	}
 
 	out := make([]ResolvedStep, 0, len(chain.Steps))
 	for _, step := range chain.Steps {
 		t, ok := p.Target(step.Target)
 		if !ok {
-			return nil, fmt.Errorf("rule %q names unknown target %q", rule.Name, step.Target)
+			return nil, fmt.Errorf("download %q names unknown target %q", downloadLabel(d), step.Target)
 		}
 		if t.PromotionOnly {
 			return nil, fmt.Errorf(
-				"rule %q reaches target %q, which is promotionOnly: it can only be reached by promotion from another target",
-				rule.Name, step.Target)
+				"download %q reaches target %q, which is promotionOnly: it can only be reached by promotion from another target",
+				downloadLabel(d), step.Target)
 		}
 		id, ok := repoIDs[step.Target]
 		if !ok {
@@ -118,8 +127,9 @@ func Open(
 	}
 
 	detail, _ := json.Marshal(map[string]any{
-		"rule": req.RuleName, "tag": req.Tag, "chain": Names(req.Steps),
-		"priority": req.Priority, "trigger": string(req.Trigger),
+		"download": req.DownloadName, "rule": req.RuleName, "tag": req.Tag,
+		"chain": Names(req.Steps), "priority": req.Priority,
+		"trigger": string(req.Trigger),
 	})
 	if err := packages.InsertAudit(ctx, tx, store.AuditRow{
 		EventType:   "DownloadRunRequested",
@@ -143,6 +153,11 @@ type Request struct {
 	SourceRepoID int64
 	Tag          string
 
+	// DownloadName is which configured download ran, empty for the default.
+	DownloadName string
+	// RuleName is the auto-download rule that triggered it, empty for a
+	// manual download. The two are separate fields because they answer
+	// different questions: what ran, and what asked for it.
 	RuleName string
 	Trigger  Trigger
 	Origin   string
@@ -180,25 +195,28 @@ func RepoIDs(steps []ResolvedStep) []int64 {
 	return out
 }
 
-// Revision fingerprints a rule's resolved fields.
+// Revision fingerprints a DOWNLOAD's resolved fields.
 //
-// It exists so that EDITING a rule creates a new run rather than being
+// It exists so that editing a download creates a new run rather than being
 // swallowed by the old one's idempotency key. The failure otherwise is
 // somebody tightening verify.policy from warn to enforce, re-running, getting
 // "already exists", and concluding the stricter policy was applied when
 // nothing ran at all.
-func Revision(r product.Rule) string {
+//
+// It covers the download and NOT the rule that triggered it, because the run
+// is the download: two rules pointing at the same download produce the same
+// work, and a revision that included the rule's pattern would make them
+// different for no reason a reader could act on.
+func Revision(d product.Download) string {
 	// Built from an explicit ordered shape rather than from the struct, so
-	// adding a field to Rule does not silently invalidate every stored
+	// adding a field to Download does not silently invalidate every stored
 	// revision in the estate on the next deploy.
 	parts := []string{
-		"pattern=" + r.TagPattern,
-		"targets=" + strings.Join(sorted(r.Targets), ","),
-		"sources=" + strings.Join(sorted(r.Sources), ","),
-		"priority=" + fmt.Sprint(r.EffectivePriority()),
-		"before=" + boolPtr(r.VerifiesBefore()),
-		"after=" + boolPtr(r.VerifiesAfter()),
-		"policy=" + string(r.VerificationPolicy()),
+		"targets=" + strings.Join(sorted(d.Targets), ","),
+		"priority=" + fmt.Sprint(d.EffectivePriority()),
+		"before=" + boolPtr(d.VerifiesBefore()),
+		"after=" + boolPtr(d.VerifiesAfter()),
+		"policy=" + string(d.VerificationPolicy()),
 	}
 	sum := sha256.Sum256([]byte(strings.Join(parts, "\x00")))
 	return hex.EncodeToString(sum[:])[:16]
@@ -233,21 +251,24 @@ func requestIDFrom(key string) string {
 	return "req_" + key[:32]
 }
 
-// KeyFor is the idempotency key of one package through one rule.
+// KeyFor is the idempotency key of one package through one download.
 //
-// It covers the DERIVED chain, so a rule naming only the tail and one naming
-// every hop key identically — they are the same work. And it covers the rule's
-// revision, so an edited rule opens a new run rather than being swallowed by
-// the old one's key.
-func KeyFor(pkg store.PackageRow, rule product.Rule, steps []ResolvedStep) string {
+// It covers the DERIVED chain, so a download naming only the tail and one
+// naming every hop key identically — they are the same work. And it covers the
+// download's revision, so an edit opens a new run rather than being swallowed
+// by the old key.
+//
+// The rule is NOT in it. Two rules that trigger the same download for the same
+// package are asking for one piece of work, and keying them apart would move
+// the bytes twice.
+func KeyFor(pkg store.PackageRow, d product.Download, steps []ResolvedStep) string {
 	parts := []string{
 		"replicate",
 		fmt.Sprint(pkg.ID),
 		fmt.Sprint(pkg.SourceRepoID),
 		fmt.Sprint(RepoIDs(steps)),
-		rule.Name,
-		Revision(rule),
-		fmt.Sprint(rule.EffectivePriority()),
+		Revision(d),
+		fmt.Sprint(d.EffectivePriority()),
 	}
 	sum := sha256.Sum256([]byte(strings.Join(parts, "\x00")))
 	return hex.EncodeToString(sum[:])

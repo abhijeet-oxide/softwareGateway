@@ -66,24 +66,7 @@ ALTER TABLE transfer_requests ADD COLUMN rule_revision TEXT NOT NULL DEFAULT '';
 ALTER TABLE transfer_requests ADD COLUMN trigger TEXT NOT NULL DEFAULT ''
     CHECK (trigger IN ('', 'discovery', 'manual', 'schedule'));
 
-CREATE TABLE download_rule_suspensions (
-    id           INTEGER PRIMARY KEY AUTOINCREMENT,
-    product_id   INTEGER NOT NULL REFERENCES products(id) ON DELETE CASCADE,
-    rule_name    TEXT    NOT NULL,
-    reason       TEXT    NOT NULL,
-    actor        TEXT    NOT NULL DEFAULT '',
-    suspended_at TEXT    NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
-    until        TEXT,
-    released_at  TEXT,
-    released_by  TEXT    NOT NULL DEFAULT ''
-);
-
-CREATE UNIQUE INDEX download_rule_suspensions_live_idx
-    ON download_rule_suspensions (product_id, rule_name)
-    WHERE released_at IS NULL;
-
 -- +goose Down
-DROP TABLE download_rule_suspensions;
 UPDATE transfers SET state = 'failed', failure_reason = 'downgraded from waiting'
  WHERE state = 'waiting';
 UPDATE transfers SET state = 'failed', failure_reason = 'downgraded from skipped'

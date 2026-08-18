@@ -244,12 +244,16 @@ func toAPIProduct(p *product.Product) v1.Product {
 
 	out.AutoDownload = v1.AutoDownloadSummary{Enabled: p.Spec.AutoDownload.Enabled}
 	for _, rule := range p.Spec.AutoDownload.Rules {
-		out.AutoDownload.Rules = append(out.AutoDownload.Rules, v1.AutoDownloadRule{
-			Name:       rule.Name,
-			TagPattern: rule.TagPattern,
-			Targets:    rule.Targets,
-			Priority:   rule.EffectivePriority(),
-		})
+		// Targets and priority come from the DOWNLOAD the rule triggers, not
+		// from the rule: a rule holds a pattern, and where things go is the
+		// download's business. Resolving here keeps this summary answering the
+		// question it always answered.
+		summary := v1.AutoDownloadRule{Name: rule.Name, TagPattern: rule.TagPattern}
+		if d, err := p.DownloadFor(rule); err == nil {
+			summary.Targets = d.Targets
+			summary.Priority = d.EffectivePriority()
+		}
+		out.AutoDownload.Rules = append(out.AutoDownload.Rules, summary)
 	}
 
 	out.Verification = v1.VerificationSummary{

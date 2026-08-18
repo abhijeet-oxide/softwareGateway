@@ -99,6 +99,7 @@ func newRootCommand() *cobra.Command {
 		newPackagesCommand(),
 		newTransfersCommand(),
 		newTargetsCommand(),
+		newDownloadsCommand(),
 		newRulesCommand(),
 		newCompareCommand(),
 		newHealthCommand(),

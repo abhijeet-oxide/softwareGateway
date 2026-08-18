@@ -2,212 +2,218 @@ package download
 
 import (
 	"context"
-	"database/sql"
 	"fmt"
 	"log/slog"
 	"regexp"
-	"time"
 
 	"github.com/abhijeet-oxide/softwareGateway/internal/product"
 	"github.com/abhijeet-oxide/softwareGateway/internal/store"
 )
 
-// Service is the download-rule use case: look, run, suspend.
+// Service is the download use case: look at what is configured, and run it.
 //
-// The API and the CLI are both clients of it, which is what keeps them from
-// disagreeing about what running a rule means — and it shares Resolve and Open
-// with discovery, so there is no path that skips a step because a person asked
-// for it rather than a scan.
+// The API and the CLI are both clients of it, and it shares Resolve and Open
+// with discovery — so a download somebody types and a download a rule fires are
+// the same operation, planned by the same code, gated the same way.
+
 type Service struct {
 	packages *store.Packages
-	rules    RuleStore
+	products ProductIDs
 	log      *slog.Logger
-	now      func() time.Time
 }
 
-// RuleStore is the persistence a rule's operational state needs.
-//
-// A consumer-defined interface: this package uses four calls, not the whole
-// replication store that happens to hold them.
-type RuleStore interface {
+// ProductIDs resolves a configured product name to its catalog row.
+type ProductIDs interface {
 	ProductID(ctx context.Context, name string) (int64, error)
-	Suspensions(ctx context.Context, productName string) (map[string]store.Suspension, error)
-	Suspend(ctx context.Context, productID int64, rule, reason, actor string, until sql.NullString) error
-	Resume(ctx context.Context, productID int64, rule, actor string) (bool, error)
 }
 
 // NewService builds one.
-func NewService(packages *store.Packages, rules RuleStore, log *slog.Logger) *Service {
+func NewService(packages *store.Packages, products ProductIDs, log *slog.Logger) *Service {
 	if log == nil {
 		log = slog.Default()
 	}
-	return &Service{packages: packages, rules: rules, log: log, now: time.Now}
+	return &Service{packages: packages, products: products, log: log}
 }
 
-// WithClock replaces the clock. Tests only.
-func (s *Service) WithClock(now func() time.Time) *Service {
-	s.now = now
-	return s
-}
+// DownloadStatus is one configured download and the chain it resolves to.
+type DownloadStatus struct {
+	Product  string
+	Download product.Download
 
-// RuleStatus is everything known about one rule.
-type RuleStatus struct {
-	Product string
-	Rule    product.Rule
-
-	// Chain is the rule's destinations, closed and ordered. Present even when
-	// the rule is suspended, because "what would this do" is the question a
-	// suspended rule most needs to answer.
+	// Chain is the destinations closed over `mirror.from` and ordered.
 	Chain Chain
-	// ChainError is why the chain could not be derived, if it could not.
-	// Reported rather than returned, so one broken rule does not blank a
-	// listing of ten.
+	// ChainError is why it could not be derived. Reported rather than
+	// returned, so one broken download does not blank a listing.
 	ChainError string
 
-	// Suspended is the operational override, which is NOT the configured
-	// `enabled`. Both are reported, because both are true and a page showing
-	// only one of them is lying by omission.
-	Suspended       bool
-	SuspendedReason string
-	SuspendedBy     string
-	SuspendedUntil  string
-
+	Default  bool
 	Revision string
 }
 
-// Runnable reports whether the rule would act if asked.
-func (r RuleStatus) Runnable() bool { return r.Rule.IsEnabled() && !r.Suspended }
-
-// List returns every rule of a product with its derived chain and its
-// operational state.
-func (s *Service) List(ctx context.Context, p *product.Product) ([]RuleStatus, error) {
-	suspensions := map[string]store.Suspension{}
-	if s.rules != nil {
-		found, err := s.rules.Suspensions(ctx, p.Metadata.Name)
-		if err != nil {
-			// Reported rather than fatal: the rules are configuration and are
-			// readable without the database. Hiding them because an override
-			// lookup failed would answer a question nobody asked.
-			s.log.WarnContext(ctx, "could not read rule suspensions",
-				"product", p.Metadata.Name, "error", err)
-		} else {
-			suspensions = found
+// Downloads returns every configured download with its resolved chain.
+//
+// A product that declares none still gets one entry: the implicit download to
+// its default target, which is what a rule naming nothing has always meant.
+// Showing it beats showing an empty list and leaving the reader to wonder what
+// `transferctl download` would actually do.
+func (s *Service) Downloads(_ context.Context, p *product.Product) []DownloadStatus {
+	declared := p.Downloads()
+	if len(declared) == 0 {
+		if t, ok := p.DefaultTarget(); ok {
+			declared = []product.Download{{Targets: []string{t.Name}}}
 		}
 	}
 
-	out := make([]RuleStatus, 0, len(p.DownloadRules()))
-	for _, r := range p.DownloadRules() {
-		status := RuleStatus{Product: p.Metadata.Name, Rule: r, Revision: Revision(r)}
-		chain, err := Derive(p, r.Targets)
+	out := make([]DownloadStatus, 0, len(declared))
+	for _, d := range declared {
+		status := DownloadStatus{
+			Product: p.Metadata.Name, Download: d,
+			Default: d.Default || len(declared) == 1, Revision: Revision(d),
+		}
+		chain, err := Derive(p, d.Targets)
 		if err != nil {
 			status.ChainError = err.Error()
 		} else {
 			status.Chain = chain
 		}
-		if sus, ok := suspensions[r.Name]; ok {
-			status.Suspended = true
-			status.SuspendedReason = sus.Reason
-			status.SuspendedBy = sus.Actor
-			status.SuspendedUntil = sus.Until.String
+		out = append(out, status)
+	}
+	return out
+}
+
+// DownloadNamed returns one download's status, or the default when name is
+// empty.
+func (s *Service) DownloadNamed(ctx context.Context, p *product.Product, name string) (DownloadStatus, error) {
+	all := s.Downloads(ctx, p)
+	for _, d := range all {
+		switch {
+		case name != "" && d.Download.Name == name:
+			return d, nil
+		case name == "" && d.Default:
+			return d, nil
+		}
+	}
+	if name == "" {
+		return DownloadStatus{}, fmt.Errorf(
+			"product %q declares no default download and no default target", p.Metadata.Name)
+	}
+	return DownloadStatus{}, fmt.Errorf("product %q has no download %q", p.Metadata.Name, name)
+}
+
+// RuleStatus is one auto-download rule and the download it triggers.
+type RuleStatus struct {
+	Product string
+	Rule    product.Rule
+
+	// Download is what the rule triggers, resolved. A rule carrying the older
+	// inline `targets` describes its own, which is why this is a value rather
+	// than a name.
+	Download product.Download
+	// DownloadName is what to call it on screen. Empty for an inline one.
+	DownloadName string
+
+	Chain      Chain
+	ChainError string
+}
+
+// Rules returns every auto-download rule with the download it triggers.
+func (s *Service) Rules(_ context.Context, p *product.Product) []RuleStatus {
+	out := make([]RuleStatus, 0, len(p.Spec.AutoDownload.Rules))
+	for _, r := range p.Spec.AutoDownload.Rules {
+		status := RuleStatus{Product: p.Metadata.Name, Rule: r, DownloadName: r.Download}
+		d, err := p.DownloadFor(r)
+		if err != nil {
+			status.ChainError = err.Error()
+			out = append(out, status)
+			continue
+		}
+		status.Download = d
+		if d.Name != "" {
+			status.DownloadName = d.Name
+		}
+		chain, derr := Derive(p, d.Targets)
+		if derr != nil {
+			status.ChainError = derr.Error()
+		} else {
+			status.Chain = chain
 		}
 		out = append(out, status)
 	}
-	return out, nil
+	return out
 }
 
-// Get returns one rule's status.
-func (s *Service) Get(ctx context.Context, p *product.Product, name string) (RuleStatus, error) {
-	all, err := s.List(ctx, p)
-	if err != nil {
-		return RuleStatus{}, err
-	}
-	for _, r := range all {
-		if r.Rule.Name == name {
-			return r, nil
-		}
-	}
-	return RuleStatus{}, fmt.Errorf("product %q has no download rule %q", p.Metadata.Name, name)
-}
-
-// RunOptions govern a manual run.
+// RunOptions govern a manual download.
 type RunOptions struct {
-	// Tags names what to run. Empty means every discovered package the rule's
-	// pattern matches.
-	Tags []string
+	// Download names which configured download to use. Empty means the
+	// default.
+	Download string
 	// ValidateOnly renders the plan and creates nothing.
 	ValidateOnly bool
 	Actor        string
 }
 
-// RunResult is what a run did, or would do.
+// RunResult is what a download did, or would do.
 type RunResult struct {
-	Rule    string
-	Chain   Chain
-	Matched []string
-	// Created names the requests opened. Empty for a dry run, and empty when
-	// every match was already requested — which is a normal outcome, not a
-	// failure.
-	Created []string
-	// AlreadyRequested is the matches whose idempotency key already existed.
+	Download  string
+	Chain     Chain
+	Requested []string
+	// Created names the requests opened; AlreadyRequested is the packages
+	// whose idempotency key already existed, which is a normal outcome rather
+	// than a failure.
+	Created          []string
 	AlreadyRequested []string
 	ValidateOnly     bool
 }
 
-// Run triggers a rule by hand.
+// Run downloads named software, by hand.
 //
-// The same request, the same derived chain and the same ordered steps as a
-// discovery run. A manual trigger changes who is recorded as the actor and
-// nothing else — there is no path that skips a step because a person asked.
+// It consults NO pattern. Patterns belong to auto-download rules, which decide
+// what to download when nobody is asking; here somebody is asking, and they
+// named the software. A pattern checked at this point could only disagree with
+// the person typing.
 func (s *Service) Run(
-	ctx context.Context, p *product.Product, name string, repoIDs map[string]int64, opts RunOptions,
+	ctx context.Context, p *product.Product, tags []string,
+	repoIDs map[string]int64, opts RunOptions,
 ) (*RunResult, error) {
-	status, err := s.Get(ctx, p, name)
+	if len(tags) == 0 {
+		return nil, fmt.Errorf("name at least one package to download")
+	}
+
+	status, err := s.DownloadNamed(ctx, p, opts.Download)
 	if err != nil {
 		return nil, err
-	}
-	rule := status.Rule
-
-	if !rule.TriggeredBy(product.TriggerManual) {
-		return nil, fmt.Errorf(
-			"rule %q does not accept a manual trigger; add `manual` to its trigger list", name)
-	}
-	if !rule.IsEnabled() {
-		return nil, fmt.Errorf("rule %q is disabled in configuration", name)
-	}
-	if status.Suspended {
-		return nil, fmt.Errorf("rule %q is suspended: %s", name, status.SuspendedReason)
 	}
 	if status.ChainError != "" {
-		return nil, fmt.Errorf("rule %q: %s", name, status.ChainError)
+		return nil, fmt.Errorf("%s: %s", downloadLabel(status.Download), status.ChainError)
 	}
 
-	steps, err := Resolve(p, rule, repoIDs)
+	steps, err := Resolve(p, status.Download, repoIDs)
 	if err != nil {
 		return nil, err
 	}
 
-	matches, err := s.match(ctx, p, rule, opts.Tags)
+	packages, err := s.find(ctx, p, tags)
 	if err != nil {
 		return nil, err
 	}
 
 	res := &RunResult{
-		Rule: name, Chain: status.Chain, ValidateOnly: opts.ValidateOnly,
+		Download: downloadLabel(status.Download), Chain: status.Chain,
+		ValidateOnly: opts.ValidateOnly,
 	}
-	for _, m := range matches {
-		res.Matched = append(res.Matched, m.Tag)
+	for _, pkg := range packages {
+		res.Requested = append(res.Requested, pkg.Tag)
 	}
-	if opts.ValidateOnly || len(matches) == 0 {
+	if opts.ValidateOnly {
 		return res, nil
 	}
 
-	productID, err := s.rules.ProductID(ctx, p.Metadata.Name)
+	productID, err := s.products.ProductID(ctx, p.Metadata.Name)
 	if err != nil {
 		return nil, err
 	}
-
-	for _, pkg := range matches {
-		id, created, err := s.open(ctx, p, productID, rule, steps, pkg, opts.Actor)
+	for _, pkg := range packages {
+		id, created, err := s.open(ctx, p, productID, status.Download, steps, pkg, opts.Actor)
 		if err != nil {
 			return nil, err
 		}
@@ -222,7 +228,7 @@ func (s *Service) Run(
 
 func (s *Service) open(
 	ctx context.Context, p *product.Product, productID int64,
-	rule product.Rule, steps []ResolvedStep, pkg store.PackageRow, actor string,
+	d product.Download, steps []ResolvedStep, pkg store.PackageRow, actor string,
 ) (string, bool, error) {
 	tx, err := s.packages.DB().BeginTx(ctx, nil)
 	if err != nil {
@@ -236,12 +242,12 @@ func (s *Service) open(
 		PackageID:      pkg.ID,
 		SourceRepoID:   pkg.SourceRepoID,
 		Tag:            pkg.Tag,
-		RuleName:       rule.Name,
+		DownloadName:   d.Name,
 		Trigger:        TriggerManual,
 		Origin:         "manual",
 		RequestedBy:    actor,
-		Priority:       rule.EffectivePriority(),
-		IdempotencyKey: KeyFor(pkg, rule, steps),
+		Priority:       d.EffectivePriority(),
+		IdempotencyKey: KeyFor(pkg, d, steps),
 		Steps:          steps,
 	})
 	if err != nil {
@@ -253,73 +259,64 @@ func (s *Service) open(
 	return id, created, nil
 }
 
-// match finds the packages a run would act on.
-func (s *Service) match(
-	ctx context.Context, p *product.Product, rule product.Rule, tags []string,
-) ([]store.PackageRow, error) {
-	pattern, err := regexp.Compile(rule.TagPattern)
-	if err != nil {
-		return nil, fmt.Errorf("rule %q pattern %q: %w", rule.Name, rule.TagPattern, err)
-	}
-
-	filter := store.ListPackagesFilter{ProductName: p.Metadata.Name}
-	rows, err := s.packages.ListPackages(ctx, filter)
+// find resolves named tags to discovered packages.
+//
+// A tag nobody has discovered is an error rather than a silent skip: somebody
+// typed it, and telling them it moved nothing without saying why is the least
+// useful possible answer.
+func (s *Service) find(ctx context.Context, p *product.Product, tags []string) ([]store.PackageRow, error) {
+	rows, err := s.packages.ListPackages(ctx, store.ListPackagesFilter{ProductName: p.Metadata.Name})
 	if err != nil {
 		return nil, err
 	}
 
-	wanted := map[string]bool{}
-	for _, t := range tags {
-		wanted[t] = true
+	byTag := map[string]store.PackageRow{}
+	for _, row := range rows {
+		byTag[row.Tag] = row
+		if row.DisplayTag != "" {
+			// Both spellings resolve, so anything a listing showed can be
+			// pasted back.
+			byTag[row.DisplayTag] = row
+		}
 	}
 
-	var out []store.PackageRow
-	for _, row := range rows {
-		// An explicitly named tag STILL has to match the rule's pattern.
-		// Running `ga-releases` for an RC would otherwise put a release
-		// candidate through the GA chain — which is exactly what the pattern
-		// is for, and a manual trigger is not a licence to bypass it.
-		if !pattern.MatchString(row.Tag) {
-			continue
-		}
-		if len(wanted) > 0 && !wanted[row.Tag] {
-			continue
+	out := make([]store.PackageRow, 0, len(tags))
+	for _, tag := range tags {
+		row, ok := byTag[tag]
+		if !ok {
+			return nil, fmt.Errorf(
+				"no discovered package %q in product %q; `transferctl packages list %s` shows what there is",
+				tag, p.Metadata.Name, p.Metadata.Name)
 		}
 		out = append(out, row)
 	}
 	return out, nil
 }
 
-// Suspend stops a rule now, without editing Git.
-func (s *Service) Suspend(ctx context.Context, p *product.Product, name, reason, actor string, until sql.NullString) error {
-	if _, err := s.Get(ctx, p, name); err != nil {
-		return err
+// Matches reports which discovered packages an auto-download rule would select.
+//
+// Read-only, and the only place a pattern is evaluated outside discovery. It
+// backs "what would this rule pick up", which is a question about the RULE
+// rather than about downloading.
+func (s *Service) Matches(ctx context.Context, p *product.Product, ruleName string) ([]string, error) {
+	rule, ok := p.Rule(ruleName)
+	if !ok {
+		return nil, fmt.Errorf("product %q has no auto-download rule %q", p.Metadata.Name, ruleName)
 	}
-	productID, err := s.rules.ProductID(ctx, p.Metadata.Name)
+	pattern, err := regexp.Compile(rule.TagPattern)
 	if err != nil {
-		return err
+		return nil, fmt.Errorf("rule %q pattern %q: %w", ruleName, rule.TagPattern, err)
 	}
-	if err := s.rules.Suspend(ctx, productID, name, reason, actor, until); err != nil {
-		return err
-	}
-	s.log.InfoContext(ctx, "download rule suspended",
-		"product", p.Metadata.Name, "rule", name, "actor", actor, "reason", reason)
-	return nil
-}
 
-// Resume lifts a suspension.
-func (s *Service) Resume(ctx context.Context, p *product.Product, name, actor string) (bool, error) {
-	productID, err := s.rules.ProductID(ctx, p.Metadata.Name)
+	rows, err := s.packages.ListPackages(ctx, store.ListPackagesFilter{ProductName: p.Metadata.Name})
 	if err != nil {
-		return false, err
+		return nil, err
 	}
-	lifted, err := s.rules.Resume(ctx, productID, name, actor)
-	if err != nil {
-		return false, err
+	var out []string
+	for _, row := range rows {
+		if pattern.MatchString(row.Tag) {
+			out = append(out, row.Tag)
+		}
 	}
-	if lifted {
-		s.log.InfoContext(ctx, "download rule resumed",
-			"product", p.Metadata.Name, "rule", name, "actor", actor)
-	}
-	return lifted, nil
+	return out, nil
 }

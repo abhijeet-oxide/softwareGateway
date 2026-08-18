@@ -63,7 +63,7 @@ function VersionHistory({ product }: { product: Product }) {
           fixed: 'left',
           width: 120,
           render: (_, pkg) => (
-            <VersionChip product={product.productId} version={version(pkg)} reference={pkg.tag} />
+            <VersionChip product={product.productId} version={version(pkg)} pkg={pkg} />
           ),
         },
         { title: 'Published', width: 110, render: (_, pkg) => <TimeAgo at={pkg.publishedAt || pkg.discoveredAt} /> },
@@ -93,6 +93,7 @@ function VersionHistory({ product }: { product: Product }) {
 export default function Products() {
   const { product: routeProduct } = useParams()
   const products = useProducts()
+  const [showDisabled, setShowDisabled] = useState(false)
 
   const [expanded, setExpanded] = useState<string[]>(routeProduct ? [routeProduct] : [])
 
@@ -105,13 +106,29 @@ export default function Products() {
     )
   }
 
-  const rows = products.data?.products ?? []
+  const all = products.data?.products ?? []
+  const disabledCount = all.filter((p) => !p.enabled).length
+
+  // A disabled product still loads, still validates and is still listed by the
+  // API — it simply does nothing. That makes it worth keeping and worth hiding:
+  // on a page answering "where has each product reached", something that has
+  // reached nowhere on purpose is noise until somebody asks for it.
+  const rows = showDisabled ? all : all.filter((p) => p.enabled)
 
   return (
     <>
       <PageHeader
         title="Products"
         description="What we track, and where each product has reached"
+        meta={
+          disabledCount > 0 && (
+            <Button onClick={() => setShowDisabled((v) => !v)}>
+              {showDisabled
+                ? `Hide disabled (${disabledCount})`
+                : `Show disabled products (${disabledCount})`}
+            </Button>
+          )
+        }
         extra={<RunDiscoveryButton products={rows} />}
       />
 
@@ -141,7 +158,16 @@ export default function Products() {
                 width: 200,
                 render: (_, p) => (
                   <Space direction="vertical" size={0}>
-                    <Typography.Text strong>{p.displayName || p.productId}</Typography.Text>
+                    <Space size={6}>
+                      <Typography.Text strong={p.enabled} type={p.enabled ? undefined : 'secondary'}>
+                        {p.displayName || p.productId}
+                      </Typography.Text>
+                      {!p.enabled && (
+                        <Tooltip title="This product is switched off in configuration. It is still loaded and validated, and it does nothing — nothing is discovered, nothing is downloaded.">
+                          <Tag style={{ marginInlineEnd: 0 }}>Disabled</Tag>
+                        </Tooltip>
+                      )}
+                    </Space>
                     {p.description && (
                       <Typography.Text type="secondary" style={{ fontSize: 12 }}>
                         {p.description}
@@ -157,7 +183,7 @@ export default function Products() {
               },
               { title: 'Owner', width: 160, render: (_, p) => <Value>{p.owner}</Value> },
               {
-                title: 'Locations',
+                title: 'Repositories',
                 width: 220,
                 render: (_, p) => (
                   <Space size={4} wrap>
@@ -166,21 +192,36 @@ export default function Products() {
                 ),
               },
               {
+                title: 'Discovery',
+                width: 130,
+                render: (_, p) => {
+                  // Discovery is enabled per SOURCE, not per product. This
+                  // column previously rendered the product's own `enabled`
+                  // flag, which is a different fact under the wrong heading.
+                  const polled = (p.sources ?? []).filter((src) => src.discovery?.enabled)
+                  if (polled.length === 0) return <Tag>Disabled</Tag>
+                  return (
+                    <Tooltip title={`Polled sources: ${polled.map((src) => src.name).join(', ')}`}>
+                      <Tag color="green" style={{ marginInlineEnd: 0 }}>
+                        {polled.length} {polled.length === 1 ? 'source' : 'sources'}
+                      </Tag>
+                    </Tooltip>
+                  )
+                },
+              },
+              {
                 title: 'Auto-download',
                 width: 140,
                 render: (_, p) =>
                   p.autoDownload?.enabled ? (
-                    <Tag color="blue">{p.autoDownload.rules?.length ?? 0} rules</Tag>
+                    <Tag color="blue" style={{ marginInlineEnd: 0 }}>
+                      {p.autoDownload.rules?.length ?? 0} rules
+                    </Tag>
                   ) : (
                     <Tooltip title="Automatic downloads are switched off in configuration. Downloading by hand is unaffected.">
-                      <Tag>Disabled in configuration</Tag>
+                      <Tag style={{ marginInlineEnd: 0 }}>Disabled</Tag>
                     </Tooltip>
                   ),
-              },
-              {
-                title: 'Discovery',
-                width: 120,
-                render: (_, p) => (p.enabled ? <Tag color="green">Enabled</Tag> : <Tag>Disabled</Tag>),
               },
             ]}
           />

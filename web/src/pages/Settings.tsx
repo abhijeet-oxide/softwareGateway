@@ -175,7 +175,7 @@ export default function Settings() {
                         {p.verification.atDestination && <Tag>at destination</Tag>}
                       </Space>
                     ) : (
-                      <Tag>Disabled in configuration</Tag>
+                      <Tag style={{ marginInlineEnd: 0 }}>Disabled</Tag>
                     ),
                 },
                 {

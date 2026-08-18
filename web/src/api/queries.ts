@@ -128,25 +128,52 @@ export function usePackages(product: string | undefined, filters: PackageFilters
   })
 }
 
-export function usePackage(product: string | undefined, ref: string | undefined) {
+/**
+ * One release.
+ *
+ * `repository` scopes the lookup, and for most vendors it is REQUIRED rather
+ * than optional: the same version tag is published into every repository of a
+ * product, so the tag alone matches ten packages and the API answers with an
+ * ambiguity error rather than a guess.
+ */
+export function usePackage(
+  product: string | undefined, ref: string | undefined, repository?: string,
+) {
   return useQuery({
-    queryKey: ['package', product, ref],
+    queryKey: ['package', product, ref, repository],
     queryFn: () => {
       const { segment, query: q } = packageRef(ref!)
       return api.get<Package>(
-        `/products/${encodeURIComponent(product!)}/packages/${encodeURIComponent(segment)}${q}`)
+        `/products/${encodeURIComponent(product!)}/packages/${encodeURIComponent(segment)}` +
+        scopeQuery(q, repository))
     },
     enabled: Boolean(product && ref),
   })
 }
 
-export function useArtifacts(product: string | undefined, ref: string | undefined, enabled = true) {
+/**
+ * Merges an explicit repository into whatever the reference already implied.
+ *
+ * The `repo:tag` spelling and `?repository=` are two ways to say the same
+ * thing and the API accepts either; this keeps a caller from emitting both and
+ * producing a malformed query.
+ */
+function scopeQuery(existing: string, repository?: string): string {
+  if (!repository) return existing
+  if (existing) return existing
+  return `?repository=${encodeURIComponent(repository)}`
+}
+
+export function useArtifacts(
+  product: string | undefined, ref: string | undefined, repository?: string, enabled = true,
+) {
   return useQuery({
-    queryKey: ['artifacts', product, ref],
+    queryKey: ['artifacts', product, ref, repository],
     queryFn: () => {
       const { segment, query: q } = packageRef(ref!)
       return api.get<ListArtifactsResponse>(
-        `/products/${encodeURIComponent(product!)}/packages/${encodeURIComponent(segment)}/artifacts${q}`)
+        `/products/${encodeURIComponent(product!)}/packages/${encodeURIComponent(segment)}/artifacts` +
+        scopeQuery(q, repository))
     },
     enabled: enabled && Boolean(product && ref),
   })
@@ -159,13 +186,14 @@ export function useArtifacts(product: string | undefined, ref: string | undefine
  * extent of the work is the thing being discovered. A caller can report that
  * it is running and for how long, and nothing more honest than that.
  */
-export function useInspectPackage(product: string, ref: string) {
+export function useInspectPackage(product: string, ref: string, repository?: string) {
   const qc = useQueryClient()
   return useMutation({
     mutationFn: () => {
       const { segment, query: q } = packageRef(ref)
       return api.post<InspectPackageResponse>(
-        `/products/${encodeURIComponent(product)}/packages/${encodeURIComponent(segment)}:inspect${q}`)
+        `/products/${encodeURIComponent(product)}/packages/${encodeURIComponent(segment)}:inspect` +
+        scopeQuery(q, repository))
     },
     onSuccess: () => {
       void qc.invalidateQueries({ queryKey: ['package', product, ref] })

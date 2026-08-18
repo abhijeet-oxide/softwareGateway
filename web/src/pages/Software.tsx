@@ -3,7 +3,7 @@ import { Button, Card, Select, Space, Table } from 'antd'
 import { Link, useSearchParams } from 'react-router-dom'
 import { usePackages, useProducts, useTransfers } from '../api/queries'
 import {
-  deriveLocations, deriveStatus, downloadSeconds, transferIndex, verification, version,
+  deriveLocations, deriveStatus, downloadSeconds, releaseHref, transferIndex, verification, version,
   withTransfers,
 } from '../domain/derive'
 import { formatDuration } from '../domain/format'
@@ -29,9 +29,10 @@ export default function Software() {
 
   const selected = params.get('product') ?? productList[0]?.productId
   const status = params.get('status')
+  const tag = params.get('tag') ?? undefined
 
   const product = productList.find((p) => p.productId === selected)
-  const packages = usePackages(selected, { pageSize: 100 })
+  const packages = usePackages(selected, { pageSize: 100, tag })
   const transfers = useTransfers({ product: selected, pageSize: 200 })
 
   const rows = useMemo(() => {
@@ -137,9 +138,9 @@ export default function Software() {
               },
               {
                 title: 'Version',
-                width: 120,
+                width: 190,
                 render: (_, r) =>
-                  product && <VersionChip product={product.productId} version={version(r.pkg)} reference={r.pkg.tag} />,
+                  product && <VersionChip product={product.productId} version={version(r.pkg)} pkg={r.pkg} />,
               },
               { title: 'Published', width: 110, render: (_, r) => <TimeAgo at={r.pkg.publishedAt || r.pkg.discoveredAt} /> },
               { title: 'Verified', width: 145, render: (_, r) => <VerificationBadge state={verification(r.pkg)} /> },
@@ -161,7 +162,7 @@ export default function Software() {
                 width: 120,
                 render: (_, r) =>
                   product && (
-                    <Link to={`/software/${encodeURIComponent(product.productId)}/${encodeURIComponent(r.pkg.tag)}`}>
+                    <Link to={releaseHref(product.productId, r.pkg)}>
                       <Button size="small" type={r.status === 'NEW' ? 'primary' : 'default'}>
                         {r.status === 'NEW' ? 'Download' : 'View Details'}
                       </Button>

@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import {
   App, Button, Card, Modal, Progress, Select, Space, Table, Tag, Tooltip, Typography,
 } from 'antd'
@@ -63,6 +63,65 @@ function summariseError(message: string): string {
   return head.length > 120 ? `${head.slice(0, 117)}…` : head
 }
 
+/**
+ * When this source will next be polled, counting down.
+ *
+ * # Why a countdown and not an interval
+ *
+ * "next scan in under 15 minutes" was true for the entire fifteen minutes and
+ * never moved, so it answered "how often" when the question is "how long". The
+ * scheduler polls each source `intervalSeconds` after its last run, so the
+ * remaining time is `lastRunAt + interval - now` — a real instant, worth
+ * counting toward.
+ *
+ * It ticks once a second, and only while it is on screen: the component
+ * unmounts with the panel, so nothing keeps running behind a page nobody is
+ * looking at.
+ */
+function NextScan({ source }: { source: DiscoverySourceState }) {
+  const [now, setNow] = useState(() => Date.now())
+
+  useEffect(() => {
+    const t = setInterval(() => setNow(Date.now()), 1000)
+    return () => clearInterval(t)
+  }, [])
+
+  if (!source.intervalSeconds) {
+    return (
+      <Space size={6}>
+        <CheckCircleFilled style={{ color: semantic.success }} />
+        <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+          Polled on demand only
+        </Typography.Text>
+      </Space>
+    )
+  }
+
+  const last = source.lastRunAt ? Date.parse(source.lastRunAt) : undefined
+  // Without a last run there is no anchor to count from, so the interval is
+  // stated as a fact about the schedule rather than as a countdown that would
+  // be starting from a moment we invented.
+  const remaining =
+    last === undefined || Number.isNaN(last)
+      ? undefined
+      : Math.max(0, (last + source.intervalSeconds * 1000 - now) / 1000)
+
+  return (
+    <Space size={6}>
+      <CheckCircleFilled style={{ color: semantic.success }} />
+      <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+        {remaining === undefined ? (
+          <>Next scan every <Value>{formatDuration(source.intervalSeconds)}</Value></>
+        ) : remaining <= 0 ? (
+          'Next scan due now'
+        ) : (
+          <>Next scan in <Value>{formatDuration(remaining)}</Value></>
+        )}
+      </Typography.Text>
+    </Space>
+  )
+}
+
 /** A source's progress, or the reason there is no percentage yet. */
 function SourceProgress({ s }: { s: DiscoverySourceState }) {
   if (!s.scanning) {
@@ -82,15 +141,7 @@ function SourceProgress({ s }: { s: DiscoverySourceState }) {
         </Space>
       )
     }
-    return (
-      <Space size={6}>
-        <CheckCircleFilled style={{ color: semantic.success }} />
-        <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-          Idle — next scan in under{' '}
-          <Value>{formatDuration(s.intervalSeconds)}</Value>
-        </Typography.Text>
-      </Space>
-    )
+    return <NextScan source={s} />
   }
 
   // Until the catalog comes back there is no denominator, and a bar without one
@@ -340,7 +391,7 @@ export function DiscoveryPanel({ products }: { products: Product[] }) {
                     </Space>
                   ),
                 },
-                { title: 'What it is doing', width: 340, render: (_, s) => <SourceProgress s={s} /> },
+                { title: 'Status', width: 340, render: (_, s) => <SourceProgress s={s} /> },
                 {
                   title: 'Versions seen',
                   width: 110,

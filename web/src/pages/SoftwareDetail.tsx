@@ -5,7 +5,7 @@ import {
   Typography,
 } from 'antd'
 import { CloudDownloadOutlined, ReloadOutlined } from '@ant-design/icons'
-import { Link, useNavigate, useParams } from 'react-router-dom'
+import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom'
 import {
   useArtifacts, useInspectPackage, usePackage, useProduct, useRunDownload,
 } from '../api/queries'
@@ -193,13 +193,19 @@ function classify(a: Artifact): 'Images' | 'Helm Charts' | 'Files' {
 
 export default function SoftwareDetail() {
   const { product: productName, reference } = useParams()
+  const [params] = useSearchParams()
   const navigate = useNavigate()
   const { message } = App.useApp()
 
+  // A version tag is not unique within a product — vendors publish the same
+  // tag into every repository — so the repository travels with the link and is
+  // what makes this lookup answerable. See releaseHref in domain/derive.
+  const repository = params.get('repository') ?? undefined
+
   const product = useProduct(productName)
-  const pkg = usePackage(productName, reference)
-  const artifacts = useArtifacts(productName, reference)
-  const inspect = useInspectPackage(productName!, reference!)
+  const pkg = usePackage(productName, reference, repository)
+  const artifacts = useArtifacts(productName, reference, repository)
+  const inspect = useInspectPackage(productName!, reference!, repository)
   const runDownload = useRunDownload(productName!)
 
   const mayOperate = useCan('operate', { product: productName })

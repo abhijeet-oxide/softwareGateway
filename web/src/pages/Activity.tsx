@@ -187,7 +187,7 @@ export default function Activity() {
                   // rule would produce a link that resolves to nothing.
                   e.product && e.subjectId && e.subjectKind === 'package' ? (
                     <Link
-                      to={`/software/${encodeURIComponent(e.product)}/${encodeURIComponent(e.subjectId)}`}
+                      to={`/software?product=${encodeURIComponent(e.product)}&tag=${encodeURIComponent(e.subjectId)}`}
                       style={{ fontFamily: mono, fontSize: 12 }}
                       onClick={(ev) => ev.stopPropagation()}
                     >

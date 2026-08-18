@@ -1,9 +1,16 @@
 import type { ReactNode } from 'react'
-import { Alert, Button, Card, Empty, Space, Steps, Tooltip, Typography } from 'antd'
+import {
+  Alert, Button, Card, Empty, Input, Popover, Space, Steps, Tag, Timeline, Tooltip, Typography,
+} from 'antd'
+import {
+  CheckCircleOutlined, ClockCircleOutlined, LoadingOutlined, RocketOutlined, SearchOutlined,
+  ShopOutlined,
+} from '@ant-design/icons'
 import { Link } from 'react-router-dom'
 import type { LifecycleStep } from '../domain/derive'
 import { formatAbsolute } from '../domain/format'
 import { semantic } from '../theme'
+import { NA } from './value'
 
 /**
  * Page furniture shared by all ten pages.
@@ -161,6 +168,119 @@ export function LifecycleIndicator({
           ) : undefined,
       }))}
     />
+  )
+}
+
+/**
+ * The same lifecycle, as ONE CELL.
+ *
+ * A stepper is the right shape on a release page, where the reader is looking
+ * at one thing and the stages are the subject. In a table it is four columns'
+ * worth of furniture repeated down the page: it makes every row look busy and
+ * the column that actually differs — which stage this release is AT — is the
+ * hardest part of it to read.
+ *
+ * So the cell states the stage, and the timeline moves to a popover. The dates
+ * are still one gesture away, and they arrive with more room than a table cell
+ * ever had: every stage, whether it was reached, and when.
+ */
+export function LifecycleCell({ steps }: { steps: LifecycleStep[] }) {
+  const reached = steps.filter((s) => s.reached)
+  const stage = steps.find((s) => s.current) ?? reached[reached.length - 1] ?? steps[0]
+  if (!stage) return <NA reason="This release has no lifecycle recorded." />
+  const mark = STAGE_MARKS[stage.stage] ?? { icon: <ClockCircleOutlined />, colour: 'default' }
+
+  return (
+    <Popover
+      placement="left"
+      title={`Lifecycle — ${stage.stage}`}
+      content={
+        <div style={{ minWidth: 260 }}>
+          <Timeline
+            style={{ marginTop: 8 }}
+            items={steps.map((s) => ({
+              color: s.current ? 'blue' : s.reached ? 'green' : 'gray',
+              children: (
+                <Space direction="vertical" size={0}>
+                  <span style={{ fontWeight: s.current ? 600 : 400 }}>{s.stage}</span>
+                  {s.at ? (
+                    <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+                      {formatAbsolute(s.at)}
+                    </Typography.Text>
+                  ) : (
+                    <Typography.Text type="secondary" style={{ fontSize: 12 }} italic>
+                      {s.reached ? 'no time recorded' : 'not reached'}
+                    </Typography.Text>
+                  )}
+                </Space>
+              ),
+            }))}
+          />
+        </div>
+      }
+    >
+      <Tag color={mark.colour} style={{ marginInlineEnd: 0, cursor: 'default' }}>
+        <Space size={4}>
+          {mark.icon}
+          {stage.stage}
+        </Space>
+      </Tag>
+    </Popover>
+  )
+}
+
+/**
+ * One mark per stage. The icon is the stage's meaning, not decoration: a
+ * release at the vendor has not moved, one downloading is in motion, one
+ * downloaded is at rest with us, one in production has shipped.
+ */
+const STAGE_MARKS: Record<string, { icon: ReactNode; colour: string }> = {
+  Vendor: { icon: <ShopOutlined />, colour: 'default' },
+  Downloading: { icon: <LoadingOutlined />, colour: 'processing' },
+  Downloaded: { icon: <CheckCircleOutlined />, colour: 'green' },
+  Production: { icon: <RocketOutlined />, colour: 'purple' },
+}
+
+/**
+ * The filter that needs no explanation.
+ *
+ * Deliberately CLIENT-SIDE, and deliberately over one page of results. The API
+ * filters packages by tag exactly, which is the wrong shape for somebody typing
+ * `2604` into a list of forty releases — and a server round trip per keystroke
+ * would be the wrong shape for a table already in the browser.
+ *
+ * It sits between the subtitle and the table, where the eye lands after reading
+ * what the page is for, and it says what it searches so nobody wonders why a
+ * match they expected is missing.
+ */
+export function SearchBar({
+  value, onChange, placeholder, matched, total, width = 320,
+}: {
+  value: string
+  onChange: (value: string) => void
+  placeholder: string
+  /** Rows after filtering, so the bar can say what it did. */
+  matched?: number
+  total?: number
+  width?: number
+}) {
+  const filtering = value.trim().length > 0
+  return (
+    <Space size={12} style={{ marginBottom: 12 }} wrap>
+      <Input
+        allowClear
+        style={{ width }}
+        prefix={<SearchOutlined style={{ color: 'rgba(0,0,0,.35)' }} />}
+        placeholder={placeholder}
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+      />
+      {filtering && matched !== undefined && (
+        <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+          {matched} of {total} shown
+        </Typography.Text>
+      )}
+    </Space>
   )
 }
 

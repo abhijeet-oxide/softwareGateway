@@ -27,12 +27,20 @@ const LIVE = ['PENDING', 'PLANNING', 'READY', 'RUNNING', 'VERIFYING']
 const SETTLED = ['SUCCEEDED', 'FAILED', 'CANCELLED']
 
 export function QueueControls({
-  transfer, size = 'small', onDeleted,
+  transfer, size = 'small', onDeleted, hasFailures = false,
 }: {
   transfer: Pick<Transfer, 'id' | 'state' | 'priority' | 'product'>
   size?: 'small' | 'middle'
   /** Called after a successful delete, since the transfer no longer exists. */
   onDeleted?: () => void
+  /**
+   * Whether any JOB of this transfer has failed, which is not the same as the
+   * transfer having failed. A download can be running with three components
+   * permanently failed under it — the retry that fixes those is the thing
+   * somebody wants, and offering it only once the whole transfer gives up
+   * means waiting for a failure that has, in effect, already happened.
+   */
+  hasFailures?: boolean
 }) {
   const { message } = App.useApp()
   const mayOperate = useCan('operate', { product: transfer.product })
@@ -54,7 +62,7 @@ export function QueueControls({
 
   return (
     <Space size={4}>
-      {state === 'FAILED' && (
+      {(state === 'FAILED' || (hasFailures && !SETTLED.includes(state))) && (
         <Tooltip title="Resumes from where it stopped. Artifacts already transferred are not moved again.">
           <Button
             size={size}

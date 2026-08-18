@@ -21,7 +21,11 @@ const { Sider, Header, Content } = Layout
 const NAV = [
   { key: '/', icon: <HomeOutlined />, label: 'Overview' },
   { key: '/products', icon: <AppstoreOutlined />, label: 'Products' },
-  { key: '/software', icon: <FileTextOutlined />, label: 'Software' },
+  // "Packages" rather than "Software": one row here is one thing a vendor
+  // published, which is what a package IS. "Software" is the whole subject of
+  // the tool and names nothing in particular. The ROUTE keeps its old spelling
+  // so links already shared still open.
+  { key: '/software', icon: <FileTextOutlined />, label: 'Packages' },
   { key: '/downloads', icon: <CloudDownloadOutlined />, label: 'Downloads' },
   { key: '/repositories', icon: <DatabaseOutlined />, label: 'Repositories' },
   { key: '/activity', icon: <HistoryOutlined />, label: 'Activity' },

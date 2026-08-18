@@ -305,9 +305,7 @@ export interface Attempt extends PackageTransfer {
 export function transferIndex(transfers: Transfer[]): Map<string, Attempt[]> {
   const index = new Map<string, Attempt[]>()
   for (const t of transfers) {
-    // The identity is the raw tag; displayTag is cosmetic and may be absent on
-    // one side of the join.
-    const key = `${t.product}\u0000${t.tag}`
+    const key = transferKey(t.packageId, t.product, t.tag)
     const entry: Attempt = {
       id: t.id,
       requestId: t.requestId,
@@ -333,8 +331,25 @@ export function transferIndex(transfers: Transfer[]): Map<string, Attempt[]> {
  */
 export function withTransfers(pkg: Package, index: Map<string, Attempt[]>): Package {
   if (pkg.transfers?.length) return pkg
-  const found = index.get(`${pkg.product}\u0000${pkg.tag}`)
+  const found = index.get(transferKey(pkg.packageId, pkg.product, pkg.tag))
   return found ? { ...pkg, transfers: found } : pkg
+}
+
+/**
+ * How a transfer is matched to the package it moves.
+ *
+ * THE PACKAGE ID, whenever the server sent one. A vendor's tag is not unique
+ * within a product — one NEAR release exists under the same tag in every
+ * repository the product watches, which is ten of them for a real product — so
+ * a join on (product, tag) attributed one download to ten releases, and the
+ * page reported twenty as DOWNLOADING when two were.
+ *
+ * The tag remains the fallback for an older Coordinator that does not send the
+ * id. It is wrong in the same way it always was, and it is better than a page
+ * that shows no download state at all.
+ */
+function transferKey(packageId: string | undefined, product: string, tag: string): string {
+  return packageId ? `id\u0000${packageId}` : `tag\u0000${product}\u0000${tag}`
 }
 
 /**
@@ -394,4 +409,19 @@ export function kindName(kind: string): string {
     // rather than hidden — an unnamed component still moved.
     default: return kind ? titleCase(kind) : 'Other'
   }
+}
+
+/**
+ * Does any of these fields contain what was typed?
+ *
+ * Case-insensitive substring, across several fields at once, because that is
+ * what somebody typing `2604` into a search box means. Not fuzzy, not ranked:
+ * a filter that quietly reorders or half-matches makes "is it missing or did I
+ * mistype" unanswerable, and these lists are short enough that exactness is
+ * the more useful property.
+ */
+export function matches(needle: string, ...fields: (string | undefined)[]): boolean {
+  const q = needle.trim().toLowerCase()
+  if (!q) return true
+  return fields.some((f) => f?.toLowerCase().includes(q))
 }

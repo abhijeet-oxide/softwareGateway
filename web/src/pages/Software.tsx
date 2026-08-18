@@ -1,17 +1,17 @@
-import { useMemo } from 'react'
+import { useMemo, useState } from 'react'
 import { Button, Card, Select, Space, Table, Tooltip } from 'antd'
 import { Link, useSearchParams } from 'react-router-dom'
 import { usePackages, useProducts, useTransfers } from '../api/queries'
 import {
-  deriveLocations, deriveStatus, downloadSeconds, releaseHref, transferIndex, verification, version,
-  withTransfers,
+  deriveLocations, deriveStatus, downloadSeconds, matches, releaseHref, transferIndex, verification,
+  version, withTransfers,
 } from '../domain/derive'
 import { formatDuration } from '../domain/format'
 import { Value } from '../components/value'
 import {
   LocationChip, ProductChip, StatusBadge, TimeAgo, VerificationBadge, VersionChip,
 } from '../components/chips'
-import { EmptyStateCard, ErrorState, PageHeader } from '../components/layout'
+import { EmptyStateCard, ErrorState, PageHeader, SearchBar } from '../components/layout'
 
 /**
  * The Software listing — the "View all software" destination and where the
@@ -24,6 +24,7 @@ import { EmptyStateCard, ErrorState, PageHeader } from '../components/layout'
  */
 export default function Software() {
   const [params, setParams] = useSearchParams()
+  const [search, setSearch] = useState('')
   const products = useProducts()
   const productList = products.data?.products ?? []
 
@@ -44,10 +45,19 @@ export default function Software() {
       const pkg = withTransfers(listed, index)
       return { pkg, status: deriveStatus(pkg, product) }
     })
-    if (!status) return all
-    if (status === 'READY') return all.filter((r) => r.status === 'READY FOR PRODUCTION')
-    return all.filter((r) => r.status === status)
-  }, [packages.data, transfers.data, product, status])
+    const byStatus = !status
+      ? all
+      : status === 'READY'
+        ? all.filter((r) => r.status === 'READY FOR PRODUCTION')
+        : all.filter((r) => r.status === status)
+
+    if (!search.trim()) return byStatus
+    // The version as shown AND as the vendor spells it, plus the repository —
+    // a product publishes one version tag into every repository it watches, so
+    // the repository is frequently the only thing telling two rows apart.
+    return byStatus.filter((r) => matches(
+      search, version(r.pkg), r.pkg.tag, r.pkg.displayRepository, r.pkg.sourceRepository))
+  }, [packages.data, transfers.data, product, status, search])
 
   const update = (key: string, value?: string) => {
     const next = new URLSearchParams(params)
@@ -59,7 +69,7 @@ export default function Software() {
   if (products.isError) {
     return (
       <>
-        <PageHeader title="Software" description="Every release we know about, and where it is" />
+        <PageHeader title="Packages" description="Every release we know about, and where it is" />
         <ErrorState error={products.error} retry={() => void products.refetch()} />
       </>
     )
@@ -68,7 +78,7 @@ export default function Software() {
   return (
     <>
       <PageHeader
-        title="Software"
+        title="Packages"
         description="Every release we know about, and where it is"
         meta={
           <Space>
@@ -107,18 +117,31 @@ export default function Software() {
         }
       />
 
+      <SearchBar
+        value={search}
+        onChange={setSearch}
+        placeholder="Search by version or repository"
+        matched={rows.length}
+        total={packages.data?.packages?.length ?? 0}
+        width={360}
+      />
+
       {!packages.isLoading && rows.length === 0 ? (
         <EmptyStateCard
-          title={status ? 'Nothing matches this filter' : 'No software discovered yet'}
+          title={search.trim() || status ? 'Nothing matches this filter' : 'No packages discovered yet'}
           explanation={
-            status
-              ? 'No release currently has this status. Clear the filter to see everything discovered for this product.'
-              : 'Discovery polls the vendor registries on a schedule. Run it from the Overview to look immediately.'
+            search.trim()
+              ? 'No release on this page matches what you typed. The search covers the version and the repository it came from.'
+              : status
+                ? 'No release currently has this status. Clear the filter to see everything discovered for this product.'
+                : 'Discovery polls the vendor registries on a schedule. Run it from the Overview to look immediately.'
           }
           action={
-            status
-              ? <Button onClick={() => update('status', undefined)}>Clear filter</Button>
-              : <Link to="/"><Button type="primary">Go to Overview</Button></Link>
+            search.trim()
+              ? <Button onClick={() => setSearch('')}>Clear search</Button>
+              : status
+                ? <Button onClick={() => update('status', undefined)}>Clear filter</Button>
+                : <Link to="/"><Button type="primary">Go to Overview</Button></Link>
           }
         />
       ) : (

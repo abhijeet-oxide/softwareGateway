@@ -570,3 +570,156 @@ func TestACancellationWithWorkInFlightStaysOpen(t *testing.T) {
 		t.Errorf("state = %q, want it still cancelling", got)
 	}
 }
+
+// A restart is not new information about anybody's intent.
+//
+// Both processes go down mid-cancellation and come back. The worker holds
+// nothing — it is a new process — and the leases in the database are from a
+// life it does not remember. Waiting out each lease means minutes of a transfer
+// reading CANCELLING with nothing happening, which is indistinguishable from a
+// hang on the one operation somebody performs when they are already unhappy.
+func TestARestartedWorkersLeasesAreRecoveredIntoTheCancellation(t *testing.T) {
+	h := newControlHarness(t)
+	id := h.runningTransfer(2)
+	h.lease()
+
+	if _, err := h.packages.StopTransfer(t.Context(), id); err != nil {
+		t.Fatal(err)
+	}
+
+	// The worker comes back, holding nothing, and asks for work.
+	recovered, err := h.packages.RecoverWorkerLeases(t.Context(), "worker-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(recovered) != 2 {
+		t.Fatalf("recovered %d leases, want 2", len(recovered))
+	}
+	for _, j := range recovered {
+		if j.State != "cancelled" {
+			t.Errorf("job %d recovered as %q, want cancelled — the stop still stands", j.ID, j.State)
+		}
+	}
+
+	closed, err := h.packages.CloseStalledCancellations(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(closed) != 1 {
+		t.Fatalf("closed %+v, want the cancellation to finish", closed)
+	}
+	if got := h.state(id); got != "cancelled" {
+		t.Errorf("state = %q, want cancelled", got)
+	}
+}
+
+// The same recovery from the Coordinator's side: leases owned by a worker whose
+// heartbeats stopped before this replica took over.
+//
+// Requeued rather than cancelled here, because this transfer is alive: the work
+// is still wanted, and the only thing that changed is who is going to do it.
+func TestOrphanedLeasesOfALiveTransferGoBackToTheQueue(t *testing.T) {
+	h := newControlHarness(t)
+	id := h.runningTransfer(1)
+	h.lease()
+
+	// No worker row at all: nothing from that worker has reached this database.
+	recovered, err := h.packages.RecoverOrphanedLeases(t.Context(), time.Minute)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(recovered) != 1 || recovered[0].State != "pending" {
+		t.Fatalf("recovered %+v, want one job back on the queue", recovered)
+	}
+	if n := h.count(
+		`SELECT count(*) FROM jobs WHERE transfer_id = ? AND state = 'pending'`, id); n != 1 {
+		t.Error("the job did not go back to the queue")
+	}
+	// And it is leasable again, by the real dequeue rather than by inspection.
+	if got := h.lease(); len(got) != 1 {
+		t.Errorf("leased %d jobs after recovery, want 1", len(got))
+	}
+}
+
+// A failure a second attempt could fix should not wait for somebody to arrive
+// in the morning and press the button the system could have pressed at three.
+func TestRetryableFailuresAreRetriedAutomatically(t *testing.T) {
+	h := newControlHarness(t)
+	id := h.runningTransfer(2)
+
+	// Both jobs gave up on something transient, a while ago.
+	h.exec(`UPDATE jobs SET state = 'failed', attempts = 8, last_error_class = 'timeout',
+	               last_error = 'registry timed out',
+	               completed_at = '2000-01-01T00:00:00Z'
+	         WHERE transfer_id = ?`, id)
+	h.exec(`UPDATE transfers SET state = 'failed' WHERE id = ?`, id)
+
+	retried, err := h.packages.AutoRetryTransfers(t.Context(), time.Minute, 3)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(retried) != 1 || retried[0].Requeued != 2 {
+		t.Fatalf("retried %+v, want two jobs requeued", retried)
+	}
+	if retried[0].Round != 1 {
+		t.Errorf("round = %d, want the first automatic attempt", retried[0].Round)
+	}
+	if got := h.state(id); got != "ready" {
+		t.Errorf("state = %q, want ready", got)
+	}
+
+	// And it is bounded. Three rounds, then it waits for a person.
+	for range 5 {
+		h.exec(`UPDATE jobs SET state = 'failed', last_error_class = 'timeout',
+		               completed_at = '2000-01-01T00:00:00Z' WHERE transfer_id = ?`, id)
+		h.exec(`UPDATE transfers SET state = 'failed' WHERE id = ?`, id)
+		if _, err := h.packages.AutoRetryTransfers(t.Context(), time.Minute, 3); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if n := h.count(`SELECT auto_retries FROM transfers WHERE id = ?`, id); n != 3 {
+		t.Errorf("auto_retries = %d, want it capped at 3", n)
+	}
+}
+
+// A failure a retry cannot fix is left alone.
+//
+// Retrying a missing credential at a fixed interval is a second failure at a
+// fixed interval, and against a vendor registry it is a failure with our name
+// on it.
+func TestFailuresNotWorthRetryingAreLeftAlone(t *testing.T) {
+	h := newControlHarness(t)
+	id := h.runningTransfer(1)
+
+	h.exec(`UPDATE jobs SET state = 'failed', attempts = 8, last_error_class = 'auth',
+	               last_error = '401 unauthorized', completed_at = '2000-01-01T00:00:00Z'
+	         WHERE transfer_id = ?`, id)
+	h.exec(`UPDATE transfers SET state = 'failed' WHERE id = ?`, id)
+
+	retried, err := h.packages.AutoRetryTransfers(t.Context(), time.Minute, 3)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(retried) != 0 {
+		t.Fatalf("retried %+v, want an auth failure left for a person", retried)
+	}
+}
+
+// And nothing is retried while its failure is still fresh: a registry having a
+// bad minute should be given the minute.
+func TestAFreshFailureIsGivenTimeBeforeItIsRetried(t *testing.T) {
+	h := newControlHarness(t)
+	id := h.runningTransfer(1)
+
+	h.exec(`UPDATE jobs SET state = 'failed', attempts = 8, last_error_class = 'timeout',
+	               completed_at = `+h.packages.dialect.Now()+` WHERE transfer_id = ?`, id)
+	h.exec(`UPDATE transfers SET state = 'failed' WHERE id = ?`, id)
+
+	retried, err := h.packages.AutoRetryTransfers(t.Context(), time.Hour, 3)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(retried) != 0 {
+		t.Fatalf("retried %+v, want it left until the cooldown has passed", retried)
+	}
+}

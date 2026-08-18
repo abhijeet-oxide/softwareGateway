@@ -45,6 +45,15 @@ type ControllerOptions struct {
 	ReapInterval time.Duration
 	// ExpandInterval is how often pending requests are turned into jobs.
 	ExpandInterval time.Duration
+	// AutoRetryAfter is how long a failure is left alone before the system
+	// tries it again. Long enough that a registry having a bad minute has had
+	// its minute, short enough that a download started in the evening is not
+	// still waiting in the morning.
+	AutoRetryAfter time.Duration
+	// AutoRetryRounds bounds automatic retries per transfer. After them the
+	// transfer stays failed and waits for a person, because a failure that has
+	// survived this many attempts is saying something another will not change.
+	AutoRetryRounds int
 }
 
 // Controller runs the leader-gated queue loops.
@@ -65,6 +74,16 @@ type Controller struct {
 // this cheap — one indexed query returning nothing — costs nothing when idle.
 const DefaultExpandInterval = 10 * time.Second
 
+// Automatic retry defaults.
+//
+// Five minutes and three rounds: about fifteen minutes of patience in total,
+// which covers a registry restart, a network blip and a certificate rotation,
+// and stops well short of hammering a vendor whose problem is not going away.
+const (
+	DefaultAutoRetryAfter  = 5 * time.Minute
+	DefaultAutoRetryRounds = 3
+)
+
 // NewController builds the background loops.
 func NewController(q *Queue, e Expander, opts ControllerOptions, log *slog.Logger) *Controller {
 	if log == nil {
@@ -75,6 +94,14 @@ func NewController(q *Queue, e Expander, opts ControllerOptions, log *slog.Logge
 	}
 	if opts.ExpandInterval <= 0 {
 		opts.ExpandInterval = DefaultExpandInterval
+	}
+	if opts.AutoRetryAfter <= 0 {
+		opts.AutoRetryAfter = DefaultAutoRetryAfter
+	}
+	// Negative disables it, and that has to be sayable: an operator whose
+	// vendor bills per request may want every retry to be a human decision.
+	if opts.AutoRetryRounds == 0 {
+		opts.AutoRetryRounds = DefaultAutoRetryRounds
 	}
 	return &Controller{queue: q, expander: e, opts: opts, log: log}
 }
@@ -117,10 +144,35 @@ func (c *Controller) Run(ctx context.Context) error {
 			}
 			if !wasLeader {
 				wasLeader = true
+				// Leadership is the moment this replica's knowledge of the
+				// fleet is oldest. Recovery comes FIRST and reaping second:
+				// recovery frees leases whose worker is provably gone, and
+				// reaping then settles whatever that leaves behind — including
+				// a cancellation that had been waiting on one of them.
+				c.recover(ctx)
 				c.reap(ctx)
 			}
 			c.expand(ctx)
 		}
+	}
+}
+
+// recover frees work held by workers that are gone.
+//
+// A restart on either side leaves the same wreckage: leases in the database
+// owned by a process that no longer remembers them. The reaper collects those
+// when their deadline passes, which is right for a worker that died mid-blob
+// and needlessly slow for one that restarted — and for a transfer somebody
+// stopped, those minutes are indistinguishable from a hang.
+func (c *Controller) recover(ctx context.Context) {
+	recovered, err := c.queue.Recover(ctx)
+	if err != nil {
+		c.log.ErrorContext(ctx, "could not recover orphaned leases", "error", err)
+		return
+	}
+	if len(recovered) > 0 {
+		c.log.InfoContext(ctx, "recovered work from workers that are gone",
+			"jobs", len(recovered))
 	}
 }
 
@@ -158,6 +210,15 @@ func (c *Controller) reap(ctx context.Context) {
 	// already unhappy.
 	if _, err := c.queue.CloseCancellations(ctx); err != nil {
 		c.log.ErrorContext(ctx, "could not close stalled cancellations", "error", err)
+	}
+
+	// Last, and after settling, because settling is what turns "some jobs
+	// failed" into a transfer that has stopped — which is the thing worth
+	// retrying. A failure a second attempt could plausibly fix should not wait
+	// for somebody to arrive in the morning and press the button the system
+	// could have pressed at three.
+	if _, err := c.queue.AutoRetry(ctx, c.opts.AutoRetryAfter, c.opts.AutoRetryRounds); err != nil {
+		c.log.ErrorContext(ctx, "could not retry failed transfers", "error", err)
 	}
 }
 

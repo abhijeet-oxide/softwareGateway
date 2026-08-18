@@ -634,6 +634,13 @@ export default function DownloadDetail() {
             t && <QueueControls transfer={t} hasFailures onDeleted={() => navigate('/downloads')} />
           }
         >
+          {failures.data.failures.some((f) => f.retryable) && (
+            <Typography.Paragraph type="secondary" style={{ fontSize: 13 }}>
+              Failures marked retryable are retried automatically, a few minutes apart and a few
+              times over, before the download is left for somebody to look at. Retry now if you
+              have already dealt with the cause — it resumes rather than restarting.
+            </Typography.Paragraph>
+          )}
           <Table
             size="small"
             pagination={false}
@@ -643,10 +650,24 @@ export default function DownloadDetail() {
               { title: 'Cause', render: (_, f) => f.message },
               { title: 'Artifacts', align: 'right', width: 90, render: (_, f) => <Value>{formatCount(f.failed)}</Value> },
               {
+                // Yes or no. "Worth retrying" and "Will not succeed on retry"
+                // were a sentence each in a column that answers a yes-or-no
+                // question, and a sentence belongs on the tooltip.
                 title: 'Retryable',
                 width: 110,
-                render: (_, f) =>
-                  f.retryable ? <Tag color="blue">Worth retrying</Tag> : <Tag>Will not succeed on retry</Tag>,
+                render: (_, f) => (
+                  <Tooltip
+                    title={
+                      f.retryable
+                        ? 'A second attempt could plausibly succeed, so the system retries these by itself — a few minutes apart, a few times over, before leaving them for a person.'
+                        : 'A second attempt would fail the same way: a missing credential, a repository that does not exist, or something the registry will not serve. Retrying is not the fix.'
+                    }
+                  >
+                    <Tag color={f.retryable ? 'blue' : undefined} style={{ marginInlineEnd: 0 }}>
+                      {f.retryable ? 'Yes' : 'No'}
+                    </Tag>
+                  </Tooltip>
+                ),
               },
             ]}
           />

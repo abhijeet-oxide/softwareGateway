@@ -106,8 +106,31 @@ type LeaseResult struct {
 }
 
 // Lease hands a worker up to `capacity` jobs.
-func (q *Queue) Lease(ctx context.Context, workerID string, capacity int) (LeaseResult, error) {
+//
+// activeJobs is what the worker says it is already running, and it is a
+// RECOVERY SIGNAL as well as an accounting one: a worker asking for work while
+// holding nothing cannot be holding the leases this database says it holds, so
+// those are freed here rather than waited out. That is the restart case, and
+// the worker itself is a better witness to it than a lease deadline — waiting
+// out the deadline leaves a transfer motionless for minutes, and a transfer
+// somebody stopped stuck in `cancelling` for the same minutes.
+func (q *Queue) Lease(
+	ctx context.Context, workerID string, capacity, activeJobs int,
+) (LeaseResult, error) {
 	res := LeaseResult{LeaseDuration: q.leaseDuration, NextPollAfter: DefaultIdlePoll}
+
+	if activeJobs == 0 {
+		recovered, err := q.packages.RecoverWorkerLeases(ctx, workerID)
+		if err != nil {
+			// Not fatal: leasing is the point of this call, and a recovery
+			// that failed will be tried again by the sweep.
+			q.log.WarnContext(ctx, "could not recover a restarted worker's leases",
+				"worker", workerID, "error", err)
+		} else if len(recovered) > 0 {
+			q.log.InfoContext(ctx, "freed work held by a worker that restarted",
+				"worker", workerID, "jobs", len(recovered))
+		}
+	}
 
 	jobs, err := q.packages.LeaseJobs(ctx, store.LeaseRequest{
 		Owner:    workerID,
@@ -408,6 +431,39 @@ func (q *Queue) CloseCancellations(ctx context.Context) ([]store.StoppedCancella
 			"transfer", t.ID)
 	}
 	return closed, nil
+}
+
+// Recover frees leases held by workers that are gone.
+//
+// Run when this replica becomes the leader, which is the moment its knowledge
+// of the fleet is oldest: leases written before a restart are owned by workers
+// whose heartbeats stopped, and waiting out each deadline means minutes of a
+// transfer sitting still for no reason anybody can see.
+func (q *Queue) Recover(ctx context.Context) ([]store.RecoveredLease, error) {
+	recovered, err := q.packages.RecoverOrphanedLeases(ctx, q.leaseDuration)
+	if err != nil {
+		return nil, err
+	}
+	for _, j := range recovered {
+		q.log.InfoContext(ctx, "recovered a lease from a worker that is gone",
+			"job", j.ID, "transfer", j.TransferID, "worker", j.Owner, "state", j.State)
+	}
+	return recovered, nil
+}
+
+// AutoRetry restarts transfers whose failures are worth another attempt.
+func (q *Queue) AutoRetry(
+	ctx context.Context, cooldown time.Duration, maxRounds int,
+) ([]store.AutoRetried, error) {
+	retried, err := q.packages.AutoRetryTransfers(ctx, cooldown, maxRounds)
+	if err != nil {
+		return nil, err
+	}
+	for _, t := range retried {
+		q.log.InfoContext(ctx, "retried a transfer automatically",
+			"transfer", t.ID, "jobs", t.Requeued, "attempt", t.Round, "of", maxRounds)
+	}
+	return retried, nil
 }
 
 // Unstick promotes work in transfers that have nothing runnable at all.

@@ -448,3 +448,125 @@ func TestAPausedJobDoesNotGateAnotherTransfersCopy(t *testing.T) {
 		t.Fatalf("leased %d jobs, want the one in the transfer nobody paused", len(got))
 	}
 }
+
+// A stop reaches the WORKER, not just the queue.
+//
+// Cancellation has no push channel: the heartbeat is the only regular call from
+// a worker holding a long blob, so a stopped job is dropped from the renewal
+// list and named as cancelled, and the worker abandons it within one interval.
+//
+// Renewing it instead — which is what happened before this existed — made
+// `stop` mean "stop when the current blob finishes". On a forty-gigabyte blob
+// that is an hour of bytes moving into a transfer somebody had just asked to
+// stop, with the page reading CANCELLING throughout.
+func TestAStoppedTransfersLeasesAreNotRenewed(t *testing.T) {
+	h := newControlHarness(t)
+	id := h.runningTransfer(2)
+	leased := h.lease()
+	if len(leased) != 2 {
+		t.Fatalf("leased %d jobs, want 2", len(leased))
+	}
+
+	if _, err := h.packages.StopTransfer(t.Context(), id); err != nil {
+		t.Fatal(err)
+	}
+
+	renewed, cancelled, err := h.packages.RenewLeases(
+		t.Context(), "worker-1", leased, time.Minute)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(renewed) != 0 {
+		t.Errorf("renewed %d leases of a stopped transfer, want none", len(renewed))
+	}
+	if len(cancelled) != 2 {
+		t.Fatalf("told the worker to drop %d jobs, want 2", len(cancelled))
+	}
+}
+
+// An expired lease on a stopped transfer is CANCELLED, not requeued.
+//
+// The reaper's job is to return abandoned work to the queue, which is right for
+// a live transfer and exactly wrong for a stopped one: requeueing undoes the
+// stop by timeout, the job runs again, and the transfer never empties.
+func TestTheReaperDoesNotResurrectStoppedWork(t *testing.T) {
+	h := newControlHarness(t)
+	id := h.runningTransfer(1)
+	h.lease()
+
+	if _, err := h.packages.StopTransfer(t.Context(), id); err != nil {
+		t.Fatal(err)
+	}
+	// The worker vanished: nothing will report, and the lease simply expires.
+	h.exec(`UPDATE jobs SET lease_expires_at = '2000-01-01T00:00:00Z' WHERE transfer_id = ?`, id)
+
+	reaped, err := h.packages.ReapExpiredLeases(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(reaped) != 1 || reaped[0].State != "cancelled" {
+		t.Fatalf("reaped %+v, want one job cancelled", reaped)
+	}
+	if n := h.count(
+		`SELECT count(*) FROM jobs WHERE transfer_id = ? AND state = 'pending'`, id); n != 0 {
+		t.Error("a stopped job was put back on the queue by the reaper")
+	}
+}
+
+// And the transfer itself finishes stopping.
+//
+// `cancelling` closes when the last lease REPORTS. A worker that died holding
+// that job reports nothing, and the reaper does not run the completion path —
+// so the transfer said `cancelling` for as long as anybody left it there, which
+// is what a hang looks like on the one operation somebody performs when they
+// are already unhappy.
+func TestACancellationClosesWhenNothingIsLeftInFlight(t *testing.T) {
+	h := newControlHarness(t)
+	id := h.runningTransfer(1)
+	h.lease()
+
+	if _, err := h.packages.StopTransfer(t.Context(), id); err != nil {
+		t.Fatal(err)
+	}
+	if got := h.state(id); got != "cancelling" {
+		t.Fatalf("state = %q, want cancelling while the lease is held", got)
+	}
+
+	// Nothing is leased any more, and nothing ever reported.
+	h.exec(`UPDATE jobs SET state = 'cancelled', lease_owner = NULL WHERE transfer_id = ?`, id)
+
+	closed, err := h.packages.CloseStalledCancellations(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(closed) != 1 || closed[0].ID != id {
+		t.Fatalf("closed %+v, want the one stuck cancellation", closed)
+	}
+	if got := h.state(id); got != "cancelled" {
+		t.Errorf("state = %q, want cancelled", got)
+	}
+}
+
+// A transfer with a lease still out is NOT closed: the worker holding it may
+// still report, and reporting a finished cancellation while bytes are moving is
+// the same lie in the other direction.
+func TestACancellationWithWorkInFlightStaysOpen(t *testing.T) {
+	h := newControlHarness(t)
+	id := h.runningTransfer(1)
+	h.lease()
+
+	if _, err := h.packages.StopTransfer(t.Context(), id); err != nil {
+		t.Fatal(err)
+	}
+
+	closed, err := h.packages.CloseStalledCancellations(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(closed) != 0 {
+		t.Fatalf("closed %+v while a worker still held a job", closed)
+	}
+	if got := h.state(id); got != "cancelling" {
+		t.Errorf("state = %q, want it still cancelling", got)
+	}
+}

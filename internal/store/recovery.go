@@ -472,3 +472,73 @@ func truncate(s string, n int) string {
 	}
 	return s[:n] + "…"
 }
+
+// StoppedCancellation is a transfer whose stop had not finished landing.
+type StoppedCancellation struct {
+	ID string
+}
+
+// CloseStalledCancellations settles transfers stuck in `cancelling` with
+// nothing left in flight.
+//
+// # Why the inline close is not enough
+//
+// `cancelling` closes when the last lease REPORTS — a worker finishes or
+// abandons the job, the completion arrives, and settleTransfer moves the
+// transfer to `cancelled`. That is the ordinary path and it works.
+//
+// The paths that matter here are the ones with no completion at all. A worker
+// that dies holding the last job reports nothing; the reaper cancels the job on
+// lease expiry, and a reaper does not run the completion path. A Coordinator
+// restarted between the stop and the last report is the same shape. In both,
+// the transfer had nothing left to do and went on saying `cancelling` for as
+// long as anybody left it there — which is exactly what a hang looks like, on
+// the one operation somebody performs when they are already unhappy.
+//
+// Conservative in the same way SettleStalledTransfers is: a single leased job
+// means a worker may still report, so the window stays open.
+func (p *Packages) CloseStalledCancellations(ctx context.Context) ([]StoppedCancellation, error) {
+	rows, err := p.db.QueryContext(ctx, p.dialect.Rewrite(`
+		SELECT t.id
+		  FROM transfers t
+		 WHERE t.state = 'cancelling'
+		   AND NOT EXISTS (SELECT 1 FROM jobs j
+		                    WHERE j.transfer_id = t.id AND j.state = 'leased')`))
+	if err != nil {
+		return nil, fmt.Errorf("find cancellations that cannot close: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+
+	var ids []string
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return nil, fmt.Errorf("scan a stuck cancellation: %w", err)
+		}
+		ids = append(ids, id)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+
+	out := make([]StoppedCancellation, 0, len(ids))
+	for _, id := range ids {
+		res, err := p.db.ExecContext(ctx, p.dialect.Rewrite(
+			`UPDATE transfers
+			    SET state = 'cancelled',
+			        completed_at = COALESCE(completed_at, `+p.dialect.Now()+`),
+			        updated_at = `+p.dialect.Now()+`
+			  WHERE id = ? AND state = 'cancelling'`), id)
+		if err != nil {
+			return nil, fmt.Errorf("close the cancellation of transfer %s: %w", id, err)
+		}
+		// Checked rather than assumed: a completion may have landed between the
+		// select and this update, and reporting a close that did not happen
+		// would put a line in the log for an event nobody can find.
+		if n, err := res.RowsAffected(); err == nil && n == 0 {
+			continue
+		}
+		out = append(out, StoppedCancellation{ID: id})
+	}
+	return out, nil
+}

@@ -269,7 +269,7 @@ func (s *Server) handleWorkerHeartbeat(w http.ResponseWriter, r *http.Request) {
 		ids = append(ids, id)
 	}
 
-	renewed, err := s.deps.Queue.Heartbeat(r.Context(), workerID, ids)
+	renewed, cancelled, err := s.deps.Queue.Heartbeat(r.Context(), workerID, ids)
 	if err != nil {
 		s.deps.Logger.ErrorContext(r.Context(), "heartbeat failed",
 			"worker", workerID, "error", err)
@@ -280,6 +280,13 @@ func (s *Server) handleWorkerHeartbeat(w http.ResponseWriter, r *http.Request) {
 	out := v1.HeartbeatResponse{LeasesRenewed: make([]string, 0, len(renewed))}
 	for _, id := range renewed {
 		out.LeasesRenewed = append(out.LeasesRenewed, strconv.FormatInt(id, 10))
+	}
+	// The field was specified and never filled in, so `stop` reached the queue
+	// and never reached the worker: a job already in flight kept its lease
+	// renewed and ran to completion, and the transfer sat in `cancelling` for
+	// however long its largest blob took.
+	for _, id := range cancelled {
+		out.CancelledJobIDs = append(out.CancelledJobIDs, strconv.FormatInt(id, 10))
 	}
 	WriteJSON(w, r, http.StatusOK, out)
 }

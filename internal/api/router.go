@@ -61,7 +61,10 @@ type Worker interface {
 	Lease(ctx context.Context, workerID string, capacity int) (queue.LeaseResult, error)
 	Progress(ctx context.Context, jobID int64, workerID string, bytes int64) error
 	Complete(ctx context.Context, c store.Completion) (store.CompletionResult, error)
-	Heartbeat(ctx context.Context, workerID string, activeJobs []int64) ([]int64, error)
+	// Heartbeat renews what a worker holds AND tells it what to drop: a job
+	// whose transfer somebody stopped is not renewed, it is cancelled, and the
+	// heartbeat is the only channel that reaches a worker mid-blob.
+	Heartbeat(ctx context.Context, workerID string, activeJobs []int64) (renewed []int64, cancelled []int64, err error)
 	// Retry returns one transfer's failed jobs to the queue. Here rather than
 	// on a separate interface because it is the same queue and the same
 	// invariants — a requeue that bypassed this type could reopen a wave the

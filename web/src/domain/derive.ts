@@ -105,7 +105,12 @@ export function deriveStatus(pkg: Package, product?: Product): SoftwareStatus {
   if (verification(pkg) === 'VERIFICATION_FAILED') return 'VERIFICATION FAILED'
 
   const transfers = pkg.transfers ?? []
-  if (transfers.some((t) => isLive(t.state))) return 'DOWNLOADING'
+  // CANCELLING is live for POLLING — the page should keep refreshing until it
+  // settles — and it is not downloading. Somebody stopped it; what is left is
+  // a worker finishing the blob in its hands, and nothing new is arriving. A
+  // release that reads DOWNLOADING after its download was cancelled says the
+  // stop did not work.
+  if (transfers.some((t) => isLive(t.state) && t.state !== 'CANCELLING')) return 'DOWNLOADING'
 
   const succeeded = transfers.filter((t) => t.state === 'SUCCEEDED')
   if (succeeded.length === 0) {

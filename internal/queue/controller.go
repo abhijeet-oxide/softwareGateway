@@ -149,6 +149,16 @@ func (c *Controller) reap(ctx context.Context) {
 	if _, err := c.queue.Settle(ctx); err != nil {
 		c.log.ErrorContext(ctx, "could not settle stalled transfers", "error", err)
 	}
+
+	// And the same question for a transfer somebody STOPPED. `cancelling`
+	// closes when the last lease reports; a worker that died holding it reports
+	// nothing, and the reaper that cancels its job does not run the completion
+	// path. Without this the transfer says `cancelling` for as long as anybody
+	// leaves it there — on the one operation somebody performs when they are
+	// already unhappy.
+	if _, err := c.queue.CloseCancellations(ctx); err != nil {
+		c.log.ErrorContext(ctx, "could not close stalled cancellations", "error", err)
+	}
 }
 
 // WithStepper attaches the chain sweep.

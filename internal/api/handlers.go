@@ -235,6 +235,7 @@ func toAPIProduct(p *product.Product) v1.Product {
 			Repository:    t.Repository,
 			Repositories:  []string{t.Repository},
 			Type:          string(t.Type),
+			Environment:   t.Environment,
 			Role:          string(product.RoleTarget),
 			Default:       t.Default,
 			PromotionOnly: t.PromotionOnly,

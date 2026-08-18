@@ -1363,23 +1363,38 @@ func (s *Scanner) applyRules(
 		return 0, nil
 	}
 
-	steps, err := download.Resolve(s.product, rule, s.targetIDs)
+	// The rule says WHICH software; the download says what happens to it.
+	dl, err := s.product.DownloadFor(rule)
+	if err == nil {
+		var steps []download.ResolvedStep
+		steps, err = download.Resolve(s.product, dl, s.targetIDs)
+		if err == nil {
+			return s.openRun(ctx, tx, packageID, sourceRepoID, tag, rule, dl, steps)
+		}
+	}
 	if err != nil {
 		// A misconfigured rule must not fail the discovery — the package is
 		// real and worth recording either way. Logged loudly instead.
-		s.log.ErrorContext(ctx, "download rule could not be applied",
+		s.log.ErrorContext(ctx, "auto-download rule could not be applied",
 			"rule", rule.Name, "tag", tag, "error", err)
 		return 0, nil
 	}
+	return 0, nil
+}
+
+// openRun records the request and the ordered steps a rule's download needs.
+func (s *Scanner) openRun(
+	ctx context.Context, tx *sql.Tx, packageID, sourceRepoID int64, tag string,
+	rule product.Rule, dl product.Download, steps []download.ResolvedStep,
+) (int, error) {
 	targetNames := download.Names(steps)
 
-	priority := rule.EffectivePriority()
-	// The key covers the DERIVED chain, so a rule naming only the tail and one
-	// naming every hop produce the same key — they are the same work. The
-	// rule's revision is in it too, so an EDITED rule opens a new run rather
-	// than being swallowed by the old one's key.
+	priority := dl.EffectivePriority()
+	// The key covers the DOWNLOAD, not the rule that triggered it: two rules
+	// pointing at one download for one package are asking for one piece of
+	// work, and keying them apart would move the bytes twice.
 	key := transfer.IdempotencyKey("replicate", packageID, sourceRepoID,
-		download.RepoIDs(steps), download.Revision(rule), priority)
+		download.RepoIDs(steps), download.Revision(dl), priority)
 
 	id, created, err := download.Open(ctx, tx, s.packages, download.Request{
 		ProductID:      s.productID,
@@ -1387,6 +1402,7 @@ func (s *Scanner) applyRules(
 		PackageID:      packageID,
 		SourceRepoID:   sourceRepoID,
 		Tag:            tag,
+		DownloadName:   dl.Name,
 		RuleName:       rule.Name,
 		Trigger:        download.TriggerDiscovery,
 		Origin:         "auto_download",
@@ -1402,7 +1418,7 @@ func (s *Scanner) applyRules(
 		return 0, nil
 	}
 
-	s.log.InfoContext(ctx, "download rule matched",
+	s.log.InfoContext(ctx, "auto-download rule matched",
 		"rule", rule.Name, "tag", tag, "chain", targetNames, "request", id, "priority", priority)
 
 	return 1, nil

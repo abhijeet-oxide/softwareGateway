@@ -81,7 +81,8 @@ func (p *Product) Validate(resolver *SecretResolver) error {
 	errs = append(errs, p.validateTargets(resolver)...)
 	errs = append(errs, p.validatePromotion()...)
 	errs = append(errs, p.validatePhysicalRepositories()...)
-	errs = append(errs, p.validateDownload()...)
+	errs = append(errs, p.validateDownloads()...)
+	errs = append(errs, p.validateAutoDownload()...)
 	errs = append(errs, p.validateReplication(resolver)...)
 	errs = append(errs, p.validateVerification(resolver)...)
 	errs = append(errs, p.validateNotifications(resolver)...)
@@ -111,7 +112,7 @@ func (p *Product) validateEnablement() Errors {
 	}
 
 	if len(p.Spec.Targets) > 0 && len(p.EnabledTargets()) == 0 && p.IsEnabled() &&
-		p.DownloadEnabled() {
+		p.AutoDownloadEnabled() {
 		errs = append(errs, Error{
 			"spec.targets",
 			"every target is disabled but download rules are enabled",
@@ -130,12 +131,11 @@ func (p *Product) validateEnablement() Errors {
 		declared[t.Name] = true
 	}
 
-	base := p.DownloadBlockPath()
-	for i, r := range p.DownloadRules() {
+	for i, r := range p.Spec.AutoDownload.Rules {
 		for j, name := range r.Targets {
 			if declared[name] && !enabled[name] {
 				errs = append(errs, Error{
-					fmt.Sprintf("%s.rules[%d].targets[%d]", base, i, j),
+					fmt.Sprintf("spec.autoDownload.rules[%d].targets[%d]", i, j),
 					fmt.Sprintf("%q is disabled", name),
 					"re-enable the target, or point the rule somewhere else — " +
 						"otherwise this rule fails the first time a package matches it",

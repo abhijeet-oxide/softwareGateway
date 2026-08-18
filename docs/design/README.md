@@ -30,7 +30,7 @@ A cloud-native platform that continuously discovers software packages published 
 | 17 | [Delivery Plan](17-delivery-plan.md) | Milestones, testing, open questions |
 | 18 | [Quay Replication Strategies](18-quay-replication.md) | `copy` / `mirror` / `proxy` per target, Quay's own mechanisms, what each promises |
 | 19 | [User Interface](19-user-interface.md) | Why v1 is CLI-only, what the UI must do, the gates before it ships |
-| 20 | [Download Rules](20-download-rules.md) | One declared operation from vendor to cluster: derived chains, verification gates, suspension |
+| 20 | [Downloads and Auto-Download](20-download-rules.md) | What happens when software comes in, and when that happens by itself: derived chains, verification gates |
 
 ## Reading order
 
@@ -42,7 +42,7 @@ A cloud-native platform that continuously discovers software packages published 
 | Implementing the Worker | 05 → 06 → 04 §4 → 11 |
 | Implementing the CLI | 13 → 09 |
 | Implementing Quay replication modes | 18 → 06 → 02 → 05 |
-| Implementing download rules | 20 → 07 → 18 → 10 → 08 |
+| Implementing downloads and auto-download | 20 → 07 → 18 → 10 → 08 |
 | Building the UI | 19 → 09 → 13 |
 | Operating it | 02 → 12 → 14 → 11 |
 | Auditing the technology choices | 16 → 03 → 06 |
@@ -76,8 +76,8 @@ Stated here so they are found before they are discovered.
 | Delegated replication is observed, not measured | A `mirror` target reports a sync state and no byte progress; a `proxy` target holds nothing until someone pulls ([18](18-quay-replication.md) §6) |
 | No UI in v1 | `transferctl` and Grafana are the interfaces. Direction and gates in [19](19-user-interface.md); the API-auth gate above blocks it |
 | `warm` is not built | A proxy cache fills when a pod pulls. Populating one deliberately moves a whole release at line rate, so it belongs in the worker plane and needs a third `jobs.kind` ([18](18-quay-replication.md) §6.3) |
-| A download rule cannot express an arbitrary workflow | The only ordering primitive is a content dependency the targets already declare. No conditionals, branches or user-defined steps — deliberately ([20](20-download-rules.md) §12) |
-| A rule suspension is state outside Git | An audited operational override, reported as an override rather than prevented. The alternative was "open a PR" as the only way to stop a bad rule at 02:00 ([20](20-download-rules.md) §9) |
+| A download cannot express an arbitrary workflow | The only ordering primitive is a content dependency the targets already declare. No conditionals, branches or user-defined steps — deliberately ([20](20-download-rules.md) §12) |
+| An auto-download rule can only be turned off by a commit | Deliberate: a runtime override would be a second source of truth for whether a rule fires. During an incident the fast path is `transfers pause`, which stops the work rather than editing configuration ([20](20-download-rules.md) §9) |
 
 ## Requirement traceability
 
@@ -95,7 +95,7 @@ Every section of the original requirement, mapped to where it is specified. This
 | Continuous discovery, persisted, no duplicates | [07](07-discovery.md) §2–3, [03](03-persistence.md) §5 |
 | Discovery → notifications, manual and auto download | [07](07-discovery.md) §5–6 |
 | Regex auto-download rules | [02](02-configuration.md) §5.4, [07](07-discovery.md) §5 |
-| A download rule triggered by CLI or UI, to one target or many, with the Quay step in the chain | [20](20-download-rules.md) §3–4, §8 |
+| A download triggered by CLI or UI, to one target or many, with the Quay step in the chain — and an auto-download rule that fires the same thing | [20](20-download-rules.md) §1.1, §3–4, §8 |
 | Verification before and after a download, enabled or disabled per rule | [20](20-download-rules.md) §5 |
 | A rule that can be turned off without a commit | [20](20-download-rules.md) §9 |
 | Notification policy per product; events; email + Teams | [02](02-configuration.md) §4, [12](12-observability-and-audit.md) §5 |

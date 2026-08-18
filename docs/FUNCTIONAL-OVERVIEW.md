@@ -22,7 +22,7 @@ softwareGateway watches those vendor registries and moves what it finds into you
 
 A Red Hat Quay destination can also **delegate** the move: instead of our workers pushing into it, Quay can be configured to mirror from an upstream on a schedule, or to act as a proxy cache that fills when a pod pulls. That buys convergence which keeps working while this tool is down, at the cost of byte-level progress and exact timing — so a delegated target reports a *state* rather than a percentage, and the choice is per target. Which mode to pick, and why, is [18 — Quay Replication Strategies](design/18-quay-replication.md).
 
-Most estates do not perform those four verbs one at a time. A release goes vendor → JFrog → Quay, verified at each end, and the sequence is the same every time — so it can be **declared once** as a download rule and run by anyone, from the CLI or later the UI, with the steps ordered, the verification acting as a gate, and nothing reaching the cluster's registry if what landed in storage did not verify. That is [20 — Download Rules](design/20-download-rules.md).
+Most estates do not perform those four verbs one at a time. A release goes vendor → JFrog → Quay, verified at each end, and the sequence is the same every time — so it can be **declared once** as a download and run by anyone, from the CLI or later the UI, with the steps ordered, the verification acting as a gate, and nothing reaching the cluster's registry if what landed in storage did not verify. An auto-download rule adds a version pattern and triggers that same download when a release appears — so nothing happens automatically that a person could not have asked for by hand. That is [20 — Downloads and Auto-Download](design/20-download-rules.md).
 
 **The concrete outcome:** a 45 GB vendor release is discovered within 15 minutes of publication, replicated into your lab registry in about 11 minutes — of which roughly a quarter never crosses the network because you already had those layers — verified against the vendor's signing identity, and recorded in an audit trail that can answer "what did we ship in March" a year later.
 
@@ -409,7 +409,7 @@ Five people, ten situations. Each scenario names **the design decision that prod
 
 ### 5.1 Onboarding a new vendor — Dan, Monday morning
 
-Dan writes **one file**. Everything about the product — sources, targets, credentials, CA bundle, proxy, rate limits, notification recipients, auto-download rules, verification policy — is in that one ConfigMap.
+Dan writes **one file**. Everything about the product — sources, targets, credentials, CA bundle, proxy, rate limits, notification recipients, the download and the rules that trigger it, verification policy — is in that one ConfigMap.
 
 ```bash
 $ vim deploy/products/vendor-c-analytics.yaml

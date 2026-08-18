@@ -46,7 +46,7 @@ Discover → Review → Verify → Download & Replicate → Compare → Promote
 
 A dark navy left sidebar, eight items, in this order:
 
-**Home · Products · Software · Download Rules · Repositories · Activity · Reports · Settings**
+**Home · Products · Software · Downloads · Repositories · Activity · Reports · Settings**
 
 Nothing else, ever. Detail views are drill-downs from these, not extra nav entries. The sidebar footer shows the signed-in user with their role (`Abhijeet Prasad — Product Owner`).
 
@@ -76,7 +76,8 @@ The UI has one vocabulary and it is the user's, not the engine's. This table is 
 | **Vendor** (Nokia) | source registry | Source repository |
 | **Location** (Vendor · JFrog · Quay · Production) | target | Target repository |
 | **Download** (includes replication) | transfer, replicate, sync, copy | TransferRequest → Transfer(s) |
-| **Download Rule** | auto-download rule, replication config | `download` rule + the chain its targets declare |
+| **Download** | replication, transfer chain | a `spec.download` entry + the chain its targets declare |
+| **Auto-download rule** | trigger, schedule, filter | a `spec.autoDownload` rule — a version pattern and the download it fires |
 | **Saved (already present)** | dedupe, placement hit, mount | Blob placements, cross-repository mount |
 | **Configure Mirror to Quay** | mirror mode, delegated replication | Quay `replication.mode: mirror` |
 | **Verified / Signed** | cosign, sigstore, referrers | Verification |
@@ -192,16 +193,22 @@ The path **high-level difference → artifact → actual file diff** must be tra
 
 ---
 
-### Page 6 — Download Rules
+### Page 6 — Downloads
 
-**Answers:** *What gets brought in automatically, and where does it go?*
+**Answers:** *How does software get in, and what comes in automatically?*
 
-**One rule controls the complete internal download and replication process.** The user never configures replication separately.
+**Two things on one page, and the page must keep them apart** — this is the distinction the whole feature is built on:
 
-- **Rule list** — name, product, the chain as a visual flow (**Vendor → JFrog → Quay Mirror**), verification requirement, discovery/download behaviour, enabled state, last triggered, and what it last produced.
-- **Rule detail** — Product and vendor source · which versions it matches · destination JFrog repository · Quay mirror repository · verification required before or after · automatic vs manual download · enabled/disabled.
-- **Rules are managed in Git.** The page shows each rule as a first-class object with a `Managed in Git` badge, a **View YAML** panel, an **Open in Git** link, and — when the registry's actual configuration has drifted from the rule — a clear **Drift** banner naming what differs and offering **Apply**, with the consequences stated before it is pressed. Enabling and disabling, and triggering a rule now, are actions the UI performs directly; editing the rule's content is a Git change. When a rule is turned off from this page, it reads back as **"Suspended by alice@example.com — configuration says enabled"**, with the reason and who gave it: both facts are true and the page shows both.
-- **Show the chain as steps, and show what stops it.** A rule that requires verification before Quay is configured should say so on the rule row, because that is the sentence a Product Owner needs when asked "could a bad build reach the cluster?" — the answer is visible, not documented.
+- A **download** is *what happens*: where software goes, in what order, and what has to verify on the way. It carries no pattern.
+- An **auto-download rule** is *when it happens by itself*: a version pattern, and the name of the download it triggers. It performs nothing of its own.
+
+A rule fires the same download a person runs by hand. If the page makes that look like two different mechanisms, it has failed.
+
+- **Download panel (top)** — usually one, named or not. Show the chain as a visual flow (**Vendor → JFrog → Quay Mirror**), the verification gates on it, and a **Download…** action that asks for the software by name and then runs. The chain is *derived* from what the targets declare, so where it is longer than what was configured, say which target pulled the extra hop in.
+- **Rule list (below)** — name, what versions it matches, which sources it watches, which download it triggers, enabled state, last fired, and what it last produced. A rule row shows its pattern; a download panel never does.
+- **Downloading by hand takes software, not a filter.** The action asks for versions, offers what has been discovered, and has no pattern field anywhere. A **Preview** shows the resolved steps before anything runs.
+- **Configuration is managed in Git, and this page cannot change it.** Each object carries a `Managed in Git` badge, a **View YAML** panel and an **Open in Git** link; when the registry's actual configuration has drifted from what Git says, a clear **Drift** banner names what differs and offers **Apply**, with the consequences stated before it is pressed. **There is no enable/disable toggle on a rule** — a rule that is off reads *"Disabled in configuration"* and links to the line. What the page *does* is run a download and, when a rule is misbehaving, **Pause the queue**: an action on work, not on Git.
+- **Show the chain as steps, and show what stops it.** A download that requires verification before Quay is configured should say so on the row, because that is the sentence a Product Owner needs when asked "could a bad build reach the cluster?" — the answer is visible, not documented.
 - **Design the read/drift/apply affordances properly** — this is the page where "the UI shows configuration but Git owns it" either reads as obvious or reads as broken.
 
 ---
@@ -291,7 +298,7 @@ For each of the ten pages, 1440 × 900, light theme, using consistent realistic 
 1. **Populated state** for every page.
 2. **Empty state** for Home, Products, Software, Activity.
 3. **In-progress state** for Download (step 1 running, step 2 configuring).
-4. **Error states** — Download with a failed step and its retry; Home with the attention band showing a verification failure; Download Rules with drift detected.
+4. **Error states** — Download with a failed step and its retry; Home with the attention band showing a verification failure; Downloads with drift detected.
 5. **Compare** at three depths: summary, differences list, and an open file diff.
 6. **Products** with a product's version history expanded.
 

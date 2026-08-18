@@ -127,27 +127,29 @@ Delegation. A Quay target can stop being somewhere we push to and become somewhe
 
 **Entry criterion:** Q7 below — if a mirror sync cannot be observed well enough to report honestly, this milestone does not start.
 
-### M9 — Download rules
+### M9 — Downloads and auto-download
 
-The declared form of the operation the estate actually performs: vendor → JFrog → Quay, with gates, as one reviewable object. Specified in [20](20-download-rules.md).
+The declared form of the operation the estate actually performs: vendor → JFrog → Quay, with gates, as one reviewable object — and, separately, the rule that fires it without being asked. Specified in [20](20-download-rules.md).
 
-**Status: complete except the window's scheduler binding and the rule metrics.** A rule can be declared, validated, listed, described, run by hand and suspended; its chain is derived from `mirror.from`, its steps are ordered, and a step whose predecessor did not succeed is `skipped` rather than failed. A rule may declare a `window` and it validates, but a run is not yet deferred to the next opening — which is Q12's question anyway, and building the binding before knowing whether anyone uses the field would be the wrong order.
+**Status: complete except the metrics.** A download can be declared, validated, listed, dry-run and run by hand; its chain is derived from `mirror.from`, its steps are ordered, and a step whose predecessor did not succeed is `skipped` rather than failed. An auto-download rule matches a tag and triggers that same download.
 
-- `download.rules` replacing `autoDownload.rules`, which keeps loading unchanged ([20](20-download-rules.md) §3)
-- Chain derivation from the targets' own `mirror.from` edges — a set of destinations in, an ordered plan out ([20](20-download-rules.md) §3.5, §4)
+- `spec.download` — targets, gates and priority, with **no pattern in it**: a download is performed, not fired ([20](20-download-rules.md) §3.1)
+- `spec.autoDownload` — a tag pattern, the sources to watch, and the download to trigger. The only place a pattern belongs ([20](20-download-rules.md) §3.4)
+- Rules written in the older inline shape keep loading and keep meaning what they meant ([20](20-download-rules.md) §3.5)
+- Chain derivation from the targets' own `mirror.from` edges — a set of destinations in, an ordered plan out ([20](20-download-rules.md) §3.6, §4)
 - `transfers.step_index` and `depends_on_transfer_id`; the `waiting` and `skipped` transfer states ([20](20-download-rules.md) §6)
 - Verification as a gate: under `enforce`, a destination that fails verification stops the steps that depend on it ([20](20-download-rules.md) §5)
-- `trigger: [discovery, manual]`, the optional window, and rule revisions in the idempotency key ([20](20-download-rules.md) §8)
-- Suspension — an audited operational override that never edits Git ([20](20-download-rules.md) §9)
-- `rules list|describe|run|suspend|resume`, `download --rule`; the `downloadRules` routes; the `Download` audit category and its metrics
+- Download revisions in the idempotency key, and the rule deliberately absent from it ([20](20-download-rules.md) §8.2)
+- `transferctl download`, `downloads list`, `rules list|matches`; the `downloads` and `autoDownloadRules` routes; the `Download` audit category and its metrics
 
 **Acceptance:**
-- One rule **naming only the Quay target** takes a newly discovered release from the vendor into JFrog and then into Quay, in that order, with no second command — and `transfers describe` shows two steps with two different kinds of progress and no combined percentage ([20](20-download-rules.md) §3.5, §7.1).
-- Two rules whose chains share the JFrog hop transfer that package to JFrog **once**, and the audit trail shows one transfer ([20](20-download-rules.md) §3.5).
+- One download **naming only the Quay target** takes a newly discovered release from the vendor into JFrog and then into Quay, in that order, with no second command — and `transfers describe` shows two steps with two different kinds of progress and no combined percentage ([20](20-download-rules.md) §3.6, §7.1).
+- `transferctl download <product> <tag>` performs the same work an auto-download rule performs, through the same chain and the same gates, **consulting no pattern** — and a rule fires nothing a person could not have asked for by hand ([20](20-download-rules.md) §1.1).
+- Two downloads whose chains share the JFrog hop transfer that package to JFrog **once**, and the audit trail shows one transfer ([20](20-download-rules.md) §3.6).
 - With `verify.policy: enforce`, a destination whose signature check fails leaves the Quay step `skipped`, not `failed`, and **nothing was written to Quay**. This is the failure this milestone exists to make impossible.
-- Every product document that was valid at M8 is valid at M9 and produces byte-identical transfers ([20](20-download-rules.md) §3.3).
-- A rule naming a Quay target whose tag glob excludes `sha256-*.sig` is rejected by `config validate` when `verify.after` is set — the two blocks are only wrong together ([20](20-download-rules.md) §3.4).
-- `rules suspend` stops a rule within one API call, survives a Coordinator restart, and is reported as an override of what Git says. No configuration file changed.
+- Every product document that was valid at M8 is valid at M9 and produces byte-identical transfers ([20](20-download-rules.md) §3.5).
+- A download naming a Quay target whose tag glob excludes `sha256-*.sig` is rejected by `config validate` when `verify.after` is set — the two blocks are only wrong together ([20](20-download-rules.md) §3.7).
+- No API call, CLI command or UI control can change whether a rule fires. `enabled` in Git is the only switch, and the CLI's own tests assert that "suspend" and "resume" do not appear in its output ([20](20-download-rules.md) §9).
 - Retrying a partially failed run does not re-transfer a step that already succeeded.
 
 ### M10 — Web UI
@@ -236,9 +238,8 @@ Deliberately unresolved. Each is recorded with when it must be answered, so none
 | Q8 | Should `manage: auto` exist — continuous reconciliation of Quay config — and under what guard? ([18](18-quay-replication.md) §8) | M8 exit, from how often observed drift turns out to be legitimate |
 | ~~Q9~~ | ~~Does `warm` belong in the worker plane?~~ ([18](18-quay-replication.md) §6.3) | **ANSWERED at M8: yes.** It moves the whole package at line rate, and [00](00-overview.md) §5 says bytes never enter the Coordinator. It needs a third `jobs.kind`, so it left M8 rather than being built in the wrong place |
 | Q10 | Can a mirror tag glob be generated from an `autoDownload` rule's RE2 pattern, or is the dialect gap a trap? ([18](18-quay-replication.md) §5.3) | M8 — the default answer is no |
-| Q11 | Should a rule suspension **expire by default** rather than persisting until someone remembers? ([20](20-download-rules.md) §9) | M9 design |
-| Q12 | Does anyone use a rule's `window`? It is the one field beyond the stated requirement and is deletable in isolation ([20](20-download-rules.md) §8.2) | M9 exit |
-| Q13 | Do recurring schedules belong in a rule, or does a CronJob calling `rules run` cover every real case? ([20](20-download-rules.md) §12) | M10 — the default answer is the CronJob |
-| Q14 | Is `rule_revision` the hash of the rule or of the whole product document? ([20](20-download-rules.md) §8.3) | M9 design |
+| Q13 | Do recurring schedules belong here at all, or does a CronJob calling `transferctl download` cover every real case? ([20](20-download-rules.md) §12) | M10 — the default answer is the CronJob |
+| Q14 | Is the run revision the hash of the download or of the whole product document? ([20](20-download-rules.md) §8.2) | M9 exit |
+| Q15 | Does anyone declare a second download? If nobody does within two quarters, the list is flexibility that cost nothing and bought nothing ([20](20-download-rules.md) §3.2) | M10 |
 
 Q6 is the one with real consequences. v1 ships unauthenticated behind a NetworkPolicy, and that is only acceptable while the NetworkPolicy is the whole story. Adding an Ingress without first implementing [09](09-api.md) §10.2 would expose transfer control and the full audit trail to anyone who can route to it.

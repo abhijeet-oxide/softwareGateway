@@ -538,29 +538,82 @@ spec:
     to: production
 
   # =====================================================================
-  # AUTO-DOWNLOAD — what to replicate without being asked.
+  # DOWNLOAD — WHAT happens when software is brought in.
+  #
+  # A download takes named software and puts it through a set of targets. It
+  # carries NO tag pattern and no repository filter, because by the time one
+  # runs the software has already been chosen — by a person typing
+  # `transferctl download v3.2.1`, or by an auto-download rule that matched.
+  # A pattern asked at that point could only disagree with the choice.
+  #
+  # This is a LIST for future-proofing. One entry is the default by being the
+  # only one, and nothing has to say so. Declare several — a different
+  # destination set for a different class of release — and exactly one must
+  # carry `default: true`, which validation enforces.
+  # =====================================================================
+  download:
+    - name: internal
+      # A SET, not a sequence. The order comes from the targets themselves:
+      # `ocp-prod` declares `replication.mirror.from: lab`, so this runs
+      # lab first and then has Quay pull from it — one hop over the vendor
+      # link instead of two. `transferctl downloads list` prints the chain
+      # it derived, which is the only way to check that reading was right.
+      targets: [lab, ocp-prod]
+
+      # Whether verification GATES the chain. It selects between behaviours
+      # the verification block below already configures; keys and identities
+      # are NOT restated here, because a trust configuration assembled from
+      # three places is one nobody can audit.
+      verify:
+        before: true          # source-side, before any bytes move
+        after: true           # destination-side, after they land
+        # Under `enforce` a target that fails verification stops every target
+        # that mirrors from it — which is the whole security value of a chain.
+        policy: enforce
+
+      priority: 100           # 0-1000; defaults to 50
+      # Meaningless with one download, required once there are two.
+      default: true
+
+  # =====================================================================
+  # AUTO-DOWNLOAD — WHEN a download happens without being asked.
+  #
+  # A rule does not download anything itself. It matches a tag and TRIGGERS
+  # the download above — the same operation a person performs by hand, with
+  # the same targets and the same gates. That equivalence is the point: there
+  # is no automatic path that can do something the manual path cannot.
   # =====================================================================
   autoDownload:
+    # The master switch over automatic firing ONLY. Downloads by hand are
+    # unaffected — a switch that also disabled the manual path is one nobody
+    # dares touch during an incident.
     enabled: true
     rules:
-      # Evaluated in order, FIRST MATCH WINS — not all-match, because two rules
-      # matching one tag with different priorities has no sensible reading.
+      # Evaluated in order, FIRST MATCH WINS — not all-match, because two
+      # rules matching one tag with different downloads has no sensible
+      # reading.
       - name: ga-releases
+        # RE2, like every other pattern in this document except a Quay mirror
+        # glob. This is the ONLY place a pattern belongs.
         tagPattern: '^v\d+\.\d+\.\d+$'
-        targets: [lab]
-        priority: 100          # 0-1000; defaults to 50
-        verifyBeforeTransfer: true
+        # `download` omitted: triggers the default, which is the only one.
+        # Naming it explicitly is how a second download would be reached.
 
       - name: release-candidates
         tagPattern: '^v\d+\.\d+\.\d+-rc\.\d+$'
-        targets: [lab]
-        priority: 10
+        # Narrows which sources the rule watches; absent means all of them.
+        # It is how one product carries a vendor's GA channel and its
+        # early-access channel without two rules differing only by a pattern
+        # nobody can read.
+        sources: [primary]
 
-      # `targets` omitted: goes to the default target. Validation rejects this
-      # if no default is declared, rather than discovering it at match time.
       - name: near-orbs
         tagPattern: '^orb_\d+\.\d+\.\d+$'
-        priority: 50
+        # Turned off without being deleted. Configuration, in Git, and the
+        # only way to stop a rule — there is deliberately no runtime override,
+        # because a second source of truth for "is this on" is exactly what
+        # GitOps exists to prevent.
+        enabled: false
 
   # =====================================================================
   # VERIFICATION — product-wide defaults, overridable per source and target.

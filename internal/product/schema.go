@@ -76,11 +76,11 @@ type Spec struct {
 	Sources   []Source   `json:"sources"`
 	Targets   []Target   `json:"targets"`
 	Promotion *Promotion `json:"promotion,omitempty"`
-	// Download is the current spelling; AutoDownload is the older one and is
-	// still honoured in full. Declaring BOTH is a validation error rather than
-	// a merge: two blocks meaning the same thing, resolved by precedence, is a
-	// configuration nobody can read out loud.
-	Download      Download            `json:"download,omitempty"`
+	// Download is WHAT happens; AutoDownload is WHEN it happens by itself.
+	// They are separate because an auto-download rule does not do the
+	// downloading — it triggers a download, which is the same operation a
+	// person performs by hand.
+	Download      []Download          `json:"download,omitempty"`
 	AutoDownload  AutoDownload        `json:"autoDownload,omitempty"`
 	Verification  Verification        `json:"verification,omitempty"`
 	Notifications Notifications       `json:"notifications,omitempty"`
@@ -618,14 +618,6 @@ const (
 	DefaultDiscoveryInterval = 15 * time.Minute
 	DefaultRulePriority      = 50
 )
-
-// AutoDownload is the older spelling of Download. Kept as its own type rather
-// than aliased, so a document using it round-trips exactly and the validator
-// can point at the path the reader actually wrote.
-type AutoDownload struct {
-	Enabled bool   `json:"enabled,omitempty"`
-	Rules   []Rule `json:"rules,omitempty"`
-}
 
 type Verification struct {
 	Enabled            bool               `json:"enabled,omitempty"`

@@ -703,39 +703,31 @@ func replicationPath(product, target string) string {
 }
 
 // ---------------------------------------------------------------------------
-// Download rules (docs/design/20)
+// Downloads and auto-download (docs/design/20)
 // ---------------------------------------------------------------------------
 
-// ListDownloadRules returns a product's rules with their derived chains.
-func (c *Client) ListDownloadRules(ctx context.Context, product string) (*ListDownloadRulesResponse, error) {
-	var out ListDownloadRulesResponse
-	return &out, c.get(ctx, "/api/v1/products/"+url.PathEscape(product)+"/downloadRules", &out)
+// ListDownloads returns a product's downloads with their derived chains.
+func (c *Client) ListDownloads(ctx context.Context, product string) (*ListDownloadsResponse, error) {
+	var out ListDownloadsResponse
+	return &out, c.get(ctx, "/api/v1/products/"+url.PathEscape(product)+"/downloads", &out)
 }
 
-// GetDownloadRule returns one rule.
-func (c *Client) GetDownloadRule(ctx context.Context, product, rule string) (*DownloadRuleView, error) {
-	var out DownloadRuleView
-	return &out, c.get(ctx, downloadRulePath(product, rule), &out)
+// RunDownload downloads named software by hand.
+func (c *Client) RunDownload(ctx context.Context, product string, req RunDownloadRequest) (*RunDownloadResponse, error) {
+	var out RunDownloadResponse
+	return &out, c.post(ctx, "/api/v1/products/"+url.PathEscape(product)+"/downloads:run", req, &out)
 }
 
-// RunDownloadRule triggers a rule by hand.
-func (c *Client) RunDownloadRule(ctx context.Context, product, rule string, req RunDownloadRuleRequest) (*RunDownloadRuleResponse, error) {
-	var out RunDownloadRuleResponse
-	return &out, c.post(ctx, downloadRulePath(product, rule)+":run", req, &out)
+// ListAutoDownloadRules returns a product's auto-download rules.
+func (c *Client) ListAutoDownloadRules(ctx context.Context, product string) (*ListAutoDownloadRulesResponse, error) {
+	var out ListAutoDownloadRulesResponse
+	return &out, c.get(ctx, "/api/v1/products/"+url.PathEscape(product)+"/autoDownloadRules", &out)
 }
 
-// SuspendDownloadRule stops a rule now, without editing configuration.
-func (c *Client) SuspendDownloadRule(ctx context.Context, product, rule string, req SuspendDownloadRuleRequest) (*SuspendDownloadRuleResponse, error) {
-	var out SuspendDownloadRuleResponse
-	return &out, c.post(ctx, downloadRulePath(product, rule)+":suspend", req, &out)
-}
-
-// ResumeDownloadRule lifts a suspension.
-func (c *Client) ResumeDownloadRule(ctx context.Context, product, rule string) (*SuspendDownloadRuleResponse, error) {
-	var out SuspendDownloadRuleResponse
-	return &out, c.post(ctx, downloadRulePath(product, rule)+":resume", nil, &out)
-}
-
-func downloadRulePath(product, rule string) string {
-	return "/api/v1/products/" + url.PathEscape(product) + "/downloadRules/" + url.PathEscape(rule)
+// RuleMatches reports which discovered packages a rule would pick up.
+func (c *Client) RuleMatches(ctx context.Context, product, rule string) (*MatchesResponse, error) {
+	path := "/api/v1/products/" + url.PathEscape(product) +
+		"/autoDownloadRules/" + url.PathEscape(rule) + "/matches"
+	var out MatchesResponse
+	return &out, c.get(ctx, path, &out)
 }

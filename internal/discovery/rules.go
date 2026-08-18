@@ -8,6 +8,10 @@ import (
 )
 
 // ruleSet is a product's auto-download rules, compiled once.
+//
+// A rule holds a pattern and nothing else about the work. What it triggers is
+// a DOWNLOAD, resolved separately — which is why nothing here knows about
+// targets, verification or priority.
 type ruleSet struct {
 	enabled bool
 	rules   []compiledRule
@@ -20,11 +24,11 @@ type compiledRule struct {
 
 // compileRules compiles a product's auto-download rules.
 func compileRules(p *product.Product) (ruleSet, error) {
-	set := ruleSet{enabled: p.DownloadEnabled()}
-	for _, r := range p.DownloadRules() {
+	set := ruleSet{enabled: p.AutoDownloadEnabled()}
+	for _, r := range p.Spec.AutoDownload.Rules {
 		re, err := regexp.Compile(r.TagPattern)
 		if err != nil {
-			return ruleSet{}, fmt.Errorf("download rule %q pattern %q: %w", r.Name, r.TagPattern, err)
+			return ruleSet{}, fmt.Errorf("auto-download rule %q pattern %q: %w", r.Name, r.TagPattern, err)
 		}
 		set.rules = append(set.rules, compiledRule{rule: r, pattern: re})
 	}
@@ -50,7 +54,7 @@ func (s ruleSet) match(tag string) (product.Rule, bool) {
 		if !c.pattern.MatchString(tag) {
 			continue
 		}
-		if !c.rule.IsEnabled() || !c.rule.TriggeredBy(product.TriggerDiscovery) {
+		if !c.rule.IsEnabled() {
 			continue
 		}
 		return c.rule, true

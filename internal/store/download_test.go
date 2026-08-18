@@ -2,9 +2,7 @@ package store
 
 import (
 	"context"
-	"database/sql"
 	"testing"
-	"time"
 )
 
 func chainFixture(t *testing.T) (*Packages, *Replication, int64, context.Context) {
@@ -199,92 +197,5 @@ func TestUnsettledPredecessorChangesNothing(t *testing.T) {
 	}
 	if got := stateOf(t, p, second); got != "waiting" {
 		t.Fatalf("state = %q", got)
-	}
-}
-
-// ---------------------------------------------------------------------------
-// Suspensions
-// ---------------------------------------------------------------------------
-
-func TestSuspendAndResume(t *testing.T) {
-	_, r, productID, ctx := chainFixture(t)
-
-	if err := r.Suspend(ctx, productID, "ga-releases", "vendor shipped a broken build", "alice", sql.NullString{}); err != nil {
-		t.Fatalf("Suspend: %v", err)
-	}
-	live, err := r.Suspensions(ctx, "vendor-a")
-	if err != nil {
-		t.Fatalf("Suspensions: %v", err)
-	}
-	s, ok := live["ga-releases"]
-	if !ok || s.Reason == "" || s.Actor != "alice" {
-		t.Fatalf("suspension = %+v", live)
-	}
-
-	lifted, err := r.Resume(ctx, productID, "ga-releases", "bob")
-	if err != nil || !lifted {
-		t.Fatalf("Resume = (%v, %v)", lifted, err)
-	}
-	live, _ = r.Suspensions(ctx, "vendor-a")
-	if len(live) != 0 {
-		t.Fatalf("expected no live suspensions, got %+v", live)
-	}
-}
-
-// A suspension nobody can explain is one nobody dares lift.
-func TestSuspendRequiresAReason(t *testing.T) {
-	_, r, productID, ctx := chainFixture(t)
-
-	if err := r.Suspend(ctx, productID, "ga-releases", "", "alice", sql.NullString{}); err == nil {
-		t.Fatal("a reason is required")
-	}
-}
-
-// An expired override must not keep stopping a rule nobody meant to stop.
-func TestExpiredSuspensionIsNotLive(t *testing.T) {
-	_, r, productID, ctx := chainFixture(t)
-	past := time.Now().UTC().Add(-time.Hour).Format("2006-01-02T15:04:05.000Z")
-
-	if err := r.Suspend(ctx, productID, "ga-releases", "incident", "alice",
-		sql.NullString{String: past, Valid: true}); err != nil {
-		t.Fatalf("Suspend: %v", err)
-	}
-	live, err := r.Suspensions(ctx, "vendor-a")
-	if err != nil {
-		t.Fatalf("Suspensions: %v", err)
-	}
-	if len(live) != 0 {
-		t.Fatalf("an expired suspension is not live: %+v", live)
-	}
-}
-
-// Released suspensions are history rather than deletions, so "what was stopped
-// and why" survives.
-func TestResumeKeepsTheHistory(t *testing.T) {
-	p, r, productID, ctx := chainFixture(t)
-
-	_ = r.Suspend(ctx, productID, "ga-releases", "incident", "alice", sql.NullString{})
-	_, _ = r.Resume(ctx, productID, "ga-releases", "bob")
-
-	var n int
-	if err := p.DB().QueryRowContext(ctx,
-		`SELECT count(*) FROM download_rule_suspensions WHERE rule_name = 'ga-releases'`).Scan(&n); err != nil {
-		t.Fatal(err)
-	}
-	if n != 1 {
-		t.Fatalf("expected the row to survive, got %d", n)
-	}
-}
-
-// One live suspension per rule; suspending twice without resuming is a
-// constraint violation rather than two overlapping overrides.
-func TestOnlyOneLiveSuspensionPerRule(t *testing.T) {
-	_, r, productID, ctx := chainFixture(t)
-
-	if err := r.Suspend(ctx, productID, "ga", "first", "alice", sql.NullString{}); err != nil {
-		t.Fatal(err)
-	}
-	if err := r.Suspend(ctx, productID, "ga", "second", "bob", sql.NullString{}); err == nil {
-		t.Fatal("a second live suspension must be refused")
 	}
 }

@@ -152,9 +152,9 @@ type Deps struct {
 	// replication routes are absent and a caller gets an honest 404 rather
 	// than a route that always fails.
 	Replication Replicator
-	// Rules is the download-rule surface. Optional on the same terms: without
+	// Downloads is the download surface. Optional on the same terms: without
 	// it the routes are absent and a caller gets an honest 404.
-	Rules Ruler
+	Downloads Downloader
 	// TargetRows resolves configured target names to catalog rows, which only
 	// running a rule needs.
 	TargetRows TargetRows
@@ -268,15 +268,16 @@ func (s *Server) routes() chi.Router {
 			r.Post("/products/{product}/targets/{target}/replication:sync", s.handleSyncReplication)
 			r.Post("/products/{product}/targets/{target}/replication:cancelSync", s.handleCancelSyncReplication)
 		}
-		// Download rules. Read-only as a collection — they are configuration —
-		// with verbs that operate: run it now, stop it now, start it again.
-		// None of them edits the rule; changing what a rule SAYS is a commit.
-		if s.deps.Rules != nil {
-			r.Get("/products/{product}/downloadRules", s.handleListDownloadRules)
-			r.Get("/products/{product}/downloadRules/{rule}", s.handleGetDownloadRule)
-			r.Post("/products/{product}/downloadRules/{rule}:run", s.handleRunDownloadRule)
-			r.Post("/products/{product}/downloadRules/{rule}:suspend", s.handleSuspendDownloadRule)
-			r.Post("/products/{product}/downloadRules/{rule}:resume", s.handleResumeDownloadRule)
+		// Downloads and auto-download rules, as two resources because they are
+		// two things. Both collections are read-only — they are configuration
+		// — and the one verb takes SOFTWARE rather than a pattern: a pattern
+		// decides what to download when nobody is asking, and `:run` is
+		// somebody asking.
+		if s.deps.Downloads != nil {
+			r.Get("/products/{product}/downloads", s.handleListDownloads)
+			r.Post("/products/{product}/downloads:run", s.handleRunDownload)
+			r.Get("/products/{product}/autoDownloadRules", s.handleListAutoDownloadRules)
+			r.Get("/products/{product}/autoDownloadRules/{rule}/matches", s.handleRuleMatches)
 		}
 
 		// The sync HISTORY is readable without a management client, and that

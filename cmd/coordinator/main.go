@@ -370,10 +370,10 @@ func run() error {
 		// to Quay's MANAGEMENT api, which needs a credential from a projected
 		// Secret, and transferctl holds neither.
 		Replication: replicationSvc,
-		// Download rules read configuration and the operational overrides;
-		// running one also needs catalog rows, which is why the two are
-		// separate dependencies.
-		Rules:            download.NewService(packages, replicationStore, logger),
+		// Downloads and auto-download rules read configuration; running a
+		// download also needs catalog rows, which is why the two are separate
+		// dependencies.
+		Downloads:        download.NewService(packages, replicationStore, logger),
 		TargetRows:       transferResolver,
 		ReplicationStore: replicationStore,
 		Leader:           elector,

@@ -57,17 +57,24 @@ Products are **read-only over the API.** Configuration comes from Git ([02](02-c
 
 These do not contradict the paragraph above: configuration still comes from Git, and `:apply` pushes what Git already says into a *third-party registry's* own configuration store. It never edits a product. See [18](18-quay-replication.md) §7–8.
 
-#### Download rules
+#### Downloads and auto-download
 
 | Method | Path | Purpose |
 |---|---|---|
-| `GET` | `/api/v1/products/{product}/downloadRules` | Rules, their derived chains, suspension state and last run |
-| `GET` | `/api/v1/products/{product}/downloadRules/{rule}` | One, with the step order and the gates it applies |
-| `POST` | `/api/v1/products/{product}/downloadRules/{rule}:run` | Trigger. `validateOnly=true` renders the plan and moves nothing |
-| `POST` | `/api/v1/products/{product}/downloadRules/{rule}:suspend` | Stop it now. Requires a reason; never edits configuration |
-| `POST` | `/api/v1/products/{product}/downloadRules/{rule}:resume` | |
+| `GET` | `/api/v1/products/{product}/downloads` | Downloads, their derived chains and their gates |
+| `POST` | `/api/v1/products/{product}/downloads:run` | Download named software. `tags` is required; `validateOnly=true` renders the plan and moves nothing |
+| `GET` | `/api/v1/products/{product}/autoDownloadRules` | Rules, what they match, and which download each triggers |
+| `GET` | `/api/v1/products/{product}/autoDownloadRules/{rule}/matches` | What this rule would pick up from what has been discovered. Reads and creates nothing |
 
-Same caveat as above, and one deliberate absence: there is **no** `/downloadRules/{rule}/runs`. A run is a transfer request, and `GET /transfers?filter=rule="ga-releases"` already returns them (§3). See [20](20-download-rules.md) §10.
+`downloads:run` takes tags and **no pattern**. A pattern decides what to download when nobody is asking; here somebody is asking, and an empty `tags` is an error rather than "download everything".
+
+Three deliberate absences, each of which someone will ask for:
+
+- **No `:suspend` or `:resume`, and no way to enable or disable a rule.** Whether a rule fires is configuration, it lives in Git, and an API that changed it would be a second source of truth that Flux reverts ([20](20-download-rules.md) §9). The fast path during an incident is `transfers pause` — stop the work, not the configuration.
+- **No `/downloads/{download}/runs`.** A run is a transfer request, and `GET /transfers?filter=…` already returns them (§3).
+- **No `autoDownloadRules/{rule}:run`.** Running a rule by hand is downloading, and that is `downloads:run` with the software named. A rule exists to choose software when nobody is there to choose it.
+
+See [20](20-download-rules.md) §10.
 
 #### Why calibration is per product and synchronous
 

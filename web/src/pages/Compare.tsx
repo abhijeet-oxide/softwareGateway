@@ -9,7 +9,7 @@ import { useSearchParams } from 'react-router-dom'
 import {
   useCompare, useCompareProgress, usePackages, useProduct, useProducts,
 } from '../api/queries'
-import { kindName, matches, version } from '../domain/derive'
+import { kindName, matches, packageReference, version } from '../domain/derive'
 import { bytes, formatBytes, formatCount, formatDuration } from '../domain/format'
 import { NA, Value } from '../components/value'
 import { ErrorState, PageHeader, SearchBar } from '../components/layout'
@@ -62,18 +62,18 @@ function sourceNameFor(
   return undefined
 }
 
-/**
- * How a release is identified in these selects.
+/*
+ * How a release is identified in these selects: `repository:tag`, which is the
+ * reference the API resolves and the only unambiguous one. A vendor publishes
+ * one version tag into every repository a product watches, so a select keyed on
+ * the tag alone had ten options with the same value and the same label, and
+ * picking any of them asked the server a question it correctly refused to
+ * answer.
  *
- * `repository:tag`, which is exactly the reference the API resolves — and the
- * only unambiguous one. A vendor publishes one version tag into every
- * repository a product watches, so a select keyed on the tag alone had ten
- * options with the same value and the same label, and picking any of them
- * asked the server a question it correctly refused to answer.
+ * The same function the download button names a release with — there is one
+ * way to say which package you mean, and two would drift.
  */
-function refOf(pkg: Package): string {
-  return pkg.sourceRepository ? `${pkg.sourceRepository}:${pkg.tag}` : pkg.tag
-}
+const refOf = packageReference
 
 /** The option list for a release select: the name, the version, and both searchable. */
 function releaseOptions(releases: Package[]) {

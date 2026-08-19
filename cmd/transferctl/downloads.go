@@ -125,7 +125,14 @@ func newDownloadCommand() *cobra.Command {
 			"targets, the same order, the same verification gates. The only\n" +
 			"difference is who chose the software.\n\n" +
 			"There is no tag filter and no repository filter here. You named the\n" +
-			"software; a pattern asked at this point could only disagree with you.",
+			"software; a pattern asked at this point could only disagree with you.\n\n" +
+			"Name a version, or a repository and a version where a product\n" +
+			"publishes one version under several names:\n\n" +
+			"  download P 25.7_mp2604_2131\n" +
+			"  download P orbs/cfx-5000-k8s:25.7_mp2604_2131\n\n" +
+			"A version matching several repositories is refused, and the refusal\n" +
+			"names them: picking one would download a different component from\n" +
+			"the one you meant, and every number about it would be correct.",
 		RunE: func(cmd *cobra.Command, args []string) error {
 			resp, err := newClient().RunDownload(cmd.Context(), args[0], v1.RunDownloadRequest{
 				Tags: args[1:], Download: which, ValidateOnly: dryRun,

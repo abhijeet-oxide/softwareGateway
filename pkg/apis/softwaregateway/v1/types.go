@@ -2190,6 +2190,16 @@ type ListAutoDownloadRulesResponse struct {
 // asking, and they named the software.
 type RunDownloadRequest struct {
 	// Tags names the software. Required.
+	//
+	// Each entry is a package REFERENCE, not merely a version: `25.7_mp2604_2131`
+	// or `orbs/cfx-5000-k8s:25.7_mp2604_2131`. A vendor publishes one version
+	// into every repository of a product, so a bare version is ambiguous there
+	// and is REFUSED with the repositories it matched rather than resolved to
+	// whichever row came back first — which is how a download of one component
+	// came to move a different one.
+	//
+	// The field keeps its name so an existing client's request is still a valid
+	// request; a version unique to one repository still resolves bare.
 	Tags []string `json:"tags"`
 	// Download names which configured download to use. Empty means the
 	// default.

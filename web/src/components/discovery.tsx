@@ -159,19 +159,85 @@ function SourceProgress({ s }: { s: DiscoverySourceState }) {
     )
   }
 
-  const done = s.repositoriesDone ?? 0
-  const percent = Math.min(100, (done / s.repositoriesTotal) * 100)
+  /*
+   * THE BAR IS THE PHASE THE SCAN IS IN.
+   *
+   * It used to be repositories, always — which reached 100% the moment the last
+   * `tags/list` returned, with the whole of the work still to come: thousands
+   * of HEADs and every new manifest. A bar that says 100% and then runs for
+   * four more minutes is worse than no bar, because it is the one thing on the
+   * page somebody actually believes.
+   *
+   * The server says which denominator is live, because a scan is three phases
+   * with three of them and no single fraction spans all three honestly:
+   * repositories are not tags, and a bar over their sum advances and then dips
+   * as listing discovers more tags.
+   */
+  const done = s.phaseDone ?? s.repositoriesDone ?? 0
+  const total = s.phaseTotal ?? s.repositoriesTotal
+  // Capped below 100: the scan is still running, and the last percent belongs
+  // to the moment it says so itself.
+  const percent = total > 0 ? Math.min(99, (done / total) * 100) : 0
 
   return (
     <Space direction="vertical" size={2} style={{ width: '100%' }}>
       <Progress percent={Number(percent.toFixed(0))} size="small" status="active" />
       <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-        {phaseLabel(s.phase)} · {done} of {s.repositoriesTotal} repositories
-        {s.repositoriesInFlight ? ` · ${s.repositoriesInFlight} in flight` : ''}
-        {s.currentRepository ? ` · ${s.currentRepository}` : ''}
+        {scanPosition(s)}
+      </Typography.Text>
+      <Typography.Text type="secondary" style={{ fontSize: 11 }}>
+        {scanFindings(s)}
       </Typography.Text>
     </Space>
   )
+}
+
+/**
+ * Where the scan has got to, in the units of whatever it is doing.
+ *
+ * Named in the phase's own terms rather than in one set of units for all three:
+ * "38 of 48 repositories" and "1,204 of 3,180 versions" are both true at
+ * different moments, and calling either of them "items" to make one sentence
+ * work would make both of them vague.
+ */
+function scanPosition(s: DiscoverySourceState): string {
+  const inFlight = s.tagsInFlight ?? s.repositoriesInFlight ?? 0
+  const parallel = inFlight > 0 ? ` · ${inFlight} in parallel` : ''
+  const where = s.currentTag
+    ? ` · ${s.currentRepository ? `${s.currentRepository}:` : ''}${s.currentTag}`
+    : s.currentRepository ? ` · ${s.currentRepository}` : ''
+
+  if (s.phase === 'LISTING_TAGS') {
+    return `Finding versions · ${formatCount(s.repositoriesDone ?? 0)} of `
+      + `${formatCount(s.repositoriesTotal)} repositories${parallel}${where}`
+  }
+  if (s.phase === 'RESOLVING_TAGS') {
+    // Two passes, and they have different denominators: every version is
+    // checked, and only the new ones are read.
+    const reading = (s.tagsToFetch ?? 0) > 0 && (s.tagsChecked ?? 0) >= (s.tagsTotal ?? 0)
+    return reading
+      ? `Reading new releases · ${formatCount(s.tagsFetched ?? 0)} of `
+        + `${formatCount(s.tagsToFetch ?? 0)}${parallel}${where}`
+      : `Checking versions · ${formatCount(s.tagsChecked ?? 0)} of `
+        + `${formatCount(s.tagsTotal ?? 0)}${parallel}${where}`
+  }
+  return `${phaseLabel(s.phase)}${parallel}${where}`
+}
+
+/**
+ * What the scan has FOUND so far.
+ *
+ * Live, because "is it finding anything?" is asked while it is still looking —
+ * and until these counters moved during the scan rather than at the end of it,
+ * the only answer available was "wait and see".
+ */
+function scanFindings(s: DiscoverySourceState): string {
+  const parts: string[] = []
+  if (s.packages) parts.push(`${formatCount(s.packages)} releases seen`)
+  if (s.newPackages) parts.push(`${formatCount(s.newPackages)} new`)
+  if (s.artifacts) parts.push(`${formatCount(s.artifacts)} manifests read`)
+  if (s.errors) parts.push(`${formatCount(s.errors)} errors`)
+  return parts.length > 0 ? parts.join(' · ') : 'nothing found yet'
 }
 
 /**
@@ -476,11 +542,14 @@ export function DiscoveryPanel({ products }: { products: Product[] }) {
                 },
                 { title: 'Status', width: 340, render: (_, s) => <SourceProgress s={s} /> },
                 {
+                  // While scanning, what has been CHECKED — which moves — not
+                  // what has been "resolved", which was reported in one step
+                  // at the end of the phase and read as nothing happening.
                   title: 'Packages seen',
                   width: 110,
                   align: 'right',
                   render: (_, s) => (
-                    <Value>{formatCount(s.scanning ? s.tagsResolved : s.lastTagsListed)}</Value>
+                    <Value>{formatCount(s.scanning ? s.tagsChecked : s.lastTagsListed)}</Value>
                   ),
                 },
                 {

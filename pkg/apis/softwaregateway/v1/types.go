@@ -912,11 +912,41 @@ type DiscoverySourceState struct {
 	// a concurrent scan looks stalled for its first minute.
 	RepositoriesInFlight int    `json:"repositoriesInFlight,omitempty"`
 	CurrentRepository    string `json:"currentRepository,omitempty"`
-	TagsTotal            int    `json:"tagsTotal,omitempty"`
-	TagsResolved         int    `json:"tagsResolved,omitempty"`
+	CurrentTag           string `json:"currentTag,omitempty"`
+
+	TagsTotal    int `json:"tagsTotal,omitempty"`
+	TagsResolved int `json:"tagsResolved,omitempty"`
+	// TagsChecked is how many tags have been resolved to a digest — one HEAD
+	// each, and the bulk of a scan. It moves continuously; TagsResolved does
+	// not, and a bar built on the wrong one sits still through the longest
+	// part of every scan.
+	TagsChecked int `json:"tagsChecked,omitempty"`
+	// TagsToFetch is how many turned out to be new, and TagsFetched how many of
+	// those have been read. The second phase's real denominator, known only
+	// once the first has decided it.
+	TagsToFetch int `json:"tagsToFetch,omitempty"`
+	TagsFetched int `json:"tagsFetched,omitempty"`
+	// TagsInFlight is how many tags are being read RIGHT NOW — the configured
+	// concurrency actually being used, and when it sits at one, that it is not.
+	TagsInFlight int `json:"tagsInFlight,omitempty"`
+
+	// PhaseDone and PhaseTotal are the fraction to render for the phase this
+	// scan is in.
+	//
+	// Served rather than derived, because a scan is three phases with three
+	// denominators and no single fraction spans them honestly: repositories are
+	// not tags, and a bar over their sum advances and then dips as listing
+	// discovers more tags. The server says which denominator is live.
+	PhaseDone  int `json:"phaseDone,omitempty"`
+	PhaseTotal int `json:"phaseTotal,omitempty"`
+
 	// Artifacts is manifests fetched so far. A single tag with a large artifact
 	// tree takes minutes, during which this is the only counter that moves.
-	Artifacts   int `json:"artifacts,omitempty"`
+	Artifacts int `json:"artifacts,omitempty"`
+	// Packages is releases recorded by this scan so far, and NewPackages the
+	// subset nobody had seen. Both counted as they are written rather than at
+	// the end — "is it finding anything?" is asked while it is still looking.
+	Packages    int `json:"packages,omitempty"`
 	NewPackages int `json:"newPackages,omitempty"`
 	Errors      int `json:"errors,omitempty"`
 

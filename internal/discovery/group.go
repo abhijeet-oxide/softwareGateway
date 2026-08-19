@@ -57,6 +57,21 @@ func (s *Scanner) headPhase(ctx context.Context, work []tagWork, limit int) []re
 			sem <- struct{}{}
 			defer func() { <-sem }()
 
+			// Counted HERE, one at a time, rather than in a loop after the
+			// whole phase. This is the bulk of a scan — a catalogue is
+			// thousands of tags — and reporting it in one step at the end left
+			// the display frozen for minutes on a number that then jumped to
+			// the total.
+			s.progress.update(func(p *ScanProgress) {
+				p.CurrentTag = w.tag
+				p.CurrentRepository = w.repoPath
+				p.TagsInFlight++
+			})
+			defer s.progress.update(func(p *ScanProgress) {
+				p.TagsInFlight--
+				p.TagsChecked++
+			})
+
 			r := resolvedTag{work: w}
 			defer func() { out[i] = r }()
 
@@ -109,6 +124,12 @@ func (s *Scanner) fetchPhase(ctx context.Context, resolved []resolvedTag, limit 
 		return nil
 	}
 
+	// How many tags turned out to be NEW. Known only now — the head phase is
+	// what decides it — and it is the denominator of the phase that actually
+	// transfers bytes, so a caller can say "12 of 40 new releases read" rather
+	// than watching a number climb towards nothing in particular.
+	s.progress.update(func(p *ScanProgress) { p.TagsToFetch += len(pending) })
+
 	out := make([]fetched, len(pending))
 	sem := make(chan struct{}, limit)
 	var wg sync.WaitGroup
@@ -123,6 +144,16 @@ func (s *Scanner) fetchPhase(ctx context.Context, resolved []resolvedTag, limit 
 			defer wg.Done()
 			sem <- struct{}{}
 			defer func() { <-sem }()
+
+			s.progress.update(func(p *ScanProgress) {
+				p.CurrentTag = r.work.tag
+				p.CurrentRepository = r.work.repoPath
+				p.TagsInFlight++
+			})
+			defer s.progress.update(func(p *ScanProgress) {
+				p.TagsInFlight--
+				p.TagsFetched++
+			})
 
 			t, err := oci.FetchRoot(ctx, r.work.client, r.desc)
 			out[i] = fetched{work: r.work, tree: t, err: err}

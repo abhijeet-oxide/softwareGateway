@@ -696,8 +696,32 @@ export interface DiscoverySourceState {
   /** Without this, a concurrent scan looks stalled for its first minute. */
   repositoriesInFlight?: number
   currentRepository?: string
+  /** Whichever tag most recently started. A hint, not a position. */
+  currentTag?: string
   tagsTotal?: number
   tagsResolved?: number
+  /**
+   * Tags resolved to a digest — one HEAD each, and the bulk of a scan. It moves
+   * continuously; `tagsResolved` does not, and a bar built on the wrong one
+   * sits still through the longest part of every scan.
+   */
+  tagsChecked?: number
+  /** How many turned out to be new, and how many of those have been read. */
+  tagsToFetch?: number
+  tagsFetched?: number
+  /** Tags being read right now — the configured concurrency actually in use. */
+  tagsInFlight?: number
+  /**
+   * The fraction to render, for the phase the scan is in.
+   *
+   * Served rather than derived: a scan is three phases with three denominators,
+   * and a bar over their sum advances and then dips as listing discovers more
+   * tags. The server says which one is live.
+   */
+  phaseDone?: number
+  phaseTotal?: number
+  /** Releases recorded so far, and the subset nobody had seen. Both live. */
+  packages?: number
   /** Manifests fetched. On a large artifact tree this is the only counter that moves. */
   artifacts?: number
   newPackages?: number

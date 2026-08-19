@@ -651,9 +651,16 @@ func (s *Server) handleDiscoveryStatus(w http.ResponseWriter, r *http.Request) {
 			state.RepositoriesDone = p.RepositoriesDone
 			state.RepositoriesInFlight = p.RepositoriesInFlight
 			state.CurrentRepository = p.CurrentRepository
+			state.CurrentTag = p.CurrentTag
 			state.TagsTotal = p.TagsTotal
 			state.TagsResolved = p.TagsResolved
+			state.TagsChecked = p.TagsChecked
+			state.TagsToFetch = p.TagsToFetch
+			state.TagsFetched = p.TagsFetched
+			state.TagsInFlight = p.TagsInFlight
+			state.PhaseDone, state.PhaseTotal = p.PhaseProgress()
 			state.Artifacts = p.Artifacts
+			state.Packages = p.Packages
 			state.NewPackages = p.New
 			state.Errors = p.Errors
 		}

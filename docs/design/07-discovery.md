@@ -324,6 +324,24 @@ The temptation is to fan out over everything at once. A vendor registry is someo
 
 ---
 
+### Reporting a scan's position
+
+A scan is three phases with three denominators, and there is no single honest fraction across them: repositories are not tags, and a bar over their sum climbs while listing and then *dips* as each repository contributes more tags to the total.
+
+So the server names the live denominator (`phaseDone`/`phaseTotal`) and the client renders that one:
+
+| Phase | Bar |
+|---|---|
+| enumerating | none — the catalogue has not answered, so nothing is measured |
+| listing tags | repositories done, of repositories found |
+| resolving | versions checked, of versions admitted — then, once checking is done, new releases read, of new releases found |
+
+**Every counter moves as the work happens, not as a phase ends.** The tag counter used to be incremented in a loop *after* the whole resolve phase returned, which is the bulk of a scan: the repositories bar reached 100% the moment the last `tags/list` returned, with thousands of HEADs and every new manifest still to come, and then nothing moved for minutes. A bar reading 100% for four more minutes is worse than no bar, because it is the one thing on the page anybody believes.
+
+The same applies to what a scan has FOUND. `packages` and `newPackages` are written as each release is recorded, so "is it finding anything?" — which is asked while it is still looking — has an answer before the scan ends.
+
+`tagsInFlight` is the configured concurrency actually in use. It is worth showing for the same reason `repositoriesInFlight` is: sixteen requests outstanding and none finished is accurate as "0 done" and reads exactly like nothing happening.
+
 ## 12. What a scan actually fetches
 
 Per tag, in order:

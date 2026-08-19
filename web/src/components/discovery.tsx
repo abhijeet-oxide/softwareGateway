@@ -160,24 +160,21 @@ function SourceProgress({ s }: { s: DiscoverySourceState }) {
   }
 
   /*
-   * THE BAR IS THE PHASE THE SCAN IS IN.
+   * ONE BAR, START TO FINISH.
    *
-   * It used to be repositories, always — which reached 100% the moment the last
-   * `tags/list` returned, with the whole of the work still to come: thousands
-   * of HEADs and every new manifest. A bar that says 100% and then runs for
-   * four more minutes is worse than no bar, because it is the one thing on the
-   * page somebody actually believes.
+   * It was the repositories, which reached 100% the moment the last
+   * `tags/list` returned with the whole of the work still to come. Then it was
+   * whichever phase was live, which was accurate at every instant and useless
+   * across them: it filled for the repositories, reset, filled again for the
+   * versions, reset again. A bar that reaches the end and starts over is
+   * reporting phases, and the phase is already written underneath it.
    *
-   * The server says which denominator is live, because a scan is three phases
-   * with three of them and no single fraction spans all three honestly:
-   * repositories are not tags, and a bar over their sum advances and then dips
-   * as listing discovers more tags.
+   * So the server puts every phase on one scale and keeps it monotonic, and
+   * this draws that and nothing else.
    */
-  const done = s.phaseDone ?? s.repositoriesDone ?? 0
-  const total = s.phaseTotal ?? s.repositoriesTotal
   // Capped below 100: the scan is still running, and the last percent belongs
   // to the moment it says so itself.
-  const percent = total > 0 ? Math.min(99, (done / total) * 100) : 0
+  const percent = Math.min(99, (s.progress ?? 0) * 100)
 
   return (
     <Space direction="vertical" size={2} style={{ width: '100%' }}>

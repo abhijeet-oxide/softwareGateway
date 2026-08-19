@@ -2,7 +2,7 @@ import { Progress, Tag, Tooltip, Typography } from 'antd'
 import {
   CheckCircleFilled, ClockCircleOutlined, CloseCircleFilled, SyncOutlined,
 } from '@ant-design/icons'
-import type { Strategy } from '../api/types'
+import type { ContentGroup, Strategy } from '../api/types'
 import { formatBytes, formatCount, formatSpeed, formatAbsolute, formatDuration } from '../domain/format'
 import { NA } from './value'
 import { semantic } from '../theme'
@@ -103,80 +103,95 @@ export function MeasuredProgress({
 }
 
 /**
- * The CONTENT half of a download: bytes, moved or found already there.
+ * ONE BAR, over the thing a release is made of.
  *
- * A thin wrapper over MeasuredProgress that names what it is measuring, so the
- * bar beneath it can name what IT is measuring and the two cannot be read as
- * one number disagreeing with itself.
- */
-export function ContentProgress(props: MeasuredProps) {
-  return (
-    <div>
-      <Typography.Text type="secondary" style={{ fontSize: 12 }}>Content</Typography.Text>
-      <MeasuredProgress {...props} />
-    </div>
-  )
-}
-
-/**
- * The COMPONENT half: how many of a release's parts have actually landed.
- *
- * # Why one bar was not enough
+ * # Why artifacts and not bytes
  *
  * A download moves content first — blobs, where all the bytes are and where all
- * the skipping happens — and then the manifests that name them. A release of
- * two hundred and sixty components has two hundred and sixty manifests of a few
- * kilobytes each, and until those land nothing is pullable.
+ * the skipping happens — and then the manifests that name them. So a byte bar
+ * reaches 100% while the download is genuinely a third done, and a release the
+ * destination already held reads as finished before anything has been named.
  *
- * So the byte bar reaches 100% while the download is genuinely a third done. It
- * is not wrong; it is answering "how many bytes are left", and somebody
- * watching it is asking "how much longer". This answers the second question,
- * and the pair of them is the honest account: the bytes are there, the naming
- * is still happening.
+ * Counting ARTIFACTS fixes that without needing a second bar: an artifact is
+ * done when everything it is made of is done, so this reaches the end exactly
+ * when the download does. It is also the population the Contents table below
+ * it breaks down, so the bar and the table cannot disagree.
  *
- * Jobs rather than components, because that is what the transfer counts and
- * what settles one at a time. The Contents table beside it says which KINDS
- * have landed, which is the same progress at the resolution somebody acts on.
+ * The bytes are still here, in the line underneath, because "how much was
+ * moved" and "how much was already there" are what the download COST and are
+ * not answerable in artifacts.
+ *
+ * # The green portion
+ *
+ * Artifacts the destination already held. Drawn inside the same track rather
+ * than as a second bar: they are part of the same total, and the distinction
+ * that matters is between what we moved and what was there — not between two
+ * kinds of progress.
  */
-export function ComponentProgress({
-  progress, live,
+export function ArtifactProgress({
+  groups, transferred, total, saved, strategy = 'copy', speedBytesPerSecond,
 }: {
-  progress?: {
-    jobsPlanned?: number
-    jobsDone?: number
-    jobsFailed?: number
-    jobsInFlight?: number
-  }
-  live: boolean
+  /** The per-kind rollup — the same rows the Contents table renders. */
+  groups?: ContentGroup[]
+  /** Bytes moved, the release's size, and bytes already there. */
+  transferred: number | undefined
+  total: number | undefined
+  saved?: number | undefined
+  strategy?: Strategy
+  speedBytesPerSecond?: number | undefined
 }) {
-  const total = progress?.jobsPlanned ?? 0
-  if (total <= 0) {
+  if (strategy !== 'copy') {
     return (
-      <div>
-        <Typography.Text type="secondary" style={{ fontSize: 12 }}>Components</Typography.Text>
-        <div>
-          <NA reason="This download has not been planned yet, so there is no count of its parts." />
-        </div>
-      </div>
+      <NA reason="This work is performed by the destination registry, so there is nothing here for us to count. Its state is shown instead." />
     )
   }
 
-  const done = Math.min(total, progress?.jobsDone ?? 0)
-  const failed = progress?.jobsFailed ?? 0
-  const percent = (done / total) * 100
+  const counted = (groups ?? []).reduce(
+    (acc, g) => ({
+      total: acc.total + g.total,
+      present: acc.present + g.present,
+      done: acc.done + g.copied + g.present,
+      failed: acc.failed + (g.failed ?? 0),
+    }),
+    { total: 0, present: 0, done: 0, failed: 0 },
+  )
+
+  // Before planning there are no artifacts to count and no bar to draw. Said
+  // rather than rendered as 0%, which is a position nobody measured.
+  if (counted.total === 0) {
+    return (
+      <NA reason="This download has not been planned yet, so what it is made of is not known." />
+    )
+  }
+
+  const percent = (counted.done / counted.total) * 100
+  const presentPercent = (counted.present / counted.total) * 100
 
   return (
     <div>
-      <Typography.Text type="secondary" style={{ fontSize: 12 }}>Components</Typography.Text>
       <Progress
         percent={Number(percent.toFixed(1))}
+        success={counted.present > 0
+          ? { percent: Number(presentPercent.toFixed(1)) }
+          : undefined}
         size="small"
-        status={failed > 0 ? 'exception' : percent >= 100 ? 'success' : live ? 'active' : 'normal'}
+        status={counted.failed > 0
+          ? 'exception'
+          : percent >= 100 ? 'success' : 'active'}
+        strokeColor={percent >= 100 ? semantic.success : undefined}
       />
       <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-        {formatCount(done)} of {formatCount(total)} parts in place
-        {(progress?.jobsInFlight ?? 0) > 0 && ` · ${progress?.jobsInFlight} moving now`}
-        {failed > 0 && ` · ${formatCount(failed)} failed`}
+        {formatCount(counted.done)} of {formatCount(counted.total)} artifacts
+        {counted.present > 0 && ` · ${formatCount(counted.present)} already there`}
+        {counted.failed > 0 && ` · ${formatCount(counted.failed)} failed`}
+        {total !== undefined && total > 0 && (
+          <>
+            {' · '}
+            {formatBytes(transferred ?? 0)} of {formatBytes(total)} moved
+            {(saved ?? 0) > 0 && `, ${formatBytes(saved!)} already there`}
+          </>
+        )}
+        {speedBytesPerSecond !== undefined && ` · ${formatSpeed(speedBytesPerSecond)}`}
       </Typography.Text>
     </div>
   )

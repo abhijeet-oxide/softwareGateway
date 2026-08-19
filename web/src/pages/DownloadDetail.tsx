@@ -14,7 +14,7 @@ import {
 } from '../domain/format'
 import { NA, Stat, Value } from '../components/value'
 import {
-  ComponentProgress, ContentProgress, MeasuredProgress, StateStrip, type StripState,
+  ArtifactProgress, MeasuredProgress, StateStrip, type StripState,
 } from '../components/progress'
 import { RepoLink, TimeAgo, TransferStateTag } from '../components/chips'
 import {
@@ -477,28 +477,25 @@ export default function DownloadDetail() {
                 <RepoLink url={t?.target ? `https://${t.target}` : undefined} label={t?.targetName} />
 
                 {/*
-                  TWO BARS, because a download is two kinds of work and one of
-                  them finishes long before the other.
+                  ONE BAR, over ARTIFACTS — the thing the table below it breaks
+                  down, so the two cannot disagree.
                   
-                  Content moves first: blobs, which is where the bytes are, and
-                  where the skipping happens. Then the manifests that name them
-                  — two hundred and sixty of them, a few kilobytes each — and
-                  until those land nothing is pullable.
-                  
-                  One byte bar therefore reads 100% while the download is
-                  genuinely a third done, which is exactly what somebody
-                  reported: "the progress shows completed, but it is still
-                  running". Both numbers were always true; only one was shown.
+                  It was two: bytes, and parts. Bytes alone reached 100% while
+                  the download was genuinely a third done, because content
+                  moves before the manifests that name it. Artifacts settle
+                  only when everything they are made of has, so one bar now
+                  reaches the end exactly when the download does, and the bytes
+                  live in the line under it where they read as a cost rather
+                  than as a second opinion about progress.
                 */}
-                <ContentProgress
+                <ArtifactProgress
+                  groups={t?.content}
                   transferred={transferred}
                   total={content}
                   saved={saved}
                   strategy={t?.strategy ?? 'copy'}
                   speedBytesPerSecond={running ? speed : undefined}
                 />
-
-                <ComponentProgress progress={progress} live={running} />
 
                 <Table
                   size="small"

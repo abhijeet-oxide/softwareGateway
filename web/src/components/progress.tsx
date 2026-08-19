@@ -5,7 +5,7 @@ import {
 import type { ContentGroup, Strategy } from '../api/types'
 import { formatBytes, formatCount, formatSpeed, formatAbsolute, formatDuration } from '../domain/format'
 import { NA } from './value'
-import { semantic } from '../theme'
+import { palette, semantic } from '../theme'
 
 /**
  * The honest-numbers rule, made structural (docs/design/18 §6.1, 19 §6).
@@ -286,7 +286,7 @@ interface StripProps {
 export function StateStrip({ state, label, events = [], message }: StripProps) {
   const icon = {
     pending: <ClockCircleOutlined style={{ color: semantic.neutral }} />,
-    running: <SyncOutlined spin style={{ color: '#0057B8' }} />,
+    running: <SyncOutlined spin style={{ color: palette.primary }} />,
     done: <CheckCircleFilled style={{ color: semantic.success }} />,
     failed: <CloseCircleFilled style={{ color: semantic.error }} />,
   }[state]
@@ -354,7 +354,7 @@ export function WorkingBar({
   return (
     <div>
       <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 6 }}>
-        <SyncOutlined spin style={{ color: '#0057B8' }} />
+        <SyncOutlined spin style={{ color: palette.primary }} />
         <Typography.Text strong style={{ fontSize: 13 }}>{label}</Typography.Text>
         {elapsedSeconds !== undefined && (
           <Typography.Text type="secondary" style={{ fontSize: 12 }}>
@@ -379,7 +379,7 @@ export function WorkingBar({
             height: '100%',
             width: '35%',
             borderRadius: 3,
-            background: '#0057B8',
+            background: palette.primary,
             animation: 'slm-working 1.4s ease-in-out infinite',
           }}
         />

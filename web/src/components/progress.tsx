@@ -3,7 +3,7 @@ import {
   CheckCircleFilled, ClockCircleOutlined, CloseCircleFilled, SyncOutlined,
 } from '@ant-design/icons'
 import type { Strategy } from '../api/types'
-import { formatBytes, formatSpeed, formatAbsolute, formatDuration } from '../domain/format'
+import { formatBytes, formatCount, formatSpeed, formatAbsolute, formatDuration } from '../domain/format'
 import { NA } from './value'
 import { semantic } from '../theme'
 
@@ -98,6 +98,86 @@ export function MeasuredProgress({
           {speedBytesPerSecond !== undefined && ` · ${formatSpeed(speedBytesPerSecond)}`}
         </Typography.Text>
       )}
+    </div>
+  )
+}
+
+/**
+ * The CONTENT half of a download: bytes, moved or found already there.
+ *
+ * A thin wrapper over MeasuredProgress that names what it is measuring, so the
+ * bar beneath it can name what IT is measuring and the two cannot be read as
+ * one number disagreeing with itself.
+ */
+export function ContentProgress(props: MeasuredProps) {
+  return (
+    <div>
+      <Typography.Text type="secondary" style={{ fontSize: 12 }}>Content</Typography.Text>
+      <MeasuredProgress {...props} />
+    </div>
+  )
+}
+
+/**
+ * The COMPONENT half: how many of a release's parts have actually landed.
+ *
+ * # Why one bar was not enough
+ *
+ * A download moves content first — blobs, where all the bytes are and where all
+ * the skipping happens — and then the manifests that name them. A release of
+ * two hundred and sixty components has two hundred and sixty manifests of a few
+ * kilobytes each, and until those land nothing is pullable.
+ *
+ * So the byte bar reaches 100% while the download is genuinely a third done. It
+ * is not wrong; it is answering "how many bytes are left", and somebody
+ * watching it is asking "how much longer". This answers the second question,
+ * and the pair of them is the honest account: the bytes are there, the naming
+ * is still happening.
+ *
+ * Jobs rather than components, because that is what the transfer counts and
+ * what settles one at a time. The Contents table beside it says which KINDS
+ * have landed, which is the same progress at the resolution somebody acts on.
+ */
+export function ComponentProgress({
+  progress, live,
+}: {
+  progress?: {
+    jobsPlanned?: number
+    jobsDone?: number
+    jobsFailed?: number
+    jobsInFlight?: number
+  }
+  live: boolean
+}) {
+  const total = progress?.jobsPlanned ?? 0
+  if (total <= 0) {
+    return (
+      <div>
+        <Typography.Text type="secondary" style={{ fontSize: 12 }}>Components</Typography.Text>
+        <div>
+          <NA reason="This download has not been planned yet, so there is no count of its parts." />
+        </div>
+      </div>
+    )
+  }
+
+  const done = Math.min(total, progress?.jobsDone ?? 0)
+  const failed = progress?.jobsFailed ?? 0
+  const percent = (done / total) * 100
+
+  return (
+    <div>
+      <Typography.Text type="secondary" style={{ fontSize: 12 }}>Components</Typography.Text>
+      <Progress
+        percent={Number(percent.toFixed(1))}
+        size="small"
+        status={failed > 0 ? 'exception' : percent >= 100 ? 'success' : live ? 'active' : 'normal'}
+      />
+      <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+        {formatCount(done)} of {formatCount(total)} parts in place
+        {(progress?.jobsInFlight ?? 0) > 0 && ` · ${progress?.jobsInFlight} moving now`}
+        {failed > 0 && ` · ${formatCount(failed)} failed`}
+      </Typography.Text>
     </div>
   )
 }

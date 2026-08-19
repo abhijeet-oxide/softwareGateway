@@ -523,8 +523,8 @@ function PresentList({ components }: { components: PresentComponent[] }) {
   if (components.length === 0) {
     return (
       <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-        Nothing has been found at the destination yet. What is already there is
-        discovered as the download plans and runs.
+        The destination has none of this release's content yet. What it holds is
+        established while the download plans and runs.
       </Typography.Text>
     )
   }

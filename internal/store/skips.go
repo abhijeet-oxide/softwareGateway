@@ -88,17 +88,21 @@ type PresentComponent struct {
 	ArtifactType    string
 	ConfigMediaType string
 	Annotations     map[string]string
-	// Bytes is what this component's skipped jobs would have moved, and Jobs
-	// how many there were.
+	// Bytes is what of this component the destination already holds, and Blobs
+	// how many pieces of content that is.
+	//
+	// Counted per BLOB and each blob attributed to one component, so a base
+	// layer shared by forty images is counted once and the parts add up to the
+	// whole saving.
 	Bytes int64
-	Jobs  int
-	// Outstanding is how many of its jobs are still to run. Zero means the
-	// whole component was already there; more than zero means part of it was,
-	// which is an ordinary and different thing to say.
+	Blobs int
+	// Outstanding is how much of it is still to move. Zero means the whole
+	// component was already there; more than zero means part of it was, which
+	// is an ordinary and different thing to say.
 	Outstanding int
 }
 
-// PresentComponents names what a transfer did not have to move.
+// PresentComponents names what the destination already holds of a release.
 //
 // # Why a list and not a number
 //
@@ -113,7 +117,53 @@ type PresentComponent struct {
 // Ordered by what each SAVED, because the reader is looking at a saving and the
 // biggest contributors are the explanation.
 func (p *Packages) PresentComponents(ctx context.Context, transferID string) ([]PresentComponent, error) {
+	// # Why this reads PLACEMENTS and not only jobs
+	//
+	// Most of a saving leaves no job behind. Planning asks the destination what
+	// it already holds, and content it holds gets NO JOB AT ALL — that is the
+	// whole point of the check, and those bytes land in `dedupe_skipped_bytes`.
+	// Only content that got a job and was then skipped by a worker has a row.
+	//
+	// Reading jobs alone therefore reported "nothing has been found at the
+	// destination yet" beside a headline of `Saved 63.7 GB`, because the great
+	// majority of that 63.7 GB was decided before a single job existed.
+	//
+	// So content is taken from the RELEASE, and counted as already there when
+	// either the transfer skipped it or the placement record says the target
+	// holds it. Each blob is attributed to ONE artifact — the lowest id that
+	// references it — so a base layer shared by forty images is counted once
+	// and the parts still add up to the whole.
 	rows, err := p.db.QueryContext(ctx, p.dialect.Rewrite(`
+		WITH tr AS (
+			SELECT package_id, target_repo_id FROM transfers WHERE id = ?
+		),
+		owned AS (
+			SELECT ab.digest AS digest, MIN(ab.artifact_id) AS artifact_id
+			  FROM package_artifacts pa
+			  JOIN artifact_blobs ab ON ab.artifact_id = pa.id
+			 WHERE pa.package_id = (SELECT package_id FROM tr)
+			 GROUP BY ab.digest
+		),
+		here AS (
+			SELECT o.artifact_id,
+			       COALESCE(b.size_bytes, 0) AS size_bytes,
+			       CASE WHEN EXISTS (
+			              SELECT 1 FROM jobs j
+			               WHERE j.transfer_id = ? AND j.digest = o.digest
+			                 AND j.state = 'skipped')
+			            OR EXISTS (
+			              SELECT 1 FROM blob_placements bp
+			               WHERE bp.repository_id = (SELECT target_repo_id FROM tr)
+			                 AND bp.digest = o.digest)
+			       THEN 1 ELSE 0 END AS present,
+			       CASE WHEN EXISTS (
+			              SELECT 1 FROM jobs j
+			               WHERE j.transfer_id = ? AND j.digest = o.digest
+			                 AND j.state IN ('pending','blocked','leased'))
+			       THEN 1 ELSE 0 END AS outstanding
+			  FROM owned o
+			  LEFT JOIN blobs b ON b.digest = o.digest
+		)
 		SELECT pa.digest,
 		       pa.media_type,
 		       COALESCE(pa.artifact_type, ''),
@@ -123,16 +173,15 @@ func (p *Packages) PresentComponents(ctx context.Context, transferID string) ([]
 		                   JOIN blobs b ON b.digest = ab.digest
 		                  WHERE ab.artifact_id = pa.id AND ab.kind = 'config'
 		                  LIMIT 1), ''),
-		       COALESCE(SUM(CASE WHEN j.state = 'skipped' THEN j.size_bytes ELSE 0 END), 0),
-		       SUM(CASE WHEN j.state = 'skipped' THEN 1 ELSE 0 END),
-		       SUM(CASE WHEN j.state IN ('pending','blocked','leased') THEN 1 ELSE 0 END)
-		  FROM jobs j
-		  JOIN package_artifacts pa ON pa.id = j.artifact_id
-		 WHERE j.transfer_id = ?
+		       COALESCE(SUM(CASE WHEN h.present = 1 THEN h.size_bytes ELSE 0 END), 0),
+		       COALESCE(SUM(h.present), 0),
+		       COALESCE(SUM(h.outstanding), 0)
+		  FROM here h
+		  JOIN package_artifacts pa ON pa.id = h.artifact_id
 		 GROUP BY pa.id, pa.digest, pa.media_type, pa.artifact_type, pa.annotations
-		HAVING SUM(CASE WHEN j.state = 'skipped' THEN 1 ELSE 0 END) > 0
-		 ORDER BY SUM(CASE WHEN j.state = 'skipped' THEN j.size_bytes ELSE 0 END) DESC`),
-		transferID)
+		HAVING SUM(h.present) > 0
+		 ORDER BY SUM(CASE WHEN h.present = 1 THEN h.size_bytes ELSE 0 END) DESC`),
+		transferID, transferID, transferID)
 	if err != nil {
 		return nil, fmt.Errorf("list what transfer %s did not move: %w", transferID, err)
 	}
@@ -145,7 +194,7 @@ func (p *Packages) PresentComponents(ctx context.Context, transferID string) ([]
 			annotations []byte
 		)
 		if err := rows.Scan(&c.Digest, &c.MediaType, &c.ArtifactType, &annotations,
-			&c.ConfigMediaType, &c.Bytes, &c.Jobs, &c.Outstanding); err != nil {
+			&c.ConfigMediaType, &c.Bytes, &c.Blobs, &c.Outstanding); err != nil {
 			return nil, fmt.Errorf("scan a present component of transfer %s: %w", transferID, err)
 		}
 		if len(annotations) > 0 {

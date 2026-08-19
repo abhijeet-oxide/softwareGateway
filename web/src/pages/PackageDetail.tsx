@@ -612,7 +612,7 @@ export default function PackageDetail() {
       <PageHeader
         /*
           THE RELEASE FIRST, the product second.
-          
+
           The title was the product and the version, which is the one pairing
           that does not identify anything: a product publishes ten packages and
           they all carry the same version tag. What a reader came here for is
@@ -854,7 +854,6 @@ export default function PackageDetail() {
             </Card>
           </Space>
         </Col>
-
       </Row>
 
       <FileViewer
@@ -868,7 +867,7 @@ export default function PackageDetail() {
 
       <Modal
         open={confirming}
-        title={`Download ${prod?.displayName || productName} ${p ? version(p) : ''}?`}
+        title={p ? `Download ${packageName(p)}:${version(p)}?` : 'Download this release?'}
         okText="Download this release"
         confirmLoading={runDownload.isPending}
         onOk={() => void download()}

@@ -6,6 +6,7 @@ import (
 
 	"github.com/abhijeet-oxide/softwareGateway/internal/api"
 	"github.com/abhijeet-oxide/softwareGateway/internal/compare"
+	"github.com/abhijeet-oxide/softwareGateway/internal/discovery"
 	"github.com/abhijeet-oxide/softwareGateway/internal/product"
 	"github.com/abhijeet-oxide/softwareGateway/internal/registry"
 	"github.com/abhijeet-oxide/softwareGateway/internal/store"
@@ -64,6 +65,23 @@ func (c compareImpl) Compare(
 		return compare.Report{}, err
 	}
 
+	// ANALYSE BOTH SIDES FIRST, where the side is a source we can analyse.
+	//
+	// This is the whole of "compare should be instantaneous once a release has
+	// been analysed", and it is one call because analysis is idempotent: the
+	// tree under a digest cannot change, so a release that has been walked is
+	// walked no further, and one that has not is walked once and recorded for
+	// everything else that will ask — the release page, the transfer planner,
+	// the next comparison.
+	//
+	// Before this, a comparison read manifests from the store when they
+	// happened to be there and pulled them from the vendor when they were not,
+	// leaving nothing behind either way. Two comparisons of the same pair
+	// therefore cost two full walks, and a release somebody had just compared
+	// still offered to analyse itself.
+	c.analyse(ctx, p, a)
+	c.analyse(ctx, p, b)
+
 	// The two sides must be distinguishable in the output, and where they are
 	// the same place at two versions the endpoint name alone is not.
 	if specA.Label == specB.Label && a.Package.Tag != b.Package.Tag {
@@ -78,6 +96,44 @@ func (c compareImpl) Compare(
 		Classify:    vendors.ClassifierFor(c.layouts, layoutNames(p)),
 		Progress:    progress,
 	})
+}
+
+// analyse walks a source-side release into the store, if it is not there.
+//
+// Best effort. A comparison must still work against a release we cannot record
+// — a target, a package this Coordinator has no row for, a vendor that has
+// withdrawn a component — so a failure here costs the speed-up and nothing
+// else: the walk that follows reads from the registry exactly as it did before.
+func (c compareImpl) analyse(ctx context.Context, p *product.Product, point api.ComparePoint) {
+	if c.packages == nil || point.Package.ID == 0 || point.Package.SourceRepository == "" {
+		return
+	}
+	// A named TARGET is not analysable: what is there is the question the
+	// comparison exists to ask, and recording it as though it were the
+	// release's content would answer that question with our own record.
+	if _, isTarget := findTarget(p, point.Endpoint); isTarget {
+		return
+	}
+
+	source, err := findSource(p, point.Endpoint)
+	if err != nil {
+		return
+	}
+	client, err := c.factory(p.Metadata.Name, source.Name, source.Registry,
+		string(source.Type), string(product.RoleSource))(point.Package.SourceRepository)
+	if err != nil {
+		return
+	}
+
+	if _, err := discovery.InspectPackage(
+		ctx, c.packages, point.Package, client, concurrencyOf(p),
+	); err != nil {
+		// Debug, not warn: this is an optimisation, and a release that cannot
+		// be walked is about to be compared live anyway — which is where the
+		// reader will see the real error if there is one.
+		c.log.DebugContext(ctx, "could not analyse a release before comparing it",
+			"package", point.Package.Tag, "error", err)
+	}
 }
 
 // side resolves one end into where to read and how to reach it.
@@ -279,14 +335,16 @@ func resolveFileBudget(requested int64) int64 {
 // trip at a time — twenty minutes against a vendor registry with nothing on
 // screen but a spinner.
 //
-// SIXTEEN, and the number is chosen from what the work IS. Every request a
-// comparison makes is a HEAD or a small GET against a read-only registry
-// endpoint: no bytes to speak of, no writes, nothing to serialise behind. The
-// limit that matters is politeness to a registry nobody sized for us, and
-// sixteen concurrent metadata reads is well inside what any registry serving a
-// CI fleet handles continuously. An operator who knows better sets
-// `concurrency.perRegistry` on the source and this defers to it.
-const defaultCompareConcurrency = 16
+// THE SAME CEILING EVERYTHING ELSE USES. A comparison's requests are HEADs and
+// small GETs against read-only endpoints — no bytes to speak of, no writes,
+// nothing to serialise behind — so there was never a reason for it to be more
+// timid than a scan, which has run at product.DefaultPerRegistry against these
+// registries since the beginning. Having its own smaller number was one more
+// thing to discover, tune and get wrong.
+//
+// An operator who knows their vendor better sets `concurrency.perRegistry` on
+// the source, and concurrencyOf defers to it.
+const defaultCompareConcurrency = product.DefaultPerRegistry
 
 // concurrencyOf is the ceiling an operator set for this product's registries.
 //

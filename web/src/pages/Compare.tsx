@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from 'react'
 import type { ReactNode } from 'react'
 import {
-  Alert, App, Button, Card, Checkbox, Col, Empty, Popover, Progress, Row, Segmented, Select,
+  App, Button, Card, Checkbox, Col, Empty, Popover, Progress, Row, Segmented, Select,
   Space, Statistic, Table, Tag, Tooltip, Typography,
 } from 'antd'
 import { SwapOutlined } from '@ant-design/icons'
@@ -231,27 +231,35 @@ type Mode = 'versions' | 'locations'
  * bucket and by kind and by size, and the table lists every component rather
  * than the differing ones with a footnote about the rest.
  */
-function ComparisonReport({
-  report, onChange,
-}: {
-  report: CompareResponse
-  onChange: () => void
-}) {
+function ComparisonReport({ report }: { report: CompareResponse }) {
   const [search, setSearch] = useState('')
   const [impact, setImpact] = useState<'all' | CompareVerdict>('all')
+  const [kind, setKind] = useState<'all' | 'image' | 'chart' | 'file'>('all')
+
+  /*
+   * THE RELEASE'S CONTENT, not its scaffolding.
+   *
+   * The index changes whenever anything under it changes — that is what a
+   * digest of a list of digests does — and the signature changes because it
+   * signs the index. Reporting either as a difference is reporting that the
+   * comparison worked, in two rows that appear at the top of every result and
+   * mean nothing to anybody.
+   */
+  const content = useMemo(
+    () => report.rows.filter((r) => r.type !== 'index' && r.type !== 'signature'),
+    [report.rows])
 
   const rows = useMemo(() => {
-    const byImpact = impact === 'all'
-      ? report.rows
-      : report.rows.filter((r) => r.verdict === impact)
-    if (!search.trim()) return byImpact
-    return byImpact.filter((r) => matches(
+    const byImpact = impact === 'all' ? content : content.filter((r) => r.verdict === impact)
+    const byKind = kind === 'all' ? byImpact : byImpact.filter((r) => r.type === kind)
+    if (!search.trim()) return byKind
+    return byKind.filter((r) => matches(
       search, r.name, r.type, r.a?.tag, r.b?.tag, r.a?.digest, r.b?.digest))
-  }, [report.rows, impact, search])
+  }, [content, impact, kind, search])
 
   // Counted from the rows rather than from the report's totals, so the buckets
   // and their breakdowns cannot disagree with the table under them.
-  const buckets = useMemo(() => summarise(report.rows), [report.rows])
+  const buckets = useMemo(() => summarise(content), [content])
 
   return (
     <Space direction="vertical" size={16} style={{ width: '100%' }}>
@@ -262,21 +270,6 @@ function ComparisonReport({
           </Col>
         ))}
       </Row>
-
-      {(report.extraTagsA?.length || report.extraTagsB?.length) ? (
-        <Alert
-          type="warning"
-          showIcon
-          message="Content nobody in this comparison put there"
-          description={
-            <Typography.Text style={{ fontSize: 13 }}>
-              {formatCount((report.extraTagsA?.length ?? 0) + (report.extraTagsB?.length ?? 0))} tags
-              in these repositories point at content this release does not account for
-              {(report.extraTruncatedA || report.extraTruncatedB) && ', and there may be more than were resolved'}.
-            </Typography.Text>
-          }
-        />
-      ) : null}
 
       <Card
         title={`Components (${formatCount(report.rows.length)})`}
@@ -294,7 +287,27 @@ function ComparisonReport({
                 { value: 'same', label: `Unchanged ${buckets.same.count}` },
               ]}
             />
-            <Button size="small" onClick={onChange}>Compare something else</Button>
+            <Segmented
+              size="small"
+              value={kind}
+              onChange={(v) => setKind(v as typeof kind)}
+              options={[
+                { value: 'all', label: 'Everything' },
+                ...(['image', 'chart', 'file'] as const).map((k) => {
+                  const name = kindName(k)
+                  const icon = ARTIFACT_ICONS[name as keyof typeof ARTIFACT_ICONS]
+                  return {
+                    value: k,
+                    label: (
+                      <Space size={4}>
+                        {icon && <Icon as={icon} size={13} title={name} />}
+                        {name}
+                      </Space>
+                    ),
+                  }
+                }),
+              ]}
+            />
           </Space>
         }
         styles={{ body: { padding: 0 } }}
@@ -320,14 +333,6 @@ function ComparisonReport({
             emptyText: (
               <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="Nothing matches this filter" />
             ),
-          }}
-          expandable={{
-            // Only where there is more than the row already says: the files
-            // inside a component, and the facts behind a `changed` verdict.
-            rowExpandable: (r) => Boolean(
-              r.differences?.length || r.filesAdded?.length ||
-              r.filesRemoved?.length || r.filesChanged?.length),
-            expandedRowRender: (r) => <RowDetail row={r} />,
           }}
           columns={[
             {
@@ -380,42 +385,24 @@ function ComparisonReport({
               render: (_, r) => <SizeCell row={r} />,
             },
             {
+              // The tag, before and after, in a column of its own.
+              //
+              // A component's tag is what a consumer pulls, and a release that
+              // moved a component from 1.2.3 to 1.2.4 changed the thing anybody
+              // will actually type. It was reachable only by expanding a row,
+              // which is three clicks to learn something the row had space for.
+              title: 'Tag',
+              width: 190,
+              render: (_, r) => <TagCell row={r} />,
+            },
+            {
               // The digests, which are the only unambiguous statement of what
               // changed — and for a `changed` row, both of them, because "it
               // changed" without saying from what to what is not a finding
               // anybody can act on.
               title: 'Digest',
-              width: 250,
+              width: 220,
               render: (_, r) => <DigestCell row={r} />,
-            },
-            {
-              title: 'Files',
-              width: 120,
-              render: (_, r) => {
-                const n = (r.filesAdded?.length ?? 0) + (r.filesRemoved?.length ?? 0) +
-                  (r.filesChanged?.length ?? 0)
-                if (n > 0) {
-                  return (
-                    <Space size={4}>
-                      <Typography.Text style={{ fontSize: 12 }}>{n} changed</Typography.Text>
-                      {r.filesTruncated && (
-                        <Tooltip title="Some layers of this component were left unopened, so there may be more inside them.">
-                          <Typography.Text type="warning" style={{ fontSize: 12 }}>+</Typography.Text>
-                        </Tooltip>
-                      )}
-                    </Space>
-                  )
-                }
-                if (r.verdict === 'same') {
-                  return <Typography.Text type="secondary" style={{ fontSize: 12 }}>—</Typography.Text>
-                }
-                if (r.filesTruncated) {
-                  return (
-                    <NA reason="This component's layers are archives with no names on them. Tick 'Also compare file contents' and run it again to open them and see which files differ." />
-                  )
-                }
-                return <Typography.Text type="secondary" style={{ fontSize: 12 }}>—</Typography.Text>
-              },
             },
           ]}
         />
@@ -498,6 +485,37 @@ function SizeCell({ row }: { row: CompareRow }) {
 }
 
 /**
+ * What this component is CALLED, before and after.
+ *
+ * The digest says whether it changed; the tag says what a consumer pulls. Both
+ * belong in the row: a release that moved a component from 1.2.3 to 1.2.4 has
+ * changed the thing anybody will actually type, and a row that showed only
+ * digests made that invisible without expanding it.
+ *
+ * Unchanged rows show the one tag, plainly. Both sides carrying the same tag is
+ * the ordinary case and printing it twice would be noise.
+ */
+function TagCell({ row }: { row: CompareRow }) {
+  const a = row.a?.tag
+  const b = row.b?.tag
+
+  if (a && b && a !== b) {
+    return (
+      <Space direction="vertical" size={0}>
+        <Typography.Text delete type="secondary" style={{ fontFamily: mono, fontSize: 11 }}>
+          {a}
+        </Typography.Text>
+        <Typography.Text style={{ fontFamily: mono, fontSize: 12 }}>{b}</Typography.Text>
+      </Space>
+    )
+  }
+  const tag = b ?? a
+  return tag
+    ? <Typography.Text style={{ fontFamily: mono, fontSize: 12 }}>{tag}</Typography.Text>
+    : <NA reason="This component answers to no tag of its own; it is addressed by digest." />
+}
+
+/**
  * The digests, short enough to read and complete enough to act on.
  *
  * A `changed` row shows both: "it changed" without saying from what to what is
@@ -530,49 +548,6 @@ function DigestCell({ row }: { row: CompareRow }) {
     default:
       return line('both', row.a?.digest ?? row.b?.digest) ?? <NA />
   }
-}
-
-/** The facts behind a verdict, and the files inside the component. */
-function RowDetail({ row }: { row: CompareRow }) {
-  return (
-    <Space direction="vertical" size={12} style={{ width: '100%', paddingBlock: 4 }}>
-      {row.differences?.length ? (
-        <div>
-          <Typography.Text type="secondary" style={{ fontSize: 12 }}>What differs</Typography.Text>
-          <ul style={{ margin: '4px 0 0', paddingInlineStart: 18 }}>
-            {row.differences.map((d) => (
-              <li key={d}><Typography.Text style={{ fontSize: 12 }}>{d}</Typography.Text></li>
-            ))}
-          </ul>
-        </div>
-      ) : null}
-
-      {([
-        ['Added', row.filesAdded, semantic.success],
-        ['Removed', row.filesRemoved, semantic.error],
-        ['Changed', row.filesChanged, semantic.warning],
-      ] as const).map(([label, files, colour]) =>
-        files?.length ? (
-          <div key={label}>
-            <Typography.Text strong style={{ color: colour, fontSize: 12 }}>
-              {label} ({files.length})
-            </Typography.Text>
-            <div style={{ maxHeight: 200, overflow: 'auto', marginTop: 4 }}>
-              {files.map((f) => (
-                <div key={f} className="diff-line" style={{ fontFamily: mono, fontSize: 11 }}>{f}</div>
-              ))}
-            </div>
-          </div>
-        ) : null,
-      )}
-
-      {row.filesTruncated && (
-        <Typography.Text type="warning" style={{ fontSize: 12 }}>
-          A layer was left unopened, so this is a partial account of what differs inside.
-        </Typography.Text>
-      )}
-    </Space>
-  )
 }
 
 /** One bucket's totals, and the same totals per kind. */
@@ -697,6 +672,12 @@ export default function Compare() {
   ]
 
   const leftPkg = releases.find((r) => refOf(r) === left)
+  // The package both sides are of. Named once rather than repeated on each
+  // side: a version comparison is two versions of ONE package, and a location
+  // comparison is one package in two places — in both, the name is a property
+  // of the comparison and not of an end.
+  const comparedName = leftPkg?.displayRepository || leftPkg?.sourceRepository || ''
+
   const sources = detail.data?.sources ?? []
   // Where the release was found, matched back to its configured source. The
   // default end for a version comparison, overridable below for a product
@@ -783,11 +764,23 @@ export default function Compare() {
       {settled && report ? (
         <Card size="small" style={{ marginBottom: 16 }}>
           <Space size={16} wrap style={{ width: '100%', justifyContent: 'space-between' }}>
+            {/*
+              The PACKAGE as well as the endpoint and the version. A label like
+              `cfx-near 25.7_mp2604_2131` says where and which version and not
+              WHAT — and a product publishes the same version of a dozen
+              different packages, so the missing third of it is the part that
+              says which one this was.
+            */}
             <Space size={8} wrap>
               <Typography.Text type="secondary" style={{ fontSize: 12 }}>Comparing</Typography.Text>
               <Typography.Text strong style={{ fontFamily: mono, fontSize: 13 }}>
-                {report.a.label}
+                {comparedName || report.a.label}
               </Typography.Text>
+              {comparedName && (
+                <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+                  {report.a.label}
+                </Typography.Text>
+              )}
               <SwapOutlined style={{ color: '#98A2B3' }} />
               <Typography.Text strong style={{ fontFamily: mono, fontSize: 13 }}>
                 {report.b.label}
@@ -935,7 +928,7 @@ export default function Compare() {
 
       {compare.isError && <ErrorState error={compare.error} retry={() => void run()} />}
 
-      {report && <ComparisonReport report={report} onChange={() => setSettled(false)} />}
+      {report && <ComparisonReport report={report} />}
 
     </>
   )

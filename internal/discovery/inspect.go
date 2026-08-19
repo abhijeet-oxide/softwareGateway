@@ -4,6 +4,7 @@ import (
 	"context"
 
 	"github.com/abhijeet-oxide/softwareGateway/internal/expand"
+	"github.com/abhijeet-oxide/softwareGateway/internal/product"
 	"github.com/abhijeet-oxide/softwareGateway/internal/registry"
 	"github.com/abhijeet-oxide/softwareGateway/internal/store"
 	"github.com/abhijeet-oxide/softwareGateway/internal/vendors"
@@ -65,6 +66,15 @@ func InspectPackage(
 	root, err := expand.Root(pkg)
 	if err != nil {
 		return InspectResult{}, err
+	}
+
+	// A CONCURRENCY OF ZERO IS NOT "no limit", it is one at a time: the walker
+	// clamps a non-positive value to a single worker. Every caller of this was
+	// passing a source's configured ceiling straight through, and a source that
+	// configures none — which is most of them — was walking a two-hundred
+	// component release one manifest at a time.
+	if concurrency <= 0 {
+		concurrency = product.DefaultPerRegistry
 	}
 
 	out, err := expand.Ensure(ctx, packages, pkg.ID, root, client, concurrency)

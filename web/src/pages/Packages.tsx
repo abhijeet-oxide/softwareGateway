@@ -3,13 +3,14 @@ import { Button, Card, Select, Space, Table, Tooltip } from 'antd'
 import { Link, useSearchParams } from 'react-router-dom'
 import { usePackages, useProducts, useTransfers } from '../api/queries'
 import {
-  deriveLocations, deriveStatus, downloadSeconds, matches, releaseHref, transferIndex, verification,
-  version, withTransfers,
+  deriveLocations, deriveStatus, downloadedAt, downloadSeconds, matches, releaseHref,
+  transferIndex, verification, version, withTransfers,
 } from '../domain/derive'
 import { formatDuration } from '../domain/format'
 import { Value } from '../components/value'
 import {
-  LocationChip, PackageName, ProductChip, StatusBadge, TimeAgo, VerificationBadge, VersionChip,
+  AnalysisTag, LocationChip, PackageName, ProductChip, StatusBadge, TimeAgo, VerificationBadge,
+  VersionChip,
 } from '../components/chips'
 import { EmptyStateCard, ErrorState, PageHeader, SearchBar } from '../components/layout'
 
@@ -185,7 +186,16 @@ export default function Packages() {
               },
               { title: 'Published', width: 110, render: (_, r) => <TimeAgo at={r.pkg.publishedAt || r.pkg.discoveredAt} /> },
               { title: 'Verified', width: 145, render: (_, r) => <VerificationBadge state={verification(r.pkg)} /> },
-              { title: 'Status', width: 200, render: (_, r) => <StatusBadge status={r.status} /> },
+              {
+                title: 'Status',
+                width: 240,
+                render: (_, r) => (
+                  <Space size={4} wrap>
+                    <StatusBadge status={r.status} />
+                    <AnalysisTag pkg={r.pkg} />
+                  </Space>
+                ),
+              },
               { title: 'Location', width: 180, render: (_, r) => <LocationChip locations={deriveLocations(r.pkg, product)} /> },
               {
                 title: 'Download time',
@@ -200,14 +210,26 @@ export default function Packages() {
               {
                 title: 'Actions',
                 fixed: 'right',
-                width: 170,
+                width: 250,
                 render: (_, r) =>
                   product && (
                     <Space size={4}>
+                      {/*
+                        DOWNLOAD FIRST, and only while there is one to start.
+                        It was one button that turned into Details once a
+                        release stopped being NEW, which hid the page's whole
+                        purpose behind a word that changed meaning — and hid
+                        Download on every release older than seven days, which
+                        is most of them and exactly the ones somebody is
+                        looking at when they need it.
+                      */}
+                      {!downloadedAt(r.pkg) && (
+                        <Link to={releaseHref(product.productId, r.pkg)}>
+                          <Button size="small" type="primary">Download</Button>
+                        </Link>
+                      )}
                       <Link to={releaseHref(product.productId, r.pkg)}>
-                        <Button size="small" type={r.status === 'NEW' ? 'primary' : 'default'}>
-                          {r.status === 'NEW' ? 'Download' : 'Details'}
-                        </Button>
+                        <Button size="small">Details</Button>
                       </Link>
                       <Tooltip title={`Compare ${version(r.pkg)} against another version or another location`}>
                         <Link

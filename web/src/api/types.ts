@@ -166,6 +166,16 @@ export interface Package {
   displayRepository?: string
   displayTag?: string
   expandedAt?: string
+  /**
+   * "analyzing" while a walk is in flight, "failed" when the last one gave up,
+   * empty otherwise — `expandedAt` is what says a walk succeeded.
+   *
+   * Three states because `expandedAt` has two: a release being walked right now
+   * must not read as one nobody has touched.
+   */
+  analysisState?: 'analyzing' | 'failed'
+  /** Why the last walk gave up. */
+  analysisError?: string
   signatureStatus?: SignatureStatus
   related?: RelatedArtifact[]
   /** Present on the single-package read only. Where transfer history lives. */
@@ -251,7 +261,20 @@ export interface ListArtifactsResponse {
 // Transfers — "Download" on screen
 // ---------------------------------------------------------------------------
 
-export interface SkipBreakdown { reason: string; jobs: number; bytes?: Int64String }
+/**
+ * One reason a transfer moved no bytes, and how much that saved.
+ *
+ * `trusted` says whether the skip rests on an ACTION the registry took — a
+ * mount — rather than on a claim it or we made. That distinction is the whole
+ * value of the number: a destination that answers about its whole storage
+ * rather than the repository asked about makes an untrusted skip worth nothing.
+ */
+export interface SkipBreakdown {
+  reason: string
+  jobs: number
+  bytes?: Int64String
+  trusted?: boolean
+}
 
 /** What a transfer is made OF, and how each kind went. */
 export interface ContentGroup {
@@ -261,6 +284,15 @@ export interface ContentGroup {
   present: number
   failed?: number
   outstanding?: number
+  /**
+   * What this kind did not have to move, and what it did.
+   *
+   * Per JOB, unlike the counts above which are per component. A blob is one job
+   * however many components reference it, so these partition the transfer's
+   * bytes exactly and the parts add up to the whole.
+   */
+  savedBytes?: Int64String
+  copiedBytes?: Int64String
 }
 
 export interface TransferWave {
@@ -576,15 +608,31 @@ export interface CompareRow {
   /** Each disagreement stated as a fact. Empty when the sides agree. */
   differences?: string[]
   /**
-   * The FILES inside the component's layers, read out of the archives.
-   * Three lists rather than two: an edited file is changed, not added and
-   * removed.
+   * The NAMED FILES inside this component, and what became of each.
+   *
+   * Read from the manifests, not from the archives: an OCI artifact names one
+   * file per layer and states its content digest, so aligning two of those
+   * lists by path answers it exactly and costs nothing.
+   *
+   * Every file of a component that differs, unchanged ones included. Empty for
+   * a component that agrees, where nothing inside it can differ.
    */
-  filesAdded?: string[]
-  filesRemoved?: string[]
-  filesChanged?: string[]
-  /** A layer was left unopened — past the budget, or not an archive. */
-  filesTruncated?: boolean
+  files?: CompareFile[]
+}
+
+/**
+ * One named file inside a component, and what became of it.
+ *
+ * Both digests and both sizes, because "changed" prompts the next question: a
+ * reader looking at a changed file wants what it was and what it is.
+ */
+export interface CompareFile {
+  path: string
+  verdict: CompareVerdict
+  sizeA?: Int64String
+  sizeB?: Int64String
+  digestA?: string
+  digestB?: string
 }
 
 /**
@@ -600,12 +648,6 @@ export interface CompareRequest {
   from?: string
   to?: string
   against?: string
-  /**
-   * How much layer content may be downloaded to say which FILES changed
-   * rather than which layers. Zero uses the server's default; negative leaves
-   * every layer opaque.
-   */
-  fileBudgetBytes?: number
   /** A caller-minted id to poll for progress while the request is open. */
   progressToken?: string
 }

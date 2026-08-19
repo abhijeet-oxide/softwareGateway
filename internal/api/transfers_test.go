@@ -1,6 +1,7 @@
 package api
 
 import (
+	"strconv"
 	"testing"
 
 	"github.com/abhijeet-oxide/softwareGateway/internal/oci"
@@ -106,5 +107,76 @@ func TestContentGroupsHonourTheVendorsOwnAnnotations(t *testing.T) {
 	}
 	if g := byKind[oci.KindFile]; g.Total != 2 || g.Present != 2 {
 		t.Errorf("files = %+v, want 2 present", g)
+	}
+}
+
+// The saving has to be attributable, or "SAVED 30 GiB" is a number nobody can
+// check.
+//
+// The question this answers is "saved on WHAT" — an operator looking at thirty
+// gigabytes it did not move wants to know whether that was the images (which is
+// ordinary; a product line shares base layers) or the configuration bundles
+// (which would be surprising and worth a look).
+//
+// The parts must ADD UP to the whole. They are summed per JOB, and a blob is
+// one job however many components reference it, so nothing is counted twice and
+// nothing is left out.
+func TestTheSavingIsBrokenDownByKindAndAddsUp(t *testing.T) {
+	rows := []store.ContentRow{
+		{
+			MediaType: "application/vnd.oci.image.manifest.v1+json",
+			Outcome:   store.ContentPresent, Count: 40,
+			SavedBytes: 30 << 30, CopiedBytes: 0,
+		},
+		{
+			MediaType: "application/vnd.oci.image.manifest.v1+json",
+			Outcome:   store.ContentCopied, Count: 5,
+			// A component reported as copied whose blobs were partly already
+			// there. Those bytes were saved just the same, and dropping them
+			// because the component's outcome was "copied" would under-report
+			// the very number this exists to explain.
+			SavedBytes: 2 << 30, CopiedBytes: 8 << 30,
+		},
+		{
+			MediaType:    "application/vnd.oci.image.manifest.v1+json",
+			ArtifactType: "application/vnd.cncf.helm.config.v1+json",
+			Outcome:      store.ContentPresent, Count: 97,
+			SavedBytes: 5 << 20,
+		},
+	}
+
+	groups := toAPIContent(rows, nil)
+
+	byKind := map[string]v1.ContentGroup{}
+	for _, g := range groups {
+		byKind[g.Kind] = g
+	}
+
+	if got := byKind["image"].SavedBytes; got != v1.Int64String("34359738368") {
+		t.Errorf("images saved %q, want the 32 GiB across both outcomes", got)
+	}
+	if got := byKind["image"].CopiedBytes; got != v1.Int64String("8589934592") {
+		t.Errorf("images copied %q, want 8 GiB", got)
+	}
+	if got := byKind["chart"].SavedBytes; got != v1.Int64String("5242880") {
+		t.Errorf("charts saved %q, want 5 MiB", got)
+	}
+
+	// And the parts are the whole: an operator adding up the popover must reach
+	// the figure it is explaining.
+	var total int64
+	for _, g := range groups {
+		if g.SavedBytes == "" {
+			continue
+		}
+		n, err := strconv.ParseInt(string(g.SavedBytes), 10, 64)
+		if err != nil {
+			t.Fatal(err)
+		}
+		total += n
+	}
+	if want := int64(32<<30 + 5<<20); total != want {
+		t.Errorf("the per-kind savings add up to %d, want %d — a breakdown that "+
+			"does not reach its own total is worse than none", total, want)
 	}
 }

@@ -19,7 +19,7 @@ import {
   ARTIFACT_ICONS, Icon, IndexIcon, LayersIcon, OciIcon, type IconComponent,
 } from '../components/icons'
 import { PriorityControl, QueueControls } from '../components/queuecontrols'
-import { ErrorState, PageHeader, SavedPanel } from '../components/layout'
+import { ErrorState, PageHeader, SavedBreakdown, SavedPanel } from '../components/layout'
 import { mono } from '../theme'
 import type { Job } from '../api/types'
 
@@ -514,6 +514,8 @@ export default function DownloadDetail() {
                   <SavedPanel
                     savedBytes={formatBytes(saved) ?? ''}
                     totalBytes={formatBytes(content) ?? undefined}
+                    content={t?.content}
+                    skips={progress?.skips}
                   />
                 )}
               </Space>
@@ -566,7 +568,14 @@ export default function DownloadDetail() {
                 <Value>{formatBytes(transferred)}</Value>
               </Descriptions.Item>
               <Descriptions.Item label="Saved (already present)">
-                <Value>{formatBytes(saved)}</Value>
+                {/*
+                  The same hover as the panel above. This is the line somebody
+                  reads when the download has finished and the panel has
+                  scrolled away, and "saved 30.1 GB" is exactly as opaque here.
+                */}
+                <SavedBreakdown content={t?.content} skips={progress?.skips}>
+                  <Value>{formatBytes(saved)}</Value>
+                </SavedBreakdown>
               </Descriptions.Item>
               <Descriptions.Item label="Total time">
                 <Value>{formatDuration(elapsed)}</Value>

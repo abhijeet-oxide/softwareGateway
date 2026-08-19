@@ -370,6 +370,17 @@ type Package struct {
 	// `packages inspect` or by a transfer. Empty means it never has been, which
 	// is why TotalBytes and BlobCount are absent.
 	ExpandedAt string `json:"expandedAt,omitempty"`
+	// AnalysisState is "analyzing" while a walk is in flight and "failed" when
+	// the last one gave up. Empty otherwise — `expandedAt` is what says a walk
+	// succeeded.
+	//
+	// Three states because `expandedAt` has two, and a release being walked
+	// right now must not read as one nobody has touched: that is what offered
+	// "Analyze package" on a release the system was already analysing.
+	AnalysisState string `json:"analysisState,omitempty"`
+	// AnalysisError is why the last walk gave up. "It failed" that cannot say
+	// why is a dead end for whoever reads it a week later.
+	AnalysisError string `json:"analysisError,omitempty"`
 
 	// SignatureStatus is SIGNED, UNSIGNED or UNKNOWN.
 	//
@@ -685,9 +696,13 @@ type CompareRequest struct {
 	// From and To that name the same endpoint, it answers "what changed in this
 	// release"; combined with two different ones, it answers both at once.
 	Against string `json:"against,omitempty"`
-	// FileBudgetBytes is how much layer CONTENT may be downloaded to say which
-	// files changed rather than which layers. Zero uses the server's default;
-	// negative leaves every layer opaque.
+	// FileBudgetBytes is accepted and ignored.
+	//
+	// It bounded how much layer CONTENT a comparison could download to say
+	// which files changed rather than which layers. Nothing is downloaded any
+	// more — an artifact's manifest already names its files and states their
+	// digests — so there is no cost to bound. Kept on the wire so an older
+	// client's request is still a valid request.
 	FileBudgetBytes int64 `json:"fileBudgetBytes,omitempty"`
 	// ProgressToken is a caller-minted id it can poll for progress while this
 	// request is still open, at GET /api/v1/comparisons/{token}.
@@ -834,18 +849,32 @@ type CompareRow struct {
 	// Differences states each disagreement as a fact. Empty when the two sides
 	// agree.
 	Differences []string `json:"differences,omitempty"`
-	// FilesAdded, FilesRemoved and FilesChanged name the FILES inside the
-	// component's layers, read out of the layer archives themselves.
+	// Files is the account of the NAMED FILES inside this component — the
+	// answer to "which configuration changed", which "two layers changed"
+	// cannot give.
 	//
-	// This is the answer to "one line of one configuration file moved", which
-	// "two layers changed" cannot give. Three lists rather than two, because an
-	// edited file is CHANGED, not added and removed.
-	FilesAdded   []string `json:"filesAdded,omitempty"`
-	FilesRemoved []string `json:"filesRemoved,omitempty"`
-	FilesChanged []string `json:"filesChanged,omitempty"`
-	// FilesTruncated says a layer was left unopened — past the budget, or not
-	// an archive — so the lists above are a partial account.
-	FilesTruncated bool `json:"filesTruncated,omitempty"`
+	// Read from the manifests, not from the archives: an OCI artifact names one
+	// file per layer and states its content digest, so aligning two of those
+	// lists by path answers it exactly and costs nothing.
+	//
+	// Every file of a component that differs, unchanged ones included. Empty
+	// for a component that agrees, where nothing inside it can differ.
+	Files []CompareFile `json:"files,omitempty"`
+}
+
+// CompareFile is one named file inside a component, and what became of it.
+//
+// Both digests and both sizes, because "changed" prompts the next question: a
+// reader looking at a changed file wants what it was and what it is.
+type CompareFile struct {
+	Path string `json:"path"`
+	// Verdict is same | changed | only-a | only-b — the same vocabulary the
+	// component rows use.
+	Verdict string      `json:"verdict"`
+	SizeA   Int64String `json:"sizeA,omitempty"`
+	SizeB   Int64String `json:"sizeB,omitempty"`
+	DigestA string      `json:"digestA,omitempty"`
+	DigestB string      `json:"digestB,omitempty"`
 }
 
 // CompareSide is one end's account of one component.
@@ -1068,14 +1097,22 @@ type CheckConnectivityResponse struct {
 // ContentGroup is one kind of component and how the transfer's components of
 // that kind went.
 //
-// # Counted per COMPONENT, and why there are no bytes here
+// # Counted per COMPONENT
 //
-// A component published under two names is one component, not two, so these
-// count artifacts rather than jobs. Bytes are deliberately absent: a base layer
-// shared by four images belongs to all of them, and any per-kind byte total
-// either counts it four times or picks an owner arbitrarily. The transfer-level
-// byte totals are exact and are the ones to trust; these say what the transfer
-// consisted of.
+// A component published under two names is one component, not two, so the
+// counts here are artifacts rather than jobs.
+//
+// # The bytes are per JOB, and they are a different question
+//
+// There is deliberately no "how big is this kind" here: a base layer shared by
+// four images belongs to all four, so any such total either counts it four
+// times or picks an owner. The transfer's own byte totals answer that.
+//
+// SavedBytes and CopiedBytes answer something else — which JOBS were skipped
+// and which ran. A blob is one job however many components reference it, so
+// these partition the transfer's bytes exactly: every byte counted once, and
+// the parts add up to the whole. The only softness is which component a shared
+// blob is filed under, and within a kind that is nearly always the same answer.
 type ContentGroup struct {
 	// Kind is what these are, in the words somebody uses: index, image, chart,
 	// file, signature, artifact.
@@ -1089,6 +1126,12 @@ type ContentGroup struct {
 	// components with work still to do.
 	Failed      int `json:"failed,omitempty"`
 	Outstanding int `json:"outstanding,omitempty"`
+
+	// SavedBytes is what this transfer did not have to move for this kind, and
+	// CopiedBytes what it did. See the type comment: these are per JOB and they
+	// add up to the transfer's own totals.
+	SavedBytes  Int64String `json:"savedBytes,omitempty"`
+	CopiedBytes Int64String `json:"copiedBytes,omitempty"`
 }
 
 // PackageTransfer is one attempt to move a package to one destination.

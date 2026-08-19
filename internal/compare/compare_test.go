@@ -386,111 +386,84 @@ func TestChangedFilesAreNamed(t *testing.T) {
 	})
 }
 
-// THE CASE THIS WAS BUILT FOR: a component whose layer is an ARCHIVE, with the
-// files inside it.
+// A LAYER THAT NAMES NOTHING IS NOT A FILE.
 //
-// "Two layers changed" is true and useless — a release that edited one line and
-// a release that rewrote everything produce the same sentence, because a layer's
-// digest changes when anything inside it does. So the layer is opened and the
-// answer is given in files.
+// An image layer, or a tar somebody packed without titling it, holds an unknown
+// number of paths and cannot be aligned with anything on the other side. It is
+// excluded from the file account rather than listed as `layer sha256:…`, which
+// would restate the digest difference in the column that exists to say more
+// than the digest.
 //
-// This is OCI rather than one vendor's convention: the image specification
-// defines a layer as a tar archive and the media types say so out loud.
-func TestFilesInsideAnArchivedLayerAreCompared(t *testing.T) {
+// This is also what makes the comparison free. It used to DOWNLOAD such layers
+// to look inside them — every layer of every changed component, on both sides —
+// which was the whole of the time a comparison took, and was spent to compute
+// digest comparisons the manifests already answered.
+func TestALayerWithNoNameIsNotReportedAsAFile(t *testing.T) {
 	f := newFixture(t)
 
 	f.publish(f.src, sourcePath, older, []component{
 		{name: "custo", tag: "23.7.900", archive: map[string]string{
-			"DOCUMENTATION/readme":    "how to deploy",
-			"CONFIGURATION/one.json":  `{"replicas":1}`,
-			"CONFIGURATION/gone.json": "removed next release",
+			"CONFIGURATION/one.json": `{"replicas":1}`,
 		}},
 	})
 	f.publish(f.src, sourcePath, release, []component{
 		{name: "custo", tag: "23.8.1076", archive: map[string]string{
-			"DOCUMENTATION/readme":   "how to deploy",
 			"CONFIGURATION/one.json": `{"replicas":3}`,
-			"CONFIGURATION/new.json": "added this release",
 		}},
 	})
 
 	report := f.compare(f.sourceSide(older), f.sourceSide(release))
-
-	row, ok := rowFor(report, "custo")
-	if !ok {
-		t.Fatalf("no row for the archived artifact:\n%s", describe(report))
-	}
-	assertFileChange(t, row, fileChange{
-		changed: []string{"CONFIGURATION/one.json"},
-		added:   []string{"CONFIGURATION/new.json"},
-		removed: []string{"CONFIGURATION/gone.json"},
-		absent:  []string{"DOCUMENTATION/readme"},
-	})
-	// And the LAYER digest must not leak into the answer. The whole point is to
-	// stop saying "one layer changed" where a file changed.
-	if strings.Contains(strings.Join(row.FilesChanged, " "), "sha256:") {
-		t.Errorf("a layer digest is reported where a file path belongs: %v",
-			row.FilesChanged)
-	}
-}
-
-// A gzipped tar is the common case — `+gzip` is in the media type — and must be
-// transparent.
-func TestAGzippedArchiveIsOpenedToo(t *testing.T) {
-	f := newFixture(t)
-
-	f.publish(f.src, sourcePath, older, []component{
-		{name: "custo", tag: "23.7.900", gzip: true,
-			archive: map[string]string{"CONFIGURATION/one.json": `{"replicas":1}`}},
-	})
-	f.publish(f.src, sourcePath, release, []component{
-		{name: "custo", tag: "23.8.1076", gzip: true,
-			archive: map[string]string{"CONFIGURATION/one.json": `{"replicas":3}`}},
-	})
-
-	report := f.compare(f.sourceSide(older), f.sourceSide(release))
-
-	row, _ := rowFor(report, "custo")
-	assertFileChange(t, row, fileChange{changed: []string{"CONFIGURATION/one.json"}})
-}
-
-// WITHOUT A BUDGET nothing is opened, and the answer degrades to the layer —
-// which is the behaviour that existed before, and is what stops a comparison
-// downloading a two-gigabyte image layer.
-func TestWithoutABudgetLayersStayOpaque(t *testing.T) {
-	f := newFixture(t)
-
-	f.publish(f.src, sourcePath, older, []component{
-		{name: "custo", tag: "23.7.900",
-			archive: map[string]string{"CONFIGURATION/one.json": `{"replicas":1}`}},
-	})
-	f.publish(f.src, sourcePath, release, []component{
-		{name: "custo", tag: "23.8.1076",
-			archive: map[string]string{"CONFIGURATION/one.json": `{"replicas":3}`}},
-	})
-
-	report, err := compare.Run(context.Background(),
-		f.clientFor(f.sourceSide(older)), f.clientFor(f.sourceSide(release)),
-		compare.Options{
-			A: f.sourceSide(older), B: f.sourceSide(release), Concurrency: 4,
-			// No budget.
-		})
-	if err != nil {
-		t.Fatal(err)
-	}
 
 	row, ok := rowFor(report, "custo")
 	if !ok {
 		t.Fatalf("no row for the artifact:\n%s", describe(report))
 	}
-	if len(row.FilesChanged)+len(row.FilesAdded)+len(row.FilesRemoved) != 0 {
-		t.Errorf("layers were opened with no budget: %v %v %v",
-			row.FilesChanged, row.FilesAdded, row.FilesRemoved)
+	if len(row.Files) != 0 {
+		t.Errorf("an untitled layer is reported as a file: %v", row.Files)
 	}
-	// The component is still reported as changed: the digests differ, and that
-	// is knowable without opening anything.
+	// The component is still changed: the digests differ, and that is knowable
+	// without opening anything at all.
 	if row.Verdict != compare.VerdictChanged {
 		t.Errorf("verdict = %q, want changed", row.Verdict)
+	}
+}
+
+// A file present on both sides with the same digest is the SAME file, and it is
+// carried rather than dropped: the unchanged files of a component that changed
+// are the context that makes the changed ones legible.
+func TestUnchangedFilesAreCarriedAndMarkedUnchanged(t *testing.T) {
+	f := newFixture(t)
+
+	f.publish(f.src, sourcePath, older, []component{
+		{name: "custo", tag: "23.7.900", files: map[string]string{
+			"DOCUMENTATION/readme":   "old readme",
+			"CONFIGURATION/one.json": `{"replicas":1}`,
+		}},
+	})
+	f.publish(f.src, sourcePath, release, []component{
+		{name: "custo", tag: "23.8.1076", files: map[string]string{
+			"DOCUMENTATION/readme":   "old readme",
+			"CONFIGURATION/one.json": `{"replicas":3}`,
+		}},
+	})
+
+	row, _ := rowFor(f.compare(f.sourceSide(older), f.sourceSide(release)), "custo")
+
+	var readme *compare.FileDiff
+	for i := range row.Files {
+		if row.Files[i].Path == "DOCUMENTATION/readme" {
+			readme = &row.Files[i]
+		}
+	}
+	if readme == nil {
+		t.Fatalf("the untouched file is missing from the account: %v", row.Files)
+	}
+	if readme.Verdict != compare.VerdictSame {
+		t.Errorf("an untouched file has verdict %q, want same", readme.Verdict)
+	}
+	if readme.DigestA == "" || readme.DigestA != readme.DigestB {
+		t.Errorf("both content digests are not carried: %q / %q",
+			readme.DigestA, readme.DigestB)
 	}
 }
 
@@ -505,29 +478,24 @@ type fileChange struct {
 func assertFileChange(t *testing.T, row compare.Row, want fileChange) {
 	t.Helper()
 
-	for _, path := range want.changed {
-		if !contains(row.FilesChanged, path) {
-			t.Errorf("%s is not reported as changed: changed=%v added=%v removed=%v",
-				path, row.FilesChanged, row.FilesAdded, row.FilesRemoved)
+	verdicts := map[string]compare.Verdict{}
+	for _, f := range row.Files {
+		verdicts[f.Path] = f.Verdict
+	}
+
+	expect := func(paths []string, want compare.Verdict) {
+		for _, path := range paths {
+			if got := verdicts[path]; got != want {
+				t.Errorf("%s has verdict %q, want %q: %v", path, got, want, row.Files)
+			}
 		}
 	}
-	for _, path := range want.added {
-		if !contains(row.FilesAdded, path) {
-			t.Errorf("%s is not reported as added: %v", path, row.FilesAdded)
-		}
-	}
-	for _, path := range want.removed {
-		if !contains(row.FilesRemoved, path) {
-			t.Errorf("%s is not reported as removed: %v", path, row.FilesRemoved)
-		}
-	}
-	for _, path := range want.absent {
-		all := append(append(append([]string(nil), row.FilesChanged...),
-			row.FilesAdded...), row.FilesRemoved...)
-		if contains(all, path) {
-			t.Errorf("the untouched %s is reported as a change: %v", path, all)
-		}
-	}
+	expect(want.changed, compare.VerdictChanged)
+	expect(want.added, compare.VerdictOnlyB)
+	expect(want.removed, compare.VerdictOnlyA)
+	// An untouched file is CARRIED, and must be marked as untouched: reporting
+	// it as a change makes a one-line edit read as a wholesale rewrite.
+	expect(want.absent, compare.VerdictSame)
 }
 
 func contains(values []string, want string) bool {
@@ -1030,7 +998,7 @@ func (f *fixture) compare(a, b compare.SideSpec) compare.Report {
 
 	report, err := compare.Run(context.Background(),
 		f.clientFor(a), f.clientFor(b),
-		compare.Options{A: a, B: b, Concurrency: 4, FileBudget: 8 << 20})
+		compare.Options{A: a, B: b, Concurrency: 4})
 	if err != nil {
 		f.t.Fatal(err)
 	}
@@ -1152,17 +1120,16 @@ func splitRefName(ref string) (repository, tag string) {
 	return ref[:i], ref[i+1:]
 }
 
-// A vendor's named layers are named files, and naming them is free.
+// A vendor's named layers are named files, and comparing them is free.
 //
 // `org.opencontainers.image.title` is the vendor saying "this layer is this
 // file" — every configuration bundle and release note in a vendor artifact is
-// one of these. The name is in the manifest the walk has already read, so a
-// comparison run WITHOUT the download budget still says which files differ.
+// one of these, and the name and the content digest are both in the manifest
+// the walk has already read.
 //
-// It used to say nothing at all: the file pass returned immediately on a zero
-// budget, so the column that exists to say more than a digest was empty on
-// every row of every comparison anybody ran quickly.
-func TestNamedLayersAreComparedWithoutABudget(t *testing.T) {
+// So the comparison downloads nothing and the fixture serves no blob for it.
+// This is the whole of the file-level answer.
+func TestNamedLayersAreComparedFromTheManifestAlone(t *testing.T) {
 	f := newFixture(t)
 
 	f.publish(f.src, sourcePath, older, []component{
@@ -1182,7 +1149,6 @@ func TestNamedLayersAreComparedWithoutABudget(t *testing.T) {
 		f.clientFor(f.sourceSide(older)), f.clientFor(f.sourceSide(release)),
 		compare.Options{
 			A: f.sourceSide(older), B: f.sourceSide(release), Concurrency: 4,
-			// No budget: nothing is downloaded.
 		})
 	if err != nil {
 		t.Fatal(err)
@@ -1192,17 +1158,24 @@ func TestNamedLayersAreComparedWithoutABudget(t *testing.T) {
 	if !ok {
 		t.Fatalf("no row for the artifact:\n%s", describe(report))
 	}
-	if got := row.FilesChanged; len(got) != 1 || got[0] != "CONFIGURATION/one.json" {
-		t.Errorf("changed = %v, want the edited file", got)
+	want := map[string]compare.Verdict{
+		"CONFIGURATION/one.json":  compare.VerdictChanged,
+		"CONFIGURATION/new.json":  compare.VerdictOnlyB,
+		"CONFIGURATION/gone.json": compare.VerdictOnlyA,
 	}
-	if got := row.FilesAdded; len(got) != 1 || got[0] != "CONFIGURATION/new.json" {
-		t.Errorf("added = %v, want the new file", got)
+	if len(row.Files) != len(want) {
+		t.Fatalf("files = %v, want exactly %d", row.Files, len(want))
 	}
-	if got := row.FilesRemoved; len(got) != 1 || got[0] != "CONFIGURATION/gone.json" {
-		t.Errorf("removed = %v, want the dropped file", got)
-	}
-	if row.FilesTruncated {
-		t.Error("the account is complete — every layer named itself")
+	for _, f := range row.Files {
+		if got := want[f.Path]; got != f.Verdict {
+			t.Errorf("%s has verdict %q, want %q", f.Path, f.Verdict, got)
+		}
+		if f.Verdict != compare.VerdictOnlyB && f.DigestA == "" {
+			t.Errorf("%s carries no digest for the first side", f.Path)
+		}
+		if f.Verdict != compare.VerdictOnlyA && f.DigestB == "" {
+			t.Errorf("%s carries no digest for the second side", f.Path)
+		}
 	}
 }
 

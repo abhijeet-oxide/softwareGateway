@@ -129,6 +129,43 @@ export function StatusBadge({ status }: { status: SoftwareStatus }) {
 }
 
 /**
+ * Whether anybody is looking INSIDE this release right now.
+ *
+ * # Why it is a second tag and not a status
+ *
+ * Being analysed is not a lifecycle stage. A release is NEW or AVAILABLE or
+ * DOWNLOADING whether or not somebody happens to be walking its manifest tree
+ * this minute, and folding the walk into that word would make a release change
+ * status because a background job started.
+ *
+ * So it sits beside the status and disappears when the walk finishes. What
+ * says a release HAS been analysed is its contents being there, which is on the
+ * release's own page and is a better answer than a tag.
+ *
+ * A failure keeps its reason on hover. "Analysis failed" that cannot say why is
+ * a dead end for whoever reads it.
+ */
+export function AnalysisTag({ pkg }: { pkg: { analysisState?: string; analysisError?: string } }) {
+  if (pkg.analysisState === 'analyzing') {
+    return (
+      <Tooltip title="Reading this release's manifest tree from the vendor registry, so its contents, sizes and files can be shown without asking again.">
+        <Tag icon={<LoadingOutlined spin />} color="processing" style={{ marginInlineEnd: 0 }}>
+          Analyzing
+        </Tag>
+      </Tooltip>
+    )
+  }
+  if (pkg.analysisState === 'failed') {
+    return (
+      <Tooltip title={pkg.analysisError || 'The walk did not finish and gave no reason.'}>
+        <Tag color="error" style={{ marginInlineEnd: 0 }}>Analysis failed</Tag>
+      </Tooltip>
+    )
+  }
+  return null
+}
+
+/**
  * A transfer's state, and whether it is MOVING.
  *
  * The spinner is the point. `RUNNING` and `SUCCEEDED` are two words of similar

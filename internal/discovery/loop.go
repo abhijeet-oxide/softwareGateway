@@ -490,6 +490,10 @@ func (l *Loop) Status() []Status {
 
 // run is one source's polling loop.
 func (w *worker) run(ctx context.Context) {
+	// Beside the loop, with the loop's own lifetime: a walk started by one scan
+	// must be able to outlive that scan, and must stop when the loop does.
+	go w.scanner.runAnalyser(ctx)
+
 	interval := w.spec.Interval
 	if interval <= 0 {
 		interval = product.DefaultDiscoveryInterval
@@ -741,13 +745,12 @@ func (w *worker) scanOnce(ctx context.Context) (ScanResult, error) {
 		}
 	}
 
-	// Walk what was just found, before anybody asks for it. Bounded and
-	// best-effort — see analyse.go — and deliberately AFTER the scan is
-	// recorded, so a slow walk cannot make a scan look slow or fail.
-	if analysed := w.scanner.analyseRecent(ctx); analysed > 0 {
-		w.log.InfoContext(ctx, "analysed newly discovered releases",
-			"product", productName, "source", w.spec.SourceName, "releases", analysed)
-	}
+	// Walk what was just found, before anybody asks for it — WITHOUT WAITING
+	// FOR IT. This used to run inline, which made a scan as slow as the
+	// walking: a scan that found ten releases took as long as walking ten
+	// manifest trees and reported nothing during it. The analyser runs beside
+	// the loop and says what it is doing in each release's own state.
+	w.scanner.wakeAnalyser()
 
 	w.log.DebugContext(ctx, "discovery scan complete",
 		"repositories", res.Repositories, "fromCatalog", res.RepositoriesFromCatalog,

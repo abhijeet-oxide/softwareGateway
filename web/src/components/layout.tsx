@@ -1,14 +1,16 @@
 import type { ReactNode } from 'react'
 import {
-  Alert, Button, Card, Empty, Input, Popover, Space, Tag, Timeline, Typography,
+  Alert, Button, Card, Empty, Input, Popover, Space, Tag, Timeline, Tooltip, Typography,
 } from 'antd'
 import {
   ArrowLeftOutlined, CheckCircleOutlined, ClockCircleOutlined, LoadingOutlined, RocketOutlined,
   SearchOutlined, ShopOutlined,
 } from '@ant-design/icons'
 import { Link } from 'react-router-dom'
-import type { LifecycleStep } from '../domain/derive'
-import { formatAbsolute } from '../domain/format'
+import type { ContentGroup, SkipBreakdown } from '../api/types'
+import { kindName, type LifecycleStep } from '../domain/derive'
+import { bytes, formatAbsolute, formatBytes, formatCount } from '../domain/format'
+import { ARTIFACT_ICONS, Icon } from './icons'
 import { semantic } from '../theme'
 import { NA } from './value'
 
@@ -376,21 +378,30 @@ export function SearchBar({
  * a fact about a release, not about the estate.
  */
 export function SavedPanel({
-  savedBytes, totalBytes, artifactsSkipped, estimated,
+  savedBytes, totalBytes, artifactsSkipped, estimated, content, skips,
 }: {
   savedBytes: string
   totalBytes?: string
   artifactsSkipped?: number
   /** Before a download this is a projection and must say so. */
   estimated?: boolean
+  /** What the transfer is made of, which is what the saving is broken down by. */
+  content?: ContentGroup[]
+  /** On whose word each skip rests. */
+  skips?: SkipBreakdown[]
 }) {
   return (
     <Card size="small" style={{ background: '#F3F8F4', borderColor: '#CFE4D6' }}>
       <Space direction="vertical" size={4} style={{ width: '100%' }}>
         <Space size={8}>
-          <Typography.Text strong style={{ color: semantic.success }}>
-            Saved {savedBytes}
-          </Typography.Text>
+          <SavedBreakdown content={content} skips={skips}>
+            <Typography.Text
+              strong
+              style={{ color: semantic.success, borderBottom: '1px dotted #9BC7A9' }}
+            >
+              Saved {savedBytes}
+            </Typography.Text>
+          </SavedBreakdown>
           {totalBytes && <Typography.Text type="secondary">of {totalBytes}</Typography.Text>}
           {artifactsSkipped !== undefined && (
             <Typography.Text type="secondary">· {artifactsSkipped} artifacts skipped</Typography.Text>
@@ -405,4 +416,151 @@ export function SavedPanel({
       </Space>
     </Card>
   )
+}
+
+/**
+ * WHAT was saved — a hover, because the number alone is not checkable.
+ *
+ * # The question
+ *
+ * "Saved 30.1 GB" is the system's best claim about itself and it is opaque: an
+ * operator who reads it wants to know saved on WHAT. Thirty gigabytes of image
+ * layers is ordinary — a product line shares base layers, and the second
+ * release of it is nearly free. Thirty gigabytes of configuration bundles would
+ * be surprising and worth looking into. Same number, opposite meanings.
+ *
+ * # Two answers, because "saved" has two halves
+ *
+ * WHAT it was: the kinds, from the same breakdown the Contents table is built
+ * from, so the two cannot disagree. The parts add up to the whole — they are
+ * summed per job, and a blob is one job however many components reference it.
+ *
+ * ON WHOSE WORD: a mount is something the registry DID and is proof; a
+ * placement record or a HEAD is something it or we SAID, and against a
+ * destination that answers about its whole storage rather than the repository
+ * asked about, it is worth nothing. Both are savings; only one is evidence.
+ */
+export function SavedBreakdown({
+  content, skips, children,
+}: {
+  content?: ContentGroup[]
+  skips?: SkipBreakdown[]
+  children: ReactNode
+}) {
+  const kinds = (content ?? [])
+    .map((g) => ({ group: g, saved: bytes(g.savedBytes) ?? 0 }))
+    .filter((k) => k.saved > 0)
+    .sort((a, b) => b.saved - a.saved)
+
+  const reasons = (skips ?? []).filter((s) => s.jobs > 0)
+
+  // Nothing to say is said by not offering a hover, rather than by an empty
+  // one: a popover that opens on nothing reads as a page that is broken.
+  if (kinds.length === 0 && reasons.length === 0) return <>{children}</>
+
+  return (
+    <Popover
+      placement="bottomLeft"
+      title="What was already there"
+      content={
+        <Space direction="vertical" size={10} style={{ minWidth: 320, maxWidth: 440 }}>
+          {kinds.length > 0 && (
+            <Space direction="vertical" size={4} style={{ width: '100%' }}>
+              {kinds.map(({ group, saved }) => {
+                const name = kindName(group.kind)
+                const icon = ARTIFACT_ICONS[name as keyof typeof ARTIFACT_ICONS]
+                return (
+                  <div
+                    key={group.kind}
+                    style={{ display: 'flex', alignItems: 'center', gap: 8 }}
+                  >
+                    {icon && <Icon as={icon} size={14} title={name} />}
+                    <Typography.Text style={{ fontSize: 12, flex: 1 }}>{name}</Typography.Text>
+                    {/*
+                      COMPONENTS on the left, BYTES on the right, and they do
+                      not have to agree. A kind can save bytes with no component
+                      wholly present — a release that changed five images still
+                      shares most of their layers with the release before it —
+                      so the count is stated only when there is one to state.
+                    */}
+                    <Typography.Text type="secondary" style={{ fontSize: 11 }}>
+                      {group.present > 0
+                        ? `${group.present} of ${group.total} already there`
+                        : 'shared layers'}
+                    </Typography.Text>
+                    <Typography.Text strong style={{ fontSize: 12, color: semantic.success }}>
+                      {formatBytes(saved)}
+                    </Typography.Text>
+                  </div>
+                )
+              })}
+            </Space>
+          )}
+
+          {reasons.length > 0 && (
+            <Space direction="vertical" size={4} style={{ width: '100%' }}>
+              <Typography.Text type="secondary" style={{ fontSize: 11 }}>
+                How we know it was there
+              </Typography.Text>
+              {reasons.map((skip) => (
+                <div key={skip.reason} style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                  <Typography.Text style={{ fontSize: 12, flex: 1 }}>
+                    {SKIP_REASONS[skip.reason]?.label ?? skip.reason}
+                  </Typography.Text>
+                  <Tooltip title={SKIP_REASONS[skip.reason]?.detail}>
+                    <Tag
+                      color={skip.trusted ? 'green' : 'default'}
+                      style={{ marginInlineEnd: 0, fontSize: 10 }}
+                    >
+                      {skip.trusted ? 'proven' : 'claimed'}
+                    </Tag>
+                  </Tooltip>
+                  <Typography.Text type="secondary" style={{ fontSize: 11 }}>
+                    {formatCount(skip.jobs)} jobs
+                  </Typography.Text>
+                  <Typography.Text style={{ fontSize: 12 }}>
+                    {formatBytes(bytes(skip.bytes))}
+                  </Typography.Text>
+                </div>
+              ))}
+            </Space>
+          )}
+        </Space>
+      }
+    >
+      <span style={{ cursor: 'help' }}>{children}</span>
+    </Popover>
+  )
+}
+
+/**
+ * Why a job moved nothing, in the words a reader uses, and what that rests on.
+ *
+ * `detail` is the part that matters: two of these are claims and one is an
+ * action, and a page presenting all three as "already present" would report a
+ * cache hit with the same confidence as a registry's own mount.
+ */
+const SKIP_REASONS: Record<string, { label: string; detail: string }> = {
+  mounted: {
+    label: 'Mounted by the registry',
+    detail:
+      'The destination registry moved the content into place itself, from another '
+      + 'repository it already held it in. That is something it DID, so it is proof: '
+      + 'the content is there.',
+  },
+  exists_at_target: {
+    label: 'The destination said it had it',
+    detail:
+      'We asked the destination whether it held the content and it said yes, so '
+      + 'nothing was sent. That is its claim rather than an action — a registry that '
+      + 'answers about its whole storage rather than the repository asked about would '
+      + 'answer yes either way.',
+  },
+  placement_hit: {
+    label: 'We had recorded it as there',
+    detail:
+      'Our own record of what this destination holds said the content was already '
+      + 'there, so nothing was sent and nothing was asked. A cache, and only as good '
+      + 'as the last thing that wrote it.',
+  },
 }

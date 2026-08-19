@@ -378,6 +378,10 @@ func toAPIContent(rows []store.ContentRow, classify vendors.Classifier) []v1.Con
 	}
 
 	byKind := map[string]*v1.ContentGroup{}
+	// Bytes accumulate as numbers and are rendered once at the end: Int64String
+	// is a wire format, not something to do arithmetic in.
+	saved, copied := map[string]int64{}, map[string]int64{}
+
 	for _, row := range rows {
 		kind := classify(row.MediaType, row.ArtifactType, row.ConfigMediaType, row.Annotations)
 		group, ok := byKind[kind]
@@ -385,6 +389,12 @@ func toAPIContent(rows []store.ContentRow, classify vendors.Classifier) []v1.Con
 			group = &v1.ContentGroup{Kind: kind}
 			byKind[kind] = group
 		}
+
+		// Summed across every OUTCOME of this kind, not only the skipped one: a
+		// component reported as copied may still have had blobs the destination
+		// already held, and those bytes were saved just the same.
+		saved[kind] += row.SavedBytes
+		copied[kind] += row.CopiedBytes
 
 		group.Total += row.Count
 		switch row.Outcome {
@@ -400,7 +410,9 @@ func toAPIContent(rows []store.ContentRow, classify vendors.Classifier) []v1.Con
 	}
 
 	out := make([]v1.ContentGroup, 0, len(byKind))
-	for _, group := range byKind {
+	for kind, group := range byKind {
+		group.SavedBytes = int64String(saved[kind])
+		group.CopiedBytes = int64String(copied[kind])
 		out = append(out, *group)
 	}
 	// Structural first, and FIXED rather than by count: a reader comparing two

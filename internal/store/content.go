@@ -65,6 +65,24 @@ type ContentRow struct {
 	// Outcome is one of copied, present, failed, outstanding.
 	Outcome string
 	Count   int
+	// SavedBytes is what this transfer did NOT have to move for these
+	// components, and CopiedBytes what it did.
+	//
+	// # Why bytes are here when ContentGroup says they cannot be
+	//
+	// Because these are not "what a component weighs". A base layer shared by
+	// four images belongs to all four, so any per-kind SIZE either counts it
+	// four times or picks an owner — which is why the transfer's own byte
+	// totals are the ones to trust for that question.
+	//
+	// This is a different question: which JOBS were skipped. A blob is one job
+	// however many components reference it, so summing the skipped jobs
+	// partitions the saving exactly — every byte counted once, and the parts
+	// add up to the whole. The only softness left is WHICH component a shared
+	// blob is filed under, and within a kind that is nearly always the same
+	// answer.
+	SavedBytes  int64
+	CopiedBytes int64
 }
 
 // Outcomes a component can be in. Ordered by precedence: the first that applies
@@ -102,7 +120,7 @@ func (p *Packages) ContentBreakdown(ctx context.Context, transferID string) ([]C
 		            WHEN copied      > 0 THEN 'copied'
 		            WHEN present     > 0 THEN 'present'
 		            ELSE 'outstanding' END AS outcome,
-		       count(*)
+		       count(*), SUM(saved_bytes), SUM(copied_bytes)
 		  FROM (
 		        SELECT pa.id,
 		               pa.media_type                     AS media_type,
@@ -121,7 +139,15 @@ func (p *Packages) ContentBreakdown(ctx context.Context, transferID string) ([]C
 		               SUM(CASE WHEN j.state IN ('pending','blocked','leased')
 		                        THEN 1 ELSE 0 END)                              AS outstanding,
 		               SUM(CASE WHEN j.state = 'succeeded' THEN 1 ELSE 0 END)   AS copied,
-		               SUM(CASE WHEN j.state = 'skipped' THEN 1 ELSE 0 END)     AS present
+		               SUM(CASE WHEN j.state = 'skipped' THEN 1 ELSE 0 END)     AS present,
+		               -- PER JOB, not per component. A blob is one job however
+		               -- many components reference it, so this partitions the
+		               -- transfer's saving exactly: every byte counted once,
+		               -- and the parts add up to the whole.
+		               COALESCE(SUM(CASE WHEN j.state = 'skipped'
+		                                 THEN j.size_bytes ELSE 0 END), 0)      AS saved_bytes,
+		               COALESCE(SUM(CASE WHEN j.state = 'succeeded'
+		                                 THEN j.size_bytes ELSE 0 END), 0)      AS copied_bytes
 		          FROM transfers t
 		          JOIN package_artifacts pa ON pa.package_id = t.package_id
 		          LEFT JOIN jobs j
@@ -145,7 +171,8 @@ func (p *Packages) ContentBreakdown(ctx context.Context, transferID string) ([]C
 			annotations []byte
 		)
 		if err := rows.Scan(&row.MediaType, &row.ArtifactType, &row.ConfigMediaType,
-			&annotations, &row.Outcome, &row.Count); err != nil {
+			&annotations, &row.Outcome, &row.Count,
+			&row.SavedBytes, &row.CopiedBytes); err != nil {
 			return nil, fmt.Errorf("scan content breakdown: %w", err)
 		}
 		if len(annotations) > 0 {

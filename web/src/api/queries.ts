@@ -128,6 +128,14 @@ export function usePackages(product: string | undefined, filters: PackageFilters
       `/products/${encodeURIComponent(product!)}/packages${query({ ...filters })}`),
     enabled: Boolean(product),
     staleTime: MINUTE,
+    // Only while a release on THIS page is being walked, and it stops the
+    // moment none is. Discovery analyses new releases on its own, so a listing
+    // that never refreshed would show `Analyzing` on rows that finished
+    // minutes ago.
+    refetchInterval: (q) =>
+      (q.state.data?.packages ?? []).some((p) => p.analysisState === 'analyzing')
+        ? 5000
+        : false,
   })
 }
 
@@ -151,6 +159,11 @@ export function usePackage(
         scopeQuery(q, repository))
     },
     enabled: Boolean(product && ref),
+    // SCOPED POLLING, by the same rule transfers follow: only while something
+    // is actually happening. A release being walked in the background finishes
+    // without anybody pressing anything, and a page that did not notice would
+    // sit on "Analyzing" until somebody reloaded it.
+    refetchInterval: (q) => (q.state.data?.analysisState === 'analyzing' ? 4000 : false),
   })
 }
 

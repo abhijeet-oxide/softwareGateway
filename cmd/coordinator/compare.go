@@ -34,7 +34,7 @@ type compareImpl struct {
 // and a target, two targets, or one place at two versions are the same call with
 // different arguments. Nothing here knows which of those the caller meant.
 func (c compareImpl) Compare(
-	ctx context.Context, productName string, a, b api.ComparePoint, fileBudget int64,
+	ctx context.Context, productName string, a, b api.ComparePoint, _ int64,
 	progress compare.ProgressFunc,
 ) (compare.Report, error) {
 	p, ok := c.products.Get(productName)
@@ -92,7 +92,6 @@ func (c compareImpl) Compare(
 	return compare.Run(ctx, clientA, clientB, compare.Options{
 		A: specA, B: specB,
 		Concurrency: concurrencyOf(p),
-		FileBudget:  resolveFileBudget(fileBudget),
 		Classify:    vendors.ClassifierFor(c.layouts, layoutNames(p)),
 		Progress:    progress,
 	})
@@ -302,28 +301,6 @@ func layoutNames(p *product.Product) []string {
 		out = append(out, s.VendorLayout())
 	}
 	return out
-}
-
-// defaultFileBudget is how much layer content a comparison downloads by default
-// in order to answer "which FILE changed" rather than "which layer changed".
-//
-// Sized against what it is FOR. A vendor's configuration bundle is kilobytes to
-// a few megabytes, and this opens every one of them; an image layer is hundreds
-// of megabytes, and this opens none of them. That asymmetry is the whole design
-// — the expensive layers are exactly the ones whose file listing nobody wants.
-const defaultFileBudget int64 = 64 << 20
-
-// resolveFileBudget reads the caller's intent: unset means the default, and a
-// negative value means "do not open anything".
-func resolveFileBudget(requested int64) int64 {
-	switch {
-	case requested > 0:
-		return requested
-	case requested < 0:
-		return 0
-	default:
-		return defaultFileBudget
-	}
 }
 
 // defaultCompareConcurrency is what a comparison uses when configuration names

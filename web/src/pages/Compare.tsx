@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from 'react'
+import type { ReactNode } from 'react'
 import {
   Alert, App, Button, Card, Checkbox, Col, Empty, Popover, Progress, Row, Segmented, Select,
   Space, Statistic, Table, Tag, Tooltip, Typography,
@@ -77,9 +78,12 @@ function refOf(pkg: Package): string {
 function releaseOptions(releases: Package[]) {
   return releases.map((r) => ({
     value: refOf(r),
-    // Kept a plain string so the closed select shows one line. The two-line
-    // form is in optionRender below, where there is room for it.
-    label: `${r.displayRepository || r.sourceRepository || ''} · ${version(r)}`,
+    // The VERSION alone, because a select box is one line and the version is
+    // the half that identifies the release to a reader. The package name is
+    // rendered under it — in the list and in the closed box — where a second
+    // line has room for it. Joining the two into one string produced
+    // `cfx-5000-k8s-215952-edgenac-25.7-2131_20260807-wn…`, which is neither.
+    label: version(r),
     name: r.displayRepository || r.sourceRepository || '',
     version: version(r),
     tag: r.tag,
@@ -88,14 +92,36 @@ function releaseOptions(releases: Package[]) {
 
 type ReleaseOption = ReturnType<typeof releaseOptions>[number]
 
-/** Name above, version below — the two things that identify a release. */
-function renderReleaseOption(option: ReleaseOption) {
+/**
+ * Version above, package name below — the two things that identify a release.
+ *
+ * Used for the options AND for the closed box, so what a reader picked still
+ * says which package it was. A select showing only a version is ambiguous by
+ * construction here: the same tag exists in ten repositories.
+ */
+function renderReleaseOption(option: Pick<ReleaseOption, 'version' | 'name'>) {
   return (
-    <Space direction="vertical" size={0}>
-      <Typography.Text style={{ fontFamily: mono, fontSize: 12 }}>{option.version}</Typography.Text>
-      <Typography.Text type="secondary" style={{ fontSize: 11 }}>{option.name}</Typography.Text>
+    <Space direction="vertical" size={0} style={{ lineHeight: 1.25, minWidth: 0 }}>
+      <Typography.Text style={{ fontFamily: mono, fontSize: 12 }} ellipsis>
+        {option.version}
+      </Typography.Text>
+      {option.name && (
+        <Typography.Text type="secondary" style={{ fontSize: 11 }} ellipsis>
+          {option.name}
+        </Typography.Text>
+      )}
     </Space>
   )
+}
+
+/** The closed box, showing the same two lines as the option that filled it. */
+function releaseLabelRender(releases: Package[], value: unknown, fallback: ReactNode) {
+  const chosen = releases.find((r) => refOf(r) === value)
+  if (!chosen) return fallback
+  return renderReleaseOption({
+    version: version(chosen),
+    name: chosen.displayRepository || chosen.sourceRepository || '',
+  })
 }
 
 /**
@@ -128,13 +154,16 @@ function ComparisonProgress({
   const progress = useCompareProgress(token)
   const sides = progress.data?.sides ?? []
 
+  // Round trips, summed. The unit is the same on both sides and in every phase,
+  // so the total grows as work is discovered and the count never drops — which
+  // is what a bar filling, emptying and filling again was.
   const done = sides.reduce((n, s) => n + s.done, 0)
   const total = sides.reduce((n, s) => n + s.total, 0)
   const estimated = sides.some((s) => s.estimated)
   const percent = total > 0 ? Math.min(99, (done / total) * 100) : 0
 
-  // Said only once it is true, and it is a statement about this comparison
-  // rather than a warning attached to every one of them.
+  // Said only once it is true, and about THIS comparison rather than as a
+  // warning attached to every one of them.
   const slow = elapsedSeconds > 120
 
   return (
@@ -152,11 +181,15 @@ function ComparisonProgress({
             status="active"
             format={() => `${formatCount(done)} of ${formatCount(total)}${estimated ? '+' : ''}`}
           />
-          <Space size={24} wrap>
+          <Space direction="vertical" size={2} style={{ width: '100%' }}>
             {sides.map((side) => (
-              <Typography.Text key={side.side} type="secondary" style={{ fontSize: 12 }}>
-                <strong>{side.side}</strong> — {side.phase} {formatCount(side.done)}
-                {side.total > 0 && ` of ${formatCount(side.total)}`}
+              <Typography.Text
+                key={side.key ?? side.side}
+                type="secondary"
+                style={{ fontSize: 12 }}
+              >
+                <strong>{side.side}</strong> — {side.phase} · {formatCount(side.done)}
+                {side.total > 0 && ` of ${formatCount(side.total)}${side.estimated ? '+' : ''}`}
               </Typography.Text>
             ))}
             <Typography.Text type="secondary" style={{ fontSize: 12 }}>
@@ -168,20 +201,14 @@ function ComparisonProgress({
 
       <Typography.Text type="secondary" style={{ fontSize: 12 }}>
         {slow
-          ? 'Analysing packages — this is taking longer than expected. Large releases with many components read slowly from their registries; the counts above are still advancing.'
+          ? 'Analysing packages — this is taking longer than expected. Large releases read slowly '
+            + 'from their registries; the counts above are still advancing.'
           : 'Analysing packages, this may take a while.'}
       </Typography.Text>
     </Space>
   )
 }
 
-/**
- * The four impacts, in the words a reader uses about a release.
- *
- * `statColour` is separate from `colour` because a tag and a headline number
- * are read differently: a tag is a label and takes Ant Design's palette name, a
- * statistic is a quantity and takes the semantic colour it means.
- */
 const VERDICT: Record<CompareVerdict, { label: string; colour: string; statColour?: string }> = {
   same: { label: 'Unchanged', colour: 'default' },
   changed: { label: 'Changed', colour: 'orange', statColour: semantic.warning },
@@ -605,7 +632,17 @@ export default function Compare() {
   const releases = packages.data?.packages ?? []
 
   const [mode, setMode] = useState<Mode>('versions')
-  const [left, setLeft] = useState<string | undefined>(params.get('from') ?? undefined)
+  /*
+   * The incoming link carries a TAG, and a tag is not a reference.
+   *
+   * One version tag exists in every repository a product watches, so `?from=`
+   * on its own does not name a package — and a select keyed on
+   * `repository:tag` had nothing matching it, which is why the box showed a
+   * bare version with no package name beside it. The repository travels in the
+   * URL now; the effect below resolves the pair, and falls back to the first
+   * release with that tag for a link written before it did.
+   */
+  const [left, setLeft] = useState<string | undefined>(undefined)
   const [right, setRight] = useState<string>()
   const [fromEndpoint, setFromEndpoint] = useState<string>()
   const [toEndpoint, setToEndpoint] = useState<string>()
@@ -629,8 +666,17 @@ export default function Compare() {
   // The first release is almost always the one somebody means, and having to
   // pick it before the page does anything is a step with no decision in it.
   useEffect(() => {
-    if (!left && releases.length > 0) setLeft(refOf(releases[0]!))
-  }, [releases, left])
+    if (left || releases.length === 0) return
+
+    const tag = params.get('from')
+    const repository = params.get('repository')
+    const asked = tag
+      ? releases.find((r) => r.tag === tag && (!repository || r.sourceRepository === repository))
+        ?? releases.find((r) => r.tag === tag)
+      : undefined
+
+    setLeft(refOf(asked ?? releases[0]!))
+  }, [releases, left, params])
 
   const compare = useCompare()
   const compareRunning = compare.isPending
@@ -797,6 +843,8 @@ export default function Compare() {
                   filterOption={(input, option) =>
                     matches(input, option?.name, option?.version, option?.tag)}
                   optionRender={(option) => renderReleaseOption(option.data)}
+                  labelRender={(item) => releaseLabelRender(releases, item.value, item.label)}
+                  styles={{ popup: { root: { minWidth: 320 } } }}
                   loading={packages.isLoading}
                   options={releaseOptions(releases)}
                 />
@@ -828,6 +876,8 @@ export default function Compare() {
                   filterOption={(input, option) =>
                     matches(input, option?.name, option?.version, option?.tag)}
                   optionRender={(option) => renderReleaseOption(option.data)}
+                  labelRender={(item) => releaseLabelRender(releases, item.value, item.label)}
+                  styles={{ popup: { root: { minWidth: 320 } } }}
                   loading={packages.isLoading}
                   options={releaseOptions(releases)}
                 />

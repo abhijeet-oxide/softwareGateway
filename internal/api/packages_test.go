@@ -729,11 +729,11 @@ func TestAComparisonReportsProgressAndGivesUpWhenItStops(t *testing.T) {
 			ctx context.Context, _ string, _, _ ComparePoint, _ int64, progress compare.ProgressFunc,
 		) (compare.Report, error) {
 			progress(compare.Progress{
-				Side: "vendor", Phase: compare.PhaseManifests,
+				Key: "a", Side: "vendor", Phase: compare.PhaseManifests,
 				Done: 143, Total: 261, Estimated: true,
 			})
 			progress(compare.Progress{
-				Side: "internal", Phase: compare.PhaseNames, Done: 12, Total: 261,
+				Key: "b", Side: "internal", Phase: compare.PhaseNames, Done: 12, Total: 261,
 			})
 			// And then nothing more: a registry that has stopped answering.
 			<-ctx.Done()
@@ -766,12 +766,14 @@ func TestAComparisonReportsProgressAndGivesUpWhenItStops(t *testing.T) {
 		time.Sleep(20 * time.Millisecond)
 	}
 
-	// Sorted by side, so a bar built from this does not reorder between polls.
-	if progress.Sides[0].Side != "internal" || progress.Sides[1].Side != "vendor" {
+	// Sorted by END, so a bar built from this does not reorder between polls —
+	// and keyed by it, because the two sides of a version comparison are the
+	// same place and share a label.
+	if progress.Sides[0].Key != "a" || progress.Sides[1].Key != "b" {
 		t.Errorf("sides came out %s, %s — want a stable order",
-			progress.Sides[0].Side, progress.Sides[1].Side)
+			progress.Sides[0].Key, progress.Sides[1].Key)
 	}
-	if vendor := progress.Sides[1]; vendor.Done != 143 || vendor.Total != 261 || !vendor.Estimated {
+	if vendor := progress.Sides[0]; vendor.Done != 143 || vendor.Total != 261 || !vendor.Estimated {
 		t.Errorf("vendor progress = %+v, want 143 of 261 and estimated", vendor)
 	}
 

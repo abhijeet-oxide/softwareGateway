@@ -623,6 +623,9 @@ export interface ListPackageFilesResponse {
 }
 
 export interface CompareProgressSide {
+  /** Which end this is — "a" or "b". The label is not an identity: the two
+   * sides of a version comparison are the same place and share it. */
+  key?: string
   side: string
   phase: string
   done: number

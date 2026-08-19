@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"sort"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/abhijeet-oxide/softwareGateway/internal/compare"
@@ -1202,5 +1203,71 @@ func TestNamedLayersAreComparedWithoutABudget(t *testing.T) {
 	}
 	if row.FilesTruncated {
 		t.Error("the account is complete — every layer named itself")
+	}
+}
+
+// Progress never goes backwards.
+//
+// A comparison is four kinds of work over four different populations —
+// manifests walked, names probed, tags resolved, layers read — and reporting
+// each phase's own count meant the number reset to zero at every boundary. On
+// screen that is a bar filling, emptying and filling again, which reads as the
+// thing having restarted; the report was "it went to 251, the bar went to the
+// end, and then it went to zero again".
+//
+// So the unit is round trips completed, and the assertion is the property that
+// makes it legible rather than any particular number.
+func TestProgressOnlyEverGoesUp(t *testing.T) {
+	f := newFixture(t)
+	f.publish(f.src, sourcePath, older, componentsOf(older))
+	f.publish(f.src, sourcePath, release, componentsOf(release))
+
+	var (
+		mu   sync.Mutex
+		last = map[string]compare.Progress{}
+		seen int
+	)
+
+	if _, err := compare.Run(context.Background(),
+		f.clientFor(f.sourceSide(older)), f.clientFor(f.sourceSide(release)),
+		compare.Options{
+			A: f.sourceSide(older), B: f.sourceSide(release), Concurrency: 4,
+			Progress: func(p compare.Progress) {
+				mu.Lock()
+				defer mu.Unlock()
+				seen++
+				if before, ok := last[p.Key]; ok {
+					if p.Done < before.Done {
+						t.Errorf("%s went backwards: %d done, was %d (phase %q, was %q)",
+							p.Key, p.Done, before.Done, p.Phase, before.Phase)
+					}
+					if p.Total < before.Total {
+						t.Errorf("%s's total shrank: %d, was %d — a denominator that "+
+							"drops makes the bar jump forwards for no reason",
+							p.Key, p.Total, before.Total)
+					}
+				}
+				last[p.Key] = p
+			},
+		}); err != nil {
+		t.Fatal(err)
+	}
+
+	if seen == 0 {
+		t.Fatal("no progress was reported at all")
+	}
+	if len(last) != 2 {
+		t.Errorf("progress came back for %d ends, want both — the two sides of a "+
+			"version comparison share a label, so anything keyed by it loses one",
+			len(last))
+	}
+	for side, p := range last {
+		if p.Estimated {
+			t.Errorf("%s still reads as an estimate after the comparison finished", side)
+		}
+		if p.Done != p.Total {
+			t.Errorf("%s finished at %d of %d, want the two equal once it is done",
+				side, p.Done, p.Total)
+		}
 	}
 }

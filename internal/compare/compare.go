@@ -156,15 +156,36 @@ type Options struct {
 // Per SIDE, because the two are walked concurrently against different
 // registries and one of them is usually the slow one — a single merged number
 // would hide which.
+//
+// # The unit is REQUESTS, and that is what makes it monotonic
+//
+// A comparison is four kinds of work over four different populations: manifests
+// walked, component names probed, repository tags resolved, layer archives
+// read. Reporting each phase's own count meant the number RESET to zero at
+// every phase boundary — a bar that filled, emptied and filled again, which
+// reads as the thing having restarted.
+//
+// So Done counts round trips completed on this side and never decreases, and
+// Total counts round trips KNOWN so far, which grows as each phase discovers
+// its population — exactly as the manifest walk's own denominator does. Phase
+// is a label saying what those requests currently are.
 type Progress struct {
+	// Key is which END this is — "a" or "b" — and it is what a consumer should
+	// index by.
+	//
+	// The label is not an identity: two sides of a version comparison are the
+	// same place, so they carry the same label unless something upstream has
+	// disambiguated them, and a tracker keyed by label would have the second
+	// side overwriting the first's position.
+	Key string
 	// Side is the end's label, as it appears in the report.
 	Side string
 	// Phase is what is being done, in the words the report uses.
 	Phase string
-	// Done and Total are components. Total is what is KNOWN so far: a tree is
-	// discovered by walking it, so during the manifest phase the denominator
-	// grows as levels open.
-	Done, Total int
+	// Done is round trips completed on this side. Monotonic.
+	Done int
+	// Total is round trips known so far. It grows; it never shrinks.
+	Total int
 	// Estimated says the total may still grow, so a caller can render the
 	// percentage as an estimate rather than as a position.
 	Estimated bool
@@ -174,12 +195,128 @@ type Progress struct {
 const (
 	PhaseManifests = "reading manifests"
 	PhaseNames     = "checking component names"
+	PhaseTags      = "checking for unaccounted tags"
 	PhaseFiles     = "reading file contents"
+	PhaseDone      = "finished"
 )
 
 // ProgressFunc receives progress. It is called from several goroutines and
 // must be safe for concurrent use.
 type ProgressFunc func(Progress)
+
+// sideReporter accumulates one side's work into a single monotonic count.
+//
+// One per side, shared by every phase that side passes through, so the number a
+// caller sees only ever goes up — see Progress for why that matters.
+type sideReporter struct {
+	key    string
+	side   string
+	report ProgressFunc
+
+	mu        sync.Mutex
+	phase     string
+	done      int
+	known     int
+	estimated bool
+}
+
+func newSideReporter(key, side string, report ProgressFunc) *sideReporter {
+	return &sideReporter{key: key, side: side, report: report, estimated: true}
+}
+
+// walked records the manifest walk's absolute position.
+//
+// Absolute rather than incremental because the walk reports totals, and it is
+// the first phase — so its numbers ARE the side's numbers until another phase
+// adds to them.
+func (r *sideReporter) walked(fetched, known int) {
+	if r == nil {
+		return
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	r.phase = PhaseManifests
+	// The HIGHEST reported, not the latest. The walk counts with an atomic
+	// across its fetching goroutines, so callbacks arrive out of order — the
+	// goroutine that computed 3 can emit after the one that computed 2 — and
+	// taking the latest made the count flicker downwards.
+	if fetched > r.done {
+		r.done = fetched
+	}
+	if known > r.known {
+		r.known = known
+	}
+	r.emitLocked()
+}
+
+// expect adds a phase's population to what is known, and names the phase.
+//
+// Called once a phase can count its own work: how many components have names to
+// probe, how many tags a repository listed. A phase with NOTHING to do adds
+// nothing and does not become the label — which is why a comparison against a
+// source, where no component is expected to answer to its own name, no longer
+// sits on "checking component names 0 of 259" for the rest of its life.
+func (r *sideReporter) expect(phase string, units int) {
+	if r == nil || units <= 0 {
+		return
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	r.phase = phase
+	r.known += units
+	r.emitLocked()
+}
+
+// did records completed work in a phase.
+func (r *sideReporter) did(phase string, n int) {
+	if r == nil || n <= 0 {
+		return
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	r.phase = phase
+	r.done += n
+	if r.done > r.known {
+		// A phase that turned out to be larger than it announced. The count is
+		// still true; the denominator was the estimate.
+		r.known = r.done
+	}
+	r.emitLocked()
+}
+
+// settled marks this side finished, so a caller stops showing it as in flight.
+func (r *sideReporter) settled() {
+	if r == nil {
+		return
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	r.phase = PhaseDone
+	r.known = r.done
+	r.estimated = false
+	r.emitLocked()
+}
+
+// emitLocked reports the current position, WITH THE LOCK HELD.
+//
+// Deliberately: the mutation and the report have to be one atomic step, or two
+// goroutines can snapshot 5 and 6 and deliver them in the other order — which
+// is a count going backwards for a reader, however monotonic the counter is.
+// The callback is a map write under the caller's own mutex, so serialising it
+// costs nothing worth measuring.
+func (r *sideReporter) emitLocked() {
+	if r.report == nil {
+		return
+	}
+	r.report(Progress{
+		Key: r.key, Side: r.side, Phase: r.phase,
+		Done: r.done, Total: r.known, Estimated: r.estimated,
+	})
+}
 
 // Layer is one blob a component is made of.
 type Layer struct {
@@ -387,6 +524,11 @@ func Run(ctx context.Context, clientA, clientB ClientFactory, opts Options) (Rep
 	// matters most — a vendor across a WAN and a destination in the datacentre
 	// — and walking them in series would make every comparison cost the sum of
 	// two round-trip-bound walks instead of the larger of them.
+	// One reporter per side, shared by every phase that side passes through, so
+	// the count a caller sees only ever goes up. See Progress.
+	reporterA := newSideReporter("a", opts.A.Label, opts.Progress)
+	reporterB := newSideReporter("b", opts.B.Label, opts.Progress)
+
 	var (
 		wg           sync.WaitGroup
 		invA, invB   inventory
@@ -396,11 +538,11 @@ func Run(ctx context.Context, clientA, clientB ClientFactory, opts Options) (Rep
 	wg.Add(2)
 	go func() {
 		defer wg.Done()
-		invA, extraA, errA = readSide(ctx, clientA, opts.A, rootA, concurrency, opts.Classify, opts.Progress)
+		invA, extraA, errA = readSide(ctx, clientA, opts.A, rootA, concurrency, opts.Classify, reporterA)
 	}()
 	go func() {
 		defer wg.Done()
-		invB, extB, errB = readSide(ctx, clientB, opts.B, rootB, concurrency, opts.Classify, opts.Progress)
+		invB, extB, errB = readSide(ctx, clientB, opts.B, rootB, concurrency, opts.Classify, reporterB)
 	}()
 	wg.Wait()
 
@@ -422,7 +564,13 @@ func Run(ctx context.Context, clientA, clientB ClientFactory, opts Options) (Rep
 	// The files inside whatever changed. Only for rows that already disagree:
 	// a component whose digest matches on both sides is byte-identical, and
 	// opening it could not produce a finding.
-	inspectFiles(ctx, clientA, clientB, report.Rows, opts.FileBudget, concurrency)
+	inspectFiles(ctx, clientA, clientB, report.Rows, opts.FileBudget, concurrency,
+		reporterA, reporterB)
+
+	// Both sides are done. Said explicitly, so a caller stops rendering the
+	// estimate as though more were still to come.
+	reporterA.settled()
+	reporterB.settled()
 
 	for _, row := range report.Rows {
 		switch row.Verdict {
@@ -478,7 +626,7 @@ func (inv inventory) add(item *Item) {
 // picked the same one.
 func readSide(
 	ctx context.Context, client ClientFactory, spec SideSpec, choice rootChoice,
-	concurrency int, with vendors.Classifier, report ProgressFunc,
+	concurrency int, with vendors.Classifier, report *sideReporter,
 ) (inventory, extras, error) {
 	root, desc, ref := choice.repo, choice.desc, choice.chosen
 
@@ -488,14 +636,7 @@ func readSide(
 	// could not report the other nineteen — and "this side could not be walked"
 	// is the least useful possible answer to "what is missing?".
 	tree, missing, _, err := oci.WalkPartialProgress(ctx, root, desc, concurrency,
-		func(p oci.Progress) {
-			if report != nil {
-				report(Progress{
-					Side: spec.Label, Phase: PhaseManifests,
-					Done: p.Fetched, Total: p.Known, Estimated: true,
-				})
-			}
-		})
+		func(p oci.Progress) { report.walked(p.Fetched, p.Known) })
 	if err != nil {
 		return nil, extras{}, fmt.Errorf("walk %s: %w", spec, err)
 	}
@@ -516,19 +657,10 @@ func readSide(
 		inv.add(item)
 	}
 
-	// The one phase with a real denominator: the components are known by now,
-	// and each is one probe.
-	if report != nil {
-		report(Progress{Side: spec.Label, Phase: PhaseNames, Done: 0, Total: len(inv)})
-	}
-	probeNamedSites(ctx, client, inv, concurrency, func(done, total int) {
-		if report != nil {
-			report(Progress{Side: spec.Label, Phase: PhaseNames, Done: done, Total: total})
-		}
-	})
+	probeNamedSites(ctx, client, inv, concurrency, report)
 
 	tags, truncated := extraTags(ctx, root, inv, spec,
-		unwalkedRoots(ctx, root, choice, concurrency), concurrency)
+		unwalkedRoots(ctx, root, choice, concurrency), concurrency, report)
 	return inv, extras{Tags: tags, Truncated: truncated}, nil
 }
 
@@ -911,7 +1043,7 @@ const annotationTitle = "org.opencontainers.image.title"
 // component whose own repository does not exist is a FINDING, not an error.
 func probeNamedSites(
 	ctx context.Context, client ClientFactory, inv inventory, concurrency int,
-	report func(done, total int),
+	report *sideReporter,
 ) {
 	var (
 		mu      sync.Mutex
@@ -931,12 +1063,19 @@ func probeNamedSites(
 		return c, nil
 	}
 
+	// Announced with the REAL population — components that have a name to
+	// probe — rather than with the size of the inventory. A source is not
+	// expected to serve its components under their own names, so for a
+	// version-to-version comparison this phase has NOTHING to do, and
+	// announcing 259 units of work it will never perform left the progress
+	// display stopped at "0 of 259" for the rest of the comparison.
 	total := 0
 	for _, item := range inv {
 		if item.Named != nil {
 			total++
 		}
 	}
+	report.expect(PhaseNames, total*2) // one presence check, one tag resolve
 
 	var done atomic.Int64
 	sem := make(chan struct{}, concurrency)
@@ -953,9 +1092,8 @@ func probeNamedSites(
 			// Counted whatever the outcome: a component whose own repository
 			// does not exist is a finding, and the probe for it happened.
 			defer func() {
-				if report != nil {
-					report(int(done.Add(1)), total)
-				}
+				done.Add(1)
+				report.did(PhaseNames, 2)
 			}()
 
 			repo, err := clientFor(it.Named.Repository)
@@ -1010,7 +1148,7 @@ func probeNamedSites(
 // answer was the wrong answer.
 func extraTags(
 	ctx context.Context, root registry.Repository, inv inventory, spec SideSpec,
-	alsoAccounted []string, concurrency int,
+	alsoAccounted []string, concurrency int, report *sideReporter,
 ) (extra []string, truncated bool) {
 	lister, ok := root.(registry.TagLister)
 	if !ok {
@@ -1040,6 +1178,12 @@ func extraTags(
 		listed, truncated = listed[:maxResolvedTags], true
 	}
 
+	// THE PHASE NOBODY COULD SEE. One resolve per tag in the repository, and a
+	// vendor's bundle repository holds every version it has ever published —
+	// which on a real catalogue is more requests than the manifest walk. It ran
+	// silently, so a comparison that had finished walking appeared to stop.
+	report.expect(PhaseTags, len(listed))
+
 	var (
 		mu  sync.Mutex
 		wg  sync.WaitGroup
@@ -1051,6 +1195,7 @@ func extraTags(
 			defer wg.Done()
 			sem <- struct{}{}
 			defer func() { <-sem }()
+			defer report.did(PhaseTags, 1)
 
 			desc, err := root.ResolveTag(ctx, tag)
 			// A tag the registry listed and will not resolve is KEPT. It

@@ -991,13 +991,13 @@ func (s *Server) handleCompareProgress(w http.ResponseWriter, r *http.Request) {
 	}
 	for _, side := range p.Sides {
 		out.Sides = append(out.Sides, v1.CompareProgressSide{
-			Side: side.Side, Phase: side.Phase,
+			Key: side.Key, Side: side.Side, Phase: side.Phase,
 			Done: side.Done, Total: side.Total, Estimated: side.Estimated,
 		})
 	}
 	// Stable order, so a bar built from this does not reorder its two rows
 	// between polls.
-	sort.Slice(out.Sides, func(i, j int) bool { return out.Sides[i].Side < out.Sides[j].Side })
+	sort.Slice(out.Sides, func(i, j int) bool { return out.Sides[i].Key < out.Sides[j].Key })
 
 	WriteJSON(w, r, http.StatusOK, out)
 }

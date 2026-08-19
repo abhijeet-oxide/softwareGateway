@@ -93,7 +93,7 @@ type fileView struct {
 // which named files a component carries is free.
 func inspectFiles(
 	ctx context.Context, clientA, clientB ClientFactory, rows []Row,
-	fileBudget int64, concurrency int,
+	fileBudget int64, concurrency int, reportA, reportB *sideReporter,
 ) {
 	if concurrency <= 0 {
 		concurrency = 4
@@ -105,8 +105,8 @@ func inspectFiles(
 	remaining := &budget{remaining: fileBudget}
 	// One reader per side, and a cache keyed by digest so a layer both sides
 	// share is fetched once however many components reference it.
-	readerA := newLayerReader(clientA, remaining)
-	readerB := newLayerReader(clientB, remaining)
+	readerA := newLayerReader(clientA, remaining, reportA)
+	readerB := newLayerReader(clientB, remaining, reportB)
 
 	sem := make(chan struct{}, concurrency)
 	var wg sync.WaitGroup
@@ -155,6 +155,7 @@ func layersDiffer(a, b []Layer) bool {
 type layerReader struct {
 	client ClientFactory
 	budget *budget
+	report *sideReporter
 
 	mu    sync.Mutex
 	cache map[string]cachedLayer
@@ -167,8 +168,10 @@ type cachedLayer struct {
 	opened bool
 }
 
-func newLayerReader(client ClientFactory, b *budget) *layerReader {
-	return &layerReader{client: client, budget: b, cache: map[string]cachedLayer{}}
+func newLayerReader(client ClientFactory, b *budget, report *sideReporter) *layerReader {
+	return &layerReader{
+		client: client, budget: b, report: report, cache: map[string]cachedLayer{},
+	}
 }
 
 // view builds one component's file map.
@@ -224,7 +227,12 @@ func (r *layerReader) read(ctx context.Context, repository string, layer Layer) 
 
 	result := cachedLayer{}
 	if r.budget.take(layer.Size) {
+		// Counted only when a layer is actually DOWNLOADED. A layer named by
+		// its title costs nothing and pretending otherwise would inflate the
+		// denominator with work nobody is waiting for.
+		r.report.expect(PhaseFiles, 1)
 		result = r.fetch(ctx, repository, layer)
+		r.report.did(PhaseFiles, 1)
 	}
 
 	r.mu.Lock()

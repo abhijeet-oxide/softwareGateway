@@ -718,6 +718,9 @@ type ListPackageFilesResponse struct {
 
 // CompareProgressSide is one end's position in a comparison.
 type CompareProgressSide struct {
+	// Key is which end this is — "a" or "b". The label is not an identity: the
+	// two sides of a version comparison are the same place and share it.
+	Key   string `json:"key"`
 	Side  string `json:"side"`
 	Phase string `json:"phase"`
 	Done  int    `json:"done"`

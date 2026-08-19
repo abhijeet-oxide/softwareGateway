@@ -665,6 +665,12 @@ export interface CompareProgressSide {
    */
   total: number
   estimated?: boolean
+  /**
+   * How many requests this side may have in flight at once. "Is it going as
+   * fast as it can" is the second question anybody watching a four-minute bar
+   * asks, and one request at a time looks identical to thirty-two.
+   */
+  concurrency?: number
 }
 
 /**

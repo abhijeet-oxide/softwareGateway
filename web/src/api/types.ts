@@ -354,6 +354,18 @@ export interface TransferProgress {
   outstandingBytes?: Int64String
   quietestInFlight?: string
   skips?: SkipBreakdown[]
+  /**
+   * The byte account over DISTINCT content — each piece weighed once, however
+   * many repositories it has to reach.
+   *
+   * The per-(repository, digest) figures below are right for bookkeeping and
+   * wrong for bytes: the second copy of a component is a mount that moves
+   * nothing, and counting it doubled every total. These three are one
+   * population — moved + present converges on `contentBytes` and never exceeds
+   * it — and are what a bar and a saving are drawn from.
+   */
+  contentMovedBytes?: Int64String
+  contentPresentBytes?: Int64String
   plannedBytes: Int64String
   bytesTransferred: Int64String
   dedupeSkippedBytes: Int64String

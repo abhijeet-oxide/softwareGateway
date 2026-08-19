@@ -1097,14 +1097,22 @@ type CheckConnectivityResponse struct {
 // ContentGroup is one kind of component and how the transfer's components of
 // that kind went.
 //
-// # Counted per COMPONENT, and why there are no bytes here
+// # Counted per COMPONENT
 //
-// A component published under two names is one component, not two, so these
-// count artifacts rather than jobs. Bytes are deliberately absent: a base layer
-// shared by four images belongs to all of them, and any per-kind byte total
-// either counts it four times or picks an owner arbitrarily. The transfer-level
-// byte totals are exact and are the ones to trust; these say what the transfer
-// consisted of.
+// A component published under two names is one component, not two, so the
+// counts here are artifacts rather than jobs.
+//
+// # The bytes are per JOB, and they are a different question
+//
+// There is deliberately no "how big is this kind" here: a base layer shared by
+// four images belongs to all four, so any such total either counts it four
+// times or picks an owner. The transfer's own byte totals answer that.
+//
+// SavedBytes and CopiedBytes answer something else — which JOBS were skipped
+// and which ran. A blob is one job however many components reference it, so
+// these partition the transfer's bytes exactly: every byte counted once, and
+// the parts add up to the whole. The only softness is which component a shared
+// blob is filed under, and within a kind that is nearly always the same answer.
 type ContentGroup struct {
 	// Kind is what these are, in the words somebody uses: index, image, chart,
 	// file, signature, artifact.
@@ -1118,6 +1126,12 @@ type ContentGroup struct {
 	// components with work still to do.
 	Failed      int `json:"failed,omitempty"`
 	Outstanding int `json:"outstanding,omitempty"`
+
+	// SavedBytes is what this transfer did not have to move for this kind, and
+	// CopiedBytes what it did. See the type comment: these are per JOB and they
+	// add up to the transfer's own totals.
+	SavedBytes  Int64String `json:"savedBytes,omitempty"`
+	CopiedBytes Int64String `json:"copiedBytes,omitempty"`
 }
 
 // PackageTransfer is one attempt to move a package to one destination.

@@ -261,7 +261,20 @@ export interface ListArtifactsResponse {
 // Transfers — "Download" on screen
 // ---------------------------------------------------------------------------
 
-export interface SkipBreakdown { reason: string; jobs: number; bytes?: Int64String }
+/**
+ * One reason a transfer moved no bytes, and how much that saved.
+ *
+ * `trusted` says whether the skip rests on an ACTION the registry took — a
+ * mount — rather than on a claim it or we made. That distinction is the whole
+ * value of the number: a destination that answers about its whole storage
+ * rather than the repository asked about makes an untrusted skip worth nothing.
+ */
+export interface SkipBreakdown {
+  reason: string
+  jobs: number
+  bytes?: Int64String
+  trusted?: boolean
+}
 
 /** What a transfer is made OF, and how each kind went. */
 export interface ContentGroup {
@@ -271,6 +284,15 @@ export interface ContentGroup {
   present: number
   failed?: number
   outstanding?: number
+  /**
+   * What this kind did not have to move, and what it did.
+   *
+   * Per JOB, unlike the counts above which are per component. A blob is one job
+   * however many components reference it, so these partition the transfer's
+   * bytes exactly and the parts add up to the whole.
+   */
+  savedBytes?: Int64String
+  copiedBytes?: Int64String
 }
 
 export interface TransferWave {

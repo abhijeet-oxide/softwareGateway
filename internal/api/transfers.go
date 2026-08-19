@@ -357,6 +357,59 @@ func parseTransferState(s string) (string, error) {
 			"running, paused, verifying, succeeded, failed, cancelling, cancelled", s)
 }
 
+// handleListPresentComponents serves
+// GET /api/v1/transfers/{transfer}/present.
+//
+// WHAT the destination already held, by name.
+//
+// Its own route rather than a field on the transfer, because the transfer is
+// POLLED — every two seconds while a download runs — and this is two hundred
+// and sixty rows that change only when a job settles. A caller fetches it when
+// somebody actually asks what the saving was made of.
+func (s *Server) handleListPresentComponents(w http.ResponseWriter, r *http.Request) {
+	ref := chi.URLParam(r, "transfer")
+
+	id, err := s.deps.Packages.ResolveTransferID(r.Context(), ref)
+	if err != nil {
+		NotFound(w, r, "transfer", ref)
+		return
+	}
+
+	rows, err := s.deps.Packages.PresentComponents(r.Context(), id)
+	if err != nil {
+		Error(w, r, v1.CodeUnavailable, "could not list what was already there: "+err.Error())
+		return
+	}
+
+	// The transfer's own product, so its vendor layout gets the same say here
+	// that it gets everywhere else. Without it a NEAR orb's charts and files
+	// are reported as images, and this list would disagree with the Contents
+	// table it is explaining.
+	classify := vendors.Classifier(vendors.OCIOnly)
+	if t, err := s.deps.Packages.GetTransfer(r.Context(), id); err == nil {
+		classify = s.artifactClassifier(t.ProductName)
+	}
+
+	out := v1.ListPresentComponentsResponse{
+		TransferID: id,
+		Components: make([]v1.PresentComponent, 0, len(rows)),
+	}
+	var total int64
+	for _, c := range rows {
+		total += c.Bytes
+		out.Components = append(out.Components, v1.PresentComponent{
+			Name:    c.Name,
+			Digest:  c.Digest,
+			Kind:    classify(c.MediaType, c.ArtifactType, c.ConfigMediaType, c.Annotations),
+			Bytes:   int64String(c.Bytes),
+			Partial: c.Outstanding > 0,
+		})
+	}
+	out.TotalBytes = int64String(total)
+
+	WriteJSON(w, r, http.StatusOK, out)
+}
+
 // toAPIContent folds the store's rows into the kinds a person names things by.
 //
 // The FOLD is the point. The store returns media types verbatim, and several of

@@ -416,6 +416,9 @@ func (s *Server) routes() chi.Router {
 			r.Get("/transfers/{transfer}", s.handleGetTransfer)
 			r.Get("/transfers/{transfer}/jobs", s.handleListTransferJobs)
 			r.Get("/transfers/{transfer}/failures", s.handleListTransferFailures)
+			// WHAT the destination already held, by name. Its own route
+			// because the transfer is polled and this is not.
+			r.Get("/transfers/{transfer}/present", s.handleListPresentComponents)
 
 			// Retry needs the queue behind it, so it is registered with the
 			// queue rather than with the read routes — a follower replica

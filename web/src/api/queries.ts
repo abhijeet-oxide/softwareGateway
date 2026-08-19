@@ -7,8 +7,8 @@ import type {
   ListAuditEventsResponse, ListAutoDownloadRulesResponse, ListDownloadsResponse,
   InspectPackageResponse, ListFailuresResponse, ListJobsResponse, ListPackagesResponse, ListProductsResponse,
   ListReplicationResponse, ListSyncsResponse, ListTransfersResponse, ListUnavailableResponse,
-  ListPackageFilesResponse, ListWorkersResponse, Package, PackageFileContentResponse,
-  ReportSummary, RunDownloadRequest,
+  ListPackageFilesResponse, ListPresentComponentsResponse, ListWorkersResponse, Package,
+  PackageFileContentResponse, ReportSummary, RunDownloadRequest,
   RunDownloadResponse,
   SetPriorityRequest, Transfer, TransferControlResponse, VersionResponse,
 } from './types'
@@ -239,6 +239,24 @@ export function usePackageFileContent(
 }
 
 /**
+ * WHAT a transfer did not have to move, by name.
+ *
+ * Its own query rather than a field on the transfer, because the transfer is
+ * polled every couple of seconds while a download runs and this is hundreds of
+ * rows that change only when a job settles. `enabled` is what makes that true:
+ * it is fetched when somebody actually asks what the saving was made of.
+ */
+export function usePresentComponents(transferId: string | undefined, enabled: boolean) {
+  return useQuery({
+    queryKey: ['transfer-present', transferId],
+    queryFn: () => api.get<ListPresentComponentsResponse>(
+      `/transfers/${encodeURIComponent(transferId!)}/present`),
+    enabled: enabled && Boolean(transferId),
+    staleTime: 10_000,
+  })
+}
+
+/**
  * Analyse a release: walk its manifest tree and record what it is made of.
  *
  * Synchronous by design — the API has no progress feed for it, because the
@@ -252,7 +270,16 @@ export function useInspectPackage(product: string, ref: string, repository?: str
       const { segment, query: q } = packageRef(ref)
       return api.post<InspectPackageResponse>(
         `/products/${encodeURIComponent(product)}/packages/${encodeURIComponent(segment)}:inspect` +
-        scopeQuery(q, repository))
+        scopeQuery(q, repository),
+        // ASKED FOR, NOT WAITED FOR.
+        //
+        // Walking a release is minutes of round trips, and a request held open
+        // for it is cancelled by navigating away — which used to cancel the
+        // walk with it and leave the release claimed by a request that no
+        // longer existed. The server hands it to the same background analyser
+        // discovery uses and answers immediately; the package's analysisState
+        // is what the page watches.
+        { wait: false })
     },
     onSuccess: () => {
       void qc.invalidateQueries({ queryKey: ['package', product, ref] })
@@ -260,6 +287,9 @@ export function useInspectPackage(product: string, ref: string, repository?: str
       // The files ARE the point of analysing for most readers: the walk is what
       // turns "two layers" into two hundred named paths.
       void qc.invalidateQueries({ queryKey: ['package-files', product, ref] })
+      // And the LISTING, so a reader who goes back sees the release marked as
+      // being analysed rather than offering to analyse it again.
+      void qc.invalidateQueries({ queryKey: ['packages'] })
     },
   })
 }

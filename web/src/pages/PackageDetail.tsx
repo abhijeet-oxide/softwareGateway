@@ -93,6 +93,15 @@ function MeasurePanel({
     inspect.mutate()
   }
 
+  // HANDED OFF. The server answers immediately and the walk runs behind it, so
+  // there is no result to report here — the release's own state is the report,
+  // and it is read by the caller and passed back in as `analysing`. Held until
+  // that arrives, so the panel does not blink through "not analysed" between
+  // the response and the refetch that notices.
+  if (inspect.data?.started && !analysed) {
+    return <AnalysingBar requested />
+  }
+
   if (inspect.isPending) {
     // Measured against a registry that could not be reached: the call runs for
     // at least ninety seconds before anything comes back. A bar that says
@@ -187,18 +196,7 @@ function MeasurePanel({
    * worse way to say the same thing.
    */
   if (analysing) {
-    return (
-      <div style={{ marginTop: 12 }}>
-        <WorkingBar
-          label="Analyzing this release"
-          detail={
-            'Reading the manifest tree from the vendor registry. This was started '
-            + 'automatically because the release is new; its contents appear here when '
-            + 'the walk finishes.'
-          }
-        />
-      </div>
-    )
+    return <AnalysingBar />
   }
 
   return (
@@ -216,6 +214,31 @@ function MeasurePanel({
         its files, and what each part weighs. Nothing is downloaded.
       </Typography.Text>
     </Space>
+  )
+}
+
+/**
+ * A walk that is running somewhere else.
+ *
+ * No elapsed time, deliberately: the walk may have been started by discovery
+ * ten minutes ago or by this reader ten seconds ago, and this page knows only
+ * that it is happening. A timer counting from the moment the page opened would
+ * be a number about the page rather than about the work.
+ */
+function AnalysingBar({ requested }: { requested?: boolean }) {
+  return (
+    <div style={{ marginTop: 12 }}>
+      <WorkingBar
+        label="Analyzing this release"
+        detail={
+          requested
+            ? 'Reading the manifest tree from the vendor registry. It carries on if you '
+              + 'leave this page, and the contents appear here when the walk finishes.'
+            : 'Reading the manifest tree from the vendor registry. Its contents appear '
+              + 'here when the walk finishes.'
+        }
+      />
+    </div>
   )
 }
 

@@ -1,11 +1,13 @@
 import { useMemo, useState } from 'react'
-import { Button, Card, Select, Space, Table, Tooltip } from 'antd'
-import { Link, useSearchParams } from 'react-router-dom'
-import { usePackages, useProducts, useTransfers } from '../api/queries'
+import { App, Button, Card, Select, Space, Table, Tooltip } from 'antd'
+import { Link, useNavigate, useSearchParams } from 'react-router-dom'
+import { usePackages, useProducts, useRunDownload, useTransfers } from '../api/queries'
+import { useCan } from '../auth/permissions'
 import {
-  deriveLocations, deriveStatus, downloadedAt, downloadSeconds, matches, releaseHref,
+  deriveLocations, deriveStatus, downloadedAt, downloadSeconds, isLive, matches, releaseHref,
   transferIndex, verification, version, withTransfers,
 } from '../domain/derive'
+import type { Package } from '../api/types'
 import { formatDuration } from '../domain/format'
 import { Value } from '../components/value'
 import {
@@ -13,6 +15,77 @@ import {
   VersionChip,
 } from '../components/chips'
 import { EmptyStateCard, ErrorState, PageHeader, SearchBar } from '../components/layout'
+
+/**
+ * Start a download, or go and watch the one that is running.
+ *
+ * # Why this starts it rather than linking to a page that can
+ *
+ * Because the button said Download and did not download. It took the reader to
+ * the release page, where a second button with the same word did the thing —
+ * two clicks and a page load to perform an action the row already had every
+ * argument for. A release downloads WHOLE, so there is nothing to choose and
+ * nothing to confirm.
+ *
+ * # And it never offers to start a second one
+ *
+ * A release already being downloaded gets a link to that download instead. The
+ * server would collapse a duplicate request onto the existing transfer anyway,
+ * so offering it would be a button whose honest outcome is "nothing happened".
+ */
+function DownloadAction({ product, pkg }: { product: string; pkg: Package }) {
+  const { message } = App.useApp()
+  const navigate = useNavigate()
+  const run = useRunDownload(product)
+  const mayOperate = useCan('operate', { product })
+
+  const live = (pkg.transfers ?? []).find((t) => isLive(t.state))
+  if (live) {
+    return (
+      <Link to={`/downloads/${live.id}`}>
+        <Button size="small" type="primary">View download</Button>
+      </Link>
+    )
+  }
+  if (downloadedAt(pkg)) return null
+
+  const start = async () => {
+    try {
+      const result = await run.mutateAsync({ tags: [pkg.tag] })
+      message.success(
+        result.created?.length
+          ? `Download of ${version(pkg)} started.`
+          : 'This release was already requested; the existing download continues.',
+      )
+      // The request fans out to one transfer per destination, so there is no
+      // single download to land on. The listing is the honest destination and
+      // the new rows are at the top of it.
+      navigate('/downloads')
+    } catch (e) {
+      message.error(e instanceof Error ? e.message : 'The download could not be started.')
+    }
+  }
+
+  return (
+    <Tooltip
+      title={
+        mayOperate
+          ? `Download ${version(pkg)} whole into the internal repositories. Artifacts already present are skipped.`
+          : 'You do not have permission to start a download.'
+      }
+    >
+      <Button
+        size="small"
+        type="primary"
+        disabled={!mayOperate}
+        loading={run.isPending}
+        onClick={() => void start()}
+      >
+        Download
+      </Button>
+    </Tooltip>
+  )
+}
 
 /**
  * The Packages listing — where "View all packages" and the Overview KPI cards
@@ -223,11 +296,7 @@ export default function Packages() {
                         is most of them and exactly the ones somebody is
                         looking at when they need it.
                       */}
-                      {!downloadedAt(r.pkg) && (
-                        <Link to={releaseHref(product.productId, r.pkg)}>
-                          <Button size="small" type="primary">Download</Button>
-                        </Link>
-                      )}
+                      <DownloadAction product={product.productId} pkg={r.pkg} />
                       <Link to={releaseHref(product.productId, r.pkg)}>
                         <Button size="small">Details</Button>
                       </Link>

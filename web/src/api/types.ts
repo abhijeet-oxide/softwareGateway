@@ -250,6 +250,12 @@ export interface InspectPackageResponse {
   cachedManifests: number
   cachedBytes?: Int64String
   signatureResolved?: number
+  /**
+   * The walk was HANDED OFF rather than performed, so every count above is
+   * zero because nothing has been counted yet. The package's `analysisState`
+   * is what to watch.
+   */
+  started?: boolean
 }
 
 export interface ListArtifactsResponse {
@@ -274,6 +280,28 @@ export interface SkipBreakdown {
   jobs: number
   bytes?: Int64String
   trusted?: boolean
+}
+
+/**
+ * One component the destination already held.
+ *
+ * `partial` says only PART of it was there and the rest is still to move — an
+ * ordinary state, and a different claim from "this was already there", which
+ * is what the list is otherwise making.
+ */
+export interface PresentComponent {
+  name?: string
+  digest: string
+  kind: string
+  bytes: Int64String
+  partial?: boolean
+}
+
+/** GET /transfers/{id}/present — WHAT the destination already held, by name. */
+export interface ListPresentComponentsResponse {
+  transferId: string
+  components: PresentComponent[]
+  totalBytes?: Int64String
 }
 
 /** What a transfer is made OF, and how each kind went. */

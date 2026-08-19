@@ -526,6 +526,23 @@ type Artifact struct {
 	Cached bool `json:"cached"`
 }
 
+// InspectPackageRequest asks for a release to be walked.
+//
+// Wait decides whether the CALLER waits. Walking a real release is hundreds of
+// round trips against a vendor registry and minutes of them, and a caller that
+// waits owns a problem: navigating away, or any intermediary's idle timeout,
+// cancels the request — and with it the walk, leaving the release claimed by
+// nobody and marked as being analysed.
+//
+// So an interface asks with `wait: false`: the walk is handed to the same
+// background analyser discovery uses, the release is marked as being analysed,
+// and the page watches that state. A script that wants the numbers back in the
+// response omits it, which is the default and the old behaviour.
+type InspectPackageRequest struct {
+	// Wait holds the request open until the walk finishes. Absent means true.
+	Wait *bool `json:"wait,omitempty"`
+}
+
 // InspectPackageResponse reports what expanding a package found.
 //
 // Discovery stops at the tag's own manifest, so a package's transfer size is
@@ -558,6 +575,11 @@ type InspectPackageResponse struct {
 	// SignatureResolved is how many signature relations had their material
 	// recorded — the blob a verifier reads, captured while the tree was in hand.
 	SignatureResolved int `json:"signatureResolved,omitempty"`
+
+	// Started reports that the walk was HANDED OFF rather than performed, so
+	// every count above is zero because nothing has been counted yet. The
+	// package's analysisState is what to watch.
+	Started bool `json:"started,omitempty"`
 }
 
 // ListArtifactsResponse is returned by
@@ -1748,6 +1770,41 @@ type SkipBreakdown struct {
 	// Trusted reports whether this rests on an ACTION the registry took (a
 	// mount) rather than on a claim it or we made (a placement record, a HEAD).
 	Trusted bool `json:"trusted"`
+}
+
+// PresentComponent is one component the destination already held.
+type PresentComponent struct {
+	// Name is the vendor's own name for it — `cfx-5000-product/bgcf:2511.174.0`.
+	// Empty for a component the release names only by digest.
+	Name   string `json:"name,omitempty"`
+	Digest string `json:"digest"`
+	// Kind is what it is, in the words somebody uses: image, chart, file. Given
+	// rather than derived, for the same reason ContentGroup gives it: the
+	// vendor's own annotations are part of the answer and only the product's
+	// layout plugin can read them.
+	Kind string `json:"kind"`
+	// Bytes is what this component's skipped jobs would have moved.
+	Bytes Int64String `json:"bytes"`
+	// Partial says only PART of it was already there — the rest is still to
+	// move. An ordinary state, and a different claim from "this was already
+	// there", which is what the list is otherwise saying.
+	Partial bool `json:"partial,omitempty"`
+}
+
+// ListPresentComponentsResponse is GET /api/v1/transfers/{transfer}/present.
+//
+// WHAT a transfer did not have to move, by name.
+//
+// "Saved 56.5 GB" is the system's best claim about itself and unverifiable as
+// stated; this is the list behind it. Every component here is one the
+// destination already held, and the bytes are what its skipped jobs would have
+// moved.
+type ListPresentComponentsResponse struct {
+	TransferID string             `json:"transferId"`
+	Components []PresentComponent `json:"components"`
+	// TotalBytes is what the whole list saved, so a caller showing part of it
+	// can say what the rest comes to.
+	TotalBytes Int64String `json:"totalBytes,omitempty"`
 }
 
 // FailureGroup is one distinct reason a transfer is failing.

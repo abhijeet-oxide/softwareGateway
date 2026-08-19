@@ -181,6 +181,7 @@ export default function Downloads() {
                       <DownloadProgress
                         transferred={bytes(t.progress?.bytesTransferred)}
                         total={bytes(t.progress?.plannedBytes)}
+                        saved={bytes(t.progress?.savedBytes)}
                         strategy={t.strategy ?? 'copy'}
                         elapsedSeconds={elapsedSeconds(t.startedAt)}
                         live={isLive(t.state)}

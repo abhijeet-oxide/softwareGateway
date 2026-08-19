@@ -9,6 +9,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"time"
 )
 
 // Package persistence: rows in, rows out.
@@ -140,6 +141,10 @@ type BlobRef struct {
 	// image, and a manifest reassembled with layers transposed is a different
 	// image that happens to contain the same bytes.
 	Ordinal int
+	// Title is `org.opencontainers.image.title` — the publisher saying "this
+	// layer IS this file". Empty for an image layer, which is a tar of an
+	// unknown number of paths and names nothing.
+	Title string
 }
 
 // Packages is the persistence surface discovery needs.
@@ -356,15 +361,16 @@ func (p *Packages) LinkBlobs(ctx context.Context, tx *sql.Tx, artifactID int64, 
 		ON CONFLICT (digest) DO NOTHING`)
 
 	linkInsert := p.dialect.Rewrite(`
-		INSERT INTO artifact_blobs (artifact_id, digest, kind, ordinal)
-		VALUES (?, ?, ?, ?)
+		INSERT INTO artifact_blobs (artifact_id, digest, kind, ordinal, title)
+		VALUES (?, ?, ?, ?, ?)
 		ON CONFLICT (artifact_id, digest, kind) DO NOTHING`)
 
 	for _, r := range refs {
 		if _, err := tx.ExecContext(ctx, blobUpsert, r.Digest, r.SizeBytes, nullable(r.MediaType)); err != nil {
 			return fmt.Errorf("upsert blob %s: %w", r.Digest, err)
 		}
-		if _, err := tx.ExecContext(ctx, linkInsert, artifactID, r.Digest, r.Kind, r.Ordinal); err != nil {
+		if _, err := tx.ExecContext(ctx, linkInsert,
+			artifactID, r.Digest, r.Kind, r.Ordinal, nullable(r.Title)); err != nil {
 			return fmt.Errorf("link blob %s to artifact %d: %w", r.Digest, artifactID, err)
 		}
 	}
@@ -2313,4 +2319,69 @@ type TransferRow struct {
 	// DependsOn is the transfer this one waits for, empty when nothing
 	// precedes it. At most one, because `mirror.from` names one upstream.
 	DependsOn string
+}
+
+// UnanalysedRecent lists recently published packages nobody has walked.
+//
+// # What "analysed" means here
+//
+// Discovery records what a tag's own manifest LISTS and stops there — it
+// answers "what is new", and the tree beneath a root digest is recoverable
+// whenever it is wanted (docs/design/07 §12). So a freshly discovered package
+// has one fetched artifact and a list of children nobody has read: no sizes, no
+// files, no contents. Every page that asks what is inside it has to say "nobody
+// has looked", and every comparison of it walks the vendor from scratch.
+//
+// # Why RECENT
+//
+// A vendor catalogue accumulates years of releases, and walking all of them
+// would be a large, pointless conversation with somebody else's registry. The
+// releases anybody opens, compares or downloads are the new ones — so those are
+// walked ahead of being asked for, and an old one is walked when somebody
+// actually asks.
+//
+// Ordered newest first, so a bounded pass does the most recently published
+// first rather than whatever the index happens to return.
+func (p *Packages) UnanalysedRecent(
+	ctx context.Context, sourceRepoID int64, within time.Duration, limit int,
+) ([]PackageRow, error) {
+	if limit <= 0 {
+		limit = 5
+	}
+
+	// Scoped to ONE SOURCE REPOSITORY, not to a product. A product's sources
+	// are distinct registries with distinct credentials, and the caller that
+	// acts on this list holds a client for one of them — handing it a package
+	// from another source would point that client at a path its registry has
+	// never heard of.
+	rows, err := p.db.QueryContext(ctx, p.dialect.Rewrite(`
+		SELECT pk.id, pk.tag, COALESCE(pk.display_tag, ''), pk.manifest_digest,
+		       COALESCE(pk.media_type, ''), pk.source_repo_id,
+		       COALESCE(r.repository_path, ''),
+		       COALESCE(pk.transfer_root_digest, ''), COALESCE(pk.transfer_root_tag, '')
+		  FROM packages pk
+		  JOIN repositories r ON r.id = pk.source_repo_id
+		 WHERE pk.source_repo_id = ?
+		   AND pk.state NOT IN ('superseded','failed')
+		   AND COALESCE(pk.published_at, pk.discovered_at) > `+p.dialect.TimeAgo("?")+`
+		   AND EXISTS (SELECT 1 FROM package_artifacts pa
+		                WHERE pa.package_id = pk.id AND pa.fetched_at IS NULL)
+		 ORDER BY COALESCE(pk.published_at, pk.discovered_at) DESC
+		 LIMIT ?`), sourceRepoID, within.Seconds(), limit)
+	if err != nil {
+		return nil, fmt.Errorf("find unanalysed packages of repository %d: %w", sourceRepoID, err)
+	}
+	defer func() { _ = rows.Close() }()
+
+	var out []PackageRow
+	for rows.Next() {
+		var row PackageRow
+		if err := rows.Scan(&row.ID, &row.Tag, &row.DisplayTag, &row.ManifestDigest,
+			&row.MediaType, &row.SourceRepoID, &row.SourceRepository,
+			&row.TransferRootDigest, &row.TransferRootTag); err != nil {
+			return nil, fmt.Errorf("scan an unanalysed package: %w", err)
+		}
+		out = append(out, row)
+	}
+	return out, rows.Err()
 }

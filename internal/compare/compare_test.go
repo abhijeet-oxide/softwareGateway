@@ -1150,3 +1150,57 @@ func splitRefName(ref string) (repository, tag string) {
 	}
 	return ref[:i], ref[i+1:]
 }
+
+// A vendor's named layers are named files, and naming them is free.
+//
+// `org.opencontainers.image.title` is the vendor saying "this layer is this
+// file" — every configuration bundle and release note in a vendor artifact is
+// one of these. The name is in the manifest the walk has already read, so a
+// comparison run WITHOUT the download budget still says which files differ.
+//
+// It used to say nothing at all: the file pass returned immediately on a zero
+// budget, so the column that exists to say more than a digest was empty on
+// every row of every comparison anybody ran quickly.
+func TestNamedLayersAreComparedWithoutABudget(t *testing.T) {
+	f := newFixture(t)
+
+	f.publish(f.src, sourcePath, older, []component{
+		{name: "custo", tag: "23.7.900", files: map[string]string{
+			"CONFIGURATION/one.json":  `{"replicas":1}`,
+			"CONFIGURATION/gone.json": `{}`,
+		}},
+	})
+	f.publish(f.src, sourcePath, release, []component{
+		{name: "custo", tag: "23.8.1076", files: map[string]string{
+			"CONFIGURATION/one.json": `{"replicas":3}`,
+			"CONFIGURATION/new.json": `{}`,
+		}},
+	})
+
+	report, err := compare.Run(context.Background(),
+		f.clientFor(f.sourceSide(older)), f.clientFor(f.sourceSide(release)),
+		compare.Options{
+			A: f.sourceSide(older), B: f.sourceSide(release), Concurrency: 4,
+			// No budget: nothing is downloaded.
+		})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	row, ok := rowFor(report, "custo")
+	if !ok {
+		t.Fatalf("no row for the artifact:\n%s", describe(report))
+	}
+	if got := row.FilesChanged; len(got) != 1 || got[0] != "CONFIGURATION/one.json" {
+		t.Errorf("changed = %v, want the edited file", got)
+	}
+	if got := row.FilesAdded; len(got) != 1 || got[0] != "CONFIGURATION/new.json" {
+		t.Errorf("added = %v, want the new file", got)
+	}
+	if got := row.FilesRemoved; len(got) != 1 || got[0] != "CONFIGURATION/gone.json" {
+		t.Errorf("removed = %v, want the dropped file", got)
+	}
+	if row.FilesTruncated {
+		t.Error("the account is complete — every layer named itself")
+	}
+}

@@ -1,17 +1,18 @@
 import { useEffect, useMemo, useState } from 'react'
+import type { ReactNode } from 'react'
 import type { UseMutationResult } from '@tanstack/react-query'
 import {
-  Alert, App, Button, Card, Col, Descriptions, Modal, Row, Space, Table, Tabs, Tooltip,
-  Typography,
+  Alert, App, Button, Card, Col, Descriptions, Empty, Modal, Row, Space, Table, Tabs, Tooltip,
+  Tree, Typography,
 } from 'antd'
-import { CloudDownloadOutlined } from '@ant-design/icons'
+import { CloudDownloadOutlined, FolderOutlined } from '@ant-design/icons'
 import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom'
 import {
-  useArtifacts, useInspectPackage, usePackage, useProduct, useRunDownload,
+  useArtifacts, useInspectPackage, usePackage, usePackageFiles, useProduct, useRunDownload,
 } from '../api/queries'
 import { useCan } from '../auth/permissions'
 import {
-  deriveLifecycle, deriveLocations, deriveStatus, isLive, verification, version,
+  deriveLifecycle, deriveLocations, deriveStatus, isLive, matches, verification, version,
 } from '../domain/derive'
 import { bytes, formatBytes, formatCount, formatDuration } from '../domain/format'
 import { NA, Value } from '../components/value'
@@ -21,10 +22,10 @@ import {
   LocationChip, RepoLink, StatusBadge, TimeAgo, VerificationBadge,
 } from '../components/chips'
 import {
-  EmptyStateCard, ErrorState, LifecycleIndicator, PageHeader, SavedPanel,
+  EmptyStateCard, ErrorState, LifecycleIndicator, PageHeader, SavedPanel, SearchBar,
 } from '../components/layout'
 import { mono } from '../theme'
-import type { Artifact, InspectPackageResponse } from '../api/types'
+import type { Artifact, InspectPackageResponse, PackageFile } from '../api/types'
 import { TargetTag } from '../components/chips'
 
 /**
@@ -234,6 +235,153 @@ function artifactName(a: Artifact): string | null {
   return null
 }
 
+
+/**
+ * What is inside a release, as a directory tree.
+ *
+ * # Why a tree and not a list
+ *
+ * A vendor's configuration bundle is two hundred paths under a handful of
+ * directories, and a flat list of two hundred rows answers "is the network
+ * configuration in here" by making somebody read all of them. The paths are
+ * already hierarchical — the publisher wrote them that way — so the shape is
+ * the vendor's, not one this page invented.
+ *
+ * # What it can show, and what it cannot
+ *
+ * Every layer that carries `org.opencontainers.image.title` IS one named file,
+ * and analysis recorded that name. A layer with no title is a tar of an unknown
+ * number of paths; those are counted at the foot rather than listed, because
+ * one row called `layer sha256:…` would be a summary pretending to be an
+ * answer.
+ */
+function FileTree({ files, opaqueLayers }: { files: PackageFile[]; opaqueLayers?: number }) {
+  const [search, setSearch] = useState('')
+
+  const shown = useMemo(
+    () => (search.trim() ? files.filter((f) => matches(search, f.path, f.component)) : files),
+    [files, search])
+
+  const tree = useMemo(() => buildTree(shown), [shown])
+
+  return (
+    <Space direction="vertical" size={8} style={{ width: '100%' }}>
+      <SearchBar
+        value={search}
+        onChange={setSearch}
+        placeholder="Search files by path or component"
+        matched={shown.length}
+        total={files.length}
+        width={320}
+      />
+
+      {shown.length === 0 ? (
+        <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="No file matches that" />
+      ) : (
+        <Tree
+          treeData={tree}
+          showLine={{ showLeafIcon: false }}
+          // Directories open, files where they are: a tree that starts
+          // collapsed makes somebody click three times to see what they came
+          // for, and these are shallow.
+          defaultExpandAll={shown.length <= 60}
+          selectable={false}
+          style={{ maxHeight: 420, overflow: 'auto' }}
+        />
+      )}
+
+      {opaqueLayers ? (
+        <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+          {formatCount(opaqueLayers)} layers carry no names of their own — image layers, which are
+          archives of an unknown number of paths. What is inside them is not listed here.
+        </Typography.Text>
+      ) : null}
+    </Space>
+  )
+}
+
+/** One node of the tree, before Ant Design's shape. */
+interface TreeNode {
+  key: string
+  title: ReactNode
+  children?: TreeNode[]
+}
+
+/**
+ * Paths into a tree, directories before files and both alphabetical.
+ *
+ * Sizes roll UP: a directory shows what everything under it weighs, which is
+ * the number somebody is looking for when they ask what a bundle costs.
+ */
+function buildTree(files: PackageFile[]): TreeNode[] {
+  interface Dir {
+    dirs: Map<string, Dir>
+    files: PackageFile[]
+    bytes: number
+  }
+  const root: Dir = { dirs: new Map(), files: [], bytes: 0 }
+
+  for (const file of files) {
+    const parts = file.path.split('/').filter(Boolean)
+    const name = parts.pop() ?? file.path
+    let node = root
+    node.bytes += bytes(file.sizeBytes) ?? 0
+    for (const part of parts) {
+      let next = node.dirs.get(part)
+      if (!next) {
+        next = { dirs: new Map(), files: [], bytes: 0 }
+        node.dirs.set(part, next)
+      }
+      node = next
+      node.bytes += bytes(file.sizeBytes) ?? 0
+    }
+    node.files.push({ ...file, path: name })
+  }
+
+  const render = (dir: Dir, prefix: string): TreeNode[] => {
+    const out: TreeNode[] = []
+    for (const [name, child] of [...dir.dirs.entries()].sort((a, b) => a[0].localeCompare(b[0]))) {
+      out.push({
+        key: `${prefix}/${name}`,
+        title: (
+          <Space size={6}>
+            <FolderOutlined style={{ color: '#98A2B3' }} />
+            <Typography.Text style={{ fontSize: 13 }}>{name}</Typography.Text>
+            <Typography.Text type="secondary" style={{ fontSize: 11 }}>
+              {formatBytes(child.bytes)}
+            </Typography.Text>
+          </Space>
+        ),
+        children: render(child, `${prefix}/${name}`),
+      })
+    }
+    for (const file of [...dir.files].sort((a, b) => a.path.localeCompare(b.path))) {
+      out.push({
+        key: `${prefix}/${file.path}-${file.digest}`,
+        title: (
+          <Space size={6}>
+            <Icon as={ARTIFACT_ICONS.Files} size={13} title="File" />
+            <Typography.Text style={{ fontSize: 13 }}>{file.path}</Typography.Text>
+            <Typography.Text type="secondary" style={{ fontSize: 11 }}>
+              {formatBytes(bytes(file.sizeBytes))}
+            </Typography.Text>
+            {file.component && (
+              <Tooltip title={`From ${file.component}`}>
+                <Typography.Text type="secondary" style={{ fontSize: 11 }} ellipsis>
+                  {file.component.split('/').pop()}
+                </Typography.Text>
+              </Tooltip>
+            )}
+          </Space>
+        ),
+      })
+    }
+    return out
+  }
+
+  return render(root, '')
+}
+
 export default function PackageDetail() {
   const { product: productName, reference } = useParams()
   const [params] = useSearchParams()
@@ -248,6 +396,7 @@ export default function PackageDetail() {
   const product = useProduct(productName)
   const pkg = usePackage(productName, reference, repository)
   const artifacts = useArtifacts(productName, reference, repository)
+  const files = usePackageFiles(productName, reference, repository)
   const inspect = useInspectPackage(productName!, reference!, repository)
   const runDownload = useRunDownload(productName!)
 
@@ -415,6 +564,13 @@ export default function PackageDetail() {
                   // none", and the tile has to make that difference.
                   const countable = kind !== 'Files' || analysed
                   const sized = groups[kind].measured
+                  // FILES ARE COUNTED AS FILES. One `generic` artifact holds
+                  // however many named layers the publisher put in it, so the
+                  // number of file-KIND artifacts was never the number of
+                  // files — it was two, on a release with two hundred.
+                  const count = kind === 'Files' && analysed
+                    ? (files.data?.files.length ?? 0)
+                    : groups[kind].count
 
                   return (
                     <Col span={8} key={kind}>
@@ -427,7 +583,7 @@ export default function PackageDetail() {
 
                           {countable ? (
                             <Typography.Title level={4} style={{ margin: 0 }}>
-                              {groups[kind].count}
+                              {count}
                             </Typography.Title>
                           ) : (
                             <div style={{ margin: '2px 0' }}>
@@ -469,10 +625,17 @@ export default function PackageDetail() {
                         printing it here would contradict the tile beside it.
                       */}
                       {kind}
-                      {(kind !== 'Files' || analysed) && ` ( ${groups[kind].count} )`}
+                      {kind === 'Files'
+                        ? analysed && ` ( ${files.data?.files.length ?? 0} )`
+                        : ` ( ${groups[kind].count} )`}
                     </Space>
                   ),
-                  children: kind === 'Files' && !analysed ? (
+                  children: kind === 'Files' && analysed ? (
+                    <FileTree
+                      files={files.data?.files ?? []}
+                      opaqueLayers={files.data?.opaqueLayers}
+                    />
+                  ) : kind === 'Files' && !analysed ? (
                     <EmptyStateCard
                       title="Files are not listed yet"
                       explanation="Files live inside this release's manifests as layers, so listing them means walking the tree. Analysing the package reads it from the vendor registry and records what is there."

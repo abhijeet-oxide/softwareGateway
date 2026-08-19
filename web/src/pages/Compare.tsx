@@ -1,20 +1,23 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import {
-  App, Button, Card, Checkbox, Col, Drawer, Empty, Progress, Row, Segmented, Select, Space,
-  Statistic, Table, Tag, Tooltip, Typography,
+  Alert, App, Button, Card, Checkbox, Col, Empty, Popover, Progress, Row, Segmented, Select,
+  Space, Statistic, Table, Tag, Tooltip, Typography,
 } from 'antd'
 import { SwapOutlined } from '@ant-design/icons'
 import { useSearchParams } from 'react-router-dom'
 import {
   useCompare, useCompareProgress, usePackages, useProduct, useProducts,
 } from '../api/queries'
-import { matches, version } from '../domain/derive'
-import { formatBytes, formatCount, formatDuration } from '../domain/format'
+import { kindName, matches, version } from '../domain/derive'
+import { bytes, formatBytes, formatCount, formatDuration } from '../domain/format'
 import { NA, Value } from '../components/value'
-import { ErrorState, PageHeader } from '../components/layout'
+import { ErrorState, PageHeader, SearchBar } from '../components/layout'
 import { WorkingBar } from '../components/progress'
+import { ARTIFACT_ICONS, Icon } from '../components/icons'
 import { mono, semantic } from '../theme'
-import type { CompareRow, CompareVerdict, Package, Repository } from '../api/types'
+import type {
+  CompareResponse, CompareRow, CompareVerdict, Package, Repository,
+} from '../api/types'
 
 /**
  * Page 5 — Compare.
@@ -172,14 +175,422 @@ function ComparisonProgress({
   )
 }
 
-const VERDICT: Record<CompareVerdict, { label: string; colour: string }> = {
+/**
+ * The four impacts, in the words a reader uses about a release.
+ *
+ * `statColour` is separate from `colour` because a tag and a headline number
+ * are read differently: a tag is a label and takes Ant Design's palette name, a
+ * statistic is a quantity and takes the semantic colour it means.
+ */
+const VERDICT: Record<CompareVerdict, { label: string; colour: string; statColour?: string }> = {
   same: { label: 'Unchanged', colour: 'default' },
-  changed: { label: 'Changed', colour: 'orange' },
-  'only-a': { label: 'Removed', colour: 'red' },
-  'only-b': { label: 'Added', colour: 'green' },
+  changed: { label: 'Changed', colour: 'orange', statColour: semantic.warning },
+  'only-a': { label: 'Removed', colour: 'red', statColour: semantic.error },
+  'only-b': { label: 'Added', colour: 'green', statColour: semantic.success },
 }
 
 type Mode = 'versions' | 'locations'
+
+
+/**
+ * The answer, once there is one.
+ *
+ * # What a comparison is actually asked
+ *
+ * Not "how many things differ" — that is a number somebody reads once and can
+ * act on never. It is asked because a release is about to be shipped, or has
+ * just landed somewhere and might be wrong, and the questions are: what KIND of
+ * thing changed, HOW MUCH of it, and WHICH ones. So the summary counts by
+ * bucket and by kind and by size, and the table lists every component rather
+ * than the differing ones with a footnote about the rest.
+ */
+function ComparisonReport({
+  report, onChange,
+}: {
+  report: CompareResponse
+  onChange: () => void
+}) {
+  const [search, setSearch] = useState('')
+  const [impact, setImpact] = useState<'all' | CompareVerdict>('all')
+
+  const rows = useMemo(() => {
+    const byImpact = impact === 'all'
+      ? report.rows
+      : report.rows.filter((r) => r.verdict === impact)
+    if (!search.trim()) return byImpact
+    return byImpact.filter((r) => matches(
+      search, r.name, r.type, r.a?.tag, r.b?.tag, r.a?.digest, r.b?.digest))
+  }, [report.rows, impact, search])
+
+  // Counted from the rows rather than from the report's totals, so the buckets
+  // and their breakdowns cannot disagree with the table under them.
+  const buckets = useMemo(() => summarise(report.rows), [report.rows])
+
+  return (
+    <Space direction="vertical" size={16} style={{ width: '100%' }}>
+      <Row gutter={[16, 16]}>
+        {(['only-b', 'only-a', 'changed', 'same'] as const).map((verdict) => (
+          <Col xs={12} lg={6} key={verdict}>
+            <BucketCard bucket={buckets[verdict]} verdict={verdict} />
+          </Col>
+        ))}
+      </Row>
+
+      {(report.extraTagsA?.length || report.extraTagsB?.length) ? (
+        <Alert
+          type="warning"
+          showIcon
+          message="Content nobody in this comparison put there"
+          description={
+            <Typography.Text style={{ fontSize: 13 }}>
+              {formatCount((report.extraTagsA?.length ?? 0) + (report.extraTagsB?.length ?? 0))} tags
+              in these repositories point at content this release does not account for
+              {(report.extraTruncatedA || report.extraTruncatedB) && ', and there may be more than were resolved'}.
+            </Typography.Text>
+          }
+        />
+      ) : null}
+
+      <Card
+        title={`Components (${formatCount(report.rows.length)})`}
+        extra={
+          <Space size={12} wrap>
+            <Segmented
+              size="small"
+              value={impact}
+              onChange={(v) => setImpact(v as typeof impact)}
+              options={[
+                { value: 'all', label: 'All' },
+                { value: 'only-b', label: `Added ${buckets['only-b'].count}` },
+                { value: 'only-a', label: `Removed ${buckets['only-a'].count}` },
+                { value: 'changed', label: `Changed ${buckets.changed.count}` },
+                { value: 'same', label: `Unchanged ${buckets.same.count}` },
+              ]}
+            />
+            <Button size="small" onClick={onChange}>Compare something else</Button>
+          </Space>
+        }
+        styles={{ body: { padding: 0 } }}
+      >
+        <div style={{ padding: '12px 16px 0' }}>
+          <SearchBar
+            value={search}
+            onChange={setSearch}
+            placeholder="Search by name, tag or digest"
+            matched={rows.length}
+            total={report.rows.length}
+            width={340}
+          />
+        </div>
+
+        <Table<CompareRow>
+          size="small"
+          dataSource={rows}
+          rowKey={(r) => `${r.type}-${r.name}-${r.verdict}-${r.a?.digest ?? ''}-${r.b?.digest ?? ''}`}
+          pagination={{ pageSize: 25, showSizeChanger: false, size: 'small' }}
+          scroll={{ x: 1200 }}
+          locale={{
+            emptyText: (
+              <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="Nothing matches this filter" />
+            ),
+          }}
+          expandable={{
+            // Only where there is more than the row already says: the files
+            // inside a component, and the facts behind a `changed` verdict.
+            rowExpandable: (r) => Boolean(
+              r.differences?.length || r.filesAdded?.length ||
+              r.filesRemoved?.length || r.filesChanged?.length),
+            expandedRowRender: (r) => <RowDetail row={r} />,
+          }}
+          columns={[
+            {
+              title: 'Name',
+              width: 300,
+              render: (_, r) => (
+                <Space direction="vertical" size={0} style={{ minWidth: 0 }}>
+                  <Tooltip title={r.name}>
+                    <Typography.Text style={{ fontSize: 13, maxWidth: 280 }} ellipsis>
+                      {r.name || <NA reason="This component carries no name of its own." />}
+                    </Typography.Text>
+                  </Tooltip>
+                  {(r.b?.tag || r.a?.tag) && (
+                    <Typography.Text type="secondary" style={{ fontFamily: mono, fontSize: 11 }}>
+                      {r.b?.tag || r.a?.tag}
+                    </Typography.Text>
+                  )}
+                </Space>
+              ),
+            },
+            {
+              title: 'Type',
+              width: 130,
+              render: (_, r) => {
+                const name = kindName(r.type)
+                const icon = ARTIFACT_ICONS[name as keyof typeof ARTIFACT_ICONS]
+                return (
+                  <Space size={6}>
+                    {icon && <Icon as={icon} size={15} title={name} />}
+                    <Typography.Text style={{ fontSize: 12 }}>{name}</Typography.Text>
+                  </Space>
+                )
+              },
+            },
+            {
+              // "Impact", not "verdict": the question is what this change does
+              // to whoever consumes the release, not what the comparison ruled.
+              title: 'Impact',
+              width: 120,
+              render: (_, r) => (
+                <Tag color={VERDICT[r.verdict]?.colour} style={{ marginInlineEnd: 0 }}>
+                  {VERDICT[r.verdict]?.label ?? r.verdict}
+                </Tag>
+              ),
+            },
+            {
+              title: 'Size',
+              width: 170,
+              align: 'right',
+              render: (_, r) => <SizeCell row={r} />,
+            },
+            {
+              // The digests, which are the only unambiguous statement of what
+              // changed — and for a `changed` row, both of them, because "it
+              // changed" without saying from what to what is not a finding
+              // anybody can act on.
+              title: 'Digest',
+              width: 250,
+              render: (_, r) => <DigestCell row={r} />,
+            },
+            {
+              title: 'Files',
+              width: 120,
+              render: (_, r) => {
+                const n = (r.filesAdded?.length ?? 0) + (r.filesRemoved?.length ?? 0) +
+                  (r.filesChanged?.length ?? 0)
+                if (n > 0) {
+                  return (
+                    <Space size={4}>
+                      <Typography.Text style={{ fontSize: 12 }}>{n} changed</Typography.Text>
+                      {r.filesTruncated && (
+                        <Tooltip title="Some layers of this component were left unopened, so there may be more inside them.">
+                          <Typography.Text type="warning" style={{ fontSize: 12 }}>+</Typography.Text>
+                        </Tooltip>
+                      )}
+                    </Space>
+                  )
+                }
+                if (r.verdict === 'same') {
+                  return <Typography.Text type="secondary" style={{ fontSize: 12 }}>—</Typography.Text>
+                }
+                if (r.filesTruncated) {
+                  return (
+                    <NA reason="This component's layers are archives with no names on them. Tick 'Also compare file contents' and run it again to open them and see which files differ." />
+                  )
+                }
+                return <Typography.Text type="secondary" style={{ fontSize: 12 }}>—</Typography.Text>
+              },
+            },
+          ]}
+        />
+      </Card>
+    </Space>
+  )
+}
+
+/** One bucket of the summary: how many, how much, and of what. */
+function BucketCard({ bucket, verdict }: { bucket: Bucket; verdict: CompareVerdict }) {
+  const meta = VERDICT[verdict]
+  const kinds = Object.entries(bucket.byKind)
+    .filter(([, v]) => v.count > 0)
+    .sort((a, b) => b[1].count - a[1].count)
+
+  return (
+    <Popover
+      placement="bottom"
+      title={`${meta.label} — what it is made of`}
+      content={
+        kinds.length === 0 ? (
+          <Typography.Text type="secondary" style={{ fontSize: 12 }}>Nothing in this bucket.</Typography.Text>
+        ) : (
+          <Space direction="vertical" size={4} style={{ minWidth: 220 }}>
+            {kinds.map(([kind, v]) => {
+              const name = kindName(kind)
+              const icon = ARTIFACT_ICONS[name as keyof typeof ARTIFACT_ICONS]
+              return (
+                <Space key={kind} size={8} style={{ width: '100%', justifyContent: 'space-between' }}>
+                  <Space size={6}>
+                    {icon && <Icon as={icon} size={14} title={name} />}
+                    <Typography.Text style={{ fontSize: 12 }}>{name}</Typography.Text>
+                  </Space>
+                  <Typography.Text style={{ fontSize: 12 }}>
+                    {formatCount(v.count)} · <Value>{formatBytes(v.bytes)}</Value>
+                  </Typography.Text>
+                </Space>
+              )
+            })}
+          </Space>
+        )
+      }
+    >
+      <Card size="small" style={{ cursor: 'default' }}>
+        <Statistic
+          title={meta.label}
+          value={bucket.count}
+          valueStyle={{ color: meta.statColour }}
+        />
+        <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+          <Value reason="Nothing in this bucket has a size we could read.">
+            {formatBytes(bucket.bytes)}
+          </Value>
+        </Typography.Text>
+      </Card>
+    </Popover>
+  )
+}
+
+/** What a component weighs, and what it weighed before. */
+function SizeCell({ row }: { row: CompareRow }) {
+  const a = bytes(row.a?.size)
+  const b = bytes(row.b?.size)
+
+  if (row.verdict === 'changed' && a !== undefined && b !== undefined && a !== b) {
+    const delta = b - a
+    return (
+      <Space direction="vertical" size={0}>
+        <Typography.Text style={{ fontSize: 12 }}>{formatBytes(b)}</Typography.Text>
+        <Typography.Text
+          type={delta > 0 ? 'warning' : 'success'}
+          style={{ fontSize: 11 }}
+        >
+          {delta > 0 ? '+' : '−'}{formatBytes(Math.abs(delta))} from {formatBytes(a)}
+        </Typography.Text>
+      </Space>
+    )
+  }
+  return <Value>{formatBytes(b ?? a)}</Value>
+}
+
+/**
+ * The digests, short enough to read and complete enough to act on.
+ *
+ * A `changed` row shows both: "it changed" without saying from what to what is
+ * not something anybody can take to a vendor. Added and removed show the one
+ * digest that exists, labelled by which side it is on.
+ */
+function DigestCell({ row }: { row: CompareRow }) {
+  const line = (label: string, digest: string | undefined, colour?: string) =>
+    digest ? (
+      <Tooltip title={digest} key={label}>
+        <Typography.Text style={{ fontSize: 11 }} type={colour as never}>
+          <Typography.Text type="secondary" style={{ fontSize: 10 }}>{label} </Typography.Text>
+          <span style={{ fontFamily: mono }}>{shortDigest(digest)}</span>
+        </Typography.Text>
+      </Tooltip>
+    ) : null
+
+  switch (row.verdict) {
+    case 'changed':
+      return (
+        <Space direction="vertical" size={0}>
+          {line('was', row.a?.digest)}
+          {line('now', row.b?.digest)}
+        </Space>
+      )
+    case 'only-a':
+      return line('removed', row.a?.digest) ?? <NA />
+    case 'only-b':
+      return line('added', row.b?.digest) ?? <NA />
+    default:
+      return line('both', row.a?.digest ?? row.b?.digest) ?? <NA />
+  }
+}
+
+/** The facts behind a verdict, and the files inside the component. */
+function RowDetail({ row }: { row: CompareRow }) {
+  return (
+    <Space direction="vertical" size={12} style={{ width: '100%', paddingBlock: 4 }}>
+      {row.differences?.length ? (
+        <div>
+          <Typography.Text type="secondary" style={{ fontSize: 12 }}>What differs</Typography.Text>
+          <ul style={{ margin: '4px 0 0', paddingInlineStart: 18 }}>
+            {row.differences.map((d) => (
+              <li key={d}><Typography.Text style={{ fontSize: 12 }}>{d}</Typography.Text></li>
+            ))}
+          </ul>
+        </div>
+      ) : null}
+
+      {([
+        ['Added', row.filesAdded, semantic.success],
+        ['Removed', row.filesRemoved, semantic.error],
+        ['Changed', row.filesChanged, semantic.warning],
+      ] as const).map(([label, files, colour]) =>
+        files?.length ? (
+          <div key={label}>
+            <Typography.Text strong style={{ color: colour, fontSize: 12 }}>
+              {label} ({files.length})
+            </Typography.Text>
+            <div style={{ maxHeight: 200, overflow: 'auto', marginTop: 4 }}>
+              {files.map((f) => (
+                <div key={f} className="diff-line" style={{ fontFamily: mono, fontSize: 11 }}>{f}</div>
+              ))}
+            </div>
+          </div>
+        ) : null,
+      )}
+
+      {row.filesTruncated && (
+        <Typography.Text type="warning" style={{ fontSize: 12 }}>
+          A layer was left unopened, so this is a partial account of what differs inside.
+        </Typography.Text>
+      )}
+    </Space>
+  )
+}
+
+/** One bucket's totals, and the same totals per kind. */
+interface Bucket {
+  count: number
+  bytes: number
+  byKind: Record<string, { count: number; bytes: number }>
+}
+
+/**
+ * Counts and sizes per bucket, and per kind within each bucket.
+ *
+ * The side each bucket is measured from is the side it EXISTS on: a removed
+ * component's size is what the first side had, an added one's is what the
+ * second has, and a changed one is measured by what it is now — the size of
+ * what somebody would be shipping.
+ */
+function summarise(rows: CompareRow[]): Record<CompareVerdict, Bucket> {
+  const empty = (): Bucket => ({ count: 0, bytes: 0, byKind: {} })
+  const out: Record<CompareVerdict, Bucket> = {
+    same: empty(), changed: empty(), 'only-a': empty(), 'only-b': empty(),
+  }
+
+  for (const row of rows) {
+    const bucket = out[row.verdict]
+    if (!bucket) continue
+    const size = row.verdict === 'only-a'
+      ? bytes(row.a?.size) ?? 0
+      : bytes(row.b?.size) ?? bytes(row.a?.size) ?? 0
+
+    bucket.count += 1
+    bucket.bytes += size
+    const kind = bucket.byKind[row.type] ?? { count: 0, bytes: 0 }
+    kind.count += 1
+    kind.bytes += size
+    bucket.byKind[row.type] = kind
+  }
+  return out
+}
+
+/** sha256:abcd… — enough to recognise, short enough for a column. */
+function shortDigest(digest: string): string {
+  const hex = digest.includes(':') ? digest.split(':')[1] ?? '' : digest
+  return hex.slice(0, 12)
+}
 
 export default function Compare() {
   const [params, setParams] = useSearchParams()
@@ -199,8 +610,12 @@ export default function Compare() {
   const [fromEndpoint, setFromEndpoint] = useState<string>()
   const [toEndpoint, setToEndpoint] = useState<string>()
   const [sourceOverride, setSourceOverride] = useState<string>()
-  const [open, setOpen] = useState<CompareRow>()
   const [withFiles, setWithFiles] = useState(false)
+  // Collapsed once there is a report. The form is scaffolding for the answer:
+  // leaving four selectors above it pushes the thing somebody waited minutes
+  // for below the fold, and every one of those selectors is now describing a
+  // comparison that has already been run.
+  const [settled, setSettled] = useState(false)
   // Elapsed while it runs. Both releases are read live from their registries,
   // so a comparison takes as long as those registries take — and a button that
   // says `loading` for four minutes with nothing beside it is the shape of
@@ -279,6 +694,7 @@ export default function Compare() {
           progressToken,
         },
       })
+      setSettled(true)
     } catch (e) {
       message.error(e instanceof Error ? e.message : 'The comparison could not be run.')
     }
@@ -301,66 +717,6 @@ export default function Compare() {
     setParams(next)
   }
 
-  const total = report ? report.same + report.changed + report.onlyA + report.onlyB : 0
-  const differing = report ? report.changed + report.onlyA + report.onlyB : 0
-
-  const rowsTable = (rows: CompareRow[]) => (
-    <Table<CompareRow>
-      size="small"
-      dataSource={rows}
-      rowKey={(r) => `${r.type}-${r.name}-${r.verdict}`}
-      pagination={{ pageSize: 12, hideOnSinglePage: true, showSizeChanger: false }}
-      scroll={{ x: 720 }}
-      locale={{ emptyText: <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="Nothing here" /> }}
-      columns={[
-        {
-          title: 'Name',
-          render: (_, r) => (
-            <Value>{r.name}</Value>
-          ),
-        },
-        { title: 'Type', width: 100, render: (_, r) => <Tag style={{ marginInlineEnd: 0 }}>{r.type}</Tag> },
-        {
-          title: 'Verdict',
-          width: 120,
-          render: (_, r) => (
-            <Tag color={VERDICT[r.verdict]?.colour} style={{ marginInlineEnd: 0 }}>
-              {VERDICT[r.verdict]?.label ?? r.verdict}
-            </Tag>
-          ),
-        },
-        {
-          title: 'Size',
-          width: 110,
-          align: 'right',
-          render: (_, r) => <Value>{formatBytes(r.b?.size ?? r.a?.size)}</Value>,
-        },
-        {
-          title: 'Files',
-          width: 130,
-          render: (_, r) => {
-            const n = (r.filesAdded?.length ?? 0) + (r.filesRemoved?.length ?? 0) +
-              (r.filesChanged?.length ?? 0)
-            if (!n) {
-              return r.filesTruncated
-                ? <NA reason="A layer was left unopened — past the download budget, or not an archive — so the files inside it are unknown." />
-                : <Typography.Text type="secondary" style={{ fontSize: 12 }}>—</Typography.Text>
-            }
-            return <Typography.Text style={{ fontSize: 12 }}>{n} changed</Typography.Text>
-          },
-        },
-        {
-          title: 'Action',
-          width: 90,
-          fixed: 'right',
-          render: (_, r) =>
-            r.verdict === 'same' ? null : (
-              <Button size="small" onClick={() => setOpen(r)}>View</Button>
-            ),
-        },
-      ]}
-    />
-  )
 
   if (products.isError) {
     return (
@@ -378,6 +734,26 @@ export default function Compare() {
         description="What is different between two versions or locations of the same software"
       />
 
+      {settled && report ? (
+        <Card size="small" style={{ marginBottom: 16 }}>
+          <Space size={16} wrap style={{ width: '100%', justifyContent: 'space-between' }}>
+            <Space size={8} wrap>
+              <Typography.Text type="secondary" style={{ fontSize: 12 }}>Comparing</Typography.Text>
+              <Typography.Text strong style={{ fontFamily: mono, fontSize: 13 }}>
+                {report.a.label}
+              </Typography.Text>
+              <SwapOutlined style={{ color: '#98A2B3' }} />
+              <Typography.Text strong style={{ fontFamily: mono, fontSize: 13 }}>
+                {report.b.label}
+              </Typography.Text>
+              {!withFiles && (
+                <Tag style={{ marginInlineStart: 8 }}>components only</Tag>
+              )}
+            </Space>
+            <Button onClick={() => setSettled(false)}>Change selection</Button>
+          </Space>
+        </Card>
+      ) : (
       <Card style={{ marginBottom: 16 }}>
         <Space direction="vertical" size={14} style={{ width: '100%' }}>
           <Space size={12} wrap>
@@ -505,157 +881,12 @@ export default function Compare() {
 
         </Space>
       </Card>
+      )}
 
       {compare.isError && <ErrorState error={compare.error} retry={() => void run()} />}
 
-      {report && (
-        <Row gutter={[16, 16]}>
-          <Col span={24}>
-            <Card>
-              <Row gutter={[16, 16]} align="middle">
-                <Col xs={24} lg={9}>
-                  <Space direction="vertical" size={2}>
-                    <Typography.Text type="secondary" style={{ fontSize: 12 }}>Comparing</Typography.Text>
-                    <Typography.Text strong className="mono" style={{ fontSize: 13 }}>{report.a.label}</Typography.Text>
-                    <Typography.Text type="secondary" style={{ fontSize: 12 }}>against</Typography.Text>
-                    <Typography.Text strong className="mono" style={{ fontSize: 13 }}>{report.b.label}</Typography.Text>
-                  </Space>
-                </Col>
-                <Col xs={12} sm={6} lg={3}>
-                  <Statistic title="Added" value={report.onlyB} valueStyle={{ color: semantic.success }} />
-                </Col>
-                <Col xs={12} sm={6} lg={3}>
-                  <Statistic title="Removed" value={report.onlyA} valueStyle={{ color: semantic.error }} />
-                </Col>
-                <Col xs={12} sm={6} lg={3}>
-                  <Statistic title="Changed" value={report.changed} valueStyle={{ color: semantic.warning }} />
-                </Col>
-                <Col xs={12} sm={6} lg={3}>
-                  <Statistic title="Unchanged" value={report.same} />
-                </Col>
-                <Col xs={24} lg={3}>
-                  <Statistic title="Components" value={total} />
-                </Col>
-              </Row>
+      {report && <ComparisonReport report={report} onChange={() => setSettled(false)} />}
 
-              {(report.extraTagsA?.length || report.extraTagsB?.length) && (
-                <Typography.Paragraph type="warning" style={{ marginTop: 12, marginBottom: 0, fontSize: 12 }}>
-                  Content nobody in this comparison put there:{' '}
-                  {formatCount((report.extraTagsA?.length ?? 0) + (report.extraTagsB?.length ?? 0))} extra tags
-                  {(report.extraTruncatedA || report.extraTruncatedB) && ', and more than were resolved'}.
-                </Typography.Paragraph>
-              )}
-            </Card>
-          </Col>
-
-          <Col span={24}>
-            <Card
-              title={differing === 0 ? 'These are identical' : `${differing} differences`}
-              extra={
-                <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-                  {formatCount(report.same)} unchanged, not listed
-                </Typography.Text>
-              }
-              styles={{ body: { padding: 0 } }}
-            >
-              {differing === 0 ? (
-                <div style={{ padding: 24 }}>
-                  <Empty
-                    image={Empty.PRESENTED_IMAGE_SIMPLE}
-                    description="Every component matches on both sides, down to the digest."
-                  />
-                </div>
-              ) : (
-                rowsTable(report.rows.filter((r) => r.verdict !== 'same'))
-              )}
-            </Card>
-          </Col>
-        </Row>
-      )}
-
-      <Drawer
-        open={Boolean(open)}
-        onClose={() => setOpen(undefined)}
-        width={680}
-        title={open?.name}
-      >
-        {open && (
-          <Space direction="vertical" size={16} style={{ width: '100%' }}>
-            <Space>
-              <Tag color={VERDICT[open.verdict]?.colour}>{VERDICT[open.verdict]?.label}</Tag>
-              <Tag>{open.type}</Tag>
-            </Space>
-
-            {open.differences?.length ? (
-              <Card size="small" title="What differs">
-                <ul style={{ margin: 0, paddingInlineStart: 18 }}>
-                  {open.differences.map((d) => (
-                    <li key={d}><Typography.Text style={{ fontSize: 13 }}>{d}</Typography.Text></li>
-                  ))}
-                </ul>
-              </Card>
-            ) : null}
-
-            <Row gutter={12}>
-              {([['Left', open.a], ['Right', open.b]] as const).map(([label, side]) => (
-                <Col xs={24} md={12} key={label}>
-                  <Card size="small" title={label}>
-                    <Space direction="vertical" size={2} style={{ width: '100%' }}>
-                      <Typography.Text type="secondary" style={{ fontSize: 11 }}>Digest</Typography.Text>
-                      <Typography.Text style={{ fontFamily: mono, fontSize: 11 }}>
-                        <Value>{side?.digest}</Value>
-                      </Typography.Text>
-                      <Typography.Text type="secondary" style={{ fontSize: 11 }}>Size</Typography.Text>
-                      <Typography.Text><Value>{formatBytes(side?.size)}</Value></Typography.Text>
-                      <Typography.Text type="secondary" style={{ fontSize: 11 }}>Pullable as itself</Typography.Text>
-                      <Typography.Text style={{ fontSize: 12 }}>
-                        {side?.namedRepository
-                          ? (side.namedPresent ? `Yes — ${side.namedRepository}` : `No — expected at ${side.namedRepository}`)
-                          : <NA />}
-                      </Typography.Text>
-                    </Space>
-                  </Card>
-                </Col>
-              ))}
-            </Row>
-
-            {(open.filesAdded?.length || open.filesRemoved?.length || open.filesChanged?.length) ? (
-              <Card size="small" title="Files inside this component">
-                {([
-                  ['Added', open.filesAdded, semantic.success],
-                  ['Removed', open.filesRemoved, semantic.error],
-                  ['Changed', open.filesChanged, semantic.warning],
-                ] as const).map(([label, files, colour]) =>
-                  files?.length ? (
-                    <div key={label} style={{ marginBottom: 10 }}>
-                      <Typography.Text strong style={{ color: colour, fontSize: 12 }}>
-                        {label} ({files.length})
-                      </Typography.Text>
-                      <div style={{ maxHeight: 180, overflow: 'auto', marginTop: 4 }}>
-                        {files.map((f) => (
-                          <div key={f} className="diff-line">{f}</div>
-                        ))}
-                      </div>
-                    </div>
-                  ) : null,
-                )}
-                {open.filesTruncated && (
-                  <Typography.Text type="warning" style={{ fontSize: 12 }}>
-                    A layer was left unopened, so this is a partial account of what differs inside.
-                  </Typography.Text>
-                )}
-              </Card>
-            ) : (
-              <Tooltip title="Either the layers were not archives, or opening them would have exceeded the comparison's download budget.">
-                <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-                  No file-level difference was resolved for this component. What differs is the
-                  metadata above.
-                </Typography.Text>
-              </Tooltip>
-            )}
-          </Space>
-        )}
-      </Drawer>
     </>
   )
 }

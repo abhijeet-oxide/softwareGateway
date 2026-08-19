@@ -320,6 +320,11 @@ func (s *Server) routes() chi.Router {
 			r.Get("/products/{product}/packages", s.handleListPackages)
 			r.Get("/products/{product}/packages/{package}", s.handleGetPackage)
 			r.Get("/products/{product}/packages/{package}/artifacts", s.handleListArtifacts)
+			// What is INSIDE the release, as files rather than as layers.
+			// Its own route rather than a field on the artifact listing: a
+			// release has thousands of files and dozens of artifacts, and one
+			// page wants one of those and not the other.
+			r.Get("/products/{product}/packages/{package}/files", s.handleListPackageFiles)
 			// What the source would not serve. A sibling of the packages listing
 			// rather than part of it: these are not packages, they are the
 			// absence of packages, and folding them in would make every consumer

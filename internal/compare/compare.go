@@ -230,8 +230,16 @@ type Item struct {
 	Name string
 	// Tag is the name it answers to, from `ref.name` or from the root
 	// reference.
-	Tag        string
-	Digest     string
+	Tag    string
+	Digest string
+	// Size is what this component WEIGHS: its manifest plus its config plus
+	// its layers.
+	//
+	// Not the manifest descriptor's size, which is what this used to be and is
+	// the size of a few kilobytes of JSON. A reader comparing two releases is
+	// asking what changed and how much of it there is; answering with the size
+	// of the pointer rather than the thing reported a 900 MB image as 2 KB and
+	// made every total on the page meaningless.
 	Size       int64
 	Repository string
 	Depth      int
@@ -815,7 +823,7 @@ func itemFrom(
 		Type:       classify(with, a.Descriptor, a.ConfigMediaType()),
 		Kind:       kindOf(a.Descriptor),
 		Digest:     string(a.Descriptor.Digest),
-		Size:       a.Descriptor.Size,
+		Size:       contentSize(a),
 		Repository: spec.Repository,
 		Depth:      a.Depth,
 		Tag:        ref.tag,
@@ -857,7 +865,15 @@ func itemFrom(
 		item.Name = a.Descriptor.Digest.Short()
 	}
 
+	// LAYERS ONLY. The config blob is metadata about the component — its
+	// entrypoint, its chart values schema — and it is not a file inside it.
+	// Counting it as one made every component's file account read as
+	// incomplete, because a config carries no title and an untitled blob is
+	// something we cannot name without opening it.
 	for _, b := range a.Blobs {
+		if b.Kind != "layer" {
+			continue
+		}
 		item.Layers = append(item.Layers, Layer{
 			Digest:    string(b.Descriptor.Digest),
 			Size:      b.Descriptor.Size,
@@ -1253,6 +1269,23 @@ func classify(with vendors.Classifier, desc registry.Descriptor, configMediaType
 		with = vendors.OCIOnly
 	}
 	return with(desc.MediaType, desc.ArtifactType, configMediaType, desc.Annotations)
+}
+
+// contentSize is what an artifact weighs, from the manifest the walk fetched.
+//
+// Manifest plus config plus layers, which is what a person means by the size of
+// an image or a chart. An artifact the walk only LISTED — a child of an index
+// on a side that could not be read further — has no blob list, and its
+// descriptor size is the honest answer for it: the pointer is all we have.
+func contentSize(a oci.Artifact) int64 {
+	if len(a.Blobs) == 0 {
+		return a.Descriptor.Size
+	}
+	total := int64(len(a.Raw))
+	for _, b := range a.Blobs {
+		total += b.Descriptor.Size
+	}
+	return total
 }
 
 // refName is a parsed org.opencontainers.image.ref.name.

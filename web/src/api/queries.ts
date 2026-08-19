@@ -7,7 +7,8 @@ import type {
   ListAuditEventsResponse, ListAutoDownloadRulesResponse, ListDownloadsResponse,
   InspectPackageResponse, ListFailuresResponse, ListJobsResponse, ListPackagesResponse, ListProductsResponse,
   ListReplicationResponse, ListSyncsResponse, ListTransfersResponse, ListUnavailableResponse,
-  ListWorkersResponse, Package, ReportSummary, RunDownloadRequest, RunDownloadResponse,
+  ListPackageFilesResponse, ListWorkersResponse, Package, ReportSummary, RunDownloadRequest,
+  RunDownloadResponse,
   SetPriorityRequest, Transfer, TransferControlResponse, VersionResponse,
 } from './types'
 import { isLive } from '../domain/derive'
@@ -181,7 +182,26 @@ export function useArtifacts(
 }
 
 /**
- * Measure a release: walk its manifest tree and record what it is made of.
+ * What is inside a release, as files.
+ *
+ * Read from what analysis recorded, so it troubles no registry — and it is
+ * empty until the release has been analysed, which the response says rather
+ * than leaving the page to guess.
+ */
+export function usePackageFiles(product: string | undefined, ref: string | undefined,
+  repository?: string) {
+  const { segment, query: q } = packageRef(ref ?? '')
+  return useQuery({
+    queryKey: ['package-files', product, ref, repository],
+    queryFn: () => api.get<ListPackageFilesResponse>(
+      `/products/${encodeURIComponent(product!)}/packages/${encodeURIComponent(segment)}/files`
+      + scopeQuery(q, repository)),
+    enabled: Boolean(product && ref),
+  })
+}
+
+/**
+ * Analyse a release: walk its manifest tree and record what it is made of.
  *
  * Synchronous by design — the API has no progress feed for it, because the
  * extent of the work is the thing being discovered. A caller can report that
@@ -199,6 +219,9 @@ export function useInspectPackage(product: string, ref: string, repository?: str
     onSuccess: () => {
       void qc.invalidateQueries({ queryKey: ['package', product, ref] })
       void qc.invalidateQueries({ queryKey: ['artifacts', product, ref] })
+      // The files ARE the point of analysing for most readers: the walk is what
+      // turns "two layers" into two hundred named paths.
+      void qc.invalidateQueries({ queryKey: ['package-files', product, ref] })
     },
   })
 }
@@ -426,7 +449,7 @@ export function useCompareProgress(token: string | undefined) {
 
 export function useCompare() {
   return useMutation({
-    mutationFn: ({ product, ref, repository, body }: {
+    mutationFn: async ({ product, ref, repository, body }: {
       product: string
       ref: string
       /** Scopes the left-hand reference, for the usual ambiguous tag. */
@@ -434,12 +457,37 @@ export function useCompare() {
       body: CompareRequest
     }) => {
       const { segment, query: q } = packageRef(ref)
-      return api.post<CompareResponse>(
+      const path =
         `/products/${encodeURIComponent(product)}/packages/${encodeURIComponent(segment)}:compare` +
-        scopeQuery(q, repository),
-        body)
+        scopeQuery(q, repository)
+
+      try {
+        return await api.post<CompareResponse>(path, body)
+      } catch (e) {
+        /*
+         * An older Coordinator does not know `progressToken`, and the API
+         * rejects unknown fields rather than ignoring them — deliberately, so
+         * a client sending `bytesTransfered` is told rather than silently
+         * reported as having moved nothing.
+         *
+         * The consequence for this one field is disproportionate: the whole
+         * comparison fails because the client asked to be told how it was
+         * going. So it is asked for ONCE, and dropped if the server has not
+         * heard of it. The comparison then runs exactly as it did before —
+         * without a position, which is what an old server could report anyway.
+         */
+        if (!isUnknownField(e, 'progressToken') || !body.progressToken) throw e
+        const { progressToken: _dropped, ...rest } = body
+        return await api.post<CompareResponse>(path, rest)
+      }
     },
   })
+}
+
+/** Whether a failure is a server refusing a field it has never heard of. */
+function isUnknownField(error: unknown, field: string): boolean {
+  const message = error instanceof Error ? error.message : String(error)
+  return message.includes('unknown field') && message.includes(field)
 }
 
 // ---------------------------------------------------------------------------

@@ -1,6 +1,7 @@
 package store
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -13,6 +14,8 @@ type cacheHarness struct {
 	packages  *Packages
 	productID int64
 	repoID    int64
+	// n makes each seeded digest distinct.
+	n int
 }
 
 func newCacheHarness(t *testing.T) *cacheHarness {
@@ -306,4 +309,176 @@ func (h *cacheHarness) cachedIn(packageID int64) int {
 		h.t.Fatalf("count cached bodies: %v", err)
 	}
 	return n
+}
+
+// A manifest we have already fetched is served from the store.
+//
+// The comparison path is the one that needed this: it walked both sides from
+// their roots every time, asking a vendor registry to re-serve two hundred
+// manifests we held, verified and kept. A digest addresses bytes, so bytes that
+// hash to it ARE the answer — there is no version of this where the registry
+// would say something else.
+func TestAFetchedManifestIsReadableByItsDigest(t *testing.T) {
+	h := newCacheHarness(t)
+	// One package whose tree was walked and whose bodies are still here.
+	h.seed("orb_25.7.2131", "sha256:"+strings.Repeat("a", 64), 1, 32)
+
+	var digest string
+	if err := h.packages.DB().QueryRowContext(t.Context(),
+		`SELECT digest FROM package_artifacts WHERE raw IS NOT NULL LIMIT 1`).
+		Scan(&digest); err != nil {
+		t.Fatal(err)
+	}
+
+	m, ok, err := h.packages.ManifestByDigest(t.Context(), digest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !ok {
+		t.Fatal("a manifest we hold was reported missing")
+	}
+	if len(m.Raw) != 32 {
+		t.Errorf("raw is %d bytes, want the body as served", len(m.Raw))
+	}
+	if m.MediaType == "" {
+		t.Error("the media type came back empty; a descriptor built from this would be wrong")
+	}
+}
+
+// An evicted body is a MISS, not an error: every caller has a registry to fall
+// back to, and the fetch is a fact the eviction did not unlearn.
+func TestAnEvictedManifestIsAMissRatherThanAnError(t *testing.T) {
+	h := newCacheHarness(t)
+	h.seed("orb_25.7.2131", "sha256:"+strings.Repeat("b", 64), 1, 32)
+
+	var digest string
+	if err := h.packages.DB().QueryRowContext(t.Context(),
+		`SELECT digest FROM package_artifacts WHERE raw IS NOT NULL LIMIT 1`).
+		Scan(&digest); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := h.packages.DB().ExecContext(t.Context(),
+		`UPDATE package_artifacts SET raw = NULL WHERE digest = ?`, digest); err != nil {
+		t.Fatal(err)
+	}
+
+	_, ok, err := h.packages.ManifestByDigest(t.Context(), digest)
+	if err != nil {
+		t.Fatalf("an evicted body came back as an error: %v", err)
+	}
+	if ok {
+		t.Error("an evicted body was reported as present")
+	}
+}
+
+// The releases worth walking unasked are the RECENT ones nobody has walked.
+//
+// Discovery records what a tag's manifest lists and stops, so a fresh package
+// has one fetched artifact and a list of children nobody has read. Walking
+// those ahead of time is what turns "nobody has looked" into an answer before
+// anybody asks the question — and bounding it to recent releases is what stops
+// that being a conversation with a vendor about eight months of history.
+func TestUnanalysedRecentFindsWhatIsWorthWalking(t *testing.T) {
+	h := newCacheHarness(t)
+
+	fresh := h.seedPackageAt("orb_25.7.2131", time.Now().Add(-2*time.Hour))
+	h.seedListedChild(fresh)
+
+	old := h.seedPackageAt("orb_24.1.100", time.Now().Add(-90*24*time.Hour))
+	h.seedListedChild(old)
+
+	walked := h.seedPackageAt("orb_25.7.2000", time.Now().Add(-3*time.Hour))
+	h.seedFetchedChild(walked)
+
+	rows, err := h.packages.UnanalysedRecent(t.Context(), h.repoID, 7*24*time.Hour, 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rows) != 1 {
+		t.Fatalf("found %d releases to walk, want the one recent unwalked: %+v", len(rows), rows)
+	}
+	if rows[0].Tag != "orb_25.7.2131" {
+		t.Errorf("chose %q, want the recent release nobody has walked", rows[0].Tag)
+	}
+	if rows[0].SourceRepository == "" {
+		t.Error("the row carries no repository, so nothing could build a client for it")
+	}
+}
+
+// And it is bounded, so a source that has just discovered two hundred releases
+// catches up over several scans rather than opening two hundred conversations
+// with somebody else's registry at once.
+func TestUnanalysedRecentIsBounded(t *testing.T) {
+	h := newCacheHarness(t)
+	for i := range 5 {
+		id := h.seedPackageAt(fmt.Sprintf("orb_25.7.%d", 2000+i), time.Now().Add(-time.Hour))
+		h.seedListedChild(id)
+	}
+
+	rows, err := h.packages.UnanalysedRecent(t.Context(), h.repoID, 7*24*time.Hour, 2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rows) != 2 {
+		t.Fatalf("returned %d releases, want the two asked for", len(rows))
+	}
+}
+
+// seedPackageAt writes a package published at a given moment.
+func (h *cacheHarness) seedPackageAt(tag string, publishedAt time.Time) int64 {
+	h.t.Helper()
+	ctx := h.t.Context()
+
+	tx, err := h.packages.DB().BeginTx(ctx, nil)
+	if err != nil {
+		h.t.Fatal(err)
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	id, err := h.packages.InsertPackage(ctx, tx, PackageRow{
+		ProductID: h.productID, SourceRepoID: h.repoID, Tag: tag,
+		ManifestDigest: "sha256:" + strings.Repeat("e", 60) + fmt.Sprintf("%04d", len(tag)),
+		MediaType:      "application/vnd.oci.image.index.v1+json",
+	})
+	if err != nil {
+		h.t.Fatal(err)
+	}
+	if err := tx.Commit(); err != nil {
+		h.t.Fatal(err)
+	}
+	if _, err := h.packages.DB().ExecContext(ctx,
+		`UPDATE packages SET published_at = ? WHERE id = ?`,
+		publishedAt.UTC().Format("2006-01-02T15:04:05Z"), id); err != nil {
+		h.t.Fatal(err)
+	}
+	return id
+}
+
+// seedListedChild adds a child the index NAMED and nobody fetched — which is
+// what discovery leaves behind.
+func (h *cacheHarness) seedListedChild(packageID int64) {
+	h.t.Helper()
+	h.child(packageID, false)
+}
+
+// seedFetchedChild adds one that has been walked.
+func (h *cacheHarness) seedFetchedChild(packageID int64) {
+	h.t.Helper()
+	h.child(packageID, true)
+}
+
+func (h *cacheHarness) child(packageID int64, fetched bool) {
+	h.t.Helper()
+	h.n++
+	digest := "sha256:" + strings.Repeat("f", 60) + fmt.Sprintf("%04d", h.n)
+	fetchedAt := "NULL"
+	if fetched {
+		fetchedAt = "'2026-01-01T00:00:00Z'"
+	}
+	if _, err := h.packages.DB().ExecContext(h.t.Context(),
+		`INSERT INTO package_artifacts (package_id, digest, media_type, size_bytes, depth, fetched_at)
+		 VALUES (?, ?, 'application/vnd.oci.image.manifest.v1+json', 512, 1, `+fetchedAt+`)`,
+		packageID, digest); err != nil {
+		h.t.Fatal(err)
+	}
 }

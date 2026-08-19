@@ -78,15 +78,28 @@ type fileView struct {
 //
 // Only for rows that already disagree: a component whose digest matches on both
 // sides is byte-identical, and opening it could not produce a finding.
+// # It runs with NO budget too
+//
+// The budget controls whether layer archives are DOWNLOADED. It does not
+// control whether the files can be named: a layer that carries
+// `org.opencontainers.image.title` names the file inside it, in the manifest we
+// have already read, for nothing. That is every layer of a vendor's generic
+// artifact — the configuration bundles, the release notes, the scripts — and
+// naming them is most of what a reader wants from this column.
+//
+// This used to return immediately on a zero budget, so a comparison run without
+// the expensive option reported no file-level information at all and the column
+// read empty on every row. The expensive part is opening an archive; saying
+// which named files a component carries is free.
 func inspectFiles(
 	ctx context.Context, clientA, clientB ClientFactory, rows []Row,
 	fileBudget int64, concurrency int,
 ) {
-	if fileBudget <= 0 {
-		return
-	}
 	if concurrency <= 0 {
 		concurrency = 4
+	}
+	if fileBudget < 0 {
+		fileBudget = 0
 	}
 
 	remaining := &budget{remaining: fileBudget}
@@ -169,11 +182,24 @@ func (r *layerReader) view(ctx context.Context, item *Item) fileView {
 	for _, layer := range item.Layers {
 		cached := r.read(ctx, item.Repository, layer)
 		if !cached.opened {
-			// One opaque unit, named the way the layer names itself. This is
-			// the degradation, and it is the behaviour that existed before
-			// layers were opened at all.
-			out.byPath[opaqueName(layer)] = layer.Digest
-			out.truncated = true
+			// A layer nobody opened contributes a file only if it NAMES one.
+			//
+			// `org.opencontainers.image.title` is the vendor saying "this
+			// layer is this file" — an ORAS-style single-file layer, which is
+			// what every configuration bundle and release note in a vendor
+			// artifact is. That name is in the manifest we have already read,
+			// so it costs nothing and it is exactly right.
+			//
+			// A layer with no title is an image layer holding an unknown
+			// number of paths. Entering it as one row called `layer sha256:…`
+			// would restate the digest difference in the column that exists to
+			// say more than the digest, so it enters nothing and the view says
+			// it is incomplete.
+			if layer.Title == "" {
+				out.truncated = true
+				continue
+			}
+			out.byPath[layer.Title] = layer.Digest
 			continue
 		}
 		for _, f := range cached.files {

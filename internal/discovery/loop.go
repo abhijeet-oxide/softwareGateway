@@ -741,6 +741,14 @@ func (w *worker) scanOnce(ctx context.Context) (ScanResult, error) {
 		}
 	}
 
+	// Walk what was just found, before anybody asks for it. Bounded and
+	// best-effort — see analyse.go — and deliberately AFTER the scan is
+	// recorded, so a slow walk cannot make a scan look slow or fail.
+	if analysed := w.scanner.analyseRecent(ctx); analysed > 0 {
+		w.log.InfoContext(ctx, "analysed newly discovered releases",
+			"product", productName, "source", w.spec.SourceName, "releases", analysed)
+	}
+
 	w.log.DebugContext(ctx, "discovery scan complete",
 		"repositories", res.Repositories, "fromCatalog", res.RepositoriesFromCatalog,
 		"tags", res.TagsListed, "admitted", res.TagsAdmitted,

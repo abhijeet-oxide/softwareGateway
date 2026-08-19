@@ -2,7 +2,9 @@ package store
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 )
 
@@ -266,4 +268,53 @@ func (p *Packages) PackageAnalysed(ctx context.Context, packageID int64) (bool, 
 		return false, fmt.Errorf("check whether package %d is analysed: %w", packageID, err)
 	}
 	return unfetched == 0, nil
+}
+
+// FileInPackage finds one named file of a package by its blob digest.
+//
+// # Why this exists rather than a digest fetch
+//
+// Reading a file's content means fetching a blob from the vendor registry, and
+// the digest arrives in a URL. Without this, the handler would be a proxy that
+// fetches whatever digest anybody names from whichever registry a product is
+// configured with — a request forgery with credentials attached, and one that
+// would also happily serve an image layer as though it were a document.
+//
+// So the digest is not a parameter, it is a LOOKUP KEY: it must already be
+// recorded as a titled layer of the package being read. ErrNotFound is the
+// answer for everything else, which is both the safe answer and the true one.
+func (p *Packages) FileInPackage(ctx context.Context, packageID int64, digest string) (PackageFile, error) {
+	var (
+		f           PackageFile
+		annotations []byte
+	)
+	err := p.db.QueryRowContext(ctx, p.dialect.Rewrite(`
+		SELECT pa.id,
+		       COALESCE(pa.annotations, ''),
+		       ab.title,
+		       COALESCE(b.size_bytes, 0),
+		       ab.digest,
+		       COALESCE(b.media_type, '')
+		  FROM package_artifacts pa
+		  JOIN artifact_blobs ab ON ab.artifact_id = pa.id
+		  LEFT JOIN blobs b ON b.digest = ab.digest
+		 WHERE pa.package_id = ?
+		   AND ab.kind = 'layer'
+		   AND ab.title IS NOT NULL
+		   AND ab.digest = ?
+		 LIMIT 1`), packageID, digest).Scan(
+		&f.ArtifactID, &annotations, &f.Path, &f.SizeBytes, &f.Digest, &f.MediaType)
+	if errors.Is(err, sql.ErrNoRows) {
+		return PackageFile{}, ErrNotFound
+	}
+	if err != nil {
+		return PackageFile{}, fmt.Errorf("find file %s of package %d: %w", digest, packageID, err)
+	}
+	if len(annotations) > 0 {
+		var a map[string]string
+		if err := json.Unmarshal(annotations, &a); err == nil {
+			f.ArtifactRef = a[annotationRefName]
+		}
+	}
+	return f, nil
 }

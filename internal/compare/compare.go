@@ -189,6 +189,13 @@ type Progress struct {
 	// Estimated says the total may still grow, so a caller can render the
 	// percentage as an estimate rather than as a position.
 	Estimated bool
+	// Concurrency is how many requests this side may have in flight at once.
+	//
+	// Reported because "is it going as fast as it can" is the second question
+	// anybody watching a four-minute bar asks, and a comparison running one
+	// request at a time looks identical to one running thirty-two — which is
+	// exactly the bug that made comparisons slow before anyone noticed.
+	Concurrency int
 }
 
 // The phases a comparison passes through, named as the reader would name them.
@@ -209,9 +216,10 @@ type ProgressFunc func(Progress)
 // One per side, shared by every phase that side passes through, so the number a
 // caller sees only ever goes up — see Progress for why that matters.
 type sideReporter struct {
-	key    string
-	side   string
-	report ProgressFunc
+	key         string
+	side        string
+	concurrency int
+	report      ProgressFunc
 
 	mu        sync.Mutex
 	phase     string
@@ -220,8 +228,10 @@ type sideReporter struct {
 	estimated bool
 }
 
-func newSideReporter(key, side string, report ProgressFunc) *sideReporter {
-	return &sideReporter{key: key, side: side, report: report, estimated: true}
+func newSideReporter(key, side string, concurrency int, report ProgressFunc) *sideReporter {
+	return &sideReporter{
+		key: key, side: side, concurrency: concurrency, report: report, estimated: true,
+	}
 }
 
 // walked records the manifest walk's absolute position.
@@ -287,6 +297,23 @@ func (r *sideReporter) did(phase string, n int) {
 	r.emitLocked()
 }
 
+// certain marks the denominator FINAL — no longer an estimate.
+//
+// The manifest walk discovers its own size as it goes, so its total is a
+// running maximum and the caller says so. A later phase can know its total
+// before it starts, and a reader deserves to be told the difference between
+// "379 of 383 so far" and "379 of 383".
+func (r *sideReporter) certain() {
+	if r == nil {
+		return
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	r.estimated = false
+	r.emitLocked()
+}
+
 // settled marks this side finished, so a caller stops showing it as in flight.
 func (r *sideReporter) settled() {
 	if r == nil {
@@ -315,6 +342,7 @@ func (r *sideReporter) emitLocked() {
 	r.report(Progress{
 		Key: r.key, Side: r.side, Phase: r.phase,
 		Done: r.done, Total: r.known, Estimated: r.estimated,
+		Concurrency: r.concurrency,
 	})
 }
 
@@ -526,8 +554,8 @@ func Run(ctx context.Context, clientA, clientB ClientFactory, opts Options) (Rep
 	// two round-trip-bound walks instead of the larger of them.
 	// One reporter per side, shared by every phase that side passes through, so
 	// the count a caller sees only ever goes up. See Progress.
-	reporterA := newSideReporter("a", opts.A.Label, opts.Progress)
-	reporterB := newSideReporter("b", opts.B.Label, opts.Progress)
+	reporterA := newSideReporter("a", opts.A.Label, concurrency, opts.Progress)
+	reporterB := newSideReporter("b", opts.B.Label, concurrency, opts.Progress)
 
 	var (
 		wg           sync.WaitGroup

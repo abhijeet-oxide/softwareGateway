@@ -50,3 +50,34 @@ body {
   /* Still clearly "busy", without the movement. */
   [style*="slm-working"] { animation: none !important; width: 100% !important; opacity: 0.45; }
 }
+
+/*
+ * A release selector shows two lines — the version and the package it belongs
+ * to — because either alone is ambiguous: a product publishes the same version
+ * tag into ten repositories.
+ *
+ * Ant Design's closed box is one line of 30px with `overflow: hidden`, so both
+ * rules here are load-bearing. The height gives the second line somewhere to
+ * be, and the `min-width: 0` lets the ellipsis inside actually clip: a flex
+ * item's default minimum size is its content, which is how a sixty-character
+ * vendor reference came to run out of the box and across the page.
+ */
+.slm-release-select .ant-select-selector {
+  height: 46px;
+}
+.slm-release-select .ant-select-selection-item,
+.slm-release-select .ant-select-selection-placeholder {
+  line-height: 44px;
+  min-width: 0;
+  overflow: hidden;
+}
+.slm-release-select .ant-select-selection-item > div {
+  line-height: normal;
+  padding: 6px 0;
+}
+.slm-release-select .ant-select-selection-search {
+  inset-inline-start: 11px;
+}
+.slm-release-select .ant-select-selection-search-input {
+  height: 44px;
+}

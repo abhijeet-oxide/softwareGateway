@@ -634,6 +634,24 @@ export interface ListPackageFilesResponse {
   analysed: boolean
 }
 
+/**
+ * One file's content, read out of the registry that publishes it.
+ *
+ * `content` is empty whenever `binary` or `tooLarge` is set — the server states
+ * what it did instead of sending a screenful of replacement characters.
+ */
+export interface PackageFileContentResponse {
+  path: string
+  component?: string
+  digest: string
+  mediaType?: string
+  sizeBytes: Int64String
+  content?: string
+  binary?: boolean
+  tooLarge?: boolean
+  limit?: number
+}
+
 export interface CompareProgressSide {
   /** Which end this is — "a" or "b". The label is not an identity: the two
    * sides of a version comparison are the same place and share it. */
@@ -647,6 +665,12 @@ export interface CompareProgressSide {
    */
   total: number
   estimated?: boolean
+  /**
+   * How many requests this side may have in flight at once. "Is it going as
+   * fast as it can" is the second question anybody watching a four-minute bar
+   * asks, and one request at a time looks identical to thirty-two.
+   */
+  concurrency?: number
 }
 
 /**

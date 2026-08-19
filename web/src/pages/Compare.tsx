@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react'
-import type { ReactNode } from 'react'
+import type { CSSProperties, ReactNode } from 'react'
 import {
   App, Button, Card, Checkbox, Col, Empty, Popover, Progress, Row, Segmented, Select,
   Space, Statistic, Table, Tag, Tooltip, Typography,
@@ -17,7 +17,7 @@ import { WorkingBar } from '../components/progress'
 import { ARTIFACT_ICONS, Icon } from '../components/icons'
 import { mono, semantic } from '../theme'
 import type {
-  CompareResponse, CompareRow, CompareVerdict, Package, Repository,
+  CompareProgressSide, CompareResponse, CompareRow, CompareVerdict, Package, Repository,
 } from '../api/types'
 
 /**
@@ -100,17 +100,37 @@ type ReleaseOption = ReturnType<typeof releaseOptions>[number]
  * construction here: the same tag exists in ten repositories.
  */
 function renderReleaseOption(option: Pick<ReleaseOption, 'version' | 'name'>) {
+  /*
+   * PLAIN DIVS, and every one of them bounded.
+   *
+   * These two lines go inside the select's closed box, which is a fixed width
+   * with `overflow: hidden` on ONE line of text. A flex container of unbounded
+   * children ignores that entirely, and a vendor reference like
+   * `cfx-5000-k8s-215952-edgenac-25.7-2131_20260807-wnv5a0csd0003c-ncm` ran
+   * straight out of the box and across the page.
+   *
+   * `minWidth: 0` on the wrapper is the part that is easy to leave out and
+   * without which none of the rest works: a block child's default minimum size
+   * is its content, so the ellipsis has nothing to clip against.
+   */
+  const line: CSSProperties = {
+    overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+  }
+
   return (
-    <Space direction="vertical" size={0} style={{ lineHeight: 1.25, minWidth: 0 }}>
-      <Typography.Text style={{ fontFamily: mono, fontSize: 12 }} ellipsis>
+    <div style={{ minWidth: 0, maxWidth: '100%', overflow: 'hidden' }}>
+      <div style={{ ...line, fontFamily: mono, fontSize: 12, lineHeight: '16px' }}>
         {option.version}
-      </Typography.Text>
+      </div>
       {option.name && (
-        <Typography.Text type="secondary" style={{ fontSize: 11 }} ellipsis>
+        <div
+          style={{ ...line, fontSize: 11, lineHeight: '14px', color: 'rgba(0,0,0,0.45)' }}
+          title={option.name}
+        >
           {option.name}
-        </Typography.Text>
+        </div>
       )}
-    </Space>
+    </div>
   )
 }
 
@@ -135,21 +155,31 @@ function releaseLabelRender(releases: Package[], value: unknown, fallback: React
  * request that legitimately runs for minutes, that is the difference between
  * waiting and giving up.
  *
- * # Per side, because one of them is the slow one
+ * # Per side, named as the reader named them
  *
- * The two ends are walked concurrently against different registries. A single
- * merged number hides which of them is holding everything up, which is the
- * first thing worth knowing when a comparison is slow.
+ * The two ends are walked concurrently against different registries and one of
+ * them is usually the slow one, so a single merged number hides which. Each row
+ * is labelled with the PACKAGE and VERSION the reader picked — the server's own
+ * label for a side is its source, `cfx-near`, which is the same word on both
+ * rows of a version comparison and identifies neither.
  *
- * The denominator during the manifest phase is what is KNOWN — a tree is
- * discovered by walking it — so it is marked as an estimate rather than
- * presented as a position it has not earned.
+ * # The three things somebody watching a four-minute bar wants
+ *
+ * Where it has got to, whether it is going as fast as it can, and whether it is
+ * re-reading something it already has. All three are here: the position, the
+ * concurrency each side is running at, and whether that release had been
+ * analysed before this started.
  */
 function ComparisonProgress({
-  token, elapsedSeconds,
+  token, elapsedSeconds, base, against, withFiles,
 }: {
   token: string | undefined
   elapsedSeconds: number
+  /** The releases the reader picked, in order. Absent in locations mode. */
+  base?: Package
+  against?: Package
+  /** Whether layer archives are being downloaded — the expensive option. */
+  withFiles: boolean
 }) {
   const progress = useCompareProgress(token)
   const sides = progress.data?.sides ?? []
@@ -161,17 +191,17 @@ function ComparisonProgress({
   const total = sides.reduce((n, s) => n + s.total, 0)
   const estimated = sides.some((s) => s.estimated)
   const percent = total > 0 ? Math.min(99, (done / total) * 100) : 0
+  const parallel = Math.max(0, ...sides.map((s) => s.concurrency ?? 0))
 
-  // Said only once it is true, and about THIS comparison rather than as a
-  // warning attached to every one of them.
-  const slow = elapsedSeconds > 120
+  const picked: Record<string, Package | undefined> = { a: base, b: against }
+
 
   return (
-    <Space direction="vertical" size={8} style={{ width: '100%' }}>
+    <Space direction="vertical" size={10} style={{ width: '100%' }}>
       {sides.length === 0 ? (
         <WorkingBar
           label="Analysing packages"
-          detail="This may take a while"
+          detail="Reading what each side contains. This may take a while."
           elapsedSeconds={elapsedSeconds}
         />
       ) : (
@@ -181,31 +211,114 @@ function ComparisonProgress({
             status="active"
             format={() => `${formatCount(done)} of ${formatCount(total)}${estimated ? '+' : ''}`}
           />
-          <Space direction="vertical" size={2} style={{ width: '100%' }}>
-            {sides.map((side) => (
-              <Typography.Text
-                key={side.key ?? side.side}
-                type="secondary"
-                style={{ fontSize: 12 }}
-              >
-                <strong>{side.side}</strong> — {side.phase} · {formatCount(side.done)}
-                {side.total > 0 && ` of ${formatCount(side.total)}${side.estimated ? '+' : ''}`}
-              </Typography.Text>
-            ))}
-            <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-              {formatDuration(elapsedSeconds)} elapsed
-            </Typography.Text>
-          </Space>
+
+          {sides.map((side) => (
+            <SideProgress
+              key={side.key ?? side.side}
+              side={side}
+              pkg={side.key ? picked[side.key] : undefined}
+              fallback={side.side}
+            />
+          ))}
         </>
       )}
 
-      <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-        {slow
-          ? 'Analysing packages — this is taking longer than expected. Large releases read slowly '
-            + 'from their registries; the counts above are still advancing.'
-          : 'Analysing packages, this may take a while.'}
-      </Typography.Text>
+      <Space size={16} wrap style={{ rowGap: 4 }}>
+        <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+          {formatDuration(elapsedSeconds)} elapsed
+        </Typography.Text>
+        {parallel > 0 && (
+          <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+            {parallel} requests in parallel per side
+          </Typography.Text>
+        )}
+        <CacheNote base={base} against={against} withFiles={withFiles} />
+      </Space>
     </Space>
+  )
+}
+
+/** One end: what it is, where it has got to, and what it is doing. */
+function SideProgress({
+  side, pkg, fallback,
+}: {
+  side: CompareProgressSide
+  pkg?: Package
+  fallback: string
+}) {
+  const percent = side.total > 0 ? Math.min(99, (side.done / side.total) * 100) : 0
+
+  return (
+    <Row gutter={12} align="middle" wrap={false}>
+      <Col flex="0 0 240px" style={{ minWidth: 0 }}>
+        <Typography.Text
+          style={{ fontFamily: mono, fontSize: 12, display: 'block' }}
+          ellipsis={{ tooltip: pkg ? `${pkg.displayRepository || pkg.sourceRepository}:${version(pkg)}` : fallback }}
+        >
+          {pkg ? version(pkg) : fallback}
+        </Typography.Text>
+        <Typography.Text
+          type="secondary"
+          style={{ fontSize: 11, display: 'block' }}
+          ellipsis
+        >
+          {pkg ? (pkg.displayRepository || pkg.sourceRepository) : ''}
+        </Typography.Text>
+      </Col>
+      <Col flex="auto" style={{ minWidth: 0 }}>
+        <Progress
+          percent={Number(percent.toFixed(0))}
+          size="small"
+          status={side.phase === 'finished' ? 'success' : 'active'}
+          showInfo={false}
+        />
+      </Col>
+      <Col flex="0 0 220px">
+        <Typography.Text type="secondary" style={{ fontSize: 11 }}>
+          {side.phase} · {formatCount(side.done)}
+          {side.total > 0 && ` of ${formatCount(side.total)}${side.estimated ? '+' : ''}`}
+        </Typography.Text>
+      </Col>
+    </Row>
+  )
+}
+
+/**
+ * Whether this comparison is re-reading something it already has.
+ *
+ * The question behind "I analysed the package and this is no faster". Analysis
+ * records a release's manifest tree, and a comparison reads it from there
+ * rather than from the registry — so a release that has been analysed costs
+ * hundreds fewer round trips, and one that has not is being analysed right now
+ * for everything that asks next.
+ *
+ * The file option is called out separately because it is the honest exception:
+ * layer archives are NOT recorded here, so opening them is a live download
+ * every time, however analysed the release is.
+ */
+function CacheNote({
+  base, against, withFiles,
+}: {
+  base?: Package
+  against?: Package
+  withFiles: boolean
+}) {
+  const picked = [base, against].filter((p): p is Package => Boolean(p))
+  if (picked.length === 0) return null
+
+  const analysed = picked.filter((p) => p.expandedAt).length
+  const note =
+    analysed === picked.length
+      ? 'Both sides were analysed earlier, so their manifests come from the cache'
+      : analysed === 0
+        ? 'Neither side has been analysed, so the manifests are being read now and recorded for next time'
+        : 'One side was analysed earlier; the other is being read now and recorded for next time'
+
+  return (
+    <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+      {note}
+      {withFiles && ' · file contents are downloaded live, which no cache covers'}
+    </Typography.Text>
   )
 }
 
@@ -821,10 +934,11 @@ export default function Compare() {
           <Row gutter={[12, 12]} align="bottom">
             <Col xs={24} md={10} lg={8}>
               <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-                {mode === 'versions' ? 'Version' : 'From'}
+                {mode === 'versions' ? 'Base version' : 'Base location'}
               </Typography.Text>
               {mode === 'versions' ? (
                 <Select<string, ReleaseOption>
+                  className="slm-release-select"
                   style={{ width: '100%' }}
                   placeholder="Choose a release"
                   value={left}
@@ -857,10 +971,11 @@ export default function Compare() {
 
             <Col xs={24} md={10} lg={8}>
               <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-                {mode === 'versions' ? 'Against version' : 'To'}
+                Compare against
               </Typography.Text>
               {mode === 'versions' ? (
                 <Select<string, ReleaseOption>
+                  className="slm-release-select"
                   style={{ width: '100%' }}
                   placeholder="Choose a release"
                   value={right}
@@ -920,7 +1035,15 @@ export default function Compare() {
             </Checkbox>
           </Space>
 
-          {compareRunning && <ComparisonProgress token={token} elapsedSeconds={elapsed} />}
+          {compareRunning && (
+            <ComparisonProgress
+              token={token}
+              elapsedSeconds={elapsed}
+              base={releases.find((r) => refOf(r) === left)}
+              against={releases.find((r) => refOf(r) === right)}
+              withFiles={withFiles}
+            />
+          )}
 
         </Space>
       </Card>

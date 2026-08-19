@@ -1,6 +1,7 @@
 package api
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -12,6 +13,7 @@ import (
 	"strings"
 	"sync/atomic"
 	"time"
+	"unicode/utf8"
 
 	"github.com/go-chi/chi/v5"
 
@@ -293,6 +295,108 @@ func (s *Server) handleListPackageFiles(w http.ResponseWriter, r *http.Request) 
 			MediaType: f.MediaType,
 		})
 	}
+	WriteJSON(w, r, http.StatusOK, out)
+}
+
+// maxViewableFile is how much of a file this endpoint will read into memory.
+//
+// Two megabytes, which is a large configuration file and a small archive. The
+// endpoint exists so somebody can LOOK at what a vendor shipped; a release is
+// downloaded by a transfer, not by a browser, and a bound that would let this
+// serve a container layer would make it a second, unaccounted transfer path.
+const maxViewableFile = 2 << 20
+
+// handleGetPackageFileContent serves
+// GET /api/v1/products/{product}/packages/{package}/files/content?digest=…
+//
+// # The digest is a key, not an address
+//
+// It is looked up among the release's own named layers first, and fetched only
+// if that lookup succeeds. Anything else — an image layer, a blob of another
+// release, a digest somebody invented — is ErrNotFound, and that is both the
+// safe answer and the true one: this Coordinator holds vendor credentials, and
+// a handler that fetched what it was told to would lend them out.
+//
+// # Text or a statement, never mojibake
+//
+// A file that is not valid UTF-8 is reported AS binary rather than rendered. A
+// reader who opened a `.tar.gz` should be told it is an archive, not shown a
+// screen of replacement characters they have to interpret.
+func (s *Server) handleGetPackageFileContent(w http.ResponseWriter, r *http.Request) {
+	productName := chi.URLParam(r, "product")
+	if !s.productExists(w, r, productName) {
+		return
+	}
+	if s.deps.Packages == nil || s.deps.Blobs == nil {
+		Error(w, r, v1.CodeUnavailable, "reading file content is not configured")
+		return
+	}
+
+	pkg, ok := s.resolvePackage(w, r, productName, chi.URLParam(r, "package"))
+	if !ok {
+		return
+	}
+
+	digest := r.URL.Query().Get("digest")
+	if digest == "" {
+		Error(w, r, v1.CodeInvalidArgument, "which file: pass the digest of one of this release's files")
+		return
+	}
+
+	file, err := s.deps.Packages.FileInPackage(r.Context(), pkg.ID, digest)
+	if errors.Is(err, store.ErrNotFound) {
+		Error(w, r, v1.CodeNotFound,
+			"this release has no named file with that digest. Only files this release "+
+				"was analysed to contain can be read.")
+		return
+	}
+	if err != nil {
+		s.internal(w, r, "find the file", err)
+		return
+	}
+
+	out := v1.PackageFileContentResponse{
+		Path:      file.Path,
+		Component: file.ArtifactRef,
+		Digest:    file.Digest,
+		MediaType: file.MediaType,
+		SizeBytes: int64String(file.SizeBytes),
+	}
+
+	if file.SizeBytes > maxViewableFile {
+		out.TooLarge = true
+		out.Limit = maxViewableFile
+		WriteJSON(w, r, http.StatusOK, out)
+		return
+	}
+
+	body, err := s.deps.Blobs.ReadBlob(r.Context(), productName, pkg, file.Digest)
+	if err != nil {
+		Error(w, r, v1.CodeUnavailable, "the registry did not serve this file: "+err.Error())
+		return
+	}
+	defer func() { _ = body.Close() }()
+
+	// One byte past the bound, so a blob the registry serves larger than its
+	// own descriptor claims is caught rather than truncated silently.
+	content, err := io.ReadAll(io.LimitReader(body, maxViewableFile+1))
+	if err != nil {
+		Error(w, r, v1.CodeUnavailable, "the file could not be read: "+err.Error())
+		return
+	}
+	if int64(len(content)) > maxViewableFile {
+		out.TooLarge = true
+		out.Limit = maxViewableFile
+		WriteJSON(w, r, http.StatusOK, out)
+		return
+	}
+
+	if !utf8.Valid(content) || bytes.IndexByte(content, 0) >= 0 {
+		out.Binary = true
+		WriteJSON(w, r, http.StatusOK, out)
+		return
+	}
+	out.Content = string(content)
 	WriteJSON(w, r, http.StatusOK, out)
 }
 
@@ -1006,6 +1110,7 @@ func (s *Server) handleCompareProgress(w http.ResponseWriter, r *http.Request) {
 		out.Sides = append(out.Sides, v1.CompareProgressSide{
 			Key: side.Key, Side: side.Side, Phase: side.Phase,
 			Done: side.Done, Total: side.Total, Estimated: side.Estimated,
+			Concurrency: side.Concurrency,
 		})
 	}
 	// Stable order, so a bar built from this does not reorder its two rows

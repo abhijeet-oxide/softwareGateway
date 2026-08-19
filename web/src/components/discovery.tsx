@@ -12,7 +12,7 @@ import { matches } from '../domain/derive'
 import { SearchBar } from './layout'
 import { NA, Value } from './value'
 import { TimeAgo } from './chips'
-import { semantic } from '../theme'
+import { palette, semantic } from '../theme'
 import type { DiscoverySourceState, Product } from '../api/types'
 
 /**
@@ -151,7 +151,7 @@ function SourceProgress({ s }: { s: DiscoverySourceState }) {
   if (!s.repositoriesTotal) {
     return (
       <Space size={6}>
-        <SyncOutlined spin style={{ color: '#0057B8' }} />
+        <SyncOutlined spin style={{ color: palette.primary }} />
         <Typography.Text style={{ fontSize: 12 }}>
           {phaseLabel(s.phase)} - waiting for the registry to list what it holds
         </Typography.Text>

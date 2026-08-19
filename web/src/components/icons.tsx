@@ -19,6 +19,7 @@ import DownloadIcon from '~icons/mdi/tray-arrow-down'
 import LayersIcon from '~icons/mdi/layers-triple-outline'
 import SignatureIcon from '~icons/mdi/certificate-outline'
 import type { Repository } from '../api/types'
+import { branding } from '../theme'
 
 /**
  * Every icon in the application, chosen in one place.
@@ -45,6 +46,42 @@ import type { Repository } from '../api/types'
  */
 
 export type IconComponent = ComponentType<SVGProps<SVGSVGElement>>
+
+/**
+ * The mark a deployment puts before the product name.
+ *
+ * Three shapes, because a company's logo arrives in whichever one they have:
+ * an Iconify icon compiled into the bundle, raw SVG markup, or an image by URL.
+ * All three are configured in theme.ts and none of them reaches the network at
+ * runtime unless the third is pointed at something remote, which an air-gapped
+ * deployment should not do.
+ *
+ * Renders nothing when no mark is set, which is the default: a tool with no
+ * logo should look deliberate rather than look like a broken image.
+ */
+export function BrandMark({ size }: { size?: number }) {
+  const mark = branding.mark
+  if (!mark) return null
+  const px = size ?? branding.markSize
+
+  if (typeof mark === 'string') {
+    // Inline SVG takes the colour and size around it; anything else is an
+    // image and cannot, so it is sized and left alone.
+    if (mark.trim().startsWith('<svg')) {
+      return (
+        <span
+          aria-hidden
+          style={{ display: 'inline-flex', width: px, height: px, color: '#fff' }}
+          dangerouslySetInnerHTML={{ __html: mark }}
+        />
+      )
+    }
+    return <img src={mark} alt="" width={px} height={px} style={{ display: 'block' }} />
+  }
+
+  const Mark = mark
+  return <Mark width={px} height={px} aria-hidden style={{ display: 'block', color: '#fff' }} />
+}
 
 /** Vendors we can name, matched against the source's declared `vendor` layout. */
 const VENDOR_MARKS: Record<string, IconComponent> = {

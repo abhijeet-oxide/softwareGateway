@@ -10,7 +10,7 @@ import {
 } from '../api/queries'
 import { isLive, kindName, repositoryOf, transferVersion } from '../domain/derive'
 import {
-  bytes, elapsedSeconds, formatBytes, formatCount, formatDuration, formatSpeed,
+  bytes, elapsedSeconds, formatAbsolute, formatBytes, formatCount, formatDuration, formatSpeed,
 } from '../domain/format'
 import { NA, Stat, Value } from '../components/value'
 import {
@@ -218,6 +218,21 @@ function JobProgress({ job }: { job: Job }) {
 const JOB_ICONS: Record<string, IconComponent> = {
   manifest: IndexIcon,
   blob: LayersIcon,
+}
+
+/**
+ * When a step happened, under the step.
+ *
+ * Absent where there is no moment to report, rather than a dash or a guess: a
+ * step that has not been reached has no time, and inventing one is the whole
+ * class of mistake this application avoids elsewhere.
+ */
+function StepTime({ at }: { at?: string }) {
+  const when = formatAbsolute(at)
+  if (!when) return null
+  return (
+    <Typography.Text type="secondary" style={{ fontSize: 11 }}>{when}</Typography.Text>
+  )
 }
 
 /** A job's state, spinning while a worker holds it. */
@@ -451,10 +466,21 @@ export default function DownloadDetail() {
           current={step}
           status={failed ? 'error' : undefined}
           items={[
-            { title: 'Downloading' },
-            ...(mirrored ? [{ title: 'Mirroring' }] : []),
-            { title: 'Verification' },
-            { title: 'Completed' },
+            { title: 'Downloading', description: <StepTime at={t?.startedAt} /> },
+            ...(mirrored
+              ? [{
+                  title: 'Mirroring',
+                  description: <StepTime at={lastSync?.completedAt ?? lastSync?.startedAt} />,
+                }]
+              : []),
+            /*
+              Verification carries no time, and does not pretend to. Nothing
+              writes a verification result yet - see domain/derive - so the step
+              exists to say the stage is in the chain and stays blank until
+              there is a moment to report.
+            */
+            { title: 'Verification', description: <StepTime at={undefined} /> },
+            { title: 'Completed', description: <StepTime at={t?.completedAt} /> },
           ]}
         />
       </Card>

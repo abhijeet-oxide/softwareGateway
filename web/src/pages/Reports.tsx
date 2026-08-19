@@ -4,7 +4,7 @@ import { useProducts, useReports } from '../api/queries'
 import { bytes, formatBytes, formatCount, formatPercent, formatSpeed } from '../domain/format'
 import { Stat, Value } from '../components/value'
 import { EmptyStateCard, ErrorState, PageHeader } from '../components/layout'
-import { semantic } from '../theme'
+import { palette, semantic } from '../theme'
 
 /**
  * Page 9 - Reports.
@@ -163,7 +163,7 @@ export default function Reports() {
                           <div
                             style={{
                               width: `${(value / peak) * 100}%`,
-                              background: '#0057B8',
+                              background: palette.primary,
                               height: '100%',
                               borderRadius: 3,
                               minWidth: value > 0 ? 2 : 0,

@@ -9,7 +9,8 @@ import { DownloadIcon, Icon, PackageIcon } from './components/icons'
 import { useLocation, useNavigate } from 'react-router-dom'
 import { useIdentity } from './auth/permissions'
 import { useTransfers } from './api/queries'
-import { attNavy } from './theme'
+import { branding, palette } from './theme'
+import { BrandMark } from './components/icons'
 
 const { Sider, Header, Content } = Layout
 
@@ -61,11 +62,19 @@ export function Shell({ children }: { children: ReactNode }) {
 
   return (
     <Layout style={{ minHeight: '100vh' }}>
-      <Sider width={216} style={{ background: attNavy }}>
-        <div style={{ padding: '18px 16px 14px', color: '#fff' }}>
-          <Typography.Text style={{ color: '#fff', fontWeight: 700, fontSize: 15 }}>
-            Software Gateway
-          </Typography.Text>
+      <Sider width={216} style={{ background: palette.sidebar }}>
+        {/*
+          The name, and the mark a deployment sets beside it. Both come from
+          theme.ts, which is the one file a company edits to make this look
+          like theirs.
+        */}
+        <div style={{ padding: '18px 16px 14px' }}>
+          <Space size={8} align="center">
+            <BrandMark />
+            <Typography.Text style={{ color: '#fff', fontWeight: 700, fontSize: 15 }}>
+              {branding.name}
+            </Typography.Text>
+          </Space>
         </div>
 
         <Menu
@@ -74,7 +83,7 @@ export function Shell({ children }: { children: ReactNode }) {
           selectedKeys={[selected]}
           items={NAV}
           onClick={({ key }) => navigate(key)}
-          style={{ background: attNavy, borderInlineEnd: 0 }}
+          style={{ background: palette.sidebar, borderInlineEnd: 0 }}
         />
 
         <div
@@ -84,7 +93,7 @@ export function Shell({ children }: { children: ReactNode }) {
           }}
         >
           <Space size={10}>
-            <Avatar size="small" style={{ background: '#1E4E8C' }}>
+            <Avatar size="small" style={{ background: palette.primary }}>
               {(who?.subject ?? 'A').slice(0, 2).toUpperCase()}
             </Avatar>
             <div style={{ lineHeight: 1.3 }}>
@@ -100,7 +109,7 @@ export function Shell({ children }: { children: ReactNode }) {
       <Layout>
         <Header
           style={{
-            background: '#fff', borderBottom: '1px solid #E4E8EE',
+            background: palette.topBar, borderBottom: `1px solid ${palette.topBarBorder}`,
             display: 'flex', alignItems: 'center', justifyContent: 'flex-end',
             gap: 16, paddingInline: 24,
           }}

@@ -14,8 +14,7 @@ import { kindName, type LifecycleStep } from '../domain/derive'
 import { bytes, formatAbsolute, formatBytes, formatCount } from '../domain/format'
 import { ARTIFACT_ICONS, Icon } from './icons'
 import { usePresentComponents } from '../api/queries'
-import { mono } from '../theme'
-import { semantic } from '../theme'
+import { mono, palette, semantic } from '../theme'
 import { NA } from './value'
 
 /**
@@ -244,7 +243,7 @@ function Moment({
   done?: boolean
   pending?: boolean
 }) {
-  const colour = done ? semantic.success : pending ? '#0057B8' : 'rgba(0,0,0,0.25)'
+  const colour = done ? semantic.success : pending ? palette.primary : 'rgba(0,0,0,0.25)'
 
   return (
     <Space size={8} align="center">

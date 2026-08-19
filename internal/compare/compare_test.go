@@ -1271,3 +1271,34 @@ func TestProgressOnlyEverGoesUp(t *testing.T) {
 		}
 	}
 }
+
+// Unaccounted tags are a question about a DESTINATION.
+//
+// The pass resolves every tag in the bundle's repository looking for content
+// this release does not account for. At a target that is a real finding —
+// something landed there that nobody in this comparison put there. At a source
+// it is the vendor's own catalogue, every other release it has ever published,
+// reported as unaccounted content on every version-to-version comparison
+// anybody runs.
+//
+// It was also the most expensive thing a comparison did: one resolve per tag in
+// a repository holding years of releases, on both sides, which is why a
+// comparison that had finished walking appeared to stop for minutes.
+func TestASourceIsNotAskedAboutUnaccountedTags(t *testing.T) {
+	f := newFixture(t)
+	f.publish(f.src, sourcePath, older, componentsOf(older))
+	f.publish(f.src, sourcePath, release, componentsOf(release))
+
+	report, err := compare.Run(context.Background(),
+		f.clientFor(f.sourceSide(older)), f.clientFor(f.sourceSide(release)),
+		compare.Options{A: f.sourceSide(older), B: f.sourceSide(release), Concurrency: 4})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// The other version's tags are in this repository and are not a finding.
+	if len(report.ExtraTagsA) != 0 || len(report.ExtraTagsB) != 0 {
+		t.Errorf("a version comparison reported the vendor's other releases as "+
+			"unaccounted content: %v %v", report.ExtraTagsA, report.ExtraTagsB)
+	}
+}

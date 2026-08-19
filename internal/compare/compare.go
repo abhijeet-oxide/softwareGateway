@@ -659,6 +659,24 @@ func readSide(
 
 	probeNamedSites(ctx, client, inv, concurrency, report)
 
+	// EXTRA TAGS ARE A QUESTION ABOUT A DESTINATION, and only about a
+	// destination.
+	//
+	// The pass resolves every tag in the bundle's repository to find content
+	// this release does not account for. At a target that is a real finding:
+	// something landed there that nobody in this comparison put there. At a
+	// SOURCE it is the vendor's own catalogue — every other release it has ever
+	// published — reported as unaccounted content, which is noise on every
+	// version-to-version comparison anybody runs.
+	//
+	// It was also the most expensive thing a comparison did, by a wide margin:
+	// one resolve per tag in a repository holding years of releases, against
+	// the vendor, on both sides. A comparison that had finished walking
+	// appeared to stop for minutes, doing this.
+	if !spec.PublishesComponentsByName {
+		return inv, extras{}, nil
+	}
+
 	tags, truncated := extraTags(ctx, root, inv, spec,
 		unwalkedRoots(ctx, root, choice, concurrency), concurrency, report)
 	return inv, extras{Tags: tags, Truncated: truncated}, nil

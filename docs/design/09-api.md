@@ -287,6 +287,12 @@ The token is optional; omitting it costs nothing and reports nothing.
 
 **Progress lives in the memory of the replica running the comparison.** It is worth nothing once the report arrives, so it is not worth a table or a write per manifest — and a poll served by a different replica returns `404`, which is a normal answer meaning "no position available", not a failure. Entries are dropped shortly after the comparison finishes.
 
+**A comparison analyses before it walks.** Each side that resolves to a *source* is passed through the same `InspectPackage` a person invokes, which is idempotent — a release already walked is walked no further, one that has not is walked once and recorded. Everything downstream then reads from the store: this comparison, the next one, the release page, the transfer planner. Before that, a comparison read manifests from the store when they happened to be there and pulled them from the vendor when they were not, leaving nothing behind either way, so two comparisons of the same pair cost two full walks.
+
+A named **target** is never analysed. What is actually at a destination is the question a comparison against one exists to ask, and recording it as the release's content would answer that question with our own record of what we sent.
+
+**Unaccounted tags are asked only of a destination.** The pass resolves every tag in the bundle's repository, which at a target finds content nobody in the comparison put there and at a source finds the vendor's own catalogue — every release it has ever published, reported as a discrepancy. It was also the most expensive thing a comparison did.
+
 Two limits bound the request, and they measure different things:
 
 | | default | what it catches |

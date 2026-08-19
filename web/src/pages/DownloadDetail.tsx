@@ -461,6 +461,7 @@ export default function DownloadDetail() {
                 <MeasuredProgress
                   transferred={transferred}
                   total={planned}
+                  saved={saved}
                   strategy={t?.strategy ?? 'copy'}
                   speedBytesPerSecond={running ? speed : undefined}
                 />
@@ -510,12 +511,33 @@ export default function DownloadDetail() {
                   ]}
                 />
 
+                {/*
+                  COUNTED PER COMPONENT, and it has to say so.
+                  
+                  `Files 2` beside a release page reading `Files 112` looks like
+                  a disagreement and is not one: a vendor's file bundle is ONE
+                  component holding a hundred and twelve named layers, and this
+                  table counts components while the release page counts files.
+                  Each of those layers is still its own blob and its own job —
+                  which is why an unchanged file in a changed bundle is not
+                  copied again.
+                */}
+                <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+                  Counted per component. A file bundle is one component however many
+                  files it carries; each of those files is a blob of its own and is
+                  copied, skipped or mounted on its own.
+                </Typography.Text>
+
                 {saved !== undefined && saved > 0 && (
                   <SavedPanel
                     savedBytes={formatBytes(saved) ?? ''}
-                    totalBytes={formatBytes(content) ?? undefined}
+                    // Against what would have been PUSHED, not against what
+                    // the release weighs. `Saved 56.5 GB of 29.8 GB` was two
+                    // true numbers from different populations, side by side,
+                    // reading as nonsense.
+                    totalBytes={formatBytes(planned) ?? undefined}
+                    transferId={t?.id}
                     content={t?.content}
-                    skips={progress?.skips}
                   />
                 )}
               </Space>
@@ -559,10 +581,26 @@ export default function DownloadDetail() {
         <Col xs={24} xl={9} style={{ display: 'flex' }}>
           <Card title="Download Summary" style={{ width: '100%' }}>
             <Descriptions column={1} size="small">
-              <Descriptions.Item label="Total size">
+              {/*
+                TWO SIZES, because there are two and they are not the same
+                number. The release WEIGHS 29.8 GB — the distinct content in
+                it. Landing it takes 63.7 GB of pushes, because a component
+                published under its own name as well as inside the bundle needs
+                its layers in both repositories, and a registry stores blobs per
+                repository.
+                
+                Both were on this page, one labelled "Total size" beside a bar
+                counting against the other, and the difference read as a bug.
+              */}
+              <Descriptions.Item label="Release size">
                 <Value reason="The release has not been measured, so its full size is not known.">
                   {formatBytes(content)}
                 </Value>
+              </Descriptions.Item>
+              <Descriptions.Item label="To push">
+                <Tooltip title="More than the release weighs, where a component is published under its own name as well as inside the bundle: a registry stores blobs per repository, so those layers are pushed to both.">
+                  <span><Value>{formatBytes(planned)}</Value></span>
+                </Tooltip>
               </Descriptions.Item>
               <Descriptions.Item label="Downloaded">
                 <Value>{formatBytes(transferred)}</Value>
@@ -573,7 +611,7 @@ export default function DownloadDetail() {
                   reads when the download has finished and the panel has
                   scrolled away, and "saved 30.1 GB" is exactly as opaque here.
                 */}
-                <SavedBreakdown content={t?.content} skips={progress?.skips}>
+                <SavedBreakdown transferId={t?.id} content={t?.content}>
                   <Value>{formatBytes(saved)}</Value>
                 </SavedBreakdown>
               </Descriptions.Item>

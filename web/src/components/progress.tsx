@@ -40,6 +40,17 @@ interface MeasuredProps {
   /** Bytes planned. */
   total: number | undefined
   /**
+   * Bytes that did not have to move because the destination already had them.
+   *
+   * DONE WORK, and the bar has to say so. A release the destination already
+   * holds is finished the moment planning discovers that, and a bar reading
+   * `0 B of 63.7 GB · 0%` beside a summary reading `Saved 56.5 GB` was
+   * describing a download that had nothing left to do as one that had not
+   * started. The saved portion is drawn in its own colour, so "already there"
+   * and "we moved it" stay distinguishable.
+   */
+  saved?: number | undefined
+  /**
    * How the transfer is being performed. Anything but `copy` means the bytes
    * were not ours to count, and this component renders nothing.
    */
@@ -49,7 +60,7 @@ interface MeasuredProps {
 }
 
 export function MeasuredProgress({
-  transferred, total, strategy = 'copy', showText = true, speedBytesPerSecond,
+  transferred, total, saved, strategy = 'copy', showText = true, speedBytesPerSecond,
 }: MeasuredProps) {
   if (strategy !== 'copy') {
     // Not a fallback — a refusal. A caller reaching here has asked for a bar
@@ -64,17 +75,26 @@ export function MeasuredProgress({
     )
   }
 
-  const percent = Math.min(100, (transferred / total) * 100)
+  const alreadyThere = Math.max(0, Math.min(saved ?? 0, total))
+  const done = Math.min(total, transferred + alreadyThere)
+  const percent = (done / total) * 100
+  const savedPercent = (alreadyThere / total) * 100
+
   return (
     <div>
       <Progress
         percent={Number(percent.toFixed(1))}
+        // The green portion is what was already there. Ant Design draws it
+        // from the left inside the same track, which is the right shape: it is
+        // part of the same total, not a second bar.
+        success={alreadyThere > 0 ? { percent: Number(savedPercent.toFixed(1)) } : undefined}
         size="small"
         strokeColor={percent >= 100 ? semantic.success : undefined}
       />
       {showText && (
         <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-          {formatBytes(transferred)} of {formatBytes(total)}
+          {formatBytes(done)} of {formatBytes(total)}
+          {alreadyThere > 0 && ` · ${formatBytes(alreadyThere)} already there`}
           {speedBytesPerSecond !== undefined && ` · ${formatSpeed(speedBytesPerSecond)}`}
         </Typography.Text>
       )}
@@ -98,10 +118,12 @@ export function MeasuredProgress({
  * numerator is a guess wearing a number's clothes).
  */
 export function DownloadProgress({
-  transferred, total, strategy = 'copy', elapsedSeconds, live,
+  transferred, total, saved, strategy = 'copy', elapsedSeconds, live,
 }: {
   transferred: number | undefined
   total: number | undefined
+  /** Bytes the destination already had. Done work — see MeasuredProgress. */
+  saved?: number | undefined
   strategy?: Strategy
   /** Seconds spent moving bytes so far. */
   elapsedSeconds: number | undefined
@@ -111,8 +133,11 @@ export function DownloadProgress({
   const speed = elapsedSeconds && transferred && elapsedSeconds > 0
     ? transferred / elapsedSeconds
     : undefined
+  // What is LEFT, which is neither moved nor already there. Counting the saved
+  // bytes as remaining is how a download with nothing left to do came to
+  // report an ETA of forever.
   const remaining = total !== undefined && transferred !== undefined
-    ? Math.max(0, total - transferred)
+    ? Math.max(0, total - transferred - (saved ?? 0))
     : undefined
   const eta = live && speed && remaining !== undefined && remaining > 0
     ? remaining / speed
@@ -123,13 +148,23 @@ export function DownloadProgress({
       <MeasuredProgress
         transferred={transferred}
         total={total}
+        saved={saved}
         strategy={strategy}
         showText={false}
       />
       <Typography.Text type="secondary" style={{ fontSize: 11 }}>
         {formatDuration(elapsedSeconds) ?? 'not started'} elapsed
         {eta !== undefined ? ` · ~${formatDuration(eta)} left` : ''}
-        {live && eta === undefined && strategy === 'copy' ? ' · estimating…' : ''}
+        {/*
+          "Estimating" only while there is something left to estimate. A
+          download whose content the destination already holds has nothing
+          remaining, and saying it is estimating an arrival is describing a
+          wait that is over.
+        */}
+        {live && eta === undefined && remaining === 0 ? ' · nothing left to move' : ''}
+        {live && eta === undefined && remaining !== 0 && strategy === 'copy'
+          ? ' · estimating…'
+          : ''}
       </Typography.Text>
     </div>
   )

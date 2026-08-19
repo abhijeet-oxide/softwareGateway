@@ -801,3 +801,120 @@ func TestProgressForAnUnknownComparisonIsNotFound(t *testing.T) {
 		t.Fatalf("status = %d, want 404", status)
 	}
 }
+
+// The complaint: "I clicked analyze, came back, and it still offered to
+// analyze — then said it was already being analysed."
+//
+// Both halves came from one decision: the walk ran INSIDE the request. A reader
+// who navigated away cancelled it, and the claim was released on a context that
+// had just been cancelled — so the release stayed marked as being analysed by a
+// request that no longer existed, while nothing was walking it.
+//
+// So the interface asks for it without waiting. The claim is taken before the
+// response, which is what makes the state visible the moment the reader looks
+// anywhere else.
+func TestAnalysingWithoutWaitingClaimsTheReleaseBeforeAnswering(t *testing.T) {
+	walking := make(chan struct{})
+	release := make(chan struct{})
+
+	fake := &fakeDiscoverer{running: true}
+	h := newAPIHarnessWith(t, func(d *Deps) {
+		d.Discovery = &blockingDiscoverer{
+			fakeDiscoverer: fake, arrived: walking, release: release,
+		}
+	})
+	id := h.seedPackage("orb_25.7.2131", "sha256:"+strings.Repeat("a", 64))
+
+	var resp v1.InspectPackageResponse
+	status := h.post("/api/v1/products/vendor-a/packages/orb_25.7.2131:inspect",
+		`{"wait":false}`, &resp)
+
+	if status != http.StatusOK {
+		t.Fatalf("status = %d, want 200", status)
+	}
+	if !resp.Started {
+		t.Error("the response does not say the walk was handed off, so a caller " +
+			"cannot tell it from one that found nothing")
+	}
+
+	// The walk is still going, and the release says so — which is the whole
+	// point: a page opened anywhere else shows `Analyzing`.
+	<-walking
+	pkg, err := h.packages.GetPackageByID(t.Context(), id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if pkg.AnalysisState != store.AnalysisRunning {
+		t.Errorf("analysisState = %q while the walk is running, want %q",
+			pkg.AnalysisState, store.AnalysisRunning)
+	}
+	if resp.Package.AnalysisState != store.AnalysisRunning {
+		t.Errorf("the response says analysisState %q, want %q — a caller that "+
+			"renders what it was handed would show the wrong thing until it polls",
+			resp.Package.AnalysisState, store.AnalysisRunning)
+	}
+
+	// And the claim is released when the walk ends, on a context the request
+	// does not own. It is the request ending that used to strand it.
+	close(release)
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		pkg, err := h.packages.GetPackageByID(t.Context(), id)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if pkg.AnalysisState == "" {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("the claim was never released: analysisState = %q", pkg.AnalysisState)
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+}
+
+// A second request for a release already being walked is not a failure. The
+// caller asked for it to be analysed and it is being analysed; answering 409
+// made the interface report an error for the thing the reader had just asked
+// for and was already getting.
+func TestAskingToAnalyseSomethingAlreadyBeingAnalysedIsNotAnError(t *testing.T) {
+	h := newAPIHarnessWith(t, func(d *Deps) {
+		d.Discovery = &fakeDiscoverer{running: true}
+	})
+	id := h.seedPackage("orb_25.7.2131", "sha256:"+strings.Repeat("b", 64))
+
+	if _, err := h.packages.ClaimAnalysis(t.Context(), id); err != nil {
+		t.Fatal(err)
+	}
+
+	var resp v1.InspectPackageResponse
+	status := h.post("/api/v1/products/vendor-a/packages/orb_25.7.2131:inspect",
+		`{"wait":false}`, &resp)
+
+	if status != http.StatusOK {
+		t.Fatalf("status = %d, want 200: being already under way is an answer, not a failure", status)
+	}
+	if !resp.Started || resp.Package.AnalysisState != store.AnalysisRunning {
+		t.Errorf("the response does not report the walk already under way: %+v", resp)
+	}
+}
+
+// blockingDiscoverer holds a walk open so a test can look at the world while it
+// is happening.
+type blockingDiscoverer struct {
+	*fakeDiscoverer
+	arrived chan struct{}
+	release chan struct{}
+}
+
+func (b *blockingDiscoverer) InspectPackage(
+	ctx context.Context, p *store.Packages, pkg store.PackageRow, product string,
+) (discovery.InspectResult, error) {
+	close(b.arrived)
+	select {
+	case <-b.release:
+	case <-ctx.Done():
+		return discovery.InspectResult{}, ctx.Err()
+	}
+	return b.fakeDiscoverer.InspectPackage(ctx, p, pkg, product)
+}

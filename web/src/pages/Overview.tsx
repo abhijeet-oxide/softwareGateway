@@ -5,7 +5,7 @@ import { Link, useNavigate } from 'react-router-dom'
 import { useProducts, usePackages, useReports, useTransfers } from '../api/queries'
 import {
   deriveLocations, deriveStatus, downloadSeconds, isRecent, publishedAt, releaseHref, transferIndex,
-  verification, version, withTransfers, type SoftwareStatus,
+  failureReason, verification, version, withTransfers, type SoftwareStatus,
 } from '../domain/derive'
 import { formatBytes, formatDuration, formatSpeed } from '../domain/format'
 import { Stat, Value } from '../components/value'
@@ -215,7 +215,9 @@ export default function Overview() {
                   {
                     title: 'Status',
                     width: 200,
-                    render: (_, r) => <StatusBadge status={r.status} />,
+                    render: (_, r) => (
+                      <StatusBadge status={r.status} reason={failureReason(r.pkg)} />
+                    ),
                   },
                   {
                     title: 'Location',

@@ -299,10 +299,10 @@ function CacheNote({ base, against }: { base?: Package; against?: Package }) {
   const analysed = picked.filter((p) => p.expandedAt).length
   const note =
     analysed === picked.length
-      ? 'Both sides were analysed earlier, so their manifests come from the cache'
+      ? 'Manifests found in cache — comparing the releases'
       : analysed === 0
-        ? 'Neither side has been analysed, so the manifests are being read now and recorded for next time'
-        : 'One side was analysed earlier; the other is being read now and recorded for next time'
+        ? 'No cache for either release — reading their manifests now, and keeping them'
+        : 'One release is cached; reading the other now, and keeping it'
 
   return (
     <Typography.Text type="secondary" style={{ fontSize: 12 }}>
@@ -336,7 +336,7 @@ type Mode = 'versions' | 'locations'
 function ComparisonReport({ report }: { report: CompareResponse }) {
   const [search, setSearch] = useState('')
   const [impact, setImpact] = useState<'all' | CompareVerdict>('all')
-  const [kind, setKind] = useState<'all' | 'image' | 'chart' | 'file'>('all')
+  const [kind, setKind] = useState<'all' | 'image' | 'chart'>('all')
 
   /*
    * THE RELEASE'S CONTENT, not its scaffolding.
@@ -395,7 +395,14 @@ function ComparisonReport({ report }: { report: CompareResponse }) {
               onChange={(v) => setKind(v as typeof kind)}
               options={[
                 { value: 'all', label: 'Everything' },
-                ...(['image', 'chart', 'file'] as const).map((k) => {
+                /*
+                  IMAGES AND CHARTS ONLY. Filtering the component table to
+                  `file` showed two components and their layer digests, which is
+                  the OCI view of a thing whose whole point is the files inside
+                  it — and the Files card below answers that question properly.
+                  Two answers to one question, and the worse one was first.
+                */
+                ...(['image', 'chart'] as const).map((k) => {
                   const name = kindName(k)
                   const icon = ARTIFACT_ICONS[name as keyof typeof ARTIFACT_ICONS]
                   return {
@@ -539,7 +546,13 @@ function ComparisonReport({ report }: { report: CompareResponse }) {
  */
 function FileDifferences({ rows }: { rows: CompareRow[] }) {
   const [search, setSearch] = useState('')
-  const [impact, setImpact] = useState<'all' | CompareVerdict>('all')
+  /*
+   * THE DELTA FIRST. A release carries hundreds of files and a comparison is
+   * asked which of them moved; opening on all of them buries the four that did
+   * under the four hundred that did not. Unchanged is one click away and says
+   * how many there are.
+   */
+  const [impact, setImpact] = useState<'all' | CompareVerdict | 'delta'>('delta')
 
   const files = useMemo(() => {
     const out: FileEntry[] = []
@@ -558,7 +571,10 @@ function FileDifferences({ rows }: { rows: CompareRow[] }) {
   }, [files])
 
   const shown = useMemo(() => {
-    const byImpact = impact === 'all' ? files : files.filter((f) => f.verdict === impact)
+    const byImpact =
+      impact === 'all' ? files
+        : impact === 'delta' ? files.filter((f) => f.verdict !== 'same')
+          : files.filter((f) => f.verdict === impact)
     if (!search.trim()) return byImpact
     return byImpact.filter((f) => matches(search, f.path, f.component))
   }, [files, impact, search])
@@ -588,11 +604,15 @@ function FileDifferences({ rows }: { rows: CompareRow[] }) {
           value={impact}
           onChange={(v) => setImpact(v as typeof impact)}
           options={[
-            { value: 'all', label: 'All' },
+            {
+              value: 'delta',
+              label: `What changed ${(counts['only-b'] ?? 0) + (counts['only-a'] ?? 0) + (counts.changed ?? 0)}`,
+            },
             { value: 'only-b', label: `Added ${counts['only-b'] ?? 0}` },
             { value: 'only-a', label: `Removed ${counts['only-a'] ?? 0}` },
             { value: 'changed', label: `Changed ${counts.changed ?? 0}` },
             { value: 'same', label: `Unchanged ${counts.same ?? 0}` },
+            { value: 'all', label: 'All' },
           ]}
         />
       }

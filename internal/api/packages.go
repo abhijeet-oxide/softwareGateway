@@ -1210,10 +1210,20 @@ func (s *Server) handleInspectPackage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	var req v1.InspectPackageRequest
+	if r.ContentLength > 0 && !decodeJSON(w, r, &req) {
+		return
+	}
+	wait := req.Wait == nil || *req.Wait
+
 	// THE SAME CLAIM THE BACKGROUND ANALYSER TAKES. A release the analyser is
 	// already walking must not be walked twice — that is two conversations with
-	// the vendor's registry for one answer — and losing the race is a real
-	// answer to give: it is being analysed, refresh and it will be there.
+	// the vendor's registry for one answer.
+	//
+	// Losing the race is not an error here. The caller asked for the release to
+	// be analysed and it is being analysed; answering 409 made the interface
+	// report a failure for the thing the reader had just asked for and was
+	// already getting.
 	if s.deps.Packages != nil {
 		claimed, err := s.deps.Packages.ClaimAnalysis(r.Context(), pkg.ID)
 		if err != nil {
@@ -1221,16 +1231,50 @@ func (s *Server) handleInspectPackage(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		if !claimed {
-			Error(w, r, v1.CodeAlreadyExists,
-				"this release is already being analysed. It will show its contents "+
-					"when the walk finishes.")
+			fresh, err := s.deps.Packages.GetPackageByID(r.Context(), pkg.ID)
+			if err != nil {
+				s.internal(w, r, "read the package", err)
+				return
+			}
+			WriteJSON(w, r, http.StatusOK, v1.InspectPackageResponse{
+				Package: toAPIPackage(productName, fresh),
+				Started: true,
+			})
 			return
 		}
 	}
 
+	if !wait && s.deps.Packages != nil {
+		// HANDED OFF, not performed. The walk outlives this request by design:
+		// a reader who starts one and navigates away must not cancel it, and a
+		// request held open for minutes is cancelled by every idle timeout
+		// between here and the browser.
+		//
+		// WithoutCancel, so the request ending does not end the walk, with its
+		// own deadline so a wedged registry cannot hold the claim until the
+		// staleness sweep notices.
+		go s.analyseInBackground(context.WithoutCancel(r.Context()), productName, pkg)
+
+		fresh, err := s.deps.Packages.GetPackageByID(r.Context(), pkg.ID)
+		if err != nil {
+			s.internal(w, r, "read the package", err)
+			return
+		}
+		WriteJSON(w, r, http.StatusOK, v1.InspectPackageResponse{
+			Package: toAPIPackage(productName, fresh),
+			Started: true,
+		})
+		return
+	}
+
 	res, err := s.deps.Discovery.InspectPackage(r.Context(), s.deps.Packages, pkg, productName)
 	if s.deps.Packages != nil {
-		if finishErr := s.deps.Packages.FinishAnalysis(r.Context(), pkg.ID, err); finishErr != nil {
+		// context.WithoutCancel, because the common way this call fails is the
+		// caller going away — and releasing the claim is exactly what must
+		// still happen then. Recording the end of a walk on a cancelled context
+		// would leave the release marked as being analysed by nobody.
+		if finishErr := s.deps.Packages.FinishAnalysis(
+			context.WithoutCancel(r.Context()), pkg.ID, err); finishErr != nil {
 			s.deps.Logger.WarnContext(r.Context(), "could not record the end of an analysis",
 				"package", pkg.Tag, "error", finishErr)
 		}
@@ -1257,6 +1301,34 @@ func (s *Server) handleInspectPackage(w http.ResponseWriter, r *http.Request) {
 		SignatureResolved: res.SignatureResolved,
 	})
 }
+
+// analyseInBackground performs a handed-off walk and always releases the claim.
+//
+// The deadline is the point. A claim released only by the staleness sweep is a
+// release that reads "Analyzing" for half an hour after the registry stopped
+// answering, and the sweep exists for processes that DIED — not as the ordinary
+// way a walk ends.
+func (s *Server) analyseInBackground(ctx context.Context, productName string, pkg store.PackageRow) {
+	ctx, cancel := context.WithTimeout(ctx, backgroundAnalysisDeadline)
+	defer cancel()
+
+	_, err := s.deps.Discovery.InspectPackage(ctx, s.deps.Packages, pkg, productName)
+	if err != nil {
+		s.deps.Logger.WarnContext(ctx, "a requested analysis did not finish",
+			"product", productName, "package", pkg.Tag, "error", err)
+	}
+	if finishErr := s.deps.Packages.FinishAnalysis(ctx, pkg.ID, err); finishErr != nil {
+		s.deps.Logger.ErrorContext(ctx, "could not record the end of an analysis",
+			"package", pkg.Tag, "error", finishErr)
+	}
+}
+
+// backgroundAnalysisDeadline bounds a handed-off walk.
+//
+// Generous, because the work is real — a release of two hundred and sixty
+// artifacts against a slow vendor registry is minutes. Bounded, because the
+// claim is held for the whole of it.
+const backgroundAnalysisDeadline = 20 * time.Minute
 
 // POST /api/v1/products:discover.
 //

@@ -1,16 +1,20 @@
+import { useState } from 'react'
 import type { ReactNode } from 'react'
 import {
-  Alert, Button, Card, Empty, Input, Popover, Space, Tag, Timeline, Tooltip, Typography,
+  Alert, Button, Card, Empty, Input, Popover, Skeleton, Space, Tag, Timeline, Tooltip,
+  Typography,
 } from 'antd'
 import {
   ArrowLeftOutlined, CheckCircleOutlined, ClockCircleOutlined, LoadingOutlined, RocketOutlined,
   SearchOutlined, ShopOutlined,
 } from '@ant-design/icons'
 import { Link } from 'react-router-dom'
-import type { ContentGroup, SkipBreakdown } from '../api/types'
+import type { ContentGroup, PresentComponent } from '../api/types'
 import { kindName, type LifecycleStep } from '../domain/derive'
 import { bytes, formatAbsolute, formatBytes, formatCount } from '../domain/format'
 import { ARTIFACT_ICONS, Icon } from './icons'
+import { usePresentComponents } from '../api/queries'
+import { mono } from '../theme'
 import { semantic } from '../theme'
 import { NA } from './value'
 
@@ -378,7 +382,7 @@ export function SearchBar({
  * a fact about a release, not about the estate.
  */
 export function SavedPanel({
-  savedBytes, totalBytes, artifactsSkipped, estimated, content, skips,
+  savedBytes, totalBytes, artifactsSkipped, estimated, content, transferId,
 }: {
   savedBytes: string
   totalBytes?: string
@@ -387,14 +391,14 @@ export function SavedPanel({
   estimated?: boolean
   /** What the transfer is made of, which is what the saving is broken down by. */
   content?: ContentGroup[]
-  /** On whose word each skip rests. */
-  skips?: SkipBreakdown[]
+  /** Whose components to name. Absent before a download exists. */
+  transferId?: string
 }) {
   return (
     <Card size="small" style={{ background: '#F3F8F4', borderColor: '#CFE4D6' }}>
       <Space direction="vertical" size={4} style={{ width: '100%' }}>
         <Space size={8}>
-          <SavedBreakdown content={content} skips={skips}>
+          <SavedBreakdown transferId={transferId} content={content}>
             <Typography.Text
               strong
               style={{ color: semantic.success, borderBottom: '1px dotted #9BC7A9' }}
@@ -419,111 +423,65 @@ export function SavedPanel({
 }
 
 /**
- * WHAT was saved — a hover, because the number alone is not checkable.
+ * WHAT was already there — by name, because the number alone is not checkable.
  *
  * # The question
  *
- * "Saved 30.1 GB" is the system's best claim about itself and it is opaque: an
- * operator who reads it wants to know saved on WHAT. Thirty gigabytes of image
- * layers is ordinary — a product line shares base layers, and the second
- * release of it is nearly free. Thirty gigabytes of configuration bundles would
- * be surprising and worth looking into. Same number, opposite meanings.
+ * "Saved 56.5 GB" is the system's best claim about itself and an operator
+ * cannot check it. What they ask next is which things were already at the
+ * destination — and that is answerable exactly, because every skipped job is
+ * attached to the artifact it belongs to.
  *
- * # Two answers, because "saved" has two halves
+ * So this names them: `cfx-5000-product/bgcf:2511.174.0`, what it weighs, what
+ * kind of thing it is. Grouped by kind because that is how somebody reads it —
+ * a hundred and fifty images already there is one fact, not a hundred and
+ * fifty — and the largest first, because they are the explanation.
  *
- * WHAT it was: the kinds, from the same breakdown the Contents table is built
- * from, so the two cannot disagree. The parts add up to the whole — they are
- * summed per job, and a blob is one job however many components reference it.
+ * # Why it is fetched only on hover
  *
- * ON WHOSE WORD: a mount is something the registry DID and is proof; a
- * placement record or a HEAD is something it or we SAID, and against a
- * destination that answers about its whole storage rather than the repository
- * asked about, it is worth nothing. Both are savings; only one is evidence.
+ * The transfer itself is polled every couple of seconds while a download runs.
+ * This is hundreds of rows that change only when a job settles, so it is a
+ * separate request made when somebody actually asks.
  */
 export function SavedBreakdown({
-  content, skips, children,
+  transferId, content, children,
 }: {
+  transferId?: string
+  /** The per-kind totals, which are on the transfer already and need no fetch. */
   content?: ContentGroup[]
-  skips?: SkipBreakdown[]
   children: ReactNode
 }) {
+  const [open, setOpen] = useState(false)
+  const present = usePresentComponents(transferId, open)
+
   const kinds = (content ?? [])
     .map((g) => ({ group: g, saved: bytes(g.savedBytes) ?? 0 }))
     .filter((k) => k.saved > 0)
     .sort((a, b) => b.saved - a.saved)
 
-  const reasons = (skips ?? []).filter((s) => s.jobs > 0)
-
-  // Nothing to say is said by not offering a hover, rather than by an empty
-  // one: a popover that opens on nothing reads as a page that is broken.
-  if (kinds.length === 0 && reasons.length === 0) return <>{children}</>
+  if (kinds.length === 0 && !transferId) return <>{children}</>
 
   return (
     <Popover
       placement="bottomLeft"
-      title="What was already there"
+      open={open}
+      onOpenChange={setOpen}
+      title="Already at the destination"
+      styles={{ body: { maxHeight: 420, overflow: 'auto' } }}
       content={
-        <Space direction="vertical" size={10} style={{ minWidth: 320, maxWidth: 440 }}>
+        <Space direction="vertical" size={12} style={{ minWidth: 380, maxWidth: 520 }}>
           {kinds.length > 0 && (
             <Space direction="vertical" size={4} style={{ width: '100%' }}>
-              {kinds.map(({ group, saved }) => {
-                const name = kindName(group.kind)
-                const icon = ARTIFACT_ICONS[name as keyof typeof ARTIFACT_ICONS]
-                return (
-                  <div
-                    key={group.kind}
-                    style={{ display: 'flex', alignItems: 'center', gap: 8 }}
-                  >
-                    {icon && <Icon as={icon} size={14} title={name} />}
-                    <Typography.Text style={{ fontSize: 12, flex: 1 }}>{name}</Typography.Text>
-                    {/*
-                      COMPONENTS on the left, BYTES on the right, and they do
-                      not have to agree. A kind can save bytes with no component
-                      wholly present — a release that changed five images still
-                      shares most of their layers with the release before it —
-                      so the count is stated only when there is one to state.
-                    */}
-                    <Typography.Text type="secondary" style={{ fontSize: 11 }}>
-                      {group.present > 0
-                        ? `${group.present} of ${group.total} already there`
-                        : 'shared layers'}
-                    </Typography.Text>
-                    <Typography.Text strong style={{ fontSize: 12, color: semantic.success }}>
-                      {formatBytes(saved)}
-                    </Typography.Text>
-                  </div>
-                )
-              })}
+              {kinds.map(({ group, saved }) => (
+                <KindLine key={group.kind} group={group} saved={saved} />
+              ))}
             </Space>
           )}
 
-          {reasons.length > 0 && (
-            <Space direction="vertical" size={4} style={{ width: '100%' }}>
-              <Typography.Text type="secondary" style={{ fontSize: 11 }}>
-                How we know it was there
-              </Typography.Text>
-              {reasons.map((skip) => (
-                <div key={skip.reason} style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                  <Typography.Text style={{ fontSize: 12, flex: 1 }}>
-                    {SKIP_REASONS[skip.reason]?.label ?? skip.reason}
-                  </Typography.Text>
-                  <Tooltip title={SKIP_REASONS[skip.reason]?.detail}>
-                    <Tag
-                      color={skip.trusted ? 'green' : 'default'}
-                      style={{ marginInlineEnd: 0, fontSize: 10 }}
-                    >
-                      {skip.trusted ? 'proven' : 'claimed'}
-                    </Tag>
-                  </Tooltip>
-                  <Typography.Text type="secondary" style={{ fontSize: 11 }}>
-                    {formatCount(skip.jobs)} jobs
-                  </Typography.Text>
-                  <Typography.Text style={{ fontSize: 12 }}>
-                    {formatBytes(bytes(skip.bytes))}
-                  </Typography.Text>
-                </div>
-              ))}
-            </Space>
+          {present.isLoading ? (
+            <Skeleton active paragraph={{ rows: 3 }} title={false} />
+          ) : (
+            <PresentList components={present.data?.components ?? []} />
           )}
         </Space>
       }
@@ -533,34 +491,79 @@ export function SavedBreakdown({
   )
 }
 
-/**
- * Why a job moved nothing, in the words a reader uses, and what that rests on.
- *
- * `detail` is the part that matters: two of these are claims and one is an
- * action, and a page presenting all three as "already present" would report a
- * cache hit with the same confidence as a registry's own mount.
- */
-const SKIP_REASONS: Record<string, { label: string; detail: string }> = {
-  mounted: {
-    label: 'Mounted by the registry',
-    detail:
-      'The destination registry moved the content into place itself, from another '
-      + 'repository it already held it in. That is something it DID, so it is proof: '
-      + 'the content is there.',
-  },
-  exists_at_target: {
-    label: 'The destination said it had it',
-    detail:
-      'We asked the destination whether it held the content and it said yes, so '
-      + 'nothing was sent. That is its claim rather than an action — a registry that '
-      + 'answers about its whole storage rather than the repository asked about would '
-      + 'answer yes either way.',
-  },
-  placement_hit: {
-    label: 'We had recorded it as there',
-    detail:
-      'Our own record of what this destination holds said the content was already '
-      + 'there, so nothing was sent and nothing was asked. A cache, and only as good '
-      + 'as the last thing that wrote it.',
-  },
+/** One kind's line: what it is, how much of it was there, and what that saved. */
+function KindLine({ group, saved }: { group: ContentGroup; saved: number }) {
+  const name = kindName(group.kind)
+  const icon = ARTIFACT_ICONS[name as keyof typeof ARTIFACT_ICONS]
+
+  return (
+    <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+      {icon && <Icon as={icon} size={14} title={name} />}
+      <Typography.Text style={{ fontSize: 12, flex: 1 }}>{name}</Typography.Text>
+      {/*
+        COMPONENTS on the left, BYTES on the right, and they do not have to
+        agree. A kind can save bytes with no component wholly present — a
+        release that changed five images still shares most of their layers with
+        the release before it.
+      */}
+      <Typography.Text type="secondary" style={{ fontSize: 11 }}>
+        {group.present > 0
+          ? `${group.present} of ${group.total} already there`
+          : 'shared layers'}
+      </Typography.Text>
+      <Typography.Text strong style={{ fontSize: 12, color: semantic.success }}>
+        {formatBytes(saved)}
+      </Typography.Text>
+    </div>
+  )
+}
+
+/** The components themselves, named, biggest first. */
+function PresentList({ components }: { components: PresentComponent[] }) {
+  if (components.length === 0) {
+    return (
+      <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+        Nothing has been found at the destination yet. What is already there is
+        discovered as the download plans and runs.
+      </Typography.Text>
+    )
+  }
+
+  // The whole list is not the point — a release is two hundred and sixty
+  // components and a hover is not a table. The heaviest are the explanation,
+  // and the rest are counted rather than hidden.
+  const shown = components.slice(0, 12)
+  const rest = components.slice(12)
+  const restBytes = rest.reduce((n, c) => n + (bytes(c.bytes) ?? 0), 0)
+
+  return (
+    <Space direction="vertical" size={2} style={{ width: '100%' }}>
+      <Typography.Text type="secondary" style={{ fontSize: 11 }}>
+        The destination already holds these
+      </Typography.Text>
+      {shown.map((c) => (
+        <div key={c.digest} style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+          <Typography.Text
+            style={{ fontSize: 12, flex: 1, fontFamily: c.name ? undefined : mono }}
+            ellipsis={{ tooltip: c.name || c.digest }}
+          >
+            {c.name || c.digest.slice(0, 19)}
+          </Typography.Text>
+          {c.partial && (
+            <Tooltip title="Part of this component was already there; the rest is still being moved.">
+              <Tag style={{ marginInlineEnd: 0, fontSize: 10 }}>partly</Tag>
+            </Tooltip>
+          )}
+          <Typography.Text type="secondary" style={{ fontSize: 11 }}>
+            {formatBytes(bytes(c.bytes))}
+          </Typography.Text>
+        </div>
+      ))}
+      {rest.length > 0 && (
+        <Typography.Text type="secondary" style={{ fontSize: 11 }}>
+          and {formatCount(rest.length)} more, {formatBytes(restBytes)}
+        </Typography.Text>
+      )}
+    </Space>
+  )
 }

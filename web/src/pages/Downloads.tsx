@@ -179,9 +179,15 @@ export default function Downloads() {
                     width: 220,
                     render: (_, t) => (
                       <DownloadProgress
-                        transferred={bytes(t.progress?.bytesTransferred)}
-                        total={bytes(t.progress?.plannedBytes)}
-                        saved={bytes(t.progress?.savedBytes)}
+                        // Distinct content, the same axis the download page
+                        // draws: bytes weighed once however many repositories
+                        // they reach, because the second copy is a mount.
+                        transferred={bytes(t.progress?.contentMovedBytes)
+                          ?? bytes(t.progress?.bytesTransferred)}
+                        total={bytes(t.progress?.contentBytes)
+                          ?? bytes(t.progress?.plannedBytes)}
+                        saved={bytes(t.progress?.contentPresentBytes)
+                          ?? bytes(t.progress?.savedBytes)}
                         strategy={t.strategy ?? 'copy'}
                         elapsedSeconds={elapsedSeconds(t.startedAt)}
                         live={isLive(t.state)}

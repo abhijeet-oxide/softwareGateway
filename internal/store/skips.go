@@ -208,3 +208,83 @@ func (p *Packages) PresentComponents(ctx context.Context, transferID string) ([]
 	}
 	return out, rows.Err()
 }
+
+// ContentBytes is a transfer's byte account over DISTINCT content.
+//
+// # Why the per-repository figures are the wrong axis for a bar
+//
+// A component published under its own name as well as inside the bundle needs
+// its layers in two repositories, so the planner counts them twice and is right
+// to: two repositories is two pieces of bookkeeping. But the second copy costs
+// NO BYTES — the registry mounts it, or the destination already had it — so a
+// byte total counted per (repository, digest) says a 29.8 GB release is 63.7 GB
+// of traffic, which never happens.
+//
+// Bytes are therefore counted per DIGEST. Each distinct piece of content is
+// weighed once, and is either moved or found already there. That is the axis a
+// person means by "how big is this download", and the one that reconciles with
+// the release's own size.
+type ContentBytes struct {
+	// Total is what the release's distinct content weighs.
+	Total int64
+	// Moved is what was actually streamed, and Present what the destination
+	// already had by any route. Both over distinct digests, so Moved + Present
+	// converges on Total and never exceeds it.
+	Moved   int64
+	Present int64
+}
+
+// TransferContentBytes weighs a transfer's content once per digest.
+//
+// The population is the RELEASE — every manifest and every blob it contains,
+// each counted once — rather than the transfer's jobs, because a job exists per
+// destination repository and the same content has several. What varies per
+// digest is only whether it moved.
+func (p *Packages) TransferContentBytes(ctx context.Context, transferID string) (ContentBytes, error) {
+	var out ContentBytes
+	err := p.db.QueryRowContext(ctx, p.dialect.Rewrite(`
+		WITH tr AS (
+			SELECT package_id, target_repo_id FROM transfers WHERE id = ?
+		),
+		owned AS (
+			-- The blobs, once each however many components reference them.
+			SELECT DISTINCT ab.digest AS digest, COALESCE(b.size_bytes, 0) AS size_bytes
+			  FROM package_artifacts pa
+			  JOIN artifact_blobs ab ON ab.artifact_id = pa.id
+			  LEFT JOIN blobs b ON b.digest = ab.digest
+			 WHERE pa.package_id = (SELECT package_id FROM tr)
+			UNION
+			-- And the manifests, which are content too and are what the
+			-- transfer is still pushing once every byte has arrived.
+			SELECT DISTINCT pa.digest, COALESCE(pa.size_bytes, 0)
+			  FROM package_artifacts pa
+			 WHERE pa.package_id = (SELECT package_id FROM tr)
+		),
+		state AS (
+			SELECT o.size_bytes AS size_bytes,
+			       COALESCE((SELECT MAX(j.bytes_transferred) FROM jobs j
+			                  WHERE j.transfer_id = ? AND j.digest = o.digest), 0) AS moved,
+			       CASE WHEN EXISTS (
+			              SELECT 1 FROM jobs j
+			               WHERE j.transfer_id = ? AND j.digest = o.digest
+			                 AND j.state = 'skipped')
+			            OR EXISTS (
+			              SELECT 1 FROM blob_placements bp
+			               WHERE bp.repository_id = (SELECT target_repo_id FROM tr)
+			                 AND bp.digest = o.digest)
+			       THEN 1 ELSE 0 END AS present
+			  FROM owned o
+		)
+		SELECT COALESCE(SUM(size_bytes), 0),
+		       -- Streamed wins over present: content this transfer actually
+		       -- moved is moved, whatever a placement record says about it now.
+		       COALESCE(SUM(CASE WHEN moved > 0 THEN size_bytes ELSE 0 END), 0),
+		       COALESCE(SUM(CASE WHEN moved = 0 AND present = 1
+		                         THEN size_bytes ELSE 0 END), 0)
+		  FROM state`),
+		transferID, transferID, transferID).Scan(&out.Total, &out.Moved, &out.Present)
+	if err != nil {
+		return ContentBytes{}, fmt.Errorf("weigh the content of transfer %s: %w", transferID, err)
+	}
+	return out, nil
+}

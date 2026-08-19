@@ -1662,6 +1662,23 @@ type TransferProgress struct {
 	// SkippedBytes was queued and then not sent: the worker found the content
 	// at the destination, or the registry relocated it internally.
 	SkippedBytes Int64String `json:"skippedBytes,omitempty"`
+	// ContentMovedBytes and ContentPresentBytes are the byte account over
+	// DISTINCT content — each piece weighed once, however many repositories it
+	// has to reach.
+	//
+	// The figures above are per (repository, digest), which is right for
+	// bookkeeping and wrong for bytes: a component published under its own name
+	// as well as inside the bundle needs its layers in two repositories, and the
+	// second copy is a mount that moves nothing. Counted that way a 29.8 GB
+	// release reported 63.7 GB of traffic, which never happened, and a saving
+	// larger than the release it was saving on.
+	//
+	// These two and ContentBytes are one population: Moved + Present converges
+	// on ContentBytes and never exceeds it. They are what a progress bar and a
+	// saving should be drawn from.
+	ContentMovedBytes   Int64String `json:"contentMovedBytes,omitempty"`
+	ContentPresentBytes Int64String `json:"contentPresentBytes,omitempty"`
+
 	// SavedBytes is the two above added up — everything this transfer did not
 	// have to move.
 	//

@@ -196,6 +196,17 @@ func (s *Server) handleGetTransfer(w http.ResponseWriter, r *http.Request) {
 		dto.Content = toAPIContent(content, s.artifactClassifier(t.ProductName))
 	}
 
+	// The byte account over DISTINCT content, which is what a bar is drawn
+	// from. See store.TransferContentBytes for why the per-repository figures
+	// are the wrong axis for bytes.
+	if c, err := s.deps.Packages.TransferContentBytes(r.Context(), t.ID); err == nil {
+		if c.Total > 0 {
+			dto.Progress.ContentBytes = int64String(c.Total)
+		}
+		dto.Progress.ContentMovedBytes = int64String(c.Moved)
+		dto.Progress.ContentPresentBytes = int64String(c.Present)
+	}
+
 	if skips, err := s.deps.Packages.SkipBreakdown(r.Context(), t.ID); err == nil {
 		for _, k := range skips {
 			dto.Progress.Skips = append(dto.Progress.Skips, v1.SkipBreakdown{

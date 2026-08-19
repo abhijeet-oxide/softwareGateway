@@ -268,24 +268,26 @@ export default function DownloadDetail() {
   }
 
   const progress = t?.progress
-  const transferred = bytes(progress?.bytesTransferred)
-  const saved = bytes(progress?.savedBytes) ?? bytes(progress?.dedupeSkippedBytes)
   const content = bytes(progress?.contentBytes)
 
   /*
-   * THE WHOLE OF THE WORK, which is not `plannedBytes`.
+   * BYTES ARE WEIGHED ONCE, however many repositories the content reaches.
    *
-   * `plannedBytes` is what got a JOB. Content the destination was already
-   * recorded as holding gets no job at all — it is not work that will be done
-   * quickly, it is work that will not happen — and those bytes land in
-   * `dedupeSkippedBytes` instead.
+   * A component published under its own name as well as inside the bundle
+   * needs its layers in two repositories, and the planner counts them twice
+   * because two repositories is two pieces of bookkeeping. The second copy
+   * costs NO BYTES — the registry mounts it — so counting bytes that way said
+   * a 29.8 GB release was 63.7 GB of traffic, which never happens, and made a
+   * saving larger than the release it was saving on.
    *
-   * So `saved` is measured against everything considered while `planned` is
-   * only the remainder, and the page put them side by side: `To push 29.8 GB`
-   * beside `Saved 63.7 GB`, which cannot be true of one population and was
-   * true of two. The denominator is the sum.
+   * So the page draws its bar and its saving from the distinct-content account:
+   * one population, moved plus present converging on the release's own size.
+   * There is no second total to reconcile and none is shown.
    */
-  const work = (bytes(progress?.plannedBytes) ?? 0) + (bytes(progress?.dedupeSkippedBytes) ?? 0)
+  const transferred = bytes(progress?.contentMovedBytes) ?? bytes(progress?.bytesTransferred)
+  const saved = bytes(progress?.contentPresentBytes)
+    ?? bytes(progress?.savedBytes)
+    ?? bytes(progress?.dedupeSkippedBytes)
 
   const elapsed = elapsedSeconds(t?.startedAt, t?.completedAt)
   // A speed we can defend: bytes WE moved over the time WE were moving them.
@@ -490,7 +492,7 @@ export default function DownloadDetail() {
                 */}
                 <ContentProgress
                   transferred={transferred}
-                  total={work}
+                  total={content}
                   saved={saved}
                   strategy={t?.strategy ?? 'copy'}
                   speedBytesPerSecond={running ? speed : undefined}
@@ -567,7 +569,7 @@ export default function DownloadDetail() {
                     // the release weighs. `Saved 56.5 GB of 29.8 GB` was two
                     // true numbers from different populations, side by side,
                     // reading as nonsense.
-                    totalBytes={formatBytes(work) ?? undefined}
+                    totalBytes={formatBytes(content) ?? undefined}
                     transferId={t?.id}
                     content={t?.content}
                   />
@@ -614,25 +616,16 @@ export default function DownloadDetail() {
           <Card title="Download Summary" style={{ width: '100%' }}>
             <Descriptions column={1} size="small">
               {/*
-                TWO SIZES, because there are two and they are not the same
-                number. The release WEIGHS 29.8 GB — the distinct content in
-                it. Landing it takes 63.7 GB of pushes, because a component
-                published under its own name as well as inside the bundle needs
-                its layers in both repositories, and a registry stores blobs per
-                repository.
-                
-                Both were on this page, one labelled "Total size" beside a bar
-                counting against the other, and the difference read as a bug.
+                ONE SIZE. There was a second — everything the transfer had to
+                account for, which counts a component published under two names
+                twice — and it was twice this one and read as a contradiction.
+                It was also not bytes anybody waits for: the second copy is a
+                mount, and a mount moves nothing.
               */}
               <Descriptions.Item label="Release size">
                 <Value reason="The release has not been measured, so its full size is not known.">
                   {formatBytes(content)}
                 </Value>
-              </Descriptions.Item>
-              <Descriptions.Item label="To move">
-                <Tooltip title="Everything this download had to account for, whether it ended up moving or not. More than the release weighs where a component is published under its own name as well as inside the bundle: a registry stores blobs per repository, so those layers must reach both.">
-                  <span><Value>{formatBytes(work)}</Value></span>
-                </Tooltip>
               </Descriptions.Item>
               <Descriptions.Item label="Downloaded">
                 <Value>{formatBytes(transferred)}</Value>

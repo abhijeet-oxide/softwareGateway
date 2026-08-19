@@ -239,3 +239,112 @@ func (h *presentHarness) exec(query string, args ...any) {
 		h.t.Fatal(err)
 	}
 }
+
+// Bytes are weighed ONCE per digest, however many repositories the content has
+// to reach.
+//
+// A component published under its own name as well as inside the bundle needs
+// its layers in two repositories, and the planner counts them twice because two
+// repositories is two pieces of bookkeeping. But the second copy costs no bytes
+// — the registry mounts it — so a byte total counted per (repository, digest)
+// reported a 29.8 GB release as 63.7 GB of traffic, which never happened.
+func TestContentIsWeighedOncePerDigest(t *testing.T) {
+	h := newPresentHarness(t)
+
+	big := h.blob("aa", 20_000_000_000)
+	small := h.blob("bb", 1_000_000_000)
+	h.artifact("cfx-5000-product/bgcf:25.7.673", big, small)
+
+	id := h.transfer()
+
+	// The same two blobs, each with a job per destination repository: one in
+	// the bundle's container and one under the component's own name. This is
+	// what doubled the totals.
+	h.jobIn(id, big, "succeeded", "orbs/cfx-5000-k8s", 20_000_000_000)
+	h.jobIn(id, big, "skipped", "cfx-5000-product/bgcf", 0)
+	h.jobIn(id, small, "succeeded", "orbs/cfx-5000-k8s", 1_000_000_000)
+	h.jobIn(id, small, "skipped", "cfx-5000-product/bgcf", 0)
+
+	got, err := h.packages.TransferContentBytes(t.Context(), id)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// 21 GB of blobs plus the component's own manifest, which is content too.
+	if got.Total < 21_000_000_000 || got.Total > 21_000_001_000 {
+		t.Errorf("total = %d, want the distinct content — about 21 GB, not 42", got.Total)
+	}
+	if got.Moved != 21_000_000_000 {
+		t.Errorf("moved = %d, want 21 GB: each blob was streamed once and mounted "+
+			"once, and a mount moves nothing", got.Moved)
+	}
+	// The second copy is not a saving either. It is the same content arriving
+	// at a second path, and counting it as saved is what made "saved" exceed
+	// the size of the release.
+	if got.Present != 0 {
+		t.Errorf("present = %d, want 0: nothing here was at the destination "+
+			"before this transfer put it there", got.Present)
+	}
+	if got.Moved+got.Present > got.Total {
+		t.Errorf("moved + present = %d exceeds the total of %d",
+			got.Moved+got.Present, got.Total)
+	}
+}
+
+// And content the destination already held is weighed once too, whether that
+// was decided at planning time or by a worker.
+func TestContentAlreadyThereIsWeighedOnceAndNotAsMoved(t *testing.T) {
+	h := newPresentHarness(t)
+
+	blob := h.blob("cc", 5_000_000_000)
+	h.artifact("cfx-5000-product/cvlk:1.0.11", blob)
+
+	id := h.transfer()
+	h.placed(blob)
+
+	got, err := h.packages.TransferContentBytes(t.Context(), id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Present != 5_000_000_000 {
+		t.Errorf("present = %d, want the 5 GB the destination already held", got.Present)
+	}
+	if got.Moved != 0 {
+		t.Errorf("moved = %d, want 0: nothing was streamed", got.Moved)
+	}
+}
+
+// jobIn records one job for a digest at a named destination repository.
+//
+// A destination repository is its own catalog row — which is exactly why the
+// same blob can have two jobs in one transfer, and exactly why counting their
+// bytes twice was wrong.
+func (h *presentHarness) jobIn(transferID, digest, state, repository string, moved int64) {
+	h.t.Helper()
+	h.exec(`INSERT INTO jobs (transfer_id, kind, digest, size_bytes, source_repo_id,
+	                          target_repo_id, target_repository, state, bytes_transferred,
+	                          wave, attempts, max_attempts)
+	         VALUES (?, 'blob', ?, 0, ?, ?, ?, ?, ?, 0, 1, 8)`,
+		transferID, digest, h.repoID, h.destination(repository), repository, state, moved)
+}
+
+// destination is the catalog row for one destination repository.
+func (h *presentHarness) destination(repository string) int64 {
+	h.t.Helper()
+
+	tx, err := h.st.DB().BeginTx(h.t.Context(), nil)
+	if err != nil {
+		h.t.Fatal(err)
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	id, err := h.packages.EnsureRepository(h.t.Context(), tx, h.productID, "target",
+		"lab/"+repository, "jfrog.example.com", repository, "generic", "config", "")
+	if err != nil {
+		h.t.Fatal(err)
+	}
+	if err := tx.Commit(); err != nil {
+		h.t.Fatal(err)
+	}
+	return id
+}

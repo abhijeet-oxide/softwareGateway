@@ -296,6 +296,18 @@ func (s *Server) handleListPackageFiles(w http.ResponseWriter, r *http.Request) 
 	WriteJSON(w, r, http.StatusOK, out)
 }
 
+// int64String renders a byte count, and NOTHING for a count nobody has
+// established.
+//
+// Zero and unknown are different facts: an artifact nobody has walked has no
+// size, and rendering that as "0 B" is a measurement somebody would believe.
+func int64String(v int64) v1.Int64String {
+	if v <= 0 {
+		return ""
+	}
+	return v1.Int64String(strconv.FormatInt(v, 10))
+}
+
 // handleListArtifacts serves
 // GET /api/v1/products/{product}/packages/{package}/artifacts.
 func (s *Server) handleListArtifacts(w http.ResponseWriter, r *http.Request) {
@@ -333,13 +345,14 @@ func (s *Server) handleListArtifacts(w http.ResponseWriter, r *http.Request) {
 			// No config media type: a listing must not load every manifest
 			// body, and for a child that was never fetched there is nothing
 			// to load.
-			Kind:        classify(a.MediaType, a.ArtifactType, "", a.Annotations),
-			SizeBytes:   v1.Int64String(strconv.FormatInt(a.SizeBytes, 10)),
-			Platform:    a.Platform,
-			Depth:       a.Depth,
-			Fetched:     a.Fetched,
-			Cached:      a.Cached,
-			Annotations: a.Annotations,
+			Kind:         classify(a.MediaType, a.ArtifactType, "", a.Annotations),
+			SizeBytes:    v1.Int64String(strconv.FormatInt(a.SizeBytes, 10)),
+			ContentBytes: int64String(a.ContentBytes),
+			Platform:     a.Platform,
+			Depth:        a.Depth,
+			Fetched:      a.Fetched,
+			Cached:       a.Cached,
+			Annotations:  a.Annotations,
 		}
 		if a.ParentID != nil {
 			artifact.ParentID = strconv.FormatInt(*a.ParentID, 10)

@@ -459,10 +459,20 @@ type Artifact struct {
 	ArtifactID string `json:"artifactId"`
 	ParentID   string `json:"parentId,omitempty"`
 
-	Digest       string      `json:"digest"`
-	MediaType    string      `json:"mediaType"`
-	ArtifactType string      `json:"artifactType,omitempty"`
-	SizeBytes    Int64String `json:"sizeBytes"`
+	Digest       string `json:"digest"`
+	MediaType    string `json:"mediaType"`
+	ArtifactType string `json:"artifactType,omitempty"`
+	// SizeBytes is what the referencing descriptor says this MANIFEST weighs —
+	// a few kilobytes of JSON. It is the right number for planning a manifest
+	// push and the wrong one for "how big is this image".
+	SizeBytes Int64String `json:"sizeBytes"`
+	// ContentBytes is what the artifact weighs: manifest, config and layers.
+	//
+	// Omitted for an artifact nobody has walked, because until then its blobs
+	// are unknown — which is not the same as its weighing nothing, and Fetched
+	// is what tells the two apart. Summing SizeBytes instead reported a
+	// nine-hundred-megabyte image as two kilobytes.
+	ContentBytes Int64String `json:"contentBytes,omitempty"`
 	// Kind is what this artifact IS, in the words somebody uses: index, image,
 	// chart, file, signature, artifact.
 	//

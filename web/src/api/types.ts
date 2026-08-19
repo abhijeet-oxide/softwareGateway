@@ -196,7 +196,19 @@ export interface Artifact {
    * available until the tree is walked.
    */
   kind?: ArtifactKind
+  /**
+   * What the referencing descriptor says this MANIFEST weighs — a couple of
+   * kilobytes of JSON. Right for planning a manifest push, wrong for "how big
+   * is this image".
+   */
   sizeBytes: Int64String
+  /**
+   * What the artifact weighs: manifest, config and layers.
+   *
+   * Absent for an artifact nobody has walked, because until then its blobs are
+   * unknown — which is not the same as its weighing nothing.
+   */
+  contentBytes?: Int64String
   platform?: string
   depth?: number
   annotations?: Record<string, string>

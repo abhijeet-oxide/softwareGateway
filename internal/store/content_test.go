@@ -301,3 +301,44 @@ func (h *failureHarness) seedTitledLayer(artifactID int64, ordinal int, title st
 	h.exec(`INSERT INTO artifact_blobs (artifact_id, digest, kind, ordinal, title)
 	        VALUES (?, ?, 'layer', ?, ?)`, artifactID, digest, ordinal, nullable(title))
 }
+
+// An artifact's size is what it WEIGHS, not what its descriptor weighs.
+//
+// `size_bytes` is the referencing descriptor's number: a couple of kilobytes of
+// JSON. It is right for planning a manifest push and wrong for every question a
+// person asks — summing it reported a nine-hundred-megabyte image as two
+// kilobytes, and a release of two hundred as half a megabyte.
+func TestListArtifactsReportsContentSizeAndNotTheDescriptors(t *testing.T) {
+	h := newFailureHarness(t)
+
+	image := h.seedArtifact("application/vnd.oci.image.manifest.v1+json", "")
+	h.seedConfig(image, "application/vnd.oci.image.config.v1+json")
+	h.seedTitledLayer(image, 0, "", 900_000_000)
+
+	// A child the index merely listed: no blobs recorded, so nothing is known
+	// about what is under it.
+	listed := h.seedArtifact("application/vnd.oci.image.manifest.v1+json", "")
+
+	rows, err := h.packages.ListArtifacts(t.Context(), h.pkgID)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	byID := map[int64]ArtifactRow{}
+	for _, r := range rows {
+		byID[r.ID] = r
+	}
+
+	if got := byID[image].ContentBytes; got < 900_000_000 {
+		t.Errorf("content bytes = %d, want at least the layer's 900000000 — the "+
+			"descriptor's size is not what an image weighs", got)
+	}
+	if got := byID[image].SizeBytes; got >= 900_000_000 {
+		t.Error("the descriptor's own size was overwritten; both are wanted, for " +
+			"different questions")
+	}
+	if got := byID[listed].ContentBytes; got != 0 {
+		t.Errorf("an artifact nobody walked reported %d bytes, want nothing — "+
+			"unknown and zero are different facts", got)
+	}
+}

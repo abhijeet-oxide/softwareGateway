@@ -943,15 +943,17 @@ type DiscoverySourceState struct {
 	// concurrency actually being used, and when it sits at one, that it is not.
 	TagsInFlight int `json:"tagsInFlight,omitempty"`
 
-	// PhaseDone and PhaseTotal are the fraction to render for the phase this
-	// scan is in.
+	// Progress is the whole scan's progress, from 0 to 1.
 	//
-	// Served rather than derived, because a scan is three phases with three
-	// denominators and no single fraction spans them honestly: repositories are
-	// not tags, and a bar over their sum advances and then dips as listing
-	// discovers more tags. The server says which denominator is live.
-	PhaseDone  int `json:"phaseDone,omitempty"`
-	PhaseTotal int `json:"phaseTotal,omitempty"`
+	// ONE number for the whole scan, not one per phase. The counters above are
+	// in three different units and a caller that drew a bar from whichever one
+	// was live would draw a bar that filled, reset and filled again — which is
+	// what this replaced. The server puts the phases on one scale and keeps the
+	// result monotonic, so the bar only ever moves forward.
+	//
+	// The phase name is served alongside and says what is happening; this says
+	// how much of it is left.
+	Progress float64 `json:"progress,omitempty"`
 
 	// Artifacts is manifests fetched so far. A single tag with a large artifact
 	// tree takes minutes, during which this is the only counter that moves.

@@ -101,30 +101,83 @@ type ScanProgress struct {
 	// is what says the scan is producing something at all.
 	Packages int
 	Errors   int
+
+	// Overall is the whole scan's progress, from 0 to 1 — the number a bar is
+	// drawn from, and the only one that is.
+	//
+	// Held as a field rather than computed by the reader because it is
+	// MONOTONIC: the tracker raises it and never lowers it, so a denominator
+	// that grows late cannot make the bar go backwards. A caller computing it
+	// from the counters would get an honest instantaneous value and a bar that
+	// twitches.
+	Overall float64
 }
 
-// Phase reports which part of the scan a caller should render a bar for.
+// listingShare is how much of the bar the listing phase owns.
 //
-// A scan is three phases with three different denominators, and no single
-// fraction spans them honestly: repositories are not tags, and a bar over their
-// sum advances and then dips as listing discovers more tags. So the phase says
-// which denominator is live, and the caller shows that one.
-func (p ScanProgress) PhaseProgress() (done, total int) {
+// A tenth, and not a third. The three phases are all made of round trips, but
+// not of the same NUMBER of them: listing is one request per repository — tens
+// of them — and resolving is one per tag, which is thousands. Splitting the bar
+// evenly would spend a third of it on a phase that takes a twentieth of the
+// time, which is the same lie as the old per-phase bar, told earlier.
+const listingShare = 0.1
+
+// overall is how far the whole scan has got, from 0 to 1.
+//
+// # One bar, start to finish
+//
+// This used to be a fraction PER PHASE, with the server naming which
+// denominator was live. It was accurate at every instant and useless across
+// them: the bar filled to 100% for repositories, reset, filled again for the
+// versions, reset again. A progress bar that reaches the end and starts over
+// is not reporting progress — it is reporting phases, and the phase already
+// has a name written next to it.
+//
+// So the phases share ONE scale. Listing takes the first tenth, and resolving
+// the remaining nine — measured in round trips, which is the one unit all of
+// them are made of.
+//
+// # Why the denominators can be trusted here
+//
+// The phases are sequential: listing finishes for every repository before the
+// first tag is resolved, so TagsTotal is final by the time it is divided by.
+// The one thing that grows late is TagsToFetch, decided by the checking pass,
+// and it enters the denominator alongside the work it adds. The tracker keeps
+// the reported value monotonic regardless, so a late arrival slows the bar
+// rather than winding it back.
+func (p ScanProgress) overall() float64 {
 	switch p.Phase {
-	case PhaseEnumerating:
-		return 0, 0
 	case PhaseListingTags:
-		return p.RepositoriesDone, p.RepositoriesTotal
-	case PhaseResolving:
-		// The checking pass first, then the reading pass. Two bars in
-		// sequence, each with a real denominator, rather than one that means
-		// two different things at two different times.
-		if p.TagsToFetch > 0 && p.TagsChecked >= p.TagsTotal {
-			return p.TagsFetched, p.TagsToFetch
+		if p.RepositoriesTotal <= 0 {
+			return 0
 		}
-		return p.TagsChecked, p.TagsTotal
+		return listingShare * clamp01(float64(p.RepositoriesDone)/float64(p.RepositoriesTotal))
+	case PhaseResolving:
+		// Listing is behind us whatever its counters say, so its share is
+		// earned in full.
+		total := p.TagsTotal + p.TagsToFetch
+		if total <= 0 {
+			return listingShare
+		}
+		done := float64(p.TagsChecked+p.TagsFetched) / float64(total)
+		return listingShare + (1-listingShare)*clamp01(done)
 	default:
-		return 0, 0
+		// Enumerating has no denominator at all — the catalog has not come
+		// back — and 0% is the honest rendering of "we do not know yet".
+		return 0
+	}
+}
+
+func clamp01(v float64) float64 {
+	// Checking can overshoot its total: a Layout may ask for accessory tags the
+	// filters never admitted, and those are resolved too.
+	switch {
+	case v < 0:
+		return 0
+	case v > 1:
+		return 1
+	default:
+		return v
 	}
 }
 
@@ -166,6 +219,11 @@ func (t *progressTracker) update(f func(*ScanProgress)) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	f(&t.prog)
+	// Forward only. Every counter above rises, but the denominators do not all
+	// arrive at once, and the reader of a bar remembers where it was.
+	if v := t.prog.overall(); v > t.prog.Overall {
+		t.prog.Overall = v
+	}
 }
 
 // snapshot returns a copy, safe to hand to a caller on another goroutine.

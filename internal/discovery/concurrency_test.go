@@ -365,12 +365,12 @@ func TestTagProgressMovesWhileTagsAreResolving(t *testing.T) {
 		t.Errorf("tags total = %d, want %d — the denominator is not established",
 			p.TagsTotal, inFlight)
 	}
-	// And the bar this drives is about TAGS by now, not about repositories,
-	// which have all been listed.
-	_, total := p.PhaseProgress()
-	if total != p.TagsTotal {
-		t.Errorf("the phase fraction is counted against %d, want the %d tags",
-			total, p.TagsTotal)
+	// And the one bar this drives has left the listing phase behind it rather
+	// than starting over: listing owns the first tenth and is finished, so the
+	// scan is at least that far along and no further than the whole.
+	if p.Overall < listingShare || p.Overall > 1 {
+		t.Errorf("overall progress = %v, want between %v and 1 once listing is done "+
+			"and tags are being resolved", p.Overall, listingShare)
 	}
 }
 

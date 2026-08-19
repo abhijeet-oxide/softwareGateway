@@ -197,6 +197,25 @@ export function repositoryUrl(repo: Repository | undefined, repository?: string)
   return `https://${host}/${path}`
 }
 
+/**
+ * When this release finished arriving, or undefined if it has not.
+ *
+ * The EARLIEST successful transfer, because a release lands once and is
+ * promoted afterwards: taking the latest would report the promotion's
+ * timestamp as the download's.
+ *
+ * Undefined is a real answer here and renders as "not downloaded". A release
+ * nobody has downloaded must not be able to show a download date, which is the
+ * whole reason this is one function rather than a line repeated per caller.
+ */
+export function downloadedAt(pkg: Package): string | undefined {
+  return (pkg.transfers ?? [])
+    .filter((t) => t.state === 'SUCCEEDED')
+    .map((t) => t.completedAt)
+    .filter((t): t is string => Boolean(t))
+    .sort()[0]
+}
+
 /** The lifecycle stages, in the order the brief fixes them. */
 export type LifecycleStage = 'Vendor' | 'Downloading' | 'Downloaded' | 'Production'
 
@@ -217,12 +236,13 @@ export function deriveLifecycle(pkg: Package, product?: Product): LifecycleStep[
   const production = productionTargets(product)
   const inProduction = succeeded.find((t) => production.has(t.target))
 
-  const downloadedAt = succeeded
-    .map((t) => t.completedAt)
-    .filter((t): t is string => Boolean(t))
-    .sort()[0]
+  const arrived = downloadedAt(pkg)
 
-  const reachedDownloading = status !== 'NEW'
+  // A download has been ASKED FOR, which is what this stage means. It was
+  // `status !== 'NEW'`, and that stopped being the same question the moment
+  // AVAILABLE existed: a release published a month ago and never downloaded is
+  // AVAILABLE, and reported its download stage as reached.
+  const reachedDownloading = transfers.length > 0
   const reachedDownloaded = succeeded.length > 0
   const reachedProduction = Boolean(inProduction)
 
@@ -243,7 +263,7 @@ export function deriveLifecycle(pkg: Package, product?: Product): LifecycleStep[
       stage: 'Downloaded',
       reached: reachedDownloaded,
       current: status === 'DOWNLOADED' || status === 'READY FOR PRODUCTION',
-      at: downloadedAt,
+      at: arrived,
     },
     {
       stage: 'Production',

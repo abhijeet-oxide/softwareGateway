@@ -12,7 +12,7 @@ import {
 } from '../api/queries'
 import { useCan } from '../auth/permissions'
 import {
-  deriveLifecycle, deriveLocations, deriveStatus, isLive, matches, verification, version,
+  deriveLocations, deriveStatus, downloadedAt, isLive, matches, verification, version,
 } from '../domain/derive'
 import { bytes, formatBytes, formatCount, formatDuration } from '../domain/format'
 import { NA, Value } from '../components/value'
@@ -22,7 +22,7 @@ import {
   LocationChip, RepoLink, StatusBadge, TimeAgo, VerificationBadge,
 } from '../components/chips'
 import {
-  EmptyStateCard, ErrorState, LifecycleIndicator, PageHeader, SavedPanel, SearchBar,
+  EmptyStateCard, ErrorState, PageHeader, ReleaseTimeline, SavedPanel, SearchBar,
 } from '../components/layout'
 import { mono } from '../theme'
 import type { Artifact, InspectPackageResponse, PackageFile } from '../api/types'
@@ -601,8 +601,16 @@ export default function PackageDetail() {
 
       <Row gutter={[16, 16]}>
         <Col span={24}>
-          <Card>
-            <LifecycleIndicator steps={p ? deriveLifecycle(p, prod) : []} size="default" />
+          {/*
+            Two dates on one line, in a strip rather than a card: it is a
+            caption for the header above it, not a section of the page.
+          */}
+          <Card size="small" styles={{ body: { padding: '10px 16px' } }}>
+            <ReleaseTimeline
+              publishedAt={p?.publishedAt || p?.discoveredAt}
+              downloadedAt={p ? downloadedAt(p) : undefined}
+              downloading={status === 'DOWNLOADING'}
+            />
           </Card>
         </Col>
 

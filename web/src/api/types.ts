@@ -727,14 +727,13 @@ export interface DiscoverySourceState {
   /** Tags being read right now — the configured concurrency actually in use. */
   tagsInFlight?: number
   /**
-   * The fraction to render, for the phase the scan is in.
+   * The whole scan's progress, 0 to 1 — the only number a bar is drawn from.
    *
-   * Served rather than derived: a scan is three phases with three denominators,
-   * and a bar over their sum advances and then dips as listing discovers more
-   * tags. The server says which one is live.
+   * One scale for every phase, and monotonic: the counters above are in three
+   * different units, and a bar drawn from whichever one was live filled, reset
+   * and filled again.
    */
-  phaseDone?: number
-  phaseTotal?: number
+  progress?: number
   /** Releases recorded so far, and the subset nobody had seen. Both live. */
   packages?: number
   /** Manifests fetched. On a large artifact tree this is the only counter that moves. */

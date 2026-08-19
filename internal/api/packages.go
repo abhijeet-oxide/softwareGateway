@@ -671,7 +671,7 @@ func (s *Server) handleDiscoveryStatus(w http.ResponseWriter, r *http.Request) {
 			state.TagsToFetch = p.TagsToFetch
 			state.TagsFetched = p.TagsFetched
 			state.TagsInFlight = p.TagsInFlight
-			state.PhaseDone, state.PhaseTotal = p.PhaseProgress()
+			state.Progress = p.Overall
 			state.Artifacts = p.Artifacts
 			state.Packages = p.Packages
 			state.NewPackages = p.New

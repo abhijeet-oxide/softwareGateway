@@ -1,6 +1,6 @@
 import type { ReactNode } from 'react'
 import {
-  Alert, Button, Card, Empty, Input, Popover, Space, Steps, Tag, Timeline, Tooltip, Typography,
+  Alert, Button, Card, Empty, Input, Popover, Space, Tag, Timeline, Typography,
 } from 'antd'
 import {
   ArrowLeftOutlined, CheckCircleOutlined, ClockCircleOutlined, LoadingOutlined, RocketOutlined,
@@ -164,40 +164,98 @@ export function ErrorState({ error, retry }: { error: unknown; retry?: () => voi
 }
 
 /**
- * `Vendor → Downloading → Downloaded → Production`.
+ * The two dates a release actually has.
  *
- * Compact in tables, expanded with timestamps on the release page — one
- * component, because two would drift.
+ * # Why this is two entries and not four
+ *
+ * It was a four-stage stepper — Vendor, Downloading, Downloaded, Production —
+ * across the full width of the page, and it was wrong in both directions at
+ * once. It took a band of the release page to say almost nothing, and it
+ * reported "Downloaded" as reached on releases nobody had downloaded, because
+ * two of its four stages are STATES rather than events and had no date to
+ * stand on. A stage with no timestamp cannot be checked or unchecked honestly;
+ * it can only be guessed at.
+ *
+ * So the page keeps the two moments that are facts with instants attached:
+ * when the vendor published it, and when it finished arriving here. Everything
+ * else the stepper was gesturing at — is it downloading, is it in production —
+ * is already said, once, by the status badge in the header.
+ *
+ * Not downloaded is stated plainly rather than drawn as an unreached stage. It
+ * is the common case for most of a catalogue, and it is not a failure.
  */
-export function LifecycleIndicator({
-  steps, size = 'small',
-}: { steps: LifecycleStep[]; size?: 'small' | 'default' }) {
-  const current = Math.max(0, steps.findIndex((s) => s.current))
+export function ReleaseTimeline({
+  publishedAt, downloadedAt, downloading,
+}: {
+  publishedAt?: string
+  downloadedAt?: string
+  /** A download is running right now, so the second date is coming. */
+  downloading?: boolean
+}) {
+  return (
+    <Space size={12} align="center" wrap>
+      <Moment label="Published" at={publishedAt} done />
+      <span
+        aria-hidden
+        style={{
+          width: 48, height: 1, background: 'rgba(0,0,0,0.15)', display: 'inline-block',
+        }}
+      />
+      <Moment
+        label="Downloaded"
+        at={downloadedAt}
+        done={Boolean(downloadedAt)}
+        pending={downloading}
+        absent="Not downloaded"
+      />
+    </Space>
+  )
+}
+
+/** One dated moment: a mark, what happened, and when. */
+function Moment({
+  label, at, done, pending, absent,
+}: {
+  label: string
+  at?: string
+  done?: boolean
+  pending?: boolean
+  absent?: string
+}) {
+  const colour = done ? semantic.success : pending ? '#0057B8' : 'rgba(0,0,0,0.25)'
 
   return (
-    <Steps
-      size={size === 'small' ? 'small' : 'default'}
-      current={current}
-      items={steps.map((s) => ({
-        title: s.stage,
-        status: s.current ? 'process' : s.reached ? 'finish' : 'wait',
-        description:
-          size === 'default' && s.at ? (
-            <Tooltip title={formatAbsolute(s.at)}>
-              <span style={{ fontSize: 12 }}>{formatAbsolute(s.at)}</span>
-            </Tooltip>
-          ) : undefined,
-      }))}
-    />
+    <Space size={8} align="center">
+      {pending && !done ? (
+        <LoadingOutlined style={{ color: colour, fontSize: 12 }} />
+      ) : (
+        <span
+          aria-hidden
+          style={{
+            width: 8, height: 8, borderRadius: '50%', display: 'inline-block',
+            background: done ? colour : 'transparent',
+            border: done ? 'none' : `1px solid ${colour}`,
+          }}
+        />
+      )}
+      <Space size={6} align="center">
+        <Typography.Text type="secondary" style={{ fontSize: 12 }}>{label}</Typography.Text>
+        {at ? (
+          <Typography.Text style={{ fontSize: 13 }}>{formatAbsolute(at)}</Typography.Text>
+        ) : (
+          <Typography.Text type="secondary" style={{ fontSize: 13 }} italic>
+            {pending ? 'in progress' : (absent ?? 'not recorded')}
+          </Typography.Text>
+        )}
+      </Space>
+    </Space>
   )
 }
 
 /**
  * The same lifecycle, as ONE CELL.
  *
- * A stepper is the right shape on a release page, where the reader is looking
- * at one thing and the stages are the subject. In a table it is four columns'
- * worth of furniture repeated down the page: it makes every row look busy and
+ * A stepper is four columns' worth of furniture repeated down the page: it makes every row look busy and
  * the column that actually differs — which stage this release is AT — is the
  * hardest part of it to read.
  *

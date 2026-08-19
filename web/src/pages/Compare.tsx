@@ -135,6 +135,34 @@ function renderReleaseOption(option: Pick<ReleaseOption, 'version' | 'name'>) {
   )
 }
 
+/**
+ * One end of a comparison: which package, and which version of it.
+ *
+ * Two lines rather than one string, because the package name is sixty
+ * characters of vendor reference and the version is the part somebody is
+ * comparing. Joined, the version falls off the end of the line.
+ */
+function ComparedEnd({ pkg, fallback }: { pkg?: Package; fallback: string }) {
+  if (!pkg) {
+    return (
+      <Typography.Text strong style={{ fontFamily: mono, fontSize: 13 }}>{fallback}</Typography.Text>
+    )
+  }
+  const name = pkg.displayRepository || pkg.sourceRepository || ''
+  return (
+    <Space direction="vertical" size={0} style={{ lineHeight: 1.3 }}>
+      <Typography.Text strong style={{ fontFamily: mono, fontSize: 13 }}>
+        {version(pkg)}
+      </Typography.Text>
+      {name && (
+        <Typography.Text type="secondary" style={{ fontSize: 11, fontFamily: mono }}>
+          {name}
+        </Typography.Text>
+      )}
+    </Space>
+  )
+}
+
 /** The closed box, showing the same two lines as the option that filled it. */
 function releaseLabelRender(releases: Package[], value: unknown, fallback: ReactNode) {
   const chosen = releases.find((r) => refOf(r) === value)
@@ -336,7 +364,19 @@ type Mode = 'versions' | 'locations'
 function ComparisonReport({ report }: { report: CompareResponse }) {
   const [search, setSearch] = useState('')
   const [impact, setImpact] = useState<'all' | CompareVerdict>('all')
-  const [kind, setKind] = useState<'all' | 'image' | 'chart'>('all')
+  /*
+   * FILES ARE A TYPE, not a second card.
+   *
+   * They were pulled out into a card of their own because the answer for them
+   * is a directory tree and the answer for images is a table. That is a
+   * difference in how one type is BEST SHOWN, and it does not make files a
+   * different question — a reader asking what changed wants images, charts and
+   * files in one place, filtered the same way.
+   *
+   * So the card keeps one type filter and swaps its own body: components for
+   * the two kinds a table suits, a tree for the one it does not.
+   */
+  const [kind, setKind] = useState<'all' | 'image' | 'chart' | 'file'>('all')
 
   /*
    * THE RELEASE'S CONTENT, not its scaffolding.
@@ -359,6 +399,37 @@ function ComparisonReport({ report }: { report: CompareResponse }) {
       search, r.name, r.type, r.a?.tag, r.b?.tag, r.a?.digest, r.b?.digest))
   }, [content, impact, kind, search])
 
+  /*
+   * THE FILES, from every component rather than from the file-kind ones.
+   *
+   * A file lives inside whatever component carries it, and a vendor's
+   * configuration bundle is a `file` component while a Helm chart's values are
+   * inside a `chart`. Filtering the components to `file` first would answer a
+   * narrower question than the one the tab asks.
+   *
+   * Filtered by the SAME impact segment as the components, so Added, Removed
+   * and Changed mean one thing on this card whichever type is selected.
+   */
+  const allFiles = useMemo(() => {
+    const out: FileEntry[] = []
+    for (const row of content) {
+      for (const f of row.files ?? []) out.push({ ...f, component: row.name })
+    }
+    return out
+  }, [content])
+
+  const fileCount = allFiles.length
+  const fileCounts = useMemo(() => {
+    const out: Record<string, number> = {}
+    for (const f of allFiles) out[f.verdict] = (out[f.verdict] ?? 0) + 1
+    return out
+  }, [allFiles])
+  const shownFiles = useMemo(() => {
+    const byImpact = impact === 'all' ? allFiles : allFiles.filter((f) => f.verdict === impact)
+    if (!search.trim()) return byImpact
+    return byImpact.filter((f) => matches(search, f.path, f.component))
+  }, [allFiles, impact, search])
+
   // Counted from the rows rather than from the report's totals, so the buckets
   // and their breakdowns cannot disagree with the table under them.
   const buckets = useMemo(() => summarise(content), [content])
@@ -374,20 +445,32 @@ function ComparisonReport({ report }: { report: CompareResponse }) {
       </Row>
 
       <Card
-        title={`Components (${formatCount(report.rows.length)})`}
+        title={
+          kind === 'file'
+            ? `Files (${formatCount(fileCount)})`
+            : `Components (${formatCount(content.length)})`
+        }
         extra={
           <Space size={12} wrap>
             <Segmented
               size="small"
               value={impact}
               onChange={(v) => setImpact(v as typeof impact)}
-              options={[
-                { value: 'all', label: 'All' },
-                { value: 'only-b', label: `Added ${buckets['only-b'].count}` },
-                { value: 'only-a', label: `Removed ${buckets['only-a'].count}` },
-                { value: 'changed', label: `Changed ${buckets.changed.count}` },
-                { value: 'same', label: `Unchanged ${buckets.same.count}` },
-              ]}
+              /*
+                The counts follow the TYPE. Added, Removed, Changed and
+                Unchanged mean the same thing on both views — the numbers
+                beside them are components on one and files on the other, and a
+                count that did not change when the view did would be labelling
+                the wrong population.
+              */
+              options={(['all', 'only-b', 'only-a', 'changed', 'same'] as const).map((v) =>
+                v === 'all'
+                  ? { value: v, label: 'All' }
+                  : {
+                      value: v,
+                      label: `${VERDICT[v].label} ${formatCount(
+                        kind === 'file' ? fileCounts[v] ?? 0 : buckets[v].count)}`,
+                    })}
             />
             <Segmented
               size="small"
@@ -396,13 +479,12 @@ function ComparisonReport({ report }: { report: CompareResponse }) {
               options={[
                 { value: 'all', label: 'Everything' },
                 /*
-                  IMAGES AND CHARTS ONLY. Filtering the component table to
-                  `file` showed two components and their layer digests, which is
-                  the OCI view of a thing whose whole point is the files inside
-                  it — and the Files card below answers that question properly.
-                  Two answers to one question, and the worse one was first.
+                  Files included: selecting it swaps the body of this card for
+                  the file tree, rather than showing two file COMPONENTS and
+                  their layer digests — the OCI view of a thing whose whole
+                  point is the files inside it.
                 */
-                ...(['image', 'chart'] as const).map((k) => {
+                ...(['image', 'chart', 'file'] as const).map((k) => {
                   const name = kindName(k)
                   const icon = ARTIFACT_ICONS[name as keyof typeof ARTIFACT_ICONS]
                   return {
@@ -425,13 +507,20 @@ function ComparisonReport({ report }: { report: CompareResponse }) {
           <SearchBar
             value={search}
             onChange={setSearch}
-            placeholder="Search by name, tag or digest"
-            matched={rows.length}
-            total={report.rows.length}
+            placeholder={kind === 'file'
+              ? 'Search files by path or component'
+              : 'Search by name, tag or digest'}
+            matched={kind === 'file' ? shownFiles.length : rows.length}
+            total={kind === 'file' ? fileCount : content.length}
             width={340}
           />
         </div>
 
+        {kind === 'file' ? (
+          <div style={{ padding: '8px 16px 16px' }}>
+            <FileDifferences files={shownFiles} total={fileCount} />
+          </div>
+        ) : (
         <Table<CompareRow>
           size="small"
           dataSource={rows}
@@ -515,9 +604,8 @@ function ComparisonReport({ report }: { report: CompareResponse }) {
             },
           ]}
         />
+        )}
       </Card>
-
-      <FileDifferences rows={content} />
     </Space>
   )
 }
@@ -544,105 +632,36 @@ function ComparisonReport({ report }: { report: CompareResponse }) {
  * components carry the same path they are separate leaves, and the component is
  * named on the row.
  */
-function FileDifferences({ rows }: { rows: CompareRow[] }) {
-  const [search, setSearch] = useState('')
-  /*
-   * THE DELTA FIRST. A release carries hundreds of files and a comparison is
-   * asked which of them moved; opening on all of them buries the four that did
-   * under the four hundred that did not. Unchanged is one click away and says
-   * how many there are.
-   */
-  const [impact, setImpact] = useState<'all' | CompareVerdict | 'delta'>('delta')
+function FileDifferences({ files, total }: { files: FileEntry[]; total: number }) {
+  const tree = useMemo(() => buildFileTree(files), [files])
 
-  const files = useMemo(() => {
-    const out: FileEntry[] = []
-    for (const row of rows) {
-      for (const f of row.files ?? []) {
-        out.push({ ...f, component: row.name })
-      }
-    }
-    return out
-  }, [rows])
-
-  const counts = useMemo(() => {
-    const out: Record<string, number> = {}
-    for (const f of files) out[f.verdict] = (out[f.verdict] ?? 0) + 1
-    return out
-  }, [files])
-
-  const shown = useMemo(() => {
-    const byImpact =
-      impact === 'all' ? files
-        : impact === 'delta' ? files.filter((f) => f.verdict !== 'same')
-          : files.filter((f) => f.verdict === impact)
-    if (!search.trim()) return byImpact
-    return byImpact.filter((f) => matches(search, f.path, f.component))
-  }, [files, impact, search])
-
-  const tree = useMemo(() => buildFileTree(shown), [shown])
-
-  if (files.length === 0) {
+  if (total === 0) {
     return (
-      <Card title="Files">
-        <Typography.Text type="secondary" style={{ fontSize: 13 }}>
-          Nothing here names a file. A component's files are the layers its
-          publisher titled — every configuration bundle, release note and script
-          shipped as an OCI artifact carries them — and an image layer names
-          nothing, so a comparison of images alone has no file-level account to
-          give.
-        </Typography.Text>
-      </Card>
+      <Typography.Text type="secondary" style={{ fontSize: 13 }}>
+        Nothing here names a file. A component's files are the layers its
+        publisher titled — every configuration bundle, release note and script
+        shipped as an OCI artifact carries them — and an image layer names
+        nothing, so a comparison of images alone has no file-level account to
+        give.
+      </Typography.Text>
     )
   }
 
-  return (
-    <Card
-      title={`Files (${formatCount(files.length)})`}
-      extra={
-        <Segmented
-          size="small"
-          value={impact}
-          onChange={(v) => setImpact(v as typeof impact)}
-          options={[
-            {
-              value: 'delta',
-              label: `What changed ${(counts['only-b'] ?? 0) + (counts['only-a'] ?? 0) + (counts.changed ?? 0)}`,
-            },
-            { value: 'only-b', label: `Added ${counts['only-b'] ?? 0}` },
-            { value: 'only-a', label: `Removed ${counts['only-a'] ?? 0}` },
-            { value: 'changed', label: `Changed ${counts.changed ?? 0}` },
-            { value: 'same', label: `Unchanged ${counts.same ?? 0}` },
-            { value: 'all', label: 'All' },
-          ]}
-        />
-      }
-    >
-      <Space direction="vertical" size={10} style={{ width: '100%' }}>
-        <SearchBar
-          value={search}
-          onChange={setSearch}
-          placeholder="Search files by path or component"
-          matched={shown.length}
-          total={files.length}
-          width={340}
-        />
+  if (files.length === 0) {
+    return <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="No file matches this filter" />
+  }
 
-        {shown.length === 0 ? (
-          <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="No file matches this filter" />
-        ) : (
-          <Tree
-            treeData={tree}
-            showLine={{ showLeafIcon: false }}
-            // Open where the reader can take it in, collapsed where they cannot:
-            // a release that rewrote four hundred files should not render four
-            // hundred rows before anybody has asked for one.
-            defaultExpandAll={shown.length <= 80}
-            selectable={false}
-            style={{ maxHeight: 520, overflow: 'auto' }}
-          />
-        )}
-      </Space>
-    </Card>
+  return (
+    <Tree
+      treeData={tree}
+      showLine={{ showLeafIcon: false }}
+      // Open where the reader can take it in, collapsed where they cannot: a
+      // release that rewrote four hundred files should not render four hundred
+      // rows before anybody has asked for one.
+      defaultExpandAll={files.length <= 80}
+      selectable={false}
+      style={{ maxHeight: 520, overflow: 'auto' }}
+    />
   )
 }
 
@@ -1033,12 +1052,19 @@ export default function Compare() {
     })),
   ]
 
+  /*
+   * BOTH ENDS ARE PACKAGES, and they are not necessarily the same package.
+   *
+   * This named the comparison once, on the assumption that a version
+   * comparison is two versions of ONE package. It is not: a product publishes
+   * nine differently-named packages that share a version string, and comparing
+   * `cfx-5000-k8s` against `cfx-5000-k8s-215952-edgenac-…-ncm` is the ordinary
+   * case. Naming the comparison after the left end left the right end reading
+   * `cfx-near 25.7_mp2604_2131` — a source and a version, and no package at
+   * all.
+   */
   const leftPkg = releases.find((r) => refOf(r) === left)
-  // The package both sides are of. Named once rather than repeated on each
-  // side: a version comparison is two versions of ONE package, and a location
-  // comparison is one package in two places — in both, the name is a property
-  // of the comparison and not of an end.
-  const comparedName = leftPkg?.displayRepository || leftPkg?.sourceRepository || ''
+  const rightPkg = releases.find((r) => refOf(r) === right)
 
   const sources = detail.data?.sources ?? []
   // Where the release was found, matched back to its configured source. The
@@ -1126,26 +1152,16 @@ export default function Compare() {
         <Card size="small" style={{ marginBottom: 16 }}>
           <Space size={16} wrap style={{ width: '100%', justifyContent: 'space-between' }}>
             {/*
-              The PACKAGE as well as the endpoint and the version. A label like
-              `cfx-near 25.7_mp2604_2131` says where and which version and not
-              WHAT — and a product publishes the same version of a dozen
-              different packages, so the missing third of it is the part that
-              says which one this was.
+              EACH END NAMED IN FULL: its package, then its version. A label
+              like `cfx-near 25.7_mp2604_2131` is a source and a version and no
+              package at all, and the two ends are frequently different
+              packages.
             */}
-            <Space size={8} wrap>
+            <Space size={12} wrap align="center">
               <Typography.Text type="secondary" style={{ fontSize: 12 }}>Comparing</Typography.Text>
-              <Typography.Text strong style={{ fontFamily: mono, fontSize: 13 }}>
-                {comparedName || report.a.label}
-              </Typography.Text>
-              {comparedName && (
-                <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-                  {report.a.label}
-                </Typography.Text>
-              )}
+              <ComparedEnd pkg={leftPkg} fallback={report.a.label} />
               <SwapOutlined style={{ color: '#98A2B3' }} />
-              <Typography.Text strong style={{ fontFamily: mono, fontSize: 13 }}>
-                {report.b.label}
-              </Typography.Text>
+              <ComparedEnd pkg={rightPkg} fallback={report.b.label} />
             </Space>
             <Button onClick={() => setSettled(false)}>Change selection</Button>
           </Space>

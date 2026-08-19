@@ -13,7 +13,9 @@ import {
   bytes, elapsedSeconds, formatBytes, formatCount, formatDuration, formatSpeed,
 } from '../domain/format'
 import { NA, Stat, Value } from '../components/value'
-import { MeasuredProgress, StateStrip, type StripState } from '../components/progress'
+import {
+  ComponentProgress, ContentProgress, MeasuredProgress, StateStrip, type StripState,
+} from '../components/progress'
 import { RepoLink, TimeAgo, TransferStateTag } from '../components/chips'
 import {
   ARTIFACT_ICONS, Icon, IndexIcon, LayersIcon, OciIcon, type IconComponent,
@@ -267,9 +269,23 @@ export default function DownloadDetail() {
 
   const progress = t?.progress
   const transferred = bytes(progress?.bytesTransferred)
-  const planned = bytes(progress?.plannedBytes)
   const saved = bytes(progress?.savedBytes) ?? bytes(progress?.dedupeSkippedBytes)
   const content = bytes(progress?.contentBytes)
+
+  /*
+   * THE WHOLE OF THE WORK, which is not `plannedBytes`.
+   *
+   * `plannedBytes` is what got a JOB. Content the destination was already
+   * recorded as holding gets no job at all — it is not work that will be done
+   * quickly, it is work that will not happen — and those bytes land in
+   * `dedupeSkippedBytes` instead.
+   *
+   * So `saved` is measured against everything considered while `planned` is
+   * only the remainder, and the page put them side by side: `To push 29.8 GB`
+   * beside `Saved 63.7 GB`, which cannot be true of one population and was
+   * true of two. The denominator is the sum.
+   */
+  const work = (bytes(progress?.plannedBytes) ?? 0) + (bytes(progress?.dedupeSkippedBytes) ?? 0)
 
   const elapsed = elapsedSeconds(t?.startedAt, t?.completedAt)
   // A speed we can defend: bytes WE moved over the time WE were moving them.
@@ -458,13 +474,29 @@ export default function DownloadDetail() {
               <Space direction="vertical" size={12} style={{ width: '100%' }}>
                 <RepoLink url={t?.target ? `https://${t.target}` : undefined} label={t?.targetName} />
 
-                <MeasuredProgress
+                {/*
+                  TWO BARS, because a download is two kinds of work and one of
+                  them finishes long before the other.
+                  
+                  Content moves first: blobs, which is where the bytes are, and
+                  where the skipping happens. Then the manifests that name them
+                  — two hundred and sixty of them, a few kilobytes each — and
+                  until those land nothing is pullable.
+                  
+                  One byte bar therefore reads 100% while the download is
+                  genuinely a third done, which is exactly what somebody
+                  reported: "the progress shows completed, but it is still
+                  running". Both numbers were always true; only one was shown.
+                */}
+                <ContentProgress
                   transferred={transferred}
-                  total={planned}
+                  total={work}
                   saved={saved}
                   strategy={t?.strategy ?? 'copy'}
                   speedBytesPerSecond={running ? speed : undefined}
                 />
+
+                <ComponentProgress progress={progress} live={running} />
 
                 <Table
                   size="small"
@@ -535,7 +567,7 @@ export default function DownloadDetail() {
                     // the release weighs. `Saved 56.5 GB of 29.8 GB` was two
                     // true numbers from different populations, side by side,
                     // reading as nonsense.
-                    totalBytes={formatBytes(planned) ?? undefined}
+                    totalBytes={formatBytes(work) ?? undefined}
                     transferId={t?.id}
                     content={t?.content}
                   />
@@ -597,9 +629,9 @@ export default function DownloadDetail() {
                   {formatBytes(content)}
                 </Value>
               </Descriptions.Item>
-              <Descriptions.Item label="To push">
-                <Tooltip title="More than the release weighs, where a component is published under its own name as well as inside the bundle: a registry stores blobs per repository, so those layers are pushed to both.">
-                  <span><Value>{formatBytes(planned)}</Value></span>
+              <Descriptions.Item label="To move">
+                <Tooltip title="Everything this download had to account for, whether it ended up moving or not. More than the release weighs where a component is published under its own name as well as inside the bundle: a registry stores blobs per repository, so those layers must reach both.">
+                  <span><Value>{formatBytes(work)}</Value></span>
                 </Tooltip>
               </Descriptions.Item>
               <Descriptions.Item label="Downloaded">

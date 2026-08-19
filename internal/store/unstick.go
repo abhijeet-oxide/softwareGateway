@@ -15,13 +15,13 @@ import (
 //
 // The cause was a repair meeting a transfer planned before dependency edges
 // existed. `RepairMissingBlobs` returns a manifest to `blocked` on the promise
-// that its edges will promote it again — and that transfer had none, so
+// that its edges will promote it again - and that transfer had none, so
 // `PromoteDependents` (which requires an edge) could never fire. Wave
 // advancement could not help either: it runs when a completing job's wave
 // drains, and the wave those manifests sat in could never drain while they were
 // blocked. A closed loop with no exit.
 //
-// The specific bug is fixed at its source — repair now writes the edges it
+// The specific bug is fixed at its source - repair now writes the edges it
 // depends on. This is the general answer, and it is worth having separately:
 // `blocked` is the one state nothing else times out. A leased job has a lease,
 // a pending job has a backoff, a failed job has an attempt count. A blocked job
@@ -38,8 +38,8 @@ import (
 //  2. The job's wave has already opened (`wave <= current_wave`) and no
 //     dependency of its own is outstanding.
 //
-// The wave test is the same guarantee `advanceWave` gives — a wave only opens
-// once every wave below it has drained — so a job at or below the watermark has
+// The wave test is the same guarantee `advanceWave` gives - a wave only opens
+// once every wave below it has drained - so a job at or below the watermark has
 // its content at the destination. The dependency test is invariant I1 stated
 // directly. A job that satisfies both is runnable by every rule the system has;
 // the only thing keeping it blocked is that nothing thought to say so.

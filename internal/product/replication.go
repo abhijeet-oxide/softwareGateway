@@ -8,7 +8,7 @@ import (
 
 // Replication says HOW content gets into a target, as opposed to what goes
 // there. Absent means `copy`, which is what every document written before this
-// block existed already means — so no configuration in any estate changes
+// block existed already means - so no configuration in any estate changes
 // meaning by this type being added.
 //
 // See docs/design/18 section 5. The three modes differ in who moves the bytes
@@ -21,7 +21,7 @@ type Replication struct {
 	Mode ReplicationMode `json:"mode,omitempty"`
 
 	// Mirror configures Quay's repository mirroring. Required when
-	// Mode is mirror, rejected otherwise — a block that is silently
+	// Mode is mirror, rejected otherwise - a block that is silently
 	// ignored is worse than an error.
 	Mirror *MirrorConfig `json:"mirror,omitempty"`
 
@@ -47,7 +47,7 @@ var ValidReplicationModes = []ReplicationMode{
 
 // ManageMode says what we do about the registry-side configuration.
 //
-// `apply` writes it, but only on an explicit `targets apply` — never as a side
+// `apply` writes it, but only on an explicit `targets apply` - never as a side
 // effect of a config reload, because the write is destructive (docs/design/18
 // section 8). `detect` never writes and only reports drift.
 type ManageMode string

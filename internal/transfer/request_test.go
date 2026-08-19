@@ -16,7 +16,7 @@ import (
 
 type fakeCatalog struct {
 	view ProductView
-	// rows is the catalog as it actually is, keyed by ID — which is not the
+	// rows is the catalog as it actually is, keyed by ID - which is not the
 	// same as configuration. An enumerating source owns a row per repository
 	// it found, named "<source>/<path>", and the package points at one of
 	// those rather than at the configured name.
@@ -86,7 +86,7 @@ func resolve(t *testing.T, view ProductView, req CreateRequest) (Resolved, error
 	t.Helper()
 
 	// The package was discovered in a row the ENUMERATING source owns, named
-	// "near/orbs/CFX-5000-k8s" — not "near". Resolving the configured name
+	// "near/orbs/CFX-5000-k8s" - not "near". Resolving the configured name
 	// would find nothing, which is exactly the bug this shape reproduces.
 	rows := map[int64]RepoView{
 		100: {RepositoryID: 100, Name: "near/orbs/CFX-5000-k8s", Role: "source",
@@ -182,7 +182,7 @@ func TestPromoteResolvesTheEnvironmentPathWithNoFlags(t *testing.T) {
 }
 
 // Several labs, several productions. Guessing here would push to a production
-// registry nobody named, so it is refused — and the error has to name the
+// registry nobody named, so it is refused - and the error has to name the
 // candidates and the flag, or the operator is left guessing at spellings.
 func TestPromoteRefusesToGuessBetweenSeveralTargets(t *testing.T) {
 	_, err := resolve(t, twoRegions(), CreateRequest{Product: "nokia", Promote: true})
@@ -238,7 +238,7 @@ func TestPromoteRefusesAVendorSource(t *testing.T) {
 }
 
 // The operation follows the origin even when nobody said "promote", so
-// `transfers create --from lab-eu` is a promotion and gets promotion's rules —
+// `transfers create --from lab-eu` is a promotion and gets promotion's rules -
 // including access to a promotionOnly destination.
 func TestOperationIsDerivedFromTheOrigin(t *testing.T) {
 	got, err := resolve(t, twoRegions(), CreateRequest{
@@ -248,7 +248,7 @@ func TestOperationIsDerivedFromTheOrigin(t *testing.T) {
 		t.Fatal(err)
 	}
 	if got.Operation != "promote" {
-		t.Errorf("operation is %q, want promote — the origin is a target", got.Operation)
+		t.Errorf("operation is %q, want promote - the origin is a target", got.Operation)
 	}
 }
 
@@ -280,7 +280,7 @@ func TestUnknownNameListsWhatExists(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 // An enumerating source owns a row per repository it found, so the configured
-// name resolves to nothing. Naming it must still work — checked against the
+// name resolves to nothing. Naming it must still work - checked against the
 // package rather than looked up, which is what stopped a zero row ID reaching
 // the insert as a foreign-key violation.
 func TestFromMayNameAnEnumeratingSource(t *testing.T) {

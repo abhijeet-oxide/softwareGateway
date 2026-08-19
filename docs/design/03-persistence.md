@@ -1,6 +1,6 @@
-# 03 — Persistence
+# 03 - Persistence
 
-> **Prerequisite:** [01 — Domain Model](01-domain-model.md) · **Consumed by:** [04](04-queue-and-scheduling.md), [05](05-transfer-engine.md), [07](07-discovery.md), [09](09-api.md), [10](10-state-machines.md), [12](12-observability-and-audit.md)
+> **Prerequisite:** [01 - Domain Model](01-domain-model.md) · **Consumed by:** [04](04-queue-and-scheduling.md), [05](05-transfer-engine.md), [07](07-discovery.md), [09](09-api.md), [10](10-state-machines.md), [12](12-observability-and-audit.md)
 
 This document is authoritative for storage. It is intended to be sufficient to write the migrations without further invention.
 
@@ -8,11 +8,11 @@ This document is authoritative for storage. It is intended to be sufficient to w
 
 ## 1. Choice of store
 
-> **Decision — a single PostgreSQL database holds queue, state, and audit. No Redis, no Kafka, no RabbitMQ, no object store.**
+> **Decision - a single PostgreSQL database holds queue, state, and audit. No Redis, no Kafka, no RabbitMQ, no object store.**
 >
 > *Alternatives:* Kafka or RabbitMQ for the queue with Postgres for state; Redis for the queue; a NoSQL store for audit volume.
 >
-> *Rejected because* each adds an operational component with its own failure modes, upgrade path, and on-call surface, to solve a problem Postgres already solves well. `SELECT … FOR UPDATE SKIP LOCKED` has been a production-grade work queue since 9.5. Our throughput requirement is measured in **gigabytes per second of blob traffic**, not messages per second of queue traffic — a 60 GB package with 1,000 blobs is *1,000 queue operations*. Postgres will do that four orders of magnitude faster than we need.
+> *Rejected because* each adds an operational component with its own failure modes, upgrade path, and on-call surface, to solve a problem Postgres already solves well. `SELECT … FOR UPDATE SKIP LOCKED` has been a production-grade work queue since 9.5. Our throughput requirement is measured in **gigabytes per second of blob traffic**, not messages per second of queue traffic - a 60 GB package with 1,000 blobs is *1,000 queue operations*. Postgres will do that four orders of magnitude faster than we need.
 >
 > The decisive argument is transactional: *dequeue a job and record its state change* must be atomic with *update the transfer's progress* and *write the audit event*. With a separate broker that is a distributed transaction, or an outbox, or a reconciliation loop. In one database it is `BEGIN … COMMIT`. Removing an entire class of consistency bug is worth more than a broker's throughput ceiling we will never reach.
 >
@@ -26,7 +26,7 @@ The logical schema is identical. Divergence is confined to three places, and is 
 
 | Concern | PostgreSQL | SQLite | Why it does not leak |
 |---|---|---|---|
-| Concurrent dequeue | `FOR UPDATE SKIP LOCKED` | Not needed — SQLite serializes writers, so `BEGIN IMMEDIATE` + `UPDATE … WHERE id IN (SELECT … LIMIT n)` is already exclusive | Both are correct; only throughput differs, and SQLite is a single-developer store |
+| Concurrent dequeue | `FOR UPDATE SKIP LOCKED` | Not needed - SQLite serializes writers, so `BEGIN IMMEDIATE` + `UPDATE … WHERE id IN (SELECT … LIMIT n)` is already exclusive | Both are correct; only throughput differs, and SQLite is a single-developer store |
 | Types | `TIMESTAMPTZ`, `BIGINT`, `JSONB`, `UUID`, `TEXT` | `TEXT` (RFC3339 UTC), `INTEGER`, `TEXT` (JSON), `TEXT`, `TEXT` | Isolated in the store layer's scanners |
 | Audit partitioning | Monthly `RANGE` partitions, retention by `DROP` | Single table, retention by batched `DELETE` | GC strategy is a store-layer detail |
 | Advisory locks | `pg_advisory_lock` (leader election, blob claims) | No-op: one process, no contention | Guarded by an interface, not `if driver == …` scattered through the code |
@@ -39,10 +39,10 @@ Queries live in `db/queries/postgres/*.sql` and `db/queries/sqlite/*.sql`, compi
 
 - `snake_case` identifiers; plural table names.
 - Every table has `created_at TIMESTAMPTZ NOT NULL DEFAULT now()`; mutable tables also have `updated_at`.
-- Primary keys are `BIGSERIAL` for high-volume internal tables (`jobs`, `audit_events`) — smaller index footprint and better locality than UUIDs, which matters at hundreds of millions of rows. **`UUID` is used where the ID is externally visible** (`transfer_requests`, `transfers`) so identifiers are not guessable or enumerable and can be minted client-side.
+- Primary keys are `BIGSERIAL` for high-volume internal tables (`jobs`, `audit_events`) - smaller index footprint and better locality than UUIDs, which matters at hundreds of millions of rows. **`UUID` is used where the ID is externally visible** (`transfer_requests`, `transfers`) so identifiers are not guessable or enumerable and can be minted client-side.
 - Digests are `TEXT` storing the full `algo:hex` form. Not `BYTEA`: they appear in URLs, logs, and API responses, and a conversion at every boundary buys 30 bytes a row.
-- Enumerations are `TEXT` with `CHECK` constraints, not Postgres `ENUM` types — adding a value to a Postgres enum is a schema migration with locking implications, while a `CHECK` is cheap to alter and portable to SQLite.
-- All state columns carry a `CHECK` constraint enumerating exactly the states in [10 — State Machines](10-state-machines.md). **The database refuses to store a state the state machine does not define.**
+- Enumerations are `TEXT` with `CHECK` constraints, not Postgres `ENUM` types - adding a value to a Postgres enum is a schema migration with locking implications, while a `CHECK` is cheap to alter and portable to SQLite.
+- All state columns carry a `CHECK` constraint enumerating exactly the states in [10 - State Machines](10-state-machines.md). **The database refuses to store a state the state machine does not define.**
 
 ## 4. Catalog tables
 
@@ -90,11 +90,11 @@ CREATE UNIQUE INDEX repositories_physical_idx
     ON repositories (registry_host, repository_path);
 ```
 
-> **Note on the last index, and a constraint it implies.** Together with `product_id NOT NULL`, it means **a physical repository belongs to exactly one product** — two products cannot both declare `internal.azurecr.io/shared/base`.
+> **Note on the last index, and a constraint it implies.** Together with `product_id NOT NULL`, it means **a physical repository belongs to exactly one product** - two products cannot both declare `internal.azurecr.io/shared/base`.
 >
 > This is enforced at configuration load, within a product and across the whole directory, so the situation is rejected before merge rather than producing a silent ownership flip on every reload. See [02](02-configuration.md) §7.
 >
-> *An earlier draft of this document claimed the opposite* — that two products sharing a repository would share `blob_placements` rows. That is not representable in this row shape, and the claim was wrong. Deduplication still works exactly as designed **within** a repository, which is where essentially all of the value is: successive versions of one product share most of their base layers. Cross-*repository* reuse on the same registry is served by cross-repository mount ([05](05-transfer-engine.md) §4.2), not by placements.
+> *An earlier draft of this document claimed the opposite* - that two products sharing a repository would share `blob_placements` rows. That is not representable in this row shape, and the claim was wrong. Deduplication still works exactly as designed **within** a repository, which is where essentially all of the value is: successive versions of one product share most of their base layers. Cross-*repository* reuse on the same registry is served by cross-repository mount ([05](05-transfer-engine.md) §4.2), not by placements.
 >
 > If shared repositories are ever genuinely needed, the fix is to normalize: drop `product_id` from `repositories` and add a `product_repositories` join table. Nothing else in the design would move.
 
@@ -163,7 +163,7 @@ CREATE TABLE artifact_blobs (
 );
 ```
 
-> **Why store `raw` manifests verbatim.** A manifest must be pushed to the destination byte-for-byte identical to the source, because its digest — and therefore every signature over it — is the hash of those exact bytes. Re-serializing from a parsed struct would change whitespace or key order and produce a different digest, breaking verification. Storing the original bytes makes the correct behaviour the easy one. Manifests are kilobytes; this costs nothing.
+> **Why store `raw` manifests verbatim.** A manifest must be pushed to the destination byte-for-byte identical to the source, because its digest - and therefore every signature over it - is the hash of those exact bytes. Re-serializing from a parsed struct would change whitespace or key order and produce a different digest, breaking verification. Storing the original bytes makes the correct behaviour the easy one. Manifests are kilobytes; this costs nothing.
 
 **The dedupe index.** Small table, disproportionate value ([01](01-domain-model.md) §4):
 
@@ -248,7 +248,7 @@ CREATE INDEX transfers_active_idx ON transfers (state, priority DESC)
     WHERE state IN ('ready','running','paused');
 ```
 
-### 6.1 `jobs` — the queue
+### 6.1 `jobs` - the queue
 
 The hot table. Every column exists for the dequeue path, the retry path, or progress; nothing decorative.
 
@@ -340,7 +340,7 @@ CREATE INDEX jobs_dequeue_idx
     ON jobs (priority DESC, site_rank, size_bytes DESC, id)
     WHERE state = 'pending' AND NOT paused;
 
--- "What was waiting on the job that just finished?" — the only question asked
+-- "What was waiting on the job that just finished?" - the only question asked
 -- of the edge table on the hot path. The forward direction is the primary key.
 CREATE INDEX job_dependencies_reverse_idx ON job_dependencies (depends_on_id);
 
@@ -522,7 +522,7 @@ Configurable per class ([02](02-configuration.md) §4, §8). Run by the leader o
 
 ### Built: what is swept, and what must not be
 
-Three tables grow with **use** rather than with the size of the catalogue, and they are the whole problem: `jobs` at roughly 2,500 rows per transfer and one transfer per release per target, `worker_logs` at a row per interesting thing a worker did, `audit_events` at a row per state transition. Everything else grows with the **catalogue** — one row per package, per artifact, per blob — and is the answer to "what does this vendor publish". None of it expires.
+Three tables grow with **use** rather than with the size of the catalogue, and they are the whole problem: `jobs` at roughly 2,500 rows per transfer and one transfer per release per target, `worker_logs` at a row per interesting thing a worker did, `audit_events` at a row per state transition. Everything else grows with the **catalogue** - one row per package, per artifact, per blob - and is the answer to "what does this vendor publish". None of it expires.
 
 Deleting a settled transfer is safe because its rows are a record of **work**, not of **content**: what actually landed is at the destination, and what we know about the source is in the catalogue. Deleting the jobs of a transfer that finished a quarter ago loses that run's per-blob byte counts and nothing else.
 
@@ -531,14 +531,14 @@ Deleting a settled transfer is safe because its rows are a record of **work**, n
 Two defaults are deliberately *keep forever*, and both look like the same kind of row as the ones that expire:
 
 - **`audit_events`.** An audit trail with a short retention is not an audit trail. A deployment that wants one bounded sets the duration; leaving it unset is how it stays unbounded, rather than there being a switch to find.
-- **`blob_placements`.** This is the memory that makes a second transfer of a product line nearly free — a placement is what lets the planner skip a blob without asking the registry. Losing one costs a `HEAD` per blob at the next transfer, never a re-upload, so sweeping it is *safe*; it is simply a poor trade for a table measured in tens of thousands of rows.
+- **`blob_placements`.** This is the memory that makes a second transfer of a product line nearly free - a placement is what lets the planner skip a blob without asking the registry. Losing one costs a `HEAD` per blob at the next transfer, never a re-upload, so sweeping it is *safe*; it is simply a poor trade for a table measured in tens of thousands of rows.
 
 Every duration is zero-means-keep-forever, so opting out of a sweep is not doing anything.
 
 **Two properties GC must have, and how they are obtained:**
 
 1. **GC must never stall transfers.** Deletes are batched (`batchSize`, default 5,000) with a bounded number of batches per tick and a commit between each. A single `DELETE FROM jobs WHERE completed_at < …` against ten million rows would hold locks and bloat WAL long enough to be an outage. Batching is not an optimization here; it is the difference between a maintenance task and an incident.
-2. **Audit retention must be cheap.** Monthly `RANGE` partitions mean expiring a month is a `DROP TABLE` — instant, no row-by-row work, no bloat, no `VACUUM` debt. This is the single reason `audit_events` is partitioned; it is also the highest-volume table in the system. Partitions are created a month ahead by the same GC tick, so nothing depends on a human remembering.
+2. **Audit retention must be cheap.** Monthly `RANGE` partitions mean expiring a month is a `DROP TABLE` - instant, no row-by-row work, no bloat, no `VACUUM` debt. This is the single reason `audit_events` is partitioned; it is also the highest-volume table in the system. Partitions are created a month ahead by the same GC tick, so nothing depends on a human remembering.
 
 ## 9. Migrations
 
@@ -548,7 +548,7 @@ Rules:
 - **Forward-only in production.** Down migrations exist for local development and are not run against production.
 - **Every migration must be safe to apply while the previous version is still running**, because a rolling deployment runs both. In practice: add columns nullable or with defaults, never rename in place (add, backfill, switch, drop across three releases), and never take an `ACCESS EXCLUSIVE` lock on `jobs` during business hours.
 - Index creation on `jobs` uses `CREATE INDEX CONCURRENTLY` (outside a transaction; `goose` supports this with `-- +goose NO TRANSACTION`).
-- Workers run no migrations and hold no schema knowledge — a direct consequence of the HTTP-leasing decision ([00](00-overview.md) §5.2).
+- Workers run no migrations and hold no schema knowledge - a direct consequence of the HTTP-leasing decision ([00](00-overview.md) §5.2).
 
 ## 10. Sizing
 
@@ -565,7 +565,7 @@ For a deployment replicating 20 products, each ~8 packages a month, each package
 
 Steady state is a few GB. This is a small database, and that is the point: PostgreSQL is not being asked to do anything difficult, which is why it is sufficient (§1).
 
-The row counts above are the reason the row counts are not the whole story. `package_artifacts` is ~1 k rows a month and trivial *as rows* — but each one may carry a manifest verbatim in `raw`, and the bytes do not dedupe the way `blobs` does. A NEAR release bundle indexes sixty-odd artifacts at a few kilobytes of JSON each; twenty products across a few years of releases is single-digit gigabytes of manifest bodies alone, in the table the sizing table calls trivial. That is what §12 bounds.
+The row counts above are the reason the row counts are not the whole story. `package_artifacts` is ~1 k rows a month and trivial *as rows* - but each one may carry a manifest verbatim in `raw`, and the bytes do not dedupe the way `blobs` does. A NEAR release bundle indexes sixty-odd artifacts at a few kilobytes of JSON each; twenty products across a few years of releases is single-digit gigabytes of manifest bodies alone, in the table the sizing table calls trivial. That is what §12 bounds.
 
 ## 11. Vendor display names
 
@@ -578,15 +578,15 @@ Two columns exist purely so a listing can be readable without any part of the sy
 
 Both are `NULL` unless the source declares a `vendor`, so a conformant registry gets neither.
 
-**Stored rather than computed at render time**, for two reasons. The transform belongs to the vendor plugin — only it knows that `orb_` is Nokia's word for "release" and `orbs/` is where Nokia puts everything — and neither the store nor the CLI may know that. And the shortened form has to RESOLVE as input: a listing showing a name you cannot type back is a trap. With a column, matching either spelling is one more equality rather than a pattern match that would have to encode a vendor's convention in SQL.
+**Stored rather than computed at render time**, for two reasons. The transform belongs to the vendor plugin - only it knows that `orb_` is Nokia's word for "release" and `orbs/` is where Nokia puts everything - and neither the store nor the CLI may know that. And the shortened form has to RESOLVE as input: a listing showing a name you cannot type back is a trap. With a column, matching either spelling is one more equality rather than a pattern match that would have to encode a vendor's convention in SQL.
 
 The real `tag` and `repository_path` are never touched. They are the identity, they are what a transfer uses, and they are what `-o json` returns. Shortening is a rendering decision from beginning to end.
 
-Before these columns, the repository half was done in the CLI by dropping whichever prefix every row on the page happened to share. That required no vendor knowledge — the appeal — and was wrong twice: it shortened paths on registries with no such convention, and it made one row's rendering depend on which other rows were in view.
+Before these columns, the repository half was done in the CLI by dropping whichever prefix every row on the page happened to share. That required no vendor knowledge - the appeal - and was wrong twice: it shortened paths on registries with no such convention, and it made one row's rendering depend on which other rows were in view.
 
 ## 12. The manifest cache
 
-`package_artifacts.raw` holds a manifest verbatim, and it has to: a manifest must be pushed byte-for-byte identical, because its digest — and every signature over it — is the hash of exactly those bytes. Re-serializing from a parsed struct would change whitespace or key order and produce a different digest.
+`package_artifacts.raw` holds a manifest verbatim, and it has to: a manifest must be pushed byte-for-byte identical, because its digest - and every signature over it - is the hash of exactly those bytes. Re-serializing from a parsed struct would change whitespace or key order and produce a different digest.
 
 It is also the only thing this schema stores that **grows without bound and can be discarded without losing a fact**. So it is treated as a cache rather than as a record.
 
@@ -597,7 +597,7 @@ It is also the only thing this schema stores that **grows without bound and can 
 | What | artifacts, digests, media types, sizes, platforms, blob links, totals | the manifest bodies |
 | Size | a few kB per fully-inspected package | a few kB per *artifact* |
 | Read by | every listing, every `describe`, every plan | only a manifest push |
-| Recoverable | no | exactly — content-addressed |
+| Recoverable | no | exactly - content-addressed |
 
 ### What made it possible
 
@@ -607,10 +607,10 @@ Before migration `00007`, "have we fetched this manifest?" was answered by `raw 
 
 | Column | Answers |
 |---|---|
-| `fetched_at` | was this manifest pulled and verified? — a fact, kept |
-| `raw` | are its bytes still here? — a cache, evictable |
-| `raw_bytes` | how much would evicting it free? — so a budget can be summed without reading blobs |
-| `raw_used_at` | when did something last need them? — so eviction is LRU |
+| `fetched_at` | was this manifest pulled and verified? - a fact, kept |
+| `raw` | are its bytes still here? - a cache, evictable |
+| `raw_bytes` | how much would evicting it free? - so a budget can be summed without reading blobs |
+| `raw_used_at` | when did something last need them? - so eviction is LRU |
 
 `packages.expanded_at` records when the whole tree was last walked, which is what `packages describe` prints and what makes "measured" distinguishable from "not measured yet" without assembling it per row.
 
@@ -618,11 +618,11 @@ Before migration `00007`, "have we fetched this manifest?" was answered by `raw 
 
 Two bounds, because they answer different questions. `coordinator.manifestCache.ttl` is *these have not been wanted in a long time*; `budgetBytes` is *this is all the space there is*. A deployment that transfers everything it discovers wants the budget to bite; one that discovers far more than it transfers wants the TTL to, and would otherwise carry a full budget of manifests nobody will ever push. Either may be set to zero to disable it, and both zero means "keep everything", which is a legitimate choice.
 
-Eviction is **least recently used**, and `raw_used_at` is bumped by the transfer planner rather than by anything that merely *looks* at a package. The access pattern that matters is "this product line is being replicated this week"; ranking by curiosity would keep alive exactly the manifests nobody is going to push. Evicting the largest first was rejected for the same reason — it would preferentially discard the packages whose re-fetch costs most.
+Eviction is **least recently used**, and `raw_used_at` is bumped by the transfer planner rather than by anything that merely *looks* at a package. The access pattern that matters is "this product line is being replicated this week"; ranking by curiosity would keep alive exactly the manifests nobody is going to push. Evicting the largest first was rejected for the same reason - it would preferentially discard the packages whose re-fetch costs most.
 
 The sweep is leader-gated (`internal/maintenance`), runs on an interval, and is safe against a concurrent inspect: whichever loses either finds the bytes or re-fetches them, and both produce the same tree.
 
-A partial index — `ON package_artifacts (raw_used_at) WHERE raw IS NOT NULL` — keeps the sweep proportional to what is *cached* rather than to how many artifacts have ever existed.
+A partial index - `ON package_artifacts (raw_used_at) WHERE raw IS NOT NULL` - keeps the sweep proportional to what is *cached* rather than to how many artifacts have ever existed.
 
 ## 13. Regrouping, and the accessory column
 
@@ -635,20 +635,20 @@ Two columns exist so a source's `vendor` can be set *after* its packages were di
 
 ### Why grouping was a one-way door
 
-A vendor Layout turns a repository's tags into the packages they represent — NEAR publishes `orb_X`, `signature_orb_X` and `signed_orb_X` for one release, and that is one package with a signature, not three packages.
+A vendor Layout turns a repository's tags into the packages they represent - NEAR publishes `orb_X`, `signature_orb_X` and `signed_orb_X` for one release, and that is one package with a signature, not three packages.
 
-Grouping runs over the tags a scan finds **new**. That is deliberate, and it is what keeps the steady state cheap: a re-scan of an unchanged repository costs one `HEAD` per tag and fetches no manifest bodies at all. The consequence nobody had accounted for is that a repository scanned *before* its source declared a vendor is never grouped again — its packages keep `signature_status = 'unknown'`, carry no relations, and have **no transfer root**, so replicating one would move the payload and leave the signature behind. Re-scanning could not fix it, because re-scanning is exactly the path that skips known tags.
+Grouping runs over the tags a scan finds **new**. That is deliberate, and it is what keeps the steady state cheap: a re-scan of an unchanged repository costs one `HEAD` per tag and fetches no manifest bodies at all. The consequence nobody had accounted for is that a repository scanned *before* its source declared a vendor is never grouped again - its packages keep `signature_status = 'unknown'`, carry no relations, and have **no transfer root**, so replicating one would move the payload and leave the signature behind. Re-scanning could not fix it, because re-scanning is exactly the path that skips known tags.
 
-`grouped_layout` closes it. When it disagrees with the configured vendor, the next scan clears the head phase's "known" marks for that repository, re-fetches its tags and groups them properly — once. It then agrees, and the steady state is cheap again.
+`grouped_layout` closes it. When it disagrees with the configured vendor, the next scan clears the head phase's "known" marks for that repository, re-fetches its tags and groups them properly - once. It then agrees, and the steady state is cheap again.
 
 The trigger is the **recorded layout name**, deliberately not a symptom such as "some package still reads `unknown`". A repository can legitimately contain unsigned packages forever, and a symptom-based trigger would re-fetch every tag of it on every scan for the rest of time. Keying off the name is what makes the pass terminate.
 
 ### Why an accessory needs a column rather than a deletion
 
-Under the standard layout all three NEAR tags became packages in their own right. Grouping them afterwards fixes `orb_X` and leaves the other two listed as though they were releases — most of the noise the Layout was meant to remove.
+Under the standard layout all three NEAR tags became packages in their own right. Grouping them afterwards fixes `orb_X` and leaves the other two listed as though they were releases - most of the noise the Layout was meant to remove.
 
-They cannot simply be deleted: a transfer may reference them, and what was actually shipped has to stay answerable. `state = 'superseded'` is the wrong word — that means the same tag re-pushed with different content, and overloading it would corrupt the one question supersession answers.
+They cannot simply be deleted: a transfer may reference them, and what was actually shipped has to stay answerable. `state = 'superseded'` is the wrong word - that means the same tag re-pushed with different content, and overloading it would corrupt the one question supersession answers.
 
 So `accessory_of` names the package this row turned out to be part of. Shaped like `superseded_by`: the row survives, keeps its history, stays reachable by explicit reference, and stops being listed as a release of its own. Listings exclude it unless asked (`--include-accessories`).
 
-Reversible by construction — removing a source's vendor clears the marks and the rows return to being ordinary packages, which is what makes a misconfigured vendor recoverable by fixing the configuration rather than by editing the database.
+Reversible by construction - removing a source's vendor clears the marks and the rows return to being ordinary packages, which is what makes a misconfigured vendor recoverable by fixing the configuration rather than by editing the database.

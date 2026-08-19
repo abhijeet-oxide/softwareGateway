@@ -330,7 +330,7 @@ func TestRejectsWrongAPIVersionAndKind(t *testing.T) {
 
 func TestErrorMessageIncludesHint(t *testing.T) {
 	e := Error{Field: "spec.x", Message: "bad", Hint: "because reasons"}
-	if got := e.Error(); got != "spec.x: bad — because reasons" {
+	if got := e.Error(); got != "spec.x: bad - because reasons" {
 		t.Fatalf("got %q", got)
 	}
 	e.Hint = ""
@@ -369,8 +369,8 @@ func TestPriorityRange(t *testing.T) {
 //
 // `repositories` is uniquely indexed on (registry_host, repository_path) and
 // its product_id is NOT NULL, so a shared repository is not representable.
-// Reconciling one would flip ownership on every config reload — silent and
-// baffling — so it is rejected at load instead. docs/design/03 §4.
+// Reconciling one would flip ownership on every config reload - silent and
+// baffling - so it is rejected at load instead. docs/design/03 §4.
 // ---------------------------------------------------------------------------
 
 func TestRejectsSameRepositoryTwiceWithinAProduct(t *testing.T) {

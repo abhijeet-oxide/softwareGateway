@@ -19,15 +19,15 @@ import (
 // # Why this is not left to the server
 //
 // A calibration measures one repository, and a product spans forty. The server
-// can pick one and does, but the choice is a judgement — which repository is
-// representative of what this product actually moves — and a judgement made
+// can pick one and does, but the choice is a judgement - which repository is
+// representative of what this product actually moves - and a judgement made
 // silently inside a five-minute network test is one nobody can check. The first
 // version picked the first repository declared, measured `cfx-5000-product/aaa`
 // (one tag, nothing over 256 KiB), and reported the whole source as
 // unmeasurable.
 //
-// So the choice is made here, from evidence the Coordinator already has —
-// discovered packages and their sizes — SHOWN, and confirmed. The server keeps
+// So the choice is made here, from evidence the Coordinator already has -
+// discovered packages and their sizes - SHOWN, and confirmed. The server keeps
 // its own fallback for API callers, and an explicit --source-repository skips
 // all of it.
 
@@ -75,7 +75,7 @@ func resolvePlan(
 }
 
 // chooseRepository resolves one end: the named one, the default, the only one,
-// or — where a person is watching — the one they pick from a list.
+// or - where a person is watching - the one they pick from a list.
 //
 // The list matters more than it looks. `--from is required (it has cfx-near,
 // cfx-mirror)` is a correct error and a wasted round trip: the command already
@@ -198,7 +198,7 @@ func otherCount(declared []string, chosen string) int {
 
 // confirm shows the plan and asks. Returns false when the answer is no.
 //
-// Shown even when it will not ask — a run that measured something other than
+// Shown even when it will not ask - a run that measured something other than
 // what the reader assumed is worse than a run they had to approve.
 func confirm(in io.Reader, out io.Writer, plan calibrationPlan, o calibrateOptions,
 	levels []int, estimated string, assumeYes bool,

@@ -48,7 +48,7 @@ func sampleCalibration() *v1.CalibrateResponse {
 			{
 				Severity: "critical", Setting: "network.proxy.direct", Scope: "source near",
 				Current: "unset (traffic goes through the proxy)", Suggested: "true",
-				Evidence: "direct moved 18.0 MiB/s against 2.1 MiB/s through the proxy — 757% faster. " +
+				Evidence: "direct moved 18.0 MiB/s against 2.1 MiB/s through the proxy - 757% faster. " +
 					"The proxy in force is: environment http://proxy.corp:8080",
 			},
 			{

@@ -5,7 +5,7 @@
 # The worker holds NO database credentials and writes NOTHING to disk. The
 # deployment runs it with readOnlyRootFilesystem and no writable volume, which
 # makes invariant I5 ("bytes never touch worker disk") enforced by the platform
-# rather than by code review — a worker cannot buffer a blob because there is
+# rather than by code review - a worker cannot buffer a blob because there is
 # nowhere to put it.
 
 FROM golang:1.25 AS build

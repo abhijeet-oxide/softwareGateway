@@ -14,7 +14,7 @@ PRAGMA foreign_keys=off;
 -- legacy_alter_table stops the RENAME from trying to rewrite every reference to
 -- `transfers` elsewhere in the schema. Without it SQLite validates the
 -- dead_letter_jobs view mid-rebuild, at the one moment the old table is gone
--- and the new one is not yet named — and fails on a view that is perfectly
+-- and the new one is not yet named - and fails on a view that is perfectly
 -- correct before and after. The references are by NAME and resolve again the
 -- instant the rename completes, which is exactly what legacy behaviour assumes.
 PRAGMA legacy_alter_table=on;

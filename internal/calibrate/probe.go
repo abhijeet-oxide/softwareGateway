@@ -19,7 +19,7 @@ import (
 //
 // # What it keeps and what it overrides
 //
-// It keeps the CA bundle, the proxy, the credentials and — importantly —
+// It keeps the CA bundle, the proxy, the credentials and - importantly -
 // requestsPerSecond. That last one is a PROMISE TO A VENDOR about how hard
 // their registry will be worked, and a calibration that quietly broke it would
 // measure a throughput no honest configuration could reproduce.
@@ -98,7 +98,7 @@ func describeRoute(cfg registry.ClientConfig) RouteReport {
 	}
 }
 
-// proxyInUse reports whether requests will actually traverse a proxy —
+// proxyInUse reports whether requests will actually traverse a proxy -
 // including one nobody configured here.
 //
 // The environment case is the whole reason this function exists. An unset
@@ -152,8 +152,8 @@ func measureRTT(ctx context.Context, cfg registry.ClientConfig) time.Duration {
 // "Bypass the proxy" is the advice that turned out to be worth the most on the
 // first real transfer, and it is also the advice most likely to be wrong: on
 // plenty of networks the proxy is the ONLY route out, and going direct fails
-// entirely rather than slowly. Both facts are cheap to establish — one probe
-// for reachability, one short throughput sample for the difference — and
+// entirely rather than slowly. Both facts are cheap to establish - one probe
+// for reachability, one short throughput sample for the difference - and
 // guessing either is how a recommendation becomes an outage.
 //
 // It returns the config the sweep should use, so the sweep measures the best
@@ -177,7 +177,7 @@ func compareRoutes(
 	}
 
 	// A SHORT deadline of its own. Where the proxy is mandatory the direct
-	// probe does not fail, it hangs — a TLS handshake to a host the network
+	// probe does not fail, it hangs - a TLS handshake to a host the network
 	// will not route to sits there until the transport's own timeout, which is
 	// thirty seconds, twice. One real run spent most of three minutes on it
 	// against an estimate of seventy seconds. A route that cannot complete a
@@ -225,7 +225,7 @@ func routeCompareLevel(opts Options) int {
 // workingTime is how long the level actually spent moving bytes.
 //
 // Capped at the budget, because every stream is bounded by the run context and
-// anything past it is teardown — cancelling upload sessions, closing bodies.
+// anything past it is teardown - cancelling upload sessions, closing bodies.
 // Counting that as measurement time would report a rate a few percent below the
 // truth, and the error would grow with the number of streams, which is exactly
 // the axis the sweep is trying to read.

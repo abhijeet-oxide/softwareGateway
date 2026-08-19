@@ -5,7 +5,7 @@ import (
 	"time"
 )
 
-// Rendering for the strings that go INTO the report — the evidence attached to
+// Rendering for the strings that go INTO the report - the evidence attached to
 // a suggestion is prose, and prose containing 4823419 is not evidence anybody
 // reads. The CLI formats the tables; this formats the sentences.
 

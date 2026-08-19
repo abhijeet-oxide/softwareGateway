@@ -26,7 +26,7 @@ const (
 // Store is the persistence interface.
 //
 // M1 needs open, ping, migrate and the advisory lock. Domain queries land in
-// M2/M3 alongside the features that need them — generating code for four
+// M2/M3 alongside the features that need them - generating code for four
 // statements would be ceremony.
 type Store interface {
 	// DB exposes the database/sql handle. Used by the migration runner and by

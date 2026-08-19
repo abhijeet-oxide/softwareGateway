@@ -15,7 +15,7 @@ import (
 //
 // These are the assertions that matter most in the long run: a probe that
 // misreports itself fails visibly, while advice that follows from nothing fails
-// silently — somebody changes a setting, throughput does not move, and the
+// silently - somebody changes a setting, throughput does not move, and the
 // tool is never trusted again.
 
 func TestSweepStopsWhenTheCurveFlattens(t *testing.T) {
@@ -39,7 +39,7 @@ func TestSweepStopsWhenTheCurveFlattens(t *testing.T) {
 	})
 
 	if want := []int{1, 2, 4, 8}; !slices.Equal(ran, want) {
-		t.Errorf("ran levels %v, want %v — 16 adds load and no information", ran, want)
+		t.Errorf("ran levels %v, want %v - 16 adds load and no information", ran, want)
 	}
 	if len(levels) != 4 {
 		t.Errorf("recorded %d levels, want 4", len(levels))
@@ -65,7 +65,7 @@ func TestAnalyseSweepPrefersTheSmallestLevelThatIsNearlyTheBest(t *testing.T) {
 	// Four reaches 97% of the best. Recommending eight would double the
 	// concurrent load on the registry for three percent.
 	if knee != 4 {
-		t.Errorf("knee = %d, want 4 — the smallest level within a tenth of the best", knee)
+		t.Errorf("knee = %d, want 4 - the smallest level within a tenth of the best", knee)
 	}
 	if climbing {
 		t.Error("reported as still climbing when the last level added 2%")

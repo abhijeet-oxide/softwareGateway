@@ -7,7 +7,7 @@ func TestDialectRewritesPlaceholders(t *testing.T) {
 	if got := pg.Rewrite("SELECT ? , ? FROM t WHERE x = ?"); got != "SELECT $1 , $2 FROM t WHERE x = $3" {
 		t.Fatalf("got %q", got)
 	}
-	// A `?` inside a string literal is data, not a placeholder — otherwise a
+	// A `?` inside a string literal is data, not a placeholder - otherwise a
 	// LIKE pattern would silently shift every subsequent parameter number.
 	if got := pg.Rewrite("SELECT ? WHERE name LIKE 'a?b'"); got != "SELECT $1 WHERE name LIKE 'a?b'" {
 		t.Fatalf("literal-quoted ? must be preserved, got %q", got)

@@ -3,7 +3,7 @@
 -- The concept is the standard one. OCI 1.1 formalises it with `subject` and
 -- the referrers API: a signature, an SBOM or an attestation is a separate
 -- artifact that BELONGS to a package without living inside its manifest tree.
--- Vendors differ only in how the relationship is discovered — referrers,
+-- Vendors differ only in how the relationship is discovered - referrers,
 -- cosign's `sha256-<hex>.sig` tag, or (our first vendor) a third tag whose
 -- index bundles the payload and the signature as siblings.
 --
@@ -16,8 +16,8 @@
 -- `signature_status` is THREE-valued, and the third value is the point.
 -- "We looked and found nothing" and "nobody has looked" are the same value in
 -- a boolean and completely different facts when someone is deciding whether to
--- trust a package. Vendors do not sign everything — older releases and hotfixes
--- routinely go unsigned — so both states occur in real data.
+-- trust a package. Vendors do not sign everything - older releases and hotfixes
+-- routinely go unsigned - so both states occur in real data.
 --
 -- `transfer_root_digest` is what a transfer plans from, which is not always the
 -- package's own manifest. Where a vendor bundles the payload and its signature

@@ -30,7 +30,7 @@ const maxBackoffMultiple = 4
 //
 // One goroutine per source repository, each on its own interval. Per-repository
 // rather than one global loop, because a slow or unreachable vendor must not
-// delay every other vendor — a single loop iterating all sources would make one
+// delay every other vendor - a single loop iterating all sources would make one
 // dead registry a fleet-wide discovery stall, which is the exact failure that
 // turns a vendor's bad afternoon into ours (docs/design/07 §1).
 type Loop struct {
@@ -101,7 +101,7 @@ type worker struct {
 
 	// ctx is the loop's context, held so a scan is never bound to the lifetime
 	// of the HTTP request that asked for it. A caller giving up must stop the
-	// caller waiting, not the scan — other callers may be joined to it, and the
+	// caller waiting, not the scan - other callers may be joined to it, and the
 	// scheduled loop certainly is.
 	ctx context.Context
 
@@ -111,8 +111,8 @@ type worker struct {
 	// its real result (docs/design/07 §8).
 	//
 	// This used to be a one-deep buffered channel, and it did not work. A
-	// trigger that found the slot occupied returned w.last — the PREVIOUS
-	// scan's result, or the zero value when no scan had completed yet — with no
+	// trigger that found the slot occupied returned w.last - the PREVIOUS
+	// scan's result, or the zero value when no scan had completed yet - with no
 	// error and no indication that nothing had run. The caller saw a successful
 	// scan of zero repositories in 0ms, and `packages discover` printed
 	// "Nothing new. A scan that finds nothing is the normal steady state, not a
@@ -206,8 +206,8 @@ func (l *Loop) Start(ctx context.Context, specs []SourceSpec, packages *store.Pa
 
 // Stop halts polling and waits for in-flight scans.
 //
-// Waiting matters: a scan killed mid-flight would be safe — the next scan is a
-// full scan and there is nothing to recover — but waiting means shutdown does
+// Waiting matters: a scan killed mid-flight would be safe - the next scan is a
+// full scan and there is nothing to recover - but waiting means shutdown does
 // not leave a half-written package transaction to be rolled back by a timeout.
 func (l *Loop) Stop() {
 	l.mu.Lock()
@@ -238,7 +238,7 @@ var ErrNoSuchSource = errors.New("no discovery source")
 // Trigger runs an immediate scan of one source, bypassing the interval.
 //
 // Idempotent and safe: it is the same scan the loop runs. Concurrent triggers
-// are COLLAPSED — a scan already running for that source returns that scan's
+// are COLLAPSED - a scan already running for that source returns that scan's
 // result rather than starting a second one, so a dashboard refresh loop cannot
 // turn into a stampede against the vendor (docs/design/07 §8).
 func (l *Loop) Trigger(ctx context.Context, productName, sourceName string) (ScanResult, error) {
@@ -500,7 +500,7 @@ func (w *worker) run(ctx context.Context) {
 	}
 
 	// Backoff is applied to the WAIT, never by disabling the source. A vendor
-	// outage must not require human re-enablement afterwards — a source that
+	// outage must not require human re-enablement afterwards - a source that
 	// turned itself off is a source nobody remembers to turn back on
 	// (docs/design/07 §7).
 	policy := backoff.Policy{Base: interval, Cap: interval * maxBackoffMultiple}
@@ -516,7 +516,7 @@ func (w *worker) run(ctx context.Context) {
 
 		case <-w.trigger:
 			// A wake-up, not a request: the caller already registered its claim.
-			// So the token can be STALE — if the interval timer fired at the same
+			// So the token can be STALE - if the interval timer fired at the same
 			// moment, that arm picked the claim up and ran it, and this token is
 			// left over. Acting on it anyway would start a second, redundant scan
 			// of the same source moments after the first, which is exactly the
@@ -561,8 +561,8 @@ func resetTimer(t *time.Timer, d time.Duration) {
 
 // triggerScan asks the worker to scan now and waits for the result.
 //
-// If a scan is already running — whether started by the interval or by another
-// caller — this joins it and returns THAT scan's result, marked Collapsed. It
+// If a scan is already running - whether started by the interval or by another
+// caller - this joins it and returns THAT scan's result, marked Collapsed. It
 // never starts a second concurrent scan against the same source, and it never
 // returns a result from a scan that has already finished: joining a running
 // scan gives fresh data, reporting a previous one does not.
@@ -587,7 +587,7 @@ func (w *worker) triggerScan(ctx context.Context) (ScanResult, error) {
 		return res, call.err
 
 	case <-ctx.Done():
-		// The caller gave up. The scan continues — it is the loop's work now,
+		// The caller gave up. The scan continues - it is the loop's work now,
 		// other callers may be waiting on it, and abandoning it would waste the
 		// registry round trips already spent.
 		return ScanResult{}, ctx.Err()
@@ -603,7 +603,7 @@ func (w *worker) triggerScan(ctx context.Context) (ScanResult, error) {
 // startScan registers a scan and returns without waiting for it.
 //
 // Reports true when it started one, false when a scan was already running and
-// this is therefore a no-op — which the caller must be told, or "started" would
+// this is therefore a no-op - which the caller must be told, or "started" would
 // be a claim it cannot back up.
 func (w *worker) startScan() bool {
 	_, mine := w.joinScan()
@@ -618,7 +618,7 @@ func (w *worker) startScan() bool {
 }
 
 // hasPendingClaim reports whether a scan has been registered and not yet
-// started — the only condition under which a wake-up token is still meaningful.
+// started - the only condition under which a wake-up token is still meaningful.
 func (w *worker) hasPendingClaim() bool {
 	w.mu.Lock()
 	defer w.mu.Unlock()
@@ -630,7 +630,7 @@ func (w *worker) hasPendingClaim() bool {
 //
 // It deliberately does NOT mark the call running. Execution belongs to the loop
 // goroutine, so that a scan is always on the same goroutine as the backoff
-// counter and the interval timer — the alternative is a scan whose failure the
+// counter and the interval timer - the alternative is a scan whose failure the
 // schedule never learns about.
 func (w *worker) joinScan() (call *scanCall, mine bool) {
 	w.mu.Lock()
@@ -745,7 +745,7 @@ func (w *worker) scanOnce(ctx context.Context) (ScanResult, error) {
 		}
 	}
 
-	// Walk what was just found, before anybody asks for it — WITHOUT WAITING
+	// Walk what was just found, before anybody asks for it - WITHOUT WAITING
 	// FOR IT. This used to run inline, which made a scan as slow as the
 	// walking: a scan that found ten releases took as long as walking ten
 	// manifest trees and reported nothing during it. The analyser runs beside

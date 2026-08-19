@@ -37,7 +37,7 @@ import (
 //
 // It is the test that would catch a DTO field that serializes wrong, a route
 // registered under the wrong pattern, or a credential the worker cannot
-// resolve from the reference the lease response carried — none of which the
+// resolve from the reference the lease response carried - none of which the
 // in-process test can see.
 
 func TestPackageTransfersOverTheWorkerPlane(t *testing.T) {
@@ -121,7 +121,7 @@ type wireHarness struct {
 // This is what lets a test say so rather than the comments claiming it.
 //
 // 502 rather than a closed listener because the two are the same thing to the
-// client — a non-nil error from the call — and a socket that can be reopened on
+// client - a non-nil error from the call - and a socket that can be reopened on
 // the same address mid-test is a great deal of machinery for no extra coverage.
 type coordinatorGate struct {
 	up    atomic.Bool
@@ -163,7 +163,7 @@ func newWireHarness(t *testing.T, src, dst *fakeregistry.Registry) *wireHarness 
 	h.sourceID = h.repo("source", "main", src.Host(), sourcePath)
 	h.targetID = h.repo("target", "lab", dst.Host(), targetBase)
 
-	// A real Coordinator router, served over TCP — behind a gate, so a test can
+	// A real Coordinator router, served over TCP - behind a gate, so a test can
 	// take the control plane away and give it back.
 	h.gate = &coordinatorGate{inner: api.NewServer(api.Deps{
 		Logger:   log,
@@ -330,7 +330,7 @@ func (h *wireHarness) plan(pkg store.PackageRow, transferID string) {
 }
 
 // waitForTransfer polls until the transfer reaches a state, or the context
-// expires — reporting what it was actually waiting on rather than just timing
+// expires - reporting what it was actually waiting on rather than just timing
 // out, because "want succeeded, got running with 3 pending jobs" is a
 // diagnosis and "timeout" is not.
 func (h *wireHarness) waitForTransfer(ctx context.Context, id, want string) {

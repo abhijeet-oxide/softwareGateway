@@ -9,7 +9,7 @@ import (
 
 func TestLivenessCannotReachDependencies(t *testing.T) {
 	// This test documents a compile-time property rather than a runtime one.
-	// AddLiveness accepts func() error — no context, no arguments — so a
+	// AddLiveness accepts func() error - no context, no arguments - so a
 	// liveness probe has nothing to make a network call with. If someone
 	// widens that signature, this test's comment is the reason not to.
 	//

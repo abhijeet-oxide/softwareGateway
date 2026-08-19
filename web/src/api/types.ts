@@ -2,7 +2,7 @@
  * TypeScript mirror of pkg/apis/softwaregateway/v1/types.go.
  *
  * This file is the contract. Nothing else in the application invents a field
- * name, and a field that is optional in Go is optional here — an absent value
+ * name, and a field that is optional in Go is optional here - an absent value
  * is load-bearing throughout this API, because "not measured" and "zero" are
  * deliberately different answers.
  *
@@ -14,7 +14,7 @@
  * A 64-bit quantity carried as a string (AIP-141). JSON numbers are doubles
  * and lose precision above 2^53; byte counts here already reach 10^11.
  *
- * Never do arithmetic on this directly — use `bytes()` from format.ts, which
+ * Never do arithmetic on this directly - use `bytes()` from format.ts, which
  * returns a number, or `BigInt` where the total could overflow.
  */
 export type Int64String = string
@@ -70,7 +70,7 @@ export interface Repository {
   repositoryDiscovery?: boolean
   repositoryFilters?: Filters
   type: string
-  /** `lab`, `production`. Targets only — the only thing that marks production. */
+  /** `lab`, `production`. Targets only - the only thing that marks production. */
   environment?: string
   vendor?: string
   role: string
@@ -115,7 +115,7 @@ export interface Product {
 export interface ListProductsResponse { products: Product[]; nextPageToken?: string }
 
 // ---------------------------------------------------------------------------
-// Packages — "Software" on screen
+// Packages - "Software" on screen
 // ---------------------------------------------------------------------------
 
 export interface RelatedArtifact {
@@ -168,7 +168,7 @@ export interface Package {
   expandedAt?: string
   /**
    * "analyzing" while a walk is in flight, "failed" when the last one gave up,
-   * empty otherwise — `expandedAt` is what says a walk succeeded.
+   * empty otherwise - `expandedAt` is what says a walk succeeded.
    *
    * Three states because `expandedAt` has two: a release being walked right now
    * must not read as one nobody has touched.
@@ -202,12 +202,12 @@ export interface Artifact {
    * Group on THIS. Classifying in the client would mean the client knowing a
    * vendor's annotation keys, and it would get charts wrong: an index's
    * children are recorded from what the index listed, so their config media
-   * type — the field that separates a Helm chart from an image — is not
+   * type - the field that separates a Helm chart from an image - is not
    * available until the tree is walked.
    */
   kind?: ArtifactKind
   /**
-   * What the referencing descriptor says this MANIFEST weighs — a couple of
+   * What the referencing descriptor says this MANIFEST weighs - a couple of
    * kilobytes of JSON. Right for planning a manifest push, wrong for "how big
    * is this image".
    */
@@ -216,7 +216,7 @@ export interface Artifact {
    * What the artifact weighs: manifest, config and layers.
    *
    * Absent for an artifact nobody has walked, because until then its blobs are
-   * unknown — which is not the same as its weighing nothing.
+   * unknown - which is not the same as its weighing nothing.
    */
   contentBytes?: Int64String
   platform?: string
@@ -224,7 +224,7 @@ export interface Artifact {
   annotations?: Record<string, string>
   /**
    * Whether this manifest was ever pulled and verified. False for a child the
-   * index merely listed — which is every child until the release is analysed,
+   * index merely listed - which is every child until the release is analysed,
    * and is why its size and contents are not known.
    */
   fetched?: boolean
@@ -238,7 +238,7 @@ export interface Artifact {
  * `fetched` is manifests this call pulled from the registry; zero with
  * `alreadyExpanded` means the tree was already recorded and the vendor was not
  * troubled again. `cachedManifests` is how many bodies are still held locally
- * out of `artifacts` — an evictable cache, not part of the record.
+ * out of `artifacts` - an evictable cache, not part of the record.
  */
 export interface InspectPackageResponse {
   package: Package
@@ -264,14 +264,14 @@ export interface ListArtifactsResponse {
 }
 
 // ---------------------------------------------------------------------------
-// Transfers — "Download" on screen
+// Transfers - "Download" on screen
 // ---------------------------------------------------------------------------
 
 /**
  * One reason a transfer moved no bytes, and how much that saved.
  *
- * `trusted` says whether the skip rests on an ACTION the registry took — a
- * mount — rather than on a claim it or we made. That distinction is the whole
+ * `trusted` says whether the skip rests on an ACTION the registry took - a
+ * mount - rather than on a claim it or we made. That distinction is the whole
  * value of the number: a destination that answers about its whole storage
  * rather than the repository asked about makes an untrusted skip worth nothing.
  */
@@ -285,7 +285,7 @@ export interface SkipBreakdown {
 /**
  * One component the destination already held.
  *
- * `partial` says only PART of it was there and the rest is still to move — an
+ * `partial` says only PART of it was there and the rest is still to move - an
  * ordinary state, and a different claim from "this was already there", which
  * is what the list is otherwise making.
  */
@@ -297,7 +297,7 @@ export interface PresentComponent {
   partial?: boolean
 }
 
-/** GET /transfers/{id}/present — WHAT the destination already held, by name. */
+/** GET /transfers/{id}/present - WHAT the destination already held, by name. */
 export interface ListPresentComponentsResponse {
   transferId: string
   components: PresentComponent[]
@@ -355,14 +355,14 @@ export interface TransferProgress {
   quietestInFlight?: string
   skips?: SkipBreakdown[]
   /**
-   * The byte account over DISTINCT content — each piece weighed once, however
+   * The byte account over DISTINCT content - each piece weighed once, however
    * many repositories it has to reach.
    *
    * The per-(repository, digest) figures below are right for bookkeeping and
    * wrong for bytes: the second copy of a component is a mount that moves
    * nothing, and counting it doubled every total. These three are one
-   * population — moved + present converges on `contentBytes` and never exceeds
-   * it — and are what a bar and a saving are drawn from.
+   * population - moved + present converges on `contentBytes` and never exceeds
+   * it - and are what a bar and a saving are drawn from.
    */
   contentMovedBytes?: Int64String
   contentPresentBytes?: Int64String
@@ -379,7 +379,7 @@ export interface Transfer {
   requestId: string
   product: string
   /**
-   * WHICH package this moves — the only unambiguous answer.
+   * WHICH package this moves - the only unambiguous answer.
    *
    * A vendor tag is not unique within a product: one NEAR release appears under
    * the same tag in every repository the product watches. Joining transfers to
@@ -397,7 +397,7 @@ export interface Transfer {
   /**
    * The field every byte column must be read against. For anything but `copy`
    * the progress numbers are structurally zero, and that is "we did not move
-   * those bytes and cannot count them" — not "nothing happened".
+   * those bytes and cannot count them" - not "nothing happened".
    */
   strategy?: Strategy
   currentWave: number
@@ -415,7 +415,7 @@ export interface Transfer {
 export interface ListTransfersResponse { transfers: Transfer[]; nextPageToken?: string }
 
 /**
- * The artifact a job belongs to — what makes a digest legible.
+ * The artifact a job belongs to - what makes a digest legible.
  *
  * A blob on its own is not something anybody can recognise. The image or chart
  * that references it is.
@@ -499,7 +499,7 @@ export interface TransferControlResponse {
 /**
  * The body of :setPriority. 0-1000, higher runs first, 50 by default.
  *
- * Required on the wire even though 0 is a legal value — the server refuses an
+ * Required on the wire even though 0 is a legal value - the server refuses an
  * omitted field rather than defaulting it, because 0 means "behind everything"
  * and guessing which of the two a caller meant is not something it can do.
  */
@@ -576,7 +576,7 @@ export interface RunDownloadResponse {
 export interface MatchesResponse { product: string; rule: string; matches: string[] }
 
 // ---------------------------------------------------------------------------
-// Replication — the "Configure Mirror to Quay" step
+// Replication - the "Configure Mirror to Quay" step
 // ---------------------------------------------------------------------------
 
 export interface ReplicationField { field: string; desired: string; observed: string }
@@ -679,8 +679,8 @@ export interface CompareFile {
  * Compares one package against another place, another version, or both.
  *
  * The package being compared is named in the URL; everything about the other
- * side is here. `from` and `to` are ENDPOINTS — configured source or target
- * names — and `against` is the other VERSION. Naming only `against` compares
+ * side is here. `from` and `to` are ENDPOINTS - configured source or target
+ * names - and `against` is the other VERSION. Naming only `against` compares
  * two versions in one place; naming only `to` compares one version in two
  * places; naming both answers each at once.
  */
@@ -695,7 +695,7 @@ export interface CompareRequest {
 /** One end's position in a comparison. */
 /** One named file inside a release. */
 export interface PackageFile {
-  /** The publisher's own name for it — `CONFIGURATION/nodes.json`. */
+  /** The publisher's own name for it - `CONFIGURATION/nodes.json`. */
   path: string
   /** The artifact it came from, by that artifact's own name. */
   component?: string
@@ -707,7 +707,7 @@ export interface PackageFile {
 export interface ListPackageFilesResponse {
   files: PackageFile[]
   /**
-   * Layers carrying no name of their own — image layers, which are archives of
+   * Layers carrying no name of their own - image layers, which are archives of
    * an unknown number of paths. Counted rather than listed.
    */
   opaqueLayers?: number
@@ -719,7 +719,7 @@ export interface ListPackageFilesResponse {
 /**
  * One file's content, read out of the registry that publishes it.
  *
- * `content` is empty whenever `binary` or `tooLarge` is set — the server states
+ * `content` is empty whenever `binary` or `tooLarge` is set - the server states
  * what it did instead of sending a screenful of replacement characters.
  */
 export interface PackageFileContentResponse {
@@ -735,7 +735,7 @@ export interface PackageFileContentResponse {
 }
 
 export interface CompareProgressSide {
-  /** Which end this is — "a" or "b". The label is not an identity: the two
+  /** Which end this is - "a" or "b". The label is not an identity: the two
    * sides of a version comparison are the same place and share it. */
   key?: string
   side: string
@@ -756,7 +756,7 @@ export interface CompareProgressSide {
 }
 
 /**
- * GET /api/v1/comparisons/{token} — where a comparison has got to.
+ * GET /api/v1/comparisons/{token} - where a comparison has got to.
  *
  * Polled while the comparison's own request is still open, using the token that
  * request carried. A 404 is a normal answer: progress lives in the memory of
@@ -808,7 +808,7 @@ export interface DiscoverySourceState {
   elapsedMs?: number
 
   /**
-   * Zero until enumeration finishes — which itself says the scan is still
+   * Zero until enumeration finishes - which itself says the scan is still
    * waiting on the registry's catalog, and is worth showing as its own state
    * rather than as 0%.
    */
@@ -822,7 +822,7 @@ export interface DiscoverySourceState {
   tagsTotal?: number
   tagsResolved?: number
   /**
-   * Tags resolved to a digest — one HEAD each, and the bulk of a scan. It moves
+   * Tags resolved to a digest - one HEAD each, and the bulk of a scan. It moves
    * continuously; `tagsResolved` does not, and a bar built on the wrong one
    * sits still through the longest part of every scan.
    */
@@ -830,10 +830,10 @@ export interface DiscoverySourceState {
   /** How many turned out to be new, and how many of those have been read. */
   tagsToFetch?: number
   tagsFetched?: number
-  /** Tags being read right now — the configured concurrency actually in use. */
+  /** Tags being read right now - the configured concurrency actually in use. */
   tagsInFlight?: number
   /**
-   * The whole scan's progress, 0 to 1 — the only number a bar is drawn from.
+   * The whole scan's progress, 0 to 1 - the only number a bar is drawn from.
    *
    * One scale for every phase, and monotonic: the counters above are in three
    * different units, and a bar drawn from whichever one was live filled, reset
@@ -1014,7 +1014,7 @@ export interface ReportTotals {
   savedPercent?: number
   /**
    * ABSENT when the period contains no transfer whose bytes we counted. Not
-   * zero — see docs/design/18 §6.1.
+   * zero - see docs/design/18 §6.1.
    */
   averageBytesPerSecond?: Int64String
   successRate?: number
@@ -1049,7 +1049,7 @@ export interface WhoAmIResponse {
 }
 
 // ---------------------------------------------------------------------------
-// Errors — RFC 9457 problem details
+// Errors - RFC 9457 problem details
 // ---------------------------------------------------------------------------
 
 export type ErrorCode =

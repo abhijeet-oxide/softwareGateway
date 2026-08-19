@@ -58,8 +58,8 @@ func (s *Scanner) headPhase(ctx context.Context, work []tagWork, limit int) []re
 			defer func() { <-sem }()
 
 			// Counted HERE, one at a time, rather than in a loop after the
-			// whole phase. This is the bulk of a scan — a catalogue is
-			// thousands of tags — and reporting it in one step at the end left
+			// whole phase. This is the bulk of a scan - a catalogue is
+			// thousands of tags - and reporting it in one step at the end left
 			// the display frozen for minutes on a number that then jumped to
 			// the total.
 			s.progress.update(func(p *ScanProgress) {
@@ -110,7 +110,7 @@ type fetched struct {
 
 // fetchPhase fetches the manifest of every tag the head phase found new.
 //
-// Exactly one request per new tag, whatever the package contains — the oci.Tree
+// Exactly one request per new tag, whatever the package contains - the oci.Tree
 // walk stays deferred (see fetchPackage). Together with the HEAD, a newly
 // discovered tag costs two round trips.
 func (s *Scanner) fetchPhase(ctx context.Context, resolved []resolvedTag, limit int) []fetched {
@@ -124,8 +124,8 @@ func (s *Scanner) fetchPhase(ctx context.Context, resolved []resolvedTag, limit 
 		return nil
 	}
 
-	// How many tags turned out to be NEW. Known only now — the head phase is
-	// what decides it — and it is the denominator of the phase that actually
+	// How many tags turned out to be NEW. Known only now - the head phase is
+	// what decides it - and it is the denominator of the phase that actually
 	// transfers bytes, so a caller can say "12 of 40 new releases read" rather
 	// than watching a number climb towards nothing in particular.
 	s.progress.update(func(p *ScanProgress) { p.TagsToFetch += len(pending) })
@@ -168,7 +168,7 @@ func (s *Scanner) fetchPhase(ctx context.Context, resolved []resolvedTag, limit 
 
 // scannedTagsFor converts fetched manifests into the shape a Layout consumes.
 //
-// The Layout is given descriptors and annotations, never the Scanner — it
+// The Layout is given descriptors and annotations, never the Scanner - it
 // classifies and relates, and cannot fetch, push or record. A broken Layout can
 // mislabel a tag; it cannot corrupt a transfer.
 func scannedTagsFor(items []fetched) []vendors.ScannedTag {
@@ -179,7 +179,7 @@ func scannedTagsFor(items []fetched) []vendors.ScannedTag {
 		}
 		root := f.tree.Artifacts[0]
 
-		// Children are the artifacts the root lists — depth 1 — which for an
+		// Children are the artifacts the root lists - depth 1 - which for an
 		// index is exactly its `manifests` array, annotations included. That is
 		// all a wrapper-index layout needs, and it costs no extra request
 		// because the index already stated it.
@@ -205,7 +205,7 @@ func scannedTagsFor(items []fetched) []vendors.ScannedTag {
 //
 // A Layout failure is NOT fatal to the scan. Falling back to one-package-per-tag
 // means a vendor changing its convention degrades to noisier output rather than
-// to discovering nothing — and the log says which happened.
+// to discovering nothing - and the log says which happened.
 func (s *Scanner) groupPhase(
 	ctx context.Context, src registry.Source, scanned []vendors.ScannedTag,
 	accessory map[string]bool,
@@ -219,7 +219,7 @@ func (s *Scanner) groupPhase(
 		s.log.WarnContext(ctx, "layout could not group tags; recording them individually",
 			"layout", s.layout.Name(), "tags", len(scanned), "error", err)
 
-		// The fallback records one package per tag — but NOT for tags the
+		// The fallback records one package per tag - but NOT for tags the
 		// filters never admitted. Those are here only because the Layout asked
 		// for them, and turning a failed grouping into three packages per
 		// release would be a worse outcome than the noisier one this fallback
@@ -271,14 +271,14 @@ func relationRows(pkg vendors.Package) []store.RelationRow {
 //
 // The case: a vendor publishes a release, then signs it on a later day. The
 // payload was recorded by an earlier scan, so the scan that finds the signature
-// has no new package to attach it to — only an existing one to correct. Without
+// has no new package to attach it to - only an existing one to correct. Without
 // this the package would read `unsigned` forever, which is worse than `unknown`
 // because it looks like an answer somebody checked.
 func (s *Scanner) attachRelations(ctx context.Context, repoID int64, pkg vendors.Package, regroup bool) error {
 	packageID, err := s.packages.FindPackageByTag(ctx, repoID, pkg.Tag)
 	if err != nil {
 		// Not found is not an error here: the Layout may name a payload tag
-		// that discovery has never admitted — excluded by a tag filter, say.
+		// that discovery has never admitted - excluded by a tag filter, say.
 		if errors.Is(err, store.ErrNotFound) {
 			return nil
 		}
@@ -296,7 +296,7 @@ func (s *Scanner) attachRelations(ctx context.Context, repoID int64, pkg vendors
 
 	if regroup {
 		// Re-derived under a DIFFERENT convention, so the old relations are not
-		// a subset of the new ones — they may be wrong rather than merely
+		// a subset of the new ones - they may be wrong rather than merely
 		// incomplete. Deleted and rewritten inside one transaction, so no reader
 		// ever sees the package between the two and briefly believes it unsigned.
 		//
@@ -331,8 +331,8 @@ func (s *Scanner) attachRelations(ctx context.Context, repoID int64, pkg vendors
 
 // absorbAccessories marks the package rows of a release's accessory tags.
 //
-// The Layout does not name accessories directly — it simply does not return
-// them as packages — but every one it absorbed is reachable as a related
+// The Layout does not name accessories directly - it simply does not return
+// them as packages - but every one it absorbed is reachable as a related
 // artifact with a tag, which is the same set.
 func (s *Scanner) absorbAccessories(
 	ctx context.Context, tx *sql.Tx, repoID, packageID int64, pkg vendors.Package,

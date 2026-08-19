@@ -111,7 +111,7 @@ func (s *Server) handleListAutoDownloadRules(w http.ResponseWriter, r *http.Requ
 
 // handleRuleMatches answers "what would this rule pick up".
 //
-// A question about the RULE, not about downloading — which is why it is a GET
+// A question about the RULE, not about downloading - which is why it is a GET
 // on the rule and creates nothing.
 func (s *Server) handleRuleMatches(w http.ResponseWriter, r *http.Request) {
 	p, ok := s.resolveProduct(w, r)

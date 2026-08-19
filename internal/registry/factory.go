@@ -34,7 +34,7 @@ type ClientConfig struct {
 	NoProxy    []string
 	// DirectConnect bypasses proxies entirely, including any the ENVIRONMENT
 	// sets. Distinct from an empty HTTPSProxy, which falls back to
-	// HTTPS_PROXY — the fallback is right by default and wrong when a
+	// HTTPS_PROXY - the fallback is right by default and wrong when a
 	// repository has explicitly asked to go direct.
 	DirectConnect bool
 
@@ -54,8 +54,8 @@ type ClientConfig struct {
 	RetryBaseDelay   time.Duration
 	RetryMaxDelay    time.Duration
 
-	// Shared carries per-SOURCE transport state — connection pool, rate limiter,
-	// token cache — so every repository on one registry shares one of each.
+	// Shared carries per-SOURCE transport state - connection pool, rate limiter,
+	// token cache - so every repository on one registry shares one of each.
 	//
 	// Deliberately `any`. This package must not import the transport package or
 	// it would know about connection pools and TLS, which is exactly the
@@ -89,7 +89,7 @@ var (
 // Register makes a backend available to New.
 //
 // Called from each backend's init, so importing the backend package is what
-// enables it. That keeps the dependency pointing the right way — this package
+// enables it. That keeps the dependency pointing the right way - this package
 // does not import generic, acr or quay, so a vendor backend can be added
 // without touching the abstraction.
 func Register(name string, c Constructor) {
@@ -106,7 +106,7 @@ func Register(name string, c Constructor) {
 // DefaultType is the backend used when configuration names none.
 //
 // Generic is the expected path for ALL four supported registries. The vendor
-// types exist for genuine deviations, not as the normal case — a configuration
+// types exist for genuine deviations, not as the normal case - a configuration
 // that names `acr` when generic works is choosing a narrower code path for no
 // benefit.
 const DefaultType = "generic"

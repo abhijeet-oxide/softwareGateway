@@ -19,9 +19,9 @@ import (
 // The vertical slice: plan, lease, stream, complete, advance, tag.
 //
 // This is the test docs/design/17 §1 calls M3's reason for existing. It drives
-// the same path a real transfer takes — the planner on the Coordinator, the
+// the same path a real transfer takes - the planner on the Coordinator, the
 // queue handing out leases, the engine moving bytes on a worker, the
-// completion closing the loop and opening the next wave — and it does it
+// completion closing the loop and opening the next wave - and it does it
 // against a real OCI Distribution server rather than a mock of one.
 //
 // It runs in an external test package on purpose. Everything it touches is
@@ -110,7 +110,7 @@ func newSliceOn(t *testing.T, src, dst *fakeregistry.Registry) *slice {
 // The row NAME is the path, because (product, role, name) is unique and a
 // product with a lab and a production target has two of the same role. In a
 // real deployment the name is the configured target's, and the paths beneath
-// it get "<configured>/<path>" — see the planner.
+// it get "<configured>/<path>" - see the planner.
 func (s *slice) repo(role, host, path string) int64 {
 	s.t.Helper()
 
@@ -150,7 +150,7 @@ func (s *slice) client(e store.Endpoint) registry.Repository {
 // but not walked.
 //
 // The shared layer is the point. A package referencing one base layer from
-// several images must move it ONCE — that is the whole reason the unit of work
+// several images must move it ONCE - that is the whole reason the unit of work
 // is a blob rather than an image.
 func (s *slice) seedPackage(tag string) store.PackageRow {
 	s.t.Helper()
@@ -203,7 +203,7 @@ func (s *slice) recordPackage(tag, rootDigest string, artifacts int) store.Packa
 	return row
 }
 
-// addGeneric seeds an artifact whose layers are files at annotated paths —
+// addGeneric seeds an artifact whose layers are files at annotated paths -
 // NEAR's `generic_system` and `generic_custo` shape, described only by OCI.
 func (s *slice) addGeneric(repoPath string, files map[string]string) string {
 	s.t.Helper()
@@ -279,7 +279,7 @@ func (s *slice) plan(pkg store.PackageRow, transferID string) transfer.Plan {
 //
 // This is the loop cmd/worker runs, with the HTTP hop removed: lease, execute,
 // complete, repeat until the queue has nothing left. Removing the transport
-// is deliberate — it is the only part not under test here, and leaving it in
+// is deliberate - it is the only part not under test here, and leaving it in
 // would make a failure ambiguous between the engine and the router.
 type drainResult struct {
 	Leases     int
@@ -297,7 +297,7 @@ func (s *slice) drain(workerID string, capacity int) drainResult {
 }
 
 // drainInto runs the worker loop when the destination is not the harness's
-// own — a promotion moves into a registry the first hop never touched.
+// own - a promotion moves into a registry the first hop never touched.
 func (s *slice) drainInto(workerID string, capacity int, _ *fakeregistry.Registry) drainResult {
 	s.t.Helper()
 	ctx := s.t.Context()
@@ -490,7 +490,7 @@ func TestWavesOrderTheTransfer(t *testing.T) {
 	// with BLOB_UNKNOWN, so reaching `succeeded` IS the assertion. Stated
 	// explicitly because a reader should not have to infer it.
 	if state := s.transferState("transfer-waves"); state != "succeeded" {
-		t.Fatalf("transfer is %q, want succeeded — a manifest was pushed before its blobs", state)
+		t.Fatalf("transfer is %q, want succeeded - a manifest was pushed before its blobs", state)
 	}
 }
 
@@ -513,7 +513,7 @@ func TestSecondTransferMovesAlmostNothing(t *testing.T) {
 	// jobs at all.
 	second := s.plan(pkg, "transfer-second")
 	if second.Blobs != 0 {
-		t.Errorf("second plan created %d blob jobs, want 0 — every blob is already placed",
+		t.Errorf("second plan created %d blob jobs, want 0 - every blob is already placed",
 			second.Blobs)
 	}
 	if second.DedupeSkippedBytes == 0 {

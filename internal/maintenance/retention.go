@@ -12,7 +12,7 @@ import (
 // RetentionSweeper deletes history past its retention.
 //
 // LEADER-GATED, like every loop that writes. Two replicas deleting the same
-// rows would not corrupt anything — the statements are idempotent — but the
+// rows would not corrupt anything - the statements are idempotent - but the
 // second one's log line would report having removed nothing, which reads like a
 // bug.
 //
@@ -105,7 +105,7 @@ func (s *RetentionSweeper) SweepOnce(ctx context.Context) (store.RetentionResult
 
 	// Logged only when something happened. A sweep that removes nothing is the
 	// steady state and would otherwise be a log line an hour, forever, saying
-	// nothing — which is how a log stops being read.
+	// nothing - which is how a log stops being read.
 	if res.Rows() > 0 {
 		s.log.InfoContext(ctx, "retention: removed",
 			"transfers", res.Transfers,

@@ -23,7 +23,7 @@ type Step struct {
 	Target string
 
 	// Index is the step's position. Steps sharing an index have no dependency
-	// between them and run concurrently — which is how fan-out and chaining
+	// between them and run concurrently - which is how fan-out and chaining
 	// end up being the same feature rather than two.
 	Index int
 
@@ -83,7 +83,7 @@ func (c Chain) Predecessor(target string) (Step, bool) {
 // Describe renders the chain the way it is shown wherever a rule is displayed.
 //
 // The chain is implicit to TYPE and never implicit to read: every place a rule
-// appears — `rules describe`, a dry run, the UI row — shows this.
+// appears - `rules describe`, a dry run, the UI row - shows this.
 func (c Chain) Describe() string {
 	if len(c.Steps) == 0 {
 		return "nothing"
@@ -118,7 +118,7 @@ func (c Chain) Describe() string {
 // Derive closes a rule's destinations over `mirror.from` and orders them.
 //
 // Because `mirror.from` names exactly ONE upstream, the graph is a forest and a
-// cycle is the only structural error possible — which is what makes the sort
+// cycle is the only structural error possible - which is what makes the sort
 // six lines instead of a general topological sort with a worklist.
 func Derive(p *product.Product, named []string) (Chain, error) {
 	declared := make(map[string]product.Target, len(p.Spec.Targets))
@@ -182,7 +182,7 @@ func Derive(p *product.Product, named []string) (Chain, error) {
 		from, ok := fromOf[name]
 		if !ok || !inChain[from] {
 			// Either it pulls from the sources, or its upstream is outside the
-			// chain — an `externalReference`, or a hop another rule fills. Both
+			// chain - an `externalReference`, or a hop another rule fills. Both
 			// mean nothing in THIS chain precedes it.
 			depth[name] = 0
 			return 0, nil
@@ -216,7 +216,7 @@ func Derive(p *product.Product, named []string) (Chain, error) {
 		})
 	}
 
-	// Sorted by index, then by name so the plan is stable — a dry run that
+	// Sorted by index, then by name so the plan is stable - a dry run that
 	// reordered between two identical invocations would be unreviewable.
 	sort.SliceStable(chain.Steps, func(i, j int) bool {
 		if chain.Steps[i].Index != chain.Steps[j].Index {

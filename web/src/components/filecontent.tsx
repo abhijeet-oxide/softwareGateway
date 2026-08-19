@@ -21,8 +21,8 @@ import { mono } from '../theme'
  * # Why the interface can show this at all
  *
  * Because analysis already recorded which layers are named files. The content
- * itself is not held here — a release is tens of gigabytes and this system is
- * deliberately not a copy of it — so the bytes are fetched from the vendor
+ * itself is not held here - a release is tens of gigabytes and this system is
+ * deliberately not a copy of it - so the bytes are fetched from the vendor
  * registry when somebody asks, through an endpoint that will only serve a
  * digest already recorded as one of THIS release's files.
  *
@@ -32,7 +32,7 @@ import { mono } from '../theme'
  * descriptors, YAML values, properties. Colouring them badly is worse than not
  * colouring them, because a mis-tokenised quote reads as a syntax error in the
  * vendor's file. Prism is compiled into the bundle with the seven grammars
- * these files actually use — nothing is fetched, which the air-gap requires.
+ * these files actually use - nothing is fetched, which the air-gap requires.
  *
  * A file whose extension names no grammar is shown as plain text rather than
  * guessed at.
@@ -62,7 +62,7 @@ function grammarFor(path: string): string | undefined {
  *
  * A vendor's generated JSON arrives as one line of forty thousand characters,
  * which is not a file anybody can read. Indenting it is the difference between
- * a viewer and a wall — and it is SAID, because the reader is looking at
+ * a viewer and a wall - and it is SAID, because the reader is looking at
  * something that is not byte-for-byte what the registry served.
  *
  * Only when it is genuinely one line: a file the publisher already formatted is
@@ -82,7 +82,7 @@ function Highlighted({ text, grammar }: { text: string; grammar?: string }) {
   const lines = useMemo(() => {
     const language = grammar ? Prism.languages[grammar] : undefined
     const html = language ? Prism.highlight(text, language, grammar!) : escapeHtml(text)
-    // Split AFTER highlighting so the grammar sees the whole document —
+    // Split AFTER highlighting so the grammar sees the whole document -
     // tokenising line by line breaks every multi-line string and comment.
     return html.split('\n')
   }, [text, grammar])
@@ -171,7 +171,7 @@ export function FileViewer({
           showIcon
           message="This file is not text"
           description={
-            'The bytes are not valid text — an archive, an image or a compiled artifact. '
+            'The bytes are not valid text - an archive, an image or a compiled artifact. '
             + 'It is shown as what it is rather than as a screen of replacement characters.'
           }
         />
@@ -179,7 +179,7 @@ export function FileViewer({
         <Space direction="vertical" size={10} style={{ width: '100%' }}>
           <Descriptions size="small" column={3}>
             <Descriptions.Item label="Size">
-              {formatBytes(bytes(file.data?.sizeBytes)) ?? '—'}
+              {formatBytes(bytes(file.data?.sizeBytes)) ?? '-'}
             </Descriptions.Item>
             <Descriptions.Item label="Type">
               {grammar ? <Tag>{grammar === 'markup' ? 'xml' : grammar}</Tag> : <Tag>text</Tag>}
@@ -196,7 +196,7 @@ export function FileViewer({
 
           {shown?.reformatted && (
             <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-              Indented for reading — the publisher shipped it on one line.
+              Indented for reading - the publisher shipped it on one line.
             </Typography.Text>
           )}
 

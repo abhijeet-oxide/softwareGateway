@@ -11,7 +11,7 @@ import (
 // correctly on the next attempt, without opening --help and without guessing.
 //
 // These assert the CONTENT rather than the wording, so the text can be improved
-// without breaking them — but the four things below have to be present, because
+// without breaking them - but the four things below have to be present, because
 // each one was missing from the message this replaced and each one cost a round
 // trip.
 func TestArgErrorSaysWhatIsMissingAndHowToFindIt(t *testing.T) {
@@ -43,7 +43,7 @@ func TestArgErrorSaysWhatIsMissingAndHowToFindIt(t *testing.T) {
 }
 
 // The caret has to land under the argument that is missing, not under the first
-// one — the whole point is not having to count words.
+// one - the whole point is not having to count words.
 func TestArgErrorMarksTheMissingArgument(t *testing.T) {
 	specs := []argSpec{productArg(), packageArg()}
 	line := usageLine("transferctl packages inspect", specs)
@@ -147,7 +147,7 @@ func TestBareGroupFails(t *testing.T) {
 }
 
 // The usage line, the argument list and the validator all come from one
-// declaration, so they cannot drift — which they had: `Use` said
+// declaration, so they cannot drift - which they had: `Use` said
 // `<product> <package>` while the error said "accepts 2 arg(s)".
 func TestTakesDrivesUseAndHelpTogether(t *testing.T) {
 	cmd := &cobra.Command{Short: "s"}

@@ -8,7 +8,7 @@ import (
 	v1 "github.com/abhijeet-oxide/softwareGateway/pkg/apis/softwaregateway/v1"
 )
 
-// GET /api/v1/workers — the fleet.
+// GET /api/v1/workers - the fleet.
 //
 // # Why this is worth its own route rather than a field on health
 //

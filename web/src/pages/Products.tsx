@@ -19,7 +19,7 @@ import type { Product } from '../api/types'
 import { TargetTag } from '../components/chips'
 
 /**
- * Page 2 — Products.
+ * Page 2 - Products.
  *
  * Answers: for each product, what is the newest release, what have we got, and
  * what is in production?
@@ -110,7 +110,6 @@ export default function Products() {
   if (products.isError) {
     return (
       <>
-        <PageHeader title="Products" description="What we track, and where each product has reached" />
         <ErrorState error={products.error} retry={() => void products.refetch()} />
       </>
     )
@@ -120,7 +119,7 @@ export default function Products() {
   const disabledCount = all.filter((p) => !p.enabled).length
 
   // A disabled product still loads, still validates and is still listed by the
-  // API — it simply does nothing. That makes it worth keeping and worth hiding:
+  // API - it simply does nothing. That makes it worth keeping and worth hiding:
   // on a page answering "where has each product reached", something that has
   // reached nowhere on purpose is noise until somebody asks for it.
   const listed = showDisabled ? all : all.filter((p) => p.enabled)
@@ -131,8 +130,6 @@ export default function Products() {
   return (
     <>
       <PageHeader
-        title="Products"
-        description="What we track, and where each product has reached"
         meta={
           disabledCount > 0 && (
             <Button onClick={() => setShowDisabled((v) => !v)}>
@@ -192,7 +189,7 @@ export default function Products() {
                         {p.displayName || p.productId}
                       </Typography.Text>
                       {!p.enabled && (
-                        <Tooltip title="This product is switched off in configuration. It is still loaded and validated, and it does nothing — nothing is discovered, nothing is downloaded.">
+                        <Tooltip title="This product is switched off in configuration. It is still loaded and validated, and it does nothing - nothing is discovered, nothing is downloaded.">
                           <Tag style={{ marginInlineEnd: 0 }}>Disabled</Tag>
                         </Tooltip>
                       )}

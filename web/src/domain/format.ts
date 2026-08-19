@@ -12,7 +12,7 @@ import type { Int64String } from '../api/types'
  *
  * Every formatter below returns `null` rather than this string, so the DECISION
  * to say "not available" is made here and the RENDERING is made once, by
- * <Value> in components/value.tsx — italic and secondary, so an absent value
+ * <Value> in components/value.tsx - italic and secondary, so an absent value
  * never reads as a measured one.
  *
  * `null` rather than a string because it makes the compiler the enforcement:
@@ -72,7 +72,7 @@ export function elapsedSeconds(from?: string | null, to?: string | null): number
   return (end - start) / 1000
 }
 
-/** Relative time — `2h ago`. The absolute form goes in the tooltip. */
+/** Relative time - `2h ago`. The absolute form goes in the tooltip. */
 export function formatRelative(timestamp: string | undefined | null): string | null {
   if (!timestamp) return null
   const then = Date.parse(timestamp)
@@ -98,7 +98,7 @@ export function formatAbsolute(timestamp: string | undefined | null): string | n
   })
 }
 
-/** A percentage to one decimal. Absent input stays absent — 0% is a claim. */
+/** A percentage to one decimal. Absent input stays absent - 0% is a claim. */
 export function formatPercent(value: number | undefined | null): string | null {
   if (value === undefined || value === null || !Number.isFinite(value)) return null
   return `${value.toFixed(1)}%`

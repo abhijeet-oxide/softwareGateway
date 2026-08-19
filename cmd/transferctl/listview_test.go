@@ -11,7 +11,7 @@ import (
 //
 // Both come from the same reported view: a terminal holding two transfers, one
 // of them finished weeks ago, and rows so wide that each wrapped onto a second
-// line — so the columns stopped lining up and the one transfer still moving was
+// line - so the columns stopped lining up and the one transfer still moving was
 // the harder of the two to find.
 
 // A finished transfer is counted, not listed. Nothing is lost: the count says
@@ -37,7 +37,7 @@ func TestFinishedTransfersAreHeldBackUntilAskedFor(t *testing.T) {
 			t.Errorf("the finished transfer %s is listed by default:\n%s", hidden, out)
 		}
 	}
-	// Held back, not dropped — and the reader is told how to see them.
+	// Held back, not dropped - and the reader is told how to see them.
 	if !strings.Contains(out, "2 finished transfers not shown") {
 		t.Errorf("the listing does not account for what it held back:\n%s", out)
 	}
@@ -97,7 +97,7 @@ func TestAListingWithNothingInFlightSaysSo(t *testing.T) {
 // The middle goes, not the end.
 //
 // These strings share their fronts and differ at their backs, so an ellipsis at
-// the end would render the two rows identically — which is worse than a wrapped
+// the end would render the two rows identically - which is worse than a wrapped
 // line, because a wrapped line can still be read.
 func TestAShortenedReferenceKeepsBothOfItsEnds(t *testing.T) {
 	const (
@@ -164,7 +164,7 @@ func TestARowIsFittedByShorteningWhatCanBeShortened(t *testing.T) {
 	}
 }
 
-// An unknown width — a pipe, a file, a test — shortens nothing. A redirected
+// An unknown width - a pipe, a file, a test - shortens nothing. A redirected
 // listing is being read by something whose width nothing here knows.
 func TestAnUnknownWidthLeavesEveryRowWhole(t *testing.T) {
 	const long = "cfx-near/orbs/cfx-5000-k8s-215952-edgenac-25.7-2131_20260807-wnv5a0cscf0003c-ncm"
@@ -181,7 +181,7 @@ func TestAnUnknownWidthLeavesEveryRowWhole(t *testing.T) {
 }
 
 // The listing renders into a buffer in every test above, which is exactly the
-// case that must not shorten anything — so this asserts the whole path, not
+// case that must not shorten anything - so this asserts the whole path, not
 // just the helper.
 func TestTheListingItselfLeavesARedirectedRowWhole(t *testing.T) {
 	resp := listWith(transferFixture{
@@ -201,8 +201,8 @@ func TestTheListingItselfLeavesARedirectedRowWhole(t *testing.T) {
 
 // A table that cannot fit at any shortening is left exactly as it was.
 //
-// The reclaimable width is in two columns; the rest of the row — thirteen fixed
-// columns and the padding between fifteen of them — exceeds a narrow terminal on
+// The reclaimable width is in two columns; the rest of the row - thirteen fixed
+// columns and the padding between fifteen of them - exceeds a narrow terminal on
 // its own. Shortening then buys nothing, because the row wraps either way, and
 // costs the reader every path in the listing.
 func TestATableThatCannotFitIsLeftAlone(t *testing.T) {

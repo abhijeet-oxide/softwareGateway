@@ -16,7 +16,7 @@ package middleware
 //
 // See docs/design/09 §10 for the authentication seam this completes, and
 // docs/design/19 §4 for why configuration is never what a caller is granted
-// against — products come from Git, and authorization decides who may LOOK at
+// against - products come from Git, and authorization decides who may LOOK at
 // them and REQUEST work on them.
 
 // Action is a verb a caller may or may not be permitted.
@@ -27,13 +27,13 @@ package middleware
 type Action string
 
 const (
-	// ActionRead covers every GET. The audit trail included — it is the most
+	// ActionRead covers every GET. The audit trail included - it is the most
 	// sensitive read in the system and is exactly what a viewer role is for.
 	ActionRead Action = "read"
 	// ActionOperate covers requesting work: downloads, promotions, discovery,
 	// retry, pause, resume, stop.
 	ActionOperate Action = "operate"
-	// ActionApply covers pushing configuration into a third-party registry —
+	// ActionApply covers pushing configuration into a third-party registry -
 	// the replication apply. Separate from operate because it changes
 	// something outside this system that outlives the request.
 	ActionApply Action = "apply"
@@ -43,7 +43,7 @@ const (
 
 // Scope is what an action is being attempted ON.
 //
-// Both fields empty means estate-wide — "list every product". A permission
+// Both fields empty means estate-wide - "list every product". A permission
 // check against an empty scope is therefore the STRICTEST question, not the
 // most permissive one, and a future resolver must treat it that way.
 type Scope struct {
@@ -82,7 +82,7 @@ func (i Identity) Can(action Action, scope Scope) bool {
 // covers reports whether a grant's scope includes the scope being asked about.
 //
 // An empty field on the GRANT is a wildcard. An empty field on the REQUEST is
-// an estate-wide question, which only an estate-wide grant answers — so a
+// an estate-wide question, which only an estate-wide grant answers - so a
 // caller granted one product cannot list the estate by asking about no product
 // in particular.
 func (g Scope) covers(want Scope) bool {
@@ -115,7 +115,7 @@ func roleFor(action Action) Role {
 // filters that take one.
 //
 // Empty means unrestricted, which is the convention every scoped store filter
-// already uses — so an unauthenticated deployment passes nil and every query
+// already uses - so an unauthenticated deployment passes nil and every query
 // stays exactly as it is today.
 func (i Identity) VisibleProducts() []string {
 	if i.Can(ActionRead, Scope{}) {

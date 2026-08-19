@@ -19,7 +19,7 @@ import (
 //
 // A change whose benefit was not measured. It is tempting to recommend a bigger
 // copyBufferSize or a different timeout on general principle, and neither is
-// something these probes observe — so neither appears, however plausible. The
+// something these probes observe - so neither appears, however plausible. The
 // list is short on purpose: an operator who finds two of eight suggestions
 // unfounded stops reading the other six.
 
@@ -43,7 +43,7 @@ func advise(rep Report, src, tgt endpoint, opts Options) []Suggestion {
 	out = append(out, skippedAdvice(rep)...)
 
 	// Stable sort by severity only, so the order within a severity stays the
-	// order above — route before concurrency before ceiling, which is the order
+	// order above - route before concurrency before ceiling, which is the order
 	// somebody would act in.
 	rank := map[Severity]int{SeverityCritical: 0, SeverityRecommended: 1, SeverityInfo: 2}
 	sort.SliceStable(out, func(i, j int) bool { return rank[out[i].Severity] < rank[out[j].Severity] })
@@ -78,7 +78,7 @@ func routeAdvice(side SideReport, scope string) []Suggestion {
 		return []Suggestion{{
 			Severity: SeverityCritical, Setting: setting, Scope: scope,
 			Current: "unset (traffic goes through the proxy)", Suggested: "true",
-			Evidence: fmt.Sprintf("direct moved %s against %s through the proxy — %s faster. "+
+			Evidence: fmt.Sprintf("direct moved %s against %s through the proxy - %s faster. "+
 				"The proxy in force is: %s",
 				humanRate(r.DirectRate), humanRate(r.ProxiedRate),
 				percentDiff(r.DirectRate, r.ProxiedRate), r.Configured),
@@ -213,7 +213,7 @@ func throttlingAdvice(side SideReport, e endpoint) []Suggestion {
 //
 // One job is one blob moving through the worker: a read stream on the source
 // and a write stream on the target, alive at the same time. So the useful
-// number of jobs in flight is the SMALLER of the two knees — sizing to the
+// number of jobs in flight is the SMALLER of the two knees - sizing to the
 // faster side just queues work in front of the slower one.
 func jobConcurrencyAdvice(rep Report) []Suggestion {
 	src, tgt := rep.Source, rep.Target
@@ -244,7 +244,7 @@ func jobConcurrencyAdvice(rep Report) []Suggestion {
 // The question the measurement can actually settle is whether the PATH has
 // headroom, and that is what this reports. A second worker adds processes, not
 // bandwidth: on the same host it competes for the same link, so it can only
-// help if the ceiling is in this process rather than on the wire — and a
+// help if the ceiling is in this process rather than on the wire - and a
 // plateau that appears with more streams is evidence that it is not.
 func workerAdvice(rep Report) []Suggestion {
 	src, tgt := rep.Source, rep.Target
@@ -324,7 +324,7 @@ func ceilingAdvice(rep Report, opts Options) []Suggestion {
 // a high-latency link one stream leaves most of the line idle no matter how
 // much bandwidth there is. Multiplying the observed single-stream rate by the
 // round trip recovers the window actually in use, and when that is small the
-// answer is more streams — not a bigger buffer, not a faster disk, and not a
+// answer is more streams - not a bigger buffer, not a faster disk, and not a
 // different tool.
 func latencyAdvice(rep Report) []Suggestion {
 	side := rep.Source
@@ -345,7 +345,7 @@ func latencyAdvice(rep Report) []Suggestion {
 		Severity: SeverityInfo, Setting: "", Scope: "source " + side.Name,
 		Suggested: "parallelism is the only lever on this link",
 		Evidence: fmt.Sprintf(
-			"round trip %s, and one stream reached %s — about %s in flight at a time. "+
+			"round trip %s, and one stream reached %s - about %s in flight at a time. "+
 				"A single connection cannot do better on a link this long, whatever the "+
 				"bandwidth; %d streams reached %s",
 			humanDuration(side.RTT), humanRate(single), humanSize(int64(window)),
@@ -405,7 +405,7 @@ func anyThrottled(side SideReport) bool {
 
 // describePool renders a connection limit, including the unset case.
 //
-// Zero is not "no connections" — it means nothing was set for this registry and
+// Zero is not "no connections" - it means nothing was set for this registry and
 // the deployment-wide default applies. Printing a bare 0 would read as the
 // opposite of what it means.
 func describePool(n int) string {

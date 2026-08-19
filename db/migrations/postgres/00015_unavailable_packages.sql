@@ -14,13 +14,13 @@
 --
 -- Which is exactly why it needs a table rather than a log line. Treated as an
 -- error it made every scheduled scan exit non-zero with thirty-seven lines of
--- URL attached — a signal that fires every fifteen minutes is a signal nobody
+-- URL attached - a signal that fires every fifteen minutes is a signal nobody
 -- reads. Discarded entirely it becomes invisible, and the question "which orbs
 -- are we not entitled to?" has no answer at all.
 --
 -- Recorded here it is a FACT with a history: what we could not read, why, when
 -- we first saw it, and when we last confirmed it. `last_seen_at` is what makes
--- the row falsifiable — entitlement changes when somebody buys something, and a
+-- the row falsifiable - entitlement changes when somebody buys something, and a
 -- row that stops being refreshed is one that came back.
 --
 -- Keyed by (product, repository, tag) rather than by scan, because the

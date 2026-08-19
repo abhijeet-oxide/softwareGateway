@@ -125,7 +125,7 @@ func TestAuditEventsRejectABadTimeBound(t *testing.T) {
 	}
 }
 
-// Nothing is authenticated yet, so the answer is anonymous — and the endpoint
+// Nothing is authenticated yet, so the answer is anonymous - and the endpoint
 // has to say so rather than imply a session.
 func TestWhoAmIReportsAnonymousHonestly(t *testing.T) {
 	h := newAPIHarness(t)

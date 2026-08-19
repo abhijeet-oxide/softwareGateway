@@ -14,7 +14,7 @@ import (
 
 // Package persistence: rows in, rows out.
 //
-// Nothing here decides what a package MEANS — whether a tag should be
+// Nothing here decides what a package MEANS - whether a tag should be
 // discovered, which rule matches it, whether a re-push is interesting. That
 // belongs in internal/discovery. This file owns the SQL and nothing else.
 
@@ -29,7 +29,7 @@ type PackageRow struct {
 	// TotalBytes and BlobCount are NIL when not yet measured, which is the case
 	// for a package whose root is an index: discovery records what the index
 	// lists without fetching it, so the layer bytes underneath are unknown
-	// until a transfer walks the tree. Nil rather than zero — a wrong size is
+	// until a transfer walks the tree. Nil rather than zero - a wrong size is
 	// worse than an absent one, because nobody questions a number.
 	TotalBytes    *int64
 	ArtifactCount int
@@ -42,14 +42,14 @@ type PackageRow struct {
 	//
 	// Deliberately separate from DiscoveredAt: one is a claim we were handed,
 	// the other an observation we made. Merging them would lose the ability to
-	// say which — and "published in March, we only noticed in July" is exactly
+	// say which - and "published in March, we only noticed in July" is exactly
 	// the sort of thing worth being able to see.
 	PublishedAt  *string
 	SupersededBy *int64
 
 	// SignatureStatus is signed | unsigned | unknown. Three values, because
 	// "we looked and found none" and "nobody looked" are different facts and a
-	// boolean cannot tell them apart — which matters when the question being
+	// boolean cannot tell them apart - which matters when the question being
 	// answered is whether to trust something.
 	SignatureStatus string
 	// DisplayTag is Tag with the vendor's structural noise removed, or empty
@@ -73,7 +73,7 @@ type PackageRow struct {
 	// identity. Both spellings resolve as input.
 	DisplayRepository string
 
-	// AccessoryOf names the package this row turned out to be PART OF — a
+	// AccessoryOf names the package this row turned out to be PART OF - a
 	// signature or a wrapper the vendor publishes as its own tag.
 	//
 	// Nil for an ordinary package. Set only by a re-grouping pass over rows
@@ -90,7 +90,7 @@ type PackageRow struct {
 	// Separate from ExpandedAt because that answers a different question. "Has
 	// it been walked" has two answers; "what is happening to it" has three, and
 	// a release being walked right now must not read as one nobody has touched
-	// — which is what put an "Analyze package" button on a release discovery
+	// - which is what put an "Analyze package" button on a release discovery
 	// was already analysing.
 	AnalysisState string
 	AnalysisError string
@@ -126,7 +126,7 @@ type ArtifactRow struct {
 	// plus its layers.
 	//
 	// Zero for an artifact nobody has walked, which is not the same as an
-	// artifact holding nothing — Fetched is what tells the two apart. SizeBytes
+	// artifact holding nothing - Fetched is what tells the two apart. SizeBytes
 	// above is the descriptor's, which is the size of the pointer.
 	ContentBytes int64
 	// Raw is the manifest exactly as served, when it is still CACHED.
@@ -134,13 +134,13 @@ type ArtifactRow struct {
 	// Nil means one of two different things, and Fetched is what tells them
 	// apart: either this artifact was only LISTED by its parent index and never
 	// fetched, or it was fetched and its bytes have since been evicted. See
-	// migration 00007 — the bytes are a cache in front of the source registry
+	// migration 00007 - the bytes are a cache in front of the source registry
 	// and the fetch is a fact, and conflating them made the cache impossible to
 	// reclaim.
 	Raw []byte
 	// Fetched is `fetched_at IS NOT NULL`: this manifest was pulled from the
 	// registry and verified against its digest, so its blobs and its size are
-	// known. Read back without the bytes themselves — a listing must not load
+	// known. Read back without the bytes themselves - a listing must not load
 	// every manifest body to report which ones we walked.
 	Fetched bool
 	// Cached is `raw IS NOT NULL`: the bytes are still here, so pushing this
@@ -159,7 +159,7 @@ type BlobRef struct {
 	// image, and a manifest reassembled with layers transposed is a different
 	// image that happens to contain the same bytes.
 	Ordinal int
-	// Title is `org.opencontainers.image.title` — the publisher saying "this
+	// Title is `org.opencontainers.image.title` - the publisher saying "this
 	// layer IS this file". Empty for an image layer, which is a tar of an
 	// unknown number of paths and names nothing.
 	Title string
@@ -169,7 +169,7 @@ type BlobRef struct {
 //
 // Every method takes an explicit *sql.Tx rather than opening its own. Discovery
 // writes a package, its artifact tree, an audit event, a notification and
-// possibly a transfer request as ONE atomic fact — a package that exists
+// possibly a transfer request as ONE atomic fact - a package that exists
 // without the notification that announces it is precisely the failure the
 // outbox pattern exists to prevent (docs/design/07 §6).
 type Packages struct {
@@ -191,7 +191,7 @@ func (p *Packages) Dialect() Dialect { return p.dialect }
 
 // ErrAlreadyExists reports that a unique constraint absorbed the write.
 //
-// Not an error condition anywhere in discovery — it is the expected result of
+// Not an error condition anywhere in discovery - it is the expected result of
 // re-scanning a repository, which happens every fifteen minutes forever. It is
 // an error VALUE rather than a bool return so it cannot be silently ignored by
 // a caller that forgot to check.
@@ -200,7 +200,7 @@ var ErrAlreadyExists = errors.New("row already exists")
 // InsertPackage inserts a discovered package.
 //
 // Returns ErrAlreadyExists when (source_repo_id, tag, manifest_digest) is
-// already recorded. THIS is the idempotency mechanism for discovery — not an
+// already recorded. THIS is the idempotency mechanism for discovery - not an
 // application-level "have I seen this?" lookup, which would have a race between
 // the check and the insert. A repeated scan, two overlapping scans, or a scan
 // that crashed halfway and restarted all converge here (docs/design/07 §2).
@@ -217,7 +217,7 @@ func (p *Packages) InsertPackage(ctx context.Context, tx *sql.Tx, row PackageRow
 	// and layer descriptors are inside the one manifest discovery fetched, so
 	// there is no deeper tree to walk. An index-rooted package leaves
 	// total_bytes nil, because the index states the size of each child manifest
-	// and not of the layers beneath it — and that is exactly what `inspect`
+	// and not of the layers beneath it - and that is exactly what `inspect`
 	// exists to resolve.
 	expanded := "NULL"
 	if row.TotalBytes != nil {
@@ -261,13 +261,13 @@ func (p *Packages) InsertPackage(ctx context.Context, tx *sql.Tx, row PackageRow
 // SupersedePrior marks earlier packages carrying THE SAME TAG as superseded.
 //
 // Note `tag = ?`: the statement cannot touch a package with a different tag.
-// This is the point stressed in docs/design/07 §4 — v2.13.0 and v2.14.0 are
+// This is the point stressed in docs/design/07 §4 - v2.13.0 and v2.14.0 are
 // independent software versions that coexist indefinitely, and discovering one
 // does nothing to the other. Supersession is exactly one situation: the same
 // tag re-pushed with different content.
 //
-// The old row's history — what was replicated, when, to where, whether it
-// verified — is preserved. Overwriting in place would be simpler and would
+// The old row's history - what was replicated, when, to where, whether it
+// verified - is preserved. Overwriting in place would be simpler and would
 // destroy the ability to answer "which bytes did we actually ship in March".
 func (p *Packages) SupersedePrior(
 	ctx context.Context, tx *sql.Tx, sourceRepoID int64, tag string, newPackageID int64,
@@ -299,7 +299,7 @@ func (p *Packages) InsertArtifact(ctx context.Context, tx *sql.Tx, a ArtifactRow
 	//
 	// Written as a literal in the statement rather than as a parameter, because
 	// "now" is a dialect expression and a Go time would be formatted by the
-	// driver — which for SQLite means a string that does not sort against the
+	// driver - which for SQLite means a string that does not sort against the
 	// ones the schema's own DEFAULT writes.
 	query := p.dialect.Rewrite(`
 		INSERT INTO package_artifacts
@@ -318,7 +318,7 @@ func (p *Packages) InsertArtifact(ctx context.Context, tx *sql.Tx, a ArtifactRow
 
 	switch {
 	case errors.Is(err, sql.ErrNoRows):
-		// The same manifest can legitimately appear twice in one tree — an index
+		// The same manifest can legitimately appear twice in one tree - an index
 		// listing the same digest under two platforms, say. Recording it once is
 		// correct, so resolve to the existing row rather than failing.
 		return p.artifactID(ctx, tx, a.PackageID, a.Digest)
@@ -417,7 +417,7 @@ type TransferRequestRow struct {
 // the loop (docs/design/07 §5).
 //
 // The bool reports whether this call created the row, so a caller can tell a
-// genuinely new request from a replay — the API surface needs it to answer 201
+// genuinely new request from a replay - the API surface needs it to answer 201
 // versus 200.
 func (p *Packages) CreateTransferRequest(
 	ctx context.Context, tx *sql.Tx, row TransferRequestRow,
@@ -538,19 +538,19 @@ func (p *Packages) EnqueueNotification(ctx context.Context, tx *sql.Tx, row Noti
 
 // EnsureRepository returns a repository row's ID, creating it if absent.
 //
-// Discovery calls this for every repository it resolves — including ones found
+// Discovery calls this for every repository it resolves - including ones found
 // in the registry catalog, which by definition are not in configuration and so
 // have no row yet. `packages` has a foreign key to `repositories`, so the row
 // must exist before anything discovered there can be recorded.
 //
 // managedBy is 'config' or 'discovery'. It exists so reconciliation can
 // deactivate declarations a human removed without touching rows discovery
-// found — otherwise every configuration reload would deactivate every
+// found - otherwise every configuration reload would deactivate every
 // discovered repository and the next scan would revive it, flapping the row
 // and churning the audit trail for no reason.
 // displayPath is the vendor-shortened spelling, or empty where none applies. It
 // is refreshed on every upsert rather than written once, so turning `vendor:
-// near` on — or off — takes effect on the next scan instead of only for
+// near` on - or off - takes effect on the next scan instead of only for
 // repositories discovered afterwards.
 func (p *Packages) EnsureRepository(
 	ctx context.Context, tx *sql.Tx,
@@ -631,7 +631,7 @@ func (p *Packages) DeactivateDiscoveredRepositories(
 // PackageExists reports whether this exact content is already recorded.
 //
 // An OPTIMISATION, not the correctness mechanism. It lets a scan where nothing
-// changed skip the manifest-tree fetch — the expensive part — for tags already
+// changed skip the manifest-tree fetch - the expensive part - for tags already
 // known. The unique constraint in InsertPackage is what actually guarantees no
 // duplicate, so a racing scan between this check and that insert is harmless.
 func (p *Packages) PackageExists(ctx context.Context, sourceRepoID int64, tag, digest string) (bool, error) {
@@ -664,7 +664,7 @@ type ListPackagesFilter struct {
 	// Hidden because they are not releases: showing them triples the length of a
 	// NEAR listing with rows nobody asked about, which is most of the noise the
 	// vendor plugin exists to remove. Available at all because a row that exists
-	// and cannot be seen is worse — somebody eventually has to find out where a
+	// and cannot be seen is worse - somebody eventually has to find out where a
 	// signature went.
 	IncludeAccessories bool
 	Limit              int
@@ -720,15 +720,15 @@ func (p *Packages) ListPackages(ctx context.Context, f ListPackagesFilter) ([]Pa
 	if limit <= 0 || limit > 1000 {
 		limit = 100
 	}
-	// Newest RELEASE first, by the vendor's own declared build date — which is
+	// Newest RELEASE first, by the vendor's own declared build date - which is
 	// the order a person thinks about releases in, and not the same as the
 	// order we happened to notice them.
 	//
 	// The CASE is there because the two dialects DISAGREE about where NULLs go.
 	// Measured, not assumed: with a plain `published_at DESC`, SQLite sorts
 	// NULLs last and PostgreSQL sorts them FIRST. So on Postgres the packages
-	// whose publisher set no date would head the list — the least informative
-	// rows first — and nobody would notice until production, because the
+	// whose publisher set no date would head the list - the least informative
+	// rows first - and nobody would notice until production, because the
 	// development default is SQLite and it looks correct there.
 	//
 	// The CASE makes both dialects agree explicitly rather than relying on a
@@ -773,7 +773,7 @@ func (p *Packages) ListPackages(ctx context.Context, f ListPackagesFilter) ([]Pa
 // than one REPOSITORY.
 //
 // A product routinely spans dozens of repositories, and a vendor's version tag
-// —`orb_23.8.1076` — appears in many of them. Picking one silently is the worst
+// -`orb_23.8.1076` - appears in many of them. Picking one silently is the worst
 // available behaviour: the caller gets a real package, believes it asked for
 // that package, and is wrong. This makes the caller say which.
 type AmbiguousReferenceError struct {
@@ -909,8 +909,8 @@ func (p *Packages) matchPackages(ctx context.Context, productName string, ref Pa
 	default:
 		// EITHER SPELLING RESOLVES.
 		//
-		// A listing renders the display tag — `23.8.1076` for a vendor whose
-		// real tag is `orb_23.8.1076` — and the shortened form has to be
+		// A listing renders the display tag - `23.8.1076` for a vendor whose
+		// real tag is `orb_23.8.1076` - and the shortened form has to be
 		// typeable back, or the abbreviation is a trap: someone copies what
 		// they see, gets "not found", and reasonably concludes the package is
 		// gone.
@@ -967,13 +967,13 @@ func (p *Packages) ListArtifacts(ctx context.Context, packageID int64) ([]Artifa
 	//
 	// `size_bytes` is what the referencing descriptor said this manifest
 	// weighs: a few kilobytes of JSON. It is the right number for planning a
-	// manifest push and the wrong one for every question a person asks — "how
+	// manifest push and the wrong one for every question a person asks - "how
 	// big is this image" means its layers, and summing descriptors reported a
 	// nine-hundred-megabyte image as two kilobytes and a release of two
 	// hundred as half a megabyte.
 	//
 	// Summed from the blobs the walk recorded, so it is zero for an artifact
-	// nobody has walked — which is honest, and which Fetched tells apart from
+	// nobody has walked - which is honest, and which Fetched tells apart from
 	// an artifact that genuinely holds nothing.
 	query := p.dialect.Rewrite(`
 		SELECT pa.id, pa.package_id, pa.parent_id, pa.digest, pa.media_type,
@@ -1069,7 +1069,7 @@ type ExpandedArtifact struct {
 type ExpandedTree struct {
 	Artifacts []ExpandedArtifact
 	// TotalBytes and BlobCount are nil when still unmeasurable, which after a
-	// full walk should not happen — but the type carries the possibility rather
+	// full walk should not happen - but the type carries the possibility rather
 	// than asserting it, because a walk that was truncated must not write a
 	// confident number.
 	TotalBytes *int64
@@ -1085,7 +1085,7 @@ type ExpandedTree struct {
 // package's size stops being unknown.
 //
 // One transaction because a half-expanded package is the worst outcome
-// available — it has a size that omits most of its bytes, and nothing marks it
+// available - it has a size that omits most of its bytes, and nothing marks it
 // as partial. Either the whole tree is known or none of it is.
 func (p *Packages) RecordExpandedTree(ctx context.Context, packageID int64, t ExpandedTree) error {
 	tx, err := p.db.BeginTx(ctx, nil)
@@ -1129,7 +1129,7 @@ func (p *Packages) RecordExpandedTree(ctx context.Context, packageID int64, t Ex
 // index's descriptors with no raw bytes, and this is where they gain them. The
 // raw bytes are written with COALESCE so a re-run cannot blank a manifest we
 // already hold, and fetched_at with COALESCE so a re-run cannot RESET the
-// moment we learned this artifact's contents — which is what an evicted-then-
+// moment we learned this artifact's contents - which is what an evicted-then-
 // refetched row would otherwise do to the record.
 func (p *Packages) upsertArtifact(ctx context.Context, tx *sql.Tx, a ArtifactRow) (int64, error) {
 	query := p.dialect.Rewrite(`
@@ -1174,7 +1174,7 @@ func (p *Packages) upsertArtifact(ctx context.Context, tx *sql.Tx, a ArtifactRow
 //
 // expanded_at is set only when the measurement is a REAL one. A truncated walk
 // leaves total_bytes nil, and stamping the package as expanded in that state
-// would tell every later caller the tree is known when it is not — which is
+// would tell every later caller the tree is known when it is not - which is
 // worse than the unmeasured row it replaced, because nobody questions a
 // timestamp.
 func (p *Packages) setPackageMeasurement(
@@ -1249,7 +1249,7 @@ func annotationsJSON(m map[string]string) any {
 // ---------------------------------------------------------------------------
 
 // RelationRow is one artifact that belongs to a package without living inside
-// its manifest tree — a signature, an SBOM, an attestation, or the wrapper that
+// its manifest tree - a signature, an SBOM, an attestation, or the wrapper that
 // bundles them.
 //
 // Role is vendor-neutral by construction: `signature`, never
@@ -1266,15 +1266,15 @@ type RelationRow struct {
 	// The SIGNATURE MATERIAL: the blob a verifier actually reads.
 	//
 	// Digest above names the MANIFEST that carries the signature. These name
-	// what is inside it — for NEAR, one layer of `application/pkcs7-signature`.
+	// what is inside it - for NEAR, one layer of `application/pkcs7-signature`.
 	// Empty until the package has been inspected, because the manifest has to be
 	// fetched before its layers are known.
 	BlobDigest    string
 	BlobMediaType string
 	BlobSize      int64
 	// Annotations is the signature manifest's own annotation map, verbatim.
-	// A verifier reads vendor keys from it — `com.nokia.ncd.orb.type` to know
-	// what kind of signature this is, `com.nokia.rb.*` to tie it to a release —
+	// A verifier reads vendor keys from it - `com.nokia.ncd.orb.type` to know
+	// what kind of signature this is, `com.nokia.rb.*` to tie it to a release -
 	// without this package knowing any of them exist.
 	Annotations map[string]string
 	// ResolvedAt separates "inspected, and this signature carries no blob" from
@@ -1287,7 +1287,7 @@ type RelationRow struct {
 //
 // Insert-or-ignore rather than delete-then-insert: re-deriving the same
 // relationship on a later scan must be a no-op, and deleting first would open a
-// window where a package briefly appears to have no signature — which is
+// window where a package briefly appears to have no signature - which is
 // exactly the fact a security decision reads.
 func (p *Packages) ReplaceRelations(
 	ctx context.Context, tx *sql.Tx, packageID int64, rows []RelationRow,
@@ -1312,11 +1312,11 @@ func (p *Packages) ReplaceRelations(
 }
 
 // RecordRelationMaterial writes what a relation's manifest turned out to
-// contain — for a signature, the blob a verifier reads.
+// contain - for a signature, the blob a verifier reads.
 //
 // Idempotent and safe to repeat: the tree under a digest cannot change, so a
 // second inspection resolves the same material. `resolved_at` is refreshed each
-// time, which is the honest reading — it says when we last confirmed it, not
+// time, which is the honest reading - it says when we last confirmed it, not
 // when we first guessed.
 func (p *Packages) RecordRelationMaterial(
 	ctx context.Context, packageID int64, role, digest string, m RelationRow,
@@ -1383,7 +1383,7 @@ func (p *Packages) ListRelations(ctx context.Context, packageID int64) ([]Relati
 //
 // The case this exists for: a vendor publishes a release, then signs it
 // afterwards. The payload was recorded on an earlier scan, so the scan that
-// finds the signature has no new package to attach it to — only an old one to
+// finds the signature has no new package to attach it to - only an old one to
 // correct. Without this the package would read `unsigned` forever, which is
 // worse than `unknown` because it looks like an answer.
 func (p *Packages) UpdateSignatureState(
@@ -1435,7 +1435,7 @@ func (p *Packages) SetGroupedLayout(ctx context.Context, sourceRepoID int64, lay
 	return nil
 }
 
-// MarkAccessory records that a package is part of another one — a signature or
+// MarkAccessory records that a package is part of another one - a signature or
 // a wrapper that a vendor publishes as its own tag.
 //
 // The row survives with all its history; it simply stops being listed as a
@@ -1529,8 +1529,8 @@ func (p *Packages) ListPackageDisplayNames(ctx context.Context, sourceRepoID int
 // SetDisplayTag rewrites one package's display tag.
 //
 // `updated_at` is deliberately NOT touched. This is a cosmetic correction to a
-// row nothing about the package has changed in — the digest, the contents and
-// the transfer history are all untouched — and bumping the timestamp would make
+// row nothing about the package has changed in - the digest, the contents and
+// the transfer history are all untouched - and bumping the timestamp would make
 // a configuration edit look like a re-push in every audit and every diff.
 func (p *Packages) SetDisplayTag(ctx context.Context, packageID int64, displayTag string) error {
 	query := p.dialect.Rewrite(`UPDATE packages SET display_tag = ? WHERE id = ?`)
@@ -1545,7 +1545,7 @@ func (p *Packages) SetDisplayTag(ctx context.Context, packageID int64, displayTa
 // It exists so a lookup can be run INSIDE a caller's transaction. On SQLite
 // that is not a stylistic preference: a write transaction holds the database
 // lock, and the same lookup issued on a pooled connection blocks until the
-// transaction ends — which, if the transaction is waiting for the lookup, is
+// transaction ends - which, if the transaction is waiting for the lookup, is
 // never. That deadlock is easy to write and invisible on Postgres, which is
 // where the development default not being the production database bites.
 type rowQueryer interface {
@@ -1555,7 +1555,7 @@ type rowQueryer interface {
 // FindPackageByTag returns the current package for a (repository, tag), or
 // ErrNotFound.
 //
-// Used when a later scan learns something about a package discovered earlier —
+// Used when a later scan learns something about a package discovered earlier -
 // see UpdateSignatureState.
 func (p *Packages) FindPackageByTag(
 	ctx context.Context, sourceRepoID int64, tag string,
@@ -1619,21 +1619,21 @@ func (e *AmbiguousRepositoryError) Error() string {
 //
 // A listing shortens `orbs/cfx-5000-db` to `cfx-5000-db` where the source's
 // vendor plugin says the prefix is structural, so the short form has to resolve
-// or the abbreviation is a trap — someone copies what they see and gets "not
+// or the abbreviation is a trap - someone copies what they see and gets "not
 // found" for a package that is plainly on the screen.
 //
 // Two things match. The stored `display_path`, which is the exact string a
 // listing showed. And any WHOLE TRAILING SEGMENT, never a substring:
 // `cfx-5000-db` matches `orbs/cfx-5000-db` and `a/b/cfx-5000-db`, and never
 // `orbs/x-cfx-5000-db`. The second is deliberately kept even now that display
-// paths are stored — it costs nothing, and someone typing the last segment of a
+// paths are stored - it costs nothing, and someone typing the last segment of a
 // path they can see is making a perfectly clear request whether or not a vendor
 // plugin agrees. Two matches is a real ambiguity and is refused with both,
 // exactly as an ambiguous tag is.
 //
 // Done in Go over the product's repository rows rather than as a LIKE, because
 // a repository path may legally contain `_`, which LIKE would treat as a
-// wildcard — quietly matching `cfx_db` against `cfx-db`.
+// wildcard - quietly matching `cfx_db` against `cfx-db`.
 func (p *Packages) resolveRepositoryPath(
 	ctx context.Context, productName, ref string,
 ) (string, error) {
@@ -1687,8 +1687,8 @@ func (p *Packages) resolveRepositoryPath(
 //
 // This is what makes the walk happen once. Discovery records a package's own
 // manifest and lists what it references without fetching it; expanding fetches
-// the rest. Whichever asks first — `packages describe --expand`, or a transfer
-// planning its jobs — pays for the walk, and everyone after reads this.
+// the rest. Whichever asks first - `packages describe --expand`, or a transfer
+// planning its jobs - pays for the walk, and everyone after reads this.
 //
 // It is a CACHE, not a second source of truth. The tree under a digest is
 // immutable, so a recorded tree can never be stale: content addressing is what
@@ -1697,7 +1697,7 @@ func (p *Packages) resolveRepositoryPath(
 // complete is false when any artifact row was never FETCHED, which is exactly
 // the state discovery leaves behind. Deliberately not "still holds its bytes":
 // the manifest bodies are an evictable cache (migration 00007) and a package
-// whose bytes were reclaimed is still fully known — its artifacts, blobs and
+// whose bytes were reclaimed is still fully known - its artifacts, blobs and
 // sizes are all recorded. Tying completeness to the bytes would mean every
 // eviction bought back a full registry walk, and the cache could never actually
 // be reclaimed.
@@ -1822,7 +1822,7 @@ func (p *Packages) attachBlobs(
 //
 // Each distinct digest counted ONCE: a fat index whose platforms share a base
 // layer does not transfer that layer per platform, and summing naively would
-// overstate the cost — sometimes several times over — making every size shown
+// overstate the cost - sometimes several times over - making every size shown
 // to an operator, and every estimate derived from one, wrong.
 func measureExpanded(artifacts []ExpandedArtifact) (*int64, *int) {
 	seen := map[string]bool{}
@@ -1864,7 +1864,7 @@ func measureExpanded(artifacts []ExpandedArtifact) (*int64, *int) {
 // JobRow is one unit of work: ONE blob to move, or ONE manifest to push.
 //
 // Never a package. That single choice produces most of the system's good
-// properties — a thousand independent jobs distribute across the whole fleet, a
+// properties - a thousand independent jobs distribute across the whole fleet, a
 // network blip costs a retry of one blob rather than a restart of sixty
 // gigabytes, workers are stateless because a job is self-contained, and
 // deduplication is natural because the unit of work IS the unit of content
@@ -1890,7 +1890,7 @@ type JobRow struct {
 	//
 	// It exists so the dequeue can order by size WITHIN a rank. A component
 	// published twice is two jobs of identical size, and the second is a
-	// cross-repository mount — but only if it runs after the first. Ordering by
+	// cross-repository mount - but only if it runs after the first. Ordering by
 	// size alone makes them adjacent and both stream from the vendor; ordering
 	// by rank first guarantees the placement the second one mounts from already
 	// exists. See migration 00011.
@@ -1900,7 +1900,7 @@ type JobRow struct {
 	//
 	// Resolved at PLANNING time from the artifact's own
 	// org.opencontainers.image.ref.name, not derived at lease time from the
-	// package row — which could only ever produce the one tag a person asked
+	// package row - which could only ever produce the one tag a person asked
 	// for, and so lost every component's own name.
 	TargetTags []string
 	// TargetRepository is the destination path, denormalised for diagnostics.
@@ -1987,7 +1987,7 @@ type PlanTotals struct {
 // is no wave-0 job left to complete and drive it. The transfer would sit in
 // `ready` with a queue full of blocked manifests, forever.
 //
-// That is not a hypothetical — it is the SECOND transfer of any package, which
+// That is not a hypothetical - it is the SECOND transfer of any package, which
 // is the case deduplication exists to make fast.
 func (p *Packages) RecordPlan(
 	ctx context.Context, tx *sql.Tx, transferID string, t PlanTotals,
@@ -2065,12 +2065,12 @@ func (p *Packages) OpenFirstWave(ctx context.Context, tx *sql.Tx, transferID str
 
 // PlacedDigests reports which of these digests are already in a repository.
 //
-// A DATABASE lookup, not a network call — that is what makes planning a
+// A DATABASE lookup, not a network call - that is what makes planning a
 // thousand-blob package fast. Registry HEADs are deferred to the worker, where
 // they run in parallel and where a stale record is caught anyway.
 //
 // A placement is STRONG EVIDENCE, not proof: a registry's garbage collector can
-// remove content underneath us. Two defences make the optimism safe — entries
+// remove content underneath us. Two defences make the optimism safe - entries
 // past their TTL are not trusted, and a manifest push failing with BLOB_UNKNOWN
 // invalidates the placements for that manifest's blobs and requeues them. The
 // registry itself tells us when the cache is wrong.
@@ -2084,7 +2084,7 @@ func (p *Packages) PlacedDigests(
 //
 // Not a convenience. SQLite is opened with SetMaxOpenConns(1), so a read
 // issued on the pool while the caller holds a write transaction waits for a
-// connection that transaction will not release until it commits — a deadlock
+// connection that transaction will not release until it commits - a deadlock
 // that presents as a hung planner rather than an error. The planner reads
 // placements between writing destination rows and writing jobs, so it must
 // read on its own transaction.
@@ -2106,7 +2106,7 @@ type rowQuerier interface {
 //
 // # The waste this exists to remove
 //
-// A bundle's components are published in two repositories at the destination —
+// A bundle's components are published in two repositories at the destination -
 // inside the bundle so its index resolves, and under their own name so they can
 // be pulled as themselves (internal/transfer/layout.go). That is one digest with
 // two destination repositories, and therefore two jobs.
@@ -2115,7 +2115,7 @@ type rowQuerier interface {
 // so is a HEAD, so the second job could see nothing of the first's work: it
 // fetched the same bytes from the vendor a second time and pushed them a second
 // time. Every relocated component in a bundle cost exactly twice its size over
-// the WAN — which on a real ORB is most of it.
+// the WAN - which on a real ORB is most of it.
 //
 // The registry can do this move itself. Both destinations are the same registry
 // by construction, so once one holds the blob the other can have it by
@@ -2135,8 +2135,8 @@ type rowQuerier interface {
 // already at the destination and moves nothing, so if the record is wrong the
 // manifest referencing it fails. That is what placementTTLSeconds bounds.
 //
-// A stale placement used as a MOUNT HINT is harmless. The mount either works —
-// which proves the record was right — or the registry declines it and the
+// A stale placement used as a MOUNT HINT is harmless. The mount either works -
+// which proves the record was right - or the registry declines it and the
 // worker streams, exactly as it would have with no hint at all. The cost of
 // being wrong is ONE request.
 //
@@ -2145,7 +2145,7 @@ type rowQuerier interface {
 // release in its repository PATH, so every new release lands in a brand-new
 // destination repository that necessarily has no placements of its own. The
 // only thing that keeps its blobs from crossing the WAN again is a mount from
-// the version-stable component repositories where the last release put them —
+// the version-stable component repositories where the last release put them -
 // and a release shipped a week after the last one found those records expired
 // and re-streamed the whole bundle.
 func (p *Packages) MountableFrom(
@@ -2221,7 +2221,7 @@ func (p *Packages) placedDigests(
 	}
 
 	// Chunked, because a package with thousands of blobs would otherwise build
-	// a statement with thousands of placeholders — which SQLite refuses outright
+	// a statement with thousands of placeholders - which SQLite refuses outright
 	// and Postgres merely plans badly.
 	const chunk = 500
 	for start := 0; start < len(digests); start += chunk {
@@ -2290,7 +2290,7 @@ const mountHintHorizonSeconds = 90 * 24 * 60 * 60
 //
 // source distinguishes how we know: `transferred` (we put it there),
 // `mounted` (the registry relocated it), `observed` (a HEAD found it). The
-// distinction is worth keeping — an observed placement is the weakest evidence
+// distinction is worth keeping - an observed placement is the weakest evidence
 // and the first thing to doubt when something is missing.
 func (p *Packages) RecordPlacement(
 	ctx context.Context, tx *sql.Tx, repositoryID int64, digest string, size int64, source string,
@@ -2320,7 +2320,7 @@ func (p *Packages) RecordPlacement(
 func (p *Packages) CreateTransfer(ctx context.Context, tx *sql.Tx, row TransferRow) (bool, error) {
 	// A step with a predecessor opens in `waiting` rather than `planning`.
 	// Planning it now would read from a target that does not hold the content
-	// yet — the whole reason the ordering exists.
+	// yet - the whole reason the ordering exists.
 	state := "planning"
 	if row.DependsOn != "" {
 		state = "waiting"
@@ -2375,7 +2375,7 @@ const retryAnalysisAfter = time.Hour
 //
 // # What "analysed" means here
 //
-// Discovery records what a tag's own manifest LISTS and stops there — it
+// Discovery records what a tag's own manifest LISTS and stops there - it
 // answers "what is new", and the tree beneath a root digest is recoverable
 // whenever it is wanted (docs/design/07 §12). So a freshly discovered package
 // has one fetched artifact and a list of children nobody has read: no sizes, no
@@ -2386,7 +2386,7 @@ const retryAnalysisAfter = time.Hour
 //
 // A vendor catalogue accumulates years of releases, and walking all of them
 // would be a large, pointless conversation with somebody else's registry. The
-// releases anybody opens, compares or downloads are the new ones — so those are
+// releases anybody opens, compares or downloads are the new ones - so those are
 // walked ahead of being asked for, and an old one is walked when somebody
 // actually asks.
 //
@@ -2401,7 +2401,7 @@ func (p *Packages) UnanalysedRecent(
 
 	// Scoped to ONE SOURCE REPOSITORY, not to a product. A product's sources
 	// are distinct registries with distinct credentials, and the caller that
-	// acts on this list holds a client for one of them — handing it a package
+	// acts on this list holds a client for one of them - handing it a package
 	// from another source would point that client at a path its registry has
 	// never heard of.
 	rows, err := p.db.QueryContext(ctx, p.dialect.Rewrite(`

@@ -28,7 +28,7 @@ var ErrUnreachable = errors.New("coordinator unreachable")
 // Separate from ErrUnreachable because they call for opposite actions. "The
 // Coordinator is down" means go and look at the Coordinator; "it is still
 // working on your request" means give it longer. Reporting both as
-// unreachable — which is what this client used to do — sends operators to
+// unreachable - which is what this client used to do - sends operators to
 // investigate a healthy service, and is exactly the confusion `products check`
 // and `packages discover` produced against their 30-second default.
 var ErrTimeout = errors.New("the request timed out")
@@ -126,7 +126,7 @@ func (c *Client) ListPackages(ctx context.Context, product string, opts ListPack
 // ComparePackage walks two places and reports what is different.
 //
 // The reference names the FIRST end's version; everything about the second is
-// in the request, because the two ends are symmetric — source against target,
+// in the request, because the two ends are symmetric - source against target,
 // target against target, and one place at two versions are the same call.
 func (c *Client) ComparePackage(
 	ctx context.Context, product, ref string, req CompareRequest,
@@ -143,8 +143,8 @@ func (c *Client) ComparePackage(
 // CompareProgress reads where a comparison has got to.
 //
 // Polled WHILE ComparePackage is still in flight, using the token that request
-// carried. A 404 is a normal answer — progress lives in the memory of the
-// replica running the comparison and is dropped shortly after it finishes — so
+// carried. A 404 is a normal answer - progress lives in the memory of the
+// replica running the comparison and is dropped shortly after it finishes - so
 // a caller treats it as "no position available", not as a failure.
 func (c *Client) CompareProgress(
 	ctx context.Context, token string,
@@ -225,8 +225,8 @@ func (c *Client) ListArtifacts(ctx context.Context, product, ref string) (*ListA
 // "works" and is the kind of thing that breaks the first time a proxy
 // normalises the path.
 //
-// So the user-facing spelling stays `orbs/core:v1` — it is what a person has
-// in their hand — and the wire form is `/packages/v1?repository=orbs/core`.
+// So the user-facing spelling stays `orbs/core:v1` - it is what a person has
+// in their hand - and the wire form is `/packages/v1?repository=orbs/core`.
 // A reference with no slash needs no rewriting and gets none, which keeps the
 // common single-repository URL exactly as it was.
 func splitPackageRef(ref string) (segment, query string) {
@@ -244,7 +244,7 @@ func splitPackageRef(ref string) (segment, query string) {
 
 // DiscoverPackages triggers an immediate scan.
 //
-// The colon in the path is an AIP-136 custom method and must NOT be escaped —
+// The colon in the path is an AIP-136 custom method and must NOT be escaped -
 // it is a structural separator, not data.
 func (c *Client) DiscoverPackages(ctx context.Context, product, source string) (*DiscoverPackagesResponse, error) {
 	return c.discover(ctx, product, DiscoverPackagesRequest{Source: source})
@@ -278,8 +278,8 @@ func (c *Client) DiscoverAll(ctx context.Context) (*DiscoverAllResponse, error) 
 
 // InspectPackage expands one package's manifest tree and returns its size.
 //
-// Slow by nature: it reads from the source registry. Idempotent — the tree
-// under a digest cannot change — so a second call is cheap and honest about it.
+// Slow by nature: it reads from the source registry. Idempotent - the tree
+// under a digest cannot change - so a second call is cheap and honest about it.
 func (c *Client) InspectPackage(ctx context.Context, product, ref string) (*InspectPackageResponse, error) {
 	var out InspectPackageResponse
 	// The colon is an AIP-136 structural separator and must NOT be escaped.
@@ -347,7 +347,7 @@ func (c *Client) ControlTransfer(
 // SetTransferPriority reorders what a transfer has left to do.
 //
 // Its own method rather than a verb on ControlTransfer, because it is the one
-// control verb that carries a value — and a signature that took `verb, body`
+// control verb that carries a value - and a signature that took `verb, body`
 // would let any of the others be called with a body they do not read.
 func (c *Client) SetTransferPriority(
 	ctx context.Context, id string, priority int,
@@ -371,7 +371,7 @@ func (c *Client) RetryTransfers(ctx context.Context) (*RetryTransferResponse, er
 //
 // The slowest call in this client by a wide margin: it moves real data in both
 // directions for as long as the requested budget allows. Callers must raise
-// their timeout to match — the sweep alone is roughly budget × (levels + 2) per
+// their timeout to match - the sweep alone is roughly budget × (levels + 2) per
 // side, and a client timeout that fires mid-run cancels the probes and reports
 // the Coordinator as unreachable.
 func (c *Client) Calibrate(
@@ -386,9 +386,9 @@ func (c *Client) Calibrate(
 // transportError classifies a failure to get any response at all.
 //
 // The distinction is worth the code because the two cases are diagnosed in
-// opposite directions, and because Go's own message for a client timeout —
+// opposite directions, and because Go's own message for a client timeout -
 // "context deadline exceeded (Client.Timeout exceeded while awaiting headers)"
-// — names neither the timeout that was in force nor the flag that changes it.
+// - names neither the timeout that was in force nor the flag that changes it.
 func (c *Client) transportError(err error) error {
 	var nerr net.Error
 	timedOut := errors.Is(err, context.DeadlineExceeded) ||
@@ -481,7 +481,7 @@ func (c *Client) get(ctx context.Context, path string, out any) error {
 // decodeProblem turns an error response into a *Problem.
 //
 // A server that returns a non-problem body (a proxy error page, say) still
-// yields a usable Problem rather than a decode failure — otherwise the user
+// yields a usable Problem rather than a decode failure - otherwise the user
 // sees "invalid character '<'" instead of the actual status.
 func decodeProblem(resp *http.Response) error {
 	body, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))

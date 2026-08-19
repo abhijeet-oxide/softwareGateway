@@ -2,7 +2,7 @@
 --
 -- `syncing` is the one that cannot be avoided. A delegated transfer creates no
 -- jobs, so without it such a transfer would sit in `running` with an empty job
--- set — and the wave-drain check would settle it immediately, reporting success
+-- set - and the wave-drain check would settle it immediately, reporting success
 -- at the moment we had asked Quay to start and before anything had happened.
 -- Reusing an existing state here would be exactly the failure docs/design/18
 -- section 6 warns about: the same-shaped object with a field that quietly means

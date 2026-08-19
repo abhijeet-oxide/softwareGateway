@@ -6,7 +6,7 @@ import { Shell } from './Shell'
 /**
  * Routing.
  *
- * Eight nav entries, and two drill-downs reached from them — never as extra
+ * Eight nav entries, and two drill-downs reached from them - never as extra
  * nav entries (UI brief §3). Every page is lazily loaded, so the first paint
  * carries the shell and one page rather than all ten.
  */
@@ -49,7 +49,7 @@ export function App() {
           <Route path="/packages/:product/:reference" element={<PackageDetail />} />
           {/*
             The old spelling. Links to it exist in chat threads and tickets, so
-            it redirects rather than 404ing — and it redirects to the same path
+            it redirects rather than 404ing - and it redirects to the same path
             under the new name so a deep link to one release still lands on it.
           */}
           <Route path="/software" element={<Navigate to="/packages" replace />} />

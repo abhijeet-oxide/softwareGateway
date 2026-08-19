@@ -128,13 +128,13 @@ func run() error {
 
 	// A worker with no products can lease nothing it could execute. Refusing to
 	// start is the whole point: the alternative is what happened on the first
-	// real run — the worker came up, leased two and a half thousand jobs, and
+	// real run - the worker came up, leased two and a half thousand jobs, and
 	// failed every one of them, consuming an attempt each time because attempts
 	// are counted at LEASE time. A worker that cannot do the work must not take
 	// it.
 	//
 	// The loader returns no error for a missing directory, which is right for
-	// the Coordinator — configuration can arrive later via the watcher — and
+	// the Coordinator - configuration can arrive later via the watcher - and
 	// wrong here, so the check belongs at this end.
 	if products.Count() == 0 {
 		return fmt.Errorf(
@@ -222,7 +222,7 @@ func run() error {
 		<-gctx.Done()
 		// Stopping is not a drain protocol. In-flight blobs are abandoned and
 		// their leases expire, which the Coordinator's reaper handles as the
-		// ordinary case — it is the same path a SIGKILL takes, so it is the
+		// ordinary case - it is the same path a SIGKILL takes, so it is the
 		// one that has to work anyway.
 		logger.Info("draining")
 

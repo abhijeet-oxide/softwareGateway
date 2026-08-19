@@ -59,7 +59,7 @@ func TestAnAnswerOtherThanYesCancels(t *testing.T) {
 		if err != nil {
 			t.Fatalf("%q: %v", answer, err)
 		}
-		// Not a terminal, so it does not actually ask — the guard is that a
+		// Not a terminal, so it does not actually ask - the guard is that a
 		// non-interactive stream proceeds rather than blocking forever on a
 		// question nobody can answer.
 		if !ok {

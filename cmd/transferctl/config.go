@@ -90,13 +90,13 @@ type validationResult struct {
 	Errors  []validationError `json:"errors,omitempty"`
 
 	// Deprecations are superseded keys the document still uses. They do not
-	// make it invalid — the values are honoured — so they are reported
+	// make it invalid - the values are honoured - so they are reported
 	// separately and never affect the exit code. A CI job that started failing
 	// because a key was renamed is a CI job people learn to ignore.
 	Deprecations []string `json:"deprecations,omitempty"`
 
 	// Warnings are configurations that are valid and probably not intended.
-	// Like deprecations they never affect the exit code — a warning that
+	// Like deprecations they never affect the exit code - a warning that
 	// fails CI is a warning somebody turns off.
 	Warnings []validationError `json:"warnings,omitempty"`
 }
@@ -206,7 +206,7 @@ func renderValidationReport(w io.Writer, report validationReport) error {
 
 	if report.DeprecationCount > 0 {
 		fmt.Fprintln(w)
-		fmt.Fprintf(w, "%d deprecated key(s) in use. They still work — the values are honoured —\n",
+		fmt.Fprintf(w, "%d deprecated key(s) in use. They still work - the values are honoured -\n",
 			report.DeprecationCount)
 		fmt.Fprintln(w, "but they are folded into `concurrency`, which replaced them:")
 		fmt.Fprintln(w)

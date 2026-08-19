@@ -20,14 +20,14 @@ import (
 //
 // It exists because the registry is under no obligation to finish while we are
 // looking. A mirror that completes overnight, during a Coordinator restart,
-// must still settle correctly in the morning — so the outcome is derived from
+// must still settle correctly in the morning - so the outcome is derived from
 // polling persisted state rather than from a goroutine that happened to be
 // waiting when the sync ended.
 //
 // Two questions per tick, and they are genuinely different:
 //
-//	1. What does the registry SAY?   — its sync status
-//	2. What is actually THERE?       — a walk of the destination
+//	1. What does the registry SAY?   - its sync status
+//	2. What is actually THERE?       - a walk of the destination
 //
 // Only the second can distinguish `succeeded` from `diverged`, which is why a
 // completed sync is never settled on the registry's word alone. See
@@ -82,7 +82,7 @@ type Watcher struct {
 	// timeout is how long a sync may stay unsettled before it is failed.
 	//
 	// Not optional, and not generous. Without it a mirror the registry quietly
-	// forgot leaves a transfer in `syncing` forever — the one delegated
+	// forgot leaves a transfer in `syncing` forever - the one delegated
 	// failure mode with no error anywhere to notice it by.
 	timeout time.Duration
 }
@@ -220,7 +220,7 @@ func (w *Watcher) check(ctx context.Context, s store.OpenSync) (string, error) {
 
 	case quayStatus == quay.SyncNeverRun:
 		// We asked and the registry has not started. Normal for a few seconds,
-		// a fault after the timeout — and the timeout is the only thing that
+		// a fault after the timeout - and the timeout is the only thing that
 		// can tell the two apart.
 		if w.expired(s) {
 			return w.settle(ctx, s, store.SyncFailed, raw, "",
@@ -230,7 +230,7 @@ func (w *Watcher) check(ctx context.Context, s store.OpenSync) (string, error) {
 
 	default:
 		// An unrecognised status. Not settled either way, because guessing is
-		// exactly what docs/design/18 refuses to do — but not ignored either:
+		// exactly what docs/design/18 refuses to do - but not ignored either:
 		// the timeout still applies, so this cannot hang forever.
 		if w.expired(s) {
 			return w.settle(ctx, s, store.SyncFailed, raw, "", fmt.Sprintf(
@@ -263,14 +263,14 @@ func (w *Watcher) verifyArrival(ctx context.Context, s store.OpenSync, raw strin
 		// it is: the sync succeeded and the tag is not there, which almost
 		// always means the tag glob never matched it.
 		return w.settle(ctx, s, store.SyncFailed, raw, "", fmt.Sprintf(
-			"the sync completed but %q is not at the destination — the tag globs most likely do not match it", s.Tag))
+			"the sync completed but %q is not at the destination - the tag globs most likely do not match it", s.Tag))
 	case err != nil:
 		return "", err
 	}
 
 	if s.ExpectedDigest != "" && observed != s.ExpectedDigest {
 		return w.settle(ctx, s, store.SyncDiverged, raw, observed, fmt.Sprintf(
-			"the destination holds %s for %q, not the %s we asked for — the upstream tag has moved",
+			"the destination holds %s for %q, not the %s we asked for - the upstream tag has moved",
 			shortDigest(observed), s.Tag, shortDigest(s.ExpectedDigest)))
 	}
 	return w.settle(ctx, s, store.SyncSucceeded, raw, observed, "")
@@ -317,7 +317,7 @@ func (w *Watcher) settle(ctx context.Context, s store.OpenSync, outcome, raw, ob
 
 	if w.metrics != nil {
 		w.metrics.RecordSync(s.Product, s.TargetName, outcome)
-		// Observed between OUR request and the registry reporting it done —
+		// Observed between OUR request and the registry reporting it done -
 		// which is not a measurement of the registry's own work, and the
 		// metric's help text says so. Recorded only when we know when we
 		// asked, because a duration from an unknown start is a made-up number.
@@ -381,7 +381,7 @@ func shortDigest(d string) string {
 // SetLeader is called by the elector on every leadership change.
 //
 // Leader-gated for the same reason the expander is: every tick is idempotent,
-// so running it on both replicas would be harmless — and would double the
+// so running it on both replicas would be harmless - and would double the
 // polling load on somebody else's registry for no benefit.
 func (w *Watcher) SetLeader(isLeader bool) {
 	w.mu.Lock()

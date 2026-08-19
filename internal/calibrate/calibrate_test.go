@@ -97,7 +97,7 @@ func TestReadProbeReadsRealBlobs(t *testing.T) {
 
 // A REPOSITORY OF SMALL BLOBS IS A POOR SAMPLE AND A USABLE ONE.
 //
-// Refusing to measure it — which is what this used to do — leaves somebody
+// Refusing to measure it - which is what this used to do - leaves somebody
 // looking at "no blob of at least 256 KiB" for a repository they can see is
 // full of layers, with no way to act on a threshold they cannot see. Measure
 // it, and let the report carry the caveat.
@@ -278,7 +278,7 @@ func loadProduct(t *testing.T, doc string) *product.Product {
 // A SOURCE SPANNING MANY REPOSITORIES MUST NOT BE JUDGED BY THE FIRST ONE.
 //
 // The first declared repository is as likely as not to be a stub. A real run
-// measured `cfx-5000-product/aaa` — one tag, nothing over 256 KiB — and
+// measured `cfx-5000-product/aaa` - one tag, nothing over 256 KiB - and
 // reported the entire source as unmeasurable while the repositories holding
 // sixty gigabytes sat next to it in the same list.
 func TestSamplingWalksPastAnEmptyRepository(t *testing.T) {
@@ -307,7 +307,7 @@ func TestSamplingWalksPastAnEmptyRepository(t *testing.T) {
 }
 
 // When there is genuinely nothing to read, the error names what was tried and
-// what to do about it — rather than one repository nobody chose.
+// what to do about it - rather than one repository nobody chose.
 func TestSamplingSaysWhatItTriedWhenItFindsNothing(t *testing.T) {
 	reg := fakeregistry.New()
 	t.Cleanup(reg.Close)
@@ -330,7 +330,7 @@ func TestSamplingSaysWhatItTriedWhenItFindsNothing(t *testing.T) {
 // A bundle's root lists its components, each component is a multi-platform
 // index, and the layers live a level below THAT. A search that descends once
 // lands on a component index, finds no layers because an index has none, and
-// reports a repository holding gigabytes as having nothing worth measuring —
+// reports a repository holding gigabytes as having nothing worth measuring -
 // which is exactly what happened against a real ORB, with and without
 // --source-repository, while `packages inspect` listed every layer.
 func TestBlobsAreFoundUnderAnIndexOfIndexes(t *testing.T) {
@@ -348,7 +348,7 @@ func TestBlobsAreFoundUnderAnIndexOfIndexes(t *testing.T) {
 
 	// Only the bundle is TAGGED, which is the real shape: a vendor publishes
 	// the release, not each manifest under it. Without this the search reaches
-	// the layers by opening the leaf's own tag and never descends at all —
+	// the layers by opening the leaf's own tag and never descends at all -
 	// which is how the first version of this test passed against code that
 	// could not descend.
 	reg.RemoveTag("orbs/bundle", "component-linux-amd64")
@@ -380,7 +380,7 @@ func TestNewerTagsAreOpenedFirst(t *testing.T) {
 // A SIGNATURE IS THE WORST POSSIBLE SAMPLE AND SORTS FIRST.
 //
 // `signature_orb_25.7` sorts after `orb_25.7`, and cosign's `sha256-….sig`
-// sorts after everything — so opening newest-first walks straight into a
+// sorts after everything - so opening newest-first walks straight into a
 // handful of three-kilobyte PKCS#7 blobs and concludes the repository has
 // nothing worth measuring. They go last, and are still opened, because a
 // repository holding only signatures is still measurable.

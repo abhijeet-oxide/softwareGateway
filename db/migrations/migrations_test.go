@@ -44,7 +44,7 @@ func eachMigration(t *testing.T, fn func(dialect, name, body string)) {
 			fn(d, e.Name(), string(b))
 		}
 		if !found {
-			t.Fatalf("no .sql migrations embedded for %s — the embed directive is wrong", d)
+			t.Fatalf("no .sql migrations embedded for %s - the embed directive is wrong", d)
 		}
 	}
 }
@@ -53,8 +53,8 @@ func eachMigration(t *testing.T, fn func(dialect, name, body string)) {
 // session and that no dialect-specific test would catch.
 //
 // goose inspects EVERY SQL-comment line for its "+goose" marker. A comment
-// that merely mentions a directive — for example, explaining when
-// NO TRANSACTION should be used — is parsed as a real directive and fails the
+// that merely mentions a directive - for example, explaining when
+// NO TRANSACTION should be used - is parsed as a real directive and fails the
 // migration at Coordinator startup.
 //
 // The original bug lived only in the Postgres file, so the SQLite-backed store
@@ -88,7 +88,7 @@ func TestMigrationsHaveUpAndDown(t *testing.T) {
 			t.Errorf("%s/%s: missing the Up marker", dialect, name)
 		}
 		if !strings.Contains(body, "-- +goose Down") {
-			t.Errorf("%s/%s: missing the Down marker — needed for local rollback", dialect, name)
+			t.Errorf("%s/%s: missing the Down marker - needed for local rollback", dialect, name)
 		}
 		if strings.Index(body, "-- +goose Up") > strings.Index(body, "-- +goose Down") {
 			t.Errorf("%s/%s: Up must precede Down", dialect, name)

@@ -14,7 +14,7 @@ import (
 // comparison saying `chart` where a transfer summary says `image` describes one
 // registry as two, and the reader has no way to tell which is wrong. It lives
 // here because both callers already depend on this package's vocabulary, and
-// because the answer is derived from OCI fields alone — no vendor, no
+// because the answer is derived from OCI fields alone - no vendor, no
 // configuration, and nothing about where the artifact came from.
 //
 // # Why the media type leads
@@ -59,7 +59,7 @@ const (
 // Classify names what an artifact is from the fields that describe it.
 //
 // configMediaType is the media type of the manifest's config blob, and may be
-// empty for an index — which has none — or for an artifact nothing has fetched.
+// empty for an index - which has none - or for an artifact nothing has fetched.
 // Any of the three may be empty, and that is a real state rather than a
 // caller's mistake: content older than OCI 1.1 has no `artifactType`, and a
 // descriptor written by something careless has none of them.

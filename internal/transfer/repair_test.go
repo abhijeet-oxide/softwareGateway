@@ -25,7 +25,7 @@ import (
 // delivered nothing: every manifest failed that way, eight times each, and then
 // permanently.
 //
-// Two separate defects made that possible and both are covered here — the
+// Two separate defects made that possible and both are covered here - the
 // classification, which read MANIFEST_INVALID as "these bytes are wrong and
 // always will be", and the missing repair, which docs/design/11 §2.5 specified
 // and nothing implemented.
@@ -85,7 +85,7 @@ func TestTheRepairIsWhatMakesTheBundleSurvive(t *testing.T) {
 
 	// And the FIRST escalation must be the cheap one. A repair that jumps
 	// straight to streaming re-sends content the destination registry is
-	// holding in a sibling repository and could relocate internally — which on
+	// holding in a sibling repository and could relocate internally - which on
 	// the second transfer of a product line is the whole package.
 	overshot := s.count(`SELECT COUNT(*) FROM jobs WHERE kind='blob' AND repair_level > 1`)
 	if overshot != 0 {
@@ -105,7 +105,7 @@ func TestARejectionNamingABlobIsTreatedAsRepairable(t *testing.T) {
 	s.drain("worker-1", 8)
 
 	// Nothing may be left terminally failed, and in particular nothing may be
-	// left failed as `unsupported` — which is what the rejection was read as
+	// left failed as `unsupported` - which is what the rejection was read as
 	// before the detail was consulted.
 	var class string
 	err := s.st.DB().QueryRowContext(s.t.Context(),

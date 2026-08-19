@@ -8,14 +8,14 @@ import { isLive, repositoryOf, transferVersion } from '../domain/derive'
 import { bytes, elapsedSeconds, formatBytes, formatDuration } from '../domain/format'
 import { NA, Value } from '../components/value'
 import { ManagedInGit, TimeAgo, TransferStateTag } from '../components/chips'
-import { EmptyStateCard, ErrorState, PageHeader } from '../components/layout'
+import { EmptyStateCard, ErrorState } from '../components/layout'
 import { DownloadProgress } from '../components/progress'
 import { PriorityControl, QueueControls } from '../components/queuecontrols'
 import { mono } from '../theme'
 import type { AutoDownloadRuleView, DownloadView, ReplicationView, Transfer } from '../api/types'
 
 /**
- * Page 6 — Downloads.
+ * Page 6 - Downloads.
  *
  * Answers: what is downloading right now, what has finished, and what comes in
  * automatically?
@@ -25,7 +25,7 @@ import type { AutoDownloadRuleView, DownloadView, ReplicationView, Transfer } fr
  * A download is started from the package being downloaded, where the reader
  * can see what they are asking for. Here they are watching, and a page that
  * both watches and acts had a product selector at the top that scoped only
- * half of it — the ongoing list is estate-wide, and a selector above it
+ * half of it - the ongoing list is estate-wide, and a selector above it
  * implied otherwise.
  *
  * # The distinction the configuration half is built on
@@ -102,7 +102,6 @@ export default function Downloads() {
   if (products.isError) {
     return (
       <>
-        <PageHeader title="Downloads" description="What is downloading now, and what comes in automatically" />
         <ErrorState error={products.error} retry={() => void products.refetch()} />
       </>
     )
@@ -110,10 +109,6 @@ export default function Downloads() {
 
   return (
     <>
-      <PageHeader
-        title="Downloads"
-        description="What is downloading now, and what comes in automatically"
-      />
 
       {drifted.length > 0 && (
         <Alert
@@ -172,7 +167,7 @@ export default function Downloads() {
                   },
                   { title: 'State', width: 130, render: (_, t) => <TransferStateTag state={t.state} /> },
                   {
-                    // How far, how long, and how much longer — one cell,
+                    // How far, how long, and how much longer - one cell,
                     // because each of the three is misleading without the
                     // other two.
                     title: 'Progress',
@@ -205,7 +200,7 @@ export default function Downloads() {
         <Col span={24}>
           <Card title="Recent downloads" loading={transfers.isLoading}>
             <Typography.Paragraph type="secondary" style={{ fontSize: 13 }}>
-              Downloads that have finished — succeeded, failed or stopped. Anything still running is
+              Downloads that have finished - succeeded, failed or stopped. Anything still running is
               in the card above.
             </Typography.Paragraph>
             {!transfers.isLoading && finished.length === 0 ? (
@@ -259,7 +254,7 @@ export default function Downloads() {
         <Col span={24}>
           <Card title="How a download runs" extra={<ManagedInGit />} loading={downloadsPerProduct.some((q) => q.isLoading)}>
             <Typography.Paragraph type="secondary" style={{ fontSize: 13 }}>
-              What happens when a product is downloaded — where the software goes, in what order,
+              What happens when a product is downloaded - where the software goes, in what order,
               and what has to verify on the way.
             </Typography.Paragraph>
             <Table<WithProduct<DownloadView>>
@@ -309,7 +304,7 @@ export default function Downloads() {
           <Card title="Auto-download rules" extra={<ManagedInGit />} loading={rulesPerProduct.some((q) => q.isLoading)}>
             <Typography.Paragraph type="secondary" style={{ fontSize: 13 }}>
               When a download happens by itself. A rule matches a version pattern and triggers one of
-              the downloads above — it performs nothing of its own.
+              the downloads above - it performs nothing of its own.
             </Typography.Paragraph>
 
             {!rulesPerProduct.some((q) => q.isLoading) && rules.length === 0 ? (

@@ -1,8 +1,8 @@
-# 10 — State Machines
+# 10 - State Machines
 
-> **Prerequisite:** [03 — Persistence](03-persistence.md) · **Related:** [04](04-queue-and-scheduling.md), [05](05-transfer-engine.md), [08](08-verification.md)
+> **Prerequisite:** [03 - Persistence](03-persistence.md) · **Related:** [04](04-queue-and-scheduling.md), [05](05-transfer-engine.md), [08](08-verification.md)
 
-> **Requirement: avoid implicit states.** Every state in this document is named, stored in a column, and constrained by a `CHECK` that enumerates exactly these values. A state that exists only as a combination of nullable timestamps is not a state — it is a bug waiting for someone to add a sixth interpretation.
+> **Requirement: avoid implicit states.** Every state in this document is named, stored in a column, and constrained by a `CHECK` that enumerates exactly these values. A state that exists only as a combination of nullable timestamps is not a state - it is a bug waiting for someone to add a sixth interpretation.
 
 ---
 
@@ -72,7 +72,7 @@ Column: `packages.state`. Reflects a package's status **at its source**, aggrega
 
 | From | Event | To | Notes |
 |---|---|---|---|
-| — | `Discovered` | `discovered` | Insert; idempotent via unique constraint |
+| - | `Discovered` | `discovered` | Insert; idempotent via unique constraint |
 | `discovered` | `TransferRequested` | `queued` | |
 | `queued` | `TransferStarted` | `transferring` | First job of any transfer leased |
 | `transferring` | `AllTransfersSucceeded` | `transferred` | |
@@ -85,13 +85,13 @@ Column: `packages.state`. Reflects a package's status **at its source**, aggrega
 | `verification_failed` | `RetryRequested` | `verifying` | Re-verify without re-transferring |
 | any except terminal | `Superseded` | `superseded` | Terminal |
 
-**Terminal:** `verified`, `verification_failed`, `superseded`. `failed` is *not* terminal — it is retryable, which is the point of naming retry as an explicit event rather than treating it as a fresh start.
+**Terminal:** `verified`, `verification_failed`, `superseded`. `failed` is *not* terminal - it is retryable, which is the point of naming retry as an explicit event rather than treating it as a fresh start.
 
-**Aggregation rule.** A package with transfers to `lab` and `production` is `transferred` only when both succeed, and `failed` as soon as either fails terminally. Per-target status stays on the Transfer and is what the API surfaces ([09](09-api.md) §3) — the aggregate is a summary, not the source of truth. A package is never "half transferred" as a state; that condition is read off its transfers.
+**Aggregation rule.** A package with transfers to `lab` and `production` is `transferred` only when both succeed, and `failed` as soon as either fails terminally. Per-target status stays on the Transfer and is what the API surfaces ([09](09-api.md) §3) - the aggregate is a summary, not the source of truth. A package is never "half transferred" as a state; that condition is read off its transfers.
 
 ## 3. Transfer and promotion lifecycle
 
-Column: `transfers.state`. **This is one machine, not two** — a promotion is a transfer whose origin is a target repository ([01](01-domain-model.md) §3.4), so it uses these states unchanged. Duplicating it for promotion would create two tables to keep in sync.
+Column: `transfers.state`. **This is one machine, not two** - a promotion is a transfer whose origin is a target repository ([01](01-domain-model.md) §3.4), so it uses these states unchanged. Duplicating it for promotion would create two tables to keep in sync.
 
 ```
    ┌─────────┐  plan   ┌──────────┐  jobs   ┌───────┐ lease ┌─────────┐
@@ -118,13 +118,13 @@ Column: `transfers.state`. **This is one machine, not two** — a promotion is a
    any non-terminal ──► cancelling ──► cancelled   (04 section 8)
 ```
 
-**`NoJobCanRun`, not `JobFailedTerminally`.** The transition fires when the transfer can no longer make progress — no job in `pending`, `blocked` or `leased`, and at least one in `failed` — rather than on the first job to exhaust its attempts. Firing on the first would report a transfer as failed while two thousand of its jobs were still copying successfully, which is a worse lie than the one this replaced. A job sitting out a retry backoff is `pending`, so a transfer mid-backoff is *waiting*, not stalled, and must not be settled.
+**`NoJobCanRun`, not `JobFailedTerminally`.** The transition fires when the transfer can no longer make progress - no job in `pending`, `blocked` or `leased`, and at least one in `failed` - rather than on the first job to exhaust its attempts. Firing on the first would report a transfer as failed while two thousand of its jobs were still copying successfully, which is a worse lie than the one this replaced. A job sitting out a retry backoff is `pending`, so a transfer mid-backoff is *waiting*, not stalled, and must not be settled.
 
-The transition is evaluated in two places, and both are needed. `CompleteJob` checks inline, so the last job to give up fails the transfer immediately. A sweep on the reaper's tick checks periodically, because the failure that matters most never reaches the completion path at all: in a network outage the workers stop answering, nothing completes, and the leases simply expire — a lease expiring on a job with no attempts left produces a `failed` job with no completion reported. Without the sweep, the case this machine exists to describe would be exactly the case it missed.
+The transition is evaluated in two places, and both are needed. `CompleteJob` checks inline, so the last job to give up fails the transfer immediately. A sweep on the reaper's tick checks periodically, because the failure that matters most never reaches the completion path at all: in a network outage the workers stop answering, nothing completes, and the leases simply expire - a lease expiring on a job with no attempts left produces a `failed` job with no completion reported. Without the sweep, the case this machine exists to describe would be exactly the case it missed.
 
 | From | Event | To | Notes |
 |---|---|---|---|
-| — | `Created` | `pending` | |
+| - | `Created` | `pending` | |
 | `pending` | `PlanningStarted` | `planning` | |
 | `planning` | `PlanCompleted` | `ready` | Jobs inserted; `max_wave` set |
 | `planning` | `PlanFailed` | `failed` | Manifest unreadable, target unreachable |
@@ -134,7 +134,7 @@ The transition is evaluated in two places, and both are needed. `CompleteJob` ch
 | `ready` | `PauseRequested` | `paused` | |
 | `paused` | `ResumeRequested` | `running` | |
 | `running` | `AllWavesDrained` | `verifying` | → `succeeded` when verification is off |
-| `running` | `NoJobCanRun` | `failed` | A job is past `max_attempts` **and none is left runnable** — see below |
+| `running` | `NoJobCanRun` | `failed` | A job is past `max_attempts` **and none is left runnable** - see below |
 | `verifying` | `VerificationPassed` | `succeeded` | Terminal |
 | `verifying` | `VerificationFailed` | `failed` | Artifacts retained |
 | `failed` | `RetryRequested` | `ready` | Failed jobs reset to `pending`, `attempts` to 0 |
@@ -143,33 +143,33 @@ The transition is evaluated in two places, and both are needed. `CompleteJob` ch
 
 **Terminal:** `succeeded`, `cancelled`. `failed` is retryable.
 
-> **Added at [M9](17-delivery-plan.md#m9--downloads-and-auto-download):** two states join this machine so that a download's steps can be ordered — `waiting` (a predecessor has not succeeded yet) and the terminal `skipped` (it never will). `skipped` is deliberately not a flavour of `failed`: a Quay step whose JFrog step failed did not fail, and no operator should go looking at Quay for the cause. Transitions, columns and the joint invariant S7 are in [20](20-download-rules.md) §6.
+> **Added at [M9](17-delivery-plan.md#m9--downloads-and-auto-download):** two states join this machine so that a download's steps can be ordered - `waiting` (a predecessor has not succeeded yet) and the terminal `skipped` (it never will). `skipped` is deliberately not a flavour of `failed`: a Quay step whose JFrog step failed did not fail, and no operator should go looking at Quay for the cause. Transitions, columns and the joint invariant S7 are in [20](20-download-rules.md) §6.
 
 Two entries deserve attention:
 
-- **`PlanEmpty` → `succeeded`.** When deduplication finds every blob already present, the correct outcome is success with zero jobs — not an error, and not a transfer that sits in `ready` forever waiting for work that will never be created. This is a common case for promotion ([05](05-transfer-engine.md) §6), not an edge case.
+- **`PlanEmpty` → `succeeded`.** When deduplication finds every blob already present, the correct outcome is success with zero jobs - not an error, and not a transfer that sits in `ready` forever waiting for work that will never be created. This is a common case for promotion ([05](05-transfer-engine.md) §6), not an edge case.
 - **`cancelling` is a real state, not a flag.** It exists because leased jobs take up to one heartbeat to abort ([09](09-api.md) §7.4). Without it, a cancel would either appear instantaneous while bytes were still moving, or appear stuck. Naming the window makes it observable.
 
 #### `AllWavesDrained` is not "the walk ran out of waves"
 
-Settling asks two questions per completion, and neither of them is *did anything fail*. `waveDrained` is asked about ONE wave — the one the completing job belongs to. `waveOccupied`, which decides whether to keep advancing, counts only work that can still move: `pending`, `blocked`, `leased`. A wave whose remaining jobs have exhausted their attempts is empty by both measures.
+Settling asks two questions per completion, and neither of them is *did anything fail*. `waveDrained` is asked about ONE wave - the one the completing job belongs to. `waveOccupied`, which decides whether to keep advancing, counts only work that can still move: `pending`, `blocked`, `leased`. A wave whose remaining jobs have exhausted their attempts is empty by both measures.
 
 So the advance loop walks straight past a wave holding nothing but failures, runs out of waves, and arrives at the terminal branch. That branch used to mark `succeeded` unconditionally.
 
-Per-artifact readiness ([04](04-queue-and-scheduling.md) §3.5) is what makes this the ordinary case rather than a corner. A manifest becomes runnable the moment its own content lands, long before the wave it belongs to opens — so by the time a lower wave formally drains, the waves above it are routinely already terminal, failures included. Observed:
+Per-artifact readiness ([04](04-queue-and-scheduling.md) §3.5) is what makes this the ordinary case rather than a corner. A manifest becomes runnable the moment its own content lands, long before the wave it belongs to opens - so by the time a lower wave formally drains, the waves above it are routinely already terminal, failures included. Observed:
 
 ```
 STATE      DONE  JOBS       FAILED
 succeeded  100%  2486/2489  3
 ```
 
-The word is not cosmetic. `succeeded` is terminal, and `RetryTransfer` refuses a terminal transfer by design, so those three failures were reported, unexplained, and unfixable at the same time — `transfers retry` answered "there is nothing to retry".
+The word is not cosmetic. `succeeded` is terminal, and `RetryTransfer` refuses a terminal transfer by design, so those three failures were reported, unexplained, and unfixable at the same time - `transfers retry` answered "there is nothing to retry".
 
 The terminal branch therefore counts failed jobs across the WHOLE transfer and settles as `failed` with a reason when there are any. Across the whole transfer rather than per wave because "was this transfer successful" is not a question about where the failure happened.
 
 ## 4. Job (layer) lifecycle
 
-Column: `jobs.state`. The highest-volume machine — hundreds of thousands of rows.
+Column: `jobs.state`. The highest-volume machine - hundreds of thousands of rows.
 
 ```
     ┌─────────┐ dependencies met   ┌─────────┐   lease    ┌────────┐
@@ -188,8 +188,8 @@ Column: `jobs.state`. The highest-volume machine — hundreds of thousands of ro
 
 | From | Event | To | Notes |
 |---|---|---|---|
-| — | `Created`, nothing to wait for | `pending` | Every blob, and any manifest whose content is already at the destination |
-| — | `Created` with dependencies | `blocked` | One edge per blob and child manifest it references |
+| - | `Created`, nothing to wait for | `pending` | Every blob, and any manifest whose content is already at the destination |
+| - | `Created` with dependencies | `blocked` | One edge per blob and child manifest it references |
 | `blocked` | `DependenciesSatisfied` | `pending` | The last thing it waited for succeeded or was skipped ([04](04-queue-and-scheduling.md) §3.5) |
 | `blocked` | `WaveAdvanced` | `pending` | Bulk update ([04](04-queue-and-scheduling.md) §3.3). The backstop, for transfers planned before edges existed |
 | `blocked` | `DependencyFailed` | `failed` | `last_error_class = 'dependency'`; transitive. Distinguishable from a real failure, and reversed first by a retry ([04](04-queue-and-scheduling.md) §3.5.1) |
@@ -207,7 +207,7 @@ Column: `jobs.state`. The highest-volume machine — hundreds of thousands of ro
 
 > **`skipped` is a first-class success, not an exception.** It is the state that makes deduplication measurable: `sum(size_bytes) where state='skipped'` grouped by `skip_reason` is exactly the bandwidth-saved metric ([12](12-observability-and-audit.md) §2). Folding "already present" into `succeeded` would make the system's most valuable optimization invisible, and an optimization nobody can measure is one nobody will notice regressing.
 
-**A dependency is satisfied by `succeeded` OR `skipped`**, and wave-drain counts them together too ([04](04-queue-and-scheduling.md) §3.4) — both mean the content is present, which is the only thing the next wave cares about.
+**A dependency is satisfied by `succeeded` OR `skipped`**, and wave-drain counts them together too ([04](04-queue-and-scheduling.md) §3.4) - both mean the content is present, which is the only thing the next wave cares about.
 
 ## 5. Verification lifecycle
 
@@ -215,7 +215,7 @@ Column: `verifications.state`. One row per verification attempt; re-verification
 
 | From | Event | To | Notes |
 |---|---|---|---|
-| — | `Requested` | `pending` | |
+| - | `Requested` | `pending` | |
 | `pending` | `Started` | `running` | |
 | `pending` | `SkippedByPolicy` | `skipped` | Disabled, or no signatures with `warn` |
 | `running` | `SignaturesValid` | `passed` | Terminal |
@@ -237,7 +237,7 @@ Collapsing them would make a Sigstore outage indistinguishable from a supply-cha
 
 ## 6. Retry lifecycle
 
-Retry is not a separate state column — it is `attempts` plus `next_visible_at` on the job, and the `leased → pending` edge in §4. It is documented as a machine because its behaviour must be explicit.
+Retry is not a separate state column - it is `attempts` plus `next_visible_at` on the job, and the `leased → pending` edge in §4. It is documented as a machine because its behaviour must be explicit.
 
 ```
 attempt N fails
@@ -264,17 +264,17 @@ classify error (06 section 7)
 | `ErrUnsupported` | 1 | Capability absent; will not change on retry |
 | Lease expiry | counts toward the class cap | A worker that reliably dies on one job must not loop forever |
 
-**Full jitter** (`random(0, …)` rather than a fixed exponential) because failures here are strongly correlated — one registry returning 503 fails all 40 in-flight jobs simultaneously. Without jitter they retry in lockstep, re-hammering a struggling registry in synchronized waves and turning a blip into an outage. This is well-established and not re-derived here.
+**Full jitter** (`random(0, …)` rather than a fixed exponential) because failures here are strongly correlated - one registry returning 503 fails all 40 in-flight jobs simultaneously. Without jitter they retry in lockstep, re-hammering a struggling registry in synchronized waves and turning a blip into an outage. This is well-established and not re-derived here.
 
 **Retries resume rather than restart.** `bytes_transferred` and `upload_state` persist across attempts ([05](05-transfer-engine.md) §4.6).
 
 ## 7. Supporting machines
 
-Lower-stakes, listed for completeness — no implicit states anywhere.
+Lower-stakes, listed for completeness - no implicit states anywhere.
 
 **Transfer request** (`transfer_requests.state`): `pending → expanded → completed | failed`, or `pending → scheduled → expanded` when `scheduleAt` is set. `cancelled` from any non-terminal state. `expanded` means Transfers exist for every target; the request's own terminal state is a rollup of theirs.
 
-**Scheduled request** (`scheduled_requests.state`): `scheduled → due → expanded`, plus `cancelled` and `failed` (expansion failed, or `maxDelay` exceeded — [04](04-queue-and-scheduling.md) §10). `due` exists so a scheduler crash between "found it" and "expanded it" is recoverable rather than ambiguous.
+**Scheduled request** (`scheduled_requests.state`): `scheduled → due → expanded`, plus `cancelled` and `failed` (expansion failed, or `maxDelay` exceeded - [04](04-queue-and-scheduling.md) §10). `due` exists so a scheduler crash between "found it" and "expanded it" is recoverable rather than ambiguous.
 
 **Notification** (`notifications.state`): `pending → sending → sent | failed`, plus `suppressed` (channel disabled or deduplicated). Same backoff shape as §6, capped at 5 attempts.
 
@@ -287,6 +287,6 @@ Relationships the guards enforce jointly. These are the properties that make the
 | S1 | A transfer cannot be `succeeded` while any job is non-terminal **or failed** | Wave-drain check ([04](04-queue-and-scheduling.md) §3.4) + the count in §3.1 |
 | S2 | A package cannot be `verified` while any transfer is non-terminal | Package aggregation (§2) |
 | S3 | A job cannot be `leased` if its transfer is `paused` or `cancelling` | `jobs.paused` + dequeue predicate ([04](04-queue-and-scheduling.md) §4.1) |
-| S4 | A manifest job cannot be `leased` before everything it references is present | `blocked` state (§4) + `job_dependencies` ([04](04-queue-and-scheduling.md) §3.5) — invariant I1 |
+| S4 | A manifest job cannot be `leased` before everything it references is present | `blocked` state (§4) + `job_dependencies` ([04](04-queue-and-scheduling.md) §3.5) - invariant I1 |
 | S5 | A terminal state is never left, except `failed` via explicit retry | Absence of edges in the tables above |
 | S6 | Every transition writes an audit event | Guard emits within the same transaction ([12](12-observability-and-audit.md) §4) |

@@ -34,8 +34,8 @@ func TestAWorkerIsRecordedFromWhatItAsksFor(t *testing.T) {
 	}
 }
 
-// A heartbeat must not wipe the ceiling a lease recorded. Between leases — most
-// of the time, on a multi-gigabyte blob — a heartbeat is the only signal, and
+// A heartbeat must not wipe the ceiling a lease recorded. Between leases - most
+// of the time, on a multi-gigabyte blob - a heartbeat is the only signal, and
 // zeroing capacity would make every busy worker report as having none.
 func TestAHeartbeatKeepsTheRecordedCeiling(t *testing.T) {
 	h := newRecoveryHarness(t)

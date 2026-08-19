@@ -17,8 +17,8 @@ import (
 //	worker_logs   one row per interesting thing a worker did
 //	audit_events  one row per state transition
 //
-// Everything else grows with the CATALOGUE — one row per package, per artifact,
-// per blob — and is the answer to "what does this vendor publish", which is the
+// Everything else grows with the CATALOGUE - one row per package, per artifact,
+// per blob - and is the answer to "what does this vendor publish", which is the
 // point of the system. None of it is swept here, and the manifest bodies that
 // would otherwise dominate are already bounded by their own cache policy (see
 // manifestcache.go).
@@ -35,7 +35,7 @@ import (
 // worth stating because it looks like the same kind of row. It is the memory
 // that makes a re-transfer nearly free: a placement is what lets the planner
 // skip a blob without asking the registry. Losing one costs a HEAD per blob at
-// the next transfer — never a re-upload, so it is safe — but it is the single
+// the next transfer - never a re-upload, so it is safe - but it is the single
 // highest-value small table in the schema, and it is tiny. It is swept only if
 // somebody sets a TTL, and the comment on that field says what it costs.
 
@@ -49,7 +49,7 @@ type RetentionPolicy struct {
 	// have been finished for this long.
 	Transfers time.Duration
 	// WorkerLogs deletes log lines older than this. They are a convenience tail
-	// for a debugging question, not a log store — cluster log aggregation
+	// for a debugging question, not a log store - cluster log aggregation
 	// remains the system of record.
 	WorkerLogs time.Duration
 	// AuditEvents deletes audit rows older than this. Usually the LONGEST of
@@ -60,8 +60,8 @@ type RetentionPolicy struct {
 	//
 	// Zero, and left zero unless somebody has a reason. This table is the
 	// memory that makes a second transfer of a product line nearly free, and
-	// losing a row costs a HEAD per blob on the next transfer. It is safe —
-	// never a re-upload — but it is a poor trade for a table measured in tens
+	// losing a row costs a HEAD per blob on the next transfer. It is safe -
+	// never a re-upload - but it is a poor trade for a table measured in tens
 	// of thousands of rows.
 	Placements time.Duration
 	// BatchSize bounds one pass, so a first sweep of a database that has run
@@ -91,7 +91,7 @@ func (r RetentionResult) Rows() int {
 // SweepRetention deletes history past its retention.
 //
 // Each pass is bounded by BatchSize and each statement stands alone, so a sweep
-// that is interrupted has done part of the work rather than none — and the next
+// that is interrupted has done part of the work rather than none - and the next
 // one continues. There is nothing to be consistent ACROSS these deletions:
 // removing a transfer's jobs but not yet its worker logs leaves logs about a
 // transfer that no longer exists, which the log view already tolerates because
@@ -113,8 +113,8 @@ func (p *Packages) SweepRetention(
 		res.Transfers = n
 
 		// Requests AFTER transfers, and only those with none left. A request
-		// with no transfers is not necessarily old work — it may be one that
-		// has just been created and not yet planned — so it is bounded by the
+		// with no transfers is not necessarily old work - it may be one that
+		// has just been created and not yet planned - so it is bounded by the
 		// same age as well as by being empty.
 		n, err = p.deleteOrphanRequests(ctx, policy.Transfers, batch)
 		if err != nil {
@@ -144,7 +144,7 @@ func (p *Packages) SweepRetention(
 	if policy.Placements > 0 {
 		// Not batched, and it is the one delete here that is not. A placement
 		// is keyed by (repository, digest), and no single column of it is
-		// unique — so the bounded form every other sweep uses would either
+		// unique - so the bounded form every other sweep uses would either
 		// over-delete or need a row-value IN that only one of the two dialects
 		// is reliable about. This sweep is off unless somebody turns it on, the
 		// table is small, and `verified_at` is indexed.

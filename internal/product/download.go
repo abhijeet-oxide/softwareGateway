@@ -6,10 +6,10 @@ import (
 
 // Downloads and auto-download: two things, and keeping them apart is the point.
 //
-//	download      WHAT happens — take this software, put it through these
+//	download      WHAT happens - take this software, put it through these
 //	              targets, with these gates. No patterns. Somebody chose the
 //	              software, either by typing it or by matching a rule.
-//	autoDownload  WHEN it happens by itself — a tag pattern, and nothing else.
+//	autoDownload  WHEN it happens by itself - a tag pattern, and nothing else.
 //
 // An auto-download rule does not do the downloading. It TRIGGERS a download,
 // which is the same operation a person performs by hand. That is why a manual
@@ -21,8 +21,8 @@ import (
 // Download is one way software moves from a source into internal targets.
 //
 // Most products have exactly one, and then it is the default by being the only
-// one. The list exists so a product that later needs a second — a different
-// destination set for a different class of release — can have one without a
+// one. The list exists so a product that later needs a second - a different
+// destination set for a different class of release - can have one without a
 // schema change.
 type Download struct {
 	// Name is required only when a product declares more than one.
@@ -62,7 +62,7 @@ type DownloadVerification struct {
 	// After is destination-side verification, after they land.
 	After *bool `json:"after,omitempty"`
 	// Policy is `enforce` or `warn`. Under `enforce` a destination that fails
-	// verification stops every step that depends on it — which is the whole
+	// verification stops every step that depends on it - which is the whole
 	// security value of a chain.
 	Policy VerificationPolicy `json:"policy,omitempty"`
 }
@@ -70,7 +70,7 @@ type DownloadVerification struct {
 // AutoDownload is when a download happens without being asked for.
 type AutoDownload struct {
 	// Enabled is the master switch over automatic firing. Downloads by hand
-	// are unaffected — a switch that also disabled the manual path is one
+	// are unaffected - a switch that also disabled the manual path is one
 	// nobody dares use during an incident.
 	Enabled bool   `json:"enabled,omitempty"`
 	Rules   []Rule `json:"rules,omitempty"`
@@ -78,14 +78,14 @@ type AutoDownload struct {
 
 // Rule selects software to download automatically.
 //
-// Rules are evaluated in order and the FIRST MATCH WINS — not all-match,
+// Rules are evaluated in order and the FIRST MATCH WINS - not all-match,
 // because two rules matching one tag with different downloads has no sensible
 // interpretation.
 type Rule struct {
 	Name string `json:"name"`
 
 	// Enabled turns the rule off without deleting it. Configuration, in Git,
-	// and the only way to turn a rule off — there is deliberately no runtime
+	// and the only way to turn a rule off - there is deliberately no runtime
 	// override, because a second source of truth for "is this on" is exactly
 	// what GitOps exists to prevent.
 	Enabled *bool `json:"enabled,omitempty"`
@@ -110,7 +110,7 @@ type Rule struct {
 
 	// Targets, Priority and VerifyBeforeTransfer are the OLDER spelling, from
 	// before downloads and auto-download were separate. A rule carrying them
-	// describes its own download inline, and keeps working exactly as it did —
+	// describes its own download inline, and keeps working exactly as it did -
 	// see Product.DownloadFor.
 	Targets              []string `json:"targets,omitempty"`
 	Priority             *int     `json:"priority,omitempty"`
@@ -132,7 +132,7 @@ func (p Product) Downloads() []Download { return p.Spec.Download }
 // DefaultDownload returns the download a manual `transferctl download` runs.
 //
 // One declared download IS the default, without having to say so. Several
-// require exactly one to be marked, which validation enforces — so reaching
+// require exactly one to be marked, which validation enforces - so reaching
 // here with none marked means the document did not validate.
 func (p Product) DefaultDownload() (Download, bool) {
 	switch len(p.Spec.Download) {
@@ -164,9 +164,9 @@ func (p Product) DownloadNamed(name string) (Download, bool) {
 // Three cases, in the order they are checked, and the middle one is what keeps
 // every document written before this split working unchanged:
 //
-//  1. The rule names a download          — use that one.
-//  2. The rule carries its own targets   — it describes a download inline.
-//  3. Neither                            — the product's default.
+//  1. The rule names a download          - use that one.
+//  2. The rule carries its own targets   - it describes a download inline.
+//  3. Neither                            - the product's default.
 func (p Product) DownloadFor(r Rule) (Download, error) {
 	if r.Download != "" {
 		d, ok := p.DownloadNamed(r.Download)

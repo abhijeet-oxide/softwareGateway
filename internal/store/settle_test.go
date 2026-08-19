@@ -14,7 +14,7 @@ import (
 //	succeeded  100%  2486/2489  3
 //
 // Three jobs failed, the transfer said it succeeded, and `transfers retry`
-// answered "there is nothing to retry" — because a settled transfer is not a
+// answered "there is nothing to retry" - because a settled transfer is not a
 // retry candidate, by design. So the three failures were simultaneously
 // reported, unexplained and unfixable.
 //
@@ -22,15 +22,15 @@ import (
 //
 // Settling asks two questions, and neither is "did anything fail". `waveDrained`
 // is asked about ONE wave, the one the completing job belongs to.
-// `waveOccupied` counts only work that can still move — pending, blocked,
-// leased — so a wave whose remaining jobs have exhausted their attempts reads
+// `waveOccupied` counts only work that can still move - pending, blocked,
+// leased - so a wave whose remaining jobs have exhausted their attempts reads
 // as empty. The advance loop walks past it, runs out of waves, and falls into
 // the branch that finishes the transfer.
 //
 // Per-artifact readiness is what makes that the normal case rather than a
 // corner: a manifest becomes runnable the moment its own content lands, well
 // before the wave it belongs to opens. By the time a lower wave formally
-// drains, the waves above it are routinely already terminal — including
+// drains, the waves above it are routinely already terminal - including
 // whatever failed in them.
 
 func TestATransferWithFailedJobsAboveTheCurrentWaveIsNotSucceeded(t *testing.T) {

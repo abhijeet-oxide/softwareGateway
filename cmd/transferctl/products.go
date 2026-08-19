@@ -164,7 +164,7 @@ func newProductsCheckCommand() *cobra.Command {
 			"needs.\n\n" +
 			"This is NOT part of `transferctl health`, deliberately. Health answers\n" +
 			"\"is the service working?\" and the same machinery backs Kubernetes\n" +
-			"readiness — if a vendor's outage made it fail, a vendor's bad afternoon\n" +
+			"readiness - if a vendor's outage made it fail, a vendor's bad afternoon\n" +
 			"would pull our own pods out of service, and you could not tell whose\n" +
 			"fault an unhealthy reading was.\n\n" +
 			"Run this after editing configuration, when onboarding a vendor, or when\n" +
@@ -206,7 +206,7 @@ func renderConnectivity(w io.Writer, resp *v1.CheckConnectivityResponse) error {
 		}
 		fmt.Fprintf(w, "%s  %s\n", checkMark(p.Status), p.Product)
 		if p.Status == v1.CheckSkipped && len(p.Repositories) == 0 {
-			fmt.Fprintln(w, "      disabled — nothing probed")
+			fmt.Fprintln(w, "      disabled - nothing probed")
 			continue
 		}
 
@@ -274,7 +274,7 @@ func checkMark(s v1.CheckStatus) string {
 func renderProductDetail(w io.Writer, p *v1.Product) error {
 	fmt.Fprintf(w, "Product      %s\n", p.ProductID)
 	if !p.Enabled {
-		fmt.Fprintln(w, "State        DISABLED — configured and validated, but not running")
+		fmt.Fprintln(w, "State        DISABLED - configured and validated, but not running")
 	}
 	if p.DisplayName != "" {
 		fmt.Fprintf(w, "Display      %s\n", p.DisplayName)
@@ -339,7 +339,7 @@ func renderProductDetail(w io.Writer, p *v1.Product) error {
 	if !p.Verification.Enabled {
 		// Worth stating plainly: an unverified product is a gap in the supply
 		// chain, not a neutral default.
-		fmt.Fprintln(w, "  disabled — packages from this product are not signature-verified")
+		fmt.Fprintln(w, "  disabled - packages from this product are not signature-verified")
 		return nil
 	}
 	fmt.Fprintf(w, "  policy       %s\n", p.Verification.Policy)

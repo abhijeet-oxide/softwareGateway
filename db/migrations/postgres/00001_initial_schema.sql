@@ -81,7 +81,7 @@ CREATE TABLE packages (
     updated_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
 
     -- Invariant I4: a re-scan can never create a duplicate. Idempotency is
-    -- structural, not procedural — there is no check-then-insert race.
+    -- structural, not procedural - there is no check-then-insert race.
     UNIQUE (source_repo_id, tag, manifest_digest)
 );
 CREATE INDEX packages_product_discovered_idx ON packages (product_id, discovered_at DESC);
@@ -99,7 +99,7 @@ CREATE TABLE package_artifacts (
     platform      TEXT,
     depth         SMALLINT    NOT NULL DEFAULT 0,
     -- Stored VERBATIM. A manifest must be pushed byte-for-byte identical,
-    -- because its digest — and every signature over it — is the hash of these
+    -- because its digest - and every signature over it - is the hash of these
     -- exact bytes. Re-serializing from a parsed struct would change whitespace
     -- or key order and produce a different digest.
     raw           BYTEA       NOT NULL,
@@ -327,7 +327,7 @@ CREATE TABLE notifications (
 CREATE INDEX notifications_outbox_idx ON notifications (next_visible_at, id) WHERE state = 'pending';
 
 -- Append-only, independent of application logs, queryable via the API.
--- Monthly RANGE partitions so expiring a month is a DROP TABLE — instant, no
+-- Monthly RANGE partitions so expiring a month is a DROP TABLE - instant, no
 -- row-by-row work, no bloat, no VACUUM debt. This is the highest-volume table
 -- in the system and the only reason it is partitioned.
 CREATE TABLE audit_events (

@@ -16,8 +16,8 @@ const (
 
 // Policy computes retry delays.
 //
-// Full jitter — delay is uniform in [0, exponential) rather than the
-// exponential value itself — because failures here are strongly correlated: one
+// Full jitter - delay is uniform in [0, exponential) rather than the
+// exponential value itself - because failures here are strongly correlated: one
 // registry returning 503 fails every in-flight job at once. Without jitter they
 // retry in lockstep, re-hammering a struggling registry in synchronized waves
 // and turning a blip into an outage.

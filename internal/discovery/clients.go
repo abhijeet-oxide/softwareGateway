@@ -19,7 +19,7 @@ import (
 // clientConfigFor builds the backend-neutral config for a source.
 //
 // This is where configuration meets I/O, and the only place credentials are
-// read. Secrets come from projected volume mounts written by VSO — the process
+// read. Secrets come from projected volume mounts written by VSO - the process
 // never talks to the Kubernetes API and never needs Secret read permission
 // (docs/design/02 §3).
 //
@@ -36,7 +36,7 @@ func clientConfigFor(
 	}
 
 	// Already resolved against the application-level defaults by the loader, so
-	// there is nothing to fill in here — and MaxConnections is PerRegistry
+	// there is nothing to fill in here - and MaxConnections is PerRegistry
 	// because the pool IS the concurrency limit. See product.Concurrency.
 	cfg.MaxConnections = src.Concurrency.PerRegistry
 	cfg.RequestsPerSecond = src.Concurrency.RequestsPerSecond
@@ -72,7 +72,7 @@ func clientConfigFor(
 //
 // One factory per source, so every repository on that registry shares the
 // credential, the CA bundle, the proxy settings and the rate-limit
-// configuration — which is what makes declaring several repositories under one
+// configuration - which is what makes declaring several repositories under one
 // source correct rather than merely convenient.
 func SourceClientFactory(
 	p *product.Product, src product.Source, secrets *product.SecretResolver, log *slog.Logger,
@@ -90,7 +90,7 @@ func SourceClientFactory(
 	// `maxConnections: 32` across sixteen parallel repositories permitted 512
 	// connections to a single host, and `requestsPerSecond: 50` permitted 800.
 	// Through a corporate proxy that is not a faster scan, it is a
-	// self-inflicted overload — and the configuration said the opposite of what
+	// self-inflicted overload - and the configuration said the opposite of what
 	// was happening.
 	shared, err := transport.NewShared(transportConfigFor(base))
 	if err != nil {
@@ -136,7 +136,7 @@ func transportConfigFor(c registry.ClientConfig) transport.Config {
 
 // SourceCatalog builds a registry-scoped client for enumerating repositories.
 //
-// Returns nil when the source names its repositories — building it anyway would
+// Returns nil when the source names its repositories - building it anyway would
 // mint a second connection pool and a second token scope for a source that will
 // never enumerate.
 func SourceCatalog(
@@ -213,8 +213,8 @@ func userAgent() string {
 // SourceSpecs builds the polling specs for every enabled source of every
 // product.
 //
-// A source whose client cannot be built — a missing secret, an unreachable
-// proxy configuration — is reported as an error and OMITTED, while every other
+// A source whose client cannot be built - a missing secret, an unreachable
+// proxy configuration - is reported as an error and OMITTED, while every other
 // source still runs. One product's broken credential must not stop discovery
 // for the rest of the fleet.
 func SourceSpecs(
@@ -234,7 +234,7 @@ func SourceSpecs(
 	var errs []error
 
 	for _, p := range products {
-		// A disabled product is loaded, validated and listed — it simply does
+		// A disabled product is loaded, validated and listed - it simply does
 		// not run. Skipping here rather than at load is what lets `products
 		// list` and `products describe` still show it, which is the point of
 		// disabling rather than deleting.
@@ -258,7 +258,7 @@ func SourceSpecs(
 
 			// An unknown vendor name is fatal FOR THIS SOURCE and no other.
 			// Falling back to standard behaviour would silently disable
-			// signature discovery for a typo — invisible in every output, since
+			// signature discovery for a typo - invisible in every output, since
 			// every package would simply read `unknown` forever.
 			layout, err := layouts.Get(src.VendorLayout())
 			if err != nil {

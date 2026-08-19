@@ -18,7 +18,7 @@ type ResolvedNetwork struct {
 	NoProxy    []string
 	// DirectConnect bypasses proxies entirely, including any the ENVIRONMENT
 	// sets. Distinct from an empty HTTPSProxy, which falls back to
-	// HTTPS_PROXY — the fallback is right by default and wrong when a
+	// HTTPS_PROXY - the fallback is right by default and wrong when a
 	// repository has explicitly asked to go direct.
 	DirectConnect bool
 
@@ -37,7 +37,7 @@ type ResolvedNetwork struct {
 // # Why this is one function
 //
 // It was three, in discovery, preflight and the worker, and they were
-// byte-identical copies of subtle merge rules — a proxy that clears rather
+// byte-identical copies of subtle merge rules - a proxy that clears rather
 // than inherits, an explicit `skipVerify: false` that must beat a product-wide
 // true, a CA bundle read from a projected secret. Three copies of a merge is
 // three chances for a config to mean different things depending on which code
@@ -83,7 +83,7 @@ func ResolveNetwork(p *Product, override *Network, secrets *SecretResolver) (Res
 		}
 
 		if n.TLS.SetsSkipVerify() {
-			// Explicit at either level wins, INCLUDING an explicit false — a
+			// Explicit at either level wins, INCLUDING an explicit false - a
 			// product that disables verification globally must still be able
 			// to keep it on for the one registry with a good certificate.
 			out.InsecureSkipVerify = n.TLS.SkipsVerify()

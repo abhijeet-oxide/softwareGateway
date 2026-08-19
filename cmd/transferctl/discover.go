@@ -12,7 +12,7 @@ import (
 
 // newDiscoverCommand is the top-level verb.
 //
-// Discovery was under `packages` — `transferctl packages discover` — and that
+// Discovery was under `packages` - `transferctl packages discover` - and that
 // was the wrong shape. Discovery is not an operation on packages; it is what
 // PRODUCES them. Burying the primary verb of the system two levels down, next
 // to the commands that read its output, is how a CLI ends up needing a
@@ -30,7 +30,7 @@ func newDiscoverCommand() *cobra.Command {
 	cmd := &cobra.Command{
 		Short: "Scan sources for newly published packages",
 		Long: "Scans now, rather than waiting for the interval.\n\n" +
-			"With no argument, scans EVERY product being polled — the usual thing\n" +
+			"With no argument, scans EVERY product being polled - the usual thing\n" +
 			"to do after a maintenance window, or when you want to know what a\n" +
 			"vendor has shipped since you last looked. A fleet-wide scan never\n" +
 			"blocks: follow it with `transferctl discover status`.\n\n" +

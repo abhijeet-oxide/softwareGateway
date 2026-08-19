@@ -19,7 +19,7 @@ import (
 // # Why this file is hand-written SQL rather than generated
 //
 // docs/design/16 §6 deferred `sqlc` twice and said the decision would be made
-// here, against the dequeue — "hand-tuned, correctness-critical, and
+// here, against the dequeue - "hand-tuned, correctness-critical, and
 // dialect-divergent enough that it will not go through the rewriter at all".
 // That turned out to be exactly right, and the answer is still hand-written.
 // See the divergence note in docs/design/16 §6 for the reasoning; the short
@@ -98,7 +98,7 @@ type LeasedJob struct {
 // implemented here. Budgets are the M7 backpressure controller's job; until it
 // exists there is nothing to divide, and a filter over an empty budget set
 // would either exclude everything or be a no-op pretending to be a limit. The
-// shape of this function does not change when it lands — an extra clause in
+// shape of this function does not change when it lands - an extra clause in
 // the candidate CTE.
 func (p *Packages) LeaseJobs(ctx context.Context, req LeaseRequest) ([]LeasedJob, error) {
 	if req.Owner == "" {
@@ -129,7 +129,7 @@ func (p *Packages) LeaseJobs(ctx context.Context, req LeaseRequest) ([]LeasedJob
 	// the argument that keeping the dequeue free of a write to a second table
 	// was worth more. It is not. A transfer with ten blobs in flight and none
 	// finished reported `ready`, and everything gated on the state word went
-	// with it — the ETA column blanked while the speed column showed a
+	// with it - the ETA column blanked while the speed column showed a
 	// throughput, which is a table disagreeing with itself. Multi-gigabyte
 	// blobs make that window long, and a resumed transfer starts inside it.
 	//
@@ -192,14 +192,14 @@ const leaseColumns = `id, transfer_id, kind, digest, size_bytes, media_type,
 //
 // An error describes the attempt that produced it. Leaving it on a job that is
 // now running again means a listing shows a live job labelled with a failure
-// that has already been superseded — which is how a fixed problem goes on
+// that has already been superseded - which is how a fixed problem goes on
 // looking broken. It is kept while the job waits out its backoff, because
 // there the reason it is waiting is exactly what a reader wants.
 
 // # The dequeue order, and why it has three keys rather than one
 //
 //	priority DESC     what an operator asked for, first
-//	kind DESC         manifests before blobs — one round trip, and it unblocks
+//	kind DESC         manifests before blobs - one round trip, and it unblocks
 //	                  the index above it ('manifest' > 'blob', see 00014)
 //	site_rank         the copy that keeps a bundle resolvable, before the copy
 //	                  published under a component's own name
@@ -208,8 +208,8 @@ const leaseColumns = `id, transfer_id, kind, digest, size_bytes, media_type,
 // The middle key is the interesting one, and it exists because ordering by size
 // alone was tried, measured and found to cost far more than it saved.
 //
-// A bundle publishes its components TWICE — once inside the bundle, once under
-// the component's own name — so one digest becomes two jobs of IDENTICAL size.
+// A bundle publishes its components TWICE - once inside the bundle, once under
+// the component's own name - so one digest becomes two jobs of IDENTICAL size.
 // The second is nearly free: the blob is already in a sibling repository of the
 // same registry, so it is a cross-repository MOUNT rather than a transfer over
 // the WAN. But only if it runs AFTER the first. Sorting by size alone makes the
@@ -219,7 +219,7 @@ const leaseColumns = `id, transfer_id, kind, digest, size_bytes, media_type,
 //
 // site_rank states what insertion order previously left to chance. Every rank-0
 // job is dequeued before any rank-1 job, so by the time the second copy is
-// leased the first has either completed — leaving a placement to mount from —
+// leased the first has either completed - leaving a placement to mount from -
 // or is still in flight, in which case the duplicate suppression below defers
 // it. Neither path streams the same digest twice.
 //
@@ -233,7 +233,7 @@ const leaseOrder = ` ORDER BY priority DESC, kind DESC, site_rank, size_bytes DE
 //
 // The NOT EXISTS is concurrent duplicate suppression (docs/design/04 §5): if
 // another worker is already moving this blob to this REGISTRY, skip it. The
-// skipped job stays pending and is picked up moments later — by which time the
+// skipped job stays pending and is picked up moments later - by which time the
 // first has completed and written a placement, so the second takes a fast path
 // and moves zero bytes.
 //
@@ -241,7 +241,7 @@ const leaseOrder = ` ORDER BY priority DESC, kind DESC, site_rank, size_bytes DE
 //
 // It was per repository, and that made the check almost useless for a bundle.
 // A component published under two names has one digest, two destination
-// repositories and therefore two jobs — created consecutively, so they have
+// repositories and therefore two jobs - created consecutively, so they have
 // adjacent ids and land in the SAME lease batch. Both streamed the blob from
 // the vendor at the same time, over the WAN, for content the registry could
 // have relocated internally in one request.
@@ -252,7 +252,7 @@ const leaseOrder = ` ORDER BY priority DESC, kind DESC, site_rank, size_bytes DE
 // matter, only that they do not run at once.
 //
 // The join is against `repositories`, which the note at the top of this file
-// warns about — the dequeue is meant to stay join-free. It is inside a NOT
+// warns about - the dequeue is meant to stay join-free. It is inside a NOT
 // EXISTS over `jobs_inflight_blob_idx`, so it runs only for the handful of
 // digests actually in flight, not for every candidate row.
 //
@@ -263,12 +263,12 @@ const leaseOrder = ` ORDER BY priority DESC, kind DESC, site_rank, size_bytes DE
 // mounts from the first. It guarantees it only when the two land in DIFFERENT
 // lease batches. Within one batch neither is leased yet, so the suppression
 // above does not fire, both are selected, both are hydrated at the same moment
-// — and the mount candidate is resolved from placements that the rank-0 job has
+// - and the mount candidate is resolved from placements that the rank-0 job has
 // not written yet. Both stream.
 //
 // Measured on the bundle fixture with a batch of eight: some components mounted
 // and some did not, entirely according to where the batch boundary fell. That is
-// not a property anybody can reason about, and no total shows it — a blob
+// not a property anybody can reason about, and no total shows it - a blob
 // uploaded twice to two repositories looks exactly like one uploaded once and
 // mounted once, in bytes, in state and in the result.
 //
@@ -283,7 +283,7 @@ const leaseOrder = ` ORDER BY priority DESC, kind DESC, site_rank, size_bytes DE
 // product line share most of their digests, and the mount is worth having
 // between them as much as within one. But "wait for the earlier copy" is only
 // sound while the earlier copy is going to run. A paused job is not, and the
-// wait becomes permanent — a second download sitting in `ready`, never leasing
+// wait becomes permanent - a second download sitting in `ready`, never leasing
 // a job and therefore never even reaching `running`, because a transfer
 // somebody paused holds a rank-0 job for the same digest. It cannot resolve on
 // its own: nothing about the paused transfer changes until a person resumes it.
@@ -465,8 +465,8 @@ func scanLeasedJobs(rows *sql.Rows) ([]LeasedJob, error) {
 
 // sortForDispatch puts a lease batch back into the order it was SELECTED in.
 //
-// Neither dialect returns it that way — Postgres RETURNING is unordered, and
-// the SQLite path reads its rows back by id — and the order is not cosmetic: a
+// Neither dialect returns it that way - Postgres RETURNING is unordered, and
+// the SQLite path reads its rows back by id - and the order is not cosmetic: a
 // worker dispatches the batch in order against a bounded semaphore, so the last
 // job in the slice is the last to start. Selecting largest-first and then
 // handing the worker the batch sorted by id throws away the entire point of the
@@ -507,7 +507,7 @@ func sortForDispatch(jobs []LeasedJob) {
 type Endpoint struct {
 	RepositoryID int64
 	Product      string
-	// Name is the configured repository name — the `sources[].name` or
+	// Name is the configured repository name - the `sources[].name` or
 	// `targets[].name` the worker resolves credentials by.
 	Name         string
 	Registry     string
@@ -521,7 +521,7 @@ type Endpoint struct {
 //
 // Separate from the dequeue on purpose. The dequeue's index is a clean match
 // for its ORDER BY only while it stays join-free (docs/design/04 §4.2), so the
-// joins live here — one extra round trip per lease BATCH, amortized across up
+// joins live here - one extra round trip per lease BATCH, amortized across up
 // to sixteen jobs, rather than a join on the hot path.
 func (p *Packages) HydrateEndpoints(ctx context.Context, ids []int64) (map[int64]Endpoint, error) {
 	out := map[int64]Endpoint{}
@@ -555,7 +555,7 @@ func (p *Packages) HydrateEndpoints(ctx context.Context, ids []int64) (map[int64
 // TransferTag returns the tag a transfer's top-level manifest must carry at
 // the destination, and the package's root digest.
 //
-// The tag is applied LAST, only after the index manifest is committed —
+// The tag is applied LAST, only after the index manifest is committed -
 // invariant I1. Until that moment the destination holds a set of unreferenced
 // blobs, which are harmless, invisible to consumers, and useful to the next
 // transfer.
@@ -602,7 +602,7 @@ func (p *Packages) RenewLeases(
 	// heartbeat is the only regular call from a worker holding a long blob, so
 	// cancellation rides it, and the worker aborts within one interval.
 	//
-	// Renewing them instead — which is what happened before this existed — made
+	// Renewing them instead - which is what happened before this existed - made
 	// `stop` mean "stop when the current blob finishes", and a forty-gigabyte
 	// blob makes that an hour. The transfer sat in `cancelling` the whole time
 	// with bytes still moving into it, which is the one thing the operator had
@@ -719,12 +719,12 @@ type Completion struct {
 	Outcome          string
 	BytesTransferred int64
 	// SkipReason is placement_hit | exists_at_target | mounted, and must be set
-	// when Outcome is skipped — the CHECK constraint enforces the vocabulary,
+	// when Outcome is skipped - the CHECK constraint enforces the vocabulary,
 	// and the distinction is what makes a dedupe regression visible.
 	SkipReason string
 	ErrorClass string
 	ErrorMsg   string
-	// Placed records that the destination now holds this blob — whether the
+	// Placed records that the destination now holds this blob - whether the
 	// bytes moved, the registry relocated them server-side, or a HEAD found
 	// them already there. All three earn a placement row: the blob IS there,
 	// and how it got there is carried by SkipReason.
@@ -736,7 +736,7 @@ type Completion struct {
 	// would buy nothing.
 	Attempt int
 	// MaxAttempts caps the retries for THIS failure's error class, from
-	// docs/design/11 §2.3 — a digest mismatch is worth two attempts where a
+	// docs/design/11 §2.3 - a digest mismatch is worth two attempts where a
 	// transient 5xx is worth eight.
 	//
 	// Zero means "whatever the row says", which is the column default. The cap
@@ -747,7 +747,7 @@ type Completion struct {
 
 // CompletionResult reports what the completion did beyond the job itself.
 type CompletionResult struct {
-	// Applied is false when the job was not this worker's to complete —
+	// Applied is false when the job was not this worker's to complete -
 	// its lease had expired and been reaped, and another worker may already
 	// have redone it. Not an error: it is the expected outcome of a slow
 	// worker finishing late, and the correct response is to drop the result.
@@ -838,8 +838,8 @@ func (p *Packages) CompleteJob(ctx context.Context, c Completion) (CompletionRes
 		return res, err
 	}
 
-	// A blob that reached the destination — by transfer, by mount, or by being
-	// found already there — is a placement. Recording it is what makes the
+	// A blob that reached the destination - by transfer, by mount, or by being
+	// found already there - is a placement. Recording it is what makes the
 	// NEXT transfer of a product line nearly free.
 	if c.Placed && kind == "blob" {
 		source := placementSource(c)
@@ -849,8 +849,8 @@ func (p *Packages) CompleteJob(ctx context.Context, c Completion) (CompletionRes
 	}
 
 	// The destination has told us a blob we recorded as present is not. That is
-	// not a failure to retry — retrying asks the same destination the same
-	// question and gets the same wrong answer — it is a cache to repair. See
+	// not a failure to retry - retrying asks the same destination the same
+	// question and gets the same wrong answer - it is a cache to repair. See
 	// RepairMissingBlobs, which is the backstop docs/design/11 §2.5 promised.
 	if c.Outcome == "failed" && c.ErrorClass == ClassBlobUnknown && kind == "manifest" {
 		repair, err := p.RepairMissingBlobs(ctx, tx, c.JobID)
@@ -862,7 +862,7 @@ func (p *Packages) CompleteJob(ctx context.Context, c Completion) (CompletionRes
 
 	// Per-artifact readiness. Anything that was waiting on THIS job and is now
 	// fully satisfied becomes runnable in the same transaction that made it
-	// true — so a manifest whose last blob just landed is leasable before the
+	// true - so a manifest whose last blob just landed is leasable before the
 	// worker reporting that blob has finished its round trip, rather than at
 	// the end of the wave.
 	if c.Outcome == "succeeded" || c.Outcome == "skipped" {
@@ -903,7 +903,7 @@ func placementSource(c Completion) string {
 // applyJobOutcome writes the job's terminal state, or schedules its retry.
 //
 // A failure is only terminal once attempts are exhausted. Until then the job
-// returns to `pending` behind a backoff, and — crucially — keeps
+// returns to `pending` behind a backoff, and - crucially - keeps
 // bytes_transferred, so a retry resumes the accounting rather than restarting
 // it (docs/design/04 §11).
 func (p *Packages) applyJobOutcome(
@@ -981,7 +981,7 @@ func (p *Packages) settleTransfer(
 	}
 
 	// A transfer somebody has stopped is not a transfer to settle, advance or
-	// declare successful — it is one waiting for its last lease to report.
+	// declare successful - it is one waiting for its last lease to report.
 	//
 	// This has to be checked BEFORE anything below it. `stop` cancels every job
 	// not yet started, so the waves genuinely drain, and without this guard the
@@ -1012,14 +1012,14 @@ func (p *Packages) settleTransfer(
 	if !drained || wave != currentWave {
 		// A job that failed permanently takes its dependents with it. Without
 		// this, per-artifact readiness would leave the transfer holding a few
-		// blocked manifests that can never run — which reads as "still
+		// blocked manifests that can never run - which reads as "still
 		// working" to the stall check below, forever. See FailUnreachableJobs.
 		if _, err := p.FailUnreachableJobs(ctx, tx, transferID); err != nil {
 			return false, currentWave, state, err
 		}
 
 		// A wave that will not drain because a job has EXHAUSTED its attempts
-		// is not a wave still working — it is a transfer that has stopped, and
+		// is not a wave still working - it is a transfer that has stopped, and
 		// until this check existed it went on reporting `running` with nothing
 		// in flight for as long as anybody left it there. See
 		// SettleStalledTransfers, which is the same question asked
@@ -1030,7 +1030,7 @@ func (p *Packages) settleTransfer(
 
 	// Advance THROUGH empty waves rather than one step per completion. A wave
 	// with no jobs of its own has nothing to complete and so nothing to drive
-	// the next advance — stopping at one would stall the transfer on any gap
+	// the next advance - stopping at one would stall the transfer on any gap
 	// in the wave numbering.
 	for next := currentWave + 1; next <= maxWave; next++ {
 		if err := p.advanceWave(ctx, tx, transferID, next); err != nil {
@@ -1045,7 +1045,7 @@ func (p *Packages) settleTransfer(
 		}
 	}
 
-	// Past the top wave. Everything is accounted for — but "accounted for" is
+	// Past the top wave. Everything is accounted for - but "accounted for" is
 	// not "succeeded", and the difference has to be checked HERE rather than
 	// inferred from the walk above.
 	//
@@ -1055,7 +1055,7 @@ func (p *Packages) settleTransfer(
 	// is empty by both measures. Per-artifact readiness makes that ordinary
 	// rather than exotic: a manifest runs as soon as its own content lands, so
 	// by the time the wave it nominally belongs to formally drains, the waves
-	// above it are frequently already terminal — failures included. The loop
+	// above it are frequently already terminal - failures included. The loop
 	// then walks past them into this branch and the transfer was declared
 	// `succeeded` with failed jobs sitting under it.
 	//
@@ -1209,7 +1209,7 @@ type ReapedJob struct {
 // no message and runs no shutdown hook. Its work returns to the queue within
 // one lease period. There is no handshake to get wrong, no tombstone to leak,
 // and no difference in handling between "crashed", "network-partitioned" and
-// "scaled down" — the only signal is a timestamp that stopped advancing.
+// "scaled down" - the only signal is a timestamp that stopped advancing.
 //
 // The one correctness requirement is that a stale worker's in-flight upload
 // must not corrupt anything after another worker retakes the job. It cannot:
@@ -1225,7 +1225,7 @@ func (p *Packages) ReapExpiredLeases(ctx context.Context) ([]ReapedJob, error) {
 	// The transfer's state comes back with the job, because what an expired
 	// lease MEANS depends on it. On a live transfer the work is still wanted
 	// and goes back to the queue; on one somebody stopped it is not, and
-	// requeueing it undoes the stop by timeout — the job runs again, the
+	// requeueing it undoes the stop by timeout - the job runs again, the
 	// transfer never empties, and `cancelling` becomes permanent.
 	rows, err := tx.QueryContext(ctx, p.dialect.Rewrite(
 		`SELECT j.id, j.transfer_id, j.attempts, j.max_attempts, t.state
@@ -1409,7 +1409,7 @@ func dedupeInt64(in []int64) []int64 {
 // TransferIDFor returns the transfer already opened for a request and target.
 //
 // Needed because CreateTransfer's ON CONFLICT DO NOTHING reports that a row
-// exists without saying which — and on the retry path, which is the normal
+// exists without saying which - and on the retry path, which is the normal
 // path after a Coordinator restart mid-expansion, the caller needs the ID to
 // carry on planning rather than a fresh UUID that would violate the
 // constraint.
@@ -1446,11 +1446,11 @@ type TransferSummary struct {
 	// Strategy is HOW this transfer was performed: `copy`, `mirror` or
 	// `proxy`. Recorded on the row rather than derived from configuration, so
 	// a year-old record still says how the content got there even after the
-	// target has been reconfigured — and so that a settled transfer with no
+	// target has been reconfigured - and so that a settled transfer with no
 	// jobs and no bytes is distinguishable from one that failed to plan.
 	Strategy string
 	Tag      string
-	// DisplayTag is Tag with the vendor's structural noise removed — `25.7.2131`
+	// DisplayTag is Tag with the vendor's structural noise removed - `25.7.2131`
 	// for NEAR's `orb_25.7.2131`. Empty where no shortening applies, which is
 	// every source that declares no `vendor`. Cosmetic: Tag is the identity.
 	DisplayTag string
@@ -1460,7 +1460,7 @@ type TransferSummary struct {
 	// Deliberately not the same quantity as PlannedBytes, and the difference is
 	// not a discrepancy. A component of a bundle is published under its own
 	// name as well as inside the bundle, and a registry stores blobs PER
-	// REPOSITORY — so one blob landing in two repositories is two placements
+	// REPOSITORY - so one blob landing in two repositories is two placements
 	// and two jobs, and its bytes are counted twice in the work. A base layer
 	// shared by fifty components is counted fifty times.
 	//
@@ -1468,12 +1468,12 @@ type TransferSummary struct {
 	// weighs, PlannedBytes is what the transfer has to do. Reporting only the
 	// second made a 29.8 GiB orb read as a 63.7 GiB one.
 	//
-	// Zero where the package's size was never established — a package listed
+	// Zero where the package's size was never established - a package listed
 	// but not fully walked has no honest total.
 	ContentBytes int64
 	Source       string
 	Target       string
-	// SourceName and TargetName are the CONFIGURED names — the `sources[].name`
+	// SourceName and TargetName are the CONFIGURED names - the `sources[].name`
 	// and `targets[].name` an operator types into --from and --to. Source and
 	// Target above are the resolved host and path, which is what a person needs
 	// when they are looking at one transfer and far too wide when they are
@@ -1494,7 +1494,7 @@ type TransferSummary struct {
 	//
 	// Both are savings and they are counted separately because they are earned
 	// at different times, but a caller asking "what did this transfer save" wants
-	// the sum — and reporting only the first is how a transfer that skipped
+	// the sum - and reporting only the first is how a transfer that skipped
 	// 32 GiB came to report `SAVED 0 B`. On a clean database nothing is
 	// deduplicated at planning time by definition: every saving is discovered by
 	// the worker, so the whole of it landed in the line nobody was reading.
@@ -1512,14 +1512,14 @@ type TransferSummary struct {
 	// JobsRepaired have been sent back because the destination denied holding
 	// content it had reported. This is the ONLY thing that makes a done count
 	// go DOWN, and a reader watching one drop with no explanation on the page
-	// concludes the tool is broken — which is exactly what happened.
+	// concludes the tool is broken - which is exactly what happened.
 	JobsRepaired int
 	// OutstandingBytes is what is actually LEFT to move: the size of every job
 	// still to run, less what each has already sent.
 	//
 	// Not planned minus transferred. That difference includes every byte that
-	// will never move — content the destination already had, blobs relocated
-	// internally, work deduplicated away — so on a transfer that skipped a
+	// will never move - content the destination already had, blobs relocated
+	// internally, work deduplicated away - so on a transfer that skipped a
 	// hundred megabytes it reports a hundred megabytes of phantom work, and any
 	// estimate built on it is wrong by exactly that much.
 	OutstandingBytes int64
@@ -1528,7 +1528,7 @@ type TransferSummary struct {
 	//
 	// "1 job in flight" says nothing about whether that job is transferring or
 	// hung, and those need opposite responses. A worker holding a job that has
-	// been silent for hours is the one shape the lease machinery cannot see —
+	// been silent for hours is the one shape the lease machinery cannot see -
 	// the lease is renewed by the worker being alive, not by the job moving.
 	QuietestInFlight string
 	JobsOutstanding  int
@@ -1691,7 +1691,7 @@ func (p *Packages) GetTransfer(ctx context.Context, ref string) (TransferSummary
 //
 // Transfers are identified by UUID, and every listing shortens them to the
 // first segment because a column of full UUIDs is unreadable. A `describe`
-// that then refused the very string `list` printed was a trap — the output
+// that then refused the very string `list` printed was a trap - the output
 // said `transferctl transfers describe 4d882940` and that command answered
 // NOT_FOUND.
 //
@@ -1776,7 +1776,7 @@ type JobSummary struct {
 	// TargetTags are the names this manifest will answer to once pushed.
 	TargetTags []string
 
-	// The artifact this job belongs to — what makes a digest legible.
+	// The artifact this job belongs to - what makes a digest legible.
 	//
 	// A blob on its own says nothing: `sha256:8a34…` is not something anybody
 	// can act on or recognise. The manifest that references it is, and the
@@ -1784,12 +1784,12 @@ type JobSummary struct {
 	// Helm chart can say it is a layer of that chart.
 	//
 	// For a manifest job this is the artifact itself. For a blob it is a
-	// manifest that references it — one of possibly several, because a base
+	// manifest that references it - one of possibly several, because a base
 	// layer shared by five images belongs to all of them.
 	ParentDigest    string
 	ParentMediaType string
 	// ParentRef is the vendor's own name for the parent, from
-	// org.opencontainers.image.ref.name — `orbs/CFX-5000-k8s/nginx:1.2.3`.
+	// org.opencontainers.image.ref.name - `orbs/CFX-5000-k8s/nginx:1.2.3`.
 	// Empty when the vendor named nothing, which is normal for the platform
 	// manifests under an index.
 	ParentRef string
@@ -1803,7 +1803,7 @@ type JobSummary struct {
 //
 // A transfer has thousands of jobs and a listing shows a page of them, so the
 // order decides what an operator ever sees. Ordering by wave put whatever
-// happened to be planned first at the top — usually blocked manifests — and
+// happened to be planned first at the top - usually blocked manifests - and
 // buried the handful actually moving.
 //
 // Running first, then what is runnable, then what is waiting, then the
@@ -1818,7 +1818,7 @@ const jobActivityOrder = `CASE j.state
 	WHEN 'skipped'   THEN 5
 	ELSE 6 END`
 
-// ListJobs returns a transfer's jobs — layer-level progress.
+// ListJobs returns a transfer's jobs - layer-level progress.
 func (p *Packages) ListJobs(
 	ctx context.Context, ref string, state string, limit int,
 ) ([]JobSummary, error) {
@@ -1919,7 +1919,7 @@ func refNameFrom(raw []byte) string {
 // tagsJSON encodes a job's destination tags.
 //
 // NULL rather than `[]` for the empty case, so "this artifact carries no tag"
-// and "somebody wrote an empty list" stay distinguishable in a raw query — and
+// and "somebody wrote an empty list" stay distinguishable in a raw query - and
 // so the common case, a blob, costs two bytes rather than a JSON document.
 func tagsJSON(tags []string) any {
 	if len(tags) == 0 {
@@ -1949,7 +1949,7 @@ func decodeTags(raw []byte) []string {
 // Transfers are created when a request is MADE, one per destination, and
 // planned later. That split is what lets a request record its own intent: the
 // destinations a rule named, or a person named, are rows rather than something
-// re-derived from configuration at expansion time — which silently promoted
+// re-derived from configuration at expansion time - which silently promoted
 // "replicate to lab" into "replicate to every enabled target", and left
 // promotion inexpressible because its destination is not "all targets" at all.
 type PendingTransfer struct {

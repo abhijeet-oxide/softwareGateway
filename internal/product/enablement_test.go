@@ -10,8 +10,8 @@ import (
 func boolPtr(b bool) *bool { return &b }
 
 // loadOne loads a single document through the real loader, so these tests
-// exercise the same path the Coordinator does — parsing, defaulting and
-// validation — rather than a hand-built struct that skips half of it.
+// exercise the same path the Coordinator does - parsing, defaulting and
+// validation - rather than a hand-built struct that skips half of it.
 func loadOne(t *testing.T, doc string) (*Product, error) {
 	t.Helper()
 
@@ -88,7 +88,7 @@ func TestNoEnabledTargetMeansNoDefault(t *testing.T) {
 }
 
 // A disabled source or target keeps its RepositoryRef so reconciliation can
-// deactivate the row rather than delete it — the packages and transfer history
+// deactivate the row rather than delete it - the packages and transfer history
 // that reference it must survive.
 func TestDisabledRepositoriesAreStillDeclaredButNotEnabled(t *testing.T) {
 	p := Product{
@@ -182,7 +182,7 @@ spec:
 }
 
 // Every source disabled while the product is on discovers nothing while
-// looking active — the exact silent failure disabling is meant to make visible.
+// looking active - the exact silent failure disabling is meant to make visible.
 func TestEverySourceDisabledIsRejected(t *testing.T) {
 	doc := `
 apiVersion: softwaregateway.io/v1alpha1
@@ -239,7 +239,7 @@ spec:
 }
 
 // A rule pointing at a disabled target fails the first time a package matches
-// it — potentially weeks later. Caught at load instead.
+// it - potentially weeks later. Caught at load instead.
 func TestRuleTargetingADisabledTargetIsRejected(t *testing.T) {
 	doc := `
 apiVersion: softwaregateway.io/v1alpha1
@@ -316,7 +316,7 @@ spec:
 // ---------------------------------------------------------------------------
 
 // Two vendors do not share a signing identity, so `cosign` replaces wholesale
-// rather than merging — a trust configuration assembled from two documents is
+// rather than merging - a trust configuration assembled from two documents is
 // one nobody can audit.
 func TestVerificationCosignReplacesWholesale(t *testing.T) {
 	p := Product{Spec: Spec{Verification: Verification{
@@ -395,7 +395,7 @@ spec:
         cosign:
           mode: keyless
           keyless:
-            # An issuer but no identity — the configuration that looks secure
+            # An issuer but no identity - the configuration that looks secure
             # and accepts a signature from anyone that issuer has ever vouched
             # for.
             certificateOidcIssuer: https://token.actions.githubusercontent.com

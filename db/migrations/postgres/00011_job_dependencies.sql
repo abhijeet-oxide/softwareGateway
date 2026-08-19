@@ -4,12 +4,12 @@
 --
 -- Invariant I1 is a statement about one manifest: it may be pushed once every
 -- blob and child manifest IT references is present. The implementation was a
--- global barrier — wave N+1 opened only when wave N had drained entirely — which
+-- global barrier - wave N+1 opened only when wave N had drained entirely - which
 -- is a far stronger claim than the invariant makes.
 --
 -- Measured on a real 63.7 GiB bundle: at 1974 of 1976 blobs done, 517 manifests
 -- whose content was already complete at the destination could not be written,
--- because two unrelated blobs had not landed. The cost is not bandwidth —
+-- because two unrelated blobs had not landed. The cost is not bandwidth -
 -- manifests are kilobytes and pushing them sooner moves no bytes sooner. The
 -- cost is everything else:
 --
@@ -23,8 +23,8 @@
 --
 -- An explicit edge per dependency, written at plan time. A manifest job is
 -- promoted from `blocked` to `pending` the moment none of its own dependencies
--- is outstanding. `wave` survives as ORDERING — it still decides what a
--- dequeue reaches first, and it is still what the progress rollup groups by —
+-- is outstanding. `wave` survives as ORDERING - it still decides what a
+-- dequeue reaches first, and it is still what the progress rollup groups by -
 -- but it is no longer a gate.
 --
 -- I1 is unchanged, and is in fact enforced more precisely than before: the edge
@@ -33,7 +33,7 @@
 --
 -- # site_rank, and why ordering needs it
 --
--- A bundle publishes each component twice — once inside the bundle, so the
+-- A bundle publishes each component twice - once inside the bundle, so the
 -- index still resolves, and once under the component's own name. One digest
 -- therefore becomes two jobs of identical size, and the SECOND one is nearly
 -- free: the blob is already in a sibling repository of the same registry, so it
@@ -50,7 +50,7 @@
 -- the bundle resolvable; rank 1 is the copy published under the component's own
 -- name. Ordering by (site_rank, size DESC) runs every rank-0 job before any
 -- rank-1 job, so the mount is guaranteed by the ordering rather than by
--- accident — and within a rank, the largest job starts first, which is the
+-- accident - and within a rank, the largest job starts first, which is the
 -- makespan win that could not be had before.
 
 -- +goose Up

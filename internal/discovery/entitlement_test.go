@@ -10,7 +10,7 @@ import (
 
 // A vendor registry serves a catalogue spanning every customer, and refuses the
 // products this one has not bought. That refusal is the entitlement check
-// WORKING, and it recurs on every scan forever — so it is neither an error to
+// WORKING, and it recurs on every scan forever - so it is neither an error to
 // raise nor a fact to discard.
 
 func TestContentTheVendorWillNotServeIsClassifiedRatherThanFailed(t *testing.T) {
@@ -31,7 +31,7 @@ func TestContentTheVendorWillNotServeIsClassifiedRatherThanFailed(t *testing.T) 
 
 	for _, e := range res.TagErrors {
 		if e.Class != ClassNotEntitled {
-			t.Errorf("%s:%s classified %q, want %q — a 403 on a read from a "+
+			t.Errorf("%s:%s classified %q, want %q - a 403 on a read from a "+
 				"vendor registry means this account may not have this product",
 				e.Repository, e.Tag, e.Class, ClassNotEntitled)
 		}

@@ -3,8 +3,8 @@ package registry
 // Capabilities records what a registry supports.
 //
 // PROBED, not hardcoded by vendor. The same product behaves differently across
-// versions and storage backends — an Artifactory on S3 and one on filesystem
-// differ — so a table keyed by registry_type would encode a lie that ages
+// versions and storage backends - an Artifactory on S3 and one on filesystem
+// differ - so a table keyed by registry_type would encode a lie that ages
 // badly. See docs/design/06 §3.
 type Capabilities struct {
 	// SupportsMount is cross-repository blob mount. M3's biggest lever for
@@ -13,15 +13,15 @@ type Capabilities struct {
 	// SupportsChunkedUpload is PATCH with Range.
 	SupportsChunkedUpload bool
 	// SupportsResumeUpload means an upload session survives a client
-	// disconnect. Cannot be determined by probing — it requires actually
-	// dropping a connection — so it starts at the vendor default and is
+	// disconnect. Cannot be determined by probing - it requires actually
+	// dropping a connection - so it starts at the vendor default and is
 	// corrected by observation. See docs/design/05 §4.6.
 	SupportsResumeUpload bool
 	// SupportsReferrersAPI is the OCI 1.1 /v2/<name>/referrers/<digest>
 	// endpoint. When false, signature discovery falls back to the tag schema.
 	SupportsReferrersAPI bool
-	// SupportsCatalog is /v2/_catalog. We do not use it for discovery —
-	// repositories come from configuration — but it is reported for
+	// SupportsCatalog is /v2/_catalog. We do not use it for discovery -
+	// repositories come from configuration - but it is reported for
 	// diagnostics.
 	SupportsCatalog bool
 	// TagPagination is how this registry paginates tags/list.
@@ -43,7 +43,7 @@ const (
 // DefaultCapabilities is the conservative starting assumption: the registry
 // speaks base OCI Distribution v2 and nothing optional.
 //
-// Assuming absence is the safe direction — a capability we wrongly believe
+// Assuming absence is the safe direction - a capability we wrongly believe
 // present produces a failed operation, while one we wrongly believe absent
 // only costs a slower path.
 func DefaultCapabilities() Capabilities {

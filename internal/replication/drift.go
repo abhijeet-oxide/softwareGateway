@@ -11,8 +11,8 @@ import (
 
 // FieldDiff is one field on which Git and the registry disagree.
 //
-// Rendered rather than raw, because the two sides speak different units — six
-// hours here, 21600 there — and a diff that made the reader convert would be a
+// Rendered rather than raw, because the two sides speak different units - six
+// hours here, 21600 there - and a diff that made the reader convert would be a
 // diff nobody reads.
 type FieldDiff struct {
 	Field string
@@ -43,7 +43,7 @@ type Drift struct {
 	// StateWrong means the Quay repository is not in the state mirroring
 	// needs. Called out separately because it is the destructive part of an
 	// apply, and because a mirror configuration on a NORMAL repository is
-	// inert — it looks configured and syncs nothing.
+	// inert - it looks configured and syncs nothing.
 	StateWrong  bool
 	ActualState string
 
@@ -99,7 +99,7 @@ func DiffMirror(want *quay.MirrorSpec, observed *quay.MirrorState, state string,
 
 	d := Drift{ActualState: state}
 	// An empty state means we did not read the repository, not that it is
-	// wrong — a missing observation must never be reported as a fault.
+	// wrong - a missing observation must never be reported as a fault.
 	if state != "" && !strings.EqualFold(state, string(quay.StateMirror)) {
 		d.StateWrong = true
 	}
@@ -151,7 +151,7 @@ func DiffMirror(want *quay.MirrorSpec, observed *quay.MirrorState, state string,
 
 	// sync_start_date is NOT compared. It defaults to the apply time, so
 	// comparing it would report drift on every reload of a configuration
-	// nobody had touched — see the same exclusion in mirrorFingerprint.
+	// nobody had touched - see the same exclusion in mirrorFingerprint.
 
 	d.CredentialsRotated = appliedSecretHash != "" && appliedSecretHash != desiredSecretHash
 	return d

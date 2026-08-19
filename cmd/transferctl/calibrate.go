@@ -13,7 +13,7 @@ import (
 	v1 "github.com/abhijeet-oxide/softwareGateway/pkg/apis/softwaregateway/v1"
 )
 
-// `transferctl calibrate` — measure the path, then say what to configure.
+// `transferctl calibrate` - measure the path, then say what to configure.
 
 type calibrateOptions struct {
 	from        string
@@ -43,8 +43,8 @@ func newCalibrateCommand() *cobra.Command {
 			"no tag, manifest or blob appears in the target. Use --no-write to skip\n" +
 			"it anyway, at the cost of only measuring the read half.\n\n" +
 			"A product spans many repositories and only one is measured, so the\n" +
-			"command shows which — chosen from the largest package discovery has\n" +
-			"found — and asks before it starts. --source-repository names one\n" +
+			"command shows which - chosen from the largest package discovery has\n" +
+			"found - and asks before it starts. --source-repository names one\n" +
 			"instead; -y skips the question.\n\n" +
 			"This is real load on both registries for a few minutes. It is not\n" +
 			"something to run on a schedule, and it is not `products check`.",
@@ -100,7 +100,7 @@ func newCalibrateCommand() *cobra.Command {
 			// silent for minutes by design, and a terminal that has printed
 			// nothing for four minutes is indistinguishable from one that has
 			// hung.
-			fmt.Fprintf(os.Stderr, "Measuring — about %s, longer if the link is slow.\n\n",
+			fmt.Fprintf(os.Stderr, "Measuring - about %s, longer if the link is slow.\n\n",
 				estimated)
 
 			resp, err := client.Calibrate(cmd.Context(), args[0], req)

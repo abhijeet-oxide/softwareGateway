@@ -14,7 +14,7 @@ import (
 // Every other step in a transfer asks first. A blob present at the destination
 // is skipped; a manifest already stored under its digest is skipped; a blob
 // held elsewhere on the destination registry is relocated rather than sent.
-// Tagging did none of that — it PUT every tag on every attempt, including the
+// Tagging did none of that - it PUT every tag on every attempt, including the
 // tags it had applied itself on the previous run.
 //
 // That is invisible while it works, because rewriting a tag to the digest it
@@ -23,7 +23,7 @@ import (
 // <tag>` over an existing tag is an OVERWRITE, and permission to create is not
 // permission to overwrite. Artifactory wants Delete on the permission target
 // for it and answers 401 without one, so a credential that had published a
-// release perfectly could not re-run the transfer over it — the run that
+// release perfectly could not re-run the transfer over it - the run that
 // should have been the cheapest was the only one that failed.
 
 // The behaviour, stated without reference to any registry's permission model:
@@ -71,7 +71,7 @@ func TestATagThatAlreadyNamesTheContentIsNotWrittenAgain(t *testing.T) {
 //
 // This is the deployment the field hit: a credential that may deploy but not
 // overwrite. The first transfer creates every tag and succeeds. Without the
-// check, the second fails on every tag it had already applied — and fails as
+// check, the second fails on every tag it had already applied - and fails as
 // `auth`, which is terminal, so it does not even retry.
 func TestARerunSurvivesADestinationThatRefusesTagOverwrites(t *testing.T) {
 	src := fakeregistry.New()
@@ -131,8 +131,8 @@ func TestTheRefusedOverwriteIsWhatTheRerunAvoids(t *testing.T) {
 
 // A refused tag write says which of the two writes it was.
 //
-// `PUT /v2/<repo>/manifests/<tag>` is two operations behind one request —
-// creating a tag that does not exist, and MOVING one that does — and a registry
+// `PUT /v2/<repo>/manifests/<tag>` is two operations behind one request -
+// creating a tag that does not exist, and MOVING one that does - and a registry
 // may permit one and refuse the other. Artifactory draws exactly that line and
 // answers 401 either way, so the status cannot say which rule was hit, and the
 // two have different fixes: one is permission to write tags at that path at

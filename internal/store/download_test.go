@@ -94,7 +94,7 @@ func setState(t *testing.T, p *Packages, id, state string) {
 }
 
 // A step with a predecessor must not be planned before that predecessor
-// succeeds — planning it early would read from a target that does not hold the
+// succeeds - planning it early would read from a target that does not hold the
 // content yet.
 func TestDependentStepOpensWaiting(t *testing.T) {
 	p, _, productID, ctx := chainFixture(t)
@@ -141,7 +141,7 @@ func TestStepIsSkippedWhenItsPredecessorFails(t *testing.T) {
 		t.Fatalf("released %d, skipped %d", released, skipped)
 	}
 	if got := stateOf(t, p, second); got != "skipped" {
-		t.Fatalf("state = %q — and it must be `skipped`, not `failed`: nothing was attempted against that target", got)
+		t.Fatalf("state = %q - and it must be `skipped`, not `failed`: nothing was attempted against that target", got)
 	}
 }
 
@@ -182,7 +182,7 @@ func TestSkipCascades(t *testing.T) {
 	}
 }
 
-// A step whose predecessor is still running stays put — the sweep is idempotent
+// A step whose predecessor is still running stays put - the sweep is idempotent
 // and safe to run on every tick.
 func TestUnsettledPredecessorChangesNothing(t *testing.T) {
 	p, r, productID, ctx := chainFixture(t)

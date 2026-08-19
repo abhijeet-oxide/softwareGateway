@@ -1,5 +1,5 @@
 -- +goose Up
--- SQLite mirror of the Postgres schema. DEVELOPMENT ONLY — see
+-- SQLite mirror of the Postgres schema. DEVELOPMENT ONLY - see
 -- docs/design/03-persistence.md section 2. The Coordinator warns at startup.
 --
 -- The logical schema is identical. Divergence is confined to three things and
@@ -11,7 +11,7 @@
 --   2. Partitioning. audit_events is a plain table; retention is a batched
 --                    DELETE rather than DROP PARTITION.
 --   3. Dequeue.      SQLite serializes writers, so BEGIN IMMEDIATE is already
---                    exclusive and FOR UPDATE SKIP LOCKED is unnecessary —
+--                    exclusive and FOR UPDATE SKIP LOCKED is unnecessary -
 --                    not merely unavailable.
 --
 -- Every CHECK constraint is identical to Postgres, so a state the machine does

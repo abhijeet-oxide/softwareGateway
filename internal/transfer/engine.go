@@ -20,7 +20,7 @@ import (
 // The engine runs on the WORKER. It is the only place bytes move.
 //
 // See docs/design/05-transfer-engine.md §4. Everything here is written against
-// registry.Repository, never against an OCI library — which is what kept
+// registry.Repository, never against an OCI library - which is what kept
 // ADR-001 a leaf decision and now keeps its closure reversible.
 //
 // Invariant I5: BYTES NEVER TOUCH WORKER DISK. There is no io.ReadAll, no temp
@@ -29,7 +29,7 @@ import (
 //
 //   - io.ReadAll on an 8 GB layer would OOM the pod.
 //   - A temp file would cap concurrency at the volume's IOPS, add a failure
-//     mode (disk full), and require cleanup on crash — the one thing workers
+//     mode (disk full), and require cleanup on crash - the one thing workers
 //     are designed not to need. It would also break readOnlyRootFilesystem.
 //   - Decompressing to recompress would burn CPU and CHANGE THE DIGEST, which
 //     would break every signature over it.
@@ -78,7 +78,7 @@ type Job struct {
 	Target registry.Repository
 
 	// KnownPlacement says the Coordinator believes this digest is already in
-	// the target repository — the placement fast path, shipped with the lease
+	// the target repository - the placement fast path, shipped with the lease
 	// batch so resolving sixteen jobs costs zero extra calls.
 	KnownPlacement bool
 
@@ -202,15 +202,15 @@ func (e *Engine) runBlob(ctx context.Context, job Job, progress ProgressFunc) Re
 	// registry can perform internally for zero bytes. See migration 00013.
 	if job.RepairLevel < store.RepairDistrustCache {
 		// 1. The Coordinator already believes this is there. A placement is
-		// strong evidence, not proof — a registry's garbage collector can
-		// remove content underneath us — but the TTL bounds the staleness and
+		// strong evidence, not proof - a registry's garbage collector can
+		// remove content underneath us - but the TTL bounds the staleness and
 		// the BLOB_UNKNOWN backstop on manifest push catches the rest.
 		if job.KnownPlacement {
 			return Result{Outcome: OutcomeSkipped, SkipReason: SkipPlacementHit, Placed: true}
 		}
 
 		// 2. Ask the destination. One HEAD, and it settles the question for
-		// real — on a registry that answers it per repository. Artifactory
+		// real - on a registry that answers it per repository. Artifactory
 		// answers from a checksum index spanning its whole repository, so a
 		// blob present under any path there reads as present under all of them,
 		// which is the lie this whole flag exists to get past.
@@ -226,15 +226,15 @@ func (e *Engine) runBlob(ctx context.Context, job Job, progress ProgressFunc) Re
 	}
 
 	// 3. Ask the registry to relocate the blob server-side. Zero bytes over the
-	// wire regardless of size — the dominant optimization for promotion, where
+	// wire regardless of size - the dominant optimization for promotion, where
 	// a 45 GB move can complete in seconds, and the difference between a
 	// bundle's shared components costing their size once or twice.
 	//
 	// OUTSIDE the block above, so a level-1 repair still reaches it. That is
 	// the whole reason repair has levels: the sibling repository genuinely does
 	// hold the blob, and asking the registry to link it is both correct and
-	// free. Only level 2 — reached when a mount reported success without
-	// materialising anything — skips this and streams.
+	// free. Only level 2 - reached when a mount reported success without
+	// materialising anything - skips this and streams.
 	if job.RepairLevel < store.RepairStreamOnly {
 		if mounted := e.tryMount(ctx, job, dgst); mounted != nil {
 			return *mounted
@@ -255,7 +255,7 @@ func (e *Engine) runBlob(ctx context.Context, job Job, progress ProgressFunc) Re
 //
 // Mount only applies within one registry: it is a server-side relocation, not
 // a transfer. A 202 Accepted means the registry declined and opened an
-// ordinary upload session instead — a NORMAL outcome, not an error, and the
+// ordinary upload session instead - a NORMAL outcome, not an error, and the
 // reason support being uneven in practice costs nothing here.
 //
 // # Two places a blob may already be, and only one of them used to be tried
@@ -264,8 +264,8 @@ func (e *Engine) runBlob(ctx context.Context, job Job, progress ProgressFunc) Re
 // share a registry. That is the promotion case, and it was all this did.
 //
 // The one that was missing is a SIBLING repository on the target registry.
-// Replication from a vendor never satisfies the first test — the vendor's
-// registry is not ours — so a bundle's components, which are published both
+// Replication from a vendor never satisfies the first test - the vendor's
+// registry is not ours - so a bundle's components, which are published both
 // inside the bundle and under their own name, were streamed from the vendor
 // twice. Same digest, two destination repositories, two full copies over the
 // WAN, for content the destination registry already held and could relocate in
@@ -303,7 +303,7 @@ func (e *Engine) mountFrom(
 		errors.Is(err, registry.ErrUnsupported),
 		errors.Is(err, registry.ErrNotFound):
 		// Declined with a 202 and an ordinary upload session, unsupported, or
-		// that repository does not hold it after all — a placement is evidence,
+		// that repository does not hold it after all - a placement is evidence,
 		// not proof. Streaming is always correct, so fall through rather than
 		// fail.
 		return nil
@@ -320,7 +320,7 @@ func (e *Engine) mountFrom(
 // request body means a slow destination naturally slows reads from the source,
 // via TCP flow control on both sides. There is no queue between them to grow
 // and no buffer to size. That is why this is one Copy rather than a
-// producer/consumer pair with a channel — the simpler structure has the better
+// producer/consumer pair with a channel - the simpler structure has the better
 // behaviour, not merely less code.
 func (e *Engine) stream(
 	ctx context.Context, job Job, dgst registry.Digest, progress ProgressFunc,
@@ -366,7 +366,7 @@ func (e *Engine) stream(
 //
 // # Divergence from docs/design/05 §9 step 2, recorded rather than absorbed
 //
-// The design says to push "the stored raw bytes (03 §5), verbatim" — the
+// The design says to push "the stored raw bytes (03 §5), verbatim" - the
 // Coordinator's copy. This fetches them from the SOURCE by digest instead.
 //
 // Verbatim is preserved either way: ManifestReader.FetchManifest is
@@ -378,13 +378,13 @@ func (e *Engine) stream(
 // bodies to the worker would put artifact payloads in every lease response for
 // the handful of manifests in a package, when the worker already holds a
 // source client and a manifest is kilobytes. What it costs is one GET per
-// manifest — a handful per package, against hundreds of blobs.
+// manifest - a handful per package, against hundreds of blobs.
 func (e *Engine) runManifest(ctx context.Context, job Job) Result {
 	dgst := registry.Digest(job.Digest)
 
 	// Already there. Re-pushing an identical manifest to the same digest is a
 	// no-op at the registry, so this is an optimization rather than a
-	// correctness requirement — but it is the one that makes re-transferring
+	// correctness requirement - but it is the one that makes re-transferring
 	// an already-present package move ZERO bytes rather than merely few. The
 	// tags still have to be applied: the manifest being present says nothing
 	// about what any tag points at.
@@ -471,8 +471,8 @@ func (e *Engine) applyTags(ctx context.Context, job Job, dgst registry.Digest) e
 //
 // `PUT /v2/<repo>/manifests/<tag>` is two operations behind one request, and a
 // registry may permit one and refuse the other: creating a tag that does not
-// exist, and MOVING one that does. Artifactory draws exactly that line —
-// creating needs Deploy, moving needs Delete on the permission target — and
+// exist, and MOVING one that does. Artifactory draws exactly that line -
+// creating needs Deploy, moving needs Delete on the permission target - and
 // answers 401 either way, so the status alone cannot say which rule was hit.
 //
 // The difference decides what an operator does next. A tag that does not exist
@@ -505,7 +505,7 @@ func (e *Engine) tagState(ctx context.Context, job Job, tag string) string {
 // It is the same check the blob and manifest paths make, one level up: the
 // destination already holds what this job would produce, so the write is not
 // an optimization to skip but a change with no difference. Comparing DIGESTS
-// makes that airtight — the tag either resolves to these bytes or it does not,
+// makes that airtight - the tag either resolves to these bytes or it does not,
 // and nothing weaker than the digest is being trusted.
 //
 // It also stops the tool from doing something registries are entitled to
@@ -513,7 +513,7 @@ func (e *Engine) tagState(ctx context.Context, job Job, tag string) string {
 // OVERWRITE, and permission to create is not permission to overwrite:
 // Artifactory requires Delete on the permission target and answers 401 without
 // it. Re-running a transfer over content already published therefore failed on
-// every tag it had already applied — the one case where a re-run should be
+// every tag it had already applied - the one case where a re-run should be
 // doing the least work. Blob and manifest pushes never hit it because both are
 // already skipped when the content is present; tagging was the only step that
 // wrote unconditionally.
@@ -560,8 +560,8 @@ func (e *Engine) manifestBytes(
 // not complete it.
 //
 // An EMPTY step is deliberate rather than an omission: where the error already
-// reads as a complete account of what was attempted — the tag writes, whose
-// message names the digest, the tag, the path and the status — a prefix adds a
+// reads as a complete account of what was attempted - the tag writes, whose
+// message names the digest, the tag, the path and the status - a prefix adds a
 // word and no information. See applyTags.
 func (e *Engine) failed(err error, what string) Result {
 	wrapped := err
@@ -586,7 +586,7 @@ func (e *Engine) failed(err error, what string) Result {
 const ClassBlobUnknown = store.ClassBlobUnknown
 
 // ClassConfiguration is a job this worker cannot execute for a reason that is
-// about the WORKER rather than the registries — a product it has not loaded, a
+// about the WORKER rather than the registries - a product it has not loaded, a
 // credential it cannot resolve.
 const ClassConfiguration = "configuration"
 
@@ -617,7 +617,7 @@ func classify(err error) string {
 func MaxAttemptsFor(class string) int {
 	switch class {
 	case ClassConfiguration:
-		// THIS worker cannot execute the job — a missing product, an
+		// THIS worker cannot execute the job - a missing product, an
 		// unresolvable credential. Another might, so the job is not hopeless;
 		// but retrying it eight times against the same misconfigured fleet
 		// only burns the attempts a real retry would need. One, so the failure
@@ -651,7 +651,7 @@ func sameRegistry(a, b registry.Identity) bool {
 
 // verifier hashes bytes as they are read.
 //
-// One SHA-256 pass over data already in cache — on modern hardware with SHA
+// One SHA-256 pass over data already in cache - on modern hardware with SHA
 // extensions, low single-digit percent of the transfer's CPU, and entirely
 // overlapped with network I/O. Free, in the only sense that matters.
 type verifier struct {

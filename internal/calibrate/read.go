@@ -23,7 +23,7 @@ const (
 	// maxSamples is how many distinct blobs the probe rotates through.
 	//
 	// More than one because a single blob read repeatedly can be served from a
-	// cache — the registry's, a CDN's, or a caching proxy's — and would then
+	// cache - the registry's, a CDN's, or a caching proxy's - and would then
 	// measure the cache rather than the path. Eight is enough that the working
 	// set exceeds anything an incidental cache holds, without walking the whole
 	// catalogue to find them.
@@ -35,7 +35,7 @@ const (
 	// maxTagsListed is how many tags are fetched before choosing which to open.
 	//
 	// Registries return tags in lexical order, so the FIRST ones are the oldest
-	// spellings and frequently the smallest — an early release, a placeholder,
+	// spellings and frequently the smallest - an early release, a placeholder,
 	// a signature. Listing a page and choosing from it beats taking whatever
 	// came back first.
 	maxTagsListed = 100
@@ -61,7 +61,7 @@ const (
 	// maxSearchDepth is how far down a manifest tree the search will go.
 	//
 	// Four, matching the transfer walk. It has to be more than one, and
-	// assuming one was the bug: a bundle is an index of INDEXES — the ORB lists
+	// assuming one was the bug: a bundle is an index of INDEXES - the ORB lists
 	// component images, each of which is a multi-platform index, and the layers
 	// live under those. One level of descent lands on a component index, finds
 	// no layers because an index has none, and concludes a repository full of
@@ -86,7 +86,7 @@ type sample struct {
 // A source spanning forty repositories has no single "the" repository, and the
 // first one declared is as likely as not to be a stub. That is not
 // hypothetical: a run against a real product measured
-// `cfx-5000-product/aaa` — one tag, no blob over 256 KiB — and reported the
+// `cfx-5000-product/aaa` - one tag, no blob over 256 KiB - and reported the
 // whole source as unmeasurable while thirty-nine repositories of real content
 // sat next to it.
 //
@@ -107,8 +107,8 @@ func collectSamples(
 		tried []string
 		// best is the largest thing found so far that did NOT clear the size
 		// floor, kept as a fallback. A repository of small blobs is a poor
-		// sample and a usable one; refusing to measure it at all — which is
-		// what this did — leaves somebody with a size threshold they cannot
+		// sample and a usable one; refusing to measure it at all - which is
+		// what this did - leaves somebody with a size threshold they cannot
 		// see and no way to act on it.
 		best      []sample
 		bestRepo  string
@@ -197,19 +197,19 @@ func samplesIn(ctx context.Context, cfg registry.ClientConfig) ([]sample, error)
 
 // preferredTags orders a tag list: newest-looking first, accessories last.
 //
-// Two heuristics, and stated as such — they change which blobs get timed, never
+// Two heuristics, and stated as such - they change which blobs get timed, never
 // whether the measurement is honest.
 //
 // Registries serve tags in lexical order and the spec guarantees nothing about
 // it, so "the first tag" is an arbitrary choice that reliably lands on the
-// OLDEST spelling — an early release, a placeholder, a `latest` pointing at
+// OLDEST spelling - an early release, a placeholder, a `latest` pointing at
 // something small. Reversing gets the other end of the same ordering, which for
 // every version scheme met so far is the most recent release.
 //
 // Reversing alone makes the second problem worse, which is why both are here. A
 // release is published alongside its signature and attestation; those sort
 // adjacently to it and, for the two conventions this system already knows
-// about, sort AFTER it — so newest-first puts a 3 KB PKCS#7 blob at the front
+// about, sort AFTER it - so newest-first puts a 3 KB PKCS#7 blob at the front
 // of the queue. Signatures are still opened, last, because a repository that
 // holds nothing else is still measurable.
 func preferredTags(tags []string) []string {
@@ -236,7 +236,7 @@ func preferredTags(tags []string) []string {
 // Two conventions, both already documented elsewhere in this system: cosign's
 // `sha256-<digest>.sig` / `.att` / `.sbom` tag schema, and the `signature_` /
 // `signed_` prefixes NEAR publishes (internal/vendors/near). Deliberately a
-// NAME test and nothing more — it only reorders a search, so a tag it
+// NAME test and nothing more - it only reorders a search, so a tag it
 // misjudges costs one extra fetch and a tag it misses is caught by the size
 // filter behind it.
 func looksLikeAccessory(tag string) bool {
@@ -267,7 +267,7 @@ func describeTried(tried []string, total int) string {
 // blobsUnderTag returns the layers reachable from one tag.
 //
 // An index states the size of its child MANIFESTS, not of the layers beneath
-// them, so reaching actual content means descending — and descending as far as
+// them, so reaching actual content means descending - and descending as far as
 // it takes, which is the part this got wrong. A bundle is an index of INDEXES:
 // the ORB lists its components, each component is a multi-platform index, and
 // the layers are a level below that. Stopping after one descent landed on a
@@ -275,7 +275,7 @@ func describeTried(tried []string, total int) string {
 // repository holding gigabytes as having nothing to measure.
 //
 // Errors are swallowed: this is a search for something to measure, and a tag
-// that will not resolve simply is not it — the caller reports "nothing found"
+// that will not resolve simply is not it - the caller reports "nothing found"
 // once, rather than one failure per tag.
 func blobsUnderTag(ctx context.Context, client *generic.Repository, tag string) []sample {
 	desc, err := client.ResolveTag(ctx, tag)
@@ -289,8 +289,8 @@ func blobsUnderTag(ctx context.Context, client *generic.Repository, tag string) 
 //
 // # Why not oci.Walk
 //
-// The transfer walk fetches the WHOLE tree — every manifest, to a bounded depth
-// — because a transfer needs every one of them. This needs a handful of blobs
+// The transfer walk fetches the WHOLE tree - every manifest, to a bounded depth
+// - because a transfer needs every one of them. This needs a handful of blobs
 // and can stop at the first manifest that has any, so it goes depth-first and
 // returns as soon as it has something. On an ORB that is two or three requests
 // against a tree of sixty artifacts, and the difference is a calibration that
@@ -311,7 +311,7 @@ func searchForBlobs(
 	}
 
 	// An index. Its children are listed but not fetched, so open them in turn
-	// until one yields layers — of its own, or from further down.
+	// until one yields layers - of its own, or from further down.
 	children := tree.Artifacts[1:]
 	for i, child := range children {
 		if i >= maxChildrenPerLevel {
@@ -367,8 +367,8 @@ func probeRead(
 	// Setup happens BEFORE the clock starts, and this is the difference between
 	// a measurement and a table of zeroes.
 	//
-	// Each level builds a fresh client — deliberately, so a level does not
-	// inherit the previous one's warm sockets — which means its first request
+	// Each level builds a fresh client - deliberately, so a level does not
+	// inherit the previous one's warm sockets - which means its first request
 	// pays a proxy CONNECT, a TLS handshake, a token exchange and a blob
 	// resolve before a single byte of payload moves. On a path with a 900ms
 	// round trip that is five round trips, more than the whole default budget,
@@ -460,7 +460,7 @@ func probeRead(
 // connection, the TLS session and the credential without moving payload that
 // would then have to be excluded from the numbers.
 //
-// Failures are ignored. This is preparation, not a check — whatever is wrong
+// Failures are ignored. This is preparation, not a check - whatever is wrong
 // will fail again inside the measured window, where it is counted and reported.
 func warmUp(
 	ctx context.Context, client *generic.Repository, digest registry.Digest, streams int,
@@ -484,7 +484,7 @@ func warmUp(
 // describeEmptyLevel turns a silently empty level into a stated one.
 //
 // A level that completed no request and recorded no error rendered as a row of
-// dashes with no explanation anywhere — which is what a five-second budget on a
+// dashes with no explanation anywhere - which is what a five-second budget on a
 // path with a one-second round trip produced, and it read as the probe being
 // broken rather than as the budget being too short for the link.
 func describeEmptyLevel(first string, requests, errors int, budget time.Duration) string {
@@ -492,7 +492,7 @@ func describeEmptyLevel(first string, requests, errors int, budget time.Duration
 		return first
 	}
 	return fmt.Sprintf(
-		"no request finished within the %s budget — the link is slower than the "+
+		"no request finished within the %s budget - the link is slower than the "+
 			"measurement window. Raise --budget", budget)
 }
 

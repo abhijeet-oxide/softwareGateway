@@ -17,7 +17,7 @@ import (
 // Promotion is the same engine with a target as its origin, and the one thing
 // it must get right that replication does not is the PATH. At lab the bundle
 // sits beneath lab's prefix; production has a prefix of its own; and what has
-// to arrive there is the vendor's structure under production's prefix — not
+// to arrive there is the vendor's structure under production's prefix - not
 // lab's prefix nested inside production's, which is what a naive copy of the
 // origin path produces.
 
@@ -93,7 +93,7 @@ func TestPromotionReproducesTheStructureUnderTheNewPrefix(t *testing.T) {
 		t.Fatalf("%s:orb_23.8.1076 resolves to %q, want %s", wantRoot, got, pkg.ManifestDigest)
 	}
 
-	// And every component, still under the names the vendor gave it — those
+	// And every component, still under the names the vendor gave it - those
 	// came from annotations inside manifests copied verbatim on the first hop,
 	// so the second hop reproduces them without ever having seen the vendor.
 	for _, c := range components {

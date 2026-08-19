@@ -14,8 +14,8 @@ import (
 //
 // Progress is a rollup over jobs, never a maintained counter (invariant I6),
 // and the same applies to everything derived from it. Elapsed, percentage and
-// throughput are computed from three facts the server already holds — bytes
-// moved, bytes planned, and when the first job was leased — so they cannot
+// throughput are computed from three facts the server already holds - bytes
+// moved, bytes planned, and when the first job was leased - so they cannot
 // drift from the jobs they describe.
 //
 // # What is deliberately absent
@@ -79,8 +79,8 @@ func averageRate(t *v1.Transfer) (float64, bool) {
 // estimate is how long the remaining work will take at the observed rates.
 //
 // A zero byte rate is passed through rather than refused. It means nothing has
-// crossed the wire — the ordinary state of a transfer whose content is already
-// at the destination — and that transfer still has jobs completing at a
+// crossed the wire - the ordinary state of a transfer whose content is already
+// at the destination - and that transfer still has jobs completing at a
 // measurable rate, which is the thing actually governing when it finishes. The
 // first few seconds of every transfer, where neither rate exists yet, still
 // answer "unknown": an estimate from a rate measured over almost no time swings
@@ -99,7 +99,7 @@ func estimate(t *v1.Transfer) (time.Duration, bool) {
 // minutes crawling and then got ten times faster needs well over an hour of the
 // new speed before the average is within 10% of it. Someone who has just added
 // a worker, or bypassed a proxy, is watching precisely to find out whether it
-// helped — and would be reading a number that mostly reflects the period before
+// helped - and would be reading a number that mostly reflects the period before
 // they changed anything.
 //
 // A watcher takes samples, so it can do better: it passes the smoothed rate
@@ -137,7 +137,7 @@ func byteEstimate(t *v1.Transfer, rate float64) (time.Duration, bool) {
 	}
 	// Scaled INSIDE the conversion. `time.Duration(x) * time.Second` truncates
 	// x to an integer first, so anything under a second became zero and printed
-	// as "-" — an estimate of "unknown" for the one case where it is most
+	// as "-" - an estimate of "unknown" for the one case where it is most
 	// certain.
 	return time.Duration(float64(remaining) / rate * float64(time.Second)), true
 }
@@ -152,7 +152,7 @@ func byteEstimate(t *v1.Transfer, rate float64) (time.Duration, bool) {
 // a HEAD, a decision and a row, so its duration is bounded by ROUND TRIPS ×
 // jobs, and bytes do not appear in that product at all.
 //
-// Estimating such a transfer on bytes said `<1s` with 794 jobs left to run —
+// Estimating such a transfer on bytes said `<1s` with 794 jobs left to run -
 // the same failure as the hours-long estimate it replaced, in the opposite
 // direction and from the same cause: one quantity being used to describe work
 // whose cost is governed by another.
@@ -160,7 +160,7 @@ func byteEstimate(t *v1.Transfer, rate float64) (time.Duration, bool) {
 // Cumulative rather than smoothed, and that is not a compromise here. Job
 // throughput is dominated by concurrency and latency, both of which hold steady
 // across a run, where byte throughput swings with the size of whatever is in
-// flight — which is exactly why the byte estimate takes a live rate and this
+// flight - which is exactly why the byte estimate takes a live rate and this
 // one does not need to.
 func jobEstimate(t *v1.Transfer) (time.Duration, bool) {
 	outstanding := t.Progress.JobsOutstanding
@@ -185,8 +185,8 @@ func jobEstimate(t *v1.Transfer) (time.Duration, bool) {
 // PLANNED MINUS TRANSFERRED IS NOT THAT, and the gap is not small. That
 // difference counts every byte that will never move: content the destination
 // already had, blobs the registry relocated internally, work deduplicated away
-// at plan time. A transfer 98% done with 43 manifest jobs left — about 233 KiB
-// of real work — reported a hundred megabytes remaining and, at the kilobyte
+// at plan time. A transfer 98% done with 43 manifest jobs left - about 233 KiB
+// of real work - reported a hundred megabytes remaining and, at the kilobyte
 // rate of a manifest phase, an ETA of eleven hours. Both numbers were arithmetic
 // on the wrong quantity.
 //
@@ -211,7 +211,7 @@ func remainingBytes(t *v1.Transfer) int64 {
 //
 // `plannedBytes` is the work the plan QUEUED. Content the destination already
 // held when the transfer was planned is never queued at all, so it is not in
-// that number — it is in `dedupeSkippedBytes`, and the release is the sum of
+// that number - it is in `dedupeSkippedBytes`, and the release is the sum of
 // the two.
 //
 // Using the planned figure as a denominator produced a row that could not be
@@ -231,7 +231,7 @@ func packageBytes(p v1.TransferProgress) int64 {
 //
 // Outstanding bytes is the size of the work remaining, and on a re-transfer
 // almost none of that work is a transfer. The second run of a release finds its
-// content already at the destination and skips it — thousands of jobs, sixty
+// content already at the destination and skips it - thousands of jobs, sixty
 // gigabytes nominally outstanding, and perhaps eight megabytes that genuinely
 // have to move. Dividing sixty gigabytes by a rate measured while moving eight
 // megabytes produced the reported symptom: hours of ETA on a transfer that
@@ -240,7 +240,7 @@ func packageBytes(p v1.TransferProgress) int64 {
 // So the remaining work is scaled by the proportion of the work ALREADY DONE
 // that turned out to need moving. A transfer that has skipped 95% of what it
 // has looked at is estimated on the assumption it will go on skipping about 95%
-// — which is what the plan and the destination both imply, and what the first
+// - which is what the plan and the destination both imply, and what the first
 // version assumed to be 0%.
 //
 // # Why this is measured rather than asked for

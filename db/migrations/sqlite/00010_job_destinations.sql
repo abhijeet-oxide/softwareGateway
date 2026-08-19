@@ -4,7 +4,7 @@
 -- One thing differs, and it is the reason this file is long where the Postgres
 -- one is short: SQLite cannot drop a table constraint. Changing the job
 -- uniqueness key means rebuilding the table, so the whole definition is
--- restated here — which is also why the two dialects' schemas have to be read
+-- restated here - which is also why the two dialects' schemas have to be read
 -- together rather than assumed identical.
 --
 -- The rebuild is the standard SQLite recipe: create the new shape, copy, drop,

@@ -83,7 +83,7 @@ func (m *Machine[S, E]) Can(from S, event E) bool {
 }
 
 // IsTerminal reports whether the state is terminal. Note that `failed` is
-// deliberately NOT terminal in most machines — it is retryable, which is the
+// deliberately NOT terminal in most machines - it is retryable, which is the
 // point of modelling retry as an explicit event.
 func (m *Machine[S, E]) IsTerminal(s S) bool { return m.terminal[s] }
 

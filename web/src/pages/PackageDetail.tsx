@@ -32,7 +32,7 @@ import type {
 } from '../api/types'
 
 /**
- * Page 3 — Package (release detail).
+ * Page 3 - Package (release detail).
  *
  * Answers: everything about this one release, and what can I do with it?
  *
@@ -41,7 +41,7 @@ import type {
  *     is selectable, because cherry-picking a release is not a thing the
  *     system does.
  *   - every fact on it is one this Coordinator can answer for. What a download
- *     would save, where a release might land, which targets exist — those are
+ *     would save, where a release might land, which targets exist - those are
  *     questions about a transfer and they are answered on a transfer's page.
  *     They were three cards here, and all three said "we cannot know yet".
  */
@@ -52,7 +52,7 @@ import type {
  * # Why this is a panel and not a button
  *
  * Analysing walks the release's whole manifest tree against the vendor
- * registry — for the 260-artifact releases this system is built for, that is
+ * registry - for the 260-artifact releases this system is built for, that is
  * hundreds of round trips and takes a while. The button reported none of it:
  * it spun in place and the page changed silently, which is indistinguishable
  * from nothing happening.
@@ -61,7 +61,7 @@ import type {
  *
  * The API has no progress feed for this, and it cannot sensibly have one: the
  * size of the tree is the thing being discovered, so there is no denominator
- * until the work is finished. <WorkingBar> is the honest shape — it shows that
+ * until the work is finished. <WorkingBar> is the honest shape - it shows that
  * work is running and how long it has been running, and states no position.
  *
  * What it CAN report is the outcome, and that is worth reporting in full: a
@@ -73,7 +73,7 @@ function MeasurePanel({
   analysed, analysing, artifactCount, inspect, disabled,
 }: {
   analysed: boolean
-  /** Somebody else is already walking it — discovery, or another reader. */
+  /** Somebody else is already walking it - discovery, or another reader. */
   analysing?: boolean
   artifactCount?: number
   inspect: UseMutationResult<InspectPackageResponse, Error, void, unknown>
@@ -95,7 +95,7 @@ function MeasurePanel({
   }
 
   // HANDED OFF. The server answers immediately and the walk runs behind it, so
-  // there is no result to report here — the release's own state is the report,
+  // there is no result to report here - the release's own state is the report,
   // and it is read by the caller and passed back in as `analysing`. Held until
   // that arrives, so the panel does not blink through "not analysed" between
   // the response and the refetch that notices.
@@ -109,7 +109,7 @@ function MeasurePanel({
     // nothing after the first minute is indistinguishable from a hang, so the
     // wording escalates rather than repeating itself.
     const scope = artifactCount
-      ? `Reading the manifest tree from the vendor registry — ${artifactCount} artifacts to walk.`
+      ? `Reading the manifest tree from the vendor registry - ${artifactCount} artifacts to walk.`
       : 'Reading the manifest tree from the vendor registry.'
     const detail =
       elapsed > 45
@@ -155,7 +155,7 @@ function MeasurePanel({
         showIcon
         message={
           r.alreadyExpanded
-            ? 'Already analyzed — the vendor registry was not contacted'
+            ? 'Already analyzed - the vendor registry was not contacted'
             : `Analyzed in ${formatDuration(elapsed) ?? 'a moment'}`
         }
         description={
@@ -193,7 +193,7 @@ function MeasurePanel({
    * Discovery walks recently published releases on its own, and a second walk
    * of the same release is a second conversation with the vendor's registry
    * for an answer already on its way. The claim is held in the database, so the
-   * server would refuse this anyway — offering it and then refusing it is a
+   * server would refuse this anyway - offering it and then refusing it is a
    * worse way to say the same thing.
    */
   if (analysing) {
@@ -211,7 +211,7 @@ function MeasurePanel({
         Analyze package
       </Button>
       <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-        Walks the manifest tree in the vendor registry to establish what this release contains —
+        Walks the manifest tree in the vendor registry to establish what this release contains -
         its files, and what each part weighs. Nothing is downloaded.
       </Typography.Text>
     </Space>
@@ -244,7 +244,7 @@ function AnalysingBar({ requested }: { requested?: boolean }) {
 }
 
 /**
- * What the release is CALLED — `orbs/cfx-5000-k8s`.
+ * What the release is CALLED - `orbs/cfx-5000-k8s`.
  *
  * The vendor's shortened spelling where there is one, for the same reason
  * `version` prefers `displayTag`: it is what the reader has in their hand.
@@ -273,8 +273,8 @@ function signature(p?: Package): RelatedArtifact | undefined {
  * It used to read the media type and call anything image-ish an image. Every
  * part of a vendor orb is served as `image.manifest.v1+json` with no
  * artifactType, so every chart was counted as an image and Helm Charts read
- * zero on every release. The API now classifies — using the vendor's own
- * annotations where the OCI fields cannot answer — and this only maps its
+ * zero on every release. The API now classifies - using the vendor's own
+ * annotations where the OCI fields cannot answer - and this only maps its
  * bounded vocabulary onto the three tiles.
  *
  * Signatures and the index itself are not release contents and are excluded
@@ -289,7 +289,7 @@ function tileFor(a: Artifact): 'Images' | 'Helm Charts' | 'Files' | null {
     case 'signature':
       return null
     default:
-      // `artifact` — content that declared nothing about itself — and any
+      // `artifact` - content that declared nothing about itself - and any
       // kind this client has not been taught. Counted as Files rather than
       // silently dropped, since it IS part of the release.
       return a.kind ? 'Files' : null
@@ -299,7 +299,7 @@ function tileFor(a: Artifact): 'Images' | 'Helm Charts' | 'Files' | null {
 /**
  * The name a person recognises.
  *
- * The vendor's ref name is the only thing here that reads like a name —
+ * The vendor's ref name is the only thing here that reads like a name -
  * `cfx-5000-product/bgcf:2511.174.0`. Without it the column showed the
  * artifact TYPE, so every row of the images tab said "Images".
  */
@@ -314,7 +314,7 @@ function artifactName(a: Artifact): string | null {
 /**
  * A component's name and its tag, apart.
  *
- * The vendor writes them as one string — `cfx-5000-product/bgcf:2511.174.0` —
+ * The vendor writes them as one string - `cfx-5000-product/bgcf:2511.174.0` -
  * and they are two facts: what the component IS and which version of it this
  * release carries. In one column the version is the part that falls off the
  * end of the cell, and it is the part somebody is looking for.
@@ -377,8 +377,8 @@ function ComponentTable({ artifacts, kind }: { artifacts: Artifact[]; kind: stri
           },
           {
             // Its own column. The vendor writes the name and the tag as one
-            // string and they are two facts — what the component is, and which
-            // version of it this release carries — and in one cell the version
+            // string and they are two facts - what the component is, and which
+            // version of it this release carries - and in one cell the version
             // is the half that falls off the end.
             title: 'Tag',
             width: 170,
@@ -422,14 +422,14 @@ function ComponentTable({ artifacts, kind }: { artifacts: Artifact[]; kind: stri
  * A vendor's configuration bundle is two hundred paths under a handful of
  * directories, and a flat list of two hundred rows answers "is the network
  * configuration in here" by making somebody read all of them. The paths are
- * already hierarchical — the publisher wrote them that way — so the shape is
+ * already hierarchical - the publisher wrote them that way - so the shape is
  * the vendor's, not one this page invented.
  *
  * # What it can show, and what it cannot
  *
  * Every layer that carries `org.opencontainers.image.title` IS one named file,
  * and analysis recorded that name. A layer with no title is a tar of an unknown
- * number of paths — an image layer — and is not listed at all: a row called
+ * number of paths - an image layer - and is not listed at all: a row called
  * `layer sha256:…` would be a summary pretending to be an answer, and counting
  * them at the foot only told a reader about something they had not asked
  * about and could not act on.
@@ -496,7 +496,7 @@ function buildTree(files: PackageFile[], onView: (file: PackageFile) => void): T
   interface Leaf {
     /** The file itself, with the path the publisher wrote. */
     file: PackageFile
-    /** Its name within this directory — what the row shows. */
+    /** Its name within this directory - what the row shows. */
     name: string
   }
   interface Dir {
@@ -521,7 +521,7 @@ function buildTree(files: PackageFile[], onView: (file: PackageFile) => void): T
       node.bytes += bytes(file.sizeBytes) ?? 0
     }
     // The FULL path is kept on the leaf. The row shows the name, and opening
-    // the file needs to say which one — two files called `values.yaml` under
+    // the file needs to say which one - two files called `values.yaml` under
     // different directories are different files.
     node.files.push({ file, name })
   }
@@ -554,8 +554,8 @@ function buildTree(files: PackageFile[], onView: (file: PackageFile) => void): T
               {formatBytes(bytes(leaf.file.sizeBytes))}
             </Typography.Text>
             {/*
-              The content is not held here — a release is tens of gigabytes and
-              this is deliberately not a copy of it — so this fetches the one
+              The content is not held here - a release is tens of gigabytes and
+              this is deliberately not a copy of it - so this fetches the one
               blob from the vendor registry when somebody asks for it.
             */}
             <Button
@@ -585,8 +585,8 @@ export default function PackageDetail() {
   const navigate = useNavigate()
   const { message } = App.useApp()
 
-  // A version tag is not unique within a product — vendors publish the same
-  // tag into every repository — so the repository travels with the link and is
+  // A version tag is not unique within a product - vendors publish the same
+  // tag into every repository - so the repository travels with the link and is
   // what makes this lookup answerable. See releaseHref in domain/derive.
   const repository = params.get('repository') ?? undefined
 
@@ -612,7 +612,7 @@ export default function PackageDetail() {
       if (!tile) continue
       out[tile].count += 1
       // WHAT IT WEIGHS, not what its descriptor weighs. `sizeBytes` is the
-      // size of the manifest — a couple of kilobytes of JSON — so summing it
+      // size of the manifest - a couple of kilobytes of JSON - so summing it
       // reported a release of two hundred images as half a megabyte. The
       // server sums the blobs and sends that, and sends nothing for an
       // artifact nobody has walked.
@@ -628,7 +628,6 @@ export default function PackageDetail() {
   if (pkg.isError) {
     return (
       <>
-        <PageHeader title="Package" description="Release detail" />
         <ErrorState error={pkg.error} retry={() => void pkg.refetch()} />
       </>
     )
@@ -637,11 +636,11 @@ export default function PackageDetail() {
   const p = pkg.data
   const prod = product.data
   // Analysing walks the manifest tree. Until it has run, the index tells us
-  // what its children ARE but nothing about what is inside them — so sizes are
+  // what its children ARE but nothing about what is inside them - so sizes are
   // not known, and FILES cannot be counted at all: files are layers inside
   // those children rather than children of the index.
   const analysed = Boolean(p?.expandedAt)
-  // Somebody is walking it RIGHT NOW — discovery's background analyser, or
+  // Somebody is walking it RIGHT NOW - discovery's background analyser, or
   // another person. What the page offers has to say so, or it invites a second
   // walk of the same release against the same registry.
   const analysing = p?.analysisState === 'analyzing'
@@ -650,7 +649,7 @@ export default function PackageDetail() {
 
   const download = async () => {
     try {
-      // Qualified by repository — see packageReference. This page knows which
+      // Qualified by repository - see packageReference. This page knows which
       // package it is showing; the version alone does not.
       const result = await runDownload.mutateAsync({ tags: [packageReference(p!)] })
       setConfirming(false)
@@ -674,12 +673,12 @@ export default function PackageDetail() {
           The title was the product and the version, which is the one pairing
           that does not identify anything: a product publishes ten packages and
           they all carry the same version tag. What a reader came here for is
-          `orbs/cfx-5000-k8s:25.7_mp2604pp3_2204` — the package and the version
-          together — and which product it belongs to is context for that, not a
+          `orbs/cfx-5000-k8s:25.7_mp2604pp3_2204` - the package and the version
+          together - and which product it belongs to is context for that, not a
           replacement for it.
         */
         title={p ? `${packageName(p)}:${version(p)}` : 'Loading…'}
-        description={prod?.displayName || productName || ''}
+        description={prod?.displayName || productName}
         meta={
           p && (
             <Space>
@@ -741,7 +740,7 @@ export default function PackageDetail() {
               <Descriptions column={2} size="small">
                 {/*
                   WHERE IT IS, first and clickable. This was a "Locations" card
-                  of its own listing every configured target — which is a fact
+                  of its own listing every configured target - which is a fact
                   about the product, repeated on every one of its releases, and
                   said nothing about whether THIS release is at any of them.
                   What belongs to a release is the one place it was published,
@@ -818,14 +817,14 @@ export default function PackageDetail() {
                 {(['Images', 'Helm Charts', 'Files'] as const).map((kind) => {
                   // Files are LAYERS inside the release's manifests, not
                   // children of its index, so before the walk there is nothing
-                  // to count — which is a different statement from "there are
+                  // to count - which is a different statement from "there are
                   // none", and the tile has to make that difference.
                   const countable = kind !== 'Files' || analysed
                   const sized = groups[kind].measured
                   // FILES ARE COUNTED AS FILES. One `generic` artifact holds
                   // however many named layers the publisher put in it, so the
                   // number of file-KIND artifacts was never the number of
-                  // files — it was two, on a release with two hundred.
+                  // files - it was two, on a release with two hundred.
                   const count = kind === 'Files' && analysed
                     ? (files.data?.files.length ?? 0)
                     : groups[kind].count
@@ -860,7 +859,7 @@ export default function PackageDetail() {
                           {/*
                             ONE SENTENCE INSTEAD OF THREE TOOLTIPS. Both lines
                             above read `N/A` before the walk, each with its own
-                            explanation on hover — which is a fact hidden behind
+                            explanation on hover - which is a fact hidden behind
                             a gesture nobody makes on a tile that looks broken.
                             What is missing and what to do about it are the same
                             answer, and it is short.
@@ -884,7 +883,7 @@ export default function PackageDetail() {
               </Row>
 
               <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-                A release is downloaded whole — individual artifacts are not selectable.
+                A release is downloaded whole - individual artifacts are not selectable.
                 {!analysed && ' Analyse the package to list its files and establish its size.'}
               </Typography.Text>
 

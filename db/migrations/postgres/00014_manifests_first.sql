@@ -3,9 +3,9 @@
 -- # What changed underneath, and why the order has to follow
 --
 -- Under the wave barrier the two never competed: every blob finished before any
--- manifest could run. Per-artifact readiness (00011) ended that — a manifest
+-- manifest could run. Per-artifact readiness (00011) ended that - a manifest
 -- becomes runnable the moment its OWN content lands, while blobs belonging to
--- other artifacts are still moving — so for the first time both are in the
+-- other artifacts are still moving - so for the first time both are in the
 -- runnable set at once, and the order between them is a decision.
 --
 -- It was being made by accident, and made wrong. Ordering by size largest-first
@@ -25,7 +25,7 @@
 -- # Why `kind DESC` rather than a CASE expression
 --
 -- 'manifest' > 'blob' lexicographically, so DESC puts manifests first and the
--- index can match the ORDER BY exactly — which is the property that keeps the
+-- index can match the ORDER BY exactly - which is the property that keeps the
 -- dequeue an index scan with no sort. A CASE would express the intent more
 -- plainly and would not be indexable.
 --

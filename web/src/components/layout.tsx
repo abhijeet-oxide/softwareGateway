@@ -24,7 +24,7 @@ import { NA } from './value'
  * The rules these encode, from the brief §4:
  *   - every page answers ONE question, and its primary action is top right;
  *   - an empty state explains what will appear and offers the button that
- *     makes it appear — never an illustration and a shrug;
+ *     makes it appear - never an illustration and a shrug;
  *   - failures surface in the SAME BAND on every page, so there is one place
  *     to learn to look.
  */
@@ -32,15 +32,25 @@ import { NA } from './value'
 export function PageHeader({
   title, description, extra, meta, back,
 }: {
-  title: string
-  description: string
+  /*
+   * OPTIONAL, and absent on every list page.
+   *
+   * A page called Packages, reached by clicking Packages, under a heading that
+   * says Packages, with a sentence under that explaining what packages are, is
+   * three restatements of the nav item that got somebody here. The pages that
+   * keep a title are the ones whose title is an IDENTITY - which release, which
+   * download - because that is a fact about the thing on screen rather than a
+   * label for the screen.
+   */
+  title?: string
+  description?: string
   extra?: ReactNode
   meta?: ReactNode
   /**
    * Where a drill-down came from.
    *
    * Detail pages are reached from a list and have no nav entry of their own, so
-   * without this the only way back is the browser button — and a page opened
+   * without this the only way back is the browser button - and a page opened
    * from a link has no back to press. One link, above the title, naming the
    * list rather than saying "back".
    */
@@ -60,13 +70,13 @@ export function PageHeader({
             {back.label}
           </Link>
         )}
-        <Typography.Title level={3} style={{ margin: 0 }}>{title}</Typography.Title>
-        <Typography.Text type="secondary">{description}</Typography.Text>
+        {title && <Typography.Title level={3} style={{ margin: 0 }}>{title}</Typography.Title>}
+        {description && <Typography.Text type="secondary">{description}</Typography.Text>}
       </div>
       {/*
         Pinned right even after wrapping. `space-between` puts this block on the
         right while both fit on one line and hard against the LEFT margin the
-        moment they do not — so a page with a long title had its elapsed, ETA
+        moment they do not - so a page with a long title had its elapsed, ETA
         and speed jump to the opposite side at one particular window width.
       */}
       <Space size={12} wrap style={{ marginInlineStart: 'auto' }}>
@@ -80,7 +90,7 @@ export function PageHeader({
 export interface Attention {
   key: string
   message: string
-  /** What it means and what to do — never just what broke. */
+  /** What it means and what to do - never just what broke. */
   detail: string
   action?: { label: string; to?: string; onClick?: () => void }
   severity?: 'error' | 'warning'
@@ -174,7 +184,7 @@ export function ErrorState({ error, retry }: { error: unknown; retry?: () => voi
  *
  * # Why this is two entries and not four
  *
- * It was a four-stage stepper — Vendor, Downloading, Downloaded, Production —
+ * It was a four-stage stepper - Vendor, Downloading, Downloaded, Production -
  * across the full width of the page, and it was wrong in both directions at
  * once. It took a band of the release page to say almost nothing, and it
  * reported "Downloaded" as reached on releases nobody had downloaded, because
@@ -184,7 +194,7 @@ export function ErrorState({ error, retry }: { error: unknown; retry?: () => voi
  *
  * So the page keeps the two moments that are facts with instants attached:
  * when the vendor published it, and when it finished arriving here. Everything
- * else the stepper was gesturing at — is it downloading, is it in production —
+ * else the stepper was gesturing at - is it downloading, is it in production -
  * is already said, once, by the status badge in the header.
  *
  * A release nobody has downloaded shows ONE date and stops there. It was
@@ -268,7 +278,7 @@ function Moment({
  * The same lifecycle, as ONE CELL.
  *
  * A stepper is four columns' worth of furniture repeated down the page: it makes every row look busy and
- * the column that actually differs — which stage this release is AT — is the
+ * the column that actually differs - which stage this release is AT - is the
  * hardest part of it to read.
  *
  * So the cell states the stage, and the timeline moves to a popover. The dates
@@ -284,7 +294,7 @@ export function LifecycleCell({ steps }: { steps: LifecycleStep[] }) {
   return (
     <Popover
       placement="left"
-      title={`Lifecycle — ${stage.stage}`}
+      title={`Lifecycle - ${stage.stage}`}
       content={
         <div style={{ minWidth: 260 }}>
           <Timeline
@@ -337,7 +347,7 @@ const STAGE_MARKS: Record<string, { icon: ReactNode; colour: string }> = {
  *
  * Deliberately CLIENT-SIDE, and deliberately over one page of results. The API
  * filters packages by tag exactly, which is the wrong shape for somebody typing
- * `2604` into a list of forty releases — and a server round trip per keystroke
+ * `2604` into a list of forty releases - and a server round trip per keystroke
  * would be the wrong shape for a table already in the browser.
  *
  * It sits between the subtitle and the table, where the eye lands after reading
@@ -376,7 +386,7 @@ export function SearchBar({
 }
 
 /**
- * "Saved (already present)" — the system optimising on the user's behalf.
+ * "Saved (already present)" - the system optimising on the user's behalf.
  *
  * Lives on the release and download pages and deliberately NOT on Home: it is
  * a fact about a release, not about the estate.
@@ -423,19 +433,19 @@ export function SavedPanel({
 }
 
 /**
- * WHAT was already there — by name, because the number alone is not checkable.
+ * WHAT was already there - by name, because the number alone is not checkable.
  *
  * # The question
  *
  * "Saved 56.5 GB" is the system's best claim about itself and an operator
  * cannot check it. What they ask next is which things were already at the
- * destination — and that is answerable exactly, because every skipped job is
+ * destination - and that is answerable exactly, because every skipped job is
  * attached to the artifact it belongs to.
  *
  * So this names them: `cfx-5000-product/bgcf:2511.174.0`, what it weighs, what
- * kind of thing it is. Grouped by kind because that is how somebody reads it —
+ * kind of thing it is. Grouped by kind because that is how somebody reads it -
  * a hundred and fifty images already there is one fact, not a hundred and
- * fifty — and the largest first, because they are the explanation.
+ * fifty - and the largest first, because they are the explanation.
  *
  * # Why it is fetched only on hover
  *
@@ -502,7 +512,7 @@ function KindLine({ group, saved }: { group: ContentGroup; saved: number }) {
       <Typography.Text style={{ fontSize: 12, flex: 1 }}>{name}</Typography.Text>
       {/*
         COMPONENTS on the left, BYTES on the right, and they do not have to
-        agree. A kind can save bytes with no component wholly present — a
+        agree. A kind can save bytes with no component wholly present - a
         release that changed five images still shares most of their layers with
         the release before it.
       */}
@@ -529,7 +539,7 @@ function PresentList({ components }: { components: PresentComponent[] }) {
     )
   }
 
-  // The whole list is not the point — a release is two hundred and sixty
+  // The whole list is not the point - a release is two hundred and sixty
   // components and a hover is not a table. The heaviest are the explanation,
   // and the rest are counted rather than hidden.
   const shown = components.slice(0, 12)

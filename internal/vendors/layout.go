@@ -4,13 +4,13 @@
 // The problem it solves, stated concretely. Our first real vendor publishes
 // THREE tags per release:
 //
-//	orb_23.8.1076              the payload — an index of Helm charts and images
+//	orb_23.8.1076              the payload - an index of Helm charts and images
 //	signature_orb_23.8.1076    a manifest whose only layer is a PKCS#7 blob
 //	signed_orb_23.8.1076       an index referencing both of the above
 //
 // Left alone, discovery records those as three unrelated packages: one release
 // becomes three rows, forty-eight repositories become three times the noise,
-// and — the part that actually matters — asking to transfer `orb_23.8.1076`
+// and - the part that actually matters - asking to transfer `orb_23.8.1076`
 // moves the payload and LEAVES THE SIGNATURE BEHIND, after which nobody can
 // ever verify what landed.
 //
@@ -26,7 +26,7 @@
 //	wrapper index  a third tag bundles both as siblings (pre-1.1; our vendor)
 //
 // So this package models the CONCEPT, and a Layout supplies the mechanism.
-// Everything downstream — storage, listing, planning, transfer — sees one
+// Everything downstream - storage, listing, planning, transfer - sees one
 // shape and cannot tell which mechanism produced it. A vendor that already
 // uses referrers needs no plugin at all, and when a vendor migrates to
 // referrers we change one file.
@@ -59,7 +59,7 @@ import (
 type Role string
 
 const (
-	// RoleSignature is a detached signature over the package — cosign bundle,
+	// RoleSignature is a detached signature over the package - cosign bundle,
 	// PKCS#7, or whatever the vendor emits. The format is a separate axis from
 	// the role, because a vendor may pair either discovery mechanism with
 	// either format.
@@ -69,7 +69,7 @@ const (
 	// RoleAttestation is an in-toto or similar provenance attestation.
 	RoleAttestation Role = "attestation"
 	// RoleWrapper is an artifact that exists only to bundle a package with its
-	// related artifacts — our vendor's `signed_orb_*`.
+	// related artifacts - our vendor's `signed_orb_*`.
 	//
 	// Recorded rather than discarded because it is the transfer root: pushing
 	// it at the destination is what makes the destination a faithful copy, so
@@ -106,7 +106,7 @@ type Related struct {
 // Package is one release as a person thinks of it.
 //
 // The distinction between Tag and Root is the whole point of this type. Tag is
-// IDENTITY — what appears in a listing and what someone types. Root is what the
+// IDENTITY - what appears in a listing and what someone types. Root is what the
 // planner walks. For our vendor they differ: you name `orb_23.8.1076` and the
 // transfer walks `signed_orb_23.8.1076`, because only the wrapper reaches both
 // the payload and the signature. For a standard source they are the same.
@@ -114,7 +114,7 @@ type Package struct {
 	Tag        string
 	Descriptor registry.Descriptor
 
-	// DisplayTag is the tag with this vendor's structural noise removed —
+	// DisplayTag is the tag with this vendor's structural noise removed -
 	// `23.8.1076` for a vendor whose real tag is `orb_23.8.1076`.
 	//
 	// Set by the Layout, because the convention being removed is the vendor's
@@ -122,12 +122,12 @@ type Package struct {
 	// which is what any conformant registry gets.
 	//
 	// Cosmetic ONLY: the real Tag is what is stored, transferred and returned
-	// by `-o json`, and BOTH spellings resolve as input — an abbreviation you
+	// by `-o json`, and BOTH spellings resolve as input - an abbreviation you
 	// cannot type back is a trap, not a convenience.
 	DisplayTag string
 
 	// Root is the descriptor a transfer plans from. Zero means "use
-	// Descriptor" — the ordinary case, and the reason a standard Layout can
+	// Descriptor" - the ordinary case, and the reason a standard Layout can
 	// leave it alone.
 	Root registry.Descriptor
 	// RootTag names Root when it has a tag of its own, so the destination can
@@ -149,8 +149,8 @@ func (p Package) EffectiveRoot() registry.Descriptor {
 //
 // "We looked and found nothing" and "we never looked" are the same value in a
 // boolean and completely different facts when someone is deciding whether to
-// trust a package. A vendor does not sign everything — older releases and
-// hotfixes routinely go unsigned — so the distinction shows up in real data,
+// trust a package. A vendor does not sign everything - older releases and
+// hotfixes routinely go unsigned - so the distinction shows up in real data,
 // not just in theory.
 type SignatureStatus string
 
@@ -160,7 +160,7 @@ const (
 	SignatureSigned SignatureStatus = "signed"
 	// SignatureUnsigned means we looked for one and there was none.
 	SignatureUnsigned SignatureStatus = "unsigned"
-	// SignatureUnknown means nobody has looked — the layout is `none`, or the
+	// SignatureUnknown means nobody has looked - the layout is `none`, or the
 	// row predates signature discovery.
 	SignatureUnknown SignatureStatus = "unknown"
 )
@@ -192,7 +192,7 @@ func (p Package) Status(looked bool) SignatureStatus {
 // may know that `orbs/` is a prefix worth removing.
 //
 // Empty fields mean "no special word", and the caller falls back to the
-// standard OCI nouns — which is what any conformant source gets.
+// standard OCI nouns - which is what any conformant source gets.
 type Vocabulary struct {
 	// Unit and Units name what holds versions: "repository" / "orb".
 	Unit  string
@@ -229,8 +229,8 @@ func StandardVocabulary() Vocabulary {
 
 // Layout is how one vendor lays packages out in a repository.
 //
-// One method. Everything a Layout does — collapsing several tags into one
-// release, naming the transfer root, locating signatures — is expressible as
+// One method. Everything a Layout does - collapsing several tags into one
+// release, naming the transfer root, locating signatures - is expressible as
 // "turn the tags I scanned into the packages they actually represent".
 type Layout interface {
 	// Name is the value that selects this Layout in configuration.
@@ -244,7 +244,7 @@ type Layout interface {
 	//
 	// It receives EVERY admitted tag of one repository at once, because a
 	// vendor's relationships are between tags and cannot be resolved one at a
-	// time — discovery has no ordering guarantee, so seeing `orb_X` alone tells
+	// time - discovery has no ordering guarantee, so seeing `orb_X` alone tells
 	// you nothing about whether a `signed_orb_X` exists.
 	//
 	// src is available for Layouts that must ask the registry (referrers).
@@ -257,14 +257,14 @@ type Layout interface {
 	LooksForSignatures() bool
 
 	// DisplayRepository is the repository path with this vendor's structural
-	// noise removed — `cfx-5000-k8s` for a vendor who puts every product under
+	// noise removed - `cfx-5000-k8s` for a vendor who puts every product under
 	// `orbs/`.
 	//
 	// The counterpart of Package.DisplayTag, and it exists for the same reason:
 	// the transform is the VENDOR's, and nothing outside the plugin may know it.
 	// This used to be done in the CLI by dropping the prefix every row in view
 	// happened to share, which needed no vendor knowledge and was wrong for
-	// exactly that reason — it shortened paths on registries that have no such
+	// exactly that reason - it shortened paths on registries that have no such
 	// convention, and it changed what a row said depending on which other rows
 	// were on screen.
 	//
@@ -273,7 +273,7 @@ type Layout interface {
 	// spellings resolve as input.
 	DisplayRepository(path string) string
 
-	// DisplayTag is a tag with this vendor's structural noise removed —
+	// DisplayTag is a tag with this vendor's structural noise removed -
 	// `23.8.1076` for a vendor whose real tag is `orb_23.8.1076`.
 	//
 	// The same transform Group applies when it sets Package.DisplayTag, exposed
@@ -281,7 +281,7 @@ type Layout interface {
 	// no manifest and no registry call.
 	//
 	// That requirement is not decoration. Discovery skips a tag it has already
-	// recorded — one HEAD, no fetch, no grouping — so a source that gains
+	// recorded - one HEAD, no fetch, no grouping - so a source that gains
 	// `vendor: near` after its packages were discovered would otherwise keep
 	// their unshortened names forever, and no amount of re-scanning would fix
 	// it. The scanner reconciles the stored display names against this method on
@@ -293,14 +293,14 @@ type Layout interface {
 	DisplayTag(tag string) string
 
 	// AccessoryTags names the OTHER tags this Layout needs in order to classify
-	// one admitted tag — NEAR's `signed_orb_X` and `signature_orb_X` for a
+	// one admitted tag - NEAR's `signed_orb_X` and `signature_orb_X` for a
 	// payload `orb_X`.
 	//
 	// It exists because tag filters and vendor mechanism are different things,
 	// and conflating them made signatures invisible. `discovery.tagFilters`
 	// is how an operator says WHICH RELEASES to track: `include: ['^orb_']` is
 	// a completely reasonable way to say "the release tags, not the noise".
-	// But under a Layout, `signed_orb_X` is not noise and is not a release —
+	// But under a Layout, `signed_orb_X` is not noise and is not a release -
 	// it is the vendor's internal plumbing for the release that WAS admitted,
 	// and it is where the signature lives.
 	//
@@ -310,7 +310,7 @@ type Layout interface {
 	// wrong with the filter, and nothing in any output pointed at it.
 	//
 	// So the filter selects PACKAGES, and a Layout may pull in the tags those
-	// packages are made of. Returning a tag that does not exist is free — the
+	// packages are made of. Returning a tag that does not exist is free - the
 	// scanner intersects this with the repository's real tag list.
 	//
 	// Called only for tags the filters ADMITTED, so an excluded release does not
@@ -325,7 +325,7 @@ type Layout interface {
 	//
 	// The OCI classification reads media type, artifact type and config media
 	// type. For an index's children, discovery records what the index LISTED
-	// and does not fetch each child — so the config is unknown, and a vendor
+	// and does not fetch each child - so the config is unknown, and a vendor
 	// whose charts and images are all `image.manifest.v1+json` with no
 	// artifactType classifies as image, every one of them. That is not a
 	// rounding error: a release of 157 images and 97 charts reads as 254
@@ -333,7 +333,7 @@ type Layout interface {
 	//
 	// Such a vendor usually says what each child is on the referencing
 	// descriptor, which discovery already has in hand and stores. This is the
-	// hook that reads it — the vendor's key stays inside the vendor's package,
+	// hook that reads it - the vendor's key stays inside the vendor's package,
 	// and the core keeps handling a bounded, neutral set of kinds.
 	//
 	// Advisory, and bounded like everything else a Layout does: it may
@@ -353,13 +353,13 @@ type Layout interface {
 type Format string
 
 const (
-	// FormatAuto infers the format from the signature's own media type —
+	// FormatAuto infers the format from the signature's own media type -
 	// application/pkcs7-signature, a cosign bundle, and so on.
 	FormatAuto Format = "auto"
 	// FormatCosign is a Sigstore bundle, keyed or keyless.
 	FormatCosign Format = "cosign"
 	// FormatPKCS7 is CMS (RFC 5652), verified against a trusted CA root. This
-	// is what our first vendor emits, and it is NOT Sigstore — sigstore-go
+	// is what our first vendor emits, and it is NOT Sigstore - sigstore-go
 	// cannot verify it and cosign has no part in it.
 	FormatPKCS7 Format = "pkcs7"
 )

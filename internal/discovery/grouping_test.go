@@ -17,8 +17,8 @@ import (
 	"github.com/abhijeet-oxide/softwareGateway/test/fakeregistry"
 )
 
-// These exercise the whole path — a registry laid out the way NEAR lays one
-// out, through a real scan, into real rows — rather than the Layout in
+// These exercise the whole path - a registry laid out the way NEAR lays one
+// out, through a real scan, into real rows - rather than the Layout in
 // isolation. The Layout has its own unit tests; what these catch is the wiring
 // between them, which is where a grouping feature actually breaks.
 //
@@ -53,7 +53,7 @@ func (wrapperLayout) DisplayRepository(path string) string {
 	return rest
 }
 
-// DisplayTag strips the vendor's release prefix, from the tag string alone —
+// DisplayTag strips the vendor's release prefix, from the tag string alone -
 // which is what lets the scanner reconcile packages discovered before the
 // source declared its vendor.
 func (wrapperLayout) DisplayTag(tag string) string {
@@ -259,7 +259,7 @@ func TestScanGroupsVendorTagsIntoOnePackage(t *testing.T) {
 		t.Errorf("listed %d tags, want the vendor's 3", res.TagsListed)
 	}
 	if res.New != 1 {
-		t.Fatalf("recorded %d packages, want 1 — the other two are accessories", res.New)
+		t.Fatalf("recorded %d packages, want 1 - the other two are accessories", res.New)
 	}
 
 	list, err := packages.ListPackages(t.Context(), store.ListPackagesFilter{ProductName: "vendor-a"})
@@ -281,7 +281,7 @@ func TestScanGroupsVendorTagsIntoOnePackage(t *testing.T) {
 	// The load-bearing one: transferring the payload alone would leave the
 	// signature behind and foreclose destination-side verification for good.
 	if pkg.TransferRootDigest == "" {
-		t.Error("no transfer root recorded — a transfer would move the payload without its signature")
+		t.Error("no transfer root recorded - a transfer would move the payload without its signature")
 	}
 	if pkg.TransferRootTag != "signed_orb_23.8.1076" {
 		t.Errorf("transfer root tag = %q, want signed_orb_23.8.1076", pkg.TransferRootTag)
@@ -305,7 +305,7 @@ func TestScanGroupsVendorTagsIntoOnePackage(t *testing.T) {
 }
 
 // A release the vendor did not sign must read `unsigned`, not `signed` and not
-// `unknown` — the layout looked, and found none.
+// `unknown` - the layout looked, and found none.
 func TestUnsignedReleaseIsReportedAsUnsigned(t *testing.T) {
 	reg := fakeregistry.New()
 	t.Cleanup(reg.Close)
@@ -394,8 +394,8 @@ func TestScanRecordsTheVendorShortenedNames(t *testing.T) {
 	}
 	pkg := list[0]
 
-	// The originals are what is stored. Everything downstream — a transfer, an
-	// audit record, `-o json` — reads these.
+	// The originals are what is stored. Everything downstream - a transfer, an
+	// audit record, `-o json` - reads these.
 	if pkg.Tag != "orb_23.8.1076" {
 		t.Errorf("stored tag = %q, want orb_23.8.1076", pkg.Tag)
 	}
@@ -461,7 +461,7 @@ func TestScanShortensNothingWithoutAVendor(t *testing.T) {
 	}
 }
 
-// plainScanner is groupingScanner with the standard layout — a source that
+// plainScanner is groupingScanner with the standard layout - a source that
 // declares no vendor at all.
 func plainScanner(t *testing.T, reg *fakeregistry.Registry, repo string) (*Scanner, *store.Packages, int64) {
 	t.Helper()
@@ -535,7 +535,7 @@ spec:
 //
 // Turning `vendor: near` on had no effect on packages already in the database.
 // Display names were computed once, at discovery, and discovery SKIPS a tag it
-// has already recorded — one HEAD, no fetch, no grouping — so the rows kept
+// has already recorded - one HEAD, no fetch, no grouping - so the rows kept
 // their unshortened names forever. Re-scanning, which is the obvious thing to
 // try, changed nothing.
 //
@@ -558,7 +558,7 @@ func TestVendorSetAfterDiscoveryRenamesExistingPackages(t *testing.T) {
 	}
 
 	// Now the operator adds `vendor: near` and the next scan runs. Same store,
-	// same registry, same tags — only the layout differs.
+	// same registry, same tags - only the layout differs.
 	vendored := rescanWithLayout(t, plain, wrapperLayout{})
 	res, err := vendored.Scan(t.Context())
 	if err != nil {
@@ -581,7 +581,7 @@ func TestVendorSetAfterDiscoveryRenamesExistingPackages(t *testing.T) {
 	}
 	// The stored tag is untouched. Shortening is cosmetic from beginning to end.
 	if after.Tag != "orb_23.8.1076" {
-		t.Errorf("stored tag = %q, want orb_23.8.1076 — renaming must not touch the identity", after.Tag)
+		t.Errorf("stored tag = %q, want orb_23.8.1076 - renaming must not touch the identity", after.Tag)
 	}
 	// And the shortened form now resolves, which is the whole point of storing it.
 	if _, err := packages.GetPackage(t.Context(), "vendor-a", "23.8.1076"); err != nil {
@@ -641,11 +641,11 @@ func onlyPackage(t *testing.T, packages *store.Packages, tag string) store.Packa
 // THE SIGNATURE HALF of the same "vendor set after the fact" problem, and the
 // more serious one.
 //
-// Grouping runs over the tags a scan finds NEW — deliberately, because that is
+// Grouping runs over the tags a scan finds NEW - deliberately, because that is
 // what keeps a re-scan of an unchanged repository down to one HEAD per tag. The
 // consequence: a repository scanned before its source declared a vendor was
 // never grouped again. Its packages read `unknown` forever, carried no
-// signature relation, and had NO TRANSFER ROOT — so moving one would have taken
+// signature relation, and had NO TRANSFER ROOT - so moving one would have taken
 // the payload and left the signature behind, which is precisely what the layout
 // exists to prevent. Re-scanning could not fix it, because re-scanning is the
 // path that skips known tags.
@@ -689,7 +689,7 @@ func TestVendorSetAfterDiscoveryRegroupsExistingPackages(t *testing.T) {
 		t.Errorf("signature status = %q, want signed", payload.SignatureStatus)
 	}
 	if payload.TransferRootDigest == "" {
-		t.Error("no transfer root recorded — a transfer would move the payload without its signature")
+		t.Error("no transfer root recorded - a transfer would move the payload without its signature")
 	}
 	if payload.TransferRootTag != "signed_orb_23.8.1076" {
 		t.Errorf("transfer root tag = %q, want signed_orb_23.8.1076", payload.TransferRootTag)
@@ -710,7 +710,7 @@ func TestVendorSetAfterDiscoveryRegroupsExistingPackages(t *testing.T) {
 		t.Error("no wrapper relation attached")
 	}
 
-	// And the two accessory tags stop being listed as releases of their own —
+	// And the two accessory tags stop being listed as releases of their own -
 	// which is most of the noise the layout exists to remove. They are not
 	// deleted: a transfer may reference them, and what was shipped has to stay
 	// answerable.
@@ -728,7 +728,7 @@ func TestVendorSetAfterDiscoveryRegroupsExistingPackages(t *testing.T) {
 }
 
 // The pass must run ONCE. Keying it off the recorded layout name rather than
-// off a symptom is what guarantees that — a symptom such as "some package still
+// off a symptom is what guarantees that - a symptom such as "some package still
 // reads unknown" is a state a repository can legitimately stay in forever, and
 // would re-fetch every tag on every scan for the rest of time.
 func TestRegroupingDoesNotRepeat(t *testing.T) {
@@ -807,7 +807,7 @@ func listPackages(t *testing.T, packages *store.Packages) []store.PackageRow {
 // which says "track the release tags". Under the old code that also, silently,
 // meant "never look at a signature": `signed_orb_X` and `signature_orb_X` do
 // not match `^orb_`, so they never entered the work list, the Layout never saw
-// them, and every package in the catalogue came out `unsigned` — a confident,
+// them, and every package in the catalogue came out `unsigned` - a confident,
 // wrong answer, with nothing in any output pointing at the filter.
 func TestTagFiltersDoNotHideSignatures(t *testing.T) {
 	reg := fakeregistry.New()
@@ -825,7 +825,7 @@ func TestTagFiltersDoNotHideSignatures(t *testing.T) {
 		t.Errorf("listed %d tags, want 3", res.TagsListed)
 	}
 	if res.TagsAdmitted != 1 {
-		t.Errorf("admitted %d tags, want 1 — the filter selects releases", res.TagsAdmitted)
+		t.Errorf("admitted %d tags, want 1 - the filter selects releases", res.TagsAdmitted)
 	}
 	if res.New != 1 {
 		t.Fatalf("recorded %d packages, want 1", res.New)
@@ -836,7 +836,7 @@ func TestTagFiltersDoNotHideSignatures(t *testing.T) {
 	// And the signature was still found, because a filter selects PACKAGES and
 	// the Layout is allowed to reach the tags a package is made of.
 	if pkg.SignatureStatus != "signed" {
-		t.Errorf("signature status = %q, want signed — the accessory tags were not reached", pkg.SignatureStatus)
+		t.Errorf("signature status = %q, want signed - the accessory tags were not reached", pkg.SignatureStatus)
 	}
 	if pkg.TransferRootTag != "signed_orb_23.8.1076" {
 		t.Errorf("transfer root tag = %q, want signed_orb_23.8.1076", pkg.TransferRootTag)
@@ -845,7 +845,7 @@ func TestTagFiltersDoNotHideSignatures(t *testing.T) {
 	// The accessory tags must NOT have become packages: they were never
 	// admitted, and pulling them in is a mechanism, not a selection.
 	if got := len(listPackages(t, packages)); got != 1 {
-		t.Errorf("listed %d packages, want 1 — accessory tags must not become releases", got)
+		t.Errorf("listed %d packages, want 1 - accessory tags must not become releases", got)
 	}
 }
 
@@ -864,7 +864,7 @@ func TestAnUnsignedReleaseStaysUnsigned(t *testing.T) {
 
 	pkg := onlyPackage(t, packages, "orb_23.8.1076")
 	if pkg.SignatureStatus != "unsigned" {
-		t.Errorf("signature status = %q, want unsigned — the layout looked and found none",
+		t.Errorf("signature status = %q, want unsigned - the layout looked and found none",
 			pkg.SignatureStatus)
 	}
 }
@@ -981,7 +981,7 @@ spec:
 // other blob and were indistinguishable from a chart layer beside them.
 //
 // Verification is a later milestone. This is the material it will need,
-// captured at the only moment it is free — the walk inspect was doing anyway.
+// captured at the only moment it is free - the walk inspect was doing anyway.
 func TestInspectRecordsTheSignatureMaterial(t *testing.T) {
 	reg := fakeregistry.New()
 	t.Cleanup(reg.Close)
@@ -1061,7 +1061,7 @@ func signatureRelation(t *testing.T, packages *store.Packages, packageID int64) 
 }
 
 // Inspect must measure what a TRANSFER moves, which for a wrapped release is
-// the wrapper's tree — payload plus signature — not the payload alone.
+// the wrapper's tree - payload plus signature - not the payload alone.
 //
 // The two disagreed: the planner honoured the transfer root while inspect
 // walked the package's own manifest. So `packages inspect` reported a size that

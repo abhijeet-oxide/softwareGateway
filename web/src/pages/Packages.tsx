@@ -1,5 +1,6 @@
 import { useMemo, useState } from 'react'
-import { App, Button, Card, Select, Space, Table, Tooltip } from 'antd'
+import { App, Button, Card, Dropdown, Select, Space, Table, Tooltip } from 'antd'
+import { MoreOutlined } from '@ant-design/icons'
 import { Link, useNavigate, useSearchParams } from 'react-router-dom'
 import { usePackages, useProducts, useRunDownload, useTransfers } from '../api/queries'
 import { useCan } from '../auth/permissions'
@@ -17,12 +18,55 @@ import {
 import { EmptyStateCard, ErrorState, PageHeader, SearchBar } from '../components/layout'
 
 /**
+ * One button, and everything else behind a `…`.
+ *
+ * # Why not three buttons
+ *
+ * Because three did not fit. The column is fixed to the right of a table that
+ * scrolls horizontally, so it cannot borrow width from anywhere, and the
+ * buttons ran past its edge. Wrapping them onto a second line would make every
+ * row taller to accommodate the widest one.
+ *
+ * So the row shows the ACTION and hides the navigation: what to do with this
+ * release stays visible, and the two ways of looking at it - its page, and a
+ * comparison - go behind an overflow. A menu is the right shape for those: they
+ * are links, they are not urgent, and they read better as words than as more
+ * buttons competing with the one that does something.
+ */
+function RowActions({ product, pkg }: { product: string; pkg: Package }) {
+  const compareHref = `/compare?product=${encodeURIComponent(product)}`
+    // The REPOSITORY travels with the tag. One version tag exists in every
+    // repository a product watches, so a compare link carrying only the tag
+    // arrives at a page that cannot say which package was meant.
+    + `&from=${encodeURIComponent(pkg.tag)}`
+    + (pkg.sourceRepository ? `&repository=${encodeURIComponent(pkg.sourceRepository)}` : '')
+
+  return (
+    <Space size={4}>
+      <DownloadAction product={product} pkg={pkg} />
+      <Dropdown
+        trigger={['click']}
+        placement="bottomRight"
+        menu={{
+          items: [
+            { key: 'details', label: <Link to={releaseHref(product, pkg)}>Details</Link> },
+            { key: 'compare', label: <Link to={compareHref}>Compare</Link> },
+          ],
+        }}
+      >
+        <Button size="small" icon={<MoreOutlined />} aria-label="More actions" />
+      </Dropdown>
+    </Space>
+  )
+}
+
+/**
  * Start a download, or go and watch the one that is running.
  *
  * # Why this starts it rather than linking to a page that can
  *
  * Because the button said Download and did not download. It took the reader to
- * the release page, where a second button with the same word did the thing —
+ * the release page, where a second button with the same word did the thing -
  * two clicks and a page load to perform an action the row already had every
  * argument for. A release downloads WHOLE, so there is nothing to choose and
  * nothing to confirm.
@@ -91,7 +135,7 @@ function DownloadAction({ product, pkg }: { product: string; pkg: Package }) {
 }
 
 /**
- * The Packages listing — where "View all packages" and the Overview KPI cards
+ * The Packages listing - where "View all packages" and the Overview KPI cards
  * land.
  *
  * Filters compose into the URL, so a filtered view can be pasted to a
@@ -129,7 +173,7 @@ export default function Packages() {
         : all.filter((r) => r.status === status)
 
     if (!search.trim()) return byStatus
-    // The version as shown AND as the vendor spells it, plus the repository —
+    // The version as shown AND as the vendor spells it, plus the repository -
     // a product publishes one version tag into every repository it watches, so
     // the repository is frequently the only thing telling two rows apart.
     return byStatus.filter((r) => matches(
@@ -146,7 +190,6 @@ export default function Packages() {
   if (products.isError) {
     return (
       <>
-        <PageHeader title="Packages" description="Every release we know about, and where it is" />
         <ErrorState error={products.error} retry={() => void products.refetch()} />
       </>
     )
@@ -155,8 +198,6 @@ export default function Packages() {
   return (
     <>
       <PageHeader
-        title="Packages"
-        description="Every release we know about, and where it is"
         meta={
           <Space>
             <Select
@@ -240,7 +281,7 @@ export default function Packages() {
               },
               {
                 // The package's own name, in its own column. It used to sit
-                // under the version as a subtitle, which read as a footnote —
+                // under the version as a subtitle, which read as a footnote -
                 // and it is not one: a product publishes one version tag into
                 // every repository it watches, so this is frequently the only
                 // thing telling two rows apart.
@@ -287,40 +328,11 @@ export default function Packages() {
               {
                 title: 'Actions',
                 fixed: 'right',
-                width: 250,
-                render: (_, r) =>
-                  product && (
-                    <Space size={4}>
-                      {/*
-                        DOWNLOAD FIRST, and only while there is one to start.
-                        It was one button that turned into Details once a
-                        release stopped being NEW, which hid the page's whole
-                        purpose behind a word that changed meaning — and hid
-                        Download on every release older than seven days, which
-                        is most of them and exactly the ones somebody is
-                        looking at when they need it.
-                      */}
-                      <DownloadAction product={product.productId} pkg={r.pkg} />
-                      <Link to={releaseHref(product.productId, r.pkg)}>
-                        <Button size="small">Details</Button>
-                      </Link>
-                      <Tooltip title={`Compare ${version(r.pkg)} against another version or another location`}>
-                        <Link
-                          // The REPOSITORY travels with the tag. One version
-                          // tag exists in every repository a product watches,
-                          // so a compare link carrying only the tag arrives at
-                          // a page that cannot say which package was meant.
-                          to={`/compare?product=${encodeURIComponent(product.productId)}` +
-                              `&from=${encodeURIComponent(r.pkg.tag)}` +
-                              (r.pkg.sourceRepository
-                                ? `&repository=${encodeURIComponent(r.pkg.sourceRepository)}`
-                                : '')}
-                        >
-                          <Button size="small">Compare</Button>
-                        </Link>
-                      </Tooltip>
-                    </Space>
-                  ),
+                // Narrow, and it stays narrow: one button plus an overflow.
+                // Three side by side needed 250px of a fixed column and spilled
+                // out of it at the widths people actually use.
+                width: 120,
+                render: (_, r) => product && <RowActions product={product.productId} pkg={r.pkg} />,
               },
             ]}
           />

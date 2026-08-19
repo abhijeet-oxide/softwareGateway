@@ -254,7 +254,7 @@ func requestIDFrom(key string) string {
 // KeyFor is the idempotency key of one package through one download.
 //
 // It covers the DERIVED chain, so a download naming only the tail and one
-// naming every hop key identically — they are the same work. And it covers the
+// naming every hop key identically - they are the same work. And it covers the
 // download's revision, so an edit opens a new run rather than being swallowed
 // by the old key.
 //

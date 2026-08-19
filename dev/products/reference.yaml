@@ -1,7 +1,7 @@
 # THE REFERENCE PRODUCT.
 #
 # One document that exercises every field the schema has, annotated with why
-# each one exists. Copy it, delete what you do not need — most real products
+# each one exists. Copy it, delete what you do not need - most real products
 # are a fifth of this length, because almost everything here has a default.
 #
 # It is also the fixture `task validate` runs, so it cannot drift from the
@@ -18,7 +18,7 @@ apiVersion: softwaregateway.io/v1alpha1
 kind: Product
 
 metadata:
-  # The resource ID: lowercase alphanumeric and hyphens, <=63 chars. Immutable —
+  # The resource ID: lowercase alphanumeric and hyphens, <=63 chars. Immutable -
   # it appears in API paths, metric labels and every audit record.
   name: reference
   displayName: "Reference Product"
@@ -37,13 +37,13 @@ metadata:
 
 spec:
   # =====================================================================
-  # NETWORK — TLS trust, proxy and timeouts for everything in this product.
+  # NETWORK - TLS trust, proxy and timeouts for everything in this product.
   #
   # Inherited by every source and target; each may override it.
   # =====================================================================
   network:
     # A PEM bundle projected by VSO at <configDir>/secrets/internal-ca/ca.crt.
-    # APPENDED to the system roots, never replacing them — a product that adds
+    # APPENDED to the system roots, never replacing them - a product that adds
     # a private CA still needs to reach public registries and Sigstore.
     caBundleRef:
       secretName: internal-ca
@@ -52,21 +52,21 @@ spec:
     # OMITTING THIS BLOCK DOES NOT MEAN "NO PROXY". It means "whatever the
     # environment says": with nothing configured here, HTTPS_PROXY / NO_PROXY
     # from the process environment apply, the same way curl, docker and kubectl
-    # treat them. That is usually what you want — in a proxied network it is
-    # often the only route out — but it is worth knowing, because a corporate
+    # treat them. That is usually what you want - in a proxied network it is
+    # often the only route out - but it is worth knowing, because a corporate
     # proxy inherited this way is invisible in configuration and shows up only
     # as a transfer running at a fraction of the available bandwidth.
     #
     # `proxy.direct: true` (see the `plugins` source below) is how you say NO
     # proxy and mean it, including the environment's. Either way, each process
-    # logs the effective setting once per registry at startup — grep for
+    # logs the effective setting once per registry at startup - grep for
     # `registry transport`.
     proxy:
       httpsProxy: http://proxy.example.com:3128
       noProxy: [".svc.cluster.local", "internal.example.com"]
 
     # Per request, not per transfer. A blob has no total deadline: a 40 GB blob
-    # is not slow, it is large. idleStall is what catches a dead connection —
+    # is not slow, it is large. idleStall is what catches a dead connection -
     # bytes stopped arriving, which is a real failure at any size.
     timeouts:
       connect: 10s
@@ -77,7 +77,7 @@ spec:
     #
     # It disables the chain, the expiry AND the hostname check. Supplying a
     # caBundleRef is the right fix for an untrusted chain. In particular it does
-    # NOT fix "x509: negative serial number" — that failure happens while
+    # NOT fix "x509: negative serial number" - that failure happens while
     # PARSING the certificate, before any verification runs, so skipping
     # verification changes nothing. Measured, not assumed; the fix is
     # tls.allowNegativeSerialNumbers in system configuration.
@@ -93,7 +93,7 @@ spec:
     - name: primary
       registry: registry.vendor.example.com
       repository: platform/suite
-      # `generic` — plain OCI Distribution v2 — is right for every registry we
+      # `generic` - plain OCI Distribution v2 - is right for every registry we
       # have met, including vendors with elaborate publishing conventions.
       # acr | artifactory | quay exist only for genuine protocol deviations.
       type: generic
@@ -117,7 +117,7 @@ spec:
           exclude: ['-(rc|beta|alpha)\.']
 
       # ONE number: requests in flight against this registry, which is ALSO the
-      # connection pool, because those are the same thing — point more
+      # connection pool, because those are the same thing - point more
       # goroutines at a pool of 32 and you get 32 in-flight requests and a
       # queue. Absent inherits the application-level `concurrency.perRegistry`
       # (32), and absent is the usual case. This one is spelled out because the
@@ -125,14 +125,14 @@ spec:
       #
       # requestsPerSecond is a politeness ceiling ON TOP, for a vendor that
       # limits by rate rather than connection count. Burst is derived (2×), not
-      # configurable — it was a third number whose only sensible value is a
+      # configurable - it was a third number whose only sensible value is a
       # small multiple of the rate.
       concurrency:
         perRegistry: 32
         requestsPerSecond: 50
 
     # -----------------------------------------------------------------
-    # 2. SEVERAL REPOSITORIES, named explicitly — a product that ships as one
+    # 2. SEVERAL REPOSITORIES, named explicitly - a product that ships as one
     #    repository per component.
     #
     #    One source, not four: they share a registry host, one credential and
@@ -158,7 +158,7 @@ spec:
         requestsPerSecond: 50
 
     # -----------------------------------------------------------------
-    # 3. NO REPOSITORIES NAMED — the interesting case.
+    # 3. NO REPOSITORIES NAMED - the interesting case.
     #
     #    Naming none means "every repository on this registry", found from the
     #    catalog on every scan. This is what you want when you cannot know the
@@ -204,7 +204,7 @@ spec:
 
       # Signing trust for THIS vendor. Two vendors do not share a signing
       # identity. The scalars (policy, atSource, …) inherit from the product;
-      # `cosign` REPLACES wholesale — a trust configuration assembled field by
+      # `cosign` REPLACES wholesale - a trust configuration assembled field by
       # field from two documents is one nobody can audit.
       #
       # Executes in M5; validated now so it is correct when it arrives.
@@ -224,31 +224,31 @@ spec:
     #
     #    `vendor` is NOT the source's `type`. `type` says how to SPEAK to the
     #    registry, and for every vendor we have met that is plain Distribution
-    #    v2 — including Nokia's NEAR, whose protocol is entirely standard. What
+    #    v2 - including Nokia's NEAR, whose protocol is entirely standard. What
     #    differs is the PUBLISHING CONVENTION, which is this. Two axes, two
     #    fields.
     #
     #    `vendor: near` is the single switch for everything NEAR-specific:
     #
-    #      * The three tags NEAR publishes per release — orb_X,
-    #        signature_orb_X and the signed_orb_X index over both — become ONE
+    #      * The three tags NEAR publishes per release - orb_X,
+    #        signature_orb_X and the signed_orb_X index over both - become ONE
     #        package, with the index as the transfer root so the signature
     #        travels with the payload. Transferring orb_X alone would leave the
     #        signature behind and make destination-side verification impossible
     #        forever.
     #      * Listings drop the noise NEAR puts on every name: `orbs/` off the
-    #        repository, `orb_` off the tag. Cosmetic only — the real names are
+    #        repository, `orb_` off the tag. Cosmetic only - the real names are
     #        stored, transferred and returned by -o json, and BOTH spellings
     #        resolve as input, so anything you can see you can paste back.
     #
     #    OMIT IT for a conformant registry, which is most of them. Without it
-    #    this source would be read as ordinary — and, just as importantly, a
+    #    this source would be read as ordinary - and, just as importantly, a
     #    source that is not NEAR gets none of NEAR's rewriting. That is the
     #    reason the field exists: the shortening used to be applied everywhere,
     #    guessed from what a page of results looked like.
     #
     #    `signatures` has TWO independent axes, because they genuinely vary
-    #    independently — a vendor may pair the referrers API with PKCS#7, or a
+    #    independently - a vendor may pair the referrers API with PKCS#7, or a
     #    wrapper index with a Sigstore bundle:
     #
     #      vendor   WHERE the signature is:  (unset) | near
@@ -263,7 +263,7 @@ spec:
         - orbs/cfx-5000-k8s
         - orbs/cfx-5000-db
       vendor: near
-      # Anonymous access — some vendors publish openly. Mutually exclusive
+      # Anonymous access - some vendors publish openly. Mutually exclusive
       # with credentialsRef; one of the two is required.
       anonymous: true
       discovery:
@@ -279,7 +279,7 @@ spec:
           key: ca.crt
 
     # -----------------------------------------------------------------
-    # 5. A FAILOVER MIRROR — reachable, but not polled.
+    # 5. A FAILOVER MIRROR - reachable, but not polled.
     #
     #    Note the two different switches, and the difference between them:
     #
@@ -304,7 +304,7 @@ spec:
   # TARGETS
   #
   # A target is a PLACE: one registry, one fixed repository. Everything
-  # replicated to it lands under that path, whatever repository it came from —
+  # replicated to it lands under that path, whatever repository it came from -
   # what follows is the registry's own addressing, tags and digests.
   #
   # One fixed path rather than a mapping derived from the source's, because lab
@@ -313,7 +313,7 @@ spec:
   # vendor reorganised theirs.
   #
   # WORTH KNOWING: with several source repositories feeding one target, BLOBS
-  # never collide — they are content-addressed. TAGS can. Two repositories both
+  # never collide - they are content-addressed. TAGS can. Two repositories both
   # publishing `v1.2.3` become one tag at the target, and the later push wins.
   # If your vendor's tags are not globally unique, use one target per source
   # repository.
@@ -329,8 +329,8 @@ spec:
       type: generic
       credentialsRef:
         secretName: internal-registry
-      # Which stage this target is. Several targets may share one — `lab-eu`
-      # and `lab-us` are both the lab stage — and `transfers promote` resolves
+      # Which stage this target is. Several targets may share one - `lab-eu`
+      # and `lab-us` are both the lab stage - and `transfers promote` resolves
       # against it, refusing to guess when more than one matches.
       environment: lab
       # Used when a transfer request names no target. At most one per product.
@@ -341,7 +341,7 @@ spec:
         requestsPerSecond: 200
 
     - name: production
-      # Same REGISTRY as lab, different repository — so a lab→production
+      # Same REGISTRY as lab, different repository - so a lab→production
       # promotion can use cross-repository mount and move almost no bytes.
       registry: internal.example.com
       repository: vendor/platform-prod
@@ -354,7 +354,7 @@ spec:
       promotionOnly: true
       concurrency:
         perRegistry: 32
-      # Destination-side verification can differ from the source's — this is
+      # Destination-side verification can differ from the source's - this is
       # the check that runs after the push, against what actually landed.
       #
       # An override block must be SELF-CONTAINED: `policy` and the whole
@@ -376,7 +376,7 @@ spec:
     # 4. A QUAY TARGET THAT PULLS FOR ITSELF.
     #
     #    `replication` says HOW content gets in, as opposed to what goes
-    #    there. Absent — every target above — means `copy`: our workers pull
+    #    there. Absent - every target above - means `copy`: our workers pull
     #    from the origin and push here. That is unchanged and is still right
     #    for almost everything.
     #
@@ -405,7 +405,7 @@ spec:
       environment: ocp
       quay:
         # repo:admin scope for mirroring (org:admin for a proxy cache). The
-        # robot above authenticates /v2 and is REJECTED by /api/v1 — the most
+        # robot above authenticates /v2 and is REJECTED by /api/v1 - the most
         # common way to get a 403 that looks like a permissions problem.
         apiTokenRef:
           secretName: quay-api
@@ -419,7 +419,7 @@ spec:
           # for an upstream this product does not otherwise declare.
           from: lab
 
-          # WHAT TO SYNC — and the single most expensive field in this file.
+          # WHAT TO SYNC - and the single most expensive field in this file.
           #
           # These are SHELL GLOBS. Every other pattern in this document is
           # RE2. `^v\d+\.\d+\.\d+$` is correct three sections above and
@@ -430,7 +430,7 @@ spec:
           #
           # Note the second glob. Cosign signatures are tags of the form
           # `sha256-<hex>.sig`, so a rule of just `v3.*` mirrors the images
-          # and leaves every signature behind — after which destination-side
+          # and leaves every signature behind - after which destination-side
           # verification fails for every package, forever, with no visible
           # cause. If you verify at the destination, mirror the signatures.
           tags: ['v3.*', 'sha256-*.sig']
@@ -444,7 +444,7 @@ spec:
           robot: platform-prod+swgw-mirror
 
           # WHAT QUAY USES TO REACH THE UPSTREAM. Written INTO Quay, so these
-          # credentials leave our custody — by reference, as everywhere else.
+          # credentials leave our custody - by reference, as everywhere else.
           sourceCredentialsRef:
             secretName: internal-registry
 
@@ -460,7 +460,7 @@ spec:
           acceptUnsignedImages: false
           skopeoTimeout: 300s      # Quay's default; its maximum is 43200s
 
-          # WHAT WE DO ABOUT IT. `apply` means "write it when asked" —
+          # WHAT WE DO ABOUT IT. `apply` means "write it when asked" -
           # `transferctl targets apply`. A config reload NEVER writes to Quay:
           # applying a mirror flips the repository read-only and deletes
           # whatever the glob does not match, which is not something a
@@ -472,11 +472,11 @@ spec:
           syncOnRequest: true
 
     # -----------------------------------------------------------------
-    # 5. A PROXY CACHE — a Quay organization fronting an upstream.
+    # 5. A PROXY CACHE - a Quay organization fronting an upstream.
     #
     #    Nothing is stored until somebody pulls through it, which is the
     #    point: no schedule, no capacity planning, and content that expires.
-    #    It is NOT a replication destination and cannot be one — there is no
+    #    It is NOT a replication destination and cannot be one - there is no
     #    way to push into a cache. Validation rejects it as a rule target, as
     #    the default target, and as a promotion destination, all at load,
     #    because the alternative is failing on the day a rule first matches.
@@ -522,13 +522,13 @@ spec:
       enabled: false
 
   # =====================================================================
-  # PROMOTION — the hop `transferctl transfers promote` takes by default.
+  # PROMOTION - the hop `transferctl transfers promote` takes by default.
   #
   # Declared rather than hard-coded, because the names of a site's stages are
   # the site's. Omit the block entirely and it defaults to lab -> production;
   # it only has to be written when those words are wrong.
   #
-  # Each environment may name SEVERAL targets — `lab-eu` and `lab-us` are both
+  # Each environment may name SEVERAL targets - `lab-eu` and `lab-us` are both
   # the lab stage. When one does, `promote` refuses to guess and names the
   # candidates, so an unintended push to a production registry is not one
   # keystroke away.
@@ -538,24 +538,24 @@ spec:
     to: production
 
   # =====================================================================
-  # DOWNLOAD — WHAT happens when software is brought in.
+  # DOWNLOAD - WHAT happens when software is brought in.
   #
   # A download takes named software and puts it through a set of targets. It
   # carries NO tag pattern and no repository filter, because by the time one
-  # runs the software has already been chosen — by a person typing
+  # runs the software has already been chosen - by a person typing
   # `transferctl download v3.2.1`, or by an auto-download rule that matched.
   # A pattern asked at that point could only disagree with the choice.
   #
   # This is a LIST for future-proofing. One entry is the default by being the
-  # only one, and nothing has to say so. Declare several — a different
-  # destination set for a different class of release — and exactly one must
+  # only one, and nothing has to say so. Declare several - a different
+  # destination set for a different class of release - and exactly one must
   # carry `default: true`, which validation enforces.
   # =====================================================================
   download:
     - name: internal
       # A SET, not a sequence. The order comes from the targets themselves:
       # `ocp-prod` declares `replication.mirror.from: lab`, so this runs
-      # lab first and then has Quay pull from it — one hop over the vendor
+      # lab first and then has Quay pull from it - one hop over the vendor
       # link instead of two. `transferctl downloads list` prints the chain
       # it derived, which is the only way to check that reading was right.
       targets: [lab, ocp-prod]
@@ -568,7 +568,7 @@ spec:
         before: true          # source-side, before any bytes move
         after: true           # destination-side, after they land
         # Under `enforce` a target that fails verification stops every target
-        # that mirrors from it — which is the whole security value of a chain.
+        # that mirrors from it - which is the whole security value of a chain.
         policy: enforce
 
       priority: 100           # 0-1000; defaults to 50
@@ -576,20 +576,20 @@ spec:
       default: true
 
   # =====================================================================
-  # AUTO-DOWNLOAD — WHEN a download happens without being asked.
+  # AUTO-DOWNLOAD - WHEN a download happens without being asked.
   #
   # A rule does not download anything itself. It matches a tag and TRIGGERS
-  # the download above — the same operation a person performs by hand, with
+  # the download above - the same operation a person performs by hand, with
   # the same targets and the same gates. That equivalence is the point: there
   # is no automatic path that can do something the manual path cannot.
   # =====================================================================
   autoDownload:
     # The master switch over automatic firing ONLY. Downloads by hand are
-    # unaffected — a switch that also disabled the manual path is one nobody
+    # unaffected - a switch that also disabled the manual path is one nobody
     # dares touch during an incident.
     enabled: true
     rules:
-      # Evaluated in order, FIRST MATCH WINS — not all-match, because two
+      # Evaluated in order, FIRST MATCH WINS - not all-match, because two
       # rules matching one tag with different downloads has no sensible
       # reading.
       - name: ga-releases
@@ -610,13 +610,13 @@ spec:
       - name: near-orbs
         tagPattern: '^orb_\d+\.\d+\.\d+$'
         # Turned off without being deleted. Configuration, in Git, and the
-        # only way to stop a rule — there is deliberately no runtime override,
+        # only way to stop a rule - there is deliberately no runtime override,
         # because a second source of truth for "is this on" is exactly what
         # GitOps exists to prevent.
         enabled: false
 
   # =====================================================================
-  # VERIFICATION — product-wide defaults, overridable per source and target.
+  # VERIFICATION - product-wide defaults, overridable per source and target.
   #
   # Executes in M5. Configuration written now stays valid, and discovery
   # already reports WHETHER a package is signed, which it cannot do without
@@ -624,8 +624,8 @@ spec:
   # =====================================================================
   verification:
     enabled: true
-    # enforce — a failure blocks or fails the transfer.
-    # warn    — record it, notify, and proceed. Right while onboarding a vendor
+    # enforce - a failure blocks or fails the transfer.
+    # warn    - record it, notify, and proceed. Right while onboarding a vendor
     #           whose signing setup is not yet understood.
     policy: enforce
     atSource: true
@@ -641,7 +641,7 @@ spec:
         # accepts any valid Sigstore signature from anyone: it proves someone
         # signed the artifact, not that the vendor did. That is syntactically
         # valid, semantically useless, and would look perfectly secure in
-        # production — which is why it is an error and not a warning.
+        # production - which is why it is an error and not a warning.
         certificateIdentity: 'https://github.com/vendor/platform/.github/workflows/release.yaml@refs/heads/main'
         certificateOidcIssuer: 'https://token.actions.githubusercontent.com'
 
@@ -670,7 +670,7 @@ spec:
     subscriptions:
       # The closed set of events: PackageDiscovered, TransferCompleted,
       # PromotionCompleted, TransferFailed, VerificationFailed, DiscoveryFailed.
-      # An unknown name is rejected — a subscription to an event that will
+      # An unknown name is rejected - a subscription to an event that will
       # never fire is silence you would mistake for calm.
       - events: [PackageDiscovered]
         channels: [platform-email]
@@ -678,7 +678,7 @@ spec:
         channels: [platform-email, platform-teams]
 
   # =====================================================================
-  # RETENTION — how long history is kept, per record kind.
+  # RETENTION - how long history is kept, per record kind.
   # =====================================================================
   retention:
     transfers: 2160h        # 90 days

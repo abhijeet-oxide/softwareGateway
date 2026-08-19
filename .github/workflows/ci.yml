@@ -17,7 +17,7 @@ env:
 # Every job below invokes the SAME task a developer runs locally. That is the
 # point of moving off make: a pipeline that reimplements the build in YAML
 # drifts from what developers run, and the drift is only discovered when CI
-# passes and the laptop does not — or the reverse. One definition, one file,
+# passes and the laptop does not - or the reverse. One definition, one file,
 # both places.
 
 jobs:
@@ -48,7 +48,7 @@ jobs:
 
       # Unit tests MUST NOT require Docker. They run against SQLite and an
       # in-process registry, because a suite that needs containers is a suite
-      # developers run less often — and the difference compounds.
+      # developers run less often - and the difference compounds.
       - name: Test
         run: task test
 
@@ -80,7 +80,7 @@ jobs:
         run: task build:all
 
       # Windows binaries MUST carry .exe. Without it the file is not executable
-      # on Windows and has to be renamed by hand — a bug this repository
+      # on Windows and has to be renamed by hand - a bug this repository
       # shipped once already, so it is now asserted rather than assumed.
       - name: Assert Windows binaries have the .exe suffix
         run: |
@@ -133,7 +133,7 @@ jobs:
       #
       # This job reproduces that on Linux by stripping PATH down to what a
       # Windows box has, so the failure is caught in seconds rather than
-      # waiting on the Windows runner below — or on a developer's laptop, which
+      # waiting on the Windows runner below - or on a developer's laptop, which
       # is where it was actually found.
       - name: Run tasks with a Windows-like PATH
         run: |
@@ -174,7 +174,7 @@ jobs:
           repo-token: ${{ secrets.GITHUB_TOKEN }}
 
       # The reason this job exists. The Makefile needed bash and `find`, so it
-      # could not run here at all — Windows support was asserted, never tested,
+      # could not run here at all - Windows support was asserted, never tested,
       # and the .exe bug survived because nothing checked. Task ships its own
       # shell interpreter, so the same tasks run natively in PowerShell.
       - name: Build

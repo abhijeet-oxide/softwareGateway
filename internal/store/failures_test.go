@@ -139,7 +139,7 @@ func TestASucceededJobIsNotAFailure(t *testing.T) {
 }
 
 // The normaliser has to survive a message naming a digest that is NOT the
-// job's own — a manifest rejected for a missing layer names the layer, and the
+// job's own - a manifest rejected for a missing layer names the layer, and the
 // layer differs per manifest while the cause does not.
 func TestAMessageNamingSomebodyElsesDigestStillGroups(t *testing.T) {
 	h := newFailureHarness(t)
@@ -198,7 +198,7 @@ func (h *failureHarness) manifestJob(transferID string, n int) int64 {
 }
 
 // fail marks a job terminally failed with a given class and message, directly
-// — the completion path is exercised elsewhere and would drag wave settlement
+// - the completion path is exercised elsewhere and would drag wave settlement
 // into a test about reporting.
 func (h *failureHarness) fail(jobID int64, class, message string) {
 	h.t.Helper()
@@ -309,7 +309,7 @@ func TestTheProductionRejectionGroupsIntoOneCause(t *testing.T) {
 // across a repair, and a blob already force-uploaded is not sent again.
 //
 // Without them, a destination that rejects a manifest for any reason mentioning
-// a blob would loop forever — push, repair, re-upload, push — with every
+// a blob would loop forever - push, repair, re-upload, push - with every
 // appearance of progress and no exit.
 func TestARepairThatDoesNotHelpIsNotRepeated(t *testing.T) {
 	h := newFailureHarness(t)
@@ -443,7 +443,7 @@ func (h *failureHarness) repair(manifestJob int64) RepairResult {
 }
 
 // seedArtifactWithBlob records one artifact and one blob it references, the way
-// the walk does — the repair resolves blobs through artifact_blobs, so a
+// the walk does - the repair resolves blobs through artifact_blobs, so a
 // fixture without those rows would prove nothing.
 func (h *failureHarness) seedArtifactWithBlob(string) (artifactID int64, digest string) {
 	h.t.Helper()
@@ -510,8 +510,8 @@ func (h *failureHarness) blobJobFor(transferID, digest string) int64 {
 
 // A destination that will not accept a tag refuses every tag of the release,
 // and each refusal names the tag it was refused. Keyed on the message alone
-// that is one cause per tag — three blocks saying the same sentence about three
-// different strings — where the operator has one problem and one thing to do.
+// that is one cause per tag - three blocks saying the same sentence about three
+// different strings - where the operator has one problem and one thing to do.
 //
 // The tags are NEAR's own, because they are the case that breaks a naive
 // substitution: `orb_25.7_mp2604_2131` is a substring of

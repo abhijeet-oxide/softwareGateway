@@ -27,8 +27,8 @@ func TestSpeedIsNotReportedWhenNothingIsRunning(t *testing.T) {
 	}
 }
 
-// "stalled" and "waiting" need different responses — one starts again on its
-// own, the other will not — so the ETA column says which rather than shrugging.
+// "stalled" and "waiting" need different responses - one starts again on its
+// own, the other will not - so the ETA column says which rather than shrugging.
 func TestTheETASaysWhyThereIsNoEstimate(t *testing.T) {
 	cases := []struct {
 		name   string
@@ -53,7 +53,7 @@ func TestTheETASaysWhyThereIsNoEstimate(t *testing.T) {
 	}
 }
 
-// And a transfer that IS running still gets a real estimate — the fix must not
+// And a transfer that IS running still gets a real estimate - the fix must not
 // blank the column for everyone.
 func TestARunningTransferStillEstimates(t *testing.T) {
 	tr := stalledTransfer()
@@ -88,7 +88,7 @@ func stalledTransfer() *v1.Transfer {
 // THE ETA EXTRAPOLATES THE WRONG QUANTITY IF IT USES PLANNED MINUS
 // TRANSFERRED.
 //
-// That difference counts every byte that will never move — content the
+// That difference counts every byte that will never move - content the
 // destination already had, blobs relocated internally, work deduplicated away.
 // Observed: a transfer 98% done with 43 manifest jobs left, about 233 KiB of
 // real work, reporting a hundred megabytes remaining and an ETA of eleven hours
@@ -126,7 +126,7 @@ func TestTheETAUsesTheBytesActuallyLeftToMove(t *testing.T) {
 }
 
 // A rate in the low kilobytes during a manifest phase is round-trip cost, not a
-// fault — and a reader who has just watched 577 KiB/s become 1.2 KiB/s will go
+// fault - and a reader who has just watched 577 KiB/s become 1.2 KiB/s will go
 // looking for one unless told.
 func TestTheManifestPhaseExplainsItsOwnRate(t *testing.T) {
 	pushing := &v1.Transfer{Waves: []v1.TransferWave{

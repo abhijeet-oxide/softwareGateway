@@ -60,7 +60,7 @@ func TestSlowCommandsGetALongerDefault(t *testing.T) {
 
 // An explicit --timeout must survive on a slow command. Quietly replacing it
 // would make the flag advisory, and there are legitimate reasons to want a
-// short one — a scripted liveness probe, for instance.
+// short one - a scripted liveness probe, for instance.
 func TestExplicitTimeoutWinsOnSlowCommands(t *testing.T) {
 	if got := resolveTimeout(t, "products", "check", "--timeout", "5s"); got != 5*time.Second {
 		t.Errorf("timeout = %s, want the 5s the operator asked for", got)
@@ -121,7 +121,7 @@ func TestProgressLineIsTruncatedToTerminalWidth(t *testing.T) {
 	got := truncate(long, 78)
 
 	if n := len([]rune(got)); n != 78 {
-		t.Errorf("truncated to %d runes, want 78 — a longer line wraps, and a "+
+		t.Errorf("truncated to %d runes, want 78 - a longer line wraps, and a "+
 			"carriage return then only rewrites the last wrapped row, which "+
 			"looks exactly like a display that has stopped updating", n)
 	}

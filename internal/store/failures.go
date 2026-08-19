@@ -15,7 +15,7 @@ import (
 // A bundle has five hundred manifests. When the destination rejects them it
 // rejects all five hundred, for the same reason, and the job listing renders
 // that as five hundred rows of wrapped repository paths and truncated error
-// text. Every row is different — a different digest, a different destination —
+// text. Every row is different - a different digest, a different destination -
 // and every row says the same thing. There is no width of terminal at which
 // that is readable, and no amount of scrolling that turns it into a diagnosis.
 //
@@ -26,7 +26,7 @@ import (
 // # Why the grouping is done here and not in SQL
 //
 // GROUP BY last_error would produce one group per job, because the message
-// contains the digest and the destination path — the two things that differ
+// contains the digest and the destination path - the two things that differ
 // between otherwise identical failures. The normalisation has to happen
 // against the row, where the digest and the repository are known exactly and
 // can be substituted rather than guessed at.
@@ -39,7 +39,7 @@ type FailureGroup struct {
 	// Class is the retry classification: auth, unsupported, timeout and so on.
 	// It is what decides whether a retry could help, so it leads.
 	Class string
-	// Message is the failure with the per-job parts replaced — one sentence
+	// Message is the failure with the per-job parts replaced - one sentence
 	// standing for every job in the group.
 	Message string
 
@@ -49,7 +49,7 @@ type FailureGroup struct {
 	Failed   int
 	Retrying int
 
-	// Kinds are the job kinds affected — "blob", "manifest", or both.
+	// Kinds are the job kinds affected - "blob", "manifest", or both.
 	Kinds []string
 	// Waves are the waves affected, lowest first.
 	Waves []int
@@ -62,7 +62,7 @@ type FailureGroup struct {
 	// shared sentence has replaced with `<tag>`.
 	//
 	// Normalising the tag is what lets one refusal across a release's several
-	// tags be one cause rather than three — and it took with it the one string a
+	// tags be one cause rather than three - and it took with it the one string a
 	// reader needs to reproduce the failure by hand. The example carries it
 	// back: the group says what went wrong, the example says exactly where.
 	ExampleTags []string
@@ -160,7 +160,7 @@ func (p *Packages) FailureGroups(ctx context.Context, transferID string) ([]Fail
 //
 // Three, and the third is the one that mattered: `sha256:<hex>` as the OCI
 // spec writes it, a bare hex run as the shortened forms use, and
-// `sha256__<hex>` — which is how Artifactory names a blob in its own storage
+// `sha256__<hex>` - which is how Artifactory names a blob in its own storage
 // layout, and which the bare-hex branch cannot catch because `_` is a word
 // character and there is therefore no `\b` in front of the hex. That one
 // omission left every rejection in a five-hundred-manifest bundle in a group of
@@ -174,7 +174,7 @@ var digestPattern = regexp.MustCompile(
 // The job's OWN digest, destination path and tags are substituted first,
 // because those are known exactly rather than guessed at. The patterns
 // afterwards are the backstop for what a message names that is not the job's
-// own — a manifest push rejected for a missing LAYER names the layer, and that
+// own - a manifest push rejected for a missing LAYER names the layer, and that
 // layer differs per manifest while the cause does not.
 func normaliseFailure(message, digest, repository string, tags []string) string {
 	out := strings.TrimSpace(message)
@@ -184,8 +184,8 @@ func normaliseFailure(message, digest, repository string, tags []string) string 
 
 	// Every form, longest first, and NOT stopping at the first match: one
 	// message can name the destination twice in two different forms. The
-	// production rejection does exactly that — the fully qualified path in the
-	// request line, and Artifactory's key-stripped version in its description —
+	// production rejection does exactly that - the fully qualified path in the
+	// request line, and Artifactory's key-stripped version in its description -
 	// so stopping early normalised the first and left the second to fragment
 	// the grouping. Longest-first means a longer form is already replaced
 	// before a shorter one could match inside it.
@@ -214,7 +214,7 @@ func normaliseFailure(message, digest, repository string, tags []string) string 
 //	it said      cfx-5000-product/nokia-ims-sas
 //
 // So the exact string is not present in the message and a whole-string
-// substitution finds nothing — leaving the path in the grouping key and one
+// substitution finds nothing - leaving the path in the grouping key and one
 // group per repository. Trying successively shorter suffixes finds the form the
 // registry actually used, and longest-first means the most specific match wins
 // rather than the last path segment swallowing a longer one.
@@ -250,8 +250,8 @@ func repositoryForms(repository string) []string {
 // least needs them to. The tag is per-job in exactly the way the digest and the
 // destination path are, and is substituted for the same reason.
 //
-// LONGEST FIRST, which here is not a refinement. NEAR's tags nest —
-// `orb_X` is a substring of `signed_orb_X` — so replacing the shorter one first
+// LONGEST FIRST, which here is not a refinement. NEAR's tags nest -
+// `orb_X` is a substring of `signed_orb_X` - so replacing the shorter one first
 // would leave `signed_<tag>` behind and split the group it was meant to join.
 func tagForms(tags []string) []string {
 	out := make([]string, 0, len(tags))
@@ -260,7 +260,7 @@ func tagForms(tags []string) []string {
 		// Too short to substitute safely. A tag of `1.0` appears inside version
 		// strings, paths and digests that have nothing to do with it, and
 		// replacing it everywhere would corrupt a message rather than normalise
-		// one — the same guard, for the same reason, as repositoryForms.
+		// one - the same guard, for the same reason, as repositoryForms.
 		if len(tag) < 4 {
 			continue
 		}
@@ -272,8 +272,8 @@ func tagForms(tags []string) []string {
 
 // classIsRetryable mirrors registry.Retryable without importing it.
 //
-// The store must not depend on the registry package — it holds rows, not
-// protocol knowledge — and the class strings are a stable vocabulary written
+// The store must not depend on the registry package - it holds rows, not
+// protocol knowledge - and the class strings are a stable vocabulary written
 // down in docs/design/10 §6 rather than an implementation detail. An unknown
 // class reads as retryable, which is the same benefit of the doubt the retry
 // policy itself gives.

@@ -2,7 +2,7 @@
 --
 -- It fetches the tag's OWN manifest and nothing else. When that manifest is an
 -- index, its children are recorded from the descriptors the index already
--- carries — digest, media type, size, platform — without a request each.
+-- carries - digest, media type, size, platform - without a request each.
 --
 -- Nothing is lost by deferring: the root digest immutably determines the whole
 -- tree, so it can be walked exactly, at any time, from one digest we already

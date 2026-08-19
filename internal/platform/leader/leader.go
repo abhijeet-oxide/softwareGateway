@@ -5,7 +5,7 @@
 // Election uses pg_try_advisory_lock rather than the Kubernetes Lease API: we
 // already hold a mandatory, highly-available Postgres connection, so the lock
 // needs no client-go, no RBAC, and works identically in local development.
-// It also fails in the right direction — if Postgres is unreachable the leader
+// It also fails in the right direction - if Postgres is unreachable the leader
 // could not act anyway, so tying leadership to the database avoids a split
 // state where a leader exists but cannot do anything.
 //
@@ -100,7 +100,7 @@ func (e *Elector) Run(ctx context.Context) error {
 func (e *Elector) tryAcquire(ctx context.Context) {
 	// A dedicated connection is required: an advisory lock belongs to the
 	// session that took it, and a pooled connection could be handed to another
-	// caller — or returned and reused — silently dropping our leadership.
+	// caller - or returned and reused - silently dropping our leadership.
 	conn, err := e.db.Conn(ctx)
 	if err != nil {
 		e.log.Warn("leader: cannot open connection", "error", err)

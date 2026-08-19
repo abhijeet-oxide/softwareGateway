@@ -1,6 +1,6 @@
-# 11 — Resiliency and Backpressure
+# 11 - Resiliency and Backpressure
 
-> **Prerequisites:** [04 — Queue and Scheduling](04-queue-and-scheduling.md), [05 — Transfer Engine](05-transfer-engine.md)
+> **Prerequisites:** [04 - Queue and Scheduling](04-queue-and-scheduling.md), [05 - Transfer Engine](05-transfer-engine.md)
 
 > *"The application should behave like a cockroach. Even after complete disruption it should recover automatically and continue processing."*
 
@@ -20,7 +20,7 @@ Everything here follows from three structural choices made elsewhere:
 | The unit of work is a blob ([04](04-queue-and-scheduling.md) §2) | Any failure costs one blob, never a package |
 | Queue state *is* database state ([03](03-persistence.md) §1) | There is no journal to replay and no cache to rebuild |
 
-There is no recovery subsystem, no repair job, and no reconciliation loop, because there is nothing that can diverge. Almost every row in §2 resolves to "a timestamp stops advancing and the reaper requeues" — that repetition is the design working, not a gap in the analysis.
+There is no recovery subsystem, no repair job, and no reconciliation loop, because there is nothing that can diverge. Almost every row in §2 resolves to "a timestamp stops advancing and the reaper requeues" - that repetition is the design working, not a gap in the analysis.
 
 ## 2. Failure taxonomy
 
@@ -30,34 +30,34 @@ There is no recovery subsystem, no repair job, and no reconciliation loop, becau
 |---|---|---|---|---|
 | Worker `SIGKILL` / OOM | Lease expiry | Reaper requeues; another worker takes over | 1 lease + 1 reaper tick ≈ 150 s | Partial blob only |
 | Worker node preempted | Lease expiry | Same | Same | Partial blob only |
-| Worker partitioned from Coordinator | Lease expiry | Same. The worker keeps transferring until its leases lapse, then idles and retries registration | Same | Usually none — in-flight work often completes |
+| Worker partitioned from Coordinator | Lease expiry | Same. The worker keeps transferring until its leases lapse, then idles and retries registration | Same | Usually none - in-flight work often completes |
 | Worker scaled down (HPA) | `SIGTERM` → drain | Finishes in-flight jobs, stops leasing, exits within `terminationGracePeriodSeconds` | Graceful | None |
 | Worker scaled down, grace exceeded | Lease expiry | Falls back to the crash path | 150 s | Partial blob only |
 | Worker hangs (no crash, no progress) | No progress reports; heartbeat may continue | Stall detector aborts the job ([05](05-transfer-engine.md) §5); if the process is wedged, the liveness probe restarts it | ~2× stall timeout | Partial blob only |
 
 **The important row is the last one.** A hung worker is worse than a dead one, because a dead worker's leases expire while a hung one may keep heartbeating and holding work. Two independent defences: a per-transfer **stall detector** (no bytes for `idleStall`, default 60 s → abort the job and report failure), and a **liveness probe** that fails if the worker's main loop stops ticking. Relying on lease expiry alone would let a wedged worker hold 16 jobs indefinitely.
 
-> **Why double execution is harmless.** A worker declared dead may still be alive and mid-upload when another worker retakes its job. Both may write the same blob. This is safe because OCI blobs are content-addressed and the registry verifies the digest on commit: the loser writes identical bytes or is rejected. **Leases are safe here precisely because the workload is idempotent** — the same mechanism on a non-idempotent workload would require fencing tokens, and would be a much harder design.
+> **Why double execution is harmless.** A worker declared dead may still be alive and mid-upload when another worker retakes its job. Both may write the same blob. This is safe because OCI blobs are content-addressed and the registry verifies the digest on commit: the loser writes identical bytes or is rejected. **Leases are safe here precisely because the workload is idempotent** - the same mechanism on a non-idempotent workload would require fencing tokens, and would be a much harder design.
 
 #### A live worker holding a job that is going nowhere
 
 The table above is about a worker that **dies**. It has nothing to say about one that is alive and stuck, and that is a different failure with none of the same defences.
 
-The heartbeat reports which job IDs a worker holds. It does not ask whether any of them is moving, so a request that never returns — a proxy that accepted a connection and went quiet, a registry that took the body and stopped — is held forever and renewed forever. The transfer reports one job in flight, zero failed, and does not move again. Observed: 2491 of 2493 jobs done, one leased manifest, and nothing to look at.
+The heartbeat reports which job IDs a worker holds. It does not ask whether any of them is moving, so a request that never returns - a proxy that accepted a connection and went quiet, a registry that took the body and stopped - is held forever and renewed forever. The transfer reports one job in flight, zero failed, and does not move again. Observed: 2491 of 2493 jobs done, one leased manifest, and nothing to look at.
 
 The transport's own timeouts do not cover it. `ResponseHeaderTimeout` starts after the request body has been written, so a stalled **upload** is outside it, and there is deliberately no client-level timeout because that would cap a legitimate multi-hour transfer of a large blob.
 
-> **Decision — the bound is a STALL timeout, not a deadline.**
+> **Decision - the bound is a STALL timeout, not a deadline.**
 >
-> *Rejected:* a per-job deadline. It cannot be both correct for an 8 GB blob and useful for a manifest — at the rates this system sees, that blob is an eight-hour job, so any deadline generous enough for it leaves a stuck manifest hanging for most of a day.
+> *Rejected:* a per-job deadline. It cannot be both correct for an 8 GB blob and useful for a manifest - at the rates this system sees, that blob is an eight-hour job, so any deadline generous enough for it leaves a stuck manifest hanging for most of a day.
 >
 > *Chosen:* the worker cancels a job that has made **no progress** for `worker.stallTimeout` (default 15 minutes). What distinguishes a working job from a stuck one is movement, not elapsed time. A blob that is transferring reports progress, resets the clock, and may run as long as it needs; a blob that has stopped reports nothing, and so does a manifest that will never return.
 >
-> A manifest job reports no progress at all — it is one small request — so for it this is a flat deadline, which is the right shape: a manifest push that has not answered in fifteen minutes is not going to.
+> A manifest job reports no progress at all - it is one small request - so for it this is a flat deadline, which is the right shape: a manifest push that has not answered in fifteen minutes is not going to.
 >
 > The watchdog beat is taken **before** the progress throttle. The throttle exists to spare the Coordinator thousands of reports for one blob; the watchdog needs every one, or a transferring blob could be abandoned between throttled reports.
 
-A job cancelled this way is reported `failed` with class `timeout` and re-queued, rather than being left to the reaper — the outcome is rewritten with what only the watchdog knows, because from inside the engine a watchdog cancellation and a shutdown are the same context error and they mean opposite things.
+A job cancelled this way is reported `failed` with class `timeout` and re-queued, rather than being left to the reaper - the outcome is rewritten with what only the watchdog knows, because from inside the engine a watchdog cancellation and a shutdown are the same context error and they mean opposite things.
 
 `transfers describe` reports the other half: how long the least active in-flight job has been silent, once that passes two minutes. "1 job in flight" does not distinguish a job that is transferring from one that is hung.
 
@@ -65,10 +65,10 @@ A job cancelled this way is reported `failed` with class `timeout` and re-queued
 
 | Failure | Detection | Recovery | Effect on in-flight transfers |
 |---|---|---|---|
-| Replica crash | Kubernetes | Restart; rejoin | **None** — bytes do not traverse the Coordinator |
+| Replica crash | Kubernetes | Restart; rejoin | **None** - bytes do not traverse the Coordinator |
 | Leader crash | Advisory lock released with the connection | Other replica acquires within ~10 s, runs the reaper immediately | None |
 | All replicas down | Readiness fails | Restart | Existing leases keep running to completion; **no new work is leased** |
-| Rolling upgrade | — | Leader lock migrates | None — leases outlive a rolling restart by design |
+| Rolling upgrade | - | Leader lock migrates | None - leases outlive a rolling restart by design |
 | Deadlock / wedged | Liveness probe | Restart | None |
 
 **This is the cost accepted in [00](00-overview.md) §5.2.** With a Coordinator outage longer than a lease period, workers finish what they hold and go idle. They do not crash, do not lose work, and resume leasing the moment the Coordinator returns. Two replicas plus a lease duration comfortably longer than a rolling restart make the window rare and harmless.
@@ -78,7 +78,7 @@ On regaining leadership the reaper runs **immediately** rather than waiting for 
 **Start order does not matter, and that is now asserted rather than assumed.** A worker started before the Coordinator exists polls until it appears; a Coordinator taken away under a running worker does not kill it. Three properties hold, one per row above, and `internal/worker` has a test for each:
 
 - The worker **does not exit** when the control plane is absent. A failed lease is a WARN and a five-second backoff, forever. Nothing in `Run` returns on it.
-- Liveness deliberately **does not check the Coordinator** — only readiness does. So Kubernetes marks the pod not-ready and stops sending it traffic it does not receive anyway, rather than restarting it. A control-plane blip that crash-looped the fleet would turn a routine rollout into an outage.
+- Liveness deliberately **does not check the Coordinator** - only readiness does. So Kubernetes marks the pod not-ready and stops sending it traffic it does not receive anyway, rather than restarting it. A control-plane blip that crash-looped the fleet would turn a routine rollout into an outage.
 - The worker **needs no restart** when the Coordinator returns. It leases on its next tick, and anything whose lease expired meanwhile has already been requeued by the reaper.
 
 Jobs in flight are unaffected throughout, because bytes do not pass through the Coordinator: only progress reports and completions do, and both retry.
@@ -92,22 +92,22 @@ Classified once at the boundary ([06](06-registry-abstraction.md) §7); retry po
 | 500/502/503/504 | `ErrUnavailable` | 8 | Full-jitter backoff; adaptive controller reduces concurrency (§3) |
 | 429 | `ErrRateLimited` | 8 | **`Retry-After` honoured over our backoff**; strongest controller signal |
 | Connection reset mid-blob | `ErrTimeout` | 8 | Resume from `upload_state` where supported ([05](05-transfer-engine.md) §4.6) |
-| TLS failure | `ErrUnavailable` | 8 | Usually a CA misconfiguration — surfaced in `system:healthCheck` |
+| TLS failure | `ErrUnavailable` | 8 | Usually a CA misconfiguration - surfaced in `system:healthCheck` |
 | 401/403 | `ErrUnauthorized`/`ErrForbidden` | 1 | Notification: needs a human |
 | Source blob 404 mid-transfer | `ErrNotFound` | 1 | Vendor deleted content mid-transfer. Fail loudly |
 | Digest mismatch | `ErrDigestMismatch` | 2 | Possible corruption; surfaced rather than absorbed |
 | 400 with an OCI error code | by CODE, see below | by class | The code decides, not the status |
 | Total registry outage | `ErrUnavailable` | 8, then `failed` | Backoff to a 5 m cap; `transfers:retry` resumes when the vendor returns |
 
-**The registry's own error code is read before the status.** The boundary used to classify four statuses and let everything else through, so a manifest rejected with a 400 — which is how several registries answer content they will not accept — arrived as `unclassified`. Unclassified is treated as *retryable*, on the reasonable theory that an uncategorised failure is more likely a transient network fault than a permanent one. For a manifest the destination will never accept, that theory is wrong in the most expensive available way: eight attempts, each a full round trip over a slow link, per manifest, ending exactly where it started.
+**The registry's own error code is read before the status.** The boundary used to classify four statuses and let everything else through, so a manifest rejected with a 400 - which is how several registries answer content they will not accept - arrived as `unclassified`. Unclassified is treated as *retryable*, on the reasonable theory that an uncategorised failure is more likely a transient network fault than a permanent one. For a manifest the destination will never accept, that theory is wrong in the most expensive available way: eight attempts, each a full round trip over a slow link, per manifest, ending exactly where it started.
 
 | OCI error code | Sentinel | Why |
 |---|---|---|
-| `BLOB_UNKNOWN`, `MANIFEST_BLOB_UNKNOWN` | `ErrNotFound` | The placement cache was wrong. Self-healing (§2.5) — and it arrives as 400 from some registries and 404 from others, so the status alone gets it right half the time |
+| `BLOB_UNKNOWN`, `MANIFEST_BLOB_UNKNOWN` | `ErrNotFound` | The placement cache was wrong. Self-healing (§2.5) - and it arrives as 400 from some registries and 404 from others, so the status alone gets it right half the time |
 | `MANIFEST_UNKNOWN`, `NAME_UNKNOWN` | `ErrNotFound` | |
 | `UNAUTHORIZED` / `DENIED` | `ErrUnauthorized` / `ErrForbidden` | |
 | `DIGEST_INVALID`, `SIZE_INVALID` | `ErrDigestMismatch` | |
-| `MANIFEST_INVALID`, `NAME_INVALID`, `UNSUPPORTED` | `ErrUnsupported` | Not retryable — **unless the detail names a blob**, see below |
+| `MANIFEST_INVALID`, `NAME_INVALID`, `UNSUPPORTED` | `ErrUnsupported` | Not retryable - **unless the detail names a blob**, see below |
 
 **One registry hides a missing blob inside MANIFEST_INVALID**, so the detail decides before the code does:
 
@@ -116,7 +116,7 @@ HTTP 400: manifest invalid: map[description:Failed to copy blob sha256:… to
 orbs/cfx-5000-…/sha256:…/sha256__dc82908b11cf…]
 ```
 
-That is `MANIFEST_BLOB_UNKNOWN` wearing another code, and the distinction is not cosmetic. `MANIFEST_INVALID` means "these bytes are wrong and always will be"; a missing blob means "put the blob there and this works". Reading the first as the second abandons a transfer that is one upload away from finishing — which is what happened to a 63.7 GiB bundle that moved every byte and delivered nothing.
+That is `MANIFEST_BLOB_UNKNOWN` wearing another code, and the distinction is not cosmetic. `MANIFEST_INVALID` means "these bytes are wrong and always will be"; a missing blob means "put the blob there and this works". Reading the first as the second abandons a transfer that is one upload away from finishing - which is what happened to a 63.7 GiB bundle that moved every byte and delivered nothing.
 
 Matching on a registry's prose is exactly as unpleasant as it looks. It is confined to one function, applies only to codes that are otherwise terminal, and so the cost of being wrong is a retry rather than a wrong result. The alternative is accepting that one registry's bundles can never be replicated.
 
@@ -139,40 +139,40 @@ A rolled-back transaction can only lose the *record* of a completed job, causing
 
 | Failure | Detection | Recovery |
 |---|---|---|
-| **Stale placement** — we believe a blob is present, it is not | Manifest push returns `BLOB_UNKNOWN` | Invalidate placements for that manifest's blobs, requeue them, return the manifest job to `blocked` ([05](05-transfer-engine.md) §9) |
+| **Stale placement** - we believe a blob is present, it is not | Manifest push returns `BLOB_UNKNOWN` | Invalidate placements for that manifest's blobs, requeue them, return the manifest job to `blocked` ([05](05-transfer-engine.md) §9) |
 | Partial upload from a dead worker | Registry discards uncommitted sessions | Blob re-transferred |
-| Tag re-pushed at source mid-transfer | New package row ([07](07-discovery.md) §4) | In-flight transfer completes against the **pinned digest** — never against a moving target |
+| Tag re-pushed at source mid-transfer | New package row ([07](07-discovery.md) §4) | In-flight transfer completes against the **pinned digest** - never against a moving target |
 | Blob deleted at destination between plan and push | `BLOB_UNKNOWN` | As stale placement |
 
 The first row is the self-healing loop that makes the placement fast path safe rather than merely fast: **the registry itself tells us when our cache is wrong**, and the cost of being wrong is one requeued blob.
 
 #### It was specified here and not built, and that is what broke
 
-The engine produced the `blob_unknown` class from the first version. Nothing anywhere consumed it. A manifest rejected for a missing blob therefore retried against a destination that went on claiming to hold the blob — eight times, and then permanently.
+The engine produced the `blob_unknown` class from the first version. Nothing anywhere consumed it. A manifest rejected for a missing blob therefore retried against a destination that went on claiming to hold the blob - eight times, and then permanently.
 
-The gap was invisible for as long as every destination answered honestly, and Artifactory does not. It answers `HEAD /v2/<path>/blobs/<digest>` from a checksum index spanning the whole Artifactory repository rather than the image path the request named, so a blob present under any path reads as present under every path. Fast path 2 believes it, skips the upload, records a placement — and the manifest push, which links per path, cannot.
+The gap was invisible for as long as every destination answered honestly, and Artifactory does not. It answers `HEAD /v2/<path>/blobs/<digest>` from a checksum index spanning the whole Artifactory repository rather than the image path the request named, so a blob present under any path reads as present under every path. Fast path 2 believes it, skips the upload, records a placement - and the manifest push, which links per path, cannot.
 
 `store.RepairMissingBlobs` is the missing half. On a `blob_unknown` completion for a manifest job, in the same transaction:
 
 1. **Withdraw the placements** for that manifest's blobs at that destination. They caused the skip; leaving them means the next attempt skips again.
-2. **Requeue those blob jobs with `force_upload`.** Deleting the placements is not sufficient on its own — fast path 2 asks the destination directly and gets the same wrong answer, and fast path 3 asks it to mount content it says it has. A repaired job takes **no** fast path: no placement, no `HEAD`, no mount, just the bytes.
-3. **Return the manifest to `blocked`**, with its attempts and its backoff reset. Its content is not present, so it is not runnable — and per-artifact readiness ([04](04-queue-and-scheduling.md) §3.5) promotes it again on its own the moment the last repaired blob lands.
+2. **Requeue those blob jobs with `force_upload`.** Deleting the placements is not sufficient on its own - fast path 2 asks the destination directly and gets the same wrong answer, and fast path 3 asks it to mount content it says it has. A repaired job takes **no** fast path: no placement, no `HEAD`, no mount, just the bytes.
+3. **Return the manifest to `blocked`**, with its attempts and its backoff reset. Its content is not present, so it is not runnable - and per-artifact readiness ([04](04-queue-and-scheduling.md) §3.5) promotes it again on its own the moment the last repaired blob lands.
 
-**It escalates rather than jumping to the strongest form**, and the reason is the ORDER of the ladder in [05](05-transfer-engine.md) §4. The answer that lies is the `HEAD` at step 2, which sits **above** the mount at step 3 — so for the copy of a component published under its own name, the same digest already in a sibling repository, step 2 answered "already there" and step 3 was never reached. The mount was not declined; it was never attempted.
+**It escalates rather than jumping to the strongest form**, and the reason is the ORDER of the ladder in [05](05-transfer-engine.md) §4. The answer that lies is the `HEAD` at step 2, which sits **above** the mount at step 3 - so for the copy of a component published under its own name, the same digest already in a sibling repository, step 2 answered "already there" and step 3 was never reached. The mount was not declined; it was never attempted.
 
 | Level | Disables | Costs |
 |---|---|---|
 | 1 | the placement record and the `HEAD` | zero bytes when the mount works, a stream when it is declined |
 | 2 | everything | a full stream |
 
-Level 1 is the right answer for a stale placement, which is what repair is for. Level 2 is reached only when a level-1 repair did not fix the push — meaning the mount reported success without materialising the blob.
+Level 1 is the right answer for a stale placement, which is what repair is for. Level 2 is reached only when a level-1 repair did not fix the push - meaning the mount reported success without materialising the blob.
 
-Jumping straight to level 2 is correct and far more expensive than it needs to be. On the transfer this was found on it is about 1.5 GiB. On the **second** transfer of a product line it is the whole package: every blob is a placement hit, so every blob is skipped, so every manifest fails, so every blob is force-uploaded — turning the case deduplication exists to make free into a full re-upload.
+Jumping straight to level 2 is correct and far more expensive than it needs to be. On the transfer this was found on it is about 1.5 GiB. On the **second** transfer of a product line it is the whole package: every blob is a placement hit, so every blob is skipped, so every manifest fails, so every blob is force-uploaded - turning the case deduplication exists to make free into a full re-upload.
 
 **What bounds it.** A repair that does not help must not repeat, and two things stop it:
 
-- The manifest **keeps its attempt count** across a repair. Only the backoff is dropped, and those look like the same decision but are opposite ones: the backoff exists to space out attempts at an operation that has not changed, and this one has, while the attempt count is the only thing that makes the loop terminate. Reset it and a repair that never helps runs forever — push, repair, re-upload, push — with every appearance of progress.
-- A blob **escalates at most twice**, because there is nothing stronger than streaming with every fast path disabled. The level therefore outlives the upload rather than being cleared by it — it is the durable record of how far this blob has been escalated. The check is per **blob**, not per manifest, so one manifest having escalated X does not stop another from repairing its own Y.
+- The manifest **keeps its attempt count** across a repair. Only the backoff is dropped, and those look like the same decision but are opposite ones: the backoff exists to space out attempts at an operation that has not changed, and this one has, while the attempt count is the only thing that makes the loop terminate. Reset it and a repair that never helps runs forever - push, repair, re-upload, push - with every appearance of progress.
+- A blob **escalates at most twice**, because there is nothing stronger than streaming with every fast path disabled. The level therefore outlives the upload rather than being cleared by it - it is the durable record of how far this blob has been escalated. The check is per **blob**, not per manifest, so one manifest having escalated X does not stop another from repairing its own Y.
 
 Both are needed. Without the first the loop never ends; without the second it ends only after eight full re-uploads of content the destination already has.
 
@@ -184,16 +184,16 @@ The third row matters more than it looks. Because a Package pins `manifest_diges
 
 A leased job has a lease. A pending job has a backoff. A failed job has an attempt count. **A blocked job waits for an event**, and if that event cannot come, nothing anywhere notices.
 
-It did not notice for 31 hours. A repair returned 202 manifests to `blocked` on the promise that their dependency edges would promote them again — against a transfer planned *before* those edges existed, which therefore had none. `PromoteDependents` requires an edge, so it could never fire; wave advancement could not help either, because the wave those manifests sat in could not drain while they were blocked. Every blob was done, nothing was failed, nothing was running, and the worker was healthy and idle.
+It did not notice for 31 hours. A repair returned 202 manifests to `blocked` on the promise that their dependency edges would promote them again - against a transfer planned *before* those edges existed, which therefore had none. `PromoteDependents` requires an edge, so it could never fire; wave advancement could not help either, because the wave those manifests sat in could not drain while they were blocked. Every blob was done, nothing was failed, nothing was running, and the worker was healthy and idle.
 
-The specific bug is fixed at its source — repair now writes the edges it depends on, so it cannot create the black hole. `UnstickTransfers` is the general answer, and it is worth having separately because the class of bug is "a blocked job whose event never arrives", not this one instance of it.
+The specific bug is fixed at its source - repair now writes the edges it depends on, so it cannot create the black hole. `UnstickTransfers` is the general answer, and it is worth having separately because the class of bug is "a blocked job whose event never arrives", not this one instance of it.
 
 The sweep promotes a blocked job when **both** hold:
 
 1. The transfer has **nothing** in `pending` or `leased`. No work in flight that the job could legitimately be waiting for, and no repair mid-way through putting content back.
 2. The job's wave has already opened (`wave <= current_wave`) **and** no dependency of its own is outstanding.
 
-The wave test is the same guarantee `advanceWave` gives — a wave opens only once every wave below it has drained — so a job at or below the watermark has its content at the destination. The dependency test is invariant I1 stated directly. A job satisfying both is runnable by every rule the system has; the only thing keeping it blocked is that nothing thought to say so.
+The wave test is the same guarantee `advanceWave` gives - a wave opens only once every wave below it has drained - so a job at or below the watermark has its content at the destination. The dependency test is invariant I1 stated directly. A job satisfying both is runnable by every rule the system has; the only thing keeping it blocked is that nothing thought to say so.
 
 It runs before the stall check, because **a transfer that can be unstuck is not stalled** and settling it first would report an ending to something one `UPDATE` away from carrying on. It logs at WARN: a run that reports unsticking regularly is a run with a bug still in it.
 
@@ -201,7 +201,7 @@ It runs before the stall check, because **a transfer that can be unstuck is not 
 
 A job that reliably kills its worker would, under naive handling, loop forever and take a worker down with it each time.
 
-Prevented by incrementing `attempts` **at lease time** ([04](04-queue-and-scheduling.md) §4.1). A job that never reports anything still burns attempts and reaches `failed` after `max_attempts`. The transfer then fails rather than stalling, because a `failed` job never satisfies the wave-drain check ([04](04-queue-and-scheduling.md) §3.4) — the failure surfaces instead of becoming a permanently 97%-complete transfer.
+Prevented by incrementing `attempts` **at lease time** ([04](04-queue-and-scheduling.md) §4.1). A job that never reports anything still burns attempts and reaches `failed` after `max_attempts`. The transfer then fails rather than stalling, because a `failed` job never satisfies the wave-drain check ([04](04-queue-and-scheduling.md) §3.4) - the failure surfaces instead of becoming a permanently 97%-complete transfer.
 
 `dead_letter_jobs` ([04](04-queue-and-scheduling.md) §11) makes these visible; `transferctl transfers describe` shows digest, attempts, error class, and last worker.
 
@@ -209,17 +209,17 @@ Prevented by incrementing `attempts` **at lease time** ([04](04-queue-and-schedu
 
 ### 3.1 The problem
 
-Static concurrency limits are wrong in both directions. Set for the worst case, they waste throughput most of the time. Set for the best case, they overwhelm a registry the moment it degrades — and the response to registry stress must be *to back off*, not to retry harder.
+Static concurrency limits are wrong in both directions. Set for the worst case, they waste throughput most of the time. Set for the best case, they overwhelm a registry the moment it degrades - and the response to registry stress must be *to back off*, not to retry harder.
 
 ### 3.2 AIMD
 
-> **Decision — AIMD (additive increase, multiplicative decrease) per `(repository, direction)`.**
+> **Decision - AIMD (additive increase, multiplicative decrease) per `(repository, direction)`.**
 >
 > *Alternatives:* Vegas/gradient controllers (latency-gradient based, as in Netflix's `concurrency-limits`); a static configured limit; token buckets alone.
 >
-> *Rejected — static:* wrong in both directions, as above.
-> *Rejected — gradient:* better steady-state utilization in theory, but it has more parameters, a longer convergence time, and behaviour that is genuinely hard to reason about at 3 a.m. when someone is asking why throughput dropped. Given priority 3 is simplicity and priority 4 is operability, a controller an on-call engineer can predict on a whiteboard beats one that is 10% more efficient.
-> *Chosen — AIMD:* the same control law as TCP congestion control. Universally understood, provably converges to fairness, two parameters, and its behaviour is obvious from its name.
+> *Rejected - static:* wrong in both directions, as above.
+> *Rejected - gradient:* better steady-state utilization in theory, but it has more parameters, a longer convergence time, and behaviour that is genuinely hard to reason about at 3 a.m. when someone is asking why throughput dropped. Given priority 3 is simplicity and priority 4 is operability, a controller an on-call engineer can predict on a whiteboard beats one that is 10% more efficient.
+> *Chosen - AIMD:* the same control law as TCP congestion control. Universally understood, provably converges to fairness, two parameters, and its behaviour is obvious from its name.
 
 ```
 every controlInterval (default 30s), per (repository, direction):
@@ -234,7 +234,7 @@ every controlInterval (default 30s), per (repository, direction):
     minLimit = max(1, configuredMax / 8)
 ```
 
-**A 429 forces a decrease regardless of latency.** It is the registry explicitly telling us to slow down — better information than any inference we could make from timing.
+**A 429 forces a decrease regardless of latency.** It is the registry explicitly telling us to slow down - better information than any inference we could make from timing.
 
 `configuredMax` from `rateLimits` ([02](02-configuration.md) §5.3) is a hard ceiling the controller never exceeds. **Configuration sets what is permitted; the controller decides what is safe right now.**
 
@@ -254,7 +254,7 @@ Worker resource pressure throttles **globally rather than per repository**, beca
 
 ### 3.4 Distribution and persistence
 
-The controller runs on the leader; limits are divided across active workers and shipped in the lease response ([09](09-api.md) §7.1). Workers self-limit. **No distributed semaphore, no lock service, no coordination protocol** — the Coordinator already knows how many workers exist, so it just does the division.
+The controller runs on the leader; limits are divided across active workers and shipped in the lease response ([09](09-api.md) §7.1). Workers self-limit. **No distributed semaphore, no lock service, no coordination protocol** - the Coordinator already knows how many workers exist, so it just does the division.
 
 State persists in `repository_budgets` ([03](03-persistence.md) §7) so a Coordinator restart resumes at the learned limit. Restarting a vendor registry's concurrency probe from scratch after every deployment would repeatedly re-discover the same ceiling, and repeatedly annoy the vendor while doing it.
 
@@ -280,7 +280,7 @@ Network bandwidth is not measured directly. It is observed indirectly: saturatin
 
 ## 5. The cockroach test
 
-Chaos scenarios the implementation must pass. **These are acceptance criteria, not aspirations** — they run in M7 ([17](17-delivery-plan.md)) and belong in CI thereafter.
+Chaos scenarios the implementation must pass. **These are acceptance criteria, not aspirations** - they run in M7 ([17](17-delivery-plan.md)) and belong in CI thereafter.
 
 | # | Scenario | Expected outcome |
 |---|---|---|
@@ -297,4 +297,4 @@ Chaos scenarios the implementation must pass. **These are acceptance criteria, n
 | C11 | Kill a worker holding a manifest job between blob completion and manifest push | Manifest job requeued; **no partially-tagged package ever visible** (invariant I1) |
 | C12 | Network partition between a worker and the Coordinator for 5 min | Worker completes in-flight jobs, cannot report, leases expire, work is redone. **No corruption** |
 
-C10 and C11 are the two most valuable. C10 validates the no-disk invariant, which underpins the memory model and the concurrency ceiling. C11 validates the ordering invariant that makes an interrupted transfer safe for consumers — the property that lets us tolerate everything else on this list.
+C10 and C11 are the two most valuable. C10 validates the no-disk invariant, which underpins the memory model and the concurrency ceiling. C11 validates the ordering invariant that makes an interrupted transfer safe for consumers - the property that lets us tolerate everything else on this list.

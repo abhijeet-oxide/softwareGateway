@@ -59,7 +59,7 @@ func TestUnentitledContentIsReportedAsAFactRatherThanAFailure(t *testing.T) {
 		t.Errorf("the raw paths are shown where the vendor has its own names:\n%s", out)
 	}
 
-	// The registry's own sentence, once — it names the customer and the
+	// The registry's own sentence, once - it names the customer and the
 	// product, and it is identical across every row.
 	if strings.Count(out, "No valid entitlement found") != 1 {
 		t.Errorf("the vendor's sentence is missing or repeated:\n%s", out)

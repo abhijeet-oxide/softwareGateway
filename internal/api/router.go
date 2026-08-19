@@ -60,7 +60,7 @@ type Discoverer interface {
 // the wave logic and everything else the queue owns (docs/design/15 §6).
 type Worker interface {
 	// activeJobs is what the worker reports it is already running. It is a
-	// recovery signal as well as an accounting one — see queue.Lease.
+	// recovery signal as well as an accounting one - see queue.Lease.
 	Lease(ctx context.Context, workerID string, capacity, activeJobs int) (queue.LeaseResult, error)
 	Progress(ctx context.Context, jobID int64, workerID string, bytes int64) error
 	Complete(ctx context.Context, c store.Completion) (store.CompletionResult, error)
@@ -70,7 +70,7 @@ type Worker interface {
 	Heartbeat(ctx context.Context, workerID string, activeJobs []int64) (renewed []int64, cancelled []int64, err error)
 	// Retry returns one transfer's failed jobs to the queue. Here rather than
 	// on a separate interface because it is the same queue and the same
-	// invariants — a requeue that bypassed this type could reopen a wave the
+	// invariants - a requeue that bypassed this type could reopen a wave the
 	// scheduler believes is closed.
 	Retry(ctx context.Context, transferID string) (store.RetryResult, error)
 	// Pause, Resume and Stop are somebody intervening in a transfer that is
@@ -206,7 +206,7 @@ type Deps struct {
 type Server struct {
 	deps   Deps
 	router chi.Router
-	// comparisons is progress for comparisons in flight — see
+	// comparisons is progress for comparisons in flight - see
 	// compareprogress.go for why it lives in memory.
 	comparisons *compareTracker
 }
@@ -235,7 +235,7 @@ func (s *Server) Handler() http.Handler { return s.router }
 func (s *Server) routes() chi.Router {
 	r := chi.NewRouter()
 
-	// Order is load-bearing — see internal/api/middleware.
+	// Order is load-bearing - see internal/api/middleware.
 	r.Use(middleware.RequestID)
 	r.Use(middleware.Logging(s.deps.Logger))
 	r.Use(func(next http.Handler) http.Handler {
@@ -312,8 +312,8 @@ func (s *Server) routes() chi.Router {
 			r.Post("/products/{product}/targets/{target}/replication:cancelSync", s.handleCancelSyncReplication)
 		}
 		// Downloads and auto-download rules, as two resources because they are
-		// two things. Both collections are read-only — they are configuration
-		// — and the one verb takes SOFTWARE rather than a pattern: a pattern
+		// two things. Both collections are read-only - they are configuration
+		// - and the one verb takes SOFTWARE rather than a pattern: a pattern
 		// decides what to download when nobody is asking, and `:run` is
 		// somebody asking.
 		if s.deps.Downloads != nil {
@@ -371,13 +371,13 @@ func (s *Server) routes() chi.Router {
 				// whatever gates the write path.
 				r.Get("/products/{product}/discovery", s.handleDiscoveryStatus)
 
-				// AIP-136 custom method: expanding a package has side effects — it
-				// writes artifacts, blobs and a measured size — so it is a POST verb
+				// AIP-136 custom method: expanding a package has side effects - it
+				// writes artifacts, blobs and a measured size - so it is a POST verb
 				// rather than a GET that quietly mutates.
 				//
 				// Registered as the PLAIN package pattern, with the `:verb` suffix
 				// split off by the handler rather than by the router. The obvious
-				// spelling — `/packages/{package}:inspect` — is a chi partial-segment
+				// spelling - `/packages/{package}:inspect` - is a chi partial-segment
 				// pattern whose delimiter is `:`, and it matches on the FIRST colon in
 				// the segment. That works for a tag and silently fails for a digest:
 				// `sha256:ccbd…:inspect` binds `{package}` to `sha256` and then cannot
@@ -407,7 +407,7 @@ func (s *Server) routes() chi.Router {
 
 			// A comparison's progress while its own request is open. Not under
 			// /products, because the token identifies it and the caller
-			// polling it already knows which product it asked about — and a
+			// polling it already knows which product it asked about - and a
 			// path that repeated the product would be a second place for the
 			// two to disagree.
 			r.Get("/comparisons/{comparison}", s.handleCompareProgress)
@@ -421,7 +421,7 @@ func (s *Server) routes() chi.Router {
 			r.Get("/transfers/{transfer}/present", s.handleListPresentComponents)
 
 			// Retry needs the queue behind it, so it is registered with the
-			// queue rather than with the read routes — a follower replica
+			// queue rather than with the read routes - a follower replica
 			// serves the reads and honestly 404s the write.
 			if s.deps.Queue != nil {
 				// The verb is split by the handler, not the router. See
@@ -442,7 +442,7 @@ func (s *Server) routes() chi.Router {
 			r.Get("/workers", s.handleListWorkers)
 
 			r.Post("/jobs:lease", s.handleLeaseJobs)
-			// The verb is split by the handler, not the router — see
+			// The verb is split by the handler, not the router - see
 			// handleJobCustomMethod.
 			r.Post("/jobs/{job}", s.handleJobCustomMethod)
 			r.Post("/workers/{worker}", s.handleWorkerHeartbeat)

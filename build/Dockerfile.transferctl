@@ -3,7 +3,7 @@
 # transferctl image, for running the CLI in CI (chiefly `config validate`).
 #
 # The CLI is a pure Coordinator API client and needs no cluster access, no
-# registry credentials and no database — so this image is safe to run anywhere.
+# registry credentials and no database - so this image is safe to run anywhere.
 
 FROM golang:1.25 AS build
 WORKDIR /src

@@ -51,7 +51,7 @@ func WriteJSON(w http.ResponseWriter, r *http.Request, status int, body any) {
 	}
 	if err := json.NewEncoder(w).Encode(body); err != nil {
 		// The status line is already sent, so the response cannot be
-		// converted into an error. Log it — this is a server bug.
+		// converted into an error. Log it - this is a server bug.
 		plog.From(r.Context()).Error("failed to encode response body", "error", err)
 	}
 }

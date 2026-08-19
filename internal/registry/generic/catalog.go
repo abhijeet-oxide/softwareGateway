@@ -78,7 +78,7 @@ func (c *Catalog) Registry() string { return c.registryHost }
 // ListRepositories returns one page of repository paths plus the next token.
 //
 // Pagination is the same RFC 8288 Link scheme as tags/list. Registries vary in
-// how faithfully they implement it — which is one of the reasons catalog
+// how faithfully they implement it - which is one of the reasons catalog
 // enumeration is opt-in rather than the default way to find repositories
 // (docs/design/07 §2).
 func (c *Catalog) ListRepositories(ctx context.Context, last string, limit int) ([]string, string, error) {

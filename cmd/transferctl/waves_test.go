@@ -11,8 +11,8 @@ import (
 // THE TOTALS CANNOT EXPLAIN AN IDLE-LOOKING TRANSFER.
 //
 // "519 outstanding, 2 in flight" mixes three populations that behave completely
-// differently — runnable now, waiting out a backoff, and gated behind a wave
-// that has not drained — and only the last one explains why a fleet with
+// differently - runnable now, waiting out a backoff, and gated behind a wave
+// that has not drained - and only the last one explains why a fleet with
 // capacity to spare is running two jobs.
 
 func realisticWaves() []v1.TransferWave {
@@ -57,7 +57,7 @@ func TestEachWaveShowsCompletionAgainstItsOwnTotal(t *testing.T) {
 	}
 }
 
-// Zeroes are dashes so the eye lands on the numbers that are not zero — which
+// Zeroes are dashes so the eye lands on the numbers that are not zero - which
 // in a wave table is nearly all of the information.
 func TestZeroCountsAreDashes(t *testing.T) {
 	if got := count(0); got != "-" {

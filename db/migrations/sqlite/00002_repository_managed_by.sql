@@ -9,7 +9,7 @@
 --              deactivates it when the declaration is removed.
 --   discovery  we found it in the catalog. Reconciliation must NOT touch it,
 --              or every configuration reload would deactivate every
---              discovered repository and the next scan would revive them —
+--              discovered repository and the next scan would revive them -
 --              a flap that would churn the audit trail for no reason.
 --
 -- Without this column the two are indistinguishable and reconciliation cannot

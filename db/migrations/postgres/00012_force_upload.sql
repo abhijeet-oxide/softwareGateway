@@ -15,16 +15,16 @@
 --   orbs/cfx-5000-…/sha256:…/sha256__dc82908b11cf…]
 --
 -- Every manifest of the bundle failed this way, permanently, while every blob
--- job reported success. The design anticipated exactly this — a placement is
+-- job reported success. The design anticipated exactly this - a placement is
 -- strong evidence and not proof, with the manifest push as the backstop
--- (docs/design/11 §2.5) — and the backstop was never built. The class was
+-- (docs/design/11 §2.5) - and the backstop was never built. The class was
 -- produced by the engine and consumed by nothing.
 --
 -- # Why a column and not a retry
 --
 -- Requeueing the blob is not enough on its own. The next attempt asks the same
 -- HEAD and gets the same lie, skips the upload again, and the manifest fails
--- again — eight times, and then permanently. Repair needs a job that is
+-- again - eight times, and then permanently. Repair needs a job that is
 -- forbidden from taking any fast path: no placement record, no HEAD, no mount,
 -- just the bytes.
 --

@@ -6,7 +6,7 @@ import "testing"
 //
 // The case that matters is the third argument. A Helm chart and a container
 // image are the SAME manifest media type with no artifactType between them, and
-// a classifier reading only the first two fields calls both of them images —
+// a classifier reading only the first two fields calls both of them images -
 // which it did, 97 times, on an orb whose vendor catalogue lists 157 images and
 // 97 charts.
 

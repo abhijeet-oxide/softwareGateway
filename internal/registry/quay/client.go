@@ -3,7 +3,7 @@
 // This is deliberately not a registry implementation. Quay's artifact path is
 // plain OCI Distribution and is served by internal/registry/generic, unchanged;
 // what lives here is `/api/v1`, which configures the registry rather than
-// moving content through it. Two protocols, two clients, one host — see
+// moving content through it. Two protocols, two clients, one host - see
 // docs/design/18 section 7.
 //
 // The distinction is not academic, because the two endpoints take DIFFERENT
@@ -61,7 +61,7 @@ type Config struct {
 	Logger    *slog.Logger
 
 	// RequestTimeout bounds one management call end to end. Unlike the blob
-	// path there is no reason for a JSON request to outlive it — every
+	// path there is no reason for a JSON request to outlive it - every
 	// response here is small and a stalled control call blocks an apply.
 	RequestTimeout time.Duration
 }
@@ -86,8 +86,8 @@ type Client struct {
 
 // New builds a client.
 //
-// The transport stack is the same one the registry path uses — TLS trust,
-// proxy, retry, rate limiting, request tracing — with NO registry credentials,
+// The transport stack is the same one the registry path uses - TLS trust,
+// proxy, retry, rate limiting, request tracing - with NO registry credentials,
 // because the OCI token exchange is the wrong auth for this endpoint. The
 // bearer token is attached per request instead.
 func New(cfg Config) (*Client, error) {
@@ -122,7 +122,7 @@ func New(cfg Config) (*Client, error) {
 		// The default is eight attempts over ninety seconds, which is right
 		// for a blob and wrong here: it is longer than a control call's own
 		// timeout, so a Quay returning 502 would surface to the operator as
-		// "context deadline exceeded" — a message about us, naming neither
+		// "context deadline exceeded" - a message about us, naming neither
 		// Quay nor the status it actually returned. The budget is kept well
 		// inside the request timeout so the real classified error is what
 		// comes back.
@@ -167,7 +167,7 @@ func hostOf(endpoint string) string {
 
 // do performs one management request and decodes the response into out.
 //
-// out may be nil for calls whose body we do not need — Quay answers several
+// out may be nil for calls whose body we do not need - Quay answers several
 // mutations with a 201 and an empty body, and a decoder pointed at nothing is
 // a needless failure mode.
 func (c *Client) do(ctx context.Context, method, path string, body, out any) error {

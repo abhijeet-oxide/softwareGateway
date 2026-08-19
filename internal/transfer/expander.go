@@ -13,14 +13,14 @@ import (
 
 // The expander is the link between a request and the queue.
 //
-// Discovery's auto-download rules — and, later, the API — write
+// Discovery's auto-download rules - and, later, the API - write
 // `transfer_requests` rows. Nothing else turns one into work. This does: for
 // each request it opens one transfer per destination, plans it, and marks the
 // request expanded.
 //
 // It runs ON THE LEADER, as a tick. Running it on every replica would be
-// harmless — every step is idempotent, by unique constraint rather than by
-// application logic — but it would multiply registry walks for no benefit.
+// harmless - every step is idempotent, by unique constraint rather than by
+// application logic - but it would multiply registry walks for no benefit.
 //
 // See docs/design/04 §10 and docs/design/05 §3.
 
@@ -112,7 +112,7 @@ func (e *Expander) Expand(ctx context.Context) (ExpandResult, error) {
 		jobs, err := e.plan(ctx, t)
 		if err != nil {
 			// One transfer's failure must not stop the rest. An unreachable
-			// origin, a package whose tree cannot be walked — each is local to
+			// origin, a package whose tree cannot be walked - each is local to
 			// that transfer, and stopping the tick would let one broken
 			// product stall every other product's work.
 			res.Failed++
@@ -141,8 +141,8 @@ func (e *Expander) Expand(ctx context.Context) (ExpandResult, error) {
 
 // plan turns one open transfer into jobs.
 //
-// The transfer row already names its origin and destination — recorded when
-// the request was made — so nothing here consults configuration to decide
+// The transfer row already names its origin and destination - recorded when
+// the request was made - so nothing here consults configuration to decide
 // WHERE. It decides only what has to move, which is what planning is.
 func (e *Expander) plan(ctx context.Context, t store.PendingTransfer) (int, error) {
 	pkg, err := e.packages.GetPackageByID(ctx, t.PackageID)
@@ -173,7 +173,7 @@ func (e *Expander) plan(ctx context.Context, t store.PendingTransfer) (int, erro
 
 	// Where the bytes actually are. For a replication that is the vendor's
 	// repository. For a promotion it is that path NESTED under the origin
-	// target's prefix, because that is where the previous hop put it — reading
+	// target's prefix, because that is where the previous hop put it - reading
 	// the prefix itself would find an empty repository.
 	readPath := relative
 	if t.Operation == "promote" {
@@ -206,7 +206,7 @@ func (e *Expander) plan(ctx context.Context, t store.PendingTransfer) (int, erro
 	if err != nil {
 		// Not fatal. A package whose accessories could not be listed still has
 		// a payload worth moving, and failing the whole transfer over a
-		// signature lookup would be the wrong trade — the signature's absence
+		// signature lookup would be the wrong trade - the signature's absence
 		// is recorded on the package and visible there.
 		e.log.WarnContext(ctx, "could not list the package's related artifacts",
 			"package", pkg.ID, "error", err)
@@ -273,7 +273,7 @@ func (e *Expander) relativePath(
 // ensureOrigin gives the path being read from a catalog row.
 //
 // A replication reads from the vendor repository, which already has one. A
-// promotion reads from a path beneath its target's prefix, which does not —
+// promotion reads from a path beneath its target's prefix, which does not -
 // and jobs carry repository IDs rather than paths, so one has to exist before
 // a job can name it.
 func (e *Expander) ensureOrigin(
@@ -290,7 +290,7 @@ func (e *Expander) ensureOrigin(
 	defer func() { _ = tx.Rollback() }()
 
 	// Named "<configured>/<path>" like every other row one configured entry
-	// owns, so the worker resolves the same credential for it — see
+	// owns, so the worker resolves the same credential for it - see
 	// regclient.endpointSpec.
 	id, err := e.packages.EnsureRepository(ctx, tx, t.ProductID, origin.Role,
 		origin.Name+"/"+readPath, origin.Registry, readPath,

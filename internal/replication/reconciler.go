@@ -132,7 +132,7 @@ func PlanApply(ctx context.Context, api ManagementAPI, d *Desired, applied Appli
 	case product.ReplicationMirror:
 		// Checked directly rather than through Drift.StateWrong, because a
 		// repository with NO mirror configuration reports Absent and carries
-		// no field differences — and a NORMAL repository still has to be
+		// no field differences - and a NORMAL repository still has to be
 		// flipped. Reading the state question out of the drift result would
 		// silently drop the destructive step in exactly that case, which is
 		// the first apply and therefore the most common one.
@@ -195,7 +195,7 @@ func PlanApply(ctx context.Context, api ManagementAPI, d *Desired, applied Appli
 
 // Apply writes the desired state to the registry.
 //
-// Never called by a configuration reload — see the decision in docs/design/18
+// Never called by a configuration reload - see the decision in docs/design/18
 // section 8. The caller has already shown a plan to a human, or has been told
 // explicitly not to.
 func Apply(ctx context.Context, api ManagementAPI, d *Desired, now time.Time) (Applied, error) {

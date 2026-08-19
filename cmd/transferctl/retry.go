@@ -9,7 +9,7 @@ import (
 	v1 "github.com/abhijeet-oxide/softwareGateway/pkg/apis/softwaregateway/v1"
 )
 
-// `transferctl transfers retry` — carry on after whatever stopped it.
+// `transferctl transfers retry` - carry on after whatever stopped it.
 
 func newTransfersRetryCommand() *cobra.Command {
 	var all bool
@@ -27,8 +27,8 @@ func newTransfersRetryCommand() *cobra.Command {
 			"After an outage, `--all` retries every transfer that has failed jobs.\n" +
 			"That is the usual shape: an outage does not fail one transfer, it\n" +
 			"fails every transfer that was running.\n\n" +
-			"Nothing here can restart a transfer that was CANCELLED — that was\n" +
-			"somebody's decision — or one that succeeded.",
+			"Nothing here can restart a transfer that was CANCELLED - that was\n" +
+			"somebody's decision - or one that succeeded.",
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if all && len(args) > 0 {
 				return usageError{msg: "--all retries every failed transfer; do not also name one"}

@@ -81,8 +81,8 @@ func indexGraph(t *testing.T, n int) (registry.Descriptor, map[registry.Digest][
 // one request per newly discovered tag, whatever the package contains.
 //
 // The walk used to recurse, fetching every child of every index. Deferring
-// loses nothing — the root digest immutably determines the whole Tree, so it
-// can be walked exactly, at any time, from a digest we already hold — and it
+// loses nothing - the root digest immutably determines the whole Tree, so it
+// can be walked exactly, at any time, from a digest we already hold - and it
 // takes a bundle with sixty artifacts from sixty-one requests to one.
 func TestOnlyTheTagsOwnManifestIsFetched(t *testing.T) {
 	root, bodies := indexGraph(t, 60)
@@ -98,7 +98,7 @@ func TestOnlyTheTagsOwnManifestIsFetched(t *testing.T) {
 			"so fetching them is work we do not need to do", f.calls)
 	}
 	if len(tr.Artifacts) != 61 {
-		t.Errorf("recorded %d artifacts, want 61 — the index plus the sixty it lists",
+		t.Errorf("recorded %d artifacts, want 61 - the index plus the sixty it lists",
 			len(tr.Artifacts))
 	}
 }

@@ -40,7 +40,7 @@ type AuditEvent struct {
 // AuditFilter narrows the trail.
 //
 // Every field is optional and they compose with AND. This struct is also the
-// single place a future authorization scope is applied — a caller who may see
+// single place a future authorization scope is applied - a caller who may see
 // two products has those two products set here, server-side, and every query
 // below is scoped without touching the SQL. See docs/design/19 and the UI
 // plan's forward-design section: authorization filtering happens here, never
@@ -53,8 +53,8 @@ type AuditFilter struct {
 	EventType string
 	Actor     string
 	Outcome   string
-	// SubjectKind and SubjectID pin the trail to one thing — a package, a
-	// transfer — which is what "history of this release" is.
+	// SubjectKind and SubjectID pin the trail to one thing - a package, a
+	// transfer - which is what "history of this release" is.
 	SubjectKind string
 	SubjectID   string
 	// Since and Until are RFC 3339 bounds, inclusive of Since and exclusive of

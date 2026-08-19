@@ -15,8 +15,8 @@ import (
 //
 // `transfers jobs --failed` is a table, and for this question a table is the
 // wrong instrument. Five hundred manifests rejected by the destination are five
-// hundred rows that differ only in the digest and the destination path — the
-// two parts of the message carrying no information about what went wrong — and
+// hundred rows that differ only in the digest and the destination path - the
+// two parts of the message carrying no information about what went wrong - and
 // the part that does is at the END of a line the terminal has already cut off.
 // No column width fixes that, because the problem is not the width. It is that
 // the same fact is being restated five hundred times.
@@ -81,8 +81,8 @@ func renderFailures(w io.Writer, resp *v1.ListFailuresResponse) error {
 //
 // # Why the classification leads and the message does not
 //
-// The message is a sentence of arbitrary length — a registry's own words, a
-// path, a status — and it used to be the first line of the block. On a real
+// The message is a sentence of arbitrary length - a registry's own words, a
+// path, a status - and it used to be the first line of the block. On a real
 // failure it wrapped across the terminal before the reader reached the counts,
 // so the two short facts that decide whether this block is worth reading at all
 // (what class of failure it is, and how much it is holding) arrived after the
@@ -93,7 +93,7 @@ func renderFailures(w io.Writer, resp *v1.ListFailuresResponse) error {
 //
 // This command said "Nothing is failing in this transfer" about a transfer
 // whose state was `failed`. Both halves were working as written: the summary is
-// built from job errors, and that transfer had no jobs — it failed while being
+// built from job errors, and that transfer had no jobs - it failed while being
 // PLANNED, which happens before a single job exists. An origin that cannot be
 // reached, a package whose tree will not walk, a destination path that cannot
 // be resolved: each fails the transfer and leaves nothing behind to summarise.
@@ -104,7 +104,7 @@ func renderTransferFailure(w io.Writer, resp *v1.ListFailuresResponse) error {
 	if resp.FailureReason == "" {
 		if resp.State == v1.TransferFailed {
 			// Failed, with nothing recorded to say why. Rare, and saying so
-			// beats "nothing is failing" — which would send the reader looking
+			// beats "nothing is failing" - which would send the reader looking
 			// for a transfer that is fine.
 			fmt.Fprintf(w, "Transfer %s failed, and no reason was recorded.\n",
 				shortID(resp.TransferID))
@@ -143,7 +143,7 @@ func renderFailure(w io.Writer, g v1.FailureGroup) {
 
 	// The example, as a coordinate somebody can go and check by hand.
 	//
-	// The TAG is on it because the shared sentence no longer carries one — it
+	// The TAG is on it because the shared sentence no longer carries one - it
 	// says `<tag>` so that one refusal across a release's several tags is one
 	// cause rather than three. That grouping took with it the exact string a
 	// reader needs to reproduce the failure against the registry, and this puts
@@ -165,7 +165,7 @@ func renderFailure(w io.Writer, g v1.FailureGroup) {
 // advice turns a class into the sentence an operator needs.
 //
 // The class already decides whether the retry policy will try again, so this
-// says the same thing in words rather than leaving the reader to look it up —
+// says the same thing in words rather than leaving the reader to look it up -
 // and, crucially, distinguishes "this will fix itself" from "this will fail
 // identically eight more times and then stop".
 func advice(g v1.FailureGroup) string {
@@ -175,12 +175,12 @@ func advice(g v1.FailureGroup) string {
 		// is not a wrong credential, and saying "check the secret" sends the
 		// reader to the one place the answer is not. Applying a tag is a write
 		// to a path the earlier writes never touched, and on registries that
-		// separate the two — Artifactory wants Delete on the permission target
-		// to move an existing tag — it is refused separately.
+		// separate the two - Artifactory wants Delete on the permission target
+		// to move an existing tag - it is refused separately.
 		//
 		// Recognised by the leading verb of the registry's own message, which
 		// is the operation the write attempted. The message carries the rest of
-		// what the reader needs — including whether the tag already existed —
+		// what the reader needs - including whether the tag already existed -
 		// so this says only what is not already on the line above it.
 		if strings.HasPrefix(g.Message, "tag ") {
 			return "Not retryable. The credential writes content to this path but " +

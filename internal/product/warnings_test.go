@@ -52,7 +52,7 @@ func noWarningOn(t *testing.T, p *Product, field string) {
 }
 
 // The trap this whole defence exists for: a mirror rule that copies every
-// image and not one signature. The document is VALID — that is the problem.
+// image and not one signature. The document is VALID - that is the problem.
 func TestWarnsWhenMirrorGlobExcludesSignatures(t *testing.T) {
 	p := withQuayChain()
 	p.Spec.Targets[1].Replication.Mirror.Tags = []string{"v3.*"}
@@ -63,7 +63,7 @@ func TestWarnsWhenMirrorGlobExcludesSignatures(t *testing.T) {
 		t.Fatalf("hint must show the tag form that is being missed, got %q", w.Hint)
 	}
 	if !strings.Contains(w.Hint, "report success") {
-		t.Fatalf("hint must say the sync SUCCEEDS — that is what makes it expensive, got %q", w.Hint)
+		t.Fatalf("hint must say the sync SUCCEEDS - that is what makes it expensive, got %q", w.Hint)
 	}
 }
 
@@ -83,7 +83,7 @@ func TestNoSignatureWarningWhenWildcardMirrorsEverything(t *testing.T) {
 }
 
 // A product that does not verify at the destination has no reason to mirror
-// signatures, so warning would be noise — and noise is how warnings get
+// signatures, so warning would be noise - and noise is how warnings get
 // switched off.
 func TestNoSignatureWarningWithoutDestinationVerification(t *testing.T) {
 	p := withQuayChain()
@@ -118,7 +118,7 @@ func TestSignatureWarningRespectsTargetOverride(t *testing.T) {
 
 // Two copy targets both pull the full package from the vendor. Legitimate for
 // a DR registry, usually an accident on a metered link, and invisible either
-// way — nothing in the document says "this costs twice".
+// way - nothing in the document says "this costs twice".
 func TestWarnsAboutRedundantVendorEgress(t *testing.T) {
 	p := valid()
 	p.Spec.Targets = append(p.Spec.Targets, Target{

@@ -3,8 +3,8 @@
 // See docs/design/12-observability-and-audit.md section 3.
 //
 // Tracing is a side channel: a collector being unreachable drops spans and
-// must never affect a transfer. When disabled — or when the exporter cannot be
-// built — Init returns a no-op provider and a nil-safe shutdown, so no caller
+// must never affect a transfer. When disabled - or when the exporter cannot be
+// built - Init returns a no-op provider and a nil-safe shutdown, so no caller
 // needs to guard against tracing being off.
 package tracing
 

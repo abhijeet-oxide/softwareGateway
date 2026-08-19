@@ -14,8 +14,8 @@ import (
 
 // A runnable manifest must not queue behind gigabytes of blobs.
 //
-// Ordering by size largest-first is right for blobs — it is what keeps a
-// multi-gigabyte layer from running alone at the end — and it is exactly wrong
+// Ordering by size largest-first is right for blobs - it is what keeps a
+// multi-gigabyte layer from running alone at the end - and it is exactly wrong
 // for a manifest, which is a kilobyte and therefore sorts last however urgent
 // it is. A manifest costs one round trip, moves no bandwidth worth counting,
 // and UNBLOCKS the index above it. Making it wait for a queue of blobs delays

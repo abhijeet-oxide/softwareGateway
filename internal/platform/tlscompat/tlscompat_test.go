@@ -78,7 +78,7 @@ func TestApplyNoOptionsChangesNothing(t *testing.T) {
 // negative serial number:
 //
 //  1. the default client fails, which is the error the operator reported;
-//  2. InsecureSkipVerify ALSO fails, with the same message — the correction,
+//  2. InsecureSkipVerify ALSO fails, with the same message - the correction,
 //     since skipping verification is the obvious guess and it does not work;
 //  3. Apply fixes it.
 //
@@ -114,7 +114,7 @@ func TestNegativeSerialHandshake(t *testing.T) {
 
 	// 2. InsecureSkipVerify does NOT help: the parse fails before verification.
 	if err := get(skipping(), url); err == nil {
-		t.Error("InsecureSkipVerify succeeded — if this ever passes, the doc " +
+		t.Error("InsecureSkipVerify succeeded - if this ever passes, the doc " +
 			"comments in product.TLS and transport.Config are wrong and must be corrected")
 	} else if !strings.Contains(err.Error(), "negative serial number") {
 		t.Errorf("expected the same negative-serial failure with InsecureSkipVerify, got: %v", err)
@@ -134,7 +134,7 @@ func TestNegativeSerialHandshake(t *testing.T) {
 //
 // The certificate has to be assembled by hand. x509.CreateCertificate enforces
 // the positive-serial rule on the WRITE path too, and unlike the read path that
-// check is unconditional — no GODEBUG relaxes it. So the certificate is minted
+// check is unconditional - no GODEBUG relaxes it. So the certificate is minted
 // with a positive serial, the serial's high bit is flipped inside the raw
 // TBSCertificate, and the result is re-signed. Re-signing is what keeps the
 // certificate genuinely valid, so the third assertion can verify the chain
@@ -148,7 +148,7 @@ func negativeSerialServer(t *testing.T) (url string, pool *x509.CertPool) {
 	}
 
 	// Eight bytes with the top bit of the first byte clear, so the DER INTEGER
-	// is exactly `02 08 <bytes>` with no leading pad — which makes it findable,
+	// is exactly `02 08 <bytes>` with no leading pad - which makes it findable,
 	// and makes flipping that bit a same-length edit.
 	serialBytes := []byte{0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77, 0x88}
 

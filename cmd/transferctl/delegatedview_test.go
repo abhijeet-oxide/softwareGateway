@@ -102,7 +102,7 @@ func TestDelegatedListRowCarriesNoNumbers(t *testing.T) {
 	if strings.Contains(out, "0%") || strings.Contains(out, " 0 ") {
 		t.Fatalf("a delegated row must carry no zeroes that read as measurements:\n%s", out)
 	}
-	if strings.Count(out, "—") < 8 {
+	if strings.Count(out, "-") < 8 {
 		t.Fatalf("expected every measured column to be dashed:\n%s", out)
 	}
 	if !strings.Contains(out, "syncing") {

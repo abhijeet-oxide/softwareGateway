@@ -108,7 +108,7 @@ func TestProxyDestinationIsRefusedByName(t *testing.T) {
 }
 
 // A failure to reach the registry fails the transfer rather than leaving it in
-// `syncing` — a transfer that never asked cannot be settled by the watcher.
+// `syncing` - a transfer that never asked cannot be settled by the watcher.
 func TestSyncRequestFailureFailsTheTransfer(t *testing.T) {
 	s := newSlice(t)
 	pkg, _ := seedORB(t, s, "orb_23.8.1076")
@@ -127,7 +127,7 @@ func TestSyncRequestFailureFailsTheTransfer(t *testing.T) {
 	}
 }
 
-// Every deployment before M8 — and every estate with no delegated targets —
+// Every deployment before M8 - and every estate with no delegated targets -
 // must behave exactly as it did.
 func TestNoDelegationConfiguredIsUnchanged(t *testing.T) {
 	s := newSlice(t)
@@ -176,7 +176,7 @@ var errNotApplied = errNotAppliedType{}
 type errNotAppliedType struct{}
 
 func (errNotAppliedType) Error() string {
-	return "target \"ocp-prod\" has no mirror configuration on the registry yet — run `transferctl targets apply vendor-a ocp-prod` first"
+	return "target \"ocp-prod\" has no mirror configuration on the registry yet - run `transferctl targets apply vendor-a ocp-prod` first"
 }
 
 // failureReason reads why a transfer stopped, which for a delegated one is the

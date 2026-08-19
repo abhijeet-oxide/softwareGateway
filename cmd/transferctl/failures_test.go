@@ -10,7 +10,7 @@ import (
 
 // The complaint this command answers was not "the table is missing a column".
 // It was that a screen of five hundred rows saying the same thing is not a
-// diagnosis. So the assertions are about SHAPE — one block per cause, the
+// diagnosis. So the assertions are about SHAPE - one block per cause, the
 // registry's own words intact, and a next step that differs by class.
 
 func TestFailuresPrintsOneBlockPerCauseNotOnePerJob(t *testing.T) {
@@ -104,8 +104,8 @@ func renderTo(t *testing.T, resp *v1.ListFailuresResponse) string {
 
 // The example names the tag, because the shared sentence no longer can.
 //
-// Grouping normalises the tag away — that is what makes one refusal across a
-// release's three tags one cause rather than three — and with it went the exact
+// Grouping normalises the tag away - that is what makes one refusal across a
+// release's three tags one cause rather than three - and with it went the exact
 // string somebody needs to reproduce the failure against the registry by hand.
 // The example line is about a single job and carries it back.
 func TestTheExampleNamesTheTagThatWasRefused(t *testing.T) {
@@ -134,7 +134,7 @@ func TestTheExampleNamesTheTagThatWasRefused(t *testing.T) {
 // A transfer that failed before it had any jobs.
 //
 // The summary is built from job errors, and a transfer that fails while being
-// PLANNED has none — an origin that cannot be reached, a package whose tree
+// PLANNED has none - an origin that cannot be reached, a package whose tree
 // will not walk. It reported "Nothing is failing in this transfer" about a
 // transfer whose state was `failed`, which is the one answer that cannot be
 // right.
@@ -186,7 +186,7 @@ func TestAFailedTransferWithNoReasonSaysThat(t *testing.T) {
 	}
 }
 
-// What a delete says it did, and — in the same breath — what it did not.
+// What a delete says it did, and - in the same breath - what it did not.
 //
 // A reader who has just deleted something needs to know whether they have
 // changed the destination. Finding that out afterwards is too late.

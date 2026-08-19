@@ -11,7 +11,7 @@ import (
 //
 // # What this replaces, and what it deliberately does not
 //
-// Wave gating is a global barrier — wave N+1 opens only once wave N has drained
+// Wave gating is a global barrier - wave N+1 opens only once wave N has drained
 // entirely. Invariant I1 is not that. I1 is a statement about ONE manifest: it
 // may be pushed once every blob and child manifest IT references is present.
 // The barrier implies I1 and is much stronger than it, and the difference is
@@ -19,7 +19,7 @@ import (
 //
 // The edges here state I1 exactly. A manifest job is created `blocked` when it
 // has dependencies at all, and is promoted to `pending` the moment the last of
-// them reaches a terminal successful state — which happens inside the same
+// them reaches a terminal successful state - which happens inside the same
 // transaction as the completion that made it true, so there is no window in
 // which a runnable job is invisible.
 //
@@ -31,7 +31,7 @@ import (
 //     still moves it.
 //  2. It drives transfer COMPLETION. `settleTransfer` decides a transfer is
 //     done by draining the top wave, and that logic is untouched by promotion
-//     happening earlier — a job promoted ahead of its wave is simply already
+//     happening earlier - a job promoted ahead of its wave is simply already
 //     `succeeded` when its wave opens.
 //  3. Every dependency of a manifest lives in a strictly LOWER wave (a child
 //     has greater depth, and wave is maxDepth-depth+1; blobs are wave 0). So
@@ -62,7 +62,7 @@ func (p *Packages) AddJobDependencies(ctx context.Context, tx *sql.Tx, edges []J
 		args := make([]any, 0, 2*(end-start))
 		for _, e := range edges[start:end] {
 			if e.JobID == 0 || e.DependsOnID == 0 || e.JobID == e.DependsOnID {
-				// A zero ID means a dependency the planner did not create — a
+				// A zero ID means a dependency the planner did not create - a
 				// blob already at the destination, say. That is not an edge
 				// that failed to be written, it is a dependency that does not
 				// exist, and inserting it would block the job forever.
@@ -100,7 +100,7 @@ func (p *Packages) AddJobDependencies(ctx context.Context, tx *sql.Tx, edges []J
 // the first this becomes a full scan on every completion, and without the
 // second a manifest with ten blobs would be pushed when the first one landed.
 //
-// Returns how many jobs became runnable, which the caller logs — a transfer
+// Returns how many jobs became runnable, which the caller logs - a transfer
 // where nothing is ever promoted has a dependency graph that is wrong, and that
 // is otherwise invisible.
 func (p *Packages) PromoteDependents(ctx context.Context, tx *sql.Tx, jobID int64) (int, error) {
@@ -173,19 +173,19 @@ const maxCascadeDepth = 32
 // Per-artifact readiness makes the good case better and the bad case WORSE, and
 // the second half is easy to miss. Under wave gating, one permanently failed
 // blob left every manifest blocked, and SettleStalledTransfers reported the
-// transfer as stopped only when nothing anywhere was runnable — which was true,
+// transfer as stopped only when nothing anywhere was runnable - which was true,
 // because everything was blocked behind the one wave.
 //
 // With edges, the manifests that do not depend on the broken blob are promoted,
 // run, and succeed. What is left is a handful of blocked jobs waiting on a
 // dependency that is terminally `failed`, and those count as "runnable" to the
 // stall check. The transfer would sit at `running` with nothing in flight and
-// nothing that could ever start — exactly the symptom the settle work was
+// nothing that could ever start - exactly the symptom the settle work was
 // written to remove, in a narrower and more confusing form.
 //
 // So a failure has to propagate: a blocked job whose dependency has failed has
 // failed too, and says so. Iterated to a fixpoint because failure is transitive
-// — an index waiting on a child manifest waiting on a blob is two levels deep.
+// - an index waiting on a child manifest waiting on a blob is two levels deep.
 //
 // The reason recorded is deliberately distinguishable from a real one. Nobody
 // should have to guess which of forty failures was the cause and which were
@@ -233,7 +233,7 @@ func (p *Packages) FailUnreachableJobs(
 // manifest whose blob is still in flight.
 //
 // Keyed on the error class rather than on the edge set, because that is the
-// question being asked — "which of these failures were consequences" — and the
+// question being asked - "which of these failures were consequences" - and the
 // edges are the same whether a job failed on its own or by cascade.
 func (p *Packages) ClearDependencyFailures(
 	ctx context.Context, tx *sql.Tx, transferID string,

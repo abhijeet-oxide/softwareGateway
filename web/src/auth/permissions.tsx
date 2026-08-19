@@ -9,7 +9,7 @@ import type { WhoAmIResponse } from '../api/types'
  * # Why this exists before authentication does
  *
  * Today `/whoami` answers `anonymous` with permissions `["*"]`, so every check
- * here returns true and nothing is hidden. The point is not what it returns —
+ * here returns true and nothing is hidden. The point is not what it returns -
  * it is that every mutating control in the application already asks.
  *
  * Without this, switching on roles means opening all ten pages and every
@@ -63,7 +63,7 @@ export function IdentityProvider({ children }: { children: ReactNode }) {
 
     // A caller restricted to some products may act within those products, and
     // not estate-wide. An action with no product named is the estate-wide
-    // question, which a narrowed caller cannot answer — the same rule the
+    // question, which a narrowed caller cannot answer - the same rule the
     // server applies in Scope.covers.
     const products = data.products ?? []
     if (products.length === 0) return true
@@ -86,7 +86,7 @@ export function useIdentity(): Identity {
  * Whether this caller may do this thing, here.
  *
  * Every Download, Run Discovery, Retry, Pause, Stop, Apply and Promote control
- * is wrapped in this. Pass the product whenever there is one — a check that
+ * is wrapped in this. Pass the product whenever there is one - a check that
  * names no scope is the strictest question, not the loosest.
  */
 export function useCan(action: Action, scope?: Scope): boolean {

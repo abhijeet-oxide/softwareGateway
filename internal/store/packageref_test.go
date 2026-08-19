@@ -56,7 +56,7 @@ func TestPackageRefRoundTrips(t *testing.T) {
 
 // The behaviour this is all for: a vendor's version tag appears in dozens of a
 // product's repositories, and picking one silently is the worst available
-// outcome — the caller gets a real package, believes it asked for that package,
+// outcome - the caller gets a real package, believes it asked for that package,
 // and is wrong.
 func TestBareTagInSeveralRepositoriesIsRefused(t *testing.T) {
 	ctx := context.Background()
@@ -111,7 +111,7 @@ func TestBareTagInOneRepositoryStillResolves(t *testing.T) {
 }
 
 // A digest identifies content, and the same content really can sit in two
-// repositories — but it is the SAME package either way, so this is the one
+// repositories - but it is the SAME package either way, so this is the one
 // place where several matches is not a question for the caller.
 func TestDigestResolvesWithoutARepository(t *testing.T) {
 	ctx := context.Background()
@@ -223,7 +223,7 @@ func TestDisplayTagResolves(t *testing.T) {
 		if err != nil {
 			t.Fatalf("GetPackage(%q): %v", ref, err)
 		}
-		// Whichever spelling was used, the REAL tag comes back — the identity
+		// Whichever spelling was used, the REAL tag comes back - the identity
 		// is never the shortened form.
 		if row.Tag != "orb_23.8.1076" {
 			t.Errorf("resolved %q to tag %q, want orb_23.8.1076", ref, row.Tag)

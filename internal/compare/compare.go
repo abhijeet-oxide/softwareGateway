@@ -17,7 +17,7 @@
 // # Why both sides are WALKED rather than one being read from a record
 //
 // Nothing in this package trusts what we recorded. Every fact about both sides
-// comes from a registry in this call — which is the whole point of an integrity
+// comes from a registry in this call - which is the whole point of an integrity
 // check, and is also what lets a side be a target we have never planned
 // against, or a version somebody published by hand.
 //
@@ -29,7 +29,7 @@
 //
 // # What identity means here
 //
-// Components are aligned by the repository half of their `ref.name` — the
+// Components are aligned by the repository half of their `ref.name` - the
 // vendor's name for the component, which survives copying and survives a new
 // release. The TAG is compared rather than matched on, because in a
 // version-to-version comparison the tag is precisely the thing that changed.
@@ -64,7 +64,7 @@ type SideSpec struct {
 	// Repository is where the bundle's root lives on this side.
 	Repository string
 	// References are candidate roots, most complete first. The most complete
-	// one BOTH SIDES hold is what gets walked — see chooseRoots.
+	// one BOTH SIDES hold is what gets walked - see chooseRoots.
 	//
 	// Plural because a release may be addressable several ways: a pre-1.1
 	// vendor bundling a payload with its detached signature publishes a wrapper
@@ -78,7 +78,7 @@ type SideSpec struct {
 	// fixes, and a list carrying only the tag cannot tell them apart.
 	References []string
 	// BasePath is the prefix beneath which this side reproduces the vendor's
-	// structure — a target's configured `repository`. Empty for a source,
+	// structure - a target's configured `repository`. Empty for a source,
 	// which holds the vendor's paths unprefixed.
 	BasePath string
 	// PublishesComponentsByName says this side is expected to serve each
@@ -86,7 +86,7 @@ type SideSpec struct {
 	// inside the bundle.
 	//
 	// TRUE ONLY FOR A SIDE THIS SYSTEM WROTE. That second publication is
-	// something a TRANSFER creates — see internal/transfer/layout.go, "Why a
+	// something a TRANSFER creates - see internal/transfer/layout.go, "Why a
 	// component lands in TWO places". It is not required by OCI, and it is not
 	// something a vendor has agreed to do.
 	//
@@ -126,7 +126,7 @@ type Options struct {
 	//
 	// A comparison of a real release is minutes of reading two registries, and
 	// a caller with no way to say what is happening can only offer an animation
-	// — which is the same thing it would offer for a comparison that had
+	// - which is the same thing it would offer for a comparison that had
 	// silently stopped.
 	Progress ProgressFunc
 
@@ -137,7 +137,7 @@ type Options struct {
 	// image manifests the OCI rules cannot answer: only the annotation the
 	// vendor wrote says which is which. The composition root builds it from
 	// the product's configured layouts, and the release page and the transfer
-	// breakdown are built from the same thing — a comparison that named
+	// breakdown are built from the same thing - a comparison that named
 	// components differently from the pages either side of it would be read as
 	// a difference in the content.
 	Classify vendors.Classifier
@@ -146,7 +146,7 @@ type Options struct {
 // Progress is one side's position in the comparison.
 //
 // Per SIDE, because the two are walked concurrently against different
-// registries and one of them is usually the slow one — a single merged number
+// registries and one of them is usually the slow one - a single merged number
 // would hide which.
 //
 // # The unit is REQUESTS, and that is what makes it monotonic
@@ -154,15 +154,15 @@ type Options struct {
 // A comparison is four kinds of work over four different populations: manifests
 // walked, component names probed, repository tags resolved, layer archives
 // read. Reporting each phase's own count meant the number RESET to zero at
-// every phase boundary — a bar that filled, emptied and filled again, which
+// every phase boundary - a bar that filled, emptied and filled again, which
 // reads as the thing having restarted.
 //
 // So Done counts round trips completed on this side and never decreases, and
 // Total counts round trips KNOWN so far, which grows as each phase discovers
-// its population — exactly as the manifest walk's own denominator does. Phase
+// its population - exactly as the manifest walk's own denominator does. Phase
 // is a label saying what those requests currently are.
 type Progress struct {
-	// Key is which END this is — "a" or "b" — and it is what a consumer should
+	// Key is which END this is - "a" or "b" - and it is what a consumer should
 	// index by.
 	//
 	// The label is not an identity: two sides of a version comparison are the
@@ -185,7 +185,7 @@ type Progress struct {
 	//
 	// Reported because "is it going as fast as it can" is the second question
 	// anybody watching a four-minute bar asks, and a comparison running one
-	// request at a time looks identical to one running thirty-two — which is
+	// request at a time looks identical to one running thirty-two - which is
 	// exactly the bug that made comparisons slow before anyone noticed.
 	Concurrency int
 }
@@ -205,7 +205,7 @@ type ProgressFunc func(Progress)
 // sideReporter accumulates one side's work into a single monotonic count.
 //
 // One per side, shared by every phase that side passes through, so the number a
-// caller sees only ever goes up — see Progress for why that matters.
+// caller sees only ever goes up - see Progress for why that matters.
 type sideReporter struct {
 	key         string
 	side        string
@@ -228,7 +228,7 @@ func newSideReporter(key, side string, concurrency int, report ProgressFunc) *si
 // walked records the manifest walk's absolute position.
 //
 // Absolute rather than incremental because the walk reports totals, and it is
-// the first phase — so its numbers ARE the side's numbers until another phase
+// the first phase - so its numbers ARE the side's numbers until another phase
 // adds to them.
 func (r *sideReporter) walked(fetched, known int) {
 	if r == nil {
@@ -239,8 +239,8 @@ func (r *sideReporter) walked(fetched, known int) {
 
 	r.phase = PhaseManifests
 	// The HIGHEST reported, not the latest. The walk counts with an atomic
-	// across its fetching goroutines, so callbacks arrive out of order — the
-	// goroutine that computed 3 can emit after the one that computed 2 — and
+	// across its fetching goroutines, so callbacks arrive out of order - the
+	// goroutine that computed 3 can emit after the one that computed 2 - and
 	// taking the latest made the count flicker downwards.
 	if fetched > r.done {
 		r.done = fetched
@@ -255,7 +255,7 @@ func (r *sideReporter) walked(fetched, known int) {
 //
 // Called once a phase can count its own work: how many components have names to
 // probe, how many tags a repository listed. A phase with NOTHING to do adds
-// nothing and does not become the label — which is why a comparison against a
+// nothing and does not become the label - which is why a comparison against a
 // source, where no component is expected to answer to its own name, no longer
 // sits on "checking component names 0 of 259" for the rest of its life.
 func (r *sideReporter) expect(phase string, units int) {
@@ -288,7 +288,7 @@ func (r *sideReporter) did(phase string, n int) {
 	r.emitLocked()
 }
 
-// certain marks the denominator FINAL — no longer an estimate.
+// certain marks the denominator FINAL - no longer an estimate.
 //
 // The manifest walk discovers its own size as it goes, so its total is a
 // running maximum and the caller says so. A later phase can know its total
@@ -322,7 +322,7 @@ func (r *sideReporter) settled() {
 // emitLocked reports the current position, WITH THE LOCK HELD.
 //
 // Deliberately: the mutation and the report have to be one atomic step, or two
-// goroutines can snapshot 5 and 6 and deliver them in the other order — which
+// goroutines can snapshot 5 and 6 and deliver them in the other order - which
 // is a count going backwards for a reader, however monotonic the counter is.
 // The callback is a map write under the caller's own mutex, so serialising it
 // costs nothing worth measuring.
@@ -372,7 +372,7 @@ type Item struct {
 	// Key aligns this component with its counterpart on the other side.
 	Key string
 	// Type is what it is, in the words somebody uses: index, image, chart,
-	// file, signature. FOR READING, never for identity — see Kind.
+	// file, signature. FOR READING, never for identity - see Kind.
 	Type string
 	// Kind is what OCI says this artifact is: its `artifactType` where it has
 	// one, its media type otherwise.
@@ -404,7 +404,7 @@ type Item struct {
 	Named  *Site
 	Layers []Layer
 	// Unreachable is set when this side's index NAMES this component and the
-	// registry would not serve it — the signature of a transfer that stopped
+	// registry would not serve it - the signature of a transfer that stopped
 	// part-way, and a finding rather than an error.
 	Unreachable string
 }
@@ -415,7 +415,7 @@ type Verdict string
 const (
 	// VerdictSame is byte-for-byte identical content under the same name.
 	VerdictSame Verdict = "same"
-	// VerdictChanged is the same component holding different content — the
+	// VerdictChanged is the same component holding different content - the
 	// answer to "what is new in this release", and to "what was mutated".
 	VerdictChanged Verdict = "changed"
 	// VerdictOnlyA is present on the first side and absent from the second:
@@ -435,7 +435,7 @@ type Row struct {
 	A, B    *Item
 	// Differences states each disagreement as a fact. Empty for VerdictSame.
 	Differences []string
-	// Files is the account of the NAMED FILES inside this component — the
+	// Files is the account of the NAMED FILES inside this component - the
 	// answer to "which configuration changed", which "two layers changed"
 	// cannot give.
 	//
@@ -471,7 +471,7 @@ type Report struct {
 	// Judged by what a tag RESOLVES TO, never by how it is spelled: nothing in
 	// the specification constrains how a publisher names a tag, so a
 	// name-shaped test is a test of one vendor's convention. Asked only of the
-	// bundle's own repository — a component's repository legitimately holds
+	// bundle's own repository - a component's repository legitimately holds
 	// every other version of that component, and asking it there would report
 	// each previous release as a discrepancy.
 	ExtraTagsA []string
@@ -487,7 +487,7 @@ type Report struct {
 func (r Report) Differences() int { return r.Changed + r.OnlyA + r.OnlyB }
 
 // ReferenceA and ReferenceB render each side as a reference somebody could
-// paste into a pull — of WHAT WAS WALKED, not of what was asked for.
+// paste into a pull - of WHAT WAS WALKED, not of what was asked for.
 //
 // The distinction is itself a finding in the case that matters. A destination
 // missing the vendor's wrapper tag is walked from its payload instead, and a
@@ -529,15 +529,15 @@ func Run(ctx context.Context, clientA, clientB ClientFactory, opts Options) (Rep
 	// WHAT each side is walked from, decided for BOTH SIDES AT ONCE and before
 	// either walk starts. Two independent resolutions can pick two different
 	// artifacts, and everything downstream of that compares one thing against
-	// another thing — see chooseRoots.
+	// another thing - see chooseRoots.
 	rootA, rootB, notes, err := chooseRoots(ctx, clientA, clientB, opts)
 	if err != nil {
 		return Report{}, err
 	}
 
 	// Both sides at once. They are different registries in the case that
-	// matters most — a vendor across a WAN and a destination in the datacentre
-	// — and walking them in series would make every comparison cost the sum of
+	// matters most - a vendor across a WAN and a destination in the datacentre
+	// - and walking them in series would make every comparison cost the sum of
 	// two round-trip-bound walks instead of the larger of them.
 	// One reporter per side, shared by every phase that side passes through, so
 	// the count a caller sees only ever goes up. See Progress.
@@ -608,7 +608,7 @@ type inventory map[string]*Item
 // apart.
 //
 // A key already held by the SAME digest is one component the bundle references
-// twice — a base image shared by two of them — and there is nothing to add.
+// twice - a base image shared by two of them - and there is nothing to add.
 //
 // A key already held by DIFFERENT content is a name that does not identify one
 // artifact, and dropping either of them loses a component from the comparison
@@ -647,7 +647,7 @@ func readSide(
 	// TOLERANT, and this is the difference between a comparison and an error
 	// message. A transfer that stopped part-way leaves an index naming children
 	// the destination does not have; a walk that aborted on the first of them
-	// could not report the other nineteen — and "this side could not be walked"
+	// could not report the other nineteen - and "this side could not be walked"
 	// is the least useful possible answer to "what is missing?".
 	tree, missing, _, err := oci.WalkPartialProgress(ctx, root, desc, concurrency,
 		func(p oci.Progress) { report.walked(p.Fetched, p.Known) })
@@ -662,7 +662,7 @@ func readSide(
 
 	// A component the index names and the registry will not serve. Recorded
 	// from the REFERENCING descriptor, so it keeps the name its parent gave it
-	// and aligns against its counterpart on the other side — which is what
+	// and aligns against its counterpart on the other side - which is what
 	// turns "something is missing" into "cfx-5000-product/lms is missing".
 	for _, m := range missing {
 		item := itemFrom(oci.Artifact{Descriptor: m.Descriptor, Depth: m.Depth},
@@ -679,8 +679,8 @@ func readSide(
 	// The pass resolves every tag in the bundle's repository to find content
 	// this release does not account for. At a target that is a real finding:
 	// something landed there that nobody in this comparison put there. At a
-	// SOURCE it is the vendor's own catalogue — every other release it has ever
-	// published — reported as unaccounted content, which is noise on every
+	// SOURCE it is the vendor's own catalogue - every other release it has ever
+	// published - reported as unaccounted content, which is noise on every
 	// version-to-version comparison anybody runs.
 	//
 	// It was also the most expensive thing a comparison did, by a wide margin:
@@ -709,7 +709,7 @@ type extras struct {
 // A side may hold a more complete root than the one both sides agreed on: the
 // vendor has the signed wrapper, the destination does not, so the payload is
 // what gets compared. The wrapper and the signature hanging off it are still
-// part of the release — the vendor published them as part of it — and calling
+// part of the release - the vendor published them as part of it - and calling
 // their tags "not part of this release" because of which root the OTHER side
 // was missing states something false about this one.
 //
@@ -727,7 +727,7 @@ func unwalkedRoots(
 		}
 
 		// FetchRoot reads one manifest and records the children it lists,
-		// without descending — which is exactly the shape wanted here, and is
+		// without descending - which is exactly the shape wanted here, and is
 		// the same reader the rest of the system parses manifests with.
 		tree, err := oci.FetchRoot(ctx, root, desc)
 		if err != nil {
@@ -770,8 +770,8 @@ type rootChoice struct {
 //
 // It used to be: each side took the first candidate it could resolve, on its
 // own. Where a destination was missing the vendor's wrapper tag, the two ends
-// then silently walked DIFFERENT ARTIFACTS — the source's signed wrapper
-// against the destination's bare payload — and every finding downstream was an
+// then silently walked DIFFERENT ARTIFACTS - the source's signed wrapper
+// against the destination's bare payload - and every finding downstream was an
 // artefact of that. The roots' digests differ because they are different
 // manifests, not because anything was corrupted; the signature hanging off the
 // wrapper is reported missing at a destination nobody looked for it on; and
@@ -779,7 +779,7 @@ type rootChoice struct {
 //
 // Comparing like with like is the whole contract, so the shared reference wins
 // even where one side could offer a more complete one. What that side has and
-// the other does not is then reported as a FINDING on the root — which is the
+// the other does not is then reported as a FINDING on the root - which is the
 // honest shape of it: "the destination is missing the wrapper tag" is a fact
 // about the release, and "the two roots have different digests" was never a
 // fact about anything.
@@ -834,8 +834,8 @@ func chooseRoots(
 // probeRoot asks one side about EVERY candidate, not just until one answers.
 //
 // The candidates a side does not hold are half the finding, and they are only
-// knowable by asking. The cost is bounded and small — three or four manifest
-// reads against one repository — against a walk that is about to make hundreds.
+// knowable by asking. The cost is bounded and small - three or four manifest
+// reads against one repository - against a walk that is about to make hundreds.
 func probeRoot(
 	ctx context.Context, client ClientFactory, spec SideSpec,
 ) (rootChoice, error) {
@@ -901,8 +901,8 @@ func firstHeld(c rootChoice) string {
 // the SAME references they hold.
 //
 // Only references both sides were asked about can disagree. Where the two
-// candidate lists share nothing the ends are deliberately different things —
-// two versions — and there is no disagreement to report.
+// candidate lists share nothing the ends are deliberately different things -
+// two versions - and there is no disagreement to report.
 func referenceNotes(a, b rootChoice) []string {
 	shared := false
 	for _, ref := range a.order {
@@ -942,7 +942,7 @@ func referenceNotes(a, b rootChoice) []string {
 			"compared from %s, which both sides hold", a.chosen))
 	} else {
 		out = append(out, fmt.Sprintf(
-			"no reference is held by both sides, so %s and %s were walked — these "+
+			"no reference is held by both sides, so %s and %s were walked - these "+
 				"are two artifacts rather than two copies of one", a.chosen, b.chosen))
 	}
 	return out
@@ -1008,7 +1008,7 @@ func itemFrom(
 		// The repository AND what OCI says the artifact is.
 		//
 		// The repository alone is not an identity. `ref.name` is a full
-		// reference — repository and tag — and only its repository half is
+		// reference - repository and tag - and only its repository half is
 		// stable enough to align two releases by, so a bundle naming two
 		// children after one repository leaves the halves we keep identical.
 		// That is not hypothetical: a pre-1.1 vendor bundling a payload with
@@ -1019,7 +1019,7 @@ func itemFrom(
 		//
 		// artifactType is the field the specification reserves for exactly this
 		// question, and unlike the tag it does not change from release to
-		// release — so it separates them at no cost to the alignment the tag is
+		// release - so it separates them at no cost to the alignment the tag is
 		// deliberately kept out of the key for.
 		item.Key = strings.ToLower(ref.repository) + "\x00" + item.Kind
 	default:
@@ -1029,8 +1029,8 @@ func itemFrom(
 		item.Name = a.Descriptor.Digest.Short()
 	}
 
-	// LAYERS ONLY. The config blob is metadata about the component — its
-	// entrypoint, its chart values schema — and it is not a file inside it.
+	// LAYERS ONLY. The config blob is metadata about the component - its
+	// entrypoint, its chart values schema - and it is not a file inside it.
 	// Counting it as one made every component's file account read as
 	// incomplete, because a config carries no title and an untitled blob is
 	// something we cannot name without opening it.
@@ -1095,8 +1095,8 @@ func probeNamedSites(
 		return c, nil
 	}
 
-	// Announced with the REAL population — components that have a name to
-	// probe — rather than with the size of the inventory. A source is not
+	// Announced with the REAL population - components that have a name to
+	// probe - rather than with the size of the inventory. A source is not
 	// expected to serve its components under their own names, so for a
 	// version-to-version comparison this phase has NOTHING to do, and
 	// announcing 259 units of work it will never perform left the progress
@@ -1168,7 +1168,7 @@ func probeNamedSites(
 // name-shaped test is a test of one vendor's convention wearing generic clothes.
 //
 // It failed exactly that way. NEAR tags every component inside the orb's own
-// repository — one tag per component, spelled from the component's digest — so a
+// repository - one tag per component, spelled from the component's digest - so a
 // correct orb reported hundreds of "unexplained" tags, every one of them
 // pointing at a manifest the walk had just matched. They were missing from the
 // inventory only because a component's Tag comes from its `ref.name`, which is a
@@ -1211,7 +1211,7 @@ func extraTags(
 	}
 
 	// THE PHASE NOBODY COULD SEE. One resolve per tag in the repository, and a
-	// vendor's bundle repository holds every version it has ever published —
+	// vendor's bundle repository holds every version it has ever published -
 	// which on a real catalogue is more requests than the manifest walk. It ran
 	// silently, so a comparison that had finished walking appeared to stop.
 	report.expect(PhaseTags, len(listed))
@@ -1276,8 +1276,8 @@ func accountedDigests(inv inventory, also []string) map[string]bool {
 
 // align pairs the two inventories by key.
 //
-// rootNotes are findings about the ROOTS themselves — which references each
-// side holds — and they are attached to the root's row before anything is
+// rootNotes are findings about the ROOTS themselves - which references each
+// side holds - and they are attached to the root's row before anything is
 // sorted, so a root the notes have just made interesting sorts with the other
 // differences rather than under the agreements.
 func align(a, b inventory, rootNotes []string) []Row {
@@ -1294,8 +1294,8 @@ func align(a, b inventory, rootNotes []string) []Row {
 		row := compareItems(a[key], b[key])
 		if key == rootKey && len(rootNotes) > 0 {
 			// A reference one side holds and the other does not IS a
-			// difference — the release is not addressable the same way in both
-			// places — so it counts as one rather than being a footnote.
+			// difference - the release is not addressable the same way in both
+			// places - so it counts as one rather than being a footnote.
 			row.Differences = append(row.Differences, rootNotes...)
 			if row.Verdict == VerdictSame {
 				row.Verdict = VerdictChanged
@@ -1418,8 +1418,8 @@ func siteDifferences(a, b *Item) []string {
 
 // kindOf is the specification's own answer to what an artifact is.
 //
-// `artifactType` where the artifact declares one — OCI 1.1 reserves it for
-// precisely this — and the media type otherwise, which is what every artifact
+// `artifactType` where the artifact declares one - OCI 1.1 reserves it for
+// precisely this - and the media type otherwise, which is what every artifact
 // predating 1.1 has instead. Neither is interpreted here: this is an identity,
 // and interpreting it is how an identity stops distinguishing things.
 func kindOf(desc registry.Descriptor) string {
@@ -1437,7 +1437,7 @@ func kindOf(desc registry.Descriptor) string {
 // which of them is wrong.
 //
 // The CONFIG media type is passed because the descriptor alone cannot tell a
-// Helm chart from an image — both are image manifests, and only the config says
+// Helm chart from an image - both are image manifests, and only the config says
 // which. The walk has already fetched it. The ANNOTATIONS are passed for the
 // vendor whose config does not say either, which is the case that made a NEAR
 // orb's 97 charts invisible everywhere they were counted.
@@ -1451,8 +1451,8 @@ func classify(with vendors.Classifier, desc registry.Descriptor, configMediaType
 // contentSize is what an artifact weighs, from the manifest the walk fetched.
 //
 // Manifest plus config plus layers, which is what a person means by the size of
-// an image or a chart. An artifact the walk only LISTED — a child of an index
-// on a side that could not be read further — has no blob list, and its
+// an image or a chart. An artifact the walk only LISTED - a child of an index
+// on a side that could not be read further - has no blob list, and its
 // descriptor size is the honest answer for it: the pointer is all we have.
 func contentSize(a oci.Artifact) int64 {
 	if len(a.Blobs) == 0 {

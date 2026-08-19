@@ -13,7 +13,7 @@ import type { ThemeConfig } from 'antd'
 export const attBlue = '#0057B8'
 export const attNavy = '#0B1F3A'
 
-/** Semantic colours. Each is REINFORCEMENT — every status is also stated in words. */
+/** Semantic colours. Each is REINFORCEMENT - every status is also stated in words. */
 export const semantic = {
   success: '#1F7A3D',
   error: '#C4262E',
@@ -33,7 +33,7 @@ export const theme: ThemeConfig = {
 
     // The semantic colours above are chosen for TEXT and icons, so they are
     // dark enough to read. Ant Design also derives every status SURFACE from
-    // them — an Alert's background, a `color="success"` Tag's fill — and a dark
+    // them - an Alert's background, a `color="success"` Tag's fill - and a dark
     // green derives a dark green surface. The result was a filled slab beside
     // the light preset tags, which is what made a production target look like a
     // different design system from an enabled rule.
@@ -60,7 +60,7 @@ export const theme: ThemeConfig = {
     colorBorderSecondary: '#E4E8EE',
     colorTextHeading: '#111C2B',
 
-    // No webfont is loaded — an air-gapped bundle ships no CDN request, and a
+    // No webfont is loaded - an air-gapped bundle ships no CDN request, and a
     // system stack renders identically without one (docs/design/19 §6).
     fontFamily:
       "-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif",
@@ -87,6 +87,6 @@ export const theme: ThemeConfig = {
   },
 }
 
-/** Identifiers — versions, digests, paths, URLs — are monospace everywhere. */
+/** Identifiers - versions, digests, paths, URLs - are monospace everywhere. */
 export const mono =
   "ui-monospace, SFMono-Regular, Menlo, Consolas, 'Liberation Mono', monospace"

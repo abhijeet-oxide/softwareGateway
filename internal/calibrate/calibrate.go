@@ -7,7 +7,7 @@
 // concurrency.perRegistry, concurrency.requestsPerSecond,
 // worker.maxConcurrentJobs, the number of workers, network.proxy, and where the
 // workers run. Nothing about a configuration file says which of them is
-// currently the binding constraint, so tuning is guesswork — and the guesses
+// currently the binding constraint, so tuning is guesswork - and the guesses
 // are usually wrong in the same direction. Raising concurrency when the link is
 // already saturated adds load and no bytes; adding a worker when a proxy is
 // halving the line rate hides the real problem behind more parallelism.
@@ -38,7 +38,7 @@
 //
 // In the Coordinator process, because transferctl is a pure API client and
 // must not touch a registry itself. That is the right answer when the workers
-// share the Coordinator's network — one laptop, or pods on one cluster — and
+// share the Coordinator's network - one laptop, or pods on one cluster - and
 // the wrong one when they do not, so every report says which host measured it.
 // Dispatching the probe to a named worker is the natural next step and needs
 // the worker's address, which the fleet does not currently report.
@@ -114,7 +114,7 @@ func (o Options) withDefaults() Options {
 	}
 
 	// Filtered BEFORE the default is applied, so a caller that passes only
-	// nonsense — `levels: [0]` over the API — gets the default sweep rather
+	// nonsense - `levels: [0]` over the API - gets the default sweep rather
 	// than a run that probes nothing and reports an empty table with no
 	// explanation for it.
 	levels := make([]int, 0, len(o.Levels))
@@ -145,7 +145,7 @@ type Report struct {
 	Target SideReport
 
 	Suggestions []Suggestion
-	// Notes are caveats about the measurement itself — a sample too small to
+	// Notes are caveats about the measurement itself - a sample too small to
 	// trust, a probe that could not run. Kept separate from suggestions
 	// because they qualify the evidence rather than propose a change.
 	Notes []string
@@ -176,7 +176,7 @@ type SideReport struct {
 	Levels []LevelResult
 	// Best is the level that moved the most bytes per second.
 	Best LevelResult
-	// Knee is the smallest concurrency reaching 90% of Best — the level worth
+	// Knee is the smallest concurrency reaching 90% of Best - the level worth
 	// configuring, since everything past it buys a few percent for
 	// proportionally more load on somebody else's registry.
 	Knee int
@@ -200,7 +200,7 @@ type RouteReport struct {
 	ProxyInUse bool
 
 	// DirectTested records whether the direct route was probed at all. It is
-	// not, when no proxy is in play — there is nothing to compare against.
+	// not, when no proxy is in play - there is nothing to compare against.
 	DirectTested    bool
 	DirectReachable bool
 	// DirectDetail carries the failure when the direct route is unreachable,
@@ -251,7 +251,7 @@ const (
 	// SeverityRecommended is a change with a measured benefit that is not
 	// dramatic.
 	SeverityRecommended Severity = "recommended"
-	// SeverityInfo states a measured fact with no change attached — the
+	// SeverityInfo states a measured fact with no change attached - the
 	// ceiling, the projection, the reason not to do something.
 	SeverityInfo Severity = "info"
 )
@@ -290,7 +290,7 @@ func NewCalibrator(secrets *product.SecretResolver) *Calibrator {
 
 // Run measures the path between one source and one target.
 //
-// It returns an error only when the run could not START — an unresolvable
+// It returns an error only when the run could not START - an unresolvable
 // source, a target the product does not declare. A probe that fails once it is
 // running is reported as a skipped side with the reason, because the other side
 // was still measured and half a report is worth having.
@@ -316,8 +316,8 @@ func (c *Calibrator) Run(ctx context.Context, p *product.Product, opts Options) 
 	rep.Source, rep.Notes = c.measureSource(ctx, &src, opts, rep.Notes)
 
 	// The target probe writes to base + the source path the read probe settled
-	// on, which is a path a transfer genuinely uses. Deriving it here — after
-	// the source is known — is why the two halves are not independent.
+	// on, which is a path a transfer genuinely uses. Deriving it here - after
+	// the source is known - is why the two halves are not independent.
 	tgt.cfg.Repository = writeProbePath(tgt, src.cfg.Repository)
 
 	if opts.Write {
@@ -426,7 +426,7 @@ func (c *Calibrator) measureTarget(
 //
 // A level has to be several round trips long to measure anything: even with the
 // connection already warm, one blob is a request and a response. Against a
-// registry 900ms away — a real, measured number, through a corporate proxy —
+// registry 900ms away - a real, measured number, through a corporate proxy -
 // the five-second default is five round trips, and the first request of each
 // level was still in flight when the level ended. Every row read zero.
 //
@@ -450,7 +450,7 @@ func withBudgetFor(
 	}
 
 	notes = append(notes, fmt.Sprintf(
-		"the %s is %s away, so each level ran for %s rather than %s — a level has to "+
+		"the %s is %s away, so each level ran for %s rather than %s - a level has to "+
 			"outlast a few round trips to measure anything",
 		side, humanDuration(rtt), humanDuration(want), humanDuration(opts.Budget)))
 	opts.Budget = want
@@ -548,7 +548,7 @@ func measurementNotes(rep Report, opts Options) []string {
 	}
 	if !opts.Write {
 		notes = append(notes, "the target was not measured, so the ceiling below is the "+
-			"read half only — the write half can be lower")
+			"read half only - the write half can be lower")
 	}
 	return notes
 }

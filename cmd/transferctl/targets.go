@@ -17,7 +17,7 @@ import (
 // `apply` is a command rather than something a config reload does, and that is
 // the load-bearing decision here. Applying a mirror flips the destination
 // repository into MIRROR state, which makes it read-only to everyone but a
-// robot and converges its content to a tag glob — deleting whatever does not
+// robot and converges its content to a tag glob - deleting whatever does not
 // match. A `kubectl apply` of a ConfigMap with a typo in `tags` must not be
 // able to empty a production repository. See docs/design/18 section 8.
 func newTargetsCommand() *cobra.Command {
@@ -66,7 +66,7 @@ func renderTargetList(w io.Writer, resp *v1.ListReplicationResponse) error {
 	tw := newTabWriter(w)
 	fmt.Fprintln(tw, "TARGET\tMODE\tUPSTREAM\tINTERVAL\tSTATE\tLAST SYNC")
 	for _, t := range resp.Targets {
-		up, interval := "—", "—"
+		up, interval := "-", "-"
 		if t.Desired != nil {
 			if t.Desired.Upstream != "" {
 				up = t.Desired.Upstream
@@ -75,7 +75,7 @@ func renderTargetList(w io.Writer, resp *v1.ListReplicationResponse) error {
 				interval = t.Desired.Interval
 			}
 		}
-		sync := "—"
+		sync := "-"
 		if t.Observed != nil && t.Observed.SyncStatus != "" {
 			sync = t.Observed.SyncStatus
 			// The registry's own word, when we did not recognise it. Reporting
@@ -177,12 +177,12 @@ func renderTargetDetail(w io.Writer, t *v1.ReplicationView) error {
 
 	fmt.Fprintln(w, "\n  APPLIED (what we last wrote)")
 	if t.Applied == nil {
-		fmt.Fprintln(w, "    never applied — run `transferctl targets apply` to write it")
+		fmt.Fprintln(w, "    never applied - run `transferctl targets apply` to write it")
 	} else {
 		printIf(w, "at", t.Applied.At)
 		printIf(w, "by", t.Applied.By)
 		if t.PendingApply {
-			fmt.Fprintln(w, "    the configuration in Git has changed since — an apply is pending")
+			fmt.Fprintln(w, "    the configuration in Git has changed since - an apply is pending")
 		}
 	}
 
@@ -201,7 +201,7 @@ func renderTargetDetail(w io.Writer, t *v1.ReplicationView) error {
 		if t.Observed.SyncStatus != "" {
 			status := t.Observed.SyncStatus
 			if status == "UNKNOWN" && t.Observed.SyncStatusRaw != "" {
-				status += " — the registry said " + t.Observed.SyncStatusRaw + ", which this build does not recognise"
+				status += " - the registry said " + t.Observed.SyncStatusRaw + ", which this build does not recognise"
 			}
 			printIf(w, "sync status", status)
 		}
@@ -309,8 +309,8 @@ func renderApplyPlan(w io.Writer, resp *v1.ApplyReplicationResponse, dryRun bool
 	}
 	switch {
 	case resp.NoOp:
-		// Nothing more to say. A no-op still means something — the registry
-		// agrees with Git right now — and the step list already says it.
+		// Nothing more to say. A no-op still means something - the registry
+		// agrees with Git right now - and the step list already says it.
 	case resp.Applied:
 		fmt.Fprintln(w, "\nApplied.")
 	case dryRun:

@@ -127,7 +127,7 @@ func isNoisyPath(p string) bool {
 
 // Metrics records request counts and latency.
 //
-// The route TEMPLATE is used as the label, never the populated path —
+// The route TEMPLATE is used as the label, never the populated path -
 // otherwise every product name would mint a new time series.
 func Metrics(reg *metrics.Registry) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {

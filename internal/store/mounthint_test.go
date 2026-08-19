@@ -14,7 +14,7 @@ import (
 //	                 Wrong -> the registry declines and the worker streams.
 //
 // They shared one 24-hour TTL, which meant the second lost its answer a day
-// after the first — and that is expensive in exactly the case that matters
+// after the first - and that is expensive in exactly the case that matters
 // most. A vendor's bundle carries its release in its repository PATH, so every
 // new release lands in a brand-new destination repository with no placements of
 // its own. The only thing keeping its blobs off the WAN is a mount from the

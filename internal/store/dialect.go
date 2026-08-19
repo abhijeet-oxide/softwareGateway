@@ -18,7 +18,7 @@ import (
 //   - Elapsed time between two stored timestamps. Postgres subtracts them into
 //     an interval; SQLite has to convert both to Julian days and scale.
 //
-// Anything beyond this — the dequeue statement, in particular — gets a
+// Anything beyond this - the dequeue statement, in particular - gets a
 // dialect-specific implementation rather than being contorted through here.
 // See docs/design/04 section 4.1.
 type Dialect interface {
@@ -39,7 +39,7 @@ type Dialect interface {
 	// N MUST BE POSITIVE. Passing a negative to mean "in the future" works in
 	// Postgres and silently produces NULL in SQLite, where the expression is
 	// built by string concatenation: '-' || -5 || ' seconds' is '--5 seconds',
-	// which strftime cannot parse and answers NULL to. Use TimeAhead instead —
+	// which strftime cannot parse and answers NULL to. Use TimeAhead instead -
 	// it exists because that bug shipped once, wrote NULL lease expiries, and
 	// left the reaper with nothing to find.
 	TimeAgo(secondsExpr string) string
@@ -47,7 +47,7 @@ type Dialect interface {
 	TimeAhead(secondsExpr string) string
 	// SecondsBetween renders the elapsed seconds from one stored timestamp to
 	// another, as a float. NULL when either side is NULL, which is the honest
-	// answer for a transfer that never started or has not finished — callers
+	// answer for a transfer that never started or has not finished - callers
 	// must treat it as "unknown" rather than coercing it to zero, or an
 	// unfinished transfer would report infinite speed.
 	SecondsBetween(from, to string) string
@@ -67,8 +67,8 @@ type postgresDialect struct{}
 
 // Rewrite replaces each `?` with a positional parameter.
 //
-// Quoted string literals are skipped so a `?` inside one — which is legal SQL
-// and appears in LIKE patterns — is not mistaken for a placeholder.
+// Quoted string literals are skipped so a `?` inside one - which is legal SQL
+// and appears in LIKE patterns - is not mistaken for a placeholder.
 func (postgresDialect) Rewrite(query string) string {
 	var b strings.Builder
 	b.Grow(len(query) + 8)

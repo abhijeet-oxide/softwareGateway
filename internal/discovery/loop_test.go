@@ -220,7 +220,7 @@ func TestStopIsIdempotent(t *testing.T) {
 	if h.loop.Running() {
 		t.Error("loop still reports running after Stop")
 	}
-	// A second Stop must not panic or block — shutdown paths get called twice
+	// A second Stop must not panic or block - shutdown paths get called twice
 	// more often than anyone expects.
 	h.loop.Stop()
 }

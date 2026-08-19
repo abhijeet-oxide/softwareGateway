@@ -10,10 +10,10 @@ import (
 // Digest is a content address, "sha256:<64 hex>".
 //
 // Our own type rather than a library's. That began as ADR-001 insurance; with
-// the ADR closed it is what keeps the closure reversible — a digest crossing
+// the ADR closed it is what keeps the closure reversible - a digest crossing
 // into domain packages must not pin the library choice, so the conversion to
 // and from oras-go's descriptor stays inside generic/write.go. It is a string so it
-// travels through URLs, logs, JSON and SQL without conversion — the alternative
+// travels through URLs, logs, JSON and SQL without conversion - the alternative
 // (raw bytes) would cost an encode at every boundary to save 30 bytes a row.
 type Digest string
 
@@ -122,7 +122,7 @@ const (
 //
 // Both OCI and Docker types are listed because vendors publish both, and a
 // registry returns whichever the client says it understands. Omitting the
-// Docker types would make older vendor repositories appear empty — a
+// Docker types would make older vendor repositories appear empty - a
 // confusing failure that looks like a permissions problem.
 var ManifestAcceptTypes = []string{
 	MediaTypeOCIIndex,
@@ -135,7 +135,7 @@ var ManifestAcceptTypes = []string{
 // Standard OCI annotation keys.
 //
 // Defined by the image spec's annotations document, under the reserved
-// `org.opencontainers.` namespace — NOT by any one vendor. Every registry and
+// `org.opencontainers.` namespace - NOT by any one vendor. Every registry and
 // build tool that sets them agrees on their meaning, which is what makes them
 // safe to promote to first-class columns while a vendor's own keys stay
 // generic strings.
@@ -156,8 +156,8 @@ const (
 	AnnotationVersion = "org.opencontainers.image.version"
 	// AnnotationTitle is a human-readable name.
 	AnnotationTitle = "org.opencontainers.image.title"
-	// AnnotationRefName names what a child of an index actually is —
-	// "product/component:1.2.3" — which is the difference between a listing of
+	// AnnotationRefName names what a child of an index actually is -
+	// "product/component:1.2.3" - which is the difference between a listing of
 	// digests and a listing a person can read.
 	AnnotationRefName = "org.opencontainers.image.ref.name"
 )

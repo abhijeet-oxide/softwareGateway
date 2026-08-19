@@ -4,7 +4,7 @@
 //
 // Cardinality is the constraint that shapes this package. A Prometheus series
 // exists per label-value combination, so a metric labelled by digest would
-// create one series per blob — millions, permanently, and a dead Prometheus.
+// create one series per blob - millions, permanently, and a dead Prometheus.
 // Digests, transfer IDs and job IDs are traced and logged; they are NEVER
 // metric labels. The only labels used here are bounded sets: product (tens),
 // repository (hundreds), registry_type (4), outcome/state (single digits).
@@ -23,7 +23,7 @@ const namespace = "softwaregateway"
 type Registry struct {
 	reg *prometheus.Registry
 
-	// Build identity — the constant-1 gauge pattern, so a dashboard can
+	// Build identity - the constant-1 gauge pattern, so a dashboard can
 	// correlate a behaviour change with a deployment.
 	BuildInfo *prometheus.GaugeVec
 
@@ -57,7 +57,7 @@ type Registry struct {
 	DiscoveryLastSuccess *prometheus.GaugeVec
 
 	// Manifest cache. Gauges rather than counters, because the question they
-	// answer is "how big is it right now, and is the budget doing anything" —
+	// answer is "how big is it right now, and is the budget doing anything" -
 	// not "how much churn has there been".
 	ManifestCacheBytes     prometheus.Gauge
 	ManifestCacheManifests prometheus.Gauge
@@ -110,7 +110,7 @@ func New(component string) *Registry {
 		}),
 
 		// `route` is the TEMPLATE (/api/v1/products/{product}), never the
-		// populated path — otherwise every product name becomes a series.
+		// populated path - otherwise every product name becomes a series.
 		APIRequests: prometheus.NewCounterVec(prometheus.CounterOpts{
 			Namespace: namespace,
 			Name:      "api_requests_total",

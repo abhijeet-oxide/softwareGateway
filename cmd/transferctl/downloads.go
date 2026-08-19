@@ -16,7 +16,7 @@ import (
 //	rules       WHEN it happens by itself: a pattern, and which download it fires
 //
 // Both are read-only. They are configuration, and configuration comes from Git
-// — there is deliberately no `enable`, no `disable` and no runtime override,
+// - there is deliberately no `enable`, no `disable` and no runtime override,
 // because a second source of truth for "is this on" is exactly what GitOps
 // exists to prevent.
 func newDownloadsCommand() *cobra.Command {
@@ -26,7 +26,7 @@ func newDownloadsCommand() *cobra.Command {
 		Short:   "How software moves from a source into internal targets",
 		Long: "A download says where software goes and what has to pass before it\n" +
 			"gets there. It holds no tag pattern: by the time one runs, somebody\n" +
-			"has already chosen the software — either by typing it, or by an\n" +
+			"has already chosen the software - either by typing it, or by an\n" +
 			"auto-download rule matching it.\n\n" +
 			"The ORDER of its targets is not in the download. It comes from what\n" +
 			"the targets themselves say, so naming the end of a chain names the\n" +
@@ -110,7 +110,7 @@ func policySuffix(policy string) string {
 // newDownloadCommand is the manual path: a person naming the software.
 //
 // A top-level VERB rather than `downloads run`, because it is the thing an
-// operator does, not a thing they look at. It takes tags and no pattern —
+// operator does, not a thing they look at. It takes tags and no pattern -
 // patterns decide what to download when nobody is asking, and here somebody
 // is asking, by name.
 func newDownloadCommand() *cobra.Command {
@@ -213,7 +213,7 @@ func newRulesCommand() *cobra.Command {
 			"download it triggers. It does not do the downloading: it fires the\n" +
 			"same operation a person performs by hand.\n\n" +
 			"Rules live in Git. `enabled: false` is the only way to turn one off,\n" +
-			"deliberately — a runtime override would be a second source of truth\n" +
+			"deliberately - a runtime override would be a second source of truth\n" +
 			"for whether a rule is on.",
 	})
 	cmd.AddCommand(newRulesListCommand(), newRulesMatchesCommand())

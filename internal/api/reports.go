@@ -12,7 +12,7 @@ import (
 	v1 "github.com/abhijeet-oxide/softwareGateway/pkg/apis/softwaregateway/v1"
 )
 
-// GET /api/v1/reports/summary — operational figures for a period.
+// GET /api/v1/reports/summary - operational figures for a period.
 //
 // # Per product, always
 //
@@ -25,7 +25,7 @@ import (
 // # What it will not state
 //
 // A speed it did not measure. AverageBytesPerSecond is derived from `copy`
-// transfers alone — the ones whose bytes our workers moved and counted — and
+// transfers alone - the ones whose bytes our workers moved and counted - and
 // is OMITTED rather than zeroed when the period contains none
 // (docs/design/18 §6.1). There is no verification metric at all, because
 // nothing writes verification records yet.
@@ -126,9 +126,9 @@ func reportTotals(r store.ProductReport) v1.ReportTotals {
 	// neither, or with a duration of zero, there is no honest answer and the
 	// field stays absent rather than becoming zero or infinity.
 	if r.CopySeconds > 0 && r.CopyBytes > 0 {
-		// Rounded, not truncated. The duration arrives as a float — SQLite
+		// Rounded, not truncated. The duration arrives as a float - SQLite
 		// computes it through julianday, which lands a ten-second transfer on
-		// 10.0000001 — and truncating 99.999 to 99 would put a number on
+		// 10.0000001 - and truncating 99.999 to 99 would put a number on
 		// screen that is wrong in the last digit for no reason anyone could
 		// explain from the data.
 		bps := math.Round(float64(r.CopyBytes) / r.CopySeconds)

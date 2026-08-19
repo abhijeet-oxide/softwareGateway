@@ -2,7 +2,7 @@ package vendors
 
 import "github.com/abhijeet-oxide/softwareGateway/internal/oci"
 
-// Classifier names what ONE artifact is, in the words a person uses about it —
+// Classifier names what ONE artifact is, in the words a person uses about it -
 // image, chart, file, index, signature.
 //
 // # Why this is a function and not a call to oci.Classify
@@ -17,7 +17,7 @@ import "github.com/abhijeet-oxide/softwareGateway/internal/oci"
 // and config media type are IDENTICAL for its charts and its images, and the
 // only evidence anywhere is the annotation the vendor wrote on them. A reader
 // with the OCI rules alone reports an orb of 160 images, 97 charts and 2 files
-// as 260 images — which is what the download page said, beside a release page
+// as 260 images - which is what the download page said, beside a release page
 // that had already named them correctly.
 //
 // So the three readers take a Classifier, and the composition root builds it
@@ -25,7 +25,7 @@ import "github.com/abhijeet-oxide/softwareGateway/internal/oci"
 // a reader given no layouts still gets the OCI rules.
 type Classifier func(mediaType, artifactType, configMediaType string, annotations map[string]string) string
 
-// OCIOnly is the classifier for content whose registry conforms — and the
+// OCIOnly is the classifier for content whose registry conforms - and the
 // fallback for a caller that has no layouts.
 //
 // A nil Classifier means this one. That is deliberate: the failure mode of
@@ -48,7 +48,7 @@ func OCIOnly(mediaType, artifactType, configMediaType string, _ map[string]strin
 //
 // A product may in principle declare several layouts. Every one that names a
 // real layout gets a say, in order, and the first to recognise an artifact
-// wins — which for the overwhelmingly common single-vendor product is just
+// wins - which for the overwhelmingly common single-vendor product is just
 // that vendor. An unresolvable name is skipped rather than failing the read:
 // the caller is rendering a page, and a page with standard names on it is a
 // better answer than an error.

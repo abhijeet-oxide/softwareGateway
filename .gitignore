@@ -2,13 +2,13 @@
 /bin/
 /dist/
 
-# Node dependencies — the web interface vendors its own under web/
+# Node dependencies - the web interface vendors its own under web/
 node_modules/
 
 # Task's up-to-date checksums
 /.task/
 
-# Local development state — SQLite database and journals
+# Local development state - SQLite database and journals
 /dev/*.db
 /dev/*.db-shm
 /dev/*.db-wal

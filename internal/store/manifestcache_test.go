@@ -266,7 +266,7 @@ func TestTouchProtectsAPackageFromTheNextSweep(t *testing.T) {
 	h.backdate(a, 48*time.Hour)
 	h.backdate(b, 72*time.Hour)
 
-	// b is the oldest — until something uses it.
+	// b is the oldest - until something uses it.
 	if err := h.packages.TouchManifestCache(ctx, b); err != nil {
 		t.Fatal(err)
 	}
@@ -316,7 +316,7 @@ func (h *cacheHarness) cachedIn(packageID int64) int {
 // The comparison path is the one that needed this: it walked both sides from
 // their roots every time, asking a vendor registry to re-serve two hundred
 // manifests we held, verified and kept. A digest addresses bytes, so bytes that
-// hash to it ARE the answer — there is no version of this where the registry
+// hash to it ARE the answer - there is no version of this where the registry
 // would say something else.
 func TestAFetchedManifestIsReadableByItsDigest(t *testing.T) {
 	h := newCacheHarness(t)
@@ -376,7 +376,7 @@ func TestAnEvictedManifestIsAMissRatherThanAnError(t *testing.T) {
 // Discovery records what a tag's manifest lists and stops, so a fresh package
 // has one fetched artifact and a list of children nobody has read. Walking
 // those ahead of time is what turns "nobody has looked" into an answer before
-// anybody asks the question — and bounding it to recent releases is what stops
+// anybody asks the question - and bounding it to recent releases is what stops
 // that being a conversation with a vendor about eight months of history.
 func TestUnanalysedRecentFindsWhatIsWorthWalking(t *testing.T) {
 	h := newCacheHarness(t)
@@ -454,7 +454,7 @@ func (h *cacheHarness) seedPackageAt(tag string, publishedAt time.Time) int64 {
 	return id
 }
 
-// seedListedChild adds a child the index NAMED and nobody fetched — which is
+// seedListedChild adds a child the index NAMED and nobody fetched - which is
 // what discovery leaves behind.
 func (h *cacheHarness) seedListedChild(packageID int64) {
 	h.t.Helper()

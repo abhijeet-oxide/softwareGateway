@@ -19,7 +19,7 @@ import (
 //
 // # This is OCI, not one vendor's convention
 //
-// The image specification defines a layer as a TAR ARCHIVE — the media types
+// The image specification defines a layer as a TAR ARCHIVE - the media types
 // say so out loud (`application/vnd.oci.image.layer.v1.tar`, and the same with
 // `+gzip`), and the "Layer Changeset" section defines the whiteout entries that
 // mark deletions. Enumerating the files inside one is reading the format the
@@ -33,7 +33,7 @@ import (
 // So a bundle whose configuration arrives as `custo.tar.gz` and a bundle whose
 // configuration arrives as one titled layer per file are two standard layouts,
 // and both are read here without anybody knowing whose bundle it is. What would
-// have been vendor-specific — a list of "artifact types worth opening" — is
+// have been vendor-specific - a list of "artifact types worth opening" - is
 // answered instead by a byte BUDGET, which degrades correctly for a vendor
 // nobody has written a plugin for.
 //
@@ -41,7 +41,7 @@ import (
 //
 // Because it is routinely wrong. A vendor shipping a gzipped tar under
 // `application/octet-stream`, or under a media type of their own invention, is
-// ordinary — and refusing to look would disable this exactly where it is most
+// ordinary - and refusing to look would disable this exactly where it is most
 // wanted. Both formats read here are self-identifying, so sniffing is sound:
 // gzip has a two-byte magic, tar has a checksummed header, zip has a signature.
 //
@@ -88,7 +88,7 @@ type File struct {
 	// comparison keyed on anything but the bytes would report a rebuild as a
 	// change to every file in it.
 	Digest string
-	// Whiteout marks an OCI deletion entry — the layer removing a path that a
+	// Whiteout marks an OCI deletion entry - the layer removing a path that a
 	// lower layer provided.
 	Whiteout bool
 }
@@ -201,7 +201,7 @@ func readZip(body []byte) ([]File, bool) {
 		}
 		// Compared as UNSIGNED before converting. A zip declaring a size past
 		// MaxInt64 would wrap to a negative int64 and sail through the bound
-		// below — which is precisely the input the bound exists to stop.
+		// below - which is precisely the input the bound exists to stop.
 		if entry.UncompressedSize64 > uint64(maxEntryBytes) {
 			return nil, false
 		}
@@ -305,7 +305,7 @@ func looksLikeTar(body []byte) bool {
 	// header with those eight bytes treated as spaces.
 	// The field is written as octal digits followed by a NUL and a space, in
 	// either order depending on the writer, so BOTH are trimmed from both ends
-	// — trimming one and then the other leaves whichever came last in place,
+	// - trimming one and then the other leaves whichever came last in place,
 	// and one stray byte makes the parse below reject a perfectly good header.
 	var want int64
 	field := strings.Trim(string(body[148:156]), " \x00")

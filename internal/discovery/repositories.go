@@ -32,7 +32,7 @@ type filter struct {
 // compileFilters compiles an include/exclude pair once, at loop start.
 //
 // Compiling per scan would recompile the same patterns every fifteen minutes
-// forever and — worse — turn a configuration error into a recurring runtime
+// forever and - worse - turn a configuration error into a recurring runtime
 // failure rather than one loud complaint at startup.
 //
 // Patterns are RE2 (Go regexp): linear time, no backtracking. A user-supplied
@@ -98,8 +98,8 @@ type RepositorySet struct {
 	//
 	// A source that enumerates has nothing else to fall back on, so this is
 	// where the scan's failure comes from. The message matters: a vendor
-	// forbidding `_catalog` is common — the credential is usually good for
-	// pulling a named repository and not for enumerating the registry — and
+	// forbidding `_catalog` is common - the credential is usually good for
+	// pulling a named repository and not for enumerating the registry - and
 	// the fix is to name the repositories, which is what describeCatalogError
 	// says.
 	CatalogErr error
@@ -114,7 +114,7 @@ type RepositorySet struct {
 //	                        narrowed by discovery.repositoryFilters
 //
 // There is no separate "enable discovery" switch. Naming nothing IS the
-// statement "I do not know them yet, find them" — which is the case that
+// statement "I do not know them yet, find them" - which is the case that
 // matters, because a product whose components each ship as a new repository
 // cannot list them in advance.
 //
@@ -173,8 +173,8 @@ func resolveRepositories(
 		}
 	}
 
-	// Sorted so the scan order — and therefore the order rows are created and
-	// logs are emitted — is stable across restarts. A registry's catalog order
+	// Sorted so the scan order - and therefore the order rows are created and
+	// logs are emitted - is stable across restarts. A registry's catalog order
 	// is not guaranteed stable, and unstable ordering makes diffs between two
 	// runs unreadable.
 	sort.Strings(kept)
@@ -186,7 +186,7 @@ func resolveRepositories(
 // act on.
 //
 // A 401 or 403 here almost always means the credential is scoped to pulling
-// named repositories rather than to enumerating the registry — which is normal
+// named repositories rather than to enumerating the registry - which is normal
 // for a vendor-issued credential and not a misconfiguration on our side.
 func describeCatalogError(err error) string {
 	switch {

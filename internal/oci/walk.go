@@ -11,13 +11,13 @@ import (
 
 // Walk traverses a manifest tree from a root, fetching every manifest.
 //
-// The recursive descent discovery deliberately does NOT do — it records what a
+// The recursive descent discovery deliberately does NOT do - it records what a
 // tag's own manifest lists and stops. This is the walk a TRANSFER needs, and
 // the walk `packages describe --expand` performs, which is why it lives here
 // rather than in either of them.
 //
 // Breadth-first, level by level, so parents are recorded before their children
-// and each artifact's Parent — an INDEX into the slice — stays correct. A
+// and each artifact's Parent - an INDEX into the slice - stays correct. A
 // level's nodes are fetched in parallel; the bookkeeping that appends to the
 // tree runs on one goroutine in level order.
 //
@@ -32,7 +32,7 @@ func Walk(
 
 // Missing is a manifest an index references and the registry would not serve.
 type Missing struct {
-	// Descriptor is what the REFERENCING index said about it — including the
+	// Descriptor is what the REFERENCING index said about it - including the
 	// `org.opencontainers.image.ref.name` annotation, which is what makes a
 	// missing component identifiable rather than merely a digest.
 	Descriptor registry.Descriptor
@@ -45,7 +45,7 @@ type Missing struct {
 //
 // A transfer that stopped part-way leaves exactly this: an index naming
 // children the destination does not have. For a transfer that is a fatal
-// inconsistency, which is why Walk refuses it — but for a comparison it is the
+// inconsistency, which is why Walk refuses it - but for a comparison it is the
 // FINDING, and a walk that aborted on the first missing component could not
 // report the other nineteen.
 //
@@ -62,8 +62,8 @@ func WalkPartial(
 // # Why a walk can say how far it is and not how far there is to go
 //
 // The tree is DISCOVERED by walking it: a level's children are only known once
-// that level has been read. So Total is what is known so far — the current
-// level's population plus everything read before it — and it grows as the walk
+// that level has been read. So Total is what is known so far - the current
+// level's population plus everything read before it - and it grows as the walk
 // opens each level. That is honest, and it is very nearly a real denominator
 // for the shape this walks in practice: an orb is a root index and then one
 // wide level of components, so the total settles after the first fetch and the
@@ -80,7 +80,7 @@ type Progress struct {
 
 // ProgressFunc is called as a walk proceeds. It runs on the fetching
 // goroutines, so an implementation must be cheap and safe to call
-// concurrently — the walk holds no lock while calling it.
+// concurrently - the walk holds no lock while calling it.
 type ProgressFunc func(Progress)
 
 // WalkPartialProgress is WalkPartial that reports as it goes.
@@ -160,7 +160,7 @@ func walk(
 				if onProgress != nil {
 					// Reported from the fetching goroutine and counted with an
 					// atomic, so the number moves while a level is in flight
-					// rather than in one step per level — which for an orb is
+					// rather than in one step per level - which for an orb is
 					// one step for the whole walk.
 					onProgress(Progress{
 						Fetched: fetched + int(done.Add(1)),

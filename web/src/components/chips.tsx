@@ -26,7 +26,7 @@ import { mono, semantic } from '../theme'
  *
  * No icon and no link. The icon said "product" beside a column already headed
  * Product, and the link took a reader looking at one download to a page about
- * everything that product has ever done — a way out of the thing they were
+ * everything that product has ever done - a way out of the thing they were
  * reading, offered in every row.
  */
 export function ProductChip({ name, display }: { name: string; display?: string }) {
@@ -43,7 +43,7 @@ export function VersionChip({
   pkg: Pick<Package, 'tag' | 'sourceRepository' | 'displayRepository'>
   /**
    * Whether to repeat the repository under the version. False where the table
-   * gives the name a column of its own — the same value in two adjacent cells
+   * gives the name a column of its own - the same value in two adjacent cells
    * reads as two different facts.
    */
   showRepository?: boolean
@@ -51,7 +51,7 @@ export function VersionChip({
   // The repository is shown, not just linked. A vendor publishes one version
   // tag into every repository of a product, so a listing shows the same
   // version many times and the rows are only telling apart by where each one
-  // came from — without it the page reads as duplicates.
+  // came from - without it the page reads as duplicates.
   const repository = showRepository ? pkg.displayRepository || pkg.sourceRepository : undefined
 
   return (
@@ -73,8 +73,8 @@ export function VersionChip({
 const STATUS_COLOUR: Record<SoftwareStatus, string> = {
   NEW: 'blue',
   // Its own colour, not the grey of "nothing to say". A release sitting at
-  // the vendor is a real, actionable state — it is the thing somebody
-  // downloads — and grey read as disabled next to the blue of NEW.
+  // the vendor is a real, actionable state - it is the thing somebody
+  // downloads - and grey read as disabled next to the blue of NEW.
   AVAILABLE: 'cyan',
   DOWNLOADING: 'processing',
   DOWNLOADED: 'green',
@@ -85,7 +85,7 @@ const STATUS_COLOUR: Record<SoftwareStatus, string> = {
 }
 
 /**
- * What the vendor calls this package — the repository it publishes into.
+ * What the vendor calls this package - the repository it publishes into.
  *
  * Ellipsised, because a vendor path is long and arbitrary and the end of it is
  * rarely the part that identifies anything; the full value is on the tooltip,
@@ -346,7 +346,7 @@ export function CountBadge({ count, colour }: { count: number; colour?: string }
 /** Configuration this page can show but never change (docs/design/19 §4). */
 export function ManagedInGit({ url }: { url?: string }) {
   return (
-    <Tooltip title="This is defined in Git and reconciled into the cluster. The interface shows it and never edits it — a change made here would be silently reverted.">
+    <Tooltip title="This is defined in Git and reconciled into the cluster. The interface shows it and never edits it - a change made here would be silently reverted.">
       <Tag color="default" style={{ marginInlineEnd: 0 }}>
         Managed in Git{url ? ' ↗' : ''}
       </Tag>
@@ -367,7 +367,7 @@ export function ManagedInGit({ url }: { url?: string }) {
  *
  * And it was a filled block of dark green. Ant Design's `success` tag derives
  * its background from `colorSuccess`, which this theme overrides with a dark
- * AT&T green — so the status tags rendered heavy while every preset-coloured
+ * AT&T green - so the status tags rendered heavy while every preset-coloured
  * tag beside them rendered light. Preset palettes are used throughout instead,
  * so a production target and an enabled rule look like they belong on the same
  * page.

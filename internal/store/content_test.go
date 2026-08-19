@@ -8,7 +8,7 @@ import (
 // What a transfer is made of, and how each component went.
 //
 // The reported gap: a listing that says `2486/2489 jobs` and `63.7 GiB` and
-// cannot answer "did the charts land?" — a question about the release, asked in
+// cannot answer "did the charts land?" - a question about the release, asked in
 // the terms the release is published in.
 
 func TestTheBreakdownCountsComponentsByWhatTheyAreAndHowTheyWent(t *testing.T) {
@@ -57,8 +57,8 @@ func TestTheBreakdownCountsComponentsByWhatTheyAreAndHowTheyWent(t *testing.T) {
 
 // A component published under two names is ONE component.
 //
-// The transfer pushes it twice — once where the bundle resolves it, once under
-// the name the vendor gave it — and counting jobs would report every component
+// The transfer pushes it twice - once where the bundle resolves it, once under
+// the name the vendor gave it - and counting jobs would report every component
 // of an orb twice.
 func TestAComponentInTwoPlacesIsCountedOnce(t *testing.T) {
 	h := newFailureHarness(t)
@@ -78,7 +78,7 @@ func TestAComponentInTwoPlacesIsCountedOnce(t *testing.T) {
 }
 
 // The worst outcome wins. A component whose second site failed has not arrived,
-// whatever its first site did — and reporting it as copied would put a failure
+// whatever its first site did - and reporting it as copied would put a failure
 // in the copied column.
 func TestAComponentThatFailedAnywhereIsFailed(t *testing.T) {
 	h := newFailureHarness(t)
@@ -149,8 +149,8 @@ func (h *failureHarness) jobForArtifact(transferID string, artifactID int64, sta
 
 // A Helm chart is an ordinary image manifest whose CONFIG says what it is.
 //
-// This is the shape Helm has always published — `artifactType` arrived in OCI
-// 1.1 and Helm predates it — so a breakdown reading only the manifest's own two
+// This is the shape Helm has always published - `artifactType` arrived in OCI
+// 1.1 and Helm predates it - so a breakdown reading only the manifest's own two
 // fields sees an image manifest with nothing to distinguish it. It reported 257
 // images for an orb the vendor's own catalogue lists as 157 images and 97
 // charts: not a rounding difference, a whole category made invisible.
@@ -200,8 +200,8 @@ func (h *failureHarness) seedConfig(artifactID int64, mediaType string) {
 //
 // A NEAR orb's charts are plain image manifests carrying an ordinary image
 // config: media type, artifact type and config media type are identical for its
-// charts and its images. The store must not try to read the annotation — naming
-// `com.nokia.ncd.orb.type` here would be vendor knowledge in the wrong place —
+// charts and its images. The store must not try to read the annotation - naming
+// `com.nokia.ncd.orb.type` here would be vendor knowledge in the wrong place -
 // but it must carry it out, and it must not fold two components that disagree
 // about it into one row.
 func TestTheBreakdownCarriesAnnotationsOutVerbatim(t *testing.T) {
@@ -250,7 +250,7 @@ func (h *failureHarness) seedAnnotations(artifactID int64, annotations string) {
 // A release's files are the layers its publisher NAMED.
 //
 // `org.opencontainers.image.title` is the ORAS convention for a single-file
-// layer, and it is the only place a file's name exists — the blob is bytes. It
+// layer, and it is the only place a file's name exists - the blob is bytes. It
 // is recorded when the release is analysed, so listing files troubles no
 // registry afterwards.
 //
@@ -276,7 +276,7 @@ func TestPackageFilesListsWhatThePublisherNamed(t *testing.T) {
 		t.Fatalf("listed %d files, want the two that were named: %+v", len(files), files)
 	}
 	if files[0].Path != "CONFIGURATION/nodes.json" || files[1].Path != "CONFIGURATION/network.json" {
-		t.Errorf("files came out %q, %q — want them in layer order",
+		t.Errorf("files came out %q, %q - want them in layer order",
 			files[0].Path, files[1].Path)
 	}
 	if files[0].ArtifactRef != "orbs/cfx/custo:25.7" {
@@ -306,7 +306,7 @@ func (h *failureHarness) seedTitledLayer(artifactID int64, ordinal int, title st
 //
 // `size_bytes` is the referencing descriptor's number: a couple of kilobytes of
 // JSON. It is right for planning a manifest push and wrong for every question a
-// person asks — summing it reported a nine-hundred-megabyte image as two
+// person asks - summing it reported a nine-hundred-megabyte image as two
 // kilobytes, and a release of two hundred as half a megabyte.
 func TestListArtifactsReportsContentSizeAndNotTheDescriptors(t *testing.T) {
 	h := newFailureHarness(t)
@@ -330,7 +330,7 @@ func TestListArtifactsReportsContentSizeAndNotTheDescriptors(t *testing.T) {
 	}
 
 	if got := byID[image].ContentBytes; got < 900_000_000 {
-		t.Errorf("content bytes = %d, want at least the layer's 900000000 — the "+
+		t.Errorf("content bytes = %d, want at least the layer's 900000000 - the "+
 			"descriptor's size is not what an image weighs", got)
 	}
 	if got := byID[image].SizeBytes; got >= 900_000_000 {
@@ -338,7 +338,7 @@ func TestListArtifactsReportsContentSizeAndNotTheDescriptors(t *testing.T) {
 			"different questions")
 	}
 	if got := byID[listed].ContentBytes; got != 0 {
-		t.Errorf("an artifact nobody walked reported %d bytes, want nothing — "+
+		t.Errorf("an artifact nobody walked reported %d bytes, want nothing - "+
 			"unknown and zero are different facts", got)
 	}
 }

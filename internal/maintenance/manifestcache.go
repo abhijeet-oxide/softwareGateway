@@ -2,7 +2,7 @@
 //
 // A loop here owns no domain logic. It decides WHEN a piece of upkeep runs and
 // what to say about it; the upkeep itself lives in the package that owns the
-// data. That split is what makes both testable — the store method against a
+// data. That split is what makes both testable - the store method against a
 // database, the schedule against a clock.
 package maintenance
 
@@ -19,7 +19,7 @@ import (
 // ManifestCacheSweeper keeps the cached manifest bodies inside their budget.
 //
 // LEADER-GATED, like every other loop that writes. Two replicas sweeping the
-// same table would not corrupt anything — the statements are idempotent — but
+// same table would not corrupt anything - the statements are idempotent - but
 // they would double the write load to reclaim the same bytes, and the second
 // one's log line would report having freed nothing, which reads like a bug.
 //
@@ -112,7 +112,7 @@ func (s *ManifestCacheSweeper) Run(ctx context.Context) error {
 
 // SweepOnce runs one sweep and reports what it reclaimed.
 //
-// Exported so a test — and, later, an operator-triggered maintenance call — can
+// Exported so a test - and, later, an operator-triggered maintenance call - can
 // drive it without waiting for a tick.
 func (s *ManifestCacheSweeper) SweepOnce(ctx context.Context) (store.SweepResult, error) {
 	res, err := s.packages.SweepManifestCache(ctx, s.policy)
@@ -135,7 +135,7 @@ func (s *ManifestCacheSweeper) SweepOnce(ctx context.Context) (store.SweepResult
 
 	// Logged only when something happened. A sweep that reclaims nothing is the
 	// steady state and would otherwise be four log lines an hour, forever,
-	// saying nothing — which is how a log stops being read.
+	// saying nothing - which is how a log stops being read.
 	if res.Manifests() > 0 {
 		s.log.InfoContext(ctx, "manifest cache: reclaimed",
 			"expiredManifests", res.ExpiredManifests,

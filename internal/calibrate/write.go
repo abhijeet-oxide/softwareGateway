@@ -27,9 +27,9 @@ import (
 // digest. This probe never sends that PUT. It PATCHes, measures, and then
 // `DELETE`s the session, which the spec defines as cancelling the upload.
 //
-// So the bytes traverse exactly the path a transfer's bytes traverse — same
+// So the bytes traverse exactly the path a transfer's bytes traverse - same
 // proxy, same TLS, same registry front end, same storage backend accepting a
-// chunk — and the repository ends the run byte-for-byte as it started. Nothing
+// chunk - and the repository ends the run byte-for-byte as it started. Nothing
 // is committed, so nothing can be pulled, listed, or garbage-collected later.
 //
 // The alternative was to measure the write path by pushing a real blob and
@@ -43,7 +43,7 @@ const (
 	// randomBufferBytes is the pool of incompressible bytes every stream sends
 	// slices of. Random rather than zeroes: a proxy or registry that
 	// transparently compresses would otherwise report a throughput no real
-	// layer — already gzip or zstd — could reach.
+	// layer - already gzip or zstd - could reach.
 	//
 	// One buffer, shared read-only by every stream, so sixteen streams cost
 	// eight megabytes rather than a hundred and twenty-eight.
@@ -52,7 +52,7 @@ const (
 	// initialChunk starts small so that a slow link completes at least one
 	// acknowledged chunk inside the budget. Bytes are counted only when the
 	// registry has accepted them, so a chunk still in flight at the deadline
-	// counts for nothing — on a 1 MB/s link a fixed eight-megabyte chunk would
+	// counts for nothing - on a 1 MB/s link a fixed eight-megabyte chunk would
 	// measure zero.
 	initialChunk = 1 << 20
 	// maxChunk bounds the growth. Each chunk costs one round trip, so on a fast
@@ -67,7 +67,7 @@ var randomBytes = sync.OnceValue(func() []byte {
 	buf := make([]byte, randomBufferBytes)
 	if _, err := rand.Read(buf); err != nil {
 		// Cannot happen on any supported platform, and a zero buffer is still
-		// a usable — if compressible — probe. Not worth failing the run for.
+		// a usable - if compressible - probe. Not worth failing the run for.
 		return buf
 	}
 	return buf
@@ -129,7 +129,7 @@ func probeWrite(
 	}
 
 	// Sessions are opened BEFORE the clock starts. Opening one is a proxy
-	// CONNECT, a TLS handshake, a token exchange and a POST — four round trips
+	// CONNECT, a TLS handshake, a token exchange and a POST - four round trips
 	// that are setup rather than throughput, and on a path with a one-second
 	// round trip they consume the whole budget on their own and leave a level
 	// reporting nothing.
@@ -155,7 +155,7 @@ func probeWrite(
 			for runCtx.Err() == nil {
 				// Do not start a chunk the deadline will cut off. Only
 				// acknowledged bytes count, so an abandoned chunk is budget
-				// spent for nothing — and at eight megabytes that is a
+				// spent for nothing - and at eight megabytes that is a
 				// measurable bite out of the sample.
 				if lastChunkTook > 0 && time.Until(deadline) < lastChunkTook {
 					return
@@ -211,7 +211,7 @@ func probeWrite(
 // openSessions opens one upload session per stream, outside the measured
 // window, and returns those that opened.
 //
-// Every session is cancelled by the caller whether or not the measurement ran —
+// Every session is cancelled by the caller whether or not the measurement ran -
 // an abandoned session is the one piece of litter this probe could leave.
 func openSessions(
 	ctx context.Context, client *http.Client, cfg registry.ClientConfig, streams int,
@@ -254,7 +254,7 @@ type upload struct {
 	// against it. The spec permits a relative one and real registries send
 	// both; resolving only the first and then trusting the rest is a bug that
 	// survives every test against a registry that happens to send absolute
-	// URLs, and then loses the session — and the cleanup that cancels it —
+	// URLs, and then loses the session - and the cleanup that cancels it -
 	// against one that does not.
 	base string
 }
@@ -340,7 +340,7 @@ func (u *upload) patch(ctx context.Context, client *http.Client, chunk []byte) e
 // the session must go is that the run has ended, and inheriting the expired
 // deadline would make cleanup fail exactly when it is needed. A registry that
 // does not implement DELETE simply keeps an incomplete session, which every
-// implementation garbage-collects — but leaving that to chance when one request
+// implementation garbage-collects - but leaving that to chance when one request
 // prevents it would be sloppy.
 func cancelUpload(ctx context.Context, client *http.Client, u *upload) {
 	if u == nil || u.location == "" {
@@ -370,7 +370,7 @@ func registryBase(cfg registry.ClientConfig) string {
 }
 
 // registryURL builds a /v2/<name><suffix> URL, escaping the path per segment
-// as the read client does — a repository path legitimately contains slashes,
+// as the read client does - a repository path legitimately contains slashes,
 // which must survive, and may contain characters that must not.
 func registryURL(cfg registry.ClientConfig, suffix string) string {
 	segments := strings.Split(strings.Trim(cfg.Repository, "/"), "/")

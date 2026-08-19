@@ -105,10 +105,10 @@ func TestAFinishedTransferReportsItsAverageSpeed(t *testing.T) {
 //
 // The reported symptom: hours remaining on a transfer that finished in under a
 // minute. Outstanding bytes is the size of the work left, and on a re-transfer
-// nearly none of that work is a transfer — so dividing it by a rate measured
+// nearly none of that work is a transfer - so dividing it by a rate measured
 // while moving the little that did move is arithmetic on the wrong quantity.
 func TestTheEstimateAllowsForWorkThatWillBeSkipped(t *testing.T) {
-	// 64 GiB planned, 60 GiB of it still outstanding — and of the 4 GiB looked
+	// 64 GiB planned, 60 GiB of it still outstanding - and of the 4 GiB looked
 	// at so far, only 40 MiB actually moved. The rest was already at the target.
 	delta := &v1.Transfer{
 		State: v1.TransferRunning,
@@ -178,7 +178,7 @@ func TestTheEstimateIsUnscaledUntilSomethingHasCompleted(t *testing.T) {
 // A transfer that had saved more than the whole of what it was moving. Both
 // figures were right and they were measured against different things: COPIED
 // counted against the work the plan QUEUED, and content already at the
-// destination when the transfer was planned is never queued — it is in SAVED.
+// destination when the transfer was planned is never queued - it is in SAVED.
 func TestTheByteColumnsAreMeasuredAgainstTheSameThing(t *testing.T) {
 	// 29.8 GiB queued, 63.7 GiB never queued: a 93.5 GiB release.
 	p := v1.TransferProgress{
@@ -209,7 +209,7 @@ func TestTheByteColumnsAreMeasuredAgainstTheSameThing(t *testing.T) {
 //
 // Its remaining jobs each cost a round trip whatever they weigh, so bytes do
 // not govern its duration. Estimated on bytes alone it reported `<1s` with 794
-// jobs still to run — the same defect as the hours-long estimate before it, in
+// jobs still to run - the same defect as the hours-long estimate before it, in
 // the opposite direction.
 func TestTheEstimateRespectsTheJobsStillToRun(t *testing.T) {
 	skipping := &v1.Transfer{
@@ -278,7 +278,7 @@ func TestAWatchDoesNotRepeatTheHintAboutAll(t *testing.T) {
 	if strings.Contains(watching.String(), "--all") {
 		t.Errorf("a watch repeated the hint about --all:\n%s", watching.String())
 	}
-	// The transfer is still hidden — only the advice about it goes.
+	// The transfer is still hidden - only the advice about it goes.
 	if strings.Contains(watching.String(), "9bc63dc2") {
 		t.Errorf("a watch stopped hiding finished transfers:\n%s", watching.String())
 	}
@@ -295,7 +295,7 @@ func TestAWatchDoesNotRepeatTheHintAboutAll(t *testing.T) {
 // A transfer with nothing outstanding has nothing remaining.
 //
 // The outstanding-bytes fallback exists for a Coordinator too old to send the
-// figure, and it was reached by testing the value rather than its presence — so
+// figure, and it was reached by testing the value rather than its presence - so
 // a transfer that had genuinely finished its bytes fell through to `planned
 // minus transferred` and reported thousands of hours left with nothing to do.
 func TestNothingOutstandingIsNothingRemaining(t *testing.T) {
@@ -336,7 +336,7 @@ func TestNothingOutstandingIsNothingRemaining(t *testing.T) {
 // shown so nobody has to guess which one a number is.
 //
 // A component is published inside its bundle AND under its own name, and a
-// registry stores blobs per repository — so a 29.8 GiB orb is 63.7 GiB of
+// registry stores blobs per repository - so a 29.8 GiB orb is 63.7 GiB of
 // placements. Reporting only the second made the tool look unable to count
 // against a listing that said 29.8 GiB.
 func TestDescribeSeparatesTheReleaseFromTheWork(t *testing.T) {
@@ -372,7 +372,7 @@ func TestDescribeSeparatesTheReleaseFromTheWork(t *testing.T) {
 //
 // Reported: `SAVED 63.7 GiB · PLANNED 63.7 GiB` with COPIED climbing through
 // kilobytes. Read as saved-equals-planned it says there is nothing left to
-// copy, and then contradicts itself by copying. The two were never equal — they
+// copy, and then contradicts itself by copying. The two were never equal - they
 // differ by the work still outstanding, which at one decimal place in gigabytes
 // is invisible, and which no column carried.
 func TestTheRowAccountsForTheWholePlan(t *testing.T) {

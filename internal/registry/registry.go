@@ -5,7 +5,7 @@
 // The interface is deliberately split into small capability interfaces rather
 // than being one wide type. Two reasons:
 //
-//  1. Honesty. M2 implements reading — tag listing and manifest resolution —
+//  1. Honesty. M2 implements reading - tag listing and manifest resolution -
 //     and nothing else. A single wide interface would force stub methods
 //     returning "not implemented", which is exactly the fabricated-behaviour
 //     pattern the router already avoids. A type that does not satisfy
@@ -60,8 +60,8 @@ type ManifestReader interface {
 
 	// FetchManifest returns manifest bytes VERBATIM.
 	//
-	// Implementations must not re-serialize: the digest — and every signature
-	// over it — is the hash of these exact bytes. Round-tripping through a
+	// Implementations must not re-serialize: the digest - and every signature
+	// over it - is the hash of these exact bytes. Round-tripping through a
 	// struct would change whitespace or key order and produce a different
 	// digest, silently breaking verification.
 	FetchManifest(ctx context.Context, ref string) (Descriptor, []byte, error)
@@ -95,7 +95,7 @@ type ManifestWriter interface {
 	Tag(ctx context.Context, dgst Digest, tag string) error
 }
 
-// ReferrerLister discovers artifacts referring to a subject — cosign
+// ReferrerLister discovers artifacts referring to a subject - cosign
 // signatures, SBOMs, attestations. M5.
 type ReferrerLister interface {
 	Referrers(ctx context.Context, subject Digest, artifactType string) ([]Descriptor, error)
@@ -108,7 +108,7 @@ type ReferrerLister interface {
 // Source is what discovery needs: identify, list, resolve, fetch, probe.
 //
 // This is the whole contract for M2, and the generic implementation satisfies
-// it completely — no stubs.
+// it completely - no stubs.
 type Source interface {
 	Identity
 	TagLister
@@ -122,7 +122,7 @@ type Source interface {
 // method that is present but not implemented is ResumeUpload: it returns
 // ErrUnsupported, so an interrupted blob restarts rather than resuming. That
 // is a deliberate deferral with a stated reason (docs/design/05 §4.6, Q3), not
-// a stub standing in for missing work — restarting a content-addressed blob is
+// a stub standing in for missing work - restarting a content-addressed blob is
 // always correct.
 type Repository interface {
 	Source

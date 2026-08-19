@@ -154,7 +154,7 @@ func TestReconcileDeactivatesRatherThanDeletes(t *testing.T) {
 func TestReconcileHandlesConfigEdit(t *testing.T) {
 	// An edited product is a new config_hash. The partial unique index on
 	// (name) WHERE active permits only one live row, so the prior version must
-	// be deactivated — while remaining present, so an audit record from before
+	// be deactivated - while remaining present, so an audit record from before
 	// the edit still resolves to the configuration in force then.
 	s := openTestStore(t)
 	c := NewCatalog(s)
@@ -190,7 +190,7 @@ func TestReconcileRefusesToStealAnotherProductsRepository(t *testing.T) {
 	// uniquely indexed on (registry_host, repository_path) with a NOT NULL
 	// product_id. Configuration validation rejects this before it gets here;
 	// this is defence in depth, because the alternative failure is product_id
-	// flipping on every reload — silent and baffling.
+	// flipping on every reload - silent and baffling.
 	s := openTestStore(t)
 	c := NewCatalog(s)
 

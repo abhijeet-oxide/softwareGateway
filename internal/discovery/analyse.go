@@ -14,7 +14,7 @@ import (
 // # What discovery leaves behind, and why it is not enough
 //
 // Discovery records what a tag's own manifest LISTS and stops (docs/design/07
-// §12). That is the right trade for the question it answers — "what is new" —
+// §12). That is the right trade for the question it answers - "what is new" -
 // and it leaves a package whose contents are unknown: no sizes, no files, no
 // account of what is inside. Every page that opens it says "nobody has looked",
 // and every comparison of it walks the vendor's registry from scratch.
@@ -26,7 +26,7 @@ import (
 // # It runs BESIDE the scan, not inside it
 //
 // This used to be the last step of a scan, which made a scan as slow as the
-// walking — a scan that found ten releases took as long as walking ten
+// walking - a scan that found ten releases took as long as walking ten
 // manifest trees, and the scan reported nothing during it. Now the scan wakes
 // the analyser and returns; the analyser walks several releases at once and
 // says so in the release's own state, so a page opened during it shows
@@ -35,7 +35,7 @@ import (
 // # Bounded on every axis, because a vendor catalogue is enormous
 //
 // RECENT, because the releases anybody opens, compares or downloads are the new
-// ones — an eight-month-old release is walked when somebody actually asks. A
+// ones - an eight-month-old release is walked when somebody actually asks. A
 // BATCH per pass, so a source that has just discovered two hundred packages
 // catches up over several passes. And the per-release concurrency is DIVIDED by
 // the number of releases in flight, so walking four at once puts no more load
@@ -46,7 +46,7 @@ import (
 // A release being walked is claimed in the database, not in memory, because the
 // process holding it can die. On start the analyser releases claims that are
 // too old for anything to still be holding, and those releases are walked
-// again — which is what stops a restart leaving a release marked `Analyzing`
+// again - which is what stops a restart leaving a release marked `Analyzing`
 // for ever.
 
 const (
@@ -74,7 +74,7 @@ func (s *Scanner) runAnalyser(ctx context.Context) {
 		return
 	}
 
-	// Claims nobody can still be holding, released before anything else — a
+	// Claims nobody can still be holding, released before anything else - a
 	// release left marked `analyzing` by a crash is invisible to the queue
 	// below until this runs.
 	if n, err := s.packages.RecoverAnalyses(ctx, analyseStale); err != nil {
@@ -104,7 +104,7 @@ func (s *Scanner) runAnalyser(ctx context.Context) {
 // A one-slot signal rather than a queue: the analyser looks for ALL outstanding
 // work when it wakes, so a second request while one is pending is the same
 // request. Non-blocking, because the caller is a scan and the scan must not
-// wait on this — the whole point of the change.
+// wait on this - the whole point of the change.
 func (s *Scanner) wakeAnalyser() {
 	select {
 	case s.analyseWake <- struct{}{}:

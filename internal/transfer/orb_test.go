@@ -15,7 +15,7 @@ import (
 // This is the requirement the rest of the transfer path exists to serve: an
 // ORB is an index over container images, Helm charts and generic artifacts,
 // and each of those has its own repository path and its own tag at the source.
-// Copying the bytes is not enough — a consumer who could pull
+// Copying the bytes is not enough - a consumer who could pull
 // `orbs/CFX-5000-k8s/nginx:1.2.3` from the vendor must be able to pull the same
 // thing from us.
 //
@@ -23,12 +23,12 @@ import (
 // from the manifests: an index's children, and the reserved
 // `org.opencontainers.image.ref.name` annotation on each. A vendor bundling
 // different component types, or naming them differently, needs no code change
-// — which is exactly why the generic artifacts below carry made-up layer
+// - which is exactly why the generic artifacts below carry made-up layer
 // media types and a media type nothing in this repository knows about.
 
 // orbComponent is one thing an ORB contains.
 type orbComponent struct {
-	// refName is what the bundle calls it — the annotation everything else is
+	// refName is what the bundle calls it - the annotation everything else is
 	// derived from.
 	refName string
 	// destination and tag are what must appear at the target.
@@ -62,8 +62,8 @@ func TestORBKeepsItsStructureAndNames(t *testing.T) {
 }
 
 // A component's own manifest must arrive byte-identical, because the paths
-// inside a generic artifact — `CONFIGURATION/example_parameters.json` and the
-// rest — live in its layer annotations, not anywhere this tool models. Copying
+// inside a generic artifact - `CONFIGURATION/example_parameters.json` and the
+// rest - live in its layer annotations, not anywhere this tool models. Copying
 // the bytes IS how that directory structure is preserved, and re-serializing
 // would change the digest and break every signature over it.
 func TestComponentManifestsArriveByteIdentical(t *testing.T) {
@@ -162,7 +162,7 @@ func seedORB(t *testing.T, s *slice, tag string) (store.PackageRow, []orbCompone
 	chart := s.src.AddImage(sourcePath, "", chartLayer)
 
 	// The generic artifacts. Their layers are ordinary blobs whose PATHS live
-	// in an annotation — nothing in this tool parses or models them, which is
+	// in an annotation - nothing in this tool parses or models them, which is
 	// the point: they survive because the manifest is copied verbatim.
 	custo := s.addGeneric(sourcePath, map[string]string{
 		"DOCUMENTATION/readme":                  "how to deploy this release",
@@ -222,7 +222,7 @@ func assertTagged(t *testing.T, s *slice, repository, tag, digest string) {
 }
 
 // A digest identifies content and nothing else. What an operator needs from a
-// job listing is which image, chart or bundle it is part of — and for a blob
+// job listing is which image, chart or bundle it is part of - and for a blob
 // that is not in the job at all, it is in the manifest that references it.
 func TestJobsSayWhatEachBlobBelongsTo(t *testing.T) {
 	s := newSlice(t)
@@ -309,7 +309,7 @@ func TestJobsCarryTheirSourceAndDestination(t *testing.T) {
 	// destination repository, and the listing has to show that rather than
 	// implying everything goes to one place.
 	if len(destinations) < 2 {
-		t.Errorf("jobs name %d destination(s) %v, want several — the components are "+
+		t.Errorf("jobs name %d destination(s) %v, want several - the components are "+
 			"published under their own names", len(destinations), destinations)
 	}
 	if !destinations[targetPath] {
@@ -320,7 +320,7 @@ func TestJobsCarryTheirSourceAndDestination(t *testing.T) {
 // A BUNDLE MUST NOT COST TWICE ITS SIZE.
 //
 // A component that names itself outside the bundle's repository is published
-// twice at the destination — inside the bundle, so its index resolves, and
+// twice at the destination - inside the bundle, so its index resolves, and
 // under its own name, so it can be pulled as itself. That is one digest and two
 // destination repositories, so it is two jobs.
 //
@@ -328,7 +328,7 @@ func TestJobsCarryTheirSourceAndDestination(t *testing.T) {
 // a HEAD, so the second job could see nothing of the first's work: it fetched
 // the same bytes from the vendor again and pushed them again. On a real ORB
 // most components are named this way, so the transfer moved close to double the
-// bundle over the WAN — measured against live registries as the difference
+// bundle over the WAN - measured against live registries as the difference
 // between an eleven-hour transfer and something far shorter.
 //
 // The destination can do the second copy itself, since both repositories are on
@@ -348,7 +348,7 @@ func TestBundleFetchesEachBlobFromTheVendorOnce(t *testing.T) {
 		t.Fatalf("transfer is %q, want succeeded", state)
 	}
 
-	// The bundle is intact either way — the optimization must not have cost
+	// The bundle is intact either way - the optimization must not have cost
 	// correctness, so this is checked before anything about how it got there.
 	for _, c := range components {
 		assertTagged(t, s, c.destination, c.tag, c.digest)

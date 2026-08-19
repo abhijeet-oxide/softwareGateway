@@ -61,7 +61,7 @@ func TestAppliedIsUpsertedNotAppended(t *testing.T) {
 	}
 }
 
-// An apply closes drift by definition — we have just made the registry say
+// An apply closes drift by definition - we have just made the registry say
 // what the configuration says. Leaving the flag set reports a fault the
 // operator has already fixed, which is how a drift signal stops being read.
 func TestApplyClosesDrift(t *testing.T) {

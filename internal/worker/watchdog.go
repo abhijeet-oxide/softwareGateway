@@ -12,13 +12,13 @@ import (
 //
 // Leases protect against a dead worker. A worker that is SIGKILLed stops
 // heartbeating, its leases expire, and the reaper returns its work to the queue
-// — the whole crash-recovery story, and it works.
+// - the whole crash-recovery story, and it works.
 //
 // It has nothing to say about a live worker holding a job that is going
 // nowhere. The heartbeat reports which job IDs the worker holds; it does not
-// ask whether any of them is moving. So a request that never returns — a proxy
+// ask whether any of them is moving. So a request that never returns - a proxy
 // that accepted a connection and went quiet, a registry that took the body and
-// stopped — is held forever, heartbeated forever, and invisible: the transfer
+// stopped - is held forever, heartbeated forever, and invisible: the transfer
 // reports one job in flight, zero failed, and does not move again.
 //
 // That happened. One manifest job, one worker, and a transfer that sat at
@@ -32,7 +32,7 @@ import (
 // # Why a stall timeout rather than a deadline
 //
 // A deadline cannot be both correct for an 8 GB blob and useful for a manifest.
-// At the rates this system actually sees, that blob is an eight-hour job — so
+// At the rates this system actually sees, that blob is an eight-hour job - so
 // any deadline generous enough for it leaves a stuck manifest hanging for most
 // of a day.
 //
@@ -41,7 +41,7 @@ import (
 // as long as it needs. A blob that has stopped reports nothing, and so does a
 // manifest that will never return, and both are caught by the same clock.
 //
-// A manifest job reports no progress at all — it is one small request — so for
+// A manifest job reports no progress at all - it is one small request - so for
 // it this is a flat deadline, which is the right shape: a manifest push that
 // has not answered in minutes is not going to.
 type watchdog struct {
@@ -87,7 +87,7 @@ func (w *watchdog) stop() {
 // shutdown.
 //
 // The distinction decides what is REPORTED. A job cancelled by shutdown is not
-// a failure — its lease expires and another worker takes it. A job cancelled
+// a failure - its lease expires and another worker takes it. A job cancelled
 // for stalling is a failure worth recording, with a message saying so, because
 // otherwise the only trace of a registry that stops answering is a job that
 // quietly ran twice.

@@ -4,8 +4,8 @@
 -- # The problem
 --
 -- `package_artifacts.raw` holds a manifest verbatim, and it has to: a manifest
--- must be pushed byte-for-byte identical, because its digest — and every
--- signature over it — is the hash of those exact bytes. Inspecting a package
+-- must be pushed byte-for-byte identical, because its digest - and every
+-- signature over it - is the hash of those exact bytes. Inspecting a package
 -- writes one such row per manifest in its tree.
 --
 -- That is fine for one package and untenable for a catalogue. A NEAR release
@@ -13,13 +13,13 @@
 -- ships several releases a month across dozens of repositories; the rows are
 -- never revisited and nothing ever removes them. Multiply it out over a couple
 -- of years and the manifest bytes are hundreds of times the size of everything
--- else in the database — and they are the one part of it that is RECOVERABLE,
+-- else in the database - and they are the one part of it that is RECOVERABLE,
 -- because the tree under a digest is immutable and can be re-fetched exactly.
 --
 -- # The split
 --
--- What a package IS — its artifacts, their digests, sizes, media types,
--- platforms, the blobs they reference and the totals derived from them — is
+-- What a package IS - its artifacts, their digests, sizes, media types,
+-- platforms, the blobs they reference and the totals derived from them - is
 -- small, is what every listing and every plan reads, and stays forever. A
 -- fully-inspected sixty-artifact package costs a few kilobytes of it.
 --
@@ -30,7 +30,7 @@
 -- The schema could not express that split before this migration, because
 -- "have we fetched this manifest?" was answered by `raw IS NOT NULL`. Evicting
 -- the bytes would therefore have unlearned the fetch, and the next inspect
--- would walk the whole tree again — the cache would have been unreclaimable in
+-- would walk the whole tree again - the cache would have been unreclaimable in
 -- practice. `fetched_at` records the FACT, `raw` carries the bytes, and the two
 -- are now independent.
 --
@@ -71,14 +71,14 @@ UPDATE packages
    AND NOT EXISTS (SELECT 1 FROM package_artifacts a
                     WHERE a.package_id = packages.id AND a.raw IS NULL);
 
--- The repository path with a vendor's structural noise removed —
+-- The repository path with a vendor's structural noise removed -
 -- `cfx-5000-k8s` for NEAR's `orbs/cfx-5000-k8s`.
 --
 -- A stored column for the same two reasons display_tag is one (migration
 -- 00006): the transform belongs to the vendor plugin and nothing else may know
 -- it, and the shortened form has to RESOLVE as input or the abbreviation is a
 -- trap. NULL means no shortening applies, which is what any conformant registry
--- gets — and what every registry got before this column existed, when the CLI
+-- gets - and what every registry got before this column existed, when the CLI
 -- was inferring a prefix from whatever a page of rows happened to share.
 ALTER TABLE repositories ADD COLUMN display_path TEXT;
 CREATE INDEX repositories_display_path_idx ON repositories (product_id, display_path);

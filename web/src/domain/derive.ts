@@ -17,7 +17,7 @@ import type {
  *   Download        → TransferRequest and its Transfers
  *   Saved           → deduplication
  *
- * The engine's words — package, transfer, blob, wave, placement — do not
+ * The engine's words - package, transfer, blob, wave, placement - do not
  * appear on screen, and none of them appear in any component that imports
  * from here.
  */
@@ -29,7 +29,7 @@ export type SoftwareStatus =
    * Discovered, not downloaded, and no longer news.
    *
    * NEW carries an implicit "look at this", and a release that has sat at the
-   * vendor for eight months is not asking for attention — a page where
+   * vendor for eight months is not asking for attention - a page where
    * everything is NEW says nothing about anything. Same fact, two words,
    * divided by the same seven days the Overview uses.
    */
@@ -41,8 +41,8 @@ export type SoftwareStatus =
   /**
    * A download was attempted and did not arrive.
    *
-   * Its own state, because the alternative was reading AVAILABLE — the word
-   * for a release nobody has tried to download — on a release somebody tried
+   * Its own state, because the alternative was reading AVAILABLE - the word
+   * for a release nobody has tried to download - on a release somebody tried
    * to download and could not. The two look identical from the listing and
    * only one of them needs somebody.
    */
@@ -71,8 +71,8 @@ export function verification(pkg: Pick<Package, 'signatureStatus'>): Verificatio
   // look. Those are different facts and must not collapse.
   //
   // VERIFICATION_FAILED is in the type and nothing returns it yet, on purpose.
-  // The API carries a signature STATUS but no verification RESULT — nothing
-  // writes verification records (see internal/store/reports.go) — so claiming
+  // The API carries a signature STATUS but no verification RESULT - nothing
+  // writes verification records (see internal/store/reports.go) - so claiming
   // a release failed verification would be inventing an outcome. The state
   // exists so the badge, the status and the attention band are all written for
   // it now, and start working the day the result is served.
@@ -107,15 +107,15 @@ export function productionTargets(product: Product | undefined): Set<string> {
  *
  * Order matters: a verification failure outranks everything, because it is the
  * one state that should stop somebody doing the next thing. After that,
- * anything in flight beats anything settled — a release that reached
+ * anything in flight beats anything settled - a release that reached
  * production and is being copied somewhere else is still downloading.
  */
 export function deriveStatus(pkg: Package, product?: Product): SoftwareStatus {
   if (verification(pkg) === 'VERIFICATION_FAILED') return 'VERIFICATION FAILED'
 
   const transfers = pkg.transfers ?? []
-  // CANCELLING is live for POLLING — the page should keep refreshing until it
-  // settles — and it is not downloading. Somebody stopped it; what is left is
+  // CANCELLING is live for POLLING - the page should keep refreshing until it
+  // settles - and it is not downloading. Somebody stopped it; what is left is
   // a worker finishing the blob in its hands, and nothing new is arriving. A
   // release that reads DOWNLOADING after its download was cancelled says the
   // stop did not work.
@@ -149,7 +149,7 @@ export function deriveStatus(pkg: Package, product?: Product): SoftwareStatus {
     if (pkg.state === 'TRANSFERRING' || pkg.state === 'QUEUED') return 'DOWNLOADING'
     // The package's own FAILED, which is what a listing has to go on when the
     // transfers were not expanded. It used to read VERIFICATION FAILED, which
-    // named a step that never ran — nothing writes verification results yet.
+    // named a step that never ran - nothing writes verification results yet.
     if (pkg.state === 'FAILED') return 'DOWNLOAD FAILED'
     return isRecent(pkg) ? 'NEW' : 'AVAILABLE'
   }
@@ -183,7 +183,7 @@ export function failureReason(pkg: Package): string | undefined {
 export interface Location {
   /** The name shown on the chip. */
   name: string
-  /** vendor | storage | mirror | production — picks the icon. */
+  /** vendor | storage | mirror | production - picks the icon. */
   kind: 'vendor' | 'storage' | 'mirror' | 'production'
   /** The external URL, where one can be built. */
   url?: string
@@ -202,7 +202,7 @@ function targetKind(target: Repository): Location['kind'] {
  * Where a release currently is, as a chain.
  *
  * Reads `Vendor: Nokia` before anything has been downloaded, and
- * `JFrog + Quay` once it has. The vendor is always the first location — the
+ * `JFrog + Quay` once it has. The vendor is always the first location - the
  * release does not stop existing there once it has been copied.
  */
 export function deriveLocations(pkg: Package, product?: Product): Location[] {
@@ -268,14 +268,14 @@ export function downloadedAt(pkg: Package): string | undefined {
 }
 
 /**
- * How to NAME one release to the API — `orbs/cfx-5000-k8s:25.7_mp2604_2131`.
+ * How to NAME one release to the API - `orbs/cfx-5000-k8s:25.7_mp2604_2131`.
  *
  * # A version is not an identity
  *
  * A vendor publishes the same version into every repository of a product: nine
  * packages, nine different names, one version string. So a request carrying the
  * version alone does not say which package it means, and the server refuses it
- * rather than choosing — which is right, and which the interface must never
+ * rather than choosing - which is right, and which the interface must never
  * make it do, because the interface knows exactly which row was clicked.
  *
  * The repository travels with the tag for the same reason releaseHref carries
@@ -348,7 +348,7 @@ export function deriveLifecycle(pkg: Package, product?: Product): LifecycleStep[
  * How long a release's download actually took, in seconds.
  *
  * Live elapsed while one is running, the measured total once it has finished,
- * and undefined for a release nobody has downloaded — which renders as `—`,
+ * and undefined for a release nobody has downloaded - which renders as `-`,
  * never as zero.
  */
 export function downloadSeconds(pkg: Package): number | undefined {
@@ -364,7 +364,7 @@ export function downloadSeconds(pkg: Package): number | undefined {
   // Grouped by the REQUEST that asked for the work, because one download fans
   // out to several targets and a promotion performed the next morning is a
   // different operation entirely. Spanning both would report a two-hour
-  // download as fifteen hours — measuring how long somebody waited before
+  // download as fifteen hours - measuring how long somebody waited before
   // promoting, not how long the download took.
   const byRequest = new Map<string, Attempt[]>()
   for (const t of done as Attempt[]) {
@@ -411,13 +411,13 @@ export interface Attempt extends PackageTransfer {
  *
  * # Why this exists
  *
- * `package.transfers` is populated on the SINGLE-package read only — a page of
+ * `package.transfers` is populated on the SINGLE-package read only - a page of
  * fifty packages would be fifty extra queries to render one column, so the API
  * deliberately omits it from listings.
  *
  * That means a LISTING cannot derive a status on its own: every row would read
  * NEW, including releases that reached production. The fix is not to fetch each
- * package individually — it is to read the transfer listing, which the pages
+ * package individually - it is to read the transfer listing, which the pages
  * already fetch, and join the two by product and version.
  */
 export function transferIndex(transfers: Transfer[]): Map<string, Attempt[]> {
@@ -443,7 +443,7 @@ export function transferIndex(transfers: Transfer[]): Map<string, Attempt[]> {
 /**
  * Fills in a listed package's transfer history from the index above.
  *
- * Returns the package unchanged when it already carries its own transfers —
+ * Returns the package unchanged when it already carries its own transfers -
  * the single-package read is authoritative and must not be overwritten by a
  * listing that may be paginated.
  */
@@ -457,8 +457,8 @@ export function withTransfers(pkg: Package, index: Map<string, Attempt[]>): Pack
  * How a transfer is matched to the package it moves.
  *
  * THE PACKAGE ID, whenever the server sent one. A vendor's tag is not unique
- * within a product — one NEAR release exists under the same tag in every
- * repository the product watches, which is ten of them for a real product — so
+ * within a product - one NEAR release exists under the same tag in every
+ * repository the product watches, which is ten of them for a real product - so
  * a join on (product, tag) attributed one download to ten releases, and the
  * page reported twenty as DOWNLOADING when two were.
  *
@@ -481,7 +481,7 @@ function transferKey(packageId: string | undefined, product: string, tag: string
  * gets an ambiguity error back instead of a release.
  *
  * The repository rides as a query parameter rather than inside the path
- * segment because it contains slashes — `orbs/cfx-5000-k8s` — and a slash
+ * segment because it contains slashes - `orbs/cfx-5000-k8s` - and a slash
  * cannot survive a path segment: %2F is decoded before routing, so the router
  * would see two segments and match neither.
  */
@@ -507,7 +507,7 @@ export function titleCase(s: string): string {
 /**
  * The word a person uses for one kind of component.
  *
- * The API speaks the OCI vocabulary — image, chart, file, index, signature —
+ * The API speaks the OCI vocabulary - image, chart, file, index, signature -
  * and it speaks the SAME vocabulary on a release page and in a transfer's
  * breakdown. Both must therefore render it the same way. The download page
  * printed the raw token, so a release shown as 160 Images and 97 Helm Charts
@@ -524,7 +524,7 @@ export function kindName(kind: string): string {
     case 'signature': return 'Signatures'
     case 'artifact': return 'Other'
     // A kind this client has not been taught. Shown as the API named it
-    // rather than hidden — an unnamed component still moved.
+    // rather than hidden - an unnamed component still moved.
     default: return kind ? titleCase(kind) : 'Other'
   }
 }

@@ -23,7 +23,7 @@ import (
 // ---------------------------------------------------------------------------
 
 // harness wires a fake registry, a migrated SQLite store, a reconciled catalog
-// and a Scanner — the same path the Coordinator takes, minus the leader gate.
+// and a Scanner - the same path the Coordinator takes, minus the leader gate.
 type harness struct {
 	t        *testing.T
 	reg      *fakeregistry.Registry
@@ -341,7 +341,7 @@ func TestIndexChildrenAreListedNotFetched(t *testing.T) {
 		t.Fatalf("expected 1 new package, got %d", res.New)
 	}
 
-	// The index plus the two children it lists — recorded WITHOUT a request
+	// The index plus the two children it lists - recorded WITHOUT a request
 	// each, from the descriptors the index already carries.
 	if got := h.count(`SELECT COUNT(*) FROM package_artifacts`); got != 3 {
 		t.Errorf("expected 3 artifacts (index + the 2 it lists), got %d", got)
@@ -512,7 +512,7 @@ func TestRuleThatMatchesNothing(t *testing.T) {
 }
 
 // autoDownload.enabled: false must disable the rules even when they are
-// present — otherwise turning the feature off would require deleting config.
+// present - otherwise turning the feature off would require deleting config.
 func TestDisabledAutoDownloadCreatesNoRequests(t *testing.T) {
 	doc := baseDoc + `
   autoDownload:
@@ -814,7 +814,7 @@ func TestInvalidPatternIsRejectedAtCompileTime(t *testing.T) {
 	}
 }
 
-// The key must not change when targets are listed in a different order — a
+// The key must not change when targets are listed in a different order - a
 // cosmetic YAML reorder must not duplicate every pending request.
 func TestFirstMatchWins(t *testing.T) {
 	set, err := compileRules(productWithRules(

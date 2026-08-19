@@ -37,7 +37,7 @@ func newVersionCommand() *cobra.Command {
 			server, err := newClient().Version(cmd.Context())
 			if err != nil {
 				// A version check must still tell you the client build when
-				// the server is unreachable — that is often exactly what you
+				// the server is unreachable - that is often exactly what you
 				// need in order to debug why it is unreachable.
 				if errors.Is(err, v1.ErrUnreachable) {
 					fmt.Fprintf(stdout(), "Client   %s (%s)\n", client.Version, client.Commit)

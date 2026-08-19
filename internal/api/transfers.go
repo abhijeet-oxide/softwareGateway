@@ -20,7 +20,7 @@ import (
 
 // Transfer routes. See docs/design/09-api.md §2.
 //
-// Create and the read routes. The custom methods — retry, pause, resume, stop —
+// Create and the read routes. The custom methods - retry, pause, resume, stop -
 // live in retry.go, which owns the verb split. `setPriority` is specified and
 // not built, so it is absent rather than present and inert: a route that accepts
 // a request and does nothing is worse than a 404, because the 404 is believed.
@@ -79,7 +79,7 @@ func (s *Server) handleCreateTransfer(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// 201 for a new request, 200 for a replay of one that already existed —
+	// 201 for a new request, 200 for a replay of one that already existed -
 	// the distinction docs/design/04 §7 asks for, so a caller can tell "I made
 	// this" from "this was already asked for". A dry run creates nothing, so
 	// it is always 200.
@@ -94,7 +94,7 @@ func (s *Server) handleCreateTransfer(w http.ResponseWriter, r *http.Request) {
 //
 // Nearly every failure here is the caller naming something that does not
 // exist or cannot be used, which is INVALID_ARGUMENT rather than a server
-// fault — and the messages already say which flag settles it, so they are
+// fault - and the messages already say which flag settles it, so they are
 // passed through rather than replaced.
 func requestError(w http.ResponseWriter, r *http.Request, err error) {
 	Error(w, r, v1.CodeInvalidArgument, err.Error())
@@ -374,7 +374,7 @@ func parseTransferState(s string) (string, error) {
 // WHAT the destination already held, by name.
 //
 // Its own route rather than a field on the transfer, because the transfer is
-// POLLED — every two seconds while a download runs — and this is two hundred
+// POLLED - every two seconds while a download runs - and this is two hundred
 // and sixty rows that change only when a job settles. A caller fetches it when
 // somebody actually asks what the saving was made of.
 func (s *Server) handleListPresentComponents(w http.ResponseWriter, r *http.Request) {
@@ -428,13 +428,13 @@ func (s *Server) handleListPresentComponents(w http.ResponseWriter, r *http.Requ
 // `application/vnd.docker.distribution.manifest.v2+json` are both an image, and
 // a reader asked to add them up has been handed the tool's internals instead of
 // an answer. Naming them is protocol knowledge, so it comes from the one place
-// that holds it — the same function the comparison classifies with.
+// that holds it - the same function the comparison classifies with.
 //
 // classify is passed in rather than being oci.Classify directly, because the
 // OCI fields are not always enough: a vendor whose charts are plain image
 // manifests has said so in its annotations, and only the product's layout
 // plugin can read that. The artifact listing already classifies this way, and
-// the two MUST agree — a transfer of a release breaks down into the same
+// the two MUST agree - a transfer of a release breaks down into the same
 // things the release is made of.
 func toAPIContent(rows []store.ContentRow, classify vendors.Classifier) []v1.ContentGroup {
 	if classify == nil {
@@ -491,7 +491,7 @@ func toAPIContent(rows []store.ContentRow, classify vendors.Classifier) []v1.Con
 // toAPIWaves renders the per-wave breakdown, marking the waves in progress.
 //
 // PLURAL, and derived from the jobs rather than from transfers.current_wave.
-// That column is a watermark — the highest wave the drain check has opened —
+// That column is a watermark - the highest wave the drain check has opened -
 // and it stopped being a description of what is happening the moment two other
 // things became true: per-artifact readiness lets a manifest run before its
 // wave opens (docs/design/04 §3.5), and a repair sends wave-0 blobs back after

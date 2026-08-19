@@ -1,7 +1,7 @@
 -- The tag with a vendor's structural noise removed.
 --
 -- Every listing repeats it: `orb_23.8.1076` is `23.8.1076` plus four characters
--- that say nothing, on every row, forever. Removing them is cosmetic — the real
+-- that say nothing, on every row, forever. Removing them is cosmetic - the real
 -- tag is what is stored, transferred and returned by `-o json`.
 --
 -- A COLUMN rather than a transform at render time, for two reasons.

@@ -20,7 +20,7 @@ import (
 //
 // The last two moved nothing and are only as good as the answer they trusted.
 // Against a destination that answers HEAD for its whole storage rather than
-// the repository asked about, `exists_at_target` is not evidence at all — and
+// the repository asked about, `exists_at_target` is not evidence at all - and
 // that is invisible in a page reporting "62.2 GiB of 63.7 GiB transferred",
 // because the 1.5 GiB difference has no line of its own.
 //
@@ -30,8 +30,8 @@ import (
 // exception precisely so that it stays measurable. It was measurable in the
 // jobs table and reported nowhere, which is the same as not being measured.
 //
-// The number answers the question an operator actually asks after a repair —
-// "why is it re-sending things that already succeeded?" — because the blobs
+// The number answers the question an operator actually asks after a repair -
+// "why is it re-sending things that already succeeded?" - because the blobs
 // being repaired are exactly the ones counted here.
 
 // SkipSummary is one reason a transfer moved no bytes, and how much it saved.
@@ -76,8 +76,8 @@ func (p *Packages) SkipBreakdown(ctx context.Context, transferID string) ([]Skip
 
 // PresentComponent is one component the destination already held.
 type PresentComponent struct {
-	// Name is the vendor's own name for it — `cfx-5000-product/bgcf:2511.174.0`
-	// — or empty for a component the release names only by digest.
+	// Name is the vendor's own name for it - `cfx-5000-product/bgcf:2511.174.0`
+	// - or empty for a component the release names only by digest.
 	Name   string
 	Digest string
 	// The four fields a classifier needs to say what this IS. Verbatim, and
@@ -108,7 +108,7 @@ type PresentComponent struct {
 //
 // "Saved 56.5 GB" is the system's best claim about itself and it is unverifiable
 // as stated. The question an operator asks next is which things were already
-// there — and that is answerable exactly, because every skipped job is attached
+// there - and that is answerable exactly, because every skipped job is attached
 // to the artifact it belongs to.
 //
 // Named where the vendor names it. A component the release lists only by digest
@@ -120,7 +120,7 @@ func (p *Packages) PresentComponents(ctx context.Context, transferID string) ([]
 	// # Why this reads PLACEMENTS and not only jobs
 	//
 	// Most of a saving leaves no job behind. Planning asks the destination what
-	// it already holds, and content it holds gets NO JOB AT ALL — that is the
+	// it already holds, and content it holds gets NO JOB AT ALL - that is the
 	// whole point of the check, and those bytes land in `dedupe_skipped_bytes`.
 	// Only content that got a job and was then skipped by a worker has a row.
 	//
@@ -130,8 +130,8 @@ func (p *Packages) PresentComponents(ctx context.Context, transferID string) ([]
 	//
 	// So content is taken from the RELEASE, and counted as already there when
 	// either the transfer skipped it or the placement record says the target
-	// holds it. Each blob is attributed to ONE artifact — the lowest id that
-	// references it — so a base layer shared by forty images is counted once
+	// holds it. Each blob is attributed to ONE artifact - the lowest id that
+	// references it - so a base layer shared by forty images is counted once
 	// and the parts still add up to the whole.
 	rows, err := p.db.QueryContext(ctx, p.dialect.Rewrite(`
 		WITH tr AS (
@@ -216,7 +216,7 @@ func (p *Packages) PresentComponents(ctx context.Context, transferID string) ([]
 // A component published under its own name as well as inside the bundle needs
 // its layers in two repositories, so the planner counts them twice and is right
 // to: two repositories is two pieces of bookkeeping. But the second copy costs
-// NO BYTES — the registry mounts it, or the destination already had it — so a
+// NO BYTES - the registry mounts it, or the destination already had it - so a
 // byte total counted per (repository, digest) says a 29.8 GB release is 63.7 GB
 // of traffic, which never happens.
 //
@@ -236,8 +236,8 @@ type ContentBytes struct {
 
 // TransferContentBytes weighs a transfer's content once per digest.
 //
-// The population is the RELEASE — every manifest and every blob it contains,
-// each counted once — rather than the transfer's jobs, because a job exists per
+// The population is the RELEASE - every manifest and every blob it contains,
+// each counted once - rather than the transfer's jobs, because a job exists per
 // destination repository and the same content has several. What varies per
 // digest is only whether it moved.
 func (p *Packages) TransferContentBytes(ctx context.Context, transferID string) (ContentBytes, error) {

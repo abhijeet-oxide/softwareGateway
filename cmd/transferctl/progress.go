@@ -15,7 +15,7 @@ import (
 // progressInterval is how often the live line is refreshed.
 //
 // One second: fast enough that the display never looks frozen, slow enough that
-// polling costs nothing — the endpoint reads in-memory counters.
+// polling costs nothing - the endpoint reads in-memory counters.
 const progressInterval = time.Second
 
 // watchDiscovery renders a live progress line while a scan runs.
@@ -24,8 +24,8 @@ const progressInterval = time.Second
 // indistinguishable from a hung one. `packages discover` blocked for two and a
 // half minutes against a registry whose manifest fetches were timing out, printed
 // nothing at all in the meantime, and then reported a timeout. Everything the
-// operator needed — that it had reached the registry, which repository it was
-// on, that it was making progress — existed on the server and was simply never
+// operator needed - that it had reached the registry, which repository it was
+// on, that it was making progress - existed on the server and was simply never
 // asked for.
 //
 // Everything here goes to STDERR. Stdout carries the result, and `-o json | jq`
@@ -39,7 +39,7 @@ func watchDiscovery(ctx context.Context, c *v1.Client, product string, out io.Wr
 	failures := 0
 
 	// A separate, short deadline per poll. A status request that hangs must not
-	// hold up the next one, and it must never be the reason the command fails —
+	// hold up the next one, and it must never be the reason the command fails -
 	// this is decoration, and decoration that breaks the operation is worse than
 	// no decoration.
 	poll := func() {
@@ -73,7 +73,7 @@ func watchDiscovery(ctx context.Context, c *v1.Client, product string, out io.Wr
 			return
 		}
 		// Pad to erase whatever the previous, possibly longer, line left behind.
-		// Measured in runes, matching truncate — a byte count would over-pad a
+		// Measured in runes, matching truncate - a byte count would over-pad a
 		// line containing a multi-byte character and wrap it anyway.
 		width := len([]rune(line))
 		pad := ""
@@ -127,7 +127,7 @@ func describeScanning(s v1.DiscoverySourceState) string {
 	switch s.Phase {
 	case "ENUMERATING_REPOSITORIES":
 		// The phase where a slow registry hurts most, and the one where a
-		// counter is impossible — we do not know the total until it answers. So
+		// counter is impossible - we do not know the total until it answers. So
 		// say what we are waiting for instead of showing a fake bar.
 		return fmt.Sprintf("%s: listing the registry's repositories… %s", s.Source, elapsed)
 
@@ -137,7 +137,7 @@ func describeScanning(s v1.DiscoverySourceState) string {
 		if s.RepositoriesTotal > 0 {
 			// "done of total" plus in-flight, never "current of total":
 			// repositories are scanned in parallel, so there is no single current
-			// one — and without the in-flight count the first minute of a
+			// one - and without the in-flight count the first minute of a
 			// concurrent scan reads as "0 of 48", which looks like nothing
 			// happening when sixteen requests are outstanding.
 			fmt.Fprintf(b, "%d/%d repos", s.RepositoriesDone, s.RepositoriesTotal)
@@ -148,7 +148,7 @@ func describeScanning(s v1.DiscoverySourceState) string {
 		if s.Phase == "RESOLVING_TAGS" && s.TagsTotal > 0 {
 			// The CHECKED count, which moves one at a time, rather than the
 			// resolved one, which arrived in a single step at the end of the
-			// phase — the reason a scan reporting `48/48 repos` then sat
+			// phase - the reason a scan reporting `48/48 repos` then sat
 			// apparently still for minutes.
 			fmt.Fprintf(b, " · %d/%d versions", s.TagsChecked, s.TagsTotal)
 			if s.TagsInFlight > 0 {
@@ -200,7 +200,7 @@ func stderr() io.Writer { return os.Stderr }
 // progressWidth is how wide the live line may be.
 //
 // A line longer than the terminal WRAPS, and a carriage return then only
-// rewrites the last wrapped row — leaving the earlier rows frozen on screen
+// rewrites the last wrapped row - leaving the earlier rows frozen on screen
 // with stale numbers. That looks exactly like a display that has stopped
 // updating, which is what it was reported as.
 //

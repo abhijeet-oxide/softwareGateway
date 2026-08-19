@@ -20,8 +20,8 @@ const defaultPageSize = 200
 
 // maxTagResponseBytes bounds a tag-list response.
 //
-// A registry answering with something enormous — or a proxy returning an HTML
-// error page — must not be able to exhaust memory during a routine scan.
+// A registry answering with something enormous - or a proxy returning an HTML
+// error page - must not be able to exhaust memory during a routine scan.
 const maxTagResponseBytes = 8 << 20 // 8 MiB
 
 // ListTags returns one page of tags plus the token for the next.
@@ -59,8 +59,8 @@ func (r *Repository) ListTags(ctx context.Context, last string, limit int) ([]st
 		//
 		// An earlier version swallowed it, on the grounds that a repository
 		// with no tags yet is a normal state. That put policy in the wrong
-		// place: it also made a TYPO'D REPOSITORY PATH — the most common
-		// configuration mistake there is — indistinguishable from an empty
+		// place: it also made a TYPO'D REPOSITORY PATH - the most common
+		// configuration mistake there is - indistinguishable from an empty
 		// repository, so `products check` could only ever warn about it.
 		//
 		// The client reports what the registry said. Discovery, which does not
@@ -145,8 +145,8 @@ func ListAllTags(ctx context.Context, lister registry.TagLister, maxPages int) (
 		}
 
 		for _, t := range tags {
-			// A registry that repeats a tag across pages — which happens when
-			// tags are written during a scan — must not produce duplicates.
+			// A registry that repeats a tag across pages - which happens when
+			// tags are written during a scan - must not produce duplicates.
 			if !seen[t] {
 				seen[t] = true
 				all = append(all, t)

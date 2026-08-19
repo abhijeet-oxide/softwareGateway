@@ -1,14 +1,14 @@
-# 13 — CLI (`transferctl`)
+# 13 - CLI (`transferctl`)
 
-> **Prerequisite:** [09 — API](09-api.md)
+> **Prerequisite:** [09 - API](09-api.md)
 
-**Invariant: `transferctl` is a pure Coordinator API client.** It never contacts a registry, never opens a database connection, never talks to a worker. Every command maps to routes in [09](09-api.md). This is what keeps one audit chokepoint and makes the binary safe to distribute — it can do nothing a user could not do with `curl`.
+**Invariant: `transferctl` is a pure Coordinator API client.** It never contacts a registry, never opens a database connection, never talks to a worker. Every command maps to routes in [09](09-api.md). This is what keeps one audit chokepoint and makes the binary safe to distribute - it can do nothing a user could not do with `curl`.
 
 ---
 
 ## 1. Conventions
 
-`transferctl <noun> <verb> [flags]` — kubectl grammar, because the audience already knows it.
+`transferctl <noun> <verb> [flags]` - kubectl grammar, because the audience already knows it.
 
 | Convention | Detail |
 |---|---|
@@ -20,7 +20,7 @@
 | Precedence | flag → `SWGW_*` env → config file → default |
 | Colour | Auto-detected; disabled when not a TTY or `NO_COLOR` is set |
 
-**Exit codes** — distinct enough to be scripted against:
+**Exit codes** - distinct enough to be scripted against:
 
 | Code | Meaning |
 |---|---|
@@ -34,7 +34,7 @@
 
 Code 6 matters for CI: `transferctl download --watch` must exit non-zero when the transfer fails, or a pipeline will report green on a failed replication.
 
-Code 3 deliberately covers both no-answer cases. A script branching on it wants the same thing either way — retry or fail the pipeline — and splitting them would break the ones already written. The distinction is carried in the **message**, because that is what a human acts on, and the two lead in opposite directions: "the service is down" means go and look at the Coordinator, "it has not answered yet" means give it longer.
+Code 3 deliberately covers both no-answer cases. A script branching on it wants the same thing either way - retry or fail the pipeline - and splitting them would break the ones already written. The distinction is carried in the **message**, because that is what a human acts on, and the two lead in opposite directions: "the service is down" means go and look at the Coordinator, "it has not answered yet" means give it longer.
 
 ## 2. Command tree
 
@@ -91,7 +91,7 @@ transferctl
 
 ### `targets` (shipped at M8) and `warm` (deferred)
 
-Delegated replication ([18](18-quay-replication.md)) adds one noun group and one verb, following the rule the tree already follows — things you *look at* are nouns, things the tool *does* are verbs. The `targets` group exists. `warm` does not, and its absence is a decision rather than a backlog item: it pulls a whole release at line rate, so it belongs in the worker plane and needs a third `jobs.kind` ([18](18-quay-replication.md) §6.3).
+Delegated replication ([18](18-quay-replication.md)) adds one noun group and one verb, following the rule the tree already follows - things you *look at* are nouns, things the tool *does* are verbs. The `targets` group exists. `warm` does not, and its absence is a decision rather than a backlog item: it pulls a whole release at line rate, so it belongs in the worker plane and needs a third `jobs.kind` ([18](18-quay-replication.md) §6.3).
 
 ```
 ├── targets
@@ -104,11 +104,11 @@ Delegated replication ([18](18-quay-replication.md)) adds one noun group and one
 ├── warm <tag> --target <t>         Populate a proxy cache by pulling through it
 ```
 
-`apply` is a separate command rather than something a config reload does, because the write is destructive — see the decision in [18](18-quay-replication.md) §8. `download` against a `mode: proxy` target is refused with an error that names `warm`, since there is nothing to push to a cache.
+`apply` is a separate command rather than something a config reload does, because the write is destructive - see the decision in [18](18-quay-replication.md) §8. `download` against a `mode: proxy` target is refused with an error that names `warm`, since there is nothing to push to a cache.
 
 ### `download`, `downloads` and `rules` (shipped at M9)
 
-[20](20-download-rules.md) adds one verb and two noun groups, following the same split — a verb for the thing you do, nouns for the things you look at:
+[20](20-download-rules.md) adds one verb and two noun groups, following the same split - a verb for the thing you do, nouns for the things you look at:
 
 ```
 ├── download <product> <package>…        Bring software in through the configured chain
@@ -123,9 +123,9 @@ Delegated replication ([18](18-quay-replication.md)) adds one noun group and one
     └── matches <product> <rule>         What this rule would pick up
 ```
 
-`download` takes packages and **no pattern**, which is the shape of the thing: a pattern decides what to download when nobody is asking, and here somebody is. `transferctl download vendor-a v3.2.1` is refused only if `v3.2.1` was never discovered — never because it failed to match a rule.
+`download` takes packages and **no pattern**, which is the shape of the thing: a pattern decides what to download when nobody is asking, and here somebody is. `transferctl download vendor-a v3.2.1` is refused only if `v3.2.1` was never discovered - never because it failed to match a rule.
 
-Both noun groups are **read-only, and there is no `enable`, `disable`, `suspend` or `resume`.** Whether a rule fires lives in Git, and a command that changed it here would be a second source of truth ([20](20-download-rules.md) §9). During an incident the fast path is `transfers pause` — stop the work, not the configuration. There is also no `rules run`: running a rule by hand *is* downloading, and that is `download` with the software named.
+Both noun groups are **read-only, and there is no `enable`, `disable`, `suspend` or `resume`.** Whether a rule fires lives in Git, and a command that changed it here would be a second source of truth ([20](20-download-rules.md) §9). During an incident the fast path is `transfers pause` - stop the work, not the configuration. There is also no `rules run`: running a rule by hand *is* downloading, and that is `download` with the software named.
 
 `rules matches` answers "what would this pick up" against what has already been discovered. It reads and creates nothing, which makes it the command to run before merging a pattern rather than after.
 
@@ -133,23 +133,23 @@ Both noun groups are **read-only, and there is no `enable`, `disable`, `suspend`
 
 It was `packages discover`, and that was the wrong shape twice over.
 
-**Discovery is not an operation on packages; it is what produces them.** Burying the primary verb of the system two levels down, next to the commands that read its output, is how a CLI ends up needing a cheat sheet. `discover` sits at the top with `download`, `promote` and `verify` — the things the tool *does* — while `packages` and `products` are the things you *look at*.
+**Discovery is not an operation on packages; it is what produces them.** Burying the primary verb of the system two levels down, next to the commands that read its output, is how a CLI ends up needing a cheat sheet. `discover` sits at the top with `download`, `promote` and `verify` - the things the tool *does* - while `packages` and `products` are the things you *look at*.
 
 **And it could not express the most common operator action: scan everything.** `transferctl discover` with no argument scans every product being polled, which is what you want after a maintenance window or when you want to know what your vendors have shipped since you last looked. A shell loop over `products list` put the definition of "everything" in the caller, where it could disagree with which products were actually enabled. A fleet-wide scan never blocks; follow it with `discover status`.
 
-`packages discovery-status` moved to `discover status` for the same reason — status belongs with the thing it reports on — and with no argument it reports every product, one block each, which is the shape you want when you are looking for the one that is stuck.
+`packages discovery-status` moved to `discover status` for the same reason - status belongs with the thing it reports on - and with no argument it reports every product, one block each, which is the shape you want when you are looking for the one that is stuck.
 
 ### Why `inspect` is a verb and `describe` is a read
 
 These were briefly one command: `describe --expand`, on the argument that a user does not want to inspect and then describe, they want to see the package and sometimes the size too. Two things were wrong with that.
 
-**A flag hid the cost.** `describe` is a database read that answers instantly. `describe --expand` opened dozens of connections to a vendor's registry and could take minutes. Those are different operations, and a boolean is not enough warning — particularly on a command whose name promises a read.
+**A flag hid the cost.** `describe` is a database read that answers instantly. `describe --expand` opened dozens of connections to a vendor's registry and could take minutes. Those are different operations, and a boolean is not enough warning - particularly on a command whose name promises a read.
 
-**And it put the result in the wrong place.** Inspecting is not a rendering option. It *writes*: artifacts, their blobs, and a measured transfer size. Everything that reads the package afterwards sees them — `describe`, `list`, and a transfer alike — and a transfer that plans an already-inspected package skips the walk entirely, because it is literally the same walk (`internal/expand`).
+**And it put the result in the wrong place.** Inspecting is not a rendering option. It *writes*: artifacts, their blobs, and a measured transfer size. Everything that reads the package afterwards sees them - `describe`, `list`, and a transfer alike - and a transfer that plans an already-inspected package skips the walk entirely, because it is literally the same walk (`internal/expand`).
 
 So the split is by what the command does to the world, not by how much detail it shows:
 
-- `packages inspect` is a verb. It contacts the vendor's registry, builds out what discovery deliberately left out, and records it. Idempotent — the tree under a digest cannot change, so a second run fetches nothing and says so.
+- `packages inspect` is a verb. It contacts the vendor's registry, builds out what discovery deliberately left out, and records it. Idempotent - the tree under a digest cannot change, so a second run fetches nothing and says so.
 - `packages describe` is a read. It shows everything known, *including* what inspect gathered: size, blob count, the artifact tree, and when it was measured. A package nobody has inspected says so and prints the command.
 
 You never have to run `inspect`: a transfer performs the same walk if nobody has. It is for deciding whether you want one.
@@ -162,7 +162,7 @@ Cobra's default for a missing argument is one line:
 Error: accepts 2 arg(s), received 1
 ```
 
-It names a count. It does not say what the two arguments *are*, which one is missing, what shape the missing one takes, or how to find a value for it — and it is produced by the command that already knows all four. Someone typing `transferctl packages inspect my-product` learns only that they need one more word, not that the missing word is a *tag*.
+It names a count. It does not say what the two arguments *are*, which one is missing, what shape the missing one takes, or how to find a value for it - and it is produced by the command that already knows all four. Someone typing `transferctl packages inspect my-product` learns only that they need one more word, not that the missing word is a *tag*.
 
 So a command declares its arguments once, and that declaration produces the usage line, the `--help` section, and the error:
 
@@ -174,7 +174,7 @@ Error: transferctl packages inspect needs 2 arguments, and got 1.
 
   <product>  the configured product to look in
              list them: transferctl products list
-  <package>  a tag, a digest, or repository:tag — e.g. orb_23.8.1076, …
+  <package>  a tag, a digest, or repository:tag - e.g. orb_23.8.1076, …
              list them: transferctl packages list <product>
 ```
 
@@ -182,17 +182,17 @@ Three properties, each of which was a real failure:
 
 - **The three cannot drift.** `Use` said `<product> <package>` while the error said "accepts 2 arg(s)", and only one of those was in front of the user at the moment it mattered.
 - **A usage error exits 2**, not 1. A script that cannot tell "I called this wrong" from "the thing does not exist" retries the one that will never succeed.
-- **A mistyped subcommand fails.** `transferctl pkg inspct a b` printed the help text and exited **zero** — indistinguishable from success to anything automated. It now exits 2 and suggests `inspect`.
+- **A mistyped subcommand fails.** `transferctl pkg inspct a b` printed the help text and exited **zero** - indistinguishable from success to anything automated. It now exits 2 and suggests `inspect`.
 
-The same reasoning applies to `NOT_FOUND`. "package not found" reads as *the package is gone*, when the likelier cause is a reference that was never going to match — a product name typed where a tag belongs, or a version without the vendor's prefix. The message names the reference forms and the command that lists what exists.
+The same reasoning applies to `NOT_FOUND`. "package not found" reads as *the package is gone*, when the likelier cause is a reference that was never going to match - a product name typed where a tag belongs, or a version without the vendor's prefix. The message names the reference forms and the command that lists what exists.
 
 ### Shortened names, and where the rule comes from
 
-Where a source declares a `vendor`, listings show that vendor's shortened spelling — `cfx-5000-k8s` rather than `orbs/cfx-5000-k8s`, `23.8.1076` rather than `orb_23.8.1076`. The full names are what is stored, transferred and returned by `-o json`.
+Where a source declares a `vendor`, listings show that vendor's shortened spelling - `cfx-5000-k8s` rather than `orbs/cfx-5000-k8s`, `23.8.1076` rather than `orb_23.8.1076`. The full names are what is stored, transferred and returned by `-o json`.
 
-Both spellings resolve as input, everywhere: `--repository`, `--tag`, and the `repository:tag` form a `describe` takes. An abbreviation you cannot type back is a trap — someone copies what is on their screen, gets "not found", and reasonably concludes the package is gone.
+Both spellings resolve as input, everywhere: `--repository`, `--tag`, and the `repository:tag` form a `describe` takes. An abbreviation you cannot type back is a trap - someone copies what is on their screen, gets "not found", and reasonably concludes the package is gone.
 
-The tag was already shortened this way, by the source's vendor plugin at discovery. The REPOSITORY was not: the CLI dropped whichever prefix every row on the page happened to share. That needed no vendor knowledge, which was the appeal, and it was wrong twice — it shortened paths on registries with no such convention, and it made a row say different things depending on which other rows were in view. Both now come from a source stating its vendor, computed once, stored, and rendered verbatim.
+The tag was already shortened this way, by the source's vendor plugin at discovery. The REPOSITORY was not: the CLI dropped whichever prefix every row on the page happened to share. That needed no vendor knowledge, which was the appeal, and it was wrong twice - it shortened paths on registries with no such convention, and it made a row say different things depending on which other rows were in view. Both now come from a source stating its vendor, computed once, stored, and rendered verbatim.
 
 ## 3. Health
 
@@ -205,9 +205,9 @@ INBLR1762     ACTIVE   0/16   1.3.9     9s ago       idle
 old-pod-7c9   STALE    0/16   1.3.0     31m00s ago   not heartbeating; its jobs are being returned to the queue
 ```
 
-**LOAD is jobs in flight over the worker's configured ceiling** — `worker.maxConcurrentJobs`, reconstructed from what the worker asks for plus what it already holds, so a mismatch between this column and the config file means a worker running configuration nobody thinks it has.
+**LOAD is jobs in flight over the worker's configured ceiling** - `worker.maxConcurrentJobs`, reconstructed from what the worker asks for plus what it already holds, so a mismatch between this column and the config file means a worker running configuration nobody thinks it has.
 
-It is also the column that answers "why is only one job running". A fleet sitting at 1/32 is not a stuck worker; it is a queue with nothing leasable in it, and `transfers describe` says why — outstanding jobs blocked behind a wave cannot be leased until the wave beneath them drains ([04](04-queue-and-scheduling.md) §3).
+It is also the column that answers "why is only one job running". A fleet sitting at 1/32 is not a stuck worker; it is a queue with nothing leasable in it, and `transfers describe` says why - outstanding jobs blocked behind a wave cannot be leased until the wave beneath them drains ([04](04-queue-and-scheduling.md) §3).
 
 Every field here already crossed the wire on every lease and every heartbeat and was read for one decision and dropped. The `workers` table was created in the first migration and nothing wrote to it until this landed, which is why the fleet had no cardinality and a stale worker was invisible.
 
@@ -248,7 +248,7 @@ Notifications
 Overall: DEGRADED (1 of 7 repositories degraded)
 ```
 
-Backed by `GET /api/v1/system:healthCheck` ([09](09-api.md) §9.1) — **the deep check, not a probe.** It validates connectivity to every configured dependency as required, which is exactly why it must not be what Kubernetes polls: a slow, thorough check is the right thing for a human and the wrong thing for a liveness probe.
+Backed by `GET /api/v1/system:healthCheck` ([09](09-api.md) §9.1) - **the deep check, not a probe.** It validates connectivity to every configured dependency as required, which is exactly why it must not be what Kubernetes polls: a slow, thorough check is the right thing for a human and the wrong thing for a liveness probe.
 
 Exit code 0 healthy, 1 degraded, 3 unreachable.
 
@@ -313,12 +313,12 @@ Transfer request 7c9e6679-7425-40de-944b-e07fc1f90ae7 created
 Follow with:  transferctl transfers describe 9c1e8f2a --watch
 ```
 
-**Dry run** — `--dry-run` maps to `validateOnly=true` ([09](09-api.md) §4.2), so it exercises the real planner ([05](05-transfer-engine.md) §7):
+**Dry run** - `--dry-run` maps to `validateOnly=true` ([09](09-api.md) §4.2), so it exercises the real planner ([05](05-transfer-engine.md) §7):
 
 ```
 $ transferctl download v2.14.0 --product vendor-a-platform --target lab --dry-run
 
-Transfer plan — vendor-a-platform / v2.14.0 → lab
+Transfer plan - vendor-a-platform / v2.14.0 → lab
 
   Artifacts               5   (1 index, 3 images, 1 helm chart)
   Blobs                 847   total 45.2 GiB
@@ -348,7 +348,7 @@ $ transferctl download v2.14.0 --product vendor-a-platform --target lab --target
 $ transferctl download --product vendor-a-platform --tag-match '^v2\.14\.' --target lab
 ```
 
-**Scheduling** — persisted as a scheduled request, expanded into jobs only when due ([04](04-queue-and-scheduling.md) §10):
+**Scheduling** - persisted as a scheduled request, expanded into jobs only when due ([04](04-queue-and-scheduling.md) §10):
 
 ```
 $ transferctl download v2.14.0 --product vendor-a-platform --target lab \
@@ -358,7 +358,7 @@ Scheduled request 3d8f1a92-… for 2026-08-11 02:00:00 UTC (in 6d 15h)
   No queue entries created until the scheduled time.
 ```
 
-**Promote** — same engine, target → target ([05](05-transfer-engine.md) §6):
+**Promote** - same engine, target → target ([05](05-transfer-engine.md) §6):
 
 ```
 $ transferctl promote v2.14.0 --product vendor-a-platform --from lab --to production
@@ -387,10 +387,10 @@ Verifying vendor-a-platform / v2.14.0 at lab (internal.azurecr.io/vendor-a/platf
   Identity    https://github.com/vendor-a/platform/.github/workflows/release.yaml@refs/heads/main
   Issuer      https://token.actions.githubusercontent.com
 
-VERIFIED — 5 of 5 artifacts (1.8s)
+VERIFIED - 5 of 5 artifacts (1.8s)
 ```
 
-### 5.1 `compare` — what is different between two places?
+### 5.1 `compare` - what is different between two places?
 
 ```
 $ transferctl compare cfx-5000-product 25.7_mp2604_2131 --to att-stage
@@ -427,23 +427,23 @@ They look like five tools and they are one, because all of them are *walk two bu
 
 | Question | Command |
 |---|---|
-| Did the transfer land? | `compare P 25.7` — or `--to stage` for a specific one |
+| Did the transfer land? | `compare P 25.7` - or `--to stage` for a specific one |
 | Did the promotion land? | `compare P 25.7 --from lab --to prod` |
 | What changed in this release? | `compare P 25.7 25.6` |
 | Did all of the new release arrive? | `compare P 25.7 25.6 --at stage` |
-| Was anything mutated, or is anything there nobody put? | any of the above — it is the same walk |
+| Was anything mutated, or is anything there nobody put? | any of the above - it is the same walk |
 
-**The two ends are symmetric.** Neither is "the original". A shape that privileged one — "a package and a destination" — needs a second shape for target-against-target and a third for version-against-version, and three shapes drift.
+**The two ends are symmetric.** Neither is "the original". A shape that privileged one - "a package and a destination" - needs a second shape for target-against-target and a third for version-against-version, and three shapes drift.
 
 **Both ends are WALKED.** Nothing reads a transfer record, which is the point of an integrity check and is also what lets an end be a target nothing ever planned against, or a version somebody published by hand. It works uniformly because a transfer copies manifests **verbatim**: the index at a destination carries the same `org.opencontainers.image.ref.name` annotations the vendor wrote, so a component identifies itself the same way wherever it is.
 
 #### What is aligned, and by what
 
-Components are aligned by the repository half of their `ref.name` — the vendor's name for the component, which survives copying *and* survives a new release — together with **what the artifact is**. The **tag is compared, not matched on**, because in a version-to-version comparison the tag is precisely what changed. An artifact the vendor named nothing is aligned by digest, which can only match itself; that is the honest answer for content whose only identity is its bytes.
+Components are aligned by the repository half of their `ref.name` - the vendor's name for the component, which survives copying *and* survives a new release - together with **what the artifact is**. The **tag is compared, not matched on**, because in a version-to-version comparison the tag is precisely what changed. An artifact the vendor named nothing is aligned by digest, which can only match itself; that is the honest answer for content whose only identity is its bytes.
 
-The type is in the key because a repository name is not always an identity. A NEAR wrapper names *both* its children after the bundle — `orbs/cfx-5000-k8s:orb_25.7…` and `orbs/cfx-5000-k8s:signature_orb_25.7…` — and keyed by repository alone they collided, one won, and the release's **signature disappeared from both sides** of every comparison that walked a wrapper. The type separates them and, unlike the tag, is stable from release to release.
+The type is in the key because a repository name is not always an identity. A NEAR wrapper names *both* its children after the bundle - `orbs/cfx-5000-k8s:orb_25.7…` and `orbs/cfx-5000-k8s:signature_orb_25.7…` - and keyed by repository alone they collided, one won, and the release's **signature disappeared from both sides** of every comparison that walked a wrapper. The type separates them and, unlike the tag, is stable from release to release.
 
-**Both ends are walked from a reference they both hold.** Resolving each end independently from the same candidate list lets them walk *different artifacts*: a destination missing the vendor's wrapper tag falls through to the payload while the source walks the wrapper, and everything downstream — a root "content difference", a signature "missing" from a destination nobody looked at it on — is an artefact of comparing two different things. The shared reference wins even where one side could offer a more complete one, and what one side has and the other does not is reported as a finding on the root instead.
+**Both ends are walked from a reference they both hold.** Resolving each end independently from the same candidate list lets them walk *different artifacts*: a destination missing the vendor's wrapper tag falls through to the payload while the source walks the wrapper, and everything downstream - a root "content difference", a signature "missing" from a destination nobody looked at it on - is an artefact of comparing two different things. The shared reference wins even where one side could offer a more complete one, and what one side has and the other does not is reported as a finding on the root instead.
 
 | Check | Catches |
 |---|---|
@@ -451,23 +451,23 @@ The type is in the key because a repository name is not always an identity. A NE
 | Tag, resolved on each side | the failure this system shipped with: everything pushed, the component's own tag never applied, every digest agreeing |
 | The component's own repository, **at a destination** | a bundle that is byte-perfect while nothing in it is pullable as itself |
 | Which root references each side holds | a release that is not addressable the same way in both places |
-| **Files inside the layers** | *which file changed* — see below |
+| **Files inside the layers** | *which file changed* - see below |
 | Tags in the bundle's own repository | content nobody in this comparison put there |
 
-The third row is asked **only of an end this system wrote**. Publishing each component under its own name is something a *transfer* does at a destination (§ `internal/transfer/layout.go`); it is not required by OCI and no vendor has agreed to it. NEAR keeps its components inside the orb repository and tags them `docker_<digest>`, so the `cfx-5000-product/admin` in a NEAR component's `ref.name` is the upstream coordinate it was built from, not a path NEAR serves. Asking a vendor's registry for it returns 404 for every component of every orb — which is how a byte-perfect transfer once reported 253 differences, each reading `not published as cfx-5000-product/… on the first side`.
+The third row is asked **only of an end this system wrote**. Publishing each component under its own name is something a *transfer* does at a destination (§ `internal/transfer/layout.go`); it is not required by OCI and no vendor has agreed to it. NEAR keeps its components inside the orb repository and tags them `docker_<digest>`, so the `cfx-5000-product/admin` in a NEAR component's `ref.name` is the upstream coordinate it was built from, not a path NEAR serves. Asking a vendor's registry for it returns 404 for every component of every orb - which is how a byte-perfect transfer once reported 253 differences, each reading `not published as cfx-5000-product/… on the first side`.
 
-**A partial transfer does not abort the walk.** An index naming children the registry will not serve is exactly what a transfer that stopped part-way leaves behind. `oci.WalkPartial` records each unreachable child *from its referencing descriptor* — so it keeps the name its parent gave it and still aligns against its counterpart — which is what turns "something is missing" into "`cfx-5000-product/lms` is missing", and what stops the first missing component costing the reader the other nineteen findings.
+**A partial transfer does not abort the walk.** An index naming children the registry will not serve is exactly what a transfer that stopped part-way leaves behind. `oci.WalkPartial` records each unreachable child *from its referencing descriptor* - so it keeps the name its parent gave it and still aligns against its counterpart - which is what turns "something is missing" into "`cfx-5000-product/lms` is missing", and what stops the first missing component costing the reader the other nineteen findings.
 
 #### Layout
 
 A diff, laid out as one, with the markers everybody already reads without being told: `-` only on the first end, `+` only on the second, `~` present on both and different.
 
-- **Differences first**, then agreements — and by default the agreements are not printed at all, only counted. `--all` shows them.
+- **Differences first**, then agreements - and by default the agreements are not printed at all, only counted. `--all` shows them.
 - **Differences are sentences, under the table.** "`cfx-5000-product/cvlk:1.0.7` points at `sha256:8533f4a71a43` on the second side" does not fit a column, and truncating it removes the half that says what is wrong.
 - **Changed files are counted, then named on request** (`--files`). A release that edited one configuration file should not print four hundred paths at somebody scanning to find which component is interesting.
 - **Non-zero exit when the ends differ**, so it can end a pipeline.
 
-#### Files, not layers — and why this is OCI rather than a vendor plugin
+#### Files, not layers - and why this is OCI rather than a vendor plugin
 
 "Two layers changed" is true and useless. A release that edited one line of one configuration file and a release that rewrote everything produce the same sentence, because a layer is an archive and its digest changes when anything inside it does.
 
@@ -482,9 +482,9 @@ So for a component that differs, the layers are **opened** and the comparison is
       - DOCUMENTATION/old_readme
 ```
 
-**This belongs in the core, not in a vendor plugin, and the specification is why.** The OCI image specification defines a layer as a *tar archive* — the media types say so out loud, `application/vnd.oci.image.layer.v1.tar` and the same with `+gzip` — and its "Layer Changeset" section defines the `.wh.` whiteout entries that mark deletions. Reading the files inside a layer is reading the format the specification names. The other shape here is equally standard: an OCI 1.1 artifact frequently carries **one file per layer** with `org.opencontainers.image.title` naming it, which is the ORAS convention used by Helm, by cosign, and by everything else publishing non-image artifacts.
+**This belongs in the core, not in a vendor plugin, and the specification is why.** The OCI image specification defines a layer as a *tar archive* - the media types say so out loud, `application/vnd.oci.image.layer.v1.tar` and the same with `+gzip` - and its "Layer Changeset" section defines the `.wh.` whiteout entries that mark deletions. Reading the files inside a layer is reading the format the specification names. The other shape here is equally standard: an OCI 1.1 artifact frequently carries **one file per layer** with `org.opencontainers.image.title` naming it, which is the ORAS convention used by Helm, by cosign, and by everything else publishing non-image artifacts.
 
-A NEAR ORB happens to use both — one titled layer per file for some components, one archive containing many for others — and neither needs Nokia to be named anywhere. `vendors.Layout` gains nothing here.
+A NEAR ORB happens to use both - one titled layer per file for some components, one archive containing many for others - and neither needs Nokia to be named anywhere. `vendors.Layout` gains nothing here.
 
 The one thing that *would* have been vendor knowledge is "which artifact types are worth opening", and that is answered by a **byte budget** instead:
 
@@ -494,24 +494,24 @@ The one thing that *would* have been vendor knowledge is "which artifact types a
 | Under it | opened, and the answer is in files |
 | Over it | one opaque unit, and the row says `(some layers not opened)` |
 
-A budget needs no plugin, degrades correctly for a vendor nobody has written one for, and gets the economics right by construction: a configuration bundle is kilobytes and is always opened, an image layer is hundreds of megabytes and never is — which is exactly the asymmetry, because nobody wants a file listing of an image layer.
+A budget needs no plugin, degrades correctly for a vendor nobody has written one for, and gets the economics right by construction: a configuration bundle is kilobytes and is always opened, an image layer is hundreds of megabytes and never is - which is exactly the asymmetry, because nobody wants a file listing of an image layer.
 
 Four properties worth stating, each of which was a decision:
 
-- **The format is sniffed, not taken from the media type.** It is routinely wrong — a gzipped tar shipped under `application/octet-stream` is ordinary — and refusing to look would disable this where it is most wanted. Both formats read are self-identifying (gzip magic, tar header checksum, zip signature), and anything unrecognised **fails closed** to one opaque blob.
+- **The format is sniffed, not taken from the media type.** It is routinely wrong - a gzipped tar shipped under `application/octet-stream` is ordinary - and refusing to look would disable this where it is most wanted. Both formats read are self-identifying (gzip magic, tar header checksum, zip signature), and anything unrecognised **fails closed** to one opaque blob.
 - **Every layer of a changed component is read, not only the ones whose digests differ.** Layers stack, and a file can move between them without changing; reading only the differing ones would report a repacked-but-identical file as added on one side and missing on the other. A layer both sides share is fetched once and cancels out.
 - **A file's identity is its content**, hashed from the entry's bytes. Two archives of the same files differ in modification times and packing order every time they are built, and keying on anything else would report a rebuild as a change to every file in it.
 - **Decompression is bounded.** A four-kilobyte gzip stream can expand to gigabytes, and this reads archives fetched from a registry it is in the middle of doubting. The caller's budget bounds what is *downloaded*; separate entry and expansion limits bound what that download can turn into.
 
 #### One deliberate limit
 
-Extra content is reported only for the bundle's **own** repository — the orb-specific folder — where the question is well defined: an ORB gets a repository to itself, so anything else in it is genuinely unexplained. It is not asked of a component's repository, which legitimately holds every other version of that component and would report each previous release as a discrepancy.
+Extra content is reported only for the bundle's **own** repository - the orb-specific folder - where the question is well defined: an ORB gets a repository to itself, so anything else in it is genuinely unexplained. It is not asked of a component's repository, which legitimately holds every other version of that component and would report each previous release as a discrepancy.
 
-**And "extra" is judged by what a tag RESOLVES TO, never by how it is spelled.** Nothing in the distribution specification constrains how a publisher names a tag, so a name-shaped test is a test of one vendor's convention wearing generic clothes — and it failed exactly that way. NEAR tags every component inside the bundle's own repository, one tag per component spelled from that component's digest, so a correct orb reported hundreds of "unexplained" tags, every one of them pointing at a manifest the walk had just matched. They were absent from the inventory only because a component's tag comes from its `ref.name` (`2507.2131.0`), a different string for the same content. Every listed tag is therefore resolved, and accounted for if what it points at is in the release. That costs one `HEAD` per tag and needs no knowledge of any vendor's spelling; where a repository lists more tags than the check will resolve, the partial account is **reported as partial** rather than silently inventing findings or hiding them.
+**And "extra" is judged by what a tag RESOLVES TO, never by how it is spelled.** Nothing in the distribution specification constrains how a publisher names a tag, so a name-shaped test is a test of one vendor's convention wearing generic clothes - and it failed exactly that way. NEAR tags every component inside the bundle's own repository, one tag per component spelled from that component's digest, so a correct orb reported hundreds of "unexplained" tags, every one of them pointing at a manifest the walk had just matched. They were absent from the inventory only because a component's tag comes from its `ref.name` (`2507.2131.0`), a different string for the same content. Every listed tag is therefore resolved, and accounted for if what it points at is in the release. That costs one `HEAD` per tag and needs no knowledge of any vendor's spelling; where a repository lists more tags than the check will resolve, the partial account is **reported as partial** rather than silently inventing findings or hiding them.
 
 ## 6. Progress
 
-`transfers list` carries FROM and TO. Without them two transfers of the same package to different destinations are the same row twice: same product, same tag, same percentage. The column shows the CONFIGURED name — what an operator typed into `--from` / `--to`, and what goes back into the next command — rather than the resolved host and path, which is a hundred characters wide and identical down the page. `describe` shows both, because there it is one transfer and there is room.
+`transfers list` carries FROM and TO. Without them two transfers of the same package to different destinations are the same row twice: same product, same tag, same percentage. The column shows the CONFIGURED name - what an operator typed into `--from` / `--to`, and what goes back into the next command - rather than the resolved host and path, which is a hundred characters wide and identical down the page. `describe` shows both, because there it is one transfer and there is room.
 
 `transfers describe` breaks the work down **per wave**, because the totals cannot explain an idle-looking transfer:
 
@@ -524,7 +524,7 @@ Waves
   3      manifest   0/8         -         -          -         8         -        0 B/41.0 KiB
 ```
 
-"519 outstanding, 2 in flight" mixes three populations that behave completely differently — runnable now, waiting out a retry backoff, and **gated** behind a wave that has not drained — and only the last one explains why a fleet with capacity to spare is running two jobs. Per wave it is immediate: wave 0 has two blobs left; waves 1 to 3 are full and cannot start until it finishes ([04](04-queue-and-scheduling.md) §3).
+"519 outstanding, 2 in flight" mixes three populations that behave completely differently - runnable now, waiting out a retry backoff, and **gated** behind a wave that has not drained - and only the last one explains why a fleet with capacity to spare is running two jobs. Per wave it is immediate: wave 0 has two blobs left; waves 1 to 3 are full and cannot start until it finishes ([04](04-queue-and-scheduling.md) §3).
 
 `>` marks the wave in progress. Everything above it is finished and everything below it cannot start. The byte columns are worth reading together: a blob wave is the whole transfer and a manifest wave is kilobytes, which is why wave 0 takes hours and the rest take seconds once they open.
 
@@ -554,7 +554,7 @@ Priority  100          Wave 1 of 3          Elapsed 6m27s
   Workers   worker-x2k4 (4)  worker-p9m2 (3)  worker-t4v7 (4)  worker-z8n1 (3)
 ```
 
-**Layer-level progress** — the required per-layer view:
+**Layer-level progress** - the required per-layer view:
 
 ```
 $ transferctl transfers jobs 9c1e8f2a --watch
@@ -568,8 +568,8 @@ blocked   manifest  orbs/cfx-5000-k8s:orb_23.8.1076           stage/orbs/cfx-500
 $ transferctl transfers jobs 9c1e8f2a --state failed -o json | jq '.jobs[].digest'
 ```
 
-Ordered by what is HAPPENING — leased, then runnable, then failed, blocked and
-the outcomes — and largest first within each. A transfer has thousands of jobs
+Ordered by what is HAPPENING - leased, then runnable, then failed, blocked and
+the outcomes - and largest first within each. A transfer has thousands of jobs
 and a listing shows a page of them, so the order decides what an operator ever
 sees; ordering by wave buried the handful actually moving under whatever was
 planned first.
@@ -581,8 +581,8 @@ and `internal/transfer/layout.go`), and each is visible above:
 - One digest appears twice with two targets. That is not a duplicate: a
   component is published inside its bundle, so the index referencing it stays
   resolvable, AND under the name it advertises, so it can be pulled as itself.
-- The bundle-internal copy is UNTAGGED — the component's name is not that
-  repository's to claim — so its TARGET carries no tag. Borrowing the name's tag
+- The bundle-internal copy is UNTAGGED - the component's name is not that
+  repository's to claim - so its TARGET carries no tag. Borrowing the name's tag
   to fill the column would advertise a reference the transfer never creates.
 - Everything is read from one repository, because an index may only reference
   children co-located with it. So SOURCE is `repository:tag` only when the name
@@ -600,24 +600,24 @@ series.
 
 ### 6.0 SPEED and ETA are questions about NOW
 
-Both used to fall back to the transfer's cumulative average whenever there was no live sample, and the average is not an answer to either. A transfer with nothing in flight is going at zero, whatever it averaged over the previous thirty-one hours — so the listing printed `581.9 KiB/s` and `~1m22s` on the same line as a `RUNNING` column reading `0`, for a transfer that had been motionless for hours. The arithmetic was right and the sentence was false: it extrapolated a rate that no longer applied.
+Both used to fall back to the transfer's cumulative average whenever there was no live sample, and the average is not an answer to either. A transfer with nothing in flight is going at zero, whatever it averaged over the previous thirty-one hours - so the listing printed `581.9 KiB/s` and `~1m22s` on the same line as a `RUNNING` column reading `0`, for a transfer that had been motionless for hours. The arithmetic was right and the sentence was false: it extrapolated a rate that no longer applied.
 
 With nothing in flight, `SPEED` is `-`, and `ETA` says **why** rather than shrugging:
 
 | ETA | Means |
 |---|---|
 | `~12m` | in flight, extrapolated from the live rate where one has been sampled |
-| `waiting` | nothing running, but jobs are in retry backoff — it will start again on its own |
-| `stalled` | nothing running, nothing waiting, work outstanding — it will not |
+| `waiting` | nothing running, but jobs are in retry backoff - it will start again on its own |
+| `stalled` | nothing running, nothing waiting, work outstanding - it will not |
 | `-` | nothing left to do |
 
-The distinction between the last two is the actionable half. The average has not been discarded — `transfers describe` reports it under Throughput, labelled as what it is.
+The distinction between the last two is the actionable half. The average has not been discarded - `transfers describe` reports it under Throughput, labelled as what it is.
 
-**The estimate extrapolates the bytes actually left, not planned minus transferred.** That subtraction counts every byte that will never move: content the destination already had, blobs the registry relocated internally, work deduplicated away at plan time. Observed on a transfer 98% done with 43 manifest jobs left — about 233 KiB of real work — reporting a hundred megabytes remaining and an ETA of eleven hours. The arithmetic was right and the quantity was wrong. `TransferProgress.outstandingBytes` is the real figure: the size of every outstanding job, less what each has already sent.
+**The estimate extrapolates the bytes actually left, not planned minus transferred.** That subtraction counts every byte that will never move: content the destination already had, blobs the registry relocated internally, work deduplicated away at plan time. Observed on a transfer 98% done with 43 manifest jobs left - about 233 KiB of real work - reporting a hundred megabytes remaining and an ETA of eleven hours. The arithmetic was right and the quantity was wrong. `TransferProgress.outstandingBytes` is the real figure: the size of every outstanding job, less what each has already sent.
 
-**A low rate during the manifest phase is expected, and `describe` says so.** A manifest is about a kilobyte, so the cost of pushing one is a round trip rather than its size, and the rate is bounded by latency × concurrency — low kilobytes per second on a link where blobs moved at hundreds. Nothing is misconfigured and no extra bandwidth would move it, but a reader watching 577 KiB/s become 1.2 KiB/s has every reason to think otherwise and would go looking for a fault that is not there.
+**A low rate during the manifest phase is expected, and `describe` says so.** A manifest is about a kilobyte, so the cost of pushing one is a round trip rather than its size, and the rate is bounded by latency × concurrency - low kilobytes per second on a link where blobs moved at hundreds. Nothing is misconfigured and no extra bandwidth would move it, but a reader watching 577 KiB/s become 1.2 KiB/s has every reason to think otherwise and would go looking for a fault that is not there.
 
-### 6.1 `failures` — why, as opposed to which
+### 6.1 `failures` - why, as opposed to which
 
 ```
 $ transferctl transfers failures 28161ab
@@ -629,20 +629,20 @@ $ transferctl transfers failures 28161ab
     18 jobs failed, 22 retrying · manifest · wave 1 · unsupported
     e.g. sha256:1626c8c6f662 → apm0014228-oci-stage/orbs/cfx-5000-k8s/nokia-ims-mtcm
     Not retryable: the registry rejects this content every time. Retrying will not
-    change the answer — the destination or the artifact has to.
+    change the answer - the destination or the artifact has to.
 
   push manifest <digest>: HTTP 504: gateway timeout
     3 jobs retrying · manifest · waves 1, 2 · timeout
     e.g. sha256:9a34ff012963 → apm0014228-oci-stage/orbs/cfx-5000-product/vnfmpartner
     Retrying on its own. If it does not recover, the network path is the thing to
-    look at — `transferctl calibrate` measures it.
+    look at - `transferctl calibrate` measures it.
 
 Once the cause is gone: transferctl transfers retry 28161ab
 ```
 
-**This is deliberately not a table, and the reason is the failure it was written for.** A bundle has five hundred manifests. When the destination rejects them it rejects all five hundred, for one reason. `transfers jobs --failed` renders that as five hundred rows of wrapped repository paths, each ending in a truncated message whose informative half — the status and the registry's own words — is off the right edge of the terminal. Every row differs, in the digest and the path. Every row says the same thing. There is no column width at which that becomes a diagnosis.
+**This is deliberately not a table, and the reason is the failure it was written for.** A bundle has five hundred manifests. When the destination rejects them it rejects all five hundred, for one reason. `transfers jobs --failed` renders that as five hundred rows of wrapped repository paths, each ending in a truncated message whose informative half - the status and the registry's own words - is off the right edge of the terminal. Every row differs, in the digest and the path. Every row says the same thing. There is no column width at which that becomes a diagnosis.
 
-So the grouping key is the message with the per-job parts substituted out, and the substitution is done against the ROW — where the digest and the destination path are known exactly — rather than guessed at from the text. What survives is the cause. What is printed once per cause is:
+So the grouping key is the message with the per-job parts substituted out, and the substitution is done against the ROW - where the digest and the destination path are known exactly - rather than guessed at from the text. What survives is the cause. What is printed once per cause is:
 
 | Line | Question it answers |
 |---|---|
@@ -671,9 +671,9 @@ Progress
 
 Three reasons a planned byte does not move, indented under one heading because they are three members of one set. They were three flat lines whose labels differed while their meaning had to be read off a trailing clause, which hid the structure.
 
-**The total sits on the heading**, aligned with `Transferred` above it, because those two are the pair a reader compares: what crossed the network, and what did not have to. A reason that did not apply is omitted rather than printed as `0 B` — `Deduplicated 0 B` is the normal state of a first transfer and carries no information.
+**The total sits on the heading**, aligned with `Transferred` above it, because those two are the pair a reader compares: what crossed the network, and what did not have to. A reason that did not apply is omitted rather than printed as `0 B` - `Deduplicated 0 B` is the normal state of a first transfer and carries no information.
 
-The same total is the listing's `SAVED` column, and getting it wrong there was the whole reason this section changed. `SAVED` read `dedupeSkippedBytes` alone — the part known at PLANNING time, from placement records. On a database that has just been rebuilt there are no placement records, so that number is zero by construction and every byte the transfer saved is saved by a WORKER discovering the content already present. The column was measuring the one kind of saving that could not occur, and a transfer that skipped 32.1 GiB reported `COPIED 0 B/63.7 GiB · SAVED 0 B` — two defensible numbers that together said it had done nothing and saved nothing.
+The same total is the listing's `SAVED` column, and getting it wrong there was the whole reason this section changed. `SAVED` read `dedupeSkippedBytes` alone - the part known at PLANNING time, from placement records. On a database that has just been rebuilt there are no placement records, so that number is zero by construction and every byte the transfer saved is saved by a WORKER discovering the content already present. The column was measuring the one kind of saving that could not occur, and a transfer that skipped 32.1 GiB reported `COPIED 0 B/63.7 GiB · SAVED 0 B` - two defensible numbers that together said it had done nothing and saved nothing.
 
 | Reason | When | Evidence |
 |---|---|---|
@@ -681,11 +681,11 @@ The same total is the listing's `SAVED` column, and getting it wrong there was t
 | `Present at target` | execution | the target's own answer to a `HEAD`, not re-checked |
 | `Mounted` | execution | the registry relocated it within itself |
 
-Each carries a short qualifier because the label alone does not convey it — `Deduplicated` in particular says nothing about *when*. The qualifier is a noun phrase and not a sentence: **the tool states what happened and leaves the reader to draw conclusions.** An earlier version explained at length that a `Present at target` saving rests on a claim rather than an action, which is true, belongs in this document, and does not belong on the terminal every time somebody checks progress.
+Each carries a short qualifier because the label alone does not convey it - `Deduplicated` in particular says nothing about *when*. The qualifier is a noun phrase and not a sentence: **the tool states what happened and leaves the reader to draw conclusions.** An earlier version explained at length that a `Present at target` saving rests on a claim rather than an action, which is true, belongs in this document, and does not belong on the terminal every time somebody checks progress.
 
 `Re-sent` appears only when a repair has occurred. It is the one thing that makes the done count fall.
 
-**Failed and retrying are counted apart.** A job sitting out a backoff has not given up, and the two need opposite responses — one is "act", the other is "wait". A single total hides which is which, which is exactly how a stalled transfer comes to look like a working one.
+**Failed and retrying are counted apart.** A job sitting out a backoff has not given up, and the two need opposite responses - one is "act", the other is "wait". A single total hides which is which, which is exactly how a stalled transfer comes to look like a working one.
 
 **The advice line is derived from the CLASS**, not from the message, because the class is what the retry policy actually keys off ([04](04-queue-and-scheduling.md) §11). If it says "not retryable", the queue agrees: those jobs will stop rather than burn their attempt budget.
 
@@ -693,14 +693,14 @@ Each carries a short qualifier because the label alone does not convey it — `D
 
 ```
 $ transferctl transfers pause 9c1e8f2a
-Paused 9c1e8f2a — 131 jobs will not be handed out.
+Paused 9c1e8f2a - 131 jobs will not be handed out.
   14 jobs still in flight; they will finish.
 
 $ transferctl transfers resume 9c1e8f2a
-Resumed 9c1e8f2a — 131 jobs are leasable again.
+Resumed 9c1e8f2a - 131 jobs are leasable again.
 
 $ transferctl transfers stop 9c1e8f2a
-Stopped 9c1e8f2a — 131 jobs cancelled.
+Stopped 9c1e8f2a - 131 jobs cancelled.
   14 jobs still in flight; the transfer is cancelling until they report.
 
 $ transferctl transfers priority 9c1e8f2a 900
@@ -720,22 +720,22 @@ Requeued 693 job(s) across 2 transfer(s).
 
 ### Retry is the outage command, and it resumes rather than restarts
 
-`--all` exists because an outage does not fail one transfer — it fails every transfer that was running, and making somebody copy IDs out of a listing to express "carry on with all of it" is busywork whose only effect is that some get missed.
+`--all` exists because an outage does not fail one transfer - it fails every transfer that was running, and making somebody copy IDs out of a listing to express "carry on with all of it" is busywork whose only effect is that some get missed.
 
 Requeueing resets the attempt budget and drops the backoff: the operator running the command *is* the signal that the cause is gone. What it does **not** reset is progress. Jobs that succeeded stay succeeded, and a blob that was partway through keeps its byte count, so a transfer that was 80% done before the network went picks up at 80%. Blobs that landed are found by the placement check or a `HEAD` and cost nothing the second time ([05](05-transfer-engine.md) §4.1).
 
-It will not restart a `cancelled` transfer — that was somebody's decision — or a `succeeded` one. A transfer that failed during *planning* has no jobs to requeue, and says so rather than reporting a successful retry of zero.
+It will not restart a `cancelled` transfer - that was somebody's decision - or a `succeeded` one. A transfer that failed during *planning* has no jobs to requeue, and says so rather than reporting a successful retry of zero.
 
 Each message states the semantics that are easy to get wrong ([04](04-queue-and-scheduling.md) §8): pause does not kill in-flight work, priority does not preempt, cancel does not roll back. The CLI is where those semantics actually reach a user, so it says them rather than assuming the documentation was read.
 
 ### The three verbs differ in what they do to work already DONE
 
-Not in what they do to the work remaining, which is where the intuition goes wrong. `pause` keeps it, `resume` restores the ability to add to it, `stop` keeps it and adds nothing more — and **none of them deletes anything at the destination**. Half a bundle there is unreferenced blobs and untagged manifests: invisible to consumers, because a tag is applied only once everything beneath it is present (invariant I1), and free to the next transfer, which finds them and skips them.
+Not in what they do to the work remaining, which is where the intuition goes wrong. `pause` keeps it, `resume` restores the ability to add to it, `stop` keeps it and adds nothing more - and **none of them deletes anything at the destination**. Half a bundle there is unreferenced blobs and untagged manifests: invisible to consumers, because a tag is applied only once everything beneath it is present (invariant I1), and free to the next transfer, which finds them and skips them.
 
 Two mechanisms carry this, and both are load-bearing:
 
 - **The pause is on the JOB rows, not only on the transfer.** The dequeue predicate reads `NOT paused`, so setting the flag is what actually stops work being handed out. A transfer state alone would be an intention every lease path had to remember to check.
-- **`cancelling` is a state, not a flag.** A leased job belongs to a worker and stops at that worker's next checkpoint, not the instant the command was typed. `stop` therefore reports `cancelling` while anything is in flight, and the completion path closes the window when the last lease reports — a transfer left in `cancelling` forever is indistinguishable from a hang.
+- **`cancelling` is a state, not a flag.** A leased job belongs to a worker and stops at that worker's next checkpoint, not the instant the command was typed. `stop` therefore reports `cancelling` while anything is in flight, and the completion path closes the window when the last lease reports - a transfer left in `cancelling` forever is indistinguishable from a hang.
 
 A verb the current state does not admit is refused with `409 FAILED_PRECONDITION` naming that state, rather than silently doing nothing: it is somebody acting on a stale listing, and telling them the state has moved is the difference between a confusing outcome and an obvious one.
 
@@ -753,7 +753,7 @@ $ transferctl transfers logs 9c1e8f2a --follow --level info
 10:07:44.556  coordinator  INFO   wave advanced    0 → 1  (556 blobs complete)
 ```
 
-Served from `worker_logs` via the Coordinator ([03](03-persistence.md) §7). **The CLI never connects to a worker.** This is a convenience tail for the common debugging question, not a log store — cluster log aggregation remains the system of record, and `transferctl` says so in `--help`.
+Served from `worker_logs` via the Coordinator ([03](03-persistence.md) §7). **The CLI never connects to a worker.** This is a convenience tail for the common debugging question, not a log store - cluster log aggregation remains the system of record, and `transferctl` says so in `--help`.
 
 ## 9. Config validation in CI
 
@@ -765,17 +765,17 @@ $ transferctl config validate ./deploy/products/
   vendor-c-analytics.yaml    ERROR
 
     spec.autoDownload.rules[0].tagPattern: invalid regexp
-      '^v(\d+\.\d+' — missing closing )
+      '^v(\d+\.\d+' - missing closing )
     spec.targets[1].name: 'prod' referenced by rules[0].targets but not declared
     spec.verification.cosign.keyless: certificateIdentity is required in
-      keyless mode — without it, any valid Sigstore signature would be accepted
+      keyless mode - without it, any valid Sigstore signature would be accepted
 
 3 files, 2 valid, 1 error
 ```
 
 Runs the **same validator the Coordinator runs at load** ([02](02-configuration.md) §7), offline, with no cluster. This is the compensation for not having CRD admission validation ([02](02-configuration.md) §2): catch it in the pull request instead of at reconcile time.
 
-The third error is the one worth having. A keyless policy without an identity constraint is syntactically fine and semantically useless — it verifies that *someone* signed the artifact, not that the vendor did. Rejecting it at validation time prevents a configuration that looks secure and is not.
+The third error is the one worth having. A keyless policy without an identity constraint is syntactically fine and semantically useless - it verifies that *someone* signed the artifact, not that the vendor did. Rejecting it at validation time prevents a configuration that looks secure and is not.
 
 ## 10. Client configuration
 
@@ -800,7 +800,7 @@ timeout: 30s
 
 `calibrate` is the exception to the exception: a fixed ten minutes is wrong in both directions, since `--budget 30s --concurrency 1,2,4,8,16,32` is a legitimate request that would blow through it, and the default sweep finishes in about a minute. It computes `2 × budget × (levels + 2) × sides + 1m` instead, which tracks whatever was asked for.
 
-Those two are slow because the work is slow. `products check` opens a TLS connection to every repository a product declares and runs several round trips against each; `discover` lists every tag of every repository and resolves each one. Through a corporate proxy, across a WAN link, minutes is the normal case — so a single 30-second default made them fail almost every time, and report it as `coordinator unreachable`, which sent operators to investigate a service that was working.
+Those two are slow because the work is slow. `products check` opens a TLS connection to every repository a product declares and runs several round trips against each; `discover` lists every tag of every repository and resolves each one. Through a corporate proxy, across a WAN link, minutes is the normal case - so a single 30-second default made them fail almost every time, and report it as `coordinator unreachable`, which sent operators to investigate a service that was working.
 
 The raise applies **only when the operator has not chosen a timeout**, by flag or by environment. An explicit `--timeout 5s` means five seconds even on a slow command; silently overriding it would make the flag a suggestion, and a short deadline is a legitimate choice for a scripted probe.
 
@@ -808,7 +808,7 @@ Giving up on the response does not stop the work. `discover` triggers a scan on 
 
 ### Progress, not a blank terminal
 
-A blocking `discover` now polls `GET .../discovery` on a second connection and renders a live line to **stderr** — phase, current repository, tag counters, elapsed. Stderr, not stdout, so `-o json | jq` is unaffected; and a carriage-return redraw only when stderr is a terminal, because a redirected log full of `\r` is worse than no live display.
+A blocking `discover` now polls `GET .../discovery` on a second connection and renders a live line to **stderr** - phase, current repository, tag counters, elapsed. Stderr, not stdout, so `-o json | jq` is unaffected; and a carriage-return redraw only when stderr is a terminal, because a redirected log full of `\r` is worse than no live display.
 
 Two ways to not wait at all:
 
@@ -856,7 +856,7 @@ Everything else in this CLI reports what the system did. This one runs an experi
 
 ### The problem it exists for
 
-At least six settings decide throughput, they interact, and none of them is self-evidently right: `concurrency.perRegistry`, `concurrency.requestsPerSecond`, `worker.maxConcurrentJobs`, the number of workers, `network.proxy`, and where the workers run. A configuration file states them without justifying them, so tuning is guesswork — and the guesses fail in a consistent direction. Raising concurrency against a link that is already full adds load and no bytes. Adding a worker while a proxy halves the line rate buys a second slow worker. Both look like effort and neither moves the number.
+At least six settings decide throughput, they interact, and none of them is self-evidently right: `concurrency.perRegistry`, `concurrency.requestsPerSecond`, `worker.maxConcurrentJobs`, the number of workers, `network.proxy`, and where the workers run. A configuration file states them without justifying them, so tuning is guesswork - and the guesses fail in a consistent direction. Raising concurrency against a link that is already full adds load and no bytes. Adding a worker while a proxy halves the line rate buys a second slow worker. Both look like effort and neither moves the number.
 
 Calibration measures the path and reports the knee of the curve, so the recommendation is arithmetic rather than folklore. Output is a table per side and a list of suggestions, each carrying the measurement behind it:
 
@@ -875,24 +875,24 @@ SOURCE  near  near.registry.example.net/orbs/cfx-5000-k8s
 Suggestions
 
   !! network.proxy.direct  (source near)  unset (traffic goes through the proxy) -> true
-      direct moved 18.0 MiB/s against 2.1 MiB/s through the proxy — 757% faster.
+      direct moved 18.0 MiB/s against 2.1 MiB/s through the proxy - 757% faster.
 ```
 
-`>` marks the knee — the level worth configuring. `!!` is a measured problem, `!` a measured improvement, unmarked a fact with no knob behind it.
+`>` marks the knee - the level worth configuring. `!!` is a measured problem, `!` a measured improvement, unmarked a fact with no knob behind it.
 
 ### Which repository, and why it is shown
 
-A product spans forty repositories and a calibration measures **one**. The first version picked the first one declared, measured `cfx-5000-product/aaa` — one tag, nothing over 256 KiB — and reported the whole source as unmeasurable while the repositories holding sixty gigabytes sat next to it in the same list.
+A product spans forty repositories and a calibration measures **one**. The first version picked the first one declared, measured `cfx-5000-product/aaa` - one tag, nothing over 256 KiB - and reported the whole source as unmeasurable while the repositories holding sixty gigabytes sat next to it in the same list.
 
 The choice is now made from evidence the Coordinator already holds: the repository containing the largest **discovered** package, which is the one whose blobs a transfer will spend its time on. Where nothing has been discovered yet it says so rather than presenting an arbitrary pick as a considered one, and the Coordinator walks the candidates at run time until one yields a blob worth timing.
 
 Either way the choice is **shown, with its reason, before anything runs**. A judgement made silently inside a five-minute network test is one nobody can check.
 
-The same applies to anything mandatory that was not supplied. A product with two sources and no `--from` used to be an error; on a terminal it is now a question, with the options listed. Off a terminal it stays an error naming the flag — there is nobody to answer, and guessing is worse than stopping.
+The same applies to anything mandatory that was not supplied. A product with two sources and no `--from` used to be an error; on a terminal it is now a question, with the options listed. Off a terminal it stays an error naming the flag - there is nobody to answer, and guessing is worse than stopping.
 
 ### It leaves nothing behind
 
-The target probe pushes real bytes into an upload session and then **cancels** it, so nothing is committed and no blob, tag or manifest appears in the destination ([05](05-transfer-engine.md) §8.1). It writes to `base + source path` — what the planner computes for a real job — and not to the target's configured repository, which is a *prefix*: an upload session opened against a bare prefix returns `404 Not Found` from a registry that is working perfectly. `--no-write` skips it anyway for a target governed by a change process that this would technically violate; the cost is that only the read half is measured, and the write half is often the slower one.
+The target probe pushes real bytes into an upload session and then **cancels** it, so nothing is committed and no blob, tag or manifest appears in the destination ([05](05-transfer-engine.md) §8.1). It writes to `base + source path` - what the planner computes for a real job - and not to the target's configured repository, which is a *prefix*: an upload session opened against a bare prefix returns `404 Not Found` from a registry that is working perfectly. `--no-write` skips it anyway for a target governed by a change process that this would technically violate; the cost is that only the read half is measured, and the write half is often the slower one.
 
 ### What it will not tell you
 

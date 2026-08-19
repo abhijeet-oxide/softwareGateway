@@ -14,9 +14,9 @@ import "sort"
 // # Why this needs no bytes
 //
 // Because the manifests already say it. An OCI 1.1 artifact carries ONE FILE
-// PER LAYER with `org.opencontainers.image.title` naming it — the ORAS
+// PER LAYER with `org.opencontainers.image.title` naming it - the ORAS
 // convention, used by Helm, by cosign and by every vendor bundle this system
-// handles — so a component's manifest is already a list of file names, each
+// handles - so a component's manifest is already a list of file names, each
 // with the content digest and the size of the file under it.
 //
 // A comparison is therefore two of those lists, aligned by path:
@@ -36,7 +36,7 @@ import "sort"
 //
 // WHICH LINES changed inside a file that changed. That genuinely needs both
 // copies, and it is a question about one file that somebody can ask about one
-// file — not a reason to download a release to render a table.
+// file - not a reason to download a release to render a table.
 //
 // An image layer carries no title, names nothing, and is not a file. It is
 // excluded rather than listed as `layer sha256:…`, which would restate the
@@ -50,7 +50,7 @@ import "sort"
 // to the other side of the comparison to find the other.
 type FileDiff struct {
 	// Path is the publisher's own name for the file, which for a titled layer
-	// IS the path — `CONFIGURATION/cfx_sample_ns_input.json`.
+	// IS the path - `CONFIGURATION/cfx_sample_ns_input.json`.
 	Path string
 	// Verdict is same, changed, only-a or only-b, in the same vocabulary the
 	// component rows use.
@@ -68,7 +68,7 @@ type FileDiff struct {
 // Either side may be nil, which is how an added or a removed component is
 // reported: every file it carries is added or removed with it.
 //
-// Sorted by path. The order is the reader's — a directory listing — rather than
+// Sorted by path. The order is the reader's - a directory listing - rather than
 // the order the publisher happened to pack the layers in.
 func diffFiles(a, b *Item) []FileDiff {
 	byPath := func(item *Item) map[string]Layer {
@@ -137,7 +137,7 @@ func diffFiles(a, b *Item) []FileDiff {
 // Not for rows that agree: a component whose own digest matches on both sides
 // is byte-identical, so every file in it is too, and listing them would be
 // thousands of rows saying nothing. The files of a component that DID change
-// are all listed, unchanged ones included — that is the context that makes the
+// are all listed, unchanged ones included - that is the context that makes the
 // changed ones legible.
 func inspectFiles(rows []Row) {
 	for i := range rows {

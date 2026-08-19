@@ -15,14 +15,14 @@ import (
 //
 // It sits in the domain layer, above persistence: it imports both `product`
 // and `store`, which `store` itself may not do. Persistence takes and returns
-// rows; deciding what a product means belongs here. See docs/design/15 §3 —
+// rows; deciding what a product means belongs here. See docs/design/15 §3 -
 // the rule is enforced by depguard, and this package exists because of it.
 
 // Catalog reconciles loaded configuration into the products and repositories
 // tables.
 //
 // This exists because configuration lives in Git and memory, but `packages`
-// carries foreign keys to `products` and `repositories` — so discovery cannot
+// carries foreign keys to `products` and `repositories` - so discovery cannot
 // record anything until those rows exist. Reconciliation runs at startup and
 // after every configuration reload.
 type Catalog struct {
@@ -60,7 +60,7 @@ type ReconcileResult struct {
 //
 // Rows are never deleted. A product or repository removed from configuration
 // is marked inactive, because discovery history, transfers and audit records
-// reference these rows by ID — deleting one would orphan the very history the
+// reference these rows by ID - deleting one would orphan the very history the
 // audit trail exists to preserve.
 func (c *Catalog) Reconcile(ctx context.Context, products []*product.Product) (ReconcileResult, error) {
 	res := ReconcileResult{Products: make(map[string]ProductRef, len(products))}
@@ -81,8 +81,8 @@ func (c *Catalog) Reconcile(ctx context.Context, products []*product.Product) (R
 		}
 		res.ProductsSeen++
 
-		// A DISABLED product keeps its row — its packages and transfer history
-		// reference it — but is left out of the active set, so deactivation
+		// A DISABLED product keeps its row - its packages and transfer history
+		// reference it - but is left out of the active set, so deactivation
 		// below switches it off. Deleting the row instead would orphan exactly
 		// the history somebody disabled the product to preserve.
 		if !p.IsEnabled() {
@@ -126,7 +126,7 @@ func (c *Catalog) Reconcile(ctx context.Context, products []*product.Product) (R
 // upsertProduct inserts or updates the product row and returns its ID.
 //
 // The unique key is (name, config_hash), so an unchanged configuration reuses
-// its row and an edited one creates a new version — which is what lets an
+// its row and an edited one creates a new version - which is what lets an
 // audit record from March still resolve to the configuration in force then.
 func (c *Catalog) upsertProduct(ctx context.Context, tx *sql.Tx, p *product.Product) (int64, error) {
 	cfg, err := json.Marshal(p)
@@ -168,7 +168,7 @@ func (c *Catalog) upsertProduct(ctx context.Context, tx *sql.Tx, p *product.Prod
 //
 // Keyed by PHYSICAL identity (registry_host, repository_path), matching the
 // unique index. Combined with product_id NOT NULL, that means one repository
-// belongs to exactly one product — enforced at configuration load, within a
+// belongs to exactly one product - enforced at configuration load, within a
 // product and across the directory (internal/product, docs/design/03 section 4).
 //
 // The ownership check below is defence in depth: if a clash ever reached this

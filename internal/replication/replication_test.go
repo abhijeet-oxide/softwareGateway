@@ -541,7 +541,7 @@ func TestApplyValidatesProxyCacheBeforeStoringIt(t *testing.T) {
 	}
 }
 
-// Quay has no proxy-cache update, so a change is a delete and a create — and
+// Quay has no proxy-cache update, so a change is a delete and a create - and
 // between them the cache is empty. The plan has to say so.
 func TestProxyCacheReplacementIsExplained(t *testing.T) {
 	api := &fakeQuay{cache: &quay.ProxyCache{UpstreamRegistry: "old.example.com", ExpirationS: 3600}}

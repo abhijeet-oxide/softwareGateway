@@ -7,7 +7,7 @@ package statemachine
 // asserts the terminal sets and the invariants in section 8.
 
 // ---------------------------------------------------------------------------
-// Job (layer) lifecycle — docs/design/10-state-machines.md section 4.
+// Job (layer) lifecycle - docs/design/10-state-machines.md section 4.
 // The highest-volume machine: hundreds of thousands of rows.
 // ---------------------------------------------------------------------------
 
@@ -18,7 +18,7 @@ const (
 	JobPending   JobState = "pending"   // leasable
 	JobLeased    JobState = "leased"    // held by a worker
 	JobSucceeded JobState = "succeeded" // bytes moved
-	JobSkipped   JobState = "skipped"   // already present or mounted — zero bytes
+	JobSkipped   JobState = "skipped"   // already present or mounted - zero bytes
 	JobFailed    JobState = "failed"    // attempts exhausted; retryable by request
 	JobCancelled JobState = "cancelled"
 )
@@ -82,7 +82,7 @@ var Job = New[JobState, JobEvent]("job",
 )
 
 // ---------------------------------------------------------------------------
-// Transfer / promotion lifecycle — section 3.
+// Transfer / promotion lifecycle - section 3.
 // One machine, not two: a promotion is a transfer whose origin is a target
 // repository, so it uses these states unchanged.
 // ---------------------------------------------------------------------------
@@ -107,7 +107,7 @@ const (
 	//
 	// It exists because a delegated transfer creates no jobs. Without it such a
 	// transfer would sit in `running` with an empty job set, and the wave-drain
-	// check would settle it immediately — reporting success at the moment we
+	// check would settle it immediately - reporting success at the moment we
 	// had asked Quay to start and before anything had happened.
 	TransferSyncing   TransferState = "syncing"
 	TransferVerifying TransferState = "verifying"
@@ -173,7 +173,7 @@ var Transfer = New[TransferState, TransferEvent]("transfer",
 
 	Transition[TransferState, TransferEvent]{TransferStateZero, TransferCreated, TransferPending},
 
-	// A step of a chain waits until its predecessor has SUCCEEDED — which,
+	// A step of a chain waits until its predecessor has SUCCEEDED - which,
 	// because the transfer machine only reaches `succeeded` after its own
 	// verification, is where a rule's verification gate comes from. There is
 	// no separate gate mechanism, and there does not need to be.
@@ -209,7 +209,7 @@ var Transfer = New[TransferState, TransferEvent]("transfer",
 	//
 	// Note the absence of any transition INTO a byte-carrying state from here.
 	// A delegated transfer never becomes `running`, never has a wave, and never
-	// acquires a progress denominator — which is what makes it impossible for
+	// acquires a progress denominator - which is what makes it impossible for
 	// one to grow a percentage by accident.
 	Transition[TransferState, TransferEvent]{TransferPlanning, TransferSyncRequested, TransferSyncing},
 	Transition[TransferState, TransferEvent]{TransferSyncing, TransferSyncSucceeded, TransferSucceeded},
@@ -237,7 +237,7 @@ var Transfer = New[TransferState, TransferEvent]("transfer",
 )
 
 // ---------------------------------------------------------------------------
-// Package lifecycle — section 2.
+// Package lifecycle - section 2.
 // ---------------------------------------------------------------------------
 
 type PackageState string
@@ -298,7 +298,7 @@ var Package = New[PackageState, PackageEvent]("package",
 )
 
 // ---------------------------------------------------------------------------
-// Verification lifecycle — section 5.
+// Verification lifecycle - section 5.
 // ---------------------------------------------------------------------------
 
 type VerificationState string
@@ -307,8 +307,8 @@ const (
 	VerificationPending VerificationState = "pending"
 	VerificationRunning VerificationState = "running"
 	VerificationPassed  VerificationState = "passed"
-	VerificationFailed  VerificationState = "failed" // signature did not check out — SECURITY event
-	VerificationError   VerificationState = "error"  // could not run — AVAILABILITY event
+	VerificationFailed  VerificationState = "failed" // signature did not check out - SECURITY event
+	VerificationError   VerificationState = "error"  // could not run - AVAILABILITY event
 	VerificationSkipped VerificationState = "skipped"
 )
 
@@ -331,7 +331,7 @@ const VerificationStateZero VerificationState = ""
 // `failed` and `error` are deliberately distinct and this is the most
 // important distinction in the machine set: collapsing them would make a
 // Sigstore outage indistinguishable from a supply-chain attack. Note there is
-// no edge out of `failed` — retrying a signature that definitively does not
+// no edge out of `failed` - retrying a signature that definitively does not
 // verify accomplishes nothing except repeating the alert.
 var Verification = New[VerificationState, VerificationEvent]("verification",
 	[]VerificationState{VerificationPassed, VerificationFailed, VerificationSkipped},

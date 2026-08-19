@@ -10,7 +10,7 @@ import (
 // is a trap: someone copies what is on their screen, gets nothing back, and
 // reasonably concludes the package is gone.
 //
-// The stored values are always the real ones — `orbs/cfx-5000-k8s` and
+// The stored values are always the real ones - `orbs/cfx-5000-k8s` and
 // `orb_23.8.1076`. Shortening is a rendering decision and never a storage one,
 // so nothing downstream of these rows has to know a vendor exists.
 
@@ -84,7 +84,7 @@ func TestGetPackageAcceptsTheShortenedScopedForm(t *testing.T) {
 	}
 }
 
-// A source with no vendor gets no shortening at all — which is the point of
+// A source with no vendor gets no shortening at all - which is the point of
 // gating it. Before this, a repository path was trimmed on the strength of what
 // a page of results looked like, on every registry.
 func TestARepositoryWithNoVendorIsNotShortened(t *testing.T) {

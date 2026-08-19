@@ -5,7 +5,7 @@
 //
 // Every scan is a FULL scan. There is no cursor, no "tags since" watermark and
 // no cached tag set, because the OCI tag list has no ordering guarantee and no
-// change feed — a cursor is a position in an arbitrary, registry-defined order
+// change feed - a cursor is a position in an arbitrary, registry-defined order
 // that can change between calls. Any incremental scheme would need
 // reconciliation against reality to avoid permanently missing a tag, and that
 // reconciliation is a full scan.
@@ -48,7 +48,7 @@ const tagPageSize = 200
 // registry.
 //
 // A factory rather than a prepared map because the repository set is not known
-// until a scan resolves it — catalog enumeration can return repositories that
+// until a scan resolves it - catalog enumeration can return repositories that
 // did not exist when the loop started.
 type ClientFactory func(repositoryPath string) (registry.Source, error)
 
@@ -69,7 +69,7 @@ type Scanner struct {
 	tagFilter  filter
 	rules      ruleSet
 
-	// layout is how this vendor lays packages out. Never nil — an unset
+	// layout is how this vendor lays packages out. Never nil - an unset
 	// configuration resolves to the standard layout, so the scanner has no
 	// "does this source have a plugin?" branch anywhere.
 	layout vendors.Layout
@@ -82,7 +82,7 @@ type Scanner struct {
 	//
 	// Rebuilding per scan would discard the connection pool and the bearer
 	// token cache every fifteen minutes, turning a warm keep-alive into a fresh
-	// TLS handshake and a token exchange per repository — the cost the token
+	// TLS handshake and a token exchange per repository - the cost the token
 	// cache exists to avoid.
 	mu      sync.Mutex
 	clients map[string]registry.Source
@@ -203,7 +203,7 @@ type ScanResult struct {
 	// Zero on every steady-state scan.
 	Renamed int
 	// Regrouped is how many EXISTING packages were re-grouped under a newly
-	// declared vendor — gaining their signature status, their related artifacts
+	// declared vendor - gaining their signature status, their related artifacts
 	// and their transfer root.
 	//
 	// Also zero on every steady-state scan, and also non-zero exactly once, on
@@ -225,8 +225,8 @@ type ScanResult struct {
 	// Collapsed reports that this result came from a scan ALREADY RUNNING when
 	// the request arrived, rather than one it started.
 	//
-	// Reported rather than hidden. The numbers are real either way — the caller
-	// waited for that scan to finish — but "a scan ran for you" and "you were
+	// Reported rather than hidden. The numbers are real either way - the caller
+	// waited for that scan to finish - but "a scan ran for you" and "you were
 	// shown a scan that was already under way" are different facts, and an
 	// operator watching a count they expect to change deserves to know which
 	// one they are looking at.
@@ -238,7 +238,7 @@ type TagError struct {
 	Repository string
 	Tag        string
 	// DisplayRepository and DisplayTag are the VENDOR's names for the same two
-	// things — `cfx-5000-k8s` and `24.7.1186` where the paths are
+	// things - `cfx-5000-k8s` and `24.7.1186` where the paths are
 	// `orbs/cfx-5000-k8s` and `orb_24.7.1186`. Empty means no shortening
 	// applies, which is what a conformant registry gets.
 	DisplayRepository string
@@ -261,7 +261,7 @@ func (e TagError) Unwrap() error { return e.Err }
 //
 // It is a separate class because it is not a failure of anything. A vendor
 // registry serves a catalogue spanning every customer, and answering 403 for
-// the products this one has no licence to is the correct behaviour — the
+// the products this one has no licence to is the correct behaviour - the
 // entitlement check working, not a broken credential, an outage, or a mistake
 // in configuration.
 //
@@ -293,7 +293,7 @@ func (s *Scanner) tagError(repoPath, tag string, err error) TagError {
 //
 // A 403 on a READ, from a registry that fronts an entitlement system, means
 // one thing: this account may not have this product. 401 is deliberately NOT
-// included — that is a credential that did not authenticate at all, which is a
+// included - that is a credential that did not authenticate at all, which is a
 // real fault affecting everything, and folding it in here would silence an
 // outage.
 func classifyTagError(err error) string {
@@ -315,7 +315,7 @@ func (e RepositoryError) Unwrap() error { return e.Err }
 
 // Scan performs one full scan of every repository this source covers.
 //
-// Returning an error means the scan could not proceed at all — the repository
+// Returning an error means the scan could not proceed at all - the repository
 // set could not be resolved. Per-repository and per-tag failures are collected
 // and do not stop the scan (docs/design/07 §7).
 func (s *Scanner) Scan(ctx context.Context) (ScanResult, error) {
@@ -323,7 +323,7 @@ func (s *Scanner) Scan(ctx context.Context) (ScanResult, error) {
 	res := ScanResult{Vocabulary: s.layout.Vocabulary().Or(vendors.StandardVocabulary())}
 
 	// Progress is published from here on. The enumeration below is the first
-	// thing a caller waits on and, against a slow registry, often the longest —
+	// thing a caller waits on and, against a slow registry, often the longest -
 	// so the tracker starts before it, not after.
 	s.progress.begin()
 	defer s.progress.end()
@@ -335,9 +335,9 @@ func (s *Scanner) Scan(ctx context.Context) (ScanResult, error) {
 	res.RepositoriesFiltered = set.Filtered
 
 	if set.CatalogErr != nil {
-		// Not fatal. A vendor forbidding `_catalog` is normal — the credential
+		// Not fatal. A vendor forbidding `_catalog` is normal - the credential
 		// is usually good for pulling named repositories, not for enumerating
-		// the registry — and the repositories we WERE told about must still be
+		// the registry - and the repositories we WERE told about must still be
 		// scanned.
 		s.log.WarnContext(ctx, "could not list the registry's repositories",
 			"error", describeCatalogError(set.CatalogErr))
@@ -367,8 +367,8 @@ func (s *Scanner) Scan(ctx context.Context) (ScanResult, error) {
 
 	// ONE bound, applied to both phases, sized to the connection pool.
 	//
-	// This used to be two nested semaphores — repositories outside, tags inside
-	// — with separately configured limits. The trouble is that every request
+	// This used to be two nested semaphores - repositories outside, tags inside
+	// - with separately configured limits. The trouble is that every request
 	// they gate goes through ONE connection pool, so the real ceiling was
 	// min(pool, R×T), and the defaults hid it by agreeing: 4 × 8 = 32 =
 	// maxConnections. Change any one of the three and the system silently
@@ -376,8 +376,8 @@ func (s *Scanner) Scan(ctx context.Context) (ScanResult, error) {
 	// way to tell from the outside which.
 	//
 	// So the semaphore is sized to the pool, and there is one of it. It cannot
-	// be nested — the outer holders would deadlock waiting for slots the inner
-	// work needs — which is why the scan is now two flat phases rather than a
+	// be nested - the outer holders would deadlock waiting for slots the inner
+	// work needs - which is why the scan is now two flat phases rather than a
 	// tree. That fell out of the fix and is an improvement on its own: the total
 	// tag count is known before any manifest is fetched, so progress reports a
 	// real denominator instead of one that grows as it goes.
@@ -410,7 +410,7 @@ func (s *Scanner) Scan(ctx context.Context) (ScanResult, error) {
 	// Display names are RECONCILED on every scan, not written once at discovery.
 	//
 	// Without this, `vendor: near` would only affect tags discovered after it
-	// was set — because the phases above skip a tag already recorded, by design:
+	// was set - because the phases above skip a tag already recorded, by design:
 	// one HEAD, no fetch, no grouping. A source whose packages predate the
 	// setting would keep showing `orb_23.8.1076` forever, and re-scanning would
 	// never fix it, which is exactly what a person would try.
@@ -443,7 +443,7 @@ func (s *Scanner) Scan(ctx context.Context) (ScanResult, error) {
 	// one that found nothing.
 	//
 	// This distinction is load-bearing. Per-repository errors are collected so
-	// one unreachable repository cannot hide the other nineteen — but if none
+	// one unreachable repository cannot hide the other nineteen - but if none
 	// succeeded, the registry is down, and reporting success would keep
 	// `discovery_last_success_timestamp_seconds` advancing right through the
 	// outage. That gauge is the thing to alert on precisely because it catches
@@ -460,8 +460,8 @@ func (s *Scanner) Scan(ctx context.Context) (ScanResult, error) {
 
 // recordUnavailable persists the tags a source refused to serve.
 //
-// Only the classified ones. An ordinary failure — a timeout, a malformed
-// manifest — is transient or is a bug, and writing it here would turn a table
+// Only the classified ones. An ordinary failure - a timeout, a malformed
+// manifest - is transient or is a bug, and writing it here would turn a table
 // of "what we are not entitled to" into a table of everything that ever went
 // wrong, which is what the log is for.
 //
@@ -493,8 +493,8 @@ func (s *Scanner) recordUnavailable(ctx context.Context, failures []TagError) {
 // entitlementDetail is what the registry itself said, when it said anything.
 //
 // Preferred over our own rendering because the vendor's sentence names the
-// customer and the product — "No valid entitlement found for End User: 215952
-// and Product sales items: CFXC24STD03.00" — which is what somebody takes to
+// customer and the product - "No valid entitlement found for End User: 215952
+// and Product sales items: CFXC24STD03.00" - which is what somebody takes to
 // their account manager. Our rendering is a status code.
 func entitlementDetail(err error) string {
 	var rerr *registry.Error
@@ -517,7 +517,7 @@ func entitlementDetail(err error) string {
 // either name alone.
 //
 // Failures are logged and swallowed. A display name is cosmetic, and failing a
-// scan over one — losing the packages that scan discovered — would be a bad
+// scan over one - losing the packages that scan discovered - would be a bad
 // trade in every direction.
 func (s *Scanner) reconcileDisplayNames(ctx context.Context, work []tagWork) int {
 	repos := make(map[int64]string, len(work))
@@ -567,7 +567,7 @@ type tagWork struct {
 	client   registry.Source
 	tag      string
 	// accessory marks a tag pulled in by the Layout rather than admitted by the
-	// filters — NEAR's `signed_orb_X` for an admitted `orb_X`. It is fetched and
+	// filters - NEAR's `signed_orb_X` for an admitted `orb_X`. It is fetched and
 	// handed to Group, and it must never become a package of its own.
 	accessory bool
 }
@@ -593,7 +593,7 @@ type repoFailure struct {
 //
 // It produces a FLAT work list. Nothing is fetched here beyond the tag lists,
 // so the phase is cheap relative to the one that follows and finishes knowing
-// the exact size of the work remaining — which is what lets progress report a
+// the exact size of the work remaining - which is what lets progress report a
 // denominator that does not move.
 func (s *Scanner) listPhase(ctx context.Context, repos []string, limit int) listOutcome {
 	type result struct {
@@ -666,8 +666,8 @@ func (s *Scanner) listPhase(ctx context.Context, repos []string, limit int) list
 	}
 	wg.Wait()
 
-	// Assembled in the ORIGINAL order, after the fact, so the work list — and
-	// therefore the logs — come out identical run to run even though the listing
+	// Assembled in the ORIGINAL order, after the fact, so the work list - and
+	// therefore the logs - come out identical run to run even though the listing
 	// did not.
 	out := listOutcome{tags: map[int64]map[string]bool{}}
 	for _, r := range results {
@@ -730,13 +730,13 @@ func (s *Scanner) resolvePhase(
 
 	// A repository grouped under a DIFFERENT convention from the one configured
 	// now has to be grouped again, and the head phase has just marked all its
-	// tags `known` — which is exactly what would skip it. So the marks are
+	// tags `known` - which is exactly what would skip it. So the marks are
 	// cleared for those repositories only.
 	//
 	// This is what makes a source's `vendor` retroactive. Without it, declaring
 	// a vendor after a repository was scanned leaves every existing package
-	// reading `unknown`, carrying no signature relation, and — the part that
-	// actually matters — with no transfer root, so moving one would leave its
+	// reading `unknown`, carrying no signature relation, and - the part that
+	// actually matters - with no transfer root, so moving one would leave its
 	// signature behind. Re-scanning could never fix it, because re-scanning is
 	// the path that skips known tags.
 	regrouping := s.repositoriesToRegroup(ctx, resolved)
@@ -748,7 +748,7 @@ func (s *Scanner) resolvePhase(
 		}
 	}
 
-	// Pull in the tags the Layout needs but the filters did not admit — NEAR's
+	// Pull in the tags the Layout needs but the filters did not admit - NEAR's
 	// `signed_orb_X` and `signature_orb_X` for an admitted `orb_X`.
 	//
 	// Only for releases that are actually being grouped: a repository where
@@ -760,7 +760,7 @@ func (s *Scanner) resolvePhase(
 		s.progress.update(func(p *ScanProgress) { p.TagsResolved++ })
 		if r.err != nil {
 			// Collected, not returned. One bad artifact must not stop discovery
-			// of the rest — that is how a single vendor mistake would otherwise
+			// of the rest - that is how a single vendor mistake would otherwise
 			// stall every release behind it.
 			res.TagErrors = append(res.TagErrors,
 				s.tagError(r.work.repoPath, r.work.tag, r.err))
@@ -829,7 +829,7 @@ func (s *Scanner) resolvePhase(
 			f, ok := trees[pkg.Tag]
 			if !ok {
 				// The Layout named a tag we did not fetch. Possible when it
-				// groups onto a payload discovered by an earlier scan — the
+				// groups onto a payload discovered by an earlier scan - the
 				// relations still belong on that existing package.
 				if err := s.attachRelations(ctx, repoID, pkg, regrouping[repoID]); err != nil {
 					s.log.WarnContext(ctx, "could not attach related artifacts",
@@ -858,7 +858,7 @@ func (s *Scanner) resolvePhase(
 			}
 
 			// The package already existed. On an ordinary scan that means a
-			// concurrent one won the race and there is nothing to do — but on a
+			// concurrent one won the race and there is nothing to do - but on a
 			// re-grouping pass it is the WHOLE POINT: this is a package recorded
 			// under the previous convention, and its relations, signature status
 			// and transfer root are what we came to correct.
@@ -892,12 +892,12 @@ func (s *Scanner) resolvePhase(
 // THE BUG THIS FIXES. `discovery.tagFilters` is how an operator says which
 // RELEASES to track, and `include: ['^orb_']` is a perfectly reasonable way to
 // say "the release tags, not the noise". But under a vendor Layout, NEAR's
-// `signed_orb_X` is neither noise nor a release — it is the plumbing of the
+// `signed_orb_X` is neither noise nor a release - it is the plumbing of the
 // release that WAS admitted, and it is where the signature lives. With the two
 // conflated, that filter produced a catalogue in which every package read
 // `unsigned`, with nothing in any output to suggest the filter was why.
 //
-// Only for tags actually being grouped — new ones, or a repository being
+// Only for tags actually being grouped - new ones, or a repository being
 // regrouped. A repository where nothing changed adds nothing, which is what
 // keeps the steady state at one HEAD per admitted tag.
 //
@@ -959,7 +959,7 @@ func (s *Scanner) accessoryPhase(
 // Cheap: one query per repository in the scan, and it answers "no" for every
 // repository on every scan after the one that reconciles it. That termination
 // is the reason this keys off the RECORDED LAYOUT NAME rather than off a
-// symptom such as "some package still reads unknown" — a repository can
+// symptom such as "some package still reads unknown" - a repository can
 // legitimately contain unsigned packages forever, and a symptom-based trigger
 // would re-fetch every tag of it on every scan for the rest of time.
 func (s *Scanner) repositoriesToRegroup(ctx context.Context, resolved []resolvedTag) map[int64]bool {
@@ -1045,7 +1045,7 @@ func (s *Scanner) ensureRepositoryRow(ctx context.Context, repoPath string) (int
 		}
 	}
 
-	// The shortened spelling for listings, from the source's vendor plugin —
+	// The shortened spelling for listings, from the source's vendor plugin -
 	// empty for every conformant registry, which is the point. It travels with
 	// the repository row rather than being inferred at render time, so a listing
 	// says the same thing about a repository whatever else is on the page, and
@@ -1117,8 +1117,8 @@ func (s *Scanner) recordPackage(
 ) (tagOutcome, error) {
 	// One writer at a time within a source.
 	//
-	// Everything expensive — the HEAD, the existence check, the manifest oci.Tree
-	// fetch — already happened outside this call and runs fully in parallel.
+	// Everything expensive - the HEAD, the existence check, the manifest oci.Tree
+	// fetch - already happened outside this call and runs fully in parallel.
 	// What is left is a short local transaction, and serialising it costs
 	// nothing measurable while removing a whole class of problem: SQLite
 	// serialises writers anyway and returns SQLITE_BUSY rather than queueing,
@@ -1145,7 +1145,7 @@ func (s *Scanner) recordPackage(
 		PublishedAt:    t.PublishedAt,
 
 		// What the Layout concluded. `unknown` where the layout does not look
-		// for signatures at all, which is honest — claiming `unsigned` there
+		// for signatures at all, which is honest - claiming `unsigned` there
 		// would be a confident answer nobody checked.
 		SignatureStatus: string(pkg.Status(s.layout.LooksForSignatures())),
 		// Empty unless the vendor bundles the payload with its signature, in
@@ -1216,7 +1216,7 @@ func (s *Scanner) recordPackage(
 
 // writeTree persists the artifact oci.Tree and its blob references.
 func (s *Scanner) writeTree(ctx context.Context, tx *sql.Tx, packageID int64, t oci.Tree) error {
-	// Parents precede children in the slice — fetchTree walks breadth-first —
+	// Parents precede children in the slice - fetchTree walks breadth-first -
 	// so a child's parent row ID is always already assigned.
 	ids := make([]int64, len(t.Artifacts))
 
@@ -1380,7 +1380,7 @@ func (s *Scanner) applyRules(
 		}
 	}
 	if err != nil {
-		// A misconfigured rule must not fail the discovery — the package is
+		// A misconfigured rule must not fail the discovery - the package is
 		// real and worth recording either way. Logged loudly instead.
 		s.log.ErrorContext(ctx, "auto-download rule could not be applied",
 			"rule", rule.Name, "tag", tag, "error", err)

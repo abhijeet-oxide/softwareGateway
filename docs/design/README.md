@@ -1,8 +1,8 @@
-# softwareGateway — System Design
+# softwareGateway - System Design
 
-A cloud-native platform that continuously discovers software packages published to vendor OCI registries and replicates them into internal registries — fast, resiliently, and with a durable record of what moved.
+A cloud-native platform that continuously discovers software packages published to vendor OCI registries and replicates them into internal registries - fast, resiliently, and with a durable record of what moved.
 
-**Start here: [00 — Overview](00-overview.md).**
+**Start here: [00 - Overview](00-overview.md).**
 
 ---
 
@@ -36,7 +36,7 @@ A cloud-native platform that continuously discovers software packages published 
 
 | If you are… | Read |
 |---|---|
-| **Wondering what this tool actually does** | **[Functional Overview](../FUNCTIONAL-OVERVIEW.md)** — start there, not here |
+| **Wondering what this tool actually does** | **[Functional Overview](../FUNCTIONAL-OVERVIEW.md)** - start there, not here |
 | Reviewing the architecture | 00 → 01 → 04 → 05 → 11 |
 | Implementing the Coordinator | 03 → 04 → 09 → 10 → 07 |
 | Implementing the Worker | 05 → 06 → 04 §4 → 11 |
@@ -50,15 +50,15 @@ A cloud-native platform that continuously discovers software packages published 
 ## The design in ten lines
 
 - **Three binaries**: Coordinator (control plane), Worker (data plane), `transferctl` (CLI). One PostgreSQL database. Nothing else.
-- **A worker never transfers a package** — it transfers one blob. That single choice gives fleet-wide parallelism, blob-sized failure blast radius, and stateless workers.
+- **A worker never transfers a package** - it transfers one blob. That single choice gives fleet-wide parallelism, blob-sized failure blast radius, and stateless workers.
 - **Bytes never touch disk and never traverse the Coordinator.** Worker memory is independent of blob size.
 - **The queue is a Postgres table** consumed with `SKIP LOCKED`, so a job's state change and its transfer's progress commit in one transaction.
 - **Recovery is the absence of state needing recovery.** Worker liveness is a lease timestamp; a `SIGKILL`ed pod needs no cleanup.
 - **The fastest transfer is the one that does not happen.** Placement lookups and cross-repository mounts routinely eliminate 30–70% of a package.
-- **Idempotency is structural** — unique constraints, not application logic.
+- **Idempotency is structural** - unique constraints, not application logic.
 - **Ordering is one integer.** Waves replace a dependency graph; a tag never appears before its blobs.
 - **Backpressure is AIMD**, chosen over cleverer controllers because it can be reasoned about at 3 a.m.
-- **The OCI client library decision** ([ADR-001](16-technology-choices.md#adr-001)) closed at M3 on `oras-go/v2`, for the write path only — and touched exactly one directory, which was the point of leaving it open behind an interface.
+- **The OCI client library decision** ([ADR-001](16-technology-choices.md#adr-001)) closed at M3 on `oras-go/v2`, for the write path only - and touched exactly one directory, which was the point of leaving it open behind an interface.
 
 ## Known limitations
 
@@ -76,7 +76,7 @@ Stated here so they are found before they are discovered.
 | Delegated replication is observed, not measured | A `mirror` target reports a sync state and no byte progress; a `proxy` target holds nothing until someone pulls ([18](18-quay-replication.md) §6) |
 | No UI in v1 | `transferctl` and Grafana are the interfaces. Direction and gates in [19](19-user-interface.md); the API-auth gate above blocks it |
 | `warm` is not built | A proxy cache fills when a pod pulls. Populating one deliberately moves a whole release at line rate, so it belongs in the worker plane and needs a third `jobs.kind` ([18](18-quay-replication.md) §6.3) |
-| A download cannot express an arbitrary workflow | The only ordering primitive is a content dependency the targets already declare. No conditionals, branches or user-defined steps — deliberately ([20](20-download-rules.md) §12) |
+| A download cannot express an arbitrary workflow | The only ordering primitive is a content dependency the targets already declare. No conditionals, branches or user-defined steps - deliberately ([20](20-download-rules.md) §12) |
 | An auto-download rule can only be turned off by a commit | Deliberate: a runtime override would be a second source of truth for whether a rule fires. During an incident the fast path is `transfers pause`, which stops the work rather than editing configuration ([20](20-download-rules.md) §9) |
 
 ## Requirement traceability
@@ -90,12 +90,12 @@ Every section of the original requirement, mapped to where it is specified. This
 | Declarative, GitOps, ConfigMaps + Secrets, Flux | [02](02-configuration.md) §2–3, [14](14-deployment-and-development.md) §2 |
 | Secrets via VSO, read as k8s Secrets | [02](02-configuration.md) §3, §5.5 |
 | Generic OCI + ACR + Artifactory + Quay; extensible | [06](06-registry-abstraction.md) §6, §6.5 |
-| Quay replication type selectable per target — copy, mirror, proxy | [18](18-quay-replication.md) §4–6 |
+| Quay replication type selectable per target - copy, mirror, proxy | [18](18-quay-replication.md) §4–6 |
 | A UI, after a CLI-first release, over the same API | [19](19-user-interface.md) |
 | Continuous discovery, persisted, no duplicates | [07](07-discovery.md) §2–3, [03](03-persistence.md) §5 |
 | Discovery → notifications, manual and auto download | [07](07-discovery.md) §5–6 |
 | Regex auto-download rules | [02](02-configuration.md) §5.4, [07](07-discovery.md) §5 |
-| A download triggered by CLI or UI, to one target or many, with the Quay step in the chain — and an auto-download rule that fires the same thing | [20](20-download-rules.md) §1.1, §3–4, §8 |
+| A download triggered by CLI or UI, to one target or many, with the Quay step in the chain - and an auto-download rule that fires the same thing | [20](20-download-rules.md) §1.1, §3–4, §8 |
 | Verification before and after a download, enabled or disabled per rule | [20](20-download-rules.md) §5 |
 | A rule that can be turned off without a commit | [20](20-download-rules.md) §9 |
 | Notification policy per product; events; email + Teams | [02](02-configuration.md) §4, [12](12-observability-and-audit.md) §5 |

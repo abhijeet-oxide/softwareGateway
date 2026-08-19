@@ -10,7 +10,7 @@ import (
 
 // tree builds an ExpandedTree from a compact description.
 //
-// Each entry is digest, parent index, and the ref.name annotation — the three
+// Each entry is digest, parent index, and the ref.name annotation - the three
 // things layout resolution reads. Nothing else matters to it.
 func tree(entries ...artifactSpec) store.ExpandedTree {
 	out := store.ExpandedTree{Artifacts: make([]store.ExpandedArtifact, 0, len(entries))}
@@ -138,7 +138,7 @@ func TestInheritanceFollowsTheNearestNamedAncestor(t *testing.T) {
 		SourceRepository: "orbs/CFX-5000-k8s",
 	})
 
-	// The leaf stays inside the bundle's own repository — that is where its
+	// The leaf stays inside the bundle's own repository - that is where its
 	// parent physically lives, whatever the parent is CALLED elsewhere.
 	if repo := got["sha256:leaf"].Primary().Repository; repo != "lab/orbs/CFX-5000-k8s" {
 		t.Errorf("leaf lands in %q, want lab/orbs/CFX-5000-k8s", repo)
@@ -234,7 +234,7 @@ func assertPlacements(t *testing.T, got, want map[string]Placement) {
 // `orbs/CFX-5000-k8s-215952-edgeNAC-…:orb_25.7_…`. The same repository, spelled
 // twice.
 //
-// Compared byte for byte, that is two repositories — so the destination grew
+// Compared byte for byte, that is two repositories - so the destination grew
 // two sibling folders with the same name and different capitals, half the
 // bundle in each, and the mixed-case one returned 401 on its tag because the
 // OCI grammar for a repository name is lowercase-only and the registry scoped

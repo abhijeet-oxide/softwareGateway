@@ -60,7 +60,7 @@ func (r *Registry) Swap(res LoadResult) {
 			// The document failed to PARSE, so it never yielded a name. Fall
 			// back to which product this file provided last time: without
 			// this, a stray syntax error would not merely fail to apply, it
-			// would silently stop the product replicating — the opposite of
+			// would silently stop the product replicating - the opposite of
 			// the fail-closed-per-product guarantee.
 			name = r.fileToName[bad.File]
 		}

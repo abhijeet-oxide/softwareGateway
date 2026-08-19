@@ -20,7 +20,7 @@ import (
 // worker may call, and the reason workers hold no database credentials: every
 // query behind them runs here, on the Coordinator, which is the sole writer.
 //
-// The handlers do what every handler in this package does and nothing more —
+// The handlers do what every handler in this package does and nothing more -
 // parse, call a domain package, serialize. The queue decides what a lease
 // means; this decides what it looks like over HTTP.
 
@@ -166,7 +166,7 @@ func (s *Server) reportProgress(w http.ResponseWriter, r *http.Request, jobID in
 	}
 
 	if err := s.deps.Queue.Progress(r.Context(), jobID, req.WorkerID, bytes); err != nil {
-		// A dropped progress report costs nothing — it is a UI signal, and the
+		// A dropped progress report costs nothing - it is a UI signal, and the
 		// worker is mid-transfer. Answering 503 would make a worker retry
 		// something not worth retrying, so this is logged and accepted.
 		s.deps.Logger.WarnContext(r.Context(), "could not record job progress",

@@ -29,7 +29,7 @@ type Setting struct {
 //
 // crypto/x509 has rejected these since Go 1.23. The rejection happens while
 // PARSING, before verification, which is why skipping verification does not
-// help — measured on Go 1.25.7, where InsecureSkipVerify alone fails with the
+// help - measured on Go 1.25.7, where InsecureSkipVerify alone fails with the
 // identical "tls: failed to parse certificate from server" message.
 var NegativeSerial = Setting{
 	Key: "x509negativeserial",
@@ -78,7 +78,7 @@ func Apply(opts Options, log *slog.Logger) []Setting {
 	}
 
 	for _, s := range applied {
-		log.Warn("tls: RELAXED X.509 PARSING FOR THE WHOLE PROCESS — this applies to every "+
+		log.Warn("tls: RELAXED X.509 PARSING FOR THE WHOLE PROCESS - this applies to every "+
 			"registry, every Sigstore call and every outbound connection, not just the "+
 			"repository that needed it",
 			"godebug", s.Key+"=1",
@@ -92,8 +92,8 @@ func Apply(opts Options, log *slog.Logger) []Setting {
 // for that key and preserving everything else.
 //
 // Appending rather than assigning matters: GODEBUG is commonly already set in a
-// container image or a Deployment — for http2debug, for a panicnil or
-// tlsmaxrsasize migration — and clobbering it would silently undo whatever it
+// container image or a Deployment - for http2debug, for a panicnil or
+// tlsmaxrsasize migration - and clobbering it would silently undo whatever it
 // was doing. That is the kind of breakage nobody connects back to this setting.
 func mergeGODEBUG(current, key, value string) string {
 	entry := key + "=" + value

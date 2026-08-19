@@ -15,7 +15,7 @@ import (
 //
 // It names a COUNT and nothing else. It does not say what the two arguments
 // are, which one is missing, what shape the missing one takes, or how to find a
-// value for it — and it is produced by the command that already knows all four.
+// value for it - and it is produced by the command that already knows all four.
 // Somebody who mistypes `transferctl packages inspect my-product` gets a number
 // and has to go and read `--help` to learn that the second argument is a tag.
 //
@@ -57,7 +57,7 @@ func (e usageError) Error() string { return e.msg }
 // takes declares a command's positional arguments.
 //
 // It sets Use, Args and the argument section of the long help from one
-// declaration, so the three cannot disagree — and they did: `Use` said
+// declaration, so the three cannot disagree - and they did: `Use` said
 // `<product> <package>` while the error said "accepts 2 arg(s)", and only one
 // of those was in front of the user when it mattered.
 func takes(cmd *cobra.Command, verb string, specs ...argSpec) {
@@ -199,7 +199,7 @@ func countPhrase(specs []argSpec) string {
 // group configures a command that only holds subcommands.
 //
 // Two fixes in three lines. An unrecognised subcommand used to print the help
-// text and EXIT ZERO — so `transferctl pkg inspct a b` looked, to a script,
+// text and EXIT ZERO - so `transferctl pkg inspct a b` looked, to a script,
 // exactly like success. And cobra's suggestion machinery is off by default,
 // which throws away the one thing it can offer for a typo.
 func group(cmd *cobra.Command) *cobra.Command {
@@ -218,7 +218,7 @@ func group(cmd *cobra.Command) *cobra.Command {
 	cmd.SilenceUsage = true
 	// Off by default in cobra, which throws away the one thing it can offer for
 	// a typo. Two is the usual edit distance for a transposition or a dropped
-	// letter — `inspct` for `inspect`, `descibe` for `describe`.
+	// letter - `inspct` for `inspect`, `descibe` for `describe`.
 	cmd.SuggestionsMinimumDistance = 2
 	return cmd
 }
@@ -289,12 +289,12 @@ func optionalProductArg(whenOmitted string) argSpec {
 // packageArg is the one that caused the confusion this file exists for.
 //
 // A package is identified by a TAG, not by a product version, and a bare
-// product name is never enough. Saying that here — with the forms and an
-// example — is the difference between one attempt and three.
+// product name is never enough. Saying that here - with the forms and an
+// example - is the difference between one attempt and three.
 func packageArg() argSpec {
 	return argSpec{
 		Name: "package",
-		Help: "a tag, a digest, or repository:tag — e.g. orb_23.8.1076, " +
+		Help: "a tag, a digest, or repository:tag - e.g. orb_23.8.1076, " +
 			"sha256:ccbd…, orbs/cfx-5000-k8s:orb_23.8.1076",
 		Find: "transferctl packages list <product>",
 	}

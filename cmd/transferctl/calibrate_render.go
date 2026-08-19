@@ -12,8 +12,8 @@ import (
 // Rendering a calibration.
 //
 // Two halves, and the second is the point. The tables are the evidence and the
-// suggestions are the answer, so the suggestions come last — the position a
-// reader's eye ends on — and each carries the measurement behind it, so the
+// suggestions are the answer, so the suggestions come last - the position a
+// reader's eye ends on - and each carries the measurement behind it, so the
 // answer can be checked rather than believed.
 
 func renderCalibration(w io.Writer, resp *v1.CalibrateResponse) error {
@@ -82,7 +82,7 @@ func renderCalibrationSide(w io.Writer, heading string, s v1.CalibrationSide) {
 	}
 
 	if s.StillClimbing {
-		fmt.Fprintf(w, "  still rising at %d streams — the ceiling is above this sweep\n",
+		fmt.Fprintf(w, "  still rising at %d streams - the ceiling is above this sweep\n",
 			s.Levels[len(s.Levels)-1].Concurrency)
 	}
 	for _, l := range s.Levels {
@@ -96,7 +96,7 @@ func renderCalibrationSide(w io.Writer, heading string, s v1.CalibrationSide) {
 // describeDirect says what happens without the proxy, in one line.
 func describeDirect(r v1.CalibrationRoute) string {
 	if !r.DirectReachable {
-		return "UNREACHABLE — the proxy is the only route out (" + r.DirectDetail + ")"
+		return "UNREACHABLE - the proxy is the only route out (" + r.DirectDetail + ")"
 	}
 	if r.ProxiedRate <= 0 || r.DirectRate <= 0 {
 		return "reachable"

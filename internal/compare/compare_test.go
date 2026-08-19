@@ -20,7 +20,7 @@ import (
 // Five questions, one mechanism.
 //
 // The tests are grouped by the question an operator is asking, because that is
-// what has to keep working — not by which function is being called. Every one of
+// what has to keep working - not by which function is being called. Every one of
 // them is `walk two bundles and align their components`, and if any of them
 // needed a special case in the engine, the engine would be wrong.
 
@@ -35,8 +35,8 @@ const (
 	// is DELIBERATELY NOT UNDER sourcePath.
 	//
 	// That is the real shape and the fixture used to get it wrong. A NEAR
-	// component is annotated with the coordinate the vendor BUILT it from —
-	// `cfx-5000-product/admin:2507.2131.0` — which is a different tree from the
+	// component is annotated with the coordinate the vendor BUILT it from -
+	// `cfx-5000-product/admin:2507.2131.0` - which is a different tree from the
 	// `orbs/…` repository the orb is served out of. Modelling the name as a
 	// path beneath the bundle made the source look like a place that could
 	// plausibly serve it, which is exactly the assumption that shipped a
@@ -66,7 +66,7 @@ func TestAFaithfulCopyIsIdentical(t *testing.T) {
 
 // The failure this system actually shipped with: every blob and every manifest
 // pushed, and the component's own tag never applied. Every digest agrees, so
-// nothing content-addressed can catch it — the release is simply not pullable.
+// nothing content-addressed can catch it - the release is simply not pullable.
 func TestAComponentThatIsNotPullableUnderItsOwnNameIsReported(t *testing.T) {
 	f := newFixture(t)
 	f.publish(f.src, sourcePath, release, componentsOf(release))
@@ -125,8 +125,8 @@ func TestAPartialTransferIsReportedComponentByComponent(t *testing.T) {
 
 // THE 253 FALSE FINDINGS.
 //
-// A vendor does not publish its components under their own names — NEAR keeps
-// them inside the orb repository — and a component's `ref.name` is the upstream
+// A vendor does not publish its components under their own names - NEAR keeps
+// them inside the orb repository - and a component's `ref.name` is the upstream
 // coordinate it was built from, not a path the vendor serves. Probing the
 // source for it returns 404 for every component of every orb, and the report
 // that produced said `not published as cfx-5000-product/… on the first side`
@@ -182,7 +182,7 @@ func TestTheDestinationIsStillHeldToIt(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 // TWO SIDES, ONE ARTIFACT. The destination holds the signed wrapper but not the
-// tag naming it — which is what a transfer whose final tag never landed leaves.
+// tag naming it - which is what a transfer whose final tag never landed leaves.
 //
 // Resolving each side independently walked the wrapper on one side and the
 // payload on the other, then reported the two roots' digests as a content
@@ -206,7 +206,7 @@ func TestBothSidesAreWalkedFromAReferenceTheyBothHold(t *testing.T) {
 			"different artifacts is not a comparison", report.ResolvedA, report.ResolvedB)
 	}
 	if report.ResolvedA != wrapper {
-		t.Errorf("walked from %q, want the wrapper %q — the most complete "+
+		t.Errorf("walked from %q, want the wrapper %q - the most complete "+
 			"reference both sides hold", report.ResolvedA, wrapper)
 	}
 
@@ -232,8 +232,8 @@ func TestBothSidesAreWalkedFromAReferenceTheyBothHold(t *testing.T) {
 }
 
 // TWO CHILDREN, ONE NAME. NEAR's wrapper names both of its children after the
-// bundle itself — `orbs/cfx-5000-k8s:orb_25.7…` and
-// `orbs/cfx-5000-k8s:signature_orb_25.7…` — so a key built from the repository
+// bundle itself - `orbs/cfx-5000-k8s:orb_25.7…` and
+// `orbs/cfx-5000-k8s:signature_orb_25.7…` - so a key built from the repository
 // alone collided, one child silently won, and the release's SIGNATURE was
 // absent from both sides of every comparison that walked a wrapper.
 //
@@ -265,7 +265,7 @@ func TestTwoComponentsNamedAfterTheBundleAreBothCompared(t *testing.T) {
 		t.Errorf("the payload the wrapper names is not a row:\n%s", describe(report))
 	}
 	if !signature {
-		t.Errorf("the signature the wrapper names is not a row — it collided with "+
+		t.Errorf("the signature the wrapper names is not a row - it collided with "+
 			"the payload and was dropped:\n%s", describe(report))
 	}
 	if !report.Identical() {
@@ -395,7 +395,7 @@ func TestChangedFilesAreNamed(t *testing.T) {
 // than the digest.
 //
 // This is also what makes the comparison free. It used to DOWNLOAD such layers
-// to look inside them — every layer of every changed component, on both sides —
+// to look inside them - every layer of every changed component, on both sides -
 // which was the whole of the time a comparison took, and was spent to compute
 // digest comparisons the manifests already answered.
 func TestALayerWithNoNameIsNotReportedAsAFile(t *testing.T) {
@@ -544,7 +544,7 @@ func TestTwoTargetsAreComparedTheSameWay(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 // A NEAR orb gets a repository to itself, so a tag in it that this release does
-// not account for is genuinely unexplained — an old version left behind, or
+// not account for is genuinely unexplained - an old version left behind, or
 // something published by hand.
 func TestUnexplainedTagsInTheBundleRepositoryAreReported(t *testing.T) {
 	f := newFixture(t)
@@ -576,15 +576,15 @@ func TestUnexplainedTagsInTheBundleRepositoryAreReported(t *testing.T) {
 
 // THE OTHER HALF OF THE 253.
 //
-// NEAR tags every component inside the orb's own repository — one tag per
-// component, spelled from that component's digest — so a listing of that
+// NEAR tags every component inside the orb's own repository - one tag per
+// component, spelled from that component's digest - so a listing of that
 // repository returns hundreds of names the inventory does not contain. It does
 // not contain them because a component's Tag comes from its `ref.name`
 // (`2507.2131.0`), a different string for the same manifest.
 //
 // Judged by NAME they were all unexplained, and a correct orb printed a wall of
-// them under "not part of this release". Judged by what they point AT — which
-// is the only question OCI lets you ask about a tag — there is nothing there
+// them under "not part of this release". Judged by what they point AT - which
+// is the only question OCI lets you ask about a tag - there is nothing there
 // the release does not account for.
 func TestTagsNamingContentTheBundleAccountsForAreNotUnexplained(t *testing.T) {
 	f := newFixture(t)
@@ -619,7 +619,7 @@ func TestTagsNamingContentTheBundleAccountsForAreNotUnexplained(t *testing.T) {
 // still part of the release.
 //
 // Where a destination has neither the wrapper's tag nor the wrapper, the
-// payload is what both sides can be compared from — so the signature is not in
+// payload is what both sides can be compared from - so the signature is not in
 // the walked tree, and the vendor's `signature_orb_…` tag was reported back to
 // the vendor as content nobody had put there. The release is precisely where
 // that tag came from.
@@ -629,14 +629,14 @@ func TestWhatAnUnwalkedRootReferencesIsStillPartOfTheRelease(t *testing.T) {
 	wrapper := f.publishWrapper(f.src, sourcePath, wrapped, release)
 
 	// The destination got the payload and its components, and nothing of the
-	// wrapper — neither the tag nor the artifact.
+	// wrapper - neither the tag nor the artifact.
 	f.copyToTarget(release)
 
 	refs := []string{wrapped, wrapper, release}
 	report := f.compare(f.sourceSide(refs...), f.targetSide(refs...))
 
 	if report.ResolvedA != release || report.ResolvedB != release {
-		t.Fatalf("walked %q and %q, want the payload %q — the only reference "+
+		t.Fatalf("walked %q and %q, want the payload %q - the only reference "+
 			"both sides hold", report.ResolvedA, report.ResolvedB, release)
 	}
 	for _, tag := range report.ExtraTagsA {
@@ -649,7 +649,7 @@ func TestWhatAnUnwalkedRootReferencesIsStillPartOfTheRelease(t *testing.T) {
 
 // A tag whose NAME says nothing, pointing at content the bundle has. The name
 // check cannot settle this one, so it is settled by asking the registry what
-// the tag resolves to — the only answer that does not depend on a convention.
+// the tag resolves to - the only answer that does not depend on a convention.
 func TestATagResolvingIntoTheBundleIsNotUnexplained(t *testing.T) {
 	f := newFixture(t)
 	f.publish(f.src, sourcePath, release, componentsOf(release))
@@ -732,12 +732,12 @@ type component struct {
 	tag     string
 	payload string
 	chart   bool
-	// files, when set, makes this an artifact with ONE TITLED LAYER PER FILE —
+	// files, when set, makes this an artifact with ONE TITLED LAYER PER FILE -
 	// the ORAS convention, used by Helm and cosign and everything else that
 	// publishes non-image artifacts.
 	files map[string]string
 	// archive, when set, makes this an artifact with ONE LAYER CONTAINING ALL
-	// THE FILES — a tar, which is what the OCI image specification says a layer
+	// THE FILES - a tar, which is what the OCI image specification says a layer
 	// is. This is the shape whose digest tells you nothing.
 	archive map[string]string
 	// gzip compresses that archive, as `+gzip` in the media type declares.
@@ -826,7 +826,7 @@ func (f *fixture) publishComponent(
 		layers = append(layers, fakeregistry.NewLayer(c.payload))
 	}
 
-	// INSIDE THE BUNDLE, UNTAGGED, AND NOWHERE ELSE — which is all a vendor
+	// INSIDE THE BUNDLE, UNTAGGED, AND NOWHERE ELSE - which is all a vendor
 	// does.
 	//
 	// This used to also publish the component under its own name, and that one
@@ -844,7 +844,7 @@ func (f *fixture) publishComponent(
 // annotation.
 //
 // The children name the BUNDLE repository, not a repository of their own,
-// which is what the vendor writes — `orbs/cfx-5000-k8s:orb_23.8.1076`.
+// which is what the vendor writes - `orbs/cfx-5000-k8s:orb_23.8.1076`.
 func (f *fixture) publishWrapper(
 	reg *fakeregistry.Registry, repo, tag, payloadTag string,
 ) string {
@@ -915,7 +915,7 @@ func (f *fixture) copyTo(reg *fakeregistry.Registry, base, tag string) {
 // Children first, and recursively: a wrapper index names a payload index which
 // names the components, and a copy that only went one level deep would leave
 // the destination unable to resolve its own root. It is also what the registry
-// requires — an index may only be pushed once its children are servable.
+// requires - an index may only be pushed once its children are servable.
 //
 // The named publication happens HERE, from the referencing descriptor, which is
 // where the name lives. That mirrors internal/transfer/layout.go exactly: the
@@ -1058,7 +1058,7 @@ func describe(r compare.Report) string {
 	for _, row := range r.Rows {
 		b.WriteString("  " + string(row.Verdict) + " " + row.Type + " " + row.Name)
 		if len(row.Differences) > 0 {
-			b.WriteString(" — " + strings.Join(row.Differences, "; "))
+			b.WriteString(" - " + strings.Join(row.Differences, "; "))
 		}
 		b.WriteString("\n")
 	}
@@ -1071,7 +1071,7 @@ func describe(r compare.Report) string {
 	return b.String()
 }
 
-// archiveOf packs files into a tar, optionally gzipped — the format the OCI
+// archiveOf packs files into a tar, optionally gzipped - the format the OCI
 // image specification names for a layer.
 func archiveOf(files map[string]string, compress bool) string {
 	var buf bytes.Buffer
@@ -1123,7 +1123,7 @@ func splitRefName(ref string) (repository, tag string) {
 // A vendor's named layers are named files, and comparing them is free.
 //
 // `org.opencontainers.image.title` is the vendor saying "this layer is this
-// file" — every configuration bundle and release note in a vendor artifact is
+// file" - every configuration bundle and release note in a vendor artifact is
 // one of these, and the name and the content digest are both in the manifest
 // the walk has already read.
 //
@@ -1181,8 +1181,8 @@ func TestNamedLayersAreComparedFromTheManifestAlone(t *testing.T) {
 
 // Progress never goes backwards.
 //
-// A comparison is four kinds of work over four different populations —
-// manifests walked, names probed, tags resolved, layers read — and reporting
+// A comparison is four kinds of work over four different populations -
+// manifests walked, names probed, tags resolved, layers read - and reporting
 // each phase's own count meant the number reset to zero at every boundary. On
 // screen that is a bar filling, emptying and filling again, which reads as the
 // thing having restarted; the report was "it went to 251, the bar went to the
@@ -1215,7 +1215,7 @@ func TestProgressOnlyEverGoesUp(t *testing.T) {
 							p.Key, p.Done, before.Done, p.Phase, before.Phase)
 					}
 					if p.Total < before.Total {
-						t.Errorf("%s's total shrank: %d, was %d — a denominator that "+
+						t.Errorf("%s's total shrank: %d, was %d - a denominator that "+
 							"drops makes the bar jump forwards for no reason",
 							p.Key, p.Total, before.Total)
 					}
@@ -1230,7 +1230,7 @@ func TestProgressOnlyEverGoesUp(t *testing.T) {
 		t.Fatal("no progress was reported at all")
 	}
 	if len(last) != 2 {
-		t.Errorf("progress came back for %d ends, want both — the two sides of a "+
+		t.Errorf("progress came back for %d ends, want both - the two sides of a "+
 			"version comparison share a label, so anything keyed by it loses one",
 			len(last))
 	}
@@ -1248,7 +1248,7 @@ func TestProgressOnlyEverGoesUp(t *testing.T) {
 // Unaccounted tags are a question about a DESTINATION.
 //
 // The pass resolves every tag in the bundle's repository looking for content
-// this release does not account for. At a target that is a real finding —
+// this release does not account for. At a target that is a real finding -
 // something landed there that nobody in this comparison put there. At a source
 // it is the vendor's own catalogue, every other release it has ever published,
 // reported as unaccounted content on every version-to-version comparison

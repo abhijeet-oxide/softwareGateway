@@ -12,7 +12,7 @@ import {
 import { kindName, matches, packageReference, version } from '../domain/derive'
 import { bytes, formatBytes, formatCount, formatDuration } from '../domain/format'
 import { NA, Value } from '../components/value'
-import { ErrorState, PageHeader, SearchBar } from '../components/layout'
+import { ErrorState, SearchBar } from '../components/layout'
 import { WorkingBar } from '../components/progress'
 import { ARTIFACT_ICONS, Icon } from '../components/icons'
 import { mono, semantic } from '../theme'
@@ -22,7 +22,7 @@ import type {
 } from '../api/types'
 
 /**
- * Page 5 — Compare.
+ * Page 5 - Compare.
  *
  * Answers: what is different between these two, exactly?
  *
@@ -36,8 +36,8 @@ import type {
  *
  * # Why the mode selector exists
  *
- * Most comparisons are one of two questions — "what changed between these
- * releases" and "did this release arrive intact" — and each needs only half
+ * Most comparisons are one of two questions - "what changed between these
+ * releases" and "did this release arrive intact" - and each needs only half
  * the form. Offering four selectors for both made the common case look like
  * the hard case.
  */
@@ -46,8 +46,8 @@ import type {
  * The configured SOURCE a release was discovered in.
  *
  * The API needs an endpoint NAME, and a package records a repository PATH. A
- * product with more than one source will not infer which end is meant — it
- * refuses rather than guessing — so the path is matched back to the source
+ * product with more than one source will not infer which end is meant - it
+ * refuses rather than guessing - so the path is matched back to the source
  * that declares it, which is knowable and saves asking the reader for
  * something the release already implies.
  */
@@ -70,7 +70,7 @@ function sourceNameFor(
  * picking any of them asked the server a question it correctly refused to
  * answer.
  *
- * The same function the download button names a release with — there is one
+ * The same function the download button names a release with - there is one
  * way to say which package you mean, and two would drift.
  */
 const refOf = packageReference
@@ -81,7 +81,7 @@ function releaseOptions(releases: Package[]) {
     value: refOf(r),
     // The VERSION alone, because a select box is one line and the version is
     // the half that identifies the release to a reader. The package name is
-    // rendered under it — in the list and in the closed box — where a second
+    // rendered under it - in the list and in the closed box - where a second
     // line has room for it. Joining the two into one string produced
     // `cfx-5000-k8s-215952-edgenac-25.7-2131_20260807-wn…`, which is neither.
     label: version(r),
@@ -94,7 +94,7 @@ function releaseOptions(releases: Package[]) {
 type ReleaseOption = ReturnType<typeof releaseOptions>[number]
 
 /**
- * Version above, package name below — the two things that identify a release.
+ * Version above, package name below - the two things that identify a release.
  *
  * Used for the options AND for the closed box, so what a reader picked still
  * says which package it was. A select showing only a version is ambiguous by
@@ -180,7 +180,7 @@ function releaseLabelRender(releases: Package[], value: unknown, fallback: React
  *
  * The work is countable: each side reads a known set of manifests and then
  * probes a known set of component names. An animation says only "something is
- * happening", which is exactly what it would say if nothing were — and on a
+ * happening", which is exactly what it would say if nothing were - and on a
  * request that legitimately runs for minutes, that is the difference between
  * waiting and giving up.
  *
@@ -188,7 +188,7 @@ function releaseLabelRender(releases: Package[], value: unknown, fallback: React
  *
  * The two ends are walked concurrently against different registries and one of
  * them is usually the slow one, so a single merged number hides which. Each row
- * is labelled with the PACKAGE and VERSION the reader picked — the server's own
+ * is labelled with the PACKAGE and VERSION the reader picked - the server's own
  * label for a side is its source, `cfx-near`, which is the same word on both
  * rows of a version comparison and identifies neither.
  *
@@ -212,7 +212,7 @@ function ComparisonProgress({
   const sides = progress.data?.sides ?? []
 
   // Round trips, summed. The unit is the same on both sides and in every phase,
-  // so the total grows as work is discovered and the count never drops — which
+  // so the total grows as work is discovered and the count never drops - which
   // is what a bar filling, emptying and filling again was.
   const done = sides.reduce((n, s) => n + s.done, 0)
   const total = sides.reduce((n, s) => n + s.total, 0)
@@ -315,7 +315,7 @@ function SideProgress({
  *
  * The question behind "I analysed the package and this is no faster". Analysis
  * records a release's manifest tree, and a comparison reads it from there
- * rather than from the registry — so a release that has been analysed costs
+ * rather than from the registry - so a release that has been analysed costs
  * hundreds fewer round trips, and one that has not is being analysed right now
  * for everything that asks next.
  *
@@ -327,9 +327,9 @@ function CacheNote({ base, against }: { base?: Package; against?: Package }) {
   const analysed = picked.filter((p) => p.expandedAt).length
   const note =
     analysed === picked.length
-      ? 'Manifests found in cache — comparing the releases'
+      ? 'Manifests found in cache - comparing the releases'
       : analysed === 0
-        ? 'No cache for either release — reading their manifests now, and keeping them'
+        ? 'No cache for either release - reading their manifests now, and keeping them'
         : 'One release is cached; reading the other now, and keeping it'
 
   return (
@@ -354,7 +354,7 @@ type Mode = 'versions' | 'locations'
  *
  * # What a comparison is actually asked
  *
- * Not "how many things differ" — that is a number somebody reads once and can
+ * Not "how many things differ" - that is a number somebody reads once and can
  * act on never. It is asked because a release is about to be shipped, or has
  * just landed somewhere and might be wrong, and the questions are: what KIND of
  * thing changed, HOW MUCH of it, and WHICH ones. So the summary counts by
@@ -370,7 +370,7 @@ function ComparisonReport({ report }: { report: CompareResponse }) {
    * They were pulled out into a card of their own because the answer for them
    * is a directory tree and the answer for images is a table. That is a
    * difference in how one type is BEST SHOWN, and it does not make files a
-   * different question — a reader asking what changed wants images, charts and
+   * different question - a reader asking what changed wants images, charts and
    * files in one place, filtered the same way.
    *
    * So the card keeps one type filter and swaps its own body: components for
@@ -381,8 +381,8 @@ function ComparisonReport({ report }: { report: CompareResponse }) {
   /*
    * THE RELEASE'S CONTENT, not its scaffolding.
    *
-   * The index changes whenever anything under it changes — that is what a
-   * digest of a list of digests does — and the signature changes because it
+   * The index changes whenever anything under it changes - that is what a
+   * digest of a list of digests does - and the signature changes because it
    * signs the index. Reporting either as a difference is reporting that the
    * comparison worked, in two rows that appear at the top of every result and
    * mean nothing to anybody.
@@ -458,7 +458,7 @@ function ComparisonReport({ report }: { report: CompareResponse }) {
               onChange={(v) => setImpact(v as typeof impact)}
               /*
                 The counts follow the TYPE. Added, Removed, Changed and
-                Unchanged mean the same thing on both views — the numbers
+                Unchanged mean the same thing on both views - the numbers
                 beside them are components on one and files on the other, and a
                 count that did not change when the view did would be labelling
                 the wrong population.
@@ -481,7 +481,7 @@ function ComparisonReport({ report }: { report: CompareResponse }) {
                 /*
                   Files included: selecting it swaps the body of this card for
                   the file tree, rather than showing two file COMPONENTS and
-                  their layer digests — the OCI view of a thing whose whole
+                  their layer digests - the OCI view of a thing whose whole
                   point is the files inside it.
                 */
                 ...(['image', 'chart', 'file'] as const).map((k) => {
@@ -595,7 +595,7 @@ function ComparisonReport({ report }: { report: CompareResponse }) {
             },
             {
               // The digests, which are the only unambiguous statement of what
-              // changed — and for a `changed` row, both of them, because "it
+              // changed - and for a `changed` row, both of them, because "it
               // changed" without saying from what to what is not a finding
               // anybody can act on.
               title: 'Digest',
@@ -639,8 +639,8 @@ function FileDifferences({ files, total }: { files: FileEntry[]; total: number }
     return (
       <Typography.Text type="secondary" style={{ fontSize: 13 }}>
         Nothing here names a file. A component's files are the layers its
-        publisher titled — every configuration bundle, release note and script
-        shipped as an OCI artifact carries them — and an image layer names
+        publisher titled - every configuration bundle, release note and script
+        shipped as an OCI artifact carries them - and an image layer names
         nothing, so a comparison of images alone has no file-level account to
         give.
       </Typography.Text>
@@ -772,8 +772,8 @@ function FileRow({ entry, name }: { entry: FileEntry; name: string }) {
       </Typography.Text>
 
       {/*
-        The digests, on hover. They are the proof — two files with the same
-        digest ARE the same file — and they are also forty characters that
+        The digests, on hover. They are the proof - two files with the same
+        digest ARE the same file - and they are also forty characters that
         would bury the name they belong to.
       */}
       <Tooltip
@@ -803,7 +803,7 @@ function BucketCard({ bucket, verdict }: { bucket: Bucket; verdict: CompareVerdi
   return (
     <Popover
       placement="bottom"
-      title={`${meta.label} — what it is made of`}
+      title={`${meta.label} - what it is made of`}
       content={
         kinds.length === 0 ? (
           <Typography.Text type="secondary" style={{ fontSize: 12 }}>Nothing in this bucket.</Typography.Text>
@@ -944,7 +944,7 @@ interface Bucket {
  *
  * The side each bucket is measured from is the side it EXISTS on: a removed
  * component's size is what the first side had, an added one's is what the
- * second has, and a changed one is measured by what it is now — the size of
+ * second has, and a changed one is measured by what it is now - the size of
  * what somebody would be shipping.
  */
 function summarise(rows: CompareRow[]): Record<CompareVerdict, Bucket> {
@@ -970,7 +970,7 @@ function summarise(rows: CompareRow[]): Record<CompareVerdict, Bucket> {
   return out
 }
 
-/** sha256:abcd… — enough to recognise, short enough for a column. */
+/** sha256:abcd… - enough to recognise, short enough for a column. */
 function shortDigest(digest: string): string {
   const hex = digest.includes(':') ? digest.split(':')[1] ?? '' : digest
   return hex.slice(0, 12)
@@ -993,7 +993,7 @@ export default function Compare() {
    * The incoming link carries a TAG, and a tag is not a reference.
    *
    * One version tag exists in every repository a product watches, so `?from=`
-   * on its own does not name a package — and a select keyed on
+   * on its own does not name a package - and a select keyed on
    * `repository:tag` had nothing matching it, which is why the box showed a
    * bare version with no package name beside it. The repository travels in the
    * URL now; the effect below resolves the pair, and falls back to the first
@@ -1010,7 +1010,7 @@ export default function Compare() {
   // comparison that has already been run.
   const [settled, setSettled] = useState(false)
   // Elapsed while it runs. Both releases are read live from their registries,
-  // so a comparison takes as long as those registries take — and a button that
+  // so a comparison takes as long as those registries take - and a button that
   // says `loading` for four minutes with nothing beside it is the shape of
   // something broken.
   const [startedAt, setStartedAt] = useState<number>()
@@ -1060,7 +1060,7 @@ export default function Compare() {
    * nine differently-named packages that share a version string, and comparing
    * `cfx-5000-k8s` against `cfx-5000-k8s-215952-edgenac-…-ncm` is the ordinary
    * case. Naming the comparison after the left end left the right end reading
-   * `cfx-near 25.7_mp2604_2131` — a source and a version, and no package at
+   * `cfx-near 25.7_mp2604_2131` - a source and a version, and no package at
    * all.
    */
   const leftPkg = releases.find((r) => refOf(r) === left)
@@ -1069,7 +1069,7 @@ export default function Compare() {
   const sources = detail.data?.sources ?? []
   // Where the release was found, matched back to its configured source. The
   // default end for a version comparison, overridable below for a product
-  // whose sources this cannot match — one that discovers its repositories
+  // whose sources this cannot match - one that discovers its repositories
   // from the registry catalog declares none to match against.
   const discoveredIn = sourceNameFor(sources, leftPkg?.sourceRepository)
   const versionEnd = sourceOverride ?? discoveredIn ?? sources[0]?.name
@@ -1135,7 +1135,6 @@ export default function Compare() {
   if (products.isError) {
     return (
       <>
-        <PageHeader title="Compare packages" description="What is different between two versions or locations" />
         <ErrorState error={products.error} retry={() => void products.refetch()} />
       </>
     )
@@ -1143,10 +1142,6 @@ export default function Compare() {
 
   return (
     <>
-      <PageHeader
-        title="Compare packages"
-        description="What is different between two versions or locations of the same software"
-      />
 
       {settled && report ? (
         <Card size="small" style={{ marginBottom: 16 }}>

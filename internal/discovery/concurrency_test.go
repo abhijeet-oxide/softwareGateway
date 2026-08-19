@@ -128,7 +128,7 @@ func TestRepositoriesAreListedConcurrently(t *testing.T) {
 		t.Errorf("the gate saw %d callers, want one per repository (%d)", total, repos)
 	}
 	if peak < perRegistry {
-		t.Errorf("peak concurrency was %d, want at least %d — repositories are still "+
+		t.Errorf("peak concurrency was %d, want at least %d - repositories are still "+
 			"being listed one at a time", peak, perRegistry)
 	}
 }
@@ -174,7 +174,7 @@ func TestTagsAreResolvedConcurrentlyAcrossRepositories(t *testing.T) {
 	}
 	if peak <= tagsEach {
 		t.Errorf("peak tag concurrency was %d, which one repository alone could reach "+
-			"(%d tags each) — tags are still bounded per repository rather than "+
+			"(%d tags each) - tags are still bounded per repository rather than "+
 			"sharing the source's budget", peak, tagsEach)
 	}
 }
@@ -303,8 +303,8 @@ func newGatedScanner(
 // The tag counter moves WHILE the tags are being resolved, not after.
 //
 // It used to be incremented in a loop after the whole phase had finished, so
-// the number that represents the bulk of a scan — thousands of HEADs against a
-// vendor registry — sat at zero for minutes and then jumped to the total. The
+// the number that represents the bulk of a scan - thousands of HEADs against a
+// vendor registry - sat at zero for minutes and then jumped to the total. The
 // repositories bar reached 100% long before any of that started, which is why a
 // scan showing 100% went on running for four more minutes.
 //
@@ -358,11 +358,11 @@ func TestTagProgressMovesWhileTagsAreResolving(t *testing.T) {
 		t.Errorf("phase = %q, want %q while tags are being resolved", p.Phase, PhaseResolving)
 	}
 	if p.TagsInFlight != inFlight {
-		t.Errorf("in flight = %d, want %d — the concurrency an operator configured is "+
+		t.Errorf("in flight = %d, want %d - the concurrency an operator configured is "+
 			"invisible without it", p.TagsInFlight, inFlight)
 	}
 	if p.TagsTotal != inFlight {
-		t.Errorf("tags total = %d, want %d — the denominator is not established",
+		t.Errorf("tags total = %d, want %d - the denominator is not established",
 			p.TagsTotal, inFlight)
 	}
 	// And the one bar this drives has left the listing phase behind it rather

@@ -181,8 +181,10 @@ export function ErrorState({ error, retry }: { error: unknown; retry?: () => voi
  * else the stepper was gesturing at — is it downloading, is it in production —
  * is already said, once, by the status badge in the header.
  *
- * Not downloaded is stated plainly rather than drawn as an unreached stage. It
- * is the common case for most of a catalogue, and it is not a failure.
+ * A release nobody has downloaded shows ONE date and stops there. It was
+ * showing an empty second entry, which drew the eye to a stage that has not
+ * happened and reads as a gap in the record rather than as the ordinary state
+ * of most of a catalogue. There is one date; the timeline says one date.
  */
 export function ReleaseTimeline({
   publishedAt, downloadedAt, downloading,
@@ -192,35 +194,39 @@ export function ReleaseTimeline({
   /** A download is running right now, so the second date is coming. */
   downloading?: boolean
 }) {
+  const arriving = Boolean(downloadedAt) || Boolean(downloading)
+
   return (
     <Space size={12} align="center" wrap>
       <Moment label="Published" at={publishedAt} done />
-      <span
-        aria-hidden
-        style={{
-          width: 48, height: 1, background: 'rgba(0,0,0,0.15)', display: 'inline-block',
-        }}
-      />
-      <Moment
-        label="Downloaded"
-        at={downloadedAt}
-        done={Boolean(downloadedAt)}
-        pending={downloading}
-        absent="Not downloaded"
-      />
+      {arriving && (
+        <>
+          <span
+            aria-hidden
+            style={{
+              width: 48, height: 1, background: 'rgba(0,0,0,0.15)', display: 'inline-block',
+            }}
+          />
+          <Moment
+            label="Downloaded"
+            at={downloadedAt}
+            done={Boolean(downloadedAt)}
+            pending={downloading}
+          />
+        </>
+      )}
     </Space>
   )
 }
 
 /** One dated moment: a mark, what happened, and when. */
 function Moment({
-  label, at, done, pending, absent,
+  label, at, done, pending,
 }: {
   label: string
   at?: string
   done?: boolean
   pending?: boolean
-  absent?: string
 }) {
   const colour = done ? semantic.success : pending ? '#0057B8' : 'rgba(0,0,0,0.25)'
 
@@ -244,7 +250,7 @@ function Moment({
           <Typography.Text style={{ fontSize: 13 }}>{formatAbsolute(at)}</Typography.Text>
         ) : (
           <Typography.Text type="secondary" style={{ fontSize: 13 }} italic>
-            {pending ? 'in progress' : (absent ?? 'not recorded')}
+            {pending ? 'in progress' : 'not recorded'}
           </Typography.Text>
         )}
       </Space>

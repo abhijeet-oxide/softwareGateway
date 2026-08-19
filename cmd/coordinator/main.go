@@ -370,6 +370,10 @@ func run() error {
 		// Comparison runs here for the same reason: it opens connections to the
 		// DESTINATION registry, and transferctl is a pure API client.
 		Comparer: compareImpl{transferResolver, layouts},
+		// Reading one file out of a release, for somebody looking at it. Here
+		// for the third time for the first reason: it needs a credentialed
+		// client, and the API layer holds none.
+		Blobs: blobsImpl{transferResolver},
 		// Delegated replication runs here for the same reason again: it speaks
 		// to Quay's MANAGEMENT api, which needs a credential from a projected
 		// Secret, and transferctl holds neither.

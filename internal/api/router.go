@@ -7,6 +7,7 @@ package api
 
 import (
 	"context"
+	"io"
 	"log/slog"
 	"net/http"
 
@@ -125,6 +126,18 @@ type Comparer interface {
 		fileBudget int64, progress compare.ProgressFunc) (compare.Report, error)
 }
 
+// BlobReader opens one blob of a release from where it was published.
+//
+// A consumer-defined interface, and a deliberately narrow one: the API needs
+// bytes for a digest it has already ESTABLISHED belongs to the release being
+// read, not the client factory and the credential store behind it. The handler
+// does the establishing; this does the fetching, and cannot be asked for
+// anything else.
+type BlobReader interface {
+	ReadBlob(ctx context.Context, productName string, pkg store.PackageRow,
+		digest string) (io.ReadCloser, error)
+}
+
 // Calibrator measures one source-to-target path and recommends settings.
 //
 // A consumer-defined interface for the same reason as ConnectivityChecker: the
@@ -160,6 +173,10 @@ type Deps struct {
 	// registry through the configured client factory, which only a
 	// composition root holds.
 	Comparer Comparer
+	// Blobs reads a file's content out of the source registry. Optional on the
+	// same terms: without it the file-content route is absent and a caller
+	// gets an honest 404 rather than a route that always fails.
+	Blobs BlobReader
 	// Replication is optional: it needs a registry management client and the
 	// secrets behind it, which only a composition root holds. Without it the
 	// replication routes are absent and a caller gets an honest 404 rather
@@ -325,6 +342,13 @@ func (s *Server) routes() chi.Router {
 			// release has thousands of files and dozens of artifacts, and one
 			// page wants one of those and not the other.
 			r.Get("/products/{product}/packages/{package}/files", s.handleListPackageFiles)
+			if s.deps.Blobs != nil {
+				// ONE file's content, for a reader who wants to look at it.
+				// Registered only where a client factory exists, because
+				// unlike the listing above this one leaves the database.
+				r.Get("/products/{product}/packages/{package}/files/content",
+					s.handleGetPackageFileContent)
+			}
 			// What the source would not serve. A sibling of the packages listing
 			// rather than part of it: these are not packages, they are the
 			// absence of packages, and folding them in would make every consumer

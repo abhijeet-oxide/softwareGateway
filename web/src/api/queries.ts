@@ -7,7 +7,8 @@ import type {
   ListAuditEventsResponse, ListAutoDownloadRulesResponse, ListDownloadsResponse,
   InspectPackageResponse, ListFailuresResponse, ListJobsResponse, ListPackagesResponse, ListProductsResponse,
   ListReplicationResponse, ListSyncsResponse, ListTransfersResponse, ListUnavailableResponse,
-  ListPackageFilesResponse, ListWorkersResponse, Package, ReportSummary, RunDownloadRequest,
+  ListPackageFilesResponse, ListWorkersResponse, Package, PackageFileContentResponse,
+  ReportSummary, RunDownloadRequest,
   RunDownloadResponse,
   SetPriorityRequest, Transfer, TransferControlResponse, VersionResponse,
 } from './types'
@@ -197,6 +198,30 @@ export function usePackageFiles(product: string | undefined, ref: string | undef
       `/products/${encodeURIComponent(product!)}/packages/${encodeURIComponent(segment)}/files`
       + scopeQuery(q, repository)),
     enabled: Boolean(product && ref),
+  })
+}
+
+/**
+ * ONE file's content, fetched on demand.
+ *
+ * Enabled only when a digest is asked for — the query is what a modal opening
+ * looks like, so mounting the hook without one must fetch nothing. Cached by
+ * digest, which is the whole identity of the content: the same file opened
+ * twice is served from memory, and content addressing means it cannot be stale.
+ */
+export function usePackageFileContent(
+  product: string | undefined, ref: string | undefined, digest: string | undefined,
+  repository?: string,
+) {
+  const { segment, query: q } = packageRef(ref ?? '')
+  const scope = scopeQuery(q, repository)
+  return useQuery({
+    queryKey: ['package-file', product, ref, repository, digest],
+    queryFn: () => api.get<PackageFileContentResponse>(
+      `/products/${encodeURIComponent(product!)}/packages/${encodeURIComponent(segment)}`
+      + `/files/content${scope ? `${scope}&` : '?'}digest=${encodeURIComponent(digest!)}`),
+    enabled: Boolean(product && ref && digest),
+    staleTime: Infinity,
   })
 }
 

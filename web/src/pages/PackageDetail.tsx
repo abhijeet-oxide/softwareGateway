@@ -12,21 +12,21 @@ import {
 } from '../api/queries'
 import { useCan } from '../auth/permissions'
 import {
-  deriveLocations, deriveStatus, downloadedAt, isLive, matches, verification, version,
+  deriveStatus, downloadedAt, isLive, matches, repositoryUrl, titleCase, verification, version,
 } from '../domain/derive'
 import { bytes, formatBytes, formatCount, formatDuration } from '../domain/format'
 import { NA, Value } from '../components/value'
 import { AnalyzeIcon, ARTIFACT_ICONS, Icon } from '../components/icons'
 import { WorkingBar } from '../components/progress'
+import { RepoLink, StatusBadge, TimeAgo, VerificationBadge } from '../components/chips'
 import {
-  LocationChip, RepoLink, StatusBadge, TimeAgo, VerificationBadge,
-} from '../components/chips'
-import {
-  EmptyStateCard, ErrorState, PageHeader, ReleaseTimeline, SavedPanel, SearchBar,
+  EmptyStateCard, ErrorState, PageHeader, ReleaseTimeline, SearchBar,
 } from '../components/layout'
+import { FileViewer } from '../components/filecontent'
 import { mono } from '../theme'
-import type { Artifact, InspectPackageResponse, PackageFile } from '../api/types'
-import { TargetTag } from '../components/chips'
+import type {
+  Artifact, InspectPackageResponse, Package, PackageFile, Product, RelatedArtifact,
+} from '../api/types'
 
 /**
  * Page 3 — Package (release detail).
@@ -37,8 +37,10 @@ import { TargetTag } from '../components/chips'
  *   - the release downloads WHOLE. The contents are shown and nothing in them
  *     is selectable, because cherry-picking a release is not a thing the
  *     system does.
- *   - "Saved (already present)" lives HERE, not on Home, and is labelled an
- *     estimate before a download and a measurement after.
+ *   - every fact on it is one this Coordinator can answer for. What a download
+ *     would save, where a release might land, which targets exist — those are
+ *     questions about a transfer and they are answered on a transfer's page.
+ *     They were three cards here, and all three said "we cannot know yet".
  */
 
 /**
@@ -187,6 +189,28 @@ function MeasurePanel({
       </Typography.Text>
     </Space>
   )
+}
+
+/**
+ * What the release is CALLED — `orbs/cfx-5000-k8s`.
+ *
+ * The vendor's shortened spelling where there is one, for the same reason
+ * `version` prefers `displayTag`: it is what the reader has in their hand.
+ */
+function packageName(p: Package): string {
+  return p.displayRepository || p.sourceRepository || p.name
+}
+
+/** Who published it, in the vendor's own name where the source declares one. */
+function vendorName(product?: Product): string | null {
+  const source = product?.sources?.[0]
+  if (!source) return null
+  return source.vendor ? titleCase(source.vendor) : source.name
+}
+
+/** The release's signature, where one was discovered. */
+function signature(p?: Package): RelatedArtifact | undefined {
+  return (p?.related ?? []).find((r) => r.role === 'SIGNATURE')
 }
 
 /**
@@ -358,14 +382,19 @@ function ComponentTable({ artifacts, kind }: { artifacts: Artifact[]; kind: stri
  * them at the foot only told a reader about something they had not asked
  * about and could not act on.
  */
-function FileTree({ files }: { files: PackageFile[] }) {
+function FileTree({
+  files, onView,
+}: {
+  files: PackageFile[]
+  onView: (file: PackageFile) => void
+}) {
   const [search, setSearch] = useState('')
 
   const shown = useMemo(
     () => (search.trim() ? files.filter((f) => matches(search, f.path, f.component)) : files),
     [files, search])
 
-  const tree = useMemo(() => buildTree(shown), [shown])
+  const tree = useMemo(() => buildTree(shown, onView), [shown, onView])
 
   return (
     <Space direction="vertical" size={8} style={{ width: '100%' }}>
@@ -411,10 +440,16 @@ interface TreeNode {
  * Sizes roll UP: a directory shows what everything under it weighs, which is
  * the number somebody is looking for when they ask what a bundle costs.
  */
-function buildTree(files: PackageFile[]): TreeNode[] {
+function buildTree(files: PackageFile[], onView: (file: PackageFile) => void): TreeNode[] {
+  interface Leaf {
+    /** The file itself, with the path the publisher wrote. */
+    file: PackageFile
+    /** Its name within this directory — what the row shows. */
+    name: string
+  }
   interface Dir {
     dirs: Map<string, Dir>
-    files: PackageFile[]
+    files: Leaf[]
     bytes: number
   }
   const root: Dir = { dirs: new Map(), files: [], bytes: 0 }
@@ -433,7 +468,10 @@ function buildTree(files: PackageFile[]): TreeNode[] {
       node = next
       node.bytes += bytes(file.sizeBytes) ?? 0
     }
-    node.files.push({ ...file, path: name })
+    // The FULL path is kept on the leaf. The row shows the name, and opening
+    // the file needs to say which one — two files called `values.yaml` under
+    // different directories are different files.
+    node.files.push({ file, name })
   }
 
   const render = (dir: Dir, prefix: string): TreeNode[] => {
@@ -453,17 +491,32 @@ function buildTree(files: PackageFile[]): TreeNode[] {
         children: render(child, `${prefix}/${name}`),
       })
     }
-    for (const file of [...dir.files].sort((a, b) => a.path.localeCompare(b.path))) {
+    for (const leaf of [...dir.files].sort((a, b) => a.name.localeCompare(b.name))) {
       out.push({
-        key: `${prefix}/${file.path}-${file.digest}`,
+        key: `${prefix}/${leaf.name}-${leaf.file.digest}`,
         title: (
           <Space size={6}>
             <Icon as={ARTIFACT_ICONS.Files} size={13} title="File" />
-            <Typography.Text style={{ fontSize: 13 }}>{file.path}</Typography.Text>
+            <Typography.Text style={{ fontSize: 13 }}>{leaf.name}</Typography.Text>
             <Typography.Text type="secondary" style={{ fontSize: 11 }}>
-              {formatBytes(bytes(file.sizeBytes))}
+              {formatBytes(bytes(leaf.file.sizeBytes))}
             </Typography.Text>
-
+            {/*
+              The content is not held here — a release is tens of gigabytes and
+              this is deliberately not a copy of it — so this fetches the one
+              blob from the vendor registry when somebody asks for it.
+            */}
+            <Button
+              type="link"
+              size="small"
+              style={{ padding: 0, height: 'auto', fontSize: 12 }}
+              onClick={(e) => {
+                e.stopPropagation()
+                onView(leaf.file)
+              }}
+            >
+              View
+            </Button>
           </Space>
         ),
       })
@@ -494,6 +547,7 @@ export default function PackageDetail() {
 
   const mayOperate = useCan('operate', { product: productName })
   const [confirming, setConfirming] = useState(false)
+  const [viewing, setViewing] = useState<PackageFile>()
 
   const groups = useMemo(() => {
     const out = {
@@ -553,13 +607,21 @@ export default function PackageDetail() {
     }
   }
 
-  const savedBytes = live?.id ? undefined : undefined
-
   return (
     <>
       <PageHeader
-        title={p ? `${prod?.displayName || productName} ${version(p)}` : 'Loading…'}
-        description="One release, its contents, and what can be done with it"
+        /*
+          THE RELEASE FIRST, the product second.
+          
+          The title was the product and the version, which is the one pairing
+          that does not identify anything: a product publishes ten packages and
+          they all carry the same version tag. What a reader came here for is
+          `orbs/cfx-5000-k8s:25.7_mp2604pp3_2204` — the package and the version
+          together — and which product it belongs to is context for that, not a
+          replacement for it.
+        */
+        title={p ? `${packageName(p)}:${version(p)}` : 'Loading…'}
+        description={prod?.displayName || productName || ''}
         meta={
           p && (
             <Space>
@@ -614,15 +676,32 @@ export default function PackageDetail() {
           </Card>
         </Col>
 
-        <Col xs={24} xl={14}>
+        <Col span={24}>
           <Space direction="vertical" size={16} style={{ width: '100%' }}>
             <Card title="Release" loading={pkg.isLoading}>
               <Descriptions column={2} size="small">
-                <Descriptions.Item label="Vendor">
-                  <Value>{prod?.sources?.[0]?.vendor || prod?.sources?.[0]?.name}</Value>
+                {/*
+                  WHERE IT IS, first and clickable. This was a "Locations" card
+                  of its own listing every configured target — which is a fact
+                  about the product, repeated on every one of its releases, and
+                  said nothing about whether THIS release is at any of them.
+                  What belongs to a release is the one place it was published,
+                  and that is a link.
+                */}
+                <Descriptions.Item label="Location">
+                  <RepoLink
+                    url={repositoryUrl(prod?.sources?.[0], p?.sourceRepository)}
+                    label={vendorName(prod) ?? undefined}
+                  />
+                </Descriptions.Item>
+                <Descriptions.Item label="Package">
+                  <span style={{ fontFamily: mono }}><Value>{p ? packageName(p) : null}</Value></span>
                 </Descriptions.Item>
                 <Descriptions.Item label="Version">
                   <span style={{ fontFamily: mono }}><Value>{p ? version(p) : null}</Value></span>
+                </Descriptions.Item>
+                <Descriptions.Item label="Product">
+                  <Value>{prod?.displayName || productName}</Value>
                 </Descriptions.Item>
                 <Descriptions.Item label="Published">
                   {p?.publishedAt
@@ -630,10 +709,24 @@ export default function PackageDetail() {
                     : <NA reason="The publisher set no build date, which the OCI specification permits." />}
                 </Descriptions.Item>
                 <Descriptions.Item label="Discovered"><TimeAgo at={p?.discoveredAt} /></Descriptions.Item>
-                <Descriptions.Item label="Artifacts"><Value>{formatCount(p?.artifactCount)}</Value></Descriptions.Item>
                 <Descriptions.Item label="Total size">
                   <Value reason="The manifest tree has not been walked yet, so the size underneath is not known. Measure the release to establish it.">
                     {formatBytes(p?.totalBytes)}
+                  </Value>
+                </Descriptions.Item>
+                {/*
+                  Verification, in the release rather than in a card of its own.
+                  It was three lines in a panel with a heading, and the heading
+                  was the largest thing in it: whether a release is signed is a
+                  property OF the release, and it belongs on the same list as
+                  its digest.
+                */}
+                <Descriptions.Item label="Signature">
+                  <VerificationBadge state={p ? verification(p) : 'UNKNOWN'} />
+                </Descriptions.Item>
+                <Descriptions.Item label="Signature type">
+                  <Value reason="No signature was discovered for this release, so there is no type to report.">
+                    {signature(p)?.blobMediaType || signature(p)?.mediaType || null}
                   </Value>
                 </Descriptions.Item>
                 <Descriptions.Item label="Digest" span={2}>
@@ -736,7 +829,7 @@ export default function PackageDetail() {
                     </Space>
                   ),
                   children: kind === 'Files' && analysed ? (
-                    <FileTree files={files.data?.files ?? []} />
+                    <FileTree files={files.data?.files ?? []} onView={setViewing} />
                   ) : kind === 'Files' && !analysed ? (
                     <EmptyStateCard
                       title="Files are not listed yet"
@@ -762,60 +855,16 @@ export default function PackageDetail() {
           </Space>
         </Col>
 
-        <Col xs={24} xl={10}>
-          <Space direction="vertical" size={16} style={{ width: '100%' }}>
-            <Card title="Saved (already present)">
-              {savedBytes !== undefined ? (
-                <SavedPanel
-                  savedBytes={formatBytes(savedBytes) ?? ''}
-                  totalBytes={formatBytes(p?.totalBytes) ?? undefined}
-                />
-              ) : (
-                // No number at all rather than a number-shaped dash: how much
-                // of a release the destination already holds cannot be known
-                // without asking it, and a download is what asks.
-                <Typography.Text type="secondary" style={{ fontSize: 13 }}>
-                  Existing artifacts are detected and skipped, so a download moves considerably less
-                  than the release weighs. How much is already present is measured during the
-                  download and reported there — it cannot be known before one runs.
-                </Typography.Text>
-              )}
-            </Card>
-
-            <Card title="Verification">
-              <Space direction="vertical" size={8} style={{ width: '100%' }}>
-                <VerificationBadge state={p ? verification(p) : 'UNKNOWN'} />
-                {(p?.related ?? []).filter((r) => r.role === 'SIGNATURE').map((sig) => (
-                  <Descriptions key={sig.digest} column={1} size="small">
-                    <Descriptions.Item label="Signature type"><Value>{sig.blobMediaType || sig.mediaType}</Value></Descriptions.Item>
-                    <Descriptions.Item label="Confirmed"><TimeAgo at={sig.resolvedAt} /></Descriptions.Item>
-                  </Descriptions>
-                ))}
-                {p && verification(p) === 'UNKNOWN' && (
-                  <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-                    This source does not publish signatures in a layout we can discover. That is not the
-                    same as the release being unsigned.
-                  </Typography.Text>
-                )}
-              </Space>
-            </Card>
-
-            <Card title="Locations">
-              <Space direction="vertical" size={10} style={{ width: '100%' }}>
-                <LocationChip locations={p ? deriveLocations(p, prod) : []} />
-                {(prod?.targets ?? []).map((t) => (
-                  <div key={t.name}>
-                    <TargetTag target={t} />
-                    <div>
-                      <RepoLink url={t.registry ? `https://${t.registry.replace(/^https?:\/\//, '')}/${t.repository ?? ''}` : undefined} />
-                    </div>
-                  </div>
-                ))}
-              </Space>
-            </Card>
-          </Space>
-        </Col>
       </Row>
+
+      <FileViewer
+        product={productName}
+        reference={reference}
+        repository={repository}
+        path={viewing?.path}
+        digest={viewing?.digest}
+        onClose={() => setViewing(undefined)}
+      />
 
       <Modal
         open={confirming}

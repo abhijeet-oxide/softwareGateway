@@ -726,6 +726,35 @@ type ListPackageFilesResponse struct {
 	Analysed bool `json:"analysed"`
 }
 
+// PackageFileContentResponse is
+// GET /api/v1/products/{product}/packages/{package}/files/content?digest=…
+//
+// One file, read out of the registry that publishes it.
+//
+// The digest names WHICH file, and it is a lookup key rather than an address:
+// the server serves it only if it is already recorded as a named layer of this
+// release. A handler that fetched whatever digest a caller asked for would be a
+// request forgery with the vendor credential attached.
+type PackageFileContentResponse struct {
+	Path      string      `json:"path"`
+	Component string      `json:"component,omitempty"`
+	Digest    string      `json:"digest"`
+	MediaType string      `json:"mediaType,omitempty"`
+	SizeBytes Int64String `json:"sizeBytes"`
+	// Content is the file, as text. Empty when Binary or TooLarge is set.
+	Content string `json:"content,omitempty"`
+	// Binary says the bytes are not text, so there is nothing to show. Stated
+	// rather than rendered as mojibake: a reader who asked to look at a file
+	// deserves to be told what it is instead of a screen of replacement
+	// characters.
+	Binary bool `json:"binary,omitempty"`
+	// TooLarge says the file is past what this endpoint will read into memory,
+	// and Limit is that bound. A view is for looking at configuration, not for
+	// downloading a release through the API.
+	TooLarge bool  `json:"tooLarge,omitempty"`
+	Limit    int64 `json:"limit,omitempty"`
+}
+
 // CompareProgressSide is one end's position in a comparison.
 type CompareProgressSide struct {
 	// Key is which end this is — "a" or "b". The label is not an identity: the
@@ -738,6 +767,10 @@ type CompareProgressSide struct {
 	// it, so during that phase the denominator grows and Estimated is true.
 	Total     int  `json:"total"`
 	Estimated bool `json:"estimated,omitempty"`
+	// Concurrency is how many requests this side may have in flight at once.
+	// "Is it going as fast as it can" is the second question anybody watching
+	// a four-minute bar asks.
+	Concurrency int `json:"concurrency,omitempty"`
 }
 
 // CompareProgressResponse is GET /api/v1/comparisons/{comparison}.

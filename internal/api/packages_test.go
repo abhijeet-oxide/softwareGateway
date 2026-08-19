@@ -664,8 +664,9 @@ func TestDiscoverAllWithNoProducts(t *testing.T) {
 // release is hundreds of manifests read live from two registries, and when
 // those registries are slow the request simply does not come back. A caller
 // cannot tell that from a hang, and there is no progress channel to tell them
-// otherwise — so it stops, and the reply names the limit and the one knob that
-// makes the work smaller.
+// otherwise — so it stops, and the reply names the limit and the one thing that
+// makes the work smaller: analysing the releases first, which is what the walk
+// reads from when it is there.
 func TestCompareThatRunsOutOfTimeSaysSo(t *testing.T) {
 	// Shortened for the test. The constant is minutes, because the work is
 	// real; what is being tested is the shape of the answer when it runs out.
@@ -692,7 +693,7 @@ func TestCompareThatRunsOutOfTimeSaysSo(t *testing.T) {
 	if problem.Code != v1.CodeDeadlineExceeded {
 		t.Errorf("code = %q, want %q", problem.Code, v1.CodeDeadlineExceeded)
 	}
-	if !strings.Contains(problem.Detail, "fileBudgetBytes") {
+	if !strings.Contains(problem.Detail, "Analysing") {
 		t.Errorf("the refusal does not say what to do about it: %s", problem.Detail)
 	}
 }

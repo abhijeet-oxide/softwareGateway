@@ -708,6 +708,8 @@ func toAPIPackage(productName string, row store.PackageRow) v1.Package {
 		SignatureStatus:   v1.SignatureStatus(strings.ToUpper(row.SignatureStatus)),
 		TransferRootTag:   row.TransferRootTag,
 	}
+	p.AnalysisState = row.AnalysisState
+	p.AnalysisError = row.AnalysisError
 	if row.ExpandedAt != nil {
 		p.ExpandedAt = *row.ExpandedAt
 	}
@@ -999,9 +1001,11 @@ func (s *Server) handleComparePackage(w http.ResponseWriter, r *http.Request) {
 				compareStall))
 		case errors.Is(ctx.Err(), context.DeadlineExceeded):
 			Error(w, r, v1.CodeDeadlineExceeded, fmt.Sprintf(
-				"the comparison did not finish within %s. Both releases are "+
-					"read live from their registries. Retry without file "+
-					"contents (fileBudgetBytes: -1), which is the expensive part.",
+				"the comparison did not finish within %s. A side that has been "+
+					"analysed is read from what analysis recorded; one that has "+
+					"not is read live from its registry, which is what takes "+
+					"this long. Analysing the two releases first makes the "+
+					"comparison immediate.",
 				compareDeadline))
 		default:
 			Error(w, r, v1.CodeInvalidArgument, err.Error())
@@ -1025,19 +1029,35 @@ func (s *Server) handleComparePackage(w http.ResponseWriter, r *http.Request) {
 	}
 	for _, row := range report.Rows {
 		out.Rows = append(out.Rows, v1.CompareRow{
-			Type:           row.Type,
-			Name:           row.Name,
-			Verdict:        string(row.Verdict),
-			A:              compareSideDTO(row.A),
-			B:              compareSideDTO(row.B),
-			Differences:    row.Differences,
-			FilesAdded:     row.FilesAdded,
-			FilesRemoved:   row.FilesRemoved,
-			FilesChanged:   row.FilesChanged,
-			FilesTruncated: row.FilesTruncated,
+			Type:        row.Type,
+			Name:        row.Name,
+			Verdict:     string(row.Verdict),
+			A:           compareSideDTO(row.A),
+			B:           compareSideDTO(row.B),
+			Differences: row.Differences,
+			Files:       compareFilesDTO(row.Files),
 		})
 	}
 	WriteJSON(w, r, http.StatusOK, out)
+}
+
+// compareFilesDTO renders a component's file-level account.
+func compareFilesDTO(files []compare.FileDiff) []v1.CompareFile {
+	if len(files) == 0 {
+		return nil
+	}
+	out := make([]v1.CompareFile, 0, len(files))
+	for _, f := range files {
+		out = append(out, v1.CompareFile{
+			Path:    f.Path,
+			Verdict: string(f.Verdict),
+			SizeA:   int64String(f.SizeA),
+			SizeB:   int64String(f.SizeB),
+			DigestA: f.DigestA,
+			DigestB: f.DigestB,
+		})
+	}
+	return out
 }
 
 // watchForStall abandons a comparison that has stopped advancing.
@@ -1190,7 +1210,31 @@ func (s *Server) handleInspectPackage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// THE SAME CLAIM THE BACKGROUND ANALYSER TAKES. A release the analyser is
+	// already walking must not be walked twice — that is two conversations with
+	// the vendor's registry for one answer — and losing the race is a real
+	// answer to give: it is being analysed, refresh and it will be there.
+	if s.deps.Packages != nil {
+		claimed, err := s.deps.Packages.ClaimAnalysis(r.Context(), pkg.ID)
+		if err != nil {
+			s.internal(w, r, "claim the analysis", err)
+			return
+		}
+		if !claimed {
+			Error(w, r, v1.CodeAlreadyExists,
+				"this release is already being analysed. It will show its contents "+
+					"when the walk finishes.")
+			return
+		}
+	}
+
 	res, err := s.deps.Discovery.InspectPackage(r.Context(), s.deps.Packages, pkg, productName)
+	if s.deps.Packages != nil {
+		if finishErr := s.deps.Packages.FinishAnalysis(r.Context(), pkg.ID, err); finishErr != nil {
+			s.deps.Logger.WarnContext(r.Context(), "could not record the end of an analysis",
+				"package", pkg.Tag, "error", finishErr)
+		}
+	}
 	if errors.Is(err, discovery.ErrNotInspectable) {
 		Error(w, r, v1.CodeFailedPrecondition, err.Error())
 		return

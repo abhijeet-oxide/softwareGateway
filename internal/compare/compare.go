@@ -122,14 +122,6 @@ type Options struct {
 	A, B SideSpec
 	// Concurrency bounds the registry calls made against each side.
 	Concurrency int
-	// FileBudget is how many bytes of LAYER CONTENT this comparison may
-	// download in order to say which files changed rather than which layers.
-	//
-	// Zero leaves every layer opaque. It is a byte budget rather than a list of
-	// artifact types worth opening, because a budget needs no vendor plugin and
-	// degrades correctly for a vendor nobody has written one for: a four-kilobyte
-	// configuration bundle is opened, a two-gigabyte image layer is not.
-	FileBudget int64
 	// Progress is called as the comparison proceeds. Nil reports nothing.
 	//
 	// A comparison of a real release is minutes of reading two registries, and
@@ -203,7 +195,6 @@ const (
 	PhaseManifests = "reading manifests"
 	PhaseNames     = "checking component names"
 	PhaseTags      = "checking for unaccounted tags"
-	PhaseFiles     = "reading file contents"
 	PhaseDone      = "finished"
 )
 
@@ -444,19 +435,15 @@ type Row struct {
 	A, B    *Item
 	// Differences states each disagreement as a fact. Empty for VerdictSame.
 	Differences []string
-	// FilesAdded, FilesRemoved and FilesChanged name the FILES inside the
-	// component's layers — the answer to "one line of one config file moved",
-	// which "two layers changed" cannot give.
+	// Files is the account of the NAMED FILES inside this component — the
+	// answer to "which configuration changed", which "two layers changed"
+	// cannot give.
 	//
-	// Three lists rather than two: an edited file is CHANGED, not added and
-	// removed, and reporting it as both would double every finding.
-	FilesAdded   []string
-	FilesRemoved []string
-	FilesChanged []string
-	// FilesTruncated says a layer was left unopened — past the budget, or not
-	// an archive — so the lists above are a partial account rather than the
-	// whole one.
-	FilesTruncated bool
+	// Every file of a component that differs, unchanged ones included, because
+	// the unchanged ones are the context that makes the changed ones legible.
+	// Empty for a component that agrees on both sides, where by construction
+	// nothing inside it can differ.
+	Files []FileDiff
 }
 
 // IsRoot reports whether this row is the bundle itself rather than one of its
@@ -589,11 +576,10 @@ func Run(ctx context.Context, clientA, clientB ClientFactory, opts Options) (Rep
 	}
 	report.Rows = align(invA, invB, notes)
 
-	// The files inside whatever changed. Only for rows that already disagree:
-	// a component whose digest matches on both sides is byte-identical, and
-	// opening it could not produce a finding.
-	inspectFiles(ctx, clientA, clientB, report.Rows, opts.FileBudget, concurrency,
-		reporterA, reporterB)
+	// The files inside whatever changed. Free: a component's manifest already
+	// names its files and states their content digests, so this is two lists
+	// aligned by path and no registry is troubled for it.
+	inspectFiles(report.Rows)
 
 	// Both sides are done. Said explicitly, so a caller stops rendering the
 	// estimate as though more were still to come.

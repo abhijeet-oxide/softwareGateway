@@ -93,6 +93,11 @@ type Scanner struct {
 	// progress is the live counter for the scan currently running, read by the
 	// status endpoint while the scan is in flight.
 	progress progressTracker
+
+	// analyseWake asks the background analyser for a pass. One slot: it looks
+	// for everything outstanding when it wakes, so a second request while one
+	// is pending is the same request. See analyse.go.
+	analyseWake chan struct{}
 }
 
 // Progress returns a snapshot of the scan currently running, or the zero value
@@ -156,20 +161,21 @@ func NewScanner(cfg ScannerConfig) (*Scanner, error) {
 	}
 
 	return &Scanner{
-		packages:   cfg.Packages,
-		log:        log.With("product", cfg.Product.Metadata.Name, "source", cfg.SourceName),
-		product:    cfg.Product,
-		productID:  cfg.ProductID,
-		sourceName: cfg.SourceName,
-		sourceCfg:  src,
-		newClient:  cfg.NewClient,
-		catalog:    cfg.Catalog,
-		repoFilter: repoFilter,
-		tagFilter:  tagFilter,
-		rules:      rules,
-		targetIDs:  cfg.RepoIDs,
-		layout:     layout,
-		clients:    map[string]registry.Source{},
+		packages:    cfg.Packages,
+		log:         log.With("product", cfg.Product.Metadata.Name, "source", cfg.SourceName),
+		product:     cfg.Product,
+		productID:   cfg.ProductID,
+		sourceName:  cfg.SourceName,
+		sourceCfg:   src,
+		newClient:   cfg.NewClient,
+		catalog:     cfg.Catalog,
+		repoFilter:  repoFilter,
+		tagFilter:   tagFilter,
+		rules:       rules,
+		targetIDs:   cfg.RepoIDs,
+		layout:      layout,
+		clients:     map[string]registry.Source{},
+		analyseWake: make(chan struct{}, 1),
 	}, nil
 }
 

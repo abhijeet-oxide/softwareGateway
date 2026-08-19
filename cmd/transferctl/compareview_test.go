@@ -131,22 +131,18 @@ func TestUnexplainedContentIsReported(t *testing.T) {
 	}
 }
 
-// A partial list must SAY it is partial. Presented as the whole answer,
-// somebody would conclude a file was untouched when it was never looked at.
-func TestAnIncompleteFileListSaysSo(t *testing.T) {
+// Unchanged files are carried for context and must not be COUNTED as changes.
+// A component with four hundred files and one edit reads "1 file: 1 changed".
+func TestUnchangedFilesAreNotCountedAsDifferences(t *testing.T) {
 	r := mixedReport()
-	for i := range r.Rows {
-		if r.Rows[i].Verdict == "changed" {
-			r.Rows[i].FilesTruncated = true
-		}
-	}
 
 	var buf bytes.Buffer
 	if err := renderCompare(&buf, r, false, false); err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(buf.String(), "not opened") {
-		t.Errorf("a truncated file list does not say so:\n%s", buf.String())
+	out := buf.String()
+	if !strings.Contains(out, "2 files: 1 changed, 1 removed") {
+		t.Errorf("the file summary counts the unchanged file as a difference:\n%s", out)
 	}
 }
 
@@ -206,8 +202,11 @@ func mixedReport() *v1.CompareResponse {
 					"cfx-5000-product/cvlk:1.0.7 points at sha256:8533f4a71a43 on " +
 						"the second side, not sha256:4573b0b15ceb",
 				},
-				FilesChanged: []string{"CONFIGURATION/example_parameters.json"},
-				FilesRemoved: []string{"DOCUMENTATION/old_readme"},
+				Files: []v1.CompareFile{
+					{Path: "CONFIGURATION/example_parameters.json", Verdict: "changed"},
+					{Path: "CONFIGURATION/unchanged.json", Verdict: "same"},
+					{Path: "DOCUMENTATION/old_readme", Verdict: "only-a"},
+				},
 			},
 			sameRow("mcc"),
 		},

@@ -42,11 +42,11 @@ func newCompareCommand() *cobra.Command {
 			"  compare P 25.7 --from lab --to prod     did the promotion land?\n" +
 			"  compare P 25.7 25.6                     what changed in the release?\n" +
 			"  compare P 25.7 25.6 --at stage          ...and did all of it arrive?\n\n" +
-			"For a component that changed, the layers are OPENED and the answer is\n" +
-			"given in FILES: `2 files changed` rather than `2 layers changed`, and\n" +
-			"--files names them. Layers past --file-budget stay opaque, which is\n" +
-			"what stops a two-gigabyte image layer being downloaded to answer a\n" +
-			"question about a four-kilobyte configuration bundle.\n\n" +
+			"For a component that changed, the answer is given in FILES: `2 files\n" +
+			"changed` rather than `2 layers changed`, and --files names them. This\n" +
+			"costs nothing and downloads nothing — an OCI artifact names one file\n" +
+			"per layer and states its content digest, so two of those lists aligned\n" +
+			"by path IS the answer.\n\n" +
 			"By default only the DIFFERENCES are printed. --all shows every\n" +
 			"component, including the ones that agree.\n\n" +
 			"Exits non-zero when the two ends differ, so it can end a pipeline.",
@@ -92,8 +92,9 @@ func newCompareCommand() *cobra.Command {
 	cmd.Flags().BoolVar(&showFiles, "files", false,
 		"for a changed component, name the files that changed rather than counting them")
 	cmd.Flags().Int64Var(&fileBudget, "file-budget", 0,
-		"MiB of layer content that may be downloaded to see inside layers "+
-			"(0 = the server's default, -1 = do not open any)")
+		"accepted and ignored: comparing files costs nothing and downloads nothing")
+	_ = cmd.Flags().MarkDeprecated("file-budget",
+		"file comparison reads the manifests and downloads nothing, so there is no budget to set")
 
 	// It reaches both registries through the Coordinator, so it belongs with
 	// the slow commands.
@@ -275,46 +276,54 @@ func renderFileChange(w io.Writer, row v1.CompareRow, showFiles bool) {
 	}
 
 	fmt.Fprintf(w, "      %s\n", summary)
-	for _, f := range row.FilesChanged {
-		fmt.Fprintf(w, "        ~ %s\n", f)
-	}
-	for _, f := range row.FilesAdded {
-		fmt.Fprintf(w, "        + %s\n", f)
-	}
-	for _, f := range row.FilesRemoved {
-		fmt.Fprintf(w, "        - %s\n", f)
+	// Changed, added, removed — in that order, because that is the order they
+	// matter in. Unchanged files are carried by the API for context and are
+	// not printed: a component with four hundred files and one edit would bury
+	// the edit under the other three hundred and ninety-nine.
+	for _, mark := range []struct {
+		verdict string
+		symbol  string
+	}{{"changed", "~"}, {"only-b", "+"}, {"only-a", "-"}} {
+		for _, f := range row.Files {
+			if f.Verdict == mark.verdict {
+				fmt.Fprintf(w, "        %s %s\n", mark.symbol, f.Path)
+			}
+		}
 	}
 }
 
 // fileSummary counts the file-level change in one clause.
-//
-// The truncation note is part of it rather than a separate line, because a
-// partial list presented as a whole one is worse than no list: somebody would
-// conclude a file was untouched when it was simply never looked at.
 func fileSummary(row v1.CompareRow) string {
+	counts := map[string]int{}
+	for _, f := range row.Files {
+		counts[f.Verdict]++
+	}
+
 	var parts []string
-	if n := len(row.FilesChanged); n > 0 {
+	if n := counts["changed"]; n > 0 {
 		parts = append(parts, fmt.Sprintf("%d changed", n))
 	}
-	if n := len(row.FilesAdded); n > 0 {
+	if n := counts["only-b"]; n > 0 {
 		parts = append(parts, fmt.Sprintf("%d added", n))
 	}
-	if n := len(row.FilesRemoved); n > 0 {
+	if n := counts["only-a"]; n > 0 {
 		parts = append(parts, fmt.Sprintf("%d removed", n))
 	}
 	if len(parts) == 0 {
 		return ""
 	}
-
-	out := plural(total(row), "file", "files") + ": " + strings.Join(parts, ", ")
-	if row.FilesTruncated {
-		out += " (some layers not opened)"
-	}
-	return out
+	return plural(total(row), "file", "files") + ": " + strings.Join(parts, ", ")
 }
 
+// total is how many of a component's files DIFFER — not how many it has.
 func total(row v1.CompareRow) int {
-	return len(row.FilesChanged) + len(row.FilesAdded) + len(row.FilesRemoved)
+	n := 0
+	for _, f := range row.Files {
+		if f.Verdict != "same" {
+			n++
+		}
+	}
+	return n
 }
 
 // renderExtras names content in a bundle's own repository that the release does

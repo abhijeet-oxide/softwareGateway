@@ -84,6 +84,17 @@ type PackageRow struct {
 	// simply stops being listed as a release of its own.
 	AccessoryOf *int64
 
+	// AnalysisState is '' | analyzing | failed, and AnalysisError the reason
+	// the last attempt gave up.
+	//
+	// Separate from ExpandedAt because that answers a different question. "Has
+	// it been walked" has two answers; "what is happening to it" has three, and
+	// a release being walked right now must not read as one nobody has touched
+	// — which is what put an "Analyze package" button on a release discovery
+	// was already analysing.
+	AnalysisState string
+	AnalysisError string
+
 	// ExpandedAt is when this package's manifest tree was last fully walked,
 	// or nil if it never has been.
 	//
@@ -672,6 +683,7 @@ func (p *Packages) ListPackages(ctx context.Context, f ListPackagesFilter) ([]Pa
 		       pk.blob_count, pk.state, pk.discovered_at, pk.published_at, pk.superseded_by,
 		       pk.signature_status, COALESCE(pk.transfer_root_digest,''), COALESCE(pk.transfer_root_tag,''),
 		       COALESCE(pk.display_tag,''), pk.expanded_at, pk.accessory_of,
+		       COALESCE(pk.analysis_state,''), COALESCE(pk.analysis_error,''),
 		       COALESCE(sr.repository_path, ''), COALESCE(sr.display_path, '')
 		  FROM packages pk
 		  JOIN products pr ON pr.id = pk.product_id
@@ -747,7 +759,8 @@ func (p *Packages) ListPackages(ctx context.Context, f ListPackagesFilter) ([]Pa
 			&r.MediaType, &r.TotalBytes, &r.ArtifactCount, &r.BlobCount,
 			&r.State, &r.DiscoveredAt, &r.PublishedAt, &r.SupersededBy,
 			&r.SignatureStatus, &r.TransferRootDigest, &r.TransferRootTag, &r.DisplayTag,
-			&r.ExpandedAt, &r.AccessoryOf, &r.SourceRepository, &r.DisplayRepository,
+			&r.ExpandedAt, &r.AccessoryOf, &r.AnalysisState, &r.AnalysisError,
+			&r.SourceRepository, &r.DisplayRepository,
 		); err != nil {
 			return nil, fmt.Errorf("scan package row: %w", err)
 		}
@@ -881,6 +894,7 @@ func (p *Packages) matchPackages(ctx context.Context, productName string, ref Pa
 		       pk.blob_count, pk.state, pk.discovered_at, pk.published_at, pk.superseded_by,
 		       pk.signature_status, COALESCE(pk.transfer_root_digest,''), COALESCE(pk.transfer_root_tag,''),
 		       COALESCE(pk.display_tag,''), pk.expanded_at, pk.accessory_of,
+		       COALESCE(pk.analysis_state,''), COALESCE(pk.analysis_error,''),
 		       COALESCE(sr.repository_path, ''), COALESCE(sr.display_path, '')
 		  FROM packages pk
 		  JOIN products pr ON pr.id = pk.product_id
@@ -934,7 +948,8 @@ func (p *Packages) matchPackages(ctx context.Context, productName string, ref Pa
 			&r.MediaType, &r.TotalBytes, &r.ArtifactCount, &r.BlobCount,
 			&r.State, &r.DiscoveredAt, &r.PublishedAt, &r.SupersededBy,
 			&r.SignatureStatus, &r.TransferRootDigest, &r.TransferRootTag, &r.DisplayTag,
-			&r.ExpandedAt, &r.AccessoryOf, &r.SourceRepository, &r.DisplayRepository,
+			&r.ExpandedAt, &r.AccessoryOf, &r.AnalysisState, &r.AnalysisError,
+			&r.SourceRepository, &r.DisplayRepository,
 		); err != nil {
 			return nil, fmt.Errorf("scan package row: %w", err)
 		}
@@ -1190,6 +1205,7 @@ func (p *Packages) GetPackageByID(ctx context.Context, id int64) (PackageRow, er
 		       pk.blob_count, pk.state, pk.discovered_at, pk.published_at, pk.superseded_by,
 		       pk.signature_status, COALESCE(pk.transfer_root_digest,''), COALESCE(pk.transfer_root_tag,''),
 		       COALESCE(pk.display_tag,''), pk.expanded_at, pk.accessory_of,
+		       COALESCE(pk.analysis_state,''), COALESCE(pk.analysis_error,''),
 		       COALESCE(sr.repository_path, ''), COALESCE(sr.display_path, '')
 		  FROM packages pk
 		  LEFT JOIN repositories sr ON sr.id = pk.source_repo_id
@@ -1201,7 +1217,8 @@ func (p *Packages) GetPackageByID(ctx context.Context, id int64) (PackageRow, er
 		&r.MediaType, &r.TotalBytes, &r.ArtifactCount, &r.BlobCount,
 		&r.State, &r.DiscoveredAt, &r.PublishedAt, &r.SupersededBy,
 		&r.SignatureStatus, &r.TransferRootDigest, &r.TransferRootTag, &r.DisplayTag,
-		&r.ExpandedAt, &r.AccessoryOf, &r.SourceRepository, &r.DisplayRepository)
+		&r.ExpandedAt, &r.AccessoryOf, &r.AnalysisState, &r.AnalysisError,
+		&r.SourceRepository, &r.DisplayRepository)
 	if errors.Is(err, sql.ErrNoRows) {
 		return PackageRow{}, ErrNotFound
 	}
@@ -2349,6 +2366,11 @@ type TransferRow struct {
 	DependsOn string
 }
 
+// retryAnalysisAfter is how long a failed walk is left alone before it is tried
+// again. Long enough that a permanently broken release does not consume every
+// batch, short enough that a registry outage costs one hour and not a day.
+const retryAnalysisAfter = time.Hour
+
 // UnanalysedRecent lists recently published packages nobody has walked.
 //
 // # What "analysed" means here
@@ -2392,10 +2414,21 @@ func (p *Packages) UnanalysedRecent(
 		 WHERE pk.source_repo_id = ?
 		   AND pk.state NOT IN ('superseded','failed')
 		   AND COALESCE(pk.published_at, pk.discovered_at) > `+p.dialect.TimeAgo("?")+`
+		   -- Not one somebody is already walking. The claim is a row precisely
+		   -- so this can say that across replicas and across restarts.
+		   AND pk.analysis_state <> ?
+		   -- A release whose walk FAILED is retried, but not immediately: a
+		   -- component the vendor has withdrawn cannot be walked at all, and
+		   -- without the cooldown every scan would spend its whole batch
+		   -- failing on the same release.
+		   AND (pk.analysis_state <> ?
+		        OR COALESCE(pk.analysis_started_at, pk.discovered_at) < `+
+		p.dialect.TimeAgo("?")+`)
 		   AND EXISTS (SELECT 1 FROM package_artifacts pa
 		                WHERE pa.package_id = pk.id AND pa.fetched_at IS NULL)
 		 ORDER BY COALESCE(pk.published_at, pk.discovered_at) DESC
-		 LIMIT ?`), sourceRepoID, within.Seconds(), limit)
+		 LIMIT ?`), sourceRepoID, within.Seconds(),
+		AnalysisRunning, AnalysisFailed, retryAnalysisAfter.Seconds(), limit)
 	if err != nil {
 		return nil, fmt.Errorf("find unanalysed packages of repository %d: %w", sourceRepoID, err)
 	}

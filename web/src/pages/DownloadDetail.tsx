@@ -511,6 +511,23 @@ export default function DownloadDetail() {
                   ]}
                 />
 
+                {/*
+                  COUNTED PER COMPONENT, and it has to say so.
+                  
+                  `Files 2` beside a release page reading `Files 112` looks like
+                  a disagreement and is not one: a vendor's file bundle is ONE
+                  component holding a hundred and twelve named layers, and this
+                  table counts components while the release page counts files.
+                  Each of those layers is still its own blob and its own job —
+                  which is why an unchanged file in a changed bundle is not
+                  copied again.
+                */}
+                <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+                  Counted per component. A file bundle is one component however many
+                  files it carries; each of those files is a blob of its own and is
+                  copied, skipped or mounted on its own.
+                </Typography.Text>
+
                 {saved !== undefined && saved > 0 && (
                   <SavedPanel
                     savedBytes={formatBytes(saved) ?? ''}

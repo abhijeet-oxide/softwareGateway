@@ -4,8 +4,8 @@ import { useParams } from 'react-router-dom'
 import { usePackages, useProducts, useTransfers } from '../api/queries'
 import { RunDiscoveryButton } from '../components/discovery'
 import {
-  deriveLifecycle, deriveLocations, deriveStatus, downloadSeconds, matches, transferIndex,
-  verification, version, withTransfers,
+  deriveLifecycle, deriveLocations, deriveStatus, downloadSeconds, failureReason, matches,
+  transferIndex, verification, version, withTransfers,
 } from '../domain/derive'
 import { formatDuration } from '../domain/format'
 import { NA, Value } from '../components/value'
@@ -68,7 +68,13 @@ function VersionHistory({ product }: { product: Product }) {
         },
         { title: 'Published', width: 110, render: (_, pkg) => <TimeAgo at={pkg.publishedAt || pkg.discoveredAt} /> },
         { title: 'Verified', width: 140, render: (_, pkg) => <VerificationBadge state={verification(pkg)} /> },
-        { title: 'Status', width: 200, render: (_, pkg) => <StatusBadge status={deriveStatus(pkg, product)} /> },
+        {
+          title: 'Status',
+          width: 200,
+          render: (_, pkg) => (
+            <StatusBadge status={deriveStatus(pkg, product)} reason={failureReason(pkg)} />
+          ),
+        },
         {
           // The stage, with the timeline one hover away. A stepper per row is
           // four columns of furniture repeated down the page, and the part

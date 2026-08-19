@@ -4,8 +4,8 @@ import { Link, useNavigate, useSearchParams } from 'react-router-dom'
 import { usePackages, useProducts, useRunDownload, useTransfers } from '../api/queries'
 import { useCan } from '../auth/permissions'
 import {
-  deriveLocations, deriveStatus, downloadedAt, downloadSeconds, isLive, matches, releaseHref,
-  transferIndex, verification, version, withTransfers,
+  deriveLocations, deriveStatus, downloadedAt, downloadSeconds, failureReason, isLive, matches,
+  releaseHref, transferIndex, verification, version, withTransfers,
 } from '../domain/derive'
 import type { Package } from '../api/types'
 import { formatDuration } from '../domain/format'
@@ -178,6 +178,7 @@ export default function Packages() {
                 { value: 'AVAILABLE', label: 'Available' },
                 { value: 'DOWNLOADING', label: 'Downloading' },
                 { value: 'DOWNLOADED', label: 'Downloaded' },
+                { value: 'DOWNLOAD FAILED', label: 'Download failed' },
                 { value: 'READY', label: 'Ready for production' },
                 { value: 'PRODUCTION', label: 'In production' },
                 { value: 'VERIFICATION FAILED', label: 'Verification failed' },
@@ -264,7 +265,7 @@ export default function Packages() {
                 width: 240,
                 render: (_, r) => (
                   <Space size={4} wrap>
-                    <StatusBadge status={r.status} />
+                    <StatusBadge status={r.status} reason={failureReason(r.pkg)} />
                     <AnalysisTag pkg={r.pkg} />
                   </Space>
                 ),

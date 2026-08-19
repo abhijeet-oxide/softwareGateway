@@ -12,7 +12,8 @@ import {
 } from '../api/queries'
 import { useCan } from '../auth/permissions'
 import {
-  deriveStatus, downloadedAt, isLive, matches, repositoryUrl, titleCase, verification, version,
+  deriveStatus, downloadedAt, failureReason, isLive, matches, repositoryUrl, titleCase,
+  verification, version,
 } from '../domain/derive'
 import { bytes, formatBytes, formatCount, formatDuration } from '../domain/format'
 import { NA, Value } from '../components/value'
@@ -680,7 +681,7 @@ export default function PackageDetail() {
         meta={
           p && (
             <Space>
-              <StatusBadge status={status!} />
+              <StatusBadge status={status!} reason={failureReason(p)} />
               <AnalysisTag pkg={p} />
               <VerificationBadge state={verification(p)} />
             </Space>

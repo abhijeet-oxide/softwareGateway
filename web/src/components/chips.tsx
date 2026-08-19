@@ -80,6 +80,7 @@ const STATUS_COLOUR: Record<SoftwareStatus, string> = {
   DOWNLOADED: 'green',
   'READY FOR PRODUCTION': 'purple',
   PRODUCTION: 'green',
+  'DOWNLOAD FAILED': 'error',
   'VERIFICATION FAILED': 'error',
 }
 
@@ -116,8 +117,18 @@ export function PackageName({
  * DOWNLOADING spins, because it is the only one of the six that describes work
  * happening right now. Everything else is a resting place.
  */
-export function StatusBadge({ status }: { status: SoftwareStatus }) {
-  return (
+export function StatusBadge({
+  status, reason,
+}: {
+  status: SoftwareStatus
+  /**
+   * Why, for a status that has a why. The reason is the whole value of a
+   * failure: `401 unauthorized` and `the vendor withdrew this component` are
+   * the same tag and completely different afternoons.
+   */
+  reason?: string
+}) {
+  const tag = (
     <Tag
       color={STATUS_COLOUR[status]}
       icon={status === 'DOWNLOADING' ? <LoadingOutlined spin /> : undefined}
@@ -126,6 +137,7 @@ export function StatusBadge({ status }: { status: SoftwareStatus }) {
       {status}
     </Tag>
   )
+  return reason ? <Tooltip title={reason}>{tag}</Tooltip> : tag
 }
 
 /**

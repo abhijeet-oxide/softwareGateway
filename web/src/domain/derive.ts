@@ -38,6 +38,15 @@ export type SoftwareStatus =
   | 'DOWNLOADED'
   | 'READY FOR PRODUCTION'
   | 'PRODUCTION'
+  /**
+   * A download was attempted and did not arrive.
+   *
+   * Its own state, because the alternative was reading AVAILABLE — the word
+   * for a release nobody has tried to download — on a release somebody tried
+   * to download and could not. The two look identical from the listing and
+   * only one of them needs somebody.
+   */
+  | 'DOWNLOAD FAILED'
   | 'VERIFICATION FAILED'
 
 /** The three verification states, stated in words as well as colour. */
@@ -113,11 +122,35 @@ export function deriveStatus(pkg: Package, product?: Product): SoftwareStatus {
   if (transfers.some((t) => isLive(t.state) && t.state !== 'CANCELLING')) return 'DOWNLOADING'
 
   const succeeded = transfers.filter((t) => t.state === 'SUCCEEDED')
+
+  /*
+   * A FAILURE NOBODY HAS PUT RIGHT.
+   *
+   * Per DESTINATION, not per transfer: a download that failed and was retried
+   * successfully to the same target is not a failure, and a page that said so
+   * would be reporting history rather than state. What is left after that
+   * subtraction is a destination this release was asked to reach and did not.
+   *
+   * Ahead of the settled successes below, because it outranks them: a release
+   * that landed in the lab and failed on the way to production is a release
+   * somebody has to do something about, and `DOWNLOADED` says the opposite.
+   *
+   * Cancelled is deliberately not here. Somebody stopped it on purpose, and
+   * nothing needs putting right.
+   */
+  const arrived = new Set(succeeded.map((t) => t.target))
+  if (transfers.some((t) => t.state === 'FAILED' && !arrived.has(t.target))) {
+    return 'DOWNLOAD FAILED'
+  }
+
   if (succeeded.length === 0) {
     // No successful transfer anywhere. The package's own state can still say
     // it is mid-flight, on a listing where transfers were not expanded.
     if (pkg.state === 'TRANSFERRING' || pkg.state === 'QUEUED') return 'DOWNLOADING'
-    if (pkg.state === 'FAILED') return 'VERIFICATION FAILED'
+    // The package's own FAILED, which is what a listing has to go on when the
+    // transfers were not expanded. It used to read VERIFICATION FAILED, which
+    // named a step that never ran — nothing writes verification results yet.
+    if (pkg.state === 'FAILED') return 'DOWNLOAD FAILED'
     return isRecent(pkg) ? 'NEW' : 'AVAILABLE'
   }
 
@@ -126,6 +159,24 @@ export function deriveStatus(pkg: Package, product?: Product): SoftwareStatus {
 
   // Downloaded somewhere, and there is a production target it has not reached.
   return production.size > 0 ? 'READY FOR PRODUCTION' : 'DOWNLOADED'
+}
+
+/**
+ * Why a release reads DOWNLOAD FAILED, in the destination's own words.
+ *
+ * The reason is the whole value of the state: `401 unauthorized` and `the
+ * vendor withdrew this component` are the same tag and completely different
+ * afternoons. Carried verbatim, digest and all.
+ */
+export function failureReason(pkg: Package): string | undefined {
+  const arrived = new Set(
+    (pkg.transfers ?? []).filter((t) => t.state === 'SUCCEEDED').map((t) => t.target))
+  const failed = (pkg.transfers ?? [])
+    .find((t) => t.state === 'FAILED' && !arrived.has(t.target))
+  if (!failed) return undefined
+  return failed.failureReason
+    ? `${failed.target}: ${failed.failureReason}`
+    : `The download to ${failed.target} failed.`
 }
 
 /** One place a release exists. */

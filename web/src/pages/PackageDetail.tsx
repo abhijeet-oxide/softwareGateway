@@ -235,6 +235,108 @@ function artifactName(a: Artifact): string | null {
   return null
 }
 
+/**
+ * A component's name and its tag, apart.
+ *
+ * The vendor writes them as one string — `cfx-5000-product/bgcf:2511.174.0` —
+ * and they are two facts: what the component IS and which version of it this
+ * release carries. In one column the version is the part that falls off the
+ * end of the cell, and it is the part somebody is looking for.
+ *
+ * The colon must come after the last slash to be a tag separator: a registry
+ * host may carry a port, and `near.example.com:5000/orbs/x` is a path with no
+ * tag in it at all.
+ */
+function splitRef(ref: string | null): { name: string | null; tag: string | null } {
+  if (!ref) return { name: null, tag: null }
+  const colon = ref.lastIndexOf(':')
+  if (colon < 0 || colon < ref.lastIndexOf('/')) return { name: ref, tag: null }
+  return { name: ref.slice(0, colon), tag: ref.slice(colon + 1) }
+}
+
+
+/**
+ * One kind of component, with a search over it.
+ *
+ * The Files tab had a search and the other two did not, which is the wrong way
+ * round if anything: a release carries a hundred and sixty images and two file
+ * bundles, and the hundred and sixty are the ones nobody can scan by eye.
+ */
+function ComponentTable({ artifacts, kind }: { artifacts: Artifact[]; kind: string }) {
+  const [search, setSearch] = useState('')
+
+  const rows = useMemo(() => {
+    if (!search.trim()) return artifacts
+    return artifacts.filter((a) => {
+      const { name, tag } = splitRef(artifactName(a))
+      return matches(search, name ?? undefined, tag ?? undefined, a.digest)
+    })
+  }, [artifacts, search])
+
+  return (
+    <Space direction="vertical" size={8} style={{ width: '100%' }}>
+      <SearchBar
+        value={search}
+        onChange={setSearch}
+        placeholder={`Search ${kind.toLowerCase()} by name, tag or digest`}
+        matched={rows.length}
+        total={artifacts.length}
+        width={320}
+      />
+
+      <Table<Artifact>
+        size="small"
+        dataSource={rows}
+        rowKey={(a) => a.artifactId}
+        pagination={{ pageSize: 10, hideOnSinglePage: true }}
+        scroll={{ x: 640 }}
+        columns={[
+          {
+            title: 'Name',
+            render: (_, a) => (
+              <Value reason="This artifact carries no name annotation; it is identified by its digest.">
+                {splitRef(artifactName(a)).name}
+              </Value>
+            ),
+          },
+          {
+            // Its own column. The vendor writes the name and the tag as one
+            // string and they are two facts — what the component is, and which
+            // version of it this release carries — and in one cell the version
+            // is the half that falls off the end.
+            title: 'Tag',
+            width: 170,
+            render: (_, a) => {
+              const { tag } = splitRef(artifactName(a))
+              return tag
+                ? <Typography.Text style={{ fontFamily: mono, fontSize: 12 }}>{tag}</Typography.Text>
+                : <NA reason="This component answers to no tag of its own; it is addressed by digest." />
+            },
+          },
+          {
+            title: 'Size',
+            width: 110,
+            align: 'right',
+            render: (_, a) => (
+              <Value reason="This manifest has not been walked, so what it holds is not known. Analyse the package to establish it.">
+                {formatBytes(bytes(a.contentBytes))}
+              </Value>
+            ),
+          },
+          {
+            title: 'Digest',
+            width: 190,
+            render: (_, a) => (
+              <Typography.Text copyable={{ text: a.digest }} style={{ fontFamily: mono, fontSize: 11 }}>
+                {a.digest.slice(0, 19)}…
+              </Typography.Text>
+            ),
+          },
+        ]}
+      />
+    </Space>
+  )
+}
 
 /**
  * What is inside a release, as a directory tree.
@@ -251,11 +353,12 @@ function artifactName(a: Artifact): string | null {
  *
  * Every layer that carries `org.opencontainers.image.title` IS one named file,
  * and analysis recorded that name. A layer with no title is a tar of an unknown
- * number of paths; those are counted at the foot rather than listed, because
- * one row called `layer sha256:…` would be a summary pretending to be an
- * answer.
+ * number of paths — an image layer — and is not listed at all: a row called
+ * `layer sha256:…` would be a summary pretending to be an answer, and counting
+ * them at the foot only told a reader about something they had not asked
+ * about and could not act on.
  */
-function FileTree({ files, opaqueLayers }: { files: PackageFile[]; opaqueLayers?: number }) {
+function FileTree({ files }: { files: PackageFile[] }) {
   const [search, setSearch] = useState('')
 
   const shown = useMemo(
@@ -290,12 +393,7 @@ function FileTree({ files, opaqueLayers }: { files: PackageFile[]; opaqueLayers?
         />
       )}
 
-      {opaqueLayers ? (
-        <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-          {formatCount(opaqueLayers)} layers carry no names of their own — image layers, which are
-          archives of an unknown number of paths. What is inside them is not listed here.
-        </Typography.Text>
-      ) : null}
+
     </Space>
   )
 }
@@ -365,13 +463,7 @@ function buildTree(files: PackageFile[]): TreeNode[] {
             <Typography.Text type="secondary" style={{ fontSize: 11 }}>
               {formatBytes(bytes(file.sizeBytes))}
             </Typography.Text>
-            {file.component && (
-              <Tooltip title={`From ${file.component}`}>
-                <Typography.Text type="secondary" style={{ fontSize: 11 }} ellipsis>
-                  {file.component.split('/').pop()}
-                </Typography.Text>
-              </Tooltip>
-            )}
+
           </Space>
         ),
       })
@@ -413,10 +505,15 @@ export default function PackageDetail() {
       const tile = tileFor(a)
       if (!tile) continue
       out[tile].count += 1
-      out[tile].bytes += bytes(a.sizeBytes) ?? 0
-      // A child the index merely listed carries the index's idea of its size,
-      // not the size of what is under it. Only a fetched manifest has been
-      // walked, and only then is the total defensible.
+      // WHAT IT WEIGHS, not what its descriptor weighs. `sizeBytes` is the
+      // size of the manifest — a couple of kilobytes of JSON — so summing it
+      // reported a release of two hundred images as half a megabyte. The
+      // server sums the blobs and sends that, and sends nothing for an
+      // artifact nobody has walked.
+      out[tile].bytes += bytes(a.contentBytes) ?? 0
+      // A child the index merely listed has no blobs recorded, so nothing is
+      // known about what is under it. Only a fetched manifest has been walked,
+      // and only then is the total defensible.
       if (a.fetched) out[tile].measured = true
     }
     return out
@@ -631,10 +728,7 @@ export default function PackageDetail() {
                     </Space>
                   ),
                   children: kind === 'Files' && analysed ? (
-                    <FileTree
-                      files={files.data?.files ?? []}
-                      opaqueLayers={files.data?.opaqueLayers}
-                    />
+                    <FileTree files={files.data?.files ?? []} />
                   ) : kind === 'Files' && !analysed ? (
                     <EmptyStateCard
                       title="Files are not listed yet"
@@ -649,42 +743,9 @@ export default function PackageDetail() {
                       }
                     />
                   ) : (
-                    <Table
-                      size="small"
-                      dataSource={(artifacts.data?.artifacts ?? []).filter((a) => tileFor(a) === kind)}
-                      rowKey={(a) => a.artifactId}
-                      pagination={{ pageSize: 8, hideOnSinglePage: true }}
-                      scroll={{ x: 600 }}
-                      columns={[
-                        {
-                          title: 'Name',
-                          render: (_, a) => (
-                            <Value reason="This artifact carries no name annotation; it is identified by its digest.">
-                              {artifactName(a)}
-                            </Value>
-                          ),
-                        },
-                        { title: 'Platform', width: 120, render: (_, a) => <Value>{a.platform}</Value> },
-                        {
-                          title: 'Size',
-                          width: 100,
-                          align: 'right',
-                          render: (_, a) => (
-                            <Value reason="This manifest has not been walked, so what it holds is not known. Analyse the package to establish it.">
-                              {a.fetched ? formatBytes(a.sizeBytes) : null}
-                            </Value>
-                          ),
-                        },
-                        {
-                          title: 'Digest',
-                          width: 200,
-                          render: (_, a) => (
-                            <Typography.Text copyable={{ text: a.digest }} style={{ fontFamily: mono, fontSize: 11 }}>
-                              {a.digest.slice(0, 19)}…
-                            </Typography.Text>
-                          ),
-                        },
-                      ]}
+                    <ComponentTable
+                      artifacts={(artifacts.data?.artifacts ?? []).filter((a) => tileFor(a) === kind)}
+                      kind={kind}
                     />
                   ),
                 }))}

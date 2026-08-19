@@ -111,6 +111,13 @@ type ArtifactRow struct {
 	// without this project knowing they exist. The alternative is a column per
 	// vendor, which does not end.
 	Annotations map[string]string
+	// ContentBytes is what this artifact WEIGHS: its manifest plus its config
+	// plus its layers.
+	//
+	// Zero for an artifact nobody has walked, which is not the same as an
+	// artifact holding nothing — Fetched is what tells the two apart. SizeBytes
+	// above is the descriptor's, which is the size of the pointer.
+	ContentBytes int64
 	// Raw is the manifest exactly as served, when it is still CACHED.
 	//
 	// Nil means one of two different things, and Fetched is what tells them
@@ -941,13 +948,29 @@ var ErrNotFound = errors.New("not found")
 
 // ListArtifacts returns a package's artifact tree, parents before children.
 func (p *Packages) ListArtifacts(ctx context.Context, packageID int64) ([]ArtifactRow, error) {
+	// CONTENT BYTES, not the descriptor's.
+	//
+	// `size_bytes` is what the referencing descriptor said this manifest
+	// weighs: a few kilobytes of JSON. It is the right number for planning a
+	// manifest push and the wrong one for every question a person asks — "how
+	// big is this image" means its layers, and summing descriptors reported a
+	// nine-hundred-megabyte image as two kilobytes and a release of two
+	// hundred as half a megabyte.
+	//
+	// Summed from the blobs the walk recorded, so it is zero for an artifact
+	// nobody has walked — which is honest, and which Fetched tells apart from
+	// an artifact that genuinely holds nothing.
 	query := p.dialect.Rewrite(`
-		SELECT id, package_id, parent_id, digest, media_type,
-		       COALESCE(artifact_type, ''), size_bytes, COALESCE(platform, ''), depth,
-		       fetched_at IS NOT NULL, raw IS NOT NULL, annotations
-		  FROM package_artifacts
-		 WHERE package_id = ?
-		 ORDER BY depth, id`)
+		SELECT pa.id, pa.package_id, pa.parent_id, pa.digest, pa.media_type,
+		       COALESCE(pa.artifact_type, ''), pa.size_bytes, COALESCE(pa.platform, ''), pa.depth,
+		       pa.fetched_at IS NOT NULL, pa.raw IS NOT NULL, pa.annotations,
+		       COALESCE((SELECT SUM(b.size_bytes)
+		                   FROM artifact_blobs ab
+		                   JOIN blobs b ON b.digest = ab.digest
+		                  WHERE ab.artifact_id = pa.id), 0)
+		  FROM package_artifacts pa
+		 WHERE pa.package_id = ?
+		 ORDER BY pa.depth, pa.id`)
 
 	rows, err := p.db.QueryContext(ctx, query, packageID)
 	if err != nil {
@@ -961,8 +984,13 @@ func (p *Packages) ListArtifacts(ctx context.Context, packageID int64) ([]Artifa
 		var annotations []byte
 		if err := rows.Scan(&a.ID, &a.PackageID, &a.ParentID, &a.Digest, &a.MediaType,
 			&a.ArtifactType, &a.SizeBytes, &a.Platform, &a.Depth, &a.Fetched, &a.Cached,
-			&annotations); err != nil {
+			&annotations, &a.ContentBytes); err != nil {
 			return nil, fmt.Errorf("scan artifact row: %w", err)
+		}
+		if a.ContentBytes > 0 {
+			// The manifest itself is part of what this weighs. Added here
+			// rather than in the query so the sum stays a sum over blobs.
+			a.ContentBytes += a.SizeBytes
 		}
 		if len(annotations) > 0 {
 			// A malformed map is dropped rather than failing the listing: it is

@@ -2,6 +2,7 @@ package download
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"regexp"
@@ -274,34 +275,45 @@ func (s *Service) open(
 	return id, created, nil
 }
 
-// find resolves named tags to discovered packages.
+// find resolves named references to discovered packages.
 //
-// A tag nobody has discovered is an error rather than a silent skip: somebody
-// typed it, and telling them it moved nothing without saying why is the least
-// useful possible answer.
-func (s *Service) find(ctx context.Context, p *product.Product, tags []string) ([]store.PackageRow, error) {
-	rows, err := s.packages.ListPackages(ctx, store.ListPackagesFilter{ProductName: p.Metadata.Name})
-	if err != nil {
-		return nil, err
-	}
-
-	byTag := map[string]store.PackageRow{}
-	for _, row := range rows {
-		byTag[row.Tag] = row
-		if row.DisplayTag != "" {
-			// Both spellings resolve, so anything a listing showed can be
-			// pasted back.
-			byTag[row.DisplayTag] = row
-		}
-	}
-
-	out := make([]store.PackageRow, 0, len(tags))
-	for _, tag := range tags {
-		row, ok := byTag[tag]
-		if !ok {
+// # A TAG IS NOT AN IDENTITY, and this is where believing otherwise cost most
+//
+// A vendor publishes the same version into every repository of a product: nine
+// packages, nine different names, all tagged `25.7_mp2604_2131`. This used to
+// build a map keyed by tag alone, so those nine collapsed onto whichever row
+// the listing happened to return last — and everything downstream was correct
+// about the wrong package.
+//
+// The symptoms were all one bug. Downloading a component downloaded a different
+// one; the recent-downloads row named a package nobody had asked for; and the
+// SECOND download of a different package reported "already requested", because
+// the idempotency key is built from the resolved package's ID and both
+// resolutions had produced the same row. The key was right. The resolution was
+// not.
+//
+// So references resolve through the store, which is where every other endpoint
+// resolves them and which REFUSES an ambiguous one rather than choosing. Both
+// spellings of a tag still work, `repository:tag` scopes it, and a bare tag
+// that matches several repositories is an error naming them — a caller that
+// cannot say which package it meant must not have one picked for it.
+//
+// A reference nobody has discovered is an error rather than a silent skip:
+// somebody typed it, and telling them it moved nothing without saying why is
+// the least useful possible answer.
+func (s *Service) find(ctx context.Context, p *product.Product, refs []string) ([]store.PackageRow, error) {
+	out := make([]store.PackageRow, 0, len(refs))
+	for _, ref := range refs {
+		row, err := s.packages.GetPackage(ctx, p.Metadata.Name, ref)
+		if errors.Is(err, store.ErrNotFound) {
 			return nil, fmt.Errorf(
 				"no discovered package %q in product %q; `transferctl packages list %s` shows what there is",
-				tag, p.Metadata.Name, p.Metadata.Name)
+				ref, p.Metadata.Name, p.Metadata.Name)
+		}
+		if err != nil {
+			// An ambiguity carries the repositories it matched, so the caller is
+			// told what to say instead. Passed through verbatim.
+			return nil, err
 		}
 		out = append(out, row)
 	}

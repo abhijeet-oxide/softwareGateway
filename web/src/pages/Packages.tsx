@@ -5,7 +5,7 @@ import { usePackages, useProducts, useRunDownload, useTransfers } from '../api/q
 import { useCan } from '../auth/permissions'
 import {
   deriveLocations, deriveStatus, downloadedAt, downloadSeconds, failureReason, isLive, matches,
-  releaseHref, transferIndex, verification, version, withTransfers,
+  packageReference, releaseHref, transferIndex, verification, version, withTransfers,
 } from '../domain/derive'
 import type { Package } from '../api/types'
 import { formatDuration } from '../domain/format'
@@ -51,7 +51,10 @@ function DownloadAction({ product, pkg }: { product: string; pkg: Package }) {
 
   const start = async () => {
     try {
-      const result = await run.mutateAsync({ tags: [pkg.tag] })
+      // The REPOSITORY travels with the version. Nine packages of this product
+      // carry this version; the row that was clicked is the only one that says
+      // which, and sending the version alone threw that away.
+      const result = await run.mutateAsync({ tags: [packageReference(pkg)] })
       message.success(
         result.created?.length
           ? `Download of ${version(pkg)} started.`

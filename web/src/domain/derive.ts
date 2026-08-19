@@ -267,6 +267,25 @@ export function downloadedAt(pkg: Package): string | undefined {
     .sort()[0]
 }
 
+/**
+ * How to NAME one release to the API — `orbs/cfx-5000-k8s:25.7_mp2604_2131`.
+ *
+ * # A version is not an identity
+ *
+ * A vendor publishes the same version into every repository of a product: nine
+ * packages, nine different names, one version string. So a request carrying the
+ * version alone does not say which package it means, and the server refuses it
+ * rather than choosing — which is right, and which the interface must never
+ * make it do, because the interface knows exactly which row was clicked.
+ *
+ * The repository travels with the tag for the same reason releaseHref carries
+ * it: everything downstream of this is correct about whichever package it was
+ * handed.
+ */
+export function packageReference(pkg: Pick<Package, 'tag' | 'sourceRepository'>): string {
+  return pkg.sourceRepository ? `${pkg.sourceRepository}:${pkg.tag}` : pkg.tag
+}
+
 /** The lifecycle stages, in the order the brief fixes them. */
 export type LifecycleStage = 'Vendor' | 'Downloading' | 'Downloaded' | 'Production'
 

@@ -12,8 +12,8 @@ import {
 } from '../api/queries'
 import { useCan } from '../auth/permissions'
 import {
-  deriveStatus, downloadedAt, failureReason, isLive, matches, repositoryUrl, titleCase,
-  verification, version,
+  deriveStatus, downloadedAt, failureReason, isLive, matches, packageReference, repositoryUrl,
+  titleCase, verification, version,
 } from '../domain/derive'
 import { bytes, formatBytes, formatCount, formatDuration } from '../domain/format'
 import { NA, Value } from '../components/value'
@@ -650,7 +650,9 @@ export default function PackageDetail() {
 
   const download = async () => {
     try {
-      const result = await runDownload.mutateAsync({ tags: [p!.tag] })
+      // Qualified by repository — see packageReference. This page knows which
+      // package it is showing; the version alone does not.
+      const result = await runDownload.mutateAsync({ tags: [packageReference(p!)] })
       setConfirming(false)
       message.success(
         result.created?.length

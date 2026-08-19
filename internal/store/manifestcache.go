@@ -2,6 +2,8 @@ package store
 
 import (
 	"context"
+	"database/sql"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -318,4 +320,46 @@ func (p *Packages) TouchManifestCache(ctx context.Context, packageID int64) erro
 		return fmt.Errorf("touch manifest cache for package %d: %w", packageID, err)
 	}
 	return nil
+}
+
+// CachedManifest is a manifest body we still hold, and what it is.
+type CachedManifest struct {
+	Raw       []byte
+	MediaType string
+	SizeBytes int64
+}
+
+// ManifestByDigest returns a manifest body we have already fetched.
+//
+// # Why a lookup by digest alone is correct
+//
+// A manifest is addressed by the hash of its own bytes. Bytes that hash to a
+// digest are THE bytes for that digest, whichever package, product or registry
+// we happened to fetch them from — so this asks no question about ownership and
+// needs none. The alternative, a lookup scoped to one package, would miss the
+// case this exists for: the same component appearing in two releases of the
+// same product line, which is most of them.
+//
+// # And why a miss is unremarkable
+//
+// Bodies are an evictable cache (see the top of this file). A miss means "not
+// here", never "does not exist", and every caller has a registry to fall back
+// to. `touched_at` is deliberately NOT updated here: a read-through for a
+// comparison is not the same as a push wanting the bytes, and letting a
+// comparison of an old release keep the eviction pass off a body nobody
+// transfers would be the cache serving the wrong master.
+func (p *Packages) ManifestByDigest(ctx context.Context, digest string) (CachedManifest, bool, error) {
+	var m CachedManifest
+	err := p.db.QueryRowContext(ctx, p.dialect.Rewrite(`
+		SELECT raw, media_type, size_bytes
+		  FROM package_artifacts
+		 WHERE digest = ? AND raw IS NOT NULL
+		 LIMIT 1`), digest).Scan(&m.Raw, &m.MediaType, &m.SizeBytes)
+	if errors.Is(err, sql.ErrNoRows) {
+		return CachedManifest{}, false, nil
+	}
+	if err != nil {
+		return CachedManifest{}, false, fmt.Errorf("read cached manifest %s: %w", digest, err)
+	}
+	return m, true, nil
 }

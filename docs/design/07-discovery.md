@@ -337,6 +337,21 @@ Per tag, in order:
 
 So an unchanged tag costs **one** request and a newly discovered one costs **two**, whatever the package contains.
 
+### And when the children ARE fetched, unasked
+
+Nothing is lost by not walking, but somebody still pays the walk eventually — the person who opens the release, compares it, or downloads it, while waiting for a page. The only question is whether they wait, or whether it happened after the release was published and before anybody looked.
+
+So a scan finishes by walking a **few recently published releases nobody has walked**, through the same `InspectPackage` a person invokes. Bounded on both axes, and both bounds matter:
+
+| | default | why |
+|---|---|---|
+| window | 7 days | the releases anybody opens are the new ones; an old one is walked when somebody actually asks |
+| per scan | 3 | a source that has just discovered two hundred packages catches up over several scans rather than opening two hundred conversations with somebody else's registry at once |
+
+Scoped to the repositories the scan just covered, because a product's sources are distinct registries and a client built for one cannot fetch from another. Best-effort throughout: a failure is logged and dropped, because work nobody asked for must never be the reason a scan reports failure.
+
+What this buys, beyond a release page that can answer immediately: a comparison of two recent releases reads its manifests from the store rather than from the vendor ([09](09-api.md) §4.2a), because by then we hold them.
+
 ### Why the children are not fetched
 
 Discovery used to walk the whole tree. It does not any more, and the argument is that **nothing is lost**: the root digest immutably determines the entire tree. Given a digest we already hold, the tree can be walked exactly, at any time, by whatever needs it. The traversal was a *cache* — and it was paid for on every newly discovered tag.

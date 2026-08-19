@@ -120,8 +120,20 @@ func (c compareImpl) side(
 	// empty.
 	spec.Label = source.Name
 	spec.Repository = pkg.SourceRepository
-	return spec, c.factory(p.Metadata.Name, source.Name, source.Registry,
-		string(source.Type), string(product.RoleSource)), nil
+
+	// The source's manifests are read from what analysis already learnt, where
+	// we have them. See comparecache.go: a component under a resolved root
+	// cannot have changed, and a TARGET deliberately gets no such treatment
+	// because what is actually there is the whole question.
+	live := c.factory(p.Metadata.Name, source.Name, source.Registry,
+		string(source.Type), string(product.RoleSource))
+	return spec, func(repository string) (registry.Repository, error) {
+		repo, err := live(repository)
+		if err != nil {
+			return nil, err
+		}
+		return cachedManifests{Repository: repo, packages: c.packages}, nil
+	}, nil
 }
 
 // referencesFor is what to walk from, most complete first.

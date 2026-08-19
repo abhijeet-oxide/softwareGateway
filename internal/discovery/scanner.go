@@ -842,6 +842,7 @@ func (s *Scanner) resolvePhase(
 				s.progress.update(func(p *ScanProgress) { p.Errors++ })
 				continue
 			}
+			s.progress.update(func(p *ScanProgress) { p.Packages++ })
 			if outcome.isNew {
 				res.New++
 				res.Superseded += outcome.superseded

@@ -299,3 +299,112 @@ func newGatedScanner(
 	}
 	return s
 }
+
+// The tag counter moves WHILE the tags are being resolved, not after.
+//
+// It used to be incremented in a loop after the whole phase had finished, so
+// the number that represents the bulk of a scan — thousands of HEADs against a
+// vendor registry — sat at zero for minutes and then jumped to the total. The
+// repositories bar reached 100% long before any of that started, which is why a
+// scan showing 100% went on running for four more minutes.
+//
+// The resolves are HELD open by the test, so there is a moment when the scan is
+// provably mid-phase and can be asked where it is. What it says then is the
+// whole test.
+func TestTagProgressMovesWhileTagsAreResolving(t *testing.T) {
+	const repos = 4
+	const tagsEach = 2
+	const inFlight = repos * tagsEach
+
+	tags := make([]string, tagsEach)
+	for i := range tags {
+		tags[i] = fmt.Sprintf("orb_1.0.%d", i)
+	}
+	paths := make([]string, repos)
+	for i := range paths {
+		paths[i] = fmt.Sprintf("orbs/component-%02d", i)
+	}
+
+	held := &heldResolves{
+		arrived: make(chan struct{}, inFlight),
+		release: make(chan struct{}),
+	}
+	s := newGatedScanner(t, paths, inFlight, func(path string) registry.Source {
+		return &heldSource{path: path, held: held, tags: tags}
+	})
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		_, _ = s.Scan(t.Context())
+	}()
+
+	// Every tag is now inside a resolve and none of them can return.
+	for range inFlight {
+		select {
+		case <-held.arrived:
+		case <-done:
+			t.Fatal("the scan finished before the resolve phase could be observed")
+		case <-time.After(10 * time.Second):
+			t.Fatal("the resolve phase never became busy")
+		}
+	}
+
+	p := s.progress.snapshot()
+	close(held.release)
+	<-done
+
+	if p.Phase != PhaseResolving {
+		t.Errorf("phase = %q, want %q while tags are being resolved", p.Phase, PhaseResolving)
+	}
+	if p.TagsInFlight != inFlight {
+		t.Errorf("in flight = %d, want %d — the concurrency an operator configured is "+
+			"invisible without it", p.TagsInFlight, inFlight)
+	}
+	if p.TagsTotal != inFlight {
+		t.Errorf("tags total = %d, want %d — the denominator is not established",
+			p.TagsTotal, inFlight)
+	}
+	// And the bar this drives is about TAGS by now, not about repositories,
+	// which have all been listed.
+	_, total := p.PhaseProgress()
+	if total != p.TagsTotal {
+		t.Errorf("the phase fraction is counted against %d, want the %d tags",
+			total, p.TagsTotal)
+	}
+}
+
+// heldResolves holds every tag resolve open until the test says otherwise.
+type heldResolves struct {
+	arrived chan struct{}
+	release chan struct{}
+}
+
+type heldSource struct {
+	registry.Source
+	path string
+	held *heldResolves
+	tags []string
+}
+
+func (s *heldSource) Name() string               { return "registry.example.com/" + s.path }
+func (s *heldSource) Registry() string           { return "registry.example.com" }
+func (s *heldSource) Path() string               { return s.path }
+func (s *heldSource) Ping(context.Context) error { return nil }
+
+func (s *heldSource) Capabilities(context.Context) registry.Capabilities {
+	return registry.DefaultCapabilities()
+}
+
+func (s *heldSource) ListTags(context.Context, string, int) ([]string, string, error) {
+	return s.tags, "", nil
+}
+
+func (s *heldSource) ResolveTag(ctx context.Context, tag string) (registry.Descriptor, error) {
+	s.held.arrived <- struct{}{}
+	select {
+	case <-s.held.release:
+	case <-ctx.Done():
+	}
+	return registry.Descriptor{}, fmt.Errorf("resolve %s: held open by the test", tag)
+}

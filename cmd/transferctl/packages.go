@@ -962,7 +962,24 @@ func renderDiscoveryStatus(w io.Writer, st *v1.DiscoveryStatusResponse) error {
 				fmt.Fprintf(tw, "  Current repository\t%s\n", s.CurrentRepository)
 			}
 			if s.TagsTotal > 0 {
-				fmt.Fprintf(tw, "  Tags resolved\t%d of %d\n", s.TagsResolved, s.TagsTotal)
+				// CHECKED, not "resolved". The checked count moves as each HEAD
+				// returns; the resolved one was reported in a single step when
+				// the whole phase finished, so this line sat at "0 of 3180"
+				// through the longest part of every scan.
+				fmt.Fprintf(tw, "  Versions checked\t%d of %d", s.TagsChecked, s.TagsTotal)
+				if s.TagsInFlight > 0 {
+					fmt.Fprintf(tw, ", %d in flight", s.TagsInFlight)
+				}
+				fmt.Fprintln(tw)
+			}
+			if s.TagsToFetch > 0 {
+				fmt.Fprintf(tw, "  New releases read\t%d of %d\n", s.TagsFetched, s.TagsToFetch)
+			}
+			if s.CurrentTag != "" {
+				fmt.Fprintf(tw, "  Current version\t%s\n", s.CurrentTag)
+			}
+			if s.Packages > 0 {
+				fmt.Fprintf(tw, "  Releases recorded so far\t%d\n", s.Packages)
 			}
 			if s.Artifacts > 0 {
 				fmt.Fprintf(tw, "  Manifests fetched\t%d\n", s.Artifacts)

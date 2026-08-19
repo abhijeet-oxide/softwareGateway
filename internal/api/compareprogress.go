@@ -35,7 +35,7 @@ import (
 
 // compareProgress is the live state of one comparison.
 type compareProgress struct {
-	// Sides is one entry per end, keyed by its label, so the slower registry is
+	// Sides is one entry per end, keyed by "a"/"b", so the slower registry is
 	// visible as itself rather than averaged into the other.
 	Sides map[string]compare.Progress
 	// StartedAt and UpdatedAt are what let a caller — and the server itself —
@@ -92,11 +92,10 @@ func (t *compareTracker) start(token string) compare.ProgressFunc {
 		if !ok {
 			return
 		}
-		// LAST REPORT WINS PER SIDE, and per side is the point: the two are
-		// walked concurrently and each moves through its own phases, so
-		// overwriting one with the other would make the pair flicker between
-		// two positions that are both true.
-		entry.Sides[p.Side] = p
+		// Keyed by the END rather than by its label: the two sides of a
+		// version comparison are the same place and carry the same label, and
+		// keying by that would have the second overwrite the first.
+		entry.Sides[p.Key] = p
 		entry.UpdatedAt = time.Now()
 	}
 }

@@ -146,7 +146,17 @@ func describeScanning(s v1.DiscoverySourceState) string {
 			}
 		}
 		if s.Phase == "RESOLVING_TAGS" && s.TagsTotal > 0 {
-			fmt.Fprintf(b, " · %d/%d tags", s.TagsResolved, s.TagsTotal)
+			// The CHECKED count, which moves one at a time, rather than the
+			// resolved one, which arrived in a single step at the end of the
+			// phase — the reason a scan reporting `48/48 repos` then sat
+			// apparently still for minutes.
+			fmt.Fprintf(b, " · %d/%d versions", s.TagsChecked, s.TagsTotal)
+			if s.TagsInFlight > 0 {
+				fmt.Fprintf(b, " (%d in flight)", s.TagsInFlight)
+			}
+			if s.TagsToFetch > 0 {
+				fmt.Fprintf(b, " · %d/%d new read", s.TagsFetched, s.TagsToFetch)
+			}
 		}
 		if s.Artifacts > 0 {
 			// The counter that keeps moving while a single large tag is being

@@ -275,11 +275,18 @@ func resolveFileBudget(requested int64) int64 {
 //
 // It used to be NONE, and none means one: the walker clamps a non-positive
 // concurrency to a single worker. A comparison of a real orb is then ~260
-// manifests plus two probes per component, per side, one round trip at a time
-// — twenty minutes against a vendor registry, with nothing on screen but a
-// spinner. Eight is the same order as a transfer's default per-registry
-// concurrency and is polite to a registry nobody has sized for us.
-const defaultCompareConcurrency = 8
+// manifests plus a resolve for every tag in the repository, per side, one round
+// trip at a time — twenty minutes against a vendor registry with nothing on
+// screen but a spinner.
+//
+// SIXTEEN, and the number is chosen from what the work IS. Every request a
+// comparison makes is a HEAD or a small GET against a read-only registry
+// endpoint: no bytes to speak of, no writes, nothing to serialise behind. The
+// limit that matters is politeness to a registry nobody sized for us, and
+// sixteen concurrent metadata reads is well inside what any registry serving a
+// CI fleet handles continuously. An operator who knows better sets
+// `concurrency.perRegistry` on the source and this defers to it.
+const defaultCompareConcurrency = 16
 
 // concurrencyOf is the ceiling an operator set for this product's registries.
 //

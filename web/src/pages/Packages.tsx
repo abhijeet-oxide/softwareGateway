@@ -211,8 +211,15 @@ export default function Packages() {
                       </Link>
                       <Tooltip title={`Compare ${version(r.pkg)} against another version or another location`}>
                         <Link
+                          // The REPOSITORY travels with the tag. One version
+                          // tag exists in every repository a product watches,
+                          // so a compare link carrying only the tag arrives at
+                          // a page that cannot say which package was meant.
                           to={`/compare?product=${encodeURIComponent(product.productId)}` +
-                              `&from=${encodeURIComponent(r.pkg.tag)}`}
+                              `&from=${encodeURIComponent(r.pkg.tag)}` +
+                              (r.pkg.sourceRepository
+                                ? `&repository=${encodeURIComponent(r.pkg.sourceRepository)}`
+                                : '')}
                         >
                           <Button size="small">Compare</Button>
                         </Link>

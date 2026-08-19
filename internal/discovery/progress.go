@@ -53,12 +53,36 @@ type ScanProgress struct {
 	// such.
 	CurrentRepository string
 
-	TagsListed   int
+	TagsListed int
+	// TagsResolved is how many tags this scan has finished with.
 	TagsResolved int
-	// TagsTotal is how many tags in the current repository survived the
-	// filters, so a caller can render "17 of 240" rather than a number that
-	// grows towards nothing in particular.
+	// TagsTotal is how many tags survived the filters across every repository
+	// listed so far, so a caller can render "17 of 240" rather than a number
+	// that grows towards nothing in particular.
 	TagsTotal int
+	// TagsChecked is how many have been resolved to a digest — one HEAD each,
+	// and the bulk of a scan.
+	//
+	// Counted as each one completes rather than after the phase. It was
+	// reported in a single step at the end, which meant the display sat frozen
+	// through the longest part of every scan and then jumped to the total: the
+	// repositories bar reached 100% while thousands of requests were still to
+	// come, and "100%" that keeps running for four minutes is worse than no
+	// bar at all.
+	TagsChecked int
+	// TagsToFetch is how many turned out to be NEW, known once the checking
+	// phase has decided it. TagsFetched is how many of those have been read.
+	TagsToFetch int
+	TagsFetched int
+	// TagsInFlight is how many tags are being resolved or read RIGHT NOW.
+	//
+	// The number that shows the concurrency an operator configured actually
+	// being used — and, when it sits at one, that it is not.
+	TagsInFlight int
+	// CurrentTag is whichever tag most recently started. A hint about where the
+	// scan has got to, not a position: with sixteen in flight there is no
+	// single current one.
+	CurrentTag string
 
 	// Artifacts is manifests fetched across every tag so far.
 	//
@@ -68,8 +92,40 @@ type ScanProgress struct {
 	// what "so many requests succeed but the CLI reports no progress" was.
 	Artifacts int
 
-	New    int
-	Errors int
+	// New is packages recorded by this scan, counted as each is written rather
+	// than at the end — the answer to "is it finding anything?" while it is
+	// still looking.
+	New int
+	// Packages is how many releases this scan has grouped and written,
+	// including ones that already existed. New is the interesting subset; this
+	// is what says the scan is producing something at all.
+	Packages int
+	Errors   int
+}
+
+// Phase reports which part of the scan a caller should render a bar for.
+//
+// A scan is three phases with three different denominators, and no single
+// fraction spans them honestly: repositories are not tags, and a bar over their
+// sum advances and then dips as listing discovers more tags. So the phase says
+// which denominator is live, and the caller shows that one.
+func (p ScanProgress) PhaseProgress() (done, total int) {
+	switch p.Phase {
+	case PhaseEnumerating:
+		return 0, 0
+	case PhaseListingTags:
+		return p.RepositoriesDone, p.RepositoriesTotal
+	case PhaseResolving:
+		// The checking pass first, then the reading pass. Two bars in
+		// sequence, each with a real denominator, rather than one that means
+		// two different things at two different times.
+		if p.TagsToFetch > 0 && p.TagsChecked >= p.TagsTotal {
+			return p.TagsFetched, p.TagsToFetch
+		}
+		return p.TagsChecked, p.TagsTotal
+	default:
+		return 0, 0
+	}
 }
 
 // Elapsed is how long the scan has been running.

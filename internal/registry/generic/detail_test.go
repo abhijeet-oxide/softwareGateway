@@ -8,7 +8,7 @@ import "testing"
 // A registry in front of an entitlement system answers a request for an
 // unlicensed product with a sentence naming the customer, the product and the
 // reason. It is not the Distribution error shape, so it parsed to nothing and
-// the operator was shown `HTTP 403: forbidden` — a status code where there was
+// the operator was shown `HTTP 403: forbidden` - a status code where there was
 // a diagnosis. Thirty-seven of those look like a broken credential.
 
 func TestTheRegistrysOwnSentenceSurvivesANonStandardErrorBody(t *testing.T) {
@@ -46,7 +46,7 @@ func TestOtherCommonErrorBodiesAreReadToo(t *testing.T) {
 }
 
 // Anything unrecognised yields nothing, which is the behaviour this replaced.
-// It may only ever ADD detail — inventing one from an arbitrary body would put
+// It may only ever ADD detail - inventing one from an arbitrary body would put
 // a registry's HTML error page into an operator's terminal.
 func TestAnUnrecognisedBodyAddsNothing(t *testing.T) {
 	for _, body := range []string{

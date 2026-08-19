@@ -12,7 +12,7 @@ import (
 // Delegation adapts the replication service to the transfer package's seam.
 //
 // It lives here rather than in internal/transfer because it is the side that
-// knows about products, Quay and secrets — which is precisely what the seam
+// knows about products, Quay and secrets - which is precisely what the seam
 // exists to keep out of the transfer engine.
 type Delegation struct {
 	service  *Service
@@ -84,7 +84,7 @@ func (d *Delegation) RequestSync(ctx context.Context, req transfer.SyncRequest) 
 	// unconfigured mirror to sync succeeds at the API level and moves nothing.
 	if status.Observation == nil || status.Observation.Drift.Absent {
 		return transfer.SyncHandle{}, fmt.Errorf(
-			"target %q has no mirror configuration on the registry yet — run `transferctl targets apply %s %s` first",
+			"target %q has no mirror configuration on the registry yet - run `transferctl targets apply %s %s` first",
 			t.Name, req.ProductName, t.Name)
 	}
 
@@ -94,7 +94,7 @@ func (d *Delegation) RequestSync(ctx context.Context, req transfer.SyncRequest) 
 	}
 
 	// The expected digest is recorded on the sync row here rather than at
-	// settle time, because it is what we asked for — and comparing against a
+	// settle time, because it is what we asked for - and comparing against a
 	// digest looked up after the fact would compare the destination with
 	// itself.
 	if d.store != nil && out.SyncID != 0 && req.ExpectedDigest != "" {

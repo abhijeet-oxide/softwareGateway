@@ -12,8 +12,8 @@ import (
 //
 // The `workers` table was created in the first migration and nothing ever
 // wrote to it. Every fact needed to fill it already crossed the wire on every
-// lease and every heartbeat — the worker's ID, its build, how much capacity it
-// has and how much of it is in use — and all of it was read for the one
+// lease and every heartbeat - the worker's ID, its build, how much capacity it
+// has and how much of it is in use - and all of it was read for the one
 // decision at hand and then dropped. So `health` could not answer "are the
 // workers up?", the fleet had no cardinality, and "only one job is running"
 // was a question with no way to look.
@@ -91,7 +91,7 @@ func (p *Packages) RecordWorker(ctx context.Context, w WorkerRow) error {
 // TouchWorker refreshes liveness and the active count from a heartbeat.
 //
 // Separate from RecordWorker because a heartbeat does not carry the worker's
-// capacity — only a lease does — and overwriting a known ceiling with a zero
+// capacity - only a lease does - and overwriting a known ceiling with a zero
 // would make the fleet view report every worker as having no capacity between
 // leases, which on a multi-gigabyte blob is most of the time.
 func (p *Packages) TouchWorker(ctx context.Context, id string, active int) error {

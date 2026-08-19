@@ -15,7 +15,7 @@ import (
 	v1 "github.com/abhijeet-oxide/softwareGateway/pkg/apis/softwaregateway/v1"
 )
 
-// The retry route, and specifically the routing — a custom method on a
+// The retry route, and specifically the routing - a custom method on a
 // resource whose ID is a UUID is the shape most likely to be matched at the
 // wrong colon.
 
@@ -28,7 +28,7 @@ type fakeQueue struct {
 	workers  []store.WorkerSummary
 
 	// controlled records the queue-control verbs applied, in order, as
-	// "verb transfer-id" — so a test can assert that :pause reached the queue
+	// "verb transfer-id" - so a test can assert that :pause reached the queue
 	// as a pause rather than merely that it returned 200.
 	controlled  []string
 	controlErr  error
@@ -182,7 +182,7 @@ func TestSetPriorityReachesTheQueueWithTheValue(t *testing.T) {
 }
 
 // Priority 0 is a legal value meaning "behind everything", so it must not be
-// mistaken for "the caller said nothing" — and an omitted priority must not be
+// mistaken for "the caller said nothing" - and an omitted priority must not be
 // silently read as 0, which would send the transfer to the back of the queue.
 func TestSetPriorityDistinguishesZeroFromUnsaid(t *testing.T) {
 	for _, tc := range []struct {
@@ -228,7 +228,7 @@ func TestSetPriorityDistinguishesZeroFromUnsaid(t *testing.T) {
 // Pause, resume and stop reach the queue as themselves.
 //
 // Asserting on the QUEUE rather than on the status code, because a handler that
-// answered 200 and did nothing would pass the weaker test — and a control verb
+// answered 200 and did nothing would pass the weaker test - and a control verb
 // that silently does nothing is the worst possible outcome for one.
 func TestTheControlVerbsReachTheQueue(t *testing.T) {
 	for _, tc := range []struct{ verb, want string }{

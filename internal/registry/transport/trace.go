@@ -21,7 +21,7 @@ const DefaultSlowRequest = 10 * time.Second
 // and there was no way to see whether that was one slow request or two hundred,
 // which host they were going to, or whether they were even leaving the process.
 //
-// Placed OUTERMOST of the functional layers — outside the rate limiter — so the
+// Placed OUTERMOST of the functional layers - outside the rate limiter - so the
 // duration it reports is the wall-clock cost the scan actually paid, including
 // time spent waiting for a rate-limit token or sleeping between retries. A
 // timer inside those layers would report a healthy 200ms for a request that

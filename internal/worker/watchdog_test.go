@@ -70,7 +70,7 @@ func TestAFinishedJobStopsTheClock(t *testing.T) {
 	}
 }
 
-// Disabled is a supported configuration — a deployment that would rather hang
+// Disabled is a supported configuration - a deployment that would rather hang
 // than risk abandoning a legitimate long job must be able to say so.
 func TestTheWatchdogCanBeDisabled(t *testing.T) {
 	ctx, cancel := context.WithCancel(t.Context())

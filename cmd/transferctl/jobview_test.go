@@ -220,8 +220,8 @@ func bytesOf(n int64) v1.Int64String {
 // The cumulative average cannot: it carries the whole history, so a transfer
 // that crawled for ten minutes and then got ten times faster needs over an hour
 // of the new speed before the average is within 10% of it. That is precisely
-// the moment somebody is watching — they have just added a worker or bypassed a
-// proxy and want to know whether it worked — and the number would still be
+// the moment somebody is watching - they have just added a worker or bypassed a
+// proxy and want to know whether it worked - and the number would still be
 // describing the period before they touched anything.
 func TestSmoothedRateFollowsAChangeTheAverageWouldNotYet(t *testing.T) {
 	var r rateTracker
@@ -248,7 +248,7 @@ func TestSmoothedRateFollowsAChangeTheAverageWouldNotYet(t *testing.T) {
 	}
 
 	// The cumulative average after that minute, for comparison: 600s at 500
-	// KiB/s then 60s at 5 MiB/s is about 909 KiB/s — still under a fifth of the
+	// KiB/s then 60s at 5 MiB/s is about 909 KiB/s - still under a fifth of the
 	// truth, and an ETA built on it would be five times too long.
 	average := float64(bytes) / at.Sub(at.Add(-660*time.Second)).Seconds()
 	if average > fast/3 {
@@ -275,7 +275,7 @@ func TestEstimateUsesTheRateItIsGiven(t *testing.T) {
 			PlannedBytes:     bytesOf(1100),
 			BytesTransferred: bytesOf(100),
 			// In flight, because an estimate is only meaningful for a transfer
-			// that is actually moving — see etaOf.
+			// that is actually moving - see etaOf.
 			JobsInFlight: 1, JobsOutstanding: 3,
 		},
 	}

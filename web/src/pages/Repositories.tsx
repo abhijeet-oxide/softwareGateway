@@ -12,13 +12,13 @@ import type { Repository } from '../api/types'
 import { Icon, repositoryIcon } from '../components/icons'
 
 /**
- * Page 7 — Repositories.
+ * Page 7 - Repositories.
  *
  * Answers: where is our software stored, and are those places healthy?
  *
  * Its real job is answering "is it us or is it them" at the start of an
- * incident, which is why the connectivity result names the step that failed —
- * credential, TLS, DNS, proxy — rather than reporting a red dot.
+ * incident, which is why the connectivity result names the step that failed -
+ * credential, TLS, DNS, proxy - rather than reporting a red dot.
  *
  * No credential value appears here, ever. Status only.
  */
@@ -49,7 +49,6 @@ export default function Repositories() {
   if (products.isError) {
     return (
       <>
-        <PageHeader title="Repositories" description="Where our software is stored, and whether those places are healthy" />
         <ErrorState error={products.error} retry={() => void products.refetch()} />
       </>
     )
@@ -58,8 +57,6 @@ export default function Repositories() {
   return (
     <>
       <PageHeader
-        title="Repositories"
-        description="Where our software is stored, and whether those places are healthy"
         extra={
           <Tooltip
             title={

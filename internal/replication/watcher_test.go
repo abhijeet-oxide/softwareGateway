@@ -115,8 +115,8 @@ func TestSyncSucceedsWhenTheDigestMatches(t *testing.T) {
 }
 
 // THE case this whole design exists for: the registry reports success and the
-// destination holds a different digest. Not a failure — the upstream tag moved
-// and the mirror followed it — but not success either.
+// destination holds a different digest. Not a failure - the upstream tag moved
+// and the mirror followed it - but not success either.
 func TestSyncDivergesWhenTheDigestDiffers(t *testing.T) {
 	api := &fakeQuay{repo: &quay.Repository{State: "MIRROR"}, mirror: mirrorState("SUCCESS")}
 	dest := &fakeDest{digest: divergedDigest}
@@ -197,7 +197,7 @@ func TestFailedSyncSettlesAsFailed(t *testing.T) {
 	_ = rec
 }
 
-// An unrecognised status is not guessed at — but it is not allowed to hang
+// An unrecognised status is not guessed at - but it is not allowed to hang
 // forever either, which is what the timeout is for.
 func TestUnknownStatusWaitsThenTimesOut(t *testing.T) {
 	api := &fakeQuay{repo: &quay.Repository{State: "MIRROR"}, mirror: mirrorState("QUIESCING")}

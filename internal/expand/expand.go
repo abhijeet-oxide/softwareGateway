@@ -3,8 +3,8 @@
 // # The two states a package can be in
 //
 // Discovery is deliberately light. It fetches a tag's own manifest and records
-// what that manifest LISTS — each child's digest, media type, size and platform,
-// straight out of the index's own descriptors — without fetching any of them.
+// what that manifest LISTS - each child's digest, media type, size and platform,
+// straight out of the index's own descriptors - without fetching any of them.
 // That answers "what is new" in two requests per tag, where walking would have
 // cost one per artifact, and a first scan of a real vendor catalogue would
 // otherwise run into five figures of requests.
@@ -41,7 +41,7 @@ import (
 
 // Result is one expansion.
 type Result struct {
-	// Tree is the package's complete contents, with database row IDs resolved —
+	// Tree is the package's complete contents, with database row IDs resolved -
 	// a manifest job references its artifact row, so the caller needs them.
 	Tree store.ExpandedTree
 
@@ -57,7 +57,7 @@ type Result struct {
 // the package's own manifest.
 //
 // Where a vendor bundles the payload with its signature under a wrapper index,
-// only the wrapper reaches both — so walking the payload alone would move the
+// only the wrapper reaches both - so walking the payload alone would move the
 // bytes and LEAVE THE SIGNATURE BEHIND. The layout plugin recorded the wrapper
 // at discovery; this is where that decision is used.
 //
@@ -65,7 +65,7 @@ type Result struct {
 // about it. They did not: the planner honoured the transfer root while inspect
 // walked the payload, so `packages inspect` reported a transfer size that
 // excluded the signature and recorded a tree that was not the tree a transfer
-// plans from — while saying, in as many words, that those were the numbers a
+// plans from - while saying, in as many words, that those were the numbers a
 // transfer would move.
 func Root(pkg store.PackageRow) (registry.Descriptor, error) {
 	dgst := registry.Digest(pkg.ManifestDigest)
@@ -100,7 +100,7 @@ func Ensure(
 	concurrency int,
 ) (Result, error) {
 	// THE RECORD FIRST. A tree already walked can never be stale, so this is
-	// not an optimisation with a correctness caveat — it is the primary path,
+	// not an optimisation with a correctness caveat - it is the primary path,
 	// and the walk is the fallback.
 	//
 	// Completeness is "every artifact was fetched", not "every artifact's bytes
@@ -111,7 +111,7 @@ func Ensure(
 		return Result{}, err
 	}
 	// Complete, AND rooted at what was asked for. The second half is not
-	// pedantry: discovery records the tree of the tag it fetched — the payload —
+	// pedantry: discovery records the tree of the tag it fetched - the payload -
 	// while a transfer walks the wrapper that reaches the payload AND its
 	// signature. Judging completeness on its own let a payload-rooted tree
 	// satisfy a request for the wrapper, so the signature manifest was never
@@ -176,7 +176,7 @@ func ToStoreTree(t oci.Tree) store.ExpandedTree {
 				Depth:        a.Depth,
 				Raw:          a.Raw,
 				// Annotations are what a bundle uses to say what each of its
-				// components is CALLED — the reserved
+				// components is CALLED - the reserved
 				// org.opencontainers.image.ref.name, merged by the walker from
 				// the referencing descriptor and the manifest's own. Dropping
 				// them here made every component of a bundle anonymous by the
@@ -201,7 +201,7 @@ func ToStoreTree(t oci.Tree) store.ExpandedTree {
 				Ordinal:   b.Ordinal,
 				// What the publisher calls this layer. For a single-file
 				// artifact it is the file's name, and it is the only place
-				// that name exists — the blob itself is just bytes.
+				// that name exists - the blob itself is just bytes.
 				Title: b.Descriptor.Annotations[registry.AnnotationTitle],
 			})
 		}

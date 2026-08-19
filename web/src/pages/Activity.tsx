@@ -10,13 +10,13 @@ import { mono } from '../theme'
 import type { AuditEvent } from '../api/types'
 
 /**
- * Page 8 — Activity.
+ * Page 8 - Activity.
  *
  * Answers: what happened, when, and who did it?
  *
  * Filters compose into the URL, so a filtered view can be pasted to a
  * colleague. Event types are rendered into the product's voice by a lookup
- * table rather than by mangling the identifier — a new event type should read
+ * table rather than by mangling the identifier - a new event type should read
  * as itself rather than as a guess.
  */
 
@@ -80,7 +80,6 @@ export default function Activity() {
   if (events.isError) {
     return (
       <>
-        <PageHeader title="Activity" description="What happened, when, and who did it" />
         <ErrorState error={events.error} retry={() => void events.refetch()} />
       </>
     )
@@ -91,8 +90,6 @@ export default function Activity() {
   return (
     <>
       <PageHeader
-        title="Activity"
-        description="What happened, when, and who did it"
         meta={
           <Space wrap>
             <Select

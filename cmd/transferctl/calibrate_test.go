@@ -76,7 +76,7 @@ func TestRuntimeEstimateScalesWithTheSweep(t *testing.T) {
 // Evidence is wrapped rather than truncated: it is the justification, and a
 // justification cut off mid-sentence is worse than none.
 func TestWrapBreaksOnWordsAndKeepsEverything(t *testing.T) {
-	text := "direct moved 18.0 MiB/s against 2.1 MiB/s through the proxy — 757% faster"
+	text := "direct moved 18.0 MiB/s against 2.1 MiB/s through the proxy - 757% faster"
 	lines := wrap(text, 30)
 
 	if len(lines) < 2 {

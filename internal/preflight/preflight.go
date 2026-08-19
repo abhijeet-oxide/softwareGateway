@@ -10,7 +10,7 @@
 //	            to third parties, run on demand.
 //
 // They are deliberately separate. Folding registry probes into health would
-// mean a vendor's outage makes OUR service look unhealthy — and since the same
+// mean a vendor's outage makes OUR service look unhealthy - and since the same
 // machinery backs readiness, a vendor's bad afternoon would pull our pods out
 // of service. It would also make health unable to answer the question it
 // exists for: an operator seeing "DEGRADED" could not tell whether the fault
@@ -80,7 +80,7 @@ type Checker struct {
 	// connection and never answers must not hold the whole report.
 	timeout time.Duration
 	// concurrency bounds parallel probes, so checking a product with forty
-	// repositories does not open forty connections to one registry at once —
+	// repositories does not open forty connections to one registry at once -
 	// which is the behaviour a rate limiter exists to prevent.
 	concurrency int
 }
@@ -90,7 +90,7 @@ type Checker struct {
 // The per-repository timeout is derived from the transport budget in
 // probeTransport rather than picked: 2 attempts of (5s connect + 10s waiting
 // for headers) is 30 seconds of legitimate work, plus retry backoff. A 15s
-// budget — what this used to be — cut off a probe that was still within its own
+// budget - what this used to be - cut off a probe that was still within its own
 // retry policy, so a registry behind a slow proxy reported a timeout the
 // transport had not yet reached.
 func NewChecker(secrets *product.SecretResolver) *Checker {
@@ -268,7 +268,7 @@ func (c *Checker) checkRepository(ctx context.Context, p *product.Product, spec 
 			Hint: "the connection is encrypted but not authenticated: anything that can " +
 				"intercept it can serve different bytes and we would not know. Prefer " +
 				"network.caBundleRef. Note this does NOT fix \"x509: negative serial " +
-				"number\" — that needs tls.allowNegativeSerialNumbers",
+				"number\" - that needs tls.allowNegativeSerialNumbers",
 		})
 	}
 
@@ -342,7 +342,7 @@ func (c *Checker) checkRepository(ctx context.Context, p *product.Product, spec 
 	if spec.Role == string(product.RoleTarget) {
 		// Write access cannot be verified without writing, and preflight must
 		// not leave artefacts in a production registry. Reported as skipped
-		// with the reason, rather than silently omitted — "we did not check"
+		// with the reason, rather than silently omitted - "we did not check"
 		// and "it passed" must not look the same.
 		res.Steps = append(res.Steps, Step{
 			Name: "writable", Status: StatusSkipped,
@@ -370,8 +370,8 @@ func (c *Checker) resolveCredentials(p *product.Product, spec repoSpec) (registr
 		PlainHTTP: isLoopback(spec.Registry),
 	}
 
-	// The rate limit is honoured — a vendor that throttles must not be probed
-	// harder than a scan would probe it — but the connection pool is fixed at 4
+	// The rate limit is honoured - a vendor that throttles must not be probed
+	// harder than a scan would probe it - but the connection pool is fixed at 4
 	// regardless of what the source configures. A check makes a handful of
 	// requests per repository and then exits; sizing the pool for a full scan
 	// would open connections it never uses.
@@ -427,8 +427,8 @@ func (c *Checker) checkRead(ctx context.Context, client *generic.Repository, spe
 			Detail: fmt.Sprintf("readable (%s…)", tags[0])}
 
 	case err == nil:
-		// Reachable, authorised, and genuinely empty. Not a failure — a vendor
-		// repository awaiting its first release is a normal state — but worth
+		// Reachable, authorised, and genuinely empty. Not a failure - a vendor
+		// repository awaiting its first release is a normal state - but worth
 		// flagging, because an empty repository is also what a typo'd path
 		// looks like.
 		return Step{Name: readStepName(spec.Role), Status: StatusWarning, Latency: latency,
@@ -455,7 +455,7 @@ func (c *Checker) checkRead(ctx context.Context, client *generic.Repository, spe
 		return Step{Name: readStepName(spec.Role), Status: StatusFailed, Latency: latency,
 			Detail: err.Error(),
 			Hint: "the credential authenticated but is not authorised to pull this " +
-				"repository — the scope is usually per repository"}
+				"repository - the scope is usually per repository"}
 
 	default:
 		return Step{Name: readStepName(spec.Role), Status: StatusFailed, Latency: latency,
@@ -490,8 +490,8 @@ func (c *Checker) checkManifest(ctx context.Context, client *generic.Repository,
 	}
 
 	if _, _, err := client.FetchManifest(ctx, string(desc.Digest)); err != nil {
-		// Split from the HEAD deliberately. A registry — or a proxy that
-		// inspects bodies — can answer HEAD promptly and stall on the GET, and
+		// Split from the HEAD deliberately. A registry - or a proxy that
+		// inspects bodies - can answer HEAD promptly and stall on the GET, and
 		// reporting them as one step would hide which of the two is broken.
 		return Step{Name: name, Status: StatusFailed, Latency: time.Since(started),
 			Detail: fmt.Sprintf("HEAD %s succeeded, GET manifests/%s failed: %s",
@@ -509,7 +509,7 @@ func manifestHint(err error) string {
 	case errors.Is(err, registry.ErrTimeout):
 		return "discovery does this for EVERY tag, so a slow manifest fetch fails every " +
 			"scan. Raise network.timeouts.responseHeader, and if the traffic goes " +
-			"through an inspecting proxy, check network.proxy — a proxy that scans " +
+			"through an inspecting proxy, check network.proxy - a proxy that scans " +
 			"response bodies can answer HEAD quickly and stall on GET"
 	case registry.ClassOf(err) == registry.ClassAuth:
 		return "the credential can list tags but not read manifests, which some " +
@@ -531,7 +531,7 @@ func (c *Checker) checkCatalog(ctx context.Context, cfg registry.ClientConfig, s
 
 	started := time.Now()
 	// Deliberately over the cap a scan would use, so the report can say how
-	// much an unfiltered source would actually adopt — the fact worth acting
+	// much an unfiltered source would actually adopt - the fact worth acting
 	// on, rather than a blanket rule that filters are mandatory.
 	repos, err := cat.ListAllRepositories(ctx, 500)
 	latency := time.Since(started)
@@ -554,7 +554,7 @@ func (c *Checker) checkCatalog(ctx context.Context, cfg registry.ClientConfig, s
 		return Step{Name: "can list repositories", Status: StatusFailed, Latency: latency,
 			Detail: "the registry refused to list its repositories",
 			Hint: "this credential is scoped to pulling named repositories, not to " +
-				"enumerating the registry — common for vendor-issued credentials. " +
+				"enumerating the registry - common for vendor-issued credentials. " +
 				"Name them under `repositories:` instead"}
 
 	case errors.Is(err, registry.ErrNotFound):
@@ -606,14 +606,14 @@ func authHint(spec repoSpec) string {
 		return "the registry requires authentication; add a credentialsRef"
 	}
 	return "the username or password in secret " + spec.Credentials.SecretName +
-		" was rejected. Check for a trailing newline in the file — it is the " +
+		" was rejected. Check for a trailing newline in the file - it is the " +
 		"most common cause and the hardest to see"
 }
 
 func reachabilityHint(err error, spec repoSpec) string {
 	switch {
 	case errors.Is(err, registry.ErrTimeout):
-		return "the host accepted a connection but did not answer in time — " +
+		return "the host accepted a connection but did not answer in time - " +
 			"check a proxy or firewall between here and " + spec.Registry
 	case registry.ClassOf(err) == registry.ClassUnavailable:
 		return "check the registry host is correct and reachable from this cluster; " +
@@ -646,7 +646,7 @@ func lastColon(s string) int {
 // probeTransport uses a short, shallow retry policy.
 //
 // Preflight is interactive: an operator waiting on the answer wants it in
-// seconds. The production schedule — eight attempts with backoff — would make
+// seconds. The production schedule - eight attempts with backoff - would make
 // an unreachable host take two minutes to report, which is the difference
 // between a useful diagnostic and one nobody runs.
 func probeTransport(cfg registry.ClientConfig) transport.Config {

@@ -1,4 +1,4 @@
-# golangci-lint configuration — SCHEMA VERSION 2.
+# golangci-lint configuration - SCHEMA VERSION 2.
 #
 # golangci-lint v2 changed the config format: `linters.settings` replaced the
 # top-level `linters-settings`, `run.timeout` moved, and `formatters` split out
@@ -36,7 +36,7 @@ linters:
         # Deferred Close on a read path cannot meaningfully fail.
         - (io.Closer).Close
         # Writes to a terminal in CLI renderers. A failed write to stdout is
-        # not actionable — the user cannot see the error either — and checking
+        # not actionable - the user cannot see the error either - and checking
         # every call would triple the size of the rendering functions for no
         # behavioural gain. Writes to a REAL sink (a registry, the database)
         # go through checked paths and are not covered by this.
@@ -80,7 +80,7 @@ linters:
             - "**/internal/platform/**"
           deny:
             - pkg: github.com/abhijeet-oxide/softwareGateway/internal/product
-              desc: "platform must not import domain packages — it would create an import cycle and stop platform being genuinely generic"
+              desc: "platform must not import domain packages - it would create an import cycle and stop platform being genuinely generic"
             - pkg: github.com/abhijeet-oxide/softwareGateway/internal/api
               desc: "platform must not import api"
             - pkg: github.com/abhijeet-oxide/softwareGateway/internal/store
@@ -93,7 +93,7 @@ linters:
             - "**/internal/store/**"
           deny:
             - pkg: github.com/abhijeet-oxide/softwareGateway/internal/api
-              desc: "business logic must not know it is served over HTTP — otherwise the CLI, a future gRPC surface, or a test harness cannot reuse it"
+              desc: "business logic must not know it is served over HTTP - otherwise the CLI, a future gRPC surface, or a test harness cannot reuse it"
 
         store-imports-no-domain:
           list-mode: lax
@@ -131,7 +131,7 @@ linters:
             - "**/internal/product/**"
           deny:
             - pkg: github.com/abhijeet-oxide/softwareGateway/internal/vendors/near
-              desc: "vendor-specific layout must stay behind vendors.Layout — only the composition root may name a vendor"
+              desc: "vendor-specific layout must stay behind vendors.Layout - only the composition root may name a vendor"
 
   exclusions:
     generated: lax

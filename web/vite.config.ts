@@ -4,7 +4,7 @@ import Icons from 'unplugin-icons/vite'
 
 // The Coordinator installs no CORS middleware, so the browser must reach the
 // API on its own origin. In development that means proxying rather than
-// pointing the app at http://localhost:8080 — and same-origin is the right
+// pointing the app at http://localhost:8080 - and same-origin is the right
 // production posture anyway, so dev and prod agree.
 export default defineConfig({
   plugins: [

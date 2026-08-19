@@ -54,7 +54,7 @@ func TestHealthShowsTheFleetAndItsLoad(t *testing.T) {
 }
 
 // A Coordinator no worker has ever leased from says so, rather than printing an
-// empty table that reads as "no data" — which is a different thing from "no
+// empty table that reads as "no data" - which is a different thing from "no
 // workers".
 func TestHealthSaysWhenNoWorkerHasEverLeased(t *testing.T) {
 	resp := healthWithFleet()

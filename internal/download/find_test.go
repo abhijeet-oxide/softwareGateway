@@ -22,7 +22,7 @@ import (
 //   - downloading one component downloaded a different one;
 //   - the recent-downloads row named a package nobody had asked for;
 //   - and the SECOND download, of a genuinely different package, reported
-//     "already requested" — because the idempotency key is built from the
+//     "already requested" - because the idempotency key is built from the
 //     resolved package's ID, and both resolutions had produced the same row.
 //     The key was right. The resolution was not.
 //
@@ -54,7 +54,7 @@ func TestOneVersionInSeveralRepositoriesResolvesToTheOneAsked(t *testing.T) {
 			t.Fatalf("%s resolved to %d packages", want.ref, len(rows))
 		}
 		if rows[0].ID != want.id {
-			t.Errorf("%s resolved to package %d, want %d — a download of one "+
+			t.Errorf("%s resolved to package %d, want %d - a download of one "+
 				"component would move a different one",
 				want.ref, rows[0].ID, want.id)
 		}

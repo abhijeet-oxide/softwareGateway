@@ -178,7 +178,7 @@ func (h *harness) seedIndex(tag string, images []string) string {
 // ---------------------------------------------------------------------------
 
 // THE UNIT OF WORK IS A BLOB. One job per blob, one per manifest, and nothing
-// in between — which is what makes a thousand-blob package saturate a fleet and
+// in between - which is what makes a thousand-blob package saturate a fleet and
 // a failure cost one blob rather than the package.
 func TestPlanCreatesOneJobPerBlobAndManifest(t *testing.T) {
 	h := newHarness(t)
@@ -204,7 +204,7 @@ func TestPlanCreatesOneJobPerBlobAndManifest(t *testing.T) {
 	if plan.Manifests != 3 {
 		t.Errorf("created %d manifest jobs, want 3", plan.Manifests)
 	}
-	// Five distinct blobs: two configs, and three layers — the SHARED base
+	// Five distinct blobs: two configs, and three layers - the SHARED base
 	// counted once, which is the whole point of the unit being a blob.
 	if plan.Blobs != 5 {
 		t.Errorf("created %d blob jobs, want 5 (2 configs + 3 distinct layers)", plan.Blobs)
@@ -254,7 +254,7 @@ func TestBlobsArePendingAndManifestsAreBlocked(t *testing.T) {
 	}
 }
 
-// DEDUPE ACROSS PACKAGES. A blob already at the destination gets NO JOB — not a
+// DEDUPE ACROSS PACKAGES. A blob already at the destination gets NO JOB - not a
 // job that will be skipped, which would still cost a lease, a round trip and a
 // row. This is what makes the second release of a product line nearly free.
 func TestBlobsAlreadyAtTheDestinationGetNoJob(t *testing.T) {
@@ -471,7 +471,7 @@ func TestPlanUsesTheTransferRootWhenOneIsRecorded(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// The plan must reach all three manifests — wrapper, payload, signature —
+	// The plan must reach all three manifests - wrapper, payload, signature -
 	// and therefore the PKCS#7 blob. Planning from the payload alone would move
 	// the bytes and foreclose destination-side verification for good.
 	for name, dgst := range map[string]string{

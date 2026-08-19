@@ -14,7 +14,7 @@ import (
 
 // TestInsecureSkipVerifyReachesTheHandshake proves the flag does what the
 // configuration says it does, against a real server with an untrusted
-// certificate — rather than asserting that a struct field was copied.
+// certificate - rather than asserting that a struct field was copied.
 func TestInsecureSkipVerifyReachesTheHandshake(t *testing.T) {
 	srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)

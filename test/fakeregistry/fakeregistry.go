@@ -4,8 +4,8 @@
 // a suite that requires containers is a suite developers run less often, and
 // the difference compounds over a project's life.
 //
-// It implements the subset M2 exercises — /v2/ probe, token auth, tag listing
-// with Link pagination, and manifest HEAD/GET — plus injectable faults, so the
+// It implements the subset M2 exercises - /v2/ probe, token auth, tag listing
+// with Link pagination, and manifest HEAD/GET - plus injectable faults, so the
 // retry and backoff paths can be tested deterministically rather than by
 // hoping a real registry misbehaves.
 package fakeregistry
@@ -83,8 +83,8 @@ type Registry struct {
 
 	// ledger records every blob ARRIVAL, by repository and digest and by how it
 	// arrived. Counters alone cannot answer the question that matters when a
-	// component appears three times in a registry browser — "was it sent three
-	// times, or sent once and linked three times?" — because a total of one
+	// component appears three times in a registry browser - "was it sent three
+	// times, or sent once and linked three times?" - because a total of one
 	// upload is equally consistent with one upload and with three that happened
 	// to overwrite each other into the same place.
 	//
@@ -220,7 +220,7 @@ func WithTokenAuth(user, pass string) Option {
 // in prose.
 //
 // A transfer against this registry skips every upload, records placements for
-// content that is not where it says, and then fails every manifest — which is
+// content that is not where it says, and then fails every manifest - which is
 // exactly what happened to a 63.7 GiB bundle in production.
 func WithArtifactoryQuirks() Option {
 	return func(r *Registry) { r.globalBlobIndex = true }
@@ -314,7 +314,7 @@ type Layer struct {
 	Size      int64
 	MediaType string
 	// Annotations are the layer descriptor's own, and the one that matters is
-	// `org.opencontainers.image.title` — the path of the FILE inside a generic
+	// `org.opencontainers.image.title` - the path of the FILE inside a generic
 	// artifact's layer. It is what makes "which files changed" answerable, so a
 	// fake that could not carry it could not test the answer.
 	Annotations map[string]string
@@ -345,7 +345,7 @@ func NewLayer(content string) Layer {
 // bytes.
 func (r *Registry) AddImage(repoPath, tag string, layers ...Layer) string {
 	// The config digest is derived from the layers as well as the name, so two
-	// images differing only in their layers get different configs — as real
+	// images differing only in their layers get different configs - as real
 	// per-platform images do. Deriving it from the tag alone would make the
 	// children of an index (seeded with no tag) share one config and quietly
 	// understate the blob count.
@@ -392,8 +392,8 @@ func (r *Registry) AddIndex(repoPath, tag string, childDigests, platforms []stri
 
 // AddAnnotatedIndex adds an index carrying annotations.
 //
-// Real vendor bundles are annotated — a release date, a product name, a
-// per-child type — and a fake registry that never sets any would let a whole
+// Real vendor bundles are annotated - a release date, a product name, a
+// per-child type - and a fake registry that never sets any would let a whole
 // class of parsing bug through untested.
 func (r *Registry) AddAnnotatedIndex(
 	repoPath, tag string, childDigests, platforms []string, annotations map[string]string,
@@ -511,7 +511,7 @@ func (r *Registry) TruncateNext(pathContains string, n int) {
 //
 // The "outage is over" half of a recovery test. Without it a test that injects
 // a generous fault count to survive the retry schedule leaves the remainder
-// queued, and the recovery it means to assert never happens — the failure looks
+// queued, and the recovery it means to assert never happens - the failure looks
 // like a bug in discovery rather than in the test.
 func (r *Registry) ClearFaults() {
 	r.faults.mu.Lock()

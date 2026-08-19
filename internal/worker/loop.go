@@ -83,8 +83,8 @@ const (
 	// DefaultStallTimeout is how long one job may make no progress.
 	//
 	// Fifteen minutes. Long enough that an ordinary slow exchange over a
-	// high-latency proxy is never mistaken for a stall — the longest legitimate
-	// single request observed on such a link took about half that — and short
+	// high-latency proxy is never mistaken for a stall - the longest legitimate
+	// single request observed on such a link took about half that - and short
 	// enough that a registry which stops answering costs one attempt rather
 	// than a night. A job that IS moving is unaffected at any duration, because
 	// progress resets the clock.
@@ -136,7 +136,7 @@ func (l *Loop) Run(ctx context.Context) error {
 		case <-ctx.Done():
 			// Jobs in flight are abandoned rather than waited for. Their
 			// leases expire and the queue redoes them, which is cheaper and
-			// far simpler than a drain protocol — and it is the path that has
+			// far simpler than a drain protocol - and it is the path that has
 			// to work anyway, because a SIGKILL gets no drain.
 			wg.Wait()
 			l.log.InfoContext(ctx, "worker stopped", "worker", l.opts.WorkerID)
@@ -187,7 +187,7 @@ func (l *Loop) tick(ctx context.Context) time.Duration {
 }
 
 // DefaultLeaseRetry is the fallback poll interval when the Coordinator
-// directs none — a failed lease, or an old Coordinator.
+// directs none - a failed lease, or an old Coordinator.
 const DefaultLeaseRetry = 5 * time.Second
 
 // dispatch starts one job, bounded by the semaphore.
@@ -251,9 +251,9 @@ func (l *Loop) run(ctx context.Context, id int64, job v1.LeasedJob, dog *watchdo
 	}, l.progressReporter(ctx, job.JobID, dog))
 
 	// A job the watchdog cancelled looks, from here, exactly like one cancelled
-	// by shutdown: a context error. They are opposite things — one is a
+	// by shutdown: a context error. They are opposite things - one is a
 	// registry that stopped answering and must be recorded, the other is a
-	// worker going away and must not be — so the outcome is rewritten with what
+	// worker going away and must not be - so the outcome is rewritten with what
 	// only the watchdog knows.
 	if dog.tripped() {
 		res = transfer.Result{
@@ -323,7 +323,7 @@ func (l *Loop) progressReporter(
 // report tells the Coordinator what happened.
 //
 // Completion is NOT lossy, so a failure to report is retried briefly. Beyond
-// that the lease expires and the job is redone — correct, because content
+// that the lease expires and the job is redone - correct, because content
 // addressing makes double execution harmless, and cheaper than blocking a
 // worker slot on an unreachable Coordinator.
 func (l *Loop) report(ctx context.Context, id int64, job v1.LeasedJob, res transfer.Result) {
@@ -382,7 +382,7 @@ func outcomeDTO(o transfer.Outcome) v1.JobState {
 //
 // It also delivers cancellation, which has no push channel: a cancelled job
 // learns of it here and aborts within one interval. Polling rather than a
-// stream is deliberate — no connection management, no reconnect logic, no
+// stream is deliberate - no connection management, no reconnect logic, no
 // server-side registry of live connections, and it degrades gracefully.
 func (l *Loop) heartbeatLoop(ctx context.Context) {
 	ticker := time.NewTicker(l.opts.HeartbeatInterval)
@@ -415,8 +415,8 @@ func (l *Loop) heartbeatLoop(ctx context.Context) {
 // abandonLost stops work on jobs this worker no longer holds.
 //
 // A job missing from LeasesRenewed has been reaped and may already be running
-// elsewhere. Continuing to push its bytes would not corrupt anything — content
-// addressing sees to that — but it would waste bandwidth against a vendor
+// elsewhere. Continuing to push its bytes would not corrupt anything - content
+// addressing sees to that - but it would waste bandwidth against a vendor
 // registry for a result that will be discarded.
 func (l *Loop) abandonLost(ctx context.Context, held []string, res *v1.HeartbeatResponse) {
 	renewed := make(map[string]bool, len(res.LeasesRenewed))

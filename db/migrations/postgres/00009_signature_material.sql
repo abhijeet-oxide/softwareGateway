@@ -4,7 +4,7 @@
 --
 -- `package_relations` records that a package has a signature, and names the
 -- MANIFEST that carries it. For NEAR that row points at
--- `signature_orb_23.8.1076` — an image manifest whose single layer is the thing
+-- `signature_orb_23.8.1076` - an image manifest whose single layer is the thing
 -- a verifier actually needs:
 --
 --   config  application/vnd.com.nokia.orb.config.v1+json   2 bytes ("{}")
@@ -12,13 +12,13 @@
 --
 -- The bytes that get verified are that LAYER. Nothing recorded which blob it
 -- was. After an inspection the blob is in `blobs` and linked in
--- `artifact_blobs` like any other — indistinguishable, from the outside, from a
+-- `artifact_blobs` like any other - indistinguishable, from the outside, from a
 -- Helm chart or an image layer sitting beside it.
 --
 -- So verification would have had to re-derive the vendor's layout from scratch
 -- every time it ran: find the relation, find the artifact, parse its manifest,
 -- decide which layer is the signature. That is the plugin's knowledge leaking
--- into the verifier — the exact coupling internal/vendors exists to prevent.
+-- into the verifier - the exact coupling internal/vendors exists to prevent.
 --
 -- # What this records, and when
 --
@@ -26,8 +26,8 @@
 -- manifest, and it fetches it anyway: the transfer root is the wrapper, so the
 -- walk passes through the signature on its way down. No extra request.
 --
--- The rule used is vendor-neutral — "a relation of role `signature` names a
--- manifest, and that manifest's layers are the signature material" — which
+-- The rule used is vendor-neutral - "a relation of role `signature` names a
+-- manifest, and that manifest's layers are the signature material" - which
 -- holds for any layout that publishes a signature as a manifest, including the
 -- referrers-based ones NEAR will eventually move to.
 --

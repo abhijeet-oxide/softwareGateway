@@ -24,7 +24,7 @@ import type { DiscoverySourceState, Product } from '../api/types'
  * least: it polls several vendor registries, each covering several
  * repositories, each carrying many tags, and against a slow registry it runs
  * for minutes. A button that starts it and reports nothing is indistinguishable
- * from a button that does nothing — which is exactly how it read.
+ * from a button that does nothing - which is exactly how it read.
  *
  * The API already reports all of it (phase, repositories, tags, artifacts, new
  * packages, errors, and a summary of the last completed run), so this shows
@@ -33,7 +33,7 @@ import type { DiscoverySourceState, Product } from '../api/types'
  * # What it will not do
  *
  * Show a percentage before there is one. Until enumeration finishes,
- * `repositoriesTotal` is zero — the scan is still waiting on the registry's
+ * `repositoriesTotal` is zero - the scan is still waiting on the registry's
  * catalog and nobody knows how much work there is. That state is named, not
  * rendered as 0%.
  */
@@ -51,8 +51,8 @@ function phaseLabel(phase?: string): string {
 /**
  * The first sentence of a scan failure, for a row that has one line for it.
  *
- * Registry errors arrive as a nested chain — what we were doing, what the
- * client said, what the proxy said, what DNS said — and the whole of it is
+ * Registry errors arrive as a nested chain - what we were doing, what the
+ * client said, what the proxy said, what DNS said - and the whole of it is
  * worth keeping. It is not worth putting all four clauses in a table cell,
  * where it buries the other three sources. So the row carries the part that
  * names the problem and the tooltip carries the chain verbatim.
@@ -73,7 +73,7 @@ function summariseError(message: string): string {
  * "next scan in under 15 minutes" was true for the entire fifteen minutes and
  * never moved, so it answered "how often" when the question is "how long". The
  * scheduler polls each source `intervalSeconds` after its last run, so the
- * remaining time is `lastRunAt + interval - now` — a real instant, worth
+ * remaining time is `lastRunAt + interval - now` - a real instant, worth
  * counting toward.
  *
  * It ticks once a second, and only while it is on screen: the component
@@ -153,7 +153,7 @@ function SourceProgress({ s }: { s: DiscoverySourceState }) {
       <Space size={6}>
         <SyncOutlined spin style={{ color: '#0057B8' }} />
         <Typography.Text style={{ fontSize: 12 }}>
-          {phaseLabel(s.phase)} — waiting for the registry to list what it holds
+          {phaseLabel(s.phase)} - waiting for the registry to list what it holds
         </Typography.Text>
       </Space>
     )
@@ -224,7 +224,7 @@ function scanPosition(s: DiscoverySourceState): string {
 /**
  * What the scan has FOUND so far.
  *
- * Live, because "is it finding anything?" is asked while it is still looking —
+ * Live, because "is it finding anything?" is asked while it is still looking -
  * and until these counters moved during the scan rather than at the end of it,
  * the only answer available was "wait and see".
  */
@@ -243,7 +243,7 @@ function scanFindings(s: DiscoverySourceState): string {
  * A component rather than a bare button because the button is the easy half:
  * the half that matters is reporting what the request ACTUALLY did, and a
  * second copy of this elsewhere would inevitably be a `mutate()` with no
- * feedback — which is precisely how this read as broken.
+ * feedback - which is precisely how this read as broken.
  *
  * `product` fixes the scan to one product and hides the chooser; leaving it out
  * offers every product, with "all of them" as the default.
@@ -272,7 +272,7 @@ export function RunDiscoveryButton({
       // look broken. `alreadyRunning` is a real outcome, not a failure.
       //
       // Discriminated on `products`, not on `started`: both shapes carry a
-      // `started` key and it means a different thing in each — a count in the
+      // `started` key and it means a different thing in each - a count in the
       // fleet-wide response, an object in the per-product one.
       const fleet = 'products' in result
       const started = fleet ? result.started : (result.started?.sources ?? 0)
@@ -353,7 +353,7 @@ export function RunDiscoveryButton({
 
         <Typography.Paragraph type="secondary" style={{ marginTop: 12, marginBottom: 0, fontSize: 12 }}>
           The scan runs in the background and its progress appears on the Overview. Nothing is
-          downloaded — discovery only records what the vendor has published.
+          downloaded - discovery only records what the vendor has published.
         </Typography.Paragraph>
       </Modal>
     </>
@@ -363,8 +363,8 @@ export function RunDiscoveryButton({
 /**
  * Rescan ONE product, from the row that shows what it last found.
  *
- * Deliberately not a confirmation: a scan is read-only — it records what the
- * vendor has published and downloads nothing — so the cost of an accidental
+ * Deliberately not a confirmation: a scan is read-only - it records what the
+ * vendor has published and downloads nothing - so the cost of an accidental
  * click is one registry poll. The fleet-wide button keeps its dialog, because
  * that one starts a scan against every registry the deployment can reach.
  */
@@ -384,7 +384,7 @@ function DiscoverSource({ product, scanning }: { product: string; scanning?: boo
         started > 0
           ? `Scanning ${started} source${started === 1 ? '' : 's'} of ${product}. Progress is in this panel.`
           : already > 0
-            ? `${product} is already being scanned — ${already} source${already === 1 ? '' : 's'} in progress.`
+            ? `${product} is already being scanned - ${already} source${already === 1 ? '' : 's'} in progress.`
             : `Nothing to scan: ${product} has no source with discovery enabled.`,
       )
     } catch (e) {
@@ -436,7 +436,7 @@ export function DiscoveryPanel({ products }: { products: Product[] }) {
     ? allRows.filter((s) => matches(search, s.source, s.product, s.currentRepository))
     : allRows
 
-  // The most recent completed scan across every source — the honest answer to
+  // The most recent completed scan across every source - the honest answer to
   // "when did we last look", rather than a transfer's timestamp standing in for
   // one.
   const lastRunAt = allRows
@@ -477,7 +477,7 @@ export function DiscoveryPanel({ products }: { products: Product[] }) {
       >
         {leaderElsewhere ? (
           <Typography.Text type="secondary">
-            Discovery runs on the leader, and this replica is a follower. Scans are still happening —
+            Discovery runs on the leader, and this replica is a follower. Scans are still happening -
             they are simply not being run from here, so there is no progress to show.
           </Typography.Text>
         ) : allRows.length === 0 && !loading ? (
@@ -489,7 +489,7 @@ export function DiscoveryPanel({ products }: { products: Product[] }) {
             <Space size={24} style={{ marginBottom: 12 }} wrap>
               {/*
                 One sentence, read left to right. It used to be a label, a
-                colon and a number — "Found on the last run: 0 new releases" —
+                colon and a number - "Found on the last run: 0 new releases" -
                 which reads as a form field rather than as the answer to the
                 question the panel exists for.
               */}
@@ -539,7 +539,7 @@ export function DiscoveryPanel({ products }: { products: Product[] }) {
                 },
                 { title: 'Status', width: 340, render: (_, s) => <SourceProgress s={s} /> },
                 {
-                  // While scanning, what has been CHECKED — which moves — not
+                  // While scanning, what has been CHECKED - which moves - not
                   // what has been "resolved", which was reported in one step
                   // at the end of the phase and read as nothing happening.
                   title: 'Packages seen',

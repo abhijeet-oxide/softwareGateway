@@ -15,8 +15,8 @@ import (
 
 // Service is the target-replication use case: read, plan, apply, sync.
 //
-// It owns the ORDER of things — read before write, validate before store,
-// record what we sent after a success — and holds no HTTP and no rendering.
+// It owns the ORDER of things - read before write, validate before store,
+// record what we sent after a success - and holds no HTTP and no rendering.
 // The API and the CLI are both clients of this, which is what keeps the two
 // from disagreeing about what an apply means.
 type Service struct {
@@ -82,7 +82,7 @@ type Status struct {
 	PendingApply bool
 }
 
-// Status reads configuration, the last apply and — where reachable — the
+// Status reads configuration, the last apply and - where reachable - the
 // registry. It never writes to the registry.
 func (s *Service) Status(ctx context.Context, p *product.Product, t product.Target) (*Status, error) {
 	out := &Status{Product: p.Metadata.Name, Target: t.Name, Mode: t.ReplicationMode()}
@@ -212,8 +212,8 @@ type ApplyResult struct {
 	// Applied reports whether anything was written.
 	Applied bool
 	// NeedsConfirmation means the plan is destructive and Confirm was not set.
-	// Refusing here rather than in a caller means every client — CLI, API,
-	// and whatever comes next — inherits the same guard rail.
+	// Refusing here rather than in a caller means every client - CLI, API,
+	// and whatever comes next - inherits the same guard rail.
 	NeedsConfirmation bool
 	ConfigHash        string
 }
@@ -222,7 +222,7 @@ type ApplyResult struct {
 //
 // Never called by a configuration reload. Applying a mirror flips the
 // destination repository into MIRROR state, which makes it read-only to
-// everyone but a robot and converges its content to a tag glob — deleting
+// everyone but a robot and converges its content to a tag glob - deleting
 // whatever does not match. A `kubectl apply` of a ConfigMap with a typo in
 // `tags` must not be able to empty a production repository, and the only way
 // to guarantee that is for the write to be a separate, deliberate act

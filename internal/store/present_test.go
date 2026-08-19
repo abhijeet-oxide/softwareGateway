@@ -9,7 +9,7 @@ import (
 //
 // Both came from this system and they cannot both be right. The listing read
 // JOBS, and most of a saving leaves no job behind: planning asks the
-// destination what it already holds, and content it holds gets no job at all —
+// destination what it already holds, and content it holds gets no job at all -
 // that is the point of the check, and those bytes are the great majority of the
 // figure in the headline.
 //
@@ -18,8 +18,8 @@ import (
 func TestWhatWasAlreadyThereIncludesContentThatNeverGotAJob(t *testing.T) {
 	h := newPresentHarness(t)
 
-	// Two blobs of one component. One was decided at PLANNING — recorded as
-	// already at the target, so no job exists for it — and one got a job that a
+	// Two blobs of one component. One was decided at PLANNING - recorded as
+	// already at the target, so no job exists for it - and one got a job that a
 	// worker then skipped.
 	planned := h.blob("aa", 30_000_000_000)
 	skipped := h.blob("bb", 2_000_000_000)
@@ -47,7 +47,7 @@ func TestWhatWasAlreadyThereIncludesContentThatNeverGotAJob(t *testing.T) {
 	// missed the thirty, which is how the listing came to say nothing was found
 	// while the headline said 63.7 GB.
 	if want := int64(32_000_000_000); got[0].Bytes != want {
-		t.Errorf("bytes = %d, want %d — the content decided at planning time is "+
+		t.Errorf("bytes = %d, want %d - the content decided at planning time is "+
 			"missing from what the destination is said to hold", got[0].Bytes, want)
 	}
 }
@@ -216,7 +216,7 @@ func (h *presentHarness) transfer() string {
 	return id
 }
 
-// placed records the destination as already holding a blob — the planning-time
+// placed records the destination as already holding a blob - the planning-time
 // answer, which produces no job at all.
 func (h *presentHarness) placed(digest string) {
 	h.t.Helper()
@@ -246,7 +246,7 @@ func (h *presentHarness) exec(query string, args ...any) {
 // A component published under its own name as well as inside the bundle needs
 // its layers in two repositories, and the planner counts them twice because two
 // repositories is two pieces of bookkeeping. But the second copy costs no bytes
-// — the registry mounts it — so a byte total counted per (repository, digest)
+// - the registry mounts it - so a byte total counted per (repository, digest)
 // reported a 29.8 GB release as 63.7 GB of traffic, which never happened.
 func TestContentIsWeighedOncePerDigest(t *testing.T) {
 	h := newPresentHarness(t)
@@ -272,7 +272,7 @@ func TestContentIsWeighedOncePerDigest(t *testing.T) {
 
 	// 21 GB of blobs plus the component's own manifest, which is content too.
 	if got.Total < 21_000_000_000 || got.Total > 21_000_001_000 {
-		t.Errorf("total = %d, want the distinct content — about 21 GB, not 42", got.Total)
+		t.Errorf("total = %d, want the distinct content - about 21 GB, not 42", got.Total)
 	}
 	if got.Moved != 21_000_000_000 {
 		t.Errorf("moved = %d, want 21 GB: each blob was streamed once and mounted "+
@@ -316,7 +316,7 @@ func TestContentAlreadyThereIsWeighedOnceAndNotAsMoved(t *testing.T) {
 
 // jobIn records one job for a digest at a named destination repository.
 //
-// A destination repository is its own catalog row — which is exactly why the
+// A destination repository is its own catalog row - which is exactly why the
 // same blob can have two jobs in one transfer, and exactly why counting their
 // bytes twice was wrong.
 func (h *presentHarness) jobIn(transferID, digest, state, repository string, moved int64) {

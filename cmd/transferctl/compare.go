@@ -18,8 +18,8 @@ import (
 // two bundles and align their components", so all of them are this command with
 // different arguments.
 //
-// Nothing here reads a transfer record. A transfer reports what it DID — 2489
-// jobs succeeded, 63.7 GiB moved — and every one of those numbers can be true
+// Nothing here reads a transfer record. A transfer reports what it DID - 2489
+// jobs succeeded, 63.7 GiB moved - and every one of those numbers can be true
 // while the destination is wrong.
 
 func newCompareCommand() *cobra.Command {
@@ -34,7 +34,7 @@ func newCompareCommand() *cobra.Command {
 
 	cmd := &cobra.Command{
 		Short: "Compare a release between two places, or two releases in one",
-		Long: "Walks BOTH ends and aligns them component by component — every image,\n" +
+		Long: "Walks BOTH ends and aligns them component by component - every image,\n" +
 			"chart and file, with its digest, its size and the name it answers to.\n\n" +
 			"The ends are symmetric, so one command covers every question:\n\n" +
 			"  compare P 25.7                          did it land at the default target?\n" +
@@ -44,7 +44,7 @@ func newCompareCommand() *cobra.Command {
 			"  compare P 25.7 25.6 --at stage          ...and did all of it arrive?\n\n" +
 			"For a component that changed, the answer is given in FILES: `2 files\n" +
 			"changed` rather than `2 layers changed`, and --files names them. This\n" +
-			"costs nothing and downloads nothing — an OCI artifact names one file\n" +
+			"costs nothing and downloads nothing - an OCI artifact names one file\n" +
 			"per layer and states its content digest, so two of those lists aligned\n" +
 			"by path IS the answer.\n\n" +
 			"By default only the DIFFERENCES are printed. --all shows every\n" +
@@ -86,7 +86,7 @@ func newCompareCommand() *cobra.Command {
 		"the second end: a source or target name (default: the product's default target, "+
 			"or the source when two versions are named)")
 	cmd.Flags().StringVar(&at, "at", "",
-		"both ends are this one place — for comparing two versions")
+		"both ends are this one place - for comparing two versions")
 	cmd.Flags().BoolVar(&all, "all", false,
 		"show every component, not only the ones that differ")
 	cmd.Flags().BoolVar(&showFiles, "files", false,
@@ -276,7 +276,7 @@ func renderFileChange(w io.Writer, row v1.CompareRow, showFiles bool) {
 	}
 
 	fmt.Fprintf(w, "      %s\n", summary)
-	// Changed, added, removed — in that order, because that is the order they
+	// Changed, added, removed - in that order, because that is the order they
 	// matter in. Unchanged files are carried by the API for context and are
 	// not printed: a component with four hundred files and one edit would bury
 	// the edit under the other three hundred and ninety-nine.
@@ -315,7 +315,7 @@ func fileSummary(row v1.CompareRow) string {
 	return plural(total(row), "file", "files") + ": " + strings.Join(parts, ", ")
 }
 
-// total is how many of a component's files DIFFER — not how many it has.
+// total is how many of a component's files DIFFER - not how many it has.
 func total(row v1.CompareRow) int {
 	n := 0
 	for _, f := range row.Files {

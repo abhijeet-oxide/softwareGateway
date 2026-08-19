@@ -28,7 +28,7 @@ type Plan struct {
 	// Jobs is how many were created. A REPLAN creates none and is not an error:
 	// planning is idempotent by construction.
 	Jobs int
-	// Blobs and Manifests break that down. Blobs is the interesting number —
+	// Blobs and Manifests break that down. Blobs is the interesting number -
 	// it is the unit of work, of failure and of resumption.
 	Blobs     int
 	Manifests int
@@ -46,7 +46,7 @@ type Plan struct {
 	// MaxWave is the deepest wave, so the queue knows when a transfer is done.
 	MaxWave int
 
-	// Dependencies is how many edges were written — how many "this manifest
+	// Dependencies is how many edges were written - how many "this manifest
 	// needs that blob" facts the transfer will be scheduled against.
 	//
 	// Worth reporting because it is the only evidence that per-artifact
@@ -57,7 +57,7 @@ type Plan struct {
 
 	// Walked reports that the planner had to read the registry because the
 	// package had not been expanded. Zero means the record already held the
-	// tree — see store.ReadExpandedTree.
+	// tree - see store.ReadExpandedTree.
 	Walked int
 }
 
@@ -91,7 +91,7 @@ type Request struct {
 	// carries row IDs rather than names, so a worker resolving one needs no
 	// configuration of its own.
 	SourceRepoID int64
-	// TargetRepoID is the target's own catalog row — the destination the
+	// TargetRepoID is the target's own catalog row - the destination the
 	// operator configured. It is the FALLBACK, not the answer: a bundle's
 	// components each land in their own repository, resolved from the source's
 	// structure by ResolveLayout, and each of those gets a catalog row of its
@@ -112,7 +112,7 @@ type Request struct {
 	// under which the source structure is reproduced. Empty mirrors the source
 	// paths at the destination registry's root.
 	TargetBasePath string
-	// SourceRepository is the path the package was discovered in — what every
+	// SourceRepository is the path the package was discovered in - what every
 	// destination path is derived from.
 	SourceRepository string
 
@@ -137,7 +137,7 @@ type Request struct {
 //     bundles the payload with its signature under a wrapper index, only the
 //     wrapper reaches both.
 //  2. Get the tree. From the RECORD when it is there, from the registry when
-//     it is not — and recording it either way, so the next caller is free.
+//     it is not - and recording it either way, so the next caller is free.
 //  3. Classify every distinct blob against blob_placements. A database lookup,
 //     not a network call: that is what makes planning a thousand-blob package
 //     fast, and the registry HEAD is deferred to the worker where it is
@@ -185,7 +185,7 @@ func (p *Planner) Plan(ctx context.Context, req Request) (Plan, error) {
 	defer func() { _ = tx.Rollback() }()
 
 	// Every distinct destination path gets a catalog row, so placements,
-	// deduplication and cross-repository mount all keep working unchanged —
+	// deduplication and cross-repository mount all keep working unchanged -
 	// they are all keyed by repository ID, and a destination without a row
 	// would be invisible to each of them.
 	destinations, err := p.ensureDestinations(ctx, tx, req, layout)
@@ -197,9 +197,9 @@ func (p *Planner) Plan(ctx context.Context, req Request) (Plan, error) {
 	//
 	// This used to run the other way round, and the order was arbitrary then:
 	// every manifest was created `blocked` regardless. It is not arbitrary now.
-	// A manifest is created runnable when it has nothing to wait for — which is
+	// A manifest is created runnable when it has nothing to wait for - which is
 	// the ordinary outcome for the second transfer of a product line, where
-	// every blob is already at the destination — and answering that needs the
+	// every blob is already at the destination - and answering that needs the
 	// blob set to be known first.
 	//
 	// One job per (digest, destination repository). The pair matters: a
@@ -219,7 +219,7 @@ func (p *Planner) Plan(ctx context.Context, req Request) (Plan, error) {
 
 	for _, b := range blobs {
 		if b.placed {
-			// Already at that destination and within its TTL. No job at all —
+			// Already at that destination and within its TTL. No job at all -
 			// not a job that will be skipped, which would still cost a lease, a
 			// round trip and a row. Deliberately absent from jobIDs: a manifest
 			// must not wait on work that does not exist.
@@ -274,7 +274,7 @@ func (p *Planner) Plan(ctx context.Context, req Request) (Plan, error) {
 
 	// BACKWARDS through the tree, because the tree is ordered parents before
 	// children and an edge has to name a row that exists. A parent depends on
-	// its children, so the children's jobs must be inserted first — which is
+	// its children, so the children's jobs must be inserted first - which is
 	// the reverse of the order that makes inheritance work in ResolveLayout,
 	// and the reason this loop cannot simply be merged with that one.
 	for i := len(tree.Artifacts) - 1; i >= 0; i-- {
@@ -285,8 +285,8 @@ func (p *Planner) Plan(ctx context.Context, req Request) (Plan, error) {
 		}
 
 		// One job per SITE. A component that also answers to a name of its
-		// own is pushed twice — once into the repository that keeps the bundle
-		// resolvable, once under its own name — because a registry resolves a
+		// own is pushed twice - once into the repository that keeps the bundle
+		// resolvable, once under its own name - because a registry resolves a
 		// manifest only within the repository it was pushed to.
 		for rank, site := range layout[a.Row.Digest].Sites {
 			targetID, ok := destinations[site.Repository]
@@ -300,7 +300,7 @@ func (p *Planner) Plan(ctx context.Context, req Request) (Plan, error) {
 			// not. This is invariant I1 stated per manifest: a tag never
 			// appears at the destination until everything under it is present,
 			// so an interrupted transfer leaves a consumer seeing the old tag
-			// or the complete new one — never a half-written one. A manifest
+			// or the complete new one - never a half-written one. A manifest
 			// with no outstanding content satisfies that on creation, and
 			// blocking it would be waiting for an event that cannot come.
 			state := "blocked"
@@ -377,7 +377,7 @@ func (p *Planner) Plan(ctx context.Context, req Request) (Plan, error) {
 
 // treeFor returns the package's full tree, walking only when it must.
 //
-// THE WALK HAPPENS ONCE, and it is the same walk `packages inspect` performs —
+// THE WALK HAPPENS ONCE, and it is the same walk `packages inspect` performs -
 // literally, via internal/expand. If somebody already inspected this package
 // the record holds the tree and the registry is not touched; if not, this walks
 // and RECORDS it, so a later inspect is free and the sizes an estimate needs
@@ -413,7 +413,7 @@ func (p *Planner) treeFor(
 //
 // Each row carries the CONFIGURED target's name, not a generated one, so the
 // worker resolves the same credential for every destination a bundle spreads
-// across — the credential belongs to the target, and the paths beneath it are
+// across - the credential belongs to the target, and the paths beneath it are
 // the vendor's structure rather than separate configuration.
 func (p *Planner) ensureDestinations(
 	ctx context.Context, tx *sql.Tx, req Request, layout map[string]Placement,
@@ -437,7 +437,7 @@ func (p *Planner) ensureDestinations(
 			// for a source covering several repositories: "<configured>/<path>".
 			// The (product, role, name) unique constraint forbids reusing the
 			// target's own name for every path, and the prefix is what lets the
-			// worker resolve ONE credential for all of them — see
+			// worker resolve ONE credential for all of them - see
 			// regclient.endpointSpec.
 			id, err := p.packages.EnsureRepository(ctx, tx, req.ProductID, "target",
 				req.TargetName+"/"+site.Repository, req.TargetRegistry, site.Repository,
@@ -452,7 +452,7 @@ func (p *Planner) ensureDestinations(
 }
 
 // jobKey identifies the one job that moves a given digest to a given
-// destination repository — which is exactly the job table's uniqueness key,
+// destination repository - which is exactly the job table's uniqueness key,
 // minus the transfer, because a plan is scoped to one.
 type jobKey struct {
 	kind       string
@@ -466,7 +466,7 @@ type jobKey struct {
 // Two kinds, and both are required by the distribution spec rather than by
 // preference: a manifest push is rejected BLOB_UNKNOWN if a layer it names is
 // absent from the repository, and MANIFEST_UNKNOWN if a child index is. So the
-// edge set is not a scheduling heuristic — it is the registry's own
+// edge set is not a scheduling heuristic - it is the registry's own
 // precondition, written down.
 //
 // A dependency with no job is not an edge. The usual reason is a blob already
@@ -539,7 +539,7 @@ type blobTarget struct {
 //
 // DISTINCT per (digest, destination). A fat index whose platforms share a base
 // layer moves it once when they land together, and once per destination when
-// they do not — which is not duplication, it is the registry's storage model.
+// they do not - which is not duplication, it is the registry's storage model.
 func (p *Planner) blobTargets(
 	ctx context.Context,
 	tx *sql.Tx,

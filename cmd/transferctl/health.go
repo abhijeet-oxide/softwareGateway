@@ -92,7 +92,7 @@ func renderHealthTable(w io.Writer, resp *v1.HealthCheckResponse) error {
 // "Are the workers up, what are they running, and how much of their capacity is
 // in use" is the first question of any incident and had no route at all: the
 // workers table existed and nothing wrote to it. LOAD is the column that
-// answers it — a fleet configured for 32 jobs each and sitting at 1/32 is a
+// answers it - a fleet configured for 32 jobs each and sitting at 1/32 is a
 // queue with nothing leasable in it, not a worker that is stuck.
 func renderWorkers(w io.Writer, workers []v1.Worker) error {
 	fmt.Fprintln(w)
@@ -115,7 +115,7 @@ func renderWorkers(w io.Writer, workers []v1.Worker) error {
 //
 // The ceiling is what the operator wrote in worker.maxConcurrentJobs, so a
 // mismatch between the file and this column is a worker running configuration
-// nobody thinks it has — which is the first thing to check when the fleet is
+// nobody thinks it has - which is the first thing to check when the fleet is
 // slower than it should be.
 func workerLoad(k v1.Worker) string {
 	if k.MaxConcurrency <= 0 {

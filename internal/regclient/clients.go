@@ -37,7 +37,7 @@ import (
 //
 // CACHING IS THE POINT, not an optimization. One handle per repository means
 // one connection pool, one rate limiter and one token cache for every job
-// against it — and without that, an 850-blob package performs 850 token
+// against it - and without that, an 850-blob package performs 850 token
 // exchanges against the vendor's auth endpoint, adding a round trip to every
 // blob and frequently tripping the registry's own rate limits. It is one of
 // the highest-value small optimizations in the system and one of the easiest
@@ -57,8 +57,8 @@ type Clients struct {
 
 // NewClients builds a client cache.
 //
-// sourceDir is where products were loaded from. It is used for one thing —
-// telling a reader where this process looked when it cannot find a product —
+// sourceDir is where products were loaded from. It is used for one thing -
+// telling a reader where this process looked when it cannot find a product -
 // and an empty value simply omits that from the message.
 func NewClients(
 	products *product.Registry, secrets *product.SecretResolver,
@@ -109,7 +109,7 @@ func (c *Clients) For(e v1.JobEndpoint) (registry.Repository, error) {
 
 	// One transport per REGISTRY, not per repository. Without this,
 	// `maxConnections: 32` across sixteen repositories on one host permits 512
-	// connections and `requestsPerSecond: 50` permits 800 — the configured
+	// connections and `requestsPerSecond: 50` permits 800 - the configured
 	// ceiling silently became a per-repository allowance.
 	sharedKey := e.Product + "|" + e.Registry
 	sh, ok := c.shared[sharedKey]
@@ -124,7 +124,7 @@ func (c *Clients) For(e v1.JobEndpoint) (registry.Repository, error) {
 		// Said out loud, once per registry, because it is otherwise invisible.
 		// An unset `httpsProxy` reads as "no proxy" and actually means "whatever
 		// the environment says", and a corporate proxy picked up that way is a
-		// throughput problem with no symptom in the configuration or the logs —
+		// throughput problem with no symptom in the configuration or the logs -
 		// it cost a real transfer most of its bandwidth before anyone thought to
 		// look. Connections is here too because it is the other number that
 		// silently decides how fast this goes.
@@ -142,7 +142,7 @@ func (c *Clients) For(e v1.JobEndpoint) (registry.Repository, error) {
 		return nil, fmt.Errorf("build client for %s/%s: %w", e.Registry, e.Repository, err)
 	}
 
-	// A worker needs the FULL contract — it writes. A backend that only reads
+	// A worker needs the FULL contract - it writes. A backend that only reads
 	// cannot serve a transfer, and finding that out here, by name, beats
 	// finding it out as a nil-pointer panic mid-blob.
 	repo, ok := src.(registry.Repository)
@@ -184,7 +184,7 @@ func (c *Clients) configFor(e v1.JobEndpoint) (registry.ClientConfig, error) {
 // Exported because calibration needs the SAME answer a transfer would get. It
 // probes the path a job would take, and a probe that resolved its own proxy,
 // CA bundle and credential would be measuring a different route from the one it
-// is advising about — which is the specific failure this whole package exists
+// is advising about - which is the specific failure this whole package exists
 // to prevent (see the package comment).
 func ConfigFor(
 	p *product.Product, secrets *product.SecretResolver, e v1.JobEndpoint,
@@ -282,8 +282,8 @@ func endpointSpec(p *product.Product, e v1.JobEndpoint) (resolvedSpec, error) {
 // configuredName recovers which configured source or target a repository row
 // belongs to.
 //
-// One configured entry can own SEVERAL repository rows — a source that
-// enumerates the registry catalog, and a target a bundle spreads across — and
+// One configured entry can own SEVERAL repository rows - a source that
+// enumerates the registry catalog, and a target a bundle spreads across - and
 // the (product, role, name) unique constraint means they cannot all be called
 // the same thing. Both producers use "<configured>/<path>", so the configured
 // name is everything before the first slash.

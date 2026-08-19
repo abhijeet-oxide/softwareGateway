@@ -4,7 +4,7 @@
 // for API availability; one holds a pg_advisory_lock and runs the background
 // loops. See docs/design/00-overview.md section 5.1.
 //
-// This binary contains wiring only — construct, inject, run. Logic in main is
+// This binary contains wiring only - construct, inject, run. Logic in main is
 // untestable. See docs/design/15-code-layout.md section 3.
 package main
 
@@ -84,7 +84,7 @@ func run() error {
 	// production. Say so loudly rather than letting someone discover it during
 	// an incident. See docs/design/03-persistence.md section 2.
 	if !cfg.IsProduction() {
-		logger.Warn("using the SQLite driver — DEVELOPMENT ONLY, not supported in production",
+		logger.Warn("using the SQLite driver - DEVELOPMENT ONLY, not supported in production",
 			"driver", cfg.Database.Driver, "dsn", cfg.Database.DSN)
 	}
 
@@ -159,7 +159,7 @@ func run() error {
 	discoveryCtl := discovery.NewController(packages, resolver, layouts, logger, mreg)
 
 	// Delegated replication: what we last wrote to a registry's own
-	// configuration, and what it did next. Only the Coordinator holds this —
+	// configuration, and what it did next. Only the Coordinator holds this -
 	// a worker moves bytes and has no business writing a mirror config.
 	replicationStore := store.NewReplication(st)
 
@@ -209,7 +209,7 @@ func run() error {
 	}, logger).WithStepper(replicationStore)
 
 	// A package's manifest BODIES are the only thing recorded here that grows
-	// without limit and can be discarded without losing a fact — they are a
+	// without limit and can be discarded without losing a fact - they are a
 	// cache in front of the source registry, and the tree they describe is kept
 	// whatever happens to them. This is what bounds them. See
 	// internal/store/manifestcache.go.
@@ -280,7 +280,7 @@ func run() error {
 
 	// A directory-level failure is fatal; individual invalid products are not.
 	// The Coordinator must stay up and serve the API even when every product
-	// is invalid — a crash-looping process cannot tell anyone why it is
+	// is invalid - a crash-looping process cannot tell anyone why it is
 	// unhappy. See docs/design/02-configuration.md section 7.
 	if err := watcher.LoadOnce(); err != nil {
 		return fmt.Errorf("load products: %w", err)
@@ -364,7 +364,7 @@ func run() error {
 		// Calibration runs here for the same reason preflight does: transferctl
 		// is a pure API client and must not open a connection to a registry
 		// itself. Every report says which host measured it, because that is the
-		// caveat — a Coordinator on a different network from the workers
+		// caveat - a Coordinator on a different network from the workers
 		// measures a path no transfer takes.
 		Calibrator: calibrate.NewCalibrator(resolver),
 		// Comparison runs here for the same reason: it opens connections to the

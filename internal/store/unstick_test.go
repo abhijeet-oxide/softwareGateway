@@ -20,7 +20,7 @@ func TestATransferWithNothingRunnableUnsticksItself(t *testing.T) {
 
 	stuck := h.manifestJob(id, 1)
 	h.exec(`UPDATE jobs SET state='blocked', wave=1 WHERE id = ?`, stuck)
-	// Its wave is open — the watermark passed it long ago, which is what makes
+	// Its wave is open - the watermark passed it long ago, which is what makes
 	// it provably runnable.
 	h.exec(`UPDATE transfers SET current_wave=1, state='running' WHERE id = ?`, id)
 
@@ -40,7 +40,7 @@ func TestATransferWithNothingRunnableUnsticksItself(t *testing.T) {
 }
 
 // A transfer with work in flight is not stuck, it is WORKING. Promoting its
-// blocked jobs would push manifests whose content is still being uploaded —
+// blocked jobs would push manifests whose content is still being uploaded -
 // which is invariant I1 broken by the mechanism meant to protect availability.
 func TestATransferWithWorkInFlightIsLeftAlone(t *testing.T) {
 	h := newFailureHarness(t)
@@ -99,7 +99,7 @@ func TestUnstickingRespectsAnOutstandingDependency(t *testing.T) {
 	manifest := h.manifestJobForArtifact(id, artifact)
 	h.dependsOn(manifest, blob)
 
-	// The blob is failed, so it is neither runnable nor satisfied — exactly the
+	// The blob is failed, so it is neither runnable nor satisfied - exactly the
 	// shape that makes a transfer look stuck when it is genuinely broken.
 	h.exec(`UPDATE jobs SET state='failed', attempts=8 WHERE id = ?`, blob)
 	h.exec(`UPDATE jobs SET state='blocked', wave=1 WHERE id = ?`, manifest)

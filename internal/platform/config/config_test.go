@@ -60,7 +60,7 @@ database:
 //
 // This is a regression test with teeth. The original mapper lowercased the
 // variable name into a koanf path, so SWGW_DATABASE_MAXOPENCONNS produced
-// `database.maxopenconns` — a different key from `database.maxOpenConns`, which
+// `database.maxopenconns` - a different key from `database.maxOpenConns`, which
 // bound to nothing. The override was accepted in silence and the default was
 // used, which is the worst failure mode a configuration mechanism has.
 func TestEnvironmentOverridesEveryKeyShape(t *testing.T) {
@@ -69,19 +69,19 @@ func TestEnvironmentOverridesEveryKeyShape(t *testing.T) {
 		value string
 		check func(SystemConfig) (any, any) // got, want
 	}{
-		// Single lowercase word — worked before, must keep working.
+		// Single lowercase word - worked before, must keep working.
 		{"SWGW_SERVER_ADDRESS", "127.0.0.1:7000",
 			func(c SystemConfig) (any, any) { return c.Server.Address, "127.0.0.1:7000" }},
 		{"SWGW_OBSERVABILITY_LOG_LEVEL", "debug",
 			func(c SystemConfig) (any, any) { return c.Observability.Log.Level, "debug" }},
 
-		// camelCase leaf — silently ignored before the fix.
+		// camelCase leaf - silently ignored before the fix.
 		{"SWGW_DATABASE_MAXOPENCONNS", "7",
 			func(c SystemConfig) (any, any) { return c.Database.MaxOpenConns, 7 }},
 		{"SWGW_SERVER_SHUTDOWNGRACEPERIOD", "45s",
 			func(c SystemConfig) (any, any) { return c.Server.ShutdownGracePeriod, 45 * time.Second }},
 
-		// camelCase SECTION — also silently ignored before the fix.
+		// camelCase SECTION - also silently ignored before the fix.
 		{"SWGW_COORDINATOR_LEADERELECTION_ENABLED", "false",
 			func(c SystemConfig) (any, any) { return c.Coordinator.LeaderElection.Enabled, false }},
 		{"SWGW_COORDINATOR_LEADERELECTION_RETRYINTERVAL", "3s",

@@ -19,8 +19,8 @@ import { isLive } from '../domain/derive'
  *
  * # On polling
  *
- * There is no server-sent-events channel yet — gate G4 in docs/design/19 §5 is
- * unmet — so live progress is polled. The rule enforced here is that polling
+ * There is no server-sent-events channel yet - gate G4 in docs/design/19 §5 is
+ * unmet - so live progress is polled. The rule enforced here is that polling
  * is SCOPED: a transfer is re-fetched on an interval only while it is in a
  * live state, and the interval drops to false the moment it settles. Job lists
  * never poll; the summary does. Nothing polls a page nobody is looking at,
@@ -65,7 +65,7 @@ export function useProduct(name: string | undefined) {
  * scan progressing instead of a button that appears to do nothing.
  *
  * Note what the response says when nothing started: `alreadyRunning`. That is
- * not a failure and not a no-op — it is "a scan is already going" — and the
+ * not a failure and not a no-op - it is "a scan is already going" - and the
  * caller is expected to say so rather than discard it.
  */
 export function useRunDiscovery() {
@@ -198,7 +198,7 @@ export function useArtifacts(
 /**
  * What is inside a release, as files.
  *
- * Read from what analysis recorded, so it troubles no registry — and it is
+ * Read from what analysis recorded, so it troubles no registry - and it is
  * empty until the release has been analysed, which the response says rather
  * than leaving the page to guess.
  */
@@ -217,7 +217,7 @@ export function usePackageFiles(product: string | undefined, ref: string | undef
 /**
  * ONE file's content, fetched on demand.
  *
- * Enabled only when a digest is asked for — the query is what a modal opening
+ * Enabled only when a digest is asked for - the query is what a modal opening
  * looks like, so mounting the hook without one must fetch nothing. Cached by
  * digest, which is the whole identity of the content: the same file opened
  * twice is served from memory, and content addressing means it cannot be stale.
@@ -259,7 +259,7 @@ export function usePresentComponents(transferId: string | undefined, enabled: bo
 /**
  * Analyse a release: walk its manifest tree and record what it is made of.
  *
- * Synchronous by design — the API has no progress feed for it, because the
+ * Synchronous by design - the API has no progress feed for it, because the
  * extent of the work is the thing being discovered. A caller can report that
  * it is running and for how long, and nothing more honest than that.
  */
@@ -274,7 +274,7 @@ export function useInspectPackage(product: string, ref: string, repository?: str
         // ASKED FOR, NOT WAITED FOR.
         //
         // Walking a release is minutes of round trips, and a request held open
-        // for it is cancelled by navigating away — which used to cancel the
+        // for it is cancelled by navigating away - which used to cancel the
         // walk with it and leave the release claimed by a request that no
         // longer existed. The server hands it to the same background analyser
         // discovery uses and answers immediately; the package's analysisState
@@ -361,7 +361,7 @@ export function useTransferControl(id: string) {
  * Reordering the queue.
  *
  * Its own hook rather than another verb on the one above, because it is the one
- * control verb that carries a value — and a mutation typed `(verb, body?)`
+ * control verb that carries a value - and a mutation typed `(verb, body?)`
  * would let any of the others be called with a body they do not read.
  */
 export function useTransferPriority(id: string) {
@@ -496,8 +496,8 @@ export function useSyncs(product: string | undefined, target: string | undefined
  * Where a comparison has got to, polled while its own request is open.
  *
  * `enabled` is the token: polling starts when a comparison starts and stops
- * when it ends. A 404 is not an error to show anybody — the comparison may be
- * running on another replica, or may have just finished — so the query is
+ * when it ends. A 404 is not an error to show anybody - the comparison may be
+ * running on another replica, or may have just finished - so the query is
  * allowed to fail quietly and the page falls back to saying that work is in
  * progress without a position.
  */
@@ -534,14 +534,14 @@ export function useCompare() {
       } catch (e) {
         /*
          * An older Coordinator does not know `progressToken`, and the API
-         * rejects unknown fields rather than ignoring them — deliberately, so
+         * rejects unknown fields rather than ignoring them - deliberately, so
          * a client sending `bytesTransfered` is told rather than silently
          * reported as having moved nothing.
          *
          * The consequence for this one field is disproportionate: the whole
          * comparison fails because the client asked to be told how it was
          * going. So it is asked for ONCE, and dropped if the server has not
-         * heard of it. The comparison then runs exactly as it did before —
+         * heard of it. The comparison then runs exactly as it did before -
          * without a position, which is what an old server could report anyway.
          */
         if (!isUnknownField(e, 'progressToken') || !body.progressToken) throw e

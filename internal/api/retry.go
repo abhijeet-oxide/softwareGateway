@@ -21,8 +21,8 @@ import (
 // # Why the collection form exists
 //
 // An outage does not fail one transfer. It fails every transfer that was
-// running, and the operator's intent afterwards is one thing — "carry on with
-// what the network interrupted" — not N things. Making them copy IDs out of a
+// running, and the operator's intent afterwards is one thing - "carry on with
+// what the network interrupted" - not N things. Making them copy IDs out of a
 // listing to express that would be busywork whose only effect is that some get
 // missed.
 //
@@ -87,7 +87,7 @@ func isPlannedVerb(string) bool { return false }
 // controlTransfer serves :pause, :resume and :stop.
 //
 // One handler for the three because they differ only in which store call they
-// make and which states admit them — and both of those belong to the store,
+// make and which states admit them - and both of those belong to the store,
 // which owns the state machine. A handler per verb would be three places to
 // keep the error mapping the same.
 func (s *Server) controlTransfer(w http.ResponseWriter, r *http.Request, ref, verb string) {
@@ -144,8 +144,8 @@ func (s *Server) setTransferPriority(w http.ResponseWriter, r *http.Request, ref
 		return
 	}
 
-	// The body is read whole first so that an EMPTY one — the commonest way to
-	// get this wrong from a shell — is answered with what the verb wants
+	// The body is read whole first so that an EMPTY one - the commonest way to
+	// get this wrong from a shell - is answered with what the verb wants
 	// rather than with "unexpected end of JSON input".
 	body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, maxRequestBody))
 	if err != nil {
@@ -234,7 +234,7 @@ func (s *Server) retryTransfer(w http.ResponseWriter, r *http.Request, ref strin
 	WriteJSON(w, r, http.StatusOK, out)
 }
 
-// handleRetryTransfers serves POST /api/v1/transfers:retry — every transfer
+// handleRetryTransfers serves POST /api/v1/transfers:retry - every transfer
 // with failed jobs.
 func (s *Server) handleRetryTransfers(w http.ResponseWriter, r *http.Request) {
 	if s.deps.Queue == nil {
@@ -279,7 +279,7 @@ func retryDTO(res store.RetryResult) v1.TransferRetry {
 		// transfer failed before it had any work, so there is nothing to
 		// requeue and re-creating it is the only way forward.
 		out.Error = "this transfer failed before any job was planned, so there is nothing " +
-			"to requeue — create it again"
+			"to requeue - create it again"
 	}
 	return out
 }

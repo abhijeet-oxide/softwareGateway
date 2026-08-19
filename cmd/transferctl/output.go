@@ -68,7 +68,7 @@ func stdout() io.Writer { return os.Stdout }
 // wide are the ones with the most in them.
 //
 // So the columns that CAN give are shortened until the row fits, and the rest
-// are left alone — a digest or a percentage means nothing shortened.
+// are left alone - a digest or a percentage means nothing shortened.
 
 const (
 	// tabGap is the padding newTabWriter puts between columns, and therefore
@@ -77,7 +77,7 @@ const (
 	tabGap = 3
 	// minCell is the narrowest a shortened column may become. Below this a
 	// path is two fragments and an ellipsis, which is not a shorter name for
-	// something — it is a different string that happens to be short.
+	// something - it is a different string that happens to be short.
 	minCell = 14
 	// minUsableWidth is the narrowest terminal worth fitting to. Anything less
 	// cannot hold these tables under any policy, and truncating to it would
@@ -117,7 +117,7 @@ func terminalWidth(w io.Writer) int {
 // the given width.
 //
 // The widest elastic column gives first, and keeps giving until it is no longer
-// the widest — so a table with one enormous column loses from that one, and a
+// the widest - so a table with one enormous column loses from that one, and a
 // table with two loses from both evenly. Nothing is taken from a column that is
 // already at minCell, and nothing at all is taken when the width is unknown.
 //
@@ -125,7 +125,7 @@ func terminalWidth(w io.Writer) int {
 //
 // A table can be too wide to fit at any shortening: the columns that cannot be
 // shortened, plus the padding between fifteen of them, can exceed the terminal
-// on their own. Shortening then buys nothing — the row wraps either way — and
+// on their own. Shortening then buys nothing - the row wraps either way - and
 // costs the reader every path in the listing. So the floor is checked FIRST,
 // and a table that cannot fit is left exactly as it was.
 //
@@ -173,7 +173,7 @@ func fitCells(rows [][]string, elastic []int, width int) {
 	}
 }
 
-// fits reports whether this table could be made to fit at all — every elastic
+// fits reports whether this table could be made to fit at all - every elastic
 // column shortened as far as it may go, and the rest left as they are.
 func fits(caps []int, elastic []int, width int) bool {
 	floored := append([]int(nil), caps...)
@@ -202,8 +202,8 @@ func rowWidth(caps []int) int {
 //
 // Not the end, which is the usual choice and the wrong one for what these
 // columns hold. A repository reference carries its two halves of the identity
-// at its two ends — `cfx-near/orbs/cfx-5000-k8s-215952-edgenac-…-ncm` says
-// WHERE at the front and WHICH at the back — and a column of them shares the
+// at its two ends - `cfx-near/orbs/cfx-5000-k8s-215952-edgenac-…-ncm` says
+// WHERE at the front and WHICH at the back - and a column of them shares the
 // front. Cutting the tail leaves every row reading identically, which is the
 // one outcome a shortened column must not produce: a listing whose rows can no
 // longer be told apart has lost more than the characters it dropped.
@@ -263,7 +263,7 @@ func humanConcurrency(c v1.Concurrency) string {
 //
 // Both the TAG and the REPOSITORY come pre-shortened from the server, as
 // `displayTag` and `displayRepository`, computed by the source's vendor plugin
-// at discovery — so `orbs/cfx-5000-k8s:orb_23.8.1076` renders as
+// at discovery - so `orbs/cfx-5000-k8s:orb_23.8.1076` renders as
 // `cfx-5000-k8s:23.8.1076` only because a plugin said those are this vendor's
 // conventions. A source with no `vendor` set gets neither, which is what any
 // conformant registry gets. Both spellings resolve as input, so copying what
@@ -278,8 +278,8 @@ func humanConcurrency(c v1.Concurrency) string {
 
 // signedMark renders a package's signature status for a table.
 //
-// Three values, not two. `n/a` is "nobody looked" — a source whose layout does
-// not attempt signature discovery — and it is deliberately not `no`, which
+// Three values, not two. `n/a` is "nobody looked" - a source whose layout does
+// not attempt signature discovery - and it is deliberately not `no`, which
 // would be a confident claim nobody checked.
 func signedMark(s v1.SignatureStatus) string {
 	switch s {

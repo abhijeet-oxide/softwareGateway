@@ -53,7 +53,7 @@ func listWith(fixtures ...transferFixture) *v1.ListTransfersResponse {
 // arithmetically defensible and together they said the transfer had done
 // nothing and saved nothing, which was false in the second half.
 //
-// SAVED read `dedupeSkippedBytes` alone — the part known at PLANNING time, from
+// SAVED read `dedupeSkippedBytes` alone - the part known at PLANNING time, from
 // placement records. On a database that has just been rebuilt there are no
 // placement records, so that number is zero by construction, and every byte the
 // transfer saved was saved by a worker discovering the content already present.

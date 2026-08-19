@@ -59,7 +59,7 @@ func NewWatcher(dir string, loader *Loader, reg *Registry, opts WatchOptions) *W
 //
 // Returns an error only if the directory itself could not be read. Individual
 // invalid products are reported through the registry and the OnReload hook,
-// not as an error — the Coordinator must stay up and serve the API even when
+// not as an error - the Coordinator must stay up and serve the API even when
 // every product is invalid, because a crash-looping process cannot tell anyone
 // why it is unhappy.
 func (w *Watcher) LoadOnce() error {

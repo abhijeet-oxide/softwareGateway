@@ -1,6 +1,6 @@
-# 14 — Deployment and Development
+# 14 - Deployment and Development
 
-> **Prerequisites:** [02 — Configuration](02-configuration.md), [09 — API](09-api.md) §9
+> **Prerequisites:** [02 - Configuration](02-configuration.md), [09 - API](09-api.md) §9
 
 ---
 
@@ -34,7 +34,7 @@ deploy/
     └── dashboards/*.json
 ```
 
-**Products are a sibling of `base`, not part of an overlay.** They are data, and they change on a different cadence and through a different review path than infrastructure — a platform team owns `base/`, product owners own `products/`. Kustomize overlays are for environment differences, not for content.
+**Products are a sibling of `base`, not part of an overlay.** They are data, and they change on a different cadence and through a different review path than infrastructure - a platform team owns `base/`, product owners own `products/`. Kustomize overlays are for environment differences, not for content.
 
 ## 2. Flux
 
@@ -123,7 +123,7 @@ spec:
       terminationGracePeriodSeconds: 45
 ```
 
-> **`/healthz` checks nothing external** ([09](09-api.md) §9.1). A liveness probe that touched the database would restart every Coordinator during a brief Postgres blip — converting a recoverable dependency hiccup into a fleet-wide crash-loop at precisely the moment the process needs to stay alive and retry. Readiness handles "should I get traffic"; liveness handles "am I wedged".
+> **`/healthz` checks nothing external** ([09](09-api.md) §9.1). A liveness probe that touched the database would restart every Coordinator during a brief Postgres blip - converting a recoverable dependency hiccup into a fleet-wide crash-loop at precisely the moment the process needs to stay alive and retry. Readiness handles "should I get traffic"; liveness handles "am I wedged".
 
 > **No CPU limit, memory limit only.** A CPU limit causes CFS throttling, which on a latency-sensitive control plane produces sporadic multi-hundred-millisecond stalls that look like network problems and are miserable to diagnose. Requests provide scheduling fairness; the limit adds throttling without adding protection. Memory *is* limited, because unbounded memory is a node-level hazard rather than a self-correcting one.
 
@@ -175,13 +175,13 @@ spec:
 
 **`readOnlyRootFilesystem: true` with no writable volume, and no `emptyDir`.** This is invariant I5 enforced by the platform rather than by code review: a worker *cannot* buffer a blob to disk, because there is nowhere to put it. Chaos scenario C10 ([11](11-resiliency-and-backpressure.md) §5) validates it.
 
-Workers hold **no database credentials** — a direct consequence of HTTP leasing ([00](00-overview.md) §5.2), and visible here as a shorter secret mount than the Coordinator's.
+Workers hold **no database credentials** - a direct consequence of HTTP leasing ([00](00-overview.md) §5.2), and visible here as a shorter secret mount than the Coordinator's.
 
-**`terminationGracePeriodSeconds: 120`** gives a worker time to finish in-flight blobs on `SIGTERM`: stop leasing, drain, exit. If a blob outlives the grace period the pod is killed and the lease expires — also correct, just less efficient ([11](11-resiliency-and-backpressure.md) §2.1). 120 s is a judgement call: long enough for a typical layer, short enough not to stall a node drain. Sites with very large layers should raise it.
+**`terminationGracePeriodSeconds: 120`** gives a worker time to finish in-flight blobs on `SIGTERM`: stop leasing, drain, exit. If a blob outlives the grace period the pod is killed and the lease expires - also correct, just less efficient ([11](11-resiliency-and-backpressure.md) §2.1). 120 s is a judgement call: long enough for a typical layer, short enough not to stall a node drain. Sites with very large layers should raise it.
 
 ### 3.3 Database
 
-**External managed PostgreSQL is the recommendation** — Cloud SQL, RDS, Azure Database. Backups, failover, patching, and PITR are solved problems we should not re-solve, and this is the only stateful component in the system.
+**External managed PostgreSQL is the recommendation** - Cloud SQL, RDS, Azure Database. Backups, failover, patching, and PITR are solved problems we should not re-solve, and this is the only stateful component in the system.
 
 The in-cluster `StatefulSet` in `base/postgres/` exists for dev and evaluation. It is a single instance with a PVC and no automated failover, and the manifest says so in a comment so nobody promotes it to production by accident.
 
@@ -258,11 +258,11 @@ task dev:worker                       # second terminal
 go run ./cmd/transferctl health --endpoint http://localhost:8080
 ```
 
-The identical configuration loader reads `./dev/products/` and `./dev/secrets/` as plain directories ([02](02-configuration.md) §9) — no cluster, no ConfigMaps, no mocking of client-go. That is the payoff for choosing volume mounts over the Kubernetes API ([02](02-configuration.md) §3), and it is a large one for developer experience.
+The identical configuration loader reads `./dev/products/` and `./dev/secrets/` as plain directories ([02](02-configuration.md) §9) - no cluster, no ConfigMaps, no mocking of client-go. That is the payoff for choosing volume mounts over the Kubernetes API ([02](02-configuration.md) §3), and it is a large one for developer experience.
 
 ### 5.2 With PostgreSQL
 
-When Postgres-specific behaviour matters — `SKIP LOCKED`, partitioning, advisory locks — which is any change to [04](04-queue-and-scheduling.md):
+When Postgres-specific behaviour matters - `SKIP LOCKED`, partitioning, advisory locks - which is any change to [04](04-queue-and-scheduling.md):
 
 ```bash
 docker compose up -d postgres
@@ -308,19 +308,19 @@ The task runner is [Task](https://taskfile.dev) (`Taskfile.yml`), not make. `tas
 | `task dev:registry` | Local registry seeded with a multi-arch test package |
 | `task validate` | Validate `./dev/products` |
 
-> **Decision — Task over make.**
+> **Decision - Task over make.**
 >
 > *Alternative:* keep the Makefile.
 >
-> *Rejected because* it needed `bash` and `find`, so **PowerShell and cmd could not run it at all** — a Windows developer had to install Git Bash or WSL before their first build, and the "cross-platform" claim was never tested. Task ships its own POSIX shell interpreter (`mvdan/sh`), so one definition runs identically on all three platforms; CI now includes a `windows-latest` job that proves it on every commit.
+> *Rejected because* it needed `bash` and `find`, so **PowerShell and cmd could not run it at all** - a Windows developer had to install Git Bash or WSL before their first build, and the "cross-platform" claim was never tested. Task ships its own POSIX shell interpreter (`mvdan/sh`), so one definition runs identically on all three platforms; CI now includes a `windows-latest` job that proves it on every commit.
 >
 > *It also removed a class of bug.* `go build -o <name>` does not append `.exe` on Windows, which is exactly how binaries shipped unrunnable and had to be renamed by hand. The suffix is now derived from the target platform, and CI asserts it.
 >
-> *What would change our mind:* nothing likely. The one real cost is a tool to install, and it is a single `go install` — cheaper than the Git Bash prerequisite it replaced.
+> *What would change our mind:* nothing likely. The one real cost is a tool to install, and it is a single `go install` - cheaper than the Git Bash prerequisite it replaced.
 
 **`task test` must not require Docker.** Unit tests run against an in-process OCI registry ([06](06-registry-abstraction.md) §8) and SQLite. A test suite that needs containers is a test suite developers run less often, and the difference compounds.
 
-**`CGO_ENABLED=0` is set on build tasks only, never globally.** Shipped binaries are static — SQLite is pure Go — but `go test -race` requires cgo, so a global setting would silently break the entire suite.
+**`CGO_ENABLED=0` is set on build tasks only, never globally.** Shipped binaries are static - SQLite is pure Go - but `go test -race` requires cgo, so a global setting would silently break the entire suite.
 
 ## 6. Container images
 
@@ -344,7 +344,7 @@ USER nonroot:nonroot
 ENTRYPOINT ["/coordinator"]
 ```
 
-`CGO_ENABLED=0` for a static binary on distroless. **This is the one place the SQLite choice has a real cost**: `mattn/go-sqlite3` requires cgo. Resolved by using a pure-Go SQLite driver (`modernc.org/sqlite`) so both dialects build statically — SQLite is a development convenience and must not compromise the production image ([16](16-technology-choices.md)).
+`CGO_ENABLED=0` for a static binary on distroless. **This is the one place the SQLite choice has a real cost**: `mattn/go-sqlite3` requires cgo. Resolved by using a pure-Go SQLite driver (`modernc.org/sqlite`) so both dialects build statically - SQLite is a development convenience and must not compromise the production image ([16](16-technology-choices.md)).
 
 `build_info` labels ([12](12-observability-and-audit.md) §2.7) come from the same `VERSION`/`COMMIT` args, so a dashboard can correlate behaviour with a deployment.
 
@@ -358,7 +358,7 @@ ENTRYPOINT ["/coordinator"]
 | Scale workers manually | `kubectl scale deploy/worker --replicas=20` (HPA will reassert) |
 | Pause everything | `transferctl transfers list -o name \| xargs -n1 transferctl transfers pause` |
 | Investigate a stuck transfer | `transferctl transfers describe <id>` → failed jobs, error classes, workers |
-| Recover after a registry outage | `transferctl transfers retry <id>` — resumes; completed jobs stay completed |
+| Recover after a registry outage | `transferctl transfers retry <id>` - resumes; completed jobs stay completed |
 | Database restore | Restore Postgres. In-flight transfers resume from the last committed state; at worst some jobs re-run ([11](11-resiliency-and-backpressure.md) §2.4) |
 | Emergency stop | `kubectl scale deploy/worker --replicas=0`. Leases expire; nothing is lost |
 

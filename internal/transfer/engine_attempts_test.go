@@ -23,7 +23,7 @@ func TestAttemptCapsFollowTheFailure(t *testing.T) {
 		"not_found":   1,
 		"unsupported": 1,
 		// This worker cannot execute the job. Another might, so it is not
-		// hopeless — but eight tries against the same misconfigured fleet only
+		// hopeless - but eight tries against the same misconfigured fleet only
 		// burns the attempts a real retry would need.
 		ClassConfiguration: 1,
 	} {

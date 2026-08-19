@@ -90,7 +90,7 @@ func (r *Resolver) upstreamCredentials(p *product.Product, t product.Target) (Cr
 
 // Client builds a management client for a target's registry.
 //
-// The transport settings are the target's own resolved network — the same CA
+// The transport settings are the target's own resolved network - the same CA
 // bundle, proxy and timeouts the artifact path uses, because it is the same
 // host and the same network between us and it. What is NOT shared is the
 // credential: the API token, not the robot.

@@ -41,7 +41,7 @@ func TestSlowServerIsATimeoutNotAnOutage(t *testing.T) {
 		t.Errorf("expected ErrTimeout, got: %v", err)
 	}
 	if errors.Is(err, ErrUnreachable) {
-		t.Error("a slow server must not be reported as unreachable — that sends " +
+		t.Error("a slow server must not be reported as unreachable - that sends " +
 			"the operator to investigate a healthy service")
 	}
 	// The elapsed budget belongs in the message: Go's own wording names neither
@@ -96,7 +96,7 @@ func TestCancelledContextIsNotReportedAsAnOutage(t *testing.T) {
 
 // A slash cannot survive a URL path segment: %2F is decoded before routing, so
 // `orbs/core:v1` in the path arrives at the router as two segments and matches
-// nothing — a 404 for a package that exists. The repository moves to the query
+// nothing - a 404 for a package that exists. The repository moves to the query
 // string instead.
 func TestScopedReferenceMovesTheRepositoryToTheQuery(t *testing.T) {
 	cases := []struct {
@@ -123,7 +123,7 @@ func TestScopedReferenceMovesTheRepositoryToTheQuery(t *testing.T) {
 	for _, c := range cases {
 		seg, query := splitPackageRef(c.ref)
 		if seg != c.wantSegment || query != c.wantQuery {
-			t.Errorf("splitPackageRef(%q) = (%q, %q), want (%q, %q) — %s",
+			t.Errorf("splitPackageRef(%q) = (%q, %q), want (%q, %q) - %s",
 				c.ref, seg, query, c.wantSegment, c.wantQuery, c.whatItCovers)
 		}
 	}

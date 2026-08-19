@@ -29,7 +29,7 @@ func (s *Server) handleLiveness(w http.ResponseWriter, r *http.Request) {
 	WriteJSON(w, r, http.StatusOK, map[string]string{"status": "ok"})
 }
 
-// handleReadiness answers "should this replica receive traffic?" — the
+// handleReadiness answers "should this replica receive traffic?" - the
 // database and configuration, and nothing slow.
 func (s *Server) handleReadiness(w http.ResponseWriter, r *http.Request) {
 	if s.deps.Health == nil {
@@ -109,7 +109,7 @@ func (s *Server) handleVersion(w http.ResponseWriter, r *http.Request) {
 // handleListProducts serves the loaded configuration.
 //
 // This works in M1 because it reads the in-memory product registry, not the
-// database — configuration is GitOps-managed and read-only over the API.
+// database - configuration is GitOps-managed and read-only over the API.
 func (s *Server) handleListProducts(w http.ResponseWriter, r *http.Request) {
 	if s.deps.Products == nil {
 		WriteJSON(w, r, http.StatusOK, v1.ListProductsResponse{Products: []v1.Product{}})
@@ -138,7 +138,7 @@ func (s *Server) handleGetProduct(w http.ResponseWriter, r *http.Request) {
 	p, ok := s.deps.Products.Get(name)
 	if !ok {
 		// A product whose configuration failed to load is reported as a 404
-		// with the reason, rather than a bare 404 — otherwise an operator
+		// with the reason, rather than a bare 404 - otherwise an operator
 		// cannot tell "misspelled" from "your YAML is broken".
 		for _, bad := range s.deps.Products.Invalid() {
 			if bad.Name == name {

@@ -26,7 +26,7 @@ import { mono } from '../theme'
 import type { Job } from '../api/types'
 
 /**
- * Page 4 — Download.
+ * Page 4 - Download.
  *
  * Answers: what is happening to this release right now, and what did it cost?
  *
@@ -35,7 +35,7 @@ import type { Job } from '../api/types'
  * Step 1 is OUR work: we move the bytes, so we count them, and it gets a
  * measured bar with a speed and an ETA. Step 2 is QUAY'S work: we configure
  * the mirror and Quay pulls the content itself, so we can report that a sync
- * started, that it finished and what it produced — and nothing else.
+ * started, that it finished and what it produced - and nothing else.
  *
  * Two steps of one operation, two different kinds of truth, shown differently
  * on purpose (docs/design/18 §6.1, 19 §6).
@@ -47,7 +47,7 @@ import type { Job } from '../api/types'
  * # Why this belongs on the page at all
  *
  * A download is thousands of jobs, and the summary above is a rollup of them.
- * When it stops moving, the rollup cannot say why — "2486/2489" names nothing
+ * When it stops moving, the rollup cannot say why - "2486/2489" names nothing
  * anybody can act on. `transferctl transfers jobs` has always been able to
  * answer that; this is the same answer, on the page somebody is already
  * looking at.
@@ -112,7 +112,7 @@ function JobsPanel({ transferId, hasFailures }: { transferId: string; hasFailure
              * on the page: the parent artifact (this IS that artifact's job),
              * the destination (the whole page is about one destination), and
              * the digest (which now sits here, where it belongs). What is left
-             * that a row cannot hold — the error — has a column of its own.
+             * that a row cannot hold - the error - has a column of its own.
              */
             title: 'Artifact',
             width: 320,
@@ -158,7 +158,7 @@ function JobsPanel({ transferId, hasFailures }: { transferId: string; hasFailure
             render: (_, j) => <Value>{j.leaseOwner ?? null}</Value>,
           },
           {
-            // Only a failed job has one, so the column is empty for most rows —
+            // Only a failed job has one, so the column is empty for most rows -
             // which is the point: the eye goes straight to the ones that do.
             title: 'Error',
             render: (_, j) =>
@@ -212,8 +212,8 @@ function JobProgress({ job }: { job: Job }) {
 /**
  * What a job moves, as a mark.
  *
- * The same two words the queue uses — a manifest names things, a blob is the
- * content itself — so the column reads without the reader translating.
+ * The same two words the queue uses - a manifest names things, a blob is the
+ * content itself - so the column reads without the reader translating.
  */
 const JOB_ICONS: Record<string, IconComponent> = {
   manifest: IndexIcon,
@@ -261,7 +261,6 @@ export default function DownloadDetail() {
   if (transfer.isError) {
     return (
       <>
-        <PageHeader title="Download" description="What is happening, and what it cost" />
         <ErrorState error={transfer.error} retry={() => void transfer.refetch()} />
       </>
     )
@@ -276,7 +275,7 @@ export default function DownloadDetail() {
    * A component published under its own name as well as inside the bundle
    * needs its layers in two repositories, and the planner counts them twice
    * because two repositories is two pieces of bookkeeping. The second copy
-   * costs NO BYTES — the registry mounts it — so counting bytes that way said
+   * costs NO BYTES - the registry mounts it - so counting bytes that way said
    * a 29.8 GB release was 63.7 GB of traffic, which never happens, and made a
    * saving larger than the release it was saving on.
    *
@@ -307,7 +306,7 @@ export default function DownloadDetail() {
    * Is there a mirror at all?
    *
    * Most deployments have none: the download ends at internal storage and
-   * nothing is delegated to a registry. Showing "Step 2 — Configuring Mirror
+   * nothing is delegated to a registry. Showing "Step 2 - Configuring Mirror
    * to Quay" for those made the page describe work that was never going to
    * happen, and left every download looking permanently half-finished.
    *
@@ -328,7 +327,7 @@ export default function DownloadDetail() {
    * Why a download that is READY is not moving.
    *
    * A transfer becomes `running` when a worker leases its first job, and until
-   * then the page has a state and nothing else — which is exactly the moment
+   * then the page has a state and nothing else - which is exactly the moment
    * somebody asks whether the thing is broken. It usually is not: the fleet is
    * busy with higher-priority or earlier work, and this download is next.
    *
@@ -373,9 +372,9 @@ export default function DownloadDetail() {
          * The package and the version make the title; the product goes
          * underneath.
          *
-         * All three are needed to identify a download — a product has many
+         * All three are needed to identify a download - a product has many
          * packages, and one version tag exists in every repository the product
-         * watches — but they are not equally interesting to somebody who has
+         * watches - but they are not equally interesting to somebody who has
          * just clicked into one. Three names joined by dots read as a path and
          * gave the version, the thing they came for, the least prominence.
          *
@@ -384,8 +383,9 @@ export default function DownloadDetail() {
          * says which it is.
          */
         title={t ? `${repositoryOf(t.source)} · ${transferVersion(t)}` : 'Download'}
-        description={t ? `${t.product} — what happened to this release, and what it cost`
-          : 'What happened to this release, and what it cost'}
+        // The product, and nothing else. It carried a sentence explaining what
+        // a download page is, on a download page.
+        description={t?.product}
         meta={
           t && (
             <Space size={16}>
@@ -431,7 +431,7 @@ export default function DownloadDetail() {
           style={{ marginBottom: 16 }}
           type="info"
           showIcon
-          message="Queued — nothing has been handed to a worker yet"
+          message="Queued - nothing has been handed to a worker yet"
           description={waiting}
         />
       )}
@@ -439,8 +439,8 @@ export default function DownloadDetail() {
       {/*
         A stepper, and nothing else.
         
-        It carried a line of explanation under every step — the target's host,
-        "signature checked at the destination", "not yet" — which is three
+        It carried a line of explanation under every step - the target's host,
+        "signature checked at the destination", "not yet" - which is three
         sentences of small grey text saying what the step names already say.
         Where the detail matters it is in the card for that step, one screen
         down. Here the only question is which step this download is on.
@@ -470,14 +470,14 @@ export default function DownloadDetail() {
             <Card
               style={{ height: '100%' }}
               title={mirrored
-                ? `Step 1 — downloading to ${t?.targetName ?? 'internal storage'}`
+                ? `Step 1 - downloading to ${t?.targetName ?? 'internal storage'}`
                 : `Downloading to ${t?.targetName ?? 'internal storage'}`}
             >
               <Space direction="vertical" size={12} style={{ width: '100%' }}>
                 <RepoLink url={t?.target ? `https://${t.target}` : undefined} label={t?.targetName} />
 
                 {/*
-                  ONE BAR, over ARTIFACTS — the thing the table below it breaks
+                  ONE BAR, over ARTIFACTS - the thing the table below it breaks
                   down, so the two cannot disagree.
                   
                   It was two: bytes, and parts. Bytes alone reached 100% while
@@ -549,7 +549,7 @@ export default function DownloadDetail() {
                   a disagreement and is not one: a vendor's file bundle is ONE
                   component holding a hundred and twelve named layers, and this
                   table counts components while the release page counts files.
-                  Each of those layers is still its own blob and its own job —
+                  Each of those layers is still its own blob and its own job -
                   which is why an unchanged file in a changed bundle is not
                   copied again.
                 */}
@@ -575,7 +575,7 @@ export default function DownloadDetail() {
             </Card>
 
             {mirrored && (
-              <Card title="Step 2 — configuring the mirror">
+              <Card title="Step 2 - configuring the mirror">
                 <Space direction="vertical" size={12} style={{ width: '100%' }}>
                   <StateStrip
                     state={mirrorState}
@@ -585,7 +585,7 @@ export default function DownloadDetail() {
                         : mirrorState === 'failed'
                           ? 'The mirror reported a failure'
                           : mirrorState === 'running'
-                            ? 'Configured — waiting for Quay to finish its first sync'
+                            ? 'Configured - waiting for Quay to finish its first sync'
                             : 'Not configured yet'
                     }
                     events={[
@@ -594,7 +594,7 @@ export default function DownloadDetail() {
                     ]}
                     message={
                       lastSync?.message ??
-                      'Quay pulls this content itself once configured, so there are no bytes for us to count here — only what it reports.'
+                      'Quay pulls this content itself once configured, so there are no bytes for us to count here - only what it reports.'
                     }
                   />
                   {lastSync?.itemsSynced !== undefined && (
@@ -613,9 +613,9 @@ export default function DownloadDetail() {
           <Card title="Download Summary" style={{ width: '100%' }}>
             <Descriptions column={1} size="small">
               {/*
-                ONE SIZE. There was a second — everything the transfer had to
+                ONE SIZE. There was a second - everything the transfer had to
                 account for, which counts a component published under two names
-                twice — and it was twice this one and read as a contradiction.
+                twice - and it was twice this one and read as a contradiction.
                 It was also not bytes anybody waits for: the second copy is a
                 mount, and a mount moves nothing.
               */}
@@ -653,9 +653,9 @@ export default function DownloadDetail() {
               {/*
                 Where it came FROM and where it went TO, at the foot of the
                 summary. They are the two facts a reader checks when a download
-                looks wrong — the right version from the wrong repository, or
+                looks wrong - the right version from the wrong repository, or
                 the right content at the wrong destination, both of which read
-                as success everywhere else — and both are links, because the
+                as success everywhere else - and both are links, because the
                 next thing anybody does with either is go and look.
               */}
               <Descriptions.Item label="From">
@@ -681,14 +681,14 @@ export default function DownloadDetail() {
 
       {/*
         Full width, below both columns. A job list is nine columns of its own
-        and was being asked to share half a page with the progress panel — at
+        and was being asked to share half a page with the progress panel - at
         which point the error column, the one somebody opened it for, was
         three words wide.
       */}
       {/*
         Failures and jobs, both full width and both below the two columns.
-        A failure's cause is a sentence from a registry — the whole sentence is
-        the useful part — and it was being wrapped into a half-width column
+        A failure's cause is a sentence from a registry - the whole sentence is
+        the useful part - and it was being wrapped into a half-width column
         three words at a time.
       */}
             {failures.data?.failures?.length ? (
@@ -698,7 +698,7 @@ export default function DownloadDetail() {
           // The retry belongs NEXT TO the failures, not only in the
           // header: this is where somebody is reading when they decide
           // to do something about them, and a retry resumes rather than
-          // restarting — nothing already moved is moved again.
+          // restarting - nothing already moved is moved again.
           extra={
             t && <QueueControls transfer={t} hasFailures onDeleted={() => navigate('/downloads')} />
           }
@@ -707,7 +707,7 @@ export default function DownloadDetail() {
             <Typography.Paragraph type="secondary" style={{ fontSize: 13 }}>
               Failures marked retryable are retried automatically, a few minutes apart and a few
               times over, before the download is left for somebody to look at. Retry now if you
-              have already dealt with the cause — it resumes rather than restarting.
+              have already dealt with the cause - it resumes rather than restarting.
             </Typography.Paragraph>
           )}
           <Table
@@ -728,7 +728,7 @@ export default function DownloadDetail() {
                   <Tooltip
                     title={
                       f.retryable
-                        ? 'A second attempt could plausibly succeed, so the system retries these by itself — a few minutes apart, a few times over, before leaving them for a person.'
+                        ? 'A second attempt could plausibly succeed, so the system retries these by itself - a few minutes apart, a few times over, before leaving them for a person.'
                         : 'A second attempt would fail the same way: a missing credential, a repository that does not exist, or something the registry will not serve. Retrying is not the fix.'
                     }
                   >

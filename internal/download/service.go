@@ -14,7 +14,7 @@ import (
 // Service is the download use case: look at what is configured, and run it.
 //
 // The API and the CLI are both clients of it, and it shares Resolve and Open
-// with discovery — so a download somebody types and a download a rule fires are
+// with discovery - so a download somebody types and a download a rule fires are
 // the same operation, planned by the same code, gated the same way.
 
 type Service struct {
@@ -229,8 +229,8 @@ func (s *Service) Run(
 
 // manualOrigin is what a download run by hand records as its origin.
 //
-// The column takes the INTERFACE that asked — api, cli, auto_download or
-// schedule — and nothing else passes its CHECK constraint. It used to say
+// The column takes the INTERFACE that asked - api, cli, auto_download or
+// schedule - and nothing else passes its CHECK constraint. It used to say
 // "manual", so every manual download failed at the insert; manual-versus-
 // automatic is already carried by Trigger, which is what made that look right.
 const manualOrigin = "api"
@@ -254,7 +254,7 @@ func (s *Service) open(
 		DownloadName: d.Name,
 		Trigger:      TriggerManual,
 		// The INTERFACE that asked, which is the only thing this column
-		// records — `api`, `cli`, `auto_download` or `schedule`, and nothing
+		// records - `api`, `cli`, `auto_download` or `schedule`, and nothing
 		// else passes its CHECK constraint. It said "manual", which is not one
 		// of them, so every download run by hand failed at the insert.
 		//
@@ -282,7 +282,7 @@ func (s *Service) open(
 // A vendor publishes the same version into every repository of a product: nine
 // packages, nine different names, all tagged `25.7_mp2604_2131`. This used to
 // build a map keyed by tag alone, so those nine collapsed onto whichever row
-// the listing happened to return last — and everything downstream was correct
+// the listing happened to return last - and everything downstream was correct
 // about the wrong package.
 //
 // The symptoms were all one bug. Downloading a component downloaded a different
@@ -295,7 +295,7 @@ func (s *Service) open(
 // So references resolve through the store, which is where every other endpoint
 // resolves them and which REFUSES an ambiguous one rather than choosing. Both
 // spellings of a tag still work, `repository:tag` scopes it, and a bare tag
-// that matches several repositories is an error naming them — a caller that
+// that matches several repositories is an error naming them - a caller that
 // cannot say which package it meant must not have one picked for it.
 //
 // A reference nobody has discovered is an error rather than a silent skip:

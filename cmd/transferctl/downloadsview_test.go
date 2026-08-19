@@ -81,7 +81,7 @@ func TestABrokenChainIsShownAndDoesNotHideTheRest(t *testing.T) {
 }
 
 // Verification is tri-state on the wire, and "said nothing" is not "turned it
-// off" — rendering the two the same would misreport a product's trust posture.
+// off" - rendering the two the same would misreport a product's trust posture.
 func TestInheritedVerificationIsNotRenderedAsOff(t *testing.T) {
 	out := renderDownloads(t, &v1.ListDownloadsResponse{Downloads: []v1.DownloadView{{
 		Name: "internal", Targets: []string{"lab"}, ChainText: "lab",
@@ -175,7 +175,7 @@ func TestListingsOfferNoRuntimeOverride(t *testing.T) {
 	}
 }
 
-// A run says where the software is going before it says what it created —
+// A run says where the software is going before it says what it created -
 // the chain is the part an operator has to check, and it is derived rather
 // than typed.
 func TestARunPrintsTheChainItResolved(t *testing.T) {

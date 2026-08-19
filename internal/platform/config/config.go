@@ -45,7 +45,7 @@ type SystemConfig struct {
 // Deliberately here and not in product configuration, unlike
 // network.tls.insecureSkipVerify. These settings are implemented by Go's
 // GODEBUG mechanism, which is per process and cannot be scoped to one
-// connection — so pretending they were per repository would be a lie about
+// connection - so pretending they were per repository would be a lie about
 // their blast radius. An operator concern, in the operator's config file.
 type TLSConfig struct {
 	// AllowNegativeSerialNumbers accepts certificates whose serial number is
@@ -56,7 +56,7 @@ type TLSConfig struct {
 	//	tls: failed to parse certificate from server: x509: negative serial number
 	//
 	// And it is the ONLY fix. That error happens while PARSING the server's
-	// certificate — before any verification runs — so
+	// certificate - before any verification runs - so
 	// network.tls.insecureSkipVerify does not help, and neither does a CA
 	// bundle. Measured on Go 1.25.7, not reasoned about: with
 	// insecureSkipVerify alone the handshake fails with the identical message.
@@ -74,8 +74,8 @@ type TLSConfig struct {
 // ConcurrencyConfig is how hard this installation works any one registry.
 //
 // It lives here, at the application level, because it is an operational
-// property of the DEPLOYMENT — the bandwidth it has, the proxy it sits behind,
-// the politeness its vendors expect — and not of any one product. Every product
+// property of the DEPLOYMENT - the bandwidth it has, the proxy it sits behind,
+// the politeness its vendors expect - and not of any one product. Every product
 // inherits it; a product may override it per source or per target for the case
 // that genuinely differs, which is one fragile vendor rather than the rule.
 //
@@ -116,8 +116,8 @@ type CoordinatorConfig struct {
 //
 // A package's manifest BODIES are the only thing this system records that grows
 // without limit and can be discarded without losing a fact. Everything else it
-// knows about a package — the artifacts, their digests and sizes, the blobs
-// they reference, the totals — is a few kilobytes and is kept forever.
+// knows about a package - the artifacts, their digests and sizes, the blobs
+// they reference, the totals - is a few kilobytes and is kept forever.
 //
 // The bodies are large, are read only when a manifest is PUSHED, and are
 // exactly recoverable, because a manifest is addressed by the hash of its own
@@ -169,7 +169,7 @@ type QueueConfig struct {
 // transfer per release per target; `worker_logs`, a row per interesting thing a
 // worker did; `audit_events`, a row per state transition. Everything else grows
 // with the CATALOGUE and is the answer to "what does this vendor publish",
-// which is the point of the system — none of it expires.
+// which is the point of the system - none of it expires.
 //
 // Every duration is zero-means-keep-forever, so a deployment that wants an
 // unbounded audit trail gets one by leaving the field unset rather than by
@@ -189,7 +189,7 @@ type GCConfig struct {
 	// somebody is watching, and deleting it out from under them would look
 	// exactly like the data loss this sweep exists to avoid being blamed for.
 	Transfers time.Duration `koanf:"transfers"`
-	// WorkerLogs expires the convenience tail. It is not a log store — cluster
+	// WorkerLogs expires the convenience tail. It is not a log store - cluster
 	// log aggregation remains the system of record.
 	WorkerLogs time.Duration `koanf:"workerLogs"`
 	// AuditEvents expires the audit trail. Longest of the three by default, and
@@ -255,7 +255,7 @@ type RetentionConfig struct {
 // Defaults returns the shipped defaults.
 //
 // SQLite is the development default so `go run ./cmd/coordinator` works with
-// no setup at all — see docs/design/14 section 5.1. It is explicitly not
+// no setup at all - see docs/design/14 section 5.1. It is explicitly not
 // supported in production, and the Coordinator warns at startup.
 func Defaults() SystemConfig {
 	return SystemConfig{
@@ -308,7 +308,7 @@ func Defaults() SystemConfig {
 				//
 				// Sized against what it is FOR rather than against available
 				// disk. A manifest body is a few kilobytes, so this holds on
-				// the order of a hundred thousand of them — far more than any
+				// the order of a hundred thousand of them - far more than any
 				// plausible working set of packages being replicated in a
 				// week, and a small fraction of the volume a database this
 				// system runs on would be given. The TTL is the bound that
@@ -356,7 +356,7 @@ func Defaults() SystemConfig {
 // Load resolves configuration in precedence order: defaults, then the file if
 // present, then SWGW_ environment variables.
 //
-// A missing file is not an error — the defaults plus environment must be
+// A missing file is not an error - the defaults plus environment must be
 // enough to start, which is what makes the zero-setup development path work.
 func Load(path string) (SystemConfig, error) {
 	k := koanf.New(".")
@@ -380,7 +380,7 @@ func Load(path string) (SystemConfig, error) {
 	//
 	// The second form is why this needs a lookup table rather than a string
 	// transform. An environment variable cannot carry case, so the naive
-	// mapping produces `database.maxopenconns` — which is a DIFFERENT koanf key
+	// mapping produces `database.maxopenconns` - which is a DIFFERENT koanf key
 	// from `database.maxOpenConns` and therefore binds to nothing. The override
 	// was silently ignored, which is the worst possible failure for a
 	// configuration mechanism: the operator sets the variable, sees no error,
@@ -434,7 +434,7 @@ func Load(path string) (SystemConfig, error) {
 // canonicalKeys maps each lowercased config path to its real, cased form.
 //
 // Built from the defaults, which by construction contain every key the struct
-// defines — so a key that exists in the schema is reachable from the
+// defines - so a key that exists in the schema is reachable from the
 // environment, and one that does not is detected as a typo.
 func canonicalKeys(keys []string) map[string]string {
 	out := make(map[string]string, len(keys))

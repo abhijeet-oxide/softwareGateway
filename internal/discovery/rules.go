@@ -10,7 +10,7 @@ import (
 // ruleSet is a product's auto-download rules, compiled once.
 //
 // A rule holds a pattern and nothing else about the work. What it triggers is
-// a DOWNLOAD, resolved separately — which is why nothing here knows about
+// a DOWNLOAD, resolved separately - which is why nothing here knows about
 // targets, verification or priority.
 type ruleSet struct {
 	enabled bool
@@ -38,7 +38,7 @@ func compileRules(p *product.Product) (ruleSet, error) {
 // match returns the first rule matching a tag.
 //
 // A rule that is disabled, or that does not accept the discovery trigger, is
-// skipped WITHOUT consuming the match — so a disabled `ga-releases` lets a
+// skipped WITHOUT consuming the match - so a disabled `ga-releases` lets a
 // later rule see the tag rather than silently swallowing it. First-match-wins
 // is about which rule applies, not about which rule looked.
 //

@@ -13,7 +13,7 @@ import (
 //
 // A comparison is one synchronous POST that reads two registries from end to
 // end. For a real release that is minutes, and the only thing a caller could
-// show for those minutes was an animation — which is exactly what it would
+// show for those minutes was an animation - which is exactly what it would
 // show for a comparison that had silently stopped. "Is this working?" was
 // unanswerable, and it is the only question anybody has while waiting.
 //
@@ -29,7 +29,7 @@ import (
 //
 // Progress is worth nothing once the report arrives, so it is not worth a
 // table, a migration or a write per manifest. The cost of holding it in memory
-// is that a poll served by a DIFFERENT replica finds nothing — the caller then
+// is that a poll served by a DIFFERENT replica finds nothing - the caller then
 // shows an indeterminate bar, which is where it started. That is the right
 // trade for a number whose whole life is four minutes.
 
@@ -38,7 +38,7 @@ type compareProgress struct {
 	// Sides is one entry per end, keyed by "a"/"b", so the slower registry is
 	// visible as itself rather than averaged into the other.
 	Sides map[string]compare.Progress
-	// StartedAt and UpdatedAt are what let a caller — and the server itself —
+	// StartedAt and UpdatedAt are what let a caller - and the server itself -
 	// tell slow from stopped.
 	StartedAt time.Time
 	UpdatedAt time.Time

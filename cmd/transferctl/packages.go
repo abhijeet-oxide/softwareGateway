@@ -21,7 +21,7 @@ func newPackagesCommand() *cobra.Command {
 		Short:   "Inspect discovered packages",
 		Long: "A package is one version of a vendor product: a specific tag\n" +
 			"resolved to a specific manifest digest. Different tags are\n" +
-			"independent versions that coexist — discovering v2.14.0 does\n" +
+			"independent versions that coexist - discovering v2.14.0 does\n" +
 			"nothing to v2.13.0.",
 	})
 	cmd.AddCommand(
@@ -39,7 +39,7 @@ func newPackagesCommand() *cobra.Command {
 // The counterpart of `packages list`, and the reason it is a separate command
 // rather than a filter on it: these are the ABSENCE of packages. A scan meets
 // them on every pass and can do nothing about them, so they belong neither in
-// the catalogue nor in an error — they belong in a listing somebody consults
+// the catalogue nor in an error - they belong in a listing somebody consults
 // when they are asking why a release they expected is not there.
 func newPackagesUnavailableCommand() *cobra.Command {
 	cmd := &cobra.Command{
@@ -89,7 +89,7 @@ func renderUnavailable(w io.Writer, r *v1.ListUnavailableResponse) error {
 
 	// The vendor's own sentence, once per distinct message. It names the end
 	// user and the sales item, which is what somebody takes to their account
-	// manager — and it is identical across dozens of rows.
+	// manager - and it is identical across dozens of rows.
 	said := map[string]bool{}
 	for _, u := range r.Packages {
 		if u.Detail == "" || said[u.Detail] {
@@ -125,7 +125,7 @@ func newPackagesListCommand() *cobra.Command {
 	cmd := &cobra.Command{
 		Short: "List a product's discovered packages",
 		Long: "Where a source declares a `vendor`, the TAG and REPOSITORY columns\n" +
-			"show that vendor's shortened spelling — `cfx-5000-k8s` rather than\n" +
+			"show that vendor's shortened spelling - `cfx-5000-k8s` rather than\n" +
 			"`orbs/cfx-5000-k8s`, `23.8.1076` rather than `orb_23.8.1076`. The full\n" +
 			"names are what is stored, transferred and returned by `-o json`; only\n" +
 			"the table is shortened, and only for a source that says its vendor\n" +
@@ -181,8 +181,8 @@ func newPackagesListCommand() *cobra.Command {
 	cmd.Flags().StringVar(&pageToken, "page-token", "", "continue from a previous nextPageToken")
 	cmd.Flags().BoolVar(&all, "all", false, "fetch every page")
 	cmd.Flags().BoolVar(&wide, "wide", false,
-		"add the bookkeeping columns: STATE, which is about the CATALOGUE — "+
-			"whether the vendor has re-pushed this tag — and not about transfers")
+		"add the bookkeeping columns: STATE, which is about the CATALOGUE - "+
+			"whether the vendor has re-pushed this tag - and not about transfers")
 
 	takes(cmd, "list", productArg())
 	return cmd
@@ -191,8 +191,8 @@ func newPackagesListCommand() *cobra.Command {
 // renderPackageList prints the catalogue.
 //
 // STATE is behind --wide because it answers a question almost nobody is asking
-// here. It has exactly two values in practice — `discovered`, and `superseded`
-// once the vendor re-pushes a tag — so it is a column of one repeated word, and
+// here. It has exactly two values in practice - `discovered`, and `superseded`
+// once the vendor re-pushes a tag - so it is a column of one repeated word, and
 // a reader who sees a column called STATE on a page about packages reasonably
 // reads it as "has this been transferred?", which it has never meant. Where a
 // package has GOT to is a question about a package and a target, and `describe`
@@ -218,7 +218,7 @@ func renderPackageList(w io.Writer, resp *v1.ListPackagesResponse, wide bool) er
 	// PUBLISHED before DISCOVERED, matching the sort order: the list is ordered
 	// by when the vendor says a release was built, which is the order a person
 	// thinks about releases in. DISCOVERED stays because the two genuinely
-	// differ — a release published in March that we only saw in July is worth
+	// differ - a release published in March that we only saw in July is worth
 	// being able to notice.
 	header := "TAG\tDIGEST\tSIGNED\tSIZE\tARTIFACTS\tBLOBS\tPUBLISHED\tDISCOVERED"
 	if wide {
@@ -293,14 +293,14 @@ func newPackagesDescribeCommand() *cobra.Command {
 		Short: "Show a package's contents and transfer status",
 		Long: "<package> is a tag, a digest, or `repository:tag`. Where a source\n" +
 			"declares a `vendor`, the shortened spellings a listing shows work\n" +
-			"too — `cfx-5000-k8s:23.8.1076` and `orbs/cfx-5000-k8s:orb_23.8.1076`\n" +
+			"too - `cfx-5000-k8s:23.8.1076` and `orbs/cfx-5000-k8s:orb_23.8.1076`\n" +
 			"are the same package.\n\n" +
-			"A bare tag is AMBIGUOUS when a product spans several repositories —\n" +
-			"a vendor's version tag appears in many of them — so a tag matching\n" +
+			"A bare tag is AMBIGUOUS when a product spans several repositories -\n" +
+			"a vendor's version tag appears in many of them - so a tag matching\n" +
 			"more than one is refused with the list, rather than one being picked\n" +
 			"for you. Scope it as `orbs/cfx-5000-k8s:orb_23.8.1076`.\n\n" +
 			"This is a READ. It shows everything known about the package,\n" +
-			"including the size and contents `packages inspect` gathered — so a\n" +
+			"including the size and contents `packages inspect` gathered - so a\n" +
 			"package that has been inspected describes fully, and one that has\n" +
 			"not says so rather than guessing.",
 		Aliases: []string{"show"},
@@ -362,7 +362,7 @@ func renderPackageDetail(w io.Writer, product, ref string, p *v1.Package, artifa
 	case p.ExpandedAt != "":
 		fmt.Fprintf(w, "Inspected    %s\n", p.ExpandedAt)
 	case p.TotalBytes == nil:
-		fmt.Fprintln(w, "             not measured — discovery records what this package's index")
+		fmt.Fprintln(w, "             not measured - discovery records what this package's index")
 		fmt.Fprintln(w, "             lists without fetching it.")
 		fmt.Fprintf(w, "             transferctl packages inspect %s %s\n", product, ref)
 	}
@@ -402,7 +402,7 @@ func renderPackageDetail(w io.Writer, product, ref string, p *v1.Package, artifa
 // "Has it been transferred?" has as many answers as there are targets. A column
 // on the package could hold one of them, would be wrong the moment a second
 // target was configured, and could not say WHICH target it meant. The per-pair
-// truth already exists — one transfer row per package and destination — so this
+// truth already exists - one transfer row per package and destination - so this
 // reads it rather than reducing it to something smaller than the question.
 //
 // # Why the failure reason is printed in full
@@ -442,7 +442,7 @@ func renderPackageTransfers(w io.Writer, p *v1.Package) {
 
 // renderCacheNote explains a tree whose manifest bodies have been reclaimed.
 //
-// Printed only when it applies, and worded so it does not read as a problem —
+// Printed only when it applies, and worded so it does not read as a problem -
 // because it is not one. Nothing about the package is unknown; the bodies are a
 // cache in front of the source registry and the sweeper reclaimed some. Without
 // the note, an operator comparing two `describe` outputs would see the same
@@ -460,7 +460,7 @@ func renderCacheNote(w io.Writer, artifacts []v1.Artifact) {
 	fmt.Fprintln(w)
 	fmt.Fprintf(w, "  %d of %d manifest bodies are no longer held locally. Their contents,\n",
 		dropped, len(artifacts))
-	fmt.Fprintln(w, "  sizes and blobs are recorded above and nothing is missing — the bodies")
+	fmt.Fprintln(w, "  sizes and blobs are recorded above and nothing is missing - the bodies")
 	fmt.Fprintln(w, "  are a bounded cache, and a transfer re-reads them from the source.")
 }
 
@@ -585,7 +585,7 @@ func renderDiscoverResult(w io.Writer, productName string, r *v1.DiscoverPackage
 		fmt.Fprintf(tw, "  Packages regrouped\t%d\n", r.Regrouped)
 	}
 	if r.Renamed > 0 {
-		// Shown only when it happened, because it happens exactly once — on the
+		// Shown only when it happened, because it happens exactly once - on the
 		// first scan after a source's `vendor` is edited. It is the direct
 		// answer to "did my config change take effect", which is otherwise
 		// answerable only by going and looking at a listing.
@@ -610,7 +610,7 @@ func renderDiscoverResult(w io.Writer, productName string, r *v1.DiscoverPackage
 				r.RepositoriesFiltered)
 		} else {
 			fmt.Fprintln(w)
-			fmt.Fprintln(w, "  Check `repositories:` on the source, or — if it names none —")
+			fmt.Fprintln(w, "  Check `repositories:` on the source, or - if it names none -")
 			fmt.Fprintln(w, "  whether the registry's /v2/_catalog returns anything.")
 			fmt.Fprintln(w, "  `transferctl products check` answers both.")
 		}
@@ -660,7 +660,7 @@ const classNotEntitled = "not_entitled"
 //
 // A vendor registry serves a catalogue spanning every customer. Asking about a
 // product this customer has not licensed gets a 403, and that is the
-// entitlement check WORKING — not an outage, not a bad credential, and nothing
+// entitlement check WORKING - not an outage, not a bad credential, and nothing
 // anybody here can fix. On a real catalogue it is dozens of orbs, on every
 // scan, forever.
 //
@@ -674,7 +674,7 @@ const classNotEntitled = "not_entitled"
 // Thirty-seven lines of `orbs/cfx-5000-k8s tag orb_24.7.1186: HTTP 403:
 // forbidden` differ only in the two parts that carry no information about what
 // went wrong. Grouped by orb, with the versions listed after it, the same
-// thirty-seven lines become four — and the registry's own sentence, which names
+// thirty-seven lines become four - and the registry's own sentence, which names
 // the customer and the product and is the thing somebody takes to their account
 // manager, is printed once instead of thirty-seven times.
 func renderNotEntitled(w io.Writer, issues []v1.ScanIssue, words v1.ScanVocabulary) {
@@ -744,14 +744,14 @@ func issueVersion(e v1.ScanIssue) string {
 // failure, dropping the path and status code we wrapped it in.
 //
 // Anything without a recognisable message yields "", and the block simply shows
-// no sentence — the grouping above it is the useful half either way.
+// no sentence - the grouping above it is the useful half either way.
 func entitlementSentence(message string) string {
 	i := strings.LastIndex(message, "HTTP 403: ")
 	if i < 0 {
 		return ""
 	}
 	rest := strings.TrimSpace(message[i+len("HTTP 403: "):])
-	// The sentinel we append — "forbidden" — is our word, not theirs.
+	// The sentinel we append - "forbidden" - is our word, not theirs.
 	rest = strings.TrimSuffix(rest, ": forbidden")
 	if rest == "" || rest == "forbidden" {
 		return ""
@@ -1018,7 +1018,7 @@ func renderDiscoveryStatus(w io.Writer, st *v1.DiscoveryStatusResponse) error {
 }
 
 // humanPhase turns the wire enum into something readable, and says what the
-// phase is waiting on — which is the part an operator actually needs.
+// phase is waiting on - which is the part an operator actually needs.
 func humanPhase(p string) string {
 	switch p {
 	case "ENUMERATING_REPOSITORIES":
@@ -1083,7 +1083,7 @@ func newPackagesDiscoverAliasCommand() *cobra.Command {
 // warning.
 //
 // And it was the wrong place for the RESULT. Inspecting is not a rendering
-// option — it writes artifacts, blobs and a measured size, and everything that
+// option - it writes artifacts, blobs and a measured size, and everything that
 // reads a package afterwards, `describe` and a transfer alike, sees them. So
 // inspect is a verb of its own again, and `describe` simply shows what it
 // gathered.
@@ -1123,7 +1123,7 @@ func renderInspect(w io.Writer, product, ref string, r *v1.InspectPackageRespons
 	if r.AlreadyExpanded {
 		fmt.Fprintf(w, "%s %s was already inspected; nothing was fetched.\n", product, ref)
 	} else {
-		fmt.Fprintf(w, "Inspected %s %s — fetched %d manifest(s).\n", product, ref, r.Fetched)
+		fmt.Fprintf(w, "Inspected %s %s - fetched %d manifest(s).\n", product, ref, r.Fetched)
 	}
 	fmt.Fprintln(w)
 
@@ -1201,8 +1201,8 @@ func anyScanningIn(st *v1.DiscoveryStatusResponse) bool {
 	return false
 }
 
-// renderSignature says what is known about a package's signature, and — the
-// part that matters — what is NOT.
+// renderSignature says what is known about a package's signature, and - the
+// part that matters - what is NOT.
 //
 // Discovery answers one question: is a signature there? It finds the artifact
 // the vendor published, records its media type and its digest, and stops.
@@ -1224,7 +1224,7 @@ func renderSignature(w io.Writer, p *v1.Package) {
 	fmt.Fprintln(w, "  says the vendor published one, not that it is valid or that it is theirs.")
 
 	// The MATERIAL, when it has been resolved. This is what a verifier reads,
-	// and printing it is how someone checks a signature by hand today — pull the
+	// and printing it is how someone checks a signature by hand today - pull the
 	// blob by digest and run it through `openssl cms`.
 	for _, r := range p.Related {
 		if !strings.EqualFold(r.Role, "signature") {
@@ -1244,7 +1244,7 @@ func renderSignature(w io.Writer, p *v1.Package) {
 			}
 			_ = tw.Flush()
 		default:
-			fmt.Fprintln(w, "  The signature's contents have not been read yet — only that it")
+			fmt.Fprintln(w, "  The signature's contents have not been read yet - only that it")
 			fmt.Fprintln(w, "  exists. `packages inspect` fetches it and records the blob a")
 			fmt.Fprintln(w, "  verifier would check.")
 		}
@@ -1278,12 +1278,12 @@ func describeSigned(p *v1.Package) string {
 		}
 		// Verification is a separate question from presence, and conflating
 		// them is exactly the mistake this line exists to prevent.
-		return out + "  — present, NOT verified"
+		return out + "  - present, NOT verified"
 	case v1.SignatureUnsigned:
-		return "no  — this source was checked and the publisher signed nothing"
+		return "no  - this source was checked and the publisher signed nothing"
 	default:
 		return notAvailable +
-			"  — not checked; set `signatures.layout` on the source to look"
+			"  - not checked; set `signatures.layout` on the source to look"
 	}
 }
 

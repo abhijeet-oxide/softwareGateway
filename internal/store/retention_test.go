@@ -9,8 +9,8 @@ import (
 
 // Keeping the database bounded, and keeping the catalogue.
 //
-// The two halves are equally load-bearing. `jobs` grows with USE — 2500 rows per
-// transfer, one transfer per release per target, forever — and nothing was ever
+// The two halves are equally load-bearing. `jobs` grows with USE - 2500 rows per
+// transfer, one transfer per release per target, forever - and nothing was ever
 // removing it. Everything else grows with the CATALOGUE, is the answer to "what
 // does this vendor publish", and must survive every sweep.
 

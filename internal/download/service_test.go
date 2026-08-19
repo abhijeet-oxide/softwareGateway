@@ -4,7 +4,7 @@ import "testing"
 
 // The origin a manual download records must be a value the schema accepts.
 //
-// It said "manual", which is not one of api, cli, auto_download or schedule —
+// It said "manual", which is not one of api, cli, auto_download or schedule -
 // so every download run by hand failed at the insert with a CHECK constraint
 // violation, and nothing in the API surfaced why. Manual-versus-automatic is
 // carried by Trigger, which is what made the wrong value here look plausible.

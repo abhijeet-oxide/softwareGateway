@@ -15,8 +15,8 @@ const (
 	// PhaseIdle means no scan is running.
 	PhaseIdle Phase = "IDLE"
 	// PhaseEnumerating is the `/v2/_catalog` call, which happens once per scan
-	// and is where a source that names no repositories spends its first — and
-	// on a slow registry, its longest — minutes.
+	// and is where a source that names no repositories spends its first - and
+	// on a slow registry, its longest - minutes.
 	PhaseEnumerating Phase = "ENUMERATING_REPOSITORIES"
 	// PhaseListingTags is `tags/list` for one repository.
 	PhaseListingTags Phase = "LISTING_TAGS"
@@ -37,7 +37,7 @@ type ScanProgress struct {
 	Phase     Phase
 	StartedAt time.Time
 
-	// RepositoriesTotal is zero until enumeration finishes — which is itself
+	// RepositoriesTotal is zero until enumeration finishes - which is itself
 	// informative, because it means we are still waiting on `_catalog`.
 	RepositoriesTotal int
 	RepositoriesDone  int
@@ -49,7 +49,7 @@ type ScanProgress struct {
 	RepositoriesInFlight int
 	// CurrentRepository is whichever repository most recently STARTED. With
 	// concurrency there is no single current one, so it is a hint about where
-	// the scan has got to and not a position — callers should render it as
+	// the scan has got to and not a position - callers should render it as
 	// such.
 	CurrentRepository string
 
@@ -60,7 +60,7 @@ type ScanProgress struct {
 	// listed so far, so a caller can render "17 of 240" rather than a number
 	// that grows towards nothing in particular.
 	TagsTotal int
-	// TagsChecked is how many have been resolved to a digest — one HEAD each,
+	// TagsChecked is how many have been resolved to a digest - one HEAD each,
 	// and the bulk of a scan.
 	//
 	// Counted as each one completes rather than after the phase. It was
@@ -77,7 +77,7 @@ type ScanProgress struct {
 	// TagsInFlight is how many tags are being resolved or read RIGHT NOW.
 	//
 	// The number that shows the concurrency an operator configured actually
-	// being used — and, when it sits at one, that it is not.
+	// being used - and, when it sits at one, that it is not.
 	TagsInFlight int
 	// CurrentTag is whichever tag most recently started. A hint about where the
 	// scan has got to, not a position: with sixteen in flight there is no
@@ -88,12 +88,12 @@ type ScanProgress struct {
 	//
 	// The counter that moves when nothing else does. A single tag with a large
 	// artifact tree can take minutes, and without this the display sat on
-	// "1/43 tags" while hundreds of requests completed successfully — which is
+	// "1/43 tags" while hundreds of requests completed successfully - which is
 	// what "so many requests succeed but the CLI reports no progress" was.
 	Artifacts int
 
 	// New is packages recorded by this scan, counted as each is written rather
-	// than at the end — the answer to "is it finding anything?" while it is
+	// than at the end - the answer to "is it finding anything?" while it is
 	// still looking.
 	New int
 	// Packages is how many releases this scan has grouped and written,
@@ -102,7 +102,7 @@ type ScanProgress struct {
 	Packages int
 	Errors   int
 
-	// Overall is the whole scan's progress, from 0 to 1 — the number a bar is
+	// Overall is the whole scan's progress, from 0 to 1 - the number a bar is
 	// drawn from, and the only one that is.
 	//
 	// Held as a field rather than computed by the reader because it is
@@ -116,8 +116,8 @@ type ScanProgress struct {
 // listingShare is how much of the bar the listing phase owns.
 //
 // A tenth, and not a third. The three phases are all made of round trips, but
-// not of the same NUMBER of them: listing is one request per repository — tens
-// of them — and resolving is one per tag, which is thousands. Splitting the bar
+// not of the same NUMBER of them: listing is one request per repository - tens
+// of them - and resolving is one per tag, which is thousands. Splitting the bar
 // evenly would spend a third of it on a phase that takes a twentieth of the
 // time, which is the same lie as the old per-phase bar, told earlier.
 const listingShare = 0.1
@@ -130,11 +130,11 @@ const listingShare = 0.1
 // denominator was live. It was accurate at every instant and useless across
 // them: the bar filled to 100% for repositories, reset, filled again for the
 // versions, reset again. A progress bar that reaches the end and starts over
-// is not reporting progress — it is reporting phases, and the phase already
+// is not reporting progress - it is reporting phases, and the phase already
 // has a name written next to it.
 //
 // So the phases share ONE scale. Listing takes the first tenth, and resolving
-// the remaining nine — measured in round trips, which is the one unit all of
+// the remaining nine - measured in round trips, which is the one unit all of
 // them are made of.
 //
 // # Why the denominators can be trusted here
@@ -162,8 +162,8 @@ func (p ScanProgress) overall() float64 {
 		done := float64(p.TagsChecked+p.TagsFetched) / float64(total)
 		return listingShare + (1-listingShare)*clamp01(done)
 	default:
-		// Enumerating has no denominator at all — the catalog has not come
-		// back — and 0% is the honest rendering of "we do not know yet".
+		// Enumerating has no denominator at all - the catalog has not come
+		// back - and 0% is the honest rendering of "we do not know yet".
 		return 0
 	}
 }

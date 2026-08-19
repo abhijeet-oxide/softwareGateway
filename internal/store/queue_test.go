@@ -7,7 +7,7 @@ import (
 
 // A listing shortens every transfer ID to its first segment, and then tells
 // the reader to run `transfers describe <that>`. If describe would not accept
-// it, the output is a trap — which is exactly what it was.
+// it, the output is a trap - which is exactly what it was.
 
 func TestTransferIDResolvesFromAPrefix(t *testing.T) {
 	h := newTransferRefHarness(t)

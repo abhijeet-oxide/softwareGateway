@@ -26,7 +26,7 @@ func TestPushAndFetchBlobRoundTrips(t *testing.T) {
 	t.Cleanup(reg.Close)
 
 	dst := writeRepo(t, reg, "mirror/suite")
-	content := []byte("a helm chart tarball, or a config file, or an image layer — " +
+	content := []byte("a helm chart tarball, or a config file, or an image layer - " +
 		"the engine cannot tell and does not look")
 	dgst := registry.NewDigestFromBytes(content)
 
@@ -104,7 +104,7 @@ func TestManifestBytesAreNotMutated(t *testing.T) {
 		t.Fatalf("fetch manifest: %v", err)
 	}
 
-	// The blobs first, or the registry rejects the manifest — which is itself
+	// The blobs first, or the registry rejects the manifest - which is itself
 	// the ordering invariant, enforced by the registry rather than by us.
 	dst := writeRepo(t, reg, "mirror/suite")
 	copyBlobsOf(t, reg, src, dst, raw)
@@ -123,7 +123,7 @@ func TestManifestBytesAreNotMutated(t *testing.T) {
 		t.Fatal("the manifest was not stored under its tag")
 	}
 	if !bytes.Equal(stored, raw) {
-		t.Errorf("stored bytes differ from source bytes — any signature over this digest is now invalid\n"+
+		t.Errorf("stored bytes differ from source bytes - any signature over this digest is now invalid\n"+
 			" got %s\nwant %s", stored, raw)
 	}
 }
@@ -151,7 +151,7 @@ func TestManifestPushFailsWhenABlobIsMissing(t *testing.T) {
 		t.Errorf("the error should name the missing blob, got %v", err)
 	}
 	if reg.TagDigest("mirror/suite", "v1.0.0") != "" {
-		t.Error("the tag was applied despite the push failing — a consumer would see a broken release")
+		t.Error("the tag was applied despite the push failing - a consumer would see a broken release")
 	}
 }
 
@@ -238,7 +238,7 @@ func TestTagPointsAtExistingContent(t *testing.T) {
 }
 
 // Resumption is deliberately unimplemented, and reports itself as such rather
-// than pretending. The caller's fallback — restart the blob — is always correct
+// than pretending. The caller's fallback - restart the blob - is always correct
 // because blobs are content-addressed.
 func TestResumeUploadReportsUnsupported(t *testing.T) {
 	reg := fakeregistry.New()
@@ -307,7 +307,7 @@ func referencedDigests(t *testing.T, raw []byte) []registry.Digest {
 // retryable on the reasonable theory that an uncategorised failure is more
 // likely transient than permanent. For a manifest the destination rejects, that
 // theory costs eight full round trips per manifest and ends exactly where it
-// started — which on a bundle of five hundred manifests over a slow link is the
+// started - which on a bundle of five hundred manifests over a slow link is the
 // difference between a failure and an afternoon.
 func TestARejectedManifestIsNotTreatedAsATransientFault(t *testing.T) {
 	reg := fakeregistry.New()
@@ -338,7 +338,7 @@ func TestARejectedManifestIsNotTreatedAsATransientFault(t *testing.T) {
 	// And the operator has to be able to see WHY without opening a debugger.
 	for _, want := range []string{"400", "manifest invalid", "schema version"} {
 		if !strings.Contains(strings.ToLower(err.Error()), want) {
-			t.Errorf("error %q does not carry %q — what the registry actually said", err, want)
+			t.Errorf("error %q does not carry %q - what the registry actually said", err, want)
 		}
 	}
 }

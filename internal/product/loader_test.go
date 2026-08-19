@@ -12,7 +12,7 @@ import (
 // name, so two products built from it never collide.
 //
 // A physical repository belongs to exactly one product (docs/design/03 §4), so
-// a shared fixture with hard-coded paths would be rejected — correctly — the
+// a shared fixture with hard-coded paths would be rejected - correctly - the
 // moment a test used it twice.
 const validDocTemplate = `
 apiVersion: softwaregateway.io/v1alpha1
@@ -202,7 +202,7 @@ func TestRegistryRetainsPreviousVersionOnInvalidReload(t *testing.T) {
 		t.Fatal("expected the product to load")
 	}
 
-	// A VALIDATION failure — the document parses, so the name is known.
+	// A VALIDATION failure - the document parses, so the name is known.
 	rewriteAndReload(t, dir, "a.yaml",
 		doc("vendor-a")+"\n  autoDownload:\n    enabled: true\n    rules:\n      - name: r\n        tagPattern: '^v('\n", reg)
 
@@ -217,7 +217,7 @@ func TestRegistryRetainsPreviousVersionOnInvalidReload(t *testing.T) {
 func TestRegistryRetainsPreviousVersionWhenFileNoLongerParses(t *testing.T) {
 	// The harder case: the document fails to PARSE, so it yields no product
 	// name at all. Without file-to-name tracking the product would be silently
-	// dropped — a stray syntax error would stop replication rather than merely
+	// dropped - a stray syntax error would stop replication rather than merely
 	// failing to apply.
 	dir := t.TempDir()
 	reg := NewRegistry()
@@ -308,7 +308,7 @@ func TestDefaultTargetResolution(t *testing.T) {
 
 func TestRejectsRepositoryClaimedByAnotherProduct(t *testing.T) {
 	// Cross-product enforcement of the same rule. The second file loses, and
-	// the first still loads — fail-closed per product.
+	// the first still loads - fail-closed per product.
 	shared := `
 apiVersion: softwaregateway.io/v1alpha1
 kind: Product
@@ -349,7 +349,7 @@ spec:
 
 // The superseded blocks are still in live ConfigMaps. Silently ignoring a
 // number someone deliberately set would be worse than either honouring it or
-// rejecting it, so they are folded forward — and said out loud.
+// rejecting it, so they are folded forward - and said out loud.
 func TestLegacyRateLimitsAreFoldedForward(t *testing.T) {
 	const legacy = `
 apiVersion: softwaregateway.io/v1alpha1

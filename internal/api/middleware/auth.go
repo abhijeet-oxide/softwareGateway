@@ -17,7 +17,7 @@ import (
 //	AnonymousAuthenticator with a real one.
 //
 // This file exists so that enabling authentication later is ONE middleware and
-// a config block — no route changes, no handler changes, no schema changes:
+// a config block - no route changes, no handler changes, no schema changes:
 //
 //   - the middleware slot is already occupied and correctly positioned;
 //   - handlers already read an Identity from the context;
@@ -51,7 +51,7 @@ type Identity struct {
 
 	// Tenant is which tenant this caller belongs to. Empty means the estate,
 	// which is every deployment today. Added before tenancy exists because a
-	// field is free to carry and a signature change is not — see scope.go.
+	// field is free to carry and a signature change is not - see scope.go.
 	Tenant string
 	// Grants are scoped permissions, consulted by Can before Roles. Empty
 	// today: the anonymous identity holds admin and needs none.
@@ -126,7 +126,7 @@ func Auth(a Authenticator, writeUnauthenticated func(http.ResponseWriter, *http.
 // IdentityFrom returns the caller's identity.
 //
 // Falls back to Anonymous rather than the zero value so that a handler reached
-// without the middleware — in a unit test, say — still has a usable subject
+// without the middleware - in a unit test, say - still has a usable subject
 // for audit rather than writing an empty actor.
 func IdentityFrom(ctx context.Context) Identity {
 	if id, ok := ctx.Value(ctxKeyIdentity{}).(Identity); ok {

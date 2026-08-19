@@ -1,13 +1,13 @@
 // Package v1 is the public API surface of softwareGateway.
 //
 // This is the ONLY package outside internal/. It is what transferctl uses and
-// what a third-party integration would import — a compile-time commitment to
+// what a third-party integration would import - a compile-time commitment to
 // the contract in docs/design/09-api.md, rather than a convention.
 //
 // Conventions (docs/design/09-api.md section 1):
 //   - lowerCamelCase JSON field names (AIP-140)
 //   - SCREAMING_SNAKE_CASE enum values (AIP-126)
-//   - int64 serialized as STRING (AIP-141) — see the note on Int64String
+//   - int64 serialized as STRING (AIP-141) - see the note on Int64String
 //   - RFC 3339 UTC timestamps
 package v1
 
@@ -19,7 +19,7 @@ const APIVersion = "v1"
 // Int64String carries a 64-bit quantity over JSON as a string.
 //
 // JSON numbers are IEEE-754 doubles and lose precision above 2^53. Byte counts
-// here already reach 10^11, so a plain int64 would be silently rounded — rare
+// here already reach 10^11, so a plain int64 would be silently rounded - rare
 // enough to survive testing, routine enough to corrupt production reporting.
 // AIP-141 requires the string form for exactly this reason.
 type Int64String string
@@ -53,7 +53,7 @@ const (
 
 // HealthCheckResponse is returned by GET /api/v1/system:healthCheck.
 //
-// This is the DEEP check — it validates connectivity to every configured
+// This is the DEEP check - it validates connectivity to every configured
 // dependency and may be slow. It is deliberately not what Kubernetes polls:
 // see docs/design/09-api.md section 9.1.
 type HealthCheckResponse struct {
@@ -102,7 +102,7 @@ type Product struct {
 	Labels      map[string]string `json:"labels,omitempty"`
 
 	// Enabled reports whether the product runs. A disabled product is still
-	// loaded, validated and listed — it simply does nothing.
+	// loaded, validated and listed - it simply does nothing.
 	Enabled bool `json:"enabled"`
 
 	Sources []Repository `json:"sources"`
@@ -143,7 +143,7 @@ type Repository struct {
 	// from anywhere else, and a client that cannot tell them apart cannot say
 	// whether a release has shipped.
 	Environment string `json:"environment,omitempty"`
-	// Vendor is the publishing convention a SOURCE follows — `near`, or empty
+	// Vendor is the publishing convention a SOURCE follows - `near`, or empty
 	// for a conformant registry. Separate from Type, which is how to speak to
 	// the registry: protocol and publishing convention vary independently.
 	Vendor        string      `json:"vendor,omitempty"`
@@ -167,7 +167,7 @@ type Discovery struct {
 	ExcludePatterns []string `json:"excludePatterns,omitempty"`
 }
 
-// Concurrency is the RESOLVED limit in force for one registry — the product's
+// Concurrency is the RESOLVED limit in force for one registry - the product's
 // override if it has one, otherwise the application-level default. Never the
 // raw document value, so a client reading this sees what is actually happening
 // rather than what was written down.
@@ -176,7 +176,7 @@ type Discovery struct {
 // replica count and flatten a vendor registry the moment HPA scaled out.
 type Concurrency struct {
 	// PerRegistry is requests in flight against this registry, which is also the
-	// connection pool size — they are the same limit.
+	// connection pool size - they are the same limit.
 	PerRegistry int `json:"perRegistry"`
 	// RequestsPerSecond is an optional politeness ceiling. Zero means none.
 	RequestsPerSecond int `json:"requestsPerSecond,omitempty"`
@@ -259,7 +259,7 @@ const (
 	JobPending   JobState = "PENDING"
 	JobLeased    JobState = "LEASED"
 	JobSucceeded JobState = "SUCCEEDED"
-	// JobSkipped means the content was already present or was mounted — a
+	// JobSkipped means the content was already present or was mounted - a
 	// first-class success carrying zero bytes, not an exception.
 	JobSkipped   JobState = "SKIPPED"
 	JobFailed    JobState = "FAILED"
@@ -290,7 +290,7 @@ const (
 
 // Package is the API view of a discovered software package.
 //
-// Identity is (source repository, tag, manifest digest) — the digest is part of
+// Identity is (source repository, tag, manifest digest) - the digest is part of
 // it, which is why a re-pushed tag produces a second Package rather than
 // mutating the first (docs/design/01 §2.2).
 type Package struct {
@@ -305,12 +305,12 @@ type Package struct {
 
 	// TotalBytes counts each distinct digest ONCE. A fat index whose platforms
 	// share a base layer transfers that layer once, so summing naively would
-	// overstate the cost — sometimes several-fold.
+	// overstate the cost - sometimes several-fold.
 	//
 	// OMITTED when not yet measured, which is the case for a package whose root
 	// is an index: discovery records what the index lists without fetching it,
 	// so the layer bytes underneath are unknown until a transfer walks the
-	// tree. Absent rather than zero — a wrong size is worse than a missing one,
+	// tree. Absent rather than zero - a wrong size is worse than a missing one,
 	// because nobody questions a number.
 	TotalBytes *Int64String `json:"totalBytes,omitempty"`
 	// ArtifactCount is always known: it is the root plus whatever its index
@@ -323,7 +323,7 @@ type Package struct {
 	DiscoveredAt string `json:"discoveredAt"`
 	// PublishedAt is when the VENDOR says it was built, from the standard
 	// org.opencontainers.image.created annotation. A claim, not an observation
-	// — and omitted entirely when the publisher set none, which the OCI spec
+	// - and omitted entirely when the publisher set none, which the OCI spec
 	// permits.
 	//
 	// Kept separate from DiscoveredAt rather than folded into one "date",
@@ -336,7 +336,7 @@ type Package struct {
 	// supersede each other.
 	SupersededBy string `json:"supersededBy,omitempty"`
 
-	// AccessoryOf names the package this row is PART OF — a signature or a
+	// AccessoryOf names the package this row is PART OF - a signature or a
 	// wrapper the vendor publishes as its own tag.
 	//
 	// Empty for an ordinary package, and empty for every package discovered
@@ -353,7 +353,7 @@ type Package struct {
 	SourceRepository string `json:"sourceRepository,omitempty"`
 
 	// DisplayRepository is SourceRepository with the vendor's structural noise
-	// removed — `cfx-5000-k8s` for NEAR's `orbs/cfx-5000-k8s`.
+	// removed - `cfx-5000-k8s` for NEAR's `orbs/cfx-5000-k8s`.
 	//
 	// Empty when no shortening applies, which is what a source with no `vendor`
 	// set gets, and therefore what any conformant registry gets. Cosmetic only:
@@ -371,7 +371,7 @@ type Package struct {
 	// is why TotalBytes and BlobCount are absent.
 	ExpandedAt string `json:"expandedAt,omitempty"`
 	// AnalysisState is "analyzing" while a walk is in flight and "failed" when
-	// the last one gave up. Empty otherwise — `expandedAt` is what says a walk
+	// the last one gave up. Empty otherwise - `expandedAt` is what says a walk
 	// succeeded.
 	//
 	// Three states because `expandedAt` has two, and a release being walked
@@ -388,11 +388,11 @@ type Package struct {
 	// none" and "nobody looked" are the same value in a boolean and completely
 	// different facts when the question is whether to trust something. UNKNOWN
 	// is what a source whose layout does not attempt signature discovery
-	// reports — honestly, rather than claiming a confident UNSIGNED.
+	// reports - honestly, rather than claiming a confident UNSIGNED.
 	SignatureStatus SignatureStatus `json:"signatureStatus,omitempty"`
 
 	// Related are artifacts that belong to this package without living inside
-	// its manifest tree — its signature, an SBOM, an attestation, or the
+	// its manifest tree - its signature, an SBOM, an attestation, or the
 	// wrapper that bundles them.
 	Related []RelatedArtifact `json:"related,omitempty"`
 
@@ -403,7 +403,7 @@ type Package struct {
 	//
 	// It is where a package's transfer HISTORY lives, and deliberately not a
 	// state on the package itself. "Transferred" is a fact about a package and
-	// ONE target — with four targets there are four answers, and a single
+	// ONE target - with four targets there are four answers, and a single
 	// column could hold at most one of them and would be wrong the moment a
 	// fifth target was configured.
 	Transfers []PackageTransfer `json:"transfers,omitempty"`
@@ -430,7 +430,7 @@ const (
 // RelatedArtifact is one artifact attached to a package.
 //
 // Role is vendor-neutral: SIGNATURE, never NOKIA_SIGNATURE. Which mechanism
-// found it — the referrers API, a cosign tag, a wrapper index — is an
+// found it - the referrers API, a cosign tag, a wrapper index - is an
 // implementation detail of the source's layout and deliberately not on the
 // wire, so a vendor changing convention changes no client.
 type RelatedArtifact struct {
@@ -441,7 +441,7 @@ type RelatedArtifact struct {
 	SizeBytes Int64String `json:"sizeBytes,omitempty"`
 
 	// The MATERIAL, for a signature: Digest above names the manifest that
-	// carries it, and these name what is inside — the blob a verifier reads.
+	// carries it, and these name what is inside - the blob a verifier reads.
 	// For NEAR that is one layer of `application/pkcs7-signature`.
 	//
 	// Absent until the package has been inspected: the manifest has to be
@@ -454,7 +454,7 @@ type RelatedArtifact struct {
 	// a client reads vendor keys this API has never heard of.
 	Annotations map[string]string `json:"annotations,omitempty"`
 	// ResolvedAt is when the material was last confirmed. Empty means nobody has
-	// inspected this package — which is a different fact from a signature that
+	// inspected this package - which is a different fact from a signature that
 	// carries no blob.
 	ResolvedAt string `json:"resolvedAt,omitempty"`
 }
@@ -473,22 +473,22 @@ type Artifact struct {
 	Digest       string `json:"digest"`
 	MediaType    string `json:"mediaType"`
 	ArtifactType string `json:"artifactType,omitempty"`
-	// SizeBytes is what the referencing descriptor says this MANIFEST weighs —
+	// SizeBytes is what the referencing descriptor says this MANIFEST weighs -
 	// a few kilobytes of JSON. It is the right number for planning a manifest
 	// push and the wrong one for "how big is this image".
 	SizeBytes Int64String `json:"sizeBytes"`
 	// ContentBytes is what the artifact weighs: manifest, config and layers.
 	//
 	// Omitted for an artifact nobody has walked, because until then its blobs
-	// are unknown — which is not the same as its weighing nothing, and Fetched
+	// are unknown - which is not the same as its weighing nothing, and Fetched
 	// is what tells the two apart. Summing SizeBytes instead reported a
 	// nine-hundred-megabyte image as two kilobytes.
 	ContentBytes Int64String `json:"contentBytes,omitempty"`
 	// Kind is what this artifact IS, in the words somebody uses: index, image,
 	// chart, file, signature, artifact.
 	//
-	// Derived rather than stored, from the OCI fields and — where the source
-	// declares a vendor layout — from the vendor's own annotations. Both are
+	// Derived rather than stored, from the OCI fields and - where the source
+	// declares a vendor layout - from the vendor's own annotations. Both are
 	// needed: an index's children are recorded from what the index LISTED
 	// without fetching each one, so the config media type that normally
 	// separates a Helm chart from an image is not available, and a vendor whose
@@ -504,7 +504,7 @@ type Artifact struct {
 	Depth int `json:"depth"`
 	// Annotations is the artifact's annotation map, verbatim.
 	//
-	// Kept whole so a vendor's own keys — com.nokia.ncd.orb.type, say — reach
+	// Kept whole so a vendor's own keys - com.nokia.ncd.orb.type, say - reach
 	// a caller without this API knowing they exist. The standard
 	// org.opencontainers.* keys are in here too; only `created` is also
 	// promoted to a column, because only it is worth sorting by.
@@ -520,8 +520,8 @@ type Artifact struct {
 	//
 	// A separate axis from Fetched, and only false-with-Fetched-true is
 	// interesting: it means the body was reclaimed by the manifest-cache
-	// sweeper. Nothing is lost — the artifact, its blobs and its size are all
-	// still recorded — but pushing it would re-read it from the source. See
+	// sweeper. Nothing is lost - the artifact, its blobs and its size are all
+	// still recorded - but pushing it would re-read it from the source. See
 	// store.SweepManifestCache.
 	Cached bool `json:"cached"`
 }
@@ -531,7 +531,7 @@ type Artifact struct {
 // Wait decides whether the CALLER waits. Walking a real release is hundreds of
 // round trips against a vendor registry and minutes of them, and a caller that
 // waits owns a problem: navigating away, or any intermediary's idle timeout,
-// cancels the request — and with it the walk, leaving the release claimed by
+// cancels the request - and with it the walk, leaving the release claimed by
 // nobody and marked as being analysed.
 //
 // So an interface asks with `wait: false`: the walk is handed to the same
@@ -546,7 +546,7 @@ type InspectPackageRequest struct {
 // InspectPackageResponse reports what expanding a package found.
 //
 // Discovery stops at the tag's own manifest, so a package's transfer size is
-// unknown until something walks the tree. This is that something — and it is
+// unknown until something walks the tree. This is that something - and it is
 // the same walk a transfer performs, so the numbers here are the numbers a
 // transfer will move.
 type InspectPackageResponse struct {
@@ -565,7 +565,7 @@ type InspectPackageResponse struct {
 	// CachedManifests and CachedBytes describe how much of this package's
 	// manifest bodies are still held locally, out of Artifacts.
 	//
-	// The bodies are an evictable cache with a budget, not part of the record —
+	// The bodies are an evictable cache with a budget, not part of the record -
 	// what a package IS gets kept forever, what it was SERVED AS gets reclaimed
 	// when the cache fills. Reported so the difference is visible rather than
 	// discovered when a transfer takes longer than expected. Neither number
@@ -573,7 +573,7 @@ type InspectPackageResponse struct {
 	CachedManifests int         `json:"cachedManifests"`
 	CachedBytes     Int64String `json:"cachedBytes,omitempty"`
 	// SignatureResolved is how many signature relations had their material
-	// recorded — the blob a verifier reads, captured while the tree was in hand.
+	// recorded - the blob a verifier reads, captured while the tree was in hand.
 	SignatureResolved int `json:"signatureResolved,omitempty"`
 
 	// Started reports that the walk was HANDED OFF rather than performed, so
@@ -623,8 +623,8 @@ func (r DiscoverPackagesRequest) ShouldWait() bool { return r.Wait == nil || *r.
 
 // DiscoverPackagesResponse reports what a triggered scan did.
 //
-// Returned synchronously by default because a scan is usually bounded work —
-// one HEAD per tag — and an operator triggering it after a vendor announcement
+// Returned synchronously by default because a scan is usually bounded work -
+// one HEAD per tag - and an operator triggering it after a vendor announcement
 // wants the answer, not a job ID to poll. `wait: false` opts out when the
 // registry is slow enough to make that a bad trade.
 type DiscoverPackagesResponse struct {
@@ -648,7 +648,7 @@ type DiscoverPackagesResponse struct {
 	// exactly once after that field is edited.
 	Renamed int `json:"renamed,omitempty"`
 	// Regrouped counts EXISTING packages re-grouped under a newly declared
-	// vendor — gaining their signature status, their related artifacts and their
+	// vendor - gaining their signature status, their related artifacts and their
 	// transfer root. Same shape as Renamed: zero always, except on the one scan
 	// that follows the edit.
 	Regrouped  int   `json:"regrouped,omitempty"`
@@ -668,7 +668,7 @@ type DiscoverPackagesResponse struct {
 
 	// Collapsed reports that a scan was ALREADY RUNNING when this request
 	// arrived, so these numbers come from that scan rather than one this call
-	// started. The data is real either way — the request waited for it — but the
+	// started. The data is real either way - the request waited for it - but the
 	// two are different facts and the caller is told which one it got.
 	Collapsed bool `json:"collapsed,omitempty"`
 
@@ -682,7 +682,7 @@ type ScanIssue struct {
 	Repository string `json:"repository,omitempty"`
 	Tag        string `json:"tag,omitempty"`
 	// DisplayRepository and DisplayTag are the VENDOR's names for the same two
-	// things — `cfx-5000-k8s` and `24.7.1186` where the paths are
+	// things - `cfx-5000-k8s` and `24.7.1186` where the paths are
 	// `orbs/cfx-5000-k8s` and `orb_24.7.1186`.
 	DisplayRepository string `json:"displayRepository,omitempty"`
 	DisplayTag        string `json:"displayTag,omitempty"`
@@ -706,14 +706,14 @@ type ScanVocabulary struct {
 // CompareRequest is POST /api/v1/products/{product}/packages/{package}:compare.
 //
 // The package in the path is the FIRST end. Everything here names the second,
-// and every field is optional: the common case — "did this land at my default
-// destination?" — is an empty body.
+// and every field is optional: the common case - "did this land at my default
+// destination?" - is an empty body.
 type CompareRequest struct {
 	// From and To are configured source or target names. An empty From means
 	// the repository the package was discovered in.
 	From string `json:"from,omitempty"`
 	To   string `json:"to,omitempty"`
-	// Against is a second package reference — a tag or a digest — making this a
+	// Against is a second package reference - a tag or a digest - making this a
 	// comparison of two VERSIONS rather than of two places. Combined with a
 	// From and To that name the same endpoint, it answers "what changed in this
 	// release"; combined with two different ones, it answers both at once.
@@ -722,8 +722,8 @@ type CompareRequest struct {
 	//
 	// It bounded how much layer CONTENT a comparison could download to say
 	// which files changed rather than which layers. Nothing is downloaded any
-	// more — an artifact's manifest already names its files and states their
-	// digests — so there is no cost to bound. Kept on the wire so an older
+	// more - an artifact's manifest already names its files and states their
+	// digests - so there is no cost to bound. Kept on the wire so an older
 	// client's request is still a valid request.
 	FileBudgetBytes int64 `json:"fileBudgetBytes,omitempty"`
 	// ProgressToken is a caller-minted id it can poll for progress while this
@@ -736,7 +736,7 @@ type CompareRequest struct {
 
 // PackageFile is one named file inside a release.
 type PackageFile struct {
-	// Path is the publisher's own name for it — `CONFIGURATION/nodes.json`.
+	// Path is the publisher's own name for it - `CONFIGURATION/nodes.json`.
 	Path string `json:"path"`
 	// Component is the artifact it came from, by the name the release gives
 	// that artifact.
@@ -752,7 +752,7 @@ type PackageFile struct {
 // What is INSIDE a release, as files rather than as layers.
 type ListPackageFilesResponse struct {
 	Files []PackageFile `json:"files"`
-	// OpaqueLayers is how many layers carry no name of their own — image
+	// OpaqueLayers is how many layers carry no name of their own - image
 	// layers, which are archives of an unknown number of paths. They are not
 	// listed, and saying how many there are is what stops the list reading as
 	// the whole of a release's content.
@@ -794,7 +794,7 @@ type PackageFileContentResponse struct {
 
 // CompareProgressSide is one end's position in a comparison.
 type CompareProgressSide struct {
-	// Key is which end this is — "a" or "b". The label is not an identity: the
+	// Key is which end this is - "a" or "b". The label is not an identity: the
 	// two sides of a version comparison are the same place and share it.
 	Key   string `json:"key"`
 	Side  string `json:"side"`
@@ -838,7 +838,7 @@ type CompareResponse struct {
 	OnlyB   int `json:"onlyB"`
 
 	// ExtraTagsA and ExtraTagsB are tags in each side's bundle repository that
-	// the bundle does not account for — content nobody in this comparison put
+	// the bundle does not account for - content nobody in this comparison put
 	// there.
 	ExtraTagsA []string `json:"extraTagsA,omitempty"`
 	ExtraTagsB []string `json:"extraTagsB,omitempty"`
@@ -871,7 +871,7 @@ type CompareRow struct {
 	// Differences states each disagreement as a fact. Empty when the two sides
 	// agree.
 	Differences []string `json:"differences,omitempty"`
-	// Files is the account of the NAMED FILES inside this component — the
+	// Files is the account of the NAMED FILES inside this component - the
 	// answer to "which configuration changed", which "two layers changed"
 	// cannot give.
 	//
@@ -890,7 +890,7 @@ type CompareRow struct {
 // reader looking at a changed file wants what it was and what it is.
 type CompareFile struct {
 	Path string `json:"path"`
-	// Verdict is same | changed | only-a | only-b — the same vocabulary the
+	// Verdict is same | changed | only-a | only-b - the same vocabulary the
 	// component rows use.
 	Verdict string      `json:"verdict"`
 	SizeA   Int64String `json:"sizeA,omitempty"`
@@ -931,7 +931,7 @@ type UnavailablePackage struct {
 	DisplayRepository string `json:"displayRepository,omitempty"`
 	DisplayTag        string `json:"displayTag,omitempty"`
 	Reason            string `json:"reason"`
-	// Detail is what the registry itself said — the sentence naming the
+	// Detail is what the registry itself said - the sentence naming the
 	// customer and the product, which is what somebody takes to their account
 	// manager.
 	Detail      string `json:"detail,omitempty"`
@@ -1013,7 +1013,7 @@ type DiscoverySourceState struct {
 
 	TagsTotal    int `json:"tagsTotal,omitempty"`
 	TagsResolved int `json:"tagsResolved,omitempty"`
-	// TagsChecked is how many tags have been resolved to a digest — one HEAD
+	// TagsChecked is how many tags have been resolved to a digest - one HEAD
 	// each, and the bulk of a scan. It moves continuously; TagsResolved does
 	// not, and a bar built on the wrong one sits still through the longest
 	// part of every scan.
@@ -1023,7 +1023,7 @@ type DiscoverySourceState struct {
 	// once the first has decided it.
 	TagsToFetch int `json:"tagsToFetch,omitempty"`
 	TagsFetched int `json:"tagsFetched,omitempty"`
-	// TagsInFlight is how many tags are being read RIGHT NOW — the configured
+	// TagsInFlight is how many tags are being read RIGHT NOW - the configured
 	// concurrency actually being used, and when it sits at one, that it is not.
 	TagsInFlight int `json:"tagsInFlight,omitempty"`
 
@@ -1031,7 +1031,7 @@ type DiscoverySourceState struct {
 	//
 	// ONE number for the whole scan, not one per phase. The counters above are
 	// in three different units and a caller that drew a bar from whichever one
-	// was live would draw a bar that filled, reset and filled again — which is
+	// was live would draw a bar that filled, reset and filled again - which is
 	// what this replaced. The server puts the phases on one scale and keeps the
 	// result monotonic, so the bar only ever moves forward.
 	//
@@ -1044,7 +1044,7 @@ type DiscoverySourceState struct {
 	Artifacts int `json:"artifacts,omitempty"`
 	// Packages is releases recorded by this scan so far, and NewPackages the
 	// subset nobody had seen. Both counted as they are written rather than at
-	// the end — "is it finding anything?" is asked while it is still looking.
+	// the end - "is it finding anything?" is asked while it is still looking.
 	Packages    int `json:"packages,omitempty"`
 	NewPackages int `json:"newPackages,omitempty"`
 	Errors      int `json:"errors,omitempty"`
@@ -1109,7 +1109,7 @@ type ProductCheck struct {
 // working?" and backs readiness; if a vendor's outage made it fail, a vendor's
 // bad afternoon would pull our pods out of service, and an operator could not
 // tell whose fault an unhealthy reading was. This answers a different
-// question — "is my configuration correct?" — makes real calls to third
+// question - "is my configuration correct?" - makes real calls to third
 // parties, and is run on demand.
 type CheckConnectivityResponse struct {
 	Status   CheckStatus    `json:"status"`
@@ -1130,7 +1130,7 @@ type CheckConnectivityResponse struct {
 // four images belongs to all four, so any such total either counts it four
 // times or picks an owner. The transfer's own byte totals answer that.
 //
-// SavedBytes and CopiedBytes answer something else — which JOBS were skipped
+// SavedBytes and CopiedBytes answer something else - which JOBS were skipped
 // and which ran. A blob is one job however many components reference it, so
 // these partition the transfer's bytes exactly: every byte counted once, and
 // the parts add up to the whole. The only softness is which component a shared
@@ -1141,7 +1141,7 @@ type ContentGroup struct {
 	Kind  string `json:"kind"`
 	Total int    `json:"total"`
 	// Copied is what this transfer actually pushed. Present is what the
-	// destination already held — the pair that makes a delta transfer legible.
+	// destination already held - the pair that makes a delta transfer legible.
 	Copied  int `json:"copied"`
 	Present int `json:"present"`
 	// Failed is components with a job that has given up; Outstanding is
@@ -1181,8 +1181,8 @@ type PackageTransfer struct {
 // asked about one transfer.
 //
 // It exists because the outstanding count mixes three populations that behave
-// completely differently — runnable, waiting out a backoff, and GATED behind a
-// wave that has not drained — and only the last one explains an idle fleet.
+// completely differently - runnable, waiting out a backoff, and GATED behind a
+// wave that has not drained - and only the last one explains an idle fleet.
 type TransferWave struct {
 	Wave int `json:"wave"`
 	// Kind is blob, manifest, or mixed. Blobs are wave 0 and manifests are the
@@ -1194,7 +1194,7 @@ type TransferWave struct {
 	Total   int `json:"total"`
 	Done    int `json:"done"`
 	Running int `json:"running"`
-	// Pending is leasable NOW. Waiting is pending behind a retry backoff — the
+	// Pending is leasable NOW. Waiting is pending behind a retry backoff - the
 	// same state column, an entirely different situation.
 	Pending int `json:"pending"`
 	Waiting int `json:"waiting"`
@@ -1213,7 +1213,7 @@ type TransferWave struct {
 //
 // Every field here already crossed the wire on a lease or a heartbeat and was
 // read for one decision and dropped. Recording it is what lets `health` answer
-// "are the workers up, and what are they doing" — a question that previously
+// "are the workers up, and what are they doing" - a question that previously
 // had no route at all.
 type Worker struct {
 	WorkerID string `json:"workerId"`
@@ -1229,7 +1229,7 @@ type Worker struct {
 	// is about to report completions nobody will accept.
 	LeasedJobs int `json:"leasedJobs"`
 	// State is ACTIVE, DRAINING or STALE. Stale is derived from the heartbeat
-	// rather than announced — a worker that was killed never got to say so.
+	// rather than announced - a worker that was killed never got to say so.
 	State         string `json:"state"`
 	LastHeartbeat string `json:"lastHeartbeat,omitempty"`
 }
@@ -1259,8 +1259,8 @@ type TransferRetry struct {
 	TransferID string `json:"transferId"`
 	Requeued   int    `json:"requeued"`
 	// Reblocked is how many jobs failed only because something they depend on
-	// failed. Those go back to WAITING rather than to running — their
-	// dependency is being requeued, not satisfied — and they are counted apart
+	// failed. Those go back to WAITING rather than to running - their
+	// dependency is being requeued, not satisfied - and they are counted apart
 	// because "forty jobs requeued" when thirty-eight were consequences of two
 	// overstates what actually broke.
 	Reblocked int    `json:"reblocked,omitempty"`
@@ -1338,7 +1338,7 @@ type CalibrationSide struct {
 	LargestSampleBytes Int64String `json:"largestSampleBytes,omitempty"`
 
 	Levels []CalibrationLevel `json:"levels,omitempty"`
-	// Knee is the smallest concurrency within a tenth of the best measured —
+	// Knee is the smallest concurrency within a tenth of the best measured -
 	// the level worth configuring.
 	Knee int `json:"knee,omitempty"`
 	// StillClimbing means the sweep ended before the path did.
@@ -1392,7 +1392,7 @@ type CalibrationSuggestion struct {
 // ---------------------------------------------------------------------------
 //
 // Workers speak only to these types. They hold no database credentials, so
-// everything needed to execute a job travels in the lease response — except
+// everything needed to execute a job travels in the lease response - except
 // the credential itself, which travels as a NAME the worker resolves against
 // its own projected secret volume. No secret is ever serialized here.
 //
@@ -1450,7 +1450,7 @@ type LeasedJob struct {
 	// This is what stops a bundle's components costing twice their size: they
 	// are published both inside the bundle and under their own name, and
 	// without this the second copy re-fetched every byte from the vendor.
-	// Advisory — a registry that declines the mount just streams.
+	// Advisory - a registry that declines the mount just streams.
 	MountFromRepository string `json:"mountFromRepository,omitempty"`
 	// Tags are what this manifest must be called at the destination, resolved
 	// at planning time from the source's own reference annotations. Empty for
@@ -1501,7 +1501,7 @@ type CompleteRequest struct {
 // CompleteResponse tells the worker what its report did.
 type CompleteResponse struct {
 	// Applied is false when the lease had already expired and the result was
-	// discarded. Not an error — the expected outcome of finishing late.
+	// discarded. Not an error - the expected outcome of finishing late.
 	Applied       bool          `json:"applied"`
 	TransferState TransferState `json:"transferState,omitempty"`
 	WaveAdvanced  bool          `json:"waveAdvanced,omitempty"`
@@ -1518,7 +1518,7 @@ type HeartbeatRequest struct {
 // HeartbeatResponse carries lease renewal and cancellation in one call.
 type HeartbeatResponse struct {
 	// LeasesRenewed is what the worker still holds. A job MISSING from this
-	// list has been lost — reaped and possibly redone elsewhere — and must be
+	// list has been lost - reaped and possibly redone elsewhere - and must be
 	// abandoned rather than completed.
 	LeasesRenewed []string `json:"leasesRenewed"`
 	// CancelledJobIDs is how cancellation reaches a worker: there is no push
@@ -1543,11 +1543,11 @@ type Transfer struct {
 	// under the same tag in every repository the product watches, which for a
 	// real product is ten of them. A consumer joining a transfer listing to a
 	// package listing on (product, tag) therefore lights up ten packages for
-	// one download — which is exactly what the software page did, reporting
+	// one download - which is exactly what the software page did, reporting
 	// twenty releases as DOWNLOADING when two were.
 	PackageID string `json:"packageId,omitempty"`
 	Tag       string `json:"tag"`
-	// DisplayTag is Tag with the vendor's structural noise removed — `25.7.2131`
+	// DisplayTag is Tag with the vendor's structural noise removed - `25.7.2131`
 	// for NEAR's `orb_25.7.2131`. Empty where no shortening applies, which is
 	// every source declaring no `vendor`. Cosmetic: Tag is the identity, and
 	// both spellings resolve as input.
@@ -1568,7 +1568,7 @@ type Transfer struct {
 	//
 	// It is the field every byte column has to be read against. For anything
 	// but `copy` the progress numbers below are structurally zero, and that is
-	// not "nothing happened" — it is "we did not move those bytes and cannot
+	// not "nothing happened" - it is "we did not move those bytes and cannot
 	// count them". A client that renders a percentage from them is inventing
 	// one (docs/design/18 §6.1).
 	Strategy string `json:"strategy,omitempty"`
@@ -1585,7 +1585,7 @@ type Transfer struct {
 
 	// Waves is the per-wave breakdown, on a single transfer only.
 	Waves []TransferWave `json:"waves,omitempty"`
-	// Content is what the transfer is made OF — images, charts, files — and how
+	// Content is what the transfer is made OF - images, charts, files - and how
 	// each of them went. On a single transfer only, for the same reason as
 	// Waves: it is a second table per row, and the question is always asked
 	// about one transfer.
@@ -1600,8 +1600,8 @@ type Transfer struct {
 
 // TransferProgress is what has happened so far, and what was planned.
 type TransferProgress struct {
-	// ContentBytes is the size of the RELEASE — every distinct digest counted
-	// once — which is not PlannedBytes and is not meant to be.
+	// ContentBytes is the size of the RELEASE - every distinct digest counted
+	// once - which is not PlannedBytes and is not meant to be.
 	//
 	// A component is published inside its bundle AND under its own name, and a
 	// registry stores blobs per repository, so one blob landing in two
@@ -1616,7 +1616,7 @@ type TransferProgress struct {
 	JobsOutstanding int `json:"jobsOutstanding"`
 
 	// JobsInFlight is how many are being worked on RIGHT NOW, across Workers
-	// distinct workers. Concurrency is otherwise invisible — a page of jobs
+	// distinct workers. Concurrency is otherwise invisible - a page of jobs
 	// shows whichever sort to the top, and sixteen-way parallelism looks
 	// exactly like one-at-a-time.
 	JobsInFlight int `json:"jobsInFlight"`
@@ -1640,7 +1640,7 @@ type TransferProgress struct {
 	// is the only thing that makes a done count go DOWN, and progress that
 	// moves backwards with no explanation reads as a broken tool.
 	JobsRepaired int `json:"jobsRepaired,omitempty"`
-	// OutstandingBytes is what is actually left to move — the size of every job
+	// OutstandingBytes is what is actually left to move - the size of every job
 	// still to run, less what each has already sent. NOT planned minus
 	// transferred, which counts bytes that will never move.
 	OutstandingBytes Int64String `json:"outstandingBytes,omitempty"`
@@ -1650,7 +1650,7 @@ type TransferProgress struct {
 	QuietestInFlight string `json:"quietestInFlight,omitempty"`
 	// Skips is what the transfer did not move, by reason. "Done" is four
 	// different claims wearing one word, and only some of them are evidence
-	// that bytes reached the destination — see SkipBreakdown.
+	// that bytes reached the destination - see SkipBreakdown.
 	Skips []SkipBreakdown `json:"skips,omitempty"`
 
 	PlannedBytes     Int64String `json:"plannedBytes"`
@@ -1663,7 +1663,7 @@ type TransferProgress struct {
 	// at the destination, or the registry relocated it internally.
 	SkippedBytes Int64String `json:"skippedBytes,omitempty"`
 	// ContentMovedBytes and ContentPresentBytes are the byte account over
-	// DISTINCT content — each piece weighed once, however many repositories it
+	// DISTINCT content - each piece weighed once, however many repositories it
 	// has to reach.
 	//
 	// The figures above are per (repository, digest), which is right for
@@ -1679,7 +1679,7 @@ type TransferProgress struct {
 	ContentMovedBytes   Int64String `json:"contentMovedBytes,omitempty"`
 	ContentPresentBytes Int64String `json:"contentPresentBytes,omitempty"`
 
-	// SavedBytes is the two above added up — everything this transfer did not
+	// SavedBytes is the two above added up - everything this transfer did not
 	// have to move.
 	//
 	// It exists because reporting only the first was wrong in the case that
@@ -1714,7 +1714,7 @@ type TransferControlResponse struct {
 	// next checkpoint, not the instant the command was typed.
 	InFlight int `json:"inFlight,omitempty"`
 	// Priority is where the transfer now sits in the queue. Set by
-	// :setPriority, which is the verb whose effect is otherwise invisible —
+	// :setPriority, which is the verb whose effect is otherwise invisible -
 	// pausing something says PAUSED, reordering it says nothing at all.
 	Priority int `json:"priority,omitempty"`
 }
@@ -1747,7 +1747,7 @@ type Job struct {
 	TargetRepository string   `json:"targetRepository,omitempty"`
 	TargetTags       []string `json:"targetTags,omitempty"`
 
-	// Parent is the artifact this job belongs to — what makes a digest
+	// Parent is the artifact this job belongs to - what makes a digest
 	// legible. A blob on its own is not something anybody can recognise; the
 	// image or chart that references it is.
 	Parent *JobParent `json:"parent,omitempty"`
@@ -1758,7 +1758,7 @@ type JobParent struct {
 	Digest    string `json:"digest"`
 	MediaType string `json:"mediaType,omitempty"`
 	// Ref is the vendor's own name for it, from
-	// org.opencontainers.image.ref.name — `orbs/CFX-5000-k8s/nginx:1.2.3`.
+	// org.opencontainers.image.ref.name - `orbs/CFX-5000-k8s/nginx:1.2.3`.
 	Ref string `json:"ref,omitempty"`
 	// Shared reports that several artifacts reference this blob, so the
 	// attribution is an example rather than the whole truth. A base layer
@@ -1791,7 +1791,7 @@ type SkipBreakdown struct {
 
 // PresentComponent is one component the destination already held.
 type PresentComponent struct {
-	// Name is the vendor's own name for it — `cfx-5000-product/bgcf:2511.174.0`.
+	// Name is the vendor's own name for it - `cfx-5000-product/bgcf:2511.174.0`.
 	// Empty for a component the release names only by digest.
 	Name   string `json:"name,omitempty"`
 	Digest string `json:"digest"`
@@ -1802,7 +1802,7 @@ type PresentComponent struct {
 	Kind string `json:"kind"`
 	// Bytes is what this component's skipped jobs would have moved.
 	Bytes Int64String `json:"bytes"`
-	// Partial says only PART of it was already there — the rest is still to
+	// Partial says only PART of it was already there - the rest is still to
 	// move. An ordinary state, and a different claim from "this was already
 	// there", which is what the list is otherwise saying.
 	Partial bool `json:"partial,omitempty"`
@@ -1829,7 +1829,7 @@ type ListPresentComponentsResponse struct {
 // The job listing answers "which jobs are failing". This answers "why", which
 // is a different question with a much shorter answer: five hundred manifests
 // rejected by the destination are five hundred rows and ONE cause, and the
-// rows differ only in the digest and the path — the two parts of the message
+// rows differ only in the digest and the path - the two parts of the message
 // that carry no information about what went wrong.
 type FailureGroup struct {
 	// Class is the retry classification, which is what decides whether a retry
@@ -1840,7 +1840,7 @@ type FailureGroup struct {
 	Message string `json:"message"`
 
 	// Failed have exhausted their attempts; Retrying will try again on their
-	// own. "Act now" versus "wait" — the distinction that makes a stalled
+	// own. "Act now" versus "wait" - the distinction that makes a stalled
 	// transfer distinguishable from a working one.
 	Failed   int `json:"failed"`
 	Retrying int `json:"retrying"`
@@ -1865,8 +1865,8 @@ type ListFailuresResponse struct {
 	// State and FailureReason are the TRANSFER's own, which is not the same
 	// question as which of its jobs are failing.
 	//
-	// A transfer can fail before it has any jobs at all — an origin that cannot
-	// be reached, a package whose tree will not walk — and its reason is then
+	// A transfer can fail before it has any jobs at all - an origin that cannot
+	// be reached, a package whose tree will not walk - and its reason is then
 	// recorded on the transfer rather than on work that was never created. A
 	// summary built only from jobs answers "nothing is failing" about a
 	// transfer whose state is `failed`, which is the one answer that cannot be
@@ -1879,8 +1879,8 @@ type ListFailuresResponse struct {
 // CreateTransferRequest is POST /api/v1/transfers.
 //
 // One request, one origin, several destinations. The OPERATION is not a field:
-// it is derived from what `from` resolves to — a configured source means
-// replicate, a configured target means promote — because a field that can
+// it is derived from what `from` resolves to - a configured source means
+// replicate, a configured target means promote - because a field that can
 // disagree with `from` is a field that eventually will.
 type CreateTransferRequest struct {
 	Product string `json:"product"`
@@ -1888,7 +1888,7 @@ type CreateTransferRequest struct {
 	Package string `json:"package"`
 
 	// From names the origin. Empty means the repository the package was
-	// discovered in, or — when Promote is set — the product's promotion
+	// discovered in, or - when Promote is set - the product's promotion
 	// source environment.
 	From string `json:"from,omitempty"`
 	// To names destinations explicitly.
@@ -1919,7 +1919,7 @@ type TransferEndpoint struct {
 // CreateTransferResponse reports what a request produced.
 type CreateTransferResponse struct {
 	RequestID string `json:"requestId,omitempty"`
-	// Created is false when an identical request already existed — a replay,
+	// Created is false when an identical request already existed - a replay,
 	// not an error.
 	Created bool `json:"created"`
 
@@ -2187,7 +2187,7 @@ type AutoDownloadRuleView struct {
 	// off. There is deliberately no runtime override.
 	Enabled bool `json:"enabled"`
 
-	// Inline reports that the rule carries its own targets — the older
+	// Inline reports that the rule carries its own targets - the older
 	// spelling, from before downloads were a block of their own.
 	Inline bool `json:"inline,omitempty"`
 }
@@ -2212,7 +2212,7 @@ type RunDownloadRequest struct {
 	// or `orbs/cfx-5000-k8s:25.7_mp2604_2131`. A vendor publishes one version
 	// into every repository of a product, so a bare version is ambiguous there
 	// and is REFUSED with the repositories it matched rather than resolved to
-	// whichever row came back first — which is how a download of one component
+	// whichever row came back first - which is how a download of one component
 	// came to move a different one.
 	//
 	// The field keeps its name so an existing client's request is still a valid
@@ -2265,7 +2265,7 @@ type AuditEvent struct {
 	EventType  string `json:"eventType"`
 
 	// Actor is who, and ActorKind is what sort of who: user, system, worker,
-	// schedule or auto_rule. Both matter — "the system did it" and "a person
+	// schedule or auto_rule. Both matter - "the system did it" and "a person
 	// did it" are the two answers this trail exists to distinguish.
 	Actor     string `json:"actor"`
 	ActorKind string `json:"actorKind"`
@@ -2324,7 +2324,7 @@ type ReportSummary struct {
 type ReportPeriod struct {
 	Since string `json:"since,omitempty"`
 	Until string `json:"until,omitempty"`
-	// Label is the requested period as typed — `7d`, `30d` — or empty for an
+	// Label is the requested period as typed - `7d`, `30d` - or empty for an
 	// explicit range.
 	Label string `json:"label,omitempty"`
 }
@@ -2346,7 +2346,7 @@ type ReportTotals struct {
 	// a percentage of zero is not zero percent.
 	SavedPercent *float64 `json:"savedPercent,omitempty"`
 
-	// AverageBytesPerSecond is measured over `copy` transfers ONLY — the ones
+	// AverageBytesPerSecond is measured over `copy` transfers ONLY - the ones
 	// whose bytes we moved and counted. OMITTED, not zero, when no such
 	// transfer completed in the period: a mirror-only period has no speed we
 	// are entitled to state (docs/design/18 §6.1).
@@ -2393,7 +2393,7 @@ type DailyVolume struct {
 //
 // Today it answers `anonymous`, method `none`, permissions `["*"]`, which is
 // exactly what the Coordinator's AnonymousAuthenticator grants. That is not
-// authentication and does not pretend to be — it is the shape authentication
+// authentication and does not pretend to be - it is the shape authentication
 // will fill in (docs/design/09 §10).
 type WhoAmIResponse struct {
 	Subject string `json:"subject"`
@@ -2414,7 +2414,7 @@ type WhoAmIResponse struct {
 	// everything, which is what an unauthenticated deployment reports.
 	Permissions []string `json:"permissions"`
 
-	// Products limits what this caller may see. Empty means every product —
+	// Products limits what this caller may see. Empty means every product -
 	// the same convention the server-side scope filters use, so a client
 	// reading this never has to special-case the unscoped deployment.
 	Products []string `json:"products,omitempty"`

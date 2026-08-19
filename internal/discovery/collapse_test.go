@@ -59,8 +59,8 @@ func (b *blockingCatalog) count() int {
 // returned instantly having done nothing.
 //
 // The old implementation handed the trigger over through a one-deep buffered
-// channel and, when it found the slot occupied, returned w.last — the previous
-// scan's result, or the ZERO VALUE if none had completed — with no error. The
+// channel and, when it found the slot occupied, returned w.last - the previous
+// scan's result, or the ZERO VALUE if none had completed - with no error. The
 // caller saw a successful scan of zero repositories in 0ms and the CLI printed
 // "Nothing new. A scan that finds nothing is the normal steady state."
 //
@@ -115,7 +115,7 @@ func TestConcurrentTriggersCollapseIntoTheRunningScan(t *testing.T) {
 		t.Error("the second trigger is not marked Collapsed, so a caller cannot " +
 			"tell a joined scan from one it started")
 	}
-	// Same scan, so the same numbers — not a zero value pretending to be one.
+	// Same scan, so the same numbers - not a zero value pretending to be one.
 	if got1.Duration != got2.Duration {
 		t.Errorf("the two callers saw different scans: %v vs %v", got1.Duration, got2.Duration)
 	}

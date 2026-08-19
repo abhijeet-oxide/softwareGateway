@@ -77,13 +77,13 @@ func TestFailedIsNotTerminal(t *testing.T) {
 	// `failed` is retryable in every machine that has a retry edge. Marking it
 	// terminal would make transfers:retry impossible.
 	if Job.IsTerminal(JobFailed) {
-		t.Fatal("job failed must not be terminal — it is retryable")
+		t.Fatal("job failed must not be terminal - it is retryable")
 	}
 	if Transfer.IsTerminal(TransferFailed) {
-		t.Fatal("transfer failed must not be terminal — it is retryable")
+		t.Fatal("transfer failed must not be terminal - it is retryable")
 	}
 	if Package.IsTerminal(PackageFailed) {
-		t.Fatal("package failed must not be terminal — it is retryable")
+		t.Fatal("package failed must not be terminal - it is retryable")
 	}
 }
 
@@ -123,8 +123,8 @@ func TestCancelIsTwoPhase(t *testing.T) {
 
 func TestVerificationFailedNeverRetries(t *testing.T) {
 	// docs/design/08 section 8 / docs/design/10 section 5.
-	// `failed` means the signature did not check out — a security event.
-	// `error` means verification could not run — an availability event.
+	// `failed` means the signature did not check out - a security event.
+	// `error` means verification could not run - an availability event.
 	// Only `error` retries; retrying a bad signature just repeats the alert.
 	if Verification.Can(VerificationFailed, VerificationRetry) {
 		t.Fatal("a definitively invalid signature must not be retryable")
@@ -146,7 +146,7 @@ func TestVerificationFailedAndErrorAreDistinct(t *testing.T) {
 		t.Fatal("failed is terminal")
 	}
 	if Verification.IsTerminal(VerificationError) {
-		t.Fatal("error is not terminal — it retries")
+		t.Fatal("error is not terminal - it retries")
 	}
 }
 

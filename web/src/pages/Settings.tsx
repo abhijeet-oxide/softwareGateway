@@ -10,7 +10,7 @@ import { ErrorState, PageHeader } from '../components/layout'
 import { mono, semantic } from '../theme'
 
 /**
- * Page 10 — Settings.
+ * Page 10 - Settings.
  *
  * Answers: how is this instance configured, and is it healthy?
  *
@@ -20,7 +20,7 @@ import { mono, semantic } from '../theme'
  * (docs/design/19 §4).
  *
  * The Users and roles section renders whatever /whoami reports rather than a
- * role model baked into this file — which is the point of that endpoint.
+ * role model baked into this file - which is the point of that endpoint.
  */
 export default function Settings() {
   const version = useVersion()
@@ -33,7 +33,6 @@ export default function Settings() {
   if (version.isError) {
     return (
       <>
-        <PageHeader title="Settings" description="How this instance is configured, and whether it is healthy" />
         <ErrorState error={version.error} retry={() => void version.refetch()} />
       </>
     )
@@ -44,8 +43,6 @@ export default function Settings() {
   return (
     <>
       <PageHeader
-        title="Settings"
-        description="How this instance is configured, and whether it is healthy"
         extra={
           <Button
             icon={<ThunderboltOutlined />}
@@ -251,8 +248,8 @@ export default function Settings() {
               <Typography.Text type="secondary">
                 Products, downloads, rules, discovery intervals and verification policy are defined in
                 Git and reconciled into the cluster. A change made here would be silently reverted
-                within minutes, so it is shown and not offered. Requesting work — downloads,
-                promotions, syncs — is not configuration and is fully available.
+                within minutes, so it is shown and not offered. Requesting work - downloads,
+                promotions, syncs - is not configuration and is fully available.
                 {productList[0]?.configHash && (
                   <> Loaded configuration: <span style={{ fontFamily: mono }}>{productList[0].configHash.slice(0, 12)}</span>{' '}
                   ({formatRelative(new Date().toISOString())}).</>

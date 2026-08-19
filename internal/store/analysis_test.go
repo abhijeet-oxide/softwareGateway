@@ -118,7 +118,7 @@ func TestAClaimNobodyCanStillHoldIsReleased(t *testing.T) {
 	if n, err := h.packages.RecoverAnalyses(t.Context(), time.Hour); err != nil {
 		t.Fatal(err)
 	} else if n != 0 {
-		t.Fatalf("released %d live claims — a running walk had its release stolen", n)
+		t.Fatalf("released %d live claims - a running walk had its release stolen", n)
 	}
 
 	// Backdated to what a crashed process leaves behind: a claim taken hours

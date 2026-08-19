@@ -4,9 +4,9 @@
 //
 // The distinction this package exists to enforce:
 //
-//	Liveness  (/healthz)  — is this process wedged?     PROCESS-LOCAL ONLY.
-//	Readiness (/readyz)   — should it receive traffic?  DB + config.
-//	Deep      (:healthCheck) — diagnostics for a human. Everything.
+//	Liveness  (/healthz)  - is this process wedged?     PROCESS-LOCAL ONLY.
+//	Readiness (/readyz)   - should it receive traffic?  DB + config.
+//	Deep      (:healthCheck) - diagnostics for a human. Everything.
 //
 // Liveness has no way to reach a dependency: Liveness accepts only func() error
 // with no context and no arguments, so there is nothing to make a network call
@@ -81,7 +81,7 @@ func (r *Registry) AddLiveness(name string, p livenessProbe) {
 }
 
 // AddReadiness registers a check gating traffic: the database and
-// configuration. Keep this set small — readiness runs on every probe interval.
+// configuration. Keep this set small - readiness runs on every probe interval.
 func (r *Registry) AddReadiness(name string, c Check) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -136,7 +136,7 @@ func (r *Registry) Deep(ctx context.Context) Report {
 	return run(ctx, checks)
 }
 
-// run executes checks concurrently — a deep check across a dozen registries
+// run executes checks concurrently - a deep check across a dozen registries
 // should take as long as the slowest one, not the sum.
 func run(ctx context.Context, checks []namedCheck) Report {
 	results := make([]Result, len(checks))

@@ -185,7 +185,7 @@ func (c *Client) SetRepositoryState(ctx context.Context, namespace, name string,
 // GetMirror reads a repository's mirror configuration.
 //
 // A repository with no mirror configured answers 404, which is a normal
-// negative answer rather than a failure — the caller distinguishes them with
+// negative answer rather than a failure - the caller distinguishes them with
 // errors.Is(err, registry.ErrNotFound).
 func (c *Client) GetMirror(ctx context.Context, namespace, name string) (*MirrorState, error) {
 	var out MirrorState
@@ -198,7 +198,7 @@ func (c *Client) GetMirror(ctx context.Context, namespace, name string) (*Mirror
 // PutMirror writes a repository's mirror configuration, creating it if absent.
 //
 // Quay splits create (POST) and update (PUT) and answers 4xx for the wrong
-// one. Callers should not have to know which, so this reads first and picks —
+// one. Callers should not have to know which, so this reads first and picks -
 // one round trip more, and one whole class of "409 on a config that was
 // already right" removed.
 func (c *Client) PutMirror(ctx context.Context, namespace, name string, spec MirrorSpec) error {
@@ -217,8 +217,8 @@ func (c *Client) PutMirror(ctx context.Context, namespace, name string, spec Mir
 
 // SyncNow asks Quay to run a sync immediately.
 //
-// Quay answers 409 when a sync is already running. That is not a failure —
-// the caller asked for a sync and a sync is happening — so it is reported as
+// Quay answers 409 when a sync is already running. That is not a failure -
+// the caller asked for a sync and a sync is happening - so it is reported as
 // such rather than as an error the operator has to interpret.
 func (c *Client) SyncNow(ctx context.Context, namespace, name string) (alreadyRunning bool, err error) {
 	err = c.do(ctx, http.MethodPost, "/api/v1/repository/"+repoPath(namespace, name)+"/mirror/sync-now", nil, nil)
@@ -287,7 +287,7 @@ func (c *Client) DeleteProxyCache(ctx context.Context, org string) error {
 }
 
 // SecondsOf renders a duration as the whole seconds Quay's fields take,
-// rounding up so a sub-second value never becomes zero — Quay reads 0 as
+// rounding up so a sub-second value never becomes zero - Quay reads 0 as
 // "unset" on some fields and as "immediately" on others, and neither is what a
 // caller passing 800ms meant.
 func SecondsOf(d time.Duration) int64 {

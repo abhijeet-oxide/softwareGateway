@@ -40,7 +40,7 @@ type Controller struct {
 	// loop starts and stops. Without it two reconciles can interleave: SetLeader
 	// runs on the leader-election goroutine and SetConfig on the config watcher,
 	// so a reload landing as leadership is acquired had both observe
-	// started=false and both call Start — the second failing with "discovery
+	// started=false and both call Start - the second failing with "discovery
 	// loop is already running". The worse ordering is silent: one reconcile
 	// stops the loop while the other is mid-Start, leaving started=true with
 	// nothing polling.
@@ -116,7 +116,7 @@ func (c *Controller) SetLeader(isLeader bool) {
 // Always restarts the loop when leading, rather than diffing the source set: a
 // product's interval, tag filters, credentials or rules may all have changed,
 // and a restart is a few milliseconds against a fifteen-minute interval.
-// Diffing here would be an optimisation whose bugs are silent — a source
+// Diffing here would be an optimisation whose bugs are silent - a source
 // quietly polling with stale filters.
 func (c *Controller) SetConfig(products []*product.Product, catalog map[string]ProductRef) {
 	c.mu.Lock()
@@ -172,7 +172,7 @@ func (c *Controller) reconcile() {
 		// Repeated on every reconcile, not just the first. A warning logged once
 		// at startup scrolls away; one that reappears whenever configuration
 		// changes is one somebody eventually removes the cause of.
-		c.log.Warn("discovery: TLS CERTIFICATE VERIFICATION IS DISABLED for this source — "+
+		c.log.Warn("discovery: TLS CERTIFICATE VERIFICATION IS DISABLED for this source - "+
 			"the connection is encrypted but not authenticated",
 			"product", s.Product.Metadata.Name,
 			"source", s.SourceName,

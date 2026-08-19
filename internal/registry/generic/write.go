@@ -19,7 +19,7 @@ import (
 	"github.com/abhijeet-oxide/softwareGateway/internal/registry"
 )
 
-// The write half of Distribution v2, on oras-go/v2 — and the read half above
+// The write half of Distribution v2, on oras-go/v2 - and the read half above
 // is not, which is a deliberate asymmetry worth explaining.
 //
 // # Why a library at all
@@ -28,14 +28,14 @@ import (
 // fiddly in ways that only show up against a real registry: an upload session
 // whose `Location` may be absolute or relative; `PATCH` with `Range` for
 // resumption; a cross-repository mount that answers `201 Created` when it works
-// and `202 Accepted` — an upload session, not an error — when the registry
+// and `202 Accepted` - an upload session, not an error - when the registry
 // declines. Those are exactly the parts a library has already got wrong once
 // and fixed, and hand-rolling them means finding each bug ourselves, in
 // production, against someone else's registry.
 //
 // # Why the read path was NOT converted
 //
-// It works against a hostile real registry — a corporate proxy, a certificate
+// It works against a hostile real registry - a corporate proxy, a certificate
 // the standard library refuses to parse, a vendor that omits `mediaType` on a
 // descriptor. Rewriting proven code to remove an asymmetry would be trading a
 // known-good path for a tidier one. The two halves share no logic, so this is
@@ -44,9 +44,9 @@ import (
 // # ORAS does no authentication here
 //
 // `remote.Repository.Client` is an interface with one method, `Do`, which our
-// *http.Client satisfies directly. So the whole M2 transport — the rate limiter
+// *http.Client satisfies directly. So the whole M2 transport - the rate limiter
 // outermost, the retry budget, the single-flight token cache, the CA bundle,
-// the proxy, the request tracer — stays in charge, and ORAS never sees a
+// the proxy, the request tracer - stays in charge, and ORAS never sees a
 // credential. Adopting a library thinly is the point: it supplies the upload
 // protocol, nothing else.
 
@@ -55,7 +55,7 @@ import (
 // # Why the Reference is constructed rather than parsed
 //
 // `remote.NewRepository` parses a string and REJECTS anything the OCI
-// distribution spec's grammar disallows — in particular uppercase, since the
+// distribution spec's grammar disallows - in particular uppercase, since the
 // spec's repository grammar is lowercase-only.
 //
 // That is correct as a rule and wrong as a gate here, because we do not choose
@@ -67,7 +67,7 @@ import (
 // blob, which reads as a transfer bug rather than a naming one.
 //
 // Constructing the Reference directly skips the parse and sends the path
-// exactly as given — which is the whole contract of this tool: copy, do not
+// exactly as given - which is the whole contract of this tool: copy, do not
 // change. A path the destination registry genuinely will not accept still
 // fails, with that registry's own error, which is the right place for the
 // judgement.
@@ -131,7 +131,7 @@ func (r *Repository) FetchBlob(ctx context.Context, dgst registry.Digest) (io.Re
 //
 // The reader is consumed as the request body, so the bytes never accumulate
 // anywhere. ORAS verifies the digest as it writes and the registry verifies it
-// again on commit — two independent checks, catching corruption on our side and
+// again on commit - two independent checks, catching corruption on our side and
 // in transit respectively.
 //
 // A push of content already present succeeds without transferring it: ORAS
@@ -164,8 +164,8 @@ func (r *Repository) PushBlob(
 // MountBlob asks the registry to relocate a blob from another repository on the
 // SAME registry, moving zero bytes.
 //
-// This is the dominant optimisation for promotion — a 45 GB lab-to-production
-// copy can complete in seconds — and applies to replication only when a vendor
+// This is the dominant optimisation for promotion - a 45 GB lab-to-production
+// copy can complete in seconds - and applies to replication only when a vendor
 // happens to share a registry with us.
 //
 // Support is uneven, so a registry declining is a NORMAL outcome and not an
@@ -187,7 +187,7 @@ func (r *Repository) MountBlob(ctx context.Context, dgst registry.Digest, fromRe
 	}
 
 	// getContent is nil deliberately. Passing a fallback would let ORAS quietly
-	// UPLOAD the blob when the mount is declined — which is the right outcome
+	// UPLOAD the blob when the mount is declined - which is the right outcome
 	// but the wrong place to decide it: the caller owns the fast-path ladder,
 	// counts the bytes, and records why a job was skipped.
 	err = repo.Mount(ctx, desc, fromRepo, nil)
@@ -211,8 +211,8 @@ func (r *Repository) MountBlob(ctx context.Context, dgst registry.Digest, fromRe
 //
 // Invariant I9: the bytes pushed are the bytes fetched, byte for byte. The
 // digest is the hash of exactly these bytes and every signature is over that
-// digest, so re-serializing — even to identical-looking JSON with different key
-// order or whitespace — would change the digest and invalidate the signature.
+// digest, so re-serializing - even to identical-looking JSON with different key
+// order or whitespace - would change the digest and invalidate the signature.
 // That is why this takes raw bytes and not a struct.
 //
 // ref may be a tag or a digest. A digest push is content-addressed and always
@@ -271,7 +271,7 @@ func (r *Repository) Tag(ctx context.Context, dgst registry.Digest, tag string) 
 	return nil
 }
 
-// Referrers lists artifacts that reference a subject — signatures, SBOMs,
+// Referrers lists artifacts that reference a subject - signatures, SBOMs,
 // attestations.
 //
 // The OCI 1.1 API where the registry supports it, with ORAS falling back to the
@@ -316,8 +316,8 @@ func (r *Repository) Referrers(
 // fromOCI converts an ORAS descriptor to ours.
 //
 // The conversion is confined to this file. Everything above internal/registry
-// speaks our Descriptor, so swapping the library — which ADR-001 requires to
-// stay possible — touches these two functions and nothing else.
+// speaks our Descriptor, so swapping the library - which ADR-001 requires to
+// stay possible - touches these two functions and nothing else.
 func fromOCI(d ocispec.Descriptor) registry.Descriptor {
 	out := registry.Descriptor{
 		MediaType:    d.MediaType,
@@ -343,8 +343,8 @@ func fromOCI(d ocispec.Descriptor) registry.Descriptor {
 // # Why this reads the OCI error CODE and not only the status
 //
 // It used to handle four statuses and let everything else through unwrapped.
-// Anything the registry rejected with a 400 — which is how several registries
-// answer a manifest they will not accept — came out `unclassified`, and
+// Anything the registry rejected with a 400 - which is how several registries
+// answer a manifest they will not accept - came out `unclassified`, and
 // unclassified is treated as RETRYABLE on the reasonable theory that an
 // uncategorised failure is more likely a transient network fault than a
 // permanent one. For a manifest the destination will never accept, that theory
@@ -355,7 +355,7 @@ func fromOCI(d ocispec.Descriptor) registry.Descriptor {
 // registry's own error code is read first where there is one. The code is the
 // better signal: `MANIFEST_BLOB_UNKNOWN` means "a blob you referenced is not
 // here", which is a self-healing signal the engine routes to placement
-// invalidation — and it arrives as a 400 from some registries and a 404 from
+// invalidation - and it arrives as a 400 from some registries and a 404 from
 // others, so keying off the status alone gets it right half the time.
 //
 // The result is a *registry.Error, which carries the status and the registry's
@@ -383,7 +383,7 @@ func (r *Repository) classify(err error, what string) error {
 	case errors.Is(err, errdef.ErrUnsupported):
 		out.Err = registry.ErrUnsupported
 	default:
-		// Genuinely uncategorised — a transport failure, most often. Kept
+		// Genuinely uncategorised - a transport failure, most often. Kept
 		// verbatim: the string is all there is, and truncating it here would
 		// leave the operator with a class and no cause.
 		out.Err = err
@@ -492,7 +492,7 @@ func newByteReader(b []byte) io.Reader { return bytes.NewReader(b) }
 // ResumeUpload continues an interrupted chunked upload.
 //
 // NOT IMPLEMENTED, and returning ErrUnsupported here is a correct
-// implementation rather than a stub — which is worth being precise about.
+// implementation rather than a stub - which is worth being precise about.
 //
 // Resumption is an OPTIMISATION, never a correctness requirement
 // (docs/design/05 §4.6). Blobs are content-addressed and pushing one twice is
@@ -517,7 +517,7 @@ func (r *Repository) ResumeUpload(_ context.Context, state registry.UploadState,
 
 // The compile-time assertion the M2 code deliberately could not make.
 //
-// internal/registry.Repository declares the full contract — read, write,
-// referrers — and until now nothing satisfied it, which was the type system
+// internal/registry.Repository declares the full contract - read, write,
+// referrers - and until now nothing satisfied it, which was the type system
 // telling the truth about what existed. It is satisfied now.
 var _ registry.Repository = (*Repository)(nil)

@@ -129,7 +129,7 @@ func TestRetryRequeuesFailedJobsAndReopensTheTransfer(t *testing.T) {
 		t.Errorf("requeued %d job(s), want the 2 that failed", res.Requeued)
 	}
 	if res.State != "ready" {
-		t.Errorf("transfer state = %q, want ready — nothing is in flight yet", res.State)
+		t.Errorf("transfer state = %q, want ready - nothing is in flight yet", res.State)
 	}
 	if got := h.state(id); got != "ready" {
 		t.Errorf("stored state = %q, want ready", got)
@@ -318,7 +318,7 @@ func (h *recoveryHarness) jobIDs(transferID string) []int64 {
 }
 
 // exhaust completes every job of a transfer as a failure with its attempts
-// spent, through the REAL completion path — so the test exercises the same code
+// spent, through the REAL completion path - so the test exercises the same code
 // a worker's report does.
 func (h *recoveryHarness) exhaust(transferID string) {
 	h.t.Helper()
@@ -396,7 +396,7 @@ func (r *rowScanner) Scan(dest ...any) error { return r.row.Scan(dest...) }
 // HANDING WORK OUT IS WHAT MAKES A TRANSFER RUNNING.
 //
 // It used to happen only when the first job COMPLETED, which is a different
-// event and can be many minutes later on a multi-gigabyte blob — so a transfer
+// event and can be many minutes later on a multi-gigabyte blob - so a transfer
 // with ten blobs in flight reported `ready`, and everything gated on the state
 // word went with it. A resumed transfer starts inside exactly that window.
 func TestLeasingWorkMarksTheTransferRunning(t *testing.T) {
@@ -426,7 +426,7 @@ func TestLeasingWorkMarksTheTransferRunning(t *testing.T) {
 }
 
 // A RESUMED transfer keeps the clock it already had. Restarting it would make
-// the average throughput — and the ETA built on it — describe a fraction of the
+// the average throughput - and the ETA built on it - describe a fraction of the
 // work as if it were all of it.
 func TestLeasingDoesNotRestartTheClockOnAResumedTransfer(t *testing.T) {
 	h := newRecoveryHarness(t)

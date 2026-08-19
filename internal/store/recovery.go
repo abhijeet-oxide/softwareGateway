@@ -16,7 +16,7 @@ import (
 // A job that exhausts its attempts becomes `failed`, which is terminal. The
 // wave-drain check counts only `succeeded` and `skipped`, so one failed job
 // means the wave never drains, the next wave never opens, and the transfer sits
-// at `running` — correctly refusing to push a manifest whose blobs are missing
+// at `running` - correctly refusing to push a manifest whose blobs are missing
 // (docs/design/04 §3.4), and indefinitely.
 //
 // That is right about the data and wrong about the reporting. Until this file
@@ -33,8 +33,8 @@ import (
 //
 // # Why the retry is a requeue and not a re-plan
 //
-// Every job already carries everything needed to run it — endpoints, digest,
-// size, wave — and `bytes_transferred` besides. Requeueing sets the failed rows
+// Every job already carries everything needed to run it - endpoints, digest,
+// size, wave - and `bytes_transferred` besides. Requeueing sets the failed rows
 // back to `pending` and the work resumes from what is already at the
 // destination: blobs that landed before the outage are found by the placement
 // check or a HEAD and cost nothing the second time. Re-planning would throw
@@ -54,7 +54,7 @@ type StalledTransfer struct {
 // The condition is exact and deliberately conservative: NO job of the transfer
 // is `pending`, `blocked` or `leased`, and at least one is `failed`. A job
 // sitting out a retry backoff is `pending`, so a transfer mid-backoff is not
-// stalled — it is waiting, which is a different thing and must not be reported
+// stalled - it is waiting, which is a different thing and must not be reported
 // as an ending.
 //
 // # Why this is a sweep and not only an event
@@ -62,7 +62,7 @@ type StalledTransfer struct {
 // CompleteJob settles the transfer inline, which handles the ordinary case: the
 // last job to give up fails the transfer immediately. But the failure that
 // matters most does not arrive that way. In a network outage the workers stop
-// answering altogether, so nothing completes — the REAPER expires the leases,
+// answering altogether, so nothing completes - the REAPER expires the leases,
 // and a lease expiring on a job with no attempts left makes it `failed` without
 // any completion being reported at all. A Coordinator restart mid-outage has
 // the same shape. A periodic sweep catches every path, including ones added
@@ -71,7 +71,7 @@ type StalledTransfer struct {
 func (p *Packages) SettleStalledTransfers(ctx context.Context) ([]StalledTransfer, error) {
 	// Propagate permanent failures first. The reaper fails a job whose attempts
 	// are exhausted without any completion being reported, so the inline
-	// cascade in settleTransfer never runs for it — and a transfer left holding
+	// cascade in settleTransfer never runs for it - and a transfer left holding
 	// blocked jobs behind a failed dependency looks runnable to the query
 	// below and would never be settled at all.
 	if err := p.failUnreachableEverywhere(ctx); err != nil {
@@ -121,8 +121,8 @@ func (p *Packages) SettleStalledTransfers(ctx context.Context) ([]StalledTransfe
 // failUnreachableEverywhere runs the dependency cascade for every live transfer
 // that holds a permanent failure.
 //
-// Scoped to transfers that actually have one, so the common case — a fleet of
-// healthy transfers — costs a single indexed query and no writes.
+// Scoped to transfers that actually have one, so the common case - a fleet of
+// healthy transfers - costs a single indexed query and no writes.
 func (p *Packages) failUnreachableEverywhere(ctx context.Context) error {
 	rows, err := p.db.QueryContext(ctx, p.dialect.Rewrite(`
 		SELECT DISTINCT t.id
@@ -218,8 +218,8 @@ func (p *Packages) failureSummary(ctx context.Context, transferID string) (int, 
 // failureReason builds the sentence stored on the transfer.
 //
 // It names the count, the dominant error class and one verbatim message,
-// because those are three different questions — how much broke, what kind of
-// breakage, and what the registry actually said — and a reason that answers
+// because those are three different questions - how much broke, what kind of
+// breakage, and what the registry actually said - and a reason that answers
 // only the first sends the reader to the jobs table to learn anything at all.
 func (p *Packages) failureReason(
 	ctx context.Context, tx *sql.Tx, transferID string, failed int,
@@ -275,8 +275,8 @@ type RetryResult struct {
 	Reblocked int
 	// State is the transfer's state afterwards.
 	State string
-	// NoJobs distinguishes a transfer that failed before any work existed —
-	// during planning — from one whose jobs failed. The two need different
+	// NoJobs distinguishes a transfer that failed before any work existed -
+	// during planning - from one whose jobs failed. The two need different
 	// actions and both present as `failed`.
 	NoJobs bool
 }
@@ -356,7 +356,7 @@ func (p *Packages) RetryTransfer(ctx context.Context, transferID string) (RetryR
 
 	// The lowest wave holding a failed job. The transfer's current wave moves
 	// back to it: a wave only advances once drained, so a failure below the
-	// current wave should be impossible — and if a future change makes it
+	// current wave should be impossible - and if a future change makes it
 	// possible, reopening the wave is the safe answer rather than leaving
 	// orphaned work behind a gate that has already been passed.
 	var lowest sql.NullInt64
@@ -411,12 +411,12 @@ func (p *Packages) RetryTransfer(ctx context.Context, transferID string) (RetryR
 	}
 
 	// `ready` rather than `running`: nothing is in flight yet, and a worker
-	// leasing the first requeued job is what makes it running again — through
+	// leasing the first requeued job is what makes it running again - through
 	// the same path every other transfer takes.
 	newState := "ready"
 	// auto_retries goes back to zero. A retry is somebody saying the cause has
 	// been dealt with, and the automatic budget is for failures nobody has
-	// looked at — a transfer that has just been looked at starts again with the
+	// looked at - a transfer that has just been looked at starts again with the
 	// full allowance. AutoRetryTransfers re-increments it for its own attempts.
 	if _, err := tx.ExecContext(ctx, p.dialect.Rewrite(`
 		UPDATE transfers
@@ -489,7 +489,7 @@ type StoppedCancellation struct {
 //
 // # Why the inline close is not enough
 //
-// `cancelling` closes when the last lease REPORTS — a worker finishes or
+// `cancelling` closes when the last lease REPORTS - a worker finishes or
 // abandons the job, the completion arrives, and settleTransfer moves the
 // transfer to `cancelled`. That is the ordinary path and it works.
 //
@@ -498,7 +498,7 @@ type StoppedCancellation struct {
 // lease expiry, and a reaper does not run the completion path. A Coordinator
 // restarted between the stop and the last report is the same shape. In both,
 // the transfer had nothing left to do and went on saying `cancelling` for as
-// long as anybody left it there — which is exactly what a hang looks like, on
+// long as anybody left it there - which is exactly what a hang looks like, on
 // the one operation somebody performs when they are already unhappy.
 //
 // Conservative in the same way SettleStalledTransfers is: a single leased job
@@ -565,11 +565,11 @@ type AutoRetried struct {
 //
 // A registry timing out, a connection reset, a 503 while a registry has a bad
 // minute. The job retries those itself while it has attempts left; when it runs
-// out, the transfer stops and — until this existed — waited for a person to
+// out, the transfer stops and - until this existed - waited for a person to
 // notice and press Retry. Which they do, usually the next morning, and the
 // retry then succeeds, having achieved nothing a machine could not have done at
-// 3am. The classes that are NOT worth retrying — auth, configuration,
-// not-found, unsupported — are left alone, because a second attempt against a
+// 3am. The classes that are NOT worth retrying - auth, configuration,
+// not-found, unsupported - are left alone, because a second attempt against a
 // missing credential is a second failure at a fixed interval.
 //
 // # Why it is bounded, and spaced
@@ -584,8 +584,8 @@ type AutoRetried struct {
 // further attempt will not change, and the honest response is to stop and say
 // so rather than to keep trying quietly.
 //
-// The count is reset by a manual retry — somebody saying they have dealt with
-// the cause — and by success.
+// The count is reset by a manual retry - somebody saying they have dealt with
+// the cause - and by success.
 func (p *Packages) AutoRetryTransfers(
 	ctx context.Context, cooldown time.Duration, maxRounds int,
 ) ([]AutoRetried, error) {
@@ -647,7 +647,7 @@ func (p *Packages) AutoRetryTransfers(
 	for _, c := range found {
 		// The SAME requeue a person gets. An automatic path with its own idea
 		// of what a retry means is a second implementation of the hardest part
-		// of this system — wave reopening and dependency cascades — and the two
+		// of this system - wave reopening and dependency cascades - and the two
 		// would diverge on the day it mattered.
 		res, err := p.RetryTransfer(ctx, c.id)
 		if err != nil {
@@ -686,7 +686,7 @@ type RecoveredLease struct {
 //
 // A lease is a promise with a deadline, and the reaper collects it when the
 // deadline passes. That is the right mechanism for a worker that dies mid-blob
-// — nobody knows it is dead until it stops answering — but it is the wrong
+// - nobody knows it is dead until it stops answering - but it is the wrong
 // mechanism for a restart, where we KNOW: the process is new, it holds nothing,
 // and the leases in the database are from a life it no longer remembers.
 // Waiting out the lease means minutes of a transfer sitting still with nothing
@@ -727,7 +727,7 @@ func (p *Packages) RecoverOrphanedLeases(
 // RecoverWorkerLeases frees work the database thinks a worker holds and the
 // worker says it does not.
 //
-// Called when a worker asks for work while reporting nothing active — which is
+// Called when a worker asks for work while reporting nothing active - which is
 // what a restarted process looks like from here, and is a far better signal
 // than a lease deadline: it is the holder itself saying the work is not being
 // done.

@@ -124,7 +124,7 @@ func TestMigrationsCreateThePartialIndexes(t *testing.T) {
 		t.Errorf("jobs_dequeue_idx must be PARTIAL, got: %s", ddl)
 	}
 	if ddl := idx["jobs_dequeue_idx"]; strings.Contains(ddl, "wave") {
-		t.Errorf("jobs_dequeue_idx must not include wave — gating is resolved into state: %s", ddl)
+		t.Errorf("jobs_dequeue_idx must not include wave - gating is resolved into state: %s", ddl)
 	}
 }
 
@@ -226,7 +226,7 @@ func TestIdempotencyConstraintsAreStructural(t *testing.T) {
 	_, err := s.DB().ExecContext(t.Context(), `INSERT INTO packages (product_id,source_repo_id,tag,manifest_digest,media_type)
 	                       VALUES (1,1,'v1','sha256:aa','application/json')`)
 	if err == nil {
-		t.Fatal("a duplicate (source_repo, tag, digest) must be rejected — this is invariant I4")
+		t.Fatal("a duplicate (source_repo, tag, digest) must be rejected - this is invariant I4")
 	}
 
 	// A re-push of the same tag with DIFFERENT content is a new package, not a
@@ -240,7 +240,7 @@ func TestIdempotencyConstraintsAreStructural(t *testing.T) {
 	_, err = s.DB().ExecContext(t.Context(), `INSERT INTO transfer_requests (id,product_id,package_id,operation,source_repo_id,idempotency_key)
 	                      VALUES ('r2',1,1,'replicate',1,'same-key')`)
 	if err == nil {
-		t.Fatal("a duplicate idempotency key must be rejected — this is invariant I3")
+		t.Fatal("a duplicate idempotency key must be rejected - this is invariant I3")
 	}
 }
 
@@ -348,7 +348,7 @@ func mustExec(t *testing.T, db *sql.DB, q string, args ...any) {
 }
 
 // readMigration returns the embedded migration SQL for a dialect, reading it
-// through the same embed.FS the Coordinator uses — so this test cannot pass
+// through the same embed.FS the Coordinator uses - so this test cannot pass
 // against files that would not actually ship in the binary.
 func readMigration(t *testing.T, dialect string) string {
 	t.Helper()
@@ -377,7 +377,7 @@ func readMigration(t *testing.T, dialect string) string {
 	}
 
 	if sb.Len() == 0 {
-		t.Fatalf("no migrations embedded for %s — the embed directive is wrong", dialect)
+		t.Fatalf("no migrations embedded for %s - the embed directive is wrong", dialect)
 	}
 	return sb.String()
 }
@@ -388,7 +388,7 @@ func readMigration(t *testing.T, dialect string) string {
 var createTableRE = regexp.MustCompile(`(?im)^\s*CREATE\s+TABLE\s+(?:IF\s+NOT\s+EXISTS\s+)?["'` + "`" + `]?([a-z_][a-z0-9_]*)["'` + "`" + `]?`)
 
 // extractTables returns the table names declared by a migration, excluding
-// anything after the goose Down marker — otherwise the DROP section would be
+// anything after the goose Down marker - otherwise the DROP section would be
 // scanned too and the comparison would be meaningless.
 func extractTables(sql string) []string {
 	if i := strings.Index(sql, "-- +goose Down"); i >= 0 {
@@ -473,7 +473,7 @@ func TestListPackagesOrdersByPublishedDate(t *testing.T) {
 	// plain `DESC` already puts NULLs last, so it would pass with or without
 	// the CASE in the query. It pins the INTENDED order. PostgreSQL is the one
 	// that sorts NULLs first on a plain DESC and therefore needs the CASE, and
-	// that half is not covered here — there is no Postgres in the unit suite by
+	// that half is not covered here - there is no Postgres in the unit suite by
 	// design (it must run with Docker stopped).
 	want := []string{"v3", "v2", "v1", "v4"}
 	if !slices.Equal(got, want) {

@@ -12,7 +12,7 @@ import (
 //
 // The property that matters for all three is what happens to work already done,
 // and it is the same property: nothing is undone. A pause keeps it, a stop keeps
-// it, and neither deletes anything at the destination — half a bundle there is
+// it, and neither deletes anything at the destination - half a bundle there is
 // unreferenced blobs and untagged manifests, invisible to consumers and free to
 // the next attempt.
 
@@ -76,7 +76,7 @@ func TestResumeMakesThemLeasableAgain(t *testing.T) {
 		t.Fatal(err)
 	}
 	if res.State != "ready" {
-		t.Errorf("state = %q, want ready — a worker leasing the first job is "+
+		t.Errorf("state = %q, want ready - a worker leasing the first job is "+
 			"what makes it running", res.State)
 	}
 	if got := h.lease(); len(got) == 0 {
@@ -97,7 +97,7 @@ func TestStopCancelsTheWorkNotYetStarted(t *testing.T) {
 	// will never arrive would leave it reading `cancelling` forever, which is
 	// the shape of a hang.
 	if res.State != "cancelled" {
-		t.Errorf("state = %q, want cancelled — nothing was in flight", res.State)
+		t.Errorf("state = %q, want cancelled - nothing was in flight", res.State)
 	}
 	if n := h.count(
 		`SELECT count(*) FROM jobs WHERE transfer_id = ? AND state = 'cancelled'`, id); n != 3 {
@@ -128,7 +128,7 @@ func TestStopWaitsForTheLastLeaseBeforeItIsCancelled(t *testing.T) {
 		h.complete(jobID)
 	}
 	if got := h.state(id); got != "cancelled" {
-		t.Errorf("state = %q after the last lease reported, want cancelled — a "+
+		t.Errorf("state = %q after the last lease reported, want cancelled - a "+
 			"transfer stuck in `cancelling` is indistinguishable from a hang", got)
 	}
 }
@@ -262,7 +262,7 @@ func (h *controlHarness) exec(query string, args ...any) {
 
 // Deleting a transfer removes its RECORD, and only its record.
 //
-// The thing an operator wants is the row out of their listing — a transfer that
+// The thing an operator wants is the row out of their listing - a transfer that
 // failed before it was planned has nothing to retry and would otherwise sit
 // there forever. What the transfer put at the destination is content-addressed,
 // shared with every other release using the same layers, and stays exactly
@@ -298,7 +298,7 @@ func TestDeleteRemovesTheTransferAndItsJobs(t *testing.T) {
 
 // A transfer with work a worker may be holding is refused.
 //
-// Its jobs are LEASED — a worker will report on them — and deleting the rows
+// Its jobs are LEASED - a worker will report on them - and deleting the rows
 // underneath it turns every one of those reports into an update of nothing,
 // silently. `stop` is one word and leaves a transfer this accepts.
 func TestDeleteRefusesATransferThatIsStillWorking(t *testing.T) {
@@ -332,7 +332,7 @@ func TestDeleteOfAnUnknownTransferIsAnError(t *testing.T) {
 // dequeue reads.
 //
 // A priority written only to the transfer row would show on every listing and
-// change nothing about what runs next — the worst shape a control verb can
+// change nothing about what runs next - the worst shape a control verb can
 // have, since the operator watches their urgent download stay exactly where it
 // was while the page insists it is now first.
 func TestSetPriorityReordersTheJobsAndNotJustTheRow(t *testing.T) {
@@ -378,7 +378,7 @@ func TestSetPriorityLeavesWorkAlreadyInFlightAlone(t *testing.T) {
 		t.Fatal(err)
 	}
 	if res.Jobs != 0 {
-		t.Errorf("reprioritized %d jobs, want none — all three are leased", res.Jobs)
+		t.Errorf("reprioritized %d jobs, want none - all three are leased", res.Jobs)
 	}
 	if n := h.count(
 		`SELECT count(*) FROM jobs WHERE transfer_id = ? AND priority = 900`, id); n != 0 {
@@ -417,8 +417,8 @@ func TestSetPriorityRefusesAValueOutsideTheBand(t *testing.T) {
 //
 // The dequeue makes a rank-1 job wait for the rank-0 copy of the same digest,
 // so the second lands as a cross-repository mount rather than a second stream
-// from the vendor. The clause matches across transfers on purpose — two
-// releases of one product share most of their digests — but a PAUSED job is
+// from the vendor. The clause matches across transfers on purpose - two
+// releases of one product share most of their digests - but a PAUSED job is
 // never going to run, so waiting for it waits forever.
 //
 // Reported from a real screen: two downloads of the same product, the first
@@ -455,7 +455,7 @@ func TestAPausedJobDoesNotGateAnotherTransfersCopy(t *testing.T) {
 // a worker holding a long blob, so a stopped job is dropped from the renewal
 // list and named as cancelled, and the worker abandons it within one interval.
 //
-// Renewing it instead — which is what happened before this existed — made
+// Renewing it instead - which is what happened before this existed - made
 // `stop` mean "stop when the current blob finishes". On a forty-gigabyte blob
 // that is an hour of bytes moving into a transfer somebody had just asked to
 // stop, with the page reading CANCELLING throughout.
@@ -516,7 +516,7 @@ func TestTheReaperDoesNotResurrectStoppedWork(t *testing.T) {
 // And the transfer itself finishes stopping.
 //
 // `cancelling` closes when the last lease REPORTS. A worker that died holding
-// that job reports nothing, and the reaper does not run the completion path —
+// that job reports nothing, and the reaper does not run the completion path -
 // so the transfer said `cancelling` for as long as anybody left it there, which
 // is what a hang looks like on the one operation somebody performs when they
 // are already unhappy.
@@ -574,7 +574,7 @@ func TestACancellationWithWorkInFlightStaysOpen(t *testing.T) {
 // A restart is not new information about anybody's intent.
 //
 // Both processes go down mid-cancellation and come back. The worker holds
-// nothing — it is a new process — and the leases in the database are from a
+// nothing - it is a new process - and the leases in the database are from a
 // life it does not remember. Waiting out each lease means minutes of a transfer
 // reading CANCELLING with nothing happening, which is indistinguishable from a
 // hang on the one operation somebody performs when they are already unhappy.
@@ -597,7 +597,7 @@ func TestARestartedWorkersLeasesAreRecoveredIntoTheCancellation(t *testing.T) {
 	}
 	for _, j := range recovered {
 		if j.State != "cancelled" {
-			t.Errorf("job %d recovered as %q, want cancelled — the stop still stands", j.ID, j.State)
+			t.Errorf("job %d recovered as %q, want cancelled - the stop still stands", j.ID, j.State)
 		}
 	}
 

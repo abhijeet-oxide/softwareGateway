@@ -19,7 +19,7 @@ const migrationLockID int64 = 424242
 // Migrate applies all pending migrations.
 //
 // On Postgres it runs under an advisory lock so that two replicas starting
-// simultaneously — which is the normal case during a rolling deployment —
+// simultaneously - which is the normal case during a rolling deployment -
 // cannot race. The second waits, then finds nothing to do.
 func Migrate(ctx context.Context, s Store, logger *slog.Logger) error {
 	if logger == nil {
@@ -81,7 +81,7 @@ func Migrate(ctx context.Context, s Store, logger *slog.Logger) error {
 	return nil
 }
 
-// MigrateDown rolls back one migration. Development only — production is
+// MigrateDown rolls back one migration. Development only - production is
 // forward-only, per docs/design/03 section 9.
 func MigrateDown(ctx context.Context, s Store) error {
 	fsys, err := migrations.FS(string(s.Driver()))

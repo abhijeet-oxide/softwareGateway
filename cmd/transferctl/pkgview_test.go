@@ -10,9 +10,9 @@ import (
 
 // What a package describe has to answer after a transfer of it has failed.
 //
-// The reported case: a vendor refused ONE component of a release —
+// The reported case: a vendor refused ONE component of a release -
 // `HTTP 403: No valid entitlement found for End User: 215952 and Product sales
-// items: CFXC24STD03…` — and nothing about the package said so. The refusal was
+// items: CFXC24STD03…` - and nothing about the package said so. The refusal was
 // recorded on the transfer that met it, which is the right place for it to
 // live and the wrong place for it to stay.
 
@@ -85,7 +85,7 @@ func TestDescribeOfAnUntransferredPackageHasNoTransfersSection(t *testing.T) {
 
 // STATE is bookkeeping about the CATALOGUE, not about transfers, and a column
 // called STATE on a page about packages is read as "has this been transferred?"
-// — which it has never meant.
+// - which it has never meant.
 func TestTheListingHidesStateUntilAskedFor(t *testing.T) {
 	resp := &v1.ListPackagesResponse{Packages: []v1.Package{{
 		Tag: "orb_25.7_mp2604_2131", ManifestDigest: "sha256:8533f4a71a43",

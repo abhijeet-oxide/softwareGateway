@@ -14,17 +14,17 @@ import { SystemPanel } from '../components/system'
 import {
   LocationChip, ProductChip, StatusBadge, TimeAgo, VerificationBadge, VersionChip,
 } from '../components/chips'
-import { AttentionBand, EmptyStateCard, ErrorState, PageHeader, type Attention } from '../components/layout'
+import { AttentionBand, EmptyStateCard, ErrorState, type Attention } from '../components/layout'
 import type { Package, Product } from '../api/types'
 
 /**
- * Page 1 — Overview.
+ * Page 1 - Overview.
  *
  * Answers: what new software is available, what is downloading, and what needs
  * my attention?
  *
  * The published-this-week table is the centre of the page and the largest thing on
- * it, because that is the answer. "Saved" is deliberately NOT a card here — it
+ * it, because that is the answer. "Saved" is deliberately NOT a card here - it
  * belongs to a release, not to the estate.
  */
 
@@ -37,15 +37,15 @@ interface Row {
 export default function Overview() {
   const navigate = useNavigate()
   const products = useProducts()
-  // Disabled products do nothing on purpose — nothing is discovered for them
-  // and nothing is downloaded — so they are noise on a page about what needs
+  // Disabled products do nothing on purpose - nothing is discovered for them
+  // and nothing is downloaded - so they are noise on a page about what needs
   // attention. The Products page is where they can be shown deliberately.
   const productList = (products.data?.products ?? []).filter((p) => p.enabled)
 
   // One request per product. The API has no estate-wide package listing, and
   // inventing one client-side by fetching everything and sorting is exactly
   // what "no client-side aggregation of anything the API can aggregate"
-  // forbids — so this is bounded by the product count, which is 5–50.
+  // forbids - so this is bounded by the product count, which is 5–50.
   const first = usePackages(productList[0]?.productId, { pageSize: 20 })
   const second = usePackages(productList[1]?.productId, { pageSize: 20 })
   const third = usePackages(productList[2]?.productId, { pageSize: 20 })
@@ -55,7 +55,7 @@ export default function Overview() {
 
   const rows = useMemo<Row[]>(() => {
     // A package listing carries no transfer history, so the status is joined in
-    // from the transfer listing rather than derived from the package alone —
+    // from the transfer listing rather than derived from the package alone -
     // otherwise every row reads NEW, including releases already in production.
     const index = transferIndex(transfers.data?.transfers ?? [])
     const out: Row[] = []
@@ -68,7 +68,7 @@ export default function Overview() {
     })
     // PUBLISHED RECENTLY, newest first. A dashboard answers "what is new",
     // and a list that falls back on old releases to fill ten rows answers a
-    // different question quietly — the reader cannot tell which rows are the
+    // different question quietly - the reader cannot tell which rows are the
     // news and which are the padding.
     return out
       .filter((r) => isRecent(r.pkg))
@@ -96,7 +96,7 @@ export default function Overview() {
       items.push({
         key: t.id,
         severity: 'error',
-        message: `${t.product} ${t.displayTag || t.tag} — download failed`,
+        message: `${t.product} ${t.displayTag || t.tag} - download failed`,
         detail: t.failureReason
           ? `${t.failureReason} The download is stopped. Open it to see what failed and retry from where it stopped.`
           : 'The download stopped before it finished. Open it to see what failed and retry from where it stopped.',
@@ -108,7 +108,7 @@ export default function Overview() {
       items.push({
         key: `verify-${r.pkg.packageId}`,
         severity: 'error',
-        message: `${r.product.productId} ${version(r.pkg)} — verification failed`,
+        message: `${r.product.productId} ${version(r.pkg)} - verification failed`,
         detail: 'The vendor signature did not verify. Do not promote this release until it is explained.',
         action: {
           label: 'View release',
@@ -122,7 +122,6 @@ export default function Overview() {
   if (products.isError) {
     return (
       <>
-        <PageHeader title="Overview" description="Track and manage software from vendor to production" />
         <ErrorState error={products.error} retry={() => void products.refetch()} />
       </>
     )
@@ -133,10 +132,6 @@ export default function Overview() {
 
   return (
     <>
-      <PageHeader
-        title="Overview"
-        description="Track and manage software from vendor to production"
-      />
 
       <AttentionBand items={attention} />
 

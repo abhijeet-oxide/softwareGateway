@@ -70,8 +70,8 @@ func (s *Server) handleCalibrate(w http.ResponseWriter, r *http.Request) {
 
 	rep, err := s.deps.Calibrator.Run(r.Context(), p, opts)
 	if err != nil {
-		// A run that could not START is the caller's problem to fix — an
-		// unknown source, a target the product does not declare — so it is an
+		// A run that could not START is the caller's problem to fix - an
+		// unknown source, a target the product does not declare - so it is an
 		// argument error rather than a server fault.
 		Error(w, r, v1.CodeInvalidArgument, err.Error())
 		return

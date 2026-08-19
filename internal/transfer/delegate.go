@@ -18,11 +18,11 @@ import (
 // point where a transfer becomes work. The planner still knows only about
 // manifests and blobs; the engine still knows only about streams. Pushing
 // delegation down into either would have made every one of their code paths
-// answer "and what if we are not actually moving anything?" — see
+// answer "and what if we are not actually moving anything?" - see
 // docs/design/18 section 7.
 //
-// It is also an optional dependency. A deployment with no delegated targets —
-// which is every deployment before M8 — leaves it nil, and every transfer is a
+// It is also an optional dependency. A deployment with no delegated targets -
+// which is every deployment before M8 - leaves it nil, and every transfer is a
 // copy exactly as before.
 
 // Strategy names how content reaches a destination.
@@ -34,7 +34,7 @@ const (
 	// StrategyMirror is the destination registry pulling for itself.
 	StrategyMirror Strategy = "mirror"
 	// StrategyProxy is a pull-through cache, which cannot be a destination at
-	// all — nothing can be pushed into one. It appears here only so that a
+	// all - nothing can be pushed into one. It appears here only so that a
 	// transfer that somehow reaches the expander fails with a message naming
 	// what to do instead.
 	StrategyProxy Strategy = "proxy"
@@ -58,8 +58,8 @@ type SyncRequest struct {
 type SyncHandle struct {
 	SyncID int64
 	// AlreadyRunning means the registry was mid-sync. That SATISFIES the
-	// request rather than failing it — the caller wanted a sync and a sync is
-	// happening — so it is carried as a fact rather than as an error.
+	// request rather than failing it - the caller wanted a sync and a sync is
+	// happening - so it is carried as a fact rather than as an error.
 	AlreadyRunning bool
 }
 
@@ -70,7 +70,7 @@ type SyncHandle struct {
 // answers, not the management client and the reconciler behind them.
 type Delegation interface {
 	// Strategy reports how content reaches a configured target. It is called
-	// on every plan, so it must be cheap — a configuration lookup, not a
+	// on every plan, so it must be cheap - a configuration lookup, not a
 	// network call.
 	Strategy(ctx context.Context, productName, targetName string) (Strategy, error)
 
@@ -84,7 +84,7 @@ type Delegation interface {
 // delegate plans a transfer whose destination fetches for itself.
 //
 // It creates no jobs and never will. The transfer enters `syncing` and is
-// settled later by whatever observes the registry — which is the only honest
+// settled later by whatever observes the registry - which is the only honest
 // shape, because the registry is under no obligation to finish while we are
 // watching, and a mirror that completes overnight while the Coordinator is
 // being restarted must still settle correctly in the morning.
@@ -118,7 +118,7 @@ func (e *Expander) delegate(
 	if handle.SyncID != 0 {
 		if err := e.replication.LinkSync(ctx, handle.SyncID, t.ID); err != nil {
 			// Not fatal. The transfer is in `syncing` and the watcher finds it
-			// from `transfers`, not from the sync row — which is exactly why
+			// from `transfers`, not from the sync row - which is exactly why
 			// the watcher is driven from that side.
 			e.log.WarnContext(ctx, "could not link the sync record to its transfer",
 				"transfer", t.ID, "sync", handle.SyncID, "error", err)

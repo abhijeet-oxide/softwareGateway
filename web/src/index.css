@@ -52,8 +52,8 @@ body {
 }
 
 /*
- * A release selector shows two lines — the version and the package it belongs
- * to — because either alone is ambiguous: a product publishes the same version
+ * A release selector shows two lines - the version and the package it belongs
+ * to - because either alone is ambiguous: a product publishes the same version
  * tag into ten repositories.
  *
  * Ant Design's closed box is one line of 30px with `overflow: hidden`, so both

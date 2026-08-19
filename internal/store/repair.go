@@ -10,7 +10,7 @@ import (
 // Repair levels, in the order a repair escalates through them.
 //
 // The ladder they disable is ordered cheapest-first (docs/design/05 §4), and
-// the lying answer sits ABOVE the mount rather than below it — which is why
+// the lying answer sits ABOVE the mount rather than below it - which is why
 // disabling the whole ladder at once is both correct and far more expensive
 // than it needs to be. See migration 00013.
 const (
@@ -37,7 +37,7 @@ const (
 // The backstop was specified and never built. The engine produced the
 // `blob_unknown` class and nothing anywhere consumed it, so a manifest rejected
 // for a missing blob simply retried against a destination that went on claiming
-// to have the blob — eight times, and then permanently.
+// to have the blob - eight times, and then permanently.
 //
 // It surfaced against Artifactory, which answers `HEAD /v2/<path>/blobs/<digest>`
 // from a checksum index spanning the whole Artifactory repository rather than
@@ -59,7 +59,7 @@ const (
 //     enough on its own: the HEAD fast path asks the destination directly and
 //     gets the same wrong answer. A repaired job must take no fast path at all.
 //  3. Put the manifest back to `blocked`. Its content is not present, so it is
-//     not runnable — and with dependency edges (docs/design/04 §3.5) it becomes
+//     not runnable - and with dependency edges (docs/design/04 §3.5) it becomes
 //     runnable again automatically, the moment the last repaired blob lands.
 //
 // The cost is one full upload of the blobs of ONE manifest. The alternative,
@@ -91,7 +91,7 @@ type RepairResult struct {
 	// from outside and need opposite responses: "the placement cache was
 	// wrong", which repairs itself, and "the registry will not accept this
 	// manifest", which needs a human. Before the repair existed they were
-	// indistinguishable — both were simply a manifest that would not push.
+	// indistinguishable - both were simply a manifest that would not push.
 	AlreadyRepaired bool
 }
 
@@ -132,14 +132,14 @@ func (p *Packages) RepairMissingBlobs(
 	//
 	// Blocking a manifest is only safe if something can unblock it, and what
 	// unblocks it is a dependency edge from it to the blob jobs it is waiting
-	// for. A transfer planned before those edges existed has none — so blocking
+	// for. A transfer planned before those edges existed has none - so blocking
 	// its manifest is a BLACK HOLE: nothing promotes it, and wave advancement
 	// cannot help either, since the wave it sits in can never drain while it is
 	// blocked. That is a deadlock, and it happened.
 	//
-	// The repair has already computed exactly the set of edges it needs — the
+	// The repair has already computed exactly the set of edges it needs - the
 	// manifest, and the blob jobs for the artifact it describes at this
-	// destination — so it writes them rather than assuming somebody else did.
+	// destination - so it writes them rather than assuming somebody else did.
 	// Idempotent, so a transfer that already has them pays nothing.
 	if _, err := tx.ExecContext(ctx, p.dialect.Rewrite(`
 		INSERT INTO job_dependencies (job_id, depends_on_id)
@@ -167,7 +167,7 @@ func (p *Packages) RepairMissingBlobs(
 	//
 	// Level 1 distrusts the cache: skip the placement record and the HEAD, but
 	// still try the mount. That is the right answer for a stale placement, and
-	// it is nearly free — the copy of a component published under its own name
+	// it is nearly free - the copy of a component published under its own name
 	// is the same digest already sitting in a sibling repository of the same
 	// registry, so the registry relocates it internally rather than us sending
 	// it across the WAN a second time.
@@ -179,9 +179,9 @@ func (p *Packages) RepairMissingBlobs(
 	// Per BLOB rather than per manifest, because two manifests can share a
 	// blob: one having already escalated X must not stop the other from
 	// repairing its own Y. And capped at 2, which is what BOUNDS the whole
-	// thing — see the note on RepairResult.AlreadyRepaired.
+	// thing - see the note on RepairResult.AlreadyRepaired.
 	//
-	// The blob's attempt budget IS reset — for the blob this is a first attempt
+	// The blob's attempt budget IS reset - for the blob this is a first attempt
 	// at a genuinely different operation, not a ninth attempt at the same one.
 	requeued, err := tx.ExecContext(ctx, p.dialect.Rewrite(`
 		UPDATE jobs
@@ -210,7 +210,7 @@ func (p *Packages) RepairMissingBlobs(
 	if res.Blobs == 0 {
 		// Every blob this manifest names is already at the top level and the
 		// push was rejected regardless. The cache is not the problem, so there
-		// is nothing left to repair — say so, change nothing, and let the
+		// is nothing left to repair - say so, change nothing, and let the
 		// manifest fail on its own attempt budget. Leaving it blocked here
 		// would be a deadlock: no completion is coming to promote it.
 		res.AlreadyRepaired = true
@@ -223,8 +223,8 @@ func (p *Packages) RepairMissingBlobs(
 	//
 	// The backoff is dropped, and the ATTEMPT COUNT IS NOT. Those look like the
 	// same decision and are opposite ones. The backoff exists to space out
-	// attempts at an operation that has not changed, and this one has — the
-	// content it was missing is being uploaded — so waiting out a delay
+	// attempts at an operation that has not changed, and this one has - the
+	// content it was missing is being uploaded - so waiting out a delay
 	// computed from a failure it no longer has adds latency and nothing else.
 	//
 	// The attempt count is what BOUNDS the repair. Resetting it would make a

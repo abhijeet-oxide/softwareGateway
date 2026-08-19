@@ -39,7 +39,7 @@ func TestSharedClientsShareOnePool(t *testing.T) {
 }
 
 // A standalone client must still work, and must not accidentally share with
-// anything — preflight probes and one-off catalog clients rely on it.
+// anything - preflight probes and one-off catalog clients rely on it.
 func TestStandaloneClientsShareNothing(t *testing.T) {
 	a, err := New(Config{Registry: "r.example.com", Repository: "x", ForceHTTP1: true})
 	if err != nil {

@@ -14,22 +14,22 @@ import (
 // A package's manifest BODIES are the only part of what we record that grows
 // without bound and can be thrown away without losing a fact.
 //
-// Everything else a package knows about itself — which artifacts it contains,
+// Everything else a package knows about itself - which artifacts it contains,
 // their digests, media types, sizes and platforms, the blobs they reference,
-// the totals derived from them — is a few kilobytes even for a sixty-artifact
+// the totals derived from them - is a few kilobytes even for a sixty-artifact
 // release bundle, is read by every listing and every plan, and is kept forever.
 //
 // The bodies are different. They are large, they are read only when something
 // PUSHES a manifest, and they are exactly recoverable: a manifest is addressed
 // by the hash of its own bytes, so re-fetching one either returns the same
 // bytes or fails the digest check. Keeping them is an optimisation, not a
-// commitment — and over a vendor catalogue with thousands of packages
+// commitment - and over a vendor catalogue with thousands of packages
 // accumulated across years, an optimisation nobody bounded becomes the largest
 // thing in the database.
 //
 // So they are a cache with a budget, evicted least-recently-used. The schema
 // keeps the FETCH (`fetched_at`) separate from the BYTES (`raw`) precisely so
-// eviction costs nothing but a re-fetch if the bytes are wanted again — see
+// eviction costs nothing but a re-fetch if the bytes are wanted again - see
 // migration 00007. Without that split, evicting would unlearn the walk and the
 // next inspect would re-read the whole tree from the vendor, which is the one
 // outcome that would make the cache not worth having.
@@ -92,15 +92,15 @@ const sweepBatch = 2000
 
 // maxSweepPasses stops a sweep that cannot make progress.
 //
-// Progress is guaranteed while there are candidates — every pass evicts at
-// least one — but a bound turns a bug that would otherwise spin forever inside
+// Progress is guaranteed while there are candidates - every pass evicts at
+// least one - but a bound turns a bug that would otherwise spin forever inside
 // a background loop into a log line and a retry on the next tick.
 const maxSweepPasses = 200
 
 // SweepManifestCache reclaims cached manifest bodies down to the policy.
 //
 // It never touches `fetched_at`, the artifact rows, the blob links or the
-// measured totals — so a swept package is still fully described, still lists
+// measured totals - so a swept package is still fully described, still lists
 // its contents, and still reports its transfer size. What it loses is the
 // shortcut of not having to ask the registry for bytes it can prove it received.
 //
@@ -178,7 +178,7 @@ func (p *Packages) expireManifestCache(ctx context.Context, ttl time.Duration) (
 //
 // LRU rather than by size or by age alone. The bodies worth keeping are the
 // ones a transfer touched recently, because the access pattern that matters is
-// "this product line is being replicated this week" — and evicting the largest
+// "this product line is being replicated this week" - and evicting the largest
 // first would preferentially throw away exactly the packages whose re-fetch
 // costs most.
 func (p *Packages) trimManifestCache(ctx context.Context, budget int64) (int64, int64, error) {
@@ -305,8 +305,8 @@ func (p *Packages) ManifestCacheStats(ctx context.Context) (ManifestCacheStats, 
 
 // TouchManifestCache marks a package's cached bodies as recently used.
 //
-// Called by whoever actually READS the bytes — the planner, on its way to
-// pushing them — and deliberately not by `describe` or `list`, which read the
+// Called by whoever actually READS the bytes - the planner, on its way to
+// pushing them - and deliberately not by `describe` or `list`, which read the
 // tree's shape and never the bodies. An LRU stamp bumped by looking at a
 // package would rank the cache by curiosity rather than by use, and would keep
 // alive exactly the manifests nobody is going to push.
@@ -335,7 +335,7 @@ type CachedManifest struct {
 //
 // A manifest is addressed by the hash of its own bytes. Bytes that hash to a
 // digest are THE bytes for that digest, whichever package, product or registry
-// we happened to fetch them from — so this asks no question about ownership and
+// we happened to fetch them from - so this asks no question about ownership and
 // needs none. The alternative, a lookup scoped to one package, would miss the
 // case this exists for: the same component appearing in two releases of the
 // same product line, which is most of them.

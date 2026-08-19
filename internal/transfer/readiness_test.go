@@ -7,7 +7,7 @@ import (
 )
 
 // Per-artifact readiness and the site ranking, end to end against the bundle
-// fixture — the two things the queue's own tests can only assert in the
+// fixture - the two things the queue's own tests can only assert in the
 // abstract.
 
 // A component published under its own name is the SAME digest already bound for
@@ -36,8 +36,8 @@ func TestTheSecondSiteOfAComponentIsRankedBehindTheFirst(t *testing.T) {
 // The claim per-artifact readiness exists to make: a manifest becomes runnable
 // on ITS OWN content, without waiting for blobs belonging to anything else.
 //
-// The bundle is the case that matters — four components, each independent of
-// the others — and under wave gating not one of them could be written until
+// The bundle is the case that matters - four components, each independent of
+// the others - and under wave gating not one of them could be written until
 // every blob of all four had landed.
 func TestAComponentIsPushableBeforeTheRestOfTheBundleHasMoved(t *testing.T) {
 	s := newSlice(t)
@@ -91,7 +91,7 @@ func (s *slice) count(query string, args ...any) int {
 	return n
 }
 
-// manifestState is the state of the copy that keeps the bundle resolvable —
+// manifestState is the state of the copy that keeps the bundle resolvable -
 // the one every other placement of the same digest is ranked behind.
 func (s *slice) manifestState(digest string) string {
 	s.t.Helper()

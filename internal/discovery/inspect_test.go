@@ -60,7 +60,7 @@ func TestInspectFillsInWhatDiscoveryListed(t *testing.T) {
 	}
 	// Two configs and three distinct layers: the shared base counts once.
 	if res.Blobs != 5 {
-		t.Errorf("got %d blobs, want 5 — the shared base layer counted once", res.Blobs)
+		t.Errorf("got %d blobs, want 5 - the shared base layer counted once", res.Blobs)
 	}
 	if res.Package.TotalBytes == nil || *res.Package.TotalBytes <= 0 {
 		t.Errorf("expected a measured size, got %v", res.Package.TotalBytes)
@@ -69,7 +69,7 @@ func TestInspectFillsInWhatDiscoveryListed(t *testing.T) {
 		t.Errorf("expected blob_count 5 on the row, got %v", res.Package.BlobCount)
 	}
 
-	// Idempotent, and — the part that matters — FREE. The tree under a digest
+	// Idempotent, and - the part that matters - FREE. The tree under a digest
 	// cannot change, so a second inspection must read the record rather than
 	// walk the registry again. A transfer that follows an inspect gets the same
 	// guarantee: the walk happens once, whoever asks first.
@@ -99,7 +99,7 @@ func TestInspectFillsInWhatDiscoveryListed(t *testing.T) {
 // promoted to a column.
 //
 // org.opencontainers.image.created is defined by the OCI image spec under the
-// reserved org.opencontainers. namespace — it is not any one vendor's key,
+// reserved org.opencontainers. namespace - it is not any one vendor's key,
 // which is what makes it safe to build on. It is also OPTIONAL, so nothing may
 // require it.
 func TestStandardCreatedAnnotationBecomesPublishedAt(t *testing.T) {

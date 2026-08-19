@@ -17,7 +17,7 @@ import (
 // note, so a destination that cannot answer produces none.
 
 // tagStub answers the one question tagState asks and nothing else. The embedded
-// interface is nil on purpose — a call to anything else is a bug in the code
+// interface is nil on purpose - a call to anything else is a bug in the code
 // under test, and panicking says so.
 type tagStub struct {
 	registry.Repository

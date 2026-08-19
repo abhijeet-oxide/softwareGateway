@@ -7,8 +7,8 @@ import "testing"
 // which parts of a repository path and a tag are structural noise a listing can
 // drop.
 //
-// It exists because those behaviours used to be reached another way — or, for
-// the shortening, not gated at all — and a NEAR-shaped assumption was being
+// It exists because those behaviours used to be reached another way - or, for
+// the shortening, not gated at all - and a NEAR-shaped assumption was being
 // applied to every registry.
 
 func TestVendorSupersedesTheLayoutSpelling(t *testing.T) {
@@ -87,7 +87,7 @@ func TestAgreeingSpellingsAreAccepted(t *testing.T) {
 }
 
 // The NAME is deliberately not checked here. Which vendors exist depends on
-// which plugins the binary registers, and this package must not know that — the
+// which plugins the binary registers, and this package must not know that - the
 // composition root resolves it and fails loudly on an unknown value.
 func TestAnUnknownVendorIsNotAValidationError(t *testing.T) {
 	p := valid()

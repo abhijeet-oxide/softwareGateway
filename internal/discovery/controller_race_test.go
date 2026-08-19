@@ -19,7 +19,7 @@ import (
 // SetConfig on the config watcher, and both call reconcile.
 //
 // The noisy log turned out to be the mild symptom. With reconcileMu removed
-// this test does not fail — it HANGS, because concurrent Start and Stop on the
+// this test does not fail - it HANGS, because concurrent Start and Stop on the
 // loop wedge each other. Measured: 1.7s with the lock, still running after two
 // minutes without it.
 //

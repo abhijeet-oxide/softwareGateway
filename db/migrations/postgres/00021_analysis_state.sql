@@ -5,7 +5,7 @@
 -- `expanded_at` answers "has this been walked", which has two answers and needs
 -- three. A release nobody has touched, a release being walked this minute, and
 -- a release whose walk failed are different situations with different things to
--- say and different things to do — and with only a timestamp, all three look
+-- say and different things to do - and with only a timestamp, all three look
 -- identical: not analysed.
 --
 -- That is what made the interface offer "Analyze package" on a release already

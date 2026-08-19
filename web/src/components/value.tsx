@@ -6,7 +6,7 @@ import { NOT_AVAILABLE } from '../domain/format'
  * How this application says "we do not have this".
  *
  * One rendering, everywhere: italic, secondary, the words `N/A`. Never a dash
- * that could be mistaken for a minus sign or a placeholder, and never a zero —
+ * that could be mistaken for a minus sign or a placeholder, and never a zero -
  * "nothing was measured" and "the measurement was zero" are different facts and
  * the second one is a claim.
  *
@@ -26,7 +26,7 @@ export function NA({ reason }: { reason?: string }) {
  * Renders a formatter's output, or `N/A` when it had nothing to report.
  *
  * Every formatter in domain/format.ts returns `string | null`, so wrapping its
- * output in this is the only thing a caller has to remember — and forgetting
+ * output in this is the only thing a caller has to remember - and forgetting
  * does not typecheck.
  */
 export function Value({

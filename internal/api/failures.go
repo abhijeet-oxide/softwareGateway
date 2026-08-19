@@ -12,7 +12,7 @@ import (
 // handleListTransferFailures serves GET /api/v1/transfers/{transfer}/failures.
 //
 // A sibling of the job listing and a different question. The job listing
-// answers "which jobs are failing" — and when five hundred manifests are
+// answers "which jobs are failing" - and when five hundred manifests are
 // rejected by the destination, the honest answer to that is five hundred rows
 // that differ only in the digest and the path. This answers "why", which
 // usually has two or three answers, each one actionable.

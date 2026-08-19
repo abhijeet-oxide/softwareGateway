@@ -10,8 +10,8 @@ import "testing"
 // drew whichever was live. Three honest fractions in a row make one dishonest
 // bar.
 //
-// So this walks a whole scan the way the scanner does — enumerate, list, check,
-// fetch — and asserts the single number never falls.
+// So this walks a whole scan the way the scanner does - enumerate, list, check,
+// fetch - and asserts the single number never falls.
 func TestTheOverallBarOnlyEverMovesForward(t *testing.T) {
 	var tracker progressTracker
 	tracker.begin()
@@ -21,7 +21,7 @@ func TestTheOverallBarOnlyEverMovesForward(t *testing.T) {
 		tracker.update(f)
 		now := tracker.snapshot().Overall
 		if now < last {
-			t.Errorf("%s took progress from %.3f back to %.3f — a bar that "+
+			t.Errorf("%s took progress from %.3f back to %.3f - a bar that "+
 				"retreats is reporting phases, not progress", what, last, now)
 		}
 		last = now
@@ -46,7 +46,7 @@ func TestTheOverallBarOnlyEverMovesForward(t *testing.T) {
 		})
 	}
 
-	// Every repository listed, and the scan is a tenth of the way in — not all
+	// Every repository listed, and the scan is a tenth of the way in - not all
 	// the way, which is the whole complaint.
 	if done := tracker.snapshot().Overall; done != listingShare {
 		t.Errorf("with every repository listed progress = %v, want %v: listing is "+

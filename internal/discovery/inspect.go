@@ -32,13 +32,13 @@ type InspectResult struct {
 	// Reported because it is the visible edge of a design decision an operator
 	// should not have to discover by surprise: the bodies are an evictable
 	// cache with a budget, and a package whose bodies were swept is still fully
-	// described — only a future push would have to re-read them. See
+	// described - only a future push would have to re-read them. See
 	// store.SweepManifestCache.
 	CachedManifests int
 	CachedBytes     int64
 
 	// SignatureResolved is how many signature relations had their MATERIAL
-	// recorded — the blob a verifier reads, and the vendor annotations that say
+	// recorded - the blob a verifier reads, and the vendor annotations that say
 	// what kind of signature it is. See resolveRelationMaterial.
 	SignatureResolved int
 }
@@ -58,7 +58,7 @@ func InspectPackage(
 	client registry.ManifestReader,
 	concurrency int,
 ) (InspectResult, error) {
-	// The TRANSFER ROOT, not the package's own manifest — the same descriptor
+	// The TRANSFER ROOT, not the package's own manifest - the same descriptor
 	// the planner walks. Where a vendor wraps the payload and its signature in
 	// an index, only the wrapper reaches both, so walking the payload would
 	// measure a transfer that excludes the signature and would never see the
@@ -71,7 +71,7 @@ func InspectPackage(
 	// A CONCURRENCY OF ZERO IS NOT "no limit", it is one at a time: the walker
 	// clamps a non-positive value to a single worker. Every caller of this was
 	// passing a source's configured ceiling straight through, and a source that
-	// configures none — which is most of them — was walking a two-hundred
+	// configures none - which is most of them - was walking a two-hundred
 	// component release one manifest at a time.
 	if concurrency <= 0 {
 		concurrency = product.DefaultPerRegistry
@@ -101,7 +101,7 @@ func InspectPackage(
 	}
 
 	// Resolve the signature material while the tree is in hand. See
-	// resolveRelationMaterial — this is the one moment the signature manifest's
+	// resolveRelationMaterial - this is the one moment the signature manifest's
 	// contents are known without paying for another request.
 	//
 	// Best effort: a package whose size was measured must not be reported as a
@@ -128,14 +128,14 @@ func InspectPackage(
 // Discovery can only record that a signature EXISTS: it sees the wrapper's
 // descriptor of the signature manifest and stops there, because fetching that
 // manifest is exactly the walk discovery defers. So the bytes a verifier
-// actually reads — for NEAR, one `application/pkcs7-signature` layer — were
+// actually reads - for NEAR, one `application/pkcs7-signature` layer - were
 // recorded like any other blob and were indistinguishable from a Helm chart
 // sitting beside them.
 //
 // The rule is vendor-neutral: a relation of role `signature` names a manifest,
 // and that manifest's LAYERS are the material. That holds for a wrapper index,
 // for a cosign tag, and for the referrers API, so a verifier reads one row
-// rather than re-deriving a vendor's layout — which is the coupling
+// rather than re-deriving a vendor's layout - which is the coupling
 // internal/vendors exists to prevent.
 //
 // Verification itself is a later milestone. This is what it will need, captured
@@ -171,8 +171,8 @@ func resolveRelationMaterial(
 		}
 		material := store.RelationRow{Annotations: annotations[rel.Digest]}
 
-		// The layer, not the config: a signature manifest's config is a stub —
-		// NEAR's is the two bytes `{}` — and the signature is the payload.
+		// The layer, not the config: a signature manifest's config is a stub -
+		// NEAR's is the two bytes `{}` - and the signature is the payload.
 		for _, b := range blobs[rel.Digest] {
 			if b.Kind == "layer" {
 				material.BlobDigest = b.Digest

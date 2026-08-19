@@ -19,7 +19,7 @@ import (
 //
 // A process that claims a release and then crashes must not leave that release
 // claimed forever. So the claim carries the moment it was taken, and anything
-// still held long after a walk could plausibly still be running is released —
+// still held long after a walk could plausibly still be running is released -
 // which is a query, run at startup, rather than a promise nobody can keep.
 
 // Analysis states. Empty means nobody is walking it, which is also the state a
@@ -34,8 +34,8 @@ const (
 
 // ClaimAnalysis takes the right to walk one release, if nobody else holds it.
 //
-// Reports whether the claim succeeded. False is an ordinary answer — somebody
-// else got there first — and the caller moves on rather than treating it as an
+// Reports whether the claim succeeded. False is an ordinary answer - somebody
+// else got there first - and the caller moves on rather than treating it as an
 // error.
 //
 // The atomicity is the WHERE clause: two processes issuing this at the same
@@ -66,7 +66,7 @@ func (p *Packages) ClaimAnalysis(ctx context.Context, packageID int64) (bool, er
 // a second flag that can disagree.
 //
 // A failure keeps the reason. "Analysis failed" with no reason is a dead end for
-// whoever reads it a week later, and the reasons here are the actionable kind —
+// whoever reads it a week later, and the reasons here are the actionable kind -
 // a component the vendor withdrew, a credential that expired, a registry that
 // refused.
 func (p *Packages) FinishAnalysis(ctx context.Context, packageID int64, cause error) error {
@@ -98,7 +98,7 @@ func (p *Packages) FinishAnalysis(ctx context.Context, packageID int64, cause er
 //
 // Recording which process holds a claim would let this be exact, and it would
 // also be wrong: a Coordinator that is running perfectly well under a different
-// identity — a rolled pod, a renamed host — would have its live claims stolen.
+// identity - a rolled pod, a renamed host - would have its live claims stolen.
 // Age is the honest test. A walk that has been going for longer than any walk
 // takes is not going.
 //
@@ -107,7 +107,7 @@ func (p *Packages) FinishAnalysis(ctx context.Context, packageID int64, cause er
 // The claim goes back to unheld, so the queue picks the release up again and
 // finishes the work. Marking it failed would be technically true and
 // operationally useless: nothing went wrong with the release, a process went
-// away, and the answer is to walk it — which is what the queue does with an
+// away, and the answer is to walk it - which is what the queue does with an
 // unheld row and will not do with a failed one.
 //
 // Returns how many were released, for the startup line that says what the

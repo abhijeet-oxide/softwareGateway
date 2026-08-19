@@ -131,7 +131,7 @@ func TestUnknownSyncStatusIsNotGuessed(t *testing.T) {
 		t.Fatalf("the raw value must survive so it can be reported verbatim, got %q", got.RawSyncStatus)
 	}
 	if got.Status().Terminal() || got.Status().Running() {
-		t.Fatal("an unknown status is neither terminal nor running — we do not know")
+		t.Fatal("an unknown status is neither terminal nor running - we do not know")
 	}
 }
 

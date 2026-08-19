@@ -19,7 +19,7 @@ func newTransfersCommand() *cobra.Command {
 		Short:   "Watch packages moving to their destinations",
 		Long: "A transfer is one package moving to ONE destination. A request\n" +
 			"naming three targets produces three transfers, which succeed or\n" +
-			"fail independently — one unreachable registry does not hold up\n" +
+			"fail independently - one unreachable registry does not hold up\n" +
 			"the other two.",
 	})
 	cmd.AddCommand(
@@ -42,7 +42,7 @@ func newTransfersCommand() *cobra.Command {
 // copySpec is the flag set create and promote share.
 //
 // They differ only in how an omitted origin and destination are RESOLVED, so
-// sharing the flags is not tidiness — it is what stops the two drifting into
+// sharing the flags is not tidiness - it is what stops the two drifting into
 // subtly different spellings of the same idea.
 type copySpec struct {
 	from          string
@@ -81,8 +81,8 @@ func newTransfersCreateCommand() *cobra.Command {
 	cmd := &cobra.Command{
 		Aliases: []string{"copy"},
 		Short:   "Copy a package to one or more targets",
-		Long: "Copies a package and everything it references — images, charts,\n" +
-			"generic artifacts — preserving every digest, repository path and\n" +
+		Long: "Copies a package and everything it references - images, charts,\n" +
+			"generic artifacts - preserving every digest, repository path and\n" +
 			"tag the vendor published.\n\n" +
 			"The OPERATION is derived, never typed. --from naming a source is a\n" +
 			"replication; --from naming a target is a promotion. Omitted, it is\n" +
@@ -108,7 +108,7 @@ func newTransfersPromoteCommand() *cobra.Command {
 
 	cmd := &cobra.Command{
 		Short: "Promote a package from one target to another",
-		Long: "Promotion moves between YOUR targets — lab to production — rather\n" +
+		Long: "Promotion moves between YOUR targets - lab to production - rather\n" +
 			"than from a vendor. It is the same copy underneath; what differs is\n" +
 			"that the origin must be a target, and that omitting --from/--to\n" +
 			"resolves them through the product's promotion path.\n\n" +
@@ -160,7 +160,7 @@ func runCopy(cmd *cobra.Command, req v1.CreateTransferRequest, dryRun bool) erro
 		if dryRun {
 			fmt.Fprintln(w)
 			fmt.Fprintln(w, "Dry run: nothing was created.")
-			fmt.Fprintln(w, "Everything above resolved — the product, the package, the origin,")
+			fmt.Fprintln(w, "Everything above resolved - the product, the package, the origin,")
 			fmt.Fprintln(w, "the destinations and their promotion rules. What would MOVE is not")
 			fmt.Fprintln(w, "computed here; run it and `transferctl transfers describe` reports it.")
 			return nil
@@ -304,7 +304,7 @@ func (r rateTrackers) observe(transfers []v1.Transfer, at time.Time) {
 	}
 }
 
-// rateFor is the smoothed rate for one transfer, or zero when there is none —
+// rateFor is the smoothed rate for one transfer, or zero when there is none -
 // no watch, or only one reading so far.
 func (r rateTrackers) rateFor(id string) float64 {
 	if tracker, ok := r[id]; ok {
@@ -319,7 +319,7 @@ func (r rateTrackers) rateFor(id string) float64 {
 //
 // PRODUCT and TAG are deliberately NOT offered. They are a few characters
 // longer than their headers and identical down the page, so shortening them
-// reclaims almost nothing — and the first version of this did offer them, which
+// reclaims almost nothing - and the first version of this did offer them, which
 // on a narrow terminal turned `cfx-5000-product` into `cfx-50…product` on every
 // row on the way to a row that wrapped anyway. A column should only be spent
 // where spending it buys the fit.
@@ -334,7 +334,7 @@ type listView struct {
 	//
 	// A hint about a flag is worth printing once. Redrawn every few seconds
 	// under the reader's eyes it is a fixed line of advice they have already
-	// read and cannot act on without stopping the watch — so the footer is left
+	// read and cannot act on without stopping the watch - so the footer is left
 	// off, and the rows keep the whole screen.
 	watching bool
 }
@@ -369,7 +369,7 @@ func dashDelegatedCells(row []string) {
 	for _, i := range []int{colDone, colJobs, colFailed, colCopied, colSaved,
 		colLeft, colPlanned, colSpeed, colRunning, colETA} {
 		if i < len(row) {
-			row[i] = "—"
+			row[i] = "-"
 		}
 	}
 }
@@ -416,7 +416,7 @@ func renderTransferList(
 		// EVERY measured column becomes an em dash for a transfer whose bytes
 		// we did not move. They would all be structurally zero otherwise, and
 		// a zero in a byte column reads as "nothing has happened" rather than
-		// as "we cannot count this" — which is the difference between a
+		// as "we cannot count this" - which is the difference between a
 		// reader waiting patiently and a reader raising an incident.
 		if delegated(t) {
 			dashDelegatedCells(row)
@@ -451,7 +451,7 @@ func renderTransferList(
 //
 // `failed` is deliberately NOT one of them. It has finished in the sense that
 // nothing more will happen to it on its own, and it is precisely what somebody
-// scanning this listing needs to see — hiding it would leave the default view
+// scanning this listing needs to see - hiding it would leave the default view
 // showing everything except the problem.
 func isFinished(t *v1.Transfer) bool {
 	switch t.State {
@@ -468,7 +468,7 @@ func isFinished(t *v1.Transfer) bool {
 // the spelling they can act on: it goes back into another command unchanged. The
 // resolved host and path is the fallback, and it is a fallback rather than the
 // first choice because it is a hundred characters wide and mostly identical
-// down the page — every row of one product shares a registry.
+// down the page - every row of one product shares a registry.
 func endpointName(name, resolved string) string {
 	if name != "" {
 		return name
@@ -512,7 +512,7 @@ func failedJobs(p v1.TransferProgress) string {
 // NEAR puts `orb_` on the front of every tag it publishes, so a column of them
 // is a column of the same four characters. The short form comes from the SERVER,
 // computed by the source's vendor plugin, because only that plugin knows which
-// part of a tag is structural noise — this package cannot tell `orb_25.7.2131`
+// part of a tag is structural noise - this package cannot tell `orb_25.7.2131`
 // from a tag that genuinely begins that way. Both spellings resolve as input,
 // and `describe` still shows the stored name.
 func transferTag(t *v1.Transfer) string {
@@ -534,13 +534,13 @@ func transferTag(t *v1.Transfer) string {
 //
 // COPIED read `X of Y`, and every candidate for Y was wrong in a way the reader
 // could see. Against the QUEUED work it produced `490 KiB/29.8 GiB · SAVED 63.7
-// GiB` — saving more than the whole of what was being moved. Against the
+// GiB` - saving more than the whole of what was being moved. Against the
 // RELEASE it produced `5.4 KiB/63.7 GiB · SAVED 63.7 GiB`, which asks the
 // obvious question: if all of it was saved, what is the 63.7 GiB being copied?
 //
 // Nothing. Y does not exist. How much of a release has to cross the wire is not
-// known when the transfer starts and is not known while it runs — each job
-// settles it, one HEAD at a time — so a fraction there states a fact nobody has.
+// known when the transfer starts and is not known while it runs - each job
+// settles it, one HEAD at a time - so a fraction there states a fact nobody has.
 //
 // So the row states the three quantities that are real:
 //
@@ -567,13 +567,13 @@ func copiedBytes(p v1.TransferProgress) string {
 //
 // COPIED and SAVED are both DECIDED: bytes that crossed the wire, and bytes
 // that turned out not to need to. Neither says how much is still to come, and
-// without that the row could not be reconciled — a reader seeing `SAVED 63.7
+// without that the row could not be reconciled - a reader seeing `SAVED 63.7
 // GiB` beside `PLANNED 63.7 GiB` concludes there is nothing left to copy, and
 // then watches COPIED climb.
 //
 // The two are not equal. They differ by exactly this column plus whatever
 // failed, and at one decimal place in gigabytes a difference of a few hundred
-// megabytes is invisible — so the row looked like a contradiction while every
+// megabytes is invisible - so the row looked like a contradiction while every
 // number in it was right.
 //
 // With it, the plan is accounted for: COPIED plus SAVED plus LEFT is the plan,
@@ -584,7 +584,7 @@ func copiedBytes(p v1.TransferProgress) string {
 // It is not "the bytes still to copy". Nothing knows that: each job settles it
 // for itself, with a HEAD at the destination, as it runs. What is left will
 // divide between COPIED and SAVED in a proportion nobody can state in advance,
-// and this is the honest bound on it — everything still to copy is in here, and
+// and this is the honest bound on it - everything still to copy is in here, and
 // so is everything still to be skipped.
 func leftBytes(p v1.TransferProgress) string {
 	if int64Of(p.OutstandingBytes) == 0 {
@@ -597,8 +597,8 @@ func leftBytes(p v1.TransferProgress) string {
 // or already accounted for at planning time.
 //
 // PLANNED rather than TOTAL, and the rename is the point. A component of a
-// bundle is published twice — inside the bundle so its index resolves, and
-// under the name the vendor gave it — and a registry stores blobs per
+// bundle is published twice - inside the bundle so its index resolves, and
+// under the name the vendor gave it - and a registry stores blobs per
 // repository, so one blob landing in two repositories is two placements and two
 // jobs. Its bytes are counted twice here, and a base layer shared by fifty
 // components is counted fifty times.
@@ -606,7 +606,7 @@ func leftBytes(p v1.TransferProgress) string {
 // Called TOTAL it invited the only comparison that makes it look wrong: a
 // listing reporting a 29.8 GiB orb, and a transfer of that orb reporting 63.7
 // GiB. Both are right. One is what the release weighs and the other is what the
-// transfer has to do, and only the second belongs beside COPIED and SAVED —
+// transfer has to do, and only the second belongs beside COPIED and SAVED -
 // which are also per-job, and which add up to exactly this.
 //
 // The release's own size is on `describe`, next to this one, where the two can
@@ -627,7 +627,7 @@ func plannedBytes(p v1.TransferProgress) string {
 // column would cost the width of one that matters more.
 // isSettled reports that a transfer has nothing left to do.
 //
-// The gate on the ETA, and it used to be `state == running` — which is a
+// The gate on the ETA, and it used to be `state == running` - which is a
 // different question and answered wrongly for a real transfer. A transfer is
 // `ready` from the moment it is planned until its first job COMPLETES, and with
 // multi-gigabyte blobs that window is long; a resumed one starts inside it. So a
@@ -662,9 +662,9 @@ func isSettled(state v1.TransferState) bool {
 // # Why a finished transfer has a speed at all
 //
 // It used to print a dash, on the rule that nothing in flight means no rate to
-// report. That rule is right for a transfer that is STUCK — a rate measured
+// report. That rule is right for a transfer that is STUCK - a rate measured
 // before it stalled describes a period that has ended, and printing it invites
-// the reader to extrapolate from it — and wrong for one that has finished, where
+// the reader to extrapolate from it - and wrong for one that has finished, where
 // the average over the whole run is not a stale sample but the answer: this is
 // what the link did, and it is the number somebody compares against the next
 // run and against the other target.
@@ -698,7 +698,7 @@ func elapsedOf(t *v1.Transfer) string {
 //
 // live is the smoothed rate a watcher has measured, or zero when nothing is
 // watching. It is preferred because the average is cumulative and therefore
-// slow to react: after a change — a second worker, a proxy bypassed — the
+// slow to react: after a change - a second worker, a proxy bypassed - the
 // average still mostly describes the period before it, and the person who made
 // the change is watching to find out whether it worked.
 func etaOf(t *v1.Transfer, live float64) string {
@@ -855,8 +855,8 @@ func kindLabel(kind string, n int) string {
 // renderWaves is the breakdown that makes an idle-looking transfer legible.
 //
 // The totals cannot do this. "519 outstanding, 2 in flight" mixes three
-// populations that behave completely differently — runnable, waiting out a
-// backoff, and GATED behind a wave that has not drained — and only the last one
+// populations that behave completely differently - runnable, waiting out a
+// backoff, and GATED behind a wave that has not drained - and only the last one
 // explains why a fleet with capacity to spare is running two jobs. Per wave it
 // is immediate: wave 0 has two blobs left, waves 1 to 3 are full and cannot
 // start until it finishes.
@@ -894,7 +894,7 @@ func renderWaves(w io.Writer, waves []v1.TransferWave) error {
 // answers about its whole storage rather than the repository asked about, the
 // last one is worth nothing.
 //
-// The distinction is not academic — it is the answer to "why is it re-sending
+// The distinction is not academic - it is the answer to "why is it re-sending
 // blobs that already succeeded?". The blobs a repair sends back are exactly the
 // ones counted on an untrusted line here.
 // renderNotTransferred accounts for the planned bytes that did not move.
@@ -906,7 +906,7 @@ func renderWaves(w io.Writer, waves []v1.TransferWave) error {
 // not sent".
 //
 // Each reason gets a short qualifier because the label alone does not carry it
-// — `Deduplicated` in particular says nothing about WHEN. The qualifier is a
+// - `Deduplicated` in particular says nothing about WHEN. The qualifier is a
 // noun phrase, not a sentence: the tool states what happened and leaves the
 // reader to draw conclusions.
 func renderNotTransferred(w io.Writer, p v1.TransferProgress) {
@@ -970,7 +970,7 @@ func activeWaves(t *v1.Transfer) string {
 }
 
 // count renders a zero as a dash, so the eye lands on the numbers that are not
-// zero — which in a wave table is nearly all of the information.
+// zero - which in a wave table is nearly all of the information.
 func count(n int) string {
 	if n == 0 {
 		return "-"
@@ -1029,7 +1029,7 @@ func describeDelegated(w io.Writer, t *v1.Transfer) error {
 
 	tw := newTabWriter(w)
 	fmt.Fprintf(tw, "  Progress:\t%s\n", delegatedProgress(t))
-	fmt.Fprintf(tw, "  Bytes:\t— we did not move them and cannot count them\n")
+	fmt.Fprintf(tw, "  Bytes:\t- we did not move them and cannot count them\n")
 	if t.FailureReason != "" {
 		fmt.Fprintf(tw, "  Detail:\t%s\n", t.FailureReason)
 	}
@@ -1062,7 +1062,7 @@ func delegatedProgress(t *v1.Transfer) string {
 	case v1.TransferSucceeded:
 		return "complete, and the destination holds the digest we asked for"
 	case v1.TransferDiverged:
-		return "complete, and the destination holds a DIFFERENT digest — the upstream tag moved"
+		return "complete, and the destination holds a DIFFERENT digest - the upstream tag moved"
 	case v1.TransferFailed:
 		return "the sync did not complete"
 	default:
@@ -1075,8 +1075,8 @@ func describeTransfer(w io.Writer, t *v1.Transfer, rates *rateTracker, watching 
 	fmt.Fprintf(tw, "ID:\t%s\n", t.ID)
 	fmt.Fprintf(tw, "Product:\t%s\n", t.Product)
 	// The vendor's shortened spelling, the same one the listing shows. `describe`
-	// printed the stored tag — `orb_25.7_mp2604_2131` where the listing said
-	// `25.7_mp2604_2131` — so the two pages named the same package differently
+	// printed the stored tag - `orb_25.7_mp2604_2131` where the listing said
+	// `25.7_mp2604_2131` - so the two pages named the same package differently
 	// and the reader had to work out that they agreed.
 	fmt.Fprintf(tw, "Package:\t%s\n", transferTag(t))
 	fmt.Fprintf(tw, "Source:\t%s\n", describeSide(t.SourceName, t.Source))
@@ -1085,7 +1085,7 @@ func describeTransfer(w io.Writer, t *v1.Transfer, rates *rateTracker, watching 
 	fmt.Fprintf(tw, "Priority:\t%d\n", t.Priority)
 	// The WAVES table below is the honest account; this line is a one-glance
 	// summary and has to agree with it. `current_wave` alone does not: it is a
-	// watermark, and work legitimately runs above and below it — a manifest
+	// watermark, and work legitimately runs above and below it - a manifest
 	// promoted before its wave opened, or a blob sent back by a repair.
 	fmt.Fprintf(tw, "Wave:\t%s of %d\n", activeWaves(t), t.MaxWave)
 	if err := tw.Flush(); err != nil {
@@ -1109,7 +1109,7 @@ func describeTransfer(w io.Writer, t *v1.Transfer, rates *rateTracker, watching 
 	if p.JobsBlocked > 0 {
 		// The line that answers "why is only one job running". Outstanding
 		// counts everything unfinished, and most of it is usually manifests
-		// that CANNOT be leased yet — a manifest is pushed only once every blob
+		// that CANNOT be leased yet - a manifest is pushed only once every blob
 		// beneath it has landed. Without this the reader sees five hundred
 		// outstanding, one running, and concludes the fleet is broken.
 		fmt.Fprintf(pw, "  Blocked:\t%d awaiting referenced content\n", p.JobsBlocked)
@@ -1211,10 +1211,10 @@ func describeTransfer(w io.Writer, t *v1.Transfer, rates *rateTracker, watching 
 	if t.State == v1.TransferRunning && p.JobsOutstanding > 0 && p.JobsInFlight == 0 {
 		fmt.Fprintln(w)
 		if p.JobsWaiting > 0 {
-			fmt.Fprintf(w, "Stalled: %d job(s) in retry backoff — `transfers failures %s`\n",
+			fmt.Fprintf(w, "Stalled: %d job(s) in retry backoff - `transfers failures %s`\n",
 				p.JobsWaiting, shortID(t.ID))
 		} else {
-			fmt.Fprintf(w, "Stalled: no job running and none waiting — check a worker is up "+
+			fmt.Fprintf(w, "Stalled: no job running and none waiting - check a worker is up "+
 				"(`transferctl health`)\n")
 		}
 	}
@@ -1238,8 +1238,8 @@ func describeTransfer(w io.Writer, t *v1.Transfer, rates *rateTracker, watching 
 
 // describeThroughput reports how fast this is actually going.
 //
-// AVERAGE is derivable from what the server holds — bytes moved over time
-// elapsed — so it is always available. CURRENT and PEAK are not: a rate needs
+// AVERAGE is derivable from what the server holds - bytes moved over time
+// elapsed - so it is always available. CURRENT and PEAK are not: a rate needs
 // two observations and the gap between them, and the server keeps no time
 // series. The watcher takes those samples, so they appear under --watch and
 // are honestly absent without it rather than being invented from one reading.
@@ -1283,7 +1283,7 @@ func describeThroughput(w io.Writer, t *v1.Transfer, rates *rateTracker, watchin
 // cost of each one is a ROUND TRIP, not its size, so the rate is bounded by
 // latency × concurrency and lands in the low kilobytes per second on a link
 // where blobs moved at hundreds. Nothing has gone wrong, nothing is
-// misconfigured, and no amount of extra bandwidth would move it — but a reader
+// misconfigured, and no amount of extra bandwidth would move it - but a reader
 // watching 577 KiB/s become 1.2 KiB/s has every reason to think otherwise, and
 // would go looking for a fault that is not there.
 func throughputNote(w io.Writer, t *v1.Transfer) {
@@ -1304,7 +1304,7 @@ func throughputNote(w io.Writer, t *v1.Transfer) {
 //
 // Only past a threshold, because on a healthy transfer it is noise: jobs report
 // progress every couple of seconds and the answer is always "moments ago". Past
-// it, it is the whole diagnosis — a worker holding a job that has not moved in
+// it, it is the whole diagnosis - a worker holding a job that has not moved in
 // hours is the one failure the lease machinery cannot see, because a lease is
 // renewed by the worker being alive rather than by the job going anywhere.
 func quietFor(p v1.TransferProgress) string {
@@ -1351,8 +1351,8 @@ func newTransfersJobsCommand() *cobra.Command {
 	cmd := &cobra.Command{
 		Short: "Show per-blob progress",
 		Long: "The unit of work is a BLOB, not a package. This is that level:\n" +
-			"which blob, how far, on which attempt, and — when something is\n" +
-			"stuck — which worker is holding it and what the registry said.",
+			"which blob, how far, on which attempt, and - when something is\n" +
+			"stuck - which worker is holding it and what the registry said.",
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if failedOnly && state != "" {
 				return usageError{msg: "--failed and --state name the same thing two ways; use one"}
@@ -1403,8 +1403,8 @@ func renderJobs(w io.Writer, jobs []v1.Job, state string) error {
 		return nil
 	}
 
-	// Rows arrive ordered by activity — what is running first, largest first
-	// within that — so the top of the table is what is happening rather than
+	// Rows arrive ordered by activity - what is running first, largest first
+	// within that - so the top of the table is what is happening rather than
 	// whatever happened to be planned first.
 	tw := newTabWriter(w)
 	fmt.Fprintln(tw,
@@ -1491,7 +1491,7 @@ func attemptsOf(j v1.Job) string {
 //
 // The failure count used to be parenthesised in here, which put it in a cell
 // that widens the whole column and reads as a footnote to progress. It is its
-// own column now — see failedJobs — because a failure is not a kind of
+// own column now - see failedJobs - because a failure is not a kind of
 // progress.
 func jobProgress(p v1.TransferProgress) string {
 	if p.JobsPlanned == 0 {
@@ -1519,8 +1519,8 @@ func shortID(id string) string {
 //
 // A digest identifies content and nothing else, and a repository on its own
 // only says which bundle. What a person needs is both: the repository the
-// registry serves the bytes out of, and — for a blob, which is nobody's idea of
-// a recognisable object — the image or chart it is a layer of, under the
+// registry serves the bytes out of, and - for a blob, which is nobody's idea of
+// a recognisable object - the image or chart it is a layer of, under the
 // vendor's own name for it.
 //
 // # Why the artifact's name is sometimes a suffix and sometimes a parenthesis
@@ -1528,8 +1528,8 @@ func shortID(id string) string {
 // Everything in a bundle is read from ONE repository, because an index may only
 // reference children co-located with it. So `repository:tag` is a reference you
 // could actually pull only when the artifact's name belongs to that same
-// repository. When a component names itself somewhere else — NEAR's ORBs name
-// theirs `cfx-5000-product/mcc:25.7.2503` — it sits in the bundle's repository
+// repository. When a component names itself somewhere else - NEAR's ORBs name
+// theirs `cfx-5000-product/mcc:25.7.2503` - it sits in the bundle's repository
 // addressed by DIGEST alone, and printing `orbs/…:25.7.2503` would invent a
 // reference that does not resolve. The name goes in parentheses there: this is
 // what the content is, not where it is.
@@ -1560,13 +1560,13 @@ func jobSource(j v1.Job) string {
 // The destination repository is per job rather than per transfer: a bundle's
 // components each land in their own path under the target, reproducing the
 // source's structure, and one component is often published in two places at
-// once — in the bundle's repository so the index referencing it stays
+// once - in the bundle's repository so the index referencing it stays
 // resolvable, and under its own name so it can be pulled as itself. Those are
 // two jobs over one digest, and each row names its own destination.
 //
 // The tags are the row's OWN, never the parent's. A relocated component is
-// deliberately left untagged in the bundle's repository — the name is not that
-// repository's to claim — and borrowing the parent's tag to fill the column
+// deliberately left untagged in the bundle's repository - the name is not that
+// repository's to claim - and borrowing the parent's tag to fill the column
 // would advertise a reference the transfer is never going to create.
 func jobTarget(j v1.Job) string {
 	if j.TargetRepository == "" {

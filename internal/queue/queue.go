@@ -1,6 +1,6 @@
 // Package queue is the Coordinator's side of the work queue.
 //
-// It owns leasing, progress, completion and reaping — everything that decides
+// It owns leasing, progress, completion and reaping - everything that decides
 // WHICH work a worker gets and what happens when it comes back. The bytes are
 // the worker's business; none pass through here.
 //
@@ -36,7 +36,7 @@ const (
 	// become a poll storm and so the Coordinator can change the answer without
 	// redeploying the fleet.
 	DefaultIdlePoll = 5 * time.Second
-	// DefaultBusyPoll is what a worker is told when it got work — come back
+	// DefaultBusyPoll is what a worker is told when it got work - come back
 	// promptly, there may be more.
 	DefaultBusyPoll = 1 * time.Second
 )
@@ -87,7 +87,7 @@ type Assignment struct {
 	// resolved at planning time from the source's own annotations.
 	//
 	// This used to be a single tag computed HERE, by comparing the job's
-	// digest against the package's root — which could only ever name the one
+	// digest against the package's root - which could only ever name the one
 	// artifact a person had asked for, and left every component of a bundle
 	// digest-addressed at the destination. The planner knows better and knows
 	// it earlier.
@@ -111,7 +111,7 @@ type LeaseResult struct {
 // RECOVERY SIGNAL as well as an accounting one: a worker asking for work while
 // holding nothing cannot be holding the leases this database says it holds, so
 // those are freed here rather than waited out. That is the restart case, and
-// the worker itself is a better witness to it than a lease deadline — waiting
+// the worker itself is a better witness to it than a lease deadline - waiting
 // out the deadline leaves a transfer motionless for minutes, and a transfer
 // somebody stopped stuck in `cancelling` for the same minutes.
 func (q *Queue) Lease(
@@ -180,7 +180,7 @@ func (q *Queue) hydrate(ctx context.Context, jobs []store.LeasedJob) ([]Assignme
 	// in one destination says nothing about another.
 	placed := map[int64]map[string]bool{}
 	// And where the destination itself does NOT have it, whether a sibling
-	// repository on the same registry does — the difference between mounting a
+	// repository on the same registry does - the difference between mounting a
 	// blob and fetching it across the WAN a second time.
 	mountable := map[int64]map[string]string{}
 	for _, j := range jobs {
@@ -218,7 +218,7 @@ func (q *Queue) hydrate(ctx context.Context, jobs []store.LeasedJob) ([]Assignme
 		// skip on the evidence that caused the failure.
 		//
 		// The mount candidate IS still resolved at level 1, and that is the
-		// point of having a level at all — the sibling repository really does
+		// point of having a level at all - the sibling repository really does
 		// hold the blob, and relocating it internally is what makes the repair
 		// nearly free instead of a second trip across the WAN.
 		repairing := j.Kind == "blob" && j.RepairLevel > 0
@@ -244,7 +244,7 @@ func (q *Queue) hydrate(ctx context.Context, jobs []store.LeasedJob) ([]Assignme
 // releaseAll returns a batch to the queue after a hydration failure.
 //
 // Best effort by design: if this fails too, the reaper collects the jobs one
-// lease period later. Nothing is lost either way — that is the property leases
+// lease period later. Nothing is lost either way - that is the property leases
 // exist to provide.
 func (q *Queue) releaseAll(ctx context.Context, workerID string, jobs []store.LeasedJob, cause error) {
 	for _, j := range jobs {
@@ -313,7 +313,7 @@ func (q *Queue) Complete(ctx context.Context, c store.Completion) (store.Complet
 
 // Heartbeat renews a worker's leases and reports what it may keep.
 //
-// One call carrying two signals: lease renewal, and — by omission — which jobs
+// One call carrying two signals: lease renewal, and - by omission - which jobs
 // the worker has lost and must abandon. There is no push channel to workers,
 // so this is also where cancellation would be delivered (docs/design/09 §7.4).
 func (q *Queue) Heartbeat(
@@ -324,7 +324,7 @@ func (q *Queue) Heartbeat(
 	// here the fleet view would call a perfectly healthy worker stale.
 	//
 	// Capacity is unknown on this path, so the stored ceiling is left as it was
-	// — the lease that set it is the caller that knows it.
+	// - the lease that set it is the caller that knows it.
 	q.recordHeartbeat(ctx, workerID, len(activeJobs))
 
 	renewed, cancelled, err = q.packages.RenewLeases(
@@ -334,7 +334,7 @@ func (q *Queue) Heartbeat(
 	}
 	if len(cancelled) > 0 {
 		// Logged, because this is the moment a stop actually reaches the bytes
-		// — everything before it is intent — and a stop that takes minutes to
+		// - everything before it is intent - and a stop that takes minutes to
 		// land is a thing an operator will ask about.
 		q.log.InfoContext(ctx, "telling a worker to abandon stopped work",
 			"worker", workerID, "jobs", len(cancelled))
@@ -346,11 +346,11 @@ func (q *Queue) Heartbeat(
 //
 // Best effort by contract: the fleet view is worth having and is worth nothing
 // at the cost of a failed lease, so the caller logs and carries on. A worker row
-// is observability — nothing in the queue reads it, and crash recovery remains
+// is observability - nothing in the queue reads it, and crash recovery remains
 // the reaper and a timestamp on the job.
 //
 // Capacity is what is LEFT, so the configured ceiling is capacity plus what the
-// worker already holds — the number an operator recognises from their config
+// worker already holds - the number an operator recognises from their config
 // file rather than a remainder that shrinks as work starts.
 func (q *Queue) RecordWorker(ctx context.Context, id string, capacity, active int, version string) {
 	if id == "" {
@@ -399,7 +399,7 @@ func (q *Queue) Reap(ctx context.Context) ([]store.ReapedJob, error) {
 //
 // Paired with Reap deliberately, and run straight after it: reaping is what
 // PRODUCES the terminal failure in the case that matters. When a network outage
-// takes the workers with it, nothing completes and nothing reports — the leases
+// takes the workers with it, nothing completes and nothing reports - the leases
 // simply expire, and a lease expiring on a job with no attempts left fails that
 // job without any completion path running. Without this the transfer would keep
 // saying `running` with nothing running.
@@ -420,7 +420,7 @@ func (q *Queue) Settle(ctx context.Context) ([]store.StalledTransfer, error) {
 // Paired with Reap for the same reason Settle is: the reaper is what produces
 // the last state change in the case that matters. A worker that dies holding
 // the final job of a stopped transfer reports nothing at all, so the inline
-// close — which runs on a completion — never runs.
+// close - which runs on a completion - never runs.
 func (q *Queue) CloseCancellations(ctx context.Context) ([]store.StoppedCancellation, error) {
 	closed, err := q.packages.CloseStalledCancellations(ctx)
 	if err != nil {
@@ -515,13 +515,13 @@ func (q *Queue) Stop(ctx context.Context, transferID string) (store.ControlResul
 }
 
 // Delete removes a settled transfer's record. Nothing at the destination is
-// touched — see store.DeleteTransfer.
+// touched - see store.DeleteTransfer.
 func (q *Queue) Delete(ctx context.Context, transferID string) (store.ControlResult, error) {
 	return q.control(ctx, "deleted", q.packages.DeleteTransfer, transferID)
 }
 
 // SetPriority reorders a transfer's remaining work. In-flight jobs finish where
-// they are — see store.SetTransferPriority.
+// they are - see store.SetTransferPriority.
 func (q *Queue) SetPriority(
 	ctx context.Context, transferID string, priority int,
 ) (store.ControlResult, error) {
@@ -534,8 +534,8 @@ func (q *Queue) SetPriority(
 // control runs one queue-control verb and logs what it did.
 //
 // The three differ only in the store call and the word, and routing them
-// through one place is what keeps their logging — the record of somebody
-// intervening in a running transfer — from drifting into three shapes.
+// through one place is what keeps their logging - the record of somebody
+// intervening in a running transfer - from drifting into three shapes.
 func (q *Queue) control(
 	ctx context.Context, verb string,
 	apply func(context.Context, string) (store.ControlResult, error),

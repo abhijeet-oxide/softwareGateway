@@ -11,7 +11,7 @@ import type { Problem, ErrorCode } from './types'
 /**
  * An error the Coordinator described, as opposed to one the network produced.
  *
- * `code` is the machine-readable RFC 9457 value. Branch on it — never on the
+ * `code` is the machine-readable RFC 9457 value. Branch on it - never on the
  * HTTP status and never on the prose, which is written for people and will be
  * reworded.
  */
@@ -89,7 +89,7 @@ export function query(params: Record<string, string | number | boolean | undefin
 
 /**
  * A package reference can contain a slash, which cannot survive a URL path
- * segment — %2F is decoded before routing, so `orbs/core:v1` would arrive as
+ * segment - %2F is decoded before routing, so `orbs/core:v1` would arrive as
  * two segments and match nothing. The repository moves to the query string,
  * exactly as the Go client does it.
  */

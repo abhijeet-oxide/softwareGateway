@@ -15,7 +15,7 @@ import (
 // "I compared two packages, it walked the whole tree, I closed it, I compared
 // them again, and it did the whole thing again." Which is exactly what it did:
 // a comparison walks both sides from their roots, and nothing in that path had
-// ever heard of the manifests sitting in our own database — fetched, verified
+// ever heard of the manifests sitting in our own database - fetched, verified
 // against their digests, and kept.
 //
 // # Why serving them is sound
@@ -55,7 +55,7 @@ type cachedManifests struct {
 // FetchManifest serves a by-digest read from the store, and everything else
 // from the registry.
 //
-// A miss is unremarkable — bodies are an evictable cache — and so is an error:
+// A miss is unremarkable - bodies are an evictable cache - and so is an error:
 // the registry is the authority and is right there, so a database that cannot
 // answer costs a round trip rather than the comparison.
 func (c cachedManifests) FetchManifest(

@@ -105,7 +105,7 @@ func (p *Product) validateDownloadTargets(path string, d Download) Errors {
 		}
 		if !t.IsEnabled() {
 			errs = append(errs, Error{tpath, fmt.Sprintf("%q is disabled", name),
-				"re-enable the target, or point the download somewhere else — otherwise this fails the first time it runs"})
+				"re-enable the target, or point the download somewhere else - otherwise this fails the first time it runs"})
 			continue
 		}
 
@@ -290,7 +290,7 @@ func (p *Product) validateVerificationReachesSignatures() Errors {
 //
 // Bounded by the number of targets rather than by a depth limit, because
 // `mirror.from` names exactly one upstream and a cycle is rejected separately
-// — this must terminate even when called on a document that has one.
+// - this must terminate even when called on a document that has one.
 func (p *Product) chainOf(name string, declared map[string]Target) []string {
 	var out []string
 	seen := map[string]bool{}

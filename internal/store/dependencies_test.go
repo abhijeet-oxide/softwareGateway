@@ -11,8 +11,8 @@ import (
 //
 // The claim is narrow and worth stating exactly: a manifest becomes runnable
 // when ITS OWN content is present, not when every blob in the transfer is.
-// Invariant I1 is unchanged — a manifest still never precedes what it
-// references — and these tests hold both ends of that at once.
+// Invariant I1 is unchanged - a manifest still never precedes what it
+// references - and these tests hold both ends of that at once.
 
 // The headline. Under wave gating this was the measured failure: 1974 of 1976
 // blobs done, and 517 manifests whose content was complete could not be
@@ -63,7 +63,7 @@ func TestAManifestWaitsForEveryOneOfItsOwnBlobs(t *testing.T) {
 
 // A blob deduplicated away gets no job at all, so a manifest whose content is
 // entirely already at the destination has no edges. It must be created runnable
-// — waiting on an empty dependency set is waiting for an event that cannot
+// - waiting on an empty dependency set is waiting for an event that cannot
 // come, and that is the deadlock OpenFirstWave exists to avoid for waves.
 func TestAManifestWithNothingToWaitForIsNotBlocked(t *testing.T) {
 	h := newDepHarness(t)
@@ -128,7 +128,7 @@ func TestASkippedBlobSatisfiesWhatWaitsOnIt(t *testing.T) {
 // Opening a wave is a bulk promotion by wave NUMBER, and the number is only a
 // proxy for readiness. A replan whose lower wave holds a failed job leaves that
 // wave out of "the first workable wave", so the wave above it would be opened
-// over a dependency that never landed — which is invariant I1 broken by the
+// over a dependency that never landed - which is invariant I1 broken by the
 // mechanism that exists to enforce it.
 func TestOpeningAWaveDoesNotPromoteOverAnUnmetDependency(t *testing.T) {
 	h := newDepHarness(t)
@@ -165,7 +165,7 @@ func TestOpeningAWaveDoesNotPromoteOverAnUnmetDependency(t *testing.T) {
 // Under wave gating a permanent failure left everything blocked behind one
 // wave, and the stall check saw a transfer with nothing runnable. With edges,
 // the unaffected manifests run and finish, and what is left is a handful of
-// jobs waiting on a dependency that will never arrive — which reads as "still
+// jobs waiting on a dependency that will never arrive - which reads as "still
 // working" unless the failure is propagated.
 func TestAPermanentFailureFailsWhatWasWaitingOnIt(t *testing.T) {
 	h := newDepHarness(t)
@@ -194,7 +194,7 @@ func TestAPermanentFailureFailsWhatWasWaitingOnIt(t *testing.T) {
 	}
 
 	// And therefore the transfer says it has stopped, rather than reporting
-	// `running` with nothing in flight — which is the whole point.
+	// `running` with nothing in flight - which is the whole point.
 	if got := h.state(id); got != "failed" {
 		t.Errorf("transfer state = %q with nothing able to run, want failed", got)
 	}
@@ -232,7 +232,7 @@ func TestTheSweepPropagatesFailuresTheReaperProduced(t *testing.T) {
 }
 
 // A retry requeues what actually broke. What failed only BECAUSE of it goes
-// back to waiting — promoting it would push a manifest whose blob is once
+// back to waiting - promoting it would push a manifest whose blob is once
 // again in flight.
 func TestRetryReturnsCascadeFailuresToWaitingRatherThanRunning(t *testing.T) {
 	h := newDepHarness(t)
@@ -258,7 +258,7 @@ func TestRetryReturnsCascadeFailuresToWaitingRatherThanRunning(t *testing.T) {
 		t.Errorf("the blob is %q after a retry, want pending", got)
 	}
 	if got, _ := h.jobState(manifest); got != "blocked" {
-		t.Errorf("the manifest is %q after a retry, want blocked — its blob has not run yet", got)
+		t.Errorf("the manifest is %q after a retry, want blocked - its blob has not run yet", got)
 	}
 
 	// And it still promotes when the blob comes back.
@@ -295,7 +295,7 @@ func TestTheDequeueRunsTheResolvableCopyBeforeThePublishedOne(t *testing.T) {
 
 // Within a rank, largest first. Insertion order is arbitrary with respect to
 // size, so a multi-gigabyte layer leased last runs alone while every other slot
-// idles — and that tail is what this ordering removes.
+// idles - and that tail is what this ordering removes.
 func TestTheDequeueRunsTheLargestJobFirstWithinARank(t *testing.T) {
 	h := newDepHarness(t)
 	id := h.transferWithJobs(0)
@@ -325,7 +325,7 @@ func newDepHarness(t *testing.T) *depHarness {
 	return &depHarness{recoveryHarness: newRecoveryHarness(t)}
 }
 
-// job inserts one job. Manifests start blocked, blobs pending — which is what
+// job inserts one job. Manifests start blocked, blobs pending - which is what
 // the planner does for anything with dependencies.
 func (h *depHarness) job(transferID, kind string, n, wave int) int64 {
 	state := "pending"

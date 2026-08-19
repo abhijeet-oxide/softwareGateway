@@ -7,7 +7,7 @@ import { EmptyStateCard, ErrorState, PageHeader } from '../components/layout'
 import { semantic } from '../theme'
 
 /**
- * Page 9 — Reports.
+ * Page 9 - Reports.
  *
  * Answers: how is this operating over time?
  *
@@ -32,7 +32,6 @@ export default function Reports() {
   if (reports.isError) {
     return (
       <>
-        <PageHeader title="Reports" description="How this is operating over time" />
         <ErrorState error={reports.error} retry={() => void reports.refetch()} />
       </>
     )
@@ -45,8 +44,6 @@ export default function Reports() {
   return (
     <>
       <PageHeader
-        title="Reports"
-        description="How this is operating over time"
         meta={
           <Space>
             <Select

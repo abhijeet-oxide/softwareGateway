@@ -4,7 +4,7 @@
 -- # Why grouping was a one-way door
 --
 -- A vendor Layout turns a repository's tags into the packages they actually
--- represent — NEAR publishes `orb_X`, `signature_orb_X` and `signed_orb_X` for
+-- represent - NEAR publishes `orb_X`, `signature_orb_X` and `signed_orb_X` for
 -- one release, and they are one package with a signature, not three packages.
 --
 -- Grouping runs over the tags a scan finds NEW. That is deliberate and it is
@@ -13,7 +13,7 @@
 -- nobody had accounted for is that a repository scanned BEFORE its source
 -- declared a vendor is never grouped again. Its packages keep
 -- `signature_status = 'unknown'`, carry no relations, and have no transfer root
--- — so a transfer of one would move the payload and leave the signature behind,
+-- - so a transfer of one would move the payload and leave the signature behind,
 -- which is the exact failure the Layout exists to prevent. Re-scanning does not
 -- help, because re-scanning is precisely the path that skips them.
 --
@@ -23,7 +23,7 @@
 -- and groups them properly, once. It then agrees, and the steady state is cheap
 -- again.
 --
--- NULL means "never grouped", which is what every existing row gets — correct,
+-- NULL means "never grouped", which is what every existing row gets - correct,
 -- and it makes the first scan after this migration do the reconciliation for
 -- any repository whose source declares a vendor.
 --
@@ -36,11 +36,11 @@
 --
 -- They cannot simply be deleted: a transfer may reference them, and the history
 -- of what was actually shipped has to stay answerable. `state = 'superseded'`
--- is the wrong word — that means the same tag re-pushed with different content,
+-- is the wrong word - that means the same tag re-pushed with different content,
 -- and overloading it would corrupt the one question supersession answers.
 --
 -- So: `accessory_of` names the package this row turned out to be part of.
--- Deliberately shaped like `superseded_by` — the row survives, keeps its
+-- Deliberately shaped like `superseded_by` - the row survives, keeps its
 -- history, and stops being listed as a release of its own.
 --
 -- Reversible by construction: removing a source's vendor clears it, and the

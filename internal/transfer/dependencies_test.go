@@ -37,7 +37,7 @@ func TestPlanRecordsWhatEachManifestIsWaitingFor(t *testing.T) {
 		t.Fatal("the plan wrote no dependencies; every manifest would be pushed immediately")
 	}
 
-	// Each image waits for its own config and its own two layers — the shared
+	// Each image waits for its own config and its own two layers - the shared
 	// base counts for both, because a dependency is on the JOB and there is one
 	// job per (digest, destination).
 	for _, image := range []string{amd, arm} {
@@ -61,7 +61,7 @@ func TestPlanRecordsWhatEachManifestIsWaitingFor(t *testing.T) {
 
 // A blob already at the destination gets no job, so a manifest whose content is
 // entirely deduplicated away has nothing to wait for. It must be created
-// RUNNABLE — blocking it would be waiting for a completion that can never
+// RUNNABLE - blocking it would be waiting for a completion that can never
 // arrive, which is the deadlock OpenFirstWave exists to avoid for waves.
 //
 // This is the second transfer of any product line, which is the case
@@ -80,7 +80,7 @@ func TestAManifestWithNothingLeftToMoveStartsRunnable(t *testing.T) {
 	}
 
 	// The first transfer walks the tree and records it. Everything it would
-	// have moved is then at the destination — which is exactly the state the
+	// have moved is then at the destination - which is exactly the state the
 	// SECOND release of a product line starts from.
 	h.transfer("t1")
 	req.TransferID = "t1"

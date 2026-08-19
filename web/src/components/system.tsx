@@ -12,7 +12,7 @@ import type { Worker } from '../api/types'
  *
  * # Why this belongs on the Overview
  *
- * "Nothing is downloading" has two completely different causes — there is
+ * "Nothing is downloading" has two completely different causes - there is
  * nothing to download, or there is nobody to download it. The Coordinator
  * plans transfers and workers move the bytes, so a fleet of zero means every
  * download sits at zero per cent forever with nothing on the page saying why.
@@ -24,7 +24,7 @@ import type { Worker } from '../api/types'
  * averaging away: a worker holding jobs the Coordinator has already reaped is
  * about to report completions nobody will accept.
  *
- * STALE is derived from the heartbeat rather than announced — a worker that
+ * STALE is derived from the heartbeat rather than announced - a worker that
  * was killed never got to say so.
  */
 export function SystemPanel() {
@@ -75,7 +75,7 @@ export function SystemPanel() {
             actually running.
 
             It used to render unconditionally, which meant an idle fleet showed
-            a bar pinned at 0% — and a progress bar that never moves reads as
+            a bar pinned at 0% - and a progress bar that never moves reads as
             stalled work rather than as no work. So idle is stated in words,
             and the bar appears when there is something for it to measure.
           */}

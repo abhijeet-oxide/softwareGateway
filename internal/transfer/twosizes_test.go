@@ -8,8 +8,8 @@ import "testing"
 // and the difference reads as a bug. The claim is that both are true and mean
 // different things:
 //
-//	total_bytes   what the release IS   — each distinct digest counted ONCE
-//	planned_bytes what landing it COSTS — each (repository, digest) counted once
+//	total_bytes   what the release IS   - each distinct digest counted ONCE
+//	planned_bytes what landing it COSTS - each (repository, digest) counted once
 //
 // and that the gap is real work, because a registry stores content PER
 // REPOSITORY and a component published under its own name as well as inside the
@@ -37,7 +37,7 @@ func TestTheReleaseSizeAndThePushCostAreBothTrue(t *testing.T) {
 			"the fixture cannot demonstrate the gap at all")
 	}
 
-	// 2. AND IT ARRIVED IN BOTH. Uploaded or mounted — a mount is the registry
+	// 2. AND IT ARRIVED IN BOTH. Uploaded or mounted - a mount is the registry
 	//    relocating it internally, which is the second copy costing no bytes
 	//    rather than the second copy not happening.
 	for _, repo := range repositories {
@@ -48,12 +48,12 @@ func TestTheReleaseSizeAndThePushCostAreBothTrue(t *testing.T) {
 		}
 	}
 
-	// 3. THE ARITHMETIC, from the jobs the plan wrote — the same rows the
+	// 3. THE ARITHMETIC, from the jobs the plan wrote - the same rows the
 	//    interface reads and the same query somebody would run by hand.
 	distinct, perSite := jobBytes(t, s, "sizes")
 
 	if plan.PlannedBytes != perSite {
-		t.Errorf("planned = %d, want %d — the planned figure is not the "+
+		t.Errorf("planned = %d, want %d - the planned figure is not the "+
 			"per-(repository, digest) sum, so the explanation of it is wrong",
 			plan.PlannedBytes, perSite)
 	}
@@ -63,7 +63,7 @@ func TestTheReleaseSizeAndThePushCostAreBothTrue(t *testing.T) {
 	}
 
 	// 4. AND THE RELEASE'S OWN SIZE IS THE DISTINCT ONE. It must not grow
-	//    because a transfer was planned against a second repository — the
+	//    because a transfer was planned against a second repository - the
 	//    release did not get bigger.
 	row, err := s.packages.GetPackageByID(t.Context(), pkg.ID)
 	if err != nil {
@@ -122,7 +122,7 @@ func twiceDestined(t *testing.T, s *slice, transferID string) (string, []string)
 // is the same query somebody would run against a live Coordinator to check the
 // same claim, so a passing test and a hand-check are the same measurement.
 //
-// EVERY job, not only the blobs — a manifest published under a second name is a
+// EVERY job, not only the blobs - a manifest published under a second name is a
 // second manifest push, and it is part of the cost for the same reason its
 // layers are.
 func jobBytes(t *testing.T, s *slice, transferID string) (distinct, perSite int64) {

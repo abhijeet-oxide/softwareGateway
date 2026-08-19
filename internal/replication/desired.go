@@ -3,7 +3,7 @@
 // two.
 //
 // It sits between internal/product, which knows about ConfigMaps and Secrets,
-// and internal/registry/quay, which knows about HTTP — and it belongs to
+// and internal/registry/quay, which knows about HTTP - and it belongs to
 // neither. The translation is where every unit conversion, default and naming
 // difference lives, so that neither side has to know about the other's
 // vocabulary: durations become seconds here, `noProxy` becomes a comma-joined
@@ -152,7 +152,7 @@ func buildProxyCache(c *product.ProxyCacheConfig, creds Credentials) *quay.Proxy
 // UpstreamReference renders what Quay should be told to pull from.
 //
 // `mirror.from` names another target, so the reference is that target's
-// registry and repository — declared once, on the target, rather than repeated
+// registry and repository - declared once, on the target, rather than repeated
 // as a literal in every mirror that pulls from it.
 func UpstreamReference(t product.Target) string {
 	if t.Repository == "" {

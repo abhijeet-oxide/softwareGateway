@@ -34,7 +34,7 @@ func TestSplitBlocksValidate(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 // A rule with no pattern selects nothing, and the message has to say that
-// downloading by hand needs no rule at all — otherwise the obvious fix is to
+// downloading by hand needs no rule at all - otherwise the obvious fix is to
 // invent a pattern that matches everything.
 func TestRuleWithoutAPatternIsRejected(t *testing.T) {
 	p := withSplitBlocks()
@@ -172,7 +172,7 @@ func TestLegacyVerifyBeforeTransferBecomesTheDownloadsGate(t *testing.T) {
 }
 
 // A rule naming nothing gets the default download, and with no downloads
-// declared, the product's default target — which is what it has always meant.
+// declared, the product's default target - which is what it has always meant.
 func TestRuleNamingNothingFallsBackTwice(t *testing.T) {
 	p := withQuayChain()
 	p.Spec.AutoDownload.Rules[0].Targets = nil

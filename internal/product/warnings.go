@@ -8,8 +8,8 @@ import "fmt"
 // ones that fail. A mirror whose tag glob excludes every signature is a
 // perfectly well-formed document: it applies cleanly, syncs successfully, and
 // then breaks destination verification for every package with no visible
-// cause. Rejecting it outright would be wrong — a product that does not verify
-// at the destination has no reason to mirror signatures — so the only honest
+// cause. Rejecting it outright would be wrong - a product that does not verify
+// at the destination has no reason to mirror signatures - so the only honest
 // treatment is to say so and let the reader decide.
 //
 // Warnings never fail validation and never block a load. `transferctl config
@@ -23,7 +23,7 @@ type Warning struct {
 
 func (w Warning) String() string {
 	if w.Hint != "" {
-		return fmt.Sprintf("%s: %s — %s", w.Field, w.Message, w.Hint)
+		return fmt.Sprintf("%s: %s - %s", w.Field, w.Message, w.Hint)
 	}
 	return fmt.Sprintf("%s: %s", w.Field, w.Message)
 }
@@ -41,7 +41,7 @@ func (p *Product) computeWarnings() []Warning {
 // docs/design/18 section 9.
 //
 // Cosign publishes a signature as the TAG `sha256-<hex>.sig`. A mirror rule of
-// `v3.*` — the obvious rule, the one anybody would write — matches every
+// `v3.*` - the obvious rule, the one anybody would write - matches every
 // release and not one signature. Quay reports success. The images arrive.
 // Destination verification then fails for every package, and the cause is a
 // field three screens away that looks correct.
@@ -65,7 +65,7 @@ func (p *Product) warnMirrorExcludesSignatures() []Warning {
 				"no glob can match a cosign signature tag, but %q verifies at the destination",
 				t.Name),
 			Hint: "signatures are published as tags of the form `sha256-<hex>.sig`, so this mirror will " +
-				"copy the images and leave every signature behind — the sync will report success and " +
+				"copy the images and leave every signature behind - the sync will report success and " +
 				"verification will then fail for every package. Add 'sha256-*.sig' to the list",
 		})
 	}
@@ -77,7 +77,7 @@ func (p *Product) warnMirrorExcludesSignatures() []Warning {
 //
 // Not an error: a second independent copy is occasionally exactly the point,
 // which is what a disaster-recovery registry is for. But on a metered or
-// contended vendor link it is usually an accident, and it is invisible —
+// contended vendor link it is usually an accident, and it is invisible -
 // nothing in the configuration says "this costs twice".
 func (p *Product) warnRedundantVendorEgress() []Warning {
 	var quay []string

@@ -38,7 +38,7 @@ type ReportFilter struct {
 
 // ProductReport is one product's operational summary for the period.
 //
-// Counts and byte totals only. Derived figures — average speed above all — are
+// Counts and byte totals only. Derived figures - average speed above all - are
 // computed by the caller from these, so the rule about when a speed may be
 // stated lives in one place rather than in the SQL.
 type ProductReport struct {
@@ -57,7 +57,7 @@ type ProductReport struct {
 	// per-job progress over succeeded jobs. Not planned bytes, and not the
 	// release size.
 	BytesTransferred int64
-	// SavedBytes is what did not have to move — deduplicated at planning time
+	// SavedBytes is what did not have to move - deduplicated at planning time
 	// plus skipped at run time.
 	SavedBytes int64
 

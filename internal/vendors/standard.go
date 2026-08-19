@@ -15,7 +15,7 @@ const (
 	// unless a vendor genuinely deviates.
 	LayoutAuto = "auto"
 	// LayoutNone records every tag as its own package and looks for nothing.
-	// Fastest, and the honest choice for a registry with no signing at all —
+	// Fastest, and the honest choice for a registry with no signing at all -
 	// it produces `unknown` rather than a misleading `unsigned`.
 	LayoutNone = "none"
 	// LayoutStandard is OCI 1.1 referrers with the cosign tag schema as
@@ -46,7 +46,7 @@ func (r *Registry) Register(l Layout) { r.layouts[l.Name()] = l }
 //
 // An unknown name is an ERROR, not a silent fallback to standard behaviour. A
 // typo in `layout: nearr` that quietly disabled signature discovery would be
-// invisible in every output — packages would simply read `unknown` forever, and
+// invisible in every output - packages would simply read `unknown` forever, and
 // nothing would say why.
 func (r *Registry) Get(name string) (Layout, error) {
 	switch strings.TrimSpace(name) {
@@ -77,7 +77,7 @@ func (r *Registry) Names() []string {
 // one package, and nothing is bundled or renamed.
 //
 // It is what any OCI-conformant source gets, and it is what makes the plugin
-// mechanism optional rather than mandatory — a vendor who publishes normally
+// mechanism optional rather than mandatory - a vendor who publishes normally
 // needs no plugin at all.
 type Standard struct{}
 
@@ -98,8 +98,8 @@ func (Standard) LooksForSignatures() bool { return false }
 
 // DisplayRepository shortens nothing.
 //
-// A conformant registry has no structural noise to remove, and inventing some —
-// by dropping whatever prefix a page of results happens to share, say — would
+// A conformant registry has no structural noise to remove, and inventing some -
+// by dropping whatever prefix a page of results happens to share, say - would
 // make a listing say different things about the same repository depending on
 // what else was on screen.
 func (Standard) DisplayRepository(string) string { return "" }
@@ -127,7 +127,7 @@ func (Standard) Group(
 // a vendor Layout that failed.
 //
 // Degrading to one-package-per-tag means a vendor changing its convention makes
-// the output noisier rather than making discovery find nothing — the latter
+// the output noisier rather than making discovery find nothing - the latter
 // being an outage, and the former an annoyance somebody notices and reports.
 func (Standard) Fallback(scanned []ScannedTag) []Package {
 	out := make([]Package, 0, len(scanned))

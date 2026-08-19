@@ -27,7 +27,7 @@ type Loader struct {
 	// Resolved HERE, at load, rather than at each point of use. Every consumer
 	// then reads a number that is already final, which is what removes the
 	// "was this set?" question from the scanner, the client factory and
-	// preflight alike — three places that previously each had their own idea of
+	// preflight alike - three places that previously each had their own idea of
 	// what a zero meant.
 	defaults Concurrency
 }
@@ -71,7 +71,7 @@ type InvalidProduct struct {
 
 // Load reads and validates every document in the directory.
 //
-// A missing directory is not an error — it yields an empty result. That keeps
+// A missing directory is not an error - it yields an empty result. That keeps
 // the zero-setup development path working before any product exists.
 func (l *Loader) Load() (LoadResult, error) {
 	var res LoadResult
@@ -153,7 +153,7 @@ func (l *Loader) Load() (LoadResult, error) {
 // uniquely indexed on (registry_host, repository_path) and its product_id is
 // NOT NULL. Two products naming the same registry and path cannot both be
 // stored, and reconciling them would flip ownership back and forth on every
-// configuration reload — a silent, confusing failure. It is rejected here
+// configuration reload - a silent, confusing failure. It is rejected here
 // instead, before merge.
 func crossProductRepositoryClashes(p *Product, claimed map[string]string) Errors {
 	var errs Errors

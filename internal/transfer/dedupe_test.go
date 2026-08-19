@@ -11,8 +11,8 @@ import (
 
 // What is NOT sent, proven rather than asserted.
 //
-// Every claim in this file was made in prose first — "the second transfer is
-// nearly free", "a component appearing three times was sent once" — and prose
+// Every claim in this file was made in prose first - "the second transfer is
+// nearly free", "a component appearing three times was sent once" - and prose
 // is exactly what content addressing makes impossible to check by eye. A blob
 // uploaded twice to the same place is byte-identical to one uploaded once, so
 // every total, every size and every state agrees with both stories. Only a
@@ -58,8 +58,8 @@ func TestTransferringTheSameBundleTwiceMovesNothingTheSecondTime(t *testing.T) {
 }
 
 // Two requests for the same bundle, planned before either has run. The
-// placement cache cannot help here — nothing is at the destination yet when the
-// second is planned — so this is the concurrent-duplicate path, not the dedupe
+// placement cache cannot help here - nothing is at the destination yet when the
+// second is planned - so this is the concurrent-duplicate path, not the dedupe
 // path, and it is the one that would quietly send everything twice.
 func TestTwoRequestsForOneBundleDoNotSendItTwice(t *testing.T) {
 	s := newSlice(t)
@@ -86,8 +86,8 @@ func TestTwoRequestsForOneBundleDoNotSendItTwice(t *testing.T) {
 }
 
 // THE CLAIM THAT NEEDED PROVING. A component of a bundle appears three times in
-// the destination browser — under its tag, under its digest, and inside the
-// bundle — and the answer to "was it sent three times?" is no, but no total
+// the destination browser - under its tag, under its digest, and inside the
+// bundle - and the answer to "was it sent three times?" is no, but no total
 // shows that. The first two are one OCI repository and cost nothing; the third
 // is a second repository, which the specification requires to hold its own blob
 // links, and that arrival is a MOUNT.
@@ -118,7 +118,7 @@ func TestAComponentAppearingInThreePlacesIsSentOnce(t *testing.T) {
 		}
 		// And exactly one mount: the second repository got it without bytes.
 		if mounts != 1 {
-			t.Errorf("blob %s was mounted %d times, want once — the second repository "+
+			t.Errorf("blob %s was mounted %d times, want once - the second repository "+
 				"should be a relocation, not a transfer", digest[:19], mounts)
 		}
 	}
@@ -189,8 +189,8 @@ func TestASecondReleaseTransfersOnlyTheDelta(t *testing.T) {
 	}
 }
 
-// Content removed at the destination — a garbage collector, an operator with a
-// delete button — must come back, and nothing else with it.
+// Content removed at the destination - a garbage collector, an operator with a
+// delete button - must come back, and nothing else with it.
 func TestOnlyWhatWasRemovedFromTheTargetIsSentAgain(t *testing.T) {
 	s := newSlice(t)
 	pkg, components := seedORB(t, s, "orb_23.8.1076")
@@ -201,7 +201,7 @@ func TestOnlyWhatWasRemovedFromTheTargetIsSentAgain(t *testing.T) {
 	}
 
 	// Remove one component's layers from the destination, and the placement
-	// records that say they are there — which is what a garbage collector
+	// records that say they are there - which is what a garbage collector
 	// leaves behind, and the case the whole optimistic cache rests on.
 	victim := components[1]
 	gone := s.blobsOfManifest(s.src, sourcePath, victim.digest)
@@ -237,8 +237,8 @@ func TestOnlyWhatWasRemovedFromTheTargetIsSentAgain(t *testing.T) {
 
 // The claim that a delta transfer is FAST, rather than merely small.
 //
-// Bytes are the honest measure and duration is not — a test machine's clock
-// says nothing about a 917 ms link — so what is asserted here is the quantity
+// Bytes are the honest measure and duration is not - a test machine's clock
+// says nothing about a 917 ms link - so what is asserted here is the quantity
 // that duration is proportional to: how much crossed the network. On a path
 // where every stream is bounded by window ÷ RTT, time is bytes ÷ a constant,
 // and the ratio is the part that carries over.
@@ -263,7 +263,7 @@ func TestASecondReleaseIsProportionallyCheaper(t *testing.T) {
 		t.Fatal("the first release moved nothing; the comparison is meaningless")
 	}
 	// Half is a deliberately loose bound. The fixture's proportions are
-	// arbitrary and the point is the ORDER of the saving, not its exact size —
+	// arbitrary and the point is the ORDER of the saving, not its exact size -
 	// a change that quietly stopped reusing anything would put this ratio at
 	// or above one and fail, which is what the assertion is for.
 	if secondMoved*2 >= firstMoved {
@@ -343,7 +343,7 @@ func seedRelease(t *testing.T, s *slice, tag, variant string) release {
 }
 
 // blobsOfManifest reads the layer and config digests a manifest references,
-// from the registry rather than from the fixture's own variables — so the test
+// from the registry rather than from the fixture's own variables - so the test
 // is checking what was actually published.
 func (s *slice) blobsOfManifest(reg *fakeregistry.Registry, repoPath, digest string) []string {
 	s.t.Helper()

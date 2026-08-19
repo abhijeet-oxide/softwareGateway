@@ -12,7 +12,7 @@ import (
 // # Why current and peak throughput live here rather than on the server
 //
 // Average throughput is derivable from state the server already holds: bytes
-// moved over time elapsed. CURRENT is not — it needs two observations and the
+// moved over time elapsed. CURRENT is not - it needs two observations and the
 // gap between them, and the server keeps no time series. Storing one would
 // mean a maintained counter, which is the thing invariant I6 exists to
 // prevent, for a number that is only ever looked at live.
@@ -33,7 +33,7 @@ const DefaultWatchInterval = 2 * time.Second
 // change in the real one.
 //
 // Thirty seconds, which is a compromise between two failure modes that are both
-// worse. A raw two-second sample is far too jumpy to extrapolate an ETA from —
+// worse. A raw two-second sample is far too jumpy to extrapolate an ETA from -
 // one large blob finishing makes it spike, and an ETA that swings by an hour
 // between redraws is not believed, or worse, is. The cumulative average has the
 // opposite problem: it is dragged by the whole history and takes longer to
@@ -73,7 +73,7 @@ func (r *rateTracker) observe(bytes int64, at time.Time) {
 	moved := bytes - r.lastBytes
 	if moved < 0 {
 		// Bytes went backwards, which happens when a job is retried and its
-		// counter resets. Not a negative rate — just a sample to skip.
+		// counter resets. Not a negative rate - just a sample to skip.
 		return
 	}
 
@@ -84,8 +84,8 @@ func (r *rateTracker) observe(bytes int64, at time.Time) {
 
 	// Weighted by the ACTUAL gap rather than by a fixed per-sample constant, so
 	// `--interval 10s` and `--interval 1s` describe the same thirty seconds of
-	// history. A poll that arrives late — a slow Coordinator, a laptop that
-	// slept — then counts for what it covers instead of for one tick.
+	// history. A poll that arrives late - a slow Coordinator, a laptop that
+	// slept - then counts for what it covers instead of for one tick.
 	if r.smoothed == 0 {
 		r.smoothed = r.current
 		return
@@ -141,7 +141,7 @@ func watchLoop(
 //
 // `ESC[H` then `ESC[2J` was wrong, and the symptom was a table drawn without
 // its header. `2J` clears the visible screen, and terminals differ on what
-// happens to what was there: several — Windows Terminal among them — SCROLL it
+// happens to what was there: several - Windows Terminal among them - SCROLL it
 // into the scrollback rather than discarding it, which moves the cursor with
 // it. Homing first and clearing second therefore leaves the cursor somewhere
 // below the top, and the first lines written land above the viewport.

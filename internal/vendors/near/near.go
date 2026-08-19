@@ -19,7 +19,7 @@
 //	org.opencontainers.image.ref.name  "orbs/CFX-5000-k8s:signature_orb_23.8.1076"
 //	com.nokia.ncd.orb.type             "generic_signature"
 //
-// So the grouping is derivable from bytes discovery has already fetched — no
+// So the grouping is derivable from bytes discovery has already fetched - no
 // extra requests, and no reliance on tag naming as the primary signal.
 //
 // # Why the naming convention is still used, but only as a hint
@@ -36,7 +36,7 @@
 // back-references. The standard answer is the referrers API, where the
 // signature carries a `subject` pointing at what it signs. NEAR predates that
 // being widely available. Recorded here so nobody mistakes this for a model to
-// copy — when NEAR moves to referrers, this file is what changes.
+// copy - when NEAR moves to referrers, this file is what changes.
 package near
 
 import (
@@ -51,17 +51,17 @@ import (
 // Name is the value that selects this layout: `signatures.layout: near`.
 const Name = "near"
 
-// Tag prefixes NEAR uses. Hints for narrowing candidates, not proof — see the
+// Tag prefixes NEAR uses. Hints for narrowing candidates, not proof - see the
 // package comment.
 const (
 	prefixSigned    = "signed_"
 	prefixSignature = "signature_"
-	// prefixOrb marks a payload — NEAR's word for "release".
+	// prefixOrb marks a payload - NEAR's word for "release".
 	prefixOrb = "orb_"
 )
 
 // repositoryNamespace is the path segment NEAR puts every product under:
-// `orbs/cfx-5000-k8s`, `orbs/cfx-5000-db`. Structural, not informative — it is
+// `orbs/cfx-5000-k8s`, `orbs/cfx-5000-db`. Structural, not informative - it is
 // on every repository of every NEAR registry, so a listing repeats it on every
 // row and it distinguishes nothing.
 const repositoryNamespace = "orbs/"
@@ -86,10 +86,10 @@ const (
 	// manifest with no artifactType, so without this annotation nothing
 	// distinguishes it from a container image until its config is fetched.
 	orbTypeHelmChart = "helmchart"
-	// orbTypeCNFImage is a container image — a Cloud-native Network Function.
+	// orbTypeCNFImage is a container image - a Cloud-native Network Function.
 	orbTypeCNFImage = "cnfimage"
-	// orbTypeGenericPrefix covers NEAR's remaining `generic_*` values —
-	// `generic_custo` and friends — which are configuration and data rather
+	// orbTypeGenericPrefix covers NEAR's remaining `generic_*` values -
+	// `generic_custo` and friends - which are configuration and data rather
 	// than either of the above.
 	orbTypeGenericPrefix = "generic"
 )
@@ -103,8 +103,8 @@ type Layout struct{}
 //
 // An orb's index lists its parts as `application/vnd.oci.image.manifest.v1+json`
 // with no `artifactType`. Discovery records what the index says without
-// fetching each child, so the config media type — the field that normally
-// tells a Helm chart from an image — is not available. Classified on the OCI
+// fetching each child, so the config media type - the field that normally
+// tells a Helm chart from an image - is not available. Classified on the OCI
 // fields alone, every part of every orb reads as an image: a release of 157
 // images and 97 charts reports 254 images, and Helm charts become a category
 // that cannot be seen at all.
@@ -137,7 +137,7 @@ func (Layout) Name() string { return Name }
 
 // Vocabulary: NEAR's users have orbs and orb versions, not repositories and
 // tags. Nobody operating this reads "42 repositories scanned" and thinks about
-// repositories — they think about orbs, and having to translate every line of a
+// repositories - they think about orbs, and having to translate every line of a
 // summary is the same tax as reading `orbs/` on every row.
 func (Layout) Vocabulary() vendors.Vocabulary {
 	return vendors.Vocabulary{
@@ -157,7 +157,7 @@ func (Layout) LooksForSignatures() bool { return true }
 // nothing would put a blank in a listing.
 //
 // This is the one place the convention is known. It used to be inferred in the
-// CLI from the prefix a page of rows happened to share — which shortened paths
+// CLI from the prefix a page of rows happened to share - which shortened paths
 // on registries that have no such convention, and which is exactly the kind of
 // vendor knowledge this package exists to contain.
 func (Layout) DisplayRepository(path string) string {
@@ -170,7 +170,7 @@ func (Layout) DisplayRepository(path string) string {
 
 // Group collapses orb_X, signed_orb_X and signature_orb_X into one package.
 //
-// The result names `orb_X` — what a person says — while the transfer root is
+// The result names `orb_X` - what a person says - while the transfer root is
 // `signed_orb_X`, because only the wrapper reaches both the payload and the
 // signature. Transferring the payload alone would leave the signature behind
 // and make destination-side verification impossible for good.
@@ -271,8 +271,8 @@ func readWrapper(s vendors.ScannedTag) (payloadTag string, sig vendors.Related, 
 
 // AccessoryTags names the two tags NEAR publishes alongside a release.
 //
-// For `orb_23.8.1076` those are `signed_orb_23.8.1076` — the index binding the
-// release to its signature, and the digest a transfer must walk — and
+// For `orb_23.8.1076` those are `signed_orb_23.8.1076` - the index binding the
+// release to its signature, and the digest a transfer must walk - and
 // `signature_orb_23.8.1076`, the manifest whose single layer is the PKCS#7 blob.
 //
 // This is the difference between a tag FILTER and the vendor's mechanism. An
@@ -302,15 +302,15 @@ func (Layout) AccessoryTags(tag string) []string {
 // Derivable from the tag string alone, with no manifest and no registry call,
 // which is what lets the scanner reconcile the stored display names of packages
 // discovered BEFORE this source declared its vendor. Without that, turning
-// `vendor: near` on would only affect tags discovered afterwards — discovery
-// skips a tag it already holds — and every existing package would keep reading
+// `vendor: near` on would only affect tags discovered afterwards - discovery
+// skips a tag it already holds - and every existing package would keep reading
 // `orb_23.8.1076` forever.
 func (Layout) DisplayTag(tag string) string { return displayTag(tag) }
 
 // displayTag removes the `orb_` the vendor puts in front of every version.
 //
 // `orb_23.8.1076` is `23.8.1076` with four characters of noise, repeated on
-// every row of every listing. Removing it is purely cosmetic — the real tag is
+// every row of every listing. Removing it is purely cosmetic - the real tag is
 // what is stored and transferred, and both spellings resolve as input.
 //
 // Returns "" when there is nothing to remove, which the core reads as "no

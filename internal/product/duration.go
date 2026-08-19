@@ -10,7 +10,7 @@ import (
 // "168h") through JSON and YAML.
 //
 // The standard library marshals time.Duration as an integer nanosecond count,
-// which makes a ConfigMap unreadable — `interval: 900000000000` instead of
+// which makes a ConfigMap unreadable - `interval: 900000000000` instead of
 // `interval: 15m`. Configuration is read by humans far more often than it is
 // parsed, so it takes the string form.
 type Duration time.Duration

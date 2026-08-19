@@ -36,7 +36,7 @@ export function QueueControls({
   /**
    * Whether any JOB of this transfer has failed, which is not the same as the
    * transfer having failed. A download can be running with three components
-   * permanently failed under it — the retry that fixes those is the thing
+   * permanently failed under it - the retry that fixes those is the thing
    * somebody wants, and offering it only once the whole transfer gives up
    * means waiting for a failure that has, in effect, already happened.
    */
@@ -77,7 +77,7 @@ export function QueueControls({
       )}
 
       {live && (
-        <Tooltip title="Nothing new starts. Work already in flight finishes — abandoning a large blob most of the way through would be a worse trade than waiting.">
+        <Tooltip title="Nothing new starts. Work already in flight finishes - abandoning a large blob most of the way through would be a worse trade than waiting.">
           <Button size={size} icon={<PauseOutlined />} disabled={!mayOperate} onClick={() => void act('pause')}>
             Pause
           </Button>
@@ -98,7 +98,7 @@ export function QueueControls({
           description={
             <div style={{ maxWidth: 320 }}>
               Everything not yet started is cancelled. What already reached the
-              destination stays there — it is untagged, so nobody can pull it by
+              destination stays there - it is untagged, so nobody can pull it by
               accident, and the next download of the same content will find it
               and skip it.
               <br />
@@ -151,7 +151,7 @@ export function QueueControls({
 function said(verb: string, jobs: number, inFlight: number): string {
   const flight = inFlight > 0 ? ` ${inFlight} already in flight will finish.` : ''
   switch (verb) {
-    case 'retry': return 'Retrying from where it stopped — work already done is not repeated.'
+    case 'retry': return 'Retrying from where it stopped - work already done is not repeated.'
     case 'pause': return `Paused. ${jobs} jobs will not be handed out.${flight}`
     case 'resume': return `Resumed. ${jobs} jobs are leasable again.`
     case 'stop': return `Stopping. ${jobs} jobs cancelled.${
@@ -168,7 +168,7 @@ function said(verb: string, jobs: number, inFlight: number): string {
  *
  * Priority is the ONLY answer to "my download is behind one I care less about".
  * Workers take the highest-priority job that is ready, so a download can be
- * moved to the front without stopping anything — and until this existed, the
+ * moved to the front without stopping anything - and until this existed, the
  * only way to influence the order was to pause the thing in front, which stops
  * work rather than reordering it.
  *

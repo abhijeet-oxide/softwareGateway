@@ -7,7 +7,7 @@
 #   go run ./cmd/transferctl health
 #
 # The same loader reads this file and ./dev/products as a plain directory that
-# it reads as projected volumes in Kubernetes — which is the payoff for
+# it reads as projected volumes in Kubernetes - which is the payoff for
 # choosing volume mounts over the Kubernetes API. See docs/design/02 section 3.
 apiVersion: softwaregateway.io/v1alpha1
 kind: SystemConfig
@@ -45,14 +45,14 @@ coordinator:
     tickInterval: 1h
     batchSize: 5000
   # The cached manifest bodies, and the only thing this system stores that
-  # would otherwise grow without limit. A package's CONTENTS — its artifacts,
-  # their sizes, the blobs they reference — are kept forever and cost a few
+  # would otherwise grow without limit. A package's CONTENTS - its artifacts,
+  # their sizes, the blobs they reference - are kept forever and cost a few
   # kilobytes. The manifest BODIES are a cache in front of the source registry:
   # large, read only when a manifest is pushed, and exactly recoverable,
   # because a manifest is addressed by the hash of its own bytes.
   #
   # Set either bound to 0 to disable it; both 0 keeps everything. Lowering them
-  # is safe — the cost of a miss is re-fetching a few kilobytes at transfer
+  # is safe - the cost of a miss is re-fetching a few kilobytes at transfer
   # time, and nothing else.
   manifestCache:
     budgetBytes: 536870912   # 512 MiB
@@ -83,7 +83,7 @@ tls:
   #
   #   tls: failed to parse certificate from server: x509: negative serial number
   #
-  # network.tls.insecureSkipVerify does NOT help — that failure happens while
+  # network.tls.insecureSkipVerify does NOT help - that failure happens while
   # PARSING the certificate, before any verification runs. Measured, not
   # assumed: internal/platform/tlscompat carries the test.
   allowNegativeSerialNumbers: false

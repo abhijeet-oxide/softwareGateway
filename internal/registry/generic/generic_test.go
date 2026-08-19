@@ -164,7 +164,7 @@ func (r *repeatingLister) ListTags(_ context.Context, _ string, _ int) ([]string
 //
 // The client now reports what the registry said. Discovery tolerates
 // ErrNotFound at its own layer, because a missing repository must not back off
-// a source — that decision belongs to the caller, and it is tested there.
+// a source - that decision belongs to the caller, and it is tested there.
 func TestMissingRepositoryIsReportedNotSwallowed(t *testing.T) {
 	fake := fakeregistry.New()
 	t.Cleanup(fake.Close)
@@ -181,7 +181,7 @@ func TestMissingRepositoryIsReportedNotSwallowed(t *testing.T) {
 	}
 }
 
-// A repository that exists and has no tags is genuinely empty — a normal state
+// A repository that exists and has no tags is genuinely empty - a normal state
 // for a vendor repository awaiting its first release.
 func TestExistingRepositoryWithNoTagsIsEmptyNotAnError(t *testing.T) {
 	fake := fakeregistry.New()
@@ -241,7 +241,7 @@ func TestResolveMissingTagIsNotFound(t *testing.T) {
 }
 
 func TestFetchManifestReturnsVerbatimBytes(t *testing.T) {
-	// The digest — and every signature over it — is the hash of these exact
+	// The digest - and every signature over it - is the hash of these exact
 	// bytes. Any re-serialization would change the digest and silently break
 	// verification, so unusual whitespace must survive the round trip.
 	fake := fakeregistry.New()
@@ -315,7 +315,7 @@ func TestMissingCredentialsSurfaceAsUnauthorized(t *testing.T) {
 		t.Fatal("expected an authentication failure")
 	}
 	if registry.Retryable(err) {
-		t.Fatal("an auth failure must not be retryable — credentials do not fix themselves")
+		t.Fatal("an auth failure must not be retryable - credentials do not fix themselves")
 	}
 }
 

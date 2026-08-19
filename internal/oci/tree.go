@@ -28,7 +28,7 @@ const (
 type Artifact struct {
 	Descriptor registry.Descriptor
 	// Raw is the manifest exactly as the registry served it. Kept verbatim
-	// because the digest — and every signature over it — is the hash of these
+	// because the digest - and every signature over it - is the hash of these
 	// exact bytes.
 	Raw []byte
 	// Parent indexes into the tree slice; -1 for the root.
@@ -67,7 +67,7 @@ type Tree struct {
 	//
 	// Deduplicated deliberately: a fat index whose platforms share a base layer
 	// does not transfer that layer per platform, so summing naively would
-	// overstate the cost — sometimes by several times — and make every size
+	// overstate the cost - sometimes by several times - and make every size
 	// shown to an operator a lie.
 	//
 	// NIL when it cannot be known, which is the case for a package whose root
@@ -82,7 +82,7 @@ type Tree struct {
 
 	// PublishedAt is the root manifest's org.opencontainers.image.created, a
 	// STANDARD OCI annotation. Nil when the publisher set none, which the spec
-	// permits — so it is useful where present and never relied upon.
+	// permits - so it is useful where present and never relied upon.
 	PublishedAt *string
 }
 
@@ -98,7 +98,7 @@ type manifestBody struct {
 	Layers       []registry.Descriptor `json:"layers"`
 	Manifests    []registry.Descriptor `json:"manifests"`
 	Subject      *registry.Descriptor  `json:"subject"`
-	// Annotations describe the artifact itself — when it was built, who
+	// Annotations describe the artifact itself - when it was built, who
 	// published it, what release it belongs to.
 	//
 	// These were parsed and discarded until it was pointed out that discovery
@@ -114,7 +114,7 @@ type manifestBody struct {
 // longer does, and the argument for deferring is that NOTHING IS LOST: the root
 // digest immutably determines the entire Tree, so it can be walked exactly, at
 // any time, from one digest we already hold. The traversal was a cache, and it
-// was paid for on every newly discovered tag — a bundle whose index references
+// was paid for on every newly discovered tag - a bundle whose index references
 // sixty artifacts cost sixty extra round trips, and a first scan of a real
 // vendor catalogue ran into five figures of requests.
 //
@@ -126,7 +126,7 @@ type manifestBody struct {
 // without has the vendor's word for it.
 //
 // The cost of deferring is that a bundle's transfer size is not known at
-// discovery — the index states the size of each child MANIFEST, not of the
+// discovery - the index states the size of each child MANIFEST, not of the
 // layers underneath it. That is reported as unknown rather than guessed. See
 // tree.TotalBytes.
 func FetchRoot(
@@ -201,7 +201,7 @@ func appendArtifact(
 		return nil, fmt.Errorf("parse manifest %s: %w: %w",
 			desc.Digest.Short(), registry.ErrMalformedResponse, err)
 	}
-	// The body's own mediaType is authoritative where present — some registries
+	// The body's own mediaType is authoritative where present - some registries
 	// return a generic Content-Type.
 	if body.MediaType != "" {
 		desc.MediaType = body.MediaType
@@ -220,8 +220,8 @@ func appendArtifact(
 	// itself beats an index describing it.
 	//
 	// `from` was missing, and its absence was the expensive one. An index
-	// names each child with the reserved org.opencontainers.image.ref.name —
-	// which repository and tag that component answers to — and it says so on
+	// names each child with the reserved org.opencontainers.image.ref.name -
+	// which repository and tag that component answers to - and it says so on
 	// the CHILD DESCRIPTOR, not inside the child's own manifest. Fetching a
 	// manifest by digest returns none of that. So every component of a bundle
 	// arrived anonymous, and a transfer had nothing to reproduce the vendor's
@@ -248,7 +248,7 @@ func appendArtifact(
 	default:
 		// An image manifest, a Helm chart, or any other single artifact.
 		// Anything that is not an index is treated as a leaf carrying blobs,
-		// which is what the OCI artifact model asks for — new artifact types
+		// which is what the OCI artifact model asks for - new artifact types
 		// arrive constantly and none of them should need a code change here.
 		if body.Config != nil && body.Config.Digest != "" {
 			if err := body.Config.Digest.Validate(); err != nil {
@@ -294,7 +294,7 @@ func mergeAnnotations(sources ...map[string]string) map[string]string {
 func measure(artifacts []Artifact) (*int64, *int) {
 	// An artifact we listed but did not fetch has no blob list, so its bytes
 	// are unaccounted for. Reporting a total that omits them would understate a
-	// bundle's transfer cost — by nearly all of it — and a wrong size is worse
+	// bundle's transfer cost - by nearly all of it - and a wrong size is worse
 	// than an absent one, because nobody questions a number.
 	for _, a := range artifacts {
 		if a.Raw == nil {
@@ -327,7 +327,7 @@ func measure(artifacts []Artifact) (*int64, *int) {
 //
 // The root only: an index's children each carry their own created time, and
 // the package's date is the release's, not the earliest component's. Reading
-// the root is also the only one of them that is stable — a bundle's children
+// the root is also the only one of them that is stable - a bundle's children
 // can be rebuilt independently.
 //
 // Validated as RFC 3339 before it is believed. It is a free-text annotation

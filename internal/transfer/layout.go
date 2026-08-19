@@ -16,7 +16,7 @@ import (
 // container images, Helm charts and generic artifacts, and those components
 // have their OWN repository paths and their OWN tags in the source registry.
 // Pushing everything into a single destination repository preserves the
-// CONTENT — every blob is content-addressed, so nothing is lost — while
+// CONTENT - every blob is content-addressed, so nothing is lost - while
 // destroying the NAMES. A consumer who could pull `orbs/CFX-5000-k8s/nginx:1.2.3`
 // from the vendor would be left with a digest.
 //
@@ -25,8 +25,8 @@ import (
 // From the OCI structure itself, in this order:
 //
 //  1. The artifact's own `org.opencontainers.image.ref.name` annotation. This
-//     is the reserved OCI annotation for exactly this — "what this artifact is
-//     called" — and an index that bundles components records it on each child
+//     is the reserved OCI annotation for exactly this - "what this artifact is
+//     called" - and an index that bundles components records it on each child
 //     descriptor. NEAR writes the fully-qualified form,
 //     `orbs/CFX-5000-k8s:signature_orb_23.8.1076`.
 //  2. Failing that, the repository its PARENT landed in. A child manifest that
@@ -48,22 +48,22 @@ import (
 // answers BLOB_UNKNOWN. That is not a policy choice, it is the distribution
 // spec, and the in-repo fake enforces it exactly as a real registry does.
 //
-// So every artifact is placed in its parent's repository — which keeps the
-// bundle intact and resolvable — and ADDITIONALLY at the repository it names,
+// So every artifact is placed in its parent's repository - which keeps the
+// bundle intact and resolvable - and ADDITIONALLY at the repository it names,
 // when that differs. Both addressing forms then work: pulling the ORB gets the
 // whole thing, and pulling `orbs/CFX-5000-k8s/nginx:1.2.3` gets the component
 // under the name the vendor documented.
 //
 // The cost is honest and worth stating: a component published in two
 // repositories needs its blobs in both, because a registry stores blobs per
-// repository. Within one registry that is a cross-repository MOUNT — zero
-// bytes over the wire regardless of size — which is the case that matters,
+// repository. Within one registry that is a cross-repository MOUNT - zero
+// bytes over the wire regardless of size - which is the case that matters,
 // since both destinations are the same registry by construction.
 //
 // # This decides the DESTINATION only, never where to read from
 //
 // Everything is read from the repository the package was discovered in, and
-// that is not a simplification — it is what OCI requires. An index can only
+// that is not a simplification - it is what OCI requires. An index can only
 // reference children the registry will serve from the index's own repository,
 // so a bundle whose components were not co-located could not have been walked
 // in the first place. The walk therefore proves co-location, and a component
@@ -83,7 +83,7 @@ type LayoutOptions struct {
 	// it, which is what keeps two vendors from colliding in one registry.
 	BasePath string
 
-	// SourceRepository is where the package itself was discovered — the
+	// SourceRepository is where the package itself was discovered - the
 	// fallback for the root, and therefore for anything that inherits.
 	SourceRepository string
 
@@ -105,7 +105,7 @@ type Site struct {
 
 // Placement is everywhere one artifact lands.
 //
-// The FIRST site is always the one that keeps the bundle resolvable — the
+// The FIRST site is always the one that keeps the bundle resolvable - the
 // artifact's parent repository. Any others are the names the vendor gave it.
 type Placement struct {
 	Sites []Site
@@ -134,7 +134,7 @@ func ResolveLayout(tree store.ExpandedTree, opts LayoutOptions) map[string]Place
 	out := make(map[string]Placement, len(tree.Artifacts))
 
 	// containerOf is the repository each artifact must live in for the bundle
-	// to resolve — its parent's, by position, so a child inherits in one pass.
+	// to resolve - its parent's, by position, so a child inherits in one pass.
 	containerOf := make([]string, len(tree.Artifacts))
 
 	for i, a := range tree.Artifacts {
@@ -159,8 +159,8 @@ func ResolveLayout(tree store.ExpandedTree, opts LayoutOptions) map[string]Place
 			sites[0].Tags = mergeTags(opts.RootTags, ref.tags())
 
 		case ref.repository == "" || sameRepository(ref.repository, container):
-			// Named within its own container, or not named at all. The tag —
-			// where there is one — belongs right here.
+			// Named within its own container, or not named at all. The tag -
+			// where there is one - belongs right here.
 			sites[0].Tags = ref.tags()
 
 		default:
@@ -174,7 +174,7 @@ func ResolveLayout(tree store.ExpandedTree, opts LayoutOptions) map[string]Place
 			})
 		}
 
-		// An artifact reached twice — a base image shared by two components —
+		// An artifact reached twice - a base image shared by two components -
 		// keeps the union of everywhere it was placed. Dropping one would
 		// leave a name at the source with no counterpart at the destination.
 		if existing, seen := out[a.Row.Digest]; seen {
@@ -213,7 +213,7 @@ func mergeSites(a, b []Site) []Site {
 // inheritedRepository returns the repository an artifact's parent lives in.
 //
 // One step, not a walk: the tree is ordered parents-before-children, so by the
-// time a child is reached its parent's container is already resolved — and a
+// time a child is reached its parent's container is already resolved - and a
 // parent's container is never empty, because it either inherited one or fell
 // back to the package's own repository.
 func inheritedRepository(containerOf []string, parent int, fallback string) string {
@@ -227,7 +227,7 @@ func inheritedRepository(containerOf []string, parent int, fallback string) stri
 //
 // With a base, the source structure is nested underneath it verbatim. Without
 // one, it is mirrored at the registry root. Either way the source's own shape
-// is preserved — the base only decides what sits above it.
+// is preserved - the base only decides what sits above it.
 // DestinationPath is where content from one source repository lands.
 //
 // Exported because calibration has to probe the SAME path a transfer writes
@@ -264,13 +264,13 @@ func destinationPath(base, sourceRepo string) string {
 // repository, spelled twice.
 //
 // Compared byte for byte, those are two repositories, so the layout published
-// the component into its container AND "elsewhere" — and the destination grew
+// the component into its container AND "elsewhere" - and the destination grew
 // two sibling folders with the same name and different capitals, half the
 // bundle in each.
 //
 // The second one does not entirely work, either. The OCI grammar for a
 // repository name is lowercase-only, and Artifactory accepts a push to a
-// mixed-case path while issuing a token scoped to the name it normalised — so a
+// mixed-case path while issuing a token scoped to the name it normalised - so a
 // later request against the name we sent falls outside that scope and comes
 // back 401 unauthorized, on a repository the same credential has been writing
 // to for thirty hours. It surfaces at the tag, which is the last request of the
@@ -301,7 +301,7 @@ func (r refName) tags() []string {
 // parseRefName reads the reserved OCI reference annotation.
 //
 // Three shapes appear in the wild, and the OCI grammar tells them apart
-// unambiguously — a tag may contain neither `/` nor `:`, and a repository path
+// unambiguously - a tag may contain neither `/` nor `:`, and a repository path
 // may contain `/` but never `:`:
 //
 //	orbs/CFX-5000-k8s:orb_23.8.1076   repository and tag
@@ -309,8 +309,8 @@ func (r refName) tags() []string {
 //	orb_23.8.1076                     tag only
 //
 // Split at the LAST colon, because a repository path may contain slashes and
-// the tag never contains a colon. A value that parses to neither — an empty
-// string, a stray colon — yields an empty refName, which the caller reads as
+// the tag never contains a colon. A value that parses to neither - an empty
+// string, a stray colon - yields an empty refName, which the caller reads as
 // "this artifact did not name itself" and falls back to inheritance.
 func parseRefName(v string) refName {
 	v = strings.TrimSpace(v)

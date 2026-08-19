@@ -3,7 +3,7 @@
 //
 // See docs/design/02-configuration.md.
 //
-// A Product is the root aggregate — the unit of configuration, ownership and
+// A Product is the root aggregate - the unit of configuration, ownership and
 // blast radius. One product is one ConfigMap, one YAML document; everything
 // about that product lives in that one place.
 package product
@@ -45,7 +45,7 @@ type Product struct {
 	// Warnings lists configurations that are valid and probably not intended.
 	//
 	// Distinct from Deprecations, which are about the schema moving on. A
-	// warning is about THIS document being self-defeating — see warnings.go.
+	// warning is about THIS document being self-defeating - see warnings.go.
 	Warnings []Warning `json:"-"`
 }
 
@@ -78,7 +78,7 @@ type Spec struct {
 	Promotion *Promotion `json:"promotion,omitempty"`
 	// Download is WHAT happens; AutoDownload is WHEN it happens by itself.
 	// They are separate because an auto-download rule does not do the
-	// downloading — it triggers a download, which is the same operation a
+	// downloading - it triggers a download, which is the same operation a
 	// person performs by hand.
 	Download      []Download          `json:"download,omitempty"`
 	AutoDownload  AutoDownload        `json:"autoDownload,omitempty"`
@@ -91,7 +91,7 @@ type Spec struct {
 // Source is a vendor-side registry location, read-only, polled by discovery.
 //
 // A source names ONE REGISTRY and one or more repositories on it. A product
-// whose packages are spread across several repositories — one per component —
+// whose packages are spread across several repositories - one per component -
 // declares them all under a single source, because they share a registry host,
 // one credential and one rate-limit budget. Splitting them into separate
 // sources would duplicate all three and let the per-repository budgets multiply
@@ -109,7 +109,7 @@ type Source struct {
 	//	                           from on request, but is not polled
 	//
 	// Use this one when a vendor relationship is paused; use discovery.enabled
-	// when you only want to stop the polling — a failover mirror, say, which
+	// when you only want to stop the polling - a failover mirror, say, which
 	// must stay usable but must not double-discover every tag.
 	Enabled *bool `json:"enabled,omitempty"`
 
@@ -119,13 +119,13 @@ type Source struct {
 	Repository string `json:"repository,omitempty"`
 
 	// Repositories names several explicitly. Use this when a product ships as
-	// separate repositories — platform/core, platform/db, platform/ui.
+	// separate repositories - platform/core, platform/db, platform/ui.
 	//
 	// LEAVING BOTH EMPTY IS THE INTERESTING CASE: it means "every repository on
 	// this registry", found from the catalog and narrowed by
 	// discovery.repositoryFilters. That is what a product needs when a new
 	// component ships as a new repository and nobody edits the ConfigMap in
-	// time — which is the normal way this goes wrong.
+	// time - which is the normal way this goes wrong.
 	Repositories []string `json:"repositories,omitempty"`
 
 	Type           RegistryType    `json:"type,omitempty"`
@@ -137,15 +137,15 @@ type Source struct {
 	// Nokia NEAR registry, empty (or `auto`) for anything conformant.
 	//
 	// It is the switch for every vendor-specific behaviour there is, and it is
-	// opt-in per source. Without it a NEAR registry is read as an ordinary one —
+	// opt-in per source. Without it a NEAR registry is read as an ordinary one -
 	// three packages per release rather than one, no signature grouping, no
-	// shortening — and, just as importantly, a registry that is NOT NEAR gets
+	// shortening - and, just as importantly, a registry that is NOT NEAR gets
 	// none of NEAR's rewriting. That second half is why this field exists:
 	// `orbs/` was being trimmed off repository paths and `orb_` off tags for
 	// every source, on the strength of what a page of results happened to look
 	// like rather than on a statement about the vendor.
 	//
-	// Deliberately separate from Type, which says how to SPEAK to the registry —
+	// Deliberately separate from Type, which says how to SPEAK to the registry -
 	// and for every vendor met so far, including NEAR, that is plain OCI
 	// Distribution v2. Protocol and publishing convention vary independently, so
 	// they are two fields.
@@ -155,7 +155,7 @@ type Source struct {
 	Vendor string `json:"vendor,omitempty"`
 
 	// Concurrency overrides the application-level limit for this one registry.
-	// Almost always absent — see the Concurrency type.
+	// Almost always absent - see the Concurrency type.
 	Concurrency Concurrency `json:"concurrency,omitempty"`
 
 	// Signatures describes how this vendor lays out and formats signatures.
@@ -173,7 +173,7 @@ type Source struct {
 	//
 	// Two vendors do not share a signing identity, and a product that pulls
 	// from both cannot express that with one product-level block. The scalar
-	// settings inherit; `cosign` replaces wholesale — see Product.VerificationFor.
+	// settings inherit; `cosign` replaces wholesale - see Product.VerificationFor.
 	Verification *Verification `json:"verification,omitempty"`
 }
 
@@ -183,7 +183,7 @@ type Source struct {
 // honoured, so documents written before the field moved keep working unchanged.
 // The two are the same setting: `layout` was nested under `signatures` when
 // grouping tags was the only thing it controlled, and it now also decides how a
-// package is NAMED — which is not a signature concern and does not read like
+// package is NAMED - which is not a signature concern and does not read like
 // one at the top of a document.
 //
 // Both set and disagreeing is a validation error rather than a precedence rule;
@@ -199,7 +199,7 @@ func (s Source) VendorLayout() string {
 // from the registry rather than being told them.
 //
 // There is deliberately no `repositoryDiscovery.enabled` flag. Naming no
-// repositories IS the statement "I do not know them yet, find them" — a
+// repositories IS the statement "I do not know them yet, find them" - a
 // separate switch would let configuration say one thing and mean another
 // (repositories listed AND discovery off, or none listed AND discovery off,
 // which scans nothing while looking configured).
@@ -233,7 +233,7 @@ func (s Source) DeclaredRepositories() []string {
 
 // Filters is an include/exclude pair of RE2 patterns.
 //
-// Shared by tag and repository filtering: the semantics are identical — no
+// Shared by tag and repository filtering: the semantics are identical - no
 // include patterns admits everything, and exclude always wins over include.
 type Filters struct {
 	Include []string `json:"include,omitempty"`
@@ -251,12 +251,12 @@ type Filters struct {
 //
 // Note that `layout` is deliberately NOT the source's `type`. `type` says how to
 // speak to the registry, and for every vendor we have met that is plain OCI
-// Distribution v2 — including Nokia's NEAR, whose protocol is entirely
+// Distribution v2 - including Nokia's NEAR, whose protocol is entirely
 // standard. What differs is the publishing convention, which is this.
 //
 // Verification itself lands in M5. These settings exist now so configuration
 // written today stays valid, and so discovery can already report WHETHER a
-// package is signed — which it cannot do without knowing where to look.
+// package is signed - which it cannot do without knowing where to look.
 type Signatures struct {
 	// Layout selects the discovery mechanism. Empty means auto, which is
 	// standard behaviour and correct for any conformant registry.
@@ -268,7 +268,7 @@ type Signatures struct {
 	// bundle.
 	Format string `json:"format,omitempty"`
 
-	// TrustBundleRef names the Secret holding the trust material — CA roots for
+	// TrustBundleRef names the Secret holding the trust material - CA roots for
 	// PKCS#7, a public key or Fulcio root for cosign.
 	//
 	// A reference, never inline: per the standing constraint, every credential
@@ -284,7 +284,7 @@ type Target struct {
 
 	// Repository is the ONE destination path for this target.
 	//
-	// A target is a single repository — `internal.example.com/nokia/lab` — and
+	// A target is a single repository - `internal.example.com/nokia/lab` - and
 	// everything replicated to it lands under that path. What follows is the
 	// registry's own addressing: tags and digests.
 	//
@@ -297,8 +297,8 @@ type Target struct {
 	// Enabled turns this target off without deleting it. Defaults to true.
 	//
 	// A destination being decommissioned, or one whose registry is down for
-	// maintenance, should stop receiving transfers without its configuration —
-	// and its history — being thrown away.
+	// maintenance, should stop receiving transfers without its configuration -
+	// and its history - being thrown away.
 	Enabled        *bool           `json:"enabled,omitempty"`
 	Type           RegistryType    `json:"type,omitempty"`
 	Anonymous      bool            `json:"anonymous,omitempty"`
@@ -328,7 +328,7 @@ type Target struct {
 	//
 	// Free text, because the stages a site runs are its own business. It is
 	// what `transferctl transfers promote` resolves against when no explicit
-	// --from/--to is given, and it carries no meaning otherwise — a product
+	// --from/--to is given, and it carries no meaning otherwise - a product
 	// that never promotes can leave it unset.
 	Environment string `json:"environment,omitempty"`
 
@@ -338,7 +338,7 @@ type Target struct {
 	// be reachable only by promotion from another target.
 	PromotionOnly bool `json:"promotionOnly,omitempty"`
 
-	// Replication says HOW content gets into this target — whether our workers
+	// Replication says HOW content gets into this target - whether our workers
 	// push it, or the registry fetches it for itself. Absent means `copy`,
 	// which is what every target meant before this field existed. See
 	// replication.go and docs/design/18.
@@ -446,15 +446,15 @@ const DefaultMaxRepositories = 200
 // It replaced seven interacting numbers with two, and the argument for that is
 // worth keeping. A source used to carry `rateLimits.maxConcurrentDownloads`,
 // `maxConcurrentUploads`, `maxConnections`, `requestsPerSecond` and `burst`,
-// plus `discovery.concurrency.repositories` and `.tags` — set per source, per
+// plus `discovery.concurrency.repositories` and `.tags` - set per source, per
 // target, in every product document. Nobody could predict what a change to one
 // of them would do, because the answer depended on the other six.
 //
 // Worse, they were not independent. Every request a scan makes goes through one
 // connection pool, so THE POOL IS THE CONCURRENCY LIMIT: point more goroutines
 // at a pool of 32 and you get 32 in-flight requests and a queue. The old
-// defaults hid this by agreeing with each other — 4 repositories × 8 tags = 32
-// = maxConnections — an agreement nobody wrote down and any edit would break.
+// defaults hid this by agreeing with each other - 4 repositories × 8 tags = 32
+// = maxConnections - an agreement nobody wrote down and any edit would break.
 // A pool sized above the worker count is idle sockets; below it is goroutines
 // blocked on a semaphore they cannot see.
 //
@@ -463,7 +463,7 @@ const DefaultMaxRepositories = 200
 //
 // It belongs at the APPLICATION level: `concurrency.perRegistry` in system
 // configuration is what a product inherits, and the per-source block below
-// exists for the case that actually comes up — one fragile vendor that needs a
+// exists for the case that actually comes up - one fragile vendor that needs a
 // smaller number than the rest of the fleet.
 type Concurrency struct {
 	// PerRegistry is the number of requests in flight against one registry, and
@@ -472,8 +472,8 @@ type Concurrency struct {
 	PerRegistry int `json:"perRegistry,omitempty"`
 
 	// RequestsPerSecond is a politeness ceiling ON TOP of PerRegistry, for a
-	// vendor that rate-limits by rate rather than by connection count. Zero —
-	// the usual case — means no artificial limit, and PerRegistry alone bounds
+	// vendor that rate-limits by rate rather than by connection count. Zero -
+	// the usual case - means no artificial limit, and PerRegistry alone bounds
 	// the load.
 	//
 	// Burst is deliberately not configurable. It was a third number whose only
@@ -737,13 +737,13 @@ type TLS struct {
 	// because supplying a CA bundle is the right fix. That was too strong.
 	// caBundleRef fixes an UNTRUSTED chain; it does nothing for a certificate
 	// that is expired, carries the wrong hostname, or belongs to a registry
-	// being migrated — and an operator who genuinely needs to move bytes past
+	// being migrated - and an operator who genuinely needs to move bytes past
 	// one of those today should not have to patch the binary.
 	//
 	// It is nonetheless the wrong answer to most problems. In particular it
 	// does NOT fix "x509: negative serial number": that failure happens while
 	// PARSING the server's certificate, before any verification runs, so
-	// skipping verification changes nothing. Measured, not assumed — see
+	// skipping verification changes nothing. Measured, not assumed - see
 	// tls.allowNegativeSerialNumbers in the system configuration for the fix.
 	//
 	// Every client built with this set logs a warning naming the repository,
@@ -765,7 +765,7 @@ func (t *TLS) SetsSkipVerify() bool {
 	return t != nil && t.InsecureSkipVerify != nil
 }
 
-// SkipsVerify reports whether verification is disabled. Absent means enabled —
+// SkipsVerify reports whether verification is disabled. Absent means enabled -
 // the safe direction, and the only defensible default.
 func (t *TLS) SkipsVerify() bool {
 	return t != nil && t.InsecureSkipVerify != nil && *t.InsecureSkipVerify
@@ -789,7 +789,7 @@ func SkipsTLSVerification(base Network, override *Network) bool {
 type Proxy struct {
 	HTTPSProxy string   `json:"httpsProxy,omitempty"`
 	NoProxy    []string `json:"noProxy,omitempty"`
-	// Direct ignores any inherited proxy and connects straight out —
+	// Direct ignores any inherited proxy and connects straight out -
 	// INCLUDING the environment's.
 	//
 	// Needed for two shapes. The first is "everything goes through the
@@ -799,7 +799,7 @@ type Proxy struct {
 	// to get subtly wrong when the host has a port or an alias.
 	//
 	// The second is the one that surprises people. Leaving the proxy block
-	// EMPTY does not mean "no proxy" — it falls back to HTTPS_PROXY from the
+	// EMPTY does not mean "no proxy" - it falls back to HTTPS_PROXY from the
 	// process environment, as curl, docker and kubectl do. That default is
 	// right, since a cluster-wide proxy is often the only route out, but it is
 	// invisible: a registry we can reach directly gets proxied anyway, and the
@@ -809,7 +809,7 @@ type Proxy struct {
 }
 
 // Timeouts are per request. Blob transfers are governed by IdleStall rather
-// than a total deadline — a 40 GB blob is not slow, it is large.
+// than a total deadline - a 40 GB blob is not slow, it is large.
 type Timeouts struct {
 	Connect        Duration `json:"connect,omitempty"`
 	ResponseHeader Duration `json:"responseHeader,omitempty"`
@@ -977,8 +977,8 @@ func (p Product) EnabledSources() []Source {
 //     that needs `warn` while a vendor's signing is being onboarded overrides
 //     that one field.
 //
-//   - `cosign` REPLACES WHOLESALE. It is one coherent trust decision — a mode
-//     plus the identity or key that mode requires — and merging it field by
+//   - `cosign` REPLACES WHOLESALE. It is one coherent trust decision - a mode
+//     plus the identity or key that mode requires - and merging it field by
 //     field would silently produce combinations nobody wrote: a product's
 //     keyless certificate identity paired with a repository's key mode, or a
 //     Fulcio issuer left over from a block that no longer applies. A trust
@@ -991,7 +991,7 @@ func (p Product) VerificationFor(override *Verification) Verification {
 
 	// Scalars: an explicitly set field wins. Booleans cannot distinguish
 	// "false" from "unset", so `enabled` and the two `at*` flags are taken
-	// from the override whenever a verification block is present at all —
+	// from the override whenever a verification block is present at all -
 	// writing one and having it ignored would be worse than the alternative.
 	v.Enabled = override.Enabled
 	v.AtSource = override.AtSource

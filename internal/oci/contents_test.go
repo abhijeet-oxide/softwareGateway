@@ -14,7 +14,7 @@ import (
 // Reading the files inside a layer.
 //
 // This is OCI, not a vendor's convention: the image specification defines a
-// layer as a tar archive — the media types say `tar` and `tar+gzip` out loud —
+// layer as a tar archive - the media types say `tar` and `tar+gzip` out loud -
 // and defines the whiteout entries that mark deletions. The tests are about the
 // format, not about anybody's bundle.
 
@@ -40,7 +40,7 @@ func TestATarLayerYieldsItsFiles(t *testing.T) {
 	}
 }
 
-// Gzipped is the common case — `+gzip` is in the media type — and it must be
+// Gzipped is the common case - `+gzip` is in the media type - and it must be
 // transparent.
 func TestAGzippedTarIsRead(t *testing.T) {
 	var buf bytes.Buffer
@@ -89,11 +89,11 @@ func TestAZipLayerIsRead(t *testing.T) {
 	}
 }
 
-// THE FORMAT IS SNIFFED, NOT TAKEN FROM THE MEDIA TYPE — because the media type
+// THE FORMAT IS SNIFFED, NOT TAKEN FROM THE MEDIA TYPE - because the media type
 // is routinely wrong, and refusing to look would disable this exactly where it
 // is most wanted. Nothing here is told what the bytes are supposed to be.
 func TestTheFormatIsRecognisedWithoutBeingDeclared(t *testing.T) {
-	// A tar in the v7 format, with no `ustar` magic — which plenty of real
+	// A tar in the v7 format, with no `ustar` magic - which plenty of real
 	// archives use, and which a magic-string check would miss.
 	body := asV7(tarOf(map[string]string{"plain.txt": "content"}))
 
@@ -108,7 +108,7 @@ func TestTheFormatIsRecognisedWithoutBeingDeclared(t *testing.T) {
 }
 
 // It FAILS CLOSED. Anything unrecognised is one opaque blob, which is what the
-// caller assumed before asking — not an error, and not a guess.
+// caller assumed before asking - not an error, and not a guess.
 func TestAnythingElseIsOpaque(t *testing.T) {
 	for _, body := range []string{
 		`{"just":"json"}`,
@@ -273,7 +273,7 @@ func tarWithTimes(files map[string]string, unix int64) []byte {
 }
 
 // asV7 blanks the `ustar` magic and repairs the header checksum, producing the
-// original tar format — which has no magic at all, and which a magic-string
+// original tar format - which has no magic at all, and which a magic-string
 // check would miss.
 func asV7(body []byte) []byte {
 	out := append([]byte(nil), body...)

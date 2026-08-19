@@ -13,7 +13,7 @@ import (
 // Stopping and starting a transfer that is already under way.
 //
 // The three verbs differ in what they do to the work ALREADY DONE, not in what
-// they do to the work remaining — and that is the thing an operator needs to be
+// they do to the work remaining - and that is the thing an operator needs to be
 // sure of before typing any of them:
 //
 //	pause    nothing new starts; everything done stays done
@@ -28,7 +28,7 @@ import (
 func newTransfersPauseCommand() *cobra.Command {
 	cmd := &cobra.Command{
 		Short: "Stop handing out jobs, keeping everything already done",
-		Long: "Nothing new starts. Jobs already in flight FINISH — abandoning a\n" +
+		Long: "Nothing new starts. Jobs already in flight FINISH - abandoning a\n" +
 			"nine-gigabyte blob nine tenths of the way through to honour a pause a\n" +
 			"fraction of a second sooner is a bad trade.\n\n" +
 			"Resume picks up exactly where this left off.",
@@ -43,7 +43,7 @@ func newTransfersResumeCommand() *cobra.Command {
 		Short: "Make a paused transfer's jobs leasable again",
 		Long: "The transfer returns to `ready` rather than to `running`: nothing is\n" +
 			"in flight at that moment, and a worker leasing the first job is what\n" +
-			"makes it running — through the same path every other transfer takes.",
+			"makes it running - through the same path every other transfer takes.",
 		RunE: controlRunner("resume"),
 	}
 	takes(cmd, "resume", transferArg())
@@ -75,7 +75,7 @@ func newTransfersDeleteCommand() *cobra.Command {
 			"destination is removed, and nothing could be: what a transfer put\n" +
 			"there is content-addressed and shared with every other release using\n" +
 			"the same layers.\n\n" +
-			"Only a transfer that has finished — succeeded, failed or cancelled.\n" +
+			"Only a transfer that has finished - succeeded, failed or cancelled.\n" +
 			"A running transfer's jobs are held by a worker that is going to report\n" +
 			"on them, so `stop` it first.\n\n" +
 			"For a transfer that failed before it was planned, this is the tidy-up:\n" +
@@ -111,7 +111,7 @@ func newTransfersSetPriorityCommand() *cobra.Command {
 				return err
 			}
 			return render(stdout(), opts.output, resp, func(w io.Writer) error {
-				fmt.Fprintf(w, "Set %s to priority %d — %s reordered.\n",
+				fmt.Fprintf(w, "Set %s to priority %d - %s reordered.\n",
 					shortID(resp.TransferID), priority,
 					plural(resp.Jobs, "job", "jobs"))
 				if resp.InFlight > 0 {
@@ -150,20 +150,20 @@ func controlRunner(verb string) func(*cobra.Command, []string) error {
 func renderControl(w io.Writer, verb string, r *v1.TransferControlResponse) error {
 	switch verb {
 	case "pause":
-		fmt.Fprintf(w, "Paused %s — %s will not be handed out.\n",
+		fmt.Fprintf(w, "Paused %s - %s will not be handed out.\n",
 			shortID(r.TransferID), plural(r.Jobs, "job", "jobs"))
 	case "resume":
-		fmt.Fprintf(w, "Resumed %s — %s are leasable again.\n",
+		fmt.Fprintf(w, "Resumed %s - %s are leasable again.\n",
 			shortID(r.TransferID), plural(r.Jobs, "job", "jobs"))
 	case "delete":
-		// What was removed, and — in the same breath — what was not. A reader
+		// What was removed, and - in the same breath - what was not. A reader
 		// who has just deleted something needs to know whether they have
 		// changed the destination, and finding that out afterwards is too late.
-		fmt.Fprintf(w, "Deleted %s — the record and %s.\n",
+		fmt.Fprintf(w, "Deleted %s - the record and %s.\n",
 			shortID(r.TransferID), plural(r.Jobs, "job", "jobs"))
 		fmt.Fprintln(w, "  Nothing at the destination was removed.")
 	default:
-		fmt.Fprintf(w, "Stopped %s — %s cancelled.\n",
+		fmt.Fprintf(w, "Stopped %s - %s cancelled.\n",
 			shortID(r.TransferID), plural(r.Jobs, "job", "jobs"))
 	}
 

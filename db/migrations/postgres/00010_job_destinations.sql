@@ -15,7 +15,7 @@
 -- 1. The job uniqueness key gains target_repo_id.
 --
 --    A base layer shared by two components that land in DIFFERENT destination
---    repositories must be pushed to both — the registry stores blobs per
+--    repositories must be pushed to both - the registry stores blobs per
 --    repository, so "already uploaded" is only true within one. Under the old
 --    key the second job was silently dropped by ON CONFLICT DO NOTHING, and the
 --    manifest referencing it would have failed with BLOB_UNKNOWN.

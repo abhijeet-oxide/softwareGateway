@@ -149,7 +149,7 @@ func validateMirror(path string, t Target, m *MirrorConfig, declared map[string]
 		}
 		if msg := GlobDialectError(g); msg != "" {
 			errs = append(errs, Error{gpath, msg,
-				"every other pattern in this schema is RE2; this one is not, and there is no faithful translation — `v3.*` matches different things in the two dialects"})
+				"every other pattern in this schema is RE2; this one is not, and there is no faithful translation - `v3.*` matches different things in the two dialects"})
 		}
 	}
 
@@ -289,7 +289,7 @@ func validateQuaySettings(path string, t Target, resolver *SecretResolver) Error
 	if t.Quay == nil || t.Quay.APITokenRef == nil {
 		errs = append(errs, Error{qpath + ".apiTokenRef",
 			fmt.Sprintf("required when replication.mode is %q", t.ReplicationMode()),
-			"mirror and proxy-cache configuration live on Quay's /api/v1 endpoint, which takes an OAuth 2 bearer token with repo:admin or org:admin scope — the robot account in credentialsRef authenticates /v2 only"})
+			"mirror and proxy-cache configuration live on Quay's /api/v1 endpoint, which takes an OAuth 2 bearer token with repo:admin or org:admin scope - the robot account in credentialsRef authenticates /v2 only"})
 	}
 	return errs
 }
@@ -354,7 +354,7 @@ func (p *Product) validatePromotionModes() Errors {
 		errs = append(errs, Error{
 			fmt.Sprintf("spec.targets[%d].replication.mode", i),
 			fmt.Sprintf("%q cannot be the promotion destination environment %q", t.ReplicationMode(), to),
-			"a mirrored repository is read-only to everyone but its robot, and a proxy cache cannot be pushed to at all — promote into a copy target, and let this one pull from it",
+			"a mirrored repository is read-only to everyone but its robot, and a proxy cache cannot be pushed to at all - promote into a copy target, and let this one pull from it",
 		})
 	}
 	return errs

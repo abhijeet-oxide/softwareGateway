@@ -6,7 +6,7 @@
 // The READ path uses no OCI client library: tag listing and manifest
 // resolution need only HTTP, and the M2 implementation works against real
 // registries through a corporate proxy. The WRITE path is oras-go/v2, adopted
-// thinly — it supplies the upload protocol and never sees a credential.
+// thinly - it supplies the upload protocol and never sees a credential.
 // ADR-001 closed there; see write.go and docs/design/16 §1.1 for why the two
 // halves differ.
 package generic
@@ -31,7 +31,7 @@ import (
 // Safe for concurrent use: one instance is shared across all work against that
 // repository, so the connection pool and token cache are shared too.
 //
-// It implements registry.Repository in full — identity, tag listing, manifest
+// It implements registry.Repository in full - identity, tag listing, manifest
 // reading, probing, blob read and write, manifest write, and referrers. The
 // compile-time assertion is at the foot of write.go.
 type Repository struct {
@@ -208,7 +208,7 @@ func (r *Repository) probe(ctx context.Context) registry.Capabilities {
 	caps := registry.DefaultCapabilities()
 
 	// Referrers API: a 200 means supported; 404 means fall back to the cosign
-	// tag schema. Any other answer is inconclusive, so we assume absence —
+	// tag schema. Any other answer is inconclusive, so we assume absence -
 	// the safe direction, since a wrongly-assumed capability produces a failed
 	// operation while a wrongly-assumed absence only costs a slower path.
 	probeDigest := registry.NewDigestFromBytes([]byte("softwaregateway-capability-probe"))
@@ -305,7 +305,7 @@ func registryErrorDetail(resp *http.Response) string {
 //	                 Product sales items: CFXC24STD03.00."}
 //
 // That is not `{"errors":[…]}`, so it parsed to nothing and the operator was
-// shown `HTTP 403: forbidden` — a status code where the registry had written a
+// shown `HTTP 403: forbidden` - a status code where the registry had written a
 // sentence naming the customer, the product and the reason. Thirty-seven of
 // those look like a broken credential and are not.
 //

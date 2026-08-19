@@ -11,7 +11,7 @@ import (
 // Registry errors are classified ONCE, here at the boundary.
 //
 // Retry policy, discovery backoff and the adaptive controller all key off the
-// class — never off an HTTP status re-inspected deep in the call stack. That
+// class - never off an HTTP status re-inspected deep in the call stack. That
 // is what stops "is 429 retryable?" being answered differently in three
 // places. See docs/design/06 §7 and docs/design/10 §6.
 var (
@@ -28,7 +28,7 @@ var (
 	ErrForbidden = errors.New("forbidden")
 
 	// ErrRateLimited is a 429. Retryable, honouring Retry-After over our own
-	// backoff — the registry telling us how long to wait is better information
+	// backoff - the registry telling us how long to wait is better information
 	// than a formula.
 	ErrRateLimited = errors.New("rate limited")
 
@@ -56,13 +56,13 @@ var (
 	ErrMountUnsupported = errors.New("cross-repository mount declined")
 
 	// ErrMalformedResponse means the registry answered with something we
-	// cannot parse — a proxy error page in place of JSON, say.
+	// cannot parse - a proxy error page in place of JSON, say.
 	ErrMalformedResponse = errors.New("malformed registry response")
 )
 
 // Class is the coarse category used for retry decisions and metrics.
 //
-// A bounded set, so it is safe as a metric label — unlike an error message.
+// A bounded set, so it is safe as a metric label - unlike an error message.
 type Class string
 
 const (
@@ -106,7 +106,7 @@ func (e *Error) Error() string {
 	// The sentinel, unless the registry's own words already said it. A 401
 	// arrives as `unauthorized: authentication required`, and appending our
 	// sentinel to that produced `unauthorized: authentication required:
-	// unauthorized` — one fact stated twice, on the line an operator reads
+	// unauthorized` - one fact stated twice, on the line an operator reads
 	// first. Suppressed only on an exact word match, so a sentinel the detail
 	// does NOT cover is still reported.
 	if e.Err != nil && !detailStates(e.Detail, e.Err) {
@@ -186,7 +186,7 @@ func RetryAfterOf(err error) time.Duration {
 // ClassifyStatus maps an HTTP status to a sentinel.
 //
 // Exported because every registry backend needs it and each one writing its own
-// switch is how classifications drift apart — one backend deciding 403 is
+// switch is how classifications drift apart - one backend deciding 403 is
 // retryable while another does not is a bug that only shows up under load.
 func ClassifyStatus(status int) error {
 	switch {
@@ -201,7 +201,7 @@ func ClassifyStatus(status int) error {
 	case status >= 500:
 		return ErrUnavailable
 	case status >= 400:
-		// 400, 405, 406 and friends. Not retryable, and not auth — usually a
+		// 400, 405, 406 and friends. Not retryable, and not auth - usually a
 		// capability the registry does not have.
 		return ErrUnsupported
 	default:

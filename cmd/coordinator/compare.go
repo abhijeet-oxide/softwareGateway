@@ -16,14 +16,14 @@ import (
 )
 
 // compareImpl joins configuration, the catalog and the client factory for the
-// comparison — the same three things resolverImpl joins, for the same reason:
+// comparison - the same three things resolverImpl joins, for the same reason:
 // this is the composition root, and internal/compare staying free of them is
 // what lets it be tested against a fake registry and literals.
 type compareImpl struct {
 	*resolverImpl
 	// layouts is what lets a comparison name a vendor's components the way the
 	// release page names them. THE COMPOSITION ROOT IS THE ONLY PLACE THIS MAY
-	// BE RESOLVED — internal/compare takes the resulting function and never
+	// BE RESOLVED - internal/compare takes the resulting function and never
 	// learns whose it is.
 	layouts *vendors.Registry
 }
@@ -44,7 +44,7 @@ func (c compareImpl) Compare(
 
 	// THE DEFAULT IS THE QUESTION PEOPLE ACTUALLY ASK. With no endpoint named
 	// on either side and one version, "compare this release" means "did it
-	// land at my destination" — so the second end becomes the default target.
+	// land at my destination" - so the second end becomes the default target.
 	//
 	// With TWO versions it means something else entirely, and the two ends stay
 	// where they are: comparing two releases is a question about the vendor's
@@ -71,7 +71,7 @@ func (c compareImpl) Compare(
 	// been analysed", and it is one call because analysis is idempotent: the
 	// tree under a digest cannot change, so a release that has been walked is
 	// walked no further, and one that has not is walked once and recorded for
-	// everything else that will ask — the release page, the transfer planner,
+	// everything else that will ask - the release page, the transfer planner,
 	// the next comparison.
 	//
 	// Before this, a comparison read manifests from the store when they
@@ -100,8 +100,8 @@ func (c compareImpl) Compare(
 // analyse walks a source-side release into the store, if it is not there.
 //
 // Best effort. A comparison must still work against a release we cannot record
-// — a target, a package this Coordinator has no row for, a vendor that has
-// withdrawn a component — so a failure here costs the speed-up and nothing
+// - a target, a package this Coordinator has no row for, a vendor that has
+// withdrawn a component - so a failure here costs the speed-up and nothing
 // else: the walk that follows reads from the registry exactly as it did before.
 func (c compareImpl) analyse(ctx context.Context, p *product.Product, point api.ComparePoint) {
 	if c.packages == nil || point.Package.ID == 0 || point.Package.SourceRepository == "" {
@@ -128,7 +128,7 @@ func (c compareImpl) analyse(ctx context.Context, p *product.Product, point api.
 		ctx, c.packages, point.Package, client, concurrencyOf(p),
 	); err != nil {
 		// Debug, not warn: this is an optimisation, and a release that cannot
-		// be walked is about to be compared live anyway — which is where the
+		// be walked is about to be compared live anyway - which is where the
 		// reader will see the real error if there is one.
 		c.log.DebugContext(ctx, "could not analyse a release before comparing it",
 			"package", point.Package.Tag, "error", err)
@@ -140,7 +140,7 @@ func (c compareImpl) analyse(ctx context.Context, p *product.Product, point api.
 // An endpoint name is looked up among the product's TARGETS first and its
 // SOURCES second, and an empty one means the repository the package was
 // discovered in. Targets first because that is the common case for this command
-// — the interesting comparisons are about destinations — and because a source
+// - the interesting comparisons are about destinations - and because a source
 // and a target sharing a name is a configuration somebody would have to work at.
 func (c compareImpl) side(
 	p *product.Product, point api.ComparePoint,
@@ -160,7 +160,7 @@ func (c compareImpl) side(
 		spec.Repository = transfer.DestinationPath(target.Repository, pkg.SourceRepository)
 		// A TARGET is a place this system wrote, so it is the one end that owes
 		// a component under the component's own name. A source owes nothing of
-		// the kind — see compare.SideSpec.PublishesComponentsByName.
+		// the kind - see compare.SideSpec.PublishesComponentsByName.
 		spec.PublishesComponentsByName = true
 		return spec, c.factory(p.Metadata.Name, target.Name, target.Registry,
 			string(target.Type), string(product.RoleTarget)), nil
@@ -170,7 +170,7 @@ func (c compareImpl) side(
 	if err != nil {
 		return compare.SideSpec{}, nil, err
 	}
-	// A source holds the vendor's own paths, unprefixed — so a component's
+	// A source holds the vendor's own paths, unprefixed - so a component's
 	// `ref.name` is already the repository it lives in, and BasePath stays
 	// empty.
 	spec.Label = source.Name
@@ -196,7 +196,7 @@ func (c compareImpl) side(
 // The wrapper where a vendor has one: only it reaches both the payload and the
 // signature, so walking it compares the whole release rather than the part a
 // consumer happens to pull. The payload tag is the fallback, and it is a real
-// state rather than a failure — a destination holding only the payload is
+// state rather than a failure - a destination holding only the payload is
 // exactly what a transfer that stopped early leaves behind.
 //
 // BOTH SPELLINGS OF EACH ROOT, tag and digest. A missing TAG and a missing
@@ -220,7 +220,7 @@ func referencesFor(pkg store.PackageRow) []string {
 	}
 	if pkg.ManifestDigest != "" {
 		// Last resort, and it only helps on the side the package was
-		// discovered from — but on that side it always works, which makes
+		// discovered from - but on that side it always works, which makes
 		// "the tag is gone" a finding rather than an error.
 		refs = append(refs, pkg.ManifestDigest)
 	}
@@ -250,7 +250,7 @@ func (c compareImpl) factory(
 // findTarget resolves a configured target by name.
 //
 // An UNNAMED end is never a target, not even the default one. It is the source,
-// because that is the end a package is defined by — and guessing a destination
+// because that is the end a package is defined by - and guessing a destination
 // nobody named is how somebody ends up reading a confident page of mismatches
 // about the wrong registry.
 func findTarget(p *product.Product, name string) (product.Target, bool) {
@@ -269,7 +269,7 @@ func findTarget(p *product.Product, name string) (product.Target, bool) {
 //
 // The declared default, or the only enabled target. With several and no default
 // there is nothing to assume, and the comparison falls back to source-against-
-// source — which produces "identical" rather than a page of mismatches about a
+// source - which produces "identical" rather than a page of mismatches about a
 // registry the caller did not mean.
 func defaultTarget(p *product.Product) (product.Target, bool) {
 	var enabled []product.Target
@@ -291,7 +291,7 @@ func defaultTarget(p *product.Product) (product.Target, bool) {
 // layoutNames is the vendor layouts a product's sources declare.
 //
 // A comparison may run entirely between TARGETS, which declare no layout of
-// their own — but what sits in a target is what a source published, so the
+// their own - but what sits in a target is what a source published, so the
 // source's layouts are what name it. Anything else would classify the same
 // component differently at the two ends of one comparison and report a
 // difference that is not there.
@@ -309,12 +309,12 @@ func layoutNames(p *product.Product) []string {
 // It used to be NONE, and none means one: the walker clamps a non-positive
 // concurrency to a single worker. A comparison of a real orb is then ~260
 // manifests plus a resolve for every tag in the repository, per side, one round
-// trip at a time — twenty minutes against a vendor registry with nothing on
+// trip at a time - twenty minutes against a vendor registry with nothing on
 // screen but a spinner.
 //
 // THE SAME CEILING EVERYTHING ELSE USES. A comparison's requests are HEADs and
-// small GETs against read-only endpoints — no bytes to speak of, no writes,
-// nothing to serialise behind — so there was never a reason for it to be more
+// small GETs against read-only endpoints - no bytes to speak of, no writes,
+// nothing to serialise behind - so there was never a reason for it to be more
 // timid than a scan, which has run at product.DefaultPerRegistry against these
 // registries since the beginning. Having its own smaller number was one more
 // thing to discover, tune and get wrong.
@@ -326,7 +326,7 @@ const defaultCompareConcurrency = product.DefaultPerRegistry
 // concurrencyOf is the ceiling an operator set for this product's registries.
 //
 // A comparison opens the same connections a transfer does, so it obeys the same
-// limit rather than choosing one here — but an ABSENT limit is not a limit of
+// limit rather than choosing one here - but an ABSENT limit is not a limit of
 // one, which is what returning zero amounted to.
 func concurrencyOf(p *product.Product) int {
 	for _, s := range p.Spec.Sources {

@@ -12,7 +12,7 @@ import (
 // A TRANSFER THAT IS FAILING MUST NOT LOOK LIKE ONE THAT IS WORKING.
 //
 // It did. The state stayed `running` because no failed job ever moved the
-// transfer's own state, and the listing had no column for failures at all — so
+// transfer's own state, and the listing had no column for failures at all - so
 // an outage that killed every job showed up as a percentage that stopped
 // moving, and nothing else. Both halves are asserted here: the state the server
 // now sets, and the column that shows the count before the state changes.
@@ -69,8 +69,8 @@ func TestFailedCountIsADashWhenThereAreNone(t *testing.T) {
 //
 // It was gated on `state == running`, which is a different question from
 // "is there anything left to estimate". A transfer is `ready` from the moment it
-// is planned until its first job COMPLETES — long, with multi-gigabyte blobs,
-// and exactly where a resumed transfer restarts — so the table showed a
+// is planned until its first job COMPLETES - long, with multi-gigabyte blobs,
+// and exactly where a resumed transfer restarts - so the table showed a
 // throughput and a blank ETA at the same time.
 func TestETAIsShownWhileWorkIsStillOutstanding(t *testing.T) {
 	moving := &v1.Transfer{

@@ -12,8 +12,8 @@
 --   4. stream             N bytes
 --
 -- The lying HEAD sits at step 2, ABOVE the mount. So for the copy of a
--- component published under its own name — the same digest already sitting in a
--- sibling repository of the same registry — step 2 answered "already there" and
+-- component published under its own name - the same digest already sitting in a
+-- sibling repository of the same registry - step 2 answered "already there" and
 -- step 3 was never reached. The mount was not declined; it was never attempted.
 --
 -- Repairing that by disabling the whole ladder streams the blob across the WAN
@@ -21,7 +21,7 @@
 -- in one request. On this transfer that is about 1.5 GiB. On the SECOND
 -- transfer of a product line it is the whole package: every blob is a placement
 -- hit, so every blob is skipped, so every manifest fails, so every blob is
--- force-uploaded — turning the case deduplication exists to make free into a
+-- force-uploaded - turning the case deduplication exists to make free into a
 -- full re-upload.
 --
 -- # The levels

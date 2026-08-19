@@ -20,7 +20,7 @@ import (
 //	         find it and skip it
 //
 // None of them deletes anything at the destination. A stopped transfer is not a
-// rollback — half a bundle at the destination is unreferenced blobs and
+// rollback - half a bundle at the destination is unreferenced blobs and
 // untagged manifests, which are invisible to consumers (invariant I1) and
 // useful to the next attempt.
 
@@ -76,7 +76,7 @@ func (p *Packages) PauseTransfer(ctx context.Context, transferID string) (Contro
 //
 // It returns to `ready` rather than to `running`, for the same reason a retry
 // does: nothing is in flight at that moment, and a worker leasing the first job
-// is what makes it running — through the one path every other transfer takes.
+// is what makes it running - through the one path every other transfer takes.
 func (p *Packages) ResumeTransfer(ctx context.Context, transferID string) (ControlResult, error) {
 	return p.control(ctx, transferID, controlSpec{
 		from: []string{"paused"},
@@ -179,7 +179,7 @@ func (p *Packages) SetTransferPriority(
 
 	// The REQUEST too, so the rest of a chain inherits the new order. A
 	// download of three steps creates the later transfers when the earlier ones
-	// finish, from the request's priority — raise only this transfer and the
+	// finish, from the request's priority - raise only this transfer and the
 	// next step silently drops back to where it was, which reads as the change
 	// having been undone by something.
 	if _, err := tx.ExecContext(ctx, p.dialect.Rewrite(
@@ -200,7 +200,7 @@ func (p *Packages) SetTransferPriority(
 //
 // Everything not yet started is cancelled outright. Everything already leased
 // is left to stop at its worker's next checkpoint, which is why the transfer
-// lands in `cancelling` rather than `cancelled` when anything is in flight —
+// lands in `cancelling` rather than `cancelled` when anything is in flight -
 // see settleTransfer, which closes the window when the last lease reports.
 //
 // What already reached the destination stays there. It is content-addressed and
@@ -313,8 +313,8 @@ func contains(values []string, want string) bool {
 //
 // It is not a rollback. Nothing at the destination is removed, and nothing
 // could be: what a transfer put there is content-addressed, shared with every
-// other release that references the same layers, and — where the transfer did
-// not finish — untagged and invisible to consumers already. A delete that
+// other release that references the same layers, and - where the transfer did
+// not finish - untagged and invisible to consumers already. A delete that
 // reached into a registry to unpick that would be the most dangerous operation
 // in this system, and it is not what anybody asking for one wants: they want
 // the row out of their listing.
@@ -326,8 +326,8 @@ func contains(values []string, want string) bool {
 //
 // # Only a settled transfer
 //
-// A running transfer's jobs are LEASED — a worker holds them and will report on
-// them — and deleting the rows underneath it turns every one of those reports
+// A running transfer's jobs are LEASED - a worker holds them and will report on
+// them - and deleting the rows underneath it turns every one of those reports
 // into an update of nothing, silently. `stop` exists, it is one word, and it
 // leaves a transfer this will accept. Refusing is a second's inconvenience
 // against a class of corruption that would be very hard to explain afterwards.
@@ -367,7 +367,7 @@ func (p *Packages) DeleteTransfer(ctx context.Context, transferID string) (Contr
 
 	// The jobs go explicitly rather than by cascade. Both databases declare it,
 	// but SQLite enforces a foreign key only when `PRAGMA foreign_keys` is on
-	// for that connection — so relying on the declaration would leave orphaned
+	// for that connection - so relying on the declaration would leave orphaned
 	// job rows on one backend and not the other, which is the kind of
 	// difference nobody finds until a count is wrong months later.
 	if _, err := tx.ExecContext(ctx, p.dialect.Rewrite(

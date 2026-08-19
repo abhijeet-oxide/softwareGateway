@@ -4,7 +4,7 @@ How to build, configure, test and run softwareGateway on your own machine.
 
 This is the practical companion to [`docs/design/`](design/README.md). The design docs explain *why*; this explains *how to get it running in the next ten minutes*.
 
-> **What works today.** Discovery works end to end: point it at an OCI registry and it finds what is published, records packages with their artifact trees, and evaluates auto-download rules. **Byte transfer does not exist yet** — a transfer request will sit in `pending`. That is expected, not a bug. See [Where the milestones are](#where-the-milestones-are).
+> **What works today.** Discovery works end to end: point it at an OCI registry and it finds what is published, records packages with their artifact trees, and evaluates auto-download rules. **Byte transfer does not exist yet** - a transfer request will sit in `pending`. That is expected, not a bug. See [Where the milestones are](#where-the-milestones-are).
 
 ---
 
@@ -28,7 +28,7 @@ This is the practical companion to [`docs/design/`](design/README.md). The desig
 | **Go** | **1.25+** | everything. Non-negotiable: `prometheus/client_golang` and the OpenTelemetry SDK both require it |
 | **Task** | 3.x | the task runner. `go install github.com/go-task/task/v3/cmd/task@latest` |
 | `git` | any | version stamping in the binary |
-| `golangci-lint` | v2.x | `task lint`. **v2, not v1** — the config uses the v2 schema and a v1 binary rejects it |
+| `golangci-lint` | v2.x | `task lint`. **v2, not v1** - the config uses the v2 schema and a v1 binary rejects it |
 | Docker | any | **not required.** Only for Postgres and the integration suite |
 
 ```bash
@@ -44,11 +44,11 @@ brew install go-task                                     # macOS
 winget install Task.Task                                 # Windows
 ```
 
-Everything Task runs is a plain `go` command. If you would rather not install it, `task --list` shows every task and `task --dry <name>` prints the commands without running them — copy and paste as you like.
+Everything Task runs is a plain `go` command. If you would rather not install it, `task --list` shows every task and `task --dry <name>` prints the commands without running them - copy and paste as you like.
 
 ### Why Task and not Make
 
-The Makefile it replaced needed `bash` and `find`, so **PowerShell and cmd could not run it at all** — a Windows developer had to install Git Bash or WSL before their first build.
+The Makefile it replaced needed `bash` and `find`, so **PowerShell and cmd could not run it at all** - a Windows developer had to install Git Bash or WSL before their first build.
 
 Task interprets shell **syntax** in-process (pipes, `&&`, `if`, redirection), so those work everywhere. But an **external command still has to exist on PATH**, and that distinction matters: `date`, `rm`, `tail`, `grep`, `sed` and `awk` do not exist in PowerShell. Shelling out to one fails the whole Taskfile before any task runs:
 
@@ -57,7 +57,7 @@ task: Command "date -u +%Y-%m-%dT%H:%M:%SZ" failed: exit status 127
 "date": executable file not found in $PATH
 ```
 
-The Taskfile therefore avoids them: the build timestamp comes from a template function evaluated in-process, and the two places that genuinely need `rm` and `tail` are `platforms:`-gated with PowerShell equivalents. Two CI jobs keep it that way — one runs every task with PATH stripped to `go`, `gofmt`, `git` and `task`, and one builds and tests on a real `windows-latest` runner.
+The Taskfile therefore avoids them: the build timestamp comes from a template function evaluated in-process, and the two places that genuinely need `rm` and `tail` are `platforms:`-gated with PowerShell equivalents. Two CI jobs keep it that way - one runs every task with PATH stripped to `go`, `gofmt`, `git` and `task`, and one builds and tests on a real `windows-latest` runner.
 
 **There is no CGO in a shipped binary.** SQLite is `modernc.org/sqlite`, a pure-Go translation, so builds set `CGO_ENABLED=0` and there is no C toolchain to install. Tests are the exception: `go test -race` requires cgo, so `CGO_ENABLED=0` is set on the build tasks only, never globally.
 
@@ -71,12 +71,12 @@ The Taskfile therefore avoids them: the build timestamp comes from a template fu
 task build          # → bin/coordinator, bin/worker, bin/transferctl
 ```
 
-On Windows this produces `bin/coordinator.exe`, `bin/worker.exe`, `bin/transferctl.exe`. **You never have to rename anything.** If you are, you are on a build from before this was fixed — pull and rebuild.
+On Windows this produces `bin/coordinator.exe`, `bin/worker.exe`, `bin/transferctl.exe`. **You never have to rename anything.** If you are, you are on a build from before this was fixed - pull and rebuild.
 
 <details>
 <summary><b>Why the <code>.exe</code> problem existed, if you hit it</b></summary>
 
-`go build` appends `.exe` on Windows **only when you do not pass `-o`**. The old Makefile passed `-o bin/transferctl`, so Go wrote exactly that — an extensionless file Windows refuses to execute.
+`go build` appends `.exe` on Windows **only when you do not pass `-o`**. The old Makefile passed `-o bin/transferctl`, so Go wrote exactly that - an extensionless file Windows refuses to execute.
 
 Task has a built-in `{{exeExt}}`, but it keys off the **runtime** OS, so `GOOS=windows task build` on Linux would have reintroduced the same bug. The Taskfile resolves the suffix against the *target* instead:
 
@@ -121,14 +121,14 @@ There are **two separate kinds of configuration**, and conflating them is the mo
 | **Who owns it** | the operator / platform team | the team that owns the product |
 | **Where** | one file, `--config` | one YAML file **per product** in a directory |
 | **In Kubernetes** | a ConfigMap or Helm values | one ConfigMap per product, managed by Flux |
-| **Changed by** | redeploy | a Git commit — **hot-reloaded, no restart** |
+| **Changed by** | redeploy | a Git commit - **hot-reloaded, no restart** |
 | **Schema** | `internal/platform/config` | `internal/product/schema.go`, [doc 02](design/02-configuration.md) |
 
 ### 3.1 System config
 
 Precedence, lowest to highest: **defaults → file → `SWGW_` environment variables**.
 
-A missing file is not an error — defaults plus environment must be enough to start. That is what makes `go run ./cmd/coordinator` work with zero setup.
+A missing file is not an error - defaults plus environment must be enough to start. That is what makes `go run ./cmd/coordinator` work with zero setup.
 
 ```yaml
 # dev/config.yaml
@@ -223,7 +223,7 @@ database:
 | `coordinator.leaderElection.retryInterval` | `10s` | how often a follower tries |
 | `coordinator.scheduler.tickInterval` | `10s` | M4 |
 | `coordinator.reaper.tickInterval` | `30s` | M3 |
-| `coordinator.reaper.leaseDuration` | `2m` | **must exceed `tickInterval`** or leases expire faster than the reaper can see them — validation rejects it |
+| `coordinator.reaper.leaseDuration` | `2m` | **must exceed `tickInterval`** or leases expire faster than the reaper can see them - validation rejects it |
 | `coordinator.queue.maxLeaseBatchSize` | `32` | M3 |
 | `coordinator.gc.tickInterval` | `1h` | M6 |
 | `worker.coordinatorEndpoint` | `http://localhost:8080` | M3 |
@@ -236,13 +236,13 @@ database:
 | `observability.tracing.enabled` | `false` | |
 | `observability.tracing.sampleRatio` | `0.05` | must be within `[0,1]` |
 | `retention.*` | 7d–365d | M6 |
-| `tls.allowNegativeSerialNumbers` | `false` | accepts certificates whose serial number is negative. **Process-wide**, and the only fix for `x509: negative serial number` — see [below](#insecureskipverify-will-not-fix-x509-negative-serial-number) |
+| `tls.allowNegativeSerialNumbers` | `false` | accepts certificates whose serial number is negative. **Process-wide**, and the only fix for `x509: negative serial number` - see [below](#insecureskipverify-will-not-fix-x509-negative-serial-number) |
 
 </details>
 
 ### 3.2 Product config
 
-**One file per product.** The blast radius of a mistake is one product — a syntax error in `vendor-b.yaml` never stops `vendor-a` from working. Invalid products are reported and skipped; the previously valid version keeps running.
+**One file per product.** The blast radius of a mistake is one product - a syntax error in `vendor-b.yaml` never stops `vendor-a` from working. Invalid products are reported and skipped; the previously valid version keeps running.
 
 Minimum viable product file:
 
@@ -252,7 +252,7 @@ kind: Product
 metadata:
   name: vendor-a                    # lowercase, hyphens, ≤63 chars; appears in URLs and metrics
 spec:
-  sources:                          # where packages come from — read-only
+  sources:                          # where packages come from - read-only
     - name: vendor
       registry: registry.vendor-a.example.com
       repository: platform/suite
@@ -261,7 +261,7 @@ spec:
       discovery:
         enabled: true
         interval: 15m
-  targets:                          # where they go — read-write
+  targets:                          # where they go - read-write
     - name: internal
       registry: internal.example.com
       repository: mirror/vendor-a
@@ -287,7 +287,7 @@ A source is **one registry**. Which repositories on it get scanned is decided by
       registry: registry.vendor-a.example.com
       repository: platform/suite
 
-    # Several — a product whose components ship separately.
+    # Several - a product whose components ship separately.
     - name: components
       registry: registry.vendor-c.example.com
       repositories:
@@ -295,7 +295,7 @@ A source is **one registry**. Which repositories on it get scanned is decided by
         - suite/database
         - suite/frontend
 
-    # NONE — "I do not know them yet, find them."
+    # NONE - "I do not know them yet, find them."
     - name: plugins
       registry: internal.example.com
       discovery:
@@ -303,9 +303,9 @@ A source is **one registry**. Which repositories on it get scanned is decided by
           include: ['^vendor-c/plugins/']
 ```
 
-**Naming none is the important case.** If every new component ships as a *new* repository, you cannot list them in advance — and listing them by hand means a component is silently not replicated until somebody remembers to edit the ConfigMap. Naming nothing means "every repository on this registry", re-resolved on **every scan**, so a repository published five minutes ago is found on the next pass. No restart, no reload.
+**Naming none is the important case.** If every new component ships as a *new* repository, you cannot list them in advance - and listing them by hand means a component is silently not replicated until somebody remembers to edit the ConfigMap. Naming nothing means "every repository on this registry", re-resolved on **every scan**, so a repository published five minutes ago is found on the next pass. No restart, no reload.
 
-There is deliberately **no `enabled` switch** for this. Naming nothing *is* the statement. A separate flag would let configuration say one thing and mean another — repositories listed with discovery off, or nothing listed with discovery off, which scans nothing while looking configured.
+There is deliberately **no `enabled` switch** for this. Naming nothing *is* the statement. A separate flag would let configuration say one thing and mean another - repositories listed with discovery off, or nothing listed with discovery off, which scans nothing while looking configured.
 
 Declaring several under one source rather than one source each is also deliberate: they share a registry host, one credential and one rate-limit budget. Three sources would duplicate all three and let the per-repository budgets multiply against a vendor that only ever sees one client.
 
@@ -325,7 +325,7 @@ Because discovery is what they govern. A scan finds **repositories**, then **tag
         maxRepositories: 200                  # safety bound; default 200
 ```
 
-`repositoryFilters` matters most for a source that names nothing. On a registry shared with other teams it is what keeps the scope to yours — without it, *every* repository on that host gets scanned.
+`repositoryFilters` matters most for a source that names nothing. On a registry shared with other teams it is what keeps the scope to yours - without it, *every* repository on that host gets scanned.
 
 It is **not mandatory**, because a registry dedicated to one vendor genuinely needs no filter and refusing to start there would be wrong. Instead, `transferctl products check` reports the number that decides it:
 
@@ -337,11 +337,11 @@ WARNING  can list repositories
            discovery.repositoryFilters.include to scope it
 ```
 
-Both filters are RE2 (Go `regexp`) — include, then exclude, exclude always wins, and no include patterns admits everything.
+Both filters are RE2 (Go `regexp`) - include, then exclude, exclude always wins, and no include patterns admits everything.
 
 #### When the registry will not list its repositories
 
-Many **vendor** credentials cannot enumerate a registry — they are scoped to pulling named repositories. A source that names none has nothing to fall back on, so the scan fails, and the message says what to do:
+Many **vendor** credentials cannot enumerate a registry - they are scoped to pulling named repositories. A source that names none has nothing to fall back on, so the scan fails, and the message says what to do:
 
 ```
 the registry refused to list its repositories: this credential is probably
@@ -351,7 +351,7 @@ Name them under `repositories:` instead
 
 That is the practical split: **name repositories for a vendor registry, name none for an internal one you control.** `products check` tells you which you have before discovery ever runs.
 
-#### Tag filters — applied *before* any network call
+#### Tag filters - applied *before* any network call
 
 ```yaml
       discovery:
@@ -362,7 +362,7 @@ That is the practical split: **name repositories for a vendor registry, name non
 
 Filters bound **scan cost**, not just what gets stored: a filtered tag costs zero requests. This is the mitigation for a repository with tens of thousands of tags.
 
-Patterns are RE2 (Go `regexp`) — linear time, no backtracking. A backtracking engine evaluating a user-supplied pattern inside a polling loop would be a denial-of-service vector.
+Patterns are RE2 (Go `regexp`) - linear time, no backtracking. A backtracking engine evaluating a user-supplied pattern inside a polling loop would be a denial-of-service vector.
 
 #### Auto-download rules
 
@@ -370,11 +370,11 @@ This is the part that most repays reading once, because the mental model is not 
 
 **A rule is not a filter. It is a routing decision.**
 
-Discovery records *every* tag that survives `tagFilters` — that is what makes the package list a complete picture of what the vendor has published. Rules answer a separate question about each newly discovered package:
+Discovery records *every* tag that survives `tagFilters` - that is what makes the package list a complete picture of what the vendor has published. Rules answer a separate question about each newly discovered package:
 
 > Should we pull this automatically, **where** should it go, and **how urgently**?
 
-A package that matches no rule is still discovered, still listed, still describable. It simply is not fetched without someone asking. **No rules at all is a perfectly good configuration** — it means "tell me what exists, I will decide what to pull."
+A package that matches no rule is still discovered, still listed, still describable. It simply is not fetched without someone asking. **No rules at all is a perfectly good configuration** - it means "tell me what exists, I will decide what to pull."
 
 **Why more than one rule?** Because "should we pull this automatically" rarely has one answer for a whole repository. Different *classes of release* deserve different treatment, and the class is encoded in the tag:
 
@@ -412,21 +412,21 @@ Read as a table, which is what it is:
 | `v2.4.1-hotfix.1` | lab **and** production | 1000 | yes |
 | `v2.4.1` | lab | 100 | yes |
 | `v2.5.0-rc.3` | lab | 10 | no |
-| `nightly-2026-01-14` | *nowhere* | — | — |
+| `nightly-2026-01-14` | *nowhere* | - | - |
 
 Three things each rule controls, and each is a real operational decision:
 
-- **`targets` — where.** A hotfix might justify going straight to production; a release candidate must never. This is how you express "auto-download, but only somewhere safe."
-- **`priority` — how urgently.** Priority orders the transfer queue. When a 40 GB nightly and a security hotfix are both waiting, priority is what decides which moves first. It matters most exactly when you are busiest.
-- **`verifyBeforeTransfer` — how carefully.** Check the vendor's signature before spending an hour on the bytes.
+- **`targets` - where.** A hotfix might justify going straight to production; a release candidate must never. This is how you express "auto-download, but only somewhere safe."
+- **`priority` - how urgently.** Priority orders the transfer queue. When a 40 GB nightly and a security hotfix are both waiting, priority is what decides which moves first. It matters most exactly when you are busiest.
+- **`verifyBeforeTransfer` - how carefully.** Check the vendor's signature before spending an hour on the bytes.
 
-**First match wins, and order is therefore load-bearing.** Put the *most specific* pattern first. In the example, `^v\d+\.\d+\.\d+-hotfix\.\d+$` must precede `^v\d+\.\d+\.\d+$`; reversed, a hotfix would… actually still not match the GA pattern (the `$` anchor saves it) — but with looser patterns like `^v2\.` first, everything below becomes dead code. Anchor your patterns and order most-specific-first, and this class of mistake disappears.
+**First match wins, and order is therefore load-bearing.** Put the *most specific* pattern first. In the example, `^v\d+\.\d+\.\d+-hotfix\.\d+$` must precede `^v\d+\.\d+\.\d+$`; reversed, a hotfix would… actually still not match the GA pattern (the `$` anchor saves it) - but with looser patterns like `^v2\.` first, everything below becomes dead code. Anchor your patterns and order most-specific-first, and this class of mistake disappears.
 
-Why first-match rather than all-match: two rules matching one tag with different targets and different priorities has no sensible combined meaning — is it priority 1000 or 10? And "most specific wins" is not an order that exists over regular expressions, so it cannot be computed. Explicit order is the only unambiguous rule.
+Why first-match rather than all-match: two rules matching one tag with different targets and different priorities has no sensible combined meaning - is it priority 1000 or 10? And "most specific wins" is not an order that exists over regular expressions, so it cannot be computed. Explicit order is the only unambiguous rule.
 
 **Each match produces exactly one transfer request, forever.** The idempotency key is derived from the package, the resolved targets and the priority, so a re-scan, a Coordinator restart mid-evaluation, or two Coordinators briefly both believing they are leader all produce one request. This matters more here than anywhere else in the system: an auto-download rule is the one path that creates tens of gigabytes of work with nobody watching.
 
-`enabled: false` turns the rules off without deleting them — useful while investigating whether a vendor's tagging changed.
+`enabled: false` turns the rules off without deleting them - useful while investigating whether a vendor's tagging changed.
 
 #### Turning things off without deleting them
 
@@ -449,7 +449,7 @@ spec:
       enabled: false      # stops receiving transfers
 ```
 
-**Why not just delete the file?** Because deleting loses the thing you most want back — the exact registries, credentials, filters and rules that were working. Re-creating it from memory during an incident is how a "temporary" pause becomes a subtly different configuration.
+**Why not just delete the file?** Because deleting loses the thing you most want back - the exact registries, credentials, filters and rules that were working. Re-creating it from memory during an incident is how a "temporary" pause becomes a subtly different configuration.
 
 A disabled product is still **loaded, validated and listed**. It just does nothing:
 
@@ -462,11 +462,11 @@ paused   DISABLED   1         1              1         1 of 1
 Re-enable with `metadata.enabled: true`; their discovered packages are kept.
 ```
 
-Validation still runs on it, deliberately — a mistake is reported now rather than discovered on the day someone re-enables it. Already-discovered packages are kept, and the catalog row is deactivated rather than deleted, so the transfer history that references it survives.
+Validation still runs on it, deliberately - a mistake is reported now rather than discovered on the day someone re-enables it. Already-discovered packages are kept, and the catalog row is deactivated rather than deleted, so the transfer history that references it survives.
 
 `transferctl products check` reports a disabled product as `[skip]` rather than probing it: there is nothing to diagnose about configuration that is deliberately not running.
 
-**`enabled: false` vs `discovery.enabled: false` on a source** — a real distinction:
+**`enabled: false` vs `discovery.enabled: false` on a source** - a real distinction:
 
 | | Effect |
 |---|---|
@@ -475,7 +475,7 @@ Validation still runs on it, deliberately — a mistake is reported now rather t
 
 Use the first when a vendor relationship is paused. Use the second for a failover mirror that must stay usable but must not double-discover every tag.
 
-Validation catches the combinations that would fail silently: every source disabled while the product is on, `autoDownload` enabled with no enabled target, and a rule pointing at a disabled target — that last one would otherwise fail the first time a package matched it, potentially weeks later.
+Validation catches the combinations that would fail silently: every source disabled while the product is on, `autoDownload` enabled with no enabled target, and a rule pointing at a disabled target - that last one would otherwise fail the first time a package matched it, potentially weeks later.
 
 #### TLS: private and internal CAs
 
@@ -524,7 +524,7 @@ spec:
           direct: true                            # no proxy at all
 ```
 
-`direct: true` exists because a product-level proxy is **inherited**, and "everything through the corporate proxy except this one internal registry" is the normal shape. It also ignores `HTTPS_PROXY` from the environment — a repository that asked to bypass the proxy means it, and silently honouring a cluster-wide setting would make the option a no-op in exactly the deployment that needs it.
+`direct: true` exists because a product-level proxy is **inherited**, and "everything through the corporate proxy except this one internal registry" is the normal shape. It also ignores `HTTPS_PROXY` from the environment - a repository that asked to bypass the proxy means it, and silently honouring a cluster-wide setting would make the option a no-op in exactly the deployment that needs it.
 
 Targets take the same block: a destination inside the datacentre and a vendor outside it need different routes.
 
@@ -556,7 +556,7 @@ spec:
 
 Omitting the field means *inherit*. Writing `false` means *verify, whatever the level above says*. That distinction is the whole reason the field is not a plain boolean.
 
-You will hear about it: the Coordinator logs a warning naming the product and source on every configuration reload, and `transferctl products check` reports a `certificate verification  WARNING` step for the repository. Setting `caBundleRef` and `insecureSkipVerify` in the **same** `network` block is rejected at validation — the bundle would never be consulted, so keeping both is dead configuration that reads as if it verifies.
+You will hear about it: the Coordinator logs a warning naming the product and source on every configuration reload, and `transferctl products check` reports a `certificate verification  WARNING` step for the repository. Setting `caBundleRef` and `insecureSkipVerify` in the **same** `network` block is rejected at validation - the bundle would never be consulted, so keeping both is dead configuration that reads as if it verifies.
 
 #### `insecureSkipVerify` will **not** fix `x509: negative serial number`
 
@@ -566,7 +566,7 @@ If discovery fails with
 tls: failed to parse certificate from server: x509: negative serial number
 ```
 
-then skipping verification changes nothing, and neither does a CA bundle. Both were measured, not assumed — `internal/platform/tlscompat` has the test:
+then skipping verification changes nothing, and neither does a CA bundle. Both were measured, not assumed - `internal/platform/tlscompat` has the test:
 
 | client | result |
 |---|---|
@@ -574,12 +574,12 @@ then skipping verification changes nothing, and neither does a CA bundle. Both w
 | `insecureSkipVerify: true` | **the identical error** |
 | `tls.allowNegativeSerialNumbers: true` | connects, with verification still fully on |
 
-The reason is where the failure happens. Go's `crypto/x509` has rejected negative serial numbers since Go 1.23, and it rejects them while **parsing** the certificate — before any verification runs. `InsecureSkipVerify` turns off a step that is never reached.
+The reason is where the failure happens. Go's `crypto/x509` has rejected negative serial numbers since Go 1.23, and it rejects them while **parsing** the certificate - before any verification runs. `InsecureSkipVerify` turns off a step that is never reached.
 
 The fix is in system config, not product config:
 
 ```yaml
-# dev/config.yaml — or SWGW_TLS_ALLOWNEGATIVESERIALNUMBERS=true
+# dev/config.yaml - or SWGW_TLS_ALLOWNEGATIVESERIALNUMBERS=true
 tls:
   allowNegativeSerialNumbers: true
 ```
@@ -588,7 +588,7 @@ Set it on **both** the Coordinator and the Worker. The Coordinator discovers; th
 
 It lives in system config because it is implemented with Go's `GODEBUG` mechanism, which is per **process**. It cannot be scoped to one repository, and putting it under `network.tls` would have been a lie about its blast radius: it relaxes parsing for every registry, every Sigstore call, and every other outbound connection the process makes. Both binaries say so at startup, and the existing `GODEBUG` value is preserved rather than overwritten.
 
-RFC 5280 §4.1.2.2 requires a positive serial number, so a certificate with a negative one is genuinely malformed — usually an appliance or enterprise CA encoding a random 20-byte value without clearing the high bit. The certificate is otherwise fine. Ask whoever runs that CA to reissue; until they do, this is the switch.
+RFC 5280 §4.1.2.2 requires a positive serial number, so a certificate with a negative one is genuinely malformed - usually an appliance or enterprise CA encoding a random 20-byte value without clearing the high bit. The certificate is otherwise fine. Ask whoever runs that CA to reissue; until they do, this is the switch.
 
 #### Signing trust per repository
 
@@ -621,9 +621,9 @@ spec:
 The merge is deliberately asymmetric:
 
 - **Scalars inherit.** `policy`, `transferSignatures` and the rest are overridden individually, so a product states its posture once.
-- **`cosign` replaces wholesale.** It is one coherent trust decision — a mode plus the identity or key that mode requires. Merging it field by field would silently produce combinations nobody wrote: a product's keyless certificate identity paired with a repository's key mode. A trust configuration assembled from two documents is one nobody can audit.
+- **`cosign` replaces wholesale.** It is one coherent trust decision - a mode plus the identity or key that mode requires. Merging it field by field would silently produce combinations nobody wrote: a product's keyless certificate identity paired with a repository's key mode. A trust configuration assembled from two documents is one nobody can audit.
 
-Every rule that applies to the product's cosign block applies to a repository's — including the important one, that keyless mode without `certificateIdentity` is rejected, because it would verify that *someone* signed the artifact rather than that the vendor did.
+Every rule that applies to the product's cosign block applies to a repository's - including the important one, that keyless mode without `certificateIdentity` is rejected, because it would verify that *someone* signed the artifact rather than that the vendor did.
 
 > Verification **executes** in M5. This is the configuration for it, validated now so it is correct when the machinery arrives.
 
@@ -636,7 +636,7 @@ A complete example is in [`dev/products/vendor-c-multirepo.yaml`](../dev/product
 
 #### Why `metadata.name` must be lowercase
 
-Because it becomes a **Kubernetes object name**. Products are ConfigMaps, and RFC 1123 requires lowercase alphanumerics and hyphens — an uppercase product name simply cannot be applied to a cluster. Everything else (API paths, metric labels, database rows) would tolerate mixed case; the cluster will not, and finding that out at `kubectl apply` rather than at `config validate` is a worse experience.
+Because it becomes a **Kubernetes object name**. Products are ConfigMaps, and RFC 1123 requires lowercase alphanumerics and hyphens - an uppercase product name simply cannot be applied to a cluster. Everything else (API paths, metric labels, database rows) would tolerate mixed case; the cluster will not, and finding that out at `kubectl apply` rather than at `config validate` is a worse experience.
 
 `displayName` is the field for human-facing casing, and it has no restrictions:
 
@@ -650,7 +650,7 @@ metadata:
 
 #### Credentials
 
-Every source and target needs **either** `credentialsRef` **or** `anonymous: true`. There is no third option — a missing `credentialsRef` fails loudly rather than silently downgrading to anonymous and failing later as a confusing 401.
+Every source and target needs **either** `credentialsRef` **or** `anonymous: true`. There is no third option - a missing `credentialsRef` fails loudly rather than silently downgrading to anonymous and failing later as a confusing 401.
 
 Secrets are read from **projected volume mounts**, never the Kubernetes API. No client-go, no cluster-wide Secret read permission, no API-server load, and the same code path works locally against a plain directory:
 
@@ -705,7 +705,7 @@ SWGW_DATABASE_DSN='postgres://swgw:swgw@localhost:5432/swgw?sslmode=disable' \
   go run ./cmd/coordinator --config ./dev/config.yaml
 ```
 
-SQLite is a development convenience and is **not supported in production** — the Coordinator warns loudly at startup. Use Postgres for anything you care about; leader election and the M3 queue both depend on Postgres semantics that SQLite does not have.
+SQLite is a development convenience and is **not supported in production** - the Coordinator warns loudly at startup. Use Postgres for anything you care about; leader election and the M3 queue both depend on Postgres semantics that SQLite does not have.
 
 ### CLI commands that work today
 
@@ -735,8 +735,8 @@ transferctl discover status [product] [--watch]  # what it is doing right now
 ```
 
 `<package>` is a tag, a digest, or `repository:tag`. A **bare tag is ambiguous**
-when a product spans several repositories — a vendor's version tag appears in
-many of them — so a tag matching more than one is refused with the list rather
+when a product spans several repositories - a vendor's version tag appears in
+many of them - so a tag matching more than one is refused with the list rather
 than one being picked for you. Scope it:
 
 ```bash
@@ -751,11 +751,11 @@ Every command takes `-o json` or `-o yaml` for scripting.
 |---|---|
 | 0 | success |
 | 1 | generic failure |
-| 2 | usage error — bad flags or arguments |
-| 3 | no answer — the Coordinator is unreachable, **or** it did not reply within the timeout |
+| 2 | usage error - bad flags or arguments |
+| 3 | no answer - the Coordinator is unreachable, **or** it did not reply within the timeout |
 | 4 | not found |
-| 5 | failed precondition — e.g. `discover` on a follower |
-| 6 | partial failure — the operation ran but something in it failed |
+| 5 | failed precondition - e.g. `discover` on a follower |
+| 6 | partial failure - the operation ran but something in it failed |
 
 The distinctions earn their keep in scripts. 3 versus 4 separates "the service is down" from "you asked for something that does not exist". 6 exists so CI cannot report green on a scan where half the tags failed, or on a config directory where one file is invalid:
 
@@ -788,18 +788,18 @@ which blames the Coordinator for being slow to answer a question that is genuine
 Error: the request timed out after 10m0s: http://localhost:8080 did not answer in time: ...
 
 The Coordinator accepted the connection but had not answered yet. If the
-work is genuinely slow — a check across many registries, or a scan of a
-large one — raise the deadline:
+work is genuinely slow - a check across many registries, or a scan of a
+large one - raise the deadline:
 
   transferctl --timeout 15m ...
   SWGW_TIMEOUT=15m transferctl ...
 ```
 
-Set `--timeout` or `SWGW_TIMEOUT` yourself and your value is used everywhere, including on the slow commands. An explicit deadline is a decision, not a suggestion — there are good reasons to want a short one, such as a scripted probe.
+Set `--timeout` or `SWGW_TIMEOUT` yourself and your value is used everywhere, including on the slow commands. An explicit deadline is a decision, not a suggestion - there are good reasons to want a short one, such as a scripted probe.
 
 **The scan does not stop when the client does.** `discover` triggers work on the Coordinator; giving up on the response only stops you waiting for it. Re-running the command finds the in-progress scan rather than starting a second one.
 
-### `health` vs `products check` — two different questions
+### `health` vs `products check` - two different questions
 
 They look similar and are deliberately not the same thing.
 
@@ -807,11 +807,11 @@ They look similar and are deliberately not the same thing.
 |---|---|---|
 | Asks | Is the **service** working? | Is my **configuration** usable? |
 | Checks | Coordinator, database, config parsed | DNS, TLS, credentials, per-repository permissions |
-| Talks to third parties | **no** | yes — that is the point |
+| Talks to third parties | **no** | yes - that is the point |
 | Speed | milliseconds | seconds, sometimes longer |
 | Run it | constantly; it backs readiness | after editing config, onboarding a vendor, or when discovery finds nothing |
 
-**Why `health` deliberately does not probe registries.** The same machinery backs Kubernetes readiness. If a vendor's registry going down made health fail, that vendor's bad afternoon would pull *your* pods out of the Service — an outage you did not cause and cannot fix. It would also destroy health's usefulness during an incident: seeing `DEGRADED` would not tell you whether the fault was yours or someone else's.
+**Why `health` deliberately does not probe registries.** The same machinery backs Kubernetes readiness. If a vendor's registry going down made health fail, that vendor's bad afternoon would pull *your* pods out of the Service - an outage you did not cause and cannot fix. It would also destroy health's usefulness during an incident: seeing `DEGRADED` would not tell you whether the fault was yours or someone else's.
 
 So they stay separate. `health` answers for things you own; `products check` answers for things you depend on.
 
@@ -828,13 +828,13 @@ $ transferctl products check vendor-a
       FAILED   authenticated
                HTTP 401: UNAUTHORIZED: authentication required
                → the username or password in secret vendor-a-registry was rejected.
-                 Check for a trailing newline in the file — it is the most common
+                 Check for a trailing newline in the file - it is the most common
                  cause and the hardest to see
       SKIPPED  can list tags
                authentication failed
 ```
 
-Checks run in dependency order and stop at the first real cause: there is no point asking whether a credential grants read access when the host does not resolve, and four failures for one cause is noise you have to work through. A **skipped** check is shown rather than hidden — "we did not check" and "it passed" must never look the same.
+Checks run in dependency order and stop at the first real cause: there is no point asking whether a credential grants read access when the host does not resolve, and four failures for one cause is noise you have to work through. A **skipped** check is shown rather than hidden - "we did not check" and "it passed" must never look the same.
 
 Exit code 6 when any repository fails, so it works in CI.
 
@@ -842,7 +842,7 @@ Exit code 6 when any repository fails, so it works in CI.
 
 ### Discovery behaviour worth knowing
 
-- **Every scan is a full scan.** No cursor, no watermark. The OCI tag list has no ordering guarantee and no change feed, so an incremental scheme would need a full scan to reconcile anyway. The payoff: it is self-healing — a crash, an outage, or a stale replica all resolve on the next pass with no repair path.
+- **Every scan is a full scan.** No cursor, no watermark. The OCI tag list has no ordering guarantee and no change feed, so an incremental scheme would need a full scan to reconcile anyway. The payoff: it is self-healing - a crash, an outage, or a stale replica all resolve on the next pass with no repair path.
 - **Discovery runs on the leader only.** On a follower, `discover` returns a precondition failure explaining why, not a 404.
 - **A scan that finds nothing is the normal steady state**, not a failure.
 - **A source is never disabled by a failure.** It backs off to at most 4× its interval and recovers on its own. A source that turned itself off is one nobody remembers to turn back on.
@@ -852,7 +852,7 @@ Exit code 6 when any repository fails, so it works in CI.
 ## 5. Test
 
 ```bash
-task test          # go test -race ./...   — the one to run before pushing
+task test          # go test -race ./...   - the one to run before pushing
 task test:short    # without the race detector, faster
 task cover         # with a coverage summary
 task lint          # golangci-lint (v2)
@@ -876,15 +876,15 @@ task test:run -- TestSupersession                 # everything matching a patter
 go test -race ./internal/discovery/
 ```
 
-The loop tests are genuinely concurrent — run those with `-race`, which both task shortcuts do.
+The loop tests are genuinely concurrent - run those with `-race`, which both task shortcuts do.
 
 ### Writing tests
 
 Follow the existing harnesses rather than inventing new ones:
 
-- `internal/discovery/discovery_test.go` — fake registry + migrated SQLite + reconciled catalog + Scanner. Copy `newHarness`.
-- `internal/api/packages_test.go` — `httptest` server over a real store, with a fake `Discoverer`.
-- `internal/store/store_test.go` — `openTestStore` gives a migrated SQLite store on a temp file.
+- `internal/discovery/discovery_test.go` - fake registry + migrated SQLite + reconciled catalog + Scanner. Copy `newHarness`.
+- `internal/api/packages_test.go` - `httptest` server over a real store, with a fake `Discoverer`.
+- `internal/store/store_test.go` - `openTestStore` gives a migrated SQLite store on a temp file.
 
 Two conventions that matter:
 
@@ -914,13 +914,13 @@ Build-tagged `integration`, excluded from the default run.
 
 From a fresh clone to seeing a package discovered, with no vendor account and no Docker.
 
-**1 — Build.**
+**1 - Build.**
 
 ```bash
 task build
 ```
 
-**2 — Point a product at a registry you control.** For a real trial, `docker run -d -p 5000:5000 registry:2` and push an image; if Docker is unavailable, use any registry you can reach.
+**2 - Point a product at a registry you control.** For a real trial, `docker run -d -p 5000:5000 registry:2` and push an image; if Docker is unavailable, use any registry you can reach.
 
 ```bash
 mkdir -p dev/products dev/secrets
@@ -955,19 +955,19 @@ YAML
 
 `localhost` and `127.0.0.1` are the only hosts allowed to use plain HTTP; everything else must be TLS.
 
-**3 — Validate before running.**
+**3 - Validate before running.**
 
 ```bash
 ./bin/transferctl config validate ./dev/products
 ```
 
-**4 — Start the Coordinator.**
+**4 - Start the Coordinator.**
 
 ```bash
 go run ./cmd/coordinator --config ./dev/config.yaml
 ```
 
-Look for these lines — they are the checkpoints:
+Look for these lines - they are the checkpoints:
 
 ```
 catalog: reconciled     products=1 repositories=2
@@ -975,7 +975,7 @@ discovery started       sources=1
 discovered package      tag=v1.0.0 digest=sha256:... artifacts=1 blobs=2 requests=1
 ```
 
-**5 — Look at it.**
+**5 - Look at it.**
 
 ```bash
 export SWGW_ENDPOINT=http://localhost:8080
@@ -985,25 +985,25 @@ export SWGW_ENDPOINT=http://localhost:8080
 ./bin/transferctl discover demo          # re-scan: finds nothing, which is correct
 ```
 
-**6 — Watch supersession.** Re-push the *same tag* with different content, then re-scan. A new package row appears and the old one becomes `superseded` with `superseded_by` set. Different tags never do this to each other — `v1.0.0` and `v1.1.0` coexist indefinitely.
+**6 - Watch supersession.** Re-push the *same tag* with different content, then re-scan. A new package row appears and the old one becomes `superseded` with `superseded_by` set. Different tags never do this to each other - `v1.0.0` and `v1.1.0` coexist indefinitely.
 
-**7 — Watch hot reload.** Edit `dev/products/demo.yaml` — change the interval, add a tag filter — and save. Discovery stops and restarts with the new configuration. No restart, no signal.
+**7 - Watch hot reload.** Edit `dev/products/demo.yaml` - change the interval, add a tag filter - and save. Discovery stops and restarts with the new configuration. No restart, no signal.
 
 ---
 
 ## 7. Troubleshooting
 
 **`bin/transferctl` will not run on Windows / has no `.exe`**
-Pull and rebuild — `task build` appends the suffix, and CI asserts it. If you would rather not install Task: `go build -o bin/transferctl.exe ./cmd/transferctl`.
+Pull and rebuild - `task build` appends the suffix, and CI asserts it. If you would rather not install Task: `go build -o bin/transferctl.exe ./cmd/transferctl`.
 
 **`task build` does nothing**
-Correct — nothing changed. Task compares checksums, so it rebuilds on a real edit and skips a `touch`. `task clean build` forces it.
+Correct - nothing changed. Task compares checksums, so it rebuilds on a real edit and skips a `touch`. `task clean build` forces it.
 
 **`task: command not found`**
-Install it: `go install github.com/go-task/task/v3/cmd/task@latest`, then make sure `$(go env GOPATH)/bin` is on your `PATH`. Or skip it — `task --dry <name>` prints the underlying `go` commands.
+Install it: `go install github.com/go-task/task/v3/cmd/task@latest`, then make sure `$(go env GOPATH)/bin` is on your `PATH`. Or skip it - `task --dry <name>` prints the underlying `go` commands.
 
 **`task: Command "<something>" failed: exit status 127` on Windows**
-The Taskfile is calling a Unix command PowerShell does not have. Pull first — `date` was one, and it is fixed. If you hit a new one after editing the Taskfile, either replace it with a template function or gate it:
+The Taskfile is calling a Unix command PowerShell does not have. Pull first - `date` was one, and it is fixed. If you hit a new one after editing the Taskfile, either replace it with a template function or gate it:
 
 ```yaml
 cmds:
@@ -1019,26 +1019,26 @@ The `portable` CI job catches this on Linux without waiting for the Windows runn
 Your `configDir` did not apply. The key is top-level `configDir`, not `paths.products`. Confirm with `--config` pointing at the right file.
 
 **A `SWGW_` variable seems ignored**
-It no longer can be — an unknown one fails startup by name. If you are on an older build, `SWGW_` variables for camelCase keys (`maxOpenConns`, `leaderElection`) were silently dropped. Pull and rebuild.
+It no longer can be - an unknown one fails startup by name. If you are on an older build, `SWGW_` variables for camelCase keys (`maxOpenConns`, `leaderElection`) were silently dropped. Pull and rebuild.
 
 **`discover` returns a precondition failure**
 Discovery runs on the leader only. Either this replica is a follower, or discovery has no enabled sources. Check the startup log for `discovery started sources=N`.
 
 **`discover` sometimes scans and sometimes returns instantly**
-Fixed — pull and rebuild. A trigger arriving while a scan was already running used to return the *previous* result (or zeros, if no scan had finished yet) instead of joining the running one, so the same command took seconds or 0ms depending on timing. It now joins the running scan and returns its real numbers, with `collapsed: true` in the JSON and "Joined a scan already in progress" in the table output.
+Fixed - pull and rebuild. A trigger arriving while a scan was already running used to return the *previous* result (or zeros, if no scan had finished yet) instead of joining the running one, so the same command took seconds or 0ms depending on timing. It now joins the running scan and returns its real numbers, with `collapsed: true` in the JSON and "Joined a scan already in progress" in the table output.
 
 **`discover` reports `Repositories scanned 0` and "Nothing new"**
-Those are two different things and the output now separates them. `Repositories scanned 0` means nothing was looked at, which is not a steady state. Either `discovery.repositoryFilters` rejected every candidate — the count is shown — or the source names no repositories and the registry's `/v2/_catalog` returned none. `transferctl products check` tells you which.
+Those are two different things and the output now separates them. `Repositories scanned 0` means nothing was looked at, which is not a steady state. Either `discovery.repositoryFilters` rejected every candidate - the count is shown - or the source names no repositories and the registry's `/v2/_catalog` returned none. `transferctl products check` tells you which.
 
 **`discover` blocks for minutes with no output**
-Fixed. It now prints a live progress line to stderr — phase, which repository, tag counts, elapsed — polled from `GET /api/v1/products/{product}/discovery`. Stdout still carries only the result, so `-o json | jq` is unaffected. Two more ways to avoid staring at it:
+Fixed. It now prints a live progress line to stderr - phase, which repository, tag counts, elapsed - polled from `GET /api/v1/products/{product}/discovery`. Stdout still carries only the result, so `-o json | jq` is unaffected. Two more ways to avoid staring at it:
 
 ```bash
 transferctl discover <product> --wait=false   # start it, return now
 transferctl discover status <product> --watch # follow it
 ```
 
-Stopping the client never stops the scan — it runs on the Coordinator.
+Stopping the client never stops the scan - it runs on the Coordinator.
 
 **`tag scan failed … net/http: timeout awaiting response headers`**
 Listing tags worked and fetching a manifest did not. Discovery does one HEAD and one GET per tag, so this fails every scan. Raise the per-repository deadline:
@@ -1052,9 +1052,9 @@ spec:
 
 If the traffic goes through an inspecting proxy, that is the usual cause: a proxy that scans response bodies answers `HEAD` promptly and stalls on `GET`. `transferctl products check` now probes a real manifest fetch, so it tells you this before discovery does.
 
-**Discovery is very slow — one repository, one tag, minutes**
-Fixed. A scan used to be strictly sequential. It now runs in two bounded phases —
-list every repository's tags, then resolve every tag — with **one** limit:
+**Discovery is very slow - one repository, one tag, minutes**
+Fixed. A scan used to be strictly sequential. It now runs in two bounded phases -
+list every repository's tags, then resolve every tag - with **one** limit:
 
 ```yaml
 # system configuration: what every product inherits
@@ -1078,43 +1078,43 @@ Clamped at 128. Raise it for a registry you own; leave it alone for a vendor's.
 This was three separate numbers (`discovery.concurrency.repositories`, `.tags`,
 and `rateLimits.maxConnections`), and they were not independent: every request
 goes through one connection pool, so **the pool was always the real ceiling**.
-The old defaults hid that by agreeing — 4 × 8 = 32 = `maxConnections` — which
+The old defaults hid that by agreeing - 4 × 8 = 32 = `maxConnections` - which
 means any edit to one of them broke an agreement nobody had written down. The
 old keys still parse and are folded forward; `transferctl config validate`
 reports them.
 
-There was also a retry amplification: a manifest `GET` that blew the 30s deadline was retried up to eight times, so **one unresponsive request cost up to four minutes** — and discovery makes two per tag. A 90-second total budget now bounds it.
+There was also a retry amplification: a manifest `GET` that blew the 30s deadline was retried up to eight times, so **one unresponsive request cost up to four minutes** - and discovery makes two per tag. A 90-second total budget now bounds it.
 
-There was also a third cause, and it was the worst of the three: **every repository built its own connection pool and its own rate limiter**. So `maxConnections: 32` with 16 repositories in flight permitted 512 concurrent connections to one host, and `requestsPerSecond: 50` permitted 800. Through a corporate proxy that is not a faster scan — it is a self-inflicted overload, and the configuration said the opposite of what was happening. A source now has one pool, one limiter and one token cache, so those numbers mean what they say.
+There was also a third cause, and it was the worst of the three: **every repository built its own connection pool and its own rate limiter**. So `maxConnections: 32` with 16 repositories in flight permitted 512 concurrent connections to one host, and `requestsPerSecond: 50` permitted 800. Through a corporate proxy that is not a faster scan - it is a self-inflicted overload, and the configuration said the opposite of what was happening. A source now has one pool, one limiter and one token cache, so those numbers mean what they say.
 
 If it is still slow after that, the requests themselves are slow: turn on request tracing (above), and `transferctl products check` times a real manifest fetch.
 
 **`packages list` is ordered by `PUBLISHED`, not by when we found it**
-Newest release first, by the vendor's own declared build date — which is the order a person thinks about releases in. Discovery order is not the same thing: a backfill, a re-scan after an outage, or adding a repository years after its first release all produce a discovery order with nothing to do with release order.
+Newest release first, by the vendor's own declared build date - which is the order a person thinks about releases in. Discovery order is not the same thing: a backfill, a re-scan after an outage, or adding a repository years after its first release all produce a discovery order with nothing to do with release order.
 
 Packages whose publisher set no date fall to the **end**, then order by when we found them.
 
-Columns showing `n/a` mean the value genuinely is not known — not zero, and not empty. `SIZE` and `BLOBS` read `n/a` until something walks the tree; `transferctl packages inspect` fills them in, and `describe` shows them from then on.
+Columns showing `n/a` mean the value genuinely is not known - not zero, and not empty. `SIZE` and `BLOBS` read `n/a` until something walks the tree; `transferctl packages inspect` fills them in, and `describe` shows them from then on.
 
 **Where does `Published` come from, and why is it sometimes missing?**
-From `org.opencontainers.image.created` on the tag's manifest — a **standard OCI annotation**, not a vendor extension, so it works anywhere it is set. It is optional in the spec, so a publisher that sets none simply has no published date, and we record nothing rather than inventing one.
+From `org.opencontainers.image.created` on the tag's manifest - a **standard OCI annotation**, not a vendor extension, so it works anywhere it is set. It is optional in the spec, so a publisher that sets none simply has no published date, and we record nothing rather than inventing one.
 
 It is deliberately separate from `Discovered`: one is the vendor's claim about when they built it, the other is when we saw it. Both are shown, and labelled.
 
-Every other annotation — including vendor-specific ones like `com.nokia.ncd.orb.type` — is kept verbatim on the artifact and returned by `packages describe -o json`, so you can use keys this tool has never heard of:
+Every other annotation - including vendor-specific ones like `com.nokia.ncd.orb.type` - is kept verbatim on the artifact and returned by `packages describe -o json`, so you can use keys this tool has never heard of:
 
 ```bash
 transferctl packages describe <product> <tag> -o json | jq '.artifacts[].annotations'
 ```
 
 **`packages list` shows `n/a` instead of a size**
-Expected, for a package whose root is an index — and it is one command away:
+Expected, for a package whose root is an index - and it is one command away:
 
 ```bash
 transferctl packages inspect <product> <package>
 ```
 
-Discovery is deliberately light: it fetches the tag's own manifest and records the artifacts that manifest lists, without a request each. That answers "what is new" in two requests per tag, and it means the layer bytes underneath are not yet known. `inspect` builds out the rest and measures it, and **records what it found** — so `packages describe` shows the size, the blob count and the full tree from then on, and a transfer of the same package does not repeat the walk.
+Discovery is deliberately light: it fetches the tag's own manifest and records the artifacts that manifest lists, without a request each. That answers "what is new" in two requests per tag, and it means the layer bytes underneath are not yet known. `inspect` builds out the rest and measures it, and **records what it found** - so `packages describe` shows the size, the blob count and the full tree from then on, and a transfer of the same package does not repeat the walk.
 
 Safe and cheap to repeat: the tree under a digest cannot change, so a second run fetches nothing and says so.
 
@@ -1123,19 +1123,19 @@ You do not have to run it before a transfer; a transfer performs the same walk i
 A package whose root is a plain image manifest already shows a real size: its config and layers are inside the one manifest discovery fetched.
 
 **`describe` says some manifest bodies are no longer held locally**
-Also expected, and nothing is missing. A package's *contents* — its artifacts, their digests and sizes, the blobs they reference — are recorded permanently. The manifest **bodies** are a cache in front of the source registry: large, read only when a manifest is pushed, and exactly recoverable because a manifest is addressed by the hash of its own bytes. They are reclaimed least-recently-used once they pass `coordinator.manifestCache.ttl` or the cache exceeds `budgetBytes`.
+Also expected, and nothing is missing. A package's *contents* - its artifacts, their digests and sizes, the blobs they reference - are recorded permanently. The manifest **bodies** are a cache in front of the source registry: large, read only when a manifest is pushed, and exactly recoverable because a manifest is addressed by the hash of its own bytes. They are reclaimed least-recently-used once they pass `coordinator.manifestCache.ttl` or the cache exceeds `budgetBytes`.
 
 The cost of a reclaimed body is re-fetching a few kilobytes at transfer time. The cost of *not* reclaiming would be, over a vendor catalogue accumulated across a few years, the largest thing in the database. Watch `swgw_manifest_cache_bytes` and `swgw_manifest_cache_evicted_total{reason="budget"}`: steady expiry is the cache working, while sustained *budget* eviction means the budget is smaller than the working set and every transfer is paying to re-fetch.
 
 **A tag or repository looks different in `list` than in the registry**
-Where a source declares `vendor: near`, listings drop the noise that vendor puts on every name — `orbs/` off the repository, `orb_` off the tag. The full names are what is stored, transferred and returned by `-o json`, and **both spellings work as input**, so anything on your screen can be pasted straight back:
+Where a source declares `vendor: near`, listings drop the noise that vendor puts on every name - `orbs/` off the repository, `orb_` off the tag. The full names are what is stored, transferred and returned by `-o json`, and **both spellings work as input**, so anything on your screen can be pasted straight back:
 
 ```bash
 transferctl packages list <product> --tag 23.8.1076        # same as --tag orb_23.8.1076
 transferctl packages describe <product> cfx-5000-k8s:23.8.1076
 ```
 
-A source with no `vendor` gets no shortening at all. If you are seeing shortened names on a registry that has no such convention, that is the bug this gating fixed — the CLI used to guess the prefix from whatever a page of results had in common.
+A source with no `vendor` gets no shortening at all. If you are seeing shortened names on a registry that has no such convention, that is the bug this gating fixed - the CLI used to guess the prefix from whatever a page of results had in common.
 
 **How do I check a package's signature? (and what does SIGNED actually mean)**
 
@@ -1144,9 +1144,9 @@ Two different questions, and this build answers only the first.
 | | Implemented | What it tells you |
 |---|---|---|
 | Is a signature **present**? | yes | the vendor published one, and where it is |
-| Is that signature **valid**? | **no** — M5 | nothing yet |
+| Is that signature **valid**? | **no** - M5 | nothing yet |
 
-The `SIGNED` column and `signatureStatus` report **presence**, discovered by the source's vendor plugin. Nothing in this build builds a certificate chain, consults a trust root, or checks a signature against a key — so `SIGNED` means "the vendor published a signature artifact alongside this release", not "we checked it and it is theirs". `packages describe` says so in as many words, deliberately, because that column is exactly the sort of thing a release decision gets made on.
+The `SIGNED` column and `signatureStatus` report **presence**, discovered by the source's vendor plugin. Nothing in this build builds a certificate chain, consults a trust root, or checks a signature against a key - so `SIGNED` means "the vendor published a signature artifact alongside this release", not "we checked it and it is theirs". `packages describe` says so in as many words, deliberately, because that column is exactly the sort of thing a release decision gets made on.
 
 The three states are worth distinguishing:
 
@@ -1154,7 +1154,7 @@ The three states are worth distinguishing:
 |---|---|
 | `signed` | a signature artifact was found |
 | `unsigned` | the source's plugin looked, and the vendor published none |
-| `n/a` | **nobody looked** — the source declares no `vendor`, so no plugin knows where this vendor puts signatures |
+| `n/a` | **nobody looked** - the source declares no `vendor`, so no plugin knows where this vendor puts signatures |
 
 `n/a` is not a weaker `no`. A source with no `vendor` reports `n/a` for everything, including releases that are in fact signed.
 
@@ -1168,9 +1168,9 @@ discovery:
     include: ['^orb_']        # "track the release tags"
 ```
 
-Nothing is wrong with that filter — but `signed_orb_X` and `signature_orb_X` do not match `^orb_`, and the signature lives in those tags.
+Nothing is wrong with that filter - but `signed_orb_X` and `signature_orb_X` do not match `^orb_`, and the signature lives in those tags.
 
-**A tag filter selects PACKAGES; it does not select the tags a package is made of.** The vendor plugin now pulls in the accessory tags of any release the filter admitted, exempt from the filter, and intersected with the repository's real tag list so an unsigned release costs nothing. You do not need to widen the filter — and widening it would be wrong, because it would turn the wrapper and the signature into packages of their own.
+**A tag filter selects PACKAGES; it does not select the tags a package is made of.** The vendor plugin now pulls in the accessory tags of any release the filter admitted, exempt from the filter, and intersected with the repository's real tag list so an unsigned release costs nothing. You do not need to widen the filter - and widening it would be wrong, because it would turn the wrapper and the signature into packages of their own.
 
 Re-scan and the status corrects itself:
 
@@ -1179,26 +1179,26 @@ transferctl discover <product>
 transferctl packages list <product>
 ```
 
-If it still reads `no` afterwards, the vendor genuinely published no `signed_orb_X` for that release — `no` and `n/a` are different answers, and `no` means the plugin looked.
+If it still reads `no` afterwards, the vendor genuinely published no `signed_orb_X` for that release - `no` and `n/a` are different answers, and `no` means the plugin looked.
 
 **Specifically for NEAR / orb packages**
 
 NEAR publishes three tags per release, and the signature is a tag of its own:
 
 ```
-orb_23.8.1076              the payload — an index of Helm charts and images
+orb_23.8.1076              the payload - an index of Helm charts and images
 signature_orb_23.8.1076    one layer, media type application/pkcs7-signature
 signed_orb_23.8.1076       an index referencing both of the above
 ```
 
-With `vendor: near` set on the source, discovery collapses those into one package, records the signature as a related artifact, and makes `signed_orb_X` the **transfer root** — so a transfer walks the wrapper and the signature travels with the payload. Without that, replicating `orb_23.8.1076` would move the payload and leave the signature behind, and destination-side verification would be impossible for good. To see what was recorded:
+With `vendor: near` set on the source, discovery collapses those into one package, records the signature as a related artifact, and makes `signed_orb_X` the **transfer root** - so a transfer walks the wrapper and the signature travels with the payload. Without that, replicating `orb_23.8.1076` would move the payload and leave the signature behind, and destination-side verification would be impossible for good. To see what was recorded:
 
 ```bash
 transferctl packages describe <product> orb_23.8.1076
 transferctl packages describe <product> orb_23.8.1076 -o json | jq '.package.related'
 ```
 
-`packages inspect` goes one step further and records **what the signature is**, not just that it exists. Discovery can only see the wrapper's descriptor of the signature manifest; inspect fetches that manifest — it walks the wrapper anyway, because that is what a transfer walks — and records the blob a verifier actually reads:
+`packages inspect` goes one step further and records **what the signature is**, not just that it exists. Discovery can only see the wrapper's descriptor of the signature manifest; inspect fetches that manifest - it walks the wrapper anyway, because that is what a transfer walks - and records the blob a verifier actually reads:
 
 ```
 Signature material
@@ -1208,7 +1208,7 @@ Signature material
   size       3.0 KiB
 ```
 
-That is persisted (`package_relations`, migration 00009), along with the manifest's annotations verbatim — `com.nokia.ncd.orb.type: generic_signature`, `com.nokia.rb.name`, `com.nokia.rb.version` — so verification, when it lands, reads one row instead of re-deriving Nokia's layout. It lives in the database rather than a file on disk because it is per-package state that has to survive a restart and be shared between Coordinator replicas.
+That is persisted (`package_relations`, migration 00009), along with the manifest's annotations verbatim - `com.nokia.ncd.orb.type: generic_signature`, `com.nokia.rb.name`, `com.nokia.rb.version` - so verification, when it lands, reads one row instead of re-deriving Nokia's layout. It lives in the database rather than a file on disk because it is per-package state that has to survive a restart and be shared between Coordinator replicas.
 
 To check a signature by hand today, pull that blob and run it through `openssl cms`:
 
@@ -1219,22 +1219,22 @@ transferctl packages describe <product> orb_23.8.1076 -o json \
 #   openssl cms -verify -in sig.p7s -inform DER -CAfile your-ca.crt -content <payload>
 ```
 
-When verification lands it will be **CMS/PKCS#7 (RFC 5652)** against a CA root, configured as `signatures.format: pkcs7` and `signatures.trustBundleRef` — both of which are accepted and stored today. It is explicitly **not** Sigstore: cosign cannot verify a NEAR signature and has no part in it.
+When verification lands it will be **CMS/PKCS#7 (RFC 5652)** against a CA root, configured as `signatures.format: pkcs7` and `signatures.trustBundleRef` - both of which are accepted and stored today. It is explicitly **not** Sigstore: cosign cannot verify a NEAR signature and has no part in it.
 
 **I set `vendor: near` and the tags still show `orb_`**
-The names are corrected on the next scan, not on config reload. Discovery skips a tag it has already recorded — one `HEAD`, no fetch — so the correction is a separate reconcile pass rather than a side effect of re-discovery:
+The names are corrected on the next scan, not on config reload. Discovery skips a tag it has already recorded - one `HEAD`, no fetch - so the correction is a separate reconcile pass rather than a side effect of re-discovery:
 
 ```bash
 transferctl discover <product>       # look for "Display names corrected"
 transferctl packages list <product>
 ```
 
-If it still shows `orb_` after a scan that reported no corrections, check that the Coordinator actually loaded the edit — `transferctl products describe <product>` shows the resolved `vendor` per source, and the loader rejects unknown fields outright, so a `vendor:` key on a build that predates it fails the whole document rather than being ignored.
+If it still shows `orb_` after a scan that reported no corrections, check that the Coordinator actually loaded the edit - `transferctl products describe <product>` shows the resolved `vendor` per source, and the loader rejects unknown fields outright, so a `vendor:` key on a build that predates it fails the whole document rather than being ignored.
 
 Note that only the NAMING is retroactive. Whether NEAR's three tags per release were collapsed into one package is decided when those tags are first recorded, and existing rows keep the shape they were discovered with.
 
 **Requests are succeeding but the tag counter does not move**
-Largely gone: a newly discovered tag now costs two requests (a `HEAD` then one `GET`) whatever it contains, and an unchanged one costs a single `HEAD`. Discovery no longer walks the artifact tree — see [design 07 §12](design/07-discovery.md). The progress line also reports `N artifacts`, which keeps moving when nothing else does.
+Largely gone: a newly discovered tag now costs two requests (a `HEAD` then one `GET`) whatever it contains, and an unchanged one costs a single `HEAD`. Discovery no longer walks the artifact tree - see [design 07 §12](design/07-discovery.md). The progress line also reports `N artifacts`, which keeps moving when nothing else does.
 
 **I have no way to see what discovery is doing**
 Turn on request tracing. Every registry request is logged with its host, path, status and duration:
@@ -1251,13 +1251,13 @@ You do not need `debug` for the important half: **failed requests and slow ones 
 Alongside it: `transferctl discover status <product> --watch`, and `transferctl products check <product>`, which times a real `HEAD` and a real manifest `GET`.
 
 **`packages list` is empty**
-Discovery polls on its interval; the first scan happens at startup. Force one with `transferctl discover <product>`. If it reports `tagsListed=0`, the repository path or credentials are wrong — `transferctl health` checks reachability.
+Discovery polls on its interval; the first scan happens at startup. Force one with `transferctl discover <product>`. If it reports `tagsListed=0`, the repository path or credentials are wrong - `transferctl health` checks reachability.
 
 **Discovery is slow to report a registry outage**
-Expected, and worth understanding: a hard outage takes **~2 minutes** to surface. The transport retries the transient class eight times with backoff, and only when those are exhausted does the loop's own backoff engage. Both layers are right individually and they multiply. This is why the alert is on `discovery_last_success_timestamp_seconds` staleness rather than failure rate — staleness is visible immediately.
+Expected, and worth understanding: a hard outage takes **~2 minutes** to surface. The transport retries the transient class eight times with backoff, and only when those are exhausted does the loop's own backoff engage. Both layers are right individually and they multiply. This is why the alert is on `discovery_last_success_timestamp_seconds` staleness rather than failure rate - staleness is visible immediately.
 
 **`tls: failed to parse certificate from server: x509: negative serial number`**
-`insecureSkipVerify` does **not** fix this — measured, and the message is byte-for-byte identical with it on. The parse fails before verification runs. Set `tls.allowNegativeSerialNumbers: true` in system config, on the Coordinator *and* the Worker, and see [the section on it](#insecureskipverify-will-not-fix-x509-negative-serial-number).
+`insecureSkipVerify` does **not** fix this - measured, and the message is byte-for-byte identical with it on. The parse fails before verification runs. Set `tls.allowNegativeSerialNumbers: true` in system config, on the Coordinator *and* the Worker, and see [the section on it](#insecureskipverify-will-not-fix-x509-negative-serial-number).
 
 **`x509: certificate signed by unknown authority`**
 This one *is* a trust problem, and the right fix is `network.caBundleRef` pointing at the issuing CA's PEM. `insecureSkipVerify: true` also works and is worse: it stops checking expiry and hostname too. `transferctl products check` tells you which of the two you have.
@@ -1269,7 +1269,7 @@ An older build. `products check` and `discover` now default to a 10-minute deadl
 You have v1. The config uses the v2 schema. Install v2.
 
 **Auth failures take a long time**
-They should not — a non-retryable error returns immediately. If a missing credential takes minutes, you are on a build from before that fix.
+They should not - a non-retryable error returns immediately. If a missing credential takes minutes, you are on a build from before that fix.
 
 ---
 
@@ -1277,26 +1277,26 @@ They should not — a non-retryable error returns immediately. If a missing cred
 
 | | Milestone | State |
 |---|---|---|
-| **M1** | Foundation — config, schema, migrations, health, API skeleton, three binaries | ✅ done |
-| **M2** | **Discovery** — registry client, full-scan discovery, supersession, auto-download rules, packages API + CLI | ✅ **done** |
-| M3 | **Transfer** — blob queue, worker lease loop, streaming copy, dedupe, mount | next |
+| **M1** | Foundation - config, schema, migrations, health, API skeleton, three binaries | ✅ done |
+| **M2** | **Discovery** - registry client, full-scan discovery, supersession, auto-download rules, packages API + CLI | ✅ **done** |
+| M3 | **Transfer** - blob queue, worker lease loop, streaming copy, dedupe, mount | next |
 | M4 | Scheduling, promotion, vendor registry backends | |
 | M5 | Verification (cosign), notifications | |
 | M6 | GC, retention, hardening | |
 
 **What works now.** Auto-download rules create `transfer_requests` rows, the Coordinator's leader expands them into planned transfers, and workers lease the jobs and move the bytes. Run a coordinator and at least one worker and a discovered package will replicate to your configured target on its own; `transferctl transfers list` shows it happening, and `transferctl transfers jobs <id>` shows it blob by blob.
 
-**What is not there yet.** `transferctl transfers` is read-only — pause, resume, cancel, retry and priority changes are M3 work still outstanding. An interrupted upload restarts its blob rather than resuming (`ResumeUpload` returns `ErrUnsupported`; see Q3). Promotion between internal registries is M4, so a `promote` request expands into a stated error rather than being silently treated as a replication. And the M3 acceptance run — a real 30–60 GB package, with the worker's memory held to the [05](design/05-transfer-engine.md) §4.5 formula, and the `kill -9` chaos scenario — has not been done: the path is proven against an in-process registry, which is a different claim.
+**What is not there yet.** `transferctl transfers` is read-only - pause, resume, cancel, retry and priority changes are M3 work still outstanding. An interrupted upload restarts its blob rather than resuming (`ResumeUpload` returns `ErrUnsupported`; see Q3). Promotion between internal registries is M4, so a `promote` request expands into a stated error rather than being silently treated as a replication. And the M3 acceptance run - a real 30–60 GB package, with the worker's memory held to the [05](design/05-transfer-engine.md) §4.5 formula, and the `kill -9` chaos scenario - has not been done: the path is proven against an in-process registry, which is a different claim.
 
-[ADR-001](design/16-technology-choices.md#11-adr-001-closure) — whether to adopt `go-containerregistry` or `oras-go/v2` — **is now closed: `oras-go/v2`, for the write path only.** The read path you exercise during discovery is still plain `net/http`, unchanged from M2; the library appears in `internal/registry/generic/write.go` and nowhere else, so blob upload, cross-repository mount and `Referrers` go through it while tag listing and manifest resolution do not. The closure, including the four criteria it leaves unmeasured, is written up in the ADR.
+[ADR-001](design/16-technology-choices.md#11-adr-001-closure) - whether to adopt `go-containerregistry` or `oras-go/v2` - **is now closed: `oras-go/v2`, for the write path only.** The read path you exercise during discovery is still plain `net/http`, unchanged from M2; the library appears in `internal/registry/generic/write.go` and nowhere else, so blob upload, cross-repository mount and `Referrers` go through it while tag listing and manifest resolution do not. The closure, including the four criteria it leaves unmeasured, is written up in the ADR.
 
 ---
 
 ## See also
 
-- [`docs/design/README.md`](design/README.md) — the full design set, 18 documents
-- [`docs/FUNCTIONAL-OVERVIEW.md`](FUNCTIONAL-OVERVIEW.md) — what the tool does, in day-to-day terms
-- [`docs/design/02-configuration.md`](design/02-configuration.md) — complete configuration schema
-- [`docs/design/07-discovery.md`](design/07-discovery.md) — discovery semantics, including supersession
-- [`docs/design/14-deployment-and-development.md`](design/14-deployment-and-development.md) — Kubernetes and Flux
-- [`docs/design/16-technology-choices.md`](design/16-technology-choices.md) — library choices and recorded divergences
+- [`docs/design/README.md`](design/README.md) - the full design set, 18 documents
+- [`docs/FUNCTIONAL-OVERVIEW.md`](FUNCTIONAL-OVERVIEW.md) - what the tool does, in day-to-day terms
+- [`docs/design/02-configuration.md`](design/02-configuration.md) - complete configuration schema
+- [`docs/design/07-discovery.md`](design/07-discovery.md) - discovery semantics, including supersession
+- [`docs/design/14-deployment-and-development.md`](design/14-deployment-and-development.md) - Kubernetes and Flux
+- [`docs/design/16-technology-choices.md`](design/16-technology-choices.md) - library choices and recorded divergences

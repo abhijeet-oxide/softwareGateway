@@ -17,7 +17,7 @@ import (
 )
 
 // resolverImpl joins configuration, the catalog and the registry client
-// factory — the three things neither the planner nor the requester may import.
+// factory - the three things neither the planner nor the requester may import.
 //
 // It lives in the composition root because that is where those three meet, and
 // because internal/transfer staying free of them is what lets the planner and
@@ -34,7 +34,7 @@ type resolverImpl struct {
 // against: configured sources and targets, joined to their catalog rows.
 //
 // A target with no catalog row yet is included with a zero ID rather than
-// omitted — configuration declares it, so naming it must produce "nothing has
+// omitted - configuration declares it, so naming it must produce "nothing has
 // been written there yet" rather than "no such target".
 func (r *resolverImpl) ProductView(
 	ctx context.Context, productName string,
@@ -49,7 +49,7 @@ func (r *resolverImpl) ProductView(
 
 	// Sources carry no row ID. A source that enumerates the registry's catalog
 	// owns a row PER REPOSITORY it found, named "<source>/<path>", so there is
-	// no single row a configured source name maps to — and pretending
+	// no single row a configured source name maps to - and pretending
 	// otherwise is what produced a zero ID and a foreign-key violation. A
 	// replication resolves its origin from the package instead.
 	for _, s := range p.Spec.Sources {
@@ -69,7 +69,7 @@ func (r *resolverImpl) ProductView(
 			continue
 		}
 		// A target that has never received a transfer has no row yet. Zero
-		// here is not an error — the requester creates one when something is
+		// here is not an error - the requester creates one when something is
 		// actually copied there.
 		id, _ := r.catalog.ResolveRepository(ctx, productName, t.Name)
 		view.Targets = append(view.Targets, transfer.RepoView{
@@ -125,7 +125,7 @@ func (r *resolverImpl) Reader(
 // Nothing yet, and deliberately nothing rather than a guess. The planner does
 // not need it: where a vendor bundles the payload with its signature under a
 // wrapper index, discovery records the WRAPPER as the transfer root, so
-// walking from that root already reaches both — see internal/expand.Root. The
+// walking from that root already reaches both - see internal/expand.Root. The
 // hook exists for the M5 case where a signature is discovered by referrers and
 // has no place in the payload's tree.
 func (r *resolverImpl) Related(
@@ -149,7 +149,7 @@ func (a expanderAdapter) Expand(ctx context.Context) (int, int, error) {
 //
 // This is how a replication learns its origin: the PACKAGE names the row it
 // was discovered in, which is authoritative in a way a configured source name
-// is not — one source can own many rows.
+// is not - one source can own many rows.
 func (r *resolverImpl) RepositoryByID(
 	ctx context.Context, repositoryID int64,
 ) (transfer.RepoView, error) {
@@ -174,7 +174,7 @@ func (r *resolverImpl) RepositoryByID(
 // EnsureTarget gives a configured target a catalog row.
 //
 // Created on first use rather than at reconciliation, because a target that
-// has never received anything has nothing to point at — and a transfer needs a
+// has never received anything has nothing to point at - and a transfer needs a
 // row before it can name one.
 func (r *resolverImpl) EnsureTarget(
 	ctx context.Context, productName string, target transfer.RepoView,
@@ -191,7 +191,7 @@ func (r *resolverImpl) EnsureTarget(
 	defer func() { _ = tx.Rollback() }()
 
 	// productID comes from the loaded configuration's row, which reconciliation
-	// keeps current — the same row every other repository of this product hangs
+	// keeps current - the same row every other repository of this product hangs
 	// off.
 	productID, err := r.productID(ctx, p.Metadata.Name)
 	if err != nil {
@@ -231,7 +231,7 @@ func (r *resolverImpl) productID(ctx context.Context, name string) (int64, error
 // only way `diverged` can be told from `succeeded` at all.
 //
 // It reads through the same client factory as everything else, so a target
-// unreachable to a transfer is unreachable to this too — which is correct: a
+// unreachable to a transfer is unreachable to this too - which is correct: a
 // confirmation that could succeed where a transfer could not would be
 // confirming the wrong thing.
 func (r *resolverImpl) ResolveAtTarget(
@@ -269,7 +269,7 @@ func (r *resolverImpl) ResolveAtTarget(
 // narrow interface.
 //
 // An adapter rather than the registry itself, so internal/replication depends
-// on four method names rather than on Prometheus — which is what lets every
+// on four method names rather than on Prometheus - which is what lets every
 // decision in it be tested without a registry.
 type replicationMetrics struct{ m *metrics.Registry }
 

@@ -1,7 +1,7 @@
-# 09 — API
+# 09 - API
 
-> **Prerequisites:** [01 — Domain Model](01-domain-model.md), [03 — Persistence](03-persistence.md), [04 — Queue and Scheduling](04-queue-and-scheduling.md)
-> **Consumed by:** [13 — CLI](13-cli.md), [14 — Deployment](14-deployment-and-development.md)
+> **Prerequisites:** [01 - Domain Model](01-domain-model.md), [03 - Persistence](03-persistence.md), [04 - Queue and Scheduling](04-queue-and-scheduling.md)
+> **Consumed by:** [13 - CLI](13-cli.md), [14 - Deployment](14-deployment-and-development.md)
 
 The Coordinator's REST API is the **only** interface. `transferctl` uses it, workers use it, HPA scrapes it. There is no second path to the data.
 
@@ -16,11 +16,11 @@ Google **AIP** (API Improvement Proposals) for resource naming and method shape,
 | Base path | `/api/v1` | Versioned from day one |
 | Resource names | Plural collections, `{id}` members: `/products/{product}/packages/{package}` | AIP-122 |
 | Standard methods | `GET` list/get, `POST` create, `PATCH` update, `DELETE` delete | AIP-131…135 |
-| Custom methods | `POST /resource/{id}:verb` — colon, lowerCamelCase verb | AIP-136 |
+| Custom methods | `POST /resource/{id}:verb` - colon, lowerCamelCase verb | AIP-136 |
 | Field names | `lowerCamelCase` in JSON | AIP-140 |
 | Pagination | `pageSize` / `pageToken` → `nextPageToken` | AIP-158 |
 | Filtering | `filter` query parameter | AIP-160 |
-| Validate-only | `validateOnly=true` — **this is how dry run works** | AIP-163 |
+| Validate-only | `validateOnly=true` - **this is how dry run works** | AIP-163 |
 | Long-running work | Resource state fields; polled, not an Operation resource | see §4.3 |
 | Errors | RFC 9457 `application/problem+json` | §8 |
 | Timestamps | RFC 3339 UTC, `…Z` | AIP-142 |
@@ -70,7 +70,7 @@ These do not contradict the paragraph above: configuration still comes from Git,
 
 Three deliberate absences, each of which someone will ask for:
 
-- **No `:suspend` or `:resume`, and no way to enable or disable a rule.** Whether a rule fires is configuration, it lives in Git, and an API that changed it would be a second source of truth that Flux reverts ([20](20-download-rules.md) §9). The fast path during an incident is `transfers pause` — stop the work, not the configuration.
+- **No `:suspend` or `:resume`, and no way to enable or disable a rule.** Whether a rule fires is configuration, it lives in Git, and an API that changed it would be a second source of truth that Flux reverts ([20](20-download-rules.md) §9). The fast path during an incident is `transfers pause` - stop the work, not the configuration.
 - **No `/downloads/{download}/runs`.** A run is a transfer request, and `GET /transfers?filter=…` already returns them (§3).
 - **No `autoDownloadRules/{rule}:run`.** Running a rule by hand is downloading, and that is `downloads:run` with the software named. A rule exists to choose software when nobody is there to choose it.
 
@@ -78,9 +78,9 @@ See [20](20-download-rules.md) §10.
 
 #### Why calibration is per product and synchronous
 
-There is deliberately no `/products:calibrate`. Calibrating everything would mean saturating every vendor link this deployment has, one after another, and the answer for one path says nothing about another — a fleet-wide verb here would be load with no information in it.
+There is deliberately no `/products:calibrate`. Calibrating everything would mean saturating every vendor link this deployment has, one after another, and the answer for one path says nothing about another - a fleet-wide verb here would be load with no information in it.
 
-It is also a plain synchronous request rather than a long-running operation, despite taking minutes. The result is a **report for a person**, not a resource for a system: nobody calibrates in a script, nobody needs the run to outlive the client, and a stored calibration is a measurement of a network as it was last Tuesday — the exact kind of stale number the feature exists to replace. Clients must raise their own timeout to cover the requested budget; `transferctl` derives one from the flags.
+It is also a plain synchronous request rather than a long-running operation, despite taking minutes. The result is a **report for a person**, not a resource for a system: nobody calibrates in a script, nobody needs the run to outlive the client, and a stored calibration is a measurement of a network as it was last Tuesday - the exact kind of stale number the feature exists to replace. Clients must raise their own timeout to cover the requested budget; `transferctl` derives one from the flags.
 
 ### Packages
 
@@ -95,9 +95,9 @@ It is also a plain synchronous request rather than a long-running operation, des
 
 #### Package references, and the custom-method colon
 
-`{package}` is a tag or a digest. The `repository:tag` form a person types is **not** in the path — a repository path contains slashes, `%2F` is decoded before routing, and percent-encoding it twice works right up until a proxy normalises the path. So the wire form is `/packages/{tag}?repository=orbs/core`, and the CLI does that rewrite.
+`{package}` is a tag or a digest. The `repository:tag` form a person types is **not** in the path - a repository path contains slashes, `%2F` is decoded before routing, and percent-encoding it twice works right up until a proxy normalises the path. So the wire form is `/packages/{tag}?repository=orbs/core`, and the CLI does that rewrite.
 
-The custom-method colon is then split **in the handler, not by the router**, and this is worth stating because getting it wrong is silent. Registering `/packages/{package}:inspect` as a route looks correct and is: chi supports a parameter followed by literal text within a segment. But it matches at the *first* occurrence of the delimiter, and a digest reference contains a colon of its own — so `sha256:ccbd…:inspect` bound `{package}` to `sha256`, failed to match `:inspect` against `:ccbd…`, fell through to the `GET`-only route, and returned:
+The custom-method colon is then split **in the handler, not by the router**, and this is worth stating because getting it wrong is silent. Registering `/packages/{package}:inspect` as a route looks correct and is: chi supports a parameter followed by literal text within a segment. But it matches at the *first* occurrence of the delimiter, and a digest reference contains a colon of its own - so `sha256:ccbd…:inspect` bound `{package}` to `sha256`, failed to match `:inspect` against `:ccbd…`, fell through to the `GET`-only route, and returned:
 
 ```
 INVALID_ARGUMENT: POST is not supported on /api/v1/products/…
@@ -131,7 +131,7 @@ which names neither the real problem nor anything the caller could change. The r
 | `GET` | `/api/v1/scheduledRequests/{id}` | Get one |
 | `POST` | `/api/v1/scheduledRequests/{id}:cancel` | Cancel before it fires |
 
-Schedules are created through `POST /transfers` with `scheduleAt` — one creation path, not two ([04](04-queue-and-scheduling.md) §10).
+Schedules are created through `POST /transfers` with `scheduleAt` - one creation path, not two ([04](04-queue-and-scheduling.md) §10).
 
 ### Verifications and audit
 
@@ -154,8 +154,8 @@ Schedules are created through `POST /transfers` with `scheduleAt` — one creati
 | `POST` | `/api/v1/jobs/{job}:complete` | // terminal outcome |
 | `GET` | `/api/v1/system:healthCheck` | Deep dependency check ([13](13-cli.md)) |
 | `GET` | `/api/v1/system/version` | Build info |
-| `GET` | `/healthz` | Liveness — **process-local only** |
-| `GET` | `/readyz` | Readiness — DB + config |
+| `GET` | `/healthz` | Liveness - **process-local only** |
+| `GET` | `/readyz` | Readiness - DB + config |
 | `GET` | `/metrics` | Prometheus |
 
 ## 3. Listing
@@ -191,9 +191,9 @@ GET /api/v1/products/vendor-a-platform/packages?pageSize=50&filter=state=discove
 - **Cursor pagination, not offset.** `pageToken` is an opaque base64 cursor over `(discovered_at, id)`. Offset pagination on a table receiving inserts silently skips and duplicates rows as the underlying set shifts, which is exactly what a paging client must not experience.
 - `pageSize` defaults to 50, caps at 1000.
 - Enum values are `SCREAMING_SNAKE_CASE` in JSON (AIP-126), lowercase in the database ([03](03-persistence.md) §3). Converted at the boundary.
-- **`int64` is serialized as a string** (`"48533438464"`) per AIP-141 — JSON numbers are IEEE-754 doubles and lose precision above 2^53. Byte counts here reach 10^11 today; the failure would be silent and rare enough to survive testing.
+- **`int64` is serialized as a string** (`"48533438464"`) per AIP-141 - JSON numbers are IEEE-754 doubles and lose precision above 2^53. Byte counts here reach 10^11 today; the failure would be silent and rare enough to survive testing.
 
-**Filter syntax** — a deliberately small subset of AIP-160: `field=value`, `field!=value`, `field>value`, `AND`. Parsed into parameterized SQL against an allowlist of filterable fields; never string-concatenated. A full CEL implementation is not warranted, and a permissive parser over a SQL builder is how injection happens.
+**Filter syntax** - a deliberately small subset of AIP-160: `field=value`, `field!=value`, `field>value`, `AND`. Parsed into parameterized SQL against an allowlist of filterable fields; never string-concatenated. A full CEL implementation is not warranted, and a permissive parser over a SQL builder is how injection happens.
 
 ## 4. Creating transfers
 
@@ -236,7 +236,7 @@ Location: /api/v1/transfers/9c1e8f2a-...
 }
 ```
 
-**Two targets, two Transfers** ([01](01-domain-model.md) §3.2) — they succeed and fail independently.
+**Two targets, two Transfers** ([01](01-domain-model.md) §3.2) - they succeed and fail independently.
 
 ### 4.1 Promotion
 
@@ -274,7 +274,7 @@ Returns `200 OK` with the plan and creates nothing ([05](05-transfer-engine.md) 
 
 ### 4.2a Progress on a long request: `:compare`
 
-A comparison reads two releases from their registries end to end. For a real one that is minutes, during which the caller has a request in flight and nothing to show for it — indistinguishable from a comparison that has silently stopped.
+A comparison reads two releases from their registries end to end. For a real one that is minutes, during which the caller has a request in flight and nothing to show for it - indistinguishable from a comparison that has silently stopped.
 
 The report **is** the response, so there is nothing to hand an operation id back in, and turning it into a stream would change the contract for every existing client to serve a progress bar. Instead the caller mints a token:
 
@@ -285,13 +285,13 @@ GET  /api/v1/comparisons/{token}
 
 The token is optional; omitting it costs nothing and reports nothing.
 
-**Progress lives in the memory of the replica running the comparison.** It is worth nothing once the report arrives, so it is not worth a table or a write per manifest — and a poll served by a different replica returns `404`, which is a normal answer meaning "no position available", not a failure. Entries are dropped shortly after the comparison finishes.
+**Progress lives in the memory of the replica running the comparison.** It is worth nothing once the report arrives, so it is not worth a table or a write per manifest - and a poll served by a different replica returns `404`, which is a normal answer meaning "no position available", not a failure. Entries are dropped shortly after the comparison finishes.
 
-**A comparison analyses before it walks.** Each side that resolves to a *source* is passed through the same `InspectPackage` a person invokes, which is idempotent — a release already walked is walked no further, one that has not is walked once and recorded. Everything downstream then reads from the store: this comparison, the next one, the release page, the transfer planner. Before that, a comparison read manifests from the store when they happened to be there and pulled them from the vendor when they were not, leaving nothing behind either way, so two comparisons of the same pair cost two full walks.
+**A comparison analyses before it walks.** Each side that resolves to a *source* is passed through the same `InspectPackage` a person invokes, which is idempotent - a release already walked is walked no further, one that has not is walked once and recorded. Everything downstream then reads from the store: this comparison, the next one, the release page, the transfer planner. Before that, a comparison read manifests from the store when they happened to be there and pulled them from the vendor when they were not, leaving nothing behind either way, so two comparisons of the same pair cost two full walks.
 
 A named **target** is never analysed. What is actually at a destination is the question a comparison against one exists to ask, and recording it as the release's content would answer that question with our own record of what we sent.
 
-**Unaccounted tags are asked only of a destination.** The pass resolves every tag in the bundle's repository, which at a target finds content nobody in the comparison put there and at a source finds the vendor's own catalogue — every release it has ever published, reported as a discrepancy. It was also the most expensive thing a comparison did.
+**Unaccounted tags are asked only of a destination.** The pass resolves every tag in the bundle's repository, which at a target finds content nobody in the comparison put there and at a source finds the vendor's own catalogue - every release it has ever published, reported as a discrepancy. It was also the most expensive thing a comparison did.
 
 Two limits bound the request, and they measure different things:
 
@@ -314,7 +314,7 @@ POST /api/v1/transfers/{transfer}:setPriority   {"priority": 900}
 POST /api/v1/transfers/{transfer}:cancel        {"reason": "superseded by v2.14.1"}
 ```
 
-All return the updated Transfer. All are **idempotent**: pausing a paused transfer is `200`, not an error — a retried request after a timeout must not fail, and the caller's intent ("be paused") is satisfied either way.
+All return the updated Transfer. All are **idempotent**: pausing a paused transfer is `200`, not an error - a retried request after a timeout must not fail, and the caller's intent ("be paused") is satisfied either way.
 
 Illegal transitions return `409 Conflict` with the current state ([10](10-state-machines.md) §1). Cancelling a `succeeded` transfer is a genuine conflict, not a no-op, because the caller's intent cannot be satisfied.
 
@@ -350,7 +350,7 @@ GET /api/v1/transfers/9c1e8f2a-…
 
 Every field is computed from `jobs` at request time (invariant I6). Nothing here is a maintained counter that could drift.
 
-`GET /transfers/{id}/jobs?filter=state=FAILED` gives layer-level detail — digest, size, attempts, last error, worker, bytes transferred — which is what an operator needs when a transfer is stuck.
+`GET /transfers/{id}/jobs?filter=state=FAILED` gives layer-level detail - digest, size, attempts, last error, worker, bytes transferred - which is what an operator needs when a transfer is stuck.
 
 ## 7. The worker plane
 
@@ -388,9 +388,9 @@ POST /api/v1/jobs:lease
 
 Three fields carry design weight:
 
-- **`grantedConcurrency`** — the worker's share of fleet-wide per-repository budgets, computed centrally ([05](05-transfer-engine.md) §8). This is how adding workers does not multiply load on a vendor registry.
-- **`knownPlacements`** — the placement fast path shipped with the batch, so resolving 16 jobs costs zero extra calls ([05](05-transfer-engine.md) §4.1).
-- **`nextPollAfterSeconds`** — server-directed backoff. An idle worker is told when to come back, so an empty queue with 40 workers does not become a poll storm. Long-polling was considered; server-directed intervals are simpler and give the Coordinator direct control.
+- **`grantedConcurrency`** - the worker's share of fleet-wide per-repository budgets, computed centrally ([05](05-transfer-engine.md) §8). This is how adding workers does not multiply load on a vendor registry.
+- **`knownPlacements`** - the placement fast path shipped with the batch, so resolving 16 jobs costs zero extra calls ([05](05-transfer-engine.md) §4.1).
+- **`nextPollAfterSeconds`** - server-directed backoff. An idle worker is told when to come back, so an empty queue with 40 workers does not become a poll storm. Long-polling was considered; server-directed intervals are simpler and give the Coordinator direct control.
 
 ### 7.2 Progress and completion
 
@@ -406,7 +406,7 @@ Outcomes: `SUCCEEDED`, `SKIPPED` (with `skipReason`), `FAILED` (with `errorClass
 
 Completion is transactional: job state, transfer progress, `blob_placements` insert, wave-drain check, audit event, and any notification commit together ([04](04-queue-and-scheduling.md) §3.4). **This atomicity is the reason the queue lives in the same database as the state** ([03](03-persistence.md) §1).
 
-Progress reports are throttled by the worker (every ~2 s or 5% of a blob, whichever is less frequent) — a 250 MB blob should produce a handful of reports, not thousands. They are also **lossy by design**: `reportProgress` is a best-effort UI signal, and dropping one costs nothing. `complete` is not.
+Progress reports are throttled by the worker (every ~2 s or 5% of a blob, whichever is less frequent) - a 250 MB blob should produce a handful of reports, not thousands. They are also **lossy by design**: `reportProgress` is a best-effort UI signal, and dropping one costs nothing. `complete` is not.
 
 ### 7.3 Heartbeat
 
@@ -426,7 +426,7 @@ Carries three signals in one call: **lease renewal** ([04](04-queue-and-scheduli
 
 There is no push channel to workers. Cancellation is delivered in the heartbeat response, so a cancelled job aborts within one heartbeat interval (≤20 s). The transfer sits in `cancelling` until in-flight jobs drain ([04](04-queue-and-scheduling.md) §8).
 
-Polling rather than a push channel (WebSocket, gRPC stream, watch) is a deliberate simplification: it needs no connection management, no reconnect logic, and no server-side registry of live connections, and it degrades gracefully — a worker that cannot reach the Coordinator simply keeps working until its leases expire, which is the correct behaviour anyway.
+Polling rather than a push channel (WebSocket, gRPC stream, watch) is a deliberate simplification: it needs no connection management, no reconnect logic, and no server-side registry of live connections, and it degrades gracefully - a worker that cannot reach the Coordinator simply keeps working until its leases expire, which is the correct behaviour anyway.
 
 ## 8. Errors
 
@@ -469,7 +469,7 @@ RFC 9457 `application/problem+json`:
 | `/readyz` | DB reachable, migrations applied, ≥1 product loaded | Readiness |
 | `/api/v1/system:healthCheck` | Everything, including every registry, SMTP, Teams | Diagnostics |
 
-> **`/healthz` must never check dependencies.** A liveness probe that fails when Postgres is briefly unavailable causes Kubernetes to restart every Coordinator — turning a recoverable database blip into a crash-loop across the fleet, at exactly the moment recovery needs the process alive to retry. Liveness answers "is this process wedged"; readiness answers "should it get traffic". Conflating them is one of the most common and most damaging Kubernetes mistakes, which is why it is called out here rather than left to reviewer instinct.
+> **`/healthz` must never check dependencies.** A liveness probe that fails when Postgres is briefly unavailable causes Kubernetes to restart every Coordinator - turning a recoverable database blip into a crash-loop across the fleet, at exactly the moment recovery needs the process alive to retry. Liveness answers "is this process wedged"; readiness answers "should it get traffic". Conflating them is one of the most common and most damaging Kubernetes mistakes, which is why it is called out here rather than left to reviewer instinct.
 
 Deep checks live at a third endpoint precisely so they can be thorough and slow without a probe ever depending on them.
 
@@ -494,7 +494,7 @@ metrics:
       target: {type: AverageValue, averageValue: "20"}
 ```
 
-**A ratio, not raw depth.** Raw `pending_jobs` does not converge: a target of "500 pending" is satisfied at 5 workers and at 50, so HPA oscillates. Backlog *per worker* is a proper control signal — it falls as replicas rise, which is what a controller needs to settle. Scale-down uses a long stabilization window (default 300 s) so that finishing a large package does not immediately kill workers that the next package will need. Full policy in [14](14-deployment-and-development.md) §4.
+**A ratio, not raw depth.** Raw `pending_jobs` does not converge: a target of "500 pending" is satisfied at 5 workers and at 50, so HPA oscillates. Backlog *per worker* is a proper control signal - it falls as replicas rise, which is what a controller needs to settle. Scale-down uses a long stabilization window (default 300 s) so that finishing a large package does not immediately kill workers that the next package will need. Full policy in [14](14-deployment-and-development.md) §4.
 
 ## 10. The authentication seam
 
@@ -520,13 +520,13 @@ The design is auth-shaped even though auth is absent, so adding it is not a refa
 
 Swap the no-op authenticator for one that accepts:
 
-- **OIDC bearer tokens** for humans — validate signature against the IdP's JWKS, check `iss`/`aud`/`exp`, map a groups claim to roles.
-- **Kubernetes ServiceAccount tokens** for in-cluster callers and workers — `TokenReview`, map the SA to a role.
+- **OIDC bearer tokens** for humans - validate signature against the IdP's JWKS, check `iss`/`aud`/`exp`, map a groups claim to roles.
+- **Kubernetes ServiceAccount tokens** for in-cluster callers and workers - `TokenReview`, map the SA to a role.
 
-Workers move to `admin` via their ServiceAccount. `transferctl` gains `--token` and a device-code login. **No route, handler, or schema changes** — the whole change is one middleware and a config block.
+Workers move to `admin` via their ServiceAccount. `transferctl` gains `--token` and a device-code login. **No route, handler, or schema changes** - the whole change is one middleware and a config block.
 
 ## 11. Versioning
 
 `/api/v1` from the start. Within v1: adding fields, adding endpoints, and adding enum values are non-breaking; clients must ignore unknown fields and handle unknown enum values gracefully. Removing or renaming a field, or changing a type, requires `/api/v2`.
 
-`GET /api/v1/system/version` returns build version, git commit, API version, and schema migration version — the four things needed to interpret a bug report.
+`GET /api/v1/system/version` returns build version, git commit, API version, and schema migration version - the four things needed to interpret a bug report.

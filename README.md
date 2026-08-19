@@ -2,11 +2,11 @@
 
 Gateway for replicating OCI artifacts from one repository to another.
 
-A cloud-native platform that continuously discovers software packages published to vendor OCI registries and replicates them into internal registries — optimized for throughput on 30–60 GB packages, resilient to any single failure, and operable without reading the source.
+A cloud-native platform that continuously discovers software packages published to vendor OCI registries and replicates them into internal registries - optimized for throughput on 30–60 GB packages, resilient to any single failure, and operable without reading the source.
 
-> **Status: M3 in progress — packages now transfer.** Point it at an OCI registry and it finds what is published, records packages with their artifact trees, evaluates auto-download rules, and **moves the bytes to your internal registry** — planned per blob, streamed registry-to-registry, deduplicated against what the destination already holds, and tagged only once the whole package has landed.
+> **Status: M3 in progress - packages now transfer.** Point it at an OCI registry and it finds what is published, records packages with their artifact trees, evaluates auto-download rules, and **moves the bytes to your internal registry** - planned per blob, streamed registry-to-registry, deduplicated against what the destination already holds, and tagged only once the whole package has landed.
 >
-> Still to come in M3: chunked-upload resumption, and the pause/resume/cancel/retry controls (`transferctl transfers` is read-only for now). A 30–60 GB acceptance run against real infrastructure has not been done yet — the transfer path is proven against an in-process OCI registry, not at scale. See the [delivery plan](docs/design/17-delivery-plan.md).
+> Still to come in M3: chunked-upload resumption, and the pause/resume/cancel/retry controls (`transferctl transfers` is read-only for now). A 30–60 GB acceptance run against real infrastructure has not been done yet - the transfer path is proven against an in-process OCI registry, not at scale. See the [delivery plan](docs/design/17-delivery-plan.md).
 >
 > **Get it running:** [Developer Guide →](docs/DEVELOPER-GUIDE.md)
 
@@ -24,9 +24,9 @@ Three binaries, one PostgreSQL database, nothing else.
 
 | Component | Role |
 |---|---|
-| `cmd/coordinator` | Control plane — API, discovery, scheduling, queue, notifications, audit |
-| `cmd/worker` | Data plane — stateless; streams OCI blobs registry to registry |
-| `cmd/transferctl` | CLI — a pure Coordinator API client |
+| `cmd/coordinator` | Control plane - API, discovery, scheduling, queue, notifications, audit |
+| `cmd/worker` | Data plane - stateless; streams OCI blobs registry to registry |
+| `cmd/transferctl` | CLI - a pure Coordinator API client |
 
 Artifact bytes flow only between registries. They never enter the Coordinator, never land on a worker's disk, and never pass through the database.
 
@@ -34,7 +34,7 @@ Artifact bytes flow only between registries. They never enter the Coordinator, n
 
 **Running it? [Read the Developer Guide →](docs/DEVELOPER-GUIDE.md)**
 
-How to build (including Windows), configure the two separate kinds of configuration, test without Docker, and run it — plus a worked example that goes from a fresh clone to a discovered package.
+How to build (including Windows), configure the two separate kinds of configuration, test without Docker, and run it - plus a worked example that goes from a fresh clone to a discovered package.
 
 **New here? [Read the Functional Overview →](docs/FUNCTIONAL-OVERVIEW.md)**
 
@@ -42,9 +42,9 @@ What the tool does, the logical components and where they run, the file-level co
 
 **Building it? [Read the design →](docs/design/README.md)**
 
-Eighteen documents covering component responsibilities, the full data model and SQL schema, queue and scheduling algorithms, the transfer engine, API surface, state machines, failure recovery, observability, deployment, and technology choices — each major decision recorded with the alternatives considered and what would change our mind.
+Eighteen documents covering component responsibilities, the full data model and SQL schema, queue and scheduling algorithms, the transfer engine, API surface, state machines, failure recovery, observability, deployment, and technology choices - each major decision recorded with the alternatives considered and what would change our mind.
 
-Start with [00 — Overview](docs/design/00-overview.md).
+Start with [00 - Overview](docs/design/00-overview.md).
 
 ## License
 

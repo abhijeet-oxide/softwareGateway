@@ -14,7 +14,7 @@ import (
 //
 // A transfer reports `2486/2489 jobs` and `63.7 GiB`, and neither says what
 // moved. An orb is container images, Helm charts and configuration files, and
-// those are what an operator releases, verifies and is asked about — "did the
+// those are what an operator releases, verifies and is asked about - "did the
 // charts land?" is a question the byte counts cannot answer at all, and the job
 // counts answer only for somebody willing to read three thousand rows.
 //
@@ -23,7 +23,7 @@ import (
 // A component is one thing a person can name, and the jobs under it are an
 // implementation detail of moving it: a component published under two names has
 // two manifest jobs, and counting jobs would report it twice. So the rollup is
-// per artifact, and the artifact's several jobs are folded into ONE outcome —
+// per artifact, and the artifact's several jobs are folded into ONE outcome -
 // the worst of them, because a component whose second site failed has not
 // arrived, whatever its first site did.
 //
@@ -45,7 +45,7 @@ type ContentRow struct {
 	// Carried because the first two fields cannot tell a Helm chart from an
 	// image: a chart is an ordinary image manifest whose config declares it,
 	// and OCI 1.1 says the config's media type stands in for `artifactType`
-	// wherever that is absent — which is every artifact Helm has ever pushed.
+	// wherever that is absent - which is every artifact Helm has ever pushed.
 	// Without it an orb of 157 images and 97 charts reported 257 images.
 	ConfigMediaType string
 	// Annotations are what the VENDOR said this component is.
@@ -55,7 +55,7 @@ type ContentRow struct {
 	// image config: the three fields above cannot tell them from images, and
 	// only `com.nokia.ncd.orb.type` can. Naming the key here would put vendor
 	// knowledge in the store, so the map goes out verbatim and the layout
-	// plugin reads it — the same evidence, and the same reader, that the
+	// plugin reads it - the same evidence, and the same reader, that the
 	// artifact listing already classifies by.
 	//
 	// It is also a GROUPING key, which is what keeps Count honest: two
@@ -72,12 +72,12 @@ type ContentRow struct {
 	//
 	// Because these are not "what a component weighs". A base layer shared by
 	// four images belongs to all four, so any per-kind SIZE either counts it
-	// four times or picks an owner — which is why the transfer's own byte
+	// four times or picks an owner - which is why the transfer's own byte
 	// totals are the ones to trust for that question.
 	//
 	// This is a different question: which JOBS were skipped. A blob is one job
 	// however many components reference it, so summing the skipped jobs
-	// partitions the saving exactly — every byte counted once, and the parts
+	// partitions the saving exactly - every byte counted once, and the parts
 	// add up to the whole. The only softness left is WHICH component a shared
 	// blob is filed under, and within a kind that is nearly always the same
 	// answer.
@@ -90,7 +90,7 @@ type ContentRow struct {
 const (
 	// ContentFailed is a component with a job that has given up.
 	ContentFailed = "failed"
-	// ContentOutstanding is a component with work still to do — including one
+	// ContentOutstanding is a component with work still to do - including one
 	// whose transfer has not finished planning, which has no jobs at all.
 	ContentOutstanding = "outstanding"
 	// ContentCopied is a component this transfer actually pushed.
@@ -105,7 +105,7 @@ const (
 // went.
 //
 // One query. The inner select folds a component's jobs into counts, and the
-// outer one turns those counts into a single outcome per component — so a
+// outer one turns those counts into a single outcome per component - so a
 // component appears exactly once in the result however many places it lands.
 //
 // The outer grouping is by what a component IS, annotations included. A vendor
@@ -195,8 +195,8 @@ const annotationRefName = "org.opencontainers.image.ref.name"
 
 // PackageFile is one named file inside one of a package's artifacts.
 type PackageFile struct {
-	// ArtifactID and ArtifactRef locate the component the file came from —
-	// `orbs/cfx-5000-k8s/custo:25.7` — so a tree can say where a path lives.
+	// ArtifactID and ArtifactRef locate the component the file came from -
+	// `orbs/cfx-5000-k8s/custo:25.7` - so a tree can say where a path lives.
 	ArtifactID  int64
 	ArtifactRef string
 	// Path is the publisher's own name for the layer, which for a single-file
@@ -218,7 +218,7 @@ type PackageFile struct {
 //
 // A layer with NO title is a tar of an unknown number of paths. It is not
 // listed, because listing it as one entry called `layer sha256:…` would be a
-// summary wearing the clothes of an answer — and its content cannot be known
+// summary wearing the clothes of an answer - and its content cannot be known
 // without downloading and unpacking it. Opaque reports how many there are, so a
 // caller can say what it is not showing.
 //
@@ -255,7 +255,7 @@ func (p *Packages) PackageFiles(ctx context.Context, packageID int64) ([]Package
 			return nil, 0, fmt.Errorf("scan a package file: %w", err)
 		}
 		if len(annotations) > 0 {
-			// The OCI reserved key, not a vendor's — this is the specification
+			// The OCI reserved key, not a vendor's - this is the specification
 			// saying what a component of an index is called, and every
 			// publisher that names its components uses it.
 			var a map[string]string
@@ -304,7 +304,7 @@ func (p *Packages) PackageAnalysed(ctx context.Context, packageID int64) (bool, 
 // Reading a file's content means fetching a blob from the vendor registry, and
 // the digest arrives in a URL. Without this, the handler would be a proxy that
 // fetches whatever digest anybody names from whichever registry a product is
-// configured with — a request forgery with credentials attached, and one that
+// configured with - a request forgery with credentials attached, and one that
 // would also happily serve an image layer as though it were a document.
 //
 // So the digest is not a parameter, it is a LOOKUP KEY: it must already be

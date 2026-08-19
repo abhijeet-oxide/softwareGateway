@@ -44,7 +44,7 @@ func wrapperTag() vendors.ScannedTag {
 				},
 			},
 			{
-				// NO MediaType — the live registry omits it on this child while
+				// NO MediaType - the live registry omits it on this child while
 				// setting it on the sibling. Technically a spec violation, and
 				// it must not stop the package being grouped.
 				Digest: registry.Digest(payloadDigest),
@@ -153,18 +153,18 @@ func TestSignedStatus(t *testing.T) {
 	}
 
 	// A release with no wrapper and no signature. The vendor does not sign
-	// everything — older releases and hotfixes routinely go unsigned — so this
+	// everything - older releases and hotfixes routinely go unsigned - so this
 	// is real data, not a hypothetical.
 	bare := group(t, vendors.ScannedTag{
 		Tag:        "orb_22.1.0001",
 		Descriptor: registry.Descriptor{Digest: registry.Digest(payloadDigest)},
 	})[0]
 	if got := bare.Status(true); got != vendors.SignatureUnsigned {
-		t.Errorf("status = %q, want unsigned — we looked and found none", got)
+		t.Errorf("status = %q, want unsigned - we looked and found none", got)
 	}
 	// And the distinction the whole tri-state exists for.
 	if got := bare.Status(false); got != vendors.SignatureUnknown {
-		t.Errorf("status = %q, want unknown — nobody looked", got)
+		t.Errorf("status = %q, want unknown - nobody looked", got)
 	}
 }
 
@@ -186,7 +186,7 @@ func TestGroupingIsOrderIndependent(t *testing.T) {
 
 // The prefix only narrows candidates; the annotations decide. A tag that merely
 // begins with signed_ but names no payload must stay an ordinary package rather
-// than vanish — silently dropping content because it failed a vendor heuristic
+// than vanish - silently dropping content because it failed a vendor heuristic
 // is the worse failure.
 func TestUnrecognisedSignedPrefixStaysAPackage(t *testing.T) {
 	impostor := vendors.ScannedTag{
@@ -247,7 +247,7 @@ func TestTagFromRefName(t *testing.T) {
 }
 
 // The listing shows the short form; both spellings must resolve as input, or
-// the abbreviation is a trap — someone copies what they see, gets "not found",
+// the abbreviation is a trap - someone copies what they see, gets "not found",
 // and reasonably concludes the package is gone.
 func TestDisplayTagStripsOnlyTheVendorNoise(t *testing.T) {
 	cases := map[string]string{
@@ -284,8 +284,8 @@ func TestGroupedPackageCarriesItsDisplayTag(t *testing.T) {
 // The repository half of the same idea, and the reason it moved here.
 //
 // `orbs/` used to be trimmed in the CLI by dropping whichever prefix a page of
-// results happened to share. That needed no vendor knowledge — which was the
-// appeal — and was wrong twice over: it shortened paths on registries with no
+// results happened to share. That needed no vendor knowledge - which was the
+// appeal - and was wrong twice over: it shortened paths on registries with no
 // such convention, and it made a row say different things depending on what
 // else was on the page. The rule now comes from a source declaring
 // `vendor: near`, and it lives in the one file that is allowed to know it.
@@ -317,7 +317,7 @@ func TestDisplayRepositoryStripsOnlyTheVendorNamespace(t *testing.T) {
 // The bug this fixes, stated as a test.
 //
 // An orb's index lists its parts as plain image manifests with no artifactType,
-// and discovery does not fetch each one — so the config media type that would
+// and discovery does not fetch each one - so the config media type that would
 // separate a chart from an image is absent. Classified on the OCI fields alone
 // every part reads as an image, and Helm charts become invisible.
 func TestClassifyArtifactReadsTheOrbType(t *testing.T) {

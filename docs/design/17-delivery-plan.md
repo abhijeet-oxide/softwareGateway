@@ -1,4 +1,4 @@
-# 17 — Delivery Plan
+# 17 - Delivery Plan
 
 > **Prerequisites:** all preceding documents
 
@@ -8,7 +8,7 @@ Milestones are sized so each ends at something **demonstrable**, not at "the per
 
 ## 1. Milestones
 
-### M1 — Foundation
+### M1 - Foundation
 
 Skeleton, configuration, schema. Nothing transfers yet.
 
@@ -22,7 +22,7 @@ Skeleton, configuration, schema. Nothing transfers yet.
 
 **Acceptance:** `transferctl config validate ./dev/products/` catches every error class in [13](13-cli.md) §9. Coordinator starts against SQLite with no setup. Two Coordinators elect one leader. `task test` passes without Docker.
 
-### M2 — Discovery
+### M2 - Discovery
 
 First externally visible behaviour.
 
@@ -33,9 +33,9 @@ First externally visible behaviour.
 - Auto-download rule evaluation creating transfer requests (not yet executed)
 - `packages list|describe|discover`, `products list|describe`
 
-**Acceptance:** point it at a real vendor registry; it discovers packages, does not duplicate on re-scan, records artifact trees, and evaluates rules. Kill it mid-scan — the next scan completes correctly.
+**Acceptance:** point it at a real vendor registry; it discovers packages, does not duplicate on re-scan, records artifact trees, and evaluates rules. Kill it mid-scan - the next scan completes correctly.
 
-### M3 — Transfer (the vertical slice) + close ADR-001
+### M3 - Transfer (the vertical slice) + close ADR-001
 
 **The milestone that proves the design.** First real multi-GB transfer.
 
@@ -49,20 +49,20 @@ First externally visible behaviour.
 
 **Acceptance:**
 - A 30–60 GB package transfers end to end.
-- **Worker RSS stays within the [05](05-transfer-engine.md) §4.5 formula throughout** — the check that proves streaming actually streams.
+- **Worker RSS stays within the [05](05-transfer-engine.md) §4.5 formula throughout** - the check that proves streaming actually streams.
 - `kill -9` all workers at 50%; the transfer completes with bytes re-transferred ≤ (workers × in-flight blob size). This is chaos scenario **C1** ([11](11-resiliency-and-backpressure.md) §5), run here rather than deferred, because it validates the core recovery premise.
 - Re-running the same transfer is a near no-op (dedupe).
 - Worker containers run with `readOnlyRootFilesystem` and no writable volume (**C10**).
 
 **Also closes [ADR-001](16-technology-choices.md#adr-001).** Sequenced so the spike never blocks the slice: build against `Repository` with whichever backend reaches a working blob transfer first; then prototype the second behind the same interface; then score both against the fixed criteria table. Exit criteria include a written ADR closure with the measurements and **deletion of the losing backend**.
 
-[08](08-verification.md) §3.3 — whether signature discovery can be hand-rolled against `Repository.Referrers` — is an M3 input, since it is the condition that most weakens the cosign-alignment argument.
+[08](08-verification.md) §3.3 - whether signature discovery can be hand-rolled against `Repository.Referrers` - is an M3 input, since it is the condition that most weakens the cosign-alignment argument.
 
 > **Schedule risk, stated honestly:** the second prototype costs a few days before M3 completes. Bought deliberately, to close the system's most consequential library choice with evidence rather than argument.
 >
-> **What actually happened:** the second prototype was not built, and the risk above was therefore not incurred. §3.3 resolved affirmatively, which removed the tiebreaker the comparison existed to settle — so the ADR closed on that rather than on the criteria table. Recorded in full, including the four criteria left unmeasured, in the [closure](16-technology-choices.md#11-adr-001-closure).
+> **What actually happened:** the second prototype was not built, and the risk above was therefore not incurred. §3.3 resolved affirmatively, which removed the tiebreaker the comparison existed to settle - so the ADR closed on that rather than on the criteria table. Recorded in full, including the four criteria left unmeasured, in the [closure](16-technology-choices.md#11-adr-001-closure).
 
-### M4 — Operations
+### M4 - Operations
 
 Everything a user needs to actually run transfers.
 
@@ -76,7 +76,7 @@ Everything a user needs to actually run transfers.
 
 **Acceptance:** promote lab → production within one registry and confirm most blobs mount rather than transfer. A scheduled request creates **zero** queue rows until due. Dry-run output matches the actual transfer that follows. Conformance suite green against all four registry types.
 
-### M5 — Verification
+### M5 - Verification
 
 - Cosign keyed and keyless; referrers with tag-schema fallback ([08](08-verification.md) §3)
 - Source, destination, and on-demand stages
@@ -84,9 +84,9 @@ Everything a user needs to actually run transfers.
 - Per-product trust policy; air-gapped Sigstore roots
 - `verify`; verification state machine ([10](10-state-machines.md) §5)
 
-**Acceptance:** a real vendor-signed package verifies at source and destination. A tampered manifest fails **`failed`**; an unreachable Rekor fails **`error`** — the distinction that separates a security event from an availability event ([08](08-verification.md) §8). Transferred signatures verify independently at the destination using the vendor's own policy.
+**Acceptance:** a real vendor-signed package verifies at source and destination. A tampered manifest fails **`failed`**; an unreachable Rekor fails **`error`** - the distinction that separates a security event from an availability event ([08](08-verification.md) §8). Transferred signatures verify independently at the destination using the vendor's own policy.
 
-### M6 — Notifications, audit, retention
+### M6 - Notifications, audit, retention
 
 - Transactional outbox; email and Teams (Power Automate) ([12](12-observability-and-audit.md) §5)
 - Audit recording across all events; `auditEvents` query API
@@ -95,7 +95,7 @@ Everything a user needs to actually run transfers.
 
 **Acceptance:** every event in the [12](12-observability-and-audit.md) §4.1 catalog is emitted and queryable. SMTP down retries notifications and **does not affect transfers**. GC deletes a million job rows without stalling an in-flight transfer. Dropping a year-old audit partition is instant.
 
-### M7 — Scale and chaos
+### M7 - Scale and chaos
 
 - AIMD backpressure controller, persisted budgets ([11](11-resiliency-and-backpressure.md) §3)
 - Fleet-wide budget division in lease responses
@@ -105,54 +105,54 @@ Everything a user needs to actually run transfers.
 
 **Acceptance:** all twelve chaos scenarios pass ([11](11-resiliency-and-backpressure.md) §5). HPA scales 2→20→2 under load without thrash. A registry returning 50% 429s for ten minutes completes the transfer with **zero failures** (C6). Adaptive limits converge and survive a Coordinator restart.
 
-### M8 — Quay replication strategies
+### M8 - Quay replication strategies
 
 Delegation. A Quay target can stop being somewhere we push to and become somewhere that pulls for itself. Specified in [18](18-quay-replication.md).
 
 **Status: complete except `warm`, which Q9 moved out of this milestone on purpose** ([18](18-quay-replication.md) §6.3). A mirror can be declared, validated, applied, observed, drifted and synced; a download against a mirror target delegates, waits, walks the destination and settles as `succeeded`, `diverged` or `failed`; and no delegated object reports a byte anywhere. `warm` needs a third job kind in the worker plane, because pulling a 45 GB release through the Coordinator would break the invariant in [00](00-overview.md) §5.
 
 - `replication.mode` on a target: `copy` (default, unchanged), `mirror`, `proxy` ([18](18-quay-replication.md) §5)
-- `internal/registry/quay`: the **management** API client — mirror config, proxy cache, `changestate`, robots — separate from the `/v2` data path
+- `internal/registry/quay`: the **management** API client - mirror config, proxy cache, `changestate`, robots - separate from the `/v2` data path
 - The `Strategy` seam, one level above the planner and the engine, both unchanged ([18](18-quay-replication.md) §7)
 - Explicit `apply` with a diff; continuous drift detection that never self-heals ([18](18-quay-replication.md) §8)
 - Observed sync history and the `diverged` outcome; `warm` deferred to the worker plane by Q9 ([18](18-quay-replication.md) §6)
 - `targets list|describe|apply|sync|drift`, the replication routes, the `Replication` audit category and its metrics
 
 **Acceptance:**
-- A `mode: mirror` target applies from configuration, syncs on request, and reaches `succeeded` when the destination digest matches the discovered one — and `diverged`, not `succeeded`, when the upstream tag has moved underneath it.
+- A `mode: mirror` target applies from configuration, syncs on request, and reaches `succeeded` when the destination digest matches the discovered one - and `diverged`, not `succeeded`, when the upstream tag has moved underneath it.
 - A tag glob that would exclude `sha256-*.sig` signature tags is caught by `config validate` **before** it is applied ([18](18-quay-replication.md) §9). This is the failure this milestone exists to make impossible.
 - A mirror edited by hand in the Quay UI shows as drift within one reload; `targets apply` closes it; **no config reload ever closes it by itself**.
 - A `mode: proxy` target refuses `download` with a problem detail naming `warm`; `warm` populates the cache and reports the bytes it discarded.
-- Byte columns for a delegated transfer render `—` everywhere. Nothing in any output synthesises a percentage ([18](18-quay-replication.md) §6.1).
+- Byte columns for a delegated transfer render `-` everywhere. Nothing in any output synthesises a percentage ([18](18-quay-replication.md) §6.1).
 
-**Entry criterion:** Q7 below — if a mirror sync cannot be observed well enough to report honestly, this milestone does not start.
+**Entry criterion:** Q7 below - if a mirror sync cannot be observed well enough to report honestly, this milestone does not start.
 
-### M9 — Downloads and auto-download
+### M9 - Downloads and auto-download
 
-The declared form of the operation the estate actually performs: vendor → JFrog → Quay, with gates, as one reviewable object — and, separately, the rule that fires it without being asked. Specified in [20](20-download-rules.md).
+The declared form of the operation the estate actually performs: vendor → JFrog → Quay, with gates, as one reviewable object - and, separately, the rule that fires it without being asked. Specified in [20](20-download-rules.md).
 
 **Status: complete except the metrics.** A download can be declared, validated, listed, dry-run and run by hand; its chain is derived from `mirror.from`, its steps are ordered, and a step whose predecessor did not succeed is `skipped` rather than failed. An auto-download rule matches a tag and triggers that same download.
 
-- `spec.download` — targets, gates and priority, with **no pattern in it**: a download is performed, not fired ([20](20-download-rules.md) §3.1)
-- `spec.autoDownload` — a tag pattern, the sources to watch, and the download to trigger. The only place a pattern belongs ([20](20-download-rules.md) §3.4)
+- `spec.download` - targets, gates and priority, with **no pattern in it**: a download is performed, not fired ([20](20-download-rules.md) §3.1)
+- `spec.autoDownload` - a tag pattern, the sources to watch, and the download to trigger. The only place a pattern belongs ([20](20-download-rules.md) §3.4)
 - Rules written in the older inline shape keep loading and keep meaning what they meant ([20](20-download-rules.md) §3.5)
-- Chain derivation from the targets' own `mirror.from` edges — a set of destinations in, an ordered plan out ([20](20-download-rules.md) §3.6, §4)
+- Chain derivation from the targets' own `mirror.from` edges - a set of destinations in, an ordered plan out ([20](20-download-rules.md) §3.6, §4)
 - `transfers.step_index` and `depends_on_transfer_id`; the `waiting` and `skipped` transfer states ([20](20-download-rules.md) §6)
 - Verification as a gate: under `enforce`, a destination that fails verification stops the steps that depend on it ([20](20-download-rules.md) §5)
 - Download revisions in the idempotency key, and the rule deliberately absent from it ([20](20-download-rules.md) §8.2)
 - `transferctl download`, `downloads list`, `rules list|matches`; the `downloads` and `autoDownloadRules` routes; the `Download` audit category and its metrics
 
 **Acceptance:**
-- One download **naming only the Quay target** takes a newly discovered release from the vendor into JFrog and then into Quay, in that order, with no second command — and `transfers describe` shows two steps with two different kinds of progress and no combined percentage ([20](20-download-rules.md) §3.6, §7.1).
-- `transferctl download <product> <tag>` performs the same work an auto-download rule performs, through the same chain and the same gates, **consulting no pattern** — and a rule fires nothing a person could not have asked for by hand ([20](20-download-rules.md) §1.1).
+- One download **naming only the Quay target** takes a newly discovered release from the vendor into JFrog and then into Quay, in that order, with no second command - and `transfers describe` shows two steps with two different kinds of progress and no combined percentage ([20](20-download-rules.md) §3.6, §7.1).
+- `transferctl download <product> <tag>` performs the same work an auto-download rule performs, through the same chain and the same gates, **consulting no pattern** - and a rule fires nothing a person could not have asked for by hand ([20](20-download-rules.md) §1.1).
 - Two downloads whose chains share the JFrog hop transfer that package to JFrog **once**, and the audit trail shows one transfer ([20](20-download-rules.md) §3.6).
 - With `verify.policy: enforce`, a destination whose signature check fails leaves the Quay step `skipped`, not `failed`, and **nothing was written to Quay**. This is the failure this milestone exists to make impossible.
 - Every product document that was valid at M8 is valid at M9 and produces byte-identical transfers ([20](20-download-rules.md) §3.5).
-- A download naming a Quay target whose tag glob excludes `sha256-*.sig` is rejected by `config validate` when `verify.after` is set — the two blocks are only wrong together ([20](20-download-rules.md) §3.7).
+- A download naming a Quay target whose tag glob excludes `sha256-*.sig` is rejected by `config validate` when `verify.after` is set - the two blocks are only wrong together ([20](20-download-rules.md) §3.7).
 - No API call, CLI command or UI control can change whether a rule fires. `enabled` in Git is the only switch, and the CLI's own tests assert that "suspend" and "resume" do not appear in its output ([20](20-download-rules.md) §9).
 - Retrying a partially failed run does not re-transfer a step that already succeeded.
 
-### M10 — Web UI
+### M10 - Web UI
 
 The second client of the same API. Direction, scope and the six gates in [19](19-user-interface.md); information architecture in the [UI generation brief](../ui/ui-generation-brief.md).
 
@@ -185,11 +185,11 @@ M7 Scale and chaos ────┘   ← needs M3 + M4
      └── M10 Web UI                       ← needs Q6 (API auth) as a GATE, not a dependency
 ```
 
-**M9 follows M8 rather than running beside it**, even though its fan-out half needs nothing from Quay. The ordering model, the `skipped` state and the per-step rendering would all be built twice if they were built first for a chain whose steps are all copies — and the chain worth having is the one with a mirror at the end ([20](20-download-rules.md) §14).
+**M9 follows M8 rather than running beside it**, even though its fan-out half needs nothing from Quay. The ordering model, the `skipped` state and the per-step rendering would all be built twice if they were built first for a chain whose steps are all copies - and the chain worth having is the one with a mirror at the end ([20](20-download-rules.md) §14).
 
 M6 depends only on M2 and can run in parallel with M4/M5 if there is capacity. M7 is deliberately last: backpressure tuning is meaningless without a real transfer path to tune, and chaos testing needs the full system.
 
-**M3 is scheduled third, not later, on purpose.** It carries essentially all the technical risk — streaming without disk, memory behaviour under concurrency, lease-based recovery, and the library decision. Discovering a problem there in week 6 is recoverable; discovering it in week 20 is not. M1 and M2 exist mainly to make M3 possible.
+**M3 is scheduled third, not later, on purpose.** It carries essentially all the technical risk - streaming without disk, memory behaviour under concurrency, lease-based recovery, and the library decision. Discovering a problem there in week 6 is recoverable; discovering it in week 20 is not. M1 and M2 exist mainly to make M3 possible.
 
 ## 3. Testing strategy
 
@@ -206,7 +206,7 @@ Per [15](15-code-layout.md) §5.
 **Two gates that catch regressions nothing else would:**
 
 - **Memory ceiling.** Assert worker RSS against the [05](05-transfer-engine.md) §4.5 formula during a large transfer. The most likely way to break the streaming invariant is an innocent-looking `io.ReadAll` or a buffering wrapper added later; this is the only test that would notice.
-- **Dedupe hit rate.** Assert that re-transferring an already-present package moves ~zero bytes. Deduplication is the system's largest optimization and it can silently regress — a placement-key bug would show up as "slightly slower", not as a failure.
+- **Dedupe hit rate.** Assert that re-transferring an already-present package moves ~zero bytes. Deduplication is the system's largest optimization and it can silently regress - a placement-key bug would show up as "slightly slower", not as a failure.
 
 ## 4. Definition of done
 
@@ -217,7 +217,7 @@ A milestone is complete when **all** hold:
 3. `golangci-lint` clean (which includes the `depguard` dependency-direction rules).
 4. Metrics and audit events emitted for new behaviour ([12](12-observability-and-audit.md)).
 5. Every state persisted has a `CHECK` constraint and a transition table entry ([10](10-state-machines.md)).
-6. Design documents updated where implementation diverged — **the divergence is written down, not silently absorbed.**
+6. Design documents updated where implementation diverged - **the divergence is written down, not silently absorbed.**
 7. CLI help and examples updated.
 
 Item 6 is the one that decays first and matters most. A design document that stops matching the code stops being read, and then stops being updated, and then actively misleads. Every milestone budgets for it.
@@ -228,17 +228,17 @@ Deliberately unresolved. Each is recorded with when it must be answered, so none
 
 | # | Question | Decide by |
 |---|---|---|
-| ~~Q1~~ | ~~**[ADR-001](16-technology-choices.md#adr-001)** — OCI client library~~ | **CLOSED at M3: `oras-go/v2`, write path only. Two divergences from the fixed procedure are recorded in the [closure](16-technology-choices.md#11-adr-001-closure)** |
-| ~~Q2~~ | ~~Can signature discovery be hand-rolled against `Repository.Referrers`?~~ ([08](08-verification.md) §3.3) | **ANSWERED at M3: yes — both mechanisms behind one `Referrers` call. This is what closed Q1** |
+| ~~Q1~~ | ~~**[ADR-001](16-technology-choices.md#adr-001)** - OCI client library~~ | **CLOSED at M3: `oras-go/v2`, write path only. Two divergences from the fixed procedure are recorded in the [closure](16-technology-choices.md#11-adr-001-closure)** |
+| ~~Q2~~ | ~~Can signature discovery be hand-rolled against `Repository.Referrers`?~~ ([08](08-verification.md) §3.3) | **ANSWERED at M3: yes - both mechanisms behind one `Referrers` call. This is what closed Q1** |
 | Q3 | Which registries actually honour chunked-upload resume in our environment? ([05](05-transfer-engine.md) §4.6) | M4, empirically via `upload_resume_total` |
 | Q4 | Is priority aging needed, or does alerting on `queue_oldest_pending_age_seconds` suffice? ([04](04-queue-and-scheduling.md) §6) | M7, from production behaviour |
 | Q5 | Does the dequeue need the per-target composite index? ([04](04-queue-and-scheduling.md) §4.2) | M7, triggered by `queue_lease_duration_seconds` |
-| Q6 | **When is API authentication enabled?** ([09](09-api.md) §10) | **Before any exposure beyond the cluster — a deployment gate, not a milestone. Also gate G1 for M10** |
-| Q7 | **Is a Quay mirror sync observable enough to report honestly?** Does `GET …/mirror` distinguish "never ran" from "running" from "failed" reliably, or must we depend on Quay's notifications? ([18](18-quay-replication.md) §13) | M8 entry — a negative answer drops `mirror` rather than shipping a status nobody can trust |
-| Q8 | Should `manage: auto` exist — continuous reconciliation of Quay config — and under what guard? ([18](18-quay-replication.md) §8) | M8 exit, from how often observed drift turns out to be legitimate |
+| Q6 | **When is API authentication enabled?** ([09](09-api.md) §10) | **Before any exposure beyond the cluster - a deployment gate, not a milestone. Also gate G1 for M10** |
+| Q7 | **Is a Quay mirror sync observable enough to report honestly?** Does `GET …/mirror` distinguish "never ran" from "running" from "failed" reliably, or must we depend on Quay's notifications? ([18](18-quay-replication.md) §13) | M8 entry - a negative answer drops `mirror` rather than shipping a status nobody can trust |
+| Q8 | Should `manage: auto` exist - continuous reconciliation of Quay config - and under what guard? ([18](18-quay-replication.md) §8) | M8 exit, from how often observed drift turns out to be legitimate |
 | ~~Q9~~ | ~~Does `warm` belong in the worker plane?~~ ([18](18-quay-replication.md) §6.3) | **ANSWERED at M8: yes.** It moves the whole package at line rate, and [00](00-overview.md) §5 says bytes never enter the Coordinator. It needs a third `jobs.kind`, so it left M8 rather than being built in the wrong place |
-| Q10 | Can a mirror tag glob be generated from an `autoDownload` rule's RE2 pattern, or is the dialect gap a trap? ([18](18-quay-replication.md) §5.3) | M8 — the default answer is no |
-| Q13 | Do recurring schedules belong here at all, or does a CronJob calling `transferctl download` cover every real case? ([20](20-download-rules.md) §12) | M10 — the default answer is the CronJob |
+| Q10 | Can a mirror tag glob be generated from an `autoDownload` rule's RE2 pattern, or is the dialect gap a trap? ([18](18-quay-replication.md) §5.3) | M8 - the default answer is no |
+| Q13 | Do recurring schedules belong here at all, or does a CronJob calling `transferctl download` cover every real case? ([20](20-download-rules.md) §12) | M10 - the default answer is the CronJob |
 | Q14 | Is the run revision the hash of the download or of the whole product document? ([20](20-download-rules.md) §8.2) | M9 exit |
 | Q15 | Does anyone declare a second download? If nobody does within two quarters, the list is flexibility that cost nothing and bought nothing ([20](20-download-rules.md) §3.2) | M10 |
 

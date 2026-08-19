@@ -7,7 +7,7 @@ import (
 	v1 "github.com/abhijeet-oxide/softwareGateway/pkg/apis/softwaregateway/v1"
 )
 
-// GET /api/v1/whoami — who is calling, and what may they do.
+// GET /api/v1/whoami - who is calling, and what may they do.
 //
 // # This is not authentication
 //
@@ -20,7 +20,7 @@ import (
 //
 // So that no client hardcodes a role model. A UI that decides for itself which
 // controls an operator may use has to be edited everywhere the day real roles
-// arrive. A UI that renders what this endpoint reports does not — the resolver
+// arrive. A UI that renders what this endpoint reports does not - the resolver
 // behind it changes, and every page keeps working.
 //
 // Registered unconditionally: a caller must always be able to find out that

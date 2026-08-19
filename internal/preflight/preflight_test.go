@@ -397,7 +397,7 @@ spec:
 
 // Enumerating with no filters is legitimate on a dedicated registry and a
 // mistake on a shared one, and only the operator knows which. So it is not an
-// error — it is a warning carrying the number that decides it.
+// error - it is a warning carrying the number that decides it.
 func TestUnfilteredEnumerationWarnsWithTheCount(t *testing.T) {
 	h := newHarness(t)
 	h.reg.AddImage("suite/core", "v1.0.0", fakeregistry.NewLayer("a"))
@@ -434,7 +434,7 @@ spec:
 	}
 }
 
-// Not checked when the source names its repositories — probing a permission
+// Not checked when the source names its repositories - probing a permission
 // the product does not need would report a failure that does not matter.
 func TestCatalogNotCheckedWhenRepositoriesAreNamed(t *testing.T) {
 	h := newHarness(t)
@@ -497,7 +497,7 @@ func TestResultsAreStablyOrdered(t *testing.T) {
 // TestInsecureSkipVerifyIsReportedAsAWarning: the setting has to be impossible
 // to leave switched on by accident, and the report is where an operator looks.
 //
-// The fake registry is plain HTTP, so nothing here exercises a handshake — the
+// The fake registry is plain HTTP, so nothing here exercises a handshake - the
 // point is only that the configuration reaches the report. The handshake itself
 // is covered in internal/registry/transport.
 func TestInsecureSkipVerifyIsReportedAsAWarning(t *testing.T) {
@@ -559,7 +559,7 @@ func TestNoCertificateStepWhenVerificationIsOn(t *testing.T) {
 
 // TestManifestFetchIsProbed is the step that separates "listing works" from
 // "discovery will work". A registry can serve tags/list in milliseconds and
-// stall every manifest GET behind it — observed in the field, through a proxy
+// stall every manifest GET behind it - observed in the field, through a proxy
 // that inspects response bodies.
 func TestManifestFetchIsProbed(t *testing.T) {
 	h := newHarness(t)

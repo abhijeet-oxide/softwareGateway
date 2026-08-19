@@ -27,14 +27,14 @@ type endpoint struct {
 	//
 	// A source spanning forty repositories has no single "the" repository, and
 	// picking the first one declared is how a calibration ends up measuring
-	// `cfx-5000-product/aaa` — a repository that exists, contains one tag and
+	// `cfx-5000-product/aaa` - a repository that exists, contains one tag and
 	// no blob worth timing. The probe walks this list until something is
 	// actually measurable and reports which one it used.
 	candidates []string
 
 	// basePath is the target's configured repository prefix, kept separately
 	// from cfg.Repository because a write probe must go to a path a transfer
-	// would use — base + source path — and not to the bare prefix.
+	// would use - base + source path - and not to the bare prefix.
 	basePath string
 }
 
@@ -112,7 +112,7 @@ func (c *Calibrator) resolveTarget(p *product.Product, opts Options) (endpoint, 
 // writeProbePath is where the target probe opens its upload session.
 //
 // It is `base + source path`, exactly what the planner computes for a real
-// job — not the target's configured repository, which is a PREFIX. That
+// job - not the target's configured repository, which is a PREFIX. That
 // distinction cost a run: probing `apm0014228-oci-stage` directly returned
 //
 //	404 Not Found: not found
@@ -163,7 +163,7 @@ func pickSource(p *product.Product, name string) (product.Source, error) {
 	}
 }
 
-// pickTarget resolves a name, the default, or the only candidate — the same
+// pickTarget resolves a name, the default, or the only candidate - the same
 // order `transfers create` uses, so calibration and transfer land on the same
 // destination when neither is told one.
 func pickTarget(p *product.Product, name string) (product.Target, error) {

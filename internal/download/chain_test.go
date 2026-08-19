@@ -158,8 +158,8 @@ func TestUnknownTargetIsAnError(t *testing.T) {
 	}
 }
 
-// An upstream outside the chain — an externalReference, or a hop another rule
-// fills — means nothing in THIS chain precedes it.
+// An upstream outside the chain - an externalReference, or a hop another rule
+// fills - means nothing in THIS chain precedes it.
 func TestUpstreamOutsideTheProductIsIndexZero(t *testing.T) {
 	p := estate()
 	p.Spec.Targets[2].Replication.Mirror.From = ""

@@ -10,9 +10,9 @@ import (
 // The Coordinator's background loops for the queue: the reaper, and the
 // expander that turns requests into work.
 //
-// BOTH RUN ON THE LEADER ONLY. Not for correctness — every step is idempotent,
+// BOTH RUN ON THE LEADER ONLY. Not for correctness - every step is idempotent,
 // so a brief period with two leaders duplicates work without corrupting
-// anything (docs/design/04 §9) — but because a second replica reaping and
+// anything (docs/design/04 §9) - but because a second replica reaping and
 // expanding buys nothing and doubles the registry walks.
 
 // Expander turns pending transfer requests into planned transfers.
@@ -32,8 +32,8 @@ type Expander interface {
 //
 // A sweep on the tick rather than a hook on completion, for the reason every
 // other recovery path here is a sweep. The interesting failure is the one
-// where nothing calls the hook — the Coordinator restarts between a step
-// succeeding and its successor being released — and a chain that only advanced
+// where nothing calls the hook - the Coordinator restarts between a step
+// succeeding and its successor being released - and a chain that only advanced
 // on an event would hang there forever.
 type Stepper interface {
 	AdvanceSteps(ctx context.Context) (released, skipped int, err error)
@@ -71,7 +71,7 @@ type Controller struct {
 //
 // Ten seconds, matching the scheduler tick in docs/design/04 §10: a request
 // created by an auto-download rule should become work promptly, and a poll
-// this cheap — one indexed query returning nothing — costs nothing when idle.
+// this cheap - one indexed query returning nothing - costs nothing when idle.
 const DefaultExpandInterval = 10 * time.Second
 
 // Automatic retry defaults.
@@ -147,7 +147,7 @@ func (c *Controller) Run(ctx context.Context) error {
 				// Leadership is the moment this replica's knowledge of the
 				// fleet is oldest. Recovery comes FIRST and reaping second:
 				// recovery frees leases whose worker is provably gone, and
-				// reaping then settles whatever that leaves behind — including
+				// reaping then settles whatever that leaves behind - including
 				// a cancellation that had been waiting on one of them.
 				c.recover(ctx)
 				c.reap(ctx)
@@ -162,7 +162,7 @@ func (c *Controller) Run(ctx context.Context) error {
 // A restart on either side leaves the same wreckage: leases in the database
 // owned by a process that no longer remembers them. The reaper collects those
 // when their deadline passes, which is right for a worker that died mid-blob
-// and needlessly slow for one that restarted — and for a transfer somebody
+// and needlessly slow for one that restarted - and for a transfer somebody
 // stopped, those minutes are indistinguishable from a hang.
 func (c *Controller) recover(ctx context.Context) {
 	recovered, err := c.queue.Recover(ctx)
@@ -187,8 +187,8 @@ func (c *Controller) reap(ctx context.Context) {
 	}
 
 	// Before settling, because a transfer that can be unstuck is not stalled.
-	// `blocked` is the one job state nothing else times out — a lease expires,
-	// a backoff elapses, attempts run out — so a job waiting for an event that
+	// `blocked` is the one job state nothing else times out - a lease expires,
+	// a backoff elapses, attempts run out - so a job waiting for an event that
 	// cannot come waits forever, and nothing notices. This is what notices.
 	if _, err := c.queue.Unstick(ctx); err != nil {
 		c.log.ErrorContext(ctx, "could not unstick transfers", "error", err)
@@ -206,14 +206,14 @@ func (c *Controller) reap(ctx context.Context) {
 	// closes when the last lease reports; a worker that died holding it reports
 	// nothing, and the reaper that cancels its job does not run the completion
 	// path. Without this the transfer says `cancelling` for as long as anybody
-	// leaves it there — on the one operation somebody performs when they are
+	// leaves it there - on the one operation somebody performs when they are
 	// already unhappy.
 	if _, err := c.queue.CloseCancellations(ctx); err != nil {
 		c.log.ErrorContext(ctx, "could not close stalled cancellations", "error", err)
 	}
 
 	// Last, and after settling, because settling is what turns "some jobs
-	// failed" into a transfer that has stopped — which is the thing worth
+	// failed" into a transfer that has stopped - which is the thing worth
 	// retrying. A failure a second attempt could plausibly fix should not wait
 	// for somebody to arrive in the morning and press the button the system
 	// could have pressed at three.
@@ -231,7 +231,7 @@ func (c *Controller) WithStepper(s Stepper) *Controller {
 // advance releases and skips the steps of a download rule's chain.
 //
 // Run BEFORE expansion on each tick, so a step released this tick is planned
-// this tick rather than waiting a whole interval for the next one — which for
+// this tick rather than waiting a whole interval for the next one - which for
 // a three-hop chain is the difference between one interval and three.
 func (c *Controller) advance(ctx context.Context) {
 	if c.stepper == nil {

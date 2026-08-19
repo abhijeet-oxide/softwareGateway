@@ -11,7 +11,7 @@ import (
 	v1 "github.com/abhijeet-oxide/softwareGateway/pkg/apis/softwaregateway/v1"
 )
 
-// GET /api/v1/auditEvents — the audit trail (docs/design/09 §2, 12 §4).
+// GET /api/v1/auditEvents - the audit trail (docs/design/09 §2, 12 §4).
 //
 // Specified since the first design pass and never registered, which meant the
 // table was accumulating a year of history that no interface could show.
@@ -67,7 +67,7 @@ func (s *Server) handleListAuditEvents(w http.ResponseWriter, r *http.Request) {
 		Since:       since,
 		Until:       until,
 		// One row over the page, so "is there another page" is answered
-		// without a second COUNT — the same trick the packages listing uses.
+		// without a second COUNT - the same trick the packages listing uses.
 		Limit:  pageSize + 1,
 		Offset: offset,
 	}
@@ -92,7 +92,7 @@ func (s *Server) handleListAuditEvents(w http.ResponseWriter, r *http.Request) {
 // auditProducts intersects what the caller ASKED for with what they may SEE.
 //
 // The second return is false when the intersection is empty because the
-// request named something outside the caller's visibility — which is a
+// request named something outside the caller's visibility - which is a
 // different outcome from "no filter", and the caller must not conflate them by
 // passing an empty slice to the store, where empty means UNRESTRICTED.
 //

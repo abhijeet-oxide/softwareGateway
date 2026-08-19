@@ -10,7 +10,7 @@ import (
 	"strings"
 
 	// modernc.org/sqlite is PURE GO. mattn/go-sqlite3 requires cgo, which
-	// would break the CGO_ENABLED=0 distroless build — a development
+	// would break the CGO_ENABLED=0 distroless build - a development
 	// convenience must not compromise the production image.
 	// See docs/design/16-technology-choices.md section 3.
 	_ "modernc.org/sqlite"
@@ -35,7 +35,7 @@ func openSQLite(ctx context.Context, cfg Config) (Store, error) {
 	// and turns lock contention into SQLITE_BUSY errors, so the pool is
 	// deliberately a single connection. This is also why BEGIN IMMEDIATE is
 	// already exclusive and FOR UPDATE SKIP LOCKED is unnecessary rather than
-	// merely unavailable — see docs/design/03 section 2.
+	// merely unavailable - see docs/design/03 section 2.
 	db.SetMaxOpenConns(1)
 	db.SetMaxIdleConns(1)
 
@@ -49,7 +49,7 @@ func openSQLite(ctx context.Context, cfg Config) (Store, error) {
 // sqliteDSN normalises a path or URI and applies the pragmas the schema needs.
 //
 // foreign_keys is OFF by default in SQLite, so without this the ON DELETE
-// CASCADE and REFERENCES clauses in the migration would be silently inert —
+// CASCADE and REFERENCES clauses in the migration would be silently inert -
 // development would not exercise the constraints production enforces.
 func sqliteDSN(raw string) (string, error) {
 	if raw == "" {

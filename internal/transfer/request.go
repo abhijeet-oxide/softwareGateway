@@ -85,14 +85,14 @@ type Catalog interface {
 	// Needed because a configured SOURCE does not map to one row: a source that
 	// enumerates the registry's catalog owns a row per repository it found,
 	// named "<source>/<path>". A package therefore knows its own row, and that
-	// row — not the configured name — is what a replication reads from.
+	// row - not the configured name - is what a replication reads from.
 	RepositoryByID(ctx context.Context, repositoryID int64) (RepoView, error)
 
 	// EnsureTarget returns the catalog row for a configured target, creating it
 	// if nothing has been written there yet.
 	//
 	// A target that has never received a transfer has no row, and a request
-	// naming it must still work — the row is what the transfer points at.
+	// naming it must still work - the row is what the transfer points at.
 	EnsureTarget(ctx context.Context, productName string, target RepoView) (int64, error)
 }
 
@@ -164,8 +164,8 @@ func NewRequester(packages *store.Packages, catalog Catalog) *Requester {
 
 // Resolve turns names into repositories without writing anything.
 //
-// Separate from Create so a dry run costs no row, and so the CLI's errors —
-// which are nearly all resolution errors — are produced before anything is
+// Separate from Create so a dry run costs no row, and so the CLI's errors -
+// which are nearly all resolution errors - are produced before anything is
 // committed.
 func (r *Requester) Resolve(ctx context.Context, req CreateRequest) (Resolved, error) {
 	view, err := r.catalog.ProductView(ctx, req.Product)
@@ -217,14 +217,14 @@ func (r *Requester) Create(ctx context.Context, req CreateRequest) (CreateResult
 	if req.ValidateOnly {
 		// AIP-163: everything is checked and nothing is written.
 		//
-		// What this checks is RESOLUTION — that the product, package, origin
+		// What this checks is RESOLUTION - that the product, package, origin
 		// and destinations exist, that promotionOnly is respected, that an
 		// ambiguous environment is refused. That is where nearly every real
 		// mistake lives, and catching it costs no rows.
 		//
 		// It does NOT report what would move. Those numbers come from the
 		// planner, and the planner's honest output requires walking the
-		// manifest tree and writing job rows — so producing them here would
+		// manifest tree and writing job rows - so producing them here would
 		// mean either a second implementation that would drift from the real
 		// one, or real work rolled back. Neither is worth it while
 		// `transfers describe` answers the same question seconds later from
@@ -281,8 +281,8 @@ func (r *Requester) Create(ctx context.Context, req CreateRequest) (CreateResult
 	//
 	// This is what makes a request's intent durable. Deriving destinations at
 	// expansion time meant reading current configuration, which turned "copy
-	// to lab" into "copy to every enabled target" and left promotion — whose
-	// destination is one named target, not all of them — inexpressible.
+	// to lab" into "copy to every enabled target" and left promotion - whose
+	// destination is one named target, not all of them - inexpressible.
 	//
 	// Planning still happens later, so docs/design/04 §10 holds: a transfer is
 	// planned against the registry as it is when it runs, not as it was when
@@ -331,7 +331,7 @@ func (r *Requester) Create(ctx context.Context, req CreateRequest) (CreateResult
 //
 // A configured source does not map to one repository row. A source that
 // enumerates the registry's catalog owns a row per repository it found, named
-// "<source>/<path>" — so resolving the configured name finds nothing, and a
+// "<source>/<path>" - so resolving the configured name finds nothing, and a
 // name lookup here silently produced a zero row ID and a foreign-key violation
 // at insert.
 //
@@ -364,7 +364,7 @@ func resolveOrigin(
 	}
 
 	// `--from` named something. It was not a target, so it has to be the
-	// configured source this package actually came from — checked rather than
+	// configured source this package actually came from - checked rather than
 	// looked up, so a typo is caught instead of silently ignored.
 	if configuredName(origin.Name) == req.From || origin.Name == req.From {
 		return origin, nil
@@ -404,8 +404,8 @@ func promotionOrigin(view ProductView) (RepoView, error) {
 
 // configuredName recovers which configured entry a repository row belongs to.
 //
-// One configured source can own several rows — "<source>/<path>" per
-// enumerated repository — and the configured name is everything before the
+// One configured source can own several rows - "<source>/<path>" per
+// enumerated repository - and the configured name is everything before the
 // first slash. A configured name may not itself contain one, which is what
 // makes the split unambiguous rather than a guess.
 func configuredName(rowName string) string {
@@ -531,7 +531,7 @@ func selectTargets(view ProductView, req CreateRequest, operation string) ([]Rep
 		// Nothing named. Ask only what cannot be deduced.
 		//
 		// One enabled target is not a choice, so `default: true` should not be
-		// required to express it — a product with a single destination needs no
+		// required to express it - a product with a single destination needs no
 		// flag and no configuration to say the obvious.
 		if len(view.Targets) == 1 {
 			return []RepoView{view.Targets[0]}, nil
@@ -542,7 +542,7 @@ func selectTargets(view ProductView, req CreateRequest, operation string) ([]Rep
 				return []RepoView{t}, nil
 			}
 		}
-		// Several, none default — but if all but one are promotionOnly, the
+		// Several, none default - but if all but one are promotionOnly, the
 		// remaining one is still the only thing a replication could mean.
 		if candidates := replicable(view.Targets); len(candidates) == 1 {
 			return candidates, nil
@@ -670,7 +670,7 @@ func allNames(view ProductView) []string {
 // every request replicated from the one repository a package was discovered in,
 // and wrong the moment promotion arrived: `lab-eu -> production` and
 // `lab-us -> production` are the same operation, package, targets and priority,
-// so they derived the same key — and the second silently returned the first's
+// so they derived the same key - and the second silently returned the first's
 // request instead of promoting from the region asked for.
 //
 // Priority participates for the reason it always did: deliberately re-requesting

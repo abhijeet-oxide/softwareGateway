@@ -100,7 +100,7 @@ func (r *Replication) Applied(
 // Observed records the result of a read.
 //
 // Called from every reload, from `products check` and from the metrics sweep,
-// so it must never write anything but the observation — in particular it must
+// so it must never write anything but the observation - in particular it must
 // not touch applied_config_hash, which is the record of what we sent and the
 // only fixed point drift is measured from.
 func (r *Replication) Observed(
@@ -127,7 +127,7 @@ func (r *Replication) Observed(
 
 // Get returns one target's replication record. A target that has never been
 // applied or observed has no row, which is reported as ErrNoRows rather than
-// as a zero value — "never applied" and "applied with empty hashes" are
+// as a zero value - "never applied" and "applied with empty hashes" are
 // different states and only one of them is a mistake.
 func (r *Replication) Get(ctx context.Context, productID int64, target string) (TargetReplication, error) {
 	query := r.dialect.Rewrite(`
@@ -461,7 +461,7 @@ func (r *Replication) SetExpectedDigest(ctx context.Context, syncID int64, diges
 // ---------------------------------------------------------------------------
 // Download-rule chains
 //
-// A step waits for its predecessor to reach `succeeded` — and because a
+// A step waits for its predecessor to reach `succeeded` - and because a
 // transfer only reaches `succeeded` after its own verification, that IS the
 // verification gate. There is no separate gate mechanism and there does not
 // need to be one.
@@ -476,7 +476,7 @@ func (r *Replication) SetExpectedDigest(ctx context.Context, syncID int64, diges
 //
 // A sweep rather than a hook on completion, for the reason every other
 // recovery path in this system is a sweep: the interesting failure is the one
-// where nothing calls the hook — the Coordinator restarts between a step
+// where nothing calls the hook - the Coordinator restarts between a step
 // succeeding and its successor being released, and a chain that only advanced
 // on an event would hang there forever.
 func (r *Replication) AdvanceSteps(ctx context.Context) (released, skipped int, err error) {

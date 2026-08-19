@@ -19,7 +19,7 @@ import (
 )
 
 // ---------------------------------------------------------------------------
-// Repository set resolution — no registry needed
+// Repository set resolution - no registry needed
 // ---------------------------------------------------------------------------
 
 // stubCatalog stands in for a registry catalog.
@@ -50,7 +50,7 @@ func TestRepositorySingularAndPluralMerge(t *testing.T) {
 	want := []string{"platform/core", "platform/db", "platform/ui"}
 
 	if len(got) != len(want) {
-		t.Fatalf("got %v, want %v — `repository` and `repositories` must merge and dedupe", got, want)
+		t.Fatalf("got %v, want %v - `repository` and `repositories` must merge and dedupe", got, want)
 	}
 	for i := range want {
 		if got[i] != want[i] {
@@ -147,7 +147,7 @@ func TestCatalogFailureIsExplainedWithTheFix(t *testing.T) {
 }
 
 // Naming repositories means exactly those, and the catalog is not consulted at
-// all — so its permissions cannot break a source that does not need them.
+// all - so its permissions cannot break a source that does not need them.
 func TestNamedRepositoriesNeverConsultTheCatalog(t *testing.T) {
 	src := product.Source{Repositories: []string{"platform/core"}}
 	cat := &stubCatalog{err: registry.ErrForbidden}
@@ -429,7 +429,7 @@ func TestOneBadRepositoryDoesNotStopTheScan(t *testing.T) {
 	}
 }
 
-// But if EVERY repository fails, the scan failed — otherwise the last-success
+// But if EVERY repository fails, the scan failed - otherwise the last-success
 // gauge would keep advancing through an outage.
 func TestTotalOutageIsAFailedScan(t *testing.T) {
 	h := newMultiRepoHarness(t, multiRepoDoc)
@@ -547,7 +547,7 @@ func TestReconcileDoesNotTouchDiscoveredRepositories(t *testing.T) {
 	}
 }
 
-// A source that names no repositories is VALID — it enumerates. This is the
+// A source that names no repositories is VALID - it enumerates. This is the
 // case that matters: a product whose components each ship as a new repository
 // cannot list them in advance, and rejecting the document would mean every new
 // component is silently not replicated until somebody edits the ConfigMap.

@@ -9,7 +9,7 @@ import (
 // Metrics and audit for delegated replication.
 //
 // The audit catalogue here records what we DID or OBSERVED, never
-// "transferred" — which we did not. That distinction is the whole reason these
+// "transferred" - which we did not. That distinction is the whole reason these
 // events exist as a category of their own rather than reusing the transfer
 // events: a year from now, "we asked Quay to sync and Quay says it did" and
 // "we moved 45 GB" must not read the same way.
@@ -29,7 +29,7 @@ const (
 // Metrics is the slice of the registry this package touches.
 //
 // A consumer-defined interface so the service and the watcher can be
-// constructed without one — which is what every test does, and what a
+// constructed without one - which is what every test does, and what a
 // deployment with metrics disabled does.
 type Metrics interface {
 	RecordSync(product, target, result string)

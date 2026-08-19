@@ -11,7 +11,7 @@ import (
 
 // The fold from media types to the words a person uses.
 //
-// Several media types are one kind — OCI and Docker both describe an image —
+// Several media types are one kind - OCI and Docker both describe an image -
 // and a reader handed both has been given the tool's internals in place of an
 // answer.
 
@@ -35,7 +35,7 @@ func TestContentGroupsFoldMediaTypesIntoKinds(t *testing.T) {
 	// Structural first, and fixed: a reader comparing two transfers compares
 	// rows by position.
 	if got[0].Kind != "index" || got[1].Kind != "image" || got[2].Kind != "chart" {
-		t.Errorf("kinds came out %s, %s, %s — want index, image, chart",
+		t.Errorf("kinds came out %s, %s, %s - want index, image, chart",
 			got[0].Kind, got[1].Kind, got[2].Kind)
 	}
 
@@ -113,7 +113,7 @@ func TestContentGroupsHonourTheVendorsOwnAnnotations(t *testing.T) {
 // The saving has to be attributable, or "SAVED 30 GiB" is a number nobody can
 // check.
 //
-// The question this answers is "saved on WHAT" — an operator looking at thirty
+// The question this answers is "saved on WHAT" - an operator looking at thirty
 // gigabytes it did not move wants to know whether that was the images (which is
 // ordinary; a product line shares base layers) or the configuration bundles
 // (which would be surprising and worth a look).
@@ -176,7 +176,7 @@ func TestTheSavingIsBrokenDownByKindAndAddsUp(t *testing.T) {
 		total += n
 	}
 	if want := int64(32<<30 + 5<<20); total != want {
-		t.Errorf("the per-kind savings add up to %d, want %d — a breakdown that "+
+		t.Errorf("the per-kind savings add up to %d, want %d - a breakdown that "+
 			"does not reach its own total is worse than none", total, want)
 	}
 }

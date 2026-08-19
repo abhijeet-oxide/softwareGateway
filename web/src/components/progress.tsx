@@ -28,7 +28,7 @@ import { semantic } from '../theme'
  * cannot be broken by a caller who has not read this comment.
  *
  * A third case sits between them: work that IS ours and IS running, but whose
- * extent nobody knows yet — measuring a release walks a manifest tree whose
+ * extent nobody knows yet - measuring a release walks a manifest tree whose
  * size is the thing being discovered. <WorkingBar> is for that. It animates,
  * so it reads as activity, and it carries no number, so it cannot be read as
  * a position.
@@ -63,7 +63,7 @@ export function MeasuredProgress({
   transferred, total, saved, strategy = 'copy', showText = true, speedBytesPerSecond,
 }: MeasuredProps) {
   if (strategy !== 'copy') {
-    // Not a fallback — a refusal. A caller reaching here has asked for a bar
+    // Not a fallback - a refusal. A caller reaching here has asked for a bar
     // over work whose bytes nobody counted.
     return (
       <NA reason="This work is performed by the destination registry, so there are no bytes for us to count. Its state is shown instead." />
@@ -107,8 +107,8 @@ export function MeasuredProgress({
  *
  * # Why artifacts and not bytes
  *
- * A download moves content first — blobs, where all the bytes are and where all
- * the skipping happens — and then the manifests that name them. So a byte bar
+ * A download moves content first - blobs, where all the bytes are and where all
+ * the skipping happens - and then the manifests that name them. So a byte bar
  * reaches 100% while the download is genuinely a third done, and a release the
  * destination already held reads as finished before anything has been named.
  *
@@ -125,13 +125,13 @@ export function MeasuredProgress({
  *
  * Artifacts the destination already held. Drawn inside the same track rather
  * than as a second bar: they are part of the same total, and the distinction
- * that matters is between what we moved and what was there — not between two
+ * that matters is between what we moved and what was there - not between two
  * kinds of progress.
  */
 export function ArtifactProgress({
   groups, transferred, total, saved, strategy = 'copy', speedBytesPerSecond,
 }: {
-  /** The per-kind rollup — the same rows the Contents table renders. */
+  /** The per-kind rollup - the same rows the Contents table renders. */
   groups?: ContentGroup[]
   /** Bytes moved, the release's size, and bytes already there. */
   transferred: number | undefined
@@ -202,8 +202,8 @@ export function ArtifactProgress({
  *
  * The three belong together. A bar alone says how far without saying whether
  * that took a minute or an afternoon; an elapsed column alone says how long
- * without saying how far. And the number an operator actually wants — when it
- * will be done — is the one that is never on screen, because it is the only
+ * without saying how far. And the number an operator actually wants - when it
+ * will be done - is the one that is never on screen, because it is the only
  * one of the three that has to be derived.
  *
  * The ETA is derived HONESTLY or not at all: bytes we moved, over the time we
@@ -217,7 +217,7 @@ export function DownloadProgress({
 }: {
   transferred: number | undefined
   total: number | undefined
-  /** Bytes the destination already had. Done work — see MeasuredProgress. */
+  /** Bytes the destination already had. Done work - see MeasuredProgress. */
   saved?: number | undefined
   strategy?: Strategy
   /** Seconds spent moving bytes so far. */
@@ -336,7 +336,7 @@ export function StateStrip({ state, label, events = [], message }: StripProps) {
  * Work in progress whose extent is not known.
  *
  * Deliberately NOT a percentage. Measuring a release walks a manifest tree to
- * find out how big it is — the total is the answer, not the input — so any
+ * find out how big it is - the total is the answer, not the input - so any
  * percentage would be invented. What is true and worth showing is that it is
  * running, what it is doing, and how long it has been doing it.
  *

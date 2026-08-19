@@ -26,7 +26,7 @@ import type { Repository } from '../api/types'
  * # Why a registry rather than an icon at each call site
  *
  * A registry, a target and an environment are named differently in every
- * deployment — `near`, `primary`, `ocp-prod`, `legacy-dr` — and the icon must
+ * deployment - `near`, `primary`, `ocp-prod`, `legacy-dr` - and the icon must
  * follow what the thing IS rather than what somebody called it. Deciding that
  * per call site means ten pages disagreeing about what a Quay mirror looks
  * like.
@@ -35,7 +35,7 @@ import type { Repository } from '../api/types'
  *
  * A Product Owner reading a location chip is looking for "is this the vendor
  * or is this ours". A vendor's own mark answers that in one glance where a
- * generic box does not — and the vendors here are few and stable, so the marks
+ * generic box does not - and the vendors here are few and stable, so the marks
  * are worth carrying.
  *
  * Where no honest mark exists the generic one is used rather than a
@@ -82,7 +82,7 @@ const ENVIRONMENT_MARKS: Record<string, IconComponent> = {
  *
  * Order is deliberate and runs from most reliable to least: what the vendor
  * says it is, then what the registry protocol is, then what the environment
- * is, and only then the name — which is the one an operator can rename on a
+ * is, and only then the name - which is the one an operator can rename on a
  * whim.
  */
 export function repositoryIcon(repo: Repository | undefined): IconComponent {
@@ -131,7 +131,7 @@ export function environmentIcon(environment: string | undefined): IconComponent 
  * Artifact kinds, for the Contents tiles and the per-type lists.
  *
  * A container image gets Docker's mark and a chart gets Helm's, because those
- * are what the things ARE — a Product Owner recognises them from every other
+ * are what the things ARE - a Product Owner recognises them from every other
  * tool they use, and a generic "layers" glyph teaches nothing. Files have no
  * ecosystem mark, so they get a document.
  */
@@ -139,8 +139,8 @@ export const ARTIFACT_ICONS = {
   Images: DockerIcon,
   'Helm Charts': HelmIcon,
   Files: FileIcon,
-  // The two structural kinds. An index is a table of contents — it names the
-  // release's parts and carries none of them — and a signature is an
+  // The two structural kinds. An index is a table of contents - it names the
+  // release's parts and carries none of them - and a signature is an
   // attestation, which is what a certificate mark says everywhere else.
   Index: IndexIcon,
   Signatures: SignatureIcon,
@@ -153,7 +153,7 @@ export { AnalyzeIcon, DownloadIcon, IndexIcon, LayersIcon, SignatureIcon, Packag
 /**
  * Renders one of the above at text size.
  *
- * A wrapper because every icon needs the same three things — a size that
+ * A wrapper because every icon needs the same three things - a size that
  * matches the line it sits on, vertical alignment against the text baseline,
  * and a title so it is not a bare glyph to a screen reader.
  */
@@ -169,7 +169,7 @@ export function Icon({
    *
    * The nav needs it: Ant Design lays a menu item out around `.anticon`, which
    * carries the gap between the mark and the label. An icon without it sat a
-   * few pixels off from the seven built-in ones on either side of it — small
+   * few pixels off from the seven built-in ones on either side of it - small
    * enough to look like a mistake rather than a difference.
    */
   className?: string

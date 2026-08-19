@@ -102,7 +102,7 @@ func newAPIHarness(t *testing.T) *apiHarness {
 }
 
 // newAPIHarnessWith is the same harness with the dependencies adjusted before
-// the server is built — for the handful of tests about a dependency's
+// the server is built - for the handful of tests about a dependency's
 // behaviour rather than the store's.
 func newAPIHarnessWith(t *testing.T, adjust func(*Deps)) *apiHarness {
 	t.Helper()
@@ -554,7 +554,7 @@ func (h *apiHarness) seedPackageIn(repoPath, tag, digest string) int64 {
 }
 
 // A vendor's version tag appears in many of a product's repositories. The
-// handler must refuse rather than pick, and must say what to type instead —
+// handler must refuse rather than pick, and must say what to type instead -
 // an error that states the problem without the fix is one the user then has to
 // go and research.
 func TestGetPackageRefusesAnAmbiguousTag(t *testing.T) {
@@ -587,7 +587,7 @@ func TestGetPackageRefusesAnAmbiguousTag(t *testing.T) {
 // A repository with no slash can be scoped in the path segment itself. This is
 // the form the router can actually route: a slash in a path segment does not
 // survive %2F decoding, which is why the client moves a slashed repository into
-// the query string instead — see splitPackageRef.
+// the query string instead - see splitPackageRef.
 func TestGetPackageAcceptsAScopedReferenceInThePath(t *testing.T) {
 	h := newAPIHarness(t)
 	h.seedPackageIn("cfx-5000-k8s", "orb_23.8.1076", digestA)
@@ -664,7 +664,7 @@ func TestDiscoverAllWithNoProducts(t *testing.T) {
 // release is hundreds of manifests read live from two registries, and when
 // those registries are slow the request simply does not come back. A caller
 // cannot tell that from a hang, and there is no progress channel to tell them
-// otherwise — so it stops, and the reply names the limit and the one thing that
+// otherwise - so it stops, and the reply names the limit and the one thing that
 // makes the work smaller: analysing the releases first, which is what the walk
 // reads from when it is there.
 func TestCompareThatRunsOutOfTimeSaysSo(t *testing.T) {
@@ -710,7 +710,7 @@ func (f comparerFunc) Compare(
 	return f(ctx, product, a, b, budget, progress)
 }
 
-// A comparison reports where it has got to, while it is still getting there —
+// A comparison reports where it has got to, while it is still getting there -
 // and gives up when it stops getting anywhere.
 //
 // Both halves in one test because they are one mechanism: the report is the
@@ -767,11 +767,11 @@ func TestAComparisonReportsProgressAndGivesUpWhenItStops(t *testing.T) {
 		time.Sleep(20 * time.Millisecond)
 	}
 
-	// Sorted by END, so a bar built from this does not reorder between polls —
+	// Sorted by END, so a bar built from this does not reorder between polls -
 	// and keyed by it, because the two sides of a version comparison are the
 	// same place and share a label.
 	if progress.Sides[0].Key != "a" || progress.Sides[1].Key != "b" {
-		t.Errorf("sides came out %s, %s — want a stable order",
+		t.Errorf("sides came out %s, %s - want a stable order",
 			progress.Sides[0].Key, progress.Sides[1].Key)
 	}
 	if vendor := progress.Sides[0]; vendor.Done != 143 || vendor.Total != 261 || !vendor.Estimated {
@@ -803,11 +803,11 @@ func TestProgressForAnUnknownComparisonIsNotFound(t *testing.T) {
 }
 
 // The complaint: "I clicked analyze, came back, and it still offered to
-// analyze — then said it was already being analysed."
+// analyze - then said it was already being analysed."
 //
 // Both halves came from one decision: the walk ran INSIDE the request. A reader
 // who navigated away cancelled it, and the claim was released on a context that
-// had just been cancelled — so the release stayed marked as being analysed by a
+// had just been cancelled - so the release stayed marked as being analysed by a
 // request that no longer existed, while nothing was walking it.
 //
 // So the interface asks for it without waiting. The claim is taken before the
@@ -837,7 +837,7 @@ func TestAnalysingWithoutWaitingClaimsTheReleaseBeforeAnswering(t *testing.T) {
 			"cannot tell it from one that found nothing")
 	}
 
-	// The walk is still going, and the release says so — which is the whole
+	// The walk is still going, and the release says so - which is the whole
 	// point: a page opened anywhere else shows `Analyzing`.
 	<-walking
 	pkg, err := h.packages.GetPackageByID(t.Context(), id)
@@ -849,7 +849,7 @@ func TestAnalysingWithoutWaitingClaimsTheReleaseBeforeAnswering(t *testing.T) {
 			pkg.AnalysisState, store.AnalysisRunning)
 	}
 	if resp.Package.AnalysisState != store.AnalysisRunning {
-		t.Errorf("the response says analysisState %q, want %q — a caller that "+
+		t.Errorf("the response says analysisState %q, want %q - a caller that "+
 			"renders what it was handed would show the wrong thing until it polls",
 			resp.Package.AnalysisState, store.AnalysisRunning)
 	}

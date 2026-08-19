@@ -60,7 +60,7 @@ func (t *retryTransport) RoundTrip(r *http.Request) (*http.Response, error) {
 			// The attempt COUNT is the wrong bound on its own. Against a server
 			// that accepts the connection and never answers, every attempt costs
 			// the full ResponseHeaderTimeout, so eight attempts is four minutes
-			// for ONE request — and discovery makes two of those per tag.
+			// for ONE request - and discovery makes two of those per tag.
 			// Measured in the field: a scan sat on a single tag for over two
 			// minutes and had 47 more repositories to go.
 			//
@@ -88,7 +88,7 @@ func (t *retryTransport) RoundTrip(r *http.Request) (*http.Response, error) {
 			}
 			// Some failures cannot be fixed by trying again. Missing or wrong
 			// credentials are the important case: retrying them burns the full
-			// backoff schedule — minutes — before reporting a problem the
+			// backoff schedule - minutes - before reporting a problem the
 			// operator could have been told about immediately, and hammering an
 			// auth endpoint is a good way to get throttled.
 			if !registry.Retryable(err) {

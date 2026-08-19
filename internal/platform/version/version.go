@@ -1,6 +1,6 @@
 // Package version carries build information stamped in at link time.
 //
-// See docs/design/12-observability-and-audit.md section 2.7 — the build_info
+// See docs/design/12-observability-and-audit.md section 2.7 - the build_info
 // metric is how a dashboard correlates a behaviour change with a deployment.
 package version
 

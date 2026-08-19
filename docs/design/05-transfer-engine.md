@@ -1,8 +1,8 @@
-# 05 — Transfer Engine
+# 05 - Transfer Engine
 
-> **Prerequisite:** [04 — Queue and Scheduling](04-queue-and-scheduling.md) · **Depends on:** [06 — Registry Abstraction](06-registry-abstraction.md)
+> **Prerequisite:** [04 - Queue and Scheduling](04-queue-and-scheduling.md) · **Depends on:** [06 - Registry Abstraction](06-registry-abstraction.md)
 
-This is the throughput document — goal G1. Everything here is written against the `Repository` interface in [06](06-registry-abstraction.md), never against a specific OCI library. That was originally because [ADR-001](16-technology-choices.md#adr-001) was open; it is now because the abstraction is what keeps the closed decision reversible. ADR-001 closed at M3 on `oras-go/v2`, confined to the write path inside `internal/registry/generic/` — nothing in this document changed as a result, which was the design goal.
+This is the throughput document - goal G1. Everything here is written against the `Repository` interface in [06](06-registry-abstraction.md), never against a specific OCI library. That was originally because [ADR-001](16-technology-choices.md#adr-001) was open; it is now because the abstraction is what keeps the closed decision reversible. ADR-001 closed at M3 on `oras-go/v2`, confined to the write path inside `internal/registry/generic/` - nothing in this document changed as a result, which was the design goal.
 
 ---
 
@@ -13,7 +13,7 @@ A 45 GB package, ~850 blobs. Blob sizes follow a heavy-tailed distribution: hund
 Three consequences drive the design:
 
 1. **Per-request overhead matters for the small blobs.** 850 blobs × (auth + connect + TLS) is a lot of round trips if any of it is repeated per blob. Hence token caching and connection reuse (§5).
-2. **Throughput matters for the large ones.** A single 8 GB layer cannot be parallelized across workers — OCI has no ranged upload that would let two workers write one blob — so it must be *fast*, and it must not have to start over. Hence transport tuning (§5) and resumption (§4.6).
+2. **Throughput matters for the large ones.** A single 8 GB layer cannot be parallelized across workers - OCI has no ranged upload that would let two workers write one blob - so it must be *fast*, and it must not have to start over. Hence transport tuning (§5) and resumption (§4.6).
 3. **The best transfer is the one that does not happen.** Deduplication and mounting routinely eliminate 30–70% of a package. Hence the fast paths (§4.1–4.2), which is where the largest wins live.
 
 ## 2. Where work happens
@@ -27,7 +27,7 @@ Three consequences drive the design:
 
 ## 3. Planning
 
-The planner turns a Package plus a target into a set of jobs. It runs on the Coordinator when a transfer is created (or when a scheduled request comes due — [04](04-queue-and-scheduling.md) §10).
+The planner turns a Package plus a target into a set of jobs. It runs on the Coordinator when a transfer is created (or when a scheduled request comes due - [04](04-queue-and-scheduling.md) §10).
 
 ```
 1. Resolve the package manifest from the origin repository.
@@ -56,7 +56,7 @@ The planner turns a Package plus a target into a set of jobs. It runs on the Coo
    dedupe_skipped_bytes, mountable_bytes.
 ```
 
-Step 3a is a database lookup, not a network call — that is what makes planning a 1,000-blob package fast. Registry `HEAD` checks are deferred to the worker, where they are parallel and where a stale placement is caught anyway (§4.1).
+Step 3a is a database lookup, not a network call - that is what makes planning a 1,000-blob package fast. Registry `HEAD` checks are deferred to the worker, where they are parallel and where a stale placement is caught anyway (§4.1).
 
 **Planning is idempotent.** A Coordinator that crashes mid-plan leaves a partial job set; on restart the transfer is still `planning` and the planner re-runs, with `ON CONFLICT DO NOTHING` making already-created jobs free.
 
@@ -96,7 +96,7 @@ Four fast paths, ordered cheapest-first. A job takes the first that applies.
 
 The placement set is shipped to the worker **in the lease response** rather than queried per job, so a worker holding 16 jobs makes zero extra calls to resolve them.
 
-**Staleness.** A placement is strong evidence, not proof ([01](01-domain-model.md) §4) — a registry's garbage collector can remove content underneath us. Two defences:
+**Staleness.** A placement is strong evidence, not proof ([01](01-domain-model.md) §4) - a registry's garbage collector can remove content underneath us. Two defences:
 
 - Entries older than `placementTTL` (default 24 h) are not trusted; the job falls through to path 2, and success refreshes `verified_at`.
 - **The backstop:** if a manifest push later fails with `BLOB_UNKNOWN`, the Coordinator invalidates the placements for that manifest's blobs and requeues them ([11](11-resiliency-and-backpressure.md) §2.5). The registry itself tells us when the cache is wrong, which is what makes the optimistic path safe rather than merely fast.
@@ -109,16 +109,16 @@ Where the destination registry **already holds the blob in another of its own re
 POST /v2/<dst-repo>/blobs/uploads/?mount=<digest>&from=<other-repo>
 ```
 
-- `201 Created` — mounted. **Zero bytes over the wire**, regardless of blob size.
-- `202 Accepted` — the registry declined and opened a normal upload session instead. Fall through to streaming, reusing the session it just handed us.
+- `201 Created` - mounted. **Zero bytes over the wire**, regardless of blob size.
+- `202 Accepted` - the registry declined and opened a normal upload session instead. Fall through to streaming, reusing the session it just handed us.
 
 There are **two** repositories worth trying, and they cover different cases:
 
-1. **A sibling destination repository.** A bundle's components are published twice — inside the bundle so its index resolves, and under their own name so they can be pulled as themselves ([§ layout](../../internal/transfer/layout.go)). One digest, two destination repositories, two jobs. The Coordinator resolves a sibling that already holds the digest and ships its path in the lease as `mountFromRepository`, so the second job relocates rather than transfers.
+1. **A sibling destination repository.** A bundle's components are published twice - inside the bundle so its index resolves, and under their own name so they can be pulled as themselves ([§ layout](../../internal/transfer/layout.go)). One digest, two destination repositories, two jobs. The Coordinator resolves a sibling that already holds the digest and ships its path in the lease as `mountFromRepository`, so the second job relocates rather than transfers.
 
 2. **The source repository**, when source and destination share a registry. This is the **promotion** case (lab → production within one internal registry), where a 45 GB promotion can complete in seconds.
 
-Only the second existed at first, and its test — "not the same registry, so do not mount" — passes for every replication from a vendor. So the first copy of a relocated component streamed and the second streamed as well, doubling the WAN cost of nearly every ORB. It is worth being precise about how that hid: both jobs are correct, both report success, the transfer completes, and the only symptom is duration. `TestBundleFetchesEachBlobFromTheVendorOnce` asserts the vendor serves each blob once, because nothing else would notice.
+Only the second existed at first, and its test - "not the same registry, so do not mount" - passes for every replication from a vendor. So the first copy of a relocated component streamed and the second streamed as well, doubling the WAN cost of nearly every ORB. It is worth being precise about how that hid: both jobs are correct, both report success, the transfer completes, and the only symptom is duration. `TestBundleFetchesEachBlobFromTheVendorOnce` asserts the vendor serves each blob once, because nothing else would notice.
 
 Concurrent duplicate suppression ([04](04-queue-and-scheduling.md) §5) is what makes case 1 fire at all: the two jobs are created consecutively and would otherwise be leased in the same batch and stream simultaneously, before either had placed anything for the other to mount. It is therefore keyed by **registry**, not by repository.
 
@@ -128,23 +128,23 @@ Support is uneven in practice, which is why `202` is treated as a normal outcome
 
 What a registry's browser shows is not what it stores, and the gap causes the same three questions every time.
 
-**A folder per reference, not per copy.** Pushing a manifest by digest creates `<image>/sha256:…/`; applying a tag creates `<image>/<tag>/`. Two folders, one manifest. Invariant I1 makes both inevitable — the manifest is pushed by digest and the tag applied only once everything beneath it is present — and the second costs no bytes and no job, because a tag is a pointer the registry writes for itself.
+**A folder per reference, not per copy.** Pushing a manifest by digest creates `<image>/sha256:…/`; applying a tag creates `<image>/<tag>/`. Two folders, one manifest. Invariant I1 makes both inevitable - the manifest is pushed by digest and the tag applied only once everything beneath it is present - and the second costs no bytes and no job, because a tag is a pointer the registry writes for itself.
 
-**A tag is not in the manifest.** It cannot be: a manifest is content-addressed, so a tag inside it would change its digest, and every signature over that digest is a signature over those exact bytes. Tags live in the registry's own index. `org.opencontainers.image.ref.name` is an annotation on the descriptor in the PARENT index — the vendor saying what to call a child — not a property of the child.
+**A tag is not in the manifest.** It cannot be: a manifest is content-addressed, so a tag inside it would change its digest, and every signature over that digest is a signature over those exact bytes. Tags live in the registry's own index. `org.opencontainers.image.ref.name` is an annotation on the descriptor in the PARENT index - the vendor saying what to call a child - not a property of the child.
 
 **Layer entries under each manifest are links.** Artifactory materialises a `sha256__<hex>` path per layer per manifest and reports a size for each, which reads as duplication and is not: its filestore is keyed by checksum and holds one binary however many paths point at it.
 
-So a component that appears three times — under its tag, under its digest, and inside the bundle — is:
+So a component that appears three times - under its tag, under its digest, and inside the bundle - is:
 
 | | Stored | Transferred |
 |---|---|---|
-| `cfx-5000-product/nginx/1.2.3/` | one binary | — |
-| `cfx-5000-product/nginx/sha256:…/` | same binary | — |
+| `cfx-5000-product/nginx/1.2.3/` | one binary | - |
+| `cfx-5000-product/nginx/sha256:…/` | same binary | - |
 | `orbs/<orb>/sha256:…/` | same binary | mount, or one upload |
 
-Two of the three are the same OCI repository and cost nothing extra. The third is a different repository, which the distribution spec requires to hold its own blob links, and that is the one blob job — a cross-repository mount where the registry supports it (§4.2).
+Two of the three are the same OCI repository and cost nothing extra. The third is a different repository, which the distribution spec requires to hold its own blob links, and that is the one blob job - a cross-repository mount where the registry supports it (§4.2).
 
-**Why the bundle repository holds content at all**, rather than just an index: an OCI index may only reference manifests the registry will serve from the index's OWN repository. `docker pull` of the bundle resolves the index and then looks for each child under the same name. A bundle repository containing only an index would be unresolvable. Its children are untagged there on purpose — the index names them by digest, and their names belong to the repositories their `ref.name` gives.
+**Why the bundle repository holds content at all**, rather than just an index: an OCI index may only reference manifests the registry will serve from the index's OWN repository. `docker pull` of the bundle resolves the index and then looks for each child under the same name. A bundle repository containing only an index would be unresolvable. Its children are untagged there on purpose - the index names them by digest, and their names belong to the repositories their `ref.name` gives.
 
 #### A repository spelled two ways is one repository
 
@@ -152,9 +152,9 @@ An `org.opencontainers.image.ref.name` annotation names an artifact. Nothing mak
 
 Compared byte for byte those are two repositories, so the layout published the component into its container **and** "elsewhere". The destination grew two sibling folders with the same name and different capitals, half the bundle in each.
 
-The mixed-case one does not entirely work either. The OCI grammar for a repository name is lowercase-only; Artifactory accepts a push to a mixed-case path while issuing a token scoped to the name **it** normalised, so a later request against the name we sent falls outside that scope and returns `401 unauthorized` — on a repository the same credential had been writing to for thirty hours. It surfaces at the tag, which is the last request of the entire transfer.
+The mixed-case one does not entirely work either. The OCI grammar for a repository name is lowercase-only; Artifactory accepts a push to a mixed-case path while issuing a token scoped to the name **it** normalised, so a later request against the name we sent falls outside that scope and returns `401 unauthorized` - on a repository the same credential had been writing to for thirty hours. It surfaces at the tag, which is the last request of the entire transfer.
 
-So repository comparison in the layout is case-insensitive, and only there. **Reading is still verbatim** — a vendor genuinely serving `orbs/CFX-5000-k8s` is read from exactly that path and mirrored to a destination of the same name, which is the contract `orasRepo` exists to keep. What no longer happens is one repository becoming two because an annotation disagreed with itself about capitals.
+So repository comparison in the layout is case-insensitive, and only there. **Reading is still verbatim** - a vendor genuinely serving `orbs/CFX-5000-k8s` is read from exactly that path and mirrored to a destination of the same name, which is the contract `orasRepo` exists to keep. What no longer happens is one repository becoming two because an annotation disagreed with itself about capitals.
 
 **Tags are untouched.** The grammar for a tag permits uppercase, so lowercasing one would publish a reference the vendor never did.
 
@@ -162,18 +162,18 @@ So repository comparison in the layout is case-insensitive, and only there. **Re
 
 Every other step asks first. A blob present at the destination is skipped, a manifest already stored under its digest is skipped, a blob held elsewhere on the destination registry is relocated rather than sent. Tagging did none of that: it issued `PUT /v2/<repo>/manifests/<tag>` on every attempt, including for tags it had applied itself on the previous run.
 
-While it works this is invisible, because rewriting a tag to the digest it already holds leaves the registry exactly as it was. It stops being invisible when the destination declines. That PUT over an existing tag is an **overwrite**, and permission to create is not permission to overwrite — Artifactory wants Delete on the permission target for it, and answers `401 unauthorized` without one. The reported failure is identical in shape to a bad credential:
+While it works this is invisible, because rewriting a tag to the digest it already holds leaves the registry exactly as it was. It stops being invisible when the destination declines. That PUT over an existing tag is an **overwrite**, and permission to create is not permission to overwrite - Artifactory wants Delete on the permission target for it, and answers `401 unauthorized` without one. The reported failure is identical in shape to a bad credential:
 
 ```
 tag destination: apply tag "1.25.212": tag sha256:438001f263ab as 1.25.212
   <host>/<repo>: HTTP 401: unauthorized: authentication required
 ```
 
-…on a credential that had just pushed every blob and every manifest beneath that tag. So the transfer that should be the cheapest — re-running one over content already published — was the only one that could fail, and it failed as `auth`, which is terminal and does not retry.
+…on a credential that had just pushed every blob and every manifest beneath that tag. So the transfer that should be the cheapest - re-running one over content already published - was the only one that could fail, and it failed as `auth`, which is terminal and does not retry.
 
 The engine now resolves the tag first and writes only if it does not already point at this digest. Comparing digests is what makes the shortcut safe: the tag either resolves to these exact bytes or it does not, and nothing weaker is being trusted. A resolve that fails for **any** reason falls through to the write, so a destination that will not answer `HEAD` is no worse off than before.
 
-This narrows the failure rather than removing it: a tag that genuinely has to move — one pointing at different content — is still an overwrite, and still needs the permission. What it removes is the whole class of refusals for tags that needed no write at all. `transferctl transfers failures` says which of the two an operator is looking at, because "check the target's secret" is the wrong advice for a credential that was only ever refused on the tag path ([13](13-cli.md) §6.1).
+This narrows the failure rather than removing it: a tag that genuinely has to move - one pointing at different content - is still an overwrite, and still needs the permission. What it removes is the whole class of refusals for tags that needed no write at all. `transferctl transfers failures` says which of the two an operator is looking at, because "check the target's secret" is the wrong advice for a credential that was only ever refused on the tag path ([13](13-cli.md) §6.1).
 
 #### The mount hint looks much further back than the placement skip
 
@@ -184,11 +184,11 @@ Both read `blob_placements`, and they need different degrees of trust because be
 | skip (§4.1) | the content is not there, and the manifest referencing it fails | `placementTTL`, 24 h |
 | mount hint | the registry declines and the worker streams | 90 days |
 
-They shared the 24-hour TTL, and that was expensive in exactly the case where it matters most. **A vendor's bundle carries its release in its repository path** — `orbs/cfx-5000-k8s-215952-edgenac-25.7-2131_…` — so every new release lands in a brand-new destination repository that necessarily holds no placements of its own. Its components go to version-*stable* paths and dedupe normally; the bundle-internal copy has nothing to dedupe against and depends entirely on mounting from where the last release put the same digests.
+They shared the 24-hour TTL, and that was expensive in exactly the case where it matters most. **A vendor's bundle carries its release in its repository path** - `orbs/cfx-5000-k8s-215952-edgenac-25.7-2131_…` - so every new release lands in a brand-new destination repository that necessarily holds no placements of its own. Its components go to version-*stable* paths and dedupe normally; the bundle-internal copy has nothing to dedupe against and depends entirely on mounting from where the last release put the same digests.
 
-A release shipped more than a day after the previous one therefore found those records expired, got no mount candidate, and re-streamed the whole bundle across the WAN — for content the destination registry was holding the entire time. Nothing about correctness changes with the longer horizon: a stale hint costs one request.
+A release shipped more than a day after the previous one therefore found those records expired, got no mount candidate, and re-streamed the whole bundle across the WAN - for content the destination registry was holding the entire time. Nothing about correctness changes with the longer horizon: a stale hint costs one request.
 
-### 4.3 Streaming — the core loop
+### 4.3 Streaming - the core loop
 
 **Invariant I5: bytes never touch worker disk.**
 
@@ -224,15 +224,15 @@ func (e *Engine) streamBlob(ctx context.Context, job Job, src, dst Repository) e
 **What is deliberately absent:**
 
 - No `io.ReadAll`. Reading an 8 GB layer into memory would OOM the pod.
-- No temp file. Disk would cap concurrency at the volume's IOPS, add a failure mode (disk full), and require cleanup on crash — the one thing workers are designed not to need.
+- No temp file. Disk would cap concurrency at the volume's IOPS, add a failure mode (disk full), and require cleanup on crash - the one thing workers are designed not to need.
 - No decompression. Blobs move as opaque bytes. Decompressing to recompress would burn CPU and change the digest, which would break every signature.
 - No manifest rewriting (invariant I9). Bytes in, identical bytes out.
 
-**Backpressure is free.** `io.Copy` from an HTTP body into an HTTP request body means a slow destination naturally slows reads from the source, via TCP flow control on both sides. There is no queue between them to grow and no buffer to size. This is why the pipe is one `Copy` rather than a producer/consumer pair with a channel — the simpler structure has better behaviour.
+**Backpressure is free.** `io.Copy` from an HTTP body into an HTTP request body means a slow destination naturally slows reads from the source, via TCP flow control on both sides. There is no queue between them to grow and no buffer to size. This is why the pipe is one `Copy` rather than a producer/consumer pair with a channel - the simpler structure has better behaviour.
 
 ### 4.4 Digest verification during transfer
 
-Every streamed blob is verified inline, as a wrapper on the read side. This costs one SHA-256 pass over data already in cache — on modern hardware with SHA extensions, low single-digit percent of the transfer's CPU, and entirely overlapped with network I/O.
+Every streamed blob is verified inline, as a wrapper on the read side. This costs one SHA-256 pass over data already in cache - on modern hardware with SHA extensions, low single-digit percent of the transfer's CPU, and entirely overlapped with network I/O.
 
 Two independent checks, and they catch different things:
 
@@ -241,7 +241,7 @@ Two independent checks, and they catch different things:
 | Our verifier on the **read** side | A source registry serving wrong or corrupted bytes |
 | The registry's own check on `PUT` | Corruption anywhere in our path, including in transit to the destination |
 
-Together they give end-to-end integrity without trusting either registry or the network. A mismatch fails the job with `ErrDigestMismatch`, retried at most twice ([11](11-resiliency-and-backpressure.md) §2.3) — if a source is serving bad bytes, retrying is unlikely to help and the failure should be surfaced, not absorbed.
+Together they give end-to-end integrity without trusting either registry or the network. A mismatch fails the job with `ErrDigestMismatch`, retried at most twice ([11](11-resiliency-and-backpressure.md) §2.3) - if a source is serving bad bytes, retrying is unlikely to help and the failure should be surfaced, not absorbed.
 
 This is **separate from signature verification** ([08](08-verification.md)) and the two must not be conflated: digest verification proves *the bytes are the bytes we asked for*; signature verification proves *the vendor vouched for them*.
 
@@ -254,7 +254,7 @@ peak ≈ maxConcurrentJobs × (copyBufferSize + transport buffers)
      ≈ 16 × (1 MiB + ~256 KiB)   ≈ 20 MiB   for blob data
 ```
 
-Plus the Go runtime, the manifest cache, and a lease's worth of job records — call it 128 MiB request, 256 MiB limit for a 16-way worker. **Crucially this is independent of blob size:** a worker moving eight 8 GB layers uses the same memory as one moving eight 8 MB layers. That property is what makes the "no disk" rule affordable, and it is a direct consequence of streaming.
+Plus the Go runtime, the manifest cache, and a lease's worth of job records - call it 128 MiB request, 256 MiB limit for a 16-way worker. **Crucially this is independent of blob size:** a worker moving eight 8 GB layers uses the same memory as one moving eight 8 MB layers. That property is what makes the "no disk" rule affordable, and it is a direct consequence of streaming.
 
 Buffer sizing: 1 MiB by default. Larger buffers stop helping once the bottleneck is the network; smaller ones increase syscall overhead on fast links. Tunable via `worker.copyBufferSize` ([02](02-configuration.md) §8).
 
@@ -276,7 +276,7 @@ otherwise                                      -> monolithic
 
 Rationale: below the threshold, restarting a failed blob costs less than the per-chunk overhead of every successful one. Above it, restarting an 8 GB upload at 95% is painful enough to pay for chunking.
 
-> **Honest weak spot.** Registry support for *resuming* a chunked upload after a client disconnect is uneven — the specification permits it, several registries accept the `PATCH`/`Range` protocol but do not durably retain a session across a connection drop, and behaviour varies by version and by storage backend. We therefore:
+> **Honest weak spot.** Registry support for *resuming* a chunked upload after a client disconnect is uneven - the specification permits it, several registries accept the `PATCH`/`Range` protocol but do not durably retain a session across a connection drop, and behaviour varies by version and by storage backend. We therefore:
 >
 > - treat resumption as an **optimization that may fail**, never a correctness requirement;
 > - probe support per registry at startup and cache the result ([06](06-registry-abstraction.md) §6);
@@ -319,11 +319,11 @@ Defaults tuned for large-body transfers rather than for API traffic. Each settin
 }
 ```
 
-> **Decision — HTTP/1.1 for blob transfer, HTTP/2 permitted for control traffic.**
+> **Decision - HTTP/1.1 for blob transfer, HTTP/2 permitted for control traffic.**
 >
 > *Why this is counter-intuitive:* h2 is newer and better for most workloads, and Go enables it automatically over TLS.
 >
-> *Why it loses here:* HTTP/2 multiplexes every stream onto **one TCP connection**. For many small requests that is a large win — one handshake, no head-of-line blocking at the connection level. For a handful of multi-gigabyte bodies it inverts:
+> *Why it loses here:* HTTP/2 multiplexes every stream onto **one TCP connection**. For many small requests that is a large win - one handshake, no head-of-line blocking at the connection level. For a handful of multi-gigabyte bodies it inverts:
 > - Per-stream and per-connection **flow-control windows** (65 KB default, and not always well auto-tuned) throttle a single large body far below link capacity on high bandwidth-delay-product paths.
 > - All streams share one congestion window, so one slow blob **stalls the others behind it**.
 > - Frame multiplexing adds per-chunk CPU for no benefit on a body that is one logical stream.
@@ -334,13 +334,13 @@ Defaults tuned for large-body transfers rather than for API traffic. Each settin
 >
 > *Not dogma:* this is a per-registry setting (`forceHTTP1`, default true). A registry that demonstrably performs better on h2 can opt out, and `softwaregateway_transfer_throughput_bytes_per_second{registry}` is the evidence.
 
-**Token caching.** Registry bearer tokens are cached per `(registry, repository, scope)` until shortly before expiry. Without this, an 850-blob package performs 850 token exchanges against the auth endpoint — adding a round trip to every blob and frequently tripping the registry's own rate limits. This is one of the highest-value small optimizations in the system, and one of the easiest to omit by accident.
+**Token caching.** Registry bearer tokens are cached per `(registry, repository, scope)` until shortly before expiry. Without this, an 850-blob package performs 850 token exchanges against the auth endpoint - adding a round trip to every blob and frequently tripping the registry's own rate limits. This is one of the highest-value small optimizations in the system, and one of the easiest to omit by accident.
 
 ## 6. Promotion
 
 **Promotion runs the same engine.** The only difference is that the origin is a TargetRepository ([01](01-domain-model.md) §2.1).
 
-No separate planner, queue, state machine, or retry logic — a promotion is a `transfer_requests` row with `operation = 'promote'` and a `source_repo_id` that happens to reference a target. The engine sees two `Repository` values and does not care about their roles.
+No separate planner, queue, state machine, or retry logic - a promotion is a `transfer_requests` row with `operation = 'promote'` and a `source_repo_id` that happens to reference a target. The engine sees two `Repository` values and does not care about their roles.
 
 Promotions are usually very fast, because both fast paths apply maximally: lab and production frequently share a registry (cross-repo mount, §4.2), and production often already holds most blobs from prior promotions (placement hits, §4.1). A 45 GB promotion moving 200 MB of genuinely new content is the normal case, not the exception.
 
@@ -355,7 +355,7 @@ The one asymmetry worth stating: promotion is guarded by `promotionOnly` on the 
 ```
 $ transferctl download --product vendor-a-platform --tag v2.14.0 --target lab --dry-run
 
-Transfer plan — vendor-a-platform / v2.14.0 → lab
+Transfer plan - vendor-a-platform / v2.14.0 → lab
   Artifacts               5   (1 index, 3 images, 1 helm chart)
   Blobs                 847   total 45.2 GiB
     already present     291         12.1 GiB   (placement hit)
@@ -370,7 +370,7 @@ Transfer plan — vendor-a-platform / v2.14.0 → lab
   No data transferred (dry run).
 ```
 
-**Estimation** uses an EWMA of recently observed throughput for the same `(source registry, target registry)` route, not a configured constant. Absent history it says so rather than inventing a number — a confidently wrong ETA is worse than none. The estimate accounts for effective concurrency, since a 33 GB transfer across 16 workers is not 33 GB serially.
+**Estimation** uses an EWMA of recently observed throughput for the same `(source registry, target registry)` route, not a configured constant. Absent history it says so rather than inventing a number - a confidently wrong ETA is worse than none. The estimate accounts for effective concurrency, since a 33 GB transfer across 16 workers is not 33 GB serially.
 
 Sharing the planner is the whole point: a dry run that used different code would eventually disagree with reality, and a dry run nobody trusts has no reason to exist.
 
@@ -391,9 +391,9 @@ Within its grant, a worker runs jobs in an `errgroup` with a semaphore. It reque
 
 The adaptive controller ([11](11-resiliency-and-backpressure.md) §3) moves the effective limit **within** the configured ceiling based on observed latency and error rates. Configuration sets the maximum; the controller decides how much of it is safe right now.
 
-### 8.1 Calibration — deciding those numbers by measurement
+### 8.1 Calibration - deciding those numbers by measurement
 
-The table above lists what can be turned. It does not say what to turn it *to*, and nothing in a configuration file does either: the answer depends on the link, the proxy, the vendor's own limits and the distance between the two registries, and it is different for every path. Left to guesswork the failures are systematic and all in one direction — raising concurrency against a link that is already saturated, or adding a worker while a proxy quietly halves the line rate.
+The table above lists what can be turned. It does not say what to turn it *to*, and nothing in a configuration file does either: the answer depends on the link, the proxy, the vendor's own limits and the distance between the two registries, and it is different for every path. Left to guesswork the failures are systematic and all in one direction - raising concurrency against a link that is already saturated, or adding a worker while a proxy quietly halves the line rate.
 
 `POST /api/v1/products/{product}:calibrate` (`transferctl calibrate`, [13](13-cli.md) §11) measures the path instead. It is implemented in `internal/calibrate` and runs in the **Coordinator** process, for the same reason preflight does: `transferctl` is a pure API client and never opens a connection to a registry itself.
 
@@ -406,33 +406,33 @@ The table above lists what can be turned. It does not say what to turn it *to*, 
 | Read | Real blobs from the source, discarded | The source ceiling and its knee |
 | Write | Real bytes into an upload session that is then **cancelled** | The target ceiling and its knee |
 
-The write probe is the part worth understanding. Distribution v2 separates the upload *session* from the *commit*: `POST …/blobs/uploads/` opens one, `PATCH` streams into it, and a blob joins the repository only when a `PUT` names its digest. Calibration never sends that `PUT` — it PATCHes, measures, and `DELETE`s the session. So the bytes cross the same proxy, TLS, front end and storage backend a transfer's bytes cross, and the repository ends the run exactly as it started. The alternative — push a real blob and delete it afterwards — needs a delete permission nothing else here uses, is visible between the two steps, and leaves an artefact behind if the process dies mid-run.
+The write probe is the part worth understanding. Distribution v2 separates the upload *session* from the *commit*: `POST …/blobs/uploads/` opens one, `PATCH` streams into it, and a blob joins the repository only when a `PUT` names its digest. Calibration never sends that `PUT` - it PATCHes, measures, and `DELETE`s the session. So the bytes cross the same proxy, TLS, front end and storage backend a transfer's bytes cross, and the repository ends the run exactly as it started. The alternative - push a real blob and delete it afterwards - needs a delete permission nothing else here uses, is visible between the two steps, and leaves an artefact behind if the process dies mid-run.
 
 **What the sweep does and does not honour**
 
-It overrides `maxConnections`, because that is the variable under test: sweeping to sixteen streams through a pool configured for four would measure the pool four times and call the result a plateau. It honours `requestsPerSecond`, because that is a promise to a vendor, and a calibration that broke it would report a throughput no honest configuration could reproduce. It stops early when a level improves on its predecessor by less than 10% — past that point each further level doubles the load on somebody else's registry to confirm something already known.
+It overrides `maxConnections`, because that is the variable under test: sweeping to sixteen streams through a pool configured for four would measure the pool four times and call the result a plateau. It honours `requestsPerSecond`, because that is a promise to a vendor, and a calibration that broke it would report a throughput no honest configuration could reproduce. It stops early when a level improves on its predecessor by less than 10% - past that point each further level doubles the load on somebody else's registry to confirm something already known.
 
 **Finding something to measure**
 
-The read probe needs real blobs, and reaching them means descending — as far as it takes. A bundle is an **index of indexes**: the ORB lists its components, each component is a multi-platform index, and the layers are a level below that. A search that descends once lands on a component index, finds no layers because an index *has* none, and concludes that a repository holding gigabytes contains nothing worth measuring. It descends to the same depth the transfer walk does, depth-first, and stops at the first manifest that has layers — a handful of requests rather than the whole tree.
+The read probe needs real blobs, and reaching them means descending - as far as it takes. A bundle is an **index of indexes**: the ORB lists its components, each component is a multi-platform index, and the layers are a level below that. A search that descends once lands on a component index, finds no layers because an index *has* none, and concludes that a repository holding gigabytes contains nothing worth measuring. It descends to the same depth the transfer walk does, depth-first, and stops at the first manifest that has layers - a handful of requests rather than the whole tree.
 
-Tag order matters for the same reason. Registries serve tags lexically and guarantee nothing about it, so the first tag is the oldest spelling; newest-first is the better sample. But newest-first walks straight into the signatures, which sort adjacent to the release they belong to and, for both conventions this system knows, sort *after* it — so `signature_orb_25.7` and cosign's `sha256-….sig` are pushed to the back of the queue and opened last. They are still opened: a repository holding nothing else is still measurable.
+Tag order matters for the same reason. Registries serve tags lexically and guarantee nothing about it, so the first tag is the oldest spelling; newest-first is the better sample. But newest-first walks straight into the signatures, which sort adjacent to the release they belong to and, for both conventions this system knows, sort *after* it - so `signature_orb_25.7` and cosign's `sha256-….sig` are pushed to the back of the queue and opened last. They are still opened: a repository holding nothing else is still measurable.
 
 And when nothing clears the 256 KiB the probe would like, it measures the largest blob there is and **says the sample was small**, rather than refusing. A number with a caveat beats a refusal citing a threshold the reader cannot see. Every report states how many blobs were sampled and how large the largest was, so a throughput measured over signature blobs cannot be mistaken for one measured over layers.
 
 **Setup is not throughput**
 
-Each level builds a fresh client, deliberately — a level must not inherit the previous one's warm sockets. That means its first request pays a proxy `CONNECT`, a TLS handshake, a token exchange and a blob resolve before a byte of payload moves. Against a registry 900 ms away through a corporate proxy that is five round trips, more than the whole default budget, and every level's first request was still in flight when the level ended: a complete sweep of zeroes, reported without comment.
+Each level builds a fresh client, deliberately - a level must not inherit the previous one's warm sockets. That means its first request pays a proxy `CONNECT`, a TLS handshake, a token exchange and a blob resolve before a byte of payload moves. Against a registry 900 ms away through a corporate proxy that is five round trips, more than the whole default budget, and every level's first request was still in flight when the level ended: a complete sweep of zeroes, reported without comment.
 
-So the connections and the token are established **before the clock starts** — one `HEAD` per stream on the read side, one upload session per stream on the write side — and the per-level budget follows the link rather than a constant: ten round trips, capped at three times what was asked for, since a client is waiting on a timeout derived from that number. A level that still completes nothing says so and names `--budget`, because a row of dashes with no explanation reads as a broken probe rather than as a window too short for the path.
+So the connections and the token are established **before the clock starts** - one `HEAD` per stream on the read side, one upload session per stream on the write side - and the per-level budget follows the link rather than a constant: ten round trips, capped at three times what was asked for, since a client is waiting on a timeout derived from that number. A level that still completes nothing says so and names `--budget`, because a row of dashes with no explanation reads as a broken probe rather than as a window too short for the path.
 
-The direct-route probe gets a short deadline of its own for the same reason. Where the proxy is mandatory it does not fail, it hangs — a handshake to a host the network will not route to sits until the transport's own thirty-second timeout, twice. A route that cannot handshake in ten seconds is not one this would recommend.
+The direct-route probe gets a short deadline of its own for the same reason. Where the proxy is mandatory it does not fail, it hangs - a handshake to a host the network will not route to sits until the transport's own thirty-second timeout, twice. A route that cannot handshake in ten seconds is not one this would recommend.
 
 **Which repository is measured**
 
 One, out of however many a product spans, so the choice decides whether the numbers mean anything. `transferctl` picks the repository holding the largest discovered package and shows that choice for confirmation ([13](13-cli.md) §11); the Coordinator's own fallback, for API callers and for products nothing has been discovered from, walks the candidate repositories until one yields a blob of at least 256 KiB rather than judging a source by whichever repository sorts first. Within a repository it opens the newest-looking tags first: registries serve tags lexically, so "the first tag" reliably lands on the oldest and smallest.
 
-The write probe's path is `DestinationPath(target base, source repository)` — the same join the planner uses. Probing the target's configured repository directly does not work: a base path is a prefix, not an image repository, and an upload session opened against it returns `404` from a healthy registry.
+The write probe's path is `DestinationPath(target base, source repository)` - the same join the planner uses. Probing the target's configured repository directly does not work: a base path is a prefix, not an image repository, and an upload session opened against it returns `404` from a healthy registry.
 
 **The knee, not the peak**
 
@@ -458,4 +458,4 @@ Simpler than blob jobs, and gated by waves so everything they reference already 
 
 Step 3 is the self-healing path for stale placements, and the reason the optimistic fast path in §4.1 is safe rather than merely fast.
 
-Tagging happens **last**, only after the index manifest is committed — invariant I1. Until that moment the destination holds a set of unreferenced blobs, which are harmless, invisible to consumers, and useful to the next transfer.
+Tagging happens **last**, only after the index manifest is committed - invariant I1. Until that moment the destination holds a set of unreferenced blobs, which are harmless, invisible to consumers, and useful to the next transfer.

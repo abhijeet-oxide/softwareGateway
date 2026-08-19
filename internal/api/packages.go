@@ -104,7 +104,7 @@ func (s *Server) handleListPackages(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// One row over the page size, so "is there another page" is answered
-	// without a second COUNT query — and without claiming a next page that
+	// without a second COUNT query - and without claiming a next page that
 	// turns out to be empty.
 	rows, err := s.deps.Packages.ListPackages(r.Context(), store.ListPackagesFilter{
 		ProductName:        productName,
@@ -172,8 +172,8 @@ func (s *Server) handleGetPackage(w http.ResponseWriter, r *http.Request) {
 	// Related: single-package read only.
 	//
 	// This is where a package's transfer history is answered from, rather than
-	// from a state on the package. A failure here carries the reason verbatim —
-	// including the digest of whatever a source refused — which is what makes an
+	// from a state on the package. A failure here carries the reason verbatim -
+	// including the digest of whatever a source refused - which is what makes an
 	// entitlement refusal debuggable weeks after the transfer that hit it.
 	if transfers, err := s.deps.Packages.ListTransfers(r.Context(), store.ListTransfersFilter{
 		PackageID: row.ID, Limit: 20,
@@ -222,7 +222,7 @@ func (s *Server) handleGetPackage(w http.ResponseWriter, r *http.Request) {
 // A thin wrapper over vendors.ClassifierFor, which holds the precedence rule
 // and the reason for it. It is here rather than inline at each call site so the
 // artifact listing and a transfer's content breakdown ask the same question of
-// the same layouts — they describe the same release, and a page that says
+// the same layouts - they describe the same release, and a page that says
 // 97 Helm Charts beside a page that says 260 images is not two views, it is a
 // bug with two symptoms.
 func (s *Server) artifactClassifier(productName string) vendors.Classifier {
@@ -245,8 +245,8 @@ func (s *Server) artifactClassifier(productName string) vendors.Classifier {
 // GET /api/v1/products/{product}/packages/{package}/files.
 //
 // A release's contents as FILES. What a layer is called is recorded when the
-// release is analysed — `org.opencontainers.image.title`, the publisher saying
-// "this layer is this file" — so this reads what analysis already learnt and
+// release is analysed - `org.opencontainers.image.title`, the publisher saying
+// "this layer is this file" - so this reads what analysis already learnt and
 // troubles no registry.
 //
 // A release nobody has analysed answers with an empty list and says so. That is
@@ -312,8 +312,8 @@ const maxViewableFile = 2 << 20
 // # The digest is a key, not an address
 //
 // It is looked up among the release's own named layers first, and fetched only
-// if that lookup succeeds. Anything else — an image layer, a blob of another
-// release, a digest somebody invented — is ErrNotFound, and that is both the
+// if that lookup succeeds. Anything else - an image layer, a blob of another
+// release, a digest somebody invented - is ErrNotFound, and that is both the
 // safe answer and the true one: this Coordinator holds vendor credentials, and
 // a handler that fetched what it was told to would lend them out.
 //
@@ -471,7 +471,7 @@ func (s *Server) handleListArtifacts(w http.ResponseWriter, r *http.Request) {
 // POST /api/v1/products/{product}/packages:discover.
 //
 // An AIP-136 custom method: a colon, because triggering a scan is a verb with
-// side effects rather than a resource. Idempotent and safe — it is the same
+// side effects rather than a resource. Idempotent and safe - it is the same
 // scan the loop runs, and concurrent triggers collapse into the running scan
 // rather than starting a second one.
 func (s *Server) handleDiscoverPackages(w http.ResponseWriter, r *http.Request) {
@@ -735,7 +735,7 @@ func toAPIPackage(productName string, row store.PackageRow) v1.Package {
 // GET /api/v1/products/{product}/discovery.
 //
 // What discovery is doing right now, for this product. A read, not a verb, so
-// it is safe to poll at one-second intervals while a scan runs — which is
+// it is safe to poll at one-second intervals while a scan runs - which is
 // exactly what transferctl does, because a synchronous scan against a slow
 // registry otherwise shows a blank terminal for minutes and then a timeout.
 func (s *Server) handleDiscoveryStatus(w http.ResponseWriter, r *http.Request) {
@@ -803,7 +803,7 @@ func (s *Server) handleDiscoveryStatus(w http.ResponseWriter, r *http.Request) {
 //
 // Centralised because every package endpoint needs the same three outcomes and
 // a handler that quietly picked the first match would be wrong in a way nobody
-// would report — the caller gets a real package and believes it asked for that
+// would report - the caller gets a real package and believes it asked for that
 // one.
 func (s *Server) resolvePackage(w http.ResponseWriter, r *http.Request, productName, ref string) (store.PackageRow, bool) {
 	// `?repository=` scopes the lookup, as does the `repo:tag` form of the
@@ -838,12 +838,12 @@ func (s *Server) resolvePackage(w http.ResponseWriter, r *http.Request, productN
 	case errors.Is(err, store.ErrNotFound):
 		// "package not found" on its own reads as "the package is gone", when
 		// the overwhelmingly likelier cause is a reference that was never going
-		// to match — a product name typed where a tag belongs, or a version
+		// to match - a product name typed where a tag belongs, or a version
 		// without the vendor's prefix. Saying what a reference IS, and where the
 		// list is, turns three attempts into one.
 		Error(w, r, v1.CodeNotFound, fmt.Sprintf(
 			"no package of product %q matches %q. A package is identified by a TAG, "+
-				"a digest, or repository:tag — for example orb_23.8.1076, "+
+				"a digest, or repository:tag - for example orb_23.8.1076, "+
 				"sha256:ccbd…, or orbs/cfx-5000-k8s:orb_23.8.1076. "+
 				"`transferctl packages list %s` shows what there is",
 			productName, ref, productName))
@@ -863,7 +863,7 @@ const (
 
 // handlePackageCustomMethod dispatches POST /packages/{package}:<verb>.
 //
-// The router binds `{package}` to the WHOLE segment — reference and verb — and
+// The router binds `{package}` to the WHOLE segment - reference and verb - and
 // the split happens here. See the registration in router.go for why: a chi
 // partial-segment pattern splits on the first colon, and a digest reference
 // contains one, so `sha256:ccbd…:inspect` never reached the inspect handler and
@@ -872,7 +872,7 @@ const (
 // Splitting at the LAST colon is unambiguous for every reference form we
 // accept. A tag may not contain a colon; a digest contains exactly one, and it
 // is not the last when a verb follows. The repository half of a scoped
-// reference never appears in the path at all — it travels as `?repository=`,
+// reference never appears in the path at all - it travels as `?repository=`,
 // because a slash cannot survive a path segment.
 func (s *Server) handlePackageCustomMethod(w http.ResponseWriter, r *http.Request) {
 	segment := chi.URLParam(r, "package")
@@ -912,7 +912,7 @@ func (s *Server) handlePackageCustomMethod(w http.ResponseWriter, r *http.Reques
 //
 // Generous, because the work is real: two full manifest walks against remote
 // registries. Bounded, because an unbounded one is indistinguishable from a
-// hang — and this endpoint has no progress channel to say otherwise.
+// hang - and this endpoint has no progress channel to say otherwise.
 var compareDeadline = 10 * time.Minute
 
 // compareStall is how long the comparison may make NO progress before it is
@@ -930,7 +930,7 @@ var compareStall = 90 * time.Second
 // the first end; the body names the second.
 //
 // It reads no transfer record, and that is the whole point: a transfer can
-// report every job successful and leave the destination wrong — a tag that
+// report every job successful and leave the destination wrong - a tag that
 // failed to apply, content deleted afterwards, a bundle assembled by two
 // transfers of which one was stopped. Each of those was seen in practice.
 //
@@ -970,8 +970,8 @@ func (s *Server) handleComparePackage(w http.ResponseWriter, r *http.Request) {
 
 	// TWO LIMITS, AND THEY MEASURE DIFFERENT THINGS.
 	//
-	// The deadline bounds the whole comparison, generously: the work is real —
-	// two full manifest walks against remote registries — and a release with
+	// The deadline bounds the whole comparison, generously: the work is real -
+	// two full manifest walks against remote registries - and a release with
 	// thousands of components legitimately takes many minutes.
 	//
 	// The stall bound is the one that catches a comparison that is not working.
@@ -1109,7 +1109,7 @@ func (s *Server) watchForStall(
 //
 // The side channel a comparison reports through while its own request is still
 // open. 404 is a normal answer, not a failure: the comparison may have finished
-// and been evicted, or be running on another replica — a caller that gets one
+// and been evicted, or be running on another replica - a caller that gets one
 // falls back to showing that work is in progress without a position.
 func (s *Server) handleCompareProgress(w http.ResponseWriter, r *http.Request) {
 	token := chi.URLParam(r, "comparison")
@@ -1180,7 +1180,7 @@ func compareSideDTO(item *compare.Item) *v1.CompareSide {
 // Expands one package's manifest tree: fetches the artifacts discovery only
 // listed, records their blobs, and measures the transfer size.
 //
-// Discovery deliberately stops at the tag's own manifest — it answers "what is
+// Discovery deliberately stops at the tag's own manifest - it answers "what is
 // new", and the root digest immutably determines everything beneath it, so the
 // rest is recoverable whenever it is wanted (docs/design/07 §12). This is where
 // it is wanted, and it is the same walk a transfer performs, so these numbers
@@ -1217,7 +1217,7 @@ func (s *Server) handleInspectPackage(w http.ResponseWriter, r *http.Request) {
 	wait := req.Wait == nil || *req.Wait
 
 	// THE SAME CLAIM THE BACKGROUND ANALYSER TAKES. A release the analyser is
-	// already walking must not be walked twice — that is two conversations with
+	// already walking must not be walked twice - that is two conversations with
 	// the vendor's registry for one answer.
 	//
 	// Losing the race is not an error here. The caller asked for the release to
@@ -1270,7 +1270,7 @@ func (s *Server) handleInspectPackage(w http.ResponseWriter, r *http.Request) {
 	res, err := s.deps.Discovery.InspectPackage(r.Context(), s.deps.Packages, pkg, productName)
 	if s.deps.Packages != nil {
 		// context.WithoutCancel, because the common way this call fails is the
-		// caller going away — and releasing the claim is exactly what must
+		// caller going away - and releasing the claim is exactly what must
 		// still happen then. Recording the end of a walk on a cancelled context
 		// would leave the release marked as being analysed by nobody.
 		if finishErr := s.deps.Packages.FinishAnalysis(
@@ -1306,7 +1306,7 @@ func (s *Server) handleInspectPackage(w http.ResponseWriter, r *http.Request) {
 //
 // The deadline is the point. A claim released only by the staleness sweep is a
 // release that reads "Analyzing" for half an hour after the registry stopped
-// answering, and the sweep exists for processes that DIED — not as the ordinary
+// answering, and the sweep exists for processes that DIED - not as the ordinary
 // way a walk ends.
 func (s *Server) analyseInBackground(ctx context.Context, productName string, pkg store.PackageRow) {
 	ctx, cancel := context.WithTimeout(ctx, backgroundAnalysisDeadline)
@@ -1325,7 +1325,7 @@ func (s *Server) analyseInBackground(ctx context.Context, productName string, pk
 
 // backgroundAnalysisDeadline bounds a handed-off walk.
 //
-// Generous, because the work is real — a release of two hundred and sixty
+// Generous, because the work is real - a release of two hundred and sixty
 // artifacts against a slow vendor registry is minutes. Bounded, because the
 // claim is held for the whole of it.
 const backgroundAnalysisDeadline = 20 * time.Minute
@@ -1359,7 +1359,7 @@ func (s *Server) handleDiscoverAll(w http.ResponseWriter, r *http.Request) {
 		if err != nil {
 			// Reported per product rather than failing the whole call. One
 			// product's broken source must not stop the other thirty being
-			// scanned — the same rule discovery itself follows.
+			// scanned - the same rule discovery itself follows.
 			entry.Error = err.Error()
 		}
 		resp.Products = append(resp.Products, entry)

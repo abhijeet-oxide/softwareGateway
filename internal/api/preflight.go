@@ -14,7 +14,7 @@ import (
 // POST /api/v1/products:checkConnectivity and
 // POST /api/v1/products/{product}:checkConnectivity.
 //
-// An AIP-136 custom method — a verb with side effects (outbound network calls)
+// An AIP-136 custom method - a verb with side effects (outbound network calls)
 // rather than a resource.
 //
 // Deliberately NOT folded into the health check. Health answers "is the service

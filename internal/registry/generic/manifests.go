@@ -19,14 +19,14 @@ import (
 //
 // The OCI spec recommends registries reject manifests above 4 MiB. Bounding it
 // here means a hostile or broken registry cannot exhaust memory during a
-// routine scan — discovery fetches a manifest for every newly discovered tag.
+// routine scan - discovery fetches a manifest for every newly discovered tag.
 const maxManifestBytes = 8 << 20 // 8 MiB
 
 // ResolveTag returns the descriptor a tag points at, without fetching the body.
 //
 // A HEAD reading Docker-Content-Digest. Discovery calls this for EVERY tag on
-// EVERY scan, so it must stay cheap: the common case — a scan where nothing
-// changed — costs one small request per tag and transfers no manifest bodies.
+// EVERY scan, so it must stay cheap: the common case - a scan where nothing
+// changed - costs one small request per tag and transfers no manifest bodies.
 func (r *Repository) ResolveTag(ctx context.Context, tag string) (registry.Descriptor, error) {
 	if tag == "" {
 		return registry.Descriptor{}, fmt.Errorf("tag is required")
@@ -58,7 +58,7 @@ func (r *Repository) ResolveTag(ctx context.Context, tag string) (registry.Descr
 // FetchManifest returns manifest bytes VERBATIM.
 //
 // The bytes are returned exactly as received and are never re-serialized: the
-// digest — and every signature over it — is the hash of these exact bytes.
+// digest - and every signature over it - is the hash of these exact bytes.
 // Round-tripping through a struct would change whitespace or key order and
 // produce a different digest, silently breaking verification later.
 //
@@ -173,7 +173,7 @@ func retryAfter(resp *http.Response) time.Duration {
 // transportError classifies a client-side failure.
 //
 // A timeout is retryable and a DNS failure usually is not, but distinguishing
-// them reliably is not worth the fragility — an unclassified error is treated
+// them reliably is not worth the fragility - an unclassified error is treated
 // as retryable and bounded by the attempt cap, which is the safer default.
 func transportError(err error) error {
 	if err == nil {
@@ -183,7 +183,7 @@ func transportError(err error) error {
 		return err
 	}
 
-	// A failure the auth layer already classified — missing credentials, say —
+	// A failure the auth layer already classified - missing credentials, say -
 	// must keep that classification. Re-labelling it ErrUnavailable would make
 	// a terminal problem look retryable and reintroduce the backoff hang.
 	if registry.ClassOf(err) != registry.ClassUnclassified {
@@ -191,17 +191,17 @@ func transportError(err error) error {
 	}
 
 	// Both errors are wrapped, so the sentinel drives classification while the
-	// underlying cause stays reachable through errors.As — a caller wanting the
+	// underlying cause stays reachable through errors.As - a caller wanting the
 	// *net.OpError for diagnostics can still get at it.
 	var netErr net.Error
 	if errors.As(err, &netErr) && netErr.Timeout() {
-		// The knob is named in the message because the stdlib's wording —
-		// "net/http: timeout awaiting response headers" — describes the symptom
+		// The knob is named in the message because the stdlib's wording -
+		// "net/http: timeout awaiting response headers" - describes the symptom
 		// and not one thing you can do about it. A registry that is slow rather
 		// than broken is a configuration problem, and the configuration is
 		// per repository.
 		return fmt.Errorf("%w: %w (no response headers within the deadline; if this "+
-			"registry is simply slow, raise network.timeouts.responseHeader — it "+
+			"registry is simply slow, raise network.timeouts.responseHeader - it "+
 			"defaults to %s)", registry.ErrTimeout, err, transport.DefaultResponseHeaderTimeout)
 	}
 	return fmt.Errorf("%w: %w", registry.ErrUnavailable, err)

@@ -13,7 +13,7 @@ import (
 // `POST /packages/{package}:inspect` was registered as a chi partial-segment
 // pattern, and chi splits such a segment at the FIRST occurrence of the
 // delimiter. For a tag that is the colon before `inspect` and everything works.
-// For a DIGEST — `sha256:ccbd…:inspect` — the first colon is inside the
+// For a DIGEST - `sha256:ccbd…:inspect` - the first colon is inside the
 // reference, so `{package}` bound to `sha256`, the literal `:inspect` failed to
 // match `:ccbd…`, and the request fell through to the GET-only route. What came
 // back was:

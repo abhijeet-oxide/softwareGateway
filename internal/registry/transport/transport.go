@@ -11,7 +11,7 @@
 // The RATE LIMITER IS OUTERMOST, and that ordering is the point: it means
 // retries are rate-limited too. With retry outside the limiter, a burst of
 // failures against a struggling registry would bypass the very limit meant to
-// protect it — which is precisely how a transient error becomes an outage.
+// protect it - which is precisely how a transient error becomes an outage.
 //
 // Every cross-cutting concern lives here rather than in a registry
 // implementation. A vendor backend that had to re-implement rate limiting
@@ -65,7 +65,7 @@ type Config struct {
 	// hostname all stop being checked.
 	//
 	// An earlier revision of this file said this would never exist. That was
-	// too strong — a CA bundle fixes an untrusted chain and nothing else, and
+	// too strong - a CA bundle fixes an untrusted chain and nothing else, and
 	// an expired or wrong-hostname certificate on a registry being migrated is
 	// a real situation. It remains the wrong answer to most problems, and
 	// notably does NOT fix "x509: negative serial number", which fails during
@@ -124,7 +124,7 @@ type Config struct {
 	// The attempt count alone is the wrong bound. Against a server that accepts
 	// the connection and then never answers, each attempt costs the full
 	// ResponseHeaderTimeout, so the default eight attempts is four minutes for
-	// a single request — and discovery makes two per tag. This caps the
+	// a single request - and discovery makes two per tag. This caps the
 	// pathological case without shortening the schedule for the transient one
 	// retries exist for, where attempts fail fast and the budget is never
 	// reached.
@@ -151,7 +151,7 @@ const (
 // It exists because building a whole stack per repository quietly multiplied
 // every configured limit by the number of repositories being scanned. With
 // `maxConnections: 32` and sixteen repositories in flight, the process was
-// entitled to 512 concurrent connections to one host — and `requestsPerSecond:
+// entitled to 512 concurrent connections to one host - and `requestsPerSecond:
 // 50` became 800. Through a corporate proxy that is not a fast scan, it is a
 // self-inflicted denial of service, and the configuration said the opposite.
 //
@@ -191,7 +191,7 @@ func (s *Shared) Client(cfg Config) *http.Client {
 	rt = newRetryTransport(rt, cfg)
 	rt = newRateLimitTransportWith(rt, s.limiter)
 	rt = newUserAgentTransport(rt, cfg.UserAgent)
-	// Outermost, so the duration reported is the cost the CALLER paid —
+	// Outermost, so the duration reported is the cost the CALLER paid -
 	// including any wait for a rate-limit token and any retry backoff.
 	rt = newTraceTransport(rt, cfg.Logger, cfg.SlowRequest)
 
@@ -205,7 +205,7 @@ func (s *Shared) Client(cfg Config) *http.Client {
 
 // New builds a standalone client, sharing nothing.
 //
-// For one-off users — preflight probes, the catalog client — where there is no
+// For one-off users - preflight probes, the catalog client - where there is no
 // second repository to share with.
 func New(cfg Config) (*http.Client, error) {
 	shared, err := NewShared(cfg)
@@ -312,7 +312,7 @@ func tlsConfigFor(cfg Config) (*tls.Config, error) {
 // cost real time to diagnose: a transfer ran at a fraction of the available
 // bandwidth because every blob was going through a corporate proxy nobody had
 // configured here. `httpsProxy` was unset, so the configuration read as "no
-// proxy" — while HTTPS_PROXY in the worker's environment quietly supplied one.
+// proxy" - while HTTPS_PROXY in the worker's environment quietly supplied one.
 //
 // Inheriting is still the right default: it is what curl, docker, kubectl and
 // every Go program do, and a cluster-wide proxy is often the only route out.
@@ -344,7 +344,7 @@ func proxyFor(cfg Config) (func(*http.Request) (*url.URL, error), error) {
 		// Explicitly direct: not even the environment's proxy applies. A
 		// repository that asked to bypass the proxy means it, and silently
 		// honouring HTTPS_PROXY here would make the setting a no-op in exactly
-		// the deployment that needs it — one with a cluster-wide proxy.
+		// the deployment that needs it - one with a cluster-wide proxy.
 		return func(*http.Request) (*url.URL, error) { return nil, nil }, nil
 	}
 	if cfg.HTTPSProxy == "" {
@@ -380,7 +380,7 @@ func proxyFor(cfg Config) (func(*http.Request) (*url.URL, error), error) {
 
 // userAgentTransport stamps a User-Agent on every request.
 //
-// Outermost because it must apply to auth-token fetches too — a registry
+// Outermost because it must apply to auth-token fetches too - a registry
 // operator diagnosing load wants to see who is calling, including for the
 // token endpoint.
 type userAgentTransport struct {

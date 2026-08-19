@@ -26,8 +26,8 @@ import (
 //
 //   - an upload session whose Location is relative (registries vary; a client
 //     that only handles absolute URLs breaks against half of them);
-//   - a cross-repository mount answering BOTH 201 Created and — when told to
-//     decline — 202 Accepted with a real upload session, which is a normal
+//   - a cross-repository mount answering BOTH 201 Created and - when told to
+//     decline - 202 Accepted with a real upload session, which is a normal
 //     outcome and not an error;
 //   - manifest push rejecting BLOB_UNKNOWN when a referenced blob is absent,
 //     which is the backstop that catches a stale placement record;
@@ -97,7 +97,7 @@ func (r *Registry) handleUpload(w http.ResponseWriter, req *http.Request) {
 //
 // The spec's way of abandoning an upload, and the mechanism calibration relies
 // on to push real bytes at a real registry and leave nothing behind. Modelled
-// here so that the property can be ASSERTED — a test that ends with the
+// here so that the property can be ASSERTED - a test that ends with the
 // registry holding no blobs is the only proof that the probe is non-destructive.
 func (r *Registry) cancelUpload(w http.ResponseWriter, sessionID string) {
 	if _, ok := r.uploads.get(sessionID); !ok {
@@ -134,7 +134,7 @@ func (r *Registry) startUpload(w http.ResponseWriter, req *http.Request, repoPat
 // handleMount performs a cross-repository mount, or declines it.
 func (r *Registry) handleMount(w http.ResponseWriter, repoPath, dgst, fromRepo string) {
 	// A registry that declines answers 202 with an ordinary upload session. It
-	// is a NORMAL outcome — the client falls through to streaming — and treating
+	// is a NORMAL outcome - the client falls through to streaming - and treating
 	// it as an error would turn a supported-everywhere operation into a failure
 	// on every registry that happens not to implement the shortcut.
 	if r.declineMounts {
@@ -244,7 +244,7 @@ func (r *Registry) handleBlob(w http.ResponseWriter, req *http.Request) {
 	if !ok && r.globalBlobIndex && req.Method == http.MethodHead {
 		// Artifactory answers HEAD from a checksum index spanning the whole
 		// Artifactory repository, not the image path the request named. So a
-		// blob present under any path reads as present under all of them —
+		// blob present under any path reads as present under all of them -
 		// while the manifest push, which links per path, still refuses.
 		//
 		// Reproduced rather than described, because the bug it caused was
@@ -299,7 +299,7 @@ func (r *Registry) putBlob(repoPath, dgst string, content []byte) {
 //
 // The BLOB_UNKNOWN rejection is the backstop that makes the optimistic
 // placement cache safe: when our record of "this blob is already there" is
-// wrong — a registry garbage collector removed it underneath us — the registry
+// wrong - a registry garbage collector removed it underneath us - the registry
 // itself tells us, and the transfer invalidates the placement and requeues the
 // blobs. Without this the fake would accept a manifest pointing at nothing and
 // the whole recovery path would go untested.
@@ -371,7 +371,7 @@ func WithDeclinedMounts() Option {
 // This is a real deployment, not a hypothetical: a permission target granting
 // Deploy without Delete lets a transfer create every tag it has never created
 // and refuses every tag it has, so the failure appears only on the SECOND
-// transfer of a release — the run that should have been the cheapest.
+// transfer of a release - the run that should have been the cheapest.
 func WithTagOverwriteDenied() Option {
 	return func(r *Registry) { r.denyTagOverwrite = true }
 }
@@ -452,7 +452,7 @@ func (r *Registry) RemoveBlob(repoPath, dgst string) {
 // pointed at it dangling.
 //
 // The state a destination is left in when content is deleted by hand, or
-// garbage-collected out from under a tag — and the one a comparison has to
+// garbage-collected out from under a tag - and the one a comparison has to
 // notice. A test cannot assert that without being able to cause it.
 func (r *Registry) RemoveManifest(repoPath, dgst string) {
 	r.mu.Lock()
@@ -571,11 +571,11 @@ func (r *Registry) missingReferences(repoPath string, raw []byte) string {
 // The PATH lives in an annotation rather than anywhere structural, which is
 // how OCI carries a directory layout: `org.opencontainers.image.title` is the
 // reserved key, and a vendor's `CONFIGURATION/example_parameters.json` is just
-// its value. Nothing about it is special to a registry — which is precisely
+// its value. Nothing about it is special to a registry - which is precisely
 // why a transfer preserves it by copying manifest bytes verbatim rather than
 // by understanding them.
 type AnnotatedLayer struct {
-	// Title is org.opencontainers.image.title — the path within the artifact.
+	// Title is org.opencontainers.image.title - the path within the artifact.
 	Title     string
 	Content   string
 	MediaType string
@@ -587,7 +587,7 @@ type AnnotatedLayer struct {
 // This is what NEAR's `generic_system` and `generic_custo` are, and what any
 // number of future artifact types will be. The fake needs it because a
 // transfer of one must be provable without hard-coding the vendor's shapes
-// into the test — the whole claim being that the tool does not know what an
+// into the test - the whole claim being that the tool does not know what an
 // ORB contains.
 func (r *Registry) AddArtifact(
 	repoPath, tag, artifactType string, layers ...AnnotatedLayer,

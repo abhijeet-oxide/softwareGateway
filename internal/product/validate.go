@@ -9,9 +9,9 @@ import (
 
 // Validation is hand-rolled rather than tag-driven.
 //
-// The three error classes that matter most — a non-compiling tagPattern, a
+// The three error classes that matter most - a non-compiling tagPattern, a
 // rule naming an undeclared target, and keyless verification without an
-// identity constraint — are all semantic or cross-field, and none is
+// identity constraint - are all semantic or cross-field, and none is
 // expressible as a struct tag. Since a validator library would help only with
 // the trivial field checks and would still need its messages translated into
 // the `spec.path[i].field` form, hand-rolling produces better errors and one
@@ -32,7 +32,7 @@ type Error struct {
 
 func (e Error) Error() string {
 	if e.Hint != "" {
-		return fmt.Sprintf("%s: %s — %s", e.Field, e.Message, e.Hint)
+		return fmt.Sprintf("%s: %s - %s", e.Field, e.Message, e.Hint)
 	}
 	return fmt.Sprintf("%s: %s", e.Field, e.Message)
 }
@@ -63,7 +63,7 @@ func (e Errors) ErrOrNil() error {
 
 // Validate checks a product document.
 //
-// resolver may be nil, in which case secret existence is not checked — used by
+// resolver may be nil, in which case secret existence is not checked - used by
 // `transferctl config validate` running offline in CI, where the cluster's
 // Secrets are legitimately unavailable.
 func (p *Product) Validate(resolver *SecretResolver) error {
@@ -94,7 +94,7 @@ func (p *Product) Validate(resolver *SecretResolver) error {
 
 // validateEnablement checks the relationships `enabled: false` can break.
 //
-// A DISABLED product is validated exactly like an enabled one — the point of
+// A DISABLED product is validated exactly like an enabled one - the point of
 // disabling rather than deleting is that the configuration stays correct and
 // re-enabling is safe. So these rules apply either way.
 func (p *Product) validateEnablement() Errors {
@@ -106,7 +106,7 @@ func (p *Product) validateEnablement() Errors {
 		errs = append(errs, Error{
 			"spec.sources",
 			"every source is disabled",
-			"this product would discover nothing while appearing active — " +
+			"this product would discover nothing while appearing active - " +
 				"disable the product itself with `metadata.enabled: false` instead",
 		})
 	}
@@ -121,7 +121,7 @@ func (p *Product) validateEnablement() Errors {
 	}
 
 	// A rule pointing at a disabled target is the failure that only shows up
-	// when a package matches — potentially weeks later.
+	// when a package matches - potentially weeks later.
 	enabled := map[string]bool{}
 	for _, t := range p.EnabledTargets() {
 		enabled[t.Name] = true
@@ -137,7 +137,7 @@ func (p *Product) validateEnablement() Errors {
 				errs = append(errs, Error{
 					fmt.Sprintf("spec.autoDownload.rules[%d].targets[%d]", i, j),
 					fmt.Sprintf("%q is disabled", name),
-					"re-enable the target, or point the rule somewhere else — " +
+					"re-enable the target, or point the rule somewhere else - " +
 						"otherwise this rule fails the first time a package matches it",
 				})
 			}
@@ -158,7 +158,7 @@ func validateSourceRepositories(path string, s Source) Errors {
 	// replicated until somebody edits the ConfigMap.
 	//
 	// Scoping that with discovery.repositoryFilters is strongly advised on a
-	// shared registry, but it is not an error — a registry dedicated to one
+	// shared registry, but it is not an error - a registry dedicated to one
 	// vendor needs no filter, and refusing to start would be wrong there.
 	// `transferctl products check` reports how many repositories an unfiltered
 	// source would actually adopt, which is the fact worth acting on.
@@ -173,7 +173,7 @@ func validateSourceRepositories(path string, s Source) Errors {
 		}
 	}
 
-	// A repository listed twice is harmless — DeclaredRepositories dedupes —
+	// A repository listed twice is harmless - DeclaredRepositories dedupes -
 	// but it is always a mistake worth surfacing, usually a copy-paste.
 	seen := map[string]bool{}
 	if s.Repository != "" {
@@ -200,7 +200,7 @@ func validateSourceRepositories(path string, s Source) Errors {
 //
 // Previously unchecked, which meant a typo in caBundleRef surfaced as a TLS
 // failure against the vendor at the first scan rather than as a configuration
-// error at load — a long way from the cause.
+// error at load - a long way from the cause.
 func validateNetwork(path string, n *Network, resolver *SecretResolver) Errors {
 	if n == nil {
 		return nil
@@ -239,7 +239,7 @@ func validateNetwork(path string, n *Network, resolver *SecretResolver) Errors {
 	// configuration: nothing verifies the chain, so the bundle is never
 	// consulted. Rejected rather than tolerated, because the shape it usually
 	// takes is someone adding insecureSkipVerify to debug a TLS failure, fixing
-	// the real cause with the bundle, and never taking the escape hatch out —
+	// the real cause with the bundle, and never taking the escape hatch out -
 	// leaving a product that looks like it verifies and does not.
 	//
 	// Across levels this is legitimate and allowed: a product-wide caBundleRef
@@ -262,8 +262,8 @@ func validateNetwork(path string, n *Network, resolver *SecretResolver) Errors {
 //
 // `repositories` carries a unique index on (registry_host, repository_path)
 // and a NOT NULL product_id, so one physical repository is owned by exactly
-// one declaration. Two entries naming the same registry and path — whether two
-// sources, two targets, or one of each — cannot both be stored, and reconciling
+// one declaration. Two entries naming the same registry and path - whether two
+// sources, two targets, or one of each - cannot both be stored, and reconciling
 // them would make one silently overwrite the other on every config reload.
 //
 // Catching it here turns a confusing runtime behaviour into a clear
@@ -300,7 +300,7 @@ func (p *Product) validatePhysicalRepositories() Errors {
 		if prev, dup := seen[key]; dup {
 			hint := "one physical repository may be declared once per product"
 			if prev.role == RoleSource {
-				hint = "a repository cannot be both a source and a target — " +
+				hint = "a repository cannot be both a source and a target - " +
 					"replication would read from and write to the same place"
 			}
 			errs = append(errs, Error{
@@ -316,7 +316,7 @@ func (p *Product) validatePhysicalRepositories() Errors {
 	return errs
 }
 
-// physicalKey identifies a repository by registry host and path — the same
+// physicalKey identifies a repository by registry host and path - the same
 // identity the repositories_physical_idx unique index uses.
 func physicalKey(registry, repository string) string {
 	return strings.ToLower(registry) + "/" + strings.Trim(repository, "/")
@@ -353,8 +353,8 @@ func (p *Product) validateSources(resolver *SecretResolver) Errors {
 		path := fmt.Sprintf("spec.sources[%d]", i)
 		// A source may name one repository, several, or none at all when it
 		// enumerates them from the catalog. validateRepoCommon checks the
-		// single-repository field, so pass the first declared one — or "" when
-		// discovery supplies them — and check the rest separately.
+		// single-repository field, so pass the first declared one - or "" when
+		// discovery supplies them - and check the rest separately.
 		declared := s.DeclaredRepositories()
 		primary := ""
 		if len(declared) > 0 {
@@ -406,7 +406,7 @@ func (p *Product) validateSources(resolver *SecretResolver) Errors {
 // validateVendor rejects a source that names its vendor twice, differently.
 //
 // `vendor` supersedes `signatures.layout` and they are the same setting, so
-// both present and agreeing is harmless — a document mid-migration. Both
+// both present and agreeing is harmless - a document mid-migration. Both
 // present and DISAGREEING has no correct reading, and picking one silently
 // would mean the operator's other spelling does nothing while looking as though
 // it does.
@@ -431,7 +431,7 @@ func validateVendor(path string, s Source) Errors {
 //
 // An environment naming no target is rejected HERE rather than at promote
 // time, because the failure is a configuration one and the person who can fix
-// it is the person editing this file — not the operator who runs `promote` six
+// it is the person editing this file - not the operator who runs `promote` six
 // weeks later and gets told their product has no lab.
 func (p *Product) validatePromotion() Errors {
 	if p.Spec.Promotion == nil {
@@ -490,8 +490,8 @@ func (p *Product) validateTargets(resolver *SecretResolver) Errors {
 		// A bundle is not one artifact: an ORB's images, charts and generic
 		// artifacts each carry their own repository path, and the destination
 		// reproduces that structure rather than flattening it. The target's
-		// `repository` is therefore a PREFIX to nest that structure under —
-		// useful for keeping two vendors apart in one registry — and omitting
+		// `repository` is therefore a PREFIX to nest that structure under -
+		// useful for keeping two vendors apart in one registry - and omitting
 		// it mirrors the source paths at the destination's root, so a consumer
 		// changes the hostname and nothing else.
 		errs = append(errs, validateRepoCommon(path, t.Name, t.Registry, t.Repository,
@@ -557,7 +557,7 @@ func (p *Product) validateVerification(resolver *SecretResolver) Errors {
 
 // validateCosign checks a per-repository verification override.
 //
-// The same rules as the product's, at a different path — extracted rather than
+// The same rules as the product's, at a different path - extracted rather than
 // duplicated, because the keyless-identity check below is the one that stops a
 // trust configuration that looks secure and is not, and two copies of it would
 // eventually differ.
@@ -604,7 +604,7 @@ func validateVerificationAt(path string, v Verification, resolver *SecretResolve
 			errs = append(errs, Error{
 				path + ".cosign.keyless.certificateIdentity",
 				"required in keyless mode",
-				"without it, any valid Sigstore signature would be accepted — it would prove someone signed the artifact, not that the vendor did",
+				"without it, any valid Sigstore signature would be accepted - it would prove someone signed the artifact, not that the vendor did",
 			})
 		}
 		if v.Cosign.Keyless.CertificateOidcIssuer == "" {
@@ -839,7 +839,7 @@ func validateConcurrency(path string, c Concurrency, r LegacyRateLimits, scan Le
 		errs = append(errs, Error{
 			path + ".rateLimits",
 			"is ignored because concurrency.perRegistry is set",
-			"delete the superseded block — leaving it in place makes the document " +
+			"delete the superseded block - leaving it in place makes the document " +
 				"claim a limit that is not in force",
 		})
 	}
@@ -884,7 +884,7 @@ func validateSecretRef(path string, ref *SecretRef, resolver *SecretResolver) Er
 // in showing it next to the pattern.
 func invalidRegexpMessage(pattern string, err error) string {
 	msg := err.Error()
-	// regexp errors read "error parsing regexp: missing closing ): `...`" —
+	// regexp errors read "error parsing regexp: missing closing ): `...`" -
 	// strip the framing so the message is not doubled up with the pattern.
 	if i := strings.Index(msg, ": "); i >= 0 {
 		if rest := msg[i+2:]; rest != "" {
@@ -894,7 +894,7 @@ func invalidRegexpMessage(pattern string, err error) string {
 			msg = rest
 		}
 	}
-	return fmt.Sprintf("invalid regexp %q — %s", pattern, msg)
+	return fmt.Sprintf("invalid regexp %q - %s", pattern, msg)
 }
 
 // AsErrors extracts the structured errors from a Validate result.

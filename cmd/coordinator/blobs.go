@@ -19,7 +19,7 @@ import (
 //
 // It answers for exactly one thing and takes no digest it was not given
 // alongside the package the digest belongs to. THE CALLER HAS ALREADY
-// ESTABLISHED THAT — see store.FileInPackage — and this deliberately cannot
+// ESTABLISHED THAT - see store.FileInPackage - and this deliberately cannot
 // re-open that question, which is what keeps the endpoint from being a proxy
 // for arbitrary blobs on a credentialed connection.
 type blobsImpl struct {
@@ -30,7 +30,7 @@ type blobsImpl struct {
 //
 // The SOURCE, never a target. What a target holds is a question a comparison
 // asks; what the vendor published is what a reader opening a file means, and
-// they are the same bytes exactly when nothing has gone wrong — which is not
+// they are the same bytes exactly when nothing has gone wrong - which is not
 // something to assume while showing somebody a file.
 func (b blobsImpl) ReadBlob(
 	ctx context.Context, productName string, pkg store.PackageRow, digest string,

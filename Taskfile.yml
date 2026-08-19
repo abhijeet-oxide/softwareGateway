@@ -3,7 +3,7 @@
 # Replaces the Makefile. Two reasons, both practical rather than fashionable:
 #
 #   1. It runs on Windows. The Makefile needed bash and `find`, so PowerShell
-#      and cmd could not use it at all — a Windows developer had to install Git
+#      and cmd could not use it at all - a Windows developer had to install Git
 #      Bash or WSL before running a single command. Task ships its own shell
 #      interpreter (mvdan/sh), so every task below behaves identically on
 #      Linux, macOS and Windows.
@@ -26,7 +26,7 @@ vars:
   # The executable suffix, resolved against the TARGET platform.
   #
   # Task's built-in {{exeExt}} keys off the RUNTIME OS, so `GOOS=windows task
-  # build` on Linux would produce an extensionless binary — silently
+  # build` on Linux would produce an extensionless binary - silently
   # reintroducing the exact bug this replaced. GOOS wins when set; otherwise
   # fall back to the host.
   TARGET_OS: '{{default OS (env "GOOS")}}'
@@ -44,8 +44,8 @@ vars:
 
   # DATE uses a TEMPLATE FUNCTION, not `date -u`.
   #
-  # There is no `date` executable on Windows — PowerShell's `date` is a
-  # Get-Date alias, not a binary — so shelling out failed the whole Taskfile
+  # There is no `date` executable on Windows - PowerShell's `date` is a
+  # Get-Date alias, not a binary - so shelling out failed the whole Taskfile
   # before any task could run:
   #
   #   task: Command "date -u +%Y-%m-%dT%H:%M:%SZ" failed: exit status 127
@@ -61,7 +61,7 @@ vars:
 
 # CGO_ENABLED is deliberately NOT set globally.
 #
-# Shipped binaries are built with CGO_ENABLED=0 — SQLite is modernc.org/sqlite,
+# Shipped binaries are built with CGO_ENABLED=0 - SQLite is modernc.org/sqlite,
 # a pure-Go translation, which is what makes a static binary and a scratch
 # container image possible. But `go test -race` REQUIRES cgo, so a global
 # CGO_ENABLED=0 silently breaks the entire test suite:
@@ -93,7 +93,7 @@ tasks:
     # sources/generates give Task the same up-to-date checking make had, so a
     # no-op rebuild stays free. The explicit list matters: without it the
     # binary would be considered current forever and you would be testing a
-    # stale build — a bug this repository has already had once.
+    # stale build - a bug this repository has already had once.
     sources:
       - 'cmd/{{.BIN}}/**/*.go'
       - 'internal/**/*.go'
@@ -128,7 +128,7 @@ tasks:
   clean:
     desc: Remove build output and the local database
     # Task interprets shell SYNTAX itself, but an external command still has to
-    # exist on PATH — and `rm` does not, in PowerShell or cmd. Hence the split.
+    # exist on PATH - and `rm` does not, in PowerShell or cmd. Hence the split.
     cmds:
       - cmd: rm -rf bin dist coverage.out dev/swgw.db dev/swgw.db-shm dev/swgw.db-wal
         platforms: [linux, darwin]
@@ -144,7 +144,7 @@ tasks:
     desc: Run unit tests with the race detector (no Docker required)
     # NOTE: unit tests MUST NOT require Docker. They run against SQLite and an
     # in-process OCI registry, because a suite that needs containers is a suite
-    # developers run less often — and the difference compounds.
+    # developers run less often - and the difference compounds.
     cmds:
       - go test -race ./...
 
@@ -195,7 +195,7 @@ tasks:
   # ------------------------------------------------------------------- lint --
 
   lint:
-    desc: Run golangci-lint (requires v2 — a v1 binary rejects the v2 config)
+    desc: Run golangci-lint (requires v2 - a v1 binary rejects the v2 config)
     cmds:
       - golangci-lint run
 
@@ -221,7 +221,7 @@ tasks:
       - go mod verify
 
   check:
-    desc: Everything CI runs — fmt, vet, lint, test
+    desc: Everything CI runs - fmt, vet, lint, test
     cmds:
       - task: fmt
       - task: vet
@@ -244,7 +244,7 @@ tasks:
       - go mod tidy
       - |
         git diff --exit-code go.mod go.sum || {
-          echo "go.mod/go.sum are not tidy — run 'task tidy'"
+          echo "go.mod/go.sum are not tidy - run 'task tidy'"
           exit 1
         }
 
@@ -302,7 +302,7 @@ tasks:
     # deliberately invalid file sitting next to it is a trap. The three error
     # classes below are the ones from docs/design/13-cli.md section 9, and each
     # also has a unit test in internal/product/validate_test.go asserting its
-    # exact field path — this task checks that the CLI surfaces them.
+    # exact field path - this task checks that the CLI surfaces them.
     cmds:
       - |
         DIR="$(mktemp -d)"
@@ -328,7 +328,7 @@ tasks:
             enabled: true
             rules:
               - name: ga-releases
-                # (1) unbalanced parenthesis — will not compile
+                # (1) unbalanced parenthesis - will not compile
                 tagPattern: '^v(\d+\.\d+'
                 # (2) 'prod' is never declared under spec.targets
                 targets: [prod]
@@ -347,7 +347,7 @@ tasks:
         YAML
         OUT="$(go run ./cmd/transferctl config validate "$DIR" 2>&1)" && {
           echo "$OUT"
-          echo "the broken fixture was ACCEPTED — the validator is not working"
+          echo "the broken fixture was ACCEPTED - the validator is not working"
           exit 1
         }
         echo "$OUT"
@@ -369,7 +369,7 @@ tasks:
     silent: true
     cmds:
       - echo "Migrations are applied automatically at Coordinator startup."
-      - echo "There is no separate migrate step by design — a binary and a schema"
+      - echo "There is no separate migrate step by design - a binary and a schema"
       - echo "that can disagree is a class of outage worth designing out."
 
   # ----------------------------------------------------------------- docker --

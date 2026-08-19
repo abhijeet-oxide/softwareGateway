@@ -1,10 +1,10 @@
 import { useEffect, useMemo, useState } from 'react'
 import type { CSSProperties, ReactNode } from 'react'
 import {
-  App, Button, Card, Checkbox, Col, Empty, Popover, Progress, Row, Segmented, Select,
-  Space, Statistic, Table, Tag, Tooltip, Typography,
+  App, Button, Card, Col, Empty, Popover, Progress, Row, Segmented, Select,
+  Space, Statistic, Table, Tag, Tooltip, Tree, Typography,
 } from 'antd'
-import { SwapOutlined } from '@ant-design/icons'
+import { FolderOutlined, SwapOutlined } from '@ant-design/icons'
 import { useSearchParams } from 'react-router-dom'
 import {
   useCompare, useCompareProgress, usePackages, useProduct, useProducts,
@@ -17,7 +17,8 @@ import { WorkingBar } from '../components/progress'
 import { ARTIFACT_ICONS, Icon } from '../components/icons'
 import { mono, semantic } from '../theme'
 import type {
-  CompareProgressSide, CompareResponse, CompareRow, CompareVerdict, Package, Repository,
+  CompareFile, CompareProgressSide, CompareResponse, CompareRow, CompareVerdict, Package,
+  Repository,
 } from '../api/types'
 
 /**
@@ -171,15 +172,13 @@ function releaseLabelRender(releases: Package[], value: unknown, fallback: React
  * analysed before this started.
  */
 function ComparisonProgress({
-  token, elapsedSeconds, base, against, withFiles,
+  token, elapsedSeconds, base, against,
 }: {
   token: string | undefined
   elapsedSeconds: number
   /** The releases the reader picked, in order. Absent in locations mode. */
   base?: Package
   against?: Package
-  /** Whether layer archives are being downloaded — the expensive option. */
-  withFiles: boolean
 }) {
   const progress = useCompareProgress(token)
   const sides = progress.data?.sides ?? []
@@ -232,7 +231,7 @@ function ComparisonProgress({
             {parallel} requests in parallel per side
           </Typography.Text>
         )}
-        <CacheNote base={base} against={against} withFiles={withFiles} />
+        <CacheNote base={base} against={against} />
       </Space>
     </Space>
   )
@@ -292,17 +291,8 @@ function SideProgress({
  * hundreds fewer round trips, and one that has not is being analysed right now
  * for everything that asks next.
  *
- * The file option is called out separately because it is the honest exception:
- * layer archives are NOT recorded here, so opening them is a live download
- * every time, however analysed the release is.
  */
-function CacheNote({
-  base, against, withFiles,
-}: {
-  base?: Package
-  against?: Package
-  withFiles: boolean
-}) {
+function CacheNote({ base, against }: { base?: Package; against?: Package }) {
   const picked = [base, against].filter((p): p is Package => Boolean(p))
   if (picked.length === 0) return null
 
@@ -317,7 +307,6 @@ function CacheNote({
   return (
     <Typography.Text type="secondary" style={{ fontSize: 12 }}>
       {note}
-      {withFiles && ' · file contents are downloaded live, which no cache covers'}
     </Typography.Text>
   )
 }
@@ -520,6 +509,247 @@ function ComparisonReport({ report }: { report: CompareResponse }) {
           ]}
         />
       </Card>
+
+      <FileDifferences rows={content} />
+    </Space>
+  )
+}
+
+/**
+ * WHICH FILES changed, as a directory tree.
+ *
+ * # Why this is the answer and the component table is not
+ *
+ * "cfx-5000-product/k8s changed" says a bundle of four hundred configuration
+ * files is not byte-identical, which anybody could have guessed from the
+ * version number. The question is which of the four hundred, and it is
+ * answerable exactly: an OCI artifact names one file per layer and states its
+ * content digest, so the two manifests already hold it.
+ *
+ * # Why a tree and not a list
+ *
+ * The paths are hierarchical because the publisher wrote them that way, and a
+ * flat list of four hundred rows answers "did the network configuration change"
+ * by making somebody read all of them. The shape is the vendor's.
+ *
+ * Files from every component are merged into ONE tree, which is what makes it
+ * read like a release rather than like a table of manifests. Where two
+ * components carry the same path they are separate leaves, and the component is
+ * named on the row.
+ */
+function FileDifferences({ rows }: { rows: CompareRow[] }) {
+  const [search, setSearch] = useState('')
+  const [impact, setImpact] = useState<'all' | CompareVerdict>('all')
+
+  const files = useMemo(() => {
+    const out: FileEntry[] = []
+    for (const row of rows) {
+      for (const f of row.files ?? []) {
+        out.push({ ...f, component: row.name })
+      }
+    }
+    return out
+  }, [rows])
+
+  const counts = useMemo(() => {
+    const out: Record<string, number> = {}
+    for (const f of files) out[f.verdict] = (out[f.verdict] ?? 0) + 1
+    return out
+  }, [files])
+
+  const shown = useMemo(() => {
+    const byImpact = impact === 'all' ? files : files.filter((f) => f.verdict === impact)
+    if (!search.trim()) return byImpact
+    return byImpact.filter((f) => matches(search, f.path, f.component))
+  }, [files, impact, search])
+
+  const tree = useMemo(() => buildFileTree(shown), [shown])
+
+  if (files.length === 0) {
+    return (
+      <Card title="Files">
+        <Typography.Text type="secondary" style={{ fontSize: 13 }}>
+          Nothing here names a file. A component's files are the layers its
+          publisher titled — every configuration bundle, release note and script
+          shipped as an OCI artifact carries them — and an image layer names
+          nothing, so a comparison of images alone has no file-level account to
+          give.
+        </Typography.Text>
+      </Card>
+    )
+  }
+
+  return (
+    <Card
+      title={`Files (${formatCount(files.length)})`}
+      extra={
+        <Segmented
+          size="small"
+          value={impact}
+          onChange={(v) => setImpact(v as typeof impact)}
+          options={[
+            { value: 'all', label: 'All' },
+            { value: 'only-b', label: `Added ${counts['only-b'] ?? 0}` },
+            { value: 'only-a', label: `Removed ${counts['only-a'] ?? 0}` },
+            { value: 'changed', label: `Changed ${counts.changed ?? 0}` },
+            { value: 'same', label: `Unchanged ${counts.same ?? 0}` },
+          ]}
+        />
+      }
+    >
+      <Space direction="vertical" size={10} style={{ width: '100%' }}>
+        <SearchBar
+          value={search}
+          onChange={setSearch}
+          placeholder="Search files by path or component"
+          matched={shown.length}
+          total={files.length}
+          width={340}
+        />
+
+        {shown.length === 0 ? (
+          <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="No file matches this filter" />
+        ) : (
+          <Tree
+            treeData={tree}
+            showLine={{ showLeafIcon: false }}
+            // Open where the reader can take it in, collapsed where they cannot:
+            // a release that rewrote four hundred files should not render four
+            // hundred rows before anybody has asked for one.
+            defaultExpandAll={shown.length <= 80}
+            selectable={false}
+            style={{ maxHeight: 520, overflow: 'auto' }}
+          />
+        )}
+      </Space>
+    </Card>
+  )
+}
+
+/** One file, and which component it came from. */
+interface FileEntry extends CompareFile {
+  component: string
+}
+
+interface FileNode {
+  key: string
+  title: ReactNode
+  children?: FileNode[]
+}
+
+/**
+ * Paths into a tree, directories before files and both alphabetical.
+ *
+ * A directory says how many files under it DIFFER, which is the number that
+ * decides whether it is worth opening.
+ */
+function buildFileTree(files: FileEntry[]): FileNode[] {
+  interface Dir {
+    dirs: Map<string, Dir>
+    files: { entry: FileEntry; name: string }[]
+    differing: number
+  }
+  const root: Dir = { dirs: new Map(), files: [], differing: 0 }
+
+  for (const entry of files) {
+    const parts = entry.path.split('/').filter(Boolean)
+    const name = parts.pop() ?? entry.path
+    const differs = entry.verdict !== 'same' ? 1 : 0
+
+    let node = root
+    node.differing += differs
+    for (const part of parts) {
+      let next = node.dirs.get(part)
+      if (!next) {
+        next = { dirs: new Map(), files: [], differing: 0 }
+        node.dirs.set(part, next)
+      }
+      node = next
+      node.differing += differs
+    }
+    node.files.push({ entry, name })
+  }
+
+  const render = (dir: Dir, prefix: string): FileNode[] => {
+    const out: FileNode[] = []
+    for (const [name, child] of [...dir.dirs.entries()].sort((a, b) => a[0].localeCompare(b[0]))) {
+      out.push({
+        key: `${prefix}/${name}`,
+        title: (
+          <Space size={6}>
+            <FolderOutlined style={{ color: '#98A2B3' }} />
+            <Typography.Text style={{ fontSize: 13 }}>{name}</Typography.Text>
+            {child.differing > 0 && (
+              <Typography.Text type="secondary" style={{ fontSize: 11 }}>
+                {child.differing} changed
+              </Typography.Text>
+            )}
+          </Space>
+        ),
+        children: render(child, `${prefix}/${name}`),
+      })
+    }
+    for (const leaf of [...dir.files].sort((a, b) => a.name.localeCompare(b.name))) {
+      out.push({
+        key: `${prefix}/${leaf.name}-${leaf.entry.component}-${leaf.entry.digestA ?? ''}${leaf.entry.digestB ?? ''}`,
+        title: <FileRow entry={leaf.entry} name={leaf.name} />,
+      })
+    }
+    return out
+  }
+
+  return render(root, '')
+}
+
+/** One file: what happened to it, what it weighs, and what it hashes to. */
+function FileRow({ entry, name }: { entry: FileEntry; name: string }) {
+  const meta = VERDICT[entry.verdict]
+  const before = bytes(entry.sizeA)
+  const after = bytes(entry.sizeB)
+
+  return (
+    <Space size={8} style={{ flexWrap: 'wrap' }}>
+      <Icon as={ARTIFACT_ICONS.Files} size={13} title="File" />
+      <Typography.Text
+        style={{
+          fontSize: 13,
+          // Struck through where it is gone. A removed file read identically
+          // to a present one with a tag beside it, and the tag is the part
+          // somebody scanning a list of two hundred does not read.
+          textDecoration: entry.verdict === 'only-a' ? 'line-through' : undefined,
+        }}
+      >
+        {name}
+      </Typography.Text>
+
+      {entry.verdict !== 'same' && (
+        <Tag color={meta?.colour} style={{ marginInlineEnd: 0 }}>{meta?.label}</Tag>
+      )}
+
+      <Typography.Text type="secondary" style={{ fontSize: 11 }}>
+        {entry.verdict === 'changed' && before !== null && after !== null && before !== after
+          ? `${formatBytes(before)} → ${formatBytes(after)}`
+          : formatBytes(after ?? before)}
+      </Typography.Text>
+
+      {/*
+        The digests, on hover. They are the proof — two files with the same
+        digest ARE the same file — and they are also forty characters that
+        would bury the name they belong to.
+      */}
+      <Tooltip
+        title={
+          <Space direction="vertical" size={2}>
+            <span style={{ fontSize: 11 }}>{entry.component}</span>
+            {entry.digestA && <span style={{ fontSize: 11 }}>before {entry.digestA}</span>}
+            {entry.digestB && <span style={{ fontSize: 11 }}>after&nbsp; {entry.digestB}</span>}
+          </Space>
+        }
+      >
+        <Typography.Text type="secondary" style={{ fontFamily: mono, fontSize: 10 }}>
+          {(entry.digestB || entry.digestA || '').slice(7, 19)}
+        </Typography.Text>
+      </Tooltip>
     </Space>
   )
 }
@@ -735,7 +965,6 @@ export default function Compare() {
   const [fromEndpoint, setFromEndpoint] = useState<string>()
   const [toEndpoint, setToEndpoint] = useState<string>()
   const [sourceOverride, setSourceOverride] = useState<string>()
-  const [withFiles, setWithFiles] = useState(false)
   // Collapsed once there is a report. The form is scaffolding for the answer:
   // leaving four selectors above it pushes the thing somebody waited minutes
   // for below the fold, and every one of those selectors is now describing a
@@ -830,7 +1059,6 @@ export default function Compare() {
           // layer archives to name the files inside them means downloading
           // them; on a release of a few hundred components that is the whole
           // cost of the request. Asked for explicitly, below.
-          fileBudgetBytes: withFiles ? 64 * 1024 * 1024 : -1,
           progressToken,
         },
       })
@@ -898,9 +1126,6 @@ export default function Compare() {
               <Typography.Text strong style={{ fontFamily: mono, fontSize: 13 }}>
                 {report.b.label}
               </Typography.Text>
-              {!withFiles && (
-                <Tag style={{ marginInlineStart: 8 }}>components only</Tag>
-              )}
             </Space>
             <Button onClick={() => setSettled(false)}>Change selection</Button>
           </Space>
@@ -1024,24 +1249,12 @@ export default function Compare() {
             </Col>
           </Row>
 
-          <Space size={16} wrap>
-            <Checkbox checked={withFiles} onChange={(e) => setWithFiles(e.target.checked)}>
-              <Space size={6}>
-                Also compare file contents
-                <Tooltip title="Opens each side's layer archives to name the files that differ, rather than reporting that a layer changed. It downloads those archives, so it is much slower — and on a large release it is most of the time the comparison takes.">
-                  <Typography.Text type="secondary" style={{ fontSize: 12 }}>(slower)</Typography.Text>
-                </Tooltip>
-              </Space>
-            </Checkbox>
-          </Space>
-
           {compareRunning && (
             <ComparisonProgress
               token={token}
               elapsedSeconds={elapsed}
               base={releases.find((r) => refOf(r) === left)}
               against={releases.find((r) => refOf(r) === right)}
-              withFiles={withFiles}
             />
           )}
 

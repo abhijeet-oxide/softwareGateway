@@ -18,7 +18,9 @@ import { bytes, formatBytes, formatCount, formatDuration } from '../domain/forma
 import { NA, Value } from '../components/value'
 import { AnalyzeIcon, ARTIFACT_ICONS, Icon } from '../components/icons'
 import { WorkingBar } from '../components/progress'
-import { RepoLink, StatusBadge, TimeAgo, VerificationBadge } from '../components/chips'
+import {
+  AnalysisTag, RepoLink, StatusBadge, TimeAgo, VerificationBadge,
+} from '../components/chips'
 import {
   EmptyStateCard, ErrorState, PageHeader, ReleaseTimeline, SearchBar,
 } from '../components/layout'
@@ -67,9 +69,11 @@ import type {
  * identical if all you do is refresh the page.
  */
 function MeasurePanel({
-  analysed, artifactCount, inspect, disabled,
+  analysed, analysing, artifactCount, inspect, disabled,
 }: {
   analysed: boolean
+  /** Somebody else is already walking it — discovery, or another reader. */
+  analysing?: boolean
   artifactCount?: number
   inspect: UseMutationResult<InspectPackageResponse, Error, void, unknown>
   disabled: boolean
@@ -172,6 +176,30 @@ function MeasurePanel({
   }
 
   if (analysed) return null
+
+  /*
+   * SOMEBODY IS ALREADY DOING IT.
+   *
+   * Discovery walks recently published releases on its own, and a second walk
+   * of the same release is a second conversation with the vendor's registry
+   * for an answer already on its way. The claim is held in the database, so the
+   * server would refuse this anyway — offering it and then refusing it is a
+   * worse way to say the same thing.
+   */
+  if (analysing) {
+    return (
+      <div style={{ marginTop: 12 }}>
+        <WorkingBar
+          label="Analyzing this release"
+          detail={
+            'Reading the manifest tree from the vendor registry. This was started '
+            + 'automatically because the release is new; its contents appear here when '
+            + 'the walk finishes.'
+          }
+        />
+      </div>
+    )
+  }
 
   return (
     <Space direction="vertical" size={4} style={{ marginTop: 12 }}>
@@ -589,6 +617,10 @@ export default function PackageDetail() {
   // not known, and FILES cannot be counted at all: files are layers inside
   // those children rather than children of the index.
   const analysed = Boolean(p?.expandedAt)
+  // Somebody is walking it RIGHT NOW — discovery's background analyser, or
+  // another person. What the page offers has to say so, or it invites a second
+  // walk of the same release against the same registry.
+  const analysing = p?.analysisState === 'analyzing'
   const status = p ? deriveStatus(p, prod) : undefined
   const live = (p?.transfers ?? []).find((t) => isLive(t.state))
 
@@ -626,6 +658,7 @@ export default function PackageDetail() {
           p && (
             <Space>
               <StatusBadge status={status!} />
+              <AnalysisTag pkg={p} />
               <VerificationBadge state={verification(p)} />
             </Space>
           )
@@ -738,6 +771,7 @@ export default function PackageDetail() {
 
               <MeasurePanel
                 analysed={analysed}
+                analysing={analysing}
                 artifactCount={p?.artifactCount}
                 inspect={inspect}
                 disabled={!mayOperate || !p}
@@ -785,7 +819,7 @@ export default function PackageDetail() {
                             </Typography.Title>
                           ) : (
                             <div style={{ margin: '2px 0' }}>
-                              <NA reason="Files are layers inside this release's manifests. They are only listed once the release has been analysed." />
+                              <NA />
                             </div>
                           )}
 
@@ -793,9 +827,29 @@ export default function PackageDetail() {
                             {sized ? (
                               <Value>{formatBytes(groups[kind].bytes || null)}</Value>
                             ) : (
-                              <NA reason="The size under each artifact is only known once the manifest tree has been walked. Analyse the package to establish it." />
+                              <NA />
                             )}
                           </Typography.Text>
+
+                          {/*
+                            ONE SENTENCE INSTEAD OF THREE TOOLTIPS. Both lines
+                            above read `N/A` before the walk, each with its own
+                            explanation on hover — which is a fact hidden behind
+                            a gesture nobody makes on a tile that looks broken.
+                            What is missing and what to do about it are the same
+                            answer, and it is short.
+                          */}
+                          {(!countable || !sized) && (
+                            <Typography.Text
+                              type="secondary"
+                              italic
+                              style={{ fontSize: 11, lineHeight: '14px' }}
+                            >
+                              {analysing
+                                ? 'analyzing this release now'
+                                : 'analyze the package to view details'}
+                            </Typography.Text>
+                          )}
                         </Space>
                       </Card>
                     </Col>
@@ -837,6 +891,7 @@ export default function PackageDetail() {
                       action={
                         <MeasurePanel
                           analysed={analysed}
+                          analysing={analysing}
                           artifactCount={p?.artifactCount}
                           inspect={inspect}
                           disabled={!mayOperate || !p}

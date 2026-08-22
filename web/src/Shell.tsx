@@ -65,7 +65,7 @@ export function Shell({ children }: { children: ReactNode }) {
     .sort((a, b) => b.length - a.length)[0] ?? '/'
 
   return (
-    <Layout style={{ minHeight: '100vh' }}>
+    <Layout style={{ height: '100dvh', overflow: 'hidden' }}>
       <Sider width={216} style={{ background: palette.sidebar }}>
         {/*
           The name, and the mark a deployment sets beside it. Both come from
@@ -110,7 +110,7 @@ export function Shell({ children }: { children: ReactNode }) {
         </div>
       </Sider>
 
-      <Layout>
+      <Layout style={{ minWidth: 0, overflow: 'hidden' }}>
         <Header
           style={{
             background: palette.topBar, borderBottom: `1px solid ${palette.topBarBorder}`,
@@ -131,7 +131,7 @@ export function Shell({ children }: { children: ReactNode }) {
           </Space>
         </Header>
 
-        <Content style={{ padding: 24, maxWidth: '100%', overflowX: 'hidden' }}>
+        <Content style={{ flex: 1, minHeight: 0, padding: 24, maxWidth: '100%', overflow: 'auto' }}>
           {children}
         </Content>
       </Layout>

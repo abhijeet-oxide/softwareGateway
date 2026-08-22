@@ -313,7 +313,7 @@ function VulnerabilityTable({ rows, state }: { rows: FlatFinding[]; state: Packa
   return (
     <Table<FlatFinding>
       size="small"
-      rowKey={(r, i) => `${r.cve ?? r.id}-${r.component.id}-${r.artifactName}-${i}`}
+      rowKey={(r) => `${r.cve ?? r.id}-${r.component.id}-${r.artifactName}`}
       dataSource={rows}
       scroll={{ x: 'max-content' }}
       pagination={{ pageSize: 25, showSizeChanger: true, size: 'small' }}

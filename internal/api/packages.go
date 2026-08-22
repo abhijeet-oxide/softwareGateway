@@ -400,6 +400,77 @@ func (s *Server) handleGetPackageFileContent(w http.ResponseWriter, r *http.Requ
 	WriteJSON(w, r, http.StatusOK, out)
 }
 
+// handleDownloadPackageFile serves
+// GET /api/v1/products/{product}/packages/{package}/files/download?digest=…
+//
+// A save, not a look. It shares handleGetPackageFileContent's lookup - a
+// digest is served only if it is already recorded as a named layer of this
+// release - but streams the blob straight through rather than reading it into
+// memory as JSON, so neither maxViewableFile nor the UTF-8 check apply: this
+// is the endpoint for the file that IS too large, or IS an archive, to look at.
+func (s *Server) handleDownloadPackageFile(w http.ResponseWriter, r *http.Request) {
+	productName := chi.URLParam(r, "product")
+	if !s.productExists(w, r, productName) {
+		return
+	}
+	if s.deps.Packages == nil || s.deps.Blobs == nil {
+		Error(w, r, v1.CodeUnavailable, "downloading a file is not configured")
+		return
+	}
+
+	pkg, ok := s.resolvePackage(w, r, productName, chi.URLParam(r, "package"))
+	if !ok {
+		return
+	}
+
+	digest := r.URL.Query().Get("digest")
+	if digest == "" {
+		Error(w, r, v1.CodeInvalidArgument, "which file: pass the digest of one of this release's files")
+		return
+	}
+
+	file, err := s.deps.Packages.FileInPackage(r.Context(), pkg.ID, digest)
+	if errors.Is(err, store.ErrNotFound) {
+		Error(w, r, v1.CodeNotFound,
+			"this release has no named file with that digest. Only files this release "+
+				"was analysed to contain can be downloaded.")
+		return
+	}
+	if err != nil {
+		s.internal(w, r, "find the file", err)
+		return
+	}
+
+	body, err := s.deps.Blobs.ReadBlob(r.Context(), productName, pkg, file.Digest)
+	if err != nil {
+		Error(w, r, v1.CodeUnavailable, "the registry did not serve this file: "+err.Error())
+		return
+	}
+	defer func() { _ = body.Close() }()
+
+	name := file.Path
+	if i := strings.LastIndex(name, "/"); i >= 0 {
+		name = name[i+1:]
+	}
+	mediaType := file.MediaType
+	if mediaType == "" {
+		mediaType = "application/octet-stream"
+	}
+	w.Header().Set("Content-Type", mediaType)
+	w.Header().Set("Content-Disposition", `attachment; filename="`+name+`"`)
+	if file.SizeBytes > 0 {
+		w.Header().Set("Content-Length", strconv.FormatInt(file.SizeBytes, 10))
+	}
+	w.WriteHeader(http.StatusOK)
+
+	// The status line is already sent, so a mid-stream failure has no error
+	// response to give - logged so the truncation has an explanation somewhere.
+	if _, err := io.Copy(w, body); err != nil {
+		s.deps.Logger.Error("file download failed mid-stream",
+			"error", err, "product", productName, "digest", digest)
+	}
+}
+
 // int64String renders a byte count, and NOTHING for a count nobody has
 // established.
 //

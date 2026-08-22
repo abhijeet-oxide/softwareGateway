@@ -40,6 +40,7 @@ import (
 	"github.com/abhijeet-oxide/softwareGateway/internal/queue"
 	"github.com/abhijeet-oxide/softwareGateway/internal/regclient"
 	"github.com/abhijeet-oxide/softwareGateway/internal/replication"
+	"github.com/abhijeet-oxide/softwareGateway/internal/security"
 	"github.com/abhijeet-oxide/softwareGateway/internal/store"
 	"github.com/abhijeet-oxide/softwareGateway/internal/transfer"
 	"github.com/abhijeet-oxide/softwareGateway/internal/vendors"
@@ -169,13 +170,26 @@ func run() error {
 	// to the queue passes through here: leases out, results back. Bytes do not.
 	jobQueue := queue.New(packages, cfg.Coordinator.Reaper.LeaseDuration, logger)
 
+	registryClients := regclient.NewClients(products, resolver, cfg.ProductsDir(), logger)
 	transferResolver := &resolverImpl{
 		products: products,
 		catalog:  cat,
 		packages: packages,
-		clients:  regclient.NewClients(products, resolver, cfg.ProductsDir(), logger),
+		clients:  registryClients,
 		log:      logger,
 	}
+
+	// ---- security ----
+	//
+	// The scanner is reached through the SAME client configuration a transfer
+	// gets - same credential, same CA bundle, same proxy - because it is the
+	// same JFrog. A security path that resolved its own would be reaching that
+	// host by a different route from the one that replicates from it, and the
+	// day the two disagree is the day Xray reports nothing while replication
+	// works perfectly.
+	securityCache := store.NewSecurity(st)
+	securityService := security.NewService(
+		regclient.NewSecurityResolver(registryClients), securityCache, logger)
 	// The requester turns `transfers create` and `transfers promote` into
 	// rows; the expander plans the transfers those rows opened. Two halves of
 	// one path, sharing the resolver so an origin the API accepted is one the
@@ -224,6 +238,11 @@ func run() error {
 	// use rather than with the catalogue: ~2500 job rows per transfer, one
 	// transfer per release per target, forever. What it removes and what it
 	// must not is store.SweepRetention's business; this is only the schedule.
+	// The security cache expires in minutes and is filtered on read, so this
+	// loop is about SIZE rather than correctness - see the sweeper's comment.
+	securitySweeper := maintenance.NewSecurityCacheSweeper(
+		securityCache, maintenance.DefaultSecuritySweepInterval, logger)
+
 	retentionSweeper := maintenance.NewRetentionSweeper(packages,
 		store.RetentionPolicy{
 			Transfers:   cfg.Coordinator.GC.Transfers,
@@ -322,6 +341,7 @@ func run() error {
 				discoveryCtl.SetLeader(isLeader)
 				cacheSweeper.SetLeader(isLeader)
 				retentionSweeper.SetLeader(isLeader)
+				securitySweeper.SetLeader(isLeader)
 				replicationWatcher.SetLeader(isLeader)
 			},
 		})
@@ -337,6 +357,7 @@ func run() error {
 			discoveryCtl.SetLeader(isLeader)
 			cacheSweeper.SetLeader(isLeader)
 			retentionSweeper.SetLeader(isLeader)
+			securitySweeper.SetLeader(isLeader)
 			replicationWatcher.SetLeader(isLeader)
 			queueCtl.SetLeader(isLeader)
 		})
@@ -370,6 +391,13 @@ func run() error {
 		// Comparison runs here for the same reason: it opens connections to the
 		// DESTINATION registry, and transferctl is a pure API client.
 		Comparer: compareImpl{transferResolver, layouts},
+		// Security runs here for the same reason as the three above: it needs a
+		// credentialed client, and the API layer holds none. Split in two
+		// because the halves fail differently - the analyzer needs a reachable
+		// scanner, the index answers from the database, and a search for a CVE
+		// is most wanted precisely when the scanner is unreachable.
+		Security:      securityService,
+		SecurityIndex: securityCache,
 		// Reading one file out of a release, for somebody looking at it. Here
 		// for the third time for the first reason: it needs a credentialed
 		// client, and the API layer holds none.
@@ -412,6 +440,7 @@ func run() error {
 	g.Go(func() error { return discoveryCtl.Run(gctx) })
 	g.Go(func() error { return cacheSweeper.Run(gctx) })
 	g.Go(func() error { return retentionSweeper.Run(gctx) })
+	g.Go(func() error { return securitySweeper.Run(gctx) })
 	g.Go(func() error { return queueCtl.Run(gctx) })
 	g.Go(func() error { return replicationWatcher.Run(gctx) })
 

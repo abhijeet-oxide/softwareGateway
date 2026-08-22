@@ -219,7 +219,10 @@ func (c *Catalog) upsertRepository(
 
 	var id int64
 	if err := tx.QueryRowContext(ctx, upsert,
-		productID, string(r.Role), r.Name, r.Registry, r.Repository, string(r.Type),
+		// Canonical, not verbatim: `jfrog` and `artifactory` are one backend,
+		// and the schema's CHECK constraint knows the one spelling. See
+		// product.RegistryType.Canonical.
+		productID, string(r.Role), r.Name, r.Registry, r.Repository, string(r.Type.Canonical()),
 	).Scan(&id); err != nil {
 		return 0, fmt.Errorf("upsert repository %q (%s/%s): %w", r.Name, r.Registry, r.Repository, err)
 	}

@@ -624,6 +624,29 @@ The sweep is leader-gated (`internal/maintenance`), runs on an interval, and is 
 
 A partial index - `ON package_artifacts (raw_used_at) WHERE raw IS NOT NULL` - keeps the sweep proportional to what is *cached* rather than to how many artifacts have ever existed.
 
+## 12.1 Security cache tables
+
+`security_scans`, `security_findings` and `security_details` (migration 00022)
+hold what a scanner said. Three tables rather than one, split by what they cost
+and how long they stay true: counts are kilobytes and kept for hours, an index
+of identifiers is kept with them so search needs no scanner round trip, and the
+complete responses expire in minutes because **Xray is the source of truth for
+detailed findings and this platform is deliberately not a second one**.
+
+Every row carries `product`, `repository` and `provider`, and those three are
+part of every unique key. That is an authorization boundary rather than a filing
+convention: findings were retrieved under one repository's scanner permissions,
+and a cache keyed by digest alone would be a cross-tenant leak with good
+performance.
+
+Expiry is a column rather than a policy, because retention is per repository
+(`xray.detailTtl`): one product may cache for five minutes and another for an
+hour, and a sweeper reading a global constant would be wrong for both. Rows are
+filtered on read and removed by a leader-gated loop - deleting on read would
+make every page render a write transaction against the single writer.
+
+Full argument in [21 - Security Posture](21-security-posture.md) §6.
+
 ## 13. Regrouping, and the accessory column
 
 Two columns exist so a source's `vendor` can be set *after* its packages were discovered.

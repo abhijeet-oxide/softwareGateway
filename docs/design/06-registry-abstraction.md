@@ -198,6 +198,19 @@ Deltas from generic:
 
 ### 6.3 JFrog Artifactory
 
+Configured as `artifactory` or `jfrog` - one backend, two spellings, because
+operators write both. The catalog stores the canonical `artifactory`; see
+[21 §3](21-security-posture.md).
+
+The distribution endpoint is conformant, so `internal/registry/artifactory`
+embeds the generic implementation and overrides nothing. What the package adds
+is the OTHER endpoint on the same host: **JFrog Xray**, at `/xray/api`, which
+reports what is wrong with the artifacts rather than serving them. It takes the
+same credential as the repository, is scoped by the repository, and is not a
+registry - which is exactly why it lives here rather than in a plugin of its
+own. Same shape as Quay's management client in §6.4; the argument is in
+[21 §3](21-security-posture.md).
+
 - **Repository paths** are prefixed by the Artifactory repository key (`docker-remote/vendor-a/platform`). Handled as configuration, not code - `repository:` in the product YAML carries the full path.
 - **Tag pagination** historically deviates from the `Link`-header convention on some versions; the `TagPaginationStyle` capability selects the right strategy.
 - **Referrers API** availability depends on version; the tag-schema fallback covers older deployments ([08](08-verification.md) §3).

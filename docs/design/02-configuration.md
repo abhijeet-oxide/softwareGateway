@@ -118,6 +118,31 @@ data:
             perRegistry: 16
             requestsPerSecond: 25
 
+        - name: jfrog-store
+          registry: acme.jfrog.io
+          repository: docker-local/platform/suite
+          type: jfrog                         # or `artifactory` - one backend, two spellings
+          credentialsRef:
+            secretName: jfrog                 # ALSO the Xray credential. There is no second one.
+          discovery:
+            enabled: false
+
+          # Optional. Valid only on a JFrog repository, and OFF unless said.
+          # Everything answerable by "the same as the repository" is absent:
+          # the endpoint, the credential, the CA bundle, the proxy and the
+          # timeouts above are the ones Xray is reached with. See 21 section 3.
+          xray:
+            enabled: true
+            # Only when the docker host is a subdomain and the platform is not.
+            endpoint: https://acme.jfrog.io
+            repositoryKey: docker-local
+            watches: [production]             # scope to named Xray watches
+            concurrency: 6                    # requests in flight, max 32
+            batchSize: 50                     # artifacts per request, max 200
+            timeout: 60s
+            detailTtl: 15m                    # complete responses, capped at 24h
+            summaryTtl: 6h                    # counts and severities
+
       # ─────────────────────────────────────────────────────────────
       # TARGETS - internal, read-write. Replication destinations and
       # promotion endpoints (both directions; see 01 §2.1).
@@ -314,6 +339,42 @@ An unknown value is fatal for that source and no other, reported at startup. Fal
 Grouping is a different matter and is **not** retroactive: whether three tags become one package is decided when those tags are first recorded, and existing rows keep the shape they were discovered with. Only the naming is reconciled.
 
 `signatures.layout` is the older spelling of this field and still works. It was nested under `signatures` when grouping tags was all it controlled; it now also decides how a package is NAMED, which is not a signature concern. Setting both to *different* values is a validation error rather than a precedence rule - picking one silently would leave the operator's other spelling doing nothing while looking as though it does something.
+
+### 5.2.1 `xray`
+
+Optional, and valid only on a `jfrog` (or `artifactory`) repository. Switches on
+the JFrog Xray integration for that one repository, and configures only the
+parts that are genuinely about Xray:
+
+```yaml
+xray:
+  enabled: true          # absent means OFF
+  endpoint: https://acme.jfrog.io   # only when the docker host is a subdomain
+  repositoryKey: docker-local
+  watches: [production]
+  concurrency: 6
+  batchSize: 50
+  timeout: 60s
+  detailTtl: 15m         # complete responses, capped at 24h
+  summaryTtl: 6h         # counts and severities
+```
+
+**There is no credential here, and there will not be.** Xray sits on the JFrog
+platform this repository already reaches, and takes the credential this
+repository already declares in `credentialsRef`. A second credential model for
+one host is not a feature - it is a second place for one password to be rotated,
+and the second place is the one that is missed.
+
+`enabled` defaults to **off**, inverting the convention every other `enabled`
+in this schema follows. Deliberately: the others turn off something the document
+asked for, this one would turn ON traffic to a third system the document never
+mentioned.
+
+An `xray` block on a repository that is not JFrog is rejected. That document is
+silently wrong otherwise - well-formed, applied, never read - and the operator
+sees a repository they believe reports vulnerabilities and which reports none.
+
+Full argument in [21 - Security Posture](21-security-posture.md) §3.
 
 ### 5.3 `concurrency`
 

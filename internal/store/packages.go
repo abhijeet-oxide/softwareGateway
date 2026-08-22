@@ -559,6 +559,20 @@ func (p *Packages) EnsureRepository(
 	if registryType == "" {
 		registryType = "generic"
 	}
+	// `jfrog` and `artifactory` are one backend and the CHECK constraint on
+	// this column knows one spelling. product.RegistryType.Canonical is where
+	// that decision is made and the catalog applies it on the configuration
+	// path; this is the backstop on the DISCOVERY path, which reaches here with
+	// whatever the source document said.
+	//
+	// It is a backstop because it shipped without one: a source declaring
+	// `type: jfrog` validated, reconciled, and then failed every scan with
+	// "CHECK constraint failed" - a message about a column, for a document that
+	// was correct. Normalising beside the constraint it protects is what makes
+	// that unreachable rather than fixed once.
+	if registryType == "jfrog" {
+		registryType = "artifactory"
+	}
 	if managedBy == "" {
 		managedBy = "discovery"
 	}

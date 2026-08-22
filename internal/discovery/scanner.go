@@ -1052,7 +1052,9 @@ func (s *Scanner) ensureRepositoryRow(ctx context.Context, repoPath string) (int
 	// so the short form can be looked up as input.
 	id, err := s.packages.EnsureRepository(ctx, tx,
 		s.productID, string(product.RoleSource), name,
-		s.sourceCfg.Registry, repoPath, string(s.sourceCfg.Type), managedBy,
+		// Canonical, not verbatim: `jfrog` and `artifactory` select one
+		// backend and the catalog stores one spelling.
+		s.sourceCfg.Registry, repoPath, string(s.sourceCfg.Type.Canonical()), managedBy,
 		s.layout.DisplayRepository(repoPath))
 	if err != nil {
 		return 0, err

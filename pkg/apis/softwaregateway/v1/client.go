@@ -860,3 +860,132 @@ func (c *Client) WhoAmI(ctx context.Context) (*WhoAmIResponse, error) {
 	var out WhoAmIResponse
 	return &out, c.get(ctx, "/api/v1/whoami", &out)
 }
+
+// ---------------------------------------------------------------------------
+// Security
+// ---------------------------------------------------------------------------
+
+// PackageSecurityOptions modulates a posture read.
+type PackageSecurityOptions struct {
+	// Detail asks for every finding. Without it the response carries counts
+	// alone, which is what a listing needs and what a listing must not pay a
+	// megabyte per release to get.
+	Detail bool
+	// Refresh bypasses every cache and asks the scanner. Only a person pressing
+	// refresh should set it.
+	Refresh bool
+	// ProgressToken is a caller-minted id it can poll at SecurityProgress while
+	// this request is open. Optional and free to omit.
+	ProgressToken string
+}
+
+// PackageSecurity returns one release's security posture.
+//
+// A 404 means this deployment has no scanner configured. That is an honest
+// absence rather than a failure - the route is not registered when the
+// dependency is missing - and a caller should render it as "not configured"
+// rather than as an error.
+func (c *Client) PackageSecurity(
+	ctx context.Context, product, ref string, opts PackageSecurityOptions,
+) (*PackageSecurityResponse, error) {
+	seg, query := splitPackageRef(ref)
+	q := url.Values{}
+	if opts.Detail {
+		q.Set("detail", "true")
+	}
+	if opts.Refresh {
+		q.Set("refresh", "true")
+	}
+	if opts.ProgressToken != "" {
+		q.Set("progressToken", opts.ProgressToken)
+	}
+
+	path := "/api/v1/products/" + url.PathEscape(product) +
+		"/packages/" + url.PathEscape(seg) + "/security" + mergeQuery(query, q)
+	var out PackageSecurityResponse
+	return &out, c.get(ctx, path, &out)
+}
+
+// CompareSecurity classifies the security difference between two releases.
+//
+// The package in the path is the OLD release and req.Against names the new one,
+// so every word in the answer - resolved, introduced - is written from the new
+// release's point of view.
+func (c *Client) CompareSecurity(
+	ctx context.Context, product, ref string, req SecurityCompareRequest,
+) (*SecurityComparisonResponse, error) {
+	seg, query := splitPackageRef(ref)
+	// The colon before the verb is an AIP-136 structural separator and must NOT
+	// be escaped; the reference itself is escaped as one segment.
+	path := "/api/v1/products/" + url.PathEscape(product) +
+		"/packages/" + url.PathEscape(seg) + ":compareSecurity" + query
+	var out SecurityComparisonResponse
+	return &out, c.post(ctx, path, req, &out)
+}
+
+// SecuritySearchOptions filters a security search.
+type SecuritySearchOptions struct {
+	// Kind is cve, package or image. Empty lets the server infer it from the
+	// query, which reads a pasted CVE identifier for what it is.
+	Kind string
+	// Exact requires a whole-value match rather than a contained one.
+	Exact bool
+	Limit int
+}
+
+// SearchSecurity finds a CVE, a package or an image across what the platform
+// has already retrieved.
+//
+// It cannot answer "is this CVE anywhere in my estate", only "is it anywhere I
+// have looked", and the response says so in Searched.Note. Reporting the first
+// would mean scanning every release in the catalogue on every search.
+func (c *Client) SearchSecurity(
+	ctx context.Context, product, query string, opts SecuritySearchOptions,
+) (*SecuritySearchResponse, error) {
+	q := url.Values{}
+	q.Set("q", query)
+	if opts.Kind != "" {
+		q.Set("kind", opts.Kind)
+	}
+	if opts.Exact {
+		q.Set("exact", "true")
+	}
+	if opts.Limit > 0 {
+		q.Set("limit", strconv.Itoa(opts.Limit))
+	}
+	var out SecuritySearchResponse
+	return &out, c.get(ctx,
+		"/api/v1/products/"+url.PathEscape(product)+"/security/search?"+q.Encode(), &out)
+}
+
+// SecurityProgress reads where a security retrieval has got to.
+//
+// Polled WHILE the request carrying the token is still in flight. A 404 is a
+// normal answer - progress lives in one replica's memory and is dropped shortly
+// after the work finishes - so a caller treats it as "no position available".
+func (c *Client) SecurityProgress(
+	ctx context.Context, token string,
+) (*SecurityProgressResponse, error) {
+	var out SecurityProgressResponse
+	return &out, c.get(ctx, "/api/v1/security/progress/"+url.PathEscape(token), &out)
+}
+
+// mergeQuery joins a reference's own query string with additional parameters.
+//
+// A package reference carries `?repository=` when its repository could not
+// survive the path, and the security calls add their own parameters on top.
+// Emitting two `?` produces a URL the server reads as one parameter with a very
+// strange value, which is a bug that looks like a server problem.
+func mergeQuery(existing string, extra url.Values) string {
+	encoded := extra.Encode()
+	switch {
+	case existing == "" && encoded == "":
+		return ""
+	case existing == "":
+		return "?" + encoded
+	case encoded == "":
+		return existing
+	default:
+		return existing + "&" + encoded
+	}
+}

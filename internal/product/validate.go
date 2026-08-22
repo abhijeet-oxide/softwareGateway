@@ -3,6 +3,7 @@ package product
 import (
 	"errors"
 	"fmt"
+	"net/url"
 	"regexp"
 	"strings"
 )
@@ -363,6 +364,7 @@ func (p *Product) validateSources(resolver *SecretResolver) Errors {
 		errs = append(errs, validateRepoCommon(path, s.Name, s.Registry, primary,
 			s.Type, s.Anonymous, s.CredentialsRef, resolver, false)...)
 		errs = append(errs, validateSourceRepositories(path, s)...)
+		errs = append(errs, validateXray(path+".xray", s.Xray, s.Type, s.Anonymous)...)
 
 		if prev, dup := seen[s.Name]; dup && s.Name != "" {
 			errs = append(errs, Error{path + ".name", fmt.Sprintf("%q duplicates spec.sources[%d]", s.Name, prev), ""})
@@ -498,6 +500,7 @@ func (p *Product) validateTargets(resolver *SecretResolver) Errors {
 			t.Type, t.Anonymous, t.CredentialsRef, resolver, false)...)
 		errs = append(errs, validateNetwork(path+".network", t.Network, resolver)...)
 		errs = append(errs, validateCosign(path+".verification", t.Verification, resolver)...)
+		errs = append(errs, validateXray(path+".xray", t.Xray, t.Type, t.Anonymous)...)
 
 		if prev, dup := seen[t.Name]; dup && t.Name != "" {
 			errs = append(errs, Error{path + ".name", fmt.Sprintf("%q duplicates spec.targets[%d]", t.Name, prev), ""})
@@ -904,4 +907,82 @@ func AsErrors(err error) (Errors, bool) {
 		return e, true
 	}
 	return nil, false
+}
+
+// validateXray checks the Xray block of one repository.
+//
+// The check that matters most is the first: an `xray` block on a repository
+// that is not JFrog. That document is not merely wrong, it is SILENTLY wrong -
+// the block is well-formed, it parses, and nothing would ever read it, so the
+// operator sees a repository they believe reports vulnerabilities and which
+// reports none. That is the failure mode this whole feature is written to
+// prevent, arriving through configuration instead of through code.
+func validateXray(path string, x *Xray, typ RegistryType, anonymous bool) Errors {
+	if x == nil {
+		return nil
+	}
+
+	var errs Errors
+	if !typ.IsJFrog() {
+		named := string(typ)
+		if named == "" {
+			named = string(RegistryGeneric) + " (the default)"
+		}
+		errs = append(errs, Error{path,
+			fmt.Sprintf("xray is only available on a JFrog repository, and this one is %s", named),
+			"set type: jfrog, or remove the xray block - it would otherwise be accepted and never read"})
+	}
+
+	if x.Endpoint != "" {
+		switch u, err := url.Parse(x.Endpoint); {
+		case err != nil:
+			errs = append(errs, Error{path + ".endpoint", fmt.Sprintf("%q is not a valid URL", x.Endpoint), ""})
+		case u.Scheme != "http" && u.Scheme != "https":
+			errs = append(errs, Error{path + ".endpoint", "must start with https:// or http://",
+				"this is the JFrog PLATFORM base URL, not the docker registry host"})
+		case u.Host == "":
+			errs = append(errs, Error{path + ".endpoint", "has no host", ""})
+		}
+	}
+
+	if x.Concurrency < 0 {
+		errs = append(errs, Error{path + ".concurrency", "must not be negative", ""})
+	}
+	if x.Concurrency > MaxXrayConcurrency {
+		errs = append(errs, Error{path + ".concurrency",
+			fmt.Sprintf("%d exceeds the maximum of %d", x.Concurrency, MaxXrayConcurrency),
+			"Xray's summary endpoint is rate limited; more requests in flight is a 429 storm, not a faster answer"})
+	}
+	if x.BatchSize < 0 {
+		errs = append(errs, Error{path + ".batchSize", "must not be negative", ""})
+	}
+	if x.BatchSize > MaxXrayBatchSize {
+		errs = append(errs, Error{path + ".batchSize",
+			fmt.Sprintf("%d exceeds the maximum of %d", x.BatchSize, MaxXrayBatchSize), ""})
+	}
+	if x.Timeout < 0 {
+		errs = append(errs, Error{path + ".timeout", "must not be negative", ""})
+	}
+	if x.DetailTTL < 0 {
+		errs = append(errs, Error{path + ".detailTtl", "must not be negative", ""})
+	}
+	if x.DetailTTL.Duration() > MaxXrayDetailTTL {
+		errs = append(errs, Error{path + ".detailTtl",
+			fmt.Sprintf("%s exceeds the maximum of %s", x.DetailTTL, Duration(MaxXrayDetailTTL)),
+			"Xray is the source of truth for detailed findings; past this the cache is an unsynchronised copy of a system that updates continuously"})
+	}
+	if x.SummaryTTL < 0 {
+		errs = append(errs, Error{path + ".summaryTtl", "must not be negative", ""})
+	}
+
+	// Xray has no anonymous access worth having, and a repository that reaches
+	// it anonymously fails with a 403 that reads like a permissions problem
+	// rather than like a missing credential.
+	if x.IsEnabled() && anonymous {
+		errs = append(errs, Error{path + ".enabled",
+			"xray cannot be enabled on an anonymous repository",
+			"Xray requires the repository's JFrog credential; set credentialsRef instead of anonymous: true"})
+	}
+
+	return errs
 }

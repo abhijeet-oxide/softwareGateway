@@ -885,10 +885,12 @@ func (s *Server) handlePackageCustomMethod(w http.ResponseWriter, r *http.Reques
 	}
 	ref, verb := segment[:i], segment[i+1:]
 
-	if verb != packageVerbInspect && verb != packageVerbCompare {
+	switch verb {
+	case packageVerbInspect, packageVerbCompare, packageVerbCompareSecurity:
+	default:
 		Error(w, r, v1.CodeInvalidArgument, fmt.Sprintf(
-			"%q is not a custom method on a package (known: %s, %s)",
-			verb, packageVerbInspect, packageVerbCompare))
+			"%q is not a custom method on a package (known: %s, %s, %s)",
+			verb, packageVerbInspect, packageVerbCompare, packageVerbCompareSecurity))
 		return
 	}
 
@@ -901,11 +903,14 @@ func (s *Server) handlePackageCustomMethod(w http.ResponseWriter, r *http.Reques
 			}
 		}
 	}
-	if verb == packageVerbCompare {
+	switch verb {
+	case packageVerbCompare:
 		s.handleComparePackage(w, r)
-		return
+	case packageVerbCompareSecurity:
+		s.handleCompareSecurity(w, r)
+	default:
+		s.handleInspectPackage(w, r)
 	}
-	s.handleInspectPackage(w, r)
 }
 
 // compareDeadline bounds one comparison.

@@ -1050,6 +1050,284 @@ export interface WhoAmIResponse {
 }
 
 // ---------------------------------------------------------------------------
+// Security
+// ---------------------------------------------------------------------------
+
+/**
+ * The five severities, in the order everything shows them.
+ *
+ * A tuple rather than a union alone, so a component can iterate the ladder
+ * without re-listing it - and so that "critical, high, medium, low" is never
+ * assembled by hand in two places and never assembled differently.
+ */
+export const SEVERITIES = ['critical', 'high', 'medium', 'low', 'unknown'] as const
+export type Severity = (typeof SEVERITIES)[number]
+
+/**
+ * What is known about one artifact.
+ *
+ * `scanned` with no findings is a clean artifact. `not_scanned` with no
+ * findings is an artifact nobody looked at. Reading the second as the first is
+ * the failure this whole feature exists to prevent, so nothing in the interface
+ * may render a finding list without also rendering this.
+ */
+export type ScanStatus = 'scanned' | 'not_scanned' | 'unsupported' | 'disabled' | 'unavailable'
+
+/** Whether a release's numbers can be trusted, and why not. */
+export type SecurityState = 'ok' | 'partial' | 'unavailable' | 'disabled'
+
+export type Verdict = 'better' | 'worse' | 'unchanged' | 'inconclusive'
+
+export type ChangeType =
+  | 'introduced' | 'resolved' | 'unchanged'
+  | 'severity_increased' | 'severity_decreased'
+  | 'remediation_changed' | 'removed_artifact'
+
+export type ArtifactChange = 'common' | 'upgraded' | 'added' | 'removed'
+
+export type SecuritySeverityCounts = Record<Severity, number>
+
+export interface SecurityCounts {
+  total: number
+  fixable: number
+  nonFixable: number
+  bySeverity: SecuritySeverityCounts
+  fixableBySeverity: SecuritySeverityCounts
+}
+
+/** Always rendered beside the counts: 1,286 means one thing at full coverage. */
+export interface SecurityCoverage {
+  artifacts: number
+  scanned: number
+  notScanned: number
+  unsupported: number
+  unavailable: number
+  disabled: number
+  /** The denominator a percentage should use - excludes the unscannable. */
+  scannable: number
+  complete: boolean
+}
+
+export interface SecurityComponent {
+  /** Excludes the version, because this is the key two releases align on. */
+  id: string
+  name: string
+  version?: string
+  type?: string
+  path?: string
+}
+
+export interface SecurityArtifact {
+  name: string
+  tag?: string
+  digest?: string
+  repository?: string
+  kind?: string
+  mediaType?: string
+  platform?: string
+  display?: string
+}
+
+export interface SecurityFinding {
+  cve?: string
+  id?: string
+  severity: Severity
+  severityLabel: string
+  summary?: string
+  description?: string
+  component: SecurityComponent
+  fixedIn?: string[]
+  fixable: boolean
+  cvssScore?: number
+  cvssVector?: string
+  references?: string[]
+  published?: string
+  provider: string
+  policy?: string
+}
+
+export interface SecurityReport {
+  artifact: SecurityArtifact
+  status: ScanStatus
+  statusLabel: string
+  provider?: string
+  message?: string
+  findings?: SecurityFinding[]
+  counts: SecurityCounts
+  scannedAt?: string
+  retrievedAt?: string
+  fromCache?: boolean
+}
+
+export interface PackageSecurityResponse {
+  product: string
+  package: string
+  provider?: string
+  enabled: boolean
+  repository?: string
+  state: SecurityState
+  message?: string
+  counts: SecurityCounts
+  uniqueCounts: SecurityCounts
+  coverage: SecurityCoverage
+  reports: SecurityReport[]
+  providers?: string[]
+  scannedAt?: string
+  retrievedAt?: string
+  fingerprint?: string
+  fromCache: number
+  fetched: number
+  detail: boolean
+}
+
+export interface SecurityChange {
+  type: ChangeType
+  typeLabel: string
+  cve?: string
+  id?: string
+  severity: Severity
+  severityLabel: string
+  fromSeverity?: Severity
+  toSeverity?: Severity
+  fixable: boolean
+  fixedIn?: string[]
+  summary?: string
+  description?: string
+  component: SecurityComponent
+  artifact: SecurityArtifact
+  artifactChange: ArtifactChange
+  viaRemoval?: boolean
+  provider?: string
+}
+
+export interface SecurityArtifactDelta {
+  key: string
+  change: ArtifactChange
+  a?: SecurityArtifact
+  b?: SecurityArtifact
+  statusA?: ScanStatus
+  statusB?: ScanStatus
+  countsA: SecurityCounts
+  countsB: SecurityCounts
+  introduced: number
+  resolved: number
+  unchanged: number
+  severityChanged: number
+  /** False when one side has no scan result: the zeroes mean "not computed". */
+  comparable: boolean
+}
+
+export interface SecurityArtifactSummary {
+  common: number
+  upgraded: number
+  added: number
+  removed: number
+  notComparable: number
+}
+
+export interface SecurityComparisonEnd {
+  label: string
+  package?: string
+  tag?: string
+  digest?: string
+  repository?: string
+  provider?: string
+  enabled: boolean
+  counts: SecurityCounts
+  coverage: SecurityCoverage
+  scannedAt?: string
+}
+
+export interface SecurityComparisonResponse {
+  product: string
+  a: SecurityComparisonEnd
+  b: SecurityComparisonEnd
+  verdict: Verdict
+  verdictLabel: string
+  headline: string
+  explanation: string
+  caveats?: string[]
+  introduced: SecurityCounts
+  resolved: SecurityCounts
+  unchanged: SecurityCounts
+  severityIncreased: SecurityCounts
+  severityDecreased: SecurityCounts
+  remediationChanged: SecurityCounts
+  removedArtifact: SecurityCounts
+  netScore: number
+  changes: SecurityChange[]
+  artifacts: SecurityArtifactDelta[]
+  artifactSummary: SecurityArtifactSummary
+  fingerprint?: string
+  retrievedAt?: string
+}
+
+export interface SecurityCompareRequest {
+  against?: string
+  repository?: string
+  refresh?: boolean
+  progressToken?: string
+}
+
+export interface SecurityRelease {
+  packageId: string
+  tag: string
+  displayTag?: string
+  digest?: string
+}
+
+export type SearchKind = 'cve' | 'package' | 'image'
+
+export interface SecuritySearchHit {
+  cve?: string
+  issueId?: string
+  severity: Severity
+  severityLabel: string
+  fixable: boolean
+  summary?: string
+  component: SecurityComponent
+  fixedIn?: string
+  artifact: SecurityArtifact
+  provider?: string
+  repository?: string
+  scannedAt?: string
+  /** The edge that makes the relationship navigable in both directions. */
+  releases?: SecurityRelease[]
+}
+
+export interface SecuritySearchScope {
+  artifacts: number
+  releases: number
+  note?: string
+}
+
+export interface SecuritySearchResponse {
+  product: string
+  kind: SearchKind
+  query: string
+  exact?: boolean
+  hits: SecuritySearchHit[]
+  truncated?: boolean
+  searched: SecuritySearchScope
+}
+
+export interface SecurityProgressStage {
+  name: string
+  label: string
+  done: number
+  /** Zero means "not yet known", which is honest while a tree is walked. */
+  total: number
+}
+
+export interface SecurityProgressResponse {
+  stages: SecurityProgressStage[]
+  notes?: string[]
+  done: boolean
+  startedAt?: string
+  updatedAt?: string
+}
+
+// ---------------------------------------------------------------------------
 // Errors - RFC 9457 problem details
 // ---------------------------------------------------------------------------
 

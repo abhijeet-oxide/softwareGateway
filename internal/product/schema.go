@@ -133,6 +133,12 @@ type Source struct {
 	CredentialsRef *CredentialsRef `json:"credentialsRef,omitempty"`
 	Discovery      Discovery       `json:"discovery,omitempty"`
 
+	// Xray switches on the JFrog Xray integration for this repository. It
+	// reuses this source's own registry, credential, CA bundle, proxy and
+	// timeouts - see xray.go for why it must not declare its own. Valid only
+	// on a JFrog type.
+	Xray *Xray `json:"xray,omitempty"`
+
 	// Vendor names the PUBLISHING CONVENTION this source follows: `near` for a
 	// Nokia NEAR registry, empty (or `auto`) for anything conformant.
 	//
@@ -348,6 +354,12 @@ type Target struct {
 	// different endpoint taking a different credential from the one in
 	// credentialsRef. Only needed by a non-copy mode.
 	Quay *QuaySettings `json:"quay,omitempty"`
+
+	// Xray switches on the JFrog Xray integration for this repository, and
+	// configures only the parts that are genuinely about Xray. It reuses this
+	// target's own registry, credential, CA bundle, proxy and timeouts - see
+	// xray.go for why it must not declare its own. Valid only on a JFrog type.
+	Xray *Xray `json:"xray,omitempty"`
 }
 
 // Promotion declares the hop `transfers promote` takes by default.
@@ -395,13 +407,20 @@ const (
 	RegistryGeneric     RegistryType = "generic"
 	RegistryACR         RegistryType = "acr"
 	RegistryArtifactory RegistryType = "artifactory"
-	RegistryQuay        RegistryType = "quay"
+	// RegistryJFrog is the same backend as RegistryArtifactory, under the name
+	// operators actually write. Accepted rather than rejected because
+	// `type: jfrog` means something obvious, and a validation error over the
+	// company's own name teaches nobody anything. `artifactory` stays
+	// canonical; anything asking "is this JFrog" calls RegistryType.IsJFrog
+	// so the two can never drift apart.
+	RegistryJFrog RegistryType = "jfrog"
+	RegistryQuay  RegistryType = "quay"
 )
 
 // ValidRegistryTypes is the closed set. Must match the CHECK constraint on
 // repositories.registry_type in db/migrations.
 var ValidRegistryTypes = []RegistryType{
-	RegistryGeneric, RegistryACR, RegistryArtifactory, RegistryQuay,
+	RegistryGeneric, RegistryACR, RegistryArtifactory, RegistryJFrog, RegistryQuay,
 }
 
 // Discovery governs what a source looks for, and how often.

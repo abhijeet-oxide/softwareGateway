@@ -31,6 +31,7 @@ A cloud-native platform that continuously discovers software packages published 
 | 18 | [Quay Replication Strategies](18-quay-replication.md) | `copy` / `mirror` / `proxy` per target, Quay's own mechanisms, what each promises |
 | 19 | [User Interface](19-user-interface.md) | Why v1 is CLI-only, what the UI must do, the gates before it ships |
 | 20 | [Downloads and Auto-Download](20-download-rules.md) | What happens when software comes in, and when that happens by itself: derived chains, verification gates |
+| 21 | [Security Posture](21-security-posture.md) | Is this release safer than the one it replaces: the Xray integration, the normalized model, comparison rules, caching |
 
 ## Reading order
 
@@ -43,6 +44,7 @@ A cloud-native platform that continuously discovers software packages published 
 | Implementing the CLI | 13 → 09 |
 | Implementing Quay replication modes | 18 → 06 → 02 → 05 |
 | Implementing downloads and auto-download | 20 → 07 → 18 → 10 → 08 |
+| Implementing security posture | 21 → 06 → 02 → 03 → 09 |
 | Building the UI | 19 → 09 → 13 |
 | Operating it | 02 → 12 → 14 → 11 |
 | Auditing the technology choices | 16 → 03 → 06 |

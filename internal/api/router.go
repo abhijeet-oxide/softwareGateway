@@ -24,6 +24,7 @@ import (
 	"github.com/abhijeet-oxide/softwareGateway/internal/preflight"
 	"github.com/abhijeet-oxide/softwareGateway/internal/product"
 	"github.com/abhijeet-oxide/softwareGateway/internal/queue"
+	"github.com/abhijeet-oxide/softwareGateway/internal/security"
 	"github.com/abhijeet-oxide/softwareGateway/internal/store"
 	"github.com/abhijeet-oxide/softwareGateway/internal/vendors"
 )
@@ -220,6 +221,9 @@ type Deps struct {
 	SecurityStore SecurityStore
 	// SecurityIndex is the searchable record of what syncs have recorded.
 	SecurityIndex SecurityIndex
+	// SecurityRetention is how long a sync's two tiers are kept, from the
+	// system configuration. The zero value means the store's own defaults.
+	SecurityRetention security.CacheTTL
 }
 
 // Server wires the router.

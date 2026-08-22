@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"sync"
+	"time"
 
 	"github.com/abhijeet-oxide/softwareGateway/internal/product"
 	// Importing the JFrog backend here is also what REGISTERS it with the
@@ -26,14 +27,28 @@ import (
 // replication works perfectly.
 type SecurityResolver struct {
 	clients *Clients
+	// tuning is how hard to push a scanner, from the SYSTEM configuration.
+	//
+	// Not from the product document: how many requests a scanner tolerates is a
+	// property of the scanner and the network to it, not of the software being
+	// replicated. Stated per product it would be repeated in every one and
+	// drift between them.
+	tuning SecurityTuning
 
 	mu sync.Mutex
 	by map[string]security.Provider
 }
 
+// SecurityTuning is the operator-level half of the scanner configuration.
+type SecurityTuning struct {
+	Concurrency    int
+	BatchSize      int
+	RequestTimeout time.Duration
+}
+
 // NewSecurityResolver builds a resolver over an existing client factory.
-func NewSecurityResolver(clients *Clients) *SecurityResolver {
-	return &SecurityResolver{clients: clients, by: map[string]security.Provider{}}
+func NewSecurityResolver(clients *Clients, tuning SecurityTuning) *SecurityResolver {
+	return &SecurityResolver{clients: clients, tuning: tuning, by: map[string]security.Provider{}}
 }
 
 // ProviderFor implements security.Resolver.
@@ -94,7 +109,7 @@ func (r *SecurityResolver) build(_ context.Context, productName, repository stri
 		}, nil
 	}
 
-	if !endpoint.xray.IsEnabled() {
+	if !endpoint.xrayEnabled {
 		return security.Disabled{
 			ProviderName: "jfrog-xray",
 			Reason:       fmt.Sprintf("JFrog Xray is not enabled for repository %q.", repository),
@@ -118,23 +133,27 @@ func (r *SecurityResolver) build(_ context.Context, productName, repository stri
 	// resolution a transfer gets. Nothing about reaching this JFrog is decided
 	// twice, and nothing about the credential is decided here at all.
 	settings := artifactory.XraySettings{
-		Enabled:        true,
-		Endpoint:       endpoint.xray.Endpoint,
-		RepositoryKey:  endpoint.xray.RepositoryKey,
-		Watches:        endpoint.xray.Watches,
-		Concurrency:    endpoint.xray.ConcurrencyOrDefault(),
-		BatchSize:      endpoint.xray.BatchSizeOrDefault(),
-		RequestTimeout: endpoint.xray.TimeoutOrDefault(),
+		Enabled:  true,
+		Endpoint: endpoint.xrayEndpoint,
+		// DERIVED, never declared. Artifactory addresses content as
+		// `<repoKey>/<path>`, so the repository this document already names
+		// begins with its own key - and a second place to state that is the
+		// place that goes stale.
+		RepositoryKey:  product.XrayRepositoryKey(endpoint.repository),
+		Concurrency:    r.tuning.Concurrency,
+		BatchSize:      r.tuning.BatchSize,
+		RequestTimeout: r.tuning.RequestTimeout,
 	}
 	return artifactory.NewXrayProvider(artifactory.XrayConfigFor(cfg, settings), settings)
 }
 
 // resolvedEndpoint is the part of a configured repository this file needs.
 type resolvedEndpoint struct {
-	registry   string
-	repository string
-	regType    product.RegistryType
-	xray       *product.Xray
+	registry     string
+	repository   string
+	regType      product.RegistryType
+	xrayEnabled  bool
+	xrayEndpoint string
 }
 
 // findEndpoint looks up a configured repository by name, in either role.
@@ -150,7 +169,8 @@ func findEndpoint(p *product.Product, name string) (product.Role, resolvedEndpoi
 			}
 		}
 		return product.RoleSource, resolvedEndpoint{
-			registry: s.Registry, repository: repo, regType: s.Type, xray: s.Xray,
+			registry: s.Registry, repository: repo, regType: s.Type,
+			xrayEnabled: product.XrayIsEnabled(s.XrayEnabled), xrayEndpoint: s.XrayEndpoint,
 		}, true
 	}
 	for _, t := range p.Spec.Targets {
@@ -158,7 +178,8 @@ func findEndpoint(p *product.Product, name string) (product.Role, resolvedEndpoi
 			continue
 		}
 		return product.RoleTarget, resolvedEndpoint{
-			registry: t.Registry, repository: t.Repository, regType: t.Type, xray: t.Xray,
+			registry: t.Registry, repository: t.Repository, regType: t.Type,
+			xrayEnabled: product.XrayIsEnabled(t.XrayEnabled), xrayEndpoint: t.XrayEndpoint,
 		}, true
 	}
 	return "", resolvedEndpoint{}, false
@@ -178,12 +199,12 @@ func describeType(t product.RegistryType) string {
 // without building a provider for every repository first.
 func XrayEnabledFor(p *product.Product) bool {
 	for _, s := range p.Spec.Sources {
-		if s.Type.IsJFrog() && s.Xray.IsEnabled() {
+		if s.Type.IsJFrog() && product.XrayIsEnabled(s.XrayEnabled) {
 			return true
 		}
 	}
 	for _, t := range p.Spec.Targets {
-		if t.Type.IsJFrog() && t.Xray.IsEnabled() {
+		if t.Type.IsJFrog() && product.XrayIsEnabled(t.XrayEnabled) {
 			return true
 		}
 	}
@@ -195,25 +216,16 @@ func XrayEnabledFor(p *product.Product) bool {
 func SecurityRepositories(p *product.Product) []string {
 	var out []string
 	for _, s := range p.Spec.Sources {
-		if s.Type.IsJFrog() && s.Xray.IsEnabled() {
+		if s.Type.IsJFrog() && product.XrayIsEnabled(s.XrayEnabled) {
 			out = append(out, s.Name)
 		}
 	}
 	for _, t := range p.Spec.Targets {
-		if t.Type.IsJFrog() && t.Xray.IsEnabled() {
+		if t.Type.IsJFrog() && product.XrayIsEnabled(t.XrayEnabled) {
 			out = append(out, t.Name)
 		}
 	}
 	return out
-}
-
-// TTLFor resolves the cache retention a repository's configuration asks for.
-func TTLFor(p *product.Product, role product.Role, repository string) security.CacheTTL {
-	x, _ := p.XrayFor(role, repository)
-	return security.CacheTTL{
-		Summary: x.SummaryTTLOrDefault(),
-		Detail:  x.DetailTTLOrDefault(),
-	}
 }
 
 var _ security.Resolver = (*SecurityResolver)(nil)
@@ -294,7 +306,7 @@ func SecurityRepositoryFor(p *product.Product, reached []string) (ScannedReposit
 func securityCandidates(p *product.Product) []ScannedRepository {
 	var out []ScannedRepository
 	for _, t := range p.Spec.Targets {
-		if t.IsEnabled() && t.Type.IsJFrog() && t.Xray.IsEnabled() {
+		if t.IsEnabled() && t.Type.IsJFrog() && product.XrayIsEnabled(t.XrayEnabled) {
 			out = append(out, ScannedRepository{
 				Role: product.RoleTarget, Name: t.Name,
 				Registry: t.Registry, Repository: t.Repository,
@@ -302,7 +314,7 @@ func securityCandidates(p *product.Product) []ScannedRepository {
 		}
 	}
 	for _, s := range p.Spec.Sources {
-		if !s.IsEnabled() || !s.Type.IsJFrog() || !s.Xray.IsEnabled() {
+		if !s.IsEnabled() || !s.Type.IsJFrog() || !product.XrayIsEnabled(s.XrayEnabled) {
 			continue
 		}
 		repo := s.Repository

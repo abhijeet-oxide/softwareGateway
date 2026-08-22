@@ -71,34 +71,53 @@ registry implementation rather than pretending to be one.
 
 ```yaml
 spec:
-  sources:
-    - name: vendor-jfrog
-      registry: acme.jfrog.io
-      repository: docker-local/cfx
+  targets:
+    - name: cfx-jfrog-lab
+      registry: artifact.example.com
+      repository: apm0014228-oci-stage
       type: jfrog                    # or `artifactory` - one backend, two spellings
       credentialsRef:
-        secretName: jfrog            # THE SAME CREDENTIAL. There is no second one.
-      xray:
-        enabled: true                # absent means OFF
-        endpoint: https://acme.jfrog.io   # only when the docker host is a subdomain
-        repositoryKey: docker-local
-        concurrency: 6
-        batchSize: 50
-        detailTtl: 15m
-        summaryTtl: 6h
+        secretName: cfx-jfrog-secret # THE SAME CREDENTIAL. There is no second one.
+      xrayEnabled: true
 ```
 
-Everything in the `xray` block is about Xray. Anything answerable by "the same
-as the repository" is deliberately absent, and adding a field here should
-require arguing that Xray genuinely differs from the registry it sits in front
-of.
+**One field.** Everything else Xray needs, the repository above it already
+states:
 
-**`enabled` defaults to OFF**, which inverts the convention every other
+| Xray needs | Comes from |
+|---|---|
+| Platform URL | `registry` |
+| Credential | `credentialsRef` |
+| CA bundle, proxy, timeouts | `network`, inherited |
+| Artifactory repository key | the first segment of `repository` |
+| Which backend | `type: jfrog` |
+
+It was briefly a nested block with eight keys - an endpoint, a repository key, a
+watch list, a concurrency, a batch size, a timeout and two retentions. That was
+wrong twice over. Half of them restated what the repository already said, and
+the repository key restated it so directly that a mismatch between the two would
+have reported the vulnerabilities of a different repository. The other half -
+concurrency, batch size, timeout, retention - are not properties of a PRODUCT at
+all: how hard to push a scanner is a property of the scanner and the network to
+it, and how long to keep an index is a property of this deployment's disk. They
+moved to the system configuration ([02](02-configuration.md) §8), where they are
+set once instead of drifting between documents.
+
+One escape hatch survives. `xrayEndpoint` overrides the platform base URL, and
+is absent from almost every document: JFrog serves Docker two ways and only one
+can be derived. A repository-path deployment puts everything on one hostname -
+`acme.jfrog.io/docker-local/app` - and there the platform base URL IS the
+registry host. A subdomain deployment gives each repository its own name -
+`acme-docker.jfrog.io/app` - and there Xray lives at `acme.jfrog.io`, and asking
+the docker subdomain returns a 404 that reads like a missing artifact rather
+than a wrong base URL. There is no way to tell those apart from a hostname.
+
+**`xrayEnabled` defaults to OFF**, which inverts the convention every other
 `enabled` in this schema follows. Deliberately: the others turn off something
 the document asked for, whereas this one would turn ON traffic to a third
 system the document never mentioned.
 
-An `xray` block on a repository that is not JFrog is a **validation error**.
+`xrayEnabled: true` on a repository that is not JFrog is a **validation error**.
 That document is not merely wrong, it is silently wrong - well-formed, applied,
 never read - so the operator sees a repository they believe reports
 vulnerabilities and which reports none. That is this feature's core failure
@@ -333,9 +352,9 @@ Four tables, split by what they cost and how long they stay true:
 | Table | Holds | Retention | Read by |
 |---|---|---|---|
 | `package_security` | One row per RELEASE: state, counts, coverage, when it was synced | Never expires - it is the result of a sync | The listing, the release view |
-| `security_scans` | One row per ARTIFACT: status, counts by severity, fixability | `summaryTtl`, 30 days | The release's artifact table, comparisons |
+| `security_scans` | One row per ARTIFACT: status, counts by severity, fixability | `indexRetention`, 30 days | The release's artifact table, comparisons |
 | `security_findings` | Identifiers only - CVE, component, severity, fixed version. **No prose.** | With its scan | Search, comparison, relationship navigation |
-| `security_details` | The complete normalized response, as JSON | `detailTtl`, 24 hours | Descriptions, references, CVSS vectors |
+| `security_details` | The complete normalized response, as JSON | `detailRetention`, 24 hours | Descriptions, references, CVSS vectors |
 
 The two TTLs are deliberately far apart, and the balance was got wrong first
 time. The **index** - statuses, counts, and the identifiers that make a finding
@@ -382,7 +401,8 @@ these are one repository's findings and a shared cache must never hold them.
 
 ## 8. Retrieval
 
-Batched and parallel, and the two bounds bound different things:
+Batched and parallel, and the two bounds bound different things. Both are system
+configuration under `coordinator.security`, not product configuration:
 
 - **`batchSize` (50)** bounds the blast radius of one failure. A failed call
   costs fifty artifacts' results, not a release's.

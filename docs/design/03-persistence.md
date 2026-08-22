@@ -634,7 +634,9 @@ timestamp for the same reason `analysis_state` is (§12.2): never, running, done
 and failed are four situations and three of them look identical to a timestamp.
 
 `security_scans`, `security_findings` and `security_details` (migration 00022)
-hold what the scanner said, per artifact. Three tables rather than one, split by
+hold what the scanner said, per artifact. Their retention is system
+configuration (`coordinator.security`), not per product: how long to keep an
+index is a property of this deployment's disk. Three tables rather than one, split by
 what they cost and how long they stay true: the index - statuses, counts and the
 identifiers that make a finding findable - is the durable half that every read
 serves, and the complete responses expire in a day because **Xray is the source
@@ -647,11 +649,11 @@ convention: findings were retrieved under one repository's scanner permissions,
 and a cache keyed by digest alone would be a cross-tenant leak with good
 performance.
 
-Expiry is a column rather than a policy, because retention is per repository
-(`xray.detailTtl`): one product may cache for five minutes and another for an
-hour, and a sweeper reading a global constant would be wrong for both. Rows are
-filtered on read and removed by a leader-gated loop - deleting on read would
-make every page render a write transaction against the single writer.
+Expiry is a column rather than a policy so the two tiers can differ by weeks
+while one sweeper collects both, and so a retention change applies to rows
+already written rather than only to new ones. Rows are filtered on read and
+removed by a leader-gated loop - deleting on read would make every page render a
+write transaction against the single writer.
 
 Full argument in [21 - Security Posture](21-security-posture.md) §6.
 

@@ -189,8 +189,18 @@ func run() error {
 	// works perfectly.
 	securityCache := store.NewSecurity(st)
 	packageSecurity := store.NewPackageSecurity(st)
+	securityTuning := regclient.SecurityTuning{
+		Concurrency:    cfg.Coordinator.Security.Concurrency,
+		BatchSize:      cfg.Coordinator.Security.BatchSize,
+		RequestTimeout: cfg.Coordinator.Security.RequestTimeout,
+	}
+	securityRetention := security.CacheTTL{
+		Summary: cfg.Coordinator.Security.IndexRetention,
+		Detail:  cfg.Coordinator.Security.DetailRetention,
+	}
 	securitySyncer := security.NewSyncer(
-		security.NewService(regclient.NewSecurityResolver(registryClients), securityCache, logger),
+		security.NewService(
+			regclient.NewSecurityResolver(registryClients, securityTuning), securityCache, logger),
 		packageSecurity, logger)
 	// The requester turns `transfers create` and `transfers promote` into
 	// rows; the expander plans the transfers those rows opened. Two halves of
@@ -243,7 +253,7 @@ func run() error {
 	// The security cache expires in minutes and is filtered on read, so this
 	// loop is about SIZE rather than correctness - see the sweeper's comment.
 	securitySweeper := maintenance.NewSecurityCacheSweeper(
-		securityCache, packageSecurity, maintenance.DefaultSecuritySweepInterval, logger)
+		securityCache, packageSecurity, cfg.Coordinator.Security.SweepInterval, logger)
 
 	retentionSweeper := maintenance.NewRetentionSweeper(packages,
 		store.RetentionPolicy{
@@ -401,9 +411,10 @@ func run() error {
 		// release's stored findings stay readable, comparable and searchable
 		// while the scanner is down - which is exactly when somebody looks at
 		// them.
-		SecuritySync:  securitySyncer,
-		SecurityStore: securitySecurityStore{packageSecurity, securityCache},
-		SecurityIndex: securityCache,
+		SecuritySync:      securitySyncer,
+		SecurityStore:     securitySecurityStore{packageSecurity, securityCache},
+		SecurityIndex:     securityCache,
+		SecurityRetention: securityRetention,
 		// Reading one file out of a release, for somebody looking at it. Here
 		// for the third time for the first reason: it needs a credentialed
 		// client, and the API layer holds none.

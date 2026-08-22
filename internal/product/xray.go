@@ -1,183 +1,52 @@
 package product
 
-import "time"
-
-// Xray configures the JFrog Xray integration for one JFrog repository.
+// JFrog Xray, in one field.
 //
 // See docs/design/21-security-posture.md §3.
 //
-// # What is deliberately absent
+// # What this deliberately is not
 //
-// An endpoint credential. A username. A password. A secret reference. A
-// timeout for the credential exchange. None of them are here, and none of them
-// will be added, because JFrog repository credentials ALREADY EXIST - JFrog is
-// a supported repository type and every JFrog repository in every product
-// already declares a `credentialsRef`. Xray sits on the same platform, takes
-// the same credential, and is reached over the same network path with the same
-// CA bundle and the same proxy.
+// It was a nested block with eight keys - an endpoint, a repository key, a
+// watch list, a concurrency, a batch size, a timeout and two retentions. Every
+// one of them was either already stated by the repository above it or an
+// operational knob that has nothing to do with a product.
 //
-// A second credential model for the same host is not a feature. It is a second
-// place for one password to be rotated, and the second place is the one that is
-// missed - the failure arriving weeks later as an Xray integration that quietly
-// stopped answering while the repository kept working.
+// A JFrog repository already declares its registry, its repository path, its
+// credential, its CA bundle, its proxy and its timeouts. `type: jfrog` already
+// says which backend serves it. So the only thing a PRODUCT document has left
+// to say about Xray is whether it is on:
 //
-// So this block holds only what is genuinely about Xray: whether it is on, what
-// to ask it, and how hard to ask.
-type Xray struct {
-	// Enabled switches the integration on for this repository.
-	//
-	// Absent means OFF. That is the opposite of the convention used by
-	// `enabled` elsewhere in this schema, and it is deliberate: every other
-	// `enabled` field turns off something the document explicitly asked for,
-	// whereas this one would turn ON traffic to a third system that the
-	// document never mentioned. A repository that says nothing about Xray makes
-	// no Xray requests and exposes no Xray data.
-	Enabled *bool `json:"enabled,omitempty"`
-
-	// Endpoint is the JFrog PLATFORM base URL - `https://acme.jfrog.io`.
-	//
-	// Absent derives it from the repository's registry host, which is correct
-	// for a repository-path deployment (`acme.jfrog.io/docker-local/app`) and
-	// wrong for a subdomain one (`acme-docker.jfrog.io/app`), where Xray lives
-	// on the platform hostname and the docker subdomain answers 404. There is
-	// no way to tell the two apart from the hostname, so the derivation covers
-	// the common case and this field covers the other.
-	Endpoint string `json:"endpoint,omitempty"`
-
-	// RepositoryKey is the Artifactory repository key - `docker-local`.
-	// Used for the path-based lookup that covers artifacts indexed before Xray
-	// recorded a checksum we would recognise.
-	RepositoryKey string `json:"repositoryKey,omitempty"`
-
-	// Watches scopes results to named Xray watches, so a repository can report
-	// what its own policy cares about rather than everything Xray knows.
-	// Empty means everything.
-	Watches []string `json:"watches,omitempty"`
-
-	// Concurrency caps Xray requests in flight for this repository.
-	//
-	// Small by default and worth keeping small. Xray's summary endpoint is
-	// expensive server-side and rate-limited on hosted JFrog; sixty parallel
-	// requests is not ten times faster than six, it is a 429 storm and a slower
-	// answer.
-	Concurrency int `json:"concurrency,omitempty"`
-
-	// BatchSize is how many artifacts one summary request asks about. It bounds
-	// the blast radius of a failed call: one failure costs this many artifacts'
-	// results rather than a whole release's.
-	BatchSize int `json:"batchSize,omitempty"`
-
-	// Timeout bounds one Xray call end to end.
-	Timeout Duration `json:"timeout,omitempty"`
-
-	// DetailTTL is how long a COMPLETE vulnerability response may be cached.
-	//
-	// Short, and capped by validation, because Xray is the source of truth for
-	// detailed findings and this platform is explicitly not a system of record
-	// for them. The cache exists so that reopening a finding, repeating a
-	// comparison or generating an export does not re-query Xray - not so that
-	// the platform can answer without Xray at all.
-	DetailTTL Duration `json:"detailTtl,omitempty"`
-
-	// SummaryTTL is how long the LIGHTWEIGHT summary - counts, severities,
-	// status - is served before it is refreshed.
-	//
-	// Much longer than DetailTTL, because it is a different kind of data with a
-	// different cost of being stale. A package listing showing counts from an
-	// hour ago is useful; a listing that queries Xray for 157 artifacts on
-	// every page render is not a listing.
-	SummaryTTL Duration `json:"summaryTtl,omitempty"`
-}
-
-// Defaults for the Xray block. Stated here rather than in the plugin so that
-// `transferctl config check` can print what a document will actually do.
-const (
-	DefaultXrayConcurrency = 6
-	DefaultXrayBatchSize   = 50
-	DefaultXrayTimeout     = 60 * time.Second
-
-	// DefaultXrayDetailTTL is how long the HEAVY half of a finding lasts: the
-	// description, the references, the CVSS vector.
-	//
-	// A day. Long enough that reopening a release's findings the same
-	// afternoon, exporting them and comparing them costs nothing, short enough
-	// that the platform is not quietly accumulating a second copy of a
-	// vulnerability database that re-grades itself continuously.
-	DefaultXrayDetailTTL = 24 * time.Hour
-	// MaxXrayDetailTTL is the ceiling validation enforces.
-	MaxXrayDetailTTL = 30 * 24 * time.Hour
-
-	// DefaultXraySummaryTTL is how long the LIGHTWEIGHT index lasts: statuses,
-	// counts, and the identifiers that make a finding findable - CVE,
-	// component, severity, fixed version.
-	//
-	// Thirty days, and much longer than the detail tier on purpose. This is not
-	// a request cache; it is the durable result of a sync, and it is what every
-	// listing, comparison and search reads. Expiring it in hours would mean a
-	// release somebody synced this morning silently losing its counts by
-	// evening, and a search that found it at 10 and not at 4.
-	DefaultXraySummaryTTL = 30 * 24 * time.Hour
-
-	// MaxXrayBatchSize bounds one request. Xray accepts more; a request this
-	// large already takes long enough that its failure is expensive.
-	MaxXrayBatchSize = 200
-	// MaxXrayConcurrency bounds what one repository may do to one Xray.
-	MaxXrayConcurrency = 32
-)
-
-// IsEnabled reports whether Xray is on for this repository.
+//	type: jfrog
+//	xrayEnabled: true
 //
-// Nil-safe, and false for a nil block: "the document did not mention Xray"
-// and "the document switched Xray off" mean the same thing here, which is that
-// no Xray request is made.
-func (x *Xray) IsEnabled() bool {
-	return x != nil && x.Enabled != nil && *x.Enabled
-}
+// Everything else moved to where it belongs. The repository key is derived from
+// the repository path, because it IS the first segment of it. The concurrency,
+// batch size, timeout and retentions are operator tuning and live in the system
+// configuration, once, rather than being repeated in every product document and
+// drifting between them.
+//
+// # What is left, and why
+//
+// One escape hatch survives: XrayEndpoint. JFrog serves Docker two ways, and
+// only one of them can be derived. A repository-path deployment puts everything
+// on one hostname - `acme.jfrog.io/docker-local/app` - and there the platform
+// base URL IS the registry host. A subdomain deployment gives each repository
+// its own name - `acme-docker.jfrog.io/app` - and there it is not: Xray lives
+// at `acme.jfrog.io`, and asking the docker subdomain returns a 404 that reads
+// like a missing artifact rather than a wrong base URL.
+//
+// There is no reliable way to tell those apart from a hostname, so the
+// derivation covers the common case and this field covers the other. It is
+// absent from almost every document.
 
-// ConcurrencyOrDefault, BatchSizeOrDefault and the TTL accessors resolve one
-// field each, so that no caller re-implements a default and gets it subtly
-// different. Every one of them is nil-safe.
-func (x *Xray) ConcurrencyOrDefault() int {
-	if x == nil || x.Concurrency <= 0 {
-		return DefaultXrayConcurrency
-	}
-	return x.Concurrency
-}
-
-func (x *Xray) BatchSizeOrDefault() int {
-	if x == nil || x.BatchSize <= 0 {
-		return DefaultXrayBatchSize
-	}
-	return x.BatchSize
-}
-
-func (x *Xray) TimeoutOrDefault() time.Duration {
-	if x == nil {
-		return DefaultXrayTimeout
-	}
-	return x.Timeout.Or(DefaultXrayTimeout)
-}
-
-func (x *Xray) DetailTTLOrDefault() time.Duration {
-	if x == nil {
-		return DefaultXrayDetailTTL
-	}
-	return x.DetailTTL.Or(DefaultXrayDetailTTL)
-}
-
-func (x *Xray) SummaryTTLOrDefault() time.Duration {
-	if x == nil {
-		return DefaultXraySummaryTTL
-	}
-	return x.SummaryTTL.Or(DefaultXraySummaryTTL)
-}
+import "strings"
 
 // IsJFrog reports whether a registry type is served by the JFrog plugin.
 //
 // Two spellings for one backend: `artifactory` is the historical name and stays
 // canonical, `jfrog` is accepted because operators write it and rejecting it
-// teaches nobody anything. Anything that asks "can this repository do Xray"
-// asks this, so the two spellings can never drift apart.
+// teaches nobody anything. Anything asking "can this repository do Xray" asks
+// this, so the two spellings can never drift apart.
 func (t RegistryType) IsJFrog() bool {
 	return t == RegistryArtifactory || t == RegistryJFrog
 }
@@ -186,12 +55,11 @@ func (t RegistryType) IsJFrog() bool {
 //
 // `jfrog` and `artifactory` select one backend, and the database stores one of
 // them: `repositories.registry_type` carries a CHECK constraint, and admitting
-// a second spelling there would mean rewriting the table on SQLite - which
-// cannot alter a constraint in place, so the table has to be recreated,
-// carrying every column and index added by every migration since. That rebuild
-// is a standing hazard for a purely cosmetic gain: one dropped column and the
-// package listing stops working, which is precisely what a first attempt at
-// this did.
+// a second spelling there would mean rewriting the table on SQLite, which
+// cannot alter a constraint in place - carrying every column and index added by
+// every migration since. That rebuild is a standing hazard for a purely
+// cosmetic gain: one dropped column and the package listing stops working,
+// which is precisely what a first attempt at this did.
 //
 // So the document accepts both and the schema keeps knowing one. Nothing above
 // the catalog notices, because everything that asks "is this JFrog" calls
@@ -203,26 +71,61 @@ func (t RegistryType) Canonical() RegistryType {
 	return t
 }
 
-// XrayFor returns the Xray configuration of one configured repository, by name
-// and role, and whether that repository can do Xray at all.
+// XrayIsEnabled reports whether Xray is on for a repository.
 //
-// The second return value is not the same as `x != nil`: a Quay source with an
-// xray block would be a configuration error caught by validation, and a JFrog
-// source with none is a perfectly ordinary repository that simply has the
-// integration switched off.
-func (p Product) XrayFor(role Role, name string) (*Xray, bool) {
+// Nil-safe, and false for a nil: "the document did not mention Xray" and "the
+// document switched Xray off" mean the same thing here, which is that no Xray
+// request is made.
+//
+// Absent means OFF, which inverts the convention every other `enabled` in this
+// schema follows. Deliberately: the others turn off something the document
+// asked for, whereas this one would turn ON traffic to a third system the
+// document never mentioned.
+func XrayIsEnabled(enabled *bool) bool { return enabled != nil && *enabled }
+
+// XrayRepositoryKey derives the Artifactory repository key from a repository
+// path.
+//
+// It is the first segment, always: Artifactory addresses content as
+// `<repoKey>/<path>`, so `docker-local/vendor-a/platform` is the repository
+// `docker-local` holding `vendor-a/platform`, and `apm0014228-oci-stage` is a
+// repository holding everything at its root.
+//
+// Derived rather than declared because a declared one is a second place to
+// state a fact the document already states, and the second place is the one
+// that goes stale - a repository moved to a new key would keep reporting the
+// vulnerabilities of the old one, which is worse than reporting none.
+func XrayRepositoryKey(repository string) string {
+	repository = strings.Trim(strings.TrimSpace(repository), "/")
+	if repository == "" {
+		return ""
+	}
+	if i := strings.Index(repository, "/"); i > 0 {
+		return repository[:i]
+	}
+	return repository
+}
+
+// XrayFor reports whether one configured repository of a product has Xray on,
+// and where its platform lives.
+//
+// The second return value is not the same as the first: a Quay target with
+// `xrayEnabled: true` is a configuration error caught by validation, and a
+// JFrog target without it is a perfectly ordinary repository that simply has
+// the integration switched off.
+func (p Product) XrayFor(role Role, name string) (enabled bool, capable bool) {
 	if role == RoleTarget {
 		for _, t := range p.Spec.Targets {
 			if t.Name == name {
-				return t.Xray, t.Type.IsJFrog()
+				return XrayIsEnabled(t.XrayEnabled), t.Type.IsJFrog()
 			}
 		}
-		return nil, false
+		return false, false
 	}
 	for _, s := range p.Spec.Sources {
 		if s.Name == name {
-			return s.Xray, s.Type.IsJFrog()
+			return XrayIsEnabled(s.XrayEnabled), s.Type.IsJFrog()
 		}
 	}
-	return nil, false
+	return false, false
 }

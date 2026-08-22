@@ -11,7 +11,6 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
-	"github.com/abhijeet-oxide/softwareGateway/internal/product"
 	"github.com/abhijeet-oxide/softwareGateway/internal/regclient"
 	"github.com/abhijeet-oxide/softwareGateway/internal/security"
 	"github.com/abhijeet-oxide/softwareGateway/internal/store"
@@ -206,7 +205,10 @@ func (s *Server) handleSyncPackageSecurity(w http.ResponseWriter, r *http.Reques
 		Label:     releaseLabel(pkg),
 		Scope:     target.Scope,
 		Artifacts: artifacts,
-		TTL:       s.securityTTL(productName, product.Role(target.Scope.Role), target.Scope.Repository),
+		// Retention is a deployment's business, not a product's - see
+		// config.SecurityConfig. The zero value means "use the defaults", which
+		// is right for a Coordinator that has not been told otherwise.
+		TTL: s.deps.SecurityRetention,
 	})
 	switch {
 	case errors.Is(err, store.ErrSyncInFlight):
@@ -700,20 +702,6 @@ func releaseLabel(pkg store.PackageRow) string {
 		return pkg.Tag
 	}
 	return shortDigest(pkg.ManifestDigest)
-}
-
-// securityTTL resolves the retention the repository's configuration asks for.
-func (s *Server) securityTTL(productName string, role product.Role, repository string) security.CacheTTL {
-	var x *product.Xray
-	if s.deps.Products != nil {
-		if p, ok := s.deps.Products.Get(productName); ok {
-			x, _ = p.XrayFor(role, repository)
-		}
-	}
-	return security.CacheTTL{
-		Summary: x.SummaryTTLOrDefault(),
-		Detail:  x.DetailTTLOrDefault(),
-	}
 }
 
 // resolveSecondPackage resolves the `against` reference of a comparison.

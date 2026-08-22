@@ -127,21 +127,12 @@ data:
           discovery:
             enabled: false
 
-          # Optional. Valid only on a JFrog repository, and OFF unless said.
-          # Everything answerable by "the same as the repository" is absent:
-          # the endpoint, the credential, the CA bundle, the proxy and the
-          # timeouts above are the ones Xray is reached with. See 21 section 3.
-          xray:
-            enabled: true
-            # Only when the docker host is a subdomain and the platform is not.
-            endpoint: https://acme.jfrog.io
-            repositoryKey: docker-local
-            watches: [production]             # scope to named Xray watches
-            concurrency: 6                    # requests in flight, max 32
-            batchSize: 50                     # artifacts per request, max 200
-            timeout: 60s
-            detailTtl: 24h                    # descriptions and references, capped at 30d
-            summaryTtl: 720h                  # the index every read serves
+          # The whole of the Xray configuration. Valid only on a JFrog
+          # repository, and OFF unless said. Everything else Xray needs is
+          # already above: the platform URL from `registry`, the credential
+          # from `credentialsRef`, the repository key from the first segment
+          # of `repository`. See 21 section 3.
+          xrayEnabled: true
 
       # ─────────────────────────────────────────────────────────────
       # TARGETS - internal, read-write. Replication destinations and
@@ -340,39 +331,59 @@ Grouping is a different matter and is **not** retroactive: whether three tags be
 
 `signatures.layout` is the older spelling of this field and still works. It was nested under `signatures` when grouping tags was all it controlled; it now also decides how a package is NAMED, which is not a signature concern. Setting both to *different* values is a validation error rather than a precedence rule - picking one silently would leave the operator's other spelling doing nothing while looking as though it does something.
 
-### 5.2.1 `xray`
+### 5.2.1 `xrayEnabled`
 
-Optional, and valid only on a `jfrog` (or `artifactory`) repository. Switches on
-the JFrog Xray integration for that one repository, and configures only the
-parts that are genuinely about Xray:
+One field, valid only on a `jfrog` (or `artifactory`) repository:
 
 ```yaml
-xray:
-  enabled: true          # absent means OFF
-  endpoint: https://acme.jfrog.io   # only when the docker host is a subdomain
-  repositoryKey: docker-local
-  watches: [production]
-  concurrency: 6
-  batchSize: 50
-  timeout: 60s
-  detailTtl: 24h         # descriptions and references, capped at 30d
-  summaryTtl: 720h       # the index every read serves: statuses, counts, CVEs
+- name: cfx-jfrog-lab
+  registry: artifact.example.com
+  repository: apm0014228-oci-stage
+  type: jfrog
+  credentialsRef:
+    secretName: cfx-jfrog-secret
+  xrayEnabled: true
 ```
 
-**There is no credential here, and there will not be.** Xray sits on the JFrog
-platform this repository already reaches, and takes the credential this
-repository already declares in `credentialsRef`. A second credential model for
-one host is not a feature - it is a second place for one password to be rotated,
-and the second place is the one that is missed.
+That is the whole configuration. Everything Xray needs beyond it, the repository
+above it already states:
 
-`enabled` defaults to **off**, inverting the convention every other `enabled`
-in this schema follows. Deliberately: the others turn off something the document
-asked for, this one would turn ON traffic to a third system the document never
-mentioned.
+| Xray needs | Comes from |
+|---|---|
+| Platform URL | `registry` |
+| Credential | `credentialsRef` - **the same one**, never a second |
+| CA bundle, proxy, timeouts | `network`, inherited as usual |
+| Artifactory repository key | the first segment of `repository` |
+| Which backend | `type: jfrog` |
 
-An `xray` block on a repository that is not JFrog is rejected. That document is
-silently wrong otherwise - well-formed, applied, never read - and the operator
-sees a repository they believe reports vulnerabilities and which reports none.
+**There is no credential here, and there will not be.** A second credential
+model for one host is not a feature - it is a second place for one password to
+be rotated, and the second place is the one that is missed.
+
+It was briefly a nested block with eight keys. Every one of them was either
+already stated above it or an operator knob that has nothing to do with a
+product: concurrency, batch size, timeout and the two retentions now live in the
+system configuration (§8) where they are set once instead of drifting between
+documents.
+
+`xrayEnabled` defaults to **off**, inverting the convention every other
+`enabled` in this schema follows. Deliberately: the others turn off something
+the document asked for, this one would turn ON traffic to a third system the
+document never mentioned.
+
+`xrayEnabled: true` on a repository that is not JFrog is rejected. That document
+is silently wrong otherwise - well-formed, applied, never read - and the
+operator sees a repository they believe reports vulnerabilities and which
+reports none.
+
+#### `xrayEndpoint`
+
+The one escape hatch, and absent from almost every document. JFrog serves Docker
+two ways and only one can be derived: a repository-path deployment puts
+everything on one hostname (`acme.jfrog.io/docker-local/app`) and the platform
+base URL IS the registry host; a subdomain deployment
+(`acme-docker.jfrog.io/app`) puts Xray at `acme.jfrog.io`, and asking the docker
+subdomain returns a 404 that reads like a missing artifact. Set it only there.
 
 Full argument in [21 - Security Posture](21-security-posture.md) §3.
 

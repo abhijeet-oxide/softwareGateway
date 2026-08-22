@@ -38,8 +38,7 @@ spec:
       credentialsRef:
         secretName: jfrog
       default: true
-      xray:
-        enabled: true
+      xrayEnabled: true
 `
 
 // fakeSyncer stands in for the background job, so handler tests need no

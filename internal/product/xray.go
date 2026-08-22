@@ -96,17 +96,27 @@ const (
 	DefaultXrayBatchSize   = 50
 	DefaultXrayTimeout     = 60 * time.Second
 
-	// DefaultXrayDetailTTL keeps a complete response long enough to reopen a
-	// finding, repeat a comparison and export it - minutes of one person's
-	// work - and not long enough to become a stale second copy of Xray.
-	DefaultXrayDetailTTL = 15 * time.Minute
-	// MaxXrayDetailTTL is the ceiling validation enforces. Past this the cache
-	// stops being a cache and starts being an unsynchronised replica of a
-	// system that updates its findings continuously.
-	MaxXrayDetailTTL = 24 * time.Hour
+	// DefaultXrayDetailTTL is how long the HEAVY half of a finding lasts: the
+	// description, the references, the CVSS vector.
+	//
+	// A day. Long enough that reopening a release's findings the same
+	// afternoon, exporting them and comparing them costs nothing, short enough
+	// that the platform is not quietly accumulating a second copy of a
+	// vulnerability database that re-grades itself continuously.
+	DefaultXrayDetailTTL = 24 * time.Hour
+	// MaxXrayDetailTTL is the ceiling validation enforces.
+	MaxXrayDetailTTL = 30 * 24 * time.Hour
 
-	// DefaultXraySummaryTTL is how long counts are good for.
-	DefaultXraySummaryTTL = 6 * time.Hour
+	// DefaultXraySummaryTTL is how long the LIGHTWEIGHT index lasts: statuses,
+	// counts, and the identifiers that make a finding findable - CVE,
+	// component, severity, fixed version.
+	//
+	// Thirty days, and much longer than the detail tier on purpose. This is not
+	// a request cache; it is the durable result of a sync, and it is what every
+	// listing, comparison and search reads. Expiring it in hours would mean a
+	// release somebody synced this morning silently losing its counts by
+	// evening, and a search that found it at 10 and not at 4.
+	DefaultXraySummaryTTL = 30 * 24 * time.Hour
 
 	// MaxXrayBatchSize bounds one request. Xray accepts more; a request this
 	// large already takes long enough that its failure is expensive.

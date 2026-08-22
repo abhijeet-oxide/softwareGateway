@@ -217,3 +217,103 @@ func TTLFor(p *product.Product, role product.Role, repository string) security.C
 }
 
 var _ security.Resolver = (*SecurityResolver)(nil)
+
+// ScannedRepository is a configured repository that could answer for a release.
+type ScannedRepository struct {
+	Role       product.Role
+	Name       string
+	Registry   string
+	Repository string
+}
+
+// SecurityRepositoryFor chooses which configured repository to ask about a
+// release.
+//
+// # Why this is not "the repository it was discovered in"
+//
+// Because that is the VENDOR'S registry, and the vendor does not run your
+// scanner. In the ordinary estate a release is discovered on a vendor registry -
+// Nokia NEAR, say - and replicated into JFrog, and it is the JFrog copy that
+// Xray has indexed. Scoping the security read to the source repository finds no
+// scanner at all and reports every release as "no scanner configured", on an
+// estate where Xray is switched on and working.
+//
+// That was the first shape of this and it was wrong on the only topology that
+// matters.
+//
+// # The order, and why it is that order
+//
+//  1. A target the release has actually REACHED. The scanner can only have
+//     indexed a copy that exists, and a target the release was never
+//     transferred to holds nothing to index.
+//  2. The default target. A release queued but not yet transferred will land
+//     there, and naming it is a better answer than naming nothing - the sync
+//     then reports "not scanned", which is true and actionable.
+//  3. Any remaining scanner-enabled repository, targets before sources, so a
+//     single-target product needs no ordering rule of its own.
+//
+// `reached` is the set of target names the release has been transferred to,
+// supplied by the caller because transfer history is the store's knowledge and
+// this package holds configuration.
+func SecurityRepositoryFor(p *product.Product, reached []string) (ScannedRepository, bool) {
+	candidates := securityCandidates(p)
+	if len(candidates) == 0 {
+		return ScannedRepository{}, false
+	}
+
+	inReach := make(map[string]bool, len(reached))
+	for _, name := range reached {
+		inReach[name] = true
+	}
+
+	// 1: a target this release actually reached.
+	for _, c := range candidates {
+		if c.Role == product.RoleTarget && inReach[c.Name] {
+			return c, true
+		}
+	}
+	// 2: the default target.
+	if def, ok := p.DefaultTarget(); ok {
+		for _, c := range candidates {
+			if c.Role == product.RoleTarget && c.Name == def.Name {
+				return c, true
+			}
+		}
+	}
+	// 3: anything left, targets first.
+	for _, c := range candidates {
+		if c.Role == product.RoleTarget {
+			return c, true
+		}
+	}
+	return candidates[0], true
+}
+
+// securityCandidates lists the repositories of a product that have a scanner
+// switched on, targets first.
+func securityCandidates(p *product.Product) []ScannedRepository {
+	var out []ScannedRepository
+	for _, t := range p.Spec.Targets {
+		if t.IsEnabled() && t.Type.IsJFrog() && t.Xray.IsEnabled() {
+			out = append(out, ScannedRepository{
+				Role: product.RoleTarget, Name: t.Name,
+				Registry: t.Registry, Repository: t.Repository,
+			})
+		}
+	}
+	for _, s := range p.Spec.Sources {
+		if !s.IsEnabled() || !s.Type.IsJFrog() || !s.Xray.IsEnabled() {
+			continue
+		}
+		repo := s.Repository
+		if repo == "" {
+			if declared := s.DeclaredRepositories(); len(declared) > 0 {
+				repo = declared[0]
+			}
+		}
+		out = append(out, ScannedRepository{
+			Role: product.RoleSource, Name: s.Name, Registry: s.Registry, Repository: repo,
+		})
+	}
+	return out
+}

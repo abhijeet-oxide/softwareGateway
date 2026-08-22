@@ -140,8 +140,8 @@ data:
             concurrency: 6                    # requests in flight, max 32
             batchSize: 50                     # artifacts per request, max 200
             timeout: 60s
-            detailTtl: 15m                    # complete responses, capped at 24h
-            summaryTtl: 6h                    # counts and severities
+            detailTtl: 24h                    # descriptions and references, capped at 30d
+            summaryTtl: 720h                  # the index every read serves
 
       # ─────────────────────────────────────────────────────────────
       # TARGETS - internal, read-write. Replication destinations and
@@ -355,8 +355,8 @@ xray:
   concurrency: 6
   batchSize: 50
   timeout: 60s
-  detailTtl: 15m         # complete responses, capped at 24h
-  summaryTtl: 6h         # counts and severities
+  detailTtl: 24h         # descriptions and references, capped at 30d
+  summaryTtl: 720h       # the index every read serves: statuses, counts, CVEs
 ```
 
 **There is no credential here, and there will not be.** Xray sits on the JFrog

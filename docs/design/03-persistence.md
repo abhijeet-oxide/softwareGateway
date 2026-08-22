@@ -626,12 +626,20 @@ A partial index - `ON package_artifacts (raw_used_at) WHERE raw IS NOT NULL` - k
 
 ## 12.1 Security cache tables
 
+`package_security` (migration 00023) holds one row per RELEASE: the state of its
+vulnerability sync, the counts, the coverage and when it last ran. It does not
+expire - it is the RESULT of a sync, and it is what a listing of two hundred
+releases renders without touching a scanner. Syncing is a STATE rather than a
+timestamp for the same reason `analysis_state` is (§12.2): never, running, done
+and failed are four situations and three of them look identical to a timestamp.
+
 `security_scans`, `security_findings` and `security_details` (migration 00022)
-hold what a scanner said. Three tables rather than one, split by what they cost
-and how long they stay true: counts are kilobytes and kept for hours, an index
-of identifiers is kept with them so search needs no scanner round trip, and the
-complete responses expire in minutes because **Xray is the source of truth for
-detailed findings and this platform is deliberately not a second one**.
+hold what the scanner said, per artifact. Three tables rather than one, split by
+what they cost and how long they stay true: the index - statuses, counts and the
+identifiers that make a finding findable - is the durable half that every read
+serves, and the complete responses expire in a day because **Xray is the source
+of truth for detailed findings and this platform is deliberately not a second
+one**.
 
 Every row carries `product`, `repository` and `provider`, and those three are
 part of every unique key. That is an authorization boundary rather than a filing

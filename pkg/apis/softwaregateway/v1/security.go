@@ -271,6 +271,13 @@ type PackageSecuritySummary struct {
 	// Complete is whether every scannable artifact has a result. False means
 	// the counts cover only part of the release.
 	Complete bool `json:"complete"`
+	// Scanned and Scannable are what "0 vulnerabilities" actually means.
+	//
+	// Zero of zero is "nobody looked" and must never render as "none found";
+	// zero of fourteen is a clean release. A listing cell cannot tell them
+	// apart from the counts alone, which is why both travel with them.
+	Scanned   int `json:"scanned"`
+	Scannable int `json:"scannable"`
 
 	SyncedAt string `json:"syncedAt,omitempty"`
 	Error    string `json:"error,omitempty"`

@@ -254,6 +254,28 @@ func (s *Syncer) run(req SyncRequest, progress *SyncProgress) {
 		return
 	}
 
+	// A sync that reached the scanner and got results for NOTHING is not a
+	// success with zero findings. It is the failure this whole feature exists
+	// to keep visible: recorded as a success it would put a clean-looking row -
+	// "0 vulnerabilities" - in a listing for a release nobody scanned.
+	//
+	// Distinct from a release with nothing scannable in it, which is an honest
+	// zero and stays a success.
+	if cov := res.Posture.Coverage; cov.Scannable() > 0 && cov.Scanned == 0 {
+		reason := fmt.Sprintf(
+			"The scanner returned no results for any of the %d artifacts in this release.",
+			cov.Scannable())
+		if msg := firstMessage(res.Posture.Reports); msg != "" {
+			reason += " " + msg
+		}
+		s.log.Warn("security sync produced no results",
+			"package", req.PackageID, "label", req.Label, "artifacts", cov.Scannable())
+		if ferr := s.recorder.Fail(ctx, req.PackageID, reason); ferr != nil {
+			s.log.Error("could not record empty security sync", "package", req.PackageID, "error", ferr)
+		}
+		return
+	}
+
 	ReportStage(progress, StageCorrelating, len(res.Posture.Reports), len(res.Posture.Reports))
 	if err := s.recorder.Record(ctx, PackageResult{
 		PackageID:   req.PackageID,
@@ -273,6 +295,26 @@ func (s *Syncer) run(req SyncRequest, progress *SyncProgress) {
 		"scanned", res.Posture.Coverage.Scanned,
 		"vulnerabilities", res.Posture.Counts.Total,
 		"fromCache", res.FromCache, "fetched", res.Fetched)
+}
+
+// firstMessage is whatever the provider said about the first artifact it could
+// not answer for.
+//
+// One message rather than all of them: a release of three hundred artifacts
+// against an unreachable scanner produces three hundred identical sentences,
+// and the useful part is the sentence, not the count.
+func firstMessage(reports []Report) string {
+	for _, r := range reports {
+		if r.Status == StatusUnavailable && r.Message != "" {
+			return r.Message
+		}
+	}
+	for _, r := range reports {
+		if r.Message != "" {
+			return r.Message
+		}
+	}
+	return ""
 }
 
 // Describe renders a sync's position as a sentence, for a caller that has a

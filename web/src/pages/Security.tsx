@@ -18,10 +18,18 @@ import { mono, semantic } from '../theme'
  *
  * # What this page can and cannot answer
  *
- * It searches what the platform has ALREADY RETRIEVED. It cannot answer "is
- * this CVE anywhere in my estate", only "is it anywhere I have looked", and
- * those are different sentences. Answering the first would mean scanning every
- * release in the catalogue on every keystroke.
+ * It searches the index a SYNC wrote. It cannot answer "is this CVE anywhere in
+ * my estate", only "is it in a release somebody has synced", and those are
+ * different sentences. Answering the first would mean scanning every release in
+ * the catalogue on every keystroke.
+ *
+ * # How it is fast, and how it is accurate
+ *
+ * Fast because it is one indexed SQL query against identifiers - CVE, component
+ * name, artifact name - and never a scanner request. Accurate for what has been
+ * synced, and honest about the rest: the note under every result names the
+ * remedy, so a reader who finds nothing knows to sync rather than concluding
+ * they are safe.
  *
  * That limit is stated on the page rather than left to be discovered. A search
  * that silently returned nothing would be read as "this CVE does not affect
@@ -327,8 +335,8 @@ export default function Security() {
               </Button>
             </Space>
             <Typography.Text type="secondary" style={{ color: semantic.neutral }}>
-              Searching covers the releases whose security data has already been retrieved. Opening a
-              release's security view adds it.
+              Searching covers releases whose vulnerabilities have been synced. Syncing a release from
+              its Security tab, or from the packages listing, adds it.
             </Typography.Text>
           </Space>
         </Card>

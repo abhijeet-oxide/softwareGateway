@@ -1,14 +1,15 @@
 import type { ReactNode } from 'react'
 import { Alert, Button, Dropdown, Progress, Space, Tag, Tooltip, Typography } from 'antd'
+import { formatRelative } from '../domain/format'
 import {
   CheckCircleOutlined, DownloadOutlined, ExclamationCircleOutlined,
-  MinusCircleOutlined, QuestionCircleOutlined, WarningOutlined,
+  MinusCircleOutlined, QuestionCircleOutlined, SyncOutlined, WarningOutlined,
 } from '@ant-design/icons'
 import { mono, palette, semantic, severity as severityColour, severitySurface, verdict as verdictColour } from '../theme'
 import { SEVERITIES } from '../api/types'
 import type {
-  ScanStatus, SecurityCounts, SecurityCoverage, SecurityProgressResponse,
-  SecurityState, Severity, Verdict,
+  PackageSecuritySummary, ScanStatus, SecurityCounts, SecurityCoverage,
+  SecurityState, SecuritySyncStatus, Severity, Verdict,
 } from '../api/types'
 
 /**
@@ -112,55 +113,99 @@ export function SeverityCountsRow({ counts, size = 'default' }: {
 /**
  * A compact vulnerability count for a table cell.
  *
- * Takes the STATUS as well as the counts, because a listing is exactly where a
- * blank cell would be read as "nothing wrong with this one".
+ * Takes the whole stored SUMMARY rather than counts, because a listing is
+ * exactly where a blank cell would be read as "nothing wrong with this one".
+ * Four of the five states it renders are not numbers at all.
  */
-export function VulnerabilityCell({ counts, state }: {
-  counts?: SecurityCounts
-  state?: SecurityState | ScanStatus
-}) {
-  if (!counts || state === 'disabled') {
-    return <Typography.Text type="secondary">Not scanned</Typography.Text>
-  }
-  if (state === 'unavailable' || state === 'not_scanned') {
+export function VulnerabilityCell({ summary }: { summary?: PackageSecuritySummary }) {
+  if (!summary || !summary.canSync) {
     return (
-      <Tooltip title="No scan result. This is not the same as no vulnerabilities.">
+      <Tooltip title={summary?.reason ?? 'No vulnerability scanner is configured for this product.'}>
+        <Typography.Text type="secondary">No scanner</Typography.Text>
+      </Tooltip>
+    )
+  }
+  if (summary.state === 'syncing') {
+    return (
+      <Space size={6}>
+        <SyncOutlined spin style={{ color: palette.primary }} />
+        <Typography.Text type="secondary">Syncing…</Typography.Text>
+      </Space>
+    )
+  }
+  if (summary.state === '') {
+    return (
+      <Tooltip title="Nobody has scanned this release. That is not the same as no vulnerabilities.">
+        <Typography.Text type="secondary">Not synced</Typography.Text>
+      </Tooltip>
+    )
+  }
+  if (summary.state === 'failed' && !summary.syncedAt) {
+    return (
+      <Tooltip title={summary.error}>
         <Space size={4}>
-          <QuestionCircleOutlined style={{ color: semantic.neutral }} />
-          <Typography.Text type="secondary">Unknown</Typography.Text>
+          <ExclamationCircleOutlined style={{ color: semantic.error }} />
+          <Typography.Text type="secondary">Sync failed</Typography.Text>
         </Space>
       </Tooltip>
     )
   }
-  if (counts.total === 0) {
+
+  const stale = summary.state === 'failed'
+
+  // Zero is two different facts and only the coverage tells them apart. A
+  // release where nothing was scanned is not a release with no vulnerabilities,
+  // and a green tick beside that number is the exact failure this whole feature
+  // exists to prevent.
+  if (summary.scanned === 0) {
+    return (
+      <Tooltip title="Nothing in this release was scanned, so there is no result. That is not the same as no vulnerabilities.">
+        <Space size={4}>
+          <QuestionCircleOutlined style={{ color: semantic.neutral }} />
+          <Typography.Text type="secondary">No results</Typography.Text>
+        </Space>
+      </Tooltip>
+    )
+  }
+
+  if (summary.counts.total === 0) {
     return (
       <Space size={4}>
         <CheckCircleOutlined style={{ color: semantic.success }} />
         <Typography.Text>None found</Typography.Text>
+        {!summary.complete && <PartialMark />}
       </Space>
     )
   }
+
   return (
-    <Space direction="vertical" size={2} style={{ width: '100%', minWidth: 140 }}>
+    <Space direction="vertical" size={2} style={{ width: '100%', minWidth: 150 }}>
       <Space size={8}>
-        <strong>{counts.total.toLocaleString()}</strong>
-        {SEVERITIES.slice(0, 2).map((s) => (
-          counts.bySeverity[s] > 0 ? (
-            <Tooltip key={s} title={`${SEVERITY_LABEL[s]}: ${counts.bySeverity[s]}`}>
-              <span style={{ color: severityColour[s], fontWeight: 500 }}>
-                {counts.bySeverity[s]} {SEVERITY_LABEL[s].toLowerCase()}
-              </span>
-            </Tooltip>
+        <strong>{summary.counts.total.toLocaleString()}</strong>
+        {SEVERITIES.slice(0, 2).map((sev) => (
+          summary.counts.bySeverity[sev] > 0 ? (
+            <span key={sev} style={{ color: severityColour[sev], fontWeight: 500 }}>
+              {summary.counts.bySeverity[sev]} {SEVERITY_LABEL[sev].toLowerCase()}
+            </span>
           ) : null
         ))}
-        {state === 'partial' && (
-          <Tooltip title="Some artifacts in this release have not been scanned, so this number covers only part of it.">
-            <WarningOutlined style={{ color: semantic.warning }} />
+        {!summary.complete && <PartialMark />}
+        {stale && (
+          <Tooltip title={`The last sync failed: ${summary.error}. These numbers are from the one before it.`}>
+            <ExclamationCircleOutlined style={{ color: semantic.warning }} />
           </Tooltip>
         )}
       </Space>
-      <SeverityBar counts={counts} height={5} />
+      <SeverityBar counts={summary.counts} height={5} />
     </Space>
+  )
+}
+
+function PartialMark() {
+  return (
+    <Tooltip title="Some artifacts in this release have no scan result, so this number covers only part of it.">
+      <WarningOutlined style={{ color: semantic.warning }} />
+    </Tooltip>
   )
 }
 
@@ -235,7 +280,10 @@ export function SecurityStateNotice({ state, message, onRefresh }: {
   const config: Record<Exclude<SecurityState, 'ok'>, { type: 'warning' | 'error' | 'info'; title: string }> = {
     partial: { type: 'warning', title: 'Some artifacts have not been scanned' },
     unavailable: { type: 'error', title: 'Security data could not be retrieved' },
-    disabled: { type: 'info', title: 'Security scanning is switched off for this repository' },
+    disabled: { type: 'info', title: 'No vulnerability scanner is configured' },
+    not_synced: { type: 'info', title: 'Vulnerabilities have not been synced yet' },
+    syncing: { type: 'info', title: 'Syncing vulnerabilities' },
+    stale: { type: 'warning', title: 'The last sync failed' },
   }
   const { type, title } = config[state]
 
@@ -272,11 +320,12 @@ export function SecurityNotConfigured({ what = 'This deployment' }: { what?: str
       type="info"
       showIcon
       icon={<MinusCircleOutlined />}
-      message="No security scanner is configured"
+      message="No vulnerability scanner is configured"
       description={
         <>
-          {what} has no security scanner set up, so there is nothing to report here.
-          Security scanning is enabled per repository, on a JFrog repository, in the product configuration.
+          {what} has no scanner set up, so there is nothing to report here. Scanning is switched on per
+          repository: set <code>type: jfrog</code> and <code>xray.enabled: true</code> on the JFrog
+          repository this release lands in.
         </>
       }
     />
@@ -427,36 +476,48 @@ export function ComparisonTiles({ resolved, introduced, moreSevere, lessSevere, 
 // ---------------------------------------------------------------------------
 
 /**
- * What the system is doing, in words, while it does it.
+ * What the sync is doing, in words, while it does it.
  *
  * # Why not a spinner
  *
- * Retrieving a release's posture is a scanner query per batch across a few
- * hundred artifacts. A spinner says the same thing for those thirty seconds as
- * it says for a request that has silently stopped, and "is this working?" is
- * the only question anybody has while waiting. A user who cannot tell reloads
- * the page, which starts the whole retrieval again.
+ * A sync is a scanner query per batch across a few hundred artifacts. A spinner
+ * says the same thing for those thirty seconds as it says for a job that has
+ * silently stopped, and "is this working?" is the only question anybody has
+ * while waiting. A user who cannot tell reloads the page.
  *
- * A stage with no total shows an indeterminate bar rather than a fabricated
- * percentage. The denominator is genuinely unknown while a tree is being
- * walked, and inventing one is how a bar reaches 90% and stops.
+ * # Why a stage with no total shows an indeterminate bar
+ *
+ * Because the denominator is genuinely unknown while a tree is being walked,
+ * and inventing one is how a bar reaches 90% and stops.
+ *
+ * # Why an empty stage list is not an error
+ *
+ * The sync may be running on another replica, where this one holds no live
+ * position. The stored state still says "syncing", and saying so without a
+ * percentage is honest; claiming 0% would not be.
  */
-export function SecurityProgressPanel({ progress, fallback }: {
-  progress?: SecurityProgressResponse
-  fallback?: string
-}) {
-  const stages = progress?.stages ?? []
-  const notes = progress?.notes ?? []
+export function SecurityProgressPanel({ sync }: { sync: SecuritySyncStatus }) {
+  const stages = sync.stages ?? []
+  const notes = sync.notes ?? []
   const current = stages.at(-1)
 
   return (
-    <div style={{ padding: '20px 4px' }}>
+    <div style={{ padding: '18px 4px' }}>
       <Space direction="vertical" size={14} style={{ width: '100%' }}>
-        <Typography.Text strong>
-          {current ? current.label : (fallback ?? 'Retrieving security data')}
-        </Typography.Text>
+        <Space size={8}>
+          <SyncOutlined spin style={{ color: palette.primary }} />
+          <Typography.Text strong>{current ? current.label : sync.label}</Typography.Text>
+        </Space>
 
-        {stages.length === 0 && <Progress percent={100} status="active" showInfo={false} size="small" />}
+        {stages.length === 0 && (
+          <>
+            <Progress percent={100} status="active" showInfo={false} size="small" />
+            <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+              Asking {sync.provider === 'jfrog-xray' ? 'JFrog Xray' : (sync.provider || 'the scanner')} about this
+              release{sync.repository ? ` in ${sync.repository}` : ''}. This can take a few minutes.
+            </Typography.Text>
+          </>
+        )}
 
         {stages.map((stage) => (
           <div key={stage.name}>
@@ -484,6 +545,60 @@ export function SecurityProgressPanel({ progress, fallback }: {
         )}
       </Space>
     </div>
+  )
+}
+
+/**
+ * The one control that talks to a scanner.
+ *
+ * Its label changes with the state, because "Sync vulnerabilities" and "Sync
+ * again" are different offers: the first is the only way to get any answer at
+ * all, and the second is a refresh of one that exists. A button that said the
+ * same thing in both places would make the first look optional.
+ */
+export function SyncButton({ sync, onSync, pending, size = 'middle' }: {
+  sync: SecuritySyncStatus
+  onSync: () => void
+  pending?: boolean
+  size?: 'small' | 'middle'
+}) {
+  if (!sync.canSync) {
+    return (
+      <Tooltip title={sync.reason}>
+        <Button size={size} icon={<SyncOutlined />} disabled>Sync vulnerabilities</Button>
+      </Tooltip>
+    )
+  }
+  const running = sync.state === 'syncing'
+  return (
+    <Tooltip
+      title={running
+        ? 'A sync is already running for this release.'
+        : `Asks ${sync.provider === 'jfrog-xray' ? 'JFrog Xray' : 'the scanner'}${sync.repository ? ` in ${sync.repository}` : ''} about every artifact in this release and stores the answer.`}
+    >
+      <Button
+        size={size}
+        type={sync.state === '' ? 'primary' : 'default'}
+        icon={<SyncOutlined spin={running || pending} />}
+        loading={pending}
+        disabled={running}
+        onClick={onSync}
+      >
+        {running ? 'Syncing…' : sync.state === '' ? 'Sync vulnerabilities' : 'Sync again'}
+      </Button>
+    </Tooltip>
+  )
+}
+
+/** When a release was last synced, and by which scanner. */
+export function SyncedAgo({ sync }: { sync: SecuritySyncStatus }) {
+  if (!sync.syncedAt) return null
+  return (
+    <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+      {sync.provider === 'jfrog-xray' ? 'JFrog Xray' : sync.provider}
+      {sync.repository && ` · ${sync.repository}`}
+      {` · synced ${formatRelative(sync.syncedAt)}`}
+    </Typography.Text>
   )
 }
 

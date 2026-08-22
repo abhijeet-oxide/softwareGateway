@@ -1,202 +1,262 @@
 import { useMemo, useState } from 'react'
 import {
-  Button, Card, Checkbox, Col, Input, Row, Segmented, Space, Table, Tooltip, Typography,
+  Alert, App, Button, Card, Checkbox, Col, Input, Progress, Row, Segmented, Space, Table,
+  Tooltip, Typography,
 } from 'antd'
-import { ReloadOutlined } from '@ant-design/icons'
-import { usePackageSecurity, useRefreshPackageSecurity, useSecurityProgress, packageSecurityExportUrl } from '../api/queries'
+import { usePackageSecurity, useSyncPackageSecurity, packageSecurityExportUrl } from '../api/queries'
 import { SEVERITIES } from '../api/types'
 import type {
   PackageSecurityResponse, SecurityFinding, SecurityReport, Severity,
 } from '../api/types'
 import {
-  ComponentCell, CoverageMeter, CveCell, FindingsEmpty, FixCell, ScanStatusTag,
+  ComponentCell, CveCell, FindingsEmpty, FixCell, ScanStatusTag,
   SecurityExportMenu, SecurityNotConfigured, SecurityProgressPanel, SecurityStateNotice,
-  SeverityBar, SeverityCountsRow, SeverityTag, VulnerabilityCell,
+  SeverityBar, SeverityCountsRow, SeverityTag, SyncButton, SyncedAgo,
 } from './security'
-import { mono, palette, semantic, severity as severityColour } from '../theme'
-import { formatRelative } from '../domain/format'
+import { mono, semantic, severity as severityColour } from '../theme'
 
 /**
- * A release's security posture: the whole of the "package-level security"
- * requirement in one panel.
+ * The Security tab of a release.
  *
  * # The order of what is on screen, and why it is that order
  *
- * State notice, then totals, then coverage, then artifacts, then findings.
- * That is deliberately the order of DECREASING trust: the first thing a reader
- * meets is whether these numbers can be believed, and only then the numbers.
- * The same panel with the caveat at the bottom is a panel whose totals get
- * quoted in a release meeting without it.
+ * Sync state, then coverage, then totals, then the rows. That is deliberately
+ * the order of DECREASING trust: the first thing a reader meets is whether
+ * these numbers exist and cover the whole release, and only then the numbers.
+ * The same tab with the caveat at the bottom is a tab whose totals get quoted
+ * in a release meeting without it.
  *
- * # Two levels in one panel
+ * # Two levels in one tab
  *
- * The tiles and the distribution bar are the simple view - readable without
- * knowing what a CVE is. The two tables under them are the detailed view. They
- * are one component rather than two pages because they are one question at two
- * depths, and a reader who needs the second should not have to navigate away
- * from the first to find it.
+ * The cards and the distribution bar are the simple view - readable without
+ * knowing what a CVE is. The two tables under them are the detailed view. One
+ * component rather than two pages, because they are one question at two depths
+ * and a reader who needs the second should not navigate away from the first.
  */
-export function SecurityPanel({ product, reference, repository }: {
+export function SecurityTab({ product, reference, repository }: {
   product: string
   reference: string
   repository?: string
 }) {
-  /*
-   * A token minted once per mount, so the progress side channel has something
-   * to key on. The retrieval's response IS the answer, so there is nothing to
-   * hand an id back in - the client supplies one and polls beside it.
-   */
-  const [token] = useState(() => `sec-${Math.random().toString(36).slice(2, 10)}`)
+  const { message } = App.useApp()
 
-  const security = usePackageSecurity(product, reference, {
-    repository, detail: true, progressToken: token,
-  })
-  const refresh = useRefreshPackageSecurity()
-  const busy = security.isLoading || refresh.isPending
-  const progress = useSecurityProgress(token, busy)
-
+  const security = usePackageSecurity(product, reference, { repository, detail: true })
+  const sync = useSyncPackageSecurity()
   const data = security.data
 
-  if (busy && !data) {
-    return (
-      <Card title="Security">
-        <SecurityProgressPanel
-          progress={progress.data}
-          fallback="Retrieving security data for this release"
-        />
-      </Card>
-    )
+  const startSync = () => {
+    sync.mutate({ product, ref: reference, repository }, {
+      onSuccess: (res) => {
+        message.info(res.started
+          ? `Syncing vulnerabilities for ${res.artifacts} artifacts. This can take a few minutes.`
+          : 'A sync is already running for this release.')
+        void security.refetch()
+      },
+      onError: (e) => message.error(e instanceof Error ? e.message : 'The sync could not be started.'),
+    })
+  }
+
+  if (security.isLoading) {
+    return <Card loading />
   }
 
   /*
-   * A 404 here means the deployment has no scanner wired at all - the route is
-   * deliberately absent rather than present and always failing. That is not an
-   * error to show in red; it is a fact about the deployment.
+   * A 404 here means the deployment has no security storage wired at all - the
+   * route is deliberately absent rather than present and always failing. That
+   * is not an error to show in red; it is a fact about the deployment.
    */
   if (!data) {
-    return <Card title="Security"><SecurityNotConfigured /></Card>
+    return <SecurityNotConfigured />
   }
 
   return (
-    <Card
-      title="Security"
-      extra={
+    <Space direction="vertical" size={16} style={{ width: '100%' }}>
+      <Space
+        size={12}
+        wrap
+        style={{ width: '100%', justifyContent: 'space-between', alignItems: 'center' }}
+      >
+        <SyncedAgo sync={data.sync} />
         <Space size={8}>
-          {data.provider && (
-            <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-              {data.provider === 'jfrog-xray' ? 'JFrog Xray' : data.provider}
-              {data.scannedAt && ` · scanned ${formatRelative(data.scannedAt)}`}
-              {data.fromCache > 0 && ` · ${data.fromCache} from cache`}
-            </Typography.Text>
-          )}
           <SecurityExportMenu
-            disabled={!data.enabled}
+            disabled={data.sync.state !== 'synced'}
             urlFor={(format, view) => packageSecurityExportUrl(product, reference, {
               format, view, repository,
             })}
           />
-          <Tooltip title="Ask the scanner again, ignoring anything cached.">
-            <Button
-              icon={<ReloadOutlined />}
-              loading={refresh.isPending}
-              onClick={() => refresh.mutate({ product, ref: reference, repository, detail: true, progressToken: token })}
-            >
-              Refresh
-            </Button>
-          </Tooltip>
+          <SyncButton sync={data.sync} onSync={startSync} pending={sync.isPending} />
         </Space>
-      }
-    >
-      <SecurityStateNotice
-        state={data.state}
-        message={data.message}
-        onRefresh={data.state === 'unavailable'
-          ? () => refresh.mutate({ product, ref: reference, repository, detail: true })
-          : undefined}
-      />
+      </Space>
 
-      {refresh.isPending && (
-        <SecurityProgressPanel progress={progress.data} fallback="Asking the scanner again" />
+      {data.sync.state === 'syncing'
+        ? <Card><SecurityProgressPanel sync={data.sync} /></Card>
+        : (
+          <SecurityStateNotice
+            state={data.state}
+            message={data.message}
+            onRefresh={data.sync.canSync && data.state !== 'not_synced' ? startSync : undefined}
+          />
+        )}
+
+      {data.sync.state === '' && data.sync.canSync && <NeverSynced onSync={startSync} pending={sync.isPending} />}
+
+      {(data.sync.state === 'synced' || data.sync.syncedAt) && (
+        <>
+          <SummaryCards data={data} />
+          <FindingsSection data={data} product={product} reference={reference} repository={repository} />
+        </>
       )}
+    </Space>
+  )
+}
 
-      <SummaryTiles data={data} />
-
-      <FindingsSection data={data} product={product} reference={reference} repository={repository} />
+/**
+ * The empty state, which is an OFFER rather than a message.
+ *
+ * A release nobody has scanned is the normal state of a fresh estate, and the
+ * only useful thing to put on this screen is the button that changes it.
+ */
+function NeverSynced({ onSync, pending }: { onSync: () => void; pending?: boolean }) {
+  return (
+    <Card>
+      <Space direction="vertical" size={10} align="center" style={{ width: '100%', padding: '28px 0' }}>
+        <Typography.Title level={5} style={{ margin: 0 }}>
+          This release has not been scanned yet
+        </Typography.Title>
+        <Typography.Text type="secondary" style={{ maxWidth: 520, textAlign: 'center' }}>
+          Syncing asks the scanner about every artifact in this release and stores what it says, so the
+          counts, the comparison and the search all work from then on without asking again.
+        </Typography.Text>
+        <Button type="primary" loading={pending} onClick={onSync}>Sync vulnerabilities</Button>
+      </Space>
     </Card>
   )
 }
 
 /**
- * The simple view: four numbers and a distribution.
+ * The simple view: four cards.
  *
- * Fixable is a tile of its own rather than a column somewhere, because it is
+ * Fixable is a card of its own rather than a column somewhere, because it is
  * the number that decides what somebody does this afternoon. A release with 900
  * non-fixable findings and 4 fixable ones has four pieces of work in it, and a
- * panel that reports 904 hides all four.
+ * panel reporting 904 hides all four.
  */
-function SummaryTiles({ data }: { data: PackageSecurityResponse }) {
-  const { counts, uniqueCounts, coverage } = data
+function SummaryCards({ data }: { data: PackageSecurityResponse }) {
+  const { counts, coverage } = data
+  const fixablePercent = counts.total > 0 ? Math.round((counts.fixable / counts.total) * 100) : 0
+  const scannedPercent = coverage.scannable > 0
+    ? Math.round((coverage.scanned / coverage.scannable) * 100)
+    : 0
 
   return (
-    <Row gutter={[16, 16]} style={{ marginBottom: 20 }}>
-      <Col xs={24} lg={10}>
-        <div style={{ border: `1px solid ${palette.border}`, borderRadius: palette.borderRadius, padding: 16, height: '100%' }}>
-          <Typography.Text type="secondary">Vulnerabilities in this release</Typography.Text>
-          <div style={{ fontSize: 34, fontWeight: 600, lineHeight: 1.2 }}>
-            {counts.total.toLocaleString()}
-          </div>
-          <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-            {/*
-              Two numbers because they answer two questions. The same base-image
-              CVE in ten images is ten things to fix in ten places, and also one
-              problem - and quoting either alone is misleading in a different
-              direction.
-            */}
-            {uniqueCounts.total.toLocaleString()} distinct across{' '}
-            {coverage.scanned.toLocaleString()} scanned artifacts
-          </Typography.Text>
-          <div style={{ marginTop: 12 }}>
-            <SeverityBar counts={counts} />
-          </div>
-          <div style={{ marginTop: 10 }}>
-            <SeverityCountsRow counts={counts} />
-          </div>
-        </div>
+    <Row gutter={[16, 16]}>
+      <Col xs={24} lg={9}>
+        <Card size="small" title="Overall vulnerabilities" style={{ height: '100%' }}>
+          <Space align="start" size={20}>
+            <div>
+              <div style={{ fontSize: 34, fontWeight: 600, lineHeight: 1.2 }}>
+                {counts.total.toLocaleString()}
+              </div>
+              <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+                {/*
+                  Two numbers because they answer two questions. The same
+                  base-image CVE in ten images is ten things to fix in ten
+                  places, and also one problem - quoting either alone misleads
+                  in a different direction.
+                */}
+                {data.distinctTotal.toLocaleString()} distinct across{' '}
+                {coverage.scanned.toLocaleString()} scanned artifacts
+              </Typography.Text>
+            </div>
+          </Space>
+          <div style={{ marginTop: 14 }}><SeverityBar counts={counts} /></div>
+          <div style={{ marginTop: 12 }}><SeverityCountsRow counts={counts} /></div>
+        </Card>
       </Col>
 
-      <Col xs={24} md={12} lg={7}>
-        <div style={{ border: `1px solid ${palette.border}`, borderRadius: palette.borderRadius, padding: 16, height: '100%' }}>
-          <Typography.Text type="secondary">Something can be done about</Typography.Text>
-          <div style={{ fontSize: 34, fontWeight: 600, lineHeight: 1.2, color: semantic.success }}>
-            {counts.fixable.toLocaleString()}
-          </div>
-          <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-            a fixed version is available · {counts.nonFixable.toLocaleString()} have none
-          </Typography.Text>
-          <div style={{ marginTop: 12 }}>
-            <Space size={14} wrap>
-              {SEVERITIES.filter((s) => counts.fixableBySeverity[s] > 0).map((s) => (
-                <Typography.Text key={s} style={{ color: severityColour[s], fontSize: 12 }}>
-                  {counts.fixableBySeverity[s]} {s}
-                </Typography.Text>
-              ))}
+      <Col xs={24} md={12} lg={5}>
+        <Card size="small" title="Fixable" style={{ height: '100%' }}>
+          <Space align="center" size={16}>
+            <Progress
+              type="circle"
+              size={72}
+              percent={fixablePercent}
+              strokeColor={semantic.success}
+              format={() => `${fixablePercent}%`}
+            />
+            <Space direction="vertical" size={0}>
+              <Typography.Text strong style={{ fontSize: 20, color: semantic.success }}>
+                {counts.fixable.toLocaleString()}
+              </Typography.Text>
+              <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+                have a fixed version
+              </Typography.Text>
+              <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+                {counts.nonFixable.toLocaleString()} have none
+              </Typography.Text>
             </Space>
-          </div>
-        </div>
+          </Space>
+        </Card>
       </Col>
 
-      <Col xs={24} md={12} lg={7}>
-        <div style={{ border: `1px solid ${palette.border}`, borderRadius: palette.borderRadius, padding: 16, height: '100%' }}>
-          <Typography.Text type="secondary">How much of the release was scanned</Typography.Text>
-          <div style={{ marginTop: 12 }}>
-            <CoverageMeter coverage={coverage} />
-          </div>
-          {coverage.notScanned > 0 && (
-            <Typography.Text type="secondary" style={{ fontSize: 12, display: 'block', marginTop: 8 }}>
-              {coverage.notScanned} artifacts have no result yet.
-            </Typography.Text>
-          )}
-        </div>
+      <Col xs={24} md={12} lg={5}>
+        <Card size="small" title="Scan status" style={{ height: '100%' }}>
+          <Space align="center" size={16}>
+            <Progress
+              type="circle"
+              size={72}
+              percent={scannedPercent}
+              strokeColor={coverage.complete ? semantic.success : semantic.warning}
+            />
+            <Space direction="vertical" size={0}>
+              <Typography.Text strong style={{ fontSize: 20 }}>
+                {coverage.scanned.toLocaleString()}
+              </Typography.Text>
+              <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+                of {coverage.scannable.toLocaleString()} scanned
+              </Typography.Text>
+              {coverage.notScanned > 0 && (
+                <Typography.Text type="secondary" style={{ fontSize: 12, color: semantic.warning }}>
+                  {coverage.notScanned} not scanned
+                </Typography.Text>
+              )}
+            </Space>
+          </Space>
+        </Card>
+      </Col>
+
+      <Col xs={24} lg={5}>
+        <Card size="small" title="By severity" style={{ height: '100%' }}>
+          <Space direction="vertical" size={6} style={{ width: '100%' }}>
+            {SEVERITIES.filter((s) => counts.bySeverity[s] > 0 || s !== 'unknown').map((s) => {
+              const total = counts.bySeverity[s]
+              const fixable = counts.fixableBySeverity[s]
+              return (
+                <div key={s}>
+                  <Space style={{ width: '100%', justifyContent: 'space-between' }}>
+                    <SeverityTag value={s} />
+                    <Typography.Text style={{ fontSize: 12 }}>
+                      <strong>{total}</strong>
+                      {total > 0 && (
+                        <Typography.Text type="secondary" style={{ fontSize: 11 }}>
+                          {' '}({fixable} fixable)
+                        </Typography.Text>
+                      )}
+                    </Typography.Text>
+                  </Space>
+                  <div style={{ height: 4, background: '#EEF1F4', borderRadius: 2, marginTop: 3 }}>
+                    <div
+                      style={{
+                        width: `${counts.total > 0 ? (total / counts.total) * 100 : 0}%`,
+                        height: '100%', background: severityColour[s], borderRadius: 2,
+                      }}
+                    />
+                  </div>
+                </div>
+              )
+            })}
+          </Space>
+        </Card>
       </Col>
     </Row>
   )
@@ -219,7 +279,7 @@ function FindingsSection({ data, product, reference, repository }: {
   reference: string
   repository?: string
 }) {
-  const [tab, setTab] = useState<'artifacts' | 'vulnerabilities'>('vulnerabilities')
+  const [tab, setTab] = useState<'vulnerabilities' | 'artifacts'>('vulnerabilities')
   const [severities, setSeverities] = useState<Severity[]>([])
   const [fixability, setFixability] = useState<'all' | 'fixable' | 'non-fixable'>('all')
   const [q, setQ] = useState('')
@@ -250,6 +310,7 @@ function FindingsSection({ data, product, reference, repository }: {
     return true
   }), [findings, severities, fixability, q])
 
+  const unscanned = data.reports.filter((r) => r.status === 'not_scanned').length
   const exportFilters = {
     severity: severities.length > 0 ? severities.join(',') : undefined,
     fixable: fixability === 'all' ? undefined : fixability === 'fixable',
@@ -257,7 +318,18 @@ function FindingsSection({ data, product, reference, repository }: {
   }
 
   return (
-    <>
+    <Card size="small" styles={{ body: { paddingTop: 12 } }}>
+      {unscanned > 0 && (
+        <Alert
+          type="warning"
+          showIcon
+          style={{ marginBottom: 12 }}
+          message={`${unscanned} artifacts have not been scanned yet`}
+          description="They are listed under Artifacts. An artifact with no scan result is not an artifact with no vulnerabilities."
+          action={<Button size="small" onClick={() => setTab('artifacts')}>View them</Button>}
+        />
+      )}
+
       <Space wrap size={12} style={{ marginBottom: 12, width: '100%', justifyContent: 'space-between' }}>
         <Space wrap size={12}>
           <Segmented
@@ -305,7 +377,7 @@ function FindingsSection({ data, product, reference, repository }: {
       {tab === 'vulnerabilities'
         ? <VulnerabilityTable rows={filtered} state={data.state} />
         : <ArtifactTable reports={data.reports} />}
-    </>
+    </Card>
   )
 }
 
@@ -319,11 +391,7 @@ function VulnerabilityTable({ rows, state }: { rows: FlatFinding[]; state: Packa
       pagination={{ pageSize: 25, showSizeChanger: true, size: 'small' }}
       locale={{ emptyText: <FindingsEmpty status={state} /> }}
       columns={[
-        {
-          title: 'CVE',
-          width: 160,
-          render: (_, r) => <CveCell cve={r.cve} id={r.id} />,
-        },
+        { title: 'CVE', width: 160, render: (_, r) => <CveCell cve={r.cve} id={r.id} /> },
         {
           title: 'Severity',
           width: 120,
@@ -352,11 +420,7 @@ function VulnerabilityTable({ rows, state }: { rows: FlatFinding[]; state: Packa
             </Space>
           ),
         },
-        {
-          title: 'Fix',
-          width: 140,
-          render: (_, r) => <FixCell fixable={r.fixable} fixedIn={r.fixedIn} />,
-        },
+        { title: 'Fix', width: 140, render: (_, r) => <FixCell fixable={r.fixable} fixedIn={r.fixedIn} /> },
         {
           title: 'Description',
           render: (_, r) => (
@@ -377,8 +441,8 @@ function VulnerabilityTable({ rows, state }: { rows: FlatFinding[]; state: Packa
  * The artifacts of a release, with what is wrong in each.
  *
  * Every artifact appears, including the ones with nothing to report and the
- * ones nobody scanned. A table that listed only the artifacts with findings
- * would be a table where an unscanned image is invisible.
+ * ones nobody scanned. A table listing only the artifacts with findings would
+ * be a table where an unscanned image is invisible.
  */
 function ArtifactTable({ reports }: { reports: SecurityReport[] }) {
   return (
@@ -393,7 +457,9 @@ function ArtifactTable({ reports }: { reports: SecurityReport[] }) {
           title: 'Artifact',
           render: (_, r) => (
             <Space direction="vertical" size={0}>
-              <Typography.Text style={{ fontFamily: mono }}>{r.artifact.display || r.artifact.name}</Typography.Text>
+              <Typography.Text style={{ fontFamily: mono }}>
+                {r.artifact.display || r.artifact.name}
+              </Typography.Text>
               <Typography.Text type="secondary" style={{ fontSize: 11 }}>
                 {[r.artifact.kind, r.artifact.platform].filter(Boolean).join(' · ')}
               </Typography.Text>
@@ -418,25 +484,36 @@ function ArtifactTable({ reports }: { reports: SecurityReport[] }) {
         },
         {
           title: 'Vulnerabilities',
-          width: 220,
+          width: 200,
           sorter: (a, b) => a.counts.total - b.counts.total,
-          render: (_, r) => <VulnerabilityCell counts={r.counts} state={r.status} />,
-        },
-        {
-          title: 'Fixable',
-          width: 110,
           render: (_, r) => (
-            r.status === 'scanned'
-              ? <Typography.Text>{r.counts.fixable.toLocaleString()}</Typography.Text>
-              : <Typography.Text type="secondary">-</Typography.Text>
+            r.status !== 'scanned'
+              ? <Typography.Text type="secondary">-</Typography.Text>
+              : r.counts.total === 0
+                ? <Typography.Text>None found</Typography.Text>
+                : (
+                  <Space direction="vertical" size={2} style={{ width: '100%' }}>
+                    <Space size={8}>
+                      <strong>{r.counts.total.toLocaleString()}</strong>
+                      {SEVERITIES.slice(0, 2).map((s) => (
+                        r.counts.bySeverity[s] > 0 ? (
+                          <span key={s} style={{ color: severityColour[s], fontSize: 12 }}>
+                            {r.counts.bySeverity[s]} {s}
+                          </span>
+                        ) : null
+                      ))}
+                    </Space>
+                    <SeverityBar counts={r.counts} height={4} />
+                  </Space>
+                )
           ),
         },
         {
-          title: 'Scanned',
-          width: 140,
+          title: 'Fixable',
+          width: 100,
           render: (_, r) => (
-            r.scannedAt
-              ? <Typography.Text type="secondary">{formatRelative(r.scannedAt)}</Typography.Text>
+            r.status === 'scanned'
+              ? <Typography.Text>{r.counts.fixable.toLocaleString()}</Typography.Text>
               : <Typography.Text type="secondary">-</Typography.Text>
           ),
         },
@@ -453,3 +530,4 @@ function ArtifactTable({ reports }: { reports: SecurityReport[] }) {
     />
   )
 }
+

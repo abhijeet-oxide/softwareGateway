@@ -249,7 +249,78 @@ It contains no CVE identifier, no percentage, no scanner name and no jargon.
 That is the audience: somebody deciding whether to ship this afternoon who has
 never read an advisory. Everything technical is one click away.
 
-## 6. Caching, and why the platform is not a system of record
+## 5.5 Where the scanner runs, and why it is not the source
+
+A release is **discovered** on a vendor registry and **scanned** where it lands.
+Those are different registries, and conflating them was the first shape of this
+feature and the one wrong assumption that made it useless on the only topology
+that matters:
+
+```
+Nokia NEAR  ──replicate──▶  JFrog (artifact.example.com)  ──▶  OpenShift
+   source                     target, Xray runs here
+```
+
+Scoping the security read to the repository a release was discovered in finds no
+scanner at all and reports every release as "no scanner configured", on an
+estate where Xray is switched on and working.
+
+So the repository is CHOSEN, in this order:
+
+1. A target the release has actually been transferred to. The scanner can only
+   have indexed a copy that exists.
+2. The default target. A release queued but not yet transferred will land there,
+   and naming it produces "not scanned" - which is true and actionable.
+3. Any remaining scanner-enabled repository, targets before sources.
+
+`regclient.SecurityRepositoryFor` holds the ordering; the API supplies the one
+fact it cannot know, which is where the release has actually been.
+
+## 6. Sync, and why reading is not retrieving
+
+**Exactly one thing talks to a scanner:** `POST …:syncSecurity`. Everything else
+- the listing, the release view, the comparison, the search, the exports - reads
+what that stored.
+
+It did not start that way. Every read went to Xray, so a listing of twenty
+releases was twenty scanner-backed reads to draw one column, and that column
+shipped behind a toggle. A toggle is a design apologising for itself.
+
+| | Before | Now |
+|---|---|---|
+| Listing column | 20 scanner reads | one join, always on |
+| Release view | scanner, tens of seconds | database, instant |
+| Comparison | two live retrievals | two indexed reads |
+| Search | only what a page happened to cache | the index a sync wrote |
+
+A sync is an explicit act with a durable result, and that is also what makes
+search answerable at all: there is a table to search.
+
+### The claim
+
+Starting a sync is a **conditional UPDATE**, not a read-then-write. Two people
+pressing the button, or a page that retries, would both read "not syncing" and
+both start; the conflict target and the `WHERE` clause make exactly one caller
+win, and the other is told "already running" - which is not a failure, because
+the thing they wanted is happening.
+
+`started_at` makes the claim **recoverable**. A Coordinator that dies mid-sync
+would otherwise leave a release marked syncing forever, and a release that can
+never be synced again is a worse outcome than a rare duplicate that converges on
+the same rows. The maintenance loop releases claims older than 30 minutes.
+
+### Four states, not a timestamp
+
+`package_security.state` is `'' | syncing | synced | failed`. "Has this been
+synced" has two answers and needs four: never, running, done, failed are four
+situations with four different things to offer, and three of them look identical
+to a timestamp. Same argument migration 00021 makes for `analysis_state`.
+
+A **failed** sync keeps the last good counts. A release that synced cleanly last
+week and whose scanner is unreachable today still knows what it knew, and
+showing nothing when something dated is known is the worse of the two answers.
+
+## 7. Caching, and why the platform is not a system of record
 
 **Xray is the source of truth for detailed findings.** It re-grades issues,
 learns new fixed versions and re-scans continuously. A copy this platform kept
@@ -257,13 +328,26 @@ indefinitely would be an unsynchronised replica of a database moving underneath
 it, and the first release decision made from a six-week-old cached finding would
 be this design's fault.
 
-Three tiers, split by what they cost and how long they stay true:
+Four tables, split by what they cost and how long they stay true:
 
-| Tier | Holds | Retention | Read by |
+| Table | Holds | Retention | Read by |
 |---|---|---|---|
-| `security_scans` | Status, counts by severity, fixability, scan time | `summaryTtl`, hours | Listings, dashboards, quick comparisons |
-| `security_findings` | Identifiers only - CVE, component, severity, fixed version. **No prose.** | With its scan | Search, relationship navigation |
-| `security_details` | The complete normalized response, as JSON | `detailTtl`, minutes | Reopening findings, repeating a comparison, exports |
+| `package_security` | One row per RELEASE: state, counts, coverage, when it was synced | Never expires - it is the result of a sync | The listing, the release view |
+| `security_scans` | One row per ARTIFACT: status, counts by severity, fixability | `summaryTtl`, 30 days | The release's artifact table, comparisons |
+| `security_findings` | Identifiers only - CVE, component, severity, fixed version. **No prose.** | With its scan | Search, comparison, relationship navigation |
+| `security_details` | The complete normalized response, as JSON | `detailTtl`, 24 hours | Descriptions, references, CVSS vectors |
+
+The two TTLs are deliberately far apart, and the balance was got wrong first
+time. The **index** - statuses, counts, and the identifiers that make a finding
+findable - is the durable half: it is what every read serves, and expiring it in
+hours would mean a release synced this morning silently losing its counts by
+evening, and a search that found it at 10 and not at 4. The **prose** is the
+half that would turn this platform into a second copy of a vulnerability
+database that re-grades itself continuously, so it goes first.
+
+When the prose has expired the findings are still complete enough to list,
+filter, compare and export - they simply lack the paragraph. A page that emptied
+itself overnight would be the worse failure.
 
 **Every row carries `product`, `repository` and `provider`, and every statement
 filters on all three.** That is an authorization boundary, not a filing
@@ -296,7 +380,7 @@ the findings themselves** rather than over a timestamp, so a re-scan that
 produced identical results does not invalidate anybody's copy. `private` because
 these are one repository's findings and a shared cache must never hold them.
 
-## 7. Retrieval
+## 8. Retrieval
 
 Batched and parallel, and the two bounds bound different things:
 
@@ -312,23 +396,28 @@ image the scanner would not answer for must not lose the other hundred - and,
 critically, must not silently become an image with no findings. An error return
 is reserved for a cancelled context.
 
-Progress is reported through a caller-minted token polled at
-`GET /api/v1/security/progress/{token}`, the same side-channel shape as
-comparison progress ([09](09-api.md)) and for the same reason: the response is
-the report, and turning it into a stream would change the contract for every
-existing client to serve a progress bar.
+Progress travels **inside the security response**, not on a channel of its own.
+The interface polls one cheap endpoint while a sync runs and gets both the live
+position and whatever is already stored in the same answer; two endpoints would
+be two requests that can disagree.
+
+Live progress is present only on the replica running the sync. The stored state
+is authoritative, so a sync running elsewhere still reports "syncing" - reading
+it the other way round is how a two-replica deployment shows a spinner that
+resets on every second request.
 
 A spinner says the same thing for thirty seconds of scanner queries as it says
 for a request that has silently stopped, and "is this working?" is the only
 question anybody has while waiting. A user who cannot tell reloads the page,
 which starts the whole retrieval again.
 
-## 8. API
+## 9. API
 
 | Method | Path | Answers |
 |---|---|---|
-| `GET` | `/products/{p}/packages/{pkg}/security` | This release's posture. `?detail=true` for findings, `?refresh=true` to bypass every cache |
-| `POST` | `/products/{p}/packages/{pkg}:compareSecurity` | How the posture changed to `against` |
+| `POST` | `/products/{p}/packages/{pkg}:syncSecurity` | **The only route that talks to a scanner.** Claims the release and returns immediately |
+| `GET` | `/products/{p}/packages/{pkg}/security` | This release's stored posture and its sync state. `?detail=true` for findings |
+| `POST` | `/products/{p}/packages/{pkg}:compareSecurity` | How the posture changed to `against`, from both sides' stored data |
 | `GET` | `/products/{p}/security/search` | `?kind=cve\|package\|image&q=` |
 | `GET` | `/products/{p}/packages/{pkg}/security/export` | CSV, Excel, JSON |
 | `GET` | `/products/{p}/packages/{pkg}/security/compare/export` | The comparison, same formats |
@@ -338,11 +427,15 @@ which starts the whole retrieval again.
 Every route is registered **only when the dependency exists**, so a deployment
 with no scanner answers an honest 404 rather than a route that always fails.
 
-Search reads the index tier and **never the scanner**. It therefore answers "is
-this CVE anywhere I have looked", not "is it anywhere in my estate", and the
-response says so on every result - including a full one. A search that silently
-returned nothing would be read as "this does not affect us", which is the most
-dangerous thing this feature could say wrongly.
+Search reads the index a sync wrote and **never the scanner**. It therefore
+answers "is this CVE in a release somebody has synced", not "is it anywhere in
+my estate", and the response says so on every result - including a full one,
+naming the remedy. A search that silently returned nothing would be read as
+"this does not affect us", which is the most dangerous thing this feature could
+say wrongly.
+
+It is one indexed SQL query over identifiers, so it is fast at any catalogue
+size, and it is exactly as complete as the set of releases somebody has synced.
 
 Exports are `GET` because a download is a link: a browser cannot follow a `POST`
 to a file, and an export a user cannot bookmark is an export they screenshot.
@@ -358,7 +451,7 @@ a dependency that renders charts and pivot tables is a large supply-chain
 surface on a product whose purpose is telling people what is in their supply
 chain.
 
-## 9. Interface
+## 10. Interface
 
 Three rules, and they are the difference between a page somebody acts on and a
 wall of red:
@@ -374,12 +467,18 @@ The security panel on a release is ordered by *decreasing trust*: whether these
 numbers cover the whole release, then the numbers. The same panel with the
 caveat underneath is a panel whose totals get quoted without it.
 
-The listing's vulnerability column is **opt-in** and remembered in the URL. A
-page of releases is twenty scanner-backed reads; that is the right cost for
-somebody comparing two releases and the wrong one imposed on everybody who
-opened the page to find a version.
+The listing's vulnerability column is **always on** and costs nothing: the
+counts arrive with the listing itself. Where a release has never been synced the
+row offers the sync rather than showing a blank cell, because a blank cell in a
+vulnerability column reads as "nothing wrong with this one".
 
-## 10. Adding a second scanner
+The release page is **tabbed** - Overview, Components, Security, Downloads -
+with the tab in the URL, so "the security of this release" is a link somebody
+can send. Stacked as cards, the security section lived below three screens of
+manifest tree, and a reader who came to check a release's security should not
+scroll past its contents to reach it.
+
+## 11. Adding a second scanner
 
 Everything above is scanner-agnostic except one directory. Concretely:
 

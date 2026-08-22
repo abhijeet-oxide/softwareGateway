@@ -183,6 +183,8 @@ func (s *Server) attachSecurity(
 			Counts:        toAPICounts(sec.Counts),
 			DistinctTotal: sec.DistinctTotal,
 			Complete:      sec.Coverage.Complete(),
+			Scanned:       sec.Coverage.Scanned,
+			Scannable:     sec.Coverage.Scannable(),
 			Error:         sec.Error,
 			CanSync:       canSync,
 			Reason:        reason,

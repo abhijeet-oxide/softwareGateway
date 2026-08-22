@@ -27,10 +27,10 @@ import {
   EmptyStateCard, ErrorState, PageHeader, ReleaseTimeline, SearchBar,
 } from '../components/layout'
 import { FileViewer, looksBinary } from '../components/filecontent'
-import { SecurityPanel } from '../components/securitypanel'
+import { SecurityTab } from '../components/securitypanel'
 import { mono } from '../theme'
 import type {
-  Artifact, InspectPackageResponse, Package, PackageFile, Product, RelatedArtifact,
+  Artifact, InspectPackageResponse, Package, PackageFile, PackageTransfer, Product, RelatedArtifact,
 } from '../api/types'
 
 /**
@@ -605,9 +605,83 @@ function buildTree(
   return render(root, '')
 }
 
+/**
+ * Where this release has been sent, and how each attempt went.
+ *
+ * Reads what the package already carries rather than fetching: the transfer
+ * history travels on the release, and a second request to render a tab nobody
+ * may open is a request nobody asked for.
+ *
+ * A failure keeps its reason VERBATIM, including whatever the registry said.
+ * That is what makes an entitlement refusal debuggable weeks after the transfer
+ * that hit it, and paraphrasing it here would throw the only useful part away.
+ */
+function DownloadsTab({ product, transfers }: { product: string; transfers: PackageTransfer[] }) {
+  if (transfers.length === 0) {
+    return (
+      <EmptyStateCard
+        title="This release has not been downloaded"
+        explanation="Nothing has been transferred from the vendor registry for this release yet. Starting a download brings the whole release into the internal repositories."
+        action={null}
+      />
+    )
+  }
+  return (
+    <Card size="small" styles={{ body: { padding: 0 } }}>
+      <Table<PackageTransfer>
+        size="small"
+        rowKey={(t) => t.id}
+        dataSource={transfers}
+        pagination={false}
+        scroll={{ x: 'max-content' }}
+        columns={[
+          {
+            title: 'Destination',
+            render: (_, t) => <Typography.Text style={{ fontFamily: mono }}>{t.target}</Typography.Text>,
+          },
+          {
+            title: 'State',
+            width: 160,
+            /*
+              The transfer's OWN state, not the release's. A release is
+              downloaded to several destinations and each attempt has its own
+              outcome; collapsing them into one status is what made a page say
+              "downloaded" while one of three destinations had failed.
+            */
+            render: (_, t) => (
+              <Space direction="vertical" size={0}>
+                <Typography.Text>{titleCase(t.state)}</Typography.Text>
+                {t.failureReason && (
+                  <Typography.Text type="danger" style={{ fontSize: 11 }} ellipsis={{ tooltip: t.failureReason }}>
+                    {t.failureReason}
+                  </Typography.Text>
+                )}
+              </Space>
+            ),
+          },
+          { title: 'Started', width: 150, render: (_, t) => <TimeAgo at={t.createdAt} /> },
+          { title: 'Finished', width: 150, render: (_, t) => <TimeAgo at={t.completedAt} /> },
+          {
+            title: '',
+            width: 110,
+            render: (_, t) => (
+              <Link to={`/downloads/${t.id}`}>
+                <Button size="small">View</Button>
+              </Link>
+            ),
+          },
+        ]}
+      />
+      <Typography.Text type="secondary" style={{ fontSize: 12, display: 'block', padding: '8px 12px' }}>
+        Every attempt at this release, for {product}.
+      </Typography.Text>
+    </Card>
+  )
+}
+
 export default function PackageDetail() {
   const { product: productName, reference } = useParams()
-  const [params] = useSearchParams()
+  const [params, setParams] = useSearchParams()
   const navigate = useNavigate()
   const { message } = App.useApp()
 
@@ -622,6 +696,9 @@ export default function PackageDetail() {
   const files = usePackageFiles(productName, reference, repository)
   const inspect = useInspectPackage(productName!, reference!, repository)
   const runDownload = useRunDownload(productName!)
+
+  // Which tab is open, in the URL so a link to a release's security is a link.
+  const tab = params.get('tab') ?? 'overview'
 
   const mayOperate = useCan('operate', { product: productName })
   const { who } = useIdentity()
@@ -767,231 +844,277 @@ export default function PackageDetail() {
         </Col>
 
         <Col span={24}>
-          <Space direction="vertical" size={16} style={{ width: '100%' }}>
-            <Card title="Release" loading={pkg.isLoading}>
-              <Descriptions column={2} size="small">
-                {/*
-                  WHERE IT IS, first and clickable. This was a "Locations" card
-                  of its own listing every configured target - which is a fact
-                  about the product, repeated on every one of its releases, and
-                  said nothing about whether THIS release is at any of them.
-                  What belongs to a release is the one place it was published,
-                  and that is a link.
-                */}
-                <Descriptions.Item label="Location">
-                  <RepoLink
-                    url={repositoryUrl(prod?.sources?.[0], p?.sourceRepository)}
-                    label={vendorName(prod) ?? undefined}
-                  />
-                </Descriptions.Item>
-                <Descriptions.Item label="Package">
-                  <span style={{ fontFamily: mono }}><Value>{p ? packageName(p) : null}</Value></span>
-                </Descriptions.Item>
-                <Descriptions.Item label="Version">
-                  <span style={{ fontFamily: mono }}><Value>{p ? version(p) : null}</Value></span>
-                </Descriptions.Item>
-                <Descriptions.Item label="Product">
-                  <Value>{prod?.displayName || productName}</Value>
-                </Descriptions.Item>
-                <Descriptions.Item label="Published">
-                  {p?.publishedAt
-                    ? <TimeAgo at={p.publishedAt} />
-                    : <NA reason="The publisher set no build date, which the OCI specification permits." />}
-                </Descriptions.Item>
-                <Descriptions.Item label="Discovered"><TimeAgo at={p?.discoveredAt} /></Descriptions.Item>
-                <Descriptions.Item label="Total size">
-                  <Value reason="The manifest tree has not been walked yet, so the size underneath is not known. Measure the release to establish it.">
-                    {formatBytes(p?.totalBytes)}
-                  </Value>
-                </Descriptions.Item>
-                {/*
-                  Verification, in the release rather than in a card of its own.
-                  It was three lines in a panel with a heading, and the heading
-                  was the largest thing in it: whether a release is signed is a
-                  property OF the release, and it belongs on the same list as
-                  its digest.
-                */}
-                <Descriptions.Item label="Signature">
-                  <VerificationBadge state={p ? verification(p) : 'UNKNOWN'} />
-                </Descriptions.Item>
-                <Descriptions.Item label="Signature type" span={2}>
-                  <Value reason="No signature was discovered for this release, so there is no type to report.">
-                    {signature(p)?.blobMediaType || signature(p)?.mediaType || null}
-                  </Value>
-                </Descriptions.Item>
-                <Descriptions.Item label="Digest" span={2}>
-                  <Typography.Text copyable style={{ fontFamily: mono, fontSize: 12 }}>
-                    <Value>{p?.manifestDigest}</Value>
-                  </Typography.Text>
-                </Descriptions.Item>
-              </Descriptions>
+          {/*
+            TABS, not a stack of cards.
 
-              <MeasurePanel
-                analysed={analysed}
-                analysing={analysing}
-                artifactCount={p?.artifactCount}
-                inspect={inspect}
-                disabled={!mayOperate || !p}
-              />
-            </Card>
+            The page carries five different kinds of answer about one release -
+            what it is, what is in it, what is wrong with it, where it has been
+            sent - and stacking them meant the last of them lived below three
+            screens of the others. A reader who came to check the security of a
+            release should not scroll past its manifest tree to reach it.
 
-            <Card
-              title="Contents"
-              extra={
-                <Typography.Text type="secondary">
-                  <Value>{formatCount(p?.artifactCount)}</Value> artifacts
-                  {p?.totalBytes ? ` · ${formatBytes(p.totalBytes) ?? ''}` : ''}
-                </Typography.Text>
-              }
-              loading={artifacts.isLoading}
-            >
-              <Row gutter={16} style={{ marginBottom: 12 }}>
-                {(['Images', 'Helm Charts', 'Files'] as const).map((kind) => {
-                  // Files are LAYERS inside the release's manifests, not
-                  // children of its index, so before the walk there is nothing
-                  // to count - which is a different statement from "there are
-                  // none", and the tile has to make that difference.
-                  const countable = kind !== 'Files' || analysed
-                  const sized = groups[kind].measured
-                  // FILES ARE COUNTED AS FILES. One `generic` artifact holds
-                  // however many named layers the publisher put in it, so the
-                  // number of file-KIND artifacts was never the number of
-                  // files - it was two, on a release with two hundred.
-                  const count = kind === 'Files' && analysed
-                    ? (files.data?.files.length ?? 0)
-                    : groups[kind].count
-
-                  return (
-                    <Col span={8} key={kind}>
-                      <Card size="small">
-                        <Space direction="vertical" size={0} style={{ width: '100%' }}>
-                          <Space size={6}>
-                            <Icon as={ARTIFACT_ICONS[kind]} size={15} title={kind} />
-                            <Typography.Text type="secondary">{kind}</Typography.Text>
-                          </Space>
-
-                          {countable ? (
-                            <Typography.Title level={4} style={{ margin: 0 }}>
-                              {count}
-                            </Typography.Title>
-                          ) : (
-                            <div style={{ margin: '2px 0' }}>
-                              <NA />
-                            </div>
-                          )}
-
-                          <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-                            {sized ? (
-                              <Value>{formatBytes(groups[kind].bytes || null)}</Value>
-                            ) : (
-                              <NA />
-                            )}
-                          </Typography.Text>
-
-                          {/*
-                            ONE SENTENCE INSTEAD OF THREE TOOLTIPS. Both lines
-                            above read `N/A` before the walk, each with its own
-                            explanation on hover - which is a fact hidden behind
-                            a gesture nobody makes on a tile that looks broken.
-                            What is missing and what to do about it are the same
-                            answer, and it is short.
-                          */}
-                          {(!countable || !sized) && (
-                            <Typography.Text
-                              type="secondary"
-                              italic
-                              style={{ fontSize: 11, lineHeight: '14px' }}
-                            >
-                              {analysing
-                                ? 'analyzing this release now'
-                                : 'analyze the package to view details'}
-                            </Typography.Text>
-                          )}
-                        </Space>
-                      </Card>
-                    </Col>
-                  )
-                })}
-              </Row>
-
-              <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-                {!analysed && ' Analyse the package to list its files and establish its size.'}
-              </Typography.Text>
-
-              <Tabs
-                size="small"
-                style={{ marginTop: 8 }}
-                items={(['Images', 'Helm Charts', 'Files'] as const).map((kind) => ({
-                  key: kind,
-                  label: (
-                    <Space size={6}>
-                      <Icon as={ARTIFACT_ICONS[kind]} title={kind} />
+            The tab is in the URL, so "the security of this release" is a link
+            somebody can send.
+          */}
+          <Tabs
+            activeKey={tab}
+            onChange={(key) => {
+              const next = new URLSearchParams(params)
+              if (key === 'overview') next.delete('tab')
+              else next.set('tab', key)
+              setParams(next, { replace: true })
+            }}
+            items={[
+              {
+                key: 'overview',
+                label: 'Overview',
+                children: (
+                  <Space direction="vertical" size={16} style={{ width: '100%' }}>
+        <Card title="Release" loading={pkg.isLoading}>
+                    <Descriptions column={2} size="small">
                       {/*
-                        No count on Files until the tree has been walked. One
-                        `generic` artifact may hold fifty files, so the number
-                        of file-kind ARTIFACTS is not the number of files, and
-                        printing it here would contradict the tile beside it.
+                        WHERE IT IS, first and clickable. This was a "Locations" card
+                        of its own listing every configured target - which is a fact
+                        about the product, repeated on every one of its releases, and
+                        said nothing about whether THIS release is at any of them.
+                        What belongs to a release is the one place it was published,
+                        and that is a link.
                       */}
-                      {kind}
-                      {kind === 'Files'
-                        ? analysed && ` ( ${files.data?.files.length ?? 0} )`
-                        : ` ( ${groups[kind].count} )`}
-                    </Space>
-                  ),
-                  children: kind === 'Files' && analysed ? (
-                    <FileTree
-                      files={files.data?.files ?? []}
-                      onView={setViewing}
-                      product={productName!}
-                      reference={reference!}
-                      repository={repository}
-                      downloadEnabled={downloadEnabled}
-                    />
-                  ) : kind === 'Files' && !analysed ? (
-                    <EmptyStateCard
-                      title="Files are not listed yet"
-                      explanation="Files live inside this release's manifests as layers, so listing them means walking the tree. Analysing the package reads it from the vendor registry and records what is there."
-                      action={
-                        <MeasurePanel
-                          analysed={analysed}
-                          analysing={analysing}
-                          artifactCount={p?.artifactCount}
-                          inspect={inspect}
-                          disabled={!mayOperate || !p}
+                      <Descriptions.Item label="Location">
+                        <RepoLink
+                          url={repositoryUrl(prod?.sources?.[0], p?.sourceRepository)}
+                          label={vendorName(prod) ?? undefined}
                         />
+                      </Descriptions.Item>
+                      <Descriptions.Item label="Package">
+                        <span style={{ fontFamily: mono }}><Value>{p ? packageName(p) : null}</Value></span>
+                      </Descriptions.Item>
+                      <Descriptions.Item label="Version">
+                        <span style={{ fontFamily: mono }}><Value>{p ? version(p) : null}</Value></span>
+                      </Descriptions.Item>
+                      <Descriptions.Item label="Product">
+                        <Value>{prod?.displayName || productName}</Value>
+                      </Descriptions.Item>
+                      <Descriptions.Item label="Published">
+                        {p?.publishedAt
+                          ? <TimeAgo at={p.publishedAt} />
+                          : <NA reason="The publisher set no build date, which the OCI specification permits." />}
+                      </Descriptions.Item>
+                      <Descriptions.Item label="Discovered"><TimeAgo at={p?.discoveredAt} /></Descriptions.Item>
+                      <Descriptions.Item label="Total size">
+                        <Value reason="The manifest tree has not been walked yet, so the size underneath is not known. Measure the release to establish it.">
+                          {formatBytes(p?.totalBytes)}
+                        </Value>
+                      </Descriptions.Item>
+                      {/*
+                        Verification, in the release rather than in a card of its own.
+                        It was three lines in a panel with a heading, and the heading
+                        was the largest thing in it: whether a release is signed is a
+                        property OF the release, and it belongs on the same list as
+                        its digest.
+                      */}
+                      <Descriptions.Item label="Signature">
+                        <VerificationBadge state={p ? verification(p) : 'UNKNOWN'} />
+                      </Descriptions.Item>
+                      <Descriptions.Item label="Signature type" span={2}>
+                        <Value reason="No signature was discovered for this release, so there is no type to report.">
+                          {signature(p)?.blobMediaType || signature(p)?.mediaType || null}
+                        </Value>
+                      </Descriptions.Item>
+                      <Descriptions.Item label="Digest" span={2}>
+                        <Typography.Text copyable style={{ fontFamily: mono, fontSize: 12 }}>
+                          <Value>{p?.manifestDigest}</Value>
+                        </Typography.Text>
+                      </Descriptions.Item>
+                    </Descriptions>
+
+                    <MeasurePanel
+                      analysed={analysed}
+                      analysing={analysing}
+                      artifactCount={p?.artifactCount}
+                      inspect={inspect}
+                      disabled={!mayOperate || !p}
+                    />
+                  </Card>
+                  </Space>
+                ),
+              },
+              {
+                key: 'components',
+                label: `Components${p?.artifactCount ? ` (${p.artifactCount})` : ''}`,
+                children: (
+          <Card
+                      title="Contents"
+                      extra={
+                        <Typography.Text type="secondary">
+                          <Value>{formatCount(p?.artifactCount)}</Value> artifacts
+                          {p?.totalBytes ? ` · ${formatBytes(p.totalBytes) ?? ''}` : ''}
+                        </Typography.Text>
                       }
-                    />
-                  ) : (
-                    <ComponentTable
-                      artifacts={(artifacts.data?.artifacts ?? []).filter((a) => tileFor(a) === kind)}
-                      kind={kind}
-                    />
-                  ),
-                }))}
-              />
-            </Card>
+                      loading={artifacts.isLoading}
+                    >
+                      <Row gutter={16} style={{ marginBottom: 12 }}>
+                        {(['Images', 'Helm Charts', 'Files'] as const).map((kind) => {
+                          // Files are LAYERS inside the release's manifests, not
+                          // children of its index, so before the walk there is nothing
+                          // to count - which is a different statement from "there are
+                          // none", and the tile has to make that difference.
+                          const countable = kind !== 'Files' || analysed
+                          const sized = groups[kind].measured
+                          // FILES ARE COUNTED AS FILES. One `generic` artifact holds
+                          // however many named layers the publisher put in it, so the
+                          // number of file-KIND artifacts was never the number of
+                          // files - it was two, on a release with two hundred.
+                          const count = kind === 'Files' && analysed
+                            ? (files.data?.files.length ?? 0)
+                            : groups[kind].count
 
-            {/*
-              Security, under the contents rather than beside them.
+                          return (
+                            <Col span={8} key={kind}>
+                              <Card size="small">
+                                <Space direction="vertical" size={0} style={{ width: '100%' }}>
+                                  <Space size={6}>
+                                    <Icon as={ARTIFACT_ICONS[kind]} size={15} title={kind} />
+                                    <Typography.Text type="secondary">{kind}</Typography.Text>
+                                  </Space>
 
-              It answers a question about the same thing the card above lists -
-              these artifacts - and it is the question somebody asks second. Put
-              above, it would push what a release IS below the fold in service
-              of what is wrong with it; in a column of its own, it would be a
-              narrow table of CVEs nobody could read.
+                                  {countable ? (
+                                    <Typography.Title level={4} style={{ margin: 0 }}>
+                                      {count}
+                                    </Typography.Title>
+                                  ) : (
+                                    <div style={{ margin: '2px 0' }}>
+                                      <NA />
+                                    </div>
+                                  )}
 
-              Its own component because it fetches separately and fails
-              separately: a release whose scanner is unreachable must still
-              render as a release.
-            */}
-            {productName && reference && (
-              <SecurityPanel
-                product={productName}
-                reference={reference}
-                repository={repository}
-              />
-            )}
-          </Space>
+                                  <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+                                    {sized ? (
+                                      <Value>{formatBytes(groups[kind].bytes || null)}</Value>
+                                    ) : (
+                                      <NA />
+                                    )}
+                                  </Typography.Text>
+
+                                  {/*
+                                    ONE SENTENCE INSTEAD OF THREE TOOLTIPS. Both lines
+                                    above read `N/A` before the walk, each with its own
+                                    explanation on hover - which is a fact hidden behind
+                                    a gesture nobody makes on a tile that looks broken.
+                                    What is missing and what to do about it are the same
+                                    answer, and it is short.
+                                  */}
+                                  {(!countable || !sized) && (
+                                    <Typography.Text
+                                      type="secondary"
+                                      italic
+                                      style={{ fontSize: 11, lineHeight: '14px' }}
+                                    >
+                                      {analysing
+                                        ? 'analyzing this release now'
+                                        : 'analyze the package to view details'}
+                                    </Typography.Text>
+                                  )}
+                                </Space>
+                              </Card>
+                            </Col>
+                          )
+                        })}
+                      </Row>
+
+                      <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+                        {!analysed && ' Analyse the package to list its files and establish its size.'}
+                      </Typography.Text>
+
+                      <Tabs
+                        size="small"
+                        style={{ marginTop: 8 }}
+                        items={(['Images', 'Helm Charts', 'Files'] as const).map((kind) => ({
+                          key: kind,
+                          label: (
+                            <Space size={6}>
+                              <Icon as={ARTIFACT_ICONS[kind]} title={kind} />
+                              {/*
+                                No count on Files until the tree has been walked. One
+                                `generic` artifact may hold fifty files, so the number
+                                of file-kind ARTIFACTS is not the number of files, and
+                                printing it here would contradict the tile beside it.
+                              */}
+                              {kind}
+                              {kind === 'Files'
+                                ? analysed && ` ( ${files.data?.files.length ?? 0} )`
+                                : ` ( ${groups[kind].count} )`}
+                            </Space>
+                          ),
+                          children: kind === 'Files' && analysed ? (
+                            <FileTree
+                              files={files.data?.files ?? []}
+                              onView={setViewing}
+                              product={productName!}
+                              reference={reference!}
+                              repository={repository}
+                              downloadEnabled={downloadEnabled}
+                            />
+                          ) : kind === 'Files' && !analysed ? (
+                            <EmptyStateCard
+                              title="Files are not listed yet"
+                              explanation="Files live inside this release's manifests as layers, so listing them means walking the tree. Analysing the package reads it from the vendor registry and records what is there."
+                              action={
+                                <MeasurePanel
+                                  analysed={analysed}
+                                  analysing={analysing}
+                                  artifactCount={p?.artifactCount}
+                                  inspect={inspect}
+                                  disabled={!mayOperate || !p}
+                                />
+                              }
+                            />
+                          ) : (
+                            <ComponentTable
+                              artifacts={(artifacts.data?.artifacts ?? []).filter((a) => tileFor(a) === kind)}
+                              kind={kind}
+                            />
+                          ),
+                        }))}
+                      />
+                    </Card>
+                ),
+              },
+              {
+                key: 'security',
+                /*
+                  The count rides on the label, because the question the tab
+                  answers is usually "how bad is it" and making somebody open a
+                  tab to find out is one click too many. Absent - not zero -
+                  where nothing has been synced.
+                */
+                label: (
+                  <Space size={6}>
+                    Security
+                    {p?.security?.state === 'synced' && (
+                      <Typography.Text
+                        type={p.security.counts.total > 0 ? undefined : 'secondary'}
+                        style={{ fontSize: 12 }}
+                      >
+                        ({p.security.counts.total.toLocaleString()})
+                      </Typography.Text>
+                    )}
+                    {p?.security?.state === 'syncing' && (
+                      <Typography.Text type="secondary" style={{ fontSize: 12 }}>syncing…</Typography.Text>
+                    )}
+                  </Space>
+                ),
+                children: productName && reference
+                  ? <SecurityTab product={productName} reference={reference} repository={repository} />
+                  : null,
+              },
+              {
+                key: 'downloads',
+                label: `Downloads${p?.transfers?.length ? ` (${p.transfers.length})` : ''}`,
+                children: <DownloadsTab product={productName!} transfers={p?.transfers ?? []} />,
+              },
+            ]}
+          />
         </Col>
       </Row>
 

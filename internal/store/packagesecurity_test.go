@@ -1,6 +1,7 @@
 package store
 
 import (
+	"errors"
 	"testing"
 	"time"
 
@@ -43,9 +44,7 @@ func TestClaimIsExclusive(t *testing.T) {
 	if err := p.Claim(t.Context(), id, time.Hour); err != nil {
 		t.Fatalf("first claim: %v", err)
 	}
-	if err := p.Claim(t.Context(), id, time.Hour); err == nil {
-		t.Fatal("a second claim succeeded while the first was held")
-	} else if err != ErrSyncInFlight {
+	if err := p.Claim(t.Context(), id, time.Hour); !errors.Is(err, ErrSyncInFlight) {
 		t.Fatalf("second claim: %v, want ErrSyncInFlight", err)
 	}
 
@@ -80,7 +79,7 @@ func TestStaleClaimIsReclaimable(t *testing.T) {
 	if err := p.Claim(t.Context(), id, time.Millisecond); err != nil {
 		t.Fatalf("reclaiming a stale claim: %v", err)
 	}
-	if err := p.Claim(t.Context(), id, time.Hour); err != ErrSyncInFlight {
+	if err := p.Claim(t.Context(), id, time.Hour); !errors.Is(err, ErrSyncInFlight) {
 		t.Fatalf("the reclaim did not take the lock: %v", err)
 	}
 

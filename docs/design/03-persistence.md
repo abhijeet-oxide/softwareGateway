@@ -626,12 +626,22 @@ A partial index - `ON package_artifacts (raw_used_at) WHERE raw IS NOT NULL` - k
 
 ## 12.1 Security cache tables
 
+`package_security` (migration 00023) holds one row per RELEASE: the state of its
+vulnerability sync, the counts, the coverage and when it last ran. It does not
+expire - it is the RESULT of a sync, and it is what a listing of two hundred
+releases renders without touching a scanner. Syncing is a STATE rather than a
+timestamp for the same reason `analysis_state` is (§12.2): never, running, done
+and failed are four situations and three of them look identical to a timestamp.
+
 `security_scans`, `security_findings` and `security_details` (migration 00022)
-hold what a scanner said. Three tables rather than one, split by what they cost
-and how long they stay true: counts are kilobytes and kept for hours, an index
-of identifiers is kept with them so search needs no scanner round trip, and the
-complete responses expire in minutes because **Xray is the source of truth for
-detailed findings and this platform is deliberately not a second one**.
+hold what the scanner said, per artifact. Their retention is system
+configuration (`coordinator.security`), not per product: how long to keep an
+index is a property of this deployment's disk. Three tables rather than one, split by
+what they cost and how long they stay true: the index - statuses, counts and the
+identifiers that make a finding findable - is the durable half that every read
+serves, and the complete responses expire in a day because **Xray is the source
+of truth for detailed findings and this platform is deliberately not a second
+one**.
 
 Every row carries `product`, `repository` and `provider`, and those three are
 part of every unique key. That is an authorization boundary rather than a filing
@@ -639,11 +649,11 @@ convention: findings were retrieved under one repository's scanner permissions,
 and a cache keyed by digest alone would be a cross-tenant leak with good
 performance.
 
-Expiry is a column rather than a policy, because retention is per repository
-(`xray.detailTtl`): one product may cache for five minutes and another for an
-hour, and a sweeper reading a global constant would be wrong for both. Rows are
-filtered on read and removed by a leader-gated loop - deleting on read would
-make every page render a write transaction against the single writer.
+Expiry is a column rather than a policy so the two tiers can differ by weeks
+while one sweeper collects both, and so a retention change applies to rows
+already written rather than only to new ones. Rows are filtered on read and
+removed by a leader-gated loop - deleting on read would make every page render a
+write transaction against the single writer.
 
 Full argument in [21 - Security Posture](21-security-posture.md) §6.
 

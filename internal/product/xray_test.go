@@ -3,50 +3,40 @@ package product
 import (
 	"strings"
 	"testing"
-	"time"
 )
 
 func boolp(b bool) *bool { return &b }
 
+// Absent means off, and that is deliberate: turning this on would start traffic
+// to a third system the document never mentioned.
 func TestXrayIsEnabledDefaultsOff(t *testing.T) {
-	// Absent means off, and that is deliberate: turning this on would start
-	// traffic to a third system the document never mentioned.
-	var nilBlock *Xray
-	if nilBlock.IsEnabled() {
-		t.Error("a product with no xray block reported Xray enabled")
+	if XrayIsEnabled(nil) {
+		t.Error("a repository with no xrayEnabled reported Xray on")
 	}
-	if (&Xray{}).IsEnabled() {
-		t.Error("an xray block with no `enabled` reported Xray enabled")
+	if XrayIsEnabled(boolp(false)) {
+		t.Error("xrayEnabled: false enabled Xray")
 	}
-	if !(&Xray{Enabled: boolp(true)}).IsEnabled() {
-		t.Error("xray.enabled: true did not enable Xray")
-	}
-	if (&Xray{Enabled: boolp(false)}).IsEnabled() {
-		t.Error("xray.enabled: false enabled Xray")
+	if !XrayIsEnabled(boolp(true)) {
+		t.Error("xrayEnabled: true did not enable Xray")
 	}
 }
 
-func TestXrayDefaultsAreNilSafe(t *testing.T) {
-	var x *Xray
-	if got := x.ConcurrencyOrDefault(); got != DefaultXrayConcurrency {
-		t.Errorf("concurrency = %d, want %d", got, DefaultXrayConcurrency)
-	}
-	if got := x.BatchSizeOrDefault(); got != DefaultXrayBatchSize {
-		t.Errorf("batchSize = %d, want %d", got, DefaultXrayBatchSize)
-	}
-	if got := x.TimeoutOrDefault(); got != DefaultXrayTimeout {
-		t.Errorf("timeout = %s, want %s", got, DefaultXrayTimeout)
-	}
-	if got := x.DetailTTLOrDefault(); got != DefaultXrayDetailTTL {
-		t.Errorf("detailTtl = %s, want %s", got, DefaultXrayDetailTTL)
-	}
-	if got := x.SummaryTTLOrDefault(); got != DefaultXraySummaryTTL {
-		t.Errorf("summaryTtl = %s, want %s", got, DefaultXraySummaryTTL)
-	}
-
-	set := &Xray{Concurrency: 3, BatchSize: 10, Timeout: Duration(time.Second), DetailTTL: Duration(time.Minute)}
-	if set.ConcurrencyOrDefault() != 3 || set.BatchSizeOrDefault() != 10 {
-		t.Error("explicit values were overridden by defaults")
+// The repository key is DERIVED, because the repository path already states it.
+// A declared one is a second place for the same fact, and the second place is
+// the one that goes stale.
+func TestXrayRepositoryKeyIsDerived(t *testing.T) {
+	for in, want := range map[string]string{
+		"apm0014228-oci-stage":           "apm0014228-oci-stage",
+		"docker-local/vendor-a/platform": "docker-local",
+		"/docker-local/vendor-a":         "docker-local",
+		"docker-local/":                  "docker-local",
+		"  docker-remote/cfx  ":          "docker-remote",
+		"":                               "",
+		"/":                              "",
+	} {
+		if got := XrayRepositoryKey(in); got != want {
+			t.Errorf("XrayRepositoryKey(%q) = %q, want %q", in, got, want)
+		}
 	}
 }
 
@@ -69,95 +59,6 @@ func TestJFrogTypeSpellings(t *testing.T) {
 	}
 }
 
-// An xray block on a repository that is not JFrog is SILENTLY wrong: it parses,
-// it applies, and nothing ever reads it. The operator sees a repository they
-// believe reports vulnerabilities and which reports none.
-func TestValidateXrayRejectsNonJFrogRepository(t *testing.T) {
-	errs := validateXray("spec.sources[0].xray", &Xray{Enabled: boolp(true)}, RegistryQuay, false)
-	if len(errs) == 0 {
-		t.Fatal("accepted an xray block on a Quay repository")
-	}
-	if !strings.Contains(errs[0].Message, "JFrog") {
-		t.Errorf("message = %q, want it to name JFrog", errs[0].Message)
-	}
-	if errs := validateXray("x", &Xray{Enabled: boolp(true)}, RegistryJFrog, false); len(errs) != 0 {
-		t.Errorf("rejected a valid JFrog xray block: %v", errs)
-	}
-}
-
-// Xray takes the repository's credential. An anonymous repository has none, and
-// the resulting 403 reads like a permissions problem rather than a missing one.
-func TestValidateXrayRejectsAnonymous(t *testing.T) {
-	errs := validateXray("x", &Xray{Enabled: boolp(true)}, RegistryJFrog, true)
-	if len(errs) == 0 {
-		t.Fatal("accepted xray on an anonymous repository")
-	}
-	if !strings.Contains(errs[0].Hint, "credentialsRef") {
-		t.Errorf("hint = %q, want it to point at credentialsRef", errs[0].Hint)
-	}
-}
-
-func TestValidateXrayBounds(t *testing.T) {
-	for _, tc := range []struct {
-		name string
-		x    *Xray
-		want string
-	}{
-		{"endpoint without a scheme", &Xray{Endpoint: "acme.jfrog.io"}, "https://"},
-		{"concurrency over the ceiling", &Xray{Concurrency: MaxXrayConcurrency + 1}, "maximum"},
-		{"batch size over the ceiling", &Xray{BatchSize: MaxXrayBatchSize + 1}, "maximum"},
-		{"detail retention over the ceiling", &Xray{DetailTTL: Duration(MaxXrayDetailTTL + time.Hour)}, "maximum"},
-		{"negative concurrency", &Xray{Concurrency: -1}, "negative"},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			errs := validateXray("x", tc.x, RegistryJFrog, false)
-			if len(errs) == 0 {
-				t.Fatalf("accepted %+v", tc.x)
-			}
-			joined := errs.Error()
-			if !strings.Contains(joined, tc.want) {
-				t.Errorf("errors = %q, want them to mention %q", joined, tc.want)
-			}
-		})
-	}
-
-	// A valid block passes every bound.
-	ok := &Xray{
-		Enabled: boolp(true), Endpoint: "https://acme.jfrog.io", RepositoryKey: "docker-local",
-		Concurrency: 6, BatchSize: 50, Timeout: Duration(time.Minute),
-		DetailTTL: Duration(15 * time.Minute), SummaryTTL: Duration(6 * time.Hour),
-	}
-	if errs := validateXray("x", ok, RegistryJFrog, false); len(errs) != 0 {
-		t.Errorf("rejected a valid block: %v", errs)
-	}
-}
-
-func TestXrayForResolvesByRole(t *testing.T) {
-	on := &Xray{Enabled: boolp(true)}
-	p := Product{Spec: Spec{
-		Sources: []Source{{Name: "vendor", Type: RegistryJFrog, Xray: on}},
-		Targets: []Target{
-			{Name: "prod", Type: RegistryQuay},
-			{Name: "store", Type: RegistryArtifactory},
-		},
-	}}
-
-	if x, ok := p.XrayFor(RoleSource, "vendor"); !ok || !x.IsEnabled() {
-		t.Errorf("source vendor: xray = %v ok = %t, want enabled", x, ok)
-	}
-	// Configured as JFrog with no xray block: capable, switched off. Not the
-	// same as a Quay target, which is not capable at all.
-	if x, ok := p.XrayFor(RoleTarget, "store"); !ok || x.IsEnabled() {
-		t.Errorf("target store: xray = %v ok = %t, want capable but disabled", x, ok)
-	}
-	if _, ok := p.XrayFor(RoleTarget, "prod"); ok {
-		t.Error("a Quay target reported itself capable of Xray")
-	}
-	if _, ok := p.XrayFor(RoleTarget, "nonexistent"); ok {
-		t.Error("an unknown repository reported itself capable of Xray")
-	}
-}
-
 // The document accepts two spellings and the schema knows one. A `jfrog`
 // reaching repositories.registry_type would fail a CHECK constraint that this
 // change deliberately does not widen.
@@ -170,11 +71,93 @@ func TestRegistryTypeCanonical(t *testing.T) {
 			t.Errorf("%q canonicalised to %q, want itself", ty, got)
 		}
 	}
-	// Everything persisted must be a value the schema admits.
 	for _, ty := range ValidRegistryTypes {
-		c := ty.Canonical()
-		if c == RegistryJFrog {
+		if ty.Canonical() == RegistryJFrog {
 			t.Errorf("%q canonicalises to a value the schema rejects", ty)
 		}
+	}
+}
+
+// Xray on a repository that is not JFrog is SILENTLY wrong: it parses, it
+// applies, and nothing ever reads it. The operator sees a repository they
+// believe reports vulnerabilities and which reports none.
+func TestValidateXrayRejectsNonJFrogRepository(t *testing.T) {
+	errs := validateXray("spec.sources[0]", boolp(true), "", RegistryQuay, false)
+	if len(errs) == 0 {
+		t.Fatal("accepted xrayEnabled on a Quay repository")
+	}
+	if !strings.Contains(errs[0].Message, "JFrog") {
+		t.Errorf("message = %q, want it to name JFrog", errs[0].Message)
+	}
+	if errs := validateXray("x", boolp(true), "", RegistryJFrog, false); len(errs) != 0 {
+		t.Errorf("rejected a valid JFrog repository: %v", errs)
+	}
+	// Off is off everywhere, and says nothing.
+	if errs := validateXray("x", nil, "", RegistryQuay, false); len(errs) != 0 {
+		t.Errorf("complained about a repository that never mentioned Xray: %v", errs)
+	}
+}
+
+// Xray takes the repository's credential. An anonymous repository has none, and
+// the resulting 403 reads like a permissions problem rather than a missing one.
+func TestValidateXrayRejectsAnonymous(t *testing.T) {
+	errs := validateXray("x", boolp(true), "", RegistryJFrog, true)
+	if len(errs) == 0 {
+		t.Fatal("accepted xray on an anonymous repository")
+	}
+	if !strings.Contains(errs[0].Hint, "credentialsRef") {
+		t.Errorf("hint = %q, want it to point at credentialsRef", errs[0].Hint)
+	}
+}
+
+func TestValidateXrayEndpoint(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		enabled  *bool
+		endpoint string
+		want     string
+	}{
+		{"no scheme", boolp(true), "acme.jfrog.io", "https://"},
+		{"no host", boolp(true), "https://", "host"},
+		{"set but not enabled", nil, "https://acme.jfrog.io", "never be read"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			errs := validateXray("x", tc.enabled, tc.endpoint, RegistryJFrog, false)
+			if len(errs) == 0 {
+				t.Fatalf("accepted %q", tc.endpoint)
+			}
+			if !strings.Contains(errs.Error(), tc.want) {
+				t.Errorf("errors = %q, want them to mention %q", errs.Error(), tc.want)
+			}
+		})
+	}
+
+	if errs := validateXray("x", boolp(true), "https://acme.jfrog.io", RegistryJFrog, false); len(errs) != 0 {
+		t.Errorf("rejected a valid subdomain override: %v", errs)
+	}
+}
+
+func TestXrayForResolvesByRole(t *testing.T) {
+	p := Product{Spec: Spec{
+		Sources: []Source{{Name: "vendor", Type: RegistryJFrog, XrayEnabled: boolp(true)}},
+		Targets: []Target{
+			{Name: "prod", Type: RegistryQuay},
+			{Name: "store", Type: RegistryArtifactory},
+		},
+	}}
+
+	if on, capable := p.XrayFor(RoleSource, "vendor"); !on || !capable {
+		t.Errorf("source vendor: on=%t capable=%t, want both", on, capable)
+	}
+	// Configured as JFrog with nothing said: capable, switched off. Not the
+	// same as a Quay target, which is not capable at all.
+	if on, capable := p.XrayFor(RoleTarget, "store"); on || !capable {
+		t.Errorf("target store: on=%t capable=%t, want capable but off", on, capable)
+	}
+	if _, capable := p.XrayFor(RoleTarget, "prod"); capable {
+		t.Error("a Quay target reported itself capable of Xray")
+	}
+	if _, capable := p.XrayFor(RoleTarget, "nonexistent"); capable {
+		t.Error("an unknown repository reported itself capable of Xray")
 	}
 }

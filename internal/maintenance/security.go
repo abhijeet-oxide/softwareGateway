@@ -27,6 +27,10 @@ import (
 // LEADER-GATED, like every loop that writes.
 type SecurityCacheSweeper struct {
 	security *store.Security
+	// packages releases sync claims held by a process that is gone. A release
+	// stuck showing "syncing" forever is a release nobody can ever sync again,
+	// which is a worse outcome than the rare duplicate a released claim allows.
+	packages *store.PackageSecurity
 	interval time.Duration
 	log      *slog.Logger
 
@@ -42,15 +46,25 @@ type SecurityCacheSweeper struct {
 const DefaultSecuritySweepInterval = 15 * time.Minute
 
 // NewSecurityCacheSweeper builds the loop.
-func NewSecurityCacheSweeper(security *store.Security, interval time.Duration, log *slog.Logger) *SecurityCacheSweeper {
+func NewSecurityCacheSweeper(
+	security *store.Security, packages *store.PackageSecurity,
+	interval time.Duration, log *slog.Logger,
+) *SecurityCacheSweeper {
 	if log == nil {
 		log = slog.Default()
 	}
 	if interval <= 0 {
 		interval = DefaultSecuritySweepInterval
 	}
-	return &SecurityCacheSweeper{security: security, interval: interval, log: log}
+	return &SecurityCacheSweeper{
+		security: security, packages: packages, interval: interval, log: log,
+	}
 }
+
+// StaleSyncAfter is how long a sync claim is honoured before it is treated as
+// abandoned. Matches the syncer's own bound, so the two cannot disagree about
+// what "still running" means.
+const StaleSyncAfter = 30 * time.Minute
 
 // SetLeader is called by the elector on every leadership change.
 func (s *SecurityCacheSweeper) SetLeader(isLeader bool) {
@@ -96,6 +110,18 @@ func (s *SecurityCacheSweeper) Run(ctx context.Context) error {
 
 // SweepOnce runs one sweep.
 func (s *SecurityCacheSweeper) SweepOnce(ctx context.Context) error {
+	if s.packages != nil {
+		released, err := s.packages.ReleaseAbandoned(ctx, StaleSyncAfter)
+		if err != nil {
+			return err
+		}
+		if released > 0 {
+			s.log.WarnContext(ctx, "security: released abandoned sync claims",
+				"releases", released,
+				"note", "a Coordinator stopped mid-sync; these can be synced again")
+		}
+	}
+
 	scans, details, err := s.security.Sweep(ctx)
 	if err != nil {
 		return err

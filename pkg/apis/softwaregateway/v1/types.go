@@ -299,6 +299,12 @@ type Package struct {
 	PackageID string `json:"packageId"`
 	Product   string `json:"product"`
 
+	// Security is what a vulnerability sync recorded for this release, or nil
+	// where none has run. Nil is NOT zero vulnerabilities, and a client that
+	// renders it as such has written the bug the whole feature exists to
+	// prevent.
+	Security *PackageSecuritySummary `json:"security,omitempty"`
+
 	Tag            string `json:"tag"`
 	ManifestDigest string `json:"manifestDigest"`
 	MediaType      string `json:"mediaType"`

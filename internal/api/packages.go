@@ -19,6 +19,7 @@ import (
 
 	"github.com/abhijeet-oxide/softwareGateway/internal/compare"
 	"github.com/abhijeet-oxide/softwareGateway/internal/discovery"
+	"github.com/abhijeet-oxide/softwareGateway/internal/regclient"
 	"github.com/abhijeet-oxide/softwareGateway/internal/store"
 	"github.com/abhijeet-oxide/softwareGateway/internal/vendors"
 	v1 "github.com/abhijeet-oxide/softwareGateway/pkg/apis/softwaregateway/v1"
@@ -128,8 +129,89 @@ func (s *Server) handleListPackages(w http.ResponseWriter, r *http.Request) {
 	for _, row := range rows {
 		resp.Packages = append(resp.Packages, toAPIPackage(productName, row))
 	}
+	// One query for the whole page, not one per row. That difference is why the
+	// vulnerability column is always on rather than hidden behind a toggle.
+	s.attachSecurity(r.Context(), productName, rows, resp.Packages)
 
 	WriteJSON(w, r, http.StatusOK, resp)
+}
+
+// attachSecurity fills in each listed release's stored vulnerability counts.
+//
+// Silent on failure, deliberately: security is a column, and a listing that
+// 500s because the security table is unreadable would take the whole page down
+// for a decoration. A missing summary renders as "not synced", which is honest.
+func (s *Server) attachSecurity(
+	ctx context.Context, productName string, rows []store.PackageRow, out []v1.Package,
+) {
+	if s.deps.SecurityStore == nil || len(rows) == 0 {
+		return
+	}
+	ids := make([]int64, 0, len(rows))
+	for _, row := range rows {
+		ids = append(ids, row.ID)
+	}
+	found, err := s.deps.SecurityStore.ForPackages(ctx, ids)
+	if err != nil {
+		s.deps.Logger.Warn("could not read package security for listing", "error", err)
+		return
+	}
+
+	// Whether a scanner exists at all is a property of the PRODUCT, so it is
+	// resolved once rather than per row - twenty identical config lookups to
+	// answer one question is the same mistake the counts themselves used to
+	// make.
+	canSync, reason := s.productCanSync(productName)
+
+	for i, row := range rows {
+		sec, ok := found[row.ID]
+		if !ok {
+			// Never synced. Still send a summary, because the listing has to
+			// offer the action and a nil would leave it with nothing to render
+			// but a blank cell.
+			out[i].Security = &v1.PackageSecuritySummary{
+				State:   string(store.PackageSecurityNever),
+				Label:   syncStateLabel(store.PackageSecurityNever),
+				CanSync: canSync,
+				Reason:  reason,
+			}
+			continue
+		}
+		summary := &v1.PackageSecuritySummary{
+			State:         string(orNever(sec.State)),
+			Label:         syncStateLabel(orNever(sec.State)),
+			Counts:        toAPICounts(sec.Counts),
+			DistinctTotal: sec.DistinctTotal,
+			Complete:      sec.Coverage.Complete(),
+			Scanned:       sec.Coverage.Scanned,
+			Scannable:     sec.Coverage.Scannable(),
+			Error:         sec.Error,
+			CanSync:       canSync,
+			Reason:        reason,
+		}
+		if sec.SyncedAt != nil {
+			summary.SyncedAt = sec.SyncedAt.UTC().Format(rfc3339)
+		}
+		out[i].Security = summary
+	}
+}
+
+// productCanSync reports whether any repository of a product has a scanner.
+func (s *Server) productCanSync(productName string) (bool, string) {
+	if s.deps.Products == nil {
+		return false, "This Coordinator has no product configuration."
+	}
+	p, ok := s.deps.Products.Get(productName)
+	if !ok {
+		return false, "This product is not configured on this Coordinator."
+	}
+	if _, ok := regclient.SecurityRepositoryFor(p, nil); !ok {
+		return false, fmt.Sprintf(
+			"No repository of %q has vulnerability scanning switched on. "+
+				"Set `type: jfrog` and `xray.enabled: true` on the JFrog repository this release lands in.",
+			productName)
+	}
+	return true, ""
 }
 
 // handleGetPackage serves GET /api/v1/products/{product}/packages/{package}.
@@ -163,6 +245,13 @@ func (s *Server) handleGetPackage(w http.ResponseWriter, r *http.Request) {
 	}
 
 	pkg := toAPIPackage(productName, row)
+	// The same summary the listing carries, so a detail page opened directly
+	// says the same thing about this release as the page it was reached from.
+	// Through a slice because attachSecurity writes into one - handing it a
+	// literal would fill in a copy and leave this one empty.
+	one := []v1.Package{pkg}
+	s.attachSecurity(r.Context(), productName, []store.PackageRow{row}, one)
+	pkg = one[0]
 
 	// Related artifacts are loaded on the SINGLE-package read only, never in a
 	// listing: a page of fifty packages would be fifty extra queries to render
@@ -957,11 +1046,12 @@ func (s *Server) handlePackageCustomMethod(w http.ResponseWriter, r *http.Reques
 	ref, verb := segment[:i], segment[i+1:]
 
 	switch verb {
-	case packageVerbInspect, packageVerbCompare, packageVerbCompareSecurity:
+	case packageVerbInspect, packageVerbCompare, packageVerbCompareSecurity, packageVerbSyncSecurity:
 	default:
 		Error(w, r, v1.CodeInvalidArgument, fmt.Sprintf(
-			"%q is not a custom method on a package (known: %s, %s, %s)",
-			verb, packageVerbInspect, packageVerbCompare, packageVerbCompareSecurity))
+			"%q is not a custom method on a package (known: %s, %s, %s, %s)",
+			verb, packageVerbInspect, packageVerbCompare,
+			packageVerbCompareSecurity, packageVerbSyncSecurity))
 		return
 	}
 
@@ -979,6 +1069,8 @@ func (s *Server) handlePackageCustomMethod(w http.ResponseWriter, r *http.Reques
 		s.handleComparePackage(w, r)
 	case packageVerbCompareSecurity:
 		s.handleCompareSecurity(w, r)
+	case packageVerbSyncSecurity:
+		s.handleSyncPackageSecurity(w, r)
 	default:
 		s.handleInspectPackage(w, r)
 	}

@@ -97,16 +97,23 @@ It is also a plain synchronous request rather than a long-running operation, des
 
 | Method | Path | Purpose |
 |---|---|---|
-| `GET` | `/api/v1/products/{product}/packages/{package}/security` | This release's posture. `?detail=true` for findings, `?refresh=true` to bypass every cache |
-| `POST` | `/api/v1/products/{product}/packages/{package}:compareSecurity` | How the posture changed against a second release |
+| `POST` | `/api/v1/products/{product}/packages/{package}:syncSecurity` | **The only route that talks to a scanner.** Claims the release and returns immediately |
+| `GET` | `/api/v1/products/{product}/packages/{package}/security` | This release's stored posture and its sync state. `?detail=true` for findings |
+| `POST` | `/api/v1/products/{product}/packages/{package}:compareSecurity` | How the posture changed against a second release, from both sides' stored data |
 | `GET` | `/api/v1/products/{product}/security/search` | `?kind=cve\|package\|image&q=` |
 | `GET` | `/api/v1/products/{product}/packages/{package}/security/export` | CSV, Excel or JSON |
 | `GET` | `/api/v1/products/{product}/packages/{package}/security/compare/export` | The comparison, same formats |
 | `GET` | `/api/v1/products/{product}/security/search/export` | Search results, same formats |
-| `GET` | `/api/v1/security/progress/{token}` | What a retrieval is doing, while it does it |
-
 Registered only where the dependency exists, per §1's rule: a deployment with no
-scanner answers an honest 404 rather than a route that always fails.
+security storage answers an honest 404 rather than a route that always fails.
+The READ routes are registered on the store and the SYNC route on the syncer, so
+a release's findings stay readable while the scanner is unreachable - which is
+exactly when somebody looks at them.
+
+A sync's progress travels **inside the security response** rather than on an
+endpoint of its own: the interface polls one cheap route while a sync runs and
+gets both the live position and whatever is stored in the same answer. Two
+endpoints would be two requests that can disagree.
 
 The posture read carries an **ETag over the findings themselves** rather than
 over a timestamp, so a re-scan that produced identical results does not

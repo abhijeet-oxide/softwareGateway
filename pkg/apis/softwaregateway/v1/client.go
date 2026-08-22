@@ -865,18 +865,12 @@ func (c *Client) WhoAmI(ctx context.Context) (*WhoAmIResponse, error) {
 // Security
 // ---------------------------------------------------------------------------
 
-// PackageSecurityOptions modulates a posture read.
+// PackageSecurityOptions modulates a security read.
 type PackageSecurityOptions struct {
 	// Detail asks for every finding. Without it the response carries counts
 	// alone, which is what a listing needs and what a listing must not pay a
 	// megabyte per release to get.
 	Detail bool
-	// Refresh bypasses every cache and asks the scanner. Only a person pressing
-	// refresh should set it.
-	Refresh bool
-	// ProgressToken is a caller-minted id it can poll at SecurityProgress while
-	// this request is open. Optional and free to omit.
-	ProgressToken string
 }
 
 // PackageSecurity returns one release's security posture.
@@ -892,12 +886,6 @@ func (c *Client) PackageSecurity(
 	q := url.Values{}
 	if opts.Detail {
 		q.Set("detail", "true")
-	}
-	if opts.Refresh {
-		q.Set("refresh", "true")
-	}
-	if opts.ProgressToken != "" {
-		q.Set("progressToken", opts.ProgressToken)
 	}
 
 	path := "/api/v1/products/" + url.PathEscape(product) +
@@ -958,16 +946,25 @@ func (c *Client) SearchSecurity(
 		"/api/v1/products/"+url.PathEscape(product)+"/security/search?"+q.Encode(), &out)
 }
 
-// SecurityProgress reads where a security retrieval has got to.
+// SyncPackageSecurity asks the scanner about a release and stores the answer.
 //
-// Polled WHILE the request carrying the token is still in flight. A 404 is a
-// normal answer - progress lives in one replica's memory and is dropped shortly
-// after the work finishes - so a caller treats it as "no position available".
-func (c *Client) SecurityProgress(
-	ctx context.Context, token string,
-) (*SecurityProgressResponse, error) {
-	var out SecurityProgressResponse
-	return &out, c.get(ctx, "/api/v1/security/progress/"+url.PathEscape(token), &out)
+// Returns as soon as the work is CLAIMED, never when it is finished: a real
+// release takes minutes, and holding the request open would put every
+// intermediary's idle timeout into the control plane. Poll PackageSecurity and
+// read its Sync block to follow it.
+//
+// A status of "already_running" is not a failure - the thing the caller wanted
+// is happening.
+func (c *Client) SyncPackageSecurity(
+	ctx context.Context, product, ref string,
+) (*SyncSecurityResponse, error) {
+	seg, query := splitPackageRef(ref)
+	// The colon before the verb is an AIP-136 structural separator and must NOT
+	// be escaped; the reference itself is escaped as one segment.
+	path := "/api/v1/products/" + url.PathEscape(product) +
+		"/packages/" + url.PathEscape(seg) + ":syncSecurity" + query
+	var out SyncSecurityResponse
+	return &out, c.post(ctx, path, struct{}{}, &out)
 }
 
 // mergeQuery joins a reference's own query string with additional parameters.

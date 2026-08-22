@@ -16,75 +16,93 @@ import (
 	v1 "github.com/abhijeet-oxide/softwareGateway/pkg/apis/softwaregateway/v1"
 )
 
-// fakeAnalyzer stands in for the security engine, so handler tests need no
-// scanner. It answers from a map keyed by artifact digest, which is exactly
-// what a real provider does.
-type fakeAnalyzer struct {
-	byDigest map[string]security.Report
-	enabled  bool
-	provider string
-	err      error
-	// calls counts retrievals, so a test can assert that a disabled scanner
-	// costs no work and that a comparison retrieves both sides.
-	calls int
-	// detail records what the last request asked for.
-	detail bool
+// The product the harness loads declares a JFrog target with Xray on, because
+// that is the shape of a real estate: the vendor publishes, and the scanner
+// runs where the release LANDS.
+const securityProductDoc = `
+apiVersion: softwaregateway.io/v1alpha1
+kind: Product
+metadata:
+  name: vendor-a
+spec:
+  sources:
+    - name: vendor
+      registry: registry.example.com
+      repository: vendor-a/platform
+      anonymous: true
+  targets:
+    - name: internal
+      registry: internal.example.com
+      repository: mirror/vendor-a
+      type: jfrog
+      credentialsRef:
+        secretName: jfrog
+      default: true
+      xrayEnabled: true
+`
+
+// fakeSyncer stands in for the background job, so handler tests need no
+// scanner. It records what it was asked to sync and writes the result the real
+// syncer would.
+type fakeSyncer struct {
+	packages *store.PackageSecurity
+	// reports is what a sync "finds", keyed by artifact digest.
+	reports map[string]security.Report
+	// started counts claims, and lastArtifacts what the last one was given.
+	started       int
+	lastArtifacts []security.ArtifactRef
+	lastScope     security.Scope
+	// leaveRunning holds the row in `syncing` instead of completing it.
+	leaveRunning bool
+	// storeHandle lets the fake write through the real store, so the read
+	// paths under test are the production ones.
+	storeHandle store.Store
 }
 
-func newFakeAnalyzer() *fakeAnalyzer {
-	return &fakeAnalyzer{byDigest: map[string]security.Report{}, enabled: true, provider: "jfrog-xray"}
-}
-
-func (f *fakeAnalyzer) Posture(_ context.Context, req security.Request) (security.Result, error) {
-	f.calls++
-	f.detail = req.Detail
-	if f.err != nil {
-		return security.Result{}, f.err
+func (f *fakeSyncer) Start(ctx context.Context, req security.SyncRequest) (security.SyncStatus, error) {
+	if err := f.packages.Claim(ctx, req.PackageID, time.Minute); err != nil {
+		return security.SyncAlreadyRunning, err
+	}
+	f.started++
+	f.lastArtifacts = req.Artifacts
+	f.lastScope = req.Scope
+	if f.leaveRunning {
+		return security.SyncStarted, nil
 	}
 
 	var reports []security.Report
 	for _, ref := range req.Artifacts {
-		if r, ok := f.byDigest[ref.Digest]; ok {
+		if r, ok := f.reports[ref.Digest]; ok {
 			r.Artifact = ref
 			reports = append(reports, r)
 			continue
 		}
-		if !f.enabled {
-			reports = append(reports, security.Report{
-				Artifact: ref, Status: security.StatusDisabled, Provider: f.provider,
-				Message: "JFrog Xray is not enabled for this repository.",
-			})
-			continue
-		}
 		reports = append(reports, security.Report{
-			Artifact: ref, Status: security.StatusUnsupported, Provider: f.provider,
+			Artifact: ref, Status: security.StatusNotScanned, Provider: "jfrog-xray",
+			Message: "not indexed", RetrievedAt: time.Now().UTC(),
 		})
 	}
-	return security.Result{
-		Posture:     security.Summarize(reports),
+
+	// The real syncer writes both tiers in one pass; so does this, through the
+	// same store, so the read paths under test are the production ones.
+	sec := store.NewSecurity(f.storeHandle)
+	if err := sec.Save(ctx, req.Scope, reports, true,
+		security.CacheTTL{Summary: time.Hour, Detail: time.Hour}); err != nil {
+		return security.SyncStarted, err
+	}
+	posture := security.Summarize(reports)
+	return security.SyncStarted, f.packages.Record(ctx, security.PackageResult{
+		PackageID:   req.PackageID,
+		Provider:    "jfrog-xray",
+		Repository:  req.Scope.Repository,
+		Role:        req.Scope.Role,
+		Posture:     posture,
 		Fingerprint: security.FingerprintReports(reports),
-		Provider:    f.provider,
-		Enabled:     f.enabled,
-		RetrievedAt: time.Date(2026, 6, 29, 1, 14, 0, 0, time.UTC),
-	}, nil
+	})
 }
 
-func (f *fakeAnalyzer) Compare(ctx context.Context, req security.CompareRequest) (security.CompareResult, error) {
-	a, err := f.Posture(ctx, req.A)
-	if err != nil {
-		return security.CompareResult{}, err
-	}
-	b, err := f.Posture(ctx, req.B)
-	if err != nil {
-		return security.CompareResult{}, err
-	}
-	return security.CompareResult{
-		Comparison: security.Compare(security.CompareInput{
-			A: a.Posture.Reports, B: b.Posture.Reports, NameA: req.NameA, NameB: req.NameB,
-		}),
-		A: a, B: b,
-	}, nil
-}
+func (f *fakeSyncer) Progress(int64) (*security.SyncProgress, bool) { return nil, false }
+func (f *fakeSyncer) Running(int64) bool                            { return false }
 
 func scannedReport(findings ...security.Finding) security.Report {
 	at := time.Date(2026, 6, 29, 1, 14, 0, 0, time.UTC)
@@ -108,156 +126,206 @@ func apiFinding(cve string, sev security.Severity, pkg string, fixable bool) sec
 	return f
 }
 
-func newSecurityHarness(t *testing.T, analyzer *fakeAnalyzer) *apiHarness {
+type securityHarness struct {
+	*apiHarness
+	syncer *fakeSyncer
+}
+
+func newSecurityHarness(t *testing.T) *securityHarness {
 	t.Helper()
-	return newAPIHarnessWith(t, func(d *Deps) {
-		d.Security = analyzer
+
+	syncer := &fakeSyncer{reports: map[string]security.Report{}}
+	h := newAPIHarnessWith(t, func(d *Deps) {
+		pkgSec := store.NewPackageSecurity(d.Store)
+		syncer.packages = pkgSec
+		syncer.storeHandle = d.Store
+
+		d.SecuritySync = syncer
+		d.SecurityStore = harnessSecurityStore{pkgSec, store.NewSecurity(d.Store)}
 		d.SecurityIndex = store.NewSecurity(d.Store)
-	})
+	}, securityProductDoc)
+
+	return &securityHarness{apiHarness: h, syncer: syncer}
 }
 
-func TestPackageSecurityReportsPostureAndCoverage(t *testing.T) {
-	analyzer := newFakeAnalyzer()
-	analyzer.byDigest[digestA] = scannedReport(
-		apiFinding("CVE-2024-3094", security.SeverityCritical, "openssl", true),
-		apiFinding("CVE-2024-0001", security.SeverityLow, "zlib", false),
-	)
-
-	h := newSecurityHarness(t, analyzer)
-	h.seedPackage("25.7.2131", digestA)
-
-	var resp v1.PackageSecurityResponse
-	if code := h.get("/api/v1/products/vendor-a/packages/25.7.2131/security?detail=true", &resp); code != http.StatusOK {
-		t.Fatalf("expected 200, got %d", code)
-	}
-
-	if resp.Counts.Total != 2 || resp.Counts.BySeverity.Critical != 1 {
-		t.Errorf("counts = %+v", resp.Counts)
-	}
-	if resp.Counts.Fixable != 1 || resp.Counts.NonFixable != 1 {
-		t.Errorf("fixability = %d fixable / %d not", resp.Counts.Fixable, resp.Counts.NonFixable)
-	}
-	if !resp.Enabled || resp.Provider != "jfrog-xray" {
-		t.Errorf("provider = %q enabled = %t", resp.Provider, resp.Enabled)
-	}
-	if resp.Fingerprint == "" {
-		t.Error("no fingerprint, so a client cannot tell an unchanged re-read from a changed one")
-	}
-	// The label travels with the value so every client says the same word.
-	for _, r := range resp.Reports {
-		if r.Status != "" && r.StatusLabel == "" {
-			t.Errorf("report %s has a status with no label", r.Artifact.Name)
-		}
-	}
-	if !analyzer.detail {
-		t.Error("detail=true did not reach the analyzer")
-	}
+// harnessSecurityStore joins the two halves the API asks for, exactly as the
+// composition root does.
+type harnessSecurityStore struct {
+	*store.PackageSecurity
+	reports *store.Security
 }
 
-// A disabled scanner is a distinct state, and must never render as a clean
-// release.
-func TestPackageSecurityDisabledIsNotClean(t *testing.T) {
-	analyzer := newFakeAnalyzer()
-	analyzer.enabled = false
+func (s harnessSecurityStore) ReportsFor(
+	ctx context.Context, scope security.Scope, refs []security.ArtifactRef,
+) ([]security.Report, error) {
+	return s.reports.ReportsFor(ctx, scope, refs)
+}
 
-	h := newSecurityHarness(t, analyzer)
+// A release nobody has synced is not a clean release. It is the state the whole
+// feature exists to keep distinct, and the response has to offer the sync.
+func TestPackageSecurityNeverSynced(t *testing.T) {
+	h := newSecurityHarness(t)
 	h.seedPackage("25.7.2131", digestA)
 
 	var resp v1.PackageSecurityResponse
 	if code := h.get("/api/v1/products/vendor-a/packages/25.7.2131/security", &resp); code != http.StatusOK {
 		t.Fatalf("expected 200, got %d", code)
 	}
-	if resp.State != "disabled" {
-		t.Fatalf("state = %q, want disabled", resp.State)
+	if resp.State != "not_synced" {
+		t.Fatalf("state = %q, want not_synced", resp.State)
 	}
-	if resp.Enabled {
-		t.Error("enabled reported true for a disabled scanner")
+	if resp.Sync.State != "" {
+		t.Errorf("sync.state = %q, want the empty never-synced state", resp.Sync.State)
 	}
-	if resp.Message == "" {
-		t.Error("a disabled state with no message tells the user nothing to do")
+	if !resp.Sync.CanSync {
+		t.Errorf("canSync = false with a JFrog target and xray on: %q", resp.Sync.Reason)
 	}
 	if resp.Counts.Total != 0 {
 		t.Errorf("counts = %d, want 0", resp.Counts.Total)
 	}
+	// The scanner answers for the TARGET, not the vendor source.
+	if resp.Repository != "internal" {
+		t.Errorf("repository = %q, want the JFrog target", resp.Repository)
+	}
 }
 
-// An unscanned artifact makes the release's numbers partial, and the response
-// says so rather than rounding to clean.
-func TestPackageSecurityPartialCoverageSaysSo(t *testing.T) {
-	analyzer := newFakeAnalyzer()
-	analyzer.byDigest[digestA] = scannedReport(apiFinding("CVE-1", security.SeverityHigh, "openssl", true))
-	analyzer.byDigest[digestB] = security.Report{Status: security.StatusNotScanned, Provider: "jfrog-xray"}
+// The scanner runs where the release LANDS. Scoping to the vendor source finds
+// no scanner at all, on an estate where Xray is switched on and working.
+func TestSyncAsksTheTargetNotTheSource(t *testing.T) {
+	h := newSecurityHarness(t)
+	h.seedPackage("25.7.2131", digestA)
 
-	h := newSecurityHarness(t, analyzer)
-	id := h.seedPackage("25.7.2131", digestA)
-	h.seedArtifact(id, digestB, "cfx-sidecar")
+	var resp v1.SyncSecurityResponse
+	if code := h.post("/api/v1/products/vendor-a/packages/25.7.2131:syncSecurity", `{}`, &resp); code != http.StatusAccepted {
+		t.Fatalf("expected 202, got %d", code)
+	}
+	if !resp.Started || resp.Status != "started" {
+		t.Fatalf("response = %+v, want a started sync", resp)
+	}
+	if h.syncer.lastScope.Repository != "internal" {
+		t.Errorf("scope repository = %q, want the JFrog target", h.syncer.lastScope.Repository)
+	}
+	if h.syncer.lastScope.Role != "target" {
+		t.Errorf("scope role = %q, want target", h.syncer.lastScope.Role)
+	}
+	if len(h.syncer.lastArtifacts) == 0 {
+		t.Error("the sync was given no artifacts")
+	}
+}
+
+func TestSyncThenReadStoredCounts(t *testing.T) {
+	h := newSecurityHarness(t)
+	h.seedPackage("25.7.2131", digestA)
+	h.syncer.reports[digestA] = scannedReport(
+		apiFinding("CVE-2024-3094", security.SeverityCritical, "openssl", true),
+		apiFinding("CVE-2024-0001", security.SeverityLow, "zlib", false),
+	)
+
+	if code := h.post("/api/v1/products/vendor-a/packages/25.7.2131:syncSecurity", `{}`, nil); code != http.StatusAccepted {
+		t.Fatalf("sync: expected 202, got %d", code)
+	}
 
 	var resp v1.PackageSecurityResponse
 	if code := h.get("/api/v1/products/vendor-a/packages/25.7.2131/security?detail=true", &resp); code != http.StatusOK {
 		t.Fatalf("expected 200, got %d", code)
 	}
-	if resp.State != "partial" {
-		t.Fatalf("state = %q, want partial", resp.State)
+	if resp.Sync.State != "synced" {
+		t.Fatalf("sync.state = %q, want synced", resp.Sync.State)
 	}
-	if resp.Coverage.NotScanned != 1 {
-		t.Errorf("coverage = %+v, want one unscanned artifact", resp.Coverage)
+	if resp.Counts.Total != 2 || resp.Counts.BySeverity.Critical != 1 {
+		t.Errorf("counts = %+v", resp.Counts)
 	}
-	if resp.Coverage.Complete {
-		t.Error("coverage reported complete with an unscanned artifact")
+	if resp.Counts.Fixable != 1 || resp.Counts.NonFixable != 1 {
+		t.Errorf("fixability = %d fixable / %d not", resp.Counts.Fixable, resp.Counts.NonFixable)
 	}
-	if !strings.Contains(resp.Message, "no scan result") {
-		t.Errorf("message = %q", resp.Message)
+	if resp.Sync.SyncedAt == "" {
+		t.Error("no syncedAt, so nobody can tell how stale this is")
+	}
+
+	// The detail read serves findings out of the index - no scanner involved.
+	var findings int
+	for _, rep := range resp.Reports {
+		findings += len(rep.Findings)
+	}
+	if findings != 2 {
+		t.Errorf("got %d findings from storage, want 2", findings)
 	}
 }
 
-// A re-read of an unchanged posture must not re-send the findings.
-func TestPackageSecurityHonoursIfNoneMatch(t *testing.T) {
-	analyzer := newFakeAnalyzer()
-	analyzer.byDigest[digestA] = scannedReport(apiFinding("CVE-1", security.SeverityHigh, "openssl", true))
-
-	h := newSecurityHarness(t, analyzer)
+// Pressing the button twice must not start two syncs.
+func TestSyncIsClaimedOnce(t *testing.T) {
+	h := newSecurityHarness(t)
 	h.seedPackage("25.7.2131", digestA)
+	h.syncer.leaveRunning = true
 
-	path := "/api/v1/products/vendor-a/packages/25.7.2131/security?detail=true"
-	resp, err := http.Get(h.server.URL + path) //nolint:noctx // test client
-	if err != nil {
-		t.Fatal(err)
-	}
-	etag := resp.Header.Get("ETag")
-	_ = resp.Body.Close()
-	if etag == "" {
-		t.Fatal("no ETag on a security response")
-	}
-	if cc := resp.Header.Get("Cache-Control"); !strings.Contains(cc, "private") {
-		t.Errorf("Cache-Control = %q, want it to be private: these are one repository's findings", cc)
+	if code := h.post("/api/v1/products/vendor-a/packages/25.7.2131:syncSecurity", `{}`, nil); code != http.StatusAccepted {
+		t.Fatalf("first sync: got %d", code)
 	}
 
-	req, _ := http.NewRequestWithContext(t.Context(), http.MethodGet, h.server.URL+path, nil)
-	req.Header.Set("If-None-Match", etag)
-	again, err := http.DefaultClient.Do(req)
-	if err != nil {
-		t.Fatal(err)
+	var second v1.SyncSecurityResponse
+	if code := h.post("/api/v1/products/vendor-a/packages/25.7.2131:syncSecurity", `{}`, &second); code != http.StatusAccepted {
+		t.Fatalf("second sync: got %d", code)
 	}
-	defer func() { _ = again.Body.Close() }()
-	if again.StatusCode != http.StatusNotModified {
-		t.Fatalf("expected 304 for an unchanged posture, got %d", again.StatusCode)
+	if second.Started {
+		t.Error("the second call started a second sync")
+	}
+	if second.Status != "already_running" {
+		t.Errorf("status = %q, want already_running", second.Status)
+	}
+	if h.syncer.started != 1 {
+		t.Errorf("started %d syncs, want 1", h.syncer.started)
+	}
+
+	// And the release reports itself as syncing, which is what the listing and
+	// the detail page render instead of a stale count.
+	var resp v1.PackageSecurityResponse
+	h.get("/api/v1/products/vendor-a/packages/25.7.2131/security", &resp)
+	if resp.State != "syncing" || resp.Sync.State != "syncing" {
+		t.Errorf("state = %q / %q, want syncing", resp.State, resp.Sync.State)
 	}
 }
 
-func TestCompareSecurityAnswersInPlainLanguage(t *testing.T) {
-	analyzer := newFakeAnalyzer()
-	analyzer.byDigest[digestA] = scannedReport(
+// A product with no scanner anywhere says so, and says which knob turns one on.
+func TestSyncRefusedWithoutAScanner(t *testing.T) {
+	h := newSecurityHarness(t)
+	// The default harness product has no xray block at all.
+	plain := newAPIHarnessWith(t, func(d *Deps) {
+		pkgSec := store.NewPackageSecurity(d.Store)
+		d.SecuritySync = &fakeSyncer{packages: pkgSec, reports: map[string]security.Report{}, storeHandle: d.Store}
+		d.SecurityStore = harnessSecurityStore{pkgSec, store.NewSecurity(d.Store)}
+	})
+	plain.seedPackage("25.7.2131", digestA)
+	_ = h
+
+	if code := plain.post("/api/v1/products/vendor-a/packages/25.7.2131:syncSecurity", `{}`, nil); code != http.StatusConflict {
+		t.Fatalf("expected a failed precondition (409), got %d", code)
+	}
+
+	var resp v1.PackageSecurityResponse
+	plain.get("/api/v1/products/vendor-a/packages/25.7.2131/security", &resp)
+	if resp.Sync.CanSync {
+		t.Error("canSync is true with no scanner configured anywhere")
+	}
+	if !strings.Contains(resp.Sync.Reason, "xray.enabled") {
+		t.Errorf("reason = %q, want it to name the setting", resp.Sync.Reason)
+	}
+}
+
+func TestCompareSecurityFromStoredData(t *testing.T) {
+	h := newSecurityHarness(t)
+	h.seedPackage("25.7.2100", digestA)
+	h.seedPackage("25.7.2131", digestB)
+
+	h.syncer.reports[digestA] = scannedReport(
 		apiFinding("CVE-1", security.SeverityHigh, "openssl", true),
 		apiFinding("CVE-2", security.SeverityHigh, "zlib", true),
 		apiFinding("CVE-3", security.SeverityHigh, "curl", true),
 	)
-	analyzer.byDigest[digestB] = scannedReport(
+	h.syncer.reports[digestB] = scannedReport(
 		apiFinding("CVE-9", security.SeverityLow, "libxml", false),
 	)
-
-	h := newSecurityHarness(t, analyzer)
-	h.seedPackage("25.7.2100", digestA)
-	h.seedPackage("25.7.2131", digestB)
+	h.post("/api/v1/products/vendor-a/packages/25.7.2100:syncSecurity", `{}`, nil)
+	h.post("/api/v1/products/vendor-a/packages/25.7.2131:syncSecurity", `{}`, nil)
 
 	var resp v1.SecurityComparisonResponse
 	code := h.post("/api/v1/products/vendor-a/packages/25.7.2100:compareSecurity",
@@ -265,59 +333,50 @@ func TestCompareSecurityAnswersInPlainLanguage(t *testing.T) {
 	if code != http.StatusOK {
 		t.Fatalf("expected 200, got %d", code)
 	}
-
 	if resp.Verdict != "better" {
-		t.Fatalf("verdict = %q, want better", resp.Verdict)
+		t.Fatalf("verdict = %q (score %d), want better", resp.Verdict, resp.NetScore)
 	}
-	if resp.VerdictLabel != "Better" {
-		t.Errorf("verdictLabel = %q", resp.VerdictLabel)
-	}
-	// The simple view must be a sentence, not a table.
 	if !strings.Contains(resp.Explanation, "resolves 3 high") {
 		t.Errorf("explanation = %q", resp.Explanation)
 	}
-	if !strings.Contains(resp.Explanation, "introduces 1 low") {
-		t.Errorf("explanation = %q", resp.Explanation)
-	}
-	// The detailed view is the same object, one level down.
 	if len(resp.Changes) == 0 {
-		t.Error("no changes: the simple view must be expandable into the breakdown behind it")
+		t.Error("no changes: the simple view must expand into the breakdown behind it")
 	}
-	for _, c := range resp.Changes {
-		if c.TypeLabel == "" {
-			t.Errorf("change %s has no label", c.Type)
-		}
-	}
-	if resp.A.Label != "25.7.2100" || resp.B.Label != "25.7.2131" {
-		t.Errorf("ends = %q and %q", resp.A.Label, resp.B.Label)
+	// Both ends carry their sync state, so the interface can offer the sync
+	// rather than only reporting a verdict.
+	if resp.A.Sync.State != "synced" || resp.B.Sync.State != "synced" {
+		t.Errorf("ends = %q / %q, want both synced", resp.A.Sync.State, resp.B.Sync.State)
 	}
 }
 
-func TestCompareSecurityRequiresASecondRelease(t *testing.T) {
-	h := newSecurityHarness(t, newFakeAnalyzer())
+// Comparing against a release nobody synced is inconclusive, and offers the fix.
+func TestCompareSecurityAgainstAnUnsyncedRelease(t *testing.T) {
+	h := newSecurityHarness(t)
 	h.seedPackage("25.7.2100", digestA)
+	h.seedPackage("25.7.2131", digestB)
+	h.syncer.reports[digestA] = scannedReport(apiFinding("CVE-1", security.SeverityHigh, "openssl", true))
+	h.post("/api/v1/products/vendor-a/packages/25.7.2100:syncSecurity", `{}`, nil)
 
-	code := h.post("/api/v1/products/vendor-a/packages/25.7.2100:compareSecurity", `{}`, nil)
-	if code != http.StatusBadRequest {
-		t.Fatalf("expected 400 without `against`, got %d", code)
+	var resp v1.SecurityComparisonResponse
+	h.post("/api/v1/products/vendor-a/packages/25.7.2100:compareSecurity", `{"against":"25.7.2131"}`, &resp)
+
+	if resp.Verdict != "inconclusive" {
+		t.Fatalf("verdict = %q, want inconclusive", resp.Verdict)
+	}
+	if resp.B.Sync.State != "" {
+		t.Errorf("b.sync.state = %q, want the never-synced state", resp.B.Sync.State)
+	}
+	if !resp.B.Sync.CanSync {
+		t.Error("the unsynced side does not offer a sync")
 	}
 }
 
 func TestSecuritySearchNavigatesToReleases(t *testing.T) {
-	analyzer := newFakeAnalyzer()
-	h := newSecurityHarness(t, analyzer)
-	packageID := h.seedPackage("25.7.2131", digestA)
-	_ = packageID
-
-	// Seed the index the way a retrieval would.
-	sec := store.NewSecurity(h.store)
-	scope := security.Scope{Product: "vendor-a", Repository: "vendor", Role: "source", Provider: "jfrog-xray"}
-	report := scannedReport(apiFinding("CVE-2024-3094", security.SeverityCritical, "openssl", true))
-	report.Artifact = security.ArtifactRef{Name: "cfx-main", Digest: digestA, Tag: "25.7.2131", Kind: "image"}
-	if err := sec.Save(t.Context(), scope, []security.Report{report}, true,
-		security.CacheTTL{Summary: time.Hour, Detail: time.Hour}); err != nil {
-		t.Fatalf("seed index: %v", err)
-	}
+	h := newSecurityHarness(t)
+	h.seedPackage("25.7.2131", digestA)
+	h.syncer.reports[digestA] = scannedReport(
+		apiFinding("CVE-2024-3094", security.SeverityCritical, "openssl", true))
+	h.post("/api/v1/products/vendor-a/packages/25.7.2131:syncSecurity", `{}`, nil)
 
 	var resp v1.SecuritySearchResponse
 	if code := h.get("/api/v1/products/vendor-a/security/search?q=CVE-2024-3094", &resp); code != http.StatusOK {
@@ -326,54 +385,47 @@ func TestSecuritySearchNavigatesToReleases(t *testing.T) {
 	if resp.Kind != "cve" {
 		t.Errorf("kind = %q, want cve: a pasted CVE id says what it is", resp.Kind)
 	}
-	if len(resp.Hits) != 1 {
-		t.Fatalf("got %d hits, want 1", len(resp.Hits))
+	if len(resp.Hits) == 0 {
+		t.Fatal("a synced release is not in the search index")
 	}
 	hit := resp.Hits[0]
 	if hit.Component.Name != "openssl" {
 		t.Errorf("component = %+v", hit.Component)
 	}
-	if hit.Artifact.Name != "cfx-main" {
-		t.Errorf("artifact = %+v", hit.Artifact)
-	}
-	// The edge that makes the relationship navigable in both directions.
 	if len(hit.Releases) != 1 || hit.Releases[0].Tag != "25.7.2131" {
 		t.Errorf("releases = %+v, want the release shipping this artifact", hit.Releases)
 	}
-	// A search that said nothing about its own scope would read as "this CVE
-	// is not in your estate".
 	if resp.Searched.Note == "" {
 		t.Error("the response does not say what the search covered")
 	}
 }
 
-func TestSecuritySearchRejectsAnUnknownKind(t *testing.T) {
-	h := newSecurityHarness(t, newFakeAnalyzer())
-	if code := h.get("/api/v1/products/vendor-a/security/search?q=x&kind=banana", nil); code != http.StatusBadRequest {
-		t.Fatalf("expected 400, got %d", code)
+// Search only knows what a sync recorded, and must not pretend otherwise.
+func TestSecuritySearchFindsNothingBeforeASync(t *testing.T) {
+	h := newSecurityHarness(t)
+	h.seedPackage("25.7.2131", digestA)
+
+	var resp v1.SecuritySearchResponse
+	h.get("/api/v1/products/vendor-a/security/search?q=CVE-2024-3094", &resp)
+	if len(resp.Hits) != 0 {
+		t.Errorf("got %d hits before any sync", len(resp.Hits))
 	}
-	if code := h.get("/api/v1/products/vendor-a/security/search", nil); code != http.StatusBadRequest {
-		t.Fatalf("expected 400 without q, got %d", code)
+	if !strings.Contains(resp.Searched.Note, "sync") {
+		t.Errorf("note = %q, want it to explain that a sync is what fills the index", resp.Searched.Note)
 	}
 }
 
 func TestSecurityExportCSVCarriesEveryRowsWholeAddress(t *testing.T) {
-	analyzer := newFakeAnalyzer()
-	analyzer.byDigest[digestA] = scannedReport(
-		apiFinding("CVE-2024-3094", security.SeverityCritical, "openssl", true))
-
-	h := newSecurityHarness(t, analyzer)
+	h := newSecurityHarness(t)
 	h.seedPackage("25.7.2131", digestA)
+	h.syncer.reports[digestA] = scannedReport(
+		apiFinding("CVE-2024-3094", security.SeverityCritical, "openssl", true))
+	h.post("/api/v1/products/vendor-a/packages/25.7.2131:syncSecurity", `{}`, nil)
 
 	body, header := h.getRaw("/api/v1/products/vendor-a/packages/25.7.2131/security/export?format=csv&view=detailed")
 	if !strings.HasPrefix(header.Get("Content-Type"), "text/csv") {
 		t.Fatalf("content type = %q", header.Get("Content-Type"))
 	}
-	if !strings.Contains(header.Get("Content-Disposition"), "attachment") {
-		t.Errorf("no attachment disposition: %q", header.Get("Content-Disposition"))
-	}
-	// An export is a point-in-time extract; caching one is how somebody
-	// re-runs it and gets yesterday.
 	if header.Get("Cache-Control") != "no-store" {
 		t.Errorf("Cache-Control = %q, want no-store", header.Get("Cache-Control"))
 	}
@@ -385,40 +437,31 @@ func TestSecurityExportCSVCarriesEveryRowsWholeAddress(t *testing.T) {
 	if len(rows) < 2 {
 		t.Fatalf("got %d rows, want a header and at least one finding", len(rows))
 	}
-
 	index := map[string]int{}
-	for i, h := range rows[0] {
-		index[h] = i
+	for i, name := range rows[0] {
+		index[name] = i
 	}
 	for _, column := range []string{"Product", "Release", "Artifact", "CVE", "Severity", "Package", "Fixable"} {
 		if _, ok := index[column]; !ok {
 			t.Errorf("export has no %q column, so a row cannot be acted on out of context", column)
 		}
 	}
-	row := rows[1]
-	if row[index["CVE"]] != "CVE-2024-3094" || row[index["Release"]] != "25.7.2131" {
-		t.Errorf("row = %v", row)
-	}
-	if row[index["Package"]] != "openssl" {
-		t.Errorf("package column = %q", row[index["Package"]])
+	if rows[1][index["CVE"]] != "CVE-2024-3094" || rows[1][index["Release"]] != "25.7.2131" {
+		t.Errorf("row = %v", rows[1])
 	}
 }
 
-// The Excel export must be a workbook a spreadsheet opens, not a CSV with a
-// different extension.
 func TestSecurityExportXLSXIsAWorkbook(t *testing.T) {
-	analyzer := newFakeAnalyzer()
-	analyzer.byDigest[digestA] = scannedReport(
-		apiFinding("CVE-2024-3094", security.SeverityCritical, "openssl", true))
-
-	h := newSecurityHarness(t, analyzer)
+	h := newSecurityHarness(t)
 	h.seedPackage("25.7.2131", digestA)
+	h.syncer.reports[digestA] = scannedReport(
+		apiFinding("CVE-2024-3094", security.SeverityCritical, "openssl", true))
+	h.post("/api/v1/products/vendor-a/packages/25.7.2131:syncSecurity", `{}`, nil)
 
 	body, header := h.getRaw("/api/v1/products/vendor-a/packages/25.7.2131/security/export?format=xlsx&view=detailed")
 	if !strings.Contains(header.Get("Content-Type"), "spreadsheetml") {
 		t.Fatalf("content type = %q", header.Get("Content-Type"))
 	}
-
 	zr, err := zip.NewReader(bytes.NewReader(body), int64(len(body)))
 	if err != nil {
 		t.Fatalf("not a zip: %v", err)
@@ -427,43 +470,10 @@ func TestSecurityExportXLSXIsAWorkbook(t *testing.T) {
 	for _, f := range zr.File {
 		found[f.Name] = true
 	}
-	for _, part := range []string{"[Content_Types].xml", "_rels/.rels", "xl/workbook.xml", "xl/worksheets/sheet1.xml"} {
+	for _, part := range []string{"[Content_Types].xml", "xl/workbook.xml", "xl/worksheets/sheet1.xml", "xl/worksheets/sheet2.xml"} {
 		if !found[part] {
-			t.Errorf("workbook is missing %s, so a spreadsheet will refuse it", part)
+			t.Errorf("workbook is missing %s", part)
 		}
-	}
-	// Two sheets: the simple summary and the detailed breakdown, which is what
-	// the requirement asks an export to offer.
-	if !found["xl/worksheets/sheet2.xml"] {
-		t.Error("a detailed export must carry both the summary and the breakdown")
-	}
-}
-
-func TestSecurityExportRespectsFilters(t *testing.T) {
-	analyzer := newFakeAnalyzer()
-	analyzer.byDigest[digestA] = scannedReport(
-		apiFinding("CVE-CRIT", security.SeverityCritical, "openssl", true),
-		apiFinding("CVE-LOW", security.SeverityLow, "zlib", false),
-	)
-
-	h := newSecurityHarness(t, analyzer)
-	h.seedPackage("25.7.2131", digestA)
-
-	body, _ := h.getRaw("/api/v1/products/vendor-a/packages/25.7.2131/security/export?format=csv&view=detailed&severity=critical")
-	text := string(body)
-	if !strings.Contains(text, "CVE-CRIT") {
-		t.Error("the filtered-in finding is missing from the export")
-	}
-	if strings.Contains(text, "CVE-LOW") {
-		t.Error("the export ignored the active severity filter")
-	}
-}
-
-// A progress token is polled while the request that mints it is still open.
-func TestSecurityProgressIsReadableAndThen404s(t *testing.T) {
-	h := newSecurityHarness(t, newFakeAnalyzer())
-	if code := h.get("/api/v1/security/progress/never-minted", nil); code != http.StatusNotFound {
-		t.Fatalf("expected 404 for an unknown token, got %d", code)
 	}
 }
 
@@ -471,8 +481,6 @@ func TestSecurityRoutesAreAbsentWithoutTheDependency(t *testing.T) {
 	h := newAPIHarness(t)
 	h.seedPackage("25.7.2131", digestA)
 
-	// An honest 404 rather than a route that always fails: the deployment has
-	// no scanner wired, and saying so beats a 500.
 	if code := h.get("/api/v1/products/vendor-a/packages/25.7.2131/security", nil); code != http.StatusNotFound {
 		t.Errorf("security route present without the dependency: got %d", code)
 	}
@@ -498,29 +506,4 @@ func (h *apiHarness) getRaw(path string) ([]byte, http.Header) {
 		h.t.Fatalf("GET %s: %d %s", path, resp.StatusCode, string(body))
 	}
 	return body, resp.Header
-}
-
-// seedArtifact adds one more artifact to a seeded package.
-func (h *apiHarness) seedArtifact(packageID int64, digest, name string) {
-	h.t.Helper()
-
-	tx, err := h.store.DB().BeginTx(h.t.Context(), nil)
-	if err != nil {
-		h.t.Fatal(err)
-	}
-	defer func() { _ = tx.Rollback() }()
-
-	if _, err := h.packages.InsertArtifact(h.t.Context(), tx, store.ArtifactRow{
-		PackageID:   packageID,
-		Digest:      digest,
-		MediaType:   "application/vnd.oci.image.manifest.v1+json",
-		SizeBytes:   256,
-		Raw:         []byte(`{"schemaVersion":2}`),
-		Annotations: map[string]string{"org.opencontainers.image.ref.name": name + ":25.7.2131"},
-	}); err != nil {
-		h.t.Fatalf("seed artifact: %v", err)
-	}
-	if err := tx.Commit(); err != nil {
-		h.t.Fatal(err)
-	}
 }

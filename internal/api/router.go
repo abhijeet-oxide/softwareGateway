@@ -24,6 +24,7 @@ import (
 	"github.com/abhijeet-oxide/softwareGateway/internal/preflight"
 	"github.com/abhijeet-oxide/softwareGateway/internal/product"
 	"github.com/abhijeet-oxide/softwareGateway/internal/queue"
+	"github.com/abhijeet-oxide/softwareGateway/internal/security"
 	"github.com/abhijeet-oxide/softwareGateway/internal/store"
 	"github.com/abhijeet-oxide/softwareGateway/internal/vendors"
 )
@@ -206,17 +207,23 @@ type Deps struct {
 	Vendors   *vendors.Registry
 	Component string
 
-	// Security answers what a scanner says about a release. Optional on the
-	// same terms as Comparer: it reaches a scanner through the configured
-	// client factory and the secrets behind it, which only a composition root
-	// holds. Without it the security routes are absent and a caller gets an
-	// honest 404 rather than a route that always fails.
-	Security SecurityAnalyzer
-	// SecurityIndex is the searchable record of what has already been
-	// retrieved. Separate from Security because it is readable on a
-	// Coordinator that cannot currently reach a scanner at all, and that is
-	// exactly when somebody is searching for a CVE.
+	// SecuritySync runs vulnerability syncs. Optional on the same terms as
+	// Comparer: it reaches a scanner through the configured client factory and
+	// the secrets behind it, which only a composition root holds. Without it
+	// the sync route is absent and a caller gets an honest 404 rather than a
+	// route that always fails.
+	SecuritySync SecuritySyncer
+	// SecurityStore serves every security READ. Separate from SecuritySync
+	// because the two fail differently: the sync needs a reachable scanner and
+	// this needs only the database, so a release's stored findings stay
+	// readable while the scanner is down - which is exactly when somebody looks
+	// at them.
+	SecurityStore SecurityStore
+	// SecurityIndex is the searchable record of what syncs have recorded.
 	SecurityIndex SecurityIndex
+	// SecurityRetention is how long a sync's two tiers are kept, from the
+	// system configuration. The zero value means the store's own defaults.
+	SecurityRetention security.CacheTTL
 }
 
 // Server wires the router.
@@ -226,11 +233,6 @@ type Server struct {
 	// comparisons is progress for comparisons in flight - see
 	// compareprogress.go for why it lives in memory.
 	comparisons *compareTracker
-	// securityProgress is the same idea for security retrievals, and a
-	// separate tracker rather than a shared one because the two report
-	// different shapes: a comparison reports two sides walking manifest trees,
-	// a retrieval reports phases against a scanner.
-	securityProgress *securityTracker
 }
 
 // NewServer builds the HTTP surface.
@@ -246,11 +248,7 @@ func NewServer(deps Deps) *Server {
 	if deps.Logger == nil {
 		deps.Logger = slog.Default()
 	}
-	s := &Server{
-		deps:             deps,
-		comparisons:      newCompareTracker(),
-		securityProgress: newSecurityTracker(),
-	}
+	s := &Server{deps: deps, comparisons: newCompareTracker()}
 	s.router = s.routes()
 	return s
 }
@@ -392,9 +390,12 @@ func (s *Server) routes() chi.Router {
 			// Security. Its own sub-resource rather than fields on the package,
 			// because it is answered by a different system with a different
 			// failure mode: a release whose scanner is unreachable must still
-			// render as a release, and folding these numbers into the package
-			// read would make every package read depend on Xray being up.
-			if s.deps.Security != nil {
+			// render as a release.
+			//
+			// Registered on the STORE rather than on the syncer: reading a
+			// release's security is a database query, and it must keep working
+			// on a Coordinator that cannot currently reach a scanner at all.
+			if s.deps.SecurityStore != nil {
 				r.Get("/products/{product}/packages/{package}/security",
 					s.handlePackageSecurity)
 				r.Get("/products/{product}/packages/{package}/security/export",
@@ -467,11 +468,6 @@ func (s *Server) routes() chi.Router {
 			// path that repeated the product would be a second place for the
 			// two to disagree.
 			r.Get("/comparisons/{comparison}", s.handleCompareProgress)
-
-			// The security side channel, on the same terms as the comparison
-			// one: read-only, unauthenticated by the write gate, and a 404 is a
-			// normal answer because progress lives in one replica's memory.
-			r.Get("/security/progress/{token}", s.handleSecurityProgress)
 
 			r.Get("/transfers", s.handleListTransfers)
 			r.Get("/transfers/{transfer}", s.handleGetTransfer)

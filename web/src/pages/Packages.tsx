@@ -1,8 +1,8 @@
 import { useMemo, useState } from 'react'
-import { App, Button, Card, Select, Space, Switch, Table, Tooltip, Typography } from 'antd'
+import { App, Button, Card, Select, Space, Table, Tooltip } from 'antd'
 import { Link, useNavigate, useSearchParams } from 'react-router-dom'
 import {
-  usePackages, usePackageSecuritySummaries, useProducts, useRunDownload, useTransfers,
+  usePackages, useProducts, useRunDownload, useSyncPackageSecurity, useTransfers,
 } from '../api/queries'
 import { useCan } from '../auth/permissions'
 import {
@@ -35,10 +35,63 @@ function RowActions({ product, pkg }: { product: string; pkg: Package }) {
         <Button size="small" type='primary' variant="solid">View</Button>
       </Link>
       <DownloadAction product={product} pkg={pkg} />
+      <SyncSecurityAction product={product} pkg={pkg} />
       <Link to={compareHref}>
         <Button size="small" color="orange" variant="solid">Compare</Button>
       </Link>
     </Space>
+  )
+}
+
+/**
+ * Ask the scanner about this release, from the row.
+ *
+ * # Why this is an action and not a toggle on the page
+ *
+ * Because it is a job with a cost, not a display preference. A sync is a
+ * scanner query per batch across every artifact of a release, and it belongs
+ * where every other per-release job lives: in the row, on the release it acts
+ * on, with a result somebody can come back to.
+ *
+ * # Why it disappears once a release is synced
+ *
+ * The row already shows the counts; re-syncing is a rarer act and lives on the
+ * release's own Security tab, where the reader can see what they would be
+ * replacing. A button offered forever in a listing of two hundred rows is two
+ * hundred invitations to re-query a scanner.
+ */
+function SyncSecurityAction({ product, pkg }: { product: string; pkg: Package }) {
+  const { message } = App.useApp()
+  const sync = useSyncPackageSecurity()
+  const mayOperate = useCan('operate', { product })
+
+  const security = pkg.security
+  if (!security || !security.canSync) return null
+  // Synced, and not stale enough to be worth re-offering here.
+  if (security.state === 'synced') return null
+
+  if (security.state === 'syncing') {
+    return <Button size="small" loading disabled>Syncing</Button>
+  }
+
+  const failed = security.state === 'failed'
+  return (
+    <Tooltip title={failed ? security.error : 'Ask the scanner about this release and store the answer.'}>
+      <Button
+        size="small"
+        danger={failed}
+        loading={sync.isPending}
+        disabled={!mayOperate}
+        onClick={() => sync.mutate({ product, ref: packageReference(pkg), repository: pkg.sourceRepository }, {
+          onSuccess: (res) => message.info(res.started
+            ? `Syncing vulnerabilities for ${res.artifacts} artifacts.`
+            : 'A sync is already running for this release.'),
+          onError: (e) => message.error(e instanceof Error ? e.message : 'The sync could not be started.'),
+        })}
+      >
+        {failed ? 'Retry sync' : 'Sync vulnerabilities'}
+      </Button>
+    </Tooltip>
   )
 }
 
@@ -175,23 +228,6 @@ export default function Packages() {
       search, version(r.pkg), r.pkg.tag, r.pkg.displayRepository, r.pkg.sourceRepository))
   }, [packages.data, transfers.data, product, status, search])
 
-  /*
-   * The vulnerability column is OPT-IN.
-   *
-   * A page of releases is twenty scanner-backed reads, and the first of each is
-   * a real query. That is the right cost for somebody who came to compare the
-   * security of two releases, and the wrong cost imposed on everybody who
-   * opened this page to find a version. The preference is remembered in the
-   * URL, so a link to "the listing with vulnerabilities" is a link somebody can
-   * send.
-   */
-  const showVulnerabilities = params.get('security') === 'true'
-  const securityRefs = useMemo(
-    () => rows.map((r) => ({ ref: packageReference(r.pkg), repository: r.pkg.sourceRepository })),
-    [rows],
-  )
-  const security = usePackageSecuritySummaries(selected, securityRefs, showVulnerabilities)
-
   const update = (key: string, value?: string) => {
     const next = new URLSearchParams(params)
     if (value) next.set(key, value)
@@ -254,25 +290,9 @@ export default function Packages() {
             ]}
           />
         </Space>
-        <Space size={12}>
-          <Tooltip title="Reads each release's vulnerability counts from the scanner. Off by default because it is one query per release.">
-            <Space size={6}>
-              <Switch
-                size="small"
-                checked={showVulnerabilities}
-                loading={security.loading}
-                onChange={(on) => update('security', on ? 'true' : undefined)}
-              />
-              <Typography.Text type="secondary">Vulnerabilities</Typography.Text>
-            </Space>
-          </Tooltip>
-          <Link to="/security">
-            <Button>Search security</Button>
-          </Link>
-          <Link to="/packages/compare">
-            <Button>Compare packages</Button>
-          </Link>
-        </Space>
+        <Link to="/packages/compare">
+          <Button>Compare packages</Button>
+        </Link>
       </div>
 
       {!packages.isLoading && rows.length === 0 ? (
@@ -367,29 +387,22 @@ export default function Packages() {
                     : <Value>{formatDuration(s)}</Value>
                 },
               },
-              ...(showVulnerabilities ? [{
+              {
+                /*
+                  Always on, and it costs nothing.
+                  The counts come from the listing response itself, written by
+                  a sync rather than fetched per row - which is what made this
+                  a toggle before, and a toggle is a design apologising for
+                  itself.
+                */
                 title: 'Vulnerabilities',
-                width: 210,
-                render: (_: unknown, r: { pkg: Package }) => {
-                  const found = security.byRef[packageReference(r.pkg)]
-                  // Undefined means the read has not answered - still in
-                  // flight, or this deployment has no scanner. Neither is
-                  // "none found", and a blank cell would be read as exactly
-                  // that.
-                  if (!found) {
-                    return (
-                      <Typography.Text type="secondary">
-                        {security.loading ? 'Checking…' : 'No data'}
-                      </Typography.Text>
-                    )
-                  }
-                  return <VulnerabilityCell counts={found.counts} state={found.state} />
-                },
-              }] : []),
+                width: 200,
+                render: (_, r) => <VulnerabilityCell summary={r.pkg.security} />,
+              },
               {
                 title: 'Actions',
                 fixed: 'right',
-                width: 270,
+                width: 300,
                 render: (_, r) => product && <RowActions product={product.productId} pkg={r.pkg} />,
               },
             ]}

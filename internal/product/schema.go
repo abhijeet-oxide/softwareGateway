@@ -133,11 +133,14 @@ type Source struct {
 	CredentialsRef *CredentialsRef `json:"credentialsRef,omitempty"`
 	Discovery      Discovery       `json:"discovery,omitempty"`
 
-	// Xray switches on the JFrog Xray integration for this repository. It
-	// reuses this source's own registry, credential, CA bundle, proxy and
-	// timeouts - see xray.go for why it must not declare its own. Valid only
-	// on a JFrog type.
-	Xray *Xray `json:"xray,omitempty"`
+	// XrayEnabled switches on the JFrog Xray integration for this repository,
+	// which then reuses this source's own registry, credential, CA bundle,
+	// proxy and timeouts. Valid only on a JFrog type. See xray.go for why it
+	// is one field rather than a block.
+	XrayEnabled *bool `json:"xrayEnabled,omitempty"`
+	// XrayEndpoint overrides the JFrog PLATFORM base URL, needed only where
+	// the docker host is a subdomain and the platform is not.
+	XrayEndpoint string `json:"xrayEndpoint,omitempty"`
 
 	// Vendor names the PUBLISHING CONVENTION this source follows: `near` for a
 	// Nokia NEAR registry, empty (or `auto`) for anything conformant.
@@ -355,11 +358,14 @@ type Target struct {
 	// credentialsRef. Only needed by a non-copy mode.
 	Quay *QuaySettings `json:"quay,omitempty"`
 
-	// Xray switches on the JFrog Xray integration for this repository, and
-	// configures only the parts that are genuinely about Xray. It reuses this
-	// target's own registry, credential, CA bundle, proxy and timeouts - see
-	// xray.go for why it must not declare its own. Valid only on a JFrog type.
-	Xray *Xray `json:"xray,omitempty"`
+	// XrayEnabled switches on the JFrog Xray integration for this repository,
+	// which then reuses this target's own registry, credential, CA bundle,
+	// proxy and timeouts. Valid only on a JFrog type. See xray.go for why it is
+	// one field rather than a block.
+	XrayEnabled *bool `json:"xrayEnabled,omitempty"`
+	// XrayEndpoint overrides the JFrog PLATFORM base URL, needed only where the
+	// docker host is a subdomain and the platform is not.
+	XrayEndpoint string `json:"xrayEndpoint,omitempty"`
 }
 
 // Promotion declares the hop `transfers promote` takes by default.

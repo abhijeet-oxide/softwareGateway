@@ -8,7 +8,7 @@ import { FolderOutlined, SwapOutlined } from '@ant-design/icons'
 import { useSearchParams } from 'react-router-dom'
 import {
   useCompare, useCompareProgress, useCompareSecurity, usePackages, useProduct, useProducts,
-  useSecurityProgress,
+  useSyncPackageSecurity,
 } from '../api/queries'
 import { kindName, matches, packageReference, version } from '../domain/derive'
 import { bytes, formatBytes, formatCount, formatDuration } from '../domain/format'
@@ -16,7 +16,6 @@ import { NA, Value } from '../components/value'
 import { ErrorState, SearchBar } from '../components/layout'
 import { WorkingBar } from '../components/progress'
 import { ARTIFACT_ICONS, Icon } from '../components/icons'
-import { SecurityProgressPanel } from '../components/security'
 import { SecurityComparison } from '../components/securitycompare'
 import { mono, semantic } from '../theme'
 import type {
@@ -1062,8 +1061,7 @@ export default function Compare() {
    */
   const [view, setView] = useState<View>('package')
   const compareSecurity = useCompareSecurity()
-  const [securityToken, setSecurityToken] = useState<string>()
-  const securityProgress = useSecurityProgress(securityToken, compareSecurity.isPending)
+  const syncSecurity = useSyncPackageSecurity()
 
   useEffect(() => {
     if (!compareRunning || !startedAt) return
@@ -1150,18 +1148,39 @@ export default function Compare() {
    */
   const runSecurity = async () => {
     if (!product || !left || !right) return
-    const progressToken = crypto.randomUUID()
-    setSecurityToken(progressToken)
     try {
       await compareSecurity.mutateAsync({
         product,
         ref: left,
         repository: leftPkg?.sourceRepository,
-        body: { against: rightPkg?.tag ?? right, progressToken },
+        body: { against: rightPkg?.tag ?? right },
       })
     } catch (e) {
       message.error(e instanceof Error ? e.message : 'The security comparison could not be run.')
     }
+  }
+
+  /**
+   * Sync one end from the comparison, then re-run it.
+   *
+   * A comparison against a release nobody scanned is inconclusive, and the
+   * useful thing to offer on that screen is the sync - not a verdict repeating
+   * that it cannot say. The re-run is deliberate rather than automatic: a sync
+   * is minutes, and a page that silently re-compared would look stuck.
+   */
+  const syncEnd = (end: 'a' | 'b') => {
+    const target = end === 'a' ? leftPkg : rightPkg
+    if (!product || !target) return
+    syncSecurity.mutate({
+      product,
+      ref: packageReference(target),
+      repository: target.sourceRepository,
+    }, {
+      onSuccess: (res) => message.info(res.started
+        ? `Syncing ${target.tag}. Re-run the comparison once it finishes.`
+        : `A sync is already running for ${target.tag}.`),
+      onError: (e) => message.error(e instanceof Error ? e.message : 'The sync could not be started.'),
+    })
   }
 
   const showSecurity = () => {
@@ -1381,14 +1400,12 @@ export default function Compare() {
 
       {view === 'security' && (
         <>
-          {compareSecurity.isPending && (
-            <Card>
-              <SecurityProgressPanel
-                progress={securityProgress.data}
-                fallback="Comparing the security of the two releases"
-              />
-            </Card>
-          )}
+          {/*
+            A comparison over stored data is two indexed reads, so there is no
+            position worth reporting - a plain loading card is the honest shape
+            and a progress bar would be theatre.
+          */}
+          {compareSecurity.isPending && <Card loading />}
           {compareSecurity.isError && (
             <ErrorState error={compareSecurity.error} retry={() => void runSecurity()} />
           )}
@@ -1399,6 +1416,7 @@ export default function Compare() {
               againstRef={rightPkg?.tag ?? right ?? ''}
               repository={leftPkg?.sourceRepository}
               report={compareSecurity.data}
+              onSync={syncEnd}
             />
           )}
         </>

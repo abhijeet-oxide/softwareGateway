@@ -145,6 +145,11 @@ export interface Package {
   name: string
   packageId: string
   product: string
+  /**
+   * What a vulnerability sync recorded, or a never-synced summary where none
+   * has run. See PackageSecuritySummary - absent is not "no vulnerabilities".
+   */
+  security?: PackageSecuritySummary
   tag: string
   manifestDigest: string
   mediaType: string
@@ -1080,8 +1085,79 @@ export type Severity = (typeof SEVERITIES)[number]
  */
 export type ScanStatus = 'scanned' | 'not_scanned' | 'unsupported' | 'disabled' | 'unavailable'
 
-/** Whether a release's numbers can be trusted, and why not. */
-export type SecurityState = 'ok' | 'partial' | 'unavailable' | 'disabled'
+/**
+ * Whether a release's numbers can be trusted, and why not.
+ *
+ * `not_synced` is the state a fresh estate is mostly in, and it is emphatically
+ * not `ok` with zero findings: nobody has looked. `stale` is a failed re-sync
+ * over counts that are still worth showing, dated.
+ */
+export type SecurityState =
+  | 'ok' | 'partial' | 'unavailable' | 'disabled' | 'not_synced' | 'syncing' | 'stale'
+
+/** Where a release's vulnerability sync has got to. */
+export type SyncState = '' | 'syncing' | 'synced' | 'failed'
+
+export interface SecurityProgressStage {
+  name: string
+  label: string
+  done: number
+  /** Zero means "not yet known", which is honest while a tree is walked. */
+  total: number
+}
+
+export interface SecuritySyncStatus {
+  state: SyncState
+  label: string
+  error?: string
+  syncedAt?: string
+  startedAt?: string
+  /** Whether any repository of this product has a scanner switched on. */
+  canSync: boolean
+  /** Which knob turns one on, when canSync is false. */
+  reason?: string
+  /** The CONFIGURED repository whose scanner answers - usually a JFrog target. */
+  repository?: string
+  provider?: string
+  /** Live position, present only while this replica runs the sync. */
+  stages?: SecurityProgressStage[]
+  notes?: string[]
+}
+
+export interface SyncSecurityResponse {
+  product: string
+  package: string
+  /** started | already_running. The second is not a failure. */
+  status: string
+  started: boolean
+  artifacts: number
+  sync: SecuritySyncStatus
+}
+
+/**
+ * A release's counts, carried on the package itself.
+ *
+ * Undefined means the server sent none. Null-ish is never zero vulnerabilities,
+ * and a component that renders it as such has written the bug the whole feature
+ * exists to prevent.
+ */
+export interface PackageSecuritySummary {
+  state: SyncState
+  label: string
+  counts: SecurityCounts
+  distinctTotal: number
+  complete: boolean
+  /**
+   * What "0 vulnerabilities" actually means. Zero of zero is "nobody looked"
+   * and must never render as "none found"; zero of fourteen is a clean release.
+   */
+  scanned: number
+  scannable: number
+  syncedAt?: string
+  error?: string
+  canSync: boolean
+  reason?: string
+}
 
 export type Verdict = 'better' | 'worse' | 'unchanged' | 'inconclusive'
 
@@ -1169,6 +1245,8 @@ export interface SecurityReport {
 export interface PackageSecurityResponse {
   product: string
   package: string
+  /** Read this first: everything below it is meaningless until a sync has run. */
+  sync: SecuritySyncStatus
   provider?: string
   enabled: boolean
   repository?: string
@@ -1176,14 +1254,13 @@ export interface PackageSecurityResponse {
   message?: string
   counts: SecurityCounts
   uniqueCounts: SecurityCounts
+  distinctTotal: number
   coverage: SecurityCoverage
   reports: SecurityReport[]
   providers?: string[]
   scannedAt?: string
-  retrievedAt?: string
+  syncedAt?: string
   fingerprint?: string
-  fromCache: number
-  fetched: number
   detail: boolean
 }
 
@@ -1243,6 +1320,8 @@ export interface SecurityComparisonEnd {
   counts: SecurityCounts
   coverage: SecurityCoverage
   scannedAt?: string
+  /** So the interface can offer the sync rather than only reporting a verdict. */
+  sync: SecuritySyncStatus
 }
 
 export interface SecurityComparisonResponse {
@@ -1272,8 +1351,6 @@ export interface SecurityComparisonResponse {
 export interface SecurityCompareRequest {
   against?: string
   repository?: string
-  refresh?: boolean
-  progressToken?: string
 }
 
 export interface SecurityRelease {
@@ -1316,22 +1393,6 @@ export interface SecuritySearchResponse {
   hits: SecuritySearchHit[]
   truncated?: boolean
   searched: SecuritySearchScope
-}
-
-export interface SecurityProgressStage {
-  name: string
-  label: string
-  done: number
-  /** Zero means "not yet known", which is honest while a tree is walked. */
-  total: number
-}
-
-export interface SecurityProgressResponse {
-  stages: SecurityProgressStage[]
-  notes?: string[]
-  done: boolean
-  startedAt?: string
-  updatedAt?: string
 }
 
 // ---------------------------------------------------------------------------

@@ -111,6 +111,53 @@ type CoordinatorConfig struct {
 	GC             GCConfig             `koanf:"gc"`
 	ManifestCache  ManifestCacheConfig  `koanf:"manifestCache"`
 	Files          FilesConfig          `koanf:"files"`
+	Security       SecurityConfig       `koanf:"security"`
+}
+
+// SecurityConfig tunes how vulnerability syncs reach a scanner and how long
+// what they record is kept.
+//
+// Here rather than in a product document, and that placement is the whole point.
+// None of it is a property of a PRODUCT: how hard to push a scanner is a
+// property of the scanner and the network to it, and how long to keep an index
+// is a property of this deployment's disk. Stated per product they would be
+// repeated in every document and drift between them, and the drift would show
+// up as one product mysteriously slower than another.
+//
+// A product document says one thing about Xray: whether it is on.
+type SecurityConfig struct {
+	// Concurrency caps scanner requests in flight for one sync.
+	//
+	// Small, and worth keeping small. Xray's summary endpoint is expensive
+	// server-side and rate-limited on hosted JFrog; sixty parallel requests is
+	// not ten times faster than six, it is a 429 storm and a slower answer.
+	Concurrency int `koanf:"concurrency"`
+	// BatchSize is how many artifacts one scanner request asks about. It bounds
+	// the blast radius of a failed call: one failure costs this many artifacts'
+	// results rather than a whole release's.
+	BatchSize int `koanf:"batchSize"`
+	// RequestTimeout bounds a single scanner call end to end.
+	RequestTimeout time.Duration `koanf:"requestTimeout"`
+
+	// IndexRetention is how long the LIGHTWEIGHT half of a sync lasts:
+	// statuses, counts, and the identifiers that make a finding findable - CVE,
+	// component, severity, fixed version.
+	//
+	// Long, because this is not a request cache; it is the durable result of a
+	// sync, and it is what every listing, comparison and search reads. Expiring
+	// it in hours would mean a release synced this morning silently losing its
+	// counts by evening, and a search that found it at 10 and not at 4.
+	IndexRetention time.Duration `koanf:"indexRetention"`
+	// DetailRetention is how long the HEAVY half lasts: descriptions,
+	// references, CVSS vectors.
+	//
+	// Short, because that is the part which would otherwise make this platform
+	// a second copy of a vulnerability database that re-grades itself
+	// continuously. When it expires the findings are still complete enough to
+	// list, filter, compare and export - they simply lack the paragraph.
+	DetailRetention time.Duration `koanf:"detailRetention"`
+	// SweepInterval is how often expired rows are collected.
+	SweepInterval time.Duration `koanf:"sweepInterval"`
 }
 
 // FilesConfig governs the file-content routes - looking inside a release at
@@ -336,6 +383,25 @@ func Defaults() SystemConfig {
 			},
 			Files: FilesConfig{
 				DownloadEnabled: true,
+			},
+			Security: SecurityConfig{
+				// Six in flight, fifty per request, a minute each.
+				//
+				// Sized against the scanner rather than against this process:
+				// a release of a few hundred artifacts is a handful of requests
+				// at this batch size, and six of them in flight is polite to a
+				// hosted JFrog while still finishing a large release in tens of
+				// seconds rather than minutes.
+				Concurrency:    6,
+				BatchSize:      50,
+				RequestTimeout: 60 * time.Second,
+
+				// Thirty days and a day. The gap is the point - see the field
+				// comments: one half is the durable index every read serves,
+				// the other is prose this platform must not become a home for.
+				IndexRetention:  30 * 24 * time.Hour,
+				DetailRetention: 24 * time.Hour,
+				SweepInterval:   15 * time.Minute,
 			},
 		},
 		Worker: WorkerConfig{

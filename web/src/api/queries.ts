@@ -11,7 +11,7 @@ import type {
   PackageFileContentResponse, ReportSummary, RunDownloadRequest,
   RunDownloadResponse,
   PackageSecurityResponse, SearchKind, SecurityCompareRequest, SecurityComparisonResponse,
-  SecurityProgressResponse, SecuritySearchResponse,
+  SecuritySearchResponse, SyncSecurityResponse,
   SetPriorityRequest, Transfer, TransferControlResponse, VersionResponse,
 } from './types'
 import { isLive } from '../domain/derive'
@@ -646,99 +646,95 @@ export function useDeepHealth(enabled: boolean) {
 // ---------------------------------------------------------------------------
 
 /**
- * A release's security posture.
+ * A release's stored security state.
  *
- * # Why `detail` is a parameter rather than always true
+ * # Why this polls, and only sometimes
  *
- * The findings of a large release are megabytes. A page that shows counts and a
- * coverage bar needs none of them, and a page that lists CVEs needs all of
- * them. Asking for the cheap read first is what makes the security tab open
- * immediately and fill in, rather than showing nothing for ten seconds.
+ * The read is a database query, so it is cheap enough to poll - and while a
+ * sync is running it is the only channel that says how far it has got, because
+ * the sync's live position travels in this same response rather than on an
+ * endpoint of its own. The moment the sync settles the interval drops to false
+ * and the page stops asking.
  *
- * # Why this does not poll
+ * # Why `detail` is a parameter
  *
- * A scan result changes when somebody re-scans, which is minutes to hours, not
- * seconds. Polling it would put a scanner query behind every open tab in the
- * building. The refresh button is the channel for "I know something changed".
+ * The findings of a large release are megabytes. A page showing counts and a
+ * coverage bar needs none of them; a page listing CVEs needs all of them.
  */
 export function usePackageSecurity(
   product: string | undefined,
   ref: string | undefined,
-  opts: { repository?: string; detail?: boolean; progressToken?: string; enabled?: boolean } = {},
+  opts: { repository?: string; detail?: boolean; enabled?: boolean } = {},
 ) {
-  const { repository, detail = false, progressToken, enabled = true } = opts
+  const { repository, detail = false, enabled = true } = opts
   return useQuery({
     queryKey: ['package-security', product, ref, repository, detail],
     queryFn: () => {
       const { segment, query: q } = packageRef(ref!)
       const scoped = scopeQuery(q, repository)
-      const extra = query({ detail, progressToken })
-      const suffix = scoped
-        ? scoped + (extra ? '&' + extra.slice(1) : '')
-        : extra
+      const extra = query({ detail })
+      const suffix = scoped ? scoped + (extra ? '&' + extra.slice(1) : '') : extra
       return api.get<PackageSecurityResponse>(
         `/products/${encodeURIComponent(product!)}/packages/${encodeURIComponent(segment)}/security` +
         suffix)
     },
     enabled: enabled && Boolean(product && ref),
-    staleTime: 5 * MINUTE,
+    // While a sync runs this is the progress feed; once it settles there is
+    // nothing to watch, and a page nobody is looking at stops polling anyway
+    // because TanStack unmounts the query.
+    refetchInterval: (q) => (q.state.data?.sync.state === 'syncing' ? 1500 : false),
     /*
-     * A deployment with no scanner answers 404 on this route, deliberately -
-     * an honest absence rather than a route that always fails. That is not
-     * worth retrying and not worth an error panel: the security tab renders
-     * "not configured" and the rest of the page is unaffected.
+     * A deployment with no security storage answers 404 on this route,
+     * deliberately - an honest absence rather than a route that always fails.
+     * Not worth retrying and not worth an error panel: the tab renders "not
+     * configured" and the rest of the page is unaffected.
      */
     retry: false,
     throwOnError: false,
   })
 }
 
-/** Re-fetch a release's posture from the scanner, bypassing every cache. */
-export function useRefreshPackageSecurity() {
+/**
+ * Start a vulnerability sync.
+ *
+ * Returns as soon as the work is CLAIMED, never when it is finished: a real
+ * release is minutes of scanner queries. The page then polls usePackageSecurity
+ * and watches `sync`.
+ *
+ * A status of `already_running` is not a failure - somebody else pressed the
+ * button first, and the thing the caller wanted is happening.
+ */
+export function useSyncPackageSecurity() {
   const qc = useQueryClient()
   return useMutation({
-    mutationFn: ({ product, ref, repository, detail, progressToken }: {
+    mutationFn: ({ product, ref, repository }: {
       product: string
       ref: string
       repository?: string
-      detail?: boolean
-      progressToken?: string
     }) => {
       const { segment, query: q } = packageRef(ref)
-      const scoped = scopeQuery(q, repository)
-      const extra = query({ detail, refresh: true, progressToken })
-      const suffix = scoped ? scoped + (extra ? '&' + extra.slice(1) : '') : extra
-      return api.get<PackageSecurityResponse>(
-        `/products/${encodeURIComponent(product)}/packages/${encodeURIComponent(segment)}/security` +
-        suffix)
+      return api.post<SyncSecurityResponse>(
+        `/products/${encodeURIComponent(product)}/packages/${encodeURIComponent(segment)}:syncSecurity` +
+        scopeQuery(q, repository), {})
     },
     onSuccess: () => {
+      // The listing carries the same counts, so it has to learn that one of
+      // its rows just changed state.
       void qc.invalidateQueries({ queryKey: ['package-security'] })
+      void qc.invalidateQueries({ queryKey: ['packages'] })
+      void qc.invalidateQueries({ queryKey: ['package'] })
     },
   })
 }
 
 /**
- * Where a security retrieval has got to, polled while its own request is open.
+ * The security comparison of two releases.
  *
- * Same shape and same rules as the comparison progress beside it: a 404 is a
- * normal answer - the work may be on another replica or may have just finished
- * - so the query fails quietly and the page falls back to saying that work is
- * happening without a position.
+ * Both sides come from storage, so this is two indexed reads and an in-memory
+ * classification - fast enough to run on a page load, with no progress worth
+ * reporting. A release nobody has synced comes back as inconclusive rather than
+ * quietly starting a multi-minute scan behind a button.
  */
-export function useSecurityProgress(token: string | undefined, active: boolean) {
-  return useQuery({
-    queryKey: ['security-progress', token],
-    queryFn: () => api.get<SecurityProgressResponse>(
-      `/security/progress/${encodeURIComponent(token!)}`),
-    enabled: Boolean(token) && active,
-    refetchInterval: 800,
-    retry: false,
-    throwOnError: false,
-  })
-}
-
-/** The security comparison of two releases. */
 export function useCompareSecurity() {
   return useMutation({
     mutationFn: ({ product, ref, repository, body }: {
@@ -756,7 +752,7 @@ export function useCompareSecurity() {
 }
 
 /**
- * Search across everything the platform has already retrieved.
+ * Search across everything a sync has recorded.
  *
  * Debouncing is the caller's job - this fires on whatever query it is given -
  * because the right delay depends on whether somebody is typing a package name
@@ -848,63 +844,4 @@ export function securitySearchExportUrl(
 ): string {
   return `/api/v1/products/${encodeURIComponent(product)}/security/search/export` +
     query({ kind, q, format, exact })
-}
-
-/**
- * Vulnerability COUNTS for a page of releases, for the listing column.
- *
- * # Why this is one request per release rather than one request
- *
- * Because a release's posture is scoped by the repository it was discovered in,
- * and a product's releases span several. A bulk endpoint would have to resolve
- * a scanner, a credential and a cache scope per release anyway, and would then
- * fail as a unit - one unreachable repository losing the column for every row.
- * These fail individually, and a row whose scanner is down says so while the
- * rest of the table renders.
- *
- * # Why it is opt-in
- *
- * A page of releases is twenty of these, and the first load of each is a
- * scanner query. That is the right cost when somebody wants the column and an
- * unacceptable one imposed on everybody who opened the listing to find a
- * version. `enabled` is the toggle above the table.
- *
- * `detail: false` throughout: this renders a number, and shipping a megabyte of
- * findings per row to do it is the difference between a listing that opens and
- * one that does not.
- */
-export function usePackageSecuritySummaries(
-  product: string | undefined,
-  refs: { ref: string; repository?: string }[],
-  enabled: boolean,
-) {
-  return useQueries({
-    queries: refs.map(({ ref, repository }) => ({
-      queryKey: ['package-security', product, ref, repository, false],
-      queryFn: () => {
-        const { segment, query: q } = packageRef(ref)
-        return api.get<PackageSecurityResponse>(
-          `/products/${encodeURIComponent(product!)}/packages/${encodeURIComponent(segment)}/security` +
-          scopeQuery(q, repository))
-      },
-      enabled: enabled && Boolean(product && ref),
-      staleTime: 5 * MINUTE,
-      retry: false,
-      throwOnError: false,
-    })),
-    combine: (results) => {
-      const byRef: Record<string, PackageSecurityResponse | undefined> = {}
-      results.forEach((r, i) => {
-        const key = refs[i]?.ref
-        if (key) byRef[key] = r.data
-      })
-      return {
-        byRef,
-        loading: results.some((r) => r.isLoading),
-        // How many rows actually answered, so the toggle can say what it got
-        // rather than leaving a column of blanks unexplained.
-        answered: results.filter((r) => r.data !== undefined).length,
-      }
-    },
-  })
 }

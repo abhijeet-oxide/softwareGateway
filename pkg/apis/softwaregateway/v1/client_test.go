@@ -144,8 +144,11 @@ func TestSecurityClientURLsReachTheHandler(t *testing.T) {
 	ctx := t.Context()
 
 	if _, err := c.PackageSecurity(ctx, "cfx", "orbs/core:v1",
-		PackageSecurityOptions{Detail: true, ProgressToken: "tok"}); err != nil {
+		PackageSecurityOptions{Detail: true}); err != nil {
 		t.Fatalf("PackageSecurity: %v", err)
+	}
+	if _, err := c.SyncPackageSecurity(ctx, "cfx", "25.7.2131"); err != nil {
+		t.Fatalf("SyncPackageSecurity: %v", err)
 	}
 	if _, err := c.CompareSecurity(ctx, "cfx", "25.7.2100",
 		SecurityCompareRequest{Against: "25.7.2131"}); err != nil {
@@ -155,18 +158,14 @@ func TestSecurityClientURLsReachTheHandler(t *testing.T) {
 		SecuritySearchOptions{Kind: "cve", Exact: true}); err != nil {
 		t.Fatalf("SearchSecurity: %v", err)
 	}
-	if _, err := c.SecurityProgress(ctx, "tok"); err != nil {
-		t.Fatalf("SecurityProgress: %v", err)
-	}
-
 	want := []string{
 		// The repository travels as a query parameter because a slash cannot
 		// survive a path segment - and the added parameters join it with `&`.
-		"GET /api/v1/products/cfx/packages/v1/security?repository=orbs%2Fcore&detail=true&progressToken=tok",
+		"GET /api/v1/products/cfx/packages/v1/security?repository=orbs%2Fcore&detail=true",
+		"POST /api/v1/products/cfx/packages/25.7.2131:syncSecurity?",
 		// The colon before the verb is structural and must not be escaped.
 		"POST /api/v1/products/cfx/packages/25.7.2100:compareSecurity?",
 		"GET /api/v1/products/cfx/security/search?exact=true&kind=cve&q=CVE-2024-3094",
-		"GET /api/v1/security/progress/tok?",
 	}
 	if len(got) != len(want) {
 		t.Fatalf("made %d requests, want %d: %v", len(got), len(want), got)

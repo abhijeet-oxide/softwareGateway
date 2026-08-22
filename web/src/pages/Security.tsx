@@ -82,7 +82,7 @@ export default function Security() {
     <>
       <PageHeader
         title="Security search"
-        description="Find a CVE, a package or an image, and follow it to the releases that contain it."
+        description="Locate a CVE, package or image across every release with synced vulnerability data."
       />
 
       <Card size="small" style={{ marginBottom: 16 }}>
@@ -129,10 +129,21 @@ export default function Security() {
             )}
           </Space>
 
+          {/*
+            One control, not five checkboxes - the same filter the release's
+            Security tab uses. Five checkboxes could not say "any" without being
+            all unchecked, which reads as "none selected", and they took 300px
+            of a toolbar that has a search box in it.
+          */}
           {search.data && search.data.hits.length > 0 && (
-            <Checkbox.Group
+            <Select<Severity[]>
+              mode="multiple"
+              allowClear
+              placeholder="Any severity"
               value={severities}
-              onChange={(v) => setSeverities(v as Severity[])}
+              onChange={setSeverities}
+              style={{ minWidth: 190 }}
+              maxTagCount="responsive"
               options={SEVERITIES.map((s) => ({ label: <SeverityTag value={s} />, value: s }))}
             />
           )}
@@ -148,8 +159,8 @@ export default function Security() {
               type="info"
               showIcon
               style={{ marginBottom: 12 }}
-              message="This is a page of the results, not all of them"
-              description="Narrow the search, or export it - the export takes the whole result rather than what is on screen."
+              message="Showing a partial result"
+              description="Narrow the search, or export it. An export contains the complete result rather than the page on screen."
             />
           )}
 
@@ -176,7 +187,7 @@ export default function Security() {
               columns={[
                 {
                   title: 'CVE',
-                  width: 170,
+                  width: 160,
                   render: (_, h) => (
                     <Space direction="vertical" size={2}>
                       <CveCell cve={h.cve} id={h.issueId} />
@@ -190,7 +201,7 @@ export default function Security() {
                 },
                 {
                   title: 'Severity',
-                  width: 120,
+                  width: 110,
                   // Worst first, because SEVERITIES is ordered worst first: the
                   // comparator was reversed, so sorting ascending put `low`
                   // at the top of a table about what is wrong with a release.
@@ -199,7 +210,7 @@ export default function Security() {
                 },
                 {
                   title: 'Package',
-                  width: 220,
+                  width: 200,
                   render: (_, h) => (
                     <Space direction="vertical" size={2}>
                       <ComponentCell
@@ -209,7 +220,7 @@ export default function Security() {
                       />
                       {h.component.name && kind !== 'package' && (
                         <Link to={linkTo(product, 'package', h.component.name)} style={{ fontSize: 11 }}>
-                          everything affecting this package
+                          All findings for this package
                         </Link>
                       )}
                     </Space>
@@ -217,7 +228,7 @@ export default function Security() {
                 },
                 {
                   title: 'Image',
-                  width: 230,
+                  width: 210,
                   render: (_, h) => (
                     <Space direction="vertical" size={2}>
                       <Typography.Text style={{ fontFamily: mono }}>
@@ -234,7 +245,7 @@ export default function Security() {
                       )}
                       {kind !== 'image' && (
                         <Link to={linkTo(product, 'image', h.artifact.name)} style={{ fontSize: 11 }}>
-                          everything in this image
+                          All findings in this image
                         </Link>
                       )}
                     </Space>
@@ -242,7 +253,7 @@ export default function Security() {
                 },
                 {
                   title: 'Fix',
-                  width: 130,
+                  width: 120,
                   render: (_, h) => (
                     h.fixable
                       ? (
@@ -266,7 +277,7 @@ export default function Security() {
                    * to its own security view, which is where the journey ends.
                    */
                   title: 'Releases',
-                  width: 240,
+                  width: 200,
                   render: (_, h) => (
                     (h.releases ?? []).length === 0
                       ? <Typography.Text type="secondary">not in a tracked release</Typography.Text>
@@ -291,10 +302,15 @@ export default function Security() {
                   ),
                 },
                 {
+                  // Last, and narrow. It is the only column here whose
+                  // absence costs nothing - the CVE identifier is the handle
+                  // somebody works from - so it is the one that gives up width
+                  // to keep the other six on screen.
                   title: 'Description',
+                  width: 280,
                   render: (_, h) => (
                     <Typography.Paragraph
-                      style={{ margin: 0, maxWidth: 420 }}
+                      style={{ margin: 0 }}
                       ellipsis={{ rows: 2, tooltip: h.summary }}
                     >
                       {h.summary || '-'}
@@ -323,11 +339,11 @@ export default function Security() {
       {!urlQuery && (
         <Card>
           <Space direction="vertical" size={8}>
-            <Typography.Text strong>Start with what you have</Typography.Text>
+            <Typography.Text strong>Search synced vulnerability data</Typography.Text>
             <Typography.Text type="secondary">
-              Paste a CVE identifier to see every image and release that carries it, a package name to
-              see what affects it, or an image name to see everything wrong with it. Each result links
-              onward to the other two.
+              Enter a CVE identifier to list every image and release that carries it, a package name to
+              list the vulnerabilities affecting it, or an image name to list its findings. Each result
+              links through to the other two views.
             </Typography.Text>
             <Space size={8} wrap>
               <Button size="small" onClick={() => update({ kind: 'cve', q: 'CVE-2024' })}>
@@ -338,8 +354,8 @@ export default function Security() {
               </Button>
             </Space>
             <Typography.Text type="secondary" style={{ color: semantic.neutral }}>
-              Searching covers releases whose vulnerabilities have been synced. Syncing a release from
-              its Security tab, or from the packages listing, adds it.
+              Search covers releases whose vulnerabilities have been synced. To include a release,
+              sync it from its Security tab or from the packages listing.
             </Typography.Text>
           </Space>
         </Card>

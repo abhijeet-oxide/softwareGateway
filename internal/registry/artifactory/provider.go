@@ -126,7 +126,7 @@ func (p *XrayProvider) Scan(ctx context.Context, refs []security.ArtifactRef, op
 	security.ReportStage(opts.Progress, security.StageFetching, 0, len(queryable))
 	if skipped := len(refs) - len(queryable); skipped > 0 {
 		security.ReportNote(opts.Progress, fmt.Sprintf(
-			"%d artifacts are signatures or attestations, which Xray does not scan.", skipped))
+			"%d artifacts are signatures or attestations, which JFrog Xray does not scan.", skipped))
 	}
 
 	var (
@@ -221,7 +221,7 @@ func (p *XrayProvider) fetchBatch(
 
 	half := len(batch) / 2
 	security.ReportNote(progress, fmt.Sprintf(
-		"JFrog Xray timed out on %d artifacts; asking about them in two smaller requests.", len(batch)))
+		"JFrog Xray timed out on %d artifacts. Retrying as two smaller requests.", len(batch)))
 
 	// Sequentially, not in parallel. The scanner has just told us it is
 	// struggling, and answering that by doubling the requests in flight is how

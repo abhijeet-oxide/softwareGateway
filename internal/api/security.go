@@ -527,7 +527,7 @@ func (s *Server) securityTargetFor(
 	if !ok {
 		return securityTarget{Reason: fmt.Sprintf(
 			"No repository of %q has vulnerability scanning switched on. "+
-				"Set `type: jfrog` and `xray.enabled: true` on the JFrog repository this release lands in.",
+				"Set `type: jfrog` and `xrayEnabled: true` on the JFrog repository this release is replicated to.",
 			productName)}
 	}
 
@@ -758,25 +758,30 @@ func etagMatches(header, etag string) bool {
 // Kept short and factual, because the interface renders the NUMBERS beside
 // them: a label that also tried to say how far along it was would disagree
 // with the counter next to it the moment one of the two was updated.
+//
+// And named for the OPERATION, not for the platform's side of a conversation.
+// "Asking the scanner" and "Working out what to ask about" describe a piece of
+// infrastructure as though it were a colleague thinking aloud; a release
+// manager reading a compliance screen wants the noun for the step.
 func securityStageLabel(name string) string {
 	switch name {
 	case security.StageResolving:
-		return "Reading this release's artifacts"
+		return "Resolving artifacts"
 	case security.StageFetching:
-		return "Asking the scanner"
+		return "Retrieving scan results"
 	case security.StageCached:
-		return "Already stored"
+		return "Reading stored results"
 	case security.StageCorrelating:
 		return "Recording findings"
 	case security.StageFailing:
 		return "Failed"
 	case security.StageComparing:
-		return "Comparing the two releases"
+		return "Comparing releases"
 	case security.StageExporting:
-		return "Preparing the export"
+		return "Generating export"
 	default:
 		if name == "" {
-			return "Working"
+			return "In progress"
 		}
 		return strings.ToUpper(name[:1]) + name[1:]
 	}

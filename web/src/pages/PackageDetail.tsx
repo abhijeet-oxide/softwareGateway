@@ -5,7 +5,7 @@ import {
   Alert, App, Button, Card, Col, Descriptions, Empty, Modal, Row, Space, Table, Tabs, Tag, Tooltip,
   Tree, Typography,
 } from 'antd'
-import { FolderOutlined } from '@ant-design/icons'
+import { FolderOutlined, SyncOutlined } from '@ant-design/icons'
 import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom'
 import {
   packageFileDownloadUrl, useArtifacts, useInspectPackage, usePackage, usePackageFiles,
@@ -723,13 +723,13 @@ function vulnerabilityFact(p: Package): string | undefined {
   if (!s || !s.canSync) return undefined
   switch (s.state) {
     case 'syncing':
-      return 'syncing…'
+      return 'Syncing'
     case '':
-      return 'not synced'
+      return 'Not synced'
     case 'failed':
-      return s.syncedAt ? `${s.counts.total.toLocaleString()} (sync failed)` : 'sync failed'
+      return s.syncedAt ? `${s.counts.total.toLocaleString()} (last sync failed)` : 'Sync failed'
     default:
-      return s.scanned === 0 ? 'no results' : s.counts.total.toLocaleString()
+      return s.scanned === 0 ? 'No results' : s.counts.total.toLocaleString()
   }
 }
 
@@ -1175,8 +1175,20 @@ export default function PackageDetail() {
                         ({p.security.counts.total.toLocaleString()})
                       </Typography.Text>
                     )}
+                    {/*
+                      A spinner, not the word "syncing…".
+
+                      A tab label is a NAME. Appending a lowercase participle to
+                      one turns it into a sentence fragment that changes length
+                      as the state changes, so the tabs beside it move; and the
+                      running state is exactly what an icon says better than a
+                      word. The word is still there for anyone who needs it, in
+                      the tooltip and on the panel the tab opens.
+                    */}
                     {p?.security?.state === 'syncing' && (
-                      <Typography.Text type="secondary" style={{ fontSize: 12 }}>syncing…</Typography.Text>
+                      <Tooltip title="A vulnerability sync is in progress">
+                        <SyncOutlined spin style={{ fontSize: 12 }} />
+                      </Tooltip>
                     )}
                   </Space>
                 ),

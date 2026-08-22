@@ -306,7 +306,11 @@ func TestSyncRefusedWithoutAScanner(t *testing.T) {
 	if resp.Sync.CanSync {
 		t.Error("canSync is true with no scanner configured anywhere")
 	}
-	if !strings.Contains(resp.Sync.Reason, "xray.enabled") {
+	// The key as the product document actually spells it. `xray.enabled` was
+	// the nested form this configuration had before it was flattened, and a
+	// message naming a setting that no longer exists is worse than one naming
+	// none.
+	if !strings.Contains(resp.Sync.Reason, "xrayEnabled") {
 		t.Errorf("reason = %q, want it to name the setting", resp.Sync.Reason)
 	}
 }

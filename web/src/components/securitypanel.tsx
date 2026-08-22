@@ -48,7 +48,7 @@ export function SecurityTab({ product, reference, repository }: {
     sync.mutate({ product, ref: reference, repository }, {
       onSuccess: (res) => {
         message.info(res.started
-          ? `Syncing vulnerabilities for ${res.artifacts} artifacts. This can take a few minutes.`
+          ? `Vulnerability sync started for ${res.artifacts} artifacts. This may take several minutes.`
           : 'A sync is already running for this release.')
         void security.refetch()
       },
@@ -122,8 +122,9 @@ function NeverSynced({ onSync, pending }: { onSync: () => void; pending?: boolea
           This release has not been scanned yet
         </Typography.Title>
         <Typography.Text type="secondary" style={{ maxWidth: 520, textAlign: 'center' }}>
-          Syncing asks the scanner about every artifact in this release and stores what it says, so the
-          counts, the comparison and the search all work from then on without asking again.
+          A sync retrieves results for every artifact in this release and stores them, so the counts,
+          the release comparison and the vulnerability search are served without contacting the
+          scanner again.
         </Typography.Text>
         <Button type="primary" loading={pending} onClick={onSync}>Sync vulnerabilities</Button>
       </Space>
@@ -187,10 +188,10 @@ function SummaryCards({ data }: { data: PackageSecurityResponse }) {
                 {counts.fixable.toLocaleString()}
               </Typography.Text>
               <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-                have a fixed version
+                with a fixed version
               </Typography.Text>
               <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-                {counts.nonFixable.toLocaleString()} have none
+                {counts.nonFixable.toLocaleString()} without
               </Typography.Text>
             </Space>
           </Space>

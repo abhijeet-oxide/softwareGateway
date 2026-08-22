@@ -584,7 +584,7 @@ function ArtifactDeltaCard({ report }: { report: SecurityComparisonResponse }) {
             render: (_, r) => (
               r.comparable ? null : (
                 <Tooltip title="One side of this artifact has no scan result, so the columns above are not a comparison.">
-                  <Typography.Text type="secondary">not comparable</Typography.Text>
+                  <Typography.Text type="secondary">Not comparable</Typography.Text>
                 </Tooltip>
               )
             ),
@@ -734,7 +734,7 @@ function ChangeTable({ report, product, baseRef, againstRef, repository }: {
               <Space direction="vertical" size={0}>
                 <Tag color={CHANGE_COLOUR[r.type]}>{CHANGE_LABEL[r.type]}</Tag>
                 {r.viaRemoval && (
-                  <Typography.Text type="secondary" style={{ fontSize: 11 }}>no longer shipped</Typography.Text>
+                  <Typography.Text type="secondary" style={{ fontSize: 11 }}>No longer present</Typography.Text>
                 )}
               </Space>
             ),

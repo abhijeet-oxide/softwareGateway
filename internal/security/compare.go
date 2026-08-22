@@ -596,7 +596,7 @@ func decide(c Comparison, a, b Posture) (Verdict, []string) {
 	}
 	if !c.RemovedArtifact.Empty() {
 		caveats = append(caveats, fmt.Sprintf(
-			"%d findings left with artifacts that are no longer shipped. They are listed separately rather than counted as resolved, because the scan data does not confirm the removal as an improvement.",
+			"%d findings belong to artifacts that are no longer present in this release. They are listed separately rather than counted as resolved, because the scan data does not confirm the removal as an improvement.",
 			c.RemovedArtifact.Total))
 	}
 	if c.Introduced.BySeverity.Unknown+c.Resolved.BySeverity.Unknown > 0 {

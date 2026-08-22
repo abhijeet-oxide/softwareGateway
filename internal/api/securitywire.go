@@ -130,9 +130,9 @@ func securityState(row store.PackageSecurityRow, target securityTarget) (state, 
 		return "stale", failureMessage(row) + " The numbers below are from the last successful sync."
 	case row.State == store.PackageSecurityNever:
 		return "not_synced",
-			"This release has not been scanned for vulnerabilities yet. Run a sync to find out what is in it."
+			"This release has not been scanned for vulnerabilities. Run a sync to retrieve its results."
 	case row.Coverage.Scannable() == 0:
-		return "unavailable", "There is nothing in this release that the scanner can look at."
+		return "unavailable", "This release contains no artifacts the scanner can analyse."
 	case !row.Coverage.Any():
 		return "unavailable", "The scanner returned no results for any artifact in this release."
 	case row.Coverage.Complete():
@@ -160,23 +160,23 @@ func securityState(row store.PackageSecurityRow, target securityTarget) (state, 
 func coverageSentence(c security.Coverage) string {
 	var parts []string
 	if c.Unavailable > 0 {
-		parts = append(parts, plural(c.Unavailable, "artifact", "artifacts")+" the scanner would not answer for")
+		parts = append(parts, plural(c.Unavailable, "artifact", "artifacts")+" the scanner returned no result for")
 	}
 	if c.NotScanned > 0 {
-		parts = append(parts, plural(c.NotScanned, "artifact", "artifacts")+" the scanner has not indexed")
+		parts = append(parts, plural(c.NotScanned, "artifact", "artifacts")+" not yet indexed by the scanner")
 	}
 	if c.Disabled > 0 {
-		parts = append(parts, plural(c.Disabled, "artifact", "artifacts")+" in a repository with no scanner")
+		parts = append(parts, plural(c.Disabled, "artifact", "artifacts")+" in repositories with no scanner configured")
 	}
 	if len(parts) == 0 {
-		return "Some artifacts have no scan result, so these numbers cover only what was scanned."
+		return "Some artifacts have no scan result. The totals below cover only the artifacts that were scanned."
 	}
 
-	sentence := "This release has " + joinClauses(parts) +
-		", so the numbers below cover only the " +
+	sentence := "This release contains " + joinClauses(parts) +
+		". The totals below cover only the " +
 		plural(c.Scanned, "artifact", "artifacts") + " that were scanned."
 	if c.Unavailable > 0 {
-		sentence += " Syncing again may reach the ones that failed."
+		sentence += " Running the sync again may retrieve the missing results."
 	}
 	return sentence
 }
@@ -199,7 +199,7 @@ func failureMessage(row store.PackageSecurityRow) string {
 	if strings.TrimSpace(row.Error) != "" {
 		return row.Error
 	}
-	return "The last vulnerability sync did not finish."
+	return "The most recent vulnerability sync did not complete."
 }
 
 func plural(n int, singular, pluralWord string) string {

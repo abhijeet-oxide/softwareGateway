@@ -130,13 +130,13 @@ export function VulnerabilityCell({ summary }: { summary?: PackageSecuritySummar
     return (
       <Space size={6}>
         <SyncOutlined spin style={{ color: palette.primary }} />
-        <Typography.Text type="secondary">Syncing…</Typography.Text>
+        <Typography.Text type="secondary">Syncing</Typography.Text>
       </Space>
     )
   }
   if (summary.state === '') {
     return (
-      <Tooltip title="Nobody has scanned this release. That is not the same as no vulnerabilities.">
+      <Tooltip title="This release has not been scanned. An unscanned release is not a release without vulnerabilities.">
         <Typography.Text type="secondary">Not synced</Typography.Text>
       </Tooltip>
     )
@@ -160,7 +160,7 @@ export function VulnerabilityCell({ summary }: { summary?: PackageSecuritySummar
   // exists to prevent.
   if (summary.scanned === 0) {
     return (
-      <Tooltip title="Nothing in this release was scanned, so there is no result. That is not the same as no vulnerabilities.">
+      <Tooltip title="No artifact in this release was scanned, so there is no result. No result is not the same as no vulnerabilities.">
         <Space size={4}>
           <QuestionCircleOutlined style={{ color: semantic.neutral }} />
           <Typography.Text type="secondary">No results</Typography.Text>
@@ -192,7 +192,7 @@ export function VulnerabilityCell({ summary }: { summary?: PackageSecuritySummar
         ))}
         {!summary.complete && <PartialMark />}
         {stale && (
-          <Tooltip title={`The last sync failed: ${summary.error}. These numbers are from the one before it.`}>
+          <Tooltip title={`The most recent sync failed: ${summary.error}. These totals are from the previous sync.`}>
             <ExclamationCircleOutlined style={{ color: semantic.warning }} />
           </Tooltip>
         )}
@@ -324,9 +324,9 @@ export function SecurityNotConfigured({ what = 'This deployment' }: { what?: str
       message="No vulnerability scanner is configured"
       description={
         <>
-          {what} has no scanner set up, so there is nothing to report here. Scanning is switched on per
-          repository: set <code>type: jfrog</code> and <code>xray.enabled: true</code> on the JFrog
-          repository this release lands in.
+          {what} has no scanner configured, so no results are available. Scanning is enabled per
+          repository: set <code>type: jfrog</code> and <code>xrayEnabled: true</code> on the JFrog
+          repository this release is replicated to.
         </>
       }
     />
@@ -516,8 +516,8 @@ export function SecurityProgressPanel({ sync }: { sync: SecuritySyncStatus }) {
           <SyncOutlined spin style={{ color: palette.primary }} />
           <Typography.Text strong>
             {total > 0
-              ? `Asking ${scannerName(sync)} about ${total.toLocaleString()} artifacts`
-              : `Reading this release's artifacts`}
+              ? `Retrieving results for ${total.toLocaleString()} artifacts from ${scannerName(sync)}`
+              : 'Resolving release artifacts'}
           </Typography.Text>
         </Space>
         {elapsed && (
@@ -536,11 +536,11 @@ export function SecurityProgressPanel({ sync }: { sync: SecuritySyncStatus }) {
           <Typography.Text type="secondary" style={{ fontSize: 12 }}>
             {total > 0
               ? `${done.toLocaleString()} of ${total.toLocaleString()} artifacts`
-              : 'working out what to ask about'}
+              : 'Preparing'}
           </Typography.Text>
           {cached && cached.done > 0 && (
             <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-              {cached.done.toLocaleString()} already stored
+              {cached.done.toLocaleString()} read from storage
             </Typography.Text>
           )}
           {/*
@@ -551,7 +551,7 @@ export function SecurityProgressPanel({ sync }: { sync: SecuritySyncStatus }) {
           */}
           {failing && failing.done > 0 && (
             <Typography.Text style={{ fontSize: 12, color: semantic.error }}>
-              {failing.done.toLocaleString()} failed so far
+              {failing.done.toLocaleString()} failed
             </Typography.Text>
           )}
           {sync.repository && (
@@ -577,8 +577,8 @@ export function SecurityProgressPanel({ sync }: { sync: SecuritySyncStatus }) {
             state is still authoritative, so the honest thing is to say where it
             is happening rather than to draw a bar at nothing.
           */}
-          This sync is running on another Coordinator, so its position is not
-          visible here. The result will appear when it finishes.
+          This sync is running on another Coordinator. Its progress is not
+          available here; the result will appear once it completes.
         </Typography.Text>
       )}
     </Space>
@@ -651,7 +651,7 @@ export function SyncButton({ sync, onSync, pending, size = 'middle' }: {
         disabled={running}
         onClick={onSync}
       >
-        {running ? 'Syncing…' : sync.state === '' ? 'Sync vulnerabilities' : 'Sync again'}
+        {running ? 'Syncing' : sync.state === '' ? 'Sync vulnerabilities' : 'Sync again'}
       </Button>
     </Tooltip>
   )
@@ -766,14 +766,14 @@ export function FindingsEmpty({ status }: { status?: ScanStatus | SecurityState 
       <Space direction="vertical" size={4} style={{ padding: 24 }}>
         <CheckCircleOutlined style={{ fontSize: 22, color: semantic.success }} />
         <Typography.Text strong>No vulnerabilities found</Typography.Text>
-        <Typography.Text type="secondary">Everything here was scanned and came back clean.</Typography.Text>
+        <Typography.Text type="secondary">All artifacts in scope were scanned and returned no findings.</Typography.Text>
       </Space>
     )
   }
   return (
     <Space direction="vertical" size={4} style={{ padding: 24 }}>
       <QuestionCircleOutlined style={{ fontSize: 22, color: semantic.neutral }} />
-      <Typography.Text strong>Nothing to show</Typography.Text>
+      <Typography.Text strong>No results available</Typography.Text>
       <Typography.Text type="secondary">
         This is an absence of scan results, not an absence of vulnerabilities.
       </Typography.Text>

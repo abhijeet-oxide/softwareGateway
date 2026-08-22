@@ -1,7 +1,6 @@
 package api
 
 import (
-	"context"
 	"fmt"
 	"net/http"
 	"strconv"
@@ -48,8 +47,8 @@ func (s *Server) handleExportPackageSecurity(w http.ResponseWriter, r *http.Requ
 	if !s.productExists(w, r, productName) {
 		return
 	}
-	if s.deps.Packages == nil || s.deps.Security == nil {
-		Error(w, r, v1.CodeUnavailable, "security scanning is not configured on this Coordinator")
+	if s.deps.Packages == nil || s.deps.SecurityStore == nil {
+		Error(w, r, v1.CodeUnavailable, "security storage is not configured on this Coordinator")
 		return
 	}
 
@@ -67,29 +66,16 @@ func (s *Server) handleExportPackageSecurity(w http.ResponseWriter, r *http.Requ
 	view := exportView(q.Get("view"))
 	filter := parseFindingFilter(q)
 
-	tracker := s.securityProgress.start(q.Get("progressToken"))
-	defer s.securityProgress.finish(q.Get("progressToken"))
-
-	ctx, cancel := context.WithTimeout(r.Context(), securityDeadline)
-	defer cancel()
-
-	// A detailed export needs findings; a summary export needs counts. Asking
-	// for detail on a summary export would make the cheap file the expensive
-	// one, on an endpoint people schedule.
-	req, problem := s.securityRequestFor(ctx, productName, pkg, view == v1.ExportViewDetailed, false, tracker)
-	if problem != "" {
-		Error(w, r, v1.CodeUnavailable, problem)
-		return
-	}
-
-	res, err := s.deps.Security.Posture(ctx, req)
+	// Read, not retrieve. An export of a release nobody synced is an export of
+	// nothing, and it says so in the file rather than quietly starting a
+	// multi-minute scan behind a download link.
+	side, err := s.securitySide(r.Context(), productName, pkg)
 	if err != nil {
-		s.internal(w, r, "retrieve security posture for export", err)
+		s.internal(w, r, "read security for export", err)
 		return
 	}
 
-	security.ReportStage(tracker, security.StageExporting, 0, 0)
-	book := packageSecurityBook(productName, pkg, req.Scope, res, view, filter)
+	book := packageSecurityBook(productName, pkg, side, view, filter)
 	s.writeExport(w, r, format, book, []string{productName, releaseLabel(pkg), "security", view})
 }
 
@@ -106,8 +92,8 @@ func (s *Server) handleExportSecurityComparison(w http.ResponseWriter, r *http.R
 	if !s.productExists(w, r, productName) {
 		return
 	}
-	if s.deps.Packages == nil || s.deps.Security == nil {
-		Error(w, r, v1.CodeUnavailable, "security scanning is not configured on this Coordinator")
+	if s.deps.Packages == nil || s.deps.SecurityStore == nil {
+		Error(w, r, v1.CodeUnavailable, "security storage is not configured on this Coordinator")
 		return
 	}
 
@@ -137,33 +123,23 @@ func (s *Server) handleExportSecurityComparison(w http.ResponseWriter, r *http.R
 		return
 	}
 
-	tracker := s.securityProgress.start(q.Get("progressToken"))
-	defer s.securityProgress.finish(q.Get("progressToken"))
-
-	ctx, cancel := context.WithTimeout(r.Context(), securityDeadline)
-	defer cancel()
-
-	reqA, problem := s.securityRequestFor(ctx, productName, base, true, false, tracker)
-	if problem != "" {
-		Error(w, r, v1.CodeUnavailable, problem)
-		return
-	}
-	reqB, problem := s.securityRequestFor(ctx, productName, other, true, false, tracker)
-	if problem != "" {
-		Error(w, r, v1.CodeUnavailable, problem)
-		return
-	}
-
-	res, err := s.deps.Security.Compare(ctx, security.CompareRequest{
-		A: reqA, B: reqB, NameA: releaseLabel(base), NameB: releaseLabel(other),
-	})
+	sideA, err := s.securitySide(r.Context(), productName, base)
 	if err != nil {
-		s.internal(w, r, "compare security for export", err)
+		s.internal(w, r, "read security for export", err)
+		return
+	}
+	sideB, err := s.securitySide(r.Context(), productName, other)
+	if err != nil {
+		s.internal(w, r, "read security for export", err)
 		return
 	}
 
-	security.ReportStage(tracker, security.StageExporting, 0, 0)
-	book := comparisonBook(productName, base, other, reqA.Scope, reqB.Scope, res, view, filter)
+	cmp := security.Compare(security.CompareInput{
+		A: sideA.reports, B: sideB.reports,
+		NameA: releaseLabel(base), NameB: releaseLabel(other),
+	})
+
+	book := comparisonBook(productName, base, other, sideA, sideB, cmp, view, filter)
 	s.writeExport(w, r, format, book,
 		[]string{productName, releaseLabel(base), "vs", releaseLabel(other), "security", view})
 }
@@ -363,11 +339,12 @@ func firstValue(q map[string][]string, key string) string {
 
 // packageSecurityBook projects a release's posture into sheets.
 func packageSecurityBook(
-	productName string, pkg store.PackageRow, scope security.Scope,
-	res security.Result, view string, filter findingFilter,
+	productName string, pkg store.PackageRow, side securitySide,
+	view string, filter findingFilter,
 ) export.Book {
-	state, message := securityState(res)
+	state, message := securityState(side.row, side.target)
 	release := releaseLabel(pkg)
+	row := side.row
 
 	summary := export.Sheet{
 		Name:    "Summary",
@@ -376,33 +353,35 @@ func packageSecurityBook(
 			{"Product", productName},
 			{"Release", release},
 			{"Release digest", pkg.ManifestDigest},
-			{"Repository", scope.Repository},
-			{"Scanner", res.Provider},
-			{"Scanner enabled", strconv.FormatBool(res.Enabled)},
+			{"Repository", repositoryOr(row.Repository, side.target)},
+			{"Scanner", providerOr(row.Provider, side.target)},
+			{"Scanner configured", strconv.FormatBool(side.target.Available)},
+			{"Sync state", string(orNever(row.State))},
+			{"Last synced", formatTimePtr(row.SyncedAt)},
 			{"Data state", state},
 			{"Data note", message},
-			{"Artifacts", strconv.Itoa(res.Posture.Coverage.Artifacts)},
-			{"Artifacts scanned", strconv.Itoa(res.Posture.Coverage.Scanned)},
-			{"Artifacts not scanned", strconv.Itoa(res.Posture.Coverage.NotScanned)},
-			{"Artifacts unavailable", strconv.Itoa(res.Posture.Coverage.Unavailable)},
-			{"Artifacts not applicable", strconv.Itoa(res.Posture.Coverage.Unsupported)},
-			{"Coverage complete", strconv.FormatBool(res.Posture.Coverage.Complete())},
-			{"Vulnerabilities", strconv.Itoa(res.Posture.Counts.Total)},
-			{"Fixable", strconv.Itoa(res.Posture.Counts.Fixable)},
-			{"Non-fixable", strconv.Itoa(res.Posture.Counts.NonFixable)},
-			{"Critical", strconv.Itoa(res.Posture.Counts.BySeverity.Critical)},
-			{"High", strconv.Itoa(res.Posture.Counts.BySeverity.High)},
-			{"Medium", strconv.Itoa(res.Posture.Counts.BySeverity.Medium)},
-			{"Low", strconv.Itoa(res.Posture.Counts.BySeverity.Low)},
-			{"Unknown severity", strconv.Itoa(res.Posture.Counts.BySeverity.Unknown)},
-			{"Distinct vulnerabilities", strconv.Itoa(res.Posture.UniqueCounts.Total)},
+			{"Artifacts", strconv.Itoa(row.Coverage.Artifacts)},
+			{"Artifacts scanned", strconv.Itoa(row.Coverage.Scanned)},
+			{"Artifacts not scanned", strconv.Itoa(row.Coverage.NotScanned)},
+			{"Artifacts unavailable", strconv.Itoa(row.Coverage.Unavailable)},
+			{"Artifacts not applicable", strconv.Itoa(row.Coverage.Unsupported)},
+			{"Coverage complete", strconv.FormatBool(row.Coverage.Complete())},
+			{"Vulnerabilities", strconv.Itoa(row.Counts.Total)},
+			{"Fixable", strconv.Itoa(row.Counts.Fixable)},
+			{"Non-fixable", strconv.Itoa(row.Counts.NonFixable)},
+			{"Critical", strconv.Itoa(row.Counts.BySeverity.Critical)},
+			{"High", strconv.Itoa(row.Counts.BySeverity.High)},
+			{"Medium", strconv.Itoa(row.Counts.BySeverity.Medium)},
+			{"Low", strconv.Itoa(row.Counts.BySeverity.Low)},
+			{"Unknown severity", strconv.Itoa(row.Counts.BySeverity.Unknown)},
+			{"Distinct vulnerabilities", strconv.Itoa(row.DistinctTotal)},
 			{"Exported at", time.Now().UTC().Format(time.RFC3339)},
 		},
 	}
 
 	book := export.Book{Sheets: []export.Sheet{summary}}
 	if view == v1.ExportViewSummary {
-		book.JSON = summaryJSON(productName, pkg, scope, res)
+		book.JSON = toAPIPackageSecurity(productName, pkg, row, side.target, false)
 		return book
 	}
 
@@ -418,7 +397,7 @@ func packageSecurityBook(
 			"Package", "Package version", "Package type", "CVSS", "Published", "Scanner", "Summary",
 		},
 	}
-	for _, report := range res.Posture.Reports {
+	for _, report := range side.reports {
 		if !filter.keepReport(report) {
 			continue
 		}
@@ -454,16 +433,15 @@ func packageSecurityBook(
 	}
 
 	book.Sheets = append(book.Sheets, detail)
-	book.JSON = detailJSON(productName, pkg, scope, res, filter)
+	book.JSON = detailJSON(productName, pkg, side, filter)
 	return book
 }
 
 // comparisonBook projects a comparison into sheets.
 func comparisonBook(
 	productName string, base, other store.PackageRow,
-	scopeA, scopeB security.Scope, res security.CompareResult, view string, filter changeFilter,
+	sideA, sideB securitySide, c security.Comparison, view string, filter changeFilter,
 ) export.Book {
-	c := res.Comparison
 
 	summary := export.Sheet{
 		Name:    "Summary",
@@ -501,7 +479,7 @@ func comparisonBook(
 
 	book := export.Book{Sheets: []export.Sheet{summary}}
 	if view == v1.ExportViewSummary {
-		book.JSON = toAPISecurityComparison(productName, base, other, scopeA, scopeB, summaryOnly(res))
+		book.JSON = toAPISecurityComparison(productName, base, other, sideA, sideB, summaryOnly(c))
 		return book
 	}
 
@@ -550,7 +528,7 @@ func comparisonBook(
 	// Changes last, so the CSV encoding - which writes the last sheet - hands
 	// back the rows somebody exporting a comparison to CSV came for.
 	book.Sheets = append(book.Sheets, artifacts, detail)
-	book.JSON = toAPISecurityComparison(productName, base, other, scopeA, scopeB, res)
+	book.JSON = toAPISecurityComparison(productName, base, other, sideA, sideB, c)
 	return book
 }
 
@@ -584,27 +562,23 @@ func searchBook(payload v1.SecuritySearchResponse) export.Book {
 }
 
 // summaryOnly strips the change rows from a comparison for a summary export.
-func summaryOnly(res security.CompareResult) security.CompareResult {
-	res.Comparison.Changes = nil
-	res.Comparison.Artifacts = nil
-	return res
+func summaryOnly(c security.Comparison) security.Comparison {
+	c.Changes = nil
+	c.Artifacts = nil
+	return c
 }
 
-func summaryJSON(productName string, pkg store.PackageRow, scope security.Scope, res security.Result) any {
-	out := toAPIPackageSecurity(productName, pkg, scope, res, false)
-	for i := range out.Reports {
-		out.Reports[i].Findings = nil
-	}
-	return out
-}
-
+// detailJSON is the tree, filtered the same way the grid was.
+//
+// A JSON export exists so a machine can consume the RELATIONSHIPS - which
+// finding belongs to which artifact in which release - and the flattened grid
+// has already thrown those away. Offering the grid as the JSON would be
+// offering the loss as the feature.
 func detailJSON(
-	productName string, pkg store.PackageRow, scope security.Scope,
-	res security.Result, filter findingFilter,
+	productName string, pkg store.PackageRow, side securitySide, filter findingFilter,
 ) any {
-	filtered := res
-	filtered.Posture.Reports = nil
-	for _, report := range res.Posture.Reports {
+	out := toAPIPackageSecurity(productName, pkg, side.row, side.target, true)
+	for _, report := range side.reports {
 		if !filter.keepReport(report) {
 			continue
 		}
@@ -615,9 +589,16 @@ func detailJSON(
 				kept.Findings = append(kept.Findings, f)
 			}
 		}
-		filtered.Posture.Reports = append(filtered.Posture.Reports, kept)
+		out.Reports = append(out.Reports, toAPIReport(kept))
 	}
-	return toAPIPackageSecurity(productName, pkg, scope, filtered, true)
+	return out
+}
+
+func formatTimePtr(t *time.Time) string {
+	if t == nil {
+		return ""
+	}
+	return t.UTC().Format(time.RFC3339)
 }
 
 func digestOf(a *security.ArtifactRef) string {

@@ -104,9 +104,17 @@ func newAPIHarness(t *testing.T) *apiHarness {
 // newAPIHarnessWith is the same harness with the dependencies adjusted before
 // the server is built - for the handful of tests about a dependency's
 // behaviour rather than the store's.
-func newAPIHarnessWith(t *testing.T, adjust func(*Deps)) *apiHarness {
+func newAPIHarnessWith(t *testing.T, adjust func(*Deps), docs ...string) *apiHarness {
 	t.Helper()
 	ctx := t.Context()
+
+	// The product document, overridable per test. Security tests need one
+	// whose JFrog target has a scanner on, because that is where a release
+	// lands and where the scanner runs.
+	doc := testProductDoc
+	if len(docs) > 0 && docs[0] != "" {
+		doc = docs[0]
+	}
 
 	st, err := store.Open(ctx, store.Config{
 		Driver: store.DriverSQLite,
@@ -121,10 +129,23 @@ func newAPIHarnessWith(t *testing.T, adjust func(*Deps)) *apiHarness {
 	}
 
 	dir := t.TempDir()
-	if err := os.WriteFile(filepath.Join(dir, "vendor-a.yaml"), []byte(testProductDoc), 0o600); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, "vendor-a.yaml"), []byte(doc), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	loader := product.NewLoader(dir, product.NewSecretResolver(t.TempDir()))
+	// A credential on disk, because a JFrog repository with a scanner must
+	// declare one - `anonymous: true` is rejected for Xray, deliberately, since
+	// there is no anonymous Xray access worth having.
+	secrets := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(secrets, "jfrog"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	for key, value := range map[string]string{"username": "svc", "password": "token"} {
+		if err := os.WriteFile(filepath.Join(secrets, "jfrog", key), []byte(value), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	loader := product.NewLoader(dir, product.NewSecretResolver(secrets))
 	res, err := loader.Load()
 	if err != nil {
 		t.Fatalf("load: %v", err)

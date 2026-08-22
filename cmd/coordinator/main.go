@@ -188,8 +188,10 @@ func run() error {
 	// day the two disagree is the day Xray reports nothing while replication
 	// works perfectly.
 	securityCache := store.NewSecurity(st)
-	securityService := security.NewService(
-		regclient.NewSecurityResolver(registryClients), securityCache, logger)
+	packageSecurity := store.NewPackageSecurity(st)
+	securitySyncer := security.NewSyncer(
+		security.NewService(regclient.NewSecurityResolver(registryClients), securityCache, logger),
+		packageSecurity, logger)
 	// The requester turns `transfers create` and `transfers promote` into
 	// rows; the expander plans the transfers those rows opened. Two halves of
 	// one path, sharing the resolver so an origin the API accepted is one the
@@ -241,7 +243,7 @@ func run() error {
 	// The security cache expires in minutes and is filtered on read, so this
 	// loop is about SIZE rather than correctness - see the sweeper's comment.
 	securitySweeper := maintenance.NewSecurityCacheSweeper(
-		securityCache, maintenance.DefaultSecuritySweepInterval, logger)
+		securityCache, packageSecurity, maintenance.DefaultSecuritySweepInterval, logger)
 
 	retentionSweeper := maintenance.NewRetentionSweeper(packages,
 		store.RetentionPolicy{
@@ -391,12 +393,16 @@ func run() error {
 		// Comparison runs here for the same reason: it opens connections to the
 		// DESTINATION registry, and transferctl is a pure API client.
 		Comparer: compareImpl{transferResolver, layouts},
-		// Security runs here for the same reason as the three above: it needs a
-		// credentialed client, and the API layer holds none. Split in two
-		// because the halves fail differently - the analyzer needs a reachable
-		// scanner, the index answers from the database, and a search for a CVE
-		// is most wanted precisely when the scanner is unreachable.
-		Security:      securityService,
+		// Security runs here for the same reason as the three above: the sync
+		// needs a credentialed client and the API layer holds none.
+		//
+		// Split in three because the parts fail differently. The syncer needs a
+		// reachable scanner; the store and the index need only the database. A
+		// release's stored findings stay readable, comparable and searchable
+		// while the scanner is down - which is exactly when somebody looks at
+		// them.
+		SecuritySync:  securitySyncer,
+		SecurityStore: securitySecurityStore{packageSecurity, securityCache},
 		SecurityIndex: securityCache,
 		// Reading one file out of a release, for somebody looking at it. Here
 		// for the third time for the first reason: it needs a credentialed
@@ -465,4 +471,23 @@ func run() error {
 	}
 	logger.Info("stopped")
 	return nil
+}
+
+// securitySecurityStore joins the two halves of a security read behind the one
+// interface the API asks for.
+//
+// The per-release row and the per-artifact reports live in different tables
+// with different lifetimes - one is the durable result of a sync, the other the
+// index behind it - and the API needs both to answer one request. Composing
+// them here rather than merging the tables keeps each store owning its own
+// retention.
+type securitySecurityStore struct {
+	*store.PackageSecurity
+	reports *store.Security
+}
+
+func (s securitySecurityStore) ReportsFor(
+	ctx context.Context, scope security.Scope, refs []security.ArtifactRef,
+) ([]security.Report, error) {
+	return s.reports.ReportsFor(ctx, scope, refs)
 }

@@ -2,6 +2,7 @@ package api
 
 import (
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/abhijeet-oxide/softwareGateway/internal/security"
@@ -110,39 +111,44 @@ func toAPIReport(r security.Report) v1.SecurityReport {
 	return out
 }
 
-// securityState is the one-word summary of whether a posture's numbers can be
+// securityState is the one-word summary of whether a release's numbers can be
 // trusted, and the sentence that goes with it.
 //
-// Four states, and the reason they are not three is the whole feature: a clean
-// release and an unscanned one both have zero findings, and only this field
-// tells them apart. `ok` with zero counts is clean. `disabled` is a
-// configuration fact. `unavailable` is a failure. `partial` is the awkward one
-// - some artifacts answered and some did not - and it is the most common state
-// in a real estate, which is why it gets a word of its own rather than being
-// rounded to either neighbour.
-func securityState(res security.Result) (state, message string) {
-	cov := res.Posture.Coverage
-
+// Five states, and the reason they are not three is the whole feature: a clean
+// release and an unsynced one both have zero findings, and only this field
+// tells them apart. `not_synced` is the common state in a fresh estate and gets
+// a word of its own rather than being rounded to "clean".
+func securityState(row store.PackageSecurityRow, target securityTarget) (state, message string) {
 	switch {
-	case !res.Enabled:
-		msg := "JFrog Xray is not enabled for the repository this release was discovered in."
-		if len(res.Posture.Reports) > 0 && res.Posture.Reports[0].Message != "" {
-			msg = res.Posture.Reports[0].Message
-		}
-		return "disabled", msg
-	case cov.Scannable() == 0:
-		return "unavailable", "There is nothing in this release that JFrog Xray can scan."
-	case !cov.Any() && cov.Unavailable > 0:
-		return "unavailable", "JFrog Xray could not be reached for any artifact in this release."
-	case !cov.Any():
-		return "unavailable", "JFrog Xray has no scan results for this release yet."
-	case cov.Complete():
+	case !target.Available:
+		return "disabled", target.Reason
+	case row.State == store.PackageSecuritySyncing:
+		return "syncing", "A vulnerability sync is running for this release."
+	case row.State == store.PackageSecurityFailed && row.SyncedAt == nil:
+		return "unavailable", failureMessage(row)
+	case row.State == store.PackageSecurityFailed:
+		return "stale", failureMessage(row) + " The numbers below are from the last successful sync."
+	case row.State == store.PackageSecurityNever:
+		return "not_synced",
+			"This release has not been scanned for vulnerabilities yet. Run a sync to find out what is in it."
+	case row.Coverage.Scannable() == 0:
+		return "unavailable", "There is nothing in this release that the scanner can look at."
+	case !row.Coverage.Any():
+		return "unavailable", "The scanner returned no results for any artifact in this release."
+	case row.Coverage.Complete():
 		return "ok", ""
 	default:
-		missing := cov.NotScanned + cov.Unavailable + cov.Disabled
+		missing := row.Coverage.NotScanned + row.Coverage.Unavailable + row.Coverage.Disabled
 		return "partial", plural(missing, "artifact", "artifacts") +
-			" in this release have no scan result, so these numbers cover only what has been scanned."
+			" in this release have no scan result, so these numbers cover only what was scanned."
 	}
+}
+
+func failureMessage(row store.PackageSecurityRow) string {
+	if strings.TrimSpace(row.Error) != "" {
+		return row.Error
+	}
+	return "The last vulnerability sync did not finish."
 }
 
 func plural(n int, singular, pluralWord string) string {
@@ -153,39 +159,61 @@ func plural(n int, singular, pluralWord string) string {
 }
 
 func toAPIPackageSecurity(
-	productName string, pkg store.PackageRow, scope security.Scope,
-	res security.Result, detail bool,
+	productName string, pkg store.PackageRow,
+	row store.PackageSecurityRow, target securityTarget, detail bool,
 ) v1.PackageSecurityResponse {
-	state, message := securityState(res)
+	state, message := securityState(row, target)
 
 	out := v1.PackageSecurityResponse{
-		Product:      productName,
-		Package:      packageReferenceOf(pkg),
-		Provider:     res.Provider,
-		Enabled:      res.Enabled,
-		Repository:   scope.Repository,
-		State:        state,
-		Message:      message,
-		Counts:       toAPICounts(res.Posture.Counts),
-		UniqueCounts: toAPICounts(res.Posture.UniqueCounts),
-		Coverage:     toAPICoverage(res.Posture.Coverage),
-		Providers:    res.Posture.Providers,
-		Fingerprint:  res.Fingerprint,
-		FromCache:    res.FromCache,
-		Fetched:      res.Fetched,
-		Detail:       detail,
-		Reports:      make([]v1.SecurityReport, 0, len(res.Posture.Reports)),
+		Product:       productName,
+		Package:       packageReferenceOf(pkg),
+		Provider:      providerOr(row.Provider, target),
+		Enabled:       target.Available,
+		Repository:    repositoryOr(row.Repository, target),
+		State:         state,
+		Message:       message,
+		Counts:        toAPICounts(row.Counts),
+		UniqueCounts:  toAPICounts(distinctCounts(row)),
+		DistinctTotal: row.DistinctTotal,
+		Coverage:      toAPICoverage(row.Coverage),
+		Fingerprint:   row.Fingerprint,
+		Detail:        detail,
+		Reports:       []v1.SecurityReport{},
 	}
-	for _, r := range res.Posture.Reports {
-		out.Reports = append(out.Reports, toAPIReport(r))
+	if row.ScannedAt != nil {
+		out.ScannedAt = row.ScannedAt.UTC().Format(rfc3339)
 	}
-	if res.Posture.ScannedAt != nil {
-		out.ScannedAt = res.Posture.ScannedAt.UTC().Format(time.RFC3339)
+	if row.SyncedAt != nil {
+		out.SyncedAt = row.SyncedAt.UTC().Format(rfc3339)
 	}
-	if !res.RetrievedAt.IsZero() {
-		out.RetrievedAt = res.RetrievedAt.UTC().Format(time.RFC3339)
+	if out.Provider != "" {
+		out.Providers = []string{out.Provider}
 	}
 	return out
+}
+
+// distinctCounts renders the distinct total in the counts shape the interface
+// already knows.
+//
+// Only the total is stored: a per-severity breakdown of DISTINCT findings would
+// be a second set of five columns answering a question nobody has asked, and
+// the severity breakdown people do want is the per-artifact one above.
+func distinctCounts(row store.PackageSecurityRow) security.Counts {
+	return security.Counts{Total: row.DistinctTotal}
+}
+
+func providerOr(stored string, target securityTarget) string {
+	if stored != "" {
+		return stored
+	}
+	return target.Scope.Provider
+}
+
+func repositoryOr(stored string, target securityTarget) string {
+	if stored != "" {
+		return stored
+	}
+	return target.Scope.Repository
 }
 
 // changeTypeLabel is the change in the words the interface shows.
@@ -261,33 +289,54 @@ func toAPIArtifactDelta(d security.ArtifactDelta) v1.SecurityArtifactDelta {
 	return out
 }
 
-func toAPIComparisonEnd(pkg store.PackageRow, scope security.Scope, res security.Result) v1.SecurityComparisonEnd {
+func toAPIComparisonEnd(pkg store.PackageRow, side securitySide) v1.SecurityComparisonEnd {
+	state, message := securityState(side.row, side.target)
 	end := v1.SecurityComparisonEnd{
 		Label:      releaseLabel(pkg),
 		Package:    packageReferenceOf(pkg),
 		Tag:        pkg.Tag,
 		Digest:     pkg.ManifestDigest,
-		Repository: scope.Repository,
-		Provider:   res.Provider,
-		Enabled:    res.Enabled,
-		Counts:     toAPICounts(res.Posture.Counts),
-		Coverage:   toAPICoverage(res.Posture.Coverage),
+		Repository: repositoryOr(side.row.Repository, side.target),
+		Provider:   providerOr(side.row.Provider, side.target),
+		Enabled:    side.target.Available,
+		Counts:     toAPICounts(side.row.Counts),
+		Coverage:   toAPICoverage(side.row.Coverage),
+		Sync: v1.SecuritySyncStatus{
+			State:      string(orNever(side.row.State)),
+			Label:      syncStateLabel(orNever(side.row.State)),
+			Error:      side.row.Error,
+			CanSync:    side.target.Available,
+			Reason:     side.target.Reason,
+			Repository: repositoryOr(side.row.Repository, side.target),
+			Provider:   providerOr(side.row.Provider, side.target),
+		},
 	}
-	if res.Posture.ScannedAt != nil {
-		end.ScannedAt = res.Posture.ScannedAt.UTC().Format(time.RFC3339)
+	_ = state
+	_ = message
+	if side.row.ScannedAt != nil {
+		end.ScannedAt = side.row.ScannedAt.UTC().Format(rfc3339)
+	}
+	if side.row.SyncedAt != nil {
+		end.Sync.SyncedAt = side.row.SyncedAt.UTC().Format(rfc3339)
 	}
 	return end
 }
 
+func orNever(state store.PackageSecurityState) store.PackageSecurityState {
+	if state == "" {
+		return store.PackageSecurityNever
+	}
+	return state
+}
+
 func toAPISecurityComparison(
 	productName string, base, other store.PackageRow,
-	scopeA, scopeB security.Scope, res security.CompareResult,
+	sideA, sideB securitySide, c security.Comparison,
 ) v1.SecurityComparisonResponse {
-	c := res.Comparison
 	out := v1.SecurityComparisonResponse{
 		Product:            productName,
-		A:                  toAPIComparisonEnd(base, scopeA, res.A),
-		B:                  toAPIComparisonEnd(other, scopeB, res.B),
+		A:                  toAPIComparisonEnd(base, sideA),
+		B:                  toAPIComparisonEnd(other, sideB),
 		Verdict:            string(c.Verdict),
 		VerdictLabel:       c.Verdict.Label(),
 		Headline:           c.Headline,
@@ -310,8 +359,8 @@ func toAPISecurityComparison(
 		},
 		Changes:     make([]v1.SecurityChange, 0, len(c.Changes)),
 		Artifacts:   make([]v1.SecurityArtifactDelta, 0, len(c.Artifacts)),
-		RetrievedAt: time.Now().UTC().Format(time.RFC3339),
-		Fingerprint: res.A.Fingerprint + "-" + res.B.Fingerprint,
+		RetrievedAt: time.Now().UTC().Format(rfc3339),
+		Fingerprint: sideA.row.Fingerprint + "-" + sideB.row.Fingerprint,
 	}
 	for _, ch := range c.Changes {
 		out.Changes = append(out.Changes, toAPIChange(ch))
@@ -377,10 +426,11 @@ func toAPISecuritySearch(
 		Releases:  len(releaseIDs),
 		// Said out loud on every search, because the alternative sentence -
 		// silence - reads as "this CVE is not in your estate", which is a
-		// dangerous thing to say when what is true is "not in what I have
-		// looked at".
-		Note: "Search covers the releases whose security data this platform has already retrieved. " +
-			"Open a release's security view to include it.",
+		// dangerous thing to say when what is true is "not in what has been
+		// synced". The remedy is named, so a reader who finds nothing knows
+		// what to do rather than concluding they are safe.
+		Note: "Search covers releases whose vulnerabilities have been synced. " +
+			"Run a sync on a release to include it.",
 	}
 	return out
 }

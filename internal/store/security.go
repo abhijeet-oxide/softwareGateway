@@ -751,3 +751,253 @@ func (s *Security) RepositoryByID(ctx context.Context, id int64) (RepositoryIden
 	}
 	return out, nil
 }
+
+// ReportsFor reads the STORED per-artifact reports for a set of artifacts.
+//
+// # Why this reads the index and not the detail blob
+//
+// The index - scans plus findings - is the durable half: statuses, counts, and
+// the identifiers that make a finding findable. It is what a sync writes and
+// what every listing, comparison and search reads, and it outlives the heavy
+// half by design.
+//
+// The detail blob carries the prose: descriptions, references, CVSS vectors. It
+// expires much sooner, because that is the part which would otherwise turn this
+// platform into a second copy of a vulnerability database that re-grades itself
+// continuously. When it is still present it is merged in; when it is not, the
+// findings are still complete enough to list, filter, compare and export -
+// they simply lack the paragraph.
+//
+// A page that showed nothing once the prose expired would be a page that
+// silently emptied itself overnight.
+func (s *Security) ReportsFor(
+	ctx context.Context, scope security.Scope, refs []security.ArtifactRef,
+) ([]security.Report, error) {
+	if len(refs) == 0 {
+		return nil, nil
+	}
+
+	byRef := map[string]*security.Report{}
+	scanIDs := map[int64]string{}
+
+	for _, chunk := range chunkRefs(refs, sqlChunk) {
+		args := []any{scope.Product, scope.Repository, scope.Provider}
+		placeholders := make([]string, 0, len(chunk))
+		for _, ref := range chunk {
+			placeholders = append(placeholders, "?")
+			args = append(args, ref.Ref())
+		}
+
+		query := s.q(`
+			SELECT id, artifact_ref, artifact_key, COALESCE(artifact_tag, ''),
+			       COALESCE(artifact_kind, ''), COALESCE(artifact_repo, ''),
+			       status, COALESCE(message, ''), provider,
+			       total, fixable, critical, high, medium, low, unknown,
+			       fix_critical, fix_high, fix_medium, fix_low, fix_unknown,
+			       scanned_at, retrieved_at
+			  FROM security_scans
+			 WHERE product = ? AND repository = ? AND provider = ?
+			   AND artifact_ref IN (` + strings.Join(placeholders, ",") + `)
+			   AND expires_at > ` + s.dialect.Now())
+
+		rows, err := s.db.QueryContext(ctx, query, args...)
+		if err != nil {
+			return nil, fmt.Errorf("read stored security reports: %w", err)
+		}
+		err = func() error {
+			defer func() { _ = rows.Close() }()
+			for rows.Next() {
+				var (
+					id                                                   int64
+					ref, key, tag, kind, repo, status, message, provider string
+					c                                                    security.Counts
+					scannedAt                                            sql.NullString
+					retrievedAt                                          string
+				)
+				if err := rows.Scan(&id, &ref, &key, &tag, &kind, &repo, &status, &message, &provider,
+					&c.Total, &c.Fixable,
+					&c.BySeverity.Critical, &c.BySeverity.High, &c.BySeverity.Medium,
+					&c.BySeverity.Low, &c.BySeverity.Unknown,
+					&c.FixableBySeverity.Critical, &c.FixableBySeverity.High,
+					&c.FixableBySeverity.Medium, &c.FixableBySeverity.Low,
+					&c.FixableBySeverity.Unknown,
+					&scannedAt, &retrievedAt); err != nil {
+					return fmt.Errorf("scan stored security report: %w", err)
+				}
+				c.NonFixable = c.Total - c.Fixable
+
+				r := &security.Report{
+					Artifact: security.ArtifactRef{
+						Name: key, Tag: tag, Digest: ref, Kind: kind, Repository: repo,
+					},
+					Status:   security.Status(status),
+					Provider: provider,
+					Message:  message,
+					Counts:   c,
+					// Stored, so nothing here cost a scanner request.
+					FromCache: true,
+				}
+				if t := parseNullableSecurityTime(scannedAt); t != nil {
+					r.ScannedAt = t
+				}
+				if t, err := parseSecurityTime(retrievedAt); err == nil {
+					r.RetrievedAt = t
+				}
+				byRef[ref] = r
+				scanIDs[id] = ref
+			}
+			return rows.Err()
+		}()
+		if err != nil {
+			return nil, err
+		}
+	}
+
+	if err := s.attachFindings(ctx, scanIDs, byRef); err != nil {
+		return nil, err
+	}
+	// Prose is an enrichment. Losing it costs the paragraph, not the findings,
+	// so a failure here is deliberately swallowed rather than returned.
+	_ = s.enrichFromDetails(ctx, scope, refs, byRef)
+
+	// Preserve the caller's order, and give an artifact with no stored row a
+	// report that says so rather than omitting it - a release whose artifacts
+	// silently vanished from the list would read as a smaller release.
+	out := make([]security.Report, 0, len(refs))
+	for _, ref := range refs {
+		if r, ok := byRef[ref.Ref()]; ok {
+			// The caller's ref carries the richer identity (media type,
+			// platform, size) that the index does not store.
+			name := r.Artifact.Name
+			r.Artifact = ref
+			if ref.Name == "" {
+				r.Artifact.Name = name
+			}
+			out = append(out, *r)
+			continue
+		}
+		out = append(out, security.Report{
+			Artifact: ref,
+			Status:   security.StatusNotScanned,
+			Provider: scope.Provider,
+			Message:  "This artifact has not been included in a vulnerability sync yet.",
+		})
+	}
+	return out, nil
+}
+
+// attachFindings loads the index rows for a set of scans.
+func (s *Security) attachFindings(
+	ctx context.Context, scanIDs map[int64]string, byRef map[string]*security.Report,
+) error {
+	if len(scanIDs) == 0 {
+		return nil
+	}
+	ids := make([]int64, 0, len(scanIDs))
+	for id := range scanIDs {
+		ids = append(ids, id)
+	}
+	sort.Slice(ids, func(i, j int) bool { return ids[i] < ids[j] })
+
+	for start := 0; start < len(ids); start += sqlChunk {
+		end := start + sqlChunk
+		if end > len(ids) {
+			end = len(ids)
+		}
+		chunk := ids[start:end]
+
+		placeholders := make([]string, 0, len(chunk))
+		args := make([]any, 0, len(chunk))
+		for _, id := range chunk {
+			placeholders = append(placeholders, "?")
+			args = append(args, id)
+		}
+
+		rows, err := s.db.QueryContext(ctx, s.q(`
+			SELECT scan_id, cve, issue_id, severity, fixable,
+			       component_id, component_name, component_version, component_type,
+			       fixed_in, summary
+			  FROM security_findings
+			 WHERE scan_id IN (`+strings.Join(placeholders, ",")+`)`), args...)
+		if err != nil {
+			return fmt.Errorf("read stored findings: %w", err)
+		}
+		err = func() error {
+			defer func() { _ = rows.Close() }()
+			for rows.Next() {
+				var (
+					scanID   int64
+					f        security.Finding
+					severity string
+					fixedIn  string
+				)
+				if err := rows.Scan(&scanID, &f.CVE, &f.ID, &severity, &f.Fixable,
+					&f.Component.ID, &f.Component.Name, &f.Component.Version, &f.Component.Type,
+					&fixedIn, &f.Summary); err != nil {
+					return fmt.Errorf("scan stored finding: %w", err)
+				}
+				f.Severity = security.Severity(severity)
+				if fixedIn != "" {
+					f.FixedIn = []string{fixedIn}
+				}
+				ref, ok := scanIDs[scanID]
+				if !ok {
+					continue
+				}
+				report, ok := byRef[ref]
+				if !ok {
+					continue
+				}
+				f.Provider = report.Provider
+				report.Findings = append(report.Findings, f)
+			}
+			return rows.Err()
+		}()
+		if err != nil {
+			return err
+		}
+	}
+
+	for _, r := range byRef {
+		security.SortFindings(r.Findings)
+	}
+	return nil
+}
+
+// enrichFromDetails merges the prose from the short-lived detail tier, where it
+// is still present.
+func (s *Security) enrichFromDetails(
+	ctx context.Context, scope security.Scope,
+	refs []security.ArtifactRef, byRef map[string]*security.Report,
+) error {
+	details, err := s.LoadDetails(ctx, scope, refs)
+	if err != nil {
+		return err
+	}
+	for ref, full := range details {
+		report, ok := byRef[ref]
+		if !ok {
+			continue
+		}
+		prose := make(map[string]security.Finding, len(full.Findings))
+		for _, f := range full.Findings {
+			prose[f.Key()] = f
+		}
+		for i, f := range report.Findings {
+			rich, ok := prose[f.Key()]
+			if !ok {
+				continue
+			}
+			report.Findings[i].Description = rich.Description
+			report.Findings[i].References = rich.References
+			report.Findings[i].CVSSScore = rich.CVSSScore
+			report.Findings[i].CVSSVector = rich.CVSSVector
+			report.Findings[i].Published = rich.Published
+			report.Findings[i].Policy = rich.Policy
+			if len(rich.FixedIn) > len(report.Findings[i].FixedIn) {
+				report.Findings[i].FixedIn = rich.FixedIn
+			}
+		}
+	}
+	return nil
+}

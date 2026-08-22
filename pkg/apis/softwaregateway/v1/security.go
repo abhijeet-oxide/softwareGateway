@@ -141,14 +141,77 @@ type SecurityReport struct {
 	FromCache   bool   `json:"fromCache,omitempty"`
 }
 
+// SecuritySyncStatus is where a release's vulnerability sync has got to.
+//
+// Travels inside the security response rather than on a channel of its own,
+// because the interface polls one endpoint while a sync runs and wants both the
+// position and whatever is already stored in the same answer. A separate
+// progress endpoint would mean two requests that can disagree.
+type SecuritySyncStatus struct {
+	// State is "" (never synced) | syncing | synced | failed.
+	//
+	// Four values, because "has this been synced" has two answers and needs
+	// four, and three of them look identical to a timestamp.
+	State string `json:"state"`
+	Label string `json:"label"`
+	Error string `json:"error,omitempty"`
+
+	SyncedAt  string `json:"syncedAt,omitempty"`
+	StartedAt string `json:"startedAt,omitempty"`
+
+	// CanSync is whether any configured repository of this product has a
+	// scanner switched on. Reason says which knob turns one on when it does
+	// not - an interface that only greyed the button out would leave the reader
+	// with nowhere to go.
+	CanSync bool   `json:"canSync"`
+	Reason  string `json:"reason,omitempty"`
+
+	// Repository is the CONFIGURED repository whose scanner answers, and
+	// Provider the scanner. Shown because in a normal estate this is a JFrog
+	// TARGET rather than the vendor registry the release came from, and a
+	// reader wondering where the numbers come from deserves to be told.
+	Repository string `json:"repository,omitempty"`
+	Provider   string `json:"provider,omitempty"`
+
+	// Stages and Notes are live progress, present only while this replica is
+	// the one running the sync. Absent is normal - the work may be elsewhere -
+	// and State remains authoritative.
+	Stages []SecurityProgressStage `json:"stages,omitempty"`
+	Notes  []string                `json:"notes,omitempty"`
+}
+
+// SyncSecurityResponse is POST
+// /api/v1/products/{product}/packages/{package}:syncSecurity.
+type SyncSecurityResponse struct {
+	Product string `json:"product"`
+	Package string `json:"package"`
+	// Status is started | already_running. The second is not a failure: the
+	// thing the caller wanted is happening.
+	Status  string `json:"status"`
+	Started bool   `json:"started"`
+	// Artifacts is how many the sync will ask about, so the interface can say
+	// what it has taken on.
+	Artifacts int                `json:"artifacts"`
+	Sync      SecuritySyncStatus `json:"sync"`
+}
+
 // PackageSecurityResponse is
 // GET /api/v1/products/{product}/packages/{package}/security.
+//
+// Served entirely from storage. Nothing behind this route queries a scanner,
+// which is what makes it cheap enough to poll while a sync runs and cheap
+// enough for a listing to carry the same numbers.
 type PackageSecurityResponse struct {
 	Product string `json:"product"`
 	Package string `json:"package"`
 
-	// Provider names the scanner; Enabled says whether it is switched on for
-	// the repository this release was discovered in.
+	// Sync is where the vulnerability sync has got to, and is the field a
+	// client reads first: everything below it is meaningless until a sync has
+	// happened.
+	Sync SecuritySyncStatus `json:"sync"`
+
+	// Provider names the scanner; Enabled says whether one is configured for
+	// the repository this release lands in.
 	Provider string `json:"provider,omitempty"`
 	Enabled  bool   `json:"enabled"`
 	// Repository is the CONFIGURED repository name the scanner answers for.
@@ -171,17 +234,50 @@ type PackageSecurityResponse struct {
 	Reports   []SecurityReport `json:"reports"`
 	Providers []string         `json:"providers,omitempty"`
 
-	ScannedAt   string `json:"scannedAt,omitempty"`
-	RetrievedAt string `json:"retrievedAt,omitempty"`
+	// ScannedAt is when the SCANNER produced the oldest contributing result,
+	// SyncedAt when this platform last asked. Two different facts, and the gap
+	// between them is how stale the answer is allowed to look.
+	ScannedAt string `json:"scannedAt,omitempty"`
+	SyncedAt  string `json:"syncedAt,omitempty"`
 	// Fingerprint is the ETag body. Exposed so a client can tell an unchanged
 	// re-read from a changed one without diffing megabytes.
 	Fingerprint string `json:"fingerprint,omitempty"`
-	// FromCache and Fetched say how the answer was assembled, which is what
-	// makes a refresh button meaningful.
-	FromCache int `json:"fromCache"`
-	Fetched   int `json:"fetched"`
 	// Detail says whether Reports carry findings or counts alone.
 	Detail bool `json:"detail"`
+	// DistinctTotal collapses the same (CVE, component) across artifacts, which
+	// is the number to quote for "how many distinct problems".
+	DistinctTotal int `json:"distinctTotal"`
+}
+
+// PackageSecuritySummary is a release's vulnerability counts, for a listing.
+//
+// # Why this is on the package rather than fetched per row
+//
+// Because a listing renders twenty of them. Fetching each one separately meant
+// twenty scanner-backed reads to draw one column, which is why that column once
+// shipped behind a toggle - the shape of a design apologising for itself. These
+// come from a table a sync wrote, so the column costs one join and is always on.
+//
+// Nil means "this release has never been synced", which is a different fact
+// from zero vulnerabilities and must not render as one.
+type PackageSecuritySummary struct {
+	// State is "" (never synced) | syncing | synced | failed.
+	State string `json:"state"`
+	Label string `json:"label"`
+
+	Counts SecurityCounts `json:"counts"`
+	// DistinctTotal collapses the same (CVE, component) across artifacts.
+	DistinctTotal int `json:"distinctTotal"`
+	// Complete is whether every scannable artifact has a result. False means
+	// the counts cover only part of the release.
+	Complete bool `json:"complete"`
+
+	SyncedAt string `json:"syncedAt,omitempty"`
+	Error    string `json:"error,omitempty"`
+	// CanSync is whether a scanner is configured for this release at all, so a
+	// listing knows whether to offer the action.
+	CanSync bool   `json:"canSync"`
+	Reason  string `json:"reason,omitempty"`
 }
 
 // SecurityChange is one finding's fate between two releases.
@@ -265,6 +361,10 @@ type SecurityComparisonEnd struct {
 	Counts     SecurityCounts   `json:"counts"`
 	Coverage   SecurityCoverage `json:"coverage"`
 	ScannedAt  string           `json:"scannedAt,omitempty"`
+	// Sync is this end's sync state. A comparison against a release nobody
+	// synced is inconclusive, and this is what lets the interface offer the
+	// sync rather than just reporting the verdict.
+	Sync SecuritySyncStatus `json:"sync"`
 }
 
 // SecurityComparisonResponse is POST
@@ -323,9 +423,14 @@ type SecurityCompareRequest struct {
 	// product's repositories.
 	Repository string `json:"repository,omitempty"`
 	// Refresh bypasses the cache on both sides.
+	// Refresh is accepted and ignored.
+	//
+	// It bypassed the cache when a comparison queried the scanner. Both sides
+	// now come from storage, and re-reading them is what a sync is for. Kept on
+	// the wire so an older client's request is still a valid request.
 	Refresh bool `json:"refresh,omitempty"`
-	// ProgressToken is a caller-minted id it can poll at
-	// GET /api/v1/security/progress/{token} while this request is open.
+	// ProgressToken is accepted and ignored, for the same reason: a comparison
+	// over stored data has no position worth reporting.
 	ProgressToken string `json:"progressToken,omitempty"`
 }
 
@@ -398,21 +503,6 @@ type SecurityProgressStage struct {
 	// Total is what is KNOWN so far; zero means not yet known, which is honest
 	// while a tree is still being walked.
 	Total int `json:"total"`
-}
-
-// SecurityProgressResponse is GET /api/v1/security/progress/{token}.
-//
-// The side channel a security retrieval reports through while its own request
-// is open. A 404 is a normal answer: progress lives in the memory of the
-// replica doing the work and is dropped shortly after it finishes.
-type SecurityProgressResponse struct {
-	Stages []SecurityProgressStage `json:"stages"`
-	// Notes are the sentences worth showing that are not a position - "Asking
-	// JFrog Xray about 157 artifacts in 4 requests."
-	Notes     []string `json:"notes,omitempty"`
-	Done      bool     `json:"done"`
-	StartedAt string   `json:"startedAt,omitempty"`
-	UpdatedAt string   `json:"updatedAt,omitempty"`
 }
 
 // Security export formats.

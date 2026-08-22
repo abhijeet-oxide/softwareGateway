@@ -2,6 +2,7 @@ package security
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"sort"
@@ -256,25 +257,11 @@ func (s *Service) provider(ctx context.Context, scope Scope) (Provider, error) {
 	switch {
 	case err == nil:
 		return p, nil
-	case isNoProvider(err):
+	case errors.Is(err, ErrNoProvider):
 		return Disabled{Reason: "This repository has no security scanner configured."}, nil
 	default:
 		return nil, err
 	}
-}
-
-func isNoProvider(err error) bool {
-	for err != nil {
-		if err == ErrNoProvider {
-			return true
-		}
-		u, ok := err.(interface{ Unwrap() error })
-		if !ok {
-			return false
-		}
-		err = u.Unwrap()
-	}
-	return false
 }
 
 // CompareRequest asks for two releases' postures and the delta between them.

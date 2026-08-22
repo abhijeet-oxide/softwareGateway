@@ -93,6 +93,32 @@ It is also a plain synchronous request rather than a long-running operation, des
 | `POST` | `/api/v1/products/{product}/packages/{package}:inspect` | Walk the manifest tree and measure it ([07](07-discovery.md) §13) |
 | `POST` | `/api/v1/products/{product}/packages/{package}:verify` | On-demand verification ([08](08-verification.md) §4) |
 
+#### Security
+
+| Method | Path | Purpose |
+|---|---|---|
+| `GET` | `/api/v1/products/{product}/packages/{package}/security` | This release's posture. `?detail=true` for findings, `?refresh=true` to bypass every cache |
+| `POST` | `/api/v1/products/{product}/packages/{package}:compareSecurity` | How the posture changed against a second release |
+| `GET` | `/api/v1/products/{product}/security/search` | `?kind=cve\|package\|image&q=` |
+| `GET` | `/api/v1/products/{product}/packages/{package}/security/export` | CSV, Excel or JSON |
+| `GET` | `/api/v1/products/{product}/packages/{package}/security/compare/export` | The comparison, same formats |
+| `GET` | `/api/v1/products/{product}/security/search/export` | Search results, same formats |
+| `GET` | `/api/v1/security/progress/{token}` | What a retrieval is doing, while it does it |
+
+Registered only where the dependency exists, per §1's rule: a deployment with no
+scanner answers an honest 404 rather than a route that always fails.
+
+The posture read carries an **ETag over the findings themselves** rather than
+over a timestamp, so a re-scan that produced identical results does not
+invalidate a client's copy, and `Cache-Control: private` because these are one
+repository's findings under one repository's permissions.
+
+Exports are `GET` because a download is a link - a browser cannot follow a
+`POST` to a file. Filters travel in the query string and are applied
+server-side; a client filtering its own copy would export the first page of a
+result into a file that looked complete. See
+[21 - Security Posture](21-security-posture.md) §8.
+
 #### Package references, and the custom-method colon
 
 `{package}` is a tag or a digest. The `repository:tag` form a person types is **not** in the path - a repository path contains slashes, `%2F` is decoded before routing, and percent-encoding it twice works right up until a proxy normalises the path. So the wire form is `/packages/{tag}?repository=orbs/core`, and the CLI does that rewrite.

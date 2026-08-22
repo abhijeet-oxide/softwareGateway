@@ -19,10 +19,26 @@ softwareGateway watches those vendor registries and moves what it finds into you
 | **Replicate** | Move a package from a vendor registry into one or more internal registries |
 | **Promote** | Move a package between internal registries - lab → production |
 | **Verify** | Prove, with cosign/Sigstore, that what landed is what the vendor signed |
+| **Judge** | Say whether a release is safer than the one it replaces, and show the evidence |
 
 A Red Hat Quay destination can also **delegate** the move: instead of our workers pushing into it, Quay can be configured to mirror from an upstream on a schedule, or to act as a proxy cache that fills when a pod pulls. That buys convergence which keeps working while this tool is down, at the cost of byte-level progress and exact timing - so a delegated target reports a *state* rather than a percentage, and the choice is per target. Which mode to pick, and why, is [18 - Quay Replication Strategies](design/18-quay-replication.md).
 
 Most estates do not perform those four verbs one at a time. A release goes vendor → JFrog → Quay, verified at each end, and the sequence is the same every time - so it can be **declared once** as a download and run by anyone, from the CLI or later the UI, with the steps ordered, the verification acting as a gate, and nothing reaching the cluster's registry if what landed in storage did not verify. An auto-download rule adds a version pattern and triggers that same download when a release appears - so nothing happens automatically that a person could not have asked for by hand. That is [20 - Downloads and Auto-Download](design/20-download-rules.md).
+
+"Replicate it" is no longer the whole job. A release manager holding a new
+vendor drop has one question before any of the four verbs above: **is this
+better or worse than what we are running?** Where a JFrog repository has Xray
+switched on, the platform answers it in a sentence - *"Release B is better than
+Release A. It resolves 3 high and 5 medium vulnerabilities and introduces 1
+low"* - with every finding, package, image and CVE behind it for the people
+whose job that is, and an export for the people who need it in a spreadsheet.
+
+The distinction it works hardest to preserve is that **"scanned and clean" and
+"nobody looked" are both an empty list**, and a release manager who reads the
+second as the first ships an unscanned image believing it is clean. Every
+number the platform shows travels with the coverage that produced it, and a
+comparison over incomplete data says *inconclusive* rather than guessing. That
+is [21 - Security Posture](design/21-security-posture.md).
 
 **The concrete outcome:** a 45 GB vendor release is discovered within 15 minutes of publication, replicated into your lab registry in about 11 minutes - of which roughly a quarter never crosses the network because you already had those layers - verified against the vendor's signing identity, and recorded in an audit trail that can answer "what did we ship in March" a year later.
 
@@ -34,9 +50,10 @@ Most estates do not perform those four verbs one at a time. A release goes vendo
 - resumption - an interrupted 60 GB copy starts over;
 - deduplication - the same base layer moves again for every product that uses it;
 - an audit trail, or per-package progress, or a way to pause and reprioritize;
-- throughput beyond what a single process can push.
+- throughput beyond what a single process can push;
+- an answer to "is this release safer than the one it replaces".
 
-Those five gaps are the reason this exists.
+Those six gaps are the reason this exists.
 
 ---
 

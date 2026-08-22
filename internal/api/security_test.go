@@ -110,12 +110,10 @@ func apiFinding(cve string, sev security.Severity, pkg string, fixable bool) sec
 
 func newSecurityHarness(t *testing.T, analyzer *fakeAnalyzer) *apiHarness {
 	t.Helper()
-	var h *apiHarness
-	h = newAPIHarnessWith(t, func(d *Deps) {
+	return newAPIHarnessWith(t, func(d *Deps) {
 		d.Security = analyzer
 		d.SecurityIndex = store.NewSecurity(d.Store)
 	})
-	return h
 }
 
 func TestPackageSecurityReportsPostureAndCoverage(t *testing.T) {

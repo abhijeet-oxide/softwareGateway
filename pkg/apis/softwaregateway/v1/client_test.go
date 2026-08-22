@@ -128,3 +128,52 @@ func TestScopedReferenceMovesTheRepositoryToTheQuery(t *testing.T) {
 		}
 	}
 }
+
+// The security calls must reach the paths the router registers, and must not
+// emit two `?` when a reference already carried a repository.
+func TestSecurityClientURLsReachTheHandler(t *testing.T) {
+	var got []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		got = append(got, r.Method+" "+r.URL.Path+"?"+r.URL.RawQuery)
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{}`))
+	}))
+	defer srv.Close()
+
+	c := NewClient(srv.URL)
+	ctx := t.Context()
+
+	if _, err := c.PackageSecurity(ctx, "cfx", "orbs/core:v1",
+		PackageSecurityOptions{Detail: true, ProgressToken: "tok"}); err != nil {
+		t.Fatalf("PackageSecurity: %v", err)
+	}
+	if _, err := c.CompareSecurity(ctx, "cfx", "25.7.2100",
+		SecurityCompareRequest{Against: "25.7.2131"}); err != nil {
+		t.Fatalf("CompareSecurity: %v", err)
+	}
+	if _, err := c.SearchSecurity(ctx, "cfx", "CVE-2024-3094",
+		SecuritySearchOptions{Kind: "cve", Exact: true}); err != nil {
+		t.Fatalf("SearchSecurity: %v", err)
+	}
+	if _, err := c.SecurityProgress(ctx, "tok"); err != nil {
+		t.Fatalf("SecurityProgress: %v", err)
+	}
+
+	want := []string{
+		// The repository travels as a query parameter because a slash cannot
+		// survive a path segment - and the added parameters join it with `&`.
+		"GET /api/v1/products/cfx/packages/v1/security?repository=orbs%2Fcore&detail=true&progressToken=tok",
+		// The colon before the verb is structural and must not be escaped.
+		"POST /api/v1/products/cfx/packages/25.7.2100:compareSecurity?",
+		"GET /api/v1/products/cfx/security/search?exact=true&kind=cve&q=CVE-2024-3094",
+		"GET /api/v1/security/progress/tok?",
+	}
+	if len(got) != len(want) {
+		t.Fatalf("made %d requests, want %d: %v", len(got), len(want), got)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Errorf("request %d:\n got %s\nwant %s", i, got[i], want[i])
+		}
+	}
+}

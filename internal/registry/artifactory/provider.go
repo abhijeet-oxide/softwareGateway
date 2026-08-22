@@ -2,6 +2,7 @@ package artifactory
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sort"
 	"strings"
@@ -215,7 +216,7 @@ func (p *XrayProvider) reportFor(
 // describeXrayFailure says what went wrong in words with an action in them.
 func describeXrayFailure(err error) string {
 	var re *registry.Error
-	if ok := asRegistryError(err, &re); ok {
+	if errors.As(err, &re) {
 		switch registry.ClassOf(re.Err) {
 		case registry.ClassAuth:
 			return "JFrog Xray refused the repository credential. " + detailOr(re, "Check that the credential has Xray read permission.")
@@ -234,22 +235,6 @@ func detailOr(e *registry.Error, fallback string) string {
 		return e.Detail
 	}
 	return fallback
-}
-
-// asRegistryError is errors.As without the import cycle of a helper package.
-func asRegistryError(err error, target **registry.Error) bool {
-	for err != nil {
-		if e, ok := err.(*registry.Error); ok {
-			*target = e
-			return true
-		}
-		u, ok := err.(interface{ Unwrap() error })
-		if !ok {
-			return false
-		}
-		err = u.Unwrap()
-	}
-	return false
 }
 
 // batchIndexes splits indexes into batches of at most size, deterministically.

@@ -722,3 +722,32 @@ func SortHits(hits []SearchHit) {
 }
 
 var _ security.Cache = (*Security)(nil)
+
+// RepositoryIdentity is a configured repository as the catalog recorded it.
+type RepositoryIdentity struct {
+	Name     string
+	Role     string
+	Registry string
+	Path     string
+	Type     string
+}
+
+// RepositoryByID resolves the CONFIGURED identity of a repository row.
+//
+// The security path needs it and nothing else does, which is why it lives
+// beside the security store rather than on Packages: a release knows which
+// repository row it was discovered in, and a scanner is configured against a
+// repository NAME. Without this, the two are joined by guessing - matching a
+// registry host and path against the product document - and a product with two
+// sources on one host would resolve to whichever the guess happened to find.
+func (s *Security) RepositoryByID(ctx context.Context, id int64) (RepositoryIdentity, error) {
+	var out RepositoryIdentity
+	err := s.db.QueryRowContext(ctx, s.q(
+		`SELECT name, role, registry_host, repository_path, registry_type
+		   FROM repositories WHERE id = ?`), id).
+		Scan(&out.Name, &out.Role, &out.Registry, &out.Path, &out.Type)
+	if err != nil {
+		return RepositoryIdentity{}, fmt.Errorf("resolve repository %d: %w", id, err)
+	}
+	return out, nil
+}

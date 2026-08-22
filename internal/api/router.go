@@ -200,6 +200,18 @@ type Deps struct {
 	// relies on its own annotations.
 	Vendors   *vendors.Registry
 	Component string
+
+	// Security answers what a scanner says about a release. Optional on the
+	// same terms as Comparer: it reaches a scanner through the configured
+	// client factory and the secrets behind it, which only a composition root
+	// holds. Without it the security routes are absent and a caller gets an
+	// honest 404 rather than a route that always fails.
+	Security SecurityAnalyzer
+	// SecurityIndex is the searchable record of what has already been
+	// retrieved. Separate from Security because it is readable on a
+	// Coordinator that cannot currently reach a scanner at all, and that is
+	// exactly when somebody is searching for a CVE.
+	SecurityIndex SecurityIndex
 }
 
 // Server wires the router.
@@ -209,6 +221,11 @@ type Server struct {
 	// comparisons is progress for comparisons in flight - see
 	// compareprogress.go for why it lives in memory.
 	comparisons *compareTracker
+	// securityProgress is the same idea for security retrievals, and a
+	// separate tracker rather than a shared one because the two report
+	// different shapes: a comparison reports two sides walking manifest trees,
+	// a retrieval reports phases against a scanner.
+	securityProgress *securityTracker
 }
 
 // NewServer builds the HTTP surface.
@@ -224,7 +241,11 @@ func NewServer(deps Deps) *Server {
 	if deps.Logger == nil {
 		deps.Logger = slog.Default()
 	}
-	s := &Server{deps: deps, comparisons: newCompareTracker()}
+	s := &Server{
+		deps:             deps,
+		comparisons:      newCompareTracker(),
+		securityProgress: newSecurityTracker(),
+	}
 	s.router = s.routes()
 	return s
 }
@@ -355,6 +376,28 @@ func (s *Server) routes() chi.Router {
 			// of the listing filter them out.
 			r.Get("/products/{product}/unavailable", s.handleListUnavailable)
 
+			// Security. Its own sub-resource rather than fields on the package,
+			// because it is answered by a different system with a different
+			// failure mode: a release whose scanner is unreachable must still
+			// render as a release, and folding these numbers into the package
+			// read would make every package read depend on Xray being up.
+			if s.deps.Security != nil {
+				r.Get("/products/{product}/packages/{package}/security",
+					s.handlePackageSecurity)
+				r.Get("/products/{product}/packages/{package}/security/export",
+					s.handleExportPackageSecurity)
+				r.Get("/products/{product}/packages/{package}/security/compare/export",
+					s.handleExportSecurityComparison)
+			}
+			// Search reads what has already been retrieved, so it is registered
+			// on the INDEX rather than on the analyzer: it answers on a
+			// Coordinator that cannot currently reach a scanner at all, which
+			// is exactly when somebody is searching for a CVE.
+			if s.deps.SecurityIndex != nil {
+				r.Get("/products/{product}/security/search", s.handleSecuritySearch)
+				r.Get("/products/{product}/security/search/export", s.handleExportSecuritySearch)
+			}
+
 			// AIP-136 custom method. Registered whenever discovery is wired, so a
 			// follower can answer with the reason it is not scanning rather than
 			// with a 404 that reads like a missing feature.
@@ -411,6 +454,11 @@ func (s *Server) routes() chi.Router {
 			// path that repeated the product would be a second place for the
 			// two to disagree.
 			r.Get("/comparisons/{comparison}", s.handleCompareProgress)
+
+			// The security side channel, on the same terms as the comparison
+			// one: read-only, unauthenticated by the write gate, and a 404 is a
+			// normal answer because progress lives in one replica's memory.
+			r.Get("/security/progress/{token}", s.handleSecurityProgress)
 
 			r.Get("/transfers", s.handleListTransfers)
 			r.Get("/transfers/{transfer}", s.handleGetTransfer)

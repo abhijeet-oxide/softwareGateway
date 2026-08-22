@@ -138,9 +138,60 @@ func securityState(row store.PackageSecurityRow, target securityTarget) (state, 
 	case row.Coverage.Complete():
 		return "ok", ""
 	default:
-		missing := row.Coverage.NotScanned + row.Coverage.Unavailable + row.Coverage.Disabled
-		return "partial", plural(missing, "artifact", "artifacts") +
-			" in this release have no scan result, so these numbers cover only what was scanned."
+		return "partial", coverageSentence(row.Coverage)
+	}
+}
+
+// coverageSentence names each REASON an artifact has no result, separately.
+//
+// # Why they cannot be one number
+//
+// They were, and the page contradicted itself: a banner said "209 artifacts
+// have no scan result", the panel under it said "1 artifact has not been
+// scanned yet", and the scan-status card said "1 not scanned" while quietly
+// omitting the 209. All three were reading the same coverage and summing
+// different parts of it.
+//
+// They are different facts with different fixes. An artifact the scanner has
+// never indexed will be there after the next sync too - somebody has to index
+// it. An artifact the scanner would not ANSWER for is a scanner or a network
+// problem, and syncing again may well fix it. Rolling them into one number
+// tells a reader neither.
+func coverageSentence(c security.Coverage) string {
+	var parts []string
+	if c.Unavailable > 0 {
+		parts = append(parts, plural(c.Unavailable, "artifact", "artifacts")+" the scanner would not answer for")
+	}
+	if c.NotScanned > 0 {
+		parts = append(parts, plural(c.NotScanned, "artifact", "artifacts")+" the scanner has not indexed")
+	}
+	if c.Disabled > 0 {
+		parts = append(parts, plural(c.Disabled, "artifact", "artifacts")+" in a repository with no scanner")
+	}
+	if len(parts) == 0 {
+		return "Some artifacts have no scan result, so these numbers cover only what was scanned."
+	}
+
+	sentence := "This release has " + joinClauses(parts) +
+		", so the numbers below cover only the " +
+		plural(c.Scanned, "artifact", "artifacts") + " that were scanned."
+	if c.Unavailable > 0 {
+		sentence += " Syncing again may reach the ones that failed."
+	}
+	return sentence
+}
+
+// joinClauses reads a list the way a person says it.
+func joinClauses(parts []string) string {
+	switch len(parts) {
+	case 0:
+		return ""
+	case 1:
+		return parts[0]
+	case 2:
+		return parts[0] + " and " + parts[1]
+	default:
+		return strings.Join(parts[:len(parts)-1], ", ") + " and " + parts[len(parts)-1]
 	}
 }
 

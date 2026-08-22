@@ -1,3 +1,4 @@
+import { useEffect, useState } from 'react'
 import type { ReactNode } from 'react'
 import { Alert, Button, Dropdown, Progress, Space, Tag, Tooltip, Typography } from 'antd'
 import { formatRelative } from '../domain/format'
@@ -476,76 +477,142 @@ export function ComparisonTiles({ resolved, introduced, moreSevere, lessSevere, 
 // ---------------------------------------------------------------------------
 
 /**
- * What the sync is doing, in words, while it does it.
+ * What the sync is doing, in words, with numbers.
  *
- * # Why not a spinner
+ * # What was wrong with the first one
  *
- * A sync is a scanner query per batch across a few hundred artifacts. A spinner
- * says the same thing for those thirty seconds as it says for a job that has
- * silently stopped, and "is this working?" is the only question anybody has
- * while waiting. A user who cannot tell reloads the page.
+ * It said "Working out what to scan", then "Fetching from JFrog Xray", then
+ * "Fetching from JFrog Xray" again - the headline repeating the row beneath it -
+ * and a bar with no denominator. Three lines of chrome that told a watcher
+ * nothing they could not have guessed from the fact that they had pressed a
+ * button.
  *
- * # Why a stage with no total shows an indeterminate bar
- *
- * Because the denominator is genuinely unknown while a tree is being walked,
- * and inventing one is how a bar reaches 90% and stops.
- *
- * # Why an empty stage list is not an error
- *
- * The sync may be running on another replica, where this one holds no live
- * position. The stored state still says "syncing", and saying so without a
- * percentage is honest; claiming 0% would not be.
+ * What somebody staring at a two-minute sync actually wants is: how far, how
+ * long, how much has already gone wrong, and against which scanner. All four
+ * are known, and all four are here.
  */
 export function SecurityProgressPanel({ sync }: { sync: SecuritySyncStatus }) {
   const stages = sync.stages ?? []
   const notes = sync.notes ?? []
-  const current = stages.at(-1)
+
+  const fetching = stages.find((st) => st.name === 'fetching')
+  const failing = stages.find((st) => st.name === 'failing')
+  const cached = stages.find((st) => st.name === 'cached')
+  const resolving = stages.find((st) => st.name === 'resolving')
+
+  // The one bar worth drawing: artifacts answered for, out of artifacts asked
+  // about. Everything else is a counter, because a second bar next to a first
+  // one invites the reader to compare two things that are not comparable.
+  const total = fetching?.total ?? resolving?.total ?? 0
+  const done = fetching?.done ?? 0
+  const percent = total > 0 ? Math.round((done / total) * 100) : 0
+
+  const elapsed = useElapsed(sync.startedAt, sync.state === 'syncing')
 
   return (
-    <div style={{ padding: '18px 4px' }}>
-      <Space direction="vertical" size={14} style={{ width: '100%' }}>
+    <Space direction="vertical" size={12} style={{ width: '100%', padding: '4px 0' }}>
+      <Space style={{ width: '100%', justifyContent: 'space-between' }} align="start">
         <Space size={8}>
           <SyncOutlined spin style={{ color: palette.primary }} />
-          <Typography.Text strong>{current ? current.label : sync.label}</Typography.Text>
+          <Typography.Text strong>
+            {total > 0
+              ? `Asking ${scannerName(sync)} about ${total.toLocaleString()} artifacts`
+              : `Reading this release's artifacts`}
+          </Typography.Text>
         </Space>
-
-        {stages.length === 0 && (
-          <>
-            <Progress percent={100} status="active" showInfo={false} size="small" />
-            <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-              Asking {sync.provider === 'jfrog-xray' ? 'JFrog Xray' : (sync.provider || 'the scanner')} about this
-              release{sync.repository ? ` in ${sync.repository}` : ''}. This can take a few minutes.
-            </Typography.Text>
-          </>
-        )}
-
-        {stages.map((stage) => (
-          <div key={stage.name}>
-            <Space style={{ width: '100%', justifyContent: 'space-between' }}>
-              <Typography.Text type="secondary">{stage.label}</Typography.Text>
-              <Typography.Text type="secondary" style={{ fontFamily: mono, fontSize: 12 }}>
-                {stage.total > 0 ? `${stage.done} / ${stage.total}` : `${stage.done}`}
-              </Typography.Text>
-            </Space>
-            <Progress
-              percent={stage.total > 0 ? Math.round((stage.done / stage.total) * 100) : 100}
-              status={stage.total > 0 && stage.done >= stage.total ? 'success' : 'active'}
-              showInfo={false}
-              size="small"
-            />
-          </div>
-        ))}
-
-        {notes.length > 0 && (
-          <Space direction="vertical" size={2}>
-            {notes.slice(-3).map((n, i) => (
-              <Typography.Text key={`${n}-${i}`} type="secondary" style={{ fontSize: 12 }}>{n}</Typography.Text>
-            ))}
-          </Space>
+        {elapsed && (
+          <Typography.Text type="secondary" style={{ fontFamily: mono, fontSize: 12 }}>{elapsed}</Typography.Text>
         )}
       </Space>
-    </div>
+
+      <div>
+        <Progress
+          percent={percent}
+          status="active"
+          showInfo={false}
+          strokeColor={palette.primary}
+        />
+        <Space size={16} wrap style={{ marginTop: 4 }}>
+          <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+            {total > 0
+              ? `${done.toLocaleString()} of ${total.toLocaleString()} artifacts`
+              : 'working out what to ask about'}
+          </Typography.Text>
+          {cached && cached.done > 0 && (
+            <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+              {cached.done.toLocaleString()} already stored
+            </Typography.Text>
+          )}
+          {/*
+            Failures shown AS THEY HAPPEN, not at the end. A sync against a
+            scanner that is timing out looks identical to a healthy one for two
+            minutes, and then delivers the bad news all at once - by which time
+            the person who could have cancelled it has walked away.
+          */}
+          {failing && failing.done > 0 && (
+            <Typography.Text style={{ fontSize: 12, color: semantic.error }}>
+              {failing.done.toLocaleString()} failed so far
+            </Typography.Text>
+          )}
+          {sync.repository && (
+            <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+              {scannerName(sync)} · {sync.repository}
+            </Typography.Text>
+          )}
+        </Space>
+      </div>
+
+      {notes.length > 0 && (
+        <Space direction="vertical" size={2} style={{ width: '100%' }}>
+          {notes.slice(-2).map((n, i) => (
+            <Typography.Text key={`${n}-${i}`} type="secondary" style={{ fontSize: 12 }}>{n}</Typography.Text>
+          ))}
+        </Space>
+      )}
+
+      {stages.length === 0 && (
+        <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+          {/*
+            No live position means the sync is running on another replica. Its
+            state is still authoritative, so the honest thing is to say where it
+            is happening rather than to draw a bar at nothing.
+          */}
+          This sync is running on another Coordinator, so its position is not
+          visible here. The result will appear when it finishes.
+        </Typography.Text>
+      )}
+    </Space>
   )
+}
+
+function scannerName(sync: SecuritySyncStatus): string {
+  if (sync.provider === 'jfrog-xray') return 'JFrog Xray'
+  return sync.provider || 'the scanner'
+}
+
+/**
+ * How long the sync has been running, ticking.
+ *
+ * A duration is the cheapest signal that something is still alive, and the only
+ * one that distinguishes "slow" from "stopped" when the position has not moved
+ * for thirty seconds.
+ */
+function useElapsed(startedAt: string | undefined, running: boolean): string | undefined {
+  const [now, setNow] = useState(() => Date.now())
+
+  useEffect(() => {
+    if (!running || !startedAt) return
+    const id = setInterval(() => setNow(Date.now()), 1000)
+    return () => clearInterval(id)
+  }, [running, startedAt])
+
+  if (!startedAt) return undefined
+  const started = Date.parse(startedAt)
+  if (Number.isNaN(started)) return undefined
+
+  const seconds = Math.max(0, Math.round((now - started) / 1000))
+  if (seconds < 60) return `${seconds}s`
+  return `${Math.floor(seconds / 60)}m ${String(seconds % 60).padStart(2, '0')}s`
 }
 
 /**

@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from 'react'
 import type { ReactNode } from 'react'
 import type { UseMutationResult } from '@tanstack/react-query'
 import {
-  Alert, App, Button, Card, Col, Descriptions, Empty, Modal, Row, Space, Table, Tabs, Tooltip,
+  Alert, App, Button, Card, Col, Descriptions, Empty, Modal, Row, Space, Table, Tabs, Tag, Tooltip,
   Tree, Typography,
 } from 'antd'
 import { FolderOutlined } from '@ant-design/icons'
@@ -679,6 +679,60 @@ function DownloadsTab({ product, transfers }: { product: string; transfers: Pack
   )
 }
 
+/**
+ * One fact, as a tag.
+ *
+ * Label and value in one chip rather than a definition list, because these sit
+ * in a row under a title where a two-column layout has nowhere to go - and
+ * because a bare number beside a badge reads as another badge.
+ *
+ * A missing value renders nothing at all. A chip saying "Size —" is a chip
+ * whose only content is that something is absent, and the reader learns that
+ * faster from its absence.
+ */
+function FactTag({ label, value, mono: isMono, onClick }: {
+  label: string
+  value?: string
+  mono?: boolean
+  onClick?: () => void
+}) {
+  if (!value) return null
+  return (
+    <Tag
+      style={{
+        margin: 0, background: '#FFFFFF', cursor: onClick ? 'pointer' : undefined,
+        paddingInline: 8,
+      }}
+      onClick={onClick}
+    >
+      <Typography.Text type="secondary" style={{ fontSize: 11 }}>{label} </Typography.Text>
+      <Typography.Text style={{ fontSize: 12, fontFamily: isMono ? mono : undefined }}>{value}</Typography.Text>
+    </Tag>
+  )
+}
+
+/**
+ * The vulnerability count for the header, or the reason there is not one.
+ *
+ * Never a bare zero. "0" beside a release nobody has scanned is the single
+ * misreading this whole feature exists to prevent, and the header is the most
+ * quoted line on the page.
+ */
+function vulnerabilityFact(p: Package): string | undefined {
+  const s = p.security
+  if (!s || !s.canSync) return undefined
+  switch (s.state) {
+    case 'syncing':
+      return 'syncing…'
+    case '':
+      return 'not synced'
+    case 'failed':
+      return s.syncedAt ? `${s.counts.total.toLocaleString()} (sync failed)` : 'sync failed'
+    default:
+      return s.scanned === 0 ? 'no results' : s.counts.total.toLocaleString()
+  }
+}
+
 export default function PackageDetail() {
   const { product: productName, reference } = useParams()
   const [params, setParams] = useSearchParams()
@@ -698,7 +752,13 @@ export default function PackageDetail() {
   const runDownload = useRunDownload(productName!)
 
   // Which tab is open, in the URL so a link to a release's security is a link.
-  const tab = params.get('tab') ?? 'overview'
+  const tab = params.get('tab') ?? 'details'
+  const switchTab = (key: string) => {
+    const next = new URLSearchParams(params)
+    if (key === 'details') next.delete('tab')
+    else next.set('tab', key)
+    setParams(next, { replace: true })
+  }
 
   const mayOperate = useCan('operate', { product: productName })
   const { who } = useIdentity()
@@ -788,15 +848,6 @@ export default function PackageDetail() {
         */
         title={p ? `${packageName(p)}:${version(p)}` : 'Loading…'}
         description={prod?.displayName || productName}
-        meta={
-          p && (
-            <Space>
-              <StatusBadge status={status!} reason={failureReason(p)} />
-              <AnalysisTag pkg={p} />
-              <VerificationBadge state={verification(p)} />
-            </Space>
-          )
-        }
         extra={
           <Space>
             <Link to={`/packages/compare?product=${encodeURIComponent(productName!)}&from=${encodeURIComponent(p?.tag ?? '')}`}>
@@ -831,15 +882,50 @@ export default function PackageDetail() {
       <Row gutter={[16, 16]}>
         <Col span={24}>
           {/*
-            Two dates on one line, in a strip rather than a card: it is a
-            caption for the header above it, not a section of the page.
+            WHAT THIS RELEASE IS, in one strip below its title.
+
+            These were three separate things: a row of badges wedged in beside
+            the Download button, a tab called Overview holding six labelled
+            values, and a card carrying two dates. The badges fought the buttons
+            for the same corner, the tab put a definition list between a reader
+            and what the release CONTAINS, and the card was one line of text
+            with a heading's worth of chrome around it.
+
+            One strip, read left to right: the state of the release, the facts
+            somebody came for, and when it happened. The rest of the values keep
+            their card under Details, where a reader who wants the digest can
+            find it.
           */}
           <Card size="small" styles={{ body: { padding: '10px 16px' } }}>
-            <ReleaseTimeline
-              publishedAt={p?.publishedAt || p?.discoveredAt}
-              downloadedAt={p ? downloadedAt(p) : undefined}
-              downloading={status === 'DOWNLOADING'}
-            />
+            <div
+              style={{
+                display: 'flex', flexWrap: 'wrap', gap: '8px 16px',
+                alignItems: 'center', justifyContent: 'space-between',
+              }}
+            >
+              <Space size={[8, 6]} wrap>
+                {p && (
+                  <>
+                    <StatusBadge status={status!} reason={failureReason(p)} />
+                    <AnalysisTag pkg={p} />
+                    <VerificationBadge state={verification(p)} />
+                    <FactTag label="Version" value={version(p)} mono />
+                    <FactTag label="Size" value={formatBytes(p.totalBytes) ?? undefined} />
+                    <FactTag label="Artifacts" value={formatCount(p.artifactCount) ?? undefined} />
+                    <FactTag
+                      label="Vulnerabilities"
+                      value={vulnerabilityFact(p)}
+                      onClick={() => switchTab('security')}
+                    />
+                  </>
+                )}
+              </Space>
+              <ReleaseTimeline
+                publishedAt={p?.publishedAt || p?.discoveredAt}
+                downloadedAt={p ? downloadedAt(p) : undefined}
+                downloading={status === 'DOWNLOADING'}
+              />
+            </div>
           </Card>
         </Col>
 
@@ -858,16 +944,11 @@ export default function PackageDetail() {
           */}
           <Tabs
             activeKey={tab}
-            onChange={(key) => {
-              const next = new URLSearchParams(params)
-              if (key === 'overview') next.delete('tab')
-              else next.set('tab', key)
-              setParams(next, { replace: true })
-            }}
+            onChange={switchTab}
             items={[
               {
-                key: 'overview',
-                label: 'Overview',
+                key: 'details',
+                label: 'Details',
                 children: (
                   <Space direction="vertical" size={16} style={{ width: '100%' }}>
         <Card title="Release" loading={pkg.isLoading}>
@@ -936,13 +1017,7 @@ export default function PackageDetail() {
                       disabled={!mayOperate || !p}
                     />
                   </Card>
-                  </Space>
-                ),
-              },
-              {
-                key: 'components',
-                label: `Components${p?.artifactCount ? ` (${p.artifactCount})` : ''}`,
-                children: (
+
           <Card
                       title="Contents"
                       extra={
@@ -1078,6 +1153,7 @@ export default function PackageDetail() {
                         }))}
                       />
                     </Card>
+                  </Space>
                 ),
               },
               {

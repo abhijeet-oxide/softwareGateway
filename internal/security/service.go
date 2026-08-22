@@ -154,7 +154,10 @@ func (s *Service) Posture(ctx context.Context, req Request) (Result, error) {
 		return res, nil
 	}
 
-	ReportStage(req.Progress, StageResolving, 0, len(req.Artifacts))
+	// The denominator, before anything has been asked. Without it the bar has
+	// no total until the first batch lands, which on a slow scanner is the
+	// first thirty seconds - exactly the window somebody is watching it in.
+	ReportStage(req.Progress, StageResolving, len(req.Artifacts), len(req.Artifacts))
 
 	provider, err := s.provider(ctx, req.Scope)
 	if err != nil {
@@ -208,7 +211,6 @@ func (s *Service) Posture(ctx context.Context, req Request) (Result, error) {
 
 	if len(reports) > 0 {
 		ReportStage(req.Progress, StageCached, len(reports), len(refs))
-		ReportNote(req.Progress, fmt.Sprintf("%d of %d artifacts answered from the platform cache.", len(reports), len(refs)))
 	}
 
 	if len(missing) > 0 {

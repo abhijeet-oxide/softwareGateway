@@ -1,6 +1,6 @@
 import { useMemo, useState } from 'react'
 import {
-  Alert, App, Button, Card, Checkbox, Col, Input, Progress, Row, Segmented, Space, Table,
+  App, Button, Card, Col, Input, Progress, Row, Segmented, Select, Space, Table,
   Tooltip, Typography,
 } from 'antd'
 import { usePackageSecurity, useSyncPackageSecurity, packageSecurityExportUrl } from '../api/queries'
@@ -77,15 +77,13 @@ export function SecurityTab({ product, reference, repository }: {
         style={{ width: '100%', justifyContent: 'space-between', alignItems: 'center' }}
       >
         <SyncedAgo sync={data.sync} />
-        <Space size={8}>
-          <SecurityExportMenu
-            disabled={data.sync.state !== 'synced'}
-            urlFor={(format, view) => packageSecurityExportUrl(product, reference, {
-              format, view, repository,
-            })}
-          />
-          <SyncButton sync={data.sync} onSync={startSync} pending={sync.isPending} />
-        </Space>
+        {/*
+          Only the sync here. The export lives with the filters below, because
+          an export respects them - two export buttons on one screen, one of
+          which quietly ignores the filter the reader just set, is a file that
+          looks complete and answers a different question.
+        */}
+        <SyncButton sync={data.sync} onSync={startSync} pending={sync.isPending} />
       </Space>
 
       {data.sync.state === 'syncing'
@@ -215,9 +213,20 @@ function SummaryCards({ data }: { data: PackageSecurityResponse }) {
               <Typography.Text type="secondary" style={{ fontSize: 12 }}>
                 of {coverage.scannable.toLocaleString()} scanned
               </Typography.Text>
+              {/*
+                EVERY bucket, named. This card once said "1 not scanned" while
+                omitting 209 the scanner had refused, because the two were
+                summed into one number somewhere and only one of them was
+                shown. They have different fixes and they get different lines.
+              */}
+              {coverage.unavailable > 0 && (
+                <Typography.Text style={{ fontSize: 12, color: semantic.error }}>
+                  {coverage.unavailable.toLocaleString()} failed
+                </Typography.Text>
+              )}
               {coverage.notScanned > 0 && (
-                <Typography.Text type="secondary" style={{ fontSize: 12, color: semantic.warning }}>
-                  {coverage.notScanned} not scanned
+                <Typography.Text style={{ fontSize: 12, color: semantic.warning }}>
+                  {coverage.notScanned.toLocaleString()} not indexed
                 </Typography.Text>
               )}
             </Space>
@@ -262,6 +271,31 @@ function SummaryCards({ data }: { data: PackageSecurityResponse }) {
   )
 }
 
+/**
+ * The kinds a release is filtered by.
+ *
+ * Three, not the seven media types underneath: a reader looking for "the Helm
+ * charts" does not care that one of them is an OCI artifact with a config
+ * media type. Anything that is not clearly an image or a chart is a file.
+ */
+type ArtifactKind = 'all' | 'image' | 'chart' | 'file'
+
+const KIND_ORDER: Exclude<ArtifactKind, 'all'>[] = ['image', 'chart', 'file']
+
+const KIND_LABEL: Record<Exclude<ArtifactKind, 'all'>, string> = {
+  image: 'Images',
+  chart: 'Charts',
+  file: 'Files',
+}
+
+function kindOf(kind?: string): ArtifactKind {
+  const k = (kind ?? '').toLowerCase()
+  if (k.includes('chart') || k.includes('helm')) return 'chart'
+  if (k.includes('image') || k === 'index') return 'image'
+  if (!k) return 'all'
+  return 'file'
+}
+
 /** One row of the flattened findings table. */
 type FlatFinding = SecurityFinding & { artifactName: string; artifactTag?: string; artifactDigest?: string }
 
@@ -282,11 +316,33 @@ function FindingsSection({ data, product, reference, repository }: {
   const [tab, setTab] = useState<'vulnerabilities' | 'artifacts'>('vulnerabilities')
   const [severities, setSeverities] = useState<Severity[]>([])
   const [fixability, setFixability] = useState<'all' | 'fixable' | 'non-fixable'>('all')
+  const [kind, setKind] = useState<ArtifactKind>('all')
   const [q, setQ] = useState('')
+
+  /*
+   * The artifact kinds this release actually holds.
+   *
+   * Offered rather than hardcoded: a release of images alone should not show a
+   * Charts filter that can only ever return nothing, and a filter that is
+   * always empty teaches a reader to distrust the ones that are not.
+   */
+  const kinds = useMemo(() => {
+    const present = new Set<ArtifactKind>()
+    for (const report of data.reports) {
+      const k = kindOf(report.artifact.kind)
+      if (k !== 'all') present.add(k)
+    }
+    return KIND_ORDER.filter((k) => present.has(k))
+  }, [data.reports])
+
+  const reports = useMemo(
+    () => (kind === 'all' ? data.reports : data.reports.filter((r) => kindOf(r.artifact.kind) === kind)),
+    [data.reports, kind],
+  )
 
   const findings = useMemo<FlatFinding[]>(() => {
     const out: FlatFinding[] = []
-    for (const report of data.reports) {
+    for (const report of reports) {
       for (const f of report.findings ?? []) {
         out.push({
           ...f,
@@ -297,7 +353,7 @@ function FindingsSection({ data, product, reference, repository }: {
       }
     }
     return out
-  }, [data.reports])
+  }, [reports])
 
   const filtered = useMemo(() => findings.filter((f) => {
     if (severities.length > 0 && !severities.includes(f.severity)) return false
@@ -310,7 +366,6 @@ function FindingsSection({ data, product, reference, repository }: {
     return true
   }), [findings, severities, fixability, q])
 
-  const unscanned = data.reports.filter((r) => r.status === 'not_scanned').length
   const exportFilters = {
     severity: severities.length > 0 ? severities.join(',') : undefined,
     fixable: fixability === 'all' ? undefined : fixability === 'fixable',
@@ -319,64 +374,102 @@ function FindingsSection({ data, product, reference, repository }: {
 
   return (
     <Card size="small" styles={{ body: { paddingTop: 12 } }}>
-      {unscanned > 0 && (
-        <Alert
-          type="warning"
-          showIcon
-          style={{ marginBottom: 12 }}
-          message={`${unscanned} artifacts have not been scanned yet`}
-          description="They are listed under Artifacts. An artifact with no scan result is not an artifact with no vulnerabilities."
-          action={<Button size="small" onClick={() => setTab('artifacts')}>View them</Button>}
-        />
-      )}
+      {/*
+        Two rows, and which control goes in which is the point.
 
-      <Space wrap size={12} style={{ marginBottom: 12, width: '100%', justifyContent: 'space-between' }}>
-        <Space wrap size={12}>
+        The first row is what you are looking at and what you take away with
+        you: the view switch on the left, the export on the right. The second is
+        how you narrow it. Putting all seven controls on one line looked tidy
+        in a mockup and wrapped in a browser, which dropped the export onto a
+        line of its own at an arbitrary place - so the button somebody clicks
+        last moved every time a filter's label got longer.
+      */}
+      <div
+        style={{
+          display: 'flex', gap: 8, alignItems: 'center',
+          justifyContent: 'space-between', marginBottom: 12,
+        }}
+      >
+        <Segmented
+          value={tab}
+          onChange={(v) => setTab(v as typeof tab)}
+          options={[
+            { value: 'vulnerabilities', label: `Vulnerabilities (${findings.length.toLocaleString()})` },
+            { value: 'artifacts', label: `Artifacts (${reports.length.toLocaleString()})` },
+          ]}
+        />
+
+        <SecurityExportMenu
+          urlFor={(format, view) => packageSecurityExportUrl(product, reference, {
+            format, view, repository, ...exportFilters,
+          })}
+        />
+      </div>
+
+      <div
+        style={{
+          display: 'flex', flexWrap: 'wrap', gap: 8,
+          alignItems: 'center', marginBottom: 12,
+        }}
+      >
+        {kinds.length > 1 && (
           <Segmented
-            value={tab}
-            onChange={(v) => setTab(v as typeof tab)}
+            value={kind}
+            onChange={(v) => setKind(v as ArtifactKind)}
             options={[
-              { value: 'vulnerabilities', label: `Vulnerabilities (${findings.length.toLocaleString()})` },
-              { value: 'artifacts', label: `Artifacts (${data.reports.length.toLocaleString()})` },
+              { value: 'all', label: `All (${data.reports.length})` },
+              ...kinds.map((k) => ({
+                value: k,
+                label: `${KIND_LABEL[k]} (${data.reports.filter((r) => kindOf(r.artifact.kind) === k).length})`,
+              })),
             ]}
           />
-          <Segmented
-            value={fixability}
-            onChange={(v) => setFixability(v as typeof fixability)}
-            options={[
-              { value: 'all', label: 'All' },
-              { value: 'fixable', label: 'Fixable only' },
-              { value: 'non-fixable', label: 'No fix available' },
-            ]}
-          />
-          {/* Checkboxes rather than coloured chips: the severity is a WORD
-              here, so the filter works for a reader who cannot tell the
-              colours apart. */}
-          <Checkbox.Group
-            value={severities}
-            onChange={(v) => setSeverities(v as Severity[])}
-            options={SEVERITIES.map((s) => ({ label: <SeverityTag value={s} />, value: s }))}
-          />
-        </Space>
-        <Space size={8}>
-          <Input.Search
-            allowClear
-            placeholder="CVE, package or image"
-            value={q}
-            onChange={(e) => setQ(e.target.value)}
-            style={{ width: 240 }}
-          />
-          <SecurityExportMenu
-            urlFor={(format, view) => packageSecurityExportUrl(product, reference, {
-              format, view, repository, ...exportFilters,
-            })}
-          />
-        </Space>
-      </Space>
+        )}
+
+        <Segmented
+          value={fixability}
+          onChange={(v) => setFixability(v as typeof fixability)}
+          options={[
+            { value: 'all', label: 'All' },
+            { value: 'fixable', label: 'Fixable' },
+            { value: 'non-fixable', label: 'No fix' },
+          ]}
+        />
+
+        {/*
+          A multi-select rather than five checkboxes in a row.
+
+          The checkboxes were 300px of chrome that pushed everything after them
+          off the line, and they could not say "any" without being all
+          unchecked - which reads as "none selected". A select shows the chosen
+          severities, clears in one click, and occupies one control's width.
+        */}
+        <Select<Severity[]>
+          mode="multiple"
+          allowClear
+          placeholder="Any severity"
+          value={severities}
+          onChange={setSeverities}
+          style={{ minWidth: 190 }}
+          maxTagCount="responsive"
+          options={SEVERITIES.map((sev) => ({
+            value: sev,
+            label: <SeverityTag value={sev} />,
+          }))}
+        />
+
+        <Input.Search
+          allowClear
+          placeholder="CVE, package or image"
+          value={q}
+          onChange={(e) => setQ(e.target.value)}
+          style={{ width: 230 }}
+        />
+      </div>
 
       {tab === 'vulnerabilities'
         ? <VulnerabilityTable rows={filtered} state={data.state} />
-        : <ArtifactTable reports={data.reports} />}
+        : <ArtifactTable reports={reports} />}
     </Card>
   )
 }
@@ -391,24 +484,27 @@ function VulnerabilityTable({ rows, state }: { rows: FlatFinding[]; state: Packa
       pagination={{ pageSize: 25, showSizeChanger: true, size: 'small' }}
       locale={{ emptyText: <FindingsEmpty status={state} /> }}
       columns={[
-        { title: 'CVE', width: 160, render: (_, r) => <CveCell cve={r.cve} id={r.id} /> },
+        { title: 'CVE', width: 150, render: (_, r) => <CveCell cve={r.cve} id={r.id} /> },
         {
           title: 'Severity',
-          width: 120,
-          sorter: (a, b) => SEVERITIES.indexOf(b.severity) - SEVERITIES.indexOf(a.severity),
+          width: 110,
+          // Worst first, because SEVERITIES is ordered worst first: the
+          // comparator was reversed, so sorting ascending put `low`
+          // at the top of a table about what is wrong with a release.
+          sorter: (a, b) => SEVERITIES.indexOf(a.severity) - SEVERITIES.indexOf(b.severity),
           defaultSortOrder: 'ascend',
           render: (_, r) => <SeverityTag value={r.severity} />,
         },
         {
           title: 'Package',
-          width: 190,
+          width: 180,
           render: (_, r) => (
             <ComponentCell name={r.component.name} version={r.component.version} type={r.component.type} />
           ),
         },
         {
           title: 'Image',
-          width: 190,
+          width: 170,
           render: (_, r) => (
             <Space direction="vertical" size={0}>
               <Typography.Text style={{ fontFamily: mono }}>{r.artifactName}</Typography.Text>
@@ -420,12 +516,20 @@ function VulnerabilityTable({ rows, state }: { rows: FlatFinding[]; state: Packa
             </Space>
           ),
         },
-        { title: 'Fix', width: 140, render: (_, r) => <FixCell fixable={r.fixable} fixedIn={r.fixedIn} /> },
+        { title: 'Fix', width: 130, render: (_, r) => <FixCell fixable={r.fixable} fixedIn={r.fixedIn} /> },
         {
+          /*
+            Narrow enough that the six columns fit the card at a laptop width.
+            The description was 520px wide, which pushed the table 180px past
+            its own card and left every row's last words behind a horizontal
+            scrollbar. Two clamped lines with the rest in a tooltip says as
+            much, in a table that ends where the card does.
+          */
           title: 'Description',
+          width: 340,
           render: (_, r) => (
             <Typography.Paragraph
-              style={{ margin: 0, maxWidth: 520 }}
+              style={{ margin: 0 }}
               ellipsis={{ rows: 2, tooltip: r.description || r.summary }}
             >
               {r.summary || r.description || '-'}

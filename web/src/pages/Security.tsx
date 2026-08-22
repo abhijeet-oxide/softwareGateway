@@ -191,7 +191,10 @@ export default function Security() {
                 {
                   title: 'Severity',
                   width: 120,
-                  sorter: (a, b) => SEVERITIES.indexOf(b.severity) - SEVERITIES.indexOf(a.severity),
+                  // Worst first, because SEVERITIES is ordered worst first: the
+                  // comparator was reversed, so sorting ascending put `low`
+                  // at the top of a table about what is wrong with a release.
+                  sorter: (a, b) => SEVERITIES.indexOf(a.severity) - SEVERITIES.indexOf(b.severity),
                   render: (_, h) => <SeverityTag value={h.severity} />,
                 },
                 {

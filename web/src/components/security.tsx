@@ -118,7 +118,15 @@ export function SeverityCountsRow({ counts, size = 'default' }: {
  * exactly where a blank cell would be read as "nothing wrong with this one".
  * Four of the five states it renders are not numbers at all.
  */
-export function VulnerabilityCell({ summary }: { summary?: PackageSecuritySummary }) {
+export function VulnerabilityCell({
+  summary,
+  onSyncNotSynced,
+  notSyncedTooltip,
+}: {
+  summary?: PackageSecuritySummary
+  onSyncNotSynced?: () => void
+  notSyncedTooltip?: string
+}) {
   if (!summary || !summary.canSync) {
     return (
       <Tooltip title={summary?.reason ?? 'No vulnerability scanner is configured for this product.'}>
@@ -128,26 +136,36 @@ export function VulnerabilityCell({ summary }: { summary?: PackageSecuritySummar
   }
   if (summary.state === 'syncing') {
     return (
-      <Space size={6}>
-        <SyncOutlined spin style={{ color: palette.primary }} />
-        <Typography.Text type="secondary">Syncing</Typography.Text>
-      </Space>
+      <Tag color="processing" icon={<SyncOutlined spin />} style={{ marginInlineEnd: 0 }}>
+        Syncing
+      </Tag>
     )
   }
   if (summary.state === '') {
+    const clickable = Boolean(onSyncNotSynced)
+    const title = clickable
+      ? (notSyncedTooltip ?? 'Click to sync')
+      : (notSyncedTooltip ?? 'This release has not been scanned. An unscanned release is not a release without vulnerabilities.')
     return (
-      <Tooltip title="This release has not been scanned. An unscanned release is not a release without vulnerabilities.">
-        <Typography.Text type="secondary">Not synced</Typography.Text>
+      <Tooltip title={title}>
+        <Tag
+          color="default"
+          style={{ marginInlineEnd: 0, cursor: clickable ? 'pointer' : 'default' }}
+          onClick={clickable ? (e) => {
+            e.preventDefault()
+            e.stopPropagation()
+            onSyncNotSynced?.()
+          } : undefined}
+        >
+          Not synced
+        </Tag>
       </Tooltip>
     )
   }
   if (summary.state === 'failed' && !summary.syncedAt) {
     return (
       <Tooltip title={summary.error}>
-        <Space size={4}>
-          <ExclamationCircleOutlined style={{ color: semantic.error }} />
-          <Typography.Text type="secondary">Sync failed</Typography.Text>
-        </Space>
+        <Tag color="error" style={{ marginInlineEnd: 0 }}>Sync failed</Tag>
       </Tooltip>
     )
   }
@@ -171,42 +189,69 @@ export function VulnerabilityCell({ summary }: { summary?: PackageSecuritySummar
 
   if (summary.counts.total === 0) {
     return (
-      <Space size={4}>
-        <CheckCircleOutlined style={{ color: semantic.success }} />
-        <Typography.Text>None found</Typography.Text>
-        {!summary.complete && <PartialMark />}
+      <Space direction="vertical" size={2}>
+        <Space size={4}>
+          <CheckCircleOutlined style={{ color: semantic.success }} />
+          <Typography.Text>None found</Typography.Text>
+        </Space>
+        {!summary.complete && (
+          <Typography.Text type="secondary" style={{ fontStyle: 'italic', fontSize: 11 }}>
+            Not all artifacts were scanned.
+          </Typography.Text>
+        )}
       </Space>
     )
   }
 
   return (
-    <Space direction="vertical" size={2} style={{ width: '100%', minWidth: 150 }}>
-      <Space size={8}>
-        <strong>{summary.counts.total.toLocaleString()}</strong>
-        {SEVERITIES.slice(0, 2).map((sev) => (
-          summary.counts.bySeverity[sev] > 0 ? (
-            <span key={sev} style={{ color: severityColour[sev], fontWeight: 500 }}>
-              {summary.counts.bySeverity[sev]} {SEVERITY_LABEL[sev].toLowerCase()}
-            </span>
+    <Space direction="vertical" size={2} style={{ width: '100%', minWidth: 170 }}>
+      <div
+        style={{
+          display: 'grid',
+          gridTemplateColumns: 'repeat(2, minmax(0, 1fr))',
+          columnGap: 10,
+          rowGap: 4,
+          fontSize: 12,
+          lineHeight: 1.25,
+        }}
+      >
+        {SEVERITIES.map((sev) => (
+          (summary.counts.bySeverity[sev] > 0 || sev === 'unknown') ? (
+            <Space key={sev} size={4} style={{ minWidth: 0 }}>
+              <span
+                aria-hidden
+                style={{
+                  display: 'inline-block',
+                  width: 7,
+                  height: 7,
+                  borderRadius: '50%',
+                  background: severityColour[sev],
+                }}
+              />
+              <span style={{ color: '#6B7280' }}>{SEVERITY_LABEL[sev]}</span>
+              <strong style={{ color: severityColour[sev], fontWeight: 600 }}>
+                {summary.counts.bySeverity[sev].toLocaleString()}
+              </strong>
+            </Space>
           ) : null
         ))}
-        {!summary.complete && <PartialMark />}
-        {stale && (
-          <Tooltip title={`The most recent sync failed: ${summary.error}. These totals are from the previous sync.`}>
-            <ExclamationCircleOutlined style={{ color: semantic.warning }} />
-          </Tooltip>
-        )}
-      </Space>
-      <SeverityBar counts={summary.counts} height={5} />
-    </Space>
-  )
-}
+        <Space size={4} style={{ minWidth: 0 }}>
+          <span style={{ color: '#6B7280' }}>Total</span>
+          <strong>{summary.counts.total.toLocaleString()}</strong>
+        </Space>
+      </div>
 
-function PartialMark() {
-  return (
-    <Tooltip title="Some artifacts in this release have no scan result, so this number covers only part of it.">
-      <WarningOutlined style={{ color: semantic.warning }} />
-    </Tooltip>
+      {!summary.complete && (
+        <Typography.Text type="secondary" style={{ color: semantic.warning, fontStyle: 'italic', fontSize: 11 }}>
+          Not all artifacts were scanned.
+        </Typography.Text>
+      )}
+      {stale && (
+        <Typography.Text type="secondary" style={{ color: semantic.warning, fontStyle: 'italic', fontSize: 11 }}>
+          Last sync failed. These are the last good results.
+        </Typography.Text>
+      )}
+    </Space>
   )
 }
 

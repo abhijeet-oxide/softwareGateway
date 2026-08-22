@@ -314,6 +314,8 @@ function FindingsSection({ data, product, reference, repository }: {
   reference: string
   repository?: string
 }) {
+  type KindCounts = Record<ArtifactKind, number>
+
   const [tab, setTab] = useState<'vulnerabilities' | 'artifacts'>('vulnerabilities')
   const [severities, setSeverities] = useState<Severity[]>([])
   const [fixability, setFixability] = useState<'all' | 'fixable' | 'non-fixable'>('all')
@@ -341,6 +343,29 @@ function FindingsSection({ data, product, reference, repository }: {
     [data.reports, kind],
   )
 
+  const artifactCounts = useMemo<KindCounts>(() => {
+    const out: KindCounts = { all: 0, image: 0, chart: 0, file: 0 }
+    for (const report of data.reports) {
+      out.all += 1
+      const k = kindOf(report.artifact.kind)
+      if (k !== 'all') out[k] += 1
+    }
+    return out
+  }, [data.reports])
+
+  const vulnerabilityCounts = useMemo<KindCounts>(() => {
+    const out: KindCounts = { all: 0, image: 0, chart: 0, file: 0 }
+    for (const report of data.reports) {
+      const n = report.counts.total
+      out.all += n
+      const k = kindOf(report.artifact.kind)
+      if (k !== 'all') out[k] += n
+    }
+    return out
+  }, [data.reports])
+
+  const kindCounts = tab === 'vulnerabilities' ? vulnerabilityCounts : artifactCounts
+
   const findings = useMemo<FlatFinding[]>(() => {
     const out: FlatFinding[] = []
     for (const report of reports) {
@@ -366,6 +391,13 @@ function FindingsSection({ data, product, reference, repository }: {
     }
     return true
   }), [findings, severities, fixability, q])
+
+  const vulnerabilityTotal = useMemo(
+    () => reports.reduce((sum, r) => sum + r.counts.total, 0),
+    [reports],
+  )
+
+  const detailRowsUnavailable = findings.length === 0 && vulnerabilityTotal > 0
 
   const exportFilters = {
     severity: severities.length > 0 ? severities.join(',') : undefined,
@@ -395,7 +427,7 @@ function FindingsSection({ data, product, reference, repository }: {
           value={tab}
           onChange={(v) => setTab(v as typeof tab)}
           options={[
-            { value: 'vulnerabilities', label: `Vulnerabilities (${findings.length.toLocaleString()})` },
+            { value: 'vulnerabilities', label: `Vulnerabilities (${vulnerabilityTotal.toLocaleString()})` },
             { value: 'artifacts', label: `Artifacts (${reports.length.toLocaleString()})` },
           ]}
         />
@@ -418,10 +450,10 @@ function FindingsSection({ data, product, reference, repository }: {
             value={kind}
             onChange={(v) => setKind(v as ArtifactKind)}
             options={[
-              { value: 'all', label: `All (${data.reports.length})` },
+              { value: 'all', label: `All (${kindCounts.all.toLocaleString()})` },
               ...kinds.map((k) => ({
                 value: k,
-                label: `${KIND_LABEL[k]} (${data.reports.filter((r) => kindOf(r.artifact.kind) === k).length})`,
+                label: `${KIND_LABEL[k]} (${kindCounts[k].toLocaleString()})`,
               })),
             ]}
           />
@@ -469,13 +501,37 @@ function FindingsSection({ data, product, reference, repository }: {
       </div>
 
       {tab === 'vulnerabilities'
-        ? <VulnerabilityTable rows={filtered} state={data.state} />
+        ? (
+          <>
+            {detailRowsUnavailable && (
+              <Alert
+                type="warning"
+                showIcon
+                style={{ marginBottom: 12 }}
+                message="Detailed vulnerability rows are unavailable"
+                description={
+                  `This release reports ${vulnerabilityTotal.toLocaleString()} vulnerabilities in summary counts, `
+                  + 'but no per-CVE rows were returned for this view.'
+                }
+              />
+            )}
+            <VulnerabilityTable rows={filtered} state={data.state} detailRowsUnavailable={detailRowsUnavailable} />
+          </>
+        )
         : <ArtifactTable reports={reports} />}
     </Card>
   )
 }
 
-function VulnerabilityTable({ rows, state }: { rows: FlatFinding[]; state: PackageSecurityResponse['state'] }) {
+function VulnerabilityTable({
+  rows,
+  state,
+  detailRowsUnavailable,
+}: {
+  rows: FlatFinding[]
+  state: PackageSecurityResponse['state']
+  detailRowsUnavailable: boolean
+}) {
   return (
     <Table<FlatFinding>
       size="small"
@@ -483,7 +539,18 @@ function VulnerabilityTable({ rows, state }: { rows: FlatFinding[]; state: Packa
       dataSource={rows}
       scroll={{ x: 'max-content' }}
       pagination={{ pageSize: 25, showSizeChanger: true, size: 'small' }}
-      locale={{ emptyText: <FindingsEmpty status={state} /> }}
+      locale={{
+        emptyText: detailRowsUnavailable
+          ? (
+            <Space direction="vertical" size={4} style={{ padding: 24 }}>
+              <Typography.Text strong>No detailed rows returned</Typography.Text>
+              <Typography.Text type="secondary">
+                Summary counts exist, but this response has no per-CVE detail rows to render.
+              </Typography.Text>
+            </Space>
+          )
+          : <FindingsEmpty status={state} />,
+      }}
       columns={[
         { title: 'CVE', width: 150, render: (_, r) => <CveCell cve={r.cve} id={r.id} /> },
         {

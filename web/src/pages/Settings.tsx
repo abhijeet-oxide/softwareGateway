@@ -212,7 +212,7 @@ export default function Settings() {
                     title: 'State',
                     width: 110,
                     render: (_, w) => (
-                      <Tag color={w.state === 'ACTIVE' ? 'green' : w.state === 'STALE' ? 'red' : 'orange'}>
+                      <Tag color={w.state === 'ACTIVE' ? 'green' : w.state === 'OFFLINE' ? 'red' : 'orange'}>
                         {w.state}
                       </Tag>
                     ),

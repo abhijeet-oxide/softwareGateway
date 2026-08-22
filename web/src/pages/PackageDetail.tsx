@@ -672,24 +672,10 @@ function DownloadsTab({ product, transfers }: { product: string; transfers: Pack
           },
         ]}
       />
-      <Typography.Text type="secondary" style={{ fontSize: 12, display: 'block', padding: '8px 12px' }}>
-        Every attempt at this release, for {product}.
-      </Typography.Text>
     </Card>
   )
 }
 
-/**
- * One fact, as a tag.
- *
- * Label and value in one chip rather than a definition list, because these sit
- * in a row under a title where a two-column layout has nowhere to go - and
- * because a bare number beside a badge reads as another badge.
- *
- * A missing value renders nothing at all. A chip saying "Size —" is a chip
- * whose only content is that something is absent, and the reader learns that
- * faster from its absence.
- */
 function FactTag({ label, value, mono: isMono, onClick }: {
   label: string
   value?: string

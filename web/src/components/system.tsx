@@ -33,7 +33,7 @@ export function SystemPanel() {
 
   const fleet = workers.data?.workers ?? []
   const active = fleet.filter((w) => w.state === 'ACTIVE')
-  const stale = fleet.filter((w) => w.state === 'STALE')
+  const offline = fleet.filter((w) => w.state === 'OFFLINE')
 
   const capacity = active.reduce((n, w) => n + (w.maxConcurrency ?? 0), 0)
   const running = active.reduce((n, w) => n + (w.activeJobs ?? 0), 0)
@@ -44,8 +44,8 @@ export function SystemPanel() {
       title={
         <Space size={8}>
           System
-          {stale.length > 0 && (
-            <Tag color="red">{stale.length} stale</Tag>
+          {offline.length > 0 && (
+            <Tag color="red">{offline.length} offline</Tag>
           )}
         </Space>
       }

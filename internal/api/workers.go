@@ -54,12 +54,12 @@ func toAPIWorkers(workers []store.WorkerSummary) []v1.Worker {
 
 // workerState is what the fleet view calls this worker.
 //
-// STALE beats whatever the row says, because it is derived from a timestamp
+// OFFLINE beats whatever the row says, because it is derived from a timestamp
 // rather than from an announcement: a worker that was killed never got to
 // update its own state, and the only evidence is that it stopped talking.
 func workerState(w store.WorkerSummary) string {
 	if w.Stale {
-		return "STALE"
+		return "OFFLINE"
 	}
 	switch w.State {
 	case "draining":

@@ -202,12 +202,16 @@ function DownloadAction({ product, pkg }: { product: string; pkg: Package }) {
  * says so rather than pretending to be exhaustive.
  */
 export default function Packages() {
+  const { message } = App.useApp()
+  const syncSecurity = useSyncPackageSecurity()
+
   const [params, setParams] = useSearchParams()
   const [search, setSearch] = useState('')
   const products = useProducts()
   const productList = products.data?.products ?? []
 
   const selected = params.get('product') ?? productList[0]?.productId
+  const mayOperateSelected = useCan('operate', selected ? { product: selected } : undefined)
   const status = params.get('status')
   const tag = params.get('tag') ?? undefined
 
@@ -243,6 +247,21 @@ export default function Packages() {
     if (value) next.set(key, value)
     else next.delete(key)
     setParams(next)
+  }
+
+  const syncNotSynced = (pkg: Package) => {
+    if (!selected) return
+    syncSecurity.mutate(
+      { product: selected, ref: packageReference(pkg), repository: pkg.sourceRepository },
+      {
+        onSuccess: (res) => {
+          message.info(res.started
+            ? `Syncing ${res.artifacts} artifacts of ${version(pkg)}.`
+            : 'A sync is already running for this release.')
+        },
+        onError: (e) => message.error(e instanceof Error ? e.message : 'The sync could not be started.'),
+      },
+    )
   }
 
   if (products.isError) {
@@ -407,7 +426,19 @@ export default function Packages() {
                 */
                 title: 'Vulnerabilities',
                 width: 185,
-                render: (_, r) => <VulnerabilityCell summary={r.pkg.security} />,
+                render: (_, r) => {
+                  const security = r.pkg.security
+                  const maySync = Boolean(security?.state === '' && security?.canSync && mayOperateSelected)
+                  return (
+                    <VulnerabilityCell
+                      summary={security}
+                      onSyncNotSynced={maySync ? () => syncNotSynced(r.pkg) : undefined}
+                      notSyncedTooltip={maySync
+                        ? 'Click to sync'
+                        : (security?.reason ?? 'Nobody has scanned this release yet.')}
+                    />
+                  )
+                },
               },
               {
                 title: 'Location',

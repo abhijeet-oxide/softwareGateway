@@ -7,7 +7,8 @@ import {
 import { FolderOutlined, SwapOutlined } from '@ant-design/icons'
 import { useSearchParams } from 'react-router-dom'
 import {
-  useCompare, useCompareProgress, usePackages, useProduct, useProducts,
+  useCompare, useCompareProgress, useCompareSecurity, usePackages, useProduct, useProducts,
+  useSecurityProgress,
 } from '../api/queries'
 import { kindName, matches, packageReference, version } from '../domain/derive'
 import { bytes, formatBytes, formatCount, formatDuration } from '../domain/format'
@@ -15,6 +16,8 @@ import { NA, Value } from '../components/value'
 import { ErrorState, SearchBar } from '../components/layout'
 import { WorkingBar } from '../components/progress'
 import { ARTIFACT_ICONS, Icon } from '../components/icons'
+import { SecurityProgressPanel } from '../components/security'
+import { SecurityComparison } from '../components/securitycompare'
 import { mono, semantic } from '../theme'
 import type {
   CompareFile, CompareProgressSide, CompareResponse, CompareRow, CompareVerdict, Package,
@@ -74,6 +77,16 @@ function sourceNameFor(
  * way to say which package you mean, and two would drift.
  */
 const refOf = packageReference
+
+/**
+ * Which comparison is on screen.
+ *
+ * Two views of ONE selection, not two pages. Somebody who has just waited for a
+ * comparison of two releases and now wants the security answer should not
+ * re-choose the same two releases in a different place - and a security answer
+ * about a different pair from the one above it would be worse than no answer.
+ */
+type View = 'package' | 'security'
 
 /** The option list for a release select: the name, the version, and both searchable. */
 function releaseOptions(releases: Package[]) {
@@ -1038,6 +1051,20 @@ export default function Compare() {
   const compareRunning = compare.isPending
   const report = compare.data
 
+  /*
+   * The security comparison runs SEPARATELY and on demand.
+   *
+   * Not folded into the package comparison, because the two have different
+   * costs and different failure modes: one walks two manifest trees, the other
+   * queries a scanner, and a scanner that is down must not fail the comparison
+   * that never needed it. Somebody who only wants to know what changed pays
+   * for what changed.
+   */
+  const [view, setView] = useState<View>('package')
+  const compareSecurity = useCompareSecurity()
+  const [securityToken, setSecurityToken] = useState<string>()
+  const securityProgress = useSecurityProgress(securityToken, compareSecurity.isPending)
+
   useEffect(() => {
     if (!compareRunning || !startedAt) return
     const id = setInterval(() => setElapsed((Date.now() - startedAt) / 1000), 500)
@@ -1112,6 +1139,34 @@ export default function Compare() {
     } catch (e) {
       message.error(e instanceof Error ? e.message : 'The comparison could not be run.')
     }
+  }
+
+  /**
+   * Run the security comparison for the pair already on screen.
+   *
+   * Idempotent from the user's side: switching to the security view runs it
+   * once and switching back and forth does not re-run it. A re-run is what the
+   * refresh on the release's own security panel is for.
+   */
+  const runSecurity = async () => {
+    if (!product || !left || !right) return
+    const progressToken = crypto.randomUUID()
+    setSecurityToken(progressToken)
+    try {
+      await compareSecurity.mutateAsync({
+        product,
+        ref: left,
+        repository: leftPkg?.sourceRepository,
+        body: { against: rightPkg?.tag ?? right, progressToken },
+      })
+    } catch (e) {
+      message.error(e instanceof Error ? e.message : 'The security comparison could not be run.')
+    }
+  }
+
+  const showSecurity = () => {
+    setView('security')
+    if (!compareSecurity.data && !compareSecurity.isPending) void runSecurity()
   }
 
   const swap = () => {
@@ -1295,7 +1350,59 @@ export default function Compare() {
 
       {compare.isError && <ErrorState error={compare.error} retry={() => void run()} />}
 
-      {report && <ComparisonReport report={report} />}
+      {/*
+        The switch between the two answers, above both of them.
+
+        Only once a comparison has been run: before that there is nothing to
+        switch between, and a segmented control over an empty page is a control
+        that teaches nothing.
+      */}
+      {report && mode === 'versions' && (
+        <Card size="small" style={{ marginBottom: 16 }}>
+          <Space size={12} wrap style={{ width: '100%', justifyContent: 'space-between' }}>
+            <Segmented
+              value={view}
+              onChange={(v) => (v === 'security' ? showSecurity() : setView('package'))}
+              options={[
+                { value: 'package', label: 'Package comparison' },
+                { value: 'security', label: 'Security comparison' },
+              ]}
+            />
+            <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+              {view === 'package'
+                ? 'What the two releases hold, component by component.'
+                : 'How the security posture changed from the base release to the new one.'}
+            </Typography.Text>
+          </Space>
+        </Card>
+      )}
+
+      {report && view === 'package' && <ComparisonReport report={report} />}
+
+      {view === 'security' && (
+        <>
+          {compareSecurity.isPending && (
+            <Card>
+              <SecurityProgressPanel
+                progress={securityProgress.data}
+                fallback="Comparing the security of the two releases"
+              />
+            </Card>
+          )}
+          {compareSecurity.isError && (
+            <ErrorState error={compareSecurity.error} retry={() => void runSecurity()} />
+          )}
+          {compareSecurity.data && product && left && (
+            <SecurityComparison
+              product={product}
+              baseRef={left}
+              againstRef={rightPkg?.tag ?? right ?? ''}
+              repository={leftPkg?.sourceRepository}
+              report={compareSecurity.data}
+            />
+          )}
+        </>
+      )}
 
     </>
   )

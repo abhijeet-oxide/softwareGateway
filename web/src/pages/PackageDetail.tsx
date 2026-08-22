@@ -26,6 +26,7 @@ import {
   EmptyStateCard, ErrorState, PageHeader, ReleaseTimeline, SearchBar,
 } from '../components/layout'
 import { FileViewer } from '../components/filecontent'
+import { SecurityPanel } from '../components/securitypanel'
 import { mono } from '../theme'
 import type {
   Artifact, InspectPackageResponse, Package, PackageFile, Product, RelatedArtifact,
@@ -936,6 +937,27 @@ export default function PackageDetail() {
                 }))}
               />
             </Card>
+
+            {/*
+              Security, under the contents rather than beside them.
+
+              It answers a question about the same thing the card above lists -
+              these artifacts - and it is the question somebody asks second. Put
+              above, it would push what a release IS below the fold in service
+              of what is wrong with it; in a column of its own, it would be a
+              narrow table of CVEs nobody could read.
+
+              Its own component because it fetches separately and fails
+              separately: a release whose scanner is unreachable must still
+              render as a release.
+            */}
+            {productName && reference && (
+              <SecurityPanel
+                product={productName}
+                reference={reference}
+                repository={repository}
+              />
+            )}
           </Space>
         </Col>
       </Row>

@@ -136,6 +136,50 @@ export const semantic = {
 }
 
 /**
+ * Severity, and the verdict of a comparison.
+ *
+ * Here rather than in the security components for the reason at the top of this
+ * file: nothing outside it names a colour, and a page that reached for its own
+ * hex is one a rebrand silently misses.
+ *
+ * COLOUR IS NEVER THE ONLY SIGNAL. Every severity is also a word and a shape -
+ * the dot beside it differs in fill, and the label is always written out - so
+ * these read correctly in greyscale and to anybody who does not distinguish red
+ * from green. A deployment may retheme them freely without making the page
+ * unreadable, which is the whole test of whether the reinforcement is real.
+ */
+export const severity = {
+  critical: '#B4232B',
+  high: '#D9660B',
+  medium: '#B98900',
+  low: '#2E7D4F',
+  unknown: '#7A8694',
+}
+
+/** The severity dots' fills, lighter than the text they sit beside. */
+export const severitySurface = {
+  critical: '#FBEDED',
+  high: '#FDF2E8',
+  medium: '#FCF7E6',
+  low: '#EFF6F1',
+  unknown: '#F1F3F5',
+}
+
+/**
+ * A comparison's verdict.
+ *
+ * `inconclusive` is deliberately not a shade of grey that reads as "nothing
+ * happened". It is a state with an action in it - go and scan the rest - and
+ * looking like an empty result is how it gets ignored.
+ */
+export const verdict = {
+  better: '#1F7A3D',
+  worse: '#B4232B',
+  unchanged: '#5A6675',
+  inconclusive: '#7A4FBF',
+}
+
+/**
  * The SURFACES those colours sit on.
  *
  * Stated rather than derived. The semantic colours above are chosen for TEXT

@@ -11,6 +11,9 @@ importers:
       '@ant-design/icons':
         specifier: ^6.0.0
         version: 6.3.2(react-dom@19.2.8(react@19.2.8))(react@19.2.8)
+      '@iconify-react/fluent-mdl2':
+        specifier: ^1.0.2
+        version: 1.0.2(react@19.2.8)
       '@iconify-react/material-symbols':
         specifier: ^1.0.31
         version: 1.0.31(react@19.2.8)
@@ -386,6 +389,9 @@ packages:
 
   '@iconify-json/simple-icons@1.2.93':
     resolution: {integrity: sha512-/XhANjfGYOuqvSR3TmUnkQkINvQ4GVjVuukvymRbxtVFBvIq/yiXJqCDycKcQPT401OYT9H2vIY6ihAlz1QIAw==}
+
+  '@iconify-react/fluent-mdl2@1.0.2':
+    resolution: {integrity: sha512-X7zd2csLKeRGAnJJWQxyS/sxf8qCGBeoTJKybK7hM9MeVpFHp19qW0ox72bitnLd96Z+XcePeDLfp5F4vx3GdA==}
 
   '@iconify-react/material-symbols@1.0.31':
     resolution: {integrity: sha512-kZZ0F0ayZDhGENjmEcQngoL5IwSEWbhAtCdq7n4gTvQi4Uq4qw4nISXBt7NMIIiWLdyzgD274aL2I8/RsQlqeQ==}
@@ -1663,6 +1669,12 @@ snapshots:
   '@iconify-json/simple-icons@1.2.93':
     dependencies:
       '@iconify/types': 2.0.0
+
+  '@iconify-react/fluent-mdl2@1.0.2(react@19.2.8)':
+    dependencies:
+      '@iconify/css-react': 1.0.2(react@19.2.8)
+    transitivePeerDependencies:
+      - react
 
   '@iconify-react/material-symbols@1.0.31(react@19.2.8)':
     dependencies:

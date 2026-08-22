@@ -2,7 +2,7 @@ import type { ReactNode } from 'react'
 import { Avatar, Badge, Button, Layout, Menu, Space, Tooltip, Typography } from 'antd'
 import {
   BarChartOutlined, BellOutlined,
-  DatabaseOutlined, HistoryOutlined,
+  DatabaseOutlined, HistoryOutlined, SafetyOutlined,
   QuestionCircleOutlined, SettingOutlined,
 } from '@ant-design/icons'
 import DashboardOutlineIcon from '@iconify-react/material-symbols/dashboard-outline';
@@ -34,6 +34,14 @@ const NAV = [
     key: '/downloads',
     icon: <Icon as={DownloadIcon} title="Downloads" className="anticon" />,
     label: 'Downloads',
+  },
+  {
+    key: '/security',
+    icon: <SafetyOutlined />,
+    // "Security" rather than "Vulnerabilities": the page answers questions
+    // about packages and images that have none as readily as about ones that
+    // do, and a nav entry named after the bad news is one people avoid.
+    label: 'Security',
   },
   { key: '/repositories', icon: <DatabaseOutlined />, label: 'Repositories' },
   { key: '/activity', icon: <HistoryOutlined />, label: 'Activity' },

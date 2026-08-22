@@ -6,8 +6,10 @@ import { Shell } from './Shell'
 /**
  * Routing.
  *
- * Eight nav entries, and two drill-downs reached from them - never as extra
- * nav entries (UI brief §3). Every page is lazily loaded, so the first paint
+ * Nine nav entries, and two drill-downs reached from them - never as extra
+ * nav entries (UI brief §3). Security is the ninth: it is a place somebody
+ * arrives at with a CVE identifier in hand and no release in mind, so it
+ * cannot be reached only from a release. Every page is lazily loaded, so the first paint
  * carries the shell and one page rather than all ten.
  */
 
@@ -18,6 +20,7 @@ const PackageDetail = lazy(() => import('./pages/PackageDetail'))
 const DownloadDetail = lazy(() => import('./pages/DownloadDetail'))
 const Downloads = lazy(() => import('./pages/Downloads'))
 const Compare = lazy(() => import('./pages/Compare'))
+const Security = lazy(() => import('./pages/Security'))
 const Repositories = lazy(() => import('./pages/Repositories'))
 const Activity = lazy(() => import('./pages/Activity'))
 const Reports = lazy(() => import('./pages/Reports'))
@@ -66,6 +69,7 @@ export function App() {
           <Route path="/packages/compare" element={<Compare />} />
           {/* The old path - links to it exist already, so it redirects rather than 404s. */}
           <Route path="/compare" element={<LegacyCompareRedirect />} />
+          <Route path="/security" element={<Security />} />
           <Route path="/repositories" element={<Repositories />} />
           <Route path="/activity" element={<Activity />} />
           <Route path="/reports" element={<Reports />} />

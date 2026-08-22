@@ -10,6 +10,8 @@ import type {
   ListPackageFilesResponse, ListPresentComponentsResponse, ListWorkersResponse, Package,
   PackageFileContentResponse, ReportSummary, RunDownloadRequest,
   RunDownloadResponse,
+  PackageSecurityResponse, SearchKind, SecurityCompareRequest, SecurityComparisonResponse,
+  SecurityProgressResponse, SecuritySearchResponse,
   SetPriorityRequest, Transfer, TransferControlResponse, VersionResponse,
 } from './types'
 import { isLive } from '../domain/derive'
@@ -613,5 +615,273 @@ export function useDeepHealth(enabled: boolean) {
     enabled,
     staleTime: 30_000,
     retry: false,
+  })
+}
+
+// ---------------------------------------------------------------------------
+// Security
+// ---------------------------------------------------------------------------
+
+/**
+ * A release's security posture.
+ *
+ * # Why `detail` is a parameter rather than always true
+ *
+ * The findings of a large release are megabytes. A page that shows counts and a
+ * coverage bar needs none of them, and a page that lists CVEs needs all of
+ * them. Asking for the cheap read first is what makes the security tab open
+ * immediately and fill in, rather than showing nothing for ten seconds.
+ *
+ * # Why this does not poll
+ *
+ * A scan result changes when somebody re-scans, which is minutes to hours, not
+ * seconds. Polling it would put a scanner query behind every open tab in the
+ * building. The refresh button is the channel for "I know something changed".
+ */
+export function usePackageSecurity(
+  product: string | undefined,
+  ref: string | undefined,
+  opts: { repository?: string; detail?: boolean; progressToken?: string; enabled?: boolean } = {},
+) {
+  const { repository, detail = false, progressToken, enabled = true } = opts
+  return useQuery({
+    queryKey: ['package-security', product, ref, repository, detail],
+    queryFn: () => {
+      const { segment, query: q } = packageRef(ref!)
+      const scoped = scopeQuery(q, repository)
+      const extra = query({ detail, progressToken })
+      const suffix = scoped
+        ? scoped + (extra ? '&' + extra.slice(1) : '')
+        : extra
+      return api.get<PackageSecurityResponse>(
+        `/products/${encodeURIComponent(product!)}/packages/${encodeURIComponent(segment)}/security` +
+        suffix)
+    },
+    enabled: enabled && Boolean(product && ref),
+    staleTime: 5 * MINUTE,
+    /*
+     * A deployment with no scanner answers 404 on this route, deliberately -
+     * an honest absence rather than a route that always fails. That is not
+     * worth retrying and not worth an error panel: the security tab renders
+     * "not configured" and the rest of the page is unaffected.
+     */
+    retry: false,
+    throwOnError: false,
+  })
+}
+
+/** Re-fetch a release's posture from the scanner, bypassing every cache. */
+export function useRefreshPackageSecurity() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: ({ product, ref, repository, detail, progressToken }: {
+      product: string
+      ref: string
+      repository?: string
+      detail?: boolean
+      progressToken?: string
+    }) => {
+      const { segment, query: q } = packageRef(ref)
+      const scoped = scopeQuery(q, repository)
+      const extra = query({ detail, refresh: true, progressToken })
+      const suffix = scoped ? scoped + (extra ? '&' + extra.slice(1) : '') : extra
+      return api.get<PackageSecurityResponse>(
+        `/products/${encodeURIComponent(product)}/packages/${encodeURIComponent(segment)}/security` +
+        suffix)
+    },
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: ['package-security'] })
+    },
+  })
+}
+
+/**
+ * Where a security retrieval has got to, polled while its own request is open.
+ *
+ * Same shape and same rules as the comparison progress beside it: a 404 is a
+ * normal answer - the work may be on another replica or may have just finished
+ * - so the query fails quietly and the page falls back to saying that work is
+ * happening without a position.
+ */
+export function useSecurityProgress(token: string | undefined, active: boolean) {
+  return useQuery({
+    queryKey: ['security-progress', token],
+    queryFn: () => api.get<SecurityProgressResponse>(
+      `/security/progress/${encodeURIComponent(token!)}`),
+    enabled: Boolean(token) && active,
+    refetchInterval: 800,
+    retry: false,
+    throwOnError: false,
+  })
+}
+
+/** The security comparison of two releases. */
+export function useCompareSecurity() {
+  return useMutation({
+    mutationFn: ({ product, ref, repository, body }: {
+      product: string
+      ref: string
+      repository?: string
+      body: SecurityCompareRequest
+    }) => {
+      const { segment, query: q } = packageRef(ref)
+      return api.post<SecurityComparisonResponse>(
+        `/products/${encodeURIComponent(product)}/packages/${encodeURIComponent(segment)}:compareSecurity` +
+        scopeQuery(q, repository), body)
+    },
+  })
+}
+
+/**
+ * Search across everything the platform has already retrieved.
+ *
+ * Debouncing is the caller's job - this fires on whatever query it is given -
+ * because the right delay depends on whether somebody is typing a package name
+ * or pasting a CVE id, and the page knows which.
+ */
+export function useSecuritySearch(
+  product: string | undefined,
+  kind: SearchKind,
+  q: string,
+  opts: { exact?: boolean; limit?: number } = {},
+) {
+  return useQuery({
+    queryKey: ['security-search', product, kind, q, opts.exact, opts.limit],
+    queryFn: () => api.get<SecuritySearchResponse>(
+      `/products/${encodeURIComponent(product!)}/security/search` +
+      query({ kind, q, exact: opts.exact, limit: opts.limit })),
+    enabled: Boolean(product) && q.trim().length > 0,
+    staleTime: MINUTE,
+    retry: false,
+    throwOnError: false,
+  })
+}
+
+/**
+ * The URL of an export.
+ *
+ * A URL rather than a fetch, because a download is a link: the browser streams
+ * it, names it from the Content-Disposition, and shows its own progress. Doing
+ * it through fetch would mean holding a large file in memory to hand it back to
+ * the browser, and losing the filename on the way.
+ */
+export function packageSecurityExportUrl(
+  product: string, ref: string,
+  opts: {
+    format: string
+    view: string
+    repository?: string
+    severity?: string
+    fixable?: boolean | undefined
+    status?: string
+    q?: string
+  },
+): string {
+  const { segment, query: scoped } = packageRef(ref)
+  const params = query({
+    format: opts.format,
+    view: opts.view,
+    repository: opts.repository ?? (scoped ? decodeURIComponent(scoped.replace('?repository=', '')) : ''),
+    severity: opts.severity,
+    fixable: opts.fixable === undefined ? undefined : String(opts.fixable),
+    status: opts.status,
+    q: opts.q,
+  })
+  return `/api/v1/products/${encodeURIComponent(product)}/packages/${encodeURIComponent(segment)}` +
+    `/security/export${params}`
+}
+
+/** The URL of a security comparison export. */
+export function securityComparisonExportUrl(
+  product: string, ref: string, against: string,
+  opts: {
+    format: string
+    view: string
+    repository?: string
+    change?: string
+    severity?: string
+    fixable?: boolean | undefined
+    q?: string
+  },
+): string {
+  const { segment } = packageRef(ref)
+  const params = query({
+    against,
+    format: opts.format,
+    view: opts.view,
+    repository: opts.repository,
+    change: opts.change,
+    severity: opts.severity,
+    fixable: opts.fixable === undefined ? undefined : String(opts.fixable),
+    q: opts.q,
+  })
+  return `/api/v1/products/${encodeURIComponent(product)}/packages/${encodeURIComponent(segment)}` +
+    `/security/compare/export${params}`
+}
+
+/** The URL of a search export. */
+export function securitySearchExportUrl(
+  product: string, kind: SearchKind, q: string, format: string, exact?: boolean,
+): string {
+  return `/api/v1/products/${encodeURIComponent(product)}/security/search/export` +
+    query({ kind, q, format, exact })
+}
+
+/**
+ * Vulnerability COUNTS for a page of releases, for the listing column.
+ *
+ * # Why this is one request per release rather than one request
+ *
+ * Because a release's posture is scoped by the repository it was discovered in,
+ * and a product's releases span several. A bulk endpoint would have to resolve
+ * a scanner, a credential and a cache scope per release anyway, and would then
+ * fail as a unit - one unreachable repository losing the column for every row.
+ * These fail individually, and a row whose scanner is down says so while the
+ * rest of the table renders.
+ *
+ * # Why it is opt-in
+ *
+ * A page of releases is twenty of these, and the first load of each is a
+ * scanner query. That is the right cost when somebody wants the column and an
+ * unacceptable one imposed on everybody who opened the listing to find a
+ * version. `enabled` is the toggle above the table.
+ *
+ * `detail: false` throughout: this renders a number, and shipping a megabyte of
+ * findings per row to do it is the difference between a listing that opens and
+ * one that does not.
+ */
+export function usePackageSecuritySummaries(
+  product: string | undefined,
+  refs: { ref: string; repository?: string }[],
+  enabled: boolean,
+) {
+  return useQueries({
+    queries: refs.map(({ ref, repository }) => ({
+      queryKey: ['package-security', product, ref, repository, false],
+      queryFn: () => {
+        const { segment, query: q } = packageRef(ref)
+        return api.get<PackageSecurityResponse>(
+          `/products/${encodeURIComponent(product!)}/packages/${encodeURIComponent(segment)}/security` +
+          scopeQuery(q, repository))
+      },
+      enabled: enabled && Boolean(product && ref),
+      staleTime: 5 * MINUTE,
+      retry: false,
+      throwOnError: false,
+    })),
+    combine: (results) => {
+      const byRef: Record<string, PackageSecurityResponse | undefined> = {}
+      results.forEach((r, i) => {
+        const key = refs[i]?.ref
+        if (key) byRef[key] = r.data
+      })
+      return {
+        byRef,
+        loading: results.some((r) => r.isLoading),
+        // How many rows actually answered, so the toggle can say what it got
+        // rather than leaving a column of blanks unexplained.
+        answered: results.filter((r) => r.data !== undefined).length,
+      }
+    },
   })
 }

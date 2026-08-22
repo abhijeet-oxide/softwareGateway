@@ -11,6 +11,7 @@
   },
   "dependencies": {
     "@ant-design/icons": "^6.0.0",
+    "@iconify-react/fluent-mdl2": "^1.0.2",
     "@iconify-react/material-symbols": "^1.0.31",
     "@iconify-react/oui": "^1.0.2",
     "@iconify-react/thesvg-color": "^1.0.1",

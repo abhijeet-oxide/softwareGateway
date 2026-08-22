@@ -229,15 +229,38 @@ export function usePackageFileContent(
   repository?: string,
 ) {
   const { segment, query: q } = packageRef(ref ?? '')
-  const scope = scopeQuery(q, repository)
   return useQuery({
     queryKey: ['package-file', product, ref, repository, digest],
     queryFn: () => api.get<PackageFileContentResponse>(
-      `/products/${encodeURIComponent(product!)}/packages/${encodeURIComponent(segment)}`
-      + `/files/content${scope ? `${scope}&` : '?'}digest=${encodeURIComponent(digest!)}`),
+      packageFileContentUrl(product!, segment, q, repository, digest!)),
     enabled: Boolean(product && ref && digest),
     staleTime: Infinity,
   })
+}
+
+function packageFileContentUrl(
+  product: string, segment: string, q: string, repository: string | undefined, digest: string,
+): string {
+  const scope = scopeQuery(q, repository)
+  return `/products/${encodeURIComponent(product)}/packages/${encodeURIComponent(segment)}`
+    + `/files/content${scope ? `${scope}&` : '?'}digest=${encodeURIComponent(digest)}`
+}
+
+/**
+ * The URL of one file's raw bytes.
+ *
+ * A URL rather than a fetch, matching packageSecurityExportUrl: a download is
+ * a link, the browser streams it and names it from Content-Disposition, and
+ * this endpoint has no size bound to trip over - unlike the content endpoint
+ * above, which reads into memory to render text and so caps what it will read.
+ */
+export function packageFileDownloadUrl(
+  product: string, ref: string, digest: string, repository?: string,
+): string {
+  const { segment, query: q } = packageRef(ref)
+  const scope = scopeQuery(q, repository)
+  return `/api/v1/products/${encodeURIComponent(product)}/packages/${encodeURIComponent(segment)}`
+    + `/files/download${scope ? `${scope}&` : '?'}digest=${encodeURIComponent(digest)}`
 }
 
 /**

@@ -783,7 +783,7 @@ type PackageFileContentResponse struct {
 	// Binary says the bytes are not text, so there is nothing to show. Stated
 	// rather than rendered as mojibake: a reader who asked to look at a file
 	// deserves to be told what it is instead of a screen of replacement
-	// characters.
+	// characters. Use the download endpoint for the actual bytes.
 	Binary bool `json:"binary,omitempty"`
 	// TooLarge says the file is past what this endpoint will read into memory,
 	// and Limit is that bound. A view is for looking at configuration, not for
@@ -2419,4 +2419,19 @@ type WhoAmIResponse struct {
 	// the same convention the server-side scope filters use, so a client
 	// reading this never has to special-case the unscoped deployment.
 	Products []string `json:"products,omitempty"`
+
+	// Features are deployment-wide switches unrelated to who is asking - a
+	// separate section from Permissions, which is about what THIS caller may
+	// do. A client reads this once to decide which controls exist at all,
+	// rather than growing a new top-level boolean each time one is added.
+	Features Features `json:"features"`
+}
+
+// Features are deployment-wide toggles, off a config file rather than a role.
+type Features struct {
+	// FileDownloads says whether a reader may save a release file's raw
+	// bytes, separately from looking at its text - see
+	// FilesConfig.DownloadEnabled. A client hides the control rather than
+	// showing one that always 404s.
+	FileDownloads bool `json:"fileDownloads"`
 }

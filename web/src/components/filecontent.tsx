@@ -1,5 +1,5 @@
 import { useMemo } from 'react'
-import { Alert, Descriptions, Modal, Skeleton, Space, Tag, Typography } from 'antd'
+import { Alert, Button, Modal, Skeleton, Space, Typography } from 'antd'
 import Prism from 'prismjs'
 import 'prismjs/components/prism-markup'
 import 'prismjs/components/prism-json'
@@ -10,9 +10,10 @@ import 'prismjs/components/prism-bash'
 import 'prismjs/components/prism-sql'
 import 'prismjs/components/prism-python'
 import 'prismjs/themes/prism.css'
-import { usePackageFileContent } from '../api/queries'
+import { packageFileDownloadUrl, usePackageFileContent } from '../api/queries'
 import { bytes, formatBytes } from '../domain/format'
 import { ErrorState } from './layout'
+import { useIdentity } from '../auth/permissions'
 import { mono } from '../theme'
 
 /**
@@ -55,6 +56,45 @@ function grammarFor(path: string): string | undefined {
   const name = path.split('/').pop() ?? path
   const ext = name.includes('.') ? name.split('.').pop()!.toLowerCase() : ''
   return GRAMMARS[ext]
+}
+
+/**
+ * Extensions that are never text - archives, images, compiled artifacts.
+ *
+ * There is no promise an OCI blob's bytes match its extension, so this only
+ * ever HIDES the "View" affordance for names that could not possibly be text;
+ * it never claims a file with none of these extensions IS text. A file with no
+ * extension, or an unrecognised one, still offers "View" - the endpoint itself
+ * is the only thing that actually knows.
+ */
+const BINARY_EXTENSIONS = new Set([
+  'zip', 'gz', 'tgz', 'tar', 'jar', 'war', 'ear',
+  'png', 'jpg', 'jpeg', 'gif', 'ico', 'bmp', 'webp',
+  'pdf', 'exe', 'dll', 'so', 'dylib', 'class', 'bin',
+  'p12', 'pfx', 'der', 'p7s', 'p7b',
+])
+
+/**
+ * Media types that are never text, regardless of what the file is named -
+ * `signature`, `ss.tar` and the like carry no extension a name-based guess can
+ * use, but the publisher's own OCI media type already says what they are.
+ */
+const BINARY_MEDIA_TYPE_MARKERS = [
+  'pkcs7', 'pkcs12', 'x-x509', 'octet-stream', 'gzip', 'zip', 'x-tar',
+  'image/', 'font/', 'video/', 'audio/',
+]
+
+/** Whether the name, or the publisher's own media type, rules out this file
+ * being viewable as text. */
+export function looksBinary(path: string, mediaType?: string): boolean {
+  const name = path.split('/').pop() ?? path
+  const ext = name.includes('.') ? name.split('.').pop()!.toLowerCase() : ''
+  if (BINARY_EXTENSIONS.has(ext)) return true
+  const mt = mediaType?.toLowerCase() ?? ''
+  // A "+json" or "+yaml" suffix, or a text/ type, overrides a marker above -
+  // `application/vnd.foo.config.v1+json` is JSON wearing a vendor's name.
+  if (mt.endsWith('+json') || mt.endsWith('+yaml') || mt.startsWith('text/')) return false
+  return BINARY_MEDIA_TYPE_MARKERS.some((marker) => mt.includes(marker))
 }
 
 /**
@@ -132,6 +172,8 @@ export function FileViewer({
   const file = usePackageFileContent(product, reference, digest, repository)
   const grammar = path ? grammarFor(path) : undefined
   const shown = file.data?.content ? present(file.data.content, grammar) : undefined
+  const { who } = useIdentity()
+  const downloadEnabled = who?.features?.fileDownloads ?? false
 
   return (
     <Modal
@@ -143,11 +185,30 @@ export function FileViewer({
       title={
         <Space direction="vertical" size={0}>
           <Typography.Text strong style={{ fontFamily: mono }}>{path}</Typography.Text>
-          {file.data?.component && (
-            <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-              {file.data.component}
-            </Typography.Text>
-          )}
+          <Space size={12} wrap style={{ fontSize: 12 }}>
+            {file.data?.component && (
+              <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+                {file.data.component}
+              </Typography.Text>
+            )}
+            {file.data && (
+              <>
+                <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+                  Size <Typography.Text style={{ fontSize: 12 }}>
+                    {formatBytes(bytes(file.data.sizeBytes)) ?? '-'}
+                  </Typography.Text>
+                </Typography.Text>
+                <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+                  Digest <Typography.Text
+                    copyable={{ text: file.data.digest }}
+                    style={{ fontFamily: mono, fontSize: 12 }}
+                  >
+                    {(file.data.digest ?? '').slice(0, 19)}…
+                  </Typography.Text>
+                </Typography.Text>
+              </>
+            )}
+          </Space>
         </Space>
       }
     >
@@ -156,44 +217,41 @@ export function FileViewer({
       ) : file.isError ? (
         <ErrorState error={file.error} retry={() => void file.refetch()} />
       ) : file.data?.tooLarge ? (
-        <Alert
-          type="info"
-          showIcon
-          message="This file is too large to open here"
-          description={
-            `It is ${formatBytes(bytes(file.data.sizeBytes)) ?? 'larger'}, and this view reads up to `
-            + `${formatBytes(file.data.limit ?? 0) ?? '2 MB'}. Looking at it means pulling the release.`
-          }
-        />
+        <Space direction="vertical" size={10}>
+          <Alert
+            type="info"
+            showIcon
+            message="This file is too large to open here"
+            description={
+              `It is ${formatBytes(bytes(file.data.sizeBytes)) ?? 'larger'}, and this view reads up to `
+              + `${formatBytes(file.data.limit ?? 0) ?? '2 MB'}.`
+            }
+          />
+          {downloadEnabled && product && reference && digest && (
+            <Button href={packageFileDownloadUrl(product, reference, digest, repository)}>
+              Download
+            </Button>
+          )}
+        </Space>
       ) : file.data?.binary ? (
-        <Alert
-          type="info"
-          showIcon
-          message="This file is not text"
-          description={
-            'The bytes are not valid text - an archive, an image or a compiled artifact. '
-            + 'It is shown as what it is rather than as a screen of replacement characters.'
-          }
-        />
+        <Space direction="vertical" size={10}>
+          <Alert
+            type="info"
+            showIcon
+            message="This file is not text"
+            description={
+              'The bytes are not valid text - an archive, an image or a compiled artifact. '
+              + 'It is shown as what it is rather than as a screen of replacement characters.'
+            }
+          />
+          {downloadEnabled && product && reference && digest && (
+            <Button href={packageFileDownloadUrl(product, reference, digest, repository)}>
+              Download
+            </Button>
+          )}
+        </Space>
       ) : (
         <Space direction="vertical" size={10} style={{ width: '100%' }}>
-          <Descriptions size="small" column={3}>
-            <Descriptions.Item label="Size">
-              {formatBytes(bytes(file.data?.sizeBytes)) ?? '-'}
-            </Descriptions.Item>
-            <Descriptions.Item label="Type">
-              {grammar ? <Tag>{grammar === 'markup' ? 'xml' : grammar}</Tag> : <Tag>text</Tag>}
-            </Descriptions.Item>
-            <Descriptions.Item label="Digest">
-              <Typography.Text
-                copyable={{ text: file.data?.digest }}
-                style={{ fontFamily: mono, fontSize: 11 }}
-              >
-                {(file.data?.digest ?? '').slice(0, 19)}…
-              </Typography.Text>
-            </Descriptions.Item>
-          </Descriptions>
-
           {shown?.reformatted && (
             <Typography.Text type="secondary" style={{ fontSize: 12 }}>
               Indented for reading - the publisher shipped it on one line.

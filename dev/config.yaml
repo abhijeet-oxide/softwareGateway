@@ -58,6 +58,10 @@ coordinator:
     budgetBytes: 536870912   # 512 MiB
     ttl: 168h                # a week
     sweepInterval: 15m
+  # Whether a reader can save a file's raw bytes, separate from looking at it.
+  # Turn off to disable saving without losing the ability to view text files.
+  files:
+    downloadEnabled: false
 
 worker:
   coordinatorEndpoint: http://localhost:8080

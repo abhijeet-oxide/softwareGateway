@@ -8,9 +8,10 @@ import {
 import { FolderOutlined } from '@ant-design/icons'
 import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom'
 import {
-  useArtifacts, useInspectPackage, usePackage, usePackageFiles, useProduct, useRunDownload,
+  packageFileDownloadUrl, useArtifacts, useInspectPackage, usePackage, usePackageFiles,
+  useProduct, useRunDownload,
 } from '../api/queries'
-import { useCan } from '../auth/permissions'
+import { useCan, useIdentity } from '../auth/permissions'
 import {
   deriveStatus, downloadedAt, failureReason, isLive, matches, packageReference, repositoryUrl,
   titleCase, verification, version,
@@ -25,7 +26,7 @@ import {
 import {
   EmptyStateCard, ErrorState, PageHeader, ReleaseTimeline, SearchBar,
 } from '../components/layout'
-import { FileViewer } from '../components/filecontent'
+import { FileViewer, looksBinary } from '../components/filecontent'
 import { SecurityPanel } from '../components/securitypanel'
 import { mono } from '../theme'
 import type {
@@ -436,10 +437,14 @@ function ComponentTable({ artifacts, kind }: { artifacts: Artifact[]; kind: stri
  * about and could not act on.
  */
 function FileTree({
-  files, onView,
+  files, onView, product, reference, repository, downloadEnabled,
 }: {
   files: PackageFile[]
   onView: (file: PackageFile) => void
+  product: string
+  reference: string
+  repository?: string
+  downloadEnabled: boolean
 }) {
   const [search, setSearch] = useState('')
 
@@ -447,7 +452,9 @@ function FileTree({
     () => (search.trim() ? files.filter((f) => matches(search, f.path, f.component)) : files),
     [files, search])
 
-  const tree = useMemo(() => buildTree(shown, onView), [shown, onView])
+  const tree = useMemo(
+    () => buildTree(shown, onView, product, reference, repository, downloadEnabled),
+    [shown, onView, product, reference, repository, downloadEnabled])
 
   return (
     <Space direction="vertical" size={8} style={{ width: '100%' }}>
@@ -493,7 +500,10 @@ interface TreeNode {
  * Sizes roll UP: a directory shows what everything under it weighs, which is
  * the number somebody is looking for when they ask what a bundle costs.
  */
-function buildTree(files: PackageFile[], onView: (file: PackageFile) => void): TreeNode[] {
+function buildTree(
+  files: PackageFile[], onView: (file: PackageFile) => void,
+  product: string, reference: string, repository: string | undefined, downloadEnabled: boolean,
+): TreeNode[] {
   interface Leaf {
     /** The file itself, with the path the publisher wrote. */
     file: PackageFile
@@ -557,19 +567,34 @@ function buildTree(files: PackageFile[], onView: (file: PackageFile) => void): T
             {/*
               The content is not held here - a release is tens of gigabytes and
               this is deliberately not a copy of it - so this fetches the one
-              blob from the vendor registry when somebody asks for it.
+              blob from the vendor registry when somebody asks for it. A file
+              that is never text (an archive, an image, a compiled artifact,
+              a signature) has nothing for a modal to show, so only Download
+              is offered for it - a plain link to the streaming endpoint,
+              gated by coordinator.files.downloadEnabled.
             */}
-            <Button
-              type="link"
-              size="small"
-              style={{ padding: 0, height: 'auto', fontSize: 12 }}
-              onClick={(e) => {
-                e.stopPropagation()
-                onView(leaf.file)
-              }}
-            >
-              View
-            </Button>
+            {!looksBinary(leaf.file.path, leaf.file.mediaType) && (
+              <Button
+                type="link"
+                size="small"
+                style={{ padding: 0, height: 'auto', fontSize: 12 }}
+                onClick={(e) => {
+                  e.stopPropagation()
+                  onView(leaf.file)
+                }}
+              >
+                View
+              </Button>
+            )}
+            {downloadEnabled && (
+              <a
+                href={packageFileDownloadUrl(product, reference, leaf.file.digest, repository)}
+                onClick={(e) => e.stopPropagation()}
+                style={{ fontSize: 12 }}
+              >
+                Download
+              </a>
+            )}
           </Space>
         ),
       })
@@ -599,6 +624,8 @@ export default function PackageDetail() {
   const runDownload = useRunDownload(productName!)
 
   const mayOperate = useCan('operate', { product: productName })
+  const { who } = useIdentity()
+  const downloadEnabled = who?.features?.fileDownloads ?? false
   const [confirming, setConfirming] = useState(false)
   const [viewing, setViewing] = useState<PackageFile>()
 
@@ -787,7 +814,7 @@ export default function PackageDetail() {
                 <Descriptions.Item label="Signature">
                   <VerificationBadge state={p ? verification(p) : 'UNKNOWN'} />
                 </Descriptions.Item>
-                <Descriptions.Item label="Signature type">
+                <Descriptions.Item label="Signature type" span={2}>
                   <Value reason="No signature was discovered for this release, so there is no type to report.">
                     {signature(p)?.blobMediaType || signature(p)?.mediaType || null}
                   </Value>
@@ -888,7 +915,6 @@ export default function PackageDetail() {
               </Row>
 
               <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-                A release is downloaded whole - individual artifacts are not selectable.
                 {!analysed && ' Analyse the package to list its files and establish its size.'}
               </Typography.Text>
 
@@ -913,7 +939,14 @@ export default function PackageDetail() {
                     </Space>
                   ),
                   children: kind === 'Files' && analysed ? (
-                    <FileTree files={files.data?.files ?? []} onView={setViewing} />
+                    <FileTree
+                      files={files.data?.files ?? []}
+                      onView={setViewing}
+                      product={productName!}
+                      reference={reference!}
+                      repository={repository}
+                      downloadEnabled={downloadEnabled}
+                    />
                   ) : kind === 'Files' && !analysed ? (
                     <EmptyStateCard
                       title="Files are not listed yet"

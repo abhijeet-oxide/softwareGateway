@@ -36,6 +36,9 @@ func (s *Server) handleWhoAmI(w http.ResponseWriter, r *http.Request) {
 		Tenant:        id.Tenant,
 		Products:      id.VisibleProducts(),
 		Permissions:   permissionsFor(id),
+		Features: v1.Features{
+			FileDownloads: s.deps.FileDownloadsEnabled,
+		},
 	}
 	for _, role := range id.Roles {
 		out.Roles = append(out.Roles, string(role))

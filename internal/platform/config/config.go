@@ -110,6 +110,18 @@ type CoordinatorConfig struct {
 	Queue          QueueConfig          `koanf:"queue"`
 	GC             GCConfig             `koanf:"gc"`
 	ManifestCache  ManifestCacheConfig  `koanf:"manifestCache"`
+	Files          FilesConfig          `koanf:"files"`
+}
+
+// FilesConfig governs the file-content routes - looking inside a release at
+// what a vendor shipped, one named layer at a time.
+type FilesConfig struct {
+	// DownloadEnabled registers the raw-bytes download route. Off by default
+	// is not the shape: a reader who cannot view a signature or an archive
+	// inline still has a legitimate reason to save it, so this defaults on and
+	// exists so a deployment that added it for one investigation can turn it
+	// back off without a rebuild.
+	DownloadEnabled bool `koanf:"downloadEnabled"`
 }
 
 // ManifestCacheConfig bounds the cached manifest bodies.
@@ -321,6 +333,9 @@ func Defaults() SystemConfig {
 				BudgetBytes:   512 << 20,
 				TTL:           7 * 24 * time.Hour,
 				SweepInterval: 15 * time.Minute,
+			},
+			Files: FilesConfig{
+				DownloadEnabled: true,
 			},
 		},
 		Worker: WorkerConfig{

@@ -1047,6 +1047,13 @@ export interface WhoAmIResponse {
   permissions: string[]
   /** Empty means every product. */
   products?: string[]
+  /** Deployment-wide switches, off a config file rather than a role. */
+  features: Features
+}
+
+export interface Features {
+  /** Whether a reader may save a file's raw bytes, not just view it. */
+  fileDownloads: boolean
 }
 
 // ---------------------------------------------------------------------------

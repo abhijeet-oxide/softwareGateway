@@ -177,6 +177,11 @@ type Deps struct {
 	// same terms: without it the file-content route is absent and a caller
 	// gets an honest 404 rather than a route that always fails.
 	Blobs BlobReader
+	// FileDownloadsEnabled gates the raw-bytes download route separately from
+	// Blobs: viewing a file's text and saving its bytes are the same read, but
+	// a deployment may want the first without the second - see
+	// FilesConfig.DownloadEnabled.
+	FileDownloadsEnabled bool
 	// Replication is optional: it needs a registry management client and the
 	// secrets behind it, which only a composition root holds. Without it the
 	// replication routes are absent and a caller gets an honest 404 rather
@@ -369,6 +374,14 @@ func (s *Server) routes() chi.Router {
 				// unlike the listing above this one leaves the database.
 				r.Get("/products/{product}/packages/{package}/files/content",
 					s.handleGetPackageFileContent)
+				if s.deps.FileDownloadsEnabled {
+					// ONE file's bytes, for a reader who wants to save it - an
+					// archive, an image, a file too large to look at inline.
+					// Gated separately so a deployment can turn saving off
+					// without also losing the ability to look.
+					r.Get("/products/{product}/packages/{package}/files/download",
+						s.handleDownloadPackageFile)
+				}
 			}
 			// What the source would not serve. A sibling of the packages listing
 			// rather than part of it: these are not packages, they are the

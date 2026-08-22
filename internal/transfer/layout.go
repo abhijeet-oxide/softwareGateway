@@ -159,15 +159,21 @@ func ResolveLayout(tree store.ExpandedTree, opts LayoutOptions) map[string]Place
 			sites[0].Tags = mergeTags(opts.RootTags, ref.tags())
 
 		case ref.repository == "" || sameRepository(ref.repository, container):
-			// Named within its own container, or not named at all. The tag -
-			// where there is one - belongs right here.
-			sites[0].Tags = ref.tags()
+			// Named within its own container, or not named at all. The tag —
+			// where there is one — belongs right here, unless the root already
+			// claims that exact name: a wrapper's payload keeps the same
+			// ref.name as the release tag the wrapper itself is tagged with,
+			// and the two must not compete to own it.
+			sites[0].Tags = withoutRootTags(ref.tags(), opts.RootTags)
 
 		default:
 			// Named elsewhere. It stays in the container so the bundle still
 			// resolves, and is ALSO published under the name the vendor gave
 			// it, untagged in the container because the name is not this
-			// repository's to claim.
+			// repository's to claim. A different repository cannot collide
+			// with the root's tags — those only ever name something in the
+			// root's own container — so the vendor's own name is kept as is,
+			// even where it happens to reuse the release's version string.
 			sites = append(sites, Site{
 				Repository: destinationPath(opts.BasePath, ref.repository),
 				Tags:       ref.tags(),
@@ -358,6 +364,45 @@ func mergeTags(a, b []string) []string {
 				continue
 			}
 			seen[t] = true
+			out = append(out, t)
+		}
+	}
+	return out
+}
+
+// withoutRootTags drops any tag the root already carries, within the SAME
+// repository only — a different repository cannot collide with a tag that
+// only ever names something in the root's own container.
+//
+// # The bug this exists for
+//
+// A wrapper's payload keeps its own `org.opencontainers.image.ref.name`
+// annotation, and a vendor that bundles a release under `signed_orb_X` has no
+// reason to change what the payload calls itself: it is still `orb_X`. But
+// `orb_X` is also one of the root's RootTags (rootTags in planner.go puts the
+// wrapper there precisely so one name reaches both the payload and the
+// signature) — so without this, TWO manifests in the same transfer, in the
+// same repository, both carried a job to tag `orb_X`: the wrapper, and its own
+// payload child. Whichever ran second found the tag already pointing at its
+// sibling's digest and was refused as an overwrite, on registries that
+// distinguish creating a tag from moving one.
+//
+// The root is the one place that name resolves correctly, because only the
+// wrapper reaches the signature. Dropping the collision here rather than
+// deduplicating jobs later keeps the rule where the layout is decided.
+func withoutRootTags(tags, rootTags []string) []string {
+	if len(rootTags) == 0 || len(tags) == 0 {
+		return tags
+	}
+
+	claimed := make(map[string]bool, len(rootTags))
+	for _, t := range rootTags {
+		claimed[t] = true
+	}
+
+	out := make([]string, 0, len(tags))
+	for _, t := range tags {
+		if !claimed[t] {
 			out = append(out, t)
 		}
 	}

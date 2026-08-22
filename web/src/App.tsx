@@ -37,6 +37,13 @@ function LegacyPackageRedirect() {
   )
 }
 
+/** Carries a bookmarked /compare, product and version intact, onto /packages/compare. */
+function LegacyCompareRedirect() {
+  const [params] = useSearchParams()
+  const query = params.toString()
+  return <Navigate replace to={`/packages/compare${query ? `?${query}` : ''}`} />
+}
+
 export function App() {
   return (
     <Shell>
@@ -56,7 +63,9 @@ export function App() {
           <Route path="/software/:product/:reference" element={<LegacyPackageRedirect />} />
           <Route path="/downloads" element={<Downloads />} />
           <Route path="/downloads/:transferId" element={<DownloadDetail />} />
-          <Route path="/compare" element={<Compare />} />
+          <Route path="/packages/compare" element={<Compare />} />
+          {/* The old path - links to it exist already, so it redirects rather than 404s. */}
+          <Route path="/compare" element={<LegacyCompareRedirect />} />
           <Route path="/repositories" element={<Repositories />} />
           <Route path="/activity" element={<Activity />} />
           <Route path="/reports" element={<Reports />} />

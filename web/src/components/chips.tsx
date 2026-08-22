@@ -4,7 +4,7 @@ import {
   CheckCircleOutlined, ExportOutlined, ExclamationCircleOutlined,
   CloseCircleOutlined, LoadingOutlined, QuestionCircleOutlined,
 } from '@ant-design/icons'
-import { Icon, locationIcon, repositoryIcon } from './icons'
+import { Icon, locationIcon, repositoryIcon, type IconComponent } from './icons'
 import { Link } from 'react-router-dom'
 import { NA } from './value'
 import { releaseHref, type SoftwareStatus, type VerificationState, type Location } from '../domain/derive'
@@ -57,7 +57,9 @@ export function VersionChip({
   return (
     <Space direction="vertical" size={0}>
       <Link to={releaseHref(product, pkg)} style={{ fontFamily: mono }}>
-        {version}
+        <Typography.Text ellipsis={{ tooltip: version }} style={{ maxWidth: 150 }}>
+          {version}
+        </Typography.Text>
       </Link>
       {repository && (
         <Tooltip title={pkg.sourceRepository}>
@@ -277,7 +279,13 @@ export function VerificationBadge({ state }: { state: VerificationState }) {
  * Every repository URL is clickable and opens in a new tab, because the brief
  * requires external repositories to always be reachable.
  */
-export function LocationChip({ locations }: { locations: Location[] }) {
+export function LocationChip({
+  locations, vendorLabel, vendorIcon,
+}: {
+  locations: Location[]
+  vendorLabel?: string
+  vendorIcon?: IconComponent
+}) {
   if (locations.length === 0) {
     return <NA reason="This release has not been recorded in any location yet." />
   }
@@ -292,21 +300,25 @@ export function LocationChip({ locations }: { locations: Location[] }) {
         const Mark = locationIcon(loc.kind, loc.name)
         // Just the name. The icon already says which kind of place it is, and
         // prefixing "Vendor:" only widened the column.
-        const label = loc.name
+        const isVendor = loc.kind === 'vendor'
+        const label = isVendor ? vendorLabel || loc.name : loc.name
+        const mark = isVendor && vendorIcon
+          ? <Icon as={vendorIcon} title={loc.kind} />
+          : <Icon as={Mark} title={loc.kind} />
         return (
           <span key={`${loc.name}-${i}`}>
             {i > 0 && <span style={{ color: '#98A2B3', marginInlineEnd: 4 }}>+</span>}
             {loc.url ? (
               <a href={loc.url} target="_blank" rel="noreferrer">
                 <Space size={4}>
-                  <Icon as={Mark} title={loc.kind} />
+                  {mark}
                   {label}
                   <ExportOutlined style={{ fontSize: 10 }} />
                 </Space>
               </a>
             ) : (
               <Space size={4}>
-                <Icon as={Mark} title={loc.kind} />
+                {mark}
                 {label}
               </Space>
             )}

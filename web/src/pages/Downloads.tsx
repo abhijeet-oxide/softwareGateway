@@ -159,11 +159,7 @@ export default function Downloads() {
                   {
                     title: 'Version',
                     width: 160,
-                    render: (_, t) => (
-                      <Link to={`/downloads/${t.id}`} style={{ fontFamily: mono }}>
-                        {transferVersion(t)}
-                      </Link>
-                    ),
+                    render: (_, t) => <Typography.Text style={{ fontFamily: mono }}>{transferVersion(t)}</Typography.Text>,
                   },
                   { title: 'State', width: 130, render: (_, t) => <TransferStateTag state={t.state} /> },
                   {
@@ -183,6 +179,7 @@ export default function Downloads() {
                           ?? bytes(t.progress?.plannedBytes)}
                         saved={bytes(t.progress?.contentPresentBytes)
                           ?? bytes(t.progress?.savedBytes)}
+                        groups={t.content}
                         strategy={t.strategy ?? 'copy'}
                         elapsedSeconds={elapsedSeconds(t.startedAt)}
                         live={isLive(t.state)}
@@ -190,7 +187,18 @@ export default function Downloads() {
                     ),
                   },
                   { title: 'Priority', width: 90, align: 'right', render: (_, t) => <PriorityControl transfer={t} /> },
-                  { title: 'Actions', width: 190, render: (_, t) => <QueueControls transfer={t} /> },
+                  {
+                    title: 'Actions',
+                    width: 290,
+                    render: (_, t) => (
+                      <Space size={4}>
+                        <Link to={`/downloads/${t.id}`}>
+                          <Button size="small" type="primary">View download</Button>
+                        </Link>
+                        <QueueControls transfer={t} />
+                      </Space>
+                    ),
+                  },
                 ]}
               />
             )}
@@ -222,11 +230,7 @@ export default function Downloads() {
                   {
                     title: 'Version',
                     width: 160,
-                    render: (_, t) => (
-                      <Link to={`/downloads/${t.id}`} style={{ fontFamily: mono }}>
-                        {transferVersion(t)}
-                      </Link>
-                    ),
+                    render: (_, t) => <Typography.Text style={{ fontFamily: mono }}>{transferVersion(t)}</Typography.Text>,
                   },
                   { title: 'State', width: 130, render: (_, t) => <TransferStateTag state={t.state} /> },
                   {
@@ -244,7 +248,18 @@ export default function Downloads() {
                     render: (_, t) => <Value>{formatBytes(bytes(t.progress?.bytesTransferred))}</Value>,
                   },
                   { title: 'When', width: 100, render: (_, t) => <TimeAgo at={t.completedAt || t.createdAt} /> },
-                  { title: 'Actions', width: 150, render: (_, t) => <QueueControls transfer={t} /> },
+                  {
+                    title: 'Actions',
+                    width: 250,
+                    render: (_, t) => (
+                      <Space size={4}>
+                        <Link to={`/downloads/${t.id}`}>
+                          <Button size="small" type="primary">View download</Button>
+                        </Link>
+                        <QueueControls transfer={t} />
+                      </Space>
+                    ),
+                  },
                 ]}
               />
             )}

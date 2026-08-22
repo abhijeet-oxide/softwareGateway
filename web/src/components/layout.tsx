@@ -8,6 +8,7 @@ import {
   ArrowLeftOutlined, CheckCircleOutlined, ClockCircleOutlined, LoadingOutlined, RocketOutlined,
   SearchOutlined, ShopOutlined,
 } from '@ant-design/icons'
+import PartialIcon from '@iconify-react/oui/partial';
 import { Link } from 'react-router-dom'
 import type { ContentGroup, PresentComponent } from '../api/types'
 import { kindName, type LifecycleStep } from '../domain/derive'
@@ -354,7 +355,7 @@ const STAGE_MARKS: Record<string, { icon: ReactNode; colour: string }> = {
  * match they expected is missing.
  */
 export function SearchBar({
-  value, onChange, placeholder, matched, total, width = 320,
+  value, onChange, placeholder, matched, total, width = 320, style,
 }: {
   value: string
   onChange: (value: string) => void
@@ -363,10 +364,12 @@ export function SearchBar({
   matched?: number
   total?: number
   width?: number
+  /** Override the default bottom margin, e.g. when sharing a row with other filters. */
+  style?: React.CSSProperties
 }) {
   const filtering = value.trim().length > 0
   return (
-    <Space size={12} style={{ marginBottom: 12 }} wrap>
+    <Space size={12} style={{ marginBottom: 12, ...style }} wrap>
       <Input
         allowClear
         style={{ width }}
@@ -478,7 +481,11 @@ export function SavedBreakdown({
       title="Already at the destination"
       styles={{ body: { maxHeight: 420, overflow: 'auto' } }}
       content={
-        <Space direction="vertical" size={12} style={{ minWidth: 380, maxWidth: 520 }}>
+        <Space
+          direction="vertical"
+          size={12}
+          style={{ width: 'min(520px, calc(100vw - 32px))', maxWidth: '100%' }}
+        >
           {kinds.length > 0 && (
             <Space direction="vertical" size={4} style={{ width: '100%' }}>
               {kinds.map(({ group, saved }) => (
@@ -551,19 +558,27 @@ function PresentList({ components }: { components: PresentComponent[] }) {
         The destination already holds these
       </Typography.Text>
       {shown.map((c) => (
-        <div key={c.digest} style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+        <div
+          key={c.digest}
+          style={{ display: 'flex', alignItems: 'center', gap: 8, minWidth: 0 }}
+        >
           <Typography.Text
-            style={{ fontSize: 12, flex: 1, fontFamily: c.name ? undefined : mono }}
+            style={{ minWidth: 0, flex: 1, fontSize: 12, fontFamily: c.name ? undefined : mono }}
             ellipsis={{ tooltip: c.name || c.digest }}
           >
             {c.name || c.digest.slice(0, 19)}
           </Typography.Text>
           {c.partial && (
             <Tooltip title="Part of this component was already there; the rest is still being moved.">
-              <Tag style={{ marginInlineEnd: 0, fontSize: 10 }}>partly</Tag>
+              <Tag
+                style={{ marginInlineEnd: 0, flex: '0 0 auto', fontSize: 10 }}
+                icon={<PartialIcon style={{ width: '1em', height: '1em' }} />}
+              >
+                partly
+              </Tag>
             </Tooltip>
           )}
-          <Typography.Text type="secondary" style={{ fontSize: 11 }}>
+          <Typography.Text type="secondary" style={{ flex: '0 0 auto', fontSize: 11 }}>
             {formatBytes(bytes(c.bytes))}
           </Typography.Text>
         </div>

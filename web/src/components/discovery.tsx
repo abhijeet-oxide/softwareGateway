@@ -39,7 +39,7 @@ import type { DiscoverySourceState, Product } from '../api/types'
  */
 
 const PHASE: Record<string, string> = {
-  ENUMERATING_REPOSITORIES: 'Finding repositories',
+  ENUMERATING_REPOSITORIES: 'Scanning Repository Catalogs',
   LISTING_TAGS: 'Listing versions',
   RESOLVING_TAGS: 'Reading version details',
 }
@@ -153,7 +153,7 @@ function SourceProgress({ s }: { s: DiscoverySourceState }) {
       <Space size={6}>
         <SyncOutlined spin style={{ color: palette.primary }} />
         <Typography.Text style={{ fontSize: 12 }}>
-          {phaseLabel(s.phase)} - waiting for the registry to list what it holds
+          {phaseLabel(s.phase)}
         </Typography.Text>
       </Space>
     )
@@ -234,7 +234,7 @@ function scanFindings(s: DiscoverySourceState): string {
   if (s.newPackages) parts.push(`${formatCount(s.newPackages)} new`)
   if (s.artifacts) parts.push(`${formatCount(s.artifacts)} manifests read`)
   if (s.errors) parts.push(`${formatCount(s.errors)} errors`)
-  return parts.length > 0 ? parts.join(' · ') : 'nothing found yet'
+  return parts.length > 0 ? parts.join(' · ') : 'No releases found'
 }
 
 /**

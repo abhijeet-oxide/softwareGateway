@@ -1,5 +1,6 @@
 import type { ThemeConfig } from 'antd'
-import type { ComponentType, SVGProps } from 'react'
+import type { ComponentType, CSSProperties } from 'react'
+import AtandtIcon from '@iconify-react/thesvg-color/atandt';
 
 /**
  * EVERY VISUAL DECISION IN THIS APPLICATION, IN ONE FILE.
@@ -57,7 +58,7 @@ import type { ComponentType, SVGProps } from 'react'
  *
  * Leave it undefined for no mark at all, which is the default.
  */
-export type BrandMark = ComponentType<SVGProps<SVGSVGElement>> | string
+export type BrandMark = ComponentType<{ style?: CSSProperties }> | string
 
 export const branding: {
   /** The name in the side navigation, and nowhere else. */
@@ -67,7 +68,7 @@ export const branding: {
   markSize: number
 } = {
   name: 'Software Gateway',
-  mark: undefined,
+  mark: AtandtIcon,
   markSize: 20,
 }
 
@@ -85,7 +86,7 @@ export const branding: {
  */
 export const palette = {
   /** The brand colour. Everything interactive derives from it. */
-  primary: '#0057B8',
+  primary: '#009fdb',
 
   /** The side navigation, and the type on it. */
   sidebar: '#0B1F3A',

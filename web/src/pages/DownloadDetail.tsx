@@ -18,7 +18,7 @@ import {
 } from '../components/progress'
 import { RepoLink, TimeAgo, TransferStateTag } from '../components/chips'
 import {
-  ARTIFACT_ICONS, Icon, IndexIcon, LayersIcon, OciIcon, type IconComponent,
+  ARTIFACT_ICONS, Icon, IndexEditIcon, LayersIcon, OciIcon, type IconComponent,
 } from '../components/icons'
 import { PriorityControl, QueueControls } from '../components/queuecontrols'
 import { ErrorState, PageHeader, SavedBreakdown, SavedPanel } from '../components/layout'
@@ -216,7 +216,7 @@ function JobProgress({ job }: { job: Job }) {
  * content itself - so the column reads without the reader translating.
  */
 const JOB_ICONS: Record<string, IconComponent> = {
-  manifest: IndexIcon,
+  manifest: IndexEditIcon,
   blob: LayersIcon,
 }
 
@@ -352,15 +352,12 @@ export default function DownloadDetail() {
   const waiting = (() => {
     if (!t || t.state !== 'READY' && t.state !== 'PENDING' && t.state !== 'PLANNING') return null
     if (t.state === 'PLANNING' || (t.state === 'PENDING' && !progress?.jobsPlanned)) {
-      return 'This download is still being planned: the release is being walked to work out what has to move.'
+      return 'Planning the release artifacts before download starts. Download will begin when planning is complete.'
     }
     const workers = progress?.workers ?? 0
     const pending = progress?.jobsWaiting ?? progress?.jobsOutstanding ?? 0
-    return `${formatCount(pending) ?? '0'} jobs are ready to run and no worker has taken one yet`
-      + (workers > 0
-        ? `. ${formatCount(workers)} workers are busy with other work; this download starts as they free up.`
-        : '. The fleet is occupied elsewhere, or no worker is currently connected.')
-      + ' Raising the priority below moves it ahead of work that has not started.'
+    return `${formatCount(pending) ?? '0'} jobs waiting for an available worker.`
+      + (workers > 0 ? ` ${formatCount(workers)} currently busy.` : '')
   })()
 
   /*
@@ -443,11 +440,11 @@ export default function DownloadDetail() {
 
       {waiting && (
         <Alert
-          style={{ marginBottom: 16 }}
+          style={{ marginBottom: 12, padding: '7px 12px' }}
           type="info"
           showIcon
-          message="Queued - nothing has been handed to a worker yet"
-          description={waiting}
+          message={<Typography.Text style={{ fontSize: 13 }}>Queued</Typography.Text>}
+          description={<Typography.Text type="secondary" style={{ fontSize: 12 }}>{waiting}</Typography.Text>}
         />
       )}
 
@@ -495,6 +492,7 @@ export default function DownloadDetail() {
           <Space direction="vertical" size={16} style={{ width: '100%' }}>
             <Card
               style={{ height: '100%' }}
+              loading={transfer.isLoading}
               title={mirrored
                 ? `Step 1 - downloading to ${t?.targetName ?? 'internal storage'}`
                 : `Downloading to ${t?.targetName ?? 'internal storage'}`}
@@ -636,7 +634,7 @@ export default function DownloadDetail() {
         </Col>
 
         <Col xs={24} xl={9} style={{ display: 'flex' }}>
-          <Card title="Download Summary" style={{ width: '100%' }}>
+          <Card title="Download Summary" style={{ width: '100%' }} loading={transfer.isLoading}>
             <Descriptions column={1} size="small">
               {/*
                 ONE SIZE. There was a second - everything the transfer had to

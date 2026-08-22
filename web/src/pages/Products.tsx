@@ -240,12 +240,12 @@ export default function Products() {
                 width: 140,
                 render: (_, p) =>
                   p.autoDownload?.enabled ? (
-                    <Tag color="blue" style={{ marginInlineEnd: 0 }}>
+                    <Tag color="success" style={{ marginInlineEnd: 0 }}>
                       {p.autoDownload.rules?.length ?? 0} rules
                     </Tag>
                   ) : (
                     <Tooltip title="Automatic downloads are switched off in configuration. Downloading by hand is unaffected.">
-                      <Tag style={{ marginInlineEnd: 0 }}>Disabled</Tag>
+                      <Tag color="error" style={{ marginInlineEnd: 0 }}>Disabled</Tag>
                     </Tooltip>
                   ),
               },

@@ -37,7 +37,9 @@ export function formatBytes(value: Int64String | number | undefined | null): str
   const units = ['B', 'KB', 'MB', 'GB', 'TB', 'PB']
   const i = Math.min(Math.floor(Math.log(Math.abs(n)) / Math.log(1024)), units.length - 1)
   const scaled = n / 1024 ** i
-  return `${i === 0 ? scaled : scaled.toFixed(1)} ${units[i]}`
+  // Bytes are a whole count, but a speed computed from a duration is rarely
+  // one - `7.113459213686935 B/s` is the same lie in more digits than `7 B/s`.
+  return `${i === 0 ? Math.round(scaled) : scaled.toFixed(1)} ${units[i]}`
 }
 
 /** Speeds as `142 MB/s`. */

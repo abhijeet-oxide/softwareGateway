@@ -1,6 +1,6 @@
-import type { ComponentType, SVGProps } from 'react'
+import type { CSSProperties, ElementType } from 'react'
 import NokiaIcon from '~icons/simple-icons/nokia'
-import JFrogIcon from '~icons/simple-icons/jfrog'
+import JFrogIcon from '~icons/logos/jfrog'
 import OpenShiftIcon from '~icons/simple-icons/redhatopenshift'
 import RedHatIcon from '~icons/simple-icons/redhat'
 import DockerIcon from '~icons/simple-icons/docker'
@@ -14,12 +14,13 @@ import PackageIcon from '~icons/mdi/package-variant-closed'
 import HelmIcon from '~icons/simple-icons/helm'
 import FileIcon from '~icons/mdi/file-document-outline'
 import AnalyzeIcon from '~icons/mdi/file-tree-outline'
-import IndexIcon from '~icons/mdi/table-of-contents'
+import IndexEditIcon from '@iconify-react/oui/index-edit';
 import DownloadIcon from '~icons/mdi/tray-arrow-down'
 import LayersIcon from '~icons/mdi/layers-triple-outline'
 import SignatureIcon from '~icons/mdi/certificate-outline'
 import type { Repository } from '../api/types'
 import { branding } from '../theme'
+import NokiaNAsset from '../assets/nokia_n.svg'
 
 /**
  * Every icon in the application, chosen in one place.
@@ -45,7 +46,7 @@ import { branding } from '../theme'
  * rather than a guess.
  */
 
-export type IconComponent = ComponentType<SVGProps<SVGSVGElement>>
+export type IconComponent = ElementType<{ style?: CSSProperties }>
 
 /**
  * The mark a deployment puts before the product name.
@@ -80,13 +81,19 @@ export function BrandMark({ size }: { size?: number }) {
   }
 
   const Mark = mark
-  return <Mark width={px} height={px} aria-hidden style={{ display: 'block', color: '#fff' }} />
+  return <Mark aria-hidden style={{ display: 'block', width: px, height: px, color: '#fff' }} />
 }
+
+export const NokiaNIcon: IconComponent = (props) => (
+  <svg viewBox="0 0 48 48" {...props}>
+    <image href={NokiaNAsset} width="48" height="48" />
+  </svg>
+)
 
 /** Vendors we can name, matched against the source's declared `vendor` layout. */
 const VENDOR_MARKS: Record<string, IconComponent> = {
-  near: NokiaIcon,
-  nokia: NokiaIcon,
+  near: NokiaNIcon,
+  nokia: NokiaNIcon,
 }
 
 /** Registry types, from `Repository.type`. */
@@ -131,12 +138,14 @@ export function repositoryIcon(repo: Repository | undefined): IconComponent {
   const type = repo.type?.toLowerCase()
   if (type && REGISTRY_MARKS[type]) return REGISTRY_MARKS[type]!
 
+  const repositoryDetails = [repo.name, repo.registry, repo.repository].filter(Boolean).join(' ')
+  for (const [pattern, mark] of NAME_HINTS) {
+    if (pattern.test(repositoryDetails)) return mark
+  }
+
   const env = repo.environment?.toLowerCase()
   if (env && ENVIRONMENT_MARKS[env]) return ENVIRONMENT_MARKS[env]!
 
-  for (const [pattern, mark] of NAME_HINTS) {
-    if (pattern.test(repo.name)) return mark
-  }
   return repo.role === 'source' ? StoreIcon : DatabaseIcon
 }
 
@@ -179,13 +188,13 @@ export const ARTIFACT_ICONS = {
   // The two structural kinds. An index is a table of contents - it names the
   // release's parts and carries none of them - and a signature is an
   // attestation, which is what a certificate mark says everywhere else.
-  Index: IndexIcon,
+  Index: IndexEditIcon,
   Signatures: SignatureIcon,
 } as const
 
 export type ArtifactKind = keyof typeof ARTIFACT_ICONS
 
-export { AnalyzeIcon, DownloadIcon, IndexIcon, LayersIcon, SignatureIcon, PackageIcon, NokiaIcon, JFrogIcon, OpenShiftIcon, RocketIcon, FlaskIcon, OciIcon, DockerIcon, HelmIcon }
+export { AnalyzeIcon, DownloadIcon, IndexEditIcon, LayersIcon, SignatureIcon, PackageIcon, NokiaIcon, JFrogIcon, OpenShiftIcon, RocketIcon, FlaskIcon, OciIcon, DockerIcon, HelmIcon }
 
 /**
  * Renders one of the above at text size.
@@ -195,10 +204,10 @@ export { AnalyzeIcon, DownloadIcon, IndexIcon, LayersIcon, SignatureIcon, Packag
  * and a title so it is not a bare glyph to a screen reader.
  */
 export function Icon({
-  as: Component, size = 14, colour, title, className,
+  as: Component, size = '1em', colour, title, className,
 }: {
   as: IconComponent
-  size?: number
+  size?: number | string
   colour?: string
   title?: string
   /**

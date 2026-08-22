@@ -1,6 +1,7 @@
 package transport
 
 import (
+	"bytes"
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
@@ -46,10 +47,48 @@ func newAuthTransportWithCache(next http.RoundTripper, cfg Config, cache *tokenC
 	return &authTransport{next: next, cfg: cfg, cache: cache}
 }
 
+// maxReauthAttempts bounds how many times one request re-authenticates after
+// a 401, counting the first.
+//
+// # The bug this exists for
+//
+// A tag write to Artifactory was refused with 401 on a brand-new token —
+// fetched moments earlier, for the same scope, over the same connection — and
+// an unmodified retry of the identical request, seconds later, succeeded
+// immediately. That is not a standing credential problem; a wrong password or
+// a missing grant fails the same way every time, and this did not. The likely
+// cause is replication lag between whichever registry node issued the token
+// (or validated the Basic credential) and whichever node served the write, in
+// a load-balanced Artifactory cluster — the kind of gap one immediate retry
+// clears and a hundred would not, which is why this is bounded rather than
+// handed to the outer retry policy's full backoff schedule.
+const maxReauthAttempts = 3
+
+// reauthBackoff is the pause between repeated 401s, short because the failure
+// this exists for clears in well under a second.
+const reauthBackoff = 250 * time.Millisecond
+
 func (t *authTransport) RoundTrip(r *http.Request) (*http.Response, error) {
 	scope := t.cfg.Scope
 	if scope == "" {
 		scope = scopeFor(r, t.cfg.Repository)
+	}
+
+	// Make a small body replayable so a 401 can be re-authenticated.
+	//
+	// A registry token this transport caches can expire mid-transfer — the
+	// default TTL is 60 seconds when the registry omits expires_in, which
+	// Artifactory does for its reference tokens — and the LAST write of a long
+	// transfer, the tag, is the one most likely to land after that expiry with
+	// no cached token to attach. The reauth path below can only retry a request
+	// whose body it can replay, and ORAS does not set GetBody on a manifest
+	// PUT. Without this, that final tag write met a 401 it could not recover
+	// from and failed the whole transfer, intermittently, by duration.
+	//
+	// Capped so a gigabyte blob upload — large or unknown ContentLength — is
+	// never buffered; a manifest is kilobytes and always fits.
+	if err := ensureReplayable(r); err != nil {
+		return nil, err
 	}
 
 	// Attach a cached token if we have one. This is the whole point of the
@@ -66,43 +105,96 @@ func (t *authTransport) RoundTrip(r *http.Request) (*http.Response, error) {
 		return resp, err
 	}
 
-	challenge := parseChallenge(resp.Header.Get("WWW-Authenticate"))
-	if challenge.scheme == "" {
-		return resp, nil // 401 without a challenge: nothing to act on
-	}
-
-	// A request whose body cannot be replayed must not be retried.
-	if r.Body != nil && r.Body != http.NoBody && r.GetBody == nil {
-		return resp, nil
-	}
-	drain(resp)
-
-	if challenge.scheme == "basic" {
-		if t.cfg.Username == "" {
-			// Classified, so the retry layer above stops immediately rather
-			// than spending the full backoff schedule on a problem no amount
-			// of waiting can fix.
-			return nil, fmt.Errorf("%w: registry %s requires basic auth but no credentials are configured",
-				registry.ErrUnauthorized, t.cfg.Registry)
+	for attempt := 1; attempt < maxReauthAttempts; attempt++ {
+		challenge := parseChallenge(resp.Header.Get("WWW-Authenticate"))
+		if challenge.scheme == "" {
+			return resp, nil // 401 without a challenge: nothing to act on
 		}
-		req, err := rewind(r, 1)
-		if err != nil {
-			return nil, err
+
+		// A request whose body cannot be replayed must not be retried.
+		if r.Body != nil && r.Body != http.NoBody && r.GetBody == nil {
+			return resp, nil
 		}
-		req.SetBasicAuth(t.cfg.Username, t.cfg.Password)
-		return t.next.RoundTrip(req)
+		drain(resp)
+
+		var req *http.Request
+		if challenge.scheme == "basic" {
+			if t.cfg.Username == "" {
+				// Classified, so the retry layer above stops immediately rather
+				// than spending the full backoff schedule on a problem no amount
+				// of waiting can fix.
+				return nil, fmt.Errorf("%w: registry %s requires basic auth but no credentials are configured",
+					registry.ErrUnauthorized, t.cfg.Registry)
+			}
+			req, err = rewind(r, attempt)
+			if err != nil {
+				return nil, err
+			}
+			req.SetBasicAuth(t.cfg.Username, t.cfg.Password)
+		} else {
+			// A token that has already been refused once for this scope is
+			// not handed out again: forcing a fresh exchange is what turns a
+			// second attempt into a DIFFERENT attempt rather than the same
+			// one repeated.
+			if attempt > 1 {
+				t.cache.delete(scope)
+			}
+			tok, tokErr := t.fetchToken(r, challenge, scope)
+			if tokErr != nil {
+				return nil, tokErr
+			}
+			req, err = rewind(r, attempt)
+			if err != nil {
+				return nil, err
+			}
+			req = withBearer(req, tok)
+		}
+
+		resp, err = t.next.RoundTrip(req)
+		if err != nil || resp.StatusCode != http.StatusUnauthorized {
+			return resp, err
+		}
+		r = req
+		if attempt < maxReauthAttempts-1 {
+			if sleepErr := sleep(r.Context(), reauthBackoff); sleepErr != nil {
+				return nil, sleepErr
+			}
+		}
+	}
+	return resp, nil
+}
+
+// maxReplayBody caps what ensureReplayable will buffer: comfortably larger than
+// any manifest, far smaller than a blob body worth holding in memory.
+const maxReplayBody = 4 << 20 // 4 MiB
+
+// ensureReplayable buffers a small request body so the request can be resent
+// after a 401.
+//
+// A no-op unless the body is present, has no GetBody already, and declares a
+// length within maxReplayBody. Blob uploads — gigabytes, or an unknown length —
+// are left untouched: they must never be held in memory, and they reach the
+// registry through the upload-session endpoints rather than as one PUT anyway.
+func ensureReplayable(r *http.Request) error {
+	if r.Body == nil || r.Body == http.NoBody || r.GetBody != nil {
+		return nil
+	}
+	if r.ContentLength < 0 || r.ContentLength > maxReplayBody {
+		return nil
 	}
 
-	tok, err := t.fetchToken(r, challenge, scope)
+	buf, err := io.ReadAll(r.Body)
+	_ = r.Body.Close()
 	if err != nil {
-		return nil, err
+		return fmt.Errorf("buffer request body for re-authentication: %w", err)
 	}
 
-	req, err := rewind(r, 1)
-	if err != nil {
-		return nil, err
+	r.Body = io.NopCloser(bytes.NewReader(buf))
+	r.GetBody = func() (io.ReadCloser, error) {
+		return io.NopCloser(bytes.NewReader(buf)), nil
 	}
-	return t.next.RoundTrip(withBearer(req, tok))
+	r.ContentLength = int64(len(buf))
+	return nil
 }
 
 // fetchToken exchanges credentials for a bearer token, once per scope even
@@ -329,4 +421,12 @@ func (c *tokenCache) set(scope, token string, ttl time.Duration) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.tokens[scope] = cachedToken{token: token, expires: expires}
+}
+
+// delete discards a scope's cached token, so the next fetch is a real
+// exchange rather than a repeat of a token the registry has already refused.
+func (c *tokenCache) delete(scope string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	delete(c.tokens, scope)
 }

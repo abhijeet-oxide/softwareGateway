@@ -667,6 +667,7 @@ export default function PackageDetail() {
   return (
     <>
       <PageHeader
+        back={{ to: '/packages', label: 'All packages' }}
         /*
           THE RELEASE FIRST, the product second.
 
@@ -690,7 +691,7 @@ export default function PackageDetail() {
         }
         extra={
           <Space>
-            <Link to={`/compare?product=${encodeURIComponent(productName!)}&from=${encodeURIComponent(p?.tag ?? '')}`}>
+            <Link to={`/packages/compare?product=${encodeURIComponent(productName!)}&from=${encodeURIComponent(p?.tag ?? '')}`}>
               <Button>Compare</Button>
             </Link>
             {live ? (

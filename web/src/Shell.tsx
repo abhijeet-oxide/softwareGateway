@@ -1,10 +1,12 @@
 import type { ReactNode } from 'react'
 import { Avatar, Badge, Button, Layout, Menu, Space, Tooltip, Typography } from 'antd'
 import {
-  AppstoreOutlined, BarChartOutlined, BellOutlined,
-  DatabaseOutlined, HistoryOutlined, HomeOutlined,
+  BarChartOutlined, BellOutlined,
+  DatabaseOutlined, HistoryOutlined,
   QuestionCircleOutlined, SettingOutlined,
 } from '@ant-design/icons'
+import DashboardOutlineIcon from '@iconify-react/material-symbols/dashboard-outline';
+import ProductCatalogIcon from '@iconify-react/fluent-mdl2/product-catalog';
 import { DownloadIcon, Icon, PackageIcon } from './components/icons'
 import { useLocation, useNavigate } from 'react-router-dom'
 import { useIdentity } from './auth/permissions'
@@ -21,22 +23,16 @@ const { Sider, Header, Content } = Layout
  * drill-downs, not extra entries (UI brief §3).
  */
 const NAV = [
-  { key: '/', icon: <HomeOutlined />, label: 'Overview' },
-  { key: '/products', icon: <AppstoreOutlined />, label: 'Products' },
-  // "Packages" rather than "Software": one row here is one thing a vendor
-  // published, which is what a package IS. "Software" is the whole subject of
-  // the tool and names nothing in particular. The ROUTE keeps its old spelling
-  // so links already shared still open.
-  // The same mark the pages use for a package, so the nav entry and the thing
-  // it leads to are recognisably one idea.
+  { key: '/', icon: <DashboardOutlineIcon height="1em" />, label: 'Overview' },
+  { key: '/products', icon: <ProductCatalogIcon height="1em" />, label: 'Products' },
   {
     key: '/packages',
-    icon: <Icon as={PackageIcon} size={15} title="Packages" className="anticon" />,
+    icon: <Icon as={PackageIcon} title="Packages" className="anticon" />,
     label: 'Packages',
   },
   {
     key: '/downloads',
-    icon: <Icon as={DownloadIcon} size={15} title="Downloads" className="anticon" />,
+    icon: <Icon as={DownloadIcon} title="Downloads" className="anticon" />,
     label: 'Downloads',
   },
   { key: '/repositories', icon: <DatabaseOutlined />, label: 'Repositories' },

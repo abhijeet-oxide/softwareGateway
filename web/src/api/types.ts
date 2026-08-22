@@ -378,6 +378,7 @@ export interface Transfer {
   id: string
   requestId: string
   product: string
+  packageName?: string
   /**
    * WHICH package this moves - the only unambiguous answer.
    *

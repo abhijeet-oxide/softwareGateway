@@ -1533,9 +1533,10 @@ type HeartbeatResponse struct {
 
 // Transfer is one package moving to one destination.
 type Transfer struct {
-	ID        string `json:"id"`
-	RequestID string `json:"requestId"`
-	Product   string `json:"product"`
+	ID          string `json:"id"`
+	RequestID   string `json:"requestId"`
+	Product     string `json:"product"`
+	PackageName string `json:"packageName,omitempty"`
 	// PackageID is WHICH package this moves, and it is the only unambiguous
 	// answer.
 	//

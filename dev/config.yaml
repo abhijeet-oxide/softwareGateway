@@ -62,7 +62,7 @@ coordinator:
 worker:
   coordinatorEndpoint: http://localhost:8080
   address: :8081
-  maxConcurrentJobs: 8
+  maxConcurrentJobs: 16
   copyBufferSize: 1048576
   heartbeatInterval: 20s
 
@@ -86,7 +86,7 @@ tls:
   # network.tls.insecureSkipVerify does NOT help - that failure happens while
   # PARSING the certificate, before any verification runs. Measured, not
   # assumed: internal/platform/tlscompat carries the test.
-  allowNegativeSerialNumbers: false
+  allowNegativeSerialNumbers: true
 
 observability:
   log:

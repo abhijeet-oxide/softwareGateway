@@ -210,9 +210,7 @@ export function deriveLocations(pkg: Package, product?: Product): Location[] {
 
   const vendor = product?.sources?.[0]
   out.push({
-    name: vendor?.vendor
-      ? titleCase(vendor.vendor)
-      : (vendor?.name ?? 'Vendor'),
+    name: vendor?.name ?? 'Vendor',
     kind: 'vendor',
     url: repositoryUrl(vendor, pkg.sourceRepository),
   })

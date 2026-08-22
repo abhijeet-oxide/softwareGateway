@@ -286,6 +286,7 @@ func transferDTO(t store.TransferSummary) v1.Transfer {
 		ID:          t.ID,
 		RequestID:   t.RequestID,
 		Product:     t.ProductName,
+		PackageName: t.PackageName,
 		PackageID:   strconv.FormatInt(t.PackageID, 10),
 		Tag:         t.Tag,
 		DisplayTag:  t.DisplayTag,

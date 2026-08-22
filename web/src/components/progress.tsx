@@ -213,12 +213,14 @@ export function ArtifactProgress({
  * numerator is a guess wearing a number's clothes).
  */
 export function DownloadProgress({
-  transferred, total, saved, strategy = 'copy', elapsedSeconds, live,
+  transferred, total, saved, groups, strategy = 'copy', elapsedSeconds, live,
 }: {
   transferred: number | undefined
   total: number | undefined
   /** Bytes the destination already had. Done work - see MeasuredProgress. */
   saved?: number | undefined
+  /** Artifact groups, when available, so the percentage matches the detail view. */
+  groups?: ContentGroup[]
   strategy?: Strategy
   /** Seconds spent moving bytes so far. */
   elapsedSeconds: number | undefined
@@ -237,18 +239,32 @@ export function DownloadProgress({
   const eta = live && speed && remaining !== undefined && remaining > 0
     ? remaining / speed
     : undefined
+  const notStarted = live
+    && (elapsedSeconds ?? 0) <= 0
+    && (transferred ?? 0) <= 0
+    && (total ?? 0) <= 0
 
   return (
     <div style={{ minWidth: 180 }}>
-      <MeasuredProgress
-        transferred={transferred}
-        total={total}
-        saved={saved}
-        strategy={strategy}
-        showText={false}
-      />
+      {!notStarted && (
+        groups?.some((group) => group.total > 0)
+          ? <ArtifactProgress
+              groups={groups}
+              transferred={transferred}
+              total={total}
+              saved={saved}
+              strategy={strategy}
+            />
+          : <MeasuredProgress
+              transferred={transferred}
+              total={total}
+              saved={saved}
+              strategy={strategy}
+              showText={false}
+            />
+      )}
       <Typography.Text type="secondary" style={{ fontSize: 11 }}>
-        {formatDuration(elapsedSeconds) ?? 'not started'} elapsed
+        {notStarted ? 'Not started' : `Elapsed: ${formatDuration(elapsedSeconds) ?? 'Unavailable'}`}
         {eta !== undefined ? ` · ~${formatDuration(eta)} left` : ''}
         {/*
           "Estimating" only while there is something left to estimate. A
@@ -256,7 +272,7 @@ export function DownloadProgress({
           remaining, and saying it is estimating an arrival is describing a
           wait that is over.
         */}
-        {live && eta === undefined && remaining === 0 ? ' · nothing left to move' : ''}
+        {live && !notStarted && eta === undefined && remaining === 0 ? ' · No remaining work' : ''}
         {live && eta === undefined && remaining !== 0 && strategy === 'copy'
           ? ' · estimating…'
           : ''}

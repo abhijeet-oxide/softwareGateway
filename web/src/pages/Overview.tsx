@@ -15,7 +15,7 @@ import {
   LocationChip, ProductChip, StatusBadge, TimeAgo, VerificationBadge, VersionChip,
 } from '../components/chips'
 import { AttentionBand, EmptyStateCard, ErrorState, type Attention } from '../components/layout'
-import type { Package, Product } from '../api/types'
+import type { Package, Product, Transfer } from '../api/types'
 
 /**
  * Page 1 - Overview.
@@ -91,16 +91,25 @@ export default function Overview() {
 
   const attention = useMemo<Attention[]>(() => {
     const items: Attention[] = []
+    const failed = new Map<string, Transfer[]>()
     for (const t of transfers.data?.transfers ?? []) {
       if (t.state !== 'FAILED') continue
+      const key = `${t.packageId || t.packageName || t.product}\u0000${t.tag}`
+      const group = failed.get(key)
+      if (group) group.push(t)
+      else failed.set(key, [t])
+    }
+    for (const group of failed.values()) {
+      const first = group[0]!
+      const destinations = group.length > 1 ? ` (${group.length} destinations)` : ''
       items.push({
-        key: t.id,
+        key: `download-${first.packageId || first.id}-${first.tag}`,
         severity: 'error',
-        message: `${t.product} ${t.displayTag || t.tag} - download failed`,
-        detail: t.failureReason
-          ? `${t.failureReason} The download is stopped. Open it to see what failed and retry from where it stopped.`
+        message: `${first.product} / ${first.packageName || 'package'}:${first.displayTag || first.tag} - download failed${destinations}`,
+        detail: first.failureReason
+          ? `${first.failureReason} The download is stopped. Open it to see what failed and retry from where it stopped.`
           : 'The download stopped before it finished. Open it to see what failed and retry from where it stopped.',
-        action: { label: 'Open download', to: `/downloads/${t.id}` },
+        action: { label: 'Open download', to: `/downloads/${first.id}` },
       })
     }
     for (const r of rows) {

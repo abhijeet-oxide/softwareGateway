@@ -228,7 +228,7 @@ function ComparisonProgress({
       {sides.length === 0 ? (
         <WorkingBar
           label="Analysing packages"
-          detail="Reading what each side contains. This may take a while."
+          detail="Fetching package contents. This may take a while."
           elapsedSeconds={elapsedSeconds}
         />
       ) : (
@@ -329,8 +329,8 @@ function CacheNote({ base, against }: { base?: Package; against?: Package }) {
     analysed === picked.length
       ? 'Manifests found in cache - comparing the releases'
       : analysed === 0
-        ? 'No cache for either release - reading their manifests now, and keeping them'
-        : 'One release is cached; reading the other now, and keeping it'
+        ? 'No cache for either release — reading their manifests now'
+        : 'One release found in cache; reading the other now'
 
   return (
     <Typography.Text type="secondary" style={{ fontSize: 12 }}>

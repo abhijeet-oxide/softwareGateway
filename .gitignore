@@ -23,3 +23,5 @@ node_modules/
 .vscode/
 *.swp
 .DS_Store
+dev/products/
+dev/secrets/

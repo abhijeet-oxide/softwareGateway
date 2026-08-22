@@ -1443,6 +1443,7 @@ type TransferSummary struct {
 	RequestID   string
 	PackageID   int64
 	ProductName string
+	PackageName string
 	// Strategy is HOW this transfer was performed: `copy`, `mirror` or
 	// `proxy`. Recorded on the row rather than derived from configuration, so
 	// a year-old record still says how the content got there even after the
@@ -1563,7 +1564,7 @@ func (t TransferSummary) SavedBytes() int64 {
 // about what a transfer looks like.
 func (p *Packages) transferSelect() string {
 	return `
-	SELECT t.id, t.request_id, t.package_id, pr.name, pk.tag,
+	SELECT t.id, t.request_id, t.package_id, pr.name, src.repository_path, pk.tag,
 	       COALESCE(pk.display_tag, ''), COALESCE(pk.total_bytes, 0),
 	       src.registry_host || '/' || src.repository_path,
 	       dst.registry_host || '/' || dst.repository_path,
@@ -1605,7 +1606,7 @@ func (p *Packages) transferSelect() string {
 
 func scanTransfer(row interface{ Scan(...any) error }) (TransferSummary, error) {
 	var t TransferSummary
-	err := row.Scan(&t.ID, &t.RequestID, &t.PackageID, &t.ProductName, &t.Tag,
+	err := row.Scan(&t.ID, &t.RequestID, &t.PackageID, &t.ProductName, &t.PackageName, &t.Tag,
 		&t.DisplayTag, &t.ContentBytes,
 		&t.Source, &t.Target, &t.SourceName, &t.TargetName,
 		&t.State, &t.Priority, &t.CurrentWave, &t.MaxWave,

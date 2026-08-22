@@ -271,6 +271,53 @@ func TestAnAnnotationThatRespellsItsOwnRepositoryDoesNotCreateASecondOne(t *test
 	}
 }
 
+// A wrapper's payload keeps its own ref.name, and that name is one of the
+// wrapper's own RootTags — NEAR's `signed_orb_X` bundles `orb_X` so one tag
+// reaches both the payload and the signature. Without the fix the payload
+// child claimed `orb_X` a second time, and the destination saw two manifests
+// racing to own the same tag.
+func TestAWrapperAndItsPayloadDoNotCompeteForTheSameTag(t *testing.T) {
+	tree := store.ExpandedTree{Artifacts: []store.ExpandedArtifact{
+		// The wrapper: the transfer root, tagged with both names by RootTags.
+		{Row: store.ArtifactRow{ID: 1, Digest: "sha256:wrapper"}, Parent: -1},
+		{
+			Row: store.ArtifactRow{ID: 2, Digest: "sha256:payload", Annotations: map[string]string{
+				registry.AnnotationRefName: "orbs/cfx-5000-k8s:orb_25.7_mp2604_2131",
+			}},
+			Parent: 0,
+		},
+		{
+			Row: store.ArtifactRow{ID: 3, Digest: "sha256:signature", Annotations: map[string]string{
+				registry.AnnotationRefName: "orbs/cfx-5000-k8s:signature_orb_25.7_mp2604_2131",
+			}},
+			Parent: 0,
+		},
+	}}
+
+	got := ResolveLayout(tree, LayoutOptions{
+		SourceRepository: "orbs/cfx-5000-k8s",
+		RootTags:         []string{"orb_25.7_mp2604_2131", "signed_orb_25.7_mp2604_2131"},
+	})
+
+	wrapper := got["sha256:wrapper"]
+	if want := []string{"orb_25.7_mp2604_2131", "signed_orb_25.7_mp2604_2131"}; !slices.Equal(wrapper.Sites[0].Tags, want) {
+		t.Errorf("wrapper tags = %v, want %v", wrapper.Sites[0].Tags, want)
+	}
+
+	// The payload shares the wrapper's repository and the wrapper's own name,
+	// so it must carry NO tag of its own: the wrapper already answers to it.
+	payload := got["sha256:payload"]
+	if len(payload.Sites) != 1 || len(payload.Sites[0].Tags) != 0 {
+		t.Errorf("payload sites = %+v, want one untagged site", payload.Sites)
+	}
+
+	// The signature's own name is not a root tag, so it keeps it.
+	signature := got["sha256:signature"]
+	if want := []string{"signature_orb_25.7_mp2604_2131"}; !slices.Equal(signature.Sites[0].Tags, want) {
+		t.Errorf("signature tags = %v, want %v", signature.Sites[0].Tags, want)
+	}
+}
+
 // The contract that must NOT change: a vendor genuinely serving a mixed-case
 // repository is mirrored to a destination of the same name. Reading is
 // verbatim, and so is the path derived from it.

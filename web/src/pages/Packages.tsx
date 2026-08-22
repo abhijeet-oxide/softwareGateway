@@ -1,11 +1,10 @@
 import { useMemo, useState } from 'react'
-import { App, Button, Card, Dropdown, Select, Space, Table, Tooltip } from 'antd'
-import { MoreOutlined } from '@ant-design/icons'
+import { App, Button, Card, Select, Space, Table, Tooltip } from 'antd'
 import { Link, useNavigate, useSearchParams } from 'react-router-dom'
 import { usePackages, useProducts, useRunDownload, useTransfers } from '../api/queries'
 import { useCan } from '../auth/permissions'
 import {
-  deriveLocations, deriveStatus, downloadedAt, downloadSeconds, failureReason, isLive, matches,
+  deriveLocations, deriveStatus, downloadSeconds, failureReason, isLive, matches,
   packageReference, releaseHref, transferIndex, verification, version, withTransfers,
 } from '../domain/derive'
 import type { Package } from '../api/types'
@@ -15,26 +14,18 @@ import {
   AnalysisTag, LocationChip, PackageName, ProductChip, StatusBadge, TimeAgo, VerificationBadge,
   VersionChip,
 } from '../components/chips'
-import { EmptyStateCard, ErrorState, PageHeader, SearchBar } from '../components/layout'
+import { EmptyStateCard, ErrorState, SearchBar } from '../components/layout'
+import { NokiaNIcon } from '../components/icons'
 
 /**
- * One button, and everything else behind a `…`.
+ * Download, and a way into Compare - both visible, nothing behind a menu.
  *
- * # Why not three buttons
- *
- * Because three did not fit. The column is fixed to the right of a table that
- * scrolls horizontally, so it cannot borrow width from anywhere, and the
- * buttons ran past its edge. Wrapping them onto a second line would make every
- * row taller to accommodate the widest one.
- *
- * So the row shows the ACTION and hides the navigation: what to do with this
- * release stays visible, and the two ways of looking at it - its page, and a
- * comparison - go behind an overflow. A menu is the right shape for those: they
- * are links, they are not urgent, and they read better as words than as more
- * buttons competing with the one that does something.
+ * Details used to live in this menu too, but the release's own name is a link
+ * to that same page now, so naming it again here was a second route to a
+ * place the row already points at.
  */
 function RowActions({ product, pkg }: { product: string; pkg: Package }) {
-  const compareHref = `/compare?product=${encodeURIComponent(product)}`
+  const compareHref = `/packages/compare?product=${encodeURIComponent(product)}`
     // The REPOSITORY travels with the tag. One version tag exists in every
     // repository a product watches, so a compare link carrying only the tag
     // arrives at a page that cannot say which package was meant.
@@ -44,18 +35,9 @@ function RowActions({ product, pkg }: { product: string; pkg: Package }) {
   return (
     <Space size={4}>
       <DownloadAction product={product} pkg={pkg} />
-      <Dropdown
-        trigger={['click']}
-        placement="bottomRight"
-        menu={{
-          items: [
-            { key: 'details', label: <Link to={releaseHref(product, pkg)}>Details</Link> },
-            { key: 'compare', label: <Link to={compareHref}>Compare</Link> },
-          ],
-        }}
-      >
-        <Button size="small" icon={<MoreOutlined />} aria-label="More actions" />
-      </Dropdown>
+      <Link to={compareHref}>
+        <Button size="small">Compare</Button>
+      </Link>
     </Space>
   )
 }
@@ -84,14 +66,18 @@ function DownloadAction({ product, pkg }: { product: string; pkg: Package }) {
   const mayOperate = useCan('operate', { product })
 
   const live = (pkg.transfers ?? []).find((t) => isLive(t.state))
-  if (live) {
+  const failed = (pkg.transfers ?? []).find((t) => t.state === 'FAILED')
+  // A finished download still gets a link to it, not nothing - the release
+  // page said "downloaded" and gave nowhere to see it.
+  const succeeded = (pkg.transfers ?? []).find((t) => t.state === 'SUCCEEDED')
+  const existing = live ?? failed ?? succeeded
+  if (existing) {
     return (
-      <Link to={`/downloads/${live.id}`}>
+      <Link to={`/downloads/${existing.id}`}>
         <Button size="small" type="primary">View download</Button>
       </Link>
     )
   }
-  if (downloadedAt(pkg)) return null
 
   const start = async () => {
     try {
@@ -197,54 +183,55 @@ export default function Packages() {
 
   return (
     <>
-      <PageHeader
-        meta={
-          <Space>
-            <Select
-              style={{ minWidth: 180 }}
-              placeholder="Product"
-              loading={products.isLoading}
-              value={selected}
-              onChange={(v) => update('product', v)}
-              options={productList.map((p) => ({
-                value: p.productId,
-                label: p.displayName || p.productId,
-              }))}
-            />
-            <Select
-              style={{ minWidth: 200 }}
-              placeholder="Any status"
-              allowClear
-              value={status ?? undefined}
-              onChange={(v) => update('status', v)}
-              options={[
-                { value: 'NEW', label: 'New (last 7 days)' },
-                { value: 'AVAILABLE', label: 'Available' },
-                { value: 'DOWNLOADING', label: 'Downloading' },
-                { value: 'DOWNLOADED', label: 'Downloaded' },
-                { value: 'DOWNLOAD FAILED', label: 'Download failed' },
-                { value: 'READY', label: 'Ready for production' },
-                { value: 'PRODUCTION', label: 'In production' },
-                { value: 'VERIFICATION FAILED', label: 'Verification failed' },
-              ]}
-            />
-          </Space>
-        }
-        extra={
-          <Link to="/compare">
-            <Button>Compare versions</Button>
-          </Link>
-        }
-      />
-
-      <SearchBar
-        value={search}
-        onChange={setSearch}
-        placeholder="Search by version or repository"
-        matched={rows.length}
-        total={packages.data?.packages?.length ?? 0}
-        width={360}
-      />
+      <div
+        style={{
+          display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+          gap: 16, marginBottom: 12, flexWrap: 'wrap',
+        }}
+      >
+        <Space size={12} align="center" wrap>
+          <SearchBar
+            value={search}
+            onChange={setSearch}
+            placeholder="Search by version or repository"
+            matched={rows.length}
+            total={packages.data?.packages?.length ?? 0}
+            width={280}
+            style={{ marginBottom: 0 }}
+          />
+          <Select
+            style={{ minWidth: 180 }}
+            placeholder="Product"
+            loading={products.isLoading}
+            value={selected}
+            onChange={(v) => update('product', v)}
+            options={productList.map((p) => ({
+              value: p.productId,
+              label: p.displayName || p.productId,
+            }))}
+          />
+          <Select
+            style={{ minWidth: 200 }}
+            placeholder="Any status"
+            allowClear
+            value={status ?? undefined}
+            onChange={(v) => update('status', v)}
+            options={[
+              { value: 'NEW', label: 'New (last 7 days)' },
+              { value: 'AVAILABLE', label: 'Available' },
+              { value: 'DOWNLOADING', label: 'Downloading' },
+              { value: 'DOWNLOADED', label: 'Downloaded' },
+              { value: 'DOWNLOAD FAILED', label: 'Download failed' },
+              { value: 'READY', label: 'Ready for production' },
+              { value: 'PRODUCTION', label: 'In production' },
+              { value: 'VERIFICATION FAILED', label: 'Verification failed' },
+            ]}
+          />
+        </Space>
+        <Link to="/packages/compare">
+          <Button>Compare packages</Button>
+        </Link>
+      </div>
 
       {!packages.isLoading && rows.length === 0 ? (
         <EmptyStateCard
@@ -287,11 +274,15 @@ export default function Packages() {
                 // thing telling two rows apart.
                 title: 'Name',
                 width: 240,
-                render: (_, r) => <PackageName pkg={r.pkg} width={220} />,
+                render: (_, r) => product && (
+                  <Link to={releaseHref(product.productId, r.pkg)}>
+                    <PackageName pkg={r.pkg} width={220} />
+                  </Link>
+                ),
               },
               {
-                title: 'Version',
-                width: 160,
+                title: 'Release',
+                width: 170,
                 render: (_, r) =>
                   product && (
                     <VersionChip
@@ -306,7 +297,7 @@ export default function Packages() {
               { title: 'Verified', width: 145, render: (_, r) => <VerificationBadge state={verification(r.pkg)} /> },
               {
                 title: 'Status',
-                width: 240,
+                width: 140,
                 render: (_, r) => (
                   <Space size={4} wrap>
                     <StatusBadge status={r.status} reason={failureReason(r.pkg)} />
@@ -314,10 +305,19 @@ export default function Packages() {
                   </Space>
                 ),
               },
-              { title: 'Location', width: 180, render: (_, r) => <LocationChip locations={deriveLocations(r.pkg, product)} /> },
+              {
+                title: 'Location',
+                width: 150,
+                render: (_, r) => (
+                  <LocationChip
+                    locations={deriveLocations(r.pkg, product)}
+                    vendorIcon={NokiaNIcon}
+                  />
+                ),
+              },
               {
                 title: 'Download time',
-                width: 120,
+                width: 130,
                 render: (_, r) => {
                   const s = downloadSeconds(r.pkg)
                   return s === undefined
@@ -328,10 +328,10 @@ export default function Packages() {
               {
                 title: 'Actions',
                 fixed: 'right',
-                // Narrow, and it stays narrow: one button plus an overflow.
-                // Three side by side needed 250px of a fixed column and spilled
-                // out of it at the widths people actually use.
-                width: 120,
+                // Both actions are words now, not an icon behind a click, so
+                // the column carries what that pair actually needs side by
+                // side - "View download" is the widest label it ever shows.
+                width: 210,
                 render: (_, r) => product && <RowActions product={product.productId} pkg={r.pkg} />,
               },
             ]}

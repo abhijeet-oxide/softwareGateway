@@ -62,16 +62,24 @@ function DownloadAction({ product, pkg }: { product: string; pkg: Package }) {
   const run = useRunDownload(product)
   const mayOperate = useCan('operate', { product })
 
+  const status = deriveStatus(pkg)
   const live = (pkg.transfers ?? []).find((t) => isLive(t.state))
   const failed = (pkg.transfers ?? []).find((t) => t.state === 'FAILED')
   // A finished download still gets a link to it, not nothing - the release
   // page said "downloaded" and gave nowhere to see it.
   const succeeded = (pkg.transfers ?? []).find((t) => t.state === 'SUCCEEDED')
   const existing = live ?? failed ?? succeeded
-  if (existing) {
+  const downloaded = status === 'DOWNLOADED' || status === 'READY FOR PRODUCTION' || status === 'PRODUCTION'
+  if (existing || downloaded) {
     return (
-      <Link to={`/downloads/${existing.id}`}>
-        <Button size="small" color="green" variant="outlined">View download</Button>
+      <Link to={existing ? `/downloads/${existing.id}` : '/downloads'}>
+        <Button
+          size="small"
+          color="green"
+          variant="outlined"
+        >
+          View download
+        </Button>
       </Link>
     )
   }

@@ -5,7 +5,7 @@ import {
   Alert, App, Button, Card, Col, Descriptions, Empty, Modal, Row, Space, Table, Tabs, Tooltip,
   Tree, Typography,
 } from 'antd'
-import { CloudDownloadOutlined, FolderOutlined } from '@ant-design/icons'
+import { FolderOutlined } from '@ant-design/icons'
 import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom'
 import {
   useArtifacts, useInspectPackage, usePackage, usePackageFiles, useProduct, useRunDownload,
@@ -17,7 +17,7 @@ import {
 } from '../domain/derive'
 import { bytes, formatBytes, formatCount, formatDuration } from '../domain/format'
 import { NA, Value } from '../components/value'
-import { AnalyzeIcon, ARTIFACT_ICONS, Icon } from '../components/icons'
+import { AnalyzeIcon, ARTIFACT_ICONS, DownloadIcon, Icon } from '../components/icons'
 import { WorkingBar } from '../components/progress'
 import {
   AnalysisTag, RepoLink, StatusBadge, TimeAgo, VerificationBadge,
@@ -646,6 +646,9 @@ export default function PackageDetail() {
   const analysing = p?.analysisState === 'analyzing'
   const status = p ? deriveStatus(p, prod) : undefined
   const live = (p?.transfers ?? []).find((t) => isLive(t.state))
+  const failed = (p?.transfers ?? []).find((t) => t.state === 'FAILED')
+  const succeeded = (p?.transfers ?? []).find((t) => t.state === 'SUCCEEDED')
+  const existingDownload = live ?? failed ?? succeeded
 
   const download = async () => {
     try {
@@ -694,9 +697,9 @@ export default function PackageDetail() {
             <Link to={`/packages/compare?product=${encodeURIComponent(productName!)}&from=${encodeURIComponent(p?.tag ?? '')}`}>
               <Button>Compare</Button>
             </Link>
-            {live ? (
-              <Link to={`/downloads/${live.id}`}>
-                <Button type="primary">View download</Button>
+            {existingDownload ? (
+              <Link to={`/downloads/${existingDownload.id}`}>
+                <Button type="primary" icon={<Icon as={DownloadIcon} title="Download" />}>View download</Button>
               </Link>
             ) : (
               <Tooltip
@@ -708,7 +711,7 @@ export default function PackageDetail() {
               >
                 <Button
                   type="primary"
-                  icon={<CloudDownloadOutlined />}
+                  icon={<Icon as={DownloadIcon} title="Download" />}
                   disabled={!mayOperate || !p}
                   onClick={() => setConfirming(true)}
                 >

@@ -753,16 +753,23 @@ func etagMatches(header, etag string) bool {
 	return false
 }
 
+// securityStageLabel names a phase.
+//
+// Kept short and factual, because the interface renders the NUMBERS beside
+// them: a label that also tried to say how far along it was would disagree
+// with the counter next to it the moment one of the two was updated.
 func securityStageLabel(name string) string {
 	switch name {
 	case security.StageResolving:
-		return "Working out what to scan"
+		return "Reading this release's artifacts"
 	case security.StageFetching:
-		return "Fetching from JFrog Xray"
+		return "Asking the scanner"
 	case security.StageCached:
-		return "Reading the platform cache"
+		return "Already stored"
 	case security.StageCorrelating:
 		return "Recording findings"
+	case security.StageFailing:
+		return "Failed"
 	case security.StageComparing:
 		return "Comparing the two releases"
 	case security.StageExporting:

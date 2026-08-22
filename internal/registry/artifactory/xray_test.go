@@ -26,6 +26,10 @@ type fakeXray struct {
 	authUser, authPass string
 	// maxChecksums records the largest batch the client asked for.
 	maxChecksums atomic.Int32
+	// timeoutOver refuses any request asking about more than this many
+	// checksums, which is what a scanner too slow for a large batch looks
+	// like from the client's side.
+	timeoutOver int
 }
 
 func newFakeXray(t *testing.T) *fakeXray {
@@ -58,6 +62,14 @@ func newFakeXray(t *testing.T) *fakeXray {
 		}
 		if n := int32(len(req.Checksums)); n > f.maxChecksums.Load() {
 			f.maxChecksums.Store(n)
+		}
+		if f.timeoutOver > 0 && len(req.Checksums) > f.timeoutOver {
+			// 504 classifies as unavailable rather than timeout, so the
+			// gateway-timeout status is what makes this a deadline the client
+			// recognises as worth splitting.
+			w.WriteHeader(http.StatusGatewayTimeout)
+			_, _ = w.Write([]byte(`{"errors":[{"status":504,"message":"timeout"}]}`))
+			return
 		}
 
 		var resp artifactSummaryResponse
@@ -513,3 +525,101 @@ func (p *recordingProgress) lock() {
 }
 
 func (p *recordingProgress) unlock() { <-p.mu }
+
+// A batch that times out is SPLIT, not lost.
+//
+// The failure this exists for: 258 artifacts asked in batches of fifty, a busy
+// Xray timing out on six requests, and 209 artifacts reported unavailable
+// because a handful of images were slow to summarise.
+func TestXraySplitsATimedOutBatch(t *testing.T) {
+	f := newFakeXray(t)
+
+	var refs []security.ArtifactRef
+	for i := 0; i < 8; i++ {
+		sha := strings.Repeat(string(rune('a'+i)), 3)
+		f.index(sha, opensslIssue())
+		refs = append(refs, ref("image-"+string(rune('a'+i)), sha))
+	}
+	// The server refuses any request asking about more than two at once, which
+	// is what a scanner too slow for a large batch looks like from here.
+	f.timeoutOver = 2
+
+	prog := &recordingProgress{}
+	p := testProvider(t, f, func(s *XraySettings) { s.BatchSize = 8 })
+	reports, err := p.Scan(t.Context(), refs, security.ScanOptions{Detail: true, Progress: prog})
+	if err != nil {
+		t.Fatalf("Scan: %v", err)
+	}
+
+	for _, r := range reports {
+		if r.Status != security.StatusScanned {
+			t.Fatalf("%s = %q (%s); splitting should have rescued every artifact",
+				r.Artifact.Name, r.Status, r.Message)
+		}
+	}
+	if got := prog.last(); got.done != 8 {
+		t.Errorf("final progress = %d, want 8", got.done)
+	}
+}
+
+// A refused credential will refuse the halves too. Retrying it per artifact
+// turns one clear error into fifty and is a way to get an account locked.
+func TestXrayDoesNotSplitAnAuthFailure(t *testing.T) {
+	f := newFakeXray(t)
+	f.authPass = "something else"
+
+	var refs []security.ArtifactRef
+	for i := 0; i < 4; i++ {
+		refs = append(refs, ref("image-"+string(rune('a'+i)), strings.Repeat(string(rune('a'+i)), 3)))
+	}
+
+	p := testProvider(t, f, func(s *XraySettings) { s.BatchSize = 4 })
+	reports, err := p.Scan(t.Context(), refs, security.ScanOptions{Detail: true})
+	if err != nil {
+		t.Fatalf("Scan: %v", err)
+	}
+	for _, r := range reports {
+		if r.Status != security.StatusUnavailable {
+			t.Fatalf("%s = %q, want unavailable", r.Artifact.Name, r.Status)
+		}
+		if !strings.Contains(r.Message, "credential") {
+			t.Errorf("message = %q, want it to name the credential", r.Message)
+		}
+	}
+	// One request, not four: the failure was not worth splitting.
+	if got := f.calls.Load(); got != 1 {
+		t.Errorf("made %d requests for an auth failure, want 1", got)
+	}
+}
+
+// The raw error was three restatements of a URL and a Go phrase. Each class of
+// failure has a different fix, and the message has to name it.
+func TestXrayFailureMessagesNameTheFix(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		err  error
+		want string
+	}{
+		{"auth", &registry.Error{Err: registry.ErrForbidden}, "Xray read permission"},
+		{"timeout", &registry.Error{Err: registry.ErrTimeout}, "requestTimeout"},
+		{"rate limited", &registry.Error{Err: registry.ErrRateLimited}, "concurrency"},
+		{"not found", &registry.Error{Err: registry.ErrNotFound}, "xrayEndpoint"},
+		{"bare deadline", context.DeadlineExceeded, "requestTimeout"},
+		// A body we cannot parse means Xray ANSWERED. Describing that as
+		// unreachable sends somebody to check a network path that is fine.
+		{"malformed", &registry.Error{Err: registry.ErrMalformedResponse}, "could not read"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got := describeXrayFailure(tc.err)
+			if !strings.Contains(got, tc.want) {
+				t.Errorf("message = %q, want it to mention %q", got, tc.want)
+			}
+			if strings.Contains(got, "context deadline exceeded") {
+				t.Errorf("message leaks the Go phrase: %q", got)
+			}
+			if tc.name == "malformed" && strings.Contains(got, "could not be reached") {
+				t.Errorf("a parse failure is not unreachability: %q", got)
+			}
+		})
+	}
+}

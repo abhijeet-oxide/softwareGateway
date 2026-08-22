@@ -416,6 +416,26 @@ image the scanner would not answer for must not lose the other hundred - and,
 critically, must not silently become an image with no findings. An error return
 is reserved for a cancelled context.
 
+**A batch that times out is halved and asked again, recursively, down to one
+artifact.** Xray's summary cost is superlinear in the batch: fifty checksums can
+exceed `requestTimeout` where two lots of twenty-five each finish comfortably,
+and on a 258-artifact release that difference was 209 artifacts reported
+`unavailable` for no reason but batch size. The retry is sequential, not
+parallel - the scanner is already struggling, and doubling the request rate at
+it is the wrong response.
+
+Only a failure that splitting can plausibly fix earns the retry: a client-side
+timeout, a rate limit, or a 504/408 from the platform. An authentication
+failure, a 404, or a cancelled context is re-asked in halves forever for
+nothing, so those record and stop.
+
+The last resort is honest words. `describeXrayFailure` turns each class into a
+sentence naming the fix - the missing Xray permission, the `requestTimeout` to
+raise, the `concurrency` to lower, the `xrayEndpoint` to correct - rather than
+echoing a URL and a Go phrase. A body that will not parse is called out as an
+answer we could not read, because saying "could not be reached" about a scanner
+that replied sends somebody to check a network path that is demonstrably fine.
+
 Progress travels **inside the security response**, not on a channel of its own.
 The interface polls one cheap endpoint while a sync runs and gets both the live
 position and whatever is already stored in the same answer; two endpoints would

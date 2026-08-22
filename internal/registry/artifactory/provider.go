@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net/http"
 	"sort"
 	"strings"
 	"sync"
@@ -123,13 +124,39 @@ func (p *XrayProvider) Scan(ctx context.Context, refs []security.ArtifactRef, op
 
 	batches := batchIndexes(queryable, p.client.BatchSize())
 	security.ReportStage(opts.Progress, security.StageFetching, 0, len(queryable))
-	security.ReportNote(opts.Progress, fmt.Sprintf(
-		"Asking JFrog Xray about %d artifacts in %d requests.", len(queryable), len(batches)))
+	if skipped := len(refs) - len(queryable); skipped > 0 {
+		security.ReportNote(opts.Progress, fmt.Sprintf(
+			"%d artifacts are signatures or attestations, which Xray does not scan.", skipped))
+	}
 
 	var (
-		mu   sync.Mutex
-		done int
+		mu       sync.Mutex
+		done     int
+		failed   int
+		requests int
 	)
+
+	// record commits one batch's outcome and reports where the sync has got to.
+	//
+	// Counting FAILURES as well as progress, because "142 of 258" tells a
+	// watcher the work is moving and nothing else. On a scanner that is timing
+	// out, the number that matters is the one going up beside it.
+	record := func(batch []int, found map[string]xrayArtifact, notIndexed map[string]string, err error) {
+		mu.Lock()
+		defer mu.Unlock()
+		for _, i := range batch {
+			reports[i] = p.reportFor(refs[i], found, notIndexed, err, opts.Detail, now)
+			if reports[i].Status == security.StatusUnavailable {
+				failed++
+			}
+		}
+		done += len(batch)
+		requests++
+		security.ReportStage(opts.Progress, security.StageFetching, done, len(queryable))
+		if failed > 0 {
+			security.ReportStage(opts.Progress, security.StageFailing, failed, len(queryable))
+		}
+	}
 
 	g, gctx := errgroup.WithContext(ctx)
 	g.SetLimit(p.concurrency)
@@ -137,20 +164,7 @@ func (p *XrayProvider) Scan(ctx context.Context, refs []security.ArtifactRef, op
 	for _, batch := range batches {
 		batch := batch
 		g.Go(func() error {
-			checksums := make([]string, 0, len(batch))
-			for _, i := range batch {
-				checksums = append(checksums, refs[i].Digest)
-			}
-
-			found, notIndexed, err := p.client.ArtifactSummary(gctx, checksums)
-
-			mu.Lock()
-			defer mu.Unlock()
-			for _, i := range batch {
-				reports[i] = p.reportFor(refs[i], found, notIndexed, err, opts.Detail, now)
-			}
-			done += len(batch)
-			security.ReportStage(opts.Progress, security.StageFetching, done, len(queryable))
+			p.fetchBatch(gctx, refs, batch, record, opts.Progress)
 			return nil
 		})
 	}
@@ -165,6 +179,89 @@ func (p *XrayProvider) Scan(ctx context.Context, refs []security.ArtifactRef, op
 		return reports, err
 	}
 	return reports, nil
+}
+
+// fetchBatch asks Xray about one batch, and SPLITS it rather than losing it.
+//
+// # The failure this exists for
+//
+// A real release is 258 images. Asked in batches of fifty, a busy Xray answered
+// six requests with `context deadline exceeded` and 209 artifacts came back
+// unavailable - four fifths of a release reported as unknown because a handful
+// of images were slow to summarise. The batch is an optimisation, and an
+// optimisation that loses the answer is not one.
+//
+// So a batch that TIMES OUT is halved and both halves are retried, down to a
+// single artifact. The cost is bounded: a batch of fifty that fails entirely
+// costs at most ninety-nine requests, and one that fails because of a single
+// slow image costs about a dozen and returns the other forty-nine. The
+// alternative - a smaller batch for everybody - pays the round trips on every
+// sync against a scanner that is coping perfectly well.
+//
+// Only a TIMEOUT is worth splitting. A 401 will refuse the halves too, and
+// retrying it fifty times is a way to get an account locked rather than an
+// answer, so every other failure is recorded as it stands.
+func (p *XrayProvider) fetchBatch(
+	ctx context.Context,
+	refs []security.ArtifactRef,
+	batch []int,
+	record func([]int, map[string]xrayArtifact, map[string]string, error),
+	progress security.Progress,
+) {
+	checksums := make([]string, 0, len(batch))
+	for _, i := range batch {
+		checksums = append(checksums, refs[i].Digest)
+	}
+
+	found, notIndexed, err := p.client.ArtifactSummary(ctx, checksums)
+	if err == nil || len(batch) == 1 || !worthSplitting(ctx, err) {
+		record(batch, found, notIndexed, err)
+		return
+	}
+
+	half := len(batch) / 2
+	security.ReportNote(progress, fmt.Sprintf(
+		"JFrog Xray timed out on %d artifacts; asking about them in two smaller requests.", len(batch)))
+
+	// Sequentially, not in parallel. The scanner has just told us it is
+	// struggling, and answering that by doubling the requests in flight is how
+	// a slow Xray becomes an unreachable one.
+	p.fetchBatch(ctx, refs, batch[:half], record, progress)
+	p.fetchBatch(ctx, refs, batch[half:], record, progress)
+}
+
+// worthSplitting reports whether a failure might succeed on a smaller batch.
+//
+// Timeouts and rate limits might: both are about how much was asked for at
+// once. A refused credential, a missing endpoint or a malformed answer will
+// not, and retrying them per artifact turns one clear error into fifty.
+func worthSplitting(ctx context.Context, err error) bool {
+	// A cancelled sync is not a slow scanner. Splitting here would fire two
+	// more doomed requests per level for the whole tree.
+	if ctx.Err() != nil {
+		return false
+	}
+	var re *registry.Error
+	if errors.As(err, &re) {
+		// A gateway timeout is the scanner's own way of saying the request was
+		// too big to finish, and it arrives as a 504 rather than as a client
+		// deadline - so it classifies as "unavailable" and would otherwise be
+		// written off. 408 is the same statement from the other side.
+		switch re.StatusCode {
+		case http.StatusGatewayTimeout, http.StatusRequestTimeout:
+			return true
+		}
+		switch registry.ClassOf(re.Err) {
+		case registry.ClassTimeout, registry.ClassRateLimited:
+			return true
+		default:
+			return false
+		}
+	}
+	// An unclassified transport error is most often a deadline that never
+	// reached the classifier, so it gets one split rather than being written
+	// off - the recursion bottoms out at a single artifact either way.
+	return errors.Is(err, context.DeadlineExceeded)
 }
 
 // reportFor decides what one artifact's report says.
@@ -213,19 +310,60 @@ func (p *XrayProvider) reportFor(
 	return r
 }
 
-// describeXrayFailure says what went wrong in words with an action in them.
+// describeXrayFailure says what went wrong in a sentence a person can act on.
+//
+// # Why the raw error is not good enough
+//
+// It was, and it read like this in a tooltip:
+//
+//	JFrog Xray could not be reached. POST /xray/api/v1/summary/artifact
+//	artifact.example.com: Post "https://artifact.example.com/xray/api/v1/
+//	summary/artifact": context deadline exceeded
+//
+// Three restatements of one URL and a Go phrase, for a reader who wants to know
+// whether their scanner is down, their credential is wrong, or the request was
+// simply too big. Each of those has a different fix and none of them is in that
+// string.
 func describeXrayFailure(err error) string {
 	var re *registry.Error
 	if errors.As(err, &re) {
 		switch registry.ClassOf(re.Err) {
 		case registry.ClassAuth:
-			return "JFrog Xray refused the repository credential. " + detailOr(re, "Check that the credential has Xray read permission.")
+			return "JFrog Xray refused the credential. " +
+				detailOr(re, "The repository credential is valid for the registry but has no Xray read permission.")
 		case registry.ClassRateLimited:
-			return "JFrog Xray is rate limiting this request. " + detailOr(re, "Try again shortly.")
+			return "JFrog Xray is rate limiting these requests. " +
+				detailOr(re, "Lower coordinator.security.concurrency, or sync again when it is quieter.")
 		case registry.ClassNotFound:
-			return "JFrog Xray did not answer at this endpoint. " + detailOr(re, "Check the Xray endpoint configured for this repository.")
+			return "JFrog Xray is not answering at this address. " +
+				detailOr(re, "Xray may not be installed on this platform, or the docker host is a subdomain and xrayEndpoint needs to name the platform URL.")
+		case registry.ClassTimeout:
+			// The one people actually hit, and the one whose raw form says
+			// least. Names the bound so it can be changed, and says what the
+			// platform already did about it.
+			return "JFrog Xray did not answer in time, even after the request was split into smaller ones. " +
+				"It is reachable but slow for these artifacts - raise coordinator.security.requestTimeout, " +
+				"or sync again when it is under less load."
+		case registry.ClassUnavailable:
+			if re.StatusCode == http.StatusGatewayTimeout || re.StatusCode == http.StatusRequestTimeout {
+				return "JFrog Xray timed out on these artifacts, even after the request was split into smaller ones. " +
+					"Raise coordinator.security.requestTimeout, or sync again when it is under less load."
+			}
+			return "JFrog Xray returned an error. " + detailOr(re, "Check the Xray service on this JFrog platform.")
+		case registry.ClassMalformed:
+			// It answered. Saying it could not be reached sends somebody to
+			// check a network path that is demonstrably fine, when what is in
+			// front of them is a proxy's error page, an SSO login form, or an
+			// Xray whose response shape this build does not know.
+			return "JFrog Xray answered with something this Coordinator could not read. " +
+				detailOr(re, "Something between here and Xray may be returning an error page or a login form "+
+					"in place of the summary - check xrayEndpoint and any proxy on the path.")
 		}
-		return "JFrog Xray could not be reached. " + detailOr(re, re.Error())
+		return "JFrog Xray could not be reached. " + detailOr(re, "Check the network path from this Coordinator to the JFrog platform.")
+	}
+	if errors.Is(err, context.DeadlineExceeded) {
+		return "JFrog Xray did not answer in time, even after the request was split into smaller ones. " +
+			"Raise coordinator.security.requestTimeout, or sync again when it is under less load."
 	}
 	return "JFrog Xray could not be reached: " + err.Error()
 }

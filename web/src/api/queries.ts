@@ -1,4 +1,5 @@
 import { useMutation, useQueries, useQuery, useQueryClient } from '@tanstack/react-query'
+import { useEffect, useRef } from 'react'
 import { api, query, packageRef } from './client'
 import type {
   CheckConnectivityResponse, CompareProgressResponse, CompareRequest, CompareResponse,
@@ -667,7 +668,8 @@ export function usePackageSecurity(
   opts: { repository?: string; detail?: boolean; enabled?: boolean } = {},
 ) {
   const { repository, detail = false, enabled = true } = opts
-  return useQuery({
+  const qc = useQueryClient()
+  const result = useQuery({
     queryKey: ['package-security', product, ref, repository, detail],
     queryFn: () => {
       const { segment, query: q } = packageRef(ref!)
@@ -692,6 +694,33 @@ export function usePackageSecurity(
     retry: false,
     throwOnError: false,
   })
+
+  /*
+   * TELL THE REST OF THE PAGE WHEN THE SYNC ENDS.
+   *
+   * This query polls itself while a sync runs, so it learns the moment the job
+   * finishes - but the release itself carries the same state, and the header
+   * tag, the tab label and the listing row all read THAT. Invalidating only
+   * when the sync STARTS left them saying "syncing…" over a panel that had
+   * already reported the counts, until something else happened to refetch.
+   *
+   * The transition is what matters, not the state: firing on every settled
+   * poll would invalidate the release query forever.
+   */
+  const wasSyncing = useRef(false)
+  const state = result.data?.sync.state
+  useEffect(() => {
+    if (state === 'syncing') {
+      wasSyncing.current = true
+      return
+    }
+    if (!wasSyncing.current || state === undefined) return
+    wasSyncing.current = false
+    void qc.invalidateQueries({ queryKey: ['package'] })
+    void qc.invalidateQueries({ queryKey: ['packages'] })
+  }, [state, qc])
+
+  return result
 }
 
 /**

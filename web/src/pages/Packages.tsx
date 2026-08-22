@@ -1,5 +1,7 @@
 import { useMemo, useState } from 'react'
-import { App, Button, Card, Select, Space, Table, Tooltip } from 'antd'
+import { App, Button, Card, Dropdown, Select, Space, Table, Tooltip } from 'antd'
+import type { MenuProps } from 'antd'
+import { MoreOutlined } from '@ant-design/icons'
 import { Link, useNavigate, useSearchParams } from 'react-router-dom'
 import {
   usePackages, useProducts, useRunDownload, useSyncPackageSecurity, useTransfers,
@@ -14,15 +16,32 @@ import type { Package } from '../api/types'
 import { formatDuration } from '../domain/format'
 import { Value } from '../components/value'
 import {
-  AnalysisTag, LocationChip, PackageName, ProductChip, StatusBadge, TimeAgo, VerificationBadge,
+  AnalysisTag, LocationChip, PackageName, StatusBadge, TimeAgo, VerificationBadge,
   VersionChip,
 } from '../components/chips'
 import { EmptyStateCard, ErrorState, SearchBar } from '../components/layout'
 import { NokiaNIcon } from '../components/icons'
 import { VulnerabilityCell } from '../components/security'
 
-/** The row's detail, download, and compare actions stay visible together. */
+/**
+ * One primary action, and everything else behind a menu.
+ *
+ * # Why this is not four buttons
+ *
+ * It was, and the fourth ran off the edge of the card. Four verbs per row is
+ * also four decisions per row on a page of two hundred, when only one of them -
+ * open this release - is what somebody is doing ninety percent of the time.
+ *
+ * So: View, the state-dependent primary verb (download it, or go and watch the
+ * download), and a menu for the rest. The menu is one button wide whatever it
+ * contains, which is what stops the column growing every time a verb is added.
+ */
 function RowActions({ product, pkg }: { product: string; pkg: Package }) {
+  const { message } = App.useApp()
+  const navigate = useNavigate()
+  const sync = useSyncPackageSecurity()
+  const mayOperate = useCan('operate', { product })
+
   const compareHref = `/packages/compare?product=${encodeURIComponent(product)}`
     // The REPOSITORY travels with the tag. One version tag exists in every
     // repository a product watches, so a compare link carrying only the tag
@@ -30,71 +49,61 @@ function RowActions({ product, pkg }: { product: string; pkg: Package }) {
     + `&from=${encodeURIComponent(pkg.tag)}`
     + (pkg.sourceRepository ? `&repository=${encodeURIComponent(pkg.sourceRepository)}` : '')
 
+  const detail = releaseHref(product, pkg)
+  const securityHref = `${detail}${detail.includes('?') ? '&' : '?'}tab=security`
+  const security = pkg.security
+  const syncing = security?.state === 'syncing'
+
+  const startSync = () => sync.mutate(
+    { product, ref: packageReference(pkg), repository: pkg.sourceRepository },
+    {
+      onSuccess: (res) => {
+        message.info(res.started
+          ? `Syncing ${res.artifacts} artifacts of ${version(pkg)}.`
+          : 'A sync is already running for this release.')
+        // Straight to where the progress is. A background job somebody cannot
+        // watch is a background job they start twice.
+        navigate(securityHref)
+      },
+      onError: (e) => message.error(e instanceof Error ? e.message : 'The sync could not be started.'),
+    },
+  )
+
+  const syncItem: MenuProps['items'] = syncing
+    ? [{ key: 'progress', label: <Link to={securityHref}>View sync progress</Link> }]
+    : security?.canSync
+      ? [{
+          key: 'sync',
+          label: security.state === '' ? 'Sync vulnerabilities' : 'Sync vulnerabilities again',
+          disabled: !mayOperate,
+          onClick: startSync,
+        }]
+      : [{
+          key: 'sync-off',
+          label: <Tooltip title={security?.reason}><span>Sync vulnerabilities</span></Tooltip>,
+          disabled: true,
+        }]
+
+  const items: MenuProps['items'] = [
+    { key: 'security', label: <Link to={securityHref}>View vulnerabilities</Link> },
+    ...syncItem,
+    { type: 'divider' },
+    { key: 'compare', label: <Link to={compareHref}>Compare with another release</Link> },
+  ]
+
   return (
     <Space size={4}>
-      <Link to={releaseHref(product, pkg)}>
-        <Button size="small" type='primary' variant="solid">View</Button>
+      <Link to={detail}>
+        <Button size="small" type="primary">View</Button>
       </Link>
       <DownloadAction product={product} pkg={pkg} />
-      <SyncSecurityAction product={product} pkg={pkg} />
-      <Link to={compareHref}>
-        <Button size="small" color="orange" variant="solid">Compare</Button>
-      </Link>
+      <Dropdown menu={{ items }} trigger={['click']} placement="bottomRight">
+        <Button size="small" icon={<MoreOutlined />} aria-label="More actions" loading={sync.isPending} />
+      </Dropdown>
     </Space>
   )
 }
 
-/**
- * Ask the scanner about this release, from the row.
- *
- * # Why this is an action and not a toggle on the page
- *
- * Because it is a job with a cost, not a display preference. A sync is a
- * scanner query per batch across every artifact of a release, and it belongs
- * where every other per-release job lives: in the row, on the release it acts
- * on, with a result somebody can come back to.
- *
- * # Why it disappears once a release is synced
- *
- * The row already shows the counts; re-syncing is a rarer act and lives on the
- * release's own Security tab, where the reader can see what they would be
- * replacing. A button offered forever in a listing of two hundred rows is two
- * hundred invitations to re-query a scanner.
- */
-function SyncSecurityAction({ product, pkg }: { product: string; pkg: Package }) {
-  const { message } = App.useApp()
-  const sync = useSyncPackageSecurity()
-  const mayOperate = useCan('operate', { product })
-
-  const security = pkg.security
-  if (!security || !security.canSync) return null
-  // Synced, and not stale enough to be worth re-offering here.
-  if (security.state === 'synced') return null
-
-  if (security.state === 'syncing') {
-    return <Button size="small" loading disabled>Syncing</Button>
-  }
-
-  const failed = security.state === 'failed'
-  return (
-    <Tooltip title={failed ? security.error : 'Ask the scanner about this release and store the answer.'}>
-      <Button
-        size="small"
-        danger={failed}
-        loading={sync.isPending}
-        disabled={!mayOperate}
-        onClick={() => sync.mutate({ product, ref: packageReference(pkg), repository: pkg.sourceRepository }, {
-          onSuccess: (res) => message.info(res.started
-            ? `Syncing vulnerabilities for ${res.artifacts} artifacts.`
-            : 'A sync is already running for this release.'),
-          onError: (e) => message.error(e instanceof Error ? e.message : 'The sync could not be started.'),
-        })}
-      >
-        {failed ? 'Retry sync' : 'Sync vulnerabilities'}
-      </Button>
-    </Tooltip>
-  )
-}
 
 /**
  * Start a download, or go and watch the one that is running.
@@ -321,22 +330,34 @@ export default function Packages() {
             dataSource={rows}
             rowKey={(r) => r.pkg.packageId}
             pagination={{ pageSize: 20, showSizeChanger: false }}
-            scroll={{ x: 1420 }}
+            /*
+              `max-content` rather than a number.
+              A hardcoded width has to be kept in step with the sum of the
+              column widths by hand, and when it drifts below that sum antd
+              squeezes the table to the smaller figure and the pinned Actions
+              column lands on top of the one before it. Letting the browser
+              measure cannot drift.
+            */
+            scroll={{ x: 'max-content' }}
             columns={[
               {
-                title: 'Product',
-                fixed: 'left',
-                width: 130,
-                render: () => product && <ProductChip name={product.productId} display={product.displayName} />,
-              },
-              {
-                // The package's own name, in its own column. It used to sit
-                // under the version as a subtitle, which read as a footnote -
-                // and it is not one: a product publishes one version tag into
-                // every repository it watches, so this is frequently the only
-                // thing telling two rows apart.
+                /*
+                  The package's own name, in its own column. It used to sit
+                  under the version as a subtitle, which read as a footnote -
+                  and it is not one: a product publishes one version tag into
+                  every repository it watches, so this is frequently the only
+                  thing telling two rows apart.
+
+                  Pinned, and first, because a column called Product used to be.
+                  That column drew the same chip on every row: the listing is
+                  scoped to exactly ONE product by the select above it, so the
+                  chip could not tell two rows apart and cost 130px of a table
+                  that was already 400px wider than the window - which is what
+                  pushed the pinned Actions column on top of its neighbour.
+                */
                 title: 'Name',
-                width: 240,
+                fixed: 'left',
+                width: 210,
                 render: (_, r) => product && (
                   <Link to={releaseHref(product.productId, r.pkg)}>
                     <PackageName pkg={r.pkg} width={220} />
@@ -345,7 +366,7 @@ export default function Packages() {
               },
               {
                 title: 'Release',
-                width: 170,
+                width: 160,
                 render: (_, r) =>
                   product && (
                     <VersionChip
@@ -356,11 +377,11 @@ export default function Packages() {
                     />
                   ),
               },
-              { title: 'Published', width: 110, render: (_, r) => <TimeAgo at={r.pkg.publishedAt || r.pkg.discoveredAt} /> },
-              { title: 'Verified', width: 145, render: (_, r) => <VerificationBadge state={verification(r.pkg)} /> },
+              { title: 'Published', width: 95, render: (_, r) => <TimeAgo at={r.pkg.publishedAt || r.pkg.discoveredAt} /> },
+              { title: 'Verified', width: 120, render: (_, r) => <VerificationBadge state={verification(r.pkg)} /> },
               {
                 title: 'Status',
-                width: 140,
+                width: 130,
                 render: (_, r) => (
                   <Space size={4} wrap>
                     <StatusBadge status={r.status} reason={failureReason(r.pkg)} />
@@ -369,8 +390,28 @@ export default function Packages() {
                 ),
               },
               {
+                /*
+                  Always on, and ahead of Location and Download time.
+
+                  The table is wider than a laptop window, so column order is a
+                  priority order: whatever sits last is what the pinned Actions
+                  column covers. This one was last but one, which made the
+                  column this whole feature exists for the one nobody could
+                  see.
+
+                  It costs nothing to keep.
+                  The counts come from the listing response itself, written by
+                  a sync rather than fetched per row - which is what made this
+                  a toggle before, and a toggle is a design apologising for
+                  itself.
+                */
+                title: 'Vulnerabilities',
+                width: 185,
+                render: (_, r) => <VulnerabilityCell summary={r.pkg.security} />,
+              },
+              {
                 title: 'Location',
-                width: 150,
+                width: 125,
                 render: (_, r) => (
                   <LocationChip
                     locations={deriveLocations(r.pkg, product)}
@@ -380,7 +421,7 @@ export default function Packages() {
               },
               {
                 title: 'Download time',
-                width: 130,
+                width: 100,
                 render: (_, r) => {
                   const s = downloadSeconds(r.pkg)
                   return s === undefined
@@ -389,21 +430,9 @@ export default function Packages() {
                 },
               },
               {
-                /*
-                  Always on, and it costs nothing.
-                  The counts come from the listing response itself, written by
-                  a sync rather than fetched per row - which is what made this
-                  a toggle before, and a toggle is a design apologising for
-                  itself.
-                */
-                title: 'Vulnerabilities',
-                width: 200,
-                render: (_, r) => <VulnerabilityCell summary={r.pkg.security} />,
-              },
-              {
                 title: 'Actions',
                 fixed: 'right',
-                width: 300,
+                width: 190,
                 render: (_, r) => product && <RowActions product={product.productId} pkg={r.pkg} />,
               },
             ]}

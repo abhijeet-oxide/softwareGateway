@@ -105,6 +105,13 @@ const (
 	StageCorrelating = "correlating"
 	StageComparing   = "comparing"
 	StageExporting   = "exporting"
+	// StageFailing counts the artifacts the scanner would not answer for.
+	//
+	// A stage rather than a note, because it is a POSITION - it goes up as the
+	// work proceeds - and because "142 of 258" tells a watcher the work is
+	// moving and nothing else. On a scanner that is timing out, the number
+	// beside it is the one that matters.
+	StageFailing = "failing"
 )
 
 // Resolver finds the provider that can answer for a repository.

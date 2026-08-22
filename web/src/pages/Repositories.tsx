@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import { Button, Card, Space, Table, Tag, Tooltip, Typography } from 'antd'
-import { CheckCircleFilled, CloseCircleFilled, SafetyOutlined, ThunderboltOutlined } from '@ant-design/icons'
+import { CheckCircleFilled, CloseCircleFilled, SafetyOutlined } from '@ant-design/icons'
+import ConnectIcon from '@iconify-react/hugeicons/connect';
 import { useConnectivity, useProducts } from '../api/queries'
 import { useCan } from '../auth/permissions'
 import { RepoLink } from '../components/chips'
@@ -10,18 +11,6 @@ import { EmptyStateCard, ErrorState, PageHeader } from '../components/layout'
 import { semantic } from '../theme'
 import type { Repository } from '../api/types'
 import { Icon, repositoryIcon } from '../components/icons'
-
-/**
- * Page 7 - Repositories.
- *
- * Answers: where is our software stored, and are those places healthy?
- *
- * Its real job is answering "is it us or is it them" at the start of an
- * incident, which is why the connectivity result names the step that failed -
- * credential, TLS, DNS, proxy - rather than reporting a red dot.
- *
- * No credential value appears here, ever. Status only.
- */
 
 interface Row {
   product: string
@@ -67,7 +56,7 @@ export default function Repositories() {
           >
             <Button
               type="primary"
-              icon={<ThunderboltOutlined />}
+              icon={<ConnectIcon style={{ width: '1em', height: '1em' }} />}
               disabled={!mayOperate}
               loading={connectivity.isFetching}
               onClick={() => { setChecking(true); void connectivity.refetch() }}

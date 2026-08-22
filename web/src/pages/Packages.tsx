@@ -4,6 +4,7 @@ import { Link, useNavigate, useSearchParams } from 'react-router-dom'
 import {
   usePackages, useProducts, useRunDownload, useSyncPackageSecurity, useTransfers,
 } from '../api/queries'
+import ScaleIcon from '@iconify-react/lucide/scale';
 import { useCan } from '../auth/permissions'
 import {
   deriveLocations, deriveStatus, downloadSeconds, failureReason, isLive, matches,
@@ -291,7 +292,7 @@ export default function Packages() {
           />
         </Space>
         <Link to="/packages/compare">
-          <Button>Compare packages</Button>
+          <Button icon={<ScaleIcon style={{ width: '1em', height: '1em' }} />}>Compare packages</Button>
         </Link>
       </div>
 

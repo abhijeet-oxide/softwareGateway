@@ -17,13 +17,7 @@ import {
 import { EmptyStateCard, ErrorState, SearchBar } from '../components/layout'
 import { NokiaNIcon } from '../components/icons'
 
-/**
- * Download, and a way into Compare - both visible, nothing behind a menu.
- *
- * Details used to live in this menu too, but the release's own name is a link
- * to that same page now, so naming it again here was a second route to a
- * place the row already points at.
- */
+/** The row's detail, download, and compare actions stay visible together. */
 function RowActions({ product, pkg }: { product: string; pkg: Package }) {
   const compareHref = `/packages/compare?product=${encodeURIComponent(product)}`
     // The REPOSITORY travels with the tag. One version tag exists in every
@@ -34,9 +28,12 @@ function RowActions({ product, pkg }: { product: string; pkg: Package }) {
 
   return (
     <Space size={4}>
+      <Link to={releaseHref(product, pkg)}>
+        <Button size="small" type='primary' variant="solid">View</Button>
+      </Link>
       <DownloadAction product={product} pkg={pkg} />
       <Link to={compareHref}>
-        <Button size="small">Compare</Button>
+        <Button size="small" color="orange" variant="solid">Compare</Button>
       </Link>
     </Space>
   )
@@ -74,7 +71,7 @@ function DownloadAction({ product, pkg }: { product: string; pkg: Package }) {
   if (existing) {
     return (
       <Link to={`/downloads/${existing.id}`}>
-        <Button size="small" type="primary">View download</Button>
+        <Button size="small" color="green" variant="outlined">View download</Button>
       </Link>
     )
   }
@@ -109,7 +106,8 @@ function DownloadAction({ product, pkg }: { product: string; pkg: Package }) {
     >
       <Button
         size="small"
-        type="primary"
+        color="green"
+        variant="solid"
         disabled={!mayOperate}
         loading={run.isPending}
         onClick={() => void start()}
@@ -328,10 +326,7 @@ export default function Packages() {
               {
                 title: 'Actions',
                 fixed: 'right',
-                // Both actions are words now, not an icon behind a click, so
-                // the column carries what that pair actually needs side by
-                // side - "View download" is the widest label it ever shows.
-                width: 210,
+                width: 270,
                 render: (_, r) => product && <RowActions product={product.productId} pkg={r.pkg} />,
               },
             ]}

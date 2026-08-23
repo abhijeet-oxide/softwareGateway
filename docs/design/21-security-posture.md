@@ -437,10 +437,33 @@ configuration under `coordinator.security`, not product configuration:
 
 - **`batchSize` (50)** bounds the blast radius of one failure. A failed call
   costs fifty artifacts' results, not a release's.
-- **`concurrency` (6)** bounds what we do to Xray. Its summary endpoint is
+- **`concurrency` (10)** bounds what we do to Xray. Its summary endpoint is
   expensive server-side and rate-limited on hosted JFrog; sixty parallel
-  requests is not ten times faster than six, it is a 429 storm and a slower
-  answer.
+  requests is not six times faster than ten, it is a 429 storm and a slower
+  answer. It is a budget PER SYNC, so two releases syncing at once are two.
+
+`concurrency` was six, and two changes since paid for the rest: the probe below
+no longer spends the budget one image at a time, and the transport retries a 429
+on the scanner's own `Retry-After`, so a burst that trips a rate limit costs a
+pause rather than a release's worth of artifacts reported unavailable.
+
+### The probe that follows a scan
+
+Xray answers "Artifact doesn't exist or not indexed/cached in Xray" for two
+situations with nothing in common: an image it has not looked at, and an image
+that was never replicated there. The first is a scan waiting to happen; the
+second is a TRANSFER waiting to happen, and reporting it as a scanning gap sends
+somebody to the wrong team. Artifactory knows which, so it is asked.
+
+**In bulk.** One AQL query answers a hundred images, so a release costs about
+three requests. It was one request per image - the only phase whose request
+count scaled with the number of artifacts rather than the number of batches, and
+it ran in exactly the situation somebody is already waiting on a slow answer: a
+release that has not been replicated yet, where *every* image needs the probe.
+
+AQL is administrator-only on some platforms. A refusal is recorded once per
+client and the per-image search runs instead - the same question asked the slow
+way, not a degraded answer.
 
 **A per-artifact failure is a report with `unavailable`, never an error.** One
 image the scanner would not answer for must not lose the other hundred - and,

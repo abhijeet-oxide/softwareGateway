@@ -128,9 +128,13 @@ type CoordinatorConfig struct {
 type SecurityConfig struct {
 	// Concurrency caps scanner requests in flight for one sync.
 	//
-	// Small, and worth keeping small. Xray's summary endpoint is expensive
+	// Bounded, and worth keeping bounded. Xray's summary endpoint is expensive
 	// server-side and rate-limited on hosted JFrog; sixty parallel requests is
-	// not ten times faster than six, it is a 429 storm and a slower answer.
+	// not six times faster than ten, it is a 429 storm and a slower answer.
+	//
+	// PER SYNC, not per Coordinator: two releases syncing at once are two
+	// budgets. Raise it for a self-hosted Xray with headroom; leave it alone on
+	// hosted JFrog.
 	Concurrency int `koanf:"concurrency"`
 	// BatchSize is how many artifacts one scanner request asks about. It bounds
 	// the blast radius of a failed call: one failure costs this many artifacts'
@@ -385,14 +389,22 @@ func Defaults() SystemConfig {
 				DownloadEnabled: true,
 			},
 			Security: SecurityConfig{
-				// Six in flight, fifty per request, a minute each.
+				// Ten in flight, fifty per request, a minute each.
 				//
-				// Sized against the scanner rather than against this process:
-				// a release of a few hundred artifacts is a handful of requests
-				// at this batch size, and six of them in flight is polite to a
+				// Sized against the scanner rather than against this process: a
+				// release of a few hundred artifacts is a handful of requests at
+				// this batch size, and ten of them in flight is polite to a
 				// hosted JFrog while still finishing a large release in tens of
 				// seconds rather than minutes.
-				Concurrency:    6,
+				//
+				// It was six, and two things since have paid for the rest. The
+				// probe that follows a scan no longer spends this budget one
+				// image at a time - it asks about a hundred at once - so the
+				// number now governs only the summary calls it was written for.
+				// And the transport retries a 429 on the scanner's own
+				// Retry-After, so a burst that trips a rate limit costs a pause
+				// rather than a release's worth of unavailable artifacts.
+				Concurrency:    10,
 				BatchSize:      50,
 				RequestTimeout: 60 * time.Second,
 

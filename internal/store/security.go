@@ -150,13 +150,62 @@ func (s *Security) Save(ctx context.Context, scope security.Scope, reports []sec
 		detailTTL = 15 * time.Minute
 	}
 
+	now := time.Now().UTC()
+	for start := 0; start < len(reports); start += saveChunk {
+		end := start + saveChunk
+		if end > len(reports) {
+			end = len(reports)
+		}
+		if err := s.saveBatch(
+			ctx, scope, reports[start:end], detail, now.Add(summaryTTL), now.Add(detailTTL),
+		); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// saveChunk is how many artifacts one transaction writes.
+//
+// # Why the whole release is no longer one transaction
+//
+// Two reasons, and the second is the one that bites. A release of 260 images
+// holds tens of thousands of findings, so one transaction meant a single
+// long-running write against the database's only writer, blocking the sweep and
+// every other sync behind it. And it was ALL OR NOTHING: a sync that reached
+// 95% and lost its connection wrote nothing at all, so the next attempt started
+// from an empty cache.
+//
+// Each artifact's rows stay atomic - its summary, its findings and its detail
+// are written together or not at all - which is the consistency that actually
+// matters here. What a partial write leaves behind is some artifacts recorded
+// and the rest not, which is exactly what the cache is designed to express.
+const saveChunk = 25
+
+// findingsPerStatement bounds one multi-row insert.
+//
+// Two hundred rows is 2,200 placeholders - comfortably inside every driver's
+// parameter limit - and it turns a release's ~26,000 individual inserts into
+// about 130 statements. That arithmetic is the whole change: the write was
+// round-trip bound, not disk bound, and against Postgres it was the slowest
+// part of a sync that had already finished talking to the scanner.
+const findingsPerStatement = 200
+
+// saveBatch writes one chunk of artifacts in a single transaction.
+func (s *Security) saveBatch(
+	ctx context.Context, scope security.Scope, reports []security.Report,
+	detail bool, summaryExpires, detailExpires time.Time,
+) error {
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return fmt.Errorf("begin security cache write: %w", err)
 	}
 	defer func() { _ = tx.Rollback() }()
 
-	now := time.Now().UTC()
+	// The artifacts whose findings this chunk rewrites, in the order their rows
+	// were written, so the ids read back below can be matched to them.
+	var stored []security.Report
+
 	for _, r := range reports {
 		// A disabled report is a fact about configuration, and caching it would
 		// outlive the configuration change that fixes it.
@@ -175,25 +224,187 @@ func (s *Security) Save(ctx context.Context, scope security.Scope, reports []sec
 		// stored result gets a row saying the scanner would not answer, and one
 		// with a result keeps it until the summary TTL expires it.
 		if r.Status == security.StatusUnavailable {
-			if err := s.saveUnavailable(ctx, tx, scope, r, now.Add(summaryTTL)); err != nil {
+			if err := s.saveUnavailable(ctx, tx, scope, r, summaryExpires); err != nil {
 				return err
 			}
 			continue
 		}
-		scanID, err := s.saveScan(ctx, tx, scope, r, now.Add(summaryTTL))
-		if err != nil {
+		if err := s.saveScan(ctx, tx, scope, r, summaryExpires); err != nil {
 			return err
 		}
-		if detail {
-			if err := s.saveFindings(ctx, tx, scanID, r.Findings); err != nil {
-				return err
-			}
-			if err := s.saveDetail(ctx, tx, scope, r, now.Add(detailTTL)); err != nil {
-				return err
-			}
+		stored = append(stored, r)
+	}
+
+	if !detail || len(stored) == 0 {
+		return tx.Commit()
+	}
+
+	// ONE read-back for the chunk, not one per artifact. The upsert cannot
+	// portably return the id - SQLite and Postgres disagree about RETURNING on
+	// a conflict - so the ids are read afterwards, and reading twenty-five at
+	// once costs one round trip where reading them one at a time cost
+	// twenty-five.
+	ids, err := s.scanIDs(ctx, tx, scope, stored)
+	if err != nil {
+		return err
+	}
+
+	if err := s.replaceFindings(ctx, tx, scope, ids, stored); err != nil {
+		return err
+	}
+	for _, r := range stored {
+		if err := s.saveDetail(ctx, tx, scope, r, detailExpires); err != nil {
+			return err
 		}
 	}
 	return tx.Commit()
+}
+
+// scanIDs reads back the row ids for a chunk of artifacts, keyed by ref.
+func (s *Security) scanIDs(
+	ctx context.Context, tx *sql.Tx, scope security.Scope, reports []security.Report,
+) (map[string]int64, error) {
+	placeholders := make([]string, 0, len(reports))
+	args := []any{scope.Product, scope.Repository}
+	for _, r := range reports {
+		placeholders = append(placeholders, "?")
+		args = append(args, r.Artifact.Ref())
+	}
+
+	rows, err := tx.QueryContext(ctx, s.q(`
+		SELECT provider, artifact_ref, id FROM security_scans
+		 WHERE product = ? AND repository = ?
+		   AND artifact_ref IN (`+strings.Join(placeholders, ",")+`)`), args...)
+	if err != nil {
+		return nil, fmt.Errorf("read back security scans: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+
+	// Keyed by PROVIDER and ref, which is what the unique index is keyed by.
+	// One repository answered by two scanners holds two rows for one artifact,
+	// and matching on the ref alone would attach one scanner's findings to the
+	// other's row.
+	out := make(map[string]int64, len(reports))
+	for rows.Next() {
+		var (
+			provider, ref string
+			id            int64
+		)
+		if err := rows.Scan(&provider, &ref, &id); err != nil {
+			return nil, fmt.Errorf("scan security scan id: %w", err)
+		}
+		out[provider+"|"+ref] = id
+	}
+	return out, rows.Err()
+}
+
+// scanKey identifies one artifact's stored scan within a scope.
+func scanKey(r security.Report, scope security.Scope) string {
+	return providerOf(r, scope) + "|" + r.Artifact.Ref()
+}
+
+// providerOf is the scanner that answered, falling back to the scope's.
+func providerOf(r security.Report, scope security.Scope) string {
+	if r.Provider != "" {
+		return r.Provider
+	}
+	return scope.Provider
+}
+
+// replaceFindings rewrites the index rows for a whole chunk of artifacts.
+//
+// Delete-then-insert rather than a merge, for the reason saveFindings gave: a
+// re-scan that RESOLVED a finding must remove its row, and a merge that only
+// upserts would leave the resolved finding in the index forever - a search for
+// it would keep naming an image that no longer has it, which is worse than not
+// having a search.
+//
+// What changed is the arithmetic, not the semantics. One DELETE for the chunk
+// and one INSERT per two hundred findings, where this was a DELETE per artifact
+// and an INSERT per finding: on a release with 26,000 findings that is about
+// 130 statements instead of 26,000, and the write stops being the slowest part
+// of a sync that has already finished talking to the scanner.
+func (s *Security) replaceFindings(
+	ctx context.Context, tx *sql.Tx, scope security.Scope,
+	ids map[string]int64, reports []security.Report,
+) error {
+	type row struct {
+		scanID  int64
+		finding security.Finding
+	}
+
+	scanIDs := make([]any, 0, len(reports))
+	pending := make([]row, 0, len(reports)*8)
+	for _, r := range reports {
+		id, ok := ids[scanKey(r, scope)]
+		if !ok {
+			// The row was written a moment ago in this transaction, so this
+			// cannot happen - and if it ever does, dropping the findings
+			// silently would be a release whose count and whose rows disagree.
+			return fmt.Errorf("security cache: no stored scan for %s", r.Artifact.Ref())
+		}
+		scanIDs = append(scanIDs, id)
+		for _, f := range r.Findings {
+			pending = append(pending, row{scanID: id, finding: f})
+		}
+	}
+	if len(scanIDs) == 0 {
+		return nil
+	}
+
+	for start := 0; start < len(scanIDs); start += sqlChunk {
+		end := start + sqlChunk
+		if end > len(scanIDs) {
+			end = len(scanIDs)
+		}
+		chunk := scanIDs[start:end]
+		placeholders := strings.TrimSuffix(strings.Repeat("?,", len(chunk)), ",")
+		if _, err := tx.ExecContext(ctx, s.q(
+			`DELETE FROM security_findings WHERE scan_id IN (`+placeholders+`)`), chunk...,
+		); err != nil {
+			return fmt.Errorf("clear security findings: %w", err)
+		}
+	}
+
+	const columns = 11
+	values := "(" + strings.TrimSuffix(strings.Repeat("?,", columns), ",") + ")"
+
+	for start := 0; start < len(pending); start += findingsPerStatement {
+		end := start + findingsPerStatement
+		if end > len(pending) {
+			end = len(pending)
+		}
+		batch := pending[start:end]
+
+		args := make([]any, 0, len(batch)*columns)
+		for _, p := range batch {
+			f := p.finding
+			fixedIn := ""
+			if len(f.FixedIn) > 0 {
+				fixedIn = f.FixedIn[0]
+			}
+			severity := f.Severity
+			if !severity.Valid() {
+				severity = security.SeverityUnknown
+			}
+			args = append(args,
+				p.scanID, f.CVE, f.ID, string(severity), f.Fixable,
+				f.Component.ID, f.Component.Name, f.Component.Version, f.Component.Type,
+				fixedIn, truncate(f.Summary, 500))
+		}
+
+		if _, err := tx.ExecContext(ctx, s.q(`
+			INSERT INTO security_findings (
+				scan_id, cve, issue_id, severity, fixable,
+				component_id, component_name, component_version, component_type,
+				fixed_in, summary)
+			VALUES `+strings.TrimSuffix(strings.Repeat(values+",", len(batch)), ",")+`
+			ON CONFLICT (scan_id, cve, issue_id, component_id) DO NOTHING`), args...,
+		); err != nil {
+			return fmt.Errorf("save security findings: %w", err)
+		}
+	}
+	return nil
 }
 
 // saveUnavailable records a scanner failure WITHOUT disturbing a stored result.
@@ -226,17 +437,16 @@ func (s *Security) saveUnavailable(
 	return nil
 }
 
-// saveScan upserts one artifact's summary row and returns its id.
-func (s *Security) saveScan(ctx context.Context, tx *sql.Tx, scope security.Scope, r security.Report, expires time.Time) (int64, error) {
+// saveScan upserts one artifact's summary row.
+//
+// The id it was given is NOT read back here. It used to be, with a SELECT per
+// artifact - and the ids are needed for a whole chunk at once, so they are read
+// in one query afterwards. See scanIDs.
+func (s *Security) saveScan(ctx context.Context, tx *sql.Tx, scope security.Scope, r security.Report, expires time.Time) error {
 	c := r.Counts
-	provider := r.Provider
-	if provider == "" {
-		provider = scope.Provider
-	}
+	provider := providerOf(r, scope)
 
-	// Upsert with the same key the unique index uses. The re-read afterwards is
-	// what makes this portable: SQLite and Postgres disagree about RETURNING on
-	// an upsert, and a second SELECT is cheap against a unique index.
+	// Upsert with the same key the unique index uses.
 	_, err := tx.ExecContext(ctx, s.q(`
 		INSERT INTO security_scans (
 			product, repository, role, provider,
@@ -274,62 +484,7 @@ func (s *Security) saveScan(ctx context.Context, tx *sql.Tx, scope security.Scop
 		c.FixableBySeverity.Low, c.FixableBySeverity.Unknown,
 		timeOrNil(r.ScannedAt), securityTime(r.RetrievedAt), fingerprintOf(r), securityTime(expires), r.Missing)
 	if err != nil {
-		return 0, fmt.Errorf("save security scan: %w", err)
-	}
-
-	var id int64
-	err = tx.QueryRowContext(ctx, s.q(`
-		SELECT id FROM security_scans
-		 WHERE product = ? AND repository = ? AND provider = ? AND artifact_ref = ?`),
-		scope.Product, scope.Repository, provider, r.Artifact.Ref()).Scan(&id)
-	if err != nil {
-		return 0, fmt.Errorf("read back security scan: %w", err)
-	}
-	return id, nil
-}
-
-// saveFindings replaces the index rows for one artifact.
-//
-// Delete-then-insert rather than a merge: a re-scan that RESOLVED a finding
-// must remove its row, and a merge that only upserts would leave the resolved
-// finding in the index forever - a search for it would keep naming an image
-// that no longer has it, which is worse than not having a search.
-func (s *Security) saveFindings(ctx context.Context, tx *sql.Tx, scanID int64, findings []security.Finding) error {
-	if _, err := tx.ExecContext(ctx, s.q(`DELETE FROM security_findings WHERE scan_id = ?`), scanID); err != nil {
-		return fmt.Errorf("clear security findings: %w", err)
-	}
-	if len(findings) == 0 {
-		return nil
-	}
-
-	stmt, err := tx.PrepareContext(ctx, s.q(`
-		INSERT INTO security_findings (
-			scan_id, cve, issue_id, severity, fixable,
-			component_id, component_name, component_version, component_type,
-			fixed_in, summary)
-		VALUES (?,?,?,?,?,?,?,?,?,?,?)
-		ON CONFLICT (scan_id, cve, issue_id, component_id) DO NOTHING`))
-	if err != nil {
-		return fmt.Errorf("prepare security finding insert: %w", err)
-	}
-	defer func() { _ = stmt.Close() }()
-
-	for _, f := range findings {
-		fixedIn := ""
-		if len(f.FixedIn) > 0 {
-			fixedIn = f.FixedIn[0]
-		}
-		severity := f.Severity
-		if !severity.Valid() {
-			severity = security.SeverityUnknown
-		}
-		if _, err := stmt.ExecContext(ctx,
-			scanID, f.CVE, f.ID, string(severity), f.Fixable,
-			f.Component.ID, f.Component.Name, f.Component.Version, f.Component.Type,
-			fixedIn, truncate(f.Summary, 500),
-		); err != nil {
-			return fmt.Errorf("save security finding: %w", err)
-		}
+		return fmt.Errorf("save security scan: %w", err)
 	}
 	return nil
 }

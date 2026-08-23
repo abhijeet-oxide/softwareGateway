@@ -143,7 +143,7 @@ export default function Downloads() {
             {!transfers.isLoading && ongoing.length === 0 ? (
               <EmptyStateCard
                 title="Nothing is downloading"
-                explanation="Downloads started by hand or by an auto-download rule appear here while they run, with what has moved so far. Finished ones are listed below."
+                explanation="Downloads started manually or by an auto-download rule appear here while they run. Finished ones are listed below."
                 action={<Link to="/packages"><Button type="primary">Find a package to download</Button></Link>}
               />
             ) : (

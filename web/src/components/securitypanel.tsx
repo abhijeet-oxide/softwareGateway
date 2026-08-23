@@ -513,9 +513,8 @@ function PendingCard({ title, previous, note }: {
       <Space direction="vertical" size={2} style={{ width: '100%' }}>
         <Space size={10} align="center">
           <Spin size="small" />
-          <Typography.Text type="secondary">Being retrieved</Typography.Text>
+          <Typography.Text type="secondary">Fetching details</Typography.Text>
         </Space>
-        <div style={{ fontSize: 30, fontWeight: 600, lineHeight: 1.1, color: '#C4CBD4' }}>—</div>
         {previous && (
           <Typography.Text type="secondary" style={{ fontSize: 12 }}>
             Previously {previous}
@@ -1772,9 +1771,7 @@ function AdvisoryDrawer({
         <Section title="Description">
           {prose
             ? (
-              <Typography.Paragraph
-                style={{ margin: 0, width: '100%', whiteSpace: 'pre-wrap', fontSize: 14, lineHeight: 1.6 }}
-              >
+              <Typography.Paragraph>
                 {prose}
               </Typography.Paragraph>
             )

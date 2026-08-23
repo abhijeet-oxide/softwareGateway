@@ -361,6 +361,13 @@ export default function Packages() {
             scroll={{ x: 'max-content' }}
             columns={[
               {
+                title: 'Product',
+                width: 210,
+                render: (_, r) => product && (
+                  <span>{product.displayName}</span>
+                ),
+              },
+              {
                 /*
                   The package's own name, in its own column. It used to sit
                   under the version as a subtitle, which read as a footnote -
@@ -385,7 +392,7 @@ export default function Packages() {
                 ),
               },
               {
-                title: 'Release',
+                title: 'Version',
                 width: 160,
                 render: (_, r) =>
                   product && (
@@ -398,7 +405,7 @@ export default function Packages() {
                   ),
               },
               { title: 'Published', width: 95, render: (_, r) => <TimeAgo at={r.pkg.publishedAt || r.pkg.discoveredAt} /> },
-              { title: 'Verified', width: 120, render: (_, r) => <VerificationBadge state={verification(r.pkg)} /> },
+              { title: 'Signed', width: 120, render: (_, r) => <VerificationBadge state={verification(r.pkg)} /> },
               {
                 title: 'Status',
                 width: 130,
@@ -443,7 +450,7 @@ export default function Packages() {
               },
               {
                 title: 'Location',
-                width: 125,
+                width: 150,
                 render: (_, r) => (
                   <LocationChip
                     locations={deriveLocations(r.pkg, product)}
@@ -452,8 +459,8 @@ export default function Packages() {
                 ),
               },
               {
-                title: 'Download time',
-                width: 100,
+                title: 'Download Time',
+                width: 140,
                 render: (_, r) => {
                   const s = downloadSeconds(r.pkg)
                   return s === undefined

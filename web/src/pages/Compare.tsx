@@ -339,9 +339,9 @@ function CacheNote({ base, against }: { base?: Package; against?: Package }) {
   const analysed = picked.filter((p) => p.expandedAt).length
   const note =
     analysed === picked.length
-      ? 'Manifests found in cache - comparing the releases'
+      ? 'Manifests found in cache, comparing the releases'
       : analysed === 0
-        ? 'No cache for either release — reading their manifests now'
+        ? 'No cache for either release, reading their manifests now'
         : 'One release found in cache; reading the other now'
 
   return (

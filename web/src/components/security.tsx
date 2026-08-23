@@ -261,7 +261,7 @@ export function VulnerabilityCell({
       )}
       {stale && (
         <Typography.Text type="secondary" style={{ color: semantic.warning, fontStyle: 'italic', fontSize: 11 }}>
-          Last sync failed. These are the last good results.
+          Last sync failed. The details may be outdated.
         </Typography.Text>
       )}
     </Space>

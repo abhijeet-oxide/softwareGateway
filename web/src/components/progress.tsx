@@ -1,6 +1,6 @@
 import { Progress, Tag, Tooltip, Typography } from 'antd'
 import {
-  CheckCircleFilled, ClockCircleOutlined, CloseCircleFilled, SyncOutlined,
+  CheckCircleFilled, ClockCircleOutlined, CloseCircleFilled, Loading3QuartersOutlined, LoadingOutlined, SyncOutlined,
 } from '@ant-design/icons'
 import type { ContentGroup, Strategy } from '../api/types'
 import { formatBytes, formatCount, formatSpeed, formatAbsolute, formatDuration } from '../domain/format'
@@ -370,7 +370,7 @@ export function WorkingBar({
   return (
     <div>
       <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 6 }}>
-        <SyncOutlined spin style={{ color: palette.primary }} />
+        <LoadingOutlined spin style={{ color: palette.primary }} />
         <Typography.Text strong style={{ fontSize: 13 }}>{label}</Typography.Text>
         {elapsedSeconds !== undefined && (
           <Typography.Text type="secondary" style={{ fontSize: 12 }}>

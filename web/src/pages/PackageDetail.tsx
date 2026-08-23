@@ -2,10 +2,10 @@ import { useEffect, useMemo, useState } from 'react'
 import type { ReactNode } from 'react'
 import type { UseMutationResult } from '@tanstack/react-query'
 import {
-  Alert, App, Button, Card, Col, Descriptions, Empty, Modal, Row, Space, Table, Tabs, Tag, Tooltip,
-  Tree, Typography,
+  Alert, App, Button, Card, Col, Descriptions, Divider, Empty, Modal, Row, Space, Table, Tabs, Tag,
+  Tooltip, Tree, Typography,
 } from 'antd'
-import { FolderOutlined, SyncOutlined } from '@ant-design/icons'
+import { FolderOutlined, SafetyCertificateOutlined, SyncOutlined } from '@ant-design/icons'
 import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom'
 import {
   packageFileDownloadUrl, useArtifacts, useInspectPackage, usePackage, usePackageFiles,
@@ -21,7 +21,7 @@ import { NA, Value } from '../components/value'
 import { AnalyzeIcon, ARTIFACT_ICONS, DownloadIcon, Icon } from '../components/icons'
 import { WorkingBar } from '../components/progress'
 import {
-  AnalysisTag, RepoLink, StatusBadge, TimeAgo, VerificationBadge,
+  AnalysisTag, RepoLink, StatusBadge, TimeAgo, TransferStateTag, VerificationBadge,
 } from '../components/chips'
 import {
   EmptyStateCard, ErrorState, PageHeader, ReleaseTimeline, SearchBar,
@@ -616,13 +616,51 @@ function buildTree(
  * That is what makes an entitlement refusal debuggable weeks after the transfer
  * that hit it, and paraphrasing it here would throw the only useful part away.
  */
-function DownloadsTab({ product, transfers }: { product: string; transfers: PackageTransfer[] }) {
+function DownloadsTab({ transfers, onDownload, downloadHref, mayOperate }: {
+  transfers: PackageTransfer[]
+  /** Starts one, when there is none and the reader may. */
+  onDownload?: () => void
+  /** Where the existing download is, when there is one. */
+  downloadHref?: string
+  mayOperate?: boolean
+}) {
   if (transfers.length === 0) {
     return (
       <EmptyStateCard
         title="This release has not been downloaded"
         explanation="Nothing has been transferred from the vendor registry for this release yet. Starting a download brings the whole release into the internal repositories."
-        action={null}
+        /*
+          THE BUTTON, not a shrug.
+
+          An empty state that explains what would appear here and offers no way
+          to make it appear sends the reader back to the top of the page to find
+          the control they were already looking for. The header keeps its
+          Download button - this is the same act, offered where the absence is.
+        */
+        action={
+          downloadHref
+            ? (
+              <Link to={downloadHref}>
+                <Button icon={<Icon as={DownloadIcon} title="Download" />}>View download</Button>
+              </Link>
+            )
+            : (
+              <Tooltip
+                title={mayOperate
+                  ? 'Downloads the whole release into the internal repositories and configures the mirror OpenShift pulls from.'
+                  : 'You do not have permission to start a download.'}
+              >
+                <Button
+                  type="primary"
+                  icon={<Icon as={DownloadIcon} title="Download" />}
+                  disabled={!mayOperate || !onDownload}
+                  onClick={onDownload}
+                >
+                  Download this release
+                </Button>
+              </Tooltip>
+            )
+        }
       />
     )
   }
@@ -641,16 +679,22 @@ function DownloadsTab({ product, transfers }: { product: string; transfers: Pack
           },
           {
             title: 'State',
-            width: 160,
+            width: 170,
             /*
               The transfer's OWN state, not the release's. A release is
               downloaded to several destinations and each attempt has its own
               outcome; collapsing them into one status is what made a page say
               "downloaded" while one of three destinations had failed.
+
+              As the SAME BADGE the Downloads page uses for the same fact. It
+              was the only status in the application rendered as plain text -
+              which made a failed transfer read exactly like a successful one
+              until somebody read the word, and made this table look like a
+              different application from the page its rows link to.
             */
             render: (_, t) => (
-              <Space direction="vertical" size={0}>
-                <Typography.Text>{titleCase(t.state)}</Typography.Text>
+              <Space direction="vertical" size={2}>
+                <TransferStateTag state={t.state} />
                 {t.failureReason && (
                   <Typography.Text type="danger" style={{ fontSize: 11 }} ellipsis={{ tooltip: t.failureReason }}>
                     {t.failureReason}
@@ -662,11 +706,16 @@ function DownloadsTab({ product, transfers }: { product: string; transfers: Pack
           { title: 'Started', width: 150, render: (_, t) => <TimeAgo at={t.createdAt} /> },
           { title: 'Finished', width: 150, render: (_, t) => <TimeAgo at={t.completedAt} /> },
           {
-            title: '',
-            width: 110,
+            // Named, because a column with no heading reads as one somebody
+            // forgot to fill in - and the button under it is a link to another
+            // page rather than a "view" of the row it sits on.
+            title: 'Action',
+            width: 150,
             render: (_, t) => (
               <Link to={`/downloads/${t.id}`}>
-                <Button size="small">View</Button>
+                <Button size="small" icon={<Icon as={DownloadIcon} title="Download" />}>
+                  View downloads
+                </Button>
               </Link>
             ),
           },
@@ -709,7 +758,9 @@ function vulnerabilityFact(p: Package): string | undefined {
   if (!s || !s.canSync) return undefined
   switch (s.state) {
     case 'syncing':
-      return 'Syncing'
+      // Never a bare "Syncing" for a sync nobody is running. See
+      // PackageSecuritySummary.stalled.
+      return s.stalled ? 'Sync interrupted' : 'Syncing'
     case '':
       return 'Not synced'
     case 'failed':
@@ -833,7 +884,42 @@ export default function PackageDetail() {
           replacement for it.
         */
         title={p ? `${packageName(p)}:${version(p)}` : 'Loading…'}
-        description={prod?.displayName || productName}
+        /*
+          THE PRODUCT AND THE BADGES ON ONE LINE.
+
+          They were two things a line apart: the product name under the title,
+          and a card below it holding the same badges plus four labelled facts.
+          The card was a box around a single row - a heading's worth of chrome
+          for one line of text - and it pushed the tabs, which are what the page
+          is actually for, a hundred pixels down the screen.
+
+          Both halves say what this release IS, so they are one line: what it
+          belongs to, then its state and its shape.
+        */
+        description={
+          <div
+            style={{
+              display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: '6px 10px', marginTop: 2,
+            }}
+          >
+            <Typography.Text type="secondary">{prod?.displayName || productName}</Typography.Text>
+            {p && (
+              <>
+                <Divider type="vertical" style={{ margin: 0 }} />
+                <StatusBadge status={status!} reason={failureReason(p)} />
+                <AnalysisTag pkg={p} />
+                <VerificationBadge state={verification(p)} />
+                <FactTag label="Size" value={formatBytes(p.totalBytes) ?? undefined} />
+                <FactTag label="Artifacts" value={formatCount(p.artifactCount) ?? undefined} />
+                <FactTag
+                  label="Vulnerabilities"
+                  value={vulnerabilityFact(p)}
+                  onClick={() => switchTab('security')}
+                />
+              </>
+            )}
+          </div>
+        }
         extra={
           <Space>
             <Link to={`/packages/compare?product=${encodeURIComponent(productName!)}&from=${encodeURIComponent(p?.tag ?? '')}`}>
@@ -868,51 +954,20 @@ export default function PackageDetail() {
       <Row gutter={[16, 16]}>
         <Col span={24}>
           {/*
-            WHAT THIS RELEASE IS, in one strip below its title.
+            WHEN, on the left, as a line rather than as a card.
 
-            These were three separate things: a row of badges wedged in beside
-            the Download button, a tab called Overview holding six labelled
-            values, and a card carrying two dates. The badges fought the buttons
-            for the same corner, the tab put a definition list between a reader
-            and what the release CONTAINS, and the card was one line of text
-            with a heading's worth of chrome around it.
-
-            One strip, read left to right: the state of the release, the facts
-            somebody came for, and when it happened. The rest of the values keep
-            their card under Details, where a reader who wants the digest can
-            find it.
+            It sat on the right of the badge card, which put the two dates in a
+            release's life in the corner a reader's eye reaches last, boxed in
+            chrome that said nothing. It is a timeline: it belongs at the start
+            of the line, and it needs no border to be one.
           */}
-          <Card size="small" styles={{ body: { padding: '10px 16px' } }}>
-            <div
-              style={{
-                display: 'flex', flexWrap: 'wrap', gap: '8px 16px',
-                alignItems: 'center', justifyContent: 'space-between',
-              }}
-            >
-              <Space size={[8, 6]} wrap>
-                {p && (
-                  <>
-                    <StatusBadge status={status!} reason={failureReason(p)} />
-                    <AnalysisTag pkg={p} />
-                    <VerificationBadge state={verification(p)} />
-                    <FactTag label="Version" value={version(p)} mono />
-                    <FactTag label="Size" value={formatBytes(p.totalBytes) ?? undefined} />
-                    <FactTag label="Artifacts" value={formatCount(p.artifactCount) ?? undefined} />
-                    <FactTag
-                      label="Vulnerabilities"
-                      value={vulnerabilityFact(p)}
-                      onClick={() => switchTab('security')}
-                    />
-                  </>
-                )}
-              </Space>
-              <ReleaseTimeline
-                publishedAt={p?.publishedAt || p?.discoveredAt}
-                downloadedAt={p ? downloadedAt(p) : undefined}
-                downloading={status === 'DOWNLOADING'}
-              />
-            </div>
-          </Card>
+          <div style={{ paddingBottom: 4 }}>
+            <ReleaseTimeline
+              publishedAt={p?.publishedAt || p?.discoveredAt}
+              downloadedAt={p ? downloadedAt(p) : undefined}
+              downloading={status === 'DOWNLOADING'}
+            />
+          </div>
         </Col>
 
         <Col span={24}>
@@ -934,7 +989,19 @@ export default function PackageDetail() {
             items={[
               {
                 key: 'details',
-                label: 'Details',
+                /*
+                  ICONS ON THE TABS, because they are three different KINDS of
+                  answer - what it is, what is wrong with it, where it has been
+                  sent - and three words in a row at the same weight make a
+                  reader read all three every time. A mark each is what makes
+                  the second visit a glance.
+                */
+                label: (
+                  <Space size={6}>
+                    <Icon as={ARTIFACT_ICONS.Index} title="Details" />
+                    Details
+                  </Space>
+                ),
                 children: (
                   <Space direction="vertical" size={16} style={{ width: '100%' }}>
         <Card title="Release" loading={pkg.isLoading}>
@@ -1152,6 +1219,7 @@ export default function PackageDetail() {
                 */
                 label: (
                   <Space size={6}>
+                    <SafetyCertificateOutlined />
                     Security
                     {p?.security?.state === 'synced' && (
                       <Typography.Text
@@ -1171,7 +1239,7 @@ export default function PackageDetail() {
                       word. The word is still there for anyone who needs it, in
                       the tooltip and on the panel the tab opens.
                     */}
-                    {p?.security?.state === 'syncing' && (
+                    {p?.security?.state === 'syncing' && !p.security.stalled && (
                       <Tooltip title="A vulnerability sync is in progress">
                         <SyncOutlined spin style={{ fontSize: 12 }} />
                       </Tooltip>
@@ -1184,8 +1252,23 @@ export default function PackageDetail() {
               },
               {
                 key: 'downloads',
-                label: `Downloads${p?.transfers?.length ? ` (${p.transfers.length})` : ''}`,
-                children: <DownloadsTab product={productName!} transfers={p?.transfers ?? []} />,
+                label: (
+                  <Space size={6}>
+                    <Icon as={DownloadIcon} title="Downloads" />
+                    Downloads
+                    {p?.transfers?.length ? `(${p.transfers.length})` : ''}
+                  </Space>
+                ),
+                children: (
+                  <DownloadsTab
+                    transfers={p?.transfers ?? []}
+                    // The empty state OFFERS the download rather than
+                    // describing one. See DownloadsTab.
+                    onDownload={existingDownload ? undefined : () => setConfirming(true)}
+                    downloadHref={existingDownload ? `/downloads/${existingDownload.id}` : undefined}
+                    mayOperate={mayOperate && Boolean(p)}
+                  />
+                ),
               },
             ]}
           />

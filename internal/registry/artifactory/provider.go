@@ -193,8 +193,20 @@ func (p *XrayProvider) Scan(ctx context.Context, refs []security.ArtifactRef, op
 // an image it has not looked at and an image that is not in the repository at
 // all. The first is a scan waiting to happen; the second is a TRANSFER waiting
 // to happen, and reporting it as a scanning gap sends somebody to the wrong
-// team. Artifactory knows which, so it is asked - once per image, and only for
-// the ones Xray declined.
+// team. Artifactory knows which, so it is asked - for the ones Xray declined.
+//
+// # In bulk, and why that matters here more than anywhere else
+//
+// This phase is asked about every image Xray would not answer for, which on a
+// release that has not been replicated yet is EVERY image. Per image, that was
+// 260 round trips six at a time - the only part of a sync whose request count
+// scaled with the number of artifacts rather than with the number of batches,
+// and it ran in exactly the situation somebody is already waiting on a slow
+// answer. One AQL query answers a hundred, so a release costs three requests
+// and they still go out in parallel.
+//
+// The per-image search remains for accounts AQL is closed to. It is the same
+// question asked the slow way, not a degraded answer.
 func (p *XrayProvider) separateMissingFromUnindexed(
 	ctx context.Context, reports []security.Report, progress security.Progress,
 ) {
@@ -209,10 +221,91 @@ func (p *XrayProvider) separateMissingFromUnindexed(
 	}
 
 	var (
-		mu      sync.Mutex
-		missing int
-		failed  bool
+		mu       sync.Mutex
+		missing  int
+		failed   bool
+		perImage []int
 	)
+
+	// found reports what one chunk learned. Called from several goroutines.
+	record := func(indexes []int, stored map[string]bool) {
+		mu.Lock()
+		defer mu.Unlock()
+		for _, i := range indexes {
+			if stored[checksumOf(reports[i].Artifact.Digest)] {
+				reports[i].Message = notIndexedYetMessage
+				continue
+			}
+			reports[i].Missing = true
+			reports[i].Message = notInRepositoryMessage
+			missing++
+		}
+	}
+
+	g, gctx := errgroup.WithContext(ctx)
+	g.SetLimit(p.concurrency)
+
+	for _, chunk := range chunkIndexes(pending, ChecksumQueryLimit) {
+		chunk := chunk
+		g.Go(func() error {
+			digests := make([]string, 0, len(chunk))
+			for _, i := range chunk {
+				digests = append(digests, reports[i].Artifact.Digest)
+			}
+			stored, err := p.client.StoredChecksums(gctx, digests)
+			switch {
+			case err == nil:
+				record(chunk, stored)
+			case errors.Is(err, errBatchUnsupported), errors.Is(err, errBatchInconclusive):
+				// Answerable, just not in bulk - either this account cannot use
+				// AQL, or the answer may have been truncated and its silences
+				// cannot be trusted. Queued rather than probed here so the
+				// fallback runs at the same bounded concurrency instead of one
+				// request per already-running goroutine.
+				mu.Lock()
+				perImage = append(perImage, chunk...)
+				mu.Unlock()
+			default:
+				// The probe is an enrichment. Losing it costs the distinction,
+				// never the report, so the message stays as Xray phrased it.
+				mu.Lock()
+				failed = true
+				mu.Unlock()
+			}
+			return nil
+		})
+	}
+	_ = g.Wait()
+
+	if len(perImage) > 0 {
+		fallbackMissing, fallbackFailed := p.probeEachImage(ctx, reports, perImage)
+		missing += fallbackMissing
+		failed = failed || fallbackFailed
+	}
+
+	switch {
+	case failed:
+		security.ReportNote(progress,
+			"Artifactory did not say which of the unscanned images it holds, "+
+				"so none of them are reported as missing.")
+	case missing > 0:
+		security.ReportNote(progress, fmt.Sprintf(
+			"%d images are not in the JFrog repository. They have not been transferred there yet.",
+			missing))
+	}
+}
+
+// probeEachImage is the fallback: one search per image, still bounded.
+//
+// Only reached where AQL is closed to this account. Kept because the
+// distinction it draws - "not transferred" against "not indexed" - is the
+// difference between a job for the replication team and one for whoever owns
+// scanning, and losing it on a locked-down platform would be a worse trade than
+// the requests it costs.
+func (p *XrayProvider) probeEachImage(
+	ctx context.Context, reports []security.Report, pending []int,
+) (missing int, failed bool) {
+	var mu sync.Mutex
 	g, gctx := errgroup.WithContext(ctx)
 	g.SetLimit(p.concurrency)
 
@@ -223,8 +316,6 @@ func (p *XrayProvider) separateMissingFromUnindexed(
 			mu.Lock()
 			defer mu.Unlock()
 			if err != nil {
-				// The probe is an enrichment. Losing it costs the distinction,
-				// never the report, so the message stays as Xray phrased it.
 				failed = true
 				return nil
 			}
@@ -239,17 +330,23 @@ func (p *XrayProvider) separateMissingFromUnindexed(
 		})
 	}
 	_ = g.Wait()
+	return missing, failed
+}
 
-	switch {
-	case failed:
-		security.ReportNote(progress,
-			"Artifactory did not say which of the unscanned images it holds, "+
-				"so none of them are reported as missing.")
-	case missing > 0:
-		security.ReportNote(progress, fmt.Sprintf(
-			"%d images are not in the JFrog repository. They have not been transferred there yet.",
-			missing))
+// chunkIndexes splits a list of positions into runs of at most `size`.
+func chunkIndexes(indexes []int, size int) [][]int {
+	if size <= 0 {
+		size = 1
 	}
+	out := make([][]int, 0, (len(indexes)+size-1)/size)
+	for start := 0; start < len(indexes); start += size {
+		end := start + size
+		if end > len(indexes) {
+			end = len(indexes)
+		}
+		out = append(out, indexes[start:end])
+	}
+	return out
 }
 
 const (

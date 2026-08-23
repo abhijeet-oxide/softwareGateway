@@ -1,10 +1,13 @@
 import { useEffect, useState } from 'react'
 import type { ReactNode } from 'react'
-import { Alert, Button, Drawer, Dropdown, Progress, Space, Tag, Tooltip, Typography } from 'antd'
+import {
+  Alert, Button, Drawer, Dropdown, Popover, Progress, Space, Tag, Tooltip, Typography,
+} from 'antd'
 import { formatRelative } from '../domain/format'
 import {
   CheckCircleOutlined, CopyOutlined, DownloadOutlined, ExclamationCircleOutlined,
-  FileTextOutlined, MinusCircleOutlined, QuestionCircleOutlined, SyncOutlined, WarningOutlined,
+  FileTextOutlined, MinusCircleOutlined, QuestionCircleOutlined, StopOutlined, SyncOutlined,
+  WarningOutlined,
 } from '@ant-design/icons'
 import { mono, palette, semantic, severity as severityColour, severitySurface, verdict as verdictColour } from '../theme'
 import { SEVERITIES } from '../api/types'
@@ -135,6 +138,16 @@ export function VulnerabilityCell({
     )
   }
   if (summary.state === 'syncing') {
+    // A claim whose holder went away is not a sync in progress. A spinning
+    // icon on a release nobody is syncing is a listing telling a reader to
+    // wait for something that is never coming.
+    if (summary.stalled) {
+      return (
+        <Tooltip title="A sync was started and the Coordinator running it stopped. Nothing is running now - open the release and sync it again.">
+          <Tag color="warning" style={{ marginInlineEnd: 0 }}>Sync interrupted</Tag>
+        </Tooltip>
+      )
+    }
     return (
       <Tag color="processing" icon={<SyncOutlined spin />} style={{ marginInlineEnd: 0 }}>
         Syncing
@@ -554,7 +567,12 @@ export function ComparisonTiles({ resolved, introduced, moreSevere, lessSevere, 
  * long, how much has already gone wrong, and against which scanner. All four
  * are known, and all four are here.
  */
-export function SecurityProgressPanel({ sync }: { sync: SecuritySyncStatus }) {
+export function SecurityProgressPanel({ sync, onStop, stopping }: {
+  sync: SecuritySyncStatus
+  /** Offered whenever a sync can be stopped, which is whenever one is running. */
+  onStop?: () => void
+  stopping?: boolean
+}) {
   const stages = sync.stages ?? []
   const notes = sync.notes ?? []
 
@@ -570,24 +588,53 @@ export function SecurityProgressPanel({ sync }: { sync: SecuritySyncStatus }) {
   const done = fetching?.done ?? 0
   const percent = total > 0 ? Math.round((done / total) * 100) : 0
 
-  const elapsed = useElapsed(sync.startedAt, sync.state === 'syncing')
+  const elapsed = useElapsed(sync.startedAt, sync.state === 'syncing' && !sync.stalled)
 
   return (
     <Space direction="vertical" size={12} style={{ width: '100%', padding: '4px 0' }}>
       <Space style={{ width: '100%', justifyContent: 'space-between' }} align="start">
         <Space size={8}>
           <SyncOutlined spin style={{ color: palette.primary }} />
+          {/*
+            What the sync is DOING, in a sentence somebody can act on.
+
+            "Resolving the release" named a stage rather than a step, and read
+            as though the release itself were in question. What is happening is
+            that the platform is working out which of the release's artifacts
+            the scanner can be asked about, and there is no number for it yet
+            because the size of that list is the thing being established.
+          */}
           <Typography.Text strong>
             {total > 0
               ? `Retrieving results for ${total.toLocaleString()} images from ${scannerName(sync)}`
-              : 'Resolving the release'}
+              // No stages at all is a sync running on another Coordinator, and
+              // this replica does not know what step it has reached. Saying it
+              // is resolving artifacts would be inventing a position.
+              : stages.length === 0
+                ? `Vulnerability sync in progress on another Coordinator`
+                : 'Working out which of this release’s artifacts to ask about'}
           </Typography.Text>
         </Space>
-        {elapsed && (
-          <Typography.Text type="secondary" style={{ fontFamily: mono, fontSize: 12 }}>{elapsed}</Typography.Text>
-        )}
+        <Space size={8} align="center">
+          {elapsed && (
+            <Typography.Text type="secondary" style={{ fontFamily: mono, fontSize: 12 }}>{elapsed}</Typography.Text>
+          )}
+          {onStop && (
+            <Tooltip title="Stops the sync. Nothing already stored is lost - the release keeps whatever its last completed sync recorded.">
+              <Button size="small" danger icon={<StopOutlined />} loading={stopping} onClick={onStop}>
+                Stop
+              </Button>
+            </Tooltip>
+          )}
+        </Space>
       </Space>
 
+      {/*
+        The bar only where there is a position to draw. A sync on another
+        Coordinator has none, and a bar sitting at zero for two minutes says
+        the work is stuck rather than that it is elsewhere.
+      */}
+      {stages.length > 0 && (
       <div>
         <Progress
           percent={percent}
@@ -595,35 +642,37 @@ export function SecurityProgressPanel({ sync }: { sync: SecuritySyncStatus }) {
           showInfo={false}
           strokeColor={palette.primary}
         />
-        <Space size={16} wrap style={{ marginTop: 4 }}>
-          <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-            {total > 0
+        {/*
+          SEPARATED, because these are four unrelated facts and whitespace alone
+          did not say so: "Preparing" ran into "JFrog Xray · cfx-jfrog-lab" as
+          though the scanner's name were part of the sentence before it.
+        */}
+        <Meta
+          style={{ marginTop: 4 }}
+          items={[
+            total > 0
               ? `${done.toLocaleString()} of ${total.toLocaleString()} images`
-              : 'Preparing'}
-          </Typography.Text>
-          {cached && cached.done > 0 && (
-            <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-              {cached.done.toLocaleString()} read from storage
-            </Typography.Text>
-          )}
-          {/*
-            Failures shown AS THEY HAPPEN, not at the end. A sync against a
-            scanner that is timing out looks identical to a healthy one for two
-            minutes, and then delivers the bad news all at once - by which time
-            the person who could have cancelled it has walked away.
-          */}
-          {failing && failing.done > 0 && (
-            <Typography.Text style={{ fontSize: 12, color: semantic.error }}>
-              {failing.done.toLocaleString()} not retrieved
-            </Typography.Text>
-          )}
-          {sync.repository && (
-            <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-              {scannerName(sync)} · {sync.repository}
-            </Typography.Text>
-          )}
-        </Space>
+              // The counterpart of the headline: no denominator exists yet, so
+              // this says what is being counted rather than pretending to a
+              // position.
+              : 'Listing the release’s artifacts',
+            cached && cached.done > 0
+              ? `${cached.done.toLocaleString()} read from storage`
+              : null,
+            /*
+              Failures shown AS THEY HAPPEN, not at the end. A sync against a
+              scanner that is timing out looks identical to a healthy one for
+              two minutes, and then delivers the bad news all at once - by which
+              time the person who could have stopped it has walked away.
+            */
+            failing && failing.done > 0
+              ? { text: `${failing.done.toLocaleString()} not retrieved`, colour: semantic.error }
+              : null,
+            sync.repository ? `${scannerName(sync)} · ${sync.repository}` : null,
+          ]}
+        />
       </div>
+      )}
 
       {notes.length > 0 && (
         <Space direction="vertical" size={2} style={{ width: '100%' }}>
@@ -636,15 +685,97 @@ export function SecurityProgressPanel({ sync }: { sync: SecuritySyncStatus }) {
       {stages.length === 0 && (
         <Typography.Text type="secondary" style={{ fontSize: 12 }}>
           {/*
-            No live position means the sync is running on another replica. Its
-            state is still authoritative, so the honest thing is to say where it
-            is happening rather than to draw a bar at nothing.
+            No live position means one of two things, and until the sync started
+            beating this could only guess at the friendlier one.
+
+            A sync that is still beating IS running somewhere else, and its
+            state is authoritative - the honest thing is to say where it is
+            happening rather than draw a bar at nothing. A sync that has stopped
+            beating is not running anywhere, and is handled above by the caller:
+            this line is never the answer for it.
           */}
-          This sync is running on another Coordinator. Its progress is not
-          available here; the result will appear once it completes.
+          This sync is running on another Coordinator - it last reported
+          {sync.heartbeatAt ? ` ${formatRelative(sync.heartbeatAt)}` : ' recently'}.
+          Its progress is not shown here; the result appears once it completes.
         </Typography.Text>
       )}
     </Space>
+  )
+}
+
+/**
+ * A row of small facts with separators between them.
+ *
+ * The separator is the whole point. Four `<Text>`s in a Space are four facts
+ * with a gap between them, and a gap reads as a space in a sentence: "Preparing
+ * JFrog Xray · cfx-jfrog-lab" was three unrelated things that looked like one.
+ */
+function Meta({ items, style }: {
+  items: (string | { text: string; colour?: string } | null | undefined | false)[]
+  style?: React.CSSProperties
+}) {
+  const shown = items.filter(Boolean).map((i) => (typeof i === 'string' ? { text: i } : i as { text: string; colour?: string }))
+  if (shown.length === 0) return null
+
+  return (
+    <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: '2px 8px', ...style }}>
+      {shown.map((item, i) => (
+        <span key={item.text} style={{ display: 'inline-flex', alignItems: 'center', gap: 8 }}>
+          {i > 0 && <span aria-hidden style={{ color: 'rgba(0,0,0,0.25)', fontSize: 12 }}>·</span>}
+          <Typography.Text
+            type={item.colour ? undefined : 'secondary'}
+            style={{ fontSize: 12, color: item.colour }}
+          >
+            {item.text}
+          </Typography.Text>
+        </span>
+      ))}
+    </div>
+  )
+}
+
+/**
+ * A sync whose Coordinator went away.
+ *
+ * # Why this is its own state and not "syncing"
+ *
+ * Because it is the opposite of syncing: nothing is running. The row says
+ * `syncing` because a run started and never got to say how it ended - a killed
+ * process leaves exactly what a healthy one leaves - and the interface used to
+ * read that as work in progress elsewhere and tell the reader to wait for a
+ * result that was never coming, while refusing them a new sync.
+ *
+ * The heartbeat is what makes the difference visible, and this is what it is
+ * for: say it stopped, and offer the button that starts it again.
+ */
+export function SyncInterrupted({ sync, onSync, pending }: {
+  sync: SecuritySyncStatus
+  onSync?: () => void
+  pending?: boolean
+}) {
+  return (
+    <Alert
+      type="warning"
+      showIcon
+      message="The last sync was interrupted"
+      description={
+        <Space direction="vertical" size={4}>
+          <Typography.Text>
+            The Coordinator running it stopped
+            {sync.heartbeatAt ? ` - it last reported ${formatRelative(sync.heartbeatAt)}` : ''}
+            {sync.startedAt ? `, having started ${formatRelative(sync.startedAt)}` : ''}.
+            Nothing is running now, and nothing already stored was lost.
+          </Typography.Text>
+          <Typography.Text type="secondary">
+            Whatever the run had recorded before it stopped is kept. Syncing again asks the scanner
+            about the whole release from the start.
+          </Typography.Text>
+        </Space>
+      }
+      action={onSync && (
+        <Button size="small" loading={pending} onClick={onSync}>Sync again</Button>
+      )}
+    />
   )
 }
 
@@ -699,7 +830,10 @@ export function SyncButton({ sync, onSync, pending, size = 'middle' }: {
       </Tooltip>
     )
   }
-  const running = sync.state === 'syncing'
+  // A stalled claim is not a running sync, and a button that refuses because of
+  // one is a release nobody can sync until a sweeper notices. The server takes
+  // the claim from a run that has stopped beating, so this offer is real.
+  const running = sync.state === 'syncing' && !sync.stalled
   return (
     <Tooltip
       title={running
@@ -715,6 +849,30 @@ export function SyncButton({ sync, onSync, pending, size = 'middle' }: {
         onClick={onSync}
       >
         {running ? 'Syncing' : sync.state === '' ? 'Sync vulnerabilities' : 'Sync again'}
+      </Button>
+    </Tooltip>
+  )
+}
+
+/**
+ * The way out of a sync somebody started by mistake.
+ *
+ * Offered only while one is running here or elsewhere, because there is nothing
+ * to stop otherwise. Stopping releases the claim rather than killing a
+ * goroutine: the run notices at its next heartbeat and stands down, which is
+ * what makes this work against a sync on another Coordinator.
+ */
+export function StopSyncButton({ sync, onStop, pending, size = 'middle' }: {
+  sync: SecuritySyncStatus
+  onStop: () => void
+  pending?: boolean
+  size?: 'small' | 'middle'
+}) {
+  if (sync.state !== 'syncing' || sync.stalled) return null
+  return (
+    <Tooltip title="Stops this sync. The release keeps whatever its last completed sync recorded.">
+      <Button size={size} danger icon={<StopOutlined />} loading={pending} onClick={onStop}>
+        Stop sync
       </Button>
     </Tooltip>
   )
@@ -763,7 +921,7 @@ export function SyncLogButton({ sync, size = 'middle' }: {
 }) {
   const [open, setOpen] = useState(false)
   const entries = sync.log ?? []
-  const running = sync.state === 'syncing'
+  const running = sync.state === 'syncing' && !sync.stalled
 
   if (entries.length === 0 && !running) {
     return null
@@ -889,16 +1047,107 @@ export function SecurityExportMenu({ urlFor, disabled }: {
 // Shared table pieces
 // ---------------------------------------------------------------------------
 
-/** A CVE identifier, monospace, with the scanner's own id behind it. */
-export function CveCell({ cve, id }: { cve?: string; id?: string }) {
+/**
+ * A CVE identifier, monospace, with the scanner's own id behind it.
+ *
+ * `link` styles it as what it is: in both findings tables the identifier OPENS
+ * the advisory beside the table, and it was rendered as plain body text - a
+ * thing that does something, dressed as a thing that does not. Nobody clicks
+ * what does not look clickable.
+ */
+export function CveCell({ cve, id, link }: { cve?: string; id?: string; link?: boolean }) {
   if (!cve && !id) return <Typography.Text type="secondary">-</Typography.Text>
   return (
     <Space direction="vertical" size={0}>
-      <Typography.Text style={{ fontFamily: mono }}>{cve || id}</Typography.Text>
+      <Typography.Text
+        style={{
+          fontFamily: mono,
+          color: link ? palette.primary : undefined,
+          textDecoration: link ? 'underline' : undefined,
+          textDecorationStyle: link ? 'dotted' : undefined,
+          textUnderlineOffset: 3,
+        }}
+      >
+        {cve || id}
+      </Typography.Text>
       {cve && id && id !== cve && (
         <Typography.Text type="secondary" style={{ fontSize: 11, fontFamily: mono }}>{id}</Typography.Text>
       )}
     </Space>
+  )
+}
+
+/**
+ * An advisory's text, as much of it as fits, with the rest one click away.
+ *
+ * # Why a popover and not a tooltip
+ *
+ * The tooltip that used to carry the full text was scrollable, which is a
+ * gesture a tooltip cannot support: it disappears when the pointer leaves the
+ * cell, so reaching its scrollbar dismissed it. And an advisory is the one
+ * thing on this page somebody wants to paste into a ticket - a tooltip has
+ * nothing to copy from.
+ *
+ * A popover stays while it is being read, holds its own scroll, and carries the
+ * copy button. The two clamped lines in the cell are unchanged: the table stays
+ * a table.
+ */
+export function DescriptionCell({ summary, description, title, onOpen }: {
+  summary?: string
+  description?: string
+  /** What the popover is about - the CVE, so a detached popover still says. */
+  title?: string
+  /** Opens the full detail, for a reader who wants everything rather than this. */
+  onOpen?: () => void
+}) {
+  const [copied, setCopied] = useState(false)
+  // The LONGER of the two: a summary is one line and a description is the
+  // advisory. Whichever exists is what somebody came to read.
+  const full = description || summary
+  const short = summary || description
+
+  if (!full) return <Typography.Text type="secondary">-</Typography.Text>
+
+  const copy = () => {
+    void navigator.clipboard?.writeText(full)
+    setCopied(true)
+    setTimeout(() => setCopied(false), 1600)
+  }
+
+  return (
+    <Popover
+      trigger="hover"
+      placement="leftTop"
+      mouseEnterDelay={0.35}
+      title={
+        <Space style={{ width: '100%', justifyContent: 'space-between' }} size={16}>
+          <Typography.Text style={{ fontFamily: mono, fontSize: 12 }}>{title ?? 'Description'}</Typography.Text>
+          <Space size={4}>
+            <Button size="small" type="text" icon={<CopyOutlined />} onClick={copy}>
+              {copied ? 'Copied' : 'Copy'}
+            </Button>
+            {onOpen && (
+              <Button size="small" type="text" onClick={onOpen}>Details</Button>
+            )}
+          </Space>
+        </Space>
+      }
+      content={
+        <div style={{ width: 'min(520px, calc(100vw - 64px))', maxHeight: 320, overflow: 'auto' }}>
+          <Typography.Paragraph style={{ margin: 0, whiteSpace: 'pre-wrap', fontSize: 13 }}>
+            {full}
+          </Typography.Paragraph>
+        </div>
+      }
+    >
+      <Typography.Paragraph
+        style={{ margin: 0, cursor: onOpen ? 'pointer' : 'default' }}
+        onClick={onOpen}
+        ellipsis={{ rows: 2 }}
+      >
+        {short}
+      </Typography.Paragraph>
+    </Popover>
   )
 }
 

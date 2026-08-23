@@ -52,7 +52,8 @@ function RowActions({ product, pkg }: { product: string; pkg: Package }) {
   const detail = releaseHref(product, pkg)
   const securityHref = `${detail}${detail.includes('?') ? '&' : '?'}tab=security`
   const security = pkg.security
-  const syncing = security?.state === 'syncing'
+  // Not a sync whose Coordinator went away: see PackageSecuritySummary.stalled.
+  const syncing = security?.state === 'syncing' && !security.stalled
 
   const startSync = () => sync.mutate(
     { product, ref: packageReference(pkg), repository: pkg.sourceRepository },

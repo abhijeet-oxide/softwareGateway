@@ -3,6 +3,8 @@ package artifactory
 import (
 	"context"
 	"encoding/json"
+	"errors"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -43,6 +45,21 @@ type fakeXray struct {
 	// megabytes of issues do not.
 	stallOver int
 	stallFor  time.Duration
+
+	// stored is what Artifactory HOLDS, by bare sha256 hex - which is a
+	// different question from what Xray has indexed, and the whole point of the
+	// probe that follows a scan.
+	stored map[string]bool
+	// aqlCalls and checksumCalls separate the bulk query from the per-image
+	// search, so a test can prove which one ran and how often.
+	aqlCalls      atomic.Int32
+	checksumCalls atomic.Int32
+	// aqlStatus, when non-zero, is returned for AQL - which is what a platform
+	// that reserves it for administrators looks like.
+	aqlStatus int
+	// aqlRepeat returns each match this many times, which is what a manifest
+	// stored at several paths looks like to the bulk query.
+	aqlRepeat int
 }
 
 func newFakeXray(t *testing.T) *fakeXray {
@@ -50,9 +67,44 @@ func newFakeXray(t *testing.T) *fakeXray {
 	f := &fakeXray{
 		artifacts:    map[string]xrayArtifact{},
 		rawArtifacts: map[string]string{},
+		stored:       map[string]bool{},
 		authUser:     "svc", authPass: "token",
 	}
 	mux := http.NewServeMux()
+
+	// Artifactory's bulk answer to "which of these do you hold". One request
+	// for a hundred images, which is what the probe after a scan asks.
+	mux.HandleFunc(aqlPath, func(w http.ResponseWriter, r *http.Request) {
+		f.aqlCalls.Add(1)
+		if f.aqlStatus != 0 {
+			w.WriteHeader(f.aqlStatus)
+			_, _ = w.Write([]byte(`{"errors":[{"status":403,"message":"Forbidden UI request"}]}`))
+			return
+		}
+		query, _ := io.ReadAll(r.Body)
+		repeat := max(f.aqlRepeat, 1)
+		results := []map[string]string{}
+		for hex := range f.stored {
+			if !strings.Contains(string(query), hex) {
+				continue
+			}
+			for i := 0; i < repeat; i++ {
+				results = append(results, map[string]string{"actual_sha256": hex})
+			}
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{"results": results})
+	})
+
+	// The same question, one image at a time - the path for an account AQL is
+	// closed to.
+	mux.HandleFunc("/artifactory/api/search/checksum", func(w http.ResponseWriter, r *http.Request) {
+		f.checksumCalls.Add(1)
+		results := []map[string]string{}
+		if f.stored[r.URL.Query().Get("sha256")] {
+			results = append(results, map[string]string{"uri": "https://example.invalid/x"})
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{"results": results})
+	})
 
 	mux.HandleFunc("/xray/api/v1/system/ping", func(w http.ResponseWriter, r *http.Request) {
 		_ = json.NewEncoder(w).Encode(map[string]string{"status": "pong"})
@@ -181,6 +233,9 @@ func testProvider(t *testing.T, f *fakeXray, mutate func(*XraySettings)) securit
 		Password:       "token",
 		RequestTimeout: settings.RequestTimeout,
 		BatchSize:      settings.BatchSize,
+		// Without it the probe cannot scope its question to a repository and
+		// declines to ask at all - see StoredChecksums.
+		RepositoryKey: settings.RepositoryKey,
 	}, settings)
 	if err != nil {
 		t.Fatalf("NewXrayProvider: %v", err)
@@ -947,5 +1002,139 @@ func TestXrayFailureMessagesNameTheFix(t *testing.T) {
 				t.Errorf("a parse failure is not unreachability: %q", got)
 			}
 		})
+	}
+}
+
+// The probe that follows a scan asks about a hundred images in ONE request.
+//
+// This is the phase whose cost used to scale with the release: every image Xray
+// declined got its own HTTP round trip, and on a release that has not been
+// replicated yet that is every image. The distinction it draws must survive the
+// change - "not transferred" and "not indexed" are jobs for different people.
+func TestUnindexedImagesAreProbedInOneQuery(t *testing.T) {
+	f := newFakeXray(t)
+	// Xray knows none of them. Artifactory holds two.
+	f.stored["ccc"] = true
+	f.stored["ddd"] = true
+
+	p := testProvider(t, f, func(s *XraySettings) { s.RepositoryKey = "docker-local" })
+	refs := []security.ArtifactRef{
+		ref("a", "aaa"), ref("b", "bbb"), ref("c", "ccc"), ref("d", "ddd"), ref("e", "eee"),
+	}
+
+	reports, err := p.Scan(t.Context(), refs, security.ScanOptions{Detail: true})
+	if err != nil {
+		t.Fatalf("Scan: %v", err)
+	}
+
+	byName := map[string]security.Report{}
+	for _, r := range reports {
+		byName[r.Artifact.Name] = r
+	}
+	for _, name := range []string{"a", "b", "e"} {
+		if !byName[name].Missing {
+			t.Errorf("%s is not in the repository and was not reported missing: %+v", name, byName[name])
+		}
+		if !strings.Contains(byName[name].Message, "not in the JFrog repository") {
+			t.Errorf("%s message = %q", name, byName[name].Message)
+		}
+	}
+	for _, name := range []string{"c", "d"} {
+		if byName[name].Missing {
+			t.Errorf("%s IS in the repository and was reported missing", name)
+		}
+		if !strings.Contains(byName[name].Message, "has not indexed it yet") {
+			t.Errorf("%s message = %q", name, byName[name].Message)
+		}
+	}
+
+	// The point of the change: five images, one question.
+	if got := f.aqlCalls.Load(); got != 1 {
+		t.Errorf("made %d bulk queries for 5 images, want 1", got)
+	}
+	if got := f.checksumCalls.Load(); got != 0 {
+		t.Errorf("made %d per-image searches while the bulk query worked, want 0", got)
+	}
+}
+
+// An account AQL is closed to still gets the distinction, one request at a
+// time. A locked-down platform losing the answer would be the worse trade.
+func TestProbeFallsBackToPerImageSearch(t *testing.T) {
+	f := newFakeXray(t)
+	f.aqlStatus = http.StatusForbidden
+	f.stored["ccc"] = true
+
+	p := testProvider(t, f, func(s *XraySettings) { s.RepositoryKey = "docker-local" })
+	refs := []security.ArtifactRef{ref("a", "aaa"), ref("c", "ccc")}
+
+	reports, err := p.Scan(t.Context(), refs, security.ScanOptions{Detail: true})
+	if err != nil {
+		t.Fatalf("Scan: %v", err)
+	}
+	byName := map[string]security.Report{}
+	for _, r := range reports {
+		byName[r.Artifact.Name] = r
+	}
+	if !byName["a"].Missing {
+		t.Error("the fallback lost the missing/unindexed distinction")
+	}
+	if byName["c"].Missing {
+		t.Error("an image the repository holds was reported missing")
+	}
+	if got := f.checksumCalls.Load(); got != 2 {
+		t.Errorf("per-image searches = %d, want one per image", got)
+	}
+}
+
+// The refusal is learned once. A release's worth of chunks each discovering it
+// would be a request per chunk wasted on every sync, forever.
+func TestAQLRefusalIsRememberedByTheClient(t *testing.T) {
+	f := newFakeXray(t)
+	f.aqlStatus = http.StatusForbidden
+
+	c, err := NewXrayClient(XrayConfig{
+		Endpoint: f.URL, Username: "svc", Password: "token", RepositoryKey: "docker-local",
+	})
+	if err != nil {
+		t.Fatalf("NewXrayClient: %v", err)
+	}
+
+	for i := 0; i < 3; i++ {
+		if _, err := c.StoredChecksums(t.Context(), []string{"sha256:aaa"}); !errors.Is(err, errBatchUnsupported) {
+			t.Fatalf("attempt %d: err = %v, want errBatchUnsupported", i, err)
+		}
+	}
+	if got := f.aqlCalls.Load(); got != 1 {
+		t.Errorf("asked AQL %d times after being refused, want 1", got)
+	}
+}
+
+// A bulk answer that may have been truncated is not trusted.
+//
+// One checksum matches one row per path holding it, so a repository with many
+// tags on one manifest can fill the result ceiling. A truncated answer does not
+// read as "we do not know" - it reads as "that image is not in the repository",
+// which sends somebody to run a transfer for an image that is already there.
+func TestATruncatedBulkAnswerFallsBackPerImage(t *testing.T) {
+	f := newFakeXray(t)
+	f.stored["aaa"] = true
+	// More rows than the query's ceiling for one digest, which is what a
+	// manifest with many tags looks like.
+	f.aqlRepeat = maxPathsPerChecksum + 1
+
+	p := testProvider(t, f, func(s *XraySettings) { s.RepositoryKey = "docker-local" })
+	reports, err := p.Scan(t.Context(), []security.ArtifactRef{ref("a", "aaa")}, security.ScanOptions{Detail: true})
+	if err != nil {
+		t.Fatalf("Scan: %v", err)
+	}
+	if reports[0].Missing {
+		t.Error("a truncated bulk answer reported an image the repository holds as missing")
+	}
+	if got := f.checksumCalls.Load(); got != 1 {
+		t.Errorf("per-image searches = %d, want the fallback to have run once", got)
+	}
+	// Truncation says nothing about the platform, so AQL is still worth trying.
+	if f.aqlCalls.Load() != 1 {
+		t.Errorf("bulk queries = %d, want 1", f.aqlCalls.Load())
 	}
 }

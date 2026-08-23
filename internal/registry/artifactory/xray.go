@@ -75,10 +75,17 @@ const (
 	DefaultBatchSize = 50
 	// DefaultConcurrency is how many batches may be in flight per repository.
 	//
-	// Six, not sixty. Xray's summary endpoint is expensive server-side and
-	// rate-limited on hosted JFrog; the difference between six and sixty is not
-	// ten times faster, it is a 429 storm and a slower answer.
-	DefaultConcurrency = 6
+	// Ten, not sixty. Xray's summary endpoint is expensive server-side and
+	// rate-limited on hosted JFrog; the difference between ten and sixty is not
+	// six times faster, it is a 429 storm and a slower answer.
+	//
+	// It was six. Two things since have paid for the rest: the probe that
+	// follows a scan no longer spends this budget one image at a time (see
+	// StoredChecksums), so the number governs only the summary calls it was
+	// written for; and the transport retries a 429 on the scanner's own
+	// Retry-After, so a burst that trips a rate limit costs a pause rather than
+	// a release's worth of artifacts reported unavailable.
+	DefaultConcurrency = 10
 
 	// retryAttempts and friends keep the Xray retry budget well inside the
 	// request timeout, so a failing Xray surfaces as Xray's own error rather
@@ -101,6 +108,9 @@ const providerName = "jfrog-xray"
 const (
 	summaryPathV2 = "/xray/api/v2/summary/artifact"
 	summaryPathV1 = "/xray/api/v1/summary/artifact"
+	// aqlPath answers "which of these does the repository hold" for a hundred
+	// images in one request. See StoredChecksums.
+	aqlPath = "/artifactory/api/search/aql"
 )
 
 // XrayClient speaks JFrog Xray's REST API.
@@ -122,6 +132,9 @@ type XrayClient struct {
 
 	// legacySummary is set once a platform has answered 404 for the v2 path.
 	legacySummary atomic.Bool
+	// noAQL is set once this account has been refused the bulk checksum query,
+	// so a release's worth of probes does not each rediscover it.
+	noAQL atomic.Bool
 }
 
 // NewXrayClient builds a client against one JFrog platform.
@@ -463,6 +476,153 @@ func (c *XrayClient) StoresChecksum(ctx context.Context, digest string) (bool, e
 
 var errNoRepositoryKey = errors.New("xray: no Artifactory repository key is configured")
 
+// errBatchUnsupported means this Artifactory will not answer the bulk query, so
+// the caller should ask one image at a time. Not a failure: AQL is restricted
+// on some deployments, and the per-image search works for everybody.
+var errBatchUnsupported = errors.New("xray: this Artifactory does not answer AQL for this account")
+
+// errBatchInconclusive means the bulk query answered but may have been
+// truncated, so its silences cannot be trusted. The caller asks per image
+// instead - and unlike errBatchUnsupported this says nothing about the
+// platform, so the next chunk still tries the bulk query.
+var errBatchInconclusive = errors.New("artifactory: the bulk query hit its result ceiling")
+
+// maxPathsPerChecksum is how many stored copies of one image the bulk query
+// allows for before it stops trusting its own answer.
+//
+// Twenty-five, because the same manifest legitimately appears at several paths
+// - one per tag pointing at it - and a handful is normal where dozens is a
+// repository doing something this probe was not written for.
+const maxPathsPerChecksum = 25
+
+// ChecksumQueryLimit is how many digests one bulk query asks about.
+//
+// A hundred, because the query travels as one `$or` and Artifactory parses it
+// whole: a thousand-term query is a slow query on the server rather than a fast
+// one for us, and a hundred already turns a release's worth of probes into two
+// requests.
+const ChecksumQueryLimit = 100
+
+// StoredChecksums reports which of these digests Artifactory holds, in ONE
+// query rather than one per image.
+//
+// # Why this replaced a request per image
+//
+// The per-image search (StoresChecksum below) is asked about every image Xray
+// declined to answer for - which on a release that has not been replicated yet
+// is EVERY image. A 260-image release was 260 HTTP round trips, six at a time,
+// to answer a question Artifactory can answer for all of them at once. It is
+// the one place in a sync that still scaled with the number of artifacts rather
+// than with the number of batches.
+//
+// Returns the digests it FOUND. A digest absent from the result is absent from
+// the repository, which is the whole point of asking.
+func (c *XrayClient) StoredChecksums(ctx context.Context, digests []string) (map[string]bool, error) {
+	if c.repoKey == "" {
+		// With no repository key the question cannot be scoped, and a global
+		// answer would report an image as present because some other
+		// repository on the platform happens to hold it.
+		return nil, errNoRepositoryKey
+	}
+	if c.noAQL.Load() {
+		return nil, errBatchUnsupported
+	}
+
+	terms := make([]string, 0, len(digests))
+	wanted := make(map[string]bool, len(digests))
+	for _, d := range digests {
+		hex := checksumOf(d)
+		if hex == "" || wanted[hex] {
+			continue
+		}
+		wanted[hex] = true
+		terms = append(terms, fmt.Sprintf(`{"actual_sha256":%s}`, quoteAQL(hex)))
+	}
+	if len(terms) == 0 {
+		return map[string]bool{}, nil
+	}
+
+	// The limit is NOT the number of digests asked about.
+	//
+	// One checksum matches one row per PATH that holds it, and a repository
+	// routinely holds the same manifest at several - two tags on one image is
+	// two rows. A limit of one-per-digest would truncate those, and a truncated
+	// answer here does not read as "we do not know", it reads as "that image is
+	// not in the repository" - which is a transfer somebody would go and run
+	// for an image that is already there.
+	//
+	// So the ceiling is generous, and hitting it makes the answer inconclusive
+	// rather than wrong: see below.
+	limit := len(terms) * maxPathsPerChecksum
+	query := fmt.Sprintf(
+		`items.find({"repo":%s,"$or":[%s]}).include("actual_sha256").limit(%d)`,
+		quoteAQL(c.repoKey), strings.Join(terms, ","), limit)
+
+	var out struct {
+		Results []struct {
+			ActualSHA256 string `json:"actual_sha256"`
+		} `json:"results"`
+	}
+	if err := c.send(ctx, http.MethodPost, aqlPath, "text/plain", []byte(query), &out); err != nil {
+		// A refusal is about this ACCOUNT, not this query: AQL is
+		// admin-restricted on some platforms and absent on old ones. Recorded
+		// so a release's worth of probes does not each discover it, and the
+		// caller falls back to the search every account can run.
+		if c.fallBackFromAQL(err) {
+			return nil, errBatchUnsupported
+		}
+		return nil, err
+	}
+
+	// A result set at the ceiling may have dropped rows, and a dropped row is
+	// an image reported as not in the repository when it is. Refusing to answer
+	// costs the fallback's requests; answering wrongly costs somebody a
+	// transfer they did not need to run.
+	if len(out.Results) >= limit {
+		return nil, errBatchInconclusive
+	}
+
+	found := make(map[string]bool, len(out.Results))
+	for _, r := range out.Results {
+		hex := strings.ToLower(strings.TrimSpace(r.ActualSHA256))
+		if hex != "" && wanted[hex] {
+			found[hex] = true
+		}
+	}
+	return found, nil
+}
+
+// fallBackFromAQL records that this account cannot use the bulk query.
+func (c *XrayClient) fallBackFromAQL(err error) bool {
+	var re *registry.Error
+	if !errors.As(err, &re) {
+		return false
+	}
+	switch re.StatusCode {
+	case http.StatusBadRequest, http.StatusUnauthorized, http.StatusForbidden,
+		http.StatusNotFound, http.StatusMethodNotAllowed:
+		if !c.noAQL.Swap(true) && c.logger != nil {
+			c.logger.Info("artifactory: AQL is not available to this account, "+
+				"asking about images one at a time",
+				"endpoint", c.endpoint, "status", re.StatusCode,
+				"cost", "a release that is not in the repository costs one request per image")
+		}
+		return true
+	}
+	return false
+}
+
+// quoteAQL renders one JSON string for the query body. AQL is JSON-shaped, and
+// a repository name or checksum containing a quote would otherwise end the
+// string it sits in.
+func quoteAQL(s string) string {
+	encoded, err := json.Marshal(s)
+	if err != nil {
+		return `""`
+	}
+	return string(encoded)
+}
+
 // fallBackToV1 records that this platform has no v2 summary endpoint.
 func (c *XrayClient) fallBackToV1(err error) bool {
 	if c.legacySummary.Load() {
@@ -510,18 +670,34 @@ func checksumOf(digest string) string {
 	return d
 }
 
-// do performs one Xray request.
+// do performs one Xray request with a JSON body.
 func (c *XrayClient) do(ctx context.Context, method, path string, body, out any) error {
+	var encoded []byte
+	contentType := ""
+	if body != nil {
+		raw, err := json.Marshal(body)
+		if err != nil {
+			return fmt.Errorf("xray: encode %s %s: %w", method, path, err)
+		}
+		encoded, contentType = raw, "application/json"
+	}
+	return c.send(ctx, method, path, contentType, encoded, out)
+}
+
+// send performs one request with a body already encoded.
+//
+// Split out from do because AQL is not JSON: Artifactory's search endpoint
+// takes the query as a text/plain body, and a client that could only send JSON
+// is a client that cannot ask the one question worth asking in bulk.
+func (c *XrayClient) send(
+	ctx context.Context, method, path, contentType string, body []byte, out any,
+) error {
 	ctx, cancel := context.WithTimeout(ctx, c.timeout)
 	defer cancel()
 
 	var reader io.Reader
 	if body != nil {
-		encoded, err := json.Marshal(body)
-		if err != nil {
-			return fmt.Errorf("xray: encode %s %s: %w", method, path, err)
-		}
-		reader = bytes.NewReader(encoded)
+		reader = bytes.NewReader(body)
 	}
 
 	req, err := http.NewRequestWithContext(ctx, method, c.endpoint+path, reader)
@@ -530,8 +706,8 @@ func (c *XrayClient) do(ctx context.Context, method, path string, body, out any)
 	}
 	req.SetBasicAuth(c.username, c.password)
 	req.Header.Set("Accept", "application/json")
-	if body != nil {
-		req.Header.Set("Content-Type", "application/json")
+	if contentType != "" {
+		req.Header.Set("Content-Type", contentType)
 	}
 
 	resp, err := c.http.Do(req)

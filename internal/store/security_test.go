@@ -1,6 +1,7 @@
 package store
 
 import (
+	"fmt"
 	"testing"
 	"time"
 
@@ -459,4 +460,81 @@ func TestSecuritySearchByEveryKind(t *testing.T) {
 			t.Errorf("search crossed the product boundary: %d hits", len(hits))
 		}
 	})
+}
+
+// A release bigger than one transaction and one statement round-trips whole.
+//
+// The write is chunked twice over - `saveChunk` artifacts per transaction,
+// `findingsPerStatement` rows per insert - and both boundaries are arithmetic
+// nobody looking at a page would notice going wrong. A release that lost its
+// last five images, or every finding after the two hundredth, would read as a
+// scanner that returned less rather than as a cache that dropped it.
+func TestSecuritySavesAcrossChunkBoundaries(t *testing.T) {
+	sec := NewSecurity(openTestStore(t))
+	scope := testScope()
+
+	// Deliberately not a multiple of either bound: the last partial chunk and
+	// the last partial statement are where an off-by-one lives.
+	const artifacts = saveChunk*2 + 3
+	const findingsEach = findingsPerStatement + 7
+
+	reports := make([]security.Report, 0, artifacts)
+	refs := make([]security.ArtifactRef, 0, artifacts)
+	for i := 0; i < artifacts; i++ {
+		name := fmt.Sprintf("image-%03d", i)
+		digest := fmt.Sprintf("sha256:%03d", i)
+		findings := make([]security.Finding, 0, findingsEach)
+		for j := 0; j < findingsEach; j++ {
+			findings = append(findings, securityFinding(
+				fmt.Sprintf("CVE-2026-%05d", j), security.SeverityHigh,
+				fmt.Sprintf("pkg-%03d", j), "1.0", j%2 == 0))
+		}
+		reports = append(reports, securityReport(name, digest, findings...))
+		refs = append(refs, securityRef(name, digest))
+	}
+
+	if err := sec.Save(t.Context(), scope, reports, true, longTTL()); err != nil {
+		t.Fatalf("Save: %v", err)
+	}
+
+	summaries, err := sec.LoadSummaries(t.Context(), scope, refs)
+	if err != nil {
+		t.Fatalf("LoadSummaries: %v", err)
+	}
+	if len(summaries) != artifacts {
+		t.Fatalf("read back %d artifacts, want %d", len(summaries), artifacts)
+	}
+	for _, ref := range refs {
+		got, ok := summaries[ref.Ref()]
+		if !ok {
+			t.Fatalf("%s was not stored", ref.Name)
+		}
+		if got.Counts.Total != findingsEach {
+			t.Errorf("%s counts = %d, want %d", ref.Name, got.Counts.Total, findingsEach)
+		}
+	}
+
+	// The index rows, which is what search and comparison read: every finding
+	// of every artifact, not just the first statement's worth.
+	var stored int
+	if err := sec.db.QueryRowContext(t.Context(),
+		`SELECT COUNT(*) FROM security_findings`).Scan(&stored); err != nil {
+		t.Fatal(err)
+	}
+	if want := artifacts * findingsEach; stored != want {
+		t.Errorf("stored %d findings, want %d", stored, want)
+	}
+
+	// And a re-save replaces rather than accumulates - the delete is chunked
+	// too, and a delete that missed a chunk would double every count.
+	if err := sec.Save(t.Context(), scope, reports, true, longTTL()); err != nil {
+		t.Fatalf("second Save: %v", err)
+	}
+	if err := sec.db.QueryRowContext(t.Context(),
+		`SELECT COUNT(*) FROM security_findings`).Scan(&stored); err != nil {
+		t.Fatal(err)
+	}
+	if want := artifacts * findingsEach; stored != want {
+		t.Errorf("after a re-save, stored %d findings, want %d", stored, want)
+	}
 }

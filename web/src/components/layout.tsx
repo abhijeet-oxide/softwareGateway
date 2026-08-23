@@ -43,7 +43,15 @@ export function PageHeader({
    * label for the screen.
    */
   title?: string
-  description?: string
+  /**
+   * What the title is OF, and whatever else identifies it.
+   *
+   * A node rather than a string: on a release this line carries the product
+   * name and the release's own badges - its state, whether it has been
+   * analysed, what it weighs - which were a card of their own underneath and
+   * are one line of context about the thing named above them.
+   */
+  description?: ReactNode
   extra?: ReactNode
   meta?: ReactNode
   /**
@@ -71,7 +79,11 @@ export function PageHeader({
           </Link>
         )}
         {title && <Typography.Title level={3} style={{ margin: 0 }}>{title}</Typography.Title>}
-        {description && <Typography.Text type="secondary">{description}</Typography.Text>}
+        {description && (
+          typeof description === 'string'
+            ? <Typography.Text type="secondary">{description}</Typography.Text>
+            : description
+        )}
       </div>
       {/*
         Pinned right even after wrapping. `space-between` puts this block on the

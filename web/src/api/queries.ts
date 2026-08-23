@@ -2,6 +2,7 @@ import { useMutation, useQueries, useQuery, useQueryClient } from '@tanstack/rea
 import { useEffect, useRef } from 'react'
 import { api, query, packageRef } from './client'
 import type {
+  CancelSecuritySyncResponse,
   CheckConnectivityResponse, CompareProgressResponse, CompareRequest, CompareResponse,
   DiscoverAllResponse,
   DiscoverPackagesResponse, DiscoveryStatusResponse, HealthCheckResponse, ListArtifactsResponse,
@@ -684,7 +685,12 @@ export function usePackageSecurity(
     // While a sync runs this is the progress feed; once it settles there is
     // nothing to watch, and a page nobody is looking at stops polling anyway
     // because TanStack unmounts the query.
-    refetchInterval: (q) => (q.state.data?.sync.state === 'syncing' ? 1500 : false),
+    // A stalled claim is not a running sync, and polling one twice a second
+    // asks the server the same question forever about work nobody is doing.
+    refetchInterval: (q) => {
+      const sync = q.state.data?.sync
+      return sync?.state === 'syncing' && !sync.stalled ? 1500 : false
+    },
     /*
      * A deployment with no security storage answers 404 on this route,
      * deliberately - an honest absence rather than a route that always fails.
@@ -749,6 +755,35 @@ export function useSyncPackageSecurity() {
     onSuccess: () => {
       // The listing carries the same counts, so it has to learn that one of
       // its rows just changed state.
+      void qc.invalidateQueries({ queryKey: ['package-security'] })
+      void qc.invalidateQueries({ queryKey: ['packages'] })
+      void qc.invalidateQueries({ queryKey: ['package'] })
+    },
+  })
+}
+
+/**
+ * Stop a running vulnerability sync.
+ *
+ * The claim is released server-side rather than only here, so a sync running on
+ * another Coordinator stops too - it notices at its next heartbeat that it no
+ * longer holds one. A job somebody can start and cannot stop is a job they
+ * learn not to start.
+ */
+export function useCancelPackageSecuritySync() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: ({ product, ref, repository }: {
+      product: string
+      ref: string
+      repository?: string
+    }) => {
+      const { segment, query: q } = packageRef(ref)
+      return api.post<CancelSecuritySyncResponse>(
+        `/products/${encodeURIComponent(product)}/packages/${encodeURIComponent(segment)}:cancelSecuritySync` +
+        scopeQuery(q, repository), {})
+    },
+    onSuccess: () => {
       void qc.invalidateQueries({ queryKey: ['package-security'] })
       void qc.invalidateQueries({ queryKey: ['packages'] })
       void qc.invalidateQueries({ queryKey: ['package'] })

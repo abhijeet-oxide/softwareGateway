@@ -328,6 +328,37 @@ would otherwise leave a release marked syncing forever, and a release that can
 never be synced again is a worse outcome than a rare duplicate that converges on
 the same rows. The maintenance loop releases claims older than 30 minutes.
 
+### The heartbeat, and why an age was not enough
+
+An age answers "has this been going too long". It cannot answer the question a
+reader actually has, which is **"is anything running?"** - because a killed
+process leaves exactly the row a healthy one leaves. So a release whose
+Coordinator had just been restarted reported *"this sync is running on another
+Coordinator; the result will appear once it completes"*, on a deployment with
+one Coordinator, and refused a new sync for half an hour.
+
+A running sync therefore **beats**: it renews `heartbeat_at` every 15 seconds
+and the claim is honoured for 90. Three things follow, and each of them was
+impossible before:
+
+- **A stopped process is visible.** `sync.stalled` is a claim that stopped
+  beating, and the interface says the sync was interrupted rather than
+  inventing work happening elsewhere.
+- **The next claim is not refused.** `Claim` takes a row whose heartbeat has
+  expired, so "sync again" works immediately instead of waiting out the sweep.
+- **A sync can be stopped from anywhere.** `POST …:cancelSecuritySync` releases
+  the claim; the run notices at its next beat that it no longer holds one and
+  stands down. That is what makes Stop work against a sync on another replica,
+  where there is no goroutine to cancel.
+
+`claimed_by` names the process holding a claim - host, pid and a random suffix,
+so a restart is never mistaken for its predecessor.
+
+A **stopped** sync is not a failure and is not recorded as one. The release goes
+back to the state it was in before the run started - `synced` with its previous
+result, or never synced - because a sync somebody stopped is a sync that did not
+happen.
+
 ### Four states, not a timestamp
 
 `package_security.state` is `'' | syncing | synced | failed`. "Has this been
@@ -406,10 +437,33 @@ configuration under `coordinator.security`, not product configuration:
 
 - **`batchSize` (50)** bounds the blast radius of one failure. A failed call
   costs fifty artifacts' results, not a release's.
-- **`concurrency` (6)** bounds what we do to Xray. Its summary endpoint is
+- **`concurrency` (10)** bounds what we do to Xray. Its summary endpoint is
   expensive server-side and rate-limited on hosted JFrog; sixty parallel
-  requests is not ten times faster than six, it is a 429 storm and a slower
-  answer.
+  requests is not six times faster than ten, it is a 429 storm and a slower
+  answer. It is a budget PER SYNC, so two releases syncing at once are two.
+
+`concurrency` was six, and two changes since paid for the rest: the probe below
+no longer spends the budget one image at a time, and the transport retries a 429
+on the scanner's own `Retry-After`, so a burst that trips a rate limit costs a
+pause rather than a release's worth of artifacts reported unavailable.
+
+### The probe that follows a scan
+
+Xray answers "Artifact doesn't exist or not indexed/cached in Xray" for two
+situations with nothing in common: an image it has not looked at, and an image
+that was never replicated there. The first is a scan waiting to happen; the
+second is a TRANSFER waiting to happen, and reporting it as a scanning gap sends
+somebody to the wrong team. Artifactory knows which, so it is asked.
+
+**In bulk.** One AQL query answers a hundred images, so a release costs about
+three requests. It was one request per image - the only phase whose request
+count scaled with the number of artifacts rather than the number of batches, and
+it ran in exactly the situation somebody is already waiting on a slow answer: a
+release that has not been replicated yet, where *every* image needs the probe.
+
+AQL is administrator-only on some platforms. A refusal is recorded once per
+client and the per-image search runs instead - the same question asked the slow
+way, not a degraded answer.
 
 **A per-artifact failure is a report with `unavailable`, never an error.** One
 image the scanner would not answer for must not lose the other hundred - and,
@@ -456,6 +510,7 @@ which starts the whole retrieval again.
 | Method | Path | Answers |
 |---|---|---|
 | `POST` | `/products/{p}/packages/{pkg}:syncSecurity` | **The only route that talks to a scanner.** Claims the release and returns immediately |
+| `POST` | `/products/{p}/packages/{pkg}:cancelSecuritySync` | Releases the claim, wherever the sync is running. The release keeps its last completed result |
 | `GET` | `/products/{p}/packages/{pkg}/security` | This release's stored posture and its sync state. `?detail=true` for findings |
 | `POST` | `/products/{p}/packages/{pkg}:compareSecurity` | How the posture changed to `against`, from both sides' stored data |
 | `GET` | `/products/{p}/security/search` | `?kind=cve\|package\|image&q=` |

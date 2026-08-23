@@ -633,6 +633,16 @@ releases renders without touching a scanner. Syncing is a STATE rather than a
 timestamp for the same reason `analysis_state` is (§12.2): never, running, done
 and failed are four situations and three of them look identical to a timestamp.
 
+A running sync also **beats** (migration 00027): `claimed_by` names the process
+holding the claim and `heartbeat_at` is the last time it said it was alive.
+`state = syncing` records that a sync was STARTED, which a killed Coordinator
+leaves behind exactly as a healthy one does - so without the beat a release
+stuck mid-sync reported work happening on another Coordinator, and refused a new
+sync until the 30-minute sweep. A claim not renewed within 90 seconds is held by
+nothing: the interface says the sync was interrupted, the next claim takes the
+row, and releasing the claim is how a sync is STOPPED on a replica that is not
+running it.
+
 `security_scans`, `security_findings` and `security_details` (migration 00022)
 hold what the scanner said, per artifact. Their retention is system
 configuration (`coordinator.security`), not per product: how long to keep an

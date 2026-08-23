@@ -20,6 +20,7 @@ import (
 	"github.com/abhijeet-oxide/softwareGateway/internal/compare"
 	"github.com/abhijeet-oxide/softwareGateway/internal/discovery"
 	"github.com/abhijeet-oxide/softwareGateway/internal/regclient"
+	"github.com/abhijeet-oxide/softwareGateway/internal/security"
 	"github.com/abhijeet-oxide/softwareGateway/internal/store"
 	"github.com/abhijeet-oxide/softwareGateway/internal/vendors"
 	v1 "github.com/abhijeet-oxide/softwareGateway/pkg/apis/softwaregateway/v1"
@@ -177,9 +178,11 @@ func (s *Server) attachSecurity(
 			}
 			continue
 		}
+		stalled := sec.Stalled(security.StaleClaimAfter) && !s.securitySyncRunningHere(row.ID)
 		summary := &v1.PackageSecuritySummary{
 			State:         string(orNever(sec.State)),
 			Label:         syncStateLabel(orNever(sec.State)),
+			Stalled:       stalled,
 			Counts:        toAPICounts(sec.Counts),
 			DistinctTotal: sec.DistinctTotal,
 			Complete:      sec.Coverage.Complete(),
@@ -194,6 +197,13 @@ func (s *Server) attachSecurity(
 		}
 		out[i].Security = summary
 	}
+}
+
+// securitySyncRunningHere reports whether this replica is the one syncing a
+// release, so a claim it is actively holding is never called stalled on the
+// strength of a heartbeat that has not landed in the database yet.
+func (s *Server) securitySyncRunningHere(packageID int64) bool {
+	return s.deps.SecuritySync != nil && s.deps.SecuritySync.Running(packageID)
 }
 
 // productCanSync reports whether any repository of a product has a scanner.
@@ -1046,12 +1056,13 @@ func (s *Server) handlePackageCustomMethod(w http.ResponseWriter, r *http.Reques
 	ref, verb := segment[:i], segment[i+1:]
 
 	switch verb {
-	case packageVerbInspect, packageVerbCompare, packageVerbCompareSecurity, packageVerbSyncSecurity:
+	case packageVerbInspect, packageVerbCompare, packageVerbCompareSecurity,
+		packageVerbSyncSecurity, packageVerbCancelSecurity:
 	default:
 		Error(w, r, v1.CodeInvalidArgument, fmt.Sprintf(
-			"%q is not a custom method on a package (known: %s, %s, %s, %s)",
+			"%q is not a custom method on a package (known: %s, %s, %s, %s, %s)",
 			verb, packageVerbInspect, packageVerbCompare,
-			packageVerbCompareSecurity, packageVerbSyncSecurity))
+			packageVerbCompareSecurity, packageVerbSyncSecurity, packageVerbCancelSecurity))
 		return
 	}
 
@@ -1071,6 +1082,8 @@ func (s *Server) handlePackageCustomMethod(w http.ResponseWriter, r *http.Reques
 		s.handleCompareSecurity(w, r)
 	case packageVerbSyncSecurity:
 		s.handleSyncPackageSecurity(w, r)
+	case packageVerbCancelSecurity:
+		s.handleCancelPackageSecuritySync(w, r)
 	default:
 		s.handleInspectPackage(w, r)
 	}

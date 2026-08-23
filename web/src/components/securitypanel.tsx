@@ -1,20 +1,25 @@
 import { useEffect, useMemo, useState } from 'react'
+import type { ReactNode } from 'react'
 import {
   Alert,
-  App, Button, Card, Col, Collapse, Drawer, Input, Progress, Row, Segmented, Select, Space, Spin,
-  Table, Tooltip, Typography,
+  App, Button, Card, Col, Collapse, Descriptions, Drawer, Input, Progress, Row, Segmented, Select,
+  Space, Spin, Table, Tag, Tooltip, Typography,
 } from 'antd'
-import { ExportOutlined } from '@ant-design/icons'
-import { usePackageSecurity, useSyncPackageSecurity, packageSecurityExportUrl } from '../api/queries'
+import { CopyOutlined, ExportOutlined } from '@ant-design/icons'
+import {
+  packageSecurityExportUrl, useCancelPackageSecuritySync, usePackageSecurity,
+  useSyncPackageSecurity,
+} from '../api/queries'
 import { SEVERITIES } from '../api/types'
 import type {
   PackageSecurityResponse, SecurityFinding, SecurityReport, Severity,
 } from '../api/types'
 import {
-  ComponentCell, CveCell, FindingsEmpty, FixCell, ScanStatusTag,
+  ComponentCell, CveCell, DescriptionCell, FindingsEmpty, FixCell, ScanStatusTag,
   SecurityExportMenu, SecurityNotConfigured, SecurityProgressPanel, SecurityStateNotice,
-  SeverityBar, SeverityTag, SyncButton, SyncedAgo, SyncLogButton,
+  SeverityBar, SeverityTag, StopSyncButton, SyncButton, SyncedAgo, SyncInterrupted, SyncLogButton,
 } from './security'
+import { formatAbsolute, formatRelative } from '../domain/format'
 import { mono, semantic, severity as severityColour } from '../theme'
 
 /**
@@ -44,6 +49,7 @@ export function SecurityTab({ product, reference, repository }: {
 
   const security = usePackageSecurity(product, reference, { repository, detail: true })
   const sync = useSyncPackageSecurity()
+  const cancel = useCancelPackageSecuritySync()
   const data = security.data
 
   /*
@@ -76,6 +82,18 @@ export function SecurityTab({ product, reference, repository }: {
     })
   }
 
+  const stopSync = () => {
+    cancel.mutate({ product, ref: reference, repository }, {
+      onSuccess: (res) => {
+        message.info(res.stopped
+          ? 'The sync was stopped. This release keeps whatever its last completed sync recorded.'
+          : 'That sync had already finished.')
+        void security.refetch()
+      },
+      onError: (e) => message.error(e instanceof Error ? e.message : 'The sync could not be stopped.'),
+    })
+  }
+
   if (security.isLoading) {
     return <Card loading />
   }
@@ -88,6 +106,10 @@ export function SecurityTab({ product, reference, repository }: {
   if (!data) {
     return <SecurityNotConfigured />
   }
+
+  // A sync is only running if something is running it. See sync.stalled: a
+  // claim whose Coordinator went away leaves the row saying `syncing` forever.
+  const syncing = data.sync.state === 'syncing' && !data.sync.stalled
 
   return (
     <Space direction="vertical" size={16} style={{ width: '100%' }}>
@@ -105,27 +127,44 @@ export function SecurityTab({ product, reference, repository }: {
         */}
         <Space size={8}>
           <SyncLogButton sync={data.sync} />
+          <StopSyncButton sync={data.sync} onStop={stopSync} pending={cancel.isPending} />
           <SyncButton sync={data.sync} onSync={startSync} pending={sync.isPending} />
         </Space>
       </Space>
 
-      {data.sync.state === 'syncing'
-        ? <Card><SecurityProgressPanel sync={data.sync} /></Card>
-        : (
-          <SecurityStateNotice
-            state={data.state}
-            message={data.message}
-            onRefresh={data.sync.canSync && data.state !== 'not_synced' ? startSync : undefined}
-            onShowProblems={data.reports.length > 0 ? showProblems : undefined}
-            problemCount={problemCount}
-          />
-        )}
+      {/*
+        THREE states, not two. A row marked `syncing` whose claim has stopped
+        beating is not a sync in progress - it is a Coordinator that was killed
+        mid-sync - and rendering the progress panel for it drew a bar at nothing
+        under a sentence saying the work was happening elsewhere.
+      */}
+      {syncing
+        ? (
+          <Card>
+            <SecurityProgressPanel
+              sync={data.sync}
+              onStop={stopSync}
+              stopping={cancel.isPending}
+            />
+          </Card>
+        )
+        : data.sync.stalled
+          ? <SyncInterrupted sync={data.sync} onSync={startSync} pending={sync.isPending} />
+          : (
+            <SecurityStateNotice
+              state={data.state}
+              message={data.message}
+              onRefresh={data.sync.canSync && data.state !== 'not_synced' ? startSync : undefined}
+              onShowProblems={data.reports.length > 0 ? showProblems : undefined}
+              problemCount={problemCount}
+            />
+          )}
 
       {data.sync.state === '' && data.sync.canSync && <NeverSynced onSync={startSync} pending={sync.isPending} />}
 
       {(data.sync.state === 'synced' || data.sync.syncedAt) && (
         <>
-          <SummaryCards data={data} />
+          <SummaryCards data={data} syncing={syncing} />
           <FindingsSection
             data={data}
             product={product}
@@ -133,7 +172,7 @@ export function SecurityTab({ product, reference, repository }: {
             repository={repository}
             tab={tab}
             onTabChange={setTab}
-            syncing={data.sync.state === 'syncing'}
+            syncing={syncing}
           />
         </>
       )}
@@ -241,13 +280,63 @@ function summarise(data: PackageSecurityResponse) {
   }
 }
 
-function SummaryCards({ data }: { data: PackageSecurityResponse }) {
+/**
+ * The cards, and what they are allowed to say while a sync is running.
+ *
+ * # Why `syncing` reaches this far down
+ *
+ * Because a sync REPLACES these numbers, and it does it in two steps: the
+ * per-artifact rows go first and the release's summary is rewritten at the end.
+ * In between, every number here is either the last sync's or a zero computed
+ * from rows that are no longer there - and the page rendered both as though
+ * they were this sync's results. "0 fixable" over a spinner is the reader being
+ * told there is no work to do, in the one place this feature exists to get
+ * right.
+ *
+ * So while a sync runs the cards say what they are: numbers being retrieved,
+ * with the previous sync's figure named as the previous sync's. A dash and a
+ * date beat a confident wrong number.
+ */
+function SummaryCards({ data, syncing }: { data: PackageSecurityResponse; syncing?: boolean }) {
   const { coverage } = data
   const stats = useMemo(() => summarise(data), [data])
   const fixablePercent = stats.total > 0 ? Math.round((stats.fixable / stats.total) * 100) : 0
   const scannedPercent = coverage.scannable > 0
     ? Math.round((coverage.scanned / coverage.scannable) * 100)
     : 0
+  const previous = data.syncedAt ? `from the sync ${formatRelative(data.syncedAt)}` : undefined
+
+  if (syncing) {
+    return (
+      <Row gutter={[16, 16]}>
+        <Col xs={24} lg={12}>
+          <PendingCard
+            title="Vulnerabilities"
+            previous={stats.total > 0
+              ? `${stats.unique.toLocaleString()} unique CVEs in ${stats.total.toLocaleString()} findings`
+              : undefined}
+            note={previous}
+          />
+        </Col>
+        <Col xs={24} md={12} lg={6}>
+          <PendingCard
+            title="Fixable"
+            previous={stats.total > 0 ? `${stats.fixable.toLocaleString()} with a fixed version` : undefined}
+            note={previous}
+          />
+        </Col>
+        <Col xs={24} md={12} lg={6}>
+          <PendingCard
+            title="Scan coverage"
+            previous={coverage.scannable > 0
+              ? `${coverage.scanned.toLocaleString()} of ${coverage.scannable.toLocaleString()} images scanned`
+              : undefined}
+            note={previous}
+          />
+        </Col>
+      </Row>
+    )
+  }
 
   return (
     <Row gutter={[16, 16]}>
@@ -405,6 +494,38 @@ function SummaryCards({ data }: { data: PackageSecurityResponse }) {
   )
 }
 
+
+/**
+ * A number that is being fetched, said as one.
+ *
+ * The dash is deliberate and so is its size: it occupies the place the figure
+ * will occupy, so the card does not resize when the sync lands, and it cannot
+ * be misread as a zero. What the last sync said is kept beside it, named as
+ * the last sync's - useful context, and never confusable with this one's.
+ */
+function PendingCard({ title, previous, note }: {
+  title: string
+  previous?: string
+  note?: string
+}) {
+  return (
+    <Card size="small" title={title} style={{ height: '100%' }}>
+      <Space direction="vertical" size={2} style={{ width: '100%' }}>
+        <Space size={10} align="center">
+          <Spin size="small" />
+          <Typography.Text type="secondary">Being retrieved</Typography.Text>
+        </Space>
+        <div style={{ fontSize: 30, fontWeight: 600, lineHeight: 1.1, color: '#C4CBD4' }}>—</div>
+        {previous && (
+          <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+            Previously {previous}
+            {note ? `, ${note}` : ''}.
+          </Typography.Text>
+        )}
+      </Space>
+    </Card>
+  )
+}
 
 /** One exception to full coverage: a count, a colour and what to call it. */
 function CoverageLine({ n, label, colour }: { n: number; label: string; colour: string }) {
@@ -786,6 +907,25 @@ function FindingsSection({ data, product, reference, repository, tab, onTabChang
         )}
 
         {/*
+          The order is the order somebody narrows in: what am I looking at
+          (unique or every occurrence), then can anything be done about it, then
+          how bad. Fixability sat AFTER the severity select, which put the
+          coarsest control - three buttons, always visible - behind the fussiest
+          one, and left the two segmented controls either side of a dropdown.
+        */}
+        {tab !== 'problems' && (
+          <Segmented
+            value={fixability}
+            onChange={(v) => setFixability(v as typeof fixability)}
+            options={[
+              { value: 'all', label: 'All' },
+              { value: 'fixable', label: 'Fixable' },
+              { value: 'non-fixable', label: 'No fix' },
+            ]}
+          />
+        )}
+
+        {/*
           A multi-select rather than five checkboxes in a row.
 
           The checkboxes were 300px of chrome that pushed everything after them
@@ -806,18 +946,6 @@ function FindingsSection({ data, product, reference, repository, tab, onTabChang
             label: <SeverityTag value={sev} />,
           }))}
         />
-
-        {tab !== 'problems' && (
-          <Segmented
-            value={fixability}
-            onChange={(v) => setFixability(v as typeof fixability)}
-            options={[
-              { value: 'all', label: 'All' },
-              { value: 'fixable', label: 'Fixable' },
-              { value: 'non-fixable', label: 'No fix' },
-            ]}
-          />
-        )}
 
         {offeredKinds.length > 1 && (
           <Segmented
@@ -868,7 +996,14 @@ function FindingsSection({ data, product, reference, repository, tab, onTabChang
                   scanUrlFor={scanUrlFor}
                 />
               )
-              : <VulnerabilityTable rows={filtered} state={data.state} detailRowsUnavailable={detailRowsUnavailable} />}
+              : (
+                <VulnerabilityTable
+                  rows={filtered}
+                  state={data.state}
+                  detailRowsUnavailable={detailRowsUnavailable}
+                  scanUrlFor={scanUrlFor}
+                />
+              )}
           </>
         )
         : tab === 'artifacts'
@@ -1060,6 +1195,21 @@ type CveGroup = {
   fixedIn: string[]
   summary?: string
   description?: string
+  /*
+   * The advisory's own facts, carried up from the findings.
+   *
+   * They belong to the CVE rather than to the occurrence - the score and the
+   * publication date of an advisory do not change because it turned up in a
+   * second image - so the group keeps the first one that has them. Without
+   * these the grouped view's detail panel could show less than the flat view's
+   * for the same advisory, which is the wrong way round.
+   */
+  cvssScore?: number
+  cvssVector?: string
+  references: string[]
+  published?: string
+  provider?: string
+  policy?: string
   packages: string[]
   images: string[]
   rows: FlatFinding[]
@@ -1089,11 +1239,20 @@ function groupByCve(findings: FlatFinding[]): CveGroup[] {
         fixedIn: [],
         summary: f.summary,
         description: f.description,
+        references: [],
         packages: [],
         images: [],
         rows: [],
       }
       byKey.set(key, g)
+    }
+    if (g.cvssScore === undefined && f.cvssScore !== undefined) g.cvssScore = f.cvssScore
+    if (!g.cvssVector && f.cvssVector) g.cvssVector = f.cvssVector
+    if (!g.published && f.published) g.published = f.published
+    if (!g.provider && f.provider) g.provider = f.provider
+    if (!g.policy && f.policy) g.policy = f.policy
+    for (const r of f.references ?? []) {
+      if (!g.references.includes(r)) g.references.push(r)
     }
     if (SEVERITIES.indexOf(f.severity) < SEVERITIES.indexOf(g.severity)) g.severity = f.severity
     if (f.fixable) g.fixable = true
@@ -1188,7 +1347,7 @@ function UniqueCveTable({ groups, state, detailRowsUnavailable, scanUrlFor }: {
           width: 160,
           render: (_, g) => (
             <a onClick={() => setOpen(g)} style={{ display: 'block' }}>
-              <CveCell cve={g.cve} id={g.id} />
+              <CveCell cve={g.cve} id={g.id} link />
             </a>
           ),
         },
@@ -1230,13 +1389,12 @@ function UniqueCveTable({ groups, state, detailRowsUnavailable, scanUrlFor }: {
           title: 'Description',
           width: 340,
           render: (_, g) => (
-            <Typography.Paragraph
-              style={{ margin: 0, cursor: 'pointer' }}
-              onClick={() => setOpen(g)}
-              ellipsis={{ rows: 2 }}
-            >
-              {g.summary || g.description || '-'}
-            </Typography.Paragraph>
+            <DescriptionCell
+              summary={g.summary}
+              description={g.description}
+              title={g.cve || g.id}
+              onOpen={() => setOpen(g)}
+            />
           ),
         },
       ]}
@@ -1262,65 +1420,406 @@ function CveDetailDrawer({ group, scanUrlFor, onClose }: {
   onClose: () => void
 }) {
   return (
-    <Drawer
-      title={group ? (group.cve || group.id) : ''}
-      width={720}
+    <AdvisoryDrawer
       open={Boolean(group)}
       onClose={onClose}
+      identifier={group?.cve || group?.id}
+      alternateId={group?.cve && group?.id && group.id !== group.cve ? group.id : undefined}
+      severity={group?.severity}
+      fixable={group?.fixable}
+      fixedIn={group?.fixedIn}
+      summary={group?.summary}
+      description={group?.description}
+      cvssScore={group?.cvssScore}
+      cvssVector={group?.cvssVector}
+      published={group?.published}
+      provider={group?.provider}
+      policy={group?.policy}
+      references={group?.references}
+      subtitle={group
+        ? `${group.packages.length} ${group.packages.length === 1 ? 'package' : 'packages'} in `
+          + `${group.images.length} ${group.images.length === 1 ? 'image' : 'images'}`
+        : undefined}
     >
       {group && (
-        <Space direction="vertical" size={16} style={{ width: '100%' }}>
-          <Space size={12} wrap>
-            <SeverityTag value={group.severity} />
-            <FixCell fixable={group.fixable} fixedIn={group.fixedIn} />
-            {group.cve && group.id && group.id !== group.cve && (
+        <Section
+          title={`Where it was found - ${group.packages.length} `
+            + `${group.packages.length === 1 ? 'package' : 'packages'} in ${group.images.length} `
+            + `${group.images.length === 1 ? 'image' : 'images'}`}
+        >
+          <Table<FlatFinding>
+            size="small"
+            rowKey={(r) => `${r.component.id}-${r.artifactName}-${r.artifactDigest ?? ''}`}
+            dataSource={group.rows}
+            pagination={group.rows.length > 12
+              ? { pageSize: 12, size: 'small', showSizeChanger: false }
+              : false}
+            columns={[
+              {
+                title: 'Package',
+                render: (_, r) => (
+                  <ComponentCell name={r.component.name} version={r.component.version} type={r.component.type} />
+                ),
+              },
+              {
+                title: 'Image',
+                render: (_, r) => <ImageCell name={r.artifactName} tag={r.artifactTag} href={scanUrlFor(r.artifactName)} />,
+              },
+              // Where in the image the scanner found it, when it says. Offered
+              // only when something has one: a column of dashes is worse than
+              // the column not being there.
+              ...(group.rows.some((r) => r.component.path)
+                ? [{
+                  title: 'Path',
+                  render: (_: unknown, r: FlatFinding) => (
+                    r.component.path
+                      ? (
+                        <Typography.Text
+                          style={{ fontFamily: mono, fontSize: 11 }}
+                          ellipsis={{ tooltip: r.component.path }}
+                        >
+                          {r.component.path}
+                        </Typography.Text>
+                      )
+                      : <Typography.Text type="secondary">-</Typography.Text>
+                  ),
+                }]
+                : []),
+              {
+                title: 'Fix',
+                width: 140,
+                render: (_, r) => <FixCell fixable={r.fixable} fixedIn={r.fixedIn} />,
+              },
+            ]}
+          />
+        </Section>
+      )}
+    </AdvisoryDrawer>
+  )
+}
+
+/**
+ * One ROW's advisory - the same panel, for the view that does not group.
+ *
+ * # Why the flat view needs its own
+ *
+ * Because the grouped panel answers "where else is this", and in the flat view
+ * that question is already answered by the row: this occurrence, this package,
+ * this image. Reusing the grouped panel here would list every other image the
+ * CVE appears in, which is the reader deliberately having left the grouped view
+ * to get away from.
+ *
+ * So the shape is the same and the last section differs: what this finding is
+ * against, rather than everywhere the advisory turns up.
+ */
+function FindingDetailDrawer({ finding, scanUrlFor, onClose }: {
+  finding: FlatFinding | null
+  scanUrlFor: (name: string) => string | undefined
+  onClose: () => void
+}) {
+  return (
+    <AdvisoryDrawer
+      open={Boolean(finding)}
+      onClose={onClose}
+      identifier={finding?.cve || finding?.id}
+      alternateId={finding?.cve && finding?.id && finding.id !== finding.cve ? finding.id : undefined}
+      severity={finding?.severity}
+      fixable={finding?.fixable}
+      fixedIn={finding?.fixedIn}
+      summary={finding?.summary}
+      description={finding?.description}
+      cvssScore={finding?.cvssScore}
+      cvssVector={finding?.cvssVector}
+      published={finding?.published}
+      provider={finding?.provider}
+      policy={finding?.policy}
+      references={finding?.references}
+      subtitle={finding ? `${finding.component.name} in ${finding.artifactName}` : undefined}
+    >
+      {finding && (
+        <Section title="This finding">
+          <Descriptions
+            column={{ xs: 1, sm: 2 }}
+            size="small"
+            bordered
+            items={[
+              {
+                key: 'package',
+                label: 'Package',
+                children: (
+                  <ComponentCell
+                    name={finding.component.name}
+                    version={finding.component.version}
+                    type={finding.component.type}
+                  />
+                ),
+              },
+              {
+                key: 'image',
+                label: 'Image',
+                children: (
+                  <ImageCell
+                    name={finding.artifactName}
+                    tag={finding.artifactTag}
+                    href={scanUrlFor(finding.artifactName)}
+                  />
+                ),
+              },
+              {
+                key: 'fix',
+                label: 'Fix',
+                children: <FixCell fixable={finding.fixable} fixedIn={finding.fixedIn} />,
+              },
+              {
+                key: 'component-id',
+                label: 'Component id',
+                children: (
+                  <Typography.Text copyable style={{ fontFamily: mono, fontSize: 12 }}>
+                    {finding.component.id}
+                  </Typography.Text>
+                ),
+              },
+              // The scanner says where inside the image it found the package
+              // when it knows, and that is what makes a finding checkable
+              // against the image rather than taken on trust.
+              ...(finding.component.path
+                ? [{
+                  key: 'path',
+                  label: 'Path',
+                  span: 2,
+                  children: (
+                    <Typography.Text copyable style={{ fontFamily: mono, fontSize: 12 }}>
+                      {finding.component.path}
+                    </Typography.Text>
+                  ),
+                }]
+                : []),
+              ...(finding.artifactDigest
+                ? [{
+                  key: 'digest',
+                  label: 'Image digest',
+                  span: 2,
+                  children: (
+                    <Typography.Text copyable style={{ fontFamily: mono, fontSize: 12 }}>
+                      {finding.artifactDigest}
+                    </Typography.Text>
+                  ),
+                }]
+                : []),
+            ]}
+          />
+        </Section>
+      )}
+    </AdvisoryDrawer>
+  )
+}
+
+/**
+ * The advisory panel both views open.
+ *
+ * # What was wrong with the one before it
+ *
+ * Three things, and they were all about the shape rather than the content. The
+ * identifier, the severity and the fix sat in one wrapping row of unlike
+ * things - a tag, a two-line cell, a monospace id - which read as a cluster
+ * rather than as facts. The description was a paragraph in a vertical Space and
+ * stopped well short of the panel's right edge, so the widest thing on screen
+ * used the least of it. And what the scanner had said beyond the prose - the
+ * CVSS score and vector, when the advisory was published, which watch flagged
+ * it, the advisory links - was simply not shown, in a panel called "everything
+ * about this CVE".
+ *
+ * So: a header that states the identity once, a grid of the facts, then the
+ * prose across the full width, then the links, then whatever the caller has to
+ * add about where it was found.
+ */
+function AdvisoryDrawer({
+  open, onClose, identifier, alternateId, severity, fixable, fixedIn, summary, description,
+  cvssScore, cvssVector, published, provider, policy, references, subtitle, children,
+}: {
+  open: boolean
+  onClose: () => void
+  identifier?: string
+  alternateId?: string
+  severity?: Severity
+  fixable?: boolean
+  fixedIn?: string[]
+  summary?: string
+  description?: string
+  cvssScore?: number
+  cvssVector?: string
+  published?: string
+  provider?: string
+  policy?: string
+  references?: string[]
+  subtitle?: string
+  children?: ReactNode
+}) {
+  const prose = description || summary
+  const facts = [
+    severity ? { key: 'severity', label: 'Severity', children: <SeverityTag value={severity} /> } : null,
+    {
+      key: 'fix',
+      label: 'Fix',
+      children: <FixCell fixable={Boolean(fixable)} fixedIn={fixedIn} />,
+    },
+    cvssScore !== undefined && cvssScore > 0
+      ? { key: 'cvss', label: 'CVSS score', children: <Typography.Text strong>{cvssScore}</Typography.Text> }
+      : null,
+    published
+      ? {
+        key: 'published',
+        label: 'Advisory published',
+        children: <Typography.Text>{formatAbsolute(published) ?? published}</Typography.Text>,
+      }
+      : null,
+    provider
+      ? {
+        key: 'provider',
+        label: 'Reported by',
+        children: <Typography.Text>{provider === 'jfrog-xray' ? 'JFrog Xray' : provider}</Typography.Text>,
+      }
+      : null,
+    // Xray's own watch or policy. Informational, and the only thing on this
+    // panel that says why a finding is being shown to THIS organisation.
+    policy ? { key: 'policy', label: 'Policy', children: <Typography.Text>{policy}</Typography.Text> } : null,
+    cvssVector
+      ? {
+        key: 'vector',
+        label: 'CVSS vector',
+        span: 2,
+        children: (
+          <Typography.Text copyable style={{ fontFamily: mono, fontSize: 12 }}>{cvssVector}</Typography.Text>
+        ),
+      }
+      : null,
+    fixedIn && fixedIn.length > 0
+      ? {
+        key: 'fixed-in',
+        label: 'Fixed in',
+        span: 2,
+        children: (
+          <Space size={[6, 6]} wrap>
+            {fixedIn.map((v) => (
+              <Tag key={v} style={{ marginInlineEnd: 0, fontFamily: mono }}>{v}</Tag>
+            ))}
+          </Space>
+        ),
+      }
+      : null,
+  ].filter(Boolean) as { key: string; label: string; span?: number; children: ReactNode }[]
+
+  return (
+    <Drawer
+      // Wide, because the widest thing in here is an advisory's prose and the
+      // panel exists to give it room. Bounded by the viewport so it never
+      // becomes the whole screen on a laptop.
+      width="min(920px, 92vw)"
+      open={open}
+      onClose={onClose}
+      title={
+        <Space direction="vertical" size={0}>
+          <Space size={10} align="center" wrap>
+            <Typography.Text strong style={{ fontFamily: mono, fontSize: 15 }}>
+              {identifier ?? 'Vulnerability'}
+            </Typography.Text>
+            {severity && <SeverityTag value={severity} />}
+            {alternateId && (
               <Typography.Text type="secondary" style={{ fontFamily: mono, fontSize: 12 }}>
-                {group.id}
+                {alternateId}
               </Typography.Text>
             )}
           </Space>
-
-          {(group.description || group.summary) && (
-            <Typography.Paragraph style={{ margin: 0, whiteSpace: 'pre-wrap' }}>
-              {group.description || group.summary}
-            </Typography.Paragraph>
+          {subtitle && (
+            <Typography.Text type="secondary" style={{ fontSize: 12 }}>{subtitle}</Typography.Text>
           )}
-
-          <div>
-            <Typography.Text strong>
-              {group.packages.length} {group.packages.length === 1 ? 'package' : 'packages'} in{' '}
-              {group.images.length} {group.images.length === 1 ? 'image' : 'images'}
-            </Typography.Text>
-            <Table<FlatFinding>
-              style={{ marginTop: 8 }}
-              size="small"
-              rowKey={(r) => `${r.component.id}-${r.artifactName}-${r.artifactDigest ?? ''}`}
-              dataSource={group.rows}
-              pagination={group.rows.length > 12
-                ? { pageSize: 12, size: 'small', showSizeChanger: false }
-                : false}
-              columns={[
-                {
-                  title: 'Package',
-                  render: (_, r) => (
-                    <ComponentCell name={r.component.name} version={r.component.version} type={r.component.type} />
-                  ),
-                },
-                {
-                  title: 'Image',
-                  render: (_, r) => <ImageCell name={r.artifactName} tag={r.artifactTag} href={scanUrlFor(r.artifactName)} />,
-                },
-                {
-                  title: 'Fix',
-                  width: 140,
-                  render: (_, r) => <FixCell fixable={r.fixable} fixedIn={r.fixedIn} />,
-                },
-              ]}
-            />
-          </div>
         </Space>
-      )}
+      }
+      extra={
+        identifier && (
+          <Space size={8}>
+            <Button
+              size="small"
+              icon={<CopyOutlined />}
+              onClick={() => void navigator.clipboard?.writeText(
+                prose ? `${identifier}\n\n${prose}` : identifier)}
+            >
+              Copy
+            </Button>
+            {/*
+              The public record, for an identifier that has one. A scanner's
+              own id has no page anywhere but the scanner, and the image rows
+              below already link there.
+            */}
+            {identifier.toUpperCase().startsWith('CVE-') && (
+              <Button
+                size="small"
+                icon={<ExportOutlined />}
+                href={`https://nvd.nist.gov/vuln/detail/${encodeURIComponent(identifier)}`}
+                target="_blank"
+                rel="noreferrer"
+              >
+                NVD
+              </Button>
+            )}
+          </Space>
+        )
+      }
+    >
+      <Space direction="vertical" size={20} style={{ width: '100%' }}>
+        <Descriptions column={{ xs: 1, sm: 2 }} size="small" bordered items={facts} />
+
+        <Section title="Description">
+          {prose
+            ? (
+              <Typography.Paragraph
+                style={{ margin: 0, width: '100%', whiteSpace: 'pre-wrap', fontSize: 14, lineHeight: 1.6 }}
+              >
+                {prose}
+              </Typography.Paragraph>
+            )
+            : (
+              <Typography.Text type="secondary">
+                The scanner supplied no description for this advisory.
+              </Typography.Text>
+            )}
+          {/*
+            Both, when they differ. The summary is the scanner's one-line
+            headline and the description is the advisory - a panel that showed
+            only the longer one dropped the sentence somebody was scanning for.
+          */}
+          {summary && description && summary !== description && (
+            <Typography.Text type="secondary" style={{ fontSize: 12, display: 'block', marginTop: 10 }}>
+              Summary: {summary}
+            </Typography.Text>
+          )}
+        </Section>
+
+        {references && references.length > 0 && (
+          <Section title="References">
+            <Space direction="vertical" size={4} style={{ width: '100%' }}>
+              {references.map((r) => (
+                <a key={r} href={r} target="_blank" rel="noreferrer" style={{ fontSize: 13, wordBreak: 'break-all' }}>
+                  {r} <ExportOutlined style={{ fontSize: 10 }} />
+                </a>
+              ))}
+            </Space>
+          </Section>
+        )}
+
+        {children}
+      </Space>
     </Drawer>
+  )
+}
+
+/** One labelled block of the detail panel. */
+function Section({ title, children }: { title: string; children: ReactNode }) {
+  return (
+    <div style={{ width: '100%' }}>
+      <Typography.Text strong style={{ display: 'block', marginBottom: 8 }}>{title}</Typography.Text>
+      {children}
+    </div>
   )
 }
 
@@ -1352,12 +1851,23 @@ function VulnerabilityTable({
   rows,
   state,
   detailRowsUnavailable,
+  scanUrlFor,
 }: {
   rows: FlatFinding[]
   state: PackageSecurityResponse['state']
   detailRowsUnavailable: boolean
+  scanUrlFor: (name: string) => string | undefined
 }) {
+  /*
+   * The same gesture as the grouped view, because it is the same table to a
+   * reader: switching the segment above it changed what a click on a CVE did -
+   * from "open the advisory" to nothing at all - which reads as a broken page
+   * rather than as a different view.
+   */
+  const [open, setOpen] = useState<FlatFinding | null>(null)
+
   return (
+    <>
     <Table<FlatFinding>
       size="small"
       rowKey={(r) => `${r.cve ?? r.id}-${r.component.id}-${r.artifactName}`}
@@ -1377,7 +1887,15 @@ function VulnerabilityTable({
           : <FindingsEmpty status={state} />,
       }}
       columns={[
-        { title: 'CVE', width: 150, render: (_, r) => <CveCell cve={r.cve} id={r.id} /> },
+        {
+          title: 'CVE',
+          width: 150,
+          render: (_, r) => (
+            <a onClick={() => setOpen(r)} style={{ display: 'block' }}>
+              <CveCell cve={r.cve} id={r.id} link />
+            </a>
+          ),
+        },
         {
           title: 'Severity',
           width: 110,
@@ -1415,31 +1933,24 @@ function VulnerabilityTable({
             Narrow enough that the six columns fit the card at a laptop width.
             The description was 520px wide, which pushed the table 180px past
             its own card and left every row's last words behind a horizontal
-            scrollbar. Two clamped lines with the rest in a tooltip says as
+            scrollbar. Two clamped lines with the rest in a popover says as
             much, in a table that ends where the card does.
           */
           title: 'Description',
           width: 340,
           render: (_, r) => (
-            <Typography.Paragraph
-              style={{ margin: 0 }}
-              ellipsis={{
-                rows: 2,
-                // Bounded, because an advisory's full text is eight paragraphs
-                // and antd will happily paint all of them over the page.
-                tooltip: {
-                  title: r.description || r.summary,
-                  overlayStyle: { maxWidth: 480 },
-                  overlayInnerStyle: { maxHeight: 320, overflow: 'auto' },
-                },
-              }}
-            >
-              {r.summary || r.description || '-'}
-            </Typography.Paragraph>
+            <DescriptionCell
+              summary={r.summary}
+              description={r.description}
+              title={r.cve || r.id}
+              onOpen={() => setOpen(r)}
+            />
           ),
         },
       ]}
     />
+    <FindingDetailDrawer finding={open} scanUrlFor={scanUrlFor} onClose={() => setOpen(null)} />
+    </>
   )
 }
 

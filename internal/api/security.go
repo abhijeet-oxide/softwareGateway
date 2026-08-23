@@ -42,6 +42,8 @@ type SecuritySyncer interface {
 	Start(ctx context.Context, req security.SyncRequest) (security.SyncStatus, error)
 	Progress(packageID int64) (*security.SyncProgress, bool)
 	Running(packageID int64) bool
+	// Cancel stops a sync, whether or not this replica is the one running it.
+	Cancel(ctx context.Context, packageID int64) (bool, error)
 }
 
 // SecurityStore is the stored result of syncs, which is what every read serves.
@@ -65,6 +67,7 @@ type SecurityIndex interface {
 // packageVerbSyncSecurity is the custom method that talks to the scanner.
 const (
 	packageVerbSyncSecurity    = "syncSecurity"
+	packageVerbCancelSecurity  = "cancelSecuritySync"
 	packageVerbCompareSecurity = "compareSecurity"
 )
 
@@ -239,6 +242,60 @@ func (s *Server) handleSyncPackageSecurity(w http.ResponseWriter, r *http.Reques
 	})
 }
 
+// handleCancelPackageSecuritySync serves POST
+// /api/v1/products/{product}/packages/{package}:cancelSecuritySync.
+//
+// # Why a sync needs a stop at all
+//
+// Because it is minutes of somebody else's scanner, started by one button, and
+// until now the only way out of one started by mistake - the wrong release, a
+// scanner that is plainly down, a sync that has to make way for a more urgent
+// one - was to wait it out. A job a user can start and cannot stop is a job
+// they learn not to start.
+//
+// The claim is released here rather than in the goroutine, so a sync running on
+// another replica stops too: that run notices at its next heartbeat that its
+// claim has gone and stands down.
+func (s *Server) handleCancelPackageSecuritySync(w http.ResponseWriter, r *http.Request) {
+	productName := chi.URLParam(r, "product")
+	ref := chi.URLParam(r, "package")
+
+	if !s.productExists(w, r, productName) {
+		return
+	}
+	if s.deps.Packages == nil || s.deps.SecuritySync == nil {
+		Error(w, r, v1.CodeUnavailable, "security scanning is not configured on this Coordinator")
+		return
+	}
+
+	pkg, ok := s.resolvePackage(w, r, productName, ref)
+	if !ok {
+		return
+	}
+
+	stopped, err := s.deps.SecuritySync.Cancel(r.Context(), pkg.ID)
+	if err != nil {
+		s.internal(w, r, "stop security sync", err)
+		return
+	}
+
+	row, _, err := s.deps.SecurityStore.Get(r.Context(), pkg.ID)
+	if err != nil {
+		s.internal(w, r, "read package security", err)
+		return
+	}
+
+	WriteJSON(w, r, http.StatusOK, v1.CancelSecuritySyncResponse{
+		Product: productName,
+		Package: packageReferenceOf(pkg),
+		// False is not a failure: the sync finished between the reader deciding
+		// to stop it and the request arriving, which is a thing to say rather
+		// than an error to raise.
+		Stopped: stopped,
+		Sync:    s.syncStatusFor(pkg.ID, row, s.securityTargetFor(r.Context(), productName, pkg)),
+	})
+}
+
 // syncStatusFor renders what is happening to a release right now.
 //
 // The stored state is authoritative and the live progress is an enrichment: a
@@ -268,10 +325,32 @@ func (s *Server) syncStatusFor(
 	if row.StartedAt != nil {
 		out.StartedAt = row.StartedAt.UTC().Format(rfc3339)
 	}
+	if row.HeartbeatAt != nil {
+		out.HeartbeatAt = row.HeartbeatAt.UTC().Format(rfc3339)
+	}
 
 	if s.deps.SecuritySync == nil {
 		out.Log = toAPISyncLog(row.Log)
+		out.Stalled = row.Stalled(security.StaleClaimAfter)
 		return out
+	}
+	/*
+	 * WHOSE sync this is, said plainly.
+	 *
+	 * A row marked `syncing` used to mean one of three things and the interface
+	 * could only say the first: a sync running here, a sync running on another
+	 * Coordinator, and a Coordinator that was killed mid-sync and left the row
+	 * exactly as a healthy one leaves it. A reader who had just restarted their
+	 * only Coordinator was told the work was happening somewhere else, and the
+	 * release refused a new sync for half an hour.
+	 *
+	 * The heartbeat separates the second from the third, and `here` separates
+	 * the first from both.
+	 */
+	out.Here = s.deps.SecuritySync.Running(packageID)
+	out.Stalled = !out.Here && row.Stalled(security.StaleClaimAfter)
+	if out.Stalled {
+		out.Label = "Vulnerability sync interrupted"
 	}
 	if progress, ok := s.deps.SecuritySync.Progress(packageID); ok {
 		stages, notes, _, _ := progress.Snapshot()

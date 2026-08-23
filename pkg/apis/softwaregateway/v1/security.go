@@ -170,6 +170,21 @@ type SecuritySyncStatus struct {
 
 	SyncedAt  string `json:"syncedAt,omitempty"`
 	StartedAt string `json:"startedAt,omitempty"`
+	// HeartbeatAt is the last time the process running the sync said it was
+	// alive. A sync beats every few seconds while it runs.
+	HeartbeatAt string `json:"heartbeatAt,omitempty"`
+
+	// Here is whether the Coordinator answering this request is the one running
+	// the sync, and Stalled whether the claim has stopped beating.
+	//
+	// `state = syncing` says a sync was STARTED and nothing else. Without these
+	// two a client cannot tell a sync running on another replica from a
+	// Coordinator that was killed mid-sync - and it showed the second as the
+	// first, on single-Coordinator deployments where that sentence is simply
+	// untrue. Stalled means nothing is running: the release can be synced
+	// again, and the next claim takes the row.
+	Here    bool `json:"here,omitempty"`
+	Stalled bool `json:"stalled,omitempty"`
 
 	// CanSync is whether any configured repository of this product has a
 	// scanner switched on. Reason says which knob turns one on when it does
@@ -224,6 +239,18 @@ type SyncSecurityResponse struct {
 	// what it has taken on.
 	Artifacts int                `json:"artifacts"`
 	Sync      SecuritySyncStatus `json:"sync"`
+}
+
+// CancelSecuritySyncResponse is POST
+// /api/v1/products/{product}/packages/{package}:cancelSecuritySync.
+type CancelSecuritySyncResponse struct {
+	Product string `json:"product"`
+	Package string `json:"package"`
+	// Stopped is false when there was nothing to stop - the sync finished
+	// between the reader deciding to stop it and the request arriving. Not a
+	// failure, and the sync below says what the release's state actually is.
+	Stopped bool               `json:"stopped"`
+	Sync    SecuritySyncStatus `json:"sync"`
 }
 
 // PackageSecurityResponse is
@@ -295,6 +322,11 @@ type PackageSecuritySummary struct {
 	// State is "" (never synced) | syncing | synced | failed.
 	State string `json:"state"`
 	Label string `json:"label"`
+	// Stalled is a `syncing` row whose claim has stopped beating: the process
+	// that started it is gone and nothing is running. Without this a listing
+	// shows a spinner on a release nobody is syncing, for as long as it takes
+	// the stale sweep to notice.
+	Stalled bool `json:"stalled,omitempty"`
 
 	Counts SecurityCounts `json:"counts"`
 	// DistinctTotal collapses the same (CVE, component) across artifacts.

@@ -6,6 +6,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/abhijeet-oxide/softwareGateway/internal/security"
 	"github.com/abhijeet-oxide/softwareGateway/internal/store"
 )
 
@@ -62,9 +63,14 @@ func NewSecurityCacheSweeper(
 }
 
 // StaleSyncAfter is how long a sync claim is honoured before it is treated as
-// abandoned. Matches the syncer's own bound, so the two cannot disagree about
-// what "still running" means.
-const StaleSyncAfter = 30 * time.Minute
+// abandoned. The syncer's own bound, rather than a copy of it, so the two
+// cannot disagree about what "still running" means.
+//
+// A claim that has stopped BEATING is abandoned long before this, and the sweep
+// picks those up too - see PackageSecurity.ReleaseAbandoned. This bound is for
+// the other failure: a sync that is alive and has been going for longer than
+// any sync takes.
+const StaleSyncAfter = security.StaleClaimAfter
 
 // SetLeader is called by the elector on every leadership change.
 func (s *SecurityCacheSweeper) SetLeader(isLeader bool) {

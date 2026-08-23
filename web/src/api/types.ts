@@ -1119,6 +1119,18 @@ export interface SecuritySyncStatus {
   error?: string
   syncedAt?: string
   startedAt?: string
+  /** The last time the process running the sync said it was alive. */
+  heartbeatAt?: string
+  /** Whether the Coordinator answering is the one running the sync. */
+  here?: boolean
+  /**
+   * The claim has stopped beating: nothing is running.
+   *
+   * `state: 'syncing'` says a sync was STARTED and nothing else, so without
+   * this a Coordinator killed mid-sync is indistinguishable from one working
+   * away on another replica - and was shown as the second.
+   */
+  stalled?: boolean
   /** Whether any repository of this product has a scanner switched on. */
   canSync: boolean
   /** Which knob turns one on, when canSync is false. */
@@ -1151,6 +1163,14 @@ export interface SyncSecurityResponse {
   sync: SecuritySyncStatus
 }
 
+export interface CancelSecuritySyncResponse {
+  product: string
+  package: string
+  /** False when the sync finished before the request arrived - not a failure. */
+  stopped: boolean
+  sync: SecuritySyncStatus
+}
+
 /**
  * A release's counts, carried on the package itself.
  *
@@ -1161,6 +1181,13 @@ export interface SyncSecurityResponse {
 export interface PackageSecuritySummary {
   state: SyncState
   label: string
+  /**
+   * A `syncing` row whose claim has stopped beating: nothing is running.
+   *
+   * A listing that reads `state` alone shows a spinner on a release whose
+   * Coordinator was killed, until a sweep half an hour later notices.
+   */
+  stalled?: boolean
   counts: SecurityCounts
   distinctTotal: number
   complete: boolean

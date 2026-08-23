@@ -328,6 +328,37 @@ would otherwise leave a release marked syncing forever, and a release that can
 never be synced again is a worse outcome than a rare duplicate that converges on
 the same rows. The maintenance loop releases claims older than 30 minutes.
 
+### The heartbeat, and why an age was not enough
+
+An age answers "has this been going too long". It cannot answer the question a
+reader actually has, which is **"is anything running?"** - because a killed
+process leaves exactly the row a healthy one leaves. So a release whose
+Coordinator had just been restarted reported *"this sync is running on another
+Coordinator; the result will appear once it completes"*, on a deployment with
+one Coordinator, and refused a new sync for half an hour.
+
+A running sync therefore **beats**: it renews `heartbeat_at` every 15 seconds
+and the claim is honoured for 90. Three things follow, and each of them was
+impossible before:
+
+- **A stopped process is visible.** `sync.stalled` is a claim that stopped
+  beating, and the interface says the sync was interrupted rather than
+  inventing work happening elsewhere.
+- **The next claim is not refused.** `Claim` takes a row whose heartbeat has
+  expired, so "sync again" works immediately instead of waiting out the sweep.
+- **A sync can be stopped from anywhere.** `POST …:cancelSecuritySync` releases
+  the claim; the run notices at its next beat that it no longer holds one and
+  stands down. That is what makes Stop work against a sync on another replica,
+  where there is no goroutine to cancel.
+
+`claimed_by` names the process holding a claim - host, pid and a random suffix,
+so a restart is never mistaken for its predecessor.
+
+A **stopped** sync is not a failure and is not recorded as one. The release goes
+back to the state it was in before the run started - `synced` with its previous
+result, or never synced - because a sync somebody stopped is a sync that did not
+happen.
+
 ### Four states, not a timestamp
 
 `package_security.state` is `'' | syncing | synced | failed`. "Has this been
@@ -456,6 +487,7 @@ which starts the whole retrieval again.
 | Method | Path | Answers |
 |---|---|---|
 | `POST` | `/products/{p}/packages/{pkg}:syncSecurity` | **The only route that talks to a scanner.** Claims the release and returns immediately |
+| `POST` | `/products/{p}/packages/{pkg}:cancelSecuritySync` | Releases the claim, wherever the sync is running. The release keeps its last completed result |
 | `GET` | `/products/{p}/packages/{pkg}/security` | This release's stored posture and its sync state. `?detail=true` for findings |
 | `POST` | `/products/{p}/packages/{pkg}:compareSecurity` | How the posture changed to `against`, from both sides' stored data |
 | `GET` | `/products/{p}/security/search` | `?kind=cve\|package\|image&q=` |

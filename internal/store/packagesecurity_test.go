@@ -41,10 +41,10 @@ func TestClaimIsExclusive(t *testing.T) {
 	p := NewPackageSecurity(st)
 	id := seedPackageFor(t, st)
 
-	if err := p.Claim(t.Context(), id, time.Hour); err != nil {
+	if err := p.Claim(t.Context(), id, "test", time.Hour); err != nil {
 		t.Fatalf("first claim: %v", err)
 	}
-	if err := p.Claim(t.Context(), id, time.Hour); !errors.Is(err, ErrSyncInFlight) {
+	if err := p.Claim(t.Context(), id, "test", time.Hour); !errors.Is(err, ErrSyncInFlight) {
 		t.Fatalf("second claim: %v, want ErrSyncInFlight", err)
 	}
 
@@ -60,6 +60,85 @@ func TestClaimIsExclusive(t *testing.T) {
 	}
 }
 
+// A Coordinator killed mid-sync leaves a row that looks exactly like a healthy
+// one. The heartbeat is what tells them apart, and a claim that has stopped
+// beating is taken at once rather than half an hour later - the whole reason
+// the interface could tell a reader their sync was running on another
+// Coordinator when nothing was running anywhere.
+func TestAClaimThatStoppedBeatingIsTakenAtOnce(t *testing.T) {
+	st := openTestStore(t)
+	p := NewPackageSecurity(st)
+	id := seedPackageFor(t, st)
+
+	if err := p.Claim(t.Context(), id, "coordinator-a", time.Hour); err != nil {
+		t.Fatal(err)
+	}
+	// A live claim is still a live claim, however long the sync runs.
+	if err := p.Claim(t.Context(), id, "coordinator-b", time.Hour); !errors.Is(err, ErrSyncInFlight) {
+		t.Fatalf("a beating claim was stolen: %v", err)
+	}
+
+	// The process holding it goes away: the beat stops.
+	ageHeartbeat(t, st, id, security.HeartbeatTimeout+time.Minute)
+
+	row, _, err := p.Get(t.Context(), id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !row.Stalled(time.Hour) {
+		t.Error("a claim whose heartbeat stopped an hour ago does not read as stalled")
+	}
+	if err := p.Claim(t.Context(), id, "coordinator-b", time.Hour); err != nil {
+		t.Fatalf("claiming after the holder stopped beating: %v", err)
+	}
+}
+
+// Stopping a sync puts the release back where it was, because nothing failed:
+// a sync somebody stopped is a sync that did not happen.
+func TestStopRestoresTheStateBeforeTheSync(t *testing.T) {
+	st := openTestStore(t)
+	p := NewPackageSecurity(st)
+	id := seedPackageFor(t, st)
+
+	if err := p.Claim(t.Context(), id, "coordinator-a", time.Hour); err != nil {
+		t.Fatal(err)
+	}
+	stopped, err := p.Stop(t.Context(), id)
+	if err != nil || !stopped {
+		t.Fatalf("Stop: %v stopped=%t", err, stopped)
+	}
+
+	row, _, _ := p.Get(t.Context(), id)
+	if row.State != PackageSecurityNever {
+		t.Errorf("state = %q, want a release that has never been synced", row.State)
+	}
+	if row.StartedAt != nil || row.ClaimedBy != "" {
+		t.Errorf("the claim survived the stop: %+v", row)
+	}
+
+	// Nothing to stop is not a failure, and says so.
+	if stopped, err := p.Stop(t.Context(), id); err != nil || stopped {
+		t.Errorf("Stop on an idle release: %v stopped=%t", err, stopped)
+	}
+	// And the release is claimable again immediately.
+	if err := p.Claim(t.Context(), id, "coordinator-b", time.Hour); err != nil {
+		t.Errorf("claiming after a stop: %v", err)
+	}
+}
+
+// ageHeartbeat backdates a claim's last beat, which is what a process dying
+// looks like from the database.
+func ageHeartbeat(t *testing.T, st Store, packageID int64, by time.Duration) {
+	t.Helper()
+	when := securityTime(time.Now().UTC().Add(-by))
+	if _, err := st.DB().ExecContext(t.Context(),
+		DialectFor(st.Driver()).Rewrite(
+			`UPDATE package_security SET heartbeat_at = ? WHERE package_id = ?`),
+		when, packageID); err != nil {
+		t.Fatal(err)
+	}
+}
+
 // A claim held by a process that is gone must be reclaimable, or a release
 // showing a spinner can never be synced again.
 func TestStaleClaimIsReclaimable(t *testing.T) {
@@ -67,7 +146,7 @@ func TestStaleClaimIsReclaimable(t *testing.T) {
 	p := NewPackageSecurity(st)
 	id := seedPackageFor(t, st)
 
-	if err := p.Claim(t.Context(), id, time.Hour); err != nil {
+	if err := p.Claim(t.Context(), id, "test", time.Hour); err != nil {
 		t.Fatal(err)
 	}
 
@@ -76,10 +155,10 @@ func TestStaleClaimIsReclaimable(t *testing.T) {
 	// say it against the real predicate rather than around it.
 	time.Sleep(5 * time.Millisecond)
 
-	if err := p.Claim(t.Context(), id, time.Millisecond); err != nil {
+	if err := p.Claim(t.Context(), id, "test", time.Millisecond); err != nil {
 		t.Fatalf("reclaiming a stale claim: %v", err)
 	}
-	if err := p.Claim(t.Context(), id, time.Hour); !errors.Is(err, ErrSyncInFlight) {
+	if err := p.Claim(t.Context(), id, "test", time.Hour); !errors.Is(err, ErrSyncInFlight) {
 		t.Fatalf("the reclaim did not take the lock: %v", err)
 	}
 

@@ -98,6 +98,7 @@ It is also a plain synchronous request rather than a long-running operation, des
 | Method | Path | Purpose |
 |---|---|---|
 | `POST` | `/api/v1/products/{product}/packages/{package}:syncSecurity` | **The only route that talks to a scanner.** Claims the release and returns immediately |
+| `POST` | `/api/v1/products/{product}/packages/{package}:cancelSecuritySync` | Stops a running sync by releasing its claim, wherever it is running. The release keeps its last completed result |
 | `GET` | `/api/v1/products/{product}/packages/{package}/security` | This release's stored posture and its sync state. `?detail=true` for findings |
 | `POST` | `/api/v1/products/{product}/packages/{package}:compareSecurity` | How the posture changed against a second release, from both sides' stored data |
 | `GET` | `/api/v1/products/{product}/security/search` | `?kind=cve\|package\|image&q=` |

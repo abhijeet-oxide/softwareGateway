@@ -45,12 +45,39 @@ type PackageSecurityRow struct {
 	StartedAt   *time.Time
 	Fingerprint string
 
+	// ClaimedBy names the process that holds a running claim, and HeartbeatAt
+	// is the last time it said so. Together they are what tells a sync that is
+	// running from one whose Coordinator went away: `state = syncing` says only
+	// that somebody started one.
+	ClaimedBy   string
+	HeartbeatAt *time.Time
+
 	// Log is the transcript of the run that produced this row.
 	Log []security.SyncLogEntry
 }
 
 // Synced reports whether this row carries a usable result.
 func (r PackageSecurityRow) Synced() bool { return r.State == PackageSecuritySynced }
+
+// Stalled reports a claim whose holder has stopped saying it is alive.
+//
+// This is the difference between "a sync is running somewhere else" and "a
+// Coordinator was killed mid-sync", which a reader was previously shown as the
+// first because the row cannot tell them apart on `state` alone. A row from
+// before the heartbeat existed has none, and falls back to the long window the
+// claim itself uses.
+func (r PackageSecurityRow) Stalled(staleAfter time.Duration) bool {
+	if r.State != PackageSecuritySyncing {
+		return false
+	}
+	if r.HeartbeatAt != nil {
+		return time.Since(*r.HeartbeatAt) > security.HeartbeatTimeout
+	}
+	if r.StartedAt != nil {
+		return time.Since(*r.StartedAt) > staleAfter
+	}
+	return true
+}
 
 // PackageSecurity stores the per-release result of a vulnerability sync.
 //
@@ -87,25 +114,40 @@ var ErrSyncInFlight = errors.New("a vulnerability sync is already running for th
 // and the other gets ErrSyncInFlight without either of them having queried a
 // scanner.
 //
-// `staleAfter` is what makes the claim recoverable. A process that died
-// mid-sync leaves a row marked syncing forever, and a release that can never be
-// synced again is a worse outcome than a rare double sync - which costs a
-// duplicate scanner query and converges on the same rows.
-func (p *PackageSecurity) Claim(ctx context.Context, packageID int64, staleAfter time.Duration) error {
+// # What makes a claim recoverable
+//
+// Two things, and they answer different failures. `staleAfter` bounds a sync
+// that is genuinely running and has taken absurdly long. The HEARTBEAT bounds
+// the failure that actually happens: a Coordinator killed mid-sync leaves a row
+// marked syncing with a start time that only gets older, and until this a
+// release in that state was refused for half an hour while every reader was
+// told the sync was running on another Coordinator. A claim that has stopped
+// beating is held by nothing, and it is taken.
+//
+// Rows written before the heartbeat existed have none, and fall back to the
+// start time - the old behaviour, for the old rows, rather than a migration
+// that has to guess.
+func (p *PackageSecurity) Claim(
+	ctx context.Context, packageID int64, owner string, staleAfter time.Duration,
+) error {
 	now := time.Now().UTC()
 	cutoff := securityTime(now.Add(-staleAfter))
+	beatCutoff := securityTime(now.Add(-security.HeartbeatTimeout))
 
 	res, err := p.db.ExecContext(ctx, p.q(`
-		INSERT INTO package_security (package_id, state, started_at, error)
-		VALUES (?, 'syncing', ?, '')
+		INSERT INTO package_security (package_id, state, started_at, heartbeat_at, claimed_by, error)
+		VALUES (?, 'syncing', ?, ?, ?, '')
 		ON CONFLICT (package_id) DO UPDATE SET
 			state = 'syncing',
 			started_at = excluded.started_at,
+			heartbeat_at = excluded.heartbeat_at,
+			claimed_by = excluded.claimed_by,
 			error = ''
 		WHERE package_security.state <> 'syncing'
 		   OR package_security.started_at IS NULL
-		   OR package_security.started_at < ?`),
-		packageID, securityTime(now), cutoff)
+		   OR package_security.started_at < ?
+		   OR (package_security.heartbeat_at IS NOT NULL AND package_security.heartbeat_at < ?)`),
+		packageID, securityTime(now), securityTime(now), owner, cutoff, beatCutoff)
 	if err != nil {
 		return fmt.Errorf("claim security sync: %w", err)
 	}
@@ -113,6 +155,52 @@ func (p *PackageSecurity) Claim(ctx context.Context, packageID int64, staleAfter
 		return ErrSyncInFlight
 	}
 	return nil
+}
+
+// Heartbeat renews a claim and reports whether it is still held by `owner`.
+//
+// False is not an error: the claim was stopped by somebody pressing Stop, or
+// taken by another process after this one stopped beating. Either way the run
+// that asked has been told to stand down, which is what makes a sync
+// cancellable from a Coordinator that is not the one running it.
+func (p *PackageSecurity) Heartbeat(ctx context.Context, packageID int64, owner string) (bool, error) {
+	res, err := p.db.ExecContext(ctx, p.q(`
+		UPDATE package_security
+		   SET heartbeat_at = ?
+		 WHERE package_id = ? AND state = 'syncing' AND claimed_by = ?`),
+		securityTime(time.Now().UTC()), packageID, owner)
+	if err != nil {
+		return false, fmt.Errorf("heartbeat security sync: %w", err)
+	}
+	n, _ := res.RowsAffected()
+	return n > 0, nil
+}
+
+// Stop releases a running claim, leaving the last good result in place.
+//
+// # Why the state goes BACK rather than to failed
+//
+// Because nothing failed. A sync somebody stopped is a sync that did not
+// happen, and a release that was synced last week still knows what it knew. So
+// a release with a stored result returns to `synced` and one with none returns
+// to "never synced" - the two states that were true before the run started.
+//
+// Reports whether a claim was actually held: a caller pressing Stop on a sync
+// that has just finished should be told so rather than shown a success.
+func (p *PackageSecurity) Stop(ctx context.Context, packageID int64) (bool, error) {
+	res, err := p.db.ExecContext(ctx, p.q(`
+		UPDATE package_security
+		   SET state = CASE WHEN synced_at IS NULL THEN '' ELSE 'synced' END,
+		       started_at = NULL,
+		       heartbeat_at = NULL,
+		       claimed_by = '',
+		       error = ''
+		 WHERE state = 'syncing' AND package_id = ?`), packageID)
+	if err != nil {
+		return false, fmt.Errorf("stop security sync: %w", err)
+	}
+	n, _ := res.RowsAffected()
+	return n > 0, nil
 }
 
 // Complete records a finished sync.
@@ -142,7 +230,8 @@ func (p *PackageSecurity) Complete(ctx context.Context, row PackageSecurityRow) 
 			not_scanned = excluded.not_scanned, unsupported = excluded.unsupported,
 			unavailable = excluded.unavailable, disabled = excluded.disabled,
 			scanned_at = excluded.scanned_at, synced_at = excluded.synced_at,
-			started_at = NULL, fingerprint = excluded.fingerprint, log = excluded.log,
+			started_at = NULL, heartbeat_at = NULL, claimed_by = '',
+			fingerprint = excluded.fingerprint, log = excluded.log,
 			missing = excluded.missing`),
 		row.PackageID, string(row.State), row.Error, row.Provider, row.Repository, roleOr(row.Role),
 		c.Total, c.Fixable,
@@ -168,7 +257,8 @@ func (p *PackageSecurity) Fail(ctx context.Context, packageID int64, reason stri
 		INSERT INTO package_security (package_id, state, error, started_at, log)
 		VALUES (?, 'failed', ?, NULL, ?)
 		ON CONFLICT (package_id) DO UPDATE SET
-			state = 'failed', error = excluded.error, started_at = NULL, log = excluded.log`),
+			state = 'failed', error = excluded.error, started_at = NULL,
+			heartbeat_at = NULL, claimed_by = '', log = excluded.log`),
 		packageID, truncate(reason, 500), encodeSyncLog(log))
 	if err != nil {
 		return fmt.Errorf("record security sync failure: %w", err)
@@ -225,14 +315,26 @@ func (p *PackageSecurity) ForPackages(ctx context.Context, ids []int64) (map[int
 
 // ReleaseAbandoned clears claims held by a process that is no longer running,
 // so a release stuck mid-sync becomes syncable again.
+//
+// A claim that has stopped beating is abandoned however recently it started:
+// that is the whole point of the heartbeat, and waiting `staleAfter` for a
+// process that is provably gone is half an hour of a release saying it is
+// syncing when nothing is.
 func (p *PackageSecurity) ReleaseAbandoned(ctx context.Context, staleAfter time.Duration) (int64, error) {
-	cutoff := securityTime(time.Now().UTC().Add(-staleAfter))
+	now := time.Now().UTC()
+	cutoff := securityTime(now.Add(-staleAfter))
+	beatCutoff := securityTime(now.Add(-security.HeartbeatTimeout))
 	res, err := p.db.ExecContext(ctx, p.q(`
 		UPDATE package_security
 		   SET state = 'failed',
 		       error = 'the sync was interrupted; run it again',
-		       started_at = NULL
-		 WHERE state = 'syncing' AND (started_at IS NULL OR started_at < ?)`), cutoff)
+		       started_at = NULL,
+		       heartbeat_at = NULL,
+		       claimed_by = ''
+		 WHERE state = 'syncing'
+		   AND (started_at IS NULL
+		        OR started_at < ?
+		        OR (heartbeat_at IS NOT NULL AND heartbeat_at < ?))`), cutoff, beatCutoff)
 	if err != nil {
 		return 0, fmt.Errorf("release abandoned security syncs: %w", err)
 	}
@@ -246,7 +348,8 @@ func (p *PackageSecurity) load(ctx context.Context, where string, args ...any) (
 		       total, fixable, critical, high, medium, low, unknown,
 		       fix_critical, fix_high, fix_medium, fix_low, fix_unknown, distinct_total,
 		       artifacts, scanned, not_scanned, unsupported, unavailable, disabled,
-		       scanned_at, synced_at, started_at, fingerprint, COALESCE(log, ''), COALESCE(missing, 0)
+		       scanned_at, synced_at, started_at, fingerprint, COALESCE(log, ''), COALESCE(missing, 0),
+		       COALESCE(claimed_by, ''), heartbeat_at
 		  FROM package_security ` + where)
 
 	rows, err := p.db.QueryContext(ctx, query, args...)
@@ -261,6 +364,7 @@ func (p *PackageSecurity) load(ctx context.Context, where string, args ...any) (
 			r                              PackageSecurityRow
 			state                          string
 			scannedAt, syncedAt, startedAt sql.NullString
+			heartbeatAt                    sql.NullString
 			log                            string
 		)
 		if err := rows.Scan(&r.PackageID, &state, &r.Error, &r.Provider, &r.Repository, &r.Role,
@@ -273,6 +377,7 @@ func (p *PackageSecurity) load(ctx context.Context, where string, args ...any) (
 			&r.Coverage.Artifacts, &r.Coverage.Scanned, &r.Coverage.NotScanned,
 			&r.Coverage.Unsupported, &r.Coverage.Unavailable, &r.Coverage.Disabled,
 			&scannedAt, &syncedAt, &startedAt, &r.Fingerprint, &log, &r.Coverage.Missing,
+			&r.ClaimedBy, &heartbeatAt,
 		); err != nil {
 			return nil, fmt.Errorf("scan package security: %w", err)
 		}
@@ -281,6 +386,7 @@ func (p *PackageSecurity) load(ctx context.Context, where string, args ...any) (
 		r.ScannedAt = parseNullableSecurityTime(scannedAt)
 		r.SyncedAt = parseNullableSecurityTime(syncedAt)
 		r.StartedAt = parseNullableSecurityTime(startedAt)
+		r.HeartbeatAt = parseNullableSecurityTime(heartbeatAt)
 		r.Log = decodeSyncLog(log)
 		out = append(out, r)
 	}

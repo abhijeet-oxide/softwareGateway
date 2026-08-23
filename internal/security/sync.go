@@ -2,12 +2,17 @@ package security
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
+	"os"
+	"regexp"
 	"sort"
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/google/uuid"
 )
 
 // PackageResult is one release's finished sync, in this package's own terms.
@@ -59,14 +64,23 @@ const maxLogEntries = 200
 
 // Recorder is where a sync writes what it found.
 //
-// Three methods and each is a state transition, not a setter. That shape is
-// deliberate: the claim has to be atomic against a second caller, and the
-// failure path has to be distinguishable from the success path by a reader who
-// only ever sees the row.
+// Each method is a state transition, not a setter. That shape is deliberate:
+// the claim has to be atomic against a second caller, and the failure path has
+// to be distinguishable from the success path by a reader who only ever sees
+// the row.
 type Recorder interface {
-	// Claim marks a release as syncing. Returns an error the caller reports as
-	// "already running" when somebody else holds it.
-	Claim(ctx context.Context, packageID int64, staleAfter time.Duration) error
+	// Claim marks a release as syncing, on behalf of the named process.
+	// Returns an error the caller reports as "already running" when somebody
+	// else holds it.
+	Claim(ctx context.Context, packageID int64, owner string, staleAfter time.Duration) error
+	// Heartbeat renews a claim and reports whether it is still held by
+	// `owner`. False means the claim went away - somebody stopped the sync, or
+	// it was taken after this process stopped beating - and the run must stand
+	// down.
+	Heartbeat(ctx context.Context, packageID int64, owner string) (bool, error)
+	// Stop releases a running claim, leaving the last stored result in place.
+	// Reports whether a claim was actually held.
+	Stop(ctx context.Context, packageID int64) (bool, error)
 	// Record stores a finished sync.
 	Record(ctx context.Context, res PackageResult) error
 	// Fail records a sync that gave up, keeping the last good counts. The log
@@ -98,15 +112,35 @@ const (
 	SyncAlreadyRunning SyncStatus = "already_running"
 )
 
-// staleClaimAfter is how long a claim is honoured before it is treated as
-// abandoned.
+// StaleClaimAfter is how long a claim is honoured before it is treated as
+// abandoned, for a sync that is still beating.
 //
 // Generous, because a release of several hundred artifacts against a busy
 // scanner is genuinely slow, and stealing a live claim costs a duplicate query.
-// Finite, because a process that died mid-sync would otherwise leave a release
-// permanently unsyncable, showing a spinner nobody can clear - which is worse
-// than a rare double sync that converges on the same rows.
-const staleClaimAfter = 30 * time.Minute
+// Finite, because a sync that has been going for longer than any sync takes is
+// not going.
+const StaleClaimAfter = 30 * time.Minute
+
+// The heartbeat, which is what tells a running sync from an abandoned one.
+//
+// # Why a claim needs one at all
+//
+// `state = syncing` says a sync was STARTED, and nothing else. A Coordinator
+// killed mid-sync leaves that row exactly as a healthy one leaves it, so every
+// reader was told the sync was running on another Coordinator - for the half
+// hour it took the stale window to expire, on a deployment that has one
+// Coordinator and had just restarted it.
+//
+// A run that is alive says so every HeartbeatInterval. A claim that has not
+// been renewed within HeartbeatTimeout is held by nothing: the interface says
+// the sync was interrupted, and the next claim takes the row.
+//
+// The timeout is several intervals, so a busy process or a slow database costs
+// a late beat rather than a stolen claim.
+const (
+	HeartbeatInterval = 15 * time.Second
+	HeartbeatTimeout  = 90 * time.Second
+)
 
 // Syncer runs vulnerability syncs in the background.
 //
@@ -125,9 +159,23 @@ type Syncer struct {
 	service  *Service
 	recorder Recorder
 	log      *slog.Logger
+	// owner names THIS process in every claim it takes. A restarted
+	// Coordinator is a different owner, which is what lets it tell its
+	// predecessor's abandoned claims from a live one held elsewhere.
+	owner string
+	// beatEvery is how often a running sync renews its claim. A field rather
+	// than the constant so a test can watch a beat without waiting for one.
+	beatEvery time.Duration
 
 	mu       sync.Mutex
-	inFlight map[int64]*SyncProgress
+	inFlight map[int64]*runningSync
+}
+
+// runningSync is one sync this replica is running: what it will say about
+// itself, and the handle that stops it.
+type runningSync struct {
+	progress *SyncProgress
+	cancel   context.CancelFunc
 }
 
 // NewSyncer builds the syncer.
@@ -136,11 +184,26 @@ func NewSyncer(service *Service, recorder Recorder, log *slog.Logger) *Syncer {
 		log = slog.Default()
 	}
 	return &Syncer{
-		service:  service,
-		recorder: recorder,
-		log:      log,
-		inFlight: map[int64]*SyncProgress{},
+		service:   service,
+		recorder:  recorder,
+		log:       log,
+		owner:     processOwner(),
+		beatEvery: HeartbeatInterval,
+		inFlight:  map[int64]*runningSync{},
 	}
+}
+
+// processOwner names this process: host, pid and a random suffix.
+//
+// The suffix matters. Two Coordinators in one pod-per-host deployment restart
+// onto the same host with the same pid often enough that host and pid alone
+// would let a restarted process mistake its predecessor's claim for its own.
+func processOwner() string {
+	host, err := os.Hostname()
+	if err != nil || host == "" {
+		host = "coordinator"
+	}
+	return fmt.Sprintf("%s/%d/%s", host, os.Getpid(), uuid.NewString()[:8])
 }
 
 // SyncProgress is what one running sync will say about itself.
@@ -148,13 +211,42 @@ type SyncProgress struct {
 	mu        sync.Mutex
 	stages    map[string]stagePosition
 	order     []string
-	notes     []string
+	notes     []progressNote
 	log       []SyncLogEntry
 	startedAt time.Time
 	done      bool
 }
 
 type stagePosition struct{ done, total int }
+
+// progressNote is one thing the sync has to say, and how many times it has had
+// to say it.
+type progressNote struct {
+	// shape is the sentence with its numbers removed, which is what makes two
+	// tellings of the same news the same note.
+	shape string
+	text  string
+	count int
+}
+
+// digits matches the numbers that make one recurring sentence look like several.
+var digits = regexp.MustCompile(`\d+`)
+
+// noteShape is a note with its numbers taken out.
+//
+// # The line this exists for
+//
+// "JFrog Xray timed out on 50 artifacts. Retrying as two smaller requests."
+// then "... on 25 artifacts ..." then "... on 7 artifacts ...". Three
+// tellings of one piece of news - the scanner is struggling and the batch is
+// being split - which arrived as three lines, then five, then nine, and read
+// as nine separate problems. They are one problem whose number is going down.
+//
+// So a note replaces the note it is a re-telling of, and carries how many
+// times it has been said. What a watcher sees is one line that updates.
+func noteShape(s string) string {
+	return digits.ReplaceAllString(strings.ToLower(strings.Join(strings.Fields(s), " ")), "#")
+}
 
 // Stage implements Progress.
 func (p *SyncProgress) Stage(name string, done, total int) {
@@ -176,13 +268,35 @@ func (p *SyncProgress) Stage(name string, done, total int) {
 }
 
 // Note implements Progress.
+//
+// A note that re-tells one already here REPLACES it and moves to the end,
+// rather than being appended beside it. See noteShape: the sentence that keeps
+// arriving with a smaller number in it is one situation, and stacking its
+// tellings turns a scanner backing off into what reads as a growing list of
+// failures.
 func (p *SyncProgress) Note(s string) {
+	s = strings.TrimSpace(s)
+	if s == "" {
+		return
+	}
 	p.mu.Lock()
 	defer p.mu.Unlock()
+
+	shape := noteShape(s)
+	for i, existing := range p.notes {
+		if existing.shape != shape {
+			continue
+		}
+		note := progressNote{shape: shape, text: s, count: existing.count + 1}
+		p.notes = append(append(p.notes[:i:i], p.notes[i+1:]...), note)
+		p.appendLocked(LogWarning, s)
+		return
+	}
+
 	if len(p.notes) >= 20 {
 		p.notes = p.notes[1:]
 	}
-	p.notes = append(p.notes, s)
+	p.notes = append(p.notes, progressNote{shape: shape, text: s, count: 1})
 	p.appendLocked(LogWarning, s)
 }
 
@@ -201,8 +315,14 @@ func (p *SyncProgress) appendLocked(level, message string) {
 	if len(message) > 500 {
 		message = message[:497] + "..."
 	}
-	if n := len(p.log); n > 0 && p.log[n-1].Message == message && p.log[n-1].Level == level {
+	// Collapsed on the SHAPE, not on the exact sentence. A batch that keeps
+	// timing out says the same thing about a different number of artifacts
+	// every time, so an equality test left forty lines in a bounded transcript
+	// and pushed out the ones that said what the sync was doing. The latest
+	// telling wins, because the number in it is the current one.
+	if n := len(p.log); n > 0 && p.log[n-1].Level == level && noteShape(p.log[n-1].Message) == noteShape(message) {
 		p.log[n-1].Repeat++
+		p.log[n-1].Message = message
 		p.log[n-1].At = time.Now().UTC()
 		return
 	}
@@ -229,7 +349,17 @@ func (p *SyncProgress) Snapshot() (stages []SyncStage, notes []string, startedAt
 		pos := p.stages[name]
 		stages = append(stages, SyncStage{Name: name, Done: pos.done, Total: pos.total})
 	}
-	return stages, append([]string(nil), p.notes...), p.startedAt, p.done
+	for _, n := range p.notes {
+		// The count travels with the line rather than as a second one. "…
+		// (3 times)" says both that this has been going on and that it is one
+		// thing going on, which two copies of the sentence do not.
+		if n.count > 1 {
+			notes = append(notes, fmt.Sprintf("%s (%d times)", n.text, n.count))
+			continue
+		}
+		notes = append(notes, n.text)
+	}
+	return stages, notes, p.startedAt, p.done
 }
 
 // SyncStage is one phase's position.
@@ -249,16 +379,22 @@ type SyncStage struct {
 // who navigates away must not cancel a sync half way through and leave the row
 // claimed - the whole point of making this a job is that it outlives the page.
 func (s *Syncer) Start(ctx context.Context, req SyncRequest) (SyncStatus, error) {
-	if err := s.recorder.Claim(ctx, req.PackageID, staleClaimAfter); err != nil {
+	if err := s.recorder.Claim(ctx, req.PackageID, s.owner, StaleClaimAfter); err != nil {
 		return SyncAlreadyRunning, err
 	}
 
 	progress := &SyncProgress{stages: map[string]stagePosition{}, startedAt: time.Now()}
+	// Bounded, because an unbounded background job against an unresponsive
+	// scanner is a goroutine that never ends and a row that stays claimed until
+	// the stale sweep notices. Detached from the request's context: a user who
+	// navigates away must not cancel a sync half way through.
+	runCtx, cancel := context.WithTimeout(context.WithoutCancel(context.Background()), StaleClaimAfter)
+
 	s.mu.Lock()
-	s.inFlight[req.PackageID] = progress
+	s.inFlight[req.PackageID] = &runningSync{progress: progress, cancel: cancel}
 	s.mu.Unlock()
 
-	go s.run(req, progress)
+	go s.run(runCtx, cancel, req, progress)
 	return SyncStarted, nil
 }
 
@@ -270,8 +406,11 @@ func (s *Syncer) Start(ctx context.Context, req SyncRequest) (SyncStatus, error)
 func (s *Syncer) Progress(packageID int64) (*SyncProgress, bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	p, ok := s.inFlight[packageID]
-	return p, ok
+	r, ok := s.inFlight[packageID]
+	if !ok {
+		return nil, false
+	}
+	return r.progress, true
 }
 
 // Running reports whether this replica is syncing the release right now.
@@ -280,11 +419,71 @@ func (s *Syncer) Running(packageID int64) bool {
 	return ok
 }
 
-func (s *Syncer) run(req SyncRequest, progress *SyncProgress) {
-	// Bounded, because an unbounded background job against an unresponsive
-	// scanner is a goroutine that never ends and a row that stays claimed until
-	// the stale sweep notices.
-	ctx, cancel := context.WithTimeout(context.WithoutCancel(context.Background()), staleClaimAfter)
+// Cancel stops a running sync, wherever it is running.
+//
+// Two halves, because a sync is two things: a goroutine here and a claim in the
+// database. The claim is released either way - that is what makes a sync
+// stoppable from a Coordinator that is not the one running it, because the run
+// checks on every heartbeat whether it still holds one and stands down when it
+// does not. Cancelling the local context as well is what makes it immediate for
+// the common case where the reader is talking to the replica doing the work.
+//
+// Reports whether anything was actually stopped: pressing Stop on a sync that
+// finished a second ago should say so rather than claim a success.
+func (s *Syncer) Cancel(ctx context.Context, packageID int64) (bool, error) {
+	stopped, err := s.recorder.Stop(ctx, packageID)
+	if err != nil {
+		return false, err
+	}
+
+	s.mu.Lock()
+	run, here := s.inFlight[packageID]
+	s.mu.Unlock()
+	if here {
+		run.progress.Log(LogWarning, "The sync was stopped before it finished.")
+		run.cancel()
+	}
+	return stopped || here, nil
+}
+
+// beat renews the claim until the run ends, and cancels the run if the claim
+// has gone.
+func (s *Syncer) beat(ctx context.Context, cancel context.CancelFunc, packageID int64) {
+	every := s.beatEvery
+	if every <= 0 {
+		every = HeartbeatInterval
+	}
+	ticker := time.NewTicker(every)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			held, err := s.recorder.Heartbeat(ctx, packageID, s.owner)
+			if err != nil {
+				// A database that cannot be reached is not a claim that was
+				// taken away. Losing a beat is what the timeout has slack for,
+				// and abandoning a sync of several hundred artifacts over one
+				// failed UPDATE would be the worse trade.
+				s.log.Warn("could not renew the security sync claim",
+					"package", packageID, "error", err)
+				continue
+			}
+			if !held {
+				s.log.Info("security sync claim released elsewhere; stopping",
+					"package", packageID)
+				cancel()
+				return
+			}
+		}
+	}
+}
+
+func (s *Syncer) run(
+	ctx context.Context, cancel context.CancelFunc, req SyncRequest, progress *SyncProgress,
+) {
 	defer cancel()
 
 	defer func() {
@@ -292,6 +491,11 @@ func (s *Syncer) run(req SyncRequest, progress *SyncProgress) {
 		delete(s.inFlight, req.PackageID)
 		s.mu.Unlock()
 	}()
+
+	// The claim says this process is alive while the work runs. Started before
+	// the work so a scanner that hangs on the first request still keeps the
+	// claim honest.
+	go s.beat(ctx, cancel, req.PackageID)
 
 	progress.Log(LogInfo, fmt.Sprintf(
 		"Sync started. %d artifacts, scanner %s, repository %s.",
@@ -309,11 +513,33 @@ func (s *Syncer) run(req SyncRequest, progress *SyncProgress) {
 		Progress: progress,
 	})
 	if err != nil {
+		// A sync somebody STOPPED is not a sync that failed, and must not
+		// overwrite the state Stop already put back. The release keeps whatever
+		// it knew before the run started, which is the truth: this run did not
+		// happen. A run that hit its own deadline is a failure and falls
+		// through.
+		if errors.Is(ctx.Err(), context.Canceled) {
+			s.log.Info("security sync stopped before it finished",
+				"package", req.PackageID, "label", req.Label)
+			return
+		}
 		s.log.Error("security sync failed", "package", req.PackageID, "label", req.Label, "error", err)
 		progress.Log(LogError, "The sync stopped before it finished: "+err.Error())
-		if ferr := s.recorder.Fail(ctx, req.PackageID, err.Error(), progress.Entries()); ferr != nil {
-			s.log.Error("could not record security sync failure", "package", req.PackageID, "error", ferr)
-		}
+		s.fail(ctx, req.PackageID, err.Error(), progress.Entries())
+		return
+	}
+
+	// STOPPED, but with an answer in hand.
+	//
+	// A provider that turns a cancelled request into "unavailable" reports
+	// rather than an error hands back a complete-looking result full of
+	// nothing - and recording that would mark the release failed, or worse
+	// overwrite good stored counts with a half-finished run's, on the strength
+	// of a stop somebody asked for. The context is the authority on whether
+	// this run is still wanted.
+	if errors.Is(ctx.Err(), context.Canceled) {
+		s.log.Info("security sync stopped before it finished",
+			"package", req.PackageID, "label", req.Label)
 		return
 	}
 
@@ -334,9 +560,7 @@ func (s *Syncer) run(req SyncRequest, progress *SyncProgress) {
 			reason = res.Posture.Reports[0].Message
 		}
 		progress.Log(LogError, reason)
-		if ferr := s.recorder.Fail(ctx, req.PackageID, reason, progress.Entries()); ferr != nil {
-			s.log.Error("could not record disabled scanner", "package", req.PackageID, "error", ferr)
-		}
+		s.fail(ctx, req.PackageID, reason, progress.Entries())
 		return
 	}
 
@@ -357,9 +581,7 @@ func (s *Syncer) run(req SyncRequest, progress *SyncProgress) {
 		s.log.Warn("security sync produced no results",
 			"package", req.PackageID, "label", req.Label, "artifacts", cov.Scannable())
 		progress.Log(LogError, reason)
-		if ferr := s.recorder.Fail(ctx, req.PackageID, reason, progress.Entries()); ferr != nil {
-			s.log.Error("could not record empty security sync", "package", req.PackageID, "error", ferr)
-		}
+		s.fail(ctx, req.PackageID, reason, progress.Entries())
 		return
 	}
 
@@ -373,7 +595,9 @@ func (s *Syncer) run(req SyncRequest, progress *SyncProgress) {
 		"Sync finished. %d of %d images scanned, %d vulnerabilities (%d distinct).",
 		cov.Scanned, cov.Scannable(), res.Posture.Counts.Total, res.Posture.UniqueCounts.Total))
 
-	if err := s.recorder.Record(ctx, PackageResult{
+	writeCtx, done := writeContext(ctx)
+	defer done()
+	if err := s.recorder.Record(writeCtx, PackageResult{
 		PackageID:   req.PackageID,
 		Provider:    res.Provider,
 		Repository:  req.Scope.Repository,
@@ -392,6 +616,26 @@ func (s *Syncer) run(req SyncRequest, progress *SyncProgress) {
 		"scanned", res.Posture.Coverage.Scanned,
 		"vulnerabilities", res.Posture.Counts.Total,
 		"fromCache", res.FromCache, "fetched", res.Fetched)
+}
+
+// fail records a run that gave up, on a context of its own.
+func (s *Syncer) fail(ctx context.Context, packageID int64, reason string, log []SyncLogEntry) {
+	writeCtx, done := writeContext(ctx)
+	defer done()
+	if err := s.recorder.Fail(writeCtx, packageID, reason, log); err != nil {
+		s.log.Error("could not record security sync failure", "package", packageID, "error", err)
+	}
+}
+
+// writeContext detaches the write that records an outcome from the run's own
+// deadline.
+//
+// A sync that ran out of time has an expired context, and recording the failure
+// through it would fail too - leaving the row claimed and the reader watching a
+// sync that stopped half an hour ago. The outcome is the one thing that must
+// still be written when the work has been abandoned.
+func writeContext(ctx context.Context) (context.Context, context.CancelFunc) {
+	return context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
 }
 
 // messageGroup is one thing the scanner said, and how many artifacts it said it

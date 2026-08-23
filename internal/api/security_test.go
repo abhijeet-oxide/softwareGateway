@@ -54,13 +54,15 @@ type fakeSyncer struct {
 	lastScope     security.Scope
 	// leaveRunning holds the row in `syncing` instead of completing it.
 	leaveRunning bool
+	// cancelled counts Stop requests.
+	cancelled int
 	// storeHandle lets the fake write through the real store, so the read
 	// paths under test are the production ones.
 	storeHandle store.Store
 }
 
 func (f *fakeSyncer) Start(ctx context.Context, req security.SyncRequest) (security.SyncStatus, error) {
-	if err := f.packages.Claim(ctx, req.PackageID, time.Minute); err != nil {
+	if err := f.packages.Claim(ctx, req.PackageID, "test", time.Minute); err != nil {
 		return security.SyncAlreadyRunning, err
 	}
 	f.started++
@@ -103,6 +105,11 @@ func (f *fakeSyncer) Start(ctx context.Context, req security.SyncRequest) (secur
 
 func (f *fakeSyncer) Progress(int64) (*security.SyncProgress, bool) { return nil, false }
 func (f *fakeSyncer) Running(int64) bool                            { return false }
+
+func (f *fakeSyncer) Cancel(ctx context.Context, packageID int64) (bool, error) {
+	f.cancelled++
+	return f.packages.Stop(ctx, packageID)
+}
 
 func scannedReport(findings ...security.Finding) security.Report {
 	at := time.Date(2026, 6, 29, 1, 14, 0, 0, time.UTC)
@@ -282,6 +289,46 @@ func TestSyncIsClaimedOnce(t *testing.T) {
 	h.get("/api/v1/products/vendor-a/packages/25.7.2131/security", &resp)
 	if resp.State != "syncing" || resp.Sync.State != "syncing" {
 		t.Errorf("state = %q / %q, want syncing", resp.State, resp.Sync.State)
+	}
+}
+
+// A sync somebody started can be stopped, and the release goes back to where it
+// was rather than being marked failed: nothing failed, the run did not happen.
+func TestSyncCanBeStopped(t *testing.T) {
+	h := newSecurityHarness(t)
+	h.seedPackage("25.7.2131", digestA)
+	h.syncer.leaveRunning = true
+
+	if code := h.post("/api/v1/products/vendor-a/packages/25.7.2131:syncSecurity", `{}`, nil); code != http.StatusAccepted {
+		t.Fatal("the sync did not start")
+	}
+
+	var stop v1.CancelSecuritySyncResponse
+	if code := h.post("/api/v1/products/vendor-a/packages/25.7.2131:cancelSecuritySync", `{}`, &stop); code != http.StatusOK {
+		t.Fatalf("stopping the sync: got %d", code)
+	}
+	if !stop.Stopped {
+		t.Error("Stopped is false for a sync that was running")
+	}
+	if stop.Sync.State == "syncing" {
+		t.Error("the release still reports itself as syncing after being stopped")
+	}
+
+	// And it can be synced again at once - the claim is gone, not waiting out a
+	// stale window.
+	var again v1.SyncSecurityResponse
+	if code := h.post("/api/v1/products/vendor-a/packages/25.7.2131:syncSecurity", `{}`, &again); code != http.StatusAccepted {
+		t.Fatalf("re-syncing after a stop: got %d", code)
+	}
+	if !again.Started {
+		t.Error("a stopped release refused a new sync")
+	}
+
+	// Stopping again is not a failure: there is simply nothing to stop.
+	var idle v1.CancelSecuritySyncResponse
+	h.syncer.leaveRunning = false
+	if code := h.post("/api/v1/products/vendor-a/packages/25.7.2131:cancelSecuritySync", `{}`, &idle); code != http.StatusOK {
+		t.Fatalf("stopping an idle release: got %d", code)
 	}
 }
 

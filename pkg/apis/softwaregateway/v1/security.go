@@ -52,6 +52,9 @@ type SecurityCoverage struct {
 	Unsupported int `json:"unsupported"`
 	Unavailable int `json:"unavailable"`
 	Disabled    int `json:"disabled"`
+	// Missing is artifacts that are not in the scanned repository at all,
+	// which is a transfer to run rather than a scan to wait for.
+	Missing int `json:"missing"`
 	// Scannable is the denominator a percentage should use: it excludes
 	// artifacts a scanner could never have an opinion about, such as
 	// signatures, which would otherwise pin every release below full coverage.
@@ -119,11 +122,17 @@ type SecurityFinding struct {
 	Policy   string `json:"policy,omitempty"`
 }
 
+// SecurityStatusNotFound is a report status the SCANNER never returns: it is
+// the platform's own answer to "the image is not in the repository", which Xray
+// reports with the same sentence it uses for one it has not indexed yet.
+const SecurityStatusNotFound = "not_found"
+
 // SecurityReport is one artifact's security state.
 type SecurityReport struct {
 	Artifact SecurityArtifact `json:"artifact"`
 
-	// Status is scanned | not_scanned | unsupported | disabled | unavailable.
+	// Status is scanned | not_scanned | not_found | unsupported | disabled |
+	// unavailable.
 	//
 	// A client that renders Findings without reading this has written the bug
 	// the whole feature exists to prevent: "scanned and clean" and "nobody
@@ -139,6 +148,9 @@ type SecurityReport struct {
 	ScannedAt   string `json:"scannedAt,omitempty"`
 	RetrievedAt string `json:"retrievedAt,omitempty"`
 	FromCache   bool   `json:"fromCache,omitempty"`
+	// ScanURL links to the scanner's own view of this artifact, built from the
+	// configured platform host and repository.
+	ScanURL string `json:"scanUrl,omitempty"`
 }
 
 // SecuritySyncStatus is where a release's vulnerability sync has got to.
@@ -178,6 +190,25 @@ type SecuritySyncStatus struct {
 	// and State remains authoritative.
 	Stages []SecurityProgressStage `json:"stages,omitempty"`
 	Notes  []string                `json:"notes,omitempty"`
+
+	// Log is the transcript of the run: live while it is running here, and the
+	// stored one from the last run otherwise.
+	//
+	// A sync is a job, and a job whose only durable output is one `error`
+	// sentence is one nobody can ask anything about afterwards - which is
+	// exactly the position a reader is in when a release comes back 4% scanned.
+	Log []SecurityLogEntry `json:"log,omitempty"`
+}
+
+// SecurityLogEntry is one line of a sync's transcript.
+type SecurityLogEntry struct {
+	At string `json:"at,omitempty"`
+	// Level is info | warning | error.
+	Level   string `json:"level"`
+	Message string `json:"message"`
+	// Repeat counts identical consecutive lines, so a scanner that timed out
+	// forty times costs one line and says forty.
+	Repeat int `json:"repeat,omitempty"`
 }
 
 // SyncSecurityResponse is POST

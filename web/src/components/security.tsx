@@ -1,10 +1,10 @@
 import { useEffect, useState } from 'react'
 import type { ReactNode } from 'react'
-import { Alert, Button, Dropdown, Progress, Space, Tag, Tooltip, Typography } from 'antd'
+import { Alert, Button, Drawer, Dropdown, Progress, Space, Tag, Tooltip, Typography } from 'antd'
 import { formatRelative } from '../domain/format'
 import {
-  CheckCircleOutlined, DownloadOutlined, ExclamationCircleOutlined,
-  MinusCircleOutlined, QuestionCircleOutlined, SyncOutlined, WarningOutlined,
+  CheckCircleOutlined, CopyOutlined, DownloadOutlined, ExclamationCircleOutlined,
+  FileTextOutlined, MinusCircleOutlined, QuestionCircleOutlined, SyncOutlined, WarningOutlined,
 } from '@ant-design/icons'
 import { mono, palette, semantic, severity as severityColour, severitySurface, verdict as verdictColour } from '../theme'
 import { SEVERITIES } from '../api/types'
@@ -261,7 +261,8 @@ export function VulnerabilityCell({
 
 const STATUS_LABEL: Record<ScanStatus, string> = {
   scanned: 'Scanned',
-  not_scanned: 'Not scanned',
+  not_scanned: 'Not indexed',
+  not_found: 'Not in JFrog',
   unsupported: 'Not applicable',
   disabled: 'Xray disabled',
   unavailable: 'Unavailable',
@@ -274,6 +275,10 @@ export function ScanStatusTag({ status }: { status: ScanStatus }) {
       return <Tag color="success">{STATUS_LABEL.scanned}</Tag>
     case 'not_scanned':
       return <Tag color="warning">{STATUS_LABEL.not_scanned}</Tag>
+    // Not a scanning problem at all: the image was never shipped here, so it
+    // gets its own word rather than being rounded to "not scanned".
+    case 'not_found':
+      return <Tag color="default">{STATUS_LABEL.not_found}</Tag>
     case 'unavailable':
       return <Tag color="error">{STATUS_LABEL.unavailable}</Tag>
     case 'disabled':
@@ -316,20 +321,23 @@ export function CoverageMeter({ coverage }: { coverage: SecurityCoverage }) {
  * qualify what follows. A `partial` release with a warning underneath the
  * totals is a release whose totals get quoted.
  */
-export function SecurityStateNotice({ state, message, onRefresh }: {
+export function SecurityStateNotice({ state, message, onRefresh, onShowProblems, problemCount }: {
   state: SecurityState
   message?: string
   onRefresh?: () => void
+  /** Opens the list of what the scanner would not answer for, and why. */
+  onShowProblems?: () => void
+  problemCount?: number
 }) {
   if (state === 'ok') return null
 
   const config: Record<Exclude<SecurityState, 'ok'>, { type: 'warning' | 'error' | 'info'; title: string }> = {
-    partial: { type: 'warning', title: 'Some artifacts have not been scanned' },
-    unavailable: { type: 'error', title: 'Security data could not be retrieved' },
-    disabled: { type: 'info', title: 'No vulnerability scanner is configured' },
-    not_synced: { type: 'info', title: 'Vulnerabilities have not been synced yet' },
-    syncing: { type: 'info', title: 'Syncing vulnerabilities' },
-    stale: { type: 'warning', title: 'The last sync failed' },
+    partial: { type: 'warning', title: 'Partially Scanned' },
+    unavailable: { type: 'error', title: 'No results available' },
+    disabled: { type: 'info', title: 'No scanner configured' },
+    not_synced: { type: 'info', title: 'Not synced' },
+    syncing: { type: 'info', title: 'Sync in progress' },
+    stale: { type: 'warning', title: 'Last sync failed' },
   }
   const { type, title } = config[state]
 
@@ -344,11 +352,21 @@ export function SecurityStateNotice({ state, message, onRefresh }: {
           <span>{message}</span>
           {/* Said plainly, because it is the single most common misreading. */}
           <Typography.Text type="secondary">
-            An artifact with no scan result is not the same as an artifact with no vulnerabilities.
+            An image with no scan result is not the same as an image with no vulnerabilities.
           </Typography.Text>
+          {/*
+            The way OUT of the banner. It named a number and then offered a
+            button that ran the whole thing again, which is a page telling
+            somebody their sync went wrong and refusing to say which images.
+          */}
+          {onShowProblems && (problemCount ?? 0) > 0 && (
+            <Button type="link" size="small" style={{ padding: 0, height: 'auto' }} onClick={onShowProblems}>
+              View details
+            </Button>
+          )}
         </Space>
       }
-      action={onRefresh && <Button size="small" onClick={onRefresh}>Try again</Button>}
+      action={onRefresh && <Button size="small" onClick={onRefresh}>Sync again</Button>}
     />
   )
 }
@@ -561,8 +579,8 @@ export function SecurityProgressPanel({ sync }: { sync: SecuritySyncStatus }) {
           <SyncOutlined spin style={{ color: palette.primary }} />
           <Typography.Text strong>
             {total > 0
-              ? `Retrieving results for ${total.toLocaleString()} artifacts from ${scannerName(sync)}`
-              : 'Resolving release artifacts'}
+              ? `Retrieving results for ${total.toLocaleString()} images from ${scannerName(sync)}`
+              : 'Resolving the release'}
           </Typography.Text>
         </Space>
         {elapsed && (
@@ -580,7 +598,7 @@ export function SecurityProgressPanel({ sync }: { sync: SecuritySyncStatus }) {
         <Space size={16} wrap style={{ marginTop: 4 }}>
           <Typography.Text type="secondary" style={{ fontSize: 12 }}>
             {total > 0
-              ? `${done.toLocaleString()} of ${total.toLocaleString()} artifacts`
+              ? `${done.toLocaleString()} of ${total.toLocaleString()} images`
               : 'Preparing'}
           </Typography.Text>
           {cached && cached.done > 0 && (
@@ -596,7 +614,7 @@ export function SecurityProgressPanel({ sync }: { sync: SecuritySyncStatus }) {
           */}
           {failing && failing.done > 0 && (
             <Typography.Text style={{ fontSize: 12, color: semantic.error }}>
-              {failing.done.toLocaleString()} failed
+              {failing.done.toLocaleString()} not retrieved
             </Typography.Text>
           )}
           {sync.repository && (
@@ -711,6 +729,122 @@ export function SyncedAgo({ sync }: { sync: SecuritySyncStatus }) {
       {sync.repository && ` · ${sync.repository}`}
       {` · synced ${formatRelative(sync.syncedAt)}`}
     </Typography.Text>
+  )
+}
+
+// ---------------------------------------------------------------------------
+// The sync's own log
+// ---------------------------------------------------------------------------
+
+const LOG_COLOUR: Record<string, string> = {
+  error: semantic.error,
+  warning: semantic.warning,
+  info: semantic.neutral,
+}
+
+/**
+ * The transcript of the sync that produced what is on screen.
+ *
+ * # Why a job needs one at all
+ *
+ * A sync is a job that takes minutes, talks to something outside this platform
+ * and half-succeeds routinely. Everything it learned used to be reduced, at the
+ * end, to a state and some counts: "11 of 261 scanned". A reader looking at
+ * that has no way to ask what happened to the other 250, and the only offer on
+ * the screen was to run the whole thing again.
+ *
+ * So the run writes down what it did and it is kept with the result. Grouped
+ * rather than per artifact - 250 failures are three sentences, and a log with
+ * 250 lines in it is one nobody reads.
+ */
+export function SyncLogButton({ sync, size = 'middle' }: {
+  sync: SecuritySyncStatus
+  size?: 'small' | 'middle'
+}) {
+  const [open, setOpen] = useState(false)
+  const entries = sync.log ?? []
+  const running = sync.state === 'syncing'
+
+  if (entries.length === 0 && !running) {
+    return null
+  }
+
+  const plain = entries
+    .map((e) => `${e.at ? new Date(e.at).toISOString() : ''} [${e.level}] ${e.message}`
+      + (e.repeat ? ` (x${e.repeat + 1})` : ''))
+    .join('\n')
+
+  return (
+    <>
+      <Button size={size} icon={<FileTextOutlined />} onClick={() => setOpen(true)}>
+        Sync log
+      </Button>
+      <Drawer
+        title="Vulnerability sync log"
+        width={720}
+        open={open}
+        onClose={() => setOpen(false)}
+        extra={
+          <Button
+            size="small"
+            icon={<CopyOutlined />}
+            onClick={() => void navigator.clipboard?.writeText(plain)}
+          >
+            Copy
+          </Button>
+        }
+      >
+        <Space direction="vertical" size={12} style={{ width: '100%' }}>
+          <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+            {running
+              ? 'This sync is running. The log updates as it goes.'
+              : sync.syncedAt
+                ? `From the run that finished ${formatRelative(sync.syncedAt)}.`
+                : 'From the last run.'}
+          </Typography.Text>
+
+          {entries.length === 0
+            ? (
+              <Typography.Text type="secondary">
+                Nothing has been written yet. Lines appear as the sync reaches each stage.
+              </Typography.Text>
+            )
+            : entries.map((e, i) => (
+              <div
+                key={`${e.at ?? ''}-${i}`}
+                style={{
+                  display: 'flex', gap: 10, alignItems: 'baseline',
+                  paddingBottom: 8, borderBottom: '1px solid #F0F0F0',
+                }}
+              >
+                <Typography.Text
+                  type="secondary"
+                  style={{ fontFamily: mono, fontSize: 11, whiteSpace: 'nowrap' }}
+                >
+                  {e.at ? new Date(e.at).toLocaleTimeString() : '--:--:--'}
+                </Typography.Text>
+                <span
+                  aria-hidden
+                  style={{
+                    display: 'inline-block', width: 8, height: 8, borderRadius: '50%',
+                    background: LOG_COLOUR[e.level] ?? semantic.neutral, flex: '0 0 auto',
+                  }}
+                />
+                <Typography.Text
+                  style={{ color: e.level === 'error' ? semantic.error : undefined }}
+                >
+                  {e.message}
+                  {e.repeat ? (
+                    <Typography.Text type="secondary" style={{ fontSize: 11 }}>
+                      {' '}(x{e.repeat + 1})
+                    </Typography.Text>
+                  ) : null}
+                </Typography.Text>
+              </div>
+            ))}
+        </Space>
+      </Drawer>
+    </>
   )
 }
 

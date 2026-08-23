@@ -236,6 +236,8 @@ type ScannedRepository struct {
 	Name       string
 	Registry   string
 	Repository string
+	// XrayEndpoint is the platform base URL override, where one is configured.
+	XrayEndpoint string
 }
 
 // SecurityRepositoryFor chooses which configured repository to ask about a
@@ -309,7 +311,7 @@ func securityCandidates(p *product.Product) []ScannedRepository {
 		if t.IsEnabled() && t.Type.IsJFrog() && product.XrayIsEnabled(t.XrayEnabled) {
 			out = append(out, ScannedRepository{
 				Role: product.RoleTarget, Name: t.Name,
-				Registry: t.Registry, Repository: t.Repository,
+				Registry: t.Registry, Repository: t.Repository, XrayEndpoint: t.XrayEndpoint,
 			})
 		}
 	}
@@ -325,6 +327,7 @@ func securityCandidates(p *product.Product) []ScannedRepository {
 		}
 		out = append(out, ScannedRepository{
 			Role: product.RoleSource, Name: s.Name, Registry: s.Registry, Repository: repo,
+			XrayEndpoint: s.XrayEndpoint,
 		})
 	}
 	return out

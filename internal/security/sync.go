@@ -4,6 +4,8 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"sort"
+	"strings"
 	"sync"
 	"time"
 )
@@ -22,7 +24,38 @@ type PackageResult struct {
 
 	Posture     Posture
 	Fingerprint string
+	// Log is the run's transcript, stored with the result so the question
+	// "what happened during that sync" survives the process that answered it.
+	Log []SyncLogEntry
 }
+
+// SyncLogEntry is one line of a sync's transcript.
+//
+// Levels rather than prose, because the reader of a two-hundred-line log is
+// looking for the lines that matter and a transcript that cannot be skimmed is
+// one nobody opens twice.
+type SyncLogEntry struct {
+	At time.Time `json:"at"`
+	// Level is info | warning | error.
+	Level   string `json:"level"`
+	Message string `json:"message"`
+	// Repeat counts identical consecutive lines. A release whose scanner is
+	// timing out produces the same sentence forty times, and forty copies of it
+	// push the line that says what started out of a bounded log.
+	Repeat int `json:"repeat,omitempty"`
+}
+
+// Log levels.
+const (
+	LogInfo    = "info"
+	LogWarning = "warning"
+	LogError   = "error"
+)
+
+// maxLogEntries bounds one sync's transcript. Generous enough to hold a run's
+// worth of distinct events, small enough that it is kilobytes in a row that is
+// read whole on every page render.
+const maxLogEntries = 200
 
 // Recorder is where a sync writes what it found.
 //
@@ -36,8 +69,10 @@ type Recorder interface {
 	Claim(ctx context.Context, packageID int64, staleAfter time.Duration) error
 	// Record stores a finished sync.
 	Record(ctx context.Context, res PackageResult) error
-	// Fail records a sync that gave up, keeping the last good counts.
-	Fail(ctx context.Context, packageID int64, reason string) error
+	// Fail records a sync that gave up, keeping the last good counts. The log
+	// is what makes the one-sentence reason answerable: it is the failure that
+	// most needs a transcript and the one that has nothing else to leave.
+	Fail(ctx context.Context, packageID int64, reason string, log []SyncLogEntry) error
 }
 
 // SyncRequest is one release's sync.
@@ -114,6 +149,7 @@ type SyncProgress struct {
 	stages    map[string]stagePosition
 	order     []string
 	notes     []string
+	log       []SyncLogEntry
 	startedAt time.Time
 	done      bool
 }
@@ -147,6 +183,42 @@ func (p *SyncProgress) Note(s string) {
 		p.notes = p.notes[1:]
 	}
 	p.notes = append(p.notes, s)
+	p.appendLocked(LogWarning, s)
+}
+
+// Log adds one line to the transcript.
+func (p *SyncProgress) Log(level, message string) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.appendLocked(level, message)
+}
+
+func (p *SyncProgress) appendLocked(level, message string) {
+	message = strings.TrimSpace(message)
+	if message == "" {
+		return
+	}
+	if len(message) > 500 {
+		message = message[:497] + "..."
+	}
+	if n := len(p.log); n > 0 && p.log[n-1].Message == message && p.log[n-1].Level == level {
+		p.log[n-1].Repeat++
+		p.log[n-1].At = time.Now().UTC()
+		return
+	}
+	if len(p.log) >= maxLogEntries {
+		// The oldest line goes, never the first: "this sync started against X
+		// with N artifacts" is the line every other line is read against.
+		p.log = append(p.log[:1], p.log[2:]...)
+	}
+	p.log = append(p.log, SyncLogEntry{At: time.Now().UTC(), Level: level, Message: message})
+}
+
+// Entries returns a copy of the transcript so far.
+func (p *SyncProgress) Entries() []SyncLogEntry {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return append([]SyncLogEntry(nil), p.log...)
 }
 
 // Snapshot returns a copy safe to serialize.
@@ -221,6 +293,10 @@ func (s *Syncer) run(req SyncRequest, progress *SyncProgress) {
 		s.mu.Unlock()
 	}()
 
+	progress.Log(LogInfo, fmt.Sprintf(
+		"Sync started. %d artifacts, scanner %s, repository %s.",
+		len(req.Artifacts), providerLabel(req.Scope.Provider), req.Scope.Repository))
+
 	res, err := s.service.Posture(ctx, Request{
 		Scope:     req.Scope,
 		Artifacts: req.Artifacts,
@@ -234,10 +310,19 @@ func (s *Syncer) run(req SyncRequest, progress *SyncProgress) {
 	})
 	if err != nil {
 		s.log.Error("security sync failed", "package", req.PackageID, "label", req.Label, "error", err)
-		if ferr := s.recorder.Fail(ctx, req.PackageID, err.Error()); ferr != nil {
+		progress.Log(LogError, "The sync stopped before it finished: "+err.Error())
+		if ferr := s.recorder.Fail(ctx, req.PackageID, err.Error(), progress.Entries()); ferr != nil {
 			s.log.Error("could not record security sync failure", "package", req.PackageID, "error", ferr)
 		}
 		return
+	}
+
+	// Every distinct thing the scanner said, with how many artifacts it said it
+	// about. This is the whole answer to "why is my release only 4% scanned",
+	// and until it was written down the interface could say the number and
+	// never the reason.
+	for _, group := range groupMessages(res.Posture.Reports) {
+		progress.Log(group.level, group.line())
 	}
 
 	// A sync that reached the scanner and was told "off" is not a success with
@@ -248,7 +333,8 @@ func (s *Syncer) run(req SyncRequest, progress *SyncProgress) {
 		if len(res.Posture.Reports) > 0 && res.Posture.Reports[0].Message != "" {
 			reason = res.Posture.Reports[0].Message
 		}
-		if ferr := s.recorder.Fail(ctx, req.PackageID, reason); ferr != nil {
+		progress.Log(LogError, reason)
+		if ferr := s.recorder.Fail(ctx, req.PackageID, reason, progress.Entries()); ferr != nil {
 			s.log.Error("could not record disabled scanner", "package", req.PackageID, "error", ferr)
 		}
 		return
@@ -270,13 +356,23 @@ func (s *Syncer) run(req SyncRequest, progress *SyncProgress) {
 		}
 		s.log.Warn("security sync produced no results",
 			"package", req.PackageID, "label", req.Label, "artifacts", cov.Scannable())
-		if ferr := s.recorder.Fail(ctx, req.PackageID, reason); ferr != nil {
+		progress.Log(LogError, reason)
+		if ferr := s.recorder.Fail(ctx, req.PackageID, reason, progress.Entries()); ferr != nil {
 			s.log.Error("could not record empty security sync", "package", req.PackageID, "error", ferr)
 		}
 		return
 	}
 
 	ReportStage(progress, StageCorrelating, len(res.Posture.Reports), len(res.Posture.Reports))
+	cov := res.Posture.Coverage
+	level := LogInfo
+	if !cov.Complete() {
+		level = LogWarning
+	}
+	progress.Log(level, fmt.Sprintf(
+		"Sync finished. %d of %d images scanned, %d vulnerabilities (%d distinct).",
+		cov.Scanned, cov.Scannable(), res.Posture.Counts.Total, res.Posture.UniqueCounts.Total))
+
 	if err := s.recorder.Record(ctx, PackageResult{
 		PackageID:   req.PackageID,
 		Provider:    res.Provider,
@@ -284,6 +380,7 @@ func (s *Syncer) run(req SyncRequest, progress *SyncProgress) {
 		Role:        req.Scope.Role,
 		Posture:     res.Posture,
 		Fingerprint: res.Fingerprint,
+		Log:         progress.Entries(),
 	}); err != nil {
 		s.log.Error("could not record security sync", "package", req.PackageID, "error", err)
 		return
@@ -297,9 +394,95 @@ func (s *Syncer) run(req SyncRequest, progress *SyncProgress) {
 		"fromCache", res.FromCache, "fetched", res.Fetched)
 }
 
+// messageGroup is one thing the scanner said, and how many artifacts it said it
+// about.
+type messageGroup struct {
+	status  Status
+	message string
+	count   int
+	level   string
+}
+
+func (g messageGroup) line() string {
+	noun := "artifacts"
+	if g.count == 1 {
+		noun = "artifact"
+	}
+	return fmt.Sprintf("%d %s. %s", g.count, noun, g.message)
+}
+
+// groupMessages collapses a release's reports into the distinct things that
+// went wrong, worst first and largest first.
+//
+// # Why grouped
+//
+// A release of 261 artifacts against a struggling scanner produces 261
+// messages and about three sentences. Logging them one per artifact is a
+// transcript nobody reads and a page that cannot render; logging the three
+// sentences with their counts is the same information in three lines, and it is
+// the form somebody can act on: "132 artifacts: Xray could not be reached" is a
+// network problem, "150 artifacts: not indexed in Xray" is an indexing one, and
+// they have nothing to do with each other.
+func groupMessages(reports []Report) []messageGroup {
+	type key struct {
+		status  Status
+		message string
+	}
+	counts := map[key]int{}
+	for _, r := range reports {
+		if r.Status == StatusScanned || strings.TrimSpace(r.Message) == "" {
+			continue
+		}
+		counts[key{r.Status, r.Message}]++
+	}
+
+	out := make([]messageGroup, 0, len(counts))
+	for k, n := range counts {
+		level := LogWarning
+		if k.status == StatusUnavailable {
+			level = LogError
+		}
+		if k.status == StatusUnsupported {
+			level = LogInfo
+		}
+		out = append(out, messageGroup{status: k.status, message: k.message, count: n, level: level})
+	}
+	sort.SliceStable(out, func(i, j int) bool {
+		if out[i].level != out[j].level {
+			return logRank(out[i].level) > logRank(out[j].level)
+		}
+		if out[i].count != out[j].count {
+			return out[i].count > out[j].count
+		}
+		return out[i].message < out[j].message
+	})
+	return out
+}
+
+func logRank(level string) int {
+	switch level {
+	case LogError:
+		return 2
+	case LogWarning:
+		return 1
+	default:
+		return 0
+	}
+}
+
+// providerLabel is the scanner's name as a person writes it.
+func providerLabel(provider string) string {
+	if provider == "jfrog-xray" {
+		return "JFrog Xray"
+	}
+	if provider == "" {
+		return "the configured scanner"
+	}
+	return provider
+}
+
 // firstMessage is whatever the provider said about the first artifact it could
 // not answer for.
-//
 // One message rather than all of them: a release of three hundred artifacts
 // against an unreachable scanner produces three hundred identical sentences,
 // and the useful part is the sentence, not the count.

@@ -60,7 +60,7 @@ func (s *Security) LoadSummaries(ctx context.Context, scope security.Scope, refs
 			SELECT artifact_ref, status, message, provider,
 			       total, fixable, critical, high, medium, low, unknown,
 			       fix_critical, fix_high, fix_medium, fix_low, fix_unknown,
-			       scanned_at, retrieved_at
+			       scanned_at, retrieved_at, missing
 			  FROM security_scans
 			 WHERE product = ? AND repository = ? AND provider = ?
 			   AND artifact_ref IN (` + strings.Join(placeholders, ",") + `)
@@ -163,6 +163,23 @@ func (s *Security) Save(ctx context.Context, scope security.Scope, reports []sec
 		if r.Status == security.StatusDisabled {
 			continue
 		}
+		// An artifact the scanner would not ANSWER for is a fact about this
+		// attempt, and these rows are shared by every release holding the same
+		// artifact. Writing it over a stored result destroyed the answer other
+		// releases were reading: a busy Xray returned 209 unavailable during
+		// one release's sync, and a second release's page - whose own summary
+		// still said 241 vulnerabilities - went to an empty table, because its
+		// artifacts' counts and findings had just been replaced with nothing.
+		//
+		// So a failure fills a gap and never overwrites: an artifact with no
+		// stored result gets a row saying the scanner would not answer, and one
+		// with a result keeps it until the summary TTL expires it.
+		if r.Status == security.StatusUnavailable {
+			if err := s.saveUnavailable(ctx, tx, scope, r, now.Add(summaryTTL)); err != nil {
+				return err
+			}
+			continue
+		}
 		scanID, err := s.saveScan(ctx, tx, scope, r, now.Add(summaryTTL))
 		if err != nil {
 			return err
@@ -177,6 +194,36 @@ func (s *Security) Save(ctx context.Context, scope security.Scope, reports []sec
 		}
 	}
 	return tx.Commit()
+}
+
+// saveUnavailable records a scanner failure WITHOUT disturbing a stored result.
+//
+// DO NOTHING rather than DO UPDATE: see the argument in Save. The row is worth
+// writing when there is nothing there - a page that says "the scanner would not
+// answer for this" beats one that says the artifact has never been synced - and
+// is never worth writing over an answer somebody already has.
+func (s *Security) saveUnavailable(
+	ctx context.Context, tx *sql.Tx, scope security.Scope, r security.Report, expires time.Time,
+) error {
+	provider := r.Provider
+	if provider == "" {
+		provider = scope.Provider
+	}
+	_, err := tx.ExecContext(ctx, s.q(`
+		INSERT INTO security_scans (
+			product, repository, role, provider,
+			artifact_ref, artifact_key, artifact_tag, artifact_kind, artifact_repo,
+			status, message, scanned_at, retrieved_at, fingerprint, expires_at)
+		VALUES (?,?,?,?, ?,?,?,?,?, ?,?, ?,?,?,?)
+		ON CONFLICT (product, repository, provider, artifact_ref) DO NOTHING`),
+		scope.Product, scope.Repository, roleOr(scope.Role), provider,
+		r.Artifact.Ref(), r.Artifact.ArtifactKey(), r.Artifact.Tag, r.Artifact.Kind, r.Artifact.Repository,
+		string(r.Status), r.Message,
+		timeOrNil(r.ScannedAt), securityTime(r.RetrievedAt), fingerprintOf(r), securityTime(expires))
+	if err != nil {
+		return fmt.Errorf("save unavailable security scan: %w", err)
+	}
+	return nil
 }
 
 // saveScan upserts one artifact's summary row and returns its id.
@@ -197,8 +244,8 @@ func (s *Security) saveScan(ctx context.Context, tx *sql.Tx, scope security.Scop
 			status, message,
 			total, fixable, critical, high, medium, low, unknown,
 			fix_critical, fix_high, fix_medium, fix_low, fix_unknown,
-			scanned_at, retrieved_at, fingerprint, expires_at)
-		VALUES (?,?,?,?, ?,?,?,?,?, ?,?, ?,?,?,?,?,?,?, ?,?,?,?,?, ?,?,?,?)
+			scanned_at, retrieved_at, fingerprint, expires_at, missing)
+		VALUES (?,?,?,?, ?,?,?,?,?, ?,?, ?,?,?,?,?,?,?, ?,?,?,?,?, ?,?,?,?,?)
 		ON CONFLICT (product, repository, provider, artifact_ref) DO UPDATE SET
 			role = excluded.role,
 			artifact_key = excluded.artifact_key,
@@ -216,7 +263,8 @@ func (s *Security) saveScan(ctx context.Context, tx *sql.Tx, scope security.Scop
 			scanned_at = excluded.scanned_at,
 			retrieved_at = excluded.retrieved_at,
 			fingerprint = excluded.fingerprint,
-			expires_at = excluded.expires_at`),
+			expires_at = excluded.expires_at,
+			missing = excluded.missing`),
 		scope.Product, scope.Repository, roleOr(scope.Role), provider,
 		r.Artifact.Ref(), r.Artifact.ArtifactKey(), r.Artifact.Tag, r.Artifact.Kind, r.Artifact.Repository,
 		string(r.Status), r.Message,
@@ -224,7 +272,7 @@ func (s *Security) saveScan(ctx context.Context, tx *sql.Tx, scope security.Scop
 		c.BySeverity.Critical, c.BySeverity.High, c.BySeverity.Medium, c.BySeverity.Low, c.BySeverity.Unknown,
 		c.FixableBySeverity.Critical, c.FixableBySeverity.High, c.FixableBySeverity.Medium,
 		c.FixableBySeverity.Low, c.FixableBySeverity.Unknown,
-		timeOrNil(r.ScannedAt), securityTime(r.RetrievedAt), fingerprintOf(r), securityTime(expires))
+		timeOrNil(r.ScannedAt), securityTime(r.RetrievedAt), fingerprintOf(r), securityTime(expires), r.Missing)
 	if err != nil {
 		return 0, fmt.Errorf("save security scan: %w", err)
 	}
@@ -610,6 +658,7 @@ func scanSummaryRows(rows *sql.Rows, into map[string]security.Report) error {
 			c                     security.Counts
 			scannedAt             sql.NullString
 			retrievedAt           string
+			missing               bool
 		)
 		if err := rows.Scan(&ref, &status, &message, &provider,
 			&c.Total, &c.Fixable,
@@ -617,7 +666,7 @@ func scanSummaryRows(rows *sql.Rows, into map[string]security.Report) error {
 			&c.BySeverity.Low, &c.BySeverity.Unknown,
 			&c.FixableBySeverity.Critical, &c.FixableBySeverity.High, &c.FixableBySeverity.Medium,
 			&c.FixableBySeverity.Low, &c.FixableBySeverity.Unknown,
-			&scannedAt, &retrievedAt); err != nil {
+			&scannedAt, &retrievedAt, &missing); err != nil {
 			return fmt.Errorf("scan security summary: %w", err)
 		}
 		c.NonFixable = c.Total - c.Fixable
@@ -627,6 +676,7 @@ func scanSummaryRows(rows *sql.Rows, into map[string]security.Report) error {
 			Provider: provider,
 			Message:  message.String,
 			Counts:   c,
+			Missing:  missing,
 		}
 		if scannedAt.Valid && scannedAt.String != "" {
 			if t, err := parseSecurityTime(scannedAt.String); err == nil {
@@ -794,7 +844,7 @@ func (s *Security) ReportsFor(
 			       status, COALESCE(message, ''), provider,
 			       total, fixable, critical, high, medium, low, unknown,
 			       fix_critical, fix_high, fix_medium, fix_low, fix_unknown,
-			       scanned_at, retrieved_at
+			       scanned_at, retrieved_at, missing
 			  FROM security_scans
 			 WHERE product = ? AND repository = ? AND provider = ?
 			   AND artifact_ref IN (` + strings.Join(placeholders, ",") + `)
@@ -813,6 +863,7 @@ func (s *Security) ReportsFor(
 					c                                                    security.Counts
 					scannedAt                                            sql.NullString
 					retrievedAt                                          string
+					missing                                              bool
 				)
 				if err := rows.Scan(&id, &ref, &key, &tag, &kind, &repo, &status, &message, &provider,
 					&c.Total, &c.Fixable,
@@ -821,7 +872,7 @@ func (s *Security) ReportsFor(
 					&c.FixableBySeverity.Critical, &c.FixableBySeverity.High,
 					&c.FixableBySeverity.Medium, &c.FixableBySeverity.Low,
 					&c.FixableBySeverity.Unknown,
-					&scannedAt, &retrievedAt); err != nil {
+					&scannedAt, &retrievedAt, &missing); err != nil {
 					return fmt.Errorf("scan stored security report: %w", err)
 				}
 				c.NonFixable = c.Total - c.Fixable
@@ -834,6 +885,7 @@ func (s *Security) ReportsFor(
 					Provider: provider,
 					Message:  message,
 					Counts:   c,
+					Missing:  missing,
 					// Stored, so nothing here cost a scanner request.
 					FromCache: true,
 				}

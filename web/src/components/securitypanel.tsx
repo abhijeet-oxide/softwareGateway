@@ -1,8 +1,10 @@
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import {
-  App, Button, Card, Col, Input, Progress, Row, Segmented, Select, Space, Table,
-  Tooltip, Typography,
+  Alert,
+  App, Button, Card, Col, Collapse, Drawer, Input, Progress, Row, Segmented, Select, Space, Spin,
+  Table, Tooltip, Typography,
 } from 'antd'
+import { ExportOutlined } from '@ant-design/icons'
 import { usePackageSecurity, useSyncPackageSecurity, packageSecurityExportUrl } from '../api/queries'
 import { SEVERITIES } from '../api/types'
 import type {
@@ -11,7 +13,7 @@ import type {
 import {
   ComponentCell, CveCell, FindingsEmpty, FixCell, ScanStatusTag,
   SecurityExportMenu, SecurityNotConfigured, SecurityProgressPanel, SecurityStateNotice,
-  SeverityBar, SeverityCountsRow, SeverityTag, SyncButton, SyncedAgo,
+  SeverityBar, SeverityTag, SyncButton, SyncedAgo, SyncLogButton,
 } from './security'
 import { mono, semantic, severity as severityColour } from '../theme'
 
@@ -43,6 +45,24 @@ export function SecurityTab({ product, reference, repository }: {
   const security = usePackageSecurity(product, reference, { repository, detail: true })
   const sync = useSyncPackageSecurity()
   const data = security.data
+
+  /*
+   * The view lives up here rather than inside the tables, because the banner at
+   * the top has to be able to open one of them. A notice that says 250
+   * artifacts have no result and cannot take the reader to them is a notice
+   * that has only made them anxious.
+   */
+  const [tab, setTab] = useState<FindingsTab>('vulnerabilities')
+
+  const problemCount = useMemo(
+    () => (data?.reports ?? []).filter((r) => r.status !== 'scanned' && r.status !== 'unsupported').length,
+    [data?.reports],
+  )
+
+  const showProblems = () => {
+    setTab('problems')
+    document.getElementById('security-findings')?.scrollIntoView({ behavior: 'smooth', block: 'start' })
+  }
 
   const startSync = () => {
     sync.mutate({ product, ref: reference, repository }, {
@@ -78,12 +98,15 @@ export function SecurityTab({ product, reference, repository }: {
       >
         <SyncedAgo sync={data.sync} />
         {/*
-          Only the sync here. The export lives with the filters below, because
-          an export respects them - two export buttons on one screen, one of
-          which quietly ignores the filter the reader just set, is a file that
-          looks complete and answers a different question.
+          Only the sync and the log here. The export lives with the filters
+          below, because an export respects them - two export buttons on one
+          screen, one of which quietly ignores the filter the reader just set,
+          is a file that looks complete and answers a different question.
         */}
-        <SyncButton sync={data.sync} onSync={startSync} pending={sync.isPending} />
+        <Space size={8}>
+          <SyncLogButton sync={data.sync} />
+          <SyncButton sync={data.sync} onSync={startSync} pending={sync.isPending} />
+        </Space>
       </Space>
 
       {data.sync.state === 'syncing'
@@ -93,6 +116,8 @@ export function SecurityTab({ product, reference, repository }: {
             state={data.state}
             message={data.message}
             onRefresh={data.sync.canSync && data.state !== 'not_synced' ? startSync : undefined}
+            onShowProblems={data.reports.length > 0 ? showProblems : undefined}
+            problemCount={problemCount}
           />
         )}
 
@@ -101,7 +126,15 @@ export function SecurityTab({ product, reference, repository }: {
       {(data.sync.state === 'synced' || data.sync.syncedAt) && (
         <>
           <SummaryCards data={data} />
-          <FindingsSection data={data} product={product} reference={reference} repository={repository} />
+          <FindingsSection
+            data={data}
+            product={product}
+            reference={reference}
+            repository={repository}
+            tab={tab}
+            onTabChange={setTab}
+            syncing={data.sync.state === 'syncing'}
+          />
         </>
       )}
     </Space>
@@ -133,142 +166,259 @@ function NeverSynced({ onSync, pending }: { onSync: () => void; pending?: boolea
 }
 
 /**
- * The simple view: four cards.
+ * The simple view: four cards, each answering a different question.
+ *
+ * # Why the totals card does not list the severities
+ *
+ * It did, and the card beside it listed them again with the fixable split - the
+ * same five numbers twice, in two visual languages, taking half the width of
+ * the page to say one thing. The totals card now carries the SHAPE (one bar)
+ * and the two numbers only it can give: how many findings, and how many
+ * distinct problems they are. The breakdown lives in one place.
  *
  * Fixable is a card of its own rather than a column somewhere, because it is
  * the number that decides what somebody does this afternoon. A release with 900
  * non-fixable findings and 4 fixable ones has four pieces of work in it, and a
  * panel reporting 904 hides all four.
  */
+/**
+ * The numbers the cards show, derived from the SAME rows the tables show.
+ *
+ * # Why not the stored counts
+ *
+ * Because they answer a subtly different question and the page put both on
+ * screen at once. The card read "8,479 · 2,805 unique CVEs" over a table
+ * offering "Unique CVEs (1,499)" and "All findings (8,152)", and none of the
+ * four numbers matched: the stored total is what the sync summed, and the
+ * stored distinct total counts (CVE, package) PAIRS - openssl and libssl3 with
+ * the same advisory are two - where a reader hearing "unique CVEs" counts one.
+ *
+ * So the cards are computed from the findings, and fall back to the stored
+ * counts only when the per-artifact rows are not loaded. A page that quotes two
+ * different totals teaches a reader to trust neither.
+ */
+function summarise(data: PackageSecurityResponse) {
+  const zero = (): Record<Severity, number> => ({ critical: 0, high: 0, medium: 0, low: 0, unknown: 0 })
+  const cves = new Set<string>()
+  const bySeverity = zero()
+  const fixableBySeverity = zero()
+  let total = 0
+  let fixable = 0
+  let affected = 0
+
+  for (const r of data.reports) {
+    if (r.counts.total > 0) affected += 1
+    for (const f of r.findings ?? []) {
+      total += 1
+      cves.add(f.cve || f.id || 'unknown')
+      bySeverity[f.severity] += 1
+      if (f.fixable) {
+        fixable += 1
+        fixableBySeverity[f.severity] += 1
+      }
+    }
+  }
+
+  if (total === 0) {
+    return {
+      unique: data.distinctTotal,
+      total: data.counts.total,
+      fixable: data.counts.fixable,
+      nonFixable: data.counts.nonFixable,
+      bySeverity: data.counts.bySeverity,
+      fixableBySeverity: data.counts.fixableBySeverity,
+      affected,
+    }
+  }
+  return {
+    unique: cves.size,
+    total,
+    fixable,
+    nonFixable: total - fixable,
+    bySeverity,
+    fixableBySeverity,
+    affected,
+  }
+}
+
 function SummaryCards({ data }: { data: PackageSecurityResponse }) {
-  const { counts, coverage } = data
-  const fixablePercent = counts.total > 0 ? Math.round((counts.fixable / counts.total) * 100) : 0
+  const { coverage } = data
+  const stats = useMemo(() => summarise(data), [data])
+  const fixablePercent = stats.total > 0 ? Math.round((stats.fixable / stats.total) * 100) : 0
   const scannedPercent = coverage.scannable > 0
     ? Math.round((coverage.scanned / coverage.scannable) * 100)
     : 0
 
   return (
     <Row gutter={[16, 16]}>
-      <Col xs={24} lg={9}>
-        <Card size="small" title="Overall vulnerabilities" style={{ height: '100%' }}>
-          <Space align="start" size={20}>
-            <div>
-              <div style={{ fontSize: 34, fontWeight: 600, lineHeight: 1.2 }}>
-                {counts.total.toLocaleString()}
+      {/*
+        One card, not two. The totals and the severity breakdown were separate
+        cards showing the same five numbers in two visual languages, across half
+        the width of the page. They are one fact at two resolutions: the total,
+        and what it is made of.
+      */}
+      <Col xs={24} lg={12}>
+        <Card size="small" title="Vulnerabilities" style={{ height: '100%' }}>
+          <Row gutter={24} align="middle">
+            <Col xs={24} sm={9}>
+              {/*
+                Unique first. "8,479" is the same advisory counted once per
+                image it appears in - a measure of how much replacing there is
+                to do - and it is not the number somebody means when they ask
+                how many vulnerabilities a release has.
+              */}
+              <div style={{ fontSize: 38, fontWeight: 600, lineHeight: 1.05 }}>
+                {stats.unique.toLocaleString()}
               </div>
               <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-                {/*
-                  Two numbers because they answer two questions. The same
-                  base-image CVE in ten images is ten things to fix in ten
-                  places, and also one problem - quoting either alone misleads
-                  in a different direction.
-                */}
-                {data.distinctTotal.toLocaleString()} distinct across{' '}
-                {coverage.scanned.toLocaleString()} scanned artifacts
+                unique CVEs
               </Typography.Text>
-            </div>
-          </Space>
-          <div style={{ marginTop: 14 }}><SeverityBar counts={counts} /></div>
-          <div style={{ marginTop: 12 }}><SeverityCountsRow counts={counts} /></div>
+              <div>
+                <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+                  {stats.total.toLocaleString()} findings
+                  {stats.affected > 0
+                    && ` across ${stats.affected.toLocaleString()} of ${coverage.scanned.toLocaleString()} images`}
+                </Typography.Text>
+              </div>
+              <div style={{ marginTop: 14 }}>
+                <SeverityBar
+                  counts={{
+                    total: stats.total,
+                    fixable: stats.fixable,
+                    nonFixable: stats.nonFixable,
+                    bySeverity: stats.bySeverity,
+                    fixableBySeverity: stats.fixableBySeverity,
+                  }}
+                  height={8}
+                />
+              </div>
+            </Col>
+
+            <Col xs={24} sm={15}>
+              <Space direction="vertical" size={7} style={{ width: '100%', marginTop: 8 }}>
+                {SEVERITIES.filter((s) => stats.bySeverity[s] > 0 || s !== 'unknown').map((s) => {
+                  const total = stats.bySeverity[s]
+                  const fixable = stats.fixableBySeverity[s]
+                  return (
+                    <div key={s}>
+                      <Space style={{ width: '100%', justifyContent: 'space-between' }}>
+                        <SeverityTag value={s} />
+                        <Typography.Text style={{ fontSize: 12 }}>
+                          <strong>{total.toLocaleString()}</strong>
+                          {total > 0 && (
+                            <Typography.Text type="secondary" style={{ fontSize: 11 }}>
+                              {' '}({fixable.toLocaleString()} fixable)
+                            </Typography.Text>
+                          )}
+                        </Typography.Text>
+                      </Space>
+                      <div style={{ height: 4, background: '#EEF1F4', borderRadius: 2, marginTop: 4 }}>
+                        <div
+                          style={{
+                            width: `${stats.total > 0 ? (total / stats.total) * 100 : 0}%`,
+                            height: '100%', background: severityColour[s], borderRadius: 2,
+                          }}
+                        />
+                      </div>
+                    </div>
+                  )
+                })}
+              </Space>
+            </Col>
+          </Row>
         </Card>
       </Col>
 
-      <Col xs={24} md={12} lg={5}>
+      <Col xs={24} md={12} lg={6}>
         <Card size="small" title="Fixable" style={{ height: '100%' }}>
           <Space align="center" size={16}>
             <Progress
               type="circle"
-              size={72}
+              size={78}
               percent={fixablePercent}
               strokeColor={semantic.success}
-              format={() => `${fixablePercent}%`}
+              format={() => (
+                <span style={{ fontSize: 16, fontWeight: 600 }}>{fixablePercent}%</span>
+              )}
             />
             <Space direction="vertical" size={0}>
-              <Typography.Text strong style={{ fontSize: 20, color: semantic.success }}>
-                {counts.fixable.toLocaleString()}
+              <Typography.Text strong style={{ fontSize: 22, color: semantic.success, lineHeight: 1.2 }}>
+                {stats.fixable.toLocaleString()}
               </Typography.Text>
               <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-                with a fixed version
+                have a fixed version
               </Typography.Text>
-              <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-                {counts.nonFixable.toLocaleString()} without
+              <Typography.Text type="secondary" style={{ fontSize: 12, marginTop: 6 }}>
+                {stats.nonFixable.toLocaleString()} have none
               </Typography.Text>
             </Space>
           </Space>
         </Card>
       </Col>
 
-      <Col xs={24} md={12} lg={5}>
-        <Card size="small" title="Scan status" style={{ height: '100%' }}>
+      <Col xs={24} md={12} lg={6}>
+        <Card size="small" title="Scan coverage" style={{ height: '100%' }}>
           <Space align="center" size={16}>
             <Progress
               type="circle"
-              size={72}
+              size={78}
               percent={scannedPercent}
               strokeColor={coverage.complete ? semantic.success : semantic.warning}
+              format={() => (
+                <span style={{ fontSize: 16, fontWeight: 600 }}>{scannedPercent}%</span>
+              )}
             />
             <Space direction="vertical" size={0}>
-              <Typography.Text strong style={{ fontSize: 20 }}>
+              <Typography.Text strong style={{ fontSize: 22, lineHeight: 1.2 }}>
                 {coverage.scanned.toLocaleString()}
               </Typography.Text>
               <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-                of {coverage.scannable.toLocaleString()} scanned
+                of {coverage.scannable.toLocaleString()} images scanned
               </Typography.Text>
               {/*
                 EVERY bucket, named. This card once said "1 not scanned" while
-                omitting 209 the scanner had refused, because the two were
-                summed into one number somewhere and only one of them was
-                shown. They have different fixes and they get different lines.
-              */}
-              {coverage.unavailable > 0 && (
-                <Typography.Text style={{ fontSize: 12, color: semantic.error }}>
-                  {coverage.unavailable.toLocaleString()} failed
-                </Typography.Text>
-              )}
-              {coverage.notScanned > 0 && (
-                <Typography.Text style={{ fontSize: 12, color: semantic.warning }}>
-                  {coverage.notScanned.toLocaleString()} not indexed
-                </Typography.Text>
-              )}
-            </Space>
-          </Space>
-        </Card>
-      </Col>
+                omitting 209 the scanner had refused, because the two were summed
+                into one number somewhere and only one of them was shown. They
+                have different fixes and they get different lines.
 
-      <Col xs={24} lg={5}>
-        <Card size="small" title="By severity" style={{ height: '100%' }}>
-          <Space direction="vertical" size={6} style={{ width: '100%' }}>
-            {SEVERITIES.filter((s) => counts.bySeverity[s] > 0 || s !== 'unknown').map((s) => {
-              const total = counts.bySeverity[s]
-              const fixable = counts.fixableBySeverity[s]
-              return (
-                <div key={s}>
-                  <Space style={{ width: '100%', justifyContent: 'space-between' }}>
-                    <SeverityTag value={s} />
-                    <Typography.Text style={{ fontSize: 12 }}>
-                      <strong>{total}</strong>
-                      {total > 0 && (
-                        <Typography.Text type="secondary" style={{ fontSize: 11 }}>
-                          {' '}({fixable} fixable)
-                        </Typography.Text>
-                      )}
-                    </Typography.Text>
-                  </Space>
-                  <div style={{ height: 4, background: '#EEF1F4', borderRadius: 2, marginTop: 3 }}>
-                    <div
-                      style={{
-                        width: `${counts.total > 0 ? (total / counts.total) * 100 : 0}%`,
-                        height: '100%', background: severityColour[s], borderRadius: 2,
-                      }}
-                    />
-                  </div>
-                </div>
-              )
-            })}
+                What is NOT here: the charts and files. They are not a gap in
+                coverage - the scanner is never asked about them - and a line
+                saying "102 not applicable" on a card about scanning invites a
+                reader to subtract it from something.
+              */}
+              <div style={{ marginTop: 6 }}>
+                {coverage.missing > 0 && (
+                  <CoverageLine n={coverage.missing} label="not found in the repository" colour={semantic.error} />
+                )}
+                {coverage.unavailable > 0 && (
+                  <CoverageLine n={coverage.unavailable} label="not retrieved" colour={semantic.error} />
+                )}
+                {coverage.notScanned > 0 && (
+                  <CoverageLine n={coverage.notScanned} label="awaiting a scan" colour={semantic.warning} />
+                )}
+              </div>
+            </Space>
           </Space>
         </Card>
       </Col>
     </Row>
+  )
+}
+
+
+/** One exception to full coverage: a count, a colour and what to call it. */
+function CoverageLine({ n, label, colour }: { n: number; label: string; colour: string }) {
+  return (
+    <Space size={6}>
+      <span
+        aria-hidden
+        style={{ display: 'inline-block', width: 6, height: 6, borderRadius: '50%', background: colour }}
+      />
+      <Typography.Text style={{ fontSize: 12 }}>
+        <strong>{n.toLocaleString()}</strong>
+        <Typography.Text type="secondary" style={{ fontSize: 12 }}> {label}</Typography.Text>
+      </Typography.Text>
+    </Space>
   )
 }
 
@@ -292,13 +442,18 @@ const KIND_LABEL: Record<Exclude<ArtifactKind, 'all'>, string> = {
 function kindOf(kind?: string): ArtifactKind {
   const k = (kind ?? '').toLowerCase()
   if (k.includes('chart') || k.includes('helm')) return 'chart'
-  if (k.includes('image') || k === 'index') return 'image'
+  // `index` is the release manifest, not an image: the images it lists are
+  // separate rows and it is the only thing that would make Images a lie.
+  if (k === 'image') return 'image'
   if (!k) return 'all'
   return 'file'
 }
 
 /** One row of the flattened findings table. */
 type FlatFinding = SecurityFinding & { artifactName: string; artifactTag?: string; artifactDigest?: string }
+
+/** Which of the three tables is on screen. */
+export type FindingsTab = 'vulnerabilities' | 'artifacts' | 'problems'
 
 /**
  * The detailed view: artifacts, and every finding in them.
@@ -308,27 +463,24 @@ type FlatFinding = SecurityFinding & { artifactName: string; artifactTag?: strin
  * that quietly ignored the filter would be a file that looked complete and was
  * a different question's answer.
  */
-function FindingsSection({ data, product, reference, repository }: {
+function FindingsSection({ data, product, reference, repository, tab, onTabChange, syncing }: {
   data: PackageSecurityResponse
   product: string
   reference: string
   repository?: string
+  tab: FindingsTab
+  onTabChange: (tab: FindingsTab) => void
+  syncing?: boolean
 }) {
   type KindCounts = Record<ArtifactKind, number>
 
-  const [tab, setTab] = useState<'vulnerabilities' | 'artifacts'>('vulnerabilities')
   const [severities, setSeverities] = useState<Severity[]>([])
   const [fixability, setFixability] = useState<'all' | 'fixable' | 'non-fixable'>('all')
   const [kind, setKind] = useState<ArtifactKind>('all')
+  const [grouping, setGrouping] = useState<'unique' | 'all'>('unique')
   const [q, setQ] = useState('')
 
-  /*
-   * The artifact kinds this release actually holds.
-   *
-   * Offered rather than hardcoded: a release of images alone should not show a
-   * Charts filter that can only ever return nothing, and a filter that is
-   * always empty teaches a reader to distrust the ones that are not.
-   */
+  /** The artifact kinds this release actually holds. */
   const kinds = useMemo(() => {
     const present = new Set<ArtifactKind>()
     for (const report of data.reports) {
@@ -343,15 +495,23 @@ function FindingsSection({ data, product, reference, repository }: {
     [data.reports, kind],
   )
 
-  const artifactCounts = useMemo<KindCounts>(() => {
-    const out: KindCounts = { all: 0, image: 0, chart: 0, file: 0 }
-    for (const report of data.reports) {
-      out.all += 1
-      const k = kindOf(report.artifact.kind)
-      if (k !== 'all') out[k] += 1
-    }
-    return out
-  }, [data.reports])
+  /*
+   * The images, which are the whole subject of this tab.
+   *
+   * Xray scans container images. The charts and files in a release are listed
+   * on the package's own Contents tab, where they belong; here they were a
+   * hundred rows saying "not applicable" in a table about what is wrong with a
+   * release, and a Charts filter that could only ever return nothing.
+   */
+  const imageReports = useMemo(
+    () => data.reports.filter((r) => kindOf(r.artifact.kind) === 'image'),
+    [data.reports],
+  )
+
+  const artifactCounts = useMemo<KindCounts>(
+    () => ({ all: imageReports.length, image: imageReports.length, chart: 0, file: 0 }),
+    [imageReports],
+  )
 
   const vulnerabilityCounts = useMemo<KindCounts>(() => {
     const out: KindCounts = { all: 0, image: 0, chart: 0, file: 0 }
@@ -364,7 +524,44 @@ function FindingsSection({ data, product, reference, repository }: {
     return out
   }, [data.reports])
 
-  const kindCounts = tab === 'vulnerabilities' ? vulnerabilityCounts : artifactCounts
+  /*
+   * Counted as a problem only if somebody could do something about it. A Helm
+   * chart the scanner does not cover is not a gap in this release, and putting
+   * 150 of them in a tab called Problems is how a number nobody can act on
+   * teaches a reader to ignore the tab.
+   */
+  const problemCounts = useMemo<KindCounts>(() => {
+    const out: KindCounts = { all: 0, image: 0, chart: 0, file: 0 }
+    for (const report of data.reports) {
+      if (report.status === 'scanned' || report.status === 'unsupported') continue
+      out.all += 1
+      const k = kindOf(report.artifact.kind)
+      if (k !== 'all') out[k] += 1
+    }
+    return out
+  }, [data.reports])
+
+  const kindCounts = tab === 'vulnerabilities'
+    ? vulnerabilityCounts
+    : tab === 'problems' ? problemCounts : artifactCounts
+
+  /*
+   * Offered per TAB, not per release.
+   *
+   * The scanner covers container images, so on the Vulnerabilities tab a
+   * release full of Helm charts still shows "Charts (0)" - a control that can
+   * only ever return nothing, sitting next to ones that do, which teaches a
+   * reader to distrust all of them. The charts are still on the Artifacts tab,
+   * where they exist, and named on the Problems tab, where they are explained.
+   */
+  const offeredKinds = useMemo(
+    () => kinds.filter((k) => kindCounts[k] > 0),
+    [kinds, kindCounts],
+  )
+
+  useEffect(() => {
+    if (kind !== 'all' && !offeredKinds.includes(kind)) setKind('all')
+  }, [kind, offeredKinds])
 
   const findings = useMemo<FlatFinding[]>(() => {
     const out: FlatFinding[] = []
@@ -397,7 +594,76 @@ function FindingsSection({ data, product, reference, repository }: {
     [reports],
   )
 
-  const detailRowsUnavailable = findings.length === 0 && vulnerabilityTotal > 0
+  /*
+   * The same CVE in ten images is ten rows and one problem.
+   *
+   * Both numbers are true and they answer different questions - "how much work
+   * is there" and "how many things are wrong" - so the table offers both and
+   * opens on the smaller one. A reader meeting 8,479 rows, four of which are
+   * the same OpenSSL advisory in four images, cannot see that they have one
+   * upgrade to do.
+   */
+  const cveGroups = useMemo(() => groupByCve(filtered), [filtered])
+
+  /*
+   * The release's own stored total, which is the number the cards above show.
+   *
+   * It has to be part of this test. The per-artifact reports come from a cache
+   * shared by every release holding the same artifact, and a later sync that
+   * could not reach the scanner replaces those rows - so BOTH the rows and
+   * their counts go to zero while the release's stored summary still says 241.
+   * A test that only looked at the reports' sum saw zero against zero, agreed
+   * with itself, and rendered "Nothing to show" under a card reading 241.
+   */
+  const summaryTotal = data.counts?.total ?? 0
+  const expectedTotal = Math.max(vulnerabilityTotal, kind === 'all' ? summaryTotal : 0)
+  // Never during a sync: the rows are missing because they are being rewritten.
+  const detailRowsUnavailable = !syncing && findings.length === 0 && expectedTotal > 0
+
+  /*
+   * The distinct things the scanner said, and which artifacts it said them
+   * about. Grouped by the sentence: 250 failures in this release are three
+   * reasons, and three reasons with counts is something a reader can act on
+   * where 250 rows is something they scroll past.
+   *
+   * Charts and files are not here. Xray is never asked about them, so there is
+   * nothing it said - listing a hundred of them under "Problems" described the
+   * release's contents rather than anything that went wrong.
+   */
+  const problems = useMemo<Problem[]>(() => {
+    const byKey = new Map<string, Problem>()
+    for (const report of reports) {
+      if (report.status === 'scanned' || report.status === 'unsupported') continue
+      const reason = report.message?.trim() || 'The scanner gave no reason.'
+      const key = `${report.status}|${reason}`
+      const existing = byKey.get(key)
+      if (existing) {
+        existing.reports.push(report)
+        continue
+      }
+      byKey.set(key, { status: report.status, reason, reports: [report] })
+    }
+    return [...byKey.values()].sort((a, b) => (
+      problemRank(a.status) !== problemRank(b.status)
+        ? problemRank(b.status) - problemRank(a.status)
+        : b.reports.length - a.reports.length
+    ))
+  }, [reports])
+
+  const scannedImages = useMemo(
+    () => imageReports.filter((r) => r.status === 'scanned').length,
+    [imageReports],
+  )
+
+  /** The scanner's own page for an image, by the name the findings carry. */
+  const scanUrlByImage = useMemo(() => {
+    const out = new Map<string, string>()
+    for (const r of data.reports) {
+      if (r.scanUrl) out.set(r.artifact.name, r.scanUrl)
+    }
+    return out
+  }, [data.reports])
+  const scanUrlFor = (name: string) => scanUrlByImage.get(name)
 
   const exportFilters = {
     severity: severities.length > 0 ? severities.join(',') : undefined,
@@ -405,8 +671,30 @@ function FindingsSection({ data, product, reference, repository }: {
     q: q || undefined,
   }
 
+  /*
+   * A sync clears the per-artifact rows before it refills them, so mid-sync
+   * every table here is empty and every tab reads (0). Rendered as a result
+   * that is what the previous build showed: three empty tables and a warning
+   * saying the detailed rows had gone missing, over cards still reporting
+   * 5,712 vulnerabilities. It is not a result. It is a result being fetched.
+   */
+  if (syncing && data.reports.length === 0) {
+    return (
+      <Card size="small" id="security-findings">
+        <Space direction="vertical" size={10} align="center" style={{ width: '100%', padding: '36px 0' }}>
+          <Spin />
+          <Typography.Text strong>Retrieving results</Typography.Text>
+          <Typography.Text type="secondary" style={{ maxWidth: 460, textAlign: 'center' }}>
+            The vulnerability, image and problem tables are rebuilt when the sync finishes. The
+            totals above are from the previous sync.
+          </Typography.Text>
+        </Space>
+      </Card>
+    )
+  }
+
   return (
-    <Card size="small" styles={{ body: { paddingTop: 12 } }}>
+    <Card size="small" id="security-findings" styles={{ body: { paddingTop: 12 } }}>
       {/*
         Two rows, and which control goes in which is the point.
 
@@ -425,18 +713,48 @@ function FindingsSection({ data, product, reference, repository }: {
       >
         <Segmented
           value={tab}
-          onChange={(v) => setTab(v as typeof tab)}
+          onChange={(v) => onTabChange(v as FindingsTab)}
           options={[
-            { value: 'vulnerabilities', label: `Vulnerabilities (${vulnerabilityTotal.toLocaleString()})` },
-            { value: 'artifacts', label: `Artifacts (${reports.length.toLocaleString()})` },
+            {
+              value: 'vulnerabilities',
+              label: `Vulnerabilities (${(grouping === 'unique'
+                ? cveGroups.length
+                : vulnerabilityTotal).toLocaleString()})`,
+            },
+            /*
+              The fraction, not the total. "Images (160)" over a table where 140
+              rows say "Not in JFrog" reads as a release of 160 scanned images,
+              and the number a reader carries away is the one on the tab.
+            */
+            {
+              value: 'artifacts',
+              label: scannedImages === imageReports.length
+                ? `Images (${imageReports.length.toLocaleString()})`
+                : `Images (${scannedImages.toLocaleString()}/${imageReports.length.toLocaleString()})`,
+            },
+            /*
+              A view of its own, and not a filter on the artifacts table.
+
+              What went wrong is a different question from what is in the
+              release, it has a different shape - a few reasons, many artifacts
+              each - and it was previously answerable only by filtering a table
+              nobody thought to filter and hovering each row for a tooltip.
+            */
+            {
+              value: 'problems',
+              label: `Problems (${problemCounts.all.toLocaleString()})`,
+              disabled: problems.length === 0,
+            },
           ]}
         />
 
-        <SecurityExportMenu
-          urlFor={(format, view) => packageSecurityExportUrl(product, reference, {
-            format, view, repository, ...exportFilters,
-          })}
-        />
+        {tab !== 'problems' && (
+          <SecurityExportMenu
+            urlFor={(format, view) => packageSecurityExportUrl(product, reference, {
+              format, view, repository, ...exportFilters,
+            })}
+          />
+        )}
       </div>
 
       <div
@@ -445,29 +763,27 @@ function FindingsSection({ data, product, reference, repository }: {
           alignItems: 'center', marginBottom: 12,
         }}
       >
-        {kinds.length > 1 && (
-          <Segmented
-            value={kind}
-            onChange={(v) => setKind(v as ArtifactKind)}
-            options={[
-              { value: 'all', label: `All (${kindCounts.all.toLocaleString()})` },
-              ...kinds.map((k) => ({
-                value: k,
-                label: `${KIND_LABEL[k]} (${kindCounts[k].toLocaleString()})`,
-              })),
-            ]}
+        {/* Search first: it is the control somebody arrives with a CVE for. */}
+        {tab !== 'problems' && (
+          <Input.Search
+            allowClear
+            placeholder="CVE, package or image"
+            value={q}
+            onChange={(e) => setQ(e.target.value)}
+            style={{ width: 260 }}
           />
         )}
 
-        <Segmented
-          value={fixability}
-          onChange={(v) => setFixability(v as typeof fixability)}
-          options={[
-            { value: 'all', label: 'All' },
-            { value: 'fixable', label: 'Fixable' },
-            { value: 'non-fixable', label: 'No fix' },
-          ]}
-        />
+        {tab === 'vulnerabilities' && (
+          <Segmented
+            value={grouping}
+            onChange={(v) => setGrouping(v as typeof grouping)}
+            options={[
+              { value: 'unique', label: `Unique CVEs (${cveGroups.length.toLocaleString()})` },
+              { value: 'all', label: `All findings (${filtered.length.toLocaleString()})` },
+            ]}
+          />
+        )}
 
         {/*
           A multi-select rather than five checkboxes in a row.
@@ -483,7 +799,7 @@ function FindingsSection({ data, product, reference, repository }: {
           placeholder="Any severity"
           value={severities}
           onChange={setSeverities}
-          style={{ minWidth: 190 }}
+          style={{ minWidth: 190, display: tab === 'problems' ? 'none' : undefined }}
           maxTagCount="responsive"
           options={SEVERITIES.map((sev) => ({
             value: sev,
@@ -491,14 +807,41 @@ function FindingsSection({ data, product, reference, repository }: {
           }))}
         />
 
-        <Input.Search
-          allowClear
-          placeholder="CVE, package or image"
-          value={q}
-          onChange={(e) => setQ(e.target.value)}
-          style={{ width: 230 }}
-        />
+        {tab !== 'problems' && (
+          <Segmented
+            value={fixability}
+            onChange={(v) => setFixability(v as typeof fixability)}
+            options={[
+              { value: 'all', label: 'All' },
+              { value: 'fixable', label: 'Fixable' },
+              { value: 'non-fixable', label: 'No fix' },
+            ]}
+          />
+        )}
+
+        {offeredKinds.length > 1 && (
+          <Segmented
+            value={kind}
+            onChange={(v) => setKind(v as ArtifactKind)}
+            options={[
+              { value: 'all', label: `All (${kindCounts.all.toLocaleString()})` },
+              ...offeredKinds.map((k) => ({
+                value: k,
+                label: `${KIND_LABEL[k]} (${kindCounts[k].toLocaleString()})`,
+              })),
+            ]}
+          />
+        )}
       </div>
+
+      {tab === 'problems' && (
+        <ProblemsPanel
+          problems={problems}
+          scanned={reports.filter((r) => r.status === 'scanned').length}
+          notApplicable={data.coverage.unsupported}
+          repository={data.sync.repository}
+        />
+      )}
 
       {tab === 'vulnerabilities'
         ? (
@@ -510,16 +853,498 @@ function FindingsSection({ data, product, reference, repository }: {
                 style={{ marginBottom: 12 }}
                 message="Detailed vulnerability rows are unavailable"
                 description={
-                  `This release reports ${vulnerabilityTotal.toLocaleString()} vulnerabilities in summary counts, `
-                  + 'but no per-CVE rows were returned for this view.'
+                  `This release reports ${expectedTotal.toLocaleString()} vulnerabilities in summary counts, `
+                  + 'but no per-CVE rows are stored for its artifacts any more. '
+                  + 'Sync this release again to fetch them.'
                 }
               />
             )}
-            <VulnerabilityTable rows={filtered} state={data.state} detailRowsUnavailable={detailRowsUnavailable} />
+            {grouping === 'unique'
+              ? (
+                <UniqueCveTable
+                  groups={cveGroups}
+                  state={data.state}
+                  detailRowsUnavailable={detailRowsUnavailable}
+                  scanUrlFor={scanUrlFor}
+                />
+              )
+              : <VulnerabilityTable rows={filtered} state={data.state} detailRowsUnavailable={detailRowsUnavailable} />}
           </>
         )
-        : <ArtifactTable reports={reports} />}
+        : tab === 'artifacts'
+          ? (
+            <Space direction="vertical" size={8} style={{ width: '100%' }}>
+              {scannedImages < imageReports.length && (
+                <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+                  {scannedImages.toLocaleString()} of {imageReports.length.toLocaleString()} images
+                  have a scan result. The vulnerability totals cover only those.
+                  {data.coverage.missing > 0
+                    && ` ${data.coverage.missing.toLocaleString()} are not in `
+                      + `${data.sync.repository ?? 'the scanned repository'}.`}
+                </Typography.Text>
+              )}
+              <ArtifactTable reports={imageReports} />
+            </Space>
+          )
+          : null}
     </Card>
+  )
+}
+
+/** One reason the scanner gave, and every image it gave it for. */
+type Problem = {
+  status: SecurityReport['status']
+  reason: string
+  reports: SecurityReport[]
+}
+
+/**
+ * Worst first, and "worst" is which one somebody can do something about.
+ *
+ * `unavailable` is a scanner or a network that failed and will probably work on
+ * the next attempt. `not_scanned` needs somebody to index the image in Xray,
+ * which is a different job on a different day.
+ */
+const PROBLEM_RANK: Record<string, number> = {
+  unavailable: 3,
+  not_scanned: 2,
+  not_found: 1,
+  disabled: 1,
+}
+
+function problemRank(status: string): number {
+  return PROBLEM_RANK[status] ?? 0
+}
+
+const PROBLEM_ADVICE: Record<string, string> = {
+  unavailable: 'A transient failure rather than a refusal. Sync again to retry these.',
+  not_scanned: 'JFrog Xray holds these images but has not indexed them yet. Syncing again will report '
+    + 'the same until it does.',
+  not_found: 'This is a transfer to run, not a scan to wait for. Replicate the release, then sync again.',
+  disabled: 'Enable a scanner on the repository these images are in.',
+}
+
+/**
+ * The group's headline: what happened, to how many, and where.
+ *
+ * A sentence rather than a status word and a count. "25 images" beside a tag
+ * reading "Not scanned" made a reader assemble the fact themselves, and the two
+ * facts that matter most - not in the repository, and not yet scanned - read
+ * almost identically that way.
+ */
+function problemHeadline(status: string, n: number, repository?: string): string {
+  const images = `${n.toLocaleString()} ${n === 1 ? 'image' : 'images'}`
+  const where = repository ? ` in ${repository}` : ''
+  switch (status) {
+    case 'not_found':
+      return `${images} were not found${where}`
+    case 'not_scanned':
+      return `${images} have not been scanned by JFrog Xray`
+    case 'unavailable':
+      return `${images} could not be retrieved from JFrog Xray`
+    case 'disabled':
+      return `${images} are in a repository with no scanner`
+    default:
+      return `${images} have no scan result`
+  }
+}
+
+/**
+ * What went wrong, in as many lines as there were reasons.
+ *
+ * # Why this is not a table of artifacts
+ *
+ * Because the interesting axis is the REASON. A release that comes back 12%
+ * scanned has two or three distinct sentences behind it and a couple of hundred
+ * images distributed across them, and the reader's first question is which
+ * sentence, not which image. The images are one click below each one, and
+ * paginated, so a group of two hundred costs a row on screen rather than two
+ * hundred.
+ */
+function ProblemsPanel({ problems, scanned, notApplicable, repository }: {
+  problems: Problem[]
+  scanned: number
+  notApplicable: number
+  repository?: string
+}) {
+  if (problems.length === 0) {
+    return (
+      <Space direction="vertical" size={4} style={{ padding: 24, width: '100%' }} align="center">
+        <Typography.Text strong>No problems</Typography.Text>
+        <Typography.Text type="secondary">
+          Every image in this release returned a scan result.
+        </Typography.Text>
+      </Space>
+    )
+  }
+
+  return (
+    <Space direction="vertical" size={12} style={{ width: '100%' }}>
+      <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+        {scanned.toLocaleString()} of {(scanned + problems.reduce((n, p) => n + p.reports.length, 0)).toLocaleString()}
+        {' '}images were scanned.
+        {notApplicable > 0 && ` The ${notApplicable.toLocaleString()} charts, files and signatures in `
+          + 'this release are not listed: JFrog Xray does not scan them.'}
+      </Typography.Text>
+
+      <Collapse
+        size="small"
+        items={problems.map((p, i) => ({
+          key: String(i),
+          label: (
+            <Space size={10} align="start" wrap={false} style={{ width: '100%' }}>
+              <ScanStatusTag status={p.status} />
+              <Space direction="vertical" size={0}>
+                <Typography.Text strong>
+                  {problemHeadline(p.status, p.reports.length, repository)}
+                </Typography.Text>
+                <Typography.Text type="secondary" style={{ fontSize: 12 }}>{p.reason}</Typography.Text>
+              </Space>
+            </Space>
+          ),
+          children: (
+            <Space direction="vertical" size={8} style={{ width: '100%' }}>
+              {PROBLEM_ADVICE[p.status] && (
+                <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+                  {PROBLEM_ADVICE[p.status]}
+                </Typography.Text>
+              )}
+              <Table<SecurityReport>
+                size="small"
+                rowKey={(r) => r.artifact.digest || r.artifact.name}
+                dataSource={p.reports}
+                pagination={p.reports.length > 10
+                  ? { pageSize: 10, size: 'small', showSizeChanger: false }
+                  : false}
+                showHeader={false}
+                columns={[
+                  {
+                    title: 'Artifact',
+                    render: (_, r) => (
+                      <Space direction="vertical" size={0}>
+                        <Typography.Text style={{ fontFamily: mono, fontSize: 12 }}>
+                          {r.artifact.display || r.artifact.name}
+                        </Typography.Text>
+                        <Typography.Text type="secondary" style={{ fontSize: 11 }}>
+                          {[r.artifact.repository, r.artifact.kind].filter(Boolean).join(' · ')}
+                        </Typography.Text>
+                      </Space>
+                    ),
+                  },
+                  {
+                    title: 'Digest',
+                    width: 190,
+                    render: (_, r) => (
+                      <Typography.Text type="secondary" style={{ fontFamily: mono, fontSize: 11 }}>
+                        {r.artifact.digest ? r.artifact.digest.slice(0, 19) : '-'}
+                      </Typography.Text>
+                    ),
+                  },
+                ]}
+              />
+            </Space>
+          ),
+        }))}
+      />
+    </Space>
+  )
+}
+
+/** One CVE, and every place it was found. */
+type CveGroup = {
+  key: string
+  cve?: string
+  id?: string
+  severity: Severity
+  fixable: boolean
+  fixedIn: string[]
+  summary?: string
+  description?: string
+  packages: string[]
+  images: string[]
+  rows: FlatFinding[]
+}
+
+/**
+ * Collapses findings onto the CVE.
+ *
+ * The severity kept is the WORST any image graded it, and fixable is true if
+ * any affected package has a fix. Both are the honest roll-up: a CVE that is
+ * critical in one image and medium in another is a critical problem, and one
+ * with a fix in three of four packages is work somebody can start.
+ */
+function groupByCve(findings: FlatFinding[]): CveGroup[] {
+  const byKey = new Map<string, CveGroup>()
+
+  for (const f of findings) {
+    const key = f.cve || f.id || 'unknown'
+    let g = byKey.get(key)
+    if (!g) {
+      g = {
+        key,
+        cve: f.cve,
+        id: f.id,
+        severity: f.severity,
+        fixable: false,
+        fixedIn: [],
+        summary: f.summary,
+        description: f.description,
+        packages: [],
+        images: [],
+        rows: [],
+      }
+      byKey.set(key, g)
+    }
+    if (SEVERITIES.indexOf(f.severity) < SEVERITIES.indexOf(g.severity)) g.severity = f.severity
+    if (f.fixable) g.fixable = true
+    for (const v of f.fixedIn ?? []) {
+      if (!g.fixedIn.includes(v)) g.fixedIn.push(v)
+    }
+    const pkg = f.component.name ? `${f.component.name}@${f.component.version ?? ''}` : ''
+    if (pkg && !g.packages.includes(pkg)) g.packages.push(pkg)
+    if (f.artifactName && !g.images.includes(f.artifactName)) g.images.push(f.artifactName)
+    if (!g.summary) g.summary = f.summary
+    if (!g.description) g.description = f.description
+    g.rows.push(f)
+  }
+
+  return [...byKey.values()].sort((a, b) => (
+    SEVERITIES.indexOf(a.severity) !== SEVERITIES.indexOf(b.severity)
+      ? SEVERITIES.indexOf(a.severity) - SEVERITIES.indexOf(b.severity)
+      : b.images.length - a.images.length
+  ))
+}
+
+/**
+ * One row per CVE, expandable into where it was found.
+ *
+ * # Why the expansion is a table and not a list of names
+ *
+ * Because the question underneath "CVE-2026-31789 is in four images" is
+ * "which package, at which version, in which image, and is there a fix" - four
+ * columns. A comma-separated list of image names answers a quarter of it and
+ * sends the reader back to the flat view to find the rest.
+ */
+function UniqueCveTable({ groups, state, detailRowsUnavailable, scanUrlFor }: {
+  groups: CveGroup[]
+  state: PackageSecurityResponse['state']
+  detailRowsUnavailable: boolean
+  scanUrlFor: (name: string) => string | undefined
+}) {
+  const [open, setOpen] = useState<CveGroup | null>(null)
+
+  return (
+    <>
+    <Table<CveGroup>
+      size="small"
+      rowKey={(g) => g.key}
+      dataSource={groups}
+      scroll={{ x: 'max-content' }}
+      pagination={{ pageSize: 25, showSizeChanger: true, size: 'small' }}
+      expandable={{
+        expandedRowRender: (g) => (
+          <Table<FlatFinding>
+            size="small"
+            rowKey={(r) => `${r.component.id}-${r.artifactName}-${r.artifactDigest ?? ''}`}
+            dataSource={g.rows}
+            pagination={g.rows.length > 10 ? { pageSize: 10, size: 'small', showSizeChanger: false } : false}
+            columns={[
+              {
+                title: 'Package',
+                width: 220,
+                render: (_, r) => (
+                  <ComponentCell name={r.component.name} version={r.component.version} type={r.component.type} />
+                ),
+              },
+              {
+                title: 'Image',
+                width: 240,
+                render: (_, r) => <ImageCell name={r.artifactName} tag={r.artifactTag} href={scanUrlFor(r.artifactName)} />,
+              },
+              {
+                title: 'Fix',
+                render: (_, r) => <FixCell fixable={r.fixable} fixedIn={r.fixedIn} />,
+              },
+            ]}
+          />
+        ),
+        rowExpandable: (g) => g.rows.length > 0,
+      }}
+      locale={{
+        emptyText: detailRowsUnavailable
+          ? (
+            <Space direction="vertical" size={4} style={{ padding: 24 }}>
+              <Typography.Text strong>No detailed rows returned</Typography.Text>
+              <Typography.Text type="secondary">
+                Summary counts exist, but this response has no per-CVE detail rows to render.
+              </Typography.Text>
+            </Space>
+          )
+          : <FindingsEmpty status={state} />,
+      }}
+      columns={[
+        {
+          title: 'CVE',
+          width: 160,
+          render: (_, g) => (
+            <a onClick={() => setOpen(g)} style={{ display: 'block' }}>
+              <CveCell cve={g.cve} id={g.id} />
+            </a>
+          ),
+        },
+        {
+          title: 'Severity',
+          width: 110,
+          sorter: (a, b) => SEVERITIES.indexOf(a.severity) - SEVERITIES.indexOf(b.severity),
+          defaultSortOrder: 'ascend',
+          render: (_, g) => <SeverityTag value={g.severity} />,
+        },
+        {
+          title: 'Affects',
+          width: 170,
+          sorter: (a, b) => a.images.length - b.images.length,
+          render: (_, g) => (
+            <Space direction="vertical" size={0}>
+              <Typography.Text style={{ fontSize: 12 }}>
+                <strong>{g.packages.length}</strong> {g.packages.length === 1 ? 'package' : 'packages'}
+                {' in '}
+                <strong>{g.images.length}</strong> {g.images.length === 1 ? 'image' : 'images'}
+              </Typography.Text>
+              <Typography.Text
+                type="secondary"
+                style={{ fontSize: 11, fontFamily: mono, maxWidth: 170 }}
+                ellipsis={{ tooltip: g.packages.map((p) => p.split('@')[0]).join(', ') }}
+              >
+                {g.packages.map((p) => p.split('@')[0]).slice(0, 2).join(', ')}
+                {g.packages.length > 2 && ` +${g.packages.length - 2}`}
+              </Typography.Text>
+            </Space>
+          ),
+        },
+        {
+          title: 'Fix',
+          width: 130,
+          render: (_, g) => <FixCell fixable={g.fixable} fixedIn={g.fixedIn} />,
+        },
+        {
+          title: 'Description',
+          width: 340,
+          render: (_, g) => (
+            <Typography.Paragraph
+              style={{ margin: 0, cursor: 'pointer' }}
+              onClick={() => setOpen(g)}
+              ellipsis={{ rows: 2 }}
+            >
+              {g.summary || g.description || '-'}
+            </Typography.Paragraph>
+          ),
+        },
+      ]}
+    />
+    <CveDetailDrawer group={open} scanUrlFor={scanUrlFor} onClose={() => setOpen(null)} />
+    </>
+  )
+}
+
+/**
+ * Everything known about one CVE, beside the table rather than over it.
+ *
+ * # Why a drawer and not a wider Description column
+ *
+ * Because the description is eight paragraphs for some advisories and one line
+ * for others, and a column sized for the first wastes the width of the page on
+ * the second. Clamped to two lines in the table with the rest here, the table
+ * stays a table and the prose gets the room it needs.
+ */
+function CveDetailDrawer({ group, scanUrlFor, onClose }: {
+  group: CveGroup | null
+  scanUrlFor: (name: string) => string | undefined
+  onClose: () => void
+}) {
+  return (
+    <Drawer
+      title={group ? (group.cve || group.id) : ''}
+      width={720}
+      open={Boolean(group)}
+      onClose={onClose}
+    >
+      {group && (
+        <Space direction="vertical" size={16} style={{ width: '100%' }}>
+          <Space size={12} wrap>
+            <SeverityTag value={group.severity} />
+            <FixCell fixable={group.fixable} fixedIn={group.fixedIn} />
+            {group.cve && group.id && group.id !== group.cve && (
+              <Typography.Text type="secondary" style={{ fontFamily: mono, fontSize: 12 }}>
+                {group.id}
+              </Typography.Text>
+            )}
+          </Space>
+
+          {(group.description || group.summary) && (
+            <Typography.Paragraph style={{ margin: 0, whiteSpace: 'pre-wrap' }}>
+              {group.description || group.summary}
+            </Typography.Paragraph>
+          )}
+
+          <div>
+            <Typography.Text strong>
+              {group.packages.length} {group.packages.length === 1 ? 'package' : 'packages'} in{' '}
+              {group.images.length} {group.images.length === 1 ? 'image' : 'images'}
+            </Typography.Text>
+            <Table<FlatFinding>
+              style={{ marginTop: 8 }}
+              size="small"
+              rowKey={(r) => `${r.component.id}-${r.artifactName}-${r.artifactDigest ?? ''}`}
+              dataSource={group.rows}
+              pagination={group.rows.length > 12
+                ? { pageSize: 12, size: 'small', showSizeChanger: false }
+                : false}
+              columns={[
+                {
+                  title: 'Package',
+                  render: (_, r) => (
+                    <ComponentCell name={r.component.name} version={r.component.version} type={r.component.type} />
+                  ),
+                },
+                {
+                  title: 'Image',
+                  render: (_, r) => <ImageCell name={r.artifactName} tag={r.artifactTag} href={scanUrlFor(r.artifactName)} />,
+                },
+                {
+                  title: 'Fix',
+                  width: 140,
+                  render: (_, r) => <FixCell fixable={r.fixable} fixedIn={r.fixedIn} />,
+                },
+              ]}
+            />
+          </div>
+        </Space>
+      )}
+    </Drawer>
+  )
+}
+
+/**
+ * An image, linked to the scanner's own page for it where there is one.
+ *
+ * The link comes from the server, which knows the configured platform host and
+ * repository. Building it here would mean the interface holding a copy of the
+ * deployment's topology.
+ */
+function ImageCell({ name, tag, href }: { name: string; tag?: string; href?: string }) {
+  return (
+    <Space direction="vertical" size={0}>
+      {href
+        ? (
+          <a href={href} target="_blank" rel="noreferrer" style={{ fontFamily: mono, fontSize: 12 }}>
+            {name} <ExportOutlined style={{ fontSize: 10 }} />
+          </a>
+        )
+        : <Typography.Text style={{ fontFamily: mono, fontSize: 12 }}>{name}</Typography.Text>}
+      {tag && (
+        <Typography.Text type="secondary" style={{ fontSize: 11, fontFamily: mono }}>{tag}</Typography.Text>
+      )}
+    </Space>
   )
 }
 
@@ -598,7 +1423,16 @@ function VulnerabilityTable({
           render: (_, r) => (
             <Typography.Paragraph
               style={{ margin: 0 }}
-              ellipsis={{ rows: 2, tooltip: r.description || r.summary }}
+              ellipsis={{
+                rows: 2,
+                // Bounded, because an advisory's full text is eight paragraphs
+                // and antd will happily paint all of them over the page.
+                tooltip: {
+                  title: r.description || r.summary,
+                  overlayStyle: { maxWidth: 480 },
+                  overlayInnerStyle: { maxHeight: 320, overflow: 'auto' },
+                },
+              }}
             >
               {r.summary || r.description || '-'}
             </Typography.Paragraph>
@@ -610,13 +1444,28 @@ function VulnerabilityTable({
 }
 
 /**
- * The artifacts of a release, with what is wrong in each.
+ * The images of a release, with what is wrong in each.
  *
- * Every artifact appears, including the ones with nothing to report and the
- * ones nobody scanned. A table listing only the artifacts with findings would
- * be a table where an unscanned image is invisible.
+ * Every image appears, including the ones with nothing to report and the ones
+ * nobody scanned. A table listing only the images with findings would be a
+ * table where an unscanned image is invisible.
  */
 function ArtifactTable({ reports }: { reports: SecurityReport[] }) {
+  /*
+   * The statuses this table actually contains, in the order it shows them.
+   *
+   * Offered rather than hardcoded. A filter for "Unavailable" on a release with
+   * no unavailable images can only ever empty the table, and a menu of four
+   * options where two do nothing teaches a reader to distrust the two that do.
+   */
+  const statusFilters = useMemo(() => {
+    const seen = new Map<string, string>()
+    for (const r of reports) {
+      if (!seen.has(r.status)) seen.set(r.status, r.statusLabel || r.status)
+    }
+    return [...seen].map(([value, text]) => ({ text, value }))
+  }, [reports])
+
   return (
     <Table<SecurityReport>
       size="small"
@@ -626,7 +1475,7 @@ function ArtifactTable({ reports }: { reports: SecurityReport[] }) {
       pagination={{ pageSize: 20, showSizeChanger: true, size: 'small' }}
       columns={[
         {
-          title: 'Artifact',
+          title: 'Image',
           render: (_, r) => (
             <Space direction="vertical" size={0}>
               <Typography.Text style={{ fontFamily: mono }}>
@@ -641,12 +1490,7 @@ function ArtifactTable({ reports }: { reports: SecurityReport[] }) {
         {
           title: 'Scan',
           width: 130,
-          filters: [
-            { text: 'Scanned', value: 'scanned' },
-            { text: 'Not scanned', value: 'not_scanned' },
-            { text: 'Unavailable', value: 'unavailable' },
-            { text: 'Not applicable', value: 'unsupported' },
-          ],
+          filters: statusFilters.length > 1 ? statusFilters : undefined,
           onFilter: (value, r) => r.status === value,
           render: (_, r) => (
             <Tooltip title={r.message}>

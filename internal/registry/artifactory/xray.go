@@ -4,12 +4,15 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
+	"net"
 	"net/http"
 	"net/url"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/abhijeet-oxide/softwareGateway/internal/registry"
@@ -89,6 +92,17 @@ const (
 // reaches cache rows, exports and the interface, so it does not change.
 const providerName = "jfrog-xray"
 
+// The artifact summary endpoints, newest first.
+//
+// v2 is the one worth having: v1 answers with the prose and the severity and
+// omits `components` entirely, so every finding it produces has no package and
+// no fixed version. v1 remains as a fallback for a platform that predates v2,
+// where a finding with no package still beats no finding at all.
+const (
+	summaryPathV2 = "/xray/api/v2/summary/artifact"
+	summaryPathV1 = "/xray/api/v1/summary/artifact"
+)
+
 // XrayClient speaks JFrog Xray's REST API.
 //
 // Deliberately not a registry implementation, for the same reason the Quay
@@ -105,6 +119,9 @@ type XrayClient struct {
 	timeout  time.Duration
 	batch    int
 	logger   *slog.Logger
+
+	// legacySummary is set once a platform has answered 404 for the v2 path.
+	legacySummary atomic.Bool
 }
 
 // NewXrayClient builds a client against one JFrog platform.
@@ -283,21 +300,53 @@ type xrayIssue struct {
 	// WatchName is present when the deployment scopes findings to watches.
 	WatchName string `json:"watch_name"`
 
-	CVEs []struct {
-		CVE          string `json:"cve"`
-		CVSSV2Score  any    `json:"cvss_v2_score"`
-		CVSSV3Score  any    `json:"cvss_v3_score"`
-		CVSSV2Vector string `json:"cvss_v2_vector"`
-		CVSSV3Vector string `json:"cvss_v3_vector"`
-	} `json:"cves"`
+	CVEs []xrayCVE `json:"cves"`
 
-	// Components is keyed by Xray's own component id -
-	// "deb://openssl:1.1.1n-0+deb11u3". That key is the stable identity this
-	// package normalizes into security.Component.
-	Components map[string]struct {
-		FixedVersions []string   `json:"fixed_versions"`
-		ImpactPaths   [][]string `json:"impact_paths"`
-	} `json:"components"`
+	// Components is an ARRAY, and every field in it matters.
+	//
+	// It was declared as a map keyed by component id, which is the shape a
+	// much older Xray used. Against a current one the key is simply absent from
+	// the v1 payload and present as an array in v2 - so every finding was
+	// emitted with no component and no fix, which is what put a dash in the
+	// Package column of every row and 0% in the Fixable card.
+	Components []xrayComponent `json:"components"`
+
+	// ImpactPath locates the package inside the image, as
+	// ".../sha256__<layer>.tar.gz/3.23:libssl3:3.5.5-r0". It is the only
+	// component information a v1 payload carries, and the fallback when an
+	// issue arrives without the array above.
+	ImpactPath []string `json:"impact_path"`
+}
+
+// xrayComponent is the vulnerable package, as Xray v2 reports it.
+//
+// The id does NOT carry the version - `3.23:libcrypto3` with `3.5.5-r0`
+// alongside - which is the opposite of the `deb://openssl:1.1.1n` form the
+// older payload used, and the reason the id is not parsed on its own here.
+type xrayComponent struct {
+	ComponentID   string     `json:"component_id"`
+	Version       string     `json:"version"`
+	PkgType       string     `json:"pkg_type"`
+	FixedVersions []string   `json:"fixed_versions"`
+	ImpactPaths   [][]string `json:"impact_paths"`
+}
+
+type xrayCVE struct {
+	CVE string `json:"cve"`
+	// The v2 form: one string carrying score and vector,
+	// "7.5/CVSS:3.1/AV:N/AC:L/...". The *Score and *Vector fields below are the
+	// v1 form. Both are read, because which one arrives is a fact about the
+	// Xray version rather than about the finding.
+	CVSSV2 string `json:"cvss_v2"`
+	CVSSV3 string `json:"cvss_v3"`
+	CVSSV4 string `json:"cvss_v4"`
+
+	CVSSV2Score  any    `json:"cvss_v2_score"`
+	CVSSV3Score  any    `json:"cvss_v3_score"`
+	CVSSV2Vector string `json:"cvss_v2_vector"`
+	CVSSV3Vector string `json:"cvss_v3_vector"`
+
+	CWE []string `json:"cwe"`
 }
 
 // ---------------------------------------------------------------------------
@@ -339,8 +388,17 @@ func (c *XrayClient) ArtifactSummary(ctx context.Context, checksums []string) (m
 
 	req := artifactSummaryRequest{Checksums: normalizeChecksums(checksums)}
 	var resp artifactSummaryResponse
-	if err := c.do(ctx, http.MethodPost, "/xray/api/v1/summary/artifact", req, &resp); err != nil {
-		return nil, nil, err
+	if err := c.do(ctx, http.MethodPost, c.summaryPath(), req, &resp); err != nil {
+		// A platform without v2 answers 404 or 405 for it. Fall back once,
+		// remember, and carry on: the alternative is a deployment that reports
+		// its whole estate unscannable because of an API version.
+		if c.fallBackToV1(err) {
+			if err := c.do(ctx, http.MethodPost, summaryPathV1, req, &resp); err != nil {
+				return nil, nil, err
+			}
+		} else {
+			return nil, nil, err
+		}
 	}
 
 	byChecksum := make(map[string]xrayArtifact, len(resp.Artifacts))
@@ -357,6 +415,74 @@ func (c *XrayClient) ArtifactSummary(ctx context.Context, checksums []string) (m
 		notIndexed[strings.ToLower(strings.TrimSpace(e.Identifier))] = e.Error
 	}
 	return byChecksum, notIndexed, nil
+}
+
+// summaryPath is v2 until a platform says it does not have it.
+func (c *XrayClient) summaryPath() string {
+	if c.legacySummary.Load() {
+		return summaryPathV1
+	}
+	return summaryPathV2
+}
+
+// StoresChecksum reports whether Artifactory holds this content in the
+// repository the scanner answers for.
+//
+// # Why this question is worth a request of its own
+//
+// Xray says one sentence for two situations: "Artifact doesn't exist or not
+// indexed/cached in Xray". Those have nothing in common. An image that IS in
+// the repository and merely un-indexed is a scanner job somebody can trigger;
+// an image that was never replicated there is a TRANSFER that has not happened,
+// and no amount of scanning will produce a result for it.
+//
+// Reported as one line - "142 images have no scan result" - the second kind
+// quietly becomes an accusation against the scanner. This turns it back into a
+// fact about the repository, which is where the fix is.
+func (c *XrayClient) StoresChecksum(ctx context.Context, digest string) (bool, error) {
+	hex := checksumOf(digest)
+	if hex == "" || c.repoKey == "" {
+		// With no repository key the question cannot be scoped, and a global
+		// answer would report an image as present because some other
+		// repository on the platform happens to hold it.
+		return false, errNoRepositoryKey
+	}
+
+	var out struct {
+		Results []struct {
+			URI string `json:"uri"`
+		} `json:"results"`
+	}
+	path := "/artifactory/api/search/checksum?sha256=" + url.QueryEscape(hex) +
+		"&repos=" + url.QueryEscape(c.repoKey)
+	if err := c.do(ctx, http.MethodGet, path, nil, &out); err != nil {
+		return false, err
+	}
+	return len(out.Results) > 0, nil
+}
+
+var errNoRepositoryKey = errors.New("xray: no Artifactory repository key is configured")
+
+// fallBackToV1 records that this platform has no v2 summary endpoint.
+func (c *XrayClient) fallBackToV1(err error) bool {
+	if c.legacySummary.Load() {
+		return false
+	}
+	var re *registry.Error
+	if !errors.As(err, &re) {
+		return false
+	}
+	switch re.StatusCode {
+	case http.StatusNotFound, http.StatusMethodNotAllowed:
+		c.legacySummary.Store(true)
+		if c.logger != nil {
+			c.logger.Info("xray: no v2 artifact summary on this platform, using v1",
+				"endpoint", c.endpoint,
+				"cost", "v1 carries no component or fix versions, so findings will have neither")
+		}
+		return true
+	}
+	return false
 }
 
 // normalizeChecksums strips the "sha256:" prefix Xray does not use and lowers
@@ -410,7 +536,10 @@ func (c *XrayClient) do(ctx context.Context, method, path string, body, out any)
 
 	resp, err := c.http.Do(req)
 	if err != nil {
-		return &registry.Error{Op: method + " " + path, Repository: hostOf(c.endpoint), Err: err}
+		return &registry.Error{
+			Op: method + " " + path, Repository: hostOf(c.endpoint),
+			Err: c.classifyTransport(ctx, err),
+		}
 	}
 	defer func() { _ = resp.Body.Close() }()
 
@@ -425,6 +554,32 @@ func (c *XrayClient) do(ctx context.Context, method, path string, body, out any)
 	// an unbounded decode against a proxy error page is a memory footgun.
 	limited := io.LimitReader(resp.Body, 64<<20)
 	if err := json.NewDecoder(limited).Decode(out); err != nil {
+		// A body that stopped arriving is a SLOW Xray, not an unreadable one.
+		// Xray sends the headers for a fifty-checksum summary quickly and then
+		// streams megabytes of issues, so a deadline lands HERE rather than on
+		// Do - and calling that malformed classified the single most common
+		// real failure as one that cannot be retried, which is why the batch
+		// splitting written for it never once ran.
+		if isDeadline(ctx, err) {
+			return &registry.Error{
+				Op: method + " " + path, Repository: hostOf(c.endpoint),
+				StatusCode: resp.StatusCode,
+				Detail: fmt.Sprintf(
+					"Xray began answering but the response did not finish within %s.", c.timeout),
+				Err: fmt.Errorf("%w: %w", registry.ErrTimeout, err),
+			}
+		}
+		// Same argument, different symptom: the connection went away mid-body.
+		// A truncated answer is a scanner under load, not one whose response
+		// shape we do not know, and it is retryable on a smaller batch.
+		if errors.Is(err, io.ErrUnexpectedEOF) || errors.Is(err, io.EOF) {
+			return &registry.Error{
+				Op: method + " " + path, Repository: hostOf(c.endpoint),
+				StatusCode: resp.StatusCode,
+				Detail:     "Xray closed the connection before the response finished.",
+				Err:        fmt.Errorf("%w: %w", registry.ErrUnavailable, err),
+			}
+		}
 		return &registry.Error{
 			Op: method + " " + path, Repository: hostOf(c.endpoint),
 			StatusCode: resp.StatusCode, Detail: err.Error(),
@@ -432,6 +587,27 @@ func (c *XrayClient) do(ctx context.Context, method, path string, body, out any)
 		}
 	}
 	return nil
+}
+
+// classifyTransport keeps a deadline from being reported as "unreachable".
+//
+// The two send a reader to different places: one is a firewall or a wrong host,
+// the other is an Xray that is answering and simply slower than the bound.
+func (c *XrayClient) classifyTransport(ctx context.Context, err error) error {
+	if isDeadline(ctx, err) {
+		return fmt.Errorf("%w: %w", registry.ErrTimeout, err)
+	}
+	return err
+}
+
+// isDeadline reports whether a failure is this request running out of time,
+// however it is wrapped.
+func isDeadline(ctx context.Context, err error) bool {
+	if errors.Is(err, context.DeadlineExceeded) || errors.Is(ctx.Err(), context.DeadlineExceeded) {
+		return true
+	}
+	var ne net.Error
+	return errors.As(err, &ne) && ne.Timeout()
 }
 
 // statusError turns Xray's error body into the classified vocabulary the rest

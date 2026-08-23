@@ -1083,7 +1083,14 @@ export type Severity = (typeof SEVERITIES)[number]
  * the failure this whole feature exists to prevent, so nothing in the interface
  * may render a finding list without also rendering this.
  */
-export type ScanStatus = 'scanned' | 'not_scanned' | 'unsupported' | 'disabled' | 'unavailable'
+/**
+ * `not_found` is the platform's own answer, not the scanner's: the image is not
+ * in the JFrog repository at all. Xray reports that with the same sentence it
+ * uses for an image it has simply not indexed yet, and the two are different
+ * jobs for different people - a transfer versus a scan.
+ */
+export type ScanStatus =
+  | 'scanned' | 'not_scanned' | 'not_found' | 'unsupported' | 'disabled' | 'unavailable'
 
 /**
  * Whether a release's numbers can be trusted, and why not.
@@ -1122,6 +1129,16 @@ export interface SecuritySyncStatus {
   /** Live position, present only while this replica runs the sync. */
   stages?: SecurityProgressStage[]
   notes?: string[]
+  /** The run's transcript: live while it runs here, the stored one otherwise. */
+  log?: SecurityLogEntry[]
+}
+
+export interface SecurityLogEntry {
+  at?: string
+  level: 'info' | 'warning' | 'error'
+  message: string
+  /** Identical consecutive lines, collapsed. */
+  repeat?: number
 }
 
 export interface SyncSecurityResponse {
@@ -1186,6 +1203,8 @@ export interface SecurityCoverage {
   unsupported: number
   unavailable: number
   disabled: number
+  /** Not in the scanned repository at all: a transfer to run, not a scan. */
+  missing: number
   /** The denominator a percentage should use - excludes the unscannable. */
   scannable: number
   complete: boolean
@@ -1240,6 +1259,8 @@ export interface SecurityReport {
   scannedAt?: string
   retrievedAt?: string
   fromCache?: boolean
+  /** The scanner's own page for this image, built from configuration. */
+  scanUrl?: string
 }
 
 export interface PackageSecurityResponse {

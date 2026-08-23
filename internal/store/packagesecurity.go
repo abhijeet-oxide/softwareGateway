@@ -3,6 +3,7 @@ package store
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
@@ -43,6 +44,9 @@ type PackageSecurityRow struct {
 	SyncedAt    *time.Time
 	StartedAt   *time.Time
 	Fingerprint string
+
+	// Log is the transcript of the run that produced this row.
+	Log []security.SyncLogEntry
 }
 
 // Synced reports whether this row carries a usable result.
@@ -123,8 +127,8 @@ func (p *PackageSecurity) Complete(ctx context.Context, row PackageSecurityRow) 
 			total, fixable, critical, high, medium, low, unknown,
 			fix_critical, fix_high, fix_medium, fix_low, fix_unknown, distinct_total,
 			artifacts, scanned, not_scanned, unsupported, unavailable, disabled,
-			scanned_at, synced_at, started_at, fingerprint)
-		VALUES (?,?,?,?,?,?, ?,?,?,?,?,?,?, ?,?,?,?,?,?, ?,?,?,?,?,?, ?,?,NULL,?)
+			scanned_at, synced_at, started_at, fingerprint, log, missing)
+		VALUES (?,?,?,?,?,?, ?,?,?,?,?,?,?, ?,?,?,?,?,?, ?,?,?,?,?,?, ?,?,NULL,?,?,?)
 		ON CONFLICT (package_id) DO UPDATE SET
 			state = excluded.state, error = excluded.error,
 			provider = excluded.provider, repository = excluded.repository, role = excluded.role,
@@ -138,14 +142,15 @@ func (p *PackageSecurity) Complete(ctx context.Context, row PackageSecurityRow) 
 			not_scanned = excluded.not_scanned, unsupported = excluded.unsupported,
 			unavailable = excluded.unavailable, disabled = excluded.disabled,
 			scanned_at = excluded.scanned_at, synced_at = excluded.synced_at,
-			started_at = NULL, fingerprint = excluded.fingerprint`),
+			started_at = NULL, fingerprint = excluded.fingerprint, log = excluded.log,
+			missing = excluded.missing`),
 		row.PackageID, string(row.State), row.Error, row.Provider, row.Repository, roleOr(row.Role),
 		c.Total, c.Fixable,
 		c.BySeverity.Critical, c.BySeverity.High, c.BySeverity.Medium, c.BySeverity.Low, c.BySeverity.Unknown,
 		c.FixableBySeverity.Critical, c.FixableBySeverity.High, c.FixableBySeverity.Medium,
 		c.FixableBySeverity.Low, c.FixableBySeverity.Unknown, row.DistinctTotal,
 		cov.Artifacts, cov.Scanned, cov.NotScanned, cov.Unsupported, cov.Unavailable, cov.Disabled,
-		timeOrNil(row.ScannedAt), securityTime(now), row.Fingerprint)
+		timeOrNil(row.ScannedAt), securityTime(now), row.Fingerprint, encodeSyncLog(row.Log), cov.Missing)
 	if err != nil {
 		return fmt.Errorf("complete security sync: %w", err)
 	}
@@ -158,13 +163,13 @@ func (p *PackageSecurity) Complete(ctx context.Context, row PackageSecurityRow) 
 // week and whose scanner is unreachable today still knows what it knew - and
 // showing the reader nothing, when something is known and dated, is the worse
 // of the two answers.
-func (p *PackageSecurity) Fail(ctx context.Context, packageID int64, reason string) error {
+func (p *PackageSecurity) Fail(ctx context.Context, packageID int64, reason string, log []security.SyncLogEntry) error {
 	_, err := p.db.ExecContext(ctx, p.q(`
-		INSERT INTO package_security (package_id, state, error, started_at)
-		VALUES (?, 'failed', ?, NULL)
+		INSERT INTO package_security (package_id, state, error, started_at, log)
+		VALUES (?, 'failed', ?, NULL, ?)
 		ON CONFLICT (package_id) DO UPDATE SET
-			state = 'failed', error = excluded.error, started_at = NULL`),
-		packageID, truncate(reason, 500))
+			state = 'failed', error = excluded.error, started_at = NULL, log = excluded.log`),
+		packageID, truncate(reason, 500), encodeSyncLog(log))
 	if err != nil {
 		return fmt.Errorf("record security sync failure: %w", err)
 	}
@@ -241,7 +246,7 @@ func (p *PackageSecurity) load(ctx context.Context, where string, args ...any) (
 		       total, fixable, critical, high, medium, low, unknown,
 		       fix_critical, fix_high, fix_medium, fix_low, fix_unknown, distinct_total,
 		       artifacts, scanned, not_scanned, unsupported, unavailable, disabled,
-		       scanned_at, synced_at, started_at, fingerprint
+		       scanned_at, synced_at, started_at, fingerprint, COALESCE(log, ''), COALESCE(missing, 0)
 		  FROM package_security ` + where)
 
 	rows, err := p.db.QueryContext(ctx, query, args...)
@@ -256,6 +261,7 @@ func (p *PackageSecurity) load(ctx context.Context, where string, args ...any) (
 			r                              PackageSecurityRow
 			state                          string
 			scannedAt, syncedAt, startedAt sql.NullString
+			log                            string
 		)
 		if err := rows.Scan(&r.PackageID, &state, &r.Error, &r.Provider, &r.Repository, &r.Role,
 			&r.Counts.Total, &r.Counts.Fixable,
@@ -266,7 +272,7 @@ func (p *PackageSecurity) load(ctx context.Context, where string, args ...any) (
 			&r.Counts.FixableBySeverity.Unknown, &r.DistinctTotal,
 			&r.Coverage.Artifacts, &r.Coverage.Scanned, &r.Coverage.NotScanned,
 			&r.Coverage.Unsupported, &r.Coverage.Unavailable, &r.Coverage.Disabled,
-			&scannedAt, &syncedAt, &startedAt, &r.Fingerprint,
+			&scannedAt, &syncedAt, &startedAt, &r.Fingerprint, &log, &r.Coverage.Missing,
 		); err != nil {
 			return nil, fmt.Errorf("scan package security: %w", err)
 		}
@@ -275,9 +281,36 @@ func (p *PackageSecurity) load(ctx context.Context, where string, args ...any) (
 		r.ScannedAt = parseNullableSecurityTime(scannedAt)
 		r.SyncedAt = parseNullableSecurityTime(syncedAt)
 		r.StartedAt = parseNullableSecurityTime(startedAt)
+		r.Log = decodeSyncLog(log)
 		out = append(out, r)
 	}
 	return out, rows.Err()
+}
+
+// encodeSyncLog stores a transcript as JSON, and an empty one as an empty
+// string rather than as "null" - a column somebody may read by eye.
+func encodeSyncLog(entries []security.SyncLogEntry) string {
+	if len(entries) == 0 {
+		return ""
+	}
+	raw, err := json.Marshal(entries)
+	if err != nil {
+		return ""
+	}
+	return string(raw)
+}
+
+// decodeSyncLog is deliberately forgiving: a log we cannot read is a missing
+// log, never a failed page.
+func decodeSyncLog(raw string) []security.SyncLogEntry {
+	if strings.TrimSpace(raw) == "" {
+		return nil
+	}
+	var out []security.SyncLogEntry
+	if err := json.Unmarshal([]byte(raw), &out); err != nil {
+		return nil
+	}
+	return out
 }
 
 func parseNullableSecurityTime(v sql.NullString) *time.Time {
@@ -308,6 +341,7 @@ func (p *PackageSecurity) Record(ctx context.Context, res security.PackageResult
 		Coverage:      res.Posture.Coverage,
 		ScannedAt:     res.Posture.ScannedAt,
 		Fingerprint:   res.Fingerprint,
+		Log:           res.Log,
 	}
 	return p.Complete(ctx, row)
 }

@@ -272,6 +272,12 @@ type Report struct {
 	Findings []Finding `json:"findings,omitempty"`
 	Counts   Counts    `json:"counts"`
 
+	// Missing says the artifact is not in the repository the scanner answers
+	// for. Only meaningful with StatusNotScanned, and the difference between
+	// "nobody has scanned this yet" and "this was never shipped here" - which
+	// are different teams' work and which the scanner reports identically.
+	Missing bool `json:"missing,omitempty"`
+
 	// ScannedAt is when the SCANNER produced this result, and RetrievedAt when
 	// we fetched it. Two different times, and the gap between them is how stale
 	// a cached answer is allowed to look before somebody asks for a refresh.
@@ -347,11 +353,17 @@ type Coverage struct {
 	Unsupported int `json:"unsupported"`
 	Unavailable int `json:"unavailable"`
 	Disabled    int `json:"disabled"`
+	// Missing is artifacts that are not in the scanned repository at all. A
+	// bucket of its own because it is the only one whose fix is a transfer
+	// rather than a scan, and counting it as unscanned sent people to look for
+	// a scanning problem that was not there.
+	Missing int `json:"missing"`
 }
 
 // Complete reports whether every artifact that could be scanned, was.
 func (c Coverage) Complete() bool {
-	return c.Scanned > 0 && c.NotScanned == 0 && c.Unavailable == 0 && c.Disabled == 0
+	return c.Scanned > 0 && c.NotScanned == 0 && c.Unavailable == 0 &&
+		c.Disabled == 0 && c.Missing == 0
 }
 
 // Any reports whether there is any security data at all.
@@ -380,7 +392,11 @@ func Summarize(reports []Report) Posture {
 		case StatusScanned:
 			p.Coverage.Scanned++
 		case StatusNotScanned:
-			p.Coverage.NotScanned++
+			if r.Missing {
+				p.Coverage.Missing++
+			} else {
+				p.Coverage.NotScanned++
+			}
 		case StatusUnsupported:
 			p.Coverage.Unsupported++
 		case StatusDisabled:

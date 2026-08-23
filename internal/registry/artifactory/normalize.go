@@ -39,16 +39,16 @@ func normalizeArtifact(a xrayArtifact) []security.Finding {
 		// every consumer - counts, comparison, search, export - working in the
 		// same unit.
 		cves := issue.CVEs
-		components := issue.Components
+		components := issueComponents(issue)
 
-		emit := func(cve string, componentID string, fixed []string) {
+		emit := func(cve string, component security.Component, fixed []string) {
 			f := security.Finding{
 				CVE:         strings.ToUpper(strings.TrimSpace(cve)),
 				ID:          issue.IssueID,
 				Severity:    severity,
 				Summary:     issue.Summary,
 				Description: issue.Description,
-				Component:   parseComponentID(componentID),
+				Component:   component,
 				FixedIn:     dedupe(fixed),
 				Fixable:     len(fixed) > 0,
 				CVSSScore:   score,
@@ -63,19 +63,20 @@ func normalizeArtifact(a xrayArtifact) []security.Finding {
 
 		switch {
 		case len(components) == 0 && len(cves) == 0:
-			emit("", "", nil)
+			emit("", security.Component{}, nil)
 		case len(components) == 0:
 			for _, c := range cves {
-				emit(c.CVE, "", nil)
+				emit(c.CVE, security.Component{}, nil)
 			}
 		default:
-			for componentID, detail := range components {
+			for _, comp := range components {
+				component := componentOf(comp)
 				if len(cves) == 0 {
-					emit("", componentID, detail.FixedVersions)
+					emit("", component, comp.FixedVersions)
 					continue
 				}
 				for _, c := range cves {
-					emit(c.CVE, componentID, detail.FixedVersions)
+					emit(c.CVE, component, comp.FixedVersions)
 				}
 			}
 		}
@@ -83,6 +84,107 @@ func normalizeArtifact(a xrayArtifact) []security.Finding {
 
 	security.SortFindings(out)
 	return out
+}
+
+// issueComponents is the vulnerable packages, from wherever this Xray put them.
+//
+// The array is the answer when it is there. When it is not - a v1 payload has
+// no `components` at all - the impact path still names the package at its end,
+// as ".../sha256__<layer>.tar.gz/3.23:libssl3:3.5.5-r0", and a finding that
+// says WHICH package is wrong beats one that says only that something is.
+func issueComponents(issue xrayIssue) []xrayComponent {
+	if len(issue.Components) > 0 {
+		return issue.Components
+	}
+	seen := map[string]bool{}
+	var out []xrayComponent
+	for _, path := range issue.ImpactPath {
+		id, version := componentFromImpactPath(path)
+		if id == "" || seen[id+"@"+version] {
+			continue
+		}
+		seen[id+"@"+version] = true
+		out = append(out, xrayComponent{ComponentID: id, Version: version})
+	}
+	return out
+}
+
+// componentFromImpactPath reads the package off the end of an impact path.
+//
+// The tail is `<qualifier>:<name>:<version>` for a distro package and `<name>`
+// for anything else, so the version is taken only when the tail has one.
+func componentFromImpactPath(path string) (id, version string) {
+	tail := path
+	if i := strings.LastIndex(tail, "/"); i >= 0 {
+		tail = tail[i+1:]
+	}
+	tail = strings.TrimSpace(tail)
+	if tail == "" {
+		return "", ""
+	}
+	if i := strings.LastIndex(tail, ":"); i > 0 {
+		return tail[:i], tail[i+1:]
+	}
+	return tail, ""
+}
+
+// componentOf turns Xray's component into the platform's.
+//
+// # Why the id is not simply split on its last colon
+//
+// Because two Xray versions mean two different things by it. The old form is
+// `deb://openssl:1.1.1n-0+deb11u3` - ecosystem, name and version in one string.
+// The current one is `3.23:libcrypto3` with `version` and `pkg_type` as fields
+// of their own, and splitting THAT on its last colon yields a package called
+// "3.23" at version "libcrypto3".
+func componentOf(c xrayComponent) security.Component {
+	id := strings.TrimSpace(c.ComponentID)
+	if id == "" {
+		return security.Component{}
+	}
+
+	// The old self-describing form, which parses on its own.
+	if strings.Contains(id, "://") {
+		out := parseComponentID(id)
+		if c.Version != "" {
+			out.Version = c.Version
+		}
+		if out.Type == "" {
+			out.Type = c.PkgType
+		}
+		return out
+	}
+
+	name := id
+	// A distro qualifier - the alpine release in `3.23:libcrypto3` - is noise
+	// in front of the package name. Stripped only when it is one: a Maven
+	// coordinate is `com.google.guava:guava` and its first half is the answer
+	// to "which guava".
+	if i := strings.Index(id, ":"); i > 0 && isDistroQualifier(id[:i]) {
+		name = id[i+1:]
+	}
+
+	out := security.Component{Name: name, Version: c.Version, Type: c.PkgType}
+	if c.PkgType != "" {
+		out.ID = strings.ToLower(c.PkgType) + "://" + name
+	} else {
+		out.ID = name
+	}
+	return out
+}
+
+// isDistroQualifier reports whether a component id's first segment is a release
+// number - "3.23", "11", "9.4" - rather than part of the package's name.
+func isDistroQualifier(s string) bool {
+	if s == "" {
+		return false
+	}
+	for _, r := range s {
+		if (r < '0' || r > '9') && r != '.' {
+			return false
+		}
+	}
+	return true
 }
 
 // parseComponentID turns Xray's component identifier into a normalized
@@ -126,25 +228,58 @@ func parseComponentID(id string) security.Component {
 	return c
 }
 
-// bestCVSS prefers v3 over v2, and takes the highest score among the issue's
-// CVEs. Informational only - nothing in the platform sorts on it.
+// bestCVSS prefers the newest scoring system present, and takes the highest
+// score among the issue's CVEs. Informational only - nothing in the platform
+// sorts on it.
 func bestCVSS(issue xrayIssue) (float64, string) {
-	var best float64
-	var vector string
-	for _, c := range issue.CVEs {
-		if s := toFloat(c.CVSSV3Score); s > best {
-			best, vector = s, c.CVSSV3Vector
+	// v4, v3, v2: each tier is tried in full before the next, so an issue that
+	// carries both does not end up scored by the older one because its number
+	// happened to be larger.
+	for _, pick := range []func(xrayCVE) (float64, string){
+		func(c xrayCVE) (float64, string) { return splitCVSS(c.CVSSV4) },
+		func(c xrayCVE) (float64, string) {
+			if s, v := splitCVSS(c.CVSSV3); s > 0 {
+				return s, v
+			}
+			return toFloat(c.CVSSV3Score), c.CVSSV3Vector
+		},
+		func(c xrayCVE) (float64, string) {
+			if s, v := splitCVSS(c.CVSSV2); s > 0 {
+				return s, v
+			}
+			return toFloat(c.CVSSV2Score), c.CVSSV2Vector
+		},
+	} {
+		var best float64
+		var vector string
+		for _, c := range issue.CVEs {
+			if s, v := pick(c); s > best {
+				best, vector = s, v
+			}
+		}
+		if best > 0 {
+			return best, vector
 		}
 	}
-	if best > 0 {
-		return best, vector
+	return 0, ""
+}
+
+// splitCVSS reads the combined form, "7.5/CVSS:3.1/AV:N/AC:L/...", where the
+// score is everything before the first slash and the vector is the rest.
+func splitCVSS(s string) (float64, string) {
+	s = strings.TrimSpace(s)
+	if s == "" {
+		return 0, ""
 	}
-	for _, c := range issue.CVEs {
-		if s := toFloat(c.CVSSV2Score); s > best {
-			best, vector = s, c.CVSSV2Vector
-		}
+	score, vector := s, ""
+	if i := strings.Index(s, "/"); i >= 0 {
+		score, vector = s[:i], s[i+1:]
 	}
-	return best, vector
+	f, err := strconv.ParseFloat(strings.TrimSpace(score), 64)
+	if err != nil {
+		return 0, ""
+	}
+	return f, strings.TrimSpace(vector)
 }
 
 // toFloat reads a score that Xray sends as a number on some versions and as a
@@ -210,23 +345,69 @@ func dedupe(in []string) []string {
 // scannable reports whether Xray could have anything to say about this kind of
 // artifact.
 //
-// Signatures, attestations and SBOMs are not things Xray declines to scan; they
-// are things there is nothing to scan in. Counting them as unscanned coverage
-// would pin every release permanently below full coverage and teach people to
-// ignore the number.
+// # An allow-list, and why it is not a deny-list
+//
+// Xray indexes CONTAINER IMAGES. It has nothing to say about a Helm chart, a
+// signature, an SBOM or a loose file, and asking it produces the same answer
+// every time: not indexed. That answer is indistinguishable, in a coverage
+// number, from an image somebody genuinely forgot to index - so a release of
+// 261 artifacts with 150 charts and signatures in it reported 4% coverage, a
+// scary banner and two hundred rows of work that did not exist.
+//
+// It was a deny-list of the four things obviously not scannable, which meant
+// every artifact type nobody had thought about was asked about by default. The
+// list of things Xray does scan is short and known; the list of things anybody
+// might put in a release is not.
 func scannable(ref security.ArtifactRef) bool {
-	switch strings.ToLower(ref.Kind) {
-	case "signature", "attestation", "sbom", "provenance":
+	switch strings.ToLower(strings.TrimSpace(ref.Kind)) {
+	case "image":
+		return true
+	case "":
+		// An artifact the core could not classify is decided on its media type
+		// rather than assumed either way.
+		return isImageMediaType(ref.MediaType)
+	default:
 		return false
 	}
+}
+
+// isImageMediaType recognises the Docker and OCI IMAGE manifest types. An index
+// is deliberately not one: in a release it is the manifest listing everything
+// else, and the per-platform images it points at are asked about individually.
+func isImageMediaType(mediaType string) bool {
+	m := strings.ToLower(strings.TrimSpace(mediaType))
 	switch {
-	case strings.Contains(ref.MediaType, "signature"),
-		strings.Contains(ref.MediaType, "in-toto"),
-		strings.Contains(ref.MediaType, "spdx"),
-		strings.Contains(ref.MediaType, "cyclonedx"):
+	case strings.Contains(m, "docker.distribution.manifest.list"),
+		strings.Contains(m, "image.index"):
 		return false
+	case strings.Contains(m, "docker.distribution.manifest"),
+		strings.Contains(m, "image.manifest"):
+		return true
 	}
-	return true
+	return false
+}
+
+// unsupportedMessage says what the artifact is, and that this is not a failure.
+//
+// "JFrog Xray does not scan this kind of artifact" left a reader wondering
+// whether that was a configuration they could change. Naming the kind and the
+// scanner's scope in one sentence closes the question.
+func unsupportedMessage(ref security.ArtifactRef) string {
+	kind := strings.ToLower(strings.TrimSpace(ref.Kind))
+	switch kind {
+	case "chart", "helm":
+		return "JFrog Xray scans container images. This is a Helm chart, so there is nothing for it to scan."
+	case "index":
+		return "JFrog Xray scans container images. This is the manifest that lists them, " +
+			"and the images it points at are scanned individually."
+	case "signature", "attestation", "sbom", "provenance":
+		return "JFrog Xray scans container images. This is a " + kind +
+			", which describes an image rather than containing software."
+	case "":
+		return "JFrog Xray scans container images, and this artifact is not one."
+	default:
+		return "JFrog Xray scans container images. This is a " + kind + ", which it does not index."
+	}
 }
 
 // notIndexedMessage turns Xray's own words about an unindexed artifact into a

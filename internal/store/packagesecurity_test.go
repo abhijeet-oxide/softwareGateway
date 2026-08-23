@@ -185,7 +185,7 @@ func TestFailKeepsTheLastGoodCounts(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if err := p.Fail(t.Context(), id, "Xray refused the credential"); err != nil {
+	if err := p.Fail(t.Context(), id, "Xray refused the credential", nil); err != nil {
 		t.Fatal(err)
 	}
 

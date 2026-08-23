@@ -42,6 +42,7 @@ func toAPICoverage(c security.Coverage) v1.SecurityCoverage {
 		Unsupported: c.Unsupported,
 		Unavailable: c.Unavailable,
 		Disabled:    c.Disabled,
+		Missing:     c.Missing,
 		Scannable:   c.Scannable(),
 		Complete:    c.Complete(),
 	}
@@ -90,10 +91,17 @@ func toAPIFinding(f security.Finding) v1.SecurityFinding {
 }
 
 func toAPIReport(r security.Report) v1.SecurityReport {
+	status, label := string(r.Status), r.Status.Label()
+	// "Not scanned" and "not in the repository at all" are one status in the
+	// scanner's vocabulary and two different jobs for two different people, so
+	// the interface is given the distinction the store keeps as a flag.
+	if r.Status == security.StatusNotScanned && r.Missing {
+		status, label = v1.SecurityStatusNotFound, "Not in JFrog"
+	}
 	out := v1.SecurityReport{
 		Artifact:    toAPIArtifact(r.Artifact),
-		Status:      string(r.Status),
-		StatusLabel: r.Status.Label(),
+		Status:      status,
+		StatusLabel: label,
 		Provider:    r.Provider,
 		Message:     r.Message,
 		Counts:      toAPICounts(r.Counts),
@@ -159,26 +167,24 @@ func securityState(row store.PackageSecurityRow, target securityTarget) (state, 
 // tells a reader neither.
 func coverageSentence(c security.Coverage) string {
 	var parts []string
-	if c.Unavailable > 0 {
-		parts = append(parts, plural(c.Unavailable, "artifact", "artifacts")+" the scanner returned no result for")
+	if c.Missing > 0 {
+		parts = append(parts, plural(c.Missing, "image is", "images are")+" not found in the repository")
 	}
 	if c.NotScanned > 0 {
-		parts = append(parts, plural(c.NotScanned, "artifact", "artifacts")+" not yet indexed by the scanner")
+		parts = append(parts, plural(c.NotScanned, "image has", "images have")+" not been scanned yet")
+	}
+	if c.Unavailable > 0 {
+		parts = append(parts, plural(c.Unavailable, "image", "images")+" could not be retrieved from the scanner")
 	}
 	if c.Disabled > 0 {
-		parts = append(parts, plural(c.Disabled, "artifact", "artifacts")+" in repositories with no scanner configured")
+		parts = append(parts, plural(c.Disabled, "image is", "images are")+" in a repository with no scanner")
 	}
 	if len(parts) == 0 {
-		return "Some artifacts have no scan result. The totals below cover only the artifacts that were scanned."
+		return "The totals below cover only the artifacts that were scanned."
 	}
 
-	sentence := "This release contains " + joinClauses(parts) +
-		". The totals below cover only the " +
-		plural(c.Scanned, "artifact", "artifacts") + " that were scanned."
-	if c.Unavailable > 0 {
-		sentence += " Running the sync again may retrieve the missing results."
-	}
-	return sentence
+	return joinClauses(parts) + ". The totals below cover only the " +
+		plural(c.Scanned, "image", "images") + " that were scanned."
 }
 
 // joinClauses reads a list the way a person says it.

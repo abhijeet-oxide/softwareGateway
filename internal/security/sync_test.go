@@ -9,10 +9,11 @@ import (
 
 // fakeRecorder captures what a sync decided.
 type fakeRecorder struct {
-	claimed  int
-	recorded []PackageResult
-	failed   []string
-	claimErr error
+	claimed   int
+	recorded  []PackageResult
+	failed    []string
+	failedLog []SyncLogEntry
+	claimErr  error
 }
 
 func (f *fakeRecorder) Claim(context.Context, int64, time.Duration) error {
@@ -26,8 +27,9 @@ func (f *fakeRecorder) Record(_ context.Context, res PackageResult) error {
 	f.recorded = append(f.recorded, res)
 	return nil
 }
-func (f *fakeRecorder) Fail(_ context.Context, _ int64, reason string) error {
+func (f *fakeRecorder) Fail(_ context.Context, _ int64, reason string, log []SyncLogEntry) error {
 	f.failed = append(f.failed, reason)
+	f.failedLog = log
 	return nil
 }
 

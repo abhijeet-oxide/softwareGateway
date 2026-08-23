@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"net/url"
 	"path"
 	"strconv"
 	"strings"
@@ -154,7 +155,9 @@ func (s *Server) packageSecurity(
 		}
 		posture := security.Summarize(reports)
 		for _, rep := range posture.Reports {
-			out.Reports = append(out.Reports, toAPIReport(rep))
+			item := toAPIReport(rep)
+			item.ScanURL = scanURL(target, rep.Artifact)
+			out.Reports = append(out.Reports, item)
 		}
 	}
 	return out, nil
@@ -267,6 +270,7 @@ func (s *Server) syncStatusFor(
 	}
 
 	if s.deps.SecuritySync == nil {
+		out.Log = toAPISyncLog(row.Log)
 		return out
 	}
 	if progress, ok := s.deps.SecuritySync.Progress(packageID); ok {
@@ -277,6 +281,27 @@ func (s *Server) syncStatusFor(
 			})
 		}
 		out.Notes = notes
+		// The RUNNING sync's transcript, not the last one's: a reader watching a
+		// sync that is failing right now needs this minute's lines, and the
+		// stored log still describes the run before it.
+		out.Log = toAPISyncLog(progress.Entries())
+		return out
+	}
+	out.Log = toAPISyncLog(row.Log)
+	return out
+}
+
+func toAPISyncLog(entries []security.SyncLogEntry) []v1.SecurityLogEntry {
+	if len(entries) == 0 {
+		return nil
+	}
+	out := make([]v1.SecurityLogEntry, 0, len(entries))
+	for _, e := range entries {
+		item := v1.SecurityLogEntry{Level: e.Level, Message: e.Message, Repeat: e.Repeat}
+		if !e.At.IsZero() {
+			item.At = e.At.UTC().Format(rfc3339)
+		}
+		out = append(out, item)
 	}
 	return out
 }
@@ -500,6 +525,14 @@ type securityTarget struct {
 	// then says which knob turns one on.
 	Available bool
 	Reason    string
+	// Registry is the docker host, RepositoryKey the Artifactory repository the
+	// release lands in, and Endpoint the platform base URL where one is
+	// configured. Together they are what a link into JFrog's own scan view is
+	// built from - from configuration, so a second deployment is not a code
+	// change.
+	Registry      string
+	RepositoryKey string
+	Endpoint      string
 }
 
 // securityTargetFor decides which configured repository to ask about a release.
@@ -539,7 +572,40 @@ func (s *Server) securityTargetFor(
 			Role:       string(chosen.Role),
 			Provider:   "jfrog-xray",
 		},
+		Registry:      chosen.Registry,
+		RepositoryKey: chosen.Repository,
+		Endpoint:      chosen.XrayEndpoint,
 	}
+}
+
+// scanURL links an image to JFrog's own scan view.
+//
+// Assembled from the configured platform host and repository key rather than
+// written down anywhere: a second deployment is a different host and a
+// different repository, and a hardcoded link would be right on exactly one
+// estate. Empty when the release has not landed anywhere with a scanner, which
+// is the case where there would be nothing to link to.
+func scanURL(target securityTarget, ref security.ArtifactRef) string {
+	base := strings.TrimSuffix(strings.TrimSpace(target.Endpoint), "/")
+	if base == "" {
+		if target.Registry == "" {
+			return ""
+		}
+		base = "https://" + target.Registry
+	}
+	if target.RepositoryKey == "" || ref.Repository == "" || ref.Tag == "" {
+		return ""
+	}
+
+	path := ref.Repository + "/" + ref.Tag
+	q := url.Values{}
+	q.Set("version", ref.Tag)
+	q.Set("package_id", "docker://"+ref.Repository)
+	q.Set("path", target.RepositoryKey+"/"+path+"/manifest.json")
+	q.Set("page_type", "overview")
+
+	return base + "/ui/scans-list/repositories/" + url.PathEscape(target.RepositoryKey) +
+		"/scan-descendants/" + url.PathEscape(path) + "?" + q.Encode()
 }
 
 // reachedTargets names the destinations a release has actually been transferred

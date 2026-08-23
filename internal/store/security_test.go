@@ -284,6 +284,75 @@ func TestSecurityDoesNotCacheDisabledReports(t *testing.T) {
 	}
 }
 
+// A scanner failure must not erase the answer another release is reading.
+//
+// These rows are shared by every release holding the same artifact, so a busy
+// Xray that would not answer during one release's sync used to replace another
+// release's stored counts and findings with nothing - a page whose summary card
+// said 241 vulnerabilities over a table with no rows in it.
+func TestSecurityUnavailableDoesNotErasePreviousResult(t *testing.T) {
+	sec := NewSecurity(openTestStore(t))
+	scope := testScope()
+	refs := []security.ArtifactRef{securityRef("cfx-main", "sha256:aaa")}
+
+	report := securityReport("cfx-main", "sha256:aaa",
+		securityFinding("CVE-2024-3094", security.SeverityCritical, "openssl", "1.1.1n", true))
+	if err := sec.Save(t.Context(), scope, []security.Report{report}, true, longTTL()); err != nil {
+		t.Fatalf("Save scanned: %v", err)
+	}
+
+	unavailable := security.Report{
+		Artifact: securityRef("cfx-main", "sha256:aaa"), Status: security.StatusUnavailable,
+		Provider: "jfrog-xray", Message: "JFrog Xray did not answer in time.",
+		RetrievedAt: time.Now().UTC(),
+	}
+	if err := sec.Save(t.Context(), scope, []security.Report{unavailable}, true, longTTL()); err != nil {
+		t.Fatalf("Save unavailable: %v", err)
+	}
+
+	summaries, err := sec.LoadSummaries(t.Context(), scope, refs)
+	if err != nil {
+		t.Fatalf("LoadSummaries: %v", err)
+	}
+	got := summaries["sha256:aaa"]
+	if got.Status != security.StatusScanned || got.Counts.Total != 1 {
+		t.Errorf("a failed scan overwrote the stored result: status %q, counts %+v", got.Status, got.Counts)
+	}
+
+	details, err := sec.LoadDetails(t.Context(), scope, refs)
+	if err != nil {
+		t.Fatalf("LoadDetails: %v", err)
+	}
+	if len(details["sha256:aaa"].Findings) != 1 {
+		t.Error("a failed scan deleted the stored findings")
+	}
+}
+
+// An artifact with nothing stored still records the failure, because "the
+// scanner would not answer" is a better answer than "never synced".
+func TestSecurityUnavailableFillsAnEmptyRow(t *testing.T) {
+	sec := NewSecurity(openTestStore(t))
+	scope := testScope()
+	refs := []security.ArtifactRef{securityRef("cfx-side", "sha256:bbb")}
+
+	report := security.Report{
+		Artifact: securityRef("cfx-side", "sha256:bbb"), Status: security.StatusUnavailable,
+		Provider: "jfrog-xray", Message: "JFrog Xray did not answer in time.",
+		RetrievedAt: time.Now().UTC(),
+	}
+	if err := sec.Save(t.Context(), scope, []security.Report{report}, true, longTTL()); err != nil {
+		t.Fatalf("Save: %v", err)
+	}
+
+	summaries, err := sec.LoadSummaries(t.Context(), scope, refs)
+	if err != nil {
+		t.Fatalf("LoadSummaries: %v", err)
+	}
+	if summaries["sha256:bbb"].Status != security.StatusUnavailable {
+		t.Errorf("status = %q, want unavailable", summaries["sha256:bbb"].Status)
+	}
+}
+
 // "not scanned" IS cached, and comes back as itself rather than as clean.
 func TestSecurityNotScannedSurvivesTheRoundTrip(t *testing.T) {
 	sec := NewSecurity(openTestStore(t))

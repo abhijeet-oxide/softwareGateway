@@ -4,7 +4,10 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
+	"net"
 	"net/http"
+	"os"
 	"sort"
 	"strings"
 	"sync"
@@ -99,7 +102,7 @@ func (p *XrayProvider) Scan(ctx context.Context, refs []security.ArtifactRef, op
 				Artifact:    ref,
 				Status:      security.StatusUnsupported,
 				Provider:    providerName,
-				Message:     "JFrog Xray does not scan this kind of artifact.",
+				Message:     unsupportedMessage(ref),
 				RetrievedAt: now,
 			}
 			continue
@@ -126,7 +129,8 @@ func (p *XrayProvider) Scan(ctx context.Context, refs []security.ArtifactRef, op
 	security.ReportStage(opts.Progress, security.StageFetching, 0, len(queryable))
 	if skipped := len(refs) - len(queryable); skipped > 0 {
 		security.ReportNote(opts.Progress, fmt.Sprintf(
-			"%d artifacts are signatures or attestations, which JFrog Xray does not scan.", skipped))
+			"Requesting scan results for %d images. Skipping %d artifacts that are not container images.",
+			len(queryable), skipped))
 	}
 
 	var (
@@ -178,8 +182,81 @@ func (p *XrayProvider) Scan(ctx context.Context, refs []security.ArtifactRef, op
 	if err := ctx.Err(); err != nil {
 		return reports, err
 	}
+
+	p.separateMissingFromUnindexed(ctx, reports, opts.Progress)
 	return reports, nil
 }
+
+// separateMissingFromUnindexed turns Xray's one sentence back into two facts.
+//
+// Xray answers "Artifact doesn't exist or not indexed/cached in Xray" for both
+// an image it has not looked at and an image that is not in the repository at
+// all. The first is a scan waiting to happen; the second is a TRANSFER waiting
+// to happen, and reporting it as a scanning gap sends somebody to the wrong
+// team. Artifactory knows which, so it is asked - once per image, and only for
+// the ones Xray declined.
+func (p *XrayProvider) separateMissingFromUnindexed(
+	ctx context.Context, reports []security.Report, progress security.Progress,
+) {
+	var pending []int
+	for i := range reports {
+		if reports[i].Status == security.StatusNotScanned && reports[i].Artifact.Digest != "" {
+			pending = append(pending, i)
+		}
+	}
+	if len(pending) == 0 {
+		return
+	}
+
+	var (
+		mu      sync.Mutex
+		missing int
+		failed  bool
+	)
+	g, gctx := errgroup.WithContext(ctx)
+	g.SetLimit(p.concurrency)
+
+	for _, i := range pending {
+		i := i
+		g.Go(func() error {
+			stored, err := p.client.StoresChecksum(gctx, reports[i].Artifact.Digest)
+			mu.Lock()
+			defer mu.Unlock()
+			if err != nil {
+				// The probe is an enrichment. Losing it costs the distinction,
+				// never the report, so the message stays as Xray phrased it.
+				failed = true
+				return nil
+			}
+			if !stored {
+				reports[i].Missing = true
+				reports[i].Message = notInRepositoryMessage
+				missing++
+			} else {
+				reports[i].Message = notIndexedYetMessage
+			}
+			return nil
+		})
+	}
+	_ = g.Wait()
+
+	switch {
+	case failed:
+		security.ReportNote(progress,
+			"Artifactory did not say which of the unscanned images it holds, "+
+				"so none of them are reported as missing.")
+	case missing > 0:
+		security.ReportNote(progress, fmt.Sprintf(
+			"%d images are not in the JFrog repository. They have not been transferred there yet.",
+			missing))
+	}
+}
+
+const (
+	notInRepositoryMessage = "This image is not in the JFrog repository. Transfer the release there, " +
+		"then sync again."
+	notIndexedYetMessage = "This image is in the JFrog repository. JFrog Xray has not indexed it yet."
+)
 
 // fetchBatch asks Xray about one batch, and SPLITS it rather than losing it.
 //
@@ -240,6 +317,23 @@ func worthSplitting(ctx context.Context, err error) bool {
 	// more doomed requests per level for the whole tree.
 	if ctx.Err() != nil {
 		return false
+	}
+	// Asked FIRST, and of the whole chain. A deadline reaches here dressed as
+	// whatever noticed it - a *url.Error from the transport, a read error from
+	// the JSON decoder - and the class switch below answered "no" to both. That
+	// is why a release could lose two hundred artifacts to timeouts without a
+	// single retry: the splitting was correct and simply never reached.
+	if errors.Is(err, context.DeadlineExceeded) || errors.Is(err, os.ErrDeadlineExceeded) {
+		return true
+	}
+	var ne net.Error
+	if errors.As(err, &ne) && ne.Timeout() {
+		return true
+	}
+	// A body that stopped arriving part way through. Same cause as a deadline -
+	// a scanner struggling with the size of the answer - and the same remedy.
+	if errors.Is(err, io.ErrUnexpectedEOF) {
+		return true
 	}
 	var re *registry.Error
 	if errors.As(err, &re) {

@@ -7,7 +7,7 @@ import { formatCount, formatRelative } from '../domain/format'
 import { Value } from '../components/value'
 import { ManagedInGit, TimeAgo } from '../components/chips'
 import { ErrorState, PageHeader } from '../components/layout'
-import { mono, semantic } from '../theme'
+import { c, mono } from '../uikit'
 
 /**
  * Page 10 - Settings.
@@ -231,7 +231,7 @@ export default function Settings() {
               />
             )}
             {workers.data?.workers?.some((w) => w.state === 'STALE') && (
-              <Typography.Text style={{ color: semantic.error, fontSize: 12 }}>
+              <Typography.Text style={{ color: c.danger, fontSize: 12 }}>
                 A stale worker stopped sending heartbeats. Its jobs are returned to the queue
                 automatically; it will not need intervention unless it stays stale.
               </Typography.Text>

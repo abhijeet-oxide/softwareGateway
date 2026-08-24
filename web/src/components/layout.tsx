@@ -15,7 +15,7 @@ import { kindName, type LifecycleStep } from '../domain/derive'
 import { bytes, formatAbsolute, formatBytes, formatCount } from '../domain/format'
 import { ARTIFACT_ICONS, Icon } from './icons'
 import { usePresentComponents } from '../api/queries'
-import { mono, palette, semantic } from '../theme'
+import { c, mono } from '../uikit'
 import { NA } from './value'
 
 /**
@@ -256,7 +256,7 @@ function Moment({
   done?: boolean
   pending?: boolean
 }) {
-  const colour = done ? semantic.success : pending ? palette.primary : 'rgba(0,0,0,0.25)'
+  const colour = done ? c.ok : pending ? c.brand : 'rgba(0,0,0,0.25)'
 
   return (
     <Space size={8} align="center">
@@ -425,7 +425,7 @@ export function SavedPanel({
           <SavedBreakdown transferId={transferId} content={content}>
             <Typography.Text
               strong
-              style={{ color: semantic.success, borderBottom: '1px dotted #9BC7A9' }}
+              style={{ color: c.ok, borderBottom: '1px dotted #9BC7A9' }}
             >
               Saved {savedBytes}
             </Typography.Text>
@@ -539,7 +539,7 @@ function KindLine({ group, saved }: { group: ContentGroup; saved: number }) {
           ? `${group.present} of ${group.total} already there`
           : 'shared layers'}
       </Typography.Text>
-      <Typography.Text strong style={{ fontSize: 12, color: semantic.success }}>
+      <Typography.Text strong style={{ fontSize: 12, color: c.ok }}>
         {formatBytes(saved)}
       </Typography.Text>
     </div>

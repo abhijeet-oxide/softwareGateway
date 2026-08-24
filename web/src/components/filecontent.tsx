@@ -14,7 +14,7 @@ import { packageFileDownloadUrl, usePackageFileContent } from '../api/queries'
 import { bytes, formatBytes } from '../domain/format'
 import { ErrorState } from './layout'
 import { useIdentity } from '../auth/permissions'
-import { mono } from '../theme'
+import { mono } from '../uikit'
 
 /**
  * Looking at a file a vendor shipped.

@@ -19,7 +19,6 @@ import DownloadIcon from '~icons/mdi/tray-arrow-down'
 import LayersIcon from '~icons/mdi/layers-triple-outline'
 import SignatureIcon from '~icons/mdi/certificate-outline'
 import type { Repository } from '../api/types'
-import { branding } from '../theme'
 import brand from '../brand'
 import { BrandMark as SharedBrandMark } from '../uikit'
 import NokiaNAsset from '../assets/nokia_n.svg'
@@ -61,7 +60,7 @@ export type IconComponent = ElementType<{ style?: CSSProperties }>
  * it copyable), and this is the one place in the application that supplies it.
  */
 export function BrandMark({ size }: { size?: number }) {
-  return <SharedBrandMark brand={brand} size={size ?? branding.markSize} />
+  return <SharedBrandMark brand={brand} size={size ?? 28} tile={false} />
 }
 
 export const NokiaNIcon: IconComponent = (props) => (

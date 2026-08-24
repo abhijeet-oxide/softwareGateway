@@ -10,7 +10,7 @@ import {
   ComponentCell, CveCell, SecurityExportMenu, SeverityTag,
 } from '../components/security'
 import { ErrorState, PageHeader } from '../components/layout'
-import { mono, semantic } from '../theme'
+import { c, mono } from '../uikit'
 
 /**
  * Search across CVEs, packages and images, and navigate the relationships
@@ -353,7 +353,7 @@ export default function Security() {
                 Example: openssl
               </Button>
             </Space>
-            <Typography.Text type="secondary" style={{ color: semantic.neutral }}>
+            <Typography.Text type="secondary" style={{ color: c.text2 }}>
               Search covers releases whose vulnerabilities have been synced. To include a release,
               sync it from its Security tab or from the packages listing.
             </Typography.Text>

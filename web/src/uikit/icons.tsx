@@ -127,3 +127,19 @@ export function SpinnerIcon(p: IconProps) {
     </Glyph>
   );
 }
+
+export function ChevronLeftIcon(p: IconProps) {
+  return (
+    <Glyph {...p}>
+      <path d="m9.6 4 -4 4 4 4M13 4l-4 4 4 4" {...stroke} />
+    </Glyph>
+  );
+}
+
+export function ChevronRightIcon(p: IconProps) {
+  return (
+    <Glyph {...p}>
+      <path d="m6.4 4 4 4-4 4M3 4l4 4-4 4" {...stroke} />
+    </Glyph>
+  );
+}

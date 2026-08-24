@@ -51,6 +51,8 @@ export type { Severity, Verdict } from "./color";
 export {
   CheckCircleIcon,
   CheckIcon,
+  ChevronLeftIcon,
+  ChevronRightIcon,
   ErrorCircleIcon,
   InfoIcon,
   MoonIcon,
@@ -81,6 +83,12 @@ export { default as Kbd } from "./primitives/Kbd";
 export { default as Mono } from "./primitives/Mono";
 export { FadeIn, Stagger, StaggerItem } from "./primitives/motion";
 export { BrandMark, BrandLockup } from "./primitives/BrandLockup";
+
+// --- the application chrome, shared whole --------------------------------
+export { AppShell, SideNav, TopBar, NavEntry } from "./primitives/AppShell";
+export type { NavItem, NavProfile } from "./primitives/AppShell";
+export { StatusScreen, BootSplash } from "./primitives/StatusScreen";
+export type { StatusAction } from "./primitives/StatusScreen";
 export {
   default as AppearanceControls,
   ThemeSwitch,

@@ -9,7 +9,7 @@ import {
   FileTextOutlined, MinusCircleOutlined, QuestionCircleOutlined, StopOutlined, SyncOutlined,
   WarningOutlined,
 } from '@ant-design/icons'
-import { mono, palette, semantic, severity as severityColour, severitySurface, verdict as verdictColour } from '../theme'
+import { c, mono, severity as severityColour, severitySurface, tokens, verdict as verdictColour } from '../uikit'
 import { SEVERITIES } from '../api/types'
 import type {
   PackageSecuritySummary, ScanStatus, SecurityCounts, SecurityCoverage,
@@ -144,10 +144,10 @@ export function SeverityMeter({ counts, width }: { counts: SecurityCounts; width
           fontVariantNumeric: 'tabular-nums',
         }}
       >
-        <span style={{ fontSize: 17, fontWeight: 600, color: palette.headingText, lineHeight: 1 }}>
+        <span style={{ fontSize: 17, fontWeight: 600, color: c.text, lineHeight: 1 }}>
           {counts.total.toLocaleString()}
         </span>
-        <span style={{ fontSize: 11, color: semantic.neutral, letterSpacing: '0.02em' }}>
+        <span style={{ fontSize: 11, color: c.text2, letterSpacing: '0.02em' }}>
           {counts.total === 1 ? 'finding' : 'findings'}
         </span>
         {counts.fixable > 0 && (
@@ -156,7 +156,7 @@ export function SeverityMeter({ counts, width }: { counts: SecurityCounts; width
           >
             <span
               style={{
-                fontSize: 11, color: semantic.success, marginInlineStart: 'auto',
+                fontSize: 11, color: c.ok, marginInlineStart: 'auto',
                 whiteSpace: 'nowrap',
               }}
             >
@@ -202,10 +202,10 @@ function SeverityPip({ value, count }: { value: Severity; count: number }) {
             border: `1.5px solid ${muted ? '#D6DCE4' : severityColour[value]}`,
           }}
         />
-        <span style={{ color: muted ? semantic.neutral : severityColour[value], fontWeight: muted ? 400 : 600 }}>
+        <span style={{ color: muted ? c.text2 : severityColour[value], fontWeight: muted ? 400 : 600 }}>
           {count.toLocaleString()}
         </span>
-        <span style={{ color: semantic.neutral }}>{SEVERITY_LABEL[value].toLowerCase()}</span>
+        <span style={{ color: c.text2 }}>{SEVERITY_LABEL[value].toLowerCase()}</span>
       </span>
     </Tooltip>
   )
@@ -312,7 +312,7 @@ export function VulnerabilityCell({
     return (
       <Tooltip title="No artifact in this release was scanned, so there is no result. No result is not the same as no vulnerabilities.">
         <Space size={4}>
-          <QuestionCircleOutlined style={{ color: semantic.neutral }} />
+          <QuestionCircleOutlined style={{ color: c.text2 }} />
           <Typography.Text type="secondary">No results</Typography.Text>
         </Space>
       </Tooltip>
@@ -323,7 +323,7 @@ export function VulnerabilityCell({
     return (
       <Space direction="vertical" size={2}>
         <Space size={4}>
-          <CheckCircleOutlined style={{ color: semantic.success }} />
+          <CheckCircleOutlined style={{ color: c.ok }} />
           <Typography.Text>None found</Typography.Text>
         </Space>
         {!summary.complete && (
@@ -340,12 +340,12 @@ export function VulnerabilityCell({
       <SeverityMeter counts={summary.counts} />
 
       {!summary.complete && (
-        <Typography.Text style={{ color: semantic.warning, fontSize: 11 }}>
+        <Typography.Text style={{ color: c.pending, fontSize: 11 }}>
           Not all artifacts were scanned.
         </Typography.Text>
       )}
       {stale && (
-        <Typography.Text style={{ color: semantic.warning, fontSize: 11 }}>
+        <Typography.Text style={{ color: c.pending, fontSize: 11 }}>
           Last sync failed. The details may be outdated.
         </Typography.Text>
       )}
@@ -402,7 +402,7 @@ export function CoverageMeter({ coverage }: { coverage: SecurityCoverage }) {
         percent={percent}
         size="small"
         status={coverage.complete ? 'success' : 'active'}
-        strokeColor={coverage.complete ? semantic.success : semantic.warning}
+        strokeColor={coverage.complete ? c.ok : c.pending}
       />
       <Typography.Text type="secondary" style={{ fontSize: 12 }}>
         {coverage.scanned.toLocaleString()} of {scannable.toLocaleString()} artifacts scanned
@@ -547,7 +547,7 @@ export function VerdictBanner({
     <div
       style={{
         border: `1px solid ${colour}2E`,
-        borderRadius: palette.borderRadius,
+        borderRadius: tokens.shape.borderRadius,
         background: `${colour}0A`,
         padding: '18px 20px',
         marginBottom: 16,
@@ -578,10 +578,10 @@ export function VerdictBanner({
 
         {caveats && caveats.length > 0 && (
           <Space direction="vertical" size={2}>
-            {caveats.map((c) => (
-              <Typography.Text key={c} type="secondary">
-                <WarningOutlined style={{ color: semantic.warning, marginRight: 6 }} />
-                {c}
+            {caveats.map((caveat) => (
+              <Typography.Text key={caveat} type="secondary">
+                <WarningOutlined style={{ color: c.pending, marginRight: 6 }} />
+                {caveat}
               </Typography.Text>
             ))}
           </Space>
@@ -616,7 +616,7 @@ export function ComparisonTiles({ resolved, introduced, moreSevere, lessSevere, 
     { label: 'Introduced', value: introduced.total, colour: verdictColour.worse, counts: introduced },
     { label: 'Became more severe', value: moreSevere, colour: severityColour.high },
     { label: 'Became less severe', value: lessSevere, colour: severityColour.low },
-    { label: 'Unchanged', value: unchanged, colour: semantic.neutral },
+    { label: 'Unchanged', value: unchanged, colour: c.text2 },
   ]
 
   return (
@@ -625,8 +625,8 @@ export function ComparisonTiles({ resolved, introduced, moreSevere, lessSevere, 
         <div
           key={t.label}
           style={{
-            border: `1px solid ${palette.border}`,
-            borderRadius: palette.borderRadius,
+            border: `1px solid ${c.borderStrong}`,
+            borderRadius: tokens.shape.borderRadius,
             padding: '12px 14px',
             background: '#FFFFFF',
           }}
@@ -696,7 +696,7 @@ export function SecurityProgressPanel({ sync, onStop, stopping }: {
     <Space direction="vertical" size={12} style={{ width: '100%', padding: '4px 0' }}>
       <Space style={{ width: '100%', justifyContent: 'space-between' }} align="start">
         <Space size={8}>
-          <SyncOutlined spin style={{ color: palette.primary }} />
+          <SyncOutlined spin style={{ color: c.brand }} />
           {/*
             What the sync is DOING, in a sentence somebody can act on.
 
@@ -742,7 +742,7 @@ export function SecurityProgressPanel({ sync, onStop, stopping }: {
           percent={percent}
           status="active"
           showInfo={false}
-          strokeColor={palette.primary}
+          strokeColor={c.brand}
         />
         {/*
           SEPARATED, because these are four unrelated facts and whitespace alone
@@ -768,7 +768,7 @@ export function SecurityProgressPanel({ sync, onStop, stopping }: {
               time the person who could have stopped it has walked away.
             */
             failing && failing.done > 0
-              ? { text: `${failing.done.toLocaleString()} not retrieved`, colour: semantic.error }
+              ? { text: `${failing.done.toLocaleString()} not retrieved`, colour: c.danger }
               : null,
             sync.repository ? `${scannerName(sync)} · ${sync.repository}` : null,
           ]}
@@ -997,9 +997,9 @@ export function SyncedAgo({ sync }: { sync: SecuritySyncStatus }) {
 // ---------------------------------------------------------------------------
 
 const LOG_COLOUR: Record<string, string> = {
-  error: semantic.error,
-  warning: semantic.warning,
-  info: semantic.neutral,
+  error: c.danger,
+  warning: c.pending,
+  info: c.text2,
 }
 
 /**
@@ -1087,11 +1087,11 @@ export function SyncLogButton({ sync, size = 'middle' }: {
                   aria-hidden
                   style={{
                     display: 'inline-block', width: 8, height: 8, borderRadius: '50%',
-                    background: LOG_COLOUR[e.level] ?? semantic.neutral, flex: '0 0 auto',
+                    background: LOG_COLOUR[e.level] ?? c.text2, flex: '0 0 auto',
                   }}
                 />
                 <Typography.Text
-                  style={{ color: e.level === 'error' ? semantic.error : undefined }}
+                  style={{ color: e.level === 'error' ? c.danger : undefined }}
                 >
                   {e.message}
                   {e.repeat ? (
@@ -1164,7 +1164,7 @@ export function CveCell({ cve, id, link }: { cve?: string; id?: string; link?: b
       <Typography.Text
         style={{
           fontFamily: mono,
-          color: link ? palette.primary : undefined,
+          color: link ? c.brand : undefined,
           textDecoration: link ? 'underline' : undefined,
           textDecorationStyle: link ? 'dotted' : undefined,
           textUnderlineOffset: 3,
@@ -1294,7 +1294,7 @@ export function FindingsEmpty({ status }: { status?: ScanStatus | SecurityState 
   if (status === 'scanned' || status === 'ok') {
     return (
       <Space direction="vertical" size={4} style={{ padding: 24 }}>
-        <CheckCircleOutlined style={{ fontSize: 22, color: semantic.success }} />
+        <CheckCircleOutlined style={{ fontSize: 22, color: c.ok }} />
         <Typography.Text strong>No vulnerabilities found</Typography.Text>
         <Typography.Text type="secondary">All artifacts in scope were scanned and returned no findings.</Typography.Text>
       </Space>
@@ -1302,7 +1302,7 @@ export function FindingsEmpty({ status }: { status?: ScanStatus | SecurityState 
   }
   return (
     <Space direction="vertical" size={4} style={{ padding: 24 }}>
-      <QuestionCircleOutlined style={{ fontSize: 22, color: semantic.neutral }} />
+      <QuestionCircleOutlined style={{ fontSize: 22, color: c.text2 }} />
       <Typography.Text strong>No results available</Typography.Text>
       <Typography.Text type="secondary">
         This is an absence of scan results, not an absence of vulnerabilities.

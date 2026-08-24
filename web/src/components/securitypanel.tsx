@@ -20,7 +20,7 @@ import {
   SeverityBar, SeverityTag, StopSyncButton, SyncButton, SyncedAgo, SyncInterrupted, SyncLogButton,
 } from './security'
 import { formatAbsolute, formatRelative } from '../domain/format'
-import { mono, palette, semantic, severity as severityColour } from '../theme'
+import { c, mono, severity as severityColour } from '../uikit'
 
 /**
  * The Security tab of a release.
@@ -372,7 +372,7 @@ function SummaryCards({ data, syncing }: { data: PackageSecurityResponse; syncin
           <div
             style={{
               fontSize: 44, fontWeight: 600, lineHeight: 1, letterSpacing: '-0.03em',
-              color: palette.headingText, fontVariantNumeric: 'tabular-nums',
+              color: c.text, fontVariantNumeric: 'tabular-nums',
             }}
           >
             {stats.unique.toLocaleString()}
@@ -404,7 +404,7 @@ function SummaryCards({ data, syncing }: { data: PackageSecurityResponse; syncin
         <div
           style={{
             padding: '18px 22px', minWidth: 0,
-            borderInlineStart: `1px solid ${palette.hairline}`,
+            borderInlineStart: `1px solid ${c.border}`,
           }}
         >
           <ZoneLabel>By severity</ZoneLabel>
@@ -425,13 +425,13 @@ function SummaryCards({ data, syncing }: { data: PackageSecurityResponse; syncin
                     <span
                       style={{
                         marginInlineStart: 'auto', fontSize: 13, fontWeight: 600,
-                        color: total > 0 ? palette.headingText : semantic.neutral,
+                        color: total > 0 ? c.text : c.text2,
                       }}
                     >
                       {total.toLocaleString()}
                     </span>
                     <span
-                      style={{ fontSize: 11, color: semantic.neutral, minWidth: 66, textAlign: 'right' }}
+                      style={{ fontSize: 11, color: c.text2, minWidth: 66, textAlign: 'right' }}
                     >
                       {total > 0 ? `${fixable.toLocaleString()} fixable` : ''}
                     </span>
@@ -461,15 +461,15 @@ function SummaryCards({ data, syncing }: { data: PackageSecurityResponse; syncin
         <div
           style={{
             padding: '18px 22px', minWidth: 0,
-            borderInlineStart: `1px solid ${palette.hairline}`,
-            background: palette.sunken,
+            borderInlineStart: `1px solid ${c.border}`,
+            background: c.surface2,
           }}
         >
           <ZoneLabel>Confidence</ZoneLabel>
 
           <Meter
             value={fixablePercent}
-            colour={semantic.success}
+            colour={c.ok}
             headline={`${stats.fixable.toLocaleString()} of ${stats.total.toLocaleString()} have a fix`}
             detail={stats.nonFixable > 0
               ? `${stats.nonFixable.toLocaleString()} have no fixed version yet`
@@ -480,7 +480,7 @@ function SummaryCards({ data, syncing }: { data: PackageSecurityResponse; syncin
 
           <Meter
             value={scannedPercent}
-            colour={coverage.complete ? semantic.success : semantic.warning}
+            colour={coverage.complete ? c.ok : c.pending}
             headline={`${coverage.scanned.toLocaleString()} of ${coverage.scannable.toLocaleString()} images scanned`}
             detail={coverage.complete
               ? 'Every scannable image has a result'
@@ -500,13 +500,13 @@ function SummaryCards({ data, syncing }: { data: PackageSecurityResponse; syncin
           {(coverage.missing > 0 || coverage.unavailable > 0 || coverage.notScanned > 0) && (
             <div style={{ marginTop: 12 }}>
               {coverage.missing > 0 && (
-                <CoverageLine n={coverage.missing} label="not found in the repository" colour={semantic.error} />
+                <CoverageLine n={coverage.missing} label="not found in the repository" colour={c.danger} />
               )}
               {coverage.unavailable > 0 && (
-                <CoverageLine n={coverage.unavailable} label="not retrieved" colour={semantic.error} />
+                <CoverageLine n={coverage.unavailable} label="not retrieved" colour={c.danger} />
               )}
               {coverage.notScanned > 0 && (
-                <CoverageLine n={coverage.notScanned} label="awaiting a scan" colour={semantic.warning} />
+                <CoverageLine n={coverage.notScanned} label="awaiting a scan" colour={c.pending} />
               )}
             </div>
           )}
@@ -522,7 +522,7 @@ function ZoneLabel({ children }: { children: ReactNode }) {
     <div
       style={{
         fontSize: 11, fontWeight: 600, letterSpacing: '0.06em', textTransform: 'uppercase',
-        color: semantic.neutral, marginBottom: 10,
+        color: c.text2, marginBottom: 10,
       }}
     >
       {children}
@@ -553,7 +553,7 @@ function Meter({ value, colour, headline, detail }: {
           fontVariantNumeric: 'tabular-nums',
         }}
       >
-        <span style={{ fontSize: 13, fontWeight: 600, color: palette.headingText }}>{headline}</span>
+        <span style={{ fontSize: 13, fontWeight: 600, color: c.text }}>{headline}</span>
         <span style={{ marginInlineStart: 'auto', fontSize: 12, fontWeight: 600, color: colour }}>
           {value}%
         </span>

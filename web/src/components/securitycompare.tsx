@@ -13,7 +13,7 @@ import type {
 import {
   ComponentCell, CveCell, FixCell, SecurityExportMenu, SeverityBar, SeverityTag, VerdictBanner,
 } from './security'
-import { mono, palette, semantic, severity as severityColour, verdict as verdictColour } from '../theme'
+import { c, mono, severity as severityColour, verdict as verdictColour } from '../uikit'
 import { formatRelative } from '../domain/format'
 
 /**
@@ -155,7 +155,7 @@ function ReleaseEnd({ title, end, onSync, align }: {
       <Typography.Text
         style={{
           fontSize: 11, fontWeight: 600, letterSpacing: '0.06em',
-          textTransform: 'uppercase', color: semantic.neutral,
+          textTransform: 'uppercase', color: c.text2,
         }}
       >
         {title}
@@ -163,7 +163,7 @@ function ReleaseEnd({ title, end, onSync, align }: {
       <div
         style={{
           fontFamily: mono, fontSize: 19, fontWeight: 600, marginTop: 4,
-          color: palette.headingText, overflow: 'hidden', textOverflow: 'ellipsis',
+          color: c.text, overflow: 'hidden', textOverflow: 'ellipsis',
           whiteSpace: 'nowrap',
         }}
         title={end.label}
@@ -232,14 +232,14 @@ function NetChangeZone({ a, b, verdict }: {
       style={{
         padding: '18px 12px', minWidth: 0, textAlign: 'center',
         display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center',
-        borderInline: `1px solid ${palette.hairline}`,
-        background: palette.sunken,
+        borderInline: `1px solid ${c.border}`,
+        background: c.surface2,
       }}
     >
       <Typography.Text
         style={{
           fontSize: 11, fontWeight: 600, letterSpacing: '0.06em',
-          textTransform: 'uppercase', color: semantic.neutral,
+          textTransform: 'uppercase', color: c.text2,
         }}
       >
         Net change
@@ -323,7 +323,7 @@ function VulnerabilityOverview({ report }: { report: SecurityComparisonResponse 
         className="slm-band"
         style={{
           gridTemplateColumns: 'repeat(3, minmax(0, 1fr))',
-          borderTop: `1px solid ${palette.hairline}`,
+          borderTop: `1px solid ${c.border}`,
         }}
       >
         <DeltaZone
@@ -342,7 +342,7 @@ function VulnerabilityOverview({ report }: { report: SecurityComparisonResponse 
         <DeltaZone
           label="Unchanged"
           counts={report.unchanged}
-          colour={semantic.neutral}
+          colour={c.text2}
           icon={<MinusOutlined />}
           divider
         />
@@ -409,7 +409,7 @@ function SetBar({ old, both, fresh }: { old: number; both: number; fresh: number
                   display: 'inline-block', flex: 'none',
                 }}
               />
-              <span style={{ fontSize: 19, fontWeight: 600, color: palette.headingText, lineHeight: 1 }}>
+              <span style={{ fontSize: 19, fontWeight: 600, color: c.text, lineHeight: 1 }}>
                 {seg.n.toLocaleString()}
               </span>
             </div>
@@ -443,7 +443,7 @@ function DeltaZone({ label, counts, colour, icon, divider }: {
     <div
       style={{
         padding: '16px 22px', minWidth: 0,
-        borderInlineStart: divider ? `1px solid ${palette.hairline}` : undefined,
+        borderInlineStart: divider ? `1px solid ${c.border}` : undefined,
       }}
     >
       <Space size={7}>
@@ -454,7 +454,7 @@ function DeltaZone({ label, counts, colour, icon, divider }: {
         <Typography.Text
           style={{
             fontSize: 11, fontWeight: 600, letterSpacing: '0.06em',
-            textTransform: 'uppercase', color: semantic.neutral,
+            textTransform: 'uppercase', color: c.text2,
           }}
         >
           {label}
@@ -761,12 +761,12 @@ function ArtifactDeltaCard({ report }: { report: SecurityComparisonResponse }) {
           {
             title: 'Resolved',
             width: 100,
-            render: (_, r) => <span style={{ color: r.resolved ? semantic.success : undefined }}>{r.resolved}</span>,
+            render: (_, r) => <span style={{ color: r.resolved ? c.ok : undefined }}>{r.resolved}</span>,
           },
           {
             title: 'Introduced',
             width: 110,
-            render: (_, r) => <span style={{ color: r.introduced ? semantic.error : undefined }}>{r.introduced}</span>,
+            render: (_, r) => <span style={{ color: r.introduced ? c.danger : undefined }}>{r.introduced}</span>,
           },
           { title: 'Severity changed', width: 140, render: (_, r) => r.severityChanged },
           {

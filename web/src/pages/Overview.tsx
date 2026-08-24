@@ -1,6 +1,6 @@
 import { useMemo } from 'react'
 import { Button, Card, Col, Row, Space, Table, Typography } from 'antd'
-import { palette, semantic } from '../theme'
+import { c } from '../uikit'
 import { CloudDownloadOutlined } from '@ant-design/icons'
 import { Link, useNavigate } from 'react-router-dom'
 import { useProducts, usePackagesByProducts, useReports, useTransfers } from '../api/queries'
@@ -168,11 +168,11 @@ export default function Overview() {
           style={{ gridTemplateColumns: 'repeat(auto-fit, minmax(160px, 1fr))' }}
         >
           {[
-            { title: 'New', value: counts.new, to: '/packages?status=NEW', tone: palette.primary },
-            { title: 'Downloading', value: counts.downloading, to: '/downloads', tone: palette.primary },
-            { title: 'Downloaded', value: counts.downloaded, to: '/packages?status=DOWNLOADED', tone: semantic.success },
-            { title: 'Production ready', value: counts.readyForProduction, to: '/packages?status=READY', tone: semantic.success },
-            { title: 'Unverified', value: counts.verificationIssues, to: '/packages?verification=failed', tone: semantic.error },
+            { title: 'New', value: counts.new, to: '/packages?status=NEW', tone: c.brand },
+            { title: 'Downloading', value: counts.downloading, to: '/downloads', tone: c.brand },
+            { title: 'Downloaded', value: counts.downloaded, to: '/packages?status=DOWNLOADED', tone: c.ok },
+            { title: 'Production ready', value: counts.readyForProduction, to: '/packages?status=READY', tone: c.ok },
+            { title: 'Unverified', value: counts.verificationIssues, to: '/packages?verification=failed', tone: c.danger },
           ].map((stage, i) => (
             <button
               key={stage.title}
@@ -182,14 +182,14 @@ export default function Overview() {
               style={{
                 appearance: 'none', font: 'inherit', textAlign: 'left', cursor: 'pointer',
                 background: 'transparent', border: 0,
-                borderInlineStart: i === 0 ? undefined : `1px solid ${palette.hairline}`,
+                borderInlineStart: i === 0 ? undefined : `1px solid ${c.border}`,
                 padding: '16px 20px', minWidth: 0,
               }}
             >
               <div
                 style={{
                   fontSize: 11, fontWeight: 600, letterSpacing: '0.06em',
-                  textTransform: 'uppercase', color: semantic.neutral, whiteSpace: 'nowrap',
+                  textTransform: 'uppercase', color: c.text2, whiteSpace: 'nowrap',
                   overflow: 'hidden', textOverflow: 'ellipsis',
                 }}
               >

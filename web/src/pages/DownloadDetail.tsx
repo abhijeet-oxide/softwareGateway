@@ -22,7 +22,7 @@ import {
 } from '../components/icons'
 import { PriorityControl, QueueControls } from '../components/queuecontrols'
 import { ErrorState, PageHeader, SavedBreakdown, SavedPanel } from '../components/layout'
-import { mono } from '../theme'
+import { mono } from '../uikit'
 import type { Job } from '../api/types'
 
 /**

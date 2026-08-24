@@ -11,7 +11,7 @@ import { ManagedInGit, TimeAgo, TransferStateTag } from '../components/chips'
 import { EmptyStateCard, ErrorState } from '../components/layout'
 import { DownloadProgress } from '../components/progress'
 import { PriorityControl, QueueControls } from '../components/queuecontrols'
-import { mono } from '../theme'
+import { mono } from '../uikit'
 import type { AutoDownloadRuleView, DownloadView, ReplicationView, Transfer } from '../api/types'
 
 /**

@@ -17,7 +17,7 @@ import { ErrorState, SearchBar } from '../components/layout'
 import { WorkingBar } from '../components/progress'
 import { ARTIFACT_ICONS, Icon } from '../components/icons'
 import { SecurityComparison } from '../components/securitycompare'
-import { mono, palette, semantic } from '../theme'
+import { c, mono } from '../uikit'
 import type {
   CompareFile, CompareProgressSide, CompareResponse, CompareRow, CompareVerdict, Package,
   Repository,
@@ -353,9 +353,9 @@ function CacheNote({ base, against }: { base?: Package; against?: Package }) {
 
 const VERDICT: Record<CompareVerdict, { label: string; colour: string; statColour?: string }> = {
   same: { label: 'Unchanged', colour: 'default' },
-  changed: { label: 'Changed', colour: 'orange', statColour: semantic.warning },
-  'only-a': { label: 'Removed', colour: 'red', statColour: semantic.error },
-  'only-b': { label: 'Added', colour: 'green', statColour: semantic.success },
+  changed: { label: 'Changed', colour: 'orange', statColour: c.pending },
+  'only-a': { label: 'Removed', colour: 'red', statColour: c.danger },
+  'only-b': { label: 'Added', colour: 'green', statColour: c.ok },
 }
 
 type Mode = 'versions' | 'locations'
@@ -867,10 +867,10 @@ function CompositionBand({ buckets }: { buckets: Record<CompareVerdict, Bucket> 
 
 /** The segment colours, matched to the verdict vocabulary already in use. */
 const BAND_COLOUR: Record<CompareVerdict, string> = {
-  'only-b': semantic.success,
-  changed: semantic.warning,
+  'only-b': c.ok,
+  changed: c.pending,
   same: '#8794A5',
-  'only-a': semantic.error,
+  'only-a': c.danger,
 }
 
 /**
@@ -934,12 +934,12 @@ function BucketFigure({ bucket, verdict }: { bucket: Bucket; verdict: CompareVer
           <span
             style={{
               fontSize: 22, fontWeight: 600, lineHeight: 1, letterSpacing: '-0.02em',
-              color: empty ? semantic.neutral : palette.headingText,
+              color: empty ? c.text2 : c.text,
             }}
           >
             {formatCount(bucket.count)}
           </span>
-          <span style={{ fontSize: 12.5, color: semantic.neutral }}>{meta.label.toLowerCase()}</span>
+          <span style={{ fontSize: 12.5, color: c.text2 }}>{meta.label.toLowerCase()}</span>
         </div>
         {!empty && (
           <Typography.Text

@@ -28,7 +28,7 @@ import {
 } from '../components/layout'
 import { FileViewer, looksBinary } from '../components/filecontent'
 import { SecurityTab } from '../components/securitypanel'
-import { mono } from '../theme'
+import { mono } from '../uikit'
 import type {
   Artifact, InspectPackageResponse, Package, PackageFile, PackageTransfer, Product, RelatedArtifact,
 } from '../api/types'

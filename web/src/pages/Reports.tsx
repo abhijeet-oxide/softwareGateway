@@ -4,7 +4,7 @@ import { useProducts, useReports } from '../api/queries'
 import { bytes, formatBytes, formatCount, formatPercent, formatSpeed } from '../domain/format'
 import { Stat, Value } from '../components/value'
 import { EmptyStateCard, ErrorState, PageHeader } from '../components/layout'
-import { palette, semantic } from '../theme'
+import { c } from '../uikit'
 
 /**
  * Page 9 - Reports.
@@ -108,7 +108,7 @@ export default function Reports() {
                   <Stat
                     title="Saved (already present)"
                     value={formatBytes(totals?.savedBytes)}
-                    valueStyle={{ color: semantic.success }}
+                    valueStyle={{ color: c.ok }}
                   />
                   <Typography.Text type="secondary" style={{ fontSize: 11 }}>
                     {totals?.savedPercent !== undefined
@@ -138,7 +138,7 @@ export default function Reports() {
                   <Statistic
                     title="Failed"
                     value={totals?.downloadsFailed ?? 0}
-                    valueStyle={{ color: (totals?.downloadsFailed ?? 0) > 0 ? semantic.error : undefined }}
+                    valueStyle={{ color: (totals?.downloadsFailed ?? 0) > 0 ? c.danger : undefined }}
                   />
                 </Col>
                 <Col span={8}><Statistic title="Promoted" value={totals?.promotions ?? 0} /></Col>
@@ -163,7 +163,7 @@ export default function Reports() {
                           <div
                             style={{
                               width: `${(value / peak) * 100}%`,
-                              background: palette.primary,
+                              background: c.brand,
                               height: '100%',
                               borderRadius: 3,
                               minWidth: value > 0 ? 2 : 0,

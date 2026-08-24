@@ -10,7 +10,7 @@ import { NA } from './value'
 import { releaseHref, type SoftwareStatus, type VerificationState, type Location } from '../domain/derive'
 import type { Package, Repository } from '../api/types'
 import { formatAbsolute, formatRelative } from '../domain/format'
-import { mono, semantic } from '../theme'
+import { c, mono } from '../uikit'
 
 /**
  * The reusable vocabulary (UI brief §7). Designed once, used literally.
@@ -356,7 +356,7 @@ export function TimeAgo({ at }: { at?: string | null }) {
 /** A count with a coloured dot, for "3 new" style figures. */
 export function CountBadge({ count, colour }: { count: number; colour?: string }) {
   if (!count) return <Typography.Text type="secondary">0</Typography.Text>
-  return <Badge count={count} color={colour ?? semantic.error} overflowCount={999} />
+  return <Badge count={count} color={colour ?? c.danger} overflowCount={999} />
 }
 
 /** Configuration this page can show but never change (docs/design/19 §4). */

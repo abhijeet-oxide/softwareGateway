@@ -49,6 +49,34 @@ things, and both live OUTSIDE this folder:
 | `primitives/` | the components: card, page header, stat tile, status pill, severity tag, notice, empty state, stepper, toolbar, keycap, motion. |
 | `vitePluginBrand.ts` | inlines the colour variables, the favicon and the title into `index.html` at build time. |
 
+## The chrome is shared whole
+
+The navigation and the bar above the page are the two surfaces a person sees on
+every screen of every tool, so they are the two that must not be written twice.
+Two products that share a palette but each draw their own sidebar do not look
+like one product; they look like two products with the same colours, which is
+worse than not trying, because the difference reads as carelessness rather than
+as intent.
+
+So `SideNav` and `TopBar` own the STRUCTURE - the widths, the item heights, the
+hover and active language, the collapse behaviour, the profile card at the foot,
+the bar's height and how its two ends are arranged - and each app hands in only
+what is genuinely its own: which entries there are, what they do, and what
+belongs in its bar.
+
+`StatusScreen` is the same argument for the moments before an app can show
+anything. Every tool has them: it is checking whether its service is there, the
+service did not answer, nobody is signed in. They are the first thing anybody
+sees of a product and the thing they see on its worst day - exactly the wrong
+place for each tool to improvise a layout.
+
+One rule inside them is worth knowing because it was a real bug: **a lockup
+aligns to itself, never to whatever it was dropped into.** The name and the
+caption are different widths, so on a card that centres its text the short name
+floated to the middle of the box the caption sized, and read as a mark with a
+hole punched between it and its own name. `.ui-lockup-text` states
+`align-items: flex-start` for that reason.
+
 ## Two constraints, and why
 
 **Plain CSS, never utility classes.** One of the tools that shares this folder

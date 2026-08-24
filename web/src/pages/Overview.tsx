@@ -1,5 +1,6 @@
 import { useMemo } from 'react'
-import { Button, Card, Col, Row, Space, Statistic, Table, Typography } from 'antd'
+import { Button, Card, Col, Row, Space, Table, Typography } from 'antd'
+import { palette, semantic } from '../theme'
 import { CloudDownloadOutlined } from '@ant-design/icons'
 import { Link, useNavigate } from 'react-router-dom'
 import { useProducts, usePackagesByProducts, useReports, useTransfers } from '../api/queries'
@@ -146,26 +147,70 @@ export default function Overview() {
         <DiscoveryPanel products={productList} />
       </div>
 
-      <Row gutter={[16, 16]} style={{ marginBottom: 16 }}>
-        {[
-          { title: 'New Packages', value: counts.new, to: '/packages?status=NEW' },
-          { title: 'Downloading', value: counts.downloading, to: '/downloads' },
-          { title: 'Downloaded', value: counts.downloaded, to: '/packages?status=DOWNLOADED' },
-          { title: 'Production Ready', value: counts.readyForProduction, to: '/packages?status=READY' },
-          { title: 'Unverified', value: counts.verificationIssues, to: '/packages?verification=failed' },
-        ].map((card) => (
-          <Col key={card.title} flex="1 1 190px">
-            <Card
-              hoverable
-              size="small"
-              onClick={() => navigate(card.to)}
-              style={{ cursor: 'pointer' }}
+      {/*
+        THE LIFECYCLE, AS ONE STRIP.
+
+        These were five cards - New, Downloading, Downloaded, Production Ready,
+        Unverified - each with a 28px number. On any ordinary morning four of
+        the five read 0 or 1, so the widest row of the landing page spent itself
+        drawing zeroes at the same weight as the one figure that had something
+        in it.
+
+        They are not five independent measurements: they are one release's
+        journey, in order, and every one of them is a link to the same listing
+        filtered differently. Read as a row of stages with dividers between
+        them, the ORDER carries meaning the five boxes threw away - and a
+        stage with nothing in it recedes instead of shouting a zero.
+      */}
+      <Card size="small" style={{ marginBottom: 16 }} styles={{ body: { padding: 0 } }}>
+        <div
+          className="slm-band"
+          style={{ gridTemplateColumns: 'repeat(auto-fit, minmax(160px, 1fr))' }}
+        >
+          {[
+            { title: 'New', value: counts.new, to: '/packages?status=NEW', tone: palette.primary },
+            { title: 'Downloading', value: counts.downloading, to: '/downloads', tone: palette.primary },
+            { title: 'Downloaded', value: counts.downloaded, to: '/packages?status=DOWNLOADED', tone: semantic.success },
+            { title: 'Production ready', value: counts.readyForProduction, to: '/packages?status=READY', tone: semantic.success },
+            { title: 'Unverified', value: counts.verificationIssues, to: '/packages?verification=failed', tone: semantic.error },
+          ].map((stage, i) => (
+            <button
+              key={stage.title}
+              type="button"
+              onClick={() => navigate(stage.to)}
+              className="slm-card-interactive"
+              style={{
+                appearance: 'none', font: 'inherit', textAlign: 'left', cursor: 'pointer',
+                background: 'transparent', border: 0,
+                borderInlineStart: i === 0 ? undefined : `1px solid ${palette.hairline}`,
+                padding: '16px 20px', minWidth: 0,
+              }}
             >
-              <Statistic title={card.title} value={card.value} loading={loading} />
-            </Card>
-          </Col>
-        ))}
-      </Row>
+              <div
+                style={{
+                  fontSize: 11, fontWeight: 600, letterSpacing: '0.06em',
+                  textTransform: 'uppercase', color: semantic.neutral, whiteSpace: 'nowrap',
+                  overflow: 'hidden', textOverflow: 'ellipsis',
+                }}
+              >
+                {stage.title}
+              </div>
+              <div
+                style={{
+                  fontSize: 30, fontWeight: 600, lineHeight: 1.15, marginTop: 4,
+                  letterSpacing: '-0.02em', fontVariantNumeric: 'tabular-nums',
+                  // A stage with nothing in it is stated, and recedes. A zero
+                  // drawn in the same weight as a seven is a page shouting
+                  // about the four things that are not happening.
+                  color: stage.value > 0 ? stage.tone : '#C2CBD6',
+                }}
+              >
+                {loading ? '—' : stage.value.toLocaleString()}
+              </div>
+            </button>
+          ))}
+        </div>
+      </Card>
 
       <Row gutter={[16, 16]}>
         <Col xs={24} xl={17}>
@@ -189,11 +234,31 @@ export default function Overview() {
                 rowKey={(r) => r.pkg.packageId}
                 pagination={false}
                 size="middle"
-                scroll={{ x: 1180 }}
+                scroll={ {
+                  /*
+                    `max-content`, not a number. A hardcoded width has to be
+                    kept in step with the sum of the column widths by hand, and
+                    when it drifts below that sum antd squeezes the table to the
+                    smaller figure and the pinned column lands on top of the one
+                    before it. Letting the browser measure cannot drift.
+                  */
+                  x: 'max-content'
+                } }
                 columns={[
                   {
+                    /*
+                      NOT PINNED, unlike the full listing's.
+
+                      A pinned column keeps its content visible while the rest
+                      scrolls, which is worth its cost on a full-width table.
+                      This one sits in a third of the page beside the system
+                      panel, where the pane is narrower than the columns and
+                      pinning both ends left the pinned Actions column sitting
+                      permanently on top of Location. Eight columns in a
+                      seven-hundred-pixel pane scroll; they do not also need
+                      furniture anchored over them.
+                    */
                     title: 'Product',
-                    fixed: 'left',
                     width: 130,
                     render: (_, r) => <ProductChip name={r.product.productId} display={r.product.displayName} />,
                   },
@@ -240,7 +305,6 @@ export default function Overview() {
                   },
                   {
                     title: 'Actions',
-                    fixed: 'right',
                     width: 130,
                     render: (_, r) =>
                       r.status === 'NEW' ? (

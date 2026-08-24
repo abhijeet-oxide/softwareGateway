@@ -153,7 +153,16 @@ export default function Activity() {
             loading={events.isLoading}
             dataSource={rows}
             rowKey={(e) => e.id}
-            scroll={{ x: 900 }}
+            scroll={ {
+                  /*
+                    `max-content`, not a number. A hardcoded width has to be
+                    kept in step with the sum of the column widths by hand, and
+                    when it drifts below that sum antd squeezes the table to the
+                    smaller figure and the pinned column lands on top of the one
+                    before it. Letting the browser measure cannot drift.
+                  */
+                  x: 'max-content'
+                } }
             onRow={(e) => ({ onClick: () => setOpen(e), style: { cursor: 'pointer' } })}
             pagination={{
               current: page,

@@ -80,7 +80,16 @@ export default function Repositories() {
             dataSource={rows}
             rowKey={(r) => `${r.product}-${r.kind}-${r.repo.name}`}
             pagination={false}
-            scroll={{ x: 1000 }}
+            scroll={ {
+                  /*
+                    `max-content`, not a number. A hardcoded width has to be
+                    kept in step with the sum of the column widths by hand, and
+                    when it drifts below that sum antd squeezes the table to the
+                    smaller figure and the pinned column lands on top of the one
+                    before it. Letting the browser measure cannot drift.
+                  */
+                  x: 'max-content'
+                } }
             expandable={{
               expandedRowRender: (r) => {
                 const result = resultFor(r.product, r.repo.name)

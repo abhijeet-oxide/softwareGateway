@@ -1,0 +1,29 @@
+apiVersion: softwaregateway.io/v1alpha1
+kind: Product
+metadata:
+  name: nokia-cmm
+  displayName: Nokia Cloud Mobility Manager
+  owner: mobility-core
+spec:
+  sources:
+    - name: vendor
+      registry: registry.nokia.example.com:9443
+      repository: nokia/cmm
+      anonymous: true
+      discovery:
+        enabled: true
+        interval: 30m
+  targets:
+    - name: jfrog-lab
+      registry: artifactory.internal.example.com:9444
+      repository: nokia-lab/cmm
+      type: artifactory
+      xrayEnabled: true
+      xrayEndpoint: https://artifactory.internal.example.com:9444
+      credentialsRef:
+        secretName: internal-registry
+      default: true
+  network:
+    tls:
+      # Development only: dev/fakeregistry issues its own certificate.
+      insecureSkipVerify: true

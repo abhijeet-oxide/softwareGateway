@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from 'react'
 import type { ReactNode } from 'react'
 import {
   Alert,
-  App, Button, Card, Col, Collapse, Descriptions, Drawer, Input, Progress, Row, Segmented, Select,
+  App, Button, Card, Col, Collapse, Descriptions, Drawer, Input, Row, Segmented, Select,
   Space, Spin, Table, Tag, Tooltip, Typography,
 } from 'antd'
 import { CopyOutlined, ExportOutlined } from '@ant-design/icons'
@@ -20,7 +20,7 @@ import {
   SeverityBar, SeverityTag, StopSyncButton, SyncButton, SyncedAgo, SyncInterrupted, SyncLogButton,
 } from './security'
 import { formatAbsolute, formatRelative } from '../domain/format'
-import { mono, semantic, severity as severityColour } from '../theme'
+import { mono, palette, semantic, severity as severityColour } from '../theme'
 
 /**
  * The Security tab of a release.
@@ -339,158 +339,239 @@ function SummaryCards({ data, syncing }: { data: PackageSecurityResponse; syncin
   }
 
   return (
-    <Row gutter={[16, 16]}>
-      {/*
-        One card, not two. The totals and the severity breakdown were separate
-        cards showing the same five numbers in two visual languages, across half
-        the width of the page. They are one fact at two resolutions: the total,
-        and what it is made of.
-      */}
-      <Col xs={24} lg={12}>
-        <Card size="small" title="Vulnerabilities" style={{ height: '100%' }}>
-          <Row gutter={24} align="middle">
-            <Col xs={24} sm={9}>
-              {/*
-                Unique first. "8,479" is the same advisory counted once per
-                image it appears in - a measure of how much replacing there is
-                to do - and it is not the number somebody means when they ask
-                how many vulnerabilities a release has.
-              */}
-              <div style={{ fontSize: 38, fontWeight: 600, lineHeight: 1.05 }}>
-                {stats.unique.toLocaleString()}
-              </div>
-              <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-                unique CVEs
-              </Typography.Text>
-              <div>
-                <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-                  {stats.total.toLocaleString()} findings
-                  {stats.affected > 0
-                    && ` across ${stats.affected.toLocaleString()} of ${coverage.scanned.toLocaleString()} images`}
-                </Typography.Text>
-              </div>
-              <div style={{ marginTop: 14 }}>
-                <SeverityBar
-                  counts={{
-                    total: stats.total,
-                    fixable: stats.fixable,
-                    nonFixable: stats.nonFixable,
-                    bySeverity: stats.bySeverity,
-                    fixableBySeverity: stats.fixableBySeverity,
-                  }}
-                  height={8}
-                />
-              </div>
-            </Col>
+    /*
+      ONE BAND, THREE ZONES - not three cards.
 
-            <Col xs={24} sm={15}>
-              <Space direction="vertical" size={7} style={{ width: '100%', marginTop: 8 }}>
-                {SEVERITIES.filter((s) => stats.bySeverity[s] > 0 || s !== 'unknown').map((s) => {
-                  const total = stats.bySeverity[s]
-                  const fixable = stats.fixableBySeverity[s]
-                  return (
-                    <div key={s}>
-                      <Space style={{ width: '100%', justifyContent: 'space-between' }}>
-                        <SeverityTag value={s} />
-                        <Typography.Text style={{ fontSize: 12 }}>
-                          <strong>{total.toLocaleString()}</strong>
-                          {total > 0 && (
-                            <Typography.Text type="secondary" style={{ fontSize: 11 }}>
-                              {' '}({fixable.toLocaleString()} fixable)
-                            </Typography.Text>
-                          )}
-                        </Typography.Text>
-                      </Space>
-                      <div style={{ height: 4, background: '#EEF1F4', borderRadius: 2, marginTop: 4 }}>
-                        <div
-                          style={{
-                            width: `${stats.total > 0 ? (total / stats.total) * 100 : 0}%`,
-                            height: '100%', background: severityColour[s], borderRadius: 2,
-                          }}
-                        />
-                      </div>
-                    </div>
-                  )
-                })}
-              </Space>
-            </Col>
-          </Row>
-        </Card>
-      </Col>
+      This was a card of totals, a card with a ring reading "80%", and a card
+      with a ring reading "100%". Three boxes of equal visual weight, two of
+      them dominated by a circle whose only job was to restate a percentage
+      written next to it. A ring at 100% is decoration: it draws a full circle
+      to say the same thing the word "all" says, and it earns its space only
+      when the shape of the number is the point.
 
-      <Col xs={24} md={12} lg={6}>
-        <Card size="small" title="Fixable" style={{ height: '100%' }}>
-          <Space align="center" size={16}>
-            <Progress
-              type="circle"
-              size={78}
-              percent={fixablePercent}
-              strokeColor={semantic.success}
-              format={() => (
-                <span style={{ fontSize: 16, fontWeight: 600 }}>{fixablePercent}%</span>
-              )}
+      The three facts are one posture, read left to right in the order somebody
+      asks them: how bad is it, what is it made of, and can I trust the answer.
+      Hairlines between them, because they belong to each other.
+    */
+    <Card size="small" styles={{ body: { padding: 0 } }}>
+      <div
+        className="slm-band"
+        style={{
+          gridTemplateColumns: 'minmax(230px, 0.85fr) minmax(280px, 1.15fr) minmax(230px, 0.9fr)',
+        }}
+      >
+        {/* -------------------------------------------------- how bad it is -- */}
+        <div style={{ padding: '18px 22px', minWidth: 0 }}>
+          <ZoneLabel>Vulnerabilities</ZoneLabel>
+          {/*
+            Unique first. The total is the same advisory counted once per image
+            it appears in - a measure of how much replacing there is to do - and
+            it is not the number somebody means when they ask how many
+            vulnerabilities a release has.
+          */}
+          <div
+            style={{
+              fontSize: 44, fontWeight: 600, lineHeight: 1, letterSpacing: '-0.03em',
+              color: palette.headingText, fontVariantNumeric: 'tabular-nums',
+            }}
+          >
+            {stats.unique.toLocaleString()}
+          </div>
+          <Typography.Text type="secondary" style={{ fontSize: 12.5 }}>
+            unique CVEs
+          </Typography.Text>
+
+          <div style={{ marginTop: 16 }}>
+            <SeverityBar
+              counts={{
+                total: stats.total,
+                fixable: stats.fixable,
+                nonFixable: stats.nonFixable,
+                bySeverity: stats.bySeverity,
+                fixableBySeverity: stats.fixableBySeverity,
+              }}
+              height={8}
             />
-            <Space direction="vertical" size={0}>
-              <Typography.Text strong style={{ fontSize: 22, color: semantic.success, lineHeight: 1.2 }}>
-                {stats.fixable.toLocaleString()}
-              </Typography.Text>
-              <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-                have a fixed version
-              </Typography.Text>
-              <Typography.Text type="secondary" style={{ fontSize: 12, marginTop: 6 }}>
-                {stats.nonFixable.toLocaleString()} have none
-              </Typography.Text>
-            </Space>
-          </Space>
-        </Card>
-      </Col>
+          </div>
+          <Typography.Text type="secondary" style={{ fontSize: 12, display: 'block', marginTop: 8 }}>
+            {stats.total.toLocaleString()} findings
+            {stats.affected > 0
+              && ` across ${stats.affected.toLocaleString()} of ${coverage.scanned.toLocaleString()} images`}
+          </Typography.Text>
+        </div>
 
-      <Col xs={24} md={12} lg={6}>
-        <Card size="small" title="Scan coverage" style={{ height: '100%' }}>
-          <Space align="center" size={16}>
-            <Progress
-              type="circle"
-              size={78}
-              percent={scannedPercent}
-              strokeColor={coverage.complete ? semantic.success : semantic.warning}
-              format={() => (
-                <span style={{ fontSize: 16, fontWeight: 600 }}>{scannedPercent}%</span>
+        {/* ------------------------------------------- what it is made of -- */}
+        <div
+          style={{
+            padding: '18px 22px', minWidth: 0,
+            borderInlineStart: `1px solid ${palette.hairline}`,
+          }}
+        >
+          <ZoneLabel>By severity</ZoneLabel>
+          <div style={{ display: 'grid', gap: 10 }}>
+            {SEVERITIES.filter((sev) => stats.bySeverity[sev] > 0 || sev !== 'unknown').map((sev) => {
+              const total = stats.bySeverity[sev]
+              const fixable = stats.fixableBySeverity[sev]
+              const share = stats.total > 0 ? (total / stats.total) * 100 : 0
+              return (
+                <div key={sev}>
+                  <div
+                    style={{
+                      display: 'flex', alignItems: 'baseline', gap: 8, marginBottom: 5,
+                      fontVariantNumeric: 'tabular-nums',
+                    }}
+                  >
+                    <SeverityTag value={sev} />
+                    <span
+                      style={{
+                        marginInlineStart: 'auto', fontSize: 13, fontWeight: 600,
+                        color: total > 0 ? palette.headingText : semantic.neutral,
+                      }}
+                    >
+                      {total.toLocaleString()}
+                    </span>
+                    <span
+                      style={{ fontSize: 11, color: semantic.neutral, minWidth: 66, textAlign: 'right' }}
+                    >
+                      {total > 0 ? `${fixable.toLocaleString()} fixable` : ''}
+                    </span>
+                  </div>
+                  {/*
+                    Proportional to the whole release, so the row lengths are
+                    comparable with each other. A bar normalised per severity
+                    would draw four full-width bars and say nothing.
+                  */}
+                  <div style={{ height: 5, background: '#EEF1F4', borderRadius: 3 }}>
+                    <div
+                      className="slm-meter-seg"
+                      style={{
+                        width: `${share}%`, height: '100%', borderRadius: 3,
+                        background: severityColour[sev], transformOrigin: 'left',
+                        animation: 'slm-grow 420ms cubic-bezier(0.16,1,0.3,1) both',
+                      }}
+                    />
+                  </div>
+                </div>
+              )
+            })}
+          </div>
+        </div>
+
+        {/* ------------------------------ whether the answer can be trusted -- */}
+        <div
+          style={{
+            padding: '18px 22px', minWidth: 0,
+            borderInlineStart: `1px solid ${palette.hairline}`,
+            background: palette.sunken,
+          }}
+        >
+          <ZoneLabel>Confidence</ZoneLabel>
+
+          <Meter
+            value={fixablePercent}
+            colour={semantic.success}
+            headline={`${stats.fixable.toLocaleString()} of ${stats.total.toLocaleString()} have a fix`}
+            detail={stats.nonFixable > 0
+              ? `${stats.nonFixable.toLocaleString()} have no fixed version yet`
+              : 'Every finding has a fixed version'}
+          />
+
+          <div style={{ height: 16 }} />
+
+          <Meter
+            value={scannedPercent}
+            colour={coverage.complete ? semantic.success : semantic.warning}
+            headline={`${coverage.scanned.toLocaleString()} of ${coverage.scannable.toLocaleString()} images scanned`}
+            detail={coverage.complete
+              ? 'Every scannable image has a result'
+              : 'Some images have no result, so the count above is a floor'}
+          />
+
+          {/*
+            EVERY bucket, named. This once said "1 not scanned" while omitting
+            209 the scanner had refused, because the two were summed into one
+            number somewhere and only one of them was shown. They have different
+            fixes and they get different lines.
+
+            What is NOT here: the charts and files. They are not a gap in
+            coverage - the scanner is never asked about them - and a line saying
+            "102 not applicable" invites a reader to subtract it from something.
+          */}
+          {(coverage.missing > 0 || coverage.unavailable > 0 || coverage.notScanned > 0) && (
+            <div style={{ marginTop: 12 }}>
+              {coverage.missing > 0 && (
+                <CoverageLine n={coverage.missing} label="not found in the repository" colour={semantic.error} />
               )}
-            />
-            <Space direction="vertical" size={0}>
-              <Typography.Text strong style={{ fontSize: 22, lineHeight: 1.2 }}>
-                {coverage.scanned.toLocaleString()}
-              </Typography.Text>
-              <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-                of {coverage.scannable.toLocaleString()} images scanned
-              </Typography.Text>
-              {/*
-                EVERY bucket, named. This card once said "1 not scanned" while
-                omitting 209 the scanner had refused, because the two were summed
-                into one number somewhere and only one of them was shown. They
-                have different fixes and they get different lines.
+              {coverage.unavailable > 0 && (
+                <CoverageLine n={coverage.unavailable} label="not retrieved" colour={semantic.error} />
+              )}
+              {coverage.notScanned > 0 && (
+                <CoverageLine n={coverage.notScanned} label="awaiting a scan" colour={semantic.warning} />
+              )}
+            </div>
+          )}
+        </div>
+      </div>
+    </Card>
+  )
+}
 
-                What is NOT here: the charts and files. They are not a gap in
-                coverage - the scanner is never asked about them - and a line
-                saying "102 not applicable" on a card about scanning invites a
-                reader to subtract it from something.
-              */}
-              <div style={{ marginTop: 6 }}>
-                {coverage.missing > 0 && (
-                  <CoverageLine n={coverage.missing} label="not found in the repository" colour={semantic.error} />
-                )}
-                {coverage.unavailable > 0 && (
-                  <CoverageLine n={coverage.unavailable} label="not retrieved" colour={semantic.error} />
-                )}
-                {coverage.notScanned > 0 && (
-                  <CoverageLine n={coverage.notScanned} label="awaiting a scan" colour={semantic.warning} />
-                )}
-              </div>
-            </Space>
-          </Space>
-        </Card>
-      </Col>
-    </Row>
+/** The name of a zone within the posture band. */
+function ZoneLabel({ children }: { children: ReactNode }) {
+  return (
+    <div
+      style={{
+        fontSize: 11, fontWeight: 600, letterSpacing: '0.06em', textTransform: 'uppercase',
+        color: semantic.neutral, marginBottom: 10,
+      }}
+    >
+      {children}
+    </div>
+  )
+}
+
+/**
+ * A proportion, as a sentence with a bar under it.
+ *
+ * This replaced a 78px progress ring. The ring drew a circle to restate a
+ * percentage printed inside it, and at 100% - which is the common case - it
+ * drew a complete circle to say "all", which the sentence already said. A
+ * horizontal bar under the sentence is the same information in a shape that
+ * can be compared with the bar under the sentence below it.
+ */
+function Meter({ value, colour, headline, detail }: {
+  value: number
+  colour: string
+  headline: string
+  detail: string
+}) {
+  return (
+    <div>
+      <div
+        style={{
+          display: 'flex', alignItems: 'baseline', gap: 8, marginBottom: 6,
+          fontVariantNumeric: 'tabular-nums',
+        }}
+      >
+        <span style={{ fontSize: 13, fontWeight: 600, color: palette.headingText }}>{headline}</span>
+        <span style={{ marginInlineStart: 'auto', fontSize: 12, fontWeight: 600, color: colour }}>
+          {value}%
+        </span>
+      </div>
+      <div style={{ height: 5, background: '#E4E9EF', borderRadius: 3, overflow: 'hidden' }}>
+        <div
+          className="slm-meter-seg"
+          style={{
+            width: `${value}%`, height: '100%', background: colour, borderRadius: 3,
+            transformOrigin: 'left',
+            animation: 'slm-grow 480ms cubic-bezier(0.16,1,0.3,1) both',
+          }}
+        />
+      </div>
+      <Typography.Text type="secondary" style={{ fontSize: 11.5, display: 'block', marginTop: 5 }}>
+        {detail}
+      </Typography.Text>
+    </div>
   )
 }
 

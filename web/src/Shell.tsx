@@ -8,10 +8,10 @@ import {
 import DashboardOutlineIcon from '@iconify-react/material-symbols/dashboard-outline';
 import ProductCatalogIcon from '@iconify-react/fluent-mdl2/product-catalog';
 import { DownloadIcon, Icon, PackageIcon } from './components/icons'
-import { useLocation, useNavigate } from 'react-router-dom'
+import { Link, useLocation, useNavigate } from 'react-router-dom'
 import { useIdentity } from './auth/permissions'
 import { useTransfers } from './api/queries'
-import { branding, palette } from './theme'
+import { branding, palette, semantic } from './theme'
 import { BrandMark } from './components/icons'
 
 const { Sider, Header, Content } = Layout
@@ -49,6 +49,47 @@ const NAV = [
   { key: '/settings', icon: <SettingOutlined />, label: 'Settings' },
 ]
 
+/**
+ * What the system is doing right now, in one line.
+ *
+ * Three states and no more: something is failing, something is running, or
+ * everything has settled. The settled case is stated rather than left blank -
+ * a bar that says nothing when all is well is a bar a reader learns to ignore,
+ * and then does not notice on the day it has something to say.
+ */
+function ActivityPill({ running, failing }: { running: number; failing: number }) {
+  const [tone, text] = failing > 0
+    ? [semantic.error, `${failing} download${failing === 1 ? '' : 's'} failed`]
+    : running > 0
+      ? [palette.primary, `${running} download${running === 1 ? '' : 's'} running`]
+      : [semantic.success, 'All downloads settled']
+
+  return (
+    <Link to="/downloads" style={{ textDecoration: 'none' }}>
+      <span
+        style={{
+          display: 'inline-flex', alignItems: 'center', gap: 8,
+          padding: '4px 12px 4px 10px', borderRadius: 999,
+          background: palette.sunken, border: `1px solid ${palette.hairline}`,
+          fontSize: 12.5, lineHeight: 1.4, color: semantic.neutral, whiteSpace: 'nowrap',
+          fontVariantNumeric: 'tabular-nums',
+        }}
+      >
+        <span
+          aria-hidden
+          style={{
+            width: 7, height: 7, borderRadius: '50%', background: tone,
+            // The pulse marks work in flight and stops the moment it settles,
+            // so movement in this bar always means something is moving.
+            boxShadow: running > 0 && failing === 0 ? `0 0 0 3px ${tone}22` : undefined,
+          }}
+        />
+        {text}
+      </span>
+    </Link>
+  )
+}
+
 export function Shell({ children }: { children: ReactNode }) {
   const location = useLocation()
   const navigate = useNavigate()
@@ -64,9 +105,19 @@ export function Shell({ children }: { children: ReactNode }) {
     .filter((k) => (k === '/' ? location.pathname === '/' : location.pathname.startsWith(k)))
     .sort((a, b) => b.length - a.length)[0] ?? '/'
 
+  const section = NAV.find((n) => n.key === selected)?.label ?? branding.name
+
   return (
     <Layout style={{ height: '100dvh', overflow: 'hidden' }}>
-      <Sider width={216} style={{ background: palette.sidebar }}>
+      <Sider
+        width={216}
+        style={{
+          background: palette.sidebar,
+          // A rule the navy itself provides, so the sidebar has an edge rather
+          // than bleeding into the page background at exactly one lightness.
+          boxShadow: 'inset -1px 0 0 rgba(255,255,255,0.06)',
+        }}
+      >
         {/*
           The name, and the mark a deployment sets beside it. Both come from
           theme.ts, which is the one file a company edits to make this look
@@ -111,19 +162,46 @@ export function Shell({ children }: { children: ReactNode }) {
       </Sider>
 
       <Layout style={{ minWidth: 0, overflow: 'hidden' }}>
+        {/*
+          The top bar carries WHERE YOU ARE and WHAT THE SYSTEM IS DOING.
+
+          It was an empty white band with two icons pushed against the right
+          edge - fourteen hundred pixels of nothing above every page. The two
+          facts now in it were both already computed and both hidden: the
+          section name existed only as a highlighted nav item on the other side
+          of the window, and the number of downloads currently running lived
+          inside the tooltip of a bell, which is to say nowhere. An operations
+          console should say what it is doing without being asked.
+        */}
         <Header
           style={{
             background: palette.topBar, borderBottom: `1px solid ${palette.topBarBorder}`,
-            display: 'flex', alignItems: 'center', justifyContent: 'flex-end',
-            gap: 16, paddingInline: 24,
+            display: 'flex', alignItems: 'center', gap: 16, paddingInline: 24,
+            // Ant sets `line-height: 64px` on the header. Anything inline
+            // inside it inherits a 64px line box, which turned a 26px pill
+            // into a 72px ellipse hanging below the bar.
+            lineHeight: 'normal',
           }}
         >
-          <Space size={16}>
+          <Typography.Text
+            style={{
+              fontSize: 15, fontWeight: 600, color: palette.headingText,
+              letterSpacing: '-0.01em',
+            }}
+          >
+            {section}
+          </Typography.Text>
+
+          <div style={{ marginInlineStart: 'auto' }}>
+            <ActivityPill running={running} failing={failing} />
+          </div>
+
+          <Space size={4}>
             <Tooltip title="Documentation">
               <Button type="text" icon={<QuestionCircleOutlined />} aria-label="Help" />
             </Tooltip>
 
-            <Tooltip title={`${running} downloading, ${failing} failed`}>
+            <Tooltip title={failing ? `${failing} download${failing === 1 ? '' : 's'} failed` : 'No notifications'}>
               <Badge count={failing} size="small">
                 <Button type="text" icon={<BellOutlined />} aria-label="Notifications" />
               </Badge>

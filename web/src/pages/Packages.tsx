@@ -413,13 +413,33 @@ export default function Packages() {
             */
             scroll={{ x: 'max-content' }}
             columns={[
-              {
+              /*
+                THE PRODUCT COLUMN EXISTS ONLY WHEN IT VARIES.
+
+                Unscoped, this listing spans every product and the column is
+                the only thing telling two identically-versioned rows apart.
+                Scoped by the select above it, every row carries the same
+                value - and that costs 235px of a table already wider than the
+                window, which is paid for by the pinned Actions column
+                covering whatever falls off the right-hand end. A column that
+                cannot distinguish two rows is not worth a reader losing one
+                that can.
+              */
+              ...(selected ? [] : [{
                 title: 'Product',
-                width: 210,
-                render: (_, r) => (
-                  <span>{r.product.displayName || r.product.productId}</span>
+                width: 190,
+                render: (_: unknown, r: (typeof rows)[number]) => (
+                  <span
+                    style={{
+                      display: 'block', whiteSpace: 'nowrap',
+                      overflow: 'hidden', textOverflow: 'ellipsis',
+                    }}
+                    title={r.product.displayName || r.product.productId}
+                  >
+                    {r.product.displayName || r.product.productId}
+                  </span>
                 ),
-              },
+              }]),
               {
                 /*
                   The package's own name, in its own column. It used to sit
@@ -456,7 +476,11 @@ export default function Packages() {
                   />
                 ),
               },
-              { title: 'Published', width: 95, render: (_, r) => <TimeAgo at={r.pkg.publishedAt || r.pkg.discoveredAt} /> },
+              {
+                title: 'Published',
+                width: 118,
+                render: (_, r) => <TimeAgo at={r.pkg.publishedAt || r.pkg.discoveredAt} />,
+              },
               { title: 'Signed', width: 120, render: (_, r) => <VerificationBadge state={verification(r.pkg)} /> },
               {
                 title: 'Status',
@@ -485,7 +509,7 @@ export default function Packages() {
                   itself.
                 */
                 title: 'Vulnerabilities',
-                width: 185,
+                width: 240,
                 render: (_, r) => (
                   <RowVulnerability
                     product={r.product.productId}

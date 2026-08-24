@@ -20,6 +20,8 @@ import LayersIcon from '~icons/mdi/layers-triple-outline'
 import SignatureIcon from '~icons/mdi/certificate-outline'
 import type { Repository } from '../api/types'
 import { branding } from '../theme'
+import brand from '../brand'
+import { BrandMark as SharedBrandMark } from '../uikit'
 import NokiaNAsset from '../assets/nokia_n.svg'
 
 /**
@@ -49,39 +51,17 @@ import NokiaNAsset from '../assets/nokia_n.svg'
 export type IconComponent = ElementType<{ style?: CSSProperties }>
 
 /**
- * The mark a deployment puts before the product name.
+ * The mark this deployment puts before the product name.
  *
- * Three shapes, because a company's logo arrives in whichever one they have:
- * an Iconify icon compiled into the bundle, raw SVG markup, or an image by URL.
- * All three are configured in theme.ts and none of them reaches the network at
- * runtime unless the third is pointed at something remote, which an air-gapped
- * deployment should not do.
- *
- * Renders nothing when no mark is set, which is the default: a tool with no
- * logo should look deliberate rather than look like a broken image.
+ * The drawing itself lives in `brand.ts` and the component that renders it
+ * lives in `uikit/` - the design system this tool shares byte for byte with
+ * the other tools on the platform - so a mark set once is drawn identically
+ * wherever it appears, in either product. This is the thin binding between the
+ * two: the shared component takes an identity as a PROP (which is what keeps
+ * it copyable), and this is the one place in the application that supplies it.
  */
 export function BrandMark({ size }: { size?: number }) {
-  const mark = branding.mark
-  if (!mark) return null
-  const px = size ?? branding.markSize
-
-  if (typeof mark === 'string') {
-    // Inline SVG takes the colour and size around it; anything else is an
-    // image and cannot, so it is sized and left alone.
-    if (mark.trim().startsWith('<svg')) {
-      return (
-        <span
-          aria-hidden
-          style={{ display: 'inline-flex', width: px, height: px, color: '#fff' }}
-          dangerouslySetInnerHTML={{ __html: mark }}
-        />
-      )
-    }
-    return <img src={mark} alt="" width={px} height={px} style={{ display: 'block' }} />
-  }
-
-  const Mark = mark
-  return <Mark aria-hidden style={{ display: 'block', width: px, height: px, color: '#fff' }} />
+  return <SharedBrandMark brand={brand} size={size ?? branding.markSize} />
 }
 
 export const NokiaNIcon: IconComponent = (props) => (

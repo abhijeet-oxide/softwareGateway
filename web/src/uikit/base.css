@@ -1,0 +1,202 @@
+/* The global rules a component library does not cover.
+ *
+ * These are the cheapest signal that a page was BUILT rather than assembled:
+ * the browser's own surfaces (selection, caret, scrollbar, focus ring) ship
+ * with defaults that belong to no design system, and leaving them is what
+ * makes an otherwise careful page look generic.
+ *
+ * Everything here names a variable, so all of it follows the theme, the active
+ * preset and the light/dark switch. */
+
+html,
+body,
+#root {
+  height: 100%;
+  margin: 0;
+  padding: 0;
+}
+
+/* This is an application shell, not a document: it is exactly the size of the
+   window and every scrollable region inside it manages its own bar. So the
+   PAGE itself never scrolls sideways.
+
+   Without this, a floating layer that lands a pixel over the right edge - a
+   tooltip on the last button in the top bar - grows the document, which puts a
+   horizontal scrollbar on the page, which shifts the layout, which moves the
+   pointer off the button that opened the tooltip, which closes it, which
+   removes the bar. That loop is what reads as the page shaking.
+
+   `clip` rather than `hidden`: hidden would make body a scroll container and
+   break every `position: sticky` inside it. `clip` just clips. */
+html,
+body {
+  overflow-x: clip;
+}
+
+body {
+  font-family: var(--font-ui);
+  background: var(--canvas);
+  color: var(--text);
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+
+/* Headings carry a touch of negative tracking and balanced wrapping so they
+   read as considered display type, not default bold body text. */
+:where(.ant-typography, h1, h2, h3, h4) {
+  letter-spacing: -0.014em;
+}
+
+/* NUMBERS THAT LINE UP.
+ *
+ * The single highest-value rule in this file. Proportional digits are why a
+ * column of counts reads as ragged text: in most UI faces a 1 is narrower than
+ * a 7, so 1,286 and 7,004 have different widths and a reader comparing a
+ * column of them is comparing shapes that do not align. Every number in a
+ * table exists to be compared with the number above it. */
+.ant-table-cell,
+.ant-statistic-content,
+.ant-descriptions-item-content,
+.ui-mono,
+.ui-num {
+  font-variant-numeric: tabular-nums;
+  font-feature-settings: "tnum" 1;
+}
+
+/* Identifiers - versions, digests, paths, URLs - are monospace everywhere, and
+   read tighter than prose; the default mono tracking is loose. */
+.ui-mono {
+  font-family: var(--font-mono);
+  font-size: 0.92em;
+  letter-spacing: -0.01em;
+}
+
+/* THE BROWSER'S OWN SURFACES. */
+::selection {
+  background: color-mix(in srgb, var(--brand) 20%, transparent);
+}
+html {
+  caret-color: var(--brand);
+  scrollbar-color: var(--border-strong) transparent;
+  scrollbar-width: thin;
+}
+::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background: var(--border-strong);
+  border: 3px solid transparent;
+  border-radius: 6px;
+  background-clip: padding-box;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: var(--text-3);
+  background-clip: padding-box;
+}
+
+/* Keyboard focus stays visible: full keyboard operation is a requirement, and
+   a focus ring in the brand colour is one fewer thing that looks borrowed. */
+:focus-visible {
+  outline: 2px solid var(--brand);
+  outline-offset: 2px;
+  border-radius: 3px;
+}
+
+/* Ant Design's inline icons, and this kit's own, are inline GLYPHS - they sit
+   on the text baseline rather than starting a line of their own. Stated here
+   because a CSS reset (Tailwind's preflight among them) sets
+   `svg { display: block }`, which stacks every icon in a menu, a tree or a
+   button onto its own line. */
+.anticon {
+  display: inline-flex;
+  align-items: center;
+  color: inherit;
+  font-style: normal;
+  line-height: 0;
+  text-align: center;
+  text-transform: none;
+  vertical-align: -0.125em;
+}
+.anticon svg,
+.ant-tree .ant-tree-iconEle svg {
+  display: inline-block;
+}
+
+/* Buttons flex-centre their label, but a font's built-in leading is split
+   evenly above and below - and Segoe UI carries its visual weight below the
+   line-box centre, so the label reads as sitting low in the control. Trimming
+   the line-height to the glyph makes flex centring land on the text itself, on
+   every platform. */
+.ant-btn {
+  line-height: 1.1;
+}
+.ant-btn.ant-btn-icon-only {
+  line-height: 1;
+}
+
+/* --- motion ----------------------------------------------------------------
+ * A small vocabulary, and no more: content arrives with a gentle rise, a
+ * collection cascades briefly, a spinner turns. Everything else is a state
+ * change fast enough to read as a response rather than an animation.
+ *
+ * CSS animations, not a JavaScript animation runtime: three fades and a
+ * stagger do not justify shipping an animation library in the entry bundle to
+ * express what @keyframes expresses for nothing. */
+@keyframes ui-rise {
+  from {
+    opacity: 0;
+    transform: translateY(var(--rise, 8px));
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+@keyframes ui-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.ui-fade-in {
+  animation: ui-rise var(--dur-view) var(--ease-out) both;
+  animation-delay: var(--delay, 0s);
+}
+.ui-stagger > .ui-stagger-item {
+  animation: ui-rise var(--dur-view) var(--ease-out) both;
+}
+/* The cascade delay comes from an item's POSITION, so items stay ordinary
+   children and callers pass nothing extra. Capped at eight: past that the last
+   card arrives late enough to read as a page that is still loading. */
+.ui-stagger > .ui-stagger-item:nth-child(1) { animation-delay: 0ms; }
+.ui-stagger > .ui-stagger-item:nth-child(2) { animation-delay: 40ms; }
+.ui-stagger > .ui-stagger-item:nth-child(3) { animation-delay: 80ms; }
+.ui-stagger > .ui-stagger-item:nth-child(4) { animation-delay: 120ms; }
+.ui-stagger > .ui-stagger-item:nth-child(5) { animation-delay: 160ms; }
+.ui-stagger > .ui-stagger-item:nth-child(6) { animation-delay: 200ms; }
+.ui-stagger > .ui-stagger-item:nth-child(7) { animation-delay: 240ms; }
+.ui-stagger > .ui-stagger-item:nth-child(n + 8) { animation-delay: 280ms; }
+
+.ui-spin {
+  transform-origin: 50% 50%;
+  animation: ui-spin 900ms linear infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .ui-fade-in,
+  .ui-stagger > .ui-stagger-item {
+    animation: none;
+  }
+  .ui-spin {
+    animation-duration: 2.4s;
+  }
+  *,
+  *::before,
+  *::after {
+    transition-duration: 0.01ms !important;
+  }
+}

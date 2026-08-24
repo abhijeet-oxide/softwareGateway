@@ -47,6 +47,9 @@ npm run typecheck
 | `src/components/icons.tsx` | Every icon, chosen once - brand marks for vendors and registries, ecosystem marks for artifact kinds. |
 | `src/auth/permissions.tsx` | `useCan(action, scope)`. |
 | `src/components/` | The reusable vocabulary: chips, badges, progress, page furniture. |
+| `src/uikit/` | **The shared design system.** Byte-identical to the copy in every other tool on the platform. Palette, tokens, `ThemeProvider`, primitives. See `src/uikit/README.md`. |
+| `src/brand.ts` | The one file that says "Software Gateway": name, tagline, mark, favicon. |
+| `src/theme.ts` | A compatibility layer mapping this app's long-standing names (`palette`, `semantic`, `severity`, `mono`) onto the shared tokens. |
 
 ### Three rules the code enforces rather than documents
 
@@ -110,7 +113,41 @@ artifacts, new packages and errors per source. The default holds the HTTP
 request open for the whole scan - minutes against a slow registry, with every
 intermediary's idle timeout becoming part of the control plane.
 
-**5. The interface never edits configuration.** Products, downloads, rules,
+**5. The look is shared, and shared means the same FILES.**
+`src/uikit/` is a design system this tool holds byte-identically with the other
+tools on the platform, so two products meant to look like one product stay that
+way without anybody maintaining the resemblance. It carries the palette (light
+and dark), the structural tokens, the Ant Design bridge, the `ThemeProvider`
+and the primitives; `src/theme.ts` maps it onto the names this application
+already used, so adopting it was not also a rename of twenty files.
+
+Three rules keep it copyable, and each is load-bearing:
+
+- **Nothing inside `uikit/` names a product.** Identity lives in `brand.ts`,
+  which is exactly what survives the folder being copied over the top of it -
+  shared components take it as a prop, the Vite plugin takes it as an argument.
+- **Nothing outside it names a colour.** Every value `theme.ts` exports is a
+  `var()` reference, so an inline style follows the light/dark switch without
+  the component knowing one exists - which is how this application gained a
+  dark theme without a page being edited. A page that reached for its own hex
+  is one a rebrand silently misses, and one that stays light forever. Where a
+  colour needs to be thinner, use `withAlpha`: appending two hex digits to a
+  `var()` produces an invalid colour, so the rule is dropped and the effect
+  simply never appears.
+- **`react` and `antd` are its only dependencies**, which is why its six glyphs
+  are drawn inline rather than imported - the sibling tool does not use the same
+  icon package, and a shared component that imports from one stops being
+  copyable.
+
+To change the look, edit `uikit/tokens.ts`; both tools follow. After changing
+anything in the folder, copy it across whole and check with
+`diff -r src/uikit ../../configer/frontend/src/uikit` - empty output means the
+tools are still one design system. Fix a drift by copying, never by patching one
+side, and never by adding a prop that makes the kit behave differently per tool.
+Two looks that must genuinely differ are a preset in `tokens.ts`, shipped to
+both and chosen by one line.
+
+**6. The interface never edits configuration.** Products, downloads, rules,
 intervals and verification policy come from Git and are reconciled by Flux. A
 write from here would be a second source of truth that gets silently reverted
 minutes later. Configuration is shown with a `Managed in Git` badge; requesting

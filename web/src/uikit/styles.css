@@ -1,0 +1,13 @@
+/* The whole stylesheet, in one import.
+ *
+ *   import "./uikit/styles.css";
+ *
+ * Order matters: structural tokens first (so base.css and components.css can
+ * name them), then the global rules, then the primitives. The COLOUR variables
+ * are not here - they are inlined into <head> by vitePluginBrand.ts, ahead of
+ * every stylesheet, which is what stops the page painting once in the wrong
+ * theme and then again in the right one. */
+
+@import "./tokens.css";
+@import "./base.css";
+@import "./components.css";

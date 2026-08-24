@@ -1,0 +1,591 @@
+/* The primitives' stylesheet.
+ *
+ * Plain CSS on the design tokens, deliberately: one of the tools that shares
+ * this folder compiles Tailwind and the other does not, and a component styled
+ * with utility classes stops being copyable the moment it lands in the app
+ * without them. Class names are prefixed `ui-` so they cannot collide with
+ * either app's own stylesheet.
+ *
+ * Every value here is a token. No hex, no bare pixel colour, nothing that a
+ * change of preset would miss. */
+
+/* --- page header ---------------------------------------------------------- */
+.ui-page-header {
+  margin-bottom: var(--sp-4);
+}
+.ui-page-header-row {
+  display: flex;
+  min-width: 0;
+  align-items: flex-start;
+  gap: var(--sp-3);
+}
+.ui-page-header-main {
+  min-width: 0;
+  flex: 1;
+}
+.ui-page-header-title {
+  display: flex;
+  min-width: 0;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--sp-2);
+  font-size: var(--fs-20);
+  font-weight: 680;
+  line-height: 1.35;
+  letter-spacing: -0.014em;
+  color: var(--text);
+}
+.ui-page-header-desc {
+  margin-top: 2px;
+  font-size: var(--fs-13);
+  color: var(--text-2);
+}
+.ui-page-header-actions {
+  display: flex;
+  flex-shrink: 0;
+  align-items: center;
+  gap: var(--sp-2);
+}
+
+/* --- section card ---------------------------------------------------------
+   The standard content surface: a soft dual shadow and no hard border, so
+   cards separate by depth rather than by drawing yet another rectangle. */
+.ui-card {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  border-radius: var(--r-xl);
+  background: var(--surface);
+  box-shadow: var(--el-1);
+}
+.ui-card-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--sp-2);
+  padding: var(--sp-3) var(--sp-4);
+  font-size: var(--fs-13);
+  font-weight: 600;
+  color: var(--text);
+}
+.ui-card-head-title {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.ui-card-head-extra {
+  flex-shrink: 0;
+  font-weight: 400;
+}
+.ui-card-body {
+  min-width: 0;
+  flex: 1;
+}
+.ui-card-body.is-padded {
+  padding: var(--sp-4);
+}
+.ui-card-body.is-padded.has-head {
+  padding: 0 var(--sp-4) var(--sp-4);
+}
+.ui-card-body.is-flush {
+  overflow: hidden;
+  border-radius: var(--r-xl);
+}
+
+/* --- stat tile ------------------------------------------------------------ */
+.ui-stat {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: var(--sp-3);
+  border-radius: var(--r-lg);
+  background: var(--surface);
+  padding: var(--sp-3) var(--sp-4);
+  box-shadow: var(--el-1);
+}
+.ui-stat.is-clickable {
+  cursor: pointer;
+  transition:
+    box-shadow var(--dur-hover) var(--ease),
+    transform var(--dur-hover) var(--ease);
+}
+.ui-stat.is-clickable:hover {
+  box-shadow: var(--el-2);
+  transform: translateY(-1px);
+}
+.ui-stat-icon {
+  display: flex;
+  height: 34px;
+  width: 34px;
+  flex-shrink: 0;
+  align-items: center;
+  justify-content: center;
+  border-radius: var(--r-md);
+  font-size: var(--fs-16);
+  color: var(--brand);
+}
+.ui-stat-main {
+  min-width: 0;
+  flex: 1;
+}
+.ui-stat-label {
+  margin-bottom: 2px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: var(--fs-12);
+  color: var(--text-2);
+}
+.ui-stat-value {
+  font-size: var(--fs-20);
+  font-weight: 600;
+  line-height: 1.2;
+  color: var(--text);
+  overflow-wrap: break-word;
+}
+/* The sub-line is a SENTENCE, not a metric: it has to wrap inside the tile
+   rather than run past its edge. Keeping it on one line clipped it mid-word. */
+.ui-stat-sub {
+  margin-top: 2px;
+  font-size: var(--fs-11);
+  line-height: 1.35;
+  color: var(--text-3);
+}
+
+/* --- status pill ----------------------------------------------------------
+   THE status chip: a pastel tinted pill with a dot and a short label. For
+   operational state (Synced, Pending review, Failing, Active); never for
+   environment identity, which has its own colours and must not borrow these. */
+.ui-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  border-radius: var(--r-pill);
+  border: 1px solid;
+  font-weight: 500;
+  line-height: 1;
+  white-space: nowrap;
+  vertical-align: middle;
+}
+.ui-pill.is-md {
+  height: 22px;
+  padding: 0 10px;
+  font-size: var(--fs-12);
+}
+.ui-pill.is-sm {
+  height: 18px;
+  padding: 0 8px;
+  font-size: var(--fs-11);
+}
+.ui-pill-dot {
+  height: 6px;
+  width: 6px;
+  flex-shrink: 0;
+  border-radius: 50%;
+  background: currentColor;
+}
+.ui-pill.tone-ok { background: var(--c-ok-bg); border-color: var(--c-ok-bd); color: var(--c-ok); }
+.ui-pill.tone-pending { background: var(--c-pending-bg); border-color: var(--c-pending-bd); color: var(--c-pending); }
+.ui-pill.tone-review { background: var(--c-review-bg); border-color: var(--c-review-bd); color: var(--c-review); }
+.ui-pill.tone-danger { background: var(--c-danger-bg); border-color: var(--c-danger-bd); color: var(--c-danger); }
+.ui-pill.tone-neutral { background: var(--surface-2); border-color: var(--border); color: var(--text-2); }
+
+/* --- severity dot ---------------------------------------------------------
+   Colour is never the only signal: the dot differs in FILL as well as hue
+   (critical and high are solid, medium and low are ringed, unknown is dashed),
+   and the label beside it is always written out. So the scale survives
+   greyscale, printing, and a reader who does not separate red from green. */
+.ui-sev {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+.ui-sev-dot {
+  height: 9px;
+  width: 9px;
+  flex-shrink: 0;
+  border-radius: 50%;
+  border: 1.5px solid currentColor;
+}
+.ui-sev.sev-critical { color: var(--sev-critical); }
+.ui-sev.sev-high { color: var(--sev-high); }
+.ui-sev.sev-medium { color: var(--sev-medium); }
+.ui-sev.sev-low { color: var(--sev-low); }
+.ui-sev.sev-unknown { color: var(--sev-unknown); }
+.ui-sev.sev-critical .ui-sev-dot { background: currentColor; }
+.ui-sev.sev-high .ui-sev-dot { background: currentColor; }
+.ui-sev.sev-medium .ui-sev-dot { background: var(--sev-medium-bg); }
+.ui-sev.sev-low .ui-sev-dot { background: var(--sev-low-bg); }
+.ui-sev.sev-unknown .ui-sev-dot {
+  background: var(--sev-unknown-bg);
+  border-style: dashed;
+}
+.ui-sev-label {
+  font-size: var(--fs-12);
+  font-weight: 500;
+}
+
+/* --- inline notice --------------------------------------------------------
+   One line, the height of a control. Most of what an app has to say is one
+   sentence, and a full alert block spends a whole band of the screen on it and
+   reads as an interruption. */
+.ui-notice {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  border-radius: var(--r-lg);
+  border: 1px solid;
+  padding: 6px var(--sp-3);
+  font-size: var(--fs-13);
+  line-height: 1.35;
+}
+.ui-notice-glyph {
+  flex-shrink: 0;
+  display: inline-flex;
+}
+.ui-notice-body {
+  min-width: 0;
+  flex: 1;
+}
+.ui-notice-action {
+  flex-shrink: 0;
+}
+.ui-notice.tone-info { background: var(--c-review-bg); border-color: var(--c-review-bd); color: var(--text); }
+.ui-notice.tone-info .ui-notice-glyph { color: var(--c-review); }
+.ui-notice.tone-ok { background: var(--c-ok-bg); border-color: var(--c-ok-bd); color: var(--text); }
+.ui-notice.tone-ok .ui-notice-glyph { color: var(--c-ok); }
+.ui-notice.tone-warn { background: var(--c-pending-bg); border-color: var(--c-pending-bd); color: var(--text); }
+.ui-notice.tone-warn .ui-notice-glyph { color: var(--c-pending); }
+.ui-notice.tone-danger { background: var(--c-danger-bg); border-color: var(--c-danger-bd); color: var(--text); }
+.ui-notice.tone-danger .ui-notice-glyph { color: var(--c-danger); }
+.ui-notice.tone-neutral { background: var(--surface-2); border-color: var(--border); color: var(--text-2); }
+.ui-notice.tone-neutral .ui-notice-glyph { color: var(--text-3); }
+
+/* --- attention row -------------------------------------------------------- */
+.ui-attention {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: var(--sp-3);
+  border-radius: var(--r-lg);
+  border: 1px solid var(--border);
+  background: var(--surface-2);
+  padding: var(--sp-3);
+}
+.ui-attention-icon {
+  display: inline-flex;
+  flex-shrink: 0;
+  font-size: var(--fs-16);
+}
+.ui-attention-main {
+  min-width: 0;
+  flex: 1;
+}
+.ui-attention-title {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: var(--fs-13);
+  font-weight: 600;
+  color: var(--text);
+}
+.ui-attention-sub {
+  margin-top: 1px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: var(--fs-12);
+  color: var(--text-2);
+}
+.ui-attention.sev-warn .ui-attention-icon { color: var(--c-pending); }
+.ui-attention.sev-danger .ui-attention-icon { color: var(--c-danger); }
+.ui-attention.sev-ok .ui-attention-icon { color: var(--c-ok); }
+.ui-attention.sev-info .ui-attention-icon { color: var(--c-review); }
+
+/* --- toolbar --------------------------------------------------------------
+   The compact control strip above a working surface: one 40px row, 8px gaps,
+   a bottom hairline. Left content leads, right content trails. */
+.ui-toolbar {
+  display: flex;
+  min-height: 40px;
+  min-width: 0;
+  flex-shrink: 0;
+  align-items: center;
+  gap: var(--sp-2);
+  background: var(--surface);
+  padding: 0 var(--sp-3);
+}
+.ui-toolbar.has-border {
+  border-bottom: 1px solid var(--border);
+}
+.ui-toolbar-left {
+  display: flex;
+  min-width: 0;
+  flex: 1;
+  align-items: center;
+  gap: var(--sp-2);
+}
+.ui-toolbar-right {
+  display: flex;
+  flex-shrink: 0;
+  align-items: center;
+  gap: var(--sp-2);
+}
+
+/* --- empty state ---------------------------------------------------------- */
+.ui-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: var(--sp-2);
+  padding: var(--sp-8) var(--sp-4);
+  text-align: center;
+}
+.ui-empty-icon {
+  margin-bottom: var(--sp-1);
+  display: flex;
+  height: 44px;
+  width: 44px;
+  align-items: center;
+  justify-content: center;
+  border-radius: 50%;
+  background: var(--brand-soft);
+  color: var(--brand);
+  font-size: var(--fs-20);
+  box-shadow: var(--el-inset);
+}
+.ui-empty-title {
+  font-size: var(--fs-14);
+  font-weight: 600;
+  color: var(--text);
+}
+.ui-empty-hint {
+  max-width: 420px;
+  font-size: var(--fs-12);
+  color: var(--text-2);
+}
+
+/* --- loading stage -------------------------------------------------------- */
+.ui-loading {
+  position: relative;
+  display: flex;
+  height: 100%;
+  min-height: 0;
+  flex-direction: column;
+}
+.ui-loading-line {
+  display: flex;
+  flex-shrink: 0;
+  align-items: center;
+  gap: var(--sp-2);
+  padding: var(--sp-2) var(--sp-4);
+  font-size: var(--fs-12);
+  color: var(--text-2);
+}
+.ui-loading-line .anticon {
+  color: var(--brand);
+}
+.ui-loading-body {
+  min-height: 0;
+  flex: 1;
+}
+
+/* --- keycap --------------------------------------------------------------- */
+.ui-kbd {
+  font-family: inherit;
+  font-size: var(--fs-11);
+  line-height: 16px;
+  min-width: 18px;
+  display: inline-block;
+  text-align: center;
+  color: var(--text-3);
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+  padding: 0 5px;
+}
+
+/* --- stepper --------------------------------------------------------------
+   ONE progress indicator for every multi-step flow, so the steppers in an
+   import wizard, an onboarding flow and a review lifecycle cannot diverge.
+   A numbered node per step joined by a connector that fills with brand as the
+   reader advances; completed steps collapse to a check. */
+.ui-steps {
+  display: flex;
+  width: 100%;
+  max-width: 640px;
+  margin-inline: auto;
+  align-items: flex-start;
+}
+.ui-steps-step {
+  display: flex;
+  min-width: 0;
+  align-items: flex-start;
+  flex: 1 1 0%;
+}
+/* The LAST step shrinks to its content so the connectors share all the slack
+   evenly and the final node lands flush right, with no trailing gap pulling
+   the row off centre. */
+.ui-steps-step.is-last {
+  flex: 0 0 auto;
+}
+.ui-steps-col {
+  display: flex;
+  min-width: 0;
+  flex: 0 0 auto;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+}
+.ui-steps-node {
+  position: relative;
+  display: flex;
+  height: 32px;
+  width: 32px;
+  align-items: center;
+  justify-content: center;
+  border-radius: 50%;
+  font-size: var(--fs-13);
+  font-weight: 600;
+  background: var(--surface-2);
+  color: var(--text-3);
+  border: 1.5px solid var(--border-strong);
+  transition:
+    background var(--dur-panel) var(--ease),
+    color var(--dur-panel) var(--ease);
+}
+.ui-steps-step.is-done .ui-steps-node,
+.ui-steps-step.is-now .ui-steps-node {
+  background: var(--brand);
+  color: #fff;
+  border-color: transparent;
+}
+.ui-steps-step.is-err .ui-steps-node {
+  background: var(--c-danger);
+  color: #fff;
+  border-color: transparent;
+}
+.ui-steps-step.is-now .ui-steps-node {
+  box-shadow: 0 0 0 4px color-mix(in srgb, var(--brand) 18%, transparent);
+}
+.ui-steps-step.is-now.is-err .ui-steps-node {
+  box-shadow: 0 0 0 4px color-mix(in srgb, var(--c-danger) 18%, transparent);
+}
+.ui-steps-label {
+  max-width: 9rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  text-align: center;
+  font-size: var(--fs-12);
+  line-height: 1.25;
+  color: var(--text-3);
+}
+.ui-steps-step.is-done .ui-steps-label {
+  color: var(--text-2);
+}
+.ui-steps-step.is-now .ui-steps-label {
+  color: var(--text);
+  font-weight: 600;
+}
+.ui-steps-bar {
+  position: relative;
+  margin: 16px var(--sp-1) 0;
+  height: 2px;
+  flex: 1;
+  overflow: hidden;
+  border-radius: var(--r-pill);
+  background: var(--border);
+}
+.ui-steps-fill {
+  position: absolute;
+  inset-block: 0;
+  left: 0;
+  border-radius: var(--r-pill);
+  background: var(--brand);
+  width: 0;
+  transition: width var(--dur-view) var(--ease);
+}
+.ui-steps-step.is-done .ui-steps-fill {
+  width: 100%;
+}
+
+/* The one-line lifecycle strip: small nodes, small labels, and a bar between
+   them that fills as the thing advances - the same vocabulary as the full
+   stepper at a tenth of the height. */
+.ui-steps-mini {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  flex-wrap: wrap;
+}
+.ui-steps-mini-group {
+  display: contents;
+}
+.ui-steps-mini-step {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: var(--fs-11);
+  line-height: 16px;
+  white-space: nowrap;
+  color: var(--text-3);
+}
+.ui-steps-mini-dot {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 13px;
+  height: 13px;
+  font-size: 8px;
+  border-radius: var(--r-pill);
+  border: 1.5px solid var(--border-strong);
+  color: #fff;
+  flex-shrink: 0;
+}
+.ui-steps-mini-step.is-done {
+  color: var(--text-2);
+}
+.ui-steps-mini-step.is-done .ui-steps-mini-dot {
+  background: var(--brand);
+  border-color: var(--brand);
+}
+.ui-steps-mini-step.is-now {
+  color: var(--text);
+  font-weight: 650;
+}
+.ui-steps-mini-step.is-now .ui-steps-mini-dot {
+  background: var(--brand);
+  border-color: var(--brand);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--brand) 18%, transparent);
+}
+.ui-steps-mini-step.is-err {
+  color: var(--c-danger);
+  font-weight: 650;
+}
+.ui-steps-mini-step.is-err .ui-steps-mini-dot {
+  background: var(--c-danger);
+  border-color: var(--c-danger);
+}
+.ui-steps-mini-bar {
+  width: 18px;
+  height: 2px;
+  border-radius: var(--r-pill);
+  background: var(--border);
+  flex-shrink: 0;
+}
+.ui-steps-mini-bar.is-filled {
+  background: var(--brand);
+}
+
+/* --- appearance control --------------------------------------------------- */
+.ui-appearance {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-2);
+}

@@ -1,41 +1,49 @@
-/* Global rules the component library does not cover. */
-
-html, body, #root {
-  height: 100%;
-  margin: 0;
-}
+/* What is left of this application's own stylesheet.
+ *
+ * Everything general - the reset, the focus ring, the scrollbar, the selection
+ * colour, tabular figures, the motion vocabulary, the primitives - moved to
+ * `uikit/`, the design system this tool shares byte for byte with the other
+ * tools on the platform (see uikit/README.md). It is imported ahead of this
+ * file in main.tsx.
+ *
+ * What remains is the handful of rules that are genuinely about THIS
+ * application: a component library override for one control, and the layout
+ * that a page here needs. Each of them names a token, so all of it follows the
+ * theme, the light/dark switch and the active preset without being edited.
+ *
+ * The test for whether a rule belongs here: would the other tool want it? If
+ * yes, it belongs in uikit/ so both get it. If it mentions a release, a
+ * severity band or a transfer, it belongs here. */
 
 /*
  * No page scrolls horizontally at 1440px. Wide tables scroll inside their own
  * container instead, which is what the `scroll` prop on every table sets up.
+ * (The rest of the reset is uikit/base.css.)
  */
-body {
-  overflow-x: hidden;
-}
 
-/* Identifiers are monospace everywhere they appear. */
+/* Identifiers are monospace everywhere they appear. `.mono` is this
+   application's long-standing spelling of what the shared kit calls
+   `.ui-mono`; it is kept as an alias so twenty files did not have to be
+   renamed to adopt the design system. */
 .mono {
-  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, 'Liberation Mono', monospace;
+  font-family: var(--font-mono);
   font-size: 13px;
-}
-
-/* Keyboard focus stays visible: full keyboard operation is a requirement. */
-:focus-visible {
-  outline: 2px solid #0057B8;
-  outline-offset: 2px;
+  letter-spacing: -0.01em;
+  font-variant-numeric: tabular-nums;
+  font-feature-settings: 'tnum' 1;
 }
 
 /* A diff pane, used by Compare. */
 .diff-line {
-  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-family: var(--font-mono);
   font-size: 12px;
   line-height: 1.6;
   white-space: pre-wrap;
   word-break: break-all;
   padding: 0 8px;
 }
-.diff-add { background: #E8F5EC; }
-.diff-remove { background: #FDECEC; }
+.diff-add { background: var(--c-ok-bg); }
+.diff-remove { background: var(--c-danger-bg); }
 
 /*
  * The sliding stripe used by <WorkingBar>. It travels rather than fills, so
@@ -49,6 +57,8 @@ body {
 @media (prefers-reduced-motion: reduce) {
   /* Still clearly "busy", without the movement. */
   [style*="slm-working"] { animation: none !important; width: 100% !important; opacity: 0.45; }
+  .slm-meter-seg { animation: none !important; }
+  .slm-rise { animation: none; }
 }
 
 /*
@@ -82,63 +92,6 @@ body {
   height: 44px;
 }
 
-/* ===========================================================================
- * Depth, rhythm, and the surfaces a design system usually forgets.
- *
- * Everything below derives from theme.ts. The literal values here are the ones
- * CSS cannot read from a token - a keyframe percentage, a scrollbar width -
- * and the colours are the palette's own, repeated because a stylesheet cannot
- * import them. Change one in theme.ts and change it here.
- * ======================================================================== */
-
-/*
- * NUMBERS THAT LINE UP.
- *
- * This is the single highest-value rule in the file. Proportional digits are
- * why a column of counts read as ragged text: in the default face a 1 is
- * narrower than a 7, so 1,286 and 7,004 have different widths and a reader
- * comparing a column of them is comparing shapes that do not align. Every
- * number here exists to be compared with the number above it.
- */
-.ant-table-cell,
-.ant-statistic-content,
-.ant-descriptions-item-content,
-.mono,
-.slm-num {
-  font-variant-numeric: tabular-nums;
-  font-feature-settings: 'tnum' 1;
-}
-
-/* Identifiers read tighter than prose; the default mono tracking is loose. */
-.mono {
-  letter-spacing: -0.01em;
-}
-
-/*
- * THE BROWSER'S OWN SURFACES.
- *
- * Selection, caret and scrollbar ship with defaults that belong to no design
- * system - a blue selection from 1998 on a page whose blue is #009fdb. They
- * are the cheapest signal that a page was built rather than assembled.
- */
-::selection {
-  background: rgba(0, 159, 219, 0.18);
-}
-html {
-  caret-color: #009fdb;
-  scrollbar-color: #C9D2DD transparent;
-  scrollbar-width: thin;
-}
-::-webkit-scrollbar { width: 10px; height: 10px; }
-::-webkit-scrollbar-track { background: transparent; }
-::-webkit-scrollbar-thumb {
-  background: #C9D2DD;
-  border: 3px solid transparent;
-  border-radius: 6px;
-  background-clip: padding-box;
-}
-::-webkit-scrollbar-thumb:hover { background: #A9B6C6; background-clip: padding-box; }
-
 /*
  * A table that scrolls sideways should say so at its edge rather than leaving
  * a reader to discover it. The shadow appears only while there is more to the
@@ -146,27 +99,16 @@ html {
  */
 .ant-table-ping-right .ant-table-cell-fix-right-first::after,
 .ant-table-ping-right .ant-table-cell-fix-right::after {
-  box-shadow: inset -10px 0 8px -8px rgba(11, 31, 58, 0.12);
-}
-
-/* Keyboard focus, from the palette rather than a hex that predates it. */
-:focus-visible {
-  outline: 2px solid #009fdb;
-  outline-offset: 2px;
-  border-radius: 3px;
+  box-shadow: inset -10px 0 8px -8px color-mix(in srgb, var(--text) 14%, transparent);
 }
 
 /* ---------------------------------------------------------------- motion --
- * One authored moment: a panel settles in on arrival. Exponential ease-out
- * from an already-visible default, so a render that beats the animation shows
- * the finished page rather than an empty one.
+ * One authored moment: a panel settles in on arrival. The keyframes are the
+ * shared kit's (`.ui-fade-in`); this is the name this application already
+ * used, kept as an alias for the same reason `.mono` is.
  */
-@keyframes slm-rise {
-  from { opacity: 0; transform: translateY(6px); }
-  to   { opacity: 1; transform: none; }
-}
 .slm-rise {
-  animation: slm-rise 420ms cubic-bezier(0.16, 1, 0.3, 1) both;
+  animation: ui-rise var(--dur-view) var(--ease-out) both;
 }
 
 /* A severity bar's segments grow from nothing, worst first. */
@@ -175,23 +117,15 @@ html {
   to   { transform: scaleX(1); }
 }
 
-@media (prefers-reduced-motion: reduce) {
-  .slm-rise { animation: none; }
-  .slm-meter-seg { animation: none !important; }
-  *, *::before, *::after {
-    animation-duration: 0.01ms !important;
-    transition-duration: 0.01ms !important;
-  }
-}
-
 /* Cards lift under the pointer only where the whole card is a link. */
 .slm-card-interactive {
-  transition: box-shadow 240ms cubic-bezier(0.16, 1, 0.3, 1),
-              border-color 240ms cubic-bezier(0.16, 1, 0.3, 1);
+  transition:
+    box-shadow var(--dur-panel) var(--ease-out),
+    border-color var(--dur-panel) var(--ease-out);
 }
 .slm-card-interactive:hover {
-  box-shadow: 0 2px 4px rgba(11,31,58,0.06), 0 6px 16px rgba(11,31,58,0.07);
-  border-color: #CFDAE6;
+  box-shadow: var(--el-2);
+  border-color: var(--border-strong);
 }
 
 /* ---------------------------------------------------------------- bands --
@@ -201,7 +135,7 @@ html {
  * numbers in it, they stack, and the dividers turn from vertical to
  * horizontal so the reading order stays the reading order.
  *
- * A class rather than inline style, because a media query cannot live in a
+ * A class rather than an inline style, because a media query cannot live in a
  * style attribute and these are the one place in the application where the
  * layout genuinely changes rather than reflowing.
  */
@@ -214,7 +148,7 @@ html {
   }
   .slm-band > * + * {
     border-inline-start: 0 !important;
-    border-top: 1px solid #EDF0F4;
+    border-top: 1px solid var(--border);
   }
   /* The comparison's middle zone has a rule on both sides at width. */
   .slm-band > .slm-band-mid {

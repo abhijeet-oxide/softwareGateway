@@ -1,0 +1,131 @@
+/* Structural design tokens: spacing, radius, elevation, motion and type.
+
+   The COLOUR layer is not here. It is generated from tokens.ts and inlined
+   into <head> by vitePluginBrand.ts, so colours have a single source of truth,
+   are customizable at build time, and land before the first paint rather than
+   after it. Edit tokens.ts to reskin; edit this file to change the SHAPE of
+   the design system.
+
+   Everything here is shared by every tool that copies this folder. Nothing in
+   it names a product. */
+
+:root {
+  /* Spacing: an engineered 4px scale. */
+  --sp-1: 4px;
+  --sp-2: 8px;
+  --sp-3: 12px;
+  --sp-4: 16px;
+  --sp-5: 20px;
+  --sp-6: 24px;
+  --sp-7: 28px;
+  --sp-8: 32px;
+
+  /* Radius: soft on cards, crisp on dense data. Pills are for status only. */
+  --r-sm: 4px;
+  --r-md: 6px;
+  --r-lg: 10px;
+  --r-xl: 14px;
+  --r-pill: 999px;
+
+  /* Elevation: soft-UI dual shadows (a light source top-left, a soft cast
+     bottom-right) pressed against the pastel canvas. Three resting levels
+     plus an inset well for inputs and pressed states. */
+  --el-1: 5px 5px 12px rgba(163, 177, 198, 0.28), -4px -4px 10px rgba(255, 255, 255, 0.85);
+  --el-2: 8px 8px 18px rgba(163, 177, 198, 0.38), -6px -6px 14px rgba(255, 255, 255, 0.9);
+  --el-3: 16px 16px 36px rgba(143, 157, 178, 0.4), -8px -8px 20px rgba(255, 255, 255, 0.9);
+  --el-inset: inset 3px 3px 7px rgba(163, 177, 198, 0.3), inset -3px -3px 7px rgba(255, 255, 255, 0.85);
+
+  /* Overlay elevation: floating surfaces (a command palette, a modal, a menu,
+     a popover) do NOT use the soft-UI dual shadow - a top-left light source on
+     a dimmed backdrop reads as a halo. They lift with a crisp, single-direction
+     cast plus a hairline seat, so they sit as focused sheets above the page.
+     The mask darkens and faintly blurs the page so the surface, not its glow,
+     holds the eye. */
+  --el-overlay: 0 12px 32px -10px rgba(16, 24, 40, 0.18), 0 4px 10px -4px rgba(16, 24, 40, 0.1);
+  --overlay-seat: 0 0 0 1px var(--border);
+  --overlay-mask: rgba(20, 27, 40, 0.42);
+
+  /* Motion: state change only, never decoration. Exponential ease-out from an
+     already-visible default, so a slow render shows the finished page rather
+     than an empty one. */
+  --dur-hover: 120ms;
+  --dur-panel: 220ms;
+  --dur-view: 300ms;
+  --ease: cubic-bezier(0.2, 0.8, 0.4, 1);
+  --ease-out: cubic-bezier(0.16, 1, 0.3, 1);
+
+  /* Typography. The families are repeated from tokens.ts because a stylesheet
+     cannot import a module; they are the same two stacks. */
+  --font-ui: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto,
+    "Helvetica Neue", Arial, sans-serif;
+  --font-mono: "JetBrains Mono", ui-monospace, "SFMono-Regular", Consolas,
+    "Liberation Mono", Menlo, monospace;
+  --fs-11: 11px;
+  --fs-12: 12px;
+  --fs-13: 13px;
+  --fs-14: 14px;
+  --fs-16: 16px;
+  --fs-20: 20px;
+  --fs-24: 24px;
+}
+
+/* Elevation is the one structural token that changes with the theme: soft-UI
+   shadows go from light-on-pastel to depth-on-dark. */
+[data-theme="dark"] {
+  --el-1: 5px 5px 12px rgba(0, 0, 0, 0.45), -4px -4px 10px rgba(255, 255, 255, 0.035);
+  --el-2: 8px 8px 18px rgba(0, 0, 0, 0.55), -6px -6px 14px rgba(255, 255, 255, 0.045);
+  --el-3: 16px 16px 36px rgba(0, 0, 0, 0.6), -8px -8px 20px rgba(255, 255, 255, 0.05);
+  --el-inset: inset 3px 3px 7px rgba(0, 0, 0, 0.5), inset -3px -3px 7px rgba(255, 255, 255, 0.04);
+  /* Dark: a deep downward cast with no top-left light, so overlays read as
+     crisp sheets against the dimmed canvas instead of glowing orbs. */
+  --el-overlay: 0 18px 44px -14px rgba(0, 0, 0, 0.72), 0 6px 16px -8px rgba(0, 0, 0, 0.6);
+  --overlay-mask: rgba(4, 7, 12, 0.58);
+}
+
+/* --- "instrument" preset elevation -----------------------------------------
+   Trade the soft-UI dual shadow for crisp, single-direction depth, and flatten
+   resting cards so hierarchy comes from borders and value contrast (the deeper
+   canvas in this preset), not a field of floating shadows. Elevation is
+   reserved for things that genuinely lift: menus, drawers, the hover state.
+   Scoped to the attribute the brand plugin stamps, so the default look is
+   untouched. */
+:root[data-preset="instrument"] {
+  --el-1: 0 1px 2px rgba(16, 24, 40, 0.05);
+  --el-2: 0 8px 20px -6px rgba(16, 24, 40, 0.14);
+  --el-3: 0 20px 44px -14px rgba(16, 24, 40, 0.22);
+  --el-inset: inset 0 0 0 1px rgba(16, 24, 40, 0.06);
+}
+:root[data-preset="instrument"][data-theme="dark"] {
+  --el-1: 0 1px 2px rgba(0, 0, 0, 0.5);
+  --el-2: 0 8px 20px -6px rgba(0, 0, 0, 0.55);
+  --el-3: 0 20px 44px -14px rgba(0, 0, 0, 0.65);
+}
+
+/* --- comfort ---------------------------------------------------------------
+   Density and font scale are stamped on <html> by ThemeProvider, so the
+   hand-rolled surfaces answer to the same two controls as the component
+   library rather than staying at one size while everything around them moves. */
+:root[data-density="compact"] {
+  --sp-3: 10px;
+  --sp-4: 12px;
+  --sp-5: 16px;
+  --sp-6: 18px;
+}
+:root[data-fontscale="small"] {
+  --fs-11: 10px;
+  --fs-12: 11px;
+  --fs-13: 12px;
+  --fs-14: 13px;
+  --fs-16: 15px;
+  --fs-20: 19px;
+  --fs-24: 22px;
+}
+:root[data-fontscale="large"] {
+  --fs-11: 12px;
+  --fs-12: 13px;
+  --fs-13: 14px;
+  --fs-14: 15px;
+  --fs-16: 17px;
+  --fs-20: 22px;
+  --fs-24: 27px;
+}

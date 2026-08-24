@@ -11,8 +11,9 @@ import { DownloadIcon, Icon, PackageIcon } from './components/icons'
 import { Link, useLocation, useNavigate } from 'react-router-dom'
 import { useIdentity } from './auth/permissions'
 import { useTransfers } from './api/queries'
-import { branding, palette, semantic } from './theme'
-import { BrandMark } from './components/icons'
+import { palette, semantic } from './theme'
+import brand from './brand'
+import { BrandLockup, c, ThemeToggleButton, withAlpha } from './uikit'
 
 const { Sider, Header, Content } = Layout
 
@@ -81,7 +82,11 @@ function ActivityPill({ running, failing }: { running: number; failing: number }
             width: 7, height: 7, borderRadius: '50%', background: tone,
             // The pulse marks work in flight and stops the moment it settles,
             // so movement in this bar always means something is moving.
-            boxShadow: running > 0 && failing === 0 ? `0 0 0 3px ${tone}22` : undefined,
+            //
+            // withAlpha rather than two more hex digits: `tone` is a var()
+            // now, and `var(--brand)22` is not a colour - the rule was simply
+            // dropped and the ring never appeared.
+            boxShadow: running > 0 && failing === 0 ? `0 0 0 3px ${withAlpha(tone, 0.13)}` : undefined,
           }}
         />
         {text}
@@ -105,7 +110,7 @@ export function Shell({ children }: { children: ReactNode }) {
     .filter((k) => (k === '/' ? location.pathname === '/' : location.pathname.startsWith(k)))
     .sort((a, b) => b.length - a.length)[0] ?? '/'
 
-  const section = NAV.find((n) => n.key === selected)?.label ?? branding.name
+  const section = NAV.find((n) => n.key === selected)?.label ?? brand.appName
 
   return (
     <Layout style={{ height: '100dvh', overflow: 'hidden' }}>
@@ -115,21 +120,20 @@ export function Shell({ children }: { children: ReactNode }) {
           background: palette.sidebar,
           // A rule the navy itself provides, so the sidebar has an edge rather
           // than bleeding into the page background at exactly one lightness.
-          boxShadow: 'inset -1px 0 0 rgba(255,255,255,0.06)',
+          // The nav's own border token, so it holds in dark mode too - a
+          // hardcoded white inset was invisible against the darker canvas.
+          boxShadow: `inset -1px 0 0 ${c.navBorder}`,
         }}
       >
         {/*
-          The name, and the mark a deployment sets beside it. Both come from
-          theme.ts, which is the one file a company edits to make this look
-          like theirs.
+          The name and the mark, drawn by the shared design system from this
+          deployment's `brand.ts`. Every tool on the platform opens its
+          navigation with the same lockup at the same size, so the two products
+          read as one system from the first glance - and the ONE thing that
+          differs between them is the identity passed in here.
         */}
         <div style={{ padding: '18px 16px 14px' }}>
-          <Space size={8} align="center">
-            <BrandMark />
-            <Typography.Text style={{ color: '#fff', fontWeight: 700, fontSize: 15 }}>
-              {branding.name}
-            </Typography.Text>
-          </Space>
+          <BrandLockup brand={brand} />
         </div>
 
         <Menu
@@ -144,7 +148,7 @@ export function Shell({ children }: { children: ReactNode }) {
         <div
           style={{
             position: 'absolute', bottom: 0, width: '100%', padding: 16,
-            borderTop: '1px solid rgba(255,255,255,0.12)',
+            borderTop: `1px solid ${c.navBorder}`,
           }}
         >
           <Space size={10}>
@@ -152,8 +156,8 @@ export function Shell({ children }: { children: ReactNode }) {
               {(who?.subject ?? 'A').slice(0, 2).toUpperCase()}
             </Avatar>
             <div style={{ lineHeight: 1.3 }}>
-              <div style={{ color: '#fff', fontSize: 13 }}>{who?.subject ?? 'Not signed in'}</div>
-              <div style={{ color: 'rgba(255,255,255,0.6)', fontSize: 11 }}>
+              <div style={{ color: c.navFgActive, fontSize: 13 }}>{who?.subject ?? 'Not signed in'}</div>
+              <div style={{ color: c.navFg, fontSize: 11 }}>
                 {who?.authenticated ? (who.roles?.join(', ') || 'Product Owner') : 'Not signed in'}
               </div>
             </div>
@@ -197,6 +201,14 @@ export function Shell({ children }: { children: ReactNode }) {
           </div>
 
           <Space size={4}>
+            {/*
+              Light and dark, in the one place a person looks for it. The
+              control comes from the shared kit, so the two tools put the same
+              button in the same corner and a preference set in one is the
+              preference the other opens with.
+            */}
+            <ThemeToggleButton />
+
             <Tooltip title="Documentation">
               <Button type="text" icon={<QuestionCircleOutlined />} aria-label="Help" />
             </Tooltip>

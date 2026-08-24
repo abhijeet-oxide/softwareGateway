@@ -2,7 +2,7 @@ import { useMemo } from 'react'
 import { Button, Card, Col, Row, Space, Statistic, Table, Typography } from 'antd'
 import { CloudDownloadOutlined } from '@ant-design/icons'
 import { Link, useNavigate } from 'react-router-dom'
-import { useProducts, usePackages, useReports, useTransfers } from '../api/queries'
+import { useProducts, usePackagesByProducts, useReports, useTransfers } from '../api/queries'
 import {
   deriveLocations, deriveStatus, downloadSeconds, isRecent, publishedAt, releaseHref, transferIndex,
   failureReason, verification, version, withTransfers, type SoftwareStatus,
@@ -42,13 +42,12 @@ export default function Overview() {
   // attention. The Products page is where they can be shown deliberately.
   const productList = (products.data?.products ?? []).filter((p) => p.enabled)
 
-  // One request per product. The API has no estate-wide package listing, and
-  // inventing one client-side by fetching everything and sorting is exactly
-  // what "no client-side aggregation of anything the API can aggregate"
-  // forbids - so this is bounded by the product count, which is 5–50.
-  const first = usePackages(productList[0]?.productId, { pageSize: 20 })
-  const second = usePackages(productList[1]?.productId, { pageSize: 20 })
-  const third = usePackages(productList[2]?.productId, { pageSize: 20 })
+  // One request per product. There is no estate-wide package listing endpoint,
+  // so this composes product listings into one "recent releases" view.
+  const packageLists = usePackagesByProducts(
+    productList.map((p) => p.productId),
+    { pageSize: 30 },
+  )
 
   const transfers = useTransfers({ pageSize: 100 })
   const reports = useReports({ period: '7d' })
@@ -59,9 +58,8 @@ export default function Overview() {
     // otherwise every row reads NEW, including releases already in production.
     const index = transferIndex(transfers.data?.transfers ?? [])
     const out: Row[] = []
-    const sources = [first, second, third]
-    productList.slice(0, 3).forEach((product, i) => {
-      for (const listed of sources[i]?.data?.packages ?? []) {
+    productList.forEach((product, i) => {
+      for (const listed of packageLists[i]?.data?.packages ?? []) {
         const pkg = withTransfers(listed, index)
         out.push({ pkg, product, status: deriveStatus(pkg, product) })
       }
@@ -74,7 +72,7 @@ export default function Overview() {
       .filter((r) => isRecent(r.pkg))
       .sort((a, b) => publishedAt(b.pkg).localeCompare(publishedAt(a.pkg)))
       .slice(0, 10)
-  }, [productList, first.data, second.data, third.data, transfers.data])
+  }, [productList, packageLists, transfers.data])
 
   const counts = useMemo(() => {
     const all = rows.map((r) => r.status)
@@ -136,7 +134,7 @@ export default function Overview() {
     )
   }
 
-  const loading = products.isLoading || first.isLoading
+  const loading = products.isLoading || packageLists.some((q) => q.isLoading)
   const totals = reports.data?.totals
 
   return (

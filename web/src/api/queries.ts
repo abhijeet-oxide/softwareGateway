@@ -143,6 +143,23 @@ export function usePackages(product: string | undefined, filters: PackageFilters
   })
 }
 
+/** Package listings for several products at once, preserving per-product query keys. */
+export function usePackagesByProducts(products: string[], filters: PackageFilters = {}) {
+  return useQueries({
+    queries: products.map((product) => ({
+      queryKey: ['packages', product, filters],
+      queryFn: () => api.get<ListPackagesResponse>(
+        `/products/${encodeURIComponent(product)}/packages${query({ ...filters })}`),
+      staleTime: MINUTE,
+      // Poll only while this product has releases currently being analysed.
+      refetchInterval: (q: { state: { data?: ListPackagesResponse } }) =>
+        (q.state.data?.packages ?? []).some((p) => p.analysisState === 'analyzing')
+          ? 5000
+          : false,
+    })),
+  })
+}
+
 /**
  * One release.
  *

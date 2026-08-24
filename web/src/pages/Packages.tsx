@@ -4,13 +4,13 @@ import type { MenuProps } from 'antd'
 import { MoreOutlined } from '@ant-design/icons'
 import { Link, useNavigate, useSearchParams } from 'react-router-dom'
 import {
-  usePackages, useProducts, useRunDownload, useSyncPackageSecurity, useTransfers,
+  usePackages, usePackagesByProducts, useProducts, useRunDownload, useSyncPackageSecurity, useTransfers,
 } from '../api/queries'
 import ScaleIcon from '@iconify-react/lucide/scale';
 import { useCan } from '../auth/permissions'
 import {
   deriveLocations, deriveStatus, downloadSeconds, failureReason, isLive, matches,
-  packageReference, releaseHref, transferIndex, verification, version, withTransfers,
+  packageReference, publishedAt, releaseHref, transferIndex, verification, version, withTransfers,
 } from '../domain/derive'
 import type { Package } from '../api/types'
 import { formatDuration } from '../domain/format'
@@ -193,6 +193,30 @@ function DownloadAction({ product, pkg }: { product: string; pkg: Package }) {
   )
 }
 
+function RowVulnerability({
+  product,
+  pkg,
+  onSync,
+}: {
+  product: string
+  pkg: Package
+  onSync: () => void
+}) {
+  const mayOperate = useCan('operate', { product })
+  const security = pkg.security
+  const maySync = Boolean(security?.state === '' && security?.canSync && mayOperate)
+
+  return (
+    <VulnerabilityCell
+      summary={security}
+      onSyncNotSynced={maySync ? onSync : undefined}
+      notSyncedTooltip={maySync
+        ? 'Click to sync'
+        : (security?.reason ?? 'Nobody has scanned this release yet.')}
+    />
+  )
+}
+
 /**
  * The Packages listing - where "View all packages" and the Overview KPI cards
  * land.
@@ -211,13 +235,16 @@ export default function Packages() {
   const products = useProducts()
   const productList = products.data?.products ?? []
 
-  const selected = params.get('product') ?? productList[0]?.productId
-  const mayOperateSelected = useCan('operate', selected ? { product: selected } : undefined)
+  const selected = params.get('product') ?? undefined
   const status = params.get('status')
   const tag = params.get('tag') ?? undefined
 
   const product = productList.find((p) => p.productId === selected)
   const packages = usePackages(selected, { pageSize: 100, tag })
+  const packagesByProducts = usePackagesByProducts(
+    selected ? [] : productList.map((p) => p.productId),
+    { pageSize: 100, tag },
+  )
   const transfers = useTransfers({ product: selected, pageSize: 200 })
 
   const rows = useMemo(() => {
@@ -225,23 +252,42 @@ export default function Packages() {
     // history, so deriving from the package alone would report every release
     // as NEW.
     const index = transferIndex(transfers.data?.transfers ?? [])
-    const all = (packages.data?.packages ?? []).map((listed) => {
-      const pkg = withTransfers(listed, index)
-      return { pkg, status: deriveStatus(pkg, product) }
-    })
+    const all = selected
+      ? (() => {
+        if (!product) return []
+        return (packages.data?.packages ?? []).map((listed) => {
+          const pkg = withTransfers(listed, index)
+          return { pkg, product, status: deriveStatus(pkg, product) }
+        })
+      })()
+      : productList.flatMap((p, i) => {
+        const listedPackages = packagesByProducts[i]?.data?.packages ?? []
+        return listedPackages.map((listed) => {
+        const pkg = withTransfers(listed, index)
+        return { pkg, product: p, status: deriveStatus(pkg, p) }
+      })
+      })
     const byStatus = !status
       ? all
+      : status === 'UNSIGNED'
+        ? all.filter((r) => verification(r.pkg) === 'NOT_SIGNED')
       : status === 'READY'
         ? all.filter((r) => r.status === 'READY FOR PRODUCTION')
         : all.filter((r) => r.status === status)
 
-    if (!search.trim()) return byStatus
+    const sorted = [...byStatus].sort((a, b) => {
+      const left = Date.parse(publishedAt(a.pkg) || '') || 0
+      const right = Date.parse(publishedAt(b.pkg) || '') || 0
+      return right - left
+    })
+
+    if (!search.trim()) return sorted
     // The version as shown AND as the vendor spells it, plus the repository -
     // a product publishes one version tag into every repository it watches, so
     // the repository is frequently the only thing telling two rows apart.
-    return byStatus.filter((r) => matches(
+    return sorted.filter((r) => matches(
       search, version(r.pkg), r.pkg.tag, r.pkg.displayRepository, r.pkg.sourceRepository))
-  }, [packages.data, transfers.data, product, status, search])
+  }, [selected, product, productList, packages.data, packagesByProducts, transfers.data, status, search])
 
   const update = (key: string, value?: string) => {
     const next = new URLSearchParams(params)
@@ -250,10 +296,9 @@ export default function Packages() {
     setParams(next)
   }
 
-  const syncNotSynced = (pkg: Package) => {
-    if (!selected) return
+  const syncNotSynced = (productId: string, pkg: Package) => {
     syncSecurity.mutate(
-      { product: selected, ref: packageReference(pkg), repository: pkg.sourceRepository },
+      { product: productId, ref: packageReference(pkg), repository: pkg.sourceRepository },
       {
         onSuccess: (res) => {
           message.info(res.started
@@ -287,7 +332,9 @@ export default function Packages() {
             onChange={setSearch}
             placeholder="Search by version or repository"
             matched={rows.length}
-            total={packages.data?.packages?.length ?? 0}
+            total={selected
+              ? (packages.data?.packages?.length ?? 0)
+              : packagesByProducts.reduce((n, q) => n + (q.data?.packages?.length ?? 0), 0)}
             width={280}
             style={{ marginBottom: 0 }}
           />
@@ -295,6 +342,9 @@ export default function Packages() {
             style={{ minWidth: 180 }}
             placeholder="Product"
             loading={products.isLoading}
+            allowClear
+            showSearch
+            optionFilterProp="label"
             value={selected}
             onChange={(v) => update('product', v)}
             options={productList.map((p) => ({
@@ -306,6 +356,8 @@ export default function Packages() {
             style={{ minWidth: 200 }}
             placeholder="Any status"
             allowClear
+            showSearch
+            optionFilterProp="label"
             value={status ?? undefined}
             onChange={(v) => update('status', v)}
             options={[
@@ -316,6 +368,7 @@ export default function Packages() {
               { value: 'DOWNLOAD FAILED', label: 'Download failed' },
               { value: 'READY', label: 'Ready for production' },
               { value: 'PRODUCTION', label: 'In production' },
+              { value: 'UNSIGNED', label: 'Unsigned' },
               { value: 'VERIFICATION FAILED', label: 'Verification failed' },
             ]}
           />
@@ -325,14 +378,14 @@ export default function Packages() {
         </Link>
       </div>
 
-      {!packages.isLoading && rows.length === 0 ? (
+      {!packages.isLoading && !packagesByProducts.some((q) => q.isLoading) && rows.length === 0 ? (
         <EmptyStateCard
           title={search.trim() || status ? 'Nothing matches this filter' : 'No packages discovered yet'}
           explanation={
             search.trim()
               ? 'No release on this page matches what you typed. The search covers the version and the repository it came from.'
               : status
-                ? 'No release currently has this status. Clear the filter to see everything discovered for this product.'
+                ? `No release currently has this status. Clear the filter to see everything discovered${selected ? ' for this product' : ''}.`
                 : 'Discovery polls the vendor registries on a schedule. Run it from the Overview to look immediately.'
           }
           action={
@@ -346,9 +399,9 @@ export default function Packages() {
       ) : (
         <Card styles={{ body: { padding: 0 } }}>
           <Table
-            loading={packages.isLoading}
+            loading={packages.isLoading || packagesByProducts.some((q) => q.isLoading)}
             dataSource={rows}
-            rowKey={(r) => r.pkg.packageId}
+            rowKey={(r) => `${r.product.productId}-${r.pkg.packageId}`}
             pagination={{ pageSize: 20, showSizeChanger: false }}
             /*
               `max-content` rather than a number.
@@ -363,8 +416,8 @@ export default function Packages() {
               {
                 title: 'Product',
                 width: 210,
-                render: (_, r) => product && (
-                  <span>{product.displayName}</span>
+                render: (_, r) => (
+                  <span>{r.product.displayName || r.product.productId}</span>
                 ),
               },
               {
@@ -385,8 +438,8 @@ export default function Packages() {
                 title: 'Name',
                 fixed: 'left',
                 width: 210,
-                render: (_, r) => product && (
-                  <Link to={releaseHref(product.productId, r.pkg)}>
+                render: (_, r) => (
+                  <Link to={releaseHref(r.product.productId, r.pkg)}>
                     <PackageName pkg={r.pkg} width={220} />
                   </Link>
                 ),
@@ -394,15 +447,14 @@ export default function Packages() {
               {
                 title: 'Version',
                 width: 160,
-                render: (_, r) =>
-                  product && (
-                    <VersionChip
-                      product={product.productId}
-                      version={version(r.pkg)}
-                      pkg={r.pkg}
-                      showRepository={false}
-                    />
-                  ),
+                render: (_, r) => (
+                  <VersionChip
+                    product={r.product.productId}
+                    version={version(r.pkg)}
+                    pkg={r.pkg}
+                    showRepository={false}
+                  />
+                ),
               },
               { title: 'Published', width: 95, render: (_, r) => <TimeAgo at={r.pkg.publishedAt || r.pkg.discoveredAt} /> },
               { title: 'Signed', width: 120, render: (_, r) => <VerificationBadge state={verification(r.pkg)} /> },
@@ -434,26 +486,20 @@ export default function Packages() {
                 */
                 title: 'Vulnerabilities',
                 width: 185,
-                render: (_, r) => {
-                  const security = r.pkg.security
-                  const maySync = Boolean(security?.state === '' && security?.canSync && mayOperateSelected)
-                  return (
-                    <VulnerabilityCell
-                      summary={security}
-                      onSyncNotSynced={maySync ? () => syncNotSynced(r.pkg) : undefined}
-                      notSyncedTooltip={maySync
-                        ? 'Click to sync'
-                        : (security?.reason ?? 'Nobody has scanned this release yet.')}
-                    />
-                  )
-                },
+                render: (_, r) => (
+                  <RowVulnerability
+                    product={r.product.productId}
+                    pkg={r.pkg}
+                    onSync={() => syncNotSynced(r.product.productId, r.pkg)}
+                  />
+                ),
               },
               {
                 title: 'Location',
                 width: 150,
                 render: (_, r) => (
                   <LocationChip
-                    locations={deriveLocations(r.pkg, product)}
+                    locations={deriveLocations(r.pkg, r.product)}
                     vendorIcon={NokiaNIcon}
                   />
                 ),
@@ -472,7 +518,7 @@ export default function Packages() {
                 title: 'Actions',
                 fixed: 'right',
                 width: 190,
-                render: (_, r) => product && <RowActions product={product.productId} pkg={r.pkg} />,
+                render: (_, r) => <RowActions product={r.product.productId} pkg={r.pkg} />,
               },
             ]}
           />

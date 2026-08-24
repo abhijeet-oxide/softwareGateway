@@ -432,9 +432,20 @@ export function DiscoveryPanel({ products }: { products: Product[] }) {
    * between a table and a filing cabinet.
    */
   const [search, setSearch] = useState('')
-  const rows = search.trim()
-    ? allRows.filter((s) => matches(search, s.source, s.product, s.currentRepository))
-    : allRows
+  const [showFailed, setShowFailed] = useState(false)
+  const [productFilter, setProductFilter] = useState<string | undefined>()
+  const [stateFilter, setStateFilter] = useState<'all' | 'scanning' | 'failed'>('all')
+
+  const rows = allRows
+    .filter((s) => (productFilter ? s.product === productFilter : true))
+    .filter((s) => {
+      if (stateFilter === 'scanning') return Boolean(s.scanning)
+      if (stateFilter === 'failed') return Boolean(s.lastError)
+      return true
+    })
+    .filter((s) => (search.trim()
+      ? matches(search, s.source, s.product, s.currentRepository)
+      : true))
 
   // The most recent completed scan across every source - the honest answer to
   // "when did we last look", rather than a transfer's timestamp standing in for
@@ -486,44 +497,87 @@ export function DiscoveryPanel({ products }: { products: Product[] }) {
           </Typography.Text>
         ) : (
           <>
-            <Space size={24} style={{ marginBottom: 12 }} wrap>
-              {/*
-                One sentence, read left to right. It used to be a label, a
-                colon and a number - "Found on the last run: 0 new releases" -
-                which reads as a form field rather than as the answer to the
-                question the panel exists for.
-              */}
-              <Typography.Text type="secondary" style={{ fontSize: 13 }}>
-                Found{' '}
-                <Typography.Text strong>
-                  <Value>{formatCount(newSinceLastRun)}</Value>
-                </Typography.Text>{' '}
-                new {newSinceLastRun === 1 ? 'release' : 'releases'} in the last sync
-              </Typography.Text>
-              {errors.length > 0 && (
-                <Typography.Text type="danger" style={{ fontSize: 13 }}>
-                  {errors.length} source{errors.length === 1 ? '' : 's'} failed on the last run
-                </Typography.Text>
-              )}
-            </Space>
+            <div
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'space-between',
+                gap: 12,
+                marginBottom: 12,
+                flexWrap: 'wrap',
+              }}
+            >
+              <Space size={12} align="center" wrap>
+                {allRows.length > 5 && (
+                  <>
+                    <SearchBar
+                      value={search}
+                      onChange={setSearch}
+                      placeholder="Search sources by name, product or repository"
+                      matched={rows.length}
+                      total={allRows.length}
+                      width={320}
+                      style={{ marginBottom: 0 }}
+                    />
+                    <Select
+                      allowClear
+                      placeholder="All products"
+                      value={productFilter}
+                      onChange={setProductFilter}
+                      style={{ minWidth: 200 }}
+                      options={products.map((p) => ({
+                        value: p.productId,
+                        label: p.displayName || p.productId,
+                      }))}
+                    />
+                    <Select
+                      value={stateFilter}
+                      onChange={setStateFilter}
+                      style={{ minWidth: 180 }}
+                      options={[
+                        { value: 'all', label: 'All states' },
+                        { value: 'scanning', label: 'Scanning now' },
+                        { value: 'failed', label: 'Failed last run' },
+                      ]}
+                    />
+                  </>
+                )}
+              </Space>
 
-            {allRows.length > 5 && (
-              <SearchBar
-                value={search}
-                onChange={setSearch}
-                placeholder="Search sources by name, product or repository"
-                matched={rows.length}
-                total={allRows.length}
-                width={300}
-              />
-            )}
+              <Space size={24} wrap>
+                {/*
+                  One sentence, read left to right. It used to be a label, a
+                  colon and a number - "Found on the last run: 0 new releases" -
+                  which reads as a form field rather than as the answer to the
+                  question the panel exists for.
+                */}
+                <Typography.Text type="secondary" style={{ fontSize: 13 }}>
+                  Found{' '}
+                  <Typography.Text strong>
+                    <Value>{formatCount(newSinceLastRun)}</Value>
+                  </Typography.Text>{' '}
+                  new {newSinceLastRun === 1 ? 'release' : 'releases'} in the last sync
+                </Typography.Text>
+                {errors.length > 0 && (
+                  <Button
+                    type="text"
+                    danger
+                    size="small"
+                    style={{ paddingInline: 0, height: 'auto', fontSize: 13 }}
+                    onClick={() => setShowFailed(true)}
+                  >
+                    {errors.length} source{errors.length === 1 ? '' : 's'} failed on the last run
+                  </Button>
+                )}
+              </Space>
+            </div>
 
             <Table<DiscoverySourceState>
               size="small"
-              pagination={false}
+              pagination={{ pageSize: 20, showSizeChanger: false }}
               dataSource={rows}
               rowKey={(s) => `${s.product}-${s.source}`}
-              scroll={{ x: 900 }}
+              scroll={{ x: 900, y: rows.length > 12 ? 560 : undefined }}
               columns={[
                 {
                   title: 'Source',
@@ -592,6 +646,53 @@ export function DiscoveryPanel({ products }: { products: Product[] }) {
                 },
               ]}
             />
+
+            <Modal
+              open={showFailed}
+              title={`Failed sources (${errors.length})`}
+              footer={null}
+              onCancel={() => setShowFailed(false)}
+              width={900}
+            >
+              {errors.length === 0 ? (
+                <Typography.Text type="secondary">No failed source in the last run.</Typography.Text>
+              ) : (
+                <Table<DiscoverySourceState>
+                  size="small"
+                  pagination={{ pageSize: 8, showSizeChanger: false }}
+                  dataSource={errors}
+                  rowKey={(s) => `${s.product}-${s.source}-failed`}
+                  columns={[
+                    {
+                      title: 'Source',
+                      width: 170,
+                      render: (_, s) => (
+                        <Space direction="vertical" size={0}>
+                          <Typography.Text strong>{s.source}</Typography.Text>
+                          <Typography.Text type="secondary" style={{ fontSize: 11 }}>
+                            {s.product}
+                          </Typography.Text>
+                        </Space>
+                      ),
+                    },
+                    {
+                      title: 'Last run',
+                      width: 110,
+                      render: (_, s) =>
+                        s.lastRunAt ? <TimeAgo at={s.lastRunAt} /> : <NA reason="No completed run yet." />,
+                    },
+                    {
+                      title: 'Error',
+                      render: (_, s) => (
+                        <Typography.Text type="danger" style={{ fontSize: 12 }}>
+                          {s.lastError}
+                        </Typography.Text>
+                      ),
+                    },
+                  ]}
+                />
+              )}
+            </Modal>
           </>
         )}
       </Card>

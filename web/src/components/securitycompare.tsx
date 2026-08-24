@@ -1,7 +1,9 @@
 import { useMemo, useState } from 'react'
+import type { ReactNode } from 'react'
 import {
   Alert, Button, Card, Checkbox, Col, Input, Row, Segmented, Space, Table, Tag, Tooltip, Typography,
 } from 'antd'
+import { ArrowUpOutlined, CheckOutlined, MinusOutlined } from '@ant-design/icons'
 import { securityComparisonExportUrl } from '../api/queries'
 import { SEVERITIES } from '../api/types'
 import type {
@@ -51,17 +53,37 @@ export function SecurityComparison({ product, baseRef, againstRef, report, repos
 
   return (
     <Space direction="vertical" size={16} style={{ width: '100%' }}>
-      <Row gutter={[16, 16]}>
-        <Col xs={24} lg={11}>
-          <ReleaseCard title="Base release (old)" end={report.a} onSync={onSync && (() => onSync('a'))} />
-        </Col>
-        <Col xs={24} lg={2} style={{ display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-          <span aria-hidden style={{ fontSize: 20, color: '#98A2B3' }}>→</span>
-        </Col>
-        <Col xs={24} lg={11}>
-          <ReleaseCard title="Target release (new)" end={report.b} onSync={onSync && (() => onSync('b'))} />
-        </Col>
-      </Row>
+      {/*
+        ONE BAND, not two cards with an arrow adrift between them.
+
+        The two ends were separate cards either side of a 2-column gutter
+        holding a single grey arrow. That gutter was dead space on the widest
+        part of the page, the two cards read as unrelated, and the one number
+        the whole comparison exists to produce - what changed - was nowhere
+        near either of them: it lived in a Summary table three screens down.
+
+        Now the two ends and the delta between them are one object, read left
+        to right, and the delta is the largest thing in it.
+      */}
+      <Card size="small" styles={{ body: { padding: 0 } }}>
+        <div
+          className="slm-band"
+          style={{ gridTemplateColumns: 'minmax(0, 1fr) minmax(140px, 0.42fr) minmax(0, 1fr)' }}
+        >
+          <ReleaseEnd
+            title="Base release"
+            end={report.a}
+            onSync={onSync && (() => onSync('a'))}
+          />
+          <NetChangeZone a={report.a} b={report.b} verdict={report.verdict} />
+          <ReleaseEnd
+            title="New release"
+            end={report.b}
+            onSync={onSync && (() => onSync('b'))}
+            align="end"
+          />
+        </div>
+      </Card>
 
       <VerdictBanner
         verdict={report.verdict}
@@ -112,53 +134,128 @@ export function SecurityComparison({ product, baseRef, againstRef, report, repos
 }
 
 /**
- * One end of the comparison, as a card.
+ * One end of the comparison.
+ *
+ * A zone within the comparison band rather than a card of its own: the two ends
+ * and the delta between them are one fact and were three boxes.
  *
  * Carries its own sync state, because a comparison against a release nobody has
  * scanned is inconclusive and the useful thing to put on screen is the button
  * that changes that - not a verdict repeating that it cannot say.
  */
-function ReleaseCard({ title, end, onSync }: {
+function ReleaseEnd({ title, end, onSync, align }: {
   title: string
   end: SecurityComparisonEnd
   onSync?: () => void
+  align?: 'end'
 }) {
   const synced = end.sync.state === 'synced'
   return (
-    <Card size="small" style={{ height: '100%' }}>
-      <Space direction="vertical" size={8} style={{ width: '100%' }}>
-        <Typography.Text type="secondary" style={{ fontSize: 11, letterSpacing: 0.4, textTransform: 'uppercase' }}>
-          {title}
-        </Typography.Text>
-        <Typography.Text strong style={{ fontFamily: mono, fontSize: 16 }}>{end.label}</Typography.Text>
+    <div style={{ padding: '18px 22px', minWidth: 0, textAlign: align === 'end' ? 'right' : 'left' }}>
+      <Typography.Text
+        style={{
+          fontSize: 11, fontWeight: 600, letterSpacing: '0.06em',
+          textTransform: 'uppercase', color: semantic.neutral,
+        }}
+      >
+        {title}
+      </Typography.Text>
+      <div
+        style={{
+          fontFamily: mono, fontSize: 19, fontWeight: 600, marginTop: 4,
+          color: palette.headingText, overflow: 'hidden', textOverflow: 'ellipsis',
+          whiteSpace: 'nowrap',
+        }}
+        title={end.label}
+      >
+        {end.label}
+      </div>
 
-        {synced ? (
-          <>
-            <Space size={18} wrap>
-              <Stat label="Vulnerabilities" value={end.counts.total} />
-              <Stat label="Fixable" value={end.counts.fixable} />
-              <Stat label="Scanned" value={end.coverage.scanned} suffix={`/ ${end.coverage.scannable}`} />
-            </Space>
-            <SeverityBar counts={end.counts} />
-            <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-              {end.sync.syncedAt && `synced ${formatRelative(end.sync.syncedAt)}`}
-              {end.repository && ` · ${end.repository}`}
-            </Typography.Text>
-          </>
-        ) : (
-          <Space direction="vertical" size={8}>
-            <Typography.Text type="secondary">
-              {end.sync.canSync
-                ? 'This release has not been scanned, so it cannot be compared.'
-                : end.sync.reason}
-            </Typography.Text>
-            {end.sync.canSync && onSync && (
-              <Button size="small" type="primary" onClick={onSync}>Sync vulnerabilities</Button>
-            )}
+      {synced ? (
+        <>
+          <Space
+            size={20}
+            wrap
+            style={{ marginTop: 14, justifyContent: align === 'end' ? 'flex-end' : 'flex-start', width: '100%' }}
+          >
+            <Stat label="Vulnerabilities" value={end.counts.total} />
+            <Stat label="Fixable" value={end.counts.fixable} />
+            <Stat label="Scanned" value={end.coverage.scanned} suffix={`/ ${end.coverage.scannable}`} />
           </Space>
-        )}
-      </Space>
-    </Card>
+          <div style={{ marginTop: 12 }}>
+            <SeverityBar counts={end.counts} />
+          </div>
+          <Typography.Text type="secondary" style={{ fontSize: 12, display: 'block', marginTop: 8 }}>
+            {end.sync.syncedAt && `synced ${formatRelative(end.sync.syncedAt)}`}
+            {end.repository && ` · ${end.repository}`}
+          </Typography.Text>
+        </>
+      ) : (
+        <Space direction="vertical" size={8} style={{ marginTop: 12 }}>
+          <Typography.Text type="secondary">
+            {end.sync.canSync
+              ? 'This release has not been scanned, so it cannot be compared.'
+              : end.sync.reason}
+          </Typography.Text>
+          {end.sync.canSync && onSync && (
+            <Button size="small" type="primary" onClick={onSync}>Sync vulnerabilities</Button>
+          )}
+        </Space>
+      )}
+    </div>
+  )
+}
+
+/**
+ * The number the whole comparison exists to produce, between the two ends that
+ * produced it.
+ *
+ * Signed, always: "+7" and "7" are different facts and only one of them is
+ * this one. The sign is the first character so it survives a glance, and the
+ * colour agrees with the verdict rather than with the arithmetic - fewer
+ * vulnerabilities is better whichever direction the number moved.
+ */
+function NetChangeZone({ a, b, verdict }: {
+  a: SecurityComparisonEnd
+  b: SecurityComparisonEnd
+  verdict: SecurityComparisonResponse['verdict']
+}) {
+  const delta = b.counts.total - a.counts.total
+  const tone = verdict === 'better' ? verdictColour.better
+    : verdict === 'worse' ? verdictColour.worse
+      : verdict === 'inconclusive' ? verdictColour.inconclusive
+        : verdictColour.unchanged
+
+  return (
+    <div
+      className="slm-band-mid"
+      style={{
+        padding: '18px 12px', minWidth: 0, textAlign: 'center',
+        display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center',
+        borderInline: `1px solid ${palette.hairline}`,
+        background: palette.sunken,
+      }}
+    >
+      <Typography.Text
+        style={{
+          fontSize: 11, fontWeight: 600, letterSpacing: '0.06em',
+          textTransform: 'uppercase', color: semantic.neutral,
+        }}
+      >
+        Net change
+      </Typography.Text>
+      <div
+        style={{
+          fontSize: 32, fontWeight: 600, color: tone, lineHeight: 1.1, marginTop: 6,
+          letterSpacing: '-0.02em', fontVariantNumeric: 'tabular-nums',
+        }}
+      >
+        {delta > 0 ? '+' : ''}{delta.toLocaleString()}
+      </div>
+      <Typography.Text type="secondary" style={{ fontSize: 11.5, marginTop: 2 }}>
+        vulnerabilities
+      </Typography.Text>
+    </div>
   )
 }
 
@@ -194,71 +291,138 @@ function VulnerabilityOverview({ report }: { report: SecurityComparisonResponse 
   const uniqueToNew = report.introduced.total
 
   return (
-    <Card size="small" title="Vulnerability overview">
-      <Row gutter={[16, 16]} align="middle">
-        <Col xs={24} md={8}>
-          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 0 }}>
-            <SetCircle label="Only in old" value={uniqueToOld} background="#EEF3FA" />
-            <SetCircle label="In both" value={common} background="#E7EDF6" overlap />
-            <SetCircle label="Only in new" value={uniqueToNew} background="#EAF3EE" overlap />
-          </div>
-        </Col>
+    <Card size="small" title="Vulnerability overview" styles={{ body: { padding: 0 } }}>
+      {/*
+        THE THREE SETS AS ONE BAR, not three circles.
 
-        <Col xs={24} md={16}>
-          <Row gutter={[12, 12]}>
-            <Col xs={24} sm={8}>
-              <DeltaTile
-                label="Introduced"
-                counts={report.introduced}
-                colour={verdictColour.worse}
-                symbol="↑"
-              />
-            </Col>
-            <Col xs={24} sm={8}>
-              <DeltaTile
-                label="Resolved"
-                counts={report.resolved}
-                colour={verdictColour.better}
-                symbol="✓"
-              />
-            </Col>
-            <Col xs={24} sm={8}>
-              <DeltaTile
-                label="Unchanged"
-                counts={report.unchanged}
-                colour={semantic.neutral}
-                symbol="−"
-              />
-            </Col>
-          </Row>
-        </Col>
-      </Row>
+        This was three pale discs overlapping by 22px. They looked like a Venn
+        diagram and were not one - a real Venn's overlap is the intersection,
+        and here the intersection had its own separate disc - so the picture
+        made a claim about the data that the data did not support. Worse, the
+        three discs were the same size whatever the numbers, so the one visual
+        on the page could not be read: 39 and 1,286 drew identical circles.
+
+        A single proportional bar is the same three numbers in a shape that is
+        true. The middle segment IS the intersection, its width is its share,
+        and two comparisons run a week apart can be held side by side.
+      */}
+      <div style={{ padding: '18px 22px' }}>
+        <SetBar
+          old={uniqueToOld}
+          both={common}
+          fresh={uniqueToNew}
+        />
+      </div>
+
+      {/*
+        Three zones, not three cards inside a card. A bordered box inside a
+        bordered box inside a page of bordered boxes is a hierarchy nobody can
+        read; a hairline says the same thing and says it once.
+      */}
+      <div
+        className="slm-band"
+        style={{
+          gridTemplateColumns: 'repeat(3, minmax(0, 1fr))',
+          borderTop: `1px solid ${palette.hairline}`,
+        }}
+      >
+        <DeltaZone
+          label="Introduced"
+          counts={report.introduced}
+          colour={verdictColour.worse}
+          icon={<ArrowUpOutlined />}
+        />
+        <DeltaZone
+          label="Resolved"
+          counts={report.resolved}
+          colour={verdictColour.better}
+          icon={<CheckOutlined />}
+          divider
+        />
+        <DeltaZone
+          label="Unchanged"
+          counts={report.unchanged}
+          colour={semantic.neutral}
+          icon={<MinusOutlined />}
+          divider
+        />
+      </div>
     </Card>
   )
 }
 
-function SetCircle({ label, value, background, overlap }: {
-  label: string
-  value: number
-  background: string
-  overlap?: boolean
-}) {
+/**
+ * What the two releases share, and what only one of them has.
+ *
+ * The middle segment is the intersection and the two ends are the differences,
+ * so the bar's shape is the answer: a wide middle is an ordinary point release,
+ * and a narrow one is a rebuild wearing a version number.
+ */
+function SetBar({ old, both, fresh }: { old: number; both: number; fresh: number }) {
+  const total = old + both + fresh || 1
+  const segments = [
+    { key: 'old', n: old, colour: verdictColour.better, label: 'Only in the base release', hint: 'gone in the new one' },
+    { key: 'both', n: both, colour: '#8794A5', label: 'In both releases', hint: 'carried over unchanged' },
+    { key: 'new', n: fresh, colour: verdictColour.worse, label: 'Only in the new release', hint: 'arrived with it' },
+  ]
+
   return (
-    <Tooltip title={label}>
+    <div>
       <div
         style={{
-          width: 108, height: 108, borderRadius: '50%', background,
-          border: `1px solid ${palette.border}`,
-          display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center',
-          marginLeft: overlap ? -22 : 0,
+          display: 'flex', width: '100%', height: 12, borderRadius: 6,
+          overflow: 'hidden', background: '#EEF1F4',
         }}
       >
-        <span style={{ fontSize: 20, fontWeight: 600 }}>{value.toLocaleString()}</span>
-        <span style={{ fontSize: 10, color: semantic.neutral, textAlign: 'center', padding: '0 8px' }}>
-          {label}
-        </span>
+        {segments.map((seg, i) => (seg.n === 0 ? null : (
+          <Tooltip key={seg.key} title={`${seg.label}: ${seg.n.toLocaleString()} (${seg.hint})`}>
+            <div
+              className="slm-meter-seg"
+              style={{
+                width: `${(seg.n / total) * 100}%`, background: seg.colour,
+                transformOrigin: 'left',
+                animation: `slm-grow 460ms cubic-bezier(0.16,1,0.3,1) ${i * 70}ms both`,
+              }}
+            />
+          </Tooltip>
+        )))}
       </div>
-    </Tooltip>
+
+      <div
+        style={{
+          display: 'grid', gridTemplateColumns: 'repeat(3, minmax(0, 1fr))',
+          gap: 16, marginTop: 12,
+        }}
+      >
+        {segments.map((seg) => (
+          <div key={seg.key} style={{ minWidth: 0 }}>
+            <div
+              style={{
+                display: 'flex', alignItems: 'baseline', gap: 7,
+                fontVariantNumeric: 'tabular-nums',
+              }}
+            >
+              <span
+                aria-hidden
+                style={{
+                  width: 8, height: 8, borderRadius: 2, background: seg.colour,
+                  display: 'inline-block', flex: 'none',
+                }}
+              />
+              <span style={{ fontSize: 19, fontWeight: 600, color: palette.headingText, lineHeight: 1 }}>
+                {seg.n.toLocaleString()}
+              </span>
+            </div>
+            <Typography.Text
+              type="secondary"
+              style={{ fontSize: 11.5, display: 'block', marginTop: 4, marginInlineStart: 15 }}
+            >
+              {seg.label}
+            </Typography.Text>
+          </div>
+        ))}
+      </div>
+    </div>
   )
 }
 
@@ -268,30 +432,57 @@ function SetCircle({ label, value, background, overlap }: {
  * Both splits, because they answer different questions: the severity says how
  * bad, and the fixability says how much of it anybody can act on this week.
  */
-function DeltaTile({ label, counts, colour, symbol }: {
+function DeltaZone({ label, counts, colour, icon, divider }: {
   label: string
   counts: SecurityComparisonResponse['introduced']
   colour: string
-  symbol: string
+  icon: ReactNode
+  divider?: boolean
 }) {
   return (
-    <div style={{ border: `1px solid ${palette.border}`, borderRadius: palette.borderRadius, padding: 12 }}>
-      <Space size={6}>
-        <span aria-hidden style={{ color: colour, fontSize: 14 }}>{symbol}</span>
-        <Typography.Text type="secondary" style={{ fontSize: 12 }}>{label}</Typography.Text>
+    <div
+      style={{
+        padding: '16px 22px', minWidth: 0,
+        borderInlineStart: divider ? `1px solid ${palette.hairline}` : undefined,
+      }}
+    >
+      <Space size={7}>
+        {/* A drawn icon, not a unicode arrow: ↑ and − take their shape from
+            whichever font the platform happens to have, and sit on a different
+            baseline in each one. */}
+        <span aria-hidden style={{ color: colour, fontSize: 12, lineHeight: 1 }}>{icon}</span>
+        <Typography.Text
+          style={{
+            fontSize: 11, fontWeight: 600, letterSpacing: '0.06em',
+            textTransform: 'uppercase', color: semantic.neutral,
+          }}
+        >
+          {label}
+        </Typography.Text>
       </Space>
-      <div style={{ fontSize: 26, fontWeight: 600, color: colour, lineHeight: 1.3 }}>
+      <div
+        style={{
+          fontSize: 30, fontWeight: 600, color: colour, lineHeight: 1.15, marginTop: 4,
+          letterSpacing: '-0.02em', fontVariantNumeric: 'tabular-nums',
+        }}
+      >
         {counts.total.toLocaleString()}
       </div>
-      <Space size={8} wrap>
-        {SEVERITIES.filter((s) => counts.bySeverity[s] > 0).map((s) => (
-          <Typography.Text key={s} style={{ fontSize: 12, color: severityColour[s] }}>
-            {counts.bySeverity[s]} {s}
+      <Space size={10} wrap style={{ marginTop: 4 }}>
+        {SEVERITIES.filter((sev) => counts.bySeverity[sev] > 0).map((sev) => (
+          <Typography.Text
+            key={sev}
+            style={{ fontSize: 12, color: severityColour[sev], fontVariantNumeric: 'tabular-nums' }}
+          >
+            <strong>{counts.bySeverity[sev]}</strong> {sev}
           </Typography.Text>
         ))}
       </Space>
       {counts.total > 0 && (
-        <Typography.Text type="secondary" style={{ fontSize: 11, display: 'block', marginTop: 4 }}>
+        <Typography.Text
+          type="secondary"
+          style={{ fontSize: 11, display: 'block', marginTop: 6, fontVariantNumeric: 'tabular-nums' }}
+        >
           {counts.fixable} fixable · {counts.nonFixable} not
         </Typography.Text>
       )}

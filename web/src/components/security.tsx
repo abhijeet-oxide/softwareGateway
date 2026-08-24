@@ -74,21 +74,140 @@ export function SeverityTag({ value, count }: { value: Severity; count?: number 
  * Proportional, so a release with 134 criticals among 1,286 findings does not
  * look like one with four. Every segment carries a tooltip with its own count,
  * because a bar answers "what is the shape of this" and never "how many".
+ *
+ * The segments grow from nothing on first paint, worst first. That is the one
+ * authored moment on these pages: it draws the eye along the bar in the order
+ * the severities matter, which is the order a reader should read them in.
  */
 export function SeverityBar({ counts, height = 8 }: { counts: SecurityCounts; height?: number }) {
   const total = counts.total || 1
   return (
-    <div style={{ display: 'flex', width: '100%', height, borderRadius: height / 2, overflow: 'hidden', background: '#EEF1F4' }}>
-      {SEVERITIES.map((s) => {
+    <div
+      style={{
+        display: 'flex', width: '100%', height, borderRadius: height / 2,
+        overflow: 'hidden', background: '#EEF1F4',
+      }}
+    >
+      {SEVERITIES.map((s, i) => {
         const n = counts.bySeverity[s]
         if (!n) return null
         return (
           <Tooltip key={s} title={`${SEVERITY_LABEL[s]}: ${n.toLocaleString()}`}>
-            <div style={{ width: `${(n / total) * 100}%`, background: severityColour[s] }} />
+            <div
+              className="slm-meter-seg"
+              style={{
+                width: `${(n / total) * 100}%`,
+                background: severityColour[s],
+                transformOrigin: 'left',
+                animation: `slm-grow 420ms cubic-bezier(0.16,1,0.3,1) ${i * 60}ms both`,
+              }}
+            />
           </Tooltip>
         )
       })}
     </div>
+  )
+}
+
+/**
+ * The listing's answer to "how bad is this release", in one glance.
+ *
+ * This replaced a two-column grid of five labelled counts. That grid was
+ * accurate and unreadable: six lines of small text per row, in a column a
+ * release manager scans down twenty rows of looking for the one that got
+ * worse. Comparing "Critical 17" against "Critical 4" four rows below meant
+ * reading two numbers out of two paragraphs.
+ *
+ * What a scan of that column actually asks is: is there anything critical, and
+ * how big is the pile. So the pile is drawn - one proportional bar, worst on
+ * the left - and only the two severities anybody acts on are written out. The
+ * rest stay one hover away, on the bar itself, where the exact figures live.
+ *
+ * The total is the largest thing in the cell because it is the number a reader
+ * carries to the next row.
+ */
+export function SeverityMeter({ counts, width }: { counts: SecurityCounts; width?: number }) {
+  const critical = counts.bySeverity.critical
+  const high = counts.bySeverity.high
+
+  /*
+    Fluid, not fixed. A minimum width here is a promise the table cannot keep:
+    the column is sized by the table, and a cell wider than its column is
+    simply clipped by the pinned Actions column on its right - which is how
+    "26 high" came to render as "26 hig".
+  */
+  return (
+    <div style={{ width: '100%', minWidth: 0, maxWidth: width ?? 260 }}>
+      <div
+        style={{
+          display: 'flex', alignItems: 'baseline', gap: 8, marginBottom: 6,
+          fontVariantNumeric: 'tabular-nums',
+        }}
+      >
+        <span style={{ fontSize: 17, fontWeight: 600, color: palette.headingText, lineHeight: 1 }}>
+          {counts.total.toLocaleString()}
+        </span>
+        <span style={{ fontSize: 11, color: semantic.neutral, letterSpacing: '0.02em' }}>
+          {counts.total === 1 ? 'finding' : 'findings'}
+        </span>
+        {counts.fixable > 0 && (
+          <Tooltip
+            title={`${counts.fixable.toLocaleString()} of ${counts.total.toLocaleString()} have a fixed version available`}
+          >
+            <span
+              style={{
+                fontSize: 11, color: semantic.success, marginInlineStart: 'auto',
+                whiteSpace: 'nowrap',
+              }}
+            >
+              {Math.round((counts.fixable / (counts.total || 1)) * 100)}% fixable
+            </span>
+          </Tooltip>
+        )}
+      </div>
+
+      <SeverityBar counts={counts} height={6} />
+
+      {/*
+        Only the two that carry an action. A zero is still shown - a release
+        with no criticals is telling you something, and a row that omits the
+        zero reads as a row that forgot to mention them.
+      */}
+      <div
+        style={{
+          display: 'flex', gap: 14, marginTop: 7, fontSize: 12,
+          fontVariantNumeric: 'tabular-nums', whiteSpace: 'nowrap',
+        }}
+      >
+        <SeverityPip value="critical" count={critical} />
+        <SeverityPip value="high" count={high} />
+      </div>
+    </div>
+  )
+}
+
+/** One severity as a dot, its word, and its count - the meter's unit. */
+function SeverityPip({ value, count }: { value: Severity; count: number }) {
+  const filled = value === 'critical' || value === 'high'
+  const muted = count === 0
+  return (
+    <Tooltip title={`${SEVERITY_LABEL[value]}: ${count.toLocaleString()}`}>
+      <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5 }}>
+        <span
+          aria-hidden
+          style={{
+            display: 'inline-block', width: 7, height: 7, borderRadius: '50%',
+            background: muted ? severitySurface[value]
+              : filled ? severityColour[value] : severitySurface[value],
+            border: `1.5px solid ${muted ? '#D6DCE4' : severityColour[value]}`,
+          }}
+        />
+        <span style={{ color: muted ? semantic.neutral : severityColour[value], fontWeight: muted ? 400 : 600 }}>
+          {count.toLocaleString()}
+        </span>
+        <span style={{ color: semantic.neutral }}>{SEVERITY_LABEL[value].toLowerCase()}</span>
+      </span>
+    </Tooltip>
   )
 }
 
@@ -217,50 +336,16 @@ export function VulnerabilityCell({
   }
 
   return (
-    <Space direction="vertical" size={2} style={{ width: '100%', minWidth: 170 }}>
-      <div
-        style={{
-          display: 'grid',
-          gridTemplateColumns: 'repeat(2, minmax(0, 1fr))',
-          columnGap: 10,
-          rowGap: 4,
-          fontSize: 12,
-          lineHeight: 1.25,
-        }}
-      >
-        {SEVERITIES.map((sev) => (
-          (summary.counts.bySeverity[sev] > 0 || sev === 'unknown') ? (
-            <Space key={sev} size={4} style={{ minWidth: 0 }}>
-              <span
-                aria-hidden
-                style={{
-                  display: 'inline-block',
-                  width: 7,
-                  height: 7,
-                  borderRadius: '50%',
-                  background: severityColour[sev],
-                }}
-              />
-              <span style={{ color: '#6B7280' }}>{SEVERITY_LABEL[sev]}</span>
-              <strong style={{ color: severityColour[sev], fontWeight: 600 }}>
-                {summary.counts.bySeverity[sev].toLocaleString()}
-              </strong>
-            </Space>
-          ) : null
-        ))}
-        <Space size={4} style={{ minWidth: 0 }}>
-          <span style={{ color: '#6B7280' }}>Total</span>
-          <strong>{summary.counts.total.toLocaleString()}</strong>
-        </Space>
-      </div>
+    <Space direction="vertical" size={4} style={{ width: '100%' }}>
+      <SeverityMeter counts={summary.counts} />
 
       {!summary.complete && (
-        <Typography.Text type="secondary" style={{ color: semantic.warning, fontStyle: 'italic', fontSize: 11 }}>
+        <Typography.Text style={{ color: semantic.warning, fontSize: 11 }}>
           Not all artifacts were scanned.
         </Typography.Text>
       )}
       {stale && (
-        <Typography.Text type="secondary" style={{ color: semantic.warning, fontStyle: 'italic', fontSize: 11 }}>
+        <Typography.Text style={{ color: semantic.warning, fontSize: 11 }}>
           Last sync failed. The details may be outdated.
         </Typography.Text>
       )}
@@ -449,12 +534,21 @@ export function VerdictBanner({
   const colour = verdictColour[verdict]
 
   return (
+    /*
+      The verdict is the page's answer, so it is the one surface that carries
+      colour rather than sitting on white.
+
+      It had a 4px coloured left border on a white card - a stripe that reads as
+      a decoration applied to a box rather than as the box meaning something. A
+      tinted ground and a matching hairline say the same thing with the whole
+      shape instead of a strip of one edge, and the icon and the word carry the
+      meaning for anybody who does not see the hue at all.
+    */
     <div
       style={{
-        border: `1px solid ${colour}33`,
-        borderLeft: `4px solid ${colour}`,
+        border: `1px solid ${colour}2E`,
         borderRadius: palette.borderRadius,
-        background: '#FFFFFF',
+        background: `${colour}0A`,
         padding: '18px 20px',
         marginBottom: 16,
       }}
@@ -462,8 +556,16 @@ export function VerdictBanner({
       <Space direction="vertical" size={10} style={{ width: '100%' }}>
         <Space align="start" style={{ width: '100%', justifyContent: 'space-between' }}>
           <Space size={10} align="center">
-            <span style={{ color: colour, fontSize: 20, lineHeight: 1 }}>{VERDICT_ICON[verdict]}</span>
-            <Typography.Title level={4} style={{ margin: 0, color: colour }}>
+            <span
+              style={{
+                color: colour, fontSize: 18, lineHeight: 1, display: 'inline-flex',
+                alignItems: 'center', justifyContent: 'center',
+                width: 32, height: 32, borderRadius: '50%', background: `${colour}1A`,
+              }}
+            >
+              {VERDICT_ICON[verdict]}
+            </span>
+            <Typography.Title level={4} style={{ margin: 0, color: colour, letterSpacing: '-0.01em' }}>
               {verdict === 'inconclusive' ? 'Not enough information' : VERDICT_WORD[verdict]}
             </Typography.Title>
           </Space>

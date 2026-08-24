@@ -1,6 +1,6 @@
 import { Progress, Tag, Tooltip, Typography } from 'antd'
 import {
-  CheckCircleFilled, ClockCircleOutlined, CloseCircleFilled, Loading3QuartersOutlined, LoadingOutlined, SyncOutlined,
+  CheckCircleFilled, ClockCircleOutlined, CloseCircleFilled, LoadingOutlined, SyncOutlined,
 } from '@ant-design/icons'
 import type { ContentGroup, Strategy } from '../api/types'
 import { formatBytes, formatCount, formatSpeed, formatAbsolute, formatDuration } from '../domain/format'

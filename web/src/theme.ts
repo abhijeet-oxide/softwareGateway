@@ -102,6 +102,16 @@ export const palette = {
   pageBackground: '#F4F6F9',
   headingText: '#111C2B',
   border: '#E4E8EE',
+  /**
+   * A rule INSIDE a card - between table rows, under a panel heading.
+   *
+   * Lighter than `border`, which separates a card from the page. One value for
+   * both made every table read as a grid of equal boxes, because the line
+   * around a card and the line between two of its rows carried the same weight.
+   */
+  hairline: '#EDF0F4',
+  /** A recessed well: a panel nested inside a card, a code block, a diff. */
+  sunken: '#F7F9FB',
 
   /** Corners, control height and type scale. */
   borderRadius: 4,
@@ -119,6 +129,45 @@ export const palette = {
   /** Identifiers - versions, digests, paths, URLs - are monospace everywhere. */
   monoFamily:
     "ui-monospace, SFMono-Regular, Menlo, Consolas, 'Liberation Mono', monospace",
+}
+
+/**
+ * Depth.
+ *
+ * Every card in this application was a white rectangle with the same 1px border
+ * on the same grey, so a page of six of them had no order in it: the summary
+ * that should be read first and the table it summarises sat at exactly the same
+ * distance from the reader. These give the page three planes.
+ *
+ * Offset and blur, never a zero-offset halo - a shadow without an offset is not
+ * light falling on anything, it is a coloured outline pretending to be depth.
+ * The tint is the sidebar navy rather than black, so the shade belongs to the
+ * palette and follows a rebrand with everything else.
+ */
+export const elevation = {
+  /** A card at rest. Enough to lift it off the page background, no more. */
+  card: '0 1px 2px rgba(11,31,58,0.05), 0 1px 3px rgba(11,31,58,0.04)',
+  /** A card the pointer is over, or one carrying the page's answer. */
+  raised: '0 2px 4px rgba(11,31,58,0.06), 0 6px 16px rgba(11,31,58,0.07)',
+  /** Something genuinely floating: a popover, a drawer, a dropdown. */
+  overlay: '0 6px 16px rgba(11,31,58,0.08), 0 12px 40px rgba(11,31,58,0.12)',
+}
+
+/**
+ * Motion.
+ *
+ * One authored moment, not an effect on every element. Panels settle in on
+ * arrival and severity bars grow from nothing; everything else is a state
+ * change fast enough to feel like a response rather than an animation.
+ *
+ * Exponential ease-out from an already-visible default, so a slow connection
+ * that renders before the transition runs shows the finished page rather than
+ * an empty one.
+ */
+export const motion = {
+  fast: '120ms cubic-bezier(0.16, 1, 0.3, 1)',
+  base: '240ms cubic-bezier(0.16, 1, 0.3, 1)',
+  slow: '420ms cubic-bezier(0.16, 1, 0.3, 1)',
 }
 
 /**
@@ -234,6 +283,12 @@ export const theme: ThemeConfig = {
     colorBorderSecondary: palette.border,
     colorTextHeading: palette.headingText,
     fontFamily: palette.fontFamily,
+
+    // Ant's defaults are a black halo with no offset. Replaced with the
+    // palette's own shade so depth reads as light rather than as an outline.
+    boxShadow: elevation.card,
+    boxShadowSecondary: elevation.overlay,
+    boxShadowTertiary: elevation.card,
   },
   components: {
     Layout: {
@@ -248,12 +303,16 @@ export const theme: ThemeConfig = {
       darkItemColor: palette.sidebarText,
     },
     Table: {
-      headerBg: '#FAFBFC',
+      headerBg: palette.sunken,
       headerColor: semantic.neutral,
-      cellPaddingBlock: 10,
+      cellPaddingBlock: 12,
+      borderColor: palette.hairline,
+      rowHoverBg: '#F6FAFD',
     },
     Card: { paddingLG: 16 },
     Statistic: { contentFontSize: 28 },
+    Segmented: { itemSelectedBg: '#FFFFFF', trackBg: palette.sunken },
+    Tabs: { horizontalItemPadding: '10px 0', horizontalMargin: '0 0 16px 0' },
   },
 }
 

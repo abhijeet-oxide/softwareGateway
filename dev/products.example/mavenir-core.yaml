@@ -1,0 +1,35 @@
+apiVersion: softwaregateway.io/v1alpha1
+kind: Product
+metadata:
+  name: mavenir-core
+  displayName: Mavenir Converged Packet Core
+  owner: packet-core-platform
+spec:
+  sources:
+    - name: vendor
+      registry: registry.mavenir.example.com:9443
+      repository: mavenir/converged-core
+      anonymous: true
+      discovery:
+        enabled: true
+        interval: 30m
+  targets:
+    - name: jfrog-lab
+      registry: artifactory.internal.example.com:9444
+      repository: mavenir-lab/converged-core
+      type: artifactory
+      xrayEnabled: true
+      xrayEndpoint: https://artifactory.internal.example.com:9444
+      credentialsRef:
+        secretName: internal-registry
+      default: true
+  autoDownload:
+    enabled: true
+    rules:
+      - name: releases
+        tagPattern: '^\d+\.\d+\.\d+$'
+        targets: [jfrog-lab]
+  network:
+    tls:
+      # Development only: dev/fakeregistry issues its own certificate.
+      insecureSkipVerify: true

@@ -81,3 +81,143 @@ body {
 .slm-release-select .ant-select-selection-search-input {
   height: 44px;
 }
+
+/* ===========================================================================
+ * Depth, rhythm, and the surfaces a design system usually forgets.
+ *
+ * Everything below derives from theme.ts. The literal values here are the ones
+ * CSS cannot read from a token - a keyframe percentage, a scrollbar width -
+ * and the colours are the palette's own, repeated because a stylesheet cannot
+ * import them. Change one in theme.ts and change it here.
+ * ======================================================================== */
+
+/*
+ * NUMBERS THAT LINE UP.
+ *
+ * This is the single highest-value rule in the file. Proportional digits are
+ * why a column of counts read as ragged text: in the default face a 1 is
+ * narrower than a 7, so 1,286 and 7,004 have different widths and a reader
+ * comparing a column of them is comparing shapes that do not align. Every
+ * number here exists to be compared with the number above it.
+ */
+.ant-table-cell,
+.ant-statistic-content,
+.ant-descriptions-item-content,
+.mono,
+.slm-num {
+  font-variant-numeric: tabular-nums;
+  font-feature-settings: 'tnum' 1;
+}
+
+/* Identifiers read tighter than prose; the default mono tracking is loose. */
+.mono {
+  letter-spacing: -0.01em;
+}
+
+/*
+ * THE BROWSER'S OWN SURFACES.
+ *
+ * Selection, caret and scrollbar ship with defaults that belong to no design
+ * system - a blue selection from 1998 on a page whose blue is #009fdb. They
+ * are the cheapest signal that a page was built rather than assembled.
+ */
+::selection {
+  background: rgba(0, 159, 219, 0.18);
+}
+html {
+  caret-color: #009fdb;
+  scrollbar-color: #C9D2DD transparent;
+  scrollbar-width: thin;
+}
+::-webkit-scrollbar { width: 10px; height: 10px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb {
+  background: #C9D2DD;
+  border: 3px solid transparent;
+  border-radius: 6px;
+  background-clip: padding-box;
+}
+::-webkit-scrollbar-thumb:hover { background: #A9B6C6; background-clip: padding-box; }
+
+/*
+ * A table that scrolls sideways should say so at its edge rather than leaving
+ * a reader to discover it. The shadow appears only while there is more to the
+ * right, which is what `ant-table-ping-right` means.
+ */
+.ant-table-ping-right .ant-table-cell-fix-right-first::after,
+.ant-table-ping-right .ant-table-cell-fix-right::after {
+  box-shadow: inset -10px 0 8px -8px rgba(11, 31, 58, 0.12);
+}
+
+/* Keyboard focus, from the palette rather than a hex that predates it. */
+:focus-visible {
+  outline: 2px solid #009fdb;
+  outline-offset: 2px;
+  border-radius: 3px;
+}
+
+/* ---------------------------------------------------------------- motion --
+ * One authored moment: a panel settles in on arrival. Exponential ease-out
+ * from an already-visible default, so a render that beats the animation shows
+ * the finished page rather than an empty one.
+ */
+@keyframes slm-rise {
+  from { opacity: 0; transform: translateY(6px); }
+  to   { opacity: 1; transform: none; }
+}
+.slm-rise {
+  animation: slm-rise 420ms cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+
+/* A severity bar's segments grow from nothing, worst first. */
+@keyframes slm-grow {
+  from { transform: scaleX(0); }
+  to   { transform: scaleX(1); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .slm-rise { animation: none; }
+  .slm-meter-seg { animation: none !important; }
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;
+    transition-duration: 0.01ms !important;
+  }
+}
+
+/* Cards lift under the pointer only where the whole card is a link. */
+.slm-card-interactive {
+  transition: box-shadow 240ms cubic-bezier(0.16, 1, 0.3, 1),
+              border-color 240ms cubic-bezier(0.16, 1, 0.3, 1);
+}
+.slm-card-interactive:hover {
+  box-shadow: 0 2px 4px rgba(11,31,58,0.06), 0 6px 16px rgba(11,31,58,0.07);
+  border-color: #CFDAE6;
+}
+
+/* ---------------------------------------------------------------- bands --
+ * The three-zone bands - the release's security posture, the two ends of a
+ * comparison, the lifecycle strip - are grids whose column counts only make
+ * sense at width. Below the point where a zone would be narrower than the
+ * numbers in it, they stack, and the dividers turn from vertical to
+ * horizontal so the reading order stays the reading order.
+ *
+ * A class rather than inline style, because a media query cannot live in a
+ * style attribute and these are the one place in the application where the
+ * layout genuinely changes rather than reflowing.
+ */
+.slm-band {
+  display: grid;
+}
+@media (max-width: 900px) {
+  .slm-band {
+    grid-template-columns: minmax(0, 1fr) !important;
+  }
+  .slm-band > * + * {
+    border-inline-start: 0 !important;
+    border-top: 1px solid #EDF0F4;
+  }
+  /* The comparison's middle zone has a rule on both sides at width. */
+  .slm-band > .slm-band-mid {
+    border-inline: 0 !important;
+  }
+}

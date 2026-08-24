@@ -344,7 +344,11 @@ export function TimeAgo({ at }: { at?: string | null }) {
   if (!at) return <NA />
   return (
     <Tooltip title={formatAbsolute(at)}>
-      <span>{formatRelative(at)}</span>
+      {/* One line, always: a column of dates that wrap is a table of rows
+          that are all different heights. The exact minute is in the tooltip. */}
+      <span style={{ whiteSpace: 'nowrap', fontVariantNumeric: 'tabular-nums' }}>
+        {formatRelative(at)}
+      </span>
     </Tooltip>
   )
 }

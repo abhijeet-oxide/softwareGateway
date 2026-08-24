@@ -86,7 +86,25 @@ export function formatRelative(timestamp: string | undefined | null): string | n
   if (seconds < 3600) return `${Math.floor(seconds / 60)}m ago`
   if (seconds < 86400) return `${Math.floor(seconds / 3600)}h ago`
   if (seconds < 2592000) return `${Math.floor(seconds / 86400)}d ago`
-  return formatAbsolute(timestamp)
+  /*
+    The DAY, not the minute.
+
+    This returned the full absolute timestamp - `21 Jul 2026, 04:34 pm` - which
+    in a table column wrapped onto three lines and made every row a different
+    height. Nobody scanning a Published column wants the minute; whoever does
+    has it in the tooltip beside this, which carries formatAbsolute unchanged.
+  */
+  return formatDay(timestamp)
+}
+
+/** `21 Jul 2026` - a date without a time, for a column. */
+export function formatDay(timestamp: string | undefined | null): string | null {
+  if (!timestamp) return null
+  const t = Date.parse(timestamp)
+  if (Number.isNaN(t)) return null
+  return new Date(t).toLocaleDateString('en-GB', {
+    day: '2-digit', month: 'short', year: 'numeric',
+  })
 }
 
 /** The tooltip form: `16 Aug 2026 08:30 AM`. */

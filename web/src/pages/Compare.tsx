@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from 'react'
 import type { CSSProperties, ReactNode } from 'react'
 import {
   App, Button, Card, Col, Empty, Popover, Progress, Row, Segmented, Select,
-  Space, Statistic, Table, Tag, Tooltip, Tree, Typography,
+  Space, Table, Tag, Tooltip, Tree, Typography,
 } from 'antd'
 import { FolderOutlined, SwapOutlined } from '@ant-design/icons'
 import { useSearchParams } from 'react-router-dom'
@@ -17,7 +17,7 @@ import { ErrorState, SearchBar } from '../components/layout'
 import { WorkingBar } from '../components/progress'
 import { ARTIFACT_ICONS, Icon } from '../components/icons'
 import { SecurityComparison } from '../components/securitycompare'
-import { mono, semantic } from '../theme'
+import { mono, palette, semantic } from '../theme'
 import type {
   CompareFile, CompareProgressSide, CompareResponse, CompareRow, CompareVerdict, Package,
   Repository,
@@ -448,13 +448,7 @@ function ComparisonReport({ report }: { report: CompareResponse }) {
 
   return (
     <Space direction="vertical" size={16} style={{ width: '100%' }}>
-      <Row gutter={[16, 16]}>
-        {(['only-b', 'only-a', 'changed', 'same'] as const).map((verdict) => (
-          <Col xs={12} lg={6} key={verdict}>
-            <BucketCard bucket={buckets[verdict]} verdict={verdict} />
-          </Col>
-        ))}
-      </Row>
+      <CompositionBand buckets={buckets} />
 
       <Card
         title={
@@ -805,12 +799,93 @@ function FileRow({ entry, name }: { entry: FileEntry; name: string }) {
   )
 }
 
-/** One bucket of the summary: how many, how much, and of what. */
-function BucketCard({ bucket, verdict }: { bucket: Bucket; verdict: CompareVerdict }) {
+/**
+ * WHAT THE RELEASE IS MADE OF, as one band.
+ *
+ * This was four cards - Added, Removed, Changed, Unchanged - each with a big
+ * number and a byte count under it. On an ordinary point release three of the
+ * four read zero, so three quarters of the widest row on the page was spent
+ * drawing 38px zeroes, and the one figure that mattered had no more weight than
+ * the three that did not.
+ *
+ * A bar makes the shape of the release legible instead: a wide "unchanged"
+ * segment is a point release, a wide "changed" segment is a rebuild, and an
+ * "added" segment is a new component somebody has to go and look at. The four
+ * counts stay, underneath, at a size proportional to how often they are not
+ * zero - and each is still the popover it always was, naming what is inside it.
+ *
+ * The same shape as the vulnerability comparison's set bar, deliberately: two
+ * views of one comparison should not speak two visual languages.
+ */
+function CompositionBand({ buckets }: { buckets: Record<CompareVerdict, Bucket> }) {
+  const order = ['only-b', 'changed', 'same', 'only-a'] as const
+  const total = order.reduce((n, v) => n + buckets[v].count, 0) || 1
+
+  return (
+    <Card size="small" styles={{ body: { padding: '18px 22px' } }}>
+      <div
+        style={{
+          display: 'flex', width: '100%', height: 12, borderRadius: 6,
+          overflow: 'hidden', background: '#EEF1F4',
+        }}
+      >
+        {order.map((verdict, i) => {
+          const n = buckets[verdict].count
+          if (!n) return null
+          return (
+            <Tooltip
+              key={verdict}
+              title={`${VERDICT[verdict].label}: ${formatCount(n)} · ${formatBytes(buckets[verdict].bytes) ?? 'size unknown'}`}
+            >
+              <div
+                className="slm-meter-seg"
+                style={{
+                  width: `${(n / total) * 100}%`,
+                  background: BAND_COLOUR[verdict],
+                  transformOrigin: 'left',
+                  animation: `slm-grow 460ms cubic-bezier(0.16,1,0.3,1) ${i * 60}ms both`,
+                }}
+              />
+            </Tooltip>
+          )
+        })}
+      </div>
+
+      <div
+        style={{
+          display: 'grid', gridTemplateColumns: 'repeat(4, minmax(0, 1fr))',
+          gap: 16, marginTop: 14,
+        }}
+      >
+        {order.map((verdict) => (
+          <BucketFigure key={verdict} bucket={buckets[verdict]} verdict={verdict} />
+        ))}
+      </div>
+    </Card>
+  )
+}
+
+/** The segment colours, matched to the verdict vocabulary already in use. */
+const BAND_COLOUR: Record<CompareVerdict, string> = {
+  'only-b': semantic.success,
+  changed: semantic.warning,
+  same: '#8794A5',
+  'only-a': semantic.error,
+}
+
+/**
+ * One bucket's count, its weight and what it is made of.
+ *
+ * A zero is drawn quietly rather than dropped: "nothing was removed" is a fact
+ * a release manager wants stated, and a row that omits it reads as a row that
+ * forgot to check.
+ */
+function BucketFigure({ bucket, verdict }: { bucket: Bucket; verdict: CompareVerdict }) {
   const meta = VERDICT[verdict]
   const kinds = Object.entries(bucket.byKind)
     .filter(([, v]) => v.count > 0)
     .sort((a, b) => b[1].count - a[1].count)
+  const empty = bucket.count === 0
 
   return (
     <Popover
@@ -818,7 +893,9 @@ function BucketCard({ bucket, verdict }: { bucket: Bucket; verdict: CompareVerdi
       title={`${meta.label} - what it is made of`}
       content={
         kinds.length === 0 ? (
-          <Typography.Text type="secondary" style={{ fontSize: 12 }}>Nothing in this bucket.</Typography.Text>
+          <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+            Nothing in this bucket.
+          </Typography.Text>
         ) : (
           <Space direction="vertical" size={4} style={{ minWidth: 220 }}>
             {kinds.map(([kind, v]) => {
@@ -840,18 +917,41 @@ function BucketCard({ bucket, verdict }: { bucket: Bucket; verdict: CompareVerdi
         )
       }
     >
-      <Card size="small" style={{ cursor: 'default' }}>
-        <Statistic
-          title={meta.label}
-          value={bucket.count}
-          valueStyle={{ color: meta.statColour }}
-        />
-        <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-          <Value reason="Nothing in this bucket has a size we could read.">
-            {formatBytes(bucket.bytes)}
-          </Value>
-        </Typography.Text>
-      </Card>
+      <div style={{ minWidth: 0 }}>
+        <div
+          style={{
+            display: 'flex', alignItems: 'baseline', gap: 7,
+            fontVariantNumeric: 'tabular-nums',
+          }}
+        >
+          <span
+            aria-hidden
+            style={{
+              width: 8, height: 8, borderRadius: 2, flex: 'none',
+              background: empty ? '#D6DCE4' : BAND_COLOUR[verdict],
+            }}
+          />
+          <span
+            style={{
+              fontSize: 22, fontWeight: 600, lineHeight: 1, letterSpacing: '-0.02em',
+              color: empty ? semantic.neutral : palette.headingText,
+            }}
+          >
+            {formatCount(bucket.count)}
+          </span>
+          <span style={{ fontSize: 12.5, color: semantic.neutral }}>{meta.label.toLowerCase()}</span>
+        </div>
+        {!empty && (
+          <Typography.Text
+            type="secondary"
+            style={{ fontSize: 11.5, display: 'block', marginTop: 5, marginInlineStart: 15 }}
+          >
+            <Value reason="Nothing in this bucket has a size we could read.">
+              {formatBytes(bucket.bytes)}
+            </Value>
+          </Typography.Text>
+        )}
+      </div>
     </Popover>
   )
 }

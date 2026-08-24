@@ -213,7 +213,16 @@ export default function Reports() {
                 pagination={false}
                 dataSource={reports.data?.products ?? []}
                 rowKey={(p) => p.product}
-                scroll={{ x: 900 }}
+                scroll={ {
+                  /*
+                    `max-content`, not a number. A hardcoded width has to be
+                    kept in step with the sum of the column widths by hand, and
+                    when it drifts below that sum antd squeezes the table to the
+                    smaller figure and the pinned column lands on top of the one
+                    before it. Letting the browser measure cannot drift.
+                  */
+                  x: 'max-content'
+                } }
                 columns={[
                   { title: 'Product', fixed: 'left', width: 150, render: (_, p) => p.product },
                   { title: 'Completed', width: 110, align: 'right', render: (_, p) => <Value>{formatCount(p.totals.downloadsCompleted)}</Value> },

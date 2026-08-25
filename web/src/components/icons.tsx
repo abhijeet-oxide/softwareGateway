@@ -1,5 +1,4 @@
 import type { CSSProperties, ElementType } from 'react'
-import NokiaIcon from '~icons/simple-icons/nokia'
 import JFrogIcon from '~icons/logos/jfrog'
 import OpenShiftIcon from '~icons/simple-icons/redhatopenshift'
 import RedHatIcon from '~icons/simple-icons/redhat'
@@ -87,7 +86,7 @@ const NAME_HINTS: [RegExp, IconComponent][] = [
   [/jfrog|artifactory/i, JFrogIcon],
   [/openshift|ocp/i, OpenShiftIcon],
   [/quay/i, RedHatIcon],
-  [/nokia|near/i, NokiaIcon],
+  [/nokia|near/i, NokiaNIcon],
 ]
 
 /** Environments, from `Repository.environment`. */
@@ -173,7 +172,7 @@ export const ARTIFACT_ICONS = {
 
 export type ArtifactKind = keyof typeof ARTIFACT_ICONS
 
-export { AnalyzeIcon, DownloadIcon, IndexEditIcon, LayersIcon, SignatureIcon, PackageIcon, NokiaIcon, JFrogIcon, OpenShiftIcon, RocketIcon, FlaskIcon, OciIcon, DockerIcon, HelmIcon }
+export { AnalyzeIcon, DownloadIcon, IndexEditIcon, LayersIcon, SignatureIcon, PackageIcon, NokiaNAsset, JFrogIcon, OpenShiftIcon, RocketIcon, FlaskIcon, OciIcon, DockerIcon, HelmIcon }
 
 /**
  * Renders one of the above at text size.

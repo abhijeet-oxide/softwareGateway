@@ -246,7 +246,7 @@ const VERIFICATION: Record<VerificationState, { label: string; colour: string; i
     label: 'Not Signed',
     colour: 'warning',
     icon: <ExclamationCircleOutlined />,
-    help: 'We looked for a vendor signature and found none.',
+    help: 'Vendor signatures were not found for this release. Caution: it may have been tampered with or withdrawn by the vendor.',
   },
   VERIFICATION_FAILED: {
     label: 'Verification Failed',

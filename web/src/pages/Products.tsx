@@ -148,16 +148,24 @@ export default function Products() {
             </Button>
           )
         }
-        extra={<RunDiscoveryButton products={rows} />}
       />
 
-      <SearchBar
-        value={search}
-        onChange={setSearch}
-        placeholder="Search products by name or description"
-        matched={rows.length}
-        total={listed.length}
-      />
+      <div
+        style={{
+          display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+          gap: 12, marginBottom: 12, flexWrap: 'wrap',
+        }}
+      >
+        <SearchBar
+          value={search}
+          onChange={setSearch}
+          placeholder="Search products by name or description"
+          matched={rows.length}
+          total={listed.length}
+          style={{ marginBottom: 0 }}
+        />
+        <RunDiscoveryButton products={rows} />
+      </div>
 
       {!products.isLoading && rows.length === 0 ? (
         <EmptyStateCard

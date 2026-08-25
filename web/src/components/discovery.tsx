@@ -521,19 +521,29 @@ export function DiscoveryPanel({ products }: { products: Product[] }) {
                     />
                     <Select
                       allowClear
+                      showSearch
                       placeholder="All products"
                       value={productFilter}
                       onChange={setProductFilter}
                       style={{ minWidth: 200 }}
+                      optionFilterProp="label"
+                      filterOption={(input, option) =>
+                        (option?.label ?? '').toLowerCase().includes(input.toLowerCase())
+                      }
                       options={products.map((p) => ({
                         value: p.productId,
                         label: p.displayName || p.productId,
                       }))}
                     />
                     <Select
+                      showSearch
                       value={stateFilter}
                       onChange={setStateFilter}
                       style={{ minWidth: 180 }}
+                      optionFilterProp="label"
+                      filterOption={(input, option) =>
+                        (option?.label ?? '').toLowerCase().includes(input.toLowerCase())
+                      }
                       options={[
                         { value: 'all', label: 'All states' },
                         { value: 'scanning', label: 'Scanning now' },

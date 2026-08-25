@@ -12,7 +12,7 @@ import {
 } from '../api/queries'
 import { SEVERITIES } from '../api/types'
 import type {
-  PackageSecurityResponse, SecurityFinding, SecurityReport, Severity,
+  PackageSecurityResponse, SecurityCounts, SecurityFinding, SecurityReport, SecuritySeverityCounts, Severity,
 } from '../api/types'
 import {
   ComponentCell, CveCell, DescriptionCell, FindingsEmpty, FixCell, ScanStatusTag,
@@ -664,6 +664,28 @@ function kindOf(kind?: string): ArtifactKind {
 /** One row of the flattened findings table. */
 type FlatFinding = SecurityFinding & { artifactName: string; artifactTag?: string; artifactDigest?: string }
 
+/** The counts one image's row shows, rebuilt from a (possibly filtered) findings list. */
+function summariseCounts(findings: SecurityFinding[]): SecurityCounts {
+  const zero = (): SecuritySeverityCounts => ({ critical: 0, high: 0, medium: 0, low: 0, unknown: 0 })
+  const bySeverity = zero()
+  const fixableBySeverity = zero()
+  let fixable = 0
+  for (const f of findings) {
+    bySeverity[f.severity] += 1
+    if (f.fixable) {
+      fixable += 1
+      fixableBySeverity[f.severity] += 1
+    }
+  }
+  return {
+    total: findings.length,
+    fixable,
+    nonFixable: findings.length - fixable,
+    bySeverity,
+    fixableBySeverity,
+  }
+}
+
 /** Which of the three tables is on screen. */
 export type FindingsTab = 'vulnerabilities' | 'artifacts' | 'problems'
 
@@ -719,6 +741,33 @@ function FindingsSection({ data, product, reference, repository, tab, onTabChang
     () => data.reports.filter((r) => kindOf(r.artifact.kind) === 'image'),
     [data.reports],
   )
+
+  /*
+   * The images table, filtered the same way the vulnerabilities table is.
+   *
+   * Severity, fixability and search narrow WHAT COUNTS AS A FINDING, and an
+   * image's row is built out of its findings - so a filter that changed one
+   * table and not the other was the same release disagreeing with itself:
+   * "No fix" showing 2,930 vulnerabilities under a total of 107 fixable ones.
+   */
+  const filteredImageReports = useMemo(() => {
+    if (severities.length === 0 && fixability === 'all' && !q) return imageReports
+    return imageReports.map((r) => {
+      const kept = (r.findings ?? []).filter((f) => {
+        if (severities.length > 0 && !severities.includes(f.severity)) return false
+        if (fixability === 'fixable' && !f.fixable) return false
+        if (fixability === 'non-fixable' && f.fixable) return false
+        if (q) {
+          const hay = `${f.cve ?? ''} ${f.id ?? ''} ${f.component.name} ${r.artifact.name} ${f.summary ?? ''}`
+            .toLowerCase()
+          if (!hay.includes(q.toLowerCase())) return false
+        }
+        return true
+      })
+      if (kept.length === (r.findings ?? []).length) return r
+      return { ...r, findings: kept, counts: summariseCounts(kept) }
+    })
+  }, [imageReports, severities, fixability, q])
 
   const artifactCounts = useMemo<KindCounts>(
     () => ({ all: imageReports.length, image: imageReports.length, chart: 0, file: 0 }),
@@ -1109,7 +1158,7 @@ function FindingsSection({ data, product, reference, repository, tab, onTabChang
                       + `${data.sync.repository ?? 'the scanned repository'}.`}
                 </Typography.Text>
               )}
-              <ArtifactTable reports={imageReports} />
+              <ArtifactTable reports={filteredImageReports} />
             </Space>
           )
           : null}
@@ -1396,7 +1445,7 @@ function UniqueCveTable({ groups, state, detailRowsUnavailable, scanUrlFor }: {
           <Table<FlatFinding>
             size="small"
             rowKey={(r) => `${r.component.id}-${r.artifactName}-${r.artifactDigest ?? ''}`}
-            dataSource={g.rows}
+            dataSource={[...g.rows].sort((a, b) => Number(b.fixable) - Number(a.fixable))}
             pagination={g.rows.length > 10 ? { pageSize: 10, size: 'small', showSizeChanger: false } : false}
             columns={[
               {
@@ -1510,6 +1559,11 @@ function CveDetailDrawer({ group, scanUrlFor, onClose }: {
   scanUrlFor: (name: string) => string | undefined
   onClose: () => void
 }) {
+  // Fixable first: that's the row someone can act on today.
+  const rows = useMemo(
+    () => (group ? [...group.rows].sort((a, b) => Number(b.fixable) - Number(a.fixable)) : []),
+    [group],
+  )
   return (
     <AdvisoryDrawer
       open={Boolean(group)}
@@ -1534,15 +1588,15 @@ function CveDetailDrawer({ group, scanUrlFor, onClose }: {
     >
       {group && (
         <Section
-          title={`Where it was found - ${group.packages.length} `
+          title={`Impacted Packages - ${group.packages.length} `
             + `${group.packages.length === 1 ? 'package' : 'packages'} in ${group.images.length} `
             + `${group.images.length === 1 ? 'image' : 'images'}`}
         >
           <Table<FlatFinding>
             size="small"
             rowKey={(r) => `${r.component.id}-${r.artifactName}-${r.artifactDigest ?? ''}`}
-            dataSource={group.rows}
-            pagination={group.rows.length > 12
+            dataSource={rows}
+            pagination={rows.length > 12
               ? { pageSize: 12, size: 'small', showSizeChanger: false }
               : false}
             columns={[
@@ -1559,7 +1613,7 @@ function CveDetailDrawer({ group, scanUrlFor, onClose }: {
               // Where in the image the scanner found it, when it says. Offered
               // only when something has one: a column of dashes is worse than
               // the column not being there.
-              ...(group.rows.some((r) => r.component.path)
+              ...(rows.some((r) => r.component.path)
                 ? [{
                   title: 'Path',
                   render: (_: unknown, r: FlatFinding) => (
@@ -2005,16 +2059,7 @@ function VulnerabilityTable({
         {
           title: 'Image',
           width: 170,
-          render: (_, r) => (
-            <Space direction="vertical" size={0}>
-              <Typography.Text style={{ fontFamily: mono }}>{r.artifactName}</Typography.Text>
-              {r.artifactTag && (
-                <Typography.Text type="secondary" style={{ fontSize: 11, fontFamily: mono }}>
-                  {r.artifactTag}
-                </Typography.Text>
-              )}
-            </Space>
-          ),
+          render: (_, r) => <ImageCell name={r.artifactName} tag={r.artifactTag} href={scanUrlFor(r.artifactName)} />,
         },
         { title: 'Fix', width: 130, render: (_, r) => <FixCell fixable={r.fixable} fixedIn={r.fixedIn} /> },
         {
@@ -2066,7 +2111,11 @@ function ArtifactTable({ reports }: { reports: SecurityReport[] }) {
     return [...seen].map(([value, text]) => ({ text, value }))
   }, [reports])
 
+  // Same gesture as a CVE row: click the name, get everything about it beside the table.
+  const [open, setOpen] = useState<SecurityReport | null>(null)
+
   return (
+    <>
     <Table<SecurityReport>
       size="small"
       rowKey={(r) => r.artifact.digest || r.artifact.name}
@@ -2078,12 +2127,25 @@ function ArtifactTable({ reports }: { reports: SecurityReport[] }) {
           title: 'Image',
           render: (_, r) => (
             <Space direction="vertical" size={0}>
-              <Typography.Text style={{ fontFamily: mono }}>
+              <a
+                onClick={() => setOpen(r)}
+                style={{
+                  fontFamily: mono,
+                  display: 'block',
+                  color: c.brand,
+                  textDecoration: 'underline',
+                  textDecorationStyle: 'dotted',
+                  textUnderlineOffset: 3,
+                }}
+              >
                 {r.artifact.display || r.artifact.name}
-              </Typography.Text>
-              <Typography.Text type="secondary" style={{ fontSize: 11 }}>
-                {[r.artifact.kind, r.artifact.platform].filter(Boolean).join(' · ')}
-              </Typography.Text>
+              </a>
+              {/* Only the platform, since this table is already scoped to images. */}
+              {r.artifact.platform && (
+                <Typography.Text type="secondary" style={{ fontSize: 11 }}>
+                  {r.artifact.platform}
+                </Typography.Text>
+              )}
             </Space>
           ),
         },
@@ -2100,7 +2162,7 @@ function ArtifactTable({ reports }: { reports: SecurityReport[] }) {
         },
         {
           title: 'Vulnerabilities',
-          width: 200,
+          width: 300,
           sorter: (a, b) => a.counts.total - b.counts.total,
           render: (_, r) => (
             r.status !== 'scanned'
@@ -2111,7 +2173,7 @@ function ArtifactTable({ reports }: { reports: SecurityReport[] }) {
                   <Space direction="vertical" size={2} style={{ width: '100%' }}>
                     <Space size={8}>
                       <strong>{r.counts.total.toLocaleString()}</strong>
-                      {SEVERITIES.slice(0, 2).map((s) => (
+                      {SEVERITIES.slice(0, 3).map((s) => (
                         r.counts.bySeverity[s] > 0 ? (
                           <span key={s} style={{ color: severityColour[s], fontSize: 12 }}>
                             {r.counts.bySeverity[s]} {s}
@@ -2144,6 +2206,174 @@ function ArtifactTable({ reports }: { reports: SecurityReport[] }) {
         },
       ]}
     />
+    <ImageDetailDrawer report={open} onClose={() => setOpen(null)} />
+    </>
+  )
+}
+
+/**
+ * Everything known about one image, beside the table rather than over it.
+ *
+ * The same shape as the CVE drawer, the other way round: instead of one
+ * advisory and every place it turns up, this is one image and every advisory
+ * it has. A reader who opened the Images tab is asking "what is wrong with
+ * THIS one", and the vulnerabilities table below answers it without a trip
+ * back to the CVE view to filter by image.
+ */
+function ImageDetailDrawer({ report, onClose }: {
+  report: SecurityReport | null
+  onClose: () => void
+}) {
+  const [finding, setFinding] = useState<FlatFinding | null>(null)
+
+  // Fixable first, same as everywhere else this question comes up.
+  const rows = useMemo<FlatFinding[]>(() => {
+    if (!report) return []
+    return (report.findings ?? [])
+      .map((f) => ({
+        ...f,
+        artifactName: report.artifact.name,
+        artifactTag: report.artifact.tag,
+        artifactDigest: report.artifact.digest,
+      }))
+      .sort((a, b) => Number(b.fixable) - Number(a.fixable))
+  }, [report])
+
+  const scanUrlFor = () => report?.scanUrl
+
+  return (
+    <>
+    <Drawer
+      width="min(920px, 92vw)"
+      open={Boolean(report)}
+      onClose={onClose}
+      title={
+        <Space direction="vertical" size={0}>
+          <Space size={10} align="center" wrap>
+            <Typography.Text strong style={{ fontFamily: mono, fontSize: 15 }}>
+              {report?.artifact.display || report?.artifact.name}
+            </Typography.Text>
+            {report && <ScanStatusTag status={report.status} />}
+          </Space>
+          {report?.artifact.tag && (
+            <Typography.Text type="secondary" style={{ fontFamily: mono, fontSize: 12 }}>
+              {report.artifact.tag}
+            </Typography.Text>
+          )}
+        </Space>
+      }
+      extra={
+        report?.scanUrl && (
+          <Button size="small" icon={<ExportOutlined />} href={report.scanUrl} target="_blank" rel="noreferrer">
+            JFrog Xray
+          </Button>
+        )
+      }
+    >
+      {report && (
+        <Space direction="vertical" size={20} style={{ width: '100%' }}>
+          <Descriptions
+            column={{ xs: 1, sm: 2 }}
+            size="small"
+            bordered
+            items={[
+              {
+                key: 'vulnerabilities',
+                label: 'Vulnerabilities',
+                children: report.status === 'scanned'
+                  ? <Typography.Text strong>{report.counts.total.toLocaleString()}</Typography.Text>
+                  : <Typography.Text type="secondary">-</Typography.Text>,
+              },
+              {
+                key: 'fixable',
+                label: 'Fixable',
+                children: report.status === 'scanned'
+                  ? <Typography.Text strong>{report.counts.fixable.toLocaleString()}</Typography.Text>
+                  : <Typography.Text type="secondary">-</Typography.Text>,
+              },
+              {
+                key: 'source',
+                label: 'Source',
+                children: (
+                  <Typography.Text>
+                    {report.provider === 'jfrog-xray' ? 'JFrog Xray' : (report.provider || '-')}
+                  </Typography.Text>
+                ),
+              },
+              ...(report.message
+                ? [{ key: 'message', label: 'Message', span: 2, children: <Typography.Text>{report.message}</Typography.Text> }]
+                : []),
+              ...(report.artifact.digest
+                ? [{
+                  key: 'digest',
+                  label: 'Digest',
+                  span: 2,
+                  children: (
+                    <Typography.Text copyable style={{ fontFamily: mono, fontSize: 12 }}>
+                      {report.artifact.digest}
+                    </Typography.Text>
+                  ),
+                }]
+                : []),
+            ]}
+          />
+
+          <Section title={`Vulnerabilities - ${rows.length.toLocaleString()}`}>
+            <Table<FlatFinding>
+              size="small"
+              rowKey={(r) => `${r.cve ?? r.id}-${r.component.id}`}
+              dataSource={rows}
+              pagination={rows.length > 12 ? { pageSize: 12, size: 'small', showSizeChanger: false } : false}
+              locale={{
+                emptyText: (
+                  <Typography.Text type="secondary">
+                    {report.status === 'scanned' ? 'No vulnerabilities found.' : 'This image has no scan result.'}
+                  </Typography.Text>
+                ),
+              }}
+              columns={[
+                {
+                  title: 'CVE',
+                  width: 150,
+                  render: (_, r) => (
+                    <a onClick={() => setFinding(r)} style={{ display: 'block' }}>
+                      <CveCell cve={r.cve} id={r.id} link />
+                    </a>
+                  ),
+                },
+                {
+                  title: 'Severity',
+                  width: 110,
+                  sorter: (a, b) => SEVERITIES.indexOf(a.severity) - SEVERITIES.indexOf(b.severity),
+                  defaultSortOrder: 'ascend',
+                  render: (_, r) => <SeverityTag value={r.severity} />,
+                },
+                {
+                  title: 'Package',
+                  render: (_, r) => (
+                    <ComponentCell name={r.component.name} version={r.component.version} type={r.component.type} />
+                  ),
+                },
+                { title: 'Fix', width: 130, render: (_, r) => <FixCell fixable={r.fixable} fixedIn={r.fixedIn} /> },
+                {
+                  title: 'Description',
+                  render: (_, r) => (
+                    <DescriptionCell
+                      summary={r.summary}
+                      description={r.description}
+                      title={r.cve || r.id}
+                      onOpen={() => setFinding(r)}
+                    />
+                  ),
+                },
+              ]}
+            />
+          </Section>
+        </Space>
+      )}
+    </Drawer>
+    <FindingDetailDrawer finding={finding} scanUrlFor={scanUrlFor} onClose={() => setFinding(null)} />
+    </>
   )
 }
 

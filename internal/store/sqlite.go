@@ -36,6 +36,16 @@ func openSQLite(ctx context.Context, cfg Config) (Store, error) {
 	// deliberately a single connection. This is also why BEGIN IMMEDIATE is
 	// already exclusive and FOR UPDATE SKIP LOCKED is unnecessary rather than
 	// merely unavailable - see docs/design/03 section 2.
+	//
+	// THE RULE THIS IMPOSES ON EVERY CALLER: inside an open transaction, run
+	// every query on the tx. Never reach for the pool - not through DB(), not
+	// through a store method that takes only a ctx. On Postgres that is merely
+	// wrong, because the query cannot see the transaction's own uncommitted
+	// rows. Here it is fatal: the goroutine would be waiting for a connection
+	// that it is itself holding, so the wait never ends. Nothing times out
+	// (the Coordinator sets no HTTP handler deadline), the connection is never
+	// released, and every later request in the process blocks on it - workers
+	// included - until the process is restarted.
 	db.SetMaxOpenConns(1)
 	db.SetMaxIdleConns(1)
 

@@ -3,6 +3,7 @@ import { Button, Segmented, Tooltip } from "antd";
 import { MoonIcon, SunIcon } from "../icons";
 import { useTheme } from "../ThemeProvider";
 import type { Density, FontScale, ThemePref } from "../prefs";
+import { pointOf } from "../themeTransition";
 
 // The appearance controls, shared so both tools offer the same three choices,
 // in the same order, with the same words. A person who learned one already
@@ -33,7 +34,7 @@ function ThemeTile({
   value: ThemePref;
   label: string;
   selected: boolean;
-  onSelect: () => void;
+  onSelect: (from?: { x: number; y: number }) => void;
 }) {
   const mini = (dark: boolean) => (
     <span
@@ -57,7 +58,9 @@ function ThemeTile({
     <button
       type="button"
       className={`ui-theme-tile${selected ? " is-selected" : ""}`}
-      onClick={onSelect}
+      // The reveal grows from the tile that was clicked, so the change starts
+      // where the reader's attention already is.
+      onClick={(e) => onSelect(pointOf(e))}
       aria-pressed={selected}
       aria-label={`${label} theme`}
     >
@@ -86,7 +89,7 @@ export function ThemeControl() {
           value={o.value}
           label={o.label}
           selected={theme === o.value}
-          onSelect={() => setTheme(o.value)}
+          onSelect={(from) => setTheme(o.value, from)}
         />
       ))}
     </div>
@@ -116,7 +119,10 @@ export function ThemeToggleButton() {
     <Tooltip title={mode === "dark" ? "Switch to light" : "Switch to dark"}>
       <Button
         type="text"
-        onClick={toggleMode}
+        // The point is what turns a theme switch into a reveal: the new theme
+        // grows out of the button the reader just pressed. A keyboard
+        // activation has no coordinates and correctly gets an instant switch.
+        onClick={(e) => toggleMode(pointOf(e))}
         aria-label={mode === "dark" ? "Switch to light theme" : "Switch to dark theme"}
         icon={mode === "dark" ? <SunIcon /> : <MoonIcon />}
       />

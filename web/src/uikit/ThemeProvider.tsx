@@ -32,6 +32,7 @@ import {
 } from "react";
 import { App as AntApp, ConfigProvider } from "antd";
 import { buildTheme } from "./antd";
+import { revealThemeChange, type RevealPoint } from "./themeTransition";
 import {
   defaultAppearance,
   loadAppearance,
@@ -48,11 +49,15 @@ import {
 export interface ThemeContextValue extends Appearance {
   /** the mode actually painted (a "system" preference is already resolved) */
   mode: Mode;
-  setTheme: (pref: ThemePref) => void;
+  /** `from` is where the change was asked for: the new theme grows as a circle
+   *  out of that point instead of the page blinking. Omit it for a change with
+   *  no place on screen - a keyboard shortcut, the OS switching at sunset - and
+   *  it applies instantly, which is the honest thing for those. */
+  setTheme: (pref: ThemePref, from?: RevealPoint) => void;
   setFontScale: (scale: FontScale) => void;
   setDensity: (density: Density) => void;
   /** flip between light and dark, settling the preference on the result */
-  toggleMode: () => void;
+  toggleMode: (from?: RevealPoint) => void;
 }
 
 const ThemeContext = createContext<ThemeContextValue | null>(null);
@@ -99,6 +104,26 @@ export function ThemeProvider({
     [appearance, controlled, onChange],
   );
 
+  // Changing the THEME is revealed; changing density or text size is not.
+  // A circle growing out of a click says "the lights are coming on", which is
+  // true of one of those and nonsense about the other two.
+  const updateTheme = useCallback(
+    (theme: ThemePref, from?: RevealPoint) => {
+      if (theme === appearance.theme) return;
+      revealThemeChange(() => {
+        update({ theme });
+        // Also written here, synchronously, because the reveal snapshots the
+        // DOM the instant this callback returns and the effect below has not
+        // necessarily run yet. Setting it twice costs nothing; setting it late
+        // means the circle grows over the old palette.
+        const painted = theme === "system" ? resolveMode("system") : theme;
+        document.documentElement.dataset.theme = painted;
+        document.documentElement.style.colorScheme = painted;
+      }, from);
+    },
+    [appearance.theme, update],
+  );
+
   // "system" is resolved on every render rather than stored, so the painted
   // mode cannot go stale; systemMode below is what makes the OS flip arrive.
   const [systemMode, setSystemMode] = useState<Mode>(() => resolveMode("system"));
@@ -128,12 +153,12 @@ export function ThemeProvider({
     () => ({
       ...appearance,
       mode,
-      setTheme: (theme) => update({ theme }),
+      setTheme: updateTheme,
       setFontScale: (fontScale) => update({ fontScale }),
       setDensity: (density) => update({ density }),
-      toggleMode: () => update({ theme: mode === "dark" ? "light" : "dark" }),
+      toggleMode: (from) => updateTheme(mode === "dark" ? "light" : "dark", from),
     }),
-    [appearance, mode, update],
+    [appearance, mode, update, updateTheme],
   );
 
   const themed = (

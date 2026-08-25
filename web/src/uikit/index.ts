@@ -9,6 +9,8 @@
 export { ThemeProvider, useTheme } from "./ThemeProvider";
 export type { ThemeContextValue } from "./ThemeProvider";
 export { buildTheme } from "./antd";
+export { revealThemeChange, pointOf } from "./themeTransition";
+export type { RevealPoint } from "./themeTransition";
 export {
   tokens,
   defaultTokens,

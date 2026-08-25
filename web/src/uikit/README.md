@@ -101,6 +101,42 @@ environment's colour is, and they do not belong to the palette. Statuses do:
 anything that means healthy / pending / failing reads a token, so it follows
 the theme and a rebrand cannot miss it.
 
+## Changing theme is an animation, not a repaint
+
+`useTheme().toggleMode(point)` and `setTheme(pref, point)` reveal the new theme
+as a circle growing out of `point`, via the View Transitions API. Pass the
+click's coordinates (`pointOf(event)`) and it animates; pass nothing and it
+switches instantly, which is the honest behaviour for a keyboard activation or
+the operating system flipping at sunset. Reduced motion and browsers without
+the API get the instant switch too.
+
+It is HERE rather than in one app because it is not a feature, it is how this
+design system changes theme - and a tool where the lights come on smoothly next
+to a tool where they snap does not read as one product. Anything mounting
+`ThemeProvider` gets it; the kit's own toggle already passes the point.
+
+The one subtlety, in case it ever looks broken: the switch runs inside
+`flushSync`. The View Transitions API snapshots the DOM the instant the callback
+returns, so without it React has not re-rendered, the "after" snapshot is
+identical to the "before" one, and the circle grows over nothing.
+
+## Deleting CSS
+
+`node src/uikit/check-styles.mjs` compares the stylesheets against a base
+revision and fails if a class was deleted while the source still uses it. Both
+repositories run it in their lint step.
+
+It exists because extracting this kit meant deleting blocks from each app's
+stylesheet, and one deletion was made by "from this selector down to that one".
+Stylesheets are not sorted by topic: between the boot screen and the sign-in
+screen sat a wizard and every responsive dialog rule, and the cut took all of
+them with it. Nothing failed - TypeScript cannot see a class name - and it
+surfaced days later as two cards that had been side by side stacking on top of
+each other.
+
+**Cut CSS by RULE, never by the distance between two markers**, and let the
+check confirm it.
+
 ## Seeds are not colours
 
 The one trap in this folder, and it cost a visible bug: **Ant Design treats

@@ -7,7 +7,7 @@
     "dev": "vite",
     "build": "tsc -b && vite build",
     "preview": "vite preview",
-    "typecheck": "tsc -b --noEmit"
+    "typecheck": "tsc -b --noEmit && node src/uikit/check-styles.mjs"
   },
   "dependencies": {
     "@ant-design/icons": "^6.0.0",

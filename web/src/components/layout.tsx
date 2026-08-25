@@ -13,7 +13,8 @@ import { Link } from 'react-router-dom'
 import type { ContentGroup, PresentComponent } from '../api/types'
 import { kindName, type LifecycleStep } from '../domain/derive'
 import { bytes, formatAbsolute, formatBytes, formatCount } from '../domain/format'
-import { ARTIFACT_ICONS, Icon } from './icons'
+import { ARTIFACT_ICONS, DownloadIcon, Icon, PackageIcon, RocketIcon } from './icons'
+import type { IconComponent } from './icons'
 import { usePresentComponents } from '../api/queries'
 import { c, EmptyArt, EmptyState, mono } from '../uikit'
 import { NA } from './value'
@@ -192,9 +193,9 @@ export function ErrorState({ error, retry }: { error: unknown; retry?: () => voi
 }
 
 /**
- * The two dates a release actually has.
+ * The dates a release actually has.
  *
- * # Why this is two entries and not four
+ * # Why these entries and not a four-stage stepper
  *
  * It was a four-stage stepper - Vendor, Downloading, Downloaded, Production -
  * across the full width of the page, and it was wrong in both directions at
@@ -204,42 +205,82 @@ export function ErrorState({ error, retry }: { error: unknown; retry?: () => voi
  * stand on. A stage with no timestamp cannot be checked or unchecked honestly;
  * it can only be guessed at.
  *
- * So the page keeps the two moments that are facts with instants attached:
- * when the vendor published it, and when it finished arriving here. Everything
- * else the stepper was gesturing at - is it downloading, is it in production -
- * is already said, once, by the status badge in the header.
+ * So the page keeps only the moments that are FACTS WITH INSTANTS ATTACHED:
+ * when the vendor published it, when it finished arriving here, and when it
+ * was promoted. Everything else the stepper was gesturing at - is it
+ * downloading, is it in production - is already said, once, by the status
+ * badge in the header.
  *
- * A release nobody has downloaded shows ONE date and stops there. It was
- * showing an empty second entry, which drew the eye to a stage that has not
- * happened and reads as a gap in the record rather than as the ordinary state
- * of most of a catalogue. There is one date; the timeline says one date.
+ * Promotion earns its place by that same rule rather than in spite of it. It
+ * is an event with a completion timestamp, and it is the one that matters most
+ * to anybody asking what production is running: a release sitting in lab and
+ * the same release promoted are the same row until this line separates them.
+ *
+ * # Each entry appears only once it is real
+ *
+ * A release nobody has downloaded shows ONE date and stops there; one nobody
+ * has promoted shows two. It used to show an empty second entry, which drew
+ * the eye to a stage that has not happened and read as a gap in the record
+ * rather than as the ordinary state of most of a catalogue. There is one date;
+ * the timeline says one date.
  */
 export function ReleaseTimeline({
-  publishedAt, downloadedAt, downloading,
+  publishedAt, downloadedAt, downloading, promotedAt, promoting,
 }: {
   publishedAt?: string
   downloadedAt?: string
   /** A download is running right now, so the second date is coming. */
   downloading?: boolean
+  promotedAt?: string
+  /** A promotion is running right now, so the third date is coming. */
+  promoting?: boolean
 }) {
-  const arriving = Boolean(downloadedAt) || Boolean(downloading)
+  const promoted = Boolean(promotedAt) || Boolean(promoting)
+  // A promotion cannot happen before a download, so the middle entry is shown
+  // whenever the last one is - otherwise a release promoted before this field
+  // existed would draw a chain with its centre missing.
+  const arriving = Boolean(downloadedAt) || Boolean(downloading) || promoted
 
   return (
     <Space size={12} align="center" wrap>
-      <Moment label="Published" at={publishedAt} done />
+      {/*
+        A MARK PER STAGE, not three identical dots.
+
+        The three moments are three different KINDS of event and the marks say
+        so: the vendor published it, we brought it in, we sent it on. Three
+        green dots made a sequence of one repeated thing, so the reader had to
+        get all of it from the labels - and the labels are the smallest text on
+        the line.
+
+        The colours run cool to warm in the order the release travels, and the
+        last one is the orange the Promote button wears. That is the whole
+        point of spending a colour on it: somebody who has pressed that button
+        recognises where its result landed.
+      */}
+      <Moment label="Published" at={publishedAt} done icon={PackageIcon} tone={c.review} />
       {arriving && (
         <>
-          <span
-            aria-hidden
-            style={{
-              width: 48, height: 1, background: c.border, display: 'inline-block',
-            }}
-          />
+          <Rule />
           <Moment
             label="Downloaded"
             at={downloadedAt}
             done={Boolean(downloadedAt)}
             pending={downloading}
+            icon={DownloadIcon}
+            tone={c.ok}
+          />
+        </>
+      )}
+      {promoted && (
+        <>
+          <Rule />
+          <Moment
+            label="Promoted"
+            at={promotedAt}
+            done={Boolean(promotedAt)}
+            pending={promoting}
+            icon={RocketIcon}
+            tone={c.pending}
           />
         </>
       )}
@@ -247,31 +288,51 @@ export function ReleaseTimeline({
   )
 }
 
+/** The line between two moments. */
+function Rule() {
+  return (
+    <span
+      aria-hidden
+      style={{ width: 48, height: 1, background: c.border, display: 'inline-block' }}
+    />
+  )
+}
+
 /** One dated moment: a mark, what happened, and when. */
 function Moment({
-  label, at, done, pending,
+  label, at, done, pending, icon, tone,
 }: {
   label: string
   at?: string
   done?: boolean
   pending?: boolean
+  /** What KIND of event this is. */
+  icon: IconComponent
+  /** The stage's own colour, from the tokens. */
+  tone: string
 }) {
-  const colour = done ? c.ok : pending ? c.brand : c.text3
+  // A stage that has not happened keeps its icon and loses its colour, so the
+  // sequence still reads as itself while saying which parts are real.
+  const colour = done || pending ? tone : c.text3
 
   return (
     <Space size={8} align="center">
-      {pending && !done ? (
-        <LoadingOutlined style={{ color: colour, fontSize: 12 }} />
-      ) : (
-        <span
-          aria-hidden
-          style={{
-            width: 8, height: 8, borderRadius: '50%', display: 'inline-block',
-            background: done ? colour : 'transparent',
-            border: done ? 'none' : `1px solid ${colour}`,
-          }}
-        />
-      )}
+      <span
+        aria-hidden
+        style={{
+          width: 22, height: 22, borderRadius: '50%',
+          display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
+          // The tint is the tone at low opacity rather than a second token, so
+          // a palette or preset change carries it without a lookup table.
+          background: done || pending ? `color-mix(in srgb, ${colour} 14%, transparent)` : 'transparent',
+          border: done || pending ? 'none' : `1px dashed ${colour}`,
+          color: colour,
+        }}
+      >
+        {pending && !done
+          ? <LoadingOutlined style={{ fontSize: 11 }} />
+          : <Icon as={icon} size={13} title={label} />}
+      </span>
       <Space size={6} align="center">
         <Typography.Text type="secondary" style={{ fontSize: 12 }}>{label}</Typography.Text>
         {at ? (

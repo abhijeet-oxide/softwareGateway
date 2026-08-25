@@ -40,7 +40,7 @@ import type { PromotionDestination, PromotionOptionsResponse } from '../api/type
  */
 
 export function PromoteButton({
-  product, reference, repository, packageLabel, disabled, disabledReason,
+  product, reference, repository, packageLabel, disabled, disabledReason, size,
 }: {
   product: string
   reference: string
@@ -49,12 +49,30 @@ export function PromoteButton({
   packageLabel: string
   disabled?: boolean
   disabledReason?: string
+  /** `small` for a table row, where every other control is small too. */
+  size?: 'small' | 'middle'
 }) {
   const [open, setOpen] = useState(false)
 
   return (
     <>
+      {/*
+        ORANGE, and it is the only orange verb in the application.
+
+        Promotion is the one action here that changes what production pulls.
+        Download brings bytes into a lab and is reversible by ignoring them;
+        this is the step somebody schedules a window for. Green would file it
+        with the safe verbs and red would read as a failure, so it takes the
+        warm colour that means "consequential, and going ahead" - the same one
+        the Promoted stage wears on the release timeline.
+
+        Outlined rather than solid: the page's primary button is already spoken
+        for, and two solid buttons side by side compete for the same glance.
+      */}
       <Button
+        size={size}
+        color="orange"
+        variant="outlined"
         icon={<Icon as={RocketIcon} title="Promote" />}
         disabled={disabled}
         title={disabled ? disabledReason : undefined}

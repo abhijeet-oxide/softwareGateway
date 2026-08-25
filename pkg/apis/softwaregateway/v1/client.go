@@ -599,8 +599,10 @@ func (c *Client) Heartbeat(ctx context.Context, workerID string, req HeartbeatRe
 
 // ListTransfersOptions filters a transfer listing.
 type ListTransfersOptions struct {
-	Product   string
-	State     string
+	Product string
+	State   string
+	// Operation is `replicate` or `promote`. Empty means both.
+	Operation string
 	PageSize  int
 	PageToken string
 }
@@ -612,6 +614,9 @@ func (o ListTransfersOptions) query() string {
 	}
 	if o.State != "" {
 		v.Set("state", o.State)
+	}
+	if o.Operation != "" {
+		v.Set("operation", o.Operation)
 	}
 	if o.PageSize > 0 {
 		v.Set("pageSize", strconv.Itoa(o.PageSize))

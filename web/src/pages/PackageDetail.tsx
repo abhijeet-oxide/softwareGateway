@@ -13,8 +13,8 @@ import {
 } from '../api/queries'
 import { useCan, useIdentity } from '../auth/permissions'
 import {
-  deriveStatus, downloadedAt, failureReason, isLive, matches, packageReference, repositoryUrl,
-  titleCase, verification, version,
+  deriveStatus, downloadedAt, failureReason, isLive, matches, packageReference, promotableTargets,
+  promotedAt, repositoryUrl, titleCase, verification, version,
 } from '../domain/derive'
 import { bytes, formatBytes, formatCount, formatDuration } from '../domain/format'
 import { NA, Value } from '../components/value'
@@ -934,13 +934,19 @@ export default function PackageDetail() {
               would make the lifecycle discoverable only to somebody who
               already knew it existed.
 
-              It is offered whether or not the release has landed anywhere
-              yet: the dialog says "this has not been downloaded to any target"
-              far better than a greyed-out button with a tooltip, and a
-              disabled control that never explains itself is how people
-              conclude a feature is broken.
+              GONE once there is nowhere left to send it. Every target already
+              holds this release, so the button's only honest outcome is a
+              dialog saying so - and a control whose whole job is to explain
+              that it does nothing is worse than no control. The release's
+              state says PRODUCTION and the timeline says when; that is the
+              answer somebody came for.
+
+              It IS offered on a release that has landed nowhere yet: the
+              dialog explains that far better than a greyed-out button, and a
+              disabled control that never says why is how people conclude a
+              feature is broken.
             */}
-            {p && (
+            {p && promotableTargets(p, prod).length > 0 && (
               <PromoteButton
                 product={productName!}
                 reference={reference!}
@@ -991,6 +997,8 @@ export default function PackageDetail() {
               publishedAt={p?.publishedAt || p?.discoveredAt}
               downloadedAt={p ? downloadedAt(p) : undefined}
               downloading={status === 'DOWNLOADING'}
+              promotedAt={p ? promotedAt(p) : undefined}
+              promoting={status === 'PROMOTING'}
             />
           </div>
         </Col>

@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"net/http"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -144,12 +145,18 @@ func (s *Server) handleListTransfers(w http.ResponseWriter, r *http.Request) {
 		Error(w, r, v1.CodeInvalidArgument, err.Error())
 		return
 	}
+	operation, err := parseOperation(q.Get("operation"))
+	if err != nil {
+		Error(w, r, v1.CodeInvalidArgument, err.Error())
+		return
+	}
 
 	// One row over the page size, so "is there another page" is answered
 	// without a second COUNT and without claiming a page that turns out empty.
 	rows, err := s.deps.Packages.ListTransfers(r.Context(), store.ListTransfersFilter{
 		ProductName: q.Get("product"),
 		State:       state,
+		Operation:   operation,
 		Limit:       pageSize + 1,
 		Offset:      offset,
 	})
@@ -305,6 +312,7 @@ func transferDTO(t store.TransferSummary) v1.Transfer {
 		SourceName:  t.SourceName,
 		TargetName:  t.TargetName,
 		State:       v1.TransferState(strings.ToUpper(t.State)),
+		Operation:   strings.ToUpper(t.Operation),
 		Strategy:    t.Strategy,
 		Priority:    t.Priority,
 		CurrentWave: t.CurrentWave,
@@ -366,17 +374,37 @@ func parseTransferState(s string) (string, error) {
 		return "", nil
 	}
 	got := strings.ToLower(s)
-	for _, valid := range []string{
-		"pending", "planning", "ready", "running", "paused",
-		"verifying", "succeeded", "failed", "cancelling", "cancelled",
-	} {
-		if got == valid {
-			return got, nil
-		}
+	// Every state the machine defines, not a subset. A filter that cannot
+	// express a state the listing RETURNS is a filter with a hole in it, and
+	// the holes were the delegated and promoted ones - exactly the transfers
+	// somebody is most likely to go looking for on their own.
+	valid := []string{
+		"waiting", "pending", "planning", "ready", "running", "paused",
+		"syncing", "promoting", "verifying", "succeeded", "diverged",
+		"skipped", "failed", "cancelling", "cancelled",
+	}
+	if slices.Contains(valid, got) {
+		return got, nil
+	}
+	return "", fmt.Errorf("state %q is not a transfer state: expected one of %s",
+		s, strings.Join(valid, ", "))
+}
+
+// parseOperation narrows a listing to downloads or to promotions.
+//
+// Two values and no third: `verify` is an operation the schema allows and
+// nothing creates, so accepting it here would offer a filter that always
+// returns nothing.
+func parseOperation(s string) (string, error) {
+	if s == "" {
+		return "", nil
+	}
+	got := strings.ToLower(s)
+	if got == "replicate" || got == "promote" {
+		return got, nil
 	}
 	return "", fmt.Errorf(
-		"state %q is not a transfer state: expected one of pending, planning, ready, "+
-			"running, paused, verifying, succeeded, failed, cancelling, cancelled", s)
+		"operation %q is not a transfer operation: expected replicate or promote", s)
 }
 
 // handleListPresentComponents serves

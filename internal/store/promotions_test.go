@@ -384,3 +384,56 @@ func TestRetryStillReportsATransferThatNeverHadWork(t *testing.T) {
 		t.Error("a transfer that failed during planning must still say so")
 	}
 }
+
+// A listing that cannot tell a promotion from a download makes both surfaces
+// wrong at once: the downloads table shows a transfer that moved no bytes, and
+// the promotions table shows nothing.
+func TestTransfersCanBeListedByOperation(t *testing.T) {
+	_, s, ctx := promotionFixture(t)
+	packages := NewPackages(s)
+
+	// The fixture's transfer is a promotion. Give it a download to be
+	// distinguished from.
+	mustExec(t, s.DB(), `INSERT INTO transfer_requests (id,product_id,package_id,operation,source_repo_id,idempotency_key)
+	                     VALUES ('r2',1,1,'replicate',1,'k2')`)
+	mustExec(t, s.DB(), `INSERT INTO transfers (id,request_id,package_id,source_repo_id,target_repo_id,state)
+	                     VALUES ('t2','r2',1,1,2,'succeeded')`)
+
+	all, err := packages.ListTransfers(ctx, ListTransfersFilter{PackageID: 1})
+	if err != nil {
+		t.Fatalf("ListTransfers: %v", err)
+	}
+	if len(all) != 2 {
+		t.Fatalf("%d transfers unfiltered, want 2", len(all))
+	}
+
+	for _, c := range []struct {
+		operation string
+		wantID    string
+	}{
+		{"promote", "t1"},
+		{"replicate", "t2"},
+	} {
+		got, err := packages.ListTransfers(ctx, ListTransfersFilter{
+			PackageID: 1, Operation: c.operation,
+		})
+		if err != nil {
+			t.Fatalf("ListTransfers %s: %v", c.operation, err)
+		}
+		if len(got) != 1 || got[0].ID != c.wantID {
+			t.Fatalf("operation=%s returned %d rows %v, want just %s",
+				c.operation, len(got), ids(got), c.wantID)
+		}
+		if got[0].Operation != c.operation {
+			t.Errorf("row reports operation %q, want %q", got[0].Operation, c.operation)
+		}
+	}
+}
+
+func ids(in []TransferSummary) []string {
+	out := make([]string, 0, len(in))
+	for _, t := range in {
+		out = append(out, t.ID)
+	}
+	return out
+}

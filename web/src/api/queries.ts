@@ -352,7 +352,17 @@ export function useUnavailable(product: string | undefined) {
 // Downloads (transfers)
 // ---------------------------------------------------------------------------
 
-export function useTransfers(filters: { product?: string; state?: string; pageSize?: number } = {}) {
+/**
+ * Transfers, newest first.
+ *
+ * `operation` narrows to downloads or to promotions, and the Downloads page
+ * asks TWICE rather than splitting one page of a hundred rows: a busy estate's
+ * hundred most recent transfers are all downloads, and the promotions table
+ * would be empty on exactly the deployments that have the most of them.
+ */
+export function useTransfers(
+  filters: { product?: string; state?: string; operation?: string; pageSize?: number } = {},
+) {
   return useQuery({
     queryKey: ['transfers', filters],
     queryFn: () => api.get<ListTransfersResponse>(`/transfers${query({ ...filters })}`),

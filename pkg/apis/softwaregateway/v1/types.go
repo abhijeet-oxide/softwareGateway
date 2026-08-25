@@ -1171,6 +1171,14 @@ type PackageTransfer struct {
 	ID     string        `json:"id"`
 	Target string        `json:"target"`
 	State  TransferState `json:"state"`
+	// Operation is REPLICATE (downloaded from a vendor) or PROMOTE (moved
+	// between two of our targets).
+	//
+	// It is what stops a release's history reading as one long download. A
+	// promotion is a different event in a release's life, reached by a
+	// different decision, and folding the two together made a promoted release
+	// look like one that had been downloaded twice.
+	Operation string `json:"operation,omitempty"`
 	// FailureReason is why it failed, verbatim, INCLUDING the digest of
 	// whatever the source would not serve.
 	//
@@ -1570,6 +1578,11 @@ type Transfer struct {
 	// for one transfer, far too wide for a page of them.
 	SourceName string `json:"sourceName,omitempty"`
 	TargetName string `json:"targetName,omitempty"`
+
+	// Operation is REPLICATE or PROMOTE - what was ASKED for, from the
+	// request. Strategy below is how it was carried out, which is a different
+	// question: a promotion can be a copy, and a download never is one.
+	Operation string `json:"operation,omitempty"`
 
 	State    TransferState `json:"state"`
 	Priority int           `json:"priority"`

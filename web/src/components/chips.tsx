@@ -81,8 +81,13 @@ const STATUS_COLOUR: Record<SoftwareStatus, string> = {
   DOWNLOADING: 'processing',
   DOWNLOADED: 'green',
   'READY FOR PRODUCTION': 'purple',
+  // The same processing blue as DOWNLOADING, because it is the same kind of
+  // fact - work happening right now - and a second colour for it would say
+  // the two differ in more than what is moving.
+  PROMOTING: 'processing',
   PRODUCTION: 'green',
   'DOWNLOAD FAILED': 'error',
+  'PROMOTION FAILED': 'error',
   'VERIFICATION FAILED': 'error',
 }
 
@@ -116,8 +121,8 @@ export function PackageName({
 /**
  * The statuses and no others.
  *
- * DOWNLOADING spins, because it is the only one of the six that describes work
- * happening right now. Everything else is a resting place.
+ * DOWNLOADING and PROMOTING spin, because they are the only ones that describe
+ * work happening right now. Everything else is a resting place.
  */
 export function StatusBadge({
   status, reason,
@@ -133,7 +138,9 @@ export function StatusBadge({
   const tag = (
     <Tag
       color={STATUS_COLOUR[status]}
-      icon={status === 'DOWNLOADING' ? <LoadingOutlined spin /> : undefined}
+      icon={status === 'DOWNLOADING' || status === 'PROMOTING'
+        ? <LoadingOutlined spin />
+        : undefined}
       style={{ marginInlineEnd: 0 }}
     >
       {status}

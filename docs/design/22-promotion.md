@@ -292,6 +292,74 @@ nobody asked about the path of least resistance.
 | `--dry-run` | resolution, plus whether each destination would be relocated or copied |
 | `transferctl transfers describe` | a `relocate` transfer renders names published, never a byte account |
 | Package page → **Promote** | beside Download, because those two are the release's whole life on that page |
+| Packages listing → **Promote** | the row's one verb once the release has landed. `View download` moves into the row menu: promoting it is what somebody is about to do, looking at the download that brought it is what they might, and a row has space for one of those |
+| Downloads page → **Promotions** | its own table, not a filter on the downloads one - see §8.1 |
+
+A release's TIMELINE gains a third moment - `Published → Downloaded →
+Promoted` - by the same rule the first two follow: only facts with an instant
+attached. A promotion has a completion timestamp, and it is the one that
+matters most to anybody asking what production is running. Each stage carries
+its own mark and colour rather than a third identical dot: the three are
+different KINDS of event, and the colours run cool to warm in the order the
+release travels.
+
+**Promote is the only orange verb in the application.** It is the one action
+that changes what production pulls - download brings bytes into a lab and is
+reversible by ignoring them, this is the step somebody books a window for.
+Green would file it with the safe verbs and red would read as a failure. The
+Promoted stage on the timeline wears the same colour, so somebody who pressed
+the button recognises where its result landed.
+
+**The button disappears once there is nowhere left to send the release.** Every
+target already holds it, so the only honest outcome is a dialog saying so - and
+a control whose whole job is to explain that it does nothing is worse than no
+control. Decided from configuration and the transfer history rather than by
+asking the server, because a page that fetched promotion options for every
+release just to decide whether to draw a button would pay for the dialog on
+every visit that never opens it.
+
+`operation` is what makes any of this possible. It comes from the REQUEST -
+`replicate` or `promote` - and reaches the transfer listing, a package's
+history and the join that gives a listed release its state. A field dropped
+anywhere on that path is a field the surface cannot see however carefully it
+asks, which is how a promoted release first showed a menu with no promotion in
+it.
+
+Two states follow from it: **PROMOTING** and **PROMOTION FAILED**, distinct
+from their download equivalents. A release being promoted is not downloading -
+it arrived days ago - and a page saying otherwise sends somebody to look at a
+vendor link for a problem between two internal registries.
+
+### 8.1 Why promotions are their own table
+
+Not a filter on the downloads listing, because the columns differ:
+
+- A download has ONE route, the vendor to wherever it lands, so the downloads
+  table never shows it. A promotion is defined BY its route, and `lab →
+  production` beside `lab → dr` is the comparison somebody opened the page for.
+- A promotion has a METHOD, which no download has. Relocated in seconds or
+  copied is most of why anybody looks.
+
+Both listings gained the ROUTE, though - `vendor → jfrog-lab` for a download.
+"Which of my three targets did this actually land in" was a question the
+listing could not answer at all; the reader had to open the transfer.
+
+They also gained the right PACKAGE NAME. A transfer's `packageName` came from
+its ORIGIN repository, which for a promotion is a target - so the listing named
+a promoted release after the lab it was being promoted out of. It comes from
+the package's own source repository now. A release is called what the vendor
+published it as, whatever it has been copied to since, and the origin is not
+lost: it is the left half of the route.
+
+One table rather than ongoing and finished, because a native promotion is
+normally over before the page refreshes: splitting it would give one empty card
+and one with everything in it.
+
+The page asks the API TWICE - `operation=replicate` and `operation=promote` -
+rather than splitting one page of a hundred rows in the browser. A busy
+estate's hundred most recent transfers are all downloads, so a client-side
+split would empty the promotions table on exactly the deployments that promote
+the most.
 
 The dialog states where the release is (a sentence when it is not a choice, a
 control only when it is), lists every destination with its method and the

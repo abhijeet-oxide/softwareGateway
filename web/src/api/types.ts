@@ -145,6 +145,16 @@ export interface PackageTransfer {
   id: string
   target: string
   state: TransferState
+  /**
+   * REPLICATE (downloaded from a vendor) or PROMOTE (moved between two of our
+   * own targets).
+   *
+   * It is what stops a release's history reading as one long download: a
+   * promotion is a different event, reached by a different decision. Absent on
+   * a transfer recorded before the field existed, which reads as a download -
+   * which is what every one of them was.
+   */
+  operation?: string
   failureReason?: string
   createdAt?: string
   completedAt?: string
@@ -414,6 +424,8 @@ export interface Transfer {
    * the progress numbers are structurally zero, and that is "we did not move
    * those bytes and cannot count them" - not "nothing happened".
    */
+  /** REPLICATE or PROMOTE - what was ASKED for. See PackageTransfer. */
+  operation?: string
   strategy?: Strategy
   /** Present only on a `relocate` transfer, and its only honest progress. */
   promotion?: PromotionProgress

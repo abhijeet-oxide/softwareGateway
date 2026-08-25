@@ -9,10 +9,11 @@ import {
 import ScaleIcon from '@iconify-react/lucide/scale';
 import { useCan } from '../auth/permissions'
 import {
-  deriveLocations, deriveStatus, downloadSeconds, failureReason, isLive, matches,
-  packageReference, publishedAt, releaseHref, transferIndex, verification, version, withTransfers,
+  deriveLocations, deriveStatus, downloadSeconds, failureReason, isLive, isPromotion, matches,
+  packageReference, promotableTargets, publishedAt, releaseHref, transferIndex, verification,
+  version, withTransfers,
 } from '../domain/derive'
-import type { Package } from '../api/types'
+import type { Package, PackageTransfer, Product } from '../api/types'
 import { formatDuration } from '../domain/format'
 import { Value } from '../components/value'
 import {
@@ -22,6 +23,7 @@ import {
 import { EmptyStateCard, ErrorState, SearchBar } from '../components/layout'
 import { NokiaNIcon } from '../components/icons'
 import { VulnerabilityCell } from '../components/security'
+import { PromoteButton } from '../components/promote'
 
 /**
  * One primary action, and everything else behind a menu.
@@ -36,7 +38,12 @@ import { VulnerabilityCell } from '../components/security'
  * download), and a menu for the rest. The menu is one button wide whatever it
  * contains, which is what stops the column growing every time a verb is added.
  */
-function RowActions({ product, pkg }: { product: string; pkg: Package }) {
+function RowActions({ product, pkg, config }: {
+  product: string
+  pkg: Package
+  /** The product's configuration, so the row knows where this could still go. */
+  config?: Product
+}) {
   const { message } = App.useApp()
   const navigate = useNavigate()
   const sync = useSyncPackageSecurity()
@@ -85,7 +92,32 @@ function RowActions({ product, pkg }: { product: string; pkg: Package }) {
           disabled: true,
         }]
 
+  // WHAT HAS HAPPENED TO THIS RELEASE, split by kind. Everything below reads
+  // from this rather than from `pkg.transfers` directly: the button and the
+  // menu have to agree about which transfer they mean, and they used to
+  // recompute it separately.
+  const history = releaseHistory(pkg)
+
   const items: MenuProps['items'] = [
+    // "View download" lives HERE now rather than in the row.
+    //
+    // Promote took its place, and that is the right trade: once a release has
+    // landed, promoting it is the thing somebody is about to do and looking at
+    // the download that brought it is the thing they might. A row has space
+    // for one of those.
+    ...(history.download
+      ? [{
+          key: 'download',
+          label: <Link to={`/downloads/${history.download.id}`}>View download</Link>,
+        }]
+      : []),
+    ...(history.promotion
+      ? [{
+          key: 'promotion',
+          label: <Link to={`/downloads/${history.promotion.id}`}>View promotion</Link>,
+        }]
+      : []),
+    ...(history.download || history.promotion ? [{ type: 'divider' as const }] : []),
     { key: 'security', label: <Link to={securityHref}>View vulnerabilities</Link> },
     ...syncItem,
     { type: 'divider' },
@@ -97,12 +129,123 @@ function RowActions({ product, pkg }: { product: string; pkg: Package }) {
       <Link to={detail}>
         <Button size="small" type="primary">View</Button>
       </Link>
-      <DownloadAction product={product} pkg={pkg} />
+      <NextStep
+        product={product}
+        pkg={pkg}
+        history={history}
+        mayOperate={mayOperate}
+        promotable={promotableTargets(pkg, config).length > 0}
+      />
       <Dropdown menu={{ items }} trigger={['click']} placement="bottomRight">
         <Button size="small" icon={<MoreOutlined />} aria-label="More actions" loading={sync.isPending} />
       </Dropdown>
     </Space>
   )
+}
+
+/**
+ * What has happened to a release, by KIND.
+ *
+ * A promotion and a download are both transfers and were both being found by
+ * the same `find(t => t.state === 'SUCCEEDED')`, so a promoted release's row
+ * linked to its promotion under the words "View download". Splitting them here
+ * is what lets every caller below be exact.
+ */
+interface ReleaseHistory {
+  /** The download worth linking to: running, else failed, else finished. */
+  download?: PackageTransfer
+  /** The promotion worth linking to, on the same rule. */
+  promotion?: PackageTransfer
+  /** A download is in flight. */
+  downloading: boolean
+  /** A download failed and its destination was never reached. */
+  downloadFailed: boolean
+  /** The release is at a target, so promoting it is a thing that can happen. */
+  landed: boolean
+}
+
+function releaseHistory(pkg: Package): ReleaseHistory {
+  const transfers = pkg.transfers ?? []
+  const downloads = transfers.filter((t) => !isPromotion(t))
+  const promotions = transfers.filter((t) => isPromotion(t))
+
+  const pick = (list: PackageTransfer[]) =>
+    list.find((t) => isLive(t.state))
+    ?? list.find((t) => t.state === 'FAILED')
+    ?? list.find((t) => t.state === 'SUCCEEDED')
+
+  const status = deriveStatus(pkg)
+  const download = pick(downloads)
+
+  return {
+    download,
+    promotion: pick(promotions),
+    downloading: downloads.some((t) => isLive(t.state)),
+    downloadFailed: Boolean(download && download.state === 'FAILED'),
+    // The package's own state carries the answer on a listing where transfers
+    // were not expanded, which is most of them.
+    landed: downloads.some((t) => t.state === 'SUCCEEDED')
+      || status === 'DOWNLOADED' || status === 'READY FOR PRODUCTION'
+      || status === 'PROMOTING' || status === 'PRODUCTION',
+  }
+}
+
+/**
+ * The one thing this release is waiting for somebody to do.
+ *
+ * Three answers and never two at once: download it, watch the download that is
+ * running or went wrong, or promote it. That is the release's life in order,
+ * and the row shows the step it is actually on.
+ */
+function NextStep({
+  product, pkg, history, mayOperate, promotable,
+}: {
+  product: string
+  pkg: Package
+  history: ReleaseHistory
+  mayOperate: boolean
+  /** There is somewhere left to promote it to. */
+  promotable: boolean
+}) {
+  if (history.downloading || history.downloadFailed) {
+    return (
+      <Link to={history.download ? `/downloads/${history.download.id}` : '/downloads'}>
+        <Button size="small" color="green" variant="outlined">View download</Button>
+      </Link>
+    )
+  }
+
+  // Landed, and somewhere left to send it. A release every target already
+  // holds gets no button: its status says PRODUCTION, and offering a promotion
+  // whose only outcome is a dialog explaining there is nothing to do is worse
+  // than offering nothing.
+  if (history.landed && promotable) {
+    return (
+      <PromoteButton
+        size="small"
+        product={product}
+        reference={packageReference(pkg)}
+        repository={pkg.sourceRepository}
+        packageLabel={`${pkg.displayRepository || pkg.sourceRepository || pkg.tag}:${version(pkg)}`}
+        disabled={!mayOperate}
+        disabledReason="You do not have permission to promote a release."
+      />
+    )
+  }
+
+  if (history.landed) {
+    // Nowhere left to go, and nothing was ever downloaded to look at either -
+    // the row simply has no next step, which the status column already says.
+    return history.download
+      ? (
+        <Link to={`/downloads/${history.download.id}`}>
+          <Button size="small" color="green" variant="outlined">View download</Button>
+        </Link>
+      )
+      : null
+  }
+
+  return <DownloadAction product={product} pkg={pkg} />
 }
 
 
@@ -119,37 +262,17 @@ function RowActions({ product, pkg }: { product: string; pkg: Package }) {
  *
  * # And it never offers to start a second one
  *
- * A release already being downloaded gets a link to that download instead. The
- * server would collapse a duplicate request onto the existing transfer anyway,
- * so offering it would be a button whose honest outcome is "nothing happened".
+ * It is only rendered for a release nothing has been done to - NextStep owns
+ * that decision now, and a release already downloading, downloaded or promoted
+ * never reaches here. The server would collapse a duplicate request onto the
+ * existing transfer anyway, so offering it would be a button whose honest
+ * outcome is "nothing happened".
  */
 function DownloadAction({ product, pkg }: { product: string; pkg: Package }) {
   const { message } = App.useApp()
   const navigate = useNavigate()
   const run = useRunDownload(product)
   const mayOperate = useCan('operate', { product })
-
-  const status = deriveStatus(pkg)
-  const live = (pkg.transfers ?? []).find((t) => isLive(t.state))
-  const failed = (pkg.transfers ?? []).find((t) => t.state === 'FAILED')
-  // A finished download still gets a link to it, not nothing - the release
-  // page said "downloaded" and gave nowhere to see it.
-  const succeeded = (pkg.transfers ?? []).find((t) => t.state === 'SUCCEEDED')
-  const existing = live ?? failed ?? succeeded
-  const downloaded = status === 'DOWNLOADED' || status === 'READY FOR PRODUCTION' || status === 'PRODUCTION'
-  if (existing || downloaded) {
-    return (
-      <Link to={existing ? `/downloads/${existing.id}` : '/downloads'}>
-        <Button
-          size="small"
-          color="green"
-          variant="outlined"
-        >
-          View download
-        </Button>
-      </Link>
-    )
-  }
 
   const start = async () => {
     try {
@@ -245,6 +368,9 @@ export default function Packages() {
     selected ? [] : productList.map((p) => p.productId),
     { pageSize: 100, tag },
   )
+  // EVERY kind of transfer, because this index is what gives a listed release
+  // its history: a listing that fetched only downloads would report a promoted
+  // release as one nothing had happened to since it landed.
   const transfers = useTransfers({ product: selected, pageSize: 200 })
 
   const rows = useMemo(() => {
@@ -367,6 +493,8 @@ export default function Packages() {
               { value: 'DOWNLOADED', label: 'Downloaded' },
               { value: 'DOWNLOAD FAILED', label: 'Download failed' },
               { value: 'READY', label: 'Ready for production' },
+              { value: 'PROMOTING', label: 'Promoting' },
+              { value: 'PROMOTION FAILED', label: 'Promotion failed' },
               { value: 'PRODUCTION', label: 'In production' },
               { value: 'UNSIGNED', label: 'Unsigned' },
               { value: 'VERIFICATION FAILED', label: 'Verification failed' },
@@ -542,7 +670,7 @@ export default function Packages() {
                 title: 'Actions',
                 fixed: 'right',
                 width: 190,
-                render: (_, r) => <RowActions product={r.product.productId} pkg={r.pkg} />,
+                render: (_, r) => <RowActions product={r.product.productId} pkg={r.pkg} config={r.product} />,
               },
             ]}
           />

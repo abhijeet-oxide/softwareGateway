@@ -37,6 +37,17 @@ export type SoftwareStatus =
   | 'DOWNLOADING'
   | 'DOWNLOADED'
   | 'READY FOR PRODUCTION'
+  /**
+   * A promotion is moving this release between two of our own targets.
+   *
+   * Its own state rather than DOWNLOADING, which is what it used to read.
+   * Nothing is being downloaded - the release arrived from the vendor days
+   * ago - and a page saying otherwise sends somebody looking at a vendor link
+   * for a problem that is between two internal registries. It is also the
+   * moment a release becomes what production pulls, which is a different
+   * decision from downloading it and deserves a different word.
+   */
+  | 'PROMOTING'
   | 'PRODUCTION'
   /**
    * A download was attempted and did not arrive.
@@ -47,10 +58,33 @@ export type SoftwareStatus =
    * only one of them needs somebody.
    */
   | 'DOWNLOAD FAILED'
+  /**
+   * A promotion was attempted and did not land.
+   *
+   * Distinct from DOWNLOAD FAILED for the same reason PROMOTING is distinct
+   * from DOWNLOADING: the release IS downloaded, and reporting a download
+   * failure on it points at the wrong system entirely.
+   */
+  | 'PROMOTION FAILED'
   | 'VERIFICATION FAILED'
 
 /** The three verification states, stated in words as well as colour. */
 export type VerificationState = 'SIGNED' | 'NOT_SIGNED' | 'VERIFICATION_FAILED' | 'UNKNOWN'
+
+/**
+ * Whether a transfer moved a release between OUR OWN targets.
+ *
+ * One predicate rather than a check per call site, because "is this a
+ * promotion" is asked by the status, the timeline, the failure wording and
+ * both listings - and until the API carried `operation` none of them could
+ * answer it. They each guessed instead, and the guesses disagreed.
+ *
+ * A transfer recorded before the field existed has no operation and reads as a
+ * download, which is what every one of them was.
+ */
+export function isPromotion(t: Pick<PackageTransfer, 'operation'>): boolean {
+  return t.operation === 'PROMOTE'
+}
 
 const LIVE_STATES: ReadonlySet<TransferState> = new Set<TransferState>([
   'PENDING', 'PLANNING', 'READY', 'RUNNING', 'PAUSED', 'PROMOTING', 'VERIFYING', 'CANCELLING',
@@ -119,7 +153,13 @@ export function deriveStatus(pkg: Package, product?: Product): SoftwareStatus {
   // a worker finishing the blob in its hands, and nothing new is arriving. A
   // release that reads DOWNLOADING after its download was cancelled says the
   // stop did not work.
-  if (transfers.some((t) => isLive(t.state) && t.state !== 'CANCELLING')) return 'DOWNLOADING'
+  const running = transfers.filter((t) => isLive(t.state) && t.state !== 'CANCELLING')
+  if (running.length > 0) {
+    // A download in flight outranks a promotion in flight: the release is
+    // still ARRIVING, and that is the more fundamental fact about it. Only
+    // when everything running is a promotion is the release itself settled.
+    return running.every(isPromotion) ? 'PROMOTING' : 'DOWNLOADING'
+  }
 
   const succeeded = transfers.filter((t) => t.state === 'SUCCEEDED')
 
@@ -139,8 +179,9 @@ export function deriveStatus(pkg: Package, product?: Product): SoftwareStatus {
    * nothing needs putting right.
    */
   const arrived = new Set(succeeded.map((t) => t.target))
-  if (transfers.some((t) => t.state === 'FAILED' && !arrived.has(t.target))) {
-    return 'DOWNLOAD FAILED'
+  const unreached = transfers.filter((t) => t.state === 'FAILED' && !arrived.has(t.target))
+  if (unreached.length > 0) {
+    return unreached.every(isPromotion) ? 'PROMOTION FAILED' : 'DOWNLOAD FAILED'
   }
 
   if (succeeded.length === 0) {
@@ -176,7 +217,7 @@ export function failureReason(pkg: Package): string | undefined {
   if (!failed) return undefined
   return failed.failureReason
     ? `${failed.target}: ${failed.failureReason}`
-    : `The download to ${failed.target} failed.`
+    : `The ${isPromotion(failed) ? 'promotion' : 'download'} to ${failed.target} failed.`
 }
 
 /** One place a release exists. */
@@ -247,22 +288,44 @@ export function repositoryUrl(repo: Repository | undefined, repository?: string)
 }
 
 /**
- * When this release finished arriving, or undefined if it has not.
+ * When this release finished arriving from the vendor, or undefined if it has
+ * not.
  *
- * The EARLIEST successful transfer, because a release lands once and is
- * promoted afterwards: taking the latest would report the promotion's
- * timestamp as the download's.
+ * DOWNLOADS ONLY. A promotion is a successful transfer too, and this used to
+ * take the earliest of all of them - a workaround for not being able to tell
+ * the two apart, which happened to give the right answer and could not say
+ * why. Now it filters, and the workaround is gone.
+ *
+ * The earliest of the downloads, because a release lands in several targets
+ * and it has arrived once the first of them has it.
  *
  * Undefined is a real answer here and renders as "not downloaded". A release
  * nobody has downloaded must not be able to show a download date, which is the
  * whole reason this is one function rather than a line repeated per caller.
  */
 export function downloadedAt(pkg: Package): string | undefined {
+  return completions(pkg, false)[0]
+}
+
+/**
+ * When this release was last promoted, or undefined if it never has been.
+ *
+ * The LATEST, where downloadedAt takes the earliest, and the asymmetry is the
+ * point: a release ARRIVES once, and is promoted to production as many times
+ * as there are production targets. The moment worth showing is when it reached
+ * the last of them - that is when it is fully promoted.
+ */
+export function promotedAt(pkg: Package): string | undefined {
+  return completions(pkg, true).at(-1)
+}
+
+/** The completion timestamps of one kind of successful transfer, in order. */
+function completions(pkg: Package, promotions: boolean): string[] {
   return (pkg.transfers ?? [])
-    .filter((t) => t.state === 'SUCCEEDED')
+    .filter((t) => t.state === 'SUCCEEDED' && isPromotion(t) === promotions)
     .map((t) => t.completedAt)
     .filter((t): t is string => Boolean(t))
-    .sort()[0]
+    .sort()
 }
 
 /**
@@ -282,6 +345,34 @@ export function downloadedAt(pkg: Package): string | undefined {
  */
 export function packageReference(pkg: Pick<Package, 'tag' | 'sourceRepository'>): string {
   return pkg.sourceRepository ? `${pkg.sourceRepository}:${pkg.tag}` : pkg.tag
+}
+
+/**
+ * The enabled targets this release is NOT already at.
+ *
+ * What "can this be promoted" actually means, and it is a question about the
+ * ESTATE rather than about the release: a release in lab with one production
+ * target left to reach can be promoted, and the same release once production
+ * has it cannot - there is nowhere for it to go.
+ *
+ * Derived from configuration and the transfer history rather than asked of the
+ * server, because the answer decides whether to render a BUTTON. A page that
+ * fetched promotion options for every release just to find out whether to draw
+ * one would pay for the dialog on every visit that never opens it.
+ *
+ * It is deliberately generous where it cannot be sure. With no product loaded
+ * it returns a placeholder, so the button appears and the dialog - which asks
+ * the server properly - gives the real answer. Hiding a control on incomplete
+ * information is worse than opening a dialog that says "nothing to do".
+ */
+export function promotableTargets(pkg: Package, product?: Product): string[] {
+  const holders = new Set(
+    (pkg.transfers ?? []).filter((t) => t.state === 'SUCCEEDED').map((t) => t.target))
+
+  const targets = (product?.targets ?? []).filter((t) => t.enabled)
+  if (targets.length === 0) return ['?']
+
+  return targets.filter((t) => !holders.has(t.name)).map((t) => t.name)
 }
 
 /** The lifecycle stages, in the order the brief fixes them. */
@@ -427,6 +518,12 @@ export function transferIndex(transfers: Transfer[]): Map<string, Attempt[]> {
       requestId: t.requestId,
       target: t.targetName || t.target,
       state: t.state,
+      // CARRIED, or every row on every listing reads as a download. This is
+      // the join that gives a listed package its history, so a field dropped
+      // here is a field the listing cannot see however carefully the rest of
+      // the page asks - which is how a promoted release showed a Downloads
+      // menu with no promotion in it.
+      operation: t.operation,
       failureReason: t.failureReason,
       createdAt: t.createdAt,
       completedAt: t.completedAt,

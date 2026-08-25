@@ -215,7 +215,7 @@ function PromoteModal({
 
               {selectable.length === 0 && (
                 <InlineNotice tone="info">
-                  Every other target already holds this release, or is on its way to holding it.
+                  Every other target already has this release.
                 </InlineNotice>
               )}
 
@@ -226,8 +226,7 @@ function PromoteModal({
                   the promotion faster, and it applies to every row at once.
                 */
                 <InlineNotice tone="info">
-                  This release has not been analysed, so it will be copied rather than relocated.
-                  Analysing it first is usually much quicker overall.
+                  Not analysed - this release will be copied. Analyse it first to relocate instead.
                 </InlineNotice>
               )}
             </>
@@ -258,29 +257,33 @@ function Origin({
   if (holders.length === 0) {
     return (
       <InlineNotice tone="warn">
-        This release has not been downloaded to any target yet, so there is nothing to promote.
+        This release has not been downloaded to any target yet.
       </InlineNotice>
     )
   }
 
   const only = holders.length === 1 ? holders[0] : undefined
   if (only) {
+    // A FLEX ROW, not inline text. Four things of different kinds - a label, a
+    // name, a tag and a path - spaced by an explicit gap rather than by
+    // whatever whitespace survives JSX. Inline, the tag butted straight up
+    // against the name and the path sat a stray space away from it.
     return (
-      <Typography.Paragraph style={{ marginBottom: 0 }}>
-        <Typography.Text type="secondary">From </Typography.Text>
+      <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 8 }}>
+        <Typography.Text type="secondary">From</Typography.Text>
         <Typography.Text strong>{only.name}</Typography.Text>
         {only.environment && <EnvironmentTag environment={only.environment} />}
         <Typography.Text type="secondary" style={{ fontFamily: mono, fontSize: 12 }}>
-          {' '}{only.registry}{only.repository ? `/${only.repository}` : ''}
+          {only.registry}{only.repository ? `/${only.repository}` : ''}
         </Typography.Text>
-      </Typography.Paragraph>
+      </div>
     )
   }
 
   return (
     <>
       <Typography.Text type="secondary" style={{ display: 'block', marginBottom: 6 }}>
-        Several targets hold this release, so which one it comes from is a real choice
+        Several targets hold this release. Choose which one to promote from.
       </Typography.Text>
       <Select
         style={{ width: '100%' }}
@@ -337,7 +340,7 @@ function DestinationRow({
         style={{ marginTop: 3 }}
       />
       <div style={{ minWidth: 0, flex: 1 }}>
-        <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 6 }}>
+        <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 8 }}>
           <Typography.Text strong={production}>{d.name}</Typography.Text>
           {d.environment && <EnvironmentTag environment={d.environment} />}
           {d.promotionOnly && (
@@ -345,7 +348,7 @@ function DestinationRow({
               style={{ marginInlineEnd: 0 }}
               title="Reachable only by promotion - a vendor can never replicate straight into it"
             >
-              promotion only
+              Promotion only
             </Tag>
           )}
           <MethodTag destination={d} />
@@ -385,18 +388,14 @@ function MethodTag({ destination: d }: { destination: PromotionDestination }) {
   if (!available(d)) {
     return (
       <Tag color={d.state === 'IN_FLIGHT' ? 'processing' : 'green'} style={{ marginInlineEnd: 0 }}>
-        {d.state === 'IN_FLIGHT' ? 'on its way' : 'already there'}
+        {d.state === 'IN_FLIGHT' ? 'In progress' : 'Already there'}
       </Tag>
     )
   }
   if (d.method === 'RELOCATE') {
-    return (
-      <Tag color="green" style={{ marginInlineEnd: 0 }}>
-        instant - the registry relocates it
-      </Tag>
-    )
+    return <Tag color="green" style={{ marginInlineEnd: 0 }}>Relocate</Tag>
   }
-  return <Tag style={{ marginInlineEnd: 0 }}>copied</Tag>
+  return <Tag style={{ marginInlineEnd: 0 }}>Copy</Tag>
 }
 
 function EnvironmentTag({ environment }: { environment: string }) {
@@ -425,8 +424,8 @@ function available(d: PromotionDestination): boolean {
  */
 function rowNote(d: PromotionDestination): string | undefined {
   if (d.unavailable) return d.unavailable
-  if (d.state === 'PRESENT') return 'This release is already at this target.'
-  if (d.state === 'IN_FLIGHT') return 'A transfer is putting this release there now.'
+  if (d.state === 'PRESENT') return 'This release is already here.'
+  if (d.state === 'IN_FLIGHT') return 'A transfer is putting it here now.'
   return d.methodReason
 }
 

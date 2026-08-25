@@ -113,7 +113,7 @@ func renderDestinations(w io.Writer, product, pkg string, o *v1.PromotionOptions
 	fmt.Fprintf(w, "%s is at %s.\n\n", pkg, orDefault(o.DefaultOrigin, "several targets"))
 
 	if o.DefaultOrigin == "" {
-		fmt.Fprintln(w, "Several targets hold this release, so the origin has to be named:")
+		fmt.Fprintln(w, "Several hold it, so name the origin:")
 		for _, origin := range o.Origins {
 			if origin.Holds {
 				fmt.Fprintf(w, "  --from %s\n", origin.Name)
@@ -144,7 +144,7 @@ func renderDestinations(w io.Writer, product, pkg string, o *v1.PromotionOptions
 		fmt.Fprintf(w, "  %s\n", reason)
 	}
 	if !o.Analysed {
-		fmt.Fprintf(w, "\n  transferctl packages describe %s %s --expand   makes the fast path available\n",
+		fmt.Fprintf(w, "\n  transferctl packages describe %s %s --expand   allows relocation\n",
 			product, pkg)
 	}
 
@@ -171,17 +171,17 @@ func destinationState(d v1.PromotionDestination) string {
 	case "PRESENT":
 		return "already there"
 	case "IN_FLIGHT":
-		return "on its way"
+		return "in progress"
 	default:
-		return "not there yet"
+		return "not there"
 	}
 }
 
 func promotionHow(d v1.PromotionDestination) string {
 	if d.Method == v1.PromotionRelocate {
-		return "relocated by the registry"
+		return "relocate"
 	}
-	return "copied"
+	return "copy"
 }
 
 // distinctReasons is each explanation once.

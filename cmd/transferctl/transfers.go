@@ -221,7 +221,7 @@ func renderPromotionMethod(
 			continue
 		}
 		if d.Method == v1.PromotionRelocate {
-			fmt.Fprintf(w, "  %s: relocated by the registry - no bytes cross the wire\n", t.Name)
+			fmt.Fprintf(w, "  %s: relocated by the registry, no bytes transferred\n", t.Name)
 		} else {
 			fmt.Fprintf(w, "  %s: copied by the workers\n", t.Name)
 		}
@@ -1126,7 +1126,7 @@ func describeRelocated(w io.Writer, t *v1.Transfer) error {
 	tw := newTabWriter(w)
 	if p := t.Promotion; p != nil {
 		fmt.Fprintf(tw, "  Promoter:\t%s\n", p.Promoter)
-		fmt.Fprintf(tw, "  Names:\t%d of %d published\n", p.NamesDone, p.NamesTotal)
+		fmt.Fprintf(tw, "  Tags:\t%d of %d published\n", p.NamesDone, p.NamesTotal)
 		if p.Attempts > 1 {
 			fmt.Fprintf(tw, "  Attempts:\t%d\n", p.Attempts)
 		}
@@ -1135,7 +1135,7 @@ func describeRelocated(w io.Writer, t *v1.Transfer) error {
 		}
 	}
 	fmt.Fprintf(tw, "  Progress:\t%s\n", relocatedProgress(t))
-	fmt.Fprintf(tw, "  Bytes:\t- none crossed the wire; the registry relocated them\n")
+	fmt.Fprintf(tw, "  Bytes:\t- none transferred; the registry relocated them\n")
 	if t.FailureReason != "" && (t.Promotion == nil || t.Promotion.LastError != t.FailureReason) {
 		fmt.Fprintf(tw, "  Reason:\t%s\n", t.FailureReason)
 	}
@@ -1146,7 +1146,7 @@ func describeRelocated(w io.Writer, t *v1.Transfer) error {
 func relocatedProgress(t *v1.Transfer) string {
 	switch t.State {
 	case v1.TransferPromoting:
-		return "the registry is relocating it; normally seconds"
+		return "the registry is relocating it"
 	case v1.TransferSucceeded:
 		return "complete, and the destination resolves the digest we promoted"
 	case v1.TransferFailed:

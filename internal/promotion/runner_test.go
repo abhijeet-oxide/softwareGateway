@@ -344,7 +344,7 @@ func TestADifferentDigestAtTheDestinationIsAFailureNotADivergence(t *testing.T) 
 		// upstream tag that moved, and this is a copy we asked for.
 		t.Fatalf("transfer is %q, want failed", state)
 	}
-	if reason := f.promotion().LastError; !strings.Contains(reason, "has NOT been promoted") {
+	if reason := f.promotion().LastError; !strings.Contains(reason, "was not promoted") {
 		t.Errorf("the failure must say the release did not arrive; got %q", reason)
 	}
 }

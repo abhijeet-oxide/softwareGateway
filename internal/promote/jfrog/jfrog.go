@@ -160,24 +160,24 @@ func (p *Promoter) Claim(h promote.Hop) promote.Verdict {
 	//    what this deployment intends to speak, and inferring JFrog from a
 	//    hostname would make the fast path depend on a DNS name.
 	if !isJFrog(h.Origin.RegistryType) || !isJFrog(h.Destination.RegistryType) {
-		return no("%s is type %s and %s is type %s; JFrog promotion needs both ends declared "+
-			"`type: jfrog`",
-			h.Origin.Name, orGeneric(h.Origin.RegistryType),
-			h.Destination.Name, orGeneric(h.Destination.RegistryType))
+		return no("%s is type %s, not jfrog.", notJFrog(h), orGeneric(typeOfNotJFrog(h)))
 	}
 
 	// 2. One Artifactory. This is the real constraint and the reason the fast
 	//    path exists: promotion is an internal relocation, and there is
 	//    nothing internal about two hosts.
+	// The hosts themselves are already on screen - the origin on the "From"
+	// line, the destination on this row - so naming them again is a sentence
+	// the reader has to parse to learn what they can already see.
 	if !sameHost(h.Origin.Registry, h.Destination.Registry) {
-		return no("%s is on %s and %s is on %s: JFrog can only relocate within one "+
-			"Artifactory, so the content will be copied instead",
-			h.Origin.Name, h.Origin.Registry, h.Destination.Name, h.Destination.Registry)
+		return no("A different Artifactory from %s.", h.Origin.Name)
 	}
 
-	// 3. Both paths have to name a repository key.
+	// 3. Both paths have to name a repository key. The full stop is added
+	//    here rather than carried in the error: this is a sentence shown to a
+	//    reader, and a Go error does not end in punctuation.
 	if p.why != "" {
-		return no("%s", p.why)
+		return no("%s.", p.why)
 	}
 
 	// 4. A hop that does not move is not a hop. Same key AND same path means
@@ -186,17 +186,15 @@ func (p *Promoter) Claim(h promote.Hop) promote.Verdict {
 	//    where two rows resolve to one JFrog coordinate.
 	if strings.EqualFold(p.srcKey, p.dstKey) &&
 		sameRepository(h.Origin.Repository, h.Destination.Repository) {
-		return no("%s and %s are the same JFrog repository (%s), so there is nothing to promote",
+		return no("%s and %s are the same JFrog repository (%s).",
 			h.Origin.Name, h.Destination.Name, p.srcKey)
 	}
 
 	return promote.Verdict{
 		Promoter: Name,
 		Claimed:  true,
-		Reason: fmt.Sprintf(
-			"both targets are repositories of %s, so JFrog relocates the release "+
-				"server-side: %d name(s), no bytes over the wire",
-			hostOf(p.endpoint), len(h.Names)),
+		Reason: fmt.Sprintf("Same Artifactory as %s. JFrog relocates %s server-side.",
+			h.Origin.Name, plural(len(h.Names), "tag")),
 	}
 }
 
@@ -457,8 +455,7 @@ func repositoryKey(e promote.Endpoint) (string, error) {
 	path := strings.Trim(strings.TrimSpace(e.Repository), "/")
 	if path == "" {
 		return "", fmt.Errorf(
-			"target %q configures no repository path, so its Artifactory repository key "+
-				"cannot be derived - set `jfrogRepositoryKey` on it", e.Name)
+			"%s has no Artifactory repository key. Set `jfrogRepositoryKey`", e.Name)
 	}
 	if i := strings.Index(path, "/"); i > 0 {
 		return path[:i], nil
@@ -550,6 +547,30 @@ func orGeneric(t string) string {
 		return "generic"
 	}
 	return t
+}
+
+// notJFrog names the END that is not declared JFrog, so the refusal points at
+// the one target somebody has to edit rather than restating both.
+func notJFrog(h promote.Hop) string {
+	if !isJFrog(h.Origin.RegistryType) {
+		return h.Origin.Name
+	}
+	return h.Destination.Name
+}
+
+func typeOfNotJFrog(h promote.Hop) string {
+	if !isJFrog(h.Origin.RegistryType) {
+		return h.Origin.RegistryType
+	}
+	return h.Destination.RegistryType
+}
+
+// plural renders a count with its noun, so a message never says "1 tags".
+func plural(n int, noun string) string {
+	if n == 1 {
+		return "1 " + noun
+	}
+	return fmt.Sprintf("%d %ss", n, noun)
 }
 
 func sameHost(a, b string) bool {

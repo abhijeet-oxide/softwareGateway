@@ -137,7 +137,7 @@ function renderReleaseOption(option: Pick<ReleaseOption, 'version' | 'name'>) {
       </div>
       {option.name && (
         <div
-          style={{ ...line, fontSize: 11, lineHeight: '14px', color: 'rgba(0,0,0,0.45)' }}
+          style={{ ...line, fontSize: 11, lineHeight: '14px', color: c.text2 }}
           title={option.name}
         >
           {option.name}

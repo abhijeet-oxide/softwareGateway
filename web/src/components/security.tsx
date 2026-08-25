@@ -823,7 +823,7 @@ function Meta({ items, style }: {
     <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: '2px 8px', ...style }}>
       {shown.map((item, i) => (
         <span key={item.text} style={{ display: 'inline-flex', alignItems: 'center', gap: 8 }}>
-          {i > 0 && <span aria-hidden style={{ color: 'rgba(0,0,0,0.25)', fontSize: 12 }}>·</span>}
+          {i > 0 && <span aria-hidden style={{ color: c.text3, fontSize: 12 }}>·</span>}
           <Typography.Text
             type={item.colour ? undefined : 'secondary'}
             style={{ fontSize: 12, color: item.colour }}

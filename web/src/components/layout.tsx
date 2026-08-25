@@ -232,7 +232,7 @@ export function ReleaseTimeline({
           <span
             aria-hidden
             style={{
-              width: 48, height: 1, background: 'rgba(0,0,0,0.15)', display: 'inline-block',
+              width: 48, height: 1, background: c.border, display: 'inline-block',
             }}
           />
           <Moment
@@ -256,7 +256,7 @@ function Moment({
   done?: boolean
   pending?: boolean
 }) {
-  const colour = done ? c.ok : pending ? c.brand : 'rgba(0,0,0,0.25)'
+  const colour = done ? c.ok : pending ? c.brand : c.text3
 
   return (
     <Space size={8} align="center">
@@ -385,7 +385,7 @@ export function SearchBar({
       <Input
         allowClear
         style={{ width }}
-        prefix={<SearchOutlined style={{ color: 'rgba(0,0,0,.35)' }} />}
+        prefix={<SearchOutlined style={{ color: c.text3 }} />}
         placeholder={placeholder}
         value={value}
         onChange={(e) => onChange(e.target.value)}

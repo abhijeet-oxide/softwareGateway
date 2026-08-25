@@ -101,6 +101,30 @@ environment's colour is, and they do not belong to the palette. Statuses do:
 anything that means healthy / pending / failing reads a token, so it follows
 the theme and a rebrand cannot miss it.
 
+## Seeds are not colours
+
+The one trap in this folder, and it cost a visible bug: **Ant Design treats
+`colorPrimary`, `colorSuccess`, `colorWarning`, `colorError`, `colorInfo` and
+`colorLink` as SEEDS, not as values.** Its algorithm derives the shade it
+actually paints, and under the dark algorithm that is a different colour -
+`#4d94e8` went in, `#4481c8` came out. So a primary button and anything written
+`var(--brand)` were two different blues on the same screen, in the one place
+nobody looks because both halves came from one file.
+
+Two rules follow, and `antd.ts` enforces both:
+
+- **The stylesheet is told what Ant will PAINT, not what it was given.**
+  `resolvePalette(mode)` asks the component library (`getDesignToken`) and hands
+  the answer to `renderRootCss`. Disagreement is impossible rather than merely
+  unlikely.
+- **Never feed a painted value back in as a seed.** It derives a second time and
+  lands somewhere else again. `buildTheme` keeps `seed` and `p` as two separate
+  objects for exactly this reason: seed tokens get `seed`, map tokens get `p`.
+
+A consequence worth knowing: the dark entries in `tokens.ts` are seeds solved
+BACKWARDS from the intended result, so they do not read like the colour you see
+on screen, and the comment there says so.
+
 ## Two constraints, and why
 
 **Plain CSS, never utility classes.** One of the tools that shares this folder

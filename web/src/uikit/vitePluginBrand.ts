@@ -1,5 +1,6 @@
 import type { Plugin } from "vite";
 import { ACTIVE_PRESET, renderRootCss } from "./tokens";
+import { resolvePalette } from "./antd";
 import { documentTitle, faviconHref, type BrandIdentity } from "./brand";
 
 // Build-time theming.
@@ -22,7 +23,11 @@ export default function brandPlugin(brand: BrandIdentity): Plugin {
   return {
     name: "uikit-brand",
     transformIndexHtml(html) {
-      const style = `<style id="brand-tokens">${renderRootCss()}</style>`;
+      // Resolved through Ant Design, so a variable and the component library can
+      // never name two different blues (see resolvePalette).
+      const style = `<style id="brand-tokens">${renderRootCss((_, dark) =>
+        resolvePalette(dark ? "dark" : "light"),
+      )}</style>`;
       const icon = `<link rel="icon" href="${faviconHref(brand.favicon)}" />`;
       const title = documentTitle(brand);
 

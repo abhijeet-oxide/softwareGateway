@@ -113,10 +113,14 @@ export function SecurityTab({ product, reference, repository }: {
 
   return (
     <Space direction="vertical" size={16} style={{ width: '100%' }}>
-      <Space
-        size={12}
-        wrap
-        style={{ width: '100%', justifyContent: 'space-between', alignItems: 'center' }}
+      <div
+        style={{
+          width: '100%',
+          display: 'flex',
+          flexWrap: 'wrap',
+          alignItems: 'center',
+          gap: 12,
+        }}
       >
         <SyncedAgo sync={data.sync} />
         {/*
@@ -125,12 +129,19 @@ export function SecurityTab({ product, reference, repository }: {
           screen, one of which quietly ignores the filter the reader just set,
           is a file that looks complete and answers a different question.
         */}
-        <Space size={8}>
+        <Space
+          size={8}
+          style={{
+            marginInlineStart: 'auto',
+            marginTop: 8,
+            justifyContent: 'flex-end',
+          }}
+        >
           <SyncLogButton sync={data.sync} />
           <StopSyncButton sync={data.sync} onStop={stopSync} pending={cancel.isPending} />
           <SyncButton sync={data.sync} onSync={startSync} pending={sync.isPending} />
         </Space>
-      </Space>
+      </div>
 
       {/*
         THREE states, not two. A row marked `syncing` whose claim has stopped

@@ -14,7 +14,7 @@ import {
 } from '../domain/format'
 import { NA, Stat, Value } from '../components/value'
 import {
-  ArtifactProgress, MeasuredProgress, PromotionProgress, StateStrip, type StripState,
+  CopyProgress, MeasuredProgress, PromotionProgress, StateStrip, type StripState,
 } from '../components/progress'
 import { RepoLink, TimeAgo, TransferStateTag } from '../components/chips'
 import {
@@ -23,7 +23,7 @@ import {
 import { PriorityControl, QueueControls } from '../components/queuecontrols'
 import { ErrorState, PageHeader, SavedBreakdown, SavedPanel } from '../components/layout'
 import { c, mono } from '../uikit'
-import type { Job } from '../api/types'
+import type { ContentGroup, Job } from '../api/types'
 
 /**
  * Page 4 - Download.
@@ -76,13 +76,15 @@ function JobsPanel({ transferId, hasFailures }: { transferId: string; hasFailure
             style={{ minWidth: 170 }}
             value={state ?? 'all'}
             onChange={(v) => setState(v === 'all' ? undefined : v)}
+            // The same words the State column uses, so the filter and the rows
+            // it produces are not two vocabularies for one set of states.
             options={[
-              { value: 'leased', label: 'Running now' },
+              { value: 'leased', label: 'Running' },
               { value: 'failed', label: 'Failed' },
-              { value: 'pending', label: 'Waiting' },
-              { value: 'blocked', label: 'Blocked' },
-              { value: 'succeeded', label: 'Succeeded' },
-              { value: 'skipped', label: 'Already present' },
+              { value: 'pending', label: 'Queued' },
+              { value: 'blocked', label: 'Waiting on layers' },
+              { value: 'succeeded', label: 'Copied' },
+              { value: 'skipped', label: 'Already there' },
               { value: 'all', label: 'Every job' },
             ]}
           />
@@ -235,31 +237,121 @@ function StepTime({ at }: { at?: string }) {
   )
 }
 
+/**
+ * A job's state, in the words somebody would use for it.
+ *
+ * # Why the queue's own vocabulary does not go on the page
+ *
+ * `LEASED` is a true and precise description of a row in the queue - a worker
+ * has taken a lease on it - and it is not what anybody reading this table
+ * wants to know, which is whether the thing is running. The same goes for the
+ * rest: `PENDING` is queued, `BLOCKED` is waiting for the layers underneath it,
+ * `SUCCEEDED` is copied, and `SKIPPED` is the destination already having it.
+ *
+ * The internal name is not lost - it is on the hover, next to the sentence
+ * explaining what the state means - so somebody comparing this against
+ * `transferctl` or a log line can still line the two up.
+ */
+const JOB_STATES: Record<string, { label: string; colour: string; meaning: string }> = {
+  LEASED: {
+    label: 'Running',
+    colour: 'processing',
+    meaning: 'A worker has this job now and is moving it.',
+  },
+  PENDING: {
+    label: 'Queued',
+    colour: 'blue',
+    meaning: 'Ready to run, waiting for a free worker. A job that has just failed also '
+      + 'waits here, out its retry backoff, before it is offered again.',
+  },
+  BLOCKED: {
+    label: 'Waiting on layers',
+    colour: 'warning',
+    meaning: 'Deliberately not runnable yet: a manifest cannot be pushed until every '
+      + 'layer it names has landed.',
+  },
+  SUCCEEDED: {
+    label: 'Copied',
+    colour: 'green',
+    meaning: 'We pushed this to the destination.',
+  },
+  SKIPPED: {
+    label: 'Already there',
+    colour: 'default',
+    meaning: 'The destination already held this content, so nothing was pushed.',
+  },
+  FAILED: {
+    label: 'Failed',
+    colour: 'error',
+    meaning: 'This job gave up. The cause is in the error column.',
+  },
+  CANCELLED: {
+    label: 'Cancelled',
+    colour: 'default',
+    meaning: 'The download was stopped before this job ran.',
+  },
+}
+
 /** A job's state, spinning while a worker holds it. */
 function JobStateTag({ job }: { job: Job }) {
-  const colour: Record<string, string> = {
-    SUCCEEDED: 'green',
-    SKIPPED: 'default',
-    FAILED: 'error',
-    LEASED: 'processing',
-    PENDING: 'blue',
-    BLOCKED: 'warning',
-    CANCELLED: 'default',
-  }
-  // SKIPPED is not a failure and not a shrug: the destination already had it,
-  // which is the number that makes a delta download legible.
-  const label = job.state === 'SKIPPED' ? 'ALREADY THERE' : job.state
+  const state = JOB_STATES[job.state]
+  const meaning = job.state === 'SKIPPED' && job.skipReason
+    ? `The destination already held this content (${job.skipReason}).`
+    : state?.meaning
   return (
-    <Tooltip title={job.state === 'SKIPPED' ? job.skipReason || 'The destination already held this content.' : undefined}>
+    <Tooltip
+      title={
+        state
+          ? <span>{meaning} <Typography.Text type="secondary" style={{ fontSize: 11 }}>
+              Queue state: {job.state}.
+            </Typography.Text></span>
+          : undefined
+      }
+    >
       <Tag
-        color={colour[job.state] ?? 'default'}
+        color={state?.colour ?? 'default'}
         icon={job.state === 'LEASED' ? <LoadingOutlined spin /> : undefined}
         style={{ marginInlineEnd: 0 }}
       >
-        {label}
+        {state?.label ?? job.state}
       </Tag>
     </Tooltip>
   )
+}
+
+/**
+ * One kind's LAYERS - the pushes underneath its components.
+ *
+ * A component is `copied` only once its last layer and its manifest have both
+ * landed, which is the right answer to "what does the destination hold" and a
+ * useless one to "how far along is this": every row of the table read `0`
+ * copied and `0` present for the whole download and then moved at the end.
+ *
+ * The layer counts come from the API where it has them. An older coordinator
+ * does not send them, and the component counts are what it has - a coarser
+ * answer rather than an empty column.
+ */
+function layers(group: ContentGroup): { total: number; copied: number; present: number } {
+  if ((group.units ?? 0) > 0) {
+    return {
+      total: group.units ?? 0,
+      copied: group.unitsCopied ?? 0,
+      present: group.unitsPresent ?? 0,
+    }
+  }
+  return { total: group.total, copied: group.copied, present: group.present }
+}
+
+/** How this kind's components are going, for the hover on the count. */
+function componentBreakdown(group: ContentGroup): string {
+  const parts = [
+    `${formatCount(group.copied) ?? 0} copied`,
+    `${formatCount(group.present) ?? 0} already there`,
+  ]
+  if (group.outstanding) parts.push(`${formatCount(group.outstanding)} still going`)
+  if (group.failed) parts.push(`${formatCount(group.failed)} failed`)
+  return `${parts.join(', ')}. A component counts only once every layer under it `
+    + 'and the manifest naming it have landed.'
 }
 
 export default function DownloadDetail() {
@@ -504,16 +596,18 @@ export default function DownloadDetail() {
                 <RepoLink url={t?.target ? `https://${t.target}` : undefined} label={t?.targetName} />
 
                 {/*
-                  ONE BAR, over ARTIFACTS - the thing the table below it breaks
-                  down, so the two cannot disagree.
-                  
-                  It was two: bytes, and parts. Bytes alone reached 100% while
-                  the download was genuinely a third done, because content
-                  moves before the manifests that name it. Artifacts settle
-                  only when everything they are made of has, so one bar now
-                  reaches the end exactly when the download does, and the bytes
-                  live in the line under it where they read as a cost rather
-                  than as a second opinion about progress.
+                  ONE BAR, over WHAT IS AT THE DESTINATION - bytes we have
+                  streamed so far plus bytes that were already there, against
+                  what the release weighs.
+
+                  It counted finished COMPONENTS, and a component finishes only
+                  when its last layer and its manifest have both landed. So the
+                  bar read 0% for the first hour of a thirty-gigabyte download
+                  while a hundred workers streamed layers on the same screen and
+                  the panel below already reported twelve gigabytes saved. See
+                  <CopyProgress> for the whole argument, including why a byte
+                  bar is held just short of the end while anything is still to
+                  push.
                 */}
                 {/*
                   A PROMOTION the registry carried out has no artifact
@@ -525,13 +619,14 @@ export default function DownloadDetail() {
                 {t?.strategy === 'relocate' ? (
                   <PromotionProgress promotion={t?.promotion} />
                 ) : (
-                  <ArtifactProgress
+                  <CopyProgress
                     groups={t?.content}
                     transferred={transferred}
                     total={content}
                     saved={saved}
                     strategy={t?.strategy ?? 'copy'}
                     speedBytesPerSecond={running ? speed : undefined}
+                    live={running}
                   />
                 )}
 
@@ -540,6 +635,9 @@ export default function DownloadDetail() {
                   pagination={false}
                   dataSource={t?.content ?? []}
                   rowKey={(c) => c.kind}
+                  // Six columns in half a page. Scrolling the table is better
+                  // than squashing the counts into two characters each.
+                  scroll={{ x: 720 }}
                   columns={[
                     {
                       title: 'Type',
@@ -557,44 +655,112 @@ export default function DownloadDetail() {
                         )
                       },
                     },
-                    { title: 'Total', align: 'right', width: 80, render: (_, c) => <Value>{formatCount(c.total)}</Value> },
-                    { title: 'Copied', align: 'right', width: 80, render: (_, c) => <Value>{formatCount(c.copied)}</Value> },
                     {
-                      title: 'Already present',
+                      /*
+                        COMPONENTS, and the tooltip says how they are going.
+                        This is the count that lines up with the release page -
+                        260 images is 260 images - and it is deliberately the
+                        one that does NOT move much during a download: a
+                        component is only complete when everything under it is.
+                      */
+                      title: 'Components',
                       align: 'right',
-                      width: 130,
-                      render: (_, c) => <Value>{formatCount(c.present)}</Value>,
+                      width: 110,
+                      render: (_, c) => (
+                        <Tooltip title={componentBreakdown(c)}>
+                          <span><Value>{formatCount(c.total)}</Value></span>
+                        </Tooltip>
+                      ),
                     },
                     {
-                      title: 'Progress',
+                      /*
+                        LAYERS, under a header that says so.
+
+                        These three counted COMPONENTS, which meant every row
+                        read `0` copied and `0` already present for the whole
+                        download and then moved all at once at the end - true,
+                        and useless to anybody watching. A layer is what is
+                        actually pushed, mounted or skipped, so these move while
+                        the download does.
+
+                        Grouped rather than renamed one by one, because `Copied`
+                        means one thing in the components column and another
+                        here, and a table cannot leave that to be inferred:
+                        `Layers 12,410 · copied 8,004 · already present 3,912`
+                        is one sentence with one population in it.
+                      */
+                      title: 'Layers',
+                      // Centred over the three it covers, so the group header reads
+                      // as a header for them rather than as a fourth column.
+                      align: 'center',
+                      children: [
+                        {
+                          title: 'Total',
+                          key: 'layers',
+                          align: 'right',
+                          width: 90,
+                          render: (_, c: ContentGroup) => <Value>{formatCount(layers(c).total)}</Value>,
+                        },
+                        {
+                          title: 'Copied',
+                          key: 'layersCopied',
+                          align: 'right',
+                          width: 90,
+                          render: (_, c: ContentGroup) => <Value>{formatCount(layers(c).copied)}</Value>,
+                        },
+                        {
+                          title: 'Already present',
+                          key: 'layersPresent',
+                          align: 'right',
+                          width: 130,
+                          render: (_, c: ContentGroup) => <Value>{formatCount(layers(c).present)}</Value>,
+                        },
+                      ],
+                    },
+                    {
+                      /*
+                        ON THE TARGET - copied plus already present over the
+                        whole population, because the destination cannot tell
+                        the two apart and neither can anybody waiting on it.
+                      */
+                      title: 'On the target',
                       width: 180,
-                      render: (_, c) => (
-                        <MeasuredProgress
-                          transferred={c.copied + c.present}
-                          total={c.total}
-                          strategy={t?.strategy ?? 'copy'}
-                          showText={false}
-                        />
-                      ),
+                      render: (_, c) => {
+                        const l = layers(c)
+                        return (
+                          <MeasuredProgress
+                            // Split, so the green portion says how much of this
+                            // row the destination already had. The bar reaches
+                            // the same place either way - what is on the target
+                            // is on the target - and the colour is the only
+                            // thing that distinguishes how it got there.
+                            transferred={l.copied}
+                            saved={l.present}
+                            total={l.total}
+                            strategy={t?.strategy ?? 'copy'}
+                            showText={false}
+                          />
+                        )
+                      },
                     },
                   ]}
                 />
 
                 {/*
-                  COUNTED PER COMPONENT, and it has to say so.
-                  
+                  TWO POPULATIONS, and the table has to say which is which.
+
                   `Files 2` beside a release page reading `Files 112` looks like
                   a disagreement and is not one: a vendor's file bundle is ONE
-                  component holding a hundred and twelve named layers, and this
-                  table counts components while the release page counts files.
-                  Each of those layers is still its own blob and its own job -
-                  which is why an unchanged file in a changed bundle is not
-                  copied again.
+                  component holding a hundred and twelve named layers. The
+                  components column counts the first, the rest count the second,
+                  and the difference is why an unchanged file in a changed
+                  bundle is not copied again.
                 */}
                 <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-                  Counted per component. A file bundle is one component however many
-                  files it carries; each of those files is a blob of its own and is
-                  copied, skipped or mounted on its own.
+                  Components are what a release is made of - a file bundle is one component
+                  however many files it carries. Layers are what actually moves: each is
+                  pushed, mounted or skipped on its own, and a component is only complete
+                  once every layer under it and the manifest naming it have landed.
                 </Typography.Text>
 
                 {saved !== undefined && saved > 0 && (

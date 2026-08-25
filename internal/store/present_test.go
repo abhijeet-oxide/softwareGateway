@@ -314,6 +314,82 @@ func TestContentAlreadyThereIsWeighedOnceAndNotAsMoved(t *testing.T) {
 	}
 }
 
+// A blob a worker is streaming RIGHT NOW counts for what has arrived, not for
+// what it will eventually weigh.
+//
+// Crediting the whole size at the first byte is how a bar came to move a blob
+// at a time - nothing for four minutes, then eight gigabytes at once - and how
+// content still crossing the wire came to be reported as moved.
+func TestContentInFlightCountsForWhatHasArrived(t *testing.T) {
+	h := newPresentHarness(t)
+
+	blob := h.blob("dd", 8_000_000_000)
+	h.artifact("cfx-5000-product/inflight:1.0", blob)
+
+	id := h.transfer()
+	h.jobIn(id, blob, "leased", "orbs/cfx-5000-k8s", 2_000_000_000)
+
+	got, err := h.packages.TransferContentBytes(t.Context(), id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Moved != 2_000_000_000 {
+		t.Errorf("moved = %d, want the 2 GB the worker has reported - not the "+
+			"8 GB it will weigh when it finishes", got.Moved)
+	}
+	if got.Moved+got.Present > got.Total {
+		t.Errorf("moved + present = %d exceeds the total of %d",
+			got.Moved+got.Present, got.Total)
+	}
+}
+
+// A job that FINISHED counts for its whole size, whatever its last progress
+// report said.
+//
+// Progress reports are lossy by design - see ReportProgress - so the last one
+// before a completion routinely never lands. Weighing a finished digest by that
+// report would leave a settled download reporting less content than it moved,
+// and a bar short of the end with nothing left to do.
+func TestFinishedContentIsWeighedWholeWhateverProgressSaid(t *testing.T) {
+	h := newPresentHarness(t)
+
+	blob := h.blob("ff", 4_000_000_000)
+	h.artifact("cfx-5000-product/finished:1.0", blob)
+
+	id := h.transfer()
+	h.jobIn(id, blob, "succeeded", "orbs/cfx-5000-k8s", 3_000_000_000)
+
+	got, err := h.packages.TransferContentBytes(t.Context(), id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Moved != 4_000_000_000 {
+		t.Errorf("moved = %d, want the whole 4 GB: the job succeeded, so the "+
+			"content is there however far the last progress report got",
+			got.Moved)
+	}
+}
+
+// A retried job can report more bytes than the content weighs. It is still only
+// that much content.
+func TestMovedNeverExceedsWhatTheContentWeighs(t *testing.T) {
+	h := newPresentHarness(t)
+
+	blob := h.blob("gg", 1_000_000_000)
+	h.artifact("cfx-5000-product/retried:1.0", blob)
+
+	id := h.transfer()
+	h.jobIn(id, blob, "leased", "orbs/cfx-5000-k8s", 1_500_000_000)
+
+	got, err := h.packages.TransferContentBytes(t.Context(), id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Moved != 1_000_000_000 {
+		t.Errorf("moved = %d, want it capped at the 1 GB the blob weighs", got.Moved)
+	}
+}
+
 // jobIn records one job for a digest at a named destination repository.
 //
 // A destination repository is its own catalog row - which is exactly why the

@@ -499,6 +499,16 @@ func toAPIContent(rows []store.ContentRow, classify vendors.Classifier) []v1.Con
 		saved[kind] += row.SavedBytes
 		copied[kind] += row.CopiedBytes
 
+		// The layers, configs and manifests beneath them, summed across every
+		// outcome: a component reported as outstanding usually has most of its
+		// units already at the destination, and that is exactly the progress
+		// the component counts cannot express.
+		group.Units += row.Units
+		group.UnitsCopied += row.UnitsCopied
+		group.UnitsPresent += row.UnitsPresent
+		group.UnitsFailed += row.UnitsFailed
+		group.UnitsOutstanding += row.UnitsOutstanding
+
 		group.Total += row.Count
 		switch row.Outcome {
 		case store.ContentCopied:

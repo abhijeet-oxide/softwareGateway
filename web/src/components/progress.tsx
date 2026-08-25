@@ -161,33 +161,78 @@ export function PromotionProgress({ promotion }: { promotion: Promotion | undefi
 }
 
 /**
- * ONE BAR, over the thing a release is made of.
+ * What a transfer's content adds up to, over both populations that matter.
  *
- * # Why artifacts and not bytes
+ * COMPONENTS are what the destination can be said to HOLD: an image is copied
+ * when its last layer and its manifest have both landed, and not a moment
+ * before, because half an image is not an image.
  *
- * A download moves content first - blobs, where all the bytes are and where all
- * the skipping happens - and then the manifests that name them. So a byte bar
- * reaches 100% while the download is genuinely a third done, and a release the
- * destination already held reads as finished before anything has been named.
+ * UNITS are the individual pushes underneath - every layer, config and
+ * manifest that is a job of its own. They are what MOVES. A release of 260
+ * components is sixty thousand of them, and the difference between the two
+ * populations is the difference between a bar that sits at nought for an hour
+ * and one that tells somebody how the hour is going.
+ */
+export function copyCounts(groups?: ContentGroup[]) {
+  return (groups ?? []).reduce(
+    (acc, g) => ({
+      components: acc.components + g.total,
+      componentsDone: acc.componentsDone + g.copied + g.present,
+      componentsPresent: acc.componentsPresent + g.present,
+      units: acc.units + (g.units ?? 0),
+      unitsDone: acc.unitsDone + (g.unitsCopied ?? 0) + (g.unitsPresent ?? 0),
+      unitsPresent: acc.unitsPresent + (g.unitsPresent ?? 0),
+      unitsOutstanding: acc.unitsOutstanding + (g.unitsOutstanding ?? 0),
+      failed: acc.failed + (g.unitsFailed ?? g.failed ?? 0),
+    }),
+    {
+      components: 0, componentsDone: 0, componentsPresent: 0,
+      units: 0, unitsDone: 0, unitsPresent: 0, unitsOutstanding: 0, failed: 0,
+    },
+  )
+}
+
+/**
+ * ONE BAR, over what the destination actually holds.
  *
- * Counting ARTIFACTS fixes that without needing a second bar: an artifact is
- * done when everything it is made of is done, so this reaches the end exactly
- * when the download does. It is also the population the Contents table below
- * it breaks down, so the bar and the table cannot disagree.
+ * # What it is drawn from, and why that changed
  *
- * The bytes are still here, in the line underneath, because "how much was
- * moved" and "how much was already there" are what the download COST and are
- * not answerable in artifacts.
+ * It used to count COMPONENTS, and a component only counts once every layer
+ * beneath it and the manifest naming it have landed. So a download of a
+ * 30 GB release read `0 of 260 · 0%` for its entire first hour - with a
+ * hundred workers visibly streaming layers on the same screen, and a saving
+ * of twelve gigabytes already discovered and reported two lines below. A bar
+ * that is nought while the work is a third done is not a conservative bar, it
+ * is a wrong one, and it is the one everybody was looking at.
+ *
+ * It is now drawn from BYTES on the destination - what we have streamed so
+ * far, including the part of a blob a worker is streaming right now, plus what
+ * was already there. Both are the distinct-content account, so one population,
+ * converging on the release's own size. That is the number that tracks the
+ * wait: it starts moving with the first megabyte and it counts the saving as
+ * the done work it is.
+ *
+ * Where a transfer has no measured size yet the bar falls back to layers, and
+ * then to components - each less granular than the last, and each still a
+ * count of finished work over known work rather than anything derived from a
+ * clock.
+ *
+ * # Why it cannot reach the end early
+ *
+ * Bytes finish before a download does: the manifests that name the content are
+ * pushed last and weigh almost nothing, so a byte bar would sit at 100% with
+ * real work outstanding. While a single unit is still to push the bar is held
+ * just short of the end, so "full" and "finished" stay the same statement.
  *
  * # The green portion
  *
- * Artifacts the destination already held. Drawn inside the same track rather
- * than as a second bar: they are part of the same total, and the distinction
- * that matters is between what we moved and what was there - not between two
- * kinds of progress.
+ * What the destination already held. Drawn inside the same track rather than
+ * as a second bar: it is part of the same total, and the distinction that
+ * matters is between what we moved and what was there - not between two kinds
+ * of progress.
  */
-export function ArtifactProgress({
-  groups, transferred, total, saved, strategy = 'copy', speedBytesPerSecond,
+export function CopyProgress({
+  groups, transferred, total, saved, strategy = 'copy', speedBytesPerSecond, live,
 }: {
   /** The per-kind rollup - the same rows the Contents table renders. */
   groups?: ContentGroup[]
@@ -197,6 +242,8 @@ export function ArtifactProgress({
   saved?: number | undefined
   strategy?: Strategy
   speedBytesPerSecond?: number | undefined
+  /** Whether the transfer is still going, which is all the animation means. */
+  live?: boolean
 }) {
   if (strategy !== 'copy') {
     return (
@@ -204,53 +251,81 @@ export function ArtifactProgress({
     )
   }
 
-  const counted = (groups ?? []).reduce(
-    (acc, g) => ({
-      total: acc.total + g.total,
-      present: acc.present + g.present,
-      done: acc.done + g.copied + g.present,
-      failed: acc.failed + (g.failed ?? 0),
-    }),
-    { total: 0, present: 0, done: 0, failed: 0 },
-  )
+  const n = copyCounts(groups)
+  const moved = Math.max(0, transferred ?? 0)
+  const present = Math.max(0, saved ?? 0)
+  const weighed = total !== undefined && total > 0
 
-  // Before planning there are no artifacts to count and no bar to draw. Said
-  // rather than rendered as 0%, which is a position nobody measured.
-  if (counted.total === 0) {
+  // In order of how closely each tracks the wait. Bytes first because they are
+  // the only one that moves while a large layer is in flight.
+  const fraction = weighed
+    ? Math.min(1, (moved + present) / total)
+    : n.units > 0
+      ? n.unitsDone / n.units
+      : n.components > 0
+        ? n.componentsDone / n.components
+        : undefined
+
+  // Before planning there is no denominator and no bar to draw. Said rather
+  // than rendered as 0%, which is a position nobody measured.
+  if (fraction === undefined) {
     return (
       <NA reason="This download has not been planned yet, so what it is made of is not known." />
     )
   }
 
-  const percent = (counted.done / counted.total) * 100
-  const presentPercent = (counted.present / counted.total) * 100
+  // Something still to push, by the finest population we have. This is what
+  // keeps a byte bar off 100% while the manifests are still going up.
+  const outstanding = n.units > 0
+    ? n.unitsOutstanding > 0
+    : n.components > 0
+      ? n.componentsDone < n.components
+      : false
+
+  const percent = outstanding ? Math.min(fraction * 100, 99.9) : fraction * 100
+  const presentFraction = weighed
+    ? Math.min(1, present / total)
+    : n.units > 0
+      ? n.unitsPresent / n.units
+      : n.components > 0 ? n.componentsPresent / n.components : 0
+  const complete = !outstanding && percent >= 100
 
   return (
     <div>
       <Progress
         percent={Number(percent.toFixed(1))}
-        success={counted.present > 0
-          ? { percent: Number(presentPercent.toFixed(1)) }
+        success={presentFraction > 0
+          ? { percent: Number((presentFraction * 100).toFixed(1)) }
           : undefined}
         size="small"
-        status={counted.failed > 0
+        status={n.failed > 0
           ? 'exception'
-          : percent >= 100 ? 'success' : 'active'}
-        strokeColor={percent >= 100 ? c.ok : undefined}
+          : complete ? 'success' : live ? 'active' : 'normal'}
+        strokeColor={complete ? c.ok : undefined}
       />
-      <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-        {formatCount(counted.done)} of {formatCount(counted.total)} artifacts
-        {counted.present > 0 && ` · ${formatCount(counted.present)} already there`}
-        {counted.failed > 0 && ` · ${formatCount(counted.failed)} failed`}
-        {total !== undefined && total > 0 && (
-          <>
-            {' · '}
-            {formatBytes(transferred ?? 0)} of {formatBytes(total)} moved
-            {(saved ?? 0) > 0 && `, ${formatBytes(saved!)} already there`}
-          </>
-        )}
-        {speedBytesPerSecond !== undefined && ` · ${formatSpeed(speedBytesPerSecond)}`}
-      </Typography.Text>
+      {weighed && (
+        <Typography.Text type="secondary" style={{ fontSize: 12, display: 'block' }}>
+          {/*
+            ON THE TARGET, not "moved". The two are different numbers and the
+            reader wants the first one: what is there now, however it got
+            there. What we moved and what was already there follow it, because
+            that is the COST, and the cost is a second question.
+          */}
+          {formatBytes(Math.min(total, moved + present))} of {formatBytes(total)} on the target
+          {present > 0 && ` · ${formatBytes(present)} already there`}
+          {moved > 0 && present > 0 && ` · ${formatBytes(moved)} downloaded`}
+          {speedBytesPerSecond !== undefined && ` · ${formatSpeed(speedBytesPerSecond)}`}
+        </Typography.Text>
+      )}
+      {(n.units > 0 || n.components > 0) && (
+        <Typography.Text type="secondary" style={{ fontSize: 11, display: 'block' }}>
+          {n.units > 0 && `${formatCount(n.unitsDone)} of ${formatCount(n.units)} layers`}
+          {n.units > 0 && n.components > 0 && ' · '}
+          {n.components > 0
+            && `${formatCount(n.componentsDone)} of ${formatCount(n.components)} components complete`}
+          {n.failed > 0 && ` · ${formatCount(n.failed)} failed`}
+        </Typography.Text>
+      )}
     </div>
   )
 }
@@ -306,12 +381,13 @@ export function DownloadProgress({
     <div style={{ minWidth: 180 }}>
       {!notStarted && (
         groups?.some((group) => group.total > 0)
-          ? <ArtifactProgress
+          ? <CopyProgress
               groups={groups}
               transferred={transferred}
               total={total}
               saved={saved}
               strategy={strategy}
+              live={live}
             />
           : <MeasuredProgress
               transferred={transferred}

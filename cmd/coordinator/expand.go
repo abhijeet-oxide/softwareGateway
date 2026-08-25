@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"database/sql"
 	"fmt"
 	"log/slog"
 	"strings"
@@ -194,8 +195,8 @@ func (r *resolverImpl) EnsureTarget(
 
 	// productID comes from the loaded configuration's row, which reconciliation
 	// keeps current - the same row every other repository of this product hangs
-	// off.
-	productID, err := r.productID(ctx, p.Metadata.Name)
+	// off. Read through THIS transaction: see productID.
+	productID, err := r.productID(ctx, tx, p.Metadata.Name)
 	if err != nil {
 		return 0, err
 	}
@@ -213,9 +214,20 @@ func (r *resolverImpl) EnsureTarget(
 }
 
 // productID finds the active products row for a configured product.
-func (r *resolverImpl) productID(ctx context.Context, name string) (int64, error) {
+//
+// It takes the caller's transaction rather than reaching for the pool, and
+// that is not a style preference. SQLite's pool is ONE connection by
+// construction (internal/store/sqlite.go), so a query issued against the pool
+// while this goroutine already holds the connection in an open transaction
+// waits for a connection only that goroutine can release. It deadlocks, the
+// handler never returns, the connection is never given back, and every later
+// request in the process - heartbeats, leases, completions, the UI - queues
+// behind it until the Coordinator is restarted. EnsureTarget runs on the
+// promotion path, so the first promotion into a target with no catalog row
+// froze the whole backend.
+func (r *resolverImpl) productID(ctx context.Context, tx *sql.Tx, name string) (int64, error) {
 	var id int64
-	err := r.packages.DB().QueryRowContext(ctx,
+	err := tx.QueryRowContext(ctx,
 		r.packages.Dialect().Rewrite(
 			`SELECT id FROM products WHERE name = ? AND active = `+
 				r.packages.Dialect().Bool(true)+` LIMIT 1`), name).Scan(&id)

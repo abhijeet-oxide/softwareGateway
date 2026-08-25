@@ -1413,9 +1413,19 @@ func dedupeInt64(in []int64) []int64 {
 // path after a Coordinator restart mid-expansion, the caller needs the ID to
 // carry on planning rather than a fresh UUID that would violate the
 // constraint.
-func (p *Packages) TransferIDFor(ctx context.Context, requestID string, targetRepoID int64) (string, error) {
+//
+// It reads through the CALLER'S transaction, and must: the only caller is
+// mid-insert, so the row it is looking for may be one this transaction wrote
+// and has not committed. Reading it through the pool instead would not merely
+// miss that row - on SQLite, whose pool is one connection by construction
+// (see sqlite.go), it would block forever waiting for a connection this same
+// goroutine is holding, and wedge every other request in the process behind
+// it.
+func (p *Packages) TransferIDFor(
+	ctx context.Context, tx *sql.Tx, requestID string, targetRepoID int64,
+) (string, error) {
 	var id string
-	err := p.db.QueryRowContext(ctx, p.dialect.Rewrite(
+	err := tx.QueryRowContext(ctx, p.dialect.Rewrite(
 		`SELECT id FROM transfers WHERE request_id = ? AND target_repo_id = ?`),
 		requestID, targetRepoID).Scan(&id)
 	if errors.Is(err, sql.ErrNoRows) {

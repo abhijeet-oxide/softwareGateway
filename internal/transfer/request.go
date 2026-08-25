@@ -314,7 +314,7 @@ func (r *Requester) Create(ctx context.Context, req CreateRequest) (CreateResult
 		if !opened {
 			// A replay of the same request. UNIQUE (request_id, target_repo_id)
 			// caught it, which is the point of the constraint.
-			existing, err := r.packages.TransferIDFor(ctx, id, t.RepositoryID)
+			existing, err := r.packages.TransferIDFor(ctx, tx, id, t.RepositoryID)
 			if err != nil {
 				return out, err
 			}

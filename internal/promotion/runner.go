@@ -151,15 +151,13 @@ func (r *Runner) run(ctx context.Context, pm store.Promotion) error {
 		// Failing here is right and the message has to say so, because the
 		// obvious reading - "JFrog is broken" - is wrong.
 		return fmt.Errorf(
-			"no promoter carries %s -> %s any more, so this promotion cannot be finished as one"+
-				"\n%s"+
-				"\nretry the transfer to copy it instead",
+			"no promoter carries %s -> %s any more: %s Retry the transfer to copy it instead",
 			hop.Origin, hop.Destination, bound.Verdict.Reason)
 	}
 	if bound.Promoter.Name() != pm.Promoter {
 		return fmt.Errorf(
-			"this promotion was opened by %q and %q claims it now: the configuration changed"+
-				" underneath it\nretry the transfer to start again",
+			"this promotion was opened by %q and %q claims it now: the configuration changed "+
+				"underneath it. Retry the transfer to start again",
 			pm.Promoter, bound.Promoter.Name())
 	}
 
@@ -217,7 +215,7 @@ func (r *Runner) verify(ctx context.Context, pm store.Promotion, hop transfer.Pr
 	if err != nil {
 		if errors.Is(err, registry.ErrNotFound) {
 			return fmt.Errorf(
-				"%s reported the promotion succeeded, but %s:%s is not present at %s",
+				"%s reported success, but %s:%s is not present at %s",
 				pm.Promoter, displayPath(root.Repository), root.Tag, hop.Destination)
 		}
 		// Unreachable rather than wrong. The promotion is not settled either
@@ -229,8 +227,8 @@ func (r *Runner) verify(ctx context.Context, pm store.Promotion, hop transfer.Pr
 
 	if !strings.EqualFold(got, root.Digest) {
 		return fmt.Errorf(
-			"%s:%s at %s resolves to %s, not the %s that was promoted"+
-				"\nsomething else wrote that tag; the release has NOT been promoted",
+			"%s:%s at %s resolves to %s, not %s. Something else wrote that tag; "+
+				"this release was not promoted",
 			displayPath(root.Repository), root.Tag, hop.Destination, got, root.Digest)
 	}
 	return nil

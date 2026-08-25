@@ -80,11 +80,15 @@ func TestDeclinesTwoHosts(t *testing.T) {
 		t.Fatal("two Artifactory hosts must not be claimed")
 	}
 	// The refusal is the diagnosis, and an operator who configured two hosts
-	// by mistake should read it rather than wait out a 45 GB transfer.
-	for _, want := range []string{"eu.jfrog.io", "us.jfrog.io"} {
-		if !strings.Contains(v.Reason, want) {
-			t.Errorf("the reason must name both hosts; %q omits %q", v.Reason, want)
-		}
+	// by mistake should read it rather than wait out a 45 GB transfer. It
+	// names the ORIGIN and not the hosts: both are already on screen beside
+	// it, and repeating them is a sentence the reader parses to learn what
+	// they can see.
+	if !strings.Contains(v.Reason, "lab") {
+		t.Errorf("the reason must name the origin it differs from; got %q", v.Reason)
+	}
+	if strings.Contains(v.Reason, "us.jfrog.io") {
+		t.Errorf("the reason repeats a host the row already shows: %q", v.Reason)
 	}
 }
 

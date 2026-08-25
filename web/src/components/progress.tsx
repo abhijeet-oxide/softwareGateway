@@ -120,7 +120,7 @@ export function MeasuredProgress({
 export function PromotionProgress({ promotion }: { promotion: Promotion | undefined }) {
   if (!promotion || promotion.namesTotal <= 0) {
     return (
-      <NA reason="The registry is promoting this release. Nothing has been recorded as published yet." />
+      <NA reason="The registry is promoting this release. Nothing published yet." />
     )
   }
 
@@ -137,13 +137,16 @@ export function PromotionProgress({ promotion }: { promotion: Promotion | undefi
         strokeColor={percent >= 100 && !failed ? c.ok : undefined}
       />
       <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-        {formatCount(done)} of {formatCount(promotion.namesTotal)} names published
-        {' · '}
         {/*
-          Said on every one of these, because a reader who has only ever seen
-          byte bars will otherwise read "45 GB in four seconds" as a bug.
+          "tags" rather than "names", which is what the API and the schema call
+          them. A name is a repository path plus a tag; `repo:tag` is what an
+          operator says, and this is the line they read.
+
+          The second clause is on every one of these, because a reader who has
+          only ever seen byte bars reads "45 GB in four seconds" as a bug.
         */}
-        relocated by the registry, so no bytes crossed the wire
+        {formatCount(done)} of {formatCount(promotion.namesTotal)} tags published
+        {' · no bytes transferred'}
       </Typography.Text>
       {promotion.lastError && (
         <Typography.Text

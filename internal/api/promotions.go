@@ -238,9 +238,9 @@ func (s *Server) destinations(
 
 		switch {
 		case !t.IsEnabled():
-			d.Unavailable = "this target is disabled"
+			d.Unavailable = "This target is disabled."
 		case t.Name == origin:
-			d.Unavailable = "this is where the release is being promoted from"
+			d.Unavailable = "The promotion source."
 		}
 
 		if id, ok := inFlight[t.Name]; ok {
@@ -270,16 +270,15 @@ func (s *Server) method(
 	case unavailable != "":
 		return v1.PromotionCopy, ""
 	case s.deps.Promotions == nil:
-		return v1.PromotionCopy, "no promoter is configured, so the content is copied"
+		return v1.PromotionCopy, "No promoter is configured."
 	case origin == "":
-		return v1.PromotionCopy, "the origin is not decided yet"
+		return v1.PromotionCopy, "The origin has not been chosen yet."
 	case len(names) == 0:
-		// The same gate the expander applies. Said in the terms a reader can
-		// act on: analysing is a button on the release, and pressing it makes
-		// the fast path available.
-		return v1.PromotionCopy,
-			"this release has not been analysed, so the names underneath it are not known yet - " +
-				"analyse it and a JFrog pair can relocate it instead of copying it"
+		// The same gate the expander applies. Named as the button that lifts
+		// it, because that is the one thing the reader can act on.
+		// The FIX is said once, by the caller, rather than repeated on every
+		// row: it is one action that unblocks all of them.
+		return v1.PromotionCopy, "This release has not been analysed yet."
 	}
 
 	claim, err := s.deps.Promotions.Claim(ctx, transfer.PromotionHop{
@@ -294,7 +293,7 @@ func (s *Server) method(
 		// A dialog must open. Reporting the copy path with the complaint
 		// attached is right in a way a 500 is not: the copy path is what would
 		// actually happen, and it is always correct.
-		return v1.PromotionCopy, "could not be determined: " + err.Error()
+		return v1.PromotionCopy, "Could not be determined: " + err.Error()
 	}
 	if claim.Claimed {
 		return v1.PromotionRelocate, claim.Reason
@@ -394,8 +393,7 @@ func promotable(out v1.PromotionOptionsResponse) (bool, string) {
 	// that makes every other consideration moot.
 	if origin, ok := originNamed(out.Origins, out.DefaultOrigin); ok && !origin.Holds {
 		return false, fmt.Sprintf(
-			"this release has not been downloaded to %s yet, so there is nothing to promote out of it",
-			origin.Name)
+			"This release has not been downloaded to %s yet.", origin.Name)
 	}
 
 	var open, blocked int
@@ -412,16 +410,15 @@ func promotable(out v1.PromotionOptionsResponse) (bool, string) {
 
 	switch {
 	case out.DefaultOrigin == "" && !anyHolds(out.Origins):
-		return false, "this release has not been downloaded to any target yet, " +
-			"so there is nothing to promote"
+		return false, "This release has not been downloaded to any target yet."
 	case out.DefaultOrigin == "":
-		return true, "several targets hold this release; choose which one to promote from"
+		return true, "Several targets hold this release. Choose which one to promote from."
 	case open > 0:
 		return true, ""
 	case blocked > 0:
-		return false, "every other target already holds this release"
+		return false, "Every other target already has this release."
 	default:
-		return false, "this product has no other target to promote into"
+		return false, "This product has no other target to promote into."
 	}
 }
 

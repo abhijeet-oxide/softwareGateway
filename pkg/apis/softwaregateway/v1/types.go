@@ -239,7 +239,11 @@ const (
 	TransferPaused   TransferState = "PAUSED"
 	// TransferSyncing is a delegated transfer waiting on the registry. It has
 	// no progress and never will.
-	TransferSyncing   TransferState = "SYNCING"
+	TransferSyncing TransferState = "SYNCING"
+	// TransferPromoting is a native promotion waiting on the registry. It has
+	// no BYTE progress and never will - what it moves is names, and Promotion
+	// below is where that count lives.
+	TransferPromoting TransferState = "PROMOTING"
 	TransferVerifying TransferState = "VERIFYING"
 	TransferSucceeded TransferState = "SUCCEEDED"
 	// TransferDiverged is terminal and is neither success nor failure: the
@@ -1596,13 +1600,41 @@ type Transfer struct {
 	// each of them went. On a single transfer only, for the same reason as
 	// Waves: it is a second table per row, and the question is always asked
 	// about one transfer.
-	Content   []ContentGroup `json:"content,omitempty"`
-	CreatedAt string         `json:"createdAt,omitempty"`
+	Content []ContentGroup `json:"content,omitempty"`
+	// Promotion is present only on a transfer the registry carried out
+	// itself, and is the only honest progress such a transfer has: it moved no
+	// bytes, so every byte column on it is structurally zero.
+	Promotion *PromotionProgress `json:"promotion,omitempty"`
+	CreatedAt string             `json:"createdAt,omitempty"`
 	// StartedAt is when the first job was leased, not when the transfer was
 	// asked for. Elapsed time and throughput measured from the request would
 	// count however long it waited for a worker as transfer time.
 	StartedAt   string `json:"startedAt,omitempty"`
 	CompletedAt string `json:"completedAt,omitempty"`
+}
+
+// PromotionProgress is a native promotion, as it stands.
+//
+// NAMES rather than bytes, and the difference is the whole reason the field
+// exists. A registry relocating content within itself already holds every
+// blob; what it publishes is names, so names are the only denominator a
+// promotion has. A client rendering a percentage from the byte columns of a
+// promoted transfer is inventing one.
+type PromotionProgress struct {
+	// Promoter is the plugin that carried it: `jfrog` today.
+	Promoter string `json:"promoter"`
+	// State is REQUESTED, RUNNING, SUCCEEDED or FAILED.
+	State string `json:"state"`
+
+	NamesTotal int `json:"namesTotal"`
+	NamesDone  int `json:"namesDone"`
+
+	Attempts  int    `json:"attempts,omitempty"`
+	LastError string `json:"lastError,omitempty"`
+
+	RequestedAt string `json:"requestedAt,omitempty"`
+	StartedAt   string `json:"startedAt,omitempty"`
+	FinishedAt  string `json:"finishedAt,omitempty"`
 }
 
 // TransferProgress is what has happened so far, and what was planned.
@@ -1881,6 +1913,114 @@ type ListFailuresResponse struct {
 	State         TransferState  `json:"state,omitempty"`
 	FailureReason string         `json:"failureReason,omitempty"`
 	Failures      []FailureGroup `json:"failures"`
+}
+
+// ---------------------------------------------------------------------------
+// Promotion (docs/design/22)
+// ---------------------------------------------------------------------------
+
+// PromotionMethod is HOW a hop would be carried out.
+type PromotionMethod string
+
+const (
+	// PromotionRelocate is the registry moving it internally: no bytes over
+	// the wire, and normally seconds regardless of how large the release is.
+	PromotionRelocate PromotionMethod = "RELOCATE"
+	// PromotionCopy is our workers reading from one target and writing to the
+	// other. Always correct, and within one registry still cheap - every blob
+	// is relocated by cross-repository mount - but it walks the manifest tree
+	// and issues a request per blob.
+	PromotionCopy PromotionMethod = "COPY"
+)
+
+// PromotionOrigin is a target this release could be promoted OUT of.
+type PromotionOrigin struct {
+	Name        string `json:"name"`
+	Environment string `json:"environment,omitempty"`
+	Registry    string `json:"registry"`
+	Repository  string `json:"repository,omitempty"`
+
+	// Holds says a transfer to this target SUCCEEDED, which is what makes it a
+	// candidate origin at all: promotion moves what is already somewhere, and
+	// offering a target that never received the release would produce a
+	// promotion that fails at the first read.
+	Holds bool `json:"holds"`
+	// LastTransferID is the transfer that put it there, for a link.
+	LastTransferID string `json:"lastTransferId,omitempty"`
+}
+
+// PromotionDestination is a target this release could be promoted INTO, and
+// what promoting into it would actually do.
+type PromotionDestination struct {
+	Name        string `json:"name"`
+	Environment string `json:"environment,omitempty"`
+	Registry    string `json:"registry"`
+	Repository  string `json:"repository,omitempty"`
+
+	// PromotionOnly marks a target reachable ONLY by promotion - a production
+	// registry a vendor may never replicate into directly.
+	PromotionOnly bool `json:"promotionOnly,omitempty"`
+	Default       bool `json:"default,omitempty"`
+
+	// Method is RELOCATE or COPY, decided the same way the expander will
+	// decide it - through the same plugin claim, so the dialog cannot promise
+	// one thing and the transfer do another.
+	Method PromotionMethod `json:"method"`
+	// MethodReason says WHY, in words, whichever answer came back. On COPY it
+	// is the diagnosis: two Artifactory hosts, a target typed `generic`, a
+	// release nobody has analysed. Always populated.
+	MethodReason string `json:"methodReason,omitempty"`
+
+	// State is ABSENT, PRESENT or IN_FLIGHT - whether this release is already
+	// there, or on its way. What stops somebody promoting the same release
+	// four times because nothing on screen said it had landed.
+	State string `json:"state"`
+	// TransferID is the transfer that put it there or is putting it there.
+	TransferID string `json:"transferId,omitempty"`
+
+	// Unavailable explains why this destination cannot be chosen at all - it
+	// is the origin, or it is disabled. Empty means it can.
+	Unavailable string `json:"unavailable,omitempty"`
+}
+
+// PromotionOptionsResponse is
+// GET /api/v1/products/{product}/packages/{package}/promotionOptions.
+//
+// It exists because the promotion dialog asks ONE question - "where can this
+// go, and what will happen" - whose answer is spread across configuration, the
+// catalog, the transfer history and the promoter plugins. A client assembling
+// it from four endpoints would be re-implementing the resolution rules in
+// TypeScript, and the copy that drifted would be the one people clicked.
+type PromotionOptionsResponse struct {
+	Product string `json:"product"`
+	Package string `json:"package"`
+	Tag     string `json:"tag"`
+
+	Origins []PromotionOrigin `json:"origins"`
+	// DefaultOrigin is where the release was downloaded to, which is what a
+	// promotion means when nobody says otherwise. Empty when the release is
+	// not at any target yet, and then Promotable is false.
+	DefaultOrigin string `json:"defaultOrigin,omitempty"`
+
+	Destinations []PromotionDestination `json:"destinations"`
+	// DefaultDestinations are the targets pre-selected in a dialog: the
+	// product's promotion path where it resolves to exactly one, and nothing
+	// where it does not. Deliberately empty rather than guessed when several
+	// targets could be meant - see transfer.exactlyOneIn.
+	DefaultDestinations []string `json:"defaultDestinations,omitempty"`
+
+	// Analysed says whether the release's manifest tree has been walked. It
+	// gates the fast path: the names underneath an unanalysed release are not
+	// known here, and claiming on a partial tree would promote the root and
+	// leave a bundle's components behind.
+	Analysed bool `json:"analysed"`
+
+	// Promotable is false when there is nothing to offer, and Reason says
+	// which of the several ways that can be true this is: the release is
+	// nowhere yet, the product has one target, every destination already
+	// holds it.
+	Promotable bool   `json:"promotable"`
+	Reason     string `json:"reason,omitempty"`
 }
 
 // CreateTransferRequest is POST /api/v1/transfers.

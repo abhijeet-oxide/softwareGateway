@@ -208,6 +208,18 @@ func (c *Client) GetPackage(ctx context.Context, product, ref string) (*Package,
 		"/api/v1/products/"+url.PathEscape(product)+"/packages/"+url.PathEscape(seg)+query, &out)
 }
 
+// PromotionOptions reports where a release can be promoted to, and what
+// promoting it there would actually do.
+func (c *Client) PromotionOptions(
+	ctx context.Context, product, ref string,
+) (*PromotionOptionsResponse, error) {
+	var out PromotionOptionsResponse
+	seg, query := splitPackageRef(ref)
+	return &out, c.get(ctx,
+		"/api/v1/products/"+url.PathEscape(product)+"/packages/"+url.PathEscape(seg)+
+			"/promotionOptions"+query, &out)
+}
+
 // ListArtifacts returns a package's artifact tree.
 func (c *Client) ListArtifacts(ctx context.Context, product, ref string) (*ListArtifactsResponse, error) {
 	var out ListArtifactsResponse

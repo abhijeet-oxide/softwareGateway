@@ -133,6 +133,35 @@ linters:
             - pkg: github.com/abhijeet-oxide/softwareGateway/internal/vendors/near
               desc: "vendor-specific layout must stay behind vendors.Layout - only the composition root may name a vendor"
 
+        # The engine must never know which registry vendor it is promoting on.
+        #
+        # internal/promote holds the Promoter INTERFACE and the plugin
+        # registry; internal/promote/<name> holds one vendor's implementation.
+        # Everything downstream depends on the seam in
+        # internal/transfer/promotion.go, and only the composition root names a
+        # promoter.
+        #
+        # The test this encodes is the same mechanical one the vendor rule
+        # encodes: delete internal/promote/jfrog and the rest must still build
+        # and pass, with every promotion falling back to a copy. A JFrog
+        # assumption reaching the expander or the queue is exactly the leak
+        # that would make that false, and it is the kind that arrives one
+        # innocent import at a time.
+        core-imports-no-promoter-implementation:
+          list-mode: lax
+          files:
+            - "**/internal/transfer/**"
+            - "**/internal/queue/**"
+            - "**/internal/store/**"
+            - "**/internal/api/**"
+            - "**/internal/promotion/**"
+            - "**/internal/discovery/**"
+            - "**/internal/registry/**"
+            - "**/internal/product/**"
+          deny:
+            - pkg: github.com/abhijeet-oxide/softwareGateway/internal/promote/jfrog
+              desc: "a promoter implementation must stay behind promote.Promoter - only the composition root may name one"
+
   exclusions:
     generated: lax
     rules:

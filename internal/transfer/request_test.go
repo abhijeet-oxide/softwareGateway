@@ -24,6 +24,9 @@ type fakeCatalog struct {
 	// nextID is what EnsureTarget hands out for a target nothing has been
 	// written to yet.
 	nextID int64
+	// holding is which targets have actually received the release, which is
+	// what settles an origin configuration cannot.
+	holding []string
 }
 
 func (f fakeCatalog) ProductView(context.Context, string) (ProductView, error) {
@@ -47,6 +50,13 @@ func (f *fakeCatalog) EnsureTarget(_ context.Context, _ string, t RepoView) (int
 	t.RepositoryID = id
 	f.rows[id] = t
 	return id, nil
+}
+
+// holding is which targets the release is actually in, keyed by target name.
+// Empty means the history says nothing, which is the state every test that
+// does not care about it wants.
+func (f fakeCatalog) TargetsHolding(context.Context, int64) ([]string, error) {
+	return f.holding, nil
 }
 
 var errNoRow = errors.New("no such repository")

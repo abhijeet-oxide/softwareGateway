@@ -207,6 +207,16 @@ func (s *Server) handleGetTransfer(w http.ResponseWriter, r *http.Request) {
 		dto.Progress.ContentPresentBytes = int64String(c.Present)
 	}
 
+	// A promotion the registry carried out itself. Present only on those, and
+	// on those it is the only honest progress the transfer has: it moved no
+	// bytes, so every byte column above is structurally zero and a client
+	// drawing a percentage from them would be inventing one.
+	if s.deps.PromotionStore != nil {
+		if pm, err := s.deps.PromotionStore.ForTransfer(r.Context(), t.ID); err == nil {
+			dto.Promotion = promotionProgressDTO(pm)
+		}
+	}
+
 	if skips, err := s.deps.Packages.SkipBreakdown(r.Context(), t.ID); err == nil {
 		for _, k := range skips {
 			dto.Progress.Skips = append(dto.Progress.Skips, v1.SkipBreakdown{

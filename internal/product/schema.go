@@ -366,6 +366,30 @@ type Target struct {
 	// XrayEndpoint overrides the JFrog PLATFORM base URL, needed only where the
 	// docker host is a subdomain and the platform is not.
 	XrayEndpoint string `json:"xrayEndpoint,omitempty"`
+
+	// JFrogEndpoint overrides the JFrog PLATFORM base URL for everything that
+	// is not Xray - today, native promotion.
+	//
+	// Separate from XrayEndpoint only because the two can genuinely differ on
+	// a split deployment, and it FALLS BACK to it: they are the same host
+	// reached for the same reason in every ordinary estate, and a second field
+	// that had to be filled in would be a second field to forget. Leaving both
+	// empty derives the host from `registry`, which is right for a
+	// repository-path deployment and wrong for a subdomain one - see
+	// internal/promote/jfrog for why that cannot be told apart automatically.
+	JFrogEndpoint string `json:"jfrogEndpoint,omitempty"`
+
+	// JFrogRepositoryKey names the Artifactory repository this target lives
+	// in, when it cannot be derived from `repository`.
+	//
+	// Needed only on a SUBDOMAIN deployment, where the repository key is in
+	// the hostname (`acme-docker-prod.jfrog.io/nokia/orbs`) and the path has
+	// none. On the repository-path deployment - `acme.jfrog.io/docker-prod/
+	// nokia/orbs` - the first path segment IS the key and nothing has to be
+	// written here.
+	//
+	// Only native promotion reads it, and only a JFrog target may set it.
+	JFrogRepositoryKey string `json:"jfrogRepositoryKey,omitempty"`
 }
 
 // Promotion declares the hop `transfers promote` takes by default.

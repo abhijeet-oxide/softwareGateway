@@ -58,6 +58,13 @@ type Expander struct {
 	delegation  Delegation
 	replication *store.Replication
 
+	// promotion and promotions are the OTHER half of that seam
+	// (promotion.go): a hop the registry the two targets share can carry out
+	// itself. Both nil means every promotion is a copy, which is always
+	// correct and is what an estate with no such pair still does.
+	promotion  Promotion
+	promotions *store.Promotions
+
 	// batch bounds one tick, so a backlog of a thousand requests does not hold
 	// the leader in one loop for minutes.
 	batch int
@@ -192,6 +199,36 @@ func (e *Expander) plan(ctx context.Context, t store.PendingTransfer) (int, erro
 		return 0, e.delegate(ctx, t, strategy, destination.Name, pkg)
 	}
 
+	// THE PROMOTION BRANCH, and it is deliberately after the one above.
+	//
+	// A destination that fetches for itself has already answered the question
+	// this asks: it does not want the content pushed at it AT ALL, by us or by
+	// its own registry's copy endpoint. Asking here first would let a native
+	// promotion write into a mirror that is meant to be read-only.
+	//
+	// Asked before anything is read from a registry, for the same reason the
+	// delegated branch is: a claimed hop needs no manifest walk, and producing
+	// one to throw it away costs a round trip per artifact.
+	if t.Operation == "promote" && e.promotion != nil {
+		hop, ok, err := e.promotionHop(ctx, t, pkg, origin, destination, relative)
+		if err != nil {
+			return 0, err
+		}
+		if ok {
+			if claim := e.claimPromotion(ctx, hop); claim.Claimed {
+				return 0, e.relocate(ctx, t, claim, hop)
+			} else if claim.Reason != "" {
+				// Said out loud, once, at the moment the slow path is chosen.
+				// "Why did promoting to production take forty minutes when it
+				// usually takes six seconds" is otherwise unanswerable after
+				// the fact.
+				e.log.InfoContext(ctx, "promoting by copy",
+					"transfer", t.ID, "from", origin.Name, "to", destination.Name,
+					"reason", claim.Reason)
+			}
+		}
+	}
+
 	originRepoID, err := e.ensureOrigin(ctx, t, origin, readPath)
 	if err != nil {
 		return 0, err
@@ -234,6 +271,111 @@ func (e *Expander) plan(ctx context.Context, t store.PendingTransfer) (int, erro
 		return 0, err
 	}
 	return plan.Jobs, nil
+}
+
+// promotionHop describes a promotion in terms of the NAMES it publishes.
+//
+// ok is false when the hop cannot be described, and that is a fall-through
+// rather than a failure: the copy path derives the same names for itself by
+// walking the registry, so anything this cannot answer, that can.
+//
+// The one case that matters is a package nobody has analysed. Its tree is
+// recorded as far as discovery got - the root manifest and a list of what it
+// references, unfetched - so the names underneath it are simply not known
+// here. Claiming on a partial tree would promote the root and quietly leave a
+// bundle's components behind, which is worse than being slow.
+func (e *Expander) promotionHop(
+	ctx context.Context, t store.PendingTransfer, pkg store.PackageRow,
+	origin, destination store.Endpoint, relative string,
+) (PromotionHop, bool, error) {
+	tree, complete, err := e.packages.ReadExpandedTree(ctx, pkg.ID)
+	if err != nil {
+		return PromotionHop{}, false, err
+	}
+	if !complete || len(tree.Artifacts) == 0 {
+		e.log.InfoContext(ctx, "promoting by copy: the release has not been analysed, "+
+			"so the names underneath it are not known here",
+			"transfer", t.ID, "package", pkg.ID)
+		return PromotionHop{}, false, nil
+	}
+
+	related, err := e.resolve.Related(ctx, t.ProductName, pkg)
+	if err != nil {
+		// Same trade the copy path makes: a release whose accessories could
+		// not be listed still has a payload worth moving.
+		e.log.WarnContext(ctx, "could not list the package's related artifacts",
+			"package", pkg.ID, "error", err)
+	}
+
+	hop := PromotionHop{
+		TransferID:     t.ID,
+		ProductName:    t.ProductName,
+		Origin:         origin.Name,
+		Destination:    destination.Name,
+		Package:        pkg.Tag,
+		ManifestDigest: pkg.ManifestDigest,
+		Names: PromotionNamesFor(tree, relative,
+			rootTags(Request{Package: pkg, Related: related})),
+	}
+	if len(hop.Names) == 0 {
+		return PromotionHop{}, false, nil
+	}
+	return hop, true, nil
+}
+
+// PromotionNamesFor is every TAGGED site of a tree, root first.
+//
+// Exported because the API answers the same question BEFORE anybody commits to
+// anything - the promotion dialog says how a hop would be carried out, and an
+// answer derived differently from the one the expander will reach is worse
+// than no answer at all.
+//
+// Tagged only, and the omission is the whole difference between the two paths.
+// Our engine moves CONTENT, so it has to visit every manifest and every blob
+// including the ones nothing names - an index's per-platform children are
+// reached by digest and carry no tag of their own. A registry relocating
+// within itself already holds all of that; what it has to be told is which
+// NAMES to publish, and a name is a repository and a tag.
+//
+// Document order, which ResolveLayout preserves from the tree, so the root -
+// the name that makes the release resolvable at all - is published first and a
+// promotion interrupted half way through has left a consistent prefix rather
+// than an arbitrary subset.
+func PromotionNamesFor(
+	tree store.ExpandedTree, sourceRepository string, rootTags []string,
+) []PromotionName {
+	// BASE PATH EMPTY, on purpose. The sites that come back are then RELATIVE
+	// to whatever prefix an end configures, which is exactly what a hop needs:
+	// the same value re-bases under lab's prefix to say where to read and
+	// under production's to say where to write. Passing either end's base
+	// here would bake one of them into both.
+	layout := ResolveLayout(tree, LayoutOptions{
+		SourceRepository: sourceRepository,
+		RootTags:         rootTags,
+	})
+
+	var out []PromotionName
+	seen := map[string]bool{}
+
+	for _, a := range tree.Artifacts {
+		placement, ok := layout[a.Row.Digest]
+		if !ok {
+			continue
+		}
+		for _, site := range placement.Sites {
+			for _, tag := range site.Tags {
+				key := site.Repository + ":" + tag
+				if seen[key] {
+					continue
+				}
+				seen[key] = true
+				out = append(out, PromotionName{
+					Repository: site.Repository, Tag: tag, Digest: a.Row.Digest,
+				})
+			}
+		}
+	}
+	return out
 }
 
 // strategyFor asks how content reaches a destination. No delegation

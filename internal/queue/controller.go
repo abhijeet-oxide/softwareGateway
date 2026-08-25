@@ -39,6 +39,18 @@ type Stepper interface {
 	AdvanceSteps(ctx context.Context) (released, skipped int, err error)
 }
 
+// Promoter runs one promotion a registry carries out itself.
+//
+// A consumer-defined interface, and optional: nil means no native promotion,
+// which is every estate whose targets do not share a registry, and which is
+// what every deployment before the promoter plugins was.
+//
+// It reports whether it DID anything, so the loop can drain a backlog and then
+// go quiet rather than poll at a fixed rate through both.
+type Promoter interface {
+	RunPromotion(ctx context.Context) (did bool, err error)
+}
+
 // ControllerOptions tune the two loops.
 type ControllerOptions struct {
 	// ReapInterval is how often expired leases are collected.
@@ -61,6 +73,7 @@ type Controller struct {
 	queue    *Queue
 	expander Expander
 	stepper  Stepper
+	promoter Promoter
 	opts     ControllerOptions
 	log      *slog.Logger
 
@@ -118,6 +131,9 @@ func (c *Controller) Run(ctx context.Context) error {
 	defer reap.Stop()
 	expand := time.NewTicker(c.opts.ExpandInterval)
 	defer expand.Stop()
+
+	// Promotions run on their own goroutine - see promotions().
+	go c.promotions(ctx)
 
 	// The reaper runs IMMEDIATELY on becoming leader rather than waiting a full
 	// interval. After a Coordinator restart, leases held by workers that died
@@ -221,6 +237,61 @@ func (c *Controller) reap(ctx context.Context) {
 		c.log.ErrorContext(ctx, "could not retry failed transfers", "error", err)
 	}
 }
+
+// WithPromoter attaches the native-promotion loop.
+func (c *Controller) WithPromoter(p Promoter) *Controller {
+	c.promoter = p
+	return c
+}
+
+// promotions runs claimed promotions until there are none left.
+//
+// ITS OWN LOOP, not a step of the expand tick, and that is the whole point of
+// the goroutine. A promotion is a call into somebody else's registry: on the
+// expand tick, one slow Artifactory would hold every other product's planning
+// behind it, which is the exact coupling the queue is built to avoid
+// everywhere else.
+//
+// The drain is BOUNDED. A backlog of a hundred promotions should not be one
+// unbroken run with no chance to notice leadership was lost - and losing it
+// mid-drain is precisely when a second replica would start doing the same work.
+func (c *Controller) promotions(ctx context.Context) {
+	tick := time.NewTicker(promotionInterval)
+	defer tick.Stop()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-tick.C:
+		}
+		if c.promoter == nil || !c.leader.Load() {
+			continue
+		}
+
+		for i := 0; i < promotionDrain; i++ {
+			did, err := c.promoter.RunPromotion(ctx)
+			if err != nil {
+				c.log.ErrorContext(ctx, "could not run a promotion", "error", err)
+				break
+			}
+			if !did || !c.leader.Load() {
+				break
+			}
+		}
+	}
+}
+
+// Promotion loop pacing.
+//
+// Two seconds rather than the expander's ten: a native promotion is normally
+// seconds end to end, and the whole reason it exists is that somebody clicking
+// Promote should see it finish rather than wait out a planning interval for
+// work that takes no time.
+const (
+	promotionInterval = 2 * time.Second
+	promotionDrain    = 8
+)
 
 // WithStepper attaches the chain sweep.
 func (c *Controller) WithStepper(s Stepper) *Controller {

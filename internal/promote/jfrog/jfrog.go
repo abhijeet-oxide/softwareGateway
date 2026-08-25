@@ -292,7 +292,7 @@ func (p *Promoter) promoteOne(
 	if resp.StatusCode >= 200 && resp.StatusCode < 300 {
 		return nil
 	}
-	return classify(resp)
+	return classify(resp, u, p.srcKey)
 }
 
 // promoteRequest is the body of POST /api/docker/{repo}/v2/promote.
@@ -311,7 +311,7 @@ type promoteRequest struct {
 // classify turns a failed response into an error of the shared vocabulary, so
 // the retry policy and the operator-facing message both key off the same
 // classification every other registry call uses.
-func classify(resp *http.Response) error {
+func classify(resp *http.Response, url, repoKey string) error {
 	detail := strings.TrimSpace(readMessage(resp.Body))
 	if detail == "" {
 		detail = resp.Status
@@ -330,7 +330,18 @@ func classify(resp *http.Response) error {
 				"promote between them; it needs delete on the source and deploy on the "+
 				"destination in Artifactory (%w)", detail, registry.ErrForbidden)
 	case http.StatusNotFound:
-		return fmt.Errorf("%s (%w)", detail, registry.ErrNotFound)
+		// The single most confusing failure on this path, because it has two
+		// completely different causes that read identically. The image really
+		// is absent - or the URL is wrong, which on JFrog means the repository
+		// key was derived from a path that does not contain it. Naming the URL
+		// is what separates them: an operator who sees a key they do not
+		// recognise knows to set `jfrogRepositoryKey`, and one who sees the
+		// right key knows to look for the image.
+		return fmt.Errorf(
+			"%s\nasked %s, so this is either a missing image or the wrong Artifactory "+
+				"repository key (%q, derived from `repository` unless `jfrogRepositoryKey` "+
+				"is set) (%w)",
+			detail, url, repoKey, registry.ErrNotFound)
 	case http.StatusMethodNotAllowed, http.StatusNotImplemented:
 		return fmt.Errorf(
 			"this Artifactory does not serve the Docker promotion endpoint: %s (%w)",

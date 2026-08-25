@@ -320,3 +320,67 @@ func TestATransferWithNoPromotionAnswersNoRecord(t *testing.T) {
 		t.Fatalf("want ErrNoRecord, got %v", err)
 	}
 }
+
+// `transfers retry` on a native promotion. Without this it would be the one
+// kind of failure with no verb that could act on it: such a transfer has no
+// jobs, so the ordinary requeue finds nothing and reports nothing.
+func TestRetryReopensAFailedNativePromotion(t *testing.T) {
+	p, s, ctx := promotionFixture(t)
+	if err := p.Open(ctx, "t1", "jfrog", threeNames()); err != nil {
+		t.Fatal(err)
+	}
+	pm, err := p.ClaimPromotion(ctx, "coordinator-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := p.NamePromoted(ctx, pm.ID, 0); err != nil {
+		t.Fatal(err)
+	}
+	if err := p.Settle(ctx, pm.ID, "failed", "Artifactory said no"); err != nil {
+		t.Fatal(err)
+	}
+
+	res, err := NewPackages(s).RetryTransfer(ctx, "t1")
+	if err != nil {
+		t.Fatalf("RetryTransfer: %v", err)
+	}
+	if res.NoJobs {
+		t.Error("a native promotion is not a transfer that never got as far as having work")
+	}
+	if res.State != "promoting" {
+		t.Errorf("state after retry is %q, want promoting", res.State)
+	}
+	if got := transferState(t, s, "t1"); got != "promoting" {
+		t.Errorf("transfer is %q, want promoting", got)
+	}
+
+	// And it is claimable again, with the name that already landed still
+	// recorded - so the retry re-issues what is left rather than the release.
+	next, err := p.ClaimPromotion(ctx, "coordinator-1")
+	if err != nil {
+		t.Fatalf("a reopened promotion must be claimable: %v", err)
+	}
+	pending, err := p.PendingNames(ctx, next.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(pending) != 2 {
+		t.Errorf("%d names left, want 2 - the published one was re-issued", len(pending))
+	}
+}
+
+// An ordinary transfer that failed before any work existed is unchanged: it is
+// still reported as having no jobs, which is a different situation needing a
+// different action.
+func TestRetryStillReportsATransferThatNeverHadWork(t *testing.T) {
+	_, s, ctx := promotionFixture(t)
+	mustExec(t, s.DB(), `UPDATE transfers SET state = 'failed' WHERE id = 't1'`)
+
+	res, err := NewPackages(s).RetryTransfer(ctx, "t1")
+	if err != nil {
+		t.Fatalf("RetryTransfer: %v", err)
+	}
+	if !res.NoJobs {
+		t.Error("a transfer that failed during planning must still say so")
+	}
+}

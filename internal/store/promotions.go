@@ -116,13 +116,8 @@ func (p *Promotions) Open(
 		// stays published, so a retry re-issues what is left rather than the
 		// whole release - which on a 260-name bundle is the difference between
 		// seconds and minutes.
-		reopen := p.dialect.Rewrite(`
-			UPDATE promotions
-			   SET state = 'requested', claimed_by = '', heartbeat_at = NULL,
-			       finished_at = NULL, updated_at = ` + p.dialect.Now() + `
-			 WHERE id = ? AND state = 'failed'`)
-		if _, err := tx.ExecContext(ctx, reopen, id); err != nil {
-			return fmt.Errorf("reopen the promotion of %s: %w", transferID, err)
+		if _, err := reopenPromotion(ctx, tx, p.dialect, transferID); err != nil {
+			return err
 		}
 	case errors.Is(err, sql.ErrNoRows):
 		if id, err = p.insert(ctx, tx, transferID, promoter, names); err != nil {
@@ -187,6 +182,36 @@ func (p *Promotions) insert(
 		}
 	}
 	return id, nil
+}
+
+// reopenPromotion returns a failed promotion to the queue.
+//
+// A free function taking a transaction, because two callers need it and they
+// live on different types: the expander re-opening a promotion it is claiming
+// again, and `transfers retry` - which without this could not retry a native
+// promotion AT ALL. Such a transfer has no jobs and never will, so the
+// ordinary requeue path finds nothing, reports nothing and leaves a failed
+// promotion with no verb that can act on it.
+//
+// Only from `failed`. A `requested` or `running` row may be held by another
+// Coordinator right now, and resetting it would hand one release to two of
+// them. The NAMES are deliberately untouched: everything already published
+// stays published, so a retry re-issues what is left rather than the whole
+// release.
+func reopenPromotion(
+	ctx context.Context, tx *sql.Tx, dialect Dialect, transferID string,
+) (bool, error) {
+	stmt := dialect.Rewrite(`
+		UPDATE promotions
+		   SET state = 'requested', claimed_by = '', heartbeat_at = NULL,
+		       finished_at = NULL, updated_at = ` + dialect.Now() + `
+		 WHERE transfer_id = ? AND state = 'failed'`)
+	res, err := tx.ExecContext(ctx, stmt, transferID)
+	if err != nil {
+		return false, fmt.Errorf("reopen the promotion of %s: %w", transferID, err)
+	}
+	n, err := res.RowsAffected()
+	return err == nil && n > 0, nil
 }
 
 // StaleAfter is how long a promotion may go without a heartbeat before another

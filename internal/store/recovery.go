@@ -334,6 +334,34 @@ func (p *Packages) RetryTransfer(ctx context.Context, transferID string) (RetryR
 		return res, fmt.Errorf("count jobs of transfer %s: %w", transferID, err)
 	}
 	if total == 0 {
+		// A NATIVE PROMOTION has no jobs and never will: the registry moved
+		// the content itself (docs/design/22 §4). Without this branch it would
+		// be the one kind of failure with no verb that could act on it - the
+		// requeue below finds nothing, reports nothing, and the transfer stays
+		// failed forever.
+		//
+		// Reopening it is the retry: the names already published stay
+		// published, so the runner re-issues only what is left.
+		reopened, err := reopenPromotion(ctx, tx, p.dialect, transferID)
+		if err != nil {
+			return res, err
+		}
+		if reopened {
+			resume := p.dialect.Rewrite(`
+				UPDATE transfers
+				   SET state = 'promoting', failure_reason = NULL, completed_at = NULL,
+				       updated_at = ` + p.dialect.Now() + `
+				 WHERE id = ? AND state = 'failed'`)
+			if _, err := tx.ExecContext(ctx, resume, transferID); err != nil {
+				return res, fmt.Errorf("resume the promotion of %s: %w", transferID, err)
+			}
+			if err := tx.Commit(); err != nil {
+				return res, fmt.Errorf("commit retry: %w", err)
+			}
+			res.State = "promoting"
+			return res, nil
+		}
+
 		// It never got as far as having work. Retrying would requeue nothing
 		// and report success, which is the worst of both.
 		res.NoJobs, res.State = true, state

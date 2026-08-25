@@ -10,7 +10,8 @@ import type {
   InspectPackageResponse, ListFailuresResponse, ListJobsResponse, ListPackagesResponse, ListProductsResponse,
   ListReplicationResponse, ListSyncsResponse, ListTransfersResponse, ListUnavailableResponse,
   ListPackageFilesResponse, ListPresentComponentsResponse, ListWorkersResponse, Package,
-  PackageFileContentResponse, ReportSummary, RunDownloadRequest,
+  CreateTransferRequest, CreateTransferResponse,
+  PackageFileContentResponse, PromotionOptionsResponse, ReportSummary, RunDownloadRequest,
   RunDownloadResponse,
   PackageSecurityResponse, SearchKind, SecurityCompareRequest, SecurityComparisonResponse,
   SecuritySearchResponse, SyncSecurityResponse,
@@ -506,6 +507,66 @@ export function useRunDownload(product: string) {
       if (variables.validateOnly) return
       void qc.invalidateQueries({ queryKey: ['transfers'] })
       void qc.invalidateQueries({ queryKey: ['packages'] })
+    },
+  })
+}
+
+// ---------------------------------------------------------------------------
+// Promotion
+// ---------------------------------------------------------------------------
+
+/**
+ * Where a release can go next, and what sending it there would do.
+ *
+ * ONE call for the whole dialog, and that is deliberate. The answer needs the
+ * product's promotion path, promotionOnly, which targets already hold the
+ * release, whether its tree has been walked, and which promoter plugin would
+ * claim each hop. Assembling it here from four endpoints would be
+ * re-implementing the server's resolution rules in TypeScript, and the copy
+ * that drifted would be the one people clicked.
+ *
+ * Not polled. It is configuration and history, and the dialog is open for
+ * seconds; `enabled` is what keeps it from being fetched at all until somebody
+ * opens one.
+ */
+export function usePromotionOptions(
+  product: string | undefined, ref: string | undefined, repository?: string, enabled = true,
+) {
+  return useQuery({
+    queryKey: ['promotion-options', product, ref, repository],
+    queryFn: () => {
+      const { segment, query: q } = packageRef(ref!)
+      return api.get<PromotionOptionsResponse>(
+        `/products/${encodeURIComponent(product!)}/packages/${encodeURIComponent(segment)}` +
+        `/promotionOptions` + scopeQuery(q, repository))
+    },
+    enabled: Boolean(enabled && product && ref),
+    staleTime: 0,
+  })
+}
+
+/**
+ * Promote a release from one of your targets to another.
+ *
+ * The SAME endpoint a replication uses, with `promote: true`. The operation is
+ * derived from what `from` resolves to rather than declared, so this flag only
+ * ever ASSERTS the intent - a request that named a source would be refused
+ * rather than quietly copied from a vendor.
+ */
+export function usePromote(product: string) {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: (body: Omit<CreateTransferRequest, 'product' | 'promote'>) =>
+      api.post<CreateTransferResponse>('/transfers',
+        { ...body, product, promote: true } satisfies CreateTransferRequest),
+    onSuccess: (_data, variables) => {
+      if (variables.validateOnly) return
+      void qc.invalidateQueries({ queryKey: ['transfers'] })
+      void qc.invalidateQueries({ queryKey: ['packages'] })
+      void qc.invalidateQueries({ queryKey: ['package'] })
+      // The dialog's own answer, so reopening it says the release is on its
+      // way rather than offering to send it again.
+      void qc.invalidateQueries({ queryKey: ['promotion-options'] })
     },
   })
 }

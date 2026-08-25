@@ -151,7 +151,7 @@ softwareGateway/
 │       ├── products.go                     list / describe
 │       ├── packages.go                     list / describe / discover              (13 §4)
 │       ├── download.go                     Replicate; --dry-run, --at, --watch     (13 §5)
-│       ├── promote.go                      Target → target                         (13 §5)
+│       ├── promote.go                      Target → target; lists destinations     (13 §5, 22)
 │       ├── verify.go                       On-demand verification                  (13 §5)
 │       ├── transfers.go                    list / describe / jobs / logs           (13 §6)
 │       ├── control.go                      pause / resume / cancel / retry / priority (13 §7)
@@ -366,11 +366,20 @@ transferctl transfers describe 9c1e8f2a --watch
 ### "Promote it to production"
 
 ```bash
-transferctl promote v2.14.0 --product vendor-a-platform --from lab --to production
-transferctl promote v2.14.0 --product vendor-a-platform --from lab --to production \
-    --at 2026-08-16T02:00:00Z          # maintenance window
-transferctl schedules list
+transferctl promote vendor-a-platform v2.14.0                 # lists the destinations
+transferctl promote vendor-a-platform v2.14.0 --to production
+transferctl promote vendor-a-platform v2.14.0 --to production --dry-run
 ```
+
+Or the **Promote** button on the release page, which asks the same question and
+shows the same answer: where the release is, where it can go, and whether each
+destination would be relocated by the registry in seconds or copied.
+
+The source is where the release already is - the product's promotion path, or
+the target that actually holds it. Where lab and production are two
+repositories of one Artifactory, JFrog relocates the release itself and no
+bytes cross the wire; where they are not, it is copied. Both are correct and
+the dialog says which, with the reason ([22](design/22-promotion.md)).
 
 ### "Something is stuck"
 

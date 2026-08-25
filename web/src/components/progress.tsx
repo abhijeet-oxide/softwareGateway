@@ -2,7 +2,7 @@ import { Progress, Tag, Tooltip, Typography } from 'antd'
 import {
   CheckCircleFilled, ClockCircleOutlined, CloseCircleFilled, LoadingOutlined, SyncOutlined,
 } from '@ant-design/icons'
-import type { ContentGroup, Strategy } from '../api/types'
+import type { ContentGroup, PromotionProgress as Promotion, Strategy } from '../api/types'
 import { formatBytes, formatCount, formatSpeed, formatAbsolute, formatDuration } from '../domain/format'
 import { NA } from './value'
 import { c } from '../uikit'
@@ -96,6 +96,61 @@ export function MeasuredProgress({
           {formatBytes(done)} of {formatBytes(total)}
           {alreadyThere > 0 && ` · ${formatBytes(alreadyThere)} already there`}
           {speedBytesPerSecond !== undefined && ` · ${formatSpeed(speedBytesPerSecond)}`}
+        </Typography.Text>
+      )}
+    </div>
+  )
+}
+
+/**
+ * A NATIVE PROMOTION's progress, counted in NAMES.
+ *
+ * A third honest denominator, alongside bytes and artifacts, and it exists for
+ * the same reason the other two are kept apart: it is the only number this
+ * work actually has. A registry relocating a release inside itself already
+ * holds every blob, so nothing crosses the wire and nothing is ours to count.
+ * What it publishes is names - the release's tag, and the name each bundled
+ * component answers to - so those are what a bar over it can mean.
+ *
+ * This is a real bar rather than a <StateStrip> precisely because that
+ * denominator is real: the names were recorded when the promotion was opened
+ * and are marked off as they land, so the percentage is a count of finished
+ * work over known work, not a timer.
+ */
+export function PromotionProgress({ promotion }: { promotion: Promotion | undefined }) {
+  if (!promotion || promotion.namesTotal <= 0) {
+    return (
+      <NA reason="The registry is promoting this release. Nothing has been recorded as published yet." />
+    )
+  }
+
+  const done = Math.min(promotion.namesDone, promotion.namesTotal)
+  const percent = (done / promotion.namesTotal) * 100
+  const failed = promotion.state === 'FAILED'
+
+  return (
+    <div>
+      <Progress
+        percent={Number(percent.toFixed(1))}
+        size="small"
+        status={failed ? 'exception' : undefined}
+        strokeColor={percent >= 100 && !failed ? c.ok : undefined}
+      />
+      <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+        {formatCount(done)} of {formatCount(promotion.namesTotal)} names published
+        {' · '}
+        {/*
+          Said on every one of these, because a reader who has only ever seen
+          byte bars will otherwise read "45 GB in four seconds" as a bug.
+        */}
+        relocated by the registry, so no bytes crossed the wire
+      </Typography.Text>
+      {promotion.lastError && (
+        <Typography.Text
+          type="danger"
+          style={{ display: 'block', fontSize: 12, marginTop: 4 }}
+        >
+          {promotion.lastError}
         </Typography.Text>
       )}
     </div>

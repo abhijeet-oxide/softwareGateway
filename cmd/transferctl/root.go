@@ -100,6 +100,7 @@ func newRootCommand() *cobra.Command {
 		newTransfersCommand(),
 		newTargetsCommand(),
 		newDownloadCommand(),
+		newPromoteCommand(),
 		newDownloadsCommand(),
 		newRulesCommand(),
 		newCompareCommand(),

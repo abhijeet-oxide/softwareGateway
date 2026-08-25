@@ -299,7 +299,7 @@ Types, defaults, and validation rules. Validation is enforced at load (§7) and 
 | `name` | string | yes | - | Unique within its list; same charset as product name |
 | `registry` | string | yes | - | Host, optional port. No scheme - HTTPS assumed |
 | `repository` | string | yes | - | Repository path, no tag or digest |
-| `type` | enum | no | `generic` | `generic`, `acr`, `artifactory`, `quay` ([06](06-registry-abstraction.md)) |
+| `type` | enum | no | `generic` | `generic`, `acr`, `artifactory` (or `jfrog`, the same backend), `quay` ([06](06-registry-abstraction.md)) |
 | `vendor` (sources) | string | no | - | Publishing convention: `near`, or empty for anything conformant. See below |
 | `anonymous` | bool | no | `false` | Mutually exclusive with `credentialsRef` |
 | `credentialsRef` | object | conditional | - | Required unless `anonymous` |
@@ -307,6 +307,8 @@ Types, defaults, and validation rules. Validation is enforced at load (§7) and 
 | `network` | object | no | inherits product | Same shape as `spec.network` |
 | `default` (targets) | bool | no | `false` | At most one per product |
 | `promotionOnly` (targets) | bool | no | `false` | Rejects replication requests naming this target |
+| `jfrogRepositoryKey` (targets) | string | no | first segment of `repository` | The Artifactory repository this target lives in, when it cannot be derived - a subdomain deployment puts it in the hostname. Read only by native promotion; rejected on a non-JFrog target ([22](22-promotion.md) §5.2) |
+| `jfrogEndpoint` (targets) | string | no | `xrayEndpoint`, then `registry` | The JFrog PLATFORM base URL for native promotion. Same derivation problem as `xrayEndpoint`, and it falls back to it ([22](22-promotion.md) §5.2) |
 | `replication` (targets) | object | no | `mode: copy` | Which mechanism puts content in this target: `copy` (our workers move it), `mirror` or `proxy` (Quay does). Requires `type: quay` for the latter two. Full schema, field reference and validation rules in [18](18-quay-replication.md) §5 |
 | `discovery` (sources) | object | no | `enabled: true` | |
 
@@ -386,6 +388,12 @@ base URL IS the registry host; a subdomain deployment
 subdomain returns a 404 that reads like a missing artifact. Set it only there.
 
 Full argument in [21 - Security Posture](21-security-posture.md) §3.
+
+`jfrogEndpoint` is the same escape hatch for everything on that platform that is
+not Xray - today, native promotion - and it FALLS BACK to `xrayEndpoint`. In
+every ordinary estate they are the same host reached for the same reason, and a
+second field that had to be filled in would be a second field to forget; the one
+that is forgotten is always the one that was not updated.
 
 ### 5.3 `concurrency`
 

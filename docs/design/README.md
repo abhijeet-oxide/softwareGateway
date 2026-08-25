@@ -32,6 +32,7 @@ A cloud-native platform that continuously discovers software packages published 
 | 19 | [User Interface](19-user-interface.md) | Why v1 is CLI-only, what the UI must do, the gates before it ships |
 | 20 | [Downloads and Auto-Download](20-download-rules.md) | What happens when software comes in, and when that happens by itself: derived chains, verification gates |
 | 21 | [Security Posture](21-security-posture.md) | Is this release safer than the one it replaces: the Xray integration, the normalized model, comparison rules, caching |
+| 22 | [Promotion](22-promotion.md) | Lab to production: the promoter plugins, native JFrog relocation, and why it is a plugin rather than a branch |
 
 ## Reading order
 

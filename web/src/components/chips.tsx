@@ -192,7 +192,7 @@ export function AnalysisTag({ pkg }: { pkg: { analysisState?: string; analysisEr
  * a worker holds run to their next checkpoint, and a still tag there would
  * report a transfer as settled while bytes were still moving.
  */
-const LIVE_STATES = ['PENDING', 'PLANNING', 'READY', 'RUNNING', 'VERIFYING', 'CANCELLING']
+const LIVE_STATES = ['PENDING', 'PLANNING', 'READY', 'RUNNING', 'PROMOTING', 'VERIFYING', 'CANCELLING']
 
 const TRANSFER_STATE_COLOUR: Record<string, string> = {
   SUCCEEDED: 'green',
@@ -202,6 +202,7 @@ const TRANSFER_STATE_COLOUR: Record<string, string> = {
   RUNNING: 'processing',
   VERIFYING: 'processing',
   PLANNING: 'processing',
+  PROMOTING: 'processing',
   CANCELLING: 'warning',
   READY: 'blue',
   PENDING: 'blue',
@@ -213,6 +214,7 @@ const TRANSFER_STATE_HELP: Record<string, string> = {
   READY: 'Planned and waiting for a worker to take the first job.',
   RUNNING: 'Workers are moving bytes right now.',
   PAUSED: 'Nothing new is being handed out. Work already in flight finishes.',
+  PROMOTING: 'The registry is relocating the release between two of its own repositories. No bytes cross the wire.',
   VERIFYING: 'The content is at the destination; its signature is being checked.',
   CANCELLING: 'Stopping. Jobs a worker already holds run to their next checkpoint.',
   CANCELLED: 'Stopped. What already reached the destination stayed there.',

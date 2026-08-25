@@ -23,6 +23,30 @@ spec:
       credentialsRef:
         secretName: internal-registry
       default: true
+      environment: lab
+
+    # Production on the SAME Artifactory, which is the ordinary deployment and
+    # the one native promotion exists for: two repositories of one instance, so
+    # JFrog relocates the release server-side.
+    - name: jfrog-prod
+      registry: artifactory.internal.example.com:9444
+      repository: nokia-prod/cmm
+      type: jfrog
+      environment: production
+      promotionOnly: true
+      credentialsRef:
+        secretName: internal-registry
+
+    # And a DR site on another host, so the dialog has something to explain:
+    # two Artifactories cannot relocate between themselves, and the release is
+    # copied instead.
+    - name: jfrog-dr
+      registry: registry.ericsson.example.com:9443
+      repository: nokia-dr/cmm
+      type: jfrog
+      environment: production
+      promotionOnly: true
+      anonymous: true
   network:
     tls:
       # Development only: dev/fakeregistry issues its own certificate.

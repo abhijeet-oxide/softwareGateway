@@ -145,6 +145,7 @@ which names neither the real problem nor anything the caller could change. The r
 |---|---|---|
 | `POST` | `/api/v1/transfers` | Create a request (replicate, promote, or scheduled). `validateOnly=true` ⇒ dry run |
 | `GET` | `/api/v1/transfers` | List, filterable |
+| `GET` | `/api/v1/products/{product}/packages/{package}/promotionOptions` | Where this release can be promoted to, and whether each hop would be RELOCATED by the registry or COPIED ([22](22-promotion.md) §7). A GET: every input is configuration or a row |
 | `GET` | `/api/v1/transfers/{transfer}` | Get one, with progress |
 | `GET` | `/api/v1/transfers/{transfer}/jobs` | Layer-level progress |
 | `GET` | `/api/v1/transfers/{transfer}/failures` | Why it is failing, grouped by cause |

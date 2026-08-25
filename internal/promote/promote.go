@@ -322,9 +322,19 @@ func Resolve(cfg Config, h Hop) (Resolution, error) {
 // Empty when nothing declined, which with no plugins registered is the normal
 // answer and reads correctly as "there is no fast path here" rather than as a
 // fault.
+//
+// ONE decline is rendered without the plugin's name. The reason already says
+// what happened - "lab is on eu.jfrog.io and production is on us.jfrog.io" -
+// and prefixing it with `jfrog: ` in a deployment where jfrog is the only
+// promoter adds a word the reader has to parse before the sentence they came
+// for. The name comes back the moment there is a second plugin to tell apart,
+// which is exactly when it starts carrying information.
 func (r Resolution) DeclinedReason() string {
-	if len(r.Declined) == 0 {
+	switch len(r.Declined) {
+	case 0:
 		return ""
+	case 1:
+		return r.Declined[0].Reason
 	}
 	parts := make([]string, 0, len(r.Declined))
 	for _, d := range r.Declined {

@@ -124,6 +124,7 @@ The real test of a layout. Each row should touch one directory, plus its tests.
 | Change | Where |
 |---|---|
 | Add Harbor support | `internal/registry/harbor/` + `factory.go` ([06](06-registry-abstraction.md) §6.5) |
+| Teach a registry to promote for itself | `internal/promote/<name>/` + one line in `cmd/coordinator` ([22](22-promotion.md) §3). Nothing in `internal/transfer` moves, and depguard enforces it |
 | Add a notification channel | `internal/notification/` |
 | Add a config field | `internal/product/` (+ [02](02-configuration.md)) |
 | Change retry policy | `internal/queue/retry.go` |

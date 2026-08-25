@@ -29,6 +29,9 @@ export type PackageState =
 
 export type TransferState =
   | 'PENDING' | 'PLANNING' | 'READY' | 'RUNNING' | 'PAUSED'
+  /** A native promotion waiting on the registry. It has no BYTE progress and
+   *  never will - what it moves is names. See PromotionProgress. */
+  | 'PROMOTING'
   | 'VERIFYING' | 'SUCCEEDED' | 'FAILED' | 'CANCELLING' | 'CANCELLED'
 
 export type JobState =
@@ -42,8 +45,14 @@ export type JobState =
  */
 export type SignatureStatus = 'UNKNOWN' | 'SIGNED' | 'UNSIGNED'
 
-/** How a transfer was performed. Anything but `copy` moved bytes we did not count. */
-export type Strategy = 'copy' | 'mirror' | 'proxy'
+/**
+ * How a transfer was performed. Anything but `copy` moved bytes we did not
+ * count, so every byte column on it is structurally zero - which is "we did
+ * not move those and cannot count them", never "nothing happened".
+ *
+ * `relocate` is a promotion the registry carried out inside itself.
+ */
+export type Strategy = 'copy' | 'mirror' | 'proxy' | 'relocate'
 
 // ---------------------------------------------------------------------------
 // Products
@@ -406,6 +415,8 @@ export interface Transfer {
    * those bytes and cannot count them" - not "nothing happened".
    */
   strategy?: Strategy
+  /** Present only on a `relocate` transfer, and its only honest progress. */
+  promotion?: PromotionProgress
   currentWave: number
   maxWave: number
   progress: TransferProgress
@@ -483,14 +494,103 @@ export interface CreateTransferRequest {
   validateOnly?: boolean
 }
 
-export interface TransferEndpoint { name: string; registry: string; repository: string; environment?: string }
+export interface TransferEndpoint {
+  name: string
+  role?: string
+  registry: string
+  repository?: string
+  environment?: string
+}
 
 export interface CreateTransferResponse {
-  requestId: string
+  requestId?: string
+  /** False when an identical request already existed - a replay, not an error. */
   created: boolean
-  transfers?: Transfer[]
-  endpoints?: TransferEndpoint[]
-  validateOnly?: boolean
+  /** REPLICATE or PROMOTE, derived from what `from` resolved to. */
+  operation: string
+  from: TransferEndpoint
+  to?: TransferEndpoint[]
+  /** One per destination, in the same order as `to`. Empty on a dry run. */
+  transferIds?: string[]
+}
+
+// ---------------------------------------------------------------------------
+// Promotion
+// ---------------------------------------------------------------------------
+
+/**
+ * HOW a promotion would be carried out.
+ *
+ * RELOCATE is the registry moving it internally: no bytes over the wire, and
+ * seconds regardless of how large the release is. COPY is our workers reading
+ * from one target and writing to the other - always correct, and within one
+ * registry still cheap, but a manifest walk and a request per blob.
+ */
+export type PromotionMethod = 'RELOCATE' | 'COPY'
+
+/** Whether a release is already at a destination, or on its way. */
+export type PromotionDestinationState = 'ABSENT' | 'PRESENT' | 'IN_FLIGHT'
+
+export interface PromotionOrigin {
+  name: string
+  environment?: string
+  registry: string
+  repository?: string
+  /** A transfer to this target SUCCEEDED, which is what makes it a candidate. */
+  holds: boolean
+  lastTransferId?: string
+}
+
+export interface PromotionDestination {
+  name: string
+  environment?: string
+  registry: string
+  repository?: string
+  /** Reachable ONLY by promotion - a registry a vendor may never push into. */
+  promotionOnly?: boolean
+  default?: boolean
+
+  method: PromotionMethod
+  /** Why, whichever answer came back. On COPY it is the diagnosis. */
+  methodReason?: string
+
+  state: PromotionDestinationState
+  transferId?: string
+  /** Why this destination cannot be chosen at all. Empty means it can. */
+  unavailable?: string
+}
+
+export interface PromotionOptionsResponse {
+  product: string
+  package: string
+  tag: string
+
+  origins: PromotionOrigin[]
+  /** Where the release was downloaded to. Empty when several targets hold it. */
+  defaultOrigin?: string
+
+  destinations: PromotionDestination[]
+  /** Pre-selected in the dialog. Empty rather than guessed when ambiguous. */
+  defaultDestinations?: string[]
+
+  /** Whether the manifest tree has been walked. Gates the fast path. */
+  analysed: boolean
+
+  promotable: boolean
+  reason?: string
+}
+
+/** A native promotion, as it stands. NAMES rather than bytes - see below. */
+export interface PromotionProgress {
+  promoter: string
+  state: 'REQUESTED' | 'RUNNING' | 'SUCCEEDED' | 'FAILED'
+  namesTotal: number
+  namesDone: number
+  attempts?: number
+  lastError?: string
+  requestedAt?: string
+  startedAt?: string
+  finishedAt?: string
 }
 
 export interface TransferControlResponse {

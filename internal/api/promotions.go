@@ -2,6 +2,7 @@ package api
 
 import (
 	"context"
+	"fmt"
 	"net/http"
 	"strings"
 
@@ -380,11 +381,23 @@ func anyEnvironment(p *product.Product) bool {
 
 // promotable says whether there is anything to offer, and why not.
 //
-// The reasons are separate because the fixes are: a release nowhere yet needs
-// downloading, a product with one target needs configuring, and a release
-// already everywhere needs nothing at all. Collapsing them into "cannot
-// promote" would send all three readers to the wrong place.
+// The reasons are separate because the FIXES are: a release nowhere yet needs
+// downloading, one whose origin is not the target holding it needs a choice,
+// one with nowhere left to go needs nothing at all. Collapsing them into
+// "cannot promote" would send all three readers to the wrong place.
 func promotable(out v1.PromotionOptionsResponse) (bool, string) {
+	// The release is not AT the origin. Offering the promotion anyway is worse
+	// than refusing it: the request resolves perfectly well, opens a transfer,
+	// and fails at the first read against a repository that has never held it.
+	//
+	// Checked before anything about destinations, because it is the reason
+	// that makes every other consideration moot.
+	if origin, ok := originNamed(out.Origins, out.DefaultOrigin); ok && !origin.Holds {
+		return false, fmt.Sprintf(
+			"this release has not been downloaded to %s yet, so there is nothing to promote out of it",
+			origin.Name)
+	}
+
 	var open, blocked int
 	for _, d := range out.Destinations {
 		if d.Unavailable != "" {
@@ -410,6 +423,18 @@ func promotable(out v1.PromotionOptionsResponse) (bool, string) {
 	default:
 		return false, "this product has no other target to promote into"
 	}
+}
+
+func originNamed(origins []v1.PromotionOrigin, name string) (v1.PromotionOrigin, bool) {
+	if name == "" {
+		return v1.PromotionOrigin{}, false
+	}
+	for _, o := range origins {
+		if o.Name == name {
+			return o, true
+		}
+	}
+	return v1.PromotionOrigin{}, false
 }
 
 func anyHolds(origins []v1.PromotionOrigin) bool {

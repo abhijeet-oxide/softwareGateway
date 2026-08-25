@@ -346,6 +346,8 @@ Promotions are usually very fast, because both fast paths apply maximally: lab a
 
 The one asymmetry worth stating: promotion is guarded by `promotionOnly` on the target ([02](02-configuration.md) §5.2), so a production registry can be configured to be reachable *only* by promotion and never by direct replication from a vendor.
 
+**Where the registry can do it better, it does.** Two repositories of one Artifactory are the ordinary lab/production deployment, and JFrog will relocate a release between them server-side in one call per NAME rather than one request per blob. That is a plugin rather than a branch here - see [22](22-promotion.md), which also explains why the engine never learns what Artifactory is. An estate with no such pair promotes exactly as this section describes, and so does a release nobody has analysed.
+
 ## 7. Dry run
 
 > **Dry run is the planner's output, rendered. It is not a second implementation.**

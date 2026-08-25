@@ -29,7 +29,7 @@ The first row is the one that cannot be retrofitted. The other two are already r
 
 ## 3. What it must do
 
-Everything `transferctl` does ([13](13-cli.md) §2), because a UI that can do most of it forces users to keep a terminal open and then they never come back to the UI. Concretely: browse products and their health; see and trigger discovery; browse packages and inspect them; request replications and promotions with a dry-run preview; watch transfers live; read failures grouped by cause; control the queue (pause, resume, cancel, retry, priority); manage schedules; verify signatures; read worker logs; compare two registries; and query the audit trail.
+Everything `transferctl` does ([13](13-cli.md) §2), because a UI that can do most of it forces users to keep a terminal open and then they never come back to the UI. Concretely: browse products and their health; see and trigger discovery; browse packages and inspect them; request replications and promotions with a dry-run preview (the promotion dialog states where the release is, every destination it can reach, and whether each hop would be relocated by the registry or copied - see [22](22-promotion.md) §8); watch transfers live; read failures grouped by cause; control the queue (pause, resume, cancel, retry, priority); manage schedules; verify signatures; read worker logs; compare two registries; and query the audit trail.
 
 Plus the one thing the CLI does awkwardly and a UI does naturally: **comprehension at a glance** - which releases are where, which have diverged, and what is failing right now, without composing a query first.
 

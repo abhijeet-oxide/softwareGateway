@@ -27,6 +27,7 @@ import {
   EmptyStateCard, ErrorState, PageHeader, ReleaseTimeline, SearchBar,
 } from '../components/layout'
 import { FileViewer, looksBinary } from '../components/filecontent'
+import { PromoteButton } from '../components/promote'
 import { SecurityTab } from '../components/securitypanel'
 import { EmptyState, c, mono } from '../uikit'
 import type {
@@ -925,6 +926,30 @@ export default function PackageDetail() {
             <Link to={`/packages/compare?product=${encodeURIComponent(productName!)}&from=${encodeURIComponent(p?.tag ?? '')}`}>
               <Button>Compare</Button>
             </Link>
+            {/*
+              PROMOTE sits beside Download rather than under a menu, and it is
+              the SECOND thing here on purpose. Download brings a release in;
+              promote is what happens to it afterwards, and the two are the
+              release's whole life on this page. Hiding the second under a "⋮"
+              would make the lifecycle discoverable only to somebody who
+              already knew it existed.
+
+              It is offered whether or not the release has landed anywhere
+              yet: the dialog says "this has not been downloaded to any target"
+              far better than a greyed-out button with a tooltip, and a
+              disabled control that never explains itself is how people
+              conclude a feature is broken.
+            */}
+            {p && (
+              <PromoteButton
+                product={productName!}
+                reference={reference!}
+                repository={repository}
+                packageLabel={`${packageName(p)}:${version(p)}`}
+                disabled={!mayOperate}
+                disabledReason="You do not have permission to promote a release."
+              />
+            )}
             {existingDownload ? (
               <Link to={`/downloads/${existingDownload.id}`}>
                 <Button type="primary" icon={<Icon as={DownloadIcon} title="Download" />}>View download</Button>

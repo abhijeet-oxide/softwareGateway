@@ -78,10 +78,19 @@ func TestNothingClaimingIsNotAnError(t *testing.T) {
 		t.Fatal("nothing should have claimed")
 	}
 	// Every decline is carried, so a dry run can say WHY the fast path is
-	// unavailable rather than merely that it is.
+	// unavailable rather than merely that it is. With SEVERAL, each is named -
+	// with one, the name is dropped, because the reason already says what
+	// happened and the prefix is a word to parse first.
 	if reason := res.DeclinedReason(); !strings.Contains(reason, "alpha") ||
 		!strings.Contains(reason, "zulu") {
 		t.Errorf("both declines must be reported; got %q", reason)
+	}
+	if len(res.Declined) != 2 {
+		t.Fatalf("%d declines carried, want 2", len(res.Declined))
+	}
+	one := promote.Resolution{Declined: res.Declined[:1]}
+	if got := one.DeclinedReason(); got != res.Declined[0].Reason {
+		t.Errorf("a single decline must be its reason alone; got %q", got)
 	}
 }
 

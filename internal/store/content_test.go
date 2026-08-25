@@ -113,6 +113,65 @@ func TestAComponentWithNoJobIsOutstanding(t *testing.T) {
 	}
 }
 
+// The LAYERS underneath, which are what actually moves.
+//
+// A component is `copied` only once its last layer and the manifest naming it
+// have both landed - the right answer to "what is at the destination" and a
+// useless one to "how far along is this". A download of a release read `0
+// copied, 0 already there` for its whole first hour while tens of thousands of
+// layers streamed underneath, because until a component settles it contributes
+// nothing to either column.
+//
+// So the row carries its jobs as well as its components, and they are counted
+// across every outcome rather than only the settled ones.
+func TestTheBreakdownCarriesTheLayersUnderneathItsComponents(t *testing.T) {
+	h := newFailureHarness(t)
+	id := h.transferWithJobs(0)
+
+	image := h.seedArtifact("application/vnd.oci.image.manifest.v1+json", "")
+	// One image, most of it at the destination and the rest still going: the
+	// component is outstanding, and saying nothing more than that is the
+	// problem.
+	h.jobForArtifact(id, image, "succeeded")
+	h.jobForArtifact(id, image, "succeeded")
+	h.jobForArtifact(id, image, "skipped")
+	h.jobForArtifact(id, image, "leased")
+
+	rows, err := h.packages.ContentBreakdown(t.Context(), id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rows) != 1 {
+		t.Fatalf("got %d rows, want the one component: %+v", len(rows), rows)
+	}
+	row := rows[0]
+	if row.Outcome != ContentOutstanding || row.Count != 1 {
+		t.Errorf("the component came out %q x%d, want one outstanding component",
+			row.Outcome, row.Count)
+	}
+	if row.Units != 4 {
+		t.Errorf("units = %d, want the four jobs beneath the component", row.Units)
+	}
+	if row.UnitsCopied != 2 {
+		t.Errorf("unitsCopied = %d, want the two layers that landed", row.UnitsCopied)
+	}
+	if row.UnitsPresent != 1 {
+		t.Errorf("unitsPresent = %d, want the one the destination already held",
+			row.UnitsPresent)
+	}
+	if row.UnitsOutstanding != 1 {
+		t.Errorf("unitsOutstanding = %d, want the one still going", row.UnitsOutstanding)
+	}
+	if row.UnitsFailed != 0 {
+		t.Errorf("unitsFailed = %d, want none", row.UnitsFailed)
+	}
+	// Three of four is what the bar has to be able to say while the component
+	// says nothing at all.
+	if row.UnitsCopied+row.UnitsPresent+row.UnitsFailed+row.UnitsOutstanding != row.Units {
+		t.Errorf("the unit counts do not partition the units: %+v", row)
+	}
+}
+
 // seedArtifact adds one component to the harness's package.
 func (h *failureHarness) seedArtifact(mediaType, artifactType string) int64 {
 	h.t.Helper()

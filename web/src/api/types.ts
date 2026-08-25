@@ -345,6 +345,27 @@ export interface ContentGroup {
    */
   savedBytes?: Int64String
   copiedBytes?: Int64String
+  /**
+   * The pushes beneath these components - every layer, config and manifest
+   * that is a job of its own - and how each of them went.
+   *
+   * # Why the counts above are not enough
+   *
+   * A component is `copied` only once its last layer AND its manifest have
+   * landed, because half an image is not an image. That makes the component
+   * counts the right answer to "what is at the destination" and a useless one
+   * to "how far along is this": they sit at zero for the whole download and
+   * then all move at once, while tens of thousands of layers are visibly
+   * streaming underneath.
+   *
+   * `unitsCopied + unitsPresent` over `units` is how much of this kind the
+   * destination now holds, and it moves with every layer.
+   */
+  units?: number
+  unitsCopied?: number
+  unitsPresent?: number
+  unitsFailed?: number
+  unitsOutstanding?: number
 }
 
 export interface TransferWave {

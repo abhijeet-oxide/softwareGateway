@@ -1164,6 +1164,29 @@ type ContentGroup struct {
 	// add up to the transfer's own totals.
 	SavedBytes  Int64String `json:"savedBytes,omitempty"`
 	CopiedBytes Int64String `json:"copiedBytes,omitempty"`
+
+	// Units is the number of separate pushes beneath these components - every
+	// layer, config and manifest that is a job of its own - and the four
+	// counts under it are how those pushes went.
+	//
+	// # Why the counts above are not enough
+	//
+	// A component is `copied` only when its last layer and its manifest have
+	// both landed: half an image is not an image, and reporting one as copied
+	// because most of it arrived would be a lie about what the destination
+	// holds. That makes the component counts the right answer to "what is
+	// there" and a hopeless answer to "how far along is this" - they sit at
+	// zero for the whole download and then all move at once, while tens of
+	// thousands of layers are visibly streaming underneath.
+	//
+	// These are that second answer. UnitsCopied + UnitsPresent over Units is
+	// how much of this kind the destination now holds, and it moves with every
+	// layer rather than with every finished component.
+	Units            int `json:"units,omitempty"`
+	UnitsCopied      int `json:"unitsCopied,omitempty"`
+	UnitsPresent     int `json:"unitsPresent,omitempty"`
+	UnitsFailed      int `json:"unitsFailed,omitempty"`
+	UnitsOutstanding int `json:"unitsOutstanding,omitempty"`
 }
 
 // PackageTransfer is one attempt to move a package to one destination.

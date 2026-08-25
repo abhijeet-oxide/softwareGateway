@@ -83,6 +83,29 @@ type ContentRow struct {
 	// answer.
 	SavedBytes  int64
 	CopiedBytes int64
+
+	// Units and the four counts beneath it are the JOBS of these components -
+	// every layer, config and manifest that is pushed on its own.
+	//
+	// # Why a second population is here at all
+	//
+	// A component's outcome is all-or-nothing: an image is `copied` only once
+	// its last layer AND its manifest have landed, because until then it is
+	// not at the destination in any usable sense. That is the right answer to
+	// "what is there", and a useless one to "how far along is this" - a
+	// release of two hundred images sat at nought copied for the whole
+	// download and then finished, while sixty thousand layers were visibly
+	// moving underneath it.
+	//
+	// So the components answer the first question and the units answer the
+	// second. A job belongs to exactly one artifact, so summing them
+	// partitions the transfer exactly - the same property that makes the byte
+	// columns above add up.
+	Units            int
+	UnitsCopied      int
+	UnitsPresent     int
+	UnitsFailed      int
+	UnitsOutstanding int
 }
 
 // Outcomes a component can be in. Ordered by precedence: the first that applies
@@ -120,7 +143,11 @@ func (p *Packages) ContentBreakdown(ctx context.Context, transferID string) ([]C
 		            WHEN copied      > 0 THEN 'copied'
 		            WHEN present     > 0 THEN 'present'
 		            ELSE 'outstanding' END AS outcome,
-		       count(*), SUM(saved_bytes), SUM(copied_bytes)
+		       count(*), SUM(saved_bytes), SUM(copied_bytes),
+		       -- The jobs beneath these components, by how each went. Summed
+		       -- from the per-component counts the inner select already has,
+		       -- so no second pass over the queue.
+		       SUM(copied), SUM(present), SUM(failed), SUM(outstanding)
 		  FROM (
 		        SELECT pa.id,
 		               pa.media_type                     AS media_type,
@@ -172,9 +199,12 @@ func (p *Packages) ContentBreakdown(ctx context.Context, transferID string) ([]C
 		)
 		if err := rows.Scan(&row.MediaType, &row.ArtifactType, &row.ConfigMediaType,
 			&annotations, &row.Outcome, &row.Count,
-			&row.SavedBytes, &row.CopiedBytes); err != nil {
+			&row.SavedBytes, &row.CopiedBytes,
+			&row.UnitsCopied, &row.UnitsPresent, &row.UnitsFailed,
+			&row.UnitsOutstanding); err != nil {
 			return nil, fmt.Errorf("scan content breakdown: %w", err)
 		}
+		row.Units = row.UnitsCopied + row.UnitsPresent + row.UnitsFailed + row.UnitsOutstanding
 		if len(annotations) > 0 {
 			// Malformed annotations leave the map nil, so the component is
 			// classified by its OCI fields alone. That is a worse answer than

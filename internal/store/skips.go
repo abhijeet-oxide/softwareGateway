@@ -227,7 +227,8 @@ func (p *Packages) PresentComponents(ctx context.Context, transferID string) ([]
 type ContentBytes struct {
 	// Total is what the release's distinct content weighs.
 	Total int64
-	// Moved is what was actually streamed, and Present what the destination
+	// Moved is what has actually been streamed - including the part of a blob
+	// a worker is streaming right now - and Present what the destination
 	// already had by any route. Both over distinct digests, so Moved + Present
 	// converges on Total and never exceeds it.
 	Moved   int64
@@ -239,7 +240,20 @@ type ContentBytes struct {
 // The population is the RELEASE - every manifest and every blob it contains,
 // each counted once - rather than the transfer's jobs, because a job exists per
 // destination repository and the same content has several. What varies per
-// digest is only whether it moved.
+// digest is only how much of it has arrived.
+//
+// # Bytes in flight count, and count for what they are
+//
+// A digest with a worker on it used to count for its WHOLE size the moment the
+// first byte landed, which made a bar jump a blob at a time and report content
+// as moved that was still moving. It now counts for what the worker has
+// actually reported - capped at the digest's own size, because a resumed job
+// resumes its accounting and a retried one can report more than once.
+//
+// A finished job counts for the whole size whatever its last progress report
+// said: the content IS there, and a report that never arrived (the last one is
+// lossy by design - see ReportProgress) must not leave a completed digest
+// weighing less than it does.
 func (p *Packages) TransferContentBytes(ctx context.Context, transferID string) (ContentBytes, error) {
 	var out ContentBytes
 	err := p.db.QueryRowContext(ctx, p.dialect.Rewrite(`
@@ -267,6 +281,11 @@ func (p *Packages) TransferContentBytes(ctx context.Context, transferID string) 
 			       CASE WHEN EXISTS (
 			              SELECT 1 FROM jobs j
 			               WHERE j.transfer_id = ? AND j.digest = o.digest
+			                 AND j.state = 'succeeded')
+			       THEN 1 ELSE 0 END AS finished,
+			       CASE WHEN EXISTS (
+			              SELECT 1 FROM jobs j
+			               WHERE j.transfer_id = ? AND j.digest = o.digest
 			                 AND j.state = 'skipped')
 			            OR EXISTS (
 			              SELECT 1 FROM blob_placements bp
@@ -278,11 +297,15 @@ func (p *Packages) TransferContentBytes(ctx context.Context, transferID string) 
 		SELECT COALESCE(SUM(size_bytes), 0),
 		       -- Streamed wins over present: content this transfer actually
 		       -- moved is moved, whatever a placement record says about it now.
-		       COALESCE(SUM(CASE WHEN moved > 0 THEN size_bytes ELSE 0 END), 0),
-		       COALESCE(SUM(CASE WHEN moved = 0 AND present = 1
+		       -- Written as a CASE rather than MIN/LEAST because the two
+		       -- dialects spell the two-argument minimum differently.
+		       COALESCE(SUM(CASE WHEN finished = 1        THEN size_bytes
+		                         WHEN moved > size_bytes  THEN size_bytes
+		                         ELSE moved END), 0),
+		       COALESCE(SUM(CASE WHEN finished = 0 AND moved = 0 AND present = 1
 		                         THEN size_bytes ELSE 0 END), 0)
 		  FROM state`),
-		transferID, transferID, transferID).Scan(&out.Total, &out.Moved, &out.Present)
+		transferID, transferID, transferID, transferID).Scan(&out.Total, &out.Moved, &out.Present)
 	if err != nil {
 		return ContentBytes{}, fmt.Errorf("weigh the content of transfer %s: %w", transferID, err)
 	}

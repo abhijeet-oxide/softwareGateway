@@ -1450,7 +1450,16 @@ type TransferSummary struct {
 	// target has been reconfigured - and so that a settled transfer with no
 	// jobs and no bytes is distinguishable from one that failed to plan.
 	Strategy string
-	Tag      string
+	// Operation is WHAT was asked for: `replicate` (a download from a vendor)
+	// or `promote` (one of our targets to another).
+	//
+	// It comes from the REQUEST, not the transfer, because that is where the
+	// intent lives - a transfer only knows two repository rows, and the engine
+	// has never cared which roles they play. Carried here because the
+	// difference is the first thing a reader needs: a promotion listed among
+	// downloads reads as a download that mysteriously moved no bytes.
+	Operation string
+	Tag       string
 	// DisplayTag is Tag with the vendor's structural noise removed - `25.7.2131`
 	// for NEAR's `orb_25.7.2131`. Empty where no shortening applies, which is
 	// every source that declares no `vendor`. Cosmetic: Tag is the identity.
@@ -1596,8 +1605,9 @@ func (p *Packages) transferSelect() string {
 	       COALESCE((SELECT MIN(j.updated_at) FROM jobs j
 	                  WHERE j.transfer_id = t.id AND j.state = 'leased'), ''),
 	       COALESCE(t.failure_reason, ''), t.created_at, COALESCE(t.started_at, ''),
-	       COALESCE(t.completed_at, ''), t.strategy
+	       COALESCE(t.completed_at, ''), t.strategy, rq.operation
 	  FROM transfers t
+	  JOIN transfer_requests rq ON rq.id = t.request_id
 	  JOIN packages pk ON pk.id = t.package_id
 	  JOIN products pr ON pr.id = pk.product_id
 	  JOIN repositories src ON src.id = t.source_repo_id
@@ -1613,7 +1623,8 @@ func scanTransfer(row interface{ Scan(...any) error }) (TransferSummary, error) 
 		&t.PlannedJobs, &t.PlannedBytes, &t.DedupeSkippedBytes, &t.SkippedBytes,
 		&t.JobsDone, &t.JobsFailed, &t.JobsOutstanding, &t.BytesTransferred,
 		&t.JobsInFlight, &t.Workers, &t.JobsWaiting, &t.JobsBlocked, &t.JobsRepaired, &t.OutstandingBytes, &t.QuietestInFlight,
-		&t.FailureReason, &t.CreatedAt, &t.StartedAt, &t.CompletedAt, &t.Strategy)
+		&t.FailureReason, &t.CreatedAt, &t.StartedAt, &t.CompletedAt, &t.Strategy,
+		&t.Operation)
 	return t, err
 }
 
@@ -1622,8 +1633,12 @@ type ListTransfersFilter struct {
 	ProductName string
 	State       string
 	PackageID   int64
-	Limit       int
-	Offset      int
+	// Operation narrows to `replicate` or `promote`. Empty means both, which
+	// is what every caller wanting "everything that has happened to this
+	// release" asks for.
+	Operation string
+	Limit     int
+	Offset    int
 }
 
 // ListTransfers returns transfers, newest first.
@@ -1643,6 +1658,10 @@ func (p *Packages) ListTransfers(ctx context.Context, f ListTransfersFilter) ([]
 	if f.PackageID > 0 {
 		where += " AND t.package_id = ?"
 		args = append(args, f.PackageID)
+	}
+	if f.Operation != "" {
+		where += " AND rq.operation = ?"
+		args = append(args, f.Operation)
 	}
 
 	limit := f.Limit

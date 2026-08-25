@@ -13,8 +13,8 @@ import {
 } from '../api/queries'
 import { useCan, useIdentity } from '../auth/permissions'
 import {
-  deriveStatus, downloadedAt, failureReason, isLive, matches, packageReference, repositoryUrl,
-  titleCase, verification, version,
+  deriveStatus, downloadedAt, failureReason, isLive, matches, packageReference, promotedAt,
+  repositoryUrl, titleCase, verification, version,
 } from '../domain/derive'
 import { bytes, formatBytes, formatCount, formatDuration } from '../domain/format'
 import { NA, Value } from '../components/value'
@@ -991,6 +991,8 @@ export default function PackageDetail() {
               publishedAt={p?.publishedAt || p?.discoveredAt}
               downloadedAt={p ? downloadedAt(p) : undefined}
               downloading={status === 'DOWNLOADING'}
+              promotedAt={p ? promotedAt(p) : undefined}
+              promoting={status === 'PROMOTING'}
             />
           </div>
         </Col>

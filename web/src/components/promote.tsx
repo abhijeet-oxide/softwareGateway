@@ -40,7 +40,7 @@ import type { PromotionDestination, PromotionOptionsResponse } from '../api/type
  */
 
 export function PromoteButton({
-  product, reference, repository, packageLabel, disabled, disabledReason,
+  product, reference, repository, packageLabel, disabled, disabledReason, size,
 }: {
   product: string
   reference: string
@@ -49,12 +49,15 @@ export function PromoteButton({
   packageLabel: string
   disabled?: boolean
   disabledReason?: string
+  /** `small` for a table row, where every other control is small too. */
+  size?: 'small' | 'middle'
 }) {
   const [open, setOpen] = useState(false)
 
   return (
     <>
       <Button
+        size={size}
         icon={<Icon as={RocketIcon} title="Promote" />}
         disabled={disabled}
         title={disabled ? disabledReason : undefined}

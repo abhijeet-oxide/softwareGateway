@@ -4,7 +4,7 @@ import { Link } from 'react-router-dom'
 import {
   useDownloadsForAll, useProducts, useReplicationForAll, useRulesForAll, useTransfers,
 } from '../api/queries'
-import { isLive, repositoryOf, transferVersion } from '../domain/derive'
+import { isLive, isPromotion, repositoryOf, transferVersion } from '../domain/derive'
 import { bytes, elapsedSeconds, formatBytes, formatDuration } from '../domain/format'
 import { NA, Value } from '../components/value'
 import { ManagedInGit, TimeAgo, TransferStateTag } from '../components/chips'
@@ -74,6 +74,52 @@ function PackageCell({ source, width = 200 }: { source?: string; width?: number 
   )
 }
 
+/**
+ * Where a promotion went, as one cell.
+ *
+ * The configured NAMES rather than the resolved host and path: `lab →
+ * production` is what somebody asked for and what they will say out loud, and
+ * a column of `acme.jfrog.io/nokia-lab/cmm → acme.jfrog.io/nokia-prod/cmm` is
+ * two hundred characters of which four differ. The full coordinates are on the
+ * transfer's own page.
+ */
+function Route({ transfer }: { transfer: Transfer }) {
+  const from = transfer.sourceName || repositoryOf(transfer.source)
+  const to = transfer.targetName || repositoryOf(transfer.target)
+  if (!from && !to) return <NA />
+  return (
+    <Tooltip title={`${transfer.source} → ${transfer.target}`}>
+      <Space size={4}>
+        <Typography.Text>{from}</Typography.Text>
+        <ArrowRightOutlined style={{ fontSize: 10, color: c.text3 }} />
+        <Typography.Text strong>{to}</Typography.Text>
+      </Space>
+    </Tooltip>
+  )
+}
+
+/**
+ * Whether the registry relocated it or our workers copied it.
+ *
+ * Colour on the fast one only. Both are correct, so a copy is not a warning -
+ * painting it amber would teach readers to distrust a perfectly good
+ * promotion.
+ */
+function MethodTag({ transfer }: { transfer: Transfer }) {
+  if (transfer.strategy === 'relocate') {
+    return (
+      <Tooltip title="The registry moved it between two of its own repositories. No bytes crossed the wire.">
+        <Tag color="green" style={{ marginInlineEnd: 0 }}>Relocate</Tag>
+      </Tooltip>
+    )
+  }
+  return (
+    <Tooltip title="Our workers read from one target and wrote to the other.">
+      <Tag style={{ marginInlineEnd: 0 }}>Copy</Tag>
+    </Tooltip>
+  )
+}
+
 /** One product's row in a configuration table. */
 type WithProduct<T> = T & { product: string }
 
@@ -82,7 +128,13 @@ export default function Downloads() {
   const productList = (products.data?.products ?? []).filter((p) => p.enabled)
   const names = productList.map((p) => p.productId)
 
-  const transfers = useTransfers({ pageSize: 100 })
+  // TWO QUERIES, not one listing split in the browser.
+  //
+  // A busy estate's hundred most recent transfers are all downloads, so a
+  // client-side split would leave the promotions table empty on exactly the
+  // deployments that promote the most.
+  const transfers = useTransfers({ pageSize: 100, operation: 'replicate' })
+  const promotionsQuery = useTransfers({ pageSize: 50, operation: 'promote' })
   const downloadsPerProduct = useDownloadsForAll(names)
   const rulesPerProduct = useRulesForAll(names)
   const replicationPerProduct = useReplicationForAll(names)
@@ -90,6 +142,11 @@ export default function Downloads() {
   const all = transfers.data?.transfers ?? []
   const ongoing = all.filter((t) => isLive(t.state) || t.state === 'PAUSED')
   const finished = all.filter((t) => !isLive(t.state) && t.state !== 'PAUSED')
+
+  // Belt and braces on the filter: a Coordinator too old to know the
+  // `operation` parameter answers with everything, and a promotion listed
+  // among downloads reads as a download that mysteriously moved no bytes.
+  const promotions = (promotionsQuery.data?.transfers ?? []).filter(isPromotion)
 
   // Flattened with the product each row belongs to, since the tables now cover
   // the estate rather than one product at a time.
@@ -255,6 +312,88 @@ export default function Downloads() {
                       <Space size={4}>
                         <Link to={`/downloads/${t.id}`}>
                           <Button size="small" type="primary">View download</Button>
+                        </Link>
+                        <QueueControls transfer={t} />
+                      </Space>
+                    ),
+                  },
+                ]}
+              />
+            )}
+          </Card>
+        </Col>
+
+        <Col span={24}>
+          {/*
+            PROMOTIONS ARE THEIR OWN TABLE, not a filter on the one above.
+
+            They are a different question with different columns. A download
+            has one route - the vendor to wherever it lands - so the listing
+            above never shows it; a promotion is defined BY its route, and lab
+            to production and lab to DR are the two rows somebody is comparing.
+            It also has a method, which no download has: the registry can
+            relocate a release between two of its own repositories in seconds,
+            and knowing which of the two happened is most of why anybody opens
+            this.
+
+            One table rather than ongoing and finished, because a native
+            promotion is normally over before the page refreshes - splitting it
+            in two would give one empty card and one with everything in it.
+          */}
+          <Card
+            title={`Promotions${promotions.length ? ` (${promotions.length})` : ''}`}
+            loading={promotionsQuery.isLoading}
+          >
+            <Typography.Paragraph type="secondary" style={{ fontSize: 13 }}>
+              Releases moved between your own targets - lab to production. Where both are
+              repositories of one Artifactory the registry relocates them itself and no bytes
+              cross the wire.
+            </Typography.Paragraph>
+            {!promotionsQuery.isLoading && promotions.length === 0 ? (
+              <EmptyStateCard
+                title="Nothing has been promoted"
+                explanation="A downloaded release can be promoted from its own page, or from the row on the packages listing. Promotions appear here with where they went and how."
+                action={<Link to="/packages"><Button>Find a release to promote</Button></Link>}
+              />
+            ) : (
+              <Table<Transfer>
+                size="small"
+                pagination={{ pageSize: 10, hideOnSinglePage: true, size: 'small' }}
+                dataSource={promotions}
+                rowKey={(t) => t.id}
+                scroll={{ x: 1100 }}
+                columns={[
+                  { title: 'Product', width: 140, render: (_, t) => t.product },
+                  { title: 'Package', width: 200, render: (_, t) => <PackageCell source={t.source} /> },
+                  {
+                    title: 'Version',
+                    width: 150,
+                    render: (_, t) => (
+                      <Typography.Text style={{ fontFamily: mono }}>{transferVersion(t)}</Typography.Text>
+                    ),
+                  },
+                  // THE ROUTE, which is what a promotion IS. The listing above
+                  // has no such column because a download's origin is always
+                  // the vendor.
+                  { title: 'Route', width: 220, render: (_, t) => <Route transfer={t} /> },
+                  { title: 'How', width: 110, render: (_, t) => <MethodTag transfer={t} /> },
+                  { title: 'State', width: 130, render: (_, t) => <TransferStateTag state={t.state} /> },
+                  {
+                    title: 'Time',
+                    width: 90,
+                    align: 'right',
+                    render: (_, t) => (
+                      <Value>{formatDuration(elapsedSeconds(t.startedAt, t.completedAt))}</Value>
+                    ),
+                  },
+                  { title: 'When', width: 100, render: (_, t) => <TimeAgo at={t.completedAt || t.createdAt} /> },
+                  {
+                    title: 'Actions',
+                    width: 250,
+                    render: (_, t) => (
+                      <Space size={4}>
+                        <Link to={`/downloads/${t.id}`}>
+                          <Button size="small" type="primary">View promotion</Button>
                         </Link>
                         <QueueControls transfer={t} />
                       </Space>

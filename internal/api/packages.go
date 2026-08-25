@@ -282,6 +282,7 @@ func (s *Server) handleGetPackage(w http.ResponseWriter, r *http.Request) {
 				ID:            t.ID,
 				Target:        targetName(t),
 				State:         v1.TransferState(strings.ToUpper(t.State)),
+				Operation:     strings.ToUpper(t.Operation),
 				FailureReason: t.FailureReason,
 				CreatedAt:     t.CreatedAt,
 				CompletedAt:   t.CompletedAt,

@@ -192,9 +192,9 @@ export function ErrorState({ error, retry }: { error: unknown; retry?: () => voi
 }
 
 /**
- * The two dates a release actually has.
+ * The dates a release actually has.
  *
- * # Why this is two entries and not four
+ * # Why these entries and not a four-stage stepper
  *
  * It was a four-stage stepper - Vendor, Downloading, Downloaded, Production -
  * across the full width of the page, and it was wrong in both directions at
@@ -204,37 +204,48 @@ export function ErrorState({ error, retry }: { error: unknown; retry?: () => voi
  * stand on. A stage with no timestamp cannot be checked or unchecked honestly;
  * it can only be guessed at.
  *
- * So the page keeps the two moments that are facts with instants attached:
- * when the vendor published it, and when it finished arriving here. Everything
- * else the stepper was gesturing at - is it downloading, is it in production -
- * is already said, once, by the status badge in the header.
+ * So the page keeps only the moments that are FACTS WITH INSTANTS ATTACHED:
+ * when the vendor published it, when it finished arriving here, and when it
+ * was promoted. Everything else the stepper was gesturing at - is it
+ * downloading, is it in production - is already said, once, by the status
+ * badge in the header.
  *
- * A release nobody has downloaded shows ONE date and stops there. It was
- * showing an empty second entry, which drew the eye to a stage that has not
- * happened and reads as a gap in the record rather than as the ordinary state
- * of most of a catalogue. There is one date; the timeline says one date.
+ * Promotion earns its place by that same rule rather than in spite of it. It
+ * is an event with a completion timestamp, and it is the one that matters most
+ * to anybody asking what production is running: a release sitting in lab and
+ * the same release promoted are the same row until this line separates them.
+ *
+ * # Each entry appears only once it is real
+ *
+ * A release nobody has downloaded shows ONE date and stops there; one nobody
+ * has promoted shows two. It used to show an empty second entry, which drew
+ * the eye to a stage that has not happened and read as a gap in the record
+ * rather than as the ordinary state of most of a catalogue. There is one date;
+ * the timeline says one date.
  */
 export function ReleaseTimeline({
-  publishedAt, downloadedAt, downloading,
+  publishedAt, downloadedAt, downloading, promotedAt, promoting,
 }: {
   publishedAt?: string
   downloadedAt?: string
   /** A download is running right now, so the second date is coming. */
   downloading?: boolean
+  promotedAt?: string
+  /** A promotion is running right now, so the third date is coming. */
+  promoting?: boolean
 }) {
-  const arriving = Boolean(downloadedAt) || Boolean(downloading)
+  const promoted = Boolean(promotedAt) || Boolean(promoting)
+  // A promotion cannot happen before a download, so the middle entry is shown
+  // whenever the last one is - otherwise a release promoted before this field
+  // existed would draw a chain with its centre missing.
+  const arriving = Boolean(downloadedAt) || Boolean(downloading) || promoted
 
   return (
     <Space size={12} align="center" wrap>
       <Moment label="Published" at={publishedAt} done />
       {arriving && (
         <>
-          <span
-            aria-hidden
-            style={{
-              width: 48, height: 1, background: c.border, display: 'inline-block',
-            }}
-          />
+          <Rule />
           <Moment
             label="Downloaded"
             at={downloadedAt}
@@ -243,7 +254,28 @@ export function ReleaseTimeline({
           />
         </>
       )}
+      {promoted && (
+        <>
+          <Rule />
+          <Moment
+            label="Promoted"
+            at={promotedAt}
+            done={Boolean(promotedAt)}
+            pending={promoting}
+          />
+        </>
+      )}
     </Space>
+  )
+}
+
+/** The line between two moments. */
+function Rule() {
+  return (
+    <span
+      aria-hidden
+      style={{ width: 48, height: 1, background: c.border, display: 'inline-block' }}
+    />
   )
 }
 

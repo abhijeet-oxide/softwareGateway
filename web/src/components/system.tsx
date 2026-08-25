@@ -4,7 +4,7 @@ import { useVersion, useWorkers } from '../api/queries'
 import { formatCount } from '../domain/format'
 import { NA, Value } from './value'
 import { TimeAgo } from './chips'
-import { semantic } from '../theme'
+import { c } from '../uikit'
 import type { Worker } from '../api/types'
 
 /**
@@ -88,7 +88,7 @@ export function SystemPanel() {
                 <Progress
                   percent={Number(utilisation.toFixed(0))}
                   size="small"
-                  strokeColor={utilisation > 90 ? semantic.warning : undefined}
+                  strokeColor={utilisation > 90 ? c.pending : undefined}
                 />
               </div>
             </Tooltip>

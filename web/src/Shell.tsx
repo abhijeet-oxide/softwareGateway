@@ -1,5 +1,5 @@
-import type { ReactNode } from 'react'
-import { Avatar, Badge, Button, Layout, Menu, Space, Tooltip, Typography } from 'antd'
+import { useState, type ReactNode } from 'react'
+import { Badge, Button, Tooltip } from 'antd'
 import {
   BarChartOutlined, BellOutlined,
   DatabaseOutlined, HistoryOutlined, SafetyOutlined,
@@ -10,18 +10,40 @@ import ProductCatalogIcon from '@iconify-react/fluent-mdl2/product-catalog';
 import { DownloadIcon, Icon, PackageIcon } from './components/icons'
 import { Link, useLocation, useNavigate } from 'react-router-dom'
 import { useIdentity } from './auth/permissions'
-import { useTransfers } from './api/queries'
-import { palette, semantic } from './theme'
+import { useTransfers, useVersion } from './api/queries'
 import brand from './brand'
-import { BrandLockup, c, ThemeToggleButton, withAlpha } from './uikit'
+import {
+  AppShell, c, envHex, SideNav, ThemeToggleButton, TopBar, withAlpha,
+  type NavItem, type NavProfile,
+} from './uikit'
 
-const { Sider, Header, Content } = Layout
+// Whether the navigation is collapsed is a per-person preference, not state the
+// server has an opinion about, so it lives on the device - the same place the
+// sibling tool keeps it, and the same place the theme lives.
+const COLLAPSE_KEY = 'gateway.nav.collapsed.v1'
+
+function loadCollapsed(): boolean {
+  try {
+    return localStorage.getItem(COLLAPSE_KEY) === '1'
+  } catch {
+    // Private browsing, storage disabled by policy: expanded is the right
+    // default and a preference failing to load must never stop a page painting.
+    return false
+  }
+}
 
 /**
  * The application shell.
  *
- * Eight nav items, in this order, and nothing else ever. Detail views are
+ * Nine nav items, in this order, and nothing else ever. Detail views are
  * drill-downs, not extra entries (UI brief §3).
+ *
+ * The chrome itself - the navigation's width and item heights, its hover and
+ * active language, the collapse behaviour, the profile card at its foot, the
+ * bar's height and how its two ends are arranged - is `SideNav`/`TopBar` from
+ * the shared design system, byte-identical to what the sibling tool mounts.
+ * What is this application's is only WHICH entries there are and what belongs
+ * in its bar.
  */
 const NAV = [
   { key: '/', icon: <DashboardOutlineIcon height="1em" />, label: 'Overview' },
@@ -60,10 +82,10 @@ const NAV = [
  */
 function ActivityPill({ running, failing }: { running: number; failing: number }) {
   const [tone, text] = failing > 0
-    ? [semantic.error, `${failing} download${failing === 1 ? '' : 's'} failed`]
+    ? [c.danger, `${failing} download${failing === 1 ? '' : 's'} failed`]
     : running > 0
-      ? [palette.primary, `${running} download${running === 1 ? '' : 's'} running`]
-      : [semantic.success, 'All downloads settled']
+      ? [c.brand, `${running} download${running === 1 ? '' : 's'} running`]
+      : [c.ok, 'All downloads settled']
 
   return (
     <Link to="/downloads" style={{ textDecoration: 'none' }}>
@@ -71,8 +93,8 @@ function ActivityPill({ running, failing }: { running: number; failing: number }
         style={{
           display: 'inline-flex', alignItems: 'center', gap: 8,
           padding: '4px 12px 4px 10px', borderRadius: 999,
-          background: palette.sunken, border: `1px solid ${palette.hairline}`,
-          fontSize: 12.5, lineHeight: 1.4, color: semantic.neutral, whiteSpace: 'nowrap',
+          background: c.surface2, border: `1px solid ${c.border}`,
+          fontSize: 12.5, lineHeight: 1.4, color: c.text2, whiteSpace: 'nowrap',
           fontVariantNumeric: 'tabular-nums',
         }}
       >
@@ -83,9 +105,9 @@ function ActivityPill({ running, failing }: { running: number; failing: number }
             // The pulse marks work in flight and stops the moment it settles,
             // so movement in this bar always means something is moving.
             //
-            // withAlpha rather than two more hex digits: `tone` is a var()
-            // now, and `var(--brand)22` is not a colour - the rule was simply
-            // dropped and the ring never appeared.
+            // withAlpha rather than two more hex digits: `tone` is a var() now,
+            // and `var(--brand)22` is not a colour - the rule would simply be
+            // dropped and the ring never appear.
             boxShadow: running > 0 && failing === 0 ? `0 0 0 3px ${withAlpha(tone, 0.13)}` : undefined,
           }}
         />
@@ -100,6 +122,9 @@ export function Shell({ children }: { children: ReactNode }) {
   const navigate = useNavigate()
   const { who } = useIdentity()
 
+  const [collapsed, setCollapsed] = useState(loadCollapsed)
+  const version = useVersion()
+
   const { data: transfers } = useTransfers({ pageSize: 100 })
   const running = (transfers?.transfers ?? []).filter(
     (t) => t.state === 'RUNNING' || t.state === 'PLANNING' || t.state === 'READY',
@@ -112,61 +137,47 @@ export function Shell({ children }: { children: ReactNode }) {
 
   const section = NAV.find((n) => n.key === selected)?.label ?? brand.appName
 
+  const items: NavItem[] = NAV.map((n) => ({
+    key: n.key,
+    label: n.label,
+    icon: n.icon,
+    ...(n.key === '/downloads' && failing > 0 ? { badge: failing } : {}),
+    onClick: () => navigate(n.key),
+  }))
+
+  // The person at the navigation's foot, in the same card the sibling tool
+  // uses: who you are, and one click to Settings, where every personal
+  // preference lives.
+  const profile: NavProfile = {
+    name: who?.subject ?? 'Not signed in',
+    sub: who?.authenticated ? (who.roles?.join(', ') || 'Product Owner') : 'Not signed in',
+    active: selected === '/settings',
+    onClick: () => navigate('/settings'),
+  }
+
   return (
-    <Layout style={{ height: '100dvh', overflow: 'hidden' }}>
-      <Sider
-        width={216}
-        style={{
-          background: palette.sidebar,
-          // A rule the navy itself provides, so the sidebar has an edge rather
-          // than bleeding into the page background at exactly one lightness.
-          // The nav's own border token, so it holds in dark mode too - a
-          // hardcoded white inset was invisible against the darker canvas.
-          boxShadow: `inset -1px 0 0 ${c.navBorder}`,
-        }}
-      >
-        {/*
-          The name and the mark, drawn by the shared design system from this
-          deployment's `brand.ts`. Every tool on the platform opens its
-          navigation with the same lockup at the same size, so the two products
-          read as one system from the first glance - and the ONE thing that
-          differs between them is the identity passed in here.
-        */}
-        <div style={{ padding: '18px 16px 14px' }}>
-          <BrandLockup brand={brand} />
-        </div>
-
-        <Menu
-          theme="dark"
-          mode="inline"
-          selectedKeys={[selected]}
-          items={NAV}
-          onClick={({ key }) => navigate(key)}
-          style={{ background: palette.sidebar, borderInlineEnd: 0 }}
-        />
-
-        <div
-          style={{
-            position: 'absolute', bottom: 0, width: '100%', padding: 16,
-            borderTop: `1px solid ${c.navBorder}`,
+    <AppShell
+      nav={
+        <SideNav
+          brand={brand}
+          items={items}
+          activeKey={selected}
+          collapsed={collapsed}
+          onToggleCollapse={() => {
+            const next = !collapsed
+            setCollapsed(next)
+            try {
+              localStorage.setItem(COLLAPSE_KEY, next ? '1' : '0')
+            } catch {
+              // The session keeps the choice; it just will not be remembered.
+            }
           }}
-        >
-          <Space size={10}>
-            <Avatar size="small" style={{ background: palette.primary }}>
-              {(who?.subject ?? 'A').slice(0, 2).toUpperCase()}
-            </Avatar>
-            <div style={{ lineHeight: 1.3 }}>
-              <div style={{ color: c.navFgActive, fontSize: 13 }}>{who?.subject ?? 'Not signed in'}</div>
-              <div style={{ color: c.navFg, fontSize: 11 }}>
-                {who?.authenticated ? (who.roles?.join(', ') || 'Product Owner') : 'Not signed in'}
-              </div>
-            </div>
-          </Space>
-        </div>
-      </Sider>
-
-      <Layout style={{ minWidth: 0, overflow: 'hidden' }}>
-        {/*
+          profile={profile}
+          footer={<DeploymentNote version={version.data?.version} />}
+        />
+      }
+      header={
+        /*
           The top bar carries WHERE YOU ARE and WHAT THE SYSTEM IS DOING.
 
           It was an empty white band with two icons pushed against the right
@@ -176,55 +187,60 @@ export function Shell({ children }: { children: ReactNode }) {
           of the window, and the number of downloads currently running lived
           inside the tooltip of a bell, which is to say nowhere. An operations
           console should say what it is doing without being asked.
-        */}
-        <Header
-          style={{
-            background: palette.topBar, borderBottom: `1px solid ${palette.topBarBorder}`,
-            display: 'flex', alignItems: 'center', gap: 16, paddingInline: 24,
-            // Ant sets `line-height: 64px` on the header. Anything inline
-            // inside it inherits a 64px line box, which turned a 26px pill
-            // into a 72px ellipse hanging below the bar.
-            lineHeight: 'normal',
-          }}
-        >
-          <Typography.Text
-            style={{
-              fontSize: 15, fontWeight: 600, color: palette.headingText,
-              letterSpacing: '-0.01em',
-            }}
-          >
-            {section}
-          </Typography.Text>
+        */
+        <TopBar
+          title={section}
+          right={
+            <>
+              <ActivityPill running={running} failing={failing} />
+              {/*
+                Light and dark, in the one place a person looks for it. The
+                control comes from the shared kit, so both tools put the same
+                button in the same corner.
+              */}
+              <ThemeToggleButton />
+              <Tooltip title="Documentation">
+                <Button type="text" icon={<QuestionCircleOutlined />} aria-label="Help" />
+              </Tooltip>
+              <Tooltip
+                title={failing ? `${failing} download${failing === 1 ? '' : 's'} failed` : 'No notifications'}
+              >
+                <Badge count={failing} size="small">
+                  <Button type="text" icon={<BellOutlined />} aria-label="Notifications" />
+                </Badge>
+              </Tooltip>
+            </>
+          }
+        />
+      }
+    >
+      {children}
+    </AppShell>
+  )
+}
 
-          <div style={{ marginInlineStart: 'auto' }}>
-            <ActivityPill running={running} failing={failing} />
-          </div>
-
-          <Space size={4}>
-            {/*
-              Light and dark, in the one place a person looks for it. The
-              control comes from the shared kit, so the two tools put the same
-              button in the same corner and a preference set in one is the
-              preference the other opens with.
-            */}
-            <ThemeToggleButton />
-
-            <Tooltip title="Documentation">
-              <Button type="text" icon={<QuestionCircleOutlined />} aria-label="Help" />
-            </Tooltip>
-
-            <Tooltip title={failing ? `${failing} download${failing === 1 ? '' : 's'} failed` : 'No notifications'}>
-              <Badge count={failing} size="small">
-                <Button type="text" icon={<BellOutlined />} aria-label="Notifications" />
-              </Badge>
-            </Tooltip>
-          </Space>
-        </Header>
-
-        <Content style={{ flex: 1, minHeight: 0, padding: 24, maxWidth: '100%', overflow: 'auto' }}>
-          {children}
-        </Content>
-      </Layout>
-    </Layout>
+/**
+ * Which installation this is, at the navigation's foot.
+ *
+ * A support conversation or a screenshot that does not say which Coordinator
+ * it came from costs a round trip to establish, every time. The dot carries the
+ * environment's own colour - deliberately not a status colour, because a
+ * healthy production deployment is not a warning.
+ */
+function DeploymentNote({ version }: { version?: string }) {
+  if (!version) return null
+  return (
+    <div className="ui-nav-note">
+      <span
+        style={{
+          width: 6,
+          height: 6,
+          borderRadius: 3,
+          flexShrink: 0,
+          background: envHex('production'),
+        }}
+      />
+      Coordinator {version}
+    </div>
   )
 }

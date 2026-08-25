@@ -8,7 +8,7 @@ import { RepoLink } from '../components/chips'
 import { Value } from '../components/value'
 import { formatCount } from '../domain/format'
 import { EmptyStateCard, ErrorState, PageHeader } from '../components/layout'
-import { semantic } from '../theme'
+import { c } from '../uikit'
 import type { Repository } from '../api/types'
 import { Icon, repositoryIcon } from '../components/icons'
 
@@ -211,12 +211,12 @@ export default function Repositories() {
                   }
                   return result.status === 'OK' ? (
                     <Space size={4}>
-                      <CheckCircleFilled style={{ color: semantic.success }} />
+                      <CheckCircleFilled style={{ color: c.ok }} />
                       <span>Reachable</span>
                     </Space>
                   ) : (
                     <Space size={4}>
-                      <CloseCircleFilled style={{ color: semantic.error }} />
+                      <CloseCircleFilled style={{ color: c.danger }} />
                       <span>{result.status === 'SKIPPED' ? 'Skipped' : 'Failed'}</span>
                     </Space>
                   )

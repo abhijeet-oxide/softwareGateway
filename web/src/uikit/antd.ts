@@ -13,8 +13,68 @@
 // color.ts instead.
 
 import { theme as antdTheme, type ThemeConfig } from "antd";
-import { tokens } from "./tokens";
+import { tokens, type Palette } from "./tokens";
 import type { Density, FontScale, Mode } from "./prefs";
+
+/**
+ * THE ONE PLACE THE TWO HALVES ARE RECONCILED.
+ *
+ * Ant Design does not use `colorPrimary` as given: it treats it as a SEED and
+ * derives the shade it actually paints, which under the dark algorithm is a
+ * different colour entirely (#4d94e8 went in, #4481c8 came out). So a primary
+ * button and anything written with `var(--brand)` were two different blues on
+ * the same screen - precisely the drift this folder exists to prevent, hiding
+ * in the one place nobody looks because both halves came from one file.
+ *
+ * The same is true of success, warning and error: a status pill and a Tag that
+ * both mean "healthy" were different greens.
+ *
+ * So the CSS variables are not written by hand any more. They are RESOLVED
+ * FROM ANT'S OWN TOKENS - ask the component library what it is going to paint,
+ * then hand that to the stylesheet - which makes disagreement impossible
+ * rather than merely unlikely.
+ */
+export function resolvePalette(mode: Mode): Palette {
+  const p = mode === "dark" ? tokens.dark : tokens.light;
+  const t = antdTheme.getDesignToken(baseConfig(mode));
+  return {
+    ...p,
+    brand: t.colorPrimary,
+    brandStrong: t.colorPrimaryHover,
+    ok: t.colorSuccess,
+    pending: t.colorWarning,
+    review: t.colorInfo,
+    danger: t.colorError,
+    // The selected navigation item IS the brand: one accent with one meaning.
+    // It used to be a separate blue, and the same value in both modes, so the
+    // selected item and every primary button on the page disagreed - in dark
+    // mode obviously so.
+    navBgActive: t.colorPrimary,
+  };
+}
+
+/** The seed half of the theme, shared by resolvePalette and buildTheme so the
+ *  resolution above cannot be asked about a config the app never builds. */
+function baseConfig(mode: Mode): ThemeConfig {
+  const dark = mode === "dark";
+  const p = dark ? tokens.dark : tokens.light;
+  return {
+    algorithm: dark ? antdTheme.darkAlgorithm : antdTheme.defaultAlgorithm,
+    token: {
+      colorPrimary: p.brand,
+      colorInfo: p.review,
+      colorSuccess: p.ok,
+      colorWarning: p.pending,
+      colorError: p.danger,
+      // A seed of its own since Ant 5.17. Left unset it derives from blue and
+      // a link came out a different colour from every primary button on the
+      // page; given the PAINTED value it derives a second time and lands
+      // somewhere else again. It takes the same seed as the primary, and then
+      // the two agree exactly.
+      colorLink: p.brand,
+    },
+  };
+}
 
 export function buildTheme(
   mode: Mode,
@@ -22,7 +82,14 @@ export function buildTheme(
   density: Density = "comfortable",
 ): ThemeConfig {
   const dark = mode === "dark";
-  const p = dark ? tokens.dark : tokens.light;
+  // TWO palettes, and the distinction is the whole point.
+  //
+  // `seed` is what Ant is GIVEN. `p` is what Ant will PAINT once its algorithm
+  // has had its way with the seed, and it is what the stylesheet was handed.
+  // Feeding `p` back in as the seed would derive a second time and land
+  // somewhere else again - which is exactly the bug this pair exists to close.
+  const seed = dark ? tokens.dark : tokens.light;
+  const p = resolvePalette(mode);
   const base =
     scale === "large"
       ? tokens.type.fontSizeBase + 2
@@ -33,12 +100,17 @@ export function buildTheme(
   return {
     algorithm: dark ? antdTheme.darkAlgorithm : antdTheme.defaultAlgorithm,
     token: {
-      colorPrimary: p.brand,
-      colorInfo: p.brand,
-      colorLink: p.brand,
-      colorSuccess: p.ok,
-      colorWarning: p.pending,
-      colorError: p.danger,
+      // Seeds. Ant re-derives each of these; resolvePalette reports where they
+      // land, and the stylesheet is given that.
+      colorPrimary: seed.brand,
+      colorInfo: seed.review,
+      colorSuccess: seed.ok,
+      colorWarning: seed.pending,
+      colorError: seed.danger,
+      // Also a seed (see baseConfig), so it takes the seed, not the painted
+      // value. Handed the painted one it derives again and a link stops
+      // matching the button beside it.
+      colorLink: seed.brand,
 
       // The status SURFACES, stated rather than derived. The semantic colours
       // above are chosen for text and icons, so they are dark enough to read;

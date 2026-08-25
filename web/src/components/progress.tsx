@@ -5,7 +5,7 @@ import {
 import type { ContentGroup, Strategy } from '../api/types'
 import { formatBytes, formatCount, formatSpeed, formatAbsolute, formatDuration } from '../domain/format'
 import { NA } from './value'
-import { palette, semantic } from '../theme'
+import { c } from '../uikit'
 
 /**
  * The honest-numbers rule, made structural (docs/design/18 §6.1, 19 §6).
@@ -89,7 +89,7 @@ export function MeasuredProgress({
         // part of the same total, not a second bar.
         success={alreadyThere > 0 ? { percent: Number(savedPercent.toFixed(1)) } : undefined}
         size="small"
-        strokeColor={percent >= 100 ? semantic.success : undefined}
+        strokeColor={percent >= 100 ? c.ok : undefined}
       />
       {showText && (
         <Typography.Text type="secondary" style={{ fontSize: 12 }}>
@@ -178,7 +178,7 @@ export function ArtifactProgress({
         status={counted.failed > 0
           ? 'exception'
           : percent >= 100 ? 'success' : 'active'}
-        strokeColor={percent >= 100 ? semantic.success : undefined}
+        strokeColor={percent >= 100 ? c.ok : undefined}
       />
       <Typography.Text type="secondary" style={{ fontSize: 12 }}>
         {formatCount(counted.done)} of {formatCount(counted.total)} artifacts
@@ -301,19 +301,19 @@ interface StripProps {
  */
 export function StateStrip({ state, label, events = [], message }: StripProps) {
   const icon = {
-    pending: <ClockCircleOutlined style={{ color: semantic.neutral }} />,
-    running: <SyncOutlined spin style={{ color: palette.primary }} />,
-    done: <CheckCircleFilled style={{ color: semantic.success }} />,
-    failed: <CloseCircleFilled style={{ color: semantic.error }} />,
+    pending: <ClockCircleOutlined style={{ color: c.text2 }} />,
+    running: <SyncOutlined spin style={{ color: c.brand }} />,
+    done: <CheckCircleFilled style={{ color: c.ok }} />,
+    failed: <CloseCircleFilled style={{ color: c.danger }} />,
   }[state]
 
   return (
     <div
       style={{
-        border: '1px dashed #D6DCE5',
+        border: '1px dashed ${c.borderStrong}',
         borderRadius: 4,
         padding: '10px 12px',
-        background: '#FBFCFD',
+        background: c.surface2,
       }}
     >
       <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: events.length ? 8 : 0 }}>
@@ -370,7 +370,7 @@ export function WorkingBar({
   return (
     <div>
       <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 6 }}>
-        <LoadingOutlined spin style={{ color: palette.primary }} />
+        <LoadingOutlined spin style={{ color: c.brand }} />
         <Typography.Text strong style={{ fontSize: 13 }}>{label}</Typography.Text>
         {elapsedSeconds !== undefined && (
           <Typography.Text type="secondary" style={{ fontSize: 12 }}>
@@ -386,7 +386,7 @@ export function WorkingBar({
         style={{
           height: 6,
           borderRadius: 3,
-          background: '#EEF2F6',
+          background: c.surface2,
           overflow: 'hidden',
         }}
       >
@@ -395,7 +395,7 @@ export function WorkingBar({
             height: '100%',
             width: '35%',
             borderRadius: 3,
-            background: palette.primary,
+            background: c.brand,
             animation: 'slm-working 1.4s ease-in-out infinite',
           }}
         />

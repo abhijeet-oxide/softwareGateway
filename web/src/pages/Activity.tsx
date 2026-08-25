@@ -6,7 +6,7 @@ import { useAuditEvents, useProducts } from '../api/queries'
 import { TimeAgo } from '../components/chips'
 import { NA, Value } from '../components/value'
 import { EmptyStateCard, ErrorState, PageHeader } from '../components/layout'
-import { mono } from '../theme'
+import { mono } from '../uikit'
 import type { AuditEvent } from '../api/types'
 
 /**

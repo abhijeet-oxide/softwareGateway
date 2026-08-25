@@ -1,7 +1,7 @@
 import { useState } from 'react'
 import type { ReactNode } from 'react'
 import {
-  Alert, Button, Card, Empty, Input, Popover, Skeleton, Space, Tag, Timeline, Tooltip,
+  Alert, Button, Card, Input, Popover, Skeleton, Space, Tag, Timeline, Tooltip,
   Typography,
 } from 'antd'
 import {
@@ -15,7 +15,7 @@ import { kindName, type LifecycleStep } from '../domain/derive'
 import { bytes, formatAbsolute, formatBytes, formatCount } from '../domain/format'
 import { ARTIFACT_ICONS, Icon } from './icons'
 import { usePresentComponents } from '../api/queries'
-import { mono, palette, semantic } from '../theme'
+import { c, EmptyArt, EmptyState, mono } from '../uikit'
 import { NA } from './value'
 
 /**
@@ -162,17 +162,17 @@ export function EmptyStateCard({
 }) {
   return (
     <Card>
-      <Empty
-        image={Empty.PRESENTED_IMAGE_SIMPLE}
-        description={
-          <Space direction="vertical" size={4}>
-            {title && <Typography.Text strong>{title}</Typography.Text>}
-            <Typography.Text type="secondary">{explanation}</Typography.Text>
-          </Space>
-        }
-      >
+      {/*
+        The shared design system's empty state, with the shared drawing.
+        A missing thing is a STATE, not an error, and it is the same state in
+        every tool on the platform - one of them having a considered
+        illustration where the other has the component library's flat default
+        glyph is exactly the kind of difference that stops two products looking
+        like one.
+      */}
+      <EmptyState art={<EmptyArt size={110} />} title={title ?? explanation} hint={title ? explanation : undefined}>
         {action}
-      </Empty>
+      </EmptyState>
     </Card>
   )
 }
@@ -232,7 +232,7 @@ export function ReleaseTimeline({
           <span
             aria-hidden
             style={{
-              width: 48, height: 1, background: 'rgba(0,0,0,0.15)', display: 'inline-block',
+              width: 48, height: 1, background: c.border, display: 'inline-block',
             }}
           />
           <Moment
@@ -256,7 +256,7 @@ function Moment({
   done?: boolean
   pending?: boolean
 }) {
-  const colour = done ? semantic.success : pending ? palette.primary : 'rgba(0,0,0,0.25)'
+  const colour = done ? c.ok : pending ? c.brand : c.text3
 
   return (
     <Space size={8} align="center">
@@ -385,7 +385,7 @@ export function SearchBar({
       <Input
         allowClear
         style={{ width }}
-        prefix={<SearchOutlined style={{ color: 'rgba(0,0,0,.35)' }} />}
+        prefix={<SearchOutlined style={{ color: c.text3 }} />}
         placeholder={placeholder}
         value={value}
         onChange={(e) => onChange(e.target.value)}
@@ -419,13 +419,13 @@ export function SavedPanel({
   transferId?: string
 }) {
   return (
-    <Card size="small" style={{ background: '#F3F8F4', borderColor: '#CFE4D6' }}>
+    <Card size="small" style={{ background: c.okBg, borderColor: c.okBd }}>
       <Space direction="vertical" size={4} style={{ width: '100%' }}>
         <Space size={8}>
           <SavedBreakdown transferId={transferId} content={content}>
             <Typography.Text
               strong
-              style={{ color: semantic.success, borderBottom: '1px dotted #9BC7A9' }}
+              style={{ color: c.ok, borderBottom: '1px dotted ${c.okBd}' }}
             >
               Saved {savedBytes}
             </Typography.Text>
@@ -539,7 +539,7 @@ function KindLine({ group, saved }: { group: ContentGroup; saved: number }) {
           ? `${group.present} of ${group.total} already there`
           : 'shared layers'}
       </Typography.Text>
-      <Typography.Text strong style={{ fontSize: 12, color: semantic.success }}>
+      <Typography.Text strong style={{ fontSize: 12, color: c.ok }}>
         {formatBytes(saved)}
       </Typography.Text>
     </div>

@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from 'react'
 import type { CSSProperties, ReactNode } from 'react'
 import {
-  App, Button, Card, Col, Empty, Popover, Progress, Row, Segmented, Select,
+  App, Button, Card, Col, Popover, Progress, Row, Segmented, Select,
   Space, Table, Tag, Tooltip, Tree, Typography,
 } from 'antd'
 import { FolderOutlined, SwapOutlined } from '@ant-design/icons'
@@ -17,7 +17,7 @@ import { ErrorState, SearchBar } from '../components/layout'
 import { WorkingBar } from '../components/progress'
 import { ARTIFACT_ICONS, Icon } from '../components/icons'
 import { SecurityComparison } from '../components/securitycompare'
-import { mono, palette, semantic } from '../theme'
+import { c, EmptyState, mono } from '../uikit'
 import type {
   CompareFile, CompareProgressSide, CompareResponse, CompareRow, CompareVerdict, Package,
   Repository,
@@ -137,7 +137,7 @@ function renderReleaseOption(option: Pick<ReleaseOption, 'version' | 'name'>) {
       </div>
       {option.name && (
         <div
-          style={{ ...line, fontSize: 11, lineHeight: '14px', color: 'rgba(0,0,0,0.45)' }}
+          style={{ ...line, fontSize: 11, lineHeight: '14px', color: c.text2 }}
           title={option.name}
         >
           {option.name}
@@ -353,9 +353,9 @@ function CacheNote({ base, against }: { base?: Package; against?: Package }) {
 
 const VERDICT: Record<CompareVerdict, { label: string; colour: string; statColour?: string }> = {
   same: { label: 'Unchanged', colour: 'default' },
-  changed: { label: 'Changed', colour: 'orange', statColour: semantic.warning },
-  'only-a': { label: 'Removed', colour: 'red', statColour: semantic.error },
-  'only-b': { label: 'Added', colour: 'green', statColour: semantic.success },
+  changed: { label: 'Changed', colour: 'orange', statColour: c.pending },
+  'only-a': { label: 'Removed', colour: 'red', statColour: c.danger },
+  'only-b': { label: 'Added', colour: 'green', statColour: c.ok },
 }
 
 type Mode = 'versions' | 'locations'
@@ -535,7 +535,7 @@ function ComparisonReport({ report }: { report: CompareResponse }) {
           scroll={{ x: 1200 }}
           locale={{
             emptyText: (
-              <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="Nothing matches this filter" />
+              <EmptyState title="Nothing matches this filter" />
             ),
           }}
           columns={[
@@ -654,7 +654,7 @@ function FileDifferences({ files, total }: { files: FileEntry[]; total: number }
   }
 
   if (files.length === 0) {
-    return <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="No file matches this filter" />
+    return <EmptyState title="No file matches this filter" />
   }
 
   return (
@@ -722,7 +722,7 @@ function buildFileTree(files: FileEntry[]): FileNode[] {
         key: `${prefix}/${name}`,
         title: (
           <Space size={6}>
-            <FolderOutlined style={{ color: '#98A2B3' }} />
+            <FolderOutlined style={{ color: c.text3 }} />
             <Typography.Text style={{ fontSize: 13 }}>{name}</Typography.Text>
             {child.differing > 0 && (
               <Typography.Text type="secondary" style={{ fontSize: 11 }}>
@@ -826,7 +826,7 @@ function CompositionBand({ buckets }: { buckets: Record<CompareVerdict, Bucket> 
       <div
         style={{
           display: 'flex', width: '100%', height: 12, borderRadius: 6,
-          overflow: 'hidden', background: '#EEF1F4',
+          overflow: 'hidden', background: c.surface2,
         }}
       >
         {order.map((verdict, i) => {
@@ -867,10 +867,10 @@ function CompositionBand({ buckets }: { buckets: Record<CompareVerdict, Bucket> 
 
 /** The segment colours, matched to the verdict vocabulary already in use. */
 const BAND_COLOUR: Record<CompareVerdict, string> = {
-  'only-b': semantic.success,
-  changed: semantic.warning,
-  same: '#8794A5',
-  'only-a': semantic.error,
+  'only-b': c.ok,
+  changed: c.pending,
+  same: c.text3,
+  'only-a': c.danger,
 }
 
 /**
@@ -928,18 +928,18 @@ function BucketFigure({ bucket, verdict }: { bucket: Bucket; verdict: CompareVer
             aria-hidden
             style={{
               width: 8, height: 8, borderRadius: 2, flex: 'none',
-              background: empty ? '#D6DCE4' : BAND_COLOUR[verdict],
+              background: empty ? c.borderStrong : BAND_COLOUR[verdict],
             }}
           />
           <span
             style={{
               fontSize: 22, fontWeight: 600, lineHeight: 1, letterSpacing: '-0.02em',
-              color: empty ? semantic.neutral : palette.headingText,
+              color: empty ? c.text2 : c.text,
             }}
           >
             {formatCount(bucket.count)}
           </span>
-          <span style={{ fontSize: 12.5, color: semantic.neutral }}>{meta.label.toLowerCase()}</span>
+          <span style={{ fontSize: 12.5, color: c.text2 }}>{meta.label.toLowerCase()}</span>
         </div>
         {!empty && (
           <Typography.Text
@@ -1329,7 +1329,7 @@ export default function Compare() {
             <Space size={12} wrap align="center">
               <Typography.Text type="secondary" style={{ fontSize: 12 }}>Comparing</Typography.Text>
               <ComparedEnd pkg={leftPkg} fallback={report.a.label} />
-              <SwapOutlined style={{ color: '#98A2B3' }} />
+              <SwapOutlined style={{ color: c.text3 }} />
               <ComparedEnd pkg={rightPkg} fallback={report.b.label} />
             </Space>
             <Button onClick={() => setSettled(false)}>Change selection</Button>

@@ -10,7 +10,7 @@ import { NA } from './value'
 import { releaseHref, type SoftwareStatus, type VerificationState, type Location } from '../domain/derive'
 import type { Package, Repository } from '../api/types'
 import { formatAbsolute, formatRelative } from '../domain/format'
-import { mono, semantic } from '../theme'
+import { c, mono } from '../uikit'
 
 /**
  * The reusable vocabulary (UI brief §7). Designed once, used literally.
@@ -307,7 +307,7 @@ export function LocationChip({
           : <Icon as={Mark} title={loc.kind} />
         return (
           <span key={`${loc.name}-${i}`}>
-            {i > 0 && <span style={{ color: '#98A2B3', marginInlineEnd: 4 }}>+</span>}
+            {i > 0 && <span style={{ color: c.text3, marginInlineEnd: 4 }}>+</span>}
             {loc.url ? (
               <a href={loc.url} target="_blank" rel="noreferrer">
                 <Space size={4}>
@@ -356,7 +356,7 @@ export function TimeAgo({ at }: { at?: string | null }) {
 /** A count with a coloured dot, for "3 new" style figures. */
 export function CountBadge({ count, colour }: { count: number; colour?: string }) {
   if (!count) return <Typography.Text type="secondary">0</Typography.Text>
-  return <Badge count={count} color={colour ?? semantic.error} overflowCount={999} />
+  return <Badge count={count} color={colour ?? c.danger} overflowCount={999} />
 }
 
 /** Configuration this page can show but never change (docs/design/19 §4). */

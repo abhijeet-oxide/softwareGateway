@@ -6,6 +6,7 @@ import enGB from 'antd/locale/en_GB'
 import { ConfigProvider } from 'antd'
 import { App } from './App'
 import { IdentityProvider } from './auth/permissions'
+import { BootGate } from './BootGate'
 import { ThemeProvider } from './uikit'
 import './uikit/styles.css'
 import './index.css'
@@ -43,7 +44,10 @@ createRoot(document.getElementById('root')!).render(
         <QueryClientProvider client={queryClient}>
           <IdentityProvider>
             <BrowserRouter>
-              <App />
+              {/* Nothing renders until we know the Coordinator is there. */}
+              <BootGate>
+                <App />
+              </BootGate>
             </BrowserRouter>
           </IdentityProvider>
         </QueryClientProvider>

@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from 'react'
 import type { ReactNode } from 'react'
 import type { UseMutationResult } from '@tanstack/react-query'
 import {
-  Alert, App, Button, Card, Col, Descriptions, Divider, Empty, Modal, Row, Space, Table, Tabs, Tag,
+  Alert, App, Button, Card, Col, Descriptions, Divider, Modal, Row, Space, Table, Tabs, Tag,
   Tooltip, Tree, Typography,
 } from 'antd'
 import { FolderOutlined, SafetyCertificateOutlined, SyncOutlined } from '@ant-design/icons'
@@ -28,7 +28,7 @@ import {
 } from '../components/layout'
 import { FileViewer, looksBinary } from '../components/filecontent'
 import { SecurityTab } from '../components/securitypanel'
-import { mono } from '../theme'
+import { EmptyState, c, mono } from '../uikit'
 import type {
   Artifact, InspectPackageResponse, Package, PackageFile, PackageTransfer, Product, RelatedArtifact,
 } from '../api/types'
@@ -468,7 +468,7 @@ function FileTree({
       />
 
       {shown.length === 0 ? (
-        <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="No file matches that" />
+        <EmptyState title="No file matches that" />
       ) : (
         <Tree
           treeData={tree}
@@ -544,7 +544,7 @@ function buildTree(
         key: `${prefix}/${name}`,
         title: (
           <Space size={6}>
-            <FolderOutlined style={{ color: '#98A2B3' }} />
+            <FolderOutlined style={{ color: c.text3 }} />
             <Typography.Text style={{ fontSize: 13 }}>{name}</Typography.Text>
             <Typography.Text type="secondary" style={{ fontSize: 11 }}>
               {formatBytes(child.bytes)}
@@ -735,7 +735,7 @@ function FactTag({ label, value, mono: isMono, onClick }: {
   return (
     <Tag
       style={{
-        margin: 0, background: '#FFFFFF', cursor: onClick ? 'pointer' : undefined,
+        margin: 0, background: c.surface, cursor: onClick ? 'pointer' : undefined,
         paddingInline: 8,
       }}
       onClick={onClick}

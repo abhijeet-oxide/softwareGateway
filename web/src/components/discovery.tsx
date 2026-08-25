@@ -12,7 +12,7 @@ import { matches } from '../domain/derive'
 import { SearchBar } from './layout'
 import { NA, Value } from './value'
 import { TimeAgo } from './chips'
-import { palette, semantic } from '../theme'
+import { c } from '../uikit'
 import type { DiscoverySourceState, Product } from '../api/types'
 
 /**
@@ -91,7 +91,7 @@ function NextScan({ source }: { source: DiscoverySourceState }) {
   if (!source.intervalSeconds) {
     return (
       <Space size={6}>
-        <CheckCircleFilled style={{ color: semantic.success }} />
+        <CheckCircleFilled style={{ color: c.ok }} />
         <Typography.Text type="secondary" style={{ fontSize: 12 }}>
           Polled on demand only
         </Typography.Text>
@@ -110,7 +110,7 @@ function NextScan({ source }: { source: DiscoverySourceState }) {
 
   return (
     <Space size={6}>
-      <CheckCircleFilled style={{ color: semantic.success }} />
+      <CheckCircleFilled style={{ color: c.ok }} />
       <Typography.Text type="secondary" style={{ fontSize: 12 }}>
         {remaining === undefined ? (
           <>Next scan every <Value>{formatDuration(source.intervalSeconds)}</Value></>
@@ -130,7 +130,7 @@ function SourceProgress({ s }: { s: DiscoverySourceState }) {
     if (s.lastError) {
       return (
         <Space size={6} align="start" style={{ width: '100%' }}>
-          <ExclamationCircleFilled style={{ color: semantic.error, marginTop: 3 }} />
+          <ExclamationCircleFilled style={{ color: c.danger, marginTop: 3 }} />
           <Tooltip title={s.lastError}>
             <Typography.Text
               type="danger"
@@ -151,7 +151,7 @@ function SourceProgress({ s }: { s: DiscoverySourceState }) {
   if (!s.repositoriesTotal) {
     return (
       <Space size={6}>
-        <SyncOutlined spin style={{ color: palette.primary }} />
+        <SyncOutlined spin style={{ color: c.brand }} />
         <Typography.Text style={{ fontSize: 12 }}>
           {phaseLabel(s.phase)}
         </Typography.Text>

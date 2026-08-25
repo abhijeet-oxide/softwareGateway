@@ -49,6 +49,82 @@ things, and both live OUTSIDE this folder:
 | `primitives/` | the components: card, page header, stat tile, status pill, severity tag, notice, empty state, stepper, toolbar, keycap, motion. |
 | `vitePluginBrand.ts` | inlines the colour variables, the favicon and the title into `index.html` at build time. |
 
+## The chrome is shared whole
+
+The navigation and the bar above the page are the two surfaces a person sees on
+every screen of every tool, so they are the two that must not be written twice.
+Two products that share a palette but each draw their own sidebar do not look
+like one product; they look like two products with the same colours, which is
+worse than not trying, because the difference reads as carelessness rather than
+as intent.
+
+So `SideNav` and `TopBar` own the STRUCTURE - the widths, the item heights, the
+hover and active language, the collapse behaviour, the profile card at the foot,
+the bar's height and how its two ends are arranged - and each app hands in only
+what is genuinely its own: which entries there are, what they do, and what
+belongs in its bar.
+
+`StatusScreen` is the same argument for the moments before an app can show
+anything. Every tool has them: it is checking whether its service is there, the
+service did not answer, nobody is signed in. They are the first thing anybody
+sees of a product and the thing they see on its worst day - exactly the wrong
+place for each tool to improvise a layout.
+
+One rule inside them is worth knowing because it was a real bug: **a lockup
+aligns to itself, never to whatever it was dropped into.** The name and the
+caption are different widths, so on a card that centres its text the short name
+floated to the middle of the box the caption sized, and read as a mark with a
+hole punched between it and its own name. `.ui-lockup-text` states
+`align-items: flex-start` for that reason.
+
+## What counts as a difference
+
+The test is not "does it look similar" but **"could the two tools answer this
+differently?"** If they could, it belongs here. Three things that failed that
+test and were moved:
+
+- **The state illustrations.** One tool showed a considered drawing where a
+  service would not answer; the other showed the same sentence with nothing
+  above it. A state screen is the same state screen in every tool.
+- **The empty state.** One used this kit's `EmptyState` with the shared
+  drawing; the other used the component library's flat default glyph, which
+  belongs to no design system and is the cheapest tell that a page was
+  assembled rather than built.
+- **The appearance controls, copy included.** "System follows your device" is
+  the same sentence in every tool. Two products that explain the same control
+  in different words are two products.
+
+The counter-example is worth stating too, because not everything shared-looking
+should be shared: a file type's icon colour and a chart series' colour are
+IDENTITIES, not theme. YAML is the same orange in dark mode, the same way an
+environment's colour is, and they do not belong to the palette. Statuses do:
+anything that means healthy / pending / failing reads a token, so it follows
+the theme and a rebrand cannot miss it.
+
+## Seeds are not colours
+
+The one trap in this folder, and it cost a visible bug: **Ant Design treats
+`colorPrimary`, `colorSuccess`, `colorWarning`, `colorError`, `colorInfo` and
+`colorLink` as SEEDS, not as values.** Its algorithm derives the shade it
+actually paints, and under the dark algorithm that is a different colour -
+`#4d94e8` went in, `#4481c8` came out. So a primary button and anything written
+`var(--brand)` were two different blues on the same screen, in the one place
+nobody looks because both halves came from one file.
+
+Two rules follow, and `antd.ts` enforces both:
+
+- **The stylesheet is told what Ant will PAINT, not what it was given.**
+  `resolvePalette(mode)` asks the component library (`getDesignToken`) and hands
+  the answer to `renderRootCss`. Disagreement is impossible rather than merely
+  unlikely.
+- **Never feed a painted value back in as a seed.** It derives a second time and
+  lands somewhere else again. `buildTheme` keeps `seed` and `p` as two separate
+  objects for exactly this reason: seed tokens get `seed`, map tokens get `p`.
+
+A consequence worth knowing: the dark entries in `tokens.ts` are seeds solved
+BACKWARDS from the intended result, so they do not read like the colour you see
+on screen, and the comment there says so.
+
 ## Two constraints, and why
 
 **Plain CSS, never utility classes.** One of the tools that shares this folder

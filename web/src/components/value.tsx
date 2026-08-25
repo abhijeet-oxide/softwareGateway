@@ -1,6 +1,7 @@
 import type { ReactNode } from 'react'
 import { Statistic, Tooltip, Typography } from 'antd'
 import { NOT_AVAILABLE } from '../domain/format'
+import { c } from '../uikit'
 
 /**
  * How this application says "we do not have this".
@@ -74,7 +75,7 @@ export function Stat({
       suffix={absent ? undefined : suffix}
       valueStyle={
         absent
-          ? { ...valueStyle, fontStyle: 'italic', color: 'rgba(0,0,0,0.45)' }
+          ? { ...valueStyle, fontStyle: 'italic', color: c.text2 }
           : valueStyle
       }
     />

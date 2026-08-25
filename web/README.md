@@ -49,7 +49,7 @@ npm run typecheck
 | `src/components/` | The reusable vocabulary: chips, badges, progress, page furniture. |
 | `src/uikit/` | **The shared design system.** Byte-identical to the copy in every other tool on the platform. Palette, tokens, `ThemeProvider`, primitives. See `src/uikit/README.md`. |
 | `src/brand.ts` | The one file that says "Software Gateway": name, tagline, mark, favicon. |
-| `src/theme.ts` | A compatibility layer mapping this app's long-standing names (`palette`, `semantic`, `severity`, `mono`) onto the shared tokens. |
+| `src/BootGate.tsx` | The probe every page renders behind: is the Coordinator there? Both of its screens are the shared kit's. |
 
 ### Three rules the code enforces rather than documents
 
@@ -118,22 +118,29 @@ intermediary's idle timeout becoming part of the control plane.
 tools on the platform, so two products meant to look like one product stay that
 way without anybody maintaining the resemblance. It carries the palette (light
 and dark), the structural tokens, the Ant Design bridge, the `ThemeProvider`
-and the primitives; `src/theme.ts` maps it onto the names this application
-already used, so adopting it was not also a rename of twenty files.
+and the primitives, and the chrome every page sits inside. There is no theme
+file of this application's own left: every page reads the tokens from the kit
+directly, so there is exactly one place a colour can come from.
 
 Three rules keep it copyable, and each is load-bearing:
 
 - **Nothing inside `uikit/` names a product.** Identity lives in `brand.ts`,
   which is exactly what survives the folder being copied over the top of it -
   shared components take it as a prop, the Vite plugin takes it as an argument.
-- **Nothing outside it names a colour.** Every value `theme.ts` exports is a
-  `var()` reference, so an inline style follows the light/dark switch without
-  the component knowing one exists - which is how this application gained a
-  dark theme without a page being edited. A page that reached for its own hex
-  is one a rebrand silently misses, and one that stays light forever. Where a
-  colour needs to be thinner, use `withAlpha`: appending two hex digits to a
-  `var()` produces an invalid colour, so the rule is dropped and the effect
-  simply never appears.
+- **Nothing outside it names a colour.** There is no `theme.ts` any more: every
+  page imports `c`, `mono`, `severity` and `verdict` from `./uikit` directly,
+  and each is a `var()` reference, so an inline style follows the light/dark
+  switch without the component knowing one exists - which is how this
+  application gained a dark theme without a page being redesigned. A page that
+  reached for its own hex is one a rebrand silently misses, and one that stays
+  light forever. Where a colour needs to be thinner, use `withAlpha`: appending
+  two hex digits to a `var()` produces an invalid colour, so the rule is
+  dropped and the effect simply never appears.
+- **The chrome is shared whole, not just its colours.** `Shell.tsx` hands
+  `SideNav` and `TopBar` this application's nav entries and bar contents;
+  everything else about them - the widths, the item heights, the hover and
+  active language, the collapse behaviour, the profile card at the foot - is
+  the kit's, byte-identical to what the sibling tool mounts.
 - **`react` and `antd` are its only dependencies**, which is why its six glyphs
   are drawn inline rather than imported - the sibling tool does not use the same
   icon package, and a shared component that imports from one stops being

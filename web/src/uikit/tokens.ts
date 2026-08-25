@@ -148,7 +148,14 @@ export const defaultTokens: ThemeTokens = {
     vBetter: "#1f7a3d", vWorse: "#b4232b", vUnchanged: "#5a6675", vInconclusive: "#7a4fbf",
   },
   dark: {
-    brand: "#4d94e8", brandStrong: "#74abec", brandSoft: "rgba(77, 148, 232, 0.16)",
+    // These five are SEEDS, not the colours you see. Ant Design's dark
+    // algorithm desaturates whatever it is given toward the page background,
+    // so a value written here comes out several shades duller - which is how a
+    // primary button and `var(--brand)` came to be two different blues. They
+    // are chosen by solving BACKWARDS from the intended result (#58a9ff seeds
+    // the #4e93dc that actually paints), and resolvePalette in antd.ts is what
+    // guarantees the stylesheet is told the same answer.
+    brand: "#58a9ff", brandStrong: "#74abec", brandSoft: "rgba(77, 148, 232, 0.16)",
     brandBorder: "rgba(77, 148, 232, 0.45)", secondary: "#74abec",
     navBg: "#081830", navBgHover: "rgba(255, 255, 255, 0.07)", navBgActive: "#0f62d6",
     navFg: "#a8b6ca", navFgActive: "#ffffff", navBorder: "rgba(255, 255, 255, 0.08)",
@@ -156,10 +163,10 @@ export const defaultTokens: ThemeTokens = {
     border: "#262b33", borderStrong: "#353b45", illSurface: "#232a33",
     text: "#e6e9ee", text2: "#a5adba", text3: "#6c7684",
     markBg: "rgba(250, 204, 21, 0.16)", markBd: "rgba(250, 204, 21, 0.42)",
-    ok: "#4cc38a", okBg: "rgba(23, 178, 106, 0.14)", okBd: "rgba(23, 178, 106, 0.4)",
-    pending: "#f2b13a", pendingBg: "rgba(247, 144, 9, 0.14)", pendingBd: "rgba(247, 144, 9, 0.4)",
-    review: "#63a7f0", reviewBg: "rgba(77, 148, 232, 0.14)", reviewBd: "rgba(77, 148, 232, 0.4)",
-    danger: "#f0716a", dangerBg: "rgba(240, 68, 56, 0.14)", dangerBd: "rgba(240, 68, 56, 0.4)",
+    ok: "#58e2a0", okBg: "rgba(23, 178, 106, 0.14)", okBd: "rgba(23, 178, 106, 0.4)",
+    pending: "#ffcd43", pendingBg: "rgba(247, 144, 9, 0.14)", pendingBd: "rgba(247, 144, 9, 0.4)",
+    review: "#71beff", reviewBg: "rgba(77, 148, 232, 0.14)", reviewBd: "rgba(77, 148, 232, 0.4)",
+    danger: "#ff827a", dangerBg: "rgba(240, 68, 56, 0.14)", dangerBd: "rgba(240, 68, 56, 0.4)",
     base: "#b490f5", baseBg: "rgba(148, 108, 230, 0.16)", baseBd: "rgba(148, 108, 230, 0.42)",
     inherit: "#98a2b3", inheritBg: "rgba(152, 162, 179, 0.14)", inheritBd: "rgba(152, 162, 179, 0.34)",
     sevCritical: "#f2726f", sevHigh: "#f0913f", sevMedium: "#e0b13a",
@@ -273,22 +280,31 @@ function paletteToCss(p: Palette): string {
 
 /** The colour layer, as a stylesheet.
  *
+ *  `resolve` is how the two halves are kept honest: the caller (the Vite
+ *  plugin) hands in `resolvePalette` from antd.ts, which asks the component
+ *  library what it is actually going to paint. Without it the stylesheet would
+ *  state the SEED colours and the components would paint the shades Ant
+ *  derives from them, and in dark mode those are visibly different.
+ *
  *  The DEFAULT palette lands on :root; every OTHER preset is emitted scoped to
  *  :root[data-preset="<name>"], so switching preset (the attribute the brand
  *  plugin stamps on <html> at parse time) flips the whole palette with no
  *  rebuild, and every look always ships together. Local overrides apply on top
  *  of whichever preset is active. */
-export function renderRootCss(): string {
+export function renderRootCss(resolve?: (p: Palette, dark: boolean) => Palette): string {
+  const r = resolve ?? ((p: Palette) => p);
   const base = deepMerge(defaultTokens, tokenOverrides);
   const blocks = [
-    `:root { ${paletteToCss(base.light)} }`,
-    `[data-theme="dark"] { ${paletteToCss(base.dark)} }`,
+    `:root { ${paletteToCss(r(base.light, false))} }`,
+    `[data-theme="dark"] { ${paletteToCss(r(base.dark, true))} }`,
   ];
   for (const [name, over] of Object.entries(presets)) {
     if (name === "default" || !over) continue;
     const merged = deepMerge(deepMerge(defaultTokens, over), tokenOverrides);
-    blocks.push(`:root[data-preset="${name}"] { ${paletteToCss(merged.light)} }`);
-    blocks.push(`[data-theme="dark"][data-preset="${name}"] { ${paletteToCss(merged.dark)} }`);
+    blocks.push(`:root[data-preset="${name}"] { ${paletteToCss(r(merged.light, false))} }`);
+    blocks.push(
+      `[data-theme="dark"][data-preset="${name}"] { ${paletteToCss(r(merged.dark, true))} }`,
+    );
   }
   return blocks.join("\n");
 }

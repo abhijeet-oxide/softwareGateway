@@ -53,7 +53,7 @@ export type SoftwareStatus =
 export type VerificationState = 'SIGNED' | 'NOT_SIGNED' | 'VERIFICATION_FAILED' | 'UNKNOWN'
 
 const LIVE_STATES: ReadonlySet<TransferState> = new Set<TransferState>([
-  'PENDING', 'PLANNING', 'READY', 'RUNNING', 'PAUSED', 'VERIFYING', 'CANCELLING',
+  'PENDING', 'PLANNING', 'READY', 'RUNNING', 'PAUSED', 'PROMOTING', 'VERIFYING', 'CANCELLING',
 ])
 
 /** Whether a transfer is still doing something, and therefore worth polling. */

@@ -112,6 +112,8 @@ Package-level progress is a **rollup** over jobs (`SUM(bytes_transferred)`), nev
 | **Verify** | either | - | No |
 | **Dry run** | either | TargetRepository(s) | No |
 
+A promotion the two targets' shared registry can carry out itself takes a fast path around the planner, described in [22](22-promotion.md). It changes nothing here: the request, the operation and the destinations are identical, and an estate where no plugin claims the hop promotes exactly as below.
+
 Replicate and promote are **the same code path** with different origins - the origin is simply a `Repository` ([06](06-registry-abstraction.md)), and the engine does not care which role it plays. Implementing promotion as a distinct subsystem would duplicate the planner, the queue, the retry logic, and the state machine to gain nothing.
 
 Dry run is likewise not a separate implementation: it is the planner's output, rendered and then discarded ([05](05-transfer-engine.md) §7). A dry run that used different code from a real transfer would eventually lie, which defeats its only purpose.

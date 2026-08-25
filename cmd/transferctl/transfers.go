@@ -158,6 +158,15 @@ func runCopy(cmd *cobra.Command, req v1.CreateTransferRequest, dryRun bool) erro
 		}
 
 		if dryRun {
+			// HOW, on a promotion, because that is the question a dry run is
+			// really being asked: whether this is the registry relocating a
+			// release in seconds or our workers copying it. Fetched
+			// separately - the create response reports RESOLUTION, and the
+			// method is a property of the pair rather than of the request.
+			if strings.EqualFold(resp.Operation, "promote") {
+				renderPromotionMethod(w, cmd, req, resp)
+			}
+
 			fmt.Fprintln(w)
 			fmt.Fprintln(w, "Dry run: nothing was created.")
 			fmt.Fprintln(w, "Everything above resolved - the product, the package, the origin,")
@@ -185,6 +194,41 @@ func runCopy(cmd *cobra.Command, req v1.CreateTransferRequest, dryRun bool) erro
 		}
 		return nil
 	})
+}
+
+// renderPromotionMethod says whether a promotion would be relocated or copied.
+//
+// Best effort, and silent when it cannot be answered: this is an addition to a
+// dry run that was already useful without it, and a Coordinator that cannot
+// answer must not turn the dry run into an error.
+func renderPromotionMethod(
+	w io.Writer, cmd *cobra.Command, req v1.CreateTransferRequest, resp *v1.CreateTransferResponse,
+) {
+	options, err := newClient().PromotionOptions(cmd.Context(), req.Product, req.Package)
+	if err != nil {
+		return
+	}
+
+	byName := map[string]v1.PromotionDestination{}
+	for _, d := range options.Destinations {
+		byName[d.Name] = d
+	}
+
+	fmt.Fprintln(w)
+	for _, t := range resp.To {
+		d, ok := byName[t.Name]
+		if !ok {
+			continue
+		}
+		if d.Method == v1.PromotionRelocate {
+			fmt.Fprintf(w, "  %s: relocated by the registry - no bytes cross the wire\n", t.Name)
+		} else {
+			fmt.Fprintf(w, "  %s: copied by the workers\n", t.Name)
+		}
+		if d.MethodReason != "" {
+			fmt.Fprintf(w, "    %s\n", d.MethodReason)
+		}
+	}
 }
 
 // describeEndpoint renders a resolved end of a copy.
@@ -347,6 +391,14 @@ type listView struct {
 func delegated(t *v1.Transfer) bool {
 	return t.Strategy != "" && t.Strategy != "copy"
 }
+
+// relocated reports whether the registry PROMOTED this transfer internally.
+//
+// A flavour of delegated - our workers moved nothing either way, so every
+// byte column is blank for both - but a different sentence: a mirror pulled
+// from an upstream on its own schedule, and this was a copy we asked one
+// registry to make between two of its own repositories.
+func relocated(t *v1.Transfer) bool { return t.Strategy == "relocate" }
 
 // dashDelegatedCells blanks the measured columns of one list row.
 //
@@ -1049,9 +1101,70 @@ func strategyPhrase(strategy string) string {
 		return "registry's own mirror"
 	case "proxy":
 		return "registry's proxy cache"
+	case "relocate":
+		return "registry's own promotion"
 	default:
 		return "registry"
 	}
+}
+
+// describeRelocated renders a promotion the registry carried out itself.
+//
+// NAMES, not bytes, and the distinction is the whole reason this rendering
+// exists rather than the delegated one. A registry relocating within itself
+// already holds every blob; what it publishes is names, so names are the only
+// denominator this transfer has. Printing a byte account would be printing
+// zeroes that mean "we did not move them", next to a release that arrived
+// in full.
+func describeRelocated(w io.Writer, t *v1.Transfer) error {
+	fmt.Fprintln(w)
+	fmt.Fprintf(w, "Promoted by %s itself, from %s to %s.\n",
+		registryHost(t.Target), endpointName(t.SourceName, t.Source),
+		endpointName(t.TargetName, t.Target))
+	fmt.Fprintln(w)
+
+	tw := newTabWriter(w)
+	if p := t.Promotion; p != nil {
+		fmt.Fprintf(tw, "  Promoter:\t%s\n", p.Promoter)
+		fmt.Fprintf(tw, "  Names:\t%d of %d published\n", p.NamesDone, p.NamesTotal)
+		if p.Attempts > 1 {
+			fmt.Fprintf(tw, "  Attempts:\t%d\n", p.Attempts)
+		}
+		if p.LastError != "" {
+			fmt.Fprintf(tw, "  Detail:\t%s\n", p.LastError)
+		}
+	}
+	fmt.Fprintf(tw, "  Progress:\t%s\n", relocatedProgress(t))
+	fmt.Fprintf(tw, "  Bytes:\t- none crossed the wire; the registry relocated them\n")
+	if t.FailureReason != "" && (t.Promotion == nil || t.Promotion.LastError != t.FailureReason) {
+		fmt.Fprintf(tw, "  Reason:\t%s\n", t.FailureReason)
+	}
+	return tw.Flush()
+}
+
+// relocatedProgress is a STATE, never a percentage.
+func relocatedProgress(t *v1.Transfer) string {
+	switch t.State {
+	case v1.TransferPromoting:
+		return "the registry is relocating it; normally seconds"
+	case v1.TransferSucceeded:
+		return "complete, and the destination resolves the digest we promoted"
+	case v1.TransferFailed:
+		return "the promotion did not complete"
+	default:
+		return strings.ToLower(string(t.State))
+	}
+}
+
+// registryHost is the host half of a resolved endpoint.
+func registryHost(resolved string) string {
+	if i := strings.Index(resolved, "/"); i > 0 {
+		return resolved[:i]
+	}
+	if resolved == "" {
+		return "the registry"
+	}
+	return resolved
 }
 
 // delegatedProgress is a STATE, never a percentage.
@@ -1092,6 +1205,9 @@ func describeTransfer(w io.Writer, t *v1.Transfer, rates *rateTracker, watching 
 		return err
 	}
 
+	if relocated(t) {
+		return describeRelocated(w, t)
+	}
 	if delegated(t) {
 		return describeDelegated(w, t)
 	}

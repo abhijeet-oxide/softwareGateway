@@ -501,6 +501,7 @@ func (p *Product) validateTargets(resolver *SecretResolver) Errors {
 		errs = append(errs, validateNetwork(path+".network", t.Network, resolver)...)
 		errs = append(errs, validateCosign(path+".verification", t.Verification, resolver)...)
 		errs = append(errs, validateXray(path, t.XrayEnabled, t.XrayEndpoint, t.Type, t.Anonymous)...)
+		errs = append(errs, validateJFrogPromotion(path, t)...)
 
 		if prev, dup := seen[t.Name]; dup && t.Name != "" {
 			errs = append(errs, Error{path + ".name", fmt.Sprintf("%q duplicates spec.targets[%d]", t.Name, prev), ""})
@@ -917,6 +918,58 @@ func AsErrors(err error) (Errors, bool) {
 // operator sees a repository they believe reports vulnerabilities and which
 // reports none. That is the failure mode this whole feature is written to
 // prevent, arriving through configuration instead of through code.
+// validateJFrogPromotion rejects promotion settings that would never be read.
+//
+// Same argument as validateXray, and the same failure it prevents: a
+// `jfrogRepositoryKey` on a target typed `generic` is well-formed, parses, and
+// is silently ignored - so an operator who wrote it to fix a subdomain
+// deployment sees promotions keep going the slow way with nothing anywhere
+// saying why. The document is not merely wrong, it is quietly wrong, which is
+// the kind worth failing on.
+func validateJFrogPromotion(path string, t Target) Errors {
+	var errs Errors
+
+	if (t.JFrogRepositoryKey != "" || t.JFrogEndpoint != "") && !t.Type.IsJFrog() {
+		named := string(t.Type)
+		if named == "" {
+			named = string(RegistryGeneric) + " (the default)"
+		}
+		field := ".jfrogRepositoryKey"
+		if t.JFrogRepositoryKey == "" {
+			field = ".jfrogEndpoint"
+		}
+		errs = append(errs, Error{path + field,
+			fmt.Sprintf("only a JFrog target promotes natively, and this one is %s", named),
+			"set type: jfrog, or remove the field - it would otherwise be accepted and never read"})
+	}
+
+	// A repository key is one Artifactory repository, never a path into one.
+	// Writing `docker-prod/nokia` here produces a promotion URL naming a
+	// repository that does not exist, and a 404 that reads like a missing
+	// image rather than like a configuration mistake.
+	if strings.Contains(t.JFrogRepositoryKey, "/") {
+		errs = append(errs, Error{path + ".jfrogRepositoryKey",
+			fmt.Sprintf("%q contains a slash, so it is a path rather than a repository key",
+				t.JFrogRepositoryKey),
+			"name only the Artifactory repository, e.g. docker-prod; the path beneath it comes from `repository`"})
+	}
+
+	if t.JFrogEndpoint != "" {
+		switch u, err := url.Parse(t.JFrogEndpoint); {
+		case err != nil:
+			errs = append(errs, Error{path + ".jfrogEndpoint",
+				fmt.Sprintf("%q is not a valid URL", t.JFrogEndpoint), ""})
+		case u.Scheme != "http" && u.Scheme != "https":
+			errs = append(errs, Error{path + ".jfrogEndpoint", "must start with https:// or http://",
+				"this is the JFrog PLATFORM base URL, not the docker registry host"})
+		case u.Host == "":
+			errs = append(errs, Error{path + ".jfrogEndpoint", "has no host", ""})
+		}
+	}
+
+	return errs
+}
+
 func validateXray(path string, enabled *bool, endpoint string, typ RegistryType, anonymous bool) Errors {
 	if !XrayIsEnabled(enabled) && endpoint == "" {
 		return nil

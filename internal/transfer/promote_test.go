@@ -2,6 +2,7 @@ package transfer_test
 
 import (
 	"context"
+	"strings"
 	"testing"
 
 	"github.com/abhijeet-oxide/softwareGateway/internal/registry"
@@ -152,4 +153,172 @@ func trimPrefix(path, prefix string) string {
 		return path[len(prefix):]
 	}
 	return path
+}
+
+// ---------------------------------------------------------------------------
+// Native promotion: the hop a registry carries out itself.
+// ---------------------------------------------------------------------------
+
+// claimingPromotion is a plugin that says yes, without being one.
+//
+// The seam is what keeps internal/transfer free of JFrog, and this is the
+// mechanical proof: the expander's whole promotion branch is exercised here
+// with a two-line fake, because everything it knows about a promoter is the
+// interface in promotion.go.
+type claimingPromotion struct {
+	claims bool
+	// seen is the hop it was asked about, so the test can assert what the
+	// expander derived rather than what it was told.
+	seen transfer.PromotionHop
+}
+
+func (c *claimingPromotion) Claim(
+	_ context.Context, hop transfer.PromotionHop,
+) (transfer.PromotionClaim, error) {
+	c.seen = hop
+	if !c.claims {
+		return transfer.PromotionClaim{Reason: "not mine"}, nil
+	}
+	return transfer.PromotionClaim{Promoter: "fake", Claimed: true, Reason: "mine"}, nil
+}
+
+// promotionSlice replicates a bundle to lab, then opens a promotion out of it.
+func promotionSlice(t *testing.T) (*slice, store.PackageRow, int64) {
+	t.Helper()
+
+	s := newSlice(t)
+	pkg, _ := seedORB(t, s, "orb_23.8.1076")
+
+	s.plan(pkg, "to-lab")
+	if got := s.drain("worker-1", 4); got.Failed != 0 {
+		t.Fatalf("replication to lab failed: %v", got.LastError)
+	}
+
+	prodID := s.repo("target", s.dst.Host(), "nokia-prod")
+	s.openTransfer("to-prod", pkg, "promote", s.targetID, prodID)
+	return s, pkg, prodID
+}
+
+func expanderWith(t *testing.T, s *slice, p transfer.Promotion) *transfer.Expander {
+	t.Helper()
+	return transfer.NewExpander(
+		s.packages,
+		transfer.NewPlanner(s.packages, 4, testLogger(t)),
+		testResolver{packages: s.packages},
+		0, testLogger(t),
+	).WithPromotion(p, store.NewPromotions(s.st))
+}
+
+func jobCount(t *testing.T, s *slice, transferID string) int {
+	t.Helper()
+	var n int
+	if err := s.st.DB().QueryRowContext(t.Context(),
+		`SELECT COUNT(*) FROM jobs WHERE transfer_id = ?`, transferID).Scan(&n); err != nil {
+		t.Fatal(err)
+	}
+	return n
+}
+
+// A claimed promotion creates NO JOBS. That is the entire point: our engine
+// would relocate every blob by mount, which is already cheap and is still tens
+// of thousands of round trips to move content the registry can move in one
+// call per name.
+func TestAClaimedPromotionPlansNoJobs(t *testing.T) {
+	s, _, _ := promotionSlice(t)
+
+	seam := &claimingPromotion{claims: true}
+	if _, err := expanderWith(t, s, seam).Expand(t.Context()); err != nil {
+		t.Fatalf("expand: %v", err)
+	}
+
+	if state := s.transferState("to-prod"); state != "promoting" {
+		t.Errorf("transfer is %q, want promoting", state)
+	}
+	if n := jobCount(t, s, "to-prod"); n != 0 {
+		t.Errorf("%d jobs were planned; a claimed promotion moves nothing itself", n)
+	}
+
+	pm, err := store.NewPromotions(s.st).ForTransfer(t.Context(), "to-prod")
+	if err != nil {
+		t.Fatalf("the promotion was not recorded: %v", err)
+	}
+	if pm.Promoter != "fake" {
+		t.Errorf("promoter is %q, want fake", pm.Promoter)
+	}
+	if pm.NamesTotal == 0 {
+		t.Error("a promotion must record the names it publishes")
+	}
+}
+
+// The names are RELATIVE to each end's base, so one value re-bases under
+// either. Carrying lab's prefix would nest it inside production's - the same
+// mistake TestPromotionReproducesTheStructureUnderTheNewPrefix guards on the
+// copy path.
+func TestTheNamesAPromotionPublishesCarryNoPrefix(t *testing.T) {
+	s, pkg, _ := promotionSlice(t)
+
+	seam := &claimingPromotion{claims: true}
+	if _, err := expanderWith(t, s, seam).Expand(t.Context()); err != nil {
+		t.Fatalf("expand: %v", err)
+	}
+
+	if len(seam.seen.Names) == 0 {
+		t.Fatal("the seam was asked about a hop with no names")
+	}
+	root := seam.seen.Names[0]
+	if root.Repository != sourcePath {
+		t.Errorf("the root is at %q, want the vendor's own path %q", root.Repository, sourcePath)
+	}
+	if root.Tag != pkg.Tag {
+		t.Errorf("the root is tagged %q, want %q", root.Tag, pkg.Tag)
+	}
+	if root.Digest != pkg.ManifestDigest {
+		t.Errorf("the root resolves to %q, want %q", root.Digest, pkg.ManifestDigest)
+	}
+
+	for _, n := range seam.seen.Names {
+		if strings.HasPrefix(n.Repository, targetBase) {
+			t.Errorf("%q carries the origin's prefix; it must be relative", n.Repository)
+		}
+		if n.Tag == "" {
+			t.Errorf("%q has no tag; a promotion publishes NAMES", n.Repository)
+		}
+	}
+}
+
+// Nothing claiming is the ordinary answer, and it must leave the copy path
+// exactly as it was.
+func TestAnUnclaimedPromotionIsPlannedAsACopy(t *testing.T) {
+	s, _, _ := promotionSlice(t)
+
+	if _, err := expanderWith(t, s, &claimingPromotion{claims: false}).Expand(t.Context()); err != nil {
+		t.Fatalf("expand: %v", err)
+	}
+
+	if state := s.transferState("to-prod"); state == "promoting" {
+		t.Fatal("nothing claimed, so the transfer must be planned as a copy")
+	}
+	if n := jobCount(t, s, "to-prod"); n == 0 {
+		t.Error("a copied promotion must have jobs")
+	}
+}
+
+// A REPLICATION is never offered to the promoters, whatever they would say. A
+// vendor's registry is not somewhere a target can relocate from.
+func TestAReplicationIsNeverOfferedToThePromoters(t *testing.T) {
+	s := newSlice(t)
+	pkg, _ := seedORB(t, s, "orb_23.8.1076")
+	s.plan(pkg, "to-lab")
+
+	seam := &claimingPromotion{claims: true}
+	if _, err := expanderWith(t, s, seam).Expand(t.Context()); err != nil {
+		t.Fatalf("expand: %v", err)
+	}
+
+	if seam.seen.TransferID != "" {
+		t.Fatalf("a replication was offered to the promoters as %q", seam.seen.TransferID)
+	}
+	if state := s.transferState("to-lab"); state == "promoting" {
+		t.Fatal("a replication must never enter `promoting`")
+	}
 }

@@ -4,10 +4,12 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"strings"
 
 	"github.com/abhijeet-oxide/softwareGateway/internal/catalog"
 	"github.com/abhijeet-oxide/softwareGateway/internal/platform/metrics"
 	"github.com/abhijeet-oxide/softwareGateway/internal/product"
+	"github.com/abhijeet-oxide/softwareGateway/internal/promotion"
 	"github.com/abhijeet-oxide/softwareGateway/internal/regclient"
 	"github.com/abhijeet-oxide/softwareGateway/internal/registry"
 	"github.com/abhijeet-oxide/softwareGateway/internal/store"
@@ -263,6 +265,98 @@ func (r *resolverImpl) ResolveAtTarget(
 		return "", err
 	}
 	return string(desc.Digest), nil
+}
+
+// TargetsHolding names the configured targets a package has reached.
+//
+// It is what makes `promote` need no --from in the case configuration cannot
+// settle: `lab-eu` and `lab-us` are the same environment and different places,
+// and only the transfer history says which one the release is in.
+//
+// SUCCEEDED only. A transfer still running has not put the release anywhere
+// yet, and promoting out of a target mid-download would read a tree that is
+// half there.
+func (r *resolverImpl) TargetsHolding(ctx context.Context, packageID int64) ([]string, error) {
+	transfers, err := r.packages.ListTransfers(ctx, store.ListTransfersFilter{
+		PackageID: packageID, Limit: 100,
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	seen := map[string]bool{}
+	var out []string
+	for _, t := range transfers {
+		// The CONFIGURED name, which is what a promotion resolves against. A
+		// transfer that predates the name being recorded contributes nothing
+		// rather than contributing a resolved path that would match no target.
+		if t.TargetName == "" || !strings.EqualFold(t.State, "succeeded") || seen[t.TargetName] {
+			continue
+		}
+		seen[t.TargetName] = true
+		out = append(out, t.TargetName)
+	}
+	return out, nil
+}
+
+// ResolveAt answers what a tag points at in one repository PATH of a target.
+//
+// The sibling of ResolveAtTarget above, and the difference is the path. A
+// mirror's whole business is one repository, so resolving the target's own
+// base is the question. A promotion publishes a bundle's components under
+// their own paths beneath that base, and verifying one of those means asking
+// about a repository the target's configuration never names.
+//
+// It reads through the same client factory as everything else, so a path
+// unreachable to a transfer is unreachable to this too - which is correct: a
+// confirmation that could succeed where the transfer could not would be
+// confirming the wrong thing.
+func (r *resolverImpl) ResolveAt(
+	ctx context.Context, productName, targetName, repositoryPath, tag string,
+) (string, error) {
+	p, ok := r.products.Get(productName)
+	if !ok {
+		return "", fmt.Errorf("product %q is not loaded", productName)
+	}
+	t, ok := p.Target(targetName)
+	if !ok {
+		return "", fmt.Errorf("product %q has no target %q", productName, targetName)
+	}
+
+	// The path a promotion published under is RELATIVE to the target's base,
+	// so it nests beneath it here exactly as the transfer engine nests it -
+	// through the same function, so a verification cannot check a path no
+	// promotion ever writes.
+	full := transfer.DestinationPath(t.Repository, repositoryPath)
+
+	reader, err := r.clients.For(v1.JobEndpoint{
+		Product:    productName,
+		Name:       t.Name,
+		Registry:   t.Registry,
+		Repository: full,
+		Type:       string(t.Type),
+		Role:       "target",
+	})
+	if err != nil {
+		return "", err
+	}
+
+	desc, err := reader.ResolveTag(ctx, tag)
+	if err != nil {
+		return "", err
+	}
+	return string(desc.Digest), nil
+}
+
+// promoterAdapter narrows promotion.Runner to what queue.Controller needs.
+//
+// The controller takes an interface of one method so internal/queue does not
+// import internal/promotion; this is the two-line adapter that satisfies it,
+// exactly as expanderAdapter does for the expander.
+type promoterAdapter struct{ r *promotion.Runner }
+
+func (a promoterAdapter) RunPromotion(ctx context.Context) (bool, error) {
+	return a.r.Tick(ctx)
 }
 
 // replicationMetrics adapts the metric registry to the replication package's

@@ -94,6 +94,16 @@ type Catalog interface {
 	// A target that has never received a transfer has no row, and a request
 	// naming it must still work - the row is what the transfer points at.
 	EnsureTarget(ctx context.Context, productName string, target RepoView) (int64, error)
+
+	// TargetsHolding names the configured targets a package has actually been
+	// transferred to, successfully.
+	//
+	// The one FACT in this interface. Everything else here is configuration -
+	// what a product declares its stages are - and configuration cannot answer
+	// the question a promotion with no --from is really asking, which is "the
+	// one it was downloaded to". Two labs are both `environment: lab`, and
+	// only the history says which of them the release is actually in.
+	TargetsHolding(ctx context.Context, packageID int64) ([]string, error)
 }
 
 // CreateRequest is a request as a person expressed it, before resolution.
@@ -349,7 +359,7 @@ func resolveOrigin(
 			return t, nil
 		}
 	} else if req.Promote {
-		return promotionOrigin(view)
+		return promotionOrigin(ctx, catalog, view, req.Row.ID)
 	}
 
 	origin, err := catalog.RepositoryByID(ctx, req.Row.SourceRepoID)
@@ -376,9 +386,46 @@ func resolveOrigin(
 }
 
 // promotionOrigin resolves the target a promotion reads from.
-func promotionOrigin(view ProductView) (RepoView, error) {
+//
+// # Configuration first, then the release's own history
+//
+// A promotion with no --from means "from where it is". The product's promotion
+// path answers that whenever it resolves to one target, and that is the
+// answer: it is what the operator wrote down, and it holds even for a release
+// that has not landed yet.
+//
+// When it does not resolve - two labs share `environment: lab`, or no target
+// declares an environment at all - the earlier behaviour was to refuse and
+// name the candidates. That refusal is still there, but it is now the SECOND
+// answer rather than the first, because there is a fact available that beats
+// configuration at this exact question: which target actually holds the
+// release. `lab-eu` and `lab-us` are indistinguishable as configuration and
+// completely distinguishable as history, and asking somebody to type --from
+// when only one of them has ever received the release is asking them to
+// re-state something the system knows.
+//
+// It only ever NARROWS. A hop configuration already resolves is unaffected,
+// and a release in two labs is still refused - because then the two really are
+// different promotions and picking one would be a guess.
+func promotionOrigin(
+	ctx context.Context, catalog Catalog, view ProductView, packageID int64,
+) (RepoView, error) {
 	if hasEnvironments(view) {
-		return exactlyOneIn(view.Targets, view.PromotionFrom, "--from")
+		origin, err := exactlyOneIn(view.Targets, view.PromotionFrom, "--from")
+		if err == nil {
+			return origin, nil
+		}
+		// Ambiguous or unconfigured. Narrow the candidates by where the
+		// release actually is; the original complaint stands if that does not
+		// settle it, because it names every candidate and the flag that would.
+		candidates := inEnvironment(view.Targets, view.PromotionFrom)
+		if len(candidates) == 0 {
+			candidates = view.Targets
+		}
+		if held, ok := onlyHolder(ctx, catalog, candidates, packageID); ok {
+			return held, nil
+		}
+		return RepoView{}, err
 	}
 
 	// No target declares an environment. Rather than refuse outright, take the
@@ -395,11 +442,49 @@ func promotionOrigin(view ProductView) (RepoView, error) {
 	if len(ordinary) == 1 {
 		return ordinary[0], nil
 	}
+	if held, ok := onlyHolder(ctx, catalog, ordinary, packageID); ok {
+		return held, nil
+	}
 	return RepoView{}, fmt.Errorf(
 		"cannot tell which target to promote from: no target of product %q declares an "+
 			"environment, and %d could be the origin"+
 			"\nname one with --from, or set `environment:` on the targets",
 		view.Name, len(ordinary))
+}
+
+// onlyHolder is the single candidate that actually holds the release.
+//
+// ok is false for none and for several, and both are correct: a release
+// nowhere yet cannot be promoted at all, and one in two places is two
+// different promotions. A lookup that fails is also false - the history is a
+// refinement here, and losing it must return the caller to the configured
+// answer rather than to an error about a query.
+func onlyHolder(
+	ctx context.Context, catalog Catalog, candidates []RepoView, packageID int64,
+) (RepoView, bool) {
+	if packageID == 0 || len(candidates) == 0 {
+		return RepoView{}, false
+	}
+	holding, err := catalog.TargetsHolding(ctx, packageID)
+	if err != nil || len(holding) == 0 {
+		return RepoView{}, false
+	}
+
+	held := make(map[string]bool, len(holding))
+	for _, name := range holding {
+		held[name] = true
+	}
+
+	var found []RepoView
+	for _, c := range candidates {
+		if held[c.Name] {
+			found = append(found, c)
+		}
+	}
+	if len(found) == 1 {
+		return found[0], true
+	}
+	return RepoView{}, false
 }
 
 // configuredName recovers which configured entry a repository row belongs to.

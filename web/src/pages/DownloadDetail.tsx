@@ -14,7 +14,7 @@ import {
 } from '../domain/format'
 import { NA, Stat, Value } from '../components/value'
 import {
-  ArtifactProgress, MeasuredProgress, StateStrip, type StripState,
+  ArtifactProgress, MeasuredProgress, PromotionProgress, StateStrip, type StripState,
 } from '../components/progress'
 import { RepoLink, TimeAgo, TransferStateTag } from '../components/chips'
 import {
@@ -493,9 +493,12 @@ export default function DownloadDetail() {
             <Card
               style={{ height: '100%' }}
               loading={transfer.isLoading}
-              title={mirrored
-                ? `Step 1 - downloading to ${t?.targetName ?? 'internal storage'}`
-                : `Downloading to ${t?.targetName ?? 'internal storage'}`}
+              /*
+                A PROMOTION is not a download, and calling it one on the page
+                somebody opened to watch it is how a reader concludes they
+                clicked the wrong button. The word follows the operation.
+              */
+              title={promotionTitle(t?.strategy, t?.targetName, mirrored)}
             >
               <Space direction="vertical" size={12} style={{ width: '100%' }}>
                 <RepoLink url={t?.target ? `https://${t.target}` : undefined} label={t?.targetName} />
@@ -512,14 +515,25 @@ export default function DownloadDetail() {
                   live in the line under it where they read as a cost rather
                   than as a second opinion about progress.
                 */}
-                <ArtifactProgress
-                  groups={t?.content}
-                  transferred={transferred}
-                  total={content}
-                  saved={saved}
-                  strategy={t?.strategy ?? 'copy'}
-                  speedBytesPerSecond={running ? speed : undefined}
-                />
+                {/*
+                  A PROMOTION the registry carried out has no artifact
+                  breakdown and never will: it created no jobs, so there is
+                  nothing for the table below to count. Its honest denominator
+                  is NAMES, and that is a different bar rather than this one
+                  with different numbers in it.
+                */}
+                {t?.strategy === 'relocate' ? (
+                  <PromotionProgress promotion={t?.promotion} />
+                ) : (
+                  <ArtifactProgress
+                    groups={t?.content}
+                    transferred={transferred}
+                    total={content}
+                    saved={saved}
+                    strategy={t?.strategy ?? 'copy'}
+                    speedBytesPerSecond={running ? speed : undefined}
+                  />
+                )}
 
                 <Table
                   size="small"
@@ -774,4 +788,22 @@ export default function DownloadDetail() {
       )}
     </>
   )
+}
+
+/**
+ * What Step 1 is called.
+ *
+ * A promotion is not a download. The page is the same page - a transfer moving
+ * one release to one destination - and the word has to follow the operation,
+ * or somebody watching a promotion reads "Downloading to production" and
+ * concludes they pressed the wrong button.
+ */
+function promotionTitle(
+  strategy: string | undefined, target: string | undefined, mirrored: boolean,
+): string {
+  const where = target ?? 'internal storage'
+  if (strategy === 'relocate') {
+    return `Promoting to ${where}`
+  }
+  return mirrored ? `Step 1 - downloading to ${where}` : `Downloading to ${where}`
 }

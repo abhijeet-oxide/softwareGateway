@@ -358,17 +358,52 @@ Scheduled request 3d8f1a92-… for 2026-08-11 02:00:00 UTC (in 6d 15h)
   No queue entries created until the scheduled time.
 ```
 
-**Promote** - same engine, target → target ([05](05-transfer-engine.md) §6):
+**Promote** - same engine, target → target ([05](05-transfer-engine.md) §6,
+[22](22-promotion.md)):
 
 ```
-$ transferctl promote v2.14.0 --product vendor-a-platform --from lab --to production
+$ transferctl promote vendor-a-platform v2.14.0 --to production
 
-Promotion request b2c4e6f8-… created
-  production   transfer 5a7b9c1d-…   PLANNING
+Promoting v2.14.0
+  from  lab (lab)  internal.example.com/vendor-a-lab
+  to    production (production)  internal.example.com/vendor-a-prod
 
-Note: lab and production share registry internal.azurecr.io
-      → cross-repository mount applies; most blobs will not cross the network.
+  transfer 5a7b9c1d -> production
+
+Bytes move once a worker picks the jobs up. Follow with:
+  transferctl transfers describe 5a7b9c1d
 ```
+
+`--from` is omitted above because it is nearly always deducible: the product's
+promotion path when its source environment names one target, and otherwise the
+target that actually HOLDS the release ([22](22-promotion.md) §6). Two labs
+holding the same release is refused, naming both.
+
+**With no `--to` and nothing to deduce**, `promote` lists rather than guesses -
+and says what sending the release to each destination would actually do:
+
+```
+$ transferctl promote vendor-a-platform v2.14.0
+
+v2.14.0 is at lab.
+
+Where it can go:
+  TARGET       ENVIRONMENT  STATE          HOW
+  production   production   not there yet  relocated by the registry
+  dr-site      production   not there yet  copied
+
+  both targets are repositories of internal.example.com, so JFrog relocates the
+  release server-side: 6 name(s), no bytes over the wire
+  lab is on internal.example.com and dr-site is on dr.example.com: JFrog can
+  only relocate within one Artifactory, so the content will be copied instead
+
+Name one: transferctl promote vendor-a-platform v2.14.0 --to <target>
+```
+
+The distinction is worth reading before a maintenance window rather than
+watching afterwards: a relocated release lands in seconds regardless of size,
+and a copied one moves at whatever the route between two registries is worth.
+`--dry-run` reports the same thing for a destination you have named.
 
 **Verify:**
 

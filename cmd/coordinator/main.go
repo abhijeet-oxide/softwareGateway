@@ -37,6 +37,7 @@ import (
 	"github.com/abhijeet-oxide/softwareGateway/internal/platform/version"
 	"github.com/abhijeet-oxide/softwareGateway/internal/preflight"
 	"github.com/abhijeet-oxide/softwareGateway/internal/product"
+	"github.com/abhijeet-oxide/softwareGateway/internal/promotion"
 	"github.com/abhijeet-oxide/softwareGateway/internal/queue"
 	"github.com/abhijeet-oxide/softwareGateway/internal/regclient"
 	"github.com/abhijeet-oxide/softwareGateway/internal/replication"
@@ -45,6 +46,17 @@ import (
 	"github.com/abhijeet-oxide/softwareGateway/internal/transfer"
 	"github.com/abhijeet-oxide/softwareGateway/internal/vendors"
 	"github.com/abhijeet-oxide/softwareGateway/internal/vendors/near"
+
+	// Registers the JFrog promoter with the plugin registry, via its init.
+	//
+	// THE ONE PLACE A PROMOTER IS NAMED, and it is the same arrangement the
+	// vendor layout above uses. Everything downstream depends on the seam in
+	// internal/transfer and is forbidden by depguard from importing an
+	// implementation, so `grep -rn "promote/jfrog"` finding only this file is
+	// the mechanical form of "the engine does not know what Artifactory is".
+	// Deleting internal/promote/jfrog must leave the rest building and
+	// passing, with every promotion falling back to a copy.
+	_ "github.com/abhijeet-oxide/softwareGateway/internal/promote/jfrog"
 )
 
 const component = "coordinator"
@@ -220,6 +232,18 @@ func run() error {
 		replicationSvc, replicationStore, products, transferResolver, logger).
 		WithObservability(replicationAudit, replicationMetric)
 
+	// Native promotion: the seam the expander asks before planning a hop, the
+	// store that carries what was claimed, and the loop that carries it out.
+	//
+	// It is what makes lab -> production on one Artifactory the seconds it
+	// ought to be rather than a manifest walk and several thousand mounts. An
+	// estate whose targets do not share a registry never claims, and every
+	// promotion is the copy it always was.
+	promotionStore := store.NewPromotions(st)
+	promotionSvc := promotion.NewService(products, resolver, logger)
+	promotionRunner := promotion.NewRunner(
+		promotionSvc, promotionStore, packages, transferResolver, logger)
+
 	queueCtl := queue.NewController(jobQueue, expanderAdapter{
 		e: transfer.NewExpander(
 			packages,
@@ -228,11 +252,13 @@ func run() error {
 			0, logger,
 		).WithDelegation(
 			replication.NewDelegation(replicationSvc, products, replicationStore),
-			replicationStore),
+			replicationStore,
+		).WithPromotion(promotionSvc, promotionStore),
 	}, queue.ControllerOptions{
 		ReapInterval:   cfg.Coordinator.Reaper.TickInterval,
 		ExpandInterval: cfg.Coordinator.Scheduler.TickInterval,
-	}, logger).WithStepper(replicationStore)
+	}, logger).WithStepper(replicationStore).
+		WithPromoter(promoterAdapter{r: promotionRunner})
 
 	// A package's manifest BODIES are the only thing recorded here that grows
 	// without limit and can be discarded without losing a fact - they are a
@@ -420,6 +446,16 @@ func run() error {
 		// client, and the API layer holds none.
 		Blobs:                blobsImpl{transferResolver},
 		FileDownloadsEnabled: cfg.Coordinator.Files.DownloadEnabled,
+		// How a promotion would be carried out, which the dialog asks before
+		// anybody commits to anything. Here for the same reason again: the
+		// plugin claim reads a target's resolved credential and registry type,
+		// and the API layer holds neither.
+		//
+		// The STORE is separate, and deliberately: reading what a promotion
+		// did is a database query, and it must keep answering on a replica
+		// that cannot resolve a credential at all.
+		Promotions:     promotionSvc,
+		PromotionStore: promotionStore,
 		// Delegated replication runs here for the same reason again: it speaks
 		// to Quay's MANAGEMENT api, which needs a credential from a projected
 		// Secret, and transferctl holds neither.

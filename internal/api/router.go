@@ -194,6 +194,15 @@ type Deps struct {
 	// TargetRows resolves configured target names to catalog rows, which only
 	// running a rule needs.
 	TargetRows TargetRows
+	// Promotions answers how a promotion would be carried out. Optional on
+	// the same terms as Comparer: it reaches the promoter plugins through
+	// resolved credentials, which only a composition root holds. Without it
+	// every hop is reported as a copy, which is what it would be.
+	Promotions Promotions
+	// PromotionStore backs the promotion progress on a transfer. Separate from
+	// Promotions because reading what a promotion DID is a database query and
+	// must keep working on a replica that cannot resolve a credential at all.
+	PromotionStore *store.Promotions
 	// ReplicationStore backs the sync history. Separate from Replication
 	// because the history is readable on a Coordinator that cannot currently
 	// reach the registry at all, and that is exactly when it is wanted.
@@ -361,6 +370,16 @@ func (s *Server) routes() chi.Router {
 			r.Get("/products/{product}/packages", s.handleListPackages)
 			r.Get("/products/{product}/packages/{package}", s.handleGetPackage)
 			r.Get("/products/{product}/packages/{package}/artifacts", s.handleListArtifacts)
+			// WHERE THIS RELEASE CAN GO NEXT, and what sending it there would
+			// do. A GET because every input is configuration or a row and
+			// nothing leaves the process - a dialog that could not be opened
+			// without a side effect would be one nobody could safely reopen.
+			//
+			// Registered on Packages rather than on Promotions: the answer is
+			// useful without a promoter configured, where it correctly reports
+			// that every hop is a copy.
+			r.Get("/products/{product}/packages/{package}/promotionOptions",
+				s.handlePromotionOptions)
 			// What is INSIDE the release, as files rather than as layers.
 			// Its own route rather than a field on the artifact listing: a
 			// release has thousands of files and dozens of artifacts, and one

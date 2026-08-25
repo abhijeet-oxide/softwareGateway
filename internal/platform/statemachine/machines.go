@@ -109,7 +109,19 @@ const (
 	// transfer would sit in `running` with an empty job set, and the wave-drain
 	// check would settle it immediately - reporting success at the moment we
 	// had asked Quay to start and before anything had happened.
-	TransferSyncing   TransferState = "syncing"
+	TransferSyncing TransferState = "syncing"
+	// TransferPromoting is a native promotion waiting on the REGISTRY.
+	//
+	// Its own state rather than a reuse of `syncing`, and the difference is
+	// the SETTLE PATH rather than the waiting. A mirror pulls from an upstream
+	// on its own schedule, so its distinctive outcome is `diverged` - the tag
+	// moved, and what arrived is not what was asked for, which is a mirror
+	// working as designed. A promotion is a copy we asked a registry to make
+	// between two of its own repositories: there is no upstream and nothing to
+	// diverge from, so a destination holding a different digest is a fault.
+	// Sharing the state would mean sharing the settle path, which is precisely
+	// where the two differ.
+	TransferPromoting TransferState = "promoting"
 	TransferVerifying TransferState = "verifying"
 	TransferSucceeded TransferState = "succeeded"
 	// TransferDiverged is terminal, and is neither success nor failure.
@@ -163,6 +175,11 @@ const (
 	TransferSyncSucceeded TransferEvent = "SyncSucceeded"
 	TransferSyncDiverged  TransferEvent = "SyncDiverged"
 	TransferSyncFailed    TransferEvent = "SyncFailed"
+
+	// Native promotion (docs/design/22 §4).
+	TransferPromotionRequested TransferEvent = "PromotionRequested"
+	TransferPromotionSucceeded TransferEvent = "PromotionSucceeded"
+	TransferPromotionFailed    TransferEvent = "PromotionFailed"
 )
 
 const TransferStateZero TransferState = ""
@@ -219,6 +236,24 @@ var Transfer = New[TransferState, TransferEvent]("transfer",
 	// equivalent of retrying failed jobs.
 	Transition[TransferState, TransferEvent]{TransferFailed, TransferSyncRequested, TransferSyncing},
 	Transition[TransferState, TransferEvent]{TransferSyncing, TransferCancelRequested, TransferCancelling},
+
+	// Native promotion. The branch is at `planning` for the same reason the
+	// delegated one is: a hop a registry carries out itself produces no jobs,
+	// so instead of PlanCompleted it emits PromotionRequested and waits.
+	//
+	// There is no PromotionDiverged, and the absence is the point. A promotion
+	// is a copy WE asked for between two repositories of one registry; a
+	// destination that ends up holding a different digest has not faithfully
+	// followed a moving upstream, it has gone wrong, and `failed` is the only
+	// honest word for that.
+	Transition[TransferState, TransferEvent]{TransferPlanning, TransferPromotionRequested, TransferPromoting},
+	Transition[TransferState, TransferEvent]{TransferPromoting, TransferPromotionSucceeded, TransferSucceeded},
+	Transition[TransferState, TransferEvent]{TransferPromoting, TransferPromotionFailed, TransferFailed},
+	// A promotion can be asked for again after it failed - the promoter's own
+	// retry, which is what makes an interrupted Coordinator recoverable rather
+	// than a request somebody has to make twice.
+	Transition[TransferState, TransferEvent]{TransferFailed, TransferPromotionRequested, TransferPromoting},
+	Transition[TransferState, TransferEvent]{TransferPromoting, TransferCancelRequested, TransferCancelling},
 
 	Transition[TransferState, TransferEvent]{TransferFailed, TransferRetryRequested, TransferReady},
 

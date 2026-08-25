@@ -268,6 +268,123 @@ func TestForbiddenNamesThePermissionThatIsMissing(t *testing.T) {
 	}
 }
 
+// Some Artifactory versions answer a bare, undiagnosed 400 to a tag-scoped
+// promote request against a packageType=oci/federated repository. When the
+// source repository holds nothing but tags this hop already intends to
+// publish, a repository-level retry (no `tag`/`targetTag`) is safe and must
+// be tried automatically.
+func TestUndiagnosedBadRequestFallsBackWhenSafe(t *testing.T) {
+	var posts int
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodGet && strings.HasSuffix(r.URL.Path, "/tags/list"):
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(`{"tags":["v1"]}`))
+		case r.Method == http.MethodPost:
+			posts++
+			raw, _ := io.ReadAll(r.Body)
+			var body promoteRequest
+			_ = json.Unmarshal(raw, &body)
+			if body.Tag == "" {
+				w.WriteHeader(http.StatusOK)
+				_, _ = w.Write([]byte(`{"status":200,"messages":[{"status":"info","message":"Promotion ended successfully"}]}`))
+				return
+			}
+			w.WriteHeader(http.StatusBadRequest)
+			_, _ = w.Write([]byte(`{"errors":[{"status":400,"message":"Bad Request"}]}`))
+		default:
+			t.Errorf("unexpected request: %s %s", r.Method, r.URL.Path)
+		}
+	}))
+	t.Cleanup(srv.Close)
+
+	host := hostOnly(t, srv.URL)
+	h := hop(
+		jfrogEnd("lab", host, "docker-lab/nokia"),
+		jfrogEnd("production", host, "docker-prod/nokia"),
+	)
+	out, err := promoterFor(t, h).Promote(t.Context(), h)
+	if err != nil {
+		t.Fatalf("Promote: %v", err)
+	}
+	if out.Promoted != 1 {
+		t.Errorf("Promoted = %d, want 1", out.Promoted)
+	}
+	if posts != 2 {
+		t.Errorf("expected the tag-scoped call and one repository-level retry, got %d POSTs", posts)
+	}
+}
+
+// The same undiagnosed 400, but the source repository also holds a tag this
+// hop never asked to publish. A repository-level retry would carry that tag
+// along uninvited, so Promote must refuse rather than fall back, and must
+// name the offending tag.
+func TestUndiagnosedBadRequestRefusesFallbackWhenUnsafe(t *testing.T) {
+	var posts int
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodGet && strings.HasSuffix(r.URL.Path, "/tags/list"):
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(`{"tags":["v1","v2-not-part-of-this-hop"]}`))
+		case r.Method == http.MethodPost:
+			posts++
+			w.WriteHeader(http.StatusBadRequest)
+			_, _ = w.Write([]byte(`{"errors":[{"status":400,"message":"Bad Request"}]}`))
+		default:
+			t.Errorf("unexpected request: %s %s", r.Method, r.URL.Path)
+		}
+	}))
+	t.Cleanup(srv.Close)
+
+	host := hostOnly(t, srv.URL)
+	h := hop(
+		jfrogEnd("lab", host, "docker-lab/nokia"),
+		jfrogEnd("production", host, "docker-prod/nokia"),
+	)
+	_, err := promoterFor(t, h).Promote(t.Context(), h)
+	if err == nil {
+		t.Fatal("a repository holding an unrelated tag must not be promoted whole")
+	}
+	if !strings.Contains(err.Error(), "v2-not-part-of-this-hop") {
+		t.Errorf("the message must name the tag this hop did not ask to publish: %v", err)
+	}
+	if posts != 1 {
+		t.Errorf("the repository-level fallback must not be attempted when unsafe; got %d POSTs", posts)
+	}
+}
+
+// Even when no safe fallback exists (a fresh repository, nothing to compare
+// against), the message itself must explain that Artifactory gave nothing
+// beyond the status code, and name the known cause.
+func TestUndiagnosedBadRequestNamesTheKnownCause(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodGet && strings.HasSuffix(r.URL.Path, "/tags/list"):
+			w.WriteHeader(http.StatusNotFound)
+			_, _ = w.Write([]byte(`{"errors":[{"status":404,"message":"repo does not exist"}]}`))
+		case r.Method == http.MethodPost:
+			w.WriteHeader(http.StatusBadRequest)
+			_, _ = w.Write([]byte(`{"errors":[{"status":400,"message":"Bad Request"}]}`))
+		default:
+			t.Errorf("unexpected request: %s %s", r.Method, r.URL.Path)
+		}
+	}))
+	t.Cleanup(srv.Close)
+
+	host := hostOnly(t, srv.URL)
+	h := hop(
+		jfrogEnd("lab", host, "docker-lab/nokia"),
+		jfrogEnd("production", host, "docker-prod/nokia"),
+	)
+	_, err := promoterFor(t, h).Promote(t.Context(), h)
+	if err == nil {
+		t.Fatal("an undiagnosed 400 must fail the promotion")
+	}
+	if !strings.Contains(err.Error(), "packageType=oci") {
+		t.Errorf("the message must name the known cause: %v", err)
+	}
+}
+
 // An anonymous target cannot promote, and finding that out here beats finding
 // it out as a 401 that reads like a rotated password.
 func TestAnAnonymousTargetIsRefusedBeforeAnyRequest(t *testing.T) {

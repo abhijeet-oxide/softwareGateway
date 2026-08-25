@@ -49,6 +49,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/url"
+	"sort"
 	"strings"
 	"time"
 
@@ -93,7 +94,18 @@ const (
 	retryAttempts  = 3
 	retryBaseDelay = 500 * time.Millisecond
 	retryMaxDelay  = 4 * time.Second
+
+	// tagsListPath lists what a docker repository actually holds. `{repo}` is
+	// the source repository key, `{name}` the docker repository path.
+	tagsListPath = "/artifactory/api/docker/%s/v2/%s/tags/list"
 )
+
+// errAmbiguousBadRequest marks a 400 whose body named no cause beyond the
+// status itself. Observed against packageType=oci/federated repositories when
+// a promote request is scoped to one tag (`tag`/`targetTag`); classify cannot
+// turn that into a better message, so promoteOne investigates instead of
+// merely reporting it.
+var errAmbiguousBadRequest = errors.New("Artifactory gave no further diagnosis")
 
 func init() { promote.Register(Name, New) }
 
@@ -219,6 +231,20 @@ func (p *Promoter) Promote(ctx context.Context, h promote.Hop) (promote.Outcome,
 		return out, err
 	}
 
+	// Tags this HOP intends to publish at each source path, keyed by that
+	// path. Consulted only if a tag-scoped call comes back an undiagnosed 400
+	// (see promoteOne): a repository-level fallback moves every tag a source
+	// holds, and this is what proves that doing so publishes nothing the hop
+	// did not already ask for.
+	intended := map[string]map[string]bool{}
+	for _, n := range h.Names {
+		src := joinPath(trimKey(h.Origin.Repository, p.srcKey), n.Repository)
+		if intended[src] == nil {
+			intended[src] = map[string]bool{}
+		}
+		intended[src][n.Tag] = true
+	}
+
 	for _, n := range h.Names {
 		select {
 		case <-ctx.Done():
@@ -235,7 +261,7 @@ func (p *Promoter) Promote(ctx context.Context, h promote.Hop) (promote.Outcome,
 				h.Origin.Repository, h.Destination.Repository)
 		}
 
-		if err := p.promoteOne(ctx, client, src, dst, n.Tag); err != nil {
+		if err := p.promoteOne(ctx, client, src, dst, n.Tag, intended[src]); err != nil {
 			return out, fmt.Errorf("promote %s:%s to %s/%s: %w", src, n.Tag, p.dstKey, dst, err)
 		}
 		out.Promoted++
@@ -244,9 +270,48 @@ func (p *Promoter) Promote(ctx context.Context, h promote.Hop) (promote.Outcome,
 	return out, nil
 }
 
-// promoteOne issues one promotion.
+// promoteOne issues one promotion, scoped to one tag.
+//
+// Some Artifactory versions answer a bare, undiagnosed 400 to a tag-scoped
+// request against a packageType=oci or federated repository - see
+// errAmbiguousBadRequest. For THAT failure only, promoteOne checks what
+// srcRepo actually holds (tagsOutsideHop) and, if every tag there is already
+// something `allowed` names, retries as a repository-level promotion, which
+// this Artifactory does accept. It never does that check for any other
+// failure, and never retries when srcRepo holds a tag `allowed` does not -
+// promoting the whole repository would carry that tag along uninvited.
 func (p *Promoter) promoteOne(
-	ctx context.Context, client *http.Client, srcRepo, dstRepo, tag string,
+	ctx context.Context, client *http.Client, srcRepo, dstRepo, tag string, allowed map[string]bool,
+) error {
+	err := p.doPromote(ctx, client, srcRepo, dstRepo, tag, tag)
+	if err == nil || !errors.Is(err, errAmbiguousBadRequest) {
+		return err
+	}
+
+	extra, lerr := p.tagsOutsideHop(ctx, client, srcRepo, allowed)
+	if lerr != nil {
+		return fmt.Errorf("%w (checked whether a repository-level promotion would be "+
+			"safe, and could not: %s)", err, lerr)
+	}
+	if len(extra) > 0 {
+		return fmt.Errorf(
+			"%w\n%s cannot be promoted for just %q on this Artifactory, and a repository-"+
+				"level promotion is not safe here either: %s also holds %s, which this "+
+				"promotion did not ask to publish", err, srcRepo, tag, srcRepo, strings.Join(extra, ", "))
+	}
+
+	// Every tag srcRepo holds is one this hop already intends to publish, so
+	// promoting the repository as a whole publishes nothing extra.
+	if err2 := p.doPromote(ctx, client, srcRepo, dstRepo, "", ""); err2 != nil {
+		return fmt.Errorf("%s (repository-level fallback also failed: %w)", err, err2)
+	}
+	return nil
+}
+
+// doPromote issues one call to the promote endpoint. tag and targetTag empty
+// means "every tag srcRepo holds" - see promoteOne for when that is safe.
+func (p *Promoter) doPromote(
+	ctx context.Context, client *http.Client, srcRepo, dstRepo, tag, targetTag string,
 ) error {
 	body, err := json.Marshal(promoteRequest{
 		TargetRepo: p.dstKey,
@@ -255,7 +320,7 @@ func (p *Promoter) promoteOne(
 		TargetDockerRepository: dstRepo,
 
 		Tag:       tag,
-		TargetTag: tag,
+		TargetTag: targetTag,
 
 		// NOT configurable, and never false. See the package comment: the
 		// default is a MOVE, and a move would empty lab the instant production
@@ -293,6 +358,48 @@ func (p *Promoter) promoteOne(
 	return classify(resp, u, p.srcKey)
 }
 
+// tagsOutsideHop lists what srcRepo actually holds and reports any tag
+// `allowed` does not name - the check that makes the repository-level
+// fallback in promoteOne safe rather than merely convenient.
+func (p *Promoter) tagsOutsideHop(
+	ctx context.Context, client *http.Client, srcRepo string, allowed map[string]bool,
+) ([]string, error) {
+	u := p.endpoint + fmt.Sprintf(tagsListPath, url.PathEscape(p.srcKey), srcRepo)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
+	if err != nil {
+		return nil, err
+	}
+	if p.cfg.OriginClient.Username != "" || p.cfg.OriginClient.Password != "" {
+		req.SetBasicAuth(p.cfg.OriginClient.Username, p.cfg.OriginClient.Password)
+	}
+
+	resp, err := client.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _, _ = io.Copy(io.Discard, resp.Body); _ = resp.Body.Close() }()
+
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return nil, classify(resp, u, p.srcKey)
+	}
+
+	var payload struct {
+		Tags []string `json:"tags"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&payload); err != nil {
+		return nil, fmt.Errorf("decode tag list: %w", err)
+	}
+
+	var extra []string
+	for _, t := range payload.Tags {
+		if !allowed[t] {
+			extra = append(extra, t)
+		}
+	}
+	sort.Strings(extra)
+	return extra, nil
+}
+
 // promoteRequest is the body of POST /api/docker/{repo}/v2/promote.
 type promoteRequest struct {
 	TargetRepo string `json:"targetRepo"`
@@ -300,7 +407,7 @@ type promoteRequest struct {
 	DockerRepository       string `json:"dockerRepository"`
 	TargetDockerRepository string `json:"targetDockerRepository,omitempty"`
 
-	Tag       string `json:"tag"`
+	Tag       string `json:"tag,omitempty"`
 	TargetTag string `json:"targetTag,omitempty"`
 
 	Copy bool `json:"copy"`
@@ -346,6 +453,20 @@ func classify(resp *http.Response, url, repoKey string) error {
 			detail, registry.ErrUnsupported)
 	case http.StatusTooManyRequests:
 		return fmt.Errorf("%s (%w)", detail, registry.ErrRateLimited)
+	case http.StatusBadRequest:
+		// Artifactory's OWN JSON, and it names no cause beyond the status - seen
+		// against packageType=oci and federated repositories, some versions of
+		// which reject a request scoped to one tag (`tag`/`targetTag`). Naming
+		// that here rather than only in promoteOne is what makes a Claim-time
+		// dry run and a failure a person reads later say the same thing; the
+		// caller decides whether trying the repository-level fallback is safe.
+		if strings.EqualFold(detail, "bad request") {
+			return fmt.Errorf(
+				"%s: %w; commonly seen on packageType=oci or federated repositories, "+
+					"which some Artifactory versions refuse to promote one tag at a time",
+				detail, errAmbiguousBadRequest)
+		}
+		return errors.New(detail)
 	}
 	if resp.StatusCode >= 500 {
 		return fmt.Errorf("%s (%w)", detail, registry.ErrUnavailable)

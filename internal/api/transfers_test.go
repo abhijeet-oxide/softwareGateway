@@ -49,6 +49,53 @@ func TestContentGroupsFoldMediaTypesIntoKinds(t *testing.T) {
 	}
 }
 
+// FILES ARE COUNTED AS FILES, and nothing else is.
+//
+// A vendor ships its configuration as one `generic` component carrying a
+// hundred and twelve named layers. The download page reported `Files 2` beside
+// a release page reporting `Files 112` - two true numbers from two populations,
+// on two pages about the same release.
+//
+// The count goes out on the `file` kind so a client can report the release's
+// files the way the release page does. It goes out NOWHERE else: an image's
+// layers are not files anybody names, and a count of them under the same field
+// would put a second unit into a column that already has one.
+func TestOnlyTheFileKindCarriesAFileCount(t *testing.T) {
+	got := toAPIContent([]store.ContentRow{
+		{MediaType: "application/vnd.oci.image.manifest.v1+json",
+			ArtifactType: "application/vnd.nokia.generic_custo",
+			Outcome:      store.ContentPresent, Count: 1, NamedFiles: 87},
+		{MediaType: "application/vnd.oci.image.manifest.v1+json",
+			ArtifactType: "application/vnd.nokia.generic_custo",
+			Outcome:      store.ContentOutstanding, Count: 1, NamedFiles: 25},
+		// An image whose layers happen to be titled is still an image, and a
+		// count of its layers is not a count of files.
+		{MediaType: "application/vnd.oci.image.manifest.v1+json",
+			Outcome: store.ContentCopied, Count: 4, NamedFiles: 60},
+	}, nil)
+
+	byKind := map[string]v1.ContentGroup{}
+	for _, g := range got {
+		byKind[g.Kind] = g
+	}
+
+	files := byKind[oci.KindFile]
+	if files.Total != 2 {
+		t.Errorf("file components = %d, want the two bundles", files.Total)
+	}
+	// Summed across every outcome: the bundle the destination already held
+	// holds files too, and a release's file count does not depend on how the
+	// download of it is going.
+	if files.Files != 112 {
+		t.Errorf("files = %d, want the 112 named layers the two bundles carry",
+			files.Files)
+	}
+	if image := byKind[oci.KindImage]; image.Files != 0 {
+		t.Errorf("images reported %d files, want none: an image's layers are "+
+			"not files", image.Files)
+	}
+}
+
 // An outcome the store grows later must not be silently counted as copied or
 // present. Anything unrecognised is work still to do.
 func TestAnUnknownOutcomeCountsAsOutstanding(t *testing.T) {

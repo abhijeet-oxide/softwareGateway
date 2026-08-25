@@ -1187,6 +1187,22 @@ type ContentGroup struct {
 	UnitsPresent     int `json:"unitsPresent,omitempty"`
 	UnitsFailed      int `json:"unitsFailed,omitempty"`
 	UnitsOutstanding int `json:"unitsOutstanding,omitempty"`
+
+	// Files is how many FILES this kind holds, where that is a different
+	// number from Total - which is to say, on the `file` kind and nowhere
+	// else.
+	//
+	// A vendor ships its configuration as one `generic` component carrying a
+	// hundred and twelve named layers. Two such bundles are two components and
+	// a hundred and twelve files, and a release page that has been counting
+	// files as files since it learnt to list them reported `Files 112` beside a
+	// download page reporting `Files 2`. Both were true of different
+	// populations, and neither said so.
+	//
+	// Counted the same way the file listing counts: a layer the publisher gave
+	// a name. An unnamed layer is a tar of an unknown number of paths and is
+	// not a file anybody can point at, so it is not one here either.
+	Files int `json:"files,omitempty"`
 }
 
 // PackageTransfer is one attempt to move a package to one destination.

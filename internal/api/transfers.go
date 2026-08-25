@@ -509,6 +509,19 @@ func toAPIContent(rows []store.ContentRow, classify vendors.Classifier) []v1.Con
 		group.UnitsFailed += row.UnitsFailed
 		group.UnitsOutstanding += row.UnitsOutstanding
 
+		// FILES, on the kind where a component is not one.
+		//
+		// Set here rather than on every kind because that is the only place it
+		// is a different question: an image's layers are not files anybody
+		// names, and reporting a count of them as `files` would put a second
+		// unit into a column that already has one. A file bundle IS the case
+		// where the two diverge - one component, a hundred and twelve named
+		// layers - and the release page has counted the layers since it learnt
+		// to list them.
+		if kind == oci.KindFile {
+			group.Files += row.NamedFiles
+		}
+
 		group.Total += row.Count
 		switch row.Outcome {
 		case store.ContentCopied:

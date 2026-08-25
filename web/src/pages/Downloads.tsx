@@ -61,12 +61,23 @@ function chainFlow(chain: string[] | undefined) {
   )
 }
 
-/** A download's package, ellipsised, with the full path on the tooltip. */
-function PackageCell({ source, width = 200 }: { source?: string; width?: number }) {
-  const name = repositoryOf(source)
+/**
+ * WHICH RELEASE this is, ellipsised, with the full path on the tooltip.
+ *
+ * `packageName` and not the transfer's origin. They are the same row for a
+ * download and completely different for a promotion, whose origin is a target
+ * - so this column used to name a promoted release after the lab it was being
+ * promoted out of. A release is called what the vendor published it as,
+ * whatever it has been copied to since.
+ *
+ * The origin has not been lost: it is the left half of the Route column, which
+ * is where it belongs.
+ */
+function PackageCell({ transfer, width = 200 }: { transfer: Transfer; width?: number }) {
+  const name = transfer.packageName || repositoryOf(transfer.source)
   if (!name) return <NA />
   return (
-    <Tooltip title={source}>
+    <Tooltip title={name}>
       <Typography.Text style={{ fontFamily: mono, fontSize: 12, maxWidth: width }} ellipsis={{ tooltip: false }}>
         {name}
       </Typography.Text>
@@ -75,13 +86,18 @@ function PackageCell({ source, width = 200 }: { source?: string; width?: number 
 }
 
 /**
- * Where a promotion went, as one cell.
+ * Where a transfer went, as one cell.
+ *
+ * On EVERY transfer table, not only promotions. A download's origin is the
+ * vendor and its destination is whichever target the chain named, and "which
+ * of my three targets did this actually land in" is a question the listing
+ * could not answer at all - the reader had to open the download to find out.
  *
  * The configured NAMES rather than the resolved host and path: `lab →
  * production` is what somebody asked for and what they will say out loud, and
  * a column of `acme.jfrog.io/nokia-lab/cmm → acme.jfrog.io/nokia-prod/cmm` is
  * two hundred characters of which four differ. The full coordinates are on the
- * transfer's own page.
+ * tooltip and on the transfer's own page.
  */
 function Route({ transfer }: { transfer: Transfer }) {
   const from = transfer.sourceName || repositoryOf(transfer.source)
@@ -209,15 +225,16 @@ export default function Downloads() {
                 pagination={false}
                 dataSource={ongoing}
                 rowKey={(t) => t.id}
-                scroll={{ x: 1180 }}
+                scroll={{ x: 1380 }}
                 columns={[
                   { title: 'Product', width: 140, render: (_, t) => t.product },
-                  { title: 'Package', width: 210, render: (_, t) => <PackageCell source={t.source} /> },
+                  { title: 'Package', width: 190, render: (_, t) => <PackageCell transfer={t} /> },
                   {
                     title: 'Version',
-                    width: 160,
+                    width: 150,
                     render: (_, t) => <Typography.Text style={{ fontFamily: mono }}>{transferVersion(t)}</Typography.Text>,
                   },
+                  { title: 'Route', width: 200, render: (_, t) => <Route transfer={t} /> },
                   { title: 'State', width: 130, render: (_, t) => <TransferStateTag state={t.state} /> },
                   {
                     // How far, how long, and how much longer - one cell,
@@ -280,15 +297,16 @@ export default function Downloads() {
                 pagination={{ pageSize: 10, hideOnSinglePage: true, size: 'small' }}
                 dataSource={finished}
                 rowKey={(t) => t.id}
-                scroll={{ x: 1080 }}
+                scroll={{ x: 1280 }}
                 columns={[
                   { title: 'Product', width: 140, render: (_, t) => t.product },
-                  { title: 'Package', width: 210, render: (_, t) => <PackageCell source={t.source} /> },
+                  { title: 'Package', width: 190, render: (_, t) => <PackageCell transfer={t} /> },
                   {
                     title: 'Version',
-                    width: 160,
+                    width: 150,
                     render: (_, t) => <Typography.Text style={{ fontFamily: mono }}>{transferVersion(t)}</Typography.Text>,
                   },
+                  { title: 'Route', width: 200, render: (_, t) => <Route transfer={t} /> },
                   { title: 'State', width: 130, render: (_, t) => <TransferStateTag state={t.state} /> },
                   {
                     title: 'Time',
@@ -364,7 +382,7 @@ export default function Downloads() {
                 scroll={{ x: 1100 }}
                 columns={[
                   { title: 'Product', width: 140, render: (_, t) => t.product },
-                  { title: 'Package', width: 200, render: (_, t) => <PackageCell source={t.source} /> },
+                  { title: 'Package', width: 180, render: (_, t) => <PackageCell transfer={t} /> },
                   {
                     title: 'Version',
                     width: 150,

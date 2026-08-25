@@ -1443,6 +1443,12 @@ type TransferSummary struct {
 	RequestID   string
 	PackageID   int64
 	ProductName string
+	// PackageName is the repository the VENDOR published this release in,
+	// taken from the package rather than from the transfer's origin.
+	//
+	// The distinction only shows on a promotion, and it showed badly: the
+	// origin of one is a target, so the listing named the release after the
+	// lab it was being promoted out of.
 	PackageName string
 	// Strategy is HOW this transfer was performed: `copy`, `mirror` or
 	// `proxy`. Recorded on the row rather than derived from configuration, so
@@ -1573,7 +1579,7 @@ func (t TransferSummary) SavedBytes() int64 {
 // about what a transfer looks like.
 func (p *Packages) transferSelect() string {
 	return `
-	SELECT t.id, t.request_id, t.package_id, pr.name, src.repository_path, pk.tag,
+	SELECT t.id, t.request_id, t.package_id, pr.name, pkgsrc.repository_path, pk.tag,
 	       COALESCE(pk.display_tag, ''), COALESCE(pk.total_bytes, 0),
 	       src.registry_host || '/' || src.repository_path,
 	       dst.registry_host || '/' || dst.repository_path,
@@ -1610,6 +1616,13 @@ func (p *Packages) transferSelect() string {
 	  JOIN transfer_requests rq ON rq.id = t.request_id
 	  JOIN packages pk ON pk.id = t.package_id
 	  JOIN products pr ON pr.id = pk.product_id
+	  -- The package's OWN repository, which is not the transfer's origin.
+	  --
+	  -- For a download the two are the same row. For a PROMOTION the origin is
+	  -- a target, so reading the package's name from it said the release was
+	  -- called after the lab it happened to be sitting in. A release is called
+	  -- what the vendor published it as, whatever it has been copied to since.
+	  JOIN repositories pkgsrc ON pkgsrc.id = pk.source_repo_id
 	  JOIN repositories src ON src.id = t.source_repo_id
 	  JOIN repositories dst ON dst.id = t.target_repo_id`
 }

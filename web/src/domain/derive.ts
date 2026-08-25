@@ -347,6 +347,34 @@ export function packageReference(pkg: Pick<Package, 'tag' | 'sourceRepository'>)
   return pkg.sourceRepository ? `${pkg.sourceRepository}:${pkg.tag}` : pkg.tag
 }
 
+/**
+ * The enabled targets this release is NOT already at.
+ *
+ * What "can this be promoted" actually means, and it is a question about the
+ * ESTATE rather than about the release: a release in lab with one production
+ * target left to reach can be promoted, and the same release once production
+ * has it cannot - there is nowhere for it to go.
+ *
+ * Derived from configuration and the transfer history rather than asked of the
+ * server, because the answer decides whether to render a BUTTON. A page that
+ * fetched promotion options for every release just to find out whether to draw
+ * one would pay for the dialog on every visit that never opens it.
+ *
+ * It is deliberately generous where it cannot be sure. With no product loaded
+ * it returns a placeholder, so the button appears and the dialog - which asks
+ * the server properly - gives the real answer. Hiding a control on incomplete
+ * information is worse than opening a dialog that says "nothing to do".
+ */
+export function promotableTargets(pkg: Package, product?: Product): string[] {
+  const holders = new Set(
+    (pkg.transfers ?? []).filter((t) => t.state === 'SUCCEEDED').map((t) => t.target))
+
+  const targets = (product?.targets ?? []).filter((t) => t.enabled)
+  if (targets.length === 0) return ['?']
+
+  return targets.filter((t) => !holders.has(t.name)).map((t) => t.name)
+}
+
 /** The lifecycle stages, in the order the brief fixes them. */
 export type LifecycleStage = 'Vendor' | 'Downloading' | 'Downloaded' | 'Production'
 

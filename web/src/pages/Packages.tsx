@@ -10,9 +10,10 @@ import ScaleIcon from '@iconify-react/lucide/scale';
 import { useCan } from '../auth/permissions'
 import {
   deriveLocations, deriveStatus, downloadSeconds, failureReason, isLive, isPromotion, matches,
-  packageReference, publishedAt, releaseHref, transferIndex, verification, version, withTransfers,
+  packageReference, promotableTargets, publishedAt, releaseHref, transferIndex, verification,
+  version, withTransfers,
 } from '../domain/derive'
-import type { Package, PackageTransfer } from '../api/types'
+import type { Package, PackageTransfer, Product } from '../api/types'
 import { formatDuration } from '../domain/format'
 import { Value } from '../components/value'
 import {
@@ -37,7 +38,12 @@ import { PromoteButton } from '../components/promote'
  * download), and a menu for the rest. The menu is one button wide whatever it
  * contains, which is what stops the column growing every time a verb is added.
  */
-function RowActions({ product, pkg }: { product: string; pkg: Package }) {
+function RowActions({ product, pkg, config }: {
+  product: string
+  pkg: Package
+  /** The product's configuration, so the row knows where this could still go. */
+  config?: Product
+}) {
   const { message } = App.useApp()
   const navigate = useNavigate()
   const sync = useSyncPackageSecurity()
@@ -123,7 +129,13 @@ function RowActions({ product, pkg }: { product: string; pkg: Package }) {
       <Link to={detail}>
         <Button size="small" type="primary">View</Button>
       </Link>
-      <NextStep product={product} pkg={pkg} history={history} mayOperate={mayOperate} />
+      <NextStep
+        product={product}
+        pkg={pkg}
+        history={history}
+        mayOperate={mayOperate}
+        promotable={promotableTargets(pkg, config).length > 0}
+      />
       <Dropdown menu={{ items }} trigger={['click']} placement="bottomRight">
         <Button size="small" icon={<MoreOutlined />} aria-label="More actions" loading={sync.isPending} />
       </Dropdown>
@@ -186,12 +198,14 @@ function releaseHistory(pkg: Package): ReleaseHistory {
  * and the row shows the step it is actually on.
  */
 function NextStep({
-  product, pkg, history, mayOperate,
+  product, pkg, history, mayOperate, promotable,
 }: {
   product: string
   pkg: Package
   history: ReleaseHistory
   mayOperate: boolean
+  /** There is somewhere left to promote it to. */
+  promotable: boolean
 }) {
   if (history.downloading || history.downloadFailed) {
     return (
@@ -201,7 +215,11 @@ function NextStep({
     )
   }
 
-  if (history.landed) {
+  // Landed, and somewhere left to send it. A release every target already
+  // holds gets no button: its status says PRODUCTION, and offering a promotion
+  // whose only outcome is a dialog explaining there is nothing to do is worse
+  // than offering nothing.
+  if (history.landed && promotable) {
     return (
       <PromoteButton
         size="small"
@@ -213,6 +231,18 @@ function NextStep({
         disabledReason="You do not have permission to promote a release."
       />
     )
+  }
+
+  if (history.landed) {
+    // Nowhere left to go, and nothing was ever downloaded to look at either -
+    // the row simply has no next step, which the status column already says.
+    return history.download
+      ? (
+        <Link to={`/downloads/${history.download.id}`}>
+          <Button size="small" color="green" variant="outlined">View download</Button>
+        </Link>
+      )
+      : null
   }
 
   return <DownloadAction product={product} pkg={pkg} />
@@ -640,7 +670,7 @@ export default function Packages() {
                 title: 'Actions',
                 fixed: 'right',
                 width: 190,
-                render: (_, r) => <RowActions product={r.product.productId} pkg={r.pkg} />,
+                render: (_, r) => <RowActions product={r.product.productId} pkg={r.pkg} config={r.product} />,
               },
             ]}
           />

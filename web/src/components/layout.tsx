@@ -13,7 +13,8 @@ import { Link } from 'react-router-dom'
 import type { ContentGroup, PresentComponent } from '../api/types'
 import { kindName, type LifecycleStep } from '../domain/derive'
 import { bytes, formatAbsolute, formatBytes, formatCount } from '../domain/format'
-import { ARTIFACT_ICONS, Icon } from './icons'
+import { ARTIFACT_ICONS, DownloadIcon, Icon, PackageIcon, RocketIcon } from './icons'
+import type { IconComponent } from './icons'
 import { usePresentComponents } from '../api/queries'
 import { c, EmptyArt, EmptyState, mono } from '../uikit'
 import { NA } from './value'
@@ -242,7 +243,21 @@ export function ReleaseTimeline({
 
   return (
     <Space size={12} align="center" wrap>
-      <Moment label="Published" at={publishedAt} done />
+      {/*
+        A MARK PER STAGE, not three identical dots.
+
+        The three moments are three different KINDS of event and the marks say
+        so: the vendor published it, we brought it in, we sent it on. Three
+        green dots made a sequence of one repeated thing, so the reader had to
+        get all of it from the labels - and the labels are the smallest text on
+        the line.
+
+        The colours run cool to warm in the order the release travels, and the
+        last one is the orange the Promote button wears. That is the whole
+        point of spending a colour on it: somebody who has pressed that button
+        recognises where its result landed.
+      */}
+      <Moment label="Published" at={publishedAt} done icon={PackageIcon} tone={c.review} />
       {arriving && (
         <>
           <Rule />
@@ -251,6 +266,8 @@ export function ReleaseTimeline({
             at={downloadedAt}
             done={Boolean(downloadedAt)}
             pending={downloading}
+            icon={DownloadIcon}
+            tone={c.ok}
           />
         </>
       )}
@@ -262,6 +279,8 @@ export function ReleaseTimeline({
             at={promotedAt}
             done={Boolean(promotedAt)}
             pending={promoting}
+            icon={RocketIcon}
+            tone={c.pending}
           />
         </>
       )}
@@ -281,29 +300,39 @@ function Rule() {
 
 /** One dated moment: a mark, what happened, and when. */
 function Moment({
-  label, at, done, pending,
+  label, at, done, pending, icon, tone,
 }: {
   label: string
   at?: string
   done?: boolean
   pending?: boolean
+  /** What KIND of event this is. */
+  icon: IconComponent
+  /** The stage's own colour, from the tokens. */
+  tone: string
 }) {
-  const colour = done ? c.ok : pending ? c.brand : c.text3
+  // A stage that has not happened keeps its icon and loses its colour, so the
+  // sequence still reads as itself while saying which parts are real.
+  const colour = done || pending ? tone : c.text3
 
   return (
     <Space size={8} align="center">
-      {pending && !done ? (
-        <LoadingOutlined style={{ color: colour, fontSize: 12 }} />
-      ) : (
-        <span
-          aria-hidden
-          style={{
-            width: 8, height: 8, borderRadius: '50%', display: 'inline-block',
-            background: done ? colour : 'transparent',
-            border: done ? 'none' : `1px solid ${colour}`,
-          }}
-        />
-      )}
+      <span
+        aria-hidden
+        style={{
+          width: 22, height: 22, borderRadius: '50%',
+          display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
+          // The tint is the tone at low opacity rather than a second token, so
+          // a palette or preset change carries it without a lookup table.
+          background: done || pending ? `color-mix(in srgb, ${colour} 14%, transparent)` : 'transparent',
+          border: done || pending ? 'none' : `1px dashed ${colour}`,
+          color: colour,
+        }}
+      >
+        {pending && !done
+          ? <LoadingOutlined style={{ fontSize: 11 }} />
+          : <Icon as={icon} size={13} title={label} />}
+      </span>
       <Space size={6} align="center">
         <Typography.Text type="secondary" style={{ fontSize: 12 }}>{label}</Typography.Text>
         {at ? (

@@ -342,16 +342,41 @@ function layers(group: ContentGroup): { total: number; copied: number; present: 
   return { total: group.total, copied: group.copied, present: group.present }
 }
 
-/** How this kind's components are going, for the hover on the count. */
-function componentBreakdown(group: ContentGroup): string {
-  const parts = [
+/**
+ * How many of this kind there ARE, in the unit the kind is counted in.
+ *
+ * # Files are counted as files
+ *
+ * A vendor ships its configuration as one `generic` component carrying a
+ * hundred and twelve named layers. Counting components said `Files 2` on a
+ * release the release page - which has counted files as files since it learnt
+ * to list them - reported as `Files 112`. Two true numbers from two
+ * populations, on two pages about the same release, and nothing on either
+ * saying which was which.
+ *
+ * So the count follows the row's own noun: images are components, charts are
+ * components, and files are files. The components are not lost - they are on
+ * the hover, which is also where the reason lives.
+ */
+function totalOf(group: ContentGroup): number {
+  return group.files && group.files > 0 ? group.files : group.total
+}
+
+/** What the count is counting, and how those components are going. */
+function totalBreakdown(group: ContentGroup): string {
+  const going = [
     `${formatCount(group.copied) ?? 0} copied`,
     `${formatCount(group.present) ?? 0} already there`,
   ]
-  if (group.outstanding) parts.push(`${formatCount(group.outstanding)} still going`)
-  if (group.failed) parts.push(`${formatCount(group.failed)} failed`)
-  return `${parts.join(', ')}. A component counts only once every layer under it `
-    + 'and the manifest naming it have landed.'
+  if (group.outstanding) going.push(`${formatCount(group.outstanding)} still going`)
+  if (group.failed) going.push(`${formatCount(group.failed)} failed`)
+
+  const unit = group.files && group.files > 0
+    ? `${formatCount(group.files)} files, carried by ${formatCount(group.total)} `
+      + `${group.total === 1 ? 'component' : 'components'}. `
+    : ''
+  return `${unit}Components: ${going.join(', ')}. A component counts only once every `
+    + 'layer under it and the manifest naming it have landed.'
 }
 
 export default function DownloadDetail() {
@@ -657,18 +682,21 @@ export default function DownloadDetail() {
                     },
                     {
                       /*
-                        COMPONENTS, and the tooltip says how they are going.
-                        This is the count that lines up with the release page -
-                        260 images is 260 images - and it is deliberately the
-                        one that does NOT move much during a download: a
-                        component is only complete when everything under it is.
+                        HOW MANY THERE ARE, in the unit the row's own noun
+                        names: images and charts are components, files are
+                        files. That is what the release page counts, and a
+                        download of a release has to report the same release.
+
+                        Deliberately the column that does NOT move much during a
+                        download - a component is only complete when everything
+                        under it is - which is why the layers sit beside it.
                       */
-                      title: 'Components',
+                      title: 'Total',
                       align: 'right',
-                      width: 110,
+                      width: 100,
                       render: (_, c) => (
-                        <Tooltip title={componentBreakdown(c)}>
-                          <span><Value>{formatCount(c.total)}</Value></span>
+                        <Tooltip title={totalBreakdown(c)}>
+                          <span><Value>{formatCount(totalOf(c))}</Value></span>
                         </Tooltip>
                       ),
                     },
@@ -757,10 +785,11 @@ export default function DownloadDetail() {
                   bundle is not copied again.
                 */}
                 <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-                  Components are what a release is made of - a file bundle is one component
-                  however many files it carries. Layers are what actually moves: each is
-                  pushed, mounted or skipped on its own, and a component is only complete
-                  once every layer under it and the manifest naming it have landed.
+                  Counted as the release page counts them: images and charts as components,
+                  files as files - a file bundle is one component however many files it
+                  carries. Layers are what actually moves: each is pushed, mounted or
+                  skipped on its own, and a component is only complete once every layer
+                  under it and the manifest naming it have landed.
                 </Typography.Text>
 
                 {saved !== undefined && saved > 0 && (

@@ -366,6 +366,17 @@ export interface ContentGroup {
   unitsPresent?: number
   unitsFailed?: number
   unitsOutstanding?: number
+  /**
+   * How many FILES this kind holds, where that is a different number from
+   * `total` - which is to say, on the `file` kind and nowhere else.
+   *
+   * A vendor ships its configuration as one `generic` component carrying a
+   * hundred and twelve named layers. Two such bundles are two components and a
+   * hundred and twelve files, and the release page has counted the files since
+   * it learnt to list them. This is the same count, so the two pages cannot
+   * report different numbers of files for the same release.
+   */
+  files?: number
 }
 
 export interface TransferWave {

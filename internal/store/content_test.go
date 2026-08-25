@@ -172,6 +172,75 @@ func TestTheBreakdownCarriesTheLayersUnderneathItsComponents(t *testing.T) {
 	}
 }
 
+// A file bundle's FILES, counted the way the file listing counts them.
+//
+// One `generic` component carries a hundred and twelve named layers, and
+// reporting it as `2` on a download of a release whose own page says `112` is
+// two populations wearing one word. The breakdown carries both so a caller can
+// say which it is showing.
+func TestTheBreakdownCountsTheFilesInsideAComponent(t *testing.T) {
+	h := newFailureHarness(t)
+	id := h.transferWithJobs(0)
+
+	bundle := h.seedArtifact("application/vnd.oci.image.manifest.v1+json",
+		"application/vnd.nokia.generic_custo")
+	h.seedNamedLayer(bundle, "etc/cfx/values.yaml")
+	h.seedNamedLayer(bundle, "etc/cfx/limits.yaml")
+	h.seedNamedLayer(bundle, "README.md")
+	// A layer with NO title is a tar of an unknown number of paths. It is not a
+	// file anybody can point at, and the listing does not show it either.
+	h.seedUnnamedLayer(bundle)
+	h.jobForArtifact(id, bundle, "skipped")
+
+	rows, err := h.packages.ContentBreakdown(t.Context(), id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rows) != 1 {
+		t.Fatalf("got %d rows, want the one bundle: %+v", len(rows), rows)
+	}
+	if rows[0].Count != 1 {
+		t.Errorf("components = %d, want the one bundle", rows[0].Count)
+	}
+	if rows[0].NamedFiles != 3 {
+		t.Errorf("namedFiles = %d, want the three the publisher named",
+			rows[0].NamedFiles)
+	}
+	// The bundle's own byte totals must survive the count: a join to the layers
+	// would have multiplied the job rows underneath them.
+	if rows[0].Outcome != ContentPresent {
+		t.Errorf("outcome = %q, want the skipped bundle present", rows[0].Outcome)
+	}
+	if rows[0].Units != 1 {
+		t.Errorf("units = %d, want the one job - counting files must not "+
+			"multiply the jobs beneath the component", rows[0].Units)
+	}
+}
+
+// seedNamedLayer gives a component one layer the publisher named - a file.
+func (h *failureHarness) seedNamedLayer(artifactID int64, title string) {
+	h.t.Helper()
+
+	h.n++
+	digest := "sha256:" + strings.Repeat("7", 60) + padded(h.n)
+	h.exec(`INSERT INTO blobs (digest, size_bytes, media_type)
+	        VALUES (?, 1024, 'application/octet-stream')`, digest)
+	h.exec(`INSERT INTO artifact_blobs (artifact_id, digest, kind, ordinal, title)
+	        VALUES (?, ?, 'layer', ?, ?)`, artifactID, digest, h.n, title)
+}
+
+// seedUnnamedLayer gives a component a layer nobody named.
+func (h *failureHarness) seedUnnamedLayer(artifactID int64) {
+	h.t.Helper()
+
+	h.n++
+	digest := "sha256:" + strings.Repeat("6", 60) + padded(h.n)
+	h.exec(`INSERT INTO blobs (digest, size_bytes, media_type)
+	        VALUES (?, 4096, 'application/octet-stream')`, digest)
+	h.exec(`INSERT INTO artifact_blobs (artifact_id, digest, kind, ordinal)
+	        VALUES (?, ?, 'layer', ?)`, artifactID, digest, h.n)
+}
+
 // seedArtifact adds one component to the harness's package.
 func (h *failureHarness) seedArtifact(mediaType, artifactType string) int64 {
 	h.t.Helper()

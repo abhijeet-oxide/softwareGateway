@@ -106,6 +106,17 @@ type ContentRow struct {
 	UnitsPresent     int
 	UnitsFailed      int
 	UnitsOutstanding int
+
+	// NamedFiles is how many FILES these components carry - layers the
+	// publisher gave a name, counted the way PackageFiles counts them.
+	//
+	// A vendor's file bundle is one component holding a hundred and twelve
+	// named layers, so `2` is the right number of components and the wrong
+	// answer to "how many files are in this release". The release page has
+	// counted files as files since it learnt to list them; this is the same
+	// count, for the transfer of the same release, so the two pages cannot
+	// disagree about a number a person reads off both.
+	NamedFiles int
 }
 
 // Outcomes a component can be in. Ordered by precedence: the first that applies
@@ -147,7 +158,8 @@ func (p *Packages) ContentBreakdown(ctx context.Context, transferID string) ([]C
 		       -- The jobs beneath these components, by how each went. Summed
 		       -- from the per-component counts the inner select already has,
 		       -- so no second pass over the queue.
-		       SUM(copied), SUM(present), SUM(failed), SUM(outstanding)
+		       SUM(copied), SUM(present), SUM(failed), SUM(outstanding),
+		       SUM(named_files)
 		  FROM (
 		        SELECT pa.id,
 		               pa.media_type                     AS media_type,
@@ -174,7 +186,15 @@ func (p *Packages) ContentBreakdown(ctx context.Context, transferID string) ([]C
 		               COALESCE(SUM(CASE WHEN j.state = 'skipped'
 		                                 THEN j.size_bytes ELSE 0 END), 0)      AS saved_bytes,
 		               COALESCE(SUM(CASE WHEN j.state = 'succeeded'
-		                                 THEN j.size_bytes ELSE 0 END), 0)      AS copied_bytes
+		                                 THEN j.size_bytes ELSE 0 END), 0)      AS copied_bytes,
+		               -- The FILES this component carries: layers the publisher
+		               -- named. Counted here rather than joined, because a
+		               -- second join to artifact_blobs would multiply the job
+		               -- rows above it and every byte total with them.
+		               (SELECT count(*) FROM artifact_blobs abf
+		                 WHERE abf.artifact_id = pa.id
+		                   AND abf.kind = 'layer'
+		                   AND abf.title IS NOT NULL)                           AS named_files
 		          FROM transfers t
 		          JOIN package_artifacts pa ON pa.package_id = t.package_id
 		          LEFT JOIN jobs j
@@ -201,7 +221,7 @@ func (p *Packages) ContentBreakdown(ctx context.Context, transferID string) ([]C
 			&annotations, &row.Outcome, &row.Count,
 			&row.SavedBytes, &row.CopiedBytes,
 			&row.UnitsCopied, &row.UnitsPresent, &row.UnitsFailed,
-			&row.UnitsOutstanding); err != nil {
+			&row.UnitsOutstanding, &row.NamedFiles); err != nil {
 			return nil, fmt.Errorf("scan content breakdown: %w", err)
 		}
 		row.Units = row.UnitsCopied + row.UnitsPresent + row.UnitsFailed + row.UnitsOutstanding

@@ -202,7 +202,7 @@ export default function Overview() {
                   // A stage with nothing in it is stated, and recedes. A zero
                   // drawn in the same weight as a seven is a page shouting
                   // about the four things that are not happening.
-                  color: stage.value > 0 ? stage.tone : '#C2CBD6',
+                  color: stage.value > 0 ? stage.tone : c.borderStrong,
                 }}
               >
                 {loading ? '—' : stage.value.toLocaleString()}

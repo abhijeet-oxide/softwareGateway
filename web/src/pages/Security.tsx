@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react'
 import {
-  Alert, Button, Card, Checkbox, Empty, Input, Segmented, Select, Space, Table, Tag, Tooltip, Typography,
+  Alert, Button, Card, Checkbox, Input, Segmented, Select, Space, Table, Tag, Tooltip, Typography,
 } from 'antd'
 import { Link, useSearchParams } from 'react-router-dom'
 import { useProducts, useSecuritySearch, securitySearchExportUrl } from '../api/queries'
@@ -10,7 +10,7 @@ import {
   ComponentCell, CveCell, SecurityExportMenu, SeverityTag,
 } from '../components/security'
 import { ErrorState, PageHeader } from '../components/layout'
-import { c, mono } from '../uikit'
+import { c, EmptyState, mono } from '../uikit'
 
 /**
  * Search across CVEs, packages and images, and navigate the relationships
@@ -173,14 +173,9 @@ export default function Security() {
               pagination={{ pageSize: 25, showSizeChanger: true, size: 'small' }}
               locale={{
                 emptyText: (
-                  <Empty
-                    image={Empty.PRESENTED_IMAGE_SIMPLE}
-                    description={
-                      <Space direction="vertical" size={4}>
-                        <Typography.Text strong>Nothing found in what has been retrieved</Typography.Text>
-                        <Typography.Text type="secondary">{search.data?.searched.note}</Typography.Text>
-                      </Space>
-                    }
+                  <EmptyState
+                    title="Nothing found in what has been retrieved"
+                    hint={search.data?.searched.note}
                   />
                 ),
               }}

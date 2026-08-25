@@ -7,7 +7,7 @@ import { formatCount, formatRelative } from '../domain/format'
 import { Value } from '../components/value'
 import { ManagedInGit, TimeAgo } from '../components/chips'
 import { ErrorState, PageHeader } from '../components/layout'
-import { c, mono } from '../uikit'
+import { AppearanceSettings, c, mono } from '../uikit'
 
 /**
  * Page 10 - Settings.
@@ -55,6 +55,19 @@ export default function Settings() {
       />
 
       <Row gutter={[16, 16]}>
+        {/*
+          Appearance, first, because it is the only thing on this page a person
+          can actually change: everything below it is managed in Git and shown
+          here to be read. The section is the shared design system's, copy
+          included - two products that explain the same control in different
+          words are two products.
+        */}
+        <Col xs={24}>
+          <Card title="Appearance">
+            <AppearanceSettings />
+          </Card>
+        </Col>
+
         <Col xs={24} xl={12}>
           <Card title="Users and roles" extra={<ManagedInGit />} loading={loading}>
             {who && !who.authenticated ? (

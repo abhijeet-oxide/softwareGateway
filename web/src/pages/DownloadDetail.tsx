@@ -22,7 +22,7 @@ import {
 } from '../components/icons'
 import { PriorityControl, QueueControls } from '../components/queuecontrols'
 import { ErrorState, PageHeader, SavedBreakdown, SavedPanel } from '../components/layout'
-import { mono } from '../uikit'
+import { c, mono } from '../uikit'
 import type { Job } from '../api/types'
 
 /**
@@ -718,7 +718,7 @@ export default function DownloadDetail() {
             {failures.data?.failures?.length ? (
         <Card
           title="Failures"
-          styles={{ header: { color: '#C4262E' } }}
+          styles={{ header: { color: c.danger } }}
           // The retry belongs NEXT TO the failures, not only in the
           // header: this is where somebody is reading when they decide
           // to do something about them, and a retry resumes rather than

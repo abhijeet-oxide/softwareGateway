@@ -307,7 +307,7 @@ export function LocationChip({
           : <Icon as={Mark} title={loc.kind} />
         return (
           <span key={`${loc.name}-${i}`}>
-            {i > 0 && <span style={{ color: '#98A2B3', marginInlineEnd: 4 }}>+</span>}
+            {i > 0 && <span style={{ color: c.text3, marginInlineEnd: 4 }}>+</span>}
             {loc.url ? (
               <a href={loc.url} target="_blank" rel="noreferrer">
                 <Space size={4}>

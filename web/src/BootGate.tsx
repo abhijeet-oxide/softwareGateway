@@ -4,7 +4,7 @@ import { useQuery } from '@tanstack/react-query'
 import { api } from './api/client'
 import type { VersionResponse } from './api/types'
 import brand from './brand'
-import { BootSplash, StatusScreen } from './uikit'
+import { BootSplash, ServiceDownArt, StatusScreen } from './uikit'
 
 /**
  * BootGate answers the first question the application has to ask: is the
@@ -85,6 +85,7 @@ function ServiceUnavailable({
   return (
     <StatusScreen
       brand={brand}
+      art={<ServiceDownArt size={140} />}
       title="Service unavailable"
       actions={[
         {

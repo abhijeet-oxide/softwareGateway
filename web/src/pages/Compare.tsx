@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from 'react'
 import type { CSSProperties, ReactNode } from 'react'
 import {
-  App, Button, Card, Col, Empty, Popover, Progress, Row, Segmented, Select,
+  App, Button, Card, Col, Popover, Progress, Row, Segmented, Select,
   Space, Table, Tag, Tooltip, Tree, Typography,
 } from 'antd'
 import { FolderOutlined, SwapOutlined } from '@ant-design/icons'
@@ -17,7 +17,7 @@ import { ErrorState, SearchBar } from '../components/layout'
 import { WorkingBar } from '../components/progress'
 import { ARTIFACT_ICONS, Icon } from '../components/icons'
 import { SecurityComparison } from '../components/securitycompare'
-import { c, mono } from '../uikit'
+import { c, EmptyState, mono } from '../uikit'
 import type {
   CompareFile, CompareProgressSide, CompareResponse, CompareRow, CompareVerdict, Package,
   Repository,
@@ -535,7 +535,7 @@ function ComparisonReport({ report }: { report: CompareResponse }) {
           scroll={{ x: 1200 }}
           locale={{
             emptyText: (
-              <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="Nothing matches this filter" />
+              <EmptyState title="Nothing matches this filter" />
             ),
           }}
           columns={[
@@ -654,7 +654,7 @@ function FileDifferences({ files, total }: { files: FileEntry[]; total: number }
   }
 
   if (files.length === 0) {
-    return <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="No file matches this filter" />
+    return <EmptyState title="No file matches this filter" />
   }
 
   return (
@@ -722,7 +722,7 @@ function buildFileTree(files: FileEntry[]): FileNode[] {
         key: `${prefix}/${name}`,
         title: (
           <Space size={6}>
-            <FolderOutlined style={{ color: '#98A2B3' }} />
+            <FolderOutlined style={{ color: c.text3 }} />
             <Typography.Text style={{ fontSize: 13 }}>{name}</Typography.Text>
             {child.differing > 0 && (
               <Typography.Text type="secondary" style={{ fontSize: 11 }}>
@@ -826,7 +826,7 @@ function CompositionBand({ buckets }: { buckets: Record<CompareVerdict, Bucket> 
       <div
         style={{
           display: 'flex', width: '100%', height: 12, borderRadius: 6,
-          overflow: 'hidden', background: '#EEF1F4',
+          overflow: 'hidden', background: c.surface2,
         }}
       >
         {order.map((verdict, i) => {
@@ -869,7 +869,7 @@ function CompositionBand({ buckets }: { buckets: Record<CompareVerdict, Bucket> 
 const BAND_COLOUR: Record<CompareVerdict, string> = {
   'only-b': c.ok,
   changed: c.pending,
-  same: '#8794A5',
+  same: c.text3,
   'only-a': c.danger,
 }
 
@@ -928,7 +928,7 @@ function BucketFigure({ bucket, verdict }: { bucket: Bucket; verdict: CompareVer
             aria-hidden
             style={{
               width: 8, height: 8, borderRadius: 2, flex: 'none',
-              background: empty ? '#D6DCE4' : BAND_COLOUR[verdict],
+              background: empty ? c.borderStrong : BAND_COLOUR[verdict],
             }}
           />
           <span
@@ -1329,7 +1329,7 @@ export default function Compare() {
             <Space size={12} wrap align="center">
               <Typography.Text type="secondary" style={{ fontSize: 12 }}>Comparing</Typography.Text>
               <ComparedEnd pkg={leftPkg} fallback={report.a.label} />
-              <SwapOutlined style={{ color: '#98A2B3' }} />
+              <SwapOutlined style={{ color: c.text3 }} />
               <ComparedEnd pkg={rightPkg} fallback={report.b.label} />
             </Space>
             <Button onClick={() => setSettled(false)}>Change selection</Button>

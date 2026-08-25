@@ -85,7 +85,7 @@ export function SeverityBar({ counts, height = 8 }: { counts: SecurityCounts; he
     <div
       style={{
         display: 'flex', width: '100%', height, borderRadius: height / 2,
-        overflow: 'hidden', background: '#EEF1F4',
+        overflow: 'hidden', background: c.surface2,
       }}
     >
       {SEVERITIES.map((s, i) => {
@@ -199,7 +199,7 @@ function SeverityPip({ value, count }: { value: Severity; count: number }) {
             display: 'inline-block', width: 7, height: 7, borderRadius: '50%',
             background: muted ? severitySurface[value]
               : filled ? severityColour[value] : severitySurface[value],
-            border: `1.5px solid ${muted ? '#D6DCE4' : severityColour[value]}`,
+            border: `1.5px solid ${muted ? c.borderStrong : severityColour[value]}`,
           }}
         />
         <span style={{ color: muted ? c.text2 : severityColour[value], fontWeight: muted ? 400 : 600 }}>
@@ -628,7 +628,7 @@ export function ComparisonTiles({ resolved, introduced, moreSevere, lessSevere, 
             border: `1px solid ${c.borderStrong}`,
             borderRadius: tokens.shape.borderRadius,
             padding: '12px 14px',
-            background: '#FFFFFF',
+            background: c.surface,
           }}
         >
           <Typography.Text type="secondary" style={{ fontSize: 12 }}>{t.label}</Typography.Text>
@@ -1074,7 +1074,7 @@ export function SyncLogButton({ sync, size = 'middle' }: {
                 key={`${e.at ?? ''}-${i}`}
                 style={{
                   display: 'flex', gap: 10, alignItems: 'baseline',
-                  paddingBottom: 8, borderBottom: '1px solid #F0F0F0',
+                  paddingBottom: 8, borderBottom: '1px solid ${c.border}',
                 }}
               >
                 <Typography.Text

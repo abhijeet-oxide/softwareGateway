@@ -1014,3 +1014,217 @@
     opacity: 0.45;
   }
 }
+
+
+/* ---------------------------------------------------- state illustrations */
+
+/* Gentle, professional motion for the SVG illustration kit (success, scan,
+   empty, offline). All effects respect prefers-reduced-motion. */
+.ill { display: block; }
+
+@keyframes illDraw { to { stroke-dashoffset: 0; } }
+.ill-draw {
+  stroke-dasharray: 1;
+  stroke-dashoffset: 1;
+  animation: illDraw 0.6s ease-out 0.25s forwards;
+}
+
+@keyframes illPop { 0% { transform: scale(0.6); opacity: 0; } 60% { opacity: 1; } 100% { transform: scale(1); opacity: 1; } }
+.ill-pop { animation: illPop 0.5s cubic-bezier(0.2, 0.8, 0.2, 1) forwards; }
+
+@keyframes illRipple { 0% { transform: scale(0.85); opacity: 0.18; } 70% { opacity: 0.05; } 100% { transform: scale(1.15); opacity: 0; } }
+.ill-ripple { transform-origin: center; animation: illRipple 2.4s ease-out infinite; }
+
+@keyframes illSpark { 0% { opacity: 0; transform: scale(0.3); } 40% { opacity: 1; } 100% { opacity: 0; transform: scale(1.4); } }
+.ill-spark { transform-box: fill-box; transform-origin: center; animation: illSpark 1.8s ease-out infinite; }
+
+@keyframes illFloaty { 0%, 100% { transform: translateY(0); } 50% { transform: translateY(-5px); } }
+.ill-floaty { animation: illFloaty 3.2s ease-in-out infinite; }
+
+@keyframes illSweep { 0% { transform: translateY(0); } 100% { transform: translateY(56px); } }
+.ill-sweep { animation: illSweep 1.7s ease-in-out infinite alternate; }
+
+@keyframes illDash { to { stroke-dashoffset: -16; } }
+.ill-dash { animation: illDash 1s linear infinite; }
+
+/* A document lifting out of the empty tray: a slow rise with a hair of tilt,
+   offset from the tray's own float so it reads as parallax, not a rigid block. */
+@keyframes illLift {
+  0%, 100% { transform: translateY(0) rotate(-1.5deg); }
+  50% { transform: translateY(-5px) rotate(1.5deg); }
+}
+.ill-lift { animation: illLift 3.8s ease-in-out infinite; }
+
+/* The settings gear on the sign-in scene: one slow revolution, so the page has
+   a pulse without anything demanding attention. */
+@keyframes illTurn { to { transform: rotate(360deg); } }
+.ill-turn { animation: illTurn 18s linear infinite; }
+
+/* Leaving the workspace: the arrow slides out and returns, the one motion on
+   the signed-out page. */
+@keyframes illExit { 0%, 100% { transform: translateX(0); opacity: 0.85; } 50% { transform: translateX(6px); opacity: 1; } }
+.ill-exit { animation: illExit 2.6s ease-in-out infinite; }
+
+@media (prefers-reduced-motion: reduce) {
+  .ill-draw { animation: none; stroke-dashoffset: 0; }
+  .ill-pop, .ill-ripple, .ill-spark, .ill-floaty, .ill-sweep, .ill-dash, .ill-lift,
+  .ill-turn, .ill-exit { animation: none; }
+}
+
+
+/* --- the appearance controls ----------------------------------------------
+   The theme picker is three MINIATURES OF THE APPLICATION, not three words: a
+   picture answers "what will this look like?" faster than any label. The
+   miniature reads its colours from the tokens, so it keeps telling the truth
+   after a reskin - a hardcoded navy would go on advertising a palette nobody
+   ships any more. */
+.ui-theme-tiles {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+.ui-theme-tile {
+  appearance: none;
+  border: 1px solid var(--border-strong);
+  background: var(--surface);
+  border-radius: var(--r-lg);
+  padding: 5px;
+  cursor: pointer;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  transition:
+    border-color var(--dur-hover) var(--ease),
+    box-shadow var(--dur-hover) var(--ease),
+    transform var(--dur-hover) var(--ease);
+}
+.ui-theme-tile:hover {
+  transform: translateY(-1px);
+  box-shadow: var(--el-1);
+}
+.ui-theme-tile:focus-visible {
+  outline: 2px solid var(--brand);
+  outline-offset: 2px;
+}
+.ui-theme-tile.is-selected,
+.ui-theme-tile.is-selected:hover {
+  border-color: var(--brand);
+  box-shadow: 0 0 0 1px var(--brand);
+}
+.ui-theme-tile-art {
+  position: relative;
+  width: 108px;
+  height: 64px;
+  border-radius: calc(var(--r-lg) - 4px);
+  overflow: hidden;
+  display: block;
+  border: 1px solid var(--border);
+}
+.ui-theme-tile-label {
+  font-size: var(--fs-12);
+  font-weight: 600;
+  color: var(--text-2);
+  text-align: center;
+  padding-bottom: 2px;
+}
+.ui-theme-tile.is-selected .ui-theme-tile-label {
+  color: var(--brand);
+}
+
+/* The miniature. Each half names the LIGHT palette by default and the dark one
+   under .is-dark, so both are drawn correctly whichever theme is actually
+   painted - a preview that changed with the current theme would be showing the
+   wrong answer half the time. */
+.ui-theme-mini {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  background: #eef1f6;
+}
+.ui-theme-mini.is-dark {
+  background: #101318;
+}
+.ui-theme-mini-nav {
+  width: 26%;
+  background: #0a1f3c;
+}
+.ui-theme-mini.is-dark .ui-theme-mini-nav {
+  background: #081830;
+}
+.ui-theme-mini-page {
+  flex: 1;
+  padding: 7px 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.ui-theme-mini-line {
+  height: 5px;
+  border-radius: 3px;
+  background: #d5dbe4;
+}
+.ui-theme-mini-line.is-long {
+  width: 62%;
+}
+.ui-theme-mini-line.is-short {
+  width: 40%;
+  background: #e7ebf1;
+}
+.ui-theme-mini.is-dark .ui-theme-mini-line {
+  background: #353b45;
+}
+.ui-theme-mini.is-dark .ui-theme-mini-line.is-short {
+  background: #262b33;
+}
+.ui-theme-mini-accent {
+  margin-top: auto;
+  height: 8px;
+  width: 30%;
+  border-radius: 3px;
+  background: var(--brand);
+}
+
+/* --- a settings surface ---------------------------------------------------
+   One row per decision: what it is, what it does, and the control. Stacked
+   when the control is wide enough that sitting beside the text would squeeze
+   both. */
+.ui-settings-group {
+  display: flex;
+  flex-direction: column;
+}
+.ui-setting-row {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-6);
+  padding: var(--sp-3) 0;
+  border-bottom: 1px solid var(--border);
+}
+.ui-setting-row:last-child {
+  border-bottom: 0;
+}
+.ui-setting-row.is-stacked {
+  flex-direction: column;
+  align-items: stretch;
+  gap: var(--sp-3);
+}
+.ui-setting-row-text {
+  min-width: 0;
+  flex: 1;
+}
+.ui-setting-row-title {
+  font-size: var(--fs-13);
+  font-weight: 600;
+  color: var(--text);
+}
+.ui-setting-row-desc {
+  margin-top: 2px;
+  font-size: var(--fs-12);
+  line-height: 1.45;
+  color: var(--text-2);
+}
+.ui-setting-row-control {
+  flex-shrink: 0;
+}
+.ui-setting-row.is-stacked .ui-setting-row-control {
+  flex-shrink: 1;
+}

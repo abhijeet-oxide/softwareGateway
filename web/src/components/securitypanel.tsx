@@ -441,7 +441,7 @@ function SummaryCards({ data, syncing }: { data: PackageSecurityResponse; syncin
                     comparable with each other. A bar normalised per severity
                     would draw four full-width bars and say nothing.
                   */}
-                  <div style={{ height: 5, background: '#EEF1F4', borderRadius: 3 }}>
+                  <div style={{ height: 5, background: c.surface2, borderRadius: 3 }}>
                     <div
                       className="slm-meter-seg"
                       style={{
@@ -558,7 +558,7 @@ function Meter({ value, colour, headline, detail }: {
           {value}%
         </span>
       </div>
-      <div style={{ height: 5, background: '#E4E9EF', borderRadius: 3, overflow: 'hidden' }}>
+      <div style={{ height: 5, background: c.borderStrong, borderRadius: 3, overflow: 'hidden' }}>
         <div
           className="slm-meter-seg"
           style={{

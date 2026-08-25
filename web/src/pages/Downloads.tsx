@@ -11,7 +11,7 @@ import { ManagedInGit, TimeAgo, TransferStateTag } from '../components/chips'
 import { EmptyStateCard, ErrorState } from '../components/layout'
 import { DownloadProgress } from '../components/progress'
 import { PriorityControl, QueueControls } from '../components/queuecontrols'
-import { mono } from '../uikit'
+import { c, mono } from '../uikit'
 import type { AutoDownloadRuleView, DownloadView, ReplicationView, Transfer } from '../api/types'
 
 /**
@@ -53,7 +53,7 @@ function chainFlow(chain: string[] | undefined) {
     <Space size={4} wrap>
       {chain.map((step, i) => (
         <span key={`${step}-${i}`}>
-          {i > 0 && <ArrowRightOutlined style={{ fontSize: 10, color: '#98A2B3', margin: '0 4px' }} />}
+          {i > 0 && <ArrowRightOutlined style={{ fontSize: 10, color: c.text3, margin: '0 4px' }} />}
           <Tag style={{ marginInlineEnd: 0 }}>{step}</Tag>
         </span>
       ))}

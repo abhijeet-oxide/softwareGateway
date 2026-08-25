@@ -14,7 +14,7 @@ import { packageFileDownloadUrl, usePackageFileContent } from '../api/queries'
 import { bytes, formatBytes } from '../domain/format'
 import { ErrorState } from './layout'
 import { useIdentity } from '../auth/permissions'
-import { mono } from '../uikit'
+import { c, mono } from '../uikit'
 
 /**
  * Looking at a file a vendor shipped.
@@ -131,14 +131,14 @@ function Highlighted({ text, grammar }: { text: string; grammar?: string }) {
     <div
       style={{
         display: 'flex', gap: 12, maxHeight: '62vh', overflow: 'auto',
-        background: '#FAFAFA', border: '1px solid #F0F0F0', borderRadius: 6, padding: '10px 12px',
+        background: c.surface2, border: '1px solid ${c.border}', borderRadius: 6, padding: '10px 12px',
       }}
     >
       <pre
         aria-hidden
         style={{
           margin: 0, fontFamily: mono, fontSize: 12, lineHeight: '18px',
-          color: '#B0B7C3', textAlign: 'right', userSelect: 'none',
+          color: c.text3, textAlign: 'right', userSelect: 'none',
         }}
       >
         {lines.map((_, i) => `${i + 1}`).join('\n')}

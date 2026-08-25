@@ -310,10 +310,10 @@ export function StateStrip({ state, label, events = [], message }: StripProps) {
   return (
     <div
       style={{
-        border: '1px dashed #D6DCE5',
+        border: '1px dashed ${c.borderStrong}',
         borderRadius: 4,
         padding: '10px 12px',
-        background: '#FBFCFD',
+        background: c.surface2,
       }}
     >
       <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: events.length ? 8 : 0 }}>
@@ -386,7 +386,7 @@ export function WorkingBar({
         style={{
           height: 6,
           borderRadius: 3,
-          background: '#EEF2F6',
+          background: c.surface2,
           overflow: 'hidden',
         }}
       >

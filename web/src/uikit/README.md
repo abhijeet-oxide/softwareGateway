@@ -77,6 +77,30 @@ floated to the middle of the box the caption sized, and read as a mark with a
 hole punched between it and its own name. `.ui-lockup-text` states
 `align-items: flex-start` for that reason.
 
+## What counts as a difference
+
+The test is not "does it look similar" but **"could the two tools answer this
+differently?"** If they could, it belongs here. Three things that failed that
+test and were moved:
+
+- **The state illustrations.** One tool showed a considered drawing where a
+  service would not answer; the other showed the same sentence with nothing
+  above it. A state screen is the same state screen in every tool.
+- **The empty state.** One used this kit's `EmptyState` with the shared
+  drawing; the other used the component library's flat default glyph, which
+  belongs to no design system and is the cheapest tell that a page was
+  assembled rather than built.
+- **The appearance controls, copy included.** "System follows your device" is
+  the same sentence in every tool. Two products that explain the same control
+  in different words are two products.
+
+The counter-example is worth stating too, because not everything shared-looking
+should be shared: a file type's icon colour and a chart series' colour are
+IDENTITIES, not theme. YAML is the same orange in dark mode, the same way an
+environment's colour is, and they do not belong to the palette. Statuses do:
+anything that means healthy / pending / failing reads a token, so it follows
+the theme and a rebrand cannot miss it.
+
 ## Two constraints, and why
 
 **Plain CSS, never utility classes.** One of the tools that shares this folder

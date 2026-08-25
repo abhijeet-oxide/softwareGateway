@@ -158,8 +158,8 @@ export default function Reports() {
                     const value = bytes(v.bytesTransferred) ?? 0
                     return (
                       <div key={v.day} style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
-                        <span style={{ width: 88, fontSize: 12, color: '#5A6675' }}>{v.day}</span>
-                        <div style={{ flex: 1, background: '#EEF2F6', borderRadius: 3, height: 18 }}>
+                        <span style={{ width: 88, fontSize: 12, color: c.text2 }}>{v.day}</span>
+                        <div style={{ flex: 1, background: c.surface2, borderRadius: 3, height: 18 }}>
                           <div
                             style={{
                               width: `${(value / peak) * 100}%`,
@@ -173,7 +173,7 @@ export default function Reports() {
                         <span style={{ width: 90, textAlign: 'right', fontSize: 12 }}>
                           <Value>{formatBytes(value)}</Value>
                         </span>
-                        <span style={{ width: 70, textAlign: 'right', fontSize: 12, color: '#5A6675' }}>
+                        <span style={{ width: 70, textAlign: 'right', fontSize: 12, color: c.text2 }}>
                           <Value>{formatCount(v.downloads)}</Value> dl
                         </span>
                       </div>

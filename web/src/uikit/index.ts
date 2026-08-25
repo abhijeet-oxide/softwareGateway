@@ -88,11 +88,34 @@ export { BrandMark, BrandLockup } from "./primitives/BrandLockup";
 export { AppShell, SideNav, TopBar, NavEntry } from "./primitives/AppShell";
 export type { NavItem, NavProfile } from "./primitives/AppShell";
 export { StatusScreen, BootSplash } from "./primitives/StatusScreen";
+
+// --- the state illustrations ----------------------------------------------
+// A state screen is the same state screen in every tool: one tool having a
+// drawing where the other has a bare sentence is exactly the kind of
+// difference that stops two products looking like one.
+export {
+  SuccessArt,
+  ScanArt,
+  EmptyArt,
+  AllClearArt,
+  InboxZeroArt,
+  InSyncArt,
+  OfflineArt,
+  WorkspaceArt,
+  SignedOutArt,
+  SessionExpiredArt,
+  ServiceDownArt,
+  AccessDeniedArt,
+  NotFoundArt,
+  StatePanel,
+} from "./primitives/illustrations";
 export type { StatusAction } from "./primitives/StatusScreen";
 export {
-  default as AppearanceControls,
+  default as AppearanceSettings,
+  SettingRow,
+  ThemeControl,
   ThemeSwitch,
   ThemeToggleButton,
-  DensitySwitch,
-  FontScaleSwitch,
+  DensityControl,
+  FontScaleControl,
 } from "./primitives/AppearanceControls";

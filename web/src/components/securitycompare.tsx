@@ -362,7 +362,7 @@ function SetBar({ old, both, fresh }: { old: number; both: number; fresh: number
   const total = old + both + fresh || 1
   const segments = [
     { key: 'old', n: old, colour: verdictColour.better, label: 'Only in the base release', hint: 'gone in the new one' },
-    { key: 'both', n: both, colour: '#8794A5', label: 'In both releases', hint: 'carried over unchanged' },
+    { key: 'both', n: both, colour: c.text3, label: 'In both releases', hint: 'carried over unchanged' },
     { key: 'new', n: fresh, colour: verdictColour.worse, label: 'Only in the new release', hint: 'arrived with it' },
   ]
 
@@ -371,7 +371,7 @@ function SetBar({ old, both, fresh }: { old: number; both: number; fresh: number
       <div
         style={{
           display: 'flex', width: '100%', height: 12, borderRadius: 6,
-          overflow: 'hidden', background: '#EEF1F4',
+          overflow: 'hidden', background: c.surface2,
         }}
       >
         {segments.map((seg, i) => (seg.n === 0 ? null : (

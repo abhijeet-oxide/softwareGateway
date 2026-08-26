@@ -231,13 +231,25 @@ func (p *Promoter) Promote(ctx context.Context, h promote.Hop) (promote.Outcome,
 		return out, err
 	}
 
-	// Tags this HOP intends to publish at each source path, keyed by that
-	// path. Consulted only if a tag-scoped call comes back an undiagnosed 400
-	// (see promoteOne): a repository-level fallback moves every tag a source
-	// holds, and this is what proves that doing so publishes nothing the hop
-	// did not already ask for.
+	// Tags the OVERALL release intends to publish at each source path, keyed
+	// by that path. Consulted only if a tag-scoped call comes back an
+	// undiagnosed 400 (see promoteOne): a repository-level fallback moves
+	// every tag a source holds, and this is what proves that doing so
+	// publishes nothing the release did not already own.
+	//
+	// Built from AllNames, not Names: the runner calls Promote once per name
+	// so a promotion is resumable at the exact one, which means Names is
+	// usually a single entry and cannot answer "does anything else in this
+	// repository belong to a DIFFERENT release". AllNames is the full list
+	// that narrowing came from, and falls back to Names for a caller that
+	// never sets it (every test in this package, and any future caller that
+	// truly has nothing wider to report).
+	allNames := h.AllNames
+	if len(allNames) == 0 {
+		allNames = h.Names
+	}
 	intended := map[string]map[string]bool{}
-	for _, n := range h.Names {
+	for _, n := range allNames {
 		src := joinPath(trimKey(h.Origin.Repository, p.srcKey), n.Repository)
 		if intended[src] == nil {
 			intended[src] = map[string]bool{}
@@ -302,7 +314,24 @@ func (p *Promoter) promoteOne(
 
 	// Every tag srcRepo holds is one this hop already intends to publish, so
 	// promoting the repository as a whole publishes nothing extra.
-	if err2 := p.doPromote(ctx, client, srcRepo, dstRepo, "", ""); err2 != nil {
+	//
+	// targetDockerRepository is omitted too, not just tag/targetTag: this
+	// Artifactory rejects a request naming targetDockerRepository without a
+	// tag ("'tag' cannot be empty"), even when the value is identical to the
+	// source. Omitted, the destination path defaults to the source's, which
+	// is exactly right when the two already match - the only case a tagless
+	// promotion can express, since renaming without a tag is what Artifactory
+	// just refused.
+	targetPath := dstRepo
+	if targetPath == srcRepo {
+		targetPath = ""
+	}
+	if targetPath != "" {
+		return fmt.Errorf("%w (a repository-level promotion needs to rename %s to %s, and "+
+			"this Artifactory requires a tag to do that, so no fallback applies)",
+			err, srcRepo, dstRepo)
+	}
+	if err2 := p.doPromote(ctx, client, srcRepo, targetPath, "", ""); err2 != nil {
 		return fmt.Errorf("%s (repository-level fallback also failed: %w)", err, err2)
 	}
 	return nil

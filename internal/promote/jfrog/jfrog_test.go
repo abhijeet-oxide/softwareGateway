@@ -285,7 +285,16 @@ func TestUndiagnosedBadRequestFallsBackWhenSafe(t *testing.T) {
 			raw, _ := io.ReadAll(r.Body)
 			var body promoteRequest
 			_ = json.Unmarshal(raw, &body)
+			// The real Artifactory validation this fallback must satisfy:
+			// targetDockerRepository requires a tag, even to rename to the
+			// same path - so a safe, same-path fallback must omit it too.
 			if body.Tag == "" {
+				if body.TargetDockerRepository != "" {
+					w.WriteHeader(http.StatusBadRequest)
+					_, _ = w.Write([]byte(`{"errors":[{"status":400,"message":` +
+						`"When 'targetTag' or 'targetDockerRepository' exists, 'tag' cannot be empty"}]}`))
+					return
+				}
 				w.WriteHeader(http.StatusOK)
 				_, _ = w.Write([]byte(`{"status":200,"messages":[{"status":"info","message":"Promotion ended successfully"}]}`))
 				return
@@ -382,6 +391,69 @@ func TestUndiagnosedBadRequestNamesTheKnownCause(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "packageType=oci") {
 		t.Errorf("the message must name the known cause: %v", err)
+	}
+}
+
+// The runner calls Promote once per name, so Names is a single entry in
+// production while AllNames still carries the whole release (see
+// internal/promotion/runner.go and service.go). The safety check must read
+// AllNames, or every multi-name release fails this exact way: refused as
+// "unsafe" against its own sibling tag.
+func TestUndiagnosedBadRequestUsesAllNamesNotTheNarrowedCall(t *testing.T) {
+	var posts int
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodGet && strings.HasSuffix(r.URL.Path, "/tags/list"):
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(`{"tags":["orb_25.7","signature_orb_25.7"]}`))
+		case r.Method == http.MethodPost:
+			posts++
+			raw, _ := io.ReadAll(r.Body)
+			var body promoteRequest
+			_ = json.Unmarshal(raw, &body)
+			if body.Tag == "" {
+				if body.TargetDockerRepository != "" {
+					w.WriteHeader(http.StatusBadRequest)
+					_, _ = w.Write([]byte(`{"errors":[{"status":400,"message":` +
+						`"When 'targetTag' or 'targetDockerRepository' exists, 'tag' cannot be empty"}]}`))
+					return
+				}
+				w.WriteHeader(http.StatusOK)
+				_, _ = w.Write([]byte(`{"status":200}`))
+				return
+			}
+			w.WriteHeader(http.StatusBadRequest)
+			_, _ = w.Write([]byte(`{"errors":[{"status":400,"message":"Bad Request"}]}`))
+		default:
+			t.Errorf("unexpected request: %s %s", r.Method, r.URL.Path)
+		}
+	}))
+	t.Cleanup(srv.Close)
+
+	host := hostOnly(t, srv.URL)
+	origin := jfrogEnd("lab", host, "docker-lab/nokia")
+	destination := jfrogEnd("production", host, "docker-prod/nokia")
+
+	// This call is asked to publish only the orb tag - as the runner narrows
+	// it to - but the release also owns the signature tag in the same
+	// repository, carried on AllNames.
+	all := []promote.Name{
+		{Repository: "orbs/cfx", Tag: "orb_25.7", Digest: "sha256:aa"},
+		{Repository: "orbs/cfx", Tag: "signature_orb_25.7", Digest: "sha256:bb"},
+	}
+	h := promote.Hop{
+		Product: "cfx", Package: "orb_25.7", ManifestDigest: "sha256:aa",
+		Origin: origin, Destination: destination,
+		Names:    []promote.Name{all[0]},
+		AllNames: all,
+	}
+
+	_, err := promoterFor(t, h).Promote(t.Context(), h)
+	if err != nil {
+		t.Fatalf("a sibling tag from the same release must not be treated as unsafe: %v", err)
+	}
+	if posts != 2 {
+		t.Errorf("expected the tag-scoped call and one repository-level retry, got %d POSTs", posts)
 	}
 }
 

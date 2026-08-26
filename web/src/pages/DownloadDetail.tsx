@@ -382,6 +382,7 @@ function totalBreakdown(group: ContentGroup): string {
 export default function DownloadDetail() {
   const { transferId } = useParams()
   const navigate = useNavigate()
+  const [failuresDismissed, setFailuresDismissed] = useState(false)
 
   const transfer = useTransfer(transferId)
   const failures = useTransferFailures(transferId)
@@ -431,6 +432,8 @@ export default function DownloadDetail() {
   const running = t ? isLive(t.state) : false
   const failed = t?.state === 'FAILED'
   const done = t?.state === 'SUCCEEDED'
+  const failureGroups = failures.data?.failures ?? []
+  const hasFailures = failureGroups.length > 0 && !failuresDismissed
 
   // Step 2 reads the mirror's own state, never a byte count.
   const lastSync = syncs.data?.syncs?.[0]
@@ -511,10 +514,14 @@ export default function DownloadDetail() {
          * present tense on a finished one reads as still running. The state tag
          * says which it is.
          */
-        title={t ? `${repositoryOf(t.source)} · ${transferVersion(t)}` : 'Download'}
-        // The product, and nothing else. It carried a sentence explaining what
-        // a download page is, on a download page.
-        description={t?.product}
+        title={t ? `${t.packageName ?? repositoryOf(t.source)} · ${transferVersion(t)}` : 'Download'}
+        description={
+          t && (
+            <Typography.Text strong>
+              {repositoryOf(t.source)} · {t.product}
+            </Typography.Text>
+          )
+        }
         meta={
           t && (
             <Space size={16}>
@@ -548,7 +555,8 @@ export default function DownloadDetail() {
             <QueueControls
               transfer={t}
               size="middle"
-              hasFailures={Boolean(failures.data?.failures?.length)}
+              hasFailures={hasFailures}
+              onRetried={() => setFailuresDismissed(true)}
               onDeleted={() => navigate('/downloads')}
             />
           )
@@ -580,7 +588,10 @@ export default function DownloadDetail() {
           current={step}
           status={failed ? 'error' : undefined}
           items={[
-            { title: 'Downloading', description: <StepTime at={t?.startedAt} /> },
+            {
+              title: t?.strategy === 'relocate' ? 'Promoting' : 'Downloading',
+              description: <StepTime at={t?.startedAt} />,
+            },
             ...(mirrored
               ? [{
                   title: 'Mirroring',
@@ -924,7 +935,7 @@ export default function DownloadDetail() {
         the useful part - and it was being wrapped into a half-width column
         three words at a time.
       */}
-            {failures.data?.failures?.length ? (
+            {hasFailures ? (
         <Card
           title="Failures"
           styles={{ header: { color: c.danger } }}
@@ -933,10 +944,17 @@ export default function DownloadDetail() {
           // to do something about them, and a retry resumes rather than
           // restarting - nothing already moved is moved again.
           extra={
-            t && <QueueControls transfer={t} hasFailures onDeleted={() => navigate('/downloads')} />
+            t && (
+              <QueueControls
+                transfer={t}
+                hasFailures
+                onRetried={() => setFailuresDismissed(true)}
+                onDeleted={() => navigate('/downloads')}
+              />
+            )
           }
         >
-          {failures.data.failures.some((f) => f.retryable) && (
+          {failureGroups.some((f) => f.retryable) && (
             <Typography.Paragraph type="secondary" style={{ fontSize: 13 }}>
               Failures marked retryable are retried automatically, a few minutes apart and a few
               times over, before the download is left for somebody to look at. Retry now if you
@@ -946,7 +964,7 @@ export default function DownloadDetail() {
           <Table
             size="small"
             pagination={false}
-            dataSource={failures.data.failures}
+            dataSource={failureGroups}
             rowKey={(f) => f.message}
             columns={[
               { title: 'Cause', render: (_, f) => f.message },
@@ -978,7 +996,7 @@ export default function DownloadDetail() {
 
       {t && (
         <div style={{ marginTop: 16 }}>
-          <JobsPanel transferId={t.id} hasFailures={Boolean(failures.data?.failures?.length)} />
+          <JobsPanel transferId={t.id} hasFailures={hasFailures} />
         </div>
       )}
     </>

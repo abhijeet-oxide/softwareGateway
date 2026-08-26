@@ -142,6 +142,11 @@ func (s *Service) resolveHop(
 		Origin:         origin.endpoint,
 		Destination:    destination.endpoint,
 		Names:          names,
+		// The FULL list, even though the runner later narrows a copy's Names
+		// to one at a time - see Hop.AllNames. Set here, once, rather than by
+		// the runner, so it survives that narrowing without the runner having
+		// to know why.
+		AllNames: names,
 	}
 
 	res, err := promote.Resolve(promote.Config{

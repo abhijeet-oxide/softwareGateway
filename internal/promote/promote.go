@@ -127,10 +127,26 @@ type Hop struct {
 	Origin      Endpoint
 	Destination Endpoint
 
-	// Names is every name the destination must answer to afterwards, root
-	// first. Never empty: a hop with nothing to publish is not a hop, and a
-	// promoter handed one should refuse rather than report success.
+	// Names is every name THIS CALL must publish, root first. Never empty: a
+	// hop with nothing to publish is not a hop, and a promoter handed one
+	// should refuse rather than report success.
+	//
+	// A caller MAY narrow this to fewer names than the whole release - the
+	// runner does, one at a time, so a promotion interrupted half way is
+	// resumable at the exact name. A promoter must publish only these.
 	Names []Name
+
+	// AllNames is every name the OVERALL promotion will publish across every
+	// call, root first - equal to Names when a caller does not narrow it.
+	//
+	// Read-only context, never a publish list. It exists because a promoter
+	// may find a native shortcut that moves more than Names asks for (JFrog's
+	// docker promote endpoint sometimes only accepts "every tag a repository
+	// holds", not one) - and such a shortcut is safe only when everything it
+	// would additionally move is something the release already owns. Names
+	// alone cannot answer that once a caller has narrowed it to one entry;
+	// AllNames is what still can.
+	AllNames []Name
 }
 
 // Verdict is a promoter's answer to "is this hop yours".

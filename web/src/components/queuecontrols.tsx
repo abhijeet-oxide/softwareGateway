@@ -27,12 +27,14 @@ const LIVE = ['PENDING', 'PLANNING', 'READY', 'RUNNING', 'VERIFYING']
 const SETTLED = ['SUCCEEDED', 'FAILED', 'CANCELLED']
 
 export function QueueControls({
-  transfer, size = 'small', onDeleted, hasFailures = false,
+  transfer, size = 'small', onDeleted, onRetried, hasFailures = false,
 }: {
   transfer: Pick<Transfer, 'id' | 'state' | 'priority' | 'product'>
   size?: 'small' | 'middle'
   /** Called after a successful delete, since the transfer no longer exists. */
   onDeleted?: () => void
+  /** Called after retry requeues the stale failure state. */
+  onRetried?: () => void
   /**
    * Whether any JOB of this transfer has failed, which is not the same as the
    * transfer having failed. A download can be running with three components
@@ -55,6 +57,7 @@ export function QueueControls({
       const res = await control.mutateAsync(verb)
       message.success(said(verb, res.jobs, res.inFlight ?? 0))
       if (verb === 'delete') onDeleted?.()
+      if (verb === 'retry') onRetried?.()
     } catch (e) {
       message.error(e instanceof Error ? e.message : `The download could not ${verb}.`)
     }

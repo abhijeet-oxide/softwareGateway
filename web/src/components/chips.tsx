@@ -3,6 +3,7 @@ import { Badge, Space, Tag, Tooltip, Typography } from 'antd'
 import {
   CheckCircleOutlined, ExportOutlined, ExclamationCircleOutlined,
   CloseCircleOutlined, LoadingOutlined, QuestionCircleOutlined,
+  GithubOutlined,
 } from '@ant-design/icons'
 import { Icon, locationIcon, repositoryIcon, type IconComponent } from './icons'
 import { Link } from 'react-router-dom'
@@ -371,8 +372,9 @@ export function CountBadge({ count, colour }: { count: number; colour?: string }
 /** Configuration this page can show but never change (docs/design/19 §4). */
 export function ManagedInGit({ url }: { url?: string }) {
   return (
-    <Tooltip title="This is defined in Git and reconciled into the cluster. The interface shows it and never edits it - a change made here would be silently reverted.">
+    <Tooltip title="The rules are defined on git and are readonly. Update the config on git to reflect here.">
       <Tag color="default" style={{ marginInlineEnd: 0 }}>
+        <GithubOutlined />{' '}
         Managed in Git{url ? ' ↗' : ''}
       </Tag>
     </Tooltip>

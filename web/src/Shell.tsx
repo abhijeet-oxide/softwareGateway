@@ -58,14 +58,14 @@ const NAV = [
     icon: <Icon as={DownloadIcon} title="Downloads" className="anticon" />,
     label: 'Downloads',
   },
-  {
-    key: '/security',
-    icon: <SafetyOutlined />,
-    // "Security" rather than "Vulnerabilities": the page answers questions
-    // about packages and images that have none as readily as about ones that
-    // do, and a nav entry named after the bad news is one people avoid.
-    label: 'Security',
-  },
+  // {
+  //   key: '/security',
+  //   icon: <SafetyOutlined />,
+  //   // "Security" rather than "Vulnerabilities": the page answers questions
+  //   // about packages and images that have none as readily as about ones that
+  //   // do, and a nav entry named after the bad news is one people avoid.
+  //   label: 'Security',
+  // },
   { key: '/repositories', icon: <DatabaseOutlined />, label: 'Repositories' },
   { key: '/activity', icon: <HistoryOutlined />, label: 'Activity' },
   { key: '/reports', icon: <BarChartOutlined />, label: 'Reports' },

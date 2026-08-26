@@ -1,5 +1,9 @@
-import { Alert, Button, Card, Col, Row, Space, Table, Tag, Tooltip, Typography } from 'antd'
-import { ArrowRightOutlined } from '@ant-design/icons'
+import { Alert, Button, Card, Col, Row, Space, Table, Tabs, Tag, Tooltip, Typography } from 'antd'
+import {
+  ArrowRightOutlined, BookOutlined, CloudDownloadOutlined, HistoryOutlined,
+  RocketOutlined, ThunderboltOutlined,
+} from '@ant-design/icons'
+import { useState } from 'react'
 import { Link } from 'react-router-dom'
 import {
   useDownloadsForAll, useProducts, useReplicationForAll, useRulesForAll, useTransfers,
@@ -8,7 +12,7 @@ import { isLive, isPromotion, repositoryOf, transferVersion } from '../domain/de
 import { bytes, elapsedSeconds, formatBytes, formatDuration } from '../domain/format'
 import { NA, Value } from '../components/value'
 import { ManagedInGit, TimeAgo, TransferStateTag } from '../components/chips'
-import { EmptyStateCard, ErrorState } from '../components/layout'
+import { EmptyStateCard, ErrorState, SearchBar } from '../components/layout'
 import { DownloadProgress } from '../components/progress'
 import { PriorityControl, QueueControls } from '../components/queuecontrols'
 import { c, mono } from '../uikit'
@@ -78,7 +82,19 @@ function PackageCell({ transfer, width = 200 }: { transfer: Transfer; width?: nu
   if (!name) return <NA />
   return (
     <Tooltip title={name}>
-      <Typography.Text style={{ fontFamily: mono, fontSize: 12, maxWidth: width }} ellipsis={{ tooltip: false }}>
+      <Typography.Text
+        style={{
+          display: 'block',
+          minWidth: 0,
+          maxWidth: width,
+          overflow: 'hidden',
+          textOverflow: 'ellipsis',
+          whiteSpace: 'nowrap',
+          fontFamily: mono,
+          fontSize: 12,
+        }}
+        ellipsis={{ tooltip: false }}
+      >
         {name}
       </Typography.Text>
     </Tooltip>
@@ -100,7 +116,7 @@ function PackageCell({ transfer, width = 200 }: { transfer: Transfer; width?: nu
  * tooltip and on the transfer's own page.
  */
 function Route({ transfer }: { transfer: Transfer }) {
-  const from = transfer.sourceName || repositoryOf(transfer.source)
+  const from = (transfer.sourceName || repositoryOf(transfer.source)).split('/')[0]
   const to = transfer.targetName || repositoryOf(transfer.target)
   if (!from && !to) return <NA />
   return (
@@ -139,7 +155,48 @@ function MethodTag({ transfer }: { transfer: Transfer }) {
 /** One product's row in a configuration table. */
 type WithProduct<T> = T & { product: string }
 
+function searchable<T>(rows: T[], query: string, text: (row: T) => string) {
+  const needle = query.trim().toLowerCase()
+  if (!needle) return rows
+  return rows.filter((row) => text(row).toLowerCase().includes(needle))
+}
+
+function TableSearch({ value, onChange, placeholder = 'Search by product or package', style }: {
+  value: string
+  onChange: (value: string) => void
+  placeholder?: string
+  style?: React.CSSProperties
+}) {
+  return <SearchBar value={value} onChange={onChange} placeholder={placeholder} width={280} style={{ marginBottom: 0, ...style }} />
+}
+
+function TableToolbar({ children }: { children: React.ReactNode }) {
+  return (
+    <div
+      style={{
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'space-between',
+        gap: 12,
+        padding: '16px 12px 12px',
+        flexWrap: 'wrap',
+      }}
+    >
+      {children}
+    </div>
+  )
+}
+
 export default function Downloads() {
+  const [transferPage, setTransferPage] = useState(1)
+  const [transferToken, setTransferToken] = useState<string>()
+  const [promotionPage, setPromotionPage] = useState(1)
+  const [promotionToken, setPromotionToken] = useState<string>()
+  const [ongoingSearch, setOngoingSearch] = useState('')
+  const [downloadSearch, setDownloadSearch] = useState('')
+  const [promotionSearch, setPromotionSearch] = useState('')
+  const [rulesSearch, setRulesSearch] = useState('')
+  const [autoDownloadSearch, setAutoDownloadSearch] = useState('')
   const products = useProducts()
   const productList = (products.data?.products ?? []).filter((p) => p.enabled)
   const names = productList.map((p) => p.productId)
@@ -149,8 +206,8 @@ export default function Downloads() {
   // A busy estate's hundred most recent transfers are all downloads, so a
   // client-side split would leave the promotions table empty on exactly the
   // deployments that promote the most.
-  const transfers = useTransfers({ pageSize: 100, operation: 'replicate' })
-  const promotionsQuery = useTransfers({ pageSize: 50, operation: 'promote' })
+  const transfers = useTransfers({ pageSize: 25, operation: 'replicate', pageToken: transferToken })
+  const promotionsQuery = useTransfers({ pageSize: 25, operation: 'promote', pageToken: promotionToken })
   const downloadsPerProduct = useDownloadsForAll(names)
   const rulesPerProduct = useRulesForAll(names)
   const replicationPerProduct = useReplicationForAll(names)
@@ -163,12 +220,17 @@ export default function Downloads() {
   // `operation` parameter answers with everything, and a promotion listed
   // among downloads reads as a download that mysteriously moved no bytes.
   const promotions = (promotionsQuery.data?.transfers ?? []).filter(isPromotion)
-
+  const activePromotions = promotions.filter((t) => isLive(t.state) || t.state === 'PAUSED')
+  const visibleOngoing = searchable(ongoing, ongoingSearch, (t) => `${t.product} ${t.packageName} ${t.tag} ${t.source} ${t.target}`)
+  const visibleFinished = searchable(finished, downloadSearch, (t) => `${t.product} ${t.packageName} ${t.tag} ${t.source} ${t.target}`)
+  const visiblePromotions = searchable(promotions, promotionSearch, (t) => `${t.product} ${t.packageName} ${t.tag} ${t.source} ${t.target}`)
   // Flattened with the product each row belongs to, since the tables now cover
   // the estate rather than one product at a time.
   const downloads: WithProduct<DownloadView>[] = downloadsPerProduct.flatMap((q, i) =>
     (q.data?.downloads ?? []).map((d) => ({ ...d, product: names[i]! })))
   const rules: AutoDownloadRuleView[] = rulesPerProduct.flatMap((q) => q.data?.rules ?? [])
+  const visibleRules = searchable(downloads, rulesSearch, (d) => `${d.product} ${d.name} ${d.chain?.join(' ')}`)
+  const visibleAutoDownloads = searchable(rules, autoDownloadSearch, (r) => `${r.product} ${r.name} ${r.tagPattern} ${r.download}`)
   const drifted: ReplicationView[] = replicationPerProduct.flatMap(
     (q) => (q.data?.replication ?? []).filter((r) => r.drift?.drifted))
 
@@ -208,11 +270,20 @@ export default function Downloads() {
 
       <Row gutter={[16, 16]}>
         <Col span={24}>
+          <Tabs
+          items={[
+            {
+              key: 'ongoing',
+              label: `Ongoing download${ongoing.length ? ` (${ongoing.length})` : ''}`,
+              icon: <CloudDownloadOutlined />,
+              children: (
           <Card
-            title={`Ongoing downloads${ongoing.length ? ` (${ongoing.length})` : ''}`}
             loading={transfers.isLoading}
-            styles={{ body: { padding: ongoing.length ? 0 : undefined } }}
+            styles={{ body: { padding: 0 } }}
           >
+            <TableToolbar>
+              <TableSearch value={ongoingSearch} onChange={setOngoingSearch} />
+            </TableToolbar>
             {!transfers.isLoading && ongoing.length === 0 ? (
               <EmptyStateCard
                 title="Nothing is downloading"
@@ -222,8 +293,19 @@ export default function Downloads() {
             ) : (
               <Table<Transfer>
                 size="small"
-                pagination={false}
-                dataSource={ongoing}
+                pagination={{
+                  current: transferPage,
+                  pageSize: 25,
+                  total: transfers.data?.nextPageToken ? transferPage * 25 + 1 : transferPage * 25,
+                  showSizeChanger: false,
+                  onChange: (page) => {
+                    if (page > transferPage && transfers.data?.nextPageToken) {
+                      setTransferToken(transfers.data.nextPageToken)
+                      setTransferPage(page)
+                    }
+                  },
+                }}
+                dataSource={visibleOngoing}
                 rowKey={(t) => t.id}
                 scroll={{ x: 1380 }}
                 columns={[
@@ -264,6 +346,7 @@ export default function Downloads() {
                   {
                     title: 'Actions',
                     width: 290,
+                    fixed: 'right',
                     render: (_, t) => (
                       <Space size={4}>
                         <Link to={`/downloads/${t.id}`}>
@@ -277,14 +360,17 @@ export default function Downloads() {
               />
             )}
           </Card>
-        </Col>
-
-        <Col span={24}>
-          <Card title="Recent downloads" loading={transfers.isLoading}>
-            <Typography.Paragraph type="secondary" style={{ fontSize: 13 }}>
-              Downloads that have finished - succeeded, failed or stopped. Anything still running is
-              in the card above.
-            </Typography.Paragraph>
+              ),
+            },
+            {
+                key: 'downloads',
+                label: 'Downloads',
+              icon: <HistoryOutlined />,
+              children: (
+              <Card loading={transfers.isLoading} styles={{ body: { padding: 0 } }}>
+            <TableToolbar>
+              <TableSearch value={downloadSearch} onChange={setDownloadSearch} />
+            </TableToolbar>
             {!transfers.isLoading && finished.length === 0 ? (
               <EmptyStateCard
                 title="No download has finished yet"
@@ -294,8 +380,19 @@ export default function Downloads() {
             ) : (
               <Table<Transfer>
                 size="small"
-                pagination={{ pageSize: 10, hideOnSinglePage: true, size: 'small' }}
-                dataSource={finished}
+                pagination={{
+                  current: transferPage,
+                  pageSize: 25,
+                  total: transfers.data?.nextPageToken ? transferPage * 25 + 1 : transferPage * 25,
+                  showSizeChanger: false,
+                  onChange: (page) => {
+                    if (page > transferPage && transfers.data?.nextPageToken) {
+                      setTransferToken(transfers.data.nextPageToken)
+                      setTransferPage(page)
+                    }
+                  },
+                }}
+                dataSource={visibleFinished}
                 rowKey={(t) => t.id}
                 scroll={{ x: 1280 }}
                 columns={[
@@ -326,6 +423,7 @@ export default function Downloads() {
                   {
                     title: 'Actions',
                     width: 250,
+                    fixed: 'right',
                     render: (_, t) => (
                       <Space size={4}>
                         <Link to={`/downloads/${t.id}`}>
@@ -339,34 +437,20 @@ export default function Downloads() {
               />
             )}
           </Card>
-        </Col>
-
-        <Col span={24}>
-          {/*
-            PROMOTIONS ARE THEIR OWN TABLE, not a filter on the one above.
-
-            They are a different question with different columns. A download
-            has one route - the vendor to wherever it lands - so the listing
-            above never shows it; a promotion is defined BY its route, and lab
-            to production and lab to DR are the two rows somebody is comparing.
-            It also has a method, which no download has: the registry can
-            relocate a release between two of its own repositories in seconds,
-            and knowing which of the two happened is most of why anybody opens
-            this.
-
-            One table rather than ongoing and finished, because a native
-            promotion is normally over before the page refreshes - splitting it
-            in two would give one empty card and one with everything in it.
-          */}
+              ),
+            },
+            {
+                key: 'promotion',
+                label: `Promotion${activePromotions.length ? ` (${activePromotions.length})` : ''}`,
+              icon: <RocketOutlined />,
+              children: (
           <Card
-            title={`Promotions${promotions.length ? ` (${promotions.length})` : ''}`}
             loading={promotionsQuery.isLoading}
+            styles={{ body: { padding: 0 } }}
           >
-            <Typography.Paragraph type="secondary" style={{ fontSize: 13 }}>
-              Releases moved between your own targets - lab to production. Where both are
-              repositories of one Artifactory the registry relocates them itself and no bytes
-              cross the wire.
-            </Typography.Paragraph>
+            <TableToolbar>
+              <TableSearch value={promotionSearch} onChange={setPromotionSearch} />
+            </TableToolbar>
             {!promotionsQuery.isLoading && promotions.length === 0 ? (
               <EmptyStateCard
                 title="Nothing has been promoted"
@@ -376,8 +460,19 @@ export default function Downloads() {
             ) : (
               <Table<Transfer>
                 size="small"
-                pagination={{ pageSize: 10, hideOnSinglePage: true, size: 'small' }}
-                dataSource={promotions}
+                pagination={{
+                  current: promotionPage,
+                  pageSize: 25,
+                  total: promotionsQuery.data?.nextPageToken ? promotionPage * 25 + 1 : promotionPage * 25,
+                  showSizeChanger: false,
+                  onChange: (page) => {
+                    if (page > promotionPage && promotionsQuery.data?.nextPageToken) {
+                      setPromotionToken(promotionsQuery.data.nextPageToken)
+                      setPromotionPage(page)
+                    }
+                  },
+                }}
+                dataSource={visiblePromotions}
                 rowKey={(t) => t.id}
                 scroll={{ x: 1100 }}
                 columns={[
@@ -408,6 +503,7 @@ export default function Downloads() {
                   {
                     title: 'Actions',
                     width: 250,
+                    fixed: 'right',
                     render: (_, t) => (
                       <Space size={4}>
                         <Link to={`/downloads/${t.id}`}>
@@ -421,18 +517,22 @@ export default function Downloads() {
               />
             )}
           </Card>
-        </Col>
-
-        <Col span={24}>
-          <Card title="How a download runs" extra={<ManagedInGit />} loading={downloadsPerProduct.some((q) => q.isLoading)}>
-            <Typography.Paragraph type="secondary" style={{ fontSize: 13 }}>
-              What happens when a product is downloaded - where the software goes, in what order,
-              and what has to verify on the way.
-            </Typography.Paragraph>
+              ),
+            },
+            {
+              key: 'rules',
+              label: 'Rules',
+              icon: <BookOutlined />,
+              children: (
+          <Card loading={downloadsPerProduct.some((q) => q.isLoading)} styles={{ body: { padding: 0 } }}>
+            <TableToolbar>
+              <TableSearch value={rulesSearch} onChange={setRulesSearch} />
+              <ManagedInGit />
+            </TableToolbar>
             <Table<WithProduct<DownloadView>>
               size="small"
               pagination={false}
-              dataSource={downloads}
+              dataSource={visibleRules}
               rowKey={(d) => `${d.product}-${d.name || 'default'}`}
               scroll={{ x: 900 }}
               columns={[
@@ -470,14 +570,18 @@ export default function Downloads() {
               ]}
             />
           </Card>
-        </Col>
-
-        <Col span={24}>
-          <Card title="Auto-download rules" extra={<ManagedInGit />} loading={rulesPerProduct.some((q) => q.isLoading)}>
-            <Typography.Paragraph type="secondary" style={{ fontSize: 13 }}>
-              When a download happens by itself. A rule matches a version pattern and triggers one of
-              the downloads above - it performs nothing of its own.
-            </Typography.Paragraph>
+              ),
+            },
+            {
+              key: 'auto-download',
+              label: 'Auto download',
+              icon: <ThunderboltOutlined />,
+              children: (
+          <Card loading={rulesPerProduct.some((q) => q.isLoading)} styles={{ body: { padding: 0 } }}>
+            <TableToolbar>
+              <TableSearch value={autoDownloadSearch} onChange={setAutoDownloadSearch} />
+              <ManagedInGit />
+            </TableToolbar>
 
             {!rulesPerProduct.some((q) => q.isLoading) && rules.length === 0 ? (
               <EmptyStateCard
@@ -489,7 +593,7 @@ export default function Downloads() {
               <Table<AutoDownloadRuleView>
                 size="small"
                 pagination={false}
-                dataSource={rules}
+                dataSource={visibleAutoDownloads}
                 rowKey={(r) => `${r.product}-${r.name}`}
                 scroll={{ x: 800 }}
                 columns={[
@@ -508,20 +612,25 @@ export default function Downloads() {
                   {
                     title: 'State',
                     width: 130,
-                    render: (_, r) =>
-                      r.enabled ? (
-                        <Tag color="green">Enabled</Tag>
-                      ) : (
-                        <Tooltip title="A rule is turned off in Git and nowhere else. There is no runtime override, so there is no toggle here.">
-                          <Tag style={{ marginInlineEnd: 0 }}>Disabled</Tag>
-                        </Tooltip>
-                      ),
+                    render: (_, r) => r.enabled ? <Tag color="green">Enabled</Tag> : (
+                      <Tooltip title="A rule is turned off in Git and nowhere else. There is no runtime override, so there is no toggle here.">
+                        <Tag style={{ marginInlineEnd: 0 }}>Disabled</Tag>
+                      </Tooltip>
+                    ),
                   },
                 ]}
               />
             )}
           </Card>
+              ),
+            },
+          ].sort((a, b) => {
+            const order = { ongoing: 0, promotion: 1, downloads: 2, rules: 3, 'auto-download': 4 }
+            return order[a.key as keyof typeof order] - order[b.key as keyof typeof order]
+          })}
+          />
         </Col>
+
       </Row>
     </>
   )

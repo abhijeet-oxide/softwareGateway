@@ -1,0 +1,472 @@
+/* The enhanced table's own stylesheet.
+ *
+ * A CSS MODULE, so every class in it is scoped to this component and cannot
+ * collide with either app's stylesheet; the handful of rules that must reach
+ * the component library's own DOM are marked `:global` and are always nested
+ * under one of this module's classes, so they reach only inside a table this
+ * kit rendered.
+ *
+ * Plain CSS, no preprocessor: the two tools that share this folder configure
+ * their builds differently and a `.less` import is a dependency each of them
+ * would have to agree to install. Nesting is not needed here - the selectors
+ * are written out.
+ *
+ * EVERY COLOUR IS A TOKEN from the shared design system (`uikit/tokens.css`
+ * and the colour layer the brand plugin inlines). That is what makes a table
+ * follow the light/dark switch and the active preset without this file knowing
+ * either exists. The upstream package ships hardcoded blues and greys, which is
+ * correct for a package that must work with no design system underneath it and
+ * wrong here: a hardcoded #fafafa header is a white band in dark mode. */
+
+.wrapper {
+  width: 100%;
+}
+
+.wrapper :global(.ant-table),
+.wrapper :global(.ant-table-container) {
+  border-radius: var(--r-lg);
+}
+
+/* Ant sets `overflow-x: scroll` whenever scroll.x is defined; auto means the
+   bar appears only when the content genuinely overflows. */
+.wrapper :global(.ant-table-content) {
+  overflow-x: auto !important;
+}
+
+.wrapper :global(.ant-table-thead > tr > th) {
+  transition:
+    background-color var(--dur-hover) var(--ease),
+    box-shadow var(--dur-hover) var(--ease),
+    border-color var(--dur-hover) var(--ease);
+}
+
+/* A header cell clips its content by default, which would cut the resize
+   handle in half - it deliberately hangs over the cell's right edge so the
+   grab target spans the seam between two columns. */
+.wrapper
+  :global(.ant-table-thead > tr > th[data-antd-table-enhanced-header-cell="true"]) {
+  overflow: visible !important;
+}
+
+/* A pinned column scrolls UNDER the rest, so it needs its own opaque fill and
+   a layer above the cells it covers. */
+.wrapper :global(.ant-table-thead > tr > th.ant-table-cell-fix-left),
+.wrapper :global(.ant-table-thead > tr > th.ant-table-cell-fix-right) {
+  background: var(--surface-2) !important;
+  z-index: 5 !important;
+}
+.wrapper :global(.ant-table-thead > tr > th.ant-table-cell-fix-left-first),
+.wrapper :global(.ant-table-thead > tr > th.ant-table-cell-fix-left-last),
+.wrapper :global(.ant-table-thead > tr > th.ant-table-cell-fix-right-first),
+.wrapper :global(.ant-table-thead > tr > th.ant-table-cell-fix-right-last) {
+  z-index: 6 !important;
+}
+.wrapper :global(.ant-table-tbody > tr > td.ant-table-cell-fix-left),
+.wrapper :global(.ant-table-tbody > tr > td.ant-table-cell-fix-right) {
+  background: var(--surface);
+  z-index: 2;
+}
+.wrapper :global(.ant-table-thead > tr > th.ant-table-cell-fix-right-first),
+.wrapper :global(.ant-table-tbody > tr > td.ant-table-cell-fix-right-first) {
+  box-shadow: -1px 0 0 var(--border) !important;
+}
+
+/* Everything below is one rule said several ways: a cell in a fixed-layout
+   table must be allowed to be NARROWER than its content, or a column cannot be
+   dragged smaller than the longest string in it. */
+.wrapper :global(.ant-table-column-title),
+.wrapper :global(.ant-table-column-sorters .ant-table-column-title) {
+  min-width: 0;
+  overflow: hidden;
+}
+.wrapper :global(.ant-table-filter-column-title) {
+  min-width: 0;
+}
+.wrapper :global(.ant-table-column-sorters),
+.wrapper :global(.ant-table-filter-column) {
+  min-width: 0;
+  width: 100%;
+}
+.wrapper :global(.ant-table-tbody > tr > td) {
+  min-width: 0;
+  overflow: hidden;
+}
+.wrapper :global(.ant-table-tbody > tr > td > *) {
+  min-width: 0;
+}
+.wrapper :global(.ant-table-cell) {
+  min-width: 0;
+}
+.wrapper :global(.ant-table-cell-ellipsis) {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* --- the toolbar above the table ----------------------------------------- */
+.toolbar {
+  display: flex;
+  justify-content: flex-end;
+  align-items: center;
+  padding: 0 0 var(--sp-2);
+  gap: var(--sp-2);
+}
+
+/* --- the menus -----------------------------------------------------------
+   Floating surfaces take the shared kit's overlay elevation and radius, so a
+   table's menu is the same object as every other menu in the product rather
+   than a second, rounder one that arrived with a package. */
+.toolbarDropdown :global(.ant-dropdown-menu),
+.preferenceDropdown :global(.ant-dropdown-menu) {
+  min-width: 200px !important;
+  padding: var(--sp-1) !important;
+  border-radius: var(--r-lg) !important;
+  background: var(--surface);
+  box-shadow: var(--el-overlay), var(--overlay-seat) !important;
+}
+.toolbarDropdown :global(.ant-dropdown-menu-item),
+.preferenceDropdown :global(.ant-dropdown-menu-item),
+.preferenceDropdown :global(.ant-dropdown-menu-submenu-title) {
+  min-height: 30px;
+  border-radius: var(--r-sm) !important;
+  margin: 1px 0 !important;
+  padding-inline: var(--sp-2) !important;
+  transition:
+    background-color var(--dur-hover) var(--ease),
+    color var(--dur-hover) var(--ease);
+}
+.toolbarDropdown
+  :global(.ant-dropdown-menu-item:not(.ant-dropdown-menu-item-disabled):hover),
+.preferenceDropdown
+  :global(.ant-dropdown-menu-item:not(.ant-dropdown-menu-item-disabled):hover) {
+  background: var(--brand-soft) !important;
+  color: var(--brand) !important;
+}
+.preferenceDropdown {
+  width: max-content !important;
+  min-width: 240px !important;
+}
+.preferenceDropdown :global(.ant-dropdown-menu-title-content) {
+  white-space: nowrap;
+}
+.preferenceDropdown :global(.ant-dropdown-menu-item-disabled) {
+  cursor: not-allowed !important;
+  opacity: 0.45;
+}
+
+/* --- which columns are shown --------------------------------------------- */
+.columnVisibilityOverlay {
+  z-index: 1080;
+}
+.columnVisibilityDropdown {
+  width: 310px;
+  max-width: calc(100vw - 32px);
+  padding: var(--sp-3);
+  border-radius: var(--r-lg);
+  background: var(--surface);
+  box-shadow: var(--el-overlay), var(--overlay-seat);
+}
+.columnVisibilityHeader {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--sp-2);
+  margin-bottom: var(--sp-2);
+}
+.columnVisibilityCount {
+  font-size: var(--fs-12);
+}
+.columnSearch {
+  margin-bottom: var(--sp-2);
+}
+.columnVisibilityList {
+  max-height: 320px;
+  overflow-y: auto;
+  padding: 2px;
+  margin: 0 -2px;
+}
+.columnVisibilityItem {
+  min-height: 32px;
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  padding: 5px var(--sp-2);
+  border-radius: var(--r-sm);
+  cursor: pointer;
+  transition:
+    background-color var(--dur-hover) var(--ease),
+    color var(--dur-hover) var(--ease);
+}
+.columnVisibilityItem:hover {
+  background: var(--brand-soft);
+}
+.columnVisibilityItem :global(.ant-checkbox-wrapper),
+.columnVisibilityItem :global(.ant-checkbox) {
+  flex: 0 0 auto;
+}
+.columnVisibilityLabel {
+  min-width: 0;
+  flex: 1 1 auto;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  color: var(--text);
+}
+.columnVisibilityPin {
+  flex: 0 0 auto;
+  color: var(--text-3);
+  font-size: var(--fs-12);
+}
+.columnVisibilityEmpty {
+  margin: var(--sp-5) 0;
+}
+.columnVisibilityFooter {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--sp-2);
+  padding-top: var(--sp-2);
+  margin-top: var(--sp-2);
+  border-top: 1px solid var(--border);
+}
+
+/* --- density and rules --------------------------------------------------- */
+.borderedHeader :global(.ant-table-thead > tr > th) {
+  border-right: 1px solid var(--border);
+}
+.borderedHeader :global(.ant-table-thead > tr > th:last-child) {
+  border-right: none;
+}
+.densityCompact :global(.ant-table-thead > tr > th),
+.densityCompact :global(.ant-table-tbody > tr > td) {
+  padding-top: 6px;
+  padding-bottom: 6px;
+}
+.densityMiddle :global(.ant-table-thead > tr > th),
+.densityMiddle :global(.ant-table-tbody > tr > td) {
+  padding-top: 10px;
+  padding-bottom: 10px;
+}
+.densityComfortable :global(.ant-table-thead > tr > th),
+.densityComfortable :global(.ant-table-tbody > tr > td) {
+  padding-top: 14px;
+  padding-bottom: 14px;
+}
+
+/* --- one column's header ------------------------------------------------- */
+.titleRoot {
+  width: 100%;
+  min-width: 0;
+  max-width: 100%;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  position: relative;
+}
+.titleText {
+  min-width: 0;
+  flex: 1 1 auto;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  display: block;
+  line-height: 1.35;
+}
+/* A STATE, not an action: it marks a column as pinned. It stays quiet for
+   exactly that reason - drawn in the accent it read as a button, and most
+   pinned columns were pinned by the page rather than by the reader. */
+.pinIndicator {
+  flex: 0 0 auto;
+  color: var(--text-3);
+  font-size: var(--fs-11);
+  transform: rotate(-24deg);
+}
+
+/* The grab handle appears on approach and is otherwise absent: a header that
+   carries a permanent row of controls is a header whose column names have to
+   share their space with them. */
+.control {
+  opacity: 0;
+  transition:
+    opacity var(--dur-hover) var(--ease),
+    background-color var(--dur-hover) var(--ease),
+    color var(--dur-hover) var(--ease),
+    transform var(--dur-hover) var(--ease);
+}
+.wrapper :global(th).headerHover .control,
+.wrapper :global(th).headerResizing .control,
+.wrapper :global(th).headerDragOverLeft .control,
+.wrapper :global(th).headerDragOverRight .control {
+  opacity: 1;
+}
+.controlsAlways .control {
+  opacity: 1;
+}
+/* Keyboard users never hover, so the handle must also appear on focus - the
+   one route to it that does not involve a pointer. */
+.control:focus-visible {
+  opacity: 1;
+}
+
+.dragButton {
+  flex: 0 0 auto;
+}
+.dragButton:global(.ant-btn) {
+  cursor: grab;
+  color: var(--text-3);
+}
+.dragButton:global(.ant-btn:hover) {
+  color: var(--brand) !important;
+  background: var(--brand-soft) !important;
+}
+.dragButton:global(.ant-btn:active) {
+  cursor: grabbing;
+  transform: scale(0.96);
+}
+
+/* --- resizing ------------------------------------------------------------
+   The target is 10px wide and straddles the seam between two columns; the
+   VISIBLE part is a 2px bar that only appears once the pointer is on it, so
+   the header stays a row of words until somebody reaches for an edge. */
+.resizeHandle {
+  position: absolute;
+  top: 0;
+  right: -5px;
+  width: 10px;
+  height: 100%;
+  cursor: col-resize;
+  z-index: 8;
+  touch-action: none;
+  user-select: none;
+  background: transparent;
+}
+.resizeHandle::before {
+  content: "";
+  position: absolute;
+  top: 7px;
+  bottom: 7px;
+  left: 4px;
+  width: 2px;
+  border-radius: var(--r-pill);
+  background: transparent;
+  transition:
+    background-color var(--dur-hover) var(--ease),
+    box-shadow var(--dur-hover) var(--ease);
+}
+.resizeHandle:hover::before,
+.resizeHandle:focus-visible::before {
+  background: var(--brand);
+  box-shadow: 0 0 0 3px var(--brand-soft);
+}
+.resizeHandle:focus-visible {
+  opacity: 1;
+  outline: none;
+}
+
+.headerHover {
+  background: var(--surface-2) !important;
+}
+.headerResizing {
+  background: var(--brand-soft) !important;
+  user-select: none;
+}
+.headerResizing .resizeHandle::before {
+  background: var(--brand);
+  box-shadow: 0 0 0 3px var(--brand-soft);
+}
+.headerDragOverLeft,
+.headerDragOverRight {
+  background: var(--brand-soft) !important;
+}
+
+/* Where it landed, said once and then gone. A column that has just been moved
+   is briefly the only lit thing in the header, which answers "did that do
+   anything?" without a toast. */
+.headerRecentlyMoved {
+  animation: tk-moved-pulse 520ms var(--ease-out);
+}
+@keyframes tk-moved-pulse {
+  0% {
+    background: var(--brand-soft);
+    box-shadow: inset 0 -2px 0 var(--brand);
+  }
+  100% {
+    background: transparent;
+    box-shadow: none;
+  }
+}
+
+/* The two lines that follow the pointer during a drag. Fixed to the viewport
+   rather than the table, because a drag can travel past the table's own edge. */
+.resizeGuide {
+  position: fixed;
+  top: 0;
+  bottom: 0;
+  width: 2px;
+  z-index: 9999;
+  background: var(--brand);
+  pointer-events: none;
+  box-shadow: 0 0 0 1px var(--brand-soft);
+}
+.reorderGuide {
+  position: fixed;
+  top: 0;
+  bottom: 0;
+  left: 0;
+  width: 1px;
+  z-index: 9999;
+  pointer-events: none;
+  transform: translateX(-50%);
+}
+.reorderGuide::before,
+.reorderGuide::after {
+  content: "";
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 1px;
+  border-radius: var(--r-pill);
+  background: var(--brand);
+  box-shadow: 0 0 0 1px var(--brand-soft);
+}
+.reorderGuide::before {
+  left: 1px;
+}
+.reorderGuide::after {
+  right: 1px;
+}
+
+/* The label that follows the pointer during a reorder, naming where the column
+   will land. It is appended to <body> (a drag leaves the table), so it is the
+   one thing here that cannot be nested under .wrapper. */
+.reorderTooltip {
+  position: fixed;
+  left: 0;
+  top: 0;
+  z-index: 99999;
+  pointer-events: none;
+  padding: 5px var(--sp-2);
+  border-radius: var(--r-md);
+  background: var(--tooltip-bg);
+  color: var(--tooltip-fg);
+  font-size: var(--fs-12);
+  line-height: 18px;
+  white-space: nowrap;
+  box-shadow: var(--el-overlay);
+  backdrop-filter: var(--blur-material);
+  -webkit-backdrop-filter: var(--blur-material);
+}
+
+.activeBadge {
+  margin-bottom: var(--sp-2);
+  display: inline-flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--sp-2);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .headerRecentlyMoved {
+    animation: none;
+  }
+}

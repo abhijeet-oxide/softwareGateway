@@ -1,7 +1,9 @@
 import { useState } from 'react'
 import { Button, Card, Space, Table, Tag, Tooltip, Typography } from 'antd'
-import { CheckCircleFilled, CloseCircleFilled, SafetyOutlined } from '@ant-design/icons'
-import ConnectIcon from '@iconify-react/hugeicons/connect';
+// The working-surface table: resizable, reorderable, pinnable columns whose
+// layout each person keeps. See `tablekit/README.md` for which tables get it.
+import { Table as DataTable } from '../tablekit'
+import { ApiOutlined, CheckCircleFilled, CloseCircleFilled, SafetyOutlined } from '../icons'
 import { useConnectivity, useProducts } from '../api/queries'
 import { useCan } from '../auth/permissions'
 import { RepoLink } from '../components/chips'
@@ -56,7 +58,7 @@ export default function Repositories() {
           >
             <Button
               type="primary"
-              icon={<ConnectIcon style={{ width: '1em', height: '1em' }} />}
+              icon={<ApiOutlined />}
               disabled={!mayOperate}
               loading={connectivity.isFetching}
               onClick={() => { setChecking(true); void connectivity.refetch() }}
@@ -75,7 +77,8 @@ export default function Repositories() {
         />
       ) : (
         <Card styles={{ body: { padding: 0 } }}>
-          <Table<Row>
+          <DataTable<Row>
+            tableEnhancedKey="repositories"
             loading={products.isLoading}
             dataSource={rows}
             rowKey={(r) => `${r.product}-${r.kind}-${r.repo.name}`}

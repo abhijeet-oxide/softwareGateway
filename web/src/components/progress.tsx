@@ -1,7 +1,7 @@
 import { Progress, Tag, Tooltip, Typography } from 'antd'
 import {
   CheckCircleFilled, ClockCircleOutlined, CloseCircleFilled, LoadingOutlined, SyncOutlined,
-} from '@ant-design/icons'
+} from '../icons'
 import type { ContentGroup, PromotionProgress as Promotion, Strategy } from '../api/types'
 import { formatBytes, formatCount, formatSpeed, formatAbsolute, formatDuration } from '../domain/format'
 import { NA } from './value'

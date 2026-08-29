@@ -48,13 +48,15 @@
 }
 
 /* --- section card ---------------------------------------------------------
-   The standard content surface: a soft dual shadow and no hard border, so
-   cards separate by depth rather than by drawing yet another rectangle. */
+   The standard content surface. It separates from the page by an EDGE and a
+   soft contact shadow, not by a drawn border: the hairline is inside `--el-1`,
+   so a card is one object with one outline at any zoom rather than a rectangle
+   with a rule around it and a glow behind it. */
 .ui-card {
   display: flex;
   min-width: 0;
   flex-direction: column;
-  border-radius: var(--r-xl);
+  border-radius: var(--r-lg);
   background: var(--surface);
   box-shadow: var(--el-1);
 }
@@ -90,7 +92,7 @@
 }
 .ui-card-body.is-flush {
   overflow: hidden;
-  border-radius: var(--r-xl);
+  border-radius: var(--r-lg);
 }
 
 /* --- stat tile ------------------------------------------------------------ */
@@ -190,6 +192,7 @@
 .ui-pill.tone-review { background: var(--c-review-bg); border-color: var(--c-review-bd); color: var(--c-review); }
 .ui-pill.tone-danger { background: var(--c-danger-bg); border-color: var(--c-danger-bd); color: var(--c-danger); }
 .ui-pill.tone-neutral { background: var(--surface-2); border-color: var(--border); color: var(--text-2); }
+.ui-pill.tone-accent { background: var(--c-base-bg); border-color: var(--c-base-bd); color: var(--c-base); }
 
 /* --- severity dot ---------------------------------------------------------
    Colour is never the only signal: the dot differs in FILL as well as hue
@@ -689,25 +692,44 @@
   white-space: nowrap;
   max-width: 100%;
 }
+/* `on-dark` means "on the navigation's material", which is dark in one theme
+   and light in the other - so it names the navigation's own foregrounds rather
+   than white. Hardcoding white was correct for exactly one of the two. */
 .ui-lockup.on-dark .ui-lockup-name {
-  color: var(--nav-fg-active);
+  color: var(--nav-fg-strong);
 }
 .ui-lockup.on-dark .ui-lockup-caption {
   color: var(--nav-fg);
 }
 
 /* --- the navigation -------------------------------------------------------
-   The product's one piece of dark chrome. Items are quiet by default, lighten
-   on hover, and the active one becomes a brand-filled pill. */
+   A MATERIAL, not a slab of colour. It is translucent, the page's own tint
+   bleeds through it, and everything on it is ordinary type - the platform's
+   sidebar, and the one change that does most of the work of making these tools
+   look like they belong on it.
+
+   It used to be a block of navy, which is the house style of every enterprise
+   dashboard and the identity of none of them: it fought the content for
+   contrast, forced a second set of foreground colours nothing else on the page
+   used, and made the brand accent unusable on top of it.
+
+   Items are quiet by default, tint on hover, and the active one is the single
+   brand-filled thing in the frame - so "where am I" is answered by the only
+   saturated pixel on screen rather than by a slightly different navy. */
 .ui-nav {
   width: 216px;
   flex-shrink: 0;
   display: flex;
   flex-direction: column;
   background: var(--nav-bg);
+  /* The blur is what makes it a material rather than a pale panel. Stated with
+     the vendor-prefixed twin because the platform this is drawn for is the one
+     that still needs it. */
+  -webkit-backdrop-filter: var(--blur-material);
+  backdrop-filter: var(--blur-material);
   color: var(--nav-fg);
-  /* A rule the navy itself provides, so the navigation has an edge rather than
-     bleeding into the page background at exactly one lightness. */
+  /* A hairline the material provides, so the navigation has an edge rather
+     than bleeding into the page at exactly one lightness. */
   box-shadow: inset -1px 0 0 var(--nav-border);
   transition: width var(--dur-panel) var(--ease);
 }
@@ -739,9 +761,9 @@
   display: flex;
   align-items: center;
   gap: 10px;
-  height: 36px;
+  height: 34px;
   padding: 0 10px;
-  margin: 2px 0;
+  margin: 1px 0;
   border-radius: var(--r-md);
   color: var(--nav-fg);
   cursor: pointer;
@@ -756,13 +778,17 @@
 }
 .ui-nav-item:hover {
   background: var(--nav-bg-hover);
-  color: var(--nav-fg-active);
+  color: var(--nav-fg-strong);
 }
 .ui-nav-item.is-active,
 .ui-nav-item.is-active:hover {
   background: var(--nav-bg-active);
   color: var(--nav-fg-active);
-  font-weight: 600;
+  font-weight: 590;
+  /* The one lifted thing in the navigation, and only just: the fill already
+     says where you are, so the shadow is there to seat the pill on the
+     material rather than to announce it. */
+  box-shadow: 0 1px 2px color-mix(in srgb, var(--nav-bg-active) 35%, transparent);
 }
 .ui-nav-item.is-disabled,
 .ui-nav-item.is-disabled:hover {
@@ -781,6 +807,28 @@
   line-height: 1.1;
   overflow: hidden;
   text-overflow: ellipsis;
+  flex: 1;
+  min-width: 0;
+}
+/* The count at the end of an expanded row. It takes the accent while the row
+   is quiet and inverts to sit on the pill once the row is the active one, so
+   it never disappears into the fill it is standing on. */
+.ui-nav-count {
+  flex-shrink: 0;
+  min-width: 18px;
+  height: 17px;
+  padding: 0 5px;
+  border-radius: var(--r-pill);
+  background: var(--nav-bg-active);
+  color: var(--nav-fg-active);
+  font-size: 10.5px;
+  font-weight: 600;
+  line-height: 17px;
+  text-align: center;
+}
+.ui-nav-item.is-active .ui-nav-count {
+  background: rgba(255, 255, 255, 0.24);
+  color: var(--nav-fg-active);
 }
 /* Badge counts must stay readable on the navy surface. */
 .ui-nav .ant-badge {
@@ -836,9 +884,12 @@
 .ui-nav-profile-name {
   font-size: 12.5px;
   font-weight: 600;
-  color: var(--nav-fg-active);
+  color: var(--nav-fg-strong);
   overflow: hidden;
   text-overflow: ellipsis;
+}
+.ui-nav-profile.is-active .ui-nav-profile-name {
+  color: var(--nav-fg-active);
 }
 .ui-nav-profile-sub {
   font-size: 10.5px;
@@ -862,7 +913,10 @@
   white-space: nowrap;
 }
 
-/* --- the bar above the page ----------------------------------------------- */
+/* --- the bar above the page -----------------------------------------------
+   The navigation's companion, and made of the same stuff: a material rather
+   than an opaque band, so a page scrolling underneath it stays faintly visible
+   and the two pieces of chrome read as one frame around the content. */
 .ui-topbar {
   display: flex;
   align-items: center;
@@ -870,12 +924,18 @@
   flex-shrink: 0;
   height: 48px;
   padding: 0 var(--sp-4);
-  background: var(--surface);
-  border-bottom: 1px solid var(--border);
+  background: var(--material-bar);
+  -webkit-backdrop-filter: var(--blur-material);
+  backdrop-filter: var(--blur-material);
+  /* A hairline rather than a 1px rule: on a retina display this is half the
+     weight, which is the difference between an edge and a drawn line. */
+  box-shadow: 0 0.5px 0 var(--border);
   min-width: 0;
   /* Stated, not inherited: a component library header that sets a 64px line
      box turns a 26px pill into a 72px ellipse hanging out of the bar. */
   line-height: normal;
+  position: relative;
+  z-index: 2;
 }
 /* Layout only. What goes in here - a breadcrumb, an application switcher -
    brings its own type, and a weight stated here would quietly embolden it. */
@@ -1135,21 +1195,25 @@
    under .is-dark, so both are drawn correctly whichever theme is actually
    painted - a preview that changed with the current theme would be showing the
    wrong answer half the time. */
+/* The two halves are written out as literal values rather than as tokens, and
+   that is the point: a preview of the LIGHT theme must be drawn in light
+   colours while the reader is sitting in the dark one. A token would resolve to
+   whatever is currently painted, and both tiles would show the same picture. */
 .ui-theme-mini {
   position: absolute;
   inset: 0;
   display: flex;
-  background: #eef1f6;
+  background: #f0f0f3;
 }
 .ui-theme-mini.is-dark {
-  background: #101318;
+  background: #1c1c1e;
 }
 .ui-theme-mini-nav {
   width: 26%;
-  background: #0a1f3c;
+  background: #e6e6ea;
 }
 .ui-theme-mini.is-dark .ui-theme-mini-nav {
-  background: #081830;
+  background: #232326;
 }
 .ui-theme-mini-page {
   flex: 1;
@@ -1161,20 +1225,20 @@
 .ui-theme-mini-line {
   height: 5px;
   border-radius: 3px;
-  background: #d5dbe4;
+  background: #d2d2d7;
 }
 .ui-theme-mini-line.is-long {
   width: 62%;
 }
 .ui-theme-mini-line.is-short {
   width: 40%;
-  background: #e7ebf1;
+  background: #e4e4e7;
 }
 .ui-theme-mini.is-dark .ui-theme-mini-line {
-  background: #353b45;
+  background: #4a4a4e;
 }
 .ui-theme-mini.is-dark .ui-theme-mini-line.is-short {
-  background: #262b33;
+  background: #38383b;
 }
 .ui-theme-mini-accent {
   margin-top: auto;

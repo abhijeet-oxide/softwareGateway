@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { Alert, Button, Card, Col, Descriptions, Row, Space, Table, Tag, Tooltip, Typography } from 'antd'
-import { ThunderboltOutlined } from '@ant-design/icons'
+import { ThunderboltOutlined } from '../icons'
 import { useDeepHealth, useProducts, useVersion, useWorkers } from '../api/queries'
 import { useIdentity } from '../auth/permissions'
 import { formatCount, formatRelative } from '../domain/format'

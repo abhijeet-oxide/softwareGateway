@@ -2,9 +2,12 @@ import { useEffect, useState } from 'react'
 import {
   App, Button, Card, Modal, Progress, Select, Space, Table, Tag, Tooltip, Typography,
 } from 'antd'
+// The working-surface table: resizable, reorderable, pinnable columns whose
+// layout each person keeps. See `tablekit/README.md` for which tables get it.
+import { Table as DataTable } from '../tablekit'
 import {
   CheckCircleFilled, ExclamationCircleFilled, PlayCircleOutlined, SyncOutlined,
-} from '@ant-design/icons'
+} from '../icons'
 import { useDiscoveryStatuses, useRunDiscovery } from '../api/queries'
 import { useCan } from '../auth/permissions'
 import { formatCount, formatDuration } from '../domain/format'
@@ -582,7 +585,8 @@ export function DiscoveryPanel({ products }: { products: Product[] }) {
               </Space>
             </div>
 
-            <Table<DiscoverySourceState>
+            <DataTable<DiscoverySourceState>
+              tableEnhancedKey="discovery-sources"
               size="small"
               pagination={{ pageSize: 20, showSizeChanger: false }}
               dataSource={rows}

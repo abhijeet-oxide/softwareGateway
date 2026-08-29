@@ -1,7 +1,7 @@
 import { useMemo } from 'react'
 import { Button, Card, Col, Row, Space, Table, Typography } from 'antd'
 import { c } from '../uikit'
-import { CloudDownloadOutlined } from '@ant-design/icons'
+import { CloudDownloadOutlined } from '../icons'
 import { Link, useNavigate } from 'react-router-dom'
 import { useProducts, usePackagesByProducts, useReports, useTransfers } from '../api/queries'
 import {

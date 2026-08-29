@@ -8,7 +8,12 @@ import type { CSSProperties, ReactNode } from "react";
 // production instance that borrowed the danger tone would say something about
 // its health that nobody meant.
 
-export type PillTone = "ok" | "pending" | "review" | "danger" | "neutral";
+// `accent` is the odd one out and earns its place: it is for a state that is
+// NOTABLE without being good, bad, waiting or nothing - a release sitting at
+// the vendor, a thing that has been singled out. Given the neutral tone those
+// states read as disabled beside the coloured ones, and given any of the four
+// semantic tones they claim a health they do not have.
+export type PillTone = "ok" | "pending" | "review" | "danger" | "neutral" | "accent";
 
 export function StatusPill({
   tone,

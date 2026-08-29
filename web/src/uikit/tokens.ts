@@ -27,11 +27,18 @@ export interface Palette {
   // Secondary accent. Defaults to brandStrong so it is inert until you set it;
   // exposed as var(--secondary) for your own accents.
   secondary: string;
-  // Sidebar / navigation rail
+  // Sidebar / navigation rail. `navBg` is a MATERIAL: a translucent fill the
+  // page shows faintly through, so give it an alpha and let `components.css`
+  // put the blur behind it.
   navBg: string;
   navBgHover: string;
   navBgActive: string;
   navFg: string;
+  /** Type that has to hold its own on the navigation - the product's name, the
+   *  signed-in person - as opposed to an item's quieter label. It is a separate
+   *  token because the navigation is a light material in light mode and a dark
+   *  one in dark mode: "white" was correct for exactly one of those. */
+  navFgStrong: string;
   navFgActive: string;
   navBorder: string;
   // Surfaces: canvas (page) < surface (content) < surface2 (raised or sunken
@@ -92,7 +99,8 @@ export const VAR_MAP: Array<[keyof Palette, string]> = [
   ["brand", "--brand"], ["brandStrong", "--brand-strong"], ["brandSoft", "--brand-soft"],
   ["brandBorder", "--brand-border"], ["secondary", "--secondary"],
   ["navBg", "--nav-bg"], ["navBgHover", "--nav-bg-hover"], ["navBgActive", "--nav-bg-active"],
-  ["navFg", "--nav-fg"], ["navFgActive", "--nav-fg-active"], ["navBorder", "--nav-border"],
+  ["navFg", "--nav-fg"], ["navFgStrong", "--nav-fg-strong"],
+  ["navFgActive", "--nav-fg-active"], ["navBorder", "--nav-border"],
   ["canvas", "--canvas"], ["surface", "--surface"], ["surface2", "--surface-2"],
   ["border", "--border"], ["borderStrong", "--border-strong"], ["illSurface", "--ill-surface"],
   ["text", "--text"], ["text2", "--text-2"], ["text3", "--text-3"],
@@ -116,69 +124,104 @@ export const VAR_MAP: Array<[keyof Palette, string]> = [
 // Defaults: the identity these tools ship with. Change values via a PRESET
 // below rather than editing these, so the baseline is always there to diff
 // against - and so both products move together when one of them moves.
+//
+// THE PALETTE IS APPLE'S SYSTEM PALETTE, and deliberately so: these two tools
+// are meant to read as one suite built for the platform their operators
+// actually sit in front of. That means the neutrals apple.com uses (#1d1d1f
+// type, #f5f5f7 grounds, #d2d2d7 rules) rather than a generic blue-grey ramp,
+// and the system accents (systemBlue, systemGreen, systemOrange, systemRed,
+// systemIndigo) rather than colours picked one at a time.
+//
+// The single biggest consequence is the NAVIGATION. It used to be a slab of
+// navy, which is the house style of every enterprise dashboard and belongs to
+// none of them. It is now a MATERIAL: a translucent neutral the page shows
+// faintly through, dark type on it, and one brand-filled pill for where you
+// are - a Finder sidebar, not a chrome band. The blur that makes it a material
+// lives in components.css; the alpha that lets it work lives here.
 // -----------------------------------------------------------------------------
 export const defaultTokens: ThemeTokens = {
-  shape: { borderRadius: 6, controlHeight: 30 },
+  // 8 and 32: a control the size of a macOS push button, with the continuous
+  // corner the whole platform rounds to. 6/30 read as a web form.
+  shape: { borderRadius: 8, controlHeight: 32 },
   type: {
+    // San Francisco first, by its real names as well as through -apple-system,
+    // so the face is right on a Mac and on an iPad viewing the same page. Inter
+    // is the closest widely-installed stand-in and sits ahead of the platform
+    // defaults for everyone else.
     fontFamily:
-      `-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif`,
+      `-apple-system, BlinkMacSystemFont, "SF Pro Text", "SF Pro Display", Inter, "Segoe UI Variable Text", "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif`,
+    // ui-monospace resolves to SF Mono on Apple platforms, which is the point.
     monoFamily:
-      `"JetBrains Mono", ui-monospace, "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace`,
+      `ui-monospace, "SF Mono", SFMono-Regular, "JetBrains Mono", Menlo, Consolas, "Liberation Mono", monospace`,
     fontSizeBase: 13,
   },
   light: {
-    brand: "#0057b8", brandStrong: "#004494", brandSoft: "#e8f1fb", brandBorder: "#b2ccea",
-    secondary: "#004494",
-    navBg: "#0a1f3c", navBgHover: "rgba(255, 255, 255, 0.06)", navBgActive: "#0f62d6",
-    navFg: "#b9c6d8", navFgActive: "#ffffff", navBorder: "rgba(255, 255, 255, 0.08)",
-    canvas: "#eef1f6", surface: "#ffffff", surface2: "#f7f9fc",
-    border: "#e7ebf1", borderStrong: "#d5dbe4", illSurface: "#ffffff",
-    text: "#101828", text2: "#475467", text3: "#98a2b3",
-    markBg: "#fdf3c8", markBd: "#f0d264",
-    ok: "#067647", okBg: "#e2f6ea", okBd: "#b7e6cb",
-    pending: "#b54708", pendingBg: "#fcf1dd", pendingBd: "#f4dda4",
-    review: "#0057b8", reviewBg: "#e4eefa", reviewBd: "#bdd4ee",
-    danger: "#b42318", dangerBg: "#fcebe9", dangerBd: "#f5c8c2",
-    base: "#6941c6", baseBg: "#f4f0fd", baseBd: "#e0d3fa",
-    inherit: "#667085", inheritBg: "#f2f4f7", inheritBd: "#e0e4ea",
-    sevCritical: "#b4232b", sevHigh: "#d9660b", sevMedium: "#b98900",
-    sevLow: "#2e7d4f", sevUnknown: "#7a8694",
-    sevCriticalBg: "#fbeded", sevHighBg: "#fdf2e8", sevMediumBg: "#fcf7e6",
-    sevLowBg: "#eff6f1", sevUnknownBg: "#f1f3f5",
-    vBetter: "#1f7a3d", vWorse: "#b4232b", vUnchanged: "#5a6675", vInconclusive: "#7a4fbf",
+    brand: "#0071e3", brandStrong: "#0058b9", brandSoft: "#e8f1fd", brandBorder: "#a8cbf4",
+    // systemIndigo, for an accent that is genuinely a second voice rather than
+    // the brand at another lightness.
+    secondary: "#5856d6",
+    navBg: "rgba(246, 246, 248, 0.72)", navBgHover: "rgba(0, 0, 0, 0.05)", navBgActive: "#0071e3",
+    navFg: "#4b4b50", navFgStrong: "#1d1d1f", navFgActive: "#ffffff",
+    navBorder: "rgba(0, 0, 0, 0.09)",
+    canvas: "#f0f0f3", surface: "#ffffff", surface2: "#f6f6f8",
+    border: "#e4e4e7", borderStrong: "#d2d2d7", illSurface: "#ffffff",
+    text: "#1d1d1f", text2: "#6e6e73", text3: "#96969b",
+    markBg: "#fff6d6", markBd: "#ffd426",
+    ok: "#1b7f3b", okBg: "#e9f7ed", okBd: "#bde5c9",
+    pending: "#b25000", pendingBg: "#fff3e5", pendingBd: "#ffd9ac",
+    review: "#0071e3", reviewBg: "#e8f1fd", reviewBd: "#a8cbf4",
+    danger: "#d70015", dangerBg: "#ffebe9", dangerBd: "#ffc7c2",
+    base: "#5856d6", baseBg: "#efeffd", baseBd: "#cfcff7",
+    inherit: "#6e6e73", inheritBg: "#f2f2f5", inheritBd: "#e4e4e7",
+    sevCritical: "#c1262e", sevHigh: "#b85c0a", sevMedium: "#8f6c00",
+    sevLow: "#1b7f3b", sevUnknown: "#86868b",
+    sevCriticalBg: "#fceceb", sevHighBg: "#fdf3e8", sevMediumBg: "#fbf6e4",
+    sevLowBg: "#eef7f1", sevUnknownBg: "#f2f2f5",
+    vBetter: "#1b7f3b", vWorse: "#c1262e", vUnchanged: "#6e6e73", vInconclusive: "#5856d6",
   },
   dark: {
     // These five are SEEDS, not the colours you see. Ant Design's dark
     // algorithm desaturates whatever it is given toward the page background,
     // so a value written here comes out several shades duller - which is how a
     // primary button and `var(--brand)` came to be two different blues. They
-    // are chosen by solving BACKWARDS from the intended result (#58a9ff seeds
-    // the #4e93dc that actually paints), and resolvePalette in antd.ts is what
+    // are chosen by solving BACKWARDS from the intended result (#44b2ff seeds
+    // the #3d9adc that actually paints), and resolvePalette in antd.ts is what
     // guarantees the stylesheet is told the same answer.
-    brand: "#58a9ff", brandStrong: "#74abec", brandSoft: "rgba(77, 148, 232, 0.16)",
-    brandBorder: "rgba(77, 148, 232, 0.45)", secondary: "#74abec",
-    navBg: "#081830", navBgHover: "rgba(255, 255, 255, 0.07)", navBgActive: "#0f62d6",
-    navFg: "#a8b6ca", navFgActive: "#ffffff", navBorder: "rgba(255, 255, 255, 0.08)",
-    canvas: "#101318", surface: "#171b21", surface2: "#1c2129",
-    border: "#262b33", borderStrong: "#353b45", illSurface: "#232a33",
-    text: "#e6e9ee", text2: "#a5adba", text3: "#6c7684",
-    markBg: "rgba(250, 204, 21, 0.16)", markBd: "rgba(250, 204, 21, 0.42)",
-    ok: "#58e2a0", okBg: "rgba(23, 178, 106, 0.14)", okBd: "rgba(23, 178, 106, 0.4)",
-    pending: "#ffcd43", pendingBg: "rgba(247, 144, 9, 0.14)", pendingBd: "rgba(247, 144, 9, 0.4)",
-    review: "#71beff", reviewBg: "rgba(77, 148, 232, 0.14)", reviewBd: "rgba(77, 148, 232, 0.4)",
-    danger: "#ff827a", dangerBg: "rgba(240, 68, 56, 0.14)", dangerBd: "rgba(240, 68, 56, 0.4)",
-    base: "#b490f5", baseBg: "rgba(148, 108, 230, 0.16)", baseBd: "rgba(148, 108, 230, 0.42)",
-    inherit: "#98a2b3", inheritBg: "rgba(152, 162, 179, 0.14)", inheritBd: "rgba(152, 162, 179, 0.34)",
-    sevCritical: "#f2726f", sevHigh: "#f0913f", sevMedium: "#e0b13a",
-    sevLow: "#4cc38a", sevUnknown: "#98a2b3",
-    sevCriticalBg: "rgba(180, 35, 43, 0.18)", sevHighBg: "rgba(217, 102, 11, 0.18)",
-    sevMediumBg: "rgba(185, 137, 0, 0.18)", sevLowBg: "rgba(46, 125, 79, 0.18)",
-    sevUnknownBg: "rgba(122, 134, 148, 0.18)",
-    vBetter: "#4cc38a", vWorse: "#f2726f", vUnchanged: "#98a2b3", vInconclusive: "#b490f5",
+    //
+    // Worth knowing before reaching for a brighter one: the dark algorithm caps
+    // every channel at 0xdc, so Apple's own #0a84ff / #ff453a / #ff9f0a cannot
+    // be painted at all. These are the nearest reachable shades, and the blue
+    // is deliberately a step lighter than the exact match so it clears 4.5:1
+    // on the canvas.
+    brand: "#44b2ff", brandStrong: "#66c6ff", brandSoft: "rgba(61, 154, 220, 0.18)",
+    brandBorder: "rgba(61, 154, 220, 0.45)", secondary: "#a5a3ff",
+    navBg: "rgba(28, 28, 30, 0.72)", navBgHover: "rgba(255, 255, 255, 0.07)",
+    navBgActive: "#0071e3",
+    navFg: "#a1a1a6", navFgStrong: "#f5f5f7", navFgActive: "#ffffff",
+    navBorder: "rgba(255, 255, 255, 0.09)",
+    canvas: "#1c1c1e", surface: "#242427", surface2: "#2c2c2f",
+    border: "#38383b", borderStrong: "#4a4a4e", illSurface: "#2c2c2f",
+    text: "#f5f5f7", text2: "#a1a1a6", text3: "#6e6e73",
+    markBg: "rgba(255, 212, 38, 0.16)", markBd: "rgba(255, 212, 38, 0.42)",
+    ok: "#35f264", okBg: "rgba(48, 209, 88, 0.16)", okBd: "rgba(48, 209, 88, 0.42)",
+    pending: "#ffb708", pendingBg: "rgba(220, 159, 10, 0.16)", pendingBd: "rgba(220, 159, 10, 0.42)",
+    review: "#44b2ff", reviewBg: "rgba(61, 154, 220, 0.16)", reviewBd: "rgba(61, 154, 220, 0.42)",
+    danger: "#ff4e41", dangerBg: "rgba(220, 69, 58, 0.16)", dangerBd: "rgba(220, 69, 58, 0.42)",
+    base: "#a5a3ff", baseBg: "rgba(120, 118, 235, 0.18)", baseBd: "rgba(120, 118, 235, 0.45)",
+    inherit: "#a1a1a6", inheritBg: "rgba(161, 161, 166, 0.14)", inheritBd: "rgba(161, 161, 166, 0.32)",
+    sevCritical: "#ff6961", sevHigh: "#ff9f0a", sevMedium: "#e0b93a",
+    sevLow: "#30d158", sevUnknown: "#98989d",
+    sevCriticalBg: "rgba(255, 105, 97, 0.18)", sevHighBg: "rgba(255, 159, 10, 0.18)",
+    sevMediumBg: "rgba(224, 185, 58, 0.18)", sevLowBg: "rgba(48, 209, 88, 0.18)",
+    sevUnknownBg: "rgba(152, 152, 157, 0.18)",
+    vBetter: "#30d158", vWorse: "#ff6961", vUnchanged: "#98989d", vInconclusive: "#a5a3ff",
   },
+  // Environment identity, on the system palette too - but these stay the same
+  // in both modes on purpose: an environment does not change identity when the
+  // lights go out.
   envColors: {
-    production: "#4338ca", prod: "#4338ca", staging: "#b54708", development: "#067647",
-    lab: "#0f9d6e", sandbox: "#7c3aed", nonprod: "#0891b2",
+    production: "#5856d6", prod: "#5856d6", staging: "#c25e00", development: "#1b7f3b",
+    lab: "#0f9d8f", sandbox: "#9f4bd0", nonprod: "#007c91",
   },
 };
 
@@ -187,47 +230,52 @@ export const defaultTokens: ThemeTokens = {
 // an operator picks ONE with a single line below, and BOTH tools follow, which
 // is the whole point of this folder being identical in each of them.
 //
-//  - "default"    the original identity: a serious cobalt on a pastel canvas,
-//                 with soft-UI elevation.
-//  - "instrument" flatter and more owned: crisp elevation via CSS, a deeper
-//                 canvas, hierarchy from borders and value contrast rather than
-//                 a field of floating shadows. (The elevation half lives in
-//                 tokens.css under :root[data-preset="instrument"].)
+//  - "default"    the system palette on a translucent chrome: what both tools
+//                 ship, and what the rest of this file is written around.
+//  - "graphite"   the same shapes with the colour taken out of the chrome: a
+//                 near-neutral accent for a deployment that wants the data to
+//                 be the only saturated thing on screen. (Its flatter elevation
+//                 lives in tokens.css under :root[data-preset="graphite"].)
 //  - "gateway"    the cyan corporate mark, for a deployment that must wear it.
+//
+// A preset never brings back the opaque navy chrome: the navigation is a
+// material in every one of them, because that is a fact about the design
+// system rather than a colour choice. What a preset changes is the ACCENT and
+// the temperature of the neutrals.
 // -----------------------------------------------------------------------------
 export const presets: Record<string, DeepPartial<ThemeTokens>> = {
   default: {},
-  instrument: {
-    shape: { borderRadius: 7 },
+  graphite: {
+    shape: { borderRadius: 8 },
     light: {
-      brand: "#2f4bd6", brandStrong: "#2439ab", brandSoft: "#ecefff", brandBorder: "#c5cdf6",
-      secondary: "#2f4bd6",
-      navBg: "#0b1730", navBgActive: "#2f4bd6",
-      canvas: "#e8e9ee", surface: "#ffffff", surface2: "#f4f5f8",
-      border: "#e1e3ea", borderStrong: "#ccd0da",
-      text: "#0f1729", text2: "#465063", text3: "#8b93a4",
-      review: "#2f4bd6", reviewBg: "#ecefff", reviewBd: "#c5cdf6",
+      brand: "#3a3a3c", brandStrong: "#1d1d1f", brandSoft: "#eeeef0", brandBorder: "#cfcfd4",
+      secondary: "#0071e3",
+      navBg: "rgba(242, 242, 245, 0.74)", navBgActive: "#3a3a3c",
+      canvas: "#ededf0", surface: "#ffffff", surface2: "#f4f4f6",
+      border: "#e2e2e5", borderStrong: "#cfcfd4",
+      review: "#3a3a3c", reviewBg: "#eeeef0", reviewBd: "#cfcfd4",
     },
     dark: {
-      brand: "#8098f6", brandStrong: "#97abf8", brandSoft: "rgba(90,110,240,0.18)",
-      brandBorder: "rgba(90,110,240,0.5)", secondary: "#8098f6",
-      navBg: "#080f1f", navBgActive: "#2f4bd6",
-      canvas: "#0d1017", surface: "#141821", surface2: "#1a1f2a",
-      border: "#242a36", borderStrong: "#333a48",
-      review: "#8098f6", reviewBg: "rgba(90,110,240,0.16)", reviewBd: "rgba(90,110,240,0.42)",
+      brand: "#d8d8dc", brandStrong: "#ececf0", brandSoft: "rgba(200, 200, 208, 0.16)",
+      brandBorder: "rgba(200, 200, 208, 0.4)", secondary: "#44b2ff",
+      navBg: "rgba(24, 24, 26, 0.74)", navBgActive: "#5a5a5f",
+      canvas: "#161618", surface: "#1f1f22", surface2: "#28282b",
+      border: "#333336", borderStrong: "#454549",
+      review: "#d8d8dc", reviewBg: "rgba(200, 200, 208, 0.14)",
+      reviewBd: "rgba(200, 200, 208, 0.36)",
     },
   },
   gateway: {
     light: {
       brand: "#007ba8", brandStrong: "#00607f", brandSoft: "#e3f4fb", brandBorder: "#a9d9ec",
       secondary: "#00607f",
-      navBg: "#0b1f3a", navBgActive: "#009fdb",
+      navBg: "rgba(240, 246, 249, 0.74)", navBgActive: "#007ba8",
       review: "#007ba8", reviewBg: "#e3f4fb", reviewBd: "#a9d9ec",
     },
     dark: {
       brand: "#45b8e3", brandStrong: "#6ac9ea", brandSoft: "rgba(0, 159, 219, 0.16)",
       brandBorder: "rgba(0, 159, 219, 0.45)", secondary: "#6ac9ea",
-      navBg: "#07182d", navBgActive: "#0084b8",
+      navBg: "rgba(20, 28, 34, 0.74)", navBgActive: "#0084b8",
       review: "#45b8e3", reviewBg: "rgba(0, 159, 219, 0.14)", reviewBd: "rgba(0, 159, 219, 0.4)",
     },
   },

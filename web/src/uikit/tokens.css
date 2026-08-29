@@ -1,4 +1,5 @@
-/* Structural design tokens: spacing, radius, elevation, motion and type.
+/* Structural design tokens: spacing, radius, elevation, materials, motion and
+   type.
 
    The COLOUR layer is not here. It is generated from tokens.ts and inlined
    into <head> by vitePluginBrand.ts, so colours have a single source of truth,
@@ -20,46 +21,97 @@
   --sp-7: 28px;
   --sp-8: 32px;
 
-  /* Radius: soft on cards, crisp on dense data. Pills are for status only. */
-  --r-sm: 4px;
-  --r-md: 6px;
-  --r-lg: 10px;
-  --r-xl: 14px;
+  /* Radius. Generous, and the whole ramp moved up together: a 4px corner on a
+     card next to an 8px corner on the button inside it is what makes a layout
+     read as assembled. Pills are for status only.
+
+     The values are the platform's own: 6 on a small control, 8 on a button or
+     an input, 12 on a card, 18 on a sheet or a dialog. */
+  --r-sm: 6px;
+  --r-md: 8px;
+  --r-lg: 12px;
+  --r-xl: 18px;
   --r-pill: 999px;
 
-  /* Elevation: soft-UI dual shadows (a light source top-left, a soft cast
-     bottom-right) pressed against the pastel canvas. Three resting levels
-     plus an inset well for inputs and pressed states. */
-  --el-1: 5px 5px 12px rgba(163, 177, 198, 0.28), -4px -4px 10px rgba(255, 255, 255, 0.85);
-  --el-2: 8px 8px 18px rgba(163, 177, 198, 0.38), -6px -6px 14px rgba(255, 255, 255, 0.9);
-  --el-3: 16px 16px 36px rgba(143, 157, 178, 0.4), -8px -8px 20px rgba(255, 255, 255, 0.9);
-  --el-inset: inset 3px 3px 7px rgba(163, 177, 198, 0.3), inset -3px -3px 7px rgba(255, 255, 255, 0.85);
+  /* --- elevation ----------------------------------------------------------
+     Three resting levels, and every one of them is the same three ingredients:
+     a HAIRLINE that gives the surface an edge at any zoom, a tight contact
+     shadow directly under it, and a wide ambient cast. That is how a physical
+     material sits on a page, and it is why these read as depth where a single
+     large blur reads as a glow.
 
-  /* Overlay elevation: floating surfaces (a command palette, a modal, a menu,
-     a popover) do NOT use the soft-UI dual shadow - a top-left light source on
-     a dimmed backdrop reads as a halo. They lift with a crisp, single-direction
-     cast plus a hairline seat, so they sit as focused sheets above the page.
-     The mask darkens and faintly blurs the page so the surface, not its glow,
-     holds the eye. */
-  --el-overlay: 0 12px 32px -10px rgba(16, 24, 40, 0.18), 0 4px 10px -4px rgba(16, 24, 40, 0.1);
-  --overlay-seat: 0 0 0 1px var(--border);
-  --overlay-mask: rgba(20, 27, 40, 0.42);
+     The hairline is a 0.5px spread rather than a border, so it costs no layout
+     and stays one device pixel on a retina display - which is the difference
+     between a crisp edge and a grey line drawn around everything. */
+  --el-1:
+    0 0 0 0.5px rgba(16, 24, 40, 0.05), 0 1px 1px rgba(16, 24, 40, 0.04),
+    0 3px 8px -2px rgba(16, 24, 40, 0.06);
+  --el-2:
+    0 0 0 0.5px rgba(16, 24, 40, 0.06), 0 1px 2px rgba(16, 24, 40, 0.05),
+    0 10px 24px -6px rgba(16, 24, 40, 0.12);
+  --el-3:
+    0 0 0 0.5px rgba(16, 24, 40, 0.06), 0 2px 4px rgba(16, 24, 40, 0.05),
+    0 28px 56px -16px rgba(16, 24, 40, 0.18);
 
-  /* Motion: state change only, never decoration. Exponential ease-out from an
-     already-visible default, so a slow render shows the finished page rather
-     than an empty one. */
-  --dur-hover: 120ms;
-  --dur-panel: 220ms;
-  --dur-view: 300ms;
-  --ease: cubic-bezier(0.2, 0.8, 0.4, 1);
+  /* The one soft-UI token that survived, and it earns its place: a single
+     hairline of light along a surface's TOP edge is what a real bevel looks
+     like, and it is what keeps a control from reading as a flat rectangle.
+     Used on inputs, wells and pressed states. */
+  --el-inset:
+    inset 0 1px 0 rgba(255, 255, 255, 0.7), inset 0 0 0 0.5px rgba(16, 24, 40, 0.07);
+
+  /* Overlay elevation: a floating surface (a menu, a modal, a popover) is a
+     SHEET above the page, so it takes the same three ingredients pushed
+     further, and the mask behind it dims rather than blacks out - the page
+     stays legible underneath, which is what makes a sheet feel like it is over
+     the page rather than instead of it. */
+  --el-overlay:
+    0 0 0 0.5px rgba(16, 24, 40, 0.08), 0 8px 20px -6px rgba(16, 24, 40, 0.14),
+    0 32px 64px -24px rgba(16, 24, 40, 0.24);
+  --overlay-seat: 0 0 0 0.5px var(--border);
+  --overlay-mask: rgba(0, 0, 0, 0.28);
+
+  /* --- materials ----------------------------------------------------------
+     A material is a translucent surface that takes its colour from whatever is
+     behind it. It is the platform's own idiom for chrome - the navigation, the
+     bar above the page, a popover - and the reason it reads as depth rather
+     than as transparency is the SATURATION boost: blur alone turns the page
+     behind into grey mush, and pushing saturation back up is what makes the
+     colour bleed through as light rather than as dirt.
+
+     Two weights, and they are used for two different distances: `material` for
+     chrome that sits on the page, `thin` for something that skims just above
+     it. Both degrade to plain opacity where backdrop-filter is unsupported,
+     which is why every surface using them also states a background. */
+  --blur-material: saturate(180%) blur(20px);
+  --blur-thin: saturate(180%) blur(10px);
+
+  /* The bar above the page, as a material: the page's own surface, thinned. */
+  --material-bar: color-mix(in srgb, var(--surface) 72%, transparent);
+
+  /* A tooltip is the one surface that is dark in both themes - it is a label
+     ON the interface, not a part of it. */
+  --tooltip-bg: rgba(28, 28, 30, 0.88);
+  --tooltip-fg: #ffffff;
+
+  /* --- motion -------------------------------------------------------------
+     State change only, never decoration. The curve is the platform's: almost
+     all of the movement happens immediately and the last few pixels take their
+     time, which is what makes an interface feel answered rather than animated.
+     `--ease-out` is the gentler cousin for things that arrive. */
+  --dur-hover: 140ms;
+  --dur-panel: 260ms;
+  --dur-view: 380ms;
+  --ease: cubic-bezier(0.32, 0.72, 0, 1);
   --ease-out: cubic-bezier(0.16, 1, 0.3, 1);
 
   /* Typography. The families are repeated from tokens.ts because a stylesheet
      cannot import a module; they are the same two stacks. */
-  --font-ui: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto,
-    "Helvetica Neue", Arial, sans-serif;
-  --font-mono: "JetBrains Mono", ui-monospace, "SFMono-Regular", Consolas,
-    "Liberation Mono", Menlo, monospace;
+  --font-ui: -apple-system, BlinkMacSystemFont, "SF Pro Text", "SF Pro Display",
+    Inter, "Segoe UI Variable Text", "Segoe UI", Roboto, "Helvetica Neue", Arial,
+    sans-serif;
+  --font-mono: ui-monospace, "SF Mono", SFMono-Regular, "JetBrains Mono", Menlo,
+    Consolas, "Liberation Mono", monospace;
   --fs-11: 11px;
   --fs-12: 12px;
   --fs-13: 13px;
@@ -67,38 +119,55 @@
   --fs-16: 16px;
   --fs-20: 20px;
   --fs-24: 24px;
+
+  /* Tracking, as a scale rather than a number typed at each call site. Type
+     tightens as it gets bigger - that is optical, not stylistic: the same
+     letter spacing that keeps 11px legible makes a 24px title look loose. */
+  --tr-tight: -0.022em;
+  --tr-snug: -0.014em;
+  --tr-normal: -0.006em;
+  --tr-wide: 0.04em;
 }
 
-/* Elevation is the one structural token that changes with the theme: soft-UI
-   shadows go from light-on-pastel to depth-on-dark. */
+/* Elevation and the materials are the structural tokens that change with the
+   theme: a light source falling on a pale surface is not a light source
+   falling on a dark one, and a shadow the colour of the page is no shadow. */
 [data-theme="dark"] {
-  --el-1: 5px 5px 12px rgba(0, 0, 0, 0.45), -4px -4px 10px rgba(255, 255, 255, 0.035);
-  --el-2: 8px 8px 18px rgba(0, 0, 0, 0.55), -6px -6px 14px rgba(255, 255, 255, 0.045);
-  --el-3: 16px 16px 36px rgba(0, 0, 0, 0.6), -8px -8px 20px rgba(255, 255, 255, 0.05);
-  --el-inset: inset 3px 3px 7px rgba(0, 0, 0, 0.5), inset -3px -3px 7px rgba(255, 255, 255, 0.04);
-  /* Dark: a deep downward cast with no top-left light, so overlays read as
-     crisp sheets against the dimmed canvas instead of glowing orbs. */
-  --el-overlay: 0 18px 44px -14px rgba(0, 0, 0, 0.72), 0 6px 16px -8px rgba(0, 0, 0, 0.6);
-  --overlay-mask: rgba(4, 7, 12, 0.58);
+  --el-1:
+    0 0 0 0.5px rgba(255, 255, 255, 0.06), 0 1px 1px rgba(0, 0, 0, 0.4),
+    0 3px 8px -2px rgba(0, 0, 0, 0.45);
+  --el-2:
+    0 0 0 0.5px rgba(255, 255, 255, 0.07), 0 1px 2px rgba(0, 0, 0, 0.45),
+    0 10px 24px -6px rgba(0, 0, 0, 0.55);
+  --el-3:
+    0 0 0 0.5px rgba(255, 255, 255, 0.08), 0 2px 4px rgba(0, 0, 0, 0.5),
+    0 28px 56px -16px rgba(0, 0, 0, 0.62);
+  /* The bevel highlight inverts: on a dark material the light along the top
+     edge is a whisper, not a shine. */
+  --el-inset:
+    inset 0 1px 0 rgba(255, 255, 255, 0.06), inset 0 0 0 0.5px rgba(255, 255, 255, 0.08);
+  --el-overlay:
+    0 0 0 0.5px rgba(255, 255, 255, 0.09), 0 8px 20px -6px rgba(0, 0, 0, 0.55),
+    0 32px 64px -24px rgba(0, 0, 0, 0.7);
+  --overlay-mask: rgba(0, 0, 0, 0.5);
+  --tooltip-bg: rgba(58, 58, 60, 0.92);
 }
 
-/* --- "instrument" preset elevation -----------------------------------------
-   Trade the soft-UI dual shadow for crisp, single-direction depth, and flatten
-   resting cards so hierarchy comes from borders and value contrast (the deeper
-   canvas in this preset), not a field of floating shadows. Elevation is
-   reserved for things that genuinely lift: menus, drawers, the hover state.
-   Scoped to the attribute the brand plugin stamps, so the default look is
-   untouched. */
-:root[data-preset="instrument"] {
-  --el-1: 0 1px 2px rgba(16, 24, 40, 0.05);
-  --el-2: 0 8px 20px -6px rgba(16, 24, 40, 0.14);
-  --el-3: 0 20px 44px -14px rgba(16, 24, 40, 0.22);
-  --el-inset: inset 0 0 0 1px rgba(16, 24, 40, 0.06);
+/* --- "graphite" preset elevation -------------------------------------------
+   The accent is taken out of the chrome in this preset, so the surfaces have to
+   do more of the separating: hierarchy comes from the hairline and from value
+   contrast, and elevation is kept for things that genuinely lift (a menu, a
+   drawer, a hover). Scoped to the attribute the brand plugin stamps, so the
+   default look is untouched. */
+:root[data-preset="graphite"] {
+  --el-1: 0 0 0 0.5px rgba(16, 24, 40, 0.08);
+  --el-2: 0 0 0 0.5px rgba(16, 24, 40, 0.08), 0 8px 20px -6px rgba(16, 24, 40, 0.12);
+  --el-3: 0 0 0 0.5px rgba(16, 24, 40, 0.08), 0 24px 48px -14px rgba(16, 24, 40, 0.2);
 }
-:root[data-preset="instrument"][data-theme="dark"] {
-  --el-1: 0 1px 2px rgba(0, 0, 0, 0.5);
-  --el-2: 0 8px 20px -6px rgba(0, 0, 0, 0.55);
-  --el-3: 0 20px 44px -14px rgba(0, 0, 0, 0.65);
+:root[data-preset="graphite"][data-theme="dark"] {
+  --el-1: 0 0 0 0.5px rgba(255, 255, 255, 0.09);
+  --el-2: 0 0 0 0.5px rgba(255, 255, 255, 0.09), 0 8px 20px -6px rgba(0, 0, 0, 0.5);
+  --el-3: 0 0 0 0.5px rgba(255, 255, 255, 0.09), 0 24px 48px -14px rgba(0, 0, 0, 0.62);
 }
 
 /* --- comfort ---------------------------------------------------------------

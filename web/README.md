@@ -44,12 +44,33 @@ npm run typecheck
 | `src/domain/format.ts` | Sizes, durations, speeds, timestamps. Returns `null` when a value is unavailable. |
 | `src/components/value.tsx` | `<Value>` / `<NA>` / `<Stat>` - how the application says "we do not have this". |
 | `src/components/discovery.tsx` | The discovery panel and the one Run Discovery control. |
-| `src/components/icons.tsx` | Every icon, chosen once - brand marks for vendors and registries, ecosystem marks for artifact kinds. |
+| `src/icons.tsx` | **THE UI icon registry.** Every general-purpose glyph, chosen once, from one family. Keeps Ant Design's names so a call site changes its import and nothing else. |
+| `src/components/icons.tsx` | The DOMAIN marks - brand marks for vendors and registries, ecosystem marks for artifact kinds. An identity, not a glyph. |
 | `src/auth/permissions.tsx` | `useCan(action, scope)`. |
 | `src/components/` | The reusable vocabulary: chips, badges, progress, page furniture. |
-| `src/uikit/` | **The shared design system.** Byte-identical to the copy in every other tool on the platform. Palette, tokens, `ThemeProvider`, primitives. See `src/uikit/README.md`. |
+| `src/uikit/` | **The shared design system.** Byte-identical to the copy in every other tool on the platform. Palette, tokens, `ThemeProvider`, primitives, and the chrome. See `src/uikit/README.md`. |
+| `src/tablekit/` | **The shared data table.** Also byte-identical, also copied rather than installed: resizable, reorderable, pinnable columns with a layout each person keeps. See `src/tablekit/README.md`. |
 | `src/brand.ts` | The one file that says "Software Gateway": name, tagline, mark, favicon. |
 | `src/BootGate.tsx` | The probe every page renders behind: is the Coordinator there? Both of its screens are the shared kit's. |
+
+### Two things that are chosen once, not per call site
+
+**Icons.** This application drew from five icon libraries at once - Ant Design's
+outlined set, Material Symbols, Fluent MDL2, MDI and Lucide - picked one call
+site at a time. Each is coherent on its own and none of them agree with the
+others about stroke weight, corner radius or optical size, so a toolbar built
+from three read as three products. There is now ONE family, in `src/icons.tsx`,
+and it is the same family the sibling tool uses: a person moving between them
+reads the same glyph for the same idea. Vendor and artifact-kind marks stay in
+`src/components/icons.tsx`, because a JFrog logo is an identity rather than a
+glyph and has to look like the thing it names.
+
+**Tables.** A table that is a working surface - five or more columns, or the
+point of its page - is `Table` from `src/tablekit/`, imported as `DataTable` and
+given a `tableEnhancedKey`. A summary in a card, a key/value list or a table
+inside an expanded row stays on the component library's plain `Table`: there is
+nothing to rearrange, and a toolbar there is chrome spent on a reader who cannot
+use it.
 
 ### Three rules the code enforces rather than documents
 

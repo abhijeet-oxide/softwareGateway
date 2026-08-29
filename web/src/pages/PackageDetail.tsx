@@ -1,11 +1,11 @@
 import { useEffect, useMemo, useState } from 'react'
 import type { ReactNode } from 'react'
 import type { UseMutationResult } from '@tanstack/react-query'
-import {
-  Alert, App, Button, Card, Col, Descriptions, Divider, Modal, Row, Space, Table, Tabs, Tag,
-  Tooltip, Tree, Typography,
-} from 'antd'
-import { FolderOutlined, SafetyCertificateOutlined, SyncOutlined } from '@ant-design/icons'
+import { Alert, App, Button, Card, Col, Descriptions, Divider, Modal, Row, Space, Tabs, Tag, Tooltip, Tree, Typography } from 'antd'
+// The working-surface table: resizable, reorderable, pinnable columns whose
+// layout each person keeps. See `tablekit/README.md` for which tables get it.
+import { Table as DataTable } from '../tablekit'
+import { FolderOutlined, SafetyCertificateOutlined, SyncOutlined } from '../icons'
 import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom'
 import {
   packageFileDownloadUrl, useArtifacts, useInspectPackage, usePackage, usePackageFiles,
@@ -363,7 +363,9 @@ function ComponentTable({ artifacts, kind }: { artifacts: Artifact[]; kind: stri
         width={320}
       />
 
-      <Table<Artifact>
+      <DataTable<Artifact>
+        tableEnhancedKey="release-artifacts"
+        allow_export
         size="small"
         dataSource={rows}
         rowKey={(a) => a.artifactId}
@@ -667,7 +669,8 @@ function DownloadsTab({ transfers, onDownload, downloadHref, mayOperate }: {
   }
   return (
     <Card size="small" styles={{ body: { padding: 0 } }}>
-      <Table<PackageTransfer>
+      <DataTable<PackageTransfer>
+        tableEnhancedKey="release-transfers"
         size="small"
         rowKey={(t) => t.id}
         dataSource={transfers}

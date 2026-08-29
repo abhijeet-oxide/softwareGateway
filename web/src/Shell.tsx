@@ -1,13 +1,10 @@
 import { useState, type ReactNode } from 'react'
 import { Badge, Button, Tooltip } from 'antd'
 import {
-  BarChartOutlined, BellOutlined,
-  DatabaseOutlined, HistoryOutlined, SafetyOutlined,
-  QuestionCircleOutlined, SettingOutlined,
-} from '@ant-design/icons'
-import DashboardOutlineIcon from '@iconify-react/material-symbols/dashboard-outline';
-import ProductCatalogIcon from '@iconify-react/fluent-mdl2/product-catalog';
-import { DownloadIcon, Icon, PackageIcon } from './components/icons'
+  BarChartOutlined, BellOutlined, DashboardOutlined, DatabaseOutlined, HistoryOutlined,
+  InboxOutlined, PackageOutlined, ProductOutlined, QuestionCircleOutlined, SafetyOutlined,
+  SettingOutlined,
+} from './icons'
 import { Link, useLocation, useNavigate } from 'react-router-dom'
 import { useIdentity } from './auth/permissions'
 import { useTransfers, useVersion } from './api/queries'
@@ -46,18 +43,10 @@ function loadCollapsed(): boolean {
  * in its bar.
  */
 const NAV = [
-  { key: '/', icon: <DashboardOutlineIcon height="1em" />, label: 'Overview' },
-  { key: '/products', icon: <ProductCatalogIcon height="1em" />, label: 'Products' },
-  {
-    key: '/packages',
-    icon: <Icon as={PackageIcon} title="Packages" className="anticon" />,
-    label: 'Packages',
-  },
-  {
-    key: '/downloads',
-    icon: <Icon as={DownloadIcon} title="Downloads" className="anticon" />,
-    label: 'Downloads',
-  },
+  { key: '/', icon: <DashboardOutlined />, label: 'Overview' },
+  { key: '/products', icon: <ProductOutlined />, label: 'Products' },
+  { key: '/packages', icon: <PackageOutlined />, label: 'Packages' },
+  { key: '/downloads', icon: <InboxOutlined />, label: 'Downloads' },
   {
     key: '/security',
     icon: <SafetyOutlined />,

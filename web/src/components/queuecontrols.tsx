@@ -2,7 +2,7 @@ import { useState } from 'react'
 import { App, Button, InputNumber, Popconfirm, Space, Tooltip, Typography } from 'antd'
 import {
   DeleteOutlined, PauseOutlined, PlayCircleOutlined, ReloadOutlined, StopOutlined,
-} from '@ant-design/icons'
+} from '../icons'
 import { useTransferControl, useTransferPriority } from '../api/queries'
 import { useCan } from '../auth/permissions'
 import type { Transfer } from '../api/types'

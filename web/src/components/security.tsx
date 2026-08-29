@@ -8,7 +8,7 @@ import {
   CheckCircleOutlined, CopyOutlined, DownloadOutlined, ExclamationCircleOutlined,
   FileTextOutlined, MinusCircleOutlined, QuestionCircleOutlined, StopOutlined, SyncOutlined,
   WarningOutlined,
-} from '@ant-design/icons'
+} from '../icons'
 import { c, mono, severity as severityColour, severitySurface, tokens, verdict as verdictColour } from '../uikit'
 import { SEVERITIES } from '../api/types'
 import type {
@@ -126,9 +126,57 @@ export function SeverityBar({ counts, height = 8 }: { counts: SecurityCounts; he
  * The total is the largest thing in the cell because it is the number a reader
  * carries to the next row.
  */
-export function SeverityMeter({ counts, width }: { counts: SecurityCounts; width?: number }) {
+export function SeverityMeter({ counts, width, compact = false }: {
+  counts: SecurityCounts
+  width?: number
+  /**
+   * ONE LINE instead of three, for a listing.
+   *
+   * The full meter is a detail component: a big total, a bar under it, and the
+   * two acted-on severities under that. It is right where a release is the
+   * subject of the page, and wrong in a table, where it was 83px tall and
+   * therefore set the height of EVERY row in the listing - eight rows to a
+   * screen on a page whose whole job is scanning twenty.
+   *
+   * Compact keeps all three facts and spends one line on them: the total leads,
+   * the bar takes the slack in the middle, and the critical and high counts sit
+   * at the end as dots with numbers. The severity WORDS are what goes, because
+   * they are the part the colour and the tooltip already say - and in a column
+   * of twenty rows they are the same two words twenty times.
+   */
+  compact?: boolean
+}) {
   const critical = counts.bySeverity.critical
   const high = counts.bySeverity.high
+
+  if (compact) {
+    return (
+      <div
+        style={{
+          display: 'flex', alignItems: 'center', gap: 8, width: '100%',
+          minWidth: 0, maxWidth: width ?? 260, fontVariantNumeric: 'tabular-nums',
+        }}
+      >
+        <Tooltip title={`${counts.total.toLocaleString()} findings${
+          counts.fixable > 0
+            ? `, ${counts.fixable.toLocaleString()} with a fixed version available`
+            : ''
+        }`}
+        >
+          <span style={{ fontSize: 13, fontWeight: 600, color: c.text, lineHeight: 1 }}>
+            {counts.total.toLocaleString()}
+          </span>
+        </Tooltip>
+        <div style={{ flex: 1, minWidth: 24 }}>
+          <SeverityBar counts={counts} height={5} />
+        </div>
+        <span style={{ display: 'inline-flex', gap: 10, flex: '0 0 auto', fontSize: 12 }}>
+          <SeverityPip value="critical" count={critical} word={false} />
+          <SeverityPip value="high" count={high} word={false} />
+        </span>
+      </div>
+    )
+  }
 
   /*
     Fluid, not fixed. A minimum width here is a promise the table cannot keep:
@@ -186,8 +234,14 @@ export function SeverityMeter({ counts, width }: { counts: SecurityCounts; width
   )
 }
 
-/** One severity as a dot, its word, and its count - the meter's unit. */
-function SeverityPip({ value, count }: { value: Severity; count: number }) {
+/** One severity as a dot, its word, and its count - the meter's unit. The word
+ *  is dropped in a listing, where the colour and the tooltip carry it and the
+ *  same two words would otherwise repeat down every row. */
+function SeverityPip({ value, count, word = true }: {
+  value: Severity
+  count: number
+  word?: boolean
+}) {
   const filled = value === 'critical' || value === 'high'
   const muted = count === 0
   return (
@@ -205,7 +259,9 @@ function SeverityPip({ value, count }: { value: Severity; count: number }) {
         <span style={{ color: muted ? c.text2 : severityColour[value], fontWeight: muted ? 400 : 600 }}>
           {count.toLocaleString()}
         </span>
-        <span style={{ color: c.text2 }}>{SEVERITY_LABEL[value].toLowerCase()}</span>
+        {word && (
+          <span style={{ color: c.text2 }}>{SEVERITY_LABEL[value].toLowerCase()}</span>
+        )}
       </span>
     </Tooltip>
   )
@@ -335,21 +391,31 @@ export function VulnerabilityCell({
     )
   }
 
-  return (
-    <Space direction="vertical" size={4} style={{ width: '100%' }}>
-      <SeverityMeter counts={summary.counts} />
+  /*
+    The two caveats become a MARK rather than two sentences.
 
-      {!summary.complete && (
-        <Typography.Text style={{ color: c.pending, fontSize: 11 }}>
-          Not all artifacts were scanned.
-        </Typography.Text>
+    Each of them is real and neither is news the reader needs on every row: at
+    two lines of amber text apiece they were most of what made this cell three
+    times the height of every other cell in the row, and a listing that spends
+    sixty pixels per row on a footnote shows a third as much of the table. The
+    warning triangle says something qualifies the number; the tooltip says what.
+  */
+  const caveats = [
+    !summary.complete ? 'Not all artifacts in this release were scanned.' : '',
+    stale ? 'The last sync failed, so these details may be outdated.' : '',
+  ].filter(Boolean)
+
+  return (
+    <div style={{ display: 'flex', alignItems: 'center', gap: 6, width: '100%', minWidth: 0 }}>
+      <SeverityMeter counts={summary.counts} compact />
+      {caveats.length > 0 && (
+        <Tooltip title={caveats.join(' ')}>
+          <span style={{ display: 'inline-flex', flex: '0 0 auto' }}>
+            <WarningOutlined style={{ color: c.pending }} />
+          </span>
+        </Tooltip>
       )}
-      {stale && (
-        <Typography.Text style={{ color: c.pending, fontSize: 11 }}>
-          Last sync failed. The details may be outdated.
-        </Typography.Text>
-      )}
-    </Space>
+    </div>
   )
 }
 

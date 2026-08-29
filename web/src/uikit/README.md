@@ -39,7 +39,7 @@ things, and both live OUTSIDE this folder:
 | file | what it decides |
 | --- | --- |
 | `tokens.ts` | every colour, in light and dark, plus shape and type. **The file to edit to reskin both tools.** Also the presets and the one `ACTIVE_PRESET` switch. |
-| `tokens.css` | spacing, radius, elevation, motion and the type scale. The structural half of the system; also where density and font scale land. |
+| `tokens.css` | spacing, radius, elevation, MATERIALS, motion and the type scale. The structural half of the system; also where density and font scale land. |
 | `base.css` | the global rules a component library does not cover: focus ring, selection, scrollbar, tabular figures, the motion keyframes. |
 | `components.css` | the primitives' styles. Plain CSS on the tokens - never utility classes, see below. |
 | `antd.ts` | the same tokens, expressed as Ant Design's. |
@@ -48,6 +48,53 @@ things, and both live OUTSIDE this folder:
 | `prefs.ts` | the appearance preference model, for an app that has none of its own. |
 | `primitives/` | the components: card, page header, stat tile, status pill, severity tag, notice, empty state, stepper, toolbar, keycap, motion. |
 | `vitePluginBrand.ts` | inlines the colour variables, the favicon and the title into `index.html` at build time. |
+
+## What the system is built to look like
+
+It is built to look like it belongs on the platform its operators actually sit
+in front of. That is a decision with consequences, and they are worth stating so
+nobody has to reverse-engineer them from the values:
+
+- **The palette is the system palette.** The neutrals are the ones Apple's own
+  surfaces use (`#1d1d1f` type, `#f5f5f7` grounds, `#d2d2d7` rules) rather than
+  a generic blue-grey ramp, and the accents are systemBlue, systemGreen,
+  systemOrange, systemRed and systemIndigo rather than five colours chosen one at
+  a time. `envColors` follows, because an environment chip sitting beside a
+  status pill in a different family is the kind of small wrongness that reads as
+  two products.
+
+- **The navigation is a MATERIAL, not a slab.** It was a block of navy - the
+  house style of every enterprise dashboard and the identity of none of them. It
+  is now translucent, the page's tint comes through it, everything on it is
+  ordinary type, and the one saturated thing in the frame is the pill under
+  wherever you are. The blur lives in `components.css`; the alpha lives in
+  `tokens.ts`. **A preset may change the accent and the temperature of the
+  neutrals; it may not bring the opaque chrome back.**
+
+  A material is `backdrop-filter: saturate(180%) blur(20px)` and the saturation
+  half is not optional: blur alone turns whatever is behind into grey mush, and
+  pushing the colour back up is what makes it read as light through glass rather
+  than as dirt. Every surface using one also states a background, because a
+  browser without `backdrop-filter` has to get a solid.
+
+- **Elevation is three ingredients, never one blur.** A hairline (a `0.5px`
+  spread, so it stays one device pixel and costs no layout), a tight contact
+  shadow, and a wide ambient cast. That is how a physical thing sits on a page;
+  a single large soft shadow reads as a glow. The one soft-UI token that
+  survived is `--el-inset`, a hairline of light along a surface's top edge -
+  a real bevel, on inputs and pressed states.
+
+- **Type is San Francisco, and it tightens as it grows.** `--tr-tight` through
+  `--tr-wide` are a scale rather than a number typed at each call site: the
+  tracking that keeps 11px legible makes a 24px title look like it is falling
+  apart. `-webkit-font-smoothing: antialiased` AND `-moz-osx-font-smoothing:
+  grayscale` are both set, because SF is drawn for grayscale antialiasing and
+  renders a weight too heavy without them.
+
+- **Radius is a ramp and the whole ramp moves together.** 6 on a small control,
+  8 on a button or a field, 12 on a card, 18 on a sheet. `antd.ts` states all
+  four rather than letting the component library derive them, because a 12px
+  card holding a 4px button is the tell that two systems are drawing one screen.
 
 ## The chrome is shared whole
 
@@ -161,6 +208,14 @@ A consequence worth knowing: the dark entries in `tokens.ts` are seeds solved
 BACKWARDS from the intended result, so they do not read like the colour you see
 on screen, and the comment there says so.
 
+And one hard limit, before anybody reaches for a brighter dark accent: **the
+dark algorithm caps every channel at `0xdc`.** Apple's own `#0a84ff`,
+`#ff453a` and `#ff9f0a` therefore cannot be painted at all, and the dark
+palette holds the nearest reachable shades. Solve a new one by search rather
+than by eye - feed candidate seeds to `theme.getDesignToken` under
+`darkAlgorithm` and hill-climb toward the target - because guessing lands
+several shades away and the miss is invisible until it is beside a button.
+
 ## Two constraints, and why
 
 **Plain CSS, never utility classes.** One of the tools that shares this folder
@@ -214,3 +269,13 @@ hopeful:
 behave one way in one tool and another way in the other is the drift, written
 down. If two tools genuinely need different looks, that is a preset in
 `tokens.ts` - shipped to both, chosen by one line.
+
+## Its neighbour
+
+`tablekit/` sits beside this folder and follows exactly the same rules: copied
+whole, byte-identical, `react` and `antd` only, every colour a token. It holds
+the one component too big and too specific to be a primitive - the data table
+with resizable, reorderable, pinnable columns - and it READS this kit's
+variables without importing anything from it, which is what keeps two copyable
+folders from being coupled to each other's file layout. See its own README for
+which tables get it.

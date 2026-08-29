@@ -3,14 +3,14 @@ import { Badge, Space, Tag, Tooltip, Typography } from 'antd'
 import {
   CheckCircleOutlined, ExportOutlined, ExclamationCircleOutlined,
   CloseCircleOutlined, LoadingOutlined, QuestionCircleOutlined,
-} from '@ant-design/icons'
+} from '../icons'
 import { Icon, locationIcon, repositoryIcon, type IconComponent } from './icons'
 import { Link } from 'react-router-dom'
 import { NA } from './value'
 import { releaseHref, type SoftwareStatus, type VerificationState, type Location } from '../domain/derive'
 import type { Package, Repository } from '../api/types'
 import { formatAbsolute, formatRelative } from '../domain/format'
-import { c, mono } from '../uikit'
+import { c, mono, StatusPill, type PillTone } from '../uikit'
 
 /**
  * The reusable vocabulary (UI brief §7). Designed once, used literally.
@@ -72,23 +72,58 @@ export function VersionChip({
   )
 }
 
-const STATUS_COLOUR: Record<SoftwareStatus, string> = {
-  NEW: 'blue',
-  // Its own colour, not the grey of "nothing to say". A release sitting at
-  // the vendor is a real, actionable state - it is the thing somebody
-  // downloads - and grey read as disabled next to the blue of NEW.
-  AVAILABLE: 'cyan',
-  DOWNLOADING: 'processing',
-  DOWNLOADED: 'green',
-  'READY FOR PRODUCTION': 'purple',
-  // The same processing blue as DOWNLOADING, because it is the same kind of
-  // fact - work happening right now - and a second colour for it would say
-  // the two differ in more than what is moving.
-  PROMOTING: 'processing',
-  PRODUCTION: 'green',
-  'DOWNLOAD FAILED': 'error',
-  'PROMOTION FAILED': 'error',
-  'VERIFICATION FAILED': 'error',
+/**
+ * Where each status sits in the shared design system's tone scale.
+ *
+ * These used to be the component library's preset tag colours - blue, cyan,
+ * purple, green, error - which belong to no palette and follow no theme: the
+ * cyan and the purple were the only two of their hue anywhere in the product,
+ * and none of the five moved when the palette did.
+ *
+ * The scale is deliberately narrower than the status list, and the words carry
+ * what the colours no longer do:
+ *
+ *   - AVAILABLE keeps a colour of its own rather than going grey. A release
+ *     sitting at the vendor is a real, actionable state - it is the thing
+ *     somebody downloads - and grey reads as disabled next to the blue of NEW.
+ *   - READY FOR PRODUCTION shares green with PRODUCTION because it has the same
+ *     destiny; what says it has not arrived yet is the sentence, not the hue.
+ *   - The two in-flight states share one tone AND spin, because being in motion
+ *     is the fact they have in common and the spinner is what states it.
+ */
+const STATUS_TONE: Record<SoftwareStatus, PillTone> = {
+  NEW: 'review',
+  AVAILABLE: 'accent',
+  DOWNLOADING: 'review',
+  DOWNLOADED: 'ok',
+  'READY FOR PRODUCTION': 'ok',
+  PROMOTING: 'review',
+  PRODUCTION: 'ok',
+  'DOWNLOAD FAILED': 'danger',
+  'PROMOTION FAILED': 'danger',
+  'VERIFICATION FAILED': 'danger',
+}
+
+/**
+ * The same statuses, in sentences.
+ *
+ * The type is SCREAMING CAPS because that is what the lifecycle constants are
+ * called in the domain, and renaming them would touch every comparison in the
+ * application. What a person reads is a different question from what the code
+ * calls it: a row of shouted fragments is what dates an interface fastest, and
+ * "Ready for production" is the same fact said the way anybody would say it.
+ */
+const STATUS_LABEL: Record<SoftwareStatus, string> = {
+  NEW: 'New',
+  AVAILABLE: 'Available',
+  DOWNLOADING: 'Downloading',
+  DOWNLOADED: 'Downloaded',
+  'READY FOR PRODUCTION': 'Ready for production',
+  PROMOTING: 'Promoting',
+  PRODUCTION: 'In production',
+  'DOWNLOAD FAILED': 'Download failed',
+  'PROMOTION FAILED': 'Promotion failed',
+  'VERIFICATION FAILED': 'Verification failed',
 }
 
 /**
@@ -135,16 +170,15 @@ export function StatusBadge({
    */
   reason?: string
 }) {
+  const moving = status === 'DOWNLOADING' || status === 'PROMOTING'
   const tag = (
-    <Tag
-      color={STATUS_COLOUR[status]}
-      icon={status === 'DOWNLOADING' || status === 'PROMOTING'
-        ? <LoadingOutlined spin />
-        : undefined}
+    <StatusPill
+      tone={STATUS_TONE[status]}
+      icon={moving ? <LoadingOutlined /> : undefined}
       style={{ marginInlineEnd: 0 }}
     >
-      {status}
-    </Tag>
+      {STATUS_LABEL[status]}
+    </StatusPill>
   )
   return reason ? <Tooltip title={reason}>{tag}</Tooltip> : tag
 }
@@ -201,18 +235,34 @@ export function AnalysisTag({ pkg }: { pkg: { analysisState?: string; analysisEr
  */
 const LIVE_STATES = ['PENDING', 'PLANNING', 'READY', 'RUNNING', 'PROMOTING', 'VERIFYING', 'CANCELLING']
 
-const TRANSFER_STATE_COLOUR: Record<string, string> = {
-  SUCCEEDED: 'green',
-  FAILED: 'error',
-  CANCELLED: 'default',
-  PAUSED: 'warning',
-  RUNNING: 'processing',
-  VERIFYING: 'processing',
-  PLANNING: 'processing',
-  PROMOTING: 'processing',
-  CANCELLING: 'warning',
-  READY: 'blue',
-  PENDING: 'blue',
+const TRANSFER_STATE_TONE: Record<string, PillTone> = {
+  SUCCEEDED: 'ok',
+  FAILED: 'danger',
+  CANCELLED: 'neutral',
+  PAUSED: 'pending',
+  RUNNING: 'review',
+  VERIFYING: 'review',
+  PLANNING: 'review',
+  PROMOTING: 'review',
+  CANCELLING: 'pending',
+  READY: 'accent',
+  PENDING: 'accent',
+}
+
+/** The same states, in sentences. See STATUS_LABEL below for why the constants
+ *  stay shouted and the labels do not. */
+const TRANSFER_STATE_LABEL: Record<string, string> = {
+  PENDING: 'Pending',
+  PLANNING: 'Planning',
+  READY: 'Ready',
+  RUNNING: 'Running',
+  PAUSED: 'Paused',
+  PROMOTING: 'Promoting',
+  VERIFYING: 'Verifying',
+  CANCELLING: 'Cancelling',
+  CANCELLED: 'Cancelled',
+  SUCCEEDED: 'Succeeded',
+  FAILED: 'Failed',
 }
 
 const TRANSFER_STATE_HELP: Record<string, string> = {
@@ -233,39 +283,42 @@ export function TransferStateTag({ state }: { state: string }) {
   const live = LIVE_STATES.includes(state)
   return (
     <Tooltip title={TRANSFER_STATE_HELP[state]}>
-      <Tag
-        color={TRANSFER_STATE_COLOUR[state] ?? 'default'}
-        icon={live ? <LoadingOutlined spin /> : undefined}
+      <StatusPill
+        tone={TRANSFER_STATE_TONE[state] ?? 'neutral'}
+        icon={live ? <LoadingOutlined /> : undefined}
         style={{ marginInlineEnd: 0 }}
       >
-        {state}
-      </Tag>
+        {TRANSFER_STATE_LABEL[state] ?? state}
+      </StatusPill>
     </Tooltip>
   )
 }
 
-const VERIFICATION: Record<VerificationState, { label: string; colour: string; icon: ReactNode; help: string }> = {
+const VERIFICATION: Record<VerificationState, { label: string; tone: PillTone; icon: ReactNode; help: string }> = {
   SIGNED: {
     label: 'Signed',
-    colour: 'green',
+    tone: 'ok',
     icon: <CheckCircleOutlined />,
     help: 'The vendor signed this release and the signature was found.',
   },
   NOT_SIGNED: {
-    label: 'Not Signed',
-    colour: 'warning',
+    label: 'Not signed',
+    tone: 'pending',
     icon: <ExclamationCircleOutlined />,
     help: 'Vendor signatures were not found for this release. Caution: it may have been tampered with or withdrawn by the vendor.',
   },
   VERIFICATION_FAILED: {
-    label: 'Verification Failed',
-    colour: 'error',
+    label: 'Verification failed',
+    tone: 'danger',
     icon: <CloseCircleOutlined />,
     help: 'A signature was found but did not verify. Do not use this release until it is explained.',
   },
   UNKNOWN: {
-    label: 'Not Checked',
-    colour: 'default',
+    // The one state that genuinely IS "nothing recorded", so it is the one that
+    // takes the neutral tone. It is also the one whose tooltip matters most:
+    // not checked is not the same as not signed.
+    label: 'Not checked',
+    tone: 'neutral',
     icon: <QuestionCircleOutlined />,
     help: 'Nobody has looked for a signature on this release. That is not the same as it being unsigned.',
   },
@@ -275,9 +328,9 @@ export function VerificationBadge({ state }: { state: VerificationState }) {
   const v = VERIFICATION[state]
   return (
     <Tooltip title={v.help}>
-      <Tag icon={v.icon} color={v.colour} style={{ marginInlineEnd: 0 }}>
+      <StatusPill tone={v.tone} icon={v.icon} style={{ marginInlineEnd: 0 }}>
         {v.label}
-      </Tag>
+      </StatusPill>
     </Tooltip>
   )
 }

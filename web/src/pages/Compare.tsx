@@ -1,10 +1,10 @@
 import { useEffect, useMemo, useState } from 'react'
 import type { CSSProperties, ReactNode } from 'react'
-import {
-  App, Button, Card, Col, Popover, Progress, Row, Segmented, Select,
-  Space, Table, Tag, Tooltip, Tree, Typography,
-} from 'antd'
-import { FolderOutlined, SwapOutlined } from '@ant-design/icons'
+import { App, Button, Card, Col, Popover, Progress, Row, Segmented, Select, Space, Tag, Tooltip, Tree, Typography } from 'antd'
+// The working-surface table: resizable, reorderable, pinnable columns whose
+// layout each person keeps. See `tablekit/README.md` for which tables get it.
+import { Table as DataTable } from '../tablekit'
+import { FolderOutlined, SwapOutlined } from '../icons'
 import { useSearchParams } from 'react-router-dom'
 import {
   useCompare, useCompareProgress, useCompareSecurity, usePackages, useProduct, useProducts,
@@ -527,7 +527,9 @@ function ComparisonReport({ report }: { report: CompareResponse }) {
             <FileDifferences files={shownFiles} total={fileCount} />
           </div>
         ) : (
-        <Table<CompareRow>
+        <DataTable<CompareRow>
+          tableEnhancedKey="compare-rows"
+          allow_export
           size="small"
           dataSource={rows}
           rowKey={(r) => `${r.type}-${r.name}-${r.verdict}-${r.a?.digest ?? ''}-${r.b?.digest ?? ''}`}

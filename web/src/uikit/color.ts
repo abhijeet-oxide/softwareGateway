@@ -36,6 +36,7 @@ export const c = {
   navBgHover: cssVar("nav-bg-hover"),
   navBgActive: cssVar("nav-bg-active"),
   navFg: cssVar("nav-fg"),
+  navFgStrong: cssVar("nav-fg-strong"),
   navFgActive: cssVar("nav-fg-active"),
   navBorder: cssVar("nav-border"),
 

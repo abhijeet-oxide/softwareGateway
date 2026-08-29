@@ -37,14 +37,29 @@ body {
   font-family: var(--font-ui);
   background: var(--canvas);
   color: var(--text);
+  /* Both halves of the pair, deliberately. San Francisco is drawn for
+     grayscale antialiasing and renders a weight too heavy under the
+     subpixel default, which is the difference between type that looks
+     native on a Mac and type that looks like a website about one. */
   -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
   text-rendering: optimizeLegibility;
+  letter-spacing: var(--tr-normal);
 }
 
-/* Headings carry a touch of negative tracking and balanced wrapping so they
-   read as considered display type, not default bold body text. */
+/* Type tightens as it gets bigger. This is optical rather than stylistic: the
+   tracking that keeps 11px legible makes a 24px title look like it is falling
+   apart, and the platform's own faces are cut on that assumption. */
 :where(.ant-typography, h1, h2, h3, h4) {
-  letter-spacing: -0.014em;
+  letter-spacing: var(--tr-snug);
+}
+:where(h1, h2) {
+  letter-spacing: var(--tr-tight);
+}
+/* A title that has to break should break where the phrase does, not wherever
+   the box happens to end. */
+:where(h1, h2, h3, .ui-page-header-title, .ui-status-title) {
+  text-wrap: balance;
 }
 
 /* NUMBERS THAT LINE UP.
@@ -73,37 +88,47 @@ body {
 
 /* THE BROWSER'S OWN SURFACES. */
 ::selection {
-  background: color-mix(in srgb, var(--brand) 20%, transparent);
+  background: color-mix(in srgb, var(--brand) 22%, transparent);
 }
 html {
   caret-color: var(--brand);
-  scrollbar-color: var(--border-strong) transparent;
+  scrollbar-color: color-mix(in srgb, var(--text-3) 55%, transparent) transparent;
   scrollbar-width: thin;
 }
+/* An OVERLAY scrollbar: a thin capsule floating over the content, quiet until
+   the pointer is near it. The platform's bars behave this way and it is worth
+   copying for more than familiarity - a bar that reserves a 10px gutter down
+   the side of every scrollable panel is 10px the data does not get. */
 ::-webkit-scrollbar {
-  width: 10px;
-  height: 10px;
+  width: 11px;
+  height: 11px;
 }
 ::-webkit-scrollbar-track {
   background: transparent;
 }
 ::-webkit-scrollbar-thumb {
-  background: var(--border-strong);
+  background: color-mix(in srgb, var(--text-3) 45%, transparent);
   border: 3px solid transparent;
-  border-radius: 6px;
+  border-radius: var(--r-pill);
   background-clip: padding-box;
+  transition: background-color var(--dur-hover) var(--ease);
 }
 ::-webkit-scrollbar-thumb:hover {
-  background: var(--text-3);
+  background: color-mix(in srgb, var(--text-3) 80%, transparent);
   background-clip: padding-box;
+}
+::-webkit-scrollbar-corner {
+  background: transparent;
 }
 
 /* Keyboard focus stays visible: full keyboard operation is a requirement, and
-   a focus ring in the brand colour is one fewer thing that looks borrowed. */
+   the ring is the platform's rather than the browser's - a soft band of the
+   brand colour just outside the control's own edge, which reads as the control
+   being lit rather than as a rectangle drawn around it. */
 :focus-visible {
-  outline: 2px solid var(--brand);
-  outline-offset: 2px;
-  border-radius: 3px;
+  outline: 3px solid color-mix(in srgb, var(--brand) 45%, transparent);
+  outline-offset: 1px;
+  border-radius: var(--r-sm);
 }
 
 /* Ant Design's inline icons, and this kit's own, are inline GLYPHS - they sit

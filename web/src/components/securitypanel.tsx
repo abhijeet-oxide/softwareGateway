@@ -5,7 +5,10 @@ import {
   App, Button, Card, Col, Collapse, Descriptions, Drawer, Input, Row, Segmented, Select,
   Space, Spin, Table, Tag, Tooltip, Typography,
 } from 'antd'
-import { CopyOutlined, ExportOutlined } from '@ant-design/icons'
+// The working-surface table: resizable, reorderable, pinnable columns whose
+// layout each person keeps. See `tablekit/README.md` for which tables get it.
+import { Table as DataTable } from '../tablekit'
+import { CopyOutlined, ExportOutlined } from '../icons'
 import {
   packageSecurityExportUrl, useCancelPackageSecuritySync, usePackageSecurity,
   useSyncPackageSecurity,
@@ -1442,7 +1445,8 @@ function UniqueCveTable({ groups, state, detailRowsUnavailable, scanUrlFor }: {
       pagination={{ pageSize: 25, showSizeChanger: true, size: 'small' }}
       expandable={{
         expandedRowRender: (g) => (
-          <Table<FlatFinding>
+          <DataTable<FlatFinding>
+            tableEnhancedKey="security-by-component"
             size="small"
             rowKey={(r) => `${r.component.id}-${r.artifactName}-${r.artifactDigest ?? ''}`}
             dataSource={[...g.rows].sort((a, b) => Number(b.fixable) - Number(a.fixable))}
@@ -2011,7 +2015,10 @@ function VulnerabilityTable({
 
   return (
     <>
-    <Table<FlatFinding>
+    <DataTable<FlatFinding>
+      tableEnhancedKey="security-findings"
+      allow_export
+      show_column_visibility
       size="small"
       rowKey={(r) => `${r.cve ?? r.id}-${r.component.id}-${r.artifactName}`}
       dataSource={rows}
@@ -2116,7 +2123,9 @@ function ArtifactTable({ reports }: { reports: SecurityReport[] }) {
 
   return (
     <>
-    <Table<SecurityReport>
+    <DataTable<SecurityReport>
+      tableEnhancedKey="security-reports"
+      allow_export
       size="small"
       rowKey={(r) => r.artifact.digest || r.artifact.name}
       dataSource={reports}
@@ -2319,7 +2328,8 @@ function ImageDetailDrawer({ report, onClose }: {
           />
 
           <Section title={`Vulnerabilities - ${rows.length.toLocaleString()}`}>
-            <Table<FlatFinding>
+            <DataTable<FlatFinding>
+              tableEnhancedKey="security-cve-findings"
               size="small"
               rowKey={(r) => `${r.cve ?? r.id}-${r.component.id}`}
               dataSource={rows}

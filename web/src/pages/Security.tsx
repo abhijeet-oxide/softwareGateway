@@ -1,7 +1,8 @@
 import { useEffect, useMemo, useState } from 'react'
-import {
-  Alert, Button, Card, Checkbox, Input, Segmented, Select, Space, Table, Tag, Tooltip, Typography,
-} from 'antd'
+import { Alert, Button, Card, Checkbox, Input, Segmented, Select, Space, Tag, Tooltip, Typography } from 'antd'
+// The working-surface table: resizable, reorderable, pinnable columns whose
+// layout each person keeps. See `tablekit/README.md` for which tables get it.
+import { Table as DataTable } from '../tablekit'
 import { Link, useSearchParams } from 'react-router-dom'
 import { useProducts, useSecuritySearch, securitySearchExportUrl } from '../api/queries'
 import type { SearchKind, SecuritySearchHit, Severity } from '../api/types'
@@ -165,7 +166,10 @@ export default function Security() {
           )}
 
           <Card styles={{ body: { padding: 0 } }}>
-            <Table<SecuritySearchHit>
+            <DataTable<SecuritySearchHit>
+              tableEnhancedKey="security-search"
+              allow_export
+              show_column_visibility
               size="small"
               rowKey={(h, i) => `${h.cve ?? h.issueId}-${h.component.id}-${h.artifact.digest}-${i}`}
               dataSource={hits}

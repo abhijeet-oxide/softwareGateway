@@ -73,15 +73,33 @@ export function NavEntry({
       aria-disabled={disabled}
       aria-current={active ? "page" : undefined}
     >
-      <Badge
-        count={item.badge ?? 0}
-        size="small"
-        offset={collapsed ? [2, 0] : [4, 0]}
-        color="var(--nav-bg-active)"
-      >
+      {/*
+        A count goes where there is room for it, which depends on the width.
+
+        Expanded, it is a chip at the END of the row - the way every mail and
+        message list on the platform states an unread count. Pinned to the icon
+        it sat on top of the first letters of the label: "Downloads" read as
+        "3ownloads", and the wider the count the more of the word it ate.
+
+        Collapsed there is no label to collide with and no room for a chip, so
+        it goes back onto the icon as a dot-sized badge.
+      */}
+      {collapsed ? (
+        <Badge
+          count={item.badge ?? 0}
+          size="small"
+          offset={[2, 0]}
+          color="var(--nav-bg-active)"
+        >
+          <span className="ui-nav-item-icon">{item.icon}</span>
+        </Badge>
+      ) : (
         <span className="ui-nav-item-icon">{item.icon}</span>
-      </Badge>
+      )}
       {!collapsed && <span className="ui-nav-item-label">{item.label}</span>}
+      {!collapsed && !!item.badge && (
+        <span className="ui-nav-count ui-num">{item.badge > 99 ? "99+" : item.badge}</span>
+      )}
     </div>
   );
   const tip = disabled ? (item.disabledHint ?? item.label) : collapsed ? item.label : "";

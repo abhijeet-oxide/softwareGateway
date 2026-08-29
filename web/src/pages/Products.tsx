@@ -1,5 +1,8 @@
 import { useState } from 'react'
-import { Button, Card, Space, Table, Tag, Tooltip, Typography } from 'antd'
+import { Button, Card, Space, Tag, Tooltip, Typography } from 'antd'
+// The working-surface table: resizable, reorderable, pinnable columns whose
+// layout each person keeps. See `tablekit/README.md` for which tables get it.
+import { Table as DataTable } from '../tablekit'
 import { useParams } from 'react-router-dom'
 import { usePackages, useProducts, useTransfers } from '../api/queries'
 import { RunDiscoveryButton } from '../components/discovery'
@@ -50,7 +53,8 @@ function VersionHistory({ product }: { product: Product }) {
   }
 
   return (
-    <Table
+    <DataTable
+      tableEnhancedKey="product-releases"
       size="small"
       loading={packages.isLoading}
       dataSource={rows}
@@ -183,7 +187,8 @@ export default function Products() {
         />
       ) : (
         <Card styles={{ body: { padding: 0 } }}>
-          <Table
+          <DataTable
+            tableEnhancedKey="products"
             loading={products.isLoading}
             dataSource={rows}
             rowKey={(p) => p.productId}

@@ -1,5 +1,8 @@
 import { Alert, Button, Card, Col, Row, Space, Table, Tag, Tooltip, Typography } from 'antd'
-import { ArrowRightOutlined } from '@ant-design/icons'
+// The working-surface table: resizable, reorderable, pinnable columns whose
+// layout each person keeps. See `tablekit/README.md` for which tables get it.
+import { Table as DataTable } from '../tablekit'
+import { ArrowRightOutlined } from '../icons'
 import { Link } from 'react-router-dom'
 import {
   useDownloadsForAll, useProducts, useReplicationForAll, useRulesForAll, useTransfers,
@@ -220,7 +223,8 @@ export default function Downloads() {
                 action={<Link to="/packages"><Button type="primary">Find a package to download</Button></Link>}
               />
             ) : (
-              <Table<Transfer>
+              <DataTable<Transfer>
+                tableEnhancedKey="downloads-ongoing"
                 size="small"
                 pagination={false}
                 dataSource={ongoing}
@@ -292,7 +296,9 @@ export default function Downloads() {
                 action={<Link to="/packages"><Button>Find a package to download</Button></Link>}
               />
             ) : (
-              <Table<Transfer>
+              <DataTable<Transfer>
+                tableEnhancedKey="downloads-finished"
+                allow_export
                 size="small"
                 pagination={{ pageSize: 10, hideOnSinglePage: true, size: 'small' }}
                 dataSource={finished}
@@ -374,7 +380,9 @@ export default function Downloads() {
                 action={<Link to="/packages"><Button>Find a release to promote</Button></Link>}
               />
             ) : (
-              <Table<Transfer>
+              <DataTable<Transfer>
+                tableEnhancedKey="downloads-promotions"
+                allow_export
                 size="small"
                 pagination={{ pageSize: 10, hideOnSinglePage: true, size: 'small' }}
                 dataSource={promotions}
@@ -429,7 +437,8 @@ export default function Downloads() {
               What happens when a product is downloaded - where the software goes, in what order,
               and what has to verify on the way.
             </Typography.Paragraph>
-            <Table<WithProduct<DownloadView>>
+            <DataTable<WithProduct<DownloadView>>
+              tableEnhancedKey="downloads-by-product"
               size="small"
               pagination={false}
               dataSource={downloads}

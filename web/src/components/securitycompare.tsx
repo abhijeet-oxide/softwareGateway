@@ -1,9 +1,10 @@
 import { useMemo, useState } from 'react'
 import type { ReactNode } from 'react'
-import {
-  Alert, Button, Card, Checkbox, Col, Input, Row, Segmented, Space, Table, Tag, Tooltip, Typography,
-} from 'antd'
-import { ArrowUpOutlined, CheckOutlined, MinusOutlined } from '@ant-design/icons'
+import { Alert, Button, Card, Checkbox, Col, Input, Row, Segmented, Space, Tag, Tooltip, Typography } from 'antd'
+// The working-surface table: resizable, reorderable, pinnable columns whose
+// layout each person keeps. See `tablekit/README.md` for which tables get it.
+import { Table as DataTable } from '../tablekit'
+import { ArrowUpOutlined, CheckOutlined, MinusOutlined } from '../icons'
 import { securityComparisonExportUrl } from '../api/queries'
 import { SEVERITIES } from '../api/types'
 import type {
@@ -535,7 +536,8 @@ function ChangeBySeverity({ report }: { report: SecurityComparisonResponse }) {
 
   return (
     <Card size="small" title="Change by severity and fixability">
-      <Table<SeverityRow>
+      <DataTable<SeverityRow>
+        tableEnhancedKey="security-compare-severity"
         size="small"
         pagination={false}
         rowKey="key"
@@ -736,7 +738,9 @@ function ArtifactDeltaCard({ report }: { report: SecurityComparisonResponse }) {
           description="They are present in both releases, but one side has no scan result, so nothing about them was classified."
         />
       )}
-      <Table<SecurityArtifactDelta>
+      <DataTable<SecurityArtifactDelta>
+        tableEnhancedKey="security-compare-artifacts"
+        allow_export
         size="small"
         rowKey="key"
         dataSource={rows}
@@ -910,7 +914,10 @@ function ChangeTable({ report, product, baseRef, againstRef, repository }: {
         />
       </Space>
 
-      <Table<SecurityChange>
+      <DataTable<SecurityChange>
+        tableEnhancedKey="security-compare-changes"
+        allow_export
+        show_column_visibility
         size="small"
         rowKey={(r) => `${r.type}-${r.cve ?? r.id}-${r.component.id}-${r.artifact.name}`}
         dataSource={rows}

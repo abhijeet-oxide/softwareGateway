@@ -1,6 +1,9 @@
 import { useState } from 'react'
-import { Button, Card, DatePicker, Descriptions, Drawer, Select, Space, Table, Tag, Typography } from 'antd'
-import { DownloadOutlined } from '@ant-design/icons'
+import { Button, Card, DatePicker, Descriptions, Drawer, Select, Space, Tag, Typography } from 'antd'
+// The working-surface table: resizable, reorderable, pinnable columns whose
+// layout each person keeps. See `tablekit/README.md` for which tables get it.
+import { Table as DataTable } from '../tablekit'
+import { DownloadOutlined } from '../icons'
 import { Link, useSearchParams } from 'react-router-dom'
 import { useAuditEvents, useProducts } from '../api/queries'
 import { TimeAgo } from '../components/chips'
@@ -149,7 +152,9 @@ export default function Activity() {
         />
       ) : (
         <Card styles={{ body: { padding: 0 } }}>
-          <Table
+          <DataTable
+            tableEnhancedKey="activity"
+            allow_export
             loading={events.isLoading}
             dataSource={rows}
             rowKey={(e) => e.id}

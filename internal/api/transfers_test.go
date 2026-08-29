@@ -1,6 +1,7 @@
 package api
 
 import (
+	"net/http"
 	"strconv"
 	"testing"
 
@@ -225,5 +226,42 @@ func TestTheSavingIsBrokenDownByKindAndAddsUp(t *testing.T) {
 	if want := int64(32<<30 + 5<<20); total != want {
 		t.Errorf("the per-kind savings add up to %d, want %d - a breakdown that "+
 			"does not reach its own total is worse than none", total, want)
+	}
+}
+
+// The shell's line has to be the same answer the listing would give, or the
+// cheap way to ask is just a wrong one.
+func TestTransferActivityAgreesWithTheListing(t *testing.T) {
+	h := newAPIHarness(t)
+
+	var listed v1.ListTransfersResponse
+	if code := h.get("/api/v1/transfers?pageSize=100", &listed); code != http.StatusOK {
+		t.Fatalf("listing = %d, want 200", code)
+	}
+
+	var got v1.TransferActivityResponse
+	if code := h.get("/api/v1/transfers:activity", &got); code != http.StatusOK {
+		t.Fatalf("activity = %d, want 200", code)
+	}
+
+	var failed int
+	for _, tr := range listed.Transfers {
+		if tr.State == v1.TransferFailed {
+			failed++
+		}
+	}
+	if got.Failed != failed {
+		t.Errorf("activity reports %d failed, the listing has %d", got.Failed, failed)
+	}
+}
+
+// The route must not be reachable as a transfer named "activity", which is what
+// a plain path segment would have allowed.
+func TestTransferActivityIsNotATransferID(t *testing.T) {
+	h := newAPIHarness(t)
+
+	var prob v1.Problem
+	if code := h.get("/api/v1/transfers/activity", &prob); code != http.StatusNotFound {
+		t.Errorf("GET /transfers/activity = %d, want 404 - it is not a transfer", code)
 	}
 }

@@ -177,6 +177,22 @@ func (s *Server) handleListTransfers(w http.ResponseWriter, r *http.Request) {
 	WriteJSON(w, r, http.StatusOK, out)
 }
 
+// handleTransferActivity serves GET /api/v1/transfers:activity.
+//
+// The shell's one line, answered by the database rather than assembled in the
+// browser from a page of transfers it did not want. See
+// v1.TransferActivityResponse for the measurement that justifies its existence.
+func (s *Server) handleTransferActivity(w http.ResponseWriter, r *http.Request) {
+	a, err := s.deps.Packages.Activity(r.Context())
+	if err != nil {
+		Error(w, r, v1.CodeUnavailable, "could not summarise activity: "+err.Error())
+		return
+	}
+	WriteJSON(w, r, http.StatusOK, v1.TransferActivityResponse{
+		Moving: a.Moving, Held: a.Held, Failed: a.Failed,
+	})
+}
+
 // handleGetTransfer serves GET /api/v1/transfers/{transfer}.
 func (s *Server) handleGetTransfer(w http.ResponseWriter, r *http.Request) {
 	id := chi.URLParam(r, "transfer")

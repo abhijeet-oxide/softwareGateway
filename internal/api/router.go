@@ -496,6 +496,11 @@ func (s *Server) routes() chi.Router {
 			r.Get("/comparisons/{comparison}", s.handleCompareProgress)
 
 			r.Get("/transfers", s.handleListTransfers)
+			// Registered BEFORE the parameterised route, and spelled with a
+			// colon rather than as a path segment, so it cannot ever be read as
+			// a transfer called "activity". Same shape as
+			// `GET /system:healthCheck`.
+			r.Get("/transfers:activity", s.handleTransferActivity)
 			r.Get("/transfers/{transfer}", s.handleGetTransfer)
 			r.Get("/transfers/{transfer}/jobs", s.handleListTransferJobs)
 			r.Get("/transfers/{transfer}/failures", s.handleListTransferFailures)

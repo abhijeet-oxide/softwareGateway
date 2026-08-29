@@ -189,22 +189,3 @@ export function describeFleet(fleet: Fleet): string {
 function countWord(n: number, noun: string): string {
   return `${formatCount(n) ?? n} ${noun}${n === 1 ? '' : 's'}`
 }
-
-/**
- * A transfer listing split by whether anything is actually happening to it.
- *
- * The shell's bar used to say "N downloads running" over a count that included
- * every planned, queued and unstarted one. On a fleet that is down that is the
- * single most misleading sentence in the interface: it reports the thing the
- * reader is worried about as working.
- */
-export function splitByMotion(transfers: Transfer[], fleet: Fleet) {
-  const moving: Transfer[] = []
-  const held: Transfer[] = []
-  for (const t of transfers) {
-    if (!isLive(t.state)) continue
-    if (holdOn(t, fleet)) held.push(t)
-    else moving.push(t)
-  }
-  return { moving, held }
-}

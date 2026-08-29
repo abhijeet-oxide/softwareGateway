@@ -116,11 +116,17 @@ func run() error {
 	// so this is fatal rather than a warning.
 	secrets := product.NewSecretResolver(cfg.SecretsDir())
 	products := product.NewRegistry()
-	loaded, err := product.NewLoader(cfg.ProductsDir(), secrets).
+	// The loader is kept, not discarded after the first Load: the watcher below
+	// reuses THIS one, so a reload applies the same concurrency defaults the
+	// startup load did. A second loader built with different arguments would
+	// silently change a product's connection ceiling the first time somebody
+	// touched an unrelated file.
+	loader := product.NewLoader(cfg.ProductsDir(), secrets).
 		WithConcurrency(product.Concurrency{
 			PerRegistry:       cfg.Concurrency.PerRegistry,
 			RequestsPerSecond: cfg.Concurrency.RequestsPerSecond,
-		}).Load()
+		})
+	loaded, err := loader.Load()
 	if err != nil {
 		return fmt.Errorf("load product configuration from %s: %w", cfg.ProductsDir(), err)
 	}
@@ -216,6 +222,52 @@ func run() error {
 
 	g.Go(func() error {
 		return loop.Run(gctx)
+	})
+
+	/*
+	  WATCH THE PRODUCTS, exactly as the Coordinator does.
+
+	  The worker read this directory once, at startup, and never again. So a
+	  product added or corrected while it was running did not exist as far as
+	  it was concerned: the Coordinator reloaded, planned the work and handed it
+	  out, and every job for that product came back
+
+	      product "…" is not configured on this worker
+
+	  until somebody restarted the process. The two planes were reading the same
+	  files and disagreeing about what was in them, which is the one thing this
+	  configuration model is supposed to make impossible.
+
+	  It is worse than a delay. A job that fails this way is classified
+	  `configuration`, which is TERMINAL - one attempt, by deliberate policy,
+	  because a worker that cannot execute a job should surface that rather than
+	  burn the attempts a real retry would need. So a single lease taken during
+	  the gap does not merely wait for the restart; it kills the job, and the
+	  transfer needs an explicit retry afterwards even once the worker can see
+	  the product.
+
+	  A watch failure is not fatal - the loaded configuration keeps working and
+	  only hot reload is lost - so this returns nil on everything except the
+	  context ending, and never takes the fleet down over an inotify limit.
+	*/
+	g.Go(func() error {
+		watcher := product.NewWatcher(cfg.ProductsDir(), loader, products, product.WatchOptions{
+			Logger: logger,
+			OnReload: func(res product.LoadResult) {
+				// Said at INFO because it is the answer to "why did this worker
+				// start working" as well as to "why did it stop": a reload that
+				// drops a product is as operationally interesting as one that
+				// adds it, and the count is what makes either visible.
+				logger.Info("product configuration reloaded",
+					"products", products.Count(), "invalid", len(res.Invalid),
+					"dir", cfg.ProductsDir())
+			},
+		})
+		if err := watcher.Run(gctx); err != nil {
+			logger.Warn("product configuration is not being watched; "+
+				"a change will need a restart to take effect", "error", err)
+		}
+		return nil
 	})
 
 	g.Go(func() error {

@@ -672,6 +672,34 @@ type CancelAnalysisResponse struct {
 	Package_ Package `json:"packageState"`
 }
 
+// TransferActivityResponse is GET /api/v1/transfers:activity.
+//
+// What the estate is doing, as three numbers, for the one line the application
+// shell shows on every page.
+//
+// # Why it is not a listing
+//
+// The shell used to ask for the hundred most recent transfers every few seconds
+// and count them in the browser. A transfer listing carries a dozen aggregates
+// over each transfer's jobs, so its cost is set by how much work the estate has
+// done rather than by how many numbers the caller wanted - measured at 158ms
+// for a hundred rows against 1ms for this. On SQLite, where the connection pool
+// is deliberately one connection, that difference is time in which no other
+// request and no worker lease can touch the database.
+type TransferActivityResponse struct {
+	// Moving is live transfers with at least one job in a worker's hands.
+	Moving int `json:"moving"`
+	// Held is live transfers with none - planned, queued, or waiting for a
+	// fleet that is not there.
+	//
+	// Reported apart from Moving because they are what the shell exists to
+	// tell apart: a queue being drained and a queue nothing is draining are
+	// the same count of "running" and completely different afternoons.
+	Held int `json:"held"`
+	// Failed is transfers that stopped and have not been retried.
+	Failed int `json:"failed"`
+}
+
 // ListArtifactsResponse is returned by
 // GET /api/v1/products/{product}/packages/{package}/artifacts.
 type ListArtifactsResponse struct {

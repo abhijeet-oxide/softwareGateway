@@ -69,6 +69,29 @@ type postgresDialect struct{}
 //
 // Quoted string literals are skipped so a `?` inside one - which is legal SQL
 // and appears in LIKE patterns - is not mistaken for a placeholder.
+//
+// # COMMENTS ARE SKIPPED TOO, and leaving them out was a real bug
+//
+// The queries in this package are heavily commented, in prose, and English
+// prose contains apostrophes: "the package's own repository", "the transfer's
+// origin". Without comment handling each of those reads as the start of a
+// string literal, and an ODD number of them in one query leaves the rewriter
+// believing everything after the last one is inside a string. Every `?` from
+// there on is left alone.
+//
+// The transfer projection had three. So `LIMIT ? OFFSET ?` reached Postgres
+// verbatim and it answered
+//
+//	ERROR: syntax error at or near "OFFSET" (SQLSTATE 42601)
+//
+// which names neither the cause nor anything in the query the author wrote.
+// Listing and reading transfers - the Downloads page, the shell, every
+// `transferctl transfers` command - could not work on Postgres at all, while
+// SQLite, whose Rewrite is the identity function, was perfectly happy.
+//
+// Handling the comments here rather than removing the apostrophes is the fix
+// that stays fixed: the next person to write "the worker's lease" in a query
+// comment must not silently break it.
 func (postgresDialect) Rewrite(query string) string {
 	var b strings.Builder
 	b.Grow(len(query) + 8)
@@ -78,6 +101,42 @@ func (postgresDialect) Rewrite(query string) string {
 
 	for i := 0; i < len(query); i++ {
 		c := query[i]
+
+		// A line comment runs to the newline, and nothing in it is SQL. Checked
+		// before the quote handling, because the whole point is that an
+		// apostrophe inside one is punctuation rather than a delimiter.
+		if !inSingle && !inDouble && c == '-' && i+1 < len(query) && query[i+1] == '-' {
+			end := strings.IndexByte(query[i:], '\n')
+			if end < 0 {
+				b.WriteString(query[i:])
+				return b.String()
+			}
+			b.WriteString(query[i : i+end+1])
+			i += end
+			continue
+		}
+
+		// A block comment, for the same reason. Postgres nests these; the
+		// depth count is cheap and means a /* */ inside one cannot end it early.
+		if !inSingle && !inDouble && c == '/' && i+1 < len(query) && query[i+1] == '*' {
+			depth, j := 1, i+2
+			for j < len(query) && depth > 0 {
+				switch {
+				case j+1 < len(query) && query[j] == '/' && query[j+1] == '*':
+					depth++
+					j += 2
+				case j+1 < len(query) && query[j] == '*' && query[j+1] == '/':
+					depth--
+					j += 2
+				default:
+					j++
+				}
+			}
+			b.WriteString(query[i:j])
+			i = j - 1
+			continue
+		}
+
 		switch {
 		case c == '\'' && !inDouble:
 			// '' inside a string is an escaped quote, not a terminator.

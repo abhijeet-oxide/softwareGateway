@@ -16,7 +16,7 @@ import type {
   RunDownloadResponse,
   PackageSecurityResponse, SearchKind, SecurityCompareRequest, SecurityComparisonResponse,
   SecuritySearchResponse, SyncSecurityResponse,
-  SetPriorityRequest, Transfer, TransferControlResponse, VersionResponse,
+  SetPriorityRequest, Transfer, TransferActivity, TransferControlResponse, VersionResponse,
 } from './types'
 import { isLive } from '../domain/derive'
 
@@ -403,6 +403,37 @@ export function useTransfers(
     // stale under an operator watching a download.
     refetchInterval: (q) =>
       (q.state.data?.transfers ?? []).some((t) => isLive(t.state)) ? 5000 : false,
+  })
+}
+
+/**
+ * The estate's activity, as three numbers.
+ *
+ * # Why this is not `useTransfers` with a big page
+ *
+ * It was. The shell mounts on every page and needs "how many are moving, how
+ * many are waiting, how many failed", and it got them by fetching a hundred
+ * fully-projected transfers every few seconds and counting in the browser.
+ *
+ * Each of those rows carries a dozen aggregates over that transfer's jobs, so
+ * the request costs what the ESTATE has done rather than what the shell asked
+ * for - and it was issued from every open tab, for the whole life of a
+ * download, against a Coordinator already busy leasing and completing jobs.
+ * The server answers the same question in about a hundred and fiftieth of the
+ * time.
+ *
+ * Polled slowly and unconditionally: it is a status line rather than a page
+ * somebody is watching, and the transfer that a reader IS watching has its own
+ * tight poll on the page they are on.
+ */
+export function useTransferActivity() {
+  return useQuery({
+    queryKey: ['transfer-activity'],
+    queryFn: () => api.get<TransferActivity>('/transfers:activity'),
+    refetchInterval: 10_000,
+    // A status line that briefly disagrees with a page is better than one that
+    // vanishes: the previous numbers stay on screen while the next arrive.
+    placeholderData: (previous) => previous,
   })
 }
 

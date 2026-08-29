@@ -549,6 +549,28 @@ export interface Transfer {
 export interface ListTransfersResponse { transfers: Transfer[]; nextPageToken?: string }
 
 /**
+ * What the estate is doing, as three numbers.
+ *
+ * The shell shows one line on every page and used to compute it by asking for
+ * the hundred most recent transfers every few seconds. A transfer listing
+ * carries a dozen aggregates over each transfer's jobs, so its cost is set by
+ * how much work the estate has done rather than by how many numbers the caller
+ * wanted - 158ms for a hundred rows against 1ms for this, on a database whose
+ * connection pool is deliberately a single connection.
+ */
+export interface TransferActivity {
+  /** Live transfers with at least one job in a worker's hands. */
+  moving: number
+  /**
+   * Live transfers with none: planned, queued, or waiting for a fleet that is
+   * not there. Apart from `moving` because a queue being drained and a queue
+   * nothing is draining are the same count of "running".
+   */
+  held: number
+  failed: number
+}
+
+/**
  * The artifact a job belongs to - what makes a digest legible.
  *
  * A blob on its own is not something anybody can recognise. The image or chart

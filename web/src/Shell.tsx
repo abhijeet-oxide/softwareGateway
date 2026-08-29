@@ -7,8 +7,8 @@ import {
 } from './icons'
 import { Link, useLocation, useNavigate } from 'react-router-dom'
 import { useIdentity } from './auth/permissions'
-import { useTransfers, useVersion, useWorkers } from './api/queries'
-import { describeFleet, splitByMotion, summariseFleet } from './domain/fleet'
+import { useTransferActivity, useVersion, useWorkers } from './api/queries'
+import { describeFleet, summariseFleet } from './domain/fleet'
 import brand from './brand'
 import {
   AppShell, c, envHex, SideNav, ThemeToggleButton, TopBar, withAlpha,
@@ -140,7 +140,25 @@ export function Shell({ children }: { children: ReactNode }) {
   const [collapsed, setCollapsed] = useState(loadCollapsed)
   const version = useVersion()
 
-  const { data: transfers } = useTransfers({ pageSize: 100 })
+  /*
+    THREE NUMBERS, asked for as three numbers.
+
+    This used to fetch the hundred most recent transfers every few seconds and
+    count them here. Every one of those rows carries a dozen aggregates over
+    that transfer's jobs, so the request cost what the estate had DONE rather
+    than what this bar wanted - and the bar is on every page, so it was issued
+    from every open tab for the whole life of a download, against a Coordinator
+    already busy leasing and completing jobs. See useTransferActivity.
+
+    The moving/held split still comes from the server, because it is the same
+    split domain/fleet makes and the two must not drift: a transfer with a job
+    in a worker's hands is moving, one without is not.
+  */
+  const activity = useTransferActivity()
+  const moving = activity.data?.moving ?? 0
+  const held = activity.data?.held ?? 0
+  const failing = activity.data?.failed ?? 0
+
   /*
     The fleet, read here because the bar is the one thing on screen from every
     page. "Three downloads running" with no worker running them is the most
@@ -149,8 +167,6 @@ export function Shell({ children }: { children: ReactNode }) {
   */
   const workerList = useWorkers()
   const fleet = summariseFleet(workerList.data?.workers, workerList.isSuccess)
-  const { moving, held } = splitByMotion(transfers?.transfers ?? [], fleet)
-  const failing = (transfers?.transfers ?? []).filter((t) => t.state === 'FAILED').length
 
   /*
     NOTHING is selected on a page the navigation does not list, and that is a
@@ -233,8 +249,8 @@ export function Shell({ children }: { children: ReactNode }) {
           right={
             <>
               <ActivityPill
-                moving={moving.length}
-                held={held.length}
+                moving={moving}
+                held={held}
                 failing={failing}
                 hint={describeFleet(fleet)}
               />

@@ -1,7 +1,11 @@
 package api
 
 import (
+	"errors"
 	"net/http"
+	"path/filepath"
+	"sort"
+	"strings"
 
 	"github.com/go-chi/chi/v5"
 
@@ -116,15 +120,114 @@ func (s *Server) handleListProducts(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	loaded := s.deps.Products.List()
-	out := make([]v1.Product, 0, len(loaded))
-	for _, p := range loaded {
-		out = append(out, toAPIProduct(p))
+	// A REJECTED PRODUCT IS LISTED, NOT OMITTED.
+	//
+	// It used to be dropped here, which meant a product somebody had configured
+	// simply was not on the screen - no row, no name, no reason, and the only
+	// record of it a line in the Coordinator's log. An operator looking at that
+	// page cannot tell a misconfigured product from one they never wrote, and
+	// the product they are looking for is the one thing the page will not
+	// mention. Every other failure in this system is a STATE with a reason
+	// attached; this one was an absence.
+	//
+	// So the two sets are merged. The registry is fail-closed per product, so a
+	// name can legitimately appear in both: a bad edit to a working product
+	// leaves the previous good version running and records the rejection
+	// alongside it. That is a different fact from a product that never loaded,
+	// and `ConfigError.Loaded` is what carries the difference through.
+	failed := map[string]product.InvalidProduct{}
+	if inv := s.deps.Products.Invalid(); len(inv) > 0 {
+		for _, bad := range inv {
+			failed[invalidKey(bad)] = bad
+		}
 	}
+
+	loaded := s.deps.Products.List()
+	out := make([]v1.Product, 0, len(loaded)+len(failed))
+	for _, p := range loaded {
+		api := toAPIProduct(p)
+		if bad, rejected := failed[p.Metadata.Name]; rejected {
+			// Running, but not on what the file now says. `Enabled` is left
+			// alone deliberately: this product IS replicating.
+			api.ConfigError = toAPIConfigError(bad, true)
+			delete(failed, p.Metadata.Name)
+		}
+		out = append(out, api)
+	}
+	for _, bad := range failed {
+		out = append(out, rejectedAPIProduct(bad))
+	}
+	// Merging appends the rejected ones after the loaded ones, so the whole set
+	// is re-sorted: a product's position must not depend on whether its
+	// document happens to parse today.
+	sort.Slice(out, func(i, j int) bool { return out[i].ProductID < out[j].ProductID })
+
 	// Pagination is a no-op at this scale (products number in the tens) but
 	// the field is present from the start so adding it later is not a breaking
 	// change for clients.
 	WriteJSON(w, r, http.StatusOK, v1.ListProductsResponse{Products: out})
+}
+
+// invalidKey is the name a rejected document is filed under.
+//
+// The registry keys by product name where it knows one and by file path where
+// it does not - a document that fails to PARSE never yields a name. Falling
+// back to the file's base name gives the UI something to show in the one case
+// where the product has no identity of its own yet, which is exactly the case
+// an operator most needs to see: a file they have just created and got wrong.
+func invalidKey(bad product.InvalidProduct) string {
+	if bad.Name != "" {
+		return bad.Name
+	}
+	return strings.TrimSuffix(filepath.Base(bad.File), filepath.Ext(bad.File))
+}
+
+// toAPIConfigError renders a rejection for the API, keeping the structure when
+// there is structure to keep.
+//
+// A validation failure is `product.Errors` - a list, each naming its own field
+// - and flattening it to one string throws away the only thing that lets a
+// reader go straight to the offending line. A parse error has no such shape and
+// is reported as the message alone.
+func toAPIConfigError(bad product.InvalidProduct, loaded bool) *v1.ConfigError {
+	out := &v1.ConfigError{
+		Message: bad.Err.Error(),
+		File:    filepath.Base(bad.File),
+		Loaded:  loaded,
+	}
+	var errs product.Errors
+	if errors.As(bad.Err, &errs) {
+		out.Details = make([]v1.ConfigIssue, 0, len(errs))
+		for _, e := range errs {
+			out.Details = append(out.Details, v1.ConfigIssue{
+				Field:   e.Field,
+				Message: e.Message,
+				Hint:    e.Hint,
+			})
+		}
+	}
+	return out
+}
+
+// rejectedAPIProduct is the view of a product that has never loaded.
+//
+// Almost every field is empty because almost nothing is known: the document did
+// not survive validation, so its sources, targets and policies cannot be
+// reported as facts. What IS known is that somebody configured a product of
+// this name, that it is not running, and why - which is the whole content of
+// the row.
+func rejectedAPIProduct(bad product.InvalidProduct) v1.Product {
+	name := invalidKey(bad)
+	return v1.Product{
+		Name:      "products/" + name,
+		ProductID: name,
+		// Not enabled, and not as a guess: nothing about this product runs.
+		// Whatever `enabled` its document may claim was never read.
+		Enabled:     false,
+		Sources:     []v1.Repository{},
+		Targets:     []v1.Repository{},
+		ConfigError: toAPIConfigError(bad, false),
+	}
 }
 
 func (s *Server) handleGetProduct(w http.ResponseWriter, r *http.Request) {
@@ -137,21 +240,36 @@ func (s *Server) handleGetProduct(w http.ResponseWriter, r *http.Request) {
 
 	p, ok := s.deps.Products.Get(name)
 	if !ok {
-		// A product whose configuration failed to load is reported as a 404
-		// with the reason, rather than a bare 404 - otherwise an operator
-		// cannot tell "misspelled" from "your YAML is broken".
+		// A product whose document was REJECTED is returned, not refused.
+		//
+		// This used to be a 404 carrying the reason in its detail, which was
+		// better than a bare 404 and still wrong in two ways: a resource the
+		// List method returns cannot be missing from the Get method, and a
+		// reader deep-linked to a broken product got an error page instead of
+		// the product and its error. "Not found" is also simply untrue - it is
+		// configured, it is just not running.
 		for _, bad := range s.deps.Products.Invalid() {
-			if bad.Name == name {
-				pr := v1.NewProblem(v1.CodeNotFound,
-					"product "+name+" is configured but failed to load: "+bad.Err.Error())
-				WriteProblem(w, r, pr)
+			if invalidKey(bad) == name {
+				WriteJSON(w, r, http.StatusOK, rejectedAPIProduct(bad))
 				return
 			}
 		}
 		NotFound(w, r, "product", name)
 		return
 	}
-	WriteJSON(w, r, http.StatusOK, toAPIProduct(p))
+
+	api := toAPIProduct(p)
+	// Loaded AND rejected: an edit to a working product failed validation, so
+	// what is running is the previous version. The product is fine; the change
+	// did not take effect. Reporting only the first half is how somebody
+	// concludes their edit landed.
+	for _, bad := range s.deps.Products.Invalid() {
+		if invalidKey(bad) == name {
+			api.ConfigError = toAPIConfigError(bad, true)
+			break
+		}
+	}
+	WriteJSON(w, r, http.StatusOK, api)
 }
 
 func (s *Server) handleNotFound(w http.ResponseWriter, r *http.Request) {

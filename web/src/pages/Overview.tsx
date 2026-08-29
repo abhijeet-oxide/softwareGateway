@@ -1,8 +1,8 @@
 import { useMemo } from 'react'
-import { Button, Card, Col, Row, Space, Table, Typography } from 'antd'
+import { Button, Card, Col, Row, Space, Table, Tabs, Typography } from 'antd'
 import { c } from '../uikit'
-import { CloudDownloadOutlined } from '../icons'
-import { Link, useNavigate } from 'react-router-dom'
+import { CloudDownloadOutlined, DashboardOutlined, RadarChartOutlined } from '../icons'
+import { Link, useNavigate, useSearchParams } from 'react-router-dom'
 import { useProducts, usePackagesByProducts, useReports, useTransfers } from '../api/queries'
 import {
   deriveLocations, deriveStatus, downloadSeconds, isRecent, publishedAt, releaseHref, transferIndex,
@@ -10,7 +10,7 @@ import {
 } from '../domain/derive'
 import { formatBytes, formatDuration, formatSpeed } from '../domain/format'
 import { Stat, Value } from '../components/value'
-import { DiscoveryPanel } from '../components/discovery'
+import { DiscoveryPanel, DiscoverySummary } from '../components/discovery'
 import { SystemPanel } from '../components/system'
 import {
   LocationChip, ProductChip, StatusBadge, TimeAgo, VerificationBadge, VersionChip,
@@ -37,6 +37,18 @@ interface Row {
 
 export default function Overview() {
   const navigate = useNavigate()
+  const [params, setParams] = useSearchParams()
+  // 'overview' is the default and carries no query string, so a bare "/" -
+  // every link back to this page - lands on it rather than on whatever tab
+  // was open last.
+  const tab = params.get('tab') === 'discovery' ? 'discovery' : 'overview'
+  const setTab = (key: string) => {
+    const next = new URLSearchParams(params)
+    if (key === 'discovery') next.set('tab', 'discovery')
+    else next.delete('tab')
+    setParams(next, { replace: true })
+  }
+
   const products = useProducts()
   // Disabled products do nothing on purpose - nothing is discovered for them
   // and nothing is downloaded - so they are noise on a page about what needs
@@ -143,26 +155,50 @@ export default function Overview() {
 
       <AttentionBand items={attention} />
 
-      <div style={{ marginBottom: 16 }}>
-        <DiscoveryPanel products={productList} />
-      </div>
-
       {/*
-        THE LIFECYCLE, AS ONE STRIP.
+        TWO TABS, not one long page.
 
-        These were five cards - New, Downloading, Downloaded, Production Ready,
-        Unverified - each with a 28px number. On any ordinary morning four of
-        the five read 0 or 1, so the widest row of the landing page spent itself
-        drawing zeroes at the same weight as the one figure that had something
-        in it.
-
-        They are not five independent measurements: they are one release's
-        journey, in order, and every one of them is a link to the same listing
-        filtered differently. Read as a row of stages with dividers between
-        them, the ORDER carries meaning the five boxes threw away - and a
-        stage with nothing in it recedes instead of shouting a zero.
+        The full per-source discovery table used to sit here inline, and a
+        deployment with a few dozen sources made it the tallest thing above
+        "what's new" - the page's actual answer - so reaching that answer
+        meant scrolling past every product's scan status first. Overview now
+        carries only the one-line summary below; the table it replaced lives
+        on the Discovery tab, a click away for whoever came here to trigger or
+        inspect a scan rather than to see what's new.
       */}
-      <Card size="small" style={{ marginBottom: 16 }} styles={{ body: { padding: 0 } }}>
+      <Tabs
+        activeKey={tab}
+        onChange={setTab}
+        items={[
+          {
+            key: 'overview',
+            label: 'Overview',
+            icon: <DashboardOutlined />,
+            children: (
+              <>
+                <div style={{ marginBottom: 16 }}>
+                  <DiscoverySummary
+                    products={productList}
+                    onViewAll={() => setTab('discovery')}
+                  />
+                </div>
+
+                {/*
+                  THE LIFECYCLE, AS ONE STRIP.
+
+                  These were five cards - New, Downloading, Downloaded, Production Ready,
+                  Unverified - each with a 28px number. On any ordinary morning four of
+                  the five read 0 or 1, so the widest row of the landing page spent itself
+                  drawing zeroes at the same weight as the one figure that had something
+                  in it.
+
+                  They are not five independent measurements: they are one release's
+                  journey, in order, and every one of them is a link to the same listing
+                  filtered differently. Read as a row of stages with dividers between
+                  them, the ORDER carries meaning the five boxes threw away - and a
+                  stage with nothing in it recedes instead of shouting a zero.
+                */}
+                <Card size="small" style={{ marginBottom: 16 }} styles={{ body: { padding: 0 } }}>
         <div
           className="slm-band"
           style={{ gridTemplateColumns: 'repeat(auto-fit, minmax(160px, 1fr))' }}
@@ -212,7 +248,7 @@ export default function Overview() {
         </div>
       </Card>
 
-      <Row gutter={[16, 16]}>
+      <Row gutter={[16, 16]} style={{ marginTop: 8 }}>
         <Col xs={24} xl={17}>
           <Card
             title="Packages published in the last 7 days"
@@ -357,6 +393,17 @@ export default function Overview() {
           </Space>
         </Col>
       </Row>
+              </>
+            ),
+          },
+          {
+            key: 'discovery',
+            label: 'Discovery',
+            icon: <RadarChartOutlined />,
+            children: <DiscoveryPanel products={productList} />,
+          },
+        ]}
+      />
     </>
   )
 }

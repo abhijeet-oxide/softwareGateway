@@ -4,7 +4,8 @@ import { App, Button, Card, Modal, Progress, Select, Space, Table, Tooltip, Typo
 // layout each person keeps. See `tablekit/README.md` for which tables get it.
 import { Table as DataTable } from '../tablekit'
 import {
-  CheckCircleFilled, ExclamationCircleFilled, PlayCircleOutlined, SyncOutlined,
+  ArrowRightOutlined, CheckCircleFilled, ExclamationCircleFilled, PlayCircleOutlined,
+  SyncOutlined,
 } from '../icons'
 import { useDiscoveryStatuses, useRunDiscovery } from '../api/queries'
 import { useCan } from '../auth/permissions'
@@ -411,6 +412,99 @@ function DiscoverSource({ product, scanning }: { product: string; scanning?: boo
         {scanning ? 'Scanning' : 'Discover'}
       </Button>
     </Tooltip>
+  )
+}
+
+/**
+ * Discovery, in one line: last run, what is scanning, what failed. Nothing
+ * more.
+ *
+ * # Why this exists beside the full panel
+ *
+ * A deployment with a few dozen sources made the per-source table the tallest
+ * thing on the Overview, ahead of the packages it opens the page to answer -
+ * so reaching "what's new" meant scrolling past every product's discovery
+ * status first. This is what the Overview tab shows instead; the table this
+ * used to render inline now lives on its own Discovery tab, reached through
+ * `onViewAll`.
+ */
+export function DiscoverySummary({
+  products, onViewAll,
+}: {
+  products: Product[]
+  onViewAll: () => void
+}) {
+  const names = products.map((p) => p.productId)
+  const results = useDiscoveryStatuses(names)
+
+  const loading = results.some((r) => r.isLoading)
+  const leaderElsewhere = results.length > 0 && results.every((r) => r.data && !r.data.running)
+
+  const allRows: DiscoverySourceState[] = results.flatMap((r) => r.data?.sources ?? [])
+  const scanning = allRows.filter((s) => s.scanning)
+  const errors = allRows.filter((s) => s.lastError)
+  const newSinceLastRun = allRows.reduce((n, s) => n + (s.lastNewPackages ?? 0), 0)
+  const lastRunAt = allRows
+    .map((s) => s.lastRunAt)
+    .filter((t): t is string => Boolean(t))
+    .sort()
+    .at(-1)
+
+  return (
+    <Card
+      size="small"
+      title={
+        <Space size={8}>
+          Discovery
+          {scanning.length > 0 && (
+            <StatusPill tone="review" icon={<SyncOutlined />}>
+              {scanning.length} source{scanning.length === 1 ? '' : 's'} scanning
+            </StatusPill>
+          )}
+        </Space>
+      }
+      loading={loading}
+      extra={
+        <Space size={12}>
+          <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+            Last run:{' '}
+            {lastRunAt ? <TimeAgo at={lastRunAt} /> : (
+              <NA reason="No scan has completed since this Coordinator started." />
+            )}
+          </Typography.Text>
+          <RunDiscoveryButton products={products} />
+        </Space>
+      }
+    >
+      {leaderElsewhere ? (
+        <Typography.Text type="secondary">
+          Discovery runs on the leader, and this replica is a follower - scans are still happening, they are
+          simply not being run from here.
+        </Typography.Text>
+      ) : allRows.length === 0 && !loading ? (
+        <Typography.Text type="secondary">
+          No source has discovery enabled in configuration, so nothing is polled automatically.
+        </Typography.Text>
+      ) : (
+        <Space size={24} wrap>
+          <Typography.Text type="secondary" style={{ fontSize: 13 }}>
+            Found{' '}
+            <Typography.Text strong>
+              <Value>{formatCount(newSinceLastRun)}</Value>
+            </Typography.Text>{' '}
+            new {newSinceLastRun === 1 ? 'release' : 'releases'} in the last sync
+          </Typography.Text>
+          {errors.length > 0 && (
+            <Typography.Text type="danger" style={{ fontSize: 13 }}>
+              {errors.length} source{errors.length === 1 ? '' : 's'} failed on the last run
+            </Typography.Text>
+          )}
+          <Button size="small" icon={<ArrowRightOutlined />} iconPosition="end" onClick={onViewAll}>
+            View Sources
+          </Button>
+        </Space>
+      )}
+    </Card>
   )
 }
 

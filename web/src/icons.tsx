@@ -65,6 +65,8 @@ import PhDotsThreeVertical from '~icons/ph/dots-three-vertical'
 import PhDownloadSimple from '~icons/ph/download-simple'
 import PhFileText from '~icons/ph/file-text'
 import PhFolder from '~icons/ph/folder'
+import PhBookOpen from '~icons/ph/book-open'
+import PhBroadcast from '~icons/ph/broadcast'
 import PhFunnel from '~icons/ph/funnel'
 import PhHardDrives from '~icons/ph/hard-drives'
 import PhLightning from '~icons/ph/lightning'
@@ -82,6 +84,7 @@ import PhRocketLaunch from '~icons/ph/rocket-launch'
 import PhScales from '~icons/ph/scales'
 import PhSealCheck from '~icons/ph/seal-check'
 import PhGear from '~icons/ph/gear'
+import PhGithubLogo from '~icons/ph/github-logo'
 import PhShieldCheck from '~icons/ph/shield-check'
 import PhSpinner from '~icons/ph/spinner'
 import PhSquaresFour from '~icons/ph/squares-four'
@@ -148,6 +151,14 @@ export const ApiOutlined = make('api', PhPlugsConnected)
 export const PartitionOutlined = make('partition', PhTreeStructure)
 export const ClusterOutlined = make('cluster', PhStack)
 export const UnorderedListOutlined = make('list', PhListBullets)
+export const BookOutlined = make('book', PhBookOpen)
+// Discovery: a sweep going out and listening for what comes back, which is
+// what polling a vendor registry on a schedule actually is.
+export const RadarChartOutlined = make('radar', PhBroadcast)
+// The one vendor mark in this file, and it earns the exception: "managed in
+// Git" is a claim about WHERE something lives, and the mark says that faster
+// than the word does.
+export const GithubOutlined = make('github', PhGithubLogo)
 
 // --- arrows and movement ----------------------------------------------------
 export const ArrowLeftOutlined = make('arrow-left', PhArrowLeft)

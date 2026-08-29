@@ -361,7 +361,7 @@ export function useUnavailable(product: string | undefined) {
  * would be empty on exactly the deployments that have the most of them.
  */
 export function useTransfers(
-  filters: { product?: string; state?: string; operation?: string; pageSize?: number } = {},
+  filters: { product?: string; state?: string; operation?: string; pageSize?: number; pageToken?: string } = {},
 ) {
   return useQuery({
     queryKey: ['transfers', filters],

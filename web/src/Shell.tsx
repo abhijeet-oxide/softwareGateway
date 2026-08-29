@@ -2,7 +2,7 @@ import { useState, type ReactNode } from 'react'
 import { Badge, Button, Tooltip } from 'antd'
 import {
   BarChartOutlined, BellOutlined, DashboardOutlined, DatabaseOutlined, HistoryOutlined,
-  InboxOutlined, PackageOutlined, ProductOutlined, QuestionCircleOutlined, SafetyOutlined,
+  InboxOutlined, PackageOutlined, ProductOutlined, QuestionCircleOutlined,
   SettingOutlined,
 } from './icons'
 import { Link, useLocation, useNavigate } from 'react-router-dom'
@@ -47,14 +47,17 @@ const NAV = [
   { key: '/products', icon: <ProductOutlined />, label: 'Products' },
   { key: '/packages', icon: <PackageOutlined />, label: 'Packages' },
   { key: '/downloads', icon: <InboxOutlined />, label: 'Downloads' },
-  {
-    key: '/security',
-    icon: <SafetyOutlined />,
-    // "Security" rather than "Vulnerabilities": the page answers questions
-    // about packages and images that have none as readily as about ones that
-    // do, and a nav entry named after the bad news is one people avoid.
-    label: 'Security',
-  },
+  // Hidden for now. Re-enabling it is this block plus `SafetyOutlined` back in
+  // the import above - the icon is in the registry, it is just not imported
+  // while nothing renders it (the build refuses an unused import).
+  // {
+  //   key: '/security',
+  //   icon: <SafetyOutlined />,
+  //   // "Security" rather than "Vulnerabilities": the page answers questions
+  //   // about packages and images that have none as readily as about ones that
+  //   // do, and a nav entry named after the bad news is one people avoid.
+  //   label: 'Security',
+  // },
   { key: '/repositories', icon: <DatabaseOutlined />, label: 'Repositories' },
   { key: '/activity', icon: <HistoryOutlined />, label: 'Activity' },
   { key: '/reports', icon: <BarChartOutlined />, label: 'Reports' },

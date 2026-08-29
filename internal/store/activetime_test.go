@@ -199,14 +199,18 @@ func (h *activeHarness) running(anchoredAgo time.Duration, leased bool) string {
 	h.exec(`UPDATE transfers SET state='running', started_at=?, last_active_at=?
 	         WHERE id = ?`, anchor, anchor, id)
 
-	state := "pending"
+	// A leased job always carries a started_at - the lease writes it - and the
+	// accrual requires one, because a job that has merely been PLANNED is not
+	// work anybody has done.
+	state, startedAt := "pending", any(nil)
 	if leased {
-		state = "leased"
+		state, startedAt = "leased", anchor
 	}
 	h.exec(`INSERT INTO jobs (transfer_id, kind, digest, size_bytes, source_repo_id,
-	                          target_repo_id, state, wave, attempts, max_attempts)
-	         VALUES (?, 'blob', ?, 1024, ?, ?, ?, 0, 1, 8)`,
-		id, "sha256:"+strings.Repeat(strconv.Itoa(h.n%10), 64), h.repoID, h.repoID, state)
+	                          target_repo_id, state, wave, attempts, max_attempts, started_at)
+	         VALUES (?, 'blob', ?, 1024, ?, ?, ?, 0, 1, 8, ?)`,
+		id, "sha256:"+strings.Repeat(strconv.Itoa(h.n%10), 64),
+		h.repoID, h.repoID, state, startedAt)
 	return id
 }
 
@@ -386,6 +390,81 @@ func TestATransferNobodyHasLeasedIsAnchoredAndCreditedNothing(t *testing.T) {
 		}
 		if !h.anchored(id) {
 			t.Error("no anchor was set, so this transfer can never accrue")
+		}
+	})
+}
+
+// WORK BETWEEN TWO SAMPLES, which is the shape the instantaneous test missed.
+//
+// A pass every thirty seconds samples a moment, and a transfer whose jobs are
+// individually short is very often between jobs at that moment. Testing only
+// "is something leased right now" credited a fifty-second download with under a
+// second - a measurement worse than the wall clock it replaced.
+func TestWorkDoneBetweenTwoPassesIsCredited(t *testing.T) {
+	eachDialect(t, func(t *testing.T, h *activeHarness) {
+		id := h.running(sweepEvery, false)
+
+		// Nothing is leased NOW - but a job of this transfer was worked on
+		// during the interval and has since finished.
+		h.exec(`UPDATE jobs SET state='succeeded', started_at=?, updated_at=?
+		         WHERE transfer_id = ?`,
+			time.Now().UTC().Add(-20*time.Second).Format("2006-01-02T15:04:05.000Z"),
+			time.Now().UTC().Add(-5*time.Second).Format("2006-01-02T15:04:05.000Z"), id)
+
+		if credited := h.accrue(); credited != 1 {
+			t.Fatalf("credited %d transfers, want 1 - a job finished during this "+
+				"interval and none happened to be leased at the sampling instant",
+				credited)
+		}
+		if got := h.active(id); got < 29 || got > 33 {
+			t.Errorf("credited %.1fs, want about %.0fs", got, sweepEvery.Seconds())
+		}
+	})
+}
+
+// PLANNING IS NOT DOWNLOADING. Writing a transfer's jobs touches them, so an
+// interval in which the planner ran and nothing else would otherwise be
+// credited as time a worker spent - which is precisely the conflation this
+// measure exists to undo.
+func TestPlanningAJobIsNotTimeSpentDownloading(t *testing.T) {
+	eachDialect(t, func(t *testing.T, h *activeHarness) {
+		id := h.running(sweepEvery, false)
+		// Freshly written, never leased: updated_at is after the anchor and
+		// there is no started_at.
+		h.exec(`UPDATE jobs SET updated_at = ?, started_at = NULL WHERE transfer_id = ?`,
+			time.Now().UTC().Format("2006-01-02T15:04:05.000Z"), id)
+
+		h.accrue()
+		if got := h.active(id); got != 0 {
+			t.Errorf("credited %.1fs for jobs that were planned and never run", got)
+		}
+	})
+}
+
+// THE INVARIANT that makes the figure believable: it is a SUBSET of the wall
+// clock, and can never exceed it.
+//
+// It did. A transfer still PLANNING is live, so the re-anchor pass gave it an
+// anchor; minutes later the first lease set started_at to that later moment,
+// and every accrual after that measured from the earlier anchor. The seeded
+// estate showed it immediately - fifty seconds of work inside forty-nine
+// seconds of existence, which is the kind of number that makes a reader
+// distrust the page rather than the figure.
+func TestATransferIsNotCreditedBeforeItStarted(t *testing.T) {
+	eachDialect(t, func(t *testing.T, h *activeHarness) {
+		id := h.running(sweepEvery, true)
+		// The shape planning actually leaves behind: live, not yet leased, so
+		// neither started nor anchored.
+		h.exec(`UPDATE transfers SET state='planning', started_at=NULL,
+		                             last_active_at=NULL WHERE id = ?`, id)
+
+		h.accrue()
+		if got := h.active(id); got != 0 {
+			t.Errorf("credited %.1fs to a transfer that had not started", got)
+		}
+		if h.anchored(id) {
+			t.Error("a transfer that has not started was anchored, so the interval " +
+				"before its first lease will be credited as time spent downloading")
 		}
 	})
 }

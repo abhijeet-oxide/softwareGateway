@@ -73,8 +73,40 @@ func (p *Packages) AccrueActiveTime(ctx context.Context, since time.Duration) (i
 
 	now := p.dialect.Now()
 	sinceAnchor := p.dialect.SecondsBetween("last_active_at", now)
-	leased := `EXISTS (SELECT 1 FROM jobs j
-	                    WHERE j.transfer_id = transfers.id AND j.state = 'leased')`
+
+	/*
+	  WAS THIS TRANSFER WORKED ON DURING THE INTERVAL - not "is a job of it
+	  leased at this instant".
+
+	  The instantaneous test is the obvious one and it under-counts savagely.
+	  A pass every thirty seconds samples a moment, and a transfer whose jobs
+	  are individually short is very often between jobs at that moment: the
+	  seeded estate here ran nine transfers for about fifty seconds each and the
+	  instantaneous test credited them 0.3 to 2.3 seconds. A measurement that
+	  reports a fifty-second download as taking under a second is worse than the
+	  wall clock it replaced.
+
+	  `updated_at` moves when a job is leased, when it reports progress and when
+	  it completes, so "any job of this transfer changed since the anchor" is
+	  the question the interval actually poses. The leased clause stays beside
+	  it for the opposite shape: one 8 GB blob occupying a worker for half an
+	  hour changes nothing at all while it streams, and every second of that was
+	  spent downloading.
+
+	  An outage does not satisfy either for long. A crashed worker's jobs stay
+	  `leased` only until the reaper expires them - one pass, since this runs
+	  immediately before it - and nothing updates them thereafter.
+	*/
+	//	`started_at IS NOT NULL` is what keeps PLANNING out of it. Creating a
+	//	job writes updated_at like anything else, so without this a transfer
+	//	whose jobs were merely written during the interval would be credited
+	//	with time no worker spent on it - and the whole point of measuring this
+	//	separately from the wall clock is that waiting is not downloading.
+	worked := `EXISTS (SELECT 1 FROM jobs j
+	                    WHERE j.transfer_id = transfers.id
+	                      AND j.started_at IS NOT NULL
+	                      AND (j.state = 'leased'
+	                           OR j.updated_at > transfers.last_active_at))`
 
 	// 1. THE ACCRUAL. Live, anchored, plausible, and with something in a
 	//    worker's hands right now.
@@ -84,10 +116,11 @@ func (p *Packages) AccrueActiveTime(ctx context.Context, since time.Duration) (i
 		       last_active_at = `+now+`,
 		       updated_at     = `+now+`
 		 WHERE state IN (`+liveTransferStates+`)
+		   AND started_at IS NOT NULL
 		   AND last_active_at IS NOT NULL
 		   AND `+sinceAnchor+` >= 0
 		   AND `+sinceAnchor+` <= `+maxGap+`
-		   AND `+leased))
+		   AND `+worked))
 	if err != nil {
 		return 0, fmt.Errorf("accrue active transfer time: %w", err)
 	}
@@ -96,20 +129,30 @@ func (p *Packages) AccrueActiveTime(ctx context.Context, since time.Duration) (i
 		return 0, fmt.Errorf("accrue active transfer time: %w", err)
 	}
 
-	// 2. RE-ANCHOR everything else that is live: nothing in flight, no anchor
-	//    yet, or a gap too old to believe. All three mean "start measuring from
-	//    now", and none of them mean "add that gap".
+	// 2. RE-ANCHOR everything else that has started: nothing worked on it, no
+	//    anchor yet, or a gap too old to believe. All three mean "start
+	//    measuring from now", and none of them mean "add that gap".
 	//
-	//    After step 1 the credited rows have an anchor of now and a job leased,
-	//    so they do not match this and cannot be credited twice.
+	//    `started_at IS NOT NULL` is the condition both this and the accrual
+	//    above turn on, and leaving it out was a real defect rather than a
+	//    tidiness one. A transfer still PLANNING is live, so it was anchored;
+	//    minutes later the first lease set its started_at to that later moment,
+	//    and every subsequent accrual measured from the earlier anchor. The
+	//    stored figure then exceeded the wall clock it is a subset of - a
+	//    download reporting fifty seconds of work inside forty-nine seconds of
+	//    existence.
+	//
+	//    After step 1 the credited rows have an anchor of now and were worked
+	//    on, so they do not match this and cannot be credited twice.
 	if _, err := p.db.ExecContext(ctx, p.dialect.Rewrite(`
 		UPDATE transfers
 		   SET last_active_at = `+now+`
 		 WHERE state IN (`+liveTransferStates+`)
+		   AND started_at IS NOT NULL
 		   AND (last_active_at IS NULL
 		        OR `+sinceAnchor+` < 0
 		        OR `+sinceAnchor+` > `+maxGap+`
-		        OR NOT `+leased+`)`)); err != nil {
+		        OR NOT `+worked+`)`)); err != nil {
 		return 0, fmt.Errorf("re-anchor active transfer time: %w", err)
 	}
 

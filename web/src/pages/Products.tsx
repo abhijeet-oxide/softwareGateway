@@ -105,7 +105,11 @@ function VersionHistory({ product }: { product: Product }) {
             const s = downloadSeconds(pkg)
             return s === undefined
               ? <NA reason="This release has not been downloaded." />
-              : <Value>{formatDuration(s)}</Value>
+              : (
+                  <Tooltip title="Time a worker was actually moving this release. Any period it spent waiting for one - or waiting out an outage - is not counted.">
+                    <span><Value>{formatDuration(s)}</Value></span>
+                  </Tooltip>
+                )
           },
         },
       ]}

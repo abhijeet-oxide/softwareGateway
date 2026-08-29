@@ -592,6 +592,36 @@ type InspectPackageResponse struct {
 	Started bool `json:"started,omitempty"`
 }
 
+// CancelAnalysisResponse is POST
+// /api/v1/products/{product}/packages/{package}:cancelAnalysis.
+//
+// Two booleans rather than one, because they are two different promises and a
+// caller must be able to tell which it was given. See the handler for why the
+// claim and the walking are separable at all.
+type CancelAnalysisResponse struct {
+	Product string `json:"product"`
+	Package string `json:"package"`
+
+	// Stopped means a claim was released - the release is no longer marked as
+	// being analysed, and can be analysed again now.
+	//
+	// False is not a failure: the walk finished between the reader deciding to
+	// stop it and the request arriving.
+	Stopped bool `json:"stopped"`
+
+	// StoppedHere means the walking itself has been cancelled, because the
+	// Coordinator that answered this request is the one that was doing it.
+	//
+	// False with Stopped true means the walk is running on another replica: it
+	// will carry on reading the vendor's registry until its own deadline, and
+	// its result will be discarded because it no longer holds the claim.
+	StoppedHere bool `json:"stoppedHere"`
+
+	// Package_ is the release as it stands now, so a caller need not re-read it
+	// to find out what state the stop left behind.
+	Package_ Package `json:"packageState"`
+}
+
 // ListArtifactsResponse is returned by
 // GET /api/v1/products/{product}/packages/{package}/artifacts.
 type ListArtifactsResponse struct {

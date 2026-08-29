@@ -242,6 +242,9 @@ type Server struct {
 	// comparisons is progress for comparisons in flight - see
 	// compareprogress.go for why it lives in memory.
 	comparisons *compareTracker
+	// analyses are the manifest-tree walks THIS replica is running, so one can
+	// be stopped rather than only disowned. See internal/api/analysis.go.
+	analyses *analysisRunner
 }
 
 // NewServer builds the HTTP surface.
@@ -257,7 +260,11 @@ func NewServer(deps Deps) *Server {
 	if deps.Logger == nil {
 		deps.Logger = slog.Default()
 	}
-	s := &Server{deps: deps, comparisons: newCompareTracker()}
+	s := &Server{
+		deps:        deps,
+		comparisons: newCompareTracker(),
+		analyses:    newAnalysisRunner(),
+	}
 	s.router = s.routes()
 	return s
 }

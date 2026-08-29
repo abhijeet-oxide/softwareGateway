@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -1030,6 +1031,9 @@ func (s *Server) resolvePackage(w http.ResponseWriter, r *http.Request, productN
 const (
 	packageVerbInspect = "inspect"
 	packageVerbCompare = "compare"
+	// The counterpart to inspect. A walk somebody can start and cannot stop is
+	// a walk they learn not to start - see internal/api/analysis.go.
+	packageVerbCancelAnalysis = "cancelAnalysis"
 )
 
 // handlePackageCustomMethod dispatches POST /packages/{package}:<verb>.
@@ -1056,14 +1060,14 @@ func (s *Server) handlePackageCustomMethod(w http.ResponseWriter, r *http.Reques
 	}
 	ref, verb := segment[:i], segment[i+1:]
 
-	switch verb {
-	case packageVerbInspect, packageVerbCompare, packageVerbCompareSecurity,
-		packageVerbSyncSecurity, packageVerbCancelSecurity:
-	default:
+	known := []string{
+		packageVerbInspect, packageVerbCancelAnalysis, packageVerbCompare,
+		packageVerbCompareSecurity, packageVerbSyncSecurity, packageVerbCancelSecurity,
+	}
+	if !slices.Contains(known, verb) {
 		Error(w, r, v1.CodeInvalidArgument, fmt.Sprintf(
-			"%q is not a custom method on a package (known: %s, %s, %s, %s, %s)",
-			verb, packageVerbInspect, packageVerbCompare,
-			packageVerbCompareSecurity, packageVerbSyncSecurity, packageVerbCancelSecurity))
+			"%q is not a custom method on a package (known: %s)",
+			verb, strings.Join(known, ", ")))
 		return
 	}
 
@@ -1085,6 +1089,8 @@ func (s *Server) handlePackageCustomMethod(w http.ResponseWriter, r *http.Reques
 		s.handleSyncPackageSecurity(w, r)
 	case packageVerbCancelSecurity:
 		s.handleCancelPackageSecuritySync(w, r)
+	case packageVerbCancelAnalysis:
+		s.handleCancelAnalysis(w, r)
 	default:
 		s.handleInspectPackage(w, r)
 	}
@@ -1494,12 +1500,39 @@ func (s *Server) analyseInBackground(ctx context.Context, productName string, pk
 	ctx, cancel := context.WithTimeout(ctx, backgroundAnalysisDeadline)
 	defer cancel()
 
+	// REGISTERED, so it can be stopped rather than only disowned. Without this
+	// a reader who stopped a walk released its claim and then watched the walk
+	// carry on reading the vendor's registry for up to the deadline - which is
+	// the request budget the stop was usually trying to free.
+	ctx, done := s.analyses.begin(ctx, pkg.ID)
+	defer done()
+
 	_, err := s.deps.Discovery.InspectPackage(ctx, s.deps.Packages, pkg, productName)
-	if err != nil {
-		s.deps.Logger.WarnContext(ctx, "a requested analysis did not finish",
-			"product", productName, "package", pkg.Tag, "error", err)
+
+	// A STOP IS NOT A FAILURE, and it must not be written down as one.
+	//
+	// The handler that stopped this has already released the claim. Recording
+	// a failure here would put a red tag on a release nobody had trouble with,
+	// hide it from the background analyser - which skips failed rows - and,
+	// worst of the three, overwrite a fresh claim if somebody has restarted the
+	// walk in the meantime.
+	record, cause := analysisEnded(err)
+	if !record {
+		s.deps.Logger.InfoContext(ctx, "an analysis was stopped before it finished",
+			"product", productName, "package", pkg.Tag)
+		return
 	}
-	if finishErr := s.deps.Packages.FinishAnalysis(ctx, pkg.ID, err); finishErr != nil {
+	if cause != nil {
+		s.deps.Logger.WarnContext(ctx, "a requested analysis did not finish",
+			"product", productName, "package", pkg.Tag, "error", cause)
+	}
+
+	// context.WithoutCancel: the deadline above may be exactly what ended the
+	// walk, and recording that it ended is the one write that must still
+	// happen when it does. Without it a timed-out walk leaves the release
+	// marked as being analysed until the staleness sweep notices.
+	if finishErr := s.deps.Packages.FinishAnalysis(
+		context.WithoutCancel(ctx), pkg.ID, cause); finishErr != nil {
 		s.deps.Logger.ErrorContext(ctx, "could not record the end of an analysis",
 			"package", pkg.Tag, "error", finishErr)
 	}

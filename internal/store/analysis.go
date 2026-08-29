@@ -132,3 +132,43 @@ func (p *Packages) RecoverAnalyses(ctx context.Context, staleAfter time.Duration
 	}
 	return int(n), nil
 }
+
+// CancelAnalysis releases a walk's claim so the release can be walked again.
+//
+// Reports whether there was a claim to release. False is an ordinary answer,
+// not a failure: the walk finished between somebody deciding to stop it and the
+// request arriving, and that is a thing to say rather than an error to raise.
+//
+// # Why the claim goes back to UNHELD rather than to failed
+//
+// The same reason RecoverAnalyses releases rather than fails: nothing is wrong
+// with the release. Marking it `failed` would put a red tag on a perfectly good
+// release, and - the part that actually costs something - the background
+// analyser skips failed rows, so a release somebody stopped once would never be
+// walked again without a person asking for it explicitly.
+//
+// Unheld means the next pass picks it up, and the reader who stopped it can
+// start it again from the same button they stopped it with.
+//
+// # What this does NOT do
+//
+// It does not reach into the process doing the walking. A walk this replica
+// started is cancelled in memory by the caller; a walk running on ANOTHER
+// replica keeps reading the vendor's registry until its own deadline, and
+// releasing the claim is all any replica can do about that from here. What the
+// release stops doing immediately is READING AS CLAIMED, which is what the
+// interface shows and what the queue tests.
+func (p *Packages) CancelAnalysis(ctx context.Context, packageID int64) (bool, error) {
+	res, err := p.db.ExecContext(ctx, p.dialect.Rewrite(`
+		UPDATE packages
+		   SET analysis_state = '', analysis_error = NULL, updated_at = `+p.dialect.Now()+`
+		 WHERE id = ? AND analysis_state = ?`), packageID, AnalysisRunning)
+	if err != nil {
+		return false, fmt.Errorf("stop the analysis of package %d: %w", packageID, err)
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return false, fmt.Errorf("stop the analysis of package %d: %w", packageID, err)
+	}
+	return n > 0, nil
+}

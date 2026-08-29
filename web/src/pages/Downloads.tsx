@@ -1,8 +1,11 @@
 import { Alert, Button, Card, Col, Row, Space, Table, Tabs, Tag, Tooltip, Typography } from 'antd'
+// The working-surface table: resizable, reorderable, pinnable columns whose
+// layout each person keeps. See `tablekit/README.md` for which tables get it.
+import { Table as DataTable } from '../tablekit'
 import {
   ArrowRightOutlined, BookOutlined, CloudDownloadOutlined, HistoryOutlined,
   RocketOutlined, ThunderboltOutlined,
-} from '@ant-design/icons'
+} from '../icons'
 import { useState } from 'react'
 import { Link } from 'react-router-dom'
 import {
@@ -15,7 +18,7 @@ import { ManagedInGit, TimeAgo, TransferStateTag } from '../components/chips'
 import { EmptyStateCard, ErrorState, SearchBar } from '../components/layout'
 import { DownloadProgress } from '../components/progress'
 import { PriorityControl, QueueControls } from '../components/queuecontrols'
-import { c, mono } from '../uikit'
+import { c, mono, StatusPill } from '../uikit'
 import type { AutoDownloadRuleView, DownloadView, ReplicationView, Transfer } from '../api/types'
 
 /**
@@ -141,7 +144,7 @@ function MethodTag({ transfer }: { transfer: Transfer }) {
   if (transfer.strategy === 'relocate') {
     return (
       <Tooltip title="The registry moved it between two of its own repositories. No bytes crossed the wire.">
-        <Tag color="green" style={{ marginInlineEnd: 0 }}>Relocate</Tag>
+        <StatusPill tone="ok" dot={false} style={{ marginInlineEnd: 0 }}>Relocate</StatusPill>
       </Tooltip>
     )
   }
@@ -291,7 +294,8 @@ export default function Downloads() {
                 action={<Link to="/packages"><Button type="primary">Find a package to download</Button></Link>}
               />
             ) : (
-              <Table<Transfer>
+              <DataTable<Transfer>
+                tableEnhancedKey="downloads-ongoing"
                 size="small"
                 pagination={{
                   current: transferPage,
@@ -378,7 +382,9 @@ export default function Downloads() {
                 action={<Link to="/packages"><Button>Find a package to download</Button></Link>}
               />
             ) : (
-              <Table<Transfer>
+              <DataTable<Transfer>
+                tableEnhancedKey="downloads-finished"
+                allow_export
                 size="small"
                 pagination={{
                   current: transferPage,
@@ -458,7 +464,9 @@ export default function Downloads() {
                 action={<Link to="/packages"><Button>Find a release to promote</Button></Link>}
               />
             ) : (
-              <Table<Transfer>
+              <DataTable<Transfer>
+                tableEnhancedKey="downloads-promotions"
+                allow_export
                 size="small"
                 pagination={{
                   current: promotionPage,
@@ -529,7 +537,8 @@ export default function Downloads() {
               <TableSearch value={rulesSearch} onChange={setRulesSearch} />
               <ManagedInGit />
             </TableToolbar>
-            <Table<WithProduct<DownloadView>>
+            <DataTable<WithProduct<DownloadView>>
+              tableEnhancedKey="downloads-by-product"
               size="small"
               pagination={false}
               dataSource={visibleRules}
@@ -612,9 +621,9 @@ export default function Downloads() {
                   {
                     title: 'State',
                     width: 130,
-                    render: (_, r) => r.enabled ? <Tag color="green">Enabled</Tag> : (
+                    render: (_, r) => r.enabled ? <StatusPill tone="ok">Enabled</StatusPill> : (
                       <Tooltip title="A rule is turned off in Git and nowhere else. There is no runtime override, so there is no toggle here.">
-                        <Tag style={{ marginInlineEnd: 0 }}>Disabled</Tag>
+                        <StatusPill tone="neutral">Disabled</StatusPill>
                       </Tooltip>
                     ),
                   },

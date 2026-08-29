@@ -1,12 +1,15 @@
 import { useState } from 'react'
-import { Button, Card, DatePicker, Descriptions, Drawer, Select, Space, Table, Tag, Typography } from 'antd'
-import { DownloadOutlined } from '@ant-design/icons'
+import { Button, Card, DatePicker, Descriptions, Drawer, Select, Space, Tag, Typography } from 'antd'
+// The working-surface table: resizable, reorderable, pinnable columns whose
+// layout each person keeps. See `tablekit/README.md` for which tables get it.
+import { Table as DataTable } from '../tablekit'
+import { DownloadOutlined } from '../icons'
 import { Link, useSearchParams } from 'react-router-dom'
 import { useAuditEvents, useProducts } from '../api/queries'
 import { TimeAgo } from '../components/chips'
 import { NA, Value } from '../components/value'
 import { EmptyStateCard, ErrorState, PageHeader } from '../components/layout'
-import { mono } from '../uikit'
+import { mono, StatusPill } from '../uikit'
 import type { AuditEvent } from '../api/types'
 
 /**
@@ -149,7 +152,9 @@ export default function Activity() {
         />
       ) : (
         <Card styles={{ body: { padding: 0 } }}>
-          <Table
+          <DataTable
+            tableEnhancedKey="activity"
+            allow_export
             loading={events.isLoading}
             dataSource={rows}
             rowKey={(e) => e.id}
@@ -211,7 +216,9 @@ export default function Activity() {
                 title: 'Result',
                 width: 110,
                 render: (_, e) =>
-                  e.outcome === 'failure' ? <Tag color="red">Failed</Tag> : <Tag color="green">Succeeded</Tag>,
+                  e.outcome === 'failure'
+                    ? <StatusPill tone="danger">Failed</StatusPill>
+                    : <StatusPill tone="ok">Succeeded</StatusPill>,
               },
               {
                 title: 'Who',

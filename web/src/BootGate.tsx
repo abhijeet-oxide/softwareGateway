@@ -1,5 +1,5 @@
 import { useEffect, useState, type ReactNode } from 'react'
-import { ReloadOutlined } from '@ant-design/icons'
+import { ReloadOutlined } from './icons'
 import { useQuery } from '@tanstack/react-query'
 import { api } from './api/client'
 import type { VersionResponse } from './api/types'

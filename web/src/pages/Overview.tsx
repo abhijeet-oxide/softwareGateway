@@ -1,7 +1,7 @@
 import { useMemo } from 'react'
 import { Button, Card, Col, Row, Space, Table, Tabs, Typography } from 'antd'
-import { c } from '../uikit'
-import { CloudDownloadOutlined, DashboardOutlined, RadarChartOutlined } from '@ant-design/icons'
+import { c, FieldLabel } from '../uikit'
+import { CloudDownloadOutlined, DashboardOutlined, RadarChartOutlined } from '../icons'
 import { Link, useNavigate, useSearchParams } from 'react-router-dom'
 import { useProducts, usePackagesByProducts, useReports, useTransfers } from '../api/queries'
 import {
@@ -222,15 +222,7 @@ export default function Overview() {
                 padding: '16px 20px', minWidth: 0,
               }}
             >
-              <div
-                style={{
-                  fontSize: 11, fontWeight: 600, letterSpacing: '0.06em',
-                  textTransform: 'uppercase', color: c.text2, whiteSpace: 'nowrap',
-                  overflow: 'hidden', textOverflow: 'ellipsis',
-                }}
-              >
-                {stage.title}
-              </div>
+<FieldLabel>{stage.title}</FieldLabel>
               <div
                 style={{
                   fontSize: 30, fontWeight: 600, lineHeight: 1.15, marginTop: 4,

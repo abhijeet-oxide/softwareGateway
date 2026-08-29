@@ -1,14 +1,16 @@
 import { useState } from 'react'
 import { Button, Card, Space, Table, Tag, Tooltip, Typography } from 'antd'
-import { CheckCircleFilled, CloseCircleFilled, SafetyOutlined } from '@ant-design/icons'
-import ConnectIcon from '@iconify-react/hugeicons/connect';
+// The working-surface table: resizable, reorderable, pinnable columns whose
+// layout each person keeps. See `tablekit/README.md` for which tables get it.
+import { Table as DataTable } from '../tablekit'
+import { ApiOutlined, CheckCircleFilled, CloseCircleFilled, SafetyOutlined } from '../icons'
 import { useConnectivity, useProducts } from '../api/queries'
 import { useCan } from '../auth/permissions'
 import { RepoLink } from '../components/chips'
 import { Value } from '../components/value'
 import { formatCount } from '../domain/format'
 import { EmptyStateCard, ErrorState, PageHeader } from '../components/layout'
-import { c } from '../uikit'
+import { c, StatusPill } from '../uikit'
 import type { Repository } from '../api/types'
 import { Icon, repositoryIcon } from '../components/icons'
 
@@ -56,7 +58,7 @@ export default function Repositories() {
           >
             <Button
               type="primary"
-              icon={<ConnectIcon style={{ width: '1em', height: '1em' }} />}
+              icon={<ApiOutlined />}
               disabled={!mayOperate}
               loading={connectivity.isFetching}
               onClick={() => { setChecking(true); void connectivity.refetch() }}
@@ -75,7 +77,8 @@ export default function Repositories() {
         />
       ) : (
         <Card styles={{ body: { padding: 0 } }}>
-          <Table<Row>
+          <DataTable<Row>
+            tableEnhancedKey="repositories"
             loading={products.isLoading}
             dataSource={rows}
             rowKey={(r) => `${r.product}-${r.kind}-${r.repo.name}`}
@@ -121,11 +124,11 @@ export default function Repositories() {
                             width: 110,
                             render: (_, s) =>
                               s.status === 'OK' ? (
-                                <Tag color="green">OK</Tag>
+                                <StatusPill tone="ok">OK</StatusPill>
                               ) : s.status === 'SKIPPED' ? (
                                 <Tag>Skipped</Tag>
                               ) : (
-                                <Tag color="red">Failed</Tag>
+                                <StatusPill tone="danger">Failed</StatusPill>
                               ),
                           },
                           { title: 'Detail', render: (_, s) => <Value>{s.detail}</Value> },
@@ -225,7 +228,9 @@ export default function Repositories() {
               {
                 title: 'Enabled',
                 width: 100,
-                render: (_, r) => (r.repo.enabled ? <Tag color="green">Yes</Tag> : <Tag>No</Tag>),
+                render: (_, r) => (r.repo.enabled
+                  ? <StatusPill tone="ok">Yes</StatusPill>
+                  : <StatusPill tone="neutral">No</StatusPill>),
               },
             ]}
           />

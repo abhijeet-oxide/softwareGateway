@@ -1,13 +1,10 @@
 import { useState, type ReactNode } from 'react'
 import { Badge, Button, Tooltip } from 'antd'
 import {
-  BarChartOutlined, BellOutlined,
-  DatabaseOutlined, HistoryOutlined, SafetyOutlined,
-  QuestionCircleOutlined, SettingOutlined,
-} from '@ant-design/icons'
-import DashboardOutlineIcon from '@iconify-react/material-symbols/dashboard-outline';
-import ProductCatalogIcon from '@iconify-react/fluent-mdl2/product-catalog';
-import { DownloadIcon, Icon, PackageIcon } from './components/icons'
+  BarChartOutlined, BellOutlined, DashboardOutlined, DatabaseOutlined, HistoryOutlined,
+  InboxOutlined, PackageOutlined, ProductOutlined, QuestionCircleOutlined,
+  SettingOutlined,
+} from './icons'
 import { Link, useLocation, useNavigate } from 'react-router-dom'
 import { useIdentity } from './auth/permissions'
 import { useTransfers, useVersion } from './api/queries'
@@ -46,18 +43,13 @@ function loadCollapsed(): boolean {
  * in its bar.
  */
 const NAV = [
-  { key: '/', icon: <DashboardOutlineIcon height="1em" />, label: 'Overview' },
-  { key: '/products', icon: <ProductCatalogIcon height="1em" />, label: 'Products' },
-  {
-    key: '/packages',
-    icon: <Icon as={PackageIcon} title="Packages" className="anticon" />,
-    label: 'Packages',
-  },
-  {
-    key: '/downloads',
-    icon: <Icon as={DownloadIcon} title="Downloads" className="anticon" />,
-    label: 'Downloads',
-  },
+  { key: '/', icon: <DashboardOutlined />, label: 'Overview' },
+  { key: '/products', icon: <ProductOutlined />, label: 'Products' },
+  { key: '/packages', icon: <PackageOutlined />, label: 'Packages' },
+  { key: '/downloads', icon: <InboxOutlined />, label: 'Downloads' },
+  // Hidden for now. Re-enabling it is this block plus `SafetyOutlined` back in
+  // the import above - the icon is in the registry, it is just not imported
+  // while nothing renders it (the build refuses an unused import).
   // {
   //   key: '/security',
   //   icon: <SafetyOutlined />,
@@ -131,11 +123,30 @@ export function Shell({ children }: { children: ReactNode }) {
   ).length
   const failing = (transfers?.transfers ?? []).filter((t) => t.state === 'FAILED').length
 
+  /*
+    NOTHING is selected on a page the navigation does not list, and that is a
+    real state rather than an oversight.
+
+    This used to fall back to '/', so every unlisted route - Security, which is
+    reachable from a release and from a listing but has no entry of its own -
+    lit the Overview item and titled the bar "Overview". The reader was told
+    they were somewhere they were not.
+  */
   const selected = NAV.map((n) => n.key)
     .filter((k) => (k === '/' ? location.pathname === '/' : location.pathname.startsWith(k)))
-    .sort((a, b) => b.length - a.length)[0] ?? '/'
+    .sort((a, b) => b.length - a.length)[0]
 
-  const section = NAV.find((n) => n.key === selected)?.label ?? brand.appName
+  // Where you are, for the pages that are reached THROUGH something rather
+  // than from the navigation. Longest prefix wins, so /packages/compare is a
+  // comparison rather than a package.
+  const UNLISTED: [string, string][] = [
+    ['/packages/compare', 'Compare releases'],
+    ['/security', 'Security'],
+  ]
+  const section = NAV.find((n) => n.key === selected)?.label
+    ?? UNLISTED.filter(([path]) => location.pathname.startsWith(path))
+      .sort((a, b) => b[0].length - a[0].length)[0]?.[1]
+    ?? brand.appName
 
   const items: NavItem[] = NAV.map((n) => ({
     key: n.key,

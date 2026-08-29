@@ -129,10 +129,22 @@ export function buildTheme(
       colorInfoBorder: p.reviewBd,
 
       borderRadius: tokens.shape.borderRadius,
+      // The whole radius ramp, stated. Left to itself Ant derives these from
+      // `borderRadius` and lands on 4 for a tag and 12 for a modal, which is
+      // not the same ramp the stylesheet uses - and a card with a 12px corner
+      // holding a button with a 4px one is the tell that two systems are
+      // drawing the same screen.
+      borderRadiusXS: 4,
+      borderRadiusSM: 6,
+      borderRadiusLG: 12,
       controlHeight: compact ? tokens.shape.controlHeight - 4 : tokens.shape.controlHeight,
       fontSize: base,
       fontFamily: tokens.type.fontFamily,
       fontFamilyCode: tokens.type.monoFamily,
+      // A hairline, not a rule. The platform separates with the thinnest line
+      // the display can draw and lets shadow and value do the rest.
+      lineWidth: 1,
+      colorSplit: p.border,
 
       // three planes: pastel page canvas < content surface < floating surface
       colorBgLayout: p.canvas,
@@ -145,15 +157,16 @@ export function buildTheme(
       colorTextSecondary: p.text2,
       colorTextTertiary: p.text3,
 
-      // Ant's default is a black halo with no offset. Depth should read as
-      // light falling on something, so it gets an offset and the palette's own
-      // shade rather than an outline pretending to be a shadow.
+      // The same three-ingredient elevation the stylesheet uses (see
+      // tokens.css): a hairline for the edge, a tight contact shadow, a wide
+      // ambient cast. Ant's own default is a black halo with no offset, which
+      // reads as a glow rather than as a thing sitting on a page.
       boxShadow: dark
-        ? "0 1px 2px rgba(0,0,0,0.5)"
-        : "0 1px 2px rgba(16,24,40,0.05), 0 1px 3px rgba(16,24,40,0.04)",
+        ? "0 0 0 0.5px rgba(255,255,255,0.06), 0 1px 1px rgba(0,0,0,0.4), 0 3px 8px -2px rgba(0,0,0,0.45)"
+        : "0 0 0 0.5px rgba(16,24,40,0.05), 0 1px 1px rgba(16,24,40,0.04), 0 3px 8px -2px rgba(16,24,40,0.06)",
       boxShadowSecondary: dark
-        ? "0 18px 44px -14px rgba(0,0,0,0.72), 0 6px 16px -8px rgba(0,0,0,0.6)"
-        : "0 12px 32px -10px rgba(16,24,40,0.18), 0 4px 10px -4px rgba(16,24,40,0.1)",
+        ? "0 0 0 0.5px rgba(255,255,255,0.09), 0 8px 20px -6px rgba(0,0,0,0.55), 0 32px 64px -24px rgba(0,0,0,0.7)"
+        : "0 0 0 0.5px rgba(16,24,40,0.08), 0 8px 20px -6px rgba(16,24,40,0.14), 0 32px 64px -24px rgba(16,24,40,0.24)",
     },
     components: {
       Layout: {
@@ -169,18 +182,27 @@ export function buildTheme(
         darkItemSelectedBg: p.navBgActive,
         darkItemColor: p.navFg,
         darkItemHoverBg: p.navBgHover,
+        itemBorderRadius: 8,
+        itemHeight: 34,
       },
       Button: {
         fontWeight: 500,
         primaryShadow: "none",
         defaultShadow: "none",
         dangerShadow: "none",
+        // A button is the control people touch most, so it gets the platform's
+        // proportions rather than the library's: a little wider than tall, and
+        // the same corner as the field beside it.
+        paddingInline: 14,
+        paddingInlineSM: 10,
+        contentFontSize: base,
       },
       Card: {
         boxShadowTertiary: dark
-          ? "5px 5px 12px rgba(0,0,0,0.45), -4px -4px 10px rgba(255,255,255,0.035)"
-          : "5px 5px 12px rgba(163,177,198,0.28), -4px -4px 10px rgba(255,255,255,0.85)",
+          ? "0 0 0 0.5px rgba(255,255,255,0.06), 0 1px 1px rgba(0,0,0,0.4), 0 3px 8px -2px rgba(0,0,0,0.45)"
+          : "0 0 0 0.5px rgba(16,24,40,0.05), 0 1px 1px rgba(16,24,40,0.04), 0 3px 8px -2px rgba(16,24,40,0.06)",
         headerFontSize: base,
+        borderRadiusLG: 12,
       },
       Table: {
         headerBg: p.surface2,
@@ -190,7 +212,12 @@ export function buildTheme(
         cellPaddingBlock: compact ? 6 : 10,
         cellPaddingBlockSM: 4,
         cellPaddingInlineSM: 8,
-        rowHoverBg: dark ? p.surface2 : p.brandSoft,
+        // A row lights up on approach without changing colour: the brand tint
+        // used to be the hover, which meant every row looked selected as the
+        // pointer crossed the table. Selection is the accent's job.
+        rowHoverBg: p.surface2,
+        rowSelectedBg: p.brandSoft,
+        rowSelectedHoverBg: p.brandSoft,
       },
       Tabs: {
         titleFontSize: base,
@@ -200,16 +227,67 @@ export function buildTheme(
       Tag: {
         defaultBg: p.surface2,
         defaultColor: p.text2,
+        borderRadiusSM: 6,
       },
       Tree: {
         nodeSelectedBg: p.brandSoft,
       },
+      // The platform's segmented control: a capsule track with a raised
+      // capsule riding inside it.
       Segmented: {
         itemSelectedBg: p.surface,
         trackBg: p.surface2,
+        borderRadius: 999,
+        borderRadiusSM: 999,
+        borderRadiusLG: 999,
+        trackPadding: 2,
       },
       Statistic: {
         contentFontSize: scale === "large" ? 24 : 20,
+      },
+      Modal: {
+        borderRadiusLG: 18,
+        // A sheet dims the page rather than blacking it out, so what it is
+        // over stays readable underneath it.
+        contentBg: p.surface,
+      },
+      Drawer: {
+        borderRadiusLG: 18,
+      },
+      Tooltip: {
+        borderRadius: 8,
+        colorBgSpotlight: dark ? "rgba(58,58,60,0.92)" : "rgba(28,28,30,0.88)",
+      },
+      Popover: {
+        borderRadiusLG: 12,
+      },
+      Dropdown: {
+        borderRadiusLG: 12,
+        // 8 rather than Ant's 4: an item inside a 12px menu wants a corner
+        // that belongs to the same family.
+        borderRadiusSM: 8,
+        controlItemBgHover: p.brandSoft,
+      },
+      Input: {
+        paddingInline: 11,
+      },
+      Select: {
+        borderRadiusSM: 6,
+        optionSelectedBg: p.brandSoft,
+      },
+      Switch: {
+        // The platform's switch is a full capsule and noticeably wider than
+        // the library's default, which is what makes it read as a physical
+        // toggle rather than as a rounded checkbox.
+        trackHeight: 22,
+        trackMinWidth: 38,
+        handleSize: 18,
+      },
+      Notification: {
+        borderRadiusLG: 14,
+      },
+      Message: {
+        borderRadiusLG: 12,
       },
     },
   };

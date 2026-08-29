@@ -159,7 +159,7 @@ export default function Reports() {
                     return (
                       <div key={v.day} style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
                         <span style={{ width: 88, fontSize: 12, color: c.text2 }}>{v.day}</span>
-                        <div style={{ flex: 1, background: c.surface2, borderRadius: 3, height: 18 }}>
+                        <div style={{ flex: 1, background: c.track, borderRadius: 3, height: 18 }}>
                           <div
                             style={{
                               width: `${(value / peak) * 100}%`,

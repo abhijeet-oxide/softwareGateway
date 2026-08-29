@@ -1,10 +1,12 @@
 import { useEffect, useState } from 'react'
+import { App, Button, Card, Modal, Progress, Select, Space, Table, Tooltip, Typography } from 'antd'
+// The working-surface table: resizable, reorderable, pinnable columns whose
+// layout each person keeps. See `tablekit/README.md` for which tables get it.
+import { Table as DataTable } from '../tablekit'
 import {
-  App, Button, Card, Modal, Progress, Select, Space, Table, Tag, Tooltip, Typography,
-} from 'antd'
-import {
-  ArrowRightOutlined, CheckCircleFilled, ExclamationCircleFilled, PlayCircleOutlined, SyncOutlined,
-} from '@ant-design/icons'
+  ArrowRightOutlined, CheckCircleFilled, ExclamationCircleFilled, PlayCircleOutlined,
+  SyncOutlined,
+} from '../icons'
 import { useDiscoveryStatuses, useRunDiscovery } from '../api/queries'
 import { useCan } from '../auth/permissions'
 import { formatCount, formatDuration } from '../domain/format'
@@ -12,7 +14,7 @@ import { matches } from '../domain/derive'
 import { SearchBar } from './layout'
 import { NA, Value } from './value'
 import { TimeAgo } from './chips'
-import { c } from '../uikit'
+import { c, StatusPill } from '../uikit'
 import type { DiscoverySourceState, Product } from '../api/types'
 
 /**
@@ -455,9 +457,9 @@ export function DiscoverySummary({
         <Space size={8}>
           Discovery
           {scanning.length > 0 && (
-            <Tag icon={<SyncOutlined spin />} color="processing">
+            <StatusPill tone="review" icon={<SyncOutlined />}>
               {scanning.length} source{scanning.length === 1 ? '' : 's'} scanning
-            </Tag>
+            </StatusPill>
           )}
         </Space>
       }
@@ -560,9 +562,9 @@ export function DiscoveryPanel({ products }: { products: Product[] }) {
           <Space size={8}>
             Discovery
             {scanning.length > 0 && (
-              <Tag icon={<SyncOutlined spin />} color="processing">
+              <StatusPill tone="review" icon={<SyncOutlined />}>
                 {scanning.length} source{scanning.length === 1 ? '' : 's'} scanning
-              </Tag>
+              </StatusPill>
             )}
           </Space>
         }
@@ -675,7 +677,8 @@ export function DiscoveryPanel({ products }: { products: Product[] }) {
               </Space>
             </div>
 
-            <Table<DiscoverySourceState>
+            <DataTable<DiscoverySourceState>
+              tableEnhancedKey="discovery-sources"
               size="small"
               pagination={{ pageSize: 20, showSizeChanger: false }}
               dataSource={rows}
@@ -712,7 +715,9 @@ export function DiscoveryPanel({ products }: { products: Product[] }) {
                   align: 'right',
                   render: (_, s) => {
                     const n = s.scanning ? s.newPackages : s.lastNewPackages
-                    return n ? <Tag color="blue">{n}</Tag> : <Value>{formatCount(n)}</Value>
+                    return n
+                      ? <StatusPill tone="review" dot={false}>{n}</StatusPill>
+                      : <Value>{formatCount(n)}</Value>
                   },
                 },
                 {

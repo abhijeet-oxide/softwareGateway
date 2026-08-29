@@ -5,10 +5,9 @@ import {
   Typography,
 } from 'antd'
 import {
-  ArrowLeftOutlined, CheckCircleOutlined, ClockCircleOutlined, LoadingOutlined, RocketOutlined,
-  SearchOutlined, ShopOutlined,
-} from '@ant-design/icons'
-import PartialIcon from '@iconify-react/oui/partial';
+  ArrowLeftOutlined, CheckCircleOutlined, ClockCircleOutlined, LoadingOutlined, PartialOutlined,
+  RocketOutlined, SearchOutlined, ShopOutlined,
+} from '../icons'
 import { Link } from 'react-router-dom'
 import type { ContentGroup, PresentComponent } from '../api/types'
 import { kindName, type LifecycleStep } from '../domain/derive'
@@ -645,7 +644,7 @@ function PresentList({ components }: { components: PresentComponent[] }) {
             <Tooltip title="Part of this component was already there; the rest is still being moved.">
               <Tag
                 style={{ marginInlineEnd: 0, flex: '0 0 auto', fontSize: 10 }}
-                icon={<PartialIcon style={{ width: '1em', height: '1em' }} />}
+                icon={<PartialOutlined />}
               >
                 partly
               </Tag>

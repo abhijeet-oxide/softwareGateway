@@ -1,9 +1,10 @@
 import { useMemo, useState } from 'react'
 import type { ReactNode } from 'react'
-import {
-  Alert, Button, Card, Checkbox, Col, Input, Row, Segmented, Space, Table, Tag, Tooltip, Typography,
-} from 'antd'
-import { ArrowUpOutlined, CheckOutlined, MinusOutlined } from '@ant-design/icons'
+import { Alert, Button, Card, Checkbox, Col, Input, Row, Segmented, Space, Tag, Tooltip, Typography } from 'antd'
+// The working-surface table: resizable, reorderable, pinnable columns whose
+// layout each person keeps. See `tablekit/README.md` for which tables get it.
+import { Table as DataTable } from '../tablekit'
+import { ArrowUpOutlined, CheckOutlined, MinusOutlined } from '../icons'
 import { securityComparisonExportUrl } from '../api/queries'
 import { SEVERITIES } from '../api/types'
 import type {
@@ -13,7 +14,7 @@ import type {
 import {
   ComponentCell, CveCell, FixCell, SecurityExportMenu, SeverityBar, SeverityTag, VerdictBanner,
 } from './security'
-import { c, mono, severity as severityColour, verdict as verdictColour } from '../uikit'
+import { c, FieldLabel, mono, severity as severityColour, verdict as verdictColour } from '../uikit'
 import { formatRelative } from '../domain/format'
 
 /**
@@ -152,14 +153,7 @@ function ReleaseEnd({ title, end, onSync, align }: {
   const synced = end.sync.state === 'synced'
   return (
     <div style={{ padding: '18px 22px', minWidth: 0, textAlign: align === 'end' ? 'right' : 'left' }}>
-      <Typography.Text
-        style={{
-          fontSize: 11, fontWeight: 600, letterSpacing: '0.06em',
-          textTransform: 'uppercase', color: c.text2,
-        }}
-      >
-        {title}
-      </Typography.Text>
+      <FieldLabel>{title}</FieldLabel>
       <div
         style={{
           fontFamily: mono, fontSize: 19, fontWeight: 600, marginTop: 4,
@@ -236,14 +230,7 @@ function NetChangeZone({ a, b, verdict }: {
         background: c.surface2,
       }}
     >
-      <Typography.Text
-        style={{
-          fontSize: 11, fontWeight: 600, letterSpacing: '0.06em',
-          textTransform: 'uppercase', color: c.text2,
-        }}
-      >
-        Net change
-      </Typography.Text>
+      <FieldLabel>Net change</FieldLabel>
       <div
         style={{
           fontSize: 32, fontWeight: 600, color: tone, lineHeight: 1.1, marginTop: 6,
@@ -371,7 +358,7 @@ function SetBar({ old, both, fresh }: { old: number; both: number; fresh: number
       <div
         style={{
           display: 'flex', width: '100%', height: 12, borderRadius: 6,
-          overflow: 'hidden', background: c.surface2,
+          overflow: 'hidden', background: c.track,
         }}
       >
         {segments.map((seg, i) => (seg.n === 0 ? null : (
@@ -446,20 +433,11 @@ function DeltaZone({ label, counts, colour, icon, divider }: {
         borderInlineStart: divider ? `1px solid ${c.border}` : undefined,
       }}
     >
-      <Space size={7}>
-        {/* A drawn icon, not a unicode arrow: ↑ and − take their shape from
-            whichever font the platform happens to have, and sit on a different
-            baseline in each one. */}
-        <span aria-hidden style={{ color: colour, fontSize: 12, lineHeight: 1 }}>{icon}</span>
-        <Typography.Text
-          style={{
-            fontSize: 11, fontWeight: 600, letterSpacing: '0.06em',
-            textTransform: 'uppercase', color: c.text2,
-          }}
-        >
-          {label}
-        </Typography.Text>
-      </Space>
+      {/* A drawn icon, not a unicode arrow: the glyph a font happens to have
+          for ↑ and − sits on a different baseline in each one. */}
+      <FieldLabel icon={<span aria-hidden style={{ color: colour, fontSize: 12, lineHeight: 1 }}>{icon}</span>}>
+        {label}
+      </FieldLabel>
       <div
         style={{
           fontSize: 30, fontWeight: 600, color: colour, lineHeight: 1.15, marginTop: 4,
@@ -535,7 +513,8 @@ function ChangeBySeverity({ report }: { report: SecurityComparisonResponse }) {
 
   return (
     <Card size="small" title="Change by severity and fixability">
-      <Table<SeverityRow>
+      <DataTable<SeverityRow>
+        tableEnhancedKey="security-compare-severity"
         size="small"
         pagination={false}
         rowKey="key"
@@ -606,20 +585,25 @@ function NetChange({ value }: { value: number }) {
 }
 
 /** The numbers a reader quotes, in one column. */
+/**
+ * What happened to the ARTIFACTS, which is the one thing the band at the top
+ * does not say.
+ *
+ * It used to open with five more rows - both release labels, the count before,
+ * the count after, and the net change - every one of them already stated, in
+ * larger type, in the band at the top of this page. A summary that repeats the
+ * headline teaches a reader to skip it, and then they skip the four lines here
+ * that are not repeated anywhere.
+ */
 function SummaryCard({ report }: { report: SecurityComparisonResponse }) {
   const rows: [string, string][] = [
-    ['Base release', report.a.label],
-    ['New release', report.b.label],
-    ['Vulnerabilities before', report.a.counts.total.toLocaleString()],
-    ['Vulnerabilities after', report.b.counts.total.toLocaleString()],
-    ['Net change', `${report.b.counts.total - report.a.counts.total > 0 ? '+' : ''}${report.b.counts.total - report.a.counts.total}`],
-    ['Artifacts unchanged', String(report.artifactSummary.common)],
-    ['Artifacts upgraded', String(report.artifactSummary.upgraded)],
-    ['Artifacts added', String(report.artifactSummary.added)],
-    ['Artifacts removed', String(report.artifactSummary.removed)],
+    ['Unchanged', String(report.artifactSummary.common)],
+    ['Upgraded', String(report.artifactSummary.upgraded)],
+    ['Added', String(report.artifactSummary.added)],
+    ['Removed', String(report.artifactSummary.removed)],
   ]
   return (
-    <Card size="small" title="Summary">
+    <Card size="small" title="Artifacts">
       <Space direction="vertical" size={6} style={{ width: '100%' }}>
         {rows.map(([label, value]) => (
           <Space key={label} style={{ width: '100%', justifyContent: 'space-between' }}>
@@ -736,7 +720,9 @@ function ArtifactDeltaCard({ report }: { report: SecurityComparisonResponse }) {
           description="They are present in both releases, but one side has no scan result, so nothing about them was classified."
         />
       )}
-      <Table<SecurityArtifactDelta>
+      <DataTable<SecurityArtifactDelta>
+        tableEnhancedKey="security-compare-artifacts"
+        allow_export
         size="small"
         rowKey="key"
         dataSource={rows}
@@ -910,7 +896,10 @@ function ChangeTable({ report, product, baseRef, againstRef, repository }: {
         />
       </Space>
 
-      <Table<SecurityChange>
+      <DataTable<SecurityChange>
+        tableEnhancedKey="security-compare-changes"
+        allow_export
+        show_column_visibility
         size="small"
         rowKey={(r) => `${r.type}-${r.cve ?? r.id}-${r.component.id}-${r.artifact.name}`}
         dataSource={rows}

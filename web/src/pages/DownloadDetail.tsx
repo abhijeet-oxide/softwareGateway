@@ -2,7 +2,10 @@ import {
   Alert, Card, Col, Descriptions, Progress, Row, Select, Space, Steps, Table, Tag, Tooltip,
   Typography,
 } from 'antd'
-import { LoadingOutlined } from '@ant-design/icons'
+// The working-surface table: resizable, reorderable, pinnable columns whose
+// layout each person keeps. See `tablekit/README.md` for which tables get it.
+import { Table as DataTable } from '../tablekit'
+import { LoadingOutlined } from '../icons'
 import { useState } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
 import {
@@ -91,7 +94,9 @@ function JobsPanel({ transferId, hasFailures }: { transferId: string; hasFailure
         </Space>
       }
     >
-      <Table<Job>
+      <DataTable<Job>
+        tableEnhancedKey="download-jobs"
+        allow_export
         size="small"
         loading={jobs.isLoading}
         dataSource={rows}

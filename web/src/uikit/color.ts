@@ -36,6 +36,7 @@ export const c = {
   navBgHover: cssVar("nav-bg-hover"),
   navBgActive: cssVar("nav-bg-active"),
   navFg: cssVar("nav-fg"),
+  navFgStrong: cssVar("nav-fg-strong"),
   navFgActive: cssVar("nav-fg-active"),
   navBorder: cssVar("nav-border"),
 
@@ -44,6 +45,10 @@ export const c = {
   surface2: cssVar("surface-2"),
   border: cssVar("border"),
   borderStrong: cssVar("border-strong"),
+
+  /** The ground a proportional bar is drawn on. Not a palette colour - it is
+   *  structural, and lives in tokens.css beside the rest of the shape. */
+  track: cssVar("track"),
 
   text: cssVar("text"),
   text2: cssVar("text-2"),

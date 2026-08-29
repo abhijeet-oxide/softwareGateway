@@ -5,7 +5,10 @@ import {
   App, Button, Card, Col, Collapse, Descriptions, Drawer, Input, Row, Segmented, Select,
   Space, Spin, Table, Tag, Tooltip, Typography,
 } from 'antd'
-import { CopyOutlined, ExportOutlined } from '@ant-design/icons'
+// The working-surface table: resizable, reorderable, pinnable columns whose
+// layout each person keeps. See `tablekit/README.md` for which tables get it.
+import { Table as DataTable } from '../tablekit'
+import { CopyOutlined, ExportOutlined } from '../icons'
 import {
   packageSecurityExportUrl, useCancelPackageSecuritySync, usePackageSecurity,
   useSyncPackageSecurity,
@@ -20,7 +23,7 @@ import {
   SeverityBar, SeverityTag, StopSyncButton, SyncButton, SyncedAgo, SyncInterrupted, SyncLogButton,
 } from './security'
 import { formatAbsolute, formatRelative } from '../domain/format'
-import { c, mono, severity as severityColour } from '../uikit'
+import { c, FieldLabel, mono, severity as severityColour } from '../uikit'
 
 /**
  * The Security tab of a release.
@@ -452,7 +455,7 @@ function SummaryCards({ data, syncing }: { data: PackageSecurityResponse; syncin
                     comparable with each other. A bar normalised per severity
                     would draw four full-width bars and say nothing.
                   */}
-                  <div style={{ height: 5, background: c.surface2, borderRadius: 3 }}>
+                  <div style={{ height: 5, background: c.track, borderRadius: 3 }}>
                     <div
                       className="slm-meter-seg"
                       style={{
@@ -527,16 +530,12 @@ function SummaryCards({ data, syncing }: { data: PackageSecurityResponse; syncin
   )
 }
 
-/** The name of a zone within the posture band. */
-function ZoneLabel({ children }: { children: ReactNode }) {
+/** The name of a zone within the posture band. The shared label, with the one
+ *  thing this band adds: the gap to whatever it introduces. */
+function ZoneLabel({ children, count }: { children: ReactNode; count?: ReactNode }) {
   return (
-    <div
-      style={{
-        fontSize: 11, fontWeight: 600, letterSpacing: '0.06em', textTransform: 'uppercase',
-        color: c.text2, marginBottom: 10,
-      }}
-    >
-      {children}
+    <div style={{ marginBottom: 10 }}>
+      <FieldLabel count={count}>{children}</FieldLabel>
     </div>
   )
 }
@@ -1442,7 +1441,8 @@ function UniqueCveTable({ groups, state, detailRowsUnavailable, scanUrlFor }: {
       pagination={{ pageSize: 25, showSizeChanger: true, size: 'small' }}
       expandable={{
         expandedRowRender: (g) => (
-          <Table<FlatFinding>
+          <DataTable<FlatFinding>
+            tableEnhancedKey="security-by-component"
             size="small"
             rowKey={(r) => `${r.component.id}-${r.artifactName}-${r.artifactDigest ?? ''}`}
             dataSource={[...g.rows].sort((a, b) => Number(b.fixable) - Number(a.fixable))}
@@ -2011,7 +2011,10 @@ function VulnerabilityTable({
 
   return (
     <>
-    <Table<FlatFinding>
+    <DataTable<FlatFinding>
+      tableEnhancedKey="security-findings"
+      allow_export
+      show_column_visibility
       size="small"
       rowKey={(r) => `${r.cve ?? r.id}-${r.component.id}-${r.artifactName}`}
       dataSource={rows}
@@ -2116,7 +2119,9 @@ function ArtifactTable({ reports }: { reports: SecurityReport[] }) {
 
   return (
     <>
-    <Table<SecurityReport>
+    <DataTable<SecurityReport>
+      tableEnhancedKey="security-reports"
+      allow_export
       size="small"
       rowKey={(r) => r.artifact.digest || r.artifact.name}
       dataSource={reports}
@@ -2319,7 +2324,8 @@ function ImageDetailDrawer({ report, onClose }: {
           />
 
           <Section title={`Vulnerabilities - ${rows.length.toLocaleString()}`}>
-            <Table<FlatFinding>
+            <DataTable<FlatFinding>
+              tableEnhancedKey="security-cve-findings"
               size="small"
               rowKey={(r) => `${r.cve ?? r.id}-${r.component.id}`}
               dataSource={rows}

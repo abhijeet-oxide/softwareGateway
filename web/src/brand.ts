@@ -40,7 +40,7 @@ const brand: BrandIdentity = {
   // and the two face tones are all that survive.
   favicon:
     "<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'>" +
-    "<rect width='32' height='32' rx='8' fill='#0057b8'/>" +
+    "<rect width='32' height='32' rx='8' fill='#0071e3'/>" +
     "<g stroke-linejoin='round' stroke-linecap='round'>" +
     "<path d='M16 16.2 L27 10.4 L27 21.6 L16 27.4 Z' fill='white' fill-opacity='0.55'/>" +
     "<path d='M16 16.2 L5 10.4 L5 21.6 L16 27.4 Z' fill='white' fill-opacity='0.78'/>" +

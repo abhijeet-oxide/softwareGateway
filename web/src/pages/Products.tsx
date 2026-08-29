@@ -1,5 +1,9 @@
 import { useState } from 'react'
-import { Button, Card, Space, Table, Tag, Tooltip, Typography } from 'antd'
+import { StatusPill } from '../uikit'
+import { Button, Card, Space, Tag, Tooltip, Typography } from 'antd'
+// The working-surface table: resizable, reorderable, pinnable columns whose
+// layout each person keeps. See `tablekit/README.md` for which tables get it.
+import { Table as DataTable } from '../tablekit'
 import { useParams } from 'react-router-dom'
 import { usePackages, useProducts, useTransfers } from '../api/queries'
 import { RunDiscoveryButton } from '../components/discovery'
@@ -50,7 +54,8 @@ function VersionHistory({ product }: { product: Product }) {
   }
 
   return (
-    <Table
+    <DataTable
+      tableEnhancedKey="product-releases"
       size="small"
       loading={packages.isLoading}
       dataSource={rows}
@@ -183,7 +188,8 @@ export default function Products() {
         />
       ) : (
         <Card styles={{ body: { padding: 0 } }}>
-          <Table
+          <DataTable
+            tableEnhancedKey="products"
             loading={products.isLoading}
             dataSource={rows}
             rowKey={(p) => p.productId}
@@ -251,12 +257,14 @@ export default function Products() {
                   // column previously rendered the product's own `enabled`
                   // flag, which is a different fact under the wrong heading.
                   const polled = (p.sources ?? []).filter((src) => src.discovery?.enabled)
-                  if (polled.length === 0) return <Tag>Disabled</Tag>
+                  if (polled.length === 0) {
+                    return <StatusPill tone="neutral">Disabled</StatusPill>
+                  }
                   return (
                     <Tooltip title={`Polled sources: ${polled.map((src) => src.name).join(', ')}`}>
-                      <Tag color="green" style={{ marginInlineEnd: 0 }}>
+                      <StatusPill tone="ok" style={{ marginInlineEnd: 0 }}>
                         {polled.length} {polled.length === 1 ? 'source' : 'sources'}
-                      </Tag>
+                      </StatusPill>
                     </Tooltip>
                   )
                 },
@@ -266,12 +274,19 @@ export default function Products() {
                 width: 140,
                 render: (_, p) =>
                   p.autoDownload?.enabled ? (
-                    <Tag color="success" style={{ marginInlineEnd: 0 }}>
-                      {p.autoDownload.rules?.length ?? 0} rules
-                    </Tag>
+                    <StatusPill tone="ok" style={{ marginInlineEnd: 0 }}>
+                      {p.autoDownload.rules?.length ?? 0}
+                      {(p.autoDownload.rules?.length ?? 0) === 1 ? ' rule' : ' rules'}
+                    </StatusPill>
                   ) : (
+                    /*
+                      NEUTRAL, not red. Automatic downloads being switched off is
+                      a configuration choice, and the tooltip says so in the next
+                      breath: downloading by hand is unaffected. A red pill in a
+                      column of green ones reads as something to go and fix.
+                    */
                     <Tooltip title="Automatic downloads are switched off in configuration. Downloading by hand is unaffected.">
-                      <Tag color="error" style={{ marginInlineEnd: 0 }}>Disabled</Tag>
+                      <StatusPill tone="neutral" style={{ marginInlineEnd: 0 }}>Disabled</StatusPill>
                     </Tooltip>
                   ),
               },

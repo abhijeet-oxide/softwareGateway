@@ -1,12 +1,14 @@
 import { useMemo, useState } from 'react'
-import { App, Button, Card, Dropdown, Select, Space, Table, Tooltip } from 'antd'
+import { App, Button, Card, Dropdown, Select, Space, Tooltip } from 'antd'
+// The working-surface table: resizable, reorderable, pinnable columns whose
+// layout each person keeps. See `tablekit/README.md` for which tables get it.
+import { Table as DataTable } from '../tablekit'
 import type { MenuProps } from 'antd'
-import { MoreOutlined } from '@ant-design/icons'
+import { MoreOutlined, ScaleOutlined } from '../icons'
 import { Link, useNavigate, useSearchParams } from 'react-router-dom'
 import {
   usePackages, usePackagesByProducts, useProducts, useRunDownload, useSyncPackageSecurity, useTransfers,
 } from '../api/queries'
-import ScaleIcon from '@iconify-react/lucide/scale';
 import { useCan } from '../auth/permissions'
 import {
   deriveLocations, deriveStatus, downloadSeconds, failureReason, isLive, isPromotion, matches,
@@ -126,8 +128,18 @@ function RowActions({ product, pkg, config }: {
 
   return (
     <Space size={4}>
+      {/*
+        NAVIGATION, not the row's verb - so it is an ordinary button.
+
+        It used to be the primary, which put a solid blue button and a solid
+        green one side by side in every row of a long table. Two saturated
+        fills competing in the same 90 pixels is what made the listing read as
+        a control panel rather than as data, and it left the row's actual next
+        step - download, or promote - with no way to look more important than
+        "go and read about it".
+      */}
       <Link to={detail}>
-        <Button size="small" type="primary">View</Button>
+        <Button size="small">View</Button>
       </Link>
       <NextStep
         product={product}
@@ -210,7 +222,7 @@ function NextStep({
   if (history.downloading || history.downloadFailed) {
     return (
       <Link to={history.download ? `/downloads/${history.download.id}` : '/downloads'}>
-        <Button size="small" color="green" variant="outlined">View download</Button>
+        <Button size="small">View download</Button>
       </Link>
     )
   }
@@ -239,7 +251,7 @@ function NextStep({
     return history.download
       ? (
         <Link to={`/downloads/${history.download.id}`}>
-          <Button size="small" color="green" variant="outlined">View download</Button>
+          <Button size="small">View download</Button>
         </Link>
       )
       : null
@@ -302,10 +314,15 @@ function DownloadAction({ product, pkg }: { product: string; pkg: Package }) {
           : 'You do not have permission to start a download.'
       }
     >
+      {/*
+        The row's primary, and the only filled button in it. Green was a second
+        accent that existed nowhere else in the product and that no palette
+        could reach; what makes this button the loud one is that it is the step
+        the row is actually on, which the brand colour is for.
+      */}
       <Button
         size="small"
-        color="green"
-        variant="solid"
+        type="primary"
         disabled={!mayOperate}
         loading={run.isPending}
         onClick={() => void start()}
@@ -502,7 +519,7 @@ export default function Packages() {
           />
         </Space>
         <Link to="/packages/compare">
-          <Button icon={<ScaleIcon style={{ width: '1em', height: '1em' }} />}>Compare packages</Button>
+          <Button icon={<ScaleOutlined />}>Compare packages</Button>
         </Link>
       </div>
 
@@ -526,7 +543,10 @@ export default function Packages() {
         />
       ) : (
         <Card styles={{ body: { padding: 0 } }}>
-          <Table
+          <DataTable
+            tableEnhancedKey="packages"
+            allow_export
+            show_column_visibility
             loading={packages.isLoading || packagesByProducts.some((q) => q.isLoading)}
             dataSource={rows}
             rowKey={(r) => `${r.product.productId}-${r.pkg.packageId}`}

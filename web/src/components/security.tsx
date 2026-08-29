@@ -1,15 +1,16 @@
 import { useEffect, useState } from 'react'
 import type { ReactNode } from 'react'
-import {
-  Alert, Button, Drawer, Dropdown, Popover, Progress, Space, Tag, Tooltip, Typography,
-} from 'antd'
+import { Alert, Button, Drawer, Dropdown, Popover, Progress, Space, Tooltip, Typography } from 'antd'
 import { formatRelative } from '../domain/format'
 import {
   CheckCircleOutlined, CopyOutlined, DownloadOutlined, ExclamationCircleOutlined,
   FileTextOutlined, MinusCircleOutlined, QuestionCircleOutlined, StopOutlined, SyncOutlined,
   WarningOutlined,
-} from '@ant-design/icons'
-import { c, mono, severity as severityColour, severitySurface, tokens, verdict as verdictColour } from '../uikit'
+} from '../icons'
+import {
+  c, mono, severity as severityColour, severitySurface, StatusPill, tokens,
+  verdict as verdictColour, withAlpha,
+} from '../uikit'
 import { SEVERITIES } from '../api/types'
 import type {
   PackageSecuritySummary, ScanStatus, SecurityCounts, SecurityCoverage,
@@ -85,7 +86,7 @@ export function SeverityBar({ counts, height = 8 }: { counts: SecurityCounts; he
     <div
       style={{
         display: 'flex', width: '100%', height, borderRadius: height / 2,
-        overflow: 'hidden', background: c.surface2,
+        overflow: 'hidden', background: c.track,
       }}
     >
       {SEVERITIES.map((s, i) => {
@@ -126,9 +127,57 @@ export function SeverityBar({ counts, height = 8 }: { counts: SecurityCounts; he
  * The total is the largest thing in the cell because it is the number a reader
  * carries to the next row.
  */
-export function SeverityMeter({ counts, width }: { counts: SecurityCounts; width?: number }) {
+export function SeverityMeter({ counts, width, compact = false }: {
+  counts: SecurityCounts
+  width?: number
+  /**
+   * ONE LINE instead of three, for a listing.
+   *
+   * The full meter is a detail component: a big total, a bar under it, and the
+   * two acted-on severities under that. It is right where a release is the
+   * subject of the page, and wrong in a table, where it was 83px tall and
+   * therefore set the height of EVERY row in the listing - eight rows to a
+   * screen on a page whose whole job is scanning twenty.
+   *
+   * Compact keeps all three facts and spends one line on them: the total leads,
+   * the bar takes the slack in the middle, and the critical and high counts sit
+   * at the end as dots with numbers. The severity WORDS are what goes, because
+   * they are the part the colour and the tooltip already say - and in a column
+   * of twenty rows they are the same two words twenty times.
+   */
+  compact?: boolean
+}) {
   const critical = counts.bySeverity.critical
   const high = counts.bySeverity.high
+
+  if (compact) {
+    return (
+      <div
+        style={{
+          display: 'flex', alignItems: 'center', gap: 8, width: '100%',
+          minWidth: 0, maxWidth: width ?? 260, fontVariantNumeric: 'tabular-nums',
+        }}
+      >
+        <Tooltip title={`${counts.total.toLocaleString()} findings${
+          counts.fixable > 0
+            ? `, ${counts.fixable.toLocaleString()} with a fixed version available`
+            : ''
+        }`}
+        >
+          <span style={{ fontSize: 13, fontWeight: 600, color: c.text, lineHeight: 1 }}>
+            {counts.total.toLocaleString()}
+          </span>
+        </Tooltip>
+        <div style={{ flex: 1, minWidth: 24 }}>
+          <SeverityBar counts={counts} height={5} />
+        </div>
+        <span style={{ display: 'inline-flex', gap: 10, flex: '0 0 auto', fontSize: 12 }}>
+          <SeverityPip value="critical" count={critical} word={false} />
+          <SeverityPip value="high" count={high} word={false} />
+        </span>
+      </div>
+    )
+  }
 
   /*
     Fluid, not fixed. A minimum width here is a promise the table cannot keep:
@@ -186,8 +235,14 @@ export function SeverityMeter({ counts, width }: { counts: SecurityCounts; width
   )
 }
 
-/** One severity as a dot, its word, and its count - the meter's unit. */
-function SeverityPip({ value, count }: { value: Severity; count: number }) {
+/** One severity as a dot, its word, and its count - the meter's unit. The word
+ *  is dropped in a listing, where the colour and the tooltip carry it and the
+ *  same two words would otherwise repeat down every row. */
+function SeverityPip({ value, count, word = true }: {
+  value: Severity
+  count: number
+  word?: boolean
+}) {
   const filled = value === 'critical' || value === 'high'
   const muted = count === 0
   return (
@@ -205,7 +260,9 @@ function SeverityPip({ value, count }: { value: Severity; count: number }) {
         <span style={{ color: muted ? c.text2 : severityColour[value], fontWeight: muted ? 400 : 600 }}>
           {count.toLocaleString()}
         </span>
-        <span style={{ color: c.text2 }}>{SEVERITY_LABEL[value].toLowerCase()}</span>
+        {word && (
+          <span style={{ color: c.text2 }}>{SEVERITY_LABEL[value].toLowerCase()}</span>
+        )}
       </span>
     </Tooltip>
   )
@@ -263,14 +320,14 @@ export function VulnerabilityCell({
     if (summary.stalled) {
       return (
         <Tooltip title="A sync was started and the Coordinator running it stopped. Nothing is running now - open the release and sync it again.">
-          <Tag color="warning" style={{ marginInlineEnd: 0 }}>Sync interrupted</Tag>
+          <StatusPill tone="pending" style={{ marginInlineEnd: 0 }}>Sync interrupted</StatusPill>
         </Tooltip>
       )
     }
     return (
-      <Tag color="processing" icon={<SyncOutlined spin />} style={{ marginInlineEnd: 0 }}>
+      <StatusPill tone="review" icon={<SyncOutlined />} style={{ marginInlineEnd: 0 }}>
         Syncing
-      </Tag>
+      </StatusPill>
     )
   }
   if (summary.state === '') {
@@ -280,24 +337,23 @@ export function VulnerabilityCell({
       : (notSyncedTooltip ?? 'This release has not been scanned. An unscanned release is not a release without vulnerabilities.')
     return (
       <Tooltip title={title}>
-        <Tag
-          color="default"
-          style={{ marginInlineEnd: 0, cursor: clickable ? 'pointer' : 'default' }}
+        <span
+          style={{ cursor: clickable ? 'pointer' : 'default' }}
           onClick={clickable ? (e) => {
             e.preventDefault()
             e.stopPropagation()
             onSyncNotSynced?.()
           } : undefined}
         >
-          Not synced
-        </Tag>
+          <StatusPill tone="neutral" style={{ marginInlineEnd: 0 }}>Not synced</StatusPill>
+        </span>
       </Tooltip>
     )
   }
   if (summary.state === 'failed' && !summary.syncedAt) {
     return (
       <Tooltip title={summary.error}>
-        <Tag color="error" style={{ marginInlineEnd: 0 }}>Sync failed</Tag>
+        <StatusPill tone="danger" style={{ marginInlineEnd: 0 }}>Sync failed</StatusPill>
       </Tooltip>
     )
   }
@@ -335,21 +391,31 @@ export function VulnerabilityCell({
     )
   }
 
-  return (
-    <Space direction="vertical" size={4} style={{ width: '100%' }}>
-      <SeverityMeter counts={summary.counts} />
+  /*
+    The two caveats become a MARK rather than two sentences.
 
-      {!summary.complete && (
-        <Typography.Text style={{ color: c.pending, fontSize: 11 }}>
-          Not all artifacts were scanned.
-        </Typography.Text>
+    Each of them is real and neither is news the reader needs on every row: at
+    two lines of amber text apiece they were most of what made this cell three
+    times the height of every other cell in the row, and a listing that spends
+    sixty pixels per row on a footnote shows a third as much of the table. The
+    warning triangle says something qualifies the number; the tooltip says what.
+  */
+  const caveats = [
+    !summary.complete ? 'Not all artifacts in this release were scanned.' : '',
+    stale ? 'The last sync failed, so these details may be outdated.' : '',
+  ].filter(Boolean)
+
+  return (
+    <div style={{ display: 'flex', alignItems: 'center', gap: 6, width: '100%', minWidth: 0 }}>
+      <SeverityMeter counts={summary.counts} compact />
+      {caveats.length > 0 && (
+        <Tooltip title={caveats.join(' ')}>
+          <span style={{ display: 'inline-flex', flex: '0 0 auto' }}>
+            <WarningOutlined style={{ color: c.pending }} />
+          </span>
+        </Tooltip>
       )}
-      {stale && (
-        <Typography.Text style={{ color: c.pending, fontSize: 11 }}>
-          Last sync failed. The details may be outdated.
-        </Typography.Text>
-      )}
-    </Space>
+    </div>
   )
 }
 
@@ -370,19 +436,19 @@ const STATUS_LABEL: Record<ScanStatus, string> = {
 export function ScanStatusTag({ status }: { status: ScanStatus }) {
   switch (status) {
     case 'scanned':
-      return <Tag color="success">{STATUS_LABEL.scanned}</Tag>
+      return <StatusPill tone="ok">{STATUS_LABEL.scanned}</StatusPill>
     case 'not_scanned':
-      return <Tag color="warning">{STATUS_LABEL.not_scanned}</Tag>
+      return <StatusPill tone="pending">{STATUS_LABEL.not_scanned}</StatusPill>
     // Not a scanning problem at all: the image was never shipped here, so it
     // gets its own word rather than being rounded to "not scanned".
     case 'not_found':
-      return <Tag color="default">{STATUS_LABEL.not_found}</Tag>
+      return <StatusPill tone="neutral">{STATUS_LABEL.not_found}</StatusPill>
     case 'unavailable':
-      return <Tag color="error">{STATUS_LABEL.unavailable}</Tag>
+      return <StatusPill tone="danger">{STATUS_LABEL.unavailable}</StatusPill>
     case 'disabled':
-      return <Tag>{STATUS_LABEL.disabled}</Tag>
+      return <StatusPill tone="neutral">{STATUS_LABEL.disabled}</StatusPill>
     default:
-      return <Tag>{STATUS_LABEL.unsupported}</Tag>
+      return <StatusPill tone="neutral">{STATUS_LABEL.unsupported}</StatusPill>
   }
 }
 
@@ -546,9 +612,20 @@ export function VerdictBanner({
     */
     <div
       style={{
-        border: `1px solid ${colour}2E`,
-        borderRadius: tokens.shape.borderRadius,
-        background: `${colour}0A`,
+        /*
+          withAlpha, NOT two more hex digits.
+
+          These read `${colour}2E` and `${colour}0A`, which worked while the
+          verdict colours were literal hexes. They are `var(--v-better)` and the
+          rest now, so the browser was being handed `var(--v-better)2E` - not a
+          colour - and dropping BOTH declarations. The banner had been rendering
+          with no tint and no border at all: a paragraph loose on the page,
+          where the whole point of this surface is that it is the one thing that
+          carries the answer's colour.
+        */
+        border: `1px solid ${withAlpha(colour, 0.22)}`,
+        borderRadius: 'var(--r-lg)',
+        background: withAlpha(colour, 0.06),
         padding: '18px 20px',
         marginBottom: 16,
       }}
@@ -560,7 +637,7 @@ export function VerdictBanner({
               style={{
                 color: colour, fontSize: 18, lineHeight: 1, display: 'inline-flex',
                 alignItems: 'center', justifyContent: 'center',
-                width: 32, height: 32, borderRadius: '50%', background: `${colour}1A`,
+                width: 32, height: 32, borderRadius: '50%', background: withAlpha(colour, 0.12),
               }}
             >
               {VERDICT_ICON[verdict]}
@@ -576,15 +653,23 @@ export function VerdictBanner({
           {explanation || headline}
         </Typography.Paragraph>
 
+        {/*
+          ONE mark for the whole group, not one per line.
+
+          Three caveats meant three amber triangles stacked down the left of the
+          banner, which read as three warnings about three different things
+          rather than as the qualifications on one answer. The mark says "this
+          answer has conditions"; the lines say what they are.
+        */}
         {caveats && caveats.length > 0 && (
-          <Space direction="vertical" size={2}>
-            {caveats.map((caveat) => (
-              <Typography.Text key={caveat} type="secondary">
-                <WarningOutlined style={{ color: c.pending, marginRight: 6 }} />
-                {caveat}
-              </Typography.Text>
-            ))}
-          </Space>
+          <div style={{ display: 'flex', gap: 8, alignItems: 'flex-start' }}>
+            <WarningOutlined style={{ color: c.pending, marginTop: 3, flexShrink: 0 }} />
+            <Space direction="vertical" size={2}>
+              {caveats.map((caveat) => (
+                <Typography.Text key={caveat} type="secondary">{caveat}</Typography.Text>
+              ))}
+            </Space>
+          </div>
         )}
       </Space>
     </div>
@@ -1275,11 +1360,11 @@ export function ComponentCell({ name, version, type }: { name?: string; version?
  */
 export function FixCell({ fixable, fixedIn }: { fixable: boolean; fixedIn?: string[] }) {
   if (!fixable) return <Typography.Text type="secondary">No fix available</Typography.Text>
-  if (!fixedIn || fixedIn.length === 0) return <Tag color="success">Fixable</Tag>
+  if (!fixedIn || fixedIn.length === 0) return <StatusPill tone="ok">Fixable</StatusPill>
   return (
     <Tooltip title={fixedIn.join(', ')}>
       <Space direction="vertical" size={0}>
-        <Tag color="success" style={{ marginInlineEnd: 0 }}>Fixable</Tag>
+        <StatusPill tone="ok" style={{ marginInlineEnd: 0 }}>Fixable</StatusPill>
         <Typography.Text type="secondary" style={{ fontFamily: mono, fontSize: 11 }}>
           {fixedIn[0]}
           {fixedIn.length > 1 && ` +${fixedIn.length - 1}`}

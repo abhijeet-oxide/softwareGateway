@@ -4,19 +4,22 @@ import OpenShiftIcon from '~icons/simple-icons/redhatopenshift'
 import RedHatIcon from '~icons/simple-icons/redhat'
 import DockerIcon from '~icons/simple-icons/docker'
 import OciIcon from '~icons/simple-icons/opencontainersinitiative'
-import FlaskIcon from '~icons/mdi/flask-outline'
-import RocketIcon from '~icons/mdi/rocket-launch-outline'
-import ServerIcon from '~icons/mdi/server'
-import StoreIcon from '~icons/mdi/store-outline'
-import DatabaseIcon from '~icons/mdi/database-outline'
-import PackageIcon from '~icons/mdi/package-variant-closed'
+// The non-brand marks come from the one UI family (see `src/icons.tsx`), so a
+// flask beside a Docker whale is the only mixed pairing on screen - and that
+// one is deliberate, because the whale IS the identity.
+import FlaskIcon from '~icons/ph/flask'
+import RocketIcon from '~icons/ph/rocket-launch'
+import ServerIcon from '~icons/ph/hard-drives'
+import StoreIcon from '~icons/ph/storefront'
+import DatabaseIcon from '~icons/ph/database'
+import PackageIcon from '~icons/ph/package'
 import HelmIcon from '~icons/simple-icons/helm'
-import FileIcon from '~icons/mdi/file-document-outline'
-import AnalyzeIcon from '~icons/mdi/file-tree-outline'
-import IndexEditIcon from '@iconify-react/oui/index-edit';
-import DownloadIcon from '~icons/mdi/tray-arrow-down'
-import LayersIcon from '~icons/mdi/layers-triple-outline'
-import SignatureIcon from '~icons/mdi/certificate-outline'
+import FileIcon from '~icons/ph/file-text'
+import AnalyzeIcon from '~icons/ph/tree-structure'
+import IndexEditIcon from '~icons/ph/list-bullets'
+import DownloadIcon from '~icons/ph/tray-arrow-down'
+import LayersIcon from '~icons/ph/stack'
+import SignatureIcon from '~icons/ph/certificate'
 import type { Repository } from '../api/types'
 import brand from '../brand'
 import { BrandMark as SharedBrandMark } from '../uikit'
@@ -58,8 +61,11 @@ export type IconComponent = ElementType<{ style?: CSSProperties }>
  * two: the shared component takes an identity as a PROP (which is what keeps
  * it copyable), and this is the one place in the application that supplies it.
  */
-export function BrandMark({ size }: { size?: number }) {
-  return <SharedBrandMark brand={brand} size={size ?? 28} tile={false} />
+export function BrandMark({ size, tile = true }: { size?: number; tile?: boolean }) {
+  // The plate is ON by default. The mark is drawn in white, and the surfaces it
+  // lands on are now materials rather than a slab of navy - a bare white glyph
+  // on a light sidebar is an invisible one.
+  return <SharedBrandMark brand={brand} size={size ?? 28} tile={tile} />
 }
 
 export const NokiaNIcon: IconComponent = (props) => (

@@ -634,7 +634,10 @@ export default function Downloads() {
                 }}
                 dataSource={visibleFinished}
                 rowKey={(t) => t.id}
-                scroll={{ x: 1280 }}
+                // Wide enough for `Time spent` and `Downloaded` to print their
+                // own headings. Truncated to `Time ...` and `Downlo...` they
+                // are two columns of numbers with no stated unit.
+                scroll={{ x: 1400 }}
                 columns={[
                   { title: 'Product', width: 140, render: (_, t) => t.product },
                   { title: 'Package', width: 190, render: (_, t) => <PackageCell transfer={t} /> },
@@ -717,7 +720,7 @@ export default function Downloads() {
                 }}
                 dataSource={visiblePromotions}
                 rowKey={(t) => t.id}
-                scroll={{ x: 1100 }}
+                scroll={{ x: 1180 }}
                 columns={[
                   { title: 'Product', width: 140, render: (_, t) => t.product },
                   { title: 'Package', width: 180, render: (_, t) => <PackageCell transfer={t} /> },

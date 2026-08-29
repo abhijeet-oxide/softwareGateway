@@ -204,16 +204,16 @@ export function AnalysisTag({ pkg }: { pkg: { analysisState?: string; analysisEr
   if (pkg.analysisState === 'analyzing') {
     return (
       <Tooltip title="Reading this release's manifest tree from the vendor registry, so its contents, sizes and files can be shown without asking again.">
-        <Tag icon={<LoadingOutlined spin />} color="processing" style={{ marginInlineEnd: 0 }}>
+        <StatusPill tone="review" icon={<LoadingOutlined />} style={{ marginInlineEnd: 0 }}>
           Analyzing
-        </Tag>
+        </StatusPill>
       </Tooltip>
     )
   }
   if (pkg.analysisState === 'failed') {
     return (
       <Tooltip title={pkg.analysisError || 'The walk did not finish and gave no reason.'}>
-        <Tag color="error" style={{ marginInlineEnd: 0 }}>Analysis failed</Tag>
+        <StatusPill tone="danger" style={{ marginInlineEnd: 0 }}>Analysis failed</StatusPill>
       </Tooltip>
     )
   }
@@ -425,9 +425,9 @@ export function CountBadge({ count, colour }: { count: number; colour?: string }
 export function ManagedInGit({ url }: { url?: string }) {
   return (
     <Tooltip title="This is defined in Git and reconciled into the cluster. The interface shows it and never edits it - a change made here would be silently reverted.">
-      <Tag color="default" style={{ marginInlineEnd: 0 }}>
+      <StatusPill tone="neutral" dot={false} style={{ marginInlineEnd: 0 }}>
         Managed in Git{url ? ' ↗' : ''}
-      </Tag>
+      </StatusPill>
     </Tooltip>
   )
 }

@@ -7,7 +7,7 @@ import { formatCount, formatRelative } from '../domain/format'
 import { Value } from '../components/value'
 import { ManagedInGit, TimeAgo } from '../components/chips'
 import { ErrorState, PageHeader } from '../components/layout'
-import { AppearanceSettings, c, mono } from '../uikit'
+import { AppearanceSettings, c, mono, StatusPill } from '../uikit'
 
 /**
  * Page 10 - Settings.
@@ -141,8 +141,8 @@ export default function Settings() {
                     width: 110,
                     render: (_, c) =>
                       c.status === 'ok' || c.status === 'OK'
-                        ? <Tag color="green">OK</Tag>
-                        : <Tag color="red">{c.status}</Tag>,
+                        ? <StatusPill tone="ok">OK</StatusPill>
+                        : <StatusPill tone="danger">{c.status}</StatusPill>,
                   },
                   { title: 'Detail', render: (_, c) => <Value>{c.detail}</Value> },
                 ]}
@@ -180,7 +180,7 @@ export default function Settings() {
                   render: (_, p) =>
                     p.verification?.enabled ? (
                       <Space size={4} wrap>
-                        <Tag color="green">{p.verification.policy || 'enabled'}</Tag>
+                        <StatusPill tone="ok">{p.verification.policy || 'enabled'}</StatusPill>
                         {p.verification.atSource && <Tag>at source</Tag>}
                         {p.verification.atDestination && <Tag>at destination</Tag>}
                       </Space>

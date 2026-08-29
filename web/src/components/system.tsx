@@ -4,7 +4,7 @@ import { useVersion, useWorkers } from '../api/queries'
 import { formatCount } from '../domain/format'
 import { NA, Value } from './value'
 import { TimeAgo } from './chips'
-import { c } from '../uikit'
+import { c, StatusPill } from '../uikit'
 import type { Worker } from '../api/types'
 
 /**
@@ -45,7 +45,7 @@ export function SystemPanel() {
         <Space size={8}>
           System
           {offline.length > 0 && (
-            <Tag color="red">{offline.length} offline</Tag>
+            <StatusPill tone="danger">{offline.length} offline</StatusPill>
           )}
         </Space>
       }

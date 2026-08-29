@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react'
-import { Alert, Button, Card, Checkbox, Input, Segmented, Select, Space, Tag, Tooltip, Typography } from 'antd'
+import { Alert, Button, Card, Checkbox, Input, Segmented, Select, Space, Tooltip, Typography } from 'antd'
 // The working-surface table: resizable, reorderable, pinnable columns whose
 // layout each person keeps. See `tablekit/README.md` for which tables get it.
 import { Table as DataTable } from '../tablekit'
@@ -11,7 +11,7 @@ import {
   ComponentCell, CveCell, SecurityExportMenu, SeverityTag,
 } from '../components/security'
 import { ErrorState, PageHeader } from '../components/layout'
-import { c, EmptyState, mono } from '../uikit'
+import { c, EmptyState, mono, StatusPill } from '../uikit'
 
 /**
  * Search across CVEs, packages and images, and navigate the relationships
@@ -257,7 +257,7 @@ export default function Security() {
                     h.fixable
                       ? (
                         <Space direction="vertical" size={0}>
-                          <Tag color="success" style={{ marginInlineEnd: 0 }}>Fixable</Tag>
+                          <StatusPill tone="ok" style={{ marginInlineEnd: 0 }}>Fixable</StatusPill>
                           {h.fixedIn && (
                             <Typography.Text type="secondary" style={{ fontFamily: mono, fontSize: 11 }}>
                               {h.fixedIn}

@@ -1,15 +1,13 @@
 import { useEffect, useState } from 'react'
 import type { ReactNode } from 'react'
-import {
-  Alert, Button, Drawer, Dropdown, Popover, Progress, Space, Tag, Tooltip, Typography,
-} from 'antd'
+import { Alert, Button, Drawer, Dropdown, Popover, Progress, Space, Tooltip, Typography } from 'antd'
 import { formatRelative } from '../domain/format'
 import {
   CheckCircleOutlined, CopyOutlined, DownloadOutlined, ExclamationCircleOutlined,
   FileTextOutlined, MinusCircleOutlined, QuestionCircleOutlined, StopOutlined, SyncOutlined,
   WarningOutlined,
 } from '../icons'
-import { c, mono, severity as severityColour, severitySurface, tokens, verdict as verdictColour } from '../uikit'
+import { c, mono, severity as severityColour, severitySurface, StatusPill, tokens, verdict as verdictColour } from '../uikit'
 import { SEVERITIES } from '../api/types'
 import type {
   PackageSecuritySummary, ScanStatus, SecurityCounts, SecurityCoverage,
@@ -319,14 +317,14 @@ export function VulnerabilityCell({
     if (summary.stalled) {
       return (
         <Tooltip title="A sync was started and the Coordinator running it stopped. Nothing is running now - open the release and sync it again.">
-          <Tag color="warning" style={{ marginInlineEnd: 0 }}>Sync interrupted</Tag>
+          <StatusPill tone="pending" style={{ marginInlineEnd: 0 }}>Sync interrupted</StatusPill>
         </Tooltip>
       )
     }
     return (
-      <Tag color="processing" icon={<SyncOutlined spin />} style={{ marginInlineEnd: 0 }}>
+      <StatusPill tone="review" icon={<SyncOutlined />} style={{ marginInlineEnd: 0 }}>
         Syncing
-      </Tag>
+      </StatusPill>
     )
   }
   if (summary.state === '') {
@@ -336,24 +334,23 @@ export function VulnerabilityCell({
       : (notSyncedTooltip ?? 'This release has not been scanned. An unscanned release is not a release without vulnerabilities.')
     return (
       <Tooltip title={title}>
-        <Tag
-          color="default"
-          style={{ marginInlineEnd: 0, cursor: clickable ? 'pointer' : 'default' }}
+        <span
+          style={{ cursor: clickable ? 'pointer' : 'default' }}
           onClick={clickable ? (e) => {
             e.preventDefault()
             e.stopPropagation()
             onSyncNotSynced?.()
           } : undefined}
         >
-          Not synced
-        </Tag>
+          <StatusPill tone="neutral" style={{ marginInlineEnd: 0 }}>Not synced</StatusPill>
+        </span>
       </Tooltip>
     )
   }
   if (summary.state === 'failed' && !summary.syncedAt) {
     return (
       <Tooltip title={summary.error}>
-        <Tag color="error" style={{ marginInlineEnd: 0 }}>Sync failed</Tag>
+        <StatusPill tone="danger" style={{ marginInlineEnd: 0 }}>Sync failed</StatusPill>
       </Tooltip>
     )
   }
@@ -436,19 +433,19 @@ const STATUS_LABEL: Record<ScanStatus, string> = {
 export function ScanStatusTag({ status }: { status: ScanStatus }) {
   switch (status) {
     case 'scanned':
-      return <Tag color="success">{STATUS_LABEL.scanned}</Tag>
+      return <StatusPill tone="ok">{STATUS_LABEL.scanned}</StatusPill>
     case 'not_scanned':
-      return <Tag color="warning">{STATUS_LABEL.not_scanned}</Tag>
+      return <StatusPill tone="pending">{STATUS_LABEL.not_scanned}</StatusPill>
     // Not a scanning problem at all: the image was never shipped here, so it
     // gets its own word rather than being rounded to "not scanned".
     case 'not_found':
-      return <Tag color="default">{STATUS_LABEL.not_found}</Tag>
+      return <StatusPill tone="neutral">{STATUS_LABEL.not_found}</StatusPill>
     case 'unavailable':
-      return <Tag color="error">{STATUS_LABEL.unavailable}</Tag>
+      return <StatusPill tone="danger">{STATUS_LABEL.unavailable}</StatusPill>
     case 'disabled':
-      return <Tag>{STATUS_LABEL.disabled}</Tag>
+      return <StatusPill tone="neutral">{STATUS_LABEL.disabled}</StatusPill>
     default:
-      return <Tag>{STATUS_LABEL.unsupported}</Tag>
+      return <StatusPill tone="neutral">{STATUS_LABEL.unsupported}</StatusPill>
   }
 }
 
@@ -1341,11 +1338,11 @@ export function ComponentCell({ name, version, type }: { name?: string; version?
  */
 export function FixCell({ fixable, fixedIn }: { fixable: boolean; fixedIn?: string[] }) {
   if (!fixable) return <Typography.Text type="secondary">No fix available</Typography.Text>
-  if (!fixedIn || fixedIn.length === 0) return <Tag color="success">Fixable</Tag>
+  if (!fixedIn || fixedIn.length === 0) return <StatusPill tone="ok">Fixable</StatusPill>
   return (
     <Tooltip title={fixedIn.join(', ')}>
       <Space direction="vertical" size={0}>
-        <Tag color="success" style={{ marginInlineEnd: 0 }}>Fixable</Tag>
+        <StatusPill tone="ok" style={{ marginInlineEnd: 0 }}>Fixable</StatusPill>
         <Typography.Text type="secondary" style={{ fontFamily: mono, fontSize: 11 }}>
           {fixedIn[0]}
           {fixedIn.length > 1 && ` +${fixedIn.length - 1}`}

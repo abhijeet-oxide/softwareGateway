@@ -10,7 +10,7 @@ import { RepoLink } from '../components/chips'
 import { Value } from '../components/value'
 import { formatCount } from '../domain/format'
 import { EmptyStateCard, ErrorState, PageHeader } from '../components/layout'
-import { c } from '../uikit'
+import { c, StatusPill } from '../uikit'
 import type { Repository } from '../api/types'
 import { Icon, repositoryIcon } from '../components/icons'
 
@@ -124,11 +124,11 @@ export default function Repositories() {
                             width: 110,
                             render: (_, s) =>
                               s.status === 'OK' ? (
-                                <Tag color="green">OK</Tag>
+                                <StatusPill tone="ok">OK</StatusPill>
                               ) : s.status === 'SKIPPED' ? (
                                 <Tag>Skipped</Tag>
                               ) : (
-                                <Tag color="red">Failed</Tag>
+                                <StatusPill tone="danger">Failed</StatusPill>
                               ),
                           },
                           { title: 'Detail', render: (_, s) => <Value>{s.detail}</Value> },
@@ -228,7 +228,9 @@ export default function Repositories() {
               {
                 title: 'Enabled',
                 width: 100,
-                render: (_, r) => (r.repo.enabled ? <Tag color="green">Yes</Tag> : <Tag>No</Tag>),
+                render: (_, r) => (r.repo.enabled
+                  ? <StatusPill tone="ok">Yes</StatusPill>
+                  : <StatusPill tone="neutral">No</StatusPill>),
               },
             ]}
           />

@@ -3,7 +3,7 @@ import { App, Button, Checkbox, Modal, Select, Skeleton, Space, Tag, Typography 
 import { useNavigate } from 'react-router-dom'
 import { usePromote, usePromotionOptions } from '../api/queries'
 import { Icon, RocketIcon, environmentIcon } from './icons'
-import { InlineNotice, c, envHex, isProductionEnv, mono } from '../uikit'
+import { c, envHex, InlineNotice, isProductionEnv, mono, StatusPill } from '../uikit'
 import type { PromotionDestination, PromotionOptionsResponse } from '../api/types'
 
 /**
@@ -411,7 +411,7 @@ function MethodTag({ destination: d }: { destination: PromotionDestination }) {
     )
   }
   if (d.method === 'RELOCATE') {
-    return <Tag color="green" style={{ marginInlineEnd: 0 }}>Relocate</Tag>
+    return <StatusPill tone="ok" dot={false} style={{ marginInlineEnd: 0 }}>Relocate</StatusPill>
   }
   return <Tag style={{ marginInlineEnd: 0 }}>Copy</Tag>
 }

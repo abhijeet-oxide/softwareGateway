@@ -14,7 +14,7 @@ import { ManagedInGit, TimeAgo, TransferStateTag } from '../components/chips'
 import { EmptyStateCard, ErrorState } from '../components/layout'
 import { DownloadProgress } from '../components/progress'
 import { PriorityControl, QueueControls } from '../components/queuecontrols'
-import { c, mono } from '../uikit'
+import { c, mono, StatusPill } from '../uikit'
 import type { AutoDownloadRuleView, DownloadView, ReplicationView, Transfer } from '../api/types'
 
 /**
@@ -128,7 +128,7 @@ function MethodTag({ transfer }: { transfer: Transfer }) {
   if (transfer.strategy === 'relocate') {
     return (
       <Tooltip title="The registry moved it between two of its own repositories. No bytes crossed the wire.">
-        <Tag color="green" style={{ marginInlineEnd: 0 }}>Relocate</Tag>
+        <StatusPill tone="ok" dot={false} style={{ marginInlineEnd: 0 }}>Relocate</StatusPill>
       </Tooltip>
     )
   }
@@ -519,7 +519,7 @@ export default function Downloads() {
                     width: 130,
                     render: (_, r) =>
                       r.enabled ? (
-                        <Tag color="green">Enabled</Tag>
+                        <StatusPill tone="ok">Enabled</StatusPill>
                       ) : (
                         <Tooltip title="A rule is turned off in Git and nowhere else. There is no runtime override, so there is no toggle here.">
                           <Tag style={{ marginInlineEnd: 0 }}>Disabled</Tag>

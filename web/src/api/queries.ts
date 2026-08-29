@@ -393,8 +393,22 @@ export function useUnavailable(product: string | undefined) {
  * hundred most recent transfers are all downloads, and the promotions table
  * would be empty on exactly the deployments that have the most of them.
  */
+/**
+ * A page of transfers.
+ *
+ * `view: 'summary'` drops the `progress` object, and with it the twelve
+ * correlated aggregates the server computes over each transfer's jobs to
+ * produce it. That rollup IS the cost of this listing - a hundred rows take
+ * about 154ms with it and about 1ms without - and the pages that join transfer
+ * history onto a package listing (Overview, Packages, Products) read only
+ * names, states and timestamps. They ask for the summary; a page that draws a
+ * progress bar leaves `view` off and pays for the counts it draws.
+ */
 export function useTransfers(
-  filters: { product?: string; state?: string; operation?: string; pageSize?: number; pageToken?: string } = {},
+  filters: {
+    product?: string; state?: string; operation?: string
+    pageSize?: number; pageToken?: string; view?: 'summary'
+  } = {},
 ) {
   return useQuery({
     queryKey: ['transfers', filters],
@@ -522,35 +536,65 @@ export function useDownloads(product: string | undefined) {
  * whichever product a selector happens to be on: a page that answers "what
  * comes in automatically" with one product's answer is a page that hides the
  * rule somebody came to find. Bounded by the product count, which is 5-50.
+ *
+ * # `enabled`, because this is a REQUEST PER PRODUCT
+ *
+ * Fifty products is fifty requests, and these two feed tabs that are not the
+ * one the page opens on. They were issued on every visit to Downloads whether
+ * or not anybody opened Rules - a hundred requests, ahead of the two that
+ * populate the table actually on screen, competing with them for the browser's
+ * six connections per host.
+ *
+ * Configuration also does not move: five minutes of staleness means opening the
+ * tab a second time costs nothing, so deferring the first fetch to the moment
+ * it is needed loses nothing either.
  */
-export function useDownloadsForAll(products: string[]) {
+export function useDownloadsForAll(products: string[], enabled = true) {
   return useQueries({
     queries: products.map((product) => ({
       queryKey: ['downloads', product],
       queryFn: () => api.get<ListDownloadsResponse>(
         `/products/${encodeURIComponent(product)}/downloads`),
       staleTime: 5 * MINUTE,
+      enabled,
     })),
   })
 }
 
-export function useRulesForAll(products: string[]) {
+export function useRulesForAll(products: string[], enabled = true) {
   return useQueries({
     queries: products.map((product) => ({
       queryKey: ['rules', product],
       queryFn: () => api.get<ListAutoDownloadRulesResponse>(
         `/products/${encodeURIComponent(product)}/autoDownloadRules`),
       staleTime: 5 * MINUTE,
+      enabled,
     })),
   })
 }
 
+/**
+ * Every product's replication targets, for the drift banner.
+ *
+ * CACHED LIKE THE CONFIGURATION IT IS. This is the most expensive read on the
+ * Downloads page by a wide margin: one request per product, and each one asks
+ * every delegated target's registry what it currently looks like - a network
+ * round trip apiece, and a row written recording the observation. On the shared
+ * 30-second default the whole estate was re-read every time somebody navigated
+ * back to this page, against a Coordinator that may be leasing and completing
+ * jobs at the same time.
+ *
+ * Five minutes, which is what the two sibling product-configuration reads above
+ * already use. Drift is somebody editing a registry by hand: it does not need
+ * spotting within thirty seconds, and the target's own page reads it fresh.
+ */
 export function useReplicationForAll(products: string[]) {
   return useQueries({
     queries: products.map((product) => ({
       queryKey: ['replication', product],
       queryFn: () => api.get<ListReplicationResponse>(
         `/products/${encodeURIComponent(product)}/replication`),
+      staleTime: 5 * MINUTE,
     })),
   })
 }

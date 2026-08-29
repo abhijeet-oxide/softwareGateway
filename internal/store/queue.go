@@ -1615,7 +1615,37 @@ func (t TransferSummary) SavedBytes() int64 {
 
 // transferSelect is the shared projection, so list and get cannot disagree
 // about what a transfer looks like.
-func (p *Packages) transferSelect() string {
+func (p *Packages) transferSelect(withJobRollups bool) string {
+	/*
+	  The dozen aggregates over `jobs`, or literal zeros in their place.
+
+	  Same columns either way, so `scanTransfer` is one function and the two
+	  callers cannot drift into disagreeing about what a transfer looks like.
+	  What changes is whether the database is asked to read a transfer's jobs at
+	  all.
+
+	  It is worth asking, because most readers of this listing do not want them.
+	  The Overview and the package listing fetch a hundred transfers to join
+	  download history onto releases - which target, which state, when - and
+	  touch none of the job counts. They were paying a dozen index seeks per row
+	  for numbers they discard, every five seconds, for the whole life of a
+	  download.
+	*/
+	// One aggregate over this transfer's jobs, or the literal zero that stands
+	// in for it when the caller did not ask.
+	job := func(agg, filter string) string {
+		if !withJobRollups {
+			return "0"
+		}
+		return "COALESCE((SELECT " + agg + " FROM jobs j WHERE j.transfer_id = t.id " +
+			filter + "), 0)"
+	}
+	quietest := "''"
+	if withJobRollups {
+		quietest = `COALESCE((SELECT MIN(j.updated_at) FROM jobs j
+	                  WHERE j.transfer_id = t.id AND j.state = 'leased'), '')`
+	}
+
 	return `
 	SELECT t.id, t.request_id, t.package_id, pr.name, pkgsrc.repository_path, pk.tag,
 	       COALESCE(pk.display_tag, ''), COALESCE(pk.total_bytes, 0),
@@ -1624,30 +1654,21 @@ func (p *Packages) transferSelect() string {
 	       src.name, dst.name,
 	       t.state, t.priority, t.current_wave, t.max_wave,
 	       t.planned_job_count, t.planned_bytes, t.dedupe_skipped_bytes,
-	       COALESCE((SELECT SUM(j.size_bytes) FROM jobs j WHERE j.transfer_id = t.id
-	                  AND j.state = 'skipped'), 0),
-	       COALESCE((SELECT count(*) FROM jobs j WHERE j.transfer_id = t.id
-	                  AND j.state IN ('succeeded','skipped')), 0),
-	       COALESCE((SELECT count(*) FROM jobs j WHERE j.transfer_id = t.id
-	                  AND j.state = 'failed'), 0),
-	       COALESCE((SELECT count(*) FROM jobs j WHERE j.transfer_id = t.id
-	                  AND j.state IN ('pending','blocked','leased')), 0),
-	       COALESCE((SELECT SUM(j.bytes_transferred) FROM jobs j WHERE j.transfer_id = t.id), 0),
-	       COALESCE((SELECT count(*) FROM jobs j WHERE j.transfer_id = t.id
-	                  AND j.state = 'leased'), 0),
-	       COALESCE((SELECT count(DISTINCT j.lease_owner) FROM jobs j WHERE j.transfer_id = t.id
-	                  AND j.state = 'leased' AND j.lease_owner IS NOT NULL), 0),
-	       COALESCE((SELECT count(*) FROM jobs j WHERE j.transfer_id = t.id
-	                  AND j.state = 'pending' AND j.next_visible_at > ` + p.dialect.Now() + `), 0),
-	       COALESCE((SELECT count(*) FROM jobs j WHERE j.transfer_id = t.id
-	                  AND j.state = 'blocked'), 0),
-	       COALESCE((SELECT count(*) FROM jobs j WHERE j.transfer_id = t.id
-	                  AND j.repair_level > 0), 0),
-	       COALESCE((SELECT SUM(j.size_bytes - j.bytes_transferred) FROM jobs j
-	                  WHERE j.transfer_id = t.id
-	                    AND j.state IN ('pending','blocked','leased')), 0),
-	       COALESCE((SELECT MIN(j.updated_at) FROM jobs j
-	                  WHERE j.transfer_id = t.id AND j.state = 'leased'), ''),
+	       ` + job(`SUM(j.size_bytes)`, `AND j.state = 'skipped'`) + `,
+	       ` + job(`count(*)`, `AND j.state IN ('succeeded','skipped')`) + `,
+	       ` + job(`count(*)`, `AND j.state = 'failed'`) + `,
+	       ` + job(`count(*)`, `AND j.state IN ('pending','blocked','leased')`) + `,
+	       ` + job(`SUM(j.bytes_transferred)`, ``) + `,
+	       ` + job(`count(*)`, `AND j.state = 'leased'`) + `,
+	       ` + job(`count(DISTINCT j.lease_owner)`,
+		`AND j.state = 'leased' AND j.lease_owner IS NOT NULL`) + `,
+	       ` + job(`count(*)`,
+		`AND j.state = 'pending' AND j.next_visible_at > `+p.dialect.Now()) + `,
+	       ` + job(`count(*)`, `AND j.state = 'blocked'`) + `,
+	       ` + job(`count(*)`, `AND j.repair_level > 0`) + `,
+	       ` + job(`SUM(j.size_bytes - j.bytes_transferred)`,
+		`AND j.state IN ('pending','blocked','leased')`) + `,
+	       ` + quietest + `,
 	       COALESCE(t.failure_reason, ''), t.created_at, COALESCE(t.started_at, ''),
 	       COALESCE(t.completed_at, ''), t.strategy, rq.operation,
 	       COALESCE(t.active_seconds, 0), COALESCE(t.last_active_at, '')
@@ -1691,11 +1712,20 @@ type ListTransfersFilter struct {
 	Operation string
 	Limit     int
 	Offset    int
+	// WithoutJobCounts drops the per-transfer aggregates over `jobs`, leaving
+	// them zero.
+	//
+	// For the callers that want a transfer's IDENTITY and OUTCOME rather than
+	// its progress: the Overview and the package listing fetch a hundred
+	// transfers to join download history onto releases, and read none of the
+	// counts. Asking for them anyway is a dozen index seeks per row, every five
+	// seconds, for the whole life of a download.
+	WithoutJobCounts bool
 }
 
 // ListTransfers returns transfers, newest first.
 func (p *Packages) ListTransfers(ctx context.Context, f ListTransfersFilter) ([]TransferSummary, error) {
-	query := p.transferSelect()
+	query := p.transferSelect(!f.WithoutJobCounts)
 	var args []any
 
 	where := " WHERE 1=1"
@@ -1747,7 +1777,7 @@ func (p *Packages) GetTransfer(ctx context.Context, ref string) (TransferSummary
 		return TransferSummary{}, err
 	}
 
-	row := p.db.QueryRowContext(ctx, p.dialect.Rewrite(p.transferSelect()+" WHERE t.id = ?"), id)
+	row := p.db.QueryRowContext(ctx, p.dialect.Rewrite(p.transferSelect(true)+" WHERE t.id = ?"), id)
 
 	t, scanErr := scanTransfer(row)
 	if errors.Is(scanErr, sql.ErrNoRows) {

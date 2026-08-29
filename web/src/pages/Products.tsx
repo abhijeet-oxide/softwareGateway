@@ -39,7 +39,7 @@ const label = (p?: Product) => p?.displayName || p?.productId || 'A product'
 
 function VersionHistory({ product }: { product: Product }) {
   const packages = usePackages(product.productId, { pageSize: 25 })
-  const transfers = useTransfers({ product: product.productId, pageSize: 200 })
+  const transfers = useTransfers({ product: product.productId, pageSize: 200, view: 'summary' })
 
   if (packages.isError) {
     return <ErrorState error={packages.error} retry={() => void packages.refetch()} />

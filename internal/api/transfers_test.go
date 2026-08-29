@@ -2,6 +2,7 @@ package api
 
 import (
 	"net/http"
+	"reflect"
 	"strconv"
 	"testing"
 
@@ -263,5 +264,61 @@ func TestTransferActivityIsNotATransferID(t *testing.T) {
 	var prob v1.Problem
 	if code := h.get("/api/v1/transfers/activity", &prob); code != http.StatusNotFound {
 		t.Errorf("GET /transfers/activity = %d, want 404 - it is not a transfer", code)
+	}
+}
+
+// THE SUMMARY VIEW DROPS THE ROLLUP AND NOTHING ELSE.
+//
+// `?view=summary` exists because the twelve correlated aggregates behind
+// `progress` are the entire cost of this listing - about 154ms for a hundred
+// rows against about 1ms without them (store.TestListingWithoutJobCountsIsMuchCheaper).
+// Three pages fetch a page of transfers only to join a release's history onto a
+// package listing, and none of them draws a progress bar.
+//
+// The saving is only honest if the fields those pages DO read survive it. A
+// summary that quietly dropped `state`, `tag` or `activeSeconds` would make
+// every release read NEW on the Packages page while looking, from the server,
+// like an optimisation.
+func TestTheSummaryViewDropsProgressAndKeepsTheHistory(t *testing.T) {
+	h := newAPIHarness(t)
+	id := h.seedTransfer("11111111-2222-3333-4444-555555555555")
+
+	var full, lite v1.ListTransfersResponse
+	if code := h.get("/api/v1/transfers?pageSize=100", &full); code != http.StatusOK {
+		t.Fatalf("full listing = %d, want 200", code)
+	}
+	if code := h.get("/api/v1/transfers?pageSize=100&view=summary", &lite); code != http.StatusOK {
+		t.Fatalf("summary listing = %d, want 200", code)
+	}
+
+	find := func(rows []v1.Transfer) v1.Transfer {
+		t.Helper()
+		for _, tr := range rows {
+			if tr.ID == id {
+				return tr
+			}
+		}
+		t.Fatalf("the seeded transfer is missing from a listing of %d", len(rows))
+		return v1.Transfer{}
+	}
+	a, b := find(full.Transfers), find(lite.Transfers)
+
+	// The rollup is there when it is asked for. Four pending jobs were seeded,
+	// so a listing reporting none of them planned has not run the aggregates at
+	// all and the comparison below would pass for the wrong reason.
+	if a.Progress == nil || a.Progress.JobsOutstanding != 4 {
+		t.Fatalf("the full listing reported %+v, want the 4 seeded jobs", a.Progress)
+	}
+	if b.Progress != nil {
+		t.Errorf("the summary carried a progress object: %+v", b.Progress)
+	}
+
+	// And everything else is the same transfer. Compared by clearing the one
+	// field that is meant to differ, so a field added to the DTO later is
+	// covered by this test without anyone remembering to list it here.
+	a.Progress = nil
+	if !reflect.DeepEqual(a, b) {
+		t.Errorf("the summary differs from the full row in more than progress:\n"+
+			" full: %+v\n summary: %+v", a, b)
 	}
 }

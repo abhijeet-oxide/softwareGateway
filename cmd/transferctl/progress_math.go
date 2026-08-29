@@ -69,7 +69,7 @@ func averageRate(t *v1.Transfer) (float64, bool) {
 	if !ok {
 		return 0, false
 	}
-	moved := int64Of(t.Progress.BytesTransferred)
+	moved := int64Of(progressOf(t).BytesTransferred)
 	if moved <= 0 {
 		return 0, false
 	}
@@ -163,8 +163,8 @@ func byteEstimate(t *v1.Transfer, rate float64) (time.Duration, bool) {
 // flight - which is exactly why the byte estimate takes a live rate and this
 // one does not need to.
 func jobEstimate(t *v1.Transfer) (time.Duration, bool) {
-	outstanding := t.Progress.JobsOutstanding
-	if outstanding <= 0 || t.Progress.JobsDone <= 0 {
+	outstanding := progressOf(t).JobsOutstanding
+	if outstanding <= 0 || progressOf(t).JobsDone <= 0 {
 		return 0, false
 	}
 
@@ -173,7 +173,7 @@ func jobEstimate(t *v1.Transfer) (time.Duration, bool) {
 		return 0, false
 	}
 
-	perSecond := float64(t.Progress.JobsDone) / d.Seconds()
+	perSecond := float64(progressOf(t).JobsDone) / d.Seconds()
 	if perSecond <= 0 {
 		return 0, false
 	}
@@ -199,10 +199,10 @@ func jobEstimate(t *v1.Transfer) (time.Duration, bool) {
 // then returned the whole plan minus the little that had moved, and a transfer
 // with nothing left to do reported thousands of hours remaining.
 func remainingBytes(t *v1.Transfer) int64 {
-	if t.Progress.OutstandingBytes != "" {
-		return int64Of(t.Progress.OutstandingBytes)
+	if progressOf(t).OutstandingBytes != "" {
+		return int64Of(progressOf(t).OutstandingBytes)
 	}
-	return int64Of(t.Progress.PlannedBytes) - int64Of(t.Progress.BytesTransferred)
+	return int64Of(progressOf(t).PlannedBytes) - int64Of(progressOf(t).BytesTransferred)
 }
 
 // packageBytes is the size of the RELEASE, which is not what was planned.
@@ -256,8 +256,8 @@ func movableBytes(t *v1.Transfer) int64 {
 		return 0
 	}
 
-	planned := int64Of(t.Progress.PlannedBytes)
-	moved := int64Of(t.Progress.BytesTransferred)
+	planned := int64Of(progressOf(t).PlannedBytes)
+	moved := int64Of(progressOf(t).BytesTransferred)
 
 	// What the completed jobs were PLANNED to weigh, against what they actually
 	// sent. Both sides have to come from the same population or the ratio is
@@ -337,4 +337,17 @@ func int64Of(v v1.Int64String) int64 {
 		return 0
 	}
 	return n
+}
+
+// progressOf is a transfer's job rollup, or an empty one.
+//
+// The field is ABSENT on a listing asked for with `view=summary`, which this
+// CLI never asks for - every command here wants the numbers. So a nil means an
+// unusual or older server rather than a view this code chose, and an empty
+// rollup renders as dashes: the honest thing to show for figures nobody sent.
+func progressOf(t *v1.Transfer) v1.TransferProgress {
+	if t == nil || t.Progress == nil {
+		return v1.TransferProgress{}
+	}
+	return *t.Progress
 }

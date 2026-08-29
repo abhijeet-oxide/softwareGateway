@@ -301,8 +301,6 @@ export default function Downloads() {
   // deployments that promote the most.
   const transfers = useTransfers({ pageSize: 25, operation: 'replicate', pageToken: transferToken })
   const promotionsQuery = useTransfers({ pageSize: 25, operation: 'promote', pageToken: promotionToken })
-  const downloadsPerProduct = useDownloadsForAll(names)
-  const rulesPerProduct = useRulesForAll(names)
   const replicationPerProduct = useReplicationForAll(names)
 
   /*
@@ -368,6 +366,23 @@ export default function Downloads() {
       : failedPromotions === failed.length
         ? 'promotion'
         : 'downloads'
+  // Which tab is actually showing, which is what decides whether the two
+  // per-product fan-outs below are worth issuing at all.
+  const openTab = tab ?? defaultTab
+
+  /*
+    A REQUEST PER PRODUCT, so only for the tab that is open.
+
+    These two feed the Rules and Auto download tabs. The page does not open on
+    either, and they were fetched anyway - fifty products meant a hundred
+    requests issued ahead of the two that populate the table actually on
+    screen, competing with them for the browser's six connections per host.
+
+    The replication fan-out below is not gated: it feeds the drift banner,
+    which is on the page whichever tab is showing.
+  */
+  const downloadsPerProduct = useDownloadsForAll(names, openTab === 'rules')
+  const rulesPerProduct = useRulesForAll(names, openTab === 'auto-download')
   const visibleOngoing = searchable(ongoing, ongoingSearch, (t) => `${t.product} ${t.packageName} ${t.tag} ${t.source} ${t.target}`)
   const visibleFinished = searchable(finished, downloadSearch, (t) => `${t.product} ${t.packageName} ${t.tag} ${t.source} ${t.target}`)
   const visiblePromotions = searchable(promotions, promotionSearch, (t) => `${t.product} ${t.packageName} ${t.tag} ${t.source} ${t.target}`)
@@ -493,7 +508,7 @@ export default function Downloads() {
             list would fix the tab on Ongoing before the data that should have
             decided it had loaded.
           */
-          activeKey={tab ?? defaultTab}
+          activeKey={openTab}
           onChange={setTab}
           items={[
             {

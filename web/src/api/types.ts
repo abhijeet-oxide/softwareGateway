@@ -519,7 +519,14 @@ export interface Transfer {
   promotion?: PromotionProgress
   currentWave: number
   maxWave: number
-  progress: TransferProgress
+  /**
+   * ABSENT on a summary listing. `?view=summary` skips the per-transfer job
+   * rollup - twelve correlated subqueries a row, and the whole cost of the
+   * listing - so a page that only reads names and states does not pay for
+   * counts it never draws. Read it optionally; a page that needs the numbers
+   * asks without `view`.
+   */
+  progress?: TransferProgress
   failureReason?: string
   waves?: TransferWave[]
   content?: ContentGroup[]

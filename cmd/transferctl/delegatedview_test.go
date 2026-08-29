@@ -71,7 +71,7 @@ func TestDelegatedDescribePointsAtTheTarget(t *testing.T) {
 func TestCopyTransferIsUnchanged(t *testing.T) {
 	tr := delegatedTransfer(v1.TransferRunning)
 	tr.Strategy = "copy"
-	tr.Progress = v1.TransferProgress{JobsPlanned: 10, JobsDone: 4}
+	tr.Progress = &v1.TransferProgress{JobsPlanned: 10, JobsDone: 4}
 
 	out := describe(t, tr)
 	if !strings.Contains(out, "Progress") || !strings.Contains(out, "40%") {

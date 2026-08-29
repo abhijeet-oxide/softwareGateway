@@ -344,7 +344,7 @@ func (r rateTrackers) observe(transfers []v1.Transfer, at time.Time) {
 			tracker = &rateTracker{}
 			r[t.ID] = tracker
 		}
-		tracker.observe(int64Of(t.Progress.BytesTransferred), at)
+		tracker.observe(int64Of(progressOf(t).BytesTransferred), at)
 	}
 }
 
@@ -453,15 +453,15 @@ func renderTransferList(
 			endpointName(t.SourceName, t.Source),
 			endpointName(t.TargetName, t.Target),
 			strings.ToLower(string(t.State)),
-			fmt.Sprintf("%.0f%%", percentComplete(t.Progress)),
-			jobProgress(t.Progress),
-			failedJobs(t.Progress),
-			copiedBytes(t.Progress),
-			savedBytes(t.Progress),
-			leftBytes(t.Progress),
-			plannedBytes(t.Progress),
+			fmt.Sprintf("%.0f%%", percentComplete(progressOf(t))),
+			jobProgress(progressOf(t)),
+			failedJobs(progressOf(t)),
+			copiedBytes(progressOf(t)),
+			savedBytes(progressOf(t)),
+			leftBytes(progressOf(t)),
+			plannedBytes(progressOf(t)),
 			speedOf(t, rates.rateFor(t.ID)),
-			fmt.Sprint(t.Progress.JobsInFlight),
+			fmt.Sprint(progressOf(t).JobsInFlight),
 			elapsedOf(t),
 			etaOf(t, rates.rateFor(t.ID)),
 		}
@@ -725,7 +725,7 @@ func isSettled(state v1.TransferState) bool {
 // by the elapsed time would print `0 B/s` for a delta transfer that did exactly
 // what it should have, which reads as a link that was not working.
 func speedOf(t *v1.Transfer, live float64) string {
-	if !isSettled(t.State) && t.Progress.JobsInFlight == 0 {
+	if !isSettled(t.State) && progressOf(t).JobsInFlight == 0 {
 		return "-"
 	}
 	if live > 0 && !isSettled(t.State) {
@@ -767,11 +767,11 @@ func etaOf(t *v1.Transfer, live float64) string {
 	// What is printed instead says WHY there is no estimate, because that is
 	// the actionable half. A job in backoff will start again on its own; a
 	// transfer with nothing running and nothing waiting will not.
-	if t.Progress.JobsInFlight == 0 {
+	if progressOf(t).JobsInFlight == 0 {
 		switch {
-		case t.Progress.JobsOutstanding == 0:
+		case progressOf(t).JobsOutstanding == 0:
 			return "-"
-		case t.Progress.JobsWaiting > 0:
+		case progressOf(t).JobsWaiting > 0:
 			return "waiting"
 		default:
 			return "stalled"
@@ -805,7 +805,7 @@ func newTransfersDescribeCommand() *cobra.Command {
 				if err != nil {
 					return false, err
 				}
-				rates.observe(int64Of(t.Progress.BytesTransferred), time.Now())
+				rates.observe(int64Of(progressOf(t).BytesTransferred), time.Now())
 
 				if err := render(w, opts.output, t, func(w io.Writer) error {
 					return describeTransfer(w, t, rates, watch)
@@ -1215,7 +1215,7 @@ func describeTransfer(w io.Writer, t *v1.Transfer, rates *rateTracker, watching 
 	fmt.Fprintln(w)
 	fmt.Fprintln(w, "Progress")
 	pw := newTabWriter(w)
-	p := t.Progress
+	p := progressOf(t)
 	fmt.Fprintf(pw, "  Jobs:\t%d done, %d outstanding, %d failed (of %d planned, %.0f%%)\n",
 		p.JobsDone, p.JobsOutstanding, p.JobsFailed, p.JobsPlanned, percentComplete(p))
 	fmt.Fprintf(pw, "  In flight:\t%s%s\n", inFlight(p), quietFor(p))

@@ -152,14 +152,23 @@ func (s *Server) handleListTransfers(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// `view=summary` drops the per-transfer job rollup - twelve correlated
+	// subqueries per row, which is the whole cost of this listing (154ms for a
+	// hundred rows against 1ms without; see
+	// store.TestListingWithoutJobCountsIsMuchCheaper). The pages that only need
+	// a name and a state ask for it and get the cheap plan; anything drawing a
+	// progress bar leaves it off and pays for the counts it draws.
+	summary := q.Get("view") == "summary"
+
 	// One row over the page size, so "is there another page" is answered
 	// without a second COUNT and without claiming a page that turns out empty.
 	rows, err := s.deps.Packages.ListTransfers(r.Context(), store.ListTransfersFilter{
-		ProductName: q.Get("product"),
-		State:       state,
-		Operation:   operation,
-		Limit:       pageSize + 1,
-		Offset:      offset,
+		ProductName:      q.Get("product"),
+		State:            state,
+		Operation:        operation,
+		Limit:            pageSize + 1,
+		Offset:           offset,
+		WithoutJobCounts: summary,
 	})
 	if err != nil {
 		Error(w, r, v1.CodeUnavailable, "could not list transfers: "+err.Error())
@@ -172,7 +181,7 @@ func (s *Server) handleListTransfers(w http.ResponseWriter, r *http.Request) {
 		rows = rows[:pageSize]
 	}
 	for _, t := range rows {
-		out.Transfers = append(out.Transfers, transferDTO(t))
+		out.Transfers = append(out.Transfers, transferDTO(t, !summary))
 	}
 	WriteJSON(w, r, http.StatusOK, out)
 }
@@ -203,7 +212,7 @@ func (s *Server) handleGetTransfer(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	dto := transferDTO(t)
+	dto := transferDTO(t, true)
 	// Only on the single-transfer read. A failure to group the waves does not
 	// fail the request: it is a breakdown of numbers already in the response,
 	// and losing it must not cost the reader the response.
@@ -315,50 +324,62 @@ func (s *Server) handleListTransferJobs(w http.ResponseWriter, r *http.Request) 
 	WriteJSON(w, r, http.StatusOK, out)
 }
 
-func transferDTO(t store.TransferSummary) v1.Transfer {
-	return v1.Transfer{
-		ID:          t.ID,
-		RequestID:   t.RequestID,
-		Product:     t.ProductName,
-		PackageName: t.PackageName,
-		PackageID:   strconv.FormatInt(t.PackageID, 10),
-		Tag:         t.Tag,
-		DisplayTag:  t.DisplayTag,
-		Source:      t.Source,
-		Target:      t.Target,
-		SourceName:  t.SourceName,
-		TargetName:  t.TargetName,
-		State:       v1.TransferState(strings.ToUpper(t.State)),
-		Operation:   strings.ToUpper(t.Operation),
-		Strategy:    t.Strategy,
-		Priority:    t.Priority,
-		CurrentWave: t.CurrentWave,
-		MaxWave:     t.MaxWave,
-		Progress: v1.TransferProgress{
-			JobsPlanned:        t.PlannedJobs,
-			JobsDone:           t.JobsDone,
-			JobsFailed:         t.JobsFailed,
-			JobsBlocked:        t.JobsBlocked,
-			JobsRepaired:       t.JobsRepaired,
-			OutstandingBytes:   v1.Int64String(strconv.FormatInt(t.OutstandingBytes, 10)),
-			QuietestInFlight:   t.QuietestInFlight,
-			JobsOutstanding:    t.JobsOutstanding,
-			JobsInFlight:       t.JobsInFlight,
-			Workers:            t.Workers,
-			JobsWaiting:        t.JobsWaiting,
-			ContentBytes:       v1.Int64String(strconv.FormatInt(t.ContentBytes, 10)),
-			PlannedBytes:       v1.Int64String(strconv.FormatInt(t.PlannedBytes, 10)),
-			BytesTransferred:   v1.Int64String(strconv.FormatInt(t.BytesTransferred, 10)),
-			DedupeSkippedBytes: v1.Int64String(strconv.FormatInt(t.DedupeSkippedBytes, 10)),
-			SkippedBytes:       v1.Int64String(strconv.FormatInt(t.SkippedBytes, 10)),
-			SavedBytes:         v1.Int64String(strconv.FormatInt(t.SavedBytes(), 10)),
-		},
+// transferDTO renders a transfer, with or without its job rollup.
+//
+// `withProgress` follows what the store was ASKED for. A summary listing does
+// not read a transfer's jobs at all, so the counts it would otherwise carry are
+// structurally zero - and a zero here is indistinguishable from a transfer that
+// has genuinely moved nothing. Omitting the field says "not asked for", which
+// is the truth; sending zeros would say "nothing has happened", which is not.
+func transferDTO(t store.TransferSummary, withProgress bool) v1.Transfer {
+	out := v1.Transfer{
+		ID:            t.ID,
+		RequestID:     t.RequestID,
+		Product:       t.ProductName,
+		PackageName:   t.PackageName,
+		PackageID:     strconv.FormatInt(t.PackageID, 10),
+		Tag:           t.Tag,
+		DisplayTag:    t.DisplayTag,
+		Source:        t.Source,
+		Target:        t.Target,
+		SourceName:    t.SourceName,
+		TargetName:    t.TargetName,
+		State:         v1.TransferState(strings.ToUpper(t.State)),
+		Operation:     strings.ToUpper(t.Operation),
+		Strategy:      t.Strategy,
+		Priority:      t.Priority,
+		CurrentWave:   t.CurrentWave,
+		MaxWave:       t.MaxWave,
 		FailureReason: t.FailureReason,
 		CreatedAt:     t.CreatedAt,
 		StartedAt:     t.StartedAt,
 		CompletedAt:   t.CompletedAt,
 		ActiveSeconds: activeSeconds(t),
 	}
+	if !withProgress {
+		return out
+	}
+
+	out.Progress = &v1.TransferProgress{
+		JobsPlanned:        t.PlannedJobs,
+		JobsDone:           t.JobsDone,
+		JobsFailed:         t.JobsFailed,
+		JobsBlocked:        t.JobsBlocked,
+		JobsRepaired:       t.JobsRepaired,
+		OutstandingBytes:   v1.Int64String(strconv.FormatInt(t.OutstandingBytes, 10)),
+		QuietestInFlight:   t.QuietestInFlight,
+		JobsOutstanding:    t.JobsOutstanding,
+		JobsInFlight:       t.JobsInFlight,
+		Workers:            t.Workers,
+		JobsWaiting:        t.JobsWaiting,
+		ContentBytes:       v1.Int64String(strconv.FormatInt(t.ContentBytes, 10)),
+		PlannedBytes:       v1.Int64String(strconv.FormatInt(t.PlannedBytes, 10)),
+		BytesTransferred:   v1.Int64String(strconv.FormatInt(t.BytesTransferred, 10)),
+		DedupeSkippedBytes: v1.Int64String(strconv.FormatInt(t.DedupeSkippedBytes, 10)),
+		SkippedBytes:       v1.Int64String(strconv.FormatInt(t.SkippedBytes, 10)),
+		SavedBytes:         v1.Int64String(strconv.FormatInt(t.SavedBytes(), 10)),
+	}
+	return out
 }
 
 // activeSeconds is the stored accrual plus whatever this instant is owed.

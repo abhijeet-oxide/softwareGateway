@@ -10,6 +10,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/google/uuid"
+
 	"github.com/abhijeet-oxide/softwareGateway/internal/platform/backoff"
 )
 
@@ -1642,8 +1644,8 @@ func (p *Packages) transferSelect(withJobRollups bool) string {
 	}
 	quietest := "''"
 	if withJobRollups {
-		quietest = `COALESCE((SELECT MIN(j.updated_at) FROM jobs j
-	                  WHERE j.transfer_id = t.id AND j.state = 'leased'), '')`
+		quietest = p.dialect.TimestampText(`(SELECT MIN(j.updated_at) FROM jobs j
+	                  WHERE j.transfer_id = t.id AND j.state = 'leased')`)
 	}
 
 	return `
@@ -1669,9 +1671,19 @@ func (p *Packages) transferSelect(withJobRollups bool) string {
 	       ` + job(`SUM(j.size_bytes - j.bytes_transferred)`,
 		`AND j.state IN ('pending','blocked','leased')`) + `,
 	       ` + quietest + `,
-	       COALESCE(t.failure_reason, ''), t.created_at, COALESCE(t.started_at, ''),
-	       COALESCE(t.completed_at, ''), t.strategy, rq.operation,
-	       COALESCE(t.active_seconds, 0), COALESCE(t.last_active_at, '')
+	       COALESCE(t.failure_reason, ''),
+	       -- EVERY TIMESTAMP GOES OUT AS RFC3339 TEXT, from both databases.
+	       --
+	       -- These four are scanned into strings and served to a browser, and
+	       -- three of them are nullable. COALESCE(x, empty string) is how that
+	       -- was written, a SQLite idiom rather than SQL: Postgres stores
+	       -- these as timestamptz and rejects the empty string, so listing or
+	       -- reading a transfer failed outright on it. See Dialect.TimestampText.
+	       ` + p.dialect.TimestampText("t.created_at") + `,
+	       ` + p.dialect.TimestampText("t.started_at") + `,
+	       ` + p.dialect.TimestampText("t.completed_at") + `, t.strategy, rq.operation,
+	       COALESCE(t.active_seconds, 0),
+	       ` + p.dialect.TimestampText("t.last_active_at") + `
 	  FROM transfers t
 	  JOIN transfer_requests rq ON rq.id = t.request_id
 	  JOIN packages pk ON pk.id = t.package_id
@@ -1806,21 +1818,39 @@ func (p *Packages) ResolveTransferID(ctx context.Context, ref string) (string, e
 		return "", errors.New("a transfer ID is required")
 	}
 
-	var exact string
-	err := p.db.QueryRowContext(ctx,
-		p.dialect.Rewrite(`SELECT id FROM transfers WHERE id = ?`), ref).Scan(&exact)
-	if err == nil {
-		return exact, nil
-	}
-	if !errors.Is(err, sql.ErrNoRows) {
-		return "", fmt.Errorf("resolve transfer %s: %w", ref, err)
+	// THE EXACT LOOKUP IS ONLY ATTEMPTED FOR A WHOLE UUID.
+	//
+	// Postgres declares this column UUID, and comparing it with a string that
+	// is not one does not miss - it raises `invalid input syntax for type
+	// uuid`. So handing it a short reference did not fall through to the
+	// prefix search below; it returned a database error naming a syntax
+	// nobody typed, and `transferctl transfer 3f2a` could not work at all.
+	//
+	// Asking first is also what keeps the common path indexed: an exact match
+	// compares the column itself rather than a cast of it.
+	if _, err := uuid.Parse(ref); err == nil {
+		var exact string
+		err := p.db.QueryRowContext(ctx,
+			p.dialect.Rewrite(`SELECT id FROM transfers WHERE id = ?`), ref).Scan(&exact)
+		if err == nil {
+			return exact, nil
+		}
+		if !errors.Is(err, sql.ErrNoRows) {
+			return "", fmt.Errorf("resolve transfer %s: %w", ref, err)
+		}
 	}
 
 	// LIKE with an escaped pattern: a UUID contains none of the wildcards, but
 	// the input is user-supplied and building a pattern from it unescaped is
 	// how a listing turns into a scan.
+	//
+	// Against the id AS TEXT, because LIKE has no meaning for a Postgres UUID
+	// (`operator does not exist: uuid ~~ unknown`). This is the scanning path
+	// either way - a prefix of a random id is not something an index helps
+	// with - and it is bounded by the LIMIT.
 	rows, err := p.db.QueryContext(ctx, p.dialect.Rewrite(
-		`SELECT id FROM transfers WHERE id LIKE ? ESCAPE '\' ORDER BY created_at DESC LIMIT 10`),
+		`SELECT id FROM transfers WHERE `+p.dialect.IDText("id")+
+			` LIKE ? ESCAPE '\' ORDER BY created_at DESC LIMIT 10`),
 		escapeLike(ref)+"%")
 	if err != nil {
 		return "", fmt.Errorf("resolve transfer %s: %w", ref, err)

@@ -38,15 +38,22 @@ const sweepEvery = 30 * time.Second
 // other recorded zero seconds for every download ever run.
 //
 // Skipped rather than failed when there is no server, so `go test ./...` on a
-// laptop stays green. `SWGW_TEST_POSTGRES` is the DSN.
+// laptop stays green. `TEST_POSTGRES_DSN` is the DSN.
+//
+// NOT `SWGW_`-PREFIXED, deliberately. The configuration loader rejects any
+// unrecognised SWGW_ variable - a good rule, since a typo in a deployment's
+// environment would otherwise be silently ignored - so a gate named
+// `SWGW_TEST_POSTGRES` made `go test ./...` fail in the config package the
+// moment it was set. Which meant the full suite was never once run against
+// Postgres, and two Postgres-only bugs in the transfer listing shipped.
 func eachDialect(t *testing.T, run func(t *testing.T, h *activeHarness)) {
 	t.Helper()
 
 	t.Run("sqlite", func(t *testing.T) { run(t, newActiveHarness(t, openTestStore)) })
 
-	dsn := os.Getenv("SWGW_TEST_POSTGRES")
+	dsn := os.Getenv("TEST_POSTGRES_DSN")
 	if dsn == "" {
-		t.Log("SWGW_TEST_POSTGRES is unset, so the Postgres form of these " +
+		t.Log("TEST_POSTGRES_DSN is unset, so the Postgres form of these " +
 			"statements was not exercised")
 		return
 	}

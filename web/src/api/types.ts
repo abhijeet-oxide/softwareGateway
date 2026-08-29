@@ -497,6 +497,23 @@ export interface Transfer {
   /** When the first job was leased, not when the transfer was asked for. */
   startedAt?: string
   completedAt?: string
+  /**
+   * How long there was work of this transfer IN A WORKER'S HANDS.
+   *
+   * A different quantity from `completedAt - startedAt`, and the one a person
+   * means by "how long did it take". The two are equal on a transfer that ran
+   * without interruption and diverge by exactly the interruption on one that
+   * did not: a fleet down overnight adds that night to the wall clock and
+   * nothing to this.
+   *
+   * It is also the right denominator for a throughput. Dividing bytes by wall
+   * clock after an outage reports a healthy link at a fraction of its speed -
+   * the outage is in the denominator and none of it was spent transferring.
+   *
+   * Absent on a transfer no worker has ever held, which is honest rather than
+   * zero: nothing has spent any time on it.
+   */
+  activeSeconds?: number
 }
 
 export interface ListTransfersResponse { transfers: Transfer[]; nextPageToken?: string }

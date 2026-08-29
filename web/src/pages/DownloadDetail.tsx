@@ -429,10 +429,35 @@ export default function DownloadDetail() {
     ?? bytes(progress?.savedBytes)
     ?? bytes(progress?.dedupeSkippedBytes)
 
-  const elapsed = elapsedSeconds(t?.startedAt, t?.completedAt)
-  // The AVERAGE: bytes we moved over the whole time we have had this download.
-  // Honest, useful for "how long does one of these take", and NOT the answer to
-  // "what is it doing now" - see below.
+  /*
+    TWO DURATIONS, and only one of them is how long the download took.
+
+    `wallClock` is completedAt minus startedAt. It is the right answer to "when
+    was this asked for and when did it land", and the wrong answer to every
+    other question, because a queue that survives outages spends time not
+    running on purpose: a worker that crashed at midnight and came back at noon
+    puts twelve hours in this number, of which twenty minutes were spent moving
+    bytes.
+
+    `spent` is the time a worker actually had work of this transfer in its
+    hands, accrued by the Coordinator while it was happening. It is what a
+    person means by "how long did it take" - and, more consequentially, it is
+    the only honest denominator for a throughput. Dividing by the wall clock
+    after an outage reports a perfectly healthy link at a thirty-sixth of its
+    speed, with the outage sitting in the denominator.
+  */
+  const wallClock = elapsedSeconds(t?.startedAt, t?.completedAt)
+  const spent = t?.activeSeconds
+  // An older Coordinator does not send it. Wall clock is what it had, and a
+  // coarse answer beats an empty column.
+  const elapsed = spent ?? wallClock
+  // How much of the wall clock was NOT spent downloading. Only worth saying
+  // when it is a real difference rather than a rounding one.
+  const idle = wallClock !== undefined && spent !== undefined
+    ? Math.max(0, wallClock - spent)
+    : undefined
+  const interrupted = (idle ?? 0) > 60 && (idle ?? 0) > (spent ?? 0) * 0.1
+
   const average = elapsed && transferred && elapsed > 0 ? transferred / elapsed : undefined
 
   const running = t ? isLive(t.state) : false
@@ -573,7 +598,31 @@ export default function DownloadDetail() {
           t && (
             <Space size={16}>
               <TransferStateTag state={t.state} />
-              <Stat title="Elapsed" value={formatDuration(elapsed)} valueStyle={{ fontSize: 18 }} />
+              {/*
+                TIME SPENT, not time since. The distinction has a tooltip
+                rather than a second stat because most downloads have nothing
+                to distinguish - they ran straight through and the two numbers
+                are the same one.
+              */}
+              <Tooltip
+                title={
+                  interrupted
+                    ? `Time a worker was actually moving this. It sat for `
+                      + `${formatDuration(idle)} without one - a fleet that was down, or `
+                      + `capacity taken by other work - and that is not counted here. `
+                      + `From first job to last it was ${formatDuration(wallClock)}.`
+                    : 'Time a worker was actually moving this. Any period the download '
+                      + 'spent waiting for one is not counted.'
+                }
+              >
+                <span>
+                  <Stat
+                    title="Time spent"
+                    value={formatDuration(elapsed)}
+                    valueStyle={{ fontSize: 18 }}
+                  />
+                </span>
+              </Tooltip>
               {/*
                 NO ARRIVAL TO ESTIMATE while nothing is moving it.
 
@@ -969,9 +1018,27 @@ export default function DownloadDetail() {
                   <Value>{formatBytes(saved)}</Value>
                 </SavedBreakdown>
               </Descriptions.Item>
-              <Descriptions.Item label="Total time">
-                <Value>{formatDuration(elapsed)}</Value>
+              <Descriptions.Item label="Time spent downloading">
+                <Tooltip title="Time a worker actually had work of this download in its hands, accrued while it happened. Waiting for a worker is not downloading, and counting it is what made a healthy link read as a slow one.">
+                  <span><Value>{formatDuration(elapsed)}</Value></span>
+                </Tooltip>
               </Descriptions.Item>
+              {/*
+                The wall clock, and ONLY when it disagrees.
+
+                On a download that ran straight through the two are the same
+                number, and printing it twice under two headings invites the
+                reader to hunt for a difference that is not there. It appears
+                when there is something to explain - which is the case this
+                whole pair of numbers exists for.
+              */}
+              {interrupted && (
+                <Descriptions.Item label="Of which waiting">
+                  <Tooltip title={`From the first job to the last was ${formatDuration(wallClock)}. This much of it had no worker on this download - the fleet was down, or its capacity was taken by other work.`}>
+                    <span><Value>{formatDuration(idle)}</Value></span>
+                  </Tooltip>
+                </Descriptions.Item>
+              )}
               <Descriptions.Item label="Average speed">
                 {/*
                   EVERYTHING divided by EVERYTHING: the bytes we moved over the
@@ -980,7 +1047,7 @@ export default function DownloadDetail() {
                   the wrong one for "what is it doing now", which is why the
                   header carries a different one under a different name.
                 */}
-                <Tooltip title="Bytes moved over the download's whole life, including any time it spent planned, queued or stalled. The header shows what it is doing right now.">
+                <Tooltip title="Bytes moved over the time a worker was actually moving them - not over the wall clock, which would put every minute the download spent waiting into the denominator. The header shows what it is doing right now.">
                   <span>
                     <Value reason="A speed needs bytes we moved and a duration we timed. One of them is missing.">
                       {formatSpeed(average)}

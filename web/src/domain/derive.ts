@@ -382,6 +382,27 @@ export interface LifecycleStep {
   stage: LifecycleStage
   reached: boolean
   current: boolean
+  /**
+   * This stage was ATTEMPTED AND DID NOT COMPLETE.
+   *
+   * # Why a flag rather than a fifth stage
+   *
+   * A failure is not somewhere a release gets to. It is a thing that happened
+   * to a stage it was already at, and giving it a stage of its own would mean
+   * a release could be "at" Failed - which then has to be ordered against the
+   * other four, and is not.
+   *
+   * # Why it had to exist at all
+   *
+   * Without it a failed release had NO current stage: `current` is derived
+   * from the status, and DOWNLOAD FAILED matches none of the four. Every
+   * reader of these steps then fell back to the last stage that was REACHED -
+   * which for a failed download is Downloading, because a download was indeed
+   * started. So the listing showed `Download failed` in the status column and
+   * `Downloading` in the lifecycle column, on the same row, about the same
+   * release, forever.
+   */
+  failed?: boolean
   /** When this stage was reached. Absent where we cannot say. */
   at?: string
 }
@@ -405,6 +426,19 @@ export function deriveLifecycle(pkg: Package, product?: Product): LifecycleStep[
   const reachedDownloaded = succeeded.length > 0
   const reachedProduction = Boolean(inProduction)
 
+  /*
+   * WHERE A FAILURE LANDS.
+   *
+   * On the stage the failed transfer was trying to REACH, which is not the
+   * same for the two operations: a download that failed never got the release
+   * downloaded, and a promotion that failed had it downloaded already and did
+   * not get it into production. The status derivation has told these apart
+   * since it learnt about operations; the lifecycle had no way to express
+   * either, so it expressed neither.
+   */
+  const failedDownload = status === 'DOWNLOAD FAILED'
+  const failedPromotion = status === 'PROMOTION FAILED'
+
   return [
     {
       stage: 'Vendor',
@@ -415,7 +449,8 @@ export function deriveLifecycle(pkg: Package, product?: Product): LifecycleStep[
     {
       stage: 'Downloading',
       reached: reachedDownloading,
-      current: status === 'DOWNLOADING',
+      current: status === 'DOWNLOADING' || failedDownload,
+      failed: failedDownload,
       at: live?.createdAt,
     },
     {
@@ -426,8 +461,12 @@ export function deriveLifecycle(pkg: Package, product?: Product): LifecycleStep[
     },
     {
       stage: 'Production',
+      // A promotion that failed was ATTEMPTED, and the stage it was reaching
+      // for is this one. `reached` stays false - the release is not in
+      // production - and `failed` is what says somebody tried.
+      current: status === 'PROMOTING' || failedPromotion,
       reached: reachedProduction,
-      current: status === 'PRODUCTION',
+      failed: failedPromotion,
       at: inProduction?.completedAt,
     },
   ]

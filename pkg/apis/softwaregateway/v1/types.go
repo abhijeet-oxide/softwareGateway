@@ -1693,6 +1693,27 @@ type Transfer struct {
 	// count however long it waited for a worker as transfer time.
 	StartedAt   string `json:"startedAt,omitempty"`
 	CompletedAt string `json:"completedAt,omitempty"`
+
+	// ActiveSeconds is how long there was work of this transfer IN A WORKER'S
+	// HANDS, which is a different quantity from CompletedAt minus StartedAt and
+	// the one a person means by "how long did it take".
+	//
+	// The two are equal on a transfer that ran without interruption, and they
+	// diverge by exactly the interruption on one that did not. A fleet that was
+	// down overnight adds that night to the wall clock and nothing to this, so
+	// a throughput computed from the wall clock is wrong by the whole outage -
+	// which is how a healthy link came to be reported at a few hundred
+	// kilobytes a second.
+	//
+	// Sampled by the Coordinator's sweep rather than derived, because it cannot
+	// be derived after the fact: a job's own started_at is set on its FIRST
+	// lease and never reset, so a job orphaned by a crash and finished the next
+	// day carries an interval spanning the outage.
+	//
+	// Accurate to within one sweep, and never larger than the wall clock.
+	// Absent on a transfer no worker has ever held, which is honest rather than
+	// zero: nothing has spent any time on it.
+	ActiveSeconds float64 `json:"activeSeconds,omitempty"`
 }
 
 // PromotionProgress is a native promotion, as it stands.

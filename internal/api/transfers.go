@@ -8,6 +8,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/go-chi/chi/v5"
 
@@ -340,7 +341,84 @@ func transferDTO(t store.TransferSummary) v1.Transfer {
 		CreatedAt:     t.CreatedAt,
 		StartedAt:     t.StartedAt,
 		CompletedAt:   t.CompletedAt,
+		ActiveSeconds: activeSeconds(t),
 	}
+}
+
+// activeSeconds is the stored accrual plus whatever this instant is owed.
+//
+// # Why the remainder is added here rather than accrued more often
+//
+// The sweep runs on the reaper's interval - half a minute - and a page watching
+// a live download polls every two seconds. Serving the stored figure alone
+// would show a number that sits still for thirty polls and then jumps, which
+// reads as a stuck page rather than as a coarse measurement.
+//
+// The remainder is only owed when a worker is holding one of this transfer's
+// jobs RIGHT NOW. With nothing in flight, no time is being spent and none is
+// added - which is what keeps a queued download from accumulating "time spent
+// downloading" while it waits.
+//
+// # Why it is capped
+//
+// The same reason the sweep refuses a long gap: a stale anchor means the sweep
+// has not run, and the honest thing to say about a period nobody measured is
+// nothing. Beyond the cap the stored figure is served unchanged and the next
+// sweep re-anchors.
+func activeSeconds(t store.TransferSummary) float64 {
+	seconds := t.ActiveSeconds
+	if t.JobsInFlight > 0 && t.LastActiveAt != "" {
+		if since, ok := secondsSince(t.LastActiveAt); ok && since <= maxActiveRemainder {
+			seconds += since
+		}
+	}
+
+	// NEVER LARGER THAN THE WALL CLOCK. The two are measured by different
+	// mechanisms - a sampling sweep and two timestamps - and a rounding that
+	// let the active figure exceed the elapsed one would put "took 4m 02s of
+	// the 4m 01s it has existed" on the page, which reads as a bug in
+	// everything around it.
+	if wall, ok := wallClockSeconds(t); ok && seconds > wall {
+		return wall
+	}
+	return seconds
+}
+
+// maxActiveRemainder bounds what one response will add to the stored figure.
+//
+// Comfortably more than a reap interval so an ordinary sweep delay is invisible,
+// and far less than any outage worth excluding.
+var maxActiveRemainder = (5 * time.Minute).Seconds()
+
+func secondsSince(ts string) (float64, bool) {
+	at, err := time.Parse(time.RFC3339Nano, ts)
+	if err != nil {
+		return 0, false
+	}
+	d := time.Since(at).Seconds()
+	if d < 0 {
+		// The Coordinator's clock and the database's disagree. Adding a
+		// negative would take time OFF a measurement, so nothing is added.
+		return 0, false
+	}
+	return d, true
+}
+
+// wallClockSeconds is how long the transfer has existed as a running thing -
+// the number active time is a subset of.
+func wallClockSeconds(t store.TransferSummary) (float64, bool) {
+	start, err := time.Parse(time.RFC3339Nano, t.StartedAt)
+	if err != nil {
+		return 0, false
+	}
+	end := time.Now()
+	if t.CompletedAt != "" {
+		if parsed, err := time.Parse(time.RFC3339Nano, t.CompletedAt); err == nil {
+			end = parsed
+		}
+	}
+	d := end.Sub(start).Seconds()
+	return d, d >= 0
 }
 
 // parseJobState validates the job state filter against the closed set.

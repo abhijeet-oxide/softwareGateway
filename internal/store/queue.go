@@ -170,11 +170,18 @@ func (p *Packages) startTransfers(ctx context.Context, leased []LeasedJob) error
 		return nil
 	}
 
+	// last_active_at is anchored HERE and only if absent, for the same reason
+	// started_at is: it is the moment from which the next sweep measures. A
+	// transfer that finishes between two sweeps - a fully deduplicated one
+	// takes well under a second - would otherwise never be observed with a job
+	// in flight and would report having spent no time at all. See
+	// AccrueActiveTime.
 	_, err := p.db.ExecContext(ctx, p.dialect.Rewrite(
 		`UPDATE transfers
-		    SET state      = 'running',
-		        started_at = COALESCE(started_at, `+p.dialect.Now()+`),
-		        updated_at = `+p.dialect.Now()+`
+		    SET state          = 'running',
+		        started_at     = COALESCE(started_at, `+p.dialect.Now()+`),
+		        last_active_at = COALESCE(last_active_at, `+p.dialect.Now()+`),
+		        updated_at     = `+p.dialect.Now()+`
 		  WHERE id IN (`+placeholders.String()+`) AND state = 'ready'`), ids...)
 	if err != nil {
 		return fmt.Errorf("start transfers for a lease batch: %w", err)
@@ -1578,6 +1585,27 @@ type TransferSummary struct {
 	// hour transferring.
 	StartedAt   string
 	CompletedAt string
+
+	// ActiveSeconds is how long there was work of this transfer IN A WORKER'S
+	// HANDS - the honest reading of "spent downloading", and a different
+	// quantity from CompletedAt minus StartedAt.
+	//
+	// The two are the same on a transfer that ran without interruption and
+	// diverge by exactly the interruption on one that did not: a fleet that was
+	// down for a night adds that night to the wall clock and nothing to this.
+	// Accrued by a sweep rather than derived, because it cannot be derived -
+	// see AccrueActiveTime for why the jobs' own timestamps do not carry it.
+	//
+	// Zero on a transfer that has never been leased, which is honest: no worker
+	// has spent any time on it.
+	ActiveSeconds float64
+	// LastActiveAt is the moment the accrual sweep last measured from. Empty
+	// once a transfer has settled and been accounted for.
+	//
+	// Carried out of the store so a caller can add the fraction accrued since
+	// the last sweep - without it a live page polled every two seconds shows a
+	// figure that jumps once per sweep and is otherwise frozen.
+	LastActiveAt string
 }
 
 // SavedBytes is everything this transfer did not have to move.
@@ -1621,7 +1649,8 @@ func (p *Packages) transferSelect() string {
 	       COALESCE((SELECT MIN(j.updated_at) FROM jobs j
 	                  WHERE j.transfer_id = t.id AND j.state = 'leased'), ''),
 	       COALESCE(t.failure_reason, ''), t.created_at, COALESCE(t.started_at, ''),
-	       COALESCE(t.completed_at, ''), t.strategy, rq.operation
+	       COALESCE(t.completed_at, ''), t.strategy, rq.operation,
+	       COALESCE(t.active_seconds, 0), COALESCE(t.last_active_at, '')
 	  FROM transfers t
 	  JOIN transfer_requests rq ON rq.id = t.request_id
 	  JOIN packages pk ON pk.id = t.package_id
@@ -1647,7 +1676,7 @@ func scanTransfer(row interface{ Scan(...any) error }) (TransferSummary, error) 
 		&t.JobsDone, &t.JobsFailed, &t.JobsOutstanding, &t.BytesTransferred,
 		&t.JobsInFlight, &t.Workers, &t.JobsWaiting, &t.JobsBlocked, &t.JobsRepaired, &t.OutstandingBytes, &t.QuietestInFlight,
 		&t.FailureReason, &t.CreatedAt, &t.StartedAt, &t.CompletedAt, &t.Strategy,
-		&t.Operation)
+		&t.Operation, &t.ActiveSeconds, &t.LastActiveAt)
 	return t, err
 }
 

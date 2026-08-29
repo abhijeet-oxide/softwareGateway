@@ -7,7 +7,8 @@ import {
 } from './icons'
 import { Link, useLocation, useNavigate } from 'react-router-dom'
 import { useIdentity } from './auth/permissions'
-import { useTransfers, useVersion } from './api/queries'
+import { useTransfers, useVersion, useWorkers } from './api/queries'
+import { describeFleet, splitByMotion, summariseFleet } from './domain/fleet'
 import brand from './brand'
 import {
   AppShell, c, envHex, SideNav, ThemeToggleButton, TopBar, withAlpha,
@@ -72,15 +73,37 @@ const NAV = [
  * a bar that says nothing when all is well is a bar a reader learns to ignore,
  * and then does not notice on the day it has something to say.
  */
-function ActivityPill({ running, failing }: { running: number; failing: number }) {
-  const [tone, text] = failing > 0
-    ? [c.danger, `${failing} download${failing === 1 ? '' : 's'} failed`]
-    : running > 0
-      ? [c.brand, `${running} download${running === 1 ? '' : 's'} running`]
-      : [c.ok, 'All downloads settled']
+function ActivityPill({ moving, held, failing, hint }: {
+  moving: number
+  held: number
+  failing: number
+  /** What the bar can say about WHY, on hover. */
+  hint: string
+}) {
+  /*
+    MOVING and HELD are counted apart, and that is the whole change.
+
+    This said "N downloads running" over a count that included every planned,
+    queued and unstarted one. On a fleet that is down - the case somebody most
+    needs this bar for - it reported the exact thing they were worried about as
+    working, in the brand colour, with a pulse next to it.
+
+    Held work is amber rather than blue: it is not failing, and it is not going
+    either, and those are three states rather than two.
+  */
+  const [tone, text] =
+    failing > 0
+      ? [c.danger, `${failing} download${failing === 1 ? '' : 's'} failed`]
+      : moving > 0
+        ? [c.brand, `${moving} download${moving === 1 ? '' : 's'} running`
+            + (held > 0 ? `, ${held} waiting` : '')]
+        : held > 0
+          ? [c.pending, `${held} download${held === 1 ? '' : 's'} waiting to start`]
+          : [c.ok, 'All downloads settled']
+  const running = moving
 
   return (
-    <Link to="/downloads" style={{ textDecoration: 'none' }}>
+    <Link to="/downloads" style={{ textDecoration: 'none' }} title={hint}>
       <span
         style={{
           display: 'inline-flex', alignItems: 'center', gap: 8,
@@ -118,9 +141,15 @@ export function Shell({ children }: { children: ReactNode }) {
   const version = useVersion()
 
   const { data: transfers } = useTransfers({ pageSize: 100 })
-  const running = (transfers?.transfers ?? []).filter(
-    (t) => t.state === 'RUNNING' || t.state === 'PLANNING' || t.state === 'READY',
-  ).length
+  /*
+    The fleet, read here because the bar is the one thing on screen from every
+    page. "Three downloads running" with no worker running them is the most
+    expensive sentence this interface can print, and this is where it printed
+    it. See domain/fleet.
+  */
+  const workerList = useWorkers()
+  const fleet = summariseFleet(workerList.data?.workers, workerList.isSuccess)
+  const { moving, held } = splitByMotion(transfers?.transfers ?? [], fleet)
   const failing = (transfers?.transfers ?? []).filter((t) => t.state === 'FAILED').length
 
   /*
@@ -203,7 +232,12 @@ export function Shell({ children }: { children: ReactNode }) {
           title={section}
           right={
             <>
-              <ActivityPill running={running} failing={failing} />
+              <ActivityPill
+                moving={moving.length}
+                held={held.length}
+                failing={failing}
+                hint={describeFleet(fleet)}
+              />
               {/*
                 Light and dark, in the one place a person looks for it. The
                 control comes from the shared kit, so both tools put the same

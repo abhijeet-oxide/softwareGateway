@@ -9,9 +9,10 @@ import {
 import { useState } from 'react'
 import { Link } from 'react-router-dom'
 import {
-  useDownloadsForAll, useProducts, useReplicationForAll, useRulesForAll, useTransfers,
+  useDownloadsForAll, useProducts, useReplicationForAll, useRulesForAll, useTransfers, useWorkers,
 } from '../api/queries'
 import { isLive, isPromotion, repositoryOf, transferVersion } from '../domain/derive'
+import { describeFleet, holdOn, summariseFleet, type Fleet } from '../domain/fleet'
 import { bytes, elapsedSeconds, formatBytes, formatDuration } from '../domain/format'
 import { NA, Value } from '../components/value'
 import { ManagedInGit, TimeAgo, TransferStateTag } from '../components/chips'
@@ -155,6 +156,46 @@ function MethodTag({ transfer }: { transfer: Transfer }) {
   )
 }
 
+/**
+ * A transfer's state, with what is holding it up when something is.
+ *
+ * # Why the state alone was not enough
+ *
+ * `RUNNING` is set the moment a transfer's first job completes and stays set
+ * while nothing at all is in flight - which is exactly the state somebody scans
+ * this table to find. `READY` is honest and its tooltip promises a worker is
+ * about to take the first job, which is a promise nobody can keep when there is
+ * no worker.
+ *
+ * The server's word is kept, because it is what `transferctl` and the logs say
+ * and the two must line up. What is added is the second half of the sentence:
+ * what would have to change for this row to move.
+ */
+function TransferState({ transfer, fleet }: { transfer: Transfer; fleet: Fleet }) {
+  const hold = holdOn(transfer, fleet)
+  return (
+    <Space direction="vertical" size={2}>
+      <TransferStateTag state={transfer.state} />
+      {hold && (
+        <Tooltip title={`${hold.detail} ${describeFleet(fleet)}`}>
+          <Typography.Text
+            style={{
+              fontSize: 11,
+              // Amber for the one that needs somebody, grey for the ones that
+              // are the queue working as designed. A reader scanning the column
+              // should not have to read every row to find the one that matters.
+              color: hold.actionable ? c.danger : c.text3,
+              whiteSpace: 'nowrap',
+            }}
+          >
+            {hold.kind === 'no-workers' ? 'No worker running' : hold.label}
+          </Typography.Text>
+        </Tooltip>
+      )}
+    </Space>
+  )
+}
+
 /** One product's row in a configuration table. */
 type WithProduct<T> = T & { product: string }
 
@@ -215,9 +256,23 @@ export default function Downloads() {
   const rulesPerProduct = useRulesForAll(names)
   const replicationPerProduct = useReplicationForAll(names)
 
+  /*
+    THE FLEET. A download is planned by the Coordinator and performed by
+    workers, and this page could not see them - so a queue that nothing was
+    draining rendered identically to one being drained at full tilt, which is
+    the difference between "wait" and "go and start a worker".
+  */
+  const workers = useWorkers()
+  const fleet = summariseFleet(workers.data?.workers, workers.isSuccess)
+
   const all = transfers.data?.transfers ?? []
   const ongoing = all.filter((t) => isLive(t.state) || t.state === 'PAUSED')
   const finished = all.filter((t) => !isLive(t.state) && t.state !== 'PAUSED')
+
+  // Downloads that have been asked for and cannot move because there is
+  // nothing to move them. Distinct from ones merely queued behind other work,
+  // which is the system working.
+  const stranded = ongoing.filter((t) => holdOn(t, fleet)?.kind === 'no-workers')
 
   // Belt and braces on the filter: a Coordinator too old to know the
   // `operation` parameter answers with everything, and a promotion listed
@@ -247,6 +302,30 @@ export default function Downloads() {
 
   return (
     <>
+
+      {stranded.length > 0 && (
+        <Alert
+          type="warning"
+          showIcon
+          style={{ marginBottom: 16 }}
+          message={
+            `${stranded.length} download${stranded.length === 1 ? '' : 's'} `
+            + `${stranded.length === 1 ? 'is' : 'are'} waiting, and no worker is running`
+          }
+          description={
+            <Space direction="vertical" size={4}>
+              <Typography.Text>
+                {describeFleet(fleet)} Downloads are planned here and performed by workers,
+                so these will not move - and will not fail either - until at least one is back.
+              </Typography.Text>
+              <Typography.Text type="secondary">
+                Nothing has been lost. Work already planned stays queued and starts on its own
+                the moment a worker reports in.
+              </Typography.Text>
+            </Space>
+          }
+        />
+      )}
 
       {drifted.length > 0 && (
         <Alert
@@ -321,7 +400,11 @@ export default function Downloads() {
                     render: (_, t) => <Typography.Text style={{ fontFamily: mono }}>{transferVersion(t)}</Typography.Text>,
                   },
                   { title: 'Route', width: 200, render: (_, t) => <Route transfer={t} /> },
-                  { title: 'State', width: 130, render: (_, t) => <TransferStateTag state={t.state} /> },
+                  {
+                    title: 'State',
+                    width: 140,
+                    render: (_, t) => <TransferState transfer={t} fleet={fleet} />,
+                  },
                   {
                     // How far, how long, and how much longer - one cell,
                     // because each of the three is misleading without the

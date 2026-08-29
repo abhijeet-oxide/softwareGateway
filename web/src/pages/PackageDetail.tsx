@@ -8,7 +8,8 @@ import { Table as DataTable } from '../tablekit'
 import { FolderOutlined, SafetyCertificateOutlined, SyncOutlined } from '../icons'
 import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom'
 import {
-  packageFileDownloadUrl, useArtifacts, useInspectPackage, usePackage, usePackageFiles,
+  packageFileDownloadUrl, useArtifacts, useCancelAnalysis, useInspectPackage, usePackage,
+  usePackageFiles,
   useProduct, useRunDownload,
 } from '../api/queries'
 import { useCan, useIdentity } from '../auth/permissions'
@@ -31,7 +32,8 @@ import { PromoteButton } from '../components/promote'
 import { SecurityTab } from '../components/securitypanel'
 import { EmptyState, c, mono } from '../uikit'
 import type {
-  Artifact, InspectPackageResponse, Package, PackageFile, PackageTransfer, Product, RelatedArtifact,
+  Artifact, CancelAnalysisResponse, InspectPackageResponse, Package, PackageFile, PackageTransfer,
+  Product, RelatedArtifact,
 } from '../api/types'
 
 /**
@@ -73,13 +75,25 @@ import type {
  * identical if all you do is refresh the page.
  */
 function MeasurePanel({
-  analysed, analysing, artifactCount, inspect, disabled,
+  analysed, analysing, analysisError, artifactCount, inspect, cancel, disabled,
 }: {
   analysed: boolean
   /** Somebody else is already walking it - discovery, or another reader. */
   analysing?: boolean
+  /**
+   * Why the LAST walk gave up, when one did.
+   *
+   * It was on the hover of a tag, which is to say nowhere: a release whose
+   * analysis hit the manifest-tree ceiling showed an empty Contents table, an
+   * unmeasured size and an invitation to analyse it again, with the one
+   * sentence explaining all three hidden behind a pointer nobody had a reason
+   * to put there.
+   */
+  analysisError?: string
   artifactCount?: number
   inspect: UseMutationResult<InspectPackageResponse, Error, void, unknown>
+  /** Stopping a walk that is under way. Absent where there is nothing to stop. */
+  cancel?: UseMutationResult<CancelAnalysisResponse, Error, void, unknown>
   disabled: boolean
 }) {
   const [startedAt, setStartedAt] = useState<number>()
@@ -102,8 +116,12 @@ function MeasurePanel({
   // and it is read by the caller and passed back in as `analysing`. Held until
   // that arrives, so the panel does not blink through "not analysed" between
   // the response and the refetch that notices.
-  if (inspect.data?.started && !analysed) {
-    return <AnalysingBar requested />
+  //
+  // Except once it has been STOPPED, which is the one case where the handoff
+  // was real and the walk is over. Without that clause the panel went on
+  // showing "Analyzing this release" after the stop had visibly succeeded.
+  if (inspect.data?.started && !analysed && !cancel?.data?.stopped) {
+    return <AnalysingBar requested onStop={cancel} />
   }
 
   if (inspect.isPending) {
@@ -149,7 +167,7 @@ function MeasurePanel({
     )
   }
 
-  if (inspect.isSuccess) {
+  if (inspect.isSuccess && !cancel?.data?.stopped) {
     const r = inspect.data
     return (
       <Alert
@@ -188,8 +206,6 @@ function MeasurePanel({
     )
   }
 
-  if (analysed) return null
-
   /*
    * SOMEBODY IS ALREADY DOING IT.
    *
@@ -198,9 +214,91 @@ function MeasurePanel({
    * for an answer already on its way. The claim is held in the database, so the
    * server would refuse this anyway - offering it and then refusing it is a
    * worse way to say the same thing.
+   *
+   * Checked BEFORE `analysed`, because a re-analysis of a release that has
+   * already been walked is a perfectly ordinary thing to be watching, and
+   * returning null for it left the button spinning into nothing.
    */
   if (analysing) {
-    return <AnalysingBar />
+    return <AnalysingBar onStop={cancel} />
+  }
+
+  /*
+   * IT FAILED, AND THE REASON IS THE WHOLE POINT.
+   *
+   * `manifest tree exceeds 512 artifacts` and `401 unauthorized` are the same
+   * empty Contents table and completely different afternoons. This used to be
+   * a tooltip on a small tag beside the title; the page underneath it showed
+   * an unmeasured release and a button offering to analyse it, with nothing
+   * anywhere saying that analysing it had already been tried and why it had
+   * not worked.
+   *
+   * Ahead of `analysed` deliberately: a release can carry a failure from a
+   * later re-analysis while still holding the tree an earlier one recorded,
+   * and the failure is the more urgent of the two things to say.
+   */
+  if (analysisError) {
+    return (
+      <Alert
+        style={{ marginTop: 12 }}
+        type="error"
+        showIcon
+        message="The last analysis of this release did not finish"
+        description={
+          <Space direction="vertical" size={6} style={{ width: '100%' }}>
+            <Typography.Text style={{ fontFamily: mono, fontSize: 12 }}>
+              {analysisError}
+            </Typography.Text>
+            <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+              {analysed
+                ? 'What is shown below is from the last walk that did finish.'
+                : 'So this release has no contents, no file list and no measured size. It can '
+                  + 'still be downloaded - a download walks the tree itself, and establishes '
+                  + 'the size as it goes.'}
+            </Typography.Text>
+          </Space>
+        }
+        action={
+          <Button size="small" disabled={disabled} onClick={run}>
+            Analyze again
+          </Button>
+        }
+      />
+    )
+  }
+
+  /*
+   * ALREADY ANALYSED - and still offering to do it again.
+   *
+   * The panel used to render nothing here, which made the walk a one-way door:
+   * a release analysed against a source that has since been fixed, or one
+   * whose record predates a change in what analysis records, could not be
+   * re-read from any page.
+   *
+   * Re-analysing is cheap and safe to offer because of what a walk IS: the
+   * tree under a digest cannot change, so the server answers "already
+   * analyzed" without contacting the vendor at all unless something is
+   * genuinely missing. The button is honest about that rather than promising
+   * fresh numbers it would not produce.
+   */
+  if (analysed) {
+    return (
+      <Space direction="vertical" size={4} style={{ marginTop: 12 }}>
+        <Button
+          size="small"
+          icon={<Icon as={AnalyzeIcon} title="Analyze" />}
+          disabled={disabled}
+          onClick={run}
+        >
+          Analyze again
+        </Button>
+        <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+          Re-reads anything this release's record is missing. A tree that has already been
+          walked cannot change - it is addressed by digest - so this contacts the vendor
+          registry only where something is actually absent.
+        </Typography.Text>
+      </Space>
+    )
   }
 
   return (
@@ -228,8 +326,19 @@ function MeasurePanel({
  * ten minutes ago or by this reader ten seconds ago, and this page knows only
  * that it is happening. A timer counting from the moment the page opened would
  * be a number about the page rather than about the work.
+ *
+ * # Where the analysis actually runs, since it decides what Stop can promise
+ *
+ * On the COORDINATOR, never on a download worker. A worker moves bytes between
+ * two registries and holds no database credentials; a walk reads manifests -
+ * kilobytes of JSON - and writes the tree straight into the database. So a
+ * release can be analysed with no worker running at all, and a fleet busy with
+ * a thirty-gigabyte download does not slow it down.
  */
-function AnalysingBar({ requested }: { requested?: boolean }) {
+function AnalysingBar({ requested, onStop }: {
+  requested?: boolean
+  onStop?: UseMutationResult<CancelAnalysisResponse, Error, void, unknown>
+}) {
   return (
     <div style={{ marginTop: 12 }}>
       <WorkingBar
@@ -242,6 +351,35 @@ function AnalysingBar({ requested }: { requested?: boolean }) {
               + 'here when the walk finishes.'
         }
       />
+      {onStop && (
+        <Space direction="vertical" size={2} style={{ marginTop: 8 }}>
+          <Button
+            size="small"
+            danger
+            loading={onStop.isPending}
+            onClick={() => onStop.mutate()}
+          >
+            Stop analyzing
+          </Button>
+          <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+            {/*
+              What a stop actually promises, because it is not "it has
+              stopped". The claim is released everywhere - the release is
+              analysable again immediately - and the walking itself only ends
+              here if this Coordinator is the one doing it. Stated rather than
+              implied: a reader who stops a walk to free the vendor's request
+              budget needs to know whether they got it back.
+            */}
+            Frees the release for another attempt straight away. A walk running on another
+            Coordinator finishes reading at its own pace, and what it finds is discarded.
+          </Typography.Text>
+          {onStop.isError && (
+            <Typography.Text type="danger" style={{ fontSize: 12 }}>
+              {onStop.error instanceof Error ? onStop.error.message : 'The stop was not accepted.'}
+            </Typography.Text>
+          )}
+        </Space>
+      )}
     </div>
   )
 }
@@ -790,6 +928,7 @@ export default function PackageDetail() {
   const artifacts = useArtifacts(productName, reference, repository)
   const files = usePackageFiles(productName, reference, repository)
   const inspect = useInspectPackage(productName!, reference!, repository)
+  const cancelAnalysis = useCancelAnalysis(productName!, reference!, repository)
   const runDownload = useRunDownload(productName!)
 
   // Which tab is open, in the URL so a link to a release's security is a link.
@@ -1101,8 +1240,10 @@ export default function PackageDetail() {
                     <MeasurePanel
                       analysed={analysed}
                       analysing={analysing}
+                      analysisError={p?.analysisState === 'failed' ? p.analysisError : undefined}
                       artifactCount={p?.artifactCount}
                       inspect={inspect}
+                      cancel={mayOperate ? cancelAnalysis : undefined}
                       disabled={!mayOperate || !p}
                     />
                   </Card>
@@ -1227,8 +1368,11 @@ export default function PackageDetail() {
                                 <MeasurePanel
                                   analysed={analysed}
                                   analysing={analysing}
+                                  analysisError={
+                                    p?.analysisState === 'failed' ? p.analysisError : undefined}
                                   artifactCount={p?.artifactCount}
                                   inspect={inspect}
+                                  cancel={mayOperate ? cancelAnalysis : undefined}
                                   disabled={!mayOperate || !p}
                                 />
                               }

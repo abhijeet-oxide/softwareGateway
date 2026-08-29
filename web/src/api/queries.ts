@@ -2,7 +2,8 @@ import { useMutation, useQueries, useQuery, useQueryClient } from '@tanstack/rea
 import { useEffect, useRef } from 'react'
 import { api, query, packageRef } from './client'
 import type {
-  CancelSecuritySyncResponse,
+  CalibrateRequest, CalibrateResponse,
+  CancelAnalysisResponse, CancelSecuritySyncResponse,
   CheckConnectivityResponse, CompareProgressResponse, CompareRequest, CompareResponse,
   DiscoverAllResponse,
   DiscoverPackagesResponse, DiscoveryStatusResponse, HealthCheckResponse, ListArtifactsResponse,
@@ -334,6 +335,38 @@ export function useInspectPackage(product: string, ref: string, repository?: str
       void qc.invalidateQueries({ queryKey: ['package-files', product, ref] })
       // And the LISTING, so a reader who goes back sees the release marked as
       // being analysed rather than offering to analyse it again.
+      void qc.invalidateQueries({ queryKey: ['packages'] })
+    },
+  })
+}
+
+/**
+ * Stop a walk that is under way.
+ *
+ * # Why a walk needs a stop at all
+ *
+ * It is minutes of round trips against the vendor's registry, started by one
+ * button, and until this existed the only ways out of one started by mistake -
+ * the wrong release, a source whose request budget a download needed more -
+ * were to wait twenty minutes for the server's deadline or to restart the
+ * Coordinator. A job somebody can start and cannot stop is a job they learn
+ * not to start.
+ *
+ * The release goes back to UNANALYSED rather than failed, so the same button
+ * that stopped it will start it again.
+ */
+export function useCancelAnalysis(product: string, ref: string, repository?: string) {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: () => {
+      const { segment, query: q } = packageRef(ref)
+      return api.post<CancelAnalysisResponse>(
+        `/products/${encodeURIComponent(product)}/packages/${encodeURIComponent(segment)}` +
+        `:cancelAnalysis` + scopeQuery(q, repository), {})
+    },
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: ['package', product, ref] })
+      // And the LISTING, whose row carries the same tag.
       void qc.invalidateQueries({ queryKey: ['packages'] })
     },
   })
@@ -710,6 +743,35 @@ export function useWorkers() {
     queryKey: ['workers'],
     queryFn: () => api.get<ListWorkersResponse>('/workers'),
     refetchInterval: 15_000,
+  })
+}
+
+/**
+ * Measure what one source-to-target path can actually do.
+ *
+ * # Why this is a mutation and not a query
+ *
+ * It has real side effects. The read probe pulls blobs from the source, and
+ * the write probe opens upload sessions on the target and streams bytes into
+ * them before cancelling - nothing is committed anywhere, and both registries
+ * see genuine load. That is not something to run because a component mounted,
+ * or to refetch when a window regains focus.
+ *
+ * # Why the answer is not stored
+ *
+ * A calibration is a measurement of a network AS IT WAS. Keeping one would
+ * produce exactly the stale number this feature exists to replace: the point
+ * is to answer "is the speed I am looking at right now the best this path can
+ * do", and that has to be measured now.
+ */
+export function useCalibrate(product: string | undefined) {
+  return useMutation({
+    mutationFn: (body: CalibrateRequest) =>
+      api.post<CalibrateResponse>(
+        `/products/${encodeURIComponent(product!)}:calibrate`, body),
+    // A path being slow enough to investigate is a path whose probes may take
+    // minutes and may fail. Retrying doubles the load for no new information.
+    retry: false,
   })
 }
 

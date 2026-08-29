@@ -4,6 +4,7 @@ import {
 } from '../icons'
 import type { ContentGroup, PromotionProgress as Promotion, Strategy } from '../api/types'
 import { formatBytes, formatCount, formatSpeed, formatAbsolute, formatDuration } from '../domain/format'
+import { useByteRate } from '../domain/rate'
 import { NA } from './value'
 import { c } from '../uikit'
 
@@ -360,17 +361,35 @@ export function DownloadProgress({
   /** Whether this download is still going. */
   live: boolean
 }) {
-  const speed = elapsedSeconds && transferred && elapsedSeconds > 0
+  /*
+    TWO SPEEDS, because they answer two questions and this cell was showing
+    neither.
+
+    The average - bytes moved over the download's whole life - is what an
+    estimate should rest on: what is left will be moved at roughly the rate
+    everything so far was, and an ETA that swung by ten minutes every poll
+    would be worse than none.
+
+    The LIVE rate is what belongs on screen. The average is dragged down by
+    every second the download existed and did not move - planning, the wait for
+    a worker, a stall - so a download queued for twenty minutes and now moving
+    at 90 MB/s averages a couple of megabytes a second. This cell used to
+    compute that number and then not render it at all, which at least spared
+    the reader; the number that is worth rendering is the one below.
+  */
+  const average = elapsedSeconds && transferred && elapsedSeconds > 0
     ? transferred / elapsedSeconds
     : undefined
+  const rate = useByteRate(transferred, live)
+
   // What is LEFT, which is neither moved nor already there. Counting the saved
   // bytes as remaining is how a download with nothing left to do came to
   // report an ETA of forever.
   const remaining = total !== undefined && transferred !== undefined
     ? Math.max(0, total - transferred - (saved ?? 0))
     : undefined
-  const eta = live && speed && remaining !== undefined && remaining > 0
-    ? remaining / speed
+  const eta = live && average && remaining !== undefined && remaining > 0
+    ? remaining / average
     : undefined
   const notStarted = live
     && (elapsedSeconds ?? 0) <= 0
@@ -387,6 +406,7 @@ export function DownloadProgress({
               total={total}
               saved={saved}
               strategy={strategy}
+              speedBytesPerSecond={live ? rate.current : undefined}
               live={live}
             />
           : <MeasuredProgress

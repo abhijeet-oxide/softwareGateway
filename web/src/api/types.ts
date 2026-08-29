@@ -287,6 +287,32 @@ export interface ListArtifactsResponse {
   nextPageToken?: string
 }
 
+/**
+ * What stopping an analysis achieved.
+ *
+ * Two booleans rather than one, because they are two different promises. The
+ * claim lives in the database, so releasing it works from any replica and is
+ * what stops the release reading as `Analyzing`. The WALKING is a goroutine,
+ * and only the Coordinator running it can cancel that - one somewhere else
+ * carries on reading the vendor's registry until its own deadline, and its
+ * result is discarded because it no longer holds the claim.
+ */
+export interface CancelAnalysisResponse {
+  product: string
+  package: string
+  /**
+   * A claim was released, so the release can be analysed again now.
+   *
+   * False is not a failure: the walk finished between the reader deciding to
+   * stop it and the request arriving.
+   */
+  stopped: boolean
+  /** The walking itself has ended, because this Coordinator was doing it. */
+  stoppedHere: boolean
+  /** The release as it stands now, so nothing has to be re-read to find out. */
+  packageState: Package
+}
+
 // ---------------------------------------------------------------------------
 // Transfers - "Download" on screen
 // ---------------------------------------------------------------------------
@@ -1116,6 +1142,111 @@ export interface Worker {
 }
 
 export interface ListWorkersResponse { workers: Worker[] }
+
+// ---------------------------------------------------------------------------
+// Calibration - "is this speed the best this path can do?"
+// ---------------------------------------------------------------------------
+//
+// A sibling of the connectivity check and a different question: not "can we
+// reach it" but "how fast is it, and what setting would make it faster". It
+// moves real data in both directions and takes minutes, which is why it is
+// asked for explicitly and never on a timer.
+
+export interface CalibrateRequest {
+  /** Configured names. Empty picks the product's only source and its default target. */
+  source?: string
+  target?: string
+  sourceRepository?: string
+  /** The concurrency levels to sweep. Empty uses the server's default. */
+  levels?: number[]
+  /** How long ONE level runs. */
+  budgetSeconds?: number
+  /**
+   * Whether to probe the WRITE half, which opens upload sessions on the target
+   * and cancels them. Nothing is committed. Absent means the server's default,
+   * which is on - a calibration that measured only reading would recommend a
+   * concurrency for the wrong end of the path.
+   */
+  write?: boolean
+  /** Projects the measured ceiling onto a transfer of this size. */
+  bundleBytes?: Int64String
+}
+
+/** One concurrency level's measurement. */
+export interface CalibrationLevel {
+  concurrency: number
+  bytes: Int64String
+  seconds: number
+  rateBytesPerSecond: number
+  perStreamBytesPerSecond: number
+  requests: number
+  errors?: number
+  throttled?: number
+  ttfbMs?: number
+  firstError?: string
+}
+
+/** What the traffic goes through, and what it would do the other way. */
+export interface CalibrationRoute {
+  configured: string
+  proxyInUse: boolean
+  directTested?: boolean
+  directReachable?: boolean
+  directDetail?: string
+  proxiedRateBytesPerSecond?: number
+  directRateBytesPerSecond?: number
+}
+
+/** Everything measured about one end of the path. */
+export interface CalibrationSide {
+  role: string
+  name: string
+  registry: string
+  repository?: string
+  route: CalibrationRoute
+  rttMs?: number
+  /**
+   * What the read probe opened. Carried so a throughput measured over
+   * signature blobs cannot be mistaken for one measured over layers.
+   */
+  samples?: number
+  largestSampleBytes?: Int64String
+  levels?: CalibrationLevel[]
+  /** The smallest concurrency within a tenth of the best measured. */
+  knee?: number
+  /** The sweep ended before the path did, so the ceiling is higher than this. */
+  stillClimbing?: boolean
+  /** Why there are no measurements, when there are none. */
+  skipped?: string
+}
+
+/** One thing to change, or one reason not to. */
+export interface CalibrationSuggestion {
+  severity: string
+  /** The configuration key, in the spelling the file uses. */
+  setting?: string
+  scope?: string
+  current?: string
+  suggested?: string
+  /** The measurement it rests on. Never empty: advice without a number is guesswork. */
+  evidence: string
+}
+
+export interface CalibrateResponse {
+  product: string
+  /**
+   * The host that ran the probes, and it is load-bearing: a measurement of the
+   * Coordinator's network describes the workers' network only when they share
+   * one.
+   */
+  measuredFrom: string
+  startedAt: string
+  durationSeconds: number
+  source: CalibrationSide
+  target: CalibrationSide
+  suggestions: CalibrationSuggestion[]
+  notes?: string[]
+}
 
 export interface VersionResponse {
   version: string

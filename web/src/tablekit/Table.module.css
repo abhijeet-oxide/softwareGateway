@@ -103,13 +103,35 @@
   text-overflow: ellipsis;
 }
 
-/* --- the toolbar above the table ----------------------------------------- */
+/* --- the toolbar above the table -----------------------------------------
+   It sits INSIDE the surface the table sits on, so it needs the same inset the
+   table's own cells have. It had none: the controls were pressed into the
+   corner with nothing between them and the two edges they met. */
 .toolbar {
   display: flex;
   justify-content: flex-end;
   align-items: center;
-  padding: 0 0 var(--sp-2);
-  gap: var(--sp-2);
+  padding: var(--sp-2) var(--sp-3);
+  gap: var(--sp-1);
+}
+
+/* A glyph with a hit area, not a button with a glyph in it. No ring, no fill,
+   no border - it takes a quiet tint on approach like any other text control,
+   and the tooltip names it. */
+.toolbarButton:global(.ant-btn) {
+  width: 28px;
+  height: 28px;
+  min-width: 28px;
+  padding: 0;
+  color: var(--text-3);
+  border-radius: var(--r-sm);
+}
+.toolbarButton:global(.ant-btn:hover) {
+  color: var(--text) !important;
+  background: var(--surface-2) !important;
+}
+.toolbarButton:global(.ant-btn:focus-visible) {
+  color: var(--text) !important;
 }
 
 /* --- the menus -----------------------------------------------------------

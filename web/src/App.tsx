@@ -1,7 +1,8 @@
 import { Suspense, lazy } from 'react'
-import { Navigate, Route, Routes, useParams, useSearchParams } from 'react-router-dom'
+import { Navigate, Route, Routes, useLocation, useParams, useSearchParams } from 'react-router-dom'
 import { Spin } from 'antd'
 import { Shell } from './Shell'
+import { PageTransition } from './uikit'
 
 /**
  * Routing.
@@ -48,9 +49,23 @@ function LegacyCompareRedirect() {
 }
 
 export function App() {
+  const { pathname } = useLocation()
+  /*
+    The KEY is the page, not the URL.
+
+    A path with a parameter in it - one release, one download - is the same page
+    showing something else, and re-running the entrance every time somebody
+    changes a query string or steps between two releases would animate a change
+    that is not a change of screen. Two segments is where every route in this
+    application stops being a different page and starts being a different
+    subject.
+  */
+  const page = pathname.split('/').slice(0, 3).join('/')
+
   return (
     <Shell>
       <Suspense fallback={<Spin size="large" style={{ display: 'block', margin: '80px auto' }} />}>
+        <PageTransition routeKey={page}>
         <Routes>
           <Route path="/" element={<Overview />} />
           <Route path="/products" element={<Products />} />
@@ -76,6 +91,7 @@ export function App() {
           <Route path="/settings" element={<Settings />} />
           <Route path="*" element={<Navigate to="/" replace />} />
         </Routes>
+        </PageTransition>
       </Suspense>
     </Shell>
   )

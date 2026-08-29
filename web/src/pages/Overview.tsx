@@ -50,10 +50,17 @@ export default function Overview() {
   }
 
   const products = useProducts()
+  const allProducts = products.data?.products ?? []
   // Disabled products do nothing on purpose - nothing is discovered for them
   // and nothing is downloaded - so they are noise on a page about what needs
   // attention. The Products page is where they can be shown deliberately.
-  const productList = (products.data?.products ?? []).filter((p) => p.enabled)
+  //
+  // A product REJECTED by validation also arrives disabled and is dropped here
+  // for the same reason, but it is not the same fact and the Discovery panel
+  // below is given the whole list rather than this one: "nothing is being
+  // looked for, and here is why" is precisely what that panel is for, and a
+  // product missing from it cannot be asked about.
+  const productList = allProducts.filter((p) => p.enabled)
 
   // One request per product. There is no estate-wide package listing endpoint,
   // so this composes product listings into one "recent releases" view.
@@ -392,7 +399,7 @@ export default function Overview() {
             key: 'discovery',
             label: 'Discovery',
             icon: <RadarChartOutlined />,
-            children: <DiscoveryPanel products={productList} />,
+            children: <DiscoveryPanel products={allProducts} />,
           },
         ]}
       />

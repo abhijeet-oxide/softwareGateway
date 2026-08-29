@@ -2180,7 +2180,7 @@ function ArtifactTable({ reports }: { reports: SecurityReport[] }) {
                       <strong>{r.counts.total.toLocaleString()}</strong>
                       {SEVERITIES.slice(0, 3).map((s) => (
                         r.counts.bySeverity[s] > 0 ? (
-                          <span key={s} style={{ color: severityColour[s], fontSize: 12 }}>
+                          <span key={s} style={{ color: c.text2, fontSize: 12 }}>
                             {r.counts.bySeverity[s]} {s}
                           </span>
                         ) : null

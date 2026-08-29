@@ -7,7 +7,7 @@ import {
 import { Table as DataTable } from '../tablekit'
 import { LoadingOutlined } from '../icons'
 import { useState } from 'react'
-import { useNavigate, useParams } from 'react-router-dom'
+import { Link, useNavigate, useParams } from 'react-router-dom'
 import {
   useReplication, useSyncs, useTransfer, useTransferFailures, useTransferJobs, useWorkers,
 } from '../api/queries'
@@ -407,14 +407,6 @@ export default function DownloadDetail() {
   const workers = useWorkers()
   const fleet = summariseFleet(workers.data?.workers, workers.isSuccess)
 
-  if (transfer.isError) {
-    return (
-      <>
-        <ErrorState error={transfer.error} retry={() => void transfer.refetch()} />
-      </>
-    )
-  }
-
   const progress = t?.progress
   const content = bytes(progress?.contentBytes)
 
@@ -470,6 +462,23 @@ export default function DownloadDetail() {
     move will be moved at roughly the rate everything so far was moved at.
   */
   const eta = average && remaining ? remaining / average : undefined
+
+  /*
+    THE EARLY RETURN SITS HERE, below every hook and not above them.
+
+    It used to be the first thing after the queries, which was fine while
+    everything under it was plain arithmetic. `useByteRate` is a hook, so a
+    render that took this branch would call one fewer hook than the render
+    before it - and a poll that fails once and then succeeds does exactly that,
+    which React ends the page over.
+  */
+  if (transfer.isError) {
+    return (
+      <>
+        <ErrorState error={transfer.error} retry={() => void transfer.refetch()} />
+      </>
+    )
+  }
 
   const failed = t?.state === 'FAILED'
   const done = t?.state === 'SUCCEEDED'
@@ -995,6 +1004,24 @@ export default function DownloadDetail() {
               </Descriptions.Item>
             </Descriptions>
 
+            {/*
+              WHERE TO TAKE A SPEED THAT LOOKS WRONG.
+
+              A rate on its own cannot say whether it is the link, the route or
+              the number of streams we are asking for - the number is identical
+              in all three cases, which is why "the download is slow" has
+              historically been unanswerable from this page. The path test
+              measures all three; this is the sentence that tells somebody it
+              exists, at the moment they are looking at the number that
+              prompted the question.
+            */}
+            {t?.strategy !== 'relocate' && (
+              <Typography.Paragraph type="secondary" style={{ fontSize: 12, marginTop: 12, marginBottom: 0 }}>
+                A speed on its own cannot say whether the link is slow, the route is wrong, or
+                we are asking for too few streams at once.{' '}
+                <Link to="/settings">Measure what this path can carry</Link> to find out which.
+              </Typography.Paragraph>
+            )}
           </Card>
         </Col>
       </Row>

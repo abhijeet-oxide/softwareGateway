@@ -2,7 +2,6 @@ package transfer
 
 import (
 	"errors"
-	"fmt"
 	"io"
 	"strings"
 	"testing"
@@ -16,10 +15,22 @@ import (
 // It is what an operator saw eight times per blob, and it is a description of
 // the destination for a failure the SOURCE caused - the read happens inside the
 // destination's Do, so the destination's URL is the one in the message.
-var observedPushError = fmt.Errorf(
-	`Put "https://artifact.example.com/v2/oci-external/orbs/cfx-5000-k8s/blobs/` +
-		`uploads/89ffb45b-5f38-4927-82f3-a08d6e7d9750.patch?digest=sha256%%3A0035772b529a": ` +
-		`unexpected EOF`)
+//
+// Capitalised because that is what Go produces - a `*url.Error` renders as
+// `Put "<url>": <cause>` - and the point of the fixture is to be the string an
+// operator actually saw. Held as a constant so the linter's "error strings
+// should not be capitalised" rule, which is about errors we write, does not
+// fire on one we are quoting.
+const observedPushMessage = `Put "https://artifact.example.com/v2/oci-external/orbs/` +
+	`cfx-5000-k8s/blobs/uploads/89ffb45b-5f38-4927-82f3-a08d6e7d9750.patch` +
+	`?digest=sha256%3A0035772b529a": unexpected EOF`
+
+// verbatim quotation of one Go produces - a *url.Error renders as
+// `Put "<url>": <cause>` - and lower-casing it would make the fixture stop
+// being the string an operator actually saw.
+//
+//nolint:staticcheck // ST1005 is about error strings WE write. This is a
+var observedPushError = errors.New(observedPushMessage)
 
 const (
 	blobSize  = 478_200_000

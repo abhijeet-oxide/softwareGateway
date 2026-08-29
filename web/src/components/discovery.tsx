@@ -14,7 +14,9 @@ import { matches } from '../domain/derive'
 import { SearchBar } from './layout'
 import { NA, Value } from './value'
 import { TimeAgo } from './chips'
-import { c, StatusPill } from '../uikit'
+import { c, InlineNotice, StatusPill } from '../uikit'
+import { Link } from 'react-router-dom'
+import { ConfigErrorLine } from './configerror'
 import type { DiscoverySourceState, Product } from '../api/types'
 
 /**
@@ -346,10 +348,17 @@ export function RunDiscoveryButton({
             placeholder="Every product"
             value={chosen}
             onChange={setChosen}
-            options={products.map((p) => ({
-              value: p.productId,
-              label: p.displayName || p.productId,
-            }))}
+            /*
+              A product whose configuration was rejected has no sources to
+              scan, so offering it here is offering an action that can only
+              fail. It is named on the panel above instead, with the reason.
+            */
+            options={products
+              .filter((p) => !p.configError || p.configError.loaded)
+              .map((p) => ({
+                value: p.productId,
+                label: p.displayName || p.productId,
+              }))}
           />
         )}
 
@@ -509,7 +518,19 @@ export function DiscoverySummary({
 }
 
 export function DiscoveryPanel({ products }: { products: Product[] }) {
-  const names = products.map((p) => p.productId)
+  /*
+   * A product whose document was REJECTED has no sources to poll, and asking
+   * the Coordinator for its discovery status is asking about configuration
+   * that was never read. So it is split out here rather than filtered out
+   * upstream: this panel is where somebody comes to ask "is anything being
+   * looked for", and a product that is silently absent from it is the same
+   * unanswerable question the Products page used to pose. It is named instead,
+   * with its reason, above the sources that do run.
+   */
+  const rejected = products.filter((p) => p.configError && !p.configError.loaded)
+  const polled = products.filter((p) => !p.configError || p.configError.loaded)
+
+  const names = polled.map((p) => p.productId)
   const results = useDiscoveryStatuses(names)
 
   const loading = results.some((r) => r.isLoading)
@@ -577,10 +598,30 @@ export function DiscoveryPanel({ products }: { products: Product[] }) {
                 <NA reason="No scan has completed since this Coordinator started." />
               )}
             </Typography.Text>
-            <RunDiscoveryButton products={products} />
+            <RunDiscoveryButton products={polled} />
           </Space>
         }
       >
+        {rejected.length > 0 && (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 8, marginBottom: 16 }}>
+            {rejected.map((p) => (
+              <InlineNotice
+                key={p.productId}
+                tone="danger"
+                action={
+                  <Link to={`/products/${p.productId}`} style={{ whiteSpace: 'nowrap' }}>
+                    Open product
+                  </Link>
+                }
+              >
+                <Typography.Text strong>{p.displayName || p.productId}</Typography.Text>
+                {' is not being polled: its configuration was rejected. '}
+                {p.configError && <ConfigErrorLine error={p.configError} />}
+              </InlineNotice>
+            ))}
+          </div>
+        )}
+
         {leaderElsewhere ? (
           <Typography.Text type="secondary">
             Discovery runs on the leader, and this replica is a follower. Scans are still happening -
@@ -625,7 +666,7 @@ export function DiscoveryPanel({ products }: { products: Product[] }) {
                       filterOption={(input, option) =>
                         (option?.label ?? '').toLowerCase().includes(input.toLowerCase())
                       }
-                      options={products.map((p) => ({
+                      options={polled.map((p) => ({
                         value: p.productId,
                         label: p.displayName || p.productId,
                       }))}

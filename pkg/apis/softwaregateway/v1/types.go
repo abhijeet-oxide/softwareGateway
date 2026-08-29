@@ -114,6 +114,56 @@ type Product struct {
 	// ConfigHash identifies the exact document this view was built from, so an
 	// operator can confirm which revision the Coordinator actually loaded.
 	ConfigHash string `json:"configHash"`
+
+	// ConfigError is set when the product's document failed to parse or
+	// validate. See ConfigError - and note that its presence does NOT by itself
+	// mean the product is stopped: read `enabled` and `configError.loaded`
+	// together.
+	ConfigError *ConfigError `json:"configError,omitempty"`
+}
+
+// ConfigError explains why a product's configuration was rejected.
+//
+// A product whose document fails to load used to vanish from this API
+// altogether. That is the worst possible answer: the operator sees a product
+// they know they configured simply not there, with nothing on any screen to
+// say why, and the only trace is a line in the Coordinator's log. So a rejected
+// product is REPORTED rather than omitted - listed, switched off, and carrying
+// the reason it was refused.
+type ConfigError struct {
+	// Message is the whole failure as one line, for a tooltip or a log.
+	Message string `json:"message"`
+	// File is the document that was rejected, so the operator knows what to
+	// open. Relative to the products directory the Coordinator was given.
+	File string `json:"file,omitempty"`
+
+	// Loaded reports whether an EARLIER, valid version of this product is still
+	// running.
+	//
+	// The distinction is the whole point and the two cases must never be drawn
+	// the same way. Loading is fail-closed per product: a bad edit to a product
+	// that was already working leaves the previous good configuration in place,
+	// so the product keeps replicating and what actually failed is the EDIT.
+	// A product that has never loaded is not running at all. "Your change did
+	// not take effect" and "this product does nothing" are different sentences
+	// and want different words on screen.
+	Loaded bool `json:"loaded"`
+
+	// Details is the failure broken into its parts, when the rejection was a
+	// validation failure rather than a parse error. Each names the field it is
+	// about, which is what lets a reader go straight to the line.
+	Details []ConfigIssue `json:"details,omitempty"`
+}
+
+// ConfigIssue is one validation failure within a rejected document.
+type ConfigIssue struct {
+	// Field is the path within the document, e.g. `spec.targets[0].registry`.
+	Field string `json:"field,omitempty"`
+	// Message is what is wrong with it.
+	Message string `json:"message"`
+	// Hint says why the rule exists, when that is not obvious. It is what turns
+	// "certificateIdentity is required" into something the reader can act on.
+	Hint string `json:"hint,omitempty"`
 }
 
 // Repository is the API view of a source or target.

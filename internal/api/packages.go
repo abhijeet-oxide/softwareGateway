@@ -761,7 +761,9 @@ func (s *Server) productExists(w http.ResponseWriter, r *http.Request, name stri
 		// document: the watcher reloads a half-written file, validation fails,
 		// and the product drops out of the registry until the next save.
 		for _, bad := range s.deps.Products.Invalid() {
-			if bad.Name != name {
+			// invalidKey, not bad.Name: a document that failed to PARSE never
+			// yielded a name, and is filed under its file instead.
+			if invalidKey(bad) != name {
 				continue
 			}
 			Error(w, r, v1.CodeFailedPrecondition,

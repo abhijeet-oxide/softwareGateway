@@ -12,7 +12,7 @@ import {
   ResetIcon,
   SearchIcon,
   SheetIcon,
-  VisibilityIcon,
+  SlidersIcon,
 } from "./icons";
 import type { MenuProps, TableProps } from "antd";
 import {
@@ -83,6 +83,7 @@ type StyleName =
   | "titleRoot"
   | "titleText"
   | "toolbar"
+  | "toolbarButton"
   | "toolbarDropdown"
   | "wrapper";
 
@@ -3185,8 +3186,21 @@ function InnerTable<RecordType extends AnyRecord = AnyRecord>(
                 }}
               >
                 <Tooltip title="Export table">
+                  {/*
+                    THE GLYPH, and nothing around it.
+
+                    These were circular bordered buttons pinned to the top-right
+                    corner of the table with nothing between them and the edges
+                    they sat against. Two hard rings competing with the header
+                    row directly beneath them, for two controls almost nobody
+                    uses on any given visit. A text button is the glyph and its
+                    hit area and no chrome at all - it recedes until somebody
+                    reaches for it, which is the right weight for a control that
+                    rearranges a view rather than changing anything.
+                  */}
                   <Button
-                    shape="circle"
+                    type="text"
+                    className={s.toolbarButton}
                     icon={<ExportIcon />}
                     loading={Boolean(exportingType)}
                     aria-label="Export table"
@@ -3209,11 +3223,12 @@ function InnerTable<RecordType extends AnyRecord = AnyRecord>(
                 }}
                 dropdownRender={() => columnVisibilityDropdown}
               >
-                <Tooltip title="Column visibility">
+                <Tooltip title="Columns">
                   <Button
-                    shape="circle"
-                    icon={<VisibilityIcon />}
-                    aria-label="Column visibility"
+                    type="text"
+                    className={s.toolbarButton}
+                    icon={<SlidersIcon />}
+                    aria-label="Columns"
                   />
                 </Tooltip>
               </Dropdown>

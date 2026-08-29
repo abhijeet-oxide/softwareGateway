@@ -72,6 +72,7 @@ export { SeverityTag, SeverityDot, VerdictTag } from "./primitives/SeverityTag";
 export { default as StatTile } from "./primitives/StatTile";
 export { default as PageHeader } from "./primitives/PageHeader";
 export { default as FieldLabel } from "./primitives/FieldLabel";
+export { default as PageTransition } from "./primitives/PageTransition";
 export { default as SectionCard } from "./primitives/SectionCard";
 export { default as AttentionCard } from "./primitives/AttentionCard";
 export type { AttentionSeverity } from "./primitives/AttentionCard";

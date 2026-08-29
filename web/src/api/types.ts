@@ -106,6 +106,34 @@ export interface VerificationSummary {
   atDestination: boolean
 }
 
+/** One validation failure inside a rejected product document. */
+export interface ConfigIssue {
+  /** The path within the document, e.g. `spec.targets[0].registry`. */
+  field?: string
+  message: string
+  /** Why the rule exists, when that is not obvious from the message. */
+  hint?: string
+}
+
+/**
+ * Why a product's configuration was rejected.
+ *
+ * Read `loaded` before drawing anything. A product can be rejected and still be
+ * RUNNING: loading is fail-closed per product, so a bad edit to a working
+ * product leaves the previous good version in place. "Your change did not take
+ * effect" and "this product does nothing" are different sentences.
+ */
+export interface ConfigError {
+  /** The whole failure as one line. */
+  message: string
+  /** The document that was rejected, so the reader knows what to open. */
+  file?: string
+  /** Whether an earlier, valid version of this product is still running. */
+  loaded: boolean
+  /** The failure broken into its parts, when it was a validation failure. */
+  details?: ConfigIssue[]
+}
+
 export interface Product {
   name: string
   productId: string
@@ -119,6 +147,8 @@ export interface Product {
   autoDownload: AutoDownloadSummary
   verification: VerificationSummary
   configHash: string
+  /** Set when this product's document failed to parse or validate. */
+  configError?: ConfigError
 }
 
 export interface ListProductsResponse { products: Product[]; nextPageToken?: string }

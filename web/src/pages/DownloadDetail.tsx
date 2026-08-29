@@ -17,7 +17,8 @@ import {
 } from '../domain/format'
 import { NA, Stat, Value } from '../components/value'
 import {
-  CopyProgress, MeasuredProgress, PromotionProgress, StateStrip, type StripState,
+  CopyProgress, etaSeconds, MeasuredProgress, PromotionProgress, StateStrip,
+  type StripState,
 } from '../components/progress'
 import { RepoLink, TimeAgo, TransferStateTag } from '../components/chips'
 import {
@@ -367,6 +368,42 @@ function totalOf(group: ContentGroup): number {
   return group.files && group.files > 0 ? group.files : group.total
 }
 
+/**
+ * A layer count, in the colour the bar uses for the same fact.
+ *
+ * Copied is the bar's own stroke, already-present its green portion, so a
+ * reader moving between the bar and the table is not asked to re-learn which
+ * is which. A ZERO is drawn muted rather than in its tone: a column of
+ * confident blue noughts claims activity that has not happened, and what the
+ * eye should find in this table is the rows that are moving.
+ */
+function LayerCount({ value, tone, strong }: {
+  value: number
+  tone: 'moved' | 'present'
+  strong?: boolean
+}) {
+  if (!value) return <Value>{formatCount(0)}</Value>
+  return (
+    <Typography.Text
+      strong={strong}
+      style={{ color: tone === 'moved' ? c.brand : c.ok, fontVariantNumeric: 'tabular-nums' }}
+    >
+      {formatCount(value)}
+    </Typography.Text>
+  )
+}
+
+/** What the layer count is counting, and why it is the number that moves. */
+function layerBreakdown(group: ContentGroup): string {
+  const l = layers(group)
+  const going = [`${formatCount(l.copied) ?? 0} copied`, `${formatCount(l.present) ?? 0} already there`]
+  const left = l.total - l.copied - l.present
+  if (left > 0) going.push(`${formatCount(left)} still to go`)
+  return `${formatCount(l.total)} layers: ${going.join(', ')}. A layer is what actually `
+    + 'moves - each is pushed, mounted or skipped on its own - so these are the counts '
+    + 'that change while the download runs.'
+}
+
 /** What the count is counting, and how those components are going. */
 function totalBreakdown(group: ContentGroup): string {
   const going = [
@@ -431,8 +468,18 @@ export default function DownloadDetail() {
   // Both absent for a delegated transfer, and the components below refuse to
   // render a bar for one.
   const speed = elapsed && transferred && elapsed > 0 ? transferred / elapsed : undefined
-  const remaining = bytes(progress?.outstandingBytes)
-  const eta = speed && remaining ? remaining / speed : undefined
+  /*
+   * THE SAME ETA THE DOWNLOADS LIST SHOWS, from the same helper.
+   *
+   * This page used to divide its own honest speed by the PLANNER's
+   * `outstandingBytes`, which counts per (repository, digest) and therefore
+   * counts a component published under its own name twice - while the bar and
+   * the saving three lines above already read the distinct-content account, for
+   * exactly the reason stated there. So the list said ~3h 22m and this page
+   * said 8h 17m about the same download in the same second, and nothing on
+   * either screen said which to believe.
+   */
+  const eta = etaSeconds({ transferred, total: content, saved, elapsedSeconds: elapsed })
 
   const running = t ? isLive(t.state) : false
   const failed = t?.state === 'FAILED'
@@ -580,7 +627,7 @@ export default function DownloadDetail() {
 
       {/*
         A stepper, and nothing else.
-        
+
         It carried a line of explanation under every step - the target's host,
         "signature checked at the destination", "not yet" - which is three
         sentences of small grey text saying what the step names already say.
@@ -676,12 +723,62 @@ export default function DownloadDetail() {
                   pagination={false}
                   dataSource={t?.content ?? []}
                   rowKey={(c) => c.kind}
-                  // Six columns in half a page. Scrolling the table is better
-                  // than squashing the counts into two characters each.
-                  scroll={{ x: 720 }}
+                  className="dl-contents"
+                  // Six columns, all of them narrow. It fits a laptop without
+                  // scrolling now that the grouped header is gone.
+                  scroll={{ x: 660 }}
+                  /*
+                    THE TOTALS, so the table reconciles with the line above it.
+                    The bar says "N of M layers"; without this row a reader has
+                    to add five numbers in their head to check that the table is
+                    talking about the same download.
+                  */
+                  summary={(rows) => {
+                    const all = rows as readonly ContentGroup[]
+                    if (all.length < 2) return null
+                    const sum = (pick: (c: ContentGroup) => number) =>
+                      all.reduce((n, c) => n + pick(c), 0)
+                    const totals = {
+                      total: sum(totalOf),
+                      layers: sum((c) => layers(c).total),
+                      copied: sum((c) => layers(c).copied),
+                      present: sum((c) => layers(c).present),
+                    }
+                    return (
+                      <Table.Summary fixed>
+                        <Table.Summary.Row>
+                          <Table.Summary.Cell index={0}>
+                            <Typography.Text strong>All content</Typography.Text>
+                          </Table.Summary.Cell>
+                          <Table.Summary.Cell index={1} align="right">
+                            <Typography.Text strong>{formatCount(totals.total)}</Typography.Text>
+                          </Table.Summary.Cell>
+                          <Table.Summary.Cell index={2} align="right">
+                            <Typography.Text strong>{formatCount(totals.layers)}</Typography.Text>
+                          </Table.Summary.Cell>
+                          <Table.Summary.Cell index={3} align="right">
+                            <LayerCount value={totals.copied} tone="moved" strong />
+                          </Table.Summary.Cell>
+                          <Table.Summary.Cell index={4} align="right">
+                            <LayerCount value={totals.present} tone="present" strong />
+                          </Table.Summary.Cell>
+                          <Table.Summary.Cell index={5}>
+                            <MeasuredProgress
+                              transferred={totals.copied}
+                              saved={totals.present}
+                              total={totals.layers}
+                              strategy={t?.strategy ?? 'copy'}
+                              showText={false}
+                            />
+                          </Table.Summary.Cell>
+                        </Table.Summary.Row>
+                      </Table.Summary>
+                    )
+                  }}
                   columns={[
                     {
                       title: 'Type',
+                      width: 150,
                       // The same words, and the same marks, the release page
                       // uses for the same components. A download of a release
                       // is that release, one screen later.
@@ -709,7 +806,7 @@ export default function DownloadDetail() {
                       */
                       title: 'Total',
                       align: 'right',
-                      width: 100,
+                      width: 90,
                       render: (_, c) => (
                         <Tooltip title={totalBreakdown(c)}>
                           <span><Value>{formatCount(totalOf(c))}</Value></span>
@@ -718,48 +815,46 @@ export default function DownloadDetail() {
                     },
                     {
                       /*
-                        LAYERS, under a header that says so.
+                        THE LAYERS, on one header line with everything else.
 
-                        These three counted COMPONENTS, which meant every row
-                        read `0` copied and `0` already present for the whole
-                        download and then moved all at once at the end - true,
-                        and useless to anybody watching. A layer is what is
-                        actually pushed, mounted or skipped, so these move while
-                        the download does.
-
-                        Grouped rather than renamed one by one, because `Copied`
-                        means one thing in the components column and another
-                        here, and a table cannot leave that to be inferred:
-                        `Layers 12,410 · copied 8,004 · already present 3,912`
-                        is one sentence with one population in it.
+                        These three used to sit under a grouped `Layers` header
+                        spanning them, which bought a shared noun and cost a
+                        second header row - so the table had two rows of
+                        furniture above five rows of data, and `Total` appeared
+                        twice at different heights meaning different things.
+                        Naming the column `Layers` and letting the two beside it
+                        inherit that noun says the same thing on one line.
                       */
                       title: 'Layers',
-                      // Centred over the three it covers, so the group header reads
-                      // as a header for them rather than as a fourth column.
-                      align: 'center',
-                      children: [
-                        {
-                          title: 'Total',
-                          key: 'layers',
-                          align: 'right',
-                          width: 90,
-                          render: (_, c: ContentGroup) => <Value>{formatCount(layers(c).total)}</Value>,
-                        },
-                        {
-                          title: 'Copied',
-                          key: 'layersCopied',
-                          align: 'right',
-                          width: 90,
-                          render: (_, c: ContentGroup) => <Value>{formatCount(layers(c).copied)}</Value>,
-                        },
-                        {
-                          title: 'Already present',
-                          key: 'layersPresent',
-                          align: 'right',
-                          width: 130,
-                          render: (_, c: ContentGroup) => <Value>{formatCount(layers(c).present)}</Value>,
-                        },
-                      ],
+                      key: 'layers',
+                      align: 'right',
+                      width: 90,
+                      render: (_, c: ContentGroup) => (
+                        <Tooltip title={layerBreakdown(c)}>
+                          <span><Value>{formatCount(layers(c).total)}</Value></span>
+                        </Tooltip>
+                      ),
+                    },
+                    {
+                      title: 'Copied',
+                      key: 'layersCopied',
+                      align: 'right',
+                      width: 90,
+                      // The bar's own two colours, so the table and the bar
+                      // above it say the same thing in the same language:
+                      // what we moved, and what was already there.
+                      render: (_, c: ContentGroup) => (
+                        <LayerCount value={layers(c).copied} tone="moved" />
+                      ),
+                    },
+                    {
+                      title: 'Already present',
+                      key: 'layersPresent',
+                      align: 'right',
+                      width: 130,
+                      render: (_, c: ContentGroup) => (
+                        <LayerCount value={layers(c).present} tone="present" />
+                      ),
                     },
                     {
                       /*
@@ -768,7 +863,7 @@ export default function DownloadDetail() {
                         the two apart and neither can anybody waiting on it.
                       */
                       title: 'On the target',
-                      width: 180,
+                      width: 170,
                       render: (_, c) => {
                         const l = layers(c)
                         return (

@@ -122,20 +122,24 @@ func TestAComponentWithNoJobIsOutstanding(t *testing.T) {
 // layers streamed underneath, because until a component settles it contributes
 // nothing to either column.
 //
-// So the row carries its jobs as well as its components, and they are counted
-// across every outcome rather than only the settled ones.
+// The layers are therefore counted over the RELEASE - the blobs a component
+// carries, plus the manifest naming them - and not over the job queue. Two
+// things made the queue the wrong population, and both of them read as zero on
+// screen: only manifest jobs carry an artifact_id, so counting jobs by
+// component counted manifests, which are blocked until everything beneath them
+// lands; and a layer the destination already had gets no job at all.
 func TestTheBreakdownCarriesTheLayersUnderneathItsComponents(t *testing.T) {
 	h := newFailureHarness(t)
 	id := h.transferWithJobs(0)
 
-	image := h.seedArtifact("application/vnd.oci.image.manifest.v1+json", "")
 	// One image, most of it at the destination and the rest still going: the
 	// component is outstanding, and saying nothing more than that is the
 	// problem.
-	h.jobForArtifact(id, image, "succeeded")
-	h.jobForArtifact(id, image, "succeeded")
-	h.jobForArtifact(id, image, "skipped")
-	h.jobForArtifact(id, image, "leased")
+	image := h.seedArtifact("application/vnd.oci.image.manifest.v1+json", "")
+	h.layerJob(id, h.seedLayer(image), "succeeded")
+	h.layerJob(id, h.seedLayer(image), "succeeded")
+	h.layerJob(id, h.seedLayer(image), "skipped")
+	h.layerJob(id, h.seedLayer(image), "leased")
 
 	rows, err := h.packages.ContentBreakdown(t.Context(), id)
 	if err != nil {
@@ -149,8 +153,11 @@ func TestTheBreakdownCarriesTheLayersUnderneathItsComponents(t *testing.T) {
 		t.Errorf("the component came out %q x%d, want one outstanding component",
 			row.Outcome, row.Count)
 	}
-	if row.Units != 4 {
-		t.Errorf("units = %d, want the four jobs beneath the component", row.Units)
+	// Four layers and the manifest that names them. The manifest is content
+	// too, and it is what the transfer is still pushing once every byte
+	// beneath it has arrived.
+	if row.Units != 5 {
+		t.Errorf("units = %d, want the four layers and their manifest", row.Units)
 	}
 	if row.UnitsCopied != 2 {
 		t.Errorf("unitsCopied = %d, want the two layers that landed", row.UnitsCopied)
@@ -159,16 +166,89 @@ func TestTheBreakdownCarriesTheLayersUnderneathItsComponents(t *testing.T) {
 		t.Errorf("unitsPresent = %d, want the one the destination already held",
 			row.UnitsPresent)
 	}
-	if row.UnitsOutstanding != 1 {
-		t.Errorf("unitsOutstanding = %d, want the one still going", row.UnitsOutstanding)
+	// The leased layer and the manifest, which has no job yet.
+	if row.UnitsOutstanding != 2 {
+		t.Errorf("unitsOutstanding = %d, want the one still going and the manifest",
+			row.UnitsOutstanding)
 	}
 	if row.UnitsFailed != 0 {
 		t.Errorf("unitsFailed = %d, want none", row.UnitsFailed)
 	}
-	// Three of four is what the bar has to be able to say while the component
+	// Three of five is what the bar has to be able to say while the component
 	// says nothing at all.
 	if row.UnitsCopied+row.UnitsPresent+row.UnitsFailed+row.UnitsOutstanding != row.Units {
 		t.Errorf("the unit counts do not partition the units: %+v", row)
+	}
+}
+
+// A layer the destination ALREADY HAS never becomes a job.
+//
+// The planner drops it deliberately - a job that exists only to be skipped
+// still costs a lease, a round trip and a row - so a layer count read off the
+// queue cannot see the very layers that make a delta download cheap. That is
+// how a download reporting 2.9 GB already there reported zero layers already
+// present, which is the same fact contradicting itself on one screen.
+func TestALayerAlreadyAtTheDestinationCountsAsPresentWithoutAJob(t *testing.T) {
+	h := newFailureHarness(t)
+	id := h.transferWithJobs(0)
+
+	image := h.seedArtifact("application/vnd.oci.image.manifest.v1+json", "")
+	h.layerJob(id, h.seedLayer(image), "succeeded")
+	// No job for this one at all: the planner found it already there.
+	h.placeAtTarget(h.seedLayer(image))
+
+	rows, err := h.packages.ContentBreakdown(t.Context(), id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rows) != 1 {
+		t.Fatalf("got %d rows, want the one component: %+v", len(rows), rows)
+	}
+	row := rows[0]
+	if row.Units != 3 {
+		t.Errorf("units = %d, want both layers and the manifest", row.Units)
+	}
+	if row.UnitsPresent != 1 {
+		t.Errorf("unitsPresent = %d, want the layer that needed no job at all",
+			row.UnitsPresent)
+	}
+	if row.UnitsCopied != 1 {
+		t.Errorf("unitsCopied = %d, want the one that was pushed", row.UnitsCopied)
+	}
+}
+
+// A base layer shared by many components is ONE layer.
+//
+// Charging it to every component that references it would make the columns sum
+// to more than the release holds, and a header line reading "0 of 12,000
+// layers" on a release with four thousand is a number nobody can reconcile
+// against anything.
+func TestASharedLayerIsCountedOnce(t *testing.T) {
+	h := newFailureHarness(t)
+	id := h.transferWithJobs(0)
+
+	first := h.seedArtifact("application/vnd.oci.image.manifest.v1+json", "")
+	second := h.seedArtifact("application/vnd.oci.image.manifest.v1+json", "")
+	shared := h.seedLayer(first)
+	h.attachLayer(second, shared)
+	h.layerJob(id, shared, "succeeded")
+
+	rows, err := h.packages.ContentBreakdown(t.Context(), id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	units, copied := 0, 0
+	for _, r := range rows {
+		units += r.Units
+		copied += r.UnitsCopied
+	}
+	// The shared layer plus the two manifests.
+	if units != 3 {
+		t.Errorf("units = %d across %d rows, want the shared layer counted once "+
+			"plus the two manifests", units, len(rows))
+	}
+	if copied != 1 {
+		t.Errorf("unitsCopied = %d, want the shared layer counted once", copied)
 	}
 }
 
@@ -211,9 +291,12 @@ func TestTheBreakdownCountsTheFilesInsideAComponent(t *testing.T) {
 	if rows[0].Outcome != ContentPresent {
 		t.Errorf("outcome = %q, want the skipped bundle present", rows[0].Outcome)
 	}
-	if rows[0].Units != 1 {
-		t.Errorf("units = %d, want the one job - counting files must not "+
-			"multiply the jobs beneath the component", rows[0].Units)
+	// Four layers and the manifest. The assertion that matters is that
+	// counting the NAMED ones did not multiply anything: a join to the layer
+	// titles would have inflated both this and every byte total with it.
+	if rows[0].Units != 5 {
+		t.Errorf("units = %d, want the four layers and their manifest - counting "+
+			"files must not multiply the layers beneath the component", rows[0].Units)
 	}
 }
 
@@ -469,4 +552,47 @@ func TestListArtifactsReportsContentSizeAndNotTheDescriptors(t *testing.T) {
 		t.Errorf("an artifact nobody walked reported %d bytes, want nothing - "+
 			"unknown and zero are different facts", got)
 	}
+}
+
+// seedLayer gives a component one layer and returns its digest.
+func (h *failureHarness) seedLayer(artifactID int64) string {
+	h.t.Helper()
+
+	h.n++
+	digest := "sha256:" + strings.Repeat("5", 60) + padded(h.n)
+	h.exec(`INSERT INTO blobs (digest, size_bytes, media_type)
+	        VALUES (?, 4096, 'application/octet-stream')`, digest)
+	h.attachLayer(artifactID, digest)
+	return digest
+}
+
+// attachLayer points a second component at a layer that already exists, which
+// is what a shared base layer looks like in the record.
+func (h *failureHarness) attachLayer(artifactID int64, digest string) {
+	h.t.Helper()
+
+	h.n++
+	h.exec(`INSERT INTO artifact_blobs (artifact_id, digest, kind, ordinal)
+	        VALUES (?, ?, 'layer', ?)`, artifactID, digest, h.n)
+}
+
+// layerJob is the job that moves one layer. Keyed by DIGEST and carrying no
+// artifact of its own, which is exactly how the planner writes them.
+func (h *failureHarness) layerJob(transferID, digest, state string) {
+	h.t.Helper()
+
+	h.exec(`INSERT INTO jobs (transfer_id, kind, digest, size_bytes,
+	                          source_repo_id, target_repo_id, target_repository,
+	                          state, wave, attempts, max_attempts)
+	        VALUES (?, 'blob', ?, 4096, ?, ?, 'dest/path', ?, 0, 1, 8)`,
+		transferID, digest, h.repoID, h.repoID, state)
+}
+
+// placeAtTarget records that the destination already holds this content, which
+// is why the planner gave it no job.
+func (h *failureHarness) placeAtTarget(digest string) {
+	h.t.Helper()
+
+	h.exec(`INSERT INTO blob_placements (repository_id, digest, size_bytes, source, verified_at)
+	        VALUES (?, ?, 4096, 'observed', '2026-01-01T00:00:00Z')`, h.repoID, digest)
 }

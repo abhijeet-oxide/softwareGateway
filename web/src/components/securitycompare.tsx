@@ -14,7 +14,7 @@ import type {
 import {
   ComponentCell, CveCell, FixCell, SecurityExportMenu, SeverityBar, SeverityTag, VerdictBanner,
 } from './security'
-import { c, FieldLabel, mono, severity as severityColour, verdict as verdictColour } from '../uikit'
+import { c, FieldLabel, mono, verdict as verdictColour } from '../uikit'
 import { formatRelative } from '../domain/format'
 
 /**
@@ -450,7 +450,7 @@ function DeltaZone({ label, counts, colour, icon, divider }: {
         {SEVERITIES.filter((sev) => counts.bySeverity[sev] > 0).map((sev) => (
           <Typography.Text
             key={sev}
-            style={{ fontSize: 12, color: severityColour[sev], fontVariantNumeric: 'tabular-nums' }}
+            style={{ fontSize: 12, color: c.text2, fontVariantNumeric: 'tabular-nums' }}
           >
             <strong>{counts.bySeverity[sev]}</strong> {sev}
           </Typography.Text>

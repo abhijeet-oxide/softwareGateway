@@ -171,14 +171,18 @@ export function SearchIcon(p: TableIconProps) {
   );
 }
 
-/** Which columns are on screen. An eye rather than a gear: a gear says
- *  "configuration, somewhere else", and this menu is about what is in front of
- *  the reader right now. */
-export function VisibilityIcon(p: TableIconProps) {
+/** Which columns are on screen, and in what order.
+ *
+ *  Sliders rather than an eye: an eye is about VISIBILITY alone, and this menu
+ *  also pins, reorders and resets - "adjust this view" is what the drawing has
+ *  to say. It is also the mark every contemporary tool puts on exactly this
+ *  control, which is worth more than any argument from first principles. */
+export function SlidersIcon(p: TableIconProps) {
   return (
     <Glyph {...p}>
-      <path d="M1.5 8s2.4-4.25 6.5-4.25S14.5 8 14.5 8s-2.4 4.25-6.5 4.25S1.5 8 1.5 8z" />
-      <circle cx="8" cy="8" r="1.85" />
+      <path d="M2.25 4.5h11.5M2.25 11.5h11.5" />
+      <circle cx="6" cy="4.5" r="1.75" />
+      <circle cx="10.5" cy="11.5" r="1.75" />
     </Glyph>
   );
 }

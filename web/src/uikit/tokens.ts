@@ -173,10 +173,27 @@ export const defaultTokens: ThemeTokens = {
     danger: "#d70015", dangerBg: "#ffebe9", dangerBd: "#ffc7c2",
     base: "#5856d6", baseBg: "#efeffd", baseBd: "#cfcff7",
     inherit: "#6e6e73", inheritBg: "#f2f2f5", inheritBd: "#e4e4e7",
-    sevCritical: "#c1262e", sevHigh: "#b85c0a", sevMedium: "#8f6c00",
-    sevLow: "#1b7f3b", sevUnknown: "#86868b",
-    sevCriticalBg: "#fceceb", sevHighBg: "#fdf3e8", sevMediumBg: "#fbf6e4",
-    sevLowBg: "#eef7f1", sevUnknownBg: "#f2f2f5",
+    // The severity ramp is the MARK's colour first - the dot, the bar, the
+    // meter - and the word's second. That ordering is what let it become
+    // modern: the old values were picked to clear 4.5:1 as text on white, and
+    // any yellow dark enough to do that is olive, any orange is brown. The
+    // panel read as army surplus.
+    //
+    // These are vivid at the hue they are meant to be: a real vermilion, a real
+    // gold, a real emerald. They are FILLS - a dot, a bar segment, a meter -
+    // never the colour of a word, so nothing here is read as text and nothing
+    // has to be dulled to be readable. Medium especially: a gold that clears
+    // 4.5:1 on white does not exist, which is the whole reason this scale used
+    // to look like army surplus.
+    //
+    // The word keeps its meaning without the hue - it is spelled out, and the
+    // dot differs in FILL as well as colour (critical and high solid, medium
+    // and low ringed, unknown dashed) - so nothing about the scale depends on
+    // being able to read a colour. Never set one of these as `color` on text.
+    sevCritical: "#f43f43", sevHigh: "#fb8c00", sevMedium: "#eab308",
+    sevLow: "#28b757", sevUnknown: "#8e8e93",
+    sevCriticalBg: "#fdedee", sevHighBg: "#fef3e4", sevMediumBg: "#fdf6e0",
+    sevLowBg: "#e8f8ee", sevUnknownBg: "#f2f2f5",
     vBetter: "#1b7f3b", vWorse: "#c1262e", vUnchanged: "#6e6e73", vInconclusive: "#5856d6",
   },
   dark: {
@@ -209,10 +226,14 @@ export const defaultTokens: ThemeTokens = {
     danger: "#ff4e41", dangerBg: "rgba(220, 69, 58, 0.16)", dangerBd: "rgba(220, 69, 58, 0.42)",
     base: "#a5a3ff", baseBg: "rgba(120, 118, 235, 0.18)", baseBd: "rgba(120, 118, 235, 0.45)",
     inherit: "#a1a1a6", inheritBg: "rgba(161, 161, 166, 0.14)", inheritBd: "rgba(161, 161, 166, 0.32)",
-    sevCritical: "#ff6961", sevHigh: "#ff9f0a", sevMedium: "#e0b93a",
+    // The system palette, exactly: these are not seeds and never go through
+    // Ant's algorithm, so the dark scale can be the real values rather than a
+    // solve. The old medium was a desaturated #e0b93a - a yellow apologising
+    // for being one - where the platform's own is unmissable.
+    sevCritical: "#ff453a", sevHigh: "#ff9f0a", sevMedium: "#ffd60a",
     sevLow: "#30d158", sevUnknown: "#98989d",
-    sevCriticalBg: "rgba(255, 105, 97, 0.18)", sevHighBg: "rgba(255, 159, 10, 0.18)",
-    sevMediumBg: "rgba(224, 185, 58, 0.18)", sevLowBg: "rgba(48, 209, 88, 0.18)",
+    sevCriticalBg: "rgba(255, 69, 58, 0.18)", sevHighBg: "rgba(255, 159, 10, 0.18)",
+    sevMediumBg: "rgba(255, 214, 10, 0.18)", sevLowBg: "rgba(48, 209, 88, 0.18)",
     sevUnknownBg: "rgba(152, 152, 157, 0.18)",
     vBetter: "#30d158", vWorse: "#ff6961", vUnchanged: "#98989d", vInconclusive: "#a5a3ff",
   },

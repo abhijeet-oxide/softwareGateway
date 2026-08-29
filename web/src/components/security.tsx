@@ -50,6 +50,19 @@ const SEVERITY_LABEL: Record<Severity, string> = {
  *
  * The dot is filled for critical and high and hollow for the rest, so the two
  * that demand attention differ in SHAPE and not only in hue.
+ *
+ * # Why the word is not coloured
+ *
+ * Because insisting that it was is what made the whole scale look like army
+ * surplus. A word has to clear 4.5:1 against white, and the only yellow that
+ * dark is olive, the only orange that dark is brown - so the palette was being
+ * chosen by a legibility constraint rather than by what the colours mean, and
+ * medium and high came out mud.
+ *
+ * The MARK carries the hue and only has to clear 3:1, which a real gold and a
+ * real vermilion do comfortably. The word is ordinary text, which is also the
+ * more legible arrangement in a dense table: a column of five differently
+ * coloured words is five colours competing with the data beside them.
  */
 export function SeverityTag({ value, count }: { value: Severity; count?: number }) {
   const filled = value === 'critical' || value === 'high'
@@ -63,7 +76,7 @@ export function SeverityTag({ value, count }: { value: Severity; count?: number 
           border: `1.5px solid ${severityColour[value]}`,
         }}
       />
-      <span style={{ color: severityColour[value] }}>{SEVERITY_LABEL[value]}</span>
+      <span>{SEVERITY_LABEL[value]}</span>
       {count !== undefined && <strong>{count.toLocaleString()}</strong>}
     </Space>
   )
@@ -257,7 +270,7 @@ function SeverityPip({ value, count, word = true }: {
             border: `1.5px solid ${muted ? c.borderStrong : severityColour[value]}`,
           }}
         />
-        <span style={{ color: muted ? c.text2 : severityColour[value], fontWeight: muted ? 400 : 600 }}>
+        <span style={{ color: muted ? c.text2 : c.text, fontWeight: muted ? 400 : 600 }}>
           {count.toLocaleString()}
         </span>
         {word && (
@@ -699,8 +712,12 @@ export function ComparisonTiles({ resolved, introduced, moreSevere, lessSevere, 
   const tiles = [
     { label: 'Resolved', value: resolved.total, colour: verdictColour.better, counts: resolved },
     { label: 'Introduced', value: introduced.total, colour: verdictColour.worse, counts: introduced },
-    { label: 'Became more severe', value: moreSevere, colour: severityColour.high },
-    { label: 'Became less severe', value: lessSevere, colour: severityColour.low },
+    // A severity that moved is a VERDICT, not a severity: these two tiles say
+    // the comparison got worse or better, which is what the two above them
+    // already say in the same two colours. Borrowing the high and low hues put
+    // a fill colour on a 24px number and said "high" where it meant "worse".
+    { label: 'Became more severe', value: moreSevere, colour: verdictColour.worse },
+    { label: 'Became less severe', value: lessSevere, colour: verdictColour.better },
     { label: 'Unchanged', value: unchanged, colour: c.text2 },
   ]
 
@@ -723,7 +740,7 @@ export function ComparisonTiles({ resolved, introduced, moreSevere, lessSevere, 
           {t.counts && t.counts.total > 0 && (
             <Space size={8} wrap style={{ marginTop: 4 }}>
               {SEVERITIES.filter((s) => t.counts!.bySeverity[s] > 0).map((s) => (
-                <Typography.Text key={s} style={{ fontSize: 12, color: severityColour[s] }}>
+                <Typography.Text key={s} type="secondary" style={{ fontSize: 12 }}>
                   {t.counts!.bySeverity[s]} {SEVERITY_LABEL[s].toLowerCase()}
                 </Typography.Text>
               ))}

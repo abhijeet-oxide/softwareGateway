@@ -226,6 +226,42 @@ html {
   }
 }
 
+/* --- the page transition ---------------------------------------------------
+ * The one movement between one screen and the next. See PageTransition.tsx for
+ * why it exists and why it is this short.
+ *
+ * OPACITY AND TRANSFORM ONLY, and `translate3d` rather than `translateY`, so
+ * the whole thing runs on the compositor. An entrance that animated height,
+ * margin or filter would relayout the page it is covering for - it would BE the
+ * stutter it exists to hide, and on the largest tables that is exactly where it
+ * would show. */
+@keyframes ui-page-enter {
+  from {
+    opacity: 0;
+    transform: translate3d(0, 6px, 0);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+.ui-page {
+  animation: ui-page-enter 200ms var(--ease-out) both;
+}
+/* For a flush shell, whose page owns the whole height and whose panes scroll
+   independently: the wrapper has to BE the page, not a box the page sits in. */
+.ui-page.is-fill {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  height: 100%;
+}
+@media (prefers-reduced-motion: reduce) {
+  .ui-page {
+    animation: none;
+  }
+}
+
 /* --- the theme reveal -----------------------------------------------------
  * The scripted clip-path circle in themeTransition.ts is the ONLY animation
  * during a theme change: the browser's default cross-fade is turned off, or

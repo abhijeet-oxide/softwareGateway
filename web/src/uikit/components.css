@@ -247,16 +247,47 @@
   border-radius: 50%;
   border: 1.5px solid currentColor;
 }
-.ui-sev.sev-critical { color: var(--sev-critical); }
-.ui-sev.sev-high { color: var(--sev-high); }
-.ui-sev.sev-medium { color: var(--sev-medium); }
-.ui-sev.sev-low { color: var(--sev-low); }
-.ui-sev.sev-unknown { color: var(--sev-unknown); }
-.ui-sev.sev-critical .ui-sev-dot { background: currentColor; }
-.ui-sev.sev-high .ui-sev-dot { background: currentColor; }
-.ui-sev.sev-medium .ui-sev-dot { background: var(--sev-medium-bg); }
-.ui-sev.sev-low .ui-sev-dot { background: var(--sev-low-bg); }
+
+/* THE HUE SITS ON THE DOT, NOT ON THE WORD.
+ *
+ * The colour used to be set on the whole tag, so the label inherited it. That
+ * is what forced the ramp to be chosen for 4.5:1 text contrast on white, and
+ * the only yellow and orange dark enough to clear it are olive and brown - the
+ * scale was picked by a legibility rule rather than by what the colours mean.
+ *
+ * A dot is a GRAPHIC and needs 3:1, which a real gold and a real vermilion
+ * clear easily. So the mark carries the hue and the word is ordinary text,
+ * which also reads better in a dense list: five differently coloured words in a
+ * column compete with the data beside them. Nothing is lost, because the word
+ * is spelled out and the dot differs in FILL as well as colour.
+ *
+ * `currentColor` stays on the dot so VerdictTag, which sets its colour inline
+ * on the wrapper and carries no `sev-` class, keeps working unchanged. */
+.ui-sev.sev-critical,
+.ui-sev.sev-high,
+.ui-sev.sev-medium,
+.ui-sev.sev-low,
+.ui-sev.sev-unknown {
+  color: var(--text);
+}
+.ui-sev.sev-critical .ui-sev-dot {
+  color: var(--sev-critical);
+  background: currentColor;
+}
+.ui-sev.sev-high .ui-sev-dot {
+  color: var(--sev-high);
+  background: currentColor;
+}
+.ui-sev.sev-medium .ui-sev-dot {
+  color: var(--sev-medium);
+  background: var(--sev-medium-bg);
+}
+.ui-sev.sev-low .ui-sev-dot {
+  color: var(--sev-low);
+  background: var(--sev-low-bg);
+}
 .ui-sev.sev-unknown .ui-sev-dot {
+  color: var(--sev-unknown);
   background: var(--sev-unknown-bg);
   border-style: dashed;
 }
@@ -659,6 +690,13 @@
   min-height: 0;
   overflow: auto;
   padding: var(--sp-6);
+  /* THE SCROLLBAR DOES NOT MOVE THE PAGE.
+     Without this the gutter appears and disappears as one screen happens to
+     overflow and the next happens not to, so every navigation between a long
+     page and a short one shifted the entire layout sideways by the width of a
+     scrollbar. That shift is most of what reads as jitter when changing pages,
+     and it is not an animation problem - no transition can hide it. */
+  scrollbar-gutter: stable;
 }
 /* A flush page manages its OWN edges and its own scrolling: a workspace built
    of panes that each scroll independently must not also sit inside a scroller,

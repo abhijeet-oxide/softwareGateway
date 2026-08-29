@@ -222,7 +222,12 @@ export function buildTheme(
       Tabs: {
         titleFontSize: base,
         horizontalItemPadding: "10px 4px",
-        horizontalMargin: "0",
+        // A GAP under the tab bar, which is the component library's own default
+        // and had been set to zero here. Without it a tab strip sits flush on
+        // whatever it introduces - most often a table - and the two read as one
+        // object, so the underline marking the active tab lands a pixel above a
+        // header row and neither is legible as what it is.
+        horizontalMargin: "0 0 16px 0",
       },
       Tag: {
         defaultBg: p.surface2,

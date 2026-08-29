@@ -89,6 +89,13 @@
   /* The bar above the page, as a material: the page's own surface, thinned. */
   --material-bar: color-mix(in srgb, var(--surface) 72%, transparent);
 
+  /* THE GROUND A PROPORTIONAL BAR IS DRAWN ON.
+     Its own token, because a meter track was being drawn in `--surface-2`
+     everywhere - a fill chosen to sit a shade off white, which on white is a
+     track nobody can see. A bar with an invisible track is a bar with no
+     denominator: 3 of 4 and 3 of 40 draw the same picture. */
+  --track: color-mix(in srgb, var(--border-strong) 70%, transparent);
+
   /* A tooltip is the one surface that is dark in both themes - it is a label
      ON the interface, not a part of it. */
   --tooltip-bg: rgba(28, 28, 30, 0.88);
@@ -150,6 +157,9 @@
     0 0 0 0.5px rgba(255, 255, 255, 0.09), 0 8px 20px -6px rgba(0, 0, 0, 0.55),
     0 32px 64px -24px rgba(0, 0, 0, 0.7);
   --overlay-mask: rgba(0, 0, 0, 0.5);
+  /* On a dark ground the track has to come UP from the surface rather than
+     down from it, or it disappears into the card. */
+  --track: color-mix(in srgb, var(--border-strong) 85%, transparent);
   --tooltip-bg: rgba(58, 58, 60, 0.92);
 }
 

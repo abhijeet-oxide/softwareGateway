@@ -7,7 +7,10 @@ import {
   FileTextOutlined, MinusCircleOutlined, QuestionCircleOutlined, StopOutlined, SyncOutlined,
   WarningOutlined,
 } from '../icons'
-import { c, mono, severity as severityColour, severitySurface, StatusPill, tokens, verdict as verdictColour } from '../uikit'
+import {
+  c, mono, severity as severityColour, severitySurface, StatusPill, tokens,
+  verdict as verdictColour, withAlpha,
+} from '../uikit'
 import { SEVERITIES } from '../api/types'
 import type {
   PackageSecuritySummary, ScanStatus, SecurityCounts, SecurityCoverage,
@@ -83,7 +86,7 @@ export function SeverityBar({ counts, height = 8 }: { counts: SecurityCounts; he
     <div
       style={{
         display: 'flex', width: '100%', height, borderRadius: height / 2,
-        overflow: 'hidden', background: c.surface2,
+        overflow: 'hidden', background: c.track,
       }}
     >
       {SEVERITIES.map((s, i) => {
@@ -609,9 +612,20 @@ export function VerdictBanner({
     */
     <div
       style={{
-        border: `1px solid ${colour}2E`,
-        borderRadius: tokens.shape.borderRadius,
-        background: `${colour}0A`,
+        /*
+          withAlpha, NOT two more hex digits.
+
+          These read `${colour}2E` and `${colour}0A`, which worked while the
+          verdict colours were literal hexes. They are `var(--v-better)` and the
+          rest now, so the browser was being handed `var(--v-better)2E` - not a
+          colour - and dropping BOTH declarations. The banner had been rendering
+          with no tint and no border at all: a paragraph loose on the page,
+          where the whole point of this surface is that it is the one thing that
+          carries the answer's colour.
+        */
+        border: `1px solid ${withAlpha(colour, 0.22)}`,
+        borderRadius: 'var(--r-lg)',
+        background: withAlpha(colour, 0.06),
         padding: '18px 20px',
         marginBottom: 16,
       }}
@@ -623,7 +637,7 @@ export function VerdictBanner({
               style={{
                 color: colour, fontSize: 18, lineHeight: 1, display: 'inline-flex',
                 alignItems: 'center', justifyContent: 'center',
-                width: 32, height: 32, borderRadius: '50%', background: `${colour}1A`,
+                width: 32, height: 32, borderRadius: '50%', background: withAlpha(colour, 0.12),
               }}
             >
               {VERDICT_ICON[verdict]}
@@ -639,15 +653,23 @@ export function VerdictBanner({
           {explanation || headline}
         </Typography.Paragraph>
 
+        {/*
+          ONE mark for the whole group, not one per line.
+
+          Three caveats meant three amber triangles stacked down the left of the
+          banner, which read as three warnings about three different things
+          rather than as the qualifications on one answer. The mark says "this
+          answer has conditions"; the lines say what they are.
+        */}
         {caveats && caveats.length > 0 && (
-          <Space direction="vertical" size={2}>
-            {caveats.map((caveat) => (
-              <Typography.Text key={caveat} type="secondary">
-                <WarningOutlined style={{ color: c.pending, marginRight: 6 }} />
-                {caveat}
-              </Typography.Text>
-            ))}
-          </Space>
+          <div style={{ display: 'flex', gap: 8, alignItems: 'flex-start' }}>
+            <WarningOutlined style={{ color: c.pending, marginTop: 3, flexShrink: 0 }} />
+            <Space direction="vertical" size={2}>
+              {caveats.map((caveat) => (
+                <Typography.Text key={caveat} type="secondary">{caveat}</Typography.Text>
+              ))}
+            </Space>
+          </div>
         )}
       </Space>
     </div>

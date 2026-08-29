@@ -23,7 +23,7 @@ import {
   SeverityBar, SeverityTag, StopSyncButton, SyncButton, SyncedAgo, SyncInterrupted, SyncLogButton,
 } from './security'
 import { formatAbsolute, formatRelative } from '../domain/format'
-import { c, mono, severity as severityColour } from '../uikit'
+import { c, FieldLabel, mono, severity as severityColour } from '../uikit'
 
 /**
  * The Security tab of a release.
@@ -455,7 +455,7 @@ function SummaryCards({ data, syncing }: { data: PackageSecurityResponse; syncin
                     comparable with each other. A bar normalised per severity
                     would draw four full-width bars and say nothing.
                   */}
-                  <div style={{ height: 5, background: c.surface2, borderRadius: 3 }}>
+                  <div style={{ height: 5, background: c.track, borderRadius: 3 }}>
                     <div
                       className="slm-meter-seg"
                       style={{
@@ -530,16 +530,12 @@ function SummaryCards({ data, syncing }: { data: PackageSecurityResponse; syncin
   )
 }
 
-/** The name of a zone within the posture band. */
-function ZoneLabel({ children }: { children: ReactNode }) {
+/** The name of a zone within the posture band. The shared label, with the one
+ *  thing this band adds: the gap to whatever it introduces. */
+function ZoneLabel({ children, count }: { children: ReactNode; count?: ReactNode }) {
   return (
-    <div
-      style={{
-        fontSize: 11, fontWeight: 600, letterSpacing: '0.06em', textTransform: 'uppercase',
-        color: c.text2, marginBottom: 10,
-      }}
-    >
-      {children}
+    <div style={{ marginBottom: 10 }}>
+      <FieldLabel count={count}>{children}</FieldLabel>
     </div>
   )
 }

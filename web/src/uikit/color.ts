@@ -46,6 +46,10 @@ export const c = {
   border: cssVar("border"),
   borderStrong: cssVar("border-strong"),
 
+  /** The ground a proportional bar is drawn on. Not a palette colour - it is
+   *  structural, and lives in tokens.css beside the rest of the shape. */
+  track: cssVar("track"),
+
   text: cssVar("text"),
   text2: cssVar("text-2"),
   text3: cssVar("text-3"),

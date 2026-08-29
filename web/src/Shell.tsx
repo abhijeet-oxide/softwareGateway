@@ -123,11 +123,30 @@ export function Shell({ children }: { children: ReactNode }) {
   ).length
   const failing = (transfers?.transfers ?? []).filter((t) => t.state === 'FAILED').length
 
+  /*
+    NOTHING is selected on a page the navigation does not list, and that is a
+    real state rather than an oversight.
+
+    This used to fall back to '/', so every unlisted route - Security, which is
+    reachable from a release and from a listing but has no entry of its own -
+    lit the Overview item and titled the bar "Overview". The reader was told
+    they were somewhere they were not.
+  */
   const selected = NAV.map((n) => n.key)
     .filter((k) => (k === '/' ? location.pathname === '/' : location.pathname.startsWith(k)))
-    .sort((a, b) => b.length - a.length)[0] ?? '/'
+    .sort((a, b) => b.length - a.length)[0]
 
-  const section = NAV.find((n) => n.key === selected)?.label ?? brand.appName
+  // Where you are, for the pages that are reached THROUGH something rather
+  // than from the navigation. Longest prefix wins, so /packages/compare is a
+  // comparison rather than a package.
+  const UNLISTED: [string, string][] = [
+    ['/packages/compare', 'Compare releases'],
+    ['/security', 'Security'],
+  ]
+  const section = NAV.find((n) => n.key === selected)?.label
+    ?? UNLISTED.filter(([path]) => location.pathname.startsWith(path))
+      .sort((a, b) => b[0].length - a[0].length)[0]?.[1]
+    ?? brand.appName
 
   const items: NavItem[] = NAV.map((n) => ({
     key: n.key,

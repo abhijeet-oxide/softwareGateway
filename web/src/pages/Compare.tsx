@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react'
 import type { CSSProperties, ReactNode } from 'react'
-import { App, Button, Card, Col, Popover, Progress, Row, Segmented, Select, Space, Tag, Tooltip, Tree, Typography } from 'antd'
+import { App, Button, Card, Col, Popover, Progress, Row, Segmented, Select, Space, Tooltip, Tree, Typography } from 'antd'
 // The working-surface table: resizable, reorderable, pinnable columns whose
 // layout each person keeps. See `tablekit/README.md` for which tables get it.
 import { Table as DataTable } from '../tablekit'
@@ -17,7 +17,7 @@ import { ErrorState, SearchBar } from '../components/layout'
 import { WorkingBar } from '../components/progress'
 import { ARTIFACT_ICONS, Icon } from '../components/icons'
 import { SecurityComparison } from '../components/securitycompare'
-import { c, EmptyState, mono } from '../uikit'
+import { c, EmptyState, mono, StatusPill, type PillTone } from '../uikit'
 import type {
   CompareFile, CompareProgressSide, CompareResponse, CompareRow, CompareVerdict, Package,
   Repository,
@@ -351,11 +351,24 @@ function CacheNote({ base, against }: { base?: Package; against?: Package }) {
   )
 }
 
-const VERDICT: Record<CompareVerdict, { label: string; colour: string; statColour?: string }> = {
-  same: { label: 'Unchanged', colour: 'default' },
-  changed: { label: 'Changed', colour: 'orange', statColour: c.pending },
-  'only-a': { label: 'Removed', colour: 'red', statColour: c.danger },
-  'only-b': { label: 'Added', colour: 'green', statColour: c.ok },
+/*
+  The four verdicts, and the ONE place their word and their colour are decided.
+
+  `tone` rather than a component-library preset colour: the presets are Ant
+  Design's own scales, which no palette reaches and no theme moves, and they
+  were the last thing on this page still saying green in a colour nothing else
+  on screen used. The design system's own chip takes a tone.
+
+  The words stay this page's - "Changed" rather than the kit's "Modified", and
+  amber rather than the kit's blue - because the composition band, the bucket
+  figures and this column all read from here, and a chip that disagreed with
+  the bar above it would be worse than one that is merely not shared.
+*/
+const VERDICT: Record<CompareVerdict, { label: string; tone: PillTone; statColour?: string }> = {
+  same: { label: 'Unchanged', tone: 'neutral' },
+  changed: { label: 'Changed', tone: 'pending', statColour: c.pending },
+  'only-a': { label: 'Removed', tone: 'danger', statColour: c.danger },
+  'only-b': { label: 'Added', tone: 'ok', statColour: c.ok },
 }
 
 type Mode = 'versions' | 'locations'
@@ -452,9 +465,33 @@ function ComparisonReport({ report }: { report: CompareResponse }) {
 
       <Card
         title={
-          kind === 'file'
-            ? `Files (${formatCount(fileCount)})`
-            : `Components (${formatCount(content.length)})`
+          /*
+            The count and the search on ONE line.
+
+            The box had a band of its own between the header and the table, and
+            the enhanced table puts its own controls in a band under that - so
+            there were three strips of chrome, two of them nearly empty, before
+            the reader reached a row. What somebody is looking AT and what they
+            are looking FOR belong on the same line.
+          */
+          <Space size={12} wrap>
+            <span>
+              {kind === 'file'
+                ? `Files (${formatCount(fileCount)})`
+                : `Components (${formatCount(content.length)})`}
+            </span>
+            <SearchBar
+              value={search}
+              onChange={setSearch}
+              placeholder={kind === 'file'
+                ? 'Search files by path or component'
+                : 'Search by name, tag or digest'}
+              matched={kind === 'file' ? shownFiles.length : rows.length}
+              total={kind === 'file' ? fileCount : content.length}
+              width={260}
+              style={{ marginBottom: 0 }}
+            />
+          </Space>
         }
         extra={
           <Space size={12} wrap>
@@ -509,19 +546,6 @@ function ComparisonReport({ report }: { report: CompareResponse }) {
         }
         styles={{ body: { padding: 0 } }}
       >
-        <div style={{ padding: '12px 16px 0' }}>
-          <SearchBar
-            value={search}
-            onChange={setSearch}
-            placeholder={kind === 'file'
-              ? 'Search files by path or component'
-              : 'Search by name, tag or digest'}
-            matched={kind === 'file' ? shownFiles.length : rows.length}
-            total={kind === 'file' ? fileCount : content.length}
-            width={340}
-          />
-        </div>
-
         {kind === 'file' ? (
           <div style={{ padding: '8px 16px 16px' }}>
             <FileDifferences files={shownFiles} total={fileCount} />
@@ -579,9 +603,9 @@ function ComparisonReport({ report }: { report: CompareResponse }) {
               title: 'Impact',
               width: 120,
               render: (_, r) => (
-                <Tag color={VERDICT[r.verdict]?.colour} style={{ marginInlineEnd: 0 }}>
+                <StatusPill tone={VERDICT[r.verdict]?.tone ?? 'neutral'} style={{ marginInlineEnd: 0 }}>
                   {VERDICT[r.verdict]?.label ?? r.verdict}
-                </Tag>
+                </StatusPill>
               ),
             },
             {
@@ -770,7 +794,9 @@ function FileRow({ entry, name }: { entry: FileEntry; name: string }) {
       </Typography.Text>
 
       {entry.verdict !== 'same' && (
-        <Tag color={meta?.colour} style={{ marginInlineEnd: 0 }}>{meta?.label}</Tag>
+        <StatusPill tone={meta?.tone ?? 'neutral'} size="sm" style={{ marginInlineEnd: 0 }}>
+          {meta?.label}
+        </StatusPill>
       )}
 
       <Typography.Text type="secondary" style={{ fontSize: 11 }}>
@@ -828,7 +854,7 @@ function CompositionBand({ buckets }: { buckets: Record<CompareVerdict, Bucket> 
       <div
         style={{
           display: 'flex', width: '100%', height: 12, borderRadius: 6,
-          overflow: 'hidden', background: c.surface2,
+          overflow: 'hidden', background: c.track,
         }}
       >
         {order.map((verdict, i) => {
@@ -1320,8 +1346,22 @@ export default function Compare() {
     <>
 
       {settled && report ? (
-        <Card size="small" style={{ marginBottom: 16 }}>
-          <Space size={16} wrap style={{ width: '100%', justifyContent: 'space-between' }}>
+        /*
+          ONE HEADER, not three cards.
+
+          What was being compared, which answer is on screen, and what that
+          answer is were three separate cards stacked down the page - three
+          borders, three shadows and forty-eight pixels of gap before the
+          reader reached anything they had waited minutes for. They are all
+          chrome about the same comparison, so they are one object: the ends on
+          top, the switch between the two answers under a hairline.
+        */
+        <Card size="small" style={{ marginBottom: 16 }} styles={{ body: { padding: 0 } }}>
+          <Space
+            size={16}
+            wrap
+            style={{ width: '100%', justifyContent: 'space-between', padding: '12px 16px' }}
+          >
             {/*
               EACH END NAMED IN FULL: its package, then its version. A label
               like `cfx-near 25.7_mp2604_2131` is a source and a version and no
@@ -1336,6 +1376,30 @@ export default function Compare() {
             </Space>
             <Button onClick={() => setSettled(false)}>Change selection</Button>
           </Space>
+
+          {mode === 'versions' && (
+            <div
+              style={{
+                display: 'flex', flexWrap: 'wrap', gap: 12, alignItems: 'center',
+                justifyContent: 'space-between',
+                padding: '10px 16px', borderTop: `1px solid ${c.border}`,
+              }}
+            >
+              <Segmented
+                value={view}
+                onChange={(v) => (v === 'security' ? showSecurity() : setView('package'))}
+                options={[
+                  { value: 'package', label: 'Package comparison' },
+                  { value: 'security', label: 'Security comparison' },
+                ]}
+              />
+              <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+                {view === 'package'
+                  ? 'What the two releases hold, component by component.'
+                  : 'How the security posture changed from the base release to the new one.'}
+              </Typography.Text>
+            </div>
+          )}
         </Card>
       ) : (
       <Card style={{ marginBottom: 16 }}>
@@ -1470,33 +1534,6 @@ export default function Compare() {
       )}
 
       {compare.isError && <ErrorState error={compare.error} retry={() => void run()} />}
-
-      {/*
-        The switch between the two answers, above both of them.
-
-        Only once a comparison has been run: before that there is nothing to
-        switch between, and a segmented control over an empty page is a control
-        that teaches nothing.
-      */}
-      {report && mode === 'versions' && (
-        <Card size="small" style={{ marginBottom: 16 }}>
-          <Space size={12} wrap style={{ width: '100%', justifyContent: 'space-between' }}>
-            <Segmented
-              value={view}
-              onChange={(v) => (v === 'security' ? showSecurity() : setView('package'))}
-              options={[
-                { value: 'package', label: 'Package comparison' },
-                { value: 'security', label: 'Security comparison' },
-              ]}
-            />
-            <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-              {view === 'package'
-                ? 'What the two releases hold, component by component.'
-                : 'How the security posture changed from the base release to the new one.'}
-            </Typography.Text>
-          </Space>
-        </Card>
-      )}
 
       {report && view === 'package' && <ComparisonReport report={report} />}
 

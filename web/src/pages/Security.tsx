@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react'
-import { Alert, Button, Card, Checkbox, Input, Segmented, Select, Space, Tooltip, Typography } from 'antd'
+import { Button, Card, Checkbox, Input, Segmented, Select, Space, Tooltip, Typography } from 'antd'
 // The working-surface table: resizable, reorderable, pinnable columns whose
 // layout each person keeps. See `tablekit/README.md` for which tables get it.
 import { Table as DataTable } from '../tablekit'
@@ -8,10 +8,10 @@ import { useProducts, useSecuritySearch, securitySearchExportUrl } from '../api/
 import type { SearchKind, SecuritySearchHit, Severity } from '../api/types'
 import { SEVERITIES } from '../api/types'
 import {
-  ComponentCell, CveCell, SecurityExportMenu, SeverityTag,
+  ComponentCell, CveCell, FixCell, SecurityExportMenu, SeverityTag,
 } from '../components/security'
 import { ErrorState, PageHeader } from '../components/layout'
-import { c, EmptyState, mono, StatusPill } from '../uikit'
+import { EmptyState, InlineNotice, mono } from '../uikit'
 
 /**
  * Search across CVEs, packages and images, and navigate the relationships
@@ -87,8 +87,7 @@ export default function Security() {
       />
 
       <Card size="small" style={{ marginBottom: 16 }}>
-        <Space direction="vertical" size={12} style={{ width: '100%' }}>
-          <Space size={12} wrap>
+        <Space size={12} wrap style={{ width: '100%' }}>
             <Select
               style={{ minWidth: 200 }}
               value={product}
@@ -123,52 +122,67 @@ export default function Security() {
                 Exact match
               </Checkbox>
             </Tooltip>
-            {urlQuery && product && (
-              <SecurityExportMenu
-                urlFor={(format) => securitySearchExportUrl(product, kind, urlQuery, format, exact)}
-              />
-            )}
-          </Space>
+            {/*
+              One control, not five checkboxes - the same filter the release's
+              Security tab uses. Five checkboxes could not say "any" without
+              being all unchecked, which reads as "none selected".
 
-          {/*
-            One control, not five checkboxes - the same filter the release's
-            Security tab uses. Five checkboxes could not say "any" without being
-            all unchecked, which reads as "none selected", and they took 300px
-            of a toolbar that has a search box in it.
-          */}
-          {search.data && search.data.hits.length > 0 && (
+              It sits IN this row rather than under it, and is disabled rather
+              than absent until there is something to filter. On its own line it
+              was one orphan control under a row of five, and because it
+              appeared only once a search had returned, the toolbar grew a
+              second row the first time somebody used it and everything below
+              jumped down.
+            */}
             <Select<Severity[]>
               mode="multiple"
               allowClear
+              disabled={!search.data || search.data.hits.length === 0}
               placeholder="Any severity"
               value={severities}
               onChange={setSeverities}
               style={{ minWidth: 190 }}
               maxTagCount="responsive"
-              options={SEVERITIES.map((s) => ({ label: <SeverityTag value={s} />, value: s }))}
+              options={SEVERITIES.map((sev) => ({ label: <SeverityTag value={sev} />, value: sev }))}
             />
-          )}
+
+            {urlQuery && product && (
+              <span style={{ marginInlineStart: 'auto' }}>
+                <SecurityExportMenu
+                  urlFor={(format) => securitySearchExportUrl(product, kind, urlQuery, format, exact)}
+                />
+              </span>
+            )}
         </Space>
+
       </Card>
 
       {search.isError && <ErrorState error={search.error} retry={() => void search.refetch()} />}
 
       {search.data && (
         <>
+          {/* One sentence gets a line, not a block: the Alert spent a band of
+              the page on a description that restated its own title. */}
           {search.data.truncated && (
-            <Alert
-              type="info"
-              showIcon
-              style={{ marginBottom: 12 }}
-              message="Showing a partial result"
-              description="Narrow the search, or export it. An export contains the complete result rather than the page on screen."
-            />
+            <div style={{ marginBottom: 12 }}>
+              <InlineNotice tone="info">
+                This is a partial result. Narrow the search, or export it - an export contains the
+                whole result rather than the page on screen.
+              </InlineNotice>
+            </div>
           )}
 
           <Card styles={{ body: { padding: 0 } }}>
+            {/*
+              NO table export here, deliberately, though every other working
+              surface has one. This page already has one, in the toolbar above,
+              and the two would answer different questions: that one exports the
+              whole result the server matched, this one would export the
+              twenty-five rows currently painted. A file that looks complete and
+              is not is worse than no file.
+            */}
             <DataTable<SecuritySearchHit>
               tableEnhancedKey="security-search"
-              allow_export
               show_column_visibility
               size="small"
               rowKey={(h, i) => `${h.cve ?? h.issueId}-${h.component.id}-${h.artifact.digest}-${i}`}
@@ -185,22 +199,40 @@ export default function Security() {
               }}
               columns={[
                 {
+                  /*
+                    THE THING ITSELF IS THE WAY THROUGH.
+
+                    Each of these three cells used to carry a sentence under it -
+                    "all images with this CVE", "All findings for this package",
+                    "All findings in this image" - so a screen of twenty-five
+                    results held fifty repetitions of three phrases, in the
+                    accent colour, and each row stood 108px tall to hold them.
+                    Nine rows fit on a laptop.
+
+                    A reader who wants every image with this CVE clicks the CVE.
+                    That is what a link on an identifier means everywhere else,
+                    it needs no sentence to explain it, and the tooltip names the
+                    destination for anybody unsure. Rows are 44px now.
+                  */
                   title: 'CVE',
                   width: 160,
                   render: (_, h) => (
-                    <Space direction="vertical" size={2}>
-                      <CveCell cve={h.cve} id={h.issueId} />
-                      {h.cve && kind !== 'cve' && (
-                        <Link to={linkTo(product, 'cve', h.cve)} style={{ fontSize: 11 }}>
-                          all images with this CVE
-                        </Link>
-                      )}
-                    </Space>
+                    h.cve && kind !== 'cve'
+                      ? (
+                        <Tooltip title="Every image and release carrying this CVE">
+                          <Link to={linkTo(product, 'cve', h.cve)}>
+                            <CveCell cve={h.cve} id={h.issueId} />
+                          </Link>
+                        </Tooltip>
+                      )
+                      : <CveCell cve={h.cve} id={h.issueId} />
                   ),
                 },
                 {
                   title: 'Severity',
-                  width: 110,
+                  // 140, because a sortable header is its label PLUS the
+                  // arrows: at 110 this column was headed "Sever…".
+                  width: 140,
                   // Worst first, because SEVERITIES is ordered worst first: the
                   // comparator was reversed, so sorting ascending put `low`
                   // at the top of a table about what is wrong with a release.
@@ -211,61 +243,65 @@ export default function Security() {
                   title: 'Package',
                   width: 200,
                   render: (_, h) => (
-                    <Space direction="vertical" size={2}>
-                      <ComponentCell
-                        name={h.component.name}
-                        version={h.component.version}
-                        type={h.component.type}
-                      />
-                      {h.component.name && kind !== 'package' && (
-                        <Link to={linkTo(product, 'package', h.component.name)} style={{ fontSize: 11 }}>
-                          All findings for this package
-                        </Link>
-                      )}
-                    </Space>
+                    h.component.name && kind !== 'package'
+                      ? (
+                        <Tooltip title="Every finding against this package">
+                          <Link to={linkTo(product, 'package', h.component.name)}>
+                            <ComponentCell
+                              name={h.component.name}
+                              version={h.component.version}
+                              type={h.component.type}
+                            />
+                          </Link>
+                        </Tooltip>
+                      )
+                      : (
+                        <ComponentCell
+                          name={h.component.name}
+                          version={h.component.version}
+                          type={h.component.type}
+                        />
+                      )
                   ),
                 },
                 {
                   title: 'Image',
                   width: 210,
-                  render: (_, h) => (
-                    <Space direction="vertical" size={2}>
-                      <Typography.Text style={{ fontFamily: mono }}>
+                  render: (_, h) => {
+                    // The digest moves to the tooltip. It is the row's proof
+                    // rather than its identity: nobody scans a column of
+                    // truncated hashes looking for one, and on a page where the
+                    // same image recurs it was a second line of noise per row.
+                    const label = (
+                      <Typography.Text
+                        style={{ fontFamily: mono, display: 'block' }}
+                        ellipsis={{ tooltip: false }}
+                      >
                         {h.artifact.display || h.artifact.name}
                       </Typography.Text>
-                      {h.artifact.digest && (
-                        <Typography.Text
-                          type="secondary"
-                          style={{ fontFamily: mono, fontSize: 11 }}
-                          ellipsis={{ tooltip: h.artifact.digest }}
-                        >
-                          {h.artifact.digest.slice(0, 19)}
-                        </Typography.Text>
-                      )}
-                      {kind !== 'image' && (
-                        <Link to={linkTo(product, 'image', h.artifact.name)} style={{ fontSize: 11 }}>
-                          All findings in this image
-                        </Link>
-                      )}
-                    </Space>
-                  ),
+                    )
+                    const title = [
+                      h.artifact.display || h.artifact.name,
+                      h.artifact.digest,
+                      kind !== 'image' ? 'Every finding in this image' : '',
+                    ].filter(Boolean).join(' · ')
+                    return kind !== 'image'
+                      ? (
+                        <Tooltip title={title}>
+                          <Link to={linkTo(product, 'image', h.artifact.name)}>{label}</Link>
+                        </Tooltip>
+                      )
+                      : <Tooltip title={title}>{label}</Tooltip>
+                  },
                 },
                 {
+                  // The same cell the release's own findings table draws, rather
+                  // than a second copy of it that had already drifted: this one
+                  // never showed the fixed version on its tooltip.
                   title: 'Fix',
-                  width: 120,
+                  width: 130,
                   render: (_, h) => (
-                    h.fixable
-                      ? (
-                        <Space direction="vertical" size={0}>
-                          <StatusPill tone="ok" style={{ marginInlineEnd: 0 }}>Fixable</StatusPill>
-                          {h.fixedIn && (
-                            <Typography.Text type="secondary" style={{ fontFamily: mono, fontSize: 11 }}>
-                              {h.fixedIn}
-                            </Typography.Text>
-                          )}
-                        </Space>
-                      )
-                      : <Typography.Text type="secondary">No fix available</Typography.Text>
+                    <FixCell fixable={h.fixable} fixedIn={h.fixedIn ? [h.fixedIn] : undefined} />
                   ),
                 },
                 {
@@ -276,29 +312,35 @@ export default function Security() {
                    * to its own security view, which is where the journey ends.
                    */
                   title: 'Releases',
-                  width: 200,
-                  render: (_, h) => (
-                    (h.releases ?? []).length === 0
-                      ? <Typography.Text type="secondary">not in a tracked release</Typography.Text>
-                      : (
-                        <Space direction="vertical" size={2}>
-                          {(h.releases ?? []).slice(0, 3).map((rel) => (
-                            <Link
-                              key={rel.packageId}
-                              to={`/packages/${encodeURIComponent(product ?? '')}/${encodeURIComponent(rel.tag)}`}
-                              style={{ fontFamily: mono, fontSize: 12 }}
-                            >
-                              {rel.displayTag || rel.tag}
-                            </Link>
-                          ))}
-                          {(h.releases ?? []).length > 3 && (
-                            <Typography.Text type="secondary" style={{ fontSize: 11 }}>
-                              +{(h.releases ?? []).length - 3} more
+                  width: 190,
+                  render: (_, h) => {
+                    const rels = h.releases ?? []
+                    if (rels.length === 0) {
+                      return <Typography.Text type="secondary">Not in a tracked release</Typography.Text>
+                    }
+                    // On ONE line. Stacked, three releases made the row three
+                    // lines tall for a fact most rows state once.
+                    return (
+                      <Space size={6} wrap={false} style={{ minWidth: 0 }}>
+                        {rels.slice(0, 2).map((rel) => (
+                          <Link
+                            key={rel.packageId}
+                            to={`/packages/${encodeURIComponent(product ?? '')}/${encodeURIComponent(rel.tag)}`}
+                            style={{ fontFamily: mono, fontSize: 12, whiteSpace: 'nowrap' }}
+                          >
+                            {rel.displayTag || rel.tag}
+                          </Link>
+                        ))}
+                        {rels.length > 2 && (
+                          <Tooltip title={rels.map((r) => r.displayTag || r.tag).join(', ')}>
+                            <Typography.Text type="secondary" style={{ fontSize: 11, whiteSpace: 'nowrap' }}>
+                              +{rels.length - 2}
                             </Typography.Text>
-                          )}
-                        </Space>
-                      )
-                  ),
+                          </Tooltip>
+                        )}
+                      </Space>
+                    )
+                  },
                 },
                 {
                   // Last, and narrow. It is the only column here whose
@@ -306,11 +348,11 @@ export default function Security() {
                   // somebody works from - so it is the one that gives up width
                   // to keep the other six on screen.
                   title: 'Description',
-                  width: 280,
+                  width: 320,
                   render: (_, h) => (
                     <Typography.Paragraph
                       style={{ margin: 0 }}
-                      ellipsis={{ rows: 2, tooltip: h.summary }}
+                      ellipsis={{ rows: 1, tooltip: h.summary }}
                     >
                       {h.summary || '-'}
                     </Typography.Paragraph>
@@ -335,28 +377,29 @@ export default function Security() {
         </>
       )}
 
+      {/*
+        The house empty state, not a card of stacked paragraphs. Nothing has
+        been asked yet, which is a STATE - and every other unasked page in both
+        tools draws it the same way: the drawing, one sentence, and the offer.
+      */}
       {!urlQuery && (
         <Card>
-          <Space direction="vertical" size={8}>
-            <Typography.Text strong>Search synced vulnerability data</Typography.Text>
-            <Typography.Text type="secondary">
-              Enter a CVE identifier to list every image and release that carries it, a package name to
-              list the vulnerabilities affecting it, or an image name to list its findings. Each result
-              links through to the other two views.
-            </Typography.Text>
+          <EmptyState
+            title="Search synced vulnerability data"
+            hint="A CVE identifier lists every image and release carrying it. A package name lists the vulnerabilities affecting it. An image name lists its findings. Each result links through to the other two."
+          >
             <Space size={8} wrap>
-              <Button size="small" onClick={() => update({ kind: 'cve', q: 'CVE-2024' })}>
-                Example: CVE-2024
-              </Button>
-              <Button size="small" onClick={() => update({ kind: 'package', q: 'openssl' })}>
-                Example: openssl
-              </Button>
+              <Button onClick={() => update({ kind: 'cve', q: 'CVE-2024' })}>Try CVE-2024</Button>
+              <Button onClick={() => update({ kind: 'package', q: 'openssl' })}>Try openssl</Button>
             </Space>
-            <Typography.Text type="secondary" style={{ color: c.text2 }}>
-              Search covers releases whose vulnerabilities have been synced. To include a release,
-              sync it from its Security tab or from the packages listing.
-            </Typography.Text>
-          </Space>
+          </EmptyState>
+          <Typography.Paragraph
+            type="secondary"
+            style={{ textAlign: 'center', margin: 0, paddingBottom: 8, fontSize: 12 }}
+          >
+            Search covers releases whose vulnerabilities have been synced. To include a release,
+            sync it from its Security tab or from the packages listing.
+          </Typography.Paragraph>
         </Card>
       )}
     </>

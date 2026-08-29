@@ -347,7 +347,7 @@ export function CopyProgress({
  * numerator is a guess wearing a number's clothes).
  */
 export function DownloadProgress({
-  transferred, total, saved, groups, strategy = 'copy', elapsedSeconds, live,
+  transferred, total, saved, groups, strategy = 'copy', elapsedSeconds, live, heldBy,
 }: {
   transferred: number | undefined
   total: number | undefined
@@ -360,6 +360,16 @@ export function DownloadProgress({
   elapsedSeconds: number | undefined
   /** Whether this download is still going. */
   live: boolean
+  /**
+   * Why nothing is moving it, when nothing is - two or three words from
+   * domain/fleet.
+   *
+   * It suppresses the ETA, which is the point. The arithmetic still produces
+   * a number for a download with no worker behind it, and that number is a
+   * fiction with two decimal places sitting in the same cell as the reason
+   * there will be no arrival.
+   */
+  heldBy?: string
 }) {
   /*
     TWO SPEEDS, because they answer two questions and this cell was showing
@@ -388,7 +398,7 @@ export function DownloadProgress({
   const remaining = total !== undefined && transferred !== undefined
     ? Math.max(0, total - transferred - (saved ?? 0))
     : undefined
-  const eta = live && average && remaining !== undefined && remaining > 0
+  const eta = live && !heldBy && average && remaining !== undefined && remaining > 0
     ? remaining / average
     : undefined
   const notStarted = live
@@ -420,6 +430,7 @@ export function DownloadProgress({
       <Typography.Text type="secondary" style={{ fontSize: 11 }}>
         {notStarted ? 'Not started' : `Elapsed: ${formatDuration(elapsedSeconds) ?? 'Unavailable'}`}
         {eta !== undefined ? ` · ~${formatDuration(eta)} left` : ''}
+        {heldBy ? ` · ${heldBy}` : ''}
         {/*
           "Estimating" only while there is something left to estimate. A
           download whose content the destination already holds has nothing
@@ -427,7 +438,7 @@ export function DownloadProgress({
           wait that is over.
         */}
         {live && !notStarted && eta === undefined && remaining === 0 ? ' · No remaining work' : ''}
-        {live && eta === undefined && remaining !== 0 && strategy === 'copy'
+        {live && !heldBy && eta === undefined && remaining !== 0 && strategy === 'copy'
           ? ' · estimating…'
           : ''}
       </Typography.Text>

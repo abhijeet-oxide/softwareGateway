@@ -139,11 +139,12 @@ export function holdOn(transfer: Transfer, fleet: Fleet): Hold | null {
     return {
       kind: 'no-workers',
       label: 'No worker',
-      detail: fleet.offline > 0 || fleet.draining > 0
-        ? `${describeFleet(fleet)} A download is planned by the Coordinator and performed `
-          + 'by workers, so nothing will move until one is back.'
-        : 'No worker has reported in. A download is planned by the Coordinator and '
-          + 'performed by workers, so nothing will move until one is running.',
+      // The CONSEQUENCE only. What the fleet looks like is describeFleet's
+      // job, and every caller renders that beside this - saying it in both
+      // printed the same sentence twice, one line apart.
+      detail: 'A download is planned by the Coordinator and performed by workers, so '
+        + 'nothing will move until one is running. Nothing is lost in the meantime: '
+        + 'the work stays queued and starts on its own when a worker reports in.',
       actionable: true,
     }
   }

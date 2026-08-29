@@ -1,8 +1,11 @@
 package transfer
 
 import (
+	"bytes"
+	"context"
 	"errors"
 	"io"
+	"log/slog"
 	"strings"
 	"testing"
 
@@ -130,3 +133,93 @@ func TestWatchedReaderRemembersTheLastFailure(t *testing.T) {
 type errReader struct{ err error }
 
 func (e errReader) Read([]byte) (int, error) { return 0, e.err }
+
+// ---------------------------------------------------------------------------
+// Through the real stream(), not just the attribution helper
+// ---------------------------------------------------------------------------
+
+// truncatingSource serves a blob and then hangs up part way through it, which
+// is what a vendor registry behind an idle-capping proxy does to a large layer.
+//
+// `io.ErrUnexpectedEOF` is the standard library's own word for it: Go's HTTP
+// client returns exactly this from a response body that ends before the
+// Content-Length the server declared.
+type truncatingSource struct {
+	registry.Repository
+	served int
+}
+
+func (s *truncatingSource) FetchBlob(context.Context, registry.Digest) (io.ReadCloser, error) {
+	return io.NopCloser(io.MultiReader(
+		bytes.NewReader(bytes.Repeat([]byte{'x'}, s.served)),
+		errReader{io.ErrUnexpectedEOF},
+	)), nil
+}
+
+// consumingTarget drains whatever it is given and reports the read failure the
+// way a real destination client does: wrapped in the PUT it was in the middle
+// of, naming the destination's own URL.
+type consumingTarget struct {
+	registry.Repository
+}
+
+func (consumingTarget) Capabilities(context.Context) registry.Capabilities {
+	return registry.Capabilities{}
+}
+
+func (consumingTarget) StatBlob(context.Context, registry.Digest) (registry.Descriptor, error) {
+	return registry.Descriptor{}, registry.ErrNotFound
+}
+
+func (consumingTarget) PushBlob(
+	_ context.Context, _ registry.Digest, _ int64, src io.Reader,
+) error {
+	if _, err := io.Copy(io.Discard, src); err != nil {
+		return errors.New(observedPushMessage)
+	}
+	return nil
+}
+
+// The whole path, end to end: a source that stops sending must not produce a
+// failure about the destination.
+//
+// This is the case in the screenshot - 40.7 MB of 478.2 MB, eight attempts of
+// eight, every one of them reported against the destination's upload URL.
+func TestAJobWhoseSourceHangsUpBlamesTheSource(t *testing.T) {
+	e := NewEngine(0, slog.New(slog.DiscardHandler))
+
+	res := e.Run(t.Context(), Job{
+		ID:        1,
+		Kind:      "blob",
+		Digest:    someDigest.String(),
+		SizeBytes: blobSize,
+		Source:    &truncatingSource{served: readSoFar},
+		Target:    consumingTarget{},
+	}, nil)
+
+	if res.Outcome != OutcomeFailed {
+		t.Fatalf("outcome = %v, want a failure", res.Outcome)
+	}
+
+	msg := res.Err.Error()
+	if !strings.Contains(msg, "the source stopped sending") {
+		t.Errorf("the failure does not name the end that broke:\n%s", msg)
+	}
+	if strings.Contains(msg, "push blob to destination: Put") {
+		t.Errorf("still reported as a destination push:\n%s", msg)
+	}
+
+	// The class is what the retry policy keys off, and what the failure
+	// listing groups by. `unclassified` is what this used to be, and it is
+	// retried with the full transient budget - eight complete re-reads of a
+	// blob the source will truncate at the same place every time.
+	if res.ErrorClass != string(registry.ClassNetwork) {
+		t.Errorf("class = %q, want %q", res.ErrorClass, registry.ClassNetwork)
+	}
+
+	// And the bytes that DID move are still counted, so the progress bar does
+	// not rewind on a failure.
+	if res.BytesMoved != readSoFar {
+		t.Errorf("BytesMoved = %d, want %d", res.BytesMoved, readSoFar)
+	}
+}

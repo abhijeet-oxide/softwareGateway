@@ -196,6 +196,13 @@ function TransferState({ transfer, fleet }: { transfer: Transfer; fleet: Fleet }
   )
 }
 
+/** The one-line version of a hold, for a cell that has no room for a sentence. */
+function holdLine(transfer: Transfer, fleet: Fleet): string | undefined {
+  const hold = holdOn(transfer, fleet)
+  if (!hold) return undefined
+  return hold.kind === 'no-workers' ? 'no worker to run it' : 'waiting for a worker'
+}
+
 /** One product's row in a configuration table. */
 type WithProduct<T> = T & { product: string }
 
@@ -314,13 +321,12 @@ export default function Downloads() {
           }
           description={
             <Space direction="vertical" size={4}>
-              <Typography.Text>
-                {describeFleet(fleet)} Downloads are planned here and performed by workers,
-                so these will not move - and will not fail either - until at least one is back.
-              </Typography.Text>
+              <Typography.Text>{describeFleet(fleet)}</Typography.Text>
               <Typography.Text type="secondary">
-                Nothing has been lost. Work already planned stays queued and starts on its own
-                the moment a worker reports in.
+                Downloads are planned here and performed by workers, so these will not move -
+                and will not fail either - until at least one is back. Nothing has been lost:
+                work already planned stays queued and starts on its own the moment a worker
+                reports in.
               </Typography.Text>
             </Space>
           }
@@ -426,6 +432,8 @@ export default function Downloads() {
                         strategy={t.strategy ?? 'copy'}
                         elapsedSeconds={elapsedSeconds(t.startedAt)}
                         live={isLive(t.state)}
+                        // No arrival to promise while nothing is moving it.
+                        heldBy={holdLine(t, fleet)}
                       />
                     ),
                   },

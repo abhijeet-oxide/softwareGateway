@@ -463,6 +463,10 @@ export default function DownloadDetail() {
   */
   const eta = average && remaining ? remaining / average : undefined
 
+  // What is holding this download up, or null if nothing is. Computed here
+  // because the ETA below depends on it: see the Stat.
+  const hold = t ? holdOn(t, fleet) : null
+
   /*
     THE EARLY RETURN SITS HERE, below every hook and not above them.
 
@@ -522,7 +526,6 @@ export default function DownloadDetail() {
    * nothing to do - or whether no worker was running at all, which is the one
    * answer that needs somebody. See domain/fleet.
    */
-  const hold = t ? holdOn(t, fleet) : null
 
   /*
    * Which step the stepper is on, counted against the steps that EXIST.
@@ -571,13 +574,24 @@ export default function DownloadDetail() {
             <Space size={16}>
               <TransferStateTag state={t.state} />
               <Stat title="Elapsed" value={formatDuration(elapsed)} valueStyle={{ fontSize: 18 }} />
+              {/*
+                NO ARRIVAL TO ESTIMATE while nothing is moving it.
+
+                The arithmetic still produces a number - bytes left over the
+                rate so far - and on a download with no worker behind it that
+                number is a fiction with two decimal places. "53h 18m" beside
+                "Nothing is moving this download" is the page contradicting
+                itself, and the reader believes the one with the digits in it.
+              */}
               <Stat
                 title="ETA"
-                value={eta !== undefined && running ? formatDuration(eta) : null}
+                value={eta !== undefined && running && !hold ? formatDuration(eta) : null}
                 reason={
-                  running
-                    ? 'An estimate needs a measured speed and a known amount left to move. One of them is not established yet.'
-                    : 'This download is not running, so there is nothing to estimate.'
+                  hold
+                    ? `${hold.detail} There is no arrival to estimate until that changes.`
+                    : running
+                      ? 'An estimate needs a measured speed and a known amount left to move. One of them is not established yet.'
+                      : 'This download is not running, so there is nothing to estimate.'
                 }
                 valueStyle={{ fontSize: 18 }}
               />

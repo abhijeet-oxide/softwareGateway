@@ -10,6 +10,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/google/uuid"
+
 	"github.com/abhijeet-oxide/softwareGateway/internal/platform/backoff"
 )
 
@@ -170,11 +172,18 @@ func (p *Packages) startTransfers(ctx context.Context, leased []LeasedJob) error
 		return nil
 	}
 
+	// last_active_at is anchored HERE and only if absent, for the same reason
+	// started_at is: it is the moment from which the next sweep measures. A
+	// transfer that finishes between two sweeps - a fully deduplicated one
+	// takes well under a second - would otherwise never be observed with a job
+	// in flight and would report having spent no time at all. See
+	// AccrueActiveTime.
 	_, err := p.db.ExecContext(ctx, p.dialect.Rewrite(
 		`UPDATE transfers
-		    SET state      = 'running',
-		        started_at = COALESCE(started_at, `+p.dialect.Now()+`),
-		        updated_at = `+p.dialect.Now()+`
+		    SET state          = 'running',
+		        started_at     = COALESCE(started_at, `+p.dialect.Now()+`),
+		        last_active_at = COALESCE(last_active_at, `+p.dialect.Now()+`),
+		        updated_at     = `+p.dialect.Now()+`
 		  WHERE id IN (`+placeholders.String()+`) AND state = 'ready'`), ids...)
 	if err != nil {
 		return fmt.Errorf("start transfers for a lease batch: %w", err)
@@ -1578,6 +1587,27 @@ type TransferSummary struct {
 	// hour transferring.
 	StartedAt   string
 	CompletedAt string
+
+	// ActiveSeconds is how long there was work of this transfer IN A WORKER'S
+	// HANDS - the honest reading of "spent downloading", and a different
+	// quantity from CompletedAt minus StartedAt.
+	//
+	// The two are the same on a transfer that ran without interruption and
+	// diverge by exactly the interruption on one that did not: a fleet that was
+	// down for a night adds that night to the wall clock and nothing to this.
+	// Accrued by a sweep rather than derived, because it cannot be derived -
+	// see AccrueActiveTime for why the jobs' own timestamps do not carry it.
+	//
+	// Zero on a transfer that has never been leased, which is honest: no worker
+	// has spent any time on it.
+	ActiveSeconds float64
+	// LastActiveAt is the moment the accrual sweep last measured from. Empty
+	// once a transfer has settled and been accounted for.
+	//
+	// Carried out of the store so a caller can add the fraction accrued since
+	// the last sweep - without it a live page polled every two seconds shows a
+	// figure that jumps once per sweep and is otherwise frozen.
+	LastActiveAt string
 }
 
 // SavedBytes is everything this transfer did not have to move.
@@ -1587,7 +1617,37 @@ func (t TransferSummary) SavedBytes() int64 {
 
 // transferSelect is the shared projection, so list and get cannot disagree
 // about what a transfer looks like.
-func (p *Packages) transferSelect() string {
+func (p *Packages) transferSelect(withJobRollups bool) string {
+	/*
+	  The dozen aggregates over `jobs`, or literal zeros in their place.
+
+	  Same columns either way, so `scanTransfer` is one function and the two
+	  callers cannot drift into disagreeing about what a transfer looks like.
+	  What changes is whether the database is asked to read a transfer's jobs at
+	  all.
+
+	  It is worth asking, because most readers of this listing do not want them.
+	  The Overview and the package listing fetch a hundred transfers to join
+	  download history onto releases - which target, which state, when - and
+	  touch none of the job counts. They were paying a dozen index seeks per row
+	  for numbers they discard, every five seconds, for the whole life of a
+	  download.
+	*/
+	// One aggregate over this transfer's jobs, or the literal zero that stands
+	// in for it when the caller did not ask.
+	job := func(agg, filter string) string {
+		if !withJobRollups {
+			return "0"
+		}
+		return "COALESCE((SELECT " + agg + " FROM jobs j WHERE j.transfer_id = t.id " +
+			filter + "), 0)"
+	}
+	quietest := "''"
+	if withJobRollups {
+		quietest = p.dialect.TimestampText(`(SELECT MIN(j.updated_at) FROM jobs j
+	                  WHERE j.transfer_id = t.id AND j.state = 'leased')`)
+	}
+
 	return `
 	SELECT t.id, t.request_id, t.package_id, pr.name, pkgsrc.repository_path, pk.tag,
 	       COALESCE(pk.display_tag, ''), COALESCE(pk.total_bytes, 0),
@@ -1596,32 +1656,34 @@ func (p *Packages) transferSelect() string {
 	       src.name, dst.name,
 	       t.state, t.priority, t.current_wave, t.max_wave,
 	       t.planned_job_count, t.planned_bytes, t.dedupe_skipped_bytes,
-	       COALESCE((SELECT SUM(j.size_bytes) FROM jobs j WHERE j.transfer_id = t.id
-	                  AND j.state = 'skipped'), 0),
-	       COALESCE((SELECT count(*) FROM jobs j WHERE j.transfer_id = t.id
-	                  AND j.state IN ('succeeded','skipped')), 0),
-	       COALESCE((SELECT count(*) FROM jobs j WHERE j.transfer_id = t.id
-	                  AND j.state = 'failed'), 0),
-	       COALESCE((SELECT count(*) FROM jobs j WHERE j.transfer_id = t.id
-	                  AND j.state IN ('pending','blocked','leased')), 0),
-	       COALESCE((SELECT SUM(j.bytes_transferred) FROM jobs j WHERE j.transfer_id = t.id), 0),
-	       COALESCE((SELECT count(*) FROM jobs j WHERE j.transfer_id = t.id
-	                  AND j.state = 'leased'), 0),
-	       COALESCE((SELECT count(DISTINCT j.lease_owner) FROM jobs j WHERE j.transfer_id = t.id
-	                  AND j.state = 'leased' AND j.lease_owner IS NOT NULL), 0),
-	       COALESCE((SELECT count(*) FROM jobs j WHERE j.transfer_id = t.id
-	                  AND j.state = 'pending' AND j.next_visible_at > ` + p.dialect.Now() + `), 0),
-	       COALESCE((SELECT count(*) FROM jobs j WHERE j.transfer_id = t.id
-	                  AND j.state = 'blocked'), 0),
-	       COALESCE((SELECT count(*) FROM jobs j WHERE j.transfer_id = t.id
-	                  AND j.repair_level > 0), 0),
-	       COALESCE((SELECT SUM(j.size_bytes - j.bytes_transferred) FROM jobs j
-	                  WHERE j.transfer_id = t.id
-	                    AND j.state IN ('pending','blocked','leased')), 0),
-	       COALESCE((SELECT MIN(j.updated_at) FROM jobs j
-	                  WHERE j.transfer_id = t.id AND j.state = 'leased'), ''),
-	       COALESCE(t.failure_reason, ''), t.created_at, COALESCE(t.started_at, ''),
-	       COALESCE(t.completed_at, ''), t.strategy, rq.operation
+	       ` + job(`SUM(j.size_bytes)`, `AND j.state = 'skipped'`) + `,
+	       ` + job(`count(*)`, `AND j.state IN ('succeeded','skipped')`) + `,
+	       ` + job(`count(*)`, `AND j.state = 'failed'`) + `,
+	       ` + job(`count(*)`, `AND j.state IN ('pending','blocked','leased')`) + `,
+	       ` + job(`SUM(j.bytes_transferred)`, ``) + `,
+	       ` + job(`count(*)`, `AND j.state = 'leased'`) + `,
+	       ` + job(`count(DISTINCT j.lease_owner)`,
+		`AND j.state = 'leased' AND j.lease_owner IS NOT NULL`) + `,
+	       ` + job(`count(*)`,
+		`AND j.state = 'pending' AND j.next_visible_at > `+p.dialect.Now()) + `,
+	       ` + job(`count(*)`, `AND j.state = 'blocked'`) + `,
+	       ` + job(`count(*)`, `AND j.repair_level > 0`) + `,
+	       ` + job(`SUM(j.size_bytes - j.bytes_transferred)`,
+		`AND j.state IN ('pending','blocked','leased')`) + `,
+	       ` + quietest + `,
+	       COALESCE(t.failure_reason, ''),
+	       -- EVERY TIMESTAMP GOES OUT AS RFC3339 TEXT, from both databases.
+	       --
+	       -- These four are scanned into strings and served to a browser, and
+	       -- three of them are nullable. COALESCE(x, empty string) is how that
+	       -- was written, a SQLite idiom rather than SQL: Postgres stores
+	       -- these as timestamptz and rejects the empty string, so listing or
+	       -- reading a transfer failed outright on it. See Dialect.TimestampText.
+	       ` + p.dialect.TimestampText("t.created_at") + `,
+	       ` + p.dialect.TimestampText("t.started_at") + `,
+	       ` + p.dialect.TimestampText("t.completed_at") + `, t.strategy, rq.operation,
+	       COALESCE(t.active_seconds, 0),
+	       ` + p.dialect.TimestampText("t.last_active_at") + `
 	  FROM transfers t
 	  JOIN transfer_requests rq ON rq.id = t.request_id
 	  JOIN packages pk ON pk.id = t.package_id
@@ -1647,7 +1709,7 @@ func scanTransfer(row interface{ Scan(...any) error }) (TransferSummary, error) 
 		&t.JobsDone, &t.JobsFailed, &t.JobsOutstanding, &t.BytesTransferred,
 		&t.JobsInFlight, &t.Workers, &t.JobsWaiting, &t.JobsBlocked, &t.JobsRepaired, &t.OutstandingBytes, &t.QuietestInFlight,
 		&t.FailureReason, &t.CreatedAt, &t.StartedAt, &t.CompletedAt, &t.Strategy,
-		&t.Operation)
+		&t.Operation, &t.ActiveSeconds, &t.LastActiveAt)
 	return t, err
 }
 
@@ -1662,11 +1724,20 @@ type ListTransfersFilter struct {
 	Operation string
 	Limit     int
 	Offset    int
+	// WithoutJobCounts drops the per-transfer aggregates over `jobs`, leaving
+	// them zero.
+	//
+	// For the callers that want a transfer's IDENTITY and OUTCOME rather than
+	// its progress: the Overview and the package listing fetch a hundred
+	// transfers to join download history onto releases, and read none of the
+	// counts. Asking for them anyway is a dozen index seeks per row, every five
+	// seconds, for the whole life of a download.
+	WithoutJobCounts bool
 }
 
 // ListTransfers returns transfers, newest first.
 func (p *Packages) ListTransfers(ctx context.Context, f ListTransfersFilter) ([]TransferSummary, error) {
-	query := p.transferSelect()
+	query := p.transferSelect(!f.WithoutJobCounts)
 	var args []any
 
 	where := " WHERE 1=1"
@@ -1718,7 +1789,7 @@ func (p *Packages) GetTransfer(ctx context.Context, ref string) (TransferSummary
 		return TransferSummary{}, err
 	}
 
-	row := p.db.QueryRowContext(ctx, p.dialect.Rewrite(p.transferSelect()+" WHERE t.id = ?"), id)
+	row := p.db.QueryRowContext(ctx, p.dialect.Rewrite(p.transferSelect(true)+" WHERE t.id = ?"), id)
 
 	t, scanErr := scanTransfer(row)
 	if errors.Is(scanErr, sql.ErrNoRows) {
@@ -1747,21 +1818,39 @@ func (p *Packages) ResolveTransferID(ctx context.Context, ref string) (string, e
 		return "", errors.New("a transfer ID is required")
 	}
 
-	var exact string
-	err := p.db.QueryRowContext(ctx,
-		p.dialect.Rewrite(`SELECT id FROM transfers WHERE id = ?`), ref).Scan(&exact)
-	if err == nil {
-		return exact, nil
-	}
-	if !errors.Is(err, sql.ErrNoRows) {
-		return "", fmt.Errorf("resolve transfer %s: %w", ref, err)
+	// THE EXACT LOOKUP IS ONLY ATTEMPTED FOR A WHOLE UUID.
+	//
+	// Postgres declares this column UUID, and comparing it with a string that
+	// is not one does not miss - it raises `invalid input syntax for type
+	// uuid`. So handing it a short reference did not fall through to the
+	// prefix search below; it returned a database error naming a syntax
+	// nobody typed, and `transferctl transfer 3f2a` could not work at all.
+	//
+	// Asking first is also what keeps the common path indexed: an exact match
+	// compares the column itself rather than a cast of it.
+	if _, err := uuid.Parse(ref); err == nil {
+		var exact string
+		err := p.db.QueryRowContext(ctx,
+			p.dialect.Rewrite(`SELECT id FROM transfers WHERE id = ?`), ref).Scan(&exact)
+		if err == nil {
+			return exact, nil
+		}
+		if !errors.Is(err, sql.ErrNoRows) {
+			return "", fmt.Errorf("resolve transfer %s: %w", ref, err)
+		}
 	}
 
 	// LIKE with an escaped pattern: a UUID contains none of the wildcards, but
 	// the input is user-supplied and building a pattern from it unescaped is
 	// how a listing turns into a scan.
+	//
+	// Against the id AS TEXT, because LIKE has no meaning for a Postgres UUID
+	// (`operator does not exist: uuid ~~ unknown`). This is the scanning path
+	// either way - a prefix of a random id is not something an index helps
+	// with - and it is bounded by the LIMIT.
 	rows, err := p.db.QueryContext(ctx, p.dialect.Rewrite(
-		`SELECT id FROM transfers WHERE id LIKE ? ESCAPE '\' ORDER BY created_at DESC LIMIT 10`),
+		`SELECT id FROM transfers WHERE `+p.dialect.IDText("id")+
+			` LIKE ? ESCAPE '\' ORDER BY created_at DESC LIMIT 10`),
 		escapeLike(ref)+"%")
 	if err != nil {
 		return "", fmt.Errorf("resolve transfer %s: %w", ref, err)

@@ -382,6 +382,27 @@ export interface LifecycleStep {
   stage: LifecycleStage
   reached: boolean
   current: boolean
+  /**
+   * This stage was ATTEMPTED AND DID NOT COMPLETE.
+   *
+   * # Why a flag rather than a fifth stage
+   *
+   * A failure is not somewhere a release gets to. It is a thing that happened
+   * to a stage it was already at, and giving it a stage of its own would mean
+   * a release could be "at" Failed - which then has to be ordered against the
+   * other four, and is not.
+   *
+   * # Why it had to exist at all
+   *
+   * Without it a failed release had NO current stage: `current` is derived
+   * from the status, and DOWNLOAD FAILED matches none of the four. Every
+   * reader of these steps then fell back to the last stage that was REACHED -
+   * which for a failed download is Downloading, because a download was indeed
+   * started. So the listing showed `Download failed` in the status column and
+   * `Downloading` in the lifecycle column, on the same row, about the same
+   * release, forever.
+   */
+  failed?: boolean
   /** When this stage was reached. Absent where we cannot say. */
   at?: string
 }
@@ -405,6 +426,19 @@ export function deriveLifecycle(pkg: Package, product?: Product): LifecycleStep[
   const reachedDownloaded = succeeded.length > 0
   const reachedProduction = Boolean(inProduction)
 
+  /*
+   * WHERE A FAILURE LANDS.
+   *
+   * On the stage the failed transfer was trying to REACH, which is not the
+   * same for the two operations: a download that failed never got the release
+   * downloaded, and a promotion that failed had it downloaded already and did
+   * not get it into production. The status derivation has told these apart
+   * since it learnt about operations; the lifecycle had no way to express
+   * either, so it expressed neither.
+   */
+  const failedDownload = status === 'DOWNLOAD FAILED'
+  const failedPromotion = status === 'PROMOTION FAILED'
+
   return [
     {
       stage: 'Vendor',
@@ -415,7 +449,8 @@ export function deriveLifecycle(pkg: Package, product?: Product): LifecycleStep[
     {
       stage: 'Downloading',
       reached: reachedDownloading,
-      current: status === 'DOWNLOADING',
+      current: status === 'DOWNLOADING' || failedDownload,
+      failed: failedDownload,
       at: live?.createdAt,
     },
     {
@@ -426,8 +461,12 @@ export function deriveLifecycle(pkg: Package, product?: Product): LifecycleStep[
     },
     {
       stage: 'Production',
+      // A promotion that failed was ATTEMPTED, and the stage it was reaching
+      // for is this one. `reached` stays false - the release is not in
+      // production - and `failed` is what says somebody tried.
+      current: status === 'PROMOTING' || failedPromotion,
       reached: reachedProduction,
-      current: status === 'PRODUCTION',
+      failed: failedPromotion,
       at: inProduction?.completedAt,
     },
   ]
@@ -444,7 +483,11 @@ export function downloadSeconds(pkg: Package): number | undefined {
   const transfers = pkg.transfers ?? []
   const live = transfers.find((t) => isLive(t.state))
   if (live?.createdAt) {
-    return (Date.now() - Date.parse(live.createdAt)) / 1000
+    // Time SPENT where the listing supplied it. The fallback measures from
+    // `createdAt` - when the download was ASKED FOR - so a release that waited
+    // an hour for a worker reported an hour of downloading before a byte moved.
+    const spent = (live as Attempt).activeSeconds
+    return spent ?? (Date.now() - Date.parse(live.createdAt)) / 1000
   }
 
   const done = transfers.filter((t) => t.state === 'SUCCEEDED' && t.createdAt && t.completedAt)
@@ -469,6 +512,24 @@ export function downloadSeconds(pkg: Package): number | undefined {
   const groups = [...byRequest.values()].sort(
     (a, b) => Date.parse(a[0]!.createdAt!) - Date.parse(b[0]!.createdAt!))
   const first = groups[0]!
+
+  /*
+   * THE LONGEST TARGET'S WORKING TIME, where every attempt reports one.
+   *
+   * The MAX rather than the sum, for the same reason the fallback below takes
+   * a wall-clock span rather than adding the attempts up: one download fans
+   * out to several targets and they run at the same time. Somebody waited for
+   * the slowest of them, not for all of them end to end.
+   *
+   * Only when every attempt has the figure. A mixture would silently compare a
+   * measured duration against an unmeasured one and take whichever was larger,
+   * which is a number derived from two different questions.
+   */
+  const spent = first.map((t) => t.activeSeconds)
+  if (spent.every((s): s is number => s !== undefined)) {
+    return Math.max(...spent)
+  }
+
   const starts = first.map((t) => Date.parse(t.createdAt!))
   const ends = first.map((t) => Date.parse(t.completedAt!))
   return (Math.max(...ends) - Math.min(...starts)) / 1000
@@ -493,6 +554,15 @@ export function version(pkg: Pick<Package, 'tag' | 'displayTag'>): string {
  */
 export interface Attempt extends PackageTransfer {
   requestId?: string
+  /**
+   * Time a worker actually spent on this attempt, where the listing supplied
+   * it.
+   *
+   * Absent on the single-package read, which carries a reduced transfer shape.
+   * Every reader therefore has to fall back to the wall clock, which is what
+   * it used to do unconditionally.
+   */
+  activeSeconds?: number
 }
 
 /**
@@ -527,6 +597,10 @@ export function transferIndex(transfers: Transfer[]): Map<string, Attempt[]> {
       failureReason: t.failureReason,
       createdAt: t.createdAt,
       completedAt: t.completedAt,
+      // CARRIED for the same reason `operation` is: a listing that drops it
+      // has to fall back to the wall clock, and the wall clock is the number
+      // this field exists to stop being reported as a duration.
+      activeSeconds: t.activeSeconds,
     }
     const existing = index.get(key)
     if (existing) existing.push(entry)

@@ -7,11 +7,13 @@ import {
 import { Table as DataTable } from '../tablekit'
 import { LoadingOutlined } from '../icons'
 import { useState } from 'react'
-import { useNavigate, useParams } from 'react-router-dom'
+import { Link, useNavigate, useParams } from 'react-router-dom'
 import {
-  useReplication, useSyncs, useTransfer, useTransferFailures, useTransferJobs,
+  useReplication, useSyncs, useTransfer, useTransferFailures, useTransferJobs, useWorkers,
 } from '../api/queries'
 import { isLive, kindName, repositoryOf, transferVersion } from '../domain/derive'
+import { describeFleet, holdOn, summariseFleet } from '../domain/fleet'
+import { useByteRate } from '../domain/rate'
 import {
   bytes, elapsedSeconds, formatAbsolute, formatBytes, formatCount, formatDuration, formatSpeed,
 } from '../domain/format'
@@ -396,13 +398,14 @@ export default function DownloadDetail() {
   const syncs = useSyncs(t?.product, t?.targetName)
   const replication = useReplication(t?.product)
 
-  if (transfer.isError) {
-    return (
-      <>
-        <ErrorState error={transfer.error} retry={() => void transfer.refetch()} />
-      </>
-    )
-  }
+  /*
+    THE FLEET, because a download is planned here and performed somewhere else.
+    Without it this page could report a transfer as `Running` with nothing
+    running it, and did - a queue nothing is draining looks identical to a
+    queue being drained, from the transfer's own row.
+  */
+  const workers = useWorkers()
+  const fleet = summariseFleet(workers.data?.workers, workers.isSuccess)
 
   const progress = t?.progress
   const content = bytes(progress?.contentBytes)
@@ -426,15 +429,86 @@ export default function DownloadDetail() {
     ?? bytes(progress?.savedBytes)
     ?? bytes(progress?.dedupeSkippedBytes)
 
-  const elapsed = elapsedSeconds(t?.startedAt, t?.completedAt)
-  // A speed we can defend: bytes WE moved over the time WE were moving them.
-  // Both absent for a delegated transfer, and the components below refuse to
-  // render a bar for one.
-  const speed = elapsed && transferred && elapsed > 0 ? transferred / elapsed : undefined
-  const remaining = bytes(progress?.outstandingBytes)
-  const eta = speed && remaining ? remaining / speed : undefined
+  /*
+    TWO DURATIONS, and only one of them is how long the download took.
+
+    `wallClock` is completedAt minus startedAt. It is the right answer to "when
+    was this asked for and when did it land", and the wrong answer to every
+    other question, because a queue that survives outages spends time not
+    running on purpose: a worker that crashed at midnight and came back at noon
+    puts twelve hours in this number, of which twenty minutes were spent moving
+    bytes.
+
+    `spent` is the time a worker actually had work of this transfer in its
+    hands, accrued by the Coordinator while it was happening. It is what a
+    person means by "how long did it take" - and, more consequentially, it is
+    the only honest denominator for a throughput. Dividing by the wall clock
+    after an outage reports a perfectly healthy link at a thirty-sixth of its
+    speed, with the outage sitting in the denominator.
+  */
+  const wallClock = elapsedSeconds(t?.startedAt, t?.completedAt)
+  const spent = t?.activeSeconds
+  // An older Coordinator does not send it. Wall clock is what it had, and a
+  // coarse answer beats an empty column.
+  const elapsed = spent ?? wallClock
+  // How much of the wall clock was NOT spent downloading. Only worth saying
+  // when it is a real difference rather than a rounding one.
+  const idle = wallClock !== undefined && spent !== undefined
+    ? Math.max(0, wallClock - spent)
+    : undefined
+  const interrupted = (idle ?? 0) > 60 && (idle ?? 0) > (spent ?? 0) * 0.1
+
+  const average = elapsed && transferred && elapsed > 0 ? transferred / elapsed : undefined
 
   const running = t ? isLive(t.state) : false
+
+  /*
+    WHAT IT IS DOING NOW.
+
+    The average above is dragged down by every second the download existed and
+    did not move: planning, the wait for a worker, a stall, and the dedupe pass
+    - whose best possible outcome moves no bytes at all. A download queued for
+    twenty minutes and then moving at 90 MB/s for thirty seconds averages about
+    2 MB/s, and 2 MB/s under a heading that says "Speed" is what sends somebody
+    looking for a broken link.
+
+    So the live rate is measured from successive observations of the byte
+    counter, over a short trailing window. It is the number that answers the
+    question the heading asks.
+  */
+  const rate = useByteRate(transferred, running)
+  const speed = rate.current ?? (running ? undefined : average)
+
+  const remaining = bytes(progress?.outstandingBytes)
+  /*
+    The ETA rests on the AVERAGE rather than the live rate, and deliberately.
+    An estimate of a half-hour wait should not swing by ten minutes because a
+    worker happened to be between blobs when the page polled; what is left to
+    move will be moved at roughly the rate everything so far was moved at.
+  */
+  const eta = average && remaining ? remaining / average : undefined
+
+  // What is holding this download up, or null if nothing is. Computed here
+  // because the ETA below depends on it: see the Stat.
+  const hold = t ? holdOn(t, fleet) : null
+
+  /*
+    THE EARLY RETURN SITS HERE, below every hook and not above them.
+
+    It used to be the first thing after the queries, which was fine while
+    everything under it was plain arithmetic. `useByteRate` is a hook, so a
+    render that took this branch would call one fewer hook than the render
+    before it - and a poll that fails once and then succeeds does exactly that,
+    which React ends the page over.
+  */
+  if (transfer.isError) {
+    return (
+      <>
+        <ErrorState error={transfer.error} retry={() => void transfer.refetch()} />
+      </>
+    )
+  }
+
   const failed = t?.state === 'FAILED'
   const done = t?.state === 'SUCCEEDED'
   const failureGroups = failures.data?.failures ?? []
@@ -464,26 +538,19 @@ export default function DownloadDetail() {
         : 'pending'
 
   /*
-   * Why a download that is READY is not moving.
+   * WHY NOTHING IS MOVING, when nothing is.
    *
-   * A transfer becomes `running` when a worker leases its first job, and until
-   * then the page has a state and nothing else - which is exactly the moment
-   * somebody asks whether the thing is broken. It usually is not: the fleet is
-   * busy with higher-priority or earlier work, and this download is next.
+   * This used to fire only for READY, PENDING and PLANNING - the states before
+   * a first job completes. That left out the case it most needed to cover: a
+   * transfer reads `RUNNING` from its first completion onwards and goes on
+   * reading it with nothing whatsoever in flight, which is precisely when
+   * somebody opens this page to ask whether it is broken.
    *
-   * So the answer is assembled from what the transfer actually knows, and
-   * stays silent for anything running, settled or paused.
+   * It also could not see the fleet, so it said "waiting for an available
+   * worker" identically whether the fleet was busy with earlier work - normal,
+   * nothing to do - or whether no worker was running at all, which is the one
+   * answer that needs somebody. See domain/fleet.
    */
-  const waiting = (() => {
-    if (!t || t.state !== 'READY' && t.state !== 'PENDING' && t.state !== 'PLANNING') return null
-    if (t.state === 'PLANNING' || (t.state === 'PENDING' && !progress?.jobsPlanned)) {
-      return 'Planning the release artifacts before download starts. Download will begin when planning is complete.'
-    }
-    const workers = progress?.workers ?? 0
-    const pending = progress?.jobsWaiting ?? progress?.jobsOutstanding ?? 0
-    return `${formatCount(pending) ?? '0'} jobs waiting for an available worker.`
-      + (workers > 0 ? ` ${formatCount(workers)} currently busy.` : '')
-  })()
 
   /*
    * Which step the stepper is on, counted against the steps that EXIST.
@@ -531,24 +598,71 @@ export default function DownloadDetail() {
           t && (
             <Space size={16}>
               <TransferStateTag state={t.state} />
-              <Stat title="Elapsed" value={formatDuration(elapsed)} valueStyle={{ fontSize: 18 }} />
+              {/*
+                TIME SPENT, not time since. The distinction has a tooltip
+                rather than a second stat because most downloads have nothing
+                to distinguish - they ran straight through and the two numbers
+                are the same one.
+              */}
+              <Tooltip
+                title={
+                  interrupted
+                    ? `Time a worker was actually moving this. It sat for `
+                      + `${formatDuration(idle)} without one - a fleet that was down, or `
+                      + `capacity taken by other work - and that is not counted here. `
+                      + `From first job to last it was ${formatDuration(wallClock)}.`
+                    : 'Time a worker was actually moving this. Any period the download '
+                      + 'spent waiting for one is not counted.'
+                }
+              >
+                <span>
+                  <Stat
+                    title="Time spent"
+                    value={formatDuration(elapsed)}
+                    valueStyle={{ fontSize: 18 }}
+                  />
+                </span>
+              </Tooltip>
+              {/*
+                NO ARRIVAL TO ESTIMATE while nothing is moving it.
+
+                The arithmetic still produces a number - bytes left over the
+                rate so far - and on a download with no worker behind it that
+                number is a fiction with two decimal places. "53h 18m" beside
+                "Nothing is moving this download" is the page contradicting
+                itself, and the reader believes the one with the digits in it.
+              */}
               <Stat
                 title="ETA"
-                value={eta !== undefined && running ? formatDuration(eta) : null}
+                value={eta !== undefined && running && !hold ? formatDuration(eta) : null}
                 reason={
-                  running
-                    ? 'An estimate needs a measured speed and a known amount left to move. One of them is not established yet.'
-                    : 'This download is not running, so there is nothing to estimate.'
+                  hold
+                    ? `${hold.detail} There is no arrival to estimate until that changes.`
+                    : running
+                      ? 'An estimate needs a measured speed and a known amount left to move. One of them is not established yet.'
+                      : 'This download is not running, so there is nothing to estimate.'
                 }
                 valueStyle={{ fontSize: 18 }}
               />
+              {/*
+                NOW, not since it started. The two differ by an order of
+                magnitude on any download that waited for a worker, and the
+                second one under this heading is what made a healthy 90 MB/s
+                link read as a few hundred kilobytes a second.
+
+                The average has not been dropped - it is in the summary panel,
+                under its own name, where it is the right answer.
+              */}
               <Stat
-                title="Speed"
-                value={speed !== undefined && running ? formatSpeed(speed) : null}
+                title="Speed now"
+                value={running && speed !== undefined ? formatSpeed(speed) : null}
                 reason={
                   running
-                    ? 'No bytes have been moved yet, so there is no rate to report.'
-                    : 'This download is not running, so there is no current speed.'
+                    ? 'A live rate is measured between two readings of the byte counter. '
+                      + 'Either nothing has moved yet, or there has not been long enough '
+                      + 'between readings to divide by.'
+                    : 'This download is not running, so there is no current speed. Its '
+                      + 'average is in the summary.'
                 }
                 valueStyle={{ fontSize: 18 }}
               />
@@ -568,13 +682,31 @@ export default function DownloadDetail() {
         }
       />
 
-      {waiting && (
+      {hold && (
         <Alert
           style={{ marginBottom: 12, padding: '7px 12px' }}
-          type="info"
+          // A queue being drained is working as designed. A queue with nothing
+          // draining it is not, and the difference has to be visible without
+          // reading the sentence.
+          type={hold.actionable ? 'warning' : 'info'}
           showIcon
-          message={<Typography.Text style={{ fontSize: 13 }}>Queued</Typography.Text>}
-          description={<Typography.Text type="secondary" style={{ fontSize: 12 }}>{waiting}</Typography.Text>}
+          message={
+            <Typography.Text style={{ fontSize: 13 }}>
+              {hold.kind === 'no-workers' ? 'Nothing is moving this download' : hold.label}
+            </Typography.Text>
+          }
+          description={
+            <Space direction="vertical" size={2}>
+              <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+                {hold.detail}
+              </Typography.Text>
+              {hold.kind !== 'planning' && (
+                <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+                  {describeFleet(fleet)}
+                </Typography.Text>
+              )}
+            </Space>
+          }
         />
       )}
 
@@ -666,7 +798,7 @@ export default function DownloadDetail() {
                     total={content}
                     saved={saved}
                     strategy={t?.strategy ?? 'copy'}
-                    speedBytesPerSecond={running ? speed : undefined}
+                    speedBytesPerSecond={running ? rate.current : undefined}
                     live={running}
                   />
                 )}
@@ -886,13 +1018,42 @@ export default function DownloadDetail() {
                   <Value>{formatBytes(saved)}</Value>
                 </SavedBreakdown>
               </Descriptions.Item>
-              <Descriptions.Item label="Total time">
-                <Value>{formatDuration(elapsed)}</Value>
+              <Descriptions.Item label="Time spent downloading">
+                <Tooltip title="Time a worker actually had work of this download in its hands, accrued while it happened. Waiting for a worker is not downloading, and counting it is what made a healthy link read as a slow one.">
+                  <span><Value>{formatDuration(elapsed)}</Value></span>
+                </Tooltip>
               </Descriptions.Item>
+              {/*
+                The wall clock, and ONLY when it disagrees.
+
+                On a download that ran straight through the two are the same
+                number, and printing it twice under two headings invites the
+                reader to hunt for a difference that is not there. It appears
+                when there is something to explain - which is the case this
+                whole pair of numbers exists for.
+              */}
+              {interrupted && (
+                <Descriptions.Item label="Of which waiting">
+                  <Tooltip title={`From the first job to the last was ${formatDuration(wallClock)}. This much of it had no worker on this download - the fleet was down, or its capacity was taken by other work.`}>
+                    <span><Value>{formatDuration(idle)}</Value></span>
+                  </Tooltip>
+                </Descriptions.Item>
+              )}
               <Descriptions.Item label="Average speed">
-                <Value reason="A speed needs bytes we moved and a duration we timed. One of them is missing.">
-                  {formatSpeed(speed)}
-                </Value>
+                {/*
+                  EVERYTHING divided by EVERYTHING: the bytes we moved over the
+                  whole time we have had this download, waiting included. That
+                  is the right number for "how long does one of these take" and
+                  the wrong one for "what is it doing now", which is why the
+                  header carries a different one under a different name.
+                */}
+                <Tooltip title="Bytes moved over the time a worker was actually moving them - not over the wall clock, which would put every minute the download spent waiting into the denominator. The header shows what it is doing right now.">
+                  <span>
+                    <Value reason="A speed needs bytes we moved and a duration we timed. One of them is missing.">
+                      {formatSpeed(average)}
+                    </Value>
+                  </span>
+                </Tooltip>
               </Descriptions.Item>
               <Descriptions.Item label="Started"><TimeAgo at={t?.startedAt} /></Descriptions.Item>
               <Descriptions.Item label="Completed"><TimeAgo at={t?.completedAt} /></Descriptions.Item>
@@ -924,6 +1085,24 @@ export default function DownloadDetail() {
               </Descriptions.Item>
             </Descriptions>
 
+            {/*
+              WHERE TO TAKE A SPEED THAT LOOKS WRONG.
+
+              A rate on its own cannot say whether it is the link, the route or
+              the number of streams we are asking for - the number is identical
+              in all three cases, which is why "the download is slow" has
+              historically been unanswerable from this page. The path test
+              measures all three; this is the sentence that tells somebody it
+              exists, at the moment they are looking at the number that
+              prompted the question.
+            */}
+            {t?.strategy !== 'relocate' && (
+              <Typography.Paragraph type="secondary" style={{ fontSize: 12, marginTop: 12, marginBottom: 0 }}>
+                A speed on its own cannot say whether the link is slow, the route is wrong, or
+                we are asking for too few streams at once.{' '}
+                <Link to="/settings">Measure what this path can carry</Link> to find out which.
+              </Typography.Paragraph>
+            )}
           </Card>
         </Col>
       </Row>

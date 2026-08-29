@@ -7,6 +7,7 @@ import { formatCount, formatRelative } from '../domain/format'
 import { Value } from '../components/value'
 import { ManagedInGit, TimeAgo } from '../components/chips'
 import { ErrorState, PageHeader } from '../components/layout'
+import { SpeedTest } from '../components/speedtest'
 import { AppearanceSettings, c, mono, StatusPill } from '../uikit'
 
 /**
@@ -200,6 +201,20 @@ export default function Settings() {
               ]}
             />
           </Card>
+        </Col>
+
+        {/*
+          IS THE SPEED WE ARE GETTING THE SPEED THIS PATH CAN DO?
+
+          Full width, because the answer is two tables and a list of settings.
+          Here rather than on a download's own page: it measures a PATH - one
+          product's source to one of its targets - not a transfer, and running
+          it from a download would imply it was measuring that download, which
+          it cannot, because the download is using the connections it would be
+          competing with.
+        */}
+        <Col span={24}>
+          <SpeedTest />
         </Col>
 
         <Col xs={24} xl={12}>

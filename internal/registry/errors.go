@@ -1,10 +1,14 @@
 package registry
 
 import (
+	"context"
 	"errors"
 	"fmt"
+	"io"
+	"net"
 	"net/http"
 	"strings"
+	"syscall"
 	"time"
 )
 
@@ -58,6 +62,25 @@ var (
 	// ErrMalformedResponse means the registry answered with something we
 	// cannot parse - a proxy error page in place of JSON, say.
 	ErrMalformedResponse = errors.New("malformed registry response")
+
+	// ErrConnectionLost means the connection died mid-transfer: the peer, or
+	// something between us and it, stopped talking before the body it promised
+	// had arrived. Retryable.
+	//
+	// # Why this is not folded into ErrTimeout
+	//
+	// A timeout is OUR deadline expiring, and the fix is usually to wait
+	// longer or to ask for less at once. A dropped connection is somebody
+	// ELSE hanging up - a load balancer's idle or request-duration cap, a
+	// proxy that will not carry a body this large, a registry that reset the
+	// stream - and the fix is on the path, not in our patience. Reporting the
+	// two as one class sends an operator to the wrong knob.
+	//
+	// It also has to exist so these stop arriving as ClassUnclassified: an
+	// uncategorised error is retried with the full transient budget, which is
+	// right for a blip and is eight full re-uploads of a 478 MB layer when a
+	// proxy is capping every request at the same offset.
+	ErrConnectionLost = errors.New("connection lost")
 )
 
 // Class is the coarse category used for retry decisions and metrics.
@@ -74,6 +97,7 @@ const (
 	ClassIntegrity    Class = "integrity"
 	ClassUnsupported  Class = "unsupported"
 	ClassMalformed    Class = "malformed"
+	ClassNetwork      Class = "network"
 	ClassUnclassified Class = "unclassified"
 )
 
@@ -153,6 +177,8 @@ func ClassOf(err error) Class {
 		return ClassUnsupported
 	case errors.Is(err, ErrMalformedResponse):
 		return ClassMalformed
+	case errors.Is(err, ErrConnectionLost):
+		return ClassNetwork
 	default:
 		return ClassUnclassified
 	}
@@ -165,7 +191,7 @@ func ClassOf(err error) Class {
 // attempt cap bounds the cost of being wrong.
 func Retryable(err error) bool {
 	switch ClassOf(err) {
-	case ClassRateLimited, ClassUnavailable, ClassTimeout, ClassUnclassified:
+	case ClassRateLimited, ClassUnavailable, ClassTimeout, ClassNetwork, ClassUnclassified:
 		return true
 	case ClassIntegrity:
 		return true // capped low by the caller's attempt policy
@@ -207,4 +233,87 @@ func ClassifyStatus(status int) error {
 	default:
 		return nil
 	}
+}
+
+// ClassifyTransport names a failure that never reached the point of being an
+// HTTP response - the connection itself went wrong.
+//
+// Returns nil when the error is not one of those, so a caller can use it as
+// the last rung of its own ladder without it swallowing anything.
+//
+// # Why this exists, and what it was costing not to have it
+//
+// A blob copy streams a source response body straight into a destination
+// request body. When the SOURCE hangs up mid-body, Go's HTTP client surfaces
+// `io.ErrUnexpectedEOF` from the read - and because that read happens inside
+// the destination's `Do`, the error comes back wrapped as
+// `Put "https://destination/...": unexpected EOF`. It names the destination
+// URL, the destination host and the destination's upload session, and every
+// word of that is about the end of the path that was working.
+//
+// Nothing matched it, so it landed in ClassUnclassified, which is retryable
+// with the full transient budget. The observed result is a table of eight-of-
+// eight attempts against the destination for a source that was dropping the
+// connection at the same offset every time.
+//
+// # Why the string match
+//
+// The errors that matter are wrapped by `*url.Error`, by ORAS, and by the
+// standard library's own transfer code, and several of them are constructed
+// with `errors.New` at the point of failure rather than being sentinels
+// anybody can match. `errors.Is` catches what it can; the prose catches the
+// rest. Being wrong costs a retry classification, not a wrong result.
+func ClassifyTransport(err error) error {
+	if err == nil {
+		return nil
+	}
+
+	switch {
+	case errors.Is(err, io.ErrUnexpectedEOF), errors.Is(err, io.EOF):
+		return ErrConnectionLost
+	case errors.Is(err, net.ErrClosed):
+		return ErrConnectionLost
+	case errors.Is(err, syscall.ECONNRESET), errors.Is(err, syscall.EPIPE),
+		errors.Is(err, syscall.ECONNABORTED):
+		return ErrConnectionLost
+	}
+
+	// A deadline is a timeout however it was wrapped, and it is asked first
+	// because a timed-out read often reports itself as a closed connection too.
+	var ne net.Error
+	if errors.As(err, &ne) && ne.Timeout() {
+		return ErrTimeout
+	}
+	if errors.Is(err, context.DeadlineExceeded) {
+		return ErrTimeout
+	}
+
+	text := strings.ToLower(err.Error())
+	for _, phrase := range droppedConnectionPhrases {
+		if strings.Contains(text, phrase) {
+			return ErrConnectionLost
+		}
+	}
+	return nil
+}
+
+// droppedConnectionPhrases are the ways this failure spells itself once it has
+// been through `*url.Error` and whatever wrapped that.
+//
+// "unexpected eof" is the one that matters most: it is what Go reports when a
+// response body ends before the Content-Length the server declared, which is
+// exactly a connection cut mid-blob.
+var droppedConnectionPhrases = []string{
+	"unexpected eof",
+	"connection reset by peer",
+	"broken pipe",
+	"connection forcibly closed",
+	"use of closed network connection",
+	"http2: stream closed",
+	"server closed idle connection",
+	"transport connection broken",
+	"unexpected end of stream",
+	// net/http's own words when a request body delivered fewer bytes than the
+	// Content-Length it declared - the short-read half of the same fault.
+	"with body length",
 }

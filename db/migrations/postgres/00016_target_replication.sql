@@ -68,7 +68,7 @@ CREATE TABLE mirror_syncs (
     -- The transfer this sync was requested for, when it was. NULL for a sync
     -- Quay ran on its own schedule, which is the normal case and the whole
     -- point of mirroring: convergence keeps working while we are down.
-    transfer_id     BIGINT      REFERENCES transfers(id) ON DELETE SET NULL,
+    transfer_id     UUID        REFERENCES transfers(id) ON DELETE SET NULL,
 
     requested_at    TIMESTAMPTZ,
     started_at      TIMESTAMPTZ,

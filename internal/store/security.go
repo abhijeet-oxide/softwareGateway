@@ -678,7 +678,7 @@ func (s *Security) Search(ctx context.Context, f SearchFilter) ([]SearchHit, err
 		SELECT v.cve, v.issue_id, v.severity, v.fixable, v.summary,
 		       v.component_id, v.component_name, v.component_version, v.component_type, v.fixed_in,
 		       sc.artifact_ref, sc.artifact_key, sc.artifact_tag, sc.artifact_kind, sc.artifact_repo,
-		       sc.provider, sc.repository, COALESCE(sc.scanned_at, '')
+		       sc.provider, sc.repository, ` + s.dialect.TimestampText("sc.scanned_at") + `
 		  FROM security_findings v
 		  JOIN security_scans sc ON sc.id = v.scan_id
 		 WHERE sc.product = ? ` + where + `

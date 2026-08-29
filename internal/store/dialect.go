@@ -51,6 +51,42 @@ type Dialect interface {
 	// must treat it as "unknown" rather than coercing it to zero, or an
 	// unfinished transfer would report infinite speed.
 	SecondsBetween(from, to string) string
+	// TimestampText renders a possibly-NULL timestamp expression as an RFC3339
+	// string in UTC, or the empty string when there is no value.
+	//
+	// # Why this is a dialect method and not COALESCE(x, '')
+	//
+	// It was `COALESCE(x, '')`, and that is a SQLite idiom rather than SQL.
+	// SQLite stores a timestamp AS TEXT, so coalescing one with a string is
+	// two strings; Postgres declares the column `timestamptz` and rejects the
+	// empty string outright -
+	//
+	//	ERROR: invalid input syntax for type timestamp with time zone: ""
+	//
+	// - because there is no cast that turns "" into a moment. The transfer
+	// projection had four, so listing or reading a transfer could not work on
+	// Postgres at all while SQLite, whose dialect is largely the identity
+	// function, was perfectly happy.
+	//
+	// It also makes the two databases agree on the FORM of the answer, which
+	// they did not before. These columns are scanned into strings and served
+	// to a browser; left to the driver, Postgres hands back a time.Time that
+	// database/sql renders with whatever offset the session is in, and SQLite
+	// hands back the milliseconds-and-Z text it wrote. One shape, chosen here,
+	// so a client parses one thing.
+	TimestampText(expr string) string
+	// IDText renders a UUID column as text, so it can be compared with LIKE
+	// and with arbitrary user input.
+	//
+	// SQLite stores these ids as TEXT and Postgres as UUID, and a UUID is not
+	// a string it will compare loosely: `id LIKE 'abc%'` is
+	// `operator does not exist: uuid ~~ unknown`, and `id = 'abc'` is
+	// `invalid input syntax for type uuid`. A cast is needed for the prefix
+	// search a person doing `transferctl transfer 3f2a` relies on.
+	//
+	// FOR PREFIX MATCHING ONLY. It defeats the primary key index, so an exact
+	// lookup must compare the column itself.
+	IDText(col string) string
 	// Name identifies the dialect.
 	Name() Driver
 }
@@ -69,6 +105,29 @@ type postgresDialect struct{}
 //
 // Quoted string literals are skipped so a `?` inside one - which is legal SQL
 // and appears in LIKE patterns - is not mistaken for a placeholder.
+//
+// # COMMENTS ARE SKIPPED TOO, and leaving them out was a real bug
+//
+// The queries in this package are heavily commented, in prose, and English
+// prose contains apostrophes: "the package's own repository", "the transfer's
+// origin". Without comment handling each of those reads as the start of a
+// string literal, and an ODD number of them in one query leaves the rewriter
+// believing everything after the last one is inside a string. Every `?` from
+// there on is left alone.
+//
+// The transfer projection had three. So `LIMIT ? OFFSET ?` reached Postgres
+// verbatim and it answered
+//
+//	ERROR: syntax error at or near "OFFSET" (SQLSTATE 42601)
+//
+// which names neither the cause nor anything in the query the author wrote.
+// Listing and reading transfers - the Downloads page, the shell, every
+// `transferctl transfers` command - could not work on Postgres at all, while
+// SQLite, whose Rewrite is the identity function, was perfectly happy.
+//
+// Handling the comments here rather than removing the apostrophes is the fix
+// that stays fixed: the next person to write "the worker's lease" in a query
+// comment must not silently break it.
 func (postgresDialect) Rewrite(query string) string {
 	var b strings.Builder
 	b.Grow(len(query) + 8)
@@ -78,6 +137,42 @@ func (postgresDialect) Rewrite(query string) string {
 
 	for i := 0; i < len(query); i++ {
 		c := query[i]
+
+		// A line comment runs to the newline, and nothing in it is SQL. Checked
+		// before the quote handling, because the whole point is that an
+		// apostrophe inside one is punctuation rather than a delimiter.
+		if !inSingle && !inDouble && c == '-' && i+1 < len(query) && query[i+1] == '-' {
+			end := strings.IndexByte(query[i:], '\n')
+			if end < 0 {
+				b.WriteString(query[i:])
+				return b.String()
+			}
+			b.WriteString(query[i : i+end+1])
+			i += end
+			continue
+		}
+
+		// A block comment, for the same reason. Postgres nests these; the
+		// depth count is cheap and means a /* */ inside one cannot end it early.
+		if !inSingle && !inDouble && c == '/' && i+1 < len(query) && query[i+1] == '*' {
+			depth, j := 1, i+2
+			for j < len(query) && depth > 0 {
+				switch {
+				case j+1 < len(query) && query[j] == '/' && query[j+1] == '*':
+					depth++
+					j += 2
+				case j+1 < len(query) && query[j] == '*' && query[j+1] == '/':
+					depth--
+					j += 2
+				default:
+					j++
+				}
+			}
+			b.WriteString(query[i:j])
+			i = j - 1
+			continue
+		}
+
 		switch {
 		case c == '\'' && !inDouble:
 			// '' inside a string is an escaped quote, not a terminator.
@@ -113,6 +208,22 @@ func (postgresDialect) TimeAhead(secondsExpr string) string {
 func (postgresDialect) SecondsBetween(from, to string) string {
 	return "EXTRACT(EPOCH FROM (" + to + " - " + from + "))"
 }
+
+// TimestampText formats in SQL rather than converting in Go, so the empty
+// case stays inside the COALESCE - a NULL timestamp must become ” without
+// the empty string ever being offered to a timestamp comparison.
+//
+// The format is SQLite's own output format, down to the millisecond and the
+// trailing Z, which is what makes the two dialects interchangeable to a
+// caller. AT TIME ZONE 'UTC' first, because the Z is only true if the value
+// has been moved there.
+func (postgresDialect) TimestampText(expr string) string {
+	return `COALESCE(to_char((` + expr + `) AT TIME ZONE 'UTC', ` +
+		`'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"'), '')`
+}
+
+func (postgresDialect) IDText(col string) string { return "(" + col + ")::text" }
+
 func (postgresDialect) Bool(b bool) string { return map[bool]string{true: "TRUE", false: "FALSE"}[b] }
 func (postgresDialect) Name() Driver       { return DriverPostgres }
 
@@ -140,5 +251,15 @@ func (sqliteDialect) TimeAhead(secondsExpr string) string {
 func (sqliteDialect) SecondsBetween(from, to string) string {
 	return "((julianday(" + to + ") - julianday(" + from + ")) * 86400.0)"
 }
+
+// TimestampText is the plain COALESCE: the column already holds the text this
+// returns, written by Now() in exactly this format.
+func (sqliteDialect) TimestampText(expr string) string {
+	return "COALESCE(" + expr + ", '')"
+}
+
+// IDText is the column itself: SQLite already stores it as text.
+func (sqliteDialect) IDText(col string) string { return col }
+
 func (sqliteDialect) Bool(b bool) string { return map[bool]string{true: "1", false: "0"}[b] }
 func (sqliteDialect) Name() Driver       { return DriverSQLite }

@@ -388,7 +388,7 @@ export default function Packages() {
   // EVERY kind of transfer, because this index is what gives a listed release
   // its history: a listing that fetched only downloads would report a promoted
   // release as one nothing had happened to since it landed.
-  const transfers = useTransfers({ product: selected, pageSize: 200 })
+  const transfers = useTransfers({ product: selected, pageSize: 200, view: 'summary' })
 
   const rows = useMemo(() => {
     // Joined from the transfer listing: a package listing carries no transfer

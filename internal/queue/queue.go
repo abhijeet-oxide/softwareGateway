@@ -555,3 +555,13 @@ func (q *Queue) control(
 func (q *Queue) Retryable(ctx context.Context) ([]string, error) {
 	return q.packages.RetryableTransfers(ctx)
 }
+
+// AccrueActiveTime records how long each transfer has spent with work in a
+// worker's hands.
+//
+// A thin pass-through, like Reap and Settle: the measurement rule lives in the
+// store, next to the columns it maintains, and this exists so the controller
+// speaks to one type.
+func (q *Queue) AccrueActiveTime(ctx context.Context, since time.Duration) (int, error) {
+	return q.packages.AccrueActiveTime(ctx, since)
+}

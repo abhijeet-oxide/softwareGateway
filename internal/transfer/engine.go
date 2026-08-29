@@ -341,14 +341,31 @@ func (e *Engine) stream(
 		return 0, err
 	}
 
+	// WHICH END BROKE.
+	//
+	// The copy is one pipe - the source's response body IS the destination's
+	// request body - and that is what makes the error reporting lie. When the
+	// SOURCE hangs up mid-blob, the read fails inside the destination's `Do`,
+	// so the failure comes back as `Put "https://destination/v2/.../blobs/
+	// uploads/...": unexpected EOF`. Every noun in that sentence is the end of
+	// the path that was working, and an operator reading it goes and looks at
+	// the destination registry, the destination's credentials and the
+	// destination's proxy - none of which had anything to do with it.
+	//
+	// So the source side is watched on the way past. It records nothing in the
+	// happy case; when the push fails it is the first thing asked, because it
+	// is the only one of the two that can say the failure was not the
+	// destination's.
+	watched := &watchedReader{r: verifier}
+
 	// The one buffer in the path, and the one the memory formula in
 	// docs/design/05 §4.5 counts: peak is maxConcurrentJobs x (copyBufferSize +
 	// transport buffers). Without it the reader is driven by whatever chunk
 	// size the destination's writer happens to ask for.
-	counter := &countingReader{r: bufio.NewReaderSize(verifier, e.copyBuffer), report: progress}
+	counter := &countingReader{r: bufio.NewReaderSize(watched, e.copyBuffer), report: progress}
 
 	if err := job.Target.PushBlob(ctx, dgst, job.SizeBytes, counter); err != nil {
-		return counter.n, fmt.Errorf("push blob to destination: %w", err)
+		return counter.n, sideOf(err, watched, job.SizeBytes, dgst)
 	}
 
 	// Checked AFTER the push, because the push is what consumed the reader.
@@ -688,4 +705,103 @@ func (c *countingReader) Read(p []byte) (int, error) {
 		}
 	}
 	return n, err
+}
+
+// watchedReader remembers how the SOURCE side of a copy ended.
+//
+// It counts and it remembers the last error, and it does nothing else - the
+// digest verification and the progress reporting are the other two wrappers in
+// this pipe, and each of them stays one job.
+//
+// `io.EOF` is kept rather than discarded, because a clean EOF is only clean if
+// it arrives at the size the descriptor promised. A source that closes at
+// 40.7 MB of a 478.2 MB layer returns EOF exactly like one that finished, and
+// the difference is the whole diagnosis.
+type watchedReader struct {
+	r   io.Reader
+	n   int64
+	err error
+}
+
+func (w *watchedReader) Read(p []byte) (int, error) {
+	n, err := w.r.Read(p)
+	w.n += int64(n)
+	if err != nil {
+		w.err = err
+	}
+	return n, err
+}
+
+// sideOf turns a failed push into a sentence about the end that actually
+// failed.
+//
+// The push error is the only error the caller has, and for a source-side
+// failure it is a description of the destination. So the source is asked
+// first: if its last read failed, or if it stopped short of the size it
+// promised, then the destination was fine and the push error is a symptom.
+//
+// The push error is still carried, wrapped, because on a genuinely ambiguous
+// case an operator wants both halves of the story - and because the retry
+// classification reads through the chain either way.
+func sideOf(pushErr error, src *watchedReader, size int64, dgst registry.Digest) error {
+	switch {
+	// A read that failed for a reason other than reaching the end. This is the
+	// `unexpected EOF` case: the vendor's registry, or something between us
+	// and it, cut the body short.
+	case src.err != nil && !errors.Is(src.err, io.EOF):
+		return fmt.Errorf(
+			"read blob from source: the source stopped sending %s after %s of %s: %w "+
+				"(the destination reported %v, which is this same interruption seen "+
+				"from the writing end)",
+			dgst.Short(), humanBytes(src.n), humanBytes(size),
+			sourceError(src.err), pushErr)
+
+	// A clean EOF at the wrong offset. The source closed the body politely and
+	// early, which reads as success to every layer between here and the socket.
+	case size > 0 && src.n < size:
+		return fmt.Errorf(
+			"read blob from source: the source closed the connection after %s of the "+
+				"%s it declared for %s: %w (the destination reported %v)",
+			humanBytes(src.n), humanBytes(size), dgst.Short(),
+			registry.ErrConnectionLost, pushErr)
+	}
+
+	// Everything the source owed us arrived, so the destination is the one
+	// that could not take it. The original wording, unchanged - it was only
+	// ever wrong when it was reporting somebody else's failure.
+	return fmt.Errorf("push blob to destination: %w", pushErr)
+}
+
+// sourceError names a source-side read failure, classifying it where we can.
+//
+// Wrapped rather than replaced: a dropped connection has to come back as
+// registry.ErrConnectionLost so the retry policy and the failure listing key
+// off a class rather than off prose, and the peer's own words have to survive
+// so somebody can tell a proxy's cap from a registry's reset.
+func sourceError(err error) error {
+	if sentinel := registry.ClassifyTransport(err); sentinel != nil {
+		return fmt.Errorf("%w: %w", sentinel, err)
+	}
+	return err
+}
+
+// humanBytes renders a size the way the failure listing shows it.
+//
+// Deliberately local and deliberately small: this is the one place in the
+// engine that puts a number in front of a person, and a dependency on a
+// formatting package for it would be the wrong direction of coupling.
+func humanBytes(n int64) string {
+	if n < 0 {
+		return "an unknown amount"
+	}
+	const unit = 1024
+	if n < unit {
+		return fmt.Sprintf("%d B", n)
+	}
+	div, exp := int64(unit), 0
+	for size := n / unit; size >= unit && exp < 4; size /= unit {
+		div *= unit
+		exp++
+	}
+	return fmt.Sprintf("%.1f %ciB", float64(n)/float64(div), "KMGTP"[exp])
 }

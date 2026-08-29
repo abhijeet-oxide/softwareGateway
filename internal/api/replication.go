@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/go-chi/chi/v5"
+	"golang.org/x/sync/errgroup"
 
 	"github.com/abhijeet-oxide/softwareGateway/internal/api/middleware"
 	"github.com/abhijeet-oxide/softwareGateway/internal/product"
@@ -29,6 +30,13 @@ type Replicator interface {
 	Sync(ctx context.Context, p *product.Product, t product.Target, actor string) (*replication.SyncOutcome, error)
 	CancelSync(ctx context.Context, p *product.Product, t product.Target, actor string) (*replication.SyncOutcome, error)
 }
+
+// maxConcurrentTargetReads bounds the fan-out in handleListReplication.
+//
+// Eight is above the number of targets a real product document declares, so in
+// practice this reads every target at once; it exists so a document with fifty
+// targets opens eight connections rather than fifty.
+const maxConcurrentTargetReads = 8
 
 // handleGetReplication reports one target's replication state.
 func (s *Server) handleGetReplication(w http.ResponseWriter, r *http.Request) {
@@ -55,22 +63,47 @@ func (s *Server) handleListReplication(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	out := v1.ListReplicationResponse{Targets: make([]v1.ReplicationView, 0, len(p.Spec.Targets))}
-	for _, t := range p.Spec.Targets {
-		st, err := s.deps.Replication.Status(r.Context(), p, t)
-		if err != nil {
-			// One bad target must not blank the whole listing: the row is
-			// returned with the reason in it, which is more useful than a 500
-			// that does not say which target failed.
-			out.Targets = append(out.Targets, v1.ReplicationView{
-				Product: p.Metadata.Name, Target: t.Name,
-				Mode: string(t.ReplicationMode()), Unreachable: err.Error(),
-			})
-			continue
-		}
-		out.Targets = append(out.Targets, replicationView(st))
+	// SIDE BY SIDE, because each delegated target costs a round trip to its
+	// own registry.
+	//
+	// Read serially, a product with four delegated targets spent four registry
+	// latencies end to end - and the Downloads page asks this of EVERY product
+	// at once to draw its drift banner, so the slowest registry in the estate
+	// set the wall-clock time of the whole page. They are independent reads of
+	// different registries; nothing is gained by waiting for one before
+	// starting the next.
+	//
+	// Bounded, because "one goroutine per target" is a fan-out a product
+	// document controls. The order of the answer is the order of the
+	// configuration - written by index rather than appended - so a listing
+	// somebody is comparing against a previous one does not reshuffle itself
+	// because a registry was slow this time.
+	views := make([]v1.ReplicationView, len(p.Spec.Targets))
+	g, gctx := errgroup.WithContext(r.Context())
+	g.SetLimit(maxConcurrentTargetReads)
+	for i, t := range p.Spec.Targets {
+		g.Go(func() error {
+			st, err := s.deps.Replication.Status(gctx, p, t)
+			if err != nil {
+				// One bad target must not blank the whole listing: the row is
+				// returned with the reason in it, which is more useful than a
+				// 500 that does not say which target failed. So the error is
+				// carried in the row and never returned to the group - one
+				// unreachable registry must not cancel the reads of the others.
+				views[i] = v1.ReplicationView{
+					Product: p.Metadata.Name, Target: t.Name,
+					Mode: string(t.ReplicationMode()), Unreachable: err.Error(),
+				}
+				return nil
+			}
+			views[i] = replicationView(st)
+			return nil
+		})
 	}
-	WriteJSON(w, r, http.StatusOK, out)
+	_ = g.Wait() // No goroutine above returns an error; see the comment there.
+
+	WriteJSON(w, r, http.StatusOK,
+		v1.ListReplicationResponse{Targets: views})
 }
 
 // handleApplyReplication writes the configuration to the registry.

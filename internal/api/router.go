@@ -242,6 +242,9 @@ type Server struct {
 	// comparisons is progress for comparisons in flight - see
 	// compareprogress.go for why it lives in memory.
 	comparisons *compareTracker
+	// analyses are the manifest-tree walks THIS replica is running, so one can
+	// be stopped rather than only disowned. See internal/api/analysis.go.
+	analyses *analysisRunner
 }
 
 // NewServer builds the HTTP surface.
@@ -257,7 +260,11 @@ func NewServer(deps Deps) *Server {
 	if deps.Logger == nil {
 		deps.Logger = slog.Default()
 	}
-	s := &Server{deps: deps, comparisons: newCompareTracker()}
+	s := &Server{
+		deps:        deps,
+		comparisons: newCompareTracker(),
+		analyses:    newAnalysisRunner(),
+	}
 	s.router = s.routes()
 	return s
 }
@@ -489,6 +496,11 @@ func (s *Server) routes() chi.Router {
 			r.Get("/comparisons/{comparison}", s.handleCompareProgress)
 
 			r.Get("/transfers", s.handleListTransfers)
+			// Registered BEFORE the parameterised route, and spelled with a
+			// colon rather than as a path segment, so it cannot ever be read as
+			// a transfer called "activity". Same shape as
+			// `GET /system:healthCheck`.
+			r.Get("/transfers:activity", s.handleTransferActivity)
 			r.Get("/transfers/{transfer}", s.handleGetTransfer)
 			r.Get("/transfers/{transfer}/jobs", s.handleListTransferJobs)
 			r.Get("/transfers/{transfer}/failures", s.handleListTransferFailures)

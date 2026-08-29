@@ -2,7 +2,8 @@ import { useMutation, useQueries, useQuery, useQueryClient } from '@tanstack/rea
 import { useEffect, useRef } from 'react'
 import { api, query, packageRef } from './client'
 import type {
-  CancelSecuritySyncResponse,
+  CalibrateRequest, CalibrateResponse,
+  CancelAnalysisResponse, CancelSecuritySyncResponse,
   CheckConnectivityResponse, CompareProgressResponse, CompareRequest, CompareResponse,
   DiscoverAllResponse,
   DiscoverPackagesResponse, DiscoveryStatusResponse, HealthCheckResponse, ListArtifactsResponse,
@@ -15,7 +16,7 @@ import type {
   RunDownloadResponse,
   PackageSecurityResponse, SearchKind, SecurityCompareRequest, SecurityComparisonResponse,
   SecuritySearchResponse, SyncSecurityResponse,
-  SetPriorityRequest, Transfer, TransferControlResponse, VersionResponse,
+  SetPriorityRequest, Transfer, TransferActivity, TransferControlResponse, VersionResponse,
 } from './types'
 import { isLive } from '../domain/derive'
 
@@ -339,6 +340,38 @@ export function useInspectPackage(product: string, ref: string, repository?: str
   })
 }
 
+/**
+ * Stop a walk that is under way.
+ *
+ * # Why a walk needs a stop at all
+ *
+ * It is minutes of round trips against the vendor's registry, started by one
+ * button, and until this existed the only ways out of one started by mistake -
+ * the wrong release, a source whose request budget a download needed more -
+ * were to wait twenty minutes for the server's deadline or to restart the
+ * Coordinator. A job somebody can start and cannot stop is a job they learn
+ * not to start.
+ *
+ * The release goes back to UNANALYSED rather than failed, so the same button
+ * that stopped it will start it again.
+ */
+export function useCancelAnalysis(product: string, ref: string, repository?: string) {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: () => {
+      const { segment, query: q } = packageRef(ref)
+      return api.post<CancelAnalysisResponse>(
+        `/products/${encodeURIComponent(product)}/packages/${encodeURIComponent(segment)}` +
+        `:cancelAnalysis` + scopeQuery(q, repository), {})
+    },
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: ['package', product, ref] })
+      // And the LISTING, whose row carries the same tag.
+      void qc.invalidateQueries({ queryKey: ['packages'] })
+    },
+  })
+}
+
 export function useUnavailable(product: string | undefined) {
   return useQuery({
     queryKey: ['unavailable', product],
@@ -360,8 +393,22 @@ export function useUnavailable(product: string | undefined) {
  * hundred most recent transfers are all downloads, and the promotions table
  * would be empty on exactly the deployments that have the most of them.
  */
+/**
+ * A page of transfers.
+ *
+ * `view: 'summary'` drops the `progress` object, and with it the twelve
+ * correlated aggregates the server computes over each transfer's jobs to
+ * produce it. That rollup IS the cost of this listing - a hundred rows take
+ * about 154ms with it and about 1ms without - and the pages that join transfer
+ * history onto a package listing (Overview, Packages, Products) read only
+ * names, states and timestamps. They ask for the summary; a page that draws a
+ * progress bar leaves `view` off and pays for the counts it draws.
+ */
 export function useTransfers(
-  filters: { product?: string; state?: string; operation?: string; pageSize?: number; pageToken?: string } = {},
+  filters: {
+    product?: string; state?: string; operation?: string
+    pageSize?: number; pageToken?: string; view?: 'summary'
+  } = {},
 ) {
   return useQuery({
     queryKey: ['transfers', filters],
@@ -370,6 +417,37 @@ export function useTransfers(
     // stale under an operator watching a download.
     refetchInterval: (q) =>
       (q.state.data?.transfers ?? []).some((t) => isLive(t.state)) ? 5000 : false,
+  })
+}
+
+/**
+ * The estate's activity, as three numbers.
+ *
+ * # Why this is not `useTransfers` with a big page
+ *
+ * It was. The shell mounts on every page and needs "how many are moving, how
+ * many are waiting, how many failed", and it got them by fetching a hundred
+ * fully-projected transfers every few seconds and counting in the browser.
+ *
+ * Each of those rows carries a dozen aggregates over that transfer's jobs, so
+ * the request costs what the ESTATE has done rather than what the shell asked
+ * for - and it was issued from every open tab, for the whole life of a
+ * download, against a Coordinator already busy leasing and completing jobs.
+ * The server answers the same question in about a hundred and fiftieth of the
+ * time.
+ *
+ * Polled slowly and unconditionally: it is a status line rather than a page
+ * somebody is watching, and the transfer that a reader IS watching has its own
+ * tight poll on the page they are on.
+ */
+export function useTransferActivity() {
+  return useQuery({
+    queryKey: ['transfer-activity'],
+    queryFn: () => api.get<TransferActivity>('/transfers:activity'),
+    refetchInterval: 10_000,
+    // A status line that briefly disagrees with a page is better than one that
+    // vanishes: the previous numbers stay on screen while the next arrive.
+    placeholderData: (previous) => previous,
   })
 }
 
@@ -458,35 +536,65 @@ export function useDownloads(product: string | undefined) {
  * whichever product a selector happens to be on: a page that answers "what
  * comes in automatically" with one product's answer is a page that hides the
  * rule somebody came to find. Bounded by the product count, which is 5-50.
+ *
+ * # `enabled`, because this is a REQUEST PER PRODUCT
+ *
+ * Fifty products is fifty requests, and these two feed tabs that are not the
+ * one the page opens on. They were issued on every visit to Downloads whether
+ * or not anybody opened Rules - a hundred requests, ahead of the two that
+ * populate the table actually on screen, competing with them for the browser's
+ * six connections per host.
+ *
+ * Configuration also does not move: five minutes of staleness means opening the
+ * tab a second time costs nothing, so deferring the first fetch to the moment
+ * it is needed loses nothing either.
  */
-export function useDownloadsForAll(products: string[]) {
+export function useDownloadsForAll(products: string[], enabled = true) {
   return useQueries({
     queries: products.map((product) => ({
       queryKey: ['downloads', product],
       queryFn: () => api.get<ListDownloadsResponse>(
         `/products/${encodeURIComponent(product)}/downloads`),
       staleTime: 5 * MINUTE,
+      enabled,
     })),
   })
 }
 
-export function useRulesForAll(products: string[]) {
+export function useRulesForAll(products: string[], enabled = true) {
   return useQueries({
     queries: products.map((product) => ({
       queryKey: ['rules', product],
       queryFn: () => api.get<ListAutoDownloadRulesResponse>(
         `/products/${encodeURIComponent(product)}/autoDownloadRules`),
       staleTime: 5 * MINUTE,
+      enabled,
     })),
   })
 }
 
+/**
+ * Every product's replication targets, for the drift banner.
+ *
+ * CACHED LIKE THE CONFIGURATION IT IS. This is the most expensive read on the
+ * Downloads page by a wide margin: one request per product, and each one asks
+ * every delegated target's registry what it currently looks like - a network
+ * round trip apiece, and a row written recording the observation. On the shared
+ * 30-second default the whole estate was re-read every time somebody navigated
+ * back to this page, against a Coordinator that may be leasing and completing
+ * jobs at the same time.
+ *
+ * Five minutes, which is what the two sibling product-configuration reads above
+ * already use. Drift is somebody editing a registry by hand: it does not need
+ * spotting within thirty seconds, and the target's own page reads it fresh.
+ */
 export function useReplicationForAll(products: string[]) {
   return useQueries({
     queries: products.map((product) => ({
       queryKey: ['replication', product],
       queryFn: () => api.get<ListReplicationResponse>(
         `/products/${encodeURIComponent(product)}/replication`),
+      staleTime: 5 * MINUTE,
     })),
   })
 }
@@ -710,6 +818,35 @@ export function useWorkers() {
     queryKey: ['workers'],
     queryFn: () => api.get<ListWorkersResponse>('/workers'),
     refetchInterval: 15_000,
+  })
+}
+
+/**
+ * Measure what one source-to-target path can actually do.
+ *
+ * # Why this is a mutation and not a query
+ *
+ * It has real side effects. The read probe pulls blobs from the source, and
+ * the write probe opens upload sessions on the target and streams bytes into
+ * them before cancelling - nothing is committed anywhere, and both registries
+ * see genuine load. That is not something to run because a component mounted,
+ * or to refetch when a window regains focus.
+ *
+ * # Why the answer is not stored
+ *
+ * A calibration is a measurement of a network AS IT WAS. Keeping one would
+ * produce exactly the stale number this feature exists to replace: the point
+ * is to answer "is the speed I am looking at right now the best this path can
+ * do", and that has to be measured now.
+ */
+export function useCalibrate(product: string | undefined) {
+  return useMutation({
+    mutationFn: (body: CalibrateRequest) =>
+      api.post<CalibrateResponse>(
+        `/products/${encodeURIComponent(product!)}:calibrate`, body),
+    // A path being slow enough to investigate is a path whose probes may take
+    // minutes and may fail. Retrying doubles the load for no new information.
+    retry: false,
   })
 }
 

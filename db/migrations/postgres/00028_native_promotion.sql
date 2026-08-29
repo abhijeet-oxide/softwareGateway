@@ -42,7 +42,7 @@ ALTER TABLE transfers ADD CONSTRAINT transfers_strategy_check
 
 CREATE TABLE promotions (
     id              BIGSERIAL PRIMARY KEY,
-    transfer_id     TEXT    NOT NULL REFERENCES transfers(id) ON DELETE CASCADE,
+    transfer_id     UUID    NOT NULL REFERENCES transfers(id) ON DELETE CASCADE,
 
     -- promoter is the plugin that claimed the hop: `jfrog` today. Recorded
     -- rather than derived, because the plugin that ran is a fact about this

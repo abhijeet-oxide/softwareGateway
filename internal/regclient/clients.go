@@ -53,6 +53,23 @@ type Clients struct {
 	mu     sync.Mutex
 	byKey  map[string]registry.Repository
 	shared map[string]*transport.Shared
+	// generation is the product registry's swap counter as of the cached
+	// entries. A reload that changes it discards them.
+	//
+	// # Why the cache has to notice
+	//
+	// A client is built ONCE per repository and reused for every job against
+	// it - that is the whole point of the cache, and it is what keeps an
+	// 850-blob package from performing 850 token exchanges. It also means a
+	// client built from yesterday's configuration is used for ever: rotate a
+	// credential, correct a proxy, raise a connection ceiling, and a running
+	// worker goes on using the old one until somebody restarts it.
+	//
+	// That was unreachable while the worker loaded its products once at
+	// startup, because nothing could change underneath it. It became reachable
+	// the moment the worker started watching its configuration directory, so
+	// the two land together.
+	generation uint64
 }
 
 // NewClients builds a client cache.
@@ -97,6 +114,8 @@ func (c *Clients) For(e v1.JobEndpoint) (registry.Repository, error) {
 
 	c.mu.Lock()
 	defer c.mu.Unlock()
+
+	c.discardIfReloaded()
 
 	if cached, ok := c.byKey[key]; ok {
 		return cached, nil
@@ -154,6 +173,41 @@ func (c *Clients) For(e v1.JobEndpoint) (registry.Repository, error) {
 
 	c.byKey[key] = repo
 	return repo, nil
+}
+
+// discardIfReloaded drops every cached client when the configuration behind
+// them has been replaced.
+//
+// Called with the lock held. Checking a counter on every resolution is cheaper
+// than the map lookup it guards, and it means the invalidation cannot be
+// forgotten by a future caller: there is no separate Invalidate() for anybody
+// to fail to call.
+//
+// The whole cache goes, not the entries for the products that changed. A swap
+// does not say which products differ - it reports what is valid now - and
+// rebuilding a handful of clients costs one connection setup each, once, after
+// somebody edited a file. Being precise here would trade a real risk of keeping
+// a stale client for an unmeasurable saving.
+//
+// The shared transports go with them. They carry the rate limiter and the
+// connection pool, which are exactly the things a configuration change is most
+// likely to be adjusting.
+func (c *Clients) discardIfReloaded() {
+	if c.products == nil {
+		return
+	}
+	gen := c.products.Generation()
+	if gen == c.generation {
+		return
+	}
+
+	if len(c.byKey) > 0 || len(c.shared) > 0 {
+		c.log.Info("configuration reloaded; rebuilding registry clients",
+			"clients", len(c.byKey), "transports", len(c.shared))
+	}
+	c.byKey = map[string]registry.Repository{}
+	c.shared = map[string]*transport.Shared{}
+	c.generation = gen
 }
 
 // configFor translates configuration into a client config for one endpoint.

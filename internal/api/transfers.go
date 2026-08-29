@@ -8,6 +8,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/go-chi/chi/v5"
 
@@ -151,14 +152,23 @@ func (s *Server) handleListTransfers(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// `view=summary` drops the per-transfer job rollup - twelve correlated
+	// subqueries per row, which is the whole cost of this listing (154ms for a
+	// hundred rows against 1ms without; see
+	// store.TestListingWithoutJobCountsIsMuchCheaper). The pages that only need
+	// a name and a state ask for it and get the cheap plan; anything drawing a
+	// progress bar leaves it off and pays for the counts it draws.
+	summary := q.Get("view") == "summary"
+
 	// One row over the page size, so "is there another page" is answered
 	// without a second COUNT and without claiming a page that turns out empty.
 	rows, err := s.deps.Packages.ListTransfers(r.Context(), store.ListTransfersFilter{
-		ProductName: q.Get("product"),
-		State:       state,
-		Operation:   operation,
-		Limit:       pageSize + 1,
-		Offset:      offset,
+		ProductName:      q.Get("product"),
+		State:            state,
+		Operation:        operation,
+		Limit:            pageSize + 1,
+		Offset:           offset,
+		WithoutJobCounts: summary,
 	})
 	if err != nil {
 		Error(w, r, v1.CodeUnavailable, "could not list transfers: "+err.Error())
@@ -171,9 +181,25 @@ func (s *Server) handleListTransfers(w http.ResponseWriter, r *http.Request) {
 		rows = rows[:pageSize]
 	}
 	for _, t := range rows {
-		out.Transfers = append(out.Transfers, transferDTO(t))
+		out.Transfers = append(out.Transfers, transferDTO(t, !summary))
 	}
 	WriteJSON(w, r, http.StatusOK, out)
+}
+
+// handleTransferActivity serves GET /api/v1/transfers:activity.
+//
+// The shell's one line, answered by the database rather than assembled in the
+// browser from a page of transfers it did not want. See
+// v1.TransferActivityResponse for the measurement that justifies its existence.
+func (s *Server) handleTransferActivity(w http.ResponseWriter, r *http.Request) {
+	a, err := s.deps.Packages.Activity(r.Context())
+	if err != nil {
+		Error(w, r, v1.CodeUnavailable, "could not summarise activity: "+err.Error())
+		return
+	}
+	WriteJSON(w, r, http.StatusOK, v1.TransferActivityResponse{
+		Moving: a.Moving, Held: a.Held, Failed: a.Failed,
+	})
 }
 
 // handleGetTransfer serves GET /api/v1/transfers/{transfer}.
@@ -186,7 +212,7 @@ func (s *Server) handleGetTransfer(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	dto := transferDTO(t)
+	dto := transferDTO(t, true)
 	// Only on the single-transfer read. A failure to group the waves does not
 	// fail the request: it is a breakdown of numbers already in the response,
 	// and losing it must not cost the reader the response.
@@ -298,49 +324,138 @@ func (s *Server) handleListTransferJobs(w http.ResponseWriter, r *http.Request) 
 	WriteJSON(w, r, http.StatusOK, out)
 }
 
-func transferDTO(t store.TransferSummary) v1.Transfer {
-	return v1.Transfer{
-		ID:          t.ID,
-		RequestID:   t.RequestID,
-		Product:     t.ProductName,
-		PackageName: t.PackageName,
-		PackageID:   strconv.FormatInt(t.PackageID, 10),
-		Tag:         t.Tag,
-		DisplayTag:  t.DisplayTag,
-		Source:      t.Source,
-		Target:      t.Target,
-		SourceName:  t.SourceName,
-		TargetName:  t.TargetName,
-		State:       v1.TransferState(strings.ToUpper(t.State)),
-		Operation:   strings.ToUpper(t.Operation),
-		Strategy:    t.Strategy,
-		Priority:    t.Priority,
-		CurrentWave: t.CurrentWave,
-		MaxWave:     t.MaxWave,
-		Progress: v1.TransferProgress{
-			JobsPlanned:        t.PlannedJobs,
-			JobsDone:           t.JobsDone,
-			JobsFailed:         t.JobsFailed,
-			JobsBlocked:        t.JobsBlocked,
-			JobsRepaired:       t.JobsRepaired,
-			OutstandingBytes:   v1.Int64String(strconv.FormatInt(t.OutstandingBytes, 10)),
-			QuietestInFlight:   t.QuietestInFlight,
-			JobsOutstanding:    t.JobsOutstanding,
-			JobsInFlight:       t.JobsInFlight,
-			Workers:            t.Workers,
-			JobsWaiting:        t.JobsWaiting,
-			ContentBytes:       v1.Int64String(strconv.FormatInt(t.ContentBytes, 10)),
-			PlannedBytes:       v1.Int64String(strconv.FormatInt(t.PlannedBytes, 10)),
-			BytesTransferred:   v1.Int64String(strconv.FormatInt(t.BytesTransferred, 10)),
-			DedupeSkippedBytes: v1.Int64String(strconv.FormatInt(t.DedupeSkippedBytes, 10)),
-			SkippedBytes:       v1.Int64String(strconv.FormatInt(t.SkippedBytes, 10)),
-			SavedBytes:         v1.Int64String(strconv.FormatInt(t.SavedBytes(), 10)),
-		},
+// transferDTO renders a transfer, with or without its job rollup.
+//
+// `withProgress` follows what the store was ASKED for. A summary listing does
+// not read a transfer's jobs at all, so the counts it would otherwise carry are
+// structurally zero - and a zero here is indistinguishable from a transfer that
+// has genuinely moved nothing. Omitting the field says "not asked for", which
+// is the truth; sending zeros would say "nothing has happened", which is not.
+func transferDTO(t store.TransferSummary, withProgress bool) v1.Transfer {
+	out := v1.Transfer{
+		ID:            t.ID,
+		RequestID:     t.RequestID,
+		Product:       t.ProductName,
+		PackageName:   t.PackageName,
+		PackageID:     strconv.FormatInt(t.PackageID, 10),
+		Tag:           t.Tag,
+		DisplayTag:    t.DisplayTag,
+		Source:        t.Source,
+		Target:        t.Target,
+		SourceName:    t.SourceName,
+		TargetName:    t.TargetName,
+		State:         v1.TransferState(strings.ToUpper(t.State)),
+		Operation:     strings.ToUpper(t.Operation),
+		Strategy:      t.Strategy,
+		Priority:      t.Priority,
+		CurrentWave:   t.CurrentWave,
+		MaxWave:       t.MaxWave,
 		FailureReason: t.FailureReason,
 		CreatedAt:     t.CreatedAt,
 		StartedAt:     t.StartedAt,
 		CompletedAt:   t.CompletedAt,
+		ActiveSeconds: activeSeconds(t),
 	}
+	if !withProgress {
+		return out
+	}
+
+	out.Progress = &v1.TransferProgress{
+		JobsPlanned:        t.PlannedJobs,
+		JobsDone:           t.JobsDone,
+		JobsFailed:         t.JobsFailed,
+		JobsBlocked:        t.JobsBlocked,
+		JobsRepaired:       t.JobsRepaired,
+		OutstandingBytes:   v1.Int64String(strconv.FormatInt(t.OutstandingBytes, 10)),
+		QuietestInFlight:   t.QuietestInFlight,
+		JobsOutstanding:    t.JobsOutstanding,
+		JobsInFlight:       t.JobsInFlight,
+		Workers:            t.Workers,
+		JobsWaiting:        t.JobsWaiting,
+		ContentBytes:       v1.Int64String(strconv.FormatInt(t.ContentBytes, 10)),
+		PlannedBytes:       v1.Int64String(strconv.FormatInt(t.PlannedBytes, 10)),
+		BytesTransferred:   v1.Int64String(strconv.FormatInt(t.BytesTransferred, 10)),
+		DedupeSkippedBytes: v1.Int64String(strconv.FormatInt(t.DedupeSkippedBytes, 10)),
+		SkippedBytes:       v1.Int64String(strconv.FormatInt(t.SkippedBytes, 10)),
+		SavedBytes:         v1.Int64String(strconv.FormatInt(t.SavedBytes(), 10)),
+	}
+	return out
+}
+
+// activeSeconds is the stored accrual plus whatever this instant is owed.
+//
+// # Why the remainder is added here rather than accrued more often
+//
+// The sweep runs on the reaper's interval - half a minute - and a page watching
+// a live download polls every two seconds. Serving the stored figure alone
+// would show a number that sits still for thirty polls and then jumps, which
+// reads as a stuck page rather than as a coarse measurement.
+//
+// The remainder is only owed when a worker is holding one of this transfer's
+// jobs RIGHT NOW. With nothing in flight, no time is being spent and none is
+// added - which is what keeps a queued download from accumulating "time spent
+// downloading" while it waits.
+//
+// # Why it is capped
+//
+// The same reason the sweep refuses a long gap: a stale anchor means the sweep
+// has not run, and the honest thing to say about a period nobody measured is
+// nothing. Beyond the cap the stored figure is served unchanged and the next
+// sweep re-anchors.
+func activeSeconds(t store.TransferSummary) float64 {
+	seconds := t.ActiveSeconds
+	if t.JobsInFlight > 0 && t.LastActiveAt != "" {
+		if since, ok := secondsSince(t.LastActiveAt); ok && since <= maxActiveRemainder {
+			seconds += since
+		}
+	}
+
+	// NEVER LARGER THAN THE WALL CLOCK. The two are measured by different
+	// mechanisms - a sampling sweep and two timestamps - and a rounding that
+	// let the active figure exceed the elapsed one would put "took 4m 02s of
+	// the 4m 01s it has existed" on the page, which reads as a bug in
+	// everything around it.
+	if wall, ok := wallClockSeconds(t); ok && seconds > wall {
+		return wall
+	}
+	return seconds
+}
+
+// maxActiveRemainder bounds what one response will add to the stored figure.
+//
+// Comfortably more than a reap interval so an ordinary sweep delay is invisible,
+// and far less than any outage worth excluding.
+var maxActiveRemainder = (5 * time.Minute).Seconds()
+
+func secondsSince(ts string) (float64, bool) {
+	at, err := time.Parse(time.RFC3339Nano, ts)
+	if err != nil {
+		return 0, false
+	}
+	d := time.Since(at).Seconds()
+	if d < 0 {
+		// The Coordinator's clock and the database's disagree. Adding a
+		// negative would take time OFF a measurement, so nothing is added.
+		return 0, false
+	}
+	return d, true
+}
+
+// wallClockSeconds is how long the transfer has existed as a running thing -
+// the number active time is a subset of.
+func wallClockSeconds(t store.TransferSummary) (float64, bool) {
+	start, err := time.Parse(time.RFC3339Nano, t.StartedAt)
+	if err != nil {
+		return 0, false
+	}
+	end := time.Now()
+	if t.CompletedAt != "" {
+		if parsed, err := time.Parse(time.RFC3339Nano, t.CompletedAt); err == nil {
+			end = parsed
+		}
+	}
+	d := end.Sub(start).Seconds()
+	return d, d >= 0
 }
 
 // parseJobState validates the job state filter against the closed set.

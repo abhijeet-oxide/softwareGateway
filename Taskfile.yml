@@ -163,6 +163,20 @@ tasks:
     cmds:
       - go test -race -run '{{.CLI_ARGS}}' -v ./...
 
+  test:postgres:
+    desc: 'Run the store tests against Postgres (task test:postgres, needs TEST_POSTGRES_DSN)'
+    # THE OTHER DATABASE. `task test` runs everything on SQLite, whose dialect
+    # is largely the identity function, so a query that is not portable passes
+    # there and fails in production. Two did: the transfer projection coalesced
+    # a timestamp with the empty string, and the short-id lookup compared a
+    # UUID column with an arbitrary string. Neither was visible from SQLite.
+    #
+    # The cases skip themselves when TEST_POSTGRES_DSN is unset, so this is the
+    # same suite rather than a separate one - `task test` on a laptop stays
+    # green and container-free.
+    cmds:
+      - go test ./internal/store/... ./internal/api/...
+
   test:integration:
     desc: Run integration tests (requires Docker)
     cmds:

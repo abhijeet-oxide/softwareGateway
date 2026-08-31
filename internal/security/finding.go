@@ -170,6 +170,33 @@ type Finding struct {
 	// Policy names the Xray watch or policy that flagged this, when the scanner
 	// reports one. Informational.
 	Policy string `json:"policy,omitempty"`
+
+	// Sources names every scanner that reported this finding, sorted.
+	//
+	// Provider says which one this ROW came from; Sources says who agrees. They
+	// are different questions and the second only has an interesting answer once
+	// a second scanner exists - which is exactly why it is here now. A field
+	// added the day Anchore is switched on is a field every stored row, every
+	// export column and every table lacks for the releases synced before it.
+	//
+	// A single-source deployment carries one entry, and the interface hides a
+	// column that can only say "JFrog Xray" on every row.
+	Sources []string `json:"sources,omitempty"`
+}
+
+// SourceSet is Sources, or Provider when nothing has merged this finding yet.
+//
+// Never let a caller read Sources directly and get an empty slice for a finding
+// that plainly came from somewhere: a filter reading "reported by nothing" would
+// hide every row on a single-scanner deployment.
+func (f Finding) SourceSet() []string {
+	if len(f.Sources) > 0 {
+		return f.Sources
+	}
+	if f.Provider != "" {
+		return []string{f.Provider}
+	}
+	return nil
 }
 
 // Key identifies a finding within one artifact: which problem, in which
@@ -178,6 +205,30 @@ type Finding struct {
 // exactly what the comparison exists to report.
 func (f Finding) Key() string {
 	return f.Identifier() + "|" + f.Component.ComponentKey()
+}
+
+// StorageKey identifies a finding within one artifact for STORAGE and for
+// COUNTING, and it is deliberately not Key().
+//
+// # The number that did not add up
+//
+// A release reported 90,808 findings on its listing row and 86,085 on its own
+// security tab, from the same sync. The listing quotes what the sync summed in
+// memory; the tab counts the rows that reached `security_findings`, whose
+// unique key was (scan, CVE, issue, component id). Component id carries no
+// VERSION - that is Key()'s whole point, and the right decision for comparing
+// two releases - so an image holding two builds of one package (libcrypto3 at
+// 3.1.4-r2 in one layer and 3.5.5-r0 in another, which a multi-stage image does
+// routinely) wrote one row where the sum counted two. Four and a half thousand
+// findings disappeared between the two pages, and neither page was wrong about
+// its own arithmetic.
+//
+// Two identities, then, for two questions. Key() answers "is this the same
+// problem as the one in the other release", and must not carry the version.
+// StorageKey answers "is this the same ROW", and must, or the count and the
+// table disagree forever.
+func (f Finding) StorageKey() string {
+	return f.Identifier() + "|" + f.Component.ComponentKey() + "|" + f.Component.Version
 }
 
 // Identifier is the CVE where there is one, and the scanner's id otherwise.
@@ -272,6 +323,24 @@ type Report struct {
 	Findings []Finding `json:"findings,omitempty"`
 	Counts   Counts    `json:"counts"`
 
+	// Malware is what the scanner found that is not a vulnerability: a
+	// malicious package, a known-bad component.
+	//
+	// Its own list rather than findings with a flag, because it is read by a
+	// different person for a different reason. A vulnerability count is a
+	// backlog; a malware hit is a release that does not ship tonight, and
+	// burying one row among ninety thousand is how it gets shipped anyway.
+	Malware []Finding `json:"malware,omitempty"`
+	// Violations is what the scanner's configured policies say about this
+	// artifact - the gate, rather than the backlog.
+	Violations []Violation `json:"violations,omitempty"`
+
+	// Documents says which scanner bodies are held for this artifact, without
+	// carrying any of them. A page offering a "download SBOM" button needs to
+	// know whether there is one; it does not need forty megabytes to draw a
+	// button.
+	Documents []DocumentSummary `json:"documents,omitempty"`
+
 	// Missing says the artifact is not in the repository the scanner answers
 	// for. Only meaningful with StatusNotScanned, and the difference between
 	// "nobody has scanned this yet" and "this was never shipped here" - which
@@ -287,6 +356,19 @@ type Report struct {
 	FromCache bool `json:"fromCache,omitempty"`
 }
 
+// DocumentSummary is a held document, named and measured but not carried.
+type DocumentSummary struct {
+	Kind DocumentKind `json:"kind"`
+	// Available is false for a document the scanner was asked for and did not
+	// have - which is worth saying, because the alternative is a button that
+	// silently downloads nothing.
+	Available   bool   `json:"available"`
+	ContentType string `json:"contentType,omitempty"`
+	SourceBytes int    `json:"sourceBytes,omitempty"`
+	FetchedAt   string `json:"fetchedAt,omitempty"`
+	Message     string `json:"message,omitempty"`
+}
+
 // Recount recomputes Counts from Findings. Called by providers after
 // normalizing, and by anything that filters a report's findings.
 func (r *Report) Recount() {
@@ -300,6 +382,79 @@ func (r *Report) Recount() {
 // that two runs over the same data produce byte-identical output. Exports are
 // diffed by people; a stable order is not cosmetic.
 func (r *Report) Sort() { SortFindings(r.Findings) }
+
+// DedupeFindings collapses findings that are the same STORED row, merging what
+// the copies knew.
+//
+// # Why a provider must call this before it hands findings back
+//
+// Because the count and the table have to agree, and the row is the narrower of
+// the two. One Xray issue naming three CVEs across four component entries
+// expands to twelve findings, and two of those entries are routinely the same
+// package at the same version reached by two impact paths - so two of the twelve
+// are one row, counted twice. Collapsing here rather than in the store means the
+// number the sync records and the rows it writes come from one list, and a page
+// can never quote two totals for one sync again.
+//
+// Deliberately NOT a collapse on Key(): that would merge two genuinely different
+// builds of one package, which is a real second thing to upgrade.
+func DedupeFindings(in []Finding) []Finding {
+	if len(in) < 2 {
+		return in
+	}
+	at := make(map[string]int, len(in))
+	out := make([]Finding, 0, len(in))
+	for _, f := range in {
+		k := f.StorageKey()
+		i, seen := at[k]
+		if !seen {
+			at[k] = len(out)
+			out = append(out, f)
+			continue
+		}
+		// The copies are the same row and may not carry the same detail: one
+		// impact path may name a fixed version the other omits. Keep the worse
+		// grade and the union of what is known, because losing a fix version to
+		// deduplication would report a fixable finding as unfixable.
+		kept := out[i]
+		if f.Severity.Rank() > kept.Severity.Rank() {
+			kept.Severity = f.Severity
+		}
+		kept.Fixable = kept.Fixable || f.Fixable
+		kept.FixedIn = mergeStrings(kept.FixedIn, f.FixedIn)
+		kept.Sources = mergeStrings(kept.Sources, f.Sources)
+		if kept.Summary == "" {
+			kept.Summary = f.Summary
+		}
+		if kept.Description == "" {
+			kept.Description = f.Description
+		}
+		if kept.CVSSScore == 0 {
+			kept.CVSSScore, kept.CVSSVector = f.CVSSScore, f.CVSSVector
+		}
+		out[i] = kept
+	}
+	return out
+}
+
+// mergeStrings unions two lists, preserving first-seen order.
+func mergeStrings(a, b []string) []string {
+	if len(b) == 0 {
+		return a
+	}
+	seen := make(map[string]bool, len(a)+len(b))
+	out := make([]string, 0, len(a)+len(b))
+	for _, list := range [][]string{a, b} {
+		for _, s := range list {
+			if s == "" || seen[s] {
+				continue
+			}
+			seen[s] = true
+			out = append(out, s)
+		}
+	}
+	return out
+}
 
 // SortFindings orders a finding slice worst-first and deterministically.
 func SortFindings(fs []Finding) {
@@ -334,14 +489,55 @@ type Posture struct {
 	// UniqueCounts collapses the same (CVE, component) across artifacts, which
 	// is the number to quote when asking "how many distinct problems".
 	UniqueCounts Counts `json:"uniqueCounts"`
+	// UniqueCVEs collapses the ADVISORY alone, ignoring which package carries
+	// it. A third number, and it earns its place because it is the one the page
+	// prints biggest.
+	//
+	// The three are genuinely different questions and a page that quotes one
+	// while labelling it another teaches a reader to trust none of them:
+	// openssl and libssl3 carrying CVE-2026-31789 are two things to upgrade
+	// (UniqueCounts), one advisory to read (UniqueCVEs), and seventeen packages
+	// across a hundred and forty-eight images to actually replace (Counts).
+	UniqueCVEs int `json:"uniqueCves"`
 
 	Coverage Coverage `json:"coverage"`
+
+	// BySource is the same arithmetic, per scanner, plus how much of it only
+	// that scanner reported.
+	//
+	// Empty on a deployment with one scanner - there is nothing to compare - and
+	// the interface hides the control rather than offering a toggle with one
+	// position.
+	BySource []SourceCounts `json:"bySource,omitempty"`
 
 	// Providers names every scanner that contributed, sorted.
 	Providers []string `json:"providers,omitempty"`
 	// ScannedAt is the OLDEST scan time among contributing reports - the age of
 	// the weakest link, which is the honest answer to "how fresh is this".
 	ScannedAt *time.Time `json:"scannedAt,omitempty"`
+}
+
+// SourceCounts is one scanner's contribution to a posture.
+//
+// # Why "only" is a field rather than something the client derives
+//
+// Because deriving it needs every finding from every scanner in one place, and
+// the client that needs the number most is the one rendering a summary row
+// without the rows behind it. "Xray found 3,111 of which 402 nobody else saw"
+// is the sentence a reader wants when a second scanner arrives, and it must not
+// require downloading two hundred thousand findings to compose.
+type SourceCounts struct {
+	// Provider is the scanner - "jfrog-xray", "anchore", "astra".
+	Provider string `json:"provider"`
+	// Counts is every finding this scanner reported, summed per artifact.
+	Counts Counts `json:"counts"`
+	// UniqueCVEs is the distinct advisories this scanner reported.
+	UniqueCVEs int `json:"uniqueCves"`
+	// OnlyHere is the distinct advisories NO other scanner reported. Zero on a
+	// single-scanner deployment, where every finding is trivially only there.
+	OnlyHere int `json:"onlyHere"`
+	// Artifacts is how many artifacts this scanner answered for.
+	Artifacts int `json:"artifacts"`
 }
 
 // Coverage states how much of a release the numbers actually cover.
@@ -385,6 +581,12 @@ func Summarize(reports []Report) Posture {
 	seenProvider := map[string]bool{}
 	unique := map[string]Severity{}
 	uniqueFixable := map[string]bool{}
+	uniqueCVEs := map[string]bool{}
+	// Per-source arithmetic, and which sources saw each advisory. Built in the
+	// same pass because a second walk over a release's findings is a second walk
+	// over a hundred thousand rows.
+	bySource := map[string]*SourceCounts{}
+	sawCVE := map[string]map[string]bool{}
 
 	for _, r := range reports {
 		p.Coverage.Artifacts++
@@ -416,6 +618,14 @@ func Summarize(reports []Report) Posture {
 			p.ScannedAt = &t
 		}
 		p.Counts = p.Counts.Plus(r.Counts)
+		for _, src := range sourcesOf(r) {
+			sc, ok := bySource[src]
+			if !ok {
+				sc = &SourceCounts{Provider: src}
+				bySource[src] = sc
+			}
+			sc.Artifacts++
+		}
 		for _, f := range r.Findings {
 			k := f.Key()
 			// Worst severity wins for the unique roll-up: the same CVE graded
@@ -426,14 +636,66 @@ func Summarize(reports []Report) Posture {
 			if f.Fixable {
 				uniqueFixable[k] = true
 			}
+			if id := f.Identifier(); id != "" {
+				uniqueCVEs[id] = true
+				for _, src := range f.SourceSet() {
+					seen, ok := sawCVE[id]
+					if !ok {
+						seen = map[string]bool{}
+						sawCVE[id] = seen
+					}
+					seen[src] = true
+				}
+			}
+			for _, src := range f.SourceSet() {
+				sc, ok := bySource[src]
+				if !ok {
+					sc = &SourceCounts{Provider: src}
+					bySource[src] = sc
+				}
+				sc.Counts.Add(f.Severity, f.Fixable)
+			}
 		}
 	}
 
 	for k, sev := range unique {
 		p.UniqueCounts.Add(sev, uniqueFixable[k])
 	}
+	p.UniqueCVEs = len(uniqueCVEs)
+
+	for id, srcs := range sawCVE {
+		for src := range srcs {
+			if sc, ok := bySource[src]; ok {
+				sc.UniqueCVEs++
+				if len(srcs) == 1 {
+					sc.OnlyHere++
+				}
+			}
+		}
+		_ = id
+	}
+	// Only worth reporting once there is something to compare. One scanner's
+	// per-source breakdown is the release's breakdown restated, and a segmented
+	// control with a single position is a control that should not be drawn.
+	if len(bySource) > 1 {
+		p.BySource = make([]SourceCounts, 0, len(bySource))
+		for _, sc := range bySource {
+			p.BySource = append(p.BySource, *sc)
+		}
+		sort.Slice(p.BySource, func(i, j int) bool {
+			return p.BySource[i].Provider < p.BySource[j].Provider
+		})
+	}
 	sort.Strings(p.Providers)
 	return p
+}
+
+// sourcesOf is the scanners that answered for one artifact.
+func sourcesOf(r Report) []string {
+	if r.Provider != "" {
+		return []string{r.Provider}
+	}
+	return nil
 }
 
 // FingerprintReports produces a stable hash over a set of reports.

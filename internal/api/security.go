@@ -51,6 +51,36 @@ type SecurityStore interface {
 	Get(ctx context.Context, packageID int64) (store.PackageSecurityRow, bool, error)
 	ForPackages(ctx context.Context, ids []int64) (map[int64]store.PackageSecurityRow, error)
 	ReportsFor(ctx context.Context, scope security.Scope, refs []security.ArtifactRef) ([]security.Report, error)
+	// LoadDocuments returns the scanner's own bodies, for a bundle export and
+	// for the download beside an image.
+	//
+	// Kinds are a filter rather than a fetch-everything: the SBOM is the
+	// largest thing this store holds, and a page that only wants to know
+	// whether one exists must not pull tens of megabytes per image to find out.
+	LoadDocuments(
+		ctx context.Context, scope security.Scope,
+		refs []security.ArtifactRef, kinds []security.DocumentKind,
+	) (map[string]map[security.DocumentKind]security.Document, error)
+	// DocumentSummaries answers "what is held" without reading any payload.
+	DocumentSummaries(
+		ctx context.Context, scope security.Scope, refs []security.ArtifactRef,
+	) (map[string][]security.DocumentSummary, error)
+	// LoadSources reads a release's per-scanner rows.
+	//
+	// A separate call rather than a field on the row, because a listing renders
+	// twenty releases and joining a second table for a breakdown that is empty
+	// on every single-scanner deployment would be twenty joins for nothing.
+	LoadSources(ctx context.Context, packageID int64) ([]security.SourceCounts, error)
+}
+
+// SecurityDocuments retrieves the scanner's own bodies, fetching what is not
+// already held.
+//
+// Separate from SecurityStore because it can reach a scanner and the store
+// cannot: an SBOM is not captured by a sync (tens of megabytes and minutes per
+// image) and is generated when somebody presses the button.
+type SecurityDocuments interface {
+	Documents(ctx context.Context, req security.DocumentRequest) ([]security.Document, error)
 }
 
 // SecurityIndex is the searchable record of what syncs have recorded.
@@ -150,20 +180,102 @@ func (s *Server) packageSecurity(
 	out := toAPIPackageSecurity(productName, pkg, row, target, detail)
 	out.Sync = s.syncStatusFor(pkg.ID, row, target)
 
+	// The per-scanner breakdown, which is empty on a single-scanner deployment
+	// and is what the source toggle is drawn from when it is not.
+	if sources, err := s.deps.SecurityStore.LoadSources(ctx, pkg.ID); err == nil {
+		for _, src := range sources {
+			out.Sources = append(out.Sources, toAPISourceCounts(src))
+		}
+	} else {
+		// A breakdown that will not load costs a control, never the page.
+		s.deps.Logger.Warn("security: could not read the per-scanner breakdown",
+			"package", pkg.ID, "error", err)
+	}
+
 	if detail && row.Synced() {
 		refs := s.securityArtifactsFor(productName, pkg, ctx)
 		reports, err := s.deps.SecurityStore.ReportsFor(ctx, target.Scope, refs)
 		if err != nil {
 			return v1.PackageSecurityResponse{}, err
 		}
+		// What bodies are held, WITHOUT reading any of them. A release is 157
+		// images times four kinds of document, and reading them to decide
+		// whether to draw a download button would be hundreds of megabytes to
+		// render a row of icons.
+		docs, err := s.deps.SecurityStore.DocumentSummaries(ctx, target.Scope, refs)
+		if err != nil {
+			s.deps.Logger.Warn("security: could not list stored scanner documents",
+				"package", pkg.ID, "error", err)
+			docs = map[string][]security.DocumentSummary{}
+		}
+
 		posture := security.Summarize(reports)
 		for _, rep := range posture.Reports {
 			item := toAPIReport(rep)
 			item.ScanURL = scanURL(target, rep.Artifact)
+			item.Documents = documentRefsFor(
+				productName, pkg, rep, docs[rep.Artifact.Ref()], target)
 			out.Reports = append(out.Reports, item)
 		}
 	}
 	return out, nil
+}
+
+// documentRefsFor is what an image's download menu offers.
+//
+// # Why the SBOM is offered even when nothing is held
+//
+// Because it is generated on demand: a sync does not fetch one (tens of
+// megabytes and minutes per image), so "not held" is the ordinary state and a
+// menu that hid the button would hide the feature. The other three are offered
+// only when something IS held, because those ARE captured by a sync - so their
+// absence means the sync did not retrieve them, and a button that fetched them
+// individually would be a page that quietly re-runs part of a sync.
+func documentRefsFor(
+	productName string, pkg store.PackageRow, report security.Report,
+	held []security.DocumentSummary, target securityTarget,
+) []v1.SecurityDocumentRef {
+	byKind := map[security.DocumentKind]security.DocumentSummary{}
+	for _, d := range held {
+		byKind[d.Kind] = d
+	}
+	// The report's own list carries the messages from the sync - "this Xray
+	// has no SBOM endpoint" - which the store does not keep.
+	for _, d := range report.Documents {
+		if existing, ok := byKind[d.Kind]; !ok || (!existing.Available && d.Message != "") {
+			byKind[d.Kind] = d
+		}
+	}
+
+	var out []v1.SecurityDocumentRef
+	for _, kind := range security.AllDocumentKinds {
+		summary, ok := byKind[kind]
+		if !ok {
+			if kind != security.DocumentSBOM {
+				continue
+			}
+			summary = security.DocumentSummary{Kind: kind}
+		}
+		ref := toAPIDocumentRef(summary)
+		ref.URL = documentURL(productName, pkg, report.Artifact, kind, target)
+		out = append(out, ref)
+	}
+	return out
+}
+
+// documentURL is where one image's document is downloaded from.
+func documentURL(
+	productName string, pkg store.PackageRow, ref security.ArtifactRef,
+	kind security.DocumentKind, target securityTarget,
+) string {
+	q := url.Values{}
+	q.Set("digest", ref.Digest)
+	if target.Scope.Repository != "" {
+		q.Set("repository", target.Scope.Repository)
+	}
+	return fmt.Sprintf("/api/v1/products/%s/packages/%s/security/documents/%s?%s",
+		url.PathEscape(productName), url.PathEscape(packageReferenceOf(pkg)),
+		url.PathEscape(string(kind)), q.Encode())
 }
 
 // handleSyncPackageSecurity serves POST

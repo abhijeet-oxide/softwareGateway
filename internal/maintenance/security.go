@@ -10,24 +10,30 @@ import (
 	"github.com/abhijeet-oxide/softwareGateway/internal/store"
 )
 
-// SecurityCacheSweeper removes expired security cache rows.
+// SecurityCacheSweeper keeps the security store inside its budget.
 //
-// # Why expiry needs a sweeper at all, when every read already filters on it
+// # What this loop is NOT any more
 //
-// Because the filter answers correctness and the sweeper answers size. A read
-// that served an expired row would be the bug; a read that DELETED one would
-// turn every page render into a write transaction, and the detail tier expires
-// in minutes, so that is a write per artifact per quarter of an hour on a
-// database whose sole writer is the Coordinator.
+// It used to delete every row past an expiry, every fifteen minutes. That is a
+// correct cache eviction and it was the wrong policy here: it threw away
+// findings nobody had asked it to forget while the counts those findings backed
+// lived on forever in `package_security`, so a release ended up with a number
+// and an empty table behind it - and the only way back was a twenty-minute sync
+// against somebody else's scanner.
 //
-// So the rows are filtered on read and removed here. Without this loop the
-// complete-response tier - the largest thing this feature stores, and the one
-// deliberately given the shortest life - would accumulate forever while never
-// being served, which is the worst of both.
+// So the loop now asks two questions in order. Is anything UNREFERENCED - a
+// payload whose scan row is gone, which no read path in the system can reach?
+// Those go, always. Is the store OVER ITS BUDGET? Only then does anything else
+// go, least recently read first, heavy tiers before light ones. Inside the
+// budget nothing is deleted, whatever its age.
 //
 // LEADER-GATED, like every loop that writes.
 type SecurityCacheSweeper struct {
 	security *store.Security
+	// budget is the ceiling for the regenerable tiers. Zero means no ceiling,
+	// which is the default: forgetting is the surprising behaviour and should
+	// have to be asked for.
+	budget store.CacheBudget
 	// packages releases sync claims held by a process that is gone. A release
 	// stuck showing "syncing" forever is a release nobody can ever sync again,
 	// which is a worse outcome than the rare duplicate a released claim allows.
@@ -39,17 +45,16 @@ type SecurityCacheSweeper struct {
 	leader bool
 }
 
-// DefaultSecuritySweepInterval is how often expired rows are collected.
+// DefaultSecuritySweepInterval is how often the store is measured.
 //
-// Fifteen minutes, which is the default detail retention: sweeping much more
-// often finds nothing, and much less often lets a quarter-hour cache occupy
-// disk for hours after it stopped being readable.
+// Fifteen minutes. Most sweeps now find nothing to do, which is the point: the
+// work is measuring, and acting only when the measurement says to.
 const DefaultSecuritySweepInterval = 15 * time.Minute
 
 // NewSecurityCacheSweeper builds the loop.
 func NewSecurityCacheSweeper(
 	security *store.Security, packages *store.PackageSecurity,
-	interval time.Duration, log *slog.Logger,
+	interval time.Duration, budget store.CacheBudget, log *slog.Logger,
 ) *SecurityCacheSweeper {
 	if log == nil {
 		log = slog.Default()
@@ -58,7 +63,7 @@ func NewSecurityCacheSweeper(
 		interval = DefaultSecuritySweepInterval
 	}
 	return &SecurityCacheSweeper{
-		security: security, packages: packages, interval: interval, log: log,
+		security: security, packages: packages, interval: interval, budget: budget, log: log,
 	}
 }
 
@@ -128,16 +133,19 @@ func (s *SecurityCacheSweeper) SweepOnce(ctx context.Context) error {
 		}
 	}
 
-	scans, details, err := s.security.Sweep(ctx)
+	res, err := s.security.Sweep(ctx, s.budget)
 	if err != nil {
 		return err
 	}
 	// Logged only when something happened. A sweep that removes nothing is the
-	// steady state, and a line every quarter of an hour saying so is how a log
-	// stops being read.
-	if scans > 0 || details > 0 {
-		s.log.InfoContext(ctx, "security cache: removed expired rows",
-			"summaries", scans, "details", details)
+	// steady state - and now the COMMON state - and a line every quarter of an
+	// hour saying so is how a log stops being read.
+	if res.Freed() {
+		s.log.InfoContext(ctx, "security cache: reclaimed space",
+			"unreferenced", res.Orphans,
+			"details", res.Details, "documents", res.Documents,
+			"bytesBefore", res.Before.Bytes(), "bytesAfter", res.After.Bytes(),
+			"budget", s.budget.Bytes)
 	}
 	return nil
 }

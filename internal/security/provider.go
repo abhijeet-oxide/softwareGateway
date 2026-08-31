@@ -64,7 +64,38 @@ type ScanOptions struct {
 	// Progress, when set, is told what is happening. May be called from several
 	// goroutines; implementations of Progress must be safe for that.
 	Progress Progress
+	// Sink, when set, receives the scanner's own bodies as they arrive.
+	//
+	// # Why the raw payload rides out on a callback rather than on the Report
+	//
+	// Because it is large, it is wanted rarely, and it must not be fetched
+	// twice. A Report is serialized into the cache on every sync, so a raw body
+	// on it would multiply the stored size of every release by ten to serve a
+	// download somebody presses once a month. A second fetch at download time
+	// is the fifteen-minute sync all over again, behind a button somebody
+	// expects to be instant.
+	//
+	// A sink is neither: the body is captured on the request that was going to
+	// happen anyway, and the caller decides whether to keep it.
+	//
+	// May be called from several goroutines.
+	Sink DocumentSink
 }
+
+// DocumentSink receives raw scanner bodies as a scan produces them.
+type DocumentSink interface {
+	// Document is handed one body. Must be safe to call from several
+	// goroutines, and must not block for long - it is called on the request
+	// path, and a sink that waits on a database write is a sink that slows the
+	// scan down.
+	Document(Document)
+}
+
+// DocumentSinkFunc adapts a function to DocumentSink.
+type DocumentSinkFunc func(Document)
+
+// Document implements DocumentSink.
+func (f DocumentSinkFunc) Document(d Document) { f(d) }
 
 // Progress reports what a retrieval is doing, so the interface can say
 // "fetching 42 of 157 from JFrog Xray" instead of spinning.

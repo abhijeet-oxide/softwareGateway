@@ -36,9 +36,24 @@ type PackageSecurityRow struct {
 	Repository string
 	Role       string
 
-	Counts        security.Counts
+	Counts security.Counts
+	// DistinctTotal collapses (CVE, package) PAIRS - openssl and libssl3
+	// carrying one advisory are two. DistinctCVEs collapses the ADVISORY -
+	// they are one.
+	//
+	// Both, and named for what they count, because the interface printed the
+	// first under the label "unique CVEs" and a reader hearing that counts the
+	// second. Two right answers to two questions is fine; one answer wearing
+	// the other's name is how a page loses a reader's trust in every number on
+	// it.
 	DistinctTotal int
+	DistinctCVEs  int
 	Coverage      security.Coverage
+
+	// Sources is one row per scanner that contributed, with how much only that
+	// scanner reported. Empty on a single-scanner deployment, where the
+	// breakdown is the release's own numbers restated.
+	Sources []security.SourceCounts
 
 	ScannedAt   *time.Time
 	SyncedAt    *time.Time
@@ -213,10 +228,11 @@ func (p *PackageSecurity) Complete(ctx context.Context, row PackageSecurityRow) 
 		INSERT INTO package_security (
 			package_id, state, error, provider, repository, role,
 			total, fixable, critical, high, medium, low, unknown,
-			fix_critical, fix_high, fix_medium, fix_low, fix_unknown, distinct_total,
+			fix_critical, fix_high, fix_medium, fix_low, fix_unknown,
+			distinct_total, distinct_cves,
 			artifacts, scanned, not_scanned, unsupported, unavailable, disabled,
 			scanned_at, synced_at, started_at, fingerprint, log, missing)
-		VALUES (?,?,?,?,?,?, ?,?,?,?,?,?,?, ?,?,?,?,?,?, ?,?,?,?,?,?, ?,?,NULL,?,?,?)
+		VALUES (?,?,?,?,?,?, ?,?,?,?,?,?,?, ?,?,?,?,?, ?,?, ?,?,?,?,?,?, ?,?,NULL,?,?,?)
 		ON CONFLICT (package_id) DO UPDATE SET
 			state = excluded.state, error = excluded.error,
 			provider = excluded.provider, repository = excluded.repository, role = excluded.role,
@@ -225,7 +241,8 @@ func (p *PackageSecurity) Complete(ctx context.Context, row PackageSecurityRow) 
 			low = excluded.low, unknown = excluded.unknown,
 			fix_critical = excluded.fix_critical, fix_high = excluded.fix_high,
 			fix_medium = excluded.fix_medium, fix_low = excluded.fix_low,
-			fix_unknown = excluded.fix_unknown, distinct_total = excluded.distinct_total,
+			fix_unknown = excluded.fix_unknown,
+			distinct_total = excluded.distinct_total, distinct_cves = excluded.distinct_cves,
 			artifacts = excluded.artifacts, scanned = excluded.scanned,
 			not_scanned = excluded.not_scanned, unsupported = excluded.unsupported,
 			unavailable = excluded.unavailable, disabled = excluded.disabled,
@@ -237,13 +254,76 @@ func (p *PackageSecurity) Complete(ctx context.Context, row PackageSecurityRow) 
 		c.Total, c.Fixable,
 		c.BySeverity.Critical, c.BySeverity.High, c.BySeverity.Medium, c.BySeverity.Low, c.BySeverity.Unknown,
 		c.FixableBySeverity.Critical, c.FixableBySeverity.High, c.FixableBySeverity.Medium,
-		c.FixableBySeverity.Low, c.FixableBySeverity.Unknown, row.DistinctTotal,
+		c.FixableBySeverity.Low, c.FixableBySeverity.Unknown,
+		row.DistinctTotal, row.DistinctCVEs,
 		cov.Artifacts, cov.Scanned, cov.NotScanned, cov.Unsupported, cov.Unavailable, cov.Disabled,
 		timeOrNil(row.ScannedAt), securityTime(now), row.Fingerprint, encodeSyncLog(row.Log), cov.Missing)
 	if err != nil {
 		return fmt.Errorf("complete security sync: %w", err)
 	}
+	return p.replaceSources(ctx, row.PackageID, row.Sources)
+}
+
+// replaceSources rewrites a release's per-scanner rows.
+//
+// Delete-then-insert rather than an upsert, because a scanner that stopped
+// contributing has to LOSE its row: a release re-synced after Anchore was
+// switched off would otherwise keep answering "Anchore found 402 nobody else
+// saw" forever, about a scan that no longer happens.
+func (p *PackageSecurity) replaceSources(
+	ctx context.Context, packageID int64, sources []security.SourceCounts,
+) error {
+	if _, err := p.db.ExecContext(ctx, p.q(
+		`DELETE FROM package_security_sources WHERE package_id = ?`), packageID); err != nil {
+		return fmt.Errorf("clear security sources: %w", err)
+	}
+	for _, src := range sources {
+		c := src.Counts
+		if _, err := p.db.ExecContext(ctx, p.q(`
+			INSERT INTO package_security_sources (
+				package_id, provider, total, fixable,
+				critical, high, medium, low, unknown,
+				distinct_cves, only_cves, artifacts)
+			VALUES (?,?,?,?, ?,?,?,?,?, ?,?,?)`),
+			packageID, src.Provider, c.Total, c.Fixable,
+			c.BySeverity.Critical, c.BySeverity.High, c.BySeverity.Medium,
+			c.BySeverity.Low, c.BySeverity.Unknown,
+			src.UniqueCVEs, src.OnlyHere, src.Artifacts); err != nil {
+			return fmt.Errorf("save security source %q: %w", src.Provider, err)
+		}
+	}
 	return nil
+}
+
+// LoadSources reads a release's per-scanner rows.
+func (p *PackageSecurity) LoadSources(
+	ctx context.Context, packageID int64,
+) ([]security.SourceCounts, error) {
+	rows, err := p.db.QueryContext(ctx, p.q(`
+		SELECT provider, total, fixable, critical, high, medium, low, unknown,
+		       distinct_cves, only_cves, artifacts
+		  FROM package_security_sources
+		 WHERE package_id = ?
+		 ORDER BY provider`), packageID)
+	if err != nil {
+		return nil, fmt.Errorf("read security sources: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+
+	var out []security.SourceCounts
+	for rows.Next() {
+		var src security.SourceCounts
+		c := &src.Counts
+		if err := rows.Scan(&src.Provider, &c.Total, &c.Fixable,
+			&c.BySeverity.Critical, &c.BySeverity.High, &c.BySeverity.Medium,
+			&c.BySeverity.Low, &c.BySeverity.Unknown,
+			&src.UniqueCVEs, &src.OnlyHere, &src.Artifacts); err != nil {
+			return nil, fmt.Errorf("scan security source: %w", err)
+		}
+		c.NonFixable = c.Total - c.Fixable
+		out = append(out, src)
+	}
+	return out, rows.Err()
 }
 
 // Fail records a sync that gave up, keeping whatever the last good result was.
@@ -346,7 +426,8 @@ func (p *PackageSecurity) load(ctx context.Context, where string, args ...any) (
 	query := p.q(`
 		SELECT package_id, state, COALESCE(error, ''), provider, repository, role,
 		       total, fixable, critical, high, medium, low, unknown,
-		       fix_critical, fix_high, fix_medium, fix_low, fix_unknown, distinct_total,
+		       fix_critical, fix_high, fix_medium, fix_low, fix_unknown,
+		       distinct_total, COALESCE(distinct_cves, 0),
 		       artifacts, scanned, not_scanned, unsupported, unavailable, disabled,
 		       scanned_at, synced_at, started_at, fingerprint, COALESCE(log, ''), COALESCE(missing, 0),
 		       COALESCE(claimed_by, ''), heartbeat_at
@@ -373,7 +454,7 @@ func (p *PackageSecurity) load(ctx context.Context, where string, args ...any) (
 			&r.Counts.BySeverity.Low, &r.Counts.BySeverity.Unknown,
 			&r.Counts.FixableBySeverity.Critical, &r.Counts.FixableBySeverity.High,
 			&r.Counts.FixableBySeverity.Medium, &r.Counts.FixableBySeverity.Low,
-			&r.Counts.FixableBySeverity.Unknown, &r.DistinctTotal,
+			&r.Counts.FixableBySeverity.Unknown, &r.DistinctTotal, &r.DistinctCVEs,
 			&r.Coverage.Artifacts, &r.Coverage.Scanned, &r.Coverage.NotScanned,
 			&r.Coverage.Unsupported, &r.Coverage.Unavailable, &r.Coverage.Disabled,
 			&scannedAt, &syncedAt, &startedAt, &r.Fingerprint, &log, &r.Coverage.Missing,
@@ -444,9 +525,11 @@ func (p *PackageSecurity) Record(ctx context.Context, res security.PackageResult
 		Role:          res.Role,
 		Counts:        res.Posture.Counts,
 		DistinctTotal: res.Posture.UniqueCounts.Total,
+		DistinctCVEs:  res.Posture.UniqueCVEs,
 		Coverage:      res.Posture.Coverage,
 		ScannedAt:     res.Posture.ScannedAt,
 		Fingerprint:   res.Fingerprint,
+		Sources:       res.Posture.BySource,
 		Log:           res.Log,
 	}
 	return p.Complete(ctx, row)

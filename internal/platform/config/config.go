@@ -143,25 +143,92 @@ type SecurityConfig struct {
 	// RequestTimeout bounds a single scanner call end to end.
 	RequestTimeout time.Duration `koanf:"requestTimeout"`
 
-	// IndexRetention is how long the LIGHTWEIGHT half of a sync lasts:
-	// statuses, counts, and the identifiers that make a finding findable - CVE,
-	// component, severity, fixed version.
+	// The three retentions are how long a row is PINNED, not how long it lives.
 	//
-	// Long, because this is not a request cache; it is the durable result of a
-	// sync, and it is what every listing, comparison and search reads. Expiring
-	// it in hours would mean a release synced this morning silently losing its
-	// counts by evening, and a search that found it at 10 and not at 4.
+	// That changed, and the change is the point. They used to be lifetimes: a
+	// row past its retention was invisible to every read and deleted by the
+	// next sweep, which is a correct cache and the wrong policy for a security
+	// index. It produced releases with counts and no findings behind them - the
+	// summary lives in `package_security` and never expired, the rows did - and
+	// the only way back was re-running a twenty-minute sync against somebody
+	// else's scanner.
+	//
+	// Now a row past its retention becomes EVICTABLE. It is still read, still
+	// exported, still counted, and it is removed only when the store is over
+	// CacheBudgetBytes and it is the least recently read thing in it. Nothing is
+	// deleted until deleting is required.
+
+	// IndexRetention pins the LIGHTWEIGHT half of a sync: statuses, counts, and
+	// the identifiers that make a finding findable - CVE, component, severity,
+	// fixed version. Long, because this is the durable result of a sync and
+	// what every listing, comparison and search reads.
 	IndexRetention time.Duration `koanf:"indexRetention"`
-	// DetailRetention is how long the HEAVY half lasts: descriptions,
-	// references, CVSS vectors.
-	//
-	// Short, because that is the part which would otherwise make this platform
-	// a second copy of a vulnerability database that re-grades itself
-	// continuously. When it expires the findings are still complete enough to
-	// list, filter, compare and export - they simply lack the paragraph.
+	// DetailRetention pins the prose half: descriptions, references, CVSS
+	// vectors. Shorter, because it is the part that would otherwise make this
+	// platform a second copy of a vulnerability database that re-grades itself
+	// continuously - and because when it does go, the findings are still
+	// complete enough to list, filter, compare and export.
 	DetailRetention time.Duration `koanf:"detailRetention"`
-	// SweepInterval is how often expired rows are collected.
+	// DocumentRetention pins the RAW scanner bodies: the vulnerability
+	// response as it arrived, the SBOM, the policy violations, the malware
+	// verdict. These are the largest thing the feature stores and the only
+	// thing an export can hand to a customer unaltered, which is why they are
+	// kept at all and why they are the first tier evicted.
+	DocumentRetention time.Duration `koanf:"documentRetention"`
+
+	// CacheBudgetBytes is the ceiling for the two regenerable tiers - the
+	// stored (compressed) detail payloads and raw documents.
+	//
+	// ZERO MEANS NO CEILING, and that is the default. Forgetting a security
+	// answer is the surprising behaviour and should have to be asked for; a
+	// deployment that has not thought about disk gets a store that keeps
+	// everything, and one that has sets a number here.
+	//
+	// The index tier is deliberately not in the budget. It is bytes per
+	// artifact and rebuilding it is minutes of somebody else's scanner, so a
+	// budget that could evict it would be a budget somebody set by mistake.
+	CacheBudgetBytes int64 `koanf:"cacheBudgetBytes"`
+
+	// SweepInterval is how often the store is measured against the budget.
 	SweepInterval time.Duration `koanf:"sweepInterval"`
+
+	// Documents names the extra scanner bodies a sync retrieves per artifact,
+	// beyond the vulnerability response.
+	//
+	// Valid values: policy, malware, sbom. The vulnerability response is always
+	// kept and never needs naming - it is captured from the request the scan
+	// was making anyway, and costs nothing.
+	//
+	// The others cost a REQUEST PER IMAGE, which on a 157-image release is 157
+	// more round trips against the scanner somebody is already waiting on. So:
+	//
+	//   - policy and malware are on by default. They are one request between
+	//     them (malware is the malicious subset of the policy verdict), they
+	//     are small, and a malware hit is the one finding a release manager
+	//     must not have to go looking for.
+	//   - sbom is OFF by default. It is minutes and tens of megabytes per
+	//     image, it is wanted for an export rather than for a page, and it is
+	//     fetched on demand when somebody presses the button.
+	Documents []string `koanf:"documents"`
+}
+
+// SecurityDocumentKinds is the configured list, defaulted and validated.
+//
+// Unknown values are dropped rather than refused. A typo in a list of optional
+// extras must not stop a Coordinator starting - the failure it would cause is
+// an outage, and the failure it prevents is a missing tab.
+func (c SecurityConfig) SecurityDocumentKinds() []string {
+	if c.Documents == nil {
+		return []string{"policy", "malware"}
+	}
+	out := make([]string, 0, len(c.Documents))
+	for _, raw := range c.Documents {
+		switch strings.ToLower(strings.TrimSpace(raw)) {
+		case "policy", "malware", "sbom", "vulnerabilities":
+			out = append(out, strings.ToLower(strings.TrimSpace(raw)))
+		}
+	}
+	return out
 }
 
 // FilesConfig governs the file-content routes - looking inside a release at
@@ -408,12 +475,27 @@ func Defaults() SystemConfig {
 				BatchSize:      50,
 				RequestTimeout: 60 * time.Second,
 
-				// Thirty days and a day. The gap is the point - see the field
-				// comments: one half is the durable index every read serves,
-				// the other is prose this platform must not become a home for.
-				IndexRetention:  30 * 24 * time.Hour,
-				DetailRetention: 24 * time.Hour,
-				SweepInterval:   15 * time.Minute,
+				// Thirty days, seven days, thirty days - and none of them a
+				// deadline. Past its retention a row is evictable, not gone,
+				// and it goes only when the budget below says something has to.
+				//
+				// The detail tier is pinned for a week rather than a day
+				// because a day was chosen when expiry meant deletion, and the
+				// cost of a re-fetch is a scanner round trip per image. It is
+				// the first thing to give when disk is short and there is no
+				// reason for it to be the first thing to give when it is not.
+				IndexRetention:    30 * 24 * time.Hour,
+				DetailRetention:   7 * 24 * time.Hour,
+				DocumentRetention: 30 * 24 * time.Hour,
+				// No ceiling by default. See the field comment: a deployment
+				// that has not thought about this gets a store that keeps its
+				// answers.
+				CacheBudgetBytes: 0,
+				SweepInterval:    15 * time.Minute,
+
+				// The gate and the malware verdict, which are one request
+				// between them. Not the SBOM: see the field comment.
+				Documents: []string{"policy", "malware"},
 			},
 		},
 		Worker: WorkerConfig{

@@ -168,6 +168,19 @@ func (s harnessSecurityStore) ReportsFor(
 	return s.reports.ReportsFor(ctx, scope, refs)
 }
 
+func (s harnessSecurityStore) LoadDocuments(
+	ctx context.Context, scope security.Scope,
+	refs []security.ArtifactRef, kinds []security.DocumentKind,
+) (map[string]map[security.DocumentKind]security.Document, error) {
+	return s.reports.LoadDocuments(ctx, scope, refs, kinds)
+}
+
+func (s harnessSecurityStore) DocumentSummaries(
+	ctx context.Context, scope security.Scope, refs []security.ArtifactRef,
+) (map[string][]security.DocumentSummary, error) {
+	return s.reports.DocumentSummaries(ctx, scope, refs)
+}
+
 // A release nobody has synced is not a clean release. It is the state the whole
 // feature exists to keep distinct, and the response has to offer the sync.
 func TestPackageSecurityNeverSynced(t *testing.T) {
@@ -492,7 +505,7 @@ func TestSecurityExportCSVCarriesEveryRowsWholeAddress(t *testing.T) {
 	for i, name := range rows[0] {
 		index[name] = i
 	}
-	for _, column := range []string{"Product", "Release", "Artifact", "CVE", "Severity", "Package", "Fixable"} {
+	for _, column := range []string{"Product", "Release", "Image", "CVE", "Severity", "Package", "Fixable"} {
 		if _, ok := index[column]; !ok {
 			t.Errorf("export has no %q column, so a row cannot be acted on out of context", column)
 		}

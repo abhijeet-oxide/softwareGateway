@@ -230,9 +230,15 @@ type Deps struct {
 	SecurityStore SecurityStore
 	// SecurityIndex is the searchable record of what syncs have recorded.
 	SecurityIndex SecurityIndex
-	// SecurityRetention is how long a sync's two tiers are kept, from the
-	// system configuration. The zero value means the store's own defaults.
+	// SecurityRetention is how long a sync's tiers are PINNED, from the system
+	// configuration. Past it a row is evictable rather than gone. The zero
+	// value means the store's own defaults.
 	SecurityRetention security.CacheTTL
+	// SecurityDocuments generates a scanner body that is not held - which in
+	// practice means an SBOM, the one document a sync deliberately does not
+	// fetch. Nil disables the on-demand path and leaves the download serving
+	// only what a sync captured.
+	SecurityDocuments SecurityDocuments
 }
 
 // Server wires the router.
@@ -424,6 +430,11 @@ func (s *Server) routes() chi.Router {
 			if s.deps.SecurityStore != nil {
 				r.Get("/products/{product}/packages/{package}/security",
 					s.handlePackageSecurity)
+				// One scanner body for one image: the SBOM behind the button
+				// beside the Xray link, and the raw responses somebody
+				// forwards to a customer.
+				r.Get("/products/{product}/packages/{package}/security/documents/{kind}",
+					s.handleSecurityDocument)
 				r.Get("/products/{product}/packages/{package}/security/export",
 					s.handleExportPackageSecurity)
 				r.Get("/products/{product}/packages/{package}/security/compare/export",

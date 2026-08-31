@@ -18,7 +18,7 @@ func sampleBook() Book {
 			{Name: "Summary", Headers: []string{"Field", "Value"}, Rows: [][]string{
 				{"Verdict", "better"}, {"Resolved", "8"},
 			}},
-			{Name: "Findings", Headers: []string{"CVE", "Severity", "Count"}, Rows: [][]string{
+			{Name: "Findings", Primary: true, Headers: []string{"CVE", "Severity", "Count"}, Rows: [][]string{
 				{"CVE-2024-3094", "critical", "34"},
 				{"CVE-2024-21887", "medium", "9"},
 			}},
@@ -31,6 +31,7 @@ func TestParseFormatAcceptsWhatPeopleType(t *testing.T) {
 		"": FormatCSV, "csv": FormatCSV, "CSV": FormatCSV,
 		"xlsx": FormatXLSX, "excel": FormatXLSX, "xls": FormatXLSX,
 		"json": FormatJSON,
+		"zip":  FormatZIP, "bundle": FormatZIP,
 	} {
 		got, err := ParseFormat(in)
 		if err != nil || got != want {
@@ -42,9 +43,13 @@ func TestParseFormatAcceptsWhatPeopleType(t *testing.T) {
 	}
 }
 
-// CSV holds one table, so it writes the DETAILED sheet - the one somebody
+// CSV holds one table, so it writes the PRIMARY sheet - the one somebody
 // exporting to CSV came for.
-func TestWriteCSVEmitsTheDetailedSheet(t *testing.T) {
+//
+// It used to be "the last sheet", and that broke as soon as a book carried four
+// data tables: a CSV export of a release's vulnerabilities handed back whichever
+// table happened to be assembled last.
+func TestWriteCSVEmitsThePrimarySheet(t *testing.T) {
 	var buf bytes.Buffer
 	if err := Write(&buf, FormatCSV, sampleBook()); err != nil {
 		t.Fatal(err)
@@ -63,7 +68,7 @@ func TestWriteCSVEmitsTheDetailedSheet(t *testing.T) {
 		t.Fatalf("got %d rows, want a header and two findings", len(rows))
 	}
 	if rows[0][0] != "CVE" {
-		t.Errorf("first sheet was written instead of the last: %v", rows[0])
+		t.Errorf("a sheet other than the primary one was written: %v", rows[0])
 	}
 }
 

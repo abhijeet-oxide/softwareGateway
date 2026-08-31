@@ -10,23 +10,42 @@ import (
 	"github.com/abhijeet-oxide/softwareGateway/internal/security"
 )
 
-// normalizeArtifact turns one Xray artifact summary into normalized findings.
+// normalizeArtifact turns one Xray artifact summary into normalized findings,
+// with the malware separated out.
 //
 // This function is the whole width of the JFrog/Xray boundary. Above it nothing
 // knows what an `issue_id` is, that severities are capitalised, that a component
 // identifier looks like `deb://openssl:1.1.1n-0+deb11u3`, or that one Xray issue
 // can name several CVEs and several components at once. Below it, nothing knows
 // what a release is.
-func normalizeArtifact(a xrayArtifact) []security.Finding {
+//
+// # Why malware comes back on its own return value
+//
+// Because it is a different decision. Ninety thousand vulnerabilities are a
+// backlog somebody works through over quarters; one malicious package is a
+// release that does not ship tonight. Returned in the same list it is row
+// 43,712 of a table sorted by severity, and the whole point of noticing it is
+// lost.
+//
+// Xray does not have a `malicious` issue type. It reports a malicious package
+// as a security issue whose summary begins "Malicious Package", which is a
+// convention rather than a schema - so it is matched as one, and the matching
+// is deliberately narrow. A false negative here puts a malware hit in the
+// vulnerabilities table, where it is still visible; a loose match would move
+// ordinary CVEs into a tab that is supposed to mean "stop".
+func normalizeArtifact(a xrayArtifact) (findings, malware []security.Finding) {
 	var out []security.Finding
+	var bad []security.Finding
 
 	for _, issue := range a.Issues {
 		// License issues share the payload with security ones and are not
 		// vulnerabilities. Including them would inflate every count on every
 		// page with something that is not a security finding at all.
-		if issue.IssueType != "" && !strings.EqualFold(issue.IssueType, "security") {
+		if issue.IssueType != "" && !strings.EqualFold(issue.IssueType, "security") &&
+			!isMalwareIssueType(issue.IssueType) {
 			continue
 		}
+		malicious := isMaliciousIssue(issue)
 
 		severity := security.ParseSeverity(issue.Severity)
 		published := parseXrayTime(issue.Created)
@@ -58,6 +77,10 @@ func normalizeArtifact(a xrayArtifact) []security.Finding {
 				Provider:    providerName,
 				Policy:      issue.WatchName,
 			}
+			if malicious {
+				bad = append(bad, f)
+				return
+			}
 			out = append(out, f)
 		}
 
@@ -82,8 +105,52 @@ func normalizeArtifact(a xrayArtifact) []security.Finding {
 		}
 	}
 
+	// Collapsed before it leaves the boundary, because the count and the stored
+	// row have to come from one list. One issue naming three CVEs across four
+	// component entries expands to twelve findings, and Xray routinely lists the
+	// same package at the same version twice - once per impact path - so two of
+	// the twelve are one row. Counting the twelve and storing eleven is how a
+	// release reported 90,808 findings on one page and 86,085 on another.
+	out = security.DedupeFindings(out)
 	security.SortFindings(out)
-	return out
+	bad = security.DedupeFindings(bad)
+	security.SortFindings(bad)
+	return out, bad
+}
+
+// maliciousPrefixes are how Xray spells a malicious package in an issue
+// summary. Prefixes rather than substrings: "Malicious Package: evil-lib" is
+// one, and an advisory describing how a CVE lets an attacker install malicious
+// packages is not.
+var maliciousPrefixes = []string{
+	"malicious package",
+	"malicious component",
+}
+
+// isMaliciousIssue reports whether an issue is a malware hit rather than a
+// vulnerability.
+func isMaliciousIssue(issue xrayIssue) bool {
+	if isMalwareIssueType(issue.IssueType) {
+		return true
+	}
+	summary := strings.ToLower(strings.TrimSpace(issue.Summary))
+	for _, prefix := range maliciousPrefixes {
+		if strings.HasPrefix(summary, prefix) {
+			return true
+		}
+	}
+	return false
+}
+
+// isMalwareIssueType recognises the issue types some Xray versions use for
+// malware directly, rather than through the summary convention.
+func isMalwareIssueType(t string) bool {
+	switch strings.ToLower(strings.TrimSpace(t)) {
+	case "malicious", "malware", "malicious_package":
+		return true
+	default:
+		return false
+	}
 }
 
 // issueComponents is the vulnerable packages, from wherever this Xray put them.

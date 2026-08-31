@@ -120,6 +120,80 @@ type SecurityFinding struct {
 
 	Provider string `json:"provider"`
 	Policy   string `json:"policy,omitempty"`
+	// Sources names every scanner that reported this finding.
+	//
+	// Provider says which row this came from; Sources says who agrees. On a
+	// deployment with one scanner it holds one name and the interface hides the
+	// column - a column that says "JFrog Xray" on every row is a column that
+	// costs width and says nothing.
+	Sources []string `json:"sources,omitempty"`
+}
+
+// SecurityViolation is one breach of a configured policy.
+//
+// Not a finding with a policy field. A finding is "this image contains
+// CVE-2026-31789"; a violation is "your Production watch forbids critical
+// fixable issues and this image has four" - it exists because somebody wrote a
+// rule, it disappears when the rule changes, and it can be raised against a
+// licence with no CVE anywhere near it.
+type SecurityViolation struct {
+	ID string `json:"id,omitempty"`
+	// Type is security | license | operational_risk, as the scanner grades it.
+	Type          string `json:"type,omitempty"`
+	Severity      string `json:"severity"`
+	SeverityLabel string `json:"severityLabel"`
+
+	// Watch, Policy and Rule are the rule's address. All three, because "a
+	// policy violation" with no policy named is a row nobody can act on.
+	Watch  string `json:"watch,omitempty"`
+	Policy string `json:"policy,omitempty"`
+	Rule   string `json:"rule,omitempty"`
+
+	Summary     string `json:"summary,omitempty"`
+	Description string `json:"description,omitempty"`
+
+	CVE       string            `json:"cve,omitempty"`
+	Component SecurityComponent `json:"component"`
+	FixedIn   []string          `json:"fixedIn,omitempty"`
+
+	Created  string `json:"created,omitempty"`
+	Provider string `json:"provider,omitempty"`
+}
+
+// SecurityDocumentRef says that a scanner body is held, without carrying it.
+//
+// A page draws a download button per image per kind - 157 images times four
+// kinds - and reading the bodies to decide whether to draw a button would be
+// hundreds of megabytes to render a row of icons.
+type SecurityDocumentRef struct {
+	// Kind is vulnerabilities | sbom | policy | malware.
+	Kind  string `json:"kind"`
+	Label string `json:"label"`
+	// Available is false for a body the scanner was asked for and did not
+	// have, which is worth saying: the alternative is a button that silently
+	// downloads nothing.
+	Available   bool   `json:"available"`
+	ContentType string `json:"contentType,omitempty"`
+	Bytes       int    `json:"bytes,omitempty"`
+	FetchedAt   string `json:"fetchedAt,omitempty"`
+	Message     string `json:"message,omitempty"`
+	// URL downloads it.
+	URL string `json:"url,omitempty"`
+}
+
+// SecuritySourceCounts is one scanner's contribution.
+//
+// OnlyHere is the number the comparison exists for: advisories this scanner
+// reported and no other did. Sent rather than derived, because the client that
+// needs it most is the one rendering a summary without any findings loaded.
+type SecuritySourceCounts struct {
+	Provider string `json:"provider"`
+	Label    string `json:"label"`
+
+	Counts     SecurityCounts `json:"counts"`
+	UniqueCVEs int            `json:"uniqueCves"`
+	OnlyHere   int            `json:"onlyHere"`
+	Artifacts  int            `json:"artifacts"`
 }
 
 // SecurityStatusNotFound is a report status the SCANNER never returns: it is
@@ -144,6 +218,18 @@ type SecurityReport struct {
 
 	Findings []SecurityFinding `json:"findings,omitempty"`
 	Counts   SecurityCounts    `json:"counts"`
+
+	// Malware is what the scanner found that is not a vulnerability. Its own
+	// list rather than findings with a flag, because it is read by a different
+	// person for a different reason: a vulnerability count is a backlog, a
+	// malware hit is a release that does not ship.
+	Malware []SecurityFinding `json:"malware,omitempty"`
+	// Violations is what the scanner's configured policies say - the gate,
+	// rather than the backlog.
+	Violations []SecurityViolation `json:"violations,omitempty"`
+	// Documents are the scanner bodies held for this image, named and measured
+	// but not carried.
+	Documents []SecurityDocumentRef `json:"documents,omitempty"`
 
 	ScannedAt   string `json:"scannedAt,omitempty"`
 	RetrievedAt string `json:"retrievedAt,omitempty"`
@@ -302,9 +388,20 @@ type PackageSecurityResponse struct {
 	Fingerprint string `json:"fingerprint,omitempty"`
 	// Detail says whether Reports carry findings or counts alone.
 	Detail bool `json:"detail"`
-	// DistinctTotal collapses the same (CVE, component) across artifacts, which
-	// is the number to quote for "how many distinct problems".
+	// DistinctTotal collapses the same (CVE, component) PAIR across artifacts;
+	// DistinctCVEs collapses the advisory alone.
+	//
+	// Both, and named for what they count. The interface printed the first
+	// under the label "unique CVEs", and a reader hearing that counts the
+	// second: openssl and libssl3 carrying one advisory are two things to
+	// upgrade and one advisory to read.
 	DistinctTotal int `json:"distinctTotal"`
+	DistinctCVEs  int `json:"distinctCves"`
+
+	// Sources is one entry per scanner that contributed, present only where
+	// more than one did. A segmented control with a single position is a
+	// control that should not be drawn.
+	Sources []SecuritySourceCounts `json:"sources,omitempty"`
 }
 
 // PackageSecuritySummary is a release's vulnerability counts, for a listing.
@@ -329,8 +426,10 @@ type PackageSecuritySummary struct {
 	Stalled bool `json:"stalled,omitempty"`
 
 	Counts SecurityCounts `json:"counts"`
-	// DistinctTotal collapses the same (CVE, component) across artifacts.
+	// DistinctTotal collapses the same (CVE, component) pair across artifacts;
+	// DistinctCVEs collapses the advisory alone.
 	DistinctTotal int `json:"distinctTotal"`
+	DistinctCVEs  int `json:"distinctCves"`
 	// Complete is whether every scannable artifact has a result. False means
 	// the counts cover only part of the release.
 	Complete bool `json:"complete"`

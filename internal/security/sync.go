@@ -99,6 +99,10 @@ type SyncRequest struct {
 	// release's own tree.
 	Artifacts []ArtifactRef
 	TTL       CacheTTL
+	// Documents are the extra scanner bodies to retrieve alongside the
+	// findings. See Request.Documents: each named kind is a request per
+	// artifact, so this is the deployment's choice and not the provider's.
+	Documents []DocumentKind
 }
 
 // SyncStatus is what a caller is told when it asks for a sync.
@@ -167,9 +171,24 @@ type Syncer struct {
 	// than the constant so a test can watch a beat without waiting for one.
 	beatEvery time.Duration
 
+	// documents are the extra scanner bodies every sync retrieves. A property
+	// of the deployment rather than of a request, because "how hard do we push
+	// this scanner" is an operator's decision and a per-request switch would
+	// let a page turn a two-minute sync into a twenty-minute one.
+	documents []DocumentKind
+
 	mu       sync.Mutex
 	inFlight map[int64]*runningSync
 }
+
+// WithDocuments sets the extra bodies every sync retrieves.
+func (s *Syncer) WithDocuments(kinds []DocumentKind) *Syncer {
+	s.documents = kinds
+	return s
+}
+
+// Documents is what a sync will retrieve beyond the findings.
+func (s *Syncer) Documents() []DocumentKind { return s.documents }
 
 // runningSync is one sync this replica is running: what it will say about
 // itself, and the handle that stops it.
@@ -507,10 +526,11 @@ func (s *Syncer) run(
 		// Detail, always. A sync exists to fill the index that search and
 		// comparison read; counts alone would leave both of them empty and
 		// force the scanner query back onto the page that reads them.
-		Detail:   true,
-		Refresh:  true,
-		TTL:      req.TTL,
-		Progress: progress,
+		Detail:    true,
+		Refresh:   true,
+		TTL:       req.TTL,
+		Documents: documentsOr(req.Documents, s.documents),
+		Progress:  progress,
 	})
 	if err != nil {
 		// A sync somebody STOPPED is not a sync that failed, and must not
@@ -616,6 +636,19 @@ func (s *Syncer) run(
 		"scanned", res.Posture.Coverage.Scanned,
 		"vulnerabilities", res.Posture.Counts.Total,
 		"fromCache", res.FromCache, "fetched", res.Fetched)
+}
+
+// documentsOr prefers the request's own list, falling back to the syncer's.
+//
+// A request that names nothing means "whatever this deployment does", not
+// "nothing" - the alternative is every caller having to remember to pass the
+// configured list through, and the one that forgets ships a release with an
+// empty malware tab and no indication why.
+func documentsOr(request, configured []DocumentKind) []DocumentKind {
+	if len(request) > 0 {
+		return request
+	}
+	return configured
 }
 
 // fail records a run that gave up, on a context of its own.

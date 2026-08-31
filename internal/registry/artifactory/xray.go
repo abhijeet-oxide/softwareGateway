@@ -271,9 +271,25 @@ type artifactSummaryRequest struct {
 	Paths     []string `json:"paths,omitempty"`
 }
 
+// artifactSummaryResponse keeps each artifact's entry BOTH decoded and as it
+// arrived.
+//
+// # Why the raw bytes are worth carrying
+//
+// Because an export has to be able to hand somebody "what Xray said about this
+// image", and a body regenerated from the normalized model is a different
+// document with the same CVE numbers in it. Normalization drops what nothing in
+// this platform reads - vendor-specific grading, impact paths, extended
+// references - and those are exactly the fields a customer's own tooling looks
+// for.
+//
+// Kept per ARTIFACT rather than per response, because a response covers a batch
+// of fifty and the export tree is one directory per image. Re-marshalling the
+// decoded struct would lose the fields it does not model; re-encoding the
+// RawMessage loses nothing.
 type artifactSummaryResponse struct {
-	Artifacts []xrayArtifact   `json:"artifacts"`
-	Errors    []xraySummaryErr `json:"errors"`
+	Artifacts []json.RawMessage `json:"artifacts"`
+	Errors    []xraySummaryErr  `json:"errors"`
 }
 
 type xraySummaryErr struct {
@@ -388,15 +404,28 @@ func (c *XrayClient) Ping(ctx context.Context) error {
 	return nil
 }
 
+// summaryResult is one batch's answer: decoded, raw, and what was declined.
+type summaryResult struct {
+	// Found is the decoded artifacts, keyed by the checksum asked about.
+	Found map[string]xrayArtifact
+	// Raw is each artifact's entry exactly as Xray sent it, same keys. Kept so
+	// an export can ship the scanner's own words; see artifactSummaryResponse.
+	Raw map[string]json.RawMessage
+	// NotIndexed is what Xray declined to answer for and why. An ANSWER, not a
+	// failure: losing it would make an unindexed artifact indistinguishable
+	// from a clean one.
+	NotIndexed map[string]string
+}
+
 // ArtifactSummary asks Xray about a batch of artifacts, by checksum.
-//
-// Returns results keyed by the checksum asked about, plus the identifiers Xray
-// declined to answer for and what it said. The second return value is what
-// becomes StatusNotScanned - it is an ANSWER, not a failure, and losing it
-// would make an unindexed artifact indistinguishable from a clean one.
-func (c *XrayClient) ArtifactSummary(ctx context.Context, checksums []string) (map[string]xrayArtifact, map[string]string, error) {
+func (c *XrayClient) ArtifactSummary(ctx context.Context, checksums []string) (summaryResult, error) {
+	out := summaryResult{
+		Found:      map[string]xrayArtifact{},
+		Raw:        map[string]json.RawMessage{},
+		NotIndexed: map[string]string{},
+	}
 	if len(checksums) == 0 {
-		return map[string]xrayArtifact{}, map[string]string{}, nil
+		return out, nil
 	}
 
 	req := artifactSummaryRequest{Checksums: normalizeChecksums(checksums)}
@@ -407,27 +436,33 @@ func (c *XrayClient) ArtifactSummary(ctx context.Context, checksums []string) (m
 		// its whole estate unscannable because of an API version.
 		if c.fallBackToV1(err) {
 			if err := c.do(ctx, http.MethodPost, summaryPathV1, req, &resp); err != nil {
-				return nil, nil, err
+				return out, err
 			}
 		} else {
-			return nil, nil, err
+			return out, err
 		}
 	}
 
-	byChecksum := make(map[string]xrayArtifact, len(resp.Artifacts))
-	for _, a := range resp.Artifacts {
+	for _, raw := range resp.Artifacts {
+		var a xrayArtifact
+		if err := json.Unmarshal(raw, &a); err != nil {
+			// One malformed entry in a batch of fifty is one artifact reported
+			// as not answered for, not a batch lost. The other forty-nine are
+			// perfectly good answers.
+			continue
+		}
 		key := strings.ToLower(strings.TrimSpace(a.General.SHA256))
 		if key == "" {
 			continue
 		}
-		byChecksum[key] = a
+		out.Found[key] = a
+		out.Raw[key] = raw
 	}
 
-	notIndexed := make(map[string]string, len(resp.Errors))
 	for _, e := range resp.Errors {
-		notIndexed[strings.ToLower(strings.TrimSpace(e.Identifier))] = e.Error
+		out.NotIndexed[strings.ToLower(strings.TrimSpace(e.Identifier))] = e.Error
 	}
-	return byChecksum, notIndexed, nil
+	return out, nil
 }
 
 // summaryPath is v2 until a platform says it does not have it.

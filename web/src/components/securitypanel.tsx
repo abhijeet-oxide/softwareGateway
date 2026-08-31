@@ -8,15 +8,20 @@ import {
 // The working-surface table: resizable, reorderable, pinnable columns whose
 // layout each person keeps. See `tablekit/README.md` for which tables get it.
 import { Table as DataTable } from '../tablekit'
-import { CopyOutlined, ExportOutlined, LoadingOutlined } from '../icons'
+import { CopyOutlined, DownloadOutlined, ExportOutlined, LoadingOutlined } from '../icons'
 import {
   packageSecurityExportUrl, useCancelPackageSecuritySync, usePackageSecurity,
   useSyncPackageSecurity,
 } from '../api/queries'
 import { SEVERITIES } from '../api/types'
 import type {
-  PackageSecurityResponse, SecurityCounts, SecurityFinding, SecurityReport, SecuritySeverityCounts, Severity,
+  PackageSecurityResponse, SecurityCounts, SecurityDocumentRef, SecurityFinding, SecurityReport,
+  SecuritySeverityCounts, SecurityViolation, Severity,
 } from '../api/types'
+import {
+  anySource, isAnySource, matchesSource, SourceControls,
+} from './securitysources'
+import type { SourceFilter } from './securitysources'
 import {
   ComponentCell, CveCell, DescriptionCell, FindingsEmpty, FixCell, ScanStatusTag,
   SecurityExportMenu, SecurityNotConfigured, SecurityProgressPanel, SecurityStateNotice,
@@ -239,14 +244,19 @@ function NeverSynced({ onSync, pending }: { onSync: () => void; pending?: boolea
  *
  * # Why not the stored counts
  *
- * Because they answer a subtly different question and the page put both on
- * screen at once. The card read "8,479 · 2,805 unique CVEs" over a table
+ * Because they used to answer a subtly different question and the page put both
+ * on screen at once. The card read "8,479 · 2,805 unique CVEs" over a table
  * offering "Unique CVEs (1,499)" and "All findings (8,152)", and none of the
- * four numbers matched: the stored total is what the sync summed, and the
- * stored distinct total counts (CVE, package) PAIRS - openssl and libssl3 with
- * the same advisory are two - where a reader hearing "unique CVEs" counts one.
+ * four numbers matched.
  *
- * So the cards are computed from the findings, and fall back to the stored
+ * Two of those disagreements are now fixed on the server. The stored total and
+ * the stored rows come from one list - they differed by 4,723 findings on one
+ * release because the row's key carried no package version - and `distinctCves`
+ * is stored beside `distinctTotal` rather than the second being printed under
+ * the first's name.
+ *
+ * The third is structural and stays: the cards are computed from the rows on
+ * screen so they agree with the tables under them, and fall back to the stored
  * counts only when the per-artifact rows are not loaded. A page that quotes two
  * different totals teaches a reader to trust neither.
  */
@@ -274,7 +284,9 @@ function summarise(data: PackageSecurityResponse) {
 
   if (total === 0) {
     return {
-      unique: data.distinctTotal,
+      // The advisory count, not the (CVE, package) pair count. They are two
+      // right answers to two questions and this card asks the first one.
+      unique: data.distinctCves || data.distinctTotal,
       total: data.counts.total,
       fixable: data.counts.fixable,
       nonFixable: data.counts.nonFixable,
@@ -663,6 +675,11 @@ function kindOf(kind?: string): ArtifactKind {
 /** One row of the flattened findings table. */
 type FlatFinding = SecurityFinding & { artifactName: string; artifactTag?: string; artifactDigest?: string }
 
+/** One row of the policy table: a violation, and the image it was raised on. */
+type FlatViolation = SecurityViolation & {
+  artifactName: string; artifactTag?: string; artifactDigest?: string
+}
+
 /** The counts one image's row shows, rebuilt from a (possibly filtered) findings list. */
 function summariseCounts(findings: SecurityFinding[]): SecurityCounts {
   const zero = (): SecuritySeverityCounts => ({ critical: 0, high: 0, medium: 0, low: 0, unknown: 0 })
@@ -685,8 +702,18 @@ function summariseCounts(findings: SecurityFinding[]): SecurityCounts {
   }
 }
 
-/** Which of the three tables is on screen. */
-export type FindingsTab = 'vulnerabilities' | 'artifacts' | 'problems'
+/**
+ * Which table is on screen.
+ *
+ * Malware and policy are TABS rather than filters on the vulnerabilities table,
+ * because they are different questions asked by different people. A
+ * vulnerability count is a backlog somebody works through over quarters; a
+ * malware hit is a release that does not ship tonight; a policy violation is a
+ * gate that has already made its decision. Folding them together put the one
+ * finding a release manager must not miss at row 43,712 of a table sorted by
+ * severity.
+ */
+export type FindingsTab = 'vulnerabilities' | 'artifacts' | 'malware' | 'policy' | 'problems'
 
 /**
  * The detailed view: artifacts, and every finding in them.
@@ -712,6 +739,16 @@ function FindingsSection({ data, product, reference, repository, tab, onTabChang
   const [kind, setKind] = useState<ArtifactKind>('all')
   const [grouping, setGrouping] = useState<'unique' | 'all'>('unique')
   const [q, setQ] = useState('')
+  /*
+    Which scanners a finding has to have come from.
+    Inert on a single-scanner deployment - the control that sets it is not
+    drawn, and `anySource` matches everything - so nothing below has to ask
+    whether a second scanner exists before filtering.
+  */
+  const [source, setSource] = useState<SourceFilter>(anySource)
+
+  /** The scanners that contributed. Empty or single means no comparison. */
+  const sources = data.sources ?? []
 
   /** The artifact kinds this release actually holds. */
   const kinds = useMemo(() => {
@@ -750,12 +787,13 @@ function FindingsSection({ data, product, reference, repository, tab, onTabChang
    * "No fix" showing 2,930 vulnerabilities under a total of 107 fixable ones.
    */
   const filteredImageReports = useMemo(() => {
-    if (severities.length === 0 && fixability === 'all' && !q) return imageReports
+    if (severities.length === 0 && fixability === 'all' && !q && isAnySource(source)) return imageReports
     return imageReports.map((r) => {
       const kept = (r.findings ?? []).filter((f) => {
         if (severities.length > 0 && !severities.includes(f.severity)) return false
         if (fixability === 'fixable' && !f.fixable) return false
         if (fixability === 'non-fixable' && f.fixable) return false
+        if (!matchesSource(f, source)) return false
         if (q) {
           const hay = `${f.cve ?? ''} ${f.id ?? ''} ${f.component.name} ${r.artifact.name} ${f.summary ?? ''}`
             .toLowerCase()
@@ -766,7 +804,7 @@ function FindingsSection({ data, product, reference, repository, tab, onTabChang
       if (kept.length === (r.findings ?? []).length) return r
       return { ...r, findings: kept, counts: summariseCounts(kept) }
     })
-  }, [imageReports, severities, fixability, q])
+  }, [imageReports, severities, fixability, q, source])
 
   const artifactCounts = useMemo<KindCounts>(
     () => ({ all: imageReports.length, image: imageReports.length, chart: 0, file: 0 }),
@@ -842,12 +880,65 @@ function FindingsSection({ data, product, reference, repository, tab, onTabChang
     if (severities.length > 0 && !severities.includes(f.severity)) return false
     if (fixability === 'fixable' && !f.fixable) return false
     if (fixability === 'non-fixable' && f.fixable) return false
+    if (!matchesSource(f, source)) return false
     if (q) {
       const hay = `${f.cve ?? ''} ${f.id ?? ''} ${f.component.name} ${f.artifactName} ${f.summary ?? ''}`.toLowerCase()
       if (!hay.includes(q.toLowerCase())) return false
     }
     return true
-  }), [findings, severities, fixability, q])
+  }), [findings, severities, fixability, q, source])
+
+  /*
+   * Malware, flattened the same way findings are.
+   *
+   * Filtered by the search box and the source control but NOT by severity or
+   * fixability: a malicious package that the scanner graded "medium" and cannot
+   * offer a fix for is still a malicious package, and hiding it because
+   * somebody was filtering for critical fixable issues is the one way this tab
+   * could do harm.
+   */
+  const malware = useMemo<FlatFinding[]>(() => {
+    const out: FlatFinding[] = []
+    for (const report of reports) {
+      for (const f of report.malware ?? []) {
+        if (!matchesSource(f, source)) continue
+        if (q) {
+          const hay = `${f.cve ?? ''} ${f.id ?? ''} ${f.component.name} ${report.artifact.name} ${f.summary ?? ''}`
+            .toLowerCase()
+          if (!hay.includes(q.toLowerCase())) continue
+        }
+        out.push({
+          ...f,
+          artifactName: report.artifact.name,
+          artifactTag: report.artifact.tag,
+          artifactDigest: report.artifact.digest,
+        })
+      }
+    }
+    return out
+  }, [reports, q, source])
+
+  /** Policy violations, flattened, with the image each belongs to. */
+  const violations = useMemo<FlatViolation[]>(() => {
+    const out: FlatViolation[] = []
+    for (const report of reports) {
+      for (const v of report.violations ?? []) {
+        if (severities.length > 0 && !severities.includes(v.severity)) continue
+        if (q) {
+          const hay = `${v.cve ?? ''} ${v.id ?? ''} ${v.component.name} ${report.artifact.name} `
+            + `${v.watch ?? ''} ${v.policy ?? ''} ${v.summary ?? ''}`
+          if (!hay.toLowerCase().includes(q.toLowerCase())) continue
+        }
+        out.push({
+          ...v,
+          artifactName: report.artifact.name,
+          artifactTag: report.artifact.tag,
+          artifactDigest: report.artifact.digest,
+        })
+      }
+    }
+    return out
+  }, [reports, severities, q])
 
   const vulnerabilityTotal = useMemo(
     () => reports.reduce((sum, r) => sum + r.counts.total, 0),
@@ -932,6 +1023,55 @@ function FindingsSection({ data, product, reference, repository, tab, onTabChang
   }
 
   /*
+   * Which table the export's "this table" item means.
+   *
+   * Named here rather than inside the menu, because the menu does not know
+   * which tab is open and a download that came back with a different table
+   * from the one on screen is the complaint this answers.
+   */
+  const exportTable = tab === 'artifacts'
+    ? 'images'
+    : tab === 'malware' || tab === 'policy'
+      ? tab
+      : grouping === 'unique' ? 'unique' : 'findings'
+  const exportTableLabel = tab === 'artifacts'
+    ? 'Images'
+    : tab === 'malware'
+      ? 'Malware'
+      : tab === 'policy'
+        ? 'Policy violations'
+        : grouping === 'unique' ? 'Unique CVEs' : 'All findings'
+
+  /*
+   * Whether the scanner was ASKED about malware and policy for this release.
+   *
+   * A sync only fetches what it is configured to fetch, so a release synced on
+   * a Coordinator with `security.documents: []` has neither - and a tab reading
+   * "Malware (0)" over that release would be a claim nobody made. The presence
+   * of a document record is what says the question was put.
+   */
+  const malwareOffered = useMemo(
+    () => data.reports.some((r) => (r.malware?.length ?? 0) > 0
+      || (r.documents ?? []).some((d) => d.kind === 'malware' && d.available)),
+    [data.reports],
+  )
+  const policyOffered = useMemo(
+    () => data.reports.some((r) => (r.violations?.length ?? 0) > 0
+      || (r.documents ?? []).some((d) => d.kind === 'policy' && d.available)),
+    [data.reports],
+  )
+
+  /*
+   * A tab that stops being offered must not leave the page on it. Mid-sync the
+   * rows are rewritten, and a release whose malware tab disappears under the
+   * reader would otherwise render an empty card with no way back.
+   */
+  useEffect(() => {
+    if (tab === 'malware' && !malwareOffered) onTabChange('vulnerabilities')
+    if (tab === 'policy' && !policyOffered) onTabChange('vulnerabilities')
+  }, [tab, malwareOffered, policyOffered, onTabChange])
+
+  /*
    * A sync clears the per-artifact rows before it refills them, so mid-sync
    * every table here is empty and every tab reads (0). Rendered as a result
    * that is what the previous build showed: three empty tables and a warning
@@ -1000,6 +1140,27 @@ function FindingsSection({ data, product, reference, repository, tab, onTabChang
               each - and it was previously answerable only by filtering a table
               nobody thought to filter and hovering each row for a tooltip.
             */
+            /*
+              Malware is a tab and not a filter, and it is offered even at zero.
+
+              "Malware (0)" is a sentence: the scanner looked and found none.
+              A tab that appeared only when something was wrong would leave a
+              reader unable to tell "clean" from "never asked" - which is the
+              distinction this whole feature exists to keep, applied to the one
+              finding that stops a release.
+            */
+            ...(malwareOffered
+              ? [{
+                value: 'malware',
+                label: `Malware (${malware.length.toLocaleString()})`,
+              }]
+              : []),
+            ...(policyOffered
+              ? [{
+                value: 'policy',
+                label: `Policy (${violations.length.toLocaleString()})`,
+              }]
+              : []),
             {
               value: 'problems',
               label: `Problems (${problemCounts.all.toLocaleString()})`,
@@ -1010,8 +1171,10 @@ function FindingsSection({ data, product, reference, repository, tab, onTabChang
 
         {tab !== 'problems' && (
           <SecurityExportMenu
-            urlFor={(format, view) => packageSecurityExportUrl(product, reference, {
-              format, view, repository, ...exportFilters,
+            table={exportTable}
+            tableLabel={exportTableLabel}
+            urlFor={(format, view, table) => packageSecurityExportUrl(product, reference, {
+              format, view, table, repository, ...exportFilters,
             })}
           />
         )}
@@ -1042,6 +1205,20 @@ function FindingsSection({ data, product, reference, repository, tab, onTabChang
               { value: 'unique', label: `Unique CVEs (${cveGroups.length.toLocaleString()})` },
               { value: 'all', label: `All findings (${filtered.length.toLocaleString()})` },
             ]}
+          />
+        )}
+
+        {/*
+          Which scanners a finding has to have come from. Renders nothing while
+          one scanner answers - see securitysources.tsx - so this line costs a
+          single-source deployment no width at all.
+        */}
+        {tab !== 'problems' && tab !== 'policy' && (
+          <SourceControls
+            sources={sources}
+            value={source}
+            onChange={setSource}
+            findings={tab === 'malware' ? malware : findings}
           />
         )}
 
@@ -1133,6 +1310,7 @@ function FindingsSection({ data, product, reference, repository, tab, onTabChang
                   state={data.state}
                   detailRowsUnavailable={detailRowsUnavailable}
                   scanUrlFor={scanUrlFor}
+                  showSources={sources.length > 1}
                 />
               )
               : (
@@ -1141,6 +1319,7 @@ function FindingsSection({ data, product, reference, repository, tab, onTabChang
                   state={data.state}
                   detailRowsUnavailable={detailRowsUnavailable}
                   scanUrlFor={scanUrlFor}
+                  showSources={sources.length > 1}
                 />
               )}
           </>
@@ -1160,9 +1339,248 @@ function FindingsSection({ data, product, reference, repository, tab, onTabChang
               <ArtifactTable reports={filteredImageReports} />
             </Space>
           )
-          : null}
+          : tab === 'malware'
+            ? <MalwareTable rows={malware} scanUrlFor={scanUrlFor} />
+            : tab === 'policy'
+              ? <PolicyTable rows={violations} />
+              : null}
     </Card>
   )
+}
+
+/**
+ * Malware, which is a shorter table and a louder one.
+ *
+ * # Why zero rows gets a sentence rather than an empty table
+ *
+ * Because "no rows" is the answer somebody most wants to be able to trust, and
+ * an empty grid with a header does not say who looked or when. The empty state
+ * names the scanner, so "clean" is attributable.
+ */
+function MalwareTable({ rows, scanUrlFor }: {
+  rows: FlatFinding[]
+  scanUrlFor: (name: string) => string | undefined
+}) {
+  const [finding, setFinding] = useState<FlatFinding | null>(null)
+
+  if (rows.length === 0) {
+    return (
+      <Alert
+        type="success"
+        showIcon
+        message="No malicious packages found"
+        description={
+          'The scanner was asked about malicious and known-bad packages in this release '
+          + 'and reported none. This is not the same as a release with no vulnerabilities - '
+          + 'see the Vulnerabilities tab for those.'
+        }
+      />
+    )
+  }
+
+  return (
+    <>
+      {/*
+        A banner above the table, not a severity tag inside it. Malware does not
+        get graded against CVEs: one row here is a release that does not ship,
+        and a table that looked like the vulnerabilities table would be read at
+        the same speed as the vulnerabilities table.
+      */}
+      <Alert
+        type="error"
+        showIcon
+        style={{ marginBottom: 12 }}
+        message={`${rows.length.toLocaleString()} malicious ${rows.length === 1 ? 'package' : 'packages'}`}
+        description={
+          'These are packages the scanner identifies as malicious rather than merely '
+          + 'vulnerable. There is no version to upgrade to: the package has to come out.'
+        }
+      />
+      <DataTable<FlatFinding>
+        tableEnhancedKey="security-malware"
+        size="small"
+        rowKey={(r) => `${r.artifactName}-${r.cve ?? r.id}-${r.component.id}-${r.component.version ?? ''}`}
+        dataSource={rows}
+        pagination={rows.length > 25 ? { pageSize: 25, size: 'small', showSizeChanger: false } : false}
+        columns={[
+          {
+            title: 'Package',
+            render: (_, r) => (
+              <ComponentCell name={r.component.name} version={r.component.version} type={r.component.type} />
+            ),
+          },
+          {
+            title: 'Image',
+            width: 220,
+            render: (_, r) => (
+              <ImageCell name={r.artifactName} tag={r.artifactTag} href={scanUrlFor(r.artifactName)} />
+            ),
+          },
+          {
+            title: 'Identifier',
+            width: 170,
+            render: (_, r) => (
+              <a onClick={() => setFinding(r)} style={{ display: 'block' }}>
+                <CveCell cve={r.cve} id={r.id} link />
+              </a>
+            ),
+          },
+          { title: 'Severity', width: 110, render: (_, r) => <SeverityTag value={r.severity} /> },
+          {
+            title: 'Reported by',
+            width: 150,
+            render: (_, r) => <SourcesCell sources={r.sources} provider={r.provider} />,
+          },
+          {
+            title: 'Description',
+            render: (_, r) => (
+              <DescriptionCell
+                summary={r.summary}
+                description={r.description}
+                title={r.cve || r.id}
+                onOpen={() => setFinding(r)}
+              />
+            ),
+          },
+        ]}
+      />
+      <FindingDetailDrawer
+        finding={finding}
+        scanUrlFor={scanUrlFor}
+        onClose={() => setFinding(null)}
+      />
+    </>
+  )
+}
+
+/**
+ * What the scanner's configured watches say about this release.
+ *
+ * # Why the watch and the rule are columns rather than a tooltip
+ *
+ * Because "this release violates policy" with no policy named is a row nobody
+ * can act on. The three facts a reader needs are which watch fired, what its
+ * rule forbids, and on which image - and the first two are the ones that say
+ * whether this is a real block or a watch somebody left switched on.
+ */
+function PolicyTable({ rows }: { rows: FlatViolation[] }) {
+  if (rows.length === 0) {
+    return (
+      <Alert
+        type="info"
+        showIcon
+        message="No policy violations"
+        description={
+          'The scanner\'s watches raised nothing against this release. A release with '
+          + 'vulnerabilities and no violations is normal: a violation exists only where '
+          + 'somebody wrote a rule that the findings break.'
+        }
+      />
+    )
+  }
+
+  return (
+    <DataTable<FlatViolation>
+      tableEnhancedKey="security-policy"
+      size="small"
+      rowKey={(r) => `${r.artifactName}-${r.id ?? r.cve}-${r.watch ?? ''}-${r.component.id}`}
+      dataSource={rows}
+      pagination={rows.length > 25 ? { pageSize: 25, size: 'small', showSizeChanger: false } : false}
+      columns={[
+        {
+          title: 'Watch',
+          width: 180,
+          render: (_, r) => (
+            <Space direction="vertical" size={0}>
+              <Typography.Text strong style={{ fontSize: 13 }}>{r.watch || '-'}</Typography.Text>
+              {r.policy && (
+                <Typography.Text type="secondary" style={{ fontSize: 11 }}>{r.policy}</Typography.Text>
+              )}
+            </Space>
+          ),
+        },
+        {
+          title: 'Rule',
+          width: 170,
+          render: (_, r) => (
+            <Typography.Text type={r.rule ? undefined : 'secondary'} style={{ fontSize: 12 }}>
+              {r.rule || '-'}
+            </Typography.Text>
+          ),
+        },
+        {
+          title: 'Severity',
+          width: 110,
+          sorter: (a, b) => SEVERITIES.indexOf(a.severity) - SEVERITIES.indexOf(b.severity),
+          defaultSortOrder: 'ascend',
+          render: (_, r) => <SeverityTag value={r.severity} />,
+        },
+        {
+          title: 'Image',
+          width: 200,
+          render: (_, r) => <ImageCell name={r.artifactName} tag={r.artifactTag} />,
+        },
+        {
+          title: 'Package',
+          render: (_, r) => (
+            r.component.name
+              ? <ComponentCell name={r.component.name} version={r.component.version} type={r.component.type} />
+              : <Typography.Text type="secondary">-</Typography.Text>
+          ),
+        },
+        {
+          title: 'CVE',
+          width: 150,
+          render: (_, r) => (r.cve
+            ? <CveCell cve={r.cve} />
+            : <Typography.Text type="secondary">-</Typography.Text>),
+        },
+        { title: 'Fix', width: 130, render: (_, r) => <FixCell fixable={(r.fixedIn?.length ?? 0) > 0} fixedIn={r.fixedIn} /> },
+        {
+          title: 'Description',
+          render: (_, r) => (
+            <Typography.Text style={{ fontSize: 12 }} ellipsis={{ tooltip: r.summary }}>
+              {r.summary || '-'}
+            </Typography.Text>
+          ),
+        },
+      ]}
+    />
+  )
+}
+
+/**
+ * Which scanners reported one row.
+ *
+ * Renders NOTHING for a single source, rather than a tag saying "JFrog Xray" on
+ * every row of every table. A column whose every cell is identical is a column
+ * that costs width and teaches a reader to skip past where the differences are.
+ */
+function SourcesCell({ sources, provider }: { sources?: string[]; provider?: string }) {
+  const all = sources && sources.length > 0 ? sources : provider ? [provider] : []
+  if (all.length === 0) return <Typography.Text type="secondary">-</Typography.Text>
+  if (all.length === 1) {
+    return (
+      <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+        {providerLabel(all[0] ?? '')}
+      </Typography.Text>
+    )
+  }
+  return (
+    <Space size={4} wrap>
+      {all.map((p) => <Tag key={p} style={{ marginInlineEnd: 0 }}>{providerLabel(p)}</Tag>)}
+    </Space>
+  )
+}
+
+/** A scanner's name as a person writes it. */
+function providerLabel(provider: string): string {
+  switch (provider) {
+    case 'jfrog-xray': return 'JFrog Xray'
+    case 'anchore': return 'Anchore'
+    case 'astra': return 'Astra'
+    default: return provider || '-'
+  }
 }
 
 /** One reason the scanner gave, and every image it gave it for. */
@@ -1349,6 +1767,15 @@ type CveGroup = {
   published?: string
   provider?: string
   policy?: string
+  /**
+   * Every scanner that reported this advisory, anywhere in the release.
+   *
+   * On the group rather than only on its rows, because "who found this" is a
+   * property of the advisory here: an advisory Anchore found in one image and
+   * Xray found in another was found by both, and a reader comparing scanners
+   * wants that sentence rather than a per-row breakdown they have to expand.
+   */
+  sources: string[]
   packages: string[]
   images: string[]
   rows: FlatFinding[]
@@ -1379,6 +1806,7 @@ function groupByCve(findings: FlatFinding[]): CveGroup[] {
         summary: f.summary,
         description: f.description,
         references: [],
+        sources: [],
         packages: [],
         images: [],
         rows: [],
@@ -1397,6 +1825,9 @@ function groupByCve(findings: FlatFinding[]): CveGroup[] {
     if (f.fixable) g.fixable = true
     for (const v of f.fixedIn ?? []) {
       if (!g.fixedIn.includes(v)) g.fixedIn.push(v)
+    }
+    for (const src of (f.sources && f.sources.length > 0 ? f.sources : f.provider ? [f.provider] : [])) {
+      if (!g.sources.includes(src)) g.sources.push(src)
     }
     const pkg = f.component.name ? `${f.component.name}@${f.component.version ?? ''}` : ''
     if (pkg && !g.packages.includes(pkg)) g.packages.push(pkg)
@@ -1423,11 +1854,19 @@ function groupByCve(findings: FlatFinding[]): CveGroup[] {
  * columns. A comma-separated list of image names answers a quarter of it and
  * sends the reader back to the flat view to find the rest.
  */
-function UniqueCveTable({ groups, state, detailRowsUnavailable, scanUrlFor }: {
+function UniqueCveTable({ groups, state, detailRowsUnavailable, scanUrlFor, showSources }: {
   groups: CveGroup[]
   state: PackageSecurityResponse['state']
   detailRowsUnavailable: boolean
   scanUrlFor: (name: string) => string | undefined
+  /**
+   * Whether more than one scanner contributed.
+   *
+   * A column reading "JFrog Xray" on every row of three thousand costs width
+   * and teaches a reader to skip past exactly where the interesting differences
+   * will be once a second scanner exists.
+   */
+  showSources?: boolean
 }) {
   const [open, setOpen] = useState<CveGroup | null>(null)
 
@@ -1525,6 +1964,13 @@ function UniqueCveTable({ groups, state, detailRowsUnavailable, scanUrlFor }: {
           width: 130,
           render: (_, g) => <FixCell fixable={g.fixable} fixedIn={g.fixedIn} />,
         },
+        ...(showSources
+          ? [{
+            title: 'Reported by',
+            width: 160,
+            render: (_: unknown, g: CveGroup) => <SourcesCell sources={g.sources} />,
+          }]
+          : []),
         {
           title: 'Description',
           width: 340,
@@ -1579,6 +2025,7 @@ function CveDetailDrawer({ group, scanUrlFor, onClose }: {
       cvssVector={group?.cvssVector}
       published={group?.published}
       provider={group?.provider}
+      sources={group?.sources}
       policy={group?.policy}
       references={group?.references}
       subtitle={group
@@ -1677,6 +2124,7 @@ function FindingDetailDrawer({ finding, scanUrlFor, onClose }: {
       cvssVector={finding?.cvssVector}
       published={finding?.published}
       provider={finding?.provider}
+      sources={finding?.sources}
       policy={finding?.policy}
       references={finding?.references}
       subtitle={finding ? `${finding.component.name} in ${finding.artifactName}` : undefined}
@@ -1780,7 +2228,7 @@ function FindingDetailDrawer({ finding, scanUrlFor, onClose }: {
  */
 function AdvisoryDrawer({
   open, onClose, identifier, alternateId, severity, fixable, fixedIn, summary, description,
-  cvssScore, cvssVector, published, provider, policy, references, subtitle, children,
+  cvssScore, cvssVector, published, provider, sources, policy, references, subtitle, children,
 }: {
   open: boolean
   onClose: () => void
@@ -1795,6 +2243,8 @@ function AdvisoryDrawer({
   cvssVector?: string
   published?: string
   provider?: string
+  /** Every scanner that reported this, where more than one did. */
+  sources?: string[]
   policy?: string
   references?: string[]
   subtitle?: string
@@ -1818,11 +2268,11 @@ function AdvisoryDrawer({
         children: <Typography.Text>{formatAbsolute(published) ?? published}</Typography.Text>,
       }
       : null,
-    provider
+    provider || (sources && sources.length > 0)
       ? {
         key: 'provider',
         label: 'Reported by',
-        children: <Typography.Text>{provider === 'jfrog-xray' ? 'JFrog Xray' : provider}</Typography.Text>,
+        children: <SourcesCell sources={sources} provider={provider} />,
       }
       : null,
     // Xray's own watch or policy. Informational, and the only thing on this
@@ -1990,11 +2440,14 @@ function VulnerabilityTable({
   state,
   detailRowsUnavailable,
   scanUrlFor,
+  showSources,
 }: {
   rows: FlatFinding[]
   state: PackageSecurityResponse['state']
   detailRowsUnavailable: boolean
   scanUrlFor: (name: string) => string | undefined
+  /** See UniqueCveTable: hidden while one scanner answers. */
+  showSources?: boolean
 }) {
   /*
    * The same gesture as the grouped view, because it is the same table to a
@@ -2060,6 +2513,15 @@ function VulnerabilityTable({
           render: (_, r) => <ImageCell name={r.artifactName} tag={r.artifactTag} href={scanUrlFor(r.artifactName)} />,
         },
         { title: 'Fix', width: 130, render: (_, r) => <FixCell fixable={r.fixable} fixedIn={r.fixedIn} /> },
+        ...(showSources
+          ? [{
+            title: 'Reported by',
+            width: 150,
+            render: (_: unknown, r: FlatFinding) => (
+              <SourcesCell sources={r.sources} provider={r.provider} />
+            ),
+          }]
+          : []),
         {
           /*
             Narrow enough that the six columns fit the card at a laptop width.
@@ -2199,16 +2661,107 @@ function ArtifactTable({ reports }: { reports: SecurityReport[] }) {
           title: 'Source',
           width: 110,
           render: (_, r) => (
-            <Typography.Text type="secondary">
-              {r.provider === 'jfrog-xray' ? 'JFrog Xray' : (r.provider || '-')}
-            </Typography.Text>
+            <Typography.Text type="secondary">{providerLabel(r.provider ?? '')}</Typography.Text>
           ),
+        },
+        /*
+          Malware as a column of its own on the images table, and blank rather
+          than "0" where there is none.
+
+          A zero in every row is a column of noise; a number in one row is the
+          row somebody has to look at. The Malware TAB carries the reassurance
+          that the scanner looked and found none - a column cannot say that
+          without saying it 157 times.
+        */
+        {
+          title: 'Malware',
+          width: 90,
+          render: (_, r) => ((r.malware?.length ?? 0) > 0
+            ? (
+              <Typography.Text strong style={{ color: c.danger }}>
+                {r.malware?.length.toLocaleString()}
+              </Typography.Text>
+            )
+            : <Typography.Text type="secondary">-</Typography.Text>),
         },
       ]}
     />
     <ImageDetailDrawer report={open} onClose={() => setOpen(null)} />
     </>
   )
+}
+
+/**
+ * The scanner's own answers about one image, as files.
+ *
+ * # Why the SBOM is a separate button and the rest are a menu
+ *
+ * Because they are not the same kind of thing to a reader. "Download SBOM" is a
+ * request people arrive with - a customer asked for one, a compliance process
+ * needs one - and it deserves to be readable without opening anything. The raw
+ * vulnerability response, the policy verdict and the malware list are evidence
+ * somebody reaches for while investigating, and a menu is the right weight for
+ * them.
+ *
+ * # Why an unavailable document still renders
+ *
+ * Disabled, with the reason on hover. "This Xray has no SBOM endpoint" and
+ * "nobody has generated one yet" are different problems with different fixes,
+ * and a button that simply vanished would leave a reader to conclude the
+ * feature does not exist.
+ */
+function DocumentDownloads({ documents }: { documents?: SecurityDocumentRef[] }) {
+  const docs = documents ?? []
+  const sbom = docs.find((d) => d.kind === 'sbom')
+  const others = docs.filter((d) => d.kind !== 'sbom' && d.url)
+
+  if (docs.length === 0) return null
+
+  return (
+    <Space size={8}>
+      {sbom?.url && (
+        <Tooltip
+          title={sbom.available
+            ? 'The component inventory as JFrog Xray produces it, CycloneDX JSON.'
+            : sbom.message
+              || 'Generated on demand. The first download asks Xray to produce it, which takes a moment.'}
+        >
+          <Button size="small" icon={<DownloadOutlined />} href={sbom.url}>
+            SBOM
+          </Button>
+        </Tooltip>
+      )}
+      {others.length > 0 && (
+        <Select
+          size="small"
+          value={undefined}
+          placeholder="Raw output"
+          style={{ minWidth: 150 }}
+          popupMatchSelectWidth={false}
+          /*
+            A select used as a menu of links. Navigating on change rather than
+            rendering anchors inside the options, because an anchor inside an
+            antd option is a click target the dropdown swallows on half the
+            rows - and a download that works four times out of five is worse
+            than one that is not offered.
+          */
+          onChange={(url: string) => { window.location.href = url }}
+          options={others.map((d) => ({
+            value: d.url as string,
+            label: `${d.label}${d.bytes ? ` · ${formatBytesShort(d.bytes)}` : ''}`,
+            disabled: !d.available,
+          }))}
+        />
+      )}
+    </Space>
+  )
+}
+
+/** A byte count, short enough for a menu label. */
+function formatBytesShort(bytes: number): string {
+  if (bytes < 1024) return `${bytes} B`
+  if (bytes < 1024 * 1024) return `${Math.round(bytes / 1024)} kB`
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`
 }
 
 /**
@@ -2263,11 +2816,23 @@ function ImageDetailDrawer({ report, onClose }: {
         </Space>
       }
       extra={
-        report?.scanUrl && (
-          <Button size="small" icon={<ExportOutlined />} href={report.scanUrl} target="_blank" rel="noreferrer">
-            JFrog Xray
-          </Button>
-        )
+        <Space size={8}>
+          {/*
+            The downloads sit BESIDE the link out, not inside the table.
+
+            A reader who has opened one image is at the point of asking two
+            questions: what does the scanner's own page say, and can I have the
+            scanner's own answer as a file. Those belong next to each other, and
+            putting the second in a row menu would hide the SBOM behind a
+            hover on a table nobody hovers.
+          */}
+          {report && <DocumentDownloads documents={report.documents} />}
+          {report?.scanUrl && (
+            <Button size="small" icon={<ExportOutlined />} href={report.scanUrl} target="_blank" rel="noreferrer">
+              JFrog Xray
+            </Button>
+          )}
+        </Space>
       }
     >
       {report && (
@@ -2294,12 +2859,40 @@ function ImageDetailDrawer({ report, onClose }: {
               {
                 key: 'source',
                 label: 'Source',
-                children: (
-                  <Typography.Text>
-                    {report.provider === 'jfrog-xray' ? 'JFrog Xray' : (report.provider || '-')}
-                  </Typography.Text>
-                ),
+                children: <Typography.Text>{providerLabel(report.provider ?? '')}</Typography.Text>,
               },
+              /*
+                Malware beside the vulnerability count, not below the table.
+
+                A reader who opened one image is deciding whether it ships. That
+                decision is the malware number, and putting it at the bottom of
+                a drawer under a table of nine hundred CVEs is putting it where
+                it will not be read.
+              */
+              ...((report.malware?.length ?? 0) > 0
+                ? [{
+                  key: 'malware',
+                  label: 'Malware',
+                  children: (
+                    <Typography.Text strong style={{ color: c.danger }}>
+                      {report.malware?.length.toLocaleString()} malicious
+                      {report.malware?.length === 1 ? ' package' : ' packages'}
+                    </Typography.Text>
+                  ),
+                }]
+                : []),
+              ...((report.violations?.length ?? 0) > 0
+                ? [{
+                  key: 'violations',
+                  label: 'Policy',
+                  children: (
+                    <Typography.Text strong>
+                      {report.violations?.length.toLocaleString()}
+                      {report.violations?.length === 1 ? ' violation' : ' violations'}
+                    </Typography.Text>
+                  ),
+                }]
+                : []),
               ...(report.message
                 ? [{ key: 'message', label: 'Message', span: 2, children: <Typography.Text>{report.message}</Typography.Text> }]
                 : []),

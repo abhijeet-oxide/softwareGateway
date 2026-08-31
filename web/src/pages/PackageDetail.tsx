@@ -5,7 +5,7 @@ import { Alert, App, Button, Card, Col, Descriptions, Divider, Modal, Row, Space
 // The working-surface table: resizable, reorderable, pinnable columns whose
 // layout each person keeps. See `tablekit/README.md` for which tables get it.
 import { Table as DataTable } from '../tablekit'
-import { FolderOutlined, LoadingOutlined, SafetyCertificateOutlined, SyncOutlined } from '../icons'
+import { FolderOutlined, LoadingOutlined, SafetyCertificateOutlined } from '../icons'
 import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom'
 import {
   packageFileDownloadUrl, useArtifacts, useCancelAnalysis, useInspectPackage, usePackage,

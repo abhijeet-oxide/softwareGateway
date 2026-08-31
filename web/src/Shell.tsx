@@ -99,7 +99,7 @@ function ActivityPill({ moving, held, failing, hint }: {
             + (held > 0 ? `, ${held} waiting` : '')]
         : held > 0
           ? [c.pending, `${held} download${held === 1 ? '' : 's'} waiting to start`]
-          : [c.ok, 'All downloads settled']
+          : [c.ok, 'Downloads completed']
   const running = moving
 
   return (

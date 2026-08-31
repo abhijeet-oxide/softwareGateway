@@ -5,7 +5,7 @@ import { Alert, App, Button, Card, Col, Descriptions, Divider, Modal, Row, Space
 // The working-surface table: resizable, reorderable, pinnable columns whose
 // layout each person keeps. See `tablekit/README.md` for which tables get it.
 import { Table as DataTable } from '../tablekit'
-import { FolderOutlined, SafetyCertificateOutlined, SyncOutlined } from '../icons'
+import { FolderOutlined, LoadingOutlined, SafetyCertificateOutlined, SyncOutlined } from '../icons'
 import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom'
 import {
   packageFileDownloadUrl, useArtifacts, useCancelAnalysis, useInspectPackage, usePackage,
@@ -1421,7 +1421,7 @@ export default function PackageDetail() {
                     */}
                     {p?.security?.state === 'syncing' && !p.security.stalled && (
                       <Tooltip title="A vulnerability sync is in progress">
-                        <SyncOutlined spin style={{ fontSize: 12 }} />
+                        <LoadingOutlined spin style={{ fontSize: 12 }} />
                       </Tooltip>
                     )}
                   </Space>

@@ -8,7 +8,7 @@ import {
 // The working-surface table: resizable, reorderable, pinnable columns whose
 // layout each person keeps. See `tablekit/README.md` for which tables get it.
 import { Table as DataTable } from '../tablekit'
-import { CopyOutlined, ExportOutlined } from '../icons'
+import { CopyOutlined, ExportOutlined, LoadingOutlined } from '../icons'
 import {
   packageSecurityExportUrl, useCancelPackageSecuritySync, usePackageSecurity,
   useSyncPackageSecurity,
@@ -486,7 +486,7 @@ function SummaryCards({ data, syncing }: { data: PackageSecurityResponse; syncin
             colour={c.ok}
             headline={`${stats.fixable.toLocaleString()} of ${stats.total.toLocaleString()} have a fix`}
             detail={stats.nonFixable > 0
-              ? `${stats.nonFixable.toLocaleString()} have no fixed version yet`
+              ? `${stats.fixable.toLocaleString()} have publically available fix`
               : 'Every finding has a fixed version'}
           />
 
@@ -497,7 +497,7 @@ function SummaryCards({ data, syncing }: { data: PackageSecurityResponse; syncin
             colour={coverage.complete ? c.ok : c.pending}
             headline={`${coverage.scanned.toLocaleString()} of ${coverage.scannable.toLocaleString()} images scanned`}
             detail={coverage.complete
-              ? 'Every scannable image has a result'
+              ? 'All Images part of the release are scanned'
               : 'Some images have no result, so the count above is a floor'}
           />
 
@@ -603,7 +603,7 @@ function PendingCard({ title, previous, note }: {
     <Card size="small" title={title} style={{ height: '100%' }}>
       <Space direction="vertical" size={2} style={{ width: '100%' }}>
         <Space size={10} align="center">
-          <Spin size="small" />
+          <LoadingOutlined />
           <Typography.Text type="secondary">Fetching details</Typography.Text>
         </Space>
         {previous && (
@@ -1682,7 +1682,7 @@ function FindingDetailDrawer({ finding, scanUrlFor, onClose }: {
       subtitle={finding ? `${finding.component.name} in ${finding.artifactName}` : undefined}
     >
       {finding && (
-        <Section title="This finding">
+        <Section title="Finding">
           <Descriptions
             column={{ xs: 1, sm: 2 }}
             size="small"
@@ -1913,7 +1913,12 @@ function AdvisoryDrawer({
     >
       <Space direction="vertical" size={20} style={{ width: '100%' }}>
         <Descriptions column={{ xs: 1, sm: 2 }} size="small" bordered items={facts} />
-
+        {summary && description && summary !== description && (
+          <Section title="Summary">
+            <Typography.Paragraph >
+              {summary}
+            </Typography.Paragraph></Section>
+          )}
         <Section title="Description">
           {prose
             ? (
@@ -1925,17 +1930,7 @@ function AdvisoryDrawer({
               <Typography.Text type="secondary">
                 The scanner supplied no description for this advisory.
               </Typography.Text>
-            )}
-          {/*
-            Both, when they differ. The summary is the scanner's one-line
-            headline and the description is the advisory - a panel that showed
-            only the longer one dropped the sentence somebody was scanning for.
-          */}
-          {summary && description && summary !== description && (
-            <Typography.Text type="secondary" style={{ fontSize: 12, display: 'block', marginTop: 10 }}>
-              Summary: {summary}
-            </Typography.Text>
-          )}
+            )}          
         </Section>
 
         {references && references.length > 0 && (

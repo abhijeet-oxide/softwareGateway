@@ -1,0 +1,77 @@
+{
+  "image_digest": "<IMAGE_DIGEST>",
+  "vulnerability_type": "all",
+  "extended_support": false,
+  "vulnerabilities": [
+    {
+      "vuln": "<CVE_ID>",
+      "severity": "<SEVERITY>",
+      "url": "<CVE_URL>",
+      "fix": "<FIX_VERSION_OR_NONE>",
+
+      "package": "<PACKAGE_FULL_NAME>",
+      "package_name": "<PACKAGE_NAME>",
+      "package_version": "<PACKAGE_VERSION>",
+      "package_type": "<PACKAGE_TYPE>",
+
+      "package_cpe": "<CPE>",
+      "package_cpe23": "<CPE23>",
+      "package_path": "<PACKAGE_PATH>",
+      "purl": "<PACKAGE_URL>",
+
+      "feed": "<FEED>",
+      "feed_group": "<FEED_GROUP>",
+
+      "nvd_data": [
+        {
+          "id": "<CVE_ID>",
+          "type": "<SOURCE_TYPE>",
+          "source": "<SOURCE>",
+          "cvss_v2": {
+            "base_score": 0.0,
+            "exploitability_score": 0.0,
+            "impact_score": 0.0
+          },
+          "cvss_v3": {
+            "base_score": 0.0,
+            "exploitability_score": 0.0,
+            "impact_score": 0.0
+          },
+          "description": "<VULNERABILITY_DESCRIPTION>",
+          "is_kev": false,
+          "epss": {
+            "epss": 0.0,
+            "percentile": 0.0
+          }
+        }
+      ],
+
+      "vendor_data": [
+        {
+          "id": "<CVE_ID>",
+          "type": "<VENDOR_TYPE>",
+          "source": "<VENDOR_SOURCE>",
+          "cvss_v2": {
+            "base_score": 0.0,
+            "exploitability_score": 0.0,
+            "impact_score": 0.0
+          },
+          "cvss_v3": {
+            "base_score": 0.0,
+            "exploitability_score": 0.0,
+            "impact_score": 0.0
+          }
+        }
+      ],
+
+      "will_not_fix": false,
+      "annotation_status": null,
+      "annotation_uuid": null,
+
+      "detected_at": "<TIMESTAMP>",
+      "fix_observed_at": "<TIMESTAMP>",
+
+      "description": "<VULNERABILITY_DESCRIPTION>"
+    }
+  ]
+}

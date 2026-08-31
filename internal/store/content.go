@@ -151,6 +151,22 @@ func (p *Packages) ContentBreakdown(ctx context.Context, transferID string) ([]C
 		WITH tr AS (
 			SELECT id, package_id, target_repo_id FROM transfers WHERE id = ?
 		),
+		-- EVERY repository this transfer writes to, not just the one on the
+		-- transfer row.
+		--
+		-- A bundle's components each land in their own destination path and
+		-- each gets a catalog row of its own, so the transfer's own
+		-- target_repo_id is the FALLBACK - the root - and almost never where
+		-- the content
+		-- actually goes. Asking for placements at that one row alone matches
+		-- nothing on a real bundle: on the development fixture the placements
+		-- sit in repositories 15 to 88 while the transfers name 2, 4 and 6.
+		targets AS (
+			SELECT target_repo_id AS repository_id FROM jobs
+			 WHERE transfer_id = (SELECT id FROM tr)
+			UNION
+			SELECT target_repo_id FROM tr
+		),
 		-- ---------------------------------------------------------------
 		-- THE LAYERS, one row per distinct piece of content.
 		--
@@ -206,11 +222,21 @@ func (p *Packages) ContentBreakdown(ctx context.Context, transferID string) ([]C
 			                       WHERE j.transfer_id = (SELECT id FROM tr)
 			                         AND j.digest = u.digest
 			                         AND j.state = 'skipped') THEN 'present'
-			         -- No job and a placement record: the planner found this
-			         -- already at the destination and never queued it.
-			         WHEN EXISTS (SELECT 1 FROM blob_placements bp
-			                       WHERE bp.repository_id = (SELECT target_repo_id FROM tr)
-			                         AND bp.digest = u.digest) THEN 'present'
+			         -- NO JOB AT ALL, and the destination has it: the planner
+			         -- found it already there and never queued it.
+			         --
+			         -- The "no job" half is what keeps this honest. A digest
+			         -- this transfer is genuinely pushing has a job, and that
+			         -- job's state decides - so a blob still outstanding for
+			         -- one repository cannot be called present because some
+			         -- other repository happens to hold it.
+			         WHEN NOT EXISTS (SELECT 1 FROM jobs j
+			                           WHERE j.transfer_id = (SELECT id FROM tr)
+			                             AND j.digest = u.digest)
+			              AND EXISTS (SELECT 1 FROM blob_placements bp
+			                           WHERE bp.digest = u.digest
+			                             AND bp.repository_id IN
+			                                 (SELECT repository_id FROM targets)) THEN 'present'
 			         WHEN EXISTS (SELECT 1 FROM jobs j
 			                       WHERE j.transfer_id = (SELECT id FROM tr)
 			                         AND j.digest = u.digest

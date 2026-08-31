@@ -1,6 +1,7 @@
 package store
 
 import (
+	"strconv"
 	"strings"
 	"testing"
 )
@@ -595,4 +596,152 @@ func (h *failureHarness) placeAtTarget(digest string) {
 
 	h.exec(`INSERT INTO blob_placements (repository_id, digest, size_bytes, source, verified_at)
 	        VALUES (?, ?, 4096, 'observed', '2026-01-01T00:00:00Z')`, h.repoID, digest)
+}
+
+// THE DELTA DOWNLOAD, which is the shape that read wrong on screen.
+//
+// A release the destination almost entirely holds already: every layer is
+// mounted or found in place, and the only thing actually pushed is the
+// manifests, which weigh a few hundred kilobytes between them. The page
+// reported `29.8 GB already there` and `354.8 KB downloaded` in its summary
+// while every row of its table read `Copied 314 · Already present 0`.
+//
+// Both halves of that came from counting jobs by artifact_id, which matches
+// manifests and only manifests: the manifests really had succeeded, so they
+// were the 314, and the layers they name were nowhere in the count at all.
+func TestADeltaDownloadReportsItsLayersAsAlreadyPresent(t *testing.T) {
+	h := newFailureHarness(t)
+	id := h.transferWithJobs(0)
+
+	image := h.seedArtifact("application/vnd.oci.image.manifest.v1+json", "")
+	// The layers: mounted by the registry, so skipped rather than succeeded.
+	for range 6 {
+		h.layerJob(id, h.seedLayer(image), "skipped")
+	}
+	// And the manifest, which is the only thing that moved.
+	h.manifestPushed(id, image)
+
+	rows, err := h.packages.ContentBreakdown(t.Context(), id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rows) != 1 {
+		t.Fatalf("got %d rows, want the one component: %+v", len(rows), rows)
+	}
+	row := rows[0]
+	if row.UnitsPresent != 6 {
+		t.Errorf("unitsPresent = %d, want the six layers the destination already had "+
+			"- this is the column that read zero over a download reporting "+
+			"29.8 GB already there", row.UnitsPresent)
+	}
+	// Only the manifest. A delta download that reports every layer as copied is
+	// claiming to have moved content it never touched.
+	if row.UnitsCopied != 1 {
+		t.Errorf("unitsCopied = %d, want only the manifest that was actually pushed",
+			row.UnitsCopied)
+	}
+	if row.Units != 7 {
+		t.Errorf("units = %d, want the six layers and the manifest", row.Units)
+	}
+}
+
+// A layer already at the destination is found wherever the transfer WRITES,
+// not only at the repository named on the transfer row.
+//
+// A bundle's components each land in their own destination path with a catalog
+// row of their own, so the transfer's target_repo_id is the root fallback and
+// almost never where the content goes: in the development fixture the
+// placements sit in repositories 15 to 88 while the transfers name 2, 4 and 6.
+// Matching on that one row found nothing, which left a plan-time placement hit
+// - the very thing that makes a second download nearly free - counted as work
+// still outstanding.
+func TestAPlacementInAComponentRepositoryCounts(t *testing.T) {
+	h := newFailureHarness(t)
+	id := h.transferWithJobs(0)
+
+	image := h.seedArtifact("application/vnd.oci.image.manifest.v1+json", "")
+	digest := h.seedLayer(image)
+	// The destination row this transfer actually writes to, which is not the
+	// one on the transfer.
+	component := h.componentRepo()
+	h.placeAt(component, digest)
+	// A manifest job pointing at that same repository is what puts it in the
+	// transfer's target set - every component has one.
+	h.manifestJobTo(id, image, component)
+
+	rows, err := h.packages.ContentBreakdown(t.Context(), id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rows) != 1 {
+		t.Fatalf("got %d rows, want the one component: %+v", len(rows), rows)
+	}
+	if rows[0].UnitsPresent != 1 {
+		t.Errorf("unitsPresent = %d, want the layer the component repository holds",
+			rows[0].UnitsPresent)
+	}
+}
+
+// componentRepo adds a destination row of its own, the way a bundle component
+// gets one, and returns its id.
+func (h *failureHarness) componentRepo() int64 {
+	h.t.Helper()
+
+	h.n++
+	res, err := h.st.DB().ExecContext(h.t.Context(),
+		`INSERT INTO repositories (product_id, role, name, registry_host, repository_path,
+		                           registry_type, managed_by, active)
+		 VALUES ((SELECT product_id FROM repositories WHERE id = ?), 'target', ?, ?, ?,
+		         'generic', 'config', 1)`,
+		h.repoID, "component-"+strconv.Itoa(h.n), "registry.example.com",
+		"dest/component-"+strconv.Itoa(h.n))
+	if err != nil {
+		h.t.Fatal(err)
+	}
+	id, err := res.LastInsertId()
+	if err != nil {
+		h.t.Fatal(err)
+	}
+	return id
+}
+
+// placeAt records that a specific repository holds this content.
+func (h *failureHarness) placeAt(repositoryID int64, digest string) {
+	h.t.Helper()
+
+	h.exec(`INSERT INTO blob_placements (repository_id, digest, size_bytes, source, verified_at)
+	        VALUES (?, ?, 4096, 'observed', '2026-01-01T00:00:00Z')`, repositoryID, digest)
+}
+
+// manifestJobTo pushes a component's manifest into a named destination row.
+func (h *failureHarness) manifestJobTo(transferID string, artifactID, targetRepoID int64) {
+	h.t.Helper()
+
+	h.n++
+	h.exec(`INSERT INTO jobs (transfer_id, kind, digest, size_bytes, artifact_id,
+	                          source_repo_id, target_repo_id, target_repository,
+	                          state, wave, attempts, max_attempts)
+	        VALUES (?, 'manifest', ?, 512, ?, ?, ?, 'dest/path', 'succeeded', 1, 1, 8)`,
+		transferID, "sha256:"+strings.Repeat("9", 60)+padded(h.n), artifactID,
+		h.repoID, targetRepoID)
+}
+
+// manifestPushed pushes a component's OWN manifest, the way the planner does.
+//
+// jobForArtifact invents a digest, which is fine for a test about job outcomes
+// and wrong for one about content: the manifest a transfer pushes is the
+// artifact's own, and that identity is what ties the two together.
+func (h *failureHarness) manifestPushed(transferID string, artifactID int64) {
+	h.t.Helper()
+
+	var digest string
+	if err := h.st.DB().QueryRowContext(h.t.Context(),
+		`SELECT digest FROM package_artifacts WHERE id = ?`, artifactID).Scan(&digest); err != nil {
+		h.t.Fatal(err)
+	}
+	h.exec(`INSERT INTO jobs (transfer_id, kind, digest, size_bytes, artifact_id,
+	                          source_repo_id, target_repo_id, target_repository,
+	                          state, wave, attempts, max_attempts)
+	        VALUES (?, 'manifest', ?, 512, ?, ?, ?, 'dest/path', 'succeeded', 1, 1, 8)`,
+		transferID, digest, artifactID, h.repoID, h.repoID)
 }

@@ -23,7 +23,7 @@ func TestTheListShowsFailedJobs(t *testing.T) {
 			ID: "281614ab-1111-2222-3333-444444444444", Product: "cfx-5000-product",
 			Tag: "25.7_mp2604_2131", State: v1.TransferRunning,
 			StartedAt: time.Now().Add(-time.Hour).Format(time.RFC3339Nano),
-			Progress: v1.TransferProgress{
+			Progress: &v1.TransferProgress{
 				JobsPlanned: 2493, JobsDone: 900, JobsFailed: 17, JobsOutstanding: 1576,
 				JobsInFlight: 4,
 				PlannedBytes: "30000000000", BytesTransferred: "9000000000",
@@ -32,7 +32,7 @@ func TestTheListShowsFailedJobs(t *testing.T) {
 		{
 			ID: "9c1e8f2a-5555-6666-7777-888888888888", Product: "cfx-5000-product",
 			Tag: "25.6", State: v1.TransferSucceeded,
-			Progress: v1.TransferProgress{JobsPlanned: 10, JobsDone: 10},
+			Progress: &v1.TransferProgress{JobsPlanned: 10, JobsDone: 10},
 		},
 	}}
 
@@ -76,7 +76,7 @@ func TestETAIsShownWhileWorkIsStillOutstanding(t *testing.T) {
 	moving := &v1.Transfer{
 		State:     v1.TransferReady,
 		StartedAt: time.Now().Add(-100 * time.Second).Format(time.RFC3339Nano),
-		Progress: v1.TransferProgress{
+		Progress: &v1.TransferProgress{
 			PlannedBytes: "1100", BytesTransferred: "100",
 			// A transfer that is MOVING has work in flight. Byte counts alone
 			// describe a transfer that moved bytes at some point, which is a

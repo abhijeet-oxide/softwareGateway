@@ -157,7 +157,7 @@ func TestElapsedRunsFromTheFirstLease(t *testing.T) {
 func TestEstimateWithdrawsRatherThanGuess(t *testing.T) {
 	tr := &v1.Transfer{
 		StartedAt: time.Now().Add(-10 * time.Second).Format(time.RFC3339Nano),
-		Progress: v1.TransferProgress{
+		Progress: &v1.TransferProgress{
 			PlannedBytes:     bytesOf(1000),
 			BytesTransferred: bytesOf(0),
 		},
@@ -271,7 +271,7 @@ func TestEstimateUsesTheRateItIsGiven(t *testing.T) {
 	tr := &v1.Transfer{
 		State:     v1.TransferRunning,
 		StartedAt: time.Now().Add(-100 * time.Second).Format(time.RFC3339Nano),
-		Progress: v1.TransferProgress{
+		Progress: &v1.TransferProgress{
 			PlannedBytes:     bytesOf(1100),
 			BytesTransferred: bytesOf(100),
 			// In flight, because an estimate is only meaningful for a transfer

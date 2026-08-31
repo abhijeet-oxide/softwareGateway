@@ -74,7 +74,7 @@ func stalledTransfer() *v1.Transfer {
 		ID:        "281614ab-e88a-452e-87f1-8af51ae8fef8",
 		State:     v1.TransferRunning,
 		StartedAt: "2026-08-11T00:00:00Z",
-		Progress: v1.TransferProgress{
+		Progress: &v1.TransferProgress{
 			JobsPlanned:      2493,
 			JobsDone:         2286,
 			JobsOutstanding:  207,
@@ -98,7 +98,7 @@ func TestTheETAUsesTheBytesActuallyLeftToMove(t *testing.T) {
 	tr := &v1.Transfer{
 		State:     v1.TransferRunning,
 		StartedAt: "2026-08-11T00:00:00Z",
-		Progress: v1.TransferProgress{
+		Progress: &v1.TransferProgress{
 			JobsInFlight:     14,
 			JobsOutstanding:  43,
 			PlannedBytes:     "68400000000",

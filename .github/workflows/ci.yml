@@ -60,6 +60,53 @@ jobs:
           ./bin/worker --version
           ./bin/transferctl version --client
 
+  postgres:
+    name: Store tests against Postgres
+    runs-on: ubuntu-latest
+    # A SERVICE CONTAINER, not Docker inside the tests.
+    #
+    # The rule above still holds - `task test` must run on a laptop with
+    # nothing installed - and this does not break it: the Postgres cases skip
+    # themselves when TEST_POSTGRES_DSN is unset, so the same suite runs both
+    # places and only this job has a server to point at.
+    #
+    # It exists because SQLite could not have caught what shipped. Its dialect
+    # is largely the identity function, so a query that is not portable passes
+    # every local run: the transfer projection coalesced a timestamptz with the
+    # empty string, and the short-id lookup compared a UUID column with an
+    # arbitrary string. Listing or reading a transfer - the Downloads page, the
+    # shell, every `transferctl transfers` command - could not work on Postgres
+    # at all, and nothing in this file would have said so.
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_PASSWORD: postgres
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+        ports:
+          - 5432:5432
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache: true
+
+      - uses: go-task/setup-task@v1
+        with:
+          version: 3.x
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Test against both dialects
+        env:
+          TEST_POSTGRES_DSN: postgres://postgres:postgres@localhost:5432/postgres?sslmode=disable
+        run: task test:postgres
+
   cross-compile:
     name: Cross-compile every platform
     runs-on: ubuntu-latest

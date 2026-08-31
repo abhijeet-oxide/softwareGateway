@@ -317,6 +317,32 @@ export interface ListArtifactsResponse {
   nextPageToken?: string
 }
 
+/**
+ * What stopping an analysis achieved.
+ *
+ * Two booleans rather than one, because they are two different promises. The
+ * claim lives in the database, so releasing it works from any replica and is
+ * what stops the release reading as `Analyzing`. The WALKING is a goroutine,
+ * and only the Coordinator running it can cancel that - one somewhere else
+ * carries on reading the vendor's registry until its own deadline, and its
+ * result is discarded because it no longer holds the claim.
+ */
+export interface CancelAnalysisResponse {
+  product: string
+  package: string
+  /**
+   * A claim was released, so the release can be analysed again now.
+   *
+   * False is not a failure: the walk finished between the reader deciding to
+   * stop it and the request arriving.
+   */
+  stopped: boolean
+  /** The walking itself has ended, because this Coordinator was doing it. */
+  stoppedHere: boolean
+  /** The release as it stands now, so nothing has to be re-read to find out. */
+  packageState: Package
+}
+
 // ---------------------------------------------------------------------------
 // Transfers - "Download" on screen
 // ---------------------------------------------------------------------------
@@ -493,7 +519,14 @@ export interface Transfer {
   promotion?: PromotionProgress
   currentWave: number
   maxWave: number
-  progress: TransferProgress
+  /**
+   * ABSENT on a summary listing. `?view=summary` skips the per-transfer job
+   * rollup - twelve correlated subqueries a row, and the whole cost of the
+   * listing - so a page that only reads names and states does not pay for
+   * counts it never draws. Read it optionally; a page that needs the numbers
+   * asks without `view`.
+   */
+  progress?: TransferProgress
   failureReason?: string
   waves?: TransferWave[]
   content?: ContentGroup[]
@@ -501,9 +534,48 @@ export interface Transfer {
   /** When the first job was leased, not when the transfer was asked for. */
   startedAt?: string
   completedAt?: string
+  /**
+   * How long there was work of this transfer IN A WORKER'S HANDS.
+   *
+   * A different quantity from `completedAt - startedAt`, and the one a person
+   * means by "how long did it take". The two are equal on a transfer that ran
+   * without interruption and diverge by exactly the interruption on one that
+   * did not: a fleet down overnight adds that night to the wall clock and
+   * nothing to this.
+   *
+   * It is also the right denominator for a throughput. Dividing bytes by wall
+   * clock after an outage reports a healthy link at a fraction of its speed -
+   * the outage is in the denominator and none of it was spent transferring.
+   *
+   * Absent on a transfer no worker has ever held, which is honest rather than
+   * zero: nothing has spent any time on it.
+   */
+  activeSeconds?: number
 }
 
 export interface ListTransfersResponse { transfers: Transfer[]; nextPageToken?: string }
+
+/**
+ * What the estate is doing, as three numbers.
+ *
+ * The shell shows one line on every page and used to compute it by asking for
+ * the hundred most recent transfers every few seconds. A transfer listing
+ * carries a dozen aggregates over each transfer's jobs, so its cost is set by
+ * how much work the estate has done rather than by how many numbers the caller
+ * wanted - 158ms for a hundred rows against 1ms for this, on a database whose
+ * connection pool is deliberately a single connection.
+ */
+export interface TransferActivity {
+  /** Live transfers with at least one job in a worker's hands. */
+  moving: number
+  /**
+   * Live transfers with none: planned, queued, or waiting for a fleet that is
+   * not there. Apart from `moving` because a queue being drained and a queue
+   * nothing is draining are the same count of "running".
+   */
+  held: number
+  failed: number
+}
 
 /**
  * The artifact a job belongs to - what makes a digest legible.
@@ -1146,6 +1218,111 @@ export interface Worker {
 }
 
 export interface ListWorkersResponse { workers: Worker[] }
+
+// ---------------------------------------------------------------------------
+// Calibration - "is this speed the best this path can do?"
+// ---------------------------------------------------------------------------
+//
+// A sibling of the connectivity check and a different question: not "can we
+// reach it" but "how fast is it, and what setting would make it faster". It
+// moves real data in both directions and takes minutes, which is why it is
+// asked for explicitly and never on a timer.
+
+export interface CalibrateRequest {
+  /** Configured names. Empty picks the product's only source and its default target. */
+  source?: string
+  target?: string
+  sourceRepository?: string
+  /** The concurrency levels to sweep. Empty uses the server's default. */
+  levels?: number[]
+  /** How long ONE level runs. */
+  budgetSeconds?: number
+  /**
+   * Whether to probe the WRITE half, which opens upload sessions on the target
+   * and cancels them. Nothing is committed. Absent means the server's default,
+   * which is on - a calibration that measured only reading would recommend a
+   * concurrency for the wrong end of the path.
+   */
+  write?: boolean
+  /** Projects the measured ceiling onto a transfer of this size. */
+  bundleBytes?: Int64String
+}
+
+/** One concurrency level's measurement. */
+export interface CalibrationLevel {
+  concurrency: number
+  bytes: Int64String
+  seconds: number
+  rateBytesPerSecond: number
+  perStreamBytesPerSecond: number
+  requests: number
+  errors?: number
+  throttled?: number
+  ttfbMs?: number
+  firstError?: string
+}
+
+/** What the traffic goes through, and what it would do the other way. */
+export interface CalibrationRoute {
+  configured: string
+  proxyInUse: boolean
+  directTested?: boolean
+  directReachable?: boolean
+  directDetail?: string
+  proxiedRateBytesPerSecond?: number
+  directRateBytesPerSecond?: number
+}
+
+/** Everything measured about one end of the path. */
+export interface CalibrationSide {
+  role: string
+  name: string
+  registry: string
+  repository?: string
+  route: CalibrationRoute
+  rttMs?: number
+  /**
+   * What the read probe opened. Carried so a throughput measured over
+   * signature blobs cannot be mistaken for one measured over layers.
+   */
+  samples?: number
+  largestSampleBytes?: Int64String
+  levels?: CalibrationLevel[]
+  /** The smallest concurrency within a tenth of the best measured. */
+  knee?: number
+  /** The sweep ended before the path did, so the ceiling is higher than this. */
+  stillClimbing?: boolean
+  /** Why there are no measurements, when there are none. */
+  skipped?: string
+}
+
+/** One thing to change, or one reason not to. */
+export interface CalibrationSuggestion {
+  severity: string
+  /** The configuration key, in the spelling the file uses. */
+  setting?: string
+  scope?: string
+  current?: string
+  suggested?: string
+  /** The measurement it rests on. Never empty: advice without a number is guesswork. */
+  evidence: string
+}
+
+export interface CalibrateResponse {
+  product: string
+  /**
+   * The host that ran the probes, and it is load-bearing: a measurement of the
+   * Coordinator's network describes the workers' network only when they share
+   * one.
+   */
+  measuredFrom: string
+  startedAt: string
+  durationSeconds: number
+  source: CalibrationSide
+  target: CalibrationSide
+  suggestions: CalibrationSuggestion[]
+  notes?: string[]
+}
 
 export interface VersionResponse {
   version: string

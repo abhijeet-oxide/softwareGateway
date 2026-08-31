@@ -642,6 +642,64 @@ type InspectPackageResponse struct {
 	Started bool `json:"started,omitempty"`
 }
 
+// CancelAnalysisResponse is POST
+// /api/v1/products/{product}/packages/{package}:cancelAnalysis.
+//
+// Two booleans rather than one, because they are two different promises and a
+// caller must be able to tell which it was given. See the handler for why the
+// claim and the walking are separable at all.
+type CancelAnalysisResponse struct {
+	Product string `json:"product"`
+	Package string `json:"package"`
+
+	// Stopped means a claim was released - the release is no longer marked as
+	// being analysed, and can be analysed again now.
+	//
+	// False is not a failure: the walk finished between the reader deciding to
+	// stop it and the request arriving.
+	Stopped bool `json:"stopped"`
+
+	// StoppedHere means the walking itself has been cancelled, because the
+	// Coordinator that answered this request is the one that was doing it.
+	//
+	// False with Stopped true means the walk is running on another replica: it
+	// will carry on reading the vendor's registry until its own deadline, and
+	// its result will be discarded because it no longer holds the claim.
+	StoppedHere bool `json:"stoppedHere"`
+
+	// Package_ is the release as it stands now, so a caller need not re-read it
+	// to find out what state the stop left behind.
+	Package_ Package `json:"packageState"`
+}
+
+// TransferActivityResponse is GET /api/v1/transfers:activity.
+//
+// What the estate is doing, as three numbers, for the one line the application
+// shell shows on every page.
+//
+// # Why it is not a listing
+//
+// The shell used to ask for the hundred most recent transfers every few seconds
+// and count them in the browser. A transfer listing carries a dozen aggregates
+// over each transfer's jobs, so its cost is set by how much work the estate has
+// done rather than by how many numbers the caller wanted - measured at 158ms
+// for a hundred rows against 1ms for this. On SQLite, where the connection pool
+// is deliberately one connection, that difference is time in which no other
+// request and no worker lease can touch the database.
+type TransferActivityResponse struct {
+	// Moving is live transfers with at least one job in a worker's hands.
+	Moving int `json:"moving"`
+	// Held is live transfers with none - planned, queued, or waiting for a
+	// fleet that is not there.
+	//
+	// Reported apart from Moving because they are what the shell exists to
+	// tell apart: a queue being drained and a queue nothing is draining are
+	// the same count of "running" and completely different afternoons.
+	Held int `json:"held"`
+	// Failed is transfers that stopped and have not been retried.
+	Failed int `json:"failed"`
+}
+
 // ListArtifactsResponse is returned by
 // GET /api/v1/products/{product}/packages/{package}/artifacts.
 type ListArtifactsResponse struct {
@@ -1692,7 +1750,17 @@ type Transfer struct {
 	// Progress is always a ROLLUP over jobs, never a maintained counter
 	// (invariant I6). A counter would be a second source of truth for the same
 	// fact and would drift; this cannot.
-	Progress TransferProgress `json:"progress"`
+	//
+	// ABSENT on a listing asked for with `view=summary`, rather than present
+	// and zero. A caller that wants a transfer's identity and outcome - which
+	// target, which state, when - and not its progress can say so, and the
+	// Coordinator then does not read that transfer's jobs at all: measured at
+	// 154ms against 1ms for a hundred rows over an estate of 150,000 jobs.
+	//
+	// Omitted rather than zeroed because a zero here is indistinguishable from
+	// a transfer that has genuinely moved nothing, and a client that drew a
+	// progress bar from it would be inventing one.
+	Progress *TransferProgress `json:"progress,omitempty"`
 
 	FailureReason string `json:"failureReason,omitempty"`
 
@@ -1713,6 +1781,27 @@ type Transfer struct {
 	// count however long it waited for a worker as transfer time.
 	StartedAt   string `json:"startedAt,omitempty"`
 	CompletedAt string `json:"completedAt,omitempty"`
+
+	// ActiveSeconds is how long there was work of this transfer IN A WORKER'S
+	// HANDS, which is a different quantity from CompletedAt minus StartedAt and
+	// the one a person means by "how long did it take".
+	//
+	// The two are equal on a transfer that ran without interruption, and they
+	// diverge by exactly the interruption on one that did not. A fleet that was
+	// down overnight adds that night to the wall clock and nothing to this, so
+	// a throughput computed from the wall clock is wrong by the whole outage -
+	// which is how a healthy link came to be reported at a few hundred
+	// kilobytes a second.
+	//
+	// Sampled by the Coordinator's sweep rather than derived, because it cannot
+	// be derived after the fact: a job's own started_at is set on its FIRST
+	// lease and never reset, so a job orphaned by a crash and finished the next
+	// day carries an interval spanning the outage.
+	//
+	// Accurate to within one sweep, and never larger than the wall clock.
+	// Absent on a transfer no worker has ever held, which is honest rather than
+	// zero: nothing has spent any time on it.
+	ActiveSeconds float64 `json:"activeSeconds,omitempty"`
 }
 
 // PromotionProgress is a native promotion, as it stands.

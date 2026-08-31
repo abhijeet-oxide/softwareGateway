@@ -39,7 +39,7 @@ const label = (p?: Product) => p?.displayName || p?.productId || 'A product'
 
 function VersionHistory({ product }: { product: Product }) {
   const packages = usePackages(product.productId, { pageSize: 25 })
-  const transfers = useTransfers({ product: product.productId, pageSize: 200 })
+  const transfers = useTransfers({ product: product.productId, pageSize: 200, view: 'summary' })
 
   if (packages.isError) {
     return <ErrorState error={packages.error} retry={() => void packages.refetch()} />
@@ -110,7 +110,11 @@ function VersionHistory({ product }: { product: Product }) {
             const s = downloadSeconds(pkg)
             return s === undefined
               ? <NA reason="This release has not been downloaded." />
-              : <Value>{formatDuration(s)}</Value>
+              : (
+                  <Tooltip title="Time a worker was actually moving this release. Any period it spent waiting for one - or waiting out an outage - is not counted.">
+                    <span><Value>{formatDuration(s)}</Value></span>
+                  </Tooltip>
+                )
           },
         },
       ]}

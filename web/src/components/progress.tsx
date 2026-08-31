@@ -4,6 +4,7 @@ import {
 } from '../icons'
 import type { ContentGroup, PromotionProgress as Promotion, Strategy } from '../api/types'
 import { formatBytes, formatCount, formatSpeed, formatAbsolute, formatDuration } from '../domain/format'
+import { useByteRate } from '../domain/rate'
 import { NA } from './value'
 import { c } from '../uikit'
 
@@ -403,7 +404,7 @@ export function etaSeconds({
 }
 
 export function DownloadProgress({
-  transferred, total, saved, groups, strategy = 'copy', elapsedSeconds, live,
+  transferred, total, saved, groups, strategy = 'copy', elapsedSeconds, live, heldBy,
 }: {
   transferred: number | undefined
   total: number | undefined
@@ -416,12 +417,45 @@ export function DownloadProgress({
   elapsedSeconds: number | undefined
   /** Whether this download is still going. */
   live: boolean
+  /**
+   * Why nothing is moving it, when nothing is - two or three words from
+   * domain/fleet.
+   *
+   * It suppresses the ETA, which is the point. The arithmetic still produces
+   * a number for a download with no worker behind it, and that number is a
+   * fiction with two decimal places sitting in the same cell as the reason
+   * there will be no arrival.
+   */
+  heldBy?: string
 }) {
-  // What is LEFT, which is neither moved nor already there.
+  /*
+    TWO SPEEDS, because they answer two questions and this cell was showing
+    neither.
+
+    The average - bytes moved over the download's whole life - is what an
+    estimate rests on: what is left will be moved at roughly the rate
+    everything so far was, and an ETA that swung by ten minutes every poll
+    would be worse than none. It is computed inside `etaSeconds` rather than
+    here, so that this cell and the download's own page cannot arrive at two
+    different answers - which they did, by ~5 hours, on one download.
+
+    The LIVE rate is what belongs on screen. The average is dragged down by
+    every second the download existed and did not move - planning, the wait for
+    a worker, a stall - so a download queued for twenty minutes and now moving
+    at 90 MB/s averages a couple of megabytes a second. This cell used to
+    compute that number and then not render it at all, which at least spared
+    the reader; the number that is worth rendering is the one below.
+  */
+  const rate = useByteRate(transferred, live)
+
+  // What is LEFT, which is neither moved nor already there. Counting the saved
+  // bytes as remaining is how a download with nothing left to do came to
+  // report an ETA of forever.
   const remaining = total !== undefined && transferred !== undefined
     ? Math.max(0, total - transferred - (saved ?? 0))
     : undefined
-  const eta = live
+  // A held download is going nowhere, so there is no arrival to estimate.
+  const eta = live && !heldBy
     ? etaSeconds({ transferred, total, saved, elapsedSeconds })
     : undefined
   const notStarted = live
@@ -439,6 +473,7 @@ export function DownloadProgress({
               total={total}
               saved={saved}
               strategy={strategy}
+              speedBytesPerSecond={live ? rate.current : undefined}
               live={live}
             />
           : <MeasuredProgress
@@ -452,6 +487,7 @@ export function DownloadProgress({
       <Typography.Text type="secondary" style={{ fontSize: 11 }}>
         {notStarted ? 'Not started' : `Elapsed: ${formatDuration(elapsedSeconds) ?? 'Unavailable'}`}
         {eta !== undefined ? ` · ~${formatDuration(eta)} left` : ''}
+        {heldBy ? ` · ${heldBy}` : ''}
         {/*
           "Estimating" only while there is something left to estimate. A
           download whose content the destination already holds has nothing
@@ -459,7 +495,7 @@ export function DownloadProgress({
           wait that is over.
         */}
         {live && !notStarted && eta === undefined && remaining === 0 ? ' · No remaining work' : ''}
-        {live && eta === undefined && remaining !== 0 && strategy === 'copy'
+        {live && !heldBy && eta === undefined && remaining !== 0 && strategy === 'copy'
           ? ' · estimating…'
           : ''}
       </Typography.Text>

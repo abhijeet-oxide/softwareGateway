@@ -1,6 +1,8 @@
 package api
 
 import (
+	"net/http"
+	"reflect"
 	"strconv"
 	"testing"
 
@@ -225,5 +227,98 @@ func TestTheSavingIsBrokenDownByKindAndAddsUp(t *testing.T) {
 	if want := int64(32<<30 + 5<<20); total != want {
 		t.Errorf("the per-kind savings add up to %d, want %d - a breakdown that "+
 			"does not reach its own total is worse than none", total, want)
+	}
+}
+
+// The shell's line has to be the same answer the listing would give, or the
+// cheap way to ask is just a wrong one.
+func TestTransferActivityAgreesWithTheListing(t *testing.T) {
+	h := newAPIHarness(t)
+
+	var listed v1.ListTransfersResponse
+	if code := h.get("/api/v1/transfers?pageSize=100", &listed); code != http.StatusOK {
+		t.Fatalf("listing = %d, want 200", code)
+	}
+
+	var got v1.TransferActivityResponse
+	if code := h.get("/api/v1/transfers:activity", &got); code != http.StatusOK {
+		t.Fatalf("activity = %d, want 200", code)
+	}
+
+	var failed int
+	for _, tr := range listed.Transfers {
+		if tr.State == v1.TransferFailed {
+			failed++
+		}
+	}
+	if got.Failed != failed {
+		t.Errorf("activity reports %d failed, the listing has %d", got.Failed, failed)
+	}
+}
+
+// The route must not be reachable as a transfer named "activity", which is what
+// a plain path segment would have allowed.
+func TestTransferActivityIsNotATransferID(t *testing.T) {
+	h := newAPIHarness(t)
+
+	var prob v1.Problem
+	if code := h.get("/api/v1/transfers/activity", &prob); code != http.StatusNotFound {
+		t.Errorf("GET /transfers/activity = %d, want 404 - it is not a transfer", code)
+	}
+}
+
+// THE SUMMARY VIEW DROPS THE ROLLUP AND NOTHING ELSE.
+//
+// `?view=summary` exists because the twelve correlated aggregates behind
+// `progress` are the entire cost of this listing - about 154ms for a hundred
+// rows against about 1ms without them (store.TestListingWithoutJobCountsIsMuchCheaper).
+// Three pages fetch a page of transfers only to join a release's history onto a
+// package listing, and none of them draws a progress bar.
+//
+// The saving is only honest if the fields those pages DO read survive it. A
+// summary that quietly dropped `state`, `tag` or `activeSeconds` would make
+// every release read NEW on the Packages page while looking, from the server,
+// like an optimisation.
+func TestTheSummaryViewDropsProgressAndKeepsTheHistory(t *testing.T) {
+	h := newAPIHarness(t)
+	id := h.seedTransfer("11111111-2222-3333-4444-555555555555")
+
+	var full, lite v1.ListTransfersResponse
+	if code := h.get("/api/v1/transfers?pageSize=100", &full); code != http.StatusOK {
+		t.Fatalf("full listing = %d, want 200", code)
+	}
+	if code := h.get("/api/v1/transfers?pageSize=100&view=summary", &lite); code != http.StatusOK {
+		t.Fatalf("summary listing = %d, want 200", code)
+	}
+
+	find := func(rows []v1.Transfer) v1.Transfer {
+		t.Helper()
+		for _, tr := range rows {
+			if tr.ID == id {
+				return tr
+			}
+		}
+		t.Fatalf("the seeded transfer is missing from a listing of %d", len(rows))
+		return v1.Transfer{}
+	}
+	a, b := find(full.Transfers), find(lite.Transfers)
+
+	// The rollup is there when it is asked for. Four pending jobs were seeded,
+	// so a listing reporting none of them planned has not run the aggregates at
+	// all and the comparison below would pass for the wrong reason.
+	if a.Progress == nil || a.Progress.JobsOutstanding != 4 {
+		t.Fatalf("the full listing reported %+v, want the 4 seeded jobs", a.Progress)
+	}
+	if b.Progress != nil {
+		t.Errorf("the summary carried a progress object: %+v", b.Progress)
+	}
+
+	// And everything else is the same transfer. Compared by clearing the one
+	// field that is meant to differ, so a field added to the DTO later is
+	// covered by this test without anyone remembering to list it here.
+	a.Progress = nil
+	if !reflect.DeepEqual(a, b) {
+		t.Errorf("the summary differs from the full row in more than progress:\n"+
+			" full: %+v\n summary: %+v", a, b)
 	}
 }

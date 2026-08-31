@@ -32,7 +32,7 @@ func listWith(fixtures ...transferFixture) *v1.ListTransfersResponse {
 			Source: f.source, Target: f.target,
 			SourceName: f.sourceName, TargetName: f.targetName,
 			State: v1.TransferState(f.state),
-			Progress: v1.TransferProgress{
+			Progress: &v1.TransferProgress{
 				JobsPlanned:        2489,
 				JobsDone:           1086,
 				PlannedBytes:       v1.Int64String(f.planned),
@@ -92,7 +92,7 @@ func TestNothingSavedIsADash(t *testing.T) {
 	if err := renderTransferList(&buf, resp, rateTrackers{}, listView{all: true}); err != nil {
 		t.Fatal(err)
 	}
-	if got := savedBytes(resp.Transfers[0].Progress); got != "-" {
+	if got := savedBytes(progressOf(&resp.Transfers[0])); got != "-" {
 		t.Errorf("saved = %q with nothing saved, want a dash", got)
 	}
 }

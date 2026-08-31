@@ -69,7 +69,7 @@ export default function Overview() {
     { pageSize: 30 },
   )
 
-  const transfers = useTransfers({ pageSize: 100 })
+  const transfers = useTransfers({ pageSize: 100, view: 'summary' })
   const reports = useReports({ period: '7d' })
 
   const rows = useMemo<Row[]>(() => {

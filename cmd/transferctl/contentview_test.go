@@ -65,7 +65,7 @@ func TestAFinishedTransferReportsItsAverageSpeed(t *testing.T) {
 		ID: "9bc63dc2", State: v1.TransferSucceeded,
 		StartedAt:   time.Now().Add(-100 * time.Second).Format(time.RFC3339Nano),
 		CompletedAt: time.Now().Format(time.RFC3339Nano),
-		Progress:    v1.TransferProgress{BytesTransferred: "524288000"},
+		Progress:    &v1.TransferProgress{BytesTransferred: "524288000"},
 	}
 
 	// 500 MiB over 100 seconds.
@@ -81,7 +81,7 @@ func TestAFinishedTransferReportsItsAverageSpeed(t *testing.T) {
 		ID: "218985ce", State: v1.TransferSucceeded,
 		StartedAt:   done.StartedAt,
 		CompletedAt: done.CompletedAt,
-		Progress:    v1.TransferProgress{BytesTransferred: "0"},
+		Progress:    &v1.TransferProgress{BytesTransferred: "0"},
 	}
 	if got := speedOf(moved, 0); got != "-" {
 		t.Errorf("a transfer that moved no bytes reported %q, want a dash", got)
@@ -92,7 +92,7 @@ func TestAFinishedTransferReportsItsAverageSpeed(t *testing.T) {
 	stalled := &v1.Transfer{
 		ID: "5a1c0000", State: v1.TransferRunning,
 		StartedAt: done.StartedAt,
-		Progress: v1.TransferProgress{
+		Progress: &v1.TransferProgress{
 			BytesTransferred: "524288000", JobsOutstanding: 40,
 		},
 	}
@@ -112,7 +112,7 @@ func TestTheEstimateAllowsForWorkThatWillBeSkipped(t *testing.T) {
 	// at so far, only 40 MiB actually moved. The rest was already at the target.
 	delta := &v1.Transfer{
 		State: v1.TransferRunning,
-		Progress: v1.TransferProgress{
+		Progress: &v1.TransferProgress{
 			PlannedBytes:     "68719476736",
 			OutstandingBytes: "64424509440",
 			BytesTransferred: "41943040",
@@ -137,7 +137,7 @@ func TestTheEstimateAllowsForWorkThatWillBeSkipped(t *testing.T) {
 	// scaling must not shorten an honest estimate.
 	fresh := &v1.Transfer{
 		State: v1.TransferRunning,
-		Progress: v1.TransferProgress{
+		Progress: &v1.TransferProgress{
 			PlannedBytes:     "68719476736",
 			OutstandingBytes: "64424509440",
 			BytesTransferred: "4294967296",
@@ -158,7 +158,7 @@ func TestTheEstimateAllowsForWorkThatWillBeSkipped(t *testing.T) {
 func TestTheEstimateIsUnscaledUntilSomethingHasCompleted(t *testing.T) {
 	starting := &v1.Transfer{
 		State: v1.TransferRunning,
-		Progress: v1.TransferProgress{
+		Progress: &v1.TransferProgress{
 			PlannedBytes:     "1048576000",
 			OutstandingBytes: "1048576000",
 			BytesTransferred: "1048576",
@@ -215,7 +215,7 @@ func TestTheEstimateRespectsTheJobsStillToRun(t *testing.T) {
 	skipping := &v1.Transfer{
 		State:     v1.TransferRunning,
 		StartedAt: time.Now().Add(-83 * time.Second).Format(time.RFC3339Nano),
-		Progress: v1.TransferProgress{
+		Progress: &v1.TransferProgress{
 			PlannedBytes:     "32000000000",
 			OutstandingBytes: "300000000",
 			BytesTransferred: "501862",
@@ -242,7 +242,7 @@ func TestTheEstimateRespectsTheJobsStillToRun(t *testing.T) {
 	heavy := &v1.Transfer{
 		State:     v1.TransferRunning,
 		StartedAt: time.Now().Add(-83 * time.Second).Format(time.RFC3339Nano),
-		Progress: v1.TransferProgress{
+		Progress: &v1.TransferProgress{
 			PlannedBytes:     "32000000000",
 			OutstandingBytes: "30000000000",
 			BytesTransferred: "2000000000",
@@ -302,7 +302,7 @@ func TestNothingOutstandingIsNothingRemaining(t *testing.T) {
 	done := &v1.Transfer{
 		State:     v1.TransferRunning,
 		StartedAt: time.Now().Add(-229 * time.Second).Format(time.RFC3339Nano),
-		Progress: v1.TransferProgress{
+		Progress: &v1.TransferProgress{
 			PlannedBytes:     "68400000000",
 			OutstandingBytes: "0",
 			BytesTransferred: "1153434",
@@ -321,7 +321,7 @@ func TestNothingOutstandingIsNothingRemaining(t *testing.T) {
 	old := &v1.Transfer{
 		State:     v1.TransferRunning,
 		StartedAt: done.StartedAt,
-		Progress: v1.TransferProgress{
+		Progress: &v1.TransferProgress{
 			PlannedBytes:     "1000",
 			BytesTransferred: "400",
 			JobsOutstanding:  4,
@@ -342,7 +342,7 @@ func TestNothingOutstandingIsNothingRemaining(t *testing.T) {
 func TestDescribeSeparatesTheReleaseFromTheWork(t *testing.T) {
 	tr := &v1.Transfer{
 		ID: "b5d85331", State: v1.TransferRunning,
-		Progress: v1.TransferProgress{
+		Progress: &v1.TransferProgress{
 			ContentBytes: "32000000000",
 			PlannedBytes: "68400000000",
 			SavedBytes:   "68398000000", BytesTransferred: "1153434",
@@ -410,7 +410,7 @@ func TestTheRowAccountsForTheWholePlan(t *testing.T) {
 func TestTheListAndDescribeAgreeOnWhatIsLeft(t *testing.T) {
 	tr := &v1.Transfer{
 		ID: "281dc2e4", State: v1.TransferRunning,
-		Progress: v1.TransferProgress{
+		Progress: &v1.TransferProgress{
 			PlannedBytes: "68400000000", SavedBytes: "67100000000",
 			OutstandingBytes: "1299745000", BytesTransferred: "255078",
 		},

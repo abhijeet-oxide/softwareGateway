@@ -383,9 +383,23 @@ func (r *Repository) classify(err error, what string) error {
 	case errors.Is(err, errdef.ErrUnsupported):
 		out.Err = registry.ErrUnsupported
 	default:
-		// Genuinely uncategorised - a transport failure, most often. Kept
-		// verbatim: the string is all there is, and truncating it here would
-		// leave the operator with a class and no cause.
+		// A failure that never became a response: the connection dropped, the
+		// deadline expired. It USED to fall straight through to the branch
+		// below and come out `unclassified`, which is retried with the full
+		// transient budget - eight complete re-uploads of a half-gigabyte
+		// layer for a path that is cutting every one of them at the same
+		// place. Naming it costs nothing and is the difference between a
+		// failure an operator can act on and one that only says "again".
+		//
+		// The original error is kept as the sentinel's cause, so the wording
+		// the peer or the standard library chose is still on the line.
+		if sentinel := registry.ClassifyTransport(err); sentinel != nil {
+			out.Err = fmt.Errorf("%w: %w", sentinel, err)
+			break
+		}
+		// Genuinely uncategorised. Kept verbatim: the string is all there is,
+		// and truncating it here would leave the operator with a class and no
+		// cause.
 		out.Err = err
 	}
 	return out

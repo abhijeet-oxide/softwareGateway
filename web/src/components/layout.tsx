@@ -5,8 +5,8 @@ import {
   Typography,
 } from 'antd'
 import {
-  ArrowLeftOutlined, CheckCircleOutlined, ClockCircleOutlined, LoadingOutlined, PartialOutlined,
-  RocketOutlined, SearchOutlined, ShopOutlined,
+  ArrowLeftOutlined, CheckCircleOutlined, ClockCircleOutlined, CloseCircleOutlined,
+  LoadingOutlined, PartialOutlined, RocketOutlined, SearchOutlined, ShopOutlined,
 } from '../icons'
 import { Link } from 'react-router-dom'
 import type { ContentGroup, PresentComponent } from '../api/types'
@@ -359,23 +359,49 @@ function Moment({
  */
 export function LifecycleCell({ steps }: { steps: LifecycleStep[] }) {
   const reached = steps.filter((s) => s.reached)
-  const stage = steps.find((s) => s.current) ?? reached[reached.length - 1] ?? steps[0]
+  /*
+    A FAILURE FIRST, and this order is the whole fix.
+
+    The fallback below - the last stage REACHED - is right for a release that
+    is simply sitting somewhere, and it was silently wrong for one that had
+    failed: a failed download has reached Downloading, because a download was
+    genuinely started, so this cell read `Downloading` on a row whose status
+    column read `Download failed`. Two columns, one release, contradicting each
+    other on every listing that shows both.
+
+    `current` alone does not settle it either. It is derived from the status,
+    and the status words for a failure are DOWNLOAD FAILED and PROMOTION
+    FAILED, which name no stage - so nothing was ever current and the fallback
+    always won.
+  */
+  const stage = steps.find((s) => s.failed)
+    ?? steps.find((s) => s.current)
+    ?? reached[reached.length - 1]
+    ?? steps[0]
   if (!stage) return <NA reason="This release has no lifecycle recorded." />
-  const mark = STAGE_MARKS[stage.stage] ?? { icon: <ClockCircleOutlined />, colour: 'default' }
+  const mark = stage.failed
+    ? { icon: <CloseCircleOutlined />, colour: 'error' }
+    : STAGE_MARKS[stage.stage] ?? { icon: <ClockCircleOutlined />, colour: 'default' }
+  // What the stage is CALLED once it has failed. "Downloading" over a download
+  // that stopped is the present tense describing something that is not
+  // happening.
+  const label = stage.failed ? FAILED_STAGE_LABEL[stage.stage] ?? stage.stage : stage.stage
 
   return (
     <Popover
       placement="left"
-      title={`Lifecycle - ${stage.stage}`}
+      title={`Lifecycle - ${label}`}
       content={
         <div style={{ minWidth: 260 }}>
           <Timeline
             style={{ marginTop: 8 }}
             items={steps.map((s) => ({
-              color: s.current ? 'blue' : s.reached ? 'green' : 'gray',
+              color: s.failed ? 'red' : s.current ? 'blue' : s.reached ? 'green' : 'gray',
               children: (
                 <Space direction="vertical" size={0}>
-                  <span style={{ fontWeight: s.current ? 600 : 400 }}>{s.stage}</span>
+                  <span style={{ fontWeight: s.current || s.failed ? 600 : 400 }}>
+                    {s.failed ? FAILED_STAGE_LABEL[s.stage] ?? s.stage : s.stage}
+                  </span>
                   {s.at ? (
                     <Typography.Text type="secondary" style={{ fontSize: 12 }}>
                       {formatAbsolute(s.at)}
@@ -395,7 +421,7 @@ export function LifecycleCell({ steps }: { steps: LifecycleStep[] }) {
       <Tag color={mark.colour} style={{ marginInlineEnd: 0, cursor: 'default' }}>
         <Space size={4}>
           {mark.icon}
-          {stage.stage}
+          {label}
         </Space>
       </Tag>
     </Popover>
@@ -407,6 +433,19 @@ export function LifecycleCell({ steps }: { steps: LifecycleStep[] }) {
  * release at the vendor has not moved, one downloading is in motion, one
  * downloaded is at rest with us, one in production has shipped.
  */
+/**
+ * What a stage is called once the attempt at it failed.
+ *
+ * Past tense, and naming the operation rather than the stage: `Downloading`
+ * over a download that has stopped is the present tense describing something
+ * that is not happening, and it is the exact word the status column is
+ * simultaneously contradicting.
+ */
+const FAILED_STAGE_LABEL: Record<string, string> = {
+  Downloading: 'Download failed',
+  Production: 'Promotion failed',
+}
+
 const STAGE_MARKS: Record<string, { icon: ReactNode; colour: string }> = {
   Vendor: { icon: <ShopOutlined />, colour: 'default' },
   Downloading: { icon: <LoadingOutlined />, colour: 'processing' },

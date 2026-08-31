@@ -9,9 +9,10 @@ import {
 import { useState } from 'react'
 import { Link } from 'react-router-dom'
 import {
-  useDownloadsForAll, useProducts, useReplicationForAll, useRulesForAll, useTransfers,
+  useDownloadsForAll, useProducts, useReplicationForAll, useRulesForAll, useTransfers, useWorkers,
 } from '../api/queries'
 import { isLive, isPromotion, repositoryOf, transferVersion } from '../domain/derive'
+import { describeFleet, holdOn, summariseFleet, type Fleet } from '../domain/fleet'
 import { bytes, elapsedSeconds, formatBytes, formatDuration } from '../domain/format'
 import { NA, Value } from '../components/value'
 import { ManagedInGit, TimeAgo, TransferStateTag } from '../components/chips'
@@ -155,6 +156,92 @@ function MethodTag({ transfer }: { transfer: Transfer }) {
   )
 }
 
+/**
+ * A transfer's state, with what is holding it up when something is.
+ *
+ * # Why the state alone was not enough
+ *
+ * `RUNNING` is set the moment a transfer's first job completes and stays set
+ * while nothing at all is in flight - which is exactly the state somebody scans
+ * this table to find. `READY` is honest and its tooltip promises a worker is
+ * about to take the first job, which is a promise nobody can keep when there is
+ * no worker.
+ *
+ * The server's word is kept, because it is what `transferctl` and the logs say
+ * and the two must line up. What is added is the second half of the sentence:
+ * what would have to change for this row to move.
+ */
+function TransferState({ transfer, fleet }: { transfer: Transfer; fleet: Fleet }) {
+  const hold = holdOn(transfer, fleet)
+  return (
+    <Space direction="vertical" size={2}>
+      <TransferStateTag state={transfer.state} />
+      {hold && (
+        <Tooltip title={`${hold.detail} ${describeFleet(fleet)}`}>
+          <Typography.Text
+            style={{
+              fontSize: 11,
+              // Amber for the one that needs somebody, grey for the ones that
+              // are the queue working as designed. A reader scanning the column
+              // should not have to read every row to find the one that matters.
+              color: hold.actionable ? c.danger : c.text3,
+              whiteSpace: 'nowrap',
+            }}
+          >
+            {hold.kind === 'no-workers' ? 'No worker running' : hold.label}
+          </Typography.Text>
+        </Tooltip>
+      )}
+    </Space>
+  )
+}
+
+/** The one-line version of a hold, for a cell that has no room for a sentence. */
+function holdLine(transfer: Transfer, fleet: Fleet): string | undefined {
+  const hold = holdOn(transfer, fleet)
+  if (!hold) return undefined
+  return hold.kind === 'no-workers' ? 'no worker to run it' : 'waiting for a worker'
+}
+
+/**
+ * How long a worker was actually on this, with the wall clock behind it.
+ *
+ * The two are the same number on a transfer that ran straight through, and the
+ * difference on one that did not is the whole point: a download that waited
+ * overnight for a worker took twenty minutes and existed for twelve hours, and
+ * a column headed "Time" reported the twelve.
+ *
+ * An older Coordinator does not send the accrued figure. Falling back to the
+ * wall clock is the answer it used to give, which is coarse rather than wrong.
+ */
+function TimeSpent({ transfer }: { transfer: Transfer }) {
+  const wall = elapsedSeconds(transfer.startedAt, transfer.completedAt)
+  const spent = transfer.activeSeconds
+  const idle = wall !== undefined && spent !== undefined ? Math.max(0, wall - spent) : undefined
+  const interrupted = (idle ?? 0) > 60 && (idle ?? 0) > (spent ?? 0) * 0.1
+
+  return (
+    <Tooltip
+      title={
+        interrupted
+          ? `A worker was on this for ${formatDuration(spent)}. It waited a further `
+            + `${formatDuration(idle)} with nothing working on it, so from the first job `
+            + `to the last was ${formatDuration(wall)}.`
+          : 'Time a worker was actually moving this. Waiting for one is not counted.'
+      }
+    >
+      <span>
+        <Value>{formatDuration(spent ?? wall)}</Value>
+        {interrupted && (
+          <Typography.Text type="secondary" style={{ fontSize: 11, display: 'block' }}>
+            +{formatDuration(idle)} waiting
+          </Typography.Text>
+        )}
+      </span>
+    </Tooltip>
+  )
+}
+
 /** One product's row in a configuration table. */
 type WithProduct<T> = T & { product: string }
 
@@ -195,6 +282,9 @@ export default function Downloads() {
   const [transferToken, setTransferToken] = useState<string>()
   const [promotionPage, setPromotionPage] = useState(1)
   const [promotionToken, setPromotionToken] = useState<string>()
+  // undefined means "nobody has chosen one", so the default below can follow
+  // the data. It stops following it the moment somebody picks a tab.
+  const [tab, setTab] = useState<string>()
   const [ongoingSearch, setOngoingSearch] = useState('')
   const [downloadSearch, setDownloadSearch] = useState('')
   const [promotionSearch, setPromotionSearch] = useState('')
@@ -211,19 +301,88 @@ export default function Downloads() {
   // deployments that promote the most.
   const transfers = useTransfers({ pageSize: 25, operation: 'replicate', pageToken: transferToken })
   const promotionsQuery = useTransfers({ pageSize: 25, operation: 'promote', pageToken: promotionToken })
-  const downloadsPerProduct = useDownloadsForAll(names)
-  const rulesPerProduct = useRulesForAll(names)
   const replicationPerProduct = useReplicationForAll(names)
+
+  /*
+    THE FLEET. A download is planned by the Coordinator and performed by
+    workers, and this page could not see them - so a queue that nothing was
+    draining rendered identically to one being drained at full tilt, which is
+    the difference between "wait" and "go and start a worker".
+  */
+  const workers = useWorkers()
+  const fleet = summariseFleet(workers.data?.workers, workers.isSuccess)
 
   const all = transfers.data?.transfers ?? []
   const ongoing = all.filter((t) => isLive(t.state) || t.state === 'PAUSED')
   const finished = all.filter((t) => !isLive(t.state) && t.state !== 'PAUSED')
 
+  // Downloads that have been asked for and cannot move because there is
+  // nothing to move them. Distinct from ones merely queued behind other work,
+  // which is the system working.
+  const stranded = ongoing.filter((t) => holdOn(t, fleet)?.kind === 'no-workers')
+
   // Belt and braces on the filter: a Coordinator too old to know the
   // `operation` parameter answers with everything, and a promotion listed
   // among downloads reads as a download that mysteriously moved no bytes.
   const promotions = (promotionsQuery.data?.transfers ?? []).filter(isPromotion)
+
+  /*
+    THE ONES THAT FAILED, and the reason this page needed to learn about them.
+
+    The navigation badges this page with the number of failed downloads. Click
+    it and you arrive on the Ongoing tab, which excludes failures by
+    construction - a failed download is settled, not ongoing - so the page
+    opened on an empty table with a red "1" still sitting in the sidebar next
+    to its own name. The failure was two tabs away in the history, unmarked,
+    and nothing anywhere said so.
+
+    Neither half of that was wrong on its own. What was missing was any
+    connection between the count and the place the counted thing lives.
+  */
+  const failed = [
+    ...finished.filter((t) => t.state === 'FAILED'),
+    // PROMOTIONS TOO. The sidebar's badge counts every failed transfer, so a
+    // failed promotion badges this page - and a banner drawn only from the
+    // downloads listing would leave that badge pointing at a page that says
+    // nothing is wrong. The two counts have to be the same count.
+    ...promotions.filter((t) => t.state === 'FAILED'),
+  ]
+
   const activePromotions = promotions.filter((t) => isLive(t.state) || t.state === 'PAUSED')
+
+  /*
+    Which tab to open on when nobody has picked one.
+
+    Ongoing while anything is running, because that is what somebody watching a
+    download came for. Otherwise the tab holding the failures, if there are
+    any - and WHICH tab that is depends on what failed: a failed promotion is
+    in the promotions table, and landing on the downloads history for it would
+    reproduce the same empty-table problem one tab across.
+  */
+  const failedPromotions = failed.filter(isPromotion).length
+  const defaultTab =
+    ongoing.length > 0 || failed.length === 0
+      ? 'ongoing'
+      : failedPromotions === failed.length
+        ? 'promotion'
+        : 'downloads'
+  // Which tab is actually showing, which is what decides whether the two
+  // per-product fan-outs below are worth issuing at all.
+  const openTab = tab ?? defaultTab
+
+  /*
+    A REQUEST PER PRODUCT, so only for the tab that is open.
+
+    These two feed the Rules and Auto download tabs. The page does not open on
+    either, and they were fetched anyway - fifty products meant a hundred
+    requests issued ahead of the two that populate the table actually on
+    screen, competing with them for the browser's six connections per host.
+
+    The replication fan-out below is not gated: it feeds the drift banner,
+    which is on the page whichever tab is showing.
+  */
+  const downloadsPerProduct = useDownloadsForAll(names, openTab === 'rules')
+  const rulesPerProduct = useRulesForAll(names, openTab === 'auto-download')
   const visibleOngoing = searchable(ongoing, ongoingSearch, (t) => `${t.product} ${t.packageName} ${t.tag} ${t.source} ${t.target}`)
   const visibleFinished = searchable(finished, downloadSearch, (t) => `${t.product} ${t.packageName} ${t.tag} ${t.source} ${t.target}`)
   const visiblePromotions = searchable(promotions, promotionSearch, (t) => `${t.product} ${t.packageName} ${t.tag} ${t.source} ${t.target}`)
@@ -247,6 +406,67 @@ export default function Downloads() {
 
   return (
     <>
+
+      {/*
+        WHAT THE BADGE WAS COUNTING, at the top of the page it points at.
+
+        The tab default below lands somebody on the right table; this says what
+        is wrong without them having to read one. A failed download is the only
+        thing on this page that needs a person, and until now the page's own
+        account of itself was an empty "Nothing is downloading" panel.
+      */}
+      {failed.length > 0 && (
+        <Alert
+          type="error"
+          showIcon
+          style={{ marginBottom: 16 }}
+          message={`${failed.length} download${failed.length === 1 ? '' : 's'} failed`}
+          description={
+            <Space direction="vertical" size={4} style={{ width: '100%' }}>
+              {failed.slice(0, 4).map((t) => (
+                <Typography.Text key={t.id}>
+                  <Link to={`/downloads/${t.id}`}>
+                    {t.product} / {t.packageName || repositoryOf(t.source)}:{transferVersion(t)}
+                  </Link>
+                  {t.targetName ? ` → ${t.targetName}` : ''}
+                  {t.failureReason ? ` - ${t.failureReason}` : ''}
+                </Typography.Text>
+              ))}
+              {failed.length > 4 && (
+                <Typography.Text type="secondary">
+                  and {failed.length - 4} more, in the Downloads tab below.
+                </Typography.Text>
+              )}
+              <Typography.Text type="secondary">
+                A retry resumes rather than restarting - nothing already moved is moved again.
+              </Typography.Text>
+            </Space>
+          }
+        />
+      )}
+
+      {stranded.length > 0 && (
+        <Alert
+          type="warning"
+          showIcon
+          style={{ marginBottom: 16 }}
+          message={
+            `${stranded.length} download${stranded.length === 1 ? '' : 's'} `
+            + `${stranded.length === 1 ? 'is' : 'are'} waiting, and no worker is running`
+          }
+          description={
+            <Space direction="vertical" size={4}>
+              <Typography.Text>{describeFleet(fleet)}</Typography.Text>
+              <Typography.Text type="secondary">
+                Downloads are planned here and performed by workers, so these will not move -
+                and will not fail either - until at least one is back. Nothing has been lost:
+                work already planned stays queued and starts on its own the moment a worker
+                reports in.
+              </Typography.Text>
+            </Space>
+          }
+        />
+      )}
 
       {drifted.length > 0 && (
         <Alert
@@ -274,6 +494,22 @@ export default function Downloads() {
       <Row gutter={[16, 16]}>
         <Col span={24}>
           <Tabs
+          /*
+            WHERE THE BADGE POINTS.
+
+            Uncontrolled, this always opened on Ongoing - including when the
+            only reason somebody clicked through was the failure badge, and
+            Ongoing is the one tab that cannot contain a failure. The default
+            now follows what there is to see: a failure with nothing running
+            opens the tab holding it.
+
+            Controlled rather than `defaultActiveKey`, because the counts
+            arrive after the first render - a default computed from an empty
+            list would fix the tab on Ongoing before the data that should have
+            decided it had loaded.
+          */
+          activeKey={openTab}
+          onChange={setTab}
           items={[
             {
               key: 'ongoing',
@@ -321,7 +557,11 @@ export default function Downloads() {
                     render: (_, t) => <Typography.Text style={{ fontFamily: mono }}>{transferVersion(t)}</Typography.Text>,
                   },
                   { title: 'Route', width: 200, render: (_, t) => <Route transfer={t} /> },
-                  { title: 'State', width: 130, render: (_, t) => <TransferStateTag state={t.state} /> },
+                  {
+                    title: 'State',
+                    width: 140,
+                    render: (_, t) => <TransferState transfer={t} fleet={fleet} />,
+                  },
                   {
                     // How far, how long, and how much longer - one cell,
                     // because each of the three is misleading without the
@@ -341,8 +581,13 @@ export default function Downloads() {
                           ?? bytes(t.progress?.savedBytes)}
                         groups={t.content}
                         strategy={t.strategy ?? 'copy'}
-                        elapsedSeconds={elapsedSeconds(t.startedAt)}
+                        // TIME SPENT, not time since it was asked for. See the
+                        // download page: the two differ by exactly however long
+                        // nothing was working on it.
+                        elapsedSeconds={t.activeSeconds ?? elapsedSeconds(t.startedAt)}
                         live={isLive(t.state)}
+                        // No arrival to promise while nothing is moving it.
+                        heldBy={holdLine(t, fleet)}
                       />
                     ),
                   },
@@ -368,7 +613,11 @@ export default function Downloads() {
             },
             {
                 key: 'downloads',
-                label: 'Downloads',
+                // The failure count is ON the tab that holds them, so the
+                // sidebar's badge and this page agree about where to look.
+                label: failed.length > 0
+                  ? `Downloads (${failed.length} failed)`
+                  : 'Downloads',
               icon: <HistoryOutlined />,
               children: (
               <Card loading={transfers.isLoading} styles={{ body: { padding: 0 } }}>
@@ -400,7 +649,10 @@ export default function Downloads() {
                 }}
                 dataSource={visibleFinished}
                 rowKey={(t) => t.id}
-                scroll={{ x: 1280 }}
+                // Wide enough for `Time spent` and `Downloaded` to print their
+                // own headings. Truncated to `Time ...` and `Downlo...` they
+                // are two columns of numbers with no stated unit.
+                scroll={{ x: 1400 }}
                 columns={[
                   { title: 'Product', width: 140, render: (_, t) => t.product },
                   { title: 'Package', width: 190, render: (_, t) => <PackageCell transfer={t} /> },
@@ -412,12 +664,13 @@ export default function Downloads() {
                   { title: 'Route', width: 200, render: (_, t) => <Route transfer={t} /> },
                   { title: 'State', width: 130, render: (_, t) => <TransferStateTag state={t.state} /> },
                   {
-                    title: 'Time',
-                    width: 90,
+                    // Time SPENT, which is not time elapsed. A download that
+                    // waited overnight for a worker took twenty minutes and sat
+                    // for twelve hours, and this column said twelve hours.
+                    title: 'Time spent',
+                    width: 100,
                     align: 'right',
-                    render: (_, t) => (
-                      <Value>{formatDuration(elapsedSeconds(t.startedAt, t.completedAt))}</Value>
-                    ),
+                    render: (_, t) => <TimeSpent transfer={t} />,
                   },
                   {
                     title: 'Downloaded',
@@ -482,7 +735,7 @@ export default function Downloads() {
                 }}
                 dataSource={visiblePromotions}
                 rowKey={(t) => t.id}
-                scroll={{ x: 1100 }}
+                scroll={{ x: 1180 }}
                 columns={[
                   { title: 'Product', width: 140, render: (_, t) => t.product },
                   { title: 'Package', width: 180, render: (_, t) => <PackageCell transfer={t} /> },
@@ -500,12 +753,10 @@ export default function Downloads() {
                   { title: 'How', width: 110, render: (_, t) => <MethodTag transfer={t} /> },
                   { title: 'State', width: 130, render: (_, t) => <TransferStateTag state={t.state} /> },
                   {
-                    title: 'Time',
-                    width: 90,
+                    title: 'Time spent',
+                    width: 100,
                     align: 'right',
-                    render: (_, t) => (
-                      <Value>{formatDuration(elapsedSeconds(t.startedAt, t.completedAt))}</Value>
-                    ),
+                    render: (_, t) => <TimeSpent transfer={t} />,
                   },
                   { title: 'When', width: 100, render: (_, t) => <TimeAgo at={t.completedAt || t.createdAt} /> },
                   {

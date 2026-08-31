@@ -193,6 +193,26 @@ func (c *Controller) recover(ctx context.Context) {
 }
 
 func (c *Controller) reap(ctx context.Context) {
+	/*
+	  FIRST, and before anything that changes a transfer's state.
+
+	  This pass credits every transfer that has a job in a worker's hands RIGHT
+	  NOW with the time since the previous pass. Running it after Settle would
+	  mean a transfer that has just been marked failed loses the seconds it
+	  spent working in the interval that produced the failure - the last pass of
+	  its life, and the one most likely to be interesting.
+
+	  It is also the only thing in this loop that measures rather than repairs,
+	  which is why its failure is logged and not returned: an unrecorded second
+	  must never cost a reap.
+	*/
+	if credited, err := c.queue.AccrueActiveTime(ctx, c.opts.ReapInterval); err != nil {
+		c.log.ErrorContext(ctx, "could not record time spent downloading", "error", err)
+	} else if credited > 0 {
+		c.log.DebugContext(ctx, "credited transfers with time spent downloading",
+			"transfers", credited)
+	}
+
 	reaped, err := c.queue.Reap(ctx)
 	if err != nil {
 		c.log.ErrorContext(ctx, "the reaper failed", "error", err)

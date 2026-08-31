@@ -556,6 +556,42 @@ coordinator:
     budgetBytes: 536870912         # 512 MiB; 0 disables the budget
     ttl: 168h                      # reclaim bodies untouched for a week; 0 disables
     sweepInterval: 15m
+  # How hard a vulnerability sync pushes a scanner, and what it keeps.
+  #
+  # Here rather than in a product document because none of it is a property of
+  # a PRODUCT: how hard to push a scanner belongs to the scanner and the network
+  # to it, and how long to keep an index belongs to this deployment's disk. A
+  # product document says one thing about Xray - whether it is on (§5.2.1).
+  security:
+    # CEILINGS, not settings. A pacer shrinks the batch when the scanner times
+    # out and the concurrency when it rate-limits, and grows both back after a
+    # run of clean requests, so these bound the worst case rather than describe
+    # the steady state. See 21 §8.
+    concurrency: 10                # scanner requests in flight, per sync
+    batchSize: 50                  # artifacts per request
+    requestTimeout: 60s
+
+    # Retentions are how long a row is PINNED, not how long it lives. Past them
+    # a row is EVICTABLE and is still read, exported and counted; it goes only
+    # when the store is over cacheBudgetBytes and it is the least recently read
+    # thing in it. See 21 §7.
+    indexRetention: 720h           # 30d - statuses, counts, CVE identifiers
+    detailRetention: 168h          # 7d  - descriptions, references, CVSS vectors
+    documentRetention: 720h        # 30d - the scanner's own bodies
+
+    # 0 - the default - means NO CEILING and nothing is ever deleted. Forgetting
+    # a security answer is the surprising behaviour and should have to be asked
+    # for. The index tier is deliberately not in this budget: rebuilding it is
+    # minutes of somebody else's scanner.
+    cacheBudgetBytes: 0
+    sweepInterval: 15m
+
+    # What a sync retrieves per image beyond the vulnerability response, which
+    # is captured from the request it was making anyway and costs nothing.
+    # Each named kind is a request per image. `sbom` is absent on purpose - it
+    # is minutes and tens of megabytes per image, and is generated on demand
+    # behind the download button instead.
+    documents: [policy, malware]
 
 worker:
   coordinatorEndpoint: http://coordinator.softwaregateway.svc:8080

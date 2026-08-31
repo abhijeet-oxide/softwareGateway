@@ -21,6 +21,17 @@ CREATE INDEX security_scans_evict_idx   ON security_scans (evictable_at);
 CREATE INDEX security_details_evict_idx ON security_details (evictable_at);
 CREATE INDEX security_details_used_idx  ON security_details (last_used_at);
 
+-- The rows that predate the accounting, measured now.
+--
+-- Eviction spends a byte budget, and a row reporting zero bytes frees nothing
+-- when it is deleted - so a store full of them would evict its whole detail
+-- tier to get back inside a budget it never left. These rows are uncompressed
+-- JSON written before there was a column to say so, which is what codec 'json'
+-- means and why the two sizes are the same.
+UPDATE security_details
+   SET bytes = length(payload), source_bytes = length(payload)
+ WHERE bytes = 0;
+
 CREATE TABLE security_documents (
     product      TEXT NOT NULL,
     repository   TEXT NOT NULL,

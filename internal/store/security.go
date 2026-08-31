@@ -857,6 +857,7 @@ func (s *Security) evictLRU(ctx context.Context, table string, want int64) (free
 			return freed, rows, nil
 		}
 
+		before := freed
 		for _, v := range victims {
 			res, err := s.db.ExecContext(ctx, s.q(
 				`DELETE FROM `+table+` WHERE `+where), v.args...)
@@ -869,6 +870,16 @@ func (s *Security) evictLRU(ctx context.Context, table string, want int64) (free
 			if freed >= want {
 				break
 			}
+		}
+		// A whole page that freed nothing measurable.
+		//
+		// The migration measures the rows written before there was a column to
+		// measure them, so this should not happen - and if it ever does, the
+		// alternative is deleting the entire tier to reclaim zero bytes, which
+		// is the failure this guard exists to make impossible rather than
+		// merely unlikely.
+		if freed == before {
+			return freed, rows, nil
 		}
 	}
 	return freed, rows, nil

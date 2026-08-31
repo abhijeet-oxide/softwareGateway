@@ -137,6 +137,16 @@ func (p *Packages) PresentComponents(ctx context.Context, transferID string) ([]
 		WITH tr AS (
 			SELECT package_id, target_repo_id FROM transfers WHERE id = ?
 		),
+		-- EVERY repository this transfer writes to. A bundle's components each
+		-- land in their own destination path with a catalog row of their own,
+		-- so the transfer's own target_repo_id is the FALLBACK - the root - and
+		-- almost never where the content actually goes. Asking for placements
+		-- at that row alone matches nothing on a real bundle.
+		targets AS (
+			SELECT target_repo_id AS repository_id FROM jobs WHERE transfer_id = ?
+			UNION
+			SELECT target_repo_id FROM tr
+		),
 		owned AS (
 			SELECT ab.digest AS digest, MIN(ab.artifact_id) AS artifact_id
 			  FROM package_artifacts pa
@@ -151,10 +161,25 @@ func (p *Packages) PresentComponents(ctx context.Context, transferID string) ([]
 			              SELECT 1 FROM jobs j
 			               WHERE j.transfer_id = ? AND j.digest = o.digest
 			                 AND j.state = 'skipped')
-			            OR EXISTS (
-			              SELECT 1 FROM blob_placements bp
-			               WHERE bp.repository_id = (SELECT target_repo_id FROM tr)
-			                 AND bp.digest = o.digest)
+			            -- NO JOB AT ALL, and the destination has it: the
+			            -- planner found it already there and never queued it.
+			            -- A job that exists only to be skipped still costs a
+			            -- lease and a round trip, so those blobs are dropped at
+			            -- plan time and this is the only trace of them.
+			            --
+			            -- The "no job" half keeps it honest: a digest this
+			            -- transfer is actually pushing has a job, and that
+			            -- job's state decides, so a blob still outstanding for
+			            -- one repository is never called present because
+			            -- another repository holds it.
+			            OR (NOT EXISTS (
+			                  SELECT 1 FROM jobs j
+			                   WHERE j.transfer_id = ? AND j.digest = o.digest)
+			                AND EXISTS (
+			                  SELECT 1 FROM blob_placements bp
+			                   WHERE bp.digest = o.digest
+			                     AND bp.repository_id IN
+			                         (SELECT repository_id FROM targets)))
 			       THEN 1 ELSE 0 END AS present,
 			       CASE WHEN EXISTS (
 			              SELECT 1 FROM jobs j
@@ -181,7 +206,8 @@ func (p *Packages) PresentComponents(ctx context.Context, transferID string) ([]
 		 GROUP BY pa.id, pa.digest, pa.media_type, pa.artifact_type, pa.annotations
 		HAVING SUM(h.present) > 0
 		 ORDER BY SUM(CASE WHEN h.present = 1 THEN h.size_bytes ELSE 0 END) DESC`),
-		transferID, transferID, transferID)
+		// tr, targets, then the three EXISTS clauses over jobs.
+		transferID, transferID, transferID, transferID, transferID)
 	if err != nil {
 		return nil, fmt.Errorf("list what transfer %s did not move: %w", transferID, err)
 	}
@@ -260,6 +286,16 @@ func (p *Packages) TransferContentBytes(ctx context.Context, transferID string) 
 		WITH tr AS (
 			SELECT package_id, target_repo_id FROM transfers WHERE id = ?
 		),
+		-- EVERY repository this transfer writes to. A bundle's components each
+		-- land in their own destination path with a catalog row of their own,
+		-- so the transfer's own target_repo_id is the FALLBACK - the root - and
+		-- almost never where the content actually goes. Asking for placements
+		-- at that row alone matches nothing on a real bundle.
+		targets AS (
+			SELECT target_repo_id AS repository_id FROM jobs WHERE transfer_id = ?
+			UNION
+			SELECT target_repo_id FROM tr
+		),
 		owned AS (
 			-- The blobs, once each however many components reference them.
 			SELECT DISTINCT ab.digest AS digest, COALESCE(b.size_bytes, 0) AS size_bytes
@@ -287,10 +323,25 @@ func (p *Packages) TransferContentBytes(ctx context.Context, transferID string) 
 			              SELECT 1 FROM jobs j
 			               WHERE j.transfer_id = ? AND j.digest = o.digest
 			                 AND j.state = 'skipped')
-			            OR EXISTS (
-			              SELECT 1 FROM blob_placements bp
-			               WHERE bp.repository_id = (SELECT target_repo_id FROM tr)
-			                 AND bp.digest = o.digest)
+			            -- NO JOB AT ALL, and the destination has it: the
+			            -- planner found it already there and never queued it.
+			            -- A job that exists only to be skipped still costs a
+			            -- lease and a round trip, so those blobs are dropped at
+			            -- plan time and this is the only trace of them.
+			            --
+			            -- The "no job" half keeps it honest: a digest this
+			            -- transfer is actually pushing has a job, and that
+			            -- job's state decides, so a blob still outstanding for
+			            -- one repository is never called present because
+			            -- another repository holds it.
+			            OR (NOT EXISTS (
+			                  SELECT 1 FROM jobs j
+			                   WHERE j.transfer_id = ? AND j.digest = o.digest)
+			                AND EXISTS (
+			                  SELECT 1 FROM blob_placements bp
+			                   WHERE bp.digest = o.digest
+			                     AND bp.repository_id IN
+			                         (SELECT repository_id FROM targets)))
 			       THEN 1 ELSE 0 END AS present
 			  FROM owned o
 		)
@@ -305,7 +356,9 @@ func (p *Packages) TransferContentBytes(ctx context.Context, transferID string) 
 		       COALESCE(SUM(CASE WHEN finished = 0 AND moved = 0 AND present = 1
 		                         THEN size_bytes ELSE 0 END), 0)
 		  FROM state`),
-		transferID, transferID, transferID, transferID).Scan(&out.Total, &out.Moved, &out.Present)
+		// tr, targets, then the four EXISTS clauses over jobs.
+		transferID, transferID, transferID, transferID, transferID, transferID).
+		Scan(&out.Total, &out.Moved, &out.Present)
 	if err != nil {
 		return ContentBytes{}, fmt.Errorf("weigh the content of transfer %s: %w", transferID, err)
 	}

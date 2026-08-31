@@ -148,6 +148,112 @@ const (
 // images at all; a registry that annotates nothing groups as tightly as before.
 func (p *Packages) ContentBreakdown(ctx context.Context, transferID string) ([]ContentRow, error) {
 	rows, err := p.db.QueryContext(ctx, p.dialect.Rewrite(`
+		WITH tr AS (
+			SELECT id, package_id, target_repo_id FROM transfers WHERE id = ?
+		),
+		-- EVERY repository this transfer writes to, not just the one on the
+		-- transfer row.
+		--
+		-- A bundle's components each land in their own destination path and
+		-- each gets a catalog row of its own, so the transfer's own
+		-- target_repo_id is the FALLBACK - the root - and almost never where
+		-- the content
+		-- actually goes. Asking for placements at that one row alone matches
+		-- nothing on a real bundle: on the development fixture the placements
+		-- sit in repositories 15 to 88 while the transfers name 2, 4 and 6.
+		targets AS (
+			SELECT target_repo_id AS repository_id FROM jobs
+			 WHERE transfer_id = (SELECT id FROM tr)
+			UNION
+			SELECT target_repo_id FROM tr
+		),
+		-- ---------------------------------------------------------------
+		-- THE LAYERS, one row per distinct piece of content.
+		--
+		-- Counted over the RELEASE, not over the job queue, and that is the
+		-- whole correction. Two things were wrong with reading jobs:
+		--
+		--  1. Only MANIFEST jobs carry an artifact_id, so joining jobs to a
+		--     component by it matched manifests and nothing else. A manifest is
+		--     blocked until everything beneath it lands, so every row read zero
+		--     copied and zero present for the whole download and then moved at
+		--     once at the end - the exact uselessness these columns were added
+		--     to fix.
+		--  2. A blob the destination already had within its TTL gets NO JOB AT
+		--     ALL - deliberately, since a job that exists only to be skipped
+		--     still costs a lease and a round trip. So the layers that make a
+		--     delta download cheap were invisible to a job-based count, which
+		--     is why a download reporting gigabytes already there reported zero
+		--     layers already present.
+		--
+		-- This is the same population the BYTE account uses (see
+		-- TransferContentBytes), so the two now reconcile by construction
+		-- rather than by coincidence.
+		--
+		-- ATTRIBUTED ONCE. A base layer shared by fifty images is one layer,
+		-- not fifty, so each digest is charged to the lowest component id that
+		-- references it. The parts therefore add up to the whole, which is what
+		-- lets these columns be summed for the header line.
+		unit_owner AS (
+			SELECT MIN(ab.artifact_id) AS artifact_id, ab.digest AS digest
+			  FROM package_artifacts pa
+			  JOIN artifact_blobs ab ON ab.artifact_id = pa.id
+			 WHERE pa.package_id = (SELECT package_id FROM tr)
+			 GROUP BY ab.digest
+			UNION ALL
+			-- A manifest is content too, and is what the transfer is still
+			-- pushing once every byte beneath it has arrived. It belongs to
+			-- itself.
+			SELECT pa.id, pa.digest
+			  FROM package_artifacts pa
+			 WHERE pa.package_id = (SELECT package_id FROM tr)
+		),
+		unit_state AS (
+			SELECT u.artifact_id AS artifact_id,
+			       CASE
+			         -- Copied wins over present: content this transfer actually
+			         -- pushed is copied, whatever a placement record says about
+			         -- it now. Same precedence as the byte account.
+			         WHEN EXISTS (SELECT 1 FROM jobs j
+			                       WHERE j.transfer_id = (SELECT id FROM tr)
+			                         AND j.digest = u.digest
+			                         AND j.state = 'succeeded') THEN 'copied'
+			         WHEN EXISTS (SELECT 1 FROM jobs j
+			                       WHERE j.transfer_id = (SELECT id FROM tr)
+			                         AND j.digest = u.digest
+			                         AND j.state = 'skipped') THEN 'present'
+			         -- NO JOB AT ALL, and the destination has it: the planner
+			         -- found it already there and never queued it.
+			         --
+			         -- The "no job" half is what keeps this honest. A digest
+			         -- this transfer is genuinely pushing has a job, and that
+			         -- job's state decides - so a blob still outstanding for
+			         -- one repository cannot be called present because some
+			         -- other repository happens to hold it.
+			         WHEN NOT EXISTS (SELECT 1 FROM jobs j
+			                           WHERE j.transfer_id = (SELECT id FROM tr)
+			                             AND j.digest = u.digest)
+			              AND EXISTS (SELECT 1 FROM blob_placements bp
+			                           WHERE bp.digest = u.digest
+			                             AND bp.repository_id IN
+			                                 (SELECT repository_id FROM targets)) THEN 'present'
+			         WHEN EXISTS (SELECT 1 FROM jobs j
+			                       WHERE j.transfer_id = (SELECT id FROM tr)
+			                         AND j.digest = u.digest
+			                         AND j.state = 'failed') THEN 'failed'
+			         ELSE 'outstanding'
+			       END AS outcome
+			  FROM unit_owner u
+		),
+		component_units AS (
+			SELECT artifact_id,
+			       SUM(CASE WHEN outcome = 'copied'  THEN 1 ELSE 0 END) AS units_copied,
+			       SUM(CASE WHEN outcome = 'present' THEN 1 ELSE 0 END) AS units_present,
+			       SUM(CASE WHEN outcome = 'failed'  THEN 1 ELSE 0 END) AS units_failed,
+			       SUM(CASE WHEN outcome = 'outstanding' THEN 1 ELSE 0 END) AS units_outstanding
+			  FROM unit_state
+			 GROUP BY artifact_id
+		)
 		SELECT media_type, artifact_type, config_media_type, annotations,
 		       CASE WHEN failed      > 0 THEN 'failed'
 		            WHEN outstanding > 0 THEN 'outstanding'
@@ -155,10 +261,8 @@ func (p *Packages) ContentBreakdown(ctx context.Context, transferID string) ([]C
 		            WHEN present     > 0 THEN 'present'
 		            ELSE 'outstanding' END AS outcome,
 		       count(*), SUM(saved_bytes), SUM(copied_bytes),
-		       -- The jobs beneath these components, by how each went. Summed
-		       -- from the per-component counts the inner select already has,
-		       -- so no second pass over the queue.
-		       SUM(copied), SUM(present), SUM(failed), SUM(outstanding),
+		       SUM(units_copied), SUM(units_present), SUM(units_failed),
+		       SUM(units_outstanding),
 		       SUM(named_files)
 		  FROM (
 		        SELECT pa.id,
@@ -179,6 +283,14 @@ func (p *Packages) ContentBreakdown(ctx context.Context, transferID string) ([]C
 		                        THEN 1 ELSE 0 END)                              AS outstanding,
 		               SUM(CASE WHEN j.state = 'succeeded' THEN 1 ELSE 0 END)   AS copied,
 		               SUM(CASE WHEN j.state = 'skipped' THEN 1 ELSE 0 END)     AS present,
+		               -- The layers charged to this component. MAX, not SUM:
+		               -- component_units holds exactly one row per component
+		               -- and the join cannot multiply it, so the value is
+		               -- constant across this group and any aggregate would do.
+		               COALESCE(MAX(cu.units_copied), 0)      AS units_copied,
+		               COALESCE(MAX(cu.units_present), 0)     AS units_present,
+		               COALESCE(MAX(cu.units_failed), 0)      AS units_failed,
+		               COALESCE(MAX(cu.units_outstanding), 0) AS units_outstanding,
 		               -- PER JOB, not per component. A blob is one job however
 		               -- many components reference it, so this partitions the
 		               -- transfer's saving exactly: every byte counted once,
@@ -200,12 +312,15 @@ func (p *Packages) ContentBreakdown(ctx context.Context, transferID string) ([]C
 		          LEFT JOIN jobs j
 		                 ON j.artifact_id = pa.id
 		                AND j.transfer_id = t.id
+		          LEFT JOIN component_units cu ON cu.artifact_id = pa.id
 		         WHERE t.id = ?
 		         GROUP BY pa.id, pa.media_type, COALESCE(pa.artifact_type, ''),
 		                  pa.annotations
 		       ) AS components
 		 GROUP BY media_type, artifact_type, config_media_type, annotations, outcome`),
-		transferID)
+		// Twice: once for the `tr` CTE that feeds the layer counts, once for
+		// the component grouping's own WHERE.
+		transferID, transferID)
 	if err != nil {
 		return nil, fmt.Errorf("content breakdown of transfer %s: %w", transferID, err)
 	}

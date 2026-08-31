@@ -91,6 +91,21 @@ export function MeasuredProgress({
         success={alreadyThere > 0 ? { percent: Number(savedPercent.toFixed(1)) } : undefined}
         size="small"
         strokeColor={percent >= 100 ? c.ok : undefined}
+        // Stated, not inferred. Ant derives this from the percentage only when
+        // no `success` segment is present, so two finished rows in one column
+        // were drawing their label in two different colours.
+        status={percent >= 100 ? 'success' : 'normal'}
+        /*
+          ALWAYS THE PERCENTAGE, never the component library's tick.
+
+          Ant infers a success status at 100% and swaps the number for a check
+          - but only when no `success` segment was passed. So in a column of
+          these, a row that finished with nothing already present said tick and
+          the row beside it said 100%, purely because of a prop the caller had
+          no idea was load-bearing. One column, one vocabulary; the bar is
+          already fully green when it is done.
+        */
+        format={(p) => `${Math.round(p ?? 0)}%`}
       />
       {showText && (
         <Typography.Text type="secondary" style={{ fontSize: 12 }}>
@@ -346,6 +361,48 @@ export function CopyProgress({
  * ours to count), and while nothing has moved yet (a rate from a zero
  * numerator is a guess wearing a number's clothes).
  */
+/**
+ * WHEN IT WILL BE DONE, derived one way for every surface that shows it.
+ *
+ * This exists because it was derived twice and the two disagreed on screen: the
+ * downloads list said ~3h 22m left while the download's own page said 8h 17m
+ * about the same transfer at the same moment. Neither number was a rounding
+ * difference and a reader had no way to tell which to believe.
+ *
+ * The cause was two different accounts of what is LEFT. The detail page used
+ * the planner's `outstandingBytes`, which counts per (repository, digest): a
+ * component published under its own name as well as inside the bundle has its
+ * layers planned twice, and the second copy costs no bytes because the registry
+ * mounts it. That account says a 27 GB release has 58 GB left to move, so the
+ * page multiplied its own honest speed by an inflated distance. The page had
+ * already moved its BAR and its saving onto the distinct-content account for
+ * exactly this reason - the ETA was simply left behind.
+ *
+ * So: what is left is the release's own content, less what we moved and less
+ * what the destination already had. Bytes we moved over the time we spent
+ * moving them is the rate. Undefined rather than wrong when either half is
+ * missing - a rate from a zero numerator is a guess wearing a number's clothes.
+ */
+export function etaSeconds({
+  transferred, total, saved, elapsedSeconds,
+}: {
+  transferred: number | undefined
+  total: number | undefined
+  saved: number | undefined
+  elapsedSeconds: number | undefined
+}): number | undefined {
+  if (!elapsedSeconds || elapsedSeconds <= 0) return undefined
+  if (!transferred || transferred <= 0) return undefined
+  if (total === undefined) return undefined
+
+  const speed = transferred / elapsedSeconds
+  // Counting the saved bytes as remaining is how a download with nothing left
+  // to do came to report an ETA of forever.
+  const remaining = Math.max(0, total - transferred - (saved ?? 0))
+  if (remaining <= 0) return undefined
+  return remaining / speed
+}
+
 export function DownloadProgress({
   transferred, total, saved, groups, strategy = 'copy', elapsedSeconds, live, heldBy,
 }: {
@@ -376,9 +433,11 @@ export function DownloadProgress({
     neither.
 
     The average - bytes moved over the download's whole life - is what an
-    estimate should rest on: what is left will be moved at roughly the rate
+    estimate rests on: what is left will be moved at roughly the rate
     everything so far was, and an ETA that swung by ten minutes every poll
-    would be worse than none.
+    would be worse than none. It is computed inside `etaSeconds` rather than
+    here, so that this cell and the download's own page cannot arrive at two
+    different answers - which they did, by ~5 hours, on one download.
 
     The LIVE rate is what belongs on screen. The average is dragged down by
     every second the download existed and did not move - planning, the wait for
@@ -387,9 +446,6 @@ export function DownloadProgress({
     compute that number and then not render it at all, which at least spared
     the reader; the number that is worth rendering is the one below.
   */
-  const average = elapsedSeconds && transferred && elapsedSeconds > 0
-    ? transferred / elapsedSeconds
-    : undefined
   const rate = useByteRate(transferred, live)
 
   // What is LEFT, which is neither moved nor already there. Counting the saved
@@ -398,8 +454,9 @@ export function DownloadProgress({
   const remaining = total !== undefined && transferred !== undefined
     ? Math.max(0, total - transferred - (saved ?? 0))
     : undefined
-  const eta = live && !heldBy && average && remaining !== undefined && remaining > 0
-    ? remaining / average
+  // A held download is going nowhere, so there is no arrival to estimate.
+  const eta = live && !heldBy
+    ? etaSeconds({ transferred, total, saved, elapsedSeconds })
     : undefined
   const notStarted = live
     && (elapsedSeconds ?? 0) <= 0

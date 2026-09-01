@@ -2,7 +2,7 @@ import { memo, useCallback, useDeferredValue, useEffect, useMemo, useState } fro
 import type { ReactNode } from 'react'
 import {
   Alert,
-  App, Button, Card, Col, Collapse, Descriptions, Drawer, Input, Row, Segmented, Select,
+  App, Button, Card, Collapse, Descriptions, Drawer, Input, Segmented, Select,
   Skeleton, Space, Spin, Table, Tabs, Tag, Tooltip, Typography,
 } from 'antd'
 // The working-surface table: resizable, reorderable, pinnable columns whose
@@ -198,7 +198,7 @@ export function SecurityTab({ product, reference, repository }: {
 
       {(data.sync.state === 'synced' || data.sync.syncedAt) && (
         <>
-          <SummaryCards data={data} syncing={syncing} />
+          <SummaryCards data={data} />
           <FindingsSection
             data={data}
             product={product}
@@ -322,63 +322,33 @@ function summarise(data: PackageSecurityResponse) {
 }
 
 /**
- * The cards, and what they are allowed to say while a sync is running.
+ * The cards.
  *
- * # Why `syncing` reaches this far down
+ * # Why they no longer empty themselves during a sync
  *
- * Because a sync REPLACES these numbers, and it does it in two steps: the
- * per-artifact rows go first and the release's summary is rewritten at the end.
- * In between, every number here is either the last sync's or a zero computed
- * from rows that are no longer there - and the page rendered both as though
- * they were this sync's results. "0 fixable" over a spinner is the reader being
- * told there is no work to do, in the one place this feature exists to get
- * right.
+ * They used to. A sync deleted the per-artifact rows before refilling them, so
+ * mid-sync every number here was either the last sync's or a zero computed
+ * from rows that had gone - and "0 fixable" over a spinner tells a reader
+ * there is no work to do, in the one place this feature exists to get right.
+ * The cards were made to say "Fetching details" instead.
  *
- * So while a sync runs the cards say what they are: numbers being retrieved,
- * with the previous sync's figure named as the previous sync's. A dash and a
- * date beat a confident wrong number.
+ * Both halves of that are fixed at the source now: a sync overwrites each
+ * artifact as its answer arrives and never deletes first, and the API serves
+ * what is stored throughout. So the numbers are always a real, complete answer
+ * - the previous sync's until this one replaces it - and hiding them left
+ * somebody who pressed Sync watching three spinners for ten minutes over a
+ * database that had their findings in it the whole time.
+ *
+ * How old the answer is, and that a refresh is running, are said above the
+ * cards rather than by blanking them.
  */
-function SummaryCards({ data, syncing }: { data: PackageSecurityResponse; syncing?: boolean }) {
+function SummaryCards({ data }: { data: PackageSecurityResponse }) {
   const { coverage } = data
   const stats = useMemo(() => summarise(data), [data])
   const fixablePercent = stats.total > 0 ? Math.round((stats.fixable / stats.total) * 100) : 0
   const scannedPercent = coverage.scannable > 0
     ? Math.round((coverage.scanned / coverage.scannable) * 100)
     : 0
-  const previous = data.syncedAt ? `from the sync ${formatRelative(data.syncedAt)}` : undefined
-
-  if (syncing) {
-    return (
-      <Row gutter={[16, 16]}>
-        <Col xs={24} lg={12}>
-          <PendingCard
-            title="Vulnerabilities"
-            previous={stats.total > 0
-              ? `${stats.unique.toLocaleString()} unique CVEs in ${stats.total.toLocaleString()} findings`
-              : undefined}
-            note={previous}
-          />
-        </Col>
-        <Col xs={24} md={12} lg={6}>
-          <PendingCard
-            title="Fixable"
-            previous={stats.total > 0 ? `${stats.fixable.toLocaleString()} with a fixed version` : undefined}
-            note={previous}
-          />
-        </Col>
-        <Col xs={24} md={12} lg={6}>
-          <PendingCard
-            title="Scan coverage"
-            previous={coverage.scannable > 0
-              ? `${coverage.scanned.toLocaleString()} of ${coverage.scannable.toLocaleString()} images scanned`
-              : undefined}
-            note={previous}
-          />
-        </Col>
-      </Row>
-    )
-  }
-
   return (
     /*
       ONE BAND, THREE ZONES - not three cards.
@@ -612,37 +582,6 @@ function Meter({ value, colour, headline, detail }: {
   )
 }
 
-
-/**
- * A number that is being fetched, said as one.
- *
- * The dash is deliberate and so is its size: it occupies the place the figure
- * will occupy, so the card does not resize when the sync lands, and it cannot
- * be misread as a zero. What the last sync said is kept beside it, named as
- * the last sync's - useful context, and never confusable with this one's.
- */
-function PendingCard({ title, previous, note }: {
-  title: string
-  previous?: string
-  note?: string
-}) {
-  return (
-    <Card size="small" title={title} style={{ height: '100%' }}>
-      <Space direction="vertical" size={2} style={{ width: '100%' }}>
-        <Space size={10} align="center">
-          <LoadingOutlined />
-          <Typography.Text type="secondary">Fetching details</Typography.Text>
-        </Space>
-        {previous && (
-          <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-            Previously {previous}
-            {note ? `, ${note}` : ''}.
-          </Typography.Text>
-        )}
-      </Space>
-    </Card>
-  )
-}
 
 /** One exception to full coverage: a count, a colour and what to call it. */
 function CoverageLine({ n, label, colour }: { n: number; label: string; colour: string }) {
@@ -1168,11 +1107,13 @@ function FindingsSection({ data, product, reference, repository, tab, onTabChang
   }, [tab, malwareOffered, policyOffered, onTabChange])
 
   /*
-   * A sync clears the per-artifact rows before it refills them, so mid-sync
-   * every table here is empty and every tab reads (0). Rendered as a result
-   * that is what the previous build showed: three empty tables and a warning
-   * saying the detailed rows had gone missing, over cards still reporting
-   * 5,712 vulnerabilities. It is not a result. It is a result being fetched.
+   * Only when there is genuinely nothing to show.
+   *
+   * This used to fire for every sync, because a sync deleted the per-artifact
+   * rows before refilling them. It does not any more - it overwrites each
+   * artifact as its answer arrives - so a release being re-synced keeps its
+   * tables, and this is left for the first sync of a release that has never
+   * had one, where the tables really are empty.
    */
   if (syncing && data.reports.length === 0) {
     return (
@@ -1181,8 +1122,8 @@ function FindingsSection({ data, product, reference, repository, tab, onTabChang
           <Spin />
           <Typography.Text strong>Retrieving results</Typography.Text>
           <Typography.Text type="secondary" style={{ maxWidth: 460, textAlign: 'center' }}>
-            The vulnerability, image and problem tables are rebuilt when the sync finishes. The
-            totals above are from the previous sync.
+            This release has not been scanned before, so there is nothing to show until the first
+            results arrive.
           </Typography.Text>
         </Space>
       </Card>
@@ -2998,7 +2939,28 @@ function ScannerOutput({ documents }: { documents?: SecurityDocumentRef[] }) {
   const { message } = App.useApp()
 
   const selected = refs.find((d) => d.kind === kind) ?? held[0] ?? refs[0]
-  const readable = Boolean(selected?.available && selected?.url)
+
+  /*
+   * An SBOM that is not held is FETCHED rather than reported missing.
+   *
+   * It is the one document a sync deliberately does not retrieve - minutes and
+   * tens of megabytes per image, for a file wanted occasionally - so the first
+   * person to want one asks Xray for it. The endpoint behind this URL already
+   * does exactly that and keeps the result, so the tab was saying "nothing is
+   * held" about something it could have produced by asking.
+   *
+   * # Why this does not fire on every drawer
+   *
+   * Because this component is only MOUNTED when somebody opens the Scanner
+   * output tab. An inactive tab pane is not rendered, so opening an image to
+   * read its vulnerabilities costs nothing, and a reader opening ten of them
+   * does not start ten SBOM generations. Reaching this code means the question
+   * was asked.
+   *
+   * Held documents load the same way, because those are a read from storage.
+   */
+  const onDemand = selected?.kind === 'sbom'
+  const readable = Boolean(selected?.url) && (Boolean(selected?.available) || onDemand)
   const doc = useSecurityDocument(selected?.url, readable)
 
   const body = doc.data ?? ''
@@ -3041,7 +3003,13 @@ function ScannerOutput({ documents }: { documents?: SecurityDocumentRef[] }) {
             // A document the scanner did not give us is offered and marked,
             // not hidden. "Where is the SBOM tab" is a worse question than
             // "why is this one empty", which the panel answers in a sentence.
-            label: d.available
+            /*
+              A document the scanner did not give us is marked, except the one
+              that can still be got. An SBOM is produced on demand, so its tab
+              is a live offer rather than an absence - marking it "none" told a
+              reader there was nothing there when clicking would have made it.
+            */
+            label: d.available || d.kind === 'sbom'
               ? d.label
               : (
                 <span style={{ color: c.text3 }}>
@@ -3084,12 +3052,8 @@ function ScannerOutput({ documents }: { documents?: SecurityDocumentRef[] }) {
             message="Nothing is held for this image"
             description={
               selected?.message
-              || (selected?.kind === 'sbom'
-                ? 'An SBOM is produced on demand. Download it once and it is kept here - '
-                  + 'and shown here - from then on, because the components inside one set of '
-                  + 'bytes cannot change.'
-                : `No ${selected?.label ?? 'document'} was stored for this image. A sync keeps `
-                  + 'what it is asked to keep, so sync the release again to retrieve it.')
+              || `No ${selected?.label ?? 'document'} was stored for this image. A sync keeps `
+                + 'what it is asked to keep, so sync the release again to retrieve it.'
             }
           />
         )
@@ -3106,7 +3070,23 @@ function ScannerOutput({ documents }: { documents?: SecurityDocumentRef[] }) {
             />
           )
           : doc.isLoading
-            ? <Skeleton active paragraph={{ rows: 6 }} />
+            ? (
+              <Space direction="vertical" size={10} style={{ width: '100%' }}>
+                {/*
+                  Named while it happens, because producing an SBOM is not a
+                  read. It is Xray walking a container image, and for a large
+                  one it is a minute - which as a bare skeleton reads as a page
+                  that has stopped.
+                */}
+                {!selected?.available && (
+                  <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+                    Asking the scanner to produce this. It is generated from the image, so it takes
+                    a moment - and it is kept afterwards, so this is the only time.
+                  </Typography.Text>
+                )}
+                <Skeleton active paragraph={{ rows: 6 }} />
+              </Space>
+            )
             : doc.isError
               ? (
                 <Alert

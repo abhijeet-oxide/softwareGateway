@@ -10,7 +10,7 @@ import {
   useCompare, useCompareProgress, useCompareSecurity, usePackages, useProduct, useProducts,
   useSyncPackageSecurity,
 } from '../api/queries'
-import { kindName, matches, packageReference, version } from '../domain/derive'
+import { hasSecurityData, kindName, matches, packageReference, version } from '../domain/derive'
 import { selectionHref } from '../domain/compare'
 import { bytes, formatBytes, formatCount, formatDuration } from '../domain/format'
 import { NA, Value } from '../components/value'
@@ -122,6 +122,19 @@ function ComparedEnd({ pkg, fallback }: { pkg?: Package; fallback: string }) {
       )}
     </Space>
   )
+}
+
+/**
+ * Why the vulnerability comparison cannot be given, in one sentence.
+ *
+ * Names the release rather than saying "one of them", because the reader's next
+ * action is to sync THAT one - and a message that makes them work out which is
+ * a message that costs a click to be useful.
+ */
+function unscannedReason(unscanned: Package[] | undefined): string {
+  if (!unscanned || unscanned.length === 0) return ''
+  if (unscanned.length === 2) return 'Neither release has been scanned yet.'
+  return `${version(unscanned[0]!)} has not been scanned yet.`
 }
 
 /**
@@ -1092,6 +1105,48 @@ export default function Compare() {
   const leftPkg = releases.find((r) => refOf(r) === leftRef)
   const rightPkg = releases.find((r) => refOf(r) === rightRef)
 
+  /*
+   * The report opens on the answer that was ASKED for.
+   *
+   * The intent was chosen on the listing, before the two releases - see
+   * domain/compare.ts - and carrying it here is what stops the reader choosing
+   * it twice, once to narrow the list and again on the tab strip.
+   */
+  const [view, setView] = useState<View>(
+    params.get('view') === 'security' ? 'security' : 'package',
+  )
+
+  /*
+   * Whether the vulnerability answer can be given at all.
+   *
+   * BOTH ends, because a comparison is a difference and a difference needs two
+   * sides. One release scanned and the other not produces a verdict where every
+   * finding reads as introduced - which is not a fact about the release, it is
+   * a fact about what nobody scanned, and it is the most dangerous thing this
+   * page could say wrongly.
+   *
+   * Absent while the listing loads, which is why this is not a plain boolean:
+   * disabling the tab because the data has not arrived yet, and then enabling
+   * it a second later, is a control that flickers.
+   */
+  const unscanned = useMemo(() => {
+    if (!leftPkg || !rightPkg) return undefined
+    return [leftPkg, rightPkg].filter((p) => !hasSecurityData(p))
+  }, [leftPkg, rightPkg])
+  const securityBlocked = Boolean(unscanned && unscanned.length > 0)
+
+  /*
+   * A link asking for the security view of a pair that cannot answer falls back
+   * rather than erroring.
+   *
+   * That happens for an honest reason - a bookmark from before a sync was
+   * cleared - and the useful response is the comparison that CAN be given, with
+   * the other tab disabled and saying why.
+   */
+  useEffect(() => {
+    if (securityBlocked && view === 'security') setView('package')
+  }, [securityBlocked, view])
+
   const sources = detail.data?.sources ?? []
   // Where the release was found, matched back to its configured source. The
   // API needs an endpoint NAME and a package records a repository PATH, and a
@@ -1118,7 +1173,6 @@ export default function Compare() {
   const compareRunning = compare.isPending
   const report = compare.data
 
-  const [view, setView] = useState<View>('package')
   const compareSecurity = useCompareSecurity()
   const syncSecurity = useSyncPackageSecurity()
 
@@ -1156,17 +1210,25 @@ export default function Compare() {
   }, [product, leftRef, rightRef, leftPkg, mode, versionEnd, fromEndpoint, toEndpoint, compare, message])
 
   /*
-   * Runs itself on arrival.
+   * Runs itself on arrival, and runs only what was ASKED for.
    *
    * The pair was chosen on the previous page and confirmed with a button called
    * Compare, so a second button here saying the same word would be asking the
-   * reader to agree with themselves. It re-runs when the pair changes, and the
-   * key guards against React's development double-mount and against the effect
-   * firing again when an unrelated piece of state moves.
+   * reader to agree with themselves.
+   *
+   * Which comparison runs follows the view, and that matters because the two
+   * cost wildly different things. The contents comparison walks two manifest
+   * trees against their registries and takes minutes; the vulnerability one is
+   * two indexed reads of what a sync already stored. Somebody who asked about
+   * vulnerabilities should not wait on a registry walk they did not ask for -
+   * and if they switch tabs afterwards, the other one starts then.
+   *
+   * The key guards against React's development double-mount and against the
+   * effect firing again when an unrelated piece of state moves.
    */
   const ranFor = useRef<string>('')
   useEffect(() => {
-    if (mode !== 'versions' || !product || !leftRef || !rightRef) return
+    if (mode !== 'versions' || view !== 'package' || !product || !leftRef || !rightRef) return
     // The source is part of the request, so a comparison must not start until
     // it is known - the packages and the product load separately.
     if (sources.length > 0 && !versionEnd) return
@@ -1174,7 +1236,7 @@ export default function Compare() {
     if (ranFor.current === key) return
     ranFor.current = key
     void run()
-  }, [mode, product, leftRef, rightRef, versionEnd, sources.length, run])
+  }, [mode, view, product, leftRef, rightRef, versionEnd, sources.length, run])
 
   const runSecurity = useCallback(async () => {
     if (!product || !leftRef || !rightRef) return
@@ -1218,10 +1280,27 @@ export default function Compare() {
     if (!compareSecurity.data && !compareSecurity.isPending) void runSecurity()
   }
 
+  /*
+   * The same, for a reader who ARRIVED on the vulnerability view rather than
+   * switching to it. Without this, asking for vulnerabilities on the listing
+   * produced a page that had chosen the right tab and then sat there.
+   */
+  const securityRanFor = useRef<string>('')
+  useEffect(() => {
+    if (view !== 'security' || securityBlocked || !product || !leftRef || !rightRef) return
+    const key = `${product}|${leftRef}|${rightRef}`
+    if (securityRanFor.current === key) return
+    securityRanFor.current = key
+    void runSecurity()
+  }, [view, securityBlocked, product, leftRef, rightRef, runSecurity])
+
   /** Back to where choosing happens, with this pair still ticked. */
   const changeSelection = () => {
     navigate(selectionHref({
       active: true,
+      // Back into the mode the reader arrived in, so returning to change one
+      // end does not silently re-broaden the list they were choosing from.
+      intent: view === 'security' ? 'vulnerabilities' : 'contents',
       a: product && leftRef ? { product, ref: leftRef } : undefined,
       b: product && rightRef ? { product, ref: rightRef } : undefined,
     }))
@@ -1335,7 +1414,12 @@ export default function Compare() {
           </div>
         )}
 
-        {mode === 'versions' && report && (
+        {/*
+          The tab strip renders before either answer does. It used to wait for
+          the contents report, which was fine while that always ran - and became
+          a page with no way to switch views the moment it stopped.
+        */}
+        {mode === 'versions' && (
           <div
             style={{
               display: 'flex', flexWrap: 'wrap', gap: 12, alignItems: 'center',
@@ -1343,18 +1427,34 @@ export default function Compare() {
               padding: '10px 16px', borderTop: `1px solid ${c.border}`,
             }}
           >
+            {/*
+              The unavailable answer is DISABLED and says why, rather than being
+              offered and then refusing. A tab that produces a verdict saying it
+              cannot say has spent the reader's click to tell them something the
+              tab strip could have.
+            */}
             <Segmented
               value={view}
               onChange={(v) => (v === 'security' ? showSecurity() : setView('package'))}
               options={[
-                { value: 'package', label: 'Package comparison' },
-                { value: 'security', label: 'Security comparison' },
+                { value: 'package', label: 'Contents' },
+                {
+                  value: 'security',
+                  label: securityBlocked ? (
+                    <Tooltip title={unscannedReason(unscanned)}>
+                      <span>Vulnerabilities</span>
+                    </Tooltip>
+                  ) : 'Vulnerabilities',
+                  disabled: securityBlocked,
+                },
               ]}
             />
             <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-              {view === 'package'
-                ? 'What the two releases hold, component by component.'
-                : 'How the security posture changed from the base release to the new one.'}
+              {securityBlocked
+                ? unscannedReason(unscanned)
+                : view === 'package'
+                  ? 'What the two releases hold, component by component.'
+                  : 'How the security posture changed from the base release to the new one.'}
             </Typography.Text>
           </div>
         )}

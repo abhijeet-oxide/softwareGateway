@@ -86,6 +86,39 @@ with Software detail and Download reached from them. The lifecycle those pages e
 > and cannot be expressed by ticking two rows. It is reached from that release's
 > own row menu, and is two selects about a release already named.
 
+> **Decision - the intent is asked before the two releases, because it decides
+> which releases are worth offering.**
+>
+> A comparison answers two questions - what the releases HOLD, and how their
+> VULNERABILITIES differ - and they do not have the same candidates. A
+> vulnerability comparison against a release nobody has scanned cannot say
+> anything, so offering those rows is offering a choice that does not work, and
+> the reader only finds out two clicks later on a page explaining its own
+> refusal.
+>
+> So selection mode opens with a two-position switch, **Contents** or
+> **Vulnerabilities**. Contents shows everything, because every release can
+> answer it. Vulnerabilities hides the releases with no findings, says how many
+> in one line, and moves the vulnerability counts to the second column - the
+> table is wider than a laptop window, so column order is priority order, and
+> the column somebody is deciding on should not be the one the pinned actions
+> cover.
+>
+> The intent then travels with the pair, so the report opens on the answer that
+> was asked for, and **only that comparison runs**. The two cost wildly
+> different things: contents walks two manifest trees against their registries
+> and takes minutes, vulnerabilities is two indexed reads of what a sync already
+> stored. Somebody who asked about vulnerabilities should not wait on a registry
+> walk they did not ask for.
+>
+> *Where the answer cannot be given*, the tab is disabled and names the release
+> that has not been scanned - "25.10.1 has not been scanned yet". Both ends are
+> required, because a difference needs two sides: one release scanned and the
+> other not produces a verdict where every finding reads as introduced, which is
+> a fact about what nobody scanned rather than about the release, and it is the
+> most dangerous thing this page could say wrongly. A link asking for that view
+> falls back to contents rather than erroring.
+
 ### 3.1 The UI speaks the user's language, not the engine's
 
 > **Decision - the interface uses product vocabulary, and the domain model stays behind the API.**

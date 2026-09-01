@@ -654,6 +654,28 @@ function transferKey(packageId: string | undefined, product: string, tag: string
  * cannot survive a path segment: %2F is decoded before routing, so the router
  * would see two segments and match neither.
  */
+/**
+ * Whether a release has vulnerability findings stored for it.
+ *
+ * # Why a comparison needs this before it starts
+ *
+ * Because a security comparison against a release nobody scanned is not a
+ * comparison - it is a verdict that says it cannot say. Offering it and then
+ * explaining the refusal wastes the reader's time twice: once choosing, once
+ * reading why the choice did not work.
+ *
+ * `synced` is the plain case. A `failed` sync is included when it managed to
+ * scan something, because a failure deliberately KEEPS the last good counts
+ * (see the security store) - a release whose scanner was unreachable this
+ * morning still knows what it knew yesterday, and comparing against that is
+ * honest as long as the interface says how old it is, which it does.
+ */
+export function hasSecurityData(pkg: Pick<Package, 'security'>): boolean {
+  const s = pkg.security
+  if (!s) return false
+  return s.state === 'synced' || s.scanned > 0
+}
+
 export function releaseHref(
   product: string,
   pkg: Pick<Package, 'tag' | 'sourceRepository'>,

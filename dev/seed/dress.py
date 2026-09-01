@@ -267,7 +267,7 @@ for pid, prod_name in products.items():
                  artifact_kind, artifact_repo, status, message, total, fixable,
                  critical, high, medium, low, unknown,
                  fix_critical, fix_high, fix_medium, fix_low, fix_unknown,
-                 scanned_at, retrieved_at, fingerprint, expires_at)
+                 scanned_at, retrieved_at, fingerprint, evictable_at)
                 VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
                 (prod_name, scope_repo, 'target', 'jfrog-xray', digest, name, tag,
                  'chart' if chart else 'image', repo_path + '/' + name, status, message,
@@ -288,10 +288,14 @@ for pid, prod_name in products.items():
                      1 if f['fixable'] else 0, f['component']['id'], f['component']['name'],
                      f['component']['version'], f['component']['type'],
                      (f.get('fixedIn') or [''])[0], f['summary']))
+            # `codec` says how the payload is stored; the seed writes plain
+            # JSON, which is what 'json' means. See internal/store/securitydocs.go.
             c.execute("""INSERT OR REPLACE INTO security_details
-                (product, repository, provider, artifact_ref, payload, fingerprint,
-                 retrieved_at, expires_at) VALUES (?,?,?,?,?,?,?,?)""",
+                (product, repository, provider, artifact_ref, payload, codec, bytes,
+                 source_bytes, fingerprint, retrieved_at, evictable_at)
+                VALUES (?,?,?,?,?,?,?,?,?,?,?)""",
                 (prod_name, scope_repo, 'jfrog-xray', digest, json.dumps(report).encode(),
+                 'json', len(json.dumps(report)), len(json.dumps(report)),
                  fp, ts(scanned_at + timedelta(minutes=6)), ts(NOW + timedelta(days=7))))
 
         log = [
@@ -307,15 +311,20 @@ for pid, prod_name in products.items():
         c.execute("""INSERT INTO package_security
             (package_id, state, provider, repository, role, total, fixable,
              critical, high, medium, low, unknown,
-             fix_critical, fix_high, fix_medium, fix_low, fix_unknown, distinct_total,
+             fix_critical, fix_high, fix_medium, fix_low, fix_unknown,
+             distinct_total, distinct_cves,
              artifacts, scanned, not_scanned, unsupported, unavailable, disabled,
              scanned_at, synced_at, started_at, fingerprint, log)
-            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
             (pkg_id, 'synced', 'jfrog-xray', scope_repo, 'target',
              sum(agg.values()), sum(aggfix.values()),
              agg['critical'], agg['high'], agg['medium'], agg['low'], agg['unknown'],
              aggfix['critical'], aggfix['high'], aggfix['medium'], aggfix['low'], aggfix['unknown'],
-             len(distinct), cov['artifacts'], cov['scanned'], cov['not_scanned'],
+             # distinct is a set of (advisory, component) PAIRS; the advisories
+             # alone are the other number, and the two are labelled for what
+             # each counts. See pkg/apis/.../security.go.
+             len(distinct), len({cve for cve, _ in distinct if cve}),
+             cov['artifacts'], cov['scanned'], cov['not_scanned'],
              cov['unsupported'], cov['unavailable'], cov['disabled'],
              ts(scanned_at), ts(scanned_at + timedelta(minutes=6)), ts(scanned_at),
              hashlib.sha256(('%s%s' % (prod_name, tag)).encode()).hexdigest()[:32],

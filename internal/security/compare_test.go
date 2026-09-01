@@ -457,3 +457,60 @@ func TestCompareStillReportsADifferentDigestWithNoScan(t *testing.T) {
 		t.Errorf("caveat states a problem without its fix: %q", said)
 	}
 }
+
+// Two releases of the same bytes are IDENTICAL, and saying so is not the same
+// as saying nothing changed.
+//
+// "25.11.0 is unchanged from 25.10.2. No vulnerabilities were resolved or
+// introduced, and 127 remain in both" is a sentence about findings, and it
+// leaves the reader to work out from three cards of noughts that the releases
+// are the same software under two names. Where every artifact is the same
+// digest, that is a content fact the comparison is entitled to state.
+func TestCompareSaysIdenticalWhenEveryArtifactMatches(t *testing.T) {
+	same := func() []Report {
+		return []Report{
+			report("cfx-amf", "sha256:aaa", finding("CVE-2024-3094", SeverityCritical, "xz", true)),
+			report("cfx-smf", "sha256:bbb", finding("CVE-2024-6387", SeverityHigh, "openssh", true)),
+		}
+	}
+
+	c := Compare(CompareInput{A: same(), B: same(), NameA: "25.10.2", NameB: "25.11.0"})
+
+	if c.Verdict != VerdictUnchanged {
+		t.Fatalf("verdict = %q, want unchanged", c.Verdict)
+	}
+	if !c.SameArtifacts() {
+		t.Fatalf("SameArtifacts = false for two releases of the same digests: %+v",
+			c.ArtifactSummary)
+	}
+	if !strings.Contains(c.Headline, "identical") {
+		t.Errorf("headline = %q, want it to say the two are identical", c.Headline)
+	}
+	// The content claim, which is the half a findings sentence cannot make.
+	if !strings.Contains(c.Explanation, "same 2 images") {
+		t.Errorf("explanation = %q, want it to name the images they share", c.Explanation)
+	}
+	if !strings.Contains(c.Explanation, "2 vulnerabilities") {
+		t.Errorf("explanation = %q, want the findings they share too", c.Explanation)
+	}
+}
+
+// The same findings in DIFFERENT images is not identical, and must not claim to
+// be: two releases can carry the same CVEs in images that are not the same
+// bytes, which is a real difference somebody may need to act on.
+func TestCompareDoesNotClaimIdenticalWhenAnArtifactDiffers(t *testing.T) {
+	a := []Report{report("cfx-amf", "sha256:aaa", finding("CVE-2024-3094", SeverityCritical, "xz", true))}
+	b := []Report{report("cfx-amf", "sha256:zzz", finding("CVE-2024-3094", SeverityCritical, "xz", true))}
+
+	c := Compare(CompareInput{A: a, B: b, NameA: "25.10.2", NameB: "25.11.0"})
+
+	if c.SameArtifacts() {
+		t.Fatalf("SameArtifacts = true across an upgraded image: %+v", c.ArtifactSummary)
+	}
+	if strings.Contains(c.Headline, "identical") {
+		t.Errorf("headline = %q: the images are different bytes", c.Headline)
+	}
+	if c.Verdict != VerdictUnchanged {
+		t.Errorf("verdict = %q, want unchanged - the findings did not move", c.Verdict)
+	}
+}

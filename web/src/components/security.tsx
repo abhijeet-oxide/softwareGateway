@@ -605,13 +605,22 @@ const VERDICT_ICON: Record<Verdict, ReactNode> = {
  * knows - so it gets a colour of its own and an explanation of what to do.
  */
 export function VerdictBanner({
-  verdict, headline, explanation, caveats, extra,
+  verdict, headline, explanation, caveats, extra, title,
 }: {
   verdict: Verdict
   headline: string
   explanation: string
   caveats?: string[]
   extra?: ReactNode
+  /**
+   * Overrides the word the verdict maps to.
+   *
+   * For the one case where the verdict is too weak a word for what was found:
+   * two releases of the same bytes are not "no meaningful change", they are
+   * the same software, and a reader who is told the first has to work out the
+   * second from a table of noughts.
+   */
+  title?: string
 }) {
   const colour = verdictColour[verdict]
 
@@ -659,7 +668,7 @@ export function VerdictBanner({
               {VERDICT_ICON[verdict]}
             </span>
             <Typography.Title level={4} style={{ margin: 0, color: colour, letterSpacing: '-0.01em' }}>
-              {verdict === 'inconclusive' ? 'Not enough information' : VERDICT_WORD[verdict]}
+              {title ?? (verdict === 'inconclusive' ? 'Not enough information' : VERDICT_WORD[verdict])}
             </Typography.Title>
           </Space>
           {extra}

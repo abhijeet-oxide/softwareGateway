@@ -4,7 +4,7 @@ import { App, Button, Card, Col, Popover, Progress, Row, Segmented, Select, Spac
 // The working-surface table: resizable, reorderable, pinnable columns whose
 // layout each person keeps. See `tablekit/README.md` for which tables get it.
 import { Table as DataTable } from '../tablekit'
-import { FolderOutlined, SwapOutlined } from '../icons'
+import { FolderOutlined } from '../icons'
 import { Link, useNavigate, useSearchParams } from 'react-router-dom'
 import {
   useCompare, useCompareProgress, useCompareSecurity, usePackages, usePackageSecurity, useProduct,
@@ -1310,6 +1310,24 @@ export default function Compare() {
 
   const showSecurity = () => setView('security')
 
+  /**
+   * The same pair, the other way round.
+   *
+   * A comparison is written from the NEW release's point of view - "resolved"
+   * means the new one no longer has it - so choosing the ends the wrong way
+   * round inverts every word of the answer, and correcting it meant going back
+   * to the listing and picking both again. Replaces the history entry rather
+   * than adding one: reversing twice is where you started, and it should not
+   * take two presses of Back to get out of.
+   */
+  const swapEnds = () => {
+    if (!leftRef || !rightRef) return
+    const next = new URLSearchParams(params)
+    next.set('a', rightRef)
+    next.set('b', leftRef)
+    navigate(`/packages/compare?${next.toString()}`, { replace: true })
+  }
+
   /** Back to where choosing happens, with this pair still ticked. */
   const changeSelection = () => {
     navigate(selectionHref({
@@ -1349,15 +1367,30 @@ export default function Compare() {
         packages.
       */}
       <Card size="small" style={{ marginBottom: 16 }} styles={{ body: { padding: 0 } }}>
+        {/*
+          The padding is on a wrapper, not on the Space.
+
+          antd's Space is an inline-flex box; `width: 100%` with padding on the
+          same element measures the padding OUTSIDE the hundred per cent, so
+          everything in it sat one padding's width past the card - which is why
+          "Change selection" hung over the right edge by sixteen pixels.
+        */}
+        <div style={{ padding: '12px 16px' }}>
         <Space
           size={16}
           wrap
-          style={{ width: '100%', justifyContent: 'space-between', padding: '12px 16px' }}
+          style={{ width: '100%', justifyContent: 'space-between' }}
         >
           <Space size={12} wrap align="center">
             <Typography.Text type="secondary" style={{ fontSize: 12 }}>Comparing</Typography.Text>
             <ComparedEnd pkg={leftPkg} fallback={report?.a.label ?? leftRef ?? ''} />
-            <SwapOutlined style={{ color: c.text3 }} />
+            {/*
+              An arrow, not a swap glyph. The swap that WORKS is between the two
+              release cards below; a second icon up here that looked exactly
+              like it and did nothing was two affordances for one action, one of
+              them fake.
+            */}
+            <Typography.Text type="secondary" aria-hidden style={{ fontSize: 13 }}>→</Typography.Text>
             {mode === 'versions'
               ? <ComparedEnd pkg={rightPkg} fallback={report?.b.label ?? rightRef ?? ''} />
               : (
@@ -1390,6 +1423,7 @@ export default function Compare() {
             )}
           </Space>
         </Space>
+        </div>
 
         {mode === 'locations' && (
           /*
@@ -1516,6 +1550,11 @@ export default function Compare() {
               report={compareSecurity.data}
               onSync={syncEnd}
               syncing={Boolean(syncingEnd) || syncSecurity.isPending}
+              names={{
+                a: leftPkg?.displayRepository || leftPkg?.sourceRepository,
+                b: rightPkg?.displayRepository || rightPkg?.sourceRepository,
+              }}
+              onSwap={swapEnds}
             />
           )}
         </>

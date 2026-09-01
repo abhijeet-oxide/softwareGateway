@@ -178,6 +178,33 @@ func newSecurityHarness(t *testing.T) *securityHarness {
 	return &securityHarness{apiHarness: h, syncer: syncer}
 }
 
+// seedArtifact adds one more artifact to a release already seeded.
+//
+// Its own helper because seedPackage inserts exactly one, and a release with a
+// single artifact cannot express the thing several of these tests are about:
+// what happens to the OTHER artifacts, the ones a scanner will not answer for.
+func (h *apiHarness) seedArtifact(packageID int64, digest, mediaType string) {
+	h.t.Helper()
+	tx, err := h.store.DB().BeginTx(h.t.Context(), nil)
+	if err != nil {
+		h.t.Fatal(err)
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	if _, err := h.packages.InsertArtifact(h.t.Context(), tx, store.ArtifactRow{
+		PackageID: packageID,
+		Digest:    digest,
+		MediaType: mediaType,
+		SizeBytes: 512,
+		Raw:       []byte(`{"schemaVersion":2}`),
+	}); err != nil {
+		h.t.Fatalf("seed artifact: %v", err)
+	}
+	if err := tx.Commit(); err != nil {
+		h.t.Fatal(err)
+	}
+}
+
 // harnessSecurityStore joins the two halves the API asks for, exactly as the
 // composition root does.
 type harnessSecurityStore struct {
@@ -647,6 +674,54 @@ func TestSecurityExportWorkbookCarriesTheTablesOnScreen(t *testing.T) {
 	}
 	if !strings.Contains(findingsSheet, "autoFilter") {
 		t.Error("no filter row on a table somebody is going to filter")
+	}
+}
+
+// The artifacts a scanner cannot cover are not rows in an export.
+//
+// A real release is 260 artifacts of which 103 are Helm charts, signatures and
+// files. Those were a third of the Images sheet and a block of blank rows in
+// All findings, and a reader scanning either for something to act on had to
+// learn to skip them. They are not a gap - every other absent-findings row in
+// those sheets is work somebody has to do, and "Xray scans container images"
+// is not. The count survives on the Summary sheet, where one line beats a
+// hundred rows.
+func TestSecurityExportOmitsArtifactsTheScannerDoesNotCover(t *testing.T) {
+	h := newSecurityHarness(t)
+	id := h.seedPackage("25.7.2131", digestA)
+	// A SECOND artifact of the same release - a chart, which Xray has nothing
+	// to say about. It has to be part of the release for the export to have the
+	// chance to carry it.
+	h.seedArtifact(id, digestB, "application/vnd.cncf.helm.config.v1+json")
+
+	h.syncer.reports[digestA] = scannedReport(
+		apiFinding("CVE-2024-3094", security.SeverityCritical, "openssl", true))
+	h.syncer.reports[digestB] = security.Report{
+		Status: security.StatusUnsupported, Provider: "jfrog-xray",
+		Message: "JFrog Xray scans container images. This is a Helm chart.",
+	}
+	h.post("/api/v1/products/vendor-a/packages/25.7.2131:syncSecurity", `{}`, nil)
+
+	// The premise: the release really does hold the artifact the export must
+	// leave out. Without this the test passes whether or not the filter exists.
+	var posture v1.PackageSecurityResponse
+	h.get("/api/v1/products/vendor-a/packages/25.7.2131/security?detail=true", &posture)
+	if posture.Coverage.Unsupported == 0 {
+		t.Fatal("the release has nothing the scanner does not cover, so this proves nothing")
+	}
+
+	for table, want := range map[string]bool{"findings": false, "images": false} {
+		body, _ := h.getRaw("/api/v1/products/vendor-a/packages/25.7.2131/security/export" +
+			"?format=csv&view=detailed&table=" + table)
+		text := string(body)
+		if strings.Contains(text, "unsupported") != want {
+			t.Errorf("table=%s still carries the artifacts the scanner does not cover:\n%s",
+				table, text)
+		}
+		// And the one row that matters is still there.
+		if !strings.Contains(text, "25.7.2131") {
+			t.Errorf("table=%s lost its real rows too:\n%s", table, text)
+		}
 	}
 }
 

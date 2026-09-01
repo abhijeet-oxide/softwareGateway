@@ -275,17 +275,44 @@ func describeDocumentFailure(what string, err error) string {
 // exportDetailsRequest asks for one artifact's inventory.
 //
 // CycloneDX rather than SPDX, and JSON rather than XML, because that is what
-// the tools people feed an SBOM to read first. Both switches are sent because
-// some Xray versions ignore the format field and key off the booleans.
+// the tools people feed an SBOM to read first.
+//
+// # The two fields that were wrong, and what Xray said about them
+//
+// It answered "one or more parameters are missing" for every SBOM, and it was
+// right twice over.
+//
+//	cyclonedx_format  A format switch is a PAIR in this API: `cyclonedx: true`
+//	                  with no `cyclonedx_format` is a request for a document in
+//	                  no particular encoding, and Xray refuses it. Same for spdx.
+//
+//	path              The artifact was identified by `component_name`, built as
+//	                  "docker://" plus an Artifactory PATH - which produced
+//	                  `docker://orbs/cfx-5000/25.7.2131/manifest.json`. A docker
+//	                  component in Xray is `docker://<image>:<tag>`; that string
+//	                  is neither, and no image has that name. `path` is the
+//	                  addressing the violations call on the next endpoint along
+//	                  already uses successfully against the same deployment, and
+//	                  it is the one identifier this platform can always build
+//	                  correctly, because it is how Artifactory stores the thing.
 type exportDetailsRequest struct {
-	ComponentName string `json:"component_name"`
-	PackageType   string `json:"package_type"`
-	OutputFormat  string `json:"output_format"`
-	CycloneDX     bool   `json:"cyclonedx"`
-	SPDX          bool   `json:"spdx"`
-	Violations    bool   `json:"violations"`
-	License       bool   `json:"license"`
-	Security      bool   `json:"security"`
+	// Path is the artifact's full Artifactory path, repository key included.
+	Path string `json:"path"`
+	// PackageType stays alongside it: some versions use it to choose how to
+	// read the path, and it is free to send.
+	PackageType string `json:"package_type,omitempty"`
+	// OutputFormat is kept exactly as it was. The old request sent it and Xray
+	// did not complain about it, so it is not one of the missing parameters -
+	// and changing a field that was working, while fixing two that were not, is
+	// how a fix becomes an experiment.
+	OutputFormat string `json:"output_format,omitempty"`
+
+	CycloneDX       bool   `json:"cyclonedx"`
+	CycloneDXFormat string `json:"cyclonedx_format,omitempty"`
+
+	Violations bool `json:"violations"`
+	License    bool `json:"license"`
+	Security   bool `json:"security"`
 }
 
 // ExportDetails asks Xray for one artifact's component inventory.
@@ -299,13 +326,14 @@ type exportDetailsRequest struct {
 // handled too: the body is sniffed for the ZIP magic rather than assumed.
 func (c *XrayClient) ExportDetails(ctx context.Context, path string) ([]byte, string, error) {
 	req := exportDetailsRequest{
-		ComponentName: "docker://" + strings.TrimPrefix(path, c.repoKey+"/"),
-		PackageType:   "docker",
-		OutputFormat:  "json",
-		CycloneDX:     true,
-		Violations:    false,
-		License:       true,
-		Security:      true,
+		Path:            path,
+		PackageType:     "docker",
+		OutputFormat:    "json",
+		CycloneDX:       true,
+		CycloneDXFormat: "json",
+		Violations:      false,
+		License:         true,
+		Security:        true,
 	}
 	body, contentType, err := c.raw(ctx, http.MethodPost, exportDetailsPath, req)
 	if err != nil {

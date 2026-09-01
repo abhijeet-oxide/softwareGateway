@@ -2941,7 +2941,28 @@ function ScannerOutput({ documents }: { documents?: SecurityDocumentRef[] }) {
   const { message } = App.useApp()
 
   const selected = refs.find((d) => d.kind === kind) ?? held[0] ?? refs[0]
-  const readable = Boolean(selected?.available && selected?.url)
+
+  /*
+   * An SBOM that is not held is FETCHED rather than reported missing.
+   *
+   * It is the one document a sync deliberately does not retrieve - minutes and
+   * tens of megabytes per image, for a file wanted occasionally - so the first
+   * person to want one asks Xray for it. The endpoint behind this URL already
+   * does exactly that and keeps the result, so the tab was saying "nothing is
+   * held" about something it could have produced by asking.
+   *
+   * # Why this does not fire on every drawer
+   *
+   * Because this component is only MOUNTED when somebody opens the Scanner
+   * output tab. An inactive tab pane is not rendered, so opening an image to
+   * read its vulnerabilities costs nothing, and a reader opening ten of them
+   * does not start ten SBOM generations. Reaching this code means the question
+   * was asked.
+   *
+   * Held documents load the same way, because those are a read from storage.
+   */
+  const onDemand = selected?.kind === 'sbom'
+  const readable = Boolean(selected?.url) && (Boolean(selected?.available) || onDemand)
   const doc = useSecurityDocument(selected?.url, readable)
 
   const body = doc.data ?? ''
@@ -2984,7 +3005,13 @@ function ScannerOutput({ documents }: { documents?: SecurityDocumentRef[] }) {
             // A document the scanner did not give us is offered and marked,
             // not hidden. "Where is the SBOM tab" is a worse question than
             // "why is this one empty", which the panel answers in a sentence.
-            label: d.available
+            /*
+              A document the scanner did not give us is marked, except the one
+              that can still be got. An SBOM is produced on demand, so its tab
+              is a live offer rather than an absence - marking it "none" told a
+              reader there was nothing there when clicking would have made it.
+            */
+            label: d.available || d.kind === 'sbom'
               ? d.label
               : (
                 <span style={{ color: c.text3 }}>
@@ -3027,12 +3054,8 @@ function ScannerOutput({ documents }: { documents?: SecurityDocumentRef[] }) {
             message="Nothing is held for this image"
             description={
               selected?.message
-              || (selected?.kind === 'sbom'
-                ? 'An SBOM is produced on demand. Download it once and it is kept here - '
-                  + 'and shown here - from then on, because the components inside one set of '
-                  + 'bytes cannot change.'
-                : `No ${selected?.label ?? 'document'} was stored for this image. A sync keeps `
-                  + 'what it is asked to keep, so sync the release again to retrieve it.')
+              || `No ${selected?.label ?? 'document'} was stored for this image. A sync keeps `
+                + 'what it is asked to keep, so sync the release again to retrieve it.'
             }
           />
         )
@@ -3049,7 +3072,23 @@ function ScannerOutput({ documents }: { documents?: SecurityDocumentRef[] }) {
             />
           )
           : doc.isLoading
-            ? <Skeleton active paragraph={{ rows: 6 }} />
+            ? (
+              <Space direction="vertical" size={10} style={{ width: '100%' }}>
+                {/*
+                  Named while it happens, because producing an SBOM is not a
+                  read. It is Xray walking a container image, and for a large
+                  one it is a minute - which as a bare skeleton reads as a page
+                  that has stopped.
+                */}
+                {!selected?.available && (
+                  <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+                    Asking the scanner to produce this. It is generated from the image, so it takes
+                    a moment - and it is kept afterwards, so this is the only time.
+                  </Typography.Text>
+                )}
+                <Skeleton active paragraph={{ rows: 6 }} />
+              </Space>
+            )
             : doc.isError
               ? (
                 <Alert

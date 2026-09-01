@@ -783,29 +783,52 @@ function FindingsSection({ data, product, reference, repository, tab, onTabChang
   /*
    * The images table, filtered the same way the vulnerabilities table is.
    *
-   * Severity, fixability and search narrow WHAT COUNTS AS A FINDING, and an
+   * Severity, fixability and source narrow WHAT COUNTS AS A FINDING, and an
    * image's row is built out of its findings - so a filter that changed one
    * table and not the other was the same release disagreeing with itself:
    * "No fix" showing 2,930 vulnerabilities under a total of 107 fixable ones.
+   *
+   * # Why the search box is not one of those
+   *
+   * Because on THIS table it means something else. The search haystack includes
+   * the image's name, so typing an image name into it made every finding of
+   * that image match and no finding of any other image match - and the table
+   * answered by showing all 157 rows with "None found" against 156 of them.
+   * A release with ninety thousand findings rendered as a release with none,
+   * and opening one of those rows showed a drawer reading "Vulnerabilities 0"
+   * over a raw scanner payload full of them.
+   *
+   * So a search NAMES ROWS here. An image whose name matches keeps every one of
+   * its findings; an image that matches only through its findings keeps those;
+   * an image that matches neither is removed from the table rather than shown
+   * as empty. "None found" now means the scanner found none.
    */
   const filteredImageReports = useMemo(() => {
     if (severities.length === 0 && fixability === 'all' && !q && isAnySource(source)) return imageReports
-    return imageReports.map((r) => {
+    const needle = q.trim().toLowerCase()
+    const out: SecurityReport[] = []
+    for (const r of imageReports) {
+      const named = needle !== '' && [r.artifact.display, r.artifact.name, r.artifact.tag, r.artifact.digest]
+        .some((v) => v?.toLowerCase().includes(needle))
       const kept = (r.findings ?? []).filter((f) => {
         if (severities.length > 0 && !severities.includes(f.severity)) return false
         if (fixability === 'fixable' && !f.fixable) return false
         if (fixability === 'non-fixable' && f.fixable) return false
         if (!matchesSource(f, source)) return false
-        if (q) {
-          const hay = `${f.cve ?? ''} ${f.id ?? ''} ${f.component.name} ${r.artifact.name} ${f.summary ?? ''}`
-            .toLowerCase()
-          if (!hay.includes(q.toLowerCase())) return false
+        if (needle && !named) {
+          const hay = `${f.cve ?? ''} ${f.id ?? ''} ${f.component.name} ${f.summary ?? ''}`.toLowerCase()
+          if (!hay.includes(needle)) return false
         }
         return true
       })
-      if (kept.length === (r.findings ?? []).length) return r
-      return { ...r, findings: kept, counts: summariseCounts(kept) }
-    })
+      if (needle && !named && kept.length === 0) continue
+      if (kept.length === (r.findings ?? []).length) {
+        out.push(r)
+        continue
+      }
+      out.push({ ...r, findings: kept, counts: summariseCounts(kept) })
+    }
+    return out
   }, [imageReports, severities, fixability, q, source])
 
   const artifactCounts = useMemo<KindCounts>(
@@ -1316,7 +1339,7 @@ function FindingsSection({ data, product, reference, repository, tab, onTabChang
                       + `${data.sync.repository ?? 'the scanned repository'}.`}
                 </Typography.Text>
               )}
-              <ArtifactTable reports={filteredImageReports} />
+              <ArtifactTable reports={filteredImageReports} whole={imageReports} />
             </Space>
           )
           : tab === 'malware'
@@ -2535,7 +2558,20 @@ function VulnerabilityTable({
  * nobody scanned. A table listing only the images with findings would be a
  * table where an unscanned image is invisible.
  */
-function ArtifactTable({ reports }: { reports: SecurityReport[] }) {
+function ArtifactTable({ reports, whole }: {
+  reports: SecurityReport[]
+  /**
+   * The same images with NOTHING filtered out, for the drawer.
+   *
+   * The rows carry a filtered projection on purpose - a row's counts have to
+   * agree with the table's filters - but a drawer is not a row. It is the
+   * question "what is in this image", and answering it with the current
+   * filter applied is how an image with seven hundred findings came to open a
+   * panel reading "Vulnerabilities 0" above a raw scanner payload listing
+   * them. The filter belongs to the table; the image belongs to itself.
+   */
+  whole: SecurityReport[]
+}) {
   /*
    * The statuses this table actually contains, in the order it shows them.
    *
@@ -2553,6 +2589,12 @@ function ArtifactTable({ reports }: { reports: SecurityReport[] }) {
 
   // Same gesture as a CVE row: click the name, get everything about it beside the table.
   const [open, setOpen] = useState<SecurityReport | null>(null)
+  const wholeByKey = useMemo(() => {
+    const m = new Map<string, SecurityReport>()
+    for (const r of whole) m.set(r.artifact.digest || r.artifact.name, r)
+    return m
+  }, [whole])
+  const opened = open ? wholeByKey.get(open.artifact.digest || open.artifact.name) ?? open : null
 
   return (
     <>
@@ -2666,7 +2708,7 @@ function ArtifactTable({ reports }: { reports: SecurityReport[] }) {
         },
       ]}
     />
-    <ImageDetailDrawer report={open} onClose={() => setOpen(null)} />
+    <ImageDetailDrawer report={opened} onClose={() => setOpen(null)} />
     </>
   )
 }

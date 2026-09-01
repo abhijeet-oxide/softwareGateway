@@ -59,8 +59,13 @@ type Cache interface {
 	// reports carry findings; a counts-only retrieval writes the summary tier
 	// only, and must not overwrite a detail row with an empty one.
 	Save(ctx context.Context, scope Scope, reports []Report, detail bool, ttl CacheTTL) error
-	// Invalidate drops every tier for the given artifacts, for an explicit
-	// refresh.
+	// Invalidate drops every tier for the given artifacts.
+	//
+	// Deliberately NOT part of a refresh: a refresh skips the read and
+	// overwrites what it finds, so that a release keeps its results while
+	// another release sharing the same images is being re-scanned. This is for
+	// forgetting on purpose - a repository removed, a scanner replaced - where
+	// the old answer is not stale but wrong.
 	Invalidate(ctx context.Context, scope Scope, refs []ArtifactRef) error
 }
 
@@ -225,11 +230,27 @@ func (s *Service) Posture(ctx context.Context, req Request) (Result, error) {
 			cached = map[string]Report{}
 		}
 	}
-	if s.cache != nil && req.Refresh {
-		if err := s.cache.Invalidate(ctx, req.Scope, refs); err != nil {
-			s.log.Warn("security: cache invalidation failed", "error", err)
-		}
-	}
+	// A refresh does NOT delete what is held first. It skips the read above and
+	// overwrites on the way out.
+	//
+	// # Why deleting first was wrong
+	//
+	// The stored rows are keyed by artifact, not by release, because that is
+	// what makes two releases of one product share the scan of a base image
+	// they both carry. Deleting them at the START of a sync therefore emptied
+	// every OTHER release holding those images, for the ten minutes the sync
+	// took - somebody with a release open watched its vulnerabilities vanish
+	// because a colleague pressed Sync on a different one.
+	//
+	// It also fought the store's own rule that an artifact the scanner would
+	// not answer for keeps its previous result: there was no previous result
+	// left to keep, so a sync interrupted by a scanner outage turned a release
+	// with ninety thousand findings into a release with none.
+	//
+	// Save upserts, so nothing needs clearing: an artifact's row is replaced by
+	// its new answer the moment there is one, and until then the old answer is
+	// the best thing anybody can be shown. Artifacts that have left a release
+	// are collected by the sweep, which is where that belongs.
 
 	var missing []ArtifactRef
 	reports := make([]Report, 0, len(refs))

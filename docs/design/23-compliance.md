@@ -848,13 +848,18 @@ internal/compliance/
     builtin/        one file per category: pdb.go, probes.go, security.go,
                     rbac.go, config.go, resources.go, network.go, storage.go,
                     metadata.go, supply.go, scheduling.go, upgrade.go
+    parse.go        rendered manifests -> addressed resources
+    run.go          one run: charts, counts, verdict, provenance
     cel/            the ONLY package importing cel-go
-      env.go          declarations, typed schemas for well-known kinds
-      funcs.go        pdbFor, servicesFor, selects, quantity, imageRef, …
-      shorthand.go    required/forbidden/equals/… compiled to the same AST
-      compile.go      per-check compile, cost estimate, load-time errors
-    policy/         pack manifest parse, validate, the baseline pack YAML
-    render/         helm.go, kustomize.go, plain.go, probe.go, sandbox.go
+      env.go          declarations; compile-time and run-time environments
+      funcs.go        value/text/present, quantity, imageRef, selects, pdbFor
+      funcs2.go       covers, replicas, declaresPort, boundToRole, allLabels
+      k8s.go          quantity, image reference and selector semantics
+      heuristics.go   the stated false-positive budgets, shared
+      shorthand.go    required/forbidden/equals/… compiled to the same CEL
+      compile.go      per-check compile, load-time errors, per-run planning
+    baseline/       the shipped pack, as embedded YAML, plus the fixture corpus
+    render/         helm.go, probe.go, source.go
     source/         artifact acquisition, budget, unpack
 internal/store/compliance.go
 internal/api/compliance.go, compliancewire.go, complianceexport.go,

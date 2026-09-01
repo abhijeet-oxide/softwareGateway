@@ -143,7 +143,7 @@ export function SeverityBar({ counts, height = 8 }: { counts: SecurityCounts; he
  * The total is the largest thing in the cell because it is the number a reader
  * carries to the next row.
  */
-export function SeverityMeter({ counts, width, compact = false }: {
+export function SeverityMeter({ counts, width, compact = false, secondaryLabel }: {
   counts: SecurityCounts
   width?: number
   /**
@@ -162,6 +162,7 @@ export function SeverityMeter({ counts, width, compact = false }: {
    * of twenty rows they are the same two words twenty times.
    */
   compact?: boolean
+  secondaryLabel?: string
 }) {
   const critical = counts.bySeverity.critical
   const high = counts.bySeverity.high
@@ -180,8 +181,13 @@ export function SeverityMeter({ counts, width, compact = false }: {
             : ''
         }`}
         >
-          <span style={{ fontSize: 13, fontWeight: 600, color: c.text, lineHeight: 1 }}>
-            {counts.total.toLocaleString()}
+          <span style={{ display: 'inline-flex', alignItems: 'baseline', gap: 4 }}>
+            <span style={{ fontSize: 13, fontWeight: 600, color: c.text, lineHeight: 1 }}>
+              {counts.total.toLocaleString()}
+            </span>
+            {secondaryLabel && (
+              <span style={{ fontSize: 10, color: c.text3 }}>{secondaryLabel}</span>
+            )}
           </span>
         </Tooltip>
         <div style={{ flex: 1, minWidth: 24 }}>
@@ -423,7 +429,7 @@ export function VulnerabilityCell({
 
   return (
     <div style={{ display: 'flex', alignItems: 'center', gap: 6, width: '100%', minWidth: 0 }}>
-      <SeverityMeter counts={summary.counts} compact />
+      <SeverityMeter counts={summary.distinctCounts} compact secondaryLabel="UNIQUE" />
       {caveats.length > 0 && (
         <Tooltip title={caveats.join(' ')}>
           <span style={{ display: 'inline-flex', flex: '0 0 auto' }}>

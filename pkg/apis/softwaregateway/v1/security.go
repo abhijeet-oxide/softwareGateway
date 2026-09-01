@@ -448,8 +448,9 @@ type PackageSecuritySummary struct {
 	Counts SecurityCounts `json:"counts"`
 	// DistinctTotal collapses the same (CVE, component) pair across artifacts;
 	// DistinctCVEs collapses the advisory alone.
-	DistinctTotal int `json:"distinctTotal"`
-	DistinctCVEs  int `json:"distinctCves"`
+	DistinctTotal  int            `json:"distinctTotal"`
+	DistinctCVEs   int            `json:"distinctCves"`
+	DistinctCounts SecurityCounts `json:"distinctCounts"`
 	// Complete is whether every scannable artifact has a result. False means
 	// the counts cover only part of the release.
 	Complete bool `json:"complete"`

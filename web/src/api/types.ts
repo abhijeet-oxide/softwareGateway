@@ -1550,6 +1550,7 @@ export interface PackageSecuritySummary {
    */
   distinctTotal: number
   distinctCves: number
+  distinctCounts: SecurityCounts
   complete: boolean
   /**
    * What "0 vulnerabilities" actually means. Zero of zero is "nobody looked"

@@ -181,18 +181,19 @@ func (s *Server) attachSecurity(
 		}
 		stalled := sec.Stalled(security.StaleClaimAfter) && !s.securitySyncRunningHere(row.ID)
 		summary := &v1.PackageSecuritySummary{
-			State:         string(orNever(sec.State)),
-			Label:         syncStateLabel(orNever(sec.State)),
-			Stalled:       stalled,
-			Counts:        toAPICounts(sec.Counts),
-			DistinctTotal: sec.DistinctTotal,
-			DistinctCVEs:  sec.DistinctCVEs,
-			Complete:      sec.Coverage.Complete(),
-			Scanned:       sec.Coverage.Scanned,
-			Scannable:     sec.Coverage.Scannable(),
-			Error:         sec.Error,
-			CanSync:       canSync,
-			Reason:        reason,
+			State:          string(orNever(sec.State)),
+			Label:          syncStateLabel(orNever(sec.State)),
+			Stalled:        stalled,
+			Counts:         toAPICounts(sec.Counts),
+			DistinctTotal:  sec.DistinctTotal,
+			DistinctCVEs:   sec.DistinctCVEs,
+			DistinctCounts: toAPICounts(sec.DistinctCounts),
+			Complete:       sec.Coverage.Complete(),
+			Scanned:        sec.Coverage.Scanned,
+			Scannable:      sec.Coverage.Scannable(),
+			Error:          sec.Error,
+			CanSync:        canSync,
+			Reason:         reason,
 		}
 		if sec.SyncedAt != nil {
 			summary.SyncedAt = sec.SyncedAt.UTC().Format(rfc3339)

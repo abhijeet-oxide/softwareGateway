@@ -46,9 +46,10 @@ type PackageSecurityRow struct {
 	// second. Two right answers to two questions is fine; one answer wearing
 	// the other's name is how a page loses a reader's trust in every number on
 	// it.
-	DistinctTotal int
-	DistinctCVEs  int
-	Coverage      security.Coverage
+	DistinctTotal  int
+	DistinctCVEs   int
+	DistinctCounts security.Counts
+	Coverage       security.Coverage
 
 	// Sources is one row per scanner that contributed, with how much only that
 	// scanner reported. Empty on a single-scanner deployment, where the
@@ -229,10 +230,11 @@ func (p *PackageSecurity) Complete(ctx context.Context, row PackageSecurityRow) 
 			package_id, state, error, provider, repository, role,
 			total, fixable, critical, high, medium, low, unknown,
 			fix_critical, fix_high, fix_medium, fix_low, fix_unknown,
-			distinct_total, distinct_cves,
+			distinct_total, distinct_cves, distinct_fixable,
+			distinct_critical, distinct_high, distinct_medium, distinct_low, distinct_unknown,
 			artifacts, scanned, not_scanned, unsupported, unavailable, disabled,
 			scanned_at, synced_at, started_at, fingerprint, log, missing)
-		VALUES (?,?,?,?,?,?, ?,?,?,?,?,?,?, ?,?,?,?,?, ?,?, ?,?,?,?,?,?, ?,?,NULL,?,?,?)
+		VALUES (?,?,?,?,?,?, ?,?,?,?,?,?,?, ?,?,?,?,?, ?,?,?,?,?,?,?,?, ?,?,?,?,?,?, ?,?,NULL,?,?,?)
 		ON CONFLICT (package_id) DO UPDATE SET
 			state = excluded.state, error = excluded.error,
 			provider = excluded.provider, repository = excluded.repository, role = excluded.role,
@@ -243,6 +245,10 @@ func (p *PackageSecurity) Complete(ctx context.Context, row PackageSecurityRow) 
 			fix_medium = excluded.fix_medium, fix_low = excluded.fix_low,
 			fix_unknown = excluded.fix_unknown,
 			distinct_total = excluded.distinct_total, distinct_cves = excluded.distinct_cves,
+			distinct_fixable = excluded.distinct_fixable,
+			distinct_critical = excluded.distinct_critical, distinct_high = excluded.distinct_high,
+			distinct_medium = excluded.distinct_medium, distinct_low = excluded.distinct_low,
+			distinct_unknown = excluded.distinct_unknown,
 			artifacts = excluded.artifacts, scanned = excluded.scanned,
 			not_scanned = excluded.not_scanned, unsupported = excluded.unsupported,
 			unavailable = excluded.unavailable, disabled = excluded.disabled,
@@ -255,7 +261,10 @@ func (p *PackageSecurity) Complete(ctx context.Context, row PackageSecurityRow) 
 		c.BySeverity.Critical, c.BySeverity.High, c.BySeverity.Medium, c.BySeverity.Low, c.BySeverity.Unknown,
 		c.FixableBySeverity.Critical, c.FixableBySeverity.High, c.FixableBySeverity.Medium,
 		c.FixableBySeverity.Low, c.FixableBySeverity.Unknown,
-		row.DistinctTotal, row.DistinctCVEs,
+		row.DistinctTotal, row.DistinctCVEs, row.DistinctCounts.Fixable,
+		row.DistinctCounts.BySeverity.Critical, row.DistinctCounts.BySeverity.High,
+		row.DistinctCounts.BySeverity.Medium, row.DistinctCounts.BySeverity.Low,
+		row.DistinctCounts.BySeverity.Unknown,
 		cov.Artifacts, cov.Scanned, cov.NotScanned, cov.Unsupported, cov.Unavailable, cov.Disabled,
 		timeOrNil(row.ScannedAt), securityTime(now), row.Fingerprint, encodeSyncLog(row.Log), cov.Missing)
 	if err != nil {
@@ -427,7 +436,9 @@ func (p *PackageSecurity) load(ctx context.Context, where string, args ...any) (
 		SELECT package_id, state, COALESCE(error, ''), provider, repository, role,
 		       total, fixable, critical, high, medium, low, unknown,
 		       fix_critical, fix_high, fix_medium, fix_low, fix_unknown,
-		       distinct_total, COALESCE(distinct_cves, 0),
+		       distinct_total, COALESCE(distinct_cves, 0), COALESCE(distinct_fixable, 0),
+		       COALESCE(distinct_critical, 0), COALESCE(distinct_high, 0),
+		       COALESCE(distinct_medium, 0), COALESCE(distinct_low, 0), COALESCE(distinct_unknown, 0),
 		       artifacts, scanned, not_scanned, unsupported, unavailable, disabled,
 		       scanned_at, synced_at, started_at, fingerprint, COALESCE(log, ''), COALESCE(missing, 0),
 		       COALESCE(claimed_by, ''), heartbeat_at
@@ -454,7 +465,10 @@ func (p *PackageSecurity) load(ctx context.Context, where string, args ...any) (
 			&r.Counts.BySeverity.Low, &r.Counts.BySeverity.Unknown,
 			&r.Counts.FixableBySeverity.Critical, &r.Counts.FixableBySeverity.High,
 			&r.Counts.FixableBySeverity.Medium, &r.Counts.FixableBySeverity.Low,
-			&r.Counts.FixableBySeverity.Unknown, &r.DistinctTotal, &r.DistinctCVEs,
+			&r.Counts.FixableBySeverity.Unknown, &r.DistinctTotal, &r.DistinctCVEs, &r.DistinctCounts.Fixable,
+			&r.DistinctCounts.BySeverity.Critical, &r.DistinctCounts.BySeverity.High,
+			&r.DistinctCounts.BySeverity.Medium, &r.DistinctCounts.BySeverity.Low,
+			&r.DistinctCounts.BySeverity.Unknown,
 			&r.Coverage.Artifacts, &r.Coverage.Scanned, &r.Coverage.NotScanned,
 			&r.Coverage.Unsupported, &r.Coverage.Unavailable, &r.Coverage.Disabled,
 			&scannedAt, &syncedAt, &startedAt, &r.Fingerprint, &log, &r.Coverage.Missing,
@@ -464,6 +478,8 @@ func (p *PackageSecurity) load(ctx context.Context, where string, args ...any) (
 		}
 		r.State = PackageSecurityState(state)
 		r.Counts.NonFixable = r.Counts.Total - r.Counts.Fixable
+		r.DistinctCounts.Total = r.DistinctTotal
+		r.DistinctCounts.NonFixable = r.DistinctTotal - r.DistinctCounts.Fixable
 		r.ScannedAt = parseNullableSecurityTime(scannedAt)
 		r.SyncedAt = parseNullableSecurityTime(syncedAt)
 		r.StartedAt = parseNullableSecurityTime(startedAt)
@@ -518,19 +534,20 @@ func parseNullableSecurityTime(v sql.NullString) *time.Time {
 // security model must not know about SQL.
 func (p *PackageSecurity) Record(ctx context.Context, res security.PackageResult) error {
 	row := PackageSecurityRow{
-		PackageID:     res.PackageID,
-		State:         PackageSecuritySynced,
-		Provider:      res.Provider,
-		Repository:    res.Repository,
-		Role:          res.Role,
-		Counts:        res.Posture.Counts,
-		DistinctTotal: res.Posture.UniqueCounts.Total,
-		DistinctCVEs:  res.Posture.UniqueCVEs,
-		Coverage:      res.Posture.Coverage,
-		ScannedAt:     res.Posture.ScannedAt,
-		Fingerprint:   res.Fingerprint,
-		Sources:       res.Posture.BySource,
-		Log:           res.Log,
+		PackageID:      res.PackageID,
+		State:          PackageSecuritySynced,
+		Provider:       res.Provider,
+		Repository:     res.Repository,
+		Role:           res.Role,
+		Counts:         res.Posture.Counts,
+		DistinctTotal:  res.Posture.UniqueCounts.Total,
+		DistinctCVEs:   res.Posture.UniqueCVEs,
+		DistinctCounts: res.Posture.UniqueCounts,
+		Coverage:       res.Posture.Coverage,
+		ScannedAt:      res.Posture.ScannedAt,
+		Fingerprint:    res.Fingerprint,
+		Sources:        res.Posture.BySource,
+		Log:            res.Log,
 	}
 	return p.Complete(ctx, row)
 }

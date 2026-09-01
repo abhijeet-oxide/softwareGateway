@@ -222,6 +222,9 @@ func TestRecordAndReadBack(t *testing.T) {
 	if row.Counts.NonFixable != 1 {
 		t.Errorf("nonFixable = %d, want 1", row.Counts.NonFixable)
 	}
+	if row.DistinctCounts.Total != 2 || row.DistinctCounts.BySeverity.Critical != 1 || row.DistinctCounts.BySeverity.Low != 1 {
+		t.Errorf("distinct counts = %+v", row.DistinctCounts)
+	}
 	// Coverage travels with the counts, because "2 vulnerabilities" means one
 	// thing at full coverage and something else with an artifact unscanned.
 	if row.Coverage.Scanned != 1 || row.Coverage.NotScanned != 1 {

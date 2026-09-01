@@ -541,7 +541,7 @@ metrics:
 
 The design is auth-shaped even though auth is absent, so adding it is not a refactor:
 
-1. **Middleware position fixed.** The chain is `RequestID → Logging → Tracing → Metrics → Recovery → [AUTH] → Handler`, with a no-op authenticator in the slot today.
+1. **Middleware position fixed.** The chain is `RequestID → Logging → Tracing → Metrics → Recovery → [AUTH] → Compress → Handler`, with a no-op authenticator in the slot today. Compression is innermost so the byte counts the log line and the metrics carry are the bytes that left the process.
 2. **Identity threaded through.** Handlers already take an `Identity` from the request context; today it is `{Subject: "anonymous", Roles: [admin]}`. Every mutating handler already records `identity.Subject` as the audit actor, so `requested_by` and `audit_events.actor` are populated and the schema needs no change.
 3. **Roles defined and mapped.** Every route is already annotated with a required role.
 

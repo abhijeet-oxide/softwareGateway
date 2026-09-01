@@ -983,6 +983,11 @@ export function useSyncPackageSecurity() {
       void qc.invalidateQueries({ queryKey: ['package-security'] })
       void qc.invalidateQueries({ queryKey: ['packages'] })
       void qc.invalidateQueries({ queryKey: ['package'] })
+      // And any comparison this release is an end of. Marking it stale now
+      // rather than refetching now is the point: the sync takes minutes, so
+      // the useful moment to re-run a comparison is when somebody next looks
+      // at it, which is exactly what a stale key does.
+      void qc.invalidateQueries({ queryKey: ['compare-security'] })
     },
   })
 }
@@ -1023,20 +1028,50 @@ export function useCancelPackageSecuritySync() {
  * classification - fast enough to run on a page load, with no progress worth
  * reporting. A release nobody has synced comes back as inconclusive rather than
  * quietly starting a multi-minute scan behind a button.
+ *
+ * # Why a query and not a mutation, given that it POSTs
+ *
+ * Because it READS. The verb is POST only because the second release will not
+ * survive a URL path segment, and TanStack's queries are indifferent to the
+ * verb. Three things follow from making it a query, and all three are the
+ * reason:
+ *
+ *   - it is keyed and cached, so switching to the contents tab and back does
+ *     not re-run a comparison of a hundred and seventy thousand findings;
+ *   - it runs from `enabled` rather than from an effect that fires a mutation,
+ *     which is a shape that cannot be got wrong on a re-render;
+ *   - it survives StrictMode. A mutation started in a mount effect is orphaned
+ *     by React's development double-mount - the fresh observer is not attached
+ *     to the request the previous one started - so the response arrived and the
+ *     page sat on its loading skeleton for ever. That was every local run of
+ *     this page.
+ *
+ * `staleTime: Infinity` because the answer changes only when a sync writes new
+ * results, and the sync path invalidates this key itself.
  */
-export function useCompareSecurity() {
-  return useMutation({
-    mutationFn: ({ product, ref, repository, body }: {
-      product: string
-      ref: string
-      repository?: string
-      body: SecurityCompareRequest
-    }) => {
-      const { segment, query: q } = packageRef(ref)
+export function useCompareSecurity(
+  args: {
+    product: string | undefined
+    ref: string | undefined
+    repository?: string
+    against: string | undefined
+  },
+  enabled: boolean,
+) {
+  const { product, ref, repository, against } = args
+  return useQuery({
+    queryKey: ['compare-security', product, ref, repository, against],
+    queryFn: () => {
+      const { segment, query: q } = packageRef(ref!)
+      const body: SecurityCompareRequest = { against }
       return api.post<SecurityComparisonResponse>(
-        `/products/${encodeURIComponent(product)}/packages/${encodeURIComponent(segment)}:compareSecurity` +
+        `/products/${encodeURIComponent(product!)}/packages/${encodeURIComponent(segment)}:compareSecurity` +
         scopeQuery(q, repository), body)
     },
+    enabled: enabled && Boolean(product && ref && against),
+    staleTime: Infinity,
+    retry: false,
+    throwOnError: false,
   })
 }
 

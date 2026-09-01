@@ -595,3 +595,68 @@ func TestSecuritySavesAcrossChunkBoundaries(t *testing.T) {
 		t.Errorf("after a re-save, stored %d findings, want %d", stored, want)
 	}
 }
+
+// A reader that only counts and classifies must not pay for the prose.
+//
+// The prose tier is per-CVE data written per OCCURRENCE, so merging it means
+// decompressing and parsing every stored payload for the release. A comparison
+// of two large releases reads none of it and was spending most of its time
+// there; security.IndexOnly is the way to say so, and this pins that the two
+// tiers genuinely differ rather than the flag being decorative.
+func TestSecurityReportsForSkipsTheProseTierWhenAskedTo(t *testing.T) {
+	sec := NewSecurity(openTestStore(t))
+	scope := testScope()
+
+	rich := securityFinding("CVE-2024-3094", security.SeverityCritical, "xz-utils", "5.4.5", true)
+	rich.Description = "A backdoor was planted in the upstream release tarballs."
+	rich.References = []string{"https://nvd.nist.gov/vuln/detail/CVE-2024-3094"}
+	rich.CVSSScore = 10
+	rich.CVSSVector = "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:H"
+
+	report := securityReport("cfx-main", "sha256:aaa", rich)
+	report.Malware = []security.Finding{
+		securityFinding("", security.SeverityCritical, "evil-pkg", "0.0.1", false),
+	}
+	if err := sec.Save(t.Context(), scope, []security.Report{report}, true, longTTL()); err != nil {
+		t.Fatalf("Save: %v", err)
+	}
+
+	refs := []security.ArtifactRef{securityRef("cfx-main", "sha256:aaa")}
+
+	full, err := sec.ReportsFor(t.Context(), scope, refs, security.WithProse)
+	if err != nil {
+		t.Fatalf("ReportsFor(WithProse): %v", err)
+	}
+	if len(full) != 1 || len(full[0].Findings) != 1 {
+		t.Fatalf("WithProse returned %d reports", len(full))
+	}
+	// The premise: without this the test below would pass with the flag
+	// ignored, because there would be no prose to leave out.
+	if full[0].Findings[0].Description == "" || full[0].Findings[0].CVSSScore == 0 {
+		t.Fatalf("WithProse lost the prose: %+v", full[0].Findings[0])
+	}
+	if len(full[0].Malware) != 1 {
+		t.Errorf("WithProse dropped malware, which lives only in that tier")
+	}
+
+	lean, err := sec.ReportsFor(t.Context(), scope, refs, security.IndexOnly)
+	if err != nil {
+		t.Fatalf("ReportsFor(IndexOnly): %v", err)
+	}
+	if len(lean) != 1 || len(lean[0].Findings) != 1 {
+		t.Fatalf("IndexOnly returned %d reports", len(lean))
+	}
+	got := lean[0].Findings[0]
+	// Everything the index holds is still there - identity, grade, remedy -
+	// because that is what makes a finding countable and comparable.
+	if got.CVE != "CVE-2024-3094" || got.Severity != security.SeverityCritical || !got.Fixable {
+		t.Errorf("IndexOnly lost the finding's identity or grade: %+v", got)
+	}
+	if got.Component.Name != "xz-utils" || got.Component.Version != "5.4.5" {
+		t.Errorf("IndexOnly lost the component: %+v", got.Component)
+	}
+	// And none of the prose, which is the whole point.
+	if got.Description != "" || len(got.References) != 0 || got.CVSSScore != 0 || got.CVSSVector != "" {
+		t.Errorf("IndexOnly read the detail tier anyway: %+v", got)
+	}
+}

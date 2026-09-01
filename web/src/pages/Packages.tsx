@@ -654,38 +654,6 @@ export default function Packages() {
         }}
       >
         <Space size={12} align="center" wrap>
-          {/*
-            FIRST in the row of controls that shape the list, because it is the
-            one that decides what the list can contain - the others narrow it,
-            this one changes what is eligible at all.
-
-            It sat on the title line, which read as a heading ornament rather
-            than as a filter, and put two rows of controls where one does. Icons
-            because the two words are near-synonyms at a glance in a row of
-            five controls, and the shield is the same one the release's own
-            Security tab uses - the same picture meaning the same thing.
-          */}
-          {comparing && <Segmented
-            value={selection.intent}
-            onChange={(v) => setIntent(
-              v as 'contents' | 'vulnerabilities',
-              // Whether a release can answer the new question is the listing's
-              // knowledge, so the listing supplies the test.
-              (pick) => {
-                const row = allRows.find((r) => r.product.productId === pick.product
-                  && packageReference(r.pkg) === pick.ref)
-                return Boolean(row && hasSecurityData(row.pkg))
-              },
-            )}
-            options={[
-              { value: 'contents', label: 'Contents', icon: <ClusterOutlined /> },
-              {
-                value: 'vulnerabilities',
-                label: 'Vulnerabilities',
-                icon: <SafetyCertificateOutlined />,
-              },
-            ]}
-          />}
           <SearchBar
             value={search}
             onChange={setSearch}
@@ -735,14 +703,48 @@ export default function Packages() {
           />
         </Space>
         {/*
-          Starts selection mode HERE rather than navigating.
+          The far end of the row, where the control that STARTS a comparison
+          sits and, once one is being chosen, the control that says what it is
+          for. One position, one job at a time: the two never both apply, and
+          keeping them in the same place means the row does not reflow under
+          the reader when they begin.
 
-          It was a link to a page whose whole content was a form asking which
-          two releases - a question this table answers better than any dropdown
-          can, because a reader deciding what to compare is reading status,
-          dates and vulnerability counts, and none of those fit in a select.
+          Icons because the two words are near-synonyms at a glance beside four
+          other controls, and the shield is the same one the release's own
+          Security tab uses - the same picture meaning the same thing.
         */}
-        {!comparing && (
+        {comparing ? (
+          <Segmented
+            value={selection.intent}
+            onChange={(v) => setIntent(
+              v as 'contents' | 'vulnerabilities',
+              // Whether a release can answer the new question is the listing's
+              // knowledge, so the listing supplies the test.
+              (pick) => {
+                const row = allRows.find((r) => r.product.productId === pick.product
+                  && packageReference(r.pkg) === pick.ref)
+                return Boolean(row && hasSecurityData(row.pkg))
+              },
+            )}
+            options={[
+              { value: 'contents', label: 'Contents', icon: <ClusterOutlined /> },
+              {
+                value: 'vulnerabilities',
+                label: 'Vulnerabilities',
+                icon: <SafetyCertificateOutlined />,
+              },
+            ]}
+          />
+        ) : (
+          /*
+            Starts selection mode HERE rather than navigating.
+
+            It was a link to a page whose whole content was a form asking which
+            two releases - a question this table answers better than any
+            dropdown can, because a reader deciding what to compare is reading
+            status, dates and vulnerability counts, and none of those fit in a
+            select.
+          */
           <Button icon={<ScaleOutlined />} onClick={() => start()}>Compare packages</Button>
         )}
       </div>

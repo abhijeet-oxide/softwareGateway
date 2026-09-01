@@ -574,7 +574,21 @@ type SecurityComparisonResponse struct {
 	// number that can be checked beats a rule that cannot.
 	NetScore int `json:"netScore"`
 
-	Changes         []SecurityChange        `json:"changes"`
+	// Changes is the classified findings, worst first: what became more
+	// severe, what is new, what left, what was resolved, and - last - what
+	// carried over unchanged.
+	//
+	// It can be a PREFIX of the whole set. ChangesTotal is the whole set's
+	// size, and when it is larger than len(Changes) the rows that were left
+	// out are the least important ones in that order, which in practice means
+	// findings that are in both releases and identical in both. A client must
+	// take its counts from the Introduced/Resolved/Unchanged totals above and
+	// never from len(Changes), and should say plainly that the list is
+	// shortened - see ChangesTotal.
+	Changes []SecurityChange `json:"changes"`
+	// ChangesTotal is how many classified findings there are in all, whether
+	// or not they are listed in Changes.
+	ChangesTotal    int                     `json:"changesTotal"`
 	Artifacts       []SecurityArtifactDelta `json:"artifacts"`
 	ArtifactSummary SecurityArtifactSummary `json:"artifactSummary"`
 

@@ -446,6 +446,50 @@ func orNever(state store.PackageSecurityState) store.PackageSecurityState {
 	return state
 }
 
+// shortenChanges trims a comparison to the rows worth sending to a page,
+// leaving ChangesTotal to say how many there were.
+//
+// Applied by the page's handler and NOT by the export, which exists to be
+// complete - see maxListedChanges for why the page is not.
+func shortenChanges(out *v1.SecurityComparisonResponse) {
+	if len(out.Changes) > maxListedChanges {
+		out.Changes = out.Changes[:maxListedChanges]
+	}
+}
+
+// maxListedChanges bounds how many classified findings a comparison RESPONSE
+// enumerates. It does not bound the comparison, which is computed over all of
+// them, nor the export, which writes all of them.
+//
+// # Why there is a bound at all
+//
+// Because two neighbouring releases of a large product are almost entirely
+// identical, and "identical" is a row here. Comparing two 84,000-finding
+// releases produced 85,715 classified findings of which 82,285 said nothing
+// happened - 96% of a response whose only reader is a table that opens on a
+// different tab. Sent in full it is a browser holding eighty-five thousand
+// objects to show twenty-five of them, and a filter box that walks all of them
+// on every keystroke.
+//
+// # Why a prefix is the right thing to drop
+//
+// Because security.Compare has already sorted the list by how much each row
+// matters: severity increases, then what is new, then what left, then what was
+// resolved, then remediation changes, and unchanged findings last - each group
+// worst-severity first. A prefix is therefore exactly "the rows that matter
+// most", and what falls off the end is the tail of what carried over
+// identically. Every genuine change survives the cut unless there are more
+// than #maxListedChanges of them, in which case the ones kept are the worst.
+//
+// The counts are unaffected: Introduced, Resolved, Unchanged and the rest are
+// computed over everything and are what a client must count from. ChangesTotal
+// says how many there were, so an interface can say the list is shortened
+// rather than quietly showing a fraction as if it were the whole.
+//
+// Five thousand: more rows than anybody pages through at twenty-five a page,
+// and small enough that the response stays a few megabytes.
+const maxListedChanges = 5000
+
 func toAPISecurityComparison(
 	productName string, base, other store.PackageRow,
 	sideA, sideB securitySide, c security.Comparison,
@@ -474,11 +518,12 @@ func toAPISecurityComparison(
 			Removed:       c.ArtifactSummary.Removed,
 			NotComparable: c.ArtifactSummary.NotComparable,
 		},
-		Changes:     make([]v1.SecurityChange, 0, len(c.Changes)),
-		Artifacts:   make([]v1.SecurityArtifactDelta, 0, len(c.Artifacts)),
-		RetrievedAt: time.Now().UTC().Format(rfc3339),
-		Fingerprint: sideA.row.Fingerprint + "-" + sideB.row.Fingerprint,
+		ChangesTotal: len(c.Changes),
+		Artifacts:    make([]v1.SecurityArtifactDelta, 0, len(c.Artifacts)),
+		RetrievedAt:  time.Now().UTC().Format(rfc3339),
+		Fingerprint:  sideA.row.Fingerprint + "-" + sideB.row.Fingerprint,
 	}
+	out.Changes = make([]v1.SecurityChange, 0, len(c.Changes))
 	for _, ch := range c.Changes {
 		out.Changes = append(out.Changes, toAPIChange(ch))
 	}

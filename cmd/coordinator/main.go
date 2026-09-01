@@ -545,9 +545,10 @@ type securitySecurityStore struct {
 }
 
 func (s securitySecurityStore) ReportsFor(
-	ctx context.Context, scope security.Scope, refs []security.ArtifactRef,
+	ctx context.Context, scope security.Scope,
+	refs []security.ArtifactRef, detail security.Detail,
 ) ([]security.Report, error) {
-	return s.reports.ReportsFor(ctx, scope, refs)
+	return s.reports.ReportsFor(ctx, scope, refs, detail)
 }
 
 func (s securitySecurityStore) LoadDocuments(

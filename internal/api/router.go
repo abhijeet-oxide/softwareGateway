@@ -299,6 +299,7 @@ func (s *Server) routes() chi.Router {
 	}
 	r.Use(middleware.Recovery(internalErrorWriter(s.deps.Logger)))
 	r.Use(middleware.Auth(middleware.AnonymousAuthenticator{}, unauthenticatedWriter))
+	r.Use(middleware.Compress)
 
 	r.NotFound(s.handleNotFound)
 	r.MethodNotAllowed(s.handleMethodNotAllowed)

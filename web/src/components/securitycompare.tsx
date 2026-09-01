@@ -824,13 +824,36 @@ function ChangeTable({ report, product, baseRef, againstRef, repository }: {
   const [fixability, setFixability] = useState<'all' | 'fixable' | 'non-fixable'>('all')
   const [q, setQ] = useState('')
 
+  /*
+   * The tab counts come from the response's TOTALS, not from the rows.
+   *
+   * They are not the same number and the difference is the point: the response
+   * carries the classified findings that matter most and says how many there
+   * were in all, because two neighbouring releases of a large product produce
+   * eighty thousand rows saying "unchanged" and a browser holding them to show
+   * twenty-five is what made this page take minutes. A tab that counted its own
+   * rows would report the sample as the population.
+   */
+  const totals = useMemo<Record<ChangeType, number>>(() => ({
+    introduced: report.introduced.total,
+    resolved: report.resolved.total,
+    unchanged: report.unchanged.total,
+    severity_increased: report.severityIncreased.total,
+    severity_decreased: report.severityDecreased.total,
+    remediation_changed: report.remediationChanged.total,
+    removed_artifact: report.removedArtifact.total,
+  }), [report])
+
   const counts = useMemo(() => {
     const out = {} as Record<ChangeTab, number>
     for (const key of Object.keys(TAB_TYPES) as ChangeTab[]) {
-      out[key] = report.changes.filter((c) => TAB_TYPES[key].includes(c.type)).length
+      out[key] = TAB_TYPES[key].reduce((n, type) => n + (totals[type] ?? 0), 0)
     }
     return out
-  }, [report.changes])
+  }, [totals])
+
+  /** True when the rows on this tab are a prefix rather than the whole set. */
+  const shortened = report.changes.length < (report.changesTotal ?? report.changes.length)
 
   const rows = useMemo(() => report.changes.filter((c) => {
     if (!TAB_TYPES[tab].includes(c.type)) return false
@@ -898,6 +921,13 @@ function ChangeTable({ report, product, baseRef, againstRef, repository }: {
           onChange={(v) => setSeverities(v as Severity[])}
           options={SEVERITIES.map((s) => ({ label: <SeverityTag value={s} />, value: s }))}
         />
+        {shortened && (
+          <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+            Listing the {report.changes.length.toLocaleString()} most significant of{' '}
+            {report.changesTotal.toLocaleString()} classified findings - every change is here, and
+            the findings both releases share are shortened. Export the comparison for all of them.
+          </Typography.Text>
+        )}
       </Space>
 
       <DataTable<SecurityChange>

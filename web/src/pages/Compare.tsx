@@ -1173,7 +1173,26 @@ export default function Compare() {
   const compareRunning = compare.isPending
   const report = compare.data
 
-  const compareSecurity = useCompareSecurity()
+  /*
+   * The comparison runs from `enabled`, not from a click or an effect: asking
+   * for the vulnerability view IS asking for the comparison, and a reader who
+   * arrives on that view from the listing should not have to ask twice. It is
+   * keyed on the pair, so switching back to contents and returning is free.
+   */
+  const compareSecurity = useCompareSecurity(
+    {
+      product,
+      ref: leftRef,
+      repository: leftPkg?.sourceRepository,
+      against: rightPkg?.tag ?? rightRef,
+    },
+    // Not until the listing has answered. Both the repository and the tag this
+    // comparison is keyed on come from the resolved pair, so running before it
+    // arrives runs the comparison TWICE - once against the raw refs and again
+    // against the resolved ones - and the first of those is three seconds of a
+    // hundred and seventy thousand findings that nothing will ever read.
+    view === 'security' && !securityBlocked && !packages.isPending,
+  )
   const syncSecurity = useSyncPackageSecurity()
 
   useEffect(() => {
@@ -1238,20 +1257,6 @@ export default function Compare() {
     void run()
   }, [mode, view, product, leftRef, rightRef, versionEnd, sources.length, run])
 
-  const runSecurity = useCallback(async () => {
-    if (!product || !leftRef || !rightRef) return
-    try {
-      await compareSecurity.mutateAsync({
-        product,
-        ref: leftRef,
-        repository: leftPkg?.sourceRepository,
-        body: { against: rightPkg?.tag ?? rightRef },
-      })
-    } catch (e) {
-      message.error(e instanceof Error ? e.message : 'The security comparison could not be run.')
-    }
-  }, [product, leftRef, rightRef, leftPkg, rightPkg, compareSecurity, message])
-
   /**
    * Sync one end from the comparison, then re-run it.
    *
@@ -1275,24 +1280,7 @@ export default function Compare() {
     })
   }
 
-  const showSecurity = () => {
-    setView('security')
-    if (!compareSecurity.data && !compareSecurity.isPending) void runSecurity()
-  }
-
-  /*
-   * The same, for a reader who ARRIVED on the vulnerability view rather than
-   * switching to it. Without this, asking for vulnerabilities on the listing
-   * produced a page that had chosen the right tab and then sat there.
-   */
-  const securityRanFor = useRef<string>('')
-  useEffect(() => {
-    if (view !== 'security' || securityBlocked || !product || !leftRef || !rightRef) return
-    const key = `${product}|${leftRef}|${rightRef}`
-    if (securityRanFor.current === key) return
-    securityRanFor.current = key
-    void runSecurity()
-  }, [view, securityBlocked, product, leftRef, rightRef, runSecurity])
+  const showSecurity = () => setView('security')
 
   /** Back to where choosing happens, with this pair still ticked. */
   const changeSelection = () => {
@@ -1481,12 +1469,17 @@ export default function Compare() {
             A comparison over stored data is two indexed reads, so there is no
             position worth reporting - a plain loading card is the honest shape
             and a progress bar would be theatre.
+
+            Shown while there is no answer yet, which covers both the request
+            being in flight and the moment before it can start - the pair has
+            to be resolved from the listing first, and a gap of blank page
+            between arriving and asking reads as a page that gave up.
           */}
-          {compareSecurity.isPending && <Card loading />}
-          {compareSecurity.isError && (
-            <ErrorState error={compareSecurity.error} retry={() => void runSecurity()} />
+          {!compareSecurity.data && !compareSecurity.isError && <Card loading />}
+          {compareSecurity.isError && !compareSecurity.isFetching && (
+            <ErrorState error={compareSecurity.error} retry={() => void compareSecurity.refetch()} />
           )}
-          {compareSecurity.data && product && leftRef && (
+          {compareSecurity.data && !compareSecurity.isFetching && product && leftRef && (
             <SecurityComparison
               product={product}
               baseRef={leftRef}

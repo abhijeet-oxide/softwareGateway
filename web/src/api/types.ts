@@ -1831,7 +1831,13 @@ export interface SecurityComparisonResponse {
   remediationChanged: SecurityCounts
   removedArtifact: SecurityCounts
   netScore: number
+  /**
+   * The classified findings, worst first, and possibly only the first of
+   * them - `changesTotal` is how many there are. Count from the totals above,
+   * never from this array's length.
+   */
   changes: SecurityChange[]
+  changesTotal: number
   artifacts: SecurityArtifactDelta[]
   artifactSummary: SecurityArtifactSummary
   fingerprint?: string

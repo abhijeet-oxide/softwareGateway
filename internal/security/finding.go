@@ -356,6 +356,36 @@ type Report struct {
 	FromCache bool `json:"fromCache,omitempty"`
 }
 
+// Detail says how much of a stored report a reader needs.
+//
+// A report has two tiers. The INDEX is identity and grade: the CVE, the
+// component, the severity, whether a fix exists. It is one row per finding and
+// it is what makes a finding countable, sortable, searchable and comparable.
+// The PROSE is the paragraph: the description, the references, the CVSS
+// vector, the policy that flagged it.
+//
+// The two are wildly different sizes, and not because the paragraph is long.
+// Prose belongs to a CVE and the index belongs to an occurrence, and a release
+// here has eighty-four thousand occurrences of three thousand CVEs. Reading
+// the prose tier for such a release means decompressing and parsing every
+// stored scanner payload in order to write the same three thousand paragraphs
+// out twenty-seven times each - fifty-nine megabytes of duplication in a
+// hundred-and-nineteen-megabyte answer.
+//
+// So a reader says which tier it needs. A comparison classifies on identity
+// and grade alone and never reads a paragraph, so it asks for IndexOnly and
+// the fifty-nine megabytes never exist. A page that shows a person one CVE
+// asks for WithProse.
+type Detail bool
+
+const (
+	// IndexOnly reads the durable half: statuses, counts, identities, grades.
+	IndexOnly Detail = false
+	// WithProse also merges the descriptions, references and CVSS vectors from
+	// the detail tier, where they are still held.
+	WithProse Detail = true
+)
+
 // DocumentSummary is a held document, named and measured but not carried.
 type DocumentSummary struct {
 	Kind DocumentKind `json:"kind"`

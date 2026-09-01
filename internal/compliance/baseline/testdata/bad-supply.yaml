@@ -1,0 +1,42 @@
+# Image references: the three shapes a chart splits them across, and the two
+# ways a registry is not the one it looks like.
+---
+# Source: bad-supply/templates/deployment.yaml
+apiVersion: apps/v1
+kind: Deployment
+metadata: {name: images, namespace: bad}
+spec:
+  replicas: 1
+  selector:
+    matchLabels: {app.kubernetes.io/name: images}
+  template:
+    metadata:
+      labels: {app.kubernetes.io/name: images}
+    spec:
+      containers:
+        # Correct: approved registry, pinned by digest. Must not fire.
+        - name: pinned
+          image: registry.acme.example/good/app@sha256:1111aaaa1111aaaa1111aaaa1111aaaa1111aaaa1111aaaa1111aaaa1111aaaa
+          resources:
+            requests: {cpu: 10m, memory: 16Mi}
+            limits: {memory: 32Mi}
+        # A semantic version is still a tag, and a tag can be moved.
+        - name: semver-tag
+          image: registry.acme.example/good/app:2.4.1
+          resources:
+            requests: {cpu: 10m, memory: 16Mi}
+            limits: {memory: 32Mi}
+        # A registry with a port, which the naive split-on-last-colon reads as
+        # a repository called 5000/... - and which is every image in a
+        # disconnected environment.
+        - name: ported-registry
+          image: other.example.com:5000/team/app@sha256:2222bbbb2222bbbb2222bbbb2222bbbb2222bbbb2222bbbb2222bbbb2222bbbb
+          resources:
+            requests: {cpu: 10m, memory: 16Mi}
+            limits: {memory: 32Mi}
+        # No registry at all, so this silently resolves to Docker Hub.
+        - name: implicit-hub
+          image: nginx:1.25
+          resources:
+            requests: {cpu: 10m, memory: 16Mi}
+            limits: {memory: 32Mi}

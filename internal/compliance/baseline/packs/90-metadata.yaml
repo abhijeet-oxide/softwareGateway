@@ -1,0 +1,180 @@
+apiVersion: softwaregateway.io/v1alpha1
+kind: PolicyPack
+metadata:
+  name: sgw-baseline-metadata
+  prefix: MTA
+  version: 1.0.0
+  description: >
+    Labels and annotations. Whether the release can be found, grouped and
+    upgraded.
+  maintainer: platform-sre
+spec:
+  checks:
+    - id: MTA-01
+      title: Controllers carry the standard Kubernetes labels
+      description: >
+        app.kubernetes.io/name, instance, component, part-of, managed-by and
+        version are present on controllers and Services.
+      rationale: >
+        These are the labels every dashboard, every kubectl selector and every
+        cost report assumes. A release without them is invisible to all of
+        them, and the omission is only noticed during an incident.
+      severity: block
+      tier: 1
+      category: Metadata
+      remediation: >
+        Add the six app.kubernetes.io labels through the chart's standard
+        labels helper.
+      appliesTo:
+        kinds: [Deployment, StatefulSet, DaemonSet, Service, Job, CronJob]
+      assert:
+        required:
+          - metadata.labels[app.kubernetes.io/name]
+          - metadata.labels[app.kubernetes.io/instance]
+          - metadata.labels[app.kubernetes.io/component]
+          - metadata.labels[app.kubernetes.io/part-of]
+          - metadata.labels[app.kubernetes.io/managed-by]
+          - metadata.labels[app.kubernetes.io/version]
+
+    - id: MTA-02
+      title: Label values are valid
+      description: >
+        Every label value is at most 63 characters and matches the syntax
+        Kubernetes accepts.
+      rationale: >
+        An invalid label is rejected at install time, so this is a check that
+        turns a failed deployment in somebody else's cluster into a finding
+        before it ships. Cheap and absolute - there is no judgement in it.
+      severity: warn
+      tier: 1
+      category: Metadata
+      remediation: Shorten the value, or move the content to an annotation.
+      appliesTo:
+        kinds: [Deployment, StatefulSet, DaemonSet, Service, Job, CronJob, ConfigMap, Secret]
+        where: 'size(allLabels(self)) > 0'
+      assert:
+        expr: |
+          allLabels(self).all(k,
+            size(allLabels(self)[k]) <= 63 &&
+            (allLabels(self)[k] == "" ||
+             allLabels(self)[k].matches("^[A-Za-z0-9]([-A-Za-z0-9_.]*[A-Za-z0-9])?$")))
+        locus: metadata.labels
+        expected: values at most 63 characters, alphanumeric with dashes, underscores and dots
+        observed: |
+          allLabels(self).filter(k, size(allLabels(self)[k]) > 63 ||
+            (allLabels(self)[k] != "" &&
+             !allLabels(self)[k].matches("^[A-Za-z0-9]([-A-Za-z0-9_.]*[A-Za-z0-9])?$")))
+            .map(k, k + "=" + allLabels(self)[k]).join(", ")
+
+    - id: MTA-03
+      title: No selector matches on a label that changes between releases
+      description: >
+        No Deployment, StatefulSet, DaemonSet, Service, NetworkPolicy or
+        PodDisruptionBudget selects on a label whose value changes with the
+        version.
+      rationale: >
+        A Deployment's spec.selector is immutable after creation. A version in
+        it means the next release cannot be upgraded at all - only deleted and
+        recreated, which for a StatefulSet means destroying its volumes. This
+        is discovered on the second release, in production, by whoever runs the
+        upgrade.
+      severity: block
+      tier: 1
+      category: Metadata
+      remediation: >
+        Select on app.kubernetes.io/name and app.kubernetes.io/instance only.
+      appliesTo:
+        kinds: [Deployment, StatefulSet, DaemonSet, Service, NetworkPolicy, PodDisruptionBudget]
+      assert:
+        expr: 'selectorKeys(self).all(k, !unstableLabelKey(k))'
+        locus: spec.selector
+        expected: selectors on stable labels only
+        observed: 'selectorKeys(self).filter(k, unstableLabelKey(string(k))).join(", ")'
+
+    - id: MTA-04
+      title: Annotations hold no credentials and are not enormous
+      description: >
+        No annotation value exceeds 8 KiB, and none is a credential written in
+        plain text.
+      rationale: >
+        Annotations are readable by anybody who can get the object, which is a
+        much wider set than can read a Secret. The size limit exists because
+        the total annotation size is capped by the API server and an oversized
+        one fails the install.
+      severity: warn
+      tier: 1
+      category: Metadata
+      remediation: >
+        Move the value into a Secret and reference it, or drop it.
+      appliesTo:
+        kinds: [Deployment, StatefulSet, DaemonSet, Service, Job, CronJob, ConfigMap]
+        where: 'value(self, "metadata.annotations") != null'
+      assert:
+        expr: |
+          self.metadata.annotations.all(k,
+            size(string(self.metadata.annotations[k])) <= 8192 &&
+            !looksLikeCredential(k, string(self.metadata.annotations[k])))
+        locus: metadata.annotations
+        expected: no credential-shaped annotation, none over 8 KiB
+        observed: |
+          self.metadata.annotations.filter(k,
+            size(string(self.metadata.annotations[k])) > 8192 ||
+            looksLikeCredential(k, string(self.metadata.annotations[k]))).join(", ")
+
+    - id: MTA-05
+      title: Custom metadata keys carry a domain prefix
+      description: >
+        Label and annotation keys outside the well-known Kubernetes namespaces
+        include a domain prefix.
+      rationale: >
+        An unprefixed key like "version" or "team" collides with whatever else
+        is installed in the namespace, and the collision is silent - one
+        controller's label becomes another's. Informational because the
+        convention is not universal.
+      severity: info
+      tier: 1
+      category: Metadata
+      remediation: 'Prefix custom keys with a domain the organization owns: acme.example/team.'
+      appliesTo:
+        kinds: [Deployment, StatefulSet, DaemonSet, Service]
+        where: 'size(allLabels(self)) > 0'
+      assert:
+        expr: |
+          allLabels(self).all(k,
+            k.contains("/") ||
+            k == "app" || k == "chart" || k == "release" || k == "heritage" || k == "component")
+        locus: metadata.labels
+        expected: a domain prefix on custom keys
+        observed: |
+          allLabels(self).filter(k, !k.contains("/") &&
+            k != "app" && k != "chart" && k != "release" && k != "heritage" && k != "component").join(", ")
+
+    - id: MTA-08
+      title: Helm hooks are bounded and cleaned up
+      description: >
+        Every resource with a helm.sh/hook annotation also carries
+        helm.sh/hook-delete-policy, and hook Jobs set backoffLimit and
+        activeDeadlineSeconds.
+      rationale: >
+        A hook Job with no delete policy is still there on the next upgrade,
+        and Helm cannot create an object that already exists - so the SECOND
+        helm upgrade fails, which is long after anybody tested the first. With
+        no backoffLimit a failing hook retries forever and the upgrade never
+        returns.
+      severity: warn
+      tier: 1
+      category: Metadata
+      remediation: >
+        Add helm.sh/hook-delete-policy: before-hook-creation,hook-succeeded,
+        and set backoffLimit and activeDeadlineSeconds on hook Jobs.
+      appliesTo:
+        kinds: [Job, Pod, ConfigMap, Secret, ServiceAccount, Role, RoleBinding]
+        annotations:
+          helm.sh/hook: "*"
+      assert:
+        expr: |
+          present(self, "metadata.annotations[helm.sh/hook-delete-policy]") &&
+          (text(self, "kind") != "Job" ||
+            (present(self, "spec.backoffLimit") && present(self, "spec.activeDeadlineSeconds")))
+        locus: metadata.annotations[helm.sh/hook-delete-policy]
+        expected: a delete policy, and bounded retries on a hook Job

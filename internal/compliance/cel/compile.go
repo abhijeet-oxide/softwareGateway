@@ -201,14 +201,17 @@ func (p *program) plan(idx *compliance.Index) (*plannedPrograms, error) {
 	if p.planned != nil && p.boundTo == idx {
 		return p.planned, nil
 	}
-	opts := programOptions(idx)
+	runtime, err := newRuntimeEnv(idx)
+	if err != nil {
+		return nil, err
+	}
+	opts := programOptions()
 	out := &plannedPrograms{}
-	var err error
 	mk := func(ast *celgo.Ast) (celgo.Program, error) {
 		if ast == nil {
 			return nil, nil
 		}
-		return p.env.Program(ast, opts...)
+		return runtime.Program(ast, opts...)
 	}
 	if out.applies, err = mk(p.applies); err != nil {
 		return nil, err

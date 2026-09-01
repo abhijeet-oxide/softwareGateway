@@ -1,0 +1,141 @@
+apiVersion: softwaregateway.io/v1alpha1
+kind: PolicyPack
+metadata:
+  name: sgw-baseline
+  prefix: SCH
+  version: 1.0.0
+  description: >
+    Scheduling and placement. Whether a workload survives losing a node, a
+    zone, or the one node it was pinned to.
+  maintainer: platform-sre
+spec:
+  checks:
+    - id: SCH-01
+      title: Replicated workloads spread across zones and nodes
+      description: >
+        A workload with two or more replicas declares topologySpreadConstraints
+        covering both topology.kubernetes.io/zone and kubernetes.io/hostname.
+      rationale: >
+        Without a spread constraint the scheduler is free to place every
+        replica on one node. Three replicas on one node is one replica with
+        extra cost, and the failure is invisible until the node goes.
+      severity: block
+      tier: 1
+      category: Scheduling & Placement
+      remediation: >
+        Add topologySpreadConstraints for topology.kubernetes.io/zone and
+        kubernetes.io/hostname with whenUnsatisfiable: ScheduleAnyway.
+      appliesTo:
+        kinds: [Deployment, StatefulSet]
+        where: 'replicas(self) >= 2'
+      assert:
+        expr: |
+          value(self, "spec.template.spec.topologySpreadConstraints") != null &&
+          self.spec.template.spec.topologySpreadConstraints.exists(c, c.topologyKey == "topology.kubernetes.io/zone") &&
+          self.spec.template.spec.topologySpreadConstraints.exists(c, c.topologyKey == "kubernetes.io/hostname")
+        locus: spec.template.spec.topologySpreadConstraints
+        expected: constraints on both topology.kubernetes.io/zone and kubernetes.io/hostname
+        observed: |
+          value(self, "spec.template.spec.topologySpreadConstraints") == null ? "no spread constraints" :
+            "keys: " + self.spec.template.spec.topologySpreadConstraints.map(c, string(c.topologyKey)).join(", ")
+
+    - id: SCH-02
+      title: Spread constraints allow a skew of at most one
+      description: Every zone or hostname spread constraint sets maxSkew to 1.
+      rationale: >
+        A maxSkew above 1 permits the imbalance the constraint was added to
+        prevent, so the constraint is present, passes review, and does nothing.
+      severity: warn
+      tier: 1
+      category: Scheduling & Placement
+      remediation: Set maxSkew to 1 on the zone and hostname constraints.
+      appliesTo:
+        kinds: [Deployment, StatefulSet, DaemonSet]
+        where: 'value(self, "spec.template.spec.topologySpreadConstraints") != null'
+      assert:
+        expr: |
+          self.spec.template.spec.topologySpreadConstraints.all(c,
+            (c.topologyKey != "topology.kubernetes.io/zone" && c.topologyKey != "kubernetes.io/hostname")
+            || int(value(c, "maxSkew")) == 1)
+        locus: spec.template.spec.topologySpreadConstraints[].maxSkew
+        expected: maxSkew 1 on zone and hostname constraints
+
+    - id: SCH-03
+      title: A pod does not carry three hard placement constraints at once
+      description: >
+        No pod declares required node affinity, required pod anti-affinity, and
+        a spread constraint with whenUnsatisfiable DoNotSchedule together.
+      rationale: >
+        Each constraint alone is reasonable. All three together is a workload
+        that becomes unschedulable the moment one node is cordoned, and the
+        symptom is a pod stuck Pending during a routine node update.
+      severity: block
+      tier: 1
+      category: Scheduling & Placement
+      remediation: >
+        Relax one of the three - usually the spread constraint, to
+        whenUnsatisfiable: ScheduleAnyway.
+      appliesTo:
+        kinds: [Deployment, StatefulSet, DaemonSet]
+        containers: none
+      assert:
+        expr: |
+          !(present(self, "spec.template.spec.affinity.nodeAffinity.requiredDuringSchedulingIgnoredDuringExecution")
+            && present(self, "spec.template.spec.affinity.podAntiAffinity.requiredDuringSchedulingIgnoredDuringExecution")
+            && value(self, "spec.template.spec.topologySpreadConstraints") != null
+            && self.spec.template.spec.topologySpreadConstraints.exists(c, value(c, "whenUnsatisfiable") == "DoNotSchedule"))
+        locus: spec.template.spec.affinity
+        expected: at most two of required node affinity, required pod anti-affinity, and DoNotSchedule spread
+
+    - id: SCH-04
+      title: Placement selectors use labels that survive an upgrade
+      description: >
+        Label keys used in topologySpreadConstraints and pod affinity selectors
+        are not ones whose value changes on every build.
+      rationale: >
+        A spread constraint selecting on app.kubernetes.io/version spreads the
+        new version against itself and ignores the old one, so during a rollout
+        there is no anti-affinity at all - which is when it was needed.
+      severity: warn
+      tier: 1
+      category: Scheduling & Placement
+      remediation: >
+        Select on app.kubernetes.io/name and app.kubernetes.io/instance, which
+        are stable across releases.
+      appliesTo:
+        kinds: [Deployment, StatefulSet, DaemonSet]
+        where: 'value(self, "spec.template.spec.topologySpreadConstraints") != null'
+      assert:
+        expr: |
+          self.spec.template.spec.topologySpreadConstraints.all(c,
+            value(c, "labelSelector.matchLabels") == null ||
+            c.labelSelector.matchLabels.all(k, !unstableLabelKey(k)))
+        locus: spec.template.spec.topologySpreadConstraints[].labelSelector
+        expected: selectors on labels that do not change between releases
+
+    - id: SCH-05
+      title: Node affinity does not pin to named zones
+      description: >
+        Required node affinity does not match on topology.kubernetes.io/zone
+        with literal zone names.
+      rationale: >
+        A chart naming zone-a and zone-b cannot be installed in a cluster whose
+        zones are called anything else, and the failure is at install time in
+        somebody else's datacentre.
+      severity: warn
+      tier: 1
+      category: Scheduling & Placement
+      remediation: >
+        Express zone distribution with topologySpreadConstraints, which name the
+        topology key rather than its values.
+      appliesTo:
+        kinds: [Deployment, StatefulSet, DaemonSet]
+        where: 'present(self, "spec.template.spec.affinity.nodeAffinity.requiredDuringSchedulingIgnoredDuringExecution")'
+      assert:
+        expr: |
+          self.spec.template.spec.affinity.nodeAffinity.requiredDuringSchedulingIgnoredDuringExecution
+            .nodeSelectorTerms.all(t,
+              value(t, "matchExpressions") == null ||
+              t.matchExpressions.all(e, value(e, "key") != "topology.kubernetes.io/zone"))
+        locus: spec.template.spec.affinity.nodeAffinity
+        expected: no required affinity on topology.kubernetes.io/zone

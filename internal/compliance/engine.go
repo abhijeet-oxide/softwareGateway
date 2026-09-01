@@ -296,6 +296,21 @@ func (e *Engine) subjects(ctx context.Context, check Check, rel *Release, idx *I
 			continue
 		}
 
+		if at.Subject == SubjectPodSpec {
+			spec, ok := res.PodSpec()
+			if !ok {
+				// A kind with no pod spec is not a subject of a pod-spec
+				// check. It is excluded from the denominator rather than
+				// failed: the check does not apply to it, and saying it does
+				// would be a false positive on every ConfigMap in the release.
+				continue
+			}
+			subj := Subject{Resource: res, PodSpec: spec, Address: res.Address}
+			if e.included(ctx, check, prog, subj, idx) {
+				out = append(out, subj)
+			}
+			continue
+		}
 		if !at.Containers.SelectsContainers() {
 			subj := Subject{Resource: res, Address: res.Address}
 			if e.included(ctx, check, prog, subj, idx) {
@@ -388,6 +403,11 @@ func (e *Engine) locus(subj Subject, locus string) string {
 	}
 	if subj.Container != nil {
 		return subj.Container.Path() + "." + locus
+	}
+	if subj.PodSpec != nil {
+		if p := subj.PodSpecPrefix(); p != "" {
+			return p + "." + locus
+		}
 	}
 	return locus
 }

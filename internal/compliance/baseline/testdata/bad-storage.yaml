@@ -1,0 +1,71 @@
+# Storage: claims that behave differently in two clusters, and workloads that
+# lose data or deadlock.
+---
+# Source: bad-storage/templates/pvc-default-class.yaml
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata: {name: implicit-class, namespace: bad}
+spec:
+  accessModes: [ReadWriteMany]
+  resources:
+    requests: {storage: 0}
+---
+# Source: bad-storage/templates/pvc-ok.yaml
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata: {name: explicit, namespace: bad}
+spec:
+  accessModes: [ReadWriteOnce]
+  storageClassName: acme-ssd
+  resources:
+    requests: {storage: 10Gi}
+---
+# Source: bad-storage/templates/shared-deployment.yaml
+# Three replicas mounting one claim: a scheduling deadlock on ReadWriteOnce,
+# and silent corruption on ReadWriteMany.
+apiVersion: apps/v1
+kind: Deployment
+metadata: {name: shared, namespace: bad}
+spec:
+  replicas: 3
+  selector: {matchLabels: {app.kubernetes.io/name: shared}}
+  template:
+    metadata: {labels: {app.kubernetes.io/name: shared}}
+    spec:
+      volumes:
+        - name: data
+          persistentVolumeClaim: {claimName: explicit}
+      initContainers:
+        # The standard workaround for not knowing the image's UID model. On
+        # network-backed storage this takes hours or times out.
+        - name: fix-perms
+          image: registry.acme.example/bad/busybox@sha256:4444000044440000444400004444000044440000444400004444000044440000
+          command: ["sh", "-c", "chown -R 1000:1000 /var/lib/shared"]
+          volumeMounts:
+            - {name: data, mountPath: /var/lib/shared}
+      containers:
+        - name: app
+          image: registry.acme.example/bad/app@sha256:5555000055550000555500005555000055550000555500005555000055550000
+          volumeMounts:
+            - {name: data, mountPath: /var/lib/shared}
+---
+# Source: bad-storage/templates/statefulset-ephemeral.yaml
+# A StatefulSet exists because the data outlives the pod. An emptyDir does not.
+apiVersion: apps/v1
+kind: StatefulSet
+metadata: {name: ephemeral, namespace: bad}
+spec:
+  replicas: 3
+  serviceName: ephemeral
+  selector: {matchLabels: {app.kubernetes.io/name: ephemeral}}
+  template:
+    metadata: {labels: {app.kubernetes.io/name: ephemeral}}
+    spec:
+      volumes:
+        - name: state
+          emptyDir: {}
+      containers:
+        - name: app
+          image: registry.acme.example/bad/app@sha256:6666000066660000666600006666000066660000666600006666000066660000
+          volumeMounts:
+            - {name: state, mountPath: /var/lib/state}

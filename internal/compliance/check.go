@@ -1,6 +1,7 @@
 package compliance
 
 import (
+	"encoding/json"
 	"fmt"
 	"regexp"
 	"sort"
@@ -30,43 +31,43 @@ type Check struct {
 	// ID is permanent and globally unique - "PDB-02". It appears in waivers, in
 	// spreadsheets sent to vendors, and in tickets that outlive the release, so
 	// it is never reused and never renumbered.
-	ID string `yaml:"id" json:"id"`
+	ID string `json:"id"`
 	// Title is one line, in the words the report uses.
-	Title string `yaml:"title" json:"title"`
+	Title string `json:"title"`
 	// Description says what is asserted, for a vendor engineer who has to
 	// satisfy it. Not a restatement of the title.
-	Description string `yaml:"description,omitempty" json:"description,omitempty"`
+	Description string `json:"description,omitempty"`
 	// Rationale says WHY the organization requires it. This is what stops a
 	// check being carried forward after the reason for it is gone, and it is
 	// the field that makes a vendor argue with the requirement rather than with
 	// the tool.
-	Rationale string `yaml:"rationale,omitempty" json:"rationale,omitempty"`
+	Rationale string `json:"rationale,omitempty"`
 
-	Severity Severity `yaml:"severity" json:"severity"`
-	Tier     Tier     `yaml:"tier,omitempty" json:"tier,omitempty"`
-	Category string   `yaml:"category,omitempty" json:"category,omitempty"`
+	Severity Severity `json:"severity"`
+	Tier     Tier     `json:"tier,omitempty"`
+	Category string   `json:"category,omitempty"`
 
-	Remediation string `yaml:"remediation,omitempty" json:"remediation,omitempty"`
-	Reference   string `yaml:"reference,omitempty" json:"reference,omitempty"`
+	Remediation string `json:"remediation,omitempty"`
+	Reference   string `json:"reference,omitempty"`
 
 	// AppliesTo selects the subjects. Mandatory: see the type comment.
-	AppliesTo AppliesTo `yaml:"appliesTo" json:"appliesTo"`
+	AppliesTo AppliesTo `json:"appliesTo"`
 	// Assert is the condition. True means compliant.
-	Assert Assert `yaml:"assert,omitempty" json:"assert,omitempty"`
+	Assert Assert `json:"assert,omitempty"`
 
 	// Engine names the implementation. Empty means the declarative one. A check
 	// the platform must answer itself - determinacy, the artifact tree, another
 	// feature's stored result - says "builtin" and is registered in Go.
-	Engine string `yaml:"engine,omitempty" json:"engine,omitempty"`
+	Engine string `json:"engine,omitempty"`
 
 	// Deprecated retires a check without freeing its ID, so an old report and
 	// an old waiver still resolve to an explanation.
-	Deprecated   bool   `yaml:"deprecated,omitempty" json:"deprecated,omitempty"`
-	SupersededBy string `yaml:"supersededBy,omitempty" json:"supersededBy,omitempty"`
+	Deprecated   bool   `json:"deprecated,omitempty"`
+	SupersededBy string `json:"supersededBy,omitempty"`
 
 	// Pack is filled in by the loader from the manifest that carried the check.
 	// Authors do not write it.
-	Pack string `yaml:"-" json:"pack,omitempty"`
+	Pack string `json:"pack,omitempty"`
 }
 
 // Engine names.
@@ -179,37 +180,69 @@ type AppliesTo struct {
 	// Kinds is the object kinds this check judges. Empty means every kind,
 	// which is almost never what an author means and is worth being explicit
 	// about.
-	Kinds []string `yaml:"kinds,omitempty" json:"kinds,omitempty"`
+	Kinds []string `json:"kinds,omitempty"`
 	// APIGroups narrows by group when kind alone is ambiguous - two CRDs called
 	// Cluster in one release is normal.
-	APIGroups []string `yaml:"apiGroups,omitempty" json:"apiGroups,omitempty"`
+	APIGroups []string `json:"apiGroups,omitempty"`
 
 	// Labels and Annotations select by metadata. A value of "*" means the key
 	// must be present with any value; any other value must match exactly.
-	Labels      map[string]string `yaml:"labels,omitempty" json:"labels,omitempty"`
-	Annotations map[string]string `yaml:"annotations,omitempty" json:"annotations,omitempty"`
+	Labels      map[string]string `json:"labels,omitempty"`
+	Annotations map[string]string `json:"annotations,omitempty"`
 
 	// Charts limits the check to named charts, for a standard that applies to
 	// one vendor component. Glob syntax, matched against the chart name.
-	Charts []string `yaml:"charts,omitempty" json:"charts,omitempty"`
+	Charts []string `json:"charts,omitempty"`
 
 	// Containers selects container subjects instead of the whole object.
-	Containers ContainerScope `yaml:"containers,omitempty" json:"containers,omitempty"`
+	Containers ContainerScope `json:"containers,omitempty"`
+
+	// Subject moves the bound value from the object to something inside it.
+	//
+	// `podSpec` is the one that earns its place: a check about hostNetwork, a
+	// service account or a termination grace period is the same check on a
+	// Deployment and on a CronJob, and only the path differs - by two levels,
+	// in the one case everybody forgets. Declaring the subject lets the check
+	// be written once, against `spec.hostNetwork`, and applied to every
+	// workload kind.
+	Subject SubjectScope `json:"subject,omitempty"`
 
 	// Where is an optional CEL predicate for applicability the fields above
 	// cannot express. It decides membership of the denominator, not compliance:
 	// a subject Where excludes is not counted at all, where one the assertion
 	// rejects is a failure. Confusing the two is how a check silently narrows
 	// itself until it applies to nothing.
-	Where string `yaml:"where,omitempty" json:"where,omitempty"`
+	Where string `json:"where,omitempty"`
+}
+
+// SubjectScope says what inside the object a check judges.
+type SubjectScope string
+
+const (
+	// SubjectObject binds the whole object. The default.
+	SubjectObject SubjectScope = ""
+	// SubjectPodSpec binds the pod spec, wherever the kind keeps it. Paths in
+	// the check are then relative to the pod spec: "hostNetwork", not
+	// "spec.template.spec.hostNetwork", and correct for a CronJob without the
+	// author knowing a CronJob is different.
+	SubjectPodSpec SubjectScope = "podSpec"
+)
+
+// Valid reports whether s is a known subject scope.
+func (s SubjectScope) Valid() bool {
+	return s == SubjectObject || s == SubjectPodSpec
 }
 
 // ContainerScope says which containers of a workload are subjects.
 type ContainerScope string
 
 const (
-	// ScopeNone makes the object itself the subject. The default.
+	// ScopeNone makes the object itself the subject. The default, and
+	// writable as `none` so a manifest can say so rather than relying on a
+	// reader knowing that an omitted field means the object.
 	ScopeNone ContainerScope = ""
+	// ScopeObject is `none` spelled out. Identical to ScopeNone.
+	ScopeObject ContainerScope = "none"
 	// ScopeAll is every container: main, init and ephemeral. The right default
 	// for anything about images, probes or resources, because an init container
 	// with no limits is the same defect as a main one with no limits - and is
@@ -224,7 +257,7 @@ const (
 // Valid reports whether s is a known scope.
 func (s ContainerScope) Valid() bool {
 	switch s {
-	case ScopeNone, ScopeAll, ScopeMain, ScopeInit:
+	case ScopeNone, ScopeObject, ScopeAll, ScopeMain, ScopeInit:
 		return true
 	}
 	return false
@@ -232,13 +265,19 @@ func (s ContainerScope) Valid() bool {
 
 // SelectsContainers reports whether the subject is a container rather than an
 // object.
-func (s ContainerScope) SelectsContainers() bool { return s != ScopeNone }
+func (s ContainerScope) SelectsContainers() bool { return s != ScopeNone && s != ScopeObject }
 
 // Validate reports every problem with an applicability declaration.
 func (a AppliesTo) Validate() []error {
 	var errs []error
+	if !a.Subject.Valid() {
+		errs = append(errs, fmt.Errorf("appliesTo.subject %q must be podSpec or omitted", a.Subject))
+	}
+	if a.Subject == SubjectPodSpec && a.Containers.SelectsContainers() {
+		errs = append(errs, fmt.Errorf("appliesTo declares both subject: podSpec and containers: %s; a subject is one thing", a.Containers))
+	}
 	if !a.Containers.Valid() {
-		errs = append(errs, fmt.Errorf("appliesTo.containers %q must be one of all, main, init, or omitted", a.Containers))
+		errs = append(errs, fmt.Errorf("appliesTo.containers %q must be one of all, main, init, none, or omitted", a.Containers))
 	}
 	for _, k := range a.Kinds {
 		if k == "" {
@@ -331,34 +370,34 @@ func contains(list []string, s string) bool {
 type Assert struct {
 	// Required paths must exist and be non-empty. The single most common
 	// assertion in the catalogue.
-	Required []string `yaml:"required,omitempty" json:"required,omitempty"`
+	Required []string `json:"required,omitempty"`
 	// Forbidden paths must not exist.
-	Forbidden []string `yaml:"forbidden,omitempty" json:"forbidden,omitempty"`
+	Forbidden []string `json:"forbidden,omitempty"`
 	// Equals is exact equality, path to value.
-	Equals map[string]any `yaml:"equals,omitempty" json:"equals,omitempty"`
+	Equals map[string]any `json:"equals,omitempty"`
 	// OneOf constrains a path to a set.
-	OneOf map[string][]any `yaml:"oneOf,omitempty" json:"oneOf,omitempty"`
+	OneOf map[string][]any `json:"oneOf,omitempty"`
 	// Matches is an RE2 match on the string form of a path.
-	Matches map[string]string `yaml:"matches,omitempty" json:"matches,omitempty"`
+	Matches map[string]string `json:"matches,omitempty"`
 	// EqualPaths asserts two paths hold the same value - the requests-equal-
 	// limits family, which is otherwise an expression in every check that needs
 	// it.
-	EqualPaths []PathPair `yaml:"equalPaths,omitempty" json:"equalPaths,omitempty"`
+	EqualPaths []PathPair `json:"equalPaths,omitempty"`
 	// Numeric bounds a path parsed as a Kubernetes quantity, so "250m", "1Gi"
 	// and "0.5" are all comparable without the author knowing the suffix rules.
-	Numeric map[string]Bound `yaml:"numeric,omitempty" json:"numeric,omitempty"`
+	Numeric map[string]Bound `json:"numeric,omitempty"`
 
 	// Expr is CEL, for everything the forms above cannot say. True means
 	// compliant.
-	Expr string `yaml:"expr,omitempty" json:"expr,omitempty"`
+	Expr string `json:"expr,omitempty"`
 
 	// Observed, Expected, Locus and Message override what the shorthand would
 	// have derived. Observed and Message are CEL expressions returning a
 	// string, so a finding can name the value that offended.
-	Observed string `yaml:"observed,omitempty" json:"observed,omitempty"`
-	Expected string `yaml:"expected,omitempty" json:"expected,omitempty"`
-	Locus    string `yaml:"locus,omitempty" json:"locus,omitempty"`
-	Message  string `yaml:"message,omitempty" json:"message,omitempty"`
+	Observed string `json:"observed,omitempty"`
+	Expected string `json:"expected,omitempty"`
+	Locus    string `json:"locus,omitempty"`
+	Message  string `json:"message,omitempty"`
 }
 
 // PathPair is the two operands of an equalPaths assertion.
@@ -367,16 +406,17 @@ type PathPair struct {
 	B string
 }
 
-// UnmarshalYAML accepts the two-element list form the manifest uses:
+// UnmarshalJSON accepts the two-element list form the manifest uses. Documents
+// are decoded with sigs.k8s.io/yaml, which routes YAML through JSON, so this is
+// where a YAML list arrives.
 //
-//	equalPaths: [resources.requests.cpu, resources.limits.cpu]
 //	equalPaths:
 //	  - [resources.requests.cpu, resources.limits.cpu]
 //	  - [resources.requests.memory, resources.limits.memory]
-func (p *PathPair) UnmarshalYAML(unmarshal func(any) error) error {
+func (p *PathPair) UnmarshalJSON(b []byte) error {
 	var pair []string
-	if err := unmarshal(&pair); err != nil {
-		return err
+	if err := json.Unmarshal(b, &pair); err != nil {
+		return fmt.Errorf("equalPaths entry must be a list of two paths: %w", err)
 	}
 	if len(pair) != 2 {
 		return fmt.Errorf("equalPaths entry needs exactly two paths, got %d", len(pair))
@@ -385,10 +425,14 @@ func (p *PathPair) UnmarshalYAML(unmarshal func(any) error) error {
 	return nil
 }
 
+// MarshalJSON writes the pair back in the form it was written, so the API
+// serves a check in the shape its author wrote it.
+func (p PathPair) MarshalJSON() ([]byte, error) { return json.Marshal([]string{p.A, p.B}) }
+
 // Bound is a numeric range. Either end may be omitted.
 type Bound struct {
-	Min *float64 `yaml:"min,omitempty" json:"min,omitempty"`
-	Max *float64 `yaml:"max,omitempty" json:"max,omitempty"`
+	Min *float64 `json:"min,omitempty"`
+	Max *float64 `json:"max,omitempty"`
 }
 
 // Empty reports whether nothing is asserted, which is a load error for a
@@ -402,24 +446,24 @@ func (a Assert) Empty() bool {
 
 // Pack is a manifest: an identity, and the checks it owns.
 type Pack struct {
-	APIVersion string       `yaml:"apiVersion" json:"apiVersion"`
-	Kind       string       `yaml:"kind" json:"kind"`
-	Metadata   PackMetadata `yaml:"metadata" json:"metadata"`
-	Spec       PackSpec     `yaml:"spec" json:"spec"`
+	APIVersion string       `json:"apiVersion"`
+	Kind       string       `json:"kind"`
+	Metadata   PackMetadata `json:"metadata"`
+	Spec       PackSpec     `json:"spec"`
 }
 
 // PackMetadata identifies a pack and the ID namespace it owns.
 type PackMetadata struct {
-	Name string `yaml:"name" json:"name"`
+	Name string `json:"name"`
 	// Prefix is the check-ID namespace this pack OWNS. Two packs claiming one
 	// prefix is a load error for the second, named in the message. This is what
 	// makes an ID globally unique with no central registry and no coordination
 	// between the teams writing packs.
-	Prefix      string `yaml:"prefix" json:"prefix"`
-	Version     string `yaml:"version,omitempty" json:"version,omitempty"`
-	Description string `yaml:"description,omitempty" json:"description,omitempty"`
-	Maintainer  string `yaml:"maintainer,omitempty" json:"maintainer,omitempty"`
-	Reference   string `yaml:"reference,omitempty" json:"reference,omitempty"`
+	Prefix      string `json:"prefix"`
+	Version     string `json:"version,omitempty"`
+	Description string `json:"description,omitempty"`
+	Maintainer  string `json:"maintainer,omitempty"`
+	Reference   string `json:"reference,omitempty"`
 }
 
 // PackSpec carries the checks. Prefixes is for a pack that legitimately owns
@@ -427,8 +471,8 @@ type PackMetadata struct {
 // of the organization's source catalogue, so the IDs in their existing document
 // are the IDs in the tool and nobody has to translate.
 type PackSpec struct {
-	Prefixes []string `yaml:"prefixes,omitempty" json:"prefixes,omitempty"`
-	Checks   []Check  `yaml:"checks" json:"checks"`
+	Prefixes []string `json:"prefixes,omitempty"`
+	Checks   []Check  `json:"checks"`
 }
 
 // OwnedPrefixes is every ID namespace this pack claims.

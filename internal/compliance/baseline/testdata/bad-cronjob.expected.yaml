@@ -1,0 +1,26 @@
+# Every one of these is inside the CronJob's pod spec, two levels deeper than a
+# Deployment's. A traversal that reads spec.template.spec finds none of them and
+# this file produces an empty result set.
+findings:
+  # Pod-spec scoped: reached through spec.jobTemplate.spec.template.spec.
+  - {check: SEC-07, kind: CronJob, name: nightly}
+  - {check: SEC-08, kind: CronJob, name: nightly}
+  - {check: RBAC-01, kind: CronJob, name: nightly}
+  - {check: PDB-08, kind: CronJob, name: nightly}
+
+  # Container scoped: both containers must be reached, including the init one.
+  - {check: SEC-01, kind: CronJob, name: nightly, container: worker}
+  - {check: SEC-01, kind: CronJob, name: nightly, container: prepare}
+  - {check: SEC-02, kind: CronJob, name: nightly, container: worker}
+  - {check: SEC-02, kind: CronJob, name: nightly, container: prepare}
+  - {check: SEC-03, kind: CronJob, name: nightly, container: worker}
+  - {check: SEC-04, kind: CronJob, name: nightly, container: worker}
+  - {check: SEC-04, kind: CronJob, name: nightly, container: prepare}
+  - {check: RES-01, kind: CronJob, name: nightly, container: worker}
+  - {check: RES-01, kind: CronJob, name: nightly, container: prepare}
+  - {check: RES-02, kind: CronJob, name: nightly, container: worker}
+  - {check: RES-02, kind: CronJob, name: nightly, container: prepare}
+  - {check: SUP-01, kind: CronJob, name: nightly, container: worker}
+  - {check: SUP-01, kind: CronJob, name: nightly, container: prepare}
+  - {check: SUP-02, kind: CronJob, name: nightly, container: worker}
+  - {check: SUP-02, kind: CronJob, name: nightly, container: prepare}

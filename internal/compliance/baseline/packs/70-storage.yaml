@@ -1,0 +1,179 @@
+apiVersion: softwaregateway.io/v1alpha1
+kind: PolicyPack
+metadata:
+  name: sgw-baseline-storage
+  prefix: STO
+  version: 1.0.0
+  description: >
+    Storage and data. Whether the release's persistence behaves the same way in
+    two clusters, and whether it can be scaled without losing data.
+  maintainer: platform-sre
+spec:
+  checks:
+    - id: STO-01
+      title: Claims name their storage class
+      description: >
+        Every PersistentVolumeClaim sets storageClassName explicitly.
+      rationale: >
+        Relying on the cluster default makes the same chart behave differently
+        in two clusters - different performance, different reclaim policy,
+        sometimes different access modes. It is the failure that is hardest to
+        diagnose, because nothing in the release changed.
+      severity: warn
+      tier: 1
+      category: Storage & Data
+      remediation: >
+        Set spec.storageClassName, exposed as a value so an operator can pick
+        their own class.
+      appliesTo:
+        kinds: [PersistentVolumeClaim]
+      assert:
+        required: [spec.storageClassName]
+
+    - id: STO-02
+      title: Shared-write claims are listed for review
+      description: >
+        Reports every claim requesting ReadWriteMany, with the workload that
+        asked for it.
+      rationale: >
+        ReadWriteMany means the software claims to handle concurrent writes
+        from several pods. Sometimes that is true. The finding exists so
+        somebody confirms it rather than inheriting the assumption.
+      severity: warn
+      tier: 1
+      category: Storage & Data
+      remediation: >
+        Confirm the application coordinates concurrent writers, or use
+        ReadWriteOnce with a StatefulSet.
+      appliesTo:
+        kinds: [PersistentVolumeClaim]
+      assert:
+        expr: 'value(self, "spec.accessModes") == null || !self.spec.accessModes.exists(m, string(m) == "ReadWriteMany")'
+        locus: spec.accessModes
+        expected: an access mode other than ReadWriteMany
+        observed: 'self.spec.accessModes.map(m, string(m)).join(", ")'
+
+    - id: STO-04
+      title: Claims request a real amount of storage
+      description: >
+        Every claim declares resources.requests.storage as a parseable,
+        non-zero quantity.
+      rationale: >
+        A claim with no size, or a size of zero, is either rejected at install
+        or bound to whatever the provisioner decides. Both are a surprise, and
+        the second one is a surprise that shows up when the volume fills.
+      severity: block
+      tier: 1
+      category: Storage & Data
+      remediation: Set spec.resources.requests.storage to the size the workload needs.
+      appliesTo:
+        kinds: [PersistentVolumeClaim]
+      assert:
+        numeric:
+          spec.resources.requests.storage: {min: 1}
+
+    - id: STO-05
+      title: A replicated Deployment does not share one claim
+      description: >
+        No Deployment with more than one replica mounts a
+        PersistentVolumeClaim.
+      rationale: >
+        Every replica of a Deployment mounts the same claim. On ReadWriteOnce
+        that is a scheduling deadlock the second replica never resolves; on
+        ReadWriteMany it is silent data corruption for anything not written for
+        concurrent access. A workload with per-replica storage is a
+        StatefulSet.
+      severity: block
+      tier: 1
+      category: Storage & Data
+      remediation: >
+        Use a StatefulSet with volumeClaimTemplates, so each replica gets its
+        own volume.
+      appliesTo:
+        kinds: [Deployment]
+        where: 'replicas(self) >= 2'
+      assert:
+        expr: 'size(pvcMountPaths(self)) == 0'
+        locus: spec.template.spec.volumes
+        expected: no persistent volume claim on a multi-replica Deployment
+        observed: '"mounts " + pvcMountPaths(self).join(", ")'
+
+    - id: STO-07
+      title: No init container recursively fixes permissions on a claim
+      description: >
+        No initContainer command runs chown or chmod against a path that is
+        also a persistent volume claim mount.
+      rationale: >
+        On network-backed storage a recursive chown of a populated volume takes
+        hours, or times out and leaves the pod crash-looping. It is the
+        standard workaround for not knowing the image's UID model, and it works
+        on a laptop.
+      severity: block
+      tier: 1
+      category: Storage & Data
+      remediation: >
+        Set securityContext.fsGroup and let the kubelet apply ownership, or
+        build the image to run as the UID that owns the volume.
+      appliesTo:
+        kinds: [Deployment, StatefulSet, DaemonSet, Job, CronJob]
+        containers: init
+        where: 'size(pvcMountPaths(owner)) > 0 && present(self, "command")'
+      assert:
+        expr: |
+          !(self.command.exists(a, string(a).contains("chown") || string(a).contains("chmod")) &&
+            pvcMountPaths(owner).exists(p, self.command.exists(a, string(a).contains(string(p)))))
+        locus: command
+        expected: no chown or chmod against a persistent volume mount path
+        observed: 'self.command.map(a, string(a)).join(" ")'
+
+    - id: STO-08
+      title: Pods with persistent storage declare a volume group
+      description: >
+        A pod mounting a claim sets securityContext.fsGroup or
+        fsGroupChangePolicy.
+      rationale: >
+        Without fsGroup the volume is owned by root and a non-root container
+        cannot write to it. The usual fix for that is the recursive chown
+        STO-07 exists to prevent, so this check is the other half of the same
+        problem.
+      severity: warn
+      tier: 1
+      category: Storage & Data
+      remediation: >
+        Set securityContext.fsGroup to the group the container runs as, and
+        fsGroupChangePolicy to OnRootMismatch.
+      appliesTo:
+        kinds: [Deployment, StatefulSet, DaemonSet, Job, CronJob]
+        subject: podSpec
+        where: 'size(pvcMountPaths(owner)) > 0'
+      assert:
+        expr: 'present(self, "securityContext.fsGroup") || present(self, "securityContext.fsGroupChangePolicy")'
+        locus: securityContext.fsGroup
+        expected: fsGroup or fsGroupChangePolicy set
+
+    - id: STO-10
+      title: A StatefulSet does not keep state in ephemeral storage
+      description: >
+        Reports emptyDir, hostPath and local volumes on a StatefulSet.
+      rationale: >
+        A StatefulSet exists because the data outlives the pod. An emptyDir
+        does not - it is deleted with the pod - so state written there is lost
+        on every restart, and the restart is the one case a StatefulSet was
+        chosen for.
+      severity: warn
+      tier: 1
+      category: Storage & Data
+      remediation: >
+        Move the data to a volumeClaimTemplate, or confirm the volume is
+        genuinely scratch.
+      appliesTo:
+        kinds: [StatefulSet]
+        subject: podSpec
+        where: 'value(self, "volumes") != null'
+      assert:
+        expr: '!self.volumes.exists(v, has(v.emptyDir) || has(v.hostPath) || has(v.local))'
+        locus: volumes
+        expected: persistent volumes only on a StatefulSet
+        observed: |
+          self.volumes.filter(v, has(v.emptyDir) || has(v.hostPath) || has(v.local))
+              .map(v, string(v.name)).join(", ")

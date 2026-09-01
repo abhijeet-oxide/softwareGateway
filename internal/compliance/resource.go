@@ -307,14 +307,22 @@ func objectKey(apiVersion, kind, namespace, name string) string {
 type Subject struct {
 	Resource  *Resource
 	Container *Container
-	Address   Address
+	// PodSpec is set when the check declared subject: podSpec. The engine did
+	// the traversal, so a check reads "hostNetwork" and is right about a
+	// CronJob too.
+	PodSpec map[string]any
+	Address Address
 }
 
 // Value is what the check's paths are resolved against: the container when the
-// check scoped to containers, the object otherwise.
+// check scoped to containers, the pod spec when it scoped to podSpec, the whole
+// object otherwise.
 func (s Subject) Value() map[string]any {
 	if s.Container != nil {
 		return s.Container.Object
+	}
+	if s.PodSpec != nil {
+		return s.PodSpec
 	}
 	if s.Resource != nil {
 		return s.Resource.Object
@@ -331,4 +339,17 @@ func (s Subject) Describe() string {
 		return fmt.Sprintf("%s %s", s.Resource.Kind(), s.Resource.Name())
 	}
 	return ""
+}
+
+// PodSpecPrefix is the dotted path from the object to the pod spec, for
+// building a locus a vendor can navigate by.
+func (s Subject) PodSpecPrefix() string {
+	if s.Resource == nil {
+		return ""
+	}
+	p := PodSpecPath(s.Resource.Kind())
+	if p == nil {
+		return ""
+	}
+	return strings.Join(p, ".")
 }

@@ -1,0 +1,10 @@
+findings:
+  - {check: SUP-01, kind: Deployment, name: images, container: semver-tag}
+  - {check: SUP-01, kind: Deployment, name: images, container: implicit-hub}
+  # ported-registry IS pinned by digest, so SUP-01 must not fire on it - that
+  # is the false positive a naive reference parser produces.
+  - {check: SUP-02, kind: Deployment, name: images, container: ported-registry}
+  - {check: SUP-02, kind: Deployment, name: images, container: implicit-hub}
+  # semver-tag is on the approved registry, so SUP-02 must NOT fire on it. Its
+  # only defect is the tag, and the two checks stay separable - which is what
+  # lets a vendor fix one without being told about the other.

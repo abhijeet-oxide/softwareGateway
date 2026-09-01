@@ -1,0 +1,69 @@
+apiVersion: softwaregateway.io/v1alpha1
+kind: PolicyPack
+metadata:
+  name: sgw-baseline-observability
+  prefix: OBS
+  version: 1.0.0
+  description: >
+    Observability. Whether anybody will know when this release is failing.
+  maintainer: platform-sre
+spec:
+  checks:
+    - id: OBS-01
+      title: Workloads receiving traffic expose metrics
+      description: >
+        A workload selected by a Service either declares a container port named
+        metrics or http-metrics, is covered by a ServiceMonitor or PodMonitor
+        the release ships, or carries prometheus.io/scrape.
+      rationale: >
+        A service with no metrics is a service whose degradation is discovered
+        by a user. Three conventions for exposing them coexist and none is
+        universal, so any of the three satisfies this - and that is also why it
+        is a warning rather than a block.
+      severity: warn
+      tier: 1
+      category: Observability
+      remediation: >
+        Name the metrics port, or ship a ServiceMonitor covering this
+        workload.
+      appliesTo:
+        kinds: [Deployment, StatefulSet, DaemonSet]
+        where: 'size(servicesFor(self)) > 0'
+      assert:
+        expr: |
+          (value(self, "spec.template.spec.containers") != null &&
+            self.spec.template.spec.containers.exists(c,
+              value(c, "ports") != null &&
+              c.ports.exists(p, text(p, "name") == "metrics" || text(p, "name") == "http-metrics"))) ||
+          text(self, "spec.template.metadata.annotations[prometheus.io/scrape]") == "true" ||
+          size(resourcesIn(["ServiceMonitor", "PodMonitor"])) > 0
+        locus: spec.template.spec.containers[].ports
+        expected: a metrics port, a scrape annotation, or a ServiceMonitor in this release
+
+    - id: OBS-09
+      title: Alert rules say what to do about them
+      description: >
+        Every rule in a PrometheusRule carries a runbook_url annotation and a
+        severity label.
+      rationale: >
+        An alert that fires at 3am and names no runbook is an alert somebody
+        silences. The severity label is what routes it, so without one it goes
+        to the default receiver, which is usually nobody.
+      severity: warn
+      tier: 1
+      category: Observability
+      remediation: >
+        Add a runbook_url annotation and a severity label to every alerting
+        rule.
+      appliesTo:
+        kinds: [PrometheusRule]
+        where: 'value(self, "spec.groups") != null'
+      assert:
+        expr: |
+          self.spec.groups.all(g,
+            value(g, "rules") == null ||
+            g.rules.all(r,
+              !present(r, "alert") ||
+              (present(r, "annotations.runbook_url") && present(r, "labels.severity"))))
+        locus: spec.groups
+        expected: runbook_url and severity on every alerting rule

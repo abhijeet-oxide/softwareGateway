@@ -1,0 +1,6 @@
+findings:
+  - {check: CFG-01, kind: ConfigMap, name: leaky}
+  - {check: CFG-02, kind: Deployment, name: leaky, container: app}
+  - {check: CFG-03, kind: ConfigMap, name: leaky}
+  - {check: CFG-06, kind: Deployment, name: leaky, container: app}
+  - {check: CFG-07, kind: Deployment, name: leaky, container: app}

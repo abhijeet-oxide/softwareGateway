@@ -1,0 +1,254 @@
+apiVersion: softwaregateway.io/v1alpha1
+kind: PolicyPack
+metadata:
+  name: sgw-baseline-networking
+  prefix: NET
+  version: 1.0.0
+  description: >
+    Networking. What can reach this release, what it can reach, and whether
+    what it exposes is what it meant to expose.
+  maintainer: platform-sre
+spec:
+  checks:
+    - id: NET-01
+      title: The release ships a default-deny network policy
+      description: >
+        At least one NetworkPolicy in the release has an empty podSelector and
+        policyTypes containing Ingress.
+      rationale: >
+        Kubernetes networking is allow-all until something denies. A release
+        with policies for its own components but no default deny leaves every
+        pod reachable from every other namespace, which is the state the
+        policies were written to end.
+      severity: block
+      tier: 1
+      category: Networking
+      remediation: >
+        Ship a NetworkPolicy with an empty podSelector and policyTypes:
+        [Ingress], then allow what is needed.
+      appliesTo:
+        kinds: [Namespace, NetworkPolicy]
+        where: 'text(self, "kind") == "NetworkPolicy"'
+      assert:
+        expr: |
+          resourcesIn(["NetworkPolicy"]).exists(np,
+            size(value(np, "spec.podSelector")) == 0 &&
+            value(np, "spec.policyTypes") != null &&
+            np.spec.policyTypes.exists(t, string(t) == "Ingress"))
+        locus: spec.podSelector
+        expected: a default-deny policy somewhere in this release
+        observed: '"the release ships " + string(size(resourcesIn(["NetworkPolicy"]))) + " NetworkPolicy object(s), none of them a default deny"'
+
+    - id: NET-02
+      title: Ingress rules name their sources and ports
+      description: >
+        No ingress rule allows every source, and every rule names ports.
+      rationale: >
+        A rule with no `from` allows the whole cluster, which makes the policy
+        a no-op that reads as a control. A rule with no ports allows every port
+        on the selected pods, including the ones added next release.
+      severity: block
+      tier: 1
+      category: Networking
+      remediation: Give every ingress rule an explicit `from` and `ports`.
+      appliesTo:
+        kinds: [NetworkPolicy]
+        where: 'value(self, "spec.ingress") != null'
+      assert:
+        expr: |
+          self.spec.ingress.all(r,
+            value(r, "from") != null && size(r.from) > 0 &&
+            value(r, "ports") != null && size(r.ports) > 0)
+        locus: spec.ingress
+        expected: every ingress rule declaring both from and ports
+
+    - id: NET-03
+      title: Egress rules name their destinations
+      description: >
+        Where policyTypes includes Egress, at least one rule enumerates
+        destinations.
+      rationale: >
+        An egress policy with an empty `to` permits the whole internet, which
+        is the opposite of what an egress policy is for and is
+        indistinguishable from having none.
+      severity: warn
+      tier: 1
+      category: Networking
+      remediation: Give each egress rule a `to` naming the destinations.
+      appliesTo:
+        kinds: [NetworkPolicy]
+        where: 'value(self, "spec.policyTypes") != null && self.spec.policyTypes.exists(t, string(t) == "Egress")'
+      assert:
+        expr: |
+          value(self, "spec.egress") != null &&
+          self.spec.egress.all(r, value(r, "to") != null && size(r.to) > 0)
+        locus: spec.egress
+        expected: every egress rule declaring a destination
+
+    - id: NET-04
+      title: Network policy selectors use stable labels
+      description: >
+        A NetworkPolicy does not select on a label whose value changes between
+        releases.
+      rationale: >
+        A policy selecting on app.kubernetes.io/version stops matching the
+        moment the version changes, so the new pods have no policy at all -
+        during the rollout, which is when the old and new versions are both
+        running and the blast radius is largest.
+      severity: warn
+      tier: 1
+      category: Networking
+      remediation: Select on app.kubernetes.io/name and instance.
+      appliesTo:
+        kinds: [NetworkPolicy]
+      assert:
+        expr: 'selectorKeys(self).all(k, !unstableLabelKey(k))'
+        locus: spec.podSelector
+        expected: selectors on labels that do not change between releases
+        observed: 'selectorKeys(self).filter(k, unstableLabelKey(string(k))).join(", ")'
+
+    - id: NET-05
+      title: External entry points terminate TLS
+      description: >
+        Every Ingress declares tls, and every OpenShift Route declares
+        tls.termination.
+      rationale: >
+        An entry point without TLS carries credentials in plain text across
+        whatever is between the load balancer and the cluster. It is usually
+        absent because TLS was terminated somewhere else in the environment the
+        chart was developed in.
+      severity: block
+      tier: 1
+      category: Networking
+      remediation: Add a tls block naming the secret holding the certificate.
+      appliesTo:
+        kinds: [Ingress, Route]
+      assert:
+        expr: |
+          text(self, "kind") == "Route"
+            ? present(self, "spec.tls.termination")
+            : (value(self, "spec.tls") != null && size(self.spec.tls) > 0)
+        locus: spec.tls
+        expected: TLS declared on the entry point
+
+    - id: NET-06
+      title: Operational endpoints are not published externally
+      description: >
+        No Ingress or Route path matches /metrics, /debug, /actuator, /admin or
+        /-/, and no LoadBalancer Service exposes a port named metrics, debug or
+        admin, or numbered 9090, 9100 or 6060.
+      rationale: >
+        These endpoints are unauthenticated by convention because they are
+        meant to be reachable only from inside the cluster. Published, a
+        metrics endpoint is an inventory of the deployment and a debug endpoint
+        is usually a profiler.
+      severity: block
+      tier: 1
+      category: Networking
+      remediation: >
+        Remove the path from the Ingress and scrape the endpoint through a
+        ServiceMonitor inside the cluster.
+      appliesTo:
+        kinds: [Ingress, Route, Service]
+        where: 'text(self, "kind") != "Service" || text(self, "spec.type") == "LoadBalancer"'
+      assert:
+        expr: |
+          (text(self, "kind") != "Service" ||
+            value(self, "spec.ports") == null ||
+            self.spec.ports.all(p,
+              text(p, "name") != "metrics" && text(p, "name") != "debug" && text(p, "name") != "admin" &&
+              text(p, "port") != "9090" && text(p, "port") != "9100" && text(p, "port") != "6060")) &&
+          (text(self, "kind") != "Ingress" ||
+            value(self, "spec.rules") == null ||
+            self.spec.rules.all(r,
+              value(r, "http.paths") == null ||
+              r.http.paths.all(p, !operationalPath(string(value(p, "path")))))) &&
+          (text(self, "kind") != "Route" || !operationalPath(text(self, "spec.path")))
+        locus: spec
+        expected: no operational endpoint published externally
+
+    - id: NET-07
+      title: Every Service selects something
+      description: >
+        A Service's selector matches at least one pod template in the release.
+      rationale: >
+        A Service selecting nothing has no endpoints, so every request to it
+        fails - while the rollout is green, the pods are running and nothing is
+        marked unhealthy. It is a one-character label mismatch, and it is
+        invisible until traffic arrives.
+      severity: block
+      tier: 1
+      category: Networking
+      remediation: >
+        Make the Service's selector match the labels on the workload's pod
+        template.
+      appliesTo:
+        kinds: [Service]
+        where: 'value(self, "spec.selector") != null && size(self.spec.selector) > 0'
+      assert:
+        expr: 'size(selectedBy(self)) > 0'
+        locus: spec.selector
+        expected: at least one workload in this release with matching pod labels
+        observed: |
+          "selector " + self.spec.selector.map(k, k + "=" + string(self.spec.selector[k])).join(",") + " matches no pod template"
+
+    - id: NET-09
+      title: Secondary interfaces are not covered by network policy
+      description: >
+        Reports any pod carrying a k8s.v1.cni.cncf.io/networks annotation where
+        the release also ships a NetworkPolicy.
+      rationale: >
+        Kubernetes NetworkPolicy governs the cluster network only. Traffic on a
+        secondary interface - which is the whole point of a CNF's dataplane -
+        is not covered by any of the policies in this release. The finding is
+        the statement; it asks for the compensating control rather than
+        claiming a defect.
+      severity: warn
+      tier: 1
+      category: Networking
+      remediation: >
+        Document the control governing the secondary network, or state that the
+        interface is on an isolated fabric.
+      appliesTo:
+        kinds: [Deployment, StatefulSet, DaemonSet, Pod]
+        where: 'size(resourcesIn(["NetworkPolicy"])) > 0'
+      assert:
+        expr: '!present(self, "spec.template.metadata.annotations[k8s.v1.cni.cncf.io/networks]")'
+        locus: spec.template.metadata.annotations
+        expected: no secondary network, or a documented compensating control
+        observed: 'text(self, "spec.template.metadata.annotations[k8s.v1.cni.cncf.io/networks]")'
+
+    - id: NET-10
+      title: Extended resources are requested and limited equally
+      description: >
+        A container asking for an accelerated-networking or hugepages resource
+        declares the same quantity in both requests and limits.
+      rationale: >
+        Kubernetes requires request and limit to be equal for extended
+        resources and rejects the pod otherwise. A chart that sets only one is
+        an install failure, and one that sets them differently is the same
+        failure with a more confusing message.
+      severity: warn
+      tier: 1
+      category: Networking
+      remediation: Set the same quantity in requests and limits for the extended resource.
+      appliesTo:
+        kinds: [Deployment, StatefulSet, DaemonSet, ReplicaSet, Job, CronJob, Pod]
+        containers: all
+        where: |
+          value(self, "resources.requests") != null &&
+          self.resources.requests.exists(k, extendedResource(k))
+      assert:
+        expr: |
+          self.resources.requests.all(k,
+            !extendedResource(k) ||
+            (value(self, "resources.limits") != null &&
+             k in self.resources.limits &&
+             string(self.resources.limits[k]) == string(self.resources.requests[k])))
+        locus: resources
+        expected: equal request and limit for every extended resource
+        observed: |
+          self.resources.requests.filter(k, extendedResource(k)).map(k,
+            k + " request " + string(self.resources.requests[k]) +
+            ", limit " + (value(self, "resources.limits") != null && k in self.resources.limits
+                          ? string(self.resources.limits[k]) : "(absent)")).join("; ")

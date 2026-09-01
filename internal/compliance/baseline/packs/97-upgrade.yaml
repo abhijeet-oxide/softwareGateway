@@ -1,0 +1,48 @@
+apiVersion: softwaregateway.io/v1alpha1
+kind: PolicyPack
+metadata:
+  name: sgw-baseline-upgrade
+  prefix: UPG
+  version: 1.0.0
+  description: >
+    Upgrade readiness. Whether this release installs, and whether the next one
+    can replace it.
+  maintainer: platform-sre
+spec:
+  checks:
+    - id: UPG-07
+      title: Every custom resource has its definition in the same release
+      description: >
+        Each custom resource the release ships has a matching
+        CustomResourceDefinition in the same release, at a version the
+        definition serves.
+      rationale: >
+        A custom resource whose definition arrives later - or comes from
+        another chart, or was expected to be in the cluster already - is an
+        install that fails on ordering. It is only decidable across the whole
+        release, which is why no single-chart check finds it.
+      severity: warn
+      tier: 1
+      category: Upgrade & Maintenance Readiness
+      remediation: >
+        Ship the CustomResourceDefinition in this release, ahead of the
+        resource, or declare the operator as a dependency.
+      appliesTo:
+        where: |
+          text(self, "apiVersion").contains("/") &&
+          !text(self, "apiVersion").startsWith("apps/") &&
+          !text(self, "apiVersion").startsWith("batch/") &&
+          !text(self, "apiVersion").startsWith("policy/") &&
+          !text(self, "apiVersion").startsWith("networking.k8s.io/") &&
+          !text(self, "apiVersion").startsWith("rbac.authorization.k8s.io/") &&
+          !text(self, "apiVersion").startsWith("autoscaling/") &&
+          !text(self, "apiVersion").startsWith("apiextensions.k8s.io/") &&
+          !text(self, "apiVersion").startsWith("storage.k8s.io/") &&
+          !text(self, "apiVersion").startsWith("route.openshift.io/") &&
+          !text(self, "apiVersion").startsWith("monitoring.coreos.com/") &&
+          !text(self, "apiVersion").startsWith("k8s.cni.cncf.io/")
+      assert:
+        expr: 'size(crdFor(self)) > 0'
+        locus: apiVersion
+        expected: a CustomResourceDefinition for this kind in the same release
+        observed: 'text(self, "apiVersion") + " " + text(self, "kind") + " has no definition in this release"'

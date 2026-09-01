@@ -1,0 +1,14 @@
+findings:
+  # Missing five of the six standard labels.
+  - {check: MTA-01, kind: Deployment, name: versioned-selector}
+  - {check: MTA-01, kind: Job, name: unbounded-hook}
+  # A label value Kubernetes will reject at install time.
+  - {check: MTA-02, kind: Deployment, name: versioned-selector}
+  # The version in an immutable selector.
+  - {check: MTA-03, kind: Deployment, name: versioned-selector}
+  # A token in an annotation, readable by anybody who can get the object.
+  - {check: MTA-04, kind: Deployment, name: versioned-selector}
+  # Unprefixed custom keys that collide with whatever else is installed.
+  - {check: MTA-05, kind: Deployment, name: versioned-selector}
+  # A hook with no delete policy and no bound on its retries.
+  - {check: MTA-08, kind: Job, name: unbounded-hook}

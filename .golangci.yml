@@ -162,6 +162,46 @@ linters:
             - pkg: github.com/abhijeet-oxide/softwareGateway/internal/promote/jfrog
               desc: "a promoter implementation must stay behind promote.Promoter - only the composition root may name one"
 
+        # Compliance follows the same rule as every other domain package.
+        compliance-imports-no-api:
+          list-mode: lax
+          files:
+            - "**/internal/compliance/**"
+          deny:
+            - pkg: github.com/abhijeet-oxide/softwareGateway/internal/api
+              desc: "compliance decides whether a release meets our standards; it must not know it is served over HTTP"
+
+        # One package owns the expression language.
+        #
+        # The mechanical test this encodes: delete internal/compliance/cel and
+        # the model, the engine and the Go-implemented checks must still build.
+        # An expression type leaking into the engine is what would make that
+        # false, and it is the leak that arrives one convenient import at a
+        # time.
+        cel-confined-to-evaluator:
+          list-mode: lax
+          files:
+            - "**/internal/compliance/**"
+            - "!**/internal/compliance/cel/**"
+          deny:
+            - pkg: cel.dev/cel-go
+              desc: "only internal/compliance/cel may import the expression language"
+
+        # No second expression language.
+        #
+        # Measured against this repository: OPA's rego package adds 18 modules
+        # to the compiled binary and 59 to the module graph an audit has to
+        # enumerate - among them a WebAssembly runtime, an embedded key-value
+        # store and two separate Levenshtein implementations. cel-go adds 4 and
+        # 3. See docs/design/23-compliance.md section 19, decision 5.
+        no-opa:
+          list-mode: lax
+          files:
+            - "$all"
+          deny:
+            - pkg: github.com/open-policy-agent/opa
+              desc: "compliance checks are YAML with CEL expressions; adding Rego would bring a wasm runtime and an embedded database into a control plane that has neither"
+
   exclusions:
     generated: lax
     rules:

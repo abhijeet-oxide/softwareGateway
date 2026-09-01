@@ -1,0 +1,191 @@
+# Every spelling of a PodDisruptionBudget that stops a node drain forever, plus
+# the false positive a naive selector implementation produces.
+#
+# The four deadlock spellings are the point: maxUnavailable 0, maxUnavailable
+# "0%", minAvailable "100%", and minAvailable equal to the replica count all
+# mean "refuse every eviction", and an implementation that catches one of them
+# passes the other three.
+---
+# Source: bad-pdb/templates/deadlock-absolute.yaml
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata: {name: deadlock-absolute, namespace: bad}
+spec:
+  maxUnavailable: 0
+  selector:
+    matchLabels: {app.kubernetes.io/name: worker}
+---
+# Source: bad-pdb/templates/deadlock-percent.yaml
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata: {name: deadlock-percent, namespace: bad}
+spec:
+  maxUnavailable: "0%"
+  selector:
+    matchLabels: {app.kubernetes.io/name: worker}
+---
+# Source: bad-pdb/templates/deadlock-hundred.yaml
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata: {name: deadlock-hundred, namespace: bad}
+spec:
+  minAvailable: "100%"
+  selector:
+    matchLabels: {app.kubernetes.io/name: worker}
+---
+# Source: bad-pdb/templates/deadlock-allreplicas.yaml
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata: {name: deadlock-allreplicas, namespace: bad}
+spec:
+  minAvailable: 3
+  selector:
+    matchLabels: {app.kubernetes.io/name: worker}
+---
+# Source: bad-pdb/templates/single-replica.yaml
+# A budget over a one-replica workload permits no eviction either.
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata: {name: over-singleton, namespace: bad}
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels: {app.kubernetes.io/name: singleton}
+---
+# Source: bad-pdb/templates/expressions-ok.yaml
+# This one is CORRECT and must not fire. It selects the quorum StatefulSet with
+# matchExpressions - the spelling the inherited pdb.rego ignores entirely, and
+# the false positive this fixture exists to catch.
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata: {name: quorum-ok, namespace: bad}
+spec:
+  minAvailable: 2
+  selector:
+    matchExpressions:
+      - {key: app.kubernetes.io/name, operator: In, values: [quorum]}
+---
+# Source: bad-pdb/templates/worker.yaml
+apiVersion: apps/v1
+kind: Deployment
+metadata: {name: worker, namespace: bad}
+spec:
+  replicas: 3
+  selector:
+    matchLabels: {app.kubernetes.io/name: worker}
+  template:
+    metadata:
+      labels: {app.kubernetes.io/name: worker}
+    spec:
+      containers:
+        - name: worker
+          image: registry.acme.example/bad/worker@sha256:1111111111111111111111111111111111111111111111111111111111111111
+---
+# Source: bad-pdb/templates/singleton.yaml
+apiVersion: apps/v1
+kind: Deployment
+metadata: {name: singleton, namespace: bad}
+spec:
+  replicas: 1
+  selector:
+    matchLabels: {app.kubernetes.io/name: singleton}
+  template:
+    metadata:
+      labels: {app.kubernetes.io/name: singleton}
+    spec:
+      containers:
+        - name: singleton
+          image: registry.acme.example/bad/singleton@sha256:2222222222222222222222222222222222222222222222222222222222222222
+---
+# Source: bad-pdb/templates/quorum.yaml
+apiVersion: apps/v1
+kind: StatefulSet
+metadata: {name: quorum, namespace: bad}
+spec:
+  replicas: 3
+  serviceName: quorum
+  selector:
+    matchLabels: {app.kubernetes.io/name: quorum}
+  template:
+    metadata:
+      labels: {app.kubernetes.io/name: quorum}
+    spec:
+      containers:
+        - name: quorum
+          image: registry.acme.example/bad/quorum@sha256:3333333333333333333333333333333333333333333333333333333333333333
+---
+# Source: bad-pdb/templates/uncovered.yaml
+# Three replicas and no budget at all.
+apiVersion: apps/v1
+kind: Deployment
+metadata: {name: uncovered, namespace: bad}
+spec:
+  replicas: 3
+  selector:
+    matchLabels: {app.kubernetes.io/name: uncovered}
+  template:
+    metadata:
+      labels: {app.kubernetes.io/name: uncovered}
+    spec:
+      containers:
+        - name: uncovered
+          image: registry.acme.example/bad/uncovered@sha256:4444444444444444444444444444444444444444444444444444444444444444
+---
+# Source: bad-pdb/templates/rollout-stuck.yaml
+# Both zero: a rolling update that can neither add a pod nor remove one.
+apiVersion: apps/v1
+kind: Deployment
+metadata: {name: stuck, namespace: bad}
+spec:
+  replicas: 2
+  strategy:
+    type: RollingUpdate
+    rollingUpdate: {maxSurge: 0, maxUnavailable: 0}
+  selector:
+    matchLabels: {app.kubernetes.io/name: stuck}
+  template:
+    metadata:
+      labels: {app.kubernetes.io/name: stuck}
+    spec:
+      containers:
+        - name: stuck
+          image: registry.acme.example/bad/stuck@sha256:5555555555555555555555555555555555555555555555555555555555555555
+---
+# Source: bad-pdb/templates/recreate.yaml
+# Recreate stops every pod before starting any. For a workload with traffic
+# that is a deliberate outage on every upgrade, and it is usually copied from a
+# chart for something that had none. Also declares no progress deadline, so a
+# stuck rollout reports progress forever.
+apiVersion: apps/v1
+kind: Deployment
+metadata: {name: recreate, namespace: bad}
+spec:
+  replicas: 2
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels: {app.kubernetes.io/name: recreate}
+  template:
+    metadata:
+      labels: {app.kubernetes.io/name: recreate}
+    spec:
+      containers:
+        - name: recreate
+          image: registry.acme.example/bad/recreate@sha256:6666666666666666666666666666666666666666666666666666666666666666
+---
+# Source: bad-pdb/templates/recreate-service.yaml
+apiVersion: v1
+kind: Service
+metadata: {name: recreate, namespace: bad}
+spec:
+  selector: {app.kubernetes.io/name: recreate}
+  ports: [{name: http, port: 80, targetPort: 8080}]
+---
+# Source: bad-pdb/templates/recreate-pdb.yaml
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata: {name: recreate, namespace: bad}
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels: {app.kubernetes.io/name: recreate}

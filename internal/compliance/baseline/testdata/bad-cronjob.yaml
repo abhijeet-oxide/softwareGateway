@@ -1,0 +1,40 @@
+# Every applicable check must fire on a CronJob.
+#
+# A CronJob keeps its pod spec at spec.jobTemplate.spec.template.spec - one
+# level deeper than every other workload. Seven of the sixteen policies this
+# platform inherited list CronJob among the kinds they check and then read
+# spec.template.spec: they match the object, find nothing, and report nothing.
+# Every scheduled job in the estate passes every one of those checks without
+# being looked at.
+#
+# This fixture is a CronJob that violates a lot, all of it inside the pod spec.
+# If the traversal is wrong, this file produces silence.
+---
+# Source: bad-cronjob/templates/cronjob.yaml
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: nightly
+  namespace: bad
+spec:
+  schedule: "0 3 * * *"
+  jobTemplate:
+    spec:
+      template:
+        spec:
+          hostNetwork: true
+          hostPID: true
+          serviceAccountName: default
+          volumes:
+            - name: docker
+              hostPath: {path: /var/run/docker.sock}
+          initContainers:
+            - name: prepare
+              image: docker.io/library/busybox:latest
+          containers:
+            - name: worker
+              image: docker.io/library/worker:1.2
+              securityContext:
+                privileged: true
+                allowPrivilegeEscalation: true
+                runAsUser: 0

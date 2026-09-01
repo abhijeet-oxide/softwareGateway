@@ -1,0 +1,19 @@
+findings:
+  # No default-deny anywhere in the release. Reported against each policy,
+  # because the absence is a property of the release and each policy is where a
+  # reader is looking.
+  - {check: NET-01, kind: NetworkPolicy, name: allow-everything}
+  - {check: NET-01, kind: NetworkPolicy, name: versioned}
+  # An ingress rule with neither `from` nor `ports`.
+  - {check: NET-02, kind: NetworkPolicy, name: allow-everything}
+  # An egress rule with no `to` permits the internet.
+  - {check: NET-03, kind: NetworkPolicy, name: allow-everything}
+  # Selects on app.kubernetes.io/version.
+  - {check: NET-04, kind: NetworkPolicy, name: versioned}
+  # The Ingress declares no TLS at all.
+  - {check: NET-05, kind: Ingress, name: api}
+  # /actuator published, and a metrics port on a load balancer.
+  - {check: NET-06, kind: Ingress, name: api}
+  - {check: NET-06, kind: Service, name: exposed}
+  # One character wrong in the selector.
+  - {check: NET-07, kind: Service, name: orphan}

@@ -5,11 +5,9 @@ import (
 	"strconv"
 	"strings"
 
-	celgo "cel.dev/cel-go/cel"
 	"cel.dev/cel-go/common/types"
 	"cel.dev/cel-go/common/types/ref"
 	"cel.dev/cel-go/common/types/traits"
-	"cel.dev/cel-go/interpreter/functions"
 
 	"github.com/abhijeet-oxide/softwareGateway/internal/compliance"
 )
@@ -30,12 +28,12 @@ import (
 // entirely, and ignores namespaces - so it silently passes every workload
 // covered by a selector written the modern way, and silently matches a PDB in
 // one namespace against a workload in another.
-func bindings(idx *compliance.Index) []*functions.Overload {
-	var list []*functions.Overload
-	add := func(names []string, impl func(args ...ref.Val) ref.Val) {
-		for _, n := range names {
-			list = append(list, &functions.Overload{Operator: n, Function: impl})
-		}
+func bindings(idx *compliance.Index) map[string]impl {
+	out := map[string]impl{}
+	add := func(names []string, fn impl) {
+		// Registered under the overload id; the function name is what an author
+		// writes and the id is what the checked expression refers to.
+		out[names[len(names)-1]] = fn
 	}
 
 	add([]string{FnPresent, "present_dyn_string"}, func(args ...ref.Val) ref.Val {
@@ -201,20 +199,7 @@ func bindings(idx *compliance.Index) []*functions.Overload {
 		return types.Int(CompareSemver(scalarString(native(args[0])), scalarString(native(args[1]))))
 	})
 
-	return list
-}
-
-// programOptions are the run-time options every compiled expression is planned
-// with.
-func programOptions(idx *compliance.Index) []celgo.ProgramOption {
-	return []celgo.ProgramOption{
-		celgo.Functions(bindings(idx)...),
-		// The bound that makes termination a guarantee rather than a hope. An
-		// expression exceeding it is an error, so the check reports `error` and
-		// the run is inconclusive - never a pass.
-		celgo.CostLimit(costLimit),
-		celgo.EvalOptions(celgo.OptOptimize),
-	}
+	return out
 }
 
 // resolve finds the indexed resource an expression handed us.
@@ -262,7 +247,8 @@ func native(v ref.Val) any {
 	}
 	switch t := v.(type) {
 	case traits.Mapper:
-		out := make(map[string]any, int(t.Size().(types.Int)))
+		size, _ := t.Size().(types.Int)
+		out := make(map[string]any, int(size))
 		it := t.Iterator()
 		for it.HasNext() == types.True {
 			k := it.Next()
@@ -276,7 +262,8 @@ func native(v ref.Val) any {
 		}
 		return out
 	case traits.Lister:
-		n := int(t.Size().(types.Int))
+		size, _ := t.Size().(types.Int)
+		n := int(size)
 		out := make([]any, 0, n)
 		for i := 0; i < n; i++ {
 			out = append(out, native(t.Get(types.Int(i))))

@@ -37,6 +37,8 @@ import (
 
 	celgo "cel.dev/cel-go/cel"
 	"cel.dev/cel-go/common/types"
+	"cel.dev/cel-go/common/types/ref"
+	"cel.dev/cel-go/ext"
 
 	"github.com/abhijeet-oxide/softwareGateway/internal/compliance"
 )
@@ -76,6 +78,21 @@ const (
 	FnCRDFor      = "crdFor"
 	FnResourcesIn = "resourcesIn"
 	FnSemverCmp   = "semverCompare"
+
+	FnCovers       = "covers"
+	FnReplicas     = "replicas"
+	FnDeclaresPort = "declaresPort"
+	FnBoundToRole  = "boundToRole"
+	FnSelectorKeys = "selectorKeys"
+	FnUnstableKey  = "unstableLabelKey"
+	FnLooksGen     = "looksGenerated"
+	FnCredential   = "looksLikeCredential"
+	FnPlaceholder  = "placeholderCredential"
+	FnExtendedRes  = "extendedResource"
+	FnMountPaths   = "pvcMountPaths"
+	FnOperational  = "operationalPath"
+	FnRuleGrants   = "ruleGrants"
+	FnAllLabels    = "allLabels"
 )
 
 // costLimit bounds any single evaluation.
@@ -99,7 +116,25 @@ const costLimit = 1_000_000
 // lets a check be type-checked at load, in front of the person editing it,
 // while still being able to ask which PodDisruptionBudget selects a workload at
 // run time.
-func NewEnv() (*celgo.Env, error) {
+func NewEnv() (*celgo.Env, error) { return newEnv(nil) }
+
+// newRuntimeEnv builds the environment programs are PLANNED against: the same
+// declarations, with the implementations bound to one run's resource index.
+//
+// Two environments rather than one because the two jobs happen at different
+// times. Compilation - where every error an author can fix lives - happens when
+// the pack loads, against declarations alone. Planning happens per run, because
+// "which PodDisruptionBudget selects this workload" has no answer outside a
+// release. Building it per run costs one environment construction and buys
+// load-time diagnostics.
+func newRuntimeEnv(idx *compliance.Index) (*celgo.Env, error) { return newEnv(idx) }
+
+// impl is one engine function's implementation.
+type impl = func(args ...ref.Val) ref.Val
+
+// newEnv builds the environment. With a nil index the functions are declared
+// and not implemented, which is all a type check needs.
+func newEnv(idx *compliance.Index) (*celgo.Env, error) {
 	dyn := celgo.DynType
 	str := celgo.StringType
 	b := celgo.BoolType
@@ -109,7 +144,32 @@ func NewEnv() (*celgo.Env, error) {
 	listDyn := celgo.ListType(dyn)
 	listStr := celgo.ListType(str)
 
+	impls := map[string]impl{}
+	if idx != nil {
+		for id, fn := range bindings(idx) {
+			impls[id] = fn
+		}
+		for id, fn := range bindings2(idx) {
+			impls[id] = fn
+		}
+	}
+	// overload declares a function overload, with its implementation when one
+	// is available. Wrapping it here is what keeps the signature and the
+	// implementation from drifting: there is one list, not two.
+	overload := func(id string, args []*celgo.Type, result *celgo.Type) celgo.FunctionOpt {
+		opts := []celgo.OverloadOpt{}
+		if fn, ok := impls[id]; ok {
+			opts = append(opts, celgo.FunctionBinding(fn))
+		}
+		return celgo.Overload(id, args, result, opts...)
+	}
+
 	return celgo.NewEnv(
+		// String helpers - join, split, trim, indexOf - from cel-go itself, no
+		// new dependency. They are what an `observed:` expression needs to
+		// report a list of offending values rather than the word "invalid".
+		ext.Strings(),
+
 		celgo.Variable(VarSelf, dyn),
 		celgo.Variable(VarOwner, dyn),
 		celgo.Variable(VarAddress, mapSS),
@@ -123,39 +183,98 @@ func NewEnv() (*celgo.Env, error) {
 		// compliant chart into an undecidable result. These take the path as a
 		// string, so a missing field is a value, not a fault.
 		celgo.Function(FnPresent,
-			celgo.Overload("present_dyn_string", []*celgo.Type{dyn, str}, b)),
+			overload("present_dyn_string", []*celgo.Type{dyn, str}, b)),
 		celgo.Function(FnValue,
-			celgo.Overload("value_dyn_string", []*celgo.Type{dyn, str}, dyn)),
+			overload("value_dyn_string", []*celgo.Type{dyn, str}, dyn)),
 		celgo.Function(FnText,
-			celgo.Overload("text_dyn_string", []*celgo.Type{dyn, str}, str)),
+			overload("text_dyn_string", []*celgo.Type{dyn, str}, str)),
 
 		// Kubernetes semantics, implemented once.
 		celgo.Function(FnQuantity,
-			celgo.Overload("quantity_dyn", []*celgo.Type{dyn}, dbl)),
+			overload("quantity_dyn", []*celgo.Type{dyn}, dbl)),
 		celgo.Function(FnImageRef,
-			celgo.Overload("imageref_string", []*celgo.Type{str}, mapSS)),
+			overload("imageref_string", []*celgo.Type{str}, mapSS)),
 		celgo.Function(FnSelects,
-			celgo.Overload("selects_dyn_dyn", []*celgo.Type{dyn, dyn}, b)),
+			overload("selects_dyn_dyn", []*celgo.Type{dyn, dyn}, b)),
 
 		// Cross-resource lookups. These are the reason an expression language
 		// with no set logic is enough: the joins live in Go.
 		celgo.Function(FnPDBFor,
-			celgo.Overload("pdbfor_dyn", []*celgo.Type{dyn}, dyn)),
+			overload("pdbfor_dyn", []*celgo.Type{dyn}, dyn)),
 		celgo.Function(FnServicesFor,
-			celgo.Overload("servicesfor_dyn", []*celgo.Type{dyn}, listDyn)),
+			overload("servicesfor_dyn", []*celgo.Type{dyn}, listDyn)),
 		celgo.Function(FnSelected,
-			celgo.Overload("selectedby_dyn", []*celgo.Type{dyn}, listDyn)),
+			overload("selectedby_dyn", []*celgo.Type{dyn}, listDyn)),
 		celgo.Function(FnCRDFor,
-			celgo.Overload("crdfor_dyn", []*celgo.Type{dyn}, dyn)),
+			overload("crdfor_dyn", []*celgo.Type{dyn}, dyn)),
 		celgo.Function(FnResourcesIn,
-			celgo.Overload("resourcesin_list", []*celgo.Type{listStr}, listDyn)),
+			overload("resourcesin_list", []*celgo.Type{listStr}, listDyn)),
+
+		// covers() is the reverse of pdbFor: the workloads an object's own
+		// selector matches. A PodDisruptionBudget covering a single-replica
+		// workload blocks drains forever, and that is only visible from the
+		// PDB's side.
+		celgo.Function(FnCovers,
+			overload("covers_dyn", []*celgo.Type{dyn}, listDyn)),
+		// replicas() reads a workload's replica count with the Kubernetes
+		// default of 1 for an absent field, so a check does not have to decide
+		// what "no replicas key" means and get it wrong differently each time.
+		celgo.Function(FnReplicas,
+			overload("replicas_dyn", []*celgo.Type{dyn}, i)),
+		// declaresPort() answers whether a container declares a port, by number
+		// or by name. A probe pointing at a sidecar's port passes a health
+		// check the application never answers.
+		celgo.Function(FnDeclaresPort,
+			overload("declaresport_dyn_dyn", []*celgo.Type{dyn, dyn}, b)),
+		// boundToRole() reports whether the release binds a ServiceAccount to
+		// any Role or ClusterRole. RBAC-02's exemption is DERIVED from this
+		// rather than assumed, which is what makes it precise instead of
+		// annoying.
+		celgo.Function(FnBoundToRole,
+			overload("boundtorole_string_string", []*celgo.Type{str, str}, b)),
+		// selectorKeys() is every label key an object selects on, whichever of
+		// the several selector shapes it uses.
+		celgo.Function(FnSelectorKeys,
+			overload("selectorkeys_dyn", []*celgo.Type{dyn}, listStr)),
+		// pvcMountPaths() is where a pod mounts persistent volume claims.
+		celgo.Function(FnMountPaths,
+			overload("pvcmountpaths_dyn", []*celgo.Type{dyn}, listStr)),
+
+		// The heuristics, each with a stated false-positive budget in
+		// heuristics.go. Shared so there is one answer to "what does this tool
+		// consider a credential?", which is the first question a vendor asks
+		// when it is wrong about one.
+		celgo.Function(FnUnstableKey,
+			overload("unstablelabelkey_string", []*celgo.Type{str}, b)),
+		celgo.Function(FnLooksGen,
+			overload("looksgenerated_string", []*celgo.Type{str}, b)),
+		celgo.Function(FnCredential,
+			overload("lookslikecredential_string_string", []*celgo.Type{str, str}, b)),
+		celgo.Function(FnPlaceholder,
+			overload("placeholdercredential_string", []*celgo.Type{str}, b)),
+		celgo.Function(FnExtendedRes,
+			overload("extendedresource_string", []*celgo.Type{str}, b)),
+		celgo.Function(FnOperational,
+			overload("operationalpath_string", []*celgo.Type{str}, b)),
+		// ruleGrants() honours the RBAC wildcards. A rule with resources: ["*"]
+		// grants secrets, and a check comparing against the literal string
+		// reports that it does not.
+		celgo.Function(FnRuleGrants,
+			overload("rulegrants_dyn_string_list", []*celgo.Type{dyn, str, listStr}, b)),
+		// allLabels() is every label the object carries, its pod template's
+		// included. An oversized value on a pod template is rejected at install
+		// exactly as one on the controller is, and a check reading only the
+		// controller's own metadata misses the half that charts actually
+		// generate.
+		celgo.Function(FnAllLabels,
+			overload("alllabels_dyn", []*celgo.Type{dyn}, celgo.MapType(str, str))),
 
 		// Version comparison, returning -1, 0 or 1. Semver rather than string
 		// order, because "1.10.0" sorts before "1.9.0" as a string and a check
 		// comparing operator versions that way is wrong exactly when it starts
 		// to matter.
 		celgo.Function(FnSemverCmp,
-			celgo.Overload("semvercompare_string_string", []*celgo.Type{str, str}, i)),
+			overload("semvercompare_string_string", []*celgo.Type{str, str}, i)),
 	)
 }
 
@@ -216,4 +335,15 @@ func asBool(v any) (bool, error) {
 		return bool(t), nil
 	}
 	return false, fmt.Errorf("expression returned %T, not a boolean: an assertion must be a condition", v)
+}
+
+// programOptions are what every compiled expression is planned with.
+func programOptions() []celgo.ProgramOption {
+	return []celgo.ProgramOption{
+		// The bound that makes termination a guarantee rather than a hope. An
+		// expression exceeding it is an error, so the check reports `error` and
+		// the run is inconclusive - never a pass.
+		celgo.CostLimit(costLimit),
+		celgo.EvalOptions(celgo.OptOptimize),
+	}
 }

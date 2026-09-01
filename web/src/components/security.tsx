@@ -1217,26 +1217,57 @@ export function SyncLogButton({ sync, size = 'middle' }: {
 /**
  * The export control.
  *
- * Two axes - what (summary or breakdown) and how (CSV, Excel, JSON) - as one
- * menu rather than two controls, because they are one decision. Every item is a
- * LINK: the browser streams the file, names it from the response, and shows its
- * own progress, none of which a fetch-and-blob would do, and a large export
- * would be held whole in memory first.
+ * # What it stopped offering, and why
+ *
+ * "Summary" and "Full breakdown", each in three formats. The summary was
+ * twenty-six field/value rows saying what the cards above already say, and
+ * nobody exports a spreadsheet to read a headline - so it is one item at the
+ * bottom rather than half the menu, and the top of the menu is the data.
+ *
+ * # The three groups
+ *
+ * Everything is the whole release: one workbook with every table, one archive
+ * with the tables AND the scanner's own responses. This table is the view on
+ * screen, as a single-table file, for the person who filtered it and wants
+ * exactly that in a pivot table. Then the summary, for the person pasting one
+ * number into a release note.
+ *
+ * Every item is a LINK. The browser streams the file, names it from the
+ * response and shows its own progress, none of which a fetch-and-blob would do -
+ * and a bundle of a large release would be held whole in memory first.
  */
-export function SecurityExportMenu({ urlFor, disabled }: {
-  urlFor: (format: string, view: string) => string
+export function SecurityExportMenu({ urlFor, disabled, table, tableLabel }: {
+  /** Builds a URL. `table` selects which single table a CSV writes. */
+  urlFor: (format: string, view: string, table?: string) => string
   disabled?: boolean
+  /** The table currently on screen, so "this table" means what it says. */
+  table?: string
+  tableLabel?: string
 }) {
   const items = [
-    { key: 'h1', type: 'group' as const, label: 'Summary', children: [
+    { key: 'h1', type: 'group' as const, label: 'Everything', children: [
+      {
+        key: 'all-xlsx',
+        label: <a href={urlFor('xlsx', 'detailed')}>Excel workbook - every table</a>,
+      },
+      {
+        key: 'all-zip',
+        /*
+          The one that answers "send this to the customer". Named for what is in
+          it rather than for its format: "ZIP" tells a reader nothing about why
+          they would pick it over Excel.
+        */
+        label: <a href={urlFor('zip', 'detailed')}>Evidence bundle - tables and raw scanner output</a>,
+      },
+      { key: 'all-json', label: <a href={urlFor('json', 'detailed')}>JSON</a> },
+    ] },
+    { key: 'h2', type: 'group' as const, label: tableLabel ? `This table - ${tableLabel}` : 'This table', children: [
+      { key: 'table-csv', label: <a href={urlFor('csv', 'detailed', table)}>CSV</a> },
+      { key: 'table-xlsx', label: <a href={urlFor('xlsx', 'detailed', table)}>Excel</a> },
+    ] },
+    { key: 'h3', type: 'group' as const, label: 'Headline figures', children: [
       { key: 'summary-csv', label: <a href={urlFor('csv', 'summary')}>CSV</a> },
       { key: 'summary-xlsx', label: <a href={urlFor('xlsx', 'summary')}>Excel</a> },
-      { key: 'summary-json', label: <a href={urlFor('json', 'summary')}>JSON</a> },
-    ] },
-    { key: 'h2', type: 'group' as const, label: 'Full breakdown', children: [
-      { key: 'detailed-csv', label: <a href={urlFor('csv', 'detailed')}>CSV</a> },
-      { key: 'detailed-xlsx', label: <a href={urlFor('xlsx', 'detailed')}>Excel</a> },
-      { key: 'detailed-json', label: <a href={urlFor('json', 'detailed')}>JSON</a> },
     ] },
   ]
 

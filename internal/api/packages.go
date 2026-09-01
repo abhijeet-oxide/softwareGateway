@@ -186,6 +186,7 @@ func (s *Server) attachSecurity(
 			Stalled:       stalled,
 			Counts:        toAPICounts(sec.Counts),
 			DistinctTotal: sec.DistinctTotal,
+			DistinctCVEs:  sec.DistinctCVEs,
 			Complete:      sec.Coverage.Complete(),
 			Scanned:       sec.Coverage.Scanned,
 			Scannable:     sec.Coverage.Scannable(),

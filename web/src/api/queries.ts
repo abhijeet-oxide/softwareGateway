@@ -1083,12 +1083,23 @@ export function packageSecurityExportUrl(
     fixable?: boolean | undefined
     status?: string
     q?: string
+    /**
+     * Which table a single-table format writes.
+     *
+     * A workbook holds every table and a CSV holds one, and which one depends
+     * on what the reader is about to do: somebody pivoting on packages wants
+     * All findings, somebody handing a list of advisories to a vendor wants
+     * Unique CVEs. Guessing produced the complaint this answers - the file came
+     * back with a table that was not the one on screen.
+     */
+    table?: string
   },
 ): string {
   const { segment, query: scoped } = packageRef(ref)
   const params = query({
     format: opts.format,
     view: opts.view,
+    table: opts.table,
     repository: opts.repository ?? (scoped ? decodeURIComponent(scoped.replace('?repository=', '')) : ''),
     severity: opts.severity,
     fixable: opts.fixable === undefined ? undefined : String(opts.fixable),
@@ -1097,6 +1108,29 @@ export function packageSecurityExportUrl(
   })
   return `/api/v1/products/${encodeURIComponent(product)}/packages/${encodeURIComponent(segment)}` +
     `/security/export${params}`
+}
+
+/**
+ * The URL of one image's scanner document - its SBOM, its raw vulnerability
+ * response, its policy verdict, its malware list.
+ *
+ * A URL rather than a fetch for the same reason as an export, and with one
+ * extra: an SBOM for a large image is tens of megabytes, and pulling it through
+ * JavaScript to hand it back to the browser is a tab that hangs on a file the
+ * browser would have streamed to disk.
+ *
+ * The server usually gives us this URL on the report itself. This builder is
+ * the fallback for a client assembling one before the report has loaded.
+ */
+export function securityDocumentUrl(
+  product: string, ref: string, digest: string,
+  kind: 'vulnerabilities' | 'sbom' | 'policy' | 'malware',
+  repository?: string,
+): string {
+  const { segment } = packageRef(ref)
+  const params = query({ digest, repository })
+  return `/api/v1/products/${encodeURIComponent(product)}/packages/${encodeURIComponent(segment)}` +
+    `/security/documents/${encodeURIComponent(kind)}${params}`
 }
 
 /** The URL of a security comparison export. */

@@ -12,13 +12,21 @@ import (
 	"github.com/abhijeet-oxide/softwareGateway/internal/security"
 )
 
-// Security is the platform's cache of what a scanner said.
+// Security is the platform's store of what a scanner said.
 //
 // See db/migrations/*/00022_security_findings.sql for the argument behind the
-// two tiers. The short version: the lightweight tier is kept because a package
-// listing cannot query Xray about 157 artifacts to render a column, and the
-// complete tier expires quickly because Xray is the source of truth for
-// detailed findings and this platform is deliberately not a second one.
+// tiers, and 00033_security_cache.sql for why they are no longer governed by
+// expiry. The short version: the lightweight tier is kept because a package
+// listing cannot query Xray about 157 artifacts to render a column; the heavy
+// tiers are kept because regenerating them costs a scanner round trip per
+// image; and NOTHING is deleted on a clock, because a page that silently
+// emptied itself overnight is worse than one showing an answer with its age
+// written next to it.
+//
+// Rows carry `evictable_at` - the point after which they MAY be reclaimed - and
+// `last_used_at`. Reads serve them whatever their age. Eviction is a size
+// decision taken by the sweeper against a byte budget, oldest-unread first, and
+// it never runs while the store is inside that budget.
 //
 // Every method takes a scope and every statement filters on it. That is an
 // authorization boundary, not a filing convention: findings were retrieved
@@ -39,9 +47,10 @@ func (s *Security) q(query string) string { return s.dialect.Rewrite(query) }
 
 // LoadSummaries implements security.Cache.
 //
-// Expired rows are not returned, and that is a filter rather than a delete: a
-// sweeper removes them (see Sweep), and a read that deleted would turn a page
-// render into a write transaction.
+// Age is NOT a filter here. A summary row is the durable result of a sync, and
+// hiding it because a clock passed turns "synced three days ago" into "never
+// synced" - which is the one distinction this whole package exists to keep. The
+// row's retrieved_at travels with it and the interface says how old it is.
 func (s *Security) LoadSummaries(ctx context.Context, scope security.Scope, refs []security.ArtifactRef) (map[string]security.Report, error) {
 	if len(refs) == 0 {
 		return map[string]security.Report{}, nil
@@ -63,8 +72,7 @@ func (s *Security) LoadSummaries(ctx context.Context, scope security.Scope, refs
 			       scanned_at, retrieved_at, missing
 			  FROM security_scans
 			 WHERE product = ? AND repository = ? AND provider = ?
-			   AND artifact_ref IN (` + strings.Join(placeholders, ",") + `)
-			   AND expires_at > ` + s.dialect.Now())
+			   AND artifact_ref IN (` + strings.Join(placeholders, ",") + `)`)
 
 		rows, err := s.db.QueryContext(ctx, query, args...)
 		if err != nil {
@@ -77,7 +85,18 @@ func (s *Security) LoadSummaries(ctx context.Context, scope security.Scope, refs
 	return out, nil
 }
 
-// LoadDetails implements security.Cache: the complete reports, while they last.
+// LoadDetails implements security.Cache: the complete reports.
+//
+// Payloads are stored compressed (see decodePayload), and the codec travels in
+// its own column rather than being sniffed: a JSON body that happens to start
+// with the gzip magic is not a thing, but a store that guesses is a store that
+// will one day be wrong about somebody's findings.
+//
+// Reading TOUCHES the rows. That is a write on a read path, which is normally
+// the wrong trade - but eviction is least-recently-USED and a cache that cannot
+// tell which of its rows anybody looks at evicts the hot ones first. One
+// batched UPDATE per chunk, best-effort: losing a touch costs a row its place
+// in the queue, never its contents.
 func (s *Security) LoadDetails(ctx context.Context, scope security.Scope, refs []security.ArtifactRef) (map[string]security.Report, error) {
 	if len(refs) == 0 {
 		return map[string]security.Report{}, nil
@@ -93,11 +112,10 @@ func (s *Security) LoadDetails(ctx context.Context, scope security.Scope, refs [
 		}
 
 		query := s.q(`
-			SELECT artifact_ref, payload
+			SELECT artifact_ref, payload, codec
 			  FROM security_details
 			 WHERE product = ? AND repository = ? AND provider = ?
-			   AND artifact_ref IN (` + strings.Join(placeholders, ",") + `)
-			   AND expires_at > ` + s.dialect.Now())
+			   AND artifact_ref IN (` + strings.Join(placeholders, ",") + `)`)
 
 		rows, err := s.db.QueryContext(ctx, query, args...)
 		if err != nil {
@@ -106,13 +124,17 @@ func (s *Security) LoadDetails(ctx context.Context, scope security.Scope, refs [
 		err = func() error {
 			defer func() { _ = rows.Close() }()
 			for rows.Next() {
-				var ref string
+				var ref, codec string
 				var payload []byte
-				if err := rows.Scan(&ref, &payload); err != nil {
+				if err := rows.Scan(&ref, &payload, &codec); err != nil {
 					return fmt.Errorf("scan security detail: %w", err)
 				}
+				decoded, err := decodePayload(payload, codec)
+				if err != nil {
+					continue
+				}
 				var report security.Report
-				if err := json.Unmarshal(payload, &report); err != nil {
+				if err := json.Unmarshal(decoded, &report); err != nil {
 					// A row we cannot read is a cache miss, not a failure. The
 					// provider is right there and the answer is recoverable.
 					continue
@@ -124,8 +146,30 @@ func (s *Security) LoadDetails(ctx context.Context, scope security.Scope, refs [
 		if err != nil {
 			return nil, err
 		}
+		s.touchDetails(ctx, scope, chunk)
 	}
 	return out, nil
+}
+
+// touchDetails records that these rows were read, for the eviction order.
+//
+// Best-effort by construction: it is called from a read, and a read that failed
+// because a bookkeeping UPDATE failed would be a page that will not render
+// because the cache could not remember being useful.
+func (s *Security) touchDetails(ctx context.Context, scope security.Scope, refs []security.ArtifactRef) {
+	if len(refs) == 0 {
+		return
+	}
+	args := []any{securityTime(time.Now().UTC()), scope.Product, scope.Repository, scope.Provider}
+	placeholders := make([]string, 0, len(refs))
+	for _, ref := range refs {
+		placeholders = append(placeholders, "?")
+		args = append(args, ref.Ref())
+	}
+	_, _ = s.db.ExecContext(ctx, s.q(`
+		UPDATE security_details SET last_used_at = ?
+		 WHERE product = ? AND repository = ? AND provider = ?
+		   AND artifact_ref IN (`+strings.Join(placeholders, ",")+`)`), args...)
 }
 
 // Save implements security.Cache.
@@ -141,13 +185,19 @@ func (s *Security) Save(ctx context.Context, scope security.Scope, reports []sec
 		return nil
 	}
 
+	// The retentions are how long a row is PINNED, not how long it lives. Past
+	// them a row becomes evictable and is still served; it goes only when the
+	// store is over its budget and this row is the least recently read. The
+	// defaults are generous for the same reason: a cache whose default
+	// behaviour is to forget is one every deployment has to configure before it
+	// is useful.
 	summaryTTL := ttl.Summary
 	if summaryTTL <= 0 {
-		summaryTTL = 6 * time.Hour
+		summaryTTL = 30 * 24 * time.Hour
 	}
 	detailTTL := ttl.Detail
 	if detailTTL <= 0 {
-		detailTTL = 15 * time.Minute
+		detailTTL = 7 * 24 * time.Hour
 	}
 
 	now := time.Now().UTC()
@@ -399,7 +449,7 @@ func (s *Security) replaceFindings(
 				component_id, component_name, component_version, component_type,
 				fixed_in, summary)
 			VALUES `+strings.TrimSuffix(strings.Repeat(values+",", len(batch)), ",")+`
-			ON CONFLICT (scan_id, cve, issue_id, component_id) DO NOTHING`), args...,
+			ON CONFLICT (scan_id, cve, issue_id, component_id, component_version) DO NOTHING`), args...,
 		); err != nil {
 			return fmt.Errorf("save security findings: %w", err)
 		}
@@ -424,13 +474,14 @@ func (s *Security) saveUnavailable(
 		INSERT INTO security_scans (
 			product, repository, role, provider,
 			artifact_ref, artifact_key, artifact_tag, artifact_kind, artifact_repo,
-			status, message, scanned_at, retrieved_at, fingerprint, expires_at)
-		VALUES (?,?,?,?, ?,?,?,?,?, ?,?, ?,?,?,?)
+			status, message, scanned_at, retrieved_at, fingerprint, evictable_at, last_used_at)
+		VALUES (?,?,?,?, ?,?,?,?,?, ?,?, ?,?,?,?,?)
 		ON CONFLICT (product, repository, provider, artifact_ref) DO NOTHING`),
 		scope.Product, scope.Repository, roleOr(scope.Role), provider,
 		r.Artifact.Ref(), r.Artifact.ArtifactKey(), r.Artifact.Tag, r.Artifact.Kind, r.Artifact.Repository,
 		string(r.Status), r.Message,
-		timeOrNil(r.ScannedAt), securityTime(r.RetrievedAt), fingerprintOf(r), securityTime(expires))
+		timeOrNil(r.ScannedAt), securityTime(r.RetrievedAt), fingerprintOf(r),
+		securityTime(expires), securityTime(r.RetrievedAt))
 	if err != nil {
 		return fmt.Errorf("save unavailable security scan: %w", err)
 	}
@@ -454,8 +505,8 @@ func (s *Security) saveScan(ctx context.Context, tx *sql.Tx, scope security.Scop
 			status, message,
 			total, fixable, critical, high, medium, low, unknown,
 			fix_critical, fix_high, fix_medium, fix_low, fix_unknown,
-			scanned_at, retrieved_at, fingerprint, expires_at, missing)
-		VALUES (?,?,?,?, ?,?,?,?,?, ?,?, ?,?,?,?,?,?,?, ?,?,?,?,?, ?,?,?,?,?)
+			scanned_at, retrieved_at, fingerprint, evictable_at, missing, last_used_at)
+		VALUES (?,?,?,?, ?,?,?,?,?, ?,?, ?,?,?,?,?,?,?, ?,?,?,?,?, ?,?,?,?,?,?)
 		ON CONFLICT (product, repository, provider, artifact_ref) DO UPDATE SET
 			role = excluded.role,
 			artifact_key = excluded.artifact_key,
@@ -473,8 +524,9 @@ func (s *Security) saveScan(ctx context.Context, tx *sql.Tx, scope security.Scop
 			scanned_at = excluded.scanned_at,
 			retrieved_at = excluded.retrieved_at,
 			fingerprint = excluded.fingerprint,
-			expires_at = excluded.expires_at,
-			missing = excluded.missing`),
+			evictable_at = excluded.evictable_at,
+			missing = excluded.missing,
+			last_used_at = excluded.last_used_at`),
 		scope.Product, scope.Repository, roleOr(scope.Role), provider,
 		r.Artifact.Ref(), r.Artifact.ArtifactKey(), r.Artifact.Tag, r.Artifact.Kind, r.Artifact.Repository,
 		string(r.Status), r.Message,
@@ -482,34 +534,55 @@ func (s *Security) saveScan(ctx context.Context, tx *sql.Tx, scope security.Scop
 		c.BySeverity.Critical, c.BySeverity.High, c.BySeverity.Medium, c.BySeverity.Low, c.BySeverity.Unknown,
 		c.FixableBySeverity.Critical, c.FixableBySeverity.High, c.FixableBySeverity.Medium,
 		c.FixableBySeverity.Low, c.FixableBySeverity.Unknown,
-		timeOrNil(r.ScannedAt), securityTime(r.RetrievedAt), fingerprintOf(r), securityTime(expires), r.Missing)
+		timeOrNil(r.ScannedAt), securityTime(r.RetrievedAt), fingerprintOf(r),
+		securityTime(expires), r.Missing, securityTime(r.RetrievedAt))
 	if err != nil {
 		return fmt.Errorf("save security scan: %w", err)
 	}
 	return nil
 }
 
-// saveDetail stores the complete normalized report.
+// saveDetail stores the complete normalized report, compressed.
+//
+// # Why compression is on by default rather than a knob
+//
+// Because the payload is JSON full of repeated advisory prose, it stores at
+// roughly a tenth of its size, and the cost is microseconds on a path that has
+// just spent seconds waiting for a scanner. A deployment that is short of CPU
+// and long on disk is not a deployment this platform has met; one that is short
+// of disk is every deployment eventually.
+//
+// The uncompressed size is recorded alongside, because "the cache is 4 GB"
+// and "the cache holds 40 GB of scanner output" are both worth being able to
+// answer, and only one of them can be measured after the fact.
 func (s *Security) saveDetail(ctx context.Context, tx *sql.Tx, scope security.Scope, r security.Report, expires time.Time) error {
-	payload, err := json.Marshal(r)
+	raw, err := json.Marshal(r)
 	if err != nil {
 		return fmt.Errorf("encode security detail: %w", err)
 	}
+	payload, codec := encodePayload(raw)
 	provider := r.Provider
 	if provider == "" {
 		provider = scope.Provider
 	}
 	_, err = tx.ExecContext(ctx, s.q(`
 		INSERT INTO security_details (product, repository, provider, artifact_ref,
-		                              payload, fingerprint, retrieved_at, expires_at)
-		VALUES (?,?,?,?,?,?,?,?)
+		                              payload, codec, bytes, source_bytes,
+		                              fingerprint, retrieved_at, evictable_at, last_used_at)
+		VALUES (?,?,?,?,?,?,?,?,?,?,?,?)
 		ON CONFLICT (product, repository, provider, artifact_ref) DO UPDATE SET
 			payload = excluded.payload,
+			codec = excluded.codec,
+			bytes = excluded.bytes,
+			source_bytes = excluded.source_bytes,
 			fingerprint = excluded.fingerprint,
 			retrieved_at = excluded.retrieved_at,
-			expires_at = excluded.expires_at`),
+			evictable_at = excluded.evictable_at,
+			last_used_at = excluded.last_used_at`),
 		scope.Product, scope.Repository, provider, r.Artifact.Ref(),
-		payload, fingerprintOf(r), securityTime(r.RetrievedAt), securityTime(expires))
+		payload, codec, len(payload), len(raw),
+		fingerprintOf(r), securityTime(r.RetrievedAt), securityTime(expires),
+		securityTime(r.RetrievedAt))
 	if err != nil {
 		return fmt.Errorf("save security detail: %w", err)
 	}
@@ -534,7 +607,11 @@ func (s *Security) Invalidate(ctx context.Context, scope security.Scope, refs []
 		}
 		in := " AND artifact_ref IN (" + strings.Join(placeholders, ",") + ")"
 
-		for _, table := range []string{"security_scans", "security_details"} {
+		// The documents go with them. A refresh that left last week's raw
+		// scanner payload beside this minute's findings would hand somebody an
+		// export whose two halves disagree - and the raw half is the one they
+		// forward to a customer.
+		for _, table := range []string{"security_scans", "security_details", "security_documents"} {
 			query := s.q(`DELETE FROM ` + table +
 				` WHERE product = ? AND repository = ? AND provider = ?` + in)
 			if _, err := s.db.ExecContext(ctx, query, args...); err != nil {
@@ -545,26 +622,289 @@ func (s *Security) Invalidate(ctx context.Context, scope security.Scope, refs []
 	return nil
 }
 
-// Sweep removes expired rows.
+// Sweep reclaims space, and only when space needs reclaiming.
 //
-// Both tiers, and the finding index goes with the scans it belongs to via the
-// cascade. Called from the maintenance loop rather than from a read, because a
-// page render must not be a write transaction.
-func (s *Security) Sweep(ctx context.Context) (scans, details int64, err error) {
-	res, err := s.db.ExecContext(ctx, s.q(
-		`DELETE FROM security_scans WHERE expires_at <= `+s.dialect.Now()))
-	if err != nil {
-		return 0, 0, fmt.Errorf("sweep security scans: %w", err)
-	}
-	scans, _ = res.RowsAffected()
+// # What changed, and why the old shape was wrong
+//
+// This used to be "delete everything past its expiry", run every fifteen
+// minutes. That is a correct cache eviction and the wrong policy for a security
+// index: it deleted findings nobody had asked it to forget, on a clock, while
+// the summary counts those findings backed lived on in `package_security`
+// forever - so a release ended up with a count and no rows, and the page behind
+// the count went blank. Nothing about that was recoverable without re-running a
+// twenty-minute sync against somebody else's scanner.
+//
+// So the order of questions is now: is anything UNREFERENCED (always go), and
+// then is the store OVER ITS BUDGET (evict the least recently read until it is
+// not). Inside the budget, nothing is deleted no matter how old it is. That is
+// what an operator means by "do not delete until required".
+//
+// # Why the heavy tiers are evicted first
+//
+// A document is megabytes and one request rebuilds it. A detail payload is
+// kilobytes and one request rebuilds it. A summary row plus its findings is the
+// durable result of a whole sync and rebuilding it is minutes of a scanner. So
+// the budget is spent in that order, and the index tier is reached only when
+// the two heavy tiers have already been emptied - which on any sane budget
+// never happens.
+func (s *Security) Sweep(ctx context.Context, budget CacheBudget) (SecuritySweepResult, error) {
+	var out SecuritySweepResult
 
-	res, err = s.db.ExecContext(ctx, s.q(
-		`DELETE FROM security_details WHERE expires_at <= `+s.dialect.Now()))
+	orphans, err := s.dropOrphans(ctx)
 	if err != nil {
-		return scans, 0, fmt.Errorf("sweep security details: %w", err)
+		return out, err
 	}
-	details, _ = res.RowsAffected()
-	return scans, details, nil
+	out.Orphans = orphans
+
+	usage, err := s.Usage(ctx)
+	if err != nil {
+		return out, err
+	}
+	out.Before = usage
+
+	// A budget of zero is "keep everything", not "keep nothing". The failure
+	// mode of the other reading is a deployment that upgrades into an empty
+	// cache because it never set a number it did not know existed.
+	if budget.Bytes <= 0 || usage.Bytes() <= budget.Bytes {
+		out.After = usage
+		return out, nil
+	}
+
+	over := usage.Bytes() - budget.Bytes
+	for _, tier := range []struct {
+		table  string
+		bytes  *int64
+		rows   *int64
+		evict  *int64
+		single bool
+	}{
+		{table: "security_documents", bytes: &usage.DocumentBytes, rows: &usage.Documents, evict: &out.Documents},
+		{table: "security_details", bytes: &usage.DetailBytes, rows: &usage.Details, evict: &out.Details},
+	} {
+		if over <= 0 {
+			break
+		}
+		freed, rows, err := s.evictLRU(ctx, tier.table, over)
+		if err != nil {
+			return out, err
+		}
+		*tier.evict = rows
+		*tier.bytes -= freed
+		*tier.rows -= rows
+		over -= freed
+	}
+
+	out.After = usage
+	return out, nil
+}
+
+// CacheBudget is how much room the security store is allowed to occupy.
+//
+// One number, over the tiers that are regenerable. The index tier is not in it:
+// it is the durable result of a sync and is measured in bytes per artifact, so
+// a budget that could evict it would be a budget somebody set by mistake.
+type CacheBudget struct {
+	// Bytes is the ceiling for the stored (compressed) payload tiers. Zero
+	// means no ceiling, which is the default and is deliberate: forgetting is
+	// the surprising behaviour and should have to be asked for.
+	Bytes int64
+}
+
+// CacheUsage is what the store currently occupies.
+type CacheUsage struct {
+	Scans       int64
+	Findings    int64
+	Details     int64
+	Documents   int64
+	DetailBytes int64
+	// DocumentBytes is what is STORED. SourceBytes is what it decodes to, which
+	// is the number that says whether compression is earning its keep.
+	DocumentBytes int64
+	SourceBytes   int64
+}
+
+// Bytes is the total the budget is measured against.
+func (u CacheUsage) Bytes() int64 { return u.DetailBytes + u.DocumentBytes }
+
+// SecuritySweepResult is what one sweep did.
+type SecuritySweepResult struct {
+	Orphans   int64
+	Details   int64
+	Documents int64
+	Before    CacheUsage
+	After     CacheUsage
+}
+
+// Freed reports whether the sweep removed anything worth logging.
+func (r SecuritySweepResult) Freed() bool { return r.Orphans+r.Details+r.Documents > 0 }
+
+// Usage measures the store.
+//
+// One query per tier rather than one big union, because the two heavy tables
+// answer with a SUM over a column they index and the union would plan as three
+// sequential scans to save two round trips.
+func (s *Security) Usage(ctx context.Context) (CacheUsage, error) {
+	var u CacheUsage
+
+	if err := s.db.QueryRowContext(ctx, s.q(
+		`SELECT COUNT(*) FROM security_scans`)).Scan(&u.Scans); err != nil {
+		return u, fmt.Errorf("measure security scans: %w", err)
+	}
+	if err := s.db.QueryRowContext(ctx, s.q(
+		`SELECT COUNT(*) FROM security_findings`)).Scan(&u.Findings); err != nil {
+		return u, fmt.Errorf("measure security findings: %w", err)
+	}
+	if err := s.db.QueryRowContext(ctx, s.q(
+		`SELECT COUNT(*), COALESCE(SUM(bytes),0), COALESCE(SUM(source_bytes),0)
+		   FROM security_details`)).Scan(&u.Details, &u.DetailBytes, &u.SourceBytes); err != nil {
+		return u, fmt.Errorf("measure security details: %w", err)
+	}
+	var docSource int64
+	if err := s.db.QueryRowContext(ctx, s.q(
+		`SELECT COUNT(*), COALESCE(SUM(bytes),0), COALESCE(SUM(source_bytes),0)
+		   FROM security_documents`)).Scan(&u.Documents, &u.DocumentBytes, &docSource); err != nil {
+		return u, fmt.Errorf("measure security documents: %w", err)
+	}
+	u.SourceBytes += docSource
+	return u, nil
+}
+
+// dropOrphans removes rows nothing can reach.
+//
+// The one deletion that needs no budget and no age: a detail or document row
+// whose summary row is gone is unreachable by every read path in this file, and
+// keeping it costs disk to store an answer nobody can ask for.
+func (s *Security) dropOrphans(ctx context.Context) (int64, error) {
+	var total int64
+	for _, table := range []string{"security_details", "security_documents"} {
+		res, err := s.db.ExecContext(ctx, s.q(`
+			DELETE FROM `+table+` WHERE NOT EXISTS (
+				SELECT 1 FROM security_scans sc
+				 WHERE sc.product = `+table+`.product
+				   AND sc.repository = `+table+`.repository
+				   AND sc.provider = `+table+`.provider
+				   AND sc.artifact_ref = `+table+`.artifact_ref)`))
+		if err != nil {
+			return total, fmt.Errorf("drop orphaned %s: %w", table, err)
+		}
+		n, _ := res.RowsAffected()
+		total += n
+	}
+	return total, nil
+}
+
+// evictLRU removes the least recently read EVICTABLE rows of one tier until it
+// has freed `want` bytes, and stops there.
+//
+// Deleted in bounded passes rather than one statement, because "delete the
+// oldest N until the sum reaches X" is a window function on Postgres and a
+// different one on SQLite, and a portable loop over a small ordered page is
+// both dialects' plan without either's syntax.
+//
+// A row inside its retention is never taken, however old it is by read time.
+// That is what the retention IS now: not a life, a pin.
+func (s *Security) evictLRU(ctx context.Context, table string, want int64) (freed, rows int64, err error) {
+	const page = 200
+	for freed < want {
+		type victim struct {
+			args  []any
+			bytes int64
+		}
+
+		// last_used_at is NULL for a row written before it was ever read, and
+		// COALESCE puts those first: never-read is the most evictable state
+		// there is.
+		// A document row is keyed by KIND as well, and deleting all four kinds
+		// to reclaim one would throw away an SBOM to make room for a
+		// vulnerability payload nobody asked to lose.
+		keys, where := evictionKey(table)
+
+		found, err := s.db.QueryContext(ctx, s.q(`
+			SELECT `+strings.Join(keys, ", ")+`, bytes
+			  FROM `+table+`
+			 WHERE evictable_at <= `+s.dialect.Now()+`
+			 ORDER BY COALESCE(last_used_at, `+lastResortColumn(table)+`) ASC
+			 LIMIT ?`), page)
+		if err != nil {
+			return freed, rows, fmt.Errorf("select %s to evict: %w", table, err)
+		}
+		var victims []victim
+		err = func() error {
+			defer func() { _ = found.Close() }()
+			for found.Next() {
+				values := make([]string, len(keys))
+				dest := make([]any, 0, len(keys)+1)
+				for i := range values {
+					dest = append(dest, &values[i])
+				}
+				var size int64
+				dest = append(dest, &size)
+				if err := found.Scan(dest...); err != nil {
+					return err
+				}
+				args := make([]any, 0, len(values))
+				for _, v := range values {
+					args = append(args, v)
+				}
+				victims = append(victims, victim{args: args, bytes: size})
+			}
+			return found.Err()
+		}()
+		if err != nil {
+			return freed, rows, fmt.Errorf("scan %s to evict: %w", table, err)
+		}
+		if len(victims) == 0 {
+			return freed, rows, nil
+		}
+
+		before := freed
+		for _, v := range victims {
+			res, err := s.db.ExecContext(ctx, s.q(
+				`DELETE FROM `+table+` WHERE `+where), v.args...)
+			if err != nil {
+				return freed, rows, fmt.Errorf("evict from %s: %w", table, err)
+			}
+			n, _ := res.RowsAffected()
+			rows += n
+			freed += v.bytes
+			if freed >= want {
+				break
+			}
+		}
+		// A whole page that freed nothing measurable.
+		//
+		// The migration measures the rows written before there was a column to
+		// measure them, so this should not happen - and if it ever does, the
+		// alternative is deleting the entire tier to reclaim zero bytes, which
+		// is the failure this guard exists to make impossible rather than
+		// merely unlikely.
+		if freed == before {
+			return freed, rows, nil
+		}
+	}
+	return freed, rows, nil
+}
+
+// lastResortColumn is the timestamp to fall back on for a row nobody has read.
+func lastResortColumn(table string) string {
+	if table == "security_documents" {
+		return "fetched_at"
+	}
+	return "retrieved_at"
+}
+
+// evictionKey is a tier's primary key, as columns to read and a WHERE to delete
+// exactly one row by.
+func evictionKey(table string) (columns []string, where string) {
+	columns = []string{"product", "repository", "provider", "artifact_ref"}
+	if table == "security_documents" {
+		columns = append(columns, "kind")
+	}
+	clauses := make([]string, 0, len(columns))
+	for _, c := range columns {
+		clauses = append(clauses, c+" = ?")
+	}
+	return columns, strings.Join(clauses, " AND ")
 }
 
 // ---------------------------------------------------------------------------
@@ -1002,8 +1342,7 @@ func (s *Security) ReportsFor(
 			       scanned_at, retrieved_at, missing
 			  FROM security_scans
 			 WHERE product = ? AND repository = ? AND provider = ?
-			   AND artifact_ref IN (` + strings.Join(placeholders, ",") + `)
-			   AND expires_at > ` + s.dialect.Now())
+			   AND artifact_ref IN (` + strings.Join(placeholders, ",") + `)`)
 
 		rows, err := s.db.QueryContext(ctx, query, args...)
 		if err != nil {
@@ -1201,10 +1540,26 @@ func (s *Security) enrichFromDetails(
 			report.Findings[i].CVSSVector = rich.CVSSVector
 			report.Findings[i].Published = rich.Published
 			report.Findings[i].Policy = rich.Policy
+			report.Findings[i].Sources = rich.Sources
 			if len(rich.FixedIn) > len(report.Findings[i].FixedIn) {
 				report.Findings[i].FixedIn = rich.FixedIn
 			}
 		}
+
+		// Malware, the policy verdict and the list of held bodies live ONLY in
+		// this tier, and that is a deliberate asymmetry rather than an
+		// oversight. The index exists to make ninety thousand findings
+		// searchable; a release has a handful of malware hits and a few dozen
+		// violations, so a table and three indexes to store them would be
+		// carrying the cost of the index tier for none of its benefit.
+		//
+		// The trade is that they go when the detail tier is evicted - which,
+		// with eviction now driven by a byte budget rather than a clock, is
+		// something an operator chose rather than something that happens
+		// overnight.
+		report.Malware = full.Malware
+		report.Violations = full.Violations
+		report.Documents = full.Documents
 	}
 	return nil
 }

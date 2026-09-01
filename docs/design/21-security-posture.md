@@ -370,34 +370,88 @@ A **failed** sync keeps the last good counts. A release that synced cleanly last
 week and whose scanner is unreachable today still knows what it knew, and
 showing nothing when something dated is known is the worse of the two answers.
 
-## 7. Caching, and why the platform is not a system of record
+## 7. Storage, and why nothing is deleted on a clock
 
 **Xray is the source of truth for detailed findings.** It re-grades issues,
-learns new fixed versions and re-scans continuously. A copy this platform kept
-indefinitely would be an unsynchronised replica of a database moving underneath
-it, and the first release decision made from a six-week-old cached finding would
-be this design's fault.
+learns new fixed versions and re-scans continuously, and this platform must not
+become a second copy of it.
 
-Four tables, split by what they cost and how long they stay true:
+For a long time the answer to that was expiry: every tier carried `expires_at`,
+every read filtered on it, and a sweeper deleted what had passed. **That was a
+correct cache and the wrong policy for a security index**, and it failed in the
+way that is hardest to notice. `package_security` never expired, so a release
+synced on Monday still said 90,808 vulnerabilities on Wednesday; the rows behind
+that number lived in `security_findings` and had aged out. The reader was
+looking at a release that had been scanned, had counts, and had nothing behind
+them - and there is no sentence an interface can honestly put on that screen.
 
-| Table | Holds | Retention | Read by |
-|---|---|---|---|
-| `package_security` | One row per RELEASE: state, counts, coverage, when it was synced | Never expires - it is the result of a sync | The listing, the release view |
-| `security_scans` | One row per ARTIFACT: status, counts by severity, fixability | `indexRetention`, 30 days | The release's artifact table, comparisons |
-| `security_findings` | Identifiers only - CVE, component, severity, fixed version. **No prose.** | With its scan | Search, comparison, relationship navigation |
-| `security_details` | The complete normalized response, as JSON | `detailRetention`, 24 hours | Descriptions, references, CVSS vectors |
+Worse, the deletion did not do the job it was there for. "Do not quote a stale
+finding" is a good argument. Silently deleting the finding is not how you honour
+it; it is how you lose the ability to say how stale it is.
 
-The two TTLs are deliberately far apart, and the balance was got wrong first
-time. The **index** - statuses, counts, and the identifiers that make a finding
-findable - is the durable half: it is what every read serves, and expiring it in
-hours would mean a release synced this morning silently losing its counts by
-evening, and a search that found it at 10 and not at 4. The **prose** is the
-half that would turn this platform into a second copy of a vulnerability
-database that re-grades itself continuously, so it goes first.
+**So rows carry `evictable_at` - the point after which they MAY be reclaimed -
+and `last_used_at`. Reads serve them whatever their age**, with `retrieved_at`
+alongside so the interface says "from the sync 3 days ago". Eviction is a SIZE
+decision, taken by the sweeper, in this order:
 
-When the prose has expired the findings are still complete enough to list,
-filter, compare and export - they simply lack the paragraph. A page that emptied
-itself overnight would be the worse failure.
+1. Anything **unreferenced** - a payload whose scan row is gone, which no read
+   path can reach - goes immediately.
+2. Everything else is kept while the store is **inside its byte budget**.
+3. Over budget, the **least recently read** evictable rows go, heaviest tier
+   first, until it is back inside.
+
+`coordinator.security.cacheBudgetBytes` is that budget, and **zero - the default
+- means no ceiling**. Forgetting a security answer is the surprising behaviour
+and should have to be asked for.
+
+Five tables, split by what they cost and how expensive they are to rebuild:
+
+| Table | Holds | Pinned for | Rebuilt by | Read by |
+|---|---|---|---|---|
+| `package_security` | One row per RELEASE: state, counts, coverage, when it was synced | Forever - it is the result of a sync | A sync | The listing, the release view |
+| `package_security_sources` | One row per (release, scanner): its counts, and what only it reported | With the release | A sync | The source toggle, the comparison |
+| `security_scans` | One row per ARTIFACT: status, counts by severity, fixability | `indexRetention`, 30 days | A sync (minutes) | The artifact table, comparisons |
+| `security_findings` | Identifiers only - CVE, component, version, severity, fixed version. **No prose.** | With its scan | A sync (minutes) | Search, comparison, navigation |
+| `security_details` | The complete normalized report, gzipped | `detailRetention`, 7 days | One request per image | Descriptions, references, CVSS vectors, malware, violations |
+| `security_documents` | The scanner's OWN bodies - vulnerability response, SBOM, policy verdict, malware - gzipped | `documentRetention`, 30 days | One request per image | Downloads, the evidence bundle |
+
+The order the budget is spent in follows the "rebuilt by" column, and that is
+the whole argument. A document is megabytes and one request rebuilds it. A
+detail payload is kilobytes and one request rebuilds it. A scan row plus its
+findings is the durable result of a whole sync, and rebuilding it is minutes of
+somebody else's scanner - so **the index tier is not in the budget at all**.
+
+When the prose has gone the findings are still complete enough to list, filter,
+compare and export - they simply lack the paragraph.
+
+### The row identity that made one sync report two totals
+
+A release reported **90,808 findings on its listing row and 86,085 on its own
+security tab, from the same sync**. Neither page was wrong about its own
+arithmetic: the listing quotes what the sync summed in memory, the tab counts
+the rows that reached `security_findings`, and 4,723 findings did not survive
+the trip.
+
+The table's unique key was `(scan, CVE, issue, component_id)`, and
+`component_id` deliberately carries **no version** - `alpine://libcrypto3`,
+never `alpine://libcrypto3:3.5.5-r0`. That is the right identity for comparing
+two releases (see §5) and the wrong one for a row: an image holding two builds
+of one package, which any multi-stage build does routinely, has two things to
+upgrade and wrote one. `ON CONFLICT DO NOTHING` discarded the second silently.
+
+Two identities, then, for two questions. `Finding.Key()` answers "is this the
+same problem as the one in the other release" and must not carry the version.
+`Finding.StorageKey()` answers "is this the same row" and must. And the provider
+collapses exact duplicates before handing findings over, so **the total and the
+rows are computed from one list** - a page can quote two numbers for one sync
+only if two lists exist.
+
+The same confusion had a second half. `distinct_total` counts (CVE, package)
+PAIRS - openssl and libssl3 carrying one advisory are two - and the interface
+printed it under the label "unique CVEs", where a reader counts one. Both
+numbers are worth having; what was not worth having was one wearing the other's
+name, so `distinct_cves` is stored beside it and each is labelled for what it
+counts.
 
 **Every row carries `product`, `repository` and `provider`, and every statement
 filters on all three.** That is an authorization boundary, not a filing
@@ -419,11 +473,16 @@ Other rules that are easy to get wrong and were:
   problem, which is worse than not having a search.
 - **A disabled report is never cached.** It is a fact about configuration and
   would outlive the change that fixes it.
-- **Expired rows are filtered on read and swept on a loop**, never deleted by a
-  read - the detail tier expires in minutes, and deleting on read makes every
-  page render a write transaction against the single writer.
-- **Refresh drops both tiers.** Leaving stale details behind would show a
-  refreshed count over an unrefreshed list, which is worse than either.
+- **Age is never a read filter.** A summary row is the durable result of a sync,
+  and hiding it because a clock passed turns "synced three days ago" into "never
+  synced" - the one distinction this whole feature exists to keep.
+- **A read touches `last_used_at` and nothing else.** Eviction is least
+  recently USED, and a cache that cannot tell which rows anybody looks at evicts
+  the hot ones first. Batched per chunk, and best-effort: losing a touch costs a
+  row its place in the queue, never its contents.
+- **Refresh drops every tier**, documents included. Leaving last week's raw
+  scanner payload beside this minute's findings would hand somebody an export
+  whose two halves disagree - and the raw half is the one they forward on.
 
 Browser caching is `private, max-age=60, must-revalidate` with an **ETag over
 the findings themselves** rather than over a timestamp, so a re-scan that
@@ -432,20 +491,73 @@ these are one repository's findings and a shared cache must never hold them.
 
 ## 8. Retrieval
 
-Batched and parallel, and the two bounds bound different things. Both are system
-configuration under `coordinator.security`, not product configuration:
+Batched and parallel, and **both numbers are ceilings rather than settings**.
+They are system configuration under `coordinator.security`, not product
+configuration:
 
-- **`batchSize` (50)** bounds the blast radius of one failure. A failed call
-  costs fifty artifacts' results, not a release's.
-- **`concurrency` (10)** bounds what we do to Xray. Its summary endpoint is
-  expensive server-side and rate-limited on hosted JFrog; sixty parallel
-  requests is not six times faster than ten, it is a 429 storm and a slower
-  answer. It is a budget PER SYNC, so two releases syncing at once are two.
+- **`batchSize` (50)** is the largest batch. It bounds the blast radius of one
+  failure: a failed call costs fifty artifacts' results, not a release's.
+- **`concurrency` (10)** is the most that may be in flight. It bounds what we do
+  to Xray, whose summary endpoint is expensive server-side and rate-limited on
+  hosted JFrog. A budget PER SYNC, so two releases syncing at once are two.
 
-`concurrency` was six, and two changes since paid for the rest: the probe below
-no longer spends the budget one image at a time, and the transport retries a 429
-on the scanner's own `Retry-After`, so a burst that trips a rate limit costs a
-pause rather than a release's worth of artifacts reported unavailable.
+### The pacer: why they are ceilings and not constants
+
+A real sync, 260 artifacts:
+
+```
+2:00:06  Sync started. 260 artifacts.
+2:00:08  Requesting scan results for 157 images.
+2:13:18  JFrog Xray timed out on 13 artifacts. Retrying as two smaller
+         requests. (x24)
+2:14:28  Sync finished.
+```
+
+Fourteen minutes, thirteen of them spent discovering the same fact over and
+over. Every batch went out at fifty, every batch waited its full sixty-second
+timeout, and every batch then halved itself - **sequentially**, inside the
+concurrency slot it already held, so a batch needing four splits paid four
+timeouts one after another while nine other workers sat idle. Twenty-four of
+those messages is twenty-four independent rediscoveries that this Xray, right
+now, cannot answer fifty checksums in a minute.
+
+Nothing in that design could learn. The batch size was a constant, the
+concurrency was a constant, and the only feedback path threw its knowledge away
+when it returned.
+
+So a **pacer** (`internal/registry/artifactory/pacer.go`), shared by every
+request to one scanner and outliving any single sync, runs additive-increase /
+multiplicative-decrease on both dials:
+
+- A **timeout** halves the batch. The first timeout still costs a minute; the
+  twentieth does not happen, because by then the batch is twelve.
+- A **429** halves the concurrency instead. "Too many at once" and "too much at
+  once" want opposite corrections, and answering one with the other makes a sync
+  slower without making it quieter.
+- A **run of clean requests** grows the batch back, then the concurrency, after
+  a short backoff - so one bad minute does not slow every later sync against a
+  scanner that has recovered.
+
+Both floors are well above one. A scanner having a bad minute should get slower,
+not stop: a pacer that collapses to one artifact per request turns a slow sync
+into one that cannot finish inside the claim window at all.
+
+Two mechanics make that work. **Work is handed out by a queue** rather than
+partitioned up front, so a worker asking for its next batch gets the size the
+scanner has just proved it can answer - the old shape cut every batch at fifty
+before the first answer arrived. And **a split batch goes back on the queue**
+instead of recursing: the halves are picked up by whichever worker is free, in
+parallel, inside the same global allowance. The load on the scanner is unchanged
+- the semaphore decides that, not the call graph - and the wall clock is not.
+
+The allowance is a semaphore whose capacity moves, not `errgroup.SetLimit`:
+shrinking is acquiring ballast and growing is releasing it, so **no in-flight
+request is ever cancelled to make a limit true**.
+
+When the pacer had to move, the sync log says so once, at the end: "JFrog Xray
+was slow, so requests were made smaller: 12 images per request and 4 requests at
+a time by the end." That line is the answer to "why did that take eleven
+minutes", and without it the only evidence is a wall clock and a shrug.
 
 ### The probe that follows a scan
 
@@ -470,13 +582,12 @@ image the scanner would not answer for must not lose the other hundred - and,
 critically, must not silently become an image with no findings. An error return
 is reserved for a cancelled context.
 
-**A batch that times out is halved and asked again, recursively, down to one
-artifact.** Xray's summary cost is superlinear in the batch: fifty checksums can
-exceed `requestTimeout` where two lots of twenty-five each finish comfortably,
-and on a 258-artifact release that difference was 209 artifacts reported
-`unavailable` for no reason but batch size. The retry is sequential, not
-parallel - the scanner is already struggling, and doubling the request rate at
-it is the wrong response.
+**A batch that times out is halved and asked again, down to one artifact.**
+Xray's summary cost is superlinear in the batch: fifty checksums can exceed
+`requestTimeout` where two lots of twenty-five each finish comfortably, and on a
+258-artifact release that difference was 209 artifacts reported `unavailable`
+for no reason but batch size. The halves go back on the queue rather than being
+re-sent by the goroutine that failed - see the pacer above.
 
 Only a failure that splitting can plausibly fix earns the retry: a client-side
 timeout, a rate limit, or a 504/408 from the platform. An authentication
@@ -514,7 +625,8 @@ which starts the whole retrieval again.
 | `GET` | `/products/{p}/packages/{pkg}/security` | This release's stored posture and its sync state. `?detail=true` for findings |
 | `POST` | `/products/{p}/packages/{pkg}:compareSecurity` | How the posture changed to `against`, from both sides' stored data |
 | `GET` | `/products/{p}/security/search` | `?kind=cve\|package\|image&q=` |
-| `GET` | `/products/{p}/packages/{pkg}/security/export` | CSV, Excel, JSON |
+| `GET` | `/products/{p}/packages/{pkg}/security/documents/{kind}` | One image's SBOM, raw vulnerability response, policy verdict or malware list. `?digest=` names the image |
+| `GET` | `/products/{p}/packages/{pkg}/security/export` | CSV, Excel, JSON, ZIP |
 | `GET` | `/products/{p}/packages/{pkg}/security/compare/export` | The comparison, same formats |
 | `GET` | `/products/{p}/security/search/export` | Search results, same formats |
 | `GET` | `/security/progress/{token}` | What a retrieval is doing |
@@ -540,11 +652,64 @@ Every row carries its whole address - release, artifact, package, CVE, and for a
 comparison its classification - because a spreadsheet row is read out of order,
 filtered, and pasted into a ticket.
 
-The `xlsx` writer is `internal/export`, written directly over `archive/zip` and
-`encoding/xml`. The subset needed for a grid of strings and numbers is one file;
-a dependency that renders charts and pivot tables is a large supply-chain
-surface on a product whose purpose is telling people what is in their supply
-chain.
+### An export is the data, not a summary of it
+
+A detailed export used to be a twenty-six-row field/value "Summary" sheet and
+one flat findings sheet, and the summary VIEW was that first sheet on its own.
+Nobody exports a spreadsheet to read a headline. So a detailed export is now the
+**tables the interface shows**, in the shape a reader has already learned:
+
+| Sheet | One row per |
+|---|---|
+| Unique CVEs | advisory, with every image and package it turns up in, and how many |
+| All findings | (image, advisory, package) |
+| Images | image, with its counts, its status and the sentence explaining it |
+| Malware | malicious package |
+| Policy violations | violation, with the watch, policy and rule that raised it |
+| By source | scanner, present only where more than one contributed |
+| Problems | reason the scanner gave, with the images it gave it for |
+
+The field/value grid survives only under `?view=summary`, for the person pasting
+one number into a release note.
+
+A workbook carries every sheet. A **CSV carries one**, and which one is the
+caller's choice (`?table=unique|findings|images|malware|policy|problems`),
+defaulting to All findings - the interface passes whichever tab is open, because
+a download that came back with a different table from the one on screen is the
+complaint the parameter answers.
+
+### The bundle
+
+`?format=zip` is the evidence bundle: the tables as CSV **beside the scanner's
+own responses**, laid out one directory per kind, then per image, then per tag.
+
+```
+README.txt
+tables/unique-cves.csv, all-findings.csv, images.csv, ...
+vulnerabilities/<image>/<tag>/jfrog-xray.json
+malware/<image>/<tag>/jfrog-xray.json
+policy/<image>/<tag>/jfrog-xray.json
+sbom/<image>/<tag>/jfrog-xray.json
+```
+
+Kind first, because that is how it is consumed: somebody forwarding a
+vulnerability report to a customer sends `vulnerabilities/`, and somebody asking
+"is there malware in this release" opens one directory. Image first would put
+the answer to that question in 157 places.
+
+It reads storage and **never a scanner**: a download link that starts a
+fifteen-minute retrieval is a link that times out somewhere between here and the
+browser, and the user's only evidence is a truncated file. The bodies were
+captured by the sync that was making those requests anyway. A release whose
+documents were never retrieved gets the tables and a README naming the empty
+directories - a worse bundle, honestly labelled, rather than a
+`vulnerabilities/` directory holding four files of a hundred and fifty-seven.
+
+The `xlsx` and `zip` writers are `internal/export`, written directly over
+`archive/zip` and `encoding/xml`. The subset needed for a grid of strings and
+numbers is one file; a dependency that renders charts and pivot tables is a
+large supply-chain surface on a product whose purpose is telling people what is
+in their supply chain.
 
 ## 10. Interface
 
@@ -573,7 +738,59 @@ can send. Stacked as cards, the security section lived below three screens of
 manifest tree, and a reader who came to check a release's security should not
 scroll past its contents to reach it.
 
-## 11. Adding a second scanner
+## 11. More than vulnerabilities: SBOMs, policy and malware
+
+Three things a scanner knows about an image that are not a list of CVEs. They
+arrive from different endpoints, mean different things and are read on different
+tabs; what they have in common is the only thing this platform needs, which is
+that each is **a body the scanner produced about one artifact** that somebody
+eventually wants to read, keep, and forward unaltered.
+
+Modelling them as one concept (`security.Document`) is what makes the storage,
+the retention, the eviction, the export tree and the download route one
+implementation instead of four. The alternative - an sbom table, a violations
+table, a malware table, three cache policies and three export writers - is the
+version that never gets a fourth document type added to it.
+
+**The raw body is kept**, even though everything else here is normalized,
+because normalization is lossy on purpose and the person asking for an SBOM is
+asking for the SBOM. A CycloneDX document regenerated from this platform's
+component model would be a different document with the same names in it, and
+handing that to somebody's compliance team is worse than handing them nothing.
+
+Where each comes from, and what it costs:
+
+| Kind | Retrieved | Why |
+|---|---|---|
+| `vulnerabilities` | Free, during a sync | It is the response the scan was already making. Captured through a sink so it never touches a `Report`, which is serialized into the cache on every sync |
+| `policy` | One request per image, during a sync | `coordinator.security.documents`, on by default |
+| `malware` | Free, with `policy` | It is the malicious subset of the same response, plus the scan's own malicious issues |
+| `sbom` | On demand, behind the download | Minutes and tens of megabytes per image. Generating one for every image on every sync would turn a two-minute job into an hour, for a file somebody downloads occasionally |
+
+**Malware is separated from vulnerabilities at the boundary**, not filtered
+downstream. Ninety thousand vulnerabilities are a backlog somebody works through
+over quarters; one malicious package is a release that does not ship tonight,
+and returned in the same list it is row 43,712 of a table sorted by severity.
+Xray has no `malicious` issue type - it reports a malicious package as a
+security issue whose summary begins "Malicious Package" - so the match is
+deliberately narrow: a false negative leaves a hit in the vulnerabilities table
+where it is still visible, and a loose match moves ordinary CVEs into a tab that
+means "stop".
+
+**A policy violation is not a finding with a policy field.** A finding is "this
+image contains CVE-2026-31789". A violation is "your Production watch forbids
+critical fixable issues and this image has four" - it exists because somebody
+wrote a rule, it disappears when the rule changes, and it can be raised against
+a licence with no CVE anywhere near it. Folding them together produced a
+vulnerabilities table with rows that were not vulnerabilities.
+
+Every failure here is a **message, not an error**. `exportDetails` is absent on
+older Xray versions, `violations` needs a permission a read-only scan token
+often lacks, and neither is a reason to fail an export of vulnerabilities that
+were retrieved perfectly well. An unavailable document is a document with no
+payload and a sentence saying which of those happened.
+
+## 12. Adding a second scanner
 
 Everything above is scanner-agnostic except one directory. Concretely:
 
@@ -581,9 +798,39 @@ Everything above is scanner-agnostic except one directory. Concretely:
    live - inside a repository plugin if it is scoped by repository, in its own
    package if it genuinely is not.
 2. Normalize into `security.Finding`, keeping the component identity
-   version-free (§4).
+   version-free (§4). Implement `security.DocumentProvider` too if it produces
+   SBOMs or policy verdicts; a scanner that does not is asked for none.
 3. Return it from `regclient.SecurityResolver.ProviderFor`.
 
 Nothing in `internal/security`, `internal/store`, `internal/api`, `internal/export`
 or the web application changes. That is what the boundary bought, and it is the
 only thing it had to buy.
+
+### What the second scanner turns on
+
+The shape for comparing scanners is already in place, and deliberately so: a
+field added the day Anchore is switched on is a field every stored row, every
+export column and every table lacks for the releases synced before it.
+
+- `Finding.Sources` names **every** scanner that reported a finding, where
+  `Provider` names the one this row came from. They are different questions:
+  which one said it, and who agrees.
+- `Posture.BySource` and `package_security_sources` carry per-scanner counts and
+  `only_cves` - the advisories that scanner reported and no other did. Stored
+  rather than derived, because the listing that most wants the number is the one
+  rendering twenty releases with none of their findings loaded.
+- Everything above renders **nothing** while one scanner answers. A segmented
+  control with a single position, and a "Reported by" column reading "JFrog
+  Xray" on every row of three thousand, are chrome that teaches a reader to
+  expect a comparison that does not exist.
+
+The interface, once there are two, is two controls and no query builder. A
+segmented switch answers the common question in one click ("what does Xray
+say"), and a single select holds the **whole truth table as named sentences** -
+only in Astra, in Anchore and Astra but not Xray, found by every scanner -
+generated from whichever scanners answered, with counts beside each. For three
+scanners that is seven rows, which is a list somebody reads.
+
+The alternative is a filter builder with AND, OR and NOT: the answer that gets
+built, demoed, and never used, because the person who needs it most is the one
+who does not think in set algebra.

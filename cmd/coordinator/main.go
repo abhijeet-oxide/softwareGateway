@@ -207,13 +207,21 @@ func run() error {
 		RequestTimeout: cfg.Coordinator.Security.RequestTimeout,
 	}
 	securityRetention := security.CacheTTL{
-		Summary: cfg.Coordinator.Security.IndexRetention,
-		Detail:  cfg.Coordinator.Security.DetailRetention,
+		Summary:   cfg.Coordinator.Security.IndexRetention,
+		Detail:    cfg.Coordinator.Security.DetailRetention,
+		Documents: cfg.Coordinator.Security.DocumentRetention,
 	}
-	securitySyncer := security.NewSyncer(
-		security.NewService(
-			regclient.NewSecurityResolver(registryClients, securityTuning), securityCache, logger),
-		packageSecurity, logger)
+	// The document kinds a sync retrieves beyond the vulnerability response,
+	// which is captured for free from the request the scan already makes. Each
+	// named kind is a request per image, so this is an operator's decision -
+	// see config.SecurityConfig.Documents.
+	securityDocuments := security.DocumentKindsFrom(
+		cfg.Coordinator.Security.SecurityDocumentKinds())
+	securityService := security.NewService(
+		regclient.NewSecurityResolver(registryClients, securityTuning),
+		securityCache, logger).WithDocuments(securityCache)
+	securitySyncer := security.NewSyncer(securityService, packageSecurity, logger).
+		WithDocuments(securityDocuments)
 	// The requester turns `transfers create` and `transfers promote` into
 	// rows; the expander plans the transfers those rows opened. Two halves of
 	// one path, sharing the resolver so an origin the API accepted is one the
@@ -272,14 +280,14 @@ func run() error {
 		},
 		cfg.Coordinator.ManifestCache.SweepInterval, logger, mreg)
 
-	// History is the OTHER thing that grows without limit, and it grows with
-	// use rather than with the catalogue: ~2500 job rows per transfer, one
-	// transfer per release per target, forever. What it removes and what it
-	// must not is store.SweepRetention's business; this is only the schedule.
-	// The security cache expires in minutes and is filtered on read, so this
-	// loop is about SIZE rather than correctness - see the sweeper's comment.
+	// The security store keeps what it is told until the disk says otherwise.
+	// Nothing here expires on a clock: rows past their retention become
+	// evictable, and the sweep removes the least recently read ones only while
+	// the store is over its budget. A budget of zero - the default - means it
+	// never is. See internal/maintenance/security.go.
 	securitySweeper := maintenance.NewSecurityCacheSweeper(
-		securityCache, packageSecurity, cfg.Coordinator.Security.SweepInterval, logger)
+		securityCache, packageSecurity, cfg.Coordinator.Security.SweepInterval,
+		store.CacheBudget{Bytes: cfg.Coordinator.Security.CacheBudgetBytes}, logger)
 
 	retentionSweeper := maintenance.NewRetentionSweeper(packages,
 		store.RetentionPolicy{
@@ -441,6 +449,9 @@ func run() error {
 		SecurityStore:     securitySecurityStore{packageSecurity, securityCache},
 		SecurityIndex:     securityCache,
 		SecurityRetention: securityRetention,
+		// The on-demand half: an SBOM a sync deliberately did not fetch,
+		// generated when somebody presses the button beside an image.
+		SecurityDocuments: securityService,
 		// Reading one file out of a release, for somebody looking at it. Here
 		// for the third time for the first reason: it needs a credentialed
 		// client, and the API layer holds none.
@@ -537,4 +548,23 @@ func (s securitySecurityStore) ReportsFor(
 	ctx context.Context, scope security.Scope, refs []security.ArtifactRef,
 ) ([]security.Report, error) {
 	return s.reports.ReportsFor(ctx, scope, refs)
+}
+
+func (s securitySecurityStore) LoadDocuments(
+	ctx context.Context, scope security.Scope,
+	refs []security.ArtifactRef, kinds []security.DocumentKind,
+) (map[string]map[security.DocumentKind]security.Document, error) {
+	return s.reports.LoadDocuments(ctx, scope, refs, kinds)
+}
+
+func (s securitySecurityStore) LoadSources(
+	ctx context.Context, packageID int64,
+) ([]security.SourceCounts, error) {
+	return s.PackageSecurity.LoadSources(ctx, packageID)
+}
+
+func (s securitySecurityStore) DocumentSummaries(
+	ctx context.Context, scope security.Scope, refs []security.ArtifactRef,
+) (map[string][]security.DocumentSummary, error) {
+	return s.reports.DocumentSummaries(ctx, scope, refs)
 }

@@ -40,6 +40,17 @@ const (
 	FormatCSV  Format = "csv"
 	FormatXLSX Format = "xlsx"
 	FormatJSON Format = "json"
+	// FormatZIP is the whole evidence bundle: the tables as CSV, and the
+	// scanner's own bodies laid out one directory per image.
+	//
+	// # Why a fourth format rather than a second endpoint
+	//
+	// Because it answers the same question - "give me this release's security
+	// state" - for a different reader. A spreadsheet is for somebody working
+	// through the findings; the bundle is for somebody FORWARDING them, to a
+	// customer, an auditor, or a vendor support case, who needs the scanner's
+	// own words rather than this platform's summary of them.
+	FormatZIP Format = "zip"
 )
 
 // ParseFormat maps what a caller asked for onto a format.
@@ -54,8 +65,10 @@ func ParseFormat(s string) (Format, error) {
 		return FormatXLSX, nil
 	case string(FormatJSON):
 		return FormatJSON, nil
+	case string(FormatZIP), "bundle", "archive":
+		return FormatZIP, nil
 	default:
-		return "", fmt.Errorf("format must be one of csv, xlsx, json (got %q)", s)
+		return "", fmt.Errorf("format must be one of csv, xlsx, json, zip (got %q)", s)
 	}
 }
 
@@ -66,6 +79,8 @@ func (f Format) ContentType() string {
 		return "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
 	case FormatJSON:
 		return "application/json"
+	case FormatZIP:
+		return "application/zip"
 	default:
 		return "text/csv; charset=utf-8"
 	}
@@ -84,6 +99,28 @@ type Sheet struct {
 	Name    string
 	Headers []string
 	Rows    [][]string
+	// Primary marks the sheet a single-table format should write.
+	//
+	// It used to be "the last one", which worked while a book was summary-then-
+	// detail and broke the moment a book had four data sheets: a CSV export of
+	// a release's vulnerabilities handed back the Problems tab, because that
+	// happened to be built last. The sheet somebody means is a property of the
+	// book, not of the order it was assembled in, so the book says which.
+	Primary bool
+	// Note is one line above the header, for a sheet whose rows need a caveat
+	// that would be a lie repeated on every row - "these are the 1,000 highest
+	// severity of 3,111". Omitted from CSV, which has nowhere to put it.
+	Note string
+}
+
+// File is one member of a bundle: a body, at a path, as the scanner produced it.
+type File struct {
+	// Path is the entry's location inside the archive, with forward slashes -
+	// "vulnerabilities/cbur-cbur-agent/1.5.7-alpine-24/xray.json".
+	Path string
+	// Body is the content, unaltered. This is the whole point of the bundle:
+	// what the scanner said, not what this platform made of it.
+	Body []byte
 }
 
 // Book is a whole export.
@@ -98,6 +135,9 @@ type Book struct {
 	// projection, and offering it as the JSON would be offering the loss as the
 	// feature.
 	JSON any
+	// Files are the bundle's members, for the ZIP encoding. Ignored by every
+	// other format - a spreadsheet has nowhere to put a forty-megabyte SBOM.
+	Files []File
 }
 
 // Write encodes a book in one format.
@@ -107,6 +147,8 @@ func Write(w io.Writer, format Format, book Book) error {
 		return WriteJSON(w, book)
 	case FormatXLSX:
 		return WriteXLSX(w, book)
+	case FormatZIP:
+		return WriteZIP(w, book)
 	default:
 		return WriteCSV(w, book)
 	}
@@ -138,16 +180,17 @@ func WriteJSON(w io.Writer, book Book) error {
 	return enc.Encode(out)
 }
 
-// WriteCSV emits the LAST sheet.
+// WriteCSV emits the PRIMARY sheet.
 //
-// The last rather than the first, because a book is built summary-first and the
-// detailed sheet is the one somebody exporting to CSV wants to work with. A CSV
-// holding two tables one after another is a file that no tool can read.
+// One sheet, because a CSV holding two tables one after another is a file no
+// tool can read. The primary one rather than the last, because a book now
+// carries four data tables and "the last one assembled" is not a thing a reader
+// asked for - see Sheet.Primary.
 func WriteCSV(w io.Writer, book Book) error {
-	if len(book.Sheets) == 0 {
+	sheet, ok := primarySheet(book)
+	if !ok {
 		return nil
 	}
-	sheet := book.Sheets[len(book.Sheets)-1]
 
 	// A UTF-8 BOM, because Excel opens a BOM-less CSV as the system code page
 	// and renders every non-ASCII package name as mojibake. Harmless everywhere
@@ -167,6 +210,90 @@ func WriteCSV(w io.Writer, book Book) error {
 	}
 	cw.Flush()
 	return cw.Error()
+}
+
+// primarySheet is the sheet a single-table format should write.
+func primarySheet(book Book) (Sheet, bool) {
+	if len(book.Sheets) == 0 {
+		return Sheet{}, false
+	}
+	for _, sheet := range book.Sheets {
+		if sheet.Primary {
+			return sheet, true
+		}
+	}
+	// No sheet claimed it. The first is the better guess than the last: a book
+	// is assembled with the table somebody asked for at the front.
+	return book.Sheets[0], true
+}
+
+// WriteZIP emits the evidence bundle.
+//
+// # The layout, and why it is by KIND then by image
+//
+//	README.txt
+//	tables/unique-cves.csv, all-findings.csv, images.csv, ...
+//	vulnerabilities/<image>/<tag>/<scanner>.json
+//	malware/<image>/<tag>/<scanner>.json
+//	policy/<image>/<tag>/<scanner>.json
+//	sbom/<image>/<tag>/<scanner>.json
+//
+// Kind first because that is how the bundle is consumed: somebody forwarding a
+// vulnerability report to a customer sends `vulnerabilities/`, and somebody
+// answering "is there malware in this release" opens one directory and reads
+// four files. Image first would put the answer to that question in 157 places.
+//
+// The tables come too, as CSV rather than as one spreadsheet, because a
+// directory of CSVs is diffable, greppable and openable by everything - and the
+// person who wants a workbook exports a workbook.
+func WriteZIP(w io.Writer, book Book) error {
+	zw := zip.NewWriter(w)
+
+	for _, sheet := range book.Sheets {
+		name := "tables/" + slugify(sheet.Name) + ".csv"
+		f, err := zw.Create(name)
+		if err != nil {
+			return fmt.Errorf("create %s: %w", name, err)
+		}
+		if err := WriteCSV(f, Book{Sheets: []Sheet{sheet}}); err != nil {
+			return fmt.Errorf("write %s: %w", name, err)
+		}
+	}
+
+	for _, file := range book.Files {
+		f, err := zw.Create(file.Path)
+		if err != nil {
+			return fmt.Errorf("create %s: %w", file.Path, err)
+		}
+		if _, err := f.Write(file.Body); err != nil {
+			return fmt.Errorf("write %s: %w", file.Path, err)
+		}
+	}
+
+	return zw.Close()
+}
+
+// slugify turns a sheet name into a filename that survives every filesystem.
+func slugify(name string) string {
+	var b strings.Builder
+	lastDash := true
+	for _, r := range strings.ToLower(strings.TrimSpace(name)) {
+		switch {
+		case r >= 'a' && r <= 'z', r >= '0' && r <= '9':
+			b.WriteRune(r)
+			lastDash = false
+		default:
+			if !lastDash {
+				b.WriteByte('-')
+				lastDash = true
+			}
+		}
+	}
+	out := strings.Trim(b.String(), "-")
+	if out == "" {
+		return "table"
+	}
+	return out
 }
 
 // WriteXLSX emits a minimal Office Open XML workbook.
@@ -222,6 +349,15 @@ func writeZipSheet(zw *zip.Writer, name string, sheet Sheet) error {
 	}
 
 	rowNum := 1
+	if sheet.Note != "" {
+		if err := writeRow(f, rowNum, []string{sheet.Note}); err != nil {
+			return err
+		}
+		// A blank row under it, so a reader's "select the header row" reflex
+		// and every importer's header sniffing both land on the headers rather
+		// than on a sentence.
+		rowNum += 2
+	}
 	if len(sheet.Headers) > 0 {
 		if err := writeRow(f, rowNum, sheet.Headers); err != nil {
 			return err

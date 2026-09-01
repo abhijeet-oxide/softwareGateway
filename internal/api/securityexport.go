@@ -1,6 +1,7 @@
 package api
 
 import (
+	"context"
 	"fmt"
 	"net/http"
 	"strconv"
@@ -65,6 +66,10 @@ func (s *Server) handleExportPackageSecurity(w http.ResponseWriter, r *http.Requ
 	}
 	view := exportView(q.Get("view"))
 	filter := parseFindingFilter(q)
+	// Which table a single-table format writes. See markPrimary: a workbook
+	// carries all of them and a CSV carries one, and which one is a question
+	// only the reader can answer.
+	table := strings.ToLower(strings.TrimSpace(q.Get("table")))
 
 	// Read, not retrieve. An export of a release nobody synced is an export of
 	// nothing, and it says so in the file rather than quietly starting a
@@ -76,7 +81,99 @@ func (s *Server) handleExportPackageSecurity(w http.ResponseWriter, r *http.Requ
 	}
 
 	book := packageSecurityBook(productName, pkg, side, view, filter)
+	markPrimary(&book, table)
+	if format == export.FormatZIP {
+		book.Files = s.bundleFor(r.Context(), productName, pkg, side)
+	}
 	s.writeExport(w, r, format, book, []string{productName, releaseLabel(pkg), "security", view})
+}
+
+// markPrimary moves the single-table formats' choice of sheet.
+//
+// # Why the caller gets to choose at all
+//
+// Because a workbook holds every table and a CSV holds one, and which one
+// depends entirely on what the reader is about to do. Somebody pivoting on
+// packages wants All findings; somebody handing a list of advisories to a
+// vendor wants Unique CVEs; somebody chasing coverage wants Images. Guessing
+// produced the complaint this parameter answers - the file came back with a
+// table that was not the one on screen.
+//
+// An unrecognised name leaves the book's own default in place rather than
+// erroring: the download is already a link somebody clicked, and a 400 in a new
+// tab is a worse answer than the sensible table.
+func markPrimary(book *export.Book, table string) {
+	if table == "" {
+		return
+	}
+	want := map[string]string{
+		"unique":    "Unique CVEs",
+		"cves":      "Unique CVEs",
+		"findings":  "All findings",
+		"all":       "All findings",
+		"images":    "Images",
+		"artifacts": "Images",
+		"malware":   "Malware",
+		"policy":    "Policy violations",
+		"problems":  "Problems",
+		"sources":   "By source",
+		"summary":   "Summary",
+	}[table]
+	if want == "" {
+		return
+	}
+	found := false
+	for i := range book.Sheets {
+		if book.Sheets[i].Name == want {
+			found = true
+		}
+	}
+	if !found {
+		return
+	}
+	for i := range book.Sheets {
+		book.Sheets[i].Primary = book.Sheets[i].Name == want
+	}
+}
+
+// bundleFor assembles the scanner's own bodies for a ZIP export.
+//
+// # Why this reads storage and never a scanner
+//
+// Because a download link that starts a fifteen-minute retrieval is a download
+// link that times out somewhere between here and the browser, and the user's
+// only evidence is a truncated file. The bodies were captured by the sync that
+// was going to make those requests anyway (see security.ScanOptions.Sink), so
+// this is a table read.
+//
+// A release whose documents have been evicted, or which was synced before this
+// existed, gets a bundle of tables and a README that says which directories are
+// empty and why. That is a worse bundle and an honest one; silently shipping a
+// vulnerabilities/ directory with four of a hundred and fifty-seven files in it
+// is neither.
+func (s *Server) bundleFor(
+	ctx context.Context, productName string, pkg store.PackageRow, side securitySide,
+) []export.File {
+	if len(side.reports) == 0 {
+		return nil
+	}
+	refs := make([]security.ArtifactRef, 0, len(side.reports))
+	for _, r := range side.reports {
+		refs = append(refs, r.Artifact)
+	}
+
+	docs, err := s.deps.SecurityStore.LoadDocuments(ctx, side.target.Scope, refs, nil)
+	if err != nil {
+		// The tables are the export's substance and they are already built.
+		// Failing the whole download because the raw half could not be read
+		// would hand back nothing where something useful was in hand.
+		s.deps.Logger.Warn("security bundle: could not read stored documents",
+			"product", productName, "package", pkg.ID, "error", err)
+		docs = map[string]map[security.DocumentKind]security.Document{}
+	}
+
+	files := bundleFiles(docs, side.reports)
+	return append([]export.File{bundleReadme(productName, pkg, side, docs)}, files...)
 }
 
 // handleExportSecurityComparison serves
@@ -337,21 +434,65 @@ func firstValue(q map[string][]string, key string) string {
 	return ""
 }
 
-// packageSecurityBook projects a release's posture into sheets.
+// packageSecurityBook projects a release's posture into the tables the
+// interface shows.
+//
+// See securitysheets.go for what those are and why. The short version: an
+// export of a release's security is the DATA, and the twenty-six-row field/value
+// summary that used to be the first tab of every workbook - and the entire
+// content of every summary export - is not it.
 func packageSecurityBook(
 	productName string, pkg store.PackageRow, side securitySide,
 	view string, filter findingFilter,
 ) export.Book {
-	state, message := securityState(side.row, side.target)
 	release := releaseLabel(pkg)
-	row := side.row
 
-	summary := export.Sheet{
+	if view == v1.ExportViewSummary {
+		// The summary view survives for the person pasting one number into a
+		// release note, and it is the only place the field/value grid belongs.
+		book := export.Book{Sheets: []export.Sheet{summarySheet(productName, pkg, side)}}
+		book.Sheets[0].Primary = true
+		book.JSON = toAPIPackageSecurity(productName, pkg, side.row, side.target, false)
+		return book
+	}
+
+	book := export.Book{Sheets: []export.Sheet{
+		uniqueCVESheet(productName, release, side.reports, filter),
+		findingsSheet(productName, release, pkg.ManifestDigest, side.reports, filter),
+		imagesSheet(productName, release, side.reports),
+	}}
+	// The three conditional sheets. A workbook with an empty "Malware" tab
+	// reads as a scanner that was asked and found none, which is a claim this
+	// platform can only make where malware was actually retrieved - so the tab
+	// appears when there is something in it, and the Images sheet's count
+	// column carries the zero otherwise.
+	if sheet := malwareSheet(productName, release, side.reports); len(sheet.Rows) > 0 {
+		book.Sheets = append(book.Sheets, sheet)
+	}
+	if sheet := policySheet(productName, release, side.reports); len(sheet.Rows) > 0 {
+		book.Sheets = append(book.Sheets, sheet)
+	}
+	if sheet, ok := sourcesSheet(productName, release, side.posture); ok {
+		book.Sheets = append(book.Sheets, sheet)
+	}
+	if sheet := problemsSheet(productName, release, side.reports); len(sheet.Rows) > 0 {
+		book.Sheets = append(book.Sheets, sheet)
+	}
+
+	book.JSON = detailJSON(productName, pkg, side, filter)
+	return book
+}
+
+// summarySheet is the field/value grid, for the summary view only.
+func summarySheet(productName string, pkg store.PackageRow, side securitySide) export.Sheet {
+	state, message := securityState(side.row, side.target)
+	row := side.row
+	return export.Sheet{
 		Name:    "Summary",
 		Headers: []string{"Field", "Value"},
 		Rows: [][]string{
 			{"Product", productName},
-			{"Release", release},
+			{"Release", releaseLabel(pkg)},
 			{"Release digest", pkg.ManifestDigest},
 			{"Repository", repositoryOr(row.Repository, side.target)},
 			{"Scanner", providerOr(row.Provider, side.target)},
@@ -363,6 +504,7 @@ func packageSecurityBook(
 			{"Artifacts", strconv.Itoa(row.Coverage.Artifacts)},
 			{"Artifacts scanned", strconv.Itoa(row.Coverage.Scanned)},
 			{"Artifacts not scanned", strconv.Itoa(row.Coverage.NotScanned)},
+			{"Artifacts not in the repository", strconv.Itoa(row.Coverage.Missing)},
 			{"Artifacts unavailable", strconv.Itoa(row.Coverage.Unavailable)},
 			{"Artifacts not applicable", strconv.Itoa(row.Coverage.Unsupported)},
 			{"Coverage complete", strconv.FormatBool(row.Coverage.Complete())},
@@ -374,67 +516,14 @@ func packageSecurityBook(
 			{"Medium", strconv.Itoa(row.Counts.BySeverity.Medium)},
 			{"Low", strconv.Itoa(row.Counts.BySeverity.Low)},
 			{"Unknown severity", strconv.Itoa(row.Counts.BySeverity.Unknown)},
-			{"Distinct vulnerabilities", strconv.Itoa(row.DistinctTotal)},
-			{"Exported at", time.Now().UTC().Format(time.RFC3339)},
+			// Named for what each one counts. The interface printed the first
+			// under the label "unique CVEs", and a reader hearing that counts
+			// the second.
+			{"Distinct CVE and package pairs", strconv.Itoa(row.DistinctTotal)},
+			{"Distinct CVEs", strconv.Itoa(row.DistinctCVEs)},
+			{"Exported at", nowRFC3339()},
 		},
 	}
-
-	book := export.Book{Sheets: []export.Sheet{summary}}
-	if view == v1.ExportViewSummary {
-		book.JSON = toAPIPackageSecurity(productName, pkg, row, side.target, false)
-		return book
-	}
-
-	// Every row carries its whole address - release, artifact, package, CVE -
-	// because a spreadsheet row is read on its own, out of order, filtered, and
-	// pasted into a ticket. A row that relied on the sheet's context for its
-	// meaning loses that meaning the moment somebody sorts the sheet.
-	detail := export.Sheet{
-		Name: "Findings",
-		Headers: []string{
-			"Product", "Release", "Release digest", "Artifact", "Artifact tag", "Artifact digest",
-			"Artifact kind", "Scan status", "CVE", "Issue ID", "Severity", "Fixable", "Fixed in",
-			"Package", "Package version", "Package type", "CVSS", "Published", "Scanner", "Summary",
-		},
-	}
-	for _, report := range side.reports {
-		if !filter.keepReport(report) {
-			continue
-		}
-		// An artifact with no findings still gets a row when it was NOT
-		// scanned. An export whose absent rows meant both "clean" and "nobody
-		// looked" would be the whole failure of this feature, in a file.
-		if len(report.Findings) == 0 {
-			if report.Status == security.StatusScanned {
-				continue
-			}
-			detail.Rows = append(detail.Rows, []string{
-				productName, release, pkg.ManifestDigest,
-				report.Artifact.ArtifactKey(), report.Artifact.Tag, report.Artifact.Digest,
-				report.Artifact.Kind, string(report.Status),
-				"", "", "", "", "", "", "", "", "", "", report.Provider, report.Message,
-			})
-			continue
-		}
-		for _, f := range report.Findings {
-			if !filter.keepFinding(f) {
-				continue
-			}
-			detail.Rows = append(detail.Rows, []string{
-				productName, release, pkg.ManifestDigest,
-				report.Artifact.ArtifactKey(), report.Artifact.Tag, report.Artifact.Digest,
-				report.Artifact.Kind, string(report.Status),
-				f.CVE, f.ID, string(f.Severity), strconv.FormatBool(f.Fixable),
-				strings.Join(f.FixedIn, " "),
-				f.Component.Name, f.Component.Version, f.Component.Type,
-				formatScore(f.CVSSScore), formatPublished(f.Published), f.Provider, f.Summary,
-			})
-		}
-	}
-
-	book.Sheets = append(book.Sheets, detail)
-	book.JSON = detailJSON(productName, pkg, side, filter)
-	return book
 }
 
 // comparisonBook projects a comparison into sheets.
@@ -484,7 +573,8 @@ func comparisonBook(
 	}
 
 	detail := export.Sheet{
-		Name: "Changes",
+		Name:    "Changes",
+		Primary: true,
 		Headers: []string{
 			"Product", "Base release", "New release", "Change", "Artifact", "Artifact change",
 			"Artifact tag", "Artifact digest", "CVE", "Issue ID", "Severity", "From severity",
@@ -535,7 +625,8 @@ func comparisonBook(
 // searchBook projects search results into one sheet.
 func searchBook(payload v1.SecuritySearchResponse) export.Book {
 	sheet := export.Sheet{
-		Name: "Search results",
+		Name:    "Search results",
+		Primary: true,
 		Headers: []string{
 			"CVE", "Issue ID", "Severity", "Fixable", "Fixed in", "Package", "Package version",
 			"Package type", "Image", "Image tag", "Image digest", "Repository", "Releases",

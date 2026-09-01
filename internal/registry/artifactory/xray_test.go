@@ -765,7 +765,7 @@ func TestNormalizeSkipsLicenseIssues(t *testing.T) {
 		opensslIssue(),
 		{IssueID: "XRAY-999", IssueType: "license", Severity: "High", Summary: "GPL-3.0"},
 	}}
-	got := normalizeArtifact(a)
+	got, _ := normalizeArtifact(a)
 	if len(got) != 1 {
 		t.Fatalf("got %d findings, want 1", len(got))
 	}
@@ -779,7 +779,7 @@ func TestNormalizeExpandsCVEsAcrossComponents(t *testing.T) {
 		ComponentID: "12:zlib", Version: "1.2.11", PkgType: "deb",
 	})
 
-	got := normalizeArtifact(xrayArtifact{Issues: []xrayIssue{issue}})
+	got, _ := normalizeArtifact(xrayArtifact{Issues: []xrayIssue{issue}})
 	if len(got) != 4 {
 		t.Fatalf("got %d findings, want 4 (2 CVEs x 2 components)", len(got))
 	}

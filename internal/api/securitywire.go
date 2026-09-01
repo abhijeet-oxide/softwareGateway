@@ -83,6 +83,7 @@ func toAPIFinding(f security.Finding) v1.SecurityFinding {
 		References:    f.References,
 		Provider:      f.Provider,
 		Policy:        f.Policy,
+		Sources:       f.SourceSet(),
 	}
 	if f.Published != nil {
 		out.Published = f.Published.UTC().Format(time.RFC3339)
@@ -110,6 +111,15 @@ func toAPIReport(r security.Report) v1.SecurityReport {
 	for _, f := range r.Findings {
 		out.Findings = append(out.Findings, toAPIFinding(f))
 	}
+	for _, f := range r.Malware {
+		out.Malware = append(out.Malware, toAPIFinding(f))
+	}
+	for _, v := range r.Violations {
+		out.Violations = append(out.Violations, toAPIViolation(v))
+	}
+	for _, d := range r.Documents {
+		out.Documents = append(out.Documents, toAPIDocumentRef(d))
+	}
 	if r.ScannedAt != nil {
 		out.ScannedAt = r.ScannedAt.UTC().Format(time.RFC3339)
 	}
@@ -117,6 +127,52 @@ func toAPIReport(r security.Report) v1.SecurityReport {
 		out.RetrievedAt = r.RetrievedAt.UTC().Format(time.RFC3339)
 	}
 	return out
+}
+
+func toAPIViolation(v security.Violation) v1.SecurityViolation {
+	out := v1.SecurityViolation{
+		ID:            v.ID,
+		Type:          v.Type,
+		Severity:      string(v.Severity),
+		SeverityLabel: v.Severity.Label(),
+		Watch:         v.Watch,
+		Policy:        v.Policy,
+		Rule:          v.Rule,
+		Summary:       v.Summary,
+		Description:   v.Description,
+		CVE:           v.CVE,
+		Component:     toAPIComponent(v.Component),
+		FixedIn:       v.FixedIn,
+		Provider:      v.Provider,
+	}
+	if v.Created != nil {
+		out.Created = v.Created.UTC().Format(rfc3339)
+	}
+	return out
+}
+
+func toAPIDocumentRef(d security.DocumentSummary) v1.SecurityDocumentRef {
+	return v1.SecurityDocumentRef{
+		Kind:        string(d.Kind),
+		Label:       d.Kind.Label(),
+		Available:   d.Available,
+		ContentType: d.ContentType,
+		Bytes:       d.SourceBytes,
+		FetchedAt:   d.FetchedAt,
+		Message:     d.Message,
+	}
+}
+
+// toAPISourceCounts renders one scanner's contribution.
+func toAPISourceCounts(src security.SourceCounts) v1.SecuritySourceCounts {
+	return v1.SecuritySourceCounts{
+		Provider:   src.Provider,
+		Label:      providerLabel(src.Provider),
+		Counts:     toAPICounts(src.Counts),
+		UniqueCVEs: src.UniqueCVEs,
+		OnlyHere:   src.OnlyHere,
+		Artifacts:  src.Artifacts,
+	}
 }
 
 // securityState is the one-word summary of whether a release's numbers can be
@@ -232,6 +288,7 @@ func toAPIPackageSecurity(
 		Counts:        toAPICounts(row.Counts),
 		UniqueCounts:  toAPICounts(distinctCounts(row)),
 		DistinctTotal: row.DistinctTotal,
+		DistinctCVEs:  row.DistinctCVEs,
 		Coverage:      toAPICoverage(row.Coverage),
 		Fingerprint:   row.Fingerprint,
 		Detail:        detail,
@@ -245,6 +302,9 @@ func toAPIPackageSecurity(
 	}
 	if out.Provider != "" {
 		out.Providers = []string{out.Provider}
+	}
+	for _, src := range row.Sources {
+		out.Sources = append(out.Sources, toAPISourceCounts(src))
 	}
 	return out
 }

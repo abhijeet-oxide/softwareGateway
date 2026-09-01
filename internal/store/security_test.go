@@ -133,7 +133,14 @@ func TestSecurityCacheIsScoped(t *testing.T) {
 	}
 }
 
-func TestSecurityExpiredRowsAreNotServed(t *testing.T) {
+// An aged row is still an answer.
+//
+// This asserted the opposite until the store stopped expiring things, and the
+// old assertion was the bug in a test: a release whose findings aged out kept
+// its counts - those live in package_security and never expired - and lost the
+// table behind them, so the page said "90,808 vulnerabilities" over nothing.
+// Age is now a fact the interface reports, not a reason to withhold the row.
+func TestSecurityAgedRowsAreStillServed(t *testing.T) {
 	st := openTestStore(t)
 	sec := NewSecurity(st)
 	scope := testScope()
@@ -144,42 +151,92 @@ func TestSecurityExpiredRowsAreNotServed(t *testing.T) {
 		t.Fatalf("Save: %v", err)
 	}
 
-	// Age both rows by hand rather than by sleeping. Save deliberately coerces
-	// a non-positive TTL to its default - a caller passing zero means "use the
-	// configured retention", not "expire immediately" - so the only honest way
-	// to reach an expired row in a test is to write one.
+	// Aged by hand rather than by sleeping. Save coerces a non-positive TTL to
+	// its default - a caller passing zero means "use the configured retention",
+	// not "evict immediately" - so the only honest way to reach an evictable
+	// row in a test is to write one.
 	past := securityTime(time.Now().UTC().Add(-time.Hour))
 	for _, table := range []string{"security_scans", "security_details"} {
 		if _, err := st.DB().ExecContext(t.Context(),
-			"UPDATE "+table+" SET expires_at = ?", past); err != nil {
+			"UPDATE "+table+" SET evictable_at = ?", past); err != nil {
 			t.Fatalf("age %s: %v", table, err)
 		}
 	}
 
 	refs := []security.ArtifactRef{securityRef("cfx-main", "sha256:aaa")}
-	if got, _ := sec.LoadSummaries(t.Context(), scope, refs); len(got) != 0 {
-		t.Errorf("served %d expired summaries", len(got))
+	if got, _ := sec.LoadSummaries(t.Context(), scope, refs); len(got) != 1 {
+		t.Errorf("served %d aged summaries, want 1", len(got))
 	}
-	if got, _ := sec.LoadDetails(t.Context(), scope, refs); len(got) != 0 {
-		t.Errorf("served %d expired details", len(got))
+	if got, _ := sec.LoadDetails(t.Context(), scope, refs); len(got) != 1 {
+		t.Errorf("served %d aged details, want 1", len(got))
 	}
 
-	scans, details, err := sec.Sweep(t.Context())
+	// And inside the budget the sweep leaves them where they are, however old.
+	res, err := sec.Sweep(t.Context(), CacheBudget{})
 	if err != nil {
 		t.Fatalf("Sweep: %v", err)
 	}
-	if scans != 1 || details != 1 {
-		t.Errorf("swept %d scans and %d details, want 1 and 1", scans, details)
+	if res.Freed() {
+		t.Errorf("an unbudgeted sweep deleted %d rows; it should delete nothing",
+			res.Details+res.Documents+res.Orphans)
+	}
+	if got, _ := sec.LoadDetails(t.Context(), scope, refs); len(got) != 1 {
+		t.Error("the sweep removed a detail row that was inside the budget")
+	}
+}
+
+// Over the budget, the heavy tier goes and the index stays.
+//
+// The order is the point: a detail payload costs one scanner request to rebuild
+// and a scan row plus its findings costs a whole sync, so the budget is spent
+// on the cheap half first and the expensive half is not in it at all.
+func TestSecuritySweepEvictsHeavyTierOverBudget(t *testing.T) {
+	st := openTestStore(t)
+	sec := NewSecurity(st)
+	scope := testScope()
+
+	var reports []security.Report
+	for _, digest := range []string{"sha256:aaa", "sha256:bbb", "sha256:ccc"} {
+		reports = append(reports, securityReport("cfx-"+digest[7:10], digest,
+			securityFinding("CVE-1", security.SeverityHigh, "openssl", "1.0", true)))
+	}
+	if err := sec.Save(t.Context(), scope, reports, true, longTTL()); err != nil {
+		t.Fatalf("Save: %v", err)
+	}
+	past := securityTime(time.Now().UTC().Add(-time.Hour))
+	if _, err := st.DB().ExecContext(t.Context(),
+		"UPDATE security_details SET evictable_at = ?", past); err != nil {
+		t.Fatalf("age details: %v", err)
 	}
 
-	// The cascade takes the index rows with the scan they belong to.
-	var findings int
-	if err := st.DB().QueryRowContext(t.Context(),
-		"SELECT COUNT(*) FROM security_findings").Scan(&findings); err != nil {
-		t.Fatal(err)
+	before, err := sec.Usage(t.Context())
+	if err != nil {
+		t.Fatalf("Usage: %v", err)
 	}
-	if findings != 0 {
-		t.Errorf("%d index rows outlived the scan they belong to", findings)
+	if before.Details != 3 {
+		t.Fatalf("stored %d detail rows, want 3", before.Details)
+	}
+
+	// A budget of one byte: everything evictable has to go.
+	res, err := sec.Sweep(t.Context(), CacheBudget{Bytes: 1})
+	if err != nil {
+		t.Fatalf("Sweep: %v", err)
+	}
+	if res.Details == 0 {
+		t.Error("an over-budget sweep evicted no detail rows")
+	}
+
+	after, err := sec.Usage(t.Context())
+	if err != nil {
+		t.Fatalf("Usage: %v", err)
+	}
+	if after.Scans != before.Scans {
+		t.Errorf("the sweep took %d scan rows; the index tier is not in the budget",
+			before.Scans-after.Scans)
+	}
+	if after.Findings != before.Findings {
+		t.Errorf("the sweep took %d finding rows; the index tier is not in the budget",
+			before.Findings-after.Findings)
 	}
 }
 

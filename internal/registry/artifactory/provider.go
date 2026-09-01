@@ -25,8 +25,12 @@ import (
 // exists anyway is stated on it: the alternative is a core platform that speaks
 // Xray's JSON, and a second scanner that is a rewrite rather than a package.
 type XrayProvider struct {
-	client      *XrayClient
-	concurrency int
+	client *XrayClient
+	// pace is how hard to push THIS scanner, and it outlives one sync on
+	// purpose. A release synced at 2am against a busy Xray teaches the pacer
+	// what that Xray can answer; the next release should not have to learn it
+	// again from a sixty-second timeout. See pacer.go.
+	pace *pacer
 }
 
 // NewXrayProvider builds the provider for one JFrog repository.
@@ -48,11 +52,10 @@ func NewXrayProvider(cfg XrayConfig, settings XraySettings) (security.Provider, 
 	if err != nil {
 		return nil, err
 	}
-	concurrency := settings.Concurrency
-	if concurrency <= 0 {
-		concurrency = DefaultConcurrency
-	}
-	return &XrayProvider{client: client, concurrency: concurrency}, nil
+	return &XrayProvider{
+		client: client,
+		pace:   newPacer(settings.Concurrency, client.BatchSize()),
+	}, nil
 }
 
 // Name implements security.Provider.
@@ -66,19 +69,25 @@ func (p *XrayProvider) Ping(ctx context.Context) error { return p.client.Ping(ct
 
 // Scan implements security.Provider.
 //
-// # Parallel, in batches, bounded
+// # Parallel, in batches, and both of them adaptive
 //
-// A release in this system is 157 images. Asking Xray about them one at a time
-// is 157 sequential round trips against an endpoint that answers in hundreds of
-// milliseconds, which is a minute of staring at a spinner for information Xray
-// could return in a few seconds.
+// A release in this system is 157 images, sometimes 260. Asking Xray about them
+// one at a time is that many sequential round trips for information Xray can
+// return in a few seconds, so requests are batched and several are in flight.
 //
-// So: batched (one call asks about fifty artifacts) and parallel (a few calls
-// in flight). Both bounds matter and they bound different things. The batch
-// bounds the blast radius of one failure - a failed call costs fifty artifacts'
-// results, not a release's. The concurrency bounds what we do to Xray, which is
-// rate-limited and whose summary endpoint is expensive server-side; sixty
-// parallel calls is not ten times faster than six, it is a 429 storm.
+// What changed is that neither number is a constant any more. A batch of fifty
+// is right for an Xray with headroom and catastrophic for one that is busy: the
+// request times out after a minute, and until now every one of the six
+// outstanding batches discovered that independently, then split itself and
+// discovered it again. One real sync spent thirteen of its fourteen minutes
+// logging the same sentence twenty-four times.
+//
+// So the size of a batch and the number in flight are decided by a pacer shared
+// across every request to this scanner (pacer.go), work is handed out by a queue
+// rather than partitioned up front (queue.go), and a batch that times out is
+// SPLIT BACK ONTO THE QUEUE rather than retried in series inside the slot it
+// already holds. The first timeout still costs a minute. The twentieth does not
+// happen, because by then the batch is twelve.
 //
 // # Why a failed batch is not an error
 //
@@ -125,7 +134,7 @@ func (p *XrayProvider) Scan(ctx context.Context, refs []security.ArtifactRef, op
 		return reports, nil
 	}
 
-	batches := batchIndexes(queryable, p.client.BatchSize())
+	sort.Ints(queryable)
 	security.ReportStage(opts.Progress, security.StageFetching, 0, len(queryable))
 	if skipped := len(refs) - len(queryable); skipped > 0 {
 		security.ReportNote(opts.Progress, fmt.Sprintf(
@@ -145,13 +154,31 @@ func (p *XrayProvider) Scan(ctx context.Context, refs []security.ArtifactRef, op
 	// Counting FAILURES as well as progress, because "142 of 258" tells a
 	// watcher the work is moving and nothing else. On a scanner that is timing
 	// out, the number that matters is the one going up beside it.
-	record := func(batch []int, found map[string]xrayArtifact, notIndexed map[string]string, err error) {
+	record := func(batch []int, res summaryResult, err error) {
 		mu.Lock()
 		defer mu.Unlock()
 		for _, i := range batch {
-			reports[i] = p.reportFor(refs[i], found, notIndexed, err, opts.Detail, now)
+			reports[i] = p.reportFor(refs[i], res, err, opts.Detail, now)
 			if reports[i].Status == security.StatusUnavailable {
 				failed++
+			}
+			// The scanner's own body for this image, handed to whoever asked to
+			// keep it. Emitted HERE rather than re-fetched at export time,
+			// because re-fetching is the fifteen-minute sync all over again for
+			// a download somebody expects to be instant.
+			if opts.Sink != nil {
+				if raw, ok := res.Raw[checksumOf(refs[i].Digest)]; ok && len(raw) > 0 {
+					opts.Sink.Document(security.Document{
+						Artifact:    refs[i],
+						Kind:        security.DocumentVulnerabilities,
+						Provider:    providerName,
+						ContentType: "application/json",
+						Payload:     append([]byte(nil), raw...),
+						Available:   true,
+						FetchedAt:   now,
+						SourceBytes: len(raw),
+					})
+				}
 			}
 		}
 		done += len(batch)
@@ -162,29 +189,85 @@ func (p *XrayProvider) Scan(ctx context.Context, refs []security.ArtifactRef, op
 		}
 	}
 
-	g, gctx := errgroup.WithContext(ctx)
-	g.SetLimit(p.concurrency)
+	queue := newBatchQueue(queryable)
+	// A cancelled sync must wake the workers waiting on the queue, or each one
+	// blocks on a condition nobody will ever signal - a goroutine per worker,
+	// held for the life of the process.
+	stop := make(chan struct{})
+	defer close(stop)
+	go func() {
+		select {
+		case <-ctx.Done():
+			queue.Close()
+		case <-stop:
+		}
+	}()
 
-	for _, batch := range batches {
-		batch := batch
-		g.Go(func() error {
-			p.fetchBatch(gctx, refs, batch, record, opts.Progress)
-			return nil
-		})
+	// One worker per slot the operator allowed. They are cheap and idle
+	// whenever the pacer has withheld their slot, which is exactly the shape
+	// wanted: the ceiling is what an operator configured, and how much of it is
+	// used is what the scanner has earned.
+	var wg sync.WaitGroup
+	for range p.pace.maxInFlight {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			p.work(ctx, queue, refs, record, opts.Progress)
+		}()
 	}
+	wg.Wait()
 
-	// No batch returns an error, by construction: a per-artifact failure is a
-	// report. An error here can only be a cancelled context, and that one IS
-	// worth returning - the caller asked us to stop.
-	if err := g.Wait(); err != nil {
-		return reports, err
-	}
 	if err := ctx.Err(); err != nil {
 		return reports, err
 	}
 
+	if batch, inFlight, shrinks, _ := p.pace.Settled(); shrinks > 0 {
+		// Said once, at the end, and only when the pacer actually had to move.
+		// This is the line that answers "why did that take eleven minutes" -
+		// and without it the only evidence is a wall clock and a shrug.
+		security.ReportNote(opts.Progress, fmt.Sprintf(
+			"JFrog Xray was slow, so requests were made smaller: %d images per request "+
+				"and %d requests at a time by the end. %d requests in total.",
+			batch, inFlight, requests))
+	}
+
 	p.separateMissingFromUnindexed(ctx, reports, opts.Progress)
 	return reports, nil
+}
+
+// work is one worker: take a batch at the size the pacer currently allows, send
+// it, and hand back whatever needs retrying.
+//
+// The slot is held across the whole request and released before the next Take,
+// so a worker blocked on the pacer is not also holding a queue slot open - the
+// deadlock that shape produces is a queue that will not hand out work because
+// every worker is waiting for a slot held by a worker waiting for work.
+func (p *XrayProvider) work(
+	ctx context.Context,
+	queue *batchQueue,
+	refs []security.ArtifactRef,
+	record func([]int, summaryResult, error),
+	progress security.Progress,
+) {
+	for {
+		if ctx.Err() != nil {
+			return
+		}
+		batch := queue.Take(p.pace.Batch())
+		if len(batch) == 0 {
+			return
+		}
+		if err := p.pace.Acquire(ctx); err != nil {
+			// A cancelled sync. The batch is abandoned deliberately: its
+			// artifacts keep whatever they had, and Scan returns the context's
+			// error so the caller knows this run did not finish.
+			queue.Done()
+			return
+		}
+		left, right := p.fetchBatch(ctx, refs, batch, record, progress)
+		p.pace.Release()
+		queue.Done(left, right)
+	}
 }
 
 // separateMissingFromUnindexed turns Xray's one sentence back into two facts.
@@ -243,7 +326,7 @@ func (p *XrayProvider) separateMissingFromUnindexed(
 	}
 
 	g, gctx := errgroup.WithContext(ctx)
-	g.SetLimit(p.concurrency)
+	g.SetLimit(p.pace.InFlight())
 
 	for _, chunk := range chunkIndexes(pending, ChecksumQueryLimit) {
 		chunk := chunk
@@ -307,7 +390,7 @@ func (p *XrayProvider) probeEachImage(
 ) (missing int, failed bool) {
 	var mu sync.Mutex
 	g, gctx := errgroup.WithContext(ctx)
-	g.SetLimit(p.concurrency)
+	g.SetLimit(p.pace.InFlight())
 
 	for _, i := range pending {
 		i := i
@@ -365,12 +448,17 @@ const (
 // of images were slow to summarise. The batch is an optimisation, and an
 // optimisation that loses the answer is not one.
 //
-// So a batch that TIMES OUT is halved and both halves are retried, down to a
-// single artifact. The cost is bounded: a batch of fifty that fails entirely
-// costs at most ninety-nine requests, and one that fails because of a single
-// slow image costs about a dozen and returns the other forty-nine. The
-// alternative - a smaller batch for everybody - pays the round trips on every
-// sync against a scanner that is coping perfectly well.
+// So a batch that TIMES OUT is halved. What changed is what happens to the
+// halves: they are RETURNED, for the caller to put back on the queue, instead
+// of being re-sent here one after the other. That recursion was correct and it
+// serialized the recovery - a batch needing four splits paid four sixty-second
+// timeouts in a row inside one slot, while the other workers had nothing to do.
+// Returned, the halves are picked up by whichever worker is free, in parallel,
+// inside the same global allowance the semaphore enforces.
+//
+// The failure also teaches the pacer, so the NEXT batch any worker takes is
+// already smaller. That is the difference between paying the discovery once and
+// paying it twenty-four times.
 //
 // Only a TIMEOUT is worth splitting. A 401 will refuse the halves too, and
 // retrying it fifty times is a way to get an account locked rather than an
@@ -379,29 +467,56 @@ func (p *XrayProvider) fetchBatch(
 	ctx context.Context,
 	refs []security.ArtifactRef,
 	batch []int,
-	record func([]int, map[string]xrayArtifact, map[string]string, error),
+	record func([]int, summaryResult, error),
 	progress security.Progress,
-) {
+) (left, right []int) {
 	checksums := make([]string, 0, len(batch))
 	for _, i := range batch {
 		checksums = append(checksums, refs[i].Digest)
 	}
 
-	found, notIndexed, err := p.client.ArtifactSummary(ctx, checksums)
-	if err == nil || len(batch) == 1 || !worthSplitting(ctx, err) {
-		record(batch, found, notIndexed, err)
-		return
+	res, err := p.client.ArtifactSummary(ctx, checksums)
+	if err == nil {
+		p.pace.Win()
+		record(batch, res, nil)
+		return nil, nil
+	}
+
+	// The pacer learns from a failure the smaller batch might fix, and from a
+	// refusal it will not. A 401 told it to back off would slow every later
+	// sync against a scanner that is perfectly healthy and simply does not know
+	// us.
+	if split := worthSplitting(ctx, err); split {
+		p.pace.Setback(isRateLimited(err))
+	}
+
+	if len(batch) == 1 || !worthSplitting(ctx, err) {
+		record(batch, res, err)
+		return nil, nil
 	}
 
 	half := len(batch) / 2
 	security.ReportNote(progress, fmt.Sprintf(
-		"JFrog Xray timed out on %d artifacts. Retrying as two smaller requests.", len(batch)))
+		"JFrog Xray timed out on %d artifacts. Retrying as two smaller requests, "+
+			"and asking for %d at a time from here on.", len(batch), p.pace.Batch()))
+	return batch[:half], batch[half:]
+}
 
-	// Sequentially, not in parallel. The scanner has just told us it is
-	// struggling, and answering that by doubling the requests in flight is how
-	// a slow Xray becomes an unreachable one.
-	p.fetchBatch(ctx, refs, batch[:half], record, progress)
-	p.fetchBatch(ctx, refs, batch[half:], record, progress)
+// isRateLimited reports whether a failure is the scanner saying "too many at
+// once" rather than "too much at once".
+//
+// The two want opposite corrections - fewer requests in flight against a
+// smaller request - and answering one with the other makes a sync slower
+// without making it quieter.
+func isRateLimited(err error) bool {
+	var re *registry.Error
+	if !errors.As(err, &re) {
+		return false
+	}
+	if re.StatusCode == http.StatusTooManyRequests {
+		return true
+	}
+	return registry.ClassOf(re.Err) == registry.ClassRateLimited
 }
 
 // worthSplitting reports whether a failure might succeed on a smaller batch.
@@ -464,8 +579,7 @@ func worthSplitting(ctx context.Context, err error) bool {
 // page that says the release is clean.
 func (p *XrayProvider) reportFor(
 	ref security.ArtifactRef,
-	found map[string]xrayArtifact,
-	notIndexed map[string]string,
+	res summaryResult,
 	callErr error,
 	detail bool,
 	now time.Time,
@@ -479,17 +593,22 @@ func (p *XrayProvider) reportFor(
 	}
 
 	key := checksumOf(ref.Digest)
-	artifact, ok := found[key]
+	artifact, ok := res.Found[key]
 	if !ok {
 		r.Status = security.StatusNotScanned
-		r.Message = notIndexedMessage(notIndexed[key])
+		r.Message = notIndexedMessage(res.NotIndexed[key])
 		return r
 	}
 
 	r.Status = security.StatusScanned
 	r.ScannedAt = parseXrayTime(artifact.General.ScanTime)
-	findings := normalizeArtifact(artifact)
+	findings, malware := normalizeArtifact(artifact)
 	r.Findings = findings
+	// Malware is carried beside the findings rather than among them. A
+	// malicious package is not a backlog item to grade against ninety thousand
+	// others; it is a release that does not ship, and burying it in a table
+	// sorted by severity is how it ships anyway.
+	r.Malware = malware
 	r.Recount()
 	// A counts-only request keeps the arithmetic and drops the rows. That is
 	// what a package listing's vulnerability column needs, and shipping a
@@ -497,6 +616,7 @@ func (p *XrayProvider) reportFor(
 	// listing that opens and one that does not.
 	if !detail {
 		r.Findings = nil
+		r.Malware = nil
 	}
 	return r
 }
@@ -564,25 +684,6 @@ func detailOr(e *registry.Error, fallback string) string {
 		return e.Detail
 	}
 	return fallback
-}
-
-// batchIndexes splits indexes into batches of at most size, deterministically.
-func batchIndexes(idx []int, size int) [][]int {
-	if size <= 0 {
-		size = DefaultBatchSize
-	}
-	sorted := append([]int(nil), idx...)
-	sort.Ints(sorted)
-
-	var out [][]int
-	for start := 0; start < len(sorted); start += size {
-		end := start + size
-		if end > len(sorted) {
-			end = len(sorted)
-		}
-		out = append(out, sorted[start:end])
-	}
-	return out
 }
 
 // PathFor builds the Artifactory storage path of an artifact's manifest, for

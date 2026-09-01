@@ -59,6 +59,10 @@ type fakeSyncer struct {
 	// storeHandle lets the fake write through the real store, so the read
 	// paths under test are the production ones.
 	storeHandle store.Store
+	// documents is what the sync "captured" from the scanner, keyed by artifact
+	// digest then kind. Written through the real store for the same reason the
+	// reports are.
+	documents map[string]map[security.DocumentKind][]byte
 }
 
 func (f *fakeSyncer) Start(ctx context.Context, req security.SyncRequest) (security.SyncStatus, error) {
@@ -92,6 +96,22 @@ func (f *fakeSyncer) Start(ctx context.Context, req security.SyncRequest) (secur
 		security.CacheTTL{Summary: time.Hour, Detail: time.Hour}); err != nil {
 		return security.SyncStarted, err
 	}
+	var docs []security.Document
+	for _, ref := range req.Artifacts {
+		for kind, body := range f.documents[ref.Digest] {
+			docs = append(docs, security.Document{
+				Artifact: ref, Kind: kind, Provider: "jfrog-xray",
+				ContentType: "application/json", Payload: body,
+				Available: true, SourceBytes: len(body), FetchedAt: time.Now().UTC(),
+			})
+		}
+	}
+	if len(docs) > 0 {
+		if err := sec.SaveDocuments(ctx, req.Scope, docs, time.Hour); err != nil {
+			return security.SyncStarted, err
+		}
+	}
+
 	posture := security.Summarize(reports)
 	return security.SyncStarted, f.packages.Record(ctx, security.PackageResult{
 		PackageID:   req.PackageID,
@@ -141,7 +161,10 @@ type securityHarness struct {
 func newSecurityHarness(t *testing.T) *securityHarness {
 	t.Helper()
 
-	syncer := &fakeSyncer{reports: map[string]security.Report{}}
+	syncer := &fakeSyncer{
+		reports:   map[string]security.Report{},
+		documents: map[string]map[security.DocumentKind][]byte{},
+	}
 	h := newAPIHarnessWith(t, func(d *Deps) {
 		pkgSec := store.NewPackageSecurity(d.Store)
 		syncer.packages = pkgSec
@@ -166,6 +189,19 @@ func (s harnessSecurityStore) ReportsFor(
 	ctx context.Context, scope security.Scope, refs []security.ArtifactRef,
 ) ([]security.Report, error) {
 	return s.reports.ReportsFor(ctx, scope, refs)
+}
+
+func (s harnessSecurityStore) LoadDocuments(
+	ctx context.Context, scope security.Scope,
+	refs []security.ArtifactRef, kinds []security.DocumentKind,
+) (map[string]map[security.DocumentKind]security.Document, error) {
+	return s.reports.LoadDocuments(ctx, scope, refs, kinds)
+}
+
+func (s harnessSecurityStore) DocumentSummaries(
+	ctx context.Context, scope security.Scope, refs []security.ArtifactRef,
+) (map[string][]security.DocumentSummary, error) {
+	return s.reports.DocumentSummaries(ctx, scope, refs)
 }
 
 // A release nobody has synced is not a clean release. It is the state the whole
@@ -492,7 +528,7 @@ func TestSecurityExportCSVCarriesEveryRowsWholeAddress(t *testing.T) {
 	for i, name := range rows[0] {
 		index[name] = i
 	}
-	for _, column := range []string{"Product", "Release", "Artifact", "CVE", "Severity", "Package", "Fixable"} {
+	for _, column := range []string{"Product", "Release", "Image", "CVE", "Severity", "Package", "Fixable"} {
 		if _, ok := index[column]; !ok {
 			t.Errorf("export has no %q column, so a row cannot be acted on out of context", column)
 		}
@@ -525,6 +561,188 @@ func TestSecurityExportXLSXIsAWorkbook(t *testing.T) {
 		if !found[part] {
 			t.Errorf("workbook is missing %s", part)
 		}
+	}
+}
+
+// A workbook holds every table the interface shows, not a summary of them.
+//
+// The old detailed export was a twenty-six-row field/value sheet and one flat
+// findings sheet, and nobody exports a spreadsheet to read a headline.
+func TestSecurityExportWorkbookCarriesTheTablesOnScreen(t *testing.T) {
+	h := newSecurityHarness(t)
+	h.seedPackage("25.7.2131", digestA)
+	h.syncer.reports[digestA] = scannedReport(
+		apiFinding("CVE-2024-3094", security.SeverityCritical, "openssl", true))
+	h.post("/api/v1/products/vendor-a/packages/25.7.2131:syncSecurity", `{}`, nil)
+
+	body, _ := h.getRaw(
+		"/api/v1/products/vendor-a/packages/25.7.2131/security/export?format=xlsx&view=detailed")
+	zr, err := zip.NewReader(bytes.NewReader(body), int64(len(body)))
+	if err != nil {
+		t.Fatalf("not a zip: %v", err)
+	}
+
+	var workbook string
+	for _, f := range zr.File {
+		if f.Name != "xl/workbook.xml" {
+			continue
+		}
+		rc, err := f.Open()
+		if err != nil {
+			t.Fatal(err)
+		}
+		raw, err := io.ReadAll(rc)
+		_ = rc.Close()
+		if err != nil {
+			t.Fatal(err)
+		}
+		workbook = string(raw)
+	}
+	for _, sheet := range []string{"Unique CVEs", "All findings", "Images"} {
+		if !strings.Contains(workbook, sheet) {
+			t.Errorf("workbook has no %q sheet: %s", sheet, workbook)
+		}
+	}
+	if strings.Contains(workbook, "Summary") {
+		t.Error("the detailed export still leads with a field/value summary sheet")
+	}
+}
+
+// A CSV holds one table, and which one is the caller's to choose.
+//
+// It used to be "the last sheet assembled", which handed back the Problems tab
+// to somebody who exported the vulnerabilities they were looking at.
+func TestSecurityExportCSVHonoursTheRequestedTable(t *testing.T) {
+	h := newSecurityHarness(t)
+	h.seedPackage("25.7.2131", digestA)
+	h.syncer.reports[digestA] = scannedReport(
+		apiFinding("CVE-2024-3094", security.SeverityCritical, "openssl", true))
+	h.post("/api/v1/products/vendor-a/packages/25.7.2131:syncSecurity", `{}`, nil)
+
+	for table, wantColumn := range map[string]string{
+		"unique": "Images affected",
+		"images": "Vulnerabilities",
+	} {
+		body, _ := h.getRaw("/api/v1/products/vendor-a/packages/25.7.2131/security/export" +
+			"?format=csv&view=detailed&table=" + table)
+		rows, err := csv.NewReader(
+			strings.NewReader(strings.TrimPrefix(string(body), "\xef\xbb\xbf"))).ReadAll()
+		if err != nil || len(rows) == 0 {
+			t.Fatalf("table=%s: parse csv: %v", table, err)
+		}
+		if !strings.Contains(strings.Join(rows[0], ","), wantColumn) {
+			t.Errorf("table=%s gave columns %v, want one called %q", table, rows[0], wantColumn)
+		}
+	}
+}
+
+// The bundle is the tables BESIDE the scanner's own responses, laid out one
+// directory per kind, per image, per tag.
+//
+// Kind first because that is how it is consumed: somebody forwarding a
+// vulnerability report to a customer sends `vulnerabilities/`.
+func TestSecurityExportBundleCarriesTheScannersOwnResponses(t *testing.T) {
+	h := newSecurityHarness(t)
+	h.seedPackage("25.7.2131", digestA)
+	h.syncer.reports[digestA] = scannedReport(
+		apiFinding("CVE-2024-3094", security.SeverityCritical, "openssl", true))
+	h.syncer.documents[digestA] = map[security.DocumentKind][]byte{
+		security.DocumentVulnerabilities: []byte(`{"artifacts":[{"general":{"name":"cfx"}}]}`),
+		security.DocumentSBOM:            []byte(`{"bomFormat":"CycloneDX"}`),
+	}
+	h.post("/api/v1/products/vendor-a/packages/25.7.2131:syncSecurity", `{}`, nil)
+
+	body, header := h.getRaw(
+		"/api/v1/products/vendor-a/packages/25.7.2131/security/export?format=zip&view=detailed")
+	if header.Get("Content-Type") != "application/zip" {
+		t.Fatalf("content type = %q", header.Get("Content-Type"))
+	}
+	zr, err := zip.NewReader(bytes.NewReader(body), int64(len(body)))
+	if err != nil {
+		t.Fatalf("not a zip: %v", err)
+	}
+
+	names := make([]string, 0, len(zr.File))
+	for _, f := range zr.File {
+		names = append(names, f.Name)
+	}
+	joined := strings.Join(names, "\n")
+
+	if !strings.Contains(joined, "README.txt") {
+		t.Error("the bundle has no README, so its recipient has to ask what it is")
+	}
+	if !strings.Contains(joined, "tables/all-findings.csv") {
+		t.Errorf("the bundle has no tables: %v", names)
+	}
+	for _, dir := range []string{"vulnerabilities/", "sbom/"} {
+		if !strings.Contains(joined, dir) {
+			t.Errorf("the bundle has no %s directory: %v", dir, names)
+		}
+	}
+
+	// And the body inside is the scanner's, byte for byte. A bundle carrying
+	// this platform's reading of the scanner's answer would be the whole point
+	// of the bundle, lost.
+	for _, f := range zr.File {
+		if !strings.HasPrefix(f.Name, "sbom/") {
+			continue
+		}
+		rc, err := f.Open()
+		if err != nil {
+			t.Fatal(err)
+		}
+		raw, err := io.ReadAll(rc)
+		_ = rc.Close()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if string(raw) != `{"bomFormat":"CycloneDX"}` {
+			t.Errorf("%s = %q, want the scanner's own body unaltered", f.Name, raw)
+		}
+	}
+}
+
+// One image's document, downloaded on its own.
+func TestSecurityDocumentDownloadServesOneImagesBody(t *testing.T) {
+	h := newSecurityHarness(t)
+	h.seedPackage("25.7.2131", digestA)
+	h.syncer.reports[digestA] = scannedReport(
+		apiFinding("CVE-2024-3094", security.SeverityCritical, "openssl", true))
+	h.syncer.documents[digestA] = map[security.DocumentKind][]byte{
+		security.DocumentSBOM: []byte(`{"bomFormat":"CycloneDX","components":[]}`),
+	}
+	h.post("/api/v1/products/vendor-a/packages/25.7.2131:syncSecurity", `{}`, nil)
+
+	body, header := h.getRaw(
+		"/api/v1/products/vendor-a/packages/25.7.2131/security/documents/sbom?digest=" + digestA)
+	if string(body) != `{"bomFormat":"CycloneDX","components":[]}` {
+		t.Errorf("body = %q, want the scanner's own SBOM", body)
+	}
+	if !strings.Contains(header.Get("Content-Disposition"), "attachment") {
+		t.Errorf("Content-Disposition = %q, want an attachment", header.Get("Content-Disposition"))
+	}
+	// One repository's findings, under one repository's permissions. A shared
+	// cache must never hold them.
+	if !strings.Contains(header.Get("Cache-Control"), "private") {
+		t.Errorf("Cache-Control = %q, want it private", header.Get("Cache-Control"))
+	}
+}
+
+// A digest this release does not contain is refused.
+//
+// Not a 404 for tidiness: the path resolves the artifact from the release's own
+// tree so a caller cannot point this Coordinator's JFrog credential at an image
+// in a repository they were never entitled to ask about.
+func TestSecurityDocumentDownloadRefusesAForeignDigest(t *testing.T) {
+	h := newSecurityHarness(t)
+	h.seedPackage("25.7.2131", digestA)
+	h.syncer.reports[digestA] = scannedReport()
+	h.post("/api/v1/products/vendor-a/packages/25.7.2131:syncSecurity", `{}`, nil)
+
+	code := h.get("/api/v1/products/vendor-a/packages/25.7.2131/security/documents/sbom"+
+		"?digest=sha256:"+strings.Repeat("f", 64), nil)
+	if code != http.StatusNotFound {
+		t.Errorf("got %d for a digest this release does not contain, want 404", code)
 	}
 }
 

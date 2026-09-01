@@ -1540,7 +1540,14 @@ export interface PackageSecuritySummary {
    */
   stalled?: boolean
   counts: SecurityCounts
+  /**
+   * distinctTotal collapses (CVE, package) PAIRS; distinctCves collapses the
+   * advisory alone. Two right answers to two questions - openssl and libssl3
+   * carrying one advisory are two things to upgrade and one advisory to read -
+   * and the panel used to print the first under the second's name.
+   */
   distinctTotal: number
+  distinctCves: number
   complete: boolean
   /**
    * What "0 vulnerabilities" actually means. Zero of zero is "nobody looked"
@@ -1624,6 +1631,71 @@ export interface SecurityFinding {
   published?: string
   provider: string
   policy?: string
+  /**
+   * Every scanner that reported this finding.
+   *
+   * `provider` says which row this came from; `sources` says who agrees. One
+   * entry on a single-scanner deployment, where the column is hidden - a column
+   * reading "JFrog Xray" on every row costs width and says nothing.
+   */
+  sources?: string[]
+}
+
+/**
+ * One breach of a configured policy - the gate, rather than the backlog.
+ *
+ * Not a finding with a policy field. A finding is "this image contains
+ * CVE-2026-31789"; a violation is "your Production watch forbids critical
+ * fixable issues and this image has four". It exists because somebody wrote a
+ * rule, it disappears when the rule changes, and it can be raised against a
+ * licence with no CVE anywhere near it.
+ */
+export interface SecurityViolation {
+  id?: string
+  type?: string
+  severity: Severity
+  severityLabel: string
+  watch?: string
+  policy?: string
+  rule?: string
+  summary?: string
+  description?: string
+  cve?: string
+  component: SecurityComponent
+  fixedIn?: string[]
+  created?: string
+  provider?: string
+}
+
+/** A scanner body held for one image, named and measured but not carried. */
+export interface SecurityDocumentRef {
+  kind: 'vulnerabilities' | 'sbom' | 'policy' | 'malware'
+  label: string
+  /**
+   * False for a body the scanner was asked for and did not have. Worth saying:
+   * the alternative is a button that silently downloads nothing.
+   */
+  available: boolean
+  contentType?: string
+  bytes?: number
+  fetchedAt?: string
+  message?: string
+  url?: string
+}
+
+/**
+ * One scanner's contribution to a release.
+ *
+ * `onlyHere` is the number the comparison exists for: advisories this scanner
+ * reported and no other did.
+ */
+export interface SecuritySourceCounts {
+  provider: string
+  label: string
+  counts: SecurityCounts
+  uniqueCves: number
+  onlyHere: number
+  artifacts: number
 }
 
 export interface SecurityReport {
@@ -1634,6 +1706,18 @@ export interface SecurityReport {
   message?: string
   findings?: SecurityFinding[]
   counts: SecurityCounts
+  /**
+   * What the scanner found that is not a vulnerability.
+   *
+   * Its own list rather than findings with a flag, because it is read by a
+   * different person for a different reason: a vulnerability count is a
+   * backlog, a malware hit is a release that does not ship tonight.
+   */
+  malware?: SecurityFinding[]
+  /** What the scanner's configured policies say about this image. */
+  violations?: SecurityViolation[]
+  /** Which scanner bodies are held, for the download menu. */
+  documents?: SecurityDocumentRef[]
   scannedAt?: string
   retrievedAt?: string
   fromCache?: boolean
@@ -1653,10 +1737,17 @@ export interface PackageSecurityResponse {
   message?: string
   counts: SecurityCounts
   uniqueCounts: SecurityCounts
+  /** See PackageSecuritySummary: two questions, two numbers, named for what they count. */
   distinctTotal: number
+  distinctCves: number
   coverage: SecurityCoverage
   reports: SecurityReport[]
   providers?: string[]
+  /**
+   * Per-scanner counts, present only where more than one scanner contributed.
+   * A segmented control with one position is a control that should not be drawn.
+   */
+  sources?: SecuritySourceCounts[]
   scannedAt?: string
   syncedAt?: string
   fingerprint?: string

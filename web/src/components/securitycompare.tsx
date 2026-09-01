@@ -722,7 +722,6 @@ function ArtifactDeltaCard({ report }: { report: SecurityComparisonResponse }) {
       )}
       <DataTable<SecurityArtifactDelta>
         tableEnhancedKey="security-compare-artifacts"
-        allow_export
         size="small"
         rowKey="key"
         dataSource={rows}
@@ -898,7 +897,6 @@ function ChangeTable({ report, product, baseRef, againstRef, repository }: {
 
       <DataTable<SecurityChange>
         tableEnhancedKey="security-compare-changes"
-        allow_export
         show_column_visibility
         size="small"
         rowKey={(r) => `${r.type}-${r.cve ?? r.id}-${r.component.id}-${r.artifact.name}`}

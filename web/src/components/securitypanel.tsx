@@ -2461,7 +2461,6 @@ function VulnerabilityTable({
     <>
     <DataTable<FlatFinding>
       tableEnhancedKey="security-findings"
-      allow_export
       show_column_visibility
       size="small"
       rowKey={(r) => `${r.cve ?? r.id}-${r.component.id}-${r.artifactName}`}
@@ -2578,7 +2577,6 @@ function ArtifactTable({ reports }: { reports: SecurityReport[] }) {
     <>
     <DataTable<SecurityReport>
       tableEnhancedKey="security-reports"
-      allow_export
       size="small"
       rowKey={(r) => r.artifact.digest || r.artifact.name}
       dataSource={reports}

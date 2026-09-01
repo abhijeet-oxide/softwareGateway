@@ -553,7 +553,6 @@ function ComparisonReport({ report }: { report: CompareResponse }) {
         ) : (
         <DataTable<CompareRow>
           tableEnhancedKey="compare-rows"
-          allow_export
           size="small"
           dataSource={rows}
           rowKey={(r) => `${r.type}-${r.name}-${r.verdict}-${r.a?.digest ?? ''}-${r.b?.digest ?? ''}`}

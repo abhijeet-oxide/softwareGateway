@@ -341,6 +341,7 @@ export default function Overview() {
                   {
                     title: 'Actions',
                     width: 130,
+                    fixed: 'right',
                     render: (_, r) =>
                       r.status === 'NEW' ? (
                         <Link to={releaseHref(r.product.productId, r.pkg)}>

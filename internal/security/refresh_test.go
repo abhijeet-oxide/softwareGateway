@@ -64,7 +64,13 @@ func pick(from map[string]Report, refs []ArtifactRef) map[string]Report {
 type countingProvider struct {
 	reports map[string]Report
 	calls   int
+	seen    []string
 }
+
+// asked is which artifacts the scanner was actually queried about since the
+// last reset, which is the number this file is about.
+func (p *countingProvider) asked() []string { return p.seen }
+func (p *countingProvider) reset()          { p.seen = nil; p.calls = 0 }
 
 func (p *countingProvider) Name() string  { return "stub" }
 func (p *countingProvider) Enabled() bool { return true }
@@ -73,6 +79,7 @@ func (p *countingProvider) Scan(_ context.Context, refs []ArtifactRef, _ ScanOpt
 	p.calls++
 	out := make([]Report, 0, len(refs))
 	for _, ref := range refs {
+		p.seen = append(p.seen, ref.Ref())
 		r, ok := p.reports[ref.Ref()]
 		if !ok {
 			r = Report{Status: StatusNotScanned, Provider: "stub"}
@@ -152,5 +159,104 @@ func TestRefreshOverwritesRatherThanClearingFirst(t *testing.T) {
 	if provider.calls != 2 {
 		t.Errorf("provider called %d times, want 2: a refresh must not be served from cache",
 			provider.calls)
+	}
+}
+
+// A sync asks the scanner only about what it does not already have.
+//
+// This is what storing answers by ARTIFACT is for. Releases of one product
+// share nearly all of their images, so syncing November's release the morning
+// after October's used to re-ask the scanner about 150 images that were the
+// same bytes, already answered for, an hour old - ten minutes of somebody
+// waiting, against somebody else's rate limit, to re-learn something known.
+func TestASyncReusesAnswersInsideTheAgeLimit(t *testing.T) {
+	cache := newRecordingCache()
+	scope := Scope{Product: "cfx", Repository: "jfrog", Provider: "stub"}
+	shared := ArtifactRef{Name: "base", Digest: "sha256:aaa", Kind: "image"}
+	fresh := ArtifactRef{Name: "app", Digest: "sha256:bbb", Kind: "image"}
+
+	provider := &countingProvider{reports: map[string]Report{
+		shared.Ref(): scannedWith("CVE-2024-3094"),
+		fresh.Ref():  scannedWith("CVE-2024-6387"),
+	}}
+	svc := NewService(stubResolver{provider}, cache, nil)
+
+	// October's release, which answers for the shared image.
+	if _, err := svc.Posture(t.Context(), Request{
+		Scope: scope, Artifacts: []ArtifactRef{shared}, Detail: true,
+	}); err != nil {
+		t.Fatalf("first release: %v", err)
+	}
+	asked := provider.asked()
+	if len(asked) != 1 {
+		t.Fatalf("first release asked about %v, want the one image", asked)
+	}
+
+	// November's, which carries the same base image and one of its own.
+	provider.reset()
+	res, err := svc.Posture(t.Context(), Request{
+		Scope: scope, Artifacts: []ArtifactRef{shared, fresh}, Detail: true,
+		MaxAge: time.Hour,
+	})
+	if err != nil {
+		t.Fatalf("second release: %v", err)
+	}
+	asked = provider.asked()
+	if len(asked) != 1 || asked[0] != fresh.Ref() {
+		t.Fatalf("second release asked about %v, want only the image it has not seen", asked)
+	}
+	// And the reused one is still in the answer, with its findings.
+	if res.Posture.Counts.Total != 2 {
+		t.Errorf("posture counted %d findings, want both images' - reuse must not lose data",
+			res.Posture.Counts.Total)
+	}
+
+	// Past the age it is asked about again, because a vulnerability answer
+	// goes out of date without the image changing.
+	provider.reset()
+	if _, err := svc.Posture(t.Context(), Request{
+		Scope: scope, Artifacts: []ArtifactRef{shared, fresh}, Detail: true,
+		MaxAge: time.Nanosecond,
+	}); err != nil {
+		t.Fatalf("aged retrieval: %v", err)
+	}
+	if len(provider.asked()) != 2 {
+		t.Errorf("past the age limit the scanner was asked about %v, want both",
+			provider.asked())
+	}
+}
+
+// A stored "the scanner would not answer" is not an answer, and must not be
+// reused as one. An image that failed during an outage would otherwise stay
+// unanswered until somebody noticed and forced a refresh by hand.
+func TestAFailedArtifactIsAlwaysAskedAboutAgain(t *testing.T) {
+	cache := newRecordingCache()
+	scope := Scope{Product: "cfx", Repository: "jfrog", Provider: "stub"}
+	ref := ArtifactRef{Name: "app", Digest: "sha256:ccc", Kind: "image"}
+
+	provider := &countingProvider{reports: map[string]Report{
+		ref.Ref(): {Status: StatusUnavailable, Message: "JFrog Xray did not answer in time."},
+	}}
+	svc := NewService(stubResolver{provider}, cache, nil)
+
+	if _, err := svc.Posture(t.Context(), Request{
+		Scope: scope, Artifacts: []ArtifactRef{ref}, Detail: true, MaxAge: time.Hour,
+	}); err != nil {
+		t.Fatalf("first: %v", err)
+	}
+
+	provider.reset()
+	provider.reports[ref.Ref()] = scannedWith("CVE-2024-3094")
+	res, err := svc.Posture(t.Context(), Request{
+		Scope: scope, Artifacts: []ArtifactRef{ref}, Detail: true, MaxAge: time.Hour,
+	})
+	if err != nil {
+		t.Fatalf("second: %v", err)
+	}
+	if len(provider.asked()) != 1 {
+		t.Fatal("an image the scanner failed on was treated as answered for")
+	}
+	if res.Posture.Counts.Total != 1 {
+		t.Errorf("the retry did not take: %d findings", res.Posture.Counts.Total)
 	}
 }

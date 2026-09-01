@@ -967,15 +967,24 @@ export function usePackageSecurity(
 export function useSyncPackageSecurity() {
   const qc = useQueryClient()
   return useMutation({
-    mutationFn: ({ product, ref, repository }: {
+    mutationFn: ({ product, ref, repository, force }: {
       product: string
       ref: string
       repository?: string
+      /**
+       * Ask the scanner about every image, even ones already answered for.
+       *
+       * The default reuses a stored answer that is inside the deployment's max
+       * age, which for a release sharing its images with a recently synced one
+       * is most of the release. Forcing is minutes of somebody else's scanner,
+       * so it is a separate thing to press.
+       */
+      force?: boolean
     }) => {
       const { segment, query: q } = packageRef(ref)
       return api.post<SyncSecurityResponse>(
         `/products/${encodeURIComponent(product)}/packages/${encodeURIComponent(segment)}:syncSecurity` +
-        scopeQuery(q, repository), {})
+        scopeQuery(q, repository), force ? { force: true } : {})
     },
     onSuccess: () => {
       // The listing carries the same counts, so it has to learn that one of

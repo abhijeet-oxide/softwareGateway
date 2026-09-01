@@ -93,9 +93,31 @@ type Request struct {
 	Artifacts []ArtifactRef
 	// Detail asks for full findings rather than counts.
 	Detail bool
-	// Refresh bypasses the cache and re-queries the provider. Only a person
-	// pressing refresh should set it.
+	// Refresh bypasses the cache and re-queries the provider for EVERY
+	// artifact. Only a person asking for exactly that should set it.
+	//
+	// It is not what a sync does. See MaxAge.
 	Refresh bool
+	// MaxAge is how old a stored answer may be before this retrieval asks the
+	// scanner about it again. Zero accepts anything held.
+	//
+	// # Why a sync uses this instead of Refresh
+	//
+	// Because stored answers are keyed by ARTIFACT, not by release, and
+	// releases of one product overwhelmingly share their images. Syncing the
+	// November release of a product whose October release was synced this
+	// morning used to ask the scanner about all 157 images; 150 of them were
+	// the same bytes, already answered for, an hour old. That is 150 requests
+	// and ten minutes spent re-learning something already known - and it is
+	// paid by whoever is waiting, against somebody else's rate limit.
+	//
+	// So a sync asks only about what it does not have or what has aged out.
+	// The saving is the whole point of storing by artifact in the first place.
+	MaxAge time.Duration
+	// Rescan names the artifacts to ask about regardless of age, for the case
+	// where the caller knows something the store does not - an image whose scan
+	// failed last time, an SBOM a reader has just asked to generate.
+	Rescan map[string]bool
 	// TTL governs what is written back.
 	TTL CacheTTL
 	// Documents are the extra scanner bodies to retrieve alongside the
@@ -253,17 +275,37 @@ func (s *Service) Posture(ctx context.Context, req Request) (Result, error) {
 	// are collected by the sweep, which is where that belongs.
 
 	var missing []ArtifactRef
+	var reused int
 	reports := make([]Report, 0, len(refs))
+	now := time.Now().UTC()
 	for _, ref := range refs {
-		if r, ok := cached[ref.Ref()]; ok {
-			r.Artifact = ref
-			r.FromCache = true
-			reports = append(reports, r)
+		r, ok := cached[ref.Ref()]
+		switch {
+		case !ok:
+			missing = append(missing, ref)
+			continue
+		case req.Rescan[ref.Ref()]:
+			missing = append(missing, ref)
+			continue
+		case stale(r, req.MaxAge, now):
+			missing = append(missing, ref)
 			continue
 		}
-		missing = append(missing, ref)
+		r.Artifact = ref
+		r.FromCache = true
+		reports = append(reports, r)
+		reused++
 	}
 	res.FromCache = len(reports)
+	if reused > 0 && len(missing) > 0 {
+		// Said out loud, because a sync that finishes in twenty seconds after
+		// a colleague's took ten minutes looks broken otherwise. The saving is
+		// the reason answers are stored by artifact rather than by release.
+		ReportInfo(req.Progress, fmt.Sprintf(
+			"%d of %d images already had a stored result within the age limit and were not "+
+				"asked about again. Asking the scanner about the other %d.",
+			reused, len(refs), len(missing)))
+	}
 
 	if len(reports) > 0 {
 		ReportStage(req.Progress, StageCached, len(reports), len(refs))
@@ -659,4 +701,28 @@ func sortReports(rs []Report) {
 		}
 		return a.Artifact.ArtifactKey() < b.Artifact.ArtifactKey()
 	})
+}
+
+// stale reports whether a stored answer is too old to reuse, or is not an
+// answer at all.
+//
+// A report the scanner would not answer for is ALWAYS retried. It is stored so
+// that a page has something to show - "Xray did not respond" beats a blank -
+// but it is not a result, and treating it as one would mean an image that
+// failed once during an outage stays unanswered until somebody notices and
+// forces a refresh by hand.
+func stale(r Report, maxAge time.Duration, now time.Time) bool {
+	switch r.Status {
+	case StatusUnavailable, StatusNotScanned:
+		return true
+	}
+	if maxAge <= 0 {
+		return false
+	}
+	if r.RetrievedAt.IsZero() {
+		// Stored before this platform recorded retrieval times. Ask again once
+		// rather than trusting an answer whose age is unknown.
+		return true
+	}
+	return now.Sub(r.RetrievedAt) > maxAge
 }

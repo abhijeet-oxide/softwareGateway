@@ -81,11 +81,18 @@ export function SecurityTab({ product, reference, repository }: {
     document.getElementById('security-findings')?.scrollIntoView({ behavior: 'smooth', block: 'start' })
   }
 
-  const startSync = () => {
-    sync.mutate({ product, ref: reference, repository }, {
+  const startSync = (force?: boolean) => {
+    sync.mutate({ product, ref: reference, repository, force }, {
       onSuccess: (res) => {
         message.info(res.started
-          ? `Vulnerability sync started for ${res.artifacts} artifacts. This may take several minutes.`
+          ? force
+            ? `Re-fetching all ${res.artifacts} artifacts. This may take several minutes.`
+            // Deliberately not "started for N artifacts": most of those N are
+            // routinely already answered for and are not asked about again,
+            // and a message promising N requests followed by a sync that
+            // finishes in twenty seconds reads as a sync that did not run.
+            : `Vulnerability sync started for ${res.artifacts} artifacts. Images already `
+              + 'answered for are reused, so this may finish quickly.'
           : 'A sync is already running for this release.')
         void security.refetch()
       },
@@ -150,7 +157,12 @@ export function SecurityTab({ product, reference, repository }: {
         >
           <SyncLogButton sync={data.sync} />
           <StopSyncButton sync={data.sync} onStop={stopSync} pending={cancel.isPending} />
-          <SyncButton sync={data.sync} onSync={startSync} pending={sync.isPending} />
+          <SyncButton
+            sync={data.sync}
+            onSync={startSync}
+            pending={sync.isPending}
+            freshness={data.freshness}
+          />
         </Space>
       </div>
 

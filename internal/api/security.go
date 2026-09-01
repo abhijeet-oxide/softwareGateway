@@ -342,6 +342,12 @@ func (s *Server) handleSyncPackageSecurity(w http.ResponseWriter, r *http.Reques
 		return
 	}
 
+	var body v1.SyncSecurityRequest
+	if err := decodeOptionalJSON(r, &body); err != nil {
+		Error(w, r, v1.CodeInvalidArgument, err.Error())
+		return
+	}
+
 	status, err := s.deps.SecuritySync.Start(r.Context(), security.SyncRequest{
 		PackageID: pkg.ID,
 		Label:     releaseLabel(pkg),
@@ -351,6 +357,11 @@ func (s *Server) handleSyncPackageSecurity(w http.ResponseWriter, r *http.Reques
 		// config.SecurityConfig. The zero value means "use the defaults", which
 		// is right for a Coordinator that has not been told otherwise.
 		TTL: s.deps.SecurityRetention,
+		// Reuse what is already held and inside the age limit. Releases of one
+		// product share most of their images, so this is the difference between
+		// a sync that asks about 157 and one that asks about seven.
+		MaxAge: s.deps.SecurityFreshness.Vulnerabilities,
+		Force:  body.Force,
 	})
 	switch {
 	case errors.Is(err, store.ErrSyncInFlight):

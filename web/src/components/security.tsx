@@ -6,7 +6,7 @@ import {
 import { formatAbsolute, formatRelative } from '../domain/format'
 import { download } from '../api/client'
 import {
-  CheckCircleOutlined, CopyOutlined, DownloadOutlined, ExclamationCircleOutlined,
+  CheckCircleOutlined, CopyOutlined, DownloadOutlined, DownOutlined, ExclamationCircleOutlined,
   FileTextOutlined, LoadingOutlined, MinusCircleOutlined, QuestionCircleOutlined, StopOutlined,
   SyncOutlined, WarningOutlined,
 } from '../icons'
@@ -1024,11 +1024,21 @@ function useElapsed(startedAt: string | undefined, running: boolean): string | u
  * all, and the second is a refresh of one that exists. A button that said the
  * same thing in both places would make the first look optional.
  */
-export function SyncButton({ sync, onSync, pending, size = 'middle' }: {
+export function SyncButton({ sync, onSync, pending, size = 'middle', freshness }: {
   sync: SecuritySyncStatus
-  onSync: () => void
+  /**
+   * `force` asks the scanner about every image, ignoring what is stored.
+   *
+   * The plain press does not. Stored answers are keyed by image and releases
+   * of one product share nearly all of theirs, so an ordinary sync asks about
+   * the images that are missing or past the age limit and reuses the rest -
+   * which is the difference between a sync of seven images and one of a
+   * hundred and fifty-seven against somebody else's rate limit.
+   */
+  onSync: (force?: boolean) => void
   pending?: boolean
   size?: 'small' | 'middle'
+  freshness?: SecurityFreshness
 }) {
   if (!sync.canSync) {
     return (
@@ -1041,11 +1051,19 @@ export function SyncButton({ sync, onSync, pending, size = 'middle' }: {
   // one is a release nobody can sync until a sweeper notices. The server takes
   // the claim from a run that has stopped beating, so this offer is real.
   const running = sync.state === 'syncing' && !sync.stalled
-  return (
+  const scanner = sync.provider === 'jfrog-xray' ? 'JFrog Xray' : 'the scanner'
+  const where = sync.repository ? ` in ${sync.repository}` : ''
+  const reuse = (freshness?.maxAgeSeconds ?? 0) > 0
+
+  const button = (
     <Tooltip
       title={running
         ? 'A sync is already running for this release.'
-        : `Asks ${sync.provider === 'jfrog-xray' ? 'JFrog Xray' : 'the scanner'}${sync.repository ? ` in ${sync.repository}` : ''} about every artifact in this release and stores the answer.`}
+        : reuse
+          ? `Asks ${scanner}${where} about the images this release has no answer for, `
+            + `or whose answer is older than ${describeAge(freshness?.maxAgeSeconds ?? 0)}. `
+            + 'Images already answered for are reused.'
+          : `Asks ${scanner}${where} about every artifact in this release and stores the answer.`}
     >
       <Button
         size={size}
@@ -1053,11 +1071,34 @@ export function SyncButton({ sync, onSync, pending, size = 'middle' }: {
         icon={<SyncOutlined spin={running || pending} />}
         loading={pending}
         disabled={running}
-        onClick={onSync}
+        onClick={() => onSync(false)}
       >
         {running ? 'Syncing' : sync.state === '' ? 'Sync vulnerabilities' : 'Sync again'}
       </Button>
     </Tooltip>
+  )
+
+  // Nothing to reuse means nothing to force past, so the second option would
+  // be two names for one action.
+  if (!reuse || running) return button
+
+  return (
+    <Space.Compact>
+      {button}
+      <Dropdown
+        disabled={pending}
+        menu={{
+          items: [{
+            key: 'force',
+            icon: <SyncOutlined />,
+            label: 'Re-fetch every image',
+          }],
+          onClick: () => onSync(true),
+        }}
+      >
+        <Button size={size} icon={<DownOutlined />} aria-label="More sync options" />
+      </Dropdown>
+    </Space.Compact>
   )
 }
 

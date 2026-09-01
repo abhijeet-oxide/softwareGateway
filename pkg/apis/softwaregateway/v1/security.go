@@ -314,6 +314,22 @@ type SecurityLogEntry struct {
 
 // SyncSecurityResponse is POST
 // /api/v1/products/{product}/packages/{package}:syncSecurity.
+// SyncSecurityRequest is the optional body of a sync.
+//
+// Empty is the ordinary case and means "bring this release up to date": images
+// whose stored answer is inside the deployment's max age are reused rather than
+// asked about again, which for a release sharing its images with one synced
+// recently is most of the release and most of the time.
+type SyncSecurityRequest struct {
+	// Force asks the scanner about every image regardless of what is held.
+	//
+	// For the person who has a reason to distrust what is stored - a scanner
+	// that was misconfigured when the last sync ran, a policy that has since
+	// changed. It is minutes of somebody else's scanner, so it is asked for
+	// rather than assumed.
+	Force bool `json:"force,omitempty"`
+}
+
 type SyncSecurityResponse struct {
 	Product string `json:"product"`
 	Package string `json:"package"`

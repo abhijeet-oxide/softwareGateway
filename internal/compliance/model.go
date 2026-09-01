@@ -620,3 +620,15 @@ func outcomeRank(o Outcome) int {
 		return 5
 	}
 }
+
+// ShortDigest is a digest as a person refers to it in conversation and in a
+// table column. Twelve hex characters, because that is what everything else in
+// this project shows and a reader comparing two screens should not have to
+// count characters.
+func ShortDigest(d string) string {
+	s := strings.TrimPrefix(d, "sha256:")
+	if len(s) > 12 {
+		return s[:12]
+	}
+	return s
+}

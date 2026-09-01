@@ -37,8 +37,13 @@ spec:
         locus: serviceAccountName
         expected: a named ServiceAccount shipped by this release
         observed: |
-          !present(self, "serviceAccountName") ? "(absent, so the default account is used)"
-            : text(self, "serviceAccountName")
+          !present(self, "serviceAccountName") ? "(absent)" : text(self, "serviceAccountName")
+        message: |
+          !present(self, "serviceAccountName")
+            ? "names no serviceAccountName, so it runs under the namespace's default account - shared with everything else installed there"
+            : (text(self, "serviceAccountName") == "default"
+              ? "runs under the default service account, which is shared with everything else in the namespace"
+              : "names serviceAccountName " + text(self, "serviceAccountName") + ", which this release does not ship")
 
     - id: RBAC-02
       title: Pods that need no API access do not mount a token

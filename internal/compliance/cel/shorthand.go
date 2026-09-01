@@ -70,7 +70,7 @@ func buildAssert(a compliance.Assert) (compiledAssert, error) {
 			Source:   fmt.Sprintf("!present(self, %s)", quote(p)),
 			Locus:    p,
 			Expected: "not set",
-			Observed: fmt.Sprintf("text(self, %s)", quote(p)),
+			Observed: observedOr(p),
 		})
 	}
 	for _, p := range sortedKeys(a.Equals) {
@@ -81,8 +81,8 @@ func buildAssert(a compliance.Assert) (compiledAssert, error) {
 		out.Terms = append(out.Terms, assertTerm{
 			Source:   fmt.Sprintf("value(self, %s) == %s", quote(p), lit),
 			Locus:    p,
-			Expected: fmt.Sprintf("== %s", display(a.Equals[p])),
-			Observed: fmt.Sprintf("text(self, %s)", quote(p)),
+			Expected: display(a.Equals[p]),
+			Observed: observedOr(p),
 		})
 	}
 	for _, p := range sortedKeys(a.OneOf) {
@@ -104,7 +104,7 @@ func buildAssert(a compliance.Assert) (compiledAssert, error) {
 			Source:   fmt.Sprintf("[%s].exists(__v, __v == value(self, %s))", strings.Join(lits, ", "), quote(p)),
 			Locus:    p,
 			Expected: "one of " + strings.Join(shown, ", "),
-			Observed: fmt.Sprintf("text(self, %s)", quote(p)),
+			Observed: observedOr(p),
 		})
 	}
 	for _, p := range sortedKeys(a.Matches) {
@@ -112,7 +112,7 @@ func buildAssert(a compliance.Assert) (compiledAssert, error) {
 			Source:   fmt.Sprintf("text(self, %s).matches(%s)", quote(p), quote(a.Matches[p])),
 			Locus:    p,
 			Expected: "matching " + a.Matches[p],
-			Observed: fmt.Sprintf("text(self, %s)", quote(p)),
+			Observed: observedOr(p),
 		})
 	}
 	for _, pair := range a.EqualPaths {
@@ -148,7 +148,7 @@ func buildAssert(a compliance.Assert) (compiledAssert, error) {
 			Source:   strings.Join(conds, " && "),
 			Locus:    p,
 			Expected: strings.Join(want, " and "),
-			Observed: fmt.Sprintf("text(self, %s)", quote(p)),
+			Observed: observedOr(p),
 		})
 	}
 	if a.Expr != "" {
@@ -188,6 +188,15 @@ func buildAssert(a compliance.Assert) (compiledAssert, error) {
 		out.Locus = out.Terms[0].Locus
 	}
 	return out, nil
+}
+
+// observedOr renders the value at a path, or says there is none.
+//
+// An empty string is what a missing field renders as, and "expected == false"
+// with nothing before it does not tell a vendor whether the field is absent or
+// set to something else. Those need different fixes.
+func observedOr(path string) string {
+	return fmt.Sprintf("present(self, %s) ? text(self, %s) : \"(absent)\"", quote(path), quote(path))
 }
 
 // quote renders a Go string as a CEL string literal.

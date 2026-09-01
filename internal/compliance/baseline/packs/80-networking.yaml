@@ -37,7 +37,11 @@ spec:
             np.spec.policyTypes.exists(t, string(t) == "Ingress"))
         locus: spec.podSelector
         expected: a default-deny policy somewhere in this release
-        observed: '"the release ships " + string(size(resourcesIn(["NetworkPolicy"]))) + " NetworkPolicy object(s), none of them a default deny"'
+        observed: 'string(size(resourcesIn(["NetworkPolicy"]))) + " NetworkPolicy object(s), none a default deny"'
+        message: |
+          "this release ships " + string(size(resourcesIn(["NetworkPolicy"]))) +
+          " NetworkPolicy object(s) and none of them is a default deny, so every pod in the namespace" +
+          " stays reachable from every other namespace"
 
     - id: NET-02
       title: Ingress rules name their sources and ports
@@ -189,8 +193,12 @@ spec:
         expr: 'size(selectedBy(self)) > 0'
         locus: spec.selector
         expected: at least one workload in this release with matching pod labels
-        observed: |
-          "selector " + self.spec.selector.map(k, k + "=" + string(self.spec.selector[k])).join(",") + " matches no pod template"
+        observed: 'self.spec.selector.map(k, k + "=" + string(self.spec.selector[k])).join(",")'
+        message: |
+          "Service " + text(self, "metadata.name") + " selects " +
+          self.spec.selector.map(k, k + "=" + string(self.spec.selector[k])).join(",") +
+          ", which matches no pod template in this release. It will have no endpoints and every" +
+          " request to it will fail, while the rollout reports success"
 
     - id: NET-09
       title: Secondary interfaces are not covered by network policy

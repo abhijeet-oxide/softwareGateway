@@ -45,4 +45,8 @@ spec:
         expr: 'size(crdFor(self)) > 0'
         locus: apiVersion
         expected: a CustomResourceDefinition for this kind in the same release
-        observed: 'text(self, "apiVersion") + " " + text(self, "kind") + " has no definition in this release"'
+        observed: 'text(self, "apiVersion") + " " + text(self, "kind")'
+        message: |
+          "this release ships a " + text(self, "kind") + " but no CustomResourceDefinition for " +
+          text(self, "apiVersion") + ". The install will fail on ordering unless the definition is" +
+          " already in the cluster"

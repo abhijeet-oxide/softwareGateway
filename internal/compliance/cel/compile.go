@@ -331,21 +331,24 @@ func (p *program) Evaluate(ctx context.Context, subj compliance.Subject, idx *co
 func (p *program) defaultMessage(subj compliance.Subject, j compliance.Judgement) string {
 	var b strings.Builder
 	b.WriteString(subj.Describe())
+	b.WriteString(": ")
 	if j.Locus != "" {
-		b.WriteString(": ")
 		b.WriteString(j.Locus)
-	} else {
-		b.WriteString(": ")
 	}
+	// "is X, expected Y" reads correctly for a value and badly for a phrase,
+	// and an author's observed expression may legitimately return either. A
+	// dash joins both without asserting a grammar.
 	if j.Observed != "" {
-		b.WriteString(" is ")
+		if j.Locus != "" {
+			b.WriteString(" — ")
+		}
 		b.WriteString(j.Observed)
 	}
 	if j.Expected != "" {
-		if j.Observed != "" {
-			b.WriteString(", expected ")
+		if j.Locus != "" || j.Observed != "" {
+			b.WriteString("; expected ")
 		} else {
-			b.WriteString(" expected ")
+			b.WriteString("expected ")
 		}
 		b.WriteString(j.Expected)
 	}

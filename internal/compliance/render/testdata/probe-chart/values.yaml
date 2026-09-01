@@ -1,0 +1,11 @@
+replicaCount: 3
+image:
+  repository: registry.acme.example/probe/app
+  tag: "1.0.0"
+resources:
+  limits:
+    memory: 512Mi
+metrics:
+  enabled: true
+serviceAccount:
+  name: probe

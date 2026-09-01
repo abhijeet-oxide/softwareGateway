@@ -32,7 +32,11 @@ spec:
         expr: 'size(pdbFor(self)) > 0'
         locus: metadata.labels
         expected: a PodDisruptionBudget in this release selecting these pods
-        observed: '"no PodDisruptionBudget selects " + text(self, "metadata.name")'
+        observed: '"none"'
+        message: |
+          "no PodDisruptionBudget in this release selects the pods of " +
+          text(self, "kind") + " " + text(self, "metadata.name") +
+          ", so a node drain can evict all " + string(replicas(self)) + " replicas at once"
 
     - id: PDB-02
       title: No PodDisruptionBudget forbids every eviction
@@ -85,7 +89,12 @@ spec:
         expr: 'covers(self).all(w, replicas(w) >= 2)'
         locus: spec.selector
         expected: selecting only workloads with two or more replicas
-        observed: '"selects " + string(size(covers(self))) + " workload(s)"'
+        observed: 'covers(self).map(w, string(value(w, "metadata.name")) + " (" + string(replicas(w)) + " replica(s))").join(", ")'
+        message: |
+          "this budget covers a workload that cannot spare a pod: " +
+          covers(self).filter(w, replicas(w) < 2)
+                      .map(w, string(value(w, "kind")) + " " + string(value(w, "metadata.name")))
+                      .join(", ") + ". Evictions of it will be refused indefinitely"
 
     - id: PDB-05
       title: A rolling update can start

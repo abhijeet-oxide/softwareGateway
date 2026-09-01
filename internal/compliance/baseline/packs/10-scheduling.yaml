@@ -36,8 +36,15 @@ spec:
         locus: spec.template.spec.topologySpreadConstraints
         expected: constraints on both topology.kubernetes.io/zone and kubernetes.io/hostname
         observed: |
-          value(self, "spec.template.spec.topologySpreadConstraints") == null ? "no spread constraints" :
-            "keys: " + self.spec.template.spec.topologySpreadConstraints.map(c, string(c.topologyKey)).join(", ")
+          value(self, "spec.template.spec.topologySpreadConstraints") == null ? "(none)" :
+            self.spec.template.spec.topologySpreadConstraints.map(c, string(c.topologyKey)).join(", ")
+        message: |
+          text(self, "kind") + " " + text(self, "metadata.name") + " runs " + string(replicas(self)) +
+          " replicas that the scheduler may place on one node: " +
+          (value(self, "spec.template.spec.topologySpreadConstraints") == null
+            ? "it declares no topologySpreadConstraints"
+            : "its spread constraints cover only " +
+              self.spec.template.spec.topologySpreadConstraints.map(c, string(c.topologyKey)).join(", "))
 
     - id: SCH-02
       title: Spread constraints allow a skew of at most one

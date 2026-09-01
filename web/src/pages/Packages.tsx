@@ -902,13 +902,24 @@ export default function Packages() {
                   chip could not tell two rows apart and cost 130px of a table
                   that was already 400px wider than the window - which is what
                   pushed the pinned Actions column on top of its neighbour.
+
+                  No hard width here: the tablekit owns the width and resize
+                  behaviour, and the label should widen or narrow with the column
+                  instead of staying locked to a pixel value.
                 */
                 title: 'Name',
                 fixed: 'left',
-                width: 210,
                 render: (_, r) => (
-                  <Link to={releaseHref(r.product.productId, r.pkg)}>
-                    <PackageName pkg={r.pkg} width={220} />
+                  <Link
+                    to={releaseHref(r.product.productId, r.pkg)}
+                    style={{
+                      display: 'block',
+                      width: '100%',
+                      minWidth: 0,
+                      maxWidth: '100%',
+                    }}
+                  >
+                    <PackageName pkg={r.pkg} />
                   </Link>
                 ),
               },

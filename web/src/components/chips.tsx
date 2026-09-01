@@ -134,17 +134,26 @@ const STATUS_LABEL: Record<SoftwareStatus, string> = {
  * so it can still be read in full.
  */
 export function PackageName({
-  pkg, width = 240,
+  pkg,
 }: {
   pkg: Pick<Package, 'sourceRepository' | 'displayRepository'>
-  width?: number
 }) {
   const name = pkg.displayRepository || pkg.sourceRepository
   if (!name) return <NA reason="This package records no source repository." />
   return (
     <Tooltip title={pkg.sourceRepository}>
       <Typography.Text
-        style={{ fontFamily: mono, fontSize: 12, maxWidth: width }}
+        style={{
+          fontFamily: mono,
+          fontSize: 12,
+          display: 'block',
+          width: '100%',
+          maxWidth: '100%',
+          minWidth: 0,
+          overflow: 'hidden',
+          textOverflow: 'ellipsis',
+          whiteSpace: 'nowrap',
+        }}
         ellipsis={{ tooltip: false }}
       >
         {name}

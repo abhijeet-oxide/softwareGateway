@@ -817,7 +817,14 @@ function DownloadsTab({ transfers, onDownload, downloadHref, mayOperate }: {
         columns={[
           {
             title: 'Destination',
-            render: (_, t) => <Typography.Text style={{ fontFamily: mono }}>{t.target}</Typography.Text>,
+            render: (_, t) => (
+              <Space direction="vertical" size={0}>
+                <Typography.Text style={{ fontFamily: mono }}>{t.target}</Typography.Text>
+                {t.repository && t.repository !== t.target && (
+                  <RepoLink url={`https://${t.repository}`} label={t.repository} />
+                )}
+              </Space>
+            ),
           },
           {
             title: 'State',

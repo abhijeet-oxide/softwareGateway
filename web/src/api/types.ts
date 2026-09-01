@@ -174,6 +174,8 @@ export interface RelatedArtifact {
 export interface PackageTransfer {
   id: string
   target: string
+  /** The resolved registry host and repository path this transfer landed in. */
+  repository?: string
   state: TransferState
   /**
    * REPLICATE (downloaded from a vendor) or PROMOTE (moved between two of our

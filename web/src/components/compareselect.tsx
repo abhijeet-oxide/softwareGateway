@@ -125,8 +125,8 @@ export function CompareSelectionBar({
         <Button size="small" icon={<CloseCircleOutlined />} onClick={onCancel}>Cancel</Button>
         {ready && selection.a && selection.b ? (
           <Link to={comparisonHref(selection.a, selection.b, selection.intent)}>
-            <Button size="small" type="primary" icon={<ScaleOutlined />}>
-              {selection.intent === 'vulnerabilities' ? 'Compare vulnerabilities' : 'Compare'}
+            <Button size="small" type="primary">
+              {selection.intent === 'vulnerabilities' ? 'Compare' : 'Compare'}
             </Button>
           </Link>
         ) : (

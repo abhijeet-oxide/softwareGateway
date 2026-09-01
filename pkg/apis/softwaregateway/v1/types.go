@@ -1315,9 +1315,13 @@ type ContentGroup struct {
 
 // PackageTransfer is one attempt to move a package to one destination.
 type PackageTransfer struct {
-	ID     string        `json:"id"`
-	Target string        `json:"target"`
-	State  TransferState `json:"state"`
+	ID     string `json:"id"`
+	Target string `json:"target"`
+	// Repository is the resolved registry host and repository path the
+	// transfer actually landed in, distinct from Target which is the
+	// operator-facing configured name.
+	Repository string        `json:"repository,omitempty"`
+	State      TransferState `json:"state"`
 	// Operation is REPLICATE (downloaded from a vendor) or PROMOTE (moved
 	// between two of our targets).
 	//

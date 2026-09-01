@@ -876,7 +876,9 @@
 }
 .ui-nav-item-label {
   font-size: 13px;
-  line-height: 1.1;
+  /* Tall enough for a descender (the "g" in "Packages") to clear the box before
+     overflow:hidden crops the line; 1.1 rounded down to less than the glyph. */
+  line-height: 1.4;
   overflow: hidden;
   text-overflow: ellipsis;
   flex: 1;

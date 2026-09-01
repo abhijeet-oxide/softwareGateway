@@ -283,6 +283,7 @@ func (s *Server) handleGetPackage(w http.ResponseWriter, r *http.Request) {
 			pkg.Transfers = append(pkg.Transfers, v1.PackageTransfer{
 				ID:            t.ID,
 				Target:        targetName(t),
+				Repository:    t.Target,
 				State:         v1.TransferState(strings.ToUpper(t.State)),
 				Operation:     strings.ToUpper(t.Operation),
 				FailureReason: t.FailureReason,

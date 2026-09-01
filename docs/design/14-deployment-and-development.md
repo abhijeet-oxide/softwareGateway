@@ -295,7 +295,9 @@ The task runner is [Task](https://taskfile.dev) (`Taskfile.yml`), not make. `tas
 
 | Task | Does |
 |---|---|
-| `task build` | All three binaries into `bin/` |
+| `task build` | Coordinator, worker, and the web production bundle |
+| `task build:backend` | Coordinator and worker into `bin/` |
+| `task build:frontend` | Web production bundle into `web/dist/` |
 | `task build:all` | Cross-compile linux/darwin/windows × amd64/arm64 into `dist/` |
 | `task test` | Unit tests with `-race`, in-process registry, **no Docker** |
 | `task test:short` | The same without the race detector |

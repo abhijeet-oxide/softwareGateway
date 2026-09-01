@@ -68,10 +68,10 @@ The Taskfile therefore avoids them: the build timestamp comes from a template fu
 ### The short version
 
 ```bash
-task build          # → bin/coordinator, bin/worker, bin/transferctl
+task build          # → bin/coordinator, bin/worker, and web/dist/
 ```
 
-On Windows this produces `bin/coordinator.exe`, `bin/worker.exe`, `bin/transferctl.exe`. **You never have to rename anything.** If you are, you are on a build from before this was fixed - pull and rebuild.
+On Windows this produces `bin/coordinator.exe` and `bin/worker.exe`. **You never have to rename anything.** If you are, you are on a build from before this was fixed - pull and rebuild.
 
 <details>
 <summary><b>Why the <code>.exe</code> problem existed, if you hit it</b></summary>
@@ -92,13 +92,15 @@ CI now asserts every Windows binary carries `.exe` and that no unsuffixed one ex
 
 ```bash
 task                        # list every task with its description
-task build                  # all three binaries
+task build                  # coordinator, worker, and web production bundle
+task build:backend          # coordinator and worker only
+task build:frontend         # web production bundle only
 task build:transferctl      # just one
 task build:all              # cross-compile: 3 OSes × 2 arches × 3 binaries
 task clean                  # remove bin/, dist/, the dev database, coverage
 ```
 
-`task build` skips work when nothing changed. Unlike make, Task compares **checksums rather than timestamps**, so `touch` alone will not trigger a pointless rebuild while a real edit always does.
+The backend build tasks skip work when nothing changed. Unlike make, Task compares **checksums rather than timestamps**, so `touch` alone will not trigger a pointless rebuild while a real edit always does.
 
 ### Cross-compiling
 

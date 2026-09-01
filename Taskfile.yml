@@ -81,8 +81,18 @@ tasks:
   # ------------------------------------------------------------------ build --
 
   build:
-    desc: Build all three binaries into bin/
-    deps: [build:coordinator, build:worker, build:transferctl]
+    desc: Build the backend binaries and frontend
+    deps: [build:backend, build:frontend]
+
+  build:backend:
+    desc: Build the coordinator and worker binaries into bin/
+    deps: [build:coordinator, build:worker]
+
+  build:frontend:
+    desc: Build the frontend production bundle
+    dir: web
+    cmds:
+      - pnpm build
 
   build:*:
     desc: Build one binary (task build:transferctl)
@@ -273,6 +283,28 @@ tasks:
     desc: Run a Worker
     cmds:
       - go run ./cmd/worker --config {{.DEV_CONFIG}}
+
+  dev:web:
+    desc: Run the web development server
+    dir: web
+    cmds:
+      - pnpm dev
+
+  run:coordinator:
+    internal: true
+    cmds:
+      - ./bin/coordinator{{.EXE}} --config {{.DEV_CONFIG}}
+
+  run:worker:
+    internal: true
+    cmds:
+      - ./bin/worker{{.EXE}} --config {{.DEV_CONFIG}}
+
+  run:
+    desc: Build and run the worker, coordinator, and web development server
+    deps: [build:backend]
+    cmds:
+      - task --parallel run:worker run:coordinator dev:web
 
   dev:postgres:
     desc: Start PostgreSQL for development

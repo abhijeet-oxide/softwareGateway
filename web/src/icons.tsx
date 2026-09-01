@@ -64,6 +64,7 @@ import PhDotsSixVertical from '~icons/ph/dots-six-vertical'
 import PhDotsThreeVertical from '~icons/ph/dots-three-vertical'
 import PhDownloadSimple from '~icons/ph/download-simple'
 import PhFileText from '~icons/ph/file-text'
+import PhFileZip from '~icons/ph/file-zip'
 import PhFolder from '~icons/ph/folder'
 import PhBookOpen from '~icons/ph/book-open'
 import PhBroadcast from '~icons/ph/broadcast'
@@ -221,3 +222,4 @@ export const PauseOutlined = make('pause', PhPause)
 // --- files ------------------------------------------------------------------
 export const FileTextOutlined = make('file-text', PhFileText)
 export const FolderOutlined = make('folder', PhFolder)
+export const FolderZip24RegularIcon = make('folder-zip', PhFileZip)

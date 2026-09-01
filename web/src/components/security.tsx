@@ -6,7 +6,7 @@ import { download } from '../api/client'
 import {
   CheckCircleOutlined, CopyOutlined, DownloadOutlined, ExclamationCircleOutlined,
   FileTextOutlined, LoadingOutlined, MinusCircleOutlined, QuestionCircleOutlined, StopOutlined,
-  SyncOutlined, WarningOutlined,
+  SyncOutlined, WarningOutlined, FolderZip24RegularIcon 
 } from '../icons'
 import {
   c, mono, severity as severityColour, severitySurface, StatusPill, tokens,
@@ -1370,7 +1370,7 @@ export function SecurityExportMenu({
     },
     {
       key: 'zip',
-      icon: running === 'zip' ? <LoadingOutlined /> : <DownloadOutlined />,
+      icon: running === 'zip' ? <LoadingOutlined /> : <FolderZip24RegularIcon />,
       label: (
         <Space direction="vertical" size={0}>
           <Typography.Text>Evidence bundle (ZIP)</Typography.Text>

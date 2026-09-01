@@ -111,6 +111,20 @@ type Sheet struct {
 	// that would be a lie repeated on every row - "these are the 1,000 highest
 	// severity of 3,111". Omitted from CSV, which has nowhere to put it.
 	Note string
+	// Widths are column widths in characters, in column order. Short lists are
+	// fine: anything not named gets a width derived from its header.
+	//
+	// # Why widths are worth carrying at all
+	//
+	// Because the default is eight characters, and a workbook whose every
+	// column reads `########` or `CVE-202…` is one the reader has to fix before
+	// they can look at it. Twenty-two columns of hand-resizing is the reason
+	// people say a generated spreadsheet is not usable.
+	Widths []int
+	// Title, when set, is a heading row above everything else - bigger, bold,
+	// and spanning. Used by the summary sheet, which is read rather than
+	// filtered.
+	Title string
 }
 
 // File is one member of a bundle: a body, at a path, as the scanner produced it.
@@ -233,10 +247,10 @@ func primarySheet(book Book) (Sheet, bool) {
 //
 //	README.txt
 //	tables/unique-cves.csv, all-findings.csv, images.csv, ...
-//	vulnerabilities/<image>/<tag>/<scanner>.json
-//	malware/<image>/<tag>/<scanner>.json
-//	policy/<image>/<tag>/<scanner>.json
-//	sbom/<image>/<tag>/<scanner>.json
+//	vulnerabilities/<image>__<tag>/<scanner>.json
+//	malware/<image>__<tag>/<scanner>.json
+//	policy/<image>__<tag>/<scanner>.json
+//	sbom/<image>__<tag>/<scanner>.json
 //
 // Kind first because that is how the bundle is consumed: somebody forwarding a
 // vulnerability report to a customer sends `vulnerabilities/`, and somebody
@@ -317,6 +331,9 @@ func WriteXLSX(w io.Writer, book Book) error {
 	if err := writeZipFile(zw, "xl/_rels/workbook.xml.rels", workbookRels(len(sheets))); err != nil {
 		return err
 	}
+	if err := writeZipFile(zw, "xl/styles.xml", stylesXML); err != nil {
+		return err
+	}
 	for i, sheet := range sheets {
 		name := fmt.Sprintf("xl/worksheets/sheet%d.xml", i+1)
 		if err := writeZipSheet(zw, name, sheet); err != nil {
@@ -343,12 +360,49 @@ func writeZipSheet(zw *zip.Writer, name string, sheet Sheet) error {
 		return fmt.Errorf("create %s: %w", name, err)
 	}
 
+	// The rows above the header, decided first, because the FREEZE has to name
+	// the row below them and a pane frozen at the wrong row is worse than none.
+	preamble := 0
+	if sheet.Title != "" {
+		preamble += 2
+	}
+	if sheet.Note != "" {
+		preamble += 2
+	}
+	headerRow := preamble + 1
+
 	if _, err := io.WriteString(f, xmlHeader+
-		`<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><sheetData>`); err != nil {
+		`<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">`); err != nil {
+		return err
+	}
+	// Order matters to Excel: sheetPr, dimension, sheetViews, sheetFormatPr,
+	// cols, sheetData. A part out of order is a workbook Excel offers to repair.
+	if len(sheet.Headers) > 0 {
+		// The header stays on screen at row 400 of a findings sheet. Without
+		// it, scrolling a real export means losing which column is which -
+		// which is the single most common thing people fix by hand.
+		if _, err := fmt.Fprintf(f,
+			`<sheetViews><sheetView workbookViewId="0"><pane ySplit="%d" topLeftCell="A%d" activePane="bottomLeft" state="frozen"/></sheetView></sheetViews>`,
+			headerRow, headerRow+1); err != nil {
+			return err
+		}
+	}
+	if cols := columnsXML(sheet); cols != "" {
+		if _, err := io.WriteString(f, cols); err != nil {
+			return err
+		}
+	}
+	if _, err := io.WriteString(f, `<sheetData>`); err != nil {
 		return err
 	}
 
 	rowNum := 1
+	if sheet.Title != "" {
+		if err := writeStyledRow(f, rowNum, []string{sheet.Title}, styleTitle, styleTitle); err != nil {
+			return err
+		}
+		rowNum += 2
+	}
 	if sheet.Note != "" {
 		if err := writeRow(f, rowNum, []string{sheet.Note}); err != nil {
 			return err
@@ -359,40 +413,131 @@ func writeZipSheet(zw *zip.Writer, name string, sheet Sheet) error {
 		rowNum += 2
 	}
 	if len(sheet.Headers) > 0 {
-		if err := writeRow(f, rowNum, sheet.Headers); err != nil {
+		if err := writeStyledRow(f, rowNum, sheet.Headers, styleHeader, styleHeader); err != nil {
 			return err
 		}
 		rowNum++
 	}
+	// A field/value grid gets its labels in bold. Every other sheet is a table
+	// somebody sorts, and bolding its first column would imply a hierarchy the
+	// rows do not have.
+	firstColumn := styleGeneral
+	if isFieldValue(sheet) {
+		firstColumn = styleLabel
+	}
 	for _, row := range sheet.Rows {
-		if err := writeRow(f, rowNum, pad(row, len(sheet.Headers))); err != nil {
+		if err := writeStyledRow(f, rowNum, pad(row, len(sheet.Headers)),
+			firstColumn, styleGeneral); err != nil {
 			return err
 		}
 		rowNum++
 	}
 
-	_, err = io.WriteString(f, `</sheetData></worksheet>`)
+	_, err = io.WriteString(f, `</sheetData>`+autoFilterXML(sheet, headerRow)+`</worksheet>`)
 	return err
 }
 
-// writeRow emits one row, choosing a numeric cell where the value is a number.
+// isFieldValue recognises a two-column Field/Value grid, which is read rather
+// than filtered and so is laid out differently.
+func isFieldValue(sheet Sheet) bool {
+	return len(sheet.Headers) == 2 &&
+		strings.EqualFold(sheet.Headers[0], "Field") &&
+		strings.EqualFold(sheet.Headers[1], "Value")
+}
+
+// autoFilterXML puts the filter dropdowns on the header row.
 //
-// The choice matters: a count written as a string sorts lexically in Excel, so
-// 10 comes before 9 and every "sort by vulnerabilities" gives the wrong answer.
+// Not on a field/value grid: a filter on a column of labels is a control that
+// can only hide the thing the reader came to read.
+func autoFilterXML(sheet Sheet, headerRow int) string {
+	if len(sheet.Headers) == 0 || isFieldValue(sheet) || len(sheet.Rows) == 0 {
+		return ""
+	}
+	return fmt.Sprintf(`<autoFilter ref="A%d:%s%d"/>`,
+		headerRow, columnName(len(sheet.Headers)-1), headerRow+len(sheet.Rows))
+}
+
+// columnsXML sets the column widths.
+//
+// The default is eight characters, which renders a digest as `#######` and
+// every CVE as `CVE-202…`. A width per column that is named, and one derived
+// from the header for the rest - bounded, because a Description column sized to
+// its longest cell would be four hundred characters wide.
+func columnsXML(sheet Sheet) string {
+	if len(sheet.Headers) == 0 {
+		return ""
+	}
+	var b strings.Builder
+	b.WriteString(`<cols>`)
+	for i, header := range sheet.Headers {
+		width := 0
+		if i < len(sheet.Widths) {
+			width = sheet.Widths[i]
+		}
+		if width <= 0 {
+			// Room for the header plus its filter arrow. Wrong for the content
+			// as often as not, and still an enormous improvement on eight.
+			width = min(max(len(header)+6, 12), 40)
+		}
+		fmt.Fprintf(&b, `<col min="%d" max="%d" width="%d" customWidth="1"/>`, i+1, i+1, width)
+	}
+	b.WriteString(`</cols>`)
+	return b.String()
+}
+
+// columnName renders a zero-based column index as "A", "Z", "AA".
+func columnName(col int) string {
+	name := ""
+	for col >= 0 {
+		name = string(rune('A'+col%26)) + name
+		col = col/26 - 1
+	}
+	return name
+}
+
+// writeRow emits one unstyled row.
 func writeRow(w io.Writer, rowNum int, cells []string) error {
-	if _, err := fmt.Fprintf(w, `<row r="%d">`, rowNum); err != nil {
+	return writeStyledRow(w, rowNum, cells, styleGeneral, styleGeneral)
+}
+
+// writeStyledRow emits one row, choosing a numeric cell where the value is a
+// number, and a style for the first cell that may differ from the rest.
+//
+// The numeric choice matters: a count written as a string sorts lexically in
+// Excel, so 10 comes before 9 and every "sort by vulnerabilities" gives the
+// wrong answer.
+func writeStyledRow(w io.Writer, rowNum int, cells []string, firstStyle, restStyle int) error {
+	// A header row is two lines tall so a wrapped heading is readable; every
+	// other row keeps Excel's own height.
+	height := ""
+	if firstStyle == styleHeader {
+		height = ` ht="28" customHeight="1"`
+	}
+	if _, err := fmt.Fprintf(w, `<row r="%d"%s>`, rowNum, height); err != nil {
 		return err
 	}
 	for i, value := range cells {
 		ref := cellRef(i, rowNum)
-		if isNumeric(value) {
-			if _, err := fmt.Fprintf(w, `<c r="%s"><v>%s</v></c>`, ref, value); err != nil {
+		style := restStyle
+		if i == 0 {
+			style = firstStyle
+		}
+		attr := ""
+		if style != styleGeneral {
+			attr = fmt.Sprintf(` s="%d"`, style)
+		}
+		// A number keeps its style but never the header's fill: a header cell
+		// holding a year would otherwise be right-aligned white-on-slate text
+		// among left-aligned headings.
+		if isNumeric(value) && style != styleHeader {
+			if _, err := fmt.Fprintf(w, `<c r="%s"%s><v>%s</v></c>`, ref, attr, value); err != nil {
 				return err
 			}
 			continue
 		}
-		if _, err := fmt.Fprintf(w, `<c r="%s" t="inlineStr"><is><t xml:space="preserve">%s</t></is></c>`,
-			ref, escapeXML(value)); err != nil {
+		if _, err := fmt.Fprintf(w,
+			`<c r="%s"%s t="inlineStr"><is><t xml:space="preserve">%s</t></is></c>`,
+			ref, attr, escapeXML(value)); err != nil {
 			return err
 		}
 	}
@@ -472,6 +617,7 @@ func contentTypes(sheets int) string {
 	b.WriteString(`<Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>`)
 	b.WriteString(`<Default Extension="xml" ContentType="application/xml"/>`)
 	b.WriteString(`<Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/>`)
+	b.WriteString(`<Override PartName="/xl/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.styles+xml"/>`)
 	for i := 1; i <= sheets; i++ {
 		fmt.Fprintf(&b, `<Override PartName="/xl/worksheets/sheet%d.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>`, i)
 	}
@@ -517,9 +663,74 @@ func workbookRels(sheets int) string {
 	for i := 1; i <= sheets; i++ {
 		fmt.Fprintf(&b, `<Relationship Id="rId%d" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet%d.xml"/>`, i, i)
 	}
+	// The styles part goes last, after the sheets, so the sheet ids stay 1..n
+	// and the relationship ids stay aligned with them. Excel does not require
+	// that alignment; a human reading the XML very much does.
+	fmt.Fprintf(&b, `<Relationship Id="rId%d" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/>`, sheets+1)
 	b.WriteString(`</Relationships>`)
 	return b.String()
 }
+
+// The style table, and why there is exactly one of it.
+//
+// # What a plain grid cost
+//
+// The workbook opened with every column eight characters wide, the header row
+// indistinguishable from the data, and nothing frozen - so scrolling to row 400
+// of a findings sheet lost the header, and the first thing anybody did with an
+// export was spend two minutes making it readable. That is the difference
+// between a file somebody works in and one they copy out of.
+//
+// # Why the styles are written by hand
+//
+// Same argument as the rest of this package: an xlsx style table is a hundred
+// lines of XML with a fixed shape, and the alternative is a spreadsheet library
+// on a product whose purpose is telling people what is in their supply chain.
+//
+// Five styles, and no more, because every one of them has to earn a number that
+// appears in the cell XML:
+//
+//	0  general        the default, for data
+//	1  header         bold, white on slate, for a header row
+//	2  title          14pt bold, for a summary sheet's heading
+//	3  label          bold, for the left column of a field/value grid
+//	4  wrapped        top-aligned and wrapping, for a description column
+const stylesXML = xmlHeader + `<styleSheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">` +
+	`<fonts count="4">` +
+	`<font><sz val="11"/><name val="Calibri"/></font>` +
+	`<font><b/><sz val="11"/><color rgb="FFFFFFFF"/><name val="Calibri"/></font>` +
+	`<font><b/><sz val="14"/><color rgb="FF1F2933"/><name val="Calibri"/></font>` +
+	`<font><b/><sz val="11"/><color rgb="FF1F2933"/><name val="Calibri"/></font>` +
+	`</fonts>` +
+	`<fills count="3">` +
+	`<fill><patternFill patternType="none"/></fill>` +
+	`<fill><patternFill patternType="gray125"/></fill>` +
+	`<fill><patternFill patternType="solid"><fgColor rgb="FF33475B"/><bgColor indexed="64"/></patternFill></fill>` +
+	`</fills>` +
+	`<borders count="2">` +
+	`<border><left/><right/><top/><bottom/><diagonal/></border>` +
+	`<border><left/><right/><top/><bottom style="thin"><color rgb="FFD9DEE3"/></bottom><diagonal/></border>` +
+	`</borders>` +
+	`<cellStyleXfs count="1"><xf numFmtId="0" fontId="0" fillId="0" borderId="0"/></cellStyleXfs>` +
+	`<cellXfs count="5">` +
+	`<xf numFmtId="0" fontId="0" fillId="0" borderId="0" xfId="0"/>` +
+	`<xf numFmtId="0" fontId="1" fillId="2" borderId="0" xfId="0" applyFont="1" applyFill="1" applyAlignment="1">` +
+	`<alignment vertical="center" wrapText="1"/></xf>` +
+	`<xf numFmtId="0" fontId="2" fillId="0" borderId="0" xfId="0" applyFont="1"/>` +
+	`<xf numFmtId="0" fontId="3" fillId="0" borderId="1" xfId="0" applyFont="1" applyBorder="1"/>` +
+	`<xf numFmtId="0" fontId="0" fillId="0" borderId="0" xfId="0" applyAlignment="1">` +
+	`<alignment vertical="top" wrapText="1"/></xf>` +
+	`</cellXfs>` +
+	`<cellStyles count="1"><cellStyle name="Normal" xfId="0" builtinId="0"/></cellStyles>` +
+	`</styleSheet>`
+
+// The style indexes, matching the cellXfs above.
+const (
+	styleGeneral = 0
+	styleHeader  = 1
+	styleTitle   = 2
+	styleLabel   = 3
+)
 
 // Filename builds a download name that says what the file is and when it was
 // taken, because a directory of `export.csv` files is a directory of one file.

@@ -213,8 +213,7 @@ func (s *Server) packageSecurity(
 		for _, rep := range posture.Reports {
 			item := toAPIReport(rep)
 			item.ScanURL = scanURL(target, rep.Artifact)
-			item.Documents = documentRefsFor(
-				productName, pkg, rep, docs[rep.Artifact.Ref()], target)
+			item.Documents = documentRefsFor(productName, pkg, rep, docs[rep.Artifact.Ref()])
 			out.Reports = append(out.Reports, item)
 		}
 	}
@@ -233,7 +232,7 @@ func (s *Server) packageSecurity(
 // individually would be a page that quietly re-runs part of a sync.
 func documentRefsFor(
 	productName string, pkg store.PackageRow, report security.Report,
-	held []security.DocumentSummary, target securityTarget,
+	held []security.DocumentSummary,
 ) []v1.SecurityDocumentRef {
 	byKind := map[security.DocumentKind]security.DocumentSummary{}
 	for _, d := range held {
@@ -257,21 +256,35 @@ func documentRefsFor(
 			summary = security.DocumentSummary{Kind: kind}
 		}
 		ref := toAPIDocumentRef(summary)
-		ref.URL = documentURL(productName, pkg, report.Artifact, kind, target)
+		ref.URL = documentURL(productName, pkg, report.Artifact, kind)
 		out = append(out, ref)
 	}
 	return out
 }
 
 // documentURL is where one image's document is downloaded from.
+//
+// # The `repository` this needs, and the one it was sending
+//
+// It sent `target.Scope.Repository` - the CONFIGURED repository whose scanner
+// answered, "cfx-jfrog-external". Every route under /packages/{package} reads
+// `?repository=` as the OCI REPOSITORY PATH the release was discovered in,
+// "orbs/cfx-5000-k8s-215952-ncp". They are different namespaces that happen to
+// share a parameter name, so the lookup failed for every product whose releases
+// span more than one repository - which is every product this feature is for -
+// and the download opened a page reading "no package of product X matches Y".
+//
+// The package's own path is the right answer and the row is right here. The
+// scanner's repository is not needed at all: the handler re-derives it from the
+// release, which is also what stops a caller naming somebody else's.
 func documentURL(
 	productName string, pkg store.PackageRow, ref security.ArtifactRef,
-	kind security.DocumentKind, target securityTarget,
+	kind security.DocumentKind,
 ) string {
 	q := url.Values{}
 	q.Set("digest", ref.Digest)
-	if target.Scope.Repository != "" {
-		q.Set("repository", target.Scope.Repository)
+	if pkg.SourceRepository != "" {
+		q.Set("repository", pkg.SourceRepository)
 	}
 	return fmt.Sprintf("/api/v1/products/%s/packages/%s/security/documents/%s?%s",
 		url.PathEscape(productName), url.PathEscape(packageReferenceOf(pkg)),

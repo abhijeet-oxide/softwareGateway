@@ -117,8 +117,19 @@ function present(content: string, grammar?: string): { text: string; reformatted
   }
 }
 
-/** The file, coloured, with a line gutter. */
-function Highlighted({ text, grammar }: { text: string; grammar?: string }) {
+/**
+ * The file, coloured, with a line gutter.
+ *
+ * Exported because it is the only syntax-highlighted view in the application
+ * and a second one would be a second Prism import, a second gutter, and two
+ * places for the two to drift apart. A scanner's raw JSON is a file to read
+ * exactly as a vendor's manifest is.
+ */
+export function CodeBlock({ text, grammar, maxHeight = '62vh' }: {
+  text: string
+  grammar?: string
+  maxHeight?: string
+}) {
   const lines = useMemo(() => {
     const language = grammar ? Prism.languages[grammar] : undefined
     const html = language ? Prism.highlight(text, language, grammar!) : escapeHtml(text)
@@ -130,8 +141,11 @@ function Highlighted({ text, grammar }: { text: string; grammar?: string }) {
   return (
     <div
       style={{
-        display: 'flex', gap: 12, maxHeight: '62vh', overflow: 'auto',
-        background: c.surface2, border: '1px solid ${c.border}', borderRadius: 6, padding: '10px 12px',
+        display: 'flex', gap: 12, maxHeight, overflow: 'auto',
+        // A template literal in single quotes, which is a string containing the
+        // characters ${c.border} and not a colour - so this block has had no
+        // border since it was written.
+        background: c.surface2, border: `1px solid ${c.border}`, borderRadius: 6, padding: '10px 12px',
       }}
     >
       <pre
@@ -258,7 +272,7 @@ export function FileViewer({
             </Typography.Text>
           )}
 
-          <Highlighted text={shown?.text ?? ''} grammar={grammar} />
+          <CodeBlock text={shown?.text ?? ''} grammar={grammar} />
         </Space>
       )}
     </Modal>

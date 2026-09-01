@@ -127,6 +127,69 @@ func ReportNote(p Progress, note string) {
 	}
 }
 
+// Detailed is an optional extension of Progress: a reporter that can be told
+// how important a line is, and whether it replaces the last one like it.
+//
+// # Why an extension rather than a wider Progress
+//
+// Because a Progress may be a test, an HTTP endpoint, or nothing, and two of
+// those have no notion of a level. The one implementation that renders a
+// transcript wants three things the others do not, and widening the interface
+// to suit it would put three stub methods in every other implementation.
+//
+// # What "replace" is for
+//
+// A line that says where the work has got to - "retrieved scan results for 96
+// of 157 images" - arrives thirty times with a different number in it. Counted
+// as repeats it reads "(x30)" beside a number that was never wrong; it is ONE
+// line whose value changes, and that is what replace says.
+type Detailed interface {
+	// Record adds a line. `replace` overwrites the last line of the same shape
+	// instead of counting it as a repeat.
+	Record(level string, replace bool, note string)
+}
+
+// ReportInfo records something the reader wants to know that is not a problem.
+//
+// The distinction matters more than it looks. Every note used to be written at
+// warning level, so "requesting scan results for 157 images, skipping 103 that
+// are not container images" - a sentence describing a sync doing exactly what
+// it should - arrived in the transcript wearing the same colour as a scanner
+// that could not be reached.
+func ReportInfo(p Progress, note string) { record(p, LevelInfo, false, note) }
+
+// ReportProgress records where the work has got to, REPLACING the last such
+// line rather than stacking beside it.
+func ReportProgress(p Progress, note string) { record(p, LevelInfo, true, note) }
+
+// ReportWarning records something that went wrong but did not stop the work.
+func ReportWarning(p Progress, note string) { record(p, LevelWarning, false, note) }
+
+// ReportWarningUpdate records a recurring problem as one line that updates -
+// a scanner backing off says the same thing with a smaller number each time,
+// and stacking those tellings turns one situation into a list of failures.
+func ReportWarningUpdate(p Progress, note string) { record(p, LevelWarning, true, note) }
+
+func record(p Progress, level string, replace bool, note string) {
+	if p == nil {
+		return
+	}
+	if d, ok := p.(Detailed); ok {
+		d.Record(level, replace, note)
+		return
+	}
+	p.Note(note)
+}
+
+// Log levels, named here rather than in sync.go so a provider can reach them
+// without importing the syncer's vocabulary.
+const (
+	LevelInfo    = "info"
+	LevelSuccess = "success"
+	LevelWarning = "warning"
+	LevelError   = "error"
+)
+
 // Stage names. Constants rather than literals because the interface renders a
 // specific sentence per stage and a typo would render nothing.
 const (

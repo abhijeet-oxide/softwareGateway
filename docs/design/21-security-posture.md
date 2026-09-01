@@ -555,9 +555,41 @@ shrinking is acquiring ballast and growing is releasing it, so **no in-flight
 request is ever cancelled to make a limit true**.
 
 When the pacer had to move, the sync log says so once, at the end: "JFrog Xray
-was slow, so requests were made smaller: 12 images per request and 4 requests at
-a time by the end." That line is the answer to "why did that take eleven
-minutes", and without it the only evidence is a wall clock and a shrug.
+was slow for this release. Requests settled at 12 images each, 4 at a time, and
+it took 61 requests in total." That line is the answer to "why did that take
+eleven minutes", and without it the only evidence is a wall clock and a shrug.
+
+### What the transcript says while it runs
+
+Four levels, and the distinction is not cosmetic. Every note used to be written
+at WARNING, so "requesting scan results for 157 images, skipping 103 that are
+not container images" - a sync doing exactly what it should - opened the
+transcript in amber, and a reader who learns that the normal case looks like a
+problem stops reading the ones that are.
+
+| Level | Colour | For |
+|---|---|---|
+| `info` | blue | what is happening: what is being asked for, and where it has got to |
+| `success` | green | the sync did what it was asked. A transcript whose best outcome is the absence of red cannot say this |
+| `warning` | amber | something went wrong and did not stop the run - images missing from the repository, a scanner slowing down |
+| `error` | red | it stopped, or something was found that stops a release |
+
+Two other things a transcript needs and did not have:
+
+- **A line that MOVES.** The bar said "fetching 96 of 157" and the log said
+  nothing between "sync started" and whatever went wrong twelve minutes later,
+  so a reader opening it mid-sync could not tell a slow sync from a stuck one.
+  "Retrieved scan results for 96 of 157 images" is now recorded as a
+  REPLACEMENT: thirty updates are one line carrying the current number, not one
+  line reading "(x30)" beside a figure that was never repeated. A recurring
+  *problem* still counts, because there the count is the news.
+- **Words instead of mechanism.** "JFrog Xray timed out on 13 artifacts.
+  Retrying as two smaller requests" arrived twenty-four times on a struggling
+  scanner: twenty-four tellings of one situation, each naming an internal
+  mechanism, none of them answering the only question a reader has. It is now
+  one line that updates - "JFrog Xray is answering slowly, so requests are being
+  made smaller: 12 images each, 4 at a time. Nothing is lost - the images are
+  asked about again."
 
 ### The probe that follows a scan
 
@@ -656,11 +688,15 @@ filtered, and pasted into a ticket.
 
 A detailed export used to be a twenty-six-row field/value "Summary" sheet and
 one flat findings sheet, and the summary VIEW was that first sheet on its own.
-Nobody exports a spreadsheet to read a headline. So a detailed export is now the
-**tables the interface shows**, in the shape a reader has already learned:
+Nobody exports a spreadsheet to read a headline. So a detailed export is the
+**tables the interface shows**, in the shape a reader has already learned - with
+the summary kept as the FIRST tab, because removing it entirely went one step
+too far: a workbook that opens on row one of ninety thousand findings gives a
+reader nowhere to stand.
 
 | Sheet | One row per |
 |---|---|
+| Summary | one fact, grouped under what this is / what was scanned / what was found |
 | Unique CVEs | advisory, with every image and package it turns up in, and how many |
 | All findings | (image, advisory, package) |
 | Images | image, with its counts, its status and the sentence explaining it |
@@ -669,14 +705,38 @@ Nobody exports a spreadsheet to read a headline. So a detailed export is now the
 | By source | scanner, present only where more than one contributed |
 | Problems | reason the scanner gave, with the images it gave it for |
 
-The field/value grid survives only under `?view=summary`, for the person pasting
-one number into a release note.
+`?view=summary` is that first sheet on its own, for the person pasting one
+number into a release note.
 
 A workbook carries every sheet. A **CSV carries one**, and which one is the
 caller's choice (`?table=unique|findings|images|malware|policy|problems`),
-defaulting to All findings - the interface passes whichever tab is open, because
-a download that came back with a different table from the one on screen is the
-complaint the parameter answers.
+defaulting to All findings.
+
+The sheets are **formatted**, which is not decoration. A grid whose every column
+is eight characters wide renders a digest as `#######` and every CVE as
+`CVE-202…`, and whose header scrolls away at row 400 of a findings sheet, is one
+the reader has to fix before they can look at it - and twenty-two columns of
+hand-resizing is why people say a generated spreadsheet is not usable. So:
+per-column widths, a frozen header row, filter dropdowns on it, and five styles
+in a hand-written `styles.xml` (see the argument in `internal/export`).
+
+### Two options in the interface, four on the API
+
+The export menu offers a **workbook** and a **bundle**, and nothing else. It
+offered nine items - summary and full breakdown, each in three formats, plus
+"this table" in two more - for a question with two real answers: do you want to
+WORK on this, or do you want to SEND it. CSV and JSON stay on the API, where a
+format parameter is the natural way for a script to ask.
+
+The download goes through `fetch` rather than an anchor, and that reverses an
+earlier decision on purpose. A link is the better mechanism in every respect but
+one: it cannot say it is working. An export of a large release was a button that
+did nothing for eleven seconds, and a reader who clicks twice starts two exports
+of ninety thousand rows. The cost is that the body is held as a blob before it
+reaches disk, which is acceptable for a document this Coordinator assembled and
+knows the size of, and would not be for something unbounded. The filename still
+comes from the response, because a client that invented one would drift from the
+CLI's.
 
 ### The bundle
 
@@ -686,16 +746,22 @@ own responses**, laid out one directory per kind, then per image, then per tag.
 ```
 README.txt
 tables/unique-cves.csv, all-findings.csv, images.csv, ...
-vulnerabilities/<image>/<tag>/jfrog-xray.json
-malware/<image>/<tag>/jfrog-xray.json
-policy/<image>/<tag>/jfrog-xray.json
-sbom/<image>/<tag>/jfrog-xray.json
+vulnerabilities/<image>__<tag>/jfrog-xray.json
+malware/<image>__<tag>/jfrog-xray.json
+policy/<image>__<tag>/jfrog-xray.json
+sbom/<image>__<tag>/jfrog-xray.json
 ```
 
 Kind first, because that is how it is consumed: somebody forwarding a
 vulnerability report to a customer sends `vulnerabilities/`, and somebody asking
 "is there malware in this release" opens one directory. Image first would put
 the answer to that question in 157 places.
+
+The image and the tag are **one directory**, not two. A release holds one tag
+per image, so nesting bought a level of clicking and nothing else. The separator
+is `__` rather than the `:` that reads most naturally: a colon is Windows' drive
+separator, Explorer refuses to extract an archive containing one, and these
+bundles exist to be forwarded to people whose laptop has to open them.
 
 It reads storage and **never a scanner**: a download link that starts a
 fifteen-minute retrieval is a link that times out somewhere between here and the

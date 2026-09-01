@@ -3,6 +3,8 @@ package security
 import (
 	"context"
 	"errors"
+	"fmt"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -331,4 +333,73 @@ func contains(s, sub string) bool {
 		}
 		return false
 	})()
+}
+
+// A note about the normal case must not arrive wearing a warning's colour.
+//
+// Every note used to be written at warning level, so "requesting scan results
+// for 157 images, skipping 103 that are not container images" - a sync doing
+// exactly what it should - opened the transcript in amber. A reader who learns
+// that the normal case looks like a problem stops reading the ones that are.
+func TestProgressRecordsInfoAsInfo(t *testing.T) {
+	p := &SyncProgress{stages: map[string]stagePosition{}}
+
+	ReportInfo(p, "Asking JFrog Xray about 157 images, 50 per request.")
+	ReportWarning(p, "12 images are not in the JFrog repository yet.")
+
+	entries := p.Entries()
+	if len(entries) != 2 {
+		t.Fatalf("got %d entries, want 2: %+v", len(entries), entries)
+	}
+	if entries[0].Level != LogInfo {
+		t.Errorf("the opening line is %q, want info", entries[0].Level)
+	}
+	if entries[1].Level != LogWarning {
+		t.Errorf("the missing-images line is %q, want warning", entries[1].Level)
+	}
+
+	// And only the problem reaches the live notes panel beside the bar, which
+	// carries what is going WRONG - the bar itself already says 96 of 157.
+	_, notes, _, _ := p.Snapshot()
+	if len(notes) != 1 || !strings.Contains(notes[0], "not in the JFrog repository") {
+		t.Errorf("notes = %v, want only the warning", notes)
+	}
+}
+
+// A line whose NUMBER is the point updates; it does not stack a repeat count.
+//
+// "Retrieved scan results for 96 of 157 images (x30)" puts a repeat count
+// beside a figure that was never repeated. It is one line whose value moved
+// thirty times, and that is what the replace mode says.
+func TestProgressUpdatesRatherThanCountsProgressLines(t *testing.T) {
+	p := &SyncProgress{stages: map[string]stagePosition{}}
+
+	for _, done := range []int{25, 96, 157} {
+		ReportProgress(p, fmt.Sprintf("Retrieved scan results for %d of 157 images.", done))
+	}
+
+	entries := p.Entries()
+	if len(entries) != 1 {
+		t.Fatalf("got %d entries, want the one line that moved: %+v", len(entries), entries)
+	}
+	if entries[0].Repeat != 0 {
+		t.Errorf("repeat = %d, want 0: the number changed, the line did not repeat", entries[0].Repeat)
+	}
+	if !strings.Contains(entries[0].Message, "157 of 157") {
+		t.Errorf("message = %q, want the latest position", entries[0].Message)
+	}
+}
+
+// A recurring PROBLEM still counts, because the count is the news there: a
+// scanner that timed out forty times is worse than one that timed out once.
+func TestProgressStillCountsRepeatedWarnings(t *testing.T) {
+	p := &SyncProgress{stages: map[string]stagePosition{}}
+
+	for range 3 {
+		ReportWarning(p, "JFrog Xray is answering slowly.")
+	}
+	entries := p.Entries()
+	if len(entries) != 1 || entries[0].Repeat != 2 {
+		t.Fatalf("entries = %+v, want one line repeated twice", entries)
+	}
 }

@@ -746,6 +746,14 @@ func explain(c Comparison) (headline, explanation string) {
 	case VerdictWorse:
 		headline = fmt.Sprintf("%s is worse than %s.", newName, oldName)
 	case VerdictUnchanged:
+		// "Identical" when they genuinely are - every artifact the same bytes -
+		// and "unchanged" when only the findings match. They are different
+		// facts and only one of them is a statement about the software: two
+		// releases can carry the same vulnerabilities in different images.
+		if c.SameArtifacts() {
+			headline = fmt.Sprintf("%s and %s are identical.", newName, oldName)
+			break
+		}
 		headline = fmt.Sprintf("%s is unchanged from %s.", newName, oldName)
 	default:
 		headline = fmt.Sprintf("Whether %s is better or worse than %s cannot be determined.", newName, oldName)
@@ -768,6 +776,15 @@ func explain(c Comparison) (headline, explanation string) {
 	switch {
 	case len(clauses) == 0 && c.Verdict == VerdictInconclusive:
 		explanation = headline + " " + firstCaveat(c)
+	case len(clauses) == 0 && c.SameArtifacts():
+		// Nothing to compare, said as the fact it is rather than as a list of
+		// zeros. Every artifact is the same bytes, so there is no content
+		// difference either - and saying so is what stops a reader scrolling
+		// three cards of noughts to work it out.
+		explanation = headline + fmt.Sprintf(
+			" They contain the same %s, and the same %s in them.",
+			countNoun(c.ArtifactSummary.Common, "image", "images"),
+			countNoun(c.Unchanged.Total, "vulnerability", "vulnerabilities"))
 	case len(clauses) == 0:
 		explanation = headline + fmt.Sprintf(" No vulnerabilities were resolved or introduced, and %s remain in both.",
 			countNoun(c.Unchanged.Total, "vulnerability", "vulnerabilities"))
@@ -779,6 +796,18 @@ func explain(c Comparison) (headline, explanation string) {
 		explanation += fmt.Sprintf(" %s carry over unchanged.", capitalize(countNoun(n, "vulnerability", "vulnerabilities")))
 	}
 	return headline, explanation
+}
+
+// SameArtifacts reports that the two releases hold the same bytes: every
+// artifact paired, none added, none removed, and none of the pairs a different
+// digest.
+//
+// A CONTENT claim, and the only one this comparison is entitled to make. A
+// digest is a hash, so identical digests throughout means identical software -
+// and where that holds, "no vulnerabilities changed" understates it.
+func (c Comparison) SameArtifacts() bool {
+	s := c.ArtifactSummary
+	return s.Common > 0 && s.Upgraded == 0 && s.Added == 0 && s.Removed == 0 && s.NotComparable == 0
 }
 
 func firstCaveat(c Comparison) string {

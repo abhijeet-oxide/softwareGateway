@@ -4,7 +4,7 @@ import { Alert, Button, Card, Checkbox, Col, Input, Row, Segmented, Space, Tag, 
 // The working-surface table: resizable, reorderable, pinnable columns whose
 // layout each person keeps. See `tablekit/README.md` for which tables get it.
 import { Table as DataTable } from '../tablekit'
-import { ArrowUpOutlined, CheckOutlined, MinusOutlined, SyncOutlined } from '../icons'
+import { ArrowUpOutlined, CheckOutlined, MinusOutlined, SwapOutlined, SyncOutlined } from '../icons'
 import { securityComparisonExportUrl } from '../api/queries'
 import { SEVERITIES } from '../api/types'
 import type {
@@ -36,7 +36,7 @@ import { formatRelative } from '../domain/format'
  * dependency and a regression.
  */
 export function SecurityComparison({
-  product, baseRef, againstRef, report, repository, onSync, syncing,
+  product, baseRef, againstRef, report, repository, onSync, syncing, names, onSwap,
 }: {
   product: string
   baseRef: string
@@ -47,7 +47,45 @@ export function SecurityComparison({
   onSync?: (end: 'a' | 'b') => void
   /** A sync is already under way, so the offer says so rather than repeating. */
   syncing?: boolean
+  /**
+   * What each end's package is CALLED, which the comparison response does not
+   * carry and the listing does.
+   *
+   * A product publishes nine differently-named packages that share a version
+   * string, so "25.10.2" over "25.11.0" names about a ninth of each end. The
+   * two ends are also frequently different packages entirely, which a pair of
+   * bare version numbers hides completely.
+   */
+  names?: { a?: string; b?: string }
+  /** Reverses which release is the base. */
+  onSwap?: () => void
 }) {
+  /*
+   * Whether anything actually changed, which decides most of what follows.
+   *
+   * Counted from the totals rather than from `verdict`, because a comparison
+   * can be "unchanged" and still have rows worth a table - a remediation that
+   * appeared, findings on an artifact that was dropped - and because a page
+   * that hides its evidence on the strength of one word is a page that hides
+   * evidence.
+   */
+  const changed = report.introduced.total + report.resolved.total
+    + report.severityIncreased.total + report.severityDecreased.total
+    + report.remediationChanged.total + report.removedArtifact.total
+
+  /*
+   * The same bytes on both sides: every artifact paired, none added, none
+   * removed, none of the pairs a different digest.
+   *
+   * A CONTENT claim, and a stronger one than "nothing changed". Two releases
+   * can carry identical findings in images that are not identical; where the
+   * digests match throughout, the two releases are the same software under two
+   * names, and that is what somebody comparing them wants told.
+   */
+  const s = report.artifactSummary
+  const identical = changed === 0 && s.common > 0
+    && s.upgraded === 0 && s.added === 0 && s.removed === 0 && s.notComparable === 0
+
   const exportMenu = (
     <SecurityExportMenu
       workbookNote="The verdict, both releases' artifacts, and every change between them"
@@ -80,12 +118,19 @@ export function SecurityComparison({
           <ReleaseEnd
             title="Base release"
             end={report.a}
+            name={names?.a}
             onSync={onSync && (() => onSync('a'))}
           />
-          <NetChangeZone a={report.a} b={report.b} verdict={report.verdict} />
+          <NetChangeZone
+            a={report.a}
+            b={report.b}
+            verdict={report.verdict}
+            onSwap={onSwap}
+          />
           <ReleaseEnd
             title="New release"
             end={report.b}
+            name={names?.b}
             onSync={onSync && (() => onSync('b'))}
             align="end"
           />
@@ -95,27 +140,60 @@ export function SecurityComparison({
       <VerdictBanner
         verdict={report.verdict}
         headline={report.headline}
-        explanation={report.explanation}
+        explanation={identical
+          /*
+            Named in full HERE and not on the server, because the server does
+            not know what the packages are called - the comparison response
+            carries versions, and a product publishes nine differently-named
+            packages that share one. "25.11.0 and 25.10.2 are identical" is
+            true and tells a reader a ninth of it.
+          */
+          ? `${label(names?.a, report.a.label)} and ${label(names?.b, report.b.label)} are `
+            + `identical: the same ${report.artifactSummary.common.toLocaleString()} images, `
+            + `carrying the same ${report.unchanged.total.toLocaleString()} vulnerabilities.`
+          : report.explanation}
+        title={identical ? 'These two releases are identical' : undefined}
         caveats={report.caveats}
         extra={exportMenu}
       />
 
-      <Row gutter={[16, 16]}>
-        <Col xs={24} xl={17}>
-          <Space direction="vertical" size={16} style={{ width: '100%' }}>
-            <VulnerabilityOverview report={report} />
-            <ChangeBySeverity report={report} />
-            <ArtifactDeltaCard report={report} onSync={onSync} syncing={syncing} />
-          </Space>
-        </Col>
-        <Col xs={24} xl={7}>
-          <Space direction="vertical" size={16} style={{ width: '100%' }}>
-            <SummaryCard report={report} />
-            <TopCves title="Top introduced" changes={report.changes} types={['introduced', 'severity_increased']} tone="worse" />
-            <TopCves title="Top resolved" changes={report.changes} types={['resolved', 'severity_decreased']} tone="better" />
-          </Space>
-        </Col>
-      </Row>
+      {/*
+        TWO COLUMNS while there is something to put in the second one.
+
+        The right column is the changes at a glance: the artifact tally, then
+        the worst of what arrived and what went. When nothing changed both
+        Top cards render nothing, so the page became a tall left column beside
+        a small tally and a screen of white space - and the tally is already
+        the segmented control on the Artifacts card underneath it.
+
+        The left column loses two cards in that case as well. "Change by
+        severity and fixability" is a five-by-seven grid of noughts, and the
+        changes table has no rows. Neither is evidence of anything; they are
+        the shape of an answer that was not given.
+      */}
+      {changed > 0 ? (
+        <Row gutter={[16, 16]}>
+          <Col xs={24} xl={17}>
+            <Space direction="vertical" size={16} style={{ width: '100%' }}>
+              <VulnerabilityOverview report={report} />
+              <ChangeBySeverity report={report} />
+              <ArtifactDeltaCard report={report} onSync={onSync} syncing={syncing} />
+            </Space>
+          </Col>
+          <Col xs={24} xl={7}>
+            <Space direction="vertical" size={16} style={{ width: '100%' }}>
+              <SummaryCard report={report} />
+              <TopCves title="Top introduced" changes={report.changes} types={['introduced', 'severity_increased']} tone="worse" />
+              <TopCves title="Top resolved" changes={report.changes} types={['resolved', 'severity_decreased']} tone="better" />
+            </Space>
+          </Col>
+        </Row>
+      ) : (
+        <Space direction="vertical" size={16} style={{ width: '100%' }}>
+          <VulnerabilityOverview report={report} />
+          <ArtifactDeltaCard report={report} onSync={onSync} syncing={syncing} />
+        </Space>
+      )}
 
       {report.removedArtifact.total > 0 && (
         <Alert
@@ -129,13 +207,15 @@ export function SecurityComparison({
         />
       )}
 
-      <ChangeTable
-        report={report}
-        product={product}
-        baseRef={baseRef}
-        againstRef={againstRef}
-        repository={repository}
-      />
+      {changed > 0 && (
+        <ChangeTable
+          report={report}
+          product={product}
+          baseRef={baseRef}
+          againstRef={againstRef}
+          repository={repository}
+        />
+      )}
     </Space>
   )
 }
@@ -150,9 +230,10 @@ export function SecurityComparison({
  * scanned is inconclusive and the useful thing to put on screen is the button
  * that changes that - not a verdict repeating that it cannot say.
  */
-function ReleaseEnd({ title, end, onSync, align }: {
+function ReleaseEnd({ title, end, name, onSync, align }: {
   title: string
   end: SecurityComparisonEnd
+  name?: string
   onSync?: () => void
   align?: 'end'
 }) {
@@ -160,9 +241,27 @@ function ReleaseEnd({ title, end, onSync, align }: {
   return (
     <div style={{ padding: '18px 22px', minWidth: 0, textAlign: align === 'end' ? 'right' : 'left' }}>
       <FieldLabel>{title}</FieldLabel>
+      {/*
+        The package, then its version. Both, because either alone is ambiguous:
+        a product publishes nine differently-named packages that share a version
+        string, and the two ends of a comparison are frequently not the same
+        package at all. The name is the smaller of the two because the version
+        is what changes between them.
+      */}
+      {name && (
+        <div
+          style={{
+            fontFamily: mono, fontSize: 12, marginTop: 4, color: c.text2,
+            overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+          }}
+          title={name}
+        >
+          {name}
+        </div>
+      )}
       <div
         style={{
-          fontFamily: mono, fontSize: 19, fontWeight: 600, marginTop: 4,
+          fontFamily: mono, fontSize: 19, fontWeight: 600, marginTop: name ? 1 : 4,
           color: c.text, overflow: 'hidden', textOverflow: 'ellipsis',
           whiteSpace: 'nowrap',
         }}
@@ -215,10 +314,12 @@ function ReleaseEnd({ title, end, onSync, align }: {
  * colour agrees with the verdict rather than with the arithmetic - fewer
  * vulnerabilities is better whichever direction the number moved.
  */
-function NetChangeZone({ a, b, verdict }: {
+function NetChangeZone({ a, b, verdict, onSwap }: {
   a: SecurityComparisonEnd
   b: SecurityComparisonEnd
   verdict: SecurityComparisonResponse['verdict']
+  /** Reverses the two ends, from between them. */
+  onSwap?: () => void
 }) {
   const delta = b.counts.total - a.counts.total
   const tone = verdict === 'better' ? verdictColour.better
@@ -248,6 +349,27 @@ function NetChangeZone({ a, b, verdict }: {
       <Typography.Text type="secondary" style={{ fontSize: 11.5, marginTop: 2 }}>
         vulnerabilities
       </Typography.Text>
+      {/*
+        The reversal, between the two things it reverses.
+
+        Every word of this comparison is written from the new release's point of
+        view - "resolved" means the new one no longer has it - so which release
+        is the base is the question the whole answer hangs on, and getting it
+        the wrong way round meant going back to the listing and choosing both
+        again. It belongs here, where the direction is being read.
+      */}
+      {onSwap && (
+        <Tooltip title="Compare them the other way round">
+          <Button
+            size="small"
+            type="text"
+            icon={<SwapOutlined />}
+            onClick={onSwap}
+            aria-label="Compare them the other way round"
+            style={{ marginTop: 8, color: c.text3 }}
+          />
+        </Tooltip>
+      )}
     </div>
   )
 }
@@ -838,13 +960,29 @@ function ArtifactDeltaCard({ report, onSync, syncing }: {
           {
             title: '',
             width: 150,
-            render: (_, r) => (
-              r.comparable ? null : (
-                <Tooltip title="One side of this artifact has no scan result, so the columns above are not a comparison.">
-                  <Typography.Text type="secondary">Not comparable</Typography.Text>
+            /*
+              Two different reasons a row has no comparison, and they have
+              different fixes. A Helm chart is out of the scanner's scope for
+              ever - "Not comparable" reads as a fault and sends somebody
+              looking for one - while a missing scan is a sync away. Naming
+              which is the difference between a note and a task.
+            */
+            render: (_, r) => {
+              if (r.comparable) return null
+              const outOfScope = (s?: string) => s === 'unsupported' || s === 'disabled'
+              if (outOfScope(r.statusA) || outOfScope(r.statusB)) {
+                return (
+                  <Tooltip title="The scanner covers container images. This is not one, so there is nothing to compare.">
+                    <Typography.Text type="secondary">Not scanned by design</Typography.Text>
+                  </Tooltip>
+                )
+              }
+              return (
+                <Tooltip title="One side of this artifact has no scan result, so the columns above are not a comparison. Syncing the release that is missing it brings it in.">
+                  <Typography.Text type="secondary">Awaiting a scan</Typography.Text>
                 </Tooltip>
               )
-            ),
+            },
           },
         ]}
       />
@@ -1078,4 +1216,9 @@ function ChangeTable({ report, product, baseRef, againstRef, repository }: {
       />
     </Card>
   )
+}
+
+/** A release as a person names it: the package, then the version. */
+function label(name: string | undefined, version: string): string {
+  return name ? `${name}:${version}` : version
 }

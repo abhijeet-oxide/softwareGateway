@@ -705,6 +705,15 @@ reader nowhere to stand.
 | By source | scanner, present only where more than one contributed |
 | Problems | reason the scanner gave, with the images it gave it for |
 
+**The artifacts a scanner cannot cover are not rows.** A release of 260
+artifacts holds around 103 Helm charts, signatures and files, and those were a
+third of the Images sheet and a block of blank rows in All findings. They are
+not a gap - every other absent-findings row in these sheets is work somebody has
+to do, and "Xray scans container images" is not. The platform already treated
+them this way (coverage's denominator excludes them, the Problems tab never
+listed them); the sheets now agree. The COUNT survives on the Summary sheet,
+where one line beats a hundred rows.
+
 `?view=summary` is that first sheet on its own, for the person pasting one
 number into a release note.
 

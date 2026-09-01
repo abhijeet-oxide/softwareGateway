@@ -4,7 +4,7 @@ import { App, Button, Card, Dropdown, Segmented, Select, Space, Tooltip, Typogra
 // layout each person keeps. See `tablekit/README.md` for which tables get it.
 import { Table as DataTable } from '../tablekit'
 import type { MenuProps } from 'antd'
-import { MoreOutlined, ScaleOutlined } from '../icons'
+import { ClusterOutlined, MoreOutlined, SafetyCertificateOutlined, ScaleOutlined } from '../icons'
 import { Link, useNavigate, useSearchParams } from 'react-router-dom'
 import {
   usePackages, usePackagesByProducts, useProducts, useRunDownload, useSyncPackageSecurity, useTransfers,
@@ -627,31 +627,45 @@ export default function Packages() {
           domain/compare.ts - and it is asked HERE rather than on the report
           because it decides what the list should contain.
         */
-        <div
-          style={{
-            display: 'flex', alignItems: 'baseline', justifyContent: 'space-between',
-            gap: 16, flexWrap: 'wrap', marginBottom: 4,
-          }}
-        >
-          <Space direction="vertical" size={0}>
-            <Typography.Title level={4} style={{ margin: 0 }}>
-              Select two packages to compare
-            </Typography.Title>
-            {/*
-              One line, and only when the filter is actually hiding something.
-              It explains the missing rows and nothing else - a reader who has
-              just narrowed a list wants to know what left it, not to read a
-              paragraph about why.
-            */}
-            {forVulnerabilities && hiddenWithoutScan > 0 && (
-              <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-                {hiddenWithoutScan.toLocaleString()} release
-                {hiddenWithoutScan === 1 ? '' : 's'} without a vulnerability sync
-                {hiddenWithoutScan === 1 ? ' is' : ' are'} hidden.
-              </Typography.Text>
-            )}
-          </Space>
-          <Segmented
+        <Space direction="vertical" size={0} style={{ marginBottom: 4 }}>
+          <Typography.Title level={4} style={{ margin: 0 }}>
+            Select two packages to compare
+          </Typography.Title>
+          {/*
+            One line, and only when the filter is actually hiding something. It
+            explains the missing rows and nothing else - a reader who has just
+            narrowed a list wants to know what left it, not to read a paragraph
+            about why.
+          */}
+          {forVulnerabilities && hiddenWithoutScan > 0 && (
+            <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+              {hiddenWithoutScan.toLocaleString()} release
+              {hiddenWithoutScan === 1 ? '' : 's'} without a vulnerability sync
+              {hiddenWithoutScan === 1 ? ' is' : ' are'} hidden.
+            </Typography.Text>
+          )}
+        </Space>
+      )}
+
+      <div
+        style={{
+          display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+          gap: 16, marginBottom: 12, flexWrap: 'wrap',
+        }}
+      >
+        <Space size={12} align="center" wrap>
+          {/*
+            FIRST in the row of controls that shape the list, because it is the
+            one that decides what the list can contain - the others narrow it,
+            this one changes what is eligible at all.
+
+            It sat on the title line, which read as a heading ornament rather
+            than as a filter, and put two rows of controls where one does. Icons
+            because the two words are near-synonyms at a glance in a row of
+            five controls, and the shield is the same one the release's own
+            Security tab uses - the same picture meaning the same thing.
+          */}
+          {comparing && <Segmented
             value={selection.intent}
             onChange={(v) => setIntent(
               v as 'contents' | 'vulnerabilities',
@@ -664,20 +678,14 @@ export default function Packages() {
               },
             )}
             options={[
-              { value: 'contents', label: 'Contents' },
-              { value: 'vulnerabilities', label: 'Vulnerabilities' },
+              { value: 'contents', label: 'Contents', icon: <ClusterOutlined /> },
+              {
+                value: 'vulnerabilities',
+                label: 'Vulnerabilities',
+                icon: <SafetyCertificateOutlined />,
+              },
             ]}
-          />
-        </div>
-      )}
-
-      <div
-        style={{
-          display: 'flex', alignItems: 'center', justifyContent: 'space-between',
-          gap: 16, marginBottom: 12, flexWrap: 'wrap',
-        }}
-      >
-        <Space size={12} align="center" wrap>
+          />}
           <SearchBar
             value={search}
             onChange={setSearch}

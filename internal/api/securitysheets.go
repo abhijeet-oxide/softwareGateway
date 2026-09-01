@@ -178,7 +178,7 @@ func findingsSheet(
 		},
 	}
 	for _, report := range reports {
-		if !filter.keepReport(report) {
+		if !filter.keepReport(report) || !scannable(report) {
 			continue
 		}
 		// An image with no findings still gets a row when it was NOT scanned.
@@ -217,6 +217,31 @@ func findingsSheet(
 
 // imagesSheet is one row per image, with its counts and - as importantly - its
 // status and the sentence explaining it.
+// scannable reports whether an artifact is one the scanner could have an
+// opinion about.
+//
+// # Why `unsupported` rows leave the export entirely
+//
+// Because they are not a gap, and every other absent-findings row in these
+// sheets is. "Not scanned" and "the scanner would not answer" are work
+// somebody has to do; "this is a Helm chart, and Xray scans container images"
+// is a fact about what a release contains, not about what nobody looked at.
+//
+// A real release is 260 artifacts of which 103 are charts, signatures and
+// files, so the distinction is not academic: those 103 were a third of the
+// Images sheet and a block of blank rows in All findings, and a reader
+// scanning either for something to act on had to learn to skip them. The
+// platform already treats them this way - coverage's denominator excludes them
+// (Coverage.Scannable), and the Problems tab never listed them - so this makes
+// the export agree with the two places that were already right.
+//
+// The COUNT survives, on the Summary sheet, which is where "this release
+// contains 103 things the scanner does not cover" belongs: one line, not a
+// hundred rows.
+func scannable(r security.Report) bool {
+	return r.Status != security.StatusUnsupported
+}
+
 func imagesSheet(productName, release string, reports []security.Report) export.Sheet {
 	sheet := export.Sheet{
 		Name: "Images",
@@ -228,6 +253,11 @@ func imagesSheet(productName, release string, reports []security.Report) export.
 		Widths: []int{18, 22, 30, 22, 20, 10, 14, 15, 9, 9, 8, 9, 8, 9, 9, 17, 14, 20, 70},
 	}
 	for _, r := range reports {
+		// A sheet called Images, holding the artifacts that are not images,
+		// was a third of its own rows saying "not applicable".
+		if !scannable(r) {
+			continue
+		}
 		c := r.Counts
 		sheet.Rows = append(sheet.Rows, []string{
 			productName, release,

@@ -1,0 +1,1029 @@
+# 23 - Custom Software Validation
+
+> **Prerequisites:** [01 - Domain Model](01-domain-model.md), [02 - Configuration](02-configuration.md), [03 - Persistence](03-persistence.md), [09 - API](09-api.md)
+> **Ground truth:** [validation/00 - The Validation Model](../validation/00-validation-model.md), [validation/01 - Check Catalog](../validation/01-check-catalog.md), [validation/02 - Authoring Checks](../validation/02-authoring-checks.md), [validation/03 - Review of the Existing Policies](../validation/03-sample-policy-review.md)
+> **Consumed by:** [17 - Delivery Plan](17-delivery-plan.md), [19 - User Interface](19-user-interface.md), [20 - Downloads](20-download-rules.md)
+>
+> **Status: DESIGN. Not implemented.** Scheduled at [M11](17-delivery-plan.md).
+
+---
+
+## 1. The statement
+
+**Every release this platform ingests is checked against the organization's own
+Kubernetes and CNF standards, before the bytes move, and every finding names one
+Kubernetes object inside one chart inside one release.**
+
+The standards are [validation/custom-validation.md](../validation/custom-validation.md) -
+118 assertions written from lab and production experience. This document is how
+they become a machine that runs on every release, a screen that shows what
+passed and what did not, and a spreadsheet a release engineer sends to a vendor.
+
+What it is *not*: an admission controller, a linter with a score, or a second
+copy of the vulnerability scanner. [validation/00](../validation/00-validation-model.md) §8
+states each non-goal and why.
+
+### 1.1 What "tier 1" means here
+
+The organization's phrasing is *tier 1 needs no values files, tier 2 does*. The
+precise version, from [validation/00](../validation/00-validation-model.md) §4:
+
+- **Tier 1** decides from what the vendor shipped - chart archives, their own
+  `values.yaml`, plain manifests, kpt packages, kustomize bases, and the OCI
+  artifact tree. This is what this document builds.
+- **Tier 2** needs a site's values or a cluster fact. Its checks are catalogued,
+  and at tier 1 they report `skip` with a reason. They never report a pass.
+
+The bridge between them is **determinacy** (§6): a tier-1 run establishes, per
+finding, whether the value it judged is fixed by the template or merely
+defaulted. That is what lets tier 1 make hard, blocking statements about a chart
+without ever seeing a site's values file, and it is the single idea that makes
+the tier split useful rather than an excuse.
+
+## 2. Where it sits in the life of a release
+
+```
+   vendor publishes
+         │
+    ┌────▼─────┐
+    │ discovery│  a tag becomes a package row                     [07]
+    └────┬─────┘
+    ┌────▼─────┐
+    │  expand  │  the artifact tree is walked; charts, files,
+    └────┬─────┘  images and their digests are known              [expand]
+         │
+    ┌────▼──────────┐
+    │  VALIDATION   │  ◄── this document. Reads chart and file blobs
+    │   tier 1      │      by digest, renders, evaluates, records.
+    └────┬──────────┘      Runs BEFORE anything is downloaded.
+         │
+    ┌────▼─────┐
+    │ download │  30-60 GB moves, optionally gated on the verdict [20]
+    └────┬─────┘
+    ┌────▼─────┐
+    │ security │  Xray, on the images that landed                 [21]
+    └────┬─────┘
+    ┌────▼─────┐
+    │ promote  │  lab → production                                [22]
+    └──────────┘
+```
+
+**Validation runs after expansion and before download, and that ordering is the
+main practical argument for the feature.** Everything a tier-1 check needs is
+known once the tree has been walked: the charts are a few hundred kilobytes and
+they are addressable by digest. Learning that a release ships a `ClusterRole`
+with `verbs: ["*"]` is worth much more before 40 GB crosses a WAN than after.
+
+It can also run **after** a download, against what actually landed in a target -
+a different question ("is what we received what the vendor published?") answered
+by the same machinery pointed at a different repository. §12.2.
+
+## 3. Components
+
+Nothing new in the deployment topology. One package, one migration, one set of
+routes, one page.
+
+| Component | Where | Responsibility |
+|---|---|---|
+| **Catalog** | `internal/validation` | The loaded packs and the checks they own. Rebuilt on change; hashed into a bundle digest |
+| **Loader / watcher** | `internal/validation` | Discovers policy directories on start and on change, compiles, fails closed per pack |
+| **Source** | `internal/validation/source` | Fetches chart and file blobs by digest, from the source repository, under a byte budget |
+| **Renderer** | `internal/validation/render` | `helm template`, `kustomize build`, plain YAML. Deterministic inputs, sandboxed, bounded |
+| **Engine** | `internal/validation` | Applicability, evaluation, derived passes, verdict |
+| **Evaluators** | `internal/validation/builtin`, `internal/validation/rego` | The two check implementations behind one interface |
+| **Runner** | `internal/validation` | One run: claim, heartbeat, progress, cancel, record. Modelled on `security.Syncer` |
+| **Store** | `internal/store/validation.go` | `validation_runs`, `validation_results`, `validation_charts`, `package_validation` |
+| **API** | `internal/api/validation*.go` | Routes, wire types, export |
+| **UI** | `web/src/pages/Policies.tsx`, `web/src/components/validationpanel.tsx` | The catalogue, the results, the report |
+| **Retention** | `internal/maintenance/validation.go` | Leader-gated sweep, budget-based like the security one |
+
+## 4. Acquiring what is checked
+
+> **Decision - the Coordinator reads chart and file blobs; it never reads image layers.**
+>
+> The system's founding invariant is that artifact bytes never traverse the
+> Coordinator ([00](00-overview.md) §5). A validation run has to read Helm
+> charts, and a chart is bytes.
+>
+> *Why this is not a violation of the invariant:* the invariant exists because a
+> 30-60 GB package through a control plane is a memory profile, a network
+> bottleneck and a failure domain that the whole architecture is shaped to
+> avoid. It is about *payload*. A Helm chart is 10 KB to 2 MB, it is metadata by
+> volume, and the platform **already reads exactly this class of blob** - the
+> file-content routes stream a named layer out of the source registry so a
+> reader can look at what a vendor shipped (`internal/api/packages.go`, `cmd/coordinator/blobs.go`).
+>
+> *The bounds that keep it true:*
+>
+> | Bound | Value | Why |
+> |---|---|---|
+> | Only artifacts classified `chart` or `file` | `oci.Classify` | An image layer is never fetched. Images are judged by their *reference*, not their content |
+> | Only digests already recorded as artifacts of this package | reuses `store.FileInPackage`'s property | The fetch is a lookup, not a proxy. Nothing can ask the Coordinator to fetch an arbitrary digest on a credentialed connection |
+> | Only from the **source** repository | as `blobsImpl.ReadBlob` does | What the vendor published is what is being judged |
+> | `maxArtifactBytes` | 32 MiB default | A chart above this is not a chart |
+> | `maxRunBytes` | 512 MiB default | Bounds a release with 400 charts |
+> | Written to a temp directory, deleted at run end | | Nothing persists; the database stores results, never content |
+>
+> *Alternative considered - do the rendering in a worker.* Architecturally
+> tidier: workers are the tier that touches bytes, and it scales. Rejected for
+> now because workers hold no database credentials and no policy bundle, so the
+> feature would need a policy-distribution channel and a result-submission API
+> before it could check anything - a milestone of plumbing before the first
+> check runs. The `Runner` interface is shaped so a worker-side runner is an
+> addition rather than a move: nothing in the domain knows where it executes.
+>
+> *What would change our mind:* a corpus where chart bytes per run routinely
+> exceed the budget, or a security requirement that the control plane execute no
+> vendor-supplied templates. §5.4 covers the second.
+
+### 4.1 What is picked up
+
+For each artifact in the package's tree:
+
+| Classification | Treatment |
+|---|---|
+| `chart` | Fetched, unpacked, rendered (§5) |
+| `file` whose title ends `.tgz`/`.tar.gz` | Fetched, unpacked, inspected: a `Chart.yaml` at the root makes it a chart; a `kustomization.yaml` makes it a kustomize base; a `Kptfile` makes it a kpt package; otherwise a directory of manifests |
+| `file` whose title ends `.yaml`/`.yml` | Fetched, parsed as one or more manifests |
+| `image` | **Not fetched.** Contributes its reference to `input.images` |
+| `signature`, `index`, `artifact` | Not fetched; contributes to coverage as `not applicable` |
+
+Anything skipped is recorded in coverage with a reason. A release where every
+artifact was skipped is reported as `inconclusive`, never as a pass - the same
+discipline the security feature applies to unscanned images
+([21](21-security-posture.md)).
+
+## 5. Rendering
+
+### 5.1 Helm
+
+> **Decision - the `helm` binary, invoked as a subprocess, not the Helm Go SDK.**
+>
+> *Alternative:* import `helm.sh/helm/v3` and render in-process. No external
+> dependency, no subprocess, no PATH question.
+>
+> *Rejected because* the Helm SDK pulls in `k8s.io/client-go`, `k8s.io/api`,
+> `k8s.io/apimachinery`, `k8s.io/cli-runtime` and their transitive closure -
+> roughly a hundred modules into a binary that currently has thirty and that
+> deliberately has no Kubernetes client at all ([02](02-configuration.md) §3 is
+> explicit that avoiding client-go was a design goal). It also pins us to one
+> Helm version at build time.
+>
+> *Chosen:* the binary, discovered on `PATH` or at a configured path, with its
+> version recorded on every run. This is the shape the request asked for and it
+> has a property the SDK does not: **the version that renders is the version the
+> organization deploys with**, and it can be changed without rebuilding this
+> platform.
+>
+> *The cost, stated plainly:* if `helm` is absent, chart rendering does not
+> happen. §5.4 says exactly what the feature does then, and it is not "pass".
+
+Invocation, fixed for reproducibility:
+
+```
+helm template <releaseName> <chartDir>
+     --namespace        <configured, default "sgw-validation">
+     --kube-version     <configured, e.g. 1.31.0>
+     --api-versions     <configured list>
+     --include-crds
+     --dry-run
+```
+
+| Flag / choice | Why it is what it is |
+|---|---|
+| `releaseName` and `--namespace` fixed in config | `.Release.Name` and `.Release.Namespace` appear in rendered names, labels and selectors. A varying release name produces varying results, and [validation/00](../validation/00-validation-model.md) Rule 5 forbids that |
+| `--kube-version` pinned, **never read from a cluster** | `.Capabilities.KubeVersion` gates whole blocks of many charts. Taking it from a live cluster would make the answer depend on which cluster the Coordinator can see |
+| `--include-crds` | UPG-07 and UPG-11 need the CRDs the chart ships |
+| No `--dependency-update`, no `--repository-config` | It would reach the network. A chart whose dependencies are not vendored fails SUP-07, which is a finding, not an excuse to go and fetch them |
+| Hooks are **not** suppressed | MTA-08 is about hooks. `--no-hooks` would hide the thing being checked |
+| `--set` is never used | Tier 1 renders defaults. Anything else is tier 2 |
+
+Environment: `HELM_CACHE_HOME`, `HELM_CONFIG_HOME`, `HELM_DATA_HOME`,
+`HELM_REPOSITORY_CONFIG` and `HELM_REGISTRY_CONFIG` all point inside the run's
+temp directory, `HOME` with them. A chart cannot reach the operator's Helm
+configuration and a render cannot leave a trace outside the directory that is
+deleted at the end.
+
+### 5.2 Source attribution
+
+`helm template` emits a marker above every document:
+
+```yaml
+---
+# Source: mysvc/templates/deployment.yaml
+apiVersion: apps/v1
+```
+
+That marker is how a finding gets its `sourceFile`, and it is exact. The **line
+within the template** is not recoverable from helm's output. Rather than invent
+one, a result carries the source file plus the line **in the rendered document**,
+and the rendered document is kept in the evidence bundle so both ends of a vendor
+conversation are reading the same text ([validation/00](../validation/00-validation-model.md) §3).
+
+Subchart documents are attributed to the subchart - `mysvc/charts/redis/templates/…` -
+which is what makes "this finding is in a dependency, not in your chart" visible.
+
+### 5.3 Kustomize, kpt, plain manifests
+
+| Form | How it is detected | How it is rendered |
+|---|---|---|
+| Kustomize | `kustomization.yaml` at the root of an unpacked file layer | `kustomize build` if the binary is present; otherwise `error`, reason `kustomize unavailable` |
+| kpt package | `Kptfile` present | Read as plain YAML. kpt packages are already-rendered manifests; running kpt functions would need the function images and the network, which is tier 2 |
+| Plain manifests | `.yaml`/`.yml` with no marker file | Parsed directly. Multi-document streams split on `---` |
+
+Charts whose `Chart.yaml` declares dependencies that are not vendored under
+`charts/` are **not rendered**: SUP-07 fails, `renderStatus` is
+`dependencies_missing`, and every check that needed the rendered output reports
+`error` for that chart. This is deliberate. Fetching the dependency would mean
+reaching the network from the control plane, and rendering without it produces
+manifests that are not the ones the vendor ships.
+
+### 5.4 When helm is not there
+
+Discovered once at start and re-probed when config changes; the version is
+recorded and shown in Settings.
+
+| State | Behaviour |
+|---|---|
+| `helm` present | Everything runs |
+| `helm` absent | `T1-C` checks - chart structure, `Chart.yaml`, `values.yaml`, template text, file presence - still run. Every `T1-R` check reports `outcome: error`, `reason: "helm is not available on this Coordinator"`. The run's verdict is **inconclusive** |
+| `helm` present but a render fails | That chart's `T1-R` checks report `error` with helm's own stderr, truncated, in the reason. Other charts are unaffected |
+
+**A missing renderer never produces a pass.** That is the whole point of `error`
+being an outcome ([validation/00](../validation/00-validation-model.md) Rule 2),
+and it is the difference between a tool that degrades and a tool that lies.
+
+### 5.5 Bounds on a hostile chart
+
+A chart is vendor-supplied input and it is executed. Go templates cannot exec or
+read outside the chart, so the risk is resource exhaustion rather than escape,
+and it is bounded rather than trusted:
+
+| Bound | Default |
+|---|---|
+| Wall-clock per render | 60 s |
+| Rendered output size | 64 MiB, `SIGKILL` past it |
+| Unpacked chart size and file count | 128 MiB / 20,000 files - a zip-bomb bound applied at unpack |
+| Path traversal in the archive | Rejected at unpack; a `../` entry fails the artifact and is itself reported |
+| Concurrent renders per run | Configurable, default 4 |
+
+## 6. Determinacy - the mechanism
+
+The idea in [validation/00](../validation/00-validation-model.md) Rule 4, made
+concrete. It is what makes a tier-1 verdict defensible.
+
+**Render twice.**
+
+1. **Baseline render** - the chart's own `values.yaml`.
+2. **Probe render** - a copy of `values.yaml` with every scalar leaf replaced by
+   a type-preserving sentinel: integers become a distinctive number (`424242`),
+   strings become `sgw-probe-<n>`, booleans are flipped, and `null` is left
+   alone.
+
+Then, per rendered field:
+
+| Observation | Determinacy |
+|---|---|
+| The field exists in both renders with the **same** value | `fixed` - no values file changes it |
+| The field exists in both with **different** values | `configurable` - the finding is about the defaults |
+| The resource exists in one render only | `configurable`, and the finding says the resource's *existence* is gated by a value - which is usually the more interesting sentence ("this chart ships a PDB, disabled by default") |
+| The probe render fails | `unknown` for that chart. Recorded on the run; never silently treated as `fixed` |
+
+Matching between the two renders is by `(kind, name-after-normalization, container)`.
+Names frequently contain a value (`{{ .Values.nameOverride }}`), so the
+normalization replaces sentinel strings with a placeholder before matching. A
+resource that cannot be matched is `unknown`, not guessed.
+
+**Cost:** one extra `helm template` per chart, at most a second. **Value:** the
+difference between "your chart is not highly available" (wrong, and the vendor
+stops reading) and "your chart ships no PodDisruptionBudget template, so no
+deployment of it can be protected" (right, blocking, and actionable).
+
+Configurable: `determinacy: off | probe`. With `off`, every `T1-R` result is
+`unknown`, which weakens the verdict to `conditional` at worst - it never
+strengthens it.
+
+## 7. The engine
+
+One run, in order:
+
+```
+ 1  claim         one active run per package, in the database, with a heartbeat
+ 2  plan          the artifact list, from the recorded tree: what will be
+                  fetched, what will be skipped and why  (this is validateOnly)
+ 3  acquire       fetch chart and file blobs, under the byte budget
+ 4  render        helm / kustomize / plain, baseline and probe
+ 5  index         parse into resources; attach __address to each; build the
+                  release-wide indexes: pod templates by label set, services,
+                  PDBs, CRDs, image references
+ 6  applicability for each check, the set of resources it judges
+ 7  evaluate      builtin and rego evaluators, per check
+ 8  reconcile     derived passes = applicable − reported; skips where applicable
+                  is empty; determinacy attached from step 4
+ 9  waivers       applied, expiry checked against the run's own start time
+10  verdict       counts, coverage, the four-state verdict
+11  record        one transaction: run, results, chart rows, package summary
+```
+
+Steps 5 and 6 are where the design earns the "not vague" requirement. The
+release-wide indexes are built **once** and shared by every check, so
+`matchExpressions` evaluation, `IntOrString` handling, quantity parsing and OCI
+reference parsing are each implemented once and tested once - which is exactly
+what [validation/03](../validation/03-sample-policy-review.md) §3.3 shows going
+wrong when every policy does it for itself.
+
+### 7.1 The check interface
+
+```go
+// Check is one assertion. Both evaluators satisfy it, and nothing downstream
+// can tell which produced a Result.
+type Check interface {
+    // Meta is the manifest's declaration: ID, title, description, rationale,
+    // severity, tier, category, remediation, reference, appliesTo.
+    Meta() CheckMeta
+    // Evaluate reports what it found. It reports FAILURES only, unless
+    // Meta().EmitsPasses is set. Passes are derived by the engine from
+    // Meta().AppliesTo, which is what makes a pass impossible to forget and
+    // impossible to over-claim.
+    Evaluate(ctx context.Context, in *Release) ([]Finding, error)
+}
+```
+
+An `error` return from `Evaluate` becomes one `error` result per applicable
+resource - not a dropped check and not a silent pass. A check that panics is
+recovered, recorded as `error`, and its pack is marked unhealthy in the
+catalogue.
+
+### 7.2 Volume
+
+A large release: ~200 workloads, ~600 resources, 88 checks, most applying to
+workloads only. Order 10,000-15,000 result rows per run. Small for Postgres,
+large for a browser - so the API paginates and the UI's default view is failures
+grouped by chart, with passes one click away. `maxResultsPerRun` (default
+200,000) truncates rather than falling over, and a truncated run **says so** on
+the run row, in the API and in the export.
+
+## 8. Policy discovery and loading
+
+The mechanism [validation/02](../validation/02-authoring-checks.md) §1 describes,
+implemented the way product configuration already is
+([02](02-configuration.md) §3): a mounted directory, `fsnotify`, no Kubernetes
+API, and the same path against a plain directory in development.
+
+```
+start ──► scan policyPaths ──► parse each pack.yaml
+                                   │
+                                   ├─ prefix collision? reject THIS pack, keep the rest
+                                   ├─ duplicate ID?     reject THIS pack
+                                   ├─ rego compile err? reject THIS pack
+                                   └─ ok → compile, register
+                                        │
+                                        ▼
+                             bundle digest = sha256 over every
+                             loaded pack file, sorted by path
+```
+
+- **Fail closed per pack, never per catalogue.** One broken pack does not take
+  the baseline down, and it does not disappear either: it is listed as broken
+  with its error, in the API and on the Policies page, and every check it owns
+  reports `error`.
+- **The built-in baseline is compiled in** and always present. It cannot be
+  removed by deleting a directory, which is what stops a misconfigured mount
+  turning every release green.
+- **Reload is atomic.** A new catalogue is built and swapped; a run in flight
+  keeps the one it started with, and its bundle digest still describes it.
+- **The bundle digest is recorded on every run**, so "which rulebook produced
+  this report" is answerable a year later.
+
+## 9. Persistence
+
+`db/migrations/{postgres,sqlite}/00035_validation.sql`. Postgres shown; the
+SQLite dialect follows the conventions in [03](03-persistence.md) §4.
+
+```sql
+CREATE TABLE validation_runs (
+    id                    UUID PRIMARY KEY,
+    package_id            BIGINT NOT NULL REFERENCES packages(id) ON DELETE CASCADE,
+    product               TEXT   NOT NULL,
+    state                 TEXT   NOT NULL
+        CHECK (state IN ('pending','running','succeeded','failed','cancelled')),
+    trigger               TEXT   NOT NULL
+        CHECK (trigger IN ('manual','analysis','download','schedule')),
+    actor                 TEXT   NOT NULL DEFAULT 'anonymous',
+    tier                  SMALLINT NOT NULL DEFAULT 1,
+
+    -- WHAT PRODUCED THIS ANSWER. Every column here can change a result, so a
+    -- report that omitted them would not be reproducible and two runs that
+    -- differ in any of them are not comparable. See validation/00 Rule 5.
+    policy_bundle_digest  TEXT   NOT NULL,
+    engine_version        TEXT   NOT NULL,
+    helm_version          TEXT,
+    kustomize_version     TEXT,
+    kube_version          TEXT,
+    api_versions          TEXT,
+    release_name          TEXT   NOT NULL,
+    render_namespace      TEXT   NOT NULL,
+    determinacy_mode      TEXT   NOT NULL,
+
+    verdict               TEXT
+        CHECK (verdict IN ('pass','conditional','fail','inconclusive')),
+    counts                JSONB  NOT NULL DEFAULT '{}',
+    coverage              JSONB  NOT NULL DEFAULT '{}',
+    truncated             BOOLEAN NOT NULL DEFAULT FALSE,
+    error                 TEXT,
+
+    started_at            TIMESTAMPTZ NOT NULL,
+    heartbeat_at          TIMESTAMPTZ,
+    finished_at           TIMESTAMPTZ
+);
+
+-- One active run per release. The claim is IN THE DATABASE for the same reason
+-- the analysis claim is (migration 00021): the process holding it can die, and
+-- a release stuck "validating" forever is a release nobody can ever validate
+-- again. heartbeat_at is what makes the claim recoverable.
+CREATE UNIQUE INDEX validation_runs_active
+    ON validation_runs (package_id) WHERE state IN ('pending','running');
+CREATE INDEX validation_runs_package ON validation_runs (package_id, started_at DESC);
+
+CREATE TABLE validation_results (
+    id             BIGSERIAL PRIMARY KEY,
+    run_id         UUID NOT NULL REFERENCES validation_runs(id) ON DELETE CASCADE,
+
+    check_id       TEXT NOT NULL,
+    pack           TEXT NOT NULL,
+    outcome        TEXT NOT NULL CHECK (outcome  IN ('pass','fail','skip','error')),
+    severity       TEXT NOT NULL CHECK (severity IN ('block','warn','info')),
+    determinacy    TEXT NOT NULL CHECK (determinacy IN ('fixed','configurable','unknown','na')),
+
+    -- The address. Denormalized on purpose: a result is read on its own, in a
+    -- spreadsheet row, out of order, pasted into a vendor ticket. A row that
+    -- needs four joins to say which chart it is about is a row nobody can act
+    -- on, and it is exactly what a normalized schema produces here.
+    artifact_id      BIGINT REFERENCES package_artifacts(id) ON DELETE SET NULL,
+    artifact_digest  TEXT,
+    artifact_ref     TEXT,
+    chart_name       TEXT,
+    chart_version    TEXT,
+    source_file      TEXT,
+    rendered_line    INTEGER,
+    api_version      TEXT,
+    resource_kind    TEXT,
+    resource_ns      TEXT,
+    resource_name    TEXT,
+    container        TEXT,
+    locus            TEXT,
+
+    observed       TEXT,
+    expected       TEXT,
+    message        TEXT NOT NULL,
+    reason         TEXT,
+
+    -- Stable across releases: excludes chart version and release tag, so
+    -- "has the vendor fixed this yet" and "how long has this been failing"
+    -- are joins rather than guesses. It is also what a waiver keys on.
+    fingerprint    TEXT NOT NULL,
+    waiver_id      TEXT
+);
+
+CREATE INDEX validation_results_run     ON validation_results (run_id, outcome, severity);
+CREATE INDEX validation_results_chart   ON validation_results (run_id, chart_name, resource_kind);
+CREATE INDEX validation_results_fprint  ON validation_results (fingerprint);
+CREATE INDEX validation_results_check   ON validation_results (run_id, check_id);
+
+-- Per-chart coverage: what was rendered, what was not, and why. This is the
+-- denominator. Without it a run with 3 of 97 charts rendered and no failures
+-- reads exactly like a clean release.
+CREATE TABLE validation_charts (
+    run_id          UUID NOT NULL REFERENCES validation_runs(id) ON DELETE CASCADE,
+    artifact_digest TEXT NOT NULL,
+    artifact_ref    TEXT,
+    chart_name      TEXT,
+    chart_version   TEXT,
+    kind            TEXT NOT NULL,     -- chart | kustomize | kpt | manifests
+    render_status   TEXT NOT NULL,     -- ok | failed | skipped | dependencies_missing | too_large
+    render_error    TEXT,
+    resources       INTEGER NOT NULL DEFAULT 0,
+    determinacy     TEXT NOT NULL DEFAULT 'unknown',
+    PRIMARY KEY (run_id, artifact_digest)
+);
+
+-- The listing column. One row per release, overwritten by each run, so the
+-- Software table can show a compliance pill without touching the result rows.
+-- Same shape and same reasoning as package_security (migration 00023).
+CREATE TABLE package_validation (
+    package_id      BIGINT PRIMARY KEY REFERENCES packages(id) ON DELETE CASCADE,
+    run_id          UUID REFERENCES validation_runs(id) ON DELETE SET NULL,
+    verdict         TEXT,
+    blocking_fails  INTEGER NOT NULL DEFAULT 0,
+    warn_fails      INTEGER NOT NULL DEFAULT 0,
+    passes          INTEGER NOT NULL DEFAULT 0,
+    skips           INTEGER NOT NULL DEFAULT 0,
+    errors          INTEGER NOT NULL DEFAULT 0,
+    waived          INTEGER NOT NULL DEFAULT 0,
+    coverage_complete BOOLEAN NOT NULL DEFAULT FALSE,
+    validated_at    TIMESTAMPTZ
+);
+```
+
+**Retention.** Run summaries and `package_validation` are kept forever - they are
+kilobytes and they are the history. Result rows are kept for the most recent `N`
+runs per release (default 5) and past that become evictable under a byte budget,
+swept by a leader-gated loop. The policy is the one the security store arrived at
+after getting it wrong once ([21](21-security-posture.md) §7): **past its
+retention a row is evictable, not deleted**, and nothing goes until the store is
+over budget. A release with a verdict and no findings behind it is the failure
+mode to avoid.
+
+## 10. API
+
+AIP conventions per [09](09-api.md) §1. Custom methods with a colon.
+
+### The catalogue - what the organization checks
+
+| Method | Path | Purpose |
+|---|---|---|
+| `GET` | `/api/v1/validation/policies` | Every pack and check: ID, title, description, rationale, severity, tier, category, applicability, remediation, reference, engine, pack, and each pack's load status |
+| `GET` | `/api/v1/validation/policies/{check}` | One check in full, including its `appliesTo` and its fixtures' names |
+| `GET` | `/api/v1/validation/policies/export` | The catalogue as CSV/XLSX - the rulebook, on its own, for a vendor who asks "what will you check?" before shipping |
+
+This is the "list the available policies and view the details" requirement, and
+it is deliberately **not** under a product: the rulebook is the organization's,
+not a product's.
+
+### A release's validation
+
+| Method | Path | Purpose |
+|---|---|---|
+| `GET` | `/api/v1/products/{product}/packages/{package}/validation` | Latest run: verdict, counts, coverage, provenance, and results. `filter` on outcome, severity, check, chart, kind, determinacy; `pageSize`/`pageToken` |
+| `POST` | `/api/v1/products/{product}/packages/{package}/validation:run` | Start a run. `validateOnly=true` returns the **plan** - which artifacts would be fetched and rendered, which would be skipped and why - and stores nothing |
+| `POST` | `/api/v1/products/{product}/packages/{package}/validation:cancel` | Stop the run, wherever it is running |
+| `GET` | `/api/v1/products/{product}/packages/{package}/validation/progress` | Live progress: stage, done/total, notes |
+| `GET` | `/api/v1/products/{product}/packages/{package}/validation/runs` | History, newest first |
+| `GET` | `/api/v1/products/{product}/packages/{package}/validation/export` | `format=csv\|xlsx\|json\|zip` (§11) |
+| `GET` | `/api/v1/products/{product}/packages/{package}/validation/compare` | `against={tag}` - fixed, new, still failing, by fingerprint |
+
+Two deliberate absences, each of which will be asked for:
+
+- **No endpoint enables, disables or re-severities a check.** That is
+  configuration; it lives in Git beside the pack. An API that could switch off a
+  blocking check is an approval process with no reviewer - the same argument that
+  keeps products read-only over the API ([02](02-configuration.md) §1).
+- **No endpoint creates a waiver.** Same reason, and a waiver is the more
+  consequential of the two. [validation/00](../validation/00-validation-model.md) §7.
+
+## 11. The report
+
+`internal/export` already writes CSV, XLSX, JSON and ZIP bundles and is used by
+the security exporter. Validation reuses it unchanged.
+
+**Every sheet carries the whole address on every row.** A spreadsheet row is read
+on its own, filtered, sorted and pasted into a ticket; a row that says
+"`readinessProbe` missing" without saying which container of which workload of
+which chart of which release is a row nobody can act on.
+
+| Sheet | One row per | Why it is a separate sheet |
+|---|---|---|
+| **Summary** | field | Product, release, package digest, verdict, counts by outcome and severity, coverage, and the full provenance block - policy bundle digest, engine, helm, kube version, release name, namespace, determinacy mode, run time, who asked. A vendor cannot reproduce a finding without these |
+| **Findings** | failing result | The working sheet. Check ID, title, category, severity, tier, determinacy, product, release, package digest, chart name, chart version, chart artifact digest, source file, rendered line, apiVersion, kind, namespace, name, container, locus, observed, expected, message, remediation, reference, pack, fingerprint, waiver |
+| **All checks** | every result | Including passes and skips. This is what tells the vendor *what was verified*, not only what broke - and it is what makes the report evidence rather than a complaint |
+| **Resources** | Kubernetes object | Every object found, with its address and its pass/fail/skip tallies. The "every Kubernetes artifact level" view: this Deployment, this ConfigMap, this Secret, and how each did |
+| **Charts** | chart | Name, version, artifact digest, OCI ref, render status, resource count, failures, determinacy. The coverage denominator |
+| **Problems** | error / unrendered artifact | What could not be checked and why, with the renderer's own message |
+| **Policy catalog** | check that ran | The rulebook itself: ID, title, description, rationale, expected outcome, severity, tier, category, reference. So the vendor receives the standard, not just the verdicts |
+| **Waivers** | waived result | What was accepted, by whom, why, and when the acceptance expires |
+
+The **ZIP bundle** adds the evidence: the rendered manifests per chart, the
+chart's own `values.yaml`, the renderer's stderr for failed charts, and the
+findings as CSV. That is what a vendor needs to reproduce a finding without
+access to this platform, and it is the artifact that makes the conversation
+short.
+
+## 12. Lifecycle integration
+
+### 12.1 When it runs by itself
+
+```yaml
+coordinator:
+  validation:
+    autoRun: onAnalysis      # off | onAnalysis | onDownload | both
+```
+
+`onAnalysis` is the recommended default: expansion has just established the
+artifact tree, everything needed is known, and the answer arrives before anyone
+decides whether to spend the bandwidth. It is enqueued on the leader, rate-limited,
+and it never blocks the analysis that triggered it.
+
+`onDownload` re-runs against a **target** repository after a download completes.
+That is not a repeat: it answers "is what landed what the vendor published?", and
+a difference is a finding about the pipeline rather than about the chart.
+
+### 12.2 The download gate
+
+Deferred to M11-C, designed now so the shape is not accidental:
+
+```yaml
+downloads:
+  - name: to-lab
+    targets: [jfrog-store]
+    gates:
+      validation: off        # off | warn | block
+```
+
+`block` refuses to open a download whose release has an unwaived blocking failure
+with determinacy `fixed`. It sits beside the verification gate that already exists
+in [20](20-download-rules.md), uses the same mechanism, and defaults to `off`:
+a gate that surprises an operator during an incident is a gate that gets removed.
+
+### 12.3 The timeline
+
+`ReleaseTimeline` (`web/src/components/layout.tsx`) gains a **Validated** moment
+between Published and Downloaded, drawn in time order like the rest. It carries
+the verdict's tone - green for pass, amber for conditional, red for fail, grey
+for inconclusive - and its `pending` state is a live run, which is what makes
+"the checks are running" visible on the release page without a second widget.
+
+Every state change is an audit event ([12](12-observability-and-audit.md)):
+`validation.started`, `validation.completed` with the verdict, `validation.cancelled`,
+`validation.failed`. The Activity page picks them up with no work.
+
+### 12.4 Metrics
+
+| Metric | Type | Labels |
+|---|---|---|
+| `sgw_validation_runs_total` | counter | product, trigger, verdict |
+| `sgw_validation_run_duration_seconds` | histogram | product |
+| `sgw_validation_results_total` | counter | outcome, severity |
+| `sgw_validation_check_failures_total` | counter | check_id, severity |
+| `sgw_validation_render_failures_total` | counter | reason |
+| `sgw_validation_policy_packs_loaded` | gauge | status (ok/broken) |
+| `sgw_validation_check_duration_seconds` | histogram | check_id |
+
+`sgw_validation_check_duration_seconds` earns its place: a pack with an
+accidental O(n²) comprehension is invisible until a large release takes twenty
+minutes, and this is where it shows.
+
+## 13. Configuration
+
+Deployment-scoped, in `config.yaml` beside `security` and for the same reason
+([02](02-configuration.md) §8): none of it is a property of a *product*. Where
+the policies live and which Kubernetes version to render for belong to this
+installation. A product document says one thing about validation - whether it is
+on.
+
+```yaml
+coordinator:
+  validation:
+    enabled: true
+
+    # WHERE THE RULES COME FROM. Projected volumes, discovered on start and
+    # watched for change - the same mechanism as products (02 section 3), so a
+    # developer drops a directory in a folder and it is picked up with no
+    # cluster and no restart.
+    #
+    # The built-in `sgw-baseline` pack is compiled into the binary and is always
+    # present. It cannot be removed by unmounting a volume, which is what stops
+    # a misconfigured mount turning every release green.
+    policyPaths:
+      - /etc/softwaregateway/policies
+    waiverPaths:
+      - /etc/softwaregateway/waivers
+
+    # RENDERING. Pinned, not discovered. `.Capabilities.KubeVersion` gates whole
+    # blocks of many charts, so taking this from a live cluster would make a
+    # release's verdict depend on which cluster this Coordinator can see - and
+    # the answer would change under a cluster upgrade nobody connected to it.
+    helm:
+      path: helm                     # resolved on PATH when relative
+      kubeVersion: "1.31.0"
+      apiVersions: []                # extra --api-versions entries
+      releaseName: sgw-validation    # fixed: .Release.Name appears in output
+      namespace: sgw-validation      # fixed: so does .Release.Namespace
+      renderTimeout: 60s
+      maxRenderedBytes: 67108864     # 64 MiB
+    kustomize:
+      path: kustomize                # optional; absent means kustomize sources error
+
+    # Two renders per chart instead of one, to establish whether a value is
+    # fixed by the template or merely defaulted. This is what lets a tier-1
+    # finding block. `off` costs nothing and weakens every T1-R verdict to
+    # advisory - it never strengthens one. See section 6.
+    determinacy: probe               # off | probe
+
+    # BYTES. The Coordinator reads charts and small files, never image layers.
+    # These are the bound that keeps section 4's exception an exception.
+    maxArtifactBytes: 33554432       # 32 MiB - a chart above this is not a chart
+    maxRunBytes: 536870912           # 512 MiB per run
+    concurrency: 4                   # charts rendered at once
+
+    # WHEN. onAnalysis answers before the bandwidth is spent, which is the whole
+    # argument for validating at ingest rather than in CI.
+    autoRun: onAnalysis              # off | onAnalysis | onDownload | both
+
+    maxResultsPerRun: 200000         # truncate loudly rather than fall over
+    keepRunsPerPackage: 5            # result rows; summaries are kept forever
+    resultBudgetBytes: 0             # 0 = no ceiling, as with security
+    sweepInterval: 15m
+
+    # Deployment-specific inputs to the shipped checks. Constants in a policy
+    # file would need a rebuild to change and would be wrong for the next
+    # installation.
+    checkConfig:
+      approvedRegistries:            # SUP-02
+        - registry.internal.example.com
+        - quay.internal.example.com
+      probeBounds:                   # PRB-05
+        timeoutSeconds: [1, 3]
+        periodSeconds: [5, 10]
+      ownershipAnnotations:          # MTA-07
+        - example.com/owner
+        - example.com/oncall
+        - example.com/runbook
+      credentialPatterns: []         # CFG-01, appended to the built-in set
+```
+
+Per product, one field, in the product document:
+
+```yaml
+spec:
+  validation:
+    enabled: true          # default true when the feature is on
+    packs: []              # empty = every loaded pack; names a subset otherwise
+```
+
+## 14. User interface
+
+Four surfaces. Three are additions to pages that exist.
+
+### 14.1 Release page - a Validation tab
+
+Beside the Security tab, in the same shape, because a reader has already learned
+that shape ([19](19-user-interface.md) §3).
+
+```
+┌─────────────────────────────────────────────────────────────────────────┐
+│ ⚠ CONDITIONAL   3 blocking · 14 warnings · 1 041 passed · 26 skipped     │
+│ 97 of 97 charts rendered · 612 resources · 88 checks · helm 3.16.2      │
+│ Validated 12 Aug 2026 14:22 · bundle a91f…  [ Re-run ]  [ Export ▾ ]    │
+└─────────────────────────────────────────────────────────────────────────┘
+
+ [ Failures ] [ All results ] [ By resource ] [ Charts ] [ Problems ]
+ ┌──────────────────────────────────────────────────────────────────────┐
+ │ 🔴 mysvc 4.2.1                                            2 blocking │
+ │   ├ Deployment/mysvc-api                                             │
+ │   │   🔴 PDB-01  No PodDisruptionBudget selects this workload  fixed │
+ │   │      chart ships no PDB template · spec.template.metadata.labels │
+ │   │      [ why this check exists ]                                   │
+ │   │   🟠 PRB-03  liveness is more sensitive than readiness           │
+ │   │      container `api` · periodSeconds 5 vs 10   configurable      │
+ │   └ ServiceAccount/mysvc                                             │
+ │       🔴 RBAC-05  Role grants list on secrets       rules[1].verbs   │
+ └──────────────────────────────────────────────────────────────────────┘
+```
+
+Five properties, each answering something in the request directly:
+
+- **The verdict is a sentence, not a score.** Counts by outcome with coverage
+  beside them, because a number without a denominator is the thing this whole
+  model exists to prevent.
+- **Grouped chart → resource → check by default.** That is the shape of the
+  vendor conversation and the shape of the fix.
+- **Every row carries its determinacy.** `fixed` and `configurable` are visually
+  distinct, and hovering says what each means. A reader must never have to guess
+  whether a finding is about the software or about its defaults.
+- **Passes are one click away, never hidden.** The "All results" tab is the
+  evidence that the check ran, and the empty-state for a chart with no failures
+  says *"38 checks passed, 4 did not apply"*, never nothing.
+- **`Problems` is a first-class tab**, not a footnote. A chart that would not
+  render is the most important thing on the page, because everything else about
+  it is unknown.
+
+### 14.2 Policies page - the catalogue
+
+A new top-level page, because the rulebook is a thing people read on its own -
+before a release arrives, when writing a check, and when a vendor asks what the
+standard is.
+
+- Every check: ID, title, category, severity, tier, pack, engine.
+- Search and filter by any of those.
+- Opening one shows the full description, the rationale, what it applies to,
+  what it expects, the remediation, the reference, and the fixtures that prove
+  it - which is the "how does it work" half of the request.
+- Packs are listed with their load status; a broken pack is red, with its error.
+- `Export catalogue` writes the whole rulebook to XLSX.
+
+### 14.3 Software listing - a compliance column
+
+A verdict pill beside the existing security column, sortable and filterable, so
+"show me every release with a blocking failure" is a filter rather than a
+question. Absent means *not validated* and renders as such - never as a pass.
+
+### 14.4 The timeline and Reports
+
+The `Validated` moment (§12.3), and on the Reports page a fleet rollup: verdicts
+by product, the checks that fail most often across all releases, and the vendors
+whose releases fail most. The second of those is what turns a per-release tool
+into an argument for changing a standard - a check that fails on every vendor is
+either a real industry gap or a check that is wrong, and both are worth knowing.
+
+## 15. Code layout
+
+```
+internal/validation/
+    check.go        Check, CheckMeta, Finding, Result, Outcome, Severity,
+                    Tier, Determinacy
+    address.go      Address, fingerprinting
+    release.go      the evaluation input: resources, charts, images, indexes
+    index.go        label-selector evaluation, pod-template index, service
+                    index, PDB index, CRD index, image-reference extraction
+    pack.go         PolicyPack manifest parse + validate
+    catalog.go      loaded packs, lookup, bundle digest
+    loader.go       directory discovery, per-pack fail-closed compile
+    watch.go        fsnotify reload
+    engine.go       the eleven steps of section 7
+    applicability.go
+    verdict.go      scoring, waivers, expiry
+    waiver.go
+    runner.go       claim, heartbeat, progress, cancel
+    progress.go
+    builtin/        one file per category: pdb.go, probes.go, security.go,
+                    rbac.go, config.go, resources.go, network.go, storage.go,
+                    metadata.go, supply.go, scheduling.go, upgrade.go
+    rego/           the ONLY package importing OPA
+    render/         helm.go, kustomize.go, plain.go, probe.go, sandbox.go
+    source/         artifact acquisition, budget, unpack
+internal/store/validation.go
+internal/api/validation.go, validationwire.go, validationexport.go,
+             validationsheets.go
+internal/maintenance/validation.go
+pkg/apis/softwaregateway/v1/validation.go
+cmd/transferctl/validate.go
+web/src/components/validationpanel.tsx
+web/src/pages/Policies.tsx
+db/migrations/{postgres,sqlite}/00035_validation.sql
+test/fixtures/validation/
+```
+
+Three `depguard` rules, added to `.golangci.yml` beside the existing ones
+([15](15-code-layout.md) §3):
+
+| Rule | Denies | Why |
+|---|---|---|
+| `validation-imports-no-api` | `internal/validation/**` → `internal/api` | The domain rule everything else follows |
+| `opa-confined-to-evaluator` | everything except `internal/validation/rego/**` → `github.com/open-policy-agent/opa/**` | The heaviest dependency in the module stays behind one package. **Delete `internal/validation/rego` and the baseline still builds and still checks** - the same mechanical test that keeps the vendor plugins optional (`internal/vendors/classify.go`) |
+| `builtin-imports-no-render` | `internal/validation/builtin/**` → `internal/validation/render` | A check judges parsed resources. One that shelled out to helm for itself would be unreproducible and untestable without the binary |
+
+## 16. Failure matrix
+
+| Failure | Detected by | Behaviour | Verdict effect |
+|---|---|---|---|
+| `helm` absent | Start-up probe | `T1-C` checks run; `T1-R` report `error` | inconclusive |
+| One chart will not render | Non-zero exit | That chart's `T1-R` → `error` with helm's stderr; others unaffected | inconclusive |
+| Chart dependencies not vendored | `Chart.yaml` vs `charts/` | SUP-07 fails; chart not rendered | fail (SUP-07 is `block`) |
+| Chart exceeds `maxArtifactBytes` | Descriptor size, before fetch | Not fetched; recorded as `too_large` | inconclusive |
+| Run exceeds `maxRunBytes` | Running total | Remaining artifacts skipped, loudly | inconclusive |
+| Render times out | Wall clock | `SIGKILL`, chart → `error` | inconclusive |
+| A pack fails to compile | Load | Pack rejected, listed as broken; its checks → `error` | inconclusive |
+| A check panics | `recover` | One `error` result per applicable resource; pack marked unhealthy | inconclusive |
+| A check exceeds its timeout | Per-check deadline | `error`, and the pack is reported as slow in metrics | inconclusive |
+| Registry unreachable | Fetch | Run fails with the reason; **no partial run is recorded as a verdict** | run `failed`, no verdict |
+| Coordinator dies mid-run | Stale `heartbeat_at` | Claim released by the sweeper; the release is validatable again | previous run stands |
+| Results exceed `maxResultsPerRun` | Counter | Truncated; `truncated=true` on the run, stated in API, UI and export | inconclusive |
+
+Every row that ends in `inconclusive` is deliberate. A run that could not examine
+everything is not a run that passed.
+
+## 17. Testing
+
+Per [15](15-code-layout.md) §5, and with one addition that is the quality
+mechanism for the whole feature.
+
+### 17.1 The fixture corpus
+
+`test/fixtures/validation/charts/`:
+
+| Fixture | Exists to prove |
+|---|---|
+| `good-app` | **Zero findings across the entire baseline.** The false-positive gate. Every new check runs against it, so "my check does not fire on correct charts" is asserted by CI, not by its author |
+| `bad-pdb` | `maxUnavailable: 0`, `"0%"`, `minAvailable` at replica count, a 3-replica workload with no PDB, an orphan PDB, a PDB using `matchExpressions` that **must not** fire (the false positive in [validation/03](../validation/03-sample-policy-review.md) §3.3) |
+| `bad-probes` | No readiness on a service-backed container; identical liveness and readiness; liveness stricter than readiness; a probe pointing at a sidecar's port |
+| `bad-security` | privileged, UID 0, `NET_ADMIN` added, `hostPath`, a runtime socket mount, `hostNetwork`, `Unconfined` seccomp |
+| `bad-rbac` | Wildcard verbs, `list` on secrets, a ClusterRoleBinding, `pods/exec` |
+| `bad-images` | `:latest`, a semver tag, an unapproved registry, an image in a CronJob's `jobTemplate`, an image in an operator CR |
+| `bad-resources` | Missing requests on a **sidecar and an init container** - the case [validation/03](../validation/03-sample-policy-review.md) §3.7 says is usually forgotten |
+| `bad-cronjob` | Every applicable check must fire on a `CronJob`. Directly targets the seven-file false negative in [validation/03](../validation/03-sample-policy-review.md) §3.1 |
+| `bad-networking` | Allow-all NetworkPolicy, a Service selecting nothing, a `targetPort` naming a port no container declares, `/metrics` on an Ingress |
+| `bad-cnf` | A `NetworkAttachmentDefinition` with no IPAM, an SR-IOV resource in `requests` but not `limits`, a pod on a secondary network with a NetworkPolicy that cannot cover it |
+| `bad-storage` | A 2-replica Deployment with a PVC, an init container `chown`-ing a mount, a claim with no `storageClassName` |
+| `configurable-replicas` | `replicas` from `.Values` - the determinacy probe must return `configurable`, and the PDB finding must be worded for defaults |
+| `fixed-replicas` | The same chart with `replicas: 3` hard-coded - determinacy must be `fixed` and the finding must block |
+| `gated-pdb` | A PDB behind `{{- if .Values.pdb.enabled }}` defaulting off - the probe must report "ships a PDB, disabled by default" |
+| `broken-render` | A template that fails - must produce `error`, never `pass` |
+| `missing-dep` | An unvendored `Chart.yaml` dependency - SUP-07 fails and the chart is not rendered |
+| `nondeterministic` | A `checksum` annotation built from `now` - CFG-10 fails and the whole chart's determinacy is `unknown` |
+| `no-workloads` | Only ConfigMaps - workload checks must `skip` with a reason, never `pass` |
+| `subchart` | A finding inside a vendored subchart must be attributed to the subchart |
+
+Each carries an `expected.yaml` asserting the **exact set** of
+`(check, outcome, kind, name, container, locus, determinacy)` tuples. Not a
+subset. A check that also fires on the fixture's ConfigMap fails its own test.
+
+### 17.2 The gates
+
+| Test | Runs | Needs helm | Gate |
+|---|---|---|---|
+| Engine against **committed rendered manifests** | Every PR | No | Merge |
+| Fixture corpus, exact-set expectations | Every PR | Yes - CI image carries it | Merge |
+| `good-app` produces zero findings | Every PR | Yes | Merge |
+| **Coverage meta-test**: every registered check has a positive and a negative fixture | Every PR | No | Merge |
+| **Determinism**: the same fixture validated twice produces byte-identical results | Every PR | Yes | Merge |
+| Renderer against a real chart corpus | Nightly | Yes | Release |
+| Store, both dialects | Every PR | No | Merge |
+
+**PR CI must not need Docker for unit tests** ([15](15-code-layout.md) §5), and
+this respects that: the engine's own tests run against committed rendered YAML
+and need nothing. Helm is a binary in the CI image, not a container.
+
+The coverage meta-test is the rule that stops the catalogue rotting. A check
+without fixtures cannot be registered, so it cannot reach a release, so nobody
+can add a plausible-sounding assertion that has never been shown to fire.
+
+## 18. Delivery
+
+### M11-A - Engine and catalogue
+
+No UI, no export. The half that has to be right.
+
+- `internal/validation`: types, address, indexes, pack manifest, loader, watcher, engine, verdict
+- `render/helm.go` with the sandbox, the pinned inputs and the determinacy probe
+- `source/` with the byte budget, reusing the existing blob-read path
+- `builtin/`: the **88 tier-1 checks** of [validation/01](../validation/01-check-catalog.md) §4
+- Migration `00035`, both dialects; store
+- The fixture corpus and all five merge gates from §17.2
+- `transferctl validate <product> <tag>` - the CLI is the first client, as it is for everything else
+
+**Acceptance:** every catalogued v1 check has a positive and a negative fixture;
+`good-app` produces zero findings; the same release validated twice is
+byte-identical; a release with no `helm` on the box reports `inconclusive` and
+never `pass`.
+
+### M11-B - API, UI and the catalogue people read
+
+- Routes of §10, wire types, pagination and filtering
+- Validation tab, Policies page, Software listing column, `Validated` timeline moment
+- Live progress, cancel, audit events, metrics
+
+**Acceptance:** a release engineer opens a release, sees which charts fail which
+checks and why, and can explain any check on screen without leaving the UI.
+
+### M11-C - The report, waivers and automation
+
+- XLSX / CSV / JSON / ZIP export, all eight sheets
+- Waiver loading, expiry, the waived column
+- `autoRun: onAnalysis`, retention sweep, cross-release comparison by fingerprint
+- Rego pack support (`internal/validation/rego`) and the migration of the
+  organization's existing policies per [validation/03](../validation/03-sample-policy-review.md) §5
+
+**Acceptance:** a vendor receives one file that names every failure with its full
+address, states the rule that produced it, and lists what passed - and can
+reproduce any finding from the bundle without access to this platform.
+
+### M11-D - Gates and tier 2 (not scheduled)
+
+The download gate of §12.2, and tier-2 validation against site values files.
+Deliberately after the first three have been used in anger: a gate designed
+before anyone has read a hundred reports is a gate designed against a guess.
+
+### Sequencing
+
+M11 needs `expand` (the artifact tree) and the blob-read path, both of which
+exist. It needs nothing from M10, and the CLI-first shape of M11-A means it
+delivers value before any UI work starts.
+
+## 19. Decisions recorded
+
+Consolidated; each is argued where it is made.
+
+| # | Decision | Alternative rejected | Where |
+|---|---|---|---|
+| 1 | The Coordinator reads chart and file blobs, never image layers | Render in a worker | §4 |
+| 2 | The `helm` binary, not the Helm Go SDK | `helm.sh/helm/v3` in-process | §5.1 |
+| 3 | Determinacy by differential render | Static template analysis; assuming defaults | §6 |
+| 4 | Passes derived from a declared `appliesTo` | Policies emitting their own passes | [validation/00](../validation/00-validation-model.md) §5 |
+| 5 | The baseline is Go; Rego is the extension | Ship the existing `.rego` files as the baseline | [validation/03](../validation/03-sample-policy-review.md) §6 |
+| 6 | Severity on the check, outcome on the result | One conflated field, as the samples have | [validation/00](../validation/00-validation-model.md) Rule 3 |
+| 7 | The address is handed to policies and echoed back | Policies constructing their own | [validation/02](../validation/02-authoring-checks.md) §4.1 |
+| 8 | Waivers in Git, never through the API | A waiver UI | [validation/00](../validation/00-validation-model.md) §7 |
+| 9 | `error` is an outcome, and it makes a run inconclusive | Treating an undecidable check as a pass | [validation/00](../validation/00-validation-model.md) Rule 2 |
+| 10 | Fixtures are a merge gate, enforced by a meta-test | Fixtures by convention | [validation/02](../validation/02-authoring-checks.md) §6 |
+| 11 | No YAML check DSL yet, but `engine:` is already a field | Building one now | [validation/02](../validation/02-authoring-checks.md) §7 |
+| 12 | Denormalized result rows | A normalized schema with joins | §9 |
+
+## 20. Open questions
+
+| # | Question | Why it is open | What would settle it |
+|---|---|---|---|
+| Q1 | Does the determinacy probe hold up on a real 97-chart corpus? | Flipping booleans changes which resources render. The design handles that (a resource in one render only is `configurable`), but the *proportion* of `unknown` results is unknown until it is measured | Run it against a real orb in M11-A and count |
+| Q2 | Is 88 checks too many to ship at once? | A first report with 400 warnings on every vendor release is a report nobody reads | Measure against three real releases; if the warning volume is unusable, ship the `block` set first and stage the `warn` set |
+| Q3 | Should MTA-06/07 severities be organization-configurable after all? | §13 says one organization, one severity. Provenance and ownership annotations are the checks most likely to be right for one product family and wrong for another | Whether the waiver mechanism handles it. If waivers are being written in bulk for one check, the check's severity is wrong |
+| Q4 | Where do the evidence-only items (26 of them) live? | They are real requirements that no check can decide. Tracking them nowhere means they are not tracked | Probably a release checklist beside the automated results, sourced from the same catalogue - but that is a feature, not a footnote, and it needs its own design |
+| Q5 | Does OPA's dependency weight justify Rego support? | It is the largest dependency in the module, for an extension path that may see three packs | Deferred to M11-C by design. If nobody has written a pack by then, the answer is visible |

@@ -1,5 +1,13 @@
 # Artigen OPA Policies
 
+> **Kept as handed over; read [03 - Review of the Existing Policies](../03-sample-policy-review.md)
+> before adopting any of these.** They are a good body of domain knowledge and a
+> poor reporting contract: no check has an ID, none can report a pass or a skip,
+> findings are not addressed to a chart or a file, and seven of the sixteen files
+> silently check nothing at all for `CronJob` workloads. Document 03 says what each
+> file becomes. The contract that replaces the one described below is in
+> [02 - Authoring Checks](../02-authoring-checks.md).
+
 This directory contains [Rego](https://www.openpolicyagent.org/docs/latest/policy-language/) policy files evaluated by `artigen validate` when validating Kubernetes manifests.
 
 ## How It Works

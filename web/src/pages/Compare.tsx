@@ -7,8 +7,8 @@ import { Table as DataTable } from '../tablekit'
 import { FolderOutlined, SwapOutlined } from '../icons'
 import { Link, useNavigate, useSearchParams } from 'react-router-dom'
 import {
-  useCompare, useCompareProgress, useCompareSecurity, usePackages, useProduct, useProducts,
-  useSyncPackageSecurity,
+  useCompare, useCompareProgress, useCompareSecurity, usePackages, usePackageSecurity, useProduct,
+  useProducts, useSyncPackageSecurity,
 } from '../api/queries'
 import { hasSecurityData, kindName, matches, packageReference, version } from '../domain/derive'
 import { selectionHref } from '../domain/compare'
@@ -1265,6 +1265,31 @@ export default function Compare() {
    * that it cannot say. The re-run is deliberate rather than automatic: a sync
    * is minutes, and a page that silently re-compared would look stuck.
    */
+  /*
+   * Fetch what is missing, then carry on - without the reader doing anything
+   * else.
+   *
+   * It used to say "re-run the comparison once it finishes", which is a task
+   * handed back to somebody who had already asked for the thing. The sync now
+   * only asks the scanner about images it has no answer for, so filling a gap
+   * of one or two images is seconds rather than minutes; this watches the
+   * release until the run settles and re-runs the comparison itself.
+   */
+  const [syncingEnd, setSyncingEnd] = useState<'a' | 'b' | null>(null)
+  const watched = syncingEnd === 'a' ? leftPkg : syncingEnd === 'b' ? rightPkg : undefined
+  const watchedSecurity = usePackageSecurity(
+    product,
+    watched ? packageReference(watched) : undefined,
+    { repository: watched?.sourceRepository, enabled: Boolean(watched) },
+  )
+  const watchedState = watchedSecurity.data?.sync.state
+  useEffect(() => {
+    if (!syncingEnd || !watchedSecurity.data) return
+    if (watchedState === 'syncing' && !watchedSecurity.data.sync.stalled) return
+    setSyncingEnd(null)
+    void compareSecurity.refetch()
+  }, [syncingEnd, watchedState, watchedSecurity.data, compareSecurity])
+
   const syncEnd = (end: 'a' | 'b') => {
     const target = end === 'a' ? leftPkg : rightPkg
     if (!product || !target) return
@@ -1273,9 +1298,12 @@ export default function Compare() {
       ref: packageReference(target),
       repository: target.sourceRepository,
     }, {
-      onSuccess: (res) => message.info(res.started
-        ? `Syncing ${target.tag}. Re-run the comparison once it finishes.`
-        : `A sync is already running for ${target.tag}.`),
+      onSuccess: (res) => {
+        setSyncingEnd(end)
+        message.info(res.started
+          ? `Fetching the missing results for ${target.tag}. The comparison re-runs on its own.`
+          : `A sync is already running for ${target.tag}. The comparison re-runs when it finishes.`)
+      },
       onError: (e) => message.error(e instanceof Error ? e.message : 'The sync could not be started.'),
     })
   }
@@ -1487,6 +1515,7 @@ export default function Compare() {
               repository={leftPkg?.sourceRepository}
               report={compareSecurity.data}
               onSync={syncEnd}
+              syncing={Boolean(syncingEnd) || syncSecurity.isPending}
             />
           )}
         </>

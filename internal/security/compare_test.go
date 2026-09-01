@@ -351,3 +351,109 @@ func TestDisabledProviderAnswersForEveryArtifact(t *testing.T) {
 		}
 	}
 }
+
+// The same bytes have one answer.
+//
+// A stored result is keyed by (scope, artifact), and two releases of one
+// product are not always discovered in the same repository - so a comparison
+// can hold a perfectly good scan of a digest on one side and nothing on the
+// other, for bytes that are identical. Refusing to compare them produced a
+// warning with no action in it: there is nothing to fix, because a digest is a
+// hash of content and matching digests are the same software.
+func TestCompareUsesOneSidesScanWhenTheDigestsMatch(t *testing.T) {
+	shared := report("cfx-amf", "sha256:aaa",
+		finding("CVE-2024-3094", SeverityCritical, "xz-utils", true),
+		finding("CVE-2024-6387", SeverityHigh, "openssh", true),
+	)
+	// The same image, never scanned under this release's scope.
+	unscanned := Report{
+		Artifact: ArtifactRef{Name: "cfx-amf", Digest: "sha256:aaa", Tag: "t", Kind: "image"},
+		Status:   StatusNotScanned,
+		Provider: "jfrog-xray",
+		Message:  "This artifact has not been included in a vulnerability sync yet.",
+	}
+
+	c := Compare(CompareInput{A: []Report{shared}, B: []Report{unscanned}})
+
+	if c.ArtifactSummary.NotComparable != 0 {
+		t.Fatalf("NotComparable = %d: identical bytes were refused a comparison",
+			c.ArtifactSummary.NotComparable)
+	}
+	if len(c.Artifacts) != 1 || !c.Artifacts[0].Comparable {
+		t.Fatalf("artifact delta = %+v, want one comparable pair", c.Artifacts)
+	}
+	// Nothing changed, because nothing did: it is one artifact.
+	if c.Introduced.Total != 0 || c.Resolved.Total != 0 {
+		t.Errorf("introduced %d / resolved %d, want none either way",
+			c.Introduced.Total, c.Resolved.Total)
+	}
+	if c.Unchanged.Total != 2 {
+		t.Errorf("unchanged = %d, want the two findings carried by both", c.Unchanged.Total)
+	}
+	for _, caveat := range c.Caveats {
+		if strings.Contains(caveat, "no scan result yet") {
+			t.Errorf("caveat still warns about a gap that does not exist: %q", caveat)
+		}
+	}
+}
+
+// It borrows only FROM a scan, and never invents one.
+func TestCompareDoesNotInventAResultForAnUnscannedPair(t *testing.T) {
+	unscanned := func() Report {
+		return Report{
+			Artifact: ArtifactRef{Name: "cfx-amf", Digest: "sha256:aaa", Tag: "t", Kind: "image"},
+			Status:   StatusNotScanned,
+			Provider: "jfrog-xray",
+		}
+	}
+
+	c := Compare(CompareInput{A: []Report{unscanned()}, B: []Report{unscanned()}})
+
+	if c.ArtifactSummary.NotComparable != 1 {
+		t.Fatalf("NotComparable = %d, want 1: neither side has a result to share",
+			c.ArtifactSummary.NotComparable)
+	}
+	if len(c.Changes) != 0 {
+		t.Errorf("classified %d changes out of two unscanned artifacts", len(c.Changes))
+	}
+}
+
+// Two different builds of one image is the real gap, and it stays reported -
+// with a sentence a reader can act on.
+func TestCompareStillReportsADifferentDigestWithNoScan(t *testing.T) {
+	scanned := report("cfx-amf", "sha256:aaa", finding("CVE-2024-3094", SeverityCritical, "xz", true))
+	other := Report{
+		Artifact: ArtifactRef{Name: "cfx-amf", Digest: "sha256:bbb", Tag: "t2", Kind: "image"},
+		Status:   StatusNotScanned,
+		Provider: "jfrog-xray",
+	}
+	// A second image both releases DO have results for, so this is a gap in a
+	// comparison rather than a release nobody has scanned - which is a
+	// different sentence and gets one of its own.
+	alsoA := report("cfx-smf", "sha256:ccc", finding("CVE-2024-6387", SeverityHigh, "openssh", true))
+	alsoB := report("cfx-smf", "sha256:ccc", finding("CVE-2024-6387", SeverityHigh, "openssh", true))
+
+	c := Compare(CompareInput{A: []Report{scanned, alsoA}, B: []Report{other, alsoB}})
+
+	if c.ArtifactSummary.NotComparable != 1 {
+		t.Fatalf("NotComparable = %d, want 1: different bytes need their own scan",
+			c.ArtifactSummary.NotComparable)
+	}
+	var said string
+	for _, caveat := range c.Caveats {
+		if strings.Contains(caveat, "no scan result yet") {
+			said = caveat
+		}
+	}
+	if said == "" {
+		t.Fatal("nothing told the reader an image was left out")
+	}
+	// Grammar, and an action. It read "1 artifacts ... could not be compared"
+	// and stopped there.
+	if strings.Contains(said, "1 images") || strings.Contains(said, "1 artifacts") {
+		t.Errorf("caveat is ungrammatical for one image: %q", said)
+	}
+	if !strings.Contains(said, "Syncing") {
+		t.Errorf("caveat states a problem without its fix: %q", said)
+	}
+}

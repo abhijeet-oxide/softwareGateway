@@ -1315,8 +1315,23 @@ func (s *Security) RepositoryByID(ctx context.Context, id int64) (RepositoryIden
 //
 // A page that showed nothing once the prose expired would be a page that
 // silently emptied itself overnight.
+//
+// # Why the caller chooses
+//
+// Merging the prose is not free, and it is not free in proportion to how much
+// of it the caller wants: it decompresses and parses EVERY stored payload for
+// the release, because that is where the paragraphs are. For a release of
+// eighty-four thousand findings that is tens of megabytes of JSON per side,
+// spent to attach descriptions that a comparison then classifies without ever
+// reading. security.IndexOnly skips the whole pass.
+//
+// The asymmetry to know about: malware, the policy verdict and the list of held
+// documents live only in the detail tier, so IndexOnly does not carry them
+// either. That is right for a comparison and wrong for a page that draws them,
+// which is why this is the caller's decision and not a heuristic here.
 func (s *Security) ReportsFor(
 	ctx context.Context, scope security.Scope, refs []security.ArtifactRef,
+	detail security.Detail,
 ) ([]security.Report, error) {
 	if len(refs) == 0 {
 		return nil, nil
@@ -1402,9 +1417,12 @@ func (s *Security) ReportsFor(
 	if err := s.attachFindings(ctx, scanIDs, byRef); err != nil {
 		return nil, err
 	}
-	// Prose is an enrichment. Losing it costs the paragraph, not the findings,
-	// so a failure here is deliberately swallowed rather than returned.
-	_ = s.enrichFromDetails(ctx, scope, refs, byRef)
+	if detail == security.WithProse {
+		// Prose is an enrichment. Losing it costs the paragraph, not the
+		// findings, so a failure here is deliberately swallowed rather than
+		// returned.
+		_ = s.enrichFromDetails(ctx, scope, refs, byRef)
+	}
 
 	// Preserve the caller's order, and give an artifact with no stored row a
 	// report that says so rather than omitting it - a release whose artifacts

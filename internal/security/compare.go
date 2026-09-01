@@ -248,15 +248,35 @@ func Compare(in CompareInput) Comparison {
 
 	pairs := pairArtifacts(a, b)
 
+	// The same bytes have one answer.
+	//
+	// A pair whose two ends carry the same digest IS one artifact, and a scan
+	// of it is a scan of both sides. Refusing to compare because the row was
+	// filled under one release's scope and not the other's is refusing to use
+	// a fact we hold - and the sentence it produced, "present in both releases
+	// but one side has no scan result", is one no reader can act on because
+	// there is nothing to fix.
+	//
+	// Before presentInB below, deliberately: adoption puts findings on B's
+	// side of a pair, and a set of "what B holds" built before it would report
+	// them resolved when they are still there.
+	for i := range pairs {
+		shareDigestResult(&pairs[i])
+	}
+
 	// Every (CVE, component) B holds anywhere. A finding that left one artifact
 	// and appeared on another has not been resolved, it has moved, and counting
 	// it as resolved would let a repackaging read as a security improvement.
+	//
+	// Read off the PAIRS rather than the index, because pairArtifacts covers
+	// every one of B's artifacts - matched or added - and the pairs are what
+	// adoption above has been applied to.
 	presentInB := map[string]bool{}
-	for _, r := range b {
-		if r.Status != StatusScanned {
+	for _, p := range pairs {
+		if p.b == nil || p.b.Status != StatusScanned {
 			continue
 		}
-		for _, f := range r.Findings {
+		for _, f := range p.b.Findings {
 			presentInB[f.Key()] = true
 		}
 	}
@@ -318,7 +338,8 @@ func Compare(in CompareInput) Comparison {
 			classifyPair(&cmp, &delta, p)
 		}
 
-		if !delta.Comparable && (p.change == ArtifactCommon || p.change == ArtifactUpgraded) {
+		if !delta.Comparable && (p.change == ArtifactCommon || p.change == ArtifactUpgraded) &&
+			fixableGap(p) {
 			cmp.ArtifactSummary.NotComparable++
 		}
 		switch p.change {
@@ -341,6 +362,81 @@ func Compare(in CompareInput) Comparison {
 	cmp.Verdict, cmp.Caveats = decide(cmp, postureA, postureB)
 	cmp.Headline, cmp.Explanation = explain(cmp)
 	return cmp
+}
+
+// fixableGap reports whether a pair that could not be compared is a MISSING
+// ANSWER rather than a question nobody asked.
+//
+// # Why this is not simply "not comparable"
+//
+// Because a release is not only images. It is Helm charts, an index manifest,
+// signatures - and the scanner has nothing to say about any of them, by design
+// and permanently. Counting those as artifacts that "could not be compared"
+// put four rows behind a warning of which one was real, and told a reader that
+// syncing would bring in a Helm chart's vulnerabilities. It never will.
+//
+// So a gap counts only when both ends are things a scanner would answer about
+// and at least one of them has no answer yet. That is the case, and the only
+// case, where somebody pressing Sync changes the outcome.
+func fixableGap(p pair) bool {
+	scannable := func(r *Report) bool {
+		return r != nil && r.Status != StatusUnsupported && r.Status != StatusDisabled
+	}
+	if !scannable(p.a) || !scannable(p.b) {
+		return false
+	}
+	return p.a.Status != StatusScanned || p.b.Status != StatusScanned
+}
+
+// shareDigestResult lets one end of a pair answer for the other when both are
+// the same bytes.
+//
+// # Why the two ends can differ at all
+//
+// Because a stored answer is keyed by (scope, artifact), and two releases of
+// one product are not always discovered in the same repository. The same image
+// under two repositories is two rows, and a sync of one release fills one of
+// them - so a comparison could hold a perfectly good scan of a digest on the
+// left and nothing on the right, for bytes that are identical.
+//
+// A digest is a hash of content. If they match, the artifacts are the same
+// software and the same vulnerabilities, and there is nothing to be gained by
+// asking a scanner to prove it again.
+func shareDigestResult(p *pair) {
+	if p.a == nil || p.b == nil {
+		return
+	}
+	da := strings.TrimSpace(strings.ToLower(p.a.Artifact.Digest))
+	db := strings.TrimSpace(strings.ToLower(p.b.Artifact.Digest))
+	if da == "" || da != db {
+		return
+	}
+
+	switch {
+	case p.a.Status == StatusScanned && p.b.Status != StatusScanned:
+		p.b = adoptFindings(p.b, p.a)
+	case p.b.Status == StatusScanned && p.a.Status != StatusScanned:
+		p.a = adoptFindings(p.a, p.b)
+	}
+}
+
+// adoptFindings copies one report's result onto another artifact, keeping the
+// second artifact's own identity - it is the same bytes under another
+// release's name, and the table names the release's.
+func adoptFindings(onto, from *Report) *Report {
+	out := *onto
+	out.Status = from.Status
+	out.Findings = from.Findings
+	out.Malware = from.Malware
+	out.Counts = from.Counts
+	out.ScannedAt = from.ScannedAt
+	out.RetrievedAt = from.RetrievedAt
+	out.Provider = from.Provider
+	// Said, rather than silently presented as this release's own scan. A
+	// reader who wonders why an image nobody synced here has results deserves
+	// the one-sentence answer.
+	out.Message = "Identical bytes to the other release's copy, so its scan result is used for both."
+	return &out
 }
 
 // classifyPair aligns the findings of one artifact present in both releases.
@@ -589,10 +685,21 @@ func decide(c Comparison, a, b Posture) (Verdict, []string) {
 		caveats = append(caveats, fmt.Sprintf("%d of %d artifacts in %s have no scan result.",
 			n, b.Coverage.Scannable(), displayName(c.NameB, "the new release")))
 	}
-	if c.ArtifactSummary.NotComparable > 0 {
+	if n := c.ArtifactSummary.NotComparable; n > 0 {
+		// Named, counted correctly, and with the fix in the sentence.
+		//
+		// It read "1 artifacts present in both releases could not be compared
+		// because one side has no scan result" - which is ungrammatical, is
+		// wrong whenever NEITHER side has one, and leaves a reader with a
+		// warning and no action. What they need is which image, which release,
+		// and that a sync fixes it.
 		caveats = append(caveats, fmt.Sprintf(
-			"%d artifacts present in both releases could not be compared because one side has no scan result.",
-			c.ArtifactSummary.NotComparable))
+			"%s in both releases %s no scan result yet, so %s left out of the comparison. "+
+				"Syncing the release that is missing them brings %s in.",
+			countNoun(n, "image", "images"),
+			map[bool]string{true: "has", false: "have"}[n == 1],
+			map[bool]string{true: "it is", false: "they are"}[n == 1],
+			map[bool]string{true: "it", false: "them"}[n == 1]))
 	}
 	if !c.RemovedArtifact.Empty() {
 		caveats = append(caveats, fmt.Sprintf(

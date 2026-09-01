@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/go-chi/chi/v5"
+	"golang.org/x/sync/errgroup"
 
 	"github.com/abhijeet-oxide/softwareGateway/internal/export"
 	"github.com/abhijeet-oxide/softwareGateway/internal/security"
@@ -75,13 +76,13 @@ func (s *Server) handleExportPackageSecurity(w http.ResponseWriter, r *http.Requ
 	// Read, not retrieve. An export of a release nobody synced is an export of
 	// nothing, and it says so in the file rather than quietly starting a
 	// multi-minute scan behind a download link.
-	side, err := s.securitySide(r.Context(), productName, pkg)
+	side, err := s.securitySide(r.Context(), productName, pkg, security.WithProse)
 	if err != nil {
 		s.internal(w, r, "read security for export", err)
 		return
 	}
 
-	book := packageSecurityBook(productName, pkg, side, view, filter)
+	book := packageSecurityBook(productName, pkg, side, view, filter, s.deps.SecurityFreshness)
 	markPrimary(&book, table)
 	if format == export.FormatZIP {
 		book.Files = s.bundleFor(r.Context(), productName, pkg, side)
@@ -221,13 +222,22 @@ func (s *Server) handleExportSecurityComparison(w http.ResponseWriter, r *http.R
 		return
 	}
 
-	sideA, err := s.securitySide(r.Context(), productName, base)
-	if err != nil {
-		s.internal(w, r, "read security for export", err)
-		return
-	}
-	sideB, err := s.securitySide(r.Context(), productName, other)
-	if err != nil {
+	// WithProse, unlike the page: an export is a document somebody reads away
+	// from this tool, and the paragraph is most of why they exported it. Both
+	// sides at once, for the reason the comparison handler gives.
+	var sideA, sideB securitySide
+	group, gctx := errgroup.WithContext(r.Context())
+	group.Go(func() error {
+		var err error
+		sideA, err = s.securitySide(gctx, productName, base, security.WithProse)
+		return err
+	})
+	group.Go(func() error {
+		var err error
+		sideB, err = s.securitySide(gctx, productName, other, security.WithProse)
+		return err
+	})
+	if err := group.Wait(); err != nil {
 		s.internal(w, r, "read security for export", err)
 		return
 	}
@@ -485,7 +495,7 @@ func firstValue(q map[string][]string, key string) string {
 // content of every summary export - is not it.
 func packageSecurityBook(
 	productName string, pkg store.PackageRow, side securitySide,
-	view string, filter findingFilter,
+	view string, filter findingFilter, fresh security.Freshness,
 ) export.Book {
 	release := releaseLabel(pkg)
 
@@ -494,7 +504,7 @@ func packageSecurityBook(
 		// one number into a release note.
 		book := export.Book{Sheets: []export.Sheet{summarySheet(productName, pkg, side, filter)}}
 		book.Sheets[0].Primary = true
-		book.JSON = toAPIPackageSecurity(productName, pkg, side.row, side.target, false)
+		book.JSON = toAPIPackageSecurity(productName, pkg, side.row, side.target, false, fresh)
 		return book
 	}
 
@@ -530,7 +540,7 @@ func packageSecurityBook(
 		book.Sheets = append(book.Sheets, sheet)
 	}
 
-	book.JSON = detailJSON(productName, pkg, side, filter)
+	book.JSON = detailJSON(productName, pkg, side, filter, fresh)
 	return book
 }
 
@@ -799,8 +809,9 @@ func summaryOnly(c security.Comparison) security.Comparison {
 // offering the loss as the feature.
 func detailJSON(
 	productName string, pkg store.PackageRow, side securitySide, filter findingFilter,
+	fresh security.Freshness,
 ) any {
-	out := toAPIPackageSecurity(productName, pkg, side.row, side.target, true)
+	out := toAPIPackageSecurity(productName, pkg, side.row, side.target, true, fresh)
 	for _, report := range side.reports {
 		if !filter.keepReport(report) {
 			continue

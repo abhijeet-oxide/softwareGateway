@@ -1,10 +1,12 @@
 import { useEffect, useState } from 'react'
 import type { ReactNode } from 'react'
-import { Alert, App, Button, Drawer, Dropdown, Popover, Progress, Space, Timeline, Tooltip, Typography } from 'antd'
+import {
+  Alert, App, Button, Drawer, Dropdown, Popover, Progress, Space, Tag, Timeline, Tooltip, Typography,
+} from 'antd'
 import { formatAbsolute, formatRelative } from '../domain/format'
 import { download } from '../api/client'
 import {
-  CheckCircleOutlined, CopyOutlined, DownloadOutlined, ExclamationCircleOutlined,
+  CheckCircleOutlined, CopyOutlined, DownloadOutlined, DownOutlined, ExclamationCircleOutlined,
   FileTextOutlined, LoadingOutlined, MinusCircleOutlined, QuestionCircleOutlined, StopOutlined,
   SyncOutlined, WarningOutlined, FolderZip24RegularIcon 
 } from '../icons'
@@ -15,7 +17,7 @@ import {
 import { SEVERITIES } from '../api/types'
 import type {
   PackageSecuritySummary, ScanStatus, SecurityCounts, SecurityCoverage,
-  SecurityLogEntry, SecurityState, SecuritySyncStatus, Severity, Verdict,
+  SecurityFreshness, SecurityLogEntry, SecurityState, SecuritySyncStatus, Severity, Verdict,
 } from '../api/types'
 
 /**
@@ -1022,11 +1024,21 @@ function useElapsed(startedAt: string | undefined, running: boolean): string | u
  * all, and the second is a refresh of one that exists. A button that said the
  * same thing in both places would make the first look optional.
  */
-export function SyncButton({ sync, onSync, pending, size = 'middle' }: {
+export function SyncButton({ sync, onSync, pending, size = 'middle', freshness }: {
   sync: SecuritySyncStatus
-  onSync: () => void
+  /**
+   * `force` asks the scanner about every image, ignoring what is stored.
+   *
+   * The plain press does not. Stored answers are keyed by image and releases
+   * of one product share nearly all of theirs, so an ordinary sync asks about
+   * the images that are missing or past the age limit and reuses the rest -
+   * which is the difference between a sync of seven images and one of a
+   * hundred and fifty-seven against somebody else's rate limit.
+   */
+  onSync: (force?: boolean) => void
   pending?: boolean
   size?: 'small' | 'middle'
+  freshness?: SecurityFreshness
 }) {
   if (!sync.canSync) {
     return (
@@ -1039,11 +1051,19 @@ export function SyncButton({ sync, onSync, pending, size = 'middle' }: {
   // one is a release nobody can sync until a sweeper notices. The server takes
   // the claim from a run that has stopped beating, so this offer is real.
   const running = sync.state === 'syncing' && !sync.stalled
-  return (
+  const scanner = sync.provider === 'jfrog-xray' ? 'JFrog Xray' : 'the scanner'
+  const where = sync.repository ? ` in ${sync.repository}` : ''
+  const reuse = (freshness?.maxAgeSeconds ?? 0) > 0
+
+  const button = (
     <Tooltip
       title={running
         ? 'A sync is already running for this release.'
-        : `Asks ${sync.provider === 'jfrog-xray' ? 'JFrog Xray' : 'the scanner'}${sync.repository ? ` in ${sync.repository}` : ''} about every artifact in this release and stores the answer.`}
+        : reuse
+          ? `Asks ${scanner}${where} about the images this release has no answer for, `
+            + `or whose answer is older than ${describeAge(freshness?.maxAgeSeconds ?? 0)}. `
+            + 'Images already answered for are reused.'
+          : `Asks ${scanner}${where} about every artifact in this release and stores the answer.`}
     >
       <Button
         size={size}
@@ -1051,11 +1071,34 @@ export function SyncButton({ sync, onSync, pending, size = 'middle' }: {
         icon={<SyncOutlined spin={running || pending} />}
         loading={pending}
         disabled={running}
-        onClick={onSync}
+        onClick={() => onSync(false)}
       >
         {running ? 'Syncing' : sync.state === '' ? 'Sync vulnerabilities' : 'Sync again'}
       </Button>
     </Tooltip>
+  )
+
+  // Nothing to reuse means nothing to force past, so the second option would
+  // be two names for one action.
+  if (!reuse || running) return button
+
+  return (
+    <Space.Compact>
+      {button}
+      <Dropdown
+        disabled={pending}
+        menu={{
+          items: [{
+            key: 'force',
+            icon: <SyncOutlined />,
+            label: 'Re-fetch every image',
+          }],
+          onClick: () => onSync(true),
+        }}
+      >
+        <Button size={size} icon={<DownOutlined />} aria-label="More sync options" />
+      </Dropdown>
+    </Space.Compact>
   )
 }
 
@@ -1084,15 +1127,51 @@ export function StopSyncButton({ sync, onStop, pending, size = 'middle' }: {
 }
 
 /** When a release was last synced, and by which scanner. */
-export function SyncedAgo({ sync }: { sync: SecuritySyncStatus }) {
+export function SyncedAgo({ sync, freshness }: {
+  sync: SecuritySyncStatus
+  /**
+   * The deployment's rule about how old is too old.
+   *
+   * The age was always here; what was missing was whether it MATTERS. "synced
+   * 11 days ago" reads as a fact about the past until something says the
+   * deployment considers a week old, and then it reads as a thing to do.
+   */
+  freshness?: SecurityFreshness
+}) {
   if (!sync.syncedAt) return null
   return (
-    <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-      {sync.provider === 'jfrog-xray' ? 'JFrog Xray' : sync.provider}
-      {sync.repository && ` · ${sync.repository}`}
-      {` · synced ${formatRelative(sync.syncedAt)}`}
-    </Typography.Text>
+    <Space size={8} align="center" wrap>
+      <Tooltip title={formatAbsolute(sync.syncedAt)}>
+        <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+          {sync.provider === 'jfrog-xray' ? 'JFrog Xray' : sync.provider}
+          {sync.repository && ` · ${sync.repository}`}
+          {` · retrieved ${formatRelative(sync.syncedAt)}`}
+        </Typography.Text>
+      </Tooltip>
+      {freshness?.stale && (
+        <Tooltip
+          title={
+            'This deployment treats a vulnerability answer older than '
+            + describeAge(freshness.maxAgeSeconds ?? 0)
+            + ' as out of date. Nothing has been discarded - these are still the '
+            + 'stored results, and a sync replaces them.'
+          }
+        >
+          <Tag color="warning" style={{ marginInlineEnd: 0 }}>Out of date</Tag>
+        </Tooltip>
+      )}
+    </Space>
   )
+}
+
+/** A configured duration in the words somebody would say it in. */
+function describeAge(seconds: number): string {
+  if (seconds <= 0) return 'any age'
+  const days = Math.round(seconds / 86400)
+  if (days >= 1) return days === 1 ? 'a day' : `${days} days`
+  const hours = Math.round(seconds / 3600)
+  if (hours >= 1) return hours === 1 ? 'an hour' : `${hours} hours`
+  return `${Math.round(seconds / 60)} minutes`
 }
 
 // ---------------------------------------------------------------------------

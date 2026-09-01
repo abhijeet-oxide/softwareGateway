@@ -1,9 +1,9 @@
-import { useEffect, useMemo, useState } from 'react'
+import { memo, useCallback, useDeferredValue, useEffect, useMemo, useState } from 'react'
 import type { ReactNode } from 'react'
 import {
   Alert,
   App, Button, Card, Col, Collapse, Descriptions, Drawer, Input, Row, Segmented, Select,
-  Skeleton, Space, Spin, Table, Tag, Tooltip, Typography,
+  Skeleton, Space, Spin, Table, Tabs, Tag, Tooltip, Typography,
 } from 'antd'
 // The working-surface table: resizable, reorderable, pinnable columns whose
 // layout each person keeps. See `tablekit/README.md` for which tables get it.
@@ -17,7 +17,8 @@ import { download } from '../api/client'
 import { CodeBlock } from './filecontent'
 import { SEVERITIES } from '../api/types'
 import type {
-  PackageSecurityResponse, SecurityCounts, SecurityDocumentRef, SecurityFinding, SecurityReport,
+  PackageSecurityResponse, SecurityCounts, SecurityDocumentRef, SecurityFinding, SecurityFreshness,
+  SecurityReport,
   SecuritySeverityCounts, SecurityViolation, Severity,
 } from '../api/types'
 import {
@@ -80,11 +81,18 @@ export function SecurityTab({ product, reference, repository }: {
     document.getElementById('security-findings')?.scrollIntoView({ behavior: 'smooth', block: 'start' })
   }
 
-  const startSync = () => {
-    sync.mutate({ product, ref: reference, repository }, {
+  const startSync = (force?: boolean) => {
+    sync.mutate({ product, ref: reference, repository, force }, {
       onSuccess: (res) => {
         message.info(res.started
-          ? `Vulnerability sync started for ${res.artifacts} artifacts. This may take several minutes.`
+          ? force
+            ? `Re-fetching all ${res.artifacts} artifacts. This may take several minutes.`
+            // Deliberately not "started for N artifacts": most of those N are
+            // routinely already answered for and are not asked about again,
+            // and a message promising N requests followed by a sync that
+            // finishes in twenty seconds reads as a sync that did not run.
+            : `Vulnerability sync started for ${res.artifacts} artifacts. Images already `
+              + 'answered for are reused, so this may finish quickly.'
           : 'A sync is already running for this release.')
         void security.refetch()
       },
@@ -132,7 +140,7 @@ export function SecurityTab({ product, reference, repository }: {
           gap: 12,
         }}
       >
-        <SyncedAgo sync={data.sync} />
+        <SyncedAgo sync={data.sync} freshness={data.freshness} />
         {/*
           Only the sync and the log here. The export lives with the filters
           below, because an export respects them - two export buttons on one
@@ -149,7 +157,12 @@ export function SecurityTab({ product, reference, repository }: {
         >
           <SyncLogButton sync={data.sync} />
           <StopSyncButton sync={data.sync} onStop={stopSync} pending={cancel.isPending} />
-          <SyncButton sync={data.sync} onSync={startSync} pending={sync.isPending} />
+          <SyncButton
+            sync={data.sync}
+            onSync={startSync}
+            pending={sync.isPending}
+            freshness={data.freshness}
+          />
         </Space>
       </div>
 
@@ -675,11 +688,42 @@ function kindOf(kind?: string): ArtifactKind {
 }
 
 /** One row of the flattened findings table. */
-type FlatFinding = SecurityFinding & { artifactName: string; artifactTag?: string; artifactDigest?: string }
+type FlatFinding = SecurityFinding & {
+  artifactName: string
+  artifactTag?: string
+  artifactDigest?: string
+  /**
+   * When the answer this finding came from was retrieved.
+   *
+   * A property of the IMAGE, carried onto the finding because that is where it
+   * gets read. Two findings in one release routinely have different ages: an
+   * image shared with a release synced this morning carries this morning's
+   * answer, and one only this release has carries whatever its last sync found.
+   */
+  artifactRetrievedAt?: string
+}
 
 /** One row of the policy table: a violation, and the image it was raised on. */
 type FlatViolation = SecurityViolation & {
   artifactName: string; artifactTag?: string; artifactDigest?: string
+  artifactRetrievedAt?: string
+}
+
+/**
+ * Whether one finding matches what somebody typed.
+ *
+ * The needle arrives already trimmed and lower-cased, once, rather than being
+ * re-lowered inside a loop over ten thousand findings for every keystroke.
+ */
+function matchesText(
+  f: { cve?: string; id?: string; component: { name: string }; summary?: string },
+  image: string,
+  needle: string,
+): boolean {
+  if (needle === '') return true
+  return `${f.cve ?? ''} ${f.id ?? ''} ${f.component.name} ${image} ${f.summary ?? ''}`
+    .toLowerCase()
+    .includes(needle)
 }
 
 /** The counts one image's row shows, rebuilt from a (possibly filtered) findings list. */
@@ -742,6 +786,18 @@ function FindingsSection({ data, product, reference, repository, tab, onTabChang
   const [grouping, setGrouping] = useState<'unique' | 'all'>('unique')
   const [q, setQ] = useState('')
   /*
+   * What the box shows, and what the tables are filtered by, are two different
+   * values on purpose.
+   *
+   * `q` is echoed in the input on every keystroke, so typing never lags. The
+   * filtering runs on the DEFERRED copy, at a priority React is allowed to
+   * interrupt - so a release with ten thousand findings re-filters between
+   * keystrokes instead of after them. Without it every character re-derived
+   * five lists and re-rendered a table over all of them before the next letter
+   * could appear, and the box typed a second behind the person using it.
+   */
+  const search = useDeferredValue(q).trim().toLowerCase()
+  /*
     Which scanners a finding has to have come from.
     Inert on a single-scanner deployment - the control that sets it is not
     drawn, and `anySource` matches everything - so nothing below has to ask
@@ -783,30 +839,46 @@ function FindingsSection({ data, product, reference, repository, tab, onTabChang
   /*
    * The images table, filtered the same way the vulnerabilities table is.
    *
-   * Severity, fixability and search narrow WHAT COUNTS AS A FINDING, and an
+   * Severity, fixability and source narrow WHAT COUNTS AS A FINDING, and an
    * image's row is built out of its findings - so a filter that changed one
    * table and not the other was the same release disagreeing with itself:
    * "No fix" showing 2,930 vulnerabilities under a total of 107 fixable ones.
+   *
+   * # Why the search box is not one of those
+   *
+   * Because it is not choosing a kind of finding, and on this table it means
+   * something else again. The search haystack included the image's own name, so
+   * typing one made every finding of that image match and no finding of any
+   * other - and the table answered by showing all 157 rows with "None found"
+   * against 156 of them, over a raw scanner payload full of CVEs.
+   *
+   * So a search NAMES ROWS here and changes no count. Rows whose image or
+   * findings match are shown, with the numbers the filters gave them; the rest
+   * leave the table rather than appearing empty. "None found" means the scanner
+   * found none.
    */
-  const filteredImageReports = useMemo(() => {
-    if (severities.length === 0 && fixability === 'all' && !q && isAnySource(source)) return imageReports
+  const selectedImageReports = useMemo(() => {
+    if (severities.length === 0 && fixability === 'all' && isAnySource(source)) return imageReports
     return imageReports.map((r) => {
       const kept = (r.findings ?? []).filter((f) => {
         if (severities.length > 0 && !severities.includes(f.severity)) return false
         if (fixability === 'fixable' && !f.fixable) return false
         if (fixability === 'non-fixable' && f.fixable) return false
-        if (!matchesSource(f, source)) return false
-        if (q) {
-          const hay = `${f.cve ?? ''} ${f.id ?? ''} ${f.component.name} ${r.artifact.name} ${f.summary ?? ''}`
-            .toLowerCase()
-          if (!hay.includes(q.toLowerCase())) return false
-        }
-        return true
+        return matchesSource(f, source)
       })
       if (kept.length === (r.findings ?? []).length) return r
       return { ...r, findings: kept, counts: summariseCounts(kept) }
     })
-  }, [imageReports, severities, fixability, q, source])
+  }, [imageReports, severities, fixability, source])
+
+  const visibleImageReports = useMemo(() => {
+    if (search === '') return selectedImageReports
+    return selectedImageReports.filter((r) => (
+      [r.artifact.display, r.artifact.name, r.artifact.tag, r.artifact.digest]
+        .some((v) => v?.toLowerCase().includes(search))
+      || (r.findings ?? []).some((f) => matchesText(f, r.artifact.name, search))
+    ))
+  }, [selectedImageReports, search])
 
   const artifactCounts = useMemo<KindCounts>(
     () => ({ all: imageReports.length, image: imageReports.length, chart: 0, file: 0 }),
@@ -872,23 +944,44 @@ function FindingsSection({ data, product, reference, repository, tab, onTabChang
           artifactName: report.artifact.name,
           artifactTag: report.artifact.tag,
           artifactDigest: report.artifact.digest,
+          artifactRetrievedAt: report.retrievedAt,
         })
       }
     }
     return out
   }, [reports])
 
-  const filtered = useMemo(() => findings.filter((f) => {
+  /*
+   * SELECTED is what the filters chose. VISIBLE is what the search left of it.
+   *
+   * # Why the search is not one of the filters
+   *
+   * Because it is not choosing a kind of vulnerability, it is looking for one.
+   * "Fixable", "No fix" and a severity say WHICH findings count - a release
+   * filtered to critical fixable issues genuinely has 41 of them, and every
+   * number on the page should say 41. A search says which of them to show me
+   * right now, and it must not change the answer to "how many are there".
+   *
+   * It did. Typing an image name into the box took the tab from
+   * "Vulnerabilities (3,111)" to "Vulnerabilities (474)" and the count a reader
+   * carried away was the one on the tab - a release quietly reporting an eighth
+   * of its problems because somebody was looking for something.
+   *
+   * So every count below - the tabs, the unique/all switch, the images table,
+   * malware, policy - comes from `selected`, and only the rows on screen come
+   * from `visible`.
+   */
+  const selected = useMemo(() => findings.filter((f) => {
     if (severities.length > 0 && !severities.includes(f.severity)) return false
     if (fixability === 'fixable' && !f.fixable) return false
     if (fixability === 'non-fixable' && f.fixable) return false
-    if (!matchesSource(f, source)) return false
-    if (q) {
-      const hay = `${f.cve ?? ''} ${f.id ?? ''} ${f.component.name} ${f.artifactName} ${f.summary ?? ''}`.toLowerCase()
-      if (!hay.includes(q.toLowerCase())) return false
-    }
-    return true
-  }), [findings, severities, fixability, q, source])
+    return matchesSource(f, source)
+  }), [findings, severities, fixability, source])
+
+  const visible = useMemo(
+    () => (search === '' ? selected : selected.filter((f) => matchesText(f, f.artifactName, search))),
+    [selected, search],
+  )
 
   /*
    * Malware, flattened the same way findings are.
@@ -904,21 +997,22 @@ function FindingsSection({ data, product, reference, repository, tab, onTabChang
     for (const report of reports) {
       for (const f of report.malware ?? []) {
         if (!matchesSource(f, source)) continue
-        if (q) {
-          const hay = `${f.cve ?? ''} ${f.id ?? ''} ${f.component.name} ${report.artifact.name} ${f.summary ?? ''}`
-            .toLowerCase()
-          if (!hay.includes(q.toLowerCase())) continue
-        }
         out.push({
           ...f,
           artifactName: report.artifact.name,
           artifactTag: report.artifact.tag,
           artifactDigest: report.artifact.digest,
+          artifactRetrievedAt: report.retrievedAt,
         })
       }
     }
     return out
-  }, [reports, q, source])
+  }, [reports, source])
+
+  const visibleMalware = useMemo(
+    () => (search === '' ? malware : malware.filter((f) => matchesText(f, f.artifactName, search))),
+    [malware, search],
+  )
 
   /** Policy violations, flattened, with the image each belongs to. */
   const violations = useMemo<FlatViolation[]>(() => {
@@ -926,21 +1020,25 @@ function FindingsSection({ data, product, reference, repository, tab, onTabChang
     for (const report of reports) {
       for (const v of report.violations ?? []) {
         if (severities.length > 0 && !severities.includes(v.severity)) continue
-        if (q) {
-          const hay = `${v.cve ?? ''} ${v.id ?? ''} ${v.component.name} ${report.artifact.name} `
-            + `${v.watch ?? ''} ${v.policy ?? ''} ${v.summary ?? ''}`
-          if (!hay.toLowerCase().includes(q.toLowerCase())) continue
-        }
         out.push({
           ...v,
           artifactName: report.artifact.name,
           artifactTag: report.artifact.tag,
           artifactDigest: report.artifact.digest,
+          artifactRetrievedAt: report.retrievedAt,
         })
       }
     }
     return out
-  }, [reports, severities, q])
+  }, [reports, severities])
+
+  const visibleViolations = useMemo(() => {
+    if (search === '') return violations
+    return violations.filter((v) => (
+      `${v.cve ?? ''} ${v.id ?? ''} ${v.component.name} ${v.artifactName} `
+      + `${v.watch ?? ''} ${v.policy ?? ''} ${v.summary ?? ''}`
+    ).toLowerCase().includes(search))
+  }, [violations, search])
 
   const vulnerabilityTotal = useMemo(
     () => reports.reduce((sum, r) => sum + r.counts.total, 0),
@@ -956,7 +1054,20 @@ function FindingsSection({ data, product, reference, repository, tab, onTabChang
    * the same OpenSSL advisory in four images, cannot see that they have one
    * upgrade to do.
    */
-  const cveGroups = useMemo(() => groupByCve(filtered), [filtered])
+  /*
+   * Grouped from what the FILTERS selected, so the count on the tab is the
+   * release's answer and not the search's. The search then decides which of
+   * those groups are on screen - a group matching through its identifier or
+   * through any occurrence of it.
+   */
+  const cveGroups = useMemo(() => groupByCve(selected), [selected])
+  const visibleCveGroups = useMemo(() => {
+    if (search === '') return cveGroups
+    return cveGroups.filter((g) => (
+      g.key.toLowerCase().includes(search)
+      || g.rows.some((f) => matchesText(f, f.artifactName, search))
+    ))
+  }, [cveGroups, search])
 
   /*
    * The release's own stored total, which is the number the cards above show.
@@ -1016,7 +1127,10 @@ function FindingsSection({ data, product, reference, repository, tab, onTabChang
     }
     return out
   }, [data.reports])
-  const scanUrlFor = (name: string) => scanUrlByImage.get(name)
+  // Stable across renders, so the memoised tables below can actually bail out.
+  // A fresh closure every keystroke would make every prop new and every table
+  // re-render, which is the cost this whole arrangement exists to avoid.
+  const scanUrlFor = useCallback((name: string) => scanUrlByImage.get(name), [scanUrlByImage])
 
   const exportFilters = {
     severity: severities.length > 0 ? severities.join(',') : undefined,
@@ -1183,7 +1297,7 @@ function FindingsSection({ data, product, reference, repository, tab, onTabChang
             onChange={(v) => setGrouping(v as typeof grouping)}
             options={[
               { value: 'unique', label: `Unique CVEs (${cveGroups.length.toLocaleString()})` },
-              { value: 'all', label: `All findings (${filtered.length.toLocaleString()})` },
+              { value: 'all', label: `All findings (${selected.length.toLocaleString()})` },
             ]}
           />
         )}
@@ -1286,7 +1400,7 @@ function FindingsSection({ data, product, reference, repository, tab, onTabChang
             {grouping === 'unique'
               ? (
                 <UniqueCveTable
-                  groups={cveGroups}
+                  groups={visibleCveGroups}
                   state={data.state}
                   detailRowsUnavailable={detailRowsUnavailable}
                   scanUrlFor={scanUrlFor}
@@ -1295,7 +1409,7 @@ function FindingsSection({ data, product, reference, repository, tab, onTabChang
               )
               : (
                 <VulnerabilityTable
-                  rows={filtered}
+                  rows={visible}
                   state={data.state}
                   detailRowsUnavailable={detailRowsUnavailable}
                   scanUrlFor={scanUrlFor}
@@ -1316,13 +1430,17 @@ function FindingsSection({ data, product, reference, repository, tab, onTabChang
                       + `${data.sync.repository ?? 'the scanned repository'}.`}
                 </Typography.Text>
               )}
-              <ArtifactTable reports={filteredImageReports} />
+              <ArtifactTable
+                reports={visibleImageReports}
+                whole={imageReports}
+                freshness={data.freshness}
+              />
             </Space>
           )
           : tab === 'malware'
-            ? <MalwareTable rows={malware} scanUrlFor={scanUrlFor} />
+            ? <MalwareTable rows={visibleMalware} scanUrlFor={scanUrlFor} />
             : tab === 'policy'
-              ? <PolicyTable rows={violations} />
+              ? <PolicyTable rows={visibleViolations} />
               : null}
     </Card>
   )
@@ -1337,7 +1455,16 @@ function FindingsSection({ data, product, reference, repository, tab, onTabChang
  * an empty grid with a header does not say who looked or when. The empty state
  * names the scanner, so "clean" is attributable.
  */
-function MalwareTable({ rows, scanUrlFor }: {
+/*
+ * Memoised, and the reason is the search box.
+ *
+ * It is a controlled input, so every keystroke re-renders this whole panel -
+ * and without a bail-out that re-rendered every table under it, over ten
+ * thousand findings, before the next character could appear. The deferred
+ * search value means these props do not change while somebody is mid-word, so
+ * with `memo` the tables sit still and the box types at typing speed.
+ */
+const MalwareTable = memo(function MalwareTable({ rows, scanUrlFor }: {
   rows: FlatFinding[]
   scanUrlFor: (name: string) => string | undefined
 }) {
@@ -1431,7 +1558,7 @@ function MalwareTable({ rows, scanUrlFor }: {
       />
     </>
   )
-}
+})
 
 /**
  * What the scanner's configured watches say about this release.
@@ -1443,7 +1570,16 @@ function MalwareTable({ rows, scanUrlFor }: {
  * rule forbids, and on which image - and the first two are the ones that say
  * whether this is a real block or a watch somebody left switched on.
  */
-function PolicyTable({ rows }: { rows: FlatViolation[] }) {
+/*
+ * Memoised, and the reason is the search box.
+ *
+ * It is a controlled input, so every keystroke re-renders this whole panel -
+ * and without a bail-out that re-rendered every table under it, over ten
+ * thousand findings, before the next character could appear. The deferred
+ * search value means these props do not change while somebody is mid-word, so
+ * with `memo` the tables sit still and the box types at typing speed.
+ */
+const PolicyTable = memo(function PolicyTable({ rows }: { rows: FlatViolation[] }) {
   if (rows.length === 0) {
     return (
       <Alert
@@ -1527,7 +1663,7 @@ function PolicyTable({ rows }: { rows: FlatViolation[] }) {
       ]}
     />
   )
-}
+})
 
 /**
  * Which scanners reported one row.
@@ -1834,7 +1970,16 @@ function groupByCve(findings: FlatFinding[]): CveGroup[] {
  * columns. A comma-separated list of image names answers a quarter of it and
  * sends the reader back to the flat view to find the rest.
  */
-function UniqueCveTable({ groups, state, detailRowsUnavailable, scanUrlFor, showSources }: {
+/*
+ * Memoised, and the reason is the search box.
+ *
+ * It is a controlled input, so every keystroke re-renders this whole panel -
+ * and without a bail-out that re-rendered every table under it, over ten
+ * thousand findings, before the next character could appear. The deferred
+ * search value means these props do not change while somebody is mid-word, so
+ * with `memo` the tables sit still and the box types at typing speed.
+ */
+const UniqueCveTable = memo(function UniqueCveTable({ groups, state, detailRowsUnavailable, scanUrlFor, showSources }: {
   groups: CveGroup[]
   state: PackageSecurityResponse['state']
   detailRowsUnavailable: boolean
@@ -1968,7 +2113,7 @@ function UniqueCveTable({ groups, state, detailRowsUnavailable, scanUrlFor, show
     <CveDetailDrawer group={open} scanUrlFor={scanUrlFor} onClose={() => setOpen(null)} />
     </>
   )
-}
+})
 
 /**
  * Everything known about one CVE, beside the table rather than over it.
@@ -2143,6 +2288,22 @@ function FindingDetailDrawer({ finding, scanUrlFor, onClose }: {
                 label: 'Fix',
                 children: <FixCell fixable={finding.fixable} fixedIn={finding.fixedIn} />,
               },
+              // How old this particular answer is. On the finding rather than
+              // only on the release, because they differ: an image shared with
+              // a release synced this morning carries a fresher answer than one
+              // this release alone holds, and "how current is this" is the
+              // question somebody asks just before acting on it.
+              ...(finding.artifactRetrievedAt
+                ? [{
+                  key: 'retrieved',
+                  label: 'Retrieved',
+                  children: (
+                    <Tooltip title={formatAbsolute(finding.artifactRetrievedAt)}>
+                      <Typography.Text>{formatRelative(finding.artifactRetrievedAt)}</Typography.Text>
+                    </Tooltip>
+                  ),
+                }]
+                : []),
               {
                 key: 'component-id',
                 label: 'Component id',
@@ -2415,7 +2576,16 @@ function ImageCell({ name, tag, href }: { name: string; tag?: string; href?: str
   )
 }
 
-function VulnerabilityTable({
+/*
+ * Memoised, and the reason is the search box.
+ *
+ * It is a controlled input, so every keystroke re-renders this whole panel -
+ * and without a bail-out that re-rendered every table under it, over ten
+ * thousand findings, before the next character could appear. The deferred
+ * search value means these props do not change while somebody is mid-word, so
+ * with `memo` the tables sit still and the box types at typing speed.
+ */
+const VulnerabilityTable = memo(function VulnerabilityTable({
   rows,
   state,
   detailRowsUnavailable,
@@ -2525,7 +2695,7 @@ function VulnerabilityTable({
     <FindingDetailDrawer finding={open} scanUrlFor={scanUrlFor} onClose={() => setOpen(null)} />
     </>
   )
-}
+})
 
 /**
  * The images of a release, with what is wrong in each.
@@ -2534,7 +2704,37 @@ function VulnerabilityTable({
  * nobody scanned. A table listing only the images with findings would be a
  * table where an unscanned image is invisible.
  */
-function ArtifactTable({ reports }: { reports: SecurityReport[] }) {
+/*
+ * Memoised, and the reason is the search box.
+ *
+ * It is a controlled input, so every keystroke re-renders this whole panel -
+ * and without a bail-out that re-rendered every table under it, over ten
+ * thousand findings, before the next character could appear. The deferred
+ * search value means these props do not change while somebody is mid-word, so
+ * with `memo` the tables sit still and the box types at typing speed.
+ */
+const ArtifactTable = memo(function ArtifactTable({ reports, whole, freshness }: {
+  reports: SecurityReport[]
+  /**
+   * The same images with NOTHING filtered out, for the drawer.
+   *
+   * The rows carry a filtered projection on purpose - a row's counts have to
+   * agree with the table's filters - but a drawer is not a row. It is the
+   * question "what is in this image", and answering it with the current
+   * filter applied is how an image with seven hundred findings came to open a
+   * panel reading "Vulnerabilities 0" above a raw scanner payload listing
+   * them. The filter belongs to the table; the image belongs to itself.
+   */
+  whole: SecurityReport[]
+  /** The deployment's rule about how old an answer may be. */
+  freshness?: SecurityFreshness
+}) {
+  const staleAfter = (freshness?.maxAgeSeconds ?? 0) * 1000
+  const stale = (at?: string) => {
+    if (!staleAfter || !at) return false
+    const t = Date.parse(at)
+    return Number.isFinite(t) && Date.now() - t > staleAfter
+  }
   /*
    * The statuses this table actually contains, in the order it shows them.
    *
@@ -2552,6 +2752,12 @@ function ArtifactTable({ reports }: { reports: SecurityReport[] }) {
 
   // Same gesture as a CVE row: click the name, get everything about it beside the table.
   const [open, setOpen] = useState<SecurityReport | null>(null)
+  const wholeByKey = useMemo(() => {
+    const m = new Map<string, SecurityReport>()
+    for (const r of whole) m.set(r.artifact.digest || r.artifact.name, r)
+    return m
+  }, [whole])
+  const opened = open ? wholeByKey.get(open.artifact.digest || open.artifact.name) ?? open : null
 
   return (
     <>
@@ -2627,6 +2833,36 @@ function ArtifactTable({ reports }: { reports: SecurityReport[] }) {
           ),
         },
         {
+          /*
+            When this answer was retrieved, per image.
+
+            Per IMAGE rather than only on the release, because they genuinely
+            differ: an image shared with a release somebody synced this morning
+            carries that morning's answer, while one only this release has
+            carries whatever its last sync found. A single "synced 3 days ago"
+            on the header is then wrong for half the table, and "wrong about
+            how old a vulnerability answer is" is the kind of wrong that ends
+            with somebody shipping on stale data.
+          */
+          title: 'Retrieved',
+          width: 130,
+          sorter: (a, b) => Date.parse(a.retrievedAt ?? '') - Date.parse(b.retrievedAt ?? ''),
+          render: (_, r) => (
+            r.retrievedAt
+              ? (
+                <Tooltip title={formatAbsolute(r.retrievedAt)}>
+                  <Typography.Text
+                    type={stale(r.retrievedAt) ? undefined : 'secondary'}
+                    style={{ fontSize: 12, color: stale(r.retrievedAt) ? c.pending : undefined }}
+                  >
+                    {formatRelative(r.retrievedAt)}
+                  </Typography.Text>
+                </Tooltip>
+              )
+              : <Typography.Text type="secondary">-</Typography.Text>
+          ),
+        },
+        {
           title: 'Fixable',
           width: 100,
           render: (_, r) => (
@@ -2664,10 +2900,10 @@ function ArtifactTable({ reports }: { reports: SecurityReport[] }) {
         },
       ]}
     />
-    <ImageDetailDrawer report={open} onClose={() => setOpen(null)} />
+    <ImageDetailDrawer report={opened} onClose={() => setOpen(null)} />
     </>
   )
-}
+})
 
 /**
  * The SBOM, as a button that downloads it.
@@ -2727,43 +2963,43 @@ function SbomButton({ doc }: { doc?: SecurityDocumentRef }) {
 }
 
 /**
- * The scanner's own answers about this image, IN the drawer.
+ * The scanner's own answers about this image.
  *
  * # What this replaced
  *
- * A dropdown of links that navigated away. A reader comparing what this page
- * says with what Xray said had to leave the page to do it, land on a raw JSON
- * body in a browser tab, and come back - which is three navigations to answer
- * "is our reading of this right".
+ * First a dropdown of links that navigated away, then a collapsed section under
+ * a table of nine hundred CVEs. Both put the scanner's own words somewhere a
+ * reader had to go looking for them, and the reason anybody opens them is to
+ * check whether this page has read them correctly - which is a comparison, and
+ * a comparison you have to scroll between is not one.
  *
- * The answer belongs where the question is. So: a tab per document the scanner
- * produced, the body formatted and syntax-coloured in place, and a copy button,
- * because the next thing somebody does with a raw payload is paste it into a
- * ticket or a support case.
+ * So it is a TAB, level with the vulnerabilities, holding one sub-tab per
+ * document: what the scanner said about vulnerabilities, the component
+ * inventory, the policy verdict, the malware list. Each is formatted,
+ * syntax-coloured, copyable and downloadable in place.
  *
- * # Why nothing is fetched until a tab is opened
+ * # Why the SBOM is here as well as on its own button
  *
- * These are the largest things this platform stores. The section renders
- * collapsed with the sizes on it, and one document is fetched when a reader
- * asks for it - so opening an image costs nothing, and the drawer does not
- * quietly pull forty megabytes to draw a heading.
+ * Because the button answers "give me the file" and this answers "what is in
+ * it". They are different questions from different people - one is a compliance
+ * request, the other is somebody checking whether a package they are arguing
+ * about is actually in the image - and the second was previously answerable
+ * only by downloading forty megabytes and opening an editor.
+ *
+ * # Why nothing is fetched until a sub-tab is opened
+ *
+ * These are the largest things this platform stores. The strip renders with the
+ * sizes and ages on it, and one document is fetched when a reader asks for it.
  */
-function RawOutputSection({ documents }: { documents?: SecurityDocumentRef[] }) {
-  const held = (documents ?? []).filter((d) => d.available && d.url)
+function ScannerOutput({ documents }: { documents?: SecurityDocumentRef[] }) {
+  const refs = documents ?? []
+  const held = refs.filter((d) => d.available && d.url)
   const [kind, setKind] = useState<string | undefined>(undefined)
-  const [open, setOpen] = useState(false)
   const { message } = App.useApp()
 
-  const selected = held.find((d) => d.kind === kind) ?? held[0]
-  const doc = useSecurityDocument(selected?.url, open && Boolean(selected))
-
-  if (held.length === 0) return null
-
-  // A body past this is one the browser stalls on rather than renders. The
-  // number is generous - a large image's vulnerability response is a few
-  // megabytes - and the reader is offered the download instead, which is what
-  // they would have wanted for a file that size anyway.
-  const tooLargeToShow = (selected?.bytes ?? 0) > 4 * 1024 * 1024
+  const selected = refs.find((d) => d.kind === kind) ?? held[0] ?? refs[0]
+  const readable = Boolean(selected?.available && selected?.url)
+  const doc = useSecurityDocument(selected?.url, readable)
 
   const body = doc.data ?? ''
   const formatted = useMemo(() => {
@@ -2778,88 +3014,110 @@ function RawOutputSection({ documents }: { documents?: SecurityDocumentRef[] }) 
     }
   }, [body])
 
-  return (
-    <Section
-      title={`Raw scanner output - ${held.length} ${held.length === 1 ? 'document' : 'documents'}`}
-    >
-      <Collapse
-        ghost
-        activeKey={open ? ['raw'] : []}
-        onChange={(keys) => setOpen((keys as string[]).includes('raw'))}
-        items={[{
-          key: 'raw',
-          label: (
-            <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-              {open
-                ? 'What the scanner returned for this image'
-                : 'Show what the scanner returned for this image'}
-            </Typography.Text>
-          ),
-          children: (
-            <Space direction="vertical" size={10} style={{ width: '100%' }}>
-              <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
-                {held.length > 1 && (
-                  <Segmented
-                    size="small"
-                    value={selected?.kind}
-                    onChange={(v) => setKind(String(v))}
-                    options={held.map((d) => ({ value: d.kind, label: d.label }))}
-                  />
-                )}
-                <span style={{ marginInlineStart: 'auto' }} />
-                <Typography.Text type="secondary" style={{ fontSize: 11 }}>
-                  {selected?.bytes ? formatBytesShort(selected.bytes) : ''}
-                  {selected?.fetchedAt && ` · retrieved ${formatRelative(selected.fetchedAt)}`}
-                </Typography.Text>
-                <Button
-                  size="small"
-                  icon={<CopyOutlined />}
-                  disabled={!formatted}
-                  onClick={() => {
-                    // The FORMATTED text, which is what is on screen. Copying
-                    // the forty-thousand-character single line the scanner
-                    // actually sent would paste something nobody can read into
-                    // the ticket this is going into.
-                    void navigator.clipboard?.writeText(formatted)
-                    message.success('Copied')
-                  }}
-                >
-                  Copy
-                </Button>
-                {selected?.url && (
-                  <DocumentDownloadButton url={selected.url} label={selected.label} />
-                )}
-              </div>
+  if (refs.length === 0) {
+    return (
+      <Typography.Text type="secondary">
+        Nothing was kept from the scanner for this image. A sync stores what it asks for -
+        check that coordinator.security.documents lists the kinds you want.
+      </Typography.Text>
+    )
+  }
 
-              {tooLargeToShow
-                ? (
-                  <Alert
-                    type="info"
-                    showIcon
-                    message="This document is too large to show here"
-                    description={
-                      `It is ${formatBytesShort(selected?.bytes ?? 0)}, which the browser would `
-                      + 'stall on. Download it and open it in an editor.'
-                    }
-                  />
-                )
-                : doc.isLoading
-                  ? <Skeleton active paragraph={{ rows: 6 }} />
-                  : doc.isError
-                    ? (
-                      <Alert
-                        type="warning"
-                        showIcon
-                        message="That document could not be read"
-                        description={doc.error instanceof Error ? doc.error.message : undefined}
-                      />
-                    )
-                    : <CodeBlock text={formatted} grammar="json" maxHeight="46vh" />}
-            </Space>
-          ),
-        }]}
-      />
-    </Section>
+  // A body past this is one the browser stalls on rather than renders. The
+  // number is generous - a large image's vulnerability response is a few
+  // megabytes - and the reader is offered the download instead, which is what
+  // they would have wanted for a file that size anyway.
+  const tooLargeToShow = (selected?.bytes ?? 0) > 4 * 1024 * 1024
+
+  return (
+    <Space direction="vertical" size={10} style={{ width: '100%' }}>
+      <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+        <Segmented
+          size="small"
+          value={selected?.kind}
+          onChange={(v) => setKind(String(v))}
+          options={refs.map((d) => ({
+            value: d.kind,
+            // A document the scanner did not give us is offered and marked,
+            // not hidden. "Where is the SBOM tab" is a worse question than
+            // "why is this one empty", which the panel answers in a sentence.
+            label: d.available
+              ? d.label
+              : (
+                <span style={{ color: c.text3 }}>
+                  {d.label}
+                  <span style={{ fontSize: 11 }}> · none</span>
+                </span>
+              ),
+          }))}
+        />
+        <span style={{ marginInlineStart: 'auto' }} />
+        <Typography.Text type="secondary" style={{ fontSize: 11 }}>
+          {selected?.bytes ? formatBytesShort(selected.bytes) : ''}
+          {selected?.fetchedAt && ` \u00b7 retrieved ${formatRelative(selected.fetchedAt)}`}
+        </Typography.Text>
+        <Button
+          size="small"
+          icon={<CopyOutlined />}
+          disabled={!formatted}
+          onClick={() => {
+            // The FORMATTED text, which is what is on screen. Copying the
+            // forty-thousand-character single line the scanner actually sent
+            // would paste something nobody can read into the ticket this is
+            // going into.
+            void navigator.clipboard?.writeText(formatted)
+            message.success('Copied')
+          }}
+        >
+          Copy
+        </Button>
+        {selected?.url && (
+          <DocumentDownloadButton url={selected.url} label={selected.label} />
+        )}
+      </div>
+
+      {!readable
+        ? (
+          <Alert
+            type="info"
+            showIcon
+            message="Nothing is held for this image"
+            description={
+              selected?.message
+              || (selected?.kind === 'sbom'
+                ? 'An SBOM is produced on demand. Download it once and it is kept here - '
+                  + 'and shown here - from then on, because the components inside one set of '
+                  + 'bytes cannot change.'
+                : `No ${selected?.label ?? 'document'} was stored for this image. A sync keeps `
+                  + 'what it is asked to keep, so sync the release again to retrieve it.')
+            }
+          />
+        )
+        : tooLargeToShow
+          ? (
+            <Alert
+              type="info"
+              showIcon
+              message="This document is too large to show here"
+              description={
+                `It is ${formatBytesShort(selected?.bytes ?? 0)}, which the browser would `
+                + 'stall on. Download it and open it in an editor.'
+              }
+            />
+          )
+          : doc.isLoading
+            ? <Skeleton active paragraph={{ rows: 6 }} />
+            : doc.isError
+              ? (
+                <Alert
+                  type="warning"
+                  showIcon
+                  message="That document could not be read"
+                  description={doc.error instanceof Error ? doc.error.message : undefined}
+                />
+              )
+              : <CodeBlock text={formatted} grammar="json" maxHeight="52vh" />}
+    </Space>
   )
 }
 
@@ -2921,6 +3179,7 @@ function ImageDetailDrawer({ report, onClose }: {
   onClose: () => void
 }) {
   const [finding, setFinding] = useState<FlatFinding | null>(null)
+  const [pane, setPane] = useState<'findings' | 'raw'>('findings')
 
   // Fixable first, same as everywhere else this question comes up.
   const rows = useMemo<FlatFinding[]>(() => {
@@ -2931,6 +3190,7 @@ function ImageDetailDrawer({ report, onClose }: {
         artifactName: report.artifact.name,
         artifactTag: report.artifact.tag,
         artifactDigest: report.artifact.digest,
+        artifactRetrievedAt: report.retrievedAt,
       }))
       .sort((a, b) => Number(b.fixable) - Number(a.fixable))
   }, [report])
@@ -3033,6 +3293,31 @@ function ImageDetailDrawer({ report, onClose }: {
                   ),
                 }]
                 : []),
+              /*
+                When we asked, and when the scanner decided - two facts, both
+                worth having and routinely different.
+
+                The one somebody can act on is ours, so it is first and it is
+                the one in words: "retrieved 5 days ago" has a Sync under it.
+                "Xray graded this three weeks ago" is the scanner's backlog and
+                nothing this page can do anything about, so it is the tooltip.
+              */
+              ...(report.retrievedAt
+                ? [{
+                  key: 'retrieved',
+                  label: 'Retrieved',
+                  children: (
+                    <Tooltip
+                      title={
+                        formatAbsolute(report.retrievedAt)
+                        + (report.scannedAt ? ` \u00b7 scanner graded it ${formatRelative(report.scannedAt)}` : '')
+                      }
+                    >
+                      <Typography.Text>{formatRelative(report.retrievedAt)}</Typography.Text>
+                    </Tooltip>
+                  ),
+                }]
+                : []),
               ...(report.message
                 ? [{ key: 'message', label: 'Message', span: 2, children: <Typography.Text>{report.message}</Typography.Text> }]
                 : []),
@@ -3051,7 +3336,16 @@ function ImageDetailDrawer({ report, onClose }: {
             ]}
           />
 
-          <Section title={`Vulnerabilities - ${rows.length.toLocaleString()}`}>
+          <Tabs
+            size="small"
+            activeKey={pane}
+            onChange={(k) => setPane(k as 'findings' | 'raw')}
+            items={[
+              {
+                key: 'findings',
+                label: `Vulnerabilities (${rows.length.toLocaleString()})`,
+                children: (
+          <>
             <DataTable<FlatFinding>
               tableEnhancedKey="security-cve-findings"
               size="small"
@@ -3102,9 +3396,25 @@ function ImageDetailDrawer({ report, onClose }: {
                 },
               ]}
             />
-          </Section>
+          </>
+                ),
+              },
+              {
+                key: 'raw',
+                /*
+                  A tab, not a section below the table.
 
-          <RawOutputSection documents={report.documents} />
+                  It was a collapsed panel under nine hundred rows, which is the
+                  wrong place for the thing people open the drawer to check: the
+                  reason to read what the scanner actually said is to compare it
+                  with what this page says it said, and a comparison you have to
+                  scroll between is not one.
+                */
+                label: `Scanner output (${(report.documents ?? []).filter((d) => d.available).length})`,
+                children: <ScannerOutput documents={report.documents} />,
+              },
+            ]}
+          />
         </Space>
       )}
     </Drawer>

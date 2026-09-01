@@ -109,6 +109,17 @@ type SyncRequest struct {
 	// findings. See Request.Documents: each named kind is a request per
 	// artifact, so this is the deployment's choice and not the provider's.
 	Documents []DocumentKind
+	// MaxAge is how old a stored answer may be before this sync asks about
+	// that image again. Zero reuses anything held.
+	//
+	// This is what makes a sync cheap for a release whose images have already
+	// been answered for by a neighbouring release - which is most releases of
+	// most products. See Request.MaxAge.
+	MaxAge time.Duration
+	// Force asks the scanner about every artifact regardless of what is held
+	// and how old it is. A person who pressed "re-fetch everything", and
+	// nothing else.
+	Force bool
 }
 
 // SyncStatus is what a caller is told when it asks for a sync.
@@ -564,8 +575,13 @@ func (s *Syncer) run(
 		// Detail, always. A sync exists to fill the index that search and
 		// comparison read; counts alone would leave both of them empty and
 		// force the scanner query back onto the page that reads them.
-		Detail:    true,
-		Refresh:   true,
+		Detail: true,
+		// NOT Refresh. A sync reuses a stored answer that is inside the age
+		// limit and asks about the rest - which for a release sharing its
+		// images with one synced this morning is most of the release. Force is
+		// the escape hatch for somebody who wants every image re-asked.
+		Refresh:   req.Force,
+		MaxAge:    req.MaxAge,
 		TTL:       req.TTL,
 		Documents: documentsOr(req.Documents, s.documents),
 		Progress:  progress,

@@ -66,7 +66,14 @@ export function CompareSelectionBar({
         background: c.brandSoft, border: `1px solid ${c.brandBorder}`, borderRadius: 8,
       }}
     >
-      <Space size={14} align="center" wrap style={{ minWidth: 0 }}>
+      <Space
+        size={14}
+        align="center"
+        wrap
+        // Shrinks before it pushes: the release names ellipsis inside their
+        // slots rather than shouldering the actions off the end of the row.
+        style={{ minWidth: 0, flex: '1 1 auto' }}
+      >
         <ScaleOutlined style={{ color: c.brand }} />
         <Slot
           label="Comparing"
@@ -108,8 +115,20 @@ export function CompareSelectionBar({
         />
       </Space>
 
-      <Space size={8} wrap>
-        <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+      <Space
+        size={8}
+        wrap={false}
+        // Right-aligned even when it wraps onto its own line.
+        //
+        // `space-between` only separates items that share a line; alone on the
+        // second line this group is the FIRST item on it, so it went to the
+        // left edge - which is where the actions ended up as soon as two
+        // long package names filled the row above them. The auto margin eats
+        // the free space ahead of the group in both layouts, so Clear, Cancel
+        // and Compare stay at the right edge whatever is beside them.
+        style={{ marginInlineStart: 'auto', flex: '0 0 auto' }}
+      >
+        <Typography.Text type="secondary" style={{ fontSize: 12, whiteSpace: 'nowrap' }}>
           {chosen === 0
             ? 'Tick two rows below'
             : chosen === 1

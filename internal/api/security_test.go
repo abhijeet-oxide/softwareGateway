@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/csv"
+	"fmt"
 	"io"
 	"net/http"
 	"strings"
@@ -160,6 +161,13 @@ type securityHarness struct {
 
 func newSecurityHarness(t *testing.T) *securityHarness {
 	t.Helper()
+	return newSecurityHarnessWith(t, nil)
+}
+
+// newSecurityHarnessWith is the same, with a hand on the dependencies - for the
+// tests that are about a configured POLICY rather than about stored data.
+func newSecurityHarnessWith(t *testing.T, adjust func(*Deps)) *securityHarness {
+	t.Helper()
 
 	syncer := &fakeSyncer{
 		reports:   map[string]security.Report{},
@@ -173,6 +181,9 @@ func newSecurityHarness(t *testing.T) *securityHarness {
 		d.SecuritySync = syncer
 		d.SecurityStore = harnessSecurityStore{pkgSec, store.NewSecurity(d.Store)}
 		d.SecurityIndex = store.NewSecurity(d.Store)
+		if adjust != nil {
+			adjust(d)
+		}
 	}, securityProductDoc)
 
 	return &securityHarness{apiHarness: h, syncer: syncer}
@@ -213,9 +224,10 @@ type harnessSecurityStore struct {
 }
 
 func (s harnessSecurityStore) ReportsFor(
-	ctx context.Context, scope security.Scope, refs []security.ArtifactRef,
+	ctx context.Context, scope security.Scope,
+	refs []security.ArtifactRef, detail security.Detail,
 ) ([]security.Report, error) {
-	return s.reports.ReportsFor(ctx, scope, refs)
+	return s.reports.ReportsFor(ctx, scope, refs, detail)
 }
 
 func (s harnessSecurityStore) LoadDocuments(
@@ -935,4 +947,147 @@ func (h *apiHarness) getRaw(path string) ([]byte, http.Header) {
 		h.t.Fatalf("GET %s: %d %s", path, resp.StatusCode, string(body))
 	}
 	return body, resp.Header
+}
+
+// A comparison of two large releases is mostly "nothing happened", and sending
+// every one of those rows to a browser is what made this endpoint answer in
+// minutes. The response carries the rows that matter and says how many there
+// were; the EXPORT carries all of them.
+func TestCompareSecurityShortensTheListButNotTheExport(t *testing.T) {
+	h := newSecurityHarness(t)
+	h.seedPackage("25.7.2100", digestA)
+	h.seedPackage("25.7.2131", digestB)
+
+	// More classified findings than the response will list, so the cut is
+	// exercised rather than merely configured.
+	const shared = maxListedChanges + 200
+	common := make([]security.Finding, 0, shared)
+	for i := range shared {
+		common = append(common,
+			apiFinding(fmt.Sprintf("CVE-2024-%05d", i), security.SeverityMedium,
+				fmt.Sprintf("pkg%d", i), false))
+	}
+	h.syncer.reports[digestA] = scannedReport(append(
+		append([]security.Finding(nil), common...),
+		apiFinding("CVE-2024-90001", security.SeverityHigh, "gone", true),
+	)...)
+	h.syncer.reports[digestB] = scannedReport(append(
+		append([]security.Finding(nil), common...),
+		apiFinding("CVE-2024-90002", security.SeverityHigh, "new", true),
+	)...)
+	h.post("/api/v1/products/vendor-a/packages/25.7.2100:syncSecurity", `{}`, nil)
+	h.post("/api/v1/products/vendor-a/packages/25.7.2131:syncSecurity", `{}`, nil)
+
+	var resp v1.SecurityComparisonResponse
+	if code := h.post("/api/v1/products/vendor-a/packages/25.7.2100:compareSecurity",
+		`{"against":"25.7.2131"}`, &resp); code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", code)
+	}
+
+	// ChangesTotal is the whole classification, which is what the counts are
+	// over. A client that counted len(Changes) would report a fraction.
+	classified := resp.Introduced.Total + resp.Resolved.Total + resp.Unchanged.Total +
+		resp.SeverityIncreased.Total + resp.SeverityDecreased.Total +
+		resp.RemediationChanged.Total + resp.RemovedArtifact.Total
+	if resp.ChangesTotal != classified {
+		t.Fatalf("changesTotal = %d, but the counts add to %d", resp.ChangesTotal, classified)
+	}
+	if resp.ChangesTotal <= maxListedChanges {
+		t.Fatalf("premise failed: %d classified findings does not exceed the ceiling of %d",
+			resp.ChangesTotal, maxListedChanges)
+	}
+	if len(resp.Changes) != maxListedChanges {
+		t.Fatalf("listed %d changes, want the ceiling of %d", len(resp.Changes), maxListedChanges)
+	}
+
+	// What survives is a PREFIX of the order the engine sorted into, so while
+	// there are changed rows left over, none of the unchanged ones may be
+	// listed ahead of them.
+	if resp.Introduced.Total <= maxListedChanges {
+		t.Fatalf("premise failed: only %d introduced", resp.Introduced.Total)
+	}
+	for _, ch := range resp.Changes {
+		if ch.Type == string(security.ChangeUnchanged) {
+			t.Fatalf("an unchanged finding (%s) was listed while %d introduced ones were cut",
+				ch.CVE, resp.Introduced.Total-maxListedChanges)
+		}
+	}
+
+	// And the export is complete, which is what makes shortening the page
+	// honest rather than lossy.
+	body, _ := h.getRaw("/api/v1/products/vendor-a/packages/25.7.2100/security/compare/export" +
+		"?format=csv&view=detailed&against=25.7.2131")
+	rows := strings.Count(strings.TrimRight(string(body), "\n"), "\n") // minus the header
+	if rows != resp.ChangesTotal {
+		t.Errorf("export wrote %d change rows, want all %d", rows, resp.ChangesTotal)
+	}
+}
+
+// How old an answer may be is one number in one configuration file, and it
+// belongs on the wire.
+//
+// A client that decided for itself would be wrong in every deployment that
+// chose differently - silently, and in the direction of presenting stale data
+// as current. Nothing expires because of this: the counts, the rows and the
+// export are unchanged past the age, and the only difference is that the page
+// says so and offers a sync.
+func TestPackageSecurityCarriesTheFreshnessRule(t *testing.T) {
+	h := newSecurityHarnessWith(t, func(d *Deps) {
+		d.SecurityFreshness = security.Freshness{Vulnerabilities: time.Hour}
+	})
+	h.seedPackage("25.7.2131", digestA)
+	h.syncer.reports[digestA] = scannedReport(
+		apiFinding("CVE-2024-3094", security.SeverityCritical, "xz-utils", true))
+	h.post("/api/v1/products/vendor-a/packages/25.7.2131:syncSecurity", `{}`, nil)
+
+	var fresh v1.PackageSecurityResponse
+	h.get("/api/v1/products/vendor-a/packages/25.7.2131/security?detail=true", &fresh)
+	if fresh.Freshness.MaxAgeSeconds != 3600 {
+		t.Errorf("maxAgeSeconds = %d, want 3600", fresh.Freshness.MaxAgeSeconds)
+	}
+	if fresh.Freshness.Stale {
+		t.Error("a release synced a moment ago is reported as out of date")
+	}
+	if fresh.Freshness.StaleAt == "" {
+		t.Error("no staleAt, so nothing can say WHEN it goes out of date")
+	}
+
+	// Wind the sync back past the age. The rows are untouched, which is the
+	// point: going out of date must not cost anybody their findings.
+	h.exec(`UPDATE package_security SET synced_at = ? WHERE package_id > 0`,
+		time.Now().Add(-3*time.Hour).UTC().Format("2006-01-02T15:04:05.000Z"))
+
+	var stale v1.PackageSecurityResponse
+	h.get("/api/v1/products/vendor-a/packages/25.7.2131/security?detail=true", &stale)
+	if !stale.Freshness.Stale {
+		t.Errorf("a release synced three hours ago is not out of date at a one-hour age (syncedAt %q)",
+			stale.SyncedAt)
+	}
+	if stale.Counts.Total != fresh.Counts.Total || stale.Counts.Total == 0 {
+		t.Errorf("going out of date changed the counts: %d then %d",
+			fresh.Counts.Total, stale.Counts.Total)
+	}
+	if len(stale.Reports) != len(fresh.Reports) {
+		t.Errorf("going out of date changed the reports: %d then %d",
+			len(fresh.Reports), len(stale.Reports))
+	}
+}
+
+// An SBOM describes one immutable set of bytes, so it does not go out of date
+// the way a vulnerability answer does. The two ages are separate for that
+// reason, and the default for the SBOM is "never".
+func TestFreshnessTreatsAnSBOMAsImmutable(t *testing.T) {
+	f := security.Freshness{Vulnerabilities: time.Hour}
+	old := time.Now().Add(-30 * 24 * time.Hour)
+	now := time.Now()
+
+	if !f.Stale(old, security.DocumentVulnerabilities, now) {
+		t.Error("a month-old scan is not stale at a one-hour age")
+	}
+	if f.Stale(old, security.DocumentSBOM, now) {
+		t.Error("an SBOM went stale on its own; its bytes cannot have changed")
+	}
+	if got := f.StaleAt(old, security.DocumentSBOM); !got.IsZero() {
+		t.Errorf("StaleAt for an SBOM = %v, want the zero time", got)
+	}
 }

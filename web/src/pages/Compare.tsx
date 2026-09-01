@@ -7,8 +7,8 @@ import { Table as DataTable } from '../tablekit'
 import { FolderOutlined, SwapOutlined } from '../icons'
 import { Link, useNavigate, useSearchParams } from 'react-router-dom'
 import {
-  useCompare, useCompareProgress, useCompareSecurity, usePackages, useProduct, useProducts,
-  useSyncPackageSecurity,
+  useCompare, useCompareProgress, useCompareSecurity, usePackages, usePackageSecurity, useProduct,
+  useProducts, useSyncPackageSecurity,
 } from '../api/queries'
 import { hasSecurityData, kindName, matches, packageReference, version } from '../domain/derive'
 import { selectionHref } from '../domain/compare'
@@ -1172,7 +1172,26 @@ export default function Compare() {
   const compareRunning = compare.isPending
   const report = compare.data
 
-  const compareSecurity = useCompareSecurity()
+  /*
+   * The comparison runs from `enabled`, not from a click or an effect: asking
+   * for the vulnerability view IS asking for the comparison, and a reader who
+   * arrives on that view from the listing should not have to ask twice. It is
+   * keyed on the pair, so switching back to contents and returning is free.
+   */
+  const compareSecurity = useCompareSecurity(
+    {
+      product,
+      ref: leftRef,
+      repository: leftPkg?.sourceRepository,
+      against: rightPkg?.tag ?? rightRef,
+    },
+    // Not until the listing has answered. Both the repository and the tag this
+    // comparison is keyed on come from the resolved pair, so running before it
+    // arrives runs the comparison TWICE - once against the raw refs and again
+    // against the resolved ones - and the first of those is three seconds of a
+    // hundred and seventy thousand findings that nothing will ever read.
+    view === 'security' && !securityBlocked && !packages.isPending,
+  )
   const syncSecurity = useSyncPackageSecurity()
 
   useEffect(() => {
@@ -1237,20 +1256,6 @@ export default function Compare() {
     void run()
   }, [mode, view, product, leftRef, rightRef, versionEnd, sources.length, run])
 
-  const runSecurity = useCallback(async () => {
-    if (!product || !leftRef || !rightRef) return
-    try {
-      await compareSecurity.mutateAsync({
-        product,
-        ref: leftRef,
-        repository: leftPkg?.sourceRepository,
-        body: { against: rightPkg?.tag ?? rightRef },
-      })
-    } catch (e) {
-      message.error(e instanceof Error ? e.message : 'The security comparison could not be run.')
-    }
-  }, [product, leftRef, rightRef, leftPkg, rightPkg, compareSecurity, message])
-
   /**
    * Sync one end from the comparison, then re-run it.
    *
@@ -1259,6 +1264,31 @@ export default function Compare() {
    * that it cannot say. The re-run is deliberate rather than automatic: a sync
    * is minutes, and a page that silently re-compared would look stuck.
    */
+  /*
+   * Fetch what is missing, then carry on - without the reader doing anything
+   * else.
+   *
+   * It used to say "re-run the comparison once it finishes", which is a task
+   * handed back to somebody who had already asked for the thing. The sync now
+   * only asks the scanner about images it has no answer for, so filling a gap
+   * of one or two images is seconds rather than minutes; this watches the
+   * release until the run settles and re-runs the comparison itself.
+   */
+  const [syncingEnd, setSyncingEnd] = useState<'a' | 'b' | null>(null)
+  const watched = syncingEnd === 'a' ? leftPkg : syncingEnd === 'b' ? rightPkg : undefined
+  const watchedSecurity = usePackageSecurity(
+    product,
+    watched ? packageReference(watched) : undefined,
+    { repository: watched?.sourceRepository, enabled: Boolean(watched) },
+  )
+  const watchedState = watchedSecurity.data?.sync.state
+  useEffect(() => {
+    if (!syncingEnd || !watchedSecurity.data) return
+    if (watchedState === 'syncing' && !watchedSecurity.data.sync.stalled) return
+    setSyncingEnd(null)
+    void compareSecurity.refetch()
+  }, [syncingEnd, watchedState, watchedSecurity.data, compareSecurity])
+
   const syncEnd = (end: 'a' | 'b') => {
     const target = end === 'a' ? leftPkg : rightPkg
     if (!product || !target) return
@@ -1267,31 +1297,17 @@ export default function Compare() {
       ref: packageReference(target),
       repository: target.sourceRepository,
     }, {
-      onSuccess: (res) => message.info(res.started
-        ? `Syncing ${target.tag}. Re-run the comparison once it finishes.`
-        : `A sync is already running for ${target.tag}.`),
+      onSuccess: (res) => {
+        setSyncingEnd(end)
+        message.info(res.started
+          ? `Fetching the missing results for ${target.tag}. The comparison re-runs on its own.`
+          : `A sync is already running for ${target.tag}. The comparison re-runs when it finishes.`)
+      },
       onError: (e) => message.error(e instanceof Error ? e.message : 'The sync could not be started.'),
     })
   }
 
-  const showSecurity = () => {
-    setView('security')
-    if (!compareSecurity.data && !compareSecurity.isPending) void runSecurity()
-  }
-
-  /*
-   * The same, for a reader who ARRIVED on the vulnerability view rather than
-   * switching to it. Without this, asking for vulnerabilities on the listing
-   * produced a page that had chosen the right tab and then sat there.
-   */
-  const securityRanFor = useRef<string>('')
-  useEffect(() => {
-    if (view !== 'security' || securityBlocked || !product || !leftRef || !rightRef) return
-    const key = `${product}|${leftRef}|${rightRef}`
-    if (securityRanFor.current === key) return
-    securityRanFor.current = key
-    void runSecurity()
-  }, [view, securityBlocked, product, leftRef, rightRef, runSecurity])
+  const showSecurity = () => setView('security')
 
   /** Back to where choosing happens, with this pair still ticked. */
   const changeSelection = () => {
@@ -1480,12 +1496,17 @@ export default function Compare() {
             A comparison over stored data is two indexed reads, so there is no
             position worth reporting - a plain loading card is the honest shape
             and a progress bar would be theatre.
+
+            Shown while there is no answer yet, which covers both the request
+            being in flight and the moment before it can start - the pair has
+            to be resolved from the listing first, and a gap of blank page
+            between arriving and asking reads as a page that gave up.
           */}
-          {compareSecurity.isPending && <Card loading />}
-          {compareSecurity.isError && (
-            <ErrorState error={compareSecurity.error} retry={() => void runSecurity()} />
+          {!compareSecurity.data && !compareSecurity.isError && <Card loading />}
+          {compareSecurity.isError && !compareSecurity.isFetching && (
+            <ErrorState error={compareSecurity.error} retry={() => void compareSecurity.refetch()} />
           )}
-          {compareSecurity.data && product && leftRef && (
+          {compareSecurity.data && !compareSecurity.isFetching && product && leftRef && (
             <SecurityComparison
               product={product}
               baseRef={leftRef}
@@ -1493,6 +1514,7 @@ export default function Compare() {
               repository={leftPkg?.sourceRepository}
               report={compareSecurity.data}
               onSync={syncEnd}
+              syncing={Boolean(syncingEnd) || syncSecurity.isPending}
             />
           )}
         </>

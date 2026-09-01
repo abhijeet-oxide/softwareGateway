@@ -239,6 +239,14 @@ type Deps struct {
 	// fetch. Nil disables the on-demand path and leaves the download serving
 	// only what a sync captured.
 	SecurityDocuments SecurityDocuments
+	// SecurityFreshness is when an answer stops being presented as current.
+	//
+	// Not a retention and not a schedule: nothing is deleted and nothing is
+	// refetched because of it. It is the number the interface uses to put an
+	// age in words beside a count and a Refresh beside the age, and it is on
+	// the wire so that the rule lives in one place rather than being guessed
+	// at by every page that draws a date.
+	SecurityFreshness security.Freshness
 }
 
 // Server wires the router.
@@ -299,6 +307,7 @@ func (s *Server) routes() chi.Router {
 	}
 	r.Use(middleware.Recovery(internalErrorWriter(s.deps.Logger)))
 	r.Use(middleware.Auth(middleware.AnonymousAuthenticator{}, unauthenticatedWriter))
+	r.Use(middleware.Compress)
 
 	r.NotFound(s.handleNotFound)
 	r.MethodNotAllowed(s.handleMethodNotAllowed)

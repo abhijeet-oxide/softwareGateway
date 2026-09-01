@@ -11,6 +11,7 @@ import (
 	"strings"
 
 	"github.com/go-chi/chi/v5"
+	"golang.org/x/sync/errgroup"
 
 	"github.com/abhijeet-oxide/softwareGateway/internal/regclient"
 	"github.com/abhijeet-oxide/softwareGateway/internal/security"
@@ -50,7 +51,13 @@ type SecuritySyncer interface {
 type SecurityStore interface {
 	Get(ctx context.Context, packageID int64) (store.PackageSecurityRow, bool, error)
 	ForPackages(ctx context.Context, ids []int64) (map[int64]store.PackageSecurityRow, error)
-	ReportsFor(ctx context.Context, scope security.Scope, refs []security.ArtifactRef) ([]security.Report, error)
+	// ReportsFor reads stored reports. The Detail argument says whether the
+	// prose tier is wanted: a reader that only counts and classifies must not
+	// pay to decompress it (see security.Detail).
+	ReportsFor(
+		ctx context.Context, scope security.Scope,
+		refs []security.ArtifactRef, detail security.Detail,
+	) ([]security.Report, error)
 	// LoadDocuments returns the scanner's own bodies, for a bundle export and
 	// for the download beside an image.
 	//
@@ -161,7 +168,11 @@ func (s *Server) handlePackageSecurity(w http.ResponseWriter, r *http.Request) {
 	// private, because these are one repository's findings under one
 	// repository's permissions and a shared cache must never hold them.
 	w.Header().Set("Cache-Control", "private, no-cache")
-	w.Header().Set("Vary", "Authorization")
+	// Add rather than Set, because this is not the only reason the answer
+	// varies: the compression middleware lists Accept-Encoding here too, and a
+	// handler that replaced the header would tell a shared cache it may serve
+	// a gzipped body to a client that asked for plain text.
+	w.Header().Add("Vary", "Authorization")
 
 	WriteJSON(w, r, http.StatusOK, out)
 }
@@ -177,7 +188,7 @@ func (s *Server) packageSecurity(
 
 	target := s.securityTargetFor(ctx, productName, pkg)
 
-	out := toAPIPackageSecurity(productName, pkg, row, target, detail)
+	out := toAPIPackageSecurity(productName, pkg, row, target, detail, s.deps.SecurityFreshness)
 	out.Sync = s.syncStatusFor(pkg.ID, row, target)
 
 	// The per-scanner breakdown, which is empty on a single-scanner deployment
@@ -194,7 +205,7 @@ func (s *Server) packageSecurity(
 
 	if detail && row.Synced() {
 		refs := s.securityArtifactsFor(productName, pkg, ctx)
-		reports, err := s.deps.SecurityStore.ReportsFor(ctx, target.Scope, refs)
+		reports, err := s.deps.SecurityStore.ReportsFor(ctx, target.Scope, refs, security.WithProse)
 		if err != nil {
 			return v1.PackageSecurityResponse{}, err
 		}
@@ -331,6 +342,12 @@ func (s *Server) handleSyncPackageSecurity(w http.ResponseWriter, r *http.Reques
 		return
 	}
 
+	var body v1.SyncSecurityRequest
+	if err := decodeOptionalJSON(r, &body); err != nil {
+		Error(w, r, v1.CodeInvalidArgument, err.Error())
+		return
+	}
+
 	status, err := s.deps.SecuritySync.Start(r.Context(), security.SyncRequest{
 		PackageID: pkg.ID,
 		Label:     releaseLabel(pkg),
@@ -340,6 +357,11 @@ func (s *Server) handleSyncPackageSecurity(w http.ResponseWriter, r *http.Reques
 		// config.SecurityConfig. The zero value means "use the defaults", which
 		// is right for a Coordinator that has not been told otherwise.
 		TTL: s.deps.SecurityRetention,
+		// Reuse what is already held and inside the age limit. Releases of one
+		// product share most of their images, so this is the difference between
+		// a sync that asks about 157 and one that asks about seven.
+		MaxAge: s.deps.SecurityFreshness.Vulnerabilities,
+		Force:  body.Force,
 	})
 	switch {
 	case errors.Is(err, store.ErrSyncInFlight):
@@ -579,12 +601,28 @@ func (s *Server) handleCompareSecurity(w http.ResponseWriter, r *http.Request) {
 func (s *Server) compareSecurity(
 	ctx context.Context, productName string, base, other store.PackageRow,
 ) (v1.SecurityComparisonResponse, error) {
-	sideA, err := s.securitySide(ctx, productName, base)
-	if err != nil {
-		return v1.SecurityComparisonResponse{}, err
-	}
-	sideB, err := s.securitySide(ctx, productName, other)
-	if err != nil {
+	// IndexOnly: a comparison is decided by identity and grade - which CVE, on
+	// which component, at what severity, fixable or not. It never reads a
+	// description, and reading them anyway is what made this endpoint answer in
+	// minutes (see security.Detail).
+	//
+	// The two sides are read CONCURRENTLY. They share nothing - two disjoint
+	// sets of artifacts, two independent reads - and each is most of a second
+	// for a release of this size, so running them one after the other spent
+	// half the endpoint's time waiting for a database that was idle.
+	var sideA, sideB securitySide
+	group, gctx := errgroup.WithContext(ctx)
+	group.Go(func() error {
+		var err error
+		sideA, err = s.securitySide(gctx, productName, base, security.IndexOnly)
+		return err
+	})
+	group.Go(func() error {
+		var err error
+		sideB, err = s.securitySide(gctx, productName, other, security.IndexOnly)
+		return err
+	})
+	if err := group.Wait(); err != nil {
 		return v1.SecurityComparisonResponse{}, err
 	}
 
@@ -592,7 +630,9 @@ func (s *Server) compareSecurity(
 		A: sideA.reports, B: sideB.reports,
 		NameA: releaseLabel(base), NameB: releaseLabel(other),
 	})
-	return toAPISecurityComparison(productName, base, other, sideA, sideB, cmp), nil
+	out := toAPISecurityComparison(productName, base, other, sideA, sideB, cmp)
+	shortenChanges(&out)
+	return out, nil
 }
 
 // securitySide is one end of a comparison, read from storage.
@@ -604,7 +644,7 @@ type securitySide struct {
 }
 
 func (s *Server) securitySide(
-	ctx context.Context, productName string, pkg store.PackageRow,
+	ctx context.Context, productName string, pkg store.PackageRow, detail security.Detail,
 ) (securitySide, error) {
 	row, _, err := s.deps.SecurityStore.Get(ctx, pkg.ID)
 	if err != nil {
@@ -621,7 +661,7 @@ func (s *Server) securitySide(
 	}
 
 	refs := s.securityArtifactsFor(productName, pkg, ctx)
-	reports, err := s.deps.SecurityStore.ReportsFor(ctx, side.target.Scope, refs)
+	reports, err := s.deps.SecurityStore.ReportsFor(ctx, side.target.Scope, refs, detail)
 	if err != nil {
 		return securitySide{}, err
 	}

@@ -314,6 +314,22 @@ type SecurityLogEntry struct {
 
 // SyncSecurityResponse is POST
 // /api/v1/products/{product}/packages/{package}:syncSecurity.
+// SyncSecurityRequest is the optional body of a sync.
+//
+// Empty is the ordinary case and means "bring this release up to date": images
+// whose stored answer is inside the deployment's max age are reused rather than
+// asked about again, which for a release sharing its images with one synced
+// recently is most of the release and most of the time.
+type SyncSecurityRequest struct {
+	// Force asks the scanner about every image regardless of what is held.
+	//
+	// For the person who has a reason to distrust what is stored - a scanner
+	// that was misconfigured when the last sync ran, a policy that has since
+	// changed. It is minutes of somebody else's scanner, so it is asked for
+	// rather than assumed.
+	Force bool `json:"force,omitempty"`
+}
+
 type SyncSecurityResponse struct {
 	Product string `json:"product"`
 	Package string `json:"package"`
@@ -383,6 +399,10 @@ type PackageSecurityResponse struct {
 	// between them is how stale the answer is allowed to look.
 	ScannedAt string `json:"scannedAt,omitempty"`
 	SyncedAt  string `json:"syncedAt,omitempty"`
+	// Freshness is when these answers stop being current, and whether they
+	// already have. On the wire so the rule lives in one place rather than
+	// being guessed at by every page that draws a date.
+	Freshness SecurityFreshness `json:"freshness"`
 	// Fingerprint is the ETag body. Exposed so a client can tell an unchanged
 	// re-read from a changed one without diffing megabytes.
 	Fingerprint string `json:"fingerprint,omitempty"`
@@ -574,12 +594,53 @@ type SecurityComparisonResponse struct {
 	// number that can be checked beats a rule that cannot.
 	NetScore int `json:"netScore"`
 
-	Changes         []SecurityChange        `json:"changes"`
+	// Changes is the classified findings, worst first: what became more
+	// severe, what is new, what left, what was resolved, and - last - what
+	// carried over unchanged.
+	//
+	// It can be a PREFIX of the whole set. ChangesTotal is the whole set's
+	// size, and when it is larger than len(Changes) the rows that were left
+	// out are the least important ones in that order, which in practice means
+	// findings that are in both releases and identical in both. A client must
+	// take its counts from the Introduced/Resolved/Unchanged totals above and
+	// never from len(Changes), and should say plainly that the list is
+	// shortened - see ChangesTotal.
+	Changes []SecurityChange `json:"changes"`
+	// ChangesTotal is how many classified findings there are in all, whether
+	// or not they are listed in Changes.
+	ChangesTotal    int                     `json:"changesTotal"`
 	Artifacts       []SecurityArtifactDelta `json:"artifacts"`
 	ArtifactSummary SecurityArtifactSummary `json:"artifactSummary"`
 
 	Fingerprint string `json:"fingerprint,omitempty"`
 	RetrievedAt string `json:"retrievedAt,omitempty"`
+}
+
+// SecurityFreshness is the deployment's rule about how old an answer may be.
+//
+// # Why the ANSWER carries the policy
+//
+// Because otherwise every page draws its own line. The rule is one number in
+// one configuration file, and a client that hardcoded "a week is old" would be
+// wrong in every deployment that decided otherwise - silently, and in the
+// direction of telling somebody stale data is current.
+//
+// Nothing here expires or refetches. Past MaxAgeSeconds an answer is still
+// served, still counted and still exported; it is presented with its age in
+// words and a Refresh beside it, and the decision stays with the person.
+type SecurityFreshness struct {
+	// MaxAgeSeconds is how old a vulnerability answer may be before it is
+	// shown as out of date. Zero means never.
+	MaxAgeSeconds int `json:"maxAgeSeconds,omitempty"`
+	// SBOMMaxAgeSeconds is the same for the component inventory, and is
+	// normally zero: an SBOM describes one immutable set of bytes, so it
+	// cannot go out of date without the digest changing.
+	SBOMMaxAgeSeconds int `json:"sbomMaxAgeSeconds,omitempty"`
+	// Stale says the release's own answer is past MaxAgeSeconds. Computed here
+	// rather than in the client so "how old is too old" is answered once.
+	Stale bool `json:"stale,omitempty"`
+	// StaleAt is when it will be, or was. Empty when nothing ever goes stale.
+	StaleAt string `json:"staleAt,omitempty"`
 }
 
 // SecurityCompareRequest is the body of a security comparison.

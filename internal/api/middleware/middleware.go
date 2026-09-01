@@ -2,11 +2,12 @@
 //
 // Order is fixed and load-bearing (docs/design/09-api.md section 10.1):
 //
-//	RequestID -> Logging -> Tracing -> Metrics -> Recovery -> Auth -> handler
+//	RequestID -> Logging -> Tracing -> Metrics -> Recovery -> Auth -> Compress -> handler
 //
 // RequestID is outermost so every log line, span and error carries it.
 // Recovery sits inside Metrics so a panic is still counted as a 500 rather
-// than vanishing from the metrics entirely.
+// than vanishing from the metrics entirely. Compress is innermost so the
+// bytes the other five observe are the bytes that went on the wire.
 package middleware
 
 import (

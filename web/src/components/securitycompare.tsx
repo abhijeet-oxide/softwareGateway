@@ -4,7 +4,7 @@ import { Alert, Button, Card, Checkbox, Col, Input, Row, Segmented, Space, Tag, 
 // The working-surface table: resizable, reorderable, pinnable columns whose
 // layout each person keeps. See `tablekit/README.md` for which tables get it.
 import { Table as DataTable } from '../tablekit'
-import { ArrowUpOutlined, CheckOutlined, MinusOutlined } from '../icons'
+import { ArrowUpOutlined, CheckOutlined, MinusOutlined, SyncOutlined } from '../icons'
 import { securityComparisonExportUrl } from '../api/queries'
 import { SEVERITIES } from '../api/types'
 import type {
@@ -35,7 +35,9 @@ import { formatRelative } from '../domain/format'
  * arrived in an image that was already there" - the difference between a new
  * dependency and a regression.
  */
-export function SecurityComparison({ product, baseRef, againstRef, report, repository, onSync }: {
+export function SecurityComparison({
+  product, baseRef, againstRef, report, repository, onSync, syncing,
+}: {
   product: string
   baseRef: string
   againstRef: string
@@ -43,6 +45,8 @@ export function SecurityComparison({ product, baseRef, againstRef, report, repos
   repository?: string
   /** Offered on an end nobody has synced, because that is the fix. */
   onSync?: (end: 'a' | 'b') => void
+  /** A sync is already under way, so the offer says so rather than repeating. */
+  syncing?: boolean
 }) {
   const exportMenu = (
     <SecurityExportMenu
@@ -101,7 +105,7 @@ export function SecurityComparison({ product, baseRef, againstRef, report, repos
           <Space direction="vertical" size={16} style={{ width: '100%' }}>
             <VulnerabilityOverview report={report} />
             <ChangeBySeverity report={report} />
-            <ArtifactDeltaCard report={report} />
+            <ArtifactDeltaCard report={report} onSync={onSync} syncing={syncing} />
           </Space>
         </Col>
         <Col xs={24} xl={7}>
@@ -686,12 +690,51 @@ const ARTIFACT_CHANGE_LABEL: Record<ArtifactChange, string> = {
  * The four counts first, because "eight of these ten images did not change" is
  * the fact that makes a two-image diff legible.
  */
-function ArtifactDeltaCard({ report }: { report: SecurityComparisonResponse }) {
+function ArtifactDeltaCard({ report, onSync, syncing }: {
+  report: SecurityComparisonResponse
+  /** Fetches the missing side's results. The fix, offered where the gap is. */
+  onSync?: (end: 'a' | 'b') => void
+  syncing?: boolean
+}) {
   const [only, setOnly] = useState<'all' | ArtifactChange>('all')
   const rows = useMemo(
     () => report.artifacts.filter((a) => only === 'all' || a.change === only),
     [report.artifacts, only],
   )
+
+  /*
+   * Which images are missing an answer, and which release has to be synced.
+   *
+   * This was one warning reading "1 artifacts could not be compared - they are
+   * present in both releases, but one side has no scan result, so nothing about
+   * them was classified". Ungrammatical, wrong whenever NEITHER side has a
+   * result, and - the part that matters - it left a reader holding a warning
+   * with nothing to do about it. Naming the images and the release that needs a
+   * sync turns it into a task, and the task takes one click.
+   *
+   * Nothing here fires for a pair whose two ends share a digest: the same bytes
+   * are the same software, so the comparison uses whichever side was scanned
+   * for both (see security.shareDigestResult). This is only the genuine case -
+   * two different builds of one image, one of them never scanned.
+   */
+  const pending = useMemo(() => {
+    // Only images a scanner would answer about. A Helm chart, a signature and
+    // the index manifest are permanently out of scope, and offering to sync
+    // for them promises something no sync can deliver - which is how one real
+    // gap came to sit behind a warning about four artifacts.
+    const scannable = (status?: string) => status !== 'unsupported' && status !== 'disabled'
+    const missing = report.artifacts.filter((a) => (
+      !a.comparable
+      && (a.change === 'common' || a.change === 'upgraded')
+      && scannable(a.statusA) && scannable(a.statusB)
+    ))
+    const ends = new Set<'a' | 'b'>()
+    for (const a of missing) {
+      if (a.statusA !== 'scanned') ends.add('a')
+      if (a.statusB !== 'scanned') ends.add('b')
+    }
+    return { missing, ends: [...ends] }
+  }, [report.artifacts])
 
   const s = report.artifactSummary
   return (
@@ -713,13 +756,49 @@ function ArtifactDeltaCard({ report }: { report: SecurityComparisonResponse }) {
         />
       }
     >
-      {s.notComparable > 0 && (
+      {pending.missing.length > 0 && (
         <Alert
-          type="warning"
+          type="info"
           showIcon
           style={{ marginBottom: 12 }}
-          message={`${s.notComparable} artifacts could not be compared`}
-          description="They are present in both releases, but one side has no scan result, so nothing about them was classified."
+          message={
+            pending.missing.length === 1
+              ? 'One image has not been scanned yet'
+              : `${pending.missing.length} images have not been scanned yet`
+          }
+          description={
+            <Space direction="vertical" size={6} style={{ width: '100%' }}>
+              <Typography.Text>
+                {/*
+                  The image NAME, not either side's display.
+
+                  The display carries a tag, and the tag would be one release's
+                  - so a gap on the new release read "cfx-amf:25.10.2", naming
+                  the copy that is fine. The name is what both releases call it,
+                  and it is what the table below is keyed by.
+                */}
+                {pending.missing.slice(0, 6).map((a) => a.key).join(', ')}
+                {pending.missing.length > 6 && ` and ${pending.missing.length - 6} more`}
+                {'. Everything else is compared normally.'}
+              </Typography.Text>
+              {onSync && pending.ends.length > 0 && (
+                <Space size={8} wrap>
+                  {pending.ends.map((end) => (
+                    <Button
+                      key={end}
+                      size="small"
+                      icon={<SyncOutlined spin={syncing} />}
+                      disabled={syncing}
+                      onClick={() => onSync(end)}
+                    >
+                      {`Fetch results for ${
+                        (end === 'a' ? report.a.label : report.b.label) || 'the other release'}`}
+                    </Button>
+                  ))}
+                </Space>
+              )}
+            </Space>
+          }
         />
       )}
       <DataTable<SecurityArtifactDelta>
@@ -823,13 +902,36 @@ function ChangeTable({ report, product, baseRef, againstRef, repository }: {
   const [fixability, setFixability] = useState<'all' | 'fixable' | 'non-fixable'>('all')
   const [q, setQ] = useState('')
 
+  /*
+   * The tab counts come from the response's TOTALS, not from the rows.
+   *
+   * They are not the same number and the difference is the point: the response
+   * carries the classified findings that matter most and says how many there
+   * were in all, because two neighbouring releases of a large product produce
+   * eighty thousand rows saying "unchanged" and a browser holding them to show
+   * twenty-five is what made this page take minutes. A tab that counted its own
+   * rows would report the sample as the population.
+   */
+  const totals = useMemo<Record<ChangeType, number>>(() => ({
+    introduced: report.introduced.total,
+    resolved: report.resolved.total,
+    unchanged: report.unchanged.total,
+    severity_increased: report.severityIncreased.total,
+    severity_decreased: report.severityDecreased.total,
+    remediation_changed: report.remediationChanged.total,
+    removed_artifact: report.removedArtifact.total,
+  }), [report])
+
   const counts = useMemo(() => {
     const out = {} as Record<ChangeTab, number>
     for (const key of Object.keys(TAB_TYPES) as ChangeTab[]) {
-      out[key] = report.changes.filter((c) => TAB_TYPES[key].includes(c.type)).length
+      out[key] = TAB_TYPES[key].reduce((n, type) => n + (totals[type] ?? 0), 0)
     }
     return out
-  }, [report.changes])
+  }, [totals])
+
+  /** True when the rows on this tab are a prefix rather than the whole set. */
+  const shortened = report.changes.length < (report.changesTotal ?? report.changes.length)
 
   const rows = useMemo(() => report.changes.filter((c) => {
     if (!TAB_TYPES[tab].includes(c.type)) return false
@@ -897,6 +999,13 @@ function ChangeTable({ report, product, baseRef, againstRef, repository }: {
           onChange={(v) => setSeverities(v as Severity[])}
           options={SEVERITIES.map((s) => ({ label: <SeverityTag value={s} />, value: s }))}
         />
+        {shortened && (
+          <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+            Listing the {report.changes.length.toLocaleString()} most significant of{' '}
+            {report.changesTotal.toLocaleString()} classified findings - every change is here, and
+            the findings both releases share are shortened. Export the comparison for all of them.
+          </Typography.Text>
+        )}
       </Space>
 
       <DataTable<SecurityChange>

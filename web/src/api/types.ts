@@ -1727,6 +1727,26 @@ export interface SecurityReport {
   scanUrl?: string
 }
 
+/**
+ * The deployment's rule about how old an answer may be, and where this release
+ * sits against it.
+ *
+ * Sent by the server rather than decided here, because "how old is too old" is
+ * one number in one configuration file and a page that guessed it would be
+ * wrong in every deployment that chose differently - silently, and in the
+ * direction of calling stale data current.
+ *
+ * Nothing expires. Past `maxAgeSeconds` an answer is still served, still
+ * counted and still exported; it is shown with its age and a refresh beside it.
+ */
+export interface SecurityFreshness {
+  maxAgeSeconds?: number
+  /** Normally absent: an SBOM describes bytes that cannot change. */
+  sbomMaxAgeSeconds?: number
+  stale?: boolean
+  staleAt?: string
+}
+
 export interface PackageSecurityResponse {
   product: string
   package: string
@@ -1752,6 +1772,7 @@ export interface PackageSecurityResponse {
   sources?: SecuritySourceCounts[]
   scannedAt?: string
   syncedAt?: string
+  freshness?: SecurityFreshness
   fingerprint?: string
   detail: boolean
 }
@@ -1833,7 +1854,13 @@ export interface SecurityComparisonResponse {
   remediationChanged: SecurityCounts
   removedArtifact: SecurityCounts
   netScore: number
+  /**
+   * The classified findings, worst first, and possibly only the first of
+   * them - `changesTotal` is how many there are. Count from the totals above,
+   * never from this array's length.
+   */
   changes: SecurityChange[]
+  changesTotal: number
   artifacts: SecurityArtifactDelta[]
   artifactSummary: SecurityArtifactSummary
   fingerprint?: string

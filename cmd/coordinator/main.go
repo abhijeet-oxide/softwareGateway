@@ -211,6 +211,12 @@ func run() error {
 		Detail:    cfg.Coordinator.Security.DetailRetention,
 		Documents: cfg.Coordinator.Security.DocumentRetention,
 	}
+	// When an answer stops being called current. Deliberately not a retention
+	// and deliberately not a schedule - see security.Freshness.
+	securityFreshness := security.Freshness{
+		Vulnerabilities: cfg.Coordinator.Security.MaxAge,
+		SBOM:            cfg.Coordinator.Security.SBOMMaxAge,
+	}
 	// The document kinds a sync retrieves beyond the vulnerability response,
 	// which is captured for free from the request the scan already makes. Each
 	// named kind is a request per image, so this is an operator's decision -
@@ -449,6 +455,7 @@ func run() error {
 		SecurityStore:     securitySecurityStore{packageSecurity, securityCache},
 		SecurityIndex:     securityCache,
 		SecurityRetention: securityRetention,
+		SecurityFreshness: securityFreshness,
 		// The on-demand half: an SBOM a sync deliberately did not fetch,
 		// generated when somebody presses the button beside an image.
 		SecurityDocuments: securityService,

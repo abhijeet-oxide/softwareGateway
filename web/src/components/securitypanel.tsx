@@ -3,7 +3,7 @@ import type { ReactNode } from 'react'
 import {
   Alert,
   App, Button, Card, Col, Collapse, Descriptions, Drawer, Input, Row, Segmented, Select,
-  Skeleton, Space, Spin, Table, Tag, Tooltip, Typography,
+  Skeleton, Space, Spin, Table, Tabs, Tag, Tooltip, Typography,
 } from 'antd'
 // The working-surface table: resizable, reorderable, pinnable columns whose
 // layout each person keeps. See `tablekit/README.md` for which tables get it.
@@ -17,7 +17,8 @@ import { download } from '../api/client'
 import { CodeBlock } from './filecontent'
 import { SEVERITIES } from '../api/types'
 import type {
-  PackageSecurityResponse, SecurityCounts, SecurityDocumentRef, SecurityFinding, SecurityReport,
+  PackageSecurityResponse, SecurityCounts, SecurityDocumentRef, SecurityFinding, SecurityFreshness,
+  SecurityReport,
   SecuritySeverityCounts, SecurityViolation, Severity,
 } from '../api/types'
 import {
@@ -132,7 +133,7 @@ export function SecurityTab({ product, reference, repository }: {
           gap: 12,
         }}
       >
-        <SyncedAgo sync={data.sync} />
+        <SyncedAgo sync={data.sync} freshness={data.freshness} />
         {/*
           Only the sync and the log here. The export lives with the filters
           below, because an export respects them - two export buttons on one
@@ -675,11 +676,25 @@ function kindOf(kind?: string): ArtifactKind {
 }
 
 /** One row of the flattened findings table. */
-type FlatFinding = SecurityFinding & { artifactName: string; artifactTag?: string; artifactDigest?: string }
+type FlatFinding = SecurityFinding & {
+  artifactName: string
+  artifactTag?: string
+  artifactDigest?: string
+  /**
+   * When the answer this finding came from was retrieved.
+   *
+   * A property of the IMAGE, carried onto the finding because that is where it
+   * gets read. Two findings in one release routinely have different ages: an
+   * image shared with a release synced this morning carries this morning's
+   * answer, and one only this release has carries whatever its last sync found.
+   */
+  artifactRetrievedAt?: string
+}
 
 /** One row of the policy table: a violation, and the image it was raised on. */
 type FlatViolation = SecurityViolation & {
   artifactName: string; artifactTag?: string; artifactDigest?: string
+  artifactRetrievedAt?: string
 }
 
 /** The counts one image's row shows, rebuilt from a (possibly filtered) findings list. */
@@ -895,6 +910,7 @@ function FindingsSection({ data, product, reference, repository, tab, onTabChang
           artifactName: report.artifact.name,
           artifactTag: report.artifact.tag,
           artifactDigest: report.artifact.digest,
+          artifactRetrievedAt: report.retrievedAt,
         })
       }
     }
@@ -937,6 +953,7 @@ function FindingsSection({ data, product, reference, repository, tab, onTabChang
           artifactName: report.artifact.name,
           artifactTag: report.artifact.tag,
           artifactDigest: report.artifact.digest,
+          artifactRetrievedAt: report.retrievedAt,
         })
       }
     }
@@ -959,6 +976,7 @@ function FindingsSection({ data, product, reference, repository, tab, onTabChang
           artifactName: report.artifact.name,
           artifactTag: report.artifact.tag,
           artifactDigest: report.artifact.digest,
+          artifactRetrievedAt: report.retrievedAt,
         })
       }
     }
@@ -1339,7 +1357,11 @@ function FindingsSection({ data, product, reference, repository, tab, onTabChang
                       + `${data.sync.repository ?? 'the scanned repository'}.`}
                 </Typography.Text>
               )}
-              <ArtifactTable reports={filteredImageReports} whole={imageReports} />
+              <ArtifactTable
+                reports={filteredImageReports}
+                whole={imageReports}
+                freshness={data.freshness}
+              />
             </Space>
           )
           : tab === 'malware'
@@ -2166,6 +2188,22 @@ function FindingDetailDrawer({ finding, scanUrlFor, onClose }: {
                 label: 'Fix',
                 children: <FixCell fixable={finding.fixable} fixedIn={finding.fixedIn} />,
               },
+              // How old this particular answer is. On the finding rather than
+              // only on the release, because they differ: an image shared with
+              // a release synced this morning carries a fresher answer than one
+              // this release alone holds, and "how current is this" is the
+              // question somebody asks just before acting on it.
+              ...(finding.artifactRetrievedAt
+                ? [{
+                  key: 'retrieved',
+                  label: 'Retrieved',
+                  children: (
+                    <Tooltip title={formatAbsolute(finding.artifactRetrievedAt)}>
+                      <Typography.Text>{formatRelative(finding.artifactRetrievedAt)}</Typography.Text>
+                    </Tooltip>
+                  ),
+                }]
+                : []),
               {
                 key: 'component-id',
                 label: 'Component id',
@@ -2558,7 +2596,7 @@ function VulnerabilityTable({
  * nobody scanned. A table listing only the images with findings would be a
  * table where an unscanned image is invisible.
  */
-function ArtifactTable({ reports, whole }: {
+function ArtifactTable({ reports, whole, freshness }: {
   reports: SecurityReport[]
   /**
    * The same images with NOTHING filtered out, for the drawer.
@@ -2571,7 +2609,15 @@ function ArtifactTable({ reports, whole }: {
    * them. The filter belongs to the table; the image belongs to itself.
    */
   whole: SecurityReport[]
+  /** The deployment's rule about how old an answer may be. */
+  freshness?: SecurityFreshness
 }) {
+  const staleAfter = (freshness?.maxAgeSeconds ?? 0) * 1000
+  const stale = (at?: string) => {
+    if (!staleAfter || !at) return false
+    const t = Date.parse(at)
+    return Number.isFinite(t) && Date.now() - t > staleAfter
+  }
   /*
    * The statuses this table actually contains, in the order it shows them.
    *
@@ -2668,6 +2714,36 @@ function ArtifactTable({ reports, whole }: {
                     <SeverityBar counts={r.counts} height={4} />
                   </Space>
                 )
+          ),
+        },
+        {
+          /*
+            When this answer was retrieved, per image.
+
+            Per IMAGE rather than only on the release, because they genuinely
+            differ: an image shared with a release somebody synced this morning
+            carries that morning's answer, while one only this release has
+            carries whatever its last sync found. A single "synced 3 days ago"
+            on the header is then wrong for half the table, and "wrong about
+            how old a vulnerability answer is" is the kind of wrong that ends
+            with somebody shipping on stale data.
+          */
+          title: 'Retrieved',
+          width: 130,
+          sorter: (a, b) => Date.parse(a.retrievedAt ?? '') - Date.parse(b.retrievedAt ?? ''),
+          render: (_, r) => (
+            r.retrievedAt
+              ? (
+                <Tooltip title={formatAbsolute(r.retrievedAt)}>
+                  <Typography.Text
+                    type={stale(r.retrievedAt) ? undefined : 'secondary'}
+                    style={{ fontSize: 12, color: stale(r.retrievedAt) ? c.pending : undefined }}
+                  >
+                    {formatRelative(r.retrievedAt)}
+                  </Typography.Text>
+                </Tooltip>
+              )
+              : <Typography.Text type="secondary">-</Typography.Text>
           ),
         },
         {
@@ -2771,43 +2847,43 @@ function SbomButton({ doc }: { doc?: SecurityDocumentRef }) {
 }
 
 /**
- * The scanner's own answers about this image, IN the drawer.
+ * The scanner's own answers about this image.
  *
  * # What this replaced
  *
- * A dropdown of links that navigated away. A reader comparing what this page
- * says with what Xray said had to leave the page to do it, land on a raw JSON
- * body in a browser tab, and come back - which is three navigations to answer
- * "is our reading of this right".
+ * First a dropdown of links that navigated away, then a collapsed section under
+ * a table of nine hundred CVEs. Both put the scanner's own words somewhere a
+ * reader had to go looking for them, and the reason anybody opens them is to
+ * check whether this page has read them correctly - which is a comparison, and
+ * a comparison you have to scroll between is not one.
  *
- * The answer belongs where the question is. So: a tab per document the scanner
- * produced, the body formatted and syntax-coloured in place, and a copy button,
- * because the next thing somebody does with a raw payload is paste it into a
- * ticket or a support case.
+ * So it is a TAB, level with the vulnerabilities, holding one sub-tab per
+ * document: what the scanner said about vulnerabilities, the component
+ * inventory, the policy verdict, the malware list. Each is formatted,
+ * syntax-coloured, copyable and downloadable in place.
  *
- * # Why nothing is fetched until a tab is opened
+ * # Why the SBOM is here as well as on its own button
  *
- * These are the largest things this platform stores. The section renders
- * collapsed with the sizes on it, and one document is fetched when a reader
- * asks for it - so opening an image costs nothing, and the drawer does not
- * quietly pull forty megabytes to draw a heading.
+ * Because the button answers "give me the file" and this answers "what is in
+ * it". They are different questions from different people - one is a compliance
+ * request, the other is somebody checking whether a package they are arguing
+ * about is actually in the image - and the second was previously answerable
+ * only by downloading forty megabytes and opening an editor.
+ *
+ * # Why nothing is fetched until a sub-tab is opened
+ *
+ * These are the largest things this platform stores. The strip renders with the
+ * sizes and ages on it, and one document is fetched when a reader asks for it.
  */
-function RawOutputSection({ documents }: { documents?: SecurityDocumentRef[] }) {
-  const held = (documents ?? []).filter((d) => d.available && d.url)
+function ScannerOutput({ documents }: { documents?: SecurityDocumentRef[] }) {
+  const refs = documents ?? []
+  const held = refs.filter((d) => d.available && d.url)
   const [kind, setKind] = useState<string | undefined>(undefined)
-  const [open, setOpen] = useState(false)
   const { message } = App.useApp()
 
-  const selected = held.find((d) => d.kind === kind) ?? held[0]
-  const doc = useSecurityDocument(selected?.url, open && Boolean(selected))
-
-  if (held.length === 0) return null
-
-  // A body past this is one the browser stalls on rather than renders. The
-  // number is generous - a large image's vulnerability response is a few
-  // megabytes - and the reader is offered the download instead, which is what
-  // they would have wanted for a file that size anyway.
-  const tooLargeToShow = (selected?.bytes ?? 0) > 4 * 1024 * 1024
+  const selected = refs.find((d) => d.kind === kind) ?? held[0] ?? refs[0]
+  const readable = Boolean(selected?.available && selected?.url)
+  const doc = useSecurityDocument(selected?.url, readable)
 
   const body = doc.data ?? ''
   const formatted = useMemo(() => {
@@ -2822,88 +2898,110 @@ function RawOutputSection({ documents }: { documents?: SecurityDocumentRef[] }) 
     }
   }, [body])
 
-  return (
-    <Section
-      title={`Raw scanner output - ${held.length} ${held.length === 1 ? 'document' : 'documents'}`}
-    >
-      <Collapse
-        ghost
-        activeKey={open ? ['raw'] : []}
-        onChange={(keys) => setOpen((keys as string[]).includes('raw'))}
-        items={[{
-          key: 'raw',
-          label: (
-            <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-              {open
-                ? 'What the scanner returned for this image'
-                : 'Show what the scanner returned for this image'}
-            </Typography.Text>
-          ),
-          children: (
-            <Space direction="vertical" size={10} style={{ width: '100%' }}>
-              <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
-                {held.length > 1 && (
-                  <Segmented
-                    size="small"
-                    value={selected?.kind}
-                    onChange={(v) => setKind(String(v))}
-                    options={held.map((d) => ({ value: d.kind, label: d.label }))}
-                  />
-                )}
-                <span style={{ marginInlineStart: 'auto' }} />
-                <Typography.Text type="secondary" style={{ fontSize: 11 }}>
-                  {selected?.bytes ? formatBytesShort(selected.bytes) : ''}
-                  {selected?.fetchedAt && ` · retrieved ${formatRelative(selected.fetchedAt)}`}
-                </Typography.Text>
-                <Button
-                  size="small"
-                  icon={<CopyOutlined />}
-                  disabled={!formatted}
-                  onClick={() => {
-                    // The FORMATTED text, which is what is on screen. Copying
-                    // the forty-thousand-character single line the scanner
-                    // actually sent would paste something nobody can read into
-                    // the ticket this is going into.
-                    void navigator.clipboard?.writeText(formatted)
-                    message.success('Copied')
-                  }}
-                >
-                  Copy
-                </Button>
-                {selected?.url && (
-                  <DocumentDownloadButton url={selected.url} label={selected.label} />
-                )}
-              </div>
+  if (refs.length === 0) {
+    return (
+      <Typography.Text type="secondary">
+        Nothing was kept from the scanner for this image. A sync stores what it asks for -
+        check that coordinator.security.documents lists the kinds you want.
+      </Typography.Text>
+    )
+  }
 
-              {tooLargeToShow
-                ? (
-                  <Alert
-                    type="info"
-                    showIcon
-                    message="This document is too large to show here"
-                    description={
-                      `It is ${formatBytesShort(selected?.bytes ?? 0)}, which the browser would `
-                      + 'stall on. Download it and open it in an editor.'
-                    }
-                  />
-                )
-                : doc.isLoading
-                  ? <Skeleton active paragraph={{ rows: 6 }} />
-                  : doc.isError
-                    ? (
-                      <Alert
-                        type="warning"
-                        showIcon
-                        message="That document could not be read"
-                        description={doc.error instanceof Error ? doc.error.message : undefined}
-                      />
-                    )
-                    : <CodeBlock text={formatted} grammar="json" maxHeight="46vh" />}
-            </Space>
-          ),
-        }]}
-      />
-    </Section>
+  // A body past this is one the browser stalls on rather than renders. The
+  // number is generous - a large image's vulnerability response is a few
+  // megabytes - and the reader is offered the download instead, which is what
+  // they would have wanted for a file that size anyway.
+  const tooLargeToShow = (selected?.bytes ?? 0) > 4 * 1024 * 1024
+
+  return (
+    <Space direction="vertical" size={10} style={{ width: '100%' }}>
+      <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+        <Segmented
+          size="small"
+          value={selected?.kind}
+          onChange={(v) => setKind(String(v))}
+          options={refs.map((d) => ({
+            value: d.kind,
+            // A document the scanner did not give us is offered and marked,
+            // not hidden. "Where is the SBOM tab" is a worse question than
+            // "why is this one empty", which the panel answers in a sentence.
+            label: d.available
+              ? d.label
+              : (
+                <span style={{ color: c.text3 }}>
+                  {d.label}
+                  <span style={{ fontSize: 11 }}> · none</span>
+                </span>
+              ),
+          }))}
+        />
+        <span style={{ marginInlineStart: 'auto' }} />
+        <Typography.Text type="secondary" style={{ fontSize: 11 }}>
+          {selected?.bytes ? formatBytesShort(selected.bytes) : ''}
+          {selected?.fetchedAt && ` \u00b7 retrieved ${formatRelative(selected.fetchedAt)}`}
+        </Typography.Text>
+        <Button
+          size="small"
+          icon={<CopyOutlined />}
+          disabled={!formatted}
+          onClick={() => {
+            // The FORMATTED text, which is what is on screen. Copying the
+            // forty-thousand-character single line the scanner actually sent
+            // would paste something nobody can read into the ticket this is
+            // going into.
+            void navigator.clipboard?.writeText(formatted)
+            message.success('Copied')
+          }}
+        >
+          Copy
+        </Button>
+        {selected?.url && (
+          <DocumentDownloadButton url={selected.url} label={selected.label} />
+        )}
+      </div>
+
+      {!readable
+        ? (
+          <Alert
+            type="info"
+            showIcon
+            message="Nothing is held for this image"
+            description={
+              selected?.message
+              || (selected?.kind === 'sbom'
+                ? 'An SBOM is produced on demand. Download it once and it is kept here - '
+                  + 'and shown here - from then on, because the components inside one set of '
+                  + 'bytes cannot change.'
+                : `No ${selected?.label ?? 'document'} was stored for this image. A sync keeps `
+                  + 'what it is asked to keep, so sync the release again to retrieve it.')
+            }
+          />
+        )
+        : tooLargeToShow
+          ? (
+            <Alert
+              type="info"
+              showIcon
+              message="This document is too large to show here"
+              description={
+                `It is ${formatBytesShort(selected?.bytes ?? 0)}, which the browser would `
+                + 'stall on. Download it and open it in an editor.'
+              }
+            />
+          )
+          : doc.isLoading
+            ? <Skeleton active paragraph={{ rows: 6 }} />
+            : doc.isError
+              ? (
+                <Alert
+                  type="warning"
+                  showIcon
+                  message="That document could not be read"
+                  description={doc.error instanceof Error ? doc.error.message : undefined}
+                />
+              )
+              : <CodeBlock text={formatted} grammar="json" maxHeight="52vh" />}
+    </Space>
   )
 }
 
@@ -2965,6 +3063,7 @@ function ImageDetailDrawer({ report, onClose }: {
   onClose: () => void
 }) {
   const [finding, setFinding] = useState<FlatFinding | null>(null)
+  const [pane, setPane] = useState<'findings' | 'raw'>('findings')
 
   // Fixable first, same as everywhere else this question comes up.
   const rows = useMemo<FlatFinding[]>(() => {
@@ -2975,6 +3074,7 @@ function ImageDetailDrawer({ report, onClose }: {
         artifactName: report.artifact.name,
         artifactTag: report.artifact.tag,
         artifactDigest: report.artifact.digest,
+        artifactRetrievedAt: report.retrievedAt,
       }))
       .sort((a, b) => Number(b.fixable) - Number(a.fixable))
   }, [report])
@@ -3077,6 +3177,31 @@ function ImageDetailDrawer({ report, onClose }: {
                   ),
                 }]
                 : []),
+              /*
+                When we asked, and when the scanner decided - two facts, both
+                worth having and routinely different.
+
+                The one somebody can act on is ours, so it is first and it is
+                the one in words: "retrieved 5 days ago" has a Sync under it.
+                "Xray graded this three weeks ago" is the scanner's backlog and
+                nothing this page can do anything about, so it is the tooltip.
+              */
+              ...(report.retrievedAt
+                ? [{
+                  key: 'retrieved',
+                  label: 'Retrieved',
+                  children: (
+                    <Tooltip
+                      title={
+                        formatAbsolute(report.retrievedAt)
+                        + (report.scannedAt ? ` \u00b7 scanner graded it ${formatRelative(report.scannedAt)}` : '')
+                      }
+                    >
+                      <Typography.Text>{formatRelative(report.retrievedAt)}</Typography.Text>
+                    </Tooltip>
+                  ),
+                }]
+                : []),
               ...(report.message
                 ? [{ key: 'message', label: 'Message', span: 2, children: <Typography.Text>{report.message}</Typography.Text> }]
                 : []),
@@ -3095,7 +3220,16 @@ function ImageDetailDrawer({ report, onClose }: {
             ]}
           />
 
-          <Section title={`Vulnerabilities - ${rows.length.toLocaleString()}`}>
+          <Tabs
+            size="small"
+            activeKey={pane}
+            onChange={(k) => setPane(k as 'findings' | 'raw')}
+            items={[
+              {
+                key: 'findings',
+                label: `Vulnerabilities (${rows.length.toLocaleString()})`,
+                children: (
+          <>
             <DataTable<FlatFinding>
               tableEnhancedKey="security-cve-findings"
               size="small"
@@ -3146,9 +3280,25 @@ function ImageDetailDrawer({ report, onClose }: {
                 },
               ]}
             />
-          </Section>
+          </>
+                ),
+              },
+              {
+                key: 'raw',
+                /*
+                  A tab, not a section below the table.
 
-          <RawOutputSection documents={report.documents} />
+                  It was a collapsed panel under nine hundred rows, which is the
+                  wrong place for the thing people open the drawer to check: the
+                  reason to read what the scanner actually said is to compare it
+                  with what this page says it said, and a comparison you have to
+                  scroll between is not one.
+                */
+                label: `Scanner output (${(report.documents ?? []).filter((d) => d.available).length})`,
+                children: <ScannerOutput documents={report.documents} />,
+              },
+            ]}
+          />
         </Space>
       )}
     </Drawer>

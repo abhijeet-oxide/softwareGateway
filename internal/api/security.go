@@ -188,7 +188,7 @@ func (s *Server) packageSecurity(
 
 	target := s.securityTargetFor(ctx, productName, pkg)
 
-	out := toAPIPackageSecurity(productName, pkg, row, target, detail)
+	out := toAPIPackageSecurity(productName, pkg, row, target, detail, s.deps.SecurityFreshness)
 	out.Sync = s.syncStatusFor(pkg.ID, row, target)
 
 	// The per-scanner breakdown, which is empty on a single-scanner deployment

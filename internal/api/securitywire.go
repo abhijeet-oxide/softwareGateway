@@ -274,6 +274,7 @@ func plural(n int, singular, pluralWord string) string {
 func toAPIPackageSecurity(
 	productName string, pkg store.PackageRow,
 	row store.PackageSecurityRow, target securityTarget, detail bool,
+	fresh security.Freshness,
 ) v1.PackageSecurityResponse {
 	state, message := securityState(row, target)
 
@@ -300,6 +301,7 @@ func toAPIPackageSecurity(
 	if row.SyncedAt != nil {
 		out.SyncedAt = row.SyncedAt.UTC().Format(rfc3339)
 	}
+	out.Freshness = toAPIFreshness(fresh, row.SyncedAt)
 	if out.Provider != "" {
 		out.Providers = []string{out.Provider}
 	}
@@ -615,4 +617,26 @@ func packageReferenceOf(pkg store.PackageRow) string {
 		return pkg.Tag
 	}
 	return pkg.ManifestDigest
+}
+
+// toAPIFreshness states the deployment's rule and where this release sits
+// against it.
+//
+// Measured from the SYNC rather than from the scan. They are different facts -
+// the scanner's result can be older than our retrieval of it - and the one a
+// reader can act on is ours: "we last asked five days ago" has a button under
+// it, and "Xray graded this eleven days ago" does not.
+func toAPIFreshness(f security.Freshness, syncedAt *time.Time) v1.SecurityFreshness {
+	out := v1.SecurityFreshness{
+		MaxAgeSeconds:     int(f.Vulnerabilities / time.Second),
+		SBOMMaxAgeSeconds: int(f.SBOM / time.Second),
+	}
+	if syncedAt == nil {
+		return out
+	}
+	if at := f.StaleAt(syncedAt.UTC(), security.DocumentVulnerabilities); !at.IsZero() {
+		out.StaleAt = at.Format(rfc3339)
+		out.Stale = time.Now().UTC().After(at)
+	}
+	return out
 }

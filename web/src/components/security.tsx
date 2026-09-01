@@ -1,6 +1,8 @@
 import { useEffect, useState } from 'react'
 import type { ReactNode } from 'react'
-import { Alert, App, Button, Drawer, Dropdown, Popover, Progress, Space, Timeline, Tooltip, Typography } from 'antd'
+import {
+  Alert, App, Button, Drawer, Dropdown, Popover, Progress, Space, Tag, Timeline, Tooltip, Typography,
+} from 'antd'
 import { formatAbsolute, formatRelative } from '../domain/format'
 import { download } from '../api/client'
 import {
@@ -15,7 +17,7 @@ import {
 import { SEVERITIES } from '../api/types'
 import type {
   PackageSecuritySummary, ScanStatus, SecurityCounts, SecurityCoverage,
-  SecurityLogEntry, SecurityState, SecuritySyncStatus, Severity, Verdict,
+  SecurityFreshness, SecurityLogEntry, SecurityState, SecuritySyncStatus, Severity, Verdict,
 } from '../api/types'
 
 /**
@@ -1084,15 +1086,51 @@ export function StopSyncButton({ sync, onStop, pending, size = 'middle' }: {
 }
 
 /** When a release was last synced, and by which scanner. */
-export function SyncedAgo({ sync }: { sync: SecuritySyncStatus }) {
+export function SyncedAgo({ sync, freshness }: {
+  sync: SecuritySyncStatus
+  /**
+   * The deployment's rule about how old is too old.
+   *
+   * The age was always here; what was missing was whether it MATTERS. "synced
+   * 11 days ago" reads as a fact about the past until something says the
+   * deployment considers a week old, and then it reads as a thing to do.
+   */
+  freshness?: SecurityFreshness
+}) {
   if (!sync.syncedAt) return null
   return (
-    <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-      {sync.provider === 'jfrog-xray' ? 'JFrog Xray' : sync.provider}
-      {sync.repository && ` · ${sync.repository}`}
-      {` · synced ${formatRelative(sync.syncedAt)}`}
-    </Typography.Text>
+    <Space size={8} align="center" wrap>
+      <Tooltip title={formatAbsolute(sync.syncedAt)}>
+        <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+          {sync.provider === 'jfrog-xray' ? 'JFrog Xray' : sync.provider}
+          {sync.repository && ` · ${sync.repository}`}
+          {` · retrieved ${formatRelative(sync.syncedAt)}`}
+        </Typography.Text>
+      </Tooltip>
+      {freshness?.stale && (
+        <Tooltip
+          title={
+            'This deployment treats a vulnerability answer older than '
+            + describeAge(freshness.maxAgeSeconds ?? 0)
+            + ' as out of date. Nothing has been discarded - these are still the '
+            + 'stored results, and a sync replaces them.'
+          }
+        >
+          <Tag color="warning" style={{ marginInlineEnd: 0 }}>Out of date</Tag>
+        </Tooltip>
+      )}
+    </Space>
   )
+}
+
+/** A configured duration in the words somebody would say it in. */
+function describeAge(seconds: number): string {
+  if (seconds <= 0) return 'any age'
+  const days = Math.round(seconds / 86400)
+  if (days >= 1) return days === 1 ? 'a day' : `${days} days`
+  const hours = Math.round(seconds / 3600)
+  if (hours >= 1) return hours === 1 ? 'an hour' : `${hours} hours`
+  return `${Math.round(seconds / 60)} minutes`
 }
 
 // ---------------------------------------------------------------------------

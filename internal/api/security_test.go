@@ -161,6 +161,13 @@ type securityHarness struct {
 
 func newSecurityHarness(t *testing.T) *securityHarness {
 	t.Helper()
+	return newSecurityHarnessWith(t, nil)
+}
+
+// newSecurityHarnessWith is the same, with a hand on the dependencies - for the
+// tests that are about a configured POLICY rather than about stored data.
+func newSecurityHarnessWith(t *testing.T, adjust func(*Deps)) *securityHarness {
+	t.Helper()
 
 	syncer := &fakeSyncer{
 		reports:   map[string]security.Report{},
@@ -174,6 +181,9 @@ func newSecurityHarness(t *testing.T) *securityHarness {
 		d.SecuritySync = syncer
 		d.SecurityStore = harnessSecurityStore{pkgSec, store.NewSecurity(d.Store)}
 		d.SecurityIndex = store.NewSecurity(d.Store)
+		if adjust != nil {
+			adjust(d)
+		}
 	}, securityProductDoc)
 
 	return &securityHarness{apiHarness: h, syncer: syncer}
@@ -1010,5 +1020,74 @@ func TestCompareSecurityShortensTheListButNotTheExport(t *testing.T) {
 	rows := strings.Count(strings.TrimRight(string(body), "\n"), "\n") // minus the header
 	if rows != resp.ChangesTotal {
 		t.Errorf("export wrote %d change rows, want all %d", rows, resp.ChangesTotal)
+	}
+}
+
+// How old an answer may be is one number in one configuration file, and it
+// belongs on the wire.
+//
+// A client that decided for itself would be wrong in every deployment that
+// chose differently - silently, and in the direction of presenting stale data
+// as current. Nothing expires because of this: the counts, the rows and the
+// export are unchanged past the age, and the only difference is that the page
+// says so and offers a sync.
+func TestPackageSecurityCarriesTheFreshnessRule(t *testing.T) {
+	h := newSecurityHarnessWith(t, func(d *Deps) {
+		d.SecurityFreshness = security.Freshness{Vulnerabilities: time.Hour}
+	})
+	h.seedPackage("25.7.2131", digestA)
+	h.syncer.reports[digestA] = scannedReport(
+		apiFinding("CVE-2024-3094", security.SeverityCritical, "xz-utils", true))
+	h.post("/api/v1/products/vendor-a/packages/25.7.2131:syncSecurity", `{}`, nil)
+
+	var fresh v1.PackageSecurityResponse
+	h.get("/api/v1/products/vendor-a/packages/25.7.2131/security?detail=true", &fresh)
+	if fresh.Freshness.MaxAgeSeconds != 3600 {
+		t.Errorf("maxAgeSeconds = %d, want 3600", fresh.Freshness.MaxAgeSeconds)
+	}
+	if fresh.Freshness.Stale {
+		t.Error("a release synced a moment ago is reported as out of date")
+	}
+	if fresh.Freshness.StaleAt == "" {
+		t.Error("no staleAt, so nothing can say WHEN it goes out of date")
+	}
+
+	// Wind the sync back past the age. The rows are untouched, which is the
+	// point: going out of date must not cost anybody their findings.
+	h.exec(`UPDATE package_security SET synced_at = ? WHERE package_id > 0`,
+		time.Now().Add(-3*time.Hour).UTC().Format("2006-01-02T15:04:05.000Z"))
+
+	var stale v1.PackageSecurityResponse
+	h.get("/api/v1/products/vendor-a/packages/25.7.2131/security?detail=true", &stale)
+	if !stale.Freshness.Stale {
+		t.Errorf("a release synced three hours ago is not out of date at a one-hour age (syncedAt %q)",
+			stale.SyncedAt)
+	}
+	if stale.Counts.Total != fresh.Counts.Total || stale.Counts.Total == 0 {
+		t.Errorf("going out of date changed the counts: %d then %d",
+			fresh.Counts.Total, stale.Counts.Total)
+	}
+	if len(stale.Reports) != len(fresh.Reports) {
+		t.Errorf("going out of date changed the reports: %d then %d",
+			len(fresh.Reports), len(stale.Reports))
+	}
+}
+
+// An SBOM describes one immutable set of bytes, so it does not go out of date
+// the way a vulnerability answer does. The two ages are separate for that
+// reason, and the default for the SBOM is "never".
+func TestFreshnessTreatsAnSBOMAsImmutable(t *testing.T) {
+	f := security.Freshness{Vulnerabilities: time.Hour}
+	old := time.Now().Add(-30 * 24 * time.Hour)
+	now := time.Now()
+
+	if !f.Stale(old, security.DocumentVulnerabilities, now) {
+		t.Error("a month-old scan is not stale at a one-hour age")
+	}
+	if f.Stale(old, security.DocumentSBOM, now) {
+		t.Error("an SBOM went stale on its own; its bytes cannot have changed")
+	}
+	if got := f.StaleAt(old, security.DocumentSBOM); !got.IsZero() {
+		t.Errorf("StaleAt for an SBOM = %v, want the zero time", got)
 	}
 }

@@ -82,7 +82,7 @@ func (s *Server) handleExportPackageSecurity(w http.ResponseWriter, r *http.Requ
 		return
 	}
 
-	book := packageSecurityBook(productName, pkg, side, view, filter)
+	book := packageSecurityBook(productName, pkg, side, view, filter, s.deps.SecurityFreshness)
 	markPrimary(&book, table)
 	if format == export.FormatZIP {
 		book.Files = s.bundleFor(r.Context(), productName, pkg, side)
@@ -495,7 +495,7 @@ func firstValue(q map[string][]string, key string) string {
 // content of every summary export - is not it.
 func packageSecurityBook(
 	productName string, pkg store.PackageRow, side securitySide,
-	view string, filter findingFilter,
+	view string, filter findingFilter, fresh security.Freshness,
 ) export.Book {
 	release := releaseLabel(pkg)
 
@@ -504,7 +504,7 @@ func packageSecurityBook(
 		// one number into a release note.
 		book := export.Book{Sheets: []export.Sheet{summarySheet(productName, pkg, side, filter)}}
 		book.Sheets[0].Primary = true
-		book.JSON = toAPIPackageSecurity(productName, pkg, side.row, side.target, false)
+		book.JSON = toAPIPackageSecurity(productName, pkg, side.row, side.target, false, fresh)
 		return book
 	}
 
@@ -540,7 +540,7 @@ func packageSecurityBook(
 		book.Sheets = append(book.Sheets, sheet)
 	}
 
-	book.JSON = detailJSON(productName, pkg, side, filter)
+	book.JSON = detailJSON(productName, pkg, side, filter, fresh)
 	return book
 }
 
@@ -809,8 +809,9 @@ func summaryOnly(c security.Comparison) security.Comparison {
 // offering the loss as the feature.
 func detailJSON(
 	productName string, pkg store.PackageRow, side securitySide, filter findingFilter,
+	fresh security.Freshness,
 ) any {
-	out := toAPIPackageSecurity(productName, pkg, side.row, side.target, true)
+	out := toAPIPackageSecurity(productName, pkg, side.row, side.target, true, fresh)
 	for _, report := range side.reports {
 		if !filter.keepReport(report) {
 			continue

@@ -383,6 +383,10 @@ type PackageSecurityResponse struct {
 	// between them is how stale the answer is allowed to look.
 	ScannedAt string `json:"scannedAt,omitempty"`
 	SyncedAt  string `json:"syncedAt,omitempty"`
+	// Freshness is when these answers stop being current, and whether they
+	// already have. On the wire so the rule lives in one place rather than
+	// being guessed at by every page that draws a date.
+	Freshness SecurityFreshness `json:"freshness"`
 	// Fingerprint is the ETag body. Exposed so a client can tell an unchanged
 	// re-read from a changed one without diffing megabytes.
 	Fingerprint string `json:"fingerprint,omitempty"`
@@ -594,6 +598,33 @@ type SecurityComparisonResponse struct {
 
 	Fingerprint string `json:"fingerprint,omitempty"`
 	RetrievedAt string `json:"retrievedAt,omitempty"`
+}
+
+// SecurityFreshness is the deployment's rule about how old an answer may be.
+//
+// # Why the ANSWER carries the policy
+//
+// Because otherwise every page draws its own line. The rule is one number in
+// one configuration file, and a client that hardcoded "a week is old" would be
+// wrong in every deployment that decided otherwise - silently, and in the
+// direction of telling somebody stale data is current.
+//
+// Nothing here expires or refetches. Past MaxAgeSeconds an answer is still
+// served, still counted and still exported; it is presented with its age in
+// words and a Refresh beside it, and the decision stays with the person.
+type SecurityFreshness struct {
+	// MaxAgeSeconds is how old a vulnerability answer may be before it is
+	// shown as out of date. Zero means never.
+	MaxAgeSeconds int `json:"maxAgeSeconds,omitempty"`
+	// SBOMMaxAgeSeconds is the same for the component inventory, and is
+	// normally zero: an SBOM describes one immutable set of bytes, so it
+	// cannot go out of date without the digest changing.
+	SBOMMaxAgeSeconds int `json:"sbomMaxAgeSeconds,omitempty"`
+	// Stale says the release's own answer is past MaxAgeSeconds. Computed here
+	// rather than in the client so "how old is too old" is answered once.
+	Stale bool `json:"stale,omitempty"`
+	// StaleAt is when it will be, or was. Empty when nothing ever goes stale.
+	StaleAt string `json:"staleAt,omitempty"`
 }
 
 // SecurityCompareRequest is the body of a security comparison.

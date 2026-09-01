@@ -192,6 +192,45 @@ type SecurityConfig struct {
 	// SweepInterval is how often the store is measured against the budget.
 	SweepInterval time.Duration `koanf:"sweepInterval"`
 
+	// MaxAge is how old a vulnerability answer may be before the interface
+	// says so and offers to fetch it again.
+	//
+	// # Why this is not a retention, and not a refetch either
+	//
+	// Retention decides when a row may be DELETED. This decides when a row
+	// stops being presented as current - which is a different question with a
+	// different answer, because a three-week-old answer is still the best
+	// answer anybody has and deleting it would leave nothing. So nothing
+	// expires here: past this age a release's counts carry their age in words
+	// beside them and a Refresh sits next to it.
+	//
+	// Nothing refetches on its own either. A sync is minutes against somebody
+	// else's scanner, and a Coordinator that quietly started one because a
+	// timer went off is a Coordinator that hammers Xray at 3am for a page
+	// nobody has open. Scheduling belongs to whoever schedules the rest of
+	// this estate's work; this is the number that tells them, and the reader,
+	// when it is due.
+	//
+	// Zero means never say stale.
+	//
+	// Seven days by default: long enough that a release synced on Monday is not
+	// nagging by Wednesday, short enough that a CVE published mid-week is not
+	// missed for a month.
+	MaxAge time.Duration `koanf:"maxAge"`
+
+	// SBOMMaxAge is the same for the component inventory, and it is DIFFERENT
+	// on purpose.
+	//
+	// An SBOM describes what is inside one immutable set of bytes. A digest's
+	// component list cannot change, because changing it would produce another
+	// digest - so an SBOM fetched once is correct for ever and refetching it is
+	// tens of megabytes and minutes of a scanner's time spent proving that.
+	//
+	// Zero, the default, means never stale. It is configurable only because a
+	// scanner that improves its own analysis may produce a better inventory of
+	// the same bytes, and a deployment that cares can ask for one.
+	SBOMMaxAge time.Duration `koanf:"sbomMaxAge"`
+
 	// Documents names the extra scanner bodies a sync retrieves per artifact,
 	// beyond the vulnerability response.
 	//
@@ -487,6 +526,7 @@ func Defaults() SystemConfig {
 				IndexRetention:    30 * 24 * time.Hour,
 				DetailRetention:   7 * 24 * time.Hour,
 				DocumentRetention: 30 * 24 * time.Hour,
+				MaxAge:            7 * 24 * time.Hour,
 				// No ceiling by default. See the field comment: a deployment
 				// that has not thought about this gets a store that keeps its
 				// answers.

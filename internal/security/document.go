@@ -282,3 +282,49 @@ type DocumentStore interface {
 		ctx context.Context, scope Scope, refs []ArtifactRef, kinds []DocumentKind,
 	) (map[string]map[DocumentKind]Document, error)
 }
+
+// Freshness is when a stored answer stops being presented as current.
+//
+// # Why staleness is a separate idea from retention
+//
+// Retention decides when a row may be DELETED, and this platform's answer to
+// that is "when the disk needs it and not before" - a three-week-old scan is
+// the best answer anybody has, and deleting it leaves nothing. Staleness
+// decides when to stop calling that answer current, which is a question about
+// trust rather than storage, and it has a different answer.
+//
+// # Why the two ages differ
+//
+// A vulnerability answer goes out of date without anything changing: the image
+// is the same bytes and the world's knowledge of it is not. So it ages.
+//
+// An SBOM does not. It describes what is inside one immutable set of bytes,
+// and a different component list would be a different digest. Fetched once it
+// is correct for ever, which is why SBOM defaults to never stale and why a
+// download of one that is already held must never go back to the scanner.
+type Freshness struct {
+	// Vulnerabilities is how old a scan result may be. Zero means never stale.
+	Vulnerabilities time.Duration
+	// SBOM is the same for the component inventory. Zero - the default - means
+	// never stale, because the bytes it describes cannot change.
+	SBOM time.Duration
+}
+
+// StaleAt returns when an answer retrieved at `at` stops being current, or the
+// zero time when it never does.
+func (f Freshness) StaleAt(at time.Time, kind DocumentKind) time.Time {
+	age := f.Vulnerabilities
+	if kind == DocumentSBOM {
+		age = f.SBOM
+	}
+	if age <= 0 || at.IsZero() {
+		return time.Time{}
+	}
+	return at.Add(age)
+}
+
+// Stale reports whether an answer retrieved at `at` is past its age.
+func (f Freshness) Stale(at time.Time, kind DocumentKind, now time.Time) bool {
+	deadline := f.StaleAt(at, kind)
+	return !deadline.IsZero() && now.After(deadline)
+}

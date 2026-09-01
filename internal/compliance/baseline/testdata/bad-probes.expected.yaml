@@ -1,0 +1,19 @@
+findings:
+  # Behind a Service, declares a port, no readiness probe.
+  - {check: PRB-01, kind: Deployment, name: api, container: unprobed}
+  # A 120-second blind liveness delay with no startup probe.
+  - {check: PRB-02, kind: Deployment, name: api, container: misconfigured}
+  # Liveness more sensitive than readiness: period 2 against readiness' 5.
+  - {check: PRB-03, kind: Deployment, name: api, container: same-handler}
+  # And again here - liveness period 10 against readiness' 60, which is the
+  # same defect arrived at by tuning readiness up rather than liveness down.
+  - {check: PRB-03, kind: Deployment, name: api, container: misconfigured}
+  # Identical handlers.
+  - {check: PRB-04, kind: Deployment, name: api, container: same-handler}
+  # timeoutSeconds 30 and periodSeconds 60, both outside the bounds.
+  - {check: PRB-05, kind: Deployment, name: api, container: misconfigured}
+  # Probe port 9999 is not declared by this container.
+  - {check: PRB-06, kind: Deployment, name: api, container: misconfigured}
+  # A 600-second preStop sleep against a 20-second grace period: SIGKILL every
+  # time, guaranteed.
+  - {check: PRB-07, kind: Deployment, name: api, container: misconfigured}

@@ -1,0 +1,62 @@
+# Container security posture, including the two hostPath findings that are the
+# same field and very different problems.
+---
+# Source: bad-security/templates/deployment.yaml
+apiVersion: apps/v1
+kind: Deployment
+metadata: {name: loose, namespace: bad}
+spec:
+  replicas: 1
+  selector:
+    matchLabels: {app.kubernetes.io/name: loose}
+  template:
+    metadata:
+      labels: {app.kubernetes.io/name: loose}
+    spec:
+      volumes:
+        - name: runtime
+          hostPath: {path: /var/run/docker.sock}
+      containers:
+        - name: loose
+          image: registry.acme.example/bad/loose@sha256:1212121212121212121212121212121212121212121212121212121212121212
+          resources:
+            requests: {cpu: 10m, memory: 16Mi}
+            limits: {memory: 32Mi}
+          securityContext:
+            privileged: true
+            runAsUser: 0
+            allowPrivilegeEscalation: true
+            seccompProfile: {type: Unconfined}
+            capabilities:
+              add: [NET_ADMIN, SYS_ADMIN]
+---
+# Source: bad-security/templates/tight.yaml
+# Correct throughout, and must produce no security findings.
+apiVersion: apps/v1
+kind: Deployment
+metadata: {name: tight, namespace: bad}
+spec:
+  replicas: 1
+  selector:
+    matchLabels: {app.kubernetes.io/name: tight}
+  template:
+    metadata:
+      labels: {app.kubernetes.io/name: tight}
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        seccompProfile: {type: RuntimeDefault}
+      containers:
+        - name: tight
+          image: registry.acme.example/bad/tight@sha256:3434343434343434343434343434343434343434343434343434343434343434
+          resources:
+            requests: {cpu: 10m, memory: 16Mi}
+            limits: {memory: 32Mi}
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 10001
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            seccompProfile: {type: RuntimeDefault}
+            capabilities:
+              drop: [ALL]

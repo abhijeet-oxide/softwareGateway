@@ -1,0 +1,830 @@
+# The shared good fixture.
+#
+# Every check in the shipped baseline runs against this, and it must produce
+# ZERO failures. That is what makes "my new check has no false positives" a CI
+# assertion rather than a claim by its author.
+#
+# It is deliberately a realistic release rather than a minimal one: a Service
+# with a workload behind it, a PodDisruptionBudget, network policy, RBAC, a
+# StatefulSet with persistent storage, a CronJob, and a custom resource with its
+# own definition. A minimal fixture passes checks by not reaching them.
+---
+# Source: good-app/templates/serviceaccount.yaml
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: good-app
+  namespace: good
+  labels:
+    app.kubernetes.io/name: good-app
+    app.kubernetes.io/instance: good-app
+    app.kubernetes.io/component: api
+    app.kubernetes.io/part-of: good-platform
+    app.kubernetes.io/managed-by: Helm
+    app.kubernetes.io/version: 1.4.2
+automountServiceAccountToken: false
+---
+# Source: good-app/templates/networkpolicy-default-deny.yaml
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: good-app-default-deny
+  namespace: good
+  labels:
+    app.kubernetes.io/name: good-app
+    app.kubernetes.io/instance: good-app
+    app.kubernetes.io/component: network
+    app.kubernetes.io/part-of: good-platform
+    app.kubernetes.io/managed-by: Helm
+    app.kubernetes.io/version: 1.4.2
+spec:
+  podSelector: {}
+  policyTypes: [Ingress]
+---
+# Source: good-app/templates/networkpolicy-api.yaml
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: good-app-api
+  namespace: good
+  labels:
+    app.kubernetes.io/name: good-app
+    app.kubernetes.io/instance: good-app
+    app.kubernetes.io/component: network
+    app.kubernetes.io/part-of: good-platform
+    app.kubernetes.io/managed-by: Helm
+    app.kubernetes.io/version: 1.4.2
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: good-app
+      app.kubernetes.io/instance: good-app
+  policyTypes: [Ingress, Egress]
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: ingress
+      ports:
+        - protocol: TCP
+          port: 8443
+  egress:
+    - to:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: good-db
+      ports:
+        - protocol: TCP
+          port: 5432
+---
+# Source: good-app/templates/service.yaml
+apiVersion: v1
+kind: Service
+metadata:
+  name: good-app
+  namespace: good
+  labels:
+    app.kubernetes.io/name: good-app
+    app.kubernetes.io/instance: good-app
+    app.kubernetes.io/component: api
+    app.kubernetes.io/part-of: good-platform
+    app.kubernetes.io/managed-by: Helm
+    app.kubernetes.io/version: 1.4.2
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/name: good-app
+    app.kubernetes.io/instance: good-app
+  ports:
+    - name: https
+      port: 8443
+      targetPort: https
+---
+# Source: good-app/templates/pdb.yaml
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: good-app
+  namespace: good
+  labels:
+    app.kubernetes.io/name: good-app
+    app.kubernetes.io/instance: good-app
+    app.kubernetes.io/component: api
+    app.kubernetes.io/part-of: good-platform
+    app.kubernetes.io/managed-by: Helm
+    app.kubernetes.io/version: 1.4.2
+spec:
+  minAvailable: 2
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: good-app
+      app.kubernetes.io/instance: good-app
+---
+# Source: good-app/templates/deployment.yaml
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: good-app
+  namespace: good
+  labels:
+    app.kubernetes.io/name: good-app
+    app.kubernetes.io/instance: good-app
+    app.kubernetes.io/component: api
+    app.kubernetes.io/part-of: good-platform
+    app.kubernetes.io/managed-by: Helm
+    app.kubernetes.io/version: 1.4.2
+spec:
+  replicas: 3
+  progressDeadlineSeconds: 600
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 0
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: good-app
+      app.kubernetes.io/instance: good-app
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: good-app
+        app.kubernetes.io/instance: good-app
+        app.kubernetes.io/component: api
+        app.kubernetes.io/part-of: good-platform
+        app.kubernetes.io/managed-by: Helm
+        app.kubernetes.io/version: 1.4.2
+    spec:
+      serviceAccountName: good-app
+      automountServiceAccountToken: false
+      terminationGracePeriodSeconds: 45
+      volumes:
+        - name: config
+          configMap:
+            name: good-app-config
+            items:
+              - {key: log.level, path: log.level}
+      securityContext:
+        runAsNonRoot: true
+        seccompProfile:
+          type: RuntimeDefault
+      topologySpreadConstraints:
+        - topologyKey: topology.kubernetes.io/zone
+          maxSkew: 1
+          whenUnsatisfiable: ScheduleAnyway
+          labelSelector:
+            matchLabels:
+              app.kubernetes.io/name: good-app
+        - topologyKey: kubernetes.io/hostname
+          maxSkew: 1
+          whenUnsatisfiable: ScheduleAnyway
+          labelSelector:
+            matchLabels:
+              app.kubernetes.io/name: good-app
+      initContainers:
+        - name: migrate
+          image: registry.acme.example/good/migrate@sha256:5f9a1c2e3b4d5a6f7081920a3b4c5d6e7f8091a2b3c4d5e6f70819202122a3b4
+          resources:
+            requests:
+              cpu: 50m
+              memory: 64Mi
+            limits:
+              memory: 128Mi
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 10001
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            seccompProfile:
+              type: RuntimeDefault
+            capabilities:
+              drop: [ALL]
+      containers:
+        - name: api
+          image: registry.acme.example/good/api@sha256:1a2b3c4d5e6f708192a3b4c5d6e7f8091a2b3c4d5e6f708192a3b4c5d6e7f809
+          ports:
+            - name: https
+              containerPort: 8443
+            - name: metrics
+              containerPort: 9464
+          resources:
+            requests:
+              cpu: 250m
+              memory: 512Mi
+            limits:
+              memory: 1Gi
+          readinessProbe:
+            httpGet:
+              path: /readyz
+              port: https
+              scheme: HTTPS
+            timeoutSeconds: 2
+            periodSeconds: 5
+            failureThreshold: 3
+          livenessProbe:
+            httpGet:
+              path: /livez
+              port: https
+              scheme: HTTPS
+            timeoutSeconds: 2
+            periodSeconds: 10
+            failureThreshold: 6
+          lifecycle:
+            preStop:
+              exec:
+                command: ["sleep", "10"]
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 10001
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            seccompProfile:
+              type: RuntimeDefault
+            capabilities:
+              drop: [ALL]
+---
+# Source: good-app/templates/statefulset.yaml
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: good-db
+  namespace: good
+  labels:
+    app.kubernetes.io/name: good-db
+    app.kubernetes.io/instance: good-app
+    app.kubernetes.io/component: database
+    app.kubernetes.io/part-of: good-platform
+    app.kubernetes.io/managed-by: Helm
+    app.kubernetes.io/version: 1.4.2
+spec:
+  replicas: 3
+  serviceName: good-db
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: good-db
+      app.kubernetes.io/instance: good-app
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: good-db
+        app.kubernetes.io/instance: good-app
+        app.kubernetes.io/component: database
+        app.kubernetes.io/part-of: good-platform
+        app.kubernetes.io/managed-by: Helm
+        app.kubernetes.io/version: 1.4.2
+    spec:
+      serviceAccountName: good-app
+      automountServiceAccountToken: false
+      terminationGracePeriodSeconds: 120
+      securityContext:
+        runAsNonRoot: true
+        fsGroup: 10002
+        fsGroupChangePolicy: OnRootMismatch
+        seccompProfile:
+          type: RuntimeDefault
+      topologySpreadConstraints:
+        - topologyKey: topology.kubernetes.io/zone
+          maxSkew: 1
+          whenUnsatisfiable: ScheduleAnyway
+          labelSelector:
+            matchLabels:
+              app.kubernetes.io/name: good-db
+        - topologyKey: kubernetes.io/hostname
+          maxSkew: 1
+          whenUnsatisfiable: ScheduleAnyway
+          labelSelector:
+            matchLabels:
+              app.kubernetes.io/name: good-db
+      volumes:
+        - name: config
+          configMap:
+            name: good-app-config
+            items:
+              - {key: log.level, path: log.level}
+      initContainers:
+        - name: wait-for-config
+          image: registry.acme.example/good/wait@sha256:c0ffee00c0ffee00c0ffee00c0ffee00c0ffee00c0ffee00c0ffee00c0ffee00
+          command: ["/bin/wait", "--for", "/etc/db/config/log.level"]
+          resources:
+            requests: {cpu: 10m, memory: 32Mi}
+            limits: {memory: 64Mi}
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 10002
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            seccompProfile: {type: RuntimeDefault}
+            capabilities: {drop: [ALL]}
+          volumeMounts:
+            - name: data
+              mountPath: /var/lib/db
+            - name: config
+              mountPath: /etc/db/config
+      containers:
+        - name: db
+          image: registry.acme.example/good/db@sha256:9f8e7d6c5b4a39281706f5e4d3c2b1a09f8e7d6c5b4a39281706f5e4d3c2b1a0
+          ports:
+            - name: pg
+              containerPort: 5432
+            - name: metrics
+              containerPort: 9187
+          resources:
+            requests:
+              cpu: 500m
+              memory: 2Gi
+            limits:
+              memory: 4Gi
+          readinessProbe:
+            tcpSocket:
+              port: pg
+            timeoutSeconds: 2
+            periodSeconds: 5
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 10002
+            allowPrivilegeEscalation: false
+            seccompProfile:
+              type: RuntimeDefault
+            capabilities:
+              drop: [ALL]
+          volumeMounts:
+            - name: data
+              mountPath: /var/lib/db
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+      spec:
+        accessModes: [ReadWriteOnce]
+        storageClassName: acme-ssd
+        resources:
+          requests:
+            storage: 100Gi
+---
+# Source: good-app/templates/db-service.yaml
+apiVersion: v1
+kind: Service
+metadata:
+  name: good-db
+  namespace: good
+  labels:
+    app.kubernetes.io/name: good-db
+    app.kubernetes.io/instance: good-app
+    app.kubernetes.io/component: database
+    app.kubernetes.io/part-of: good-platform
+    app.kubernetes.io/managed-by: Helm
+    app.kubernetes.io/version: 1.4.2
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/name: good-db
+    app.kubernetes.io/instance: good-app
+  ports:
+    - name: pg
+      port: 5432
+      targetPort: pg
+---
+# Source: good-app/templates/db-pdb.yaml
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: good-db
+  namespace: good
+  labels:
+    app.kubernetes.io/name: good-db
+    app.kubernetes.io/instance: good-app
+    app.kubernetes.io/component: database
+    app.kubernetes.io/part-of: good-platform
+    app.kubernetes.io/managed-by: Helm
+    app.kubernetes.io/version: 1.4.2
+spec:
+  minAvailable: 2
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: good-db
+      app.kubernetes.io/instance: good-app
+---
+# Source: good-app/templates/cronjob.yaml
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: good-backup
+  namespace: good
+  labels:
+    app.kubernetes.io/name: good-backup
+    app.kubernetes.io/instance: good-app
+    app.kubernetes.io/component: backup
+    app.kubernetes.io/part-of: good-platform
+    app.kubernetes.io/managed-by: Helm
+    app.kubernetes.io/version: 1.4.2
+spec:
+  schedule: "17 2 * * *"
+  jobTemplate:
+    spec:
+      backoffLimit: 3
+      activeDeadlineSeconds: 3600
+      template:
+        metadata:
+          labels:
+            app.kubernetes.io/name: good-backup
+            app.kubernetes.io/instance: good-app
+        spec:
+          # A service account this release binds to nothing, so the pod has no
+          # use for a mounted API token - the case RBAC-02's exemption is
+          # DERIVED from rather than assumed.
+          serviceAccountName: good-backup
+          automountServiceAccountToken: false
+          terminationGracePeriodSeconds: 60
+          restartPolicy: OnFailure
+          securityContext:
+            runAsNonRoot: true
+            seccompProfile:
+              type: RuntimeDefault
+          containers:
+            - name: backup
+              image: registry.acme.example/good/backup@sha256:0011223344556677889900aabbccddeeff00112233445566778899aabbccddee
+              resources:
+                requests:
+                  cpu: 100m
+                  memory: 128Mi
+                limits:
+                  memory: 256Mi
+              securityContext:
+                runAsNonRoot: true
+                runAsUser: 10003
+                allowPrivilegeEscalation: false
+                readOnlyRootFilesystem: true
+                seccompProfile:
+                  type: RuntimeDefault
+                capabilities:
+                  drop: [ALL]
+---
+# Source: good-app/templates/crd.yaml
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  name: widgets.acme.example
+spec:
+  group: acme.example
+  names:
+    kind: Widget
+    plural: widgets
+  scope: Namespaced
+  versions:
+    - name: v1
+      served: true
+      storage: true
+---
+# Source: good-app/templates/widget.yaml
+apiVersion: acme.example/v1
+kind: Widget
+metadata:
+  name: good-widget
+  namespace: good
+spec:
+  size: 3
+---
+# Source: good-app/templates/configmap.yaml
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: good-app-config
+  namespace: good
+  labels:
+    app.kubernetes.io/name: good-app
+    app.kubernetes.io/instance: good-app
+    app.kubernetes.io/component: api
+    app.kubernetes.io/part-of: good-platform
+    app.kubernetes.io/managed-by: Helm
+    app.kubernetes.io/version: 1.4.2
+  annotations:
+    acme.example/owner: platform-sre
+immutable: true
+data:
+  log.level: info
+  listen.address: "0.0.0.0:8443"
+  # A REFERENCE to a credential is exactly what a chart should do, and must not
+  # be reported as one.
+  database.passwordSecretRef: good-app-db
+---
+# Source: good-app/templates/role.yaml
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: good-app
+  namespace: good
+  labels:
+    app.kubernetes.io/name: good-app
+    app.kubernetes.io/instance: good-app
+    app.kubernetes.io/component: api
+    app.kubernetes.io/part-of: good-platform
+    app.kubernetes.io/managed-by: Helm
+    app.kubernetes.io/version: 1.4.2
+rules:
+  - apiGroups: [""]
+    resources: ["configmaps"]
+    verbs: ["get", "list", "watch"]
+  # get on a NAMED secret, which is the same permission scoped to this
+  # workload's own credential rather than to every one in the namespace.
+  - apiGroups: [""]
+    resources: ["secrets"]
+    verbs: ["get"]
+    resourceNames: ["good-app-db"]
+---
+# Source: good-app/templates/rolebinding.yaml
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: good-app
+  namespace: good
+  labels:
+    app.kubernetes.io/name: good-app
+    app.kubernetes.io/instance: good-app
+    app.kubernetes.io/component: api
+    app.kubernetes.io/part-of: good-platform
+    app.kubernetes.io/managed-by: Helm
+    app.kubernetes.io/version: 1.4.2
+roleRef: {apiGroup: rbac.authorization.k8s.io, kind: Role, name: good-app}
+subjects:
+  - {kind: ServiceAccount, name: good-app, namespace: good}
+---
+# Source: good-app/templates/ingress.yaml
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: good-app
+  namespace: good
+  labels:
+    app.kubernetes.io/name: good-app
+    app.kubernetes.io/instance: good-app
+    app.kubernetes.io/component: api
+    app.kubernetes.io/part-of: good-platform
+    app.kubernetes.io/managed-by: Helm
+    app.kubernetes.io/version: 1.4.2
+spec:
+  tls:
+    - hosts: [good-app.acme.example]
+      secretName: good-app-tls
+  rules:
+    - host: good-app.acme.example
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: good-app
+                port: {number: 8443}
+---
+# Source: good-app/templates/hpa.yaml
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: good-app
+  namespace: good
+  labels:
+    app.kubernetes.io/name: good-app
+    app.kubernetes.io/instance: good-app
+    app.kubernetes.io/component: api
+    app.kubernetes.io/part-of: good-platform
+    app.kubernetes.io/managed-by: Helm
+    app.kubernetes.io/version: 1.4.2
+spec:
+  minReplicas: 3
+  maxReplicas: 12
+  scaleTargetRef: {apiVersion: apps/v1, kind: Deployment, name: good-app}
+---
+# Source: good-app/templates/prometheusrule.yaml
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: good-app
+  namespace: good
+  labels:
+    app.kubernetes.io/name: good-app
+    app.kubernetes.io/instance: good-app
+    app.kubernetes.io/component: api
+    app.kubernetes.io/part-of: good-platform
+    app.kubernetes.io/managed-by: Helm
+    app.kubernetes.io/version: 1.4.2
+spec:
+  groups:
+    - name: good-app
+      rules:
+        - alert: GoodAppErrorRate
+          expr: rate(http_requests_total{code=~"5.."}[5m]) > 0.05
+          for: 10m
+          labels: {severity: critical}
+          annotations:
+            summary: good-app is returning 5xx
+            runbook_url: https://wiki.acme.example/runbooks/good-app-error-rate
+---
+# Source: good-app/templates/hook-job.yaml
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: good-app-precheck
+  namespace: good
+  labels:
+    app.kubernetes.io/name: good-app
+    app.kubernetes.io/instance: good-app
+    app.kubernetes.io/component: hook
+    app.kubernetes.io/part-of: good-platform
+    app.kubernetes.io/managed-by: Helm
+    app.kubernetes.io/version: 1.4.2
+  annotations:
+    helm.sh/hook: pre-install,pre-upgrade
+    helm.sh/hook-delete-policy: before-hook-creation,hook-succeeded
+spec:
+  backoffLimit: 2
+  activeDeadlineSeconds: 600
+  template:
+    metadata:
+      # A distinct name, so the workload's PodDisruptionBudget does not select
+      # this Job's pods. A budget over a hook Job blocks the eviction of a pod
+      # that is meant to be transient - which the compliance run caught here.
+      labels:
+        app.kubernetes.io/name: good-app-precheck
+        app.kubernetes.io/instance: good-app
+    spec:
+      serviceAccountName: good-app
+      automountServiceAccountToken: false
+      terminationGracePeriodSeconds: 30
+      restartPolicy: Never
+      securityContext:
+        runAsNonRoot: true
+        seccompProfile: {type: RuntimeDefault}
+      containers:
+        - name: precheck
+          image: registry.acme.example/good/precheck@sha256:abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789
+          args: ["--config", "/etc/good-app/config.yaml", "--strict"]
+          env:
+            - name: LOG_LEVEL
+              value: info
+            - name: DB_PASSWORD
+              valueFrom:
+                secretKeyRef: {name: good-app-db, key: password}
+          envFrom:
+            - configMapRef: {name: good-app-config}
+          resources:
+            requests: {cpu: 50m, memory: 64Mi}
+            limits: {memory: 128Mi}
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 10004
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            seccompProfile: {type: RuntimeDefault}
+            capabilities: {drop: [ALL]}
+---
+# Source: good-app/templates/dataplane.yaml
+# A CNF dataplane: hugepages and an SR-IOV interface, requested and limited
+# equally as Kubernetes requires for extended resources.
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: good-dataplane
+  namespace: good
+  labels:
+    app.kubernetes.io/name: good-dataplane
+    app.kubernetes.io/instance: good-app
+    app.kubernetes.io/component: dataplane
+    app.kubernetes.io/part-of: good-platform
+    app.kubernetes.io/managed-by: Helm
+    app.kubernetes.io/version: 1.4.2
+spec:
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: good-dataplane
+      app.kubernetes.io/instance: good-app
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: good-dataplane
+        app.kubernetes.io/instance: good-app
+        app.kubernetes.io/component: dataplane
+        app.kubernetes.io/part-of: good-platform
+        app.kubernetes.io/managed-by: Helm
+        app.kubernetes.io/version: 1.4.2
+    spec:
+      automountServiceAccountToken: false
+      terminationGracePeriodSeconds: 30
+      serviceAccountName: good-dataplane
+      nodeSelector:
+        acme.example/dataplane: "true"
+      affinity:
+        nodeAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            nodeSelectorTerms:
+              - matchExpressions:
+                  - {key: acme.example/dataplane, operator: In, values: ["true"]}
+      tolerations:
+        - {key: acme.example/dataplane, operator: Exists, effect: NoSchedule}
+      securityContext:
+        runAsNonRoot: true
+        seccompProfile: {type: RuntimeDefault}
+      containers:
+        - name: dataplane
+          image: registry.acme.example/good/dataplane@sha256:fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210
+          resources:
+            requests:
+              cpu: "2"
+              memory: 2Gi
+              hugepages-1Gi: 2Gi
+              intel.com/sriov_netdevice: "1"
+            limits:
+              memory: 4Gi
+              hugepages-1Gi: 2Gi
+              intel.com/sriov_netdevice: "1"
+          startupProbe:
+            exec:
+              command: ["/bin/dataplane", "ready"]
+            failureThreshold: 30
+            periodSeconds: 10
+          livenessProbe:
+            exec:
+              command: ["/bin/dataplane", "alive"]
+            initialDelaySeconds: 60
+            periodSeconds: 20
+            failureThreshold: 6
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 10005
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            seccompProfile: {type: RuntimeDefault}
+            capabilities: {drop: [ALL]}
+---
+# Source: good-app/templates/pvc.yaml
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: good-app-shared
+  namespace: good
+  labels:
+    app.kubernetes.io/name: good-app
+    app.kubernetes.io/instance: good-app
+    app.kubernetes.io/component: api
+    app.kubernetes.io/part-of: good-platform
+    app.kubernetes.io/managed-by: Helm
+    app.kubernetes.io/version: 1.4.2
+spec:
+  accessModes: [ReadWriteOnce]
+  storageClassName: acme-ssd
+  resources:
+    requests:
+      storage: 20Gi
+---
+# Source: good-app/templates/dataplane-sa.yaml
+# A service account bound to nothing, so its pods have no use for a mounted
+# token - the case RBAC-02's exemption is derived from.
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: good-dataplane
+  namespace: good
+  labels:
+    app.kubernetes.io/name: good-dataplane
+    app.kubernetes.io/instance: good-app
+    app.kubernetes.io/component: dataplane
+    app.kubernetes.io/part-of: good-platform
+    app.kubernetes.io/managed-by: Helm
+    app.kubernetes.io/version: 1.4.2
+automountServiceAccountToken: false
+---
+# Source: good-app/templates/scc-binding.yaml
+# A privileged constraint granted to one named service account, which is what
+# SEC-10 asks for. Granting it to a group would give it to everything installed
+# in the namespace afterwards.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: good-dataplane-scc
+  namespace: good
+  labels:
+    app.kubernetes.io/name: good-dataplane
+    app.kubernetes.io/instance: good-app
+    app.kubernetes.io/component: dataplane
+    app.kubernetes.io/part-of: good-platform
+    app.kubernetes.io/managed-by: Helm
+    app.kubernetes.io/version: 1.4.2
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: system:openshift:scc:hostmount-anyuid
+subjects:
+  - {kind: ServiceAccount, name: good-dataplane, namespace: good}
+---
+# Source: good-app/templates/backup-sa.yaml
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: good-backup
+  namespace: good
+  labels:
+    app.kubernetes.io/name: good-backup
+    app.kubernetes.io/instance: good-app
+    app.kubernetes.io/component: backup
+    app.kubernetes.io/part-of: good-platform
+    app.kubernetes.io/managed-by: Helm
+    app.kubernetes.io/version: 1.4.2
+automountServiceAccountToken: false

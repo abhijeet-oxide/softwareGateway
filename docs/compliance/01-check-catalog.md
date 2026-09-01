@@ -1,21 +1,21 @@
 # 01 - Check Catalog
 
-> **Ground truth.** Every assertion in [custom-validation.md](custom-validation.md),
+> **Ground truth.** Every assertion in [source-standards.md](source-standards.md),
 > triaged: what a machine can decide from the artifact alone, what needs a site's
 > values, what needs a human reading a document - and for the first group,
 > exactly what the check inspects.
 >
-> **Prerequisite:** [00 - The Validation Model](00-validation-model.md) · **Consumed by:** [02 - Authoring Checks](02-authoring-checks.md), [design/23](../design/23-validation.md)
+> **Prerequisite:** [00 - The Compliance Model](00-compliance-model.md) · **Consumed by:** [02 - Authoring Checks](02-authoring-checks.md), [design/23](../design/23-compliance.md)
 
 ---
 
 ## 1. How to read this
 
-[custom-validation.md](custom-validation.md) is the organization's list and it
+[source-standards.md](source-standards.md) is the organization's list and it
 stays the source of truth for *what we require*. It is written for a human
 reviewer, so a third of it is not decidable by a machine at all - "backup and
 restore procedure documented, with tested restore evidence" is a document
-review, not a YAML assertion. Pretending otherwise is how a validation tool
+review, not a YAML assertion. Pretending otherwise is how a compliance tool
 ends up with a hundred green ticks that mean nothing.
 
 So every ID gets a disposition:
@@ -23,7 +23,7 @@ So every ID gets a disposition:
 | Column | Values | Meaning |
 |---|---|---|
 | **Tier** | `T1-C` | Decidable from the chart's own structure - templates, `Chart.yaml`, `values.yaml`, files present. Never affected by a site's values. |
-| | `T1-R` | Decidable from the manifests rendered with the chart's default values. Carries a determinacy ([00](00-validation-model.md) §2, Rule 4). |
+| | `T1-R` | Decidable from the manifests rendered with the chart's default values. Carries a determinacy ([00](00-compliance-model.md) §2, Rule 4). |
 | | `T1-X` | Decidable across the whole release - needs more than one chart, or the artifact tree, or another feature of this platform. |
 | | `T2` | Needs a site's values file or a cluster fact. Reported as `skip` at tier 1, with the reason. |
 | | `EV` | Needs a document or an attestation a human reads. Never automated; tracked as a release checklist item. |
@@ -223,7 +223,7 @@ answers on one screen.
 | SUP-04 | T1-X | v1 | warn | Integration: an SBOM document is on record for the release's images. |
 | SUP-05 | T1-X | v1 | block | Integration: signature verification has passed for this package ([design/08](../design/08-verification.md)). |
 | SUP-06 | - | - | block | Structurally guaranteed by this platform: promotion moves the same digest ([design/22](../design/22-promotion.md)). Recorded as an `info` result stating that, so the report is complete rather than silent. |
-| SUP-07 | T1-C | v1 | block | Every `Chart.yaml` dependency has an exact version (no range, no `*`, no `^`/`~`) **and** is vendored under `charts/`. An unvendored dependency means the render is not reproducible and, in an air-gapped install, not possible. This is also what makes tier-1 rendering work at all - see [design/23](../design/23-validation.md) §5.3. |
+| SUP-07 | T1-C | v1 | block | Every `Chart.yaml` dependency has an exact version (no range, no `*`, no `^`/`~`) **and** is vendored under `charts/`. An unvendored dependency means the render is not reproducible and, in an air-gapped install, not possible. This is also what makes tier-1 rendering work at all - see [design/23](../design/23-compliance.md) §5.3. |
 | SUP-08..09 | EV | - | warn | Rollback references and pipeline provenance are documents. |
 | SUP-10 | T1-C | v1 | block | No default, sample or placeholder credential in `values.yaml`, a `Secret` template's literal data, or a container `env` default. The pattern set is the CFG-01 set plus the known placeholders (`changeme`, `change-me`, `admin`, `password`, `secret`, `letmein`, `test123`, `P@ssw0rd`, `example.com` credentials). |
 
@@ -365,7 +365,7 @@ Two assertions, one implementation, and the second is the one nobody checks.
 
 **Schema validity:** every rendered document is parsed and validated against the
 Kubernetes OpenAPI schema for its `apiVersion`/`kind`, from a schema set vendored
-at a pinned Kubernetes version ([design/23](../design/23-validation.md) §5.5).
+at a pinned Kubernetes version ([design/23](../design/23-compliance.md) §5.5).
 Unknown kinds - CRs of operators the release ships - are validated against the
 `CustomResourceDefinition`'s own `openAPIV3Schema` where the release ships one,
 and reported as `skip` with reason `no schema available` where it does not.
@@ -381,7 +381,7 @@ byte for byte. A difference means the chart contains `now`, `randAlphaNum`,
   `determinacy: unknown`.
 
 This is also the cheapest possible implementation of "reproducible" from
-[00](00-validation-model.md) Rule 5 - the same mechanism that establishes the
+[00](00-compliance-model.md) Rule 5 - the same mechanism that establishes the
 property tests it.
 
 ### 3.6 NET-07 - a Service that selects nothing

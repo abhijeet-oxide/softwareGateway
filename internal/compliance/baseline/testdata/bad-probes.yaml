@@ -1,0 +1,62 @@
+# Health probes: the ways a container is reported healthy when it is not, and
+# the ways it is restarted when it is merely busy.
+---
+# Source: bad-probes/templates/service.yaml
+apiVersion: v1
+kind: Service
+metadata: {name: api, namespace: bad}
+spec:
+  selector: {app.kubernetes.io/name: api}
+  ports: [{name: http, port: 8080, targetPort: http}]
+---
+# Source: bad-probes/templates/deployment.yaml
+apiVersion: apps/v1
+kind: Deployment
+metadata: {name: api, namespace: bad}
+spec:
+  replicas: 1
+  selector: {matchLabels: {app.kubernetes.io/name: api}}
+  template:
+    metadata: {labels: {app.kubernetes.io/name: api}}
+    spec:
+      terminationGracePeriodSeconds: 20
+      containers:
+        # Behind a Service, declares a port, and has no readiness probe: every
+        # rollout drops the requests that arrive before it is listening.
+        - name: unprobed
+          image: registry.acme.example/bad/api@sha256:1111000011110000111100001111000011110000111100001111000011110000
+          ports: [{name: http, containerPort: 8080}]
+        # Liveness and readiness are the same handler, so a slow dependency
+        # restarts the pod instead of removing it from the endpoint list.
+        - name: same-handler
+          image: registry.acme.example/bad/api@sha256:2222000022220000222200002222000022220000222200002222000022220000
+          ports: [{name: alt, containerPort: 8081}]
+          readinessProbe:
+            httpGet: {path: /health, port: 8081, scheme: HTTP}
+            timeoutSeconds: 2
+            periodSeconds: 5
+            failureThreshold: 3
+          livenessProbe:
+            httpGet: {path: /health, port: 8081, scheme: HTTP}
+            timeoutSeconds: 2
+            # More sensitive than readiness, so liveness reacts first.
+            periodSeconds: 2
+            failureThreshold: 1
+        # A blind minute at start-up instead of a startup probe, a probe
+        # pointing at a port this container does not declare, timings outside
+        # the bounds, and a preStop sleep longer than the grace period.
+        - name: misconfigured
+          image: registry.acme.example/bad/api@sha256:3333000033330000333300003333000033330000333300003333000033330000
+          ports: [{name: own, containerPort: 8082}]
+          readinessProbe:
+            httpGet: {path: /ready, port: 9999, scheme: HTTP}
+            timeoutSeconds: 30
+            periodSeconds: 60
+          livenessProbe:
+            httpGet: {path: /alive, port: 8082, scheme: HTTP}
+            initialDelaySeconds: 120
+            periodSeconds: 10
+          lifecycle:
+            preStop:
+              exec:
+                command: ["sleep", "600"]

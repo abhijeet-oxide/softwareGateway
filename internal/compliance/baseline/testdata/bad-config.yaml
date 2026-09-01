@@ -1,0 +1,53 @@
+# Configuration and secrets: what the release puts where anybody can read it.
+---
+# Source: bad-config/templates/configmap.yaml
+apiVersion: v1
+kind: ConfigMap
+metadata: {name: leaky, namespace: bad}
+data:
+  log.level: info
+  # A credential in a ConfigMap is readable by anybody who can read the
+  # namespace, which is a far wider set than can read a Secret.
+  database.password: hunter2
+  api_key: sk-live-8f3a9c2e1b4d
+  # A reference is not a credential, and must not be reported as one.
+  database.passwordSecretRef: leaky-db
+  oidc.authorizationUrl: https://sso.acme.example/authorize
+---
+# Source: bad-config/templates/configmap-ok.yaml
+apiVersion: v1
+kind: ConfigMap
+metadata: {name: clean, namespace: bad}
+immutable: true
+data:
+  log.level: debug
+---
+# Source: bad-config/templates/deployment.yaml
+apiVersion: apps/v1
+kind: Deployment
+metadata: {name: leaky, namespace: bad}
+spec:
+  replicas: 1
+  selector: {matchLabels: {app.kubernetes.io/name: leaky}}
+  template:
+    metadata: {labels: {app.kubernetes.io/name: leaky}}
+    spec:
+      containers:
+        - name: app
+          image: registry.acme.example/bad/app@sha256:7777000077770000777700007777000077770000777700007777000077770000
+          # Container args are world-readable through the API and appear in ps.
+          args: ["--listen=:8080", "--password=hunter2"]
+          env:
+            - name: LOG_LEVEL
+              value: info
+            # A private key in the environment is in the pod spec and in every
+            # crash dump.
+            - name: TLS_KEY
+              value: |
+                -----BEGIN PRIVATE KEY-----
+                notarealkey
+                -----END PRIVATE KEY-----
+          envFrom:
+            # The container gets every key in the Secret, including the ones
+            # added next release for a different component.
+            - secretRef: {name: everything}

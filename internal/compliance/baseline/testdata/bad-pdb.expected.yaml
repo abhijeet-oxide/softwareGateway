@@ -1,0 +1,32 @@
+# The exact set of PDB findings. Not a minimum: a check that also fires on the
+# deliberately-correct quorum-ok budget fails this test.
+findings:
+  # Three replicas, no budget covering them.
+  - {check: PDB-01, kind: Deployment, name: uncovered}
+  # Two replicas, no budget covering them either.
+  - {check: PDB-01, kind: Deployment, name: stuck}
+
+  # The four spellings of "refuse every eviction". An implementation catching
+  # one of these passes the other three.
+  - {check: PDB-02, kind: PodDisruptionBudget, name: deadlock-absolute}
+  - {check: PDB-02, kind: PodDisruptionBudget, name: deadlock-percent}
+  - {check: PDB-02, kind: PodDisruptionBudget, name: deadlock-hundred}
+  - {check: PDB-02, kind: PodDisruptionBudget, name: deadlock-allreplicas}
+  # minAvailable 1 over a one-replica workload is the same deadlock arrived at
+  # from the other side, so PDB-02 fires here as well as PDB-03.
+  - {check: PDB-02, kind: PodDisruptionBudget, name: over-singleton}
+  - {check: PDB-03, kind: PodDisruptionBudget, name: over-singleton}
+
+  # maxSurge and maxUnavailable both zero: a rollout that cannot start.
+  - {check: PDB-05, kind: Deployment, name: stuck}
+
+  # Recreate on a workload that is behind a Service: a deliberate outage on
+  # every upgrade.
+  - {check: PDB-06, kind: Deployment, name: recreate}
+  # No progressDeadlineSeconds on any of these Deployments, so a stuck rollout
+  # reports progress forever and automation waiting on it never fails.
+  - {check: PDB-07, kind: Deployment, name: worker}
+  - {check: PDB-07, kind: Deployment, name: singleton}
+  - {check: PDB-07, kind: Deployment, name: uncovered}
+  - {check: PDB-07, kind: Deployment, name: stuck}
+  - {check: PDB-07, kind: Deployment, name: recreate}

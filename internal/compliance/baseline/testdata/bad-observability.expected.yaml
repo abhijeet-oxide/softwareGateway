@@ -1,0 +1,11 @@
+findings:
+  - {check: OBS-01, kind: Deployment, name: silent}
+  - {check: OBS-09, kind: PrometheusRule, name: silent}
+  - {check: UPG-07, kind: Widget, name: orphan-widget}
+  - {check: NET-09, kind: DaemonSet, name: dataplane}
+  - {check: NET-10, kind: DaemonSet, name: dataplane, container: dataplane}
+  - {check: RBAC-02, kind: DaemonSet, name: dataplane}
+  # No serviceAccountName at all, so this uses the default account - bound to
+  # nothing, and still mounting a token.
+  - {check: RBAC-02, kind: Deployment, name: silent}
+  - {check: SEC-10, kind: RoleBinding, name: dataplane-scc}

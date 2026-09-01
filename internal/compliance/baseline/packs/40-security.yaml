@@ -1,0 +1,260 @@
+apiVersion: softwaregateway.io/v1alpha1
+kind: PolicyPack
+metadata:
+  name: sgw-baseline-security
+  prefix: SEC
+  version: 1.0.0
+  description: >
+    Container security posture. What a compromised process in this release can
+    reach.
+  maintainer: platform-sre
+spec:
+  checks:
+    - id: SEC-01
+      title: Containers do not run as root
+      description: >
+        runAsNonRoot is true at the pod or container level, and runAsUser is
+        not 0 wherever it is set.
+      rationale: >
+        A process running as root inside a container is root on anything it
+        mounts from the node, and root is what turns a container escape from a
+        finding into an incident.
+      severity: block
+      tier: 1
+      category: Container Security Posture
+      remediation: >
+        Set securityContext.runAsNonRoot: true and a non-zero runAsUser, and
+        build the image to run as that user.
+      appliesTo:
+        kinds: [Deployment, StatefulSet, DaemonSet, ReplicaSet, Job, CronJob, Pod]
+        containers: all
+      assert:
+        expr: |
+          (value(self, "securityContext.runAsNonRoot") == true ||
+           value(owner, "spec.template.spec.securityContext.runAsNonRoot") == true ||
+           value(owner, "spec.securityContext.runAsNonRoot") == true) &&
+          text(self, "securityContext.runAsUser") != "0"
+        locus: securityContext.runAsNonRoot
+        expected: "runAsNonRoot: true, and runAsUser other than 0"
+        observed: |
+          text(self, "securityContext.runAsUser") == "0" ? "runAsUser 0" : "runAsNonRoot not set"
+
+    - id: SEC-02
+      title: Containers cannot escalate privileges
+      description: allowPrivilegeEscalation is false on every container.
+      rationale: >
+        Left unset it defaults to true, so a setuid binary in the image regains
+        everything the securityContext dropped. It is the setting that makes
+        the others hold.
+      severity: block
+      tier: 1
+      category: Container Security Posture
+      remediation: "Set securityContext.allowPrivilegeEscalation: false."
+      appliesTo:
+        kinds: [Deployment, StatefulSet, DaemonSet, ReplicaSet, Job, CronJob, Pod]
+        containers: all
+      assert:
+        equals:
+          securityContext.allowPrivilegeEscalation: false
+
+    - id: SEC-03
+      title: No container is privileged
+      description: No container sets securityContext.privileged to true.
+      rationale: >
+        A privileged container has every capability and full device access. It
+        is equivalent to root on the node, and it is almost always there
+        because something needed one capability.
+      severity: block
+      tier: 1
+      category: Container Security Posture
+      remediation: >
+        Drop privileged and add the specific capability the container needs.
+      appliesTo:
+        kinds: [Deployment, StatefulSet, DaemonSet, ReplicaSet, Job, CronJob, Pod]
+        containers: all
+      assert:
+        expr: 'value(self, "securityContext.privileged") != true'
+        locus: securityContext.privileged
+        expected: not privileged
+
+    - id: SEC-04
+      title: Containers drop all capabilities
+      description: >
+        securityContext.capabilities.drop contains ALL. Anything added back is
+        named in the finding.
+      rationale: >
+        The default capability set includes several that matter, and dropping
+        ALL then adding the one needed turns a review of "is this container
+        safe" into a review of a named list.
+      severity: block
+      tier: 1
+      category: Container Security Posture
+      remediation: >
+        Set capabilities.drop to [ALL] and add back only what the process
+        needs.
+      appliesTo:
+        kinds: [Deployment, StatefulSet, DaemonSet, ReplicaSet, Job, CronJob, Pod]
+        containers: all
+      assert:
+        expr: |
+          value(self, "securityContext.capabilities.drop") != null &&
+          self.securityContext.capabilities.drop.exists(c, string(c) == "ALL")
+        locus: securityContext.capabilities.drop
+        expected: drop includes ALL
+        observed: |
+          value(self, "securityContext.capabilities.add") != null
+            ? "adds " + self.securityContext.capabilities.add.map(c, string(c)).join(", ")
+            : "no drop declared"
+
+    - id: SEC-05
+      title: Containers without persistent storage use a read-only root filesystem
+      description: >
+        readOnlyRootFilesystem is true on containers in workloads that mount no
+        PersistentVolumeClaim.
+      rationale: >
+        A writable root filesystem is where a compromised process drops a
+        binary. Workloads with a claim are exempted because the check would
+        otherwise fire on every database, and a check that fires on every
+        database gets switched off.
+      severity: warn
+      tier: 1
+      category: Container Security Posture
+      remediation: >
+        Set readOnlyRootFilesystem: true and mount an emptyDir for anything
+        that needs to be written.
+      appliesTo:
+        kinds: [Deployment, StatefulSet, DaemonSet, ReplicaSet]
+        containers: main
+        where: 'size(pvcMountPaths(owner)) == 0'
+      assert:
+        equals:
+          securityContext.readOnlyRootFilesystem: true
+
+    - id: SEC-06
+      title: Containers use a seccomp profile
+      description: >
+        seccompProfile.type is RuntimeDefault or Localhost at the pod or
+        container level. Unconfined fails.
+      rationale: >
+        Unconfined leaves the whole syscall surface open. RuntimeDefault blocks
+        the syscalls a normal application never makes, at effectively no cost.
+      severity: warn
+      tier: 1
+      category: Container Security Posture
+      remediation: "Set securityContext.seccompProfile.type: RuntimeDefault."
+      appliesTo:
+        kinds: [Deployment, StatefulSet, DaemonSet, ReplicaSet, Job, CronJob, Pod]
+        containers: main
+      assert:
+        expr: |
+          text(self, "securityContext.seccompProfile.type") == "RuntimeDefault" ||
+          text(self, "securityContext.seccompProfile.type") == "Localhost" ||
+          text(owner, "spec.template.spec.securityContext.seccompProfile.type") == "RuntimeDefault" ||
+          text(owner, "spec.template.spec.securityContext.seccompProfile.type") == "Localhost" ||
+          text(owner, "spec.securityContext.seccompProfile.type") == "RuntimeDefault" ||
+          text(owner, "spec.securityContext.seccompProfile.type") == "Localhost"
+        locus: securityContext.seccompProfile.type
+        expected: RuntimeDefault or Localhost
+        observed: |
+          text(self, "securityContext.seccompProfile.type") == ""
+            ? "no seccomp profile" : text(self, "securityContext.seccompProfile.type")
+
+    - id: SEC-07
+      title: Pods do not share the node's namespaces
+      description: >
+        No pod sets hostNetwork, hostPID or hostIPC, and no container declares
+        a hostPort.
+      rationale: >
+        Each of these puts the container on the node's side of an isolation
+        boundary. hostNetwork also makes every containerPort a node port, which
+        is a listening service nobody declared.
+      severity: block
+      tier: 1
+      category: Container Security Posture
+      remediation: >
+        Remove hostNetwork, hostPID, hostIPC and hostPort; use a Service for
+        external access.
+      appliesTo:
+        kinds: [Deployment, StatefulSet, DaemonSet, ReplicaSet, Job, CronJob, Pod]
+        subject: podSpec
+      assert:
+        expr: |
+          value(self, "hostNetwork") != true &&
+          value(self, "hostPID") != true &&
+          value(self, "hostIPC") != true &&
+          (value(self, "containers") == null ||
+            self.containers.all(c, value(c, "ports") == null || c.ports.all(p, !has(p.hostPort))))
+        locus: hostNetwork
+        expected: no host namespaces and no hostPort
+        observed: |
+          value(self, "hostNetwork") == true ? "hostNetwork: true" :
+          value(self, "hostPID") == true ? "hostPID: true" :
+          value(self, "hostIPC") == true ? "hostIPC: true" : "a container declares hostPort"
+
+    - id: SEC-08
+      title: No pod mounts a path from the node
+      description: >
+        No volume is a hostPath. A hostPath naming a container-runtime socket
+        is reported as cluster-admin equivalence rather than as a mount.
+      rationale: >
+        A hostPath is the node's filesystem inside the container, with the
+        container's privileges. A mount of the container runtime's socket is
+        not a mount at all - it is the ability to start a privileged container
+        on that node, which is cluster-admin by another name.
+      severity: block
+      tier: 1
+      category: Container Security Posture
+      remediation: >
+        Use a PersistentVolumeClaim, a ConfigMap or an emptyDir. If node access
+        is genuinely required, it needs a waiver naming the path.
+      appliesTo:
+        kinds: [Deployment, StatefulSet, DaemonSet, ReplicaSet, Job, CronJob, Pod]
+        subject: podSpec
+        where: 'value(self, "volumes") != null'
+      assert:
+        expr: '!self.volumes.exists(v, has(v.hostPath))'
+        locus: volumes
+        expected: no hostPath volumes
+        observed: |
+          self.volumes.filter(v, has(v.hostPath)).map(v, string(v.hostPath.path)).join(", ")
+        message: |
+          self.volumes.exists(v, has(v.hostPath) && (
+            string(v.hostPath.path).startsWith("/var/run/docker.sock") ||
+            string(v.hostPath.path).startsWith("/run/containerd") ||
+            string(v.hostPath.path).startsWith("/run/crio")))
+          ? "mounts the container runtime socket, which is cluster-admin equivalence on this node: " +
+              self.volumes.filter(v, has(v.hostPath)).map(v, string(v.hostPath.path)).join(", ")
+          : "mounts the node filesystem at " +
+              self.volumes.filter(v, has(v.hostPath)).map(v, string(v.hostPath.path)).join(", ")
+
+    - id: SEC-10
+      title: Privileged policy grants name individual service accounts
+      description: >
+        A binding that grants a SecurityContextConstraints or PodSecurityPolicy
+        names ServiceAccount subjects, not system:authenticated,
+        system:serviceaccounts, or a group.
+      rationale: >
+        Granting a privileged constraint to a group gives it to every workload
+        in that group, including ones installed later by somebody else. The
+        chart intended to exempt itself and exempted the cluster.
+      severity: block
+      tier: 1
+      category: Container Security Posture
+      remediation: >
+        Bind the constraint to the specific ServiceAccount the workload uses.
+      appliesTo:
+        kinds: [RoleBinding, ClusterRoleBinding]
+        where: |
+          text(self, "roleRef.kind") == "ClusterRole" &&
+          (text(self, "roleRef.name").startsWith("system:openshift:scc:") ||
+           text(self, "roleRef.name") == "privileged" ||
+           text(self, "roleRef.name") == "anyuid" ||
+           text(self, "roleRef.name") == "hostmount-anyuid")
+      assert:
+        expr: |
+          value(self, "subjects") != null &&
+          self.subjects.all(s, string(value(s, "kind")) == "ServiceAccount") &&
+          !self.subjects.exists(s, string(value(s, "name")).startsWith("system:"))
+        locus: subjects
+        expected: ServiceAccount subjects only
+        observed: 'self.subjects.map(s, string(value(s, "kind")) + "/" + string(value(s, "name"))).join(", ")'

@@ -1,0 +1,64 @@
+apiVersion: softwaregateway.io/v1alpha1
+kind: PolicyPack
+metadata:
+  name: sgw-baseline-supply
+  prefix: SUP
+  version: 1.0.0
+  description: >
+    Supply chain. Whether what runs is what was tested, and whether it came
+    from somewhere this organization controls.
+  maintainer: platform-sre
+spec:
+  checks:
+    - id: SUP-01
+      title: Every image is pinned by digest
+      description: >
+        Every image reference is of the form name@sha256:… . A tag - including
+        a semantic version - fails.
+      rationale: >
+        A tag is a pointer and it can be moved. The release that was tested and
+        the release that is installed six months later are then different
+        software with the same name, and nothing records that they differ. A
+        digest is the content.
+      severity: block
+      tier: 1
+      category: Supply Chain & Release Integrity
+      remediation: >
+        Replace the tag with the digest the image currently resolves to.
+      appliesTo:
+        kinds: [Deployment, StatefulSet, DaemonSet, ReplicaSet, Job, CronJob, Pod]
+        containers: all
+      assert:
+        expr: 'imageRef(text(self, "image")).hasDigest'
+        locus: image
+        expected: "name@sha256:…"
+        observed: 'text(self, "image")'
+
+    - id: SUP-02
+      title: Every image comes from an approved registry
+      description: >
+        Every image reference resolves to a registry named in this
+        deployment's configured allowlist.
+      rationale: >
+        An image from an unapproved registry has not been scanned, is not
+        mirrored, and will not pull at all in a disconnected environment. The
+        allowlist is deployment configuration, not a constant, because the
+        registries an organization runs are a fact about the organization.
+      severity: block
+      tier: 1
+      category: Supply Chain & Release Integrity
+      remediation: >
+        Mirror the image into an approved registry and reference it there.
+      appliesTo:
+        kinds: [Deployment, StatefulSet, DaemonSet, ReplicaSet, Job, CronJob, Pod]
+        containers: all
+        where: 'value(config, "approvedRegistries") != null && size(config.approvedRegistries) > 0'
+      assert:
+        expr: |
+          config.approvedRegistries.exists(r, string(r) == imageRef(text(self, "image")).registry)
+        locus: image
+        expected: 'a registry in config.approvedRegistries'
+        observed: |
+          imageRef(text(self, "image")).registry == ""
+            ? "(no registry, so this resolves to Docker Hub)"
+            : string(imageRef(text(self, "image")).registry)

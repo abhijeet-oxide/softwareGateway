@@ -1,0 +1,55 @@
+# Labels and annotations: the release that cannot be found, and the release
+# that cannot be upgraded.
+---
+# Source: bad-metadata/templates/deployment.yaml
+# A selector containing the app version. spec.selector is immutable after
+# creation, so the next release cannot be upgraded at all - only deleted and
+# recreated. Discovered on the second release, in production.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: versioned-selector
+  namespace: bad
+  labels:
+    app.kubernetes.io/name: versioned-selector
+  annotations:
+    acme.example/api-token: ghp_realtokenvaluehere0000000000000000
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: versioned-selector
+      app.kubernetes.io/version: 1.4.2
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: versioned-selector
+        app.kubernetes.io/version: 1.4.2
+        team: platform
+        release-note: "this value is far too long to be a label and Kubernetes will reject the whole object at install time"
+    spec:
+      containers:
+        - name: app
+          image: registry.acme.example/bad/app@sha256:8888000088880000888800008888000088880000888800008888000088880000
+---
+# Source: bad-metadata/templates/hook.yaml
+# No delete policy, so the object is still there on the next upgrade and Helm
+# cannot create one that already exists: the SECOND upgrade fails. No
+# backoffLimit, so a failing hook retries forever.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: unbounded-hook
+  namespace: bad
+  labels:
+    app.kubernetes.io/name: unbounded-hook
+  annotations:
+    helm.sh/hook: pre-upgrade
+spec:
+  template:
+    metadata: {labels: {app.kubernetes.io/name: unbounded-hook}}
+    spec:
+      restartPolicy: Never
+      containers:
+        - name: hook
+          image: registry.acme.example/bad/hook@sha256:9999000099990000999900009999000099990000999900009999000099990000

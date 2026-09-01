@@ -1,0 +1,201 @@
+apiVersion: softwaregateway.io/v1alpha1
+kind: PolicyPack
+metadata:
+  name: sgw-baseline-probes
+  prefix: PRB
+  version: 1.0.0
+  description: >
+    Health probes and lifecycle. Whether Kubernetes can tell that a container
+    is ready, and whether it restarts one that is merely busy.
+  maintainer: platform-sre
+spec:
+  checks:
+    - id: PRB-01
+      title: Containers receiving traffic declare a readiness probe
+      description: >
+        A container that declares a port, in a workload selected by a Service,
+        has a readinessProbe.
+      rationale: >
+        Without one Kubernetes routes traffic the moment the process starts, so
+        every rollout drops the requests that arrive before the application is
+        listening. Applicability is narrowed to traffic-receiving containers on
+        purpose - a sidecar failing this is noise, and noise is what gets a
+        check switched off.
+      severity: block
+      tier: 1
+      category: Health Probes & Lifecycle
+      remediation: Add a readinessProbe that answers only once the container can serve.
+      appliesTo:
+        kinds: [Deployment, StatefulSet, DaemonSet, ReplicaSet]
+        containers: main
+        where: 'size(servicesFor(owner)) > 0 && value(self, "ports") != null'
+      assert:
+        required: [readinessProbe]
+
+    - id: PRB-02
+      title: A slow-starting container uses a startup probe
+      description: >
+        A container whose livenessProbe.initialDelaySeconds exceeds 30 also
+        declares a startupProbe.
+      rationale: >
+        A long initial delay is somebody working around slow initialization by
+        making the liveness probe blind for the first minute. A startupProbe
+        expresses the same thing without leaving the container unmonitored, and
+        without restarting it if initialization takes longer than guessed.
+      severity: warn
+      tier: 1
+      category: Health Probes & Lifecycle
+      remediation: >
+        Replace the long initialDelaySeconds with a startupProbe and lower the
+        liveness delay.
+      appliesTo:
+        kinds: [Deployment, StatefulSet, DaemonSet, ReplicaSet, Job, CronJob]
+        containers: all
+        where: 'present(self, "livenessProbe.initialDelaySeconds") && int(value(self, "livenessProbe.initialDelaySeconds")) > 30'
+      assert:
+        required: [startupProbe]
+
+    - id: PRB-03
+      title: Liveness is less sensitive than readiness
+      description: >
+        Where a container has both, livenessProbe.periodSeconds and
+        failureThreshold are at least those of the readinessProbe.
+      rationale: >
+        Readiness removes a pod from the endpoint list; liveness kills it. If
+        liveness reacts first, a slow dependency restarts the process instead
+        of taking it out of rotation - which turns a degraded service into a
+        crash loop.
+      severity: warn
+      tier: 1
+      category: Health Probes & Lifecycle
+      remediation: >
+        Raise the liveness periodSeconds and failureThreshold above the
+        readiness ones.
+      appliesTo:
+        kinds: [Deployment, StatefulSet, DaemonSet, ReplicaSet]
+        containers: all
+        where: 'present(self, "livenessProbe") && present(self, "readinessProbe")'
+      assert:
+        expr: |
+          (!present(self, "livenessProbe.periodSeconds") || !present(self, "readinessProbe.periodSeconds") ||
+             int(value(self, "livenessProbe.periodSeconds")) >= int(value(self, "readinessProbe.periodSeconds"))) &&
+          (!present(self, "livenessProbe.failureThreshold") || !present(self, "readinessProbe.failureThreshold") ||
+             int(value(self, "livenessProbe.failureThreshold")) >= int(value(self, "readinessProbe.failureThreshold")))
+        locus: livenessProbe
+        expected: liveness period and failureThreshold at least the readiness ones
+
+    - id: PRB-04
+      title: Liveness and readiness do not use the same handler
+      description: >
+        A container's livenessProbe and readinessProbe do not have an identical
+        HTTP scheme, port and path, or an identical exec command.
+      rationale: >
+        Identical probes mean the two decisions are the same decision. A slow
+        dependency then restarts the pod rather than removing it from the
+        endpoint list, and every replica restarts at once because they all
+        depend on the same slow thing.
+      severity: block
+      tier: 1
+      category: Health Probes & Lifecycle
+      remediation: >
+        Point liveness at a handler that tests only the process, and readiness
+        at one that tests the dependencies.
+      appliesTo:
+        kinds: [Deployment, StatefulSet, DaemonSet, ReplicaSet]
+        containers: all
+        where: 'present(self, "livenessProbe") && present(self, "readinessProbe")'
+      assert:
+        expr: |
+          !(text(self, "livenessProbe.httpGet.path") == text(self, "readinessProbe.httpGet.path") &&
+            text(self, "livenessProbe.httpGet.port") == text(self, "readinessProbe.httpGet.port") &&
+            text(self, "livenessProbe.httpGet.scheme") == text(self, "readinessProbe.httpGet.scheme") &&
+            present(self, "livenessProbe.httpGet")) &&
+          !(present(self, "livenessProbe.exec.command") &&
+            text(self, "livenessProbe.exec.command") == text(self, "readinessProbe.exec.command")) &&
+          !(present(self, "livenessProbe.tcpSocket.port") &&
+            text(self, "livenessProbe.tcpSocket.port") == text(self, "readinessProbe.tcpSocket.port"))
+        locus: livenessProbe
+        expected: a liveness handler distinct from the readiness one
+        observed: 'text(self, "livenessProbe.httpGet.path") + " on " + text(self, "livenessProbe.httpGet.port")'
+
+    - id: PRB-05
+      title: Probe timings are within the configured bounds
+      description: >
+        Probe timeoutSeconds is between 1 and 3, and periodSeconds between 5
+        and 10.
+      rationale: >
+        A timeout longer than the period queues probes against a container that
+        is already struggling. The bounds are this organization's, and a chart
+        outside them has usually been tuned around a problem rather than for
+        one.
+      severity: warn
+      tier: 1
+      category: Health Probes & Lifecycle
+      remediation: Bring timeoutSeconds into [1,3] and periodSeconds into [5,10].
+      appliesTo:
+        kinds: [Deployment, StatefulSet, DaemonSet, ReplicaSet]
+        containers: all
+        where: 'present(self, "readinessProbe")'
+      assert:
+        expr: |
+          (!present(self, "readinessProbe.timeoutSeconds") ||
+            (int(value(self, "readinessProbe.timeoutSeconds")) >= 1 && int(value(self, "readinessProbe.timeoutSeconds")) <= 3)) &&
+          (!present(self, "readinessProbe.periodSeconds") ||
+            (int(value(self, "readinessProbe.periodSeconds")) >= 5 && int(value(self, "readinessProbe.periodSeconds")) <= 10))
+        locus: readinessProbe
+        expected: timeoutSeconds in [1,3] and periodSeconds in [5,10]
+        observed: '"timeout " + text(self, "readinessProbe.timeoutSeconds") + ", period " + text(self, "readinessProbe.periodSeconds")'
+
+    - id: PRB-06
+      title: A probe points at a port its own container declares
+      description: >
+        A readiness, liveness or startup probe's httpGet.port or
+        tcpSocket.port resolves to a containerPort the same container declares,
+        by number or by name.
+      rationale: >
+        A probe pointing at a sidecar's port is answered by the sidecar. The
+        application is reported healthy from the moment the sidecar starts and
+        its own failures are invisible - the pod stays in the endpoint list
+        through an outage.
+      severity: block
+      tier: 1
+      category: Health Probes & Lifecycle
+      remediation: Point the probe at a port this container declares.
+      appliesTo:
+        kinds: [Deployment, StatefulSet, DaemonSet, ReplicaSet]
+        containers: all
+        where: 'present(self, "readinessProbe.httpGet.port") || present(self, "readinessProbe.tcpSocket.port")'
+      assert:
+        expr: |
+          (!present(self, "readinessProbe.httpGet.port") || declaresPort(self, value(self, "readinessProbe.httpGet.port"))) &&
+          (!present(self, "readinessProbe.tcpSocket.port") || declaresPort(self, value(self, "readinessProbe.tcpSocket.port")))
+        locus: readinessProbe.httpGet.port
+        expected: a port declared by this container
+        observed: '"probe port " + text(self, "readinessProbe.httpGet.port") + text(self, "readinessProbe.tcpSocket.port")'
+
+    - id: PRB-07
+      title: A preStop sleep fits inside the grace period
+      description: >
+        Where a preStop hook is a bare sleep, its duration is shorter than the
+        pod's terminationGracePeriodSeconds.
+      rationale: >
+        A sleep longer than the grace period guarantees SIGKILL part way
+        through shutdown, every time. The hook was added to make shutdown
+        graceful and is what makes it abrupt.
+      severity: warn
+      tier: 1
+      category: Health Probes & Lifecycle
+      remediation: >
+        Shorten the sleep, or raise terminationGracePeriodSeconds above it.
+      appliesTo:
+        kinds: [Deployment, StatefulSet, DaemonSet, ReplicaSet]
+        containers: all
+        where: 'present(self, "lifecycle.preStop.exec.command")'
+      assert:
+        expr: |
+          !self.lifecycle.preStop.exec.command.exists(a, string(a) == "sleep") ||
+          int(value(owner, "spec.template.spec.terminationGracePeriodSeconds")) >
+            int(self.lifecycle.preStop.exec.command[size(self.lifecycle.preStop.exec.command) - 1])
+        locus: lifecycle.preStop
+        expected: a preStop sleep shorter than terminationGracePeriodSeconds
+        observed: 'text(self, "lifecycle.preStop.exec.command")'

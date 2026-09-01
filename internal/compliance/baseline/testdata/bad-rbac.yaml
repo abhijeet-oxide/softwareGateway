@@ -1,0 +1,59 @@
+# Identity and access: what this release can do to the cluster.
+---
+# Source: bad-rbac/templates/role-wildcards.yaml
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata: {name: everything, namespace: bad}
+rules:
+  - apiGroups: ["*"]
+    resources: ["*"]
+    verbs: ["*"]
+---
+# Source: bad-rbac/templates/role-secrets.yaml
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata: {name: reads-secrets, namespace: bad}
+rules:
+  - apiGroups: [""]
+    resources: ["secrets"]
+    verbs: ["list", "watch"]
+---
+# Source: bad-rbac/templates/role-rbac.yaml
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata: {name: grants-itself, namespace: bad}
+rules:
+  - apiGroups: ["rbac.authorization.k8s.io"]
+    resources: ["roles", "rolebindings"]
+    verbs: ["create", "bind"]
+---
+# Source: bad-rbac/templates/role-exec.yaml
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata: {name: shells-in, namespace: bad}
+rules:
+  - apiGroups: [""]
+    resources: ["pods/exec"]
+    verbs: ["create"]
+---
+# Source: bad-rbac/templates/role-ok.yaml
+# Correct: narrow verbs, get on named secrets only. Must not fire.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata: {name: narrow, namespace: bad}
+rules:
+  - apiGroups: [""]
+    resources: ["configmaps"]
+    verbs: ["get", "list"]
+  - apiGroups: [""]
+    resources: ["secrets"]
+    verbs: ["get"]
+    resourceNames: ["narrow-tls"]
+---
+# Source: bad-rbac/templates/clusterrolebinding.yaml
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata: {name: too-much}
+roleRef: {apiGroup: rbac.authorization.k8s.io, kind: ClusterRole, name: cluster-admin}
+subjects:
+  - {kind: ServiceAccount, name: bad-app, namespace: bad}

@@ -104,6 +104,7 @@ func newRootCommand() *cobra.Command {
 		newDownloadsCommand(),
 		newRulesCommand(),
 		newCompareCommand(),
+		newComplianceCommand(),
 		newHealthCommand(),
 		newVersionCommand(),
 	)

@@ -1,0 +1,11 @@
+findings:
+  - {check: RBAC-03, kind: Role, name: everything}
+  - {check: RBAC-05, kind: Role, name: everything}
+  - {check: RBAC-05, kind: Role, name: reads-secrets}
+  - {check: RBAC-06, kind: Role, name: everything}
+  - {check: RBAC-06, kind: Role, name: grants-itself}
+  - {check: RBAC-07, kind: Role, name: everything}
+  - {check: RBAC-07, kind: Role, name: shells-in}
+  # The release grants cluster-admin. The message names the built-in role,
+  # because that is the part a reviewer needs to see.
+  - {check: RBAC-04, kind: ClusterRoleBinding, name: too-much}

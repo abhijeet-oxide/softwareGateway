@@ -1,0 +1,13 @@
+findings:
+  # Three replicas, no spread constraints at all.
+  - {check: SCH-01, kind: Deployment, name: unspread}
+  # maxSkew above 1 on both constraints.
+  - {check: SCH-02, kind: Deployment, name: loose-skew}
+  # Selects on the app version, so the constraint spreads the new pods against
+  # themselves and ignores the old ones - during the rollout, which is when it
+  # was needed.
+  - {check: SCH-04, kind: Deployment, name: loose-skew}
+  # Three hard constraints at once.
+  - {check: SCH-03, kind: Deployment, name: overconstrained}
+  # Required affinity naming literal zones the target cluster may not have.
+  - {check: SCH-05, kind: Deployment, name: overconstrained}

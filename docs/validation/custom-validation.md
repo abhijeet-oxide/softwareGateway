@@ -1,5 +1,12 @@
 # Custom Validation
 
+> **The source catalog, unchanged.** This is what the organization requires.
+> How each entry is turned into a machine-checkable assertion - and which of
+> them cannot be - is triaged in [01 - Check Catalog](01-check-catalog.md);
+> the rules a check has to follow are in [00 - The Validation Model](00-validation-model.md);
+> the implementation plan is [design/23](../design/23-validation.md).
+> Start at [README.md](README.md).
+
 Validation catalog for automated scanning of a delivered software package (container images, Helm charts, Kubernetes manifests, and accompanying metadata). Each item is expressed as a machine-checkable assertion so a scanner can emit PASS / FAIL / WARN.
 
 **Scan inputs:** rendered manifests (Helm template / kustomize build), chart metadata and values, image references and manifests/SBOM, CRs for operator-managed components, and release documentation.

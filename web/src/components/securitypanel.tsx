@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react'
+import { memo, useCallback, useDeferredValue, useEffect, useMemo, useState } from 'react'
 import type { ReactNode } from 'react'
 import {
   Alert,
@@ -709,6 +709,23 @@ type FlatViolation = SecurityViolation & {
   artifactRetrievedAt?: string
 }
 
+/**
+ * Whether one finding matches what somebody typed.
+ *
+ * The needle arrives already trimmed and lower-cased, once, rather than being
+ * re-lowered inside a loop over ten thousand findings for every keystroke.
+ */
+function matchesText(
+  f: { cve?: string; id?: string; component: { name: string }; summary?: string },
+  image: string,
+  needle: string,
+): boolean {
+  if (needle === '') return true
+  return `${f.cve ?? ''} ${f.id ?? ''} ${f.component.name} ${image} ${f.summary ?? ''}`
+    .toLowerCase()
+    .includes(needle)
+}
+
 /** The counts one image's row shows, rebuilt from a (possibly filtered) findings list. */
 function summariseCounts(findings: SecurityFinding[]): SecurityCounts {
   const zero = (): SecuritySeverityCounts => ({ critical: 0, high: 0, medium: 0, low: 0, unknown: 0 })
@@ -769,6 +786,18 @@ function FindingsSection({ data, product, reference, repository, tab, onTabChang
   const [grouping, setGrouping] = useState<'unique' | 'all'>('unique')
   const [q, setQ] = useState('')
   /*
+   * What the box shows, and what the tables are filtered by, are two different
+   * values on purpose.
+   *
+   * `q` is echoed in the input on every keystroke, so typing never lags. The
+   * filtering runs on the DEFERRED copy, at a priority React is allowed to
+   * interrupt - so a release with ten thousand findings re-filters between
+   * keystrokes instead of after them. Without it every character re-derived
+   * five lists and re-rendered a table over all of them before the next letter
+   * could appear, and the box typed a second behind the person using it.
+   */
+  const search = useDeferredValue(q).trim().toLowerCase()
+  /*
     Which scanners a finding has to have come from.
     Inert on a single-scanner deployment - the control that sets it is not
     drawn, and `anySource` matches everything - so nothing below has to ask
@@ -817,46 +846,39 @@ function FindingsSection({ data, product, reference, repository, tab, onTabChang
    *
    * # Why the search box is not one of those
    *
-   * Because on THIS table it means something else. The search haystack includes
-   * the image's name, so typing an image name into it made every finding of
-   * that image match and no finding of any other image match - and the table
-   * answered by showing all 157 rows with "None found" against 156 of them.
-   * A release with ninety thousand findings rendered as a release with none,
-   * and opening one of those rows showed a drawer reading "Vulnerabilities 0"
-   * over a raw scanner payload full of them.
+   * Because it is not choosing a kind of finding, and on this table it means
+   * something else again. The search haystack included the image's own name, so
+   * typing one made every finding of that image match and no finding of any
+   * other - and the table answered by showing all 157 rows with "None found"
+   * against 156 of them, over a raw scanner payload full of CVEs.
    *
-   * So a search NAMES ROWS here. An image whose name matches keeps every one of
-   * its findings; an image that matches only through its findings keeps those;
-   * an image that matches neither is removed from the table rather than shown
-   * as empty. "None found" now means the scanner found none.
+   * So a search NAMES ROWS here and changes no count. Rows whose image or
+   * findings match are shown, with the numbers the filters gave them; the rest
+   * leave the table rather than appearing empty. "None found" means the scanner
+   * found none.
    */
-  const filteredImageReports = useMemo(() => {
-    if (severities.length === 0 && fixability === 'all' && !q && isAnySource(source)) return imageReports
-    const needle = q.trim().toLowerCase()
-    const out: SecurityReport[] = []
-    for (const r of imageReports) {
-      const named = needle !== '' && [r.artifact.display, r.artifact.name, r.artifact.tag, r.artifact.digest]
-        .some((v) => v?.toLowerCase().includes(needle))
+  const selectedImageReports = useMemo(() => {
+    if (severities.length === 0 && fixability === 'all' && isAnySource(source)) return imageReports
+    return imageReports.map((r) => {
       const kept = (r.findings ?? []).filter((f) => {
         if (severities.length > 0 && !severities.includes(f.severity)) return false
         if (fixability === 'fixable' && !f.fixable) return false
         if (fixability === 'non-fixable' && f.fixable) return false
-        if (!matchesSource(f, source)) return false
-        if (needle && !named) {
-          const hay = `${f.cve ?? ''} ${f.id ?? ''} ${f.component.name} ${f.summary ?? ''}`.toLowerCase()
-          if (!hay.includes(needle)) return false
-        }
-        return true
+        return matchesSource(f, source)
       })
-      if (needle && !named && kept.length === 0) continue
-      if (kept.length === (r.findings ?? []).length) {
-        out.push(r)
-        continue
-      }
-      out.push({ ...r, findings: kept, counts: summariseCounts(kept) })
-    }
-    return out
-  }, [imageReports, severities, fixability, q, source])
+      if (kept.length === (r.findings ?? []).length) return r
+      return { ...r, findings: kept, counts: summariseCounts(kept) }
+    })
+  }, [imageReports, severities, fixability, source])
+
+  const visibleImageReports = useMemo(() => {
+    if (search === '') return selectedImageReports
+    return selectedImageReports.filter((r) => (
+      [r.artifact.display, r.artifact.name, r.artifact.tag, r.artifact.digest]
+        .some((v) => v?.toLowerCase().includes(search))
+      || (r.findings ?? []).some((f) => matchesText(f, r.artifact.name, search))
+    ))
+  }, [selectedImageReports, search])
 
   const artifactCounts = useMemo<KindCounts>(
     () => ({ all: imageReports.length, image: imageReports.length, chart: 0, file: 0 }),
@@ -929,17 +951,37 @@ function FindingsSection({ data, product, reference, repository, tab, onTabChang
     return out
   }, [reports])
 
-  const filtered = useMemo(() => findings.filter((f) => {
+  /*
+   * SELECTED is what the filters chose. VISIBLE is what the search left of it.
+   *
+   * # Why the search is not one of the filters
+   *
+   * Because it is not choosing a kind of vulnerability, it is looking for one.
+   * "Fixable", "No fix" and a severity say WHICH findings count - a release
+   * filtered to critical fixable issues genuinely has 41 of them, and every
+   * number on the page should say 41. A search says which of them to show me
+   * right now, and it must not change the answer to "how many are there".
+   *
+   * It did. Typing an image name into the box took the tab from
+   * "Vulnerabilities (3,111)" to "Vulnerabilities (474)" and the count a reader
+   * carried away was the one on the tab - a release quietly reporting an eighth
+   * of its problems because somebody was looking for something.
+   *
+   * So every count below - the tabs, the unique/all switch, the images table,
+   * malware, policy - comes from `selected`, and only the rows on screen come
+   * from `visible`.
+   */
+  const selected = useMemo(() => findings.filter((f) => {
     if (severities.length > 0 && !severities.includes(f.severity)) return false
     if (fixability === 'fixable' && !f.fixable) return false
     if (fixability === 'non-fixable' && f.fixable) return false
-    if (!matchesSource(f, source)) return false
-    if (q) {
-      const hay = `${f.cve ?? ''} ${f.id ?? ''} ${f.component.name} ${f.artifactName} ${f.summary ?? ''}`.toLowerCase()
-      if (!hay.includes(q.toLowerCase())) return false
-    }
-    return true
-  }), [findings, severities, fixability, q, source])
+    return matchesSource(f, source)
+  }), [findings, severities, fixability, source])
+
+  const visible = useMemo(
+    () => (search === '' ? selected : selected.filter((f) => matchesText(f, f.artifactName, search))),
+    [selected, search],
+  )
 
   /*
    * Malware, flattened the same way findings are.
@@ -955,11 +997,6 @@ function FindingsSection({ data, product, reference, repository, tab, onTabChang
     for (const report of reports) {
       for (const f of report.malware ?? []) {
         if (!matchesSource(f, source)) continue
-        if (q) {
-          const hay = `${f.cve ?? ''} ${f.id ?? ''} ${f.component.name} ${report.artifact.name} ${f.summary ?? ''}`
-            .toLowerCase()
-          if (!hay.includes(q.toLowerCase())) continue
-        }
         out.push({
           ...f,
           artifactName: report.artifact.name,
@@ -970,7 +1007,12 @@ function FindingsSection({ data, product, reference, repository, tab, onTabChang
       }
     }
     return out
-  }, [reports, q, source])
+  }, [reports, source])
+
+  const visibleMalware = useMemo(
+    () => (search === '' ? malware : malware.filter((f) => matchesText(f, f.artifactName, search))),
+    [malware, search],
+  )
 
   /** Policy violations, flattened, with the image each belongs to. */
   const violations = useMemo<FlatViolation[]>(() => {
@@ -978,11 +1020,6 @@ function FindingsSection({ data, product, reference, repository, tab, onTabChang
     for (const report of reports) {
       for (const v of report.violations ?? []) {
         if (severities.length > 0 && !severities.includes(v.severity)) continue
-        if (q) {
-          const hay = `${v.cve ?? ''} ${v.id ?? ''} ${v.component.name} ${report.artifact.name} `
-            + `${v.watch ?? ''} ${v.policy ?? ''} ${v.summary ?? ''}`
-          if (!hay.toLowerCase().includes(q.toLowerCase())) continue
-        }
         out.push({
           ...v,
           artifactName: report.artifact.name,
@@ -993,7 +1030,15 @@ function FindingsSection({ data, product, reference, repository, tab, onTabChang
       }
     }
     return out
-  }, [reports, severities, q])
+  }, [reports, severities])
+
+  const visibleViolations = useMemo(() => {
+    if (search === '') return violations
+    return violations.filter((v) => (
+      `${v.cve ?? ''} ${v.id ?? ''} ${v.component.name} ${v.artifactName} `
+      + `${v.watch ?? ''} ${v.policy ?? ''} ${v.summary ?? ''}`
+    ).toLowerCase().includes(search))
+  }, [violations, search])
 
   const vulnerabilityTotal = useMemo(
     () => reports.reduce((sum, r) => sum + r.counts.total, 0),
@@ -1009,7 +1054,20 @@ function FindingsSection({ data, product, reference, repository, tab, onTabChang
    * the same OpenSSL advisory in four images, cannot see that they have one
    * upgrade to do.
    */
-  const cveGroups = useMemo(() => groupByCve(filtered), [filtered])
+  /*
+   * Grouped from what the FILTERS selected, so the count on the tab is the
+   * release's answer and not the search's. The search then decides which of
+   * those groups are on screen - a group matching through its identifier or
+   * through any occurrence of it.
+   */
+  const cveGroups = useMemo(() => groupByCve(selected), [selected])
+  const visibleCveGroups = useMemo(() => {
+    if (search === '') return cveGroups
+    return cveGroups.filter((g) => (
+      g.key.toLowerCase().includes(search)
+      || g.rows.some((f) => matchesText(f, f.artifactName, search))
+    ))
+  }, [cveGroups, search])
 
   /*
    * The release's own stored total, which is the number the cards above show.
@@ -1069,7 +1127,10 @@ function FindingsSection({ data, product, reference, repository, tab, onTabChang
     }
     return out
   }, [data.reports])
-  const scanUrlFor = (name: string) => scanUrlByImage.get(name)
+  // Stable across renders, so the memoised tables below can actually bail out.
+  // A fresh closure every keystroke would make every prop new and every table
+  // re-render, which is the cost this whole arrangement exists to avoid.
+  const scanUrlFor = useCallback((name: string) => scanUrlByImage.get(name), [scanUrlByImage])
 
   const exportFilters = {
     severity: severities.length > 0 ? severities.join(',') : undefined,
@@ -1236,7 +1297,7 @@ function FindingsSection({ data, product, reference, repository, tab, onTabChang
             onChange={(v) => setGrouping(v as typeof grouping)}
             options={[
               { value: 'unique', label: `Unique CVEs (${cveGroups.length.toLocaleString()})` },
-              { value: 'all', label: `All findings (${filtered.length.toLocaleString()})` },
+              { value: 'all', label: `All findings (${selected.length.toLocaleString()})` },
             ]}
           />
         )}
@@ -1339,7 +1400,7 @@ function FindingsSection({ data, product, reference, repository, tab, onTabChang
             {grouping === 'unique'
               ? (
                 <UniqueCveTable
-                  groups={cveGroups}
+                  groups={visibleCveGroups}
                   state={data.state}
                   detailRowsUnavailable={detailRowsUnavailable}
                   scanUrlFor={scanUrlFor}
@@ -1348,7 +1409,7 @@ function FindingsSection({ data, product, reference, repository, tab, onTabChang
               )
               : (
                 <VulnerabilityTable
-                  rows={filtered}
+                  rows={visible}
                   state={data.state}
                   detailRowsUnavailable={detailRowsUnavailable}
                   scanUrlFor={scanUrlFor}
@@ -1370,16 +1431,16 @@ function FindingsSection({ data, product, reference, repository, tab, onTabChang
                 </Typography.Text>
               )}
               <ArtifactTable
-                reports={filteredImageReports}
+                reports={visibleImageReports}
                 whole={imageReports}
                 freshness={data.freshness}
               />
             </Space>
           )
           : tab === 'malware'
-            ? <MalwareTable rows={malware} scanUrlFor={scanUrlFor} />
+            ? <MalwareTable rows={visibleMalware} scanUrlFor={scanUrlFor} />
             : tab === 'policy'
-              ? <PolicyTable rows={violations} />
+              ? <PolicyTable rows={visibleViolations} />
               : null}
     </Card>
   )
@@ -1394,7 +1455,16 @@ function FindingsSection({ data, product, reference, repository, tab, onTabChang
  * an empty grid with a header does not say who looked or when. The empty state
  * names the scanner, so "clean" is attributable.
  */
-function MalwareTable({ rows, scanUrlFor }: {
+/*
+ * Memoised, and the reason is the search box.
+ *
+ * It is a controlled input, so every keystroke re-renders this whole panel -
+ * and without a bail-out that re-rendered every table under it, over ten
+ * thousand findings, before the next character could appear. The deferred
+ * search value means these props do not change while somebody is mid-word, so
+ * with `memo` the tables sit still and the box types at typing speed.
+ */
+const MalwareTable = memo(function MalwareTable({ rows, scanUrlFor }: {
   rows: FlatFinding[]
   scanUrlFor: (name: string) => string | undefined
 }) {
@@ -1488,7 +1558,7 @@ function MalwareTable({ rows, scanUrlFor }: {
       />
     </>
   )
-}
+})
 
 /**
  * What the scanner's configured watches say about this release.
@@ -1500,7 +1570,16 @@ function MalwareTable({ rows, scanUrlFor }: {
  * rule forbids, and on which image - and the first two are the ones that say
  * whether this is a real block or a watch somebody left switched on.
  */
-function PolicyTable({ rows }: { rows: FlatViolation[] }) {
+/*
+ * Memoised, and the reason is the search box.
+ *
+ * It is a controlled input, so every keystroke re-renders this whole panel -
+ * and without a bail-out that re-rendered every table under it, over ten
+ * thousand findings, before the next character could appear. The deferred
+ * search value means these props do not change while somebody is mid-word, so
+ * with `memo` the tables sit still and the box types at typing speed.
+ */
+const PolicyTable = memo(function PolicyTable({ rows }: { rows: FlatViolation[] }) {
   if (rows.length === 0) {
     return (
       <Alert
@@ -1584,7 +1663,7 @@ function PolicyTable({ rows }: { rows: FlatViolation[] }) {
       ]}
     />
   )
-}
+})
 
 /**
  * Which scanners reported one row.
@@ -1891,7 +1970,16 @@ function groupByCve(findings: FlatFinding[]): CveGroup[] {
  * columns. A comma-separated list of image names answers a quarter of it and
  * sends the reader back to the flat view to find the rest.
  */
-function UniqueCveTable({ groups, state, detailRowsUnavailable, scanUrlFor, showSources }: {
+/*
+ * Memoised, and the reason is the search box.
+ *
+ * It is a controlled input, so every keystroke re-renders this whole panel -
+ * and without a bail-out that re-rendered every table under it, over ten
+ * thousand findings, before the next character could appear. The deferred
+ * search value means these props do not change while somebody is mid-word, so
+ * with `memo` the tables sit still and the box types at typing speed.
+ */
+const UniqueCveTable = memo(function UniqueCveTable({ groups, state, detailRowsUnavailable, scanUrlFor, showSources }: {
   groups: CveGroup[]
   state: PackageSecurityResponse['state']
   detailRowsUnavailable: boolean
@@ -2025,7 +2113,7 @@ function UniqueCveTable({ groups, state, detailRowsUnavailable, scanUrlFor, show
     <CveDetailDrawer group={open} scanUrlFor={scanUrlFor} onClose={() => setOpen(null)} />
     </>
   )
-}
+})
 
 /**
  * Everything known about one CVE, beside the table rather than over it.
@@ -2488,7 +2576,16 @@ function ImageCell({ name, tag, href }: { name: string; tag?: string; href?: str
   )
 }
 
-function VulnerabilityTable({
+/*
+ * Memoised, and the reason is the search box.
+ *
+ * It is a controlled input, so every keystroke re-renders this whole panel -
+ * and without a bail-out that re-rendered every table under it, over ten
+ * thousand findings, before the next character could appear. The deferred
+ * search value means these props do not change while somebody is mid-word, so
+ * with `memo` the tables sit still and the box types at typing speed.
+ */
+const VulnerabilityTable = memo(function VulnerabilityTable({
   rows,
   state,
   detailRowsUnavailable,
@@ -2599,7 +2696,7 @@ function VulnerabilityTable({
     <FindingDetailDrawer finding={open} scanUrlFor={scanUrlFor} onClose={() => setOpen(null)} />
     </>
   )
-}
+})
 
 /**
  * The images of a release, with what is wrong in each.
@@ -2608,7 +2705,16 @@ function VulnerabilityTable({
  * nobody scanned. A table listing only the images with findings would be a
  * table where an unscanned image is invisible.
  */
-function ArtifactTable({ reports, whole, freshness }: {
+/*
+ * Memoised, and the reason is the search box.
+ *
+ * It is a controlled input, so every keystroke re-renders this whole panel -
+ * and without a bail-out that re-rendered every table under it, over ten
+ * thousand findings, before the next character could appear. The deferred
+ * search value means these props do not change while somebody is mid-word, so
+ * with `memo` the tables sit still and the box types at typing speed.
+ */
+const ArtifactTable = memo(function ArtifactTable({ reports, whole, freshness }: {
   reports: SecurityReport[]
   /**
    * The same images with NOTHING filtered out, for the drawer.
@@ -2799,7 +2905,7 @@ function ArtifactTable({ reports, whole, freshness }: {
     <ImageDetailDrawer report={opened} onClose={() => setOpen(null)} />
     </>
   )
-}
+})
 
 /**
  * The SBOM, as a button that downloads it.

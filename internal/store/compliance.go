@@ -7,6 +7,8 @@ import (
 	"errors"
 	"fmt"
 	"time"
+
+	"github.com/abhijeet-oxide/softwareGateway/internal/compliance"
 )
 
 // ChartArtifact is one Helm chart inside a release, with the one blob that
@@ -382,4 +384,71 @@ func upsertPackageCompliance(
 		return fmt.Errorf("update package compliance summary: %w", err)
 	}
 	return nil
+}
+
+// RecordComplianceRun adapts a finished run into this table's rows.
+//
+// The adapter lives here rather than in internal/compliance because the
+// dependency points this way: the store knows about the compliance model, and
+// the compliance model must not know about SQL. It is the same arrangement
+// PackageSecurity.Record uses, for the same reason.
+func (p *Packages) RecordComplianceRun(ctx context.Context, runID string, packageID int64, run *compliance.Run) error {
+	row := ComplianceRunRow{
+		ID: runID, PackageID: packageID, State: ComplianceComplete,
+		Verdict:      string(run.Verdict),
+		BundleDigest: run.BundleDigest,
+		HelmVersion:  run.HelmVersion,
+		KubeVersion:  run.KubeVersion,
+		Checks:       run.Checks,
+		Pass:         run.Counts.Pass,
+		Fail:         run.Counts.Fail,
+		Skip:         run.Counts.Skip,
+		Errors:       run.Counts.Error,
+		Waived:       run.Counts.Waived,
+		Blocking:     run.Counts.Blocking,
+		Warning:      run.Counts.Warning,
+		Info:         run.Counts.Info,
+		Truncated:    run.Truncated,
+	}
+
+	charts := make([]ComplianceChartRow, 0, len(run.Charts))
+	for _, c := range run.Charts {
+		charts = append(charts, ComplianceChartRow{
+			Name: c.Name, Version: c.Version, Status: c.Status,
+			Error: c.Error, Resources: c.Resources,
+		})
+	}
+
+	results := make([]ComplianceResultRow, 0, len(run.Results))
+	for i, r := range run.Results {
+		a := r.Address
+		results = append(results, ComplianceResultRow{
+			// seq is the engine's reading order - failures first, then the
+			// undecidable, then passes - so a page read back by seq is the
+			// page a person was shown. Reconstructing that order in SQL would
+			// approximate it differently.
+			Seq:         i,
+			CheckID:     r.CheckID,
+			CheckTitle:  r.CheckTitle,
+			Severity:    string(r.Severity),
+			Tier:        int(r.Tier),
+			Category:    r.Category,
+			Pack:        r.Pack,
+			Remediation: r.Remediation,
+			Reference:   r.Reference,
+			Outcome:     string(r.Outcome),
+			Determinacy: string(r.Determinacy),
+
+			Chart: a.Chart, ChartVersion: a.ChartVersion, SubchartPath: a.SubchartPath,
+			ArtifactDigest: a.ArtifactDigest, ArtifactRef: a.ArtifactRef,
+			SourceFile: a.SourceFile, RenderedLine: a.RenderedLine,
+			APIVersion: a.APIVersion, Kind: a.Kind, Namespace: a.Namespace, Name: a.Name,
+			Container: a.Container, ContainerType: a.ContainerType, Locus: a.Locus,
+
+			Observed: r.Observed, Expected: r.Expected, Message: r.Message, Error: r.Error,
+			Waiver: r.Waiver, WaiverExpires: r.WaiverExpires,
+			Fingerprint: r.Fingerprint(),
+		})
+	}
+	return p.FinishComplianceRun(ctx, row, charts, results)
 }

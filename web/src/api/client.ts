@@ -165,6 +165,112 @@ export function packageRef(ref: string): { segment: string; query: string } {
   return { segment: tag, query: `?repository=${encodeURIComponent(repository)}` }
 }
 
+/**
+ * Fetches a URL as text, for a body that is not this API's JSON contract.
+ *
+ * A scanner's own SBOM is JSON, but it is not OUR JSON: `request` parses it,
+ * hands back an object, and the raw bytes a reader asked to see are gone. This
+ * returns the text exactly as it arrived.
+ *
+ * `url` is a whole path rather than one relative to BASE, because these URLs
+ * come from the SERVER - the security response says where each document lives -
+ * and re-deriving them here would be a second place to get them wrong.
+ */
+export async function fetchText(url: string): Promise<string> {
+  let response: Response
+  await acquire()
+  try {
+    response = await fetch(url, { headers: { Accept: '*/*' } })
+  } catch (cause) {
+    throw new UnreachableError(cause)
+  } finally {
+    release()
+  }
+  if (!response.ok) {
+    throw await problemFrom(response)
+  }
+  return response.text()
+}
+
+/**
+ * Downloads a URL to a file, and RESOLVES WHEN IT IS DONE.
+ *
+ * # Why this is not an `<a href>` any more
+ *
+ * Because a link tells the caller nothing. The browser streams the file, names
+ * it from the Content-Disposition and shows its own progress - all good - but
+ * the page it was clicked on has no idea any of that is happening, so an export
+ * of a large release looked like a button that did nothing for eleven seconds.
+ * A reader who clicks twice starts two exports.
+ *
+ * The trade is real and worth naming: the body is held in memory as a blob
+ * before it reaches disk, so this is the wrong mechanism for something
+ * unbounded. Every download it is used for is a document this Coordinator
+ * assembled and knows the size of.
+ *
+ * The filename comes from the response, never from the caller. The server names
+ * the file, and a client that invented one would drift from the CLI's.
+ */
+export async function download(url: string): Promise<void> {
+  let response: Response
+  await acquire()
+  try {
+    response = await fetch(url, { headers: { Accept: '*/*' } })
+  } catch (cause) {
+    throw new UnreachableError(cause)
+  } finally {
+    release()
+  }
+  if (!response.ok) {
+    throw await problemFrom(response)
+  }
+
+  const blob = await response.blob()
+  const href = URL.createObjectURL(blob)
+  try {
+    const a = document.createElement('a')
+    a.href = href
+    a.download = filenameFrom(response.headers.get('Content-Disposition')) ?? 'download'
+    // Appended before clicking: Firefox ignores a click on an anchor that is
+    // not in the document, and does so silently.
+    document.body.appendChild(a)
+    a.click()
+    a.remove()
+  } finally {
+    // Not immediately - Safari reads the blob after the click returns, and
+    // revoking synchronously gives it an empty file. A minute is longer than
+    // any browser takes and shorter than anybody keeps a tab open.
+    setTimeout(() => URL.revokeObjectURL(href), 60_000)
+  }
+}
+
+/** The filename the server chose, out of its Content-Disposition. */
+function filenameFrom(header: string | null): string | undefined {
+  if (!header) return undefined
+  const quoted = /filename\*?=(?:UTF-8'')?"?([^";]+)"?/i.exec(header)
+  if (!quoted?.[1]) return undefined
+  try {
+    return decodeURIComponent(quoted[1])
+  } catch {
+    return quoted[1]
+  }
+}
+
+/** Turns a failed response into the same error type every other call throws. */
+async function problemFrom(response: Response): Promise<ApiError> {
+  let problem: Problem
+  try {
+    problem = (await response.json()) as Problem
+    if (!problem?.code) throw new Error('not a problem document')
+  } catch {
+    problem = {
+      code: response.status >= 500 ? 'INTERNAL' : 'INVALID_ARGUMENT',
+      detail: `The server answered ${response.status} without an error document.`,
+    }
+  }
+  return new ApiError(problem, response.status)
+}
+
 export const api = {
   get: <T>(path: string) => request<T>(path),
   post: <T>(path: string, body?: unknown) =>

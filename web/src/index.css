@@ -155,3 +155,26 @@
     border-inline: 0 !important;
   }
 }
+
+/*
+ * The two rows a comparison has been drawn from.
+ *
+ * A class rather than an inline style, because the target is antd's own row
+ * element and its cells - a `style` on the row does not reach them, and a
+ * selected row whose cells keep the default background reads as a tinted
+ * gutter beside unchanged data rather than as a chosen row.
+ *
+ * `!important` for the same reason and only that one: antd sets the cell
+ * background on `.ant-table-tbody > tr > td` and on its hover state, and both
+ * are more specific than anything a single class can say.
+ */
+.slm-row-selected > td {
+  background: var(--brand-soft) !important;
+}
+.ant-table-tbody > tr.slm-row-selected:hover > td {
+  background: var(--brand-soft) !important;
+}
+/* The left edge marks WHICH rows without another column of colour. */
+.slm-row-selected > td:first-child {
+  box-shadow: inset 3px 0 0 0 var(--brand);
+}

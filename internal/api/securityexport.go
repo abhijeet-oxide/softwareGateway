@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"net/http"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -370,6 +371,47 @@ func parseFindingFilter(q map[string][]string) findingFilter {
 	return f
 }
 
+// describe renders the active filter as a sentence, or "" when nothing is
+// filtered.
+//
+// # Why an export has to say this on its own first page
+//
+// Because a filtered export is indistinguishable from a complete one once it
+// has been emailed. A file holding 402 of 90,808 findings, with nothing in it
+// naming the filter, is the file somebody forwards as "the vulnerabilities in
+// this release" - and every number a reader takes from it is wrong in the one
+// direction that matters.
+func (f findingFilter) describe() string {
+	var parts []string
+	if len(f.severities) > 0 {
+		names := make([]string, 0, len(f.severities))
+		for sev := range f.severities {
+			names = append(names, string(sev))
+		}
+		sort.Strings(names)
+		parts = append(parts, "severity "+strings.Join(names, ", "))
+	}
+	if f.fixable != nil {
+		if *f.fixable {
+			parts = append(parts, "fixable only")
+		} else {
+			parts = append(parts, "not-fixable only")
+		}
+	}
+	if len(f.statuses) > 0 {
+		names := make([]string, 0, len(f.statuses))
+		for st := range f.statuses {
+			names = append(names, string(st))
+		}
+		sort.Strings(names)
+		parts = append(parts, "scan status "+strings.Join(names, ", "))
+	}
+	if f.query != "" {
+		parts = append(parts, "search "+strconv.Quote(f.query))
+	}
+	return strings.Join(parts, "; ")
+}
+
 func (f findingFilter) keepReport(r security.Report) bool {
 	return len(f.statuses) == 0 || f.statuses[r.Status]
 }
@@ -448,15 +490,24 @@ func packageSecurityBook(
 	release := releaseLabel(pkg)
 
 	if view == v1.ExportViewSummary {
-		// The summary view survives for the person pasting one number into a
-		// release note, and it is the only place the field/value grid belongs.
-		book := export.Book{Sheets: []export.Sheet{summarySheet(productName, pkg, side)}}
+		// The summary view is the same page on its own, for the person pasting
+		// one number into a release note.
+		book := export.Book{Sheets: []export.Sheet{summarySheet(productName, pkg, side, filter)}}
 		book.Sheets[0].Primary = true
 		book.JSON = toAPIPackageSecurity(productName, pkg, side.row, side.target, false)
 		return book
 	}
 
+	// The summary FIRST, and as a page rather than a grid.
+	//
+	// It was removed from the detailed export because the old one was
+	// twenty-six field/value rows restating the cards - and removing it went
+	// one step too far. A workbook that opens on row one of ninety thousand
+	// findings gives a reader nowhere to stand: what release is this, how much
+	// of it was scanned, how bad is it, when was it measured. That page is
+	// worth one tab; it is not worth being the whole export.
 	book := export.Book{Sheets: []export.Sheet{
+		summarySheet(productName, pkg, side, filter),
 		uniqueCVESheet(productName, release, side.reports, filter),
 		findingsSheet(productName, release, pkg.ManifestDigest, side.reports, filter),
 		imagesSheet(productName, release, side.reports),
@@ -483,47 +534,128 @@ func packageSecurityBook(
 	return book
 }
 
-// summarySheet is the field/value grid, for the summary view only.
-func summarySheet(productName string, pkg store.PackageRow, side securitySide) export.Sheet {
+// summarySheet is the page a workbook opens on: what this is, how much of it
+// was looked at, and how bad it is.
+//
+// # Why it is grouped rather than a flat list of fields
+//
+// Because the twenty-six rows it used to be were in the order somebody wrote
+// them, and a reader looking for "how many images were scanned" had to read all
+// of them to find out. Four headings - what this is, what was scanned, what was
+// found, what is held - are the four questions somebody opens a security export
+// with, in the order they ask them.
+func summarySheet(
+	productName string, pkg store.PackageRow, side securitySide, filter findingFilter,
+) export.Sheet {
 	state, message := securityState(side.row, side.target)
 	row := side.row
-	return export.Sheet{
-		Name:    "Summary",
-		Headers: []string{"Field", "Value"},
-		Rows: [][]string{
-			{"Product", productName},
-			{"Release", releaseLabel(pkg)},
-			{"Release digest", pkg.ManifestDigest},
-			{"Repository", repositoryOr(row.Repository, side.target)},
-			{"Scanner", providerOr(row.Provider, side.target)},
-			{"Scanner configured", strconv.FormatBool(side.target.Available)},
-			{"Sync state", string(orNever(row.State))},
-			{"Last synced", formatTimePtr(row.SyncedAt)},
-			{"Data state", state},
-			{"Data note", message},
-			{"Artifacts", strconv.Itoa(row.Coverage.Artifacts)},
-			{"Artifacts scanned", strconv.Itoa(row.Coverage.Scanned)},
-			{"Artifacts not scanned", strconv.Itoa(row.Coverage.NotScanned)},
-			{"Artifacts not in the repository", strconv.Itoa(row.Coverage.Missing)},
-			{"Artifacts unavailable", strconv.Itoa(row.Coverage.Unavailable)},
-			{"Artifacts not applicable", strconv.Itoa(row.Coverage.Unsupported)},
-			{"Coverage complete", strconv.FormatBool(row.Coverage.Complete())},
-			{"Vulnerabilities", strconv.Itoa(row.Counts.Total)},
-			{"Fixable", strconv.Itoa(row.Counts.Fixable)},
-			{"Non-fixable", strconv.Itoa(row.Counts.NonFixable)},
-			{"Critical", strconv.Itoa(row.Counts.BySeverity.Critical)},
-			{"High", strconv.Itoa(row.Counts.BySeverity.High)},
-			{"Medium", strconv.Itoa(row.Counts.BySeverity.Medium)},
-			{"Low", strconv.Itoa(row.Counts.BySeverity.Low)},
-			{"Unknown severity", strconv.Itoa(row.Counts.BySeverity.Unknown)},
-			// Named for what each one counts. The interface printed the first
-			// under the label "unique CVEs", and a reader hearing that counts
-			// the second.
-			{"Distinct CVE and package pairs", strconv.Itoa(row.DistinctTotal)},
-			{"Distinct CVEs", strconv.Itoa(row.DistinctCVEs)},
-			{"Exported at", nowRFC3339()},
-		},
+	cov := row.Coverage
+
+	// The malware count is the one number here that is not in the stored row -
+	// it lives on the per-image reports - and it is the one that most needs to
+	// be on the first page a reader sees.
+	malware, violations, images := 0, 0, 0
+	for _, r := range side.reports {
+		malware += len(r.Malware)
+		violations += len(r.Violations)
+		if len(r.Malware) > 0 {
+			images++
+		}
 	}
+
+	sheet := export.Sheet{
+		Name:    "Summary",
+		Title:   productName + " - " + releaseLabel(pkg) + " - security summary",
+		Headers: []string{"Field", "Value"},
+		Widths:  []int{38, 78},
+	}
+	add := func(field, value string) {
+		sheet.Rows = append(sheet.Rows, []string{field, value})
+	}
+	// A blank field is a spacer row. Cheap, and it is what turns a wall of
+	// twenty-six rows into four things a reader can find at a glance.
+	group := func(heading string) {
+		sheet.Rows = append(sheet.Rows, []string{"", ""}, []string{heading, ""})
+	}
+
+	add("Product", productName)
+	add("Release", releaseLabel(pkg))
+	add("Release digest", pkg.ManifestDigest)
+	add("Repository", pkg.SourceRepository)
+	add("Exported at", nowRFC3339())
+
+	group("SCAN")
+	add("Scanner", providerLabel(providerOr(row.Provider, side.target)))
+	add("Scanner repository", repositoryOr(row.Repository, side.target))
+	add("Last synced", formatTimePtr(row.SyncedAt))
+	add("Oldest scan result", formatTimePtr(row.ScannedAt))
+	add("Sync state", string(orNever(row.State)))
+	add("Result", state)
+	if message != "" {
+		add("Note", message)
+	}
+
+	group("COVERAGE")
+	add("Artifacts in release", strconv.Itoa(cov.Artifacts))
+	add("Images scanned", fmt.Sprintf("%d of %d", cov.Scanned, cov.Scannable()))
+	add("Images not indexed yet", strconv.Itoa(cov.NotScanned))
+	add("Images not in the scanner's repository", strconv.Itoa(cov.Missing))
+	add("Images the scanner would not answer for", strconv.Itoa(cov.Unavailable))
+	add("Artifacts the scanner does not cover", strconv.Itoa(cov.Unsupported))
+	add("Coverage complete", yesNo(cov.Complete()))
+
+	group("FINDINGS")
+	add("Vulnerabilities", strconv.Itoa(row.Counts.Total))
+	add("Distinct advisories", strconv.Itoa(row.DistinctCVEs))
+	add("Distinct advisory and package pairs", strconv.Itoa(row.DistinctTotal))
+	add("Fixable", strconv.Itoa(row.Counts.Fixable))
+	add("Not fixable", strconv.Itoa(row.Counts.NonFixable))
+	add("Critical", strconv.Itoa(row.Counts.BySeverity.Critical))
+	add("High", strconv.Itoa(row.Counts.BySeverity.High))
+	add("Medium", strconv.Itoa(row.Counts.BySeverity.Medium))
+	add("Low", strconv.Itoa(row.Counts.BySeverity.Low))
+	add("Unknown severity", strconv.Itoa(row.Counts.BySeverity.Unknown))
+	add("Malicious packages", strconv.Itoa(malware))
+	if malware > 0 {
+		add("Images carrying malware", strconv.Itoa(images))
+	}
+	add("Policy violations", strconv.Itoa(violations))
+
+	if len(side.posture.BySource) > 1 {
+		group("BY SCANNER")
+		for _, src := range side.posture.BySource {
+			add(providerLabel(src.Provider), fmt.Sprintf(
+				"%d findings, %d distinct advisories, %d reported by no other scanner",
+				src.Counts.Total, src.UniqueCVEs, src.OnlyHere))
+		}
+	}
+
+	if described := filter.describe(); described != "" {
+		// An export taken through a filter has to say so on its first page.
+		// A file holding 402 of 90,808 findings, with nothing on it to say
+		// which 402, is the export that gets forwarded as if it were the lot.
+		group("FILTER")
+		add("Rows in this export were filtered by", described)
+	}
+
+	group("SHEETS")
+	add("Unique CVEs", "One row per advisory, with every image and package it appears in")
+	add("All findings", "One row per image, advisory and package")
+	add("Images", "One row per image, with its counts and its scan status")
+	if malware > 0 {
+		add("Malware", "Malicious packages - these have no version to upgrade to")
+	}
+	if violations > 0 {
+		add("Policy violations", "What the scanner's configured watches raised")
+	}
+	return sheet
+}
+
+func yesNo(v bool) string {
+	if v {
+		return "Yes"
+	}
+	return "No"
 }
 
 // comparisonBook projects a comparison into sheets.

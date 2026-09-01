@@ -117,6 +117,10 @@ func uniqueCVESheet(productName, release string, reports []security.Report, filt
 			"Findings", "Images affected", "Packages affected", "Reported by",
 			"Images", "Packages", "Advisory published", "Summary",
 		},
+		// Sized for what the column HOLDS, not for its heading. A CVE is
+		// eighteen characters and was being shown in eight; the two list
+		// columns are wide because a reader opens this sheet to read them.
+		Widths: []int{18, 22, 18, 16, 11, 8, 9, 18, 10, 15, 17, 16, 46, 46, 18, 70},
 	}
 
 	sort.SliceStable(order, func(i, j int) bool {
@@ -165,6 +169,12 @@ func findingsSheet(
 			"Image kind", "Scan status", "CVE", "Issue ID", "Severity", "Fixable", "Fixed in",
 			"Package", "Package version", "Package type", "CVSS", "CVSS vector",
 			"Advisory published", "Reported by", "Policy", "Summary",
+		},
+		Widths: []int{
+			18, 22, 20, 28, 20, 20,
+			11, 13, 18, 16, 11, 9, 18,
+			24, 18, 13, 8, 30,
+			18, 16, 16, 70,
 		},
 	}
 	for _, report := range reports {
@@ -215,6 +225,7 @@ func imagesSheet(productName, release string, reports []security.Report) export.
 			"Vulnerabilities", "Fixable", "Critical", "High", "Medium", "Low", "Unknown",
 			"Malware", "Policy violations", "Scanner", "Scanned at", "Note",
 		},
+		Widths: []int{18, 22, 30, 22, 20, 10, 14, 15, 9, 9, 8, 9, 8, 9, 9, 17, 14, 20, 70},
 	}
 	for _, r := range reports {
 		c := r.Counts
@@ -259,6 +270,7 @@ func malwareSheet(productName, release string, reports []security.Report) export
 			"Identifier", "Severity", "Package", "Package version", "Package type",
 			"Fixed in", "Reported by", "Policy", "Summary",
 		},
+		Widths: []int{18, 22, 30, 22, 20, 18, 11, 26, 18, 13, 18, 16, 18, 70},
 	}
 	for _, r := range reports {
 		for _, f := range r.Malware {
@@ -284,6 +296,7 @@ func policySheet(productName, release string, reports []security.Report) export.
 			"Violation ID", "Type", "Severity", "Watch", "Policy", "Rule",
 			"CVE", "Package", "Package version", "Fixed in", "Created", "Scanner", "Description",
 		},
+		Widths: []int{18, 22, 30, 22, 20, 18, 14, 11, 22, 22, 22, 18, 26, 18, 18, 20, 14, 70},
 	}
 	for _, r := range reports {
 		for _, v := range r.Violations {
@@ -335,6 +348,7 @@ func problemsSheet(productName, release string, reports []security.Report) expor
 	sheet := export.Sheet{
 		Name:    "Problems",
 		Headers: []string{"Product", "Release", "Status", "Images", "Reason", "Affected images"},
+		Widths:  []int{18, 22, 14, 9, 70, 60},
 	}
 	sort.SliceStable(order, func(i, j int) bool {
 		return len(byKey[order[i]].images) > len(byKey[order[j]].images)
@@ -366,6 +380,7 @@ func sourcesSheet(productName, release string, posture security.Posture) (export
 			"Critical", "High", "Medium", "Low", "Unknown",
 			"Distinct CVEs", "Only this scanner",
 		},
+		Widths: []int{18, 22, 16, 15, 11, 9, 9, 8, 9, 8, 9, 14, 18},
 	}
 	for _, src := range posture.BySource {
 		c := src.Counts
@@ -403,9 +418,22 @@ func providerLabel(provider string) string {
 
 // bundleFiles lays the scanner's own bodies out as a directory tree.
 //
-// One directory per KIND, then per image, then per tag - see export.WriteZIP
-// for why that order. The filename names the scanner, so a bundle from a
+// One directory per KIND, then ONE per image-and-tag - see export.WriteZIP for
+// why kind comes first. The filename names the scanner, so a bundle from a
 // deployment running two of them does not have one overwrite the other.
+//
+// # Why the tag is not a directory of its own
+//
+// It was, and it bought nothing: a release holds one tag per image, so every
+// image directory contained exactly one tag directory containing one file, and
+// opening a bundle meant three clicks to reach every document. `cbur-cbur-agent`
+// and `1.5.7-alpine-24` name one thing here, so they are one directory.
+//
+// The separator is `__` rather than the `:` that reads most naturally. A colon
+// is a reserved character on Windows - it is the drive separator - and Explorer
+// refuses to extract an archive containing one. These bundles exist to be
+// FORWARDED, and an archive that fails to open on the recipient's laptop is a
+// worse outcome than a separator nobody would have chosen.
 func bundleFiles(
 	docs map[string]map[security.DocumentKind]security.Document,
 	reports []security.Report,
@@ -428,8 +456,8 @@ func bundleFiles(
 			out = append(out, export.File{
 				Path: strings.Join([]string{
 					kind.Folder(),
-					bundleSegment(r.Artifact.ArtifactKey()),
-					bundleSegment(tagOrDigest(r.Artifact)),
+					bundleSegment(r.Artifact.ArtifactKey()) + "__" +
+						bundleSegment(tagOrDigest(r.Artifact)),
 					bundleSegment(provider) + doc.Extension(),
 				}, "/"),
 				Body: doc.Payload,

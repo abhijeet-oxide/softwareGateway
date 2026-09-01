@@ -46,6 +46,8 @@ export function SecurityComparison({ product, baseRef, againstRef, report, repos
 }) {
   const exportMenu = (
     <SecurityExportMenu
+      workbookNote="The verdict, both releases' artifacts, and every change between them"
+      bundleNote="The same tables as CSV files"
       urlFor={(format, view) => securityComparisonExportUrl(product, baseRef, againstRef, {
         format, view, repository,
       })}
@@ -848,6 +850,8 @@ function ChangeTable({ report, product, baseRef, againstRef, repository }: {
       title={`Changes (${rows.length.toLocaleString()})`}
       extra={
         <SecurityExportMenu
+          workbookNote="The verdict, both releases' artifacts, and every change between them"
+          bundleNote="The same tables as CSV files"
           urlFor={(format, view) => securityComparisonExportUrl(product, baseRef, againstRef, {
             format, view, repository,
             change: TAB_TYPES[tab].join(','),

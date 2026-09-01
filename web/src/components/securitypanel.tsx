@@ -3,7 +3,7 @@ import type { ReactNode } from 'react'
 import {
   Alert,
   App, Button, Card, Col, Collapse, Descriptions, Drawer, Input, Row, Segmented, Select,
-  Space, Spin, Table, Tag, Tooltip, Typography,
+  Skeleton, Space, Spin, Table, Tag, Tooltip, Typography,
 } from 'antd'
 // The working-surface table: resizable, reorderable, pinnable columns whose
 // layout each person keeps. See `tablekit/README.md` for which tables get it.
@@ -11,8 +11,10 @@ import { Table as DataTable } from '../tablekit'
 import { CopyOutlined, DownloadOutlined, ExportOutlined, LoadingOutlined } from '../icons'
 import {
   packageSecurityExportUrl, useCancelPackageSecuritySync, usePackageSecurity,
-  useSyncPackageSecurity,
+  useSecurityDocument, useSyncPackageSecurity,
 } from '../api/queries'
+import { download } from '../api/client'
+import { CodeBlock } from './filecontent'
 import { SEVERITIES } from '../api/types'
 import type {
   PackageSecurityResponse, SecurityCounts, SecurityDocumentRef, SecurityFinding, SecurityReport,
@@ -1023,26 +1025,6 @@ function FindingsSection({ data, product, reference, repository, tab, onTabChang
   }
 
   /*
-   * Which table the export's "this table" item means.
-   *
-   * Named here rather than inside the menu, because the menu does not know
-   * which tab is open and a download that came back with a different table
-   * from the one on screen is the complaint this answers.
-   */
-  const exportTable = tab === 'artifacts'
-    ? 'images'
-    : tab === 'malware' || tab === 'policy'
-      ? tab
-      : grouping === 'unique' ? 'unique' : 'findings'
-  const exportTableLabel = tab === 'artifacts'
-    ? 'Images'
-    : tab === 'malware'
-      ? 'Malware'
-      : tab === 'policy'
-        ? 'Policy violations'
-        : grouping === 'unique' ? 'Unique CVEs' : 'All findings'
-
-  /*
    * Whether the scanner was ASKED about malware and policy for this release.
    *
    * A sync only fetches what it is configured to fetch, so a release synced on
@@ -1171,10 +1153,8 @@ function FindingsSection({ data, product, reference, repository, tab, onTabChang
 
         {tab !== 'problems' && (
           <SecurityExportMenu
-            table={exportTable}
-            tableLabel={exportTableLabel}
-            urlFor={(format, view, table) => packageSecurityExportUrl(product, reference, {
-              format, view, table, repository, ...exportFilters,
+            urlFor={(format, view) => packageSecurityExportUrl(product, reference, {
+              format, view, repository, ...exportFilters,
             })}
           />
         )}
@@ -2692,72 +2672,237 @@ function ArtifactTable({ reports }: { reports: SecurityReport[] }) {
 }
 
 /**
- * The scanner's own answers about one image, as files.
+ * The SBOM, as a button that downloads it.
  *
- * # Why the SBOM is a separate button and the rest are a menu
+ * # Why it is a button and not a menu item
  *
- * Because they are not the same kind of thing to a reader. "Download SBOM" is a
- * request people arrive with - a customer asked for one, a compliance process
- * needs one - and it deserves to be readable without opening anything. The raw
- * vulnerability response, the policy verdict and the malware list are evidence
- * somebody reaches for while investigating, and a menu is the right weight for
- * them.
+ * Because it is a request people arrive with - a customer asked for one, a
+ * compliance process needs one - and a request people arrive with should be
+ * readable without opening anything. It was in a dropdown beside three raw
+ * payloads, which is the right weight for evidence somebody reaches for
+ * mid-investigation and the wrong weight for the one thing on this drawer that
+ * anybody plans to do.
  *
- * # Why an unavailable document still renders
+ * # Why it fetches rather than linking
  *
- * Disabled, with the reason on hover. "This Xray has no SBOM endpoint" and
- * "nobody has generated one yet" are different problems with different fixes,
- * and a button that simply vanished would leave a reader to conclude the
- * feature does not exist.
+ * An SBOM is generated on demand, so the first click is a request to JFrog that
+ * takes a moment. As a link that was a button that appeared to do nothing, and
+ * then - because the URL was wrong - a new page reading "no package of product
+ * X matches Y". Now it spins while it works and says so when it cannot.
  */
-function DocumentDownloads({ documents }: { documents?: SecurityDocumentRef[] }) {
-  const docs = documents ?? []
-  const sbom = docs.find((d) => d.kind === 'sbom')
-  const others = docs.filter((d) => d.kind !== 'sbom' && d.url)
+function SbomButton({ doc }: { doc?: SecurityDocumentRef }) {
+  const [running, setRunning] = useState(false)
+  const { message } = App.useApp()
 
-  if (docs.length === 0) return null
+  if (!doc?.url) return null
+
+  const run = async () => {
+    setRunning(true)
+    try {
+      await download(doc.url!)
+    } catch (err) {
+      message.error(err instanceof Error
+        ? `The SBOM could not be produced: ${err.message}`
+        : 'The SBOM could not be produced.')
+    } finally {
+      setRunning(false)
+    }
+  }
 
   return (
-    <Space size={8}>
-      {sbom?.url && (
-        <Tooltip
-          title={sbom.available
-            ? 'The component inventory as JFrog Xray produces it, CycloneDX JSON.'
-            : sbom.message
-              || 'Generated on demand. The first download asks Xray to produce it, which takes a moment.'}
-        >
-          <Button size="small" icon={<DownloadOutlined />} href={sbom.url}>
-            SBOM
-          </Button>
-        </Tooltip>
-      )}
-      {others.length > 0 && (
-        <Select
-          size="small"
-          value={undefined}
-          placeholder="Raw output"
-          style={{ minWidth: 150 }}
-          popupMatchSelectWidth={false}
-          /*
-            A select used as a menu of links. Navigating on change rather than
-            rendering anchors inside the options, because an anchor inside an
-            antd option is a click target the dropdown swallows on half the
-            rows - and a download that works four times out of five is worse
-            than one that is not offered.
-          */
-          onChange={(url: string) => { window.location.href = url }}
-          options={others.map((d) => ({
-            value: d.url as string,
-            label: `${d.label}${d.bytes ? ` · ${formatBytesShort(d.bytes)}` : ''}`,
-            disabled: !d.available,
-          }))}
-        />
-      )}
-    </Space>
+    <Tooltip
+      title={doc.available
+        ? 'The component inventory as JFrog Xray produces it, CycloneDX JSON.'
+        : doc.message
+          || 'Generated on demand. The first download asks Xray to produce it, which takes a moment.'}
+    >
+      <Button
+        size="small"
+        icon={running ? <LoadingOutlined /> : <DownloadOutlined />}
+        onClick={() => void run()}
+        disabled={running}
+      >
+        {running ? 'Preparing…' : 'Download SBOM'}
+      </Button>
+    </Tooltip>
   )
 }
 
-/** A byte count, short enough for a menu label. */
+/**
+ * The scanner's own answers about this image, IN the drawer.
+ *
+ * # What this replaced
+ *
+ * A dropdown of links that navigated away. A reader comparing what this page
+ * says with what Xray said had to leave the page to do it, land on a raw JSON
+ * body in a browser tab, and come back - which is three navigations to answer
+ * "is our reading of this right".
+ *
+ * The answer belongs where the question is. So: a tab per document the scanner
+ * produced, the body formatted and syntax-coloured in place, and a copy button,
+ * because the next thing somebody does with a raw payload is paste it into a
+ * ticket or a support case.
+ *
+ * # Why nothing is fetched until a tab is opened
+ *
+ * These are the largest things this platform stores. The section renders
+ * collapsed with the sizes on it, and one document is fetched when a reader
+ * asks for it - so opening an image costs nothing, and the drawer does not
+ * quietly pull forty megabytes to draw a heading.
+ */
+function RawOutputSection({ documents }: { documents?: SecurityDocumentRef[] }) {
+  const held = (documents ?? []).filter((d) => d.available && d.url)
+  const [kind, setKind] = useState<string | undefined>(undefined)
+  const [open, setOpen] = useState(false)
+  const { message } = App.useApp()
+
+  const selected = held.find((d) => d.kind === kind) ?? held[0]
+  const doc = useSecurityDocument(selected?.url, open && Boolean(selected))
+
+  if (held.length === 0) return null
+
+  // A body past this is one the browser stalls on rather than renders. The
+  // number is generous - a large image's vulnerability response is a few
+  // megabytes - and the reader is offered the download instead, which is what
+  // they would have wanted for a file that size anyway.
+  const tooLargeToShow = (selected?.bytes ?? 0) > 4 * 1024 * 1024
+
+  const body = doc.data ?? ''
+  const formatted = useMemo(() => {
+    if (!body) return ''
+    try {
+      return JSON.stringify(JSON.parse(body), null, 2)
+    } catch {
+      // Not JSON, or not valid JSON. Shown as it arrived rather than not at
+      // all: a scanner that answered with something unexpected is exactly when
+      // somebody needs to see what it actually said.
+      return body
+    }
+  }, [body])
+
+  return (
+    <Section
+      title={`Raw scanner output - ${held.length} ${held.length === 1 ? 'document' : 'documents'}`}
+    >
+      <Collapse
+        ghost
+        activeKey={open ? ['raw'] : []}
+        onChange={(keys) => setOpen((keys as string[]).includes('raw'))}
+        items={[{
+          key: 'raw',
+          label: (
+            <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+              {open
+                ? 'What the scanner returned for this image'
+                : 'Show what the scanner returned for this image'}
+            </Typography.Text>
+          ),
+          children: (
+            <Space direction="vertical" size={10} style={{ width: '100%' }}>
+              <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+                {held.length > 1 && (
+                  <Segmented
+                    size="small"
+                    value={selected?.kind}
+                    onChange={(v) => setKind(String(v))}
+                    options={held.map((d) => ({ value: d.kind, label: d.label }))}
+                  />
+                )}
+                <span style={{ marginInlineStart: 'auto' }} />
+                <Typography.Text type="secondary" style={{ fontSize: 11 }}>
+                  {selected?.bytes ? formatBytesShort(selected.bytes) : ''}
+                  {selected?.fetchedAt && ` · retrieved ${formatRelative(selected.fetchedAt)}`}
+                </Typography.Text>
+                <Button
+                  size="small"
+                  icon={<CopyOutlined />}
+                  disabled={!formatted}
+                  onClick={() => {
+                    // The FORMATTED text, which is what is on screen. Copying
+                    // the forty-thousand-character single line the scanner
+                    // actually sent would paste something nobody can read into
+                    // the ticket this is going into.
+                    void navigator.clipboard?.writeText(formatted)
+                    message.success('Copied')
+                  }}
+                >
+                  Copy
+                </Button>
+                {selected?.url && (
+                  <DocumentDownloadButton url={selected.url} label={selected.label} />
+                )}
+              </div>
+
+              {tooLargeToShow
+                ? (
+                  <Alert
+                    type="info"
+                    showIcon
+                    message="This document is too large to show here"
+                    description={
+                      `It is ${formatBytesShort(selected?.bytes ?? 0)}, which the browser would `
+                      + 'stall on. Download it and open it in an editor.'
+                    }
+                  />
+                )
+                : doc.isLoading
+                  ? <Skeleton active paragraph={{ rows: 6 }} />
+                  : doc.isError
+                    ? (
+                      <Alert
+                        type="warning"
+                        showIcon
+                        message="That document could not be read"
+                        description={doc.error instanceof Error ? doc.error.message : undefined}
+                      />
+                    )
+                    : <CodeBlock text={formatted} grammar="json" maxHeight="46vh" />}
+            </Space>
+          ),
+        }]}
+      />
+    </Section>
+  )
+}
+
+/**
+ * Saves one document, through the same path every other download here takes.
+ *
+ * An anchor would work - the response is an attachment - but it would be the
+ * one download on this page with no loading state and no way to report a
+ * failure, and a reader who clicked it and saw nothing would have no idea
+ * whether it was slow or broken.
+ */
+function DocumentDownloadButton({ url, label }: { url: string; label: string }) {
+  const [running, setRunning] = useState(false)
+  const { message } = App.useApp()
+
+  const run = async () => {
+    setRunning(true)
+    try {
+      await download(url)
+    } catch (err) {
+      message.error(err instanceof Error
+        ? `${label} could not be downloaded: ${err.message}`
+        : `${label} could not be downloaded.`)
+    } finally {
+      setRunning(false)
+    }
+  }
+
+  return (
+    <Button
+      size="small"
+      icon={running ? <LoadingOutlined /> : <DownloadOutlined />}
+      onClick={() => void run()}
+      disabled={running}
+    >
+      Download
+    </Button>
+  )
+}
+
+/** A byte count, short enough for a label. */
 function formatBytesShort(bytes: number): string {
   if (bytes < 1024) return `${bytes} B`
   if (bytes < 1024 * 1024) return `${Math.round(bytes / 1024)} kB`
@@ -2818,15 +2963,12 @@ function ImageDetailDrawer({ report, onClose }: {
       extra={
         <Space size={8}>
           {/*
-            The downloads sit BESIDE the link out, not inside the table.
-
-            A reader who has opened one image is at the point of asking two
-            questions: what does the scanner's own page say, and can I have the
-            scanner's own answer as a file. Those belong next to each other, and
-            putting the second in a row menu would hide the SBOM behind a
-            hover on a table nobody hovers.
+            One button, beside the link out. The raw payloads used to be a
+            second dropdown here; they are now a section in the drawer itself,
+            because a reader comparing what this page says with what the scanner
+            said should not have to leave the page to do it.
           */}
-          {report && <DocumentDownloads documents={report.documents} />}
+          <SbomButton doc={(report?.documents ?? []).find((d) => d.kind === 'sbom')} />
           {report?.scanUrl && (
             <Button size="small" icon={<ExportOutlined />} href={report.scanUrl} target="_blank" rel="noreferrer">
               JFrog Xray
@@ -2963,6 +3105,8 @@ function ImageDetailDrawer({ report, onClose }: {
               ]}
             />
           </Section>
+
+          <RawOutputSection documents={report.documents} />
         </Space>
       )}
     </Drawer>

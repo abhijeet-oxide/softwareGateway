@@ -136,11 +136,20 @@ func (p *XrayProvider) Scan(ctx context.Context, refs []security.ArtifactRef, op
 
 	sort.Ints(queryable)
 	security.ReportStage(opts.Progress, security.StageFetching, 0, len(queryable))
+
+	// What is about to happen, in a sentence, at INFO.
+	//
+	// This was written at warning level, so a sync doing exactly what it should
+	// opened its transcript with an amber line - and a reader who learns that
+	// the normal case looks like a problem stops reading the ones that are.
+	opening := fmt.Sprintf("Asking JFrog Xray about %d images, %d per request.",
+		len(queryable), p.pace.Batch())
 	if skipped := len(refs) - len(queryable); skipped > 0 {
-		security.ReportNote(opts.Progress, fmt.Sprintf(
-			"Requesting scan results for %d images. Skipping %d artifacts that are not container images.",
-			len(queryable), skipped))
+		opening += fmt.Sprintf(
+			" %d other artifacts in this release are charts, signatures or files, which Xray does not scan.",
+			skipped)
 	}
+	security.ReportInfo(opts.Progress, opening)
 
 	var (
 		mu       sync.Mutex
@@ -187,6 +196,16 @@ func (p *XrayProvider) Scan(ctx context.Context, refs []security.ArtifactRef, op
 		if failed > 0 {
 			security.ReportStage(opts.Progress, security.StageFailing, failed, len(queryable))
 		}
+
+		// One line in the transcript that MOVES, rather than nothing at all.
+		//
+		// The bar said "fetching 96 of 157" and the log said nothing between
+		// "sync started" and whatever went wrong twelve minutes later, so a
+		// reader opening the log mid-sync could not tell a slow sync from a
+		// stuck one. Recorded as a replacement, so thirty updates are one line
+		// carrying the current number rather than one line saying "(x30)".
+		security.ReportProgress(opts.Progress, fmt.Sprintf(
+			"Retrieved scan results for %d of %d images.", done, len(queryable)))
 	}
 
 	queue := newBatchQueue(queryable)
@@ -225,10 +244,13 @@ func (p *XrayProvider) Scan(ctx context.Context, refs []security.ArtifactRef, op
 		// Said once, at the end, and only when the pacer actually had to move.
 		// This is the line that answers "why did that take eleven minutes" -
 		// and without it the only evidence is a wall clock and a shrug.
-		security.ReportNote(opts.Progress, fmt.Sprintf(
-			"JFrog Xray was slow, so requests were made smaller: %d images per request "+
-				"and %d requests at a time by the end. %d requests in total.",
+		security.ReportInfo(opts.Progress, fmt.Sprintf(
+			"JFrog Xray was slow for this release. Requests settled at %d images each, "+
+				"%d at a time, and it took %d requests in total.",
 			batch, inFlight, requests))
+	} else {
+		security.ReportInfo(opts.Progress, fmt.Sprintf(
+			"JFrog Xray answered %d requests without slowing down.", requests))
 	}
 
 	p.separateMissingFromUnindexed(ctx, reports, opts.Progress)
@@ -368,13 +390,19 @@ func (p *XrayProvider) separateMissingFromUnindexed(
 
 	switch {
 	case failed:
-		security.ReportNote(progress,
+		security.ReportWarning(progress,
 			"Artifactory did not say which of the unscanned images it holds, "+
 				"so none of them are reported as missing.")
 	case missing > 0:
-		security.ReportNote(progress, fmt.Sprintf(
-			"%d images are not in the JFrog repository. They have not been transferred there yet.",
-			missing))
+		// A warning, and the one worth having: the fix is a TRANSFER, owned by
+		// somebody other than whoever owns scanning.
+		security.ReportWarning(progress, fmt.Sprintf(
+			"%d images are not in the JFrog repository yet, so there is nothing there to scan. "+
+				"Transfer this release, then sync again.", missing))
+	default:
+		security.ReportInfo(progress, fmt.Sprintf(
+			"Checked %d unscanned images against the JFrog repository: all of them are there, "+
+				"waiting to be indexed.", len(pending)))
 	}
 }
 
@@ -496,9 +524,18 @@ func (p *XrayProvider) fetchBatch(
 	}
 
 	half := len(batch) / 2
-	security.ReportNote(progress, fmt.Sprintf(
-		"JFrog Xray timed out on %d artifacts. Retrying as two smaller requests, "+
-			"and asking for %d at a time from here on.", len(batch), p.pace.Batch()))
+	// What this MEANS, not how many retries it took.
+	//
+	// It said "JFrog Xray timed out on 13 artifacts. Retrying as two smaller
+	// requests", and on a struggling scanner that arrived twenty-four times.
+	// Twenty-four tellings of one situation, each naming an internal mechanism,
+	// none of them saying the only thing a reader wants: is this sync going to
+	// finish, and is anything being lost? Nothing is - the images are re-asked
+	// about - and the honest headline is that the requests got smaller.
+	security.ReportWarningUpdate(progress, fmt.Sprintf(
+		"JFrog Xray is answering slowly, so requests are being made smaller: "+
+			"%d images each, %d at a time. Nothing is lost - the images are asked about again.",
+		p.pace.Batch(), p.pace.InFlight()))
 	return batch[:half], batch[half:]
 }
 

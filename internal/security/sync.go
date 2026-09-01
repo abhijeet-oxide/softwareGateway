@@ -51,10 +51,16 @@ type SyncLogEntry struct {
 }
 
 // Log levels.
+//
+// Aliases of the constants in provider.go, which is where a provider reaches
+// them from. Four rather than three: a transcript whose only positive outcome
+// is the absence of red cannot say "this worked", and "Sync finished. 157 of
+// 157 images scanned" is the line a reader is looking for.
 const (
-	LogInfo    = "info"
-	LogWarning = "warning"
-	LogError   = "error"
+	LogInfo    = LevelInfo
+	LogSuccess = LevelSuccess
+	LogWarning = LevelWarning
+	LogError   = LevelError
 )
 
 // maxLogEntries bounds one sync's transcript. Generous enough to hold a run's
@@ -286,14 +292,22 @@ func (p *SyncProgress) Stage(name string, done, total int) {
 	p.stages[name] = cur
 }
 
-// Note implements Progress.
+// Note implements Progress: a warning that is not a position.
+func (p *SyncProgress) Note(s string) { p.Record(LogWarning, false, s) }
+
+// Record implements Detailed.
 //
 // A note that re-tells one already here REPLACES it and moves to the end,
 // rather than being appended beside it. See noteShape: the sentence that keeps
 // arriving with a smaller number in it is one situation, and stacking its
 // tellings turns a scanner backing off into what reads as a growing list of
 // failures.
-func (p *SyncProgress) Note(s string) {
+//
+// `replace` goes further and suppresses the COUNT as well, for a line whose
+// number is the point. "Retrieved scan results for 96 of 157 images (x30)" puts
+// a repeat count beside a figure that was never repeated; it is one line whose
+// value moved thirty times.
+func (p *SyncProgress) Record(level string, replace bool, s string) {
 	s = strings.TrimSpace(s)
 	if s == "" {
 		return
@@ -301,32 +315,43 @@ func (p *SyncProgress) Note(s string) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 
-	shape := noteShape(s)
-	for i, existing := range p.notes {
-		if existing.shape != shape {
-			continue
+	// The live notes panel carries what is going WRONG. A progress line belongs
+	// in the transcript and not beside the bar, which already says 96 of 157.
+	if level != LogInfo && level != LogSuccess {
+		shape := noteShape(s)
+		replaced := false
+		for i, existing := range p.notes {
+			if existing.shape != shape {
+				continue
+			}
+			count := existing.count + 1
+			if replace {
+				count = existing.count
+			}
+			note := progressNote{shape: shape, text: s, count: count}
+			p.notes = append(append(p.notes[:i:i], p.notes[i+1:]...), note)
+			replaced = true
+			break
 		}
-		note := progressNote{shape: shape, text: s, count: existing.count + 1}
-		p.notes = append(append(p.notes[:i:i], p.notes[i+1:]...), note)
-		p.appendLocked(LogWarning, s)
-		return
+		if !replaced {
+			if len(p.notes) >= 20 {
+				p.notes = p.notes[1:]
+			}
+			p.notes = append(p.notes, progressNote{shape: shape, text: s, count: 1})
+		}
 	}
 
-	if len(p.notes) >= 20 {
-		p.notes = p.notes[1:]
-	}
-	p.notes = append(p.notes, progressNote{shape: shape, text: s, count: 1})
-	p.appendLocked(LogWarning, s)
+	p.appendLocked(level, s, replace)
 }
 
 // Log adds one line to the transcript.
 func (p *SyncProgress) Log(level, message string) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	p.appendLocked(level, message)
+	p.appendLocked(level, message, false)
 }
 
-func (p *SyncProgress) appendLocked(level, message string) {
+func (p *SyncProgress) appendLocked(level, message string, replace bool) {
 	message = strings.TrimSpace(message)
 	if message == "" {
 		return
@@ -340,7 +365,9 @@ func (p *SyncProgress) appendLocked(level, message string) {
 	// and pushed out the ones that said what the sync was doing. The latest
 	// telling wins, because the number in it is the current one.
 	if n := len(p.log); n > 0 && p.log[n-1].Level == level && noteShape(p.log[n-1].Message) == noteShape(message) {
-		p.log[n-1].Repeat++
+		if !replace {
+			p.log[n-1].Repeat++
+		}
 		p.log[n-1].Message = message
 		p.log[n-1].At = time.Now().UTC()
 		return
@@ -517,8 +544,19 @@ func (s *Syncer) run(
 	go s.beat(ctx, cancel, req.PackageID)
 
 	progress.Log(LogInfo, fmt.Sprintf(
-		"Sync started. %d artifacts, scanner %s, repository %s.",
-		len(req.Artifacts), providerLabel(req.Scope.Provider), req.Scope.Repository))
+		"Sync started for %s. %d artifacts to consider, using %s against repository %s.",
+		labelOr(req.Label, "this release"), len(req.Artifacts),
+		providerLabel(req.Scope.Provider), req.Scope.Repository))
+	if len(s.documents) > 0 {
+		// What ELSE this sync is going to ask for, because each named kind is a
+		// request per image and a reader watching a slow sync deserves to know
+		// what the requests are for.
+		names := make([]string, 0, len(s.documents))
+		for _, kind := range s.documents {
+			names = append(names, strings.ToLower(kind.Label()))
+		}
+		progress.Log(LogInfo, "Also retrieving "+strings.Join(names, " and ")+" for each scanned image.")
+	}
 
 	res, err := s.service.Posture(ctx, Request{
 		Scope:     req.Scope,
@@ -607,13 +645,27 @@ func (s *Syncer) run(
 
 	ReportStage(progress, StageCorrelating, len(res.Posture.Reports), len(res.Posture.Reports))
 	cov := res.Posture.Coverage
-	level := LogInfo
+
+	// The closing line, and it is allowed to say the work SUCCEEDED.
+	//
+	// A transcript whose best outcome is the absence of red cannot tell a
+	// reader that a sync did what it was asked; "Sync finished" in the same
+	// grey as every other line is the difference between a log somebody trusts
+	// and one they scroll to the bottom of looking for something worse.
+	level := LogSuccess
 	if !cov.Complete() {
 		level = LogWarning
 	}
 	progress.Log(level, fmt.Sprintf(
-		"Sync finished. %d of %d images scanned, %d vulnerabilities (%d distinct).",
-		cov.Scanned, cov.Scannable(), res.Posture.Counts.Total, res.Posture.UniqueCounts.Total))
+		"Sync finished. %d of %d images scanned, %d vulnerabilities across %d distinct advisories.",
+		cov.Scanned, cov.Scannable(), res.Posture.Counts.Total, res.Posture.UniqueCVEs))
+	if malware := countMalware(res.Posture.Reports); malware > 0 {
+		// Never buried in the totals. Everything else in this transcript is
+		// something to schedule; this is something to stop.
+		progress.Log(LogError, fmt.Sprintf(
+			"%d malicious %s found in this release.",
+			malware, plural(malware, "package", "packages")))
+	}
 
 	writeCtx, done := writeContext(ctx)
 	defer done()
@@ -745,6 +797,30 @@ func logRank(level string) int {
 	default:
 		return 0
 	}
+}
+
+// countMalware is how many malicious packages a release turned out to hold.
+func countMalware(reports []Report) int {
+	n := 0
+	for _, r := range reports {
+		n += len(r.Malware)
+	}
+	return n
+}
+
+func plural(n int, one, many string) string {
+	if n == 1 {
+		return one
+	}
+	return many
+}
+
+// labelOr names the release, falling back where the caller gave no label.
+func labelOr(label, fallback string) string {
+	if strings.TrimSpace(label) == "" {
+		return fallback
+	}
+	return label
 }
 
 // providerLabel is the scanner's name as a person writes it.

@@ -41,6 +41,51 @@ Home · Products · Software · Downloads · Repositories · Activity · Reports
 
 with Software detail and Download reached from them. The lifecycle those pages exist to make obvious is **Discover → Review → Verify → Download & Replicate → Compare → Promote**.
 
+### 3.0 Choosing happens where the data is
+
+> **Decision - a comparison is selected on the Software listing, not on a page of its own.**
+>
+> Comparing two releases used to open a page whose entire content was a form: a
+> product select, a two-position mode switch, two release dropdowns, a swap
+> button and sometimes a fourth select for the source. Six controls to express
+> "these two".
+>
+> The two dropdowns were the worst of it. A list of two hundred releases,
+> rendered as a name and a version in a box 320 pixels wide, with no status, no
+> date, no repository and no vulnerability counts - so everything a person needs
+> in order to DECIDE which two releases to compare was on the listing they had
+> just left, and none of it was where the decision was made.
+>
+> So the listing IS the selection surface. "Compare packages" turns it into one
+> in place: the title becomes *Select two packages to compare*, a numbered pick
+> column appears, and a bar above the table states what has been chosen. The
+> reader keeps the search box, the status filter, the product filter, the
+> sorting and every column they were already reading.
+>
+> *Three rules that make it work, and each was a failure first:*
+>
+> - **The selection lives in the URL.** It has to survive the search box, the
+>   product filter and the round trip to the report - all of which destroy
+>   component state. "Pick one, search for the other, lose the first" is the
+>   exact thing that makes a two-step selection feel broken.
+> - **The names resolve against every loaded release, not the filtered ones.**
+>   Missing this reintroduced the same failure one layer up: the selection was
+>   intact and the bar said *select the first package*, which is worse than
+>   losing it.
+> - **A change is a function of the LIVE URL, not of the last render.** Two
+>   ticks 400 ms apart lost one; the second click decided against a selection
+>   that had already moved. React Router's functional setter does not fix this -
+>   it passes the render's own params.
+>
+> The report keeps a route of its own, because it is a page-sized answer somebody
+> waits minutes for and sends to a colleague. What it no longer keeps is any way
+> to choose: arriving there without a pair returns the reader to the listing.
+>
+> *The one form that survives* compares a release across two LOCATIONS - "did
+> this arrive intact" - which is a question about one release rather than two
+> and cannot be expressed by ticking two rows. It is reached from that release's
+> own row menu, and is two selects about a release already named.
+
 ### 3.1 The UI speaks the user's language, not the engine's
 
 > **Decision - the interface uses product vocabulary, and the domain model stays behind the API.**

@@ -875,7 +875,7 @@ Three `depguard` rules, added to `.golangci.yml` beside the existing ones
 |---|---|---|
 | `compliance-imports-no-api` | `internal/compliance/**` → `internal/api` | The domain rule everything else follows |
 | `cel-confined-to-evaluator` | everything except `internal/compliance/cel/**` → `cel.dev/cel-go/**` | One package owns the expression language. **Delete `internal/compliance/cel` and the Go baseline still builds and still checks** - the same mechanical test that keeps the vendor plugins optional (`internal/vendors/classify.go`) |
-| `no-opa` | anywhere → `github.com/open-policy-agent/opa/**` | 71 modules for a second expression language. §19 decision 5 |
+| `no-opa` | anywhere → `github.com/open-policy-agent/opa/**` | 18 linked modules and 59 in the module graph, for a second expression language. §19 decision 5 |
 | `builtin-imports-no-render` | `internal/compliance/builtin/**` → `internal/compliance/render` | A check judges parsed resources. One that shelled out to helm for itself would be unreproducible and untestable without the binary |
 
 ## 16. Failure matrix
@@ -1016,7 +1016,7 @@ Consolidated; each is argued where it is made.
 | 2 | The `helm` binary, not the Helm Go SDK | `helm.sh/helm/v3` in-process | §5.1 |
 | 3 | Determinacy by differential render | Static template analysis; assuming defaults | §6 |
 | 4 | Passes derived from a declared `appliesTo` | Policies emitting their own passes | [compliance/00](../compliance/00-compliance-model.md) §5 |
-| 5 | Checks are YAML with CEL expressions; Go only where the platform must be consulted | Embedding OPA/Rego: 71 new modules against cel-go's 1, an evaluator with no termination guarantee, and a second language | [compliance/02](../compliance/02-authoring-checks.md) §7 |
+| 5 | Checks are YAML with CEL expressions; Go only where the platform must be consulted | Embedding OPA/Rego: +18 linked modules against cel-go's +4 (+59 against +3 in the module graph), an evaluator with no termination guarantee, and a second language | [compliance/02](../compliance/02-authoring-checks.md) §7 |
 | 6 | Severity on the check, outcome on the result | One conflated field, as the samples have | [compliance/00](../compliance/00-compliance-model.md) Rule 3 |
 | 7 | The engine binds one subject at a time; checks never loop | Checks iterating the release themselves, as the samples do | [compliance/02](../compliance/02-authoring-checks.md) §2 |
 | 8 | Waivers in Git, never through the API | A waiver UI | [compliance/00](../compliance/00-compliance-model.md) §7 |

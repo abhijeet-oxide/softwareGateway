@@ -318,14 +318,24 @@ Rules 3 and 4 are what separate this from a policy directory that accumulates.
 >
 > *Why not:* three reasons, in order of weight.
 >
-> **Dependency cost, measured.** Embedding OPA adds **71 modules** to this
-> binary - including a WebAssembly runtime (`wazero`), an embedded key-value
-> store (`badger` + `ristretto`), `secp256k1`, and two Levenshtein
-> implementations. `cel-go` adds **one**; its other requirements are already in
-> the module graph via gRPC and OpenTelemetry. A tool whose purpose is telling
-> people what is inside their software does not quietly triple its own
-> dependency surface - the same argument `internal/export` already makes for
-> writing XLSX by hand.
+> **Dependency cost, measured** against this repository at the commit that
+> introduced compliance, by two counts that answer different questions:
+>
+> | | linked into the binary | in the module graph |
+> |---|---|---|
+> | `cel.dev/cel-go` | **+4** modules | **+3** |
+> | `github.com/open-policy-agent/opa/rego` | **+18** modules | **+59** |
+>
+> The first column is `go list -deps` - what is actually compiled. The second is
+> `go list -m all` - what a supply-chain audit of this repository has to
+> enumerate, and where OPA brings a WebAssembly runtime (`wazero`), an embedded
+> key-value store (`badger` + `ristretto`), `secp256k1`, `blake256` and two
+> separate Levenshtein implementations. cel-go's four are itself, its expression
+> protos, the ANTLR runtime and `golang.org/x/exp`.
+>
+> A tool whose purpose is telling people what is inside their software does not
+> quietly add a wasm runtime to itself - the same argument `internal/export`
+> already makes for writing XLSX by hand.
 >
 > **Robustness.** CEL is non-Turing-complete, so bounded evaluation is a
 > guarantee rather than a timeout (§4.3). Errors surface when the pack loads,

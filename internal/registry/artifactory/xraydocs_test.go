@@ -15,13 +15,11 @@ import (
 // Xray answered "one or more parameters are missing" for every SBOM, and this
 // is the request that made it stop.
 //
-// Two things it insists on, both of which the old body got wrong:
+// It insists on an Xray-qualified path and a format pair.
 //
-//   - a format switch is a PAIR. `cyclonedx: true` with no `cyclonedx_format`
-//     asks for a document in no particular encoding, and it refuses.
-//   - the artifact has to be identified by something that exists. It was sent a
-//     `component_name` of "docker://" plus an Artifactory PATH, which named no
-//     image in any repository.
+//   - a format switch is a PAIR. `spdx: true` with no `spdx_format` asks for a
+//     document in no particular encoding, and it refuses.
+//   - the artifact path must include Xray's required `default/` prefix.
 func TestExportDetailsSendsAnIdentifierAndAFormat(t *testing.T) {
 	var got map[string]any
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -50,20 +48,21 @@ func TestExportDetailsSendsAnIdentifierAndAFormat(t *testing.T) {
 		t.Fatalf("ExportDetails: %v", err)
 	}
 
-	if got["path"] != path {
-		t.Errorf("path = %v, want the artifact's full Artifactory path %q", got["path"], path)
+	if got["path"] != "default/"+path {
+		t.Errorf("path = %v, want the Xray-qualified artifact path %q", got["path"], "default/"+path)
 	}
-	// The old body's identifier. It named nothing, and sending it alongside a
-	// good one is how a request comes back ambiguous.
-	if name, ok := got["component_name"]; ok {
-		t.Errorf("component_name = %v: a path is not a docker component name", name)
+	if got["component_name"] != "orbs/cfx-amf:25.10.2" {
+		t.Errorf("component_name = %v, want the Docker image and tag", got["component_name"])
 	}
-	if got["cyclonedx"] != true {
-		t.Errorf("cyclonedx = %v, want true", got["cyclonedx"])
+	if got["spdx"] != true {
+		t.Errorf("spdx = %v, want true", got["spdx"])
 	}
-	if got["cyclonedx_format"] != "json" {
-		t.Errorf("cyclonedx_format = %v, want json - the format switch is a pair",
-			got["cyclonedx_format"])
+	if got["spdx_format"] != "json" {
+		t.Errorf("spdx_format = %v, want json - the format switch is a pair",
+			got["spdx_format"])
+	}
+	if got["exclude_unknown"] != true {
+		t.Errorf("exclude_unknown = %v, want true", got["exclude_unknown"])
 	}
 }
 

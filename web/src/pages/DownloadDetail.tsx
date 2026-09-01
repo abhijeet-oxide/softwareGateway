@@ -819,7 +819,10 @@ export default function DownloadDetail() {
               title={promotionTitle(t?.strategy, t?.targetName, mirrored)}
             >
               <Space direction="vertical" size={12} style={{ width: '100%' }}>
-                <RepoLink url={t?.target ? `https://${t.target}` : undefined} label={t?.targetName} />
+                <RepoLink
+                  url={t?.target ? `https://${t.target}` : undefined}
+                  label={[t?.targetName, repositoryOf(t?.target)].filter(Boolean).join('/')}
+                />
 
                 {/*
                   ONE BAR, over WHAT IS AT THE DESTINATION - bytes we have

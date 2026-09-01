@@ -274,30 +274,23 @@ func describeDocumentFailure(what string, err error) string {
 
 // exportDetailsRequest asks for one artifact's inventory.
 //
-// CycloneDX rather than SPDX, and JSON rather than XML, because that is what
-// the tools people feed an SBOM to read first.
+// SPDX JSON, matching the JFrog UI export and the proven standalone exporter.
 //
-// # The two fields that were wrong, and what Xray said about them
+// # Required fields
 //
-// It answered "one or more parameters are missing" for every SBOM, and it was
-// right twice over.
+// This deployment answers "one or more parameters are missing" unless every
+// one of these identifiers and format fields is supplied.
 //
-//	cyclonedx_format  A format switch is a PAIR in this API: `cyclonedx: true`
-//	                  with no `cyclonedx_format` is a request for a document in
-//	                  no particular encoding, and Xray refuses it. Same for spdx.
+//	spdx_format       A format switch is a PAIR with `spdx: true`; otherwise
+//	                  Xray has no requested encoding.
 //
-//	path              The artifact was identified by `component_name`, built as
-//	                  "docker://" plus an Artifactory PATH - which produced
-//	                  `docker://orbs/cfx-5000/25.7.2131/manifest.json`. A docker
-//	                  component in Xray is `docker://<image>:<tag>`; that string
-//	                  is neither, and no image has that name. `path` is the
-//	                  addressing the violations call on the next endpoint along
-//	                  already uses successfully against the same deployment, and
-//	                  it is the one identifier this platform can always build
-//	                  correctly, because it is how Artifactory stores the thing.
+//	path              The full Xray artifact path, prefixed with `default/`.
+//	component_name    The Docker image and tag as `<image>:<tag>`.
 type exportDetailsRequest struct {
-	// Path is the artifact's full Artifactory path, repository key included.
+	// Path is Xray's full artifact path, including its required default prefix.
 	Path string `json:"path"`
+	// ComponentName identifies the Docker image as <image>:<tag>.
+	ComponentName string `json:"component_name"`
 	// PackageType stays alongside it: some versions use it to choose how to
 	// read the path, and it is free to send.
 	PackageType string `json:"package_type,omitempty"`
@@ -307,12 +300,13 @@ type exportDetailsRequest struct {
 	// how a fix becomes an experiment.
 	OutputFormat string `json:"output_format,omitempty"`
 
-	CycloneDX       bool   `json:"cyclonedx"`
-	CycloneDXFormat string `json:"cyclonedx_format,omitempty"`
+	SPDX       bool   `json:"spdx"`
+	SPDXFormat string `json:"spdx_format,omitempty"`
 
-	Violations bool `json:"violations"`
-	License    bool `json:"license"`
-	Security   bool `json:"security"`
+	Violations     bool `json:"violations"`
+	License        bool `json:"license"`
+	Security       bool `json:"security"`
+	ExcludeUnknown bool `json:"exclude_unknown"`
 }
 
 // ExportDetails asks Xray for one artifact's component inventory.
@@ -326,14 +320,16 @@ type exportDetailsRequest struct {
 // handled too: the body is sniffed for the ZIP magic rather than assumed.
 func (c *XrayClient) ExportDetails(ctx context.Context, path string) ([]byte, string, error) {
 	req := exportDetailsRequest{
-		Path:            path,
-		PackageType:     "docker",
-		OutputFormat:    "json",
-		CycloneDX:       true,
-		CycloneDXFormat: "json",
-		Violations:      false,
-		License:         true,
-		Security:        true,
+		Path:           "default/" + strings.TrimPrefix(path, "/"),
+		ComponentName:  componentNameForPath(path, c.repoKey),
+		PackageType:    "docker",
+		OutputFormat:   "json",
+		SPDX:           true,
+		SPDXFormat:     "json",
+		Violations:     true,
+		License:        true,
+		Security:       true,
+		ExcludeUnknown: true,
 	}
 	body, contentType, err := c.raw(ctx, http.MethodPost, exportDetailsPath, req)
 	if err != nil {
@@ -346,6 +342,16 @@ func (c *XrayClient) ExportDetails(ctx context.Context, path string) ([]byte, st
 		contentType = "application/json"
 	}
 	return body, contentType, nil
+}
+
+func componentNameForPath(path, repositoryKey string) string {
+	imageTag := strings.TrimPrefix(strings.TrimPrefix(path, repositoryKey+"/"), "/")
+	imageTag = strings.TrimSuffix(imageTag, "/manifest.json")
+	lastSlash := strings.LastIndex(imageTag, "/")
+	if lastSlash < 0 {
+		return imageTag
+	}
+	return imageTag[:lastSlash] + ":" + imageTag[lastSlash+1:]
 }
 
 // firstZipEntry pulls the largest file out of a ZIP body.

@@ -15,7 +15,7 @@ import {
 import { useCan, useIdentity } from '../auth/permissions'
 import {
   deriveStatus, downloadedAt, failureReason, isLive, matches, packageReference, promotableTargets,
-  promotedAt, repositoryUrl, titleCase, verification, version,
+  promotedAt, repositoryOf, repositoryUrl, titleCase, verification, version,
 } from '../domain/derive'
 import { bytes, formatBytes, formatCount, formatDuration } from '../domain/format'
 import { NA, Value } from '../components/value'
@@ -819,12 +819,10 @@ function DownloadsTab({ transfers, onDownload, downloadHref, mayOperate }: {
           {
             title: 'Destination',
             render: (_, t) => (
-              <Space direction="vertical" size={0}>
-                <Typography.Text style={{ fontFamily: mono }}>{t.target}</Typography.Text>
-                {t.repository && t.repository !== t.target && (
-                  <RepoLink url={`https://${t.repository}`} label={t.repository} />
-                )}
-              </Space>
+              <RepoLink
+                url={t.repository ? `https://${t.repository}` : undefined}
+                label={t.repository ? `${t.target}/${repositoryOf(t.repository)}` : t.target}
+              />
             ),
           },
           {

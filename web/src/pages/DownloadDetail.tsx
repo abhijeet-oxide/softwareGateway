@@ -1223,7 +1223,8 @@ export default function DownloadDetail() {
         the useful part - and it was being wrapped into a half-width column
         three words at a time.
       */}
-            {hasFailures ? (
+      {hasFailures ? (
+        <div style={{ marginTop: 16 }}>
         <Card
           title="Failures"
           styles={{ header: { color: c.danger } }}
@@ -1280,6 +1281,7 @@ export default function DownloadDetail() {
             ]}
           />
         </Card>
+        </div>
       ) : null}
 
       {t && (

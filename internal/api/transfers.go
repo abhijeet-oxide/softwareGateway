@@ -181,7 +181,21 @@ func (s *Server) handleListTransfers(w http.ResponseWriter, r *http.Request) {
 		rows = rows[:pageSize]
 	}
 	for _, t := range rows {
-		out.Transfers = append(out.Transfers, transferDTO(t, !summary))
+		dto := transferDTO(t, !summary)
+		// The progress bar in the ongoing-download list must use the same
+		// distinct-content account as the transfer detail page. The legacy job
+		// counters include mounts to multiple repositories, which can make the
+		// list percentage disagree with the detail percentage.
+		if !summary {
+			if c, err := s.deps.Packages.TransferContentBytes(r.Context(), t.ID); err == nil {
+				if c.Total > 0 {
+					dto.Progress.ContentBytes = int64String(c.Total)
+				}
+				dto.Progress.ContentMovedBytes = int64String(c.Moved)
+				dto.Progress.ContentPresentBytes = int64String(c.Present)
+			}
+		}
+		out.Transfers = append(out.Transfers, dto)
 	}
 	WriteJSON(w, r, http.StatusOK, out)
 }

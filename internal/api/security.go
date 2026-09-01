@@ -203,7 +203,20 @@ func (s *Server) packageSecurity(
 			"package", pkg.ID, "error", err)
 	}
 
-	if detail && row.Synced() {
+	// Served DURING a sync as well as after one.
+	//
+	// This used to require a settled row, on the premise that a sync cleared
+	// the per-artifact rows before refilling them - so mid-sync there was
+	// nothing to send. That premise is gone: a sync overwrites each artifact as
+	// its answer arrives and never deletes first, so what is stored throughout
+	// is the previous sync's complete result.
+	//
+	// Withholding it left a reader who pressed Sync looking at three spinners
+	// and an empty table for as long as the scanner took, on a release whose
+	// findings were sitting in the database the whole time. The last answer is
+	// the best answer until there is a better one; the interface says how old
+	// it is and that a refresh is running.
+	if detail && (row.Synced() || row.State == store.PackageSecuritySyncing) {
 		refs := s.securityArtifactsFor(productName, pkg, ctx)
 		reports, err := s.deps.SecurityStore.ReportsFor(ctx, target.Scope, refs, security.WithProse)
 		if err != nil {

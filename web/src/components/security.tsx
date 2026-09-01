@@ -843,12 +843,52 @@ export function SecurityProgressPanel({ sync, onStop, stopping }: {
       */}
       {stages.length > 0 && (
       <div>
-        <Progress
-          percent={percent}
-          status="active"
-          showInfo={false}
-          strokeColor={c.brand}
-        />
+        {/*
+          A TRAVELLING stripe until the first batch lands, a real bar after.
+
+          A determinate bar at zero is a claim about position, and the claim it
+          makes is "nothing has happened". The first request to a scanner about
+          fifty images takes as long as it takes - a minute against a busy Xray
+          - and for that whole minute the bar sat at 0%, which is what a stuck
+          job looks like. It was not stuck; there was simply nothing to report
+          a position for yet. The stripe says "working" without saying where,
+          which is the honest shape for work whose extent is known and whose
+          progress is not.
+        */}
+        {done === 0
+          ? (
+            <div
+              role="progressbar"
+              aria-label="Retrieving scan results"
+              aria-busy="true"
+              style={{
+                height: 8,
+                borderRadius: 4,
+                background: c.brandSoft,
+                overflow: 'hidden',
+                position: 'relative',
+              }}
+            >
+              <div
+                style={{
+                  position: 'absolute',
+                  inset: 0,
+                  width: '30%',
+                  borderRadius: 4,
+                  background: c.brand,
+                  animation: 'slm-working 1.4s ease-in-out infinite',
+                }}
+              />
+            </div>
+          )
+          : (
+            <Progress
+              percent={percent}
+              status="active"
+              showInfo={false}
+              strokeColor={c.brand}
+            />
+          )}
         {/*
           SEPARATED, because these are four unrelated facts and whitespace alone
           did not say so: "Preparing" ran into "JFrog Xray · cfx-jfrog-lab" as

@@ -1091,3 +1091,54 @@ func TestFreshnessTreatsAnSBOMAsImmutable(t *testing.T) {
 		t.Errorf("StaleAt for an SBOM = %v, want the zero time", got)
 	}
 }
+
+// A release keeps its findings on screen while it is being re-synced.
+//
+// The stored rows are the previous sync's complete answer and a sync overwrites
+// them one artifact at a time rather than clearing them first, so there is
+// always something true to show. Withholding it until the run settled left
+// somebody who pressed Sync watching spinners for ten minutes over a database
+// that had their findings in it the whole time.
+func TestPackageSecurityServesStoredResultsDuringASync(t *testing.T) {
+	h := newSecurityHarness(t)
+	id := h.seedPackage("25.7.2131", digestA)
+	h.syncer.reports[digestA] = scannedReport(
+		apiFinding("CVE-2024-3094", security.SeverityCritical, "xz-utils", true),
+		apiFinding("CVE-2024-6387", security.SeverityHigh, "openssh", true),
+	)
+	h.post("/api/v1/products/vendor-a/packages/25.7.2131:syncSecurity", `{}`, nil)
+
+	var settled v1.PackageSecurityResponse
+	h.get("/api/v1/products/vendor-a/packages/25.7.2131/security?detail=true", &settled)
+	if len(settled.Reports) == 0 || settled.Counts.Total != 2 {
+		t.Fatalf("premise failed: %d reports, %d findings", len(settled.Reports), settled.Counts.Total)
+	}
+
+	// Put the release back into a running sync, leaving every stored row alone -
+	// which is what a real sync in flight looks like now.
+	h.exec(`UPDATE package_security SET state = 'syncing', claimed_by = 'someone',
+	        heartbeat_at = ? WHERE package_id = ?`,
+		time.Now().UTC().Format("2006-01-02T15:04:05.000Z"), id)
+
+	var during v1.PackageSecurityResponse
+	h.get("/api/v1/products/vendor-a/packages/25.7.2131/security?detail=true", &during)
+
+	if during.Sync.State != "syncing" {
+		t.Fatalf("state = %q, want syncing", during.Sync.State)
+	}
+	if len(during.Reports) != len(settled.Reports) {
+		t.Errorf("a running sync hid the stored reports: %d during, %d settled",
+			len(during.Reports), len(settled.Reports))
+	}
+	if during.Counts.Total != settled.Counts.Total {
+		t.Errorf("counts changed because a sync was running: %d during, %d settled",
+			during.Counts.Total, settled.Counts.Total)
+	}
+	var findings int
+	for _, r := range during.Reports {
+		findings += len(r.Findings)
+	}
+	if findings != 2 {
+		t.Errorf("the rows behind the counts went missing mid-sync: %d findings", findings)
+	}
+}

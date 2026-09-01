@@ -1,5 +1,5 @@
 import { useMemo, useState } from 'react'
-import { App, Button, Card, Dropdown, Select, Space, Tooltip } from 'antd'
+import { App, Button, Card, Dropdown, Select, Space, Tooltip, Typography } from 'antd'
 // The working-surface table: resizable, reorderable, pinnable columns whose
 // layout each person keeps. See `tablekit/README.md` for which tables get it.
 import { Table as DataTable } from '../tablekit'
@@ -23,9 +23,71 @@ import {
   VersionChip,
 } from '../components/chips'
 import { EmptyStateCard, ErrorState, SearchBar } from '../components/layout'
+import { CompareSelectionBar } from '../components/compareselect'
+import { pickOf, samePick, useComparisonSelection } from '../domain/compare'
 import { NokiaNIcon } from '../components/icons'
 import { VulnerabilityCell } from '../components/security'
 import { PromoteButton } from '../components/promote'
+import { c } from '../uikit'
+
+/**
+ * A row's place in the comparison: unticked, first, or second.
+ *
+ * # Why this is not a plain checkbox
+ *
+ * Because the two ends are not interchangeable. One is the base and the other
+ * is what it is compared against, every verdict on the report is phrased in
+ * that direction, and a grid of identical ticks cannot say which is which. The
+ * badge shows the ORDER, so a reader glancing back at the table can see which
+ * row is the baseline without reading the bar.
+ *
+ * An unticked row is still a box rather than an empty cell: a column of
+ * nothing, with two numbers in it, does not read as something to click.
+ */
+function ComparePick({ slot, blocked, onToggle }: {
+  slot: number
+  blocked: boolean
+  onToggle: () => void
+}) {
+  if (blocked) {
+    return (
+      <Tooltip title="A comparison covers one product. Clear the selection to compare releases of this one.">
+        <span
+          style={{
+            display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
+            width: 22, height: 22, borderRadius: 6,
+            border: `1px dashed ${c.border}`, color: c.text3, fontSize: 11,
+            cursor: 'not-allowed',
+          }}
+        >
+          -
+        </span>
+      </Tooltip>
+    )
+  }
+
+  return (
+    <Tooltip title={slot ? 'Remove from the comparison' : 'Add to the comparison'}>
+      <button
+        type="button"
+        onClick={onToggle}
+        aria-pressed={slot > 0}
+        aria-label={slot ? `Selected as package ${slot}` : 'Select for comparison'}
+        style={{
+          display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
+          width: 22, height: 22, borderRadius: 6, cursor: 'pointer',
+          fontSize: 11, fontWeight: 600, lineHeight: 1,
+          background: slot ? c.brand : 'transparent',
+          color: slot ? '#fff' : 'transparent',
+          border: slot ? 'none' : `1px solid ${c.border}`,
+          transition: 'background 120ms ease, border-color 120ms ease',
+        }}
+      >
+        {slot || '+'}
+      </button>
+    </Tooltip>
+  )
+}
 
 /**
  * One primary action, and everything else behind a menu.
@@ -51,12 +113,22 @@ function RowActions({ product, pkg, config }: {
   const sync = useSyncPackageSecurity()
   const mayOperate = useCan('operate', { product })
 
-  const compareHref = `/packages/compare?product=${encodeURIComponent(product)}`
+  // "Compare with another release" now PRE-SELECTS this one and stays here.
+  //
+  // It used to leave for a page whose first job was to ask which release the
+  // reader meant - which they had just told it by clicking this row - and whose
+  // second was to ask for the other one from a dropdown of two hundred. Both
+  // halves of that are this listing's job, and it is already open.
+  const compareHref = `/packages?compare=1`
+    + `&cmp=${encodeURIComponent(product)}`
     // The REPOSITORY travels with the tag. One version tag exists in every
-    // repository a product watches, so a compare link carrying only the tag
-    // arrives at a page that cannot say which package was meant.
-    + `&from=${encodeURIComponent(pkg.tag)}`
-    + (pkg.sourceRepository ? `&repository=${encodeURIComponent(pkg.sourceRepository)}` : '')
+    // repository a product watches, so a reference carrying only the tag does
+    // not name a package.
+    + `&a=${encodeURIComponent(packageReference(pkg))}`
+
+  const locationsHref = `/packages/compare?mode=locations`
+    + `&product=${encodeURIComponent(product)}`
+    + `&a=${encodeURIComponent(packageReference(pkg))}`
 
   const detail = releaseHref(product, pkg)
   const securityHref = `${detail}${detail.includes('?') ? '&' : '?'}tab=security`
@@ -124,6 +196,14 @@ function RowActions({ product, pkg, config }: {
     ...syncItem,
     { type: 'divider' },
     { key: 'compare', label: <Link to={compareHref}>Compare with another release</Link> },
+    // The OTHER comparison, and it is a different question: not "what changed
+    // between these two releases" but "did this one arrive intact". It is about
+    // ONE release, so it cannot be expressed by ticking two rows - it keeps a
+    // small form of its own, on a page that already knows which release.
+    {
+      key: 'compare-locations',
+      label: <Link to={locationsHref}>Compare across locations</Link>,
+    },
   ]
 
   return (
@@ -390,7 +470,17 @@ export default function Packages() {
   // release as one nothing had happened to since it landed.
   const transfers = useTransfers({ product: selected, pageSize: 200, view: 'summary' })
 
-  const rows = useMemo(() => {
+  /*
+   * Every release this page has loaded, BEFORE the search and status filters.
+   *
+   * Split out from `rows` for one reason, and it is the reason the whole
+   * selection lives in the URL: a comparison in progress has to be able to
+   * NAME the two releases it holds even when neither is on screen. Resolving
+   * them against the filtered rows meant that typing in the search box emptied
+   * the bar back to "select the first package" - the selection was intact, and
+   * the page said it was gone, which is worse than losing it.
+   */
+  const allRows = useMemo(() => {
     // Joined from the transfer listing: a package listing carries no transfer
     // history, so deriving from the package alone would report every release
     // as NEW.
@@ -410,27 +500,29 @@ export default function Packages() {
         return { pkg, product: p, status: deriveStatus(pkg, p) }
       })
       })
-    const byStatus = !status
-      ? all
-      : status === 'UNSIGNED'
-        ? all.filter((r) => verification(r.pkg) === 'NOT_SIGNED')
-      : status === 'READY'
-        ? all.filter((r) => r.status === 'READY FOR PRODUCTION')
-        : all.filter((r) => r.status === status)
-
-    const sorted = [...byStatus].sort((a, b) => {
+    return [...all].sort((a, b) => {
       const left = Date.parse(publishedAt(a.pkg) || '') || 0
       const right = Date.parse(publishedAt(b.pkg) || '') || 0
       return right - left
     })
+  }, [selected, product, productList, packages.data, packagesByProducts, transfers.data])
 
-    if (!search.trim()) return sorted
+  const rows = useMemo(() => {
+    const byStatus = !status
+      ? allRows
+      : status === 'UNSIGNED'
+        ? allRows.filter((r) => verification(r.pkg) === 'NOT_SIGNED')
+      : status === 'READY'
+        ? allRows.filter((r) => r.status === 'READY FOR PRODUCTION')
+        : allRows.filter((r) => r.status === status)
+
+    if (!search.trim()) return byStatus
     // The version as shown AND as the vendor spells it, plus the repository -
     // a product publishes one version tag into every repository it watches, so
     // the repository is frequently the only thing telling two rows apart.
-    return sorted.filter((r) => matches(
+    return byStatus.filter((r) => matches(
       search, version(r.pkg), r.pkg.tag, r.pkg.displayRepository, r.pkg.sourceRepository))
-  }, [selected, product, productList, packages.data, packagesByProducts, transfers.data, status, search])
+  }, [allRows, status, search])
 
   const update = (key: string, value?: string) => {
     const next = new URLSearchParams(params)
@@ -438,6 +530,34 @@ export default function Packages() {
     else next.delete(key)
     setParams(next)
   }
+
+  /*
+   * Choosing two releases to compare, IN this listing.
+   *
+   * See domain/compare.ts for why the selection lives in the URL: it has to
+   * survive the search box, the product filter and the round trip to the
+   * report, and every one of those unmounts component state.
+   */
+  const { selection, toggle, start, reset, cancel, swap } = useComparisonSelection()
+  const comparing = selection.active
+
+  // The product a selection is locked to, once one end is chosen. Two products
+  // are two sets of repositories under two sets of credentials, so a comparison
+  // across them is not a thing the API can answer - and the rows that would
+  // make one are disabled with the reason on them, which teaches the rule
+  // better than a product dropdown ever did.
+  const lockedProduct = selection.a?.product ?? selection.b?.product
+
+  /**
+   * Resolves a chosen reference back to the release it names.
+   *
+   * Against `allRows` and never the filtered ones - see the comment there. A
+   * selection has to keep its name while the reader searches for the other end,
+   * which is the whole shape of choosing two things out of two hundred.
+   */
+  const pickedPackage = (pick: { product: string; ref: string }) =>
+    allRows.find((r) => r.product.productId === pick.product
+      && packageReference(r.pkg) === pick.ref)?.pkg
 
   const syncNotSynced = (productId: string, pkg: Package) => {
     syncSecurity.mutate(
@@ -463,6 +583,20 @@ export default function Packages() {
 
   return (
     <>
+      {comparing && (
+        /*
+          The page says what it is FOR while it is in this mode.
+
+          A table that has grown a column of plus signs is a table with an
+          unexplained column; a title saying "select two packages to compare" is
+          the whole instruction, and it is the sentence the old page opened with
+          before it asked the same question through six controls.
+        */
+        <Typography.Title level={4} style={{ marginTop: 0, marginBottom: 4 }}>
+          Select two packages to compare
+        </Typography.Title>
+      )}
+
       <div
         style={{
           display: 'flex', alignItems: 'center', justifyContent: 'space-between',
@@ -518,10 +652,31 @@ export default function Packages() {
             ]}
           />
         </Space>
-        <Link to="/packages/compare">
-          <Button icon={<ScaleOutlined />}>Compare packages</Button>
-        </Link>
+        {/*
+          Starts selection mode HERE rather than navigating.
+
+          It was a link to a page whose whole content was a form asking which
+          two releases - a question this table answers better than any dropdown
+          can, because a reader deciding what to compare is reading status,
+          dates and vulnerability counts, and none of those fit in a select.
+        */}
+        {!comparing && (
+          <Button icon={<ScaleOutlined />} onClick={() => start()}>Compare packages</Button>
+        )}
       </div>
+
+      {comparing && (
+        <CompareSelectionBar
+          selection={selection}
+          packagesFor={pickedPackage}
+          productName={lockedProduct
+            ? productList.find((p) => p.productId === lockedProduct)?.displayName ?? lockedProduct
+            : undefined}
+          onReset={reset}
+          onCancel={cancel}
+          onSwap={swap}
+        />
+      )}
 
       {!packages.isLoading && !packagesByProducts.some((q) => q.isLoading) && rows.length === 0 ? (
         <EmptyStateCard
@@ -550,6 +705,34 @@ export default function Packages() {
             loading={packages.isLoading || packagesByProducts.some((q) => q.isLoading)}
             dataSource={rows}
             rowKey={(r) => `${r.product.productId}-${r.pkg.packageId}`}
+            /*
+              The whole row is the target while choosing.
+
+              A 22-pixel box at the left edge of a table 1,600 pixels wide is a
+              small target hit twice per comparison, and the row is already the
+              thing the reader is looking at. The links and buttons inside it
+              keep working - see the guard in onClick - so this adds a way to
+              select without taking away a way to navigate.
+            */
+            onRow={comparing ? (r) => ({
+              onClick: (event) => {
+                const target = event.target as HTMLElement
+                if (target.closest('a, button, input, .ant-dropdown-trigger')) return
+                const pick = pickOf(r.product.productId, r.pkg)
+                if (lockedProduct && r.product.productId !== lockedProduct
+                  && !samePick(selection.a, pick) && !samePick(selection.b, pick)) return
+                toggle(pick)
+              },
+              style: { cursor: 'pointer' },
+            }) : undefined}
+            rowClassName={comparing
+              ? (r) => {
+                const pick = pickOf(r.product.productId, r.pkg)
+                return samePick(selection.a, pick) || samePick(selection.b, pick)
+                  ? 'slm-row-selected'
+                  : ''
+              }
+              : undefined}
             pagination={{ pageSize: 20, showSizeChanger: false }}
             /*
               `max-content` rather than a number.
@@ -560,7 +743,42 @@ export default function Packages() {
               measure cannot drift.
             */
             scroll={{ x: 'max-content' }}
+            /*
+              THE SELECTION IS A COLUMN, not antd's rowSelection.
+
+              rowSelection gives a "select all" box in the header and unbounded
+              multi-select, and this is neither: exactly two, in an order that
+              means something. A header checkbox that ticks two hundred rows,
+              on a control that accepts two, is a control that lies about what
+              it does - and the numbered badges below are what make the ORDER
+              visible, which a uniform grid of checkboxes cannot.
+            */
             columns={[
+              ...(comparing ? [{
+                title: '',
+                fixed: 'left' as const,
+                width: 52,
+                render: (_: unknown, r: (typeof rows)[number]) => {
+                  const pick = pickOf(r.product.productId, r.pkg)
+                  const slot = samePick(selection.a, pick)
+                    ? 1
+                    : samePick(selection.b, pick) ? 2 : 0
+                  // Locked to one product once an end is chosen: two products
+                  // are two sets of credentials, and the API cannot compare
+                  // across them. Disabled with the reason on it beats a
+                  // dropdown that silently narrows the list.
+                  const blocked = Boolean(lockedProduct)
+                    && r.product.productId !== lockedProduct
+                    && slot === 0
+                  return (
+                    <ComparePick
+                      slot={slot}
+                      blocked={blocked}
+                      onToggle={() => toggle(pick)}
+                    />
+                  )
+                },
+              }] : []),
               /*
                 THE PRODUCT COLUMN EXISTS ONLY WHEN IT VARIES.
 

@@ -1,16 +1,17 @@
-import { useEffect, useMemo, useState } from 'react'
-import type { CSSProperties, ReactNode } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import type { ReactNode } from 'react'
 import { App, Button, Card, Col, Popover, Progress, Row, Segmented, Select, Space, Tooltip, Tree, Typography } from 'antd'
 // The working-surface table: resizable, reorderable, pinnable columns whose
 // layout each person keeps. See `tablekit/README.md` for which tables get it.
 import { Table as DataTable } from '../tablekit'
 import { FolderOutlined, SwapOutlined } from '../icons'
-import { useSearchParams } from 'react-router-dom'
+import { Link, useNavigate, useSearchParams } from 'react-router-dom'
 import {
   useCompare, useCompareProgress, useCompareSecurity, usePackages, useProduct, useProducts,
   useSyncPackageSecurity,
 } from '../api/queries'
 import { kindName, matches, packageReference, version } from '../domain/derive'
+import { selectionHref } from '../domain/compare'
 import { bytes, formatBytes, formatCount, formatDuration } from '../domain/format'
 import { NA, Value } from '../components/value'
 import { ErrorState, SearchBar } from '../components/layout'
@@ -28,20 +29,28 @@ import type {
  *
  * Answers: what is different between these two, exactly?
  *
- * # The shape of the question
+ * # This page no longer asks the question
  *
- * A comparison has two axes and the API takes them separately: WHICH VERSION
- * (`against`) and WHERE (`from` and `to`). Naming only a version compares two
- * releases in one place; naming only a place compares one release in two;
- * naming both answers each at once. The form is arranged the same way, so what
- * is being asked stays legible as it is assembled.
+ * It used to open on a form: a product select, a two-position mode switch, two
+ * release dropdowns, a swap button and sometimes a fourth select for the
+ * source. Six controls to express "these two" - and the two dropdowns were the
+ * worst of it, because a list of two hundred releases rendered as a name and a
+ * version in a 320-pixel box gave a reader no way to tell which two they wanted.
+ * Everything needed to DECIDE - what is in production, what arrived last week,
+ * what has vulnerabilities - was on the packages listing they had just left.
  *
- * # Why the mode selector exists
+ * So the choosing happens there (see domain/compare.ts), and this page is the
+ * ANSWER. It arrives with a pair in its URL, runs the comparison, and shows it.
+ * Arriving without one sends the reader back to the listing, in selection mode,
+ * because that is where the question is now asked.
  *
- * Most comparisons are one of two questions - "what changed between these
- * releases" and "did this release arrive intact" - and each needs only half
- * the form. Offering four selectors for both made the common case look like
- * the hard case.
+ * # The one form that survives
+ *
+ * A LOCATION comparison - "did this release arrive intact" - is a question
+ * about one release rather than about two, so it cannot be expressed by ticking
+ * two rows. It keeps two selects, reached from a release's own row menu, and
+ * they are two controls about a release already named rather than four about a
+ * release that is not.
  */
 
 /**
@@ -87,66 +96,6 @@ const refOf = packageReference
  */
 type View = 'package' | 'security'
 
-/** The option list for a release select: the name, the version, and both searchable. */
-function releaseOptions(releases: Package[]) {
-  return releases.map((r) => ({
-    value: refOf(r),
-    // The VERSION alone, because a select box is one line and the version is
-    // the half that identifies the release to a reader. The package name is
-    // rendered under it - in the list and in the closed box - where a second
-    // line has room for it. Joining the two into one string produced
-    // `cfx-5000-k8s-215952-edgenac-25.7-2131_20260807-wn…`, which is neither.
-    label: version(r),
-    name: r.displayRepository || r.sourceRepository || '',
-    version: version(r),
-    tag: r.tag,
-  }))
-}
-
-type ReleaseOption = ReturnType<typeof releaseOptions>[number]
-
-/**
- * Version above, package name below - the two things that identify a release.
- *
- * Used for the options AND for the closed box, so what a reader picked still
- * says which package it was. A select showing only a version is ambiguous by
- * construction here: the same tag exists in ten repositories.
- */
-function renderReleaseOption(option: Pick<ReleaseOption, 'version' | 'name'>) {
-  /*
-   * PLAIN DIVS, and every one of them bounded.
-   *
-   * These two lines go inside the select's closed box, which is a fixed width
-   * with `overflow: hidden` on ONE line of text. A flex container of unbounded
-   * children ignores that entirely, and a vendor reference like
-   * `cfx-5000-k8s-215952-edgenac-25.7-2131_20260807-wnv5a0csd0003c-ncm` ran
-   * straight out of the box and across the page.
-   *
-   * `minWidth: 0` on the wrapper is the part that is easy to leave out and
-   * without which none of the rest works: a block child's default minimum size
-   * is its content, so the ellipsis has nothing to clip against.
-   */
-  const line: CSSProperties = {
-    overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
-  }
-
-  return (
-    <div style={{ minWidth: 0, maxWidth: '100%', overflow: 'hidden' }}>
-      <div style={{ ...line, fontFamily: mono, fontSize: 12, lineHeight: '16px' }}>
-        {option.version}
-      </div>
-      {option.name && (
-        <div
-          style={{ ...line, fontSize: 11, lineHeight: '14px', color: c.text2 }}
-          title={option.name}
-        >
-          {option.name}
-        </div>
-      )}
-    </div>
-  )
-}
-
 /**
  * One end of a comparison: which package, and which version of it.
  *
@@ -173,16 +122,6 @@ function ComparedEnd({ pkg, fallback }: { pkg?: Package; fallback: string }) {
       )}
     </Space>
   )
-}
-
-/** The closed box, showing the same two lines as the option that filled it. */
-function releaseLabelRender(releases: Package[], value: unknown, fallback: ReactNode) {
-  const chosen = releases.find((r) => refOf(r) === value)
-  if (!chosen) return fallback
-  return renderReleaseOption({
-    version: version(chosen),
-    name: chosen.displayRepository || chosen.sourceRepository || '',
-  })
 }
 
 /**
@@ -1116,76 +1055,68 @@ function shortDigest(digest: string): string {
 }
 
 export default function Compare() {
-  const [params, setParams] = useSearchParams()
+  const [params] = useSearchParams()
+  const navigate = useNavigate()
   const { message } = App.useApp()
 
-  const products = useProducts()
-  const productList = products.data?.products ?? []
-  const product = params.get('product') ?? productList[0]?.productId
+  const product = params.get('product') ?? undefined
+  // The pair, as the listing wrote it. `from` is the old link's spelling and is
+  // read so a bookmark made before the selection moved still lands somewhere
+  // sensible rather than on an empty page.
+  const leftRef = params.get('a') ?? params.get('from') ?? undefined
+  const rightRef = params.get('b') ?? undefined
+  const mode: Mode = params.get('mode') === 'locations' ? 'locations' : 'versions'
 
+  const products = useProducts()
   const detail = useProduct(product)
   const packages = usePackages(product, { pageSize: 200 })
   const releases = packages.data?.packages ?? []
 
-  const [mode, setMode] = useState<Mode>('versions')
   /*
-   * The incoming link carries a TAG, and a tag is not a reference.
+   * A page with no pair has nothing to show and no way to ask for one.
    *
-   * One version tag exists in every repository a product watches, so `?from=`
-   * on its own does not name a package - and a select keyed on
-   * `repository:tag` had nothing matching it, which is why the box showed a
-   * bare version with no package name beside it. The repository travels in the
-   * URL now; the effect below resolves the pair, and falls back to the first
-   * release with that tag for a link written before it did.
+   * Sent back to the listing in selection mode rather than rendering an empty
+   * state with a link in it: the reader's next action is the same either way,
+   * and one of the two spellings of it costs them a click.
    */
-  const [left, setLeft] = useState<string | undefined>(undefined)
-  const [right, setRight] = useState<string>()
+  const incomplete = mode === 'versions' && !(product && leftRef && rightRef)
+  useEffect(() => {
+    if (!incomplete) return
+    const q = new URLSearchParams({ compare: '1' })
+    if (product) q.set('cmp', product)
+    if (leftRef) q.set('a', leftRef)
+    navigate(`/packages?${q.toString()}`, { replace: true })
+  }, [incomplete, product, leftRef, navigate])
+
+  const leftPkg = releases.find((r) => refOf(r) === leftRef)
+  const rightPkg = releases.find((r) => refOf(r) === rightRef)
+
+  const sources = detail.data?.sources ?? []
+  // Where the release was found, matched back to its configured source. The
+  // API needs an endpoint NAME and a package records a repository PATH, and a
+  // product with several sources refuses to guess between them.
+  const discoveredIn = sourceNameFor(sources, leftPkg?.sourceRepository)
+  const [sourceOverride, setSourceOverride] = useState<string>()
+  const versionEnd = sourceOverride ?? discoveredIn ?? sources[0]?.name
+  // Asked ONLY when it genuinely cannot be worked out: several sources, and
+  // none of them claiming this release's repository. One select that appears
+  // for the products that need it beats a fourth control on every comparison.
+  const ambiguousSource = mode === 'versions' && sources.length > 1 && !discoveredIn
+
   const [fromEndpoint, setFromEndpoint] = useState<string>()
   const [toEndpoint, setToEndpoint] = useState<string>()
-  const [sourceOverride, setSourceOverride] = useState<string>()
-  // Collapsed once there is a report. The form is scaffolding for the answer:
-  // leaving four selectors above it pushes the thing somebody waited minutes
-  // for below the fold, and every one of those selectors is now describing a
-  // comparison that has already been run.
-  const [settled, setSettled] = useState(false)
-  // Elapsed while it runs. Both releases are read live from their registries,
-  // so a comparison takes as long as those registries take - and a button that
-  // says `loading` for four minutes with nothing beside it is the shape of
-  // something broken.
+
   const [startedAt, setStartedAt] = useState<number>()
   const [elapsed, setElapsed] = useState(0)
-  // Minted here, per run: the comparison's response is the report, so there is
+  // Minted here, per run: the comparison's response IS the report, so there is
   // nothing for the server to hand an id back in. Sending one is what makes
   // progress readable while the request is open.
   const [token, setToken] = useState<string>()
-  // The first release is almost always the one somebody means, and having to
-  // pick it before the page does anything is a step with no decision in it.
-  useEffect(() => {
-    if (left || releases.length === 0) return
-
-    const tag = params.get('from')
-    const repository = params.get('repository')
-    const asked = tag
-      ? releases.find((r) => r.tag === tag && (!repository || r.sourceRepository === repository))
-        ?? releases.find((r) => r.tag === tag)
-      : undefined
-
-    setLeft(refOf(asked ?? releases[0]!))
-  }, [releases, left, params])
 
   const compare = useCompare()
   const compareRunning = compare.isPending
   const report = compare.data
 
-  /*
-   * The security comparison runs SEPARATELY and on demand.
-   *
-   * Not folded into the package comparison, because the two have different
-   * costs and different failure modes: one walks two manifest trees, the other
-   * queries a scanner, and a scanner that is down must not fail the comparison
-   * that never needed it. Somebody who only wants to know what changed pays
-   * for what changed.
-   */
   const [view, setView] = useState<View>('package')
   const compareSecurity = useCompareSecurity()
   const syncSecurity = useSyncPackageSecurity()
@@ -1196,43 +1127,8 @@ export default function Compare() {
     return () => clearInterval(id)
   }, [compareRunning, startedAt])
 
-  const endpoints = [
-    { value: '', label: 'Vendor (where it was discovered)' },
-    ...(detail.data?.targets ?? []).map((t) => ({
-      value: t.name,
-      label: `${t.name}${t.environment ? ` · ${t.environment}` : ''}`,
-    })),
-  ]
-
-  /*
-   * BOTH ENDS ARE PACKAGES, and they are not necessarily the same package.
-   *
-   * This named the comparison once, on the assumption that a version
-   * comparison is two versions of ONE package. It is not: a product publishes
-   * nine differently-named packages that share a version string, and comparing
-   * `cfx-5000-k8s` against `cfx-5000-k8s-215952-edgenac-…-ncm` is the ordinary
-   * case. Naming the comparison after the left end left the right end reading
-   * `cfx-near 25.7_mp2604_2131` - a source and a version, and no package at
-   * all.
-   */
-  const leftPkg = releases.find((r) => refOf(r) === left)
-  const rightPkg = releases.find((r) => refOf(r) === right)
-
-  const sources = detail.data?.sources ?? []
-  // Where the release was found, matched back to its configured source. The
-  // default end for a version comparison, overridable below for a product
-  // whose sources this cannot match - one that discovers its repositories
-  // from the registry catalog declares none to match against.
-  const discoveredIn = sourceNameFor(sources, leftPkg?.sourceRepository)
-  const versionEnd = sourceOverride ?? discoveredIn ?? sources[0]?.name
-
-  const ready = Boolean(
-    product && left &&
-    (mode === 'versions' ? right && versionEnd : toEndpoint !== undefined),
-  )
-
-  const run = async () => {
-    if (!product || !left) return
+  const run = useCallback(async () => {
+    if (!product || !leftRef) return
     setStartedAt(Date.now())
     setElapsed(0)
     const progressToken = crypto.randomUUID()
@@ -1240,52 +1136,58 @@ export default function Compare() {
     try {
       await compare.mutateAsync({
         product,
-        ref: left,
+        ref: leftRef,
         repository: leftPkg?.sourceRepository,
         body: {
           // A version comparison names the other release; a location
-          // comparison names the other place. Both may be sent, and then the
-          // answer covers both at once.
-          // A version comparison still has to NAME its end: a product with
-          // several sources will not guess which one, and both sides of a
-          // version comparison are the same place.
-          against: mode === 'versions' ? right : undefined,
+          // comparison names the other place. A version comparison still has
+          // to NAME its end - a product with several sources will not guess -
+          // and both sides of one are the same place.
+          against: mode === 'versions' ? rightRef : undefined,
           from: mode === 'versions' ? versionEnd : (fromEndpoint || undefined),
           to: mode === 'versions' ? versionEnd : (toEndpoint || undefined),
-          // OFF by default, and this is the difference between a comparison
-          // that answers in seconds and one that reads like a hang. Opening
-          // layer archives to name the files inside them means downloading
-          // them; on a release of a few hundred components that is the whole
-          // cost of the request. Asked for explicitly, below.
           progressToken,
         },
       })
-      setSettled(true)
     } catch (e) {
       message.error(e instanceof Error ? e.message : 'The comparison could not be run.')
     }
-  }
+  }, [product, leftRef, rightRef, leftPkg, mode, versionEnd, fromEndpoint, toEndpoint, compare, message])
 
-  /**
-   * Run the security comparison for the pair already on screen.
+  /*
+   * Runs itself on arrival.
    *
-   * Idempotent from the user's side: switching to the security view runs it
-   * once and switching back and forth does not re-run it. A re-run is what the
-   * refresh on the release's own security panel is for.
+   * The pair was chosen on the previous page and confirmed with a button called
+   * Compare, so a second button here saying the same word would be asking the
+   * reader to agree with themselves. It re-runs when the pair changes, and the
+   * key guards against React's development double-mount and against the effect
+   * firing again when an unrelated piece of state moves.
    */
-  const runSecurity = async () => {
-    if (!product || !left || !right) return
+  const ranFor = useRef<string>('')
+  useEffect(() => {
+    if (mode !== 'versions' || !product || !leftRef || !rightRef) return
+    // The source is part of the request, so a comparison must not start until
+    // it is known - the packages and the product load separately.
+    if (sources.length > 0 && !versionEnd) return
+    const key = `${product}|${leftRef}|${rightRef}|${versionEnd ?? ''}`
+    if (ranFor.current === key) return
+    ranFor.current = key
+    void run()
+  }, [mode, product, leftRef, rightRef, versionEnd, sources.length, run])
+
+  const runSecurity = useCallback(async () => {
+    if (!product || !leftRef || !rightRef) return
     try {
       await compareSecurity.mutateAsync({
         product,
-        ref: left,
+        ref: leftRef,
         repository: leftPkg?.sourceRepository,
-        body: { against: rightPkg?.tag ?? right },
+        body: { against: rightPkg?.tag ?? rightRef },
       })
     } catch (e) {
       message.error(e instanceof Error ? e.message : 'The security comparison could not be run.')
     }
-  }
+  }, [product, leftRef, rightRef, leftPkg, rightPkg, compareSecurity, message])
 
   /**
    * Sync one end from the comparison, then re-run it.
@@ -1315,221 +1217,157 @@ export default function Compare() {
     if (!compareSecurity.data && !compareSecurity.isPending) void runSecurity()
   }
 
-  const swap = () => {
-    if (mode === 'versions') {
-      setLeft(right)
-      setRight(left)
-    } else {
-      setFromEndpoint(toEndpoint)
-      setToEndpoint(fromEndpoint)
-    }
+  /** Back to where choosing happens, with this pair still ticked. */
+  const changeSelection = () => {
+    navigate(selectionHref({
+      active: true,
+      a: product && leftRef ? { product, ref: leftRef } : undefined,
+      b: product && rightRef ? { product, ref: rightRef } : undefined,
+    }))
   }
 
-  const update = (key: string, value?: string) => {
-    const next = new URLSearchParams(params)
-    if (value) next.set(key, value)
-    else next.delete(key)
-    setParams(next)
-  }
-
+  const endpoints = [
+    { value: '', label: 'Vendor (where it was discovered)' },
+    ...(detail.data?.targets ?? []).map((t) => ({
+      value: t.name,
+      label: `${t.name}${t.environment ? ` · ${t.environment}` : ''}`,
+    })),
+  ]
 
   if (products.isError) {
-    return (
-      <>
-        <ErrorState error={products.error} retry={() => void products.refetch()} />
-      </>
-    )
+    return <ErrorState error={products.error} retry={() => void products.refetch()} />
   }
+  // Mid-redirect. Rendering the empty shell would flash a page that is about to
+  // be replaced.
+  if (incomplete) return null
 
   return (
     <>
+      {/*
+        ONE HEADER, and it STATES the comparison rather than asking for it.
 
-      {settled && report ? (
-        /*
-          ONE HEADER, not three cards.
-
-          What was being compared, which answer is on screen, and what that
-          answer is were three separate cards stacked down the page - three
-          borders, three shadows and forty-eight pixels of gap before the
-          reader reached anything they had waited minutes for. They are all
-          chrome about the same comparison, so they are one object: the ends on
-          top, the switch between the two answers under a hairline.
-        */
-        <Card size="small" style={{ marginBottom: 16 }} styles={{ body: { padding: 0 } }}>
-          <Space
-            size={16}
-            wrap
-            style={{ width: '100%', justifyContent: 'space-between', padding: '12px 16px' }}
-          >
-            {/*
-              EACH END NAMED IN FULL: its package, then its version. A label
-              like `cfx-near 25.7_mp2604_2131` is a source and a version and no
-              package at all, and the two ends are frequently different
-              packages.
-            */}
-            <Space size={12} wrap align="center">
-              <Typography.Text type="secondary" style={{ fontSize: 12 }}>Comparing</Typography.Text>
-              <ComparedEnd pkg={leftPkg} fallback={report.a.label} />
-              <SwapOutlined style={{ color: c.text3 }} />
-              <ComparedEnd pkg={rightPkg} fallback={report.b.label} />
-            </Space>
-            <Button onClick={() => setSettled(false)}>Change selection</Button>
+        What is being compared, which answer is on screen, and how to change the
+        pair. The ends are named in full - each one's package and then its
+        version - because a product publishes nine differently-named packages
+        that share a version string, and the two ends are frequently different
+        packages.
+      */}
+      <Card size="small" style={{ marginBottom: 16 }} styles={{ body: { padding: 0 } }}>
+        <Space
+          size={16}
+          wrap
+          style={{ width: '100%', justifyContent: 'space-between', padding: '12px 16px' }}
+        >
+          <Space size={12} wrap align="center">
+            <Typography.Text type="secondary" style={{ fontSize: 12 }}>Comparing</Typography.Text>
+            <ComparedEnd pkg={leftPkg} fallback={report?.a.label ?? leftRef ?? ''} />
+            <SwapOutlined style={{ color: c.text3 }} />
+            {mode === 'versions'
+              ? <ComparedEnd pkg={rightPkg} fallback={report?.b.label ?? rightRef ?? ''} />
+              : (
+                <Typography.Text strong style={{ fontFamily: mono, fontSize: 13 }}>
+                  {toEndpoint || 'the vendor'}
+                </Typography.Text>
+              )}
           </Space>
 
-          {mode === 'versions' && (
-            <div
-              style={{
-                display: 'flex', flexWrap: 'wrap', gap: 12, alignItems: 'center',
-                justifyContent: 'space-between',
-                padding: '10px 16px', borderTop: `1px solid ${c.border}`,
-              }}
-            >
-              <Segmented
-                value={view}
-                onChange={(v) => (v === 'security' ? showSecurity() : setView('package'))}
-                options={[
-                  { value: 'package', label: 'Package comparison' },
-                  { value: 'security', label: 'Security comparison' },
-                ]}
-              />
-              <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-                {view === 'package'
-                  ? 'What the two releases hold, component by component.'
-                  : 'How the security posture changed from the base release to the new one.'}
-              </Typography.Text>
-            </div>
-          )}
-        </Card>
-      ) : (
-      <Card style={{ marginBottom: 16 }}>
-        <Space direction="vertical" size={14} style={{ width: '100%' }}>
-          <Space size={12} wrap>
-            <Select
-              style={{ minWidth: 200 }}
-              value={product}
-              onChange={(v) => { update('product', v); setLeft(undefined); setRight(undefined) }}
-              loading={products.isLoading}
-              options={productList.map((p) => ({ value: p.productId, label: p.displayName || p.productId }))}
-            />
-            <Segmented
-              value={mode}
-              onChange={(v) => setMode(v as Mode)}
-              options={[
-                { value: 'versions', label: 'Two versions' },
-                { value: 'locations', label: 'Two locations' },
-              ]}
-            />
-          </Space>
-
-          {/*
-            Wraps rather than sitting in fixed thirds: at 1280 the three
-            selectors and the button no longer fit on one line, and the page
-            used to overflow instead of reflowing.
-          */}
-          <Row gutter={[12, 12]} align="bottom">
-            <Col xs={24} md={10} lg={8}>
-              <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-                {mode === 'versions' ? 'Base version' : 'Base location'}
-              </Typography.Text>
-              {mode === 'versions' ? (
-                <Select<string, ReleaseOption>
-                  className="slm-release-select"
-                  style={{ width: '100%' }}
-                  placeholder="Choose a release"
-                  value={left}
-                  onChange={setLeft}
-                  showSearch
-                  // Over the NAME and the version both. A product has several
-                  // packages and each has many versions, so searching one of
-                  // the two finds half of what somebody types.
-                  filterOption={(input, option) =>
-                    matches(input, option?.name, option?.version, option?.tag)}
-                  optionRender={(option) => renderReleaseOption(option.data)}
-                  labelRender={(item) => releaseLabelRender(releases, item.value, item.label)}
-                  styles={{ popup: { root: { minWidth: 320 } } }}
-                  loading={packages.isLoading}
-                  options={releaseOptions(releases)}
-                />
-              ) : (
+          <Space size={8} wrap>
+            {ambiguousSource && (
+              // Only where the release's repository matches no configured
+              // source. Labelled, because "cfx-near" in a bare select beside
+              // two release names reads as a third end of the comparison.
+              <Space size={6}>
+                <Typography.Text type="secondary" style={{ fontSize: 12 }}>Read from</Typography.Text>
                 <Select
-                  style={{ width: '100%' }}
-                  value={fromEndpoint ?? ''}
-                  onChange={setFromEndpoint}
-                  options={endpoints}
-                />
-              )}
-            </Col>
-
-            <Col xs={24} md={4} lg={2} style={{ textAlign: 'center' }}>
-              <Button icon={<SwapOutlined />} onClick={swap} aria-label="Swap sides" block />
-            </Col>
-
-            <Col xs={24} md={10} lg={8}>
-              <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-                Compare against
-              </Typography.Text>
-              {mode === 'versions' ? (
-                <Select<string, ReleaseOption>
-                  className="slm-release-select"
-                  style={{ width: '100%' }}
-                  placeholder="Choose a release"
-                  value={right}
-                  onChange={setRight}
-                  showSearch
-                  filterOption={(input, option) =>
-                    matches(input, option?.name, option?.version, option?.tag)}
-                  optionRender={(option) => renderReleaseOption(option.data)}
-                  labelRender={(item) => releaseLabelRender(releases, item.value, item.label)}
-                  styles={{ popup: { root: { minWidth: 320 } } }}
-                  loading={packages.isLoading}
-                  options={releaseOptions(releases)}
-                />
-              ) : (
-                <Select
-                  style={{ width: '100%' }}
-                  value={toEndpoint ?? ''}
-                  onChange={setToEndpoint}
-                  options={endpoints}
-                />
-              )}
-            </Col>
-
-            {mode === 'versions' && sources.length > 1 && (
-              <Col xs={24} md={10} lg={6}>
-                <Typography.Text type="secondary" style={{ fontSize: 12 }}>In</Typography.Text>
-                <Select
-                  style={{ width: '100%' }}
+                  size="small"
+                  style={{ minWidth: 160 }}
                   value={versionEnd}
                   onChange={setSourceOverride}
                   options={sources.map((src) => ({ value: src.name, label: src.name }))}
                 />
-              </Col>
+              </Space>
             )}
-
-            <Col xs={24} lg={mode === 'versions' && sources.length > 1 ? 24 : 6}>
-              <Button
-                type="primary"
-                block
-                disabled={!ready}
-                loading={compare.isPending}
-                onClick={() => void run()}
-              >
-                Compare
-              </Button>
-            </Col>
-          </Row>
-
-          {compareRunning && (
-            <ComparisonProgress
-              token={token}
-              elapsedSeconds={elapsed}
-              base={releases.find((r) => refOf(r) === left)}
-              against={releases.find((r) => refOf(r) === right)}
-            />
-          )}
-
+            {mode === 'versions' ? (
+              <Button onClick={changeSelection}>Change selection</Button>
+            ) : (
+              <Link to="/packages"><Button>Back to packages</Button></Link>
+            )}
+          </Space>
         </Space>
+
+        {mode === 'locations' && (
+          /*
+            The one form that survives, and it is two controls about a release
+            that is already named rather than four about one that is not.
+          */
+          <div
+            style={{
+              display: 'flex', flexWrap: 'wrap', gap: 12, alignItems: 'center',
+              padding: '10px 16px', borderTop: `1px solid ${c.border}`,
+            }}
+          >
+            <Typography.Text type="secondary" style={{ fontSize: 12 }}>From</Typography.Text>
+            <Select
+              size="small"
+              style={{ minWidth: 220 }}
+              value={fromEndpoint ?? ''}
+              onChange={setFromEndpoint}
+              options={endpoints}
+            />
+            <Typography.Text type="secondary" style={{ fontSize: 12 }}>to</Typography.Text>
+            <Select
+              size="small"
+              style={{ minWidth: 220 }}
+              value={toEndpoint ?? ''}
+              onChange={setToEndpoint}
+              options={endpoints}
+            />
+            <Button
+              size="small"
+              type="primary"
+              loading={compare.isPending}
+              disabled={toEndpoint === undefined}
+              onClick={() => void run()}
+            >
+              Compare
+            </Button>
+          </div>
+        )}
+
+        {mode === 'versions' && report && (
+          <div
+            style={{
+              display: 'flex', flexWrap: 'wrap', gap: 12, alignItems: 'center',
+              justifyContent: 'space-between',
+              padding: '10px 16px', borderTop: `1px solid ${c.border}`,
+            }}
+          >
+            <Segmented
+              value={view}
+              onChange={(v) => (v === 'security' ? showSecurity() : setView('package'))}
+              options={[
+                { value: 'package', label: 'Package comparison' },
+                { value: 'security', label: 'Security comparison' },
+              ]}
+            />
+            <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+              {view === 'package'
+                ? 'What the two releases hold, component by component.'
+                : 'How the security posture changed from the base release to the new one.'}
+            </Typography.Text>
+          </div>
+        )}
       </Card>
+
+      {compareRunning && (
+        <Card size="small" style={{ marginBottom: 16 }}>
+          <ComparisonProgress
+            token={token}
+            elapsedSeconds={elapsed}
+            base={leftPkg}
+            against={rightPkg}
+          />
+        </Card>
       )}
 
       {compare.isError && <ErrorState error={compare.error} retry={() => void run()} />}
@@ -1547,11 +1385,11 @@ export default function Compare() {
           {compareSecurity.isError && (
             <ErrorState error={compareSecurity.error} retry={() => void runSecurity()} />
           )}
-          {compareSecurity.data && product && left && (
+          {compareSecurity.data && product && leftRef && (
             <SecurityComparison
               product={product}
-              baseRef={left}
-              againstRef={rightPkg?.tag ?? right ?? ''}
+              baseRef={leftRef}
+              againstRef={rightPkg?.tag ?? rightRef ?? ''}
               repository={leftPkg?.sourceRepository}
               report={compareSecurity.data}
               onSync={syncEnd}
@@ -1559,7 +1397,6 @@ export default function Compare() {
           )}
         </>
       )}
-
     </>
   )
 }

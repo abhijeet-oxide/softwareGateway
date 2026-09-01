@@ -1,6 +1,6 @@
 import { useMutation, useQueries, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useEffect, useRef } from 'react'
-import { api, query, packageRef } from './client'
+import { api, fetchText, query, packageRef } from './client'
 import type {
   CalibrateRequest, CalibrateResponse,
   CancelAnalysisResponse, CancelSecuritySyncResponse,
@@ -1108,6 +1108,34 @@ export function packageSecurityExportUrl(
   })
   return `/api/v1/products/${encodeURIComponent(product)}/packages/${encodeURIComponent(segment)}` +
     `/security/export${params}`
+}
+
+/**
+ * One image's scanner document, as text, for reading in the drawer.
+ *
+ * # Why this is a query and not part of the security response
+ *
+ * Because a release is 157 images and an SBOM is tens of megabytes: a response
+ * carrying them would be gigabytes of JSON to render a table of numbers. The
+ * security response says WHICH documents exist and how big each is; this
+ * fetches one, when somebody opens it.
+ *
+ * `enabled` is what makes that true - it is false until a reader picks a
+ * document - and `url` comes from the server rather than being rebuilt here,
+ * so there is one place that knows how a document is addressed.
+ */
+export function useSecurityDocument(url: string | undefined, enabled: boolean) {
+  return useQuery({
+    queryKey: ['security-document', url],
+    queryFn: () => fetchText(url!),
+    enabled: Boolean(url) && enabled,
+    // A scanner's answer for one image does not change until the next sync, and
+    // a reader flicking between four tabs should not re-fetch megabytes each
+    // time they come back.
+    staleTime: 10 * MINUTE,
+    retry: false,
+    throwOnError: false,
+  })
 }
 
 /**

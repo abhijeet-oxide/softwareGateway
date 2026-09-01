@@ -564,10 +564,13 @@ func TestSecurityExportXLSXIsAWorkbook(t *testing.T) {
 	}
 }
 
-// A workbook holds every table the interface shows, not a summary of them.
+// A workbook opens on a summary page and holds every table behind it.
 //
-// The old detailed export was a twenty-six-row field/value sheet and one flat
-// findings sheet, and nobody exports a spreadsheet to read a headline.
+// Both halves matter and the balance was got wrong twice. The original export
+// was a twenty-six-row field/value sheet and one flat findings sheet, and
+// nobody exports a spreadsheet to read a headline; removing the summary
+// entirely went one step too far, because a workbook that opens on row one of
+// ninety thousand findings gives a reader nowhere to stand.
 func TestSecurityExportWorkbookCarriesTheTablesOnScreen(t *testing.T) {
 	h := newSecurityHarness(t)
 	h.seedPackage("25.7.2131", digestA)
@@ -598,13 +601,52 @@ func TestSecurityExportWorkbookCarriesTheTablesOnScreen(t *testing.T) {
 		}
 		workbook = string(raw)
 	}
-	for _, sheet := range []string{"Unique CVEs", "All findings", "Images"} {
+	for _, sheet := range []string{"Summary", "Unique CVEs", "All findings", "Images"} {
 		if !strings.Contains(workbook, sheet) {
 			t.Errorf("workbook has no %q sheet: %s", sheet, workbook)
 		}
 	}
-	if strings.Contains(workbook, "Summary") {
-		t.Error("the detailed export still leads with a field/value summary sheet")
+	// First, because it is the page a reader lands on.
+	if summary, findings := strings.Index(workbook, "Summary"),
+		strings.Index(workbook, "All findings"); summary > findings {
+		t.Error("the summary is not the workbook's first sheet")
+	}
+
+	// And the sheets are formatted: a header row that stays put, columns wide
+	// enough to read, and a style table for them to point at. Without these the
+	// first thing anybody does with an export is spend two minutes fixing it.
+	var findingsSheet string
+	styled := false
+	for _, f := range zr.File {
+		if f.Name != "xl/worksheets/sheet3.xml" && f.Name != "xl/styles.xml" {
+			continue
+		}
+		rc, err := f.Open()
+		if err != nil {
+			t.Fatal(err)
+		}
+		raw, err := io.ReadAll(rc)
+		_ = rc.Close()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if f.Name == "xl/styles.xml" {
+			styled = len(raw) > 0
+			continue
+		}
+		findingsSheet = string(raw)
+	}
+	if !styled {
+		t.Error("the workbook has no style table, so every cell renders as the default")
+	}
+	if !strings.Contains(findingsSheet, "state=\"frozen\"") {
+		t.Error("the header row is not frozen: scrolling a real export loses the column names")
+	}
+	if !strings.Contains(findingsSheet, "<cols>") {
+		t.Error("no column widths: every column opens eight characters wide")
+	}
+	if !strings.Contains(findingsSheet, "autoFilter") {
+		t.Error("no filter row on a table somebody is going to filter")
 	}
 }
 
@@ -725,6 +767,49 @@ func TestSecurityDocumentDownloadServesOneImagesBody(t *testing.T) {
 	// cache must never hold them.
 	if !strings.Contains(header.Get("Cache-Control"), "private") {
 		t.Errorf("Cache-Control = %q, want it private", header.Get("Cache-Control"))
+	}
+}
+
+// The download URL the response advertises has to be one that resolves.
+//
+// It carried the CONFIGURED scanner repository in `?repository=`, where every
+// route under /packages/{package} reads that parameter as the OCI repository
+// path - so the button opened a page reading "no package of product X matches
+// Y". Following the advertised link is the only assertion that catches it.
+func TestSecurityDocumentURLOnTheResponseResolves(t *testing.T) {
+	h := newSecurityHarness(t)
+	h.seedPackage("25.7.2131", digestA)
+	h.syncer.reports[digestA] = scannedReport(
+		apiFinding("CVE-2024-3094", security.SeverityCritical, "openssl", true))
+	h.syncer.documents[digestA] = map[security.DocumentKind][]byte{
+		security.DocumentSBOM: []byte(`{"bomFormat":"CycloneDX"}`),
+	}
+	h.post("/api/v1/products/vendor-a/packages/25.7.2131:syncSecurity", `{}`, nil)
+
+	var resp v1.PackageSecurityResponse
+	if code := h.get(
+		"/api/v1/products/vendor-a/packages/25.7.2131/security?detail=true", &resp); code != http.StatusOK {
+		t.Fatalf("read security: %d", code)
+	}
+
+	var sbomURL string
+	for _, report := range resp.Reports {
+		for _, doc := range report.Documents {
+			if doc.Kind == "sbom" {
+				sbomURL = doc.URL
+			}
+		}
+	}
+	if sbomURL == "" {
+		t.Fatal("the response advertises no SBOM download")
+	}
+
+	body, header := h.getRaw(sbomURL)
+	if string(body) != `{"bomFormat":"CycloneDX"}` {
+		t.Errorf("following the advertised URL gave %q", body)
+	}
+	if !strings.Contains(header.Get("Content-Type"), "json") {
+		t.Errorf("content type = %q", header.Get("Content-Type"))
 	}
 }
 

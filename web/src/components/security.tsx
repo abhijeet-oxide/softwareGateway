@@ -1,11 +1,12 @@
 import { useEffect, useState } from 'react'
 import type { ReactNode } from 'react'
-import { Alert, Button, Drawer, Dropdown, Popover, Progress, Space, Tooltip, Typography } from 'antd'
-import { formatRelative } from '../domain/format'
+import { Alert, App, Button, Drawer, Dropdown, Popover, Progress, Space, Timeline, Tooltip, Typography } from 'antd'
+import { formatAbsolute, formatRelative } from '../domain/format'
+import { download } from '../api/client'
 import {
   CheckCircleOutlined, CopyOutlined, DownloadOutlined, ExclamationCircleOutlined,
-  FileTextOutlined, MinusCircleOutlined, QuestionCircleOutlined, StopOutlined, SyncOutlined,
-  WarningOutlined,
+  FileTextOutlined, LoadingOutlined, MinusCircleOutlined, QuestionCircleOutlined, StopOutlined,
+  SyncOutlined, WarningOutlined,
 } from '../icons'
 import {
   c, mono, severity as severityColour, severitySurface, StatusPill, tokens,
@@ -14,7 +15,7 @@ import {
 import { SEVERITIES } from '../api/types'
 import type {
   PackageSecuritySummary, ScanStatus, SecurityCounts, SecurityCoverage,
-  SecurityState, SecuritySyncStatus, Severity, Verdict,
+  SecurityLogEntry, SecurityState, SecuritySyncStatus, Severity, Verdict,
 } from '../api/types'
 
 /**
@@ -1098,10 +1099,32 @@ export function SyncedAgo({ sync }: { sync: SecuritySyncStatus }) {
 // The sync's own log
 // ---------------------------------------------------------------------------
 
+/**
+ * A dot per level, and the levels mean what a reader expects them to mean.
+ *
+ * Every line used to be one of three greys with an amber for warnings, and
+ * every NOTE was written at warning level - so "requesting scan results for 157
+ * images, skipping 103 that are not container images", which is a sync doing
+ * exactly what it should, arrived the same colour as a scanner that could not
+ * be reached. A reader who learns that the normal case looks like a problem
+ * stops reading the ones that are.
+ *
+ * Blue is something happening. Green is something that worked. Amber is
+ * something that went wrong and did not stop the sync. Red stopped it.
+ */
 const LOG_COLOUR: Record<string, string> = {
   error: c.danger,
   warning: c.pending,
-  info: c.text2,
+  success: c.ok,
+  info: c.brand,
+}
+
+/** The word beside the dot, for a reader who cannot rely on colour. */
+const LOG_LABEL: Record<string, string> = {
+  error: 'Failed',
+  warning: 'Warning',
+  success: 'Done',
+  info: 'Info',
 }
 
 /**
@@ -1136,6 +1159,19 @@ export function SyncLogButton({ sync, size = 'middle' }: {
       + (e.repeat ? ` (x${e.repeat + 1})` : ''))
     .join('\n')
 
+  /*
+   * Whether the times need their date.
+   *
+   * A sync that ran this morning is read as clock times and the date is noise.
+   * One from last Tuesday read as "02:14:28" with no date at all, which is not
+   * a wrong time so much as a time about nothing - and a reader comparing it
+   * with a release that shipped since has no way to tell which came first.
+   *
+   * So the date appears when any line is not from today, rather than always or
+   * never: the common case stays clean and the stale case stops lying.
+   */
+  const showDates = entries.some((e) => e.at && !isToday(e.at))
+
   return (
     <>
       <Button size={size} icon={<FileTextOutlined />} onClick={() => setOpen(true)}>
@@ -1156,7 +1192,7 @@ export function SyncLogButton({ sync, size = 'middle' }: {
           </Button>
         }
       >
-        <Space direction="vertical" size={12} style={{ width: '100%' }}>
+        <Space direction="vertical" size={16} style={{ width: '100%' }}>
           <Typography.Text type="secondary" style={{ fontSize: 12 }}>
             {running
               ? 'This sync is running. The log updates as it goes.'
@@ -1171,42 +1207,85 @@ export function SyncLogButton({ sync, size = 'middle' }: {
                 Nothing has been written yet. Lines appear as the sync reaches each stage.
               </Typography.Text>
             )
-            : entries.map((e, i) => (
-              <div
-                key={`${e.at ?? ''}-${i}`}
-                style={{
-                  display: 'flex', gap: 10, alignItems: 'baseline',
-                  paddingBottom: 8, borderBottom: '1px solid ${c.border}',
-                }}
-              >
-                <Typography.Text
-                  type="secondary"
-                  style={{ fontFamily: mono, fontSize: 11, whiteSpace: 'nowrap' }}
-                >
-                  {e.at ? new Date(e.at).toLocaleTimeString() : '--:--:--'}
-                </Typography.Text>
-                <span
-                  aria-hidden
-                  style={{
-                    display: 'inline-block', width: 8, height: 8, borderRadius: '50%',
-                    background: LOG_COLOUR[e.level] ?? c.text2, flex: '0 0 auto',
-                  }}
-                />
-                <Typography.Text
-                  style={{ color: e.level === 'error' ? c.danger : undefined }}
-                >
-                  {e.message}
-                  {e.repeat ? (
-                    <Typography.Text type="secondary" style={{ fontSize: 11 }}>
-                      {' '}(x{e.repeat + 1})
-                    </Typography.Text>
-                  ) : null}
-                </Typography.Text>
-              </div>
-            ))}
+            : (
+              /*
+                A timeline, because a sync IS one: a sequence of things that
+                happened, in order, with gaps between them that mean something.
+                It was a list of rows with a coloured dot floating between the
+                time and the text, connected to nothing - so a reader could see
+                the events and not the shape of the run, which is what tells a
+                slow sync from a stuck one.
+              */
+              <Timeline
+                mode="left"
+                items={entries.map((e, i) => ({
+                  key: `${e.at ?? ''}-${i}`,
+                  color: LOG_COLOUR[e.level] ?? c.text2,
+                  children: <LogLine entry={e} showDate={showDates} />,
+                }))}
+              />
+            )}
         </Space>
       </Drawer>
     </>
+  )
+}
+
+/** Whether a timestamp falls on today's date, in the reader's own zone. */
+function isToday(at: string): boolean {
+  const then = new Date(at)
+  if (Number.isNaN(then.getTime())) return true
+  const now = new Date()
+  return then.getFullYear() === now.getFullYear()
+    && then.getMonth() === now.getMonth()
+    && then.getDate() === now.getDate()
+}
+
+/**
+ * One line of the transcript: when, how important, and what happened.
+ *
+ * The level is a WORD as well as a colour. Everything on this page reads
+ * correctly in greyscale, and a timeline whose only signal is the colour of a
+ * six-pixel dot is the easiest place in the interface to forget that.
+ */
+function LogLine({ entry, showDate }: { entry: SecurityLogEntry; showDate: boolean }) {
+  const when = entry.at ? new Date(entry.at) : undefined
+  const valid = when && !Number.isNaN(when.getTime())
+  const colour = LOG_COLOUR[entry.level] ?? c.text2
+
+  return (
+    <Space direction="vertical" size={2} style={{ width: '100%' }}>
+      <Space size={8} wrap style={{ lineHeight: 1.2 }}>
+        <Typography.Text
+          type="secondary"
+          style={{ fontFamily: mono, fontSize: 11, whiteSpace: 'nowrap' }}
+          // The full timestamp on hover, always, whatever the line shows.
+          title={valid ? formatAbsolute(entry.at) ?? when.toISOString() : undefined}
+        >
+          {valid
+            ? showDate
+              ? `${when.toLocaleDateString(undefined, { day: '2-digit', month: 'short' })} ${when.toLocaleTimeString()}`
+              : when.toLocaleTimeString()
+            : '--:--:--'}
+        </Typography.Text>
+        <Typography.Text
+          style={{
+            fontSize: 10, textTransform: 'uppercase', letterSpacing: '0.04em',
+            color: colour, fontWeight: 600,
+          }}
+        >
+          {LOG_LABEL[entry.level] ?? entry.level}
+        </Typography.Text>
+        {entry.repeat ? (
+          <Typography.Text type="secondary" style={{ fontSize: 11 }}>
+            x{entry.repeat + 1}
+          </Typography.Text>
+        ) : null}
+      </Space>
+      <Typography.Text style={{ color: entry.level === 'error' ? c.danger : undefined }}>
+        {entry.message}
+      </Typography.Text>
+    </Space>
   )
 }
 
@@ -1215,65 +1294,104 @@ export function SyncLogButton({ sync, size = 'middle' }: {
 // ---------------------------------------------------------------------------
 
 /**
- * The export control.
+ * The export control: two answers, and one of them is running.
  *
- * # What it stopped offering, and why
+ * # Why two, when there were nine
  *
- * "Summary" and "Full breakdown", each in three formats. The summary was
- * twenty-six field/value rows saying what the cards above already say, and
- * nobody exports a spreadsheet to read a headline - so it is one item at the
- * bottom rather than half the menu, and the top of the menu is the data.
+ * It offered summary and full breakdown, each as CSV, Excel and JSON - and then
+ * "this table" in two more formats. Nine items for a question with two real
+ * answers: do you want to WORK on this, or do you want to SEND it. A workbook
+ * is the first; the bundle, with the scanner's own responses beside the tables,
+ * is the second. CSV and JSON remain on the API for anything scripted, where
+ * a format parameter is the natural way to ask.
  *
- * # The three groups
+ * # Why the download goes through fetch rather than an anchor
  *
- * Everything is the whole release: one workbook with every table, one archive
- * with the tables AND the scanner's own responses. This table is the view on
- * screen, as a single-table file, for the person who filtered it and wants
- * exactly that in a pivot table. Then the summary, for the person pasting one
- * number into a release note.
+ * Because a link cannot say it is working. The browser streams the file and
+ * names it from the response - all correct - but the page has no idea, so an
+ * export of a large release was a button that did nothing for eleven seconds,
+ * and a reader who clicks twice starts two exports of ninety thousand rows.
  *
- * Every item is a LINK. The browser streams the file, names it from the
- * response and shows its own progress, none of which a fetch-and-blob would do -
- * and a bundle of a large release would be held whole in memory first.
+ * The button holds a spinner until the file has arrived, and the menu is
+ * disabled while it does. See `download` in api/client: the filename still
+ * comes from the server, because a client that invented one would drift from
+ * the CLI's.
  */
-export function SecurityExportMenu({ urlFor, disabled, table, tableLabel }: {
-  /** Builds a URL. `table` selects which single table a CSV writes. */
-  urlFor: (format: string, view: string, table?: string) => string
+export function SecurityExportMenu({
+  urlFor, disabled, label = 'Export', workbookNote, bundleNote,
+}: {
+  /** Builds a URL for a format. `view` stays for the API's sake; both use `detailed`. */
+  urlFor: (format: string, view: string) => string
   disabled?: boolean
-  /** The table currently on screen, so "this table" means what it says. */
-  table?: string
-  tableLabel?: string
+  label?: string
+  /**
+   * What each file actually contains, in this context.
+   *
+   * Defaulted for a release's own security, and overridden by the comparison
+   * view - whose bundle holds the change tables and NOT a directory of scanner
+   * responses per image. A menu item that promised those would be describing a
+   * file the reader is not about to get.
+   */
+  workbookNote?: string
+  bundleNote?: string
 }) {
+  const [running, setRunning] = useState<string | null>(null)
+  const { message } = App.useApp()
+
+  const start = async (format: string, what: string) => {
+    if (running) return
+    setRunning(format)
+    try {
+      await download(urlFor(format, 'detailed'))
+    } catch (err) {
+      // Said out loud. A download that fails silently is indistinguishable
+      // from one the browser is still thinking about, and the reader waits.
+      message.error(
+        err instanceof Error ? `${what} could not be exported: ${err.message}` : `${what} could not be exported`,
+      )
+    } finally {
+      setRunning(null)
+    }
+  }
+
   const items = [
-    { key: 'h1', type: 'group' as const, label: 'Everything', children: [
-      {
-        key: 'all-xlsx',
-        label: <a href={urlFor('xlsx', 'detailed')}>Excel workbook - every table</a>,
-      },
-      {
-        key: 'all-zip',
-        /*
-          The one that answers "send this to the customer". Named for what is in
-          it rather than for its format: "ZIP" tells a reader nothing about why
-          they would pick it over Excel.
-        */
-        label: <a href={urlFor('zip', 'detailed')}>Evidence bundle - tables and raw scanner output</a>,
-      },
-      { key: 'all-json', label: <a href={urlFor('json', 'detailed')}>JSON</a> },
-    ] },
-    { key: 'h2', type: 'group' as const, label: tableLabel ? `This table - ${tableLabel}` : 'This table', children: [
-      { key: 'table-csv', label: <a href={urlFor('csv', 'detailed', table)}>CSV</a> },
-      { key: 'table-xlsx', label: <a href={urlFor('xlsx', 'detailed', table)}>Excel</a> },
-    ] },
-    { key: 'h3', type: 'group' as const, label: 'Headline figures', children: [
-      { key: 'summary-csv', label: <a href={urlFor('csv', 'summary')}>CSV</a> },
-      { key: 'summary-xlsx', label: <a href={urlFor('xlsx', 'summary')}>Excel</a> },
-    ] },
+    {
+      key: 'xlsx',
+      icon: running === 'xlsx' ? <LoadingOutlined /> : <FileTextOutlined />,
+      label: (
+        <Space direction="vertical" size={0}>
+          <Typography.Text>Excel workbook</Typography.Text>
+          <Typography.Text type="secondary" style={{ fontSize: 11 }}>
+            {workbookNote ?? 'A summary page, then every table on this tab'}
+          </Typography.Text>
+        </Space>
+      ),
+      onClick: () => void start('xlsx', 'The workbook'),
+    },
+    {
+      key: 'zip',
+      icon: running === 'zip' ? <LoadingOutlined /> : <DownloadOutlined />,
+      label: (
+        <Space direction="vertical" size={0}>
+          <Typography.Text>Evidence bundle (ZIP)</Typography.Text>
+          <Typography.Text type="secondary" style={{ fontSize: 11 }}>
+            {bundleNote ?? 'The same tables, plus the scanner\u2019s own raw output per image'}
+          </Typography.Text>
+        </Space>
+      ),
+      onClick: () => void start('zip', 'The bundle'),
+    },
   ]
 
   return (
-    <Dropdown menu={{ items }} disabled={disabled} trigger={['click']}>
-      <Button icon={<DownloadOutlined />}>Export</Button>
+    <Dropdown menu={{ items }} disabled={disabled || Boolean(running)} trigger={['click']}>
+      <Button
+        icon={running ? <LoadingOutlined /> : <DownloadOutlined />}
+        loading={false}
+        disabled={disabled}
+      >
+        {running ? 'Preparing…' : label}
+      </Button>
     </Dropdown>
   )
 }

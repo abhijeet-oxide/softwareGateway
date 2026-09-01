@@ -124,8 +124,10 @@ export function CompareSelectionBar({
         <Button size="small" onClick={onReset} disabled={chosen === 0}>Clear</Button>
         <Button size="small" icon={<CloseCircleOutlined />} onClick={onCancel}>Cancel</Button>
         {ready && selection.a && selection.b ? (
-          <Link to={comparisonHref(selection.a, selection.b)}>
-            <Button size="small" type="primary" icon={<ScaleOutlined />}>Compare</Button>
+          <Link to={comparisonHref(selection.a, selection.b, selection.intent)}>
+            <Button size="small" type="primary" icon={<ScaleOutlined />}>
+              {selection.intent === 'vulnerabilities' ? 'Compare vulnerabilities' : 'Compare'}
+            </Button>
           </Link>
         ) : (
           <Tooltip title="Pick two releases of the same product">

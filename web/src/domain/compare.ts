@@ -37,6 +37,23 @@ import { packageReference } from './derive'
  * one more parameter.
  */
 
+/**
+ * What the reader is comparing FOR.
+ *
+ * # Why this is asked before the two releases and not after
+ *
+ * Because it changes which releases are worth choosing between. A comparison of
+ * vulnerabilities against a release nobody has scanned cannot say anything, so
+ * offering those rows is offering a choice that does not work - and the reader
+ * only finds out two clicks later, on a page that has to explain its own
+ * refusal.
+ *
+ * Asked first, it costs one two-position switch and removes the rows that
+ * cannot answer. It is also the answer to "which tab should the report open
+ * on", which is a question the reader would otherwise have to answer again.
+ */
+export type Intent = 'contents' | 'vulnerabilities'
+
 /** One end of a comparison: which product, and which release within it. */
 export interface Pick {
   product: string
@@ -48,6 +65,8 @@ export interface Pick {
 export interface Selection {
   /** Whether the listing is in selection mode at all. */
   active: boolean
+  /** What the comparison is for. Contents unless the reader says otherwise. */
+  intent: Intent
   a?: Pick
   b?: Pick
 }
@@ -75,7 +94,7 @@ export function samePick(a?: Pick, b?: Pick): boolean {
  * repositories with two sets of credentials - so a selection has one product
  * by construction, and the listing disables the rows that would break that.
  */
-const PARAM = { mode: 'compare', product: 'cmp', a: 'a', b: 'b' } as const
+const PARAM = { mode: 'compare', product: 'cmp', a: 'a', b: 'b', intent: 'for' } as const
 
 /**
  * Reads and writes the selection in the query string.
@@ -93,6 +112,7 @@ export function useComparisonSelection() {
     const b = params.get(PARAM.b) ?? undefined
     return {
       active: params.get(PARAM.mode) === '1',
+      intent: params.get(PARAM.intent) === 'vulnerabilities' ? 'vulnerabilities' : 'contents',
       a: product && a ? { product, ref: a } : undefined,
       b: product && b ? { product, ref: b } : undefined,
     }
@@ -131,6 +151,7 @@ export function useComparisonSelection() {
     const b = current.get(PARAM.b) ?? undefined
     const next = change({
       active: current.get(PARAM.mode) === '1',
+      intent: current.get(PARAM.intent) === 'vulnerabilities' ? 'vulnerabilities' : 'contents',
       a: product && a ? { product, ref: a } : undefined,
       b: product && b ? { product, ref: b } : undefined,
     })
@@ -148,14 +169,17 @@ export function useComparisonSelection() {
       else out.delete(PARAM.a)
       if (next.b) out.set(PARAM.b, next.b.ref)
       else out.delete(PARAM.b)
+
+      // Contents is the default and leaves no parameter, so an ordinary
+      // comparison link stays short and a shared URL says only what was chosen.
+      if (next.intent === 'vulnerabilities') out.set(PARAM.intent, next.intent)
+      else out.delete(PARAM.intent)
       return out
       // `replace`, so a selection does not fill the reader's back button with
       // one entry per checkbox. Backing out of a comparison should return them
       // to wherever they came from, not walk them through six clicks.
     }, { replace: true })
   }, [setParams])
-
-  const write = useCallback((next: Selection) => apply(() => next), [apply])
 
   /**
    * Adds or removes one release.
@@ -187,7 +211,7 @@ export function useComparisonSelection() {
     // the reader changed the product filter - and starting again is what they
     // meant by that.
     if (current.a && current.a.product !== pick.product) {
-      return { active: true, a: pick }
+      return { ...current, active: true, a: pick, b: undefined }
     }
     if (!current.a) {
       return { ...current, active: true, a: pick }
@@ -196,15 +220,40 @@ export function useComparisonSelection() {
   }), [apply])
 
   const start = useCallback(() => apply((s) => ({ ...s, active: true })), [apply])
-  const reset = useCallback(() => write({ active: true }), [write])
-  const cancel = useCallback(() => write({ active: false }), [write])
+  const reset = useCallback(
+    () => apply((s) => ({ intent: s.intent, active: true })), [apply])
+  const cancel = useCallback(
+    () => apply((s) => ({ intent: s.intent, active: false })), [apply])
+
+  /**
+   * Changes what the comparison is for, dropping picks the new intent cannot
+   * use.
+   *
+   * # Why a pick is dropped rather than kept and refused
+   *
+   * Because in the vulnerabilities intent a release with no findings is not a
+   * choice that happens to be unavailable - it is not in the list at all. A
+   * selection naming a row the reader can no longer see, above a Compare button
+   * that would produce a verdict saying nothing, is worse than a slot that
+   * visibly empties at the moment the mode changes.
+   *
+   * `usable` is supplied by the caller because whether a release has findings is
+   * the listing's knowledge, not this module's.
+   */
+  const setIntent = useCallback((intent: Intent, usable: (p: Pick) => boolean) => apply((s) => {
+    if (intent !== 'vulnerabilities') return { ...s, active: true, intent }
+    const a = s.a && usable(s.a) ? s.a : undefined
+    const b = s.b && usable(s.b) ? s.b : undefined
+    // A second end with no first is an orphan; promote it.
+    return { ...s, active: true, intent, a: a ?? b, b: a ? b : undefined }
+  }), [apply])
   /** Swaps which end is the base, for a comparison read the other way round. */
   const swap = useCallback(
     () => apply((s) => ({ ...s, active: true, a: s.b, b: s.a })),
     [apply],
   )
 
-  return { selection, toggle, start, reset, cancel, swap }
+  return { selection, toggle, start, reset, cancel, swap, setIntent }
 }
 
 /**
@@ -216,14 +265,19 @@ export function useComparisonSelection() {
  * there without a pair sends the reader back to the listing, which is where
  * choosing happens.
  */
-export function comparisonHref(a: Pick, b: Pick): string {
+export function comparisonHref(a: Pick, b: Pick, intent: Intent = 'contents'): string {
   const q = new URLSearchParams({ product: a.product, a: a.ref, b: b.ref })
+  // The report opens on the answer that was asked for. Carrying the intent is
+  // what stops the reader choosing it twice - once to filter the list, and
+  // again on the tab strip.
+  if (intent === 'vulnerabilities') q.set('view', 'security')
   return `/packages/compare?${q.toString()}`
 }
 
 /** The link back to the listing, in selection mode, with the pair preserved. */
 export function selectionHref(selection: Selection): string {
   const q = new URLSearchParams({ compare: '1' })
+  if (selection.intent === 'vulnerabilities') q.set(PARAM.intent, selection.intent)
   const product = selection.a?.product ?? selection.b?.product
   if (product) q.set(PARAM.product, product)
   if (selection.a) q.set(PARAM.a, selection.a.ref)

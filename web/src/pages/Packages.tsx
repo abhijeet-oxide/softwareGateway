@@ -1,5 +1,5 @@
 import { useMemo, useState } from 'react'
-import { App, Button, Card, Dropdown, Select, Space, Tooltip, Typography } from 'antd'
+import { App, Button, Card, Dropdown, Segmented, Select, Space, Tooltip, Typography } from 'antd'
 // The working-surface table: resizable, reorderable, pinnable columns whose
 // layout each person keeps. See `tablekit/README.md` for which tables get it.
 import { Table as DataTable } from '../tablekit'
@@ -12,8 +12,8 @@ import {
 import { useCan } from '../auth/permissions'
 import {
   deriveLocations, deriveStatus, downloadSeconds, failureReason, isLive, isPromotion, matches,
-  packageReference, promotableTargets, publishedAt, releaseHref, transferIndex, verification,
-  version, withTransfers,
+  hasSecurityData, packageReference, promotableTargets, publishedAt, releaseHref, transferIndex,
+  verification, version, withTransfers,
 } from '../domain/derive'
 import type { Package, PackageTransfer, Product } from '../api/types'
 import { formatDuration } from '../domain/format'
@@ -471,6 +471,21 @@ export default function Packages() {
   const transfers = useTransfers({ product: selected, pageSize: 200, view: 'summary' })
 
   /*
+   * Choosing two releases to compare, IN this listing.
+   *
+   * See domain/compare.ts for why the selection lives in the URL: it has to
+   * survive the search box, the product filter and the round trip to the
+   * report, and every one of those unmounts component state.
+   */
+  const {
+    selection, toggle, start, reset, cancel, swap, setIntent,
+  } = useComparisonSelection()
+  const comparing = selection.active
+  // Only the vulnerabilities intent narrows the list. Comparing contents is a
+  // question every release can answer, so nothing is hidden for it.
+  const forVulnerabilities = comparing && selection.intent === 'vulnerabilities'
+
+  /*
    * Every release this page has loaded, BEFORE the search and status filters.
    *
    * Split out from `rows` for one reason, and it is the reason the whole
@@ -516,13 +531,21 @@ export default function Packages() {
         ? allRows.filter((r) => r.status === 'READY FOR PRODUCTION')
         : allRows.filter((r) => r.status === status)
 
-    if (!search.trim()) return byStatus
+    /*
+      In the vulnerabilities intent, a release with no findings is not a choice
+      that happens to be unavailable - it cannot answer the question, so it is
+      not offered. The count line above the table says how many that is, which
+      is the whole explanation this filter needs.
+    */
+    const relevant = forVulnerabilities ? byStatus.filter((r) => hasSecurityData(r.pkg)) : byStatus
+
+    if (!search.trim()) return relevant
     // The version as shown AND as the vendor spells it, plus the repository -
     // a product publishes one version tag into every repository it watches, so
     // the repository is frequently the only thing telling two rows apart.
-    return byStatus.filter((r) => matches(
+    return relevant.filter((r) => matches(
       search, version(r.pkg), r.pkg.tag, r.pkg.displayRepository, r.pkg.sourceRepository))
-  }, [allRows, status, search])
+  }, [allRows, status, search, forVulnerabilities])
 
   const update = (key: string, value?: string) => {
     const next = new URLSearchParams(params)
@@ -531,22 +554,32 @@ export default function Packages() {
     setParams(next)
   }
 
-  /*
-   * Choosing two releases to compare, IN this listing.
-   *
-   * See domain/compare.ts for why the selection lives in the URL: it has to
-   * survive the search box, the product filter and the round trip to the
-   * report, and every one of those unmounts component state.
-   */
-  const { selection, toggle, start, reset, cancel, swap } = useComparisonSelection()
-  const comparing = selection.active
-
   // The product a selection is locked to, once one end is chosen. Two products
   // are two sets of repositories under two sets of credentials, so a comparison
   // across them is not a thing the API can answer - and the rows that would
   // make one are disabled with the reason on them, which teaches the rule
   // better than a product dropdown ever did.
   const lockedProduct = selection.a?.product ?? selection.b?.product
+
+  /**
+   * How many releases the vulnerabilities intent is holding back.
+   *
+   * Counted against the STATUS-filtered set rather than everything loaded, so
+   * the number describes what this filter removed and not what some other one
+   * did - two explanations for one missing row is how a reader stops trusting
+   * either.
+   */
+  const hiddenWithoutScan = useMemo(() => {
+    if (!forVulnerabilities) return 0
+    const eligible = !status
+      ? allRows
+      : status === 'UNSIGNED'
+        ? allRows.filter((r) => verification(r.pkg) === 'NOT_SIGNED')
+      : status === 'READY'
+        ? allRows.filter((r) => r.status === 'READY FOR PRODUCTION')
+        : allRows.filter((r) => r.status === status)
+    return eligible.filter((r) => !hasSecurityData(r.pkg)).length
+  }, [allRows, status, forVulnerabilities])
 
   /**
    * Resolves a chosen reference back to the release it names.
@@ -585,16 +618,57 @@ export default function Packages() {
     <>
       {comparing && (
         /*
-          The page says what it is FOR while it is in this mode.
+          The page says what it is FOR while it is in this mode, and asks the
+          one question that changes which releases are worth offering.
 
           A table that has grown a column of plus signs is a table with an
           unexplained column; a title saying "select two packages to compare" is
-          the whole instruction, and it is the sentence the old page opened with
-          before it asked the same question through six controls.
+          the whole instruction. The switch beside it is the intent - see
+          domain/compare.ts - and it is asked HERE rather than on the report
+          because it decides what the list should contain.
         */
-        <Typography.Title level={4} style={{ marginTop: 0, marginBottom: 4 }}>
-          Select two packages to compare
-        </Typography.Title>
+        <div
+          style={{
+            display: 'flex', alignItems: 'baseline', justifyContent: 'space-between',
+            gap: 16, flexWrap: 'wrap', marginBottom: 4,
+          }}
+        >
+          <Space direction="vertical" size={0}>
+            <Typography.Title level={4} style={{ margin: 0 }}>
+              Select two packages to compare
+            </Typography.Title>
+            {/*
+              One line, and only when the filter is actually hiding something.
+              It explains the missing rows and nothing else - a reader who has
+              just narrowed a list wants to know what left it, not to read a
+              paragraph about why.
+            */}
+            {forVulnerabilities && hiddenWithoutScan > 0 && (
+              <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+                {hiddenWithoutScan.toLocaleString()} release
+                {hiddenWithoutScan === 1 ? '' : 's'} without a vulnerability sync
+                {hiddenWithoutScan === 1 ? ' is' : ' are'} hidden.
+              </Typography.Text>
+            )}
+          </Space>
+          <Segmented
+            value={selection.intent}
+            onChange={(v) => setIntent(
+              v as 'contents' | 'vulnerabilities',
+              // Whether a release can answer the new question is the listing's
+              // knowledge, so the listing supplies the test.
+              (pick) => {
+                const row = allRows.find((r) => r.product.productId === pick.product
+                  && packageReference(r.pkg) === pick.ref)
+                return Boolean(row && hasSecurityData(row.pkg))
+              },
+            )}
+            options={[
+              { value: 'contents', label: 'Contents' },
+              { value: 'vulnerabilities', label: 'Vulnerabilities' },
+            ]}
+          />
+        </div>
       )}
 
       <div
@@ -842,6 +916,27 @@ export default function Packages() {
                   />
                 ),
               },
+              /*
+                THE COLUMN THE DECISION IS BEING MADE ON COMES SECOND.
+
+                Column order is a priority order here - the table is wider than
+                a laptop window and whatever sits last is what the pinned
+                Actions column covers. Somebody choosing two releases to compare
+                VULNERABILITIES is reading the counts, and leaving them where
+                they are for the contents intent put the deciding column half
+                behind another one.
+              */
+              ...(forVulnerabilities ? [{
+                title: 'Vulnerabilities',
+                width: 240,
+                render: (_: unknown, r: (typeof rows)[number]) => (
+                  <RowVulnerability
+                    product={r.product.productId}
+                    pkg={r.pkg}
+                    onSync={() => syncNotSynced(r.product.productId, r.pkg)}
+                  />
+                ),
+              }] : []),
               {
                 title: 'Published',
                 width: 118,
@@ -876,6 +971,9 @@ export default function Packages() {
                 */
                 title: 'Vulnerabilities',
                 width: 240,
+                // Moved to second while choosing on vulnerabilities, so it is
+                // rendered once either way.
+                hidden: forVulnerabilities,
                 render: (_, r) => (
                   <RowVulnerability
                     product={r.product.productId}

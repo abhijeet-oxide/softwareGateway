@@ -24,7 +24,9 @@ import {
 } from '../components/chips'
 import { EmptyStateCard, ErrorState, SearchBar } from '../components/layout'
 import { CompareSelectionBar } from '../components/compareselect'
-import { pickOf, samePick, useComparisonSelection } from '../domain/compare'
+import {
+  COMPARISON_PRODUCT_FILTER, pickOf, samePick, useComparisonSelection,
+} from '../domain/compare'
 import { NokiaNIcon } from '../components/icons'
 import { VulnerabilityCell } from '../components/security'
 import { PromoteButton } from '../components/promote'
@@ -102,11 +104,12 @@ function ComparePick({ slot, blocked, onToggle }: {
  * download), and a menu for the rest. The menu is one button wide whatever it
  * contains, which is what stops the column growing every time a verb is added.
  */
-function RowActions({ product, pkg, config }: {
+function RowActions({ product, pkg, config, autoProductFilter }: {
   product: string
   pkg: Package
   /** The product's configuration, so the row knows where this could still go. */
   config?: Product
+  autoProductFilter: boolean
 }) {
   const { message } = App.useApp()
   const navigate = useNavigate()
@@ -121,6 +124,8 @@ function RowActions({ product, pkg, config }: {
   // halves of that are this listing's job, and it is already open.
   const compareHref = `/packages?compare=1`
     + `&cmp=${encodeURIComponent(product)}`
+    + `&product=${encodeURIComponent(product)}`
+    + (autoProductFilter ? `&${COMPARISON_PRODUCT_FILTER}=1` : '')
     // The REPOSITORY travels with the tag. One version tag exists in every
     // repository a product watches, so a reference carrying only the tag does
     // not name a package.
@@ -551,6 +556,7 @@ export default function Packages() {
     const next = new URLSearchParams(params)
     if (value) next.set(key, value)
     else next.delete(key)
+    if (key === 'product') next.delete(COMPARISON_PRODUCT_FILTER)
     setParams(next)
   }
 
@@ -1027,7 +1033,14 @@ export default function Packages() {
                 title: 'Actions',
                 fixed: 'right',
                 width: 190,
-                render: (_, r) => <RowActions product={r.product.productId} pkg={r.pkg} config={r.product} />,
+                render: (_, r) => (
+                  <RowActions
+                    product={r.product.productId}
+                    pkg={r.pkg}
+                    config={r.product}
+                    autoProductFilter={!selected}
+                  />
+                ),
               },
             ]}
           />

@@ -300,11 +300,15 @@ tasks:
     cmds:
       - ./bin/worker{{.EXE}} --config {{.DEV_CONFIG}}
 
+  run:all:
+    internal: true
+    deps: [run:worker, run:coordinator, dev:web]
+
   run:
     desc: Build and run the worker, coordinator, and web development server
     deps: [build:backend]
     cmds:
-      - task --parallel run:worker run:coordinator dev:web
+      - task: run:all
 
   dev:postgres:
     desc: Start PostgreSQL for development

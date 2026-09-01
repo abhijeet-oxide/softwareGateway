@@ -30,6 +30,7 @@ import {
 import { FileViewer, looksBinary } from '../components/filecontent'
 import { PromoteButton } from '../components/promote'
 import { SecurityTab } from '../components/securitypanel'
+import { COMPARISON_PRODUCT_FILTER } from '../domain/compare'
 import { EmptyState, c, mono } from '../uikit'
 import type {
   Artifact, CancelAnalysisResponse, InspectPackageResponse, Package, PackageFile, PackageTransfer,
@@ -1072,7 +1073,9 @@ export default function PackageDetail() {
         }
         extra={
           <Space>
-            <Link to={`/packages/compare?product=${encodeURIComponent(productName!)}&from=${encodeURIComponent(p?.tag ?? '')}`}>
+            <Link to={p
+              ? `/packages?compare=1&cmp=${encodeURIComponent(productName!)}&product=${encodeURIComponent(productName!)}&${COMPARISON_PRODUCT_FILTER}=1&a=${encodeURIComponent(packageReference(p))}`
+              : '/packages'}>
               <Button>Compare</Button>
             </Link>
             {/*

@@ -96,6 +96,9 @@ export function samePick(a?: Pick, b?: Pick): boolean {
  */
 const PARAM = { mode: 'compare', product: 'cmp', a: 'a', b: 'b', intent: 'for' } as const
 
+/** Marks a listing product filter that comparison selection added itself. */
+export const COMPARISON_PRODUCT_FILTER = 'compareProductFilter'
+
 /**
  * Reads and writes the selection in the query string.
  *
@@ -162,8 +165,17 @@ export function useComparisonSelection() {
       else out.delete(PARAM.mode)
 
       const chosen = next.a?.product ?? next.b?.product
-      if (chosen) out.set(PARAM.product, chosen)
-      else out.delete(PARAM.product)
+      if (chosen) {
+        out.set(PARAM.product, chosen)
+        if (!current.get('product')) out.set(COMPARISON_PRODUCT_FILTER, '1')
+        out.set('product', chosen)
+      } else {
+        out.delete(PARAM.product)
+        if (!next.active && current.get(COMPARISON_PRODUCT_FILTER) === '1') {
+          out.delete('product')
+          out.delete(COMPARISON_PRODUCT_FILTER)
+        }
+      }
 
       if (next.a) out.set(PARAM.a, next.a.ref)
       else out.delete(PARAM.a)

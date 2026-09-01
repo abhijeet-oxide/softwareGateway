@@ -5,7 +5,7 @@
 > over with "I'm not sure how accurate or how good they were", and because a
 > plan that adopts them without reading them would inherit the defects silently.
 >
-> **Prerequisites:** [00 - The Validation Model](00-validation-model.md), [01 - Check Catalog](01-check-catalog.md), [02 - Authoring Checks](02-authoring-checks.md)
+> **Prerequisites:** [00 - The Compliance Model](00-compliance-model.md), [01 - Check Catalog](01-check-catalog.md), [02 - Authoring Checks](02-authoring-checks.md)
 
 ---
 
@@ -49,7 +49,7 @@ The consequences compound:
 And the categories themselves are ad hoc per file: `pdb.rego` says
 `"Pod Disruption Budget (PDB)"`, `probes.rego` says `"Reliability/HA"`,
 `resource_limits.rego` says `"Configuration"` - which is not the category
-[custom-validation.md](custom-validation.md) files resource requests under.
+[source-standards.md](source-standards.md) files resource requests under.
 There is no controlled vocabulary, so grouping the report by category produces a
 different taxonomy than the organization's own document.
 
@@ -59,7 +59,7 @@ catalog's own thirteen prefixes, and category as a closed set.
 ### 2.2 `violations` only - the central flaw
 
 A policy that emits only violations cannot express three of the four outcomes
-in [00](00-validation-model.md) Rule 2. There is no way for it to say *this
+in [00](00-compliance-model.md) Rule 2. There is no way for it to say *this
 workload was checked and is fine*, *there was nothing here to check*, or *this
 check could not be decided*. All three render as silence.
 
@@ -67,7 +67,7 @@ For a release-gating tool this is disqualifying: silence is exactly what a
 completely broken run also produces.
 
 **Becomes:** the `appliesTo` denominator plus derived passes
-([00](00-validation-model.md) §5). This is the reason that mechanism exists, and
+([00](00-compliance-model.md) §5). This is the reason that mechanism exists, and
 it is what lets these sixteen files be adopted almost unchanged - **the
 violation logic stays; the manifest supplies what was missing.**
 
@@ -80,7 +80,7 @@ serious is it" without evaluation. It also conflates *outcome* with *severity* -
 `"fail"` is doing both jobs.
 
 **Becomes:** two orthogonal fields, severity declared in the manifest
-([00](00-validation-model.md) Rule 3).
+([00](00-compliance-model.md) Rule 3).
 
 ### 2.4 The address stops at kind/namespace/name
 
@@ -106,7 +106,7 @@ reads a running cluster and its Helm release history. Two mismatches matter:
 
 - **`input.namespace`** presumes one target namespace. A release here is dozens
   of charts that will land in several namespaces, and the namespace is not known
-  at validation time at all.
+  at compliance time at all.
 - **`input.manifests`** is flat. Nothing says which chart a manifest came from,
   which is precisely the information the report is built around.
 
@@ -153,7 +153,7 @@ Affected: `resource_limits`, `high_uid`, `security_context`, `seccomp`,
 `automount_token`, `image_pull_policy`, `configmap_hygiene`. Every CronJob in
 every chart passes all seven, including the ones that would otherwise block.
 
-**This is the exact failure mode [00](00-validation-model.md) Rule 2 exists to
+**This is the exact failure mode [00](00-compliance-model.md) Rule 2 exists to
 prevent, and it is here in the existing policies today.** A `violations`-only
 engine reports "no findings" identically whether the CronJob is compliant or
 whether the traversal never reached it. With an `appliesTo` denominator, the
@@ -173,7 +173,7 @@ a stanza copied into every file.
   container across the whole release for a condition that is not a defect. The
   third and fourth rules together cover the complete space of "has liveness, no
   startup", so every such container produces a finding no matter what.
-- **A missing `livenessProbe` is a `warn`.** [custom-validation.md](custom-validation.md)
+- **A missing `livenessProbe` is a `warn`.** [source-standards.md](source-standards.md)
   does not require a liveness probe at all; PRB-03 requires that *if* one
   exists, it is less sensitive than readiness. The policy asks for the opposite
   of the organization's own standard, and following it makes clusters less
@@ -229,10 +229,10 @@ Three further problems:
   single-replica, so the HA-without-PDB rule almost never fires and the
   "single replica with a PDB" rule fires on workloads that are not single
   replica. This is precisely the problem determinacy solves
-  ([00](00-validation-model.md) Rule 4), and without it the policy's central
+  ([00](00-compliance-model.md) Rule 4), and without it the policy's central
   rule is close to inert on real charts.
 - **Severity contradicts the catalog.** HA workload without a PDB is `warn`
-  here and `BLOCK` in [custom-validation.md](custom-validation.md).
+  here and `BLOCK` in [source-standards.md](source-standards.md).
 
 **Becomes:** PDB-01, PDB-02, PDB-03, PDB-09, specified in
 [01](01-check-catalog.md) §3.1-3.2. The pod-template-labels insight is kept; the
@@ -252,7 +252,7 @@ manifest == all_workloads[0]
 That is a "fire only once" hack that depends on the order of `input.manifests`.
 It works, and it means the finding is attached to whichever workload happens to
 be first - so the finding's `resource` field points at an arbitrary object that
-has nothing to do with the problem. Under [00](00-validation-model.md) Rule 1 a
+has nothing to do with the problem. Under [00](00-compliance-model.md) Rule 1 a
 release-scoped finding is addressed to the release, not smuggled onto a resource.
 
 The conceptual problem is larger: it asserts only that **some** NetworkPolicy
@@ -351,32 +351,48 @@ for rule 4 in [02](02-authoring-checks.md) §6 in one table.
 | `network_policy.rego` | **Rewrite** - checks existence, not policy (§3.4) | NET-01, NET-02, NET-03 |
 | `default_namespace.rego` | **Drop** at tier 1; keep the inverse assertion (§3.5) | a portability `warn` under CFG |
 
-## 6. Why the baseline is Go rather than these files
+## 6. Why the baseline is not these files
 
 The disposition above adopts the *logic* of eleven files and none of the *code*.
 That is a deliberate choice and it deserves stating, because "we already have
 Rego, use it" is the cheaper answer.
 
-Three of the four things the baseline has to do are things a Rego policy cannot
-see:
+Two separate things are being rejected: this code, and this language.
 
-| Needed by the baseline | Available to a Rego policy |
+### 6.1 The code
+
+Every defect in §2 and §3 is a defect of these sixteen files, not of Rego. But
+they are the defects that decide the rewrite: no identity, no passes, no
+address below kind/namespace/name, no tests, and seven files that silently skip
+`CronJob`. There is no edit that turns them into checks under
+[00](00-compliance-model.md)'s five rules; there is only a rewrite that keeps
+what they were trying to say.
+
+### 6.2 The language
+
+Some of what the baseline has to do is not visible to a policy at all, in any
+language:
+
+| Needed by the baseline | Available to a policy expression |
 |---|---|
 | Determinacy - was this value fixed by the template or defaulted from values | No. It is established by comparing two renders, outside any single evaluation |
 | The artifact tree - which chart artifact, which digest, which OCI ref | Only as data the engine hands in, and only because the engine constructed it |
 | Another feature's stored result - the security scan, the signature verification (SUP-03, SUP-04, SUP-05) | No |
 | Label-selector semantics, `IntOrString`, quantity parsing, OCI reference parsing | Expressible, but re-implemented per policy and wrong in a different way each time - §3.3 is that happening |
 
-The last row is the practical one. `matchExpressions`, `"0%"` versus `0`, and
-`registry.example.com:5000/app:tag` are all places where a shared, tested Go
-helper is right once and a per-policy Rego implementation is wrong repeatedly.
-The baseline is where the organization's standards are enforced hardest, so it
-gets the implementation that can be unit-tested against the Kubernetes semantics
-it is modelling.
+The last row is the practical one, and it is what settles the language. Under
+Rego, `matchExpressions`, `"0%"` versus `0`, and
+`registry.example.com:5000/app:tag` are re-implemented in every policy that
+needs them, and §3.3 is what that looks like after one attempt. Under the model
+in [02](02-authoring-checks.md) they are **engine functions** - `selects()`,
+`quantity()`, `imageRef()` - written once in Go, unit-tested against the
+Kubernetes semantics they model, and callable from a YAML pack with no rebuild.
 
-**Rego remains the extension path, and it is a first-class one** -
-[02](02-authoring-checks.md) exists for it, packs load without rebuilding this
-platform, and the input hands policies the same addresses and the same helpers'
-output that the baseline uses. What changed is that the sixteen files are read
-as a *specification of what to check*, which is what they are good at, rather
-than as an implementation to inherit.
+So the extension path is not weaker for dropping Rego; it is stronger, because
+the hard parts moved from each author's copy into one tested implementation. The
+full argument, including the measured dependency cost, is
+[02](02-authoring-checks.md) §7.
+
+**What survives is the reading.** The sixteen files are treated as a
+*specification of what to check* - which is what they are good at - rather than
+as an implementation to inherit.

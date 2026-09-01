@@ -1,7 +1,7 @@
-# 23 - Custom Software Validation
+# 23 - Custom Software Compliance
 
 > **Prerequisites:** [01 - Domain Model](01-domain-model.md), [02 - Configuration](02-configuration.md), [03 - Persistence](03-persistence.md), [09 - API](09-api.md)
-> **Ground truth:** [validation/00 - The Validation Model](../validation/00-validation-model.md), [validation/01 - Check Catalog](../validation/01-check-catalog.md), [validation/02 - Authoring Checks](../validation/02-authoring-checks.md), [validation/03 - Review of the Existing Policies](../validation/03-sample-policy-review.md)
+> **Ground truth:** [compliance/00 - The Compliance Model](../compliance/00-compliance-model.md), [compliance/01 - Check Catalog](../compliance/01-check-catalog.md), [compliance/02 - Authoring Checks](../compliance/02-authoring-checks.md), [compliance/03 - Review of the Existing Policies](../compliance/03-sample-policy-review.md)
 > **Consumed by:** [17 - Delivery Plan](17-delivery-plan.md), [19 - User Interface](19-user-interface.md), [20 - Downloads](20-download-rules.md)
 >
 > **Status: DESIGN. Not implemented.** Scheduled at [M11](17-delivery-plan.md).
@@ -14,19 +14,19 @@
 Kubernetes and CNF standards, before the bytes move, and every finding names one
 Kubernetes object inside one chart inside one release.**
 
-The standards are [validation/custom-validation.md](../validation/custom-validation.md) -
+The standards are [compliance/source-standards.md](../compliance/source-standards.md) -
 118 assertions written from lab and production experience. This document is how
 they become a machine that runs on every release, a screen that shows what
 passed and what did not, and a spreadsheet a release engineer sends to a vendor.
 
 What it is *not*: an admission controller, a linter with a score, or a second
-copy of the vulnerability scanner. [validation/00](../validation/00-validation-model.md) §8
+copy of the vulnerability scanner. [compliance/00](../compliance/00-compliance-model.md) §8
 states each non-goal and why.
 
 ### 1.1 What "tier 1" means here
 
 The organization's phrasing is *tier 1 needs no values files, tier 2 does*. The
-precise version, from [validation/00](../validation/00-validation-model.md) §4:
+precise version, from [compliance/00](../compliance/00-compliance-model.md) §4:
 
 - **Tier 1** decides from what the vendor shipped - chart archives, their own
   `values.yaml`, plain manifests, kpt packages, kustomize bases, and the OCI
@@ -68,7 +68,7 @@ the tier split useful rather than an excuse.
     └──────────┘
 ```
 
-**Validation runs after expansion and before download, and that ordering is the
+**Compliance runs after expansion and before download, and that ordering is the
 main practical argument for the feature.** Everything a tier-1 check needs is
 known once the tree has been walked: the charts are a few hundred kilobytes and
 they are addressable by digest. Learning that a release ships a `ClusterRole`
@@ -85,24 +85,24 @@ routes, one page.
 
 | Component | Where | Responsibility |
 |---|---|---|
-| **Catalog** | `internal/validation` | The loaded packs and the checks they own. Rebuilt on change; hashed into a bundle digest |
-| **Loader / watcher** | `internal/validation` | Discovers policy directories on start and on change, compiles, fails closed per pack |
-| **Source** | `internal/validation/source` | Fetches chart and file blobs by digest, from the source repository, under a byte budget |
-| **Renderer** | `internal/validation/render` | `helm template`, `kustomize build`, plain YAML. Deterministic inputs, sandboxed, bounded |
-| **Engine** | `internal/validation` | Applicability, evaluation, derived passes, verdict |
-| **Evaluators** | `internal/validation/builtin`, `internal/validation/rego` | The two check implementations behind one interface |
-| **Runner** | `internal/validation` | One run: claim, heartbeat, progress, cancel, record. Modelled on `security.Syncer` |
-| **Store** | `internal/store/validation.go` | `validation_runs`, `validation_results`, `validation_charts`, `package_validation` |
-| **API** | `internal/api/validation*.go` | Routes, wire types, export |
-| **UI** | `web/src/pages/Policies.tsx`, `web/src/components/validationpanel.tsx` | The catalogue, the results, the report |
-| **Retention** | `internal/maintenance/validation.go` | Leader-gated sweep, budget-based like the security one |
+| **Catalog** | `internal/compliance` | The loaded packs and the checks they own. Rebuilt on change; hashed into a bundle digest |
+| **Loader / watcher** | `internal/compliance` | Discovers policy directories on start and on change, compiles, fails closed per pack |
+| **Source** | `internal/compliance/source` | Fetches chart and file blobs by digest, from the source repository, under a byte budget |
+| **Renderer** | `internal/compliance/render` | `helm template`, `kustomize build`, plain YAML. Deterministic inputs, sandboxed, bounded |
+| **Engine** | `internal/compliance` | Applicability, evaluation, derived passes, verdict |
+| **Evaluators** | `internal/compliance/cel`, `internal/compliance/builtin` | Declarative YAML/CEL checks and Go checks, behind one interface |
+| **Runner** | `internal/compliance` | One run: claim, heartbeat, progress, cancel, record. Modelled on `security.Syncer` |
+| **Store** | `internal/store/compliance.go` | `compliance_runs`, `compliance_results`, `compliance_charts`, `package_compliance` |
+| **API** | `internal/api/compliance*.go` | Routes, wire types, export |
+| **UI** | `web/src/pages/Policies.tsx`, `web/src/components/compliancepanel.tsx` | The catalogue, the results, the report |
+| **Retention** | `internal/maintenance/compliance.go` | Leader-gated sweep, budget-based like the security one |
 
 ## 4. Acquiring what is checked
 
 > **Decision - the Coordinator reads chart and file blobs; it never reads image layers.**
 >
 > The system's founding invariant is that artifact bytes never traverse the
-> Coordinator ([00](00-overview.md) §5). A validation run has to read Helm
+> Coordinator ([00](00-overview.md) §5). A compliance run has to read Helm
 > charts, and a chart is bytes.
 >
 > *Why this is not a violation of the invariant:* the invariant exists because a
@@ -182,7 +182,7 @@ Invocation, fixed for reproducibility:
 
 ```
 helm template <releaseName> <chartDir>
-     --namespace        <configured, default "sgw-validation">
+     --namespace        <configured, default "sgw-compliance">
      --kube-version     <configured, e.g. 1.31.0>
      --api-versions     <configured list>
      --include-crds
@@ -191,7 +191,7 @@ helm template <releaseName> <chartDir>
 
 | Flag / choice | Why it is what it is |
 |---|---|
-| `releaseName` and `--namespace` fixed in config | `.Release.Name` and `.Release.Namespace` appear in rendered names, labels and selectors. A varying release name produces varying results, and [validation/00](../validation/00-validation-model.md) Rule 5 forbids that |
+| `releaseName` and `--namespace` fixed in config | `.Release.Name` and `.Release.Namespace` appear in rendered names, labels and selectors. A varying release name produces varying results, and [compliance/00](../compliance/00-compliance-model.md) Rule 5 forbids that |
 | `--kube-version` pinned, **never read from a cluster** | `.Capabilities.KubeVersion` gates whole blocks of many charts. Taking it from a live cluster would make the answer depend on which cluster the Coordinator can see |
 | `--include-crds` | UPG-07 and UPG-11 need the CRDs the chart ships |
 | No `--dependency-update`, no `--repository-config` | It would reach the network. A chart whose dependencies are not vendored fails SUP-07, which is a finding, not an excuse to go and fetch them |
@@ -218,7 +218,7 @@ That marker is how a finding gets its `sourceFile`, and it is exact. The **line
 within the template** is not recoverable from helm's output. Rather than invent
 one, a result carries the source file plus the line **in the rendered document**,
 and the rendered document is kept in the evidence bundle so both ends of a vendor
-conversation are reading the same text ([validation/00](../validation/00-validation-model.md) §3).
+conversation are reading the same text ([compliance/00](../compliance/00-compliance-model.md) §3).
 
 Subchart documents are attributed to the subchart - `mysvc/charts/redis/templates/…` -
 which is what makes "this finding is in a dependency, not in your chart" visible.
@@ -250,7 +250,7 @@ recorded and shown in Settings.
 | `helm` present but a render fails | That chart's `T1-R` checks report `error` with helm's own stderr, truncated, in the reason. Other charts are unaffected |
 
 **A missing renderer never produces a pass.** That is the whole point of `error`
-being an outcome ([validation/00](../validation/00-validation-model.md) Rule 2),
+being an outcome ([compliance/00](../compliance/00-compliance-model.md) Rule 2),
 and it is the difference between a tool that degrades and a tool that lies.
 
 ### 5.5 Bounds on a hostile chart
@@ -269,7 +269,7 @@ and it is bounded rather than trusted:
 
 ## 6. Determinacy - the mechanism
 
-The idea in [validation/00](../validation/00-validation-model.md) Rule 4, made
+The idea in [compliance/00](../compliance/00-compliance-model.md) Rule 4, made
 concrete. It is what makes a tier-1 verdict defensible.
 
 **Render twice.**
@@ -317,7 +317,7 @@ One run, in order:
                   release-wide indexes: pod templates by label set, services,
                   PDBs, CRDs, image references
  6  applicability for each check, the set of resources it judges
- 7  evaluate      builtin and rego evaluators, per check
+ 7  evaluate      CEL and builtin evaluators, per check
  8  reconcile     derived passes = applicable − reported; skips where applicable
                   is empty; determinacy attached from step 4
  9  waivers       applied, expiry checked against the run's own start time
@@ -329,7 +329,7 @@ Steps 5 and 6 are where the design earns the "not vague" requirement. The
 release-wide indexes are built **once** and shared by every check, so
 `matchExpressions` evaluation, `IntOrString` handling, quantity parsing and OCI
 reference parsing are each implemented once and tested once - which is exactly
-what [validation/03](../validation/03-sample-policy-review.md) §3.3 shows going
+what [compliance/03](../compliance/03-sample-policy-review.md) §3.3 shows going
 wrong when every policy does it for itself.
 
 ### 7.1 The check interface
@@ -365,7 +365,7 @@ the run row, in the API and in the export.
 
 ## 8. Policy discovery and loading
 
-The mechanism [validation/02](../validation/02-authoring-checks.md) §1 describes,
+The mechanism [compliance/02](../compliance/02-authoring-checks.md) §1 describes,
 implemented the way product configuration already is
 ([02](02-configuration.md) §3): a mounted directory, `fsnotify`, no Kubernetes
 API, and the same path against a plain directory in development.
@@ -375,7 +375,7 @@ start ──► scan policyPaths ──► parse each pack.yaml
                                    │
                                    ├─ prefix collision? reject THIS pack, keep the rest
                                    ├─ duplicate ID?     reject THIS pack
-                                   ├─ rego compile err? reject THIS pack
+                                   ├─ expr compile err? reject THIS pack
                                    └─ ok → compile, register
                                         │
                                         ▼
@@ -397,11 +397,11 @@ start ──► scan policyPaths ──► parse each pack.yaml
 
 ## 9. Persistence
 
-`db/migrations/{postgres,sqlite}/00035_validation.sql`. Postgres shown; the
+`db/migrations/{postgres,sqlite}/00035_compliance.sql`. Postgres shown; the
 SQLite dialect follows the conventions in [03](03-persistence.md) §4.
 
 ```sql
-CREATE TABLE validation_runs (
+CREATE TABLE compliance_runs (
     id                    UUID PRIMARY KEY,
     package_id            BIGINT NOT NULL REFERENCES packages(id) ON DELETE CASCADE,
     product               TEXT   NOT NULL,
@@ -414,7 +414,7 @@ CREATE TABLE validation_runs (
 
     -- WHAT PRODUCED THIS ANSWER. Every column here can change a result, so a
     -- report that omitted them would not be reproducible and two runs that
-    -- differ in any of them are not comparable. See validation/00 Rule 5.
+    -- differ in any of them are not comparable. See compliance/00 Rule 5.
     policy_bundle_digest  TEXT   NOT NULL,
     engine_version        TEXT   NOT NULL,
     helm_version          TEXT,
@@ -439,15 +439,15 @@ CREATE TABLE validation_runs (
 
 -- One active run per release. The claim is IN THE DATABASE for the same reason
 -- the analysis claim is (migration 00021): the process holding it can die, and
--- a release stuck "validating" forever is a release nobody can ever validate
+-- a release stuck "running" forever is a release nobody can ever check
 -- again. heartbeat_at is what makes the claim recoverable.
-CREATE UNIQUE INDEX validation_runs_active
-    ON validation_runs (package_id) WHERE state IN ('pending','running');
-CREATE INDEX validation_runs_package ON validation_runs (package_id, started_at DESC);
+CREATE UNIQUE INDEX compliance_runs_active
+    ON compliance_runs (package_id) WHERE state IN ('pending','running');
+CREATE INDEX compliance_runs_package ON compliance_runs (package_id, started_at DESC);
 
-CREATE TABLE validation_results (
+CREATE TABLE compliance_results (
     id             BIGSERIAL PRIMARY KEY,
-    run_id         UUID NOT NULL REFERENCES validation_runs(id) ON DELETE CASCADE,
+    run_id         UUID NOT NULL REFERENCES compliance_runs(id) ON DELETE CASCADE,
 
     check_id       TEXT NOT NULL,
     pack           TEXT NOT NULL,
@@ -485,16 +485,16 @@ CREATE TABLE validation_results (
     waiver_id      TEXT
 );
 
-CREATE INDEX validation_results_run     ON validation_results (run_id, outcome, severity);
-CREATE INDEX validation_results_chart   ON validation_results (run_id, chart_name, resource_kind);
-CREATE INDEX validation_results_fprint  ON validation_results (fingerprint);
-CREATE INDEX validation_results_check   ON validation_results (run_id, check_id);
+CREATE INDEX compliance_results_run     ON compliance_results (run_id, outcome, severity);
+CREATE INDEX compliance_results_chart   ON compliance_results (run_id, chart_name, resource_kind);
+CREATE INDEX compliance_results_fprint  ON compliance_results (fingerprint);
+CREATE INDEX compliance_results_check   ON compliance_results (run_id, check_id);
 
 -- Per-chart coverage: what was rendered, what was not, and why. This is the
 -- denominator. Without it a run with 3 of 97 charts rendered and no failures
 -- reads exactly like a clean release.
-CREATE TABLE validation_charts (
-    run_id          UUID NOT NULL REFERENCES validation_runs(id) ON DELETE CASCADE,
+CREATE TABLE compliance_charts (
+    run_id          UUID NOT NULL REFERENCES compliance_runs(id) ON DELETE CASCADE,
     artifact_digest TEXT NOT NULL,
     artifact_ref    TEXT,
     chart_name      TEXT,
@@ -510,9 +510,9 @@ CREATE TABLE validation_charts (
 -- The listing column. One row per release, overwritten by each run, so the
 -- Software table can show a compliance pill without touching the result rows.
 -- Same shape and same reasoning as package_security (migration 00023).
-CREATE TABLE package_validation (
+CREATE TABLE package_compliance (
     package_id      BIGINT PRIMARY KEY REFERENCES packages(id) ON DELETE CASCADE,
-    run_id          UUID REFERENCES validation_runs(id) ON DELETE SET NULL,
+    run_id          UUID REFERENCES compliance_runs(id) ON DELETE SET NULL,
     verdict         TEXT,
     blocking_fails  INTEGER NOT NULL DEFAULT 0,
     warn_fails      INTEGER NOT NULL DEFAULT 0,
@@ -521,11 +521,11 @@ CREATE TABLE package_validation (
     errors          INTEGER NOT NULL DEFAULT 0,
     waived          INTEGER NOT NULL DEFAULT 0,
     coverage_complete BOOLEAN NOT NULL DEFAULT FALSE,
-    validated_at    TIMESTAMPTZ
+    evaluated_at    TIMESTAMPTZ
 );
 ```
 
-**Retention.** Run summaries and `package_validation` are kept forever - they are
+**Retention.** Run summaries and `package_compliance` are kept forever - they are
 kilobytes and they are the history. Result rows are kept for the most recent `N`
 runs per release (default 5) and past that become evictable under a byte budget,
 swept by a leader-gated loop. The policy is the one the security store arrived at
@@ -542,25 +542,25 @@ AIP conventions per [09](09-api.md) §1. Custom methods with a colon.
 
 | Method | Path | Purpose |
 |---|---|---|
-| `GET` | `/api/v1/validation/policies` | Every pack and check: ID, title, description, rationale, severity, tier, category, applicability, remediation, reference, engine, pack, and each pack's load status |
-| `GET` | `/api/v1/validation/policies/{check}` | One check in full, including its `appliesTo` and its fixtures' names |
-| `GET` | `/api/v1/validation/policies/export` | The catalogue as CSV/XLSX - the rulebook, on its own, for a vendor who asks "what will you check?" before shipping |
+| `GET` | `/api/v1/compliance/policies` | Every pack and check: ID, title, description, rationale, severity, tier, category, applicability, remediation, reference, engine, pack, and each pack's load status |
+| `GET` | `/api/v1/compliance/policies/{check}` | One check in full, including its `appliesTo` and its fixtures' names |
+| `GET` | `/api/v1/compliance/policies/export` | The catalogue as CSV/XLSX - the rulebook, on its own, for a vendor who asks "what will you check?" before shipping |
 
 This is the "list the available policies and view the details" requirement, and
 it is deliberately **not** under a product: the rulebook is the organization's,
 not a product's.
 
-### A release's validation
+### A release's compliance
 
 | Method | Path | Purpose |
 |---|---|---|
-| `GET` | `/api/v1/products/{product}/packages/{package}/validation` | Latest run: verdict, counts, coverage, provenance, and results. `filter` on outcome, severity, check, chart, kind, determinacy; `pageSize`/`pageToken` |
-| `POST` | `/api/v1/products/{product}/packages/{package}/validation:run` | Start a run. `validateOnly=true` returns the **plan** - which artifacts would be fetched and rendered, which would be skipped and why - and stores nothing |
-| `POST` | `/api/v1/products/{product}/packages/{package}/validation:cancel` | Stop the run, wherever it is running |
-| `GET` | `/api/v1/products/{product}/packages/{package}/validation/progress` | Live progress: stage, done/total, notes |
-| `GET` | `/api/v1/products/{product}/packages/{package}/validation/runs` | History, newest first |
-| `GET` | `/api/v1/products/{product}/packages/{package}/validation/export` | `format=csv\|xlsx\|json\|zip` (§11) |
-| `GET` | `/api/v1/products/{product}/packages/{package}/validation/compare` | `against={tag}` - fixed, new, still failing, by fingerprint |
+| `GET` | `/api/v1/products/{product}/packages/{package}/compliance` | Latest run: verdict, counts, coverage, provenance, and results. `filter` on outcome, severity, check, chart, kind, determinacy; `pageSize`/`pageToken` |
+| `POST` | `/api/v1/products/{product}/packages/{package}/compliance:run` | Start a run. `validateOnly=true` returns the **plan** - which artifacts would be fetched and rendered, which would be skipped and why - and stores nothing |
+| `POST` | `/api/v1/products/{product}/packages/{package}/compliance:cancel` | Stop the run, wherever it is running |
+| `GET` | `/api/v1/products/{product}/packages/{package}/compliance/progress` | Live progress: stage, done/total, notes |
+| `GET` | `/api/v1/products/{product}/packages/{package}/compliance/runs` | History, newest first |
+| `GET` | `/api/v1/products/{product}/packages/{package}/compliance/export` | `format=csv\|xlsx\|json\|zip` (§11) |
+| `GET` | `/api/v1/products/{product}/packages/{package}/compliance/compare` | `against={tag}` - fixed, new, still failing, by fingerprint |
 
 Two deliberate absences, each of which will be asked for:
 
@@ -569,12 +569,12 @@ Two deliberate absences, each of which will be asked for:
   blocking check is an approval process with no reviewer - the same argument that
   keeps products read-only over the API ([02](02-configuration.md) §1).
 - **No endpoint creates a waiver.** Same reason, and a waiver is the more
-  consequential of the two. [validation/00](../validation/00-validation-model.md) §7.
+  consequential of the two. [compliance/00](../compliance/00-compliance-model.md) §7.
 
 ## 11. The report
 
 `internal/export` already writes CSV, XLSX, JSON and ZIP bundles and is used by
-the security exporter. Validation reuses it unchanged.
+the security exporter. Compliance reuses it unchanged.
 
 **Every sheet carries the whole address on every row.** A spreadsheet row is read
 on its own, filtered, sorted and pasted into a ticket; a row that says
@@ -604,7 +604,7 @@ short.
 
 ```yaml
 coordinator:
-  validation:
+  compliance:
     autoRun: onAnalysis      # off | onAnalysis | onDownload | both
 ```
 
@@ -626,7 +626,7 @@ downloads:
   - name: to-lab
     targets: [jfrog-store]
     gates:
-      validation: off        # off | warn | block
+      compliance: off        # off | warn | block
 ```
 
 `block` refuses to open a download whose release has an unwaived blocking failure
@@ -636,29 +636,29 @@ a gate that surprises an operator during an incident is a gate that gets removed
 
 ### 12.3 The timeline
 
-`ReleaseTimeline` (`web/src/components/layout.tsx`) gains a **Validated** moment
+`ReleaseTimeline` (`web/src/components/layout.tsx`) gains a **Checked** moment
 between Published and Downloaded, drawn in time order like the rest. It carries
 the verdict's tone - green for pass, amber for conditional, red for fail, grey
 for inconclusive - and its `pending` state is a live run, which is what makes
 "the checks are running" visible on the release page without a second widget.
 
 Every state change is an audit event ([12](12-observability-and-audit.md)):
-`validation.started`, `validation.completed` with the verdict, `validation.cancelled`,
-`validation.failed`. The Activity page picks them up with no work.
+`compliance.started`, `compliance.completed` with the verdict, `compliance.cancelled`,
+`compliance.failed`. The Activity page picks them up with no work.
 
 ### 12.4 Metrics
 
 | Metric | Type | Labels |
 |---|---|---|
-| `sgw_validation_runs_total` | counter | product, trigger, verdict |
-| `sgw_validation_run_duration_seconds` | histogram | product |
-| `sgw_validation_results_total` | counter | outcome, severity |
-| `sgw_validation_check_failures_total` | counter | check_id, severity |
-| `sgw_validation_render_failures_total` | counter | reason |
-| `sgw_validation_policy_packs_loaded` | gauge | status (ok/broken) |
-| `sgw_validation_check_duration_seconds` | histogram | check_id |
+| `sgw_compliance_runs_total` | counter | product, trigger, verdict |
+| `sgw_compliance_run_duration_seconds` | histogram | product |
+| `sgw_compliance_results_total` | counter | outcome, severity |
+| `sgw_compliance_check_failures_total` | counter | check_id, severity |
+| `sgw_compliance_render_failures_total` | counter | reason |
+| `sgw_compliance_policy_packs_loaded` | gauge | status (ok/broken) |
+| `sgw_compliance_check_duration_seconds` | histogram | check_id |
 
-`sgw_validation_check_duration_seconds` earns its place: a pack with an
+`sgw_compliance_check_duration_seconds` earns its place: a pack with an
 accidental O(n²) comprehension is invisible until a large release takes twenty
 minutes, and this is where it shows.
 
@@ -667,12 +667,12 @@ minutes, and this is where it shows.
 Deployment-scoped, in `config.yaml` beside `security` and for the same reason
 ([02](02-configuration.md) §8): none of it is a property of a *product*. Where
 the policies live and which Kubernetes version to render for belong to this
-installation. A product document says one thing about validation - whether it is
+installation. A product document says one thing about compliance - whether it is
 on.
 
 ```yaml
 coordinator:
-  validation:
+  compliance:
     enabled: true
 
     # WHERE THE RULES COME FROM. Projected volumes, discovered on start and
@@ -696,8 +696,8 @@ coordinator:
       path: helm                     # resolved on PATH when relative
       kubeVersion: "1.31.0"
       apiVersions: []                # extra --api-versions entries
-      releaseName: sgw-validation    # fixed: .Release.Name appears in output
-      namespace: sgw-validation      # fixed: so does .Release.Namespace
+      releaseName: sgw-compliance    # fixed: .Release.Name appears in output
+      namespace: sgw-compliance      # fixed: so does .Release.Namespace
       renderTimeout: 60s
       maxRenderedBytes: 67108864     # 64 MiB
     kustomize:
@@ -716,7 +716,7 @@ coordinator:
     concurrency: 4                   # charts rendered at once
 
     # WHEN. onAnalysis answers before the bandwidth is spent, which is the whole
-    # argument for validating at ingest rather than in CI.
+    # argument for checking at ingest rather than in CI.
     autoRun: onAnalysis              # off | onAnalysis | onDownload | both
 
     maxResultsPerRun: 200000         # truncate loudly rather than fall over
@@ -745,7 +745,7 @@ Per product, one field, in the product document:
 
 ```yaml
 spec:
-  validation:
+  compliance:
     enabled: true          # default true when the feature is on
     packs: []              # empty = every loaded pack; names a subset otherwise
 ```
@@ -754,7 +754,7 @@ spec:
 
 Four surfaces. Three are additions to pages that exist.
 
-### 14.1 Release page - a Validation tab
+### 14.1 Release page - a Compliance tab
 
 Beside the Security tab, in the same shape, because a reader has already learned
 that shape ([19](19-user-interface.md) §3).
@@ -763,7 +763,7 @@ that shape ([19](19-user-interface.md) §3).
 ┌─────────────────────────────────────────────────────────────────────────┐
 │ ⚠ CONDITIONAL   3 blocking · 14 warnings · 1 041 passed · 26 skipped     │
 │ 97 of 97 charts rendered · 612 resources · 88 checks · helm 3.16.2      │
-│ Validated 12 Aug 2026 14:22 · bundle a91f…  [ Re-run ]  [ Export ▾ ]    │
+│ Checked   12 Aug 2026 14:22 · bundle a91f…  [ Re-run ]  [ Export ▾ ]    │
 └─────────────────────────────────────────────────────────────────────────┘
 
  [ Failures ] [ All results ] [ By resource ] [ Charts ] [ Problems ]
@@ -815,11 +815,11 @@ standard is.
 
 A verdict pill beside the existing security column, sortable and filterable, so
 "show me every release with a blocking failure" is a filter rather than a
-question. Absent means *not validated* and renders as such - never as a pass.
+question. Absent means *not checked* and renders as such - never as a pass.
 
 ### 14.4 The timeline and Reports
 
-The `Validated` moment (§12.3), and on the Reports page a fleet rollup: verdicts
+The `Checked` moment (§12.3), and on the Reports page a fleet rollup: verdicts
 by product, the checks that fail most often across all releases, and the vendors
 whose releases fail most. The second of those is what turns a per-release tool
 into an argument for changing a standard - a check that fails on every vendor is
@@ -828,7 +828,7 @@ either a real industry gap or a check that is wrong, and both are worth knowing.
 ## 15. Code layout
 
 ```
-internal/validation/
+internal/compliance/
     check.go        Check, CheckMeta, Finding, Result, Outcome, Severity,
                     Tier, Determinacy
     address.go      Address, fingerprinting
@@ -848,19 +848,24 @@ internal/validation/
     builtin/        one file per category: pdb.go, probes.go, security.go,
                     rbac.go, config.go, resources.go, network.go, storage.go,
                     metadata.go, supply.go, scheduling.go, upgrade.go
-    rego/           the ONLY package importing OPA
+    cel/            the ONLY package importing cel-go
+      env.go          declarations, typed schemas for well-known kinds
+      funcs.go        pdbFor, servicesFor, selects, quantity, imageRef, …
+      shorthand.go    required/forbidden/equals/… compiled to the same AST
+      compile.go      per-check compile, cost estimate, load-time errors
+    policy/         pack manifest parse, validate, the baseline pack YAML
     render/         helm.go, kustomize.go, plain.go, probe.go, sandbox.go
     source/         artifact acquisition, budget, unpack
-internal/store/validation.go
-internal/api/validation.go, validationwire.go, validationexport.go,
-             validationsheets.go
-internal/maintenance/validation.go
-pkg/apis/softwaregateway/v1/validation.go
-cmd/transferctl/validate.go
-web/src/components/validationpanel.tsx
+internal/store/compliance.go
+internal/api/compliance.go, compliancewire.go, complianceexport.go,
+             compliancesheets.go
+internal/maintenance/compliance.go
+pkg/apis/softwaregateway/v1/compliance.go
+cmd/transferctl/compliance.go
+web/src/components/compliancepanel.tsx
 web/src/pages/Policies.tsx
-db/migrations/{postgres,sqlite}/00035_validation.sql
-test/fixtures/validation/
+db/migrations/{postgres,sqlite}/00035_compliance.sql
+test/fixtures/compliance/
 ```
 
 Three `depguard` rules, added to `.golangci.yml` beside the existing ones
@@ -868,9 +873,10 @@ Three `depguard` rules, added to `.golangci.yml` beside the existing ones
 
 | Rule | Denies | Why |
 |---|---|---|
-| `validation-imports-no-api` | `internal/validation/**` → `internal/api` | The domain rule everything else follows |
-| `opa-confined-to-evaluator` | everything except `internal/validation/rego/**` → `github.com/open-policy-agent/opa/**` | The heaviest dependency in the module stays behind one package. **Delete `internal/validation/rego` and the baseline still builds and still checks** - the same mechanical test that keeps the vendor plugins optional (`internal/vendors/classify.go`) |
-| `builtin-imports-no-render` | `internal/validation/builtin/**` → `internal/validation/render` | A check judges parsed resources. One that shelled out to helm for itself would be unreproducible and untestable without the binary |
+| `compliance-imports-no-api` | `internal/compliance/**` → `internal/api` | The domain rule everything else follows |
+| `cel-confined-to-evaluator` | everything except `internal/compliance/cel/**` → `cel.dev/cel-go/**` | One package owns the expression language. **Delete `internal/compliance/cel` and the Go baseline still builds and still checks** - the same mechanical test that keeps the vendor plugins optional (`internal/vendors/classify.go`) |
+| `no-opa` | anywhere → `github.com/open-policy-agent/opa/**` | 71 modules for a second expression language. §19 decision 5 |
+| `builtin-imports-no-render` | `internal/compliance/builtin/**` → `internal/compliance/render` | A check judges parsed resources. One that shelled out to helm for itself would be unreproducible and untestable without the binary |
 
 ## 16. Failure matrix
 
@@ -886,7 +892,7 @@ Three `depguard` rules, added to `.golangci.yml` beside the existing ones
 | A check panics | `recover` | One `error` result per applicable resource; pack marked unhealthy | inconclusive |
 | A check exceeds its timeout | Per-check deadline | `error`, and the pack is reported as slow in metrics | inconclusive |
 | Registry unreachable | Fetch | Run fails with the reason; **no partial run is recorded as a verdict** | run `failed`, no verdict |
-| Coordinator dies mid-run | Stale `heartbeat_at` | Claim released by the sweeper; the release is validatable again | previous run stands |
+| Coordinator dies mid-run | Stale `heartbeat_at` | Claim released by the sweeper; the release is checkable again | previous run stands |
 | Results exceed `maxResultsPerRun` | Counter | Truncated; `truncated=true` on the run, stated in API, UI and export | inconclusive |
 
 Every row that ends in `inconclusive` is deliberate. A run that could not examine
@@ -899,18 +905,18 @@ mechanism for the whole feature.
 
 ### 17.1 The fixture corpus
 
-`test/fixtures/validation/charts/`:
+`test/fixtures/compliance/charts/`:
 
 | Fixture | Exists to prove |
 |---|---|
 | `good-app` | **Zero findings across the entire baseline.** The false-positive gate. Every new check runs against it, so "my check does not fire on correct charts" is asserted by CI, not by its author |
-| `bad-pdb` | `maxUnavailable: 0`, `"0%"`, `minAvailable` at replica count, a 3-replica workload with no PDB, an orphan PDB, a PDB using `matchExpressions` that **must not** fire (the false positive in [validation/03](../validation/03-sample-policy-review.md) §3.3) |
+| `bad-pdb` | `maxUnavailable: 0`, `"0%"`, `minAvailable` at replica count, a 3-replica workload with no PDB, an orphan PDB, a PDB using `matchExpressions` that **must not** fire (the false positive in [compliance/03](../compliance/03-sample-policy-review.md) §3.3) |
 | `bad-probes` | No readiness on a service-backed container; identical liveness and readiness; liveness stricter than readiness; a probe pointing at a sidecar's port |
 | `bad-security` | privileged, UID 0, `NET_ADMIN` added, `hostPath`, a runtime socket mount, `hostNetwork`, `Unconfined` seccomp |
 | `bad-rbac` | Wildcard verbs, `list` on secrets, a ClusterRoleBinding, `pods/exec` |
 | `bad-images` | `:latest`, a semver tag, an unapproved registry, an image in a CronJob's `jobTemplate`, an image in an operator CR |
-| `bad-resources` | Missing requests on a **sidecar and an init container** - the case [validation/03](../validation/03-sample-policy-review.md) §3.7 says is usually forgotten |
-| `bad-cronjob` | Every applicable check must fire on a `CronJob`. Directly targets the seven-file false negative in [validation/03](../validation/03-sample-policy-review.md) §3.1 |
+| `bad-resources` | Missing requests on a **sidecar and an init container** - the case [compliance/03](../compliance/03-sample-policy-review.md) §3.7 says is usually forgotten |
+| `bad-cronjob` | Every applicable check must fire on a `CronJob`. Directly targets the seven-file false negative in [compliance/03](../compliance/03-sample-policy-review.md) §3.1 |
 | `bad-networking` | Allow-all NetworkPolicy, a Service selecting nothing, a `targetPort` naming a port no container declares, `/metrics` on an Ingress |
 | `bad-cnf` | A `NetworkAttachmentDefinition` with no IPAM, an SR-IOV resource in `requests` but not `limits`, a pod on a secondary network with a NetworkPolicy that cannot cover it |
 | `bad-storage` | A 2-replica Deployment with a PVC, an init container `chown`-ing a mount, a claim with no `storageClassName` |
@@ -935,7 +941,7 @@ subset. A check that also fires on the fixture's ConfigMap fails its own test.
 | Fixture corpus, exact-set expectations | Every PR | Yes - CI image carries it | Merge |
 | `good-app` produces zero findings | Every PR | Yes | Merge |
 | **Coverage meta-test**: every registered check has a positive and a negative fixture | Every PR | No | Merge |
-| **Determinism**: the same fixture validated twice produces byte-identical results | Every PR | Yes | Merge |
+| **Determinism**: the same fixture checked twice produces byte-identical results | Every PR | Yes | Merge |
 | Renderer against a real chart corpus | Nightly | Yes | Release |
 | Store, both dialects | Every PR | No | Merge |
 
@@ -953,23 +959,24 @@ can add a plausible-sounding assertion that has never been shown to fire.
 
 No UI, no export. The half that has to be right.
 
-- `internal/validation`: types, address, indexes, pack manifest, loader, watcher, engine, verdict
+- `internal/compliance`: types, address, indexes, pack manifest, loader, watcher, engine, verdict
 - `render/helm.go` with the sandbox, the pinned inputs and the determinacy probe
 - `source/` with the byte budget, reusing the existing blob-read path
-- `builtin/`: the **88 tier-1 checks** of [validation/01](../validation/01-check-catalog.md) §4
+- `cel/`: the environment, the engine functions of [compliance/02](../compliance/02-authoring-checks.md) §4.2, the shorthand compiler
+- `policy/`: the manifest, and the **88 tier-1 checks** of [compliance/01](../compliance/01-check-catalog.md) §4 - declarative wherever the check is expressible that way, `builtin/` where it is not
 - Migration `00035`, both dialects; store
 - The fixture corpus and all five merge gates from §17.2
-- `transferctl validate <product> <tag>` - the CLI is the first client, as it is for everything else
+- `transferctl compliance <product> <tag>` - the CLI is the first client, as it is for everything else
 
 **Acceptance:** every catalogued v1 check has a positive and a negative fixture;
-`good-app` produces zero findings; the same release validated twice is
+`good-app` produces zero findings; the same release checked twice is
 byte-identical; a release with no `helm` on the box reports `inconclusive` and
 never `pass`.
 
 ### M11-B - API, UI and the catalogue people read
 
 - Routes of §10, wire types, pagination and filtering
-- Validation tab, Policies page, Software listing column, `Validated` timeline moment
+- Compliance tab, Policies page, Software listing column, `Checked` timeline moment
 - Live progress, cancel, audit events, metrics
 
 **Acceptance:** a release engineer opens a release, sees which charts fail which
@@ -980,8 +987,8 @@ checks and why, and can explain any check on screen without leaving the UI.
 - XLSX / CSV / JSON / ZIP export, all eight sheets
 - Waiver loading, expiry, the waived column
 - `autoRun: onAnalysis`, retention sweep, cross-release comparison by fingerprint
-- Rego pack support (`internal/validation/rego`) and the migration of the
-  organization's existing policies per [validation/03](../validation/03-sample-policy-review.md) §5
+- The migration of the organization's existing `.rego` policies to declarative
+  checks per [compliance/03](../compliance/03-sample-policy-review.md) §5
 
 **Acceptance:** a vendor receives one file that names every failure with its full
 address, states the rule that produced it, and lists what passed - and can
@@ -989,7 +996,7 @@ reproduce any finding from the bundle without access to this platform.
 
 ### M11-D - Gates and tier 2 (not scheduled)
 
-The download gate of §12.2, and tier-2 validation against site values files.
+The download gate of §12.2, and tier-2 compliance against site values files.
 Deliberately after the first three have been used in anger: a gate designed
 before anyone has read a hundred reports is a gate designed against a guess.
 
@@ -1008,14 +1015,14 @@ Consolidated; each is argued where it is made.
 | 1 | The Coordinator reads chart and file blobs, never image layers | Render in a worker | §4 |
 | 2 | The `helm` binary, not the Helm Go SDK | `helm.sh/helm/v3` in-process | §5.1 |
 | 3 | Determinacy by differential render | Static template analysis; assuming defaults | §6 |
-| 4 | Passes derived from a declared `appliesTo` | Policies emitting their own passes | [validation/00](../validation/00-validation-model.md) §5 |
-| 5 | The baseline is Go; Rego is the extension | Ship the existing `.rego` files as the baseline | [validation/03](../validation/03-sample-policy-review.md) §6 |
-| 6 | Severity on the check, outcome on the result | One conflated field, as the samples have | [validation/00](../validation/00-validation-model.md) Rule 3 |
-| 7 | The address is handed to policies and echoed back | Policies constructing their own | [validation/02](../validation/02-authoring-checks.md) §4.1 |
-| 8 | Waivers in Git, never through the API | A waiver UI | [validation/00](../validation/00-validation-model.md) §7 |
-| 9 | `error` is an outcome, and it makes a run inconclusive | Treating an undecidable check as a pass | [validation/00](../validation/00-validation-model.md) Rule 2 |
-| 10 | Fixtures are a merge gate, enforced by a meta-test | Fixtures by convention | [validation/02](../validation/02-authoring-checks.md) §6 |
-| 11 | No YAML check DSL yet, but `engine:` is already a field | Building one now | [validation/02](../validation/02-authoring-checks.md) §7 |
+| 4 | Passes derived from a declared `appliesTo` | Policies emitting their own passes | [compliance/00](../compliance/00-compliance-model.md) §5 |
+| 5 | Checks are YAML with CEL expressions; Go only where the platform must be consulted | Embedding OPA/Rego: 71 new modules against cel-go's 1, an evaluator with no termination guarantee, and a second language | [compliance/02](../compliance/02-authoring-checks.md) §7 |
+| 6 | Severity on the check, outcome on the result | One conflated field, as the samples have | [compliance/00](../compliance/00-compliance-model.md) Rule 3 |
+| 7 | The engine binds one subject at a time; checks never loop | Checks iterating the release themselves, as the samples do | [compliance/02](../compliance/02-authoring-checks.md) §2 |
+| 8 | Waivers in Git, never through the API | A waiver UI | [compliance/00](../compliance/00-compliance-model.md) §7 |
+| 9 | `error` is an outcome, and it makes a run inconclusive | Treating an undecidable check as a pass | [compliance/00](../compliance/00-compliance-model.md) Rule 2 |
+| 10 | Fixtures are a merge gate, enforced by a meta-test | Fixtures by convention | [compliance/02](../compliance/02-authoring-checks.md) §6 |
+| 11 | Cross-resource semantics are engine functions, not per-check code | Every author re-implementing selector matching, as `pdb.rego` did | [compliance/02](../compliance/02-authoring-checks.md) §4.2 |
 | 12 | Denormalized result rows | A normalized schema with joins | §9 |
 
 ## 20. Open questions
@@ -1026,4 +1033,4 @@ Consolidated; each is argued where it is made.
 | Q2 | Is 88 checks too many to ship at once? | A first report with 400 warnings on every vendor release is a report nobody reads | Measure against three real releases; if the warning volume is unusable, ship the `block` set first and stage the `warn` set |
 | Q3 | Should MTA-06/07 severities be organization-configurable after all? | §13 says one organization, one severity. Provenance and ownership annotations are the checks most likely to be right for one product family and wrong for another | Whether the waiver mechanism handles it. If waivers are being written in bulk for one check, the check's severity is wrong |
 | Q4 | Where do the evidence-only items (26 of them) live? | They are real requirements that no check can decide. Tracking them nowhere means they are not tracked | Probably a release checklist beside the automated results, sourced from the same catalogue - but that is a feature, not a footnote, and it needs its own design |
-| Q5 | Does OPA's dependency weight justify Rego support? | It is the largest dependency in the module, for an extension path that may see three packs | Deferred to M11-C by design. If nobody has written a pack by then, the answer is visible |
+| Q5 | How many of the 88 baseline checks are expressible declaratively? | The target is most of them; the ones that are not define how much `builtin/` has to carry, and how good the shorthand has to be | Counted in M11-A as the baseline pack is written. A baseline that is 80% Go means the extension point is decorative |

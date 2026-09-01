@@ -1,10 +1,10 @@
-# Custom Software Validation
+# Custom Software Compliance
 
 Checking a vendor's release against this organization's own Kubernetes and CNF
 standards - automatically, at ingest, with every finding addressed to one
 Kubernetes object inside one chart inside one release.
 
-**Building it? Read [design/23 - Custom Software Validation](../design/23-validation.md).**
+**Building it? Read [design/23 - Custom Software Compliance](../design/23-compliance.md).**
 That is the implementation plan: architecture, rendering, data model, API, UI,
 report, milestones. This directory is the ground truth it rests on.
 
@@ -14,10 +14,10 @@ report, milestones. This directory is the ground truth it rests on.
 
 | # | Document | Covers |
 |---|---|---|
-| — | [custom-validation.md](custom-validation.md) | **The source catalog.** 118 assertions across 13 categories, written from lab and production experience. Unchanged, and the reason everything else exists |
-| 00 | [The Validation Model](00-validation-model.md) | What a check is allowed to say. Outcomes, severity, determinacy, the address, verdicts, waivers, and what is deliberately out of scope |
+| — | [source-standards.md](source-standards.md) | **The source catalog.** 118 assertions across 13 categories, written from lab and production experience. Unchanged, and the reason everything else exists |
+| 00 | [The Compliance Model](00-compliance-model.md) | What a check is allowed to say. Outcomes, severity, determinacy, the address, verdicts, waivers, and what is deliberately out of scope |
 | 01 | [Check Catalog](01-check-catalog.md) | Every one of the 118 assertions triaged - automatable now, needs a values file, or needs a human reading a document - plus 8 proposed additions and the six checks that are easy to get wrong |
-| 02 | [Authoring Checks](02-authoring-checks.md) | The extension contract: the pack manifest, the Rego input and output, ID rules, and what a new check must prove before it can fail anybody's release |
+| 02 | [Authoring Checks](02-authoring-checks.md) | The extension contract: the pack manifest, the YAML and CEL forms a check is written in, ID rules, and what a new check must prove before it can fail anybody's release |
 | 03 | [Review of the Existing Policies](03-sample-policy-review.md) | An honest read of the sixteen `.rego` files in [sample-policies/](sample-policies/): what is sound, what is broken, what each becomes |
 | — | [sample-policies/](sample-policies/) | The policies as they were handed over. Kept as-is; see 03 before adopting any of them |
 

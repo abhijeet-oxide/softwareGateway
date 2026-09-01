@@ -163,19 +163,19 @@ The second client of the same API. Direction, scope and the six gates in [19](19
 
 **Acceptance:** a first-time user replicates a package into lab without documentation. Every CLI capability is reachable in the UI. Configuration is read-only with drift visible. No delegated object shows a progress percentage or ETA anywhere.
 
-### M11 - Custom software validation
+### M11 - Custom standards compliance
 
-Does a release follow the organization's own Kubernetes and CNF standards. Ground truth in [validation/00](../validation/00-validation-model.md) and [validation/01](../validation/01-check-catalog.md); design in [23](23-validation.md) §18.
+Does a release follow the organization's own Kubernetes and CNF standards. Ground truth in [compliance/00](../compliance/00-compliance-model.md) and [compliance/01](../compliance/01-check-catalog.md); design in [23](23-compliance.md) §18.
 
 Three stages, and the first delivers on its own:
 
-- **M11-A - engine and catalogue.** The 88 tier-1 checks, the Helm renderer with its pinned inputs and its determinacy probe, the policy loader, the store, and `transferctl validate`. No UI
-- **M11-B - API, Validation tab, Policies page**, the `Validated` timeline moment and a compliance column on the Software listing
+- **M11-A - engine and catalogue.** The 88 tier-1 checks, the Helm renderer with its pinned inputs and its determinacy probe, the policy loader, the store, and `transferctl compliance`. No UI
+- **M11-B - API, Compliance tab, Policies page**, the `Checked` timeline moment and a compliance column on the Software listing
 - **M11-C - the vendor report** (XLSX/CSV/JSON/ZIP), waivers with expiry, `autoRun: onAnalysis`, cross-release comparison, and Rego pack support
 
 Needs `expand` and the blob-read path, both of which exist. Needs nothing from M10.
 
-**Acceptance:** every shipped check has a positive and a negative fixture and a meta-test fails CI when one does not; the `good-app` fixture produces zero findings across the whole baseline; the same release validated twice is byte-identical; a Coordinator with no `helm` reports `inconclusive` and never `pass`; and a vendor receives one file that names every failure with its full address - product, release, package digest, chart, chart version, source file, resource, container, field - states the rule that produced it, and lists what passed.
+**Acceptance:** every shipped check has a positive and a negative fixture and a meta-test fails CI when one does not; the `good-app` fixture produces zero findings across the whole baseline; the same release checked twice is byte-identical; a Coordinator with no `helm` reports `inconclusive` and never `pass`; and a vendor receives one file that names every failure with its full address - product, release, package digest, chart, chart version, source file, resource, container, field - states the rule that produced it, and lists what passed.
 
 ## 2. Sequencing
 
@@ -197,7 +197,7 @@ M7 Scale and chaos ────┘   ← needs M3 + M4
      │   M9 Download rules                ← needs M8 (the mirror step) + M5 (the gates)
      │
      └── M10 Web UI                       ← needs Q6 (API auth) as a GATE, not a dependency
-     └── M11 Custom software validation   ← needs expand + the blob-read path only; independent of M10
+     └── M11 Custom standards compliance   ← needs expand + the blob-read path only; independent of M10
 ```
 
 **M9 follows M8 rather than running beside it**, even though its fan-out half needs nothing from Quay. The ordering model, the `skipped` state and the per-step rendering would all be built twice if they were built first for a chain whose steps are all copies - and the chain worth having is the one with a mirror at the end ([20](20-download-rules.md) §14).

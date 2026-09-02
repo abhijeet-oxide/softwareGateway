@@ -195,7 +195,7 @@ func (h Helm) Render(ctx context.Context, chartDir string, valuesFiles ...string
 		// words "invalid YAML" once made this code classify a nil dereference
 		// as a YAML parse error.
 		return out, fmt.Errorf("helm template failed for %s: %s",
-			filepath.Base(chartDir), firstLines(stripHelmAdvice(out.Stderr), 8))
+			filepath.Base(chartDir), boundedMessage(stripHelmAdvice(out.Stderr)))
 	}
 	return out, nil
 }
@@ -304,6 +304,41 @@ func ReadValuesFile(chartDir string) []byte {
 func IsChart(dir string) bool {
 	st, err := os.Stat(filepath.Join(dir, "Chart.yaml"))
 	return err == nil && !st.IsDir()
+}
+
+// maxMessageChars bounds one render failure's message.
+//
+// # Why lines were not enough
+//
+// firstLines bounds how many lines a message has, and a helm error is usually
+// eight short ones. But some are ONE line: `error validating data:` can carry
+// a whole rejected object, and a chart that fails on a schema can emit its
+// entire values document on a single line. Those messages are stored with the
+// chart, returned by the API, drawn in a table and written to a spreadsheet
+// cell - and a spreadsheet cell holds 32,767 characters before Excel calls the
+// whole workbook damaged.
+//
+// Two thousand characters is far more than anybody reads off a coverage table
+// and far more than the diagnosis in failure.go needs, which parses the first
+// line.
+const maxMessageChars = 2000
+
+// boundedMessage is a render failure's message, cut to something a person and
+// a spreadsheet can both hold.
+func boundedMessage(s string) string {
+	return clipRunes(firstLines(s, 8), maxMessageChars)
+}
+
+// clipRunes cuts a string to n characters, and says how much it cut.
+func clipRunes(s string, n int) string {
+	if len(s) <= n {
+		return s
+	}
+	runes := []rune(s)
+	if len(runes) <= n {
+		return s
+	}
+	return string(runes[:n]) + fmt.Sprintf("… (%d more characters)", len(runes)-n)
 }
 
 // firstLines truncates a multi-line error so one broken chart does not fill a

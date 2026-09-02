@@ -1007,6 +1007,31 @@ function vulnerabilityFact(p: Package): string | undefined {
   }
 }
 
+/**
+ * The release's compliance, in the header, in one word.
+ *
+ * Beside Vulnerabilities and read the same way. A release being checked says so
+ * HERE and not only inside the tab: somebody who starts a check and navigates
+ * to Details has no other way to find out whether it is still going, and the
+ * absence of any statement reads as "nothing is happening".
+ */
+function complianceFact(p: Package): string | undefined {
+  const cmp = p.compliance
+  if (!cmp) return 'Not checked'
+  switch (cmp.state) {
+    case 'running':
+      return 'Checking'
+    case 'failed':
+      return 'Check failed'
+    case '':
+      return 'Not checked'
+    default:
+      if (cmp.blocking > 0) return `${cmp.blocking.toLocaleString()} blocking`
+      if (cmp.error > 0) return 'Inconclusive'
+      return cmp.label || 'Compliant'
+  }
+}
+
 export default function PackageDetail() {
   const { product: productName, reference } = useParams()
   const [params, setParams] = useSearchParams()
@@ -1153,6 +1178,11 @@ export default function PackageDetail() {
                   label="Vulnerabilities"
                   value={vulnerabilityFact(p)}
                   onClick={() => switchTab('security')}
+                />
+                <FactTag
+                  label="Compliance"
+                  value={complianceFact(p)}
+                  onClick={() => switchTab('compliance')}
                 />
               </>
             )}

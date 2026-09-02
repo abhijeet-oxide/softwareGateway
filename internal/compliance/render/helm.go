@@ -186,7 +186,16 @@ func (h Helm) Render(ctx context.Context, chartDir string, valuesFiles ...string
 		}
 		// helm's stderr is the message a vendor needs. Passing our own instead
 		// would hide the line and column of the template that failed.
-		return out, fmt.Errorf("helm template failed for %s: %s", filepath.Base(chartDir), firstLines(out.Stderr, 8))
+		//
+		// Its BOILERPLATE is dropped, though. helm ends a great many errors
+		// with "Use --debug flag to render out invalid YAML" - advice about a
+		// flag nobody reading a compliance report can pass, on a render that
+		// already happened. It is two lines of noise on every failed row of a
+		// coverage table, it is stored and exported with the finding, and its
+		// words "invalid YAML" once made this code classify a nil dereference
+		// as a YAML parse error.
+		return out, fmt.Errorf("helm template failed for %s: %s",
+			filepath.Base(chartDir), firstLines(stripHelmAdvice(out.Stderr), 8))
 	}
 	return out, nil
 }

@@ -40,6 +40,15 @@ type Chart struct {
 	// manifests. A chart that would not render is not a chart with no findings.
 	RenderStatus string
 	RenderError  string
+	// RenderErrorKind classifies the failure, so ninety-five charts that failed
+	// four different ways are four conversations rather than one stack trace.
+	// See render.FailureKind.
+	RenderErrorKind string
+	// RenderAttempts is how many times it was tried. Recorded because "retried
+	// and failed again" and "not retried, because a second render of the same
+	// bytes returns the same error" are different facts and a reader is
+	// entitled to know which happened.
+	RenderAttempts int
 }
 
 // Render statuses.

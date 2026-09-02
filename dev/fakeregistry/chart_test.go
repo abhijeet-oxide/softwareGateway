@@ -102,14 +102,30 @@ func TestDevChartsRenderAndProduceFindings(t *testing.T) {
 		counts.Pass, counts.Fail, counts.Blocking, counts.Warning, counts.Skip)
 }
 
-// Every component's chart must render, not just the one above: the defects are
-// chosen from the component name, so a template that only breaks for one
-// combination would slip through a single-chart test.
-func TestEveryDevChartRenders(t *testing.T) {
+// Every component's chart must either RENDER, or fail in a way the classifier
+// recognises and would not retry.
+//
+// # Why the assertion is not "everything renders"
+//
+// It was, and that made the development estate unlike every real one. A vendor
+// orb's coverage table is seventeen failures deep: subcharts that require a
+// `global.registry` only their umbrella supplies, and templates that dereference
+// a nil. Those are what the failure classification, the retry decision and the
+// coverage table exist for, and an estate where nothing fails cannot exercise
+// any of them - so all three were built from a screenshot of somebody else's
+// release and none of them was ever run against a failure here.
+//
+// So the deliberate failures are asserted as deliberate: recognised, explained,
+// and NOT retryable, because retrying a template error costs the person waiting
+// three times the delay for the identical message.
+func TestEveryDevChartRendersOrFailsRecognisably(t *testing.T) {
 	if _, err := exec.LookPath("helm"); err != nil {
 		t.Skip("helm is not on PATH")
 	}
 	seen := map[string]bool{}
+	var rendered int
+	kinds := map[render.FailureKind]int{}
+
 	for _, releases := range catalogue {
 		for _, rel := range releases {
 			for _, comp := range rel.components {
@@ -123,8 +139,22 @@ func TestEveryDevChartRenders(t *testing.T) {
 					t.Fatalf("%s: %v", comp.name, err)
 				}
 				helm := render.Helm{}.WithDefaults()
-				if _, err := helm.Render(context.Background(), findChart(t, dir)); err != nil {
-					t.Errorf("%s does not render: %v", comp.name, err)
+				_, err := helm.Render(context.Background(), findChart(t, dir))
+				if err == nil {
+					rendered++
+					continue
+				}
+
+				kind := render.ClassifyFailure(err)
+				kinds[kind]++
+				if kind == render.FailureUnknown {
+					t.Errorf("%s failed in a way the classifier does not recognise, so the "+
+						"coverage table would show a stack trace and the run would retry it "+
+						"for nothing: %v", comp.name, err)
+				}
+				if kind.Retryable() {
+					t.Errorf("%s failed with %s, which the run will retry - a deliberate "+
+						"fixture failure must be deterministic: %v", comp.name, kind, err)
 				}
 			}
 		}
@@ -132,7 +162,18 @@ func TestEveryDevChartRenders(t *testing.T) {
 	if len(seen) == 0 {
 		t.Fatal("no chart components in the catalogue")
 	}
-	t.Logf("%d chart components render", len(seen))
+	if rendered == 0 {
+		t.Fatal("no chart rendered, so the estate cannot exercise the passing path")
+	}
+	// Both deliberate failures must actually occur, or the estate has silently
+	// gone back to being one where everything works.
+	for _, want := range []render.FailureKind{render.FailureNeedsValues, render.FailureTemplate} {
+		if kinds[want] == 0 {
+			t.Errorf("no chart failed with %s, so that path is untested here", want)
+		}
+	}
+	t.Logf("%d chart components: %d rendered, %d failed (%v)",
+		len(seen), rendered, len(seen)-rendered, kinds)
 }
 
 func findChart(t *testing.T, root string) string {

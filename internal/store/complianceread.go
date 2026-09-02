@@ -143,7 +143,8 @@ func (p *Packages) ComplianceRuns(ctx context.Context, packageID int64, limit in
 // ComplianceCharts returns what each chart contributed to a run.
 func (p *Packages) ComplianceCharts(ctx context.Context, runID string) ([]ComplianceChartRow, error) {
 	rows, err := p.db.QueryContext(ctx, p.dialect.Rewrite(`
-		SELECT name, version, artifact_digest, artifact_ref, status, COALESCE(error, ''), resources
+		SELECT name, version, artifact_digest, artifact_ref, status, COALESCE(error, ''),
+		       error_kind, attempts, resources
 		  FROM compliance_charts
 		 WHERE run_id = ?
 		 ORDER BY status DESC, name, version`), runID)
@@ -156,7 +157,7 @@ func (p *Packages) ComplianceCharts(ctx context.Context, runID string) ([]Compli
 	for rows.Next() {
 		var c ComplianceChartRow
 		if err := rows.Scan(&c.Name, &c.Version, &c.ArtifactDigest, &c.ArtifactRef,
-			&c.Status, &c.Error, &c.Resources); err != nil {
+			&c.Status, &c.Error, &c.ErrorKind, &c.Attempts, &c.Resources); err != nil {
 			return nil, fmt.Errorf("scan compliance chart: %w", err)
 		}
 		out = append(out, c)

@@ -1,4 +1,6 @@
-import { Button, Card, Col, Progress, Row, Space, Tag, Tooltip, Typography } from 'antd'
+import {
+  Button, Card, Col, Progress, Row, Space, Tag, Timeline, Tooltip, Typography,
+} from 'antd'
 import { LoadingOutlined } from '../icons'
 import { formatBytes, formatCount, formatDuration } from '../domain/format'
 import { c, mono } from '../uikit'
@@ -339,37 +341,62 @@ function EventLog({ events }: { events: ComplianceProgressEvent[] }) {
       </Typography.Text>
       <div
         style={{
-          marginTop: 4,
-          maxHeight: 190,
+          marginTop: 8,
+          maxHeight: 240,
           overflowY: 'auto',
-          border: `1px solid ${c.border}`,
-          borderRadius: 6,
-          background: c.surface2,
+          paddingRight: 8,
         }}
       >
-        {newest.map((e, i) => (
-          <div
-            key={`${e.sec}-${i}`}
-            style={{
-              display: 'flex',
-              gap: 10,
-              padding: '3px 10px',
-              fontSize: 12,
-              lineHeight: '18px',
-              borderTop: i === 0 ? undefined : `1px solid ${c.border}`,
-            }}
-          >
-            <span
-              style={{
-                fontFamily: mono, fontSize: 11, color: c.text3,
-                minWidth: '4.5ch', textAlign: 'right', flexShrink: 0,
-              }}
-            >
-              {formatDuration(e.sec) ?? '0s'}
-            </span>
-            <span style={{ color: toneOf(e.kind), wordBreak: 'break-word' }}>{e.text}</span>
-          </div>
-        ))}
+        {/*
+          A TIMELINE, because a run IS one: a sequence of things that happened,
+          in order, with gaps between them that mean something. This is the
+          shape the vulnerability sync log uses and a reader has already learned
+          it there - a second transcript style for the same kind of information
+          is a second thing to learn for no gain.
+
+          The elapsed second, not a clock time. A run is minutes long and every
+          line is about how far into it something happened; wall-clock times
+          would need subtracting before they said anything.
+        */}
+        <Timeline
+          mode="left"
+          items={newest.map((e, i) => ({
+            key: `${e.sec}-${i}`,
+            color: toneOf(e.kind),
+            children: (
+              <Space size={10} align="start" style={{ lineHeight: 1.35 }}>
+                <Typography.Text
+                  type="secondary"
+                  style={{
+                    fontFamily: mono, fontSize: 11, whiteSpace: 'nowrap',
+                    minWidth: '4.5ch', display: 'inline-block', textAlign: 'right',
+                  }}
+                  title={e.at ? new Date(e.at).toLocaleString() : undefined}
+                >
+                  {formatDuration(e.sec) ?? '0s'}
+                </Typography.Text>
+                {/*
+                  The kind is a WORD as well as a colour, on the lines where it
+                  changes what the line means. Everything on this page reads
+                  correctly in greyscale, and a transcript whose only signal is
+                  the colour of a six-pixel dot is the easiest place to forget
+                  that.
+                */}
+                {(e.kind === 'fail' || e.kind === 'warn') && (
+                  <Tag
+                    color={e.kind === 'fail' ? 'red' : 'orange'}
+                    style={{ margin: 0, fontSize: 10, lineHeight: '16px' }}
+                  >
+                    {e.kind === 'fail' ? 'Failed' : 'Warning'}
+                  </Tag>
+                )}
+                <span style={{ fontSize: 12, color: e.kind === 'fail' ? c.danger : c.text }}>
+                  {e.text}
+                </span>
+              </Space>
+            ),
+          }))}
+        />
       </div>
     </div>
   )

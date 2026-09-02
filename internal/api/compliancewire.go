@@ -1,9 +1,11 @@
 package api
 
 import (
+	"errors"
 	"time"
 
 	"github.com/abhijeet-oxide/softwareGateway/internal/compliance"
+	"github.com/abhijeet-oxide/softwareGateway/internal/compliance/render"
 	"github.com/abhijeet-oxide/softwareGateway/internal/store"
 )
 
@@ -66,13 +68,31 @@ type ComplianceCounts struct {
 
 // ComplianceChartView is one chart's contribution - the run's denominator.
 type ComplianceChartView struct {
-	Name      string `json:"name"`
-	Version   string `json:"version,omitempty"`
-	Digest    string `json:"digest,omitempty"`
-	Ref       string `json:"ref,omitempty"`
-	Status    string `json:"status"`
-	Error     string `json:"error,omitempty"`
-	Resources int    `json:"resources"`
+	Name    string `json:"name"`
+	Version string `json:"version,omitempty"`
+	Digest  string `json:"digest,omitempty"`
+	Ref     string `json:"ref,omitempty"`
+	Status  string `json:"status"`
+	Error   string `json:"error,omitempty"`
+	// ErrorKind classifies the failure, ErrorLabel names it in the words the
+	// table shows, and ErrorHint says what the reader does about it. Carried
+	// rather than mapped in the interface so the two cannot drift, and because
+	// an export a vendor opens has no interface to map it with.
+	ErrorKind  string `json:"errorKind,omitempty"`
+	ErrorLabel string `json:"errorLabel,omitempty"`
+	ErrorHint  string `json:"errorHint,omitempty"`
+	// Attempts is how many renders were tried, and Retryable whether a further
+	// one could have helped. "Retried and failed again" and "not retried,
+	// because a second render of the same bytes returns the same error" are
+	// different facts.
+	Attempts int `json:"attempts,omitempty"`
+	// Not omitempty: FALSE is the informative value here. "Not retried, because
+	// a second render of the same bytes returns the same error" is a thing the
+	// coverage table says, and an omitted false reaches the interface as
+	// "unknown" - which it then cannot say anything about.
+	Retryable bool `json:"retryable"`
+
+	Resources int `json:"resources"`
 }
 
 // ComplianceResultView is one finding, addressed.
@@ -248,10 +268,24 @@ func complianceRunView(r store.ComplianceRunRow) ComplianceRunView {
 func complianceChartViews(rows []store.ComplianceChartRow) []ComplianceChartView {
 	out := make([]ComplianceChartView, 0, len(rows))
 	for _, c := range rows {
-		out = append(out, ComplianceChartView{
+		v := ComplianceChartView{
 			Name: c.Name, Version: c.Version, Digest: c.ArtifactDigest, Ref: c.ArtifactRef,
-			Status: c.Status, Error: c.Error, Resources: c.Resources,
-		})
+			Status: c.Status, Error: c.Error, ErrorKind: c.ErrorKind,
+			Attempts: c.Attempts, Resources: c.Resources,
+		}
+		// A run recorded before failures were classified has an error and no
+		// kind. Classifying it on read costs one string scan and turns an old
+		// run's coverage table from a column of stack traces into the same
+		// grouped view a new one gets.
+		if v.ErrorKind == "" && c.Error != "" {
+			v.ErrorKind = string(render.ClassifyFailure(errors.New(c.Error)))
+		}
+		if kind := render.FailureKind(v.ErrorKind); kind != "" {
+			v.ErrorLabel = kind.Label()
+			v.ErrorHint = kind.Explain()
+			v.Retryable = kind.Retryable()
+		}
+		out = append(out, v)
 	}
 	return out
 }

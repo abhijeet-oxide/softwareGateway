@@ -563,7 +563,7 @@ func writeStyledRow(
 		}
 		if _, err := fmt.Fprintf(w,
 			`<c r="%s"%s t="inlineStr"><is><t xml:space="preserve">%s</t></is></c>`,
-			ref, attr, escapeXML(value)); err != nil {
+			ref, attr, escapeXML(clampCell(value))); err != nil {
 			return err
 		}
 	}
@@ -585,6 +585,54 @@ func isNumeric(s string) bool {
 		return true
 	}
 	return false
+}
+
+// maxCellChars is Excel's own limit on the characters one cell can hold.
+//
+// # What going over it actually does
+//
+// Not a truncated cell: Excel declares the WORKBOOK damaged. It opens with "we
+// found a problem with some content", and its repair log says
+//
+//	Repaired Records: String properties from /xl/worksheets/sheet4.xml part
+//
+// - which is Excel having thrown the string away. The reader is told the file
+// is corrupt, and the sheet they were sent is the one they no longer trust.
+//
+// # Why the WRITER enforces it rather than its callers
+//
+// Because every string that reaches here is somebody else's: a scanner's
+// description, helm's stderr, a vendor's annotation. Bounding it at each call
+// site means every caller has to know a spreadsheet's limit, and the one that
+// forgets does not produce a long cell - it produces a file that opens as
+// damaged. This is the one place that knows it is writing a spreadsheet.
+const maxCellChars = 32767
+
+// markerRoom reserves space for the marker clampCell appends, so the marker
+// itself cannot push the cell back over the limit.
+const markerRoom = 64
+
+// clampCell cuts a cell down to what Excel will hold, and says so in the cell.
+//
+// Silently would be worse than the corruption: a renderer's message that stops
+// mid-sentence with nothing to show for it reads as the whole message, and the
+// next person debugs the half they were given.
+//
+// Cut BEFORE escaping, and on runes rather than bytes. The limit is on the
+// cell's value, not on the XML that carries it, and a cut through `&amp;` or
+// through half of a multi-byte character produces exactly the malformed part
+// this is here to avoid.
+func clampCell(s string) string {
+	// Bytes are never fewer than runes, so most cells never get counted.
+	if len(s) <= maxCellChars {
+		return s
+	}
+	runes := []rune(s)
+	if len(runes) <= maxCellChars {
+		return s
+	}
+	keep := maxCellChars - markerRoom
+	return string(runes[:keep]) + fmt.Sprintf("… (%d more characters)", len(runes)-keep)
 }
 
 // cellRef renders a zero-based column index and one-based row as "AB12".
@@ -676,8 +724,10 @@ func sheetName(name string, index int) string {
 	if name == "" {
 		name = fmt.Sprintf("Sheet%d", index+1)
 	}
-	if len(name) > 31 {
-		name = name[:31]
+	// Runes, not bytes: half a multi-byte character in a sheet name is invalid
+	// UTF-8 in the workbook part, which is a file Excel offers to repair.
+	if runes := []rune(name); len(runes) > 31 {
+		name = string(runes[:31])
 	}
 	return name
 }

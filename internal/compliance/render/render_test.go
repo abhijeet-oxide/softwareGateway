@@ -454,3 +454,51 @@ func tail(s string) string {
 	}
 	return s
 }
+
+// A render failure's message is bounded, because it is stored, drawn and
+// exported.
+//
+// helm's stderr is usually eight readable lines, and firstLines already bounds
+// it at that. But some helm errors are ONE line: `error validating data:` hands
+// back a whole rejected object, and a chart that fails on its own schema can
+// emit its entire values document without a newline in it. That message is
+// written to a database column, returned by the API, drawn in a table, and put
+// in a spreadsheet cell - and a spreadsheet cell holds 32,767 characters before
+// Excel declares the WORKBOOK damaged and repairs it by dropping the string.
+func TestARenderFailureMessageIsBounded(t *testing.T) {
+	h := helmOrSkip(t)
+
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "Chart.yaml"),
+		[]byte("apiVersion: v2\nname: shouty\nversion: 0.1.0\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "values.yaml"), []byte("{}\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(dir, "templates"), 0o750); err != nil {
+		t.Fatal(err)
+	}
+	// One line, fifty thousand characters - the shape of the helm errors that
+	// carry a rejected object back with them.
+	if err := os.WriteFile(filepath.Join(dir, "templates", "boom.yaml"),
+		[]byte(`{{ fail (repeat 5000 "0123456789") }}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	_, err := h.Render(context.Background(), dir)
+	if err == nil {
+		t.Fatal("the chart rendered, so there is no message to bound")
+	}
+	if n := len([]rune(err.Error())); n > 4000 {
+		t.Errorf("the message is %d characters; it is stored, drawn and exported as it stands", n)
+	}
+	if !strings.Contains(err.Error(), "more characters") {
+		t.Error("the message was cut with nothing saying so, so the reader debugs the half they were given")
+	}
+	// The part that says which chart failed has to survive the cut, or the row
+	// it lands on names no chart.
+	if !strings.Contains(err.Error(), "helm template failed for") {
+		t.Errorf("the cut took the part that names the chart: %q", err.Error())
+	}
+}

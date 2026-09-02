@@ -10,6 +10,7 @@ import (
 	"strings"
 	"testing"
 	"time"
+	"unicode/utf8"
 )
 
 func sampleBook() Book {
@@ -232,4 +233,131 @@ func TestShortRowsArePadded(t *testing.T) {
 	if len(rows[1]) != 3 {
 		t.Errorf("short row was not padded: %v", rows[1])
 	}
+}
+
+// A cell longer than Excel holds is a workbook Excel calls damaged.
+//
+// This is not a hypothetical rounding of a limit. The compliance report carries
+// helm's own stderr - `error validating data:` can hand back a whole rejected
+// object on one line - and Excel's answer to a cell over 32,767 characters is
+// to open the file with "we found a problem with some content" and repair it by
+// throwing the string away:
+//
+//	Repaired Records: String properties from /xl/worksheets/sheet4.xml part
+//
+// The reader is then told the report is corrupt, which is worse than a long
+// cell by every measure.
+func TestXLSXCellsStayInsideExcelsLimit(t *testing.T) {
+	huge := strings.Repeat("helm template failed: ", 6000) // ~132,000 characters
+	book := Book{Sheets: []Sheet{{
+		Name:    "Charts",
+		Headers: []string{"Chart", "Renderer message"},
+		Rows:    [][]string{{"cfx-nssaaf-chart", huge}},
+		Wrap:    []int{1},
+	}}}
+
+	var buf bytes.Buffer
+	if err := Write(&buf, FormatXLSX, book); err != nil {
+		t.Fatal(err)
+	}
+	sheet := xlsxPart(t, buf.Bytes(), "xl/worksheets/sheet1.xml")
+
+	for _, text := range inlineStrings(t, sheet) {
+		if n := len([]rune(text)); n > 32767 {
+			t.Errorf("a cell holds %d characters: Excel repairs the workbook rather than opening it", n)
+		}
+	}
+	if !strings.Contains(sheet, "more characters") {
+		t.Error("the cell was cut with nothing saying so, which reads as the whole message")
+	}
+}
+
+// The limit is Excel's, so a CSV keeps the whole thing.
+//
+// Somebody exporting a table to grep it should not be handed the spreadsheet's
+// constraint, and the CSV is the format they reach for when the workbook's cell
+// was not big enough.
+func TestCSVKeepsWhatExcelCannotHold(t *testing.T) {
+	huge := strings.Repeat("x", 40000)
+	book := Book{Sheets: []Sheet{{
+		Name: "Charts", Primary: true,
+		Headers: []string{"Message"}, Rows: [][]string{{huge}},
+	}}}
+
+	var buf bytes.Buffer
+	if err := Write(&buf, FormatCSV, book); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(buf.String(), huge) {
+		t.Error("the CSV was cut to a spreadsheet's limit")
+	}
+}
+
+// A sheet name is cut on a character, not on a byte.
+//
+// Half a multi-byte rune in xl/workbook.xml is invalid UTF-8 in the part that
+// names every sheet - which is the whole workbook, not one cell.
+func TestSheetNameIsCutOnARuneBoundary(t *testing.T) {
+	// 32 three-byte runes: a byte cut lands inside the 11th one.
+	book := Book{Sheets: []Sheet{{Name: strings.Repeat("三", 32), Headers: []string{"A"}}}}
+
+	var buf bytes.Buffer
+	if err := Write(&buf, FormatXLSX, book); err != nil {
+		t.Fatal(err)
+	}
+	workbook := xlsxPart(t, buf.Bytes(), "xl/workbook.xml")
+	if !utf8.ValidString(workbook) {
+		t.Fatal("xl/workbook.xml is not valid UTF-8")
+	}
+	if strings.Contains(workbook, "�") {
+		t.Error("a sheet name was cut through a character")
+	}
+}
+
+func xlsxPart(t *testing.T, body []byte, name string) string {
+	t.Helper()
+	zr, err := zip.NewReader(bytes.NewReader(body), int64(len(body)))
+	if err != nil {
+		t.Fatalf("not a zip: %v", err)
+	}
+	for _, f := range zr.File {
+		if f.Name != name {
+			continue
+		}
+		rc, err := f.Open()
+		if err != nil {
+			t.Fatal(err)
+		}
+		out, err := io.ReadAll(rc)
+		_ = rc.Close()
+		if err != nil {
+			t.Fatal(err)
+		}
+		return string(out)
+	}
+	t.Fatalf("the workbook has no %s", name)
+	return ""
+}
+
+// inlineStrings returns every cell's text, unescaped, from a worksheet part.
+func inlineStrings(t *testing.T, sheet string) []string {
+	t.Helper()
+	var out []string
+	dec := xml.NewDecoder(strings.NewReader(sheet))
+	for {
+		tok, err := dec.Token()
+		if err != nil {
+			break
+		}
+		start, ok := tok.(xml.StartElement)
+		if !ok || start.Name.Local != "t" {
+			continue
+		}
+		var text string
+		if err := dec.DecodeElement(&text, &start); err != nil {
+			t.Fatalf("decoding a cell: %v", err)
+		}
+		out = append(out, text)
+	}
+	return out
 }

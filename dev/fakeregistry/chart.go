@@ -50,6 +50,10 @@ func chartTarball(component, version string) []byte {
 	noLimits := seed%3 == 0
 	taggedImage := seed%5 < 2
 	noPDB := seed%7 < 3
+	// SCH-08 and SCH-09: the toleration block a chart picks up by copying
+	// somebody else's chart - it tolerates the node running out of memory, and
+	// it tolerates an unreachable node forever.
+	badTolerations := seed%11 < 4
 
 	files := map[string]string{
 		name + "/Chart.yaml": fmt.Sprintf(
@@ -110,7 +114,7 @@ app.kubernetes.io/version: {{ .Chart.AppVersion | quote }}
 {{- end -}}
 `, "\n"),
 
-		name + "/templates/deployment.yaml": deploymentTemplate(rootUser, noLimits, taggedImage),
+		name + "/templates/deployment.yaml": deploymentTemplate(rootUser, noLimits, taggedImage, badTolerations),
 	}
 	if !noPDB {
 		files[name+"/templates/pdb.yaml"] = tmpl(`
@@ -136,7 +140,7 @@ spec:
 // Each is a real failure mode from the check catalogue rather than a synthetic
 // one: a container running as root, a missing memory limit, an image pinned by
 // tag instead of digest.
-func deploymentTemplate(rootUser, noLimits, taggedImage bool) string {
+func deploymentTemplate(rootUser, noLimits, taggedImage, badTolerations bool) string {
 	image := `{{ .Values.image.repository }}@{{ .Values.image.digest }}`
 	if taggedImage {
 		// SUP-01: a tag is a pointer and it can be moved.
@@ -170,6 +174,32 @@ func deploymentTemplate(rootUser, noLimits, taggedImage bool) string {
               memory: {{ .Values.resources.requests.memory }}`
 	}
 
+	// The tolerations a conformant chart writes: nothing at all for the
+	// node-pressure taints, and a bound on the two it does tolerate.
+	tolerations := `
+      tolerations:
+        - key: node.kubernetes.io/not-ready
+          operator: Exists
+          effect: NoExecute
+          tolerationSeconds: 300
+        - key: node.kubernetes.io/unreachable
+          operator: Exists
+          effect: NoExecute
+          tolerationSeconds: 300`
+	if badTolerations {
+		// SCH-08: scheduled onto a node that has already said it is out of
+		// memory, with nothing anywhere saying why. SCH-09: and bound to an
+		// unreachable node until somebody notices it is gone.
+		tolerations = `
+      tolerations:
+        - key: node.kubernetes.io/memory-pressure
+          operator: Exists
+          effect: NoSchedule
+        - key: node.kubernetes.io/unreachable
+          operator: Exists
+          effect: NoExecute`
+	}
+
 	return tmpl(`
 apiVersion: apps/v1
 kind: Deployment
@@ -191,7 +221,7 @@ spec:
     spec:
       serviceAccountName: {{ .Chart.Name }}
       automountServiceAccountToken: false
-      terminationGracePeriodSeconds: 45
+      terminationGracePeriodSeconds: 45` + tolerations + `
       securityContext:
         runAsNonRoot: true
         seccompProfile:

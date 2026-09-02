@@ -348,6 +348,40 @@ Rules that make a waiver a control rather than a hole:
   A waiver with no scope beyond the check ID is rejected at load: blanket
   waivers are how a policy set dies quietly.
 
+### 7.1 A waiver is not a declared exception, and the two must not be confused
+
+A waiver is **ours**: our organization accepting a failure the vendor shipped,
+recorded on our side, expiring on a date we set. A declared exception is
+**theirs**: the chart itself saying, in the manifest, that it needs something
+the standard forbids by default and why.
+
+Both exist because some checks describe a rule with real exceptions, and the two
+answer different questions. SCH-08 is the worked example: a pod must not
+tolerate a node-pressure taint, *unless* the workload carries
+
+```yaml
+metadata:
+  annotations:
+    compliance.softwaregateway.io/toleration-rationale: >-
+      Collects kernel logs off nodes already under disk pressure, which is the
+      condition the logs are needed for. Approved by platform-sre 2026-04-11.
+```
+
+on itself or on its pod template. The annotation makes the check PASS - it is
+not a suppression, and nothing is moved out of the verdict.
+
+The reason to build it this way rather than as a waiver is that the deciding
+fact is in the chart. A DaemonSet that has to run on a failing node and one that
+tolerates pressure taints by copy-paste are byte-identical without the
+declaration, so a check that simply forbade the toleration would be waived
+release after release, and a check that exempted DaemonSets would pass the
+copy-paste one forever. Asking the author to write the sentence is what turns
+"we tolerate everything" into a claim somebody can disagree with in review.
+
+Where a check offers a declared exception, the annotation key, where it may be
+written, and what an empty value does are stated in the check's own catalog row.
+An exception the vendor will not declare is what a waiver is for.
+
 ## 8. What this model deliberately does not do
 
 Stated so nobody has to infer it from an absence.

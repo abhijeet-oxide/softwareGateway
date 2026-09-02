@@ -853,7 +853,8 @@ internal/compliance/
     cel/            the ONLY package importing cel-go
       env.go          declarations; compile-time and run-time environments
       funcs.go        value/text/present, quantity, imageRef, selects, pdbFor
-      funcs2.go       covers, replicas, declaresPort, boundToRole, allLabels
+      funcs2.go       covers, replicas, declaresPort, boundToRole, allLabels,
+                      allAnnotations
       k8s.go          quantity, image reference and selector semantics
       heuristics.go   the stated false-positive budgets, shared
       shorthand.go    required/forbidden/equals/… compiled to the same CEL

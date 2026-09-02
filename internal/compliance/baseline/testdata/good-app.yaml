@@ -155,6 +155,13 @@ spec:
         app.kubernetes.io/managed-by: Helm
         app.kubernetes.io/version: 1.4.2
     spec:
+      # The only tolerations a workload needs by default, and both bounded:
+      # a kubelet missing one heartbeat should not evict, and five minutes of
+      # silence should. Written out rather than left to the defaults so the
+      # chart says what it means.
+      tolerations:
+        - {key: node.kubernetes.io/not-ready, operator: Exists, effect: NoExecute, tolerationSeconds: 300}
+        - {key: node.kubernetes.io/unreachable, operator: Exists, effect: NoExecute, tolerationSeconds: 300}
       serviceAccountName: good-app
       automountServiceAccountToken: false
       terminationGracePeriodSeconds: 45

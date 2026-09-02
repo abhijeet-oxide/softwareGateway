@@ -1179,10 +1179,23 @@ charts and a values file can fix in two is *both*, and picking either would send
 half the work to the wrong person - which is the distinction the whole
 determinacy model exists to keep.
 
-**Warning is amber, not blue.** `warn` used to take the `review` tone, and blue
-beside red does not read as the middle of a three-step scale: it reads as a link
-or as something informational. Critical red, Warning amber, Info grey is the
-scale a reader already has, and it is the one the Security tab draws.
+**The severity scale is the Security tab's, glyph for glyph.** It was drawn from
+the STATUS palette - `danger` #d70015, `pending` #b25000 - which are a deeper red
+and a brown-orange than Security's `sev-critical` #f43f43 and `sev-high` #fb8c00:
+near enough to look like a mistake rather than a distinction, on two tabs one
+click apart. `block` takes Security's critical and `warn` takes its high, because
+those are the two it fills solid - the ones that are work - and Info is blue,
+because it is the one step on this scale that is not a severity at all but a
+note, and the shared scale's remaining steps (yellow, green) both read as
+verdicts about how bad something is. The drawing matches too: a dot and a word,
+filled for the two that are work and outlined for the one that is a note, which
+is `SeverityTag` in `security.tsx`. It was a filled pill here, so the same scale
+had two shapes as well as two palettes.
+
+The count on the release's tab label is the same colour as the Security tab's
+beside it. It was red and that one was not, so two counts of the same kind of
+thing, four centimetres apart on one row of tabs, were drawn as different kinds
+of fact.
 
 ```
 ┌─────────────────────────────────────────────────────────────────────────┐

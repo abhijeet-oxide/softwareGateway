@@ -1,7 +1,9 @@
 import type { ReactNode } from 'react'
 import { Alert, Card, Space, Tooltip, Typography } from 'antd'
 import { HelmOutlined } from '../icons'
-import { FieldLabel, StatusPill, c, mono } from '../uikit'
+import {
+  FieldLabel, StatusPill, c, mono, severity as severityColour, severitySurface,
+} from '../uikit'
 import type { PillTone } from '../uikit'
 import { formatRelative } from '../domain/format'
 import type {
@@ -78,18 +80,34 @@ export function OutcomePill({ outcome, label }: { outcome: ComplianceOutcome; la
 }
 
 /**
- * The severity scale's colours.
+ * THE SEVERITY SCALE, in the colours the Security tab draws.
  *
- * `warn` is PENDING (amber), not `review` (blue). Blue beside red does not read
- * as the middle of a three-step scale - it reads as a link, or as something
- * informational - and the Security tab one click away draws its own middle
- * severities amber. Critical red, Warning amber, Info grey is the scale a
- * reader already has.
+ * # Why the shared palette and not this tab's own
+ *
+ * Because they are the same scale on two tabs one click apart, and they were
+ * drawn from two different sets. Compliance used the STATUS palette - `danger`
+ * #d70015, `pending` #b25000 - which are a deeper red and a brown-orange than
+ * Security's `sev-critical` #f43f43 and `sev-high` #fb8c00. Near enough to look
+ * like a mistake rather than a distinction: a reader comparing the two tabs
+ * sees two reds and wonders what the difference means, and the answer is that
+ * there is none.
+ *
+ * `block` takes Security's critical and `warn` takes its high, because those
+ * are the two it fills solid - the ones that are work. Info is blue: it is the
+ * one step on this scale that is not a severity at all but a note, and the
+ * shared scale's remaining steps (yellow, green) both read as verdicts about
+ * how bad something is.
  */
-const SEVERITY_TONE: Record<string, PillTone> = {
-  block: 'danger',
-  warn: 'pending',
-  info: 'neutral',
+const SEVERITY_COLOUR: Record<string, string> = {
+  block: severityColour.critical,
+  warn: severityColour.high,
+  info: c.review,
+}
+
+const SEVERITY_SURFACE: Record<string, string> = {
+  block: severitySurface.critical,
+  warn: severitySurface.high,
+  info: c.reviewBg,
 }
 
 /**
@@ -106,11 +124,30 @@ const SEVERITY_WORD: Record<string, string> = {
   info: 'Info',
 }
 
+/**
+ * A severity, drawn exactly as the Security tab draws one.
+ *
+ * A dot and a word, the dot filled for the two that are work and outlined for
+ * the one that is a note - which is `SeverityTag` in security.tsx, glyph for
+ * glyph. It was a filled pill here, so the same scale had two shapes as well as
+ * two palettes.
+ */
 export function CheckSeverityTag({ severity }: { severity: string }) {
+  const colour = SEVERITY_COLOUR[severity] ?? c.text3
+  const filled = severity === 'block' || severity === 'warn'
   return (
-    <StatusPill tone={SEVERITY_TONE[severity] ?? 'neutral'} dot={false}>
-      {SEVERITY_WORD[severity] ?? severity}
-    </StatusPill>
+    <Space size={6}>
+      <span
+        aria-hidden
+        style={{
+          display: 'inline-block', width: 9, height: 9, borderRadius: '50%',
+          background: filled ? colour : (SEVERITY_SURFACE[severity] ?? 'transparent'),
+          border: `1.5px solid ${colour}`,
+          flexShrink: 0,
+        }}
+      />
+      <span>{SEVERITY_WORD[severity] ?? severity}</span>
+    </Space>
   )
 }
 
@@ -221,19 +258,23 @@ export function ComplianceSummary({
   const severities: {
     key: SummaryKey
     label: string
+    severity: string
     unique: number
     total: number
     colour: string
   }[] = [
     {
-      key: 'blocking', label: 'Critical',
-      unique: counts.uniqueBlocking, total: counts.blocking, colour: c.danger,
+      key: 'blocking', label: 'Critical', severity: 'block',
+      unique: counts.uniqueBlocking, total: counts.blocking, colour: SEVERITY_COLOUR.block!,
     },
     {
-      key: 'warning', label: 'Warning',
-      unique: counts.uniqueWarning, total: counts.warning, colour: c.pending,
+      key: 'warning', label: 'Warning', severity: 'warn',
+      unique: counts.uniqueWarning, total: counts.warning, colour: SEVERITY_COLOUR.warn!,
     },
-    { key: 'info', label: 'Info', unique: counts.uniqueInfo, total: counts.info, colour: c.text3 },
+    {
+      key: 'info', label: 'Info', severity: 'info',
+      unique: counts.uniqueInfo, total: counts.info, colour: SEVERITY_COLOUR.info!,
+    },
   ]
 
   return (
@@ -279,7 +320,7 @@ export function ComplianceSummary({
               {unique > 0 && (
                 <div style={{ marginTop: 4, fontSize: 12.5 }}>
                   {counts.uniqueBlocking > 0 && (
-                    <span style={{ color: c.danger, fontWeight: 600 }}>
+                    <span style={{ color: SEVERITY_COLOUR.block, fontWeight: 600 }}>
                       {counts.uniqueBlocking.toLocaleString()} critical
                     </span>
                   )}
@@ -287,7 +328,7 @@ export function ComplianceSummary({
                     <span style={{ color: c.text3 }}> · </span>
                   )}
                   {counts.uniqueWarning > 0 && (
-                    <span style={{ color: c.pending, fontWeight: 600 }}>
+                    <span style={{ color: SEVERITY_COLOUR.warn, fontWeight: 600 }}>
                       {counts.uniqueWarning.toLocaleString()} warning
                     </span>
                   )}
@@ -361,12 +402,7 @@ export function ComplianceSummary({
                       fontVariantNumeric: 'tabular-nums',
                     }}
                   >
-                    <StatusPill
-                      tone={sev.key === 'blocking' ? 'danger' : sev.key === 'warning' ? 'pending' : 'neutral'}
-                      dot={false}
-                    >
-                      {sev.label}
-                    </StatusPill>
+                    <CheckSeverityTag severity={sev.severity} />
                     {/*
                       CHECKS, then PLACES, in the shape the Security tab's
                       severity rows use for unique CVEs and total findings. One
@@ -493,8 +529,8 @@ function ComplianceSeverityBar({ counts }: { counts: ComplianceCounts }) {
   // is not work, and a release with four hundred notes must not draw wider
   // than one with four defects.
   const segments = [
-    { label: 'Critical', n: counts.blocking, colour: c.danger },
-    { label: 'Warning', n: counts.warning, colour: c.pending },
+    { label: 'Critical', n: counts.blocking, colour: SEVERITY_COLOUR.block! },
+    { label: 'Warning', n: counts.warning, colour: SEVERITY_COLOUR.warn! },
   ]
   return (
     <div

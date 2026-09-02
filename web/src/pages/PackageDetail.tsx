@@ -1636,7 +1636,16 @@ export default function PackageDetail() {
                           + `in ${p.compliance.blocking.toLocaleString()} places across this release`
                         }
                       >
-                        <Typography.Text type="danger" style={{ fontSize: 12 }}>
+                        {/*
+                          THE SAME COLOUR AS THE SECURITY TAB'S COUNT.
+
+                          This was red and the one beside it was not, so two
+                          counts of the same kind of thing, four centimetres
+                          apart on the same row of tabs, were drawn as different
+                          kinds of fact. The tab beside it is the only thing
+                          this one is ever compared with.
+                        */}
+                        <Typography.Text style={{ fontSize: 12 }}>
                           ({uniqueChecks(p.compliance).toLocaleString()})
                         </Typography.Text>
                       </Tooltip>

@@ -201,6 +201,14 @@ export interface Package {
    * has run. See PackageSecuritySummary - absent is not "no vulnerabilities".
    */
   security?: PackageSecuritySummary
+  /**
+   * What a standards check recorded, or a never-run summary where none has.
+   *
+   * ABSENT IS NOT "COMPLIANT". A release nobody has checked and a release that
+   * passed everything are different facts, and rendering them the same way is
+   * the bug this whole feature exists to prevent.
+   */
+  compliance?: PackageComplianceSummary
   tag: string
   manifestDigest: string
   mediaType: string
@@ -1932,4 +1940,223 @@ export interface Problem {
   /** Clients switch on THIS, never on the HTTP status or the prose. */
   code: ErrorCode
   requestId?: string
+}
+
+/** '' never run | running | complete | failed | cancelled. */
+export type ComplianceState = '' | 'running' | 'complete' | 'failed' | 'cancelled'
+
+/**
+ * pass | conditional | fail | inconclusive.
+ *
+ * `inconclusive` is not a milder `fail`: it means something could not be
+ * decided, so the release has not been SHOWN to comply with anything. It
+ * outranks pass and conditional for exactly that reason.
+ */
+export type ComplianceVerdict = '' | 'pass' | 'conditional' | 'fail' | 'inconclusive'
+
+/** pass | fail | skip | error | waived. */
+export type ComplianceOutcome = 'pass' | 'fail' | 'skip' | 'error' | 'waived'
+
+/**
+ * fixed | configurable | unknown | na.
+ *
+ * The difference between the vendor's defect and the site's decision: a value
+ * the chart template fixes is theirs to change, and one a values file can
+ * override is a question for whoever writes those values.
+ */
+export type ComplianceDeterminacy = 'fixed' | 'configurable' | 'unknown' | 'na'
+
+/** A release's standards result, as the listing shows it. */
+export interface PackageComplianceSummary {
+  state?: ComplianceState
+  verdict?: ComplianceVerdict
+  /** The verdict in the words the interface states it, sent by the server. */
+  label?: string
+  blocking: number
+  warning: number
+  /**
+   * Checks that could not be decided. A release with three hundred passes and
+   * one of these is INCONCLUSIVE, not compliant - a column that showed only
+   * blocking and warning would draw it as clean.
+   */
+  error: number
+  pass: number
+  /** RFC 3339. Empty while running, and empty for a release never checked. */
+  checkedAt?: string
+  /** Whether this Coordinator can start a check at all, and why not. */
+  canRun?: boolean
+  reason?: string
+}
+
+export interface ComplianceCounts {
+  pass: number
+  fail: number
+  skip: number
+  error: number
+  waived: number
+  blocking: number
+  warning: number
+  info: number
+}
+
+/** One run, without its results. */
+export interface ComplianceRun {
+  id: string
+  state: ComplianceState
+  error?: string
+  verdict?: ComplianceVerdict
+  verdictLabel?: string
+  /**
+   * What produced it. A report that cannot say which rulebook, which helm and
+   * which Kubernetes version produced it cannot be re-derived - and re-deriving
+   * it is what happens when a vendor disputes a finding.
+   */
+  bundleDigest?: string
+  helmVersion?: string
+  kubeVersion?: string
+  checks: number
+  counts: ComplianceCounts
+  /** The result list was cut short. A truncated report LOOKS complete. */
+  truncated?: boolean
+  trigger?: string
+  startedAt: string
+  finishedAt?: string
+}
+
+/** One chart's contribution - the run's denominator. */
+export interface ComplianceChart {
+  name: string
+  version?: string
+  digest?: string
+  ref?: string
+  /** ok | failed | skipped. */
+  status: string
+  error?: string
+  resources: number
+}
+
+/**
+ * One finding, addressed precisely enough to act on without this tool.
+ *
+ * Every address field is present even where a client could derive it, because
+ * deriving it needs the release - and the most important consumer of this shape
+ * is an export a vendor opens with no access to this platform.
+ */
+export interface ComplianceResult {
+  check: string
+  title?: string
+  severity: 'block' | 'warn' | 'info'
+  category?: string
+  pack?: string
+  tier?: number
+  remediation?: string
+  reference?: string
+
+  outcome: ComplianceOutcome
+  outcomeLabel: string
+  determinacy?: ComplianceDeterminacy
+  determinacyLabel?: string
+
+  chart?: string
+  chartVersion?: string
+  subchartPath?: string
+  artifactDigest?: string
+  artifactRef?: string
+  sourceFile?: string
+  renderedLine?: number
+  apiVersion?: string
+  kind?: string
+  namespace?: string
+  name?: string
+  container?: string
+  containerType?: string
+  locus?: string
+
+  observed?: string
+  expected?: string
+  message?: string
+  error?: string
+
+  waiver?: string
+  waiverExpires?: string
+  fingerprint?: string
+}
+
+/** What a run reports while it is working. */
+export interface ComplianceProgress {
+  runId: string
+  stage: 'fetching' | 'rendering' | 'evaluating' | 'recording'
+  label: string
+  /** Counts of the CURRENT stage, not of the whole run. */
+  done: number
+  total: number
+  note?: string
+  started: string
+}
+
+/** Whether this Coordinator can render charts at all. */
+export interface ComplianceHelm {
+  available: boolean
+  version?: string
+  reason?: string
+}
+
+export interface PackageComplianceResponse {
+  product: string
+  release: string
+  /** ABSENT MEANS NOT CHECKED. Never render it as a pass. */
+  run?: ComplianceRun
+  /** Present only while a run is live, so one endpoint serves both. */
+  progress?: ComplianceProgress
+  charts?: ComplianceChart[]
+  results?: ComplianceResult[]
+  /** The count BEFORE the page was taken. */
+  total: number
+  helm: ComplianceHelm
+}
+
+export interface ComplianceRunsResponse {
+  runs: ComplianceRun[]
+}
+
+/** One rule, in full - what a vendor reads before they ship. */
+export interface PolicyCheck {
+  id: string
+  title: string
+  description?: string
+  /** WHY the organization requires it. What stops a check being cargo-culted. */
+  rationale?: string
+  severity: 'block' | 'warn' | 'info'
+  tier?: number
+  category?: string
+  remediation?: string
+  reference?: string
+  pack?: string
+  engine?: string
+  /** What the check judges, as a sentence. */
+  appliesTo?: string
+  deprecated?: boolean
+  supersededBy?: string
+}
+
+export interface PolicyPack {
+  name: string
+  prefixes?: string[]
+  version?: string
+  description?: string
+  maintainer?: string
+  reference?: string
+  builtin?: boolean
+  checks: number
+  /**
+   * Why a pack did not load. Surfaced rather than logged: the checks it owns
+   * will report `error`, and a reader has to know which and why.
+   */
+  errors?: string[]
+}
+
+export interface PolicyCatalogueResponse {
+  bundleDigest?: string
+  packs: PolicyPack[]
+  checks: PolicyCheck[]
 }

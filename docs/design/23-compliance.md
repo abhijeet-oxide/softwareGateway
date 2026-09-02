@@ -1092,14 +1092,14 @@ compliance puts in it.
 ```
  Checked 12m ago · rulebook 0ec0ff69 · 73 checks · helm 3.16.3    [Rulebook] [Run log] [Re-check]
 ┌──────────────────────┬────────────────────────────┬─────────────────────────────────┐
-│ COMPLIANCE           │ FINDINGS BY SEVERITY       │ CONFIDENCE                      │
-│ ● Not compliant      │ Critical            171    │ 82 of 95 charts rendered   86%  │
-│                      │ ████████████████████       │ ██████████████████░░░           │
-│  192                 │ Warning              21    │ 13 produced no objects          │
-│  findings            │ ██                         │                                 │
-│ ████████████▊        │ Info                  0    │ 3,336 of 4,321 decided     77%  │
-│ across 82 of 95      │ ───────────────────────    │ ███████████████░░░░░            │
-│ charts rendered      │ Checks passed     3,144    │ ● 949 checks not decided        │
+│ COMPLIANCE           │ FAILING CHECKS BY SEVERITY │ CONFIDENCE                      │
+│ ● Not compliant      │            checks | places │ 82 of 95 charts rendered   86%  │
+│                      │ Critical         5 | 171   │ ██████████████████░░░           │
+│  6                   │ ████████████████████       │ 13 produced no objects          │
+│  checks failed       │ Warning          1 |  21   │                                 │
+│ ████████████▊        │ ██                         │ 3,336 of 4,321 decided     77%  │
+│ 192 findings across  │ Info             0 |   0   │ ███████████████░░░░░            │
+│ 82 of 95 charts      │ Checks passed        3,144 │ ● 949 checks not decided        │
 └──────────────────────┴────────────────────────────┴─────────────────────────────────┘
 ┌──────────────────────────────────────────────────────────────────────────────────────┐
 │ [Findings (192)] [Charts (82/95)]                            [⤓ Download manifests]  │
@@ -1112,11 +1112,31 @@ compliance puts in it.
 └──────────────────────────────────────────────────────────────────────────────────────┘
 ```
 
+**Unique first, the total under it** - the Security tab's zone, for the same
+reason. The total is one rule counted once per place it fires: a measure of how
+much editing there is to do, and not the number somebody means when they ask how
+many problems a release has. Five rules broken in a hundred and seventy-one
+places is five conversations with the vendor.
+
+The distinct counts come from the SERVER (`store.ComplianceUniqueChecks`, one
+`COUNT(DISTINCT check_id)` grouped by severity) rather than from the rows. The
+table groups the page it was sent, so a count taken from those rows would be a
+count of whatever fitted in the page - and this number is the tab's headline. A
+check has exactly one severity, so the total is the sum; there is no check that
+is critical in one chart and a warning in another, which is how this differs
+from the vulnerability side's identical-looking number.
+
 **The grouping is the point.** 171 critical findings on a real orb are five
 rules. Expanding a row gives every occurrence - chart, template, resource,
 container, field, what was found - and clicking the check id opens the rule with
 all of them; clicking one occurrence opens that finding with the rendered
 manifest it was judged against (§14.2).
+
+Every occurrence row carries a **View** action pinned to the right edge. The row
+itself opens the finding, and a row that is clickable without saying so is a row
+most people never click; `fixed: 'right'` keeps the control on screen when the
+table scrolls sideways, because an action that scrolls out of view is an action
+that does not exist.
 
 **Owner is rolled up but never flattened.** A rule the vendor must fix in three
 charts and a values file can fix in two is *both*, and picking either would send

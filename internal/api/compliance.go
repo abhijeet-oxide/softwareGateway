@@ -45,6 +45,7 @@ type ComplianceStore interface {
 	LatestComplianceRun(ctx context.Context, packageID int64) (store.ComplianceRunRow, error)
 	ComplianceRun(ctx context.Context, id string) (store.ComplianceRunRow, error)
 	ComplianceRuns(ctx context.Context, packageID int64, limit int) ([]store.ComplianceRunRow, error)
+	ComplianceUniqueChecks(ctx context.Context, runID string) (store.ComplianceUniqueCounts, error)
 	ComplianceCharts(ctx context.Context, runID string) ([]store.ComplianceChartRow, error)
 	ComplianceResults(ctx context.Context, runID string, f store.ComplianceFilter) ([]store.ComplianceResultRow, int, error)
 	PackageCompliance(ctx context.Context, ids []int64) (map[int64]store.PackageComplianceRow, error)
@@ -119,6 +120,14 @@ func (s *Server) handlePackageCompliance(w http.ResponseWriter, r *http.Request)
 	}
 
 	view := complianceRunView(run)
+	// The distinct checks behind the severity counts. One extra aggregate over
+	// an indexed column, and it is what the tab leads with - see
+	// store.ComplianceUniqueCounts for why it cannot come from the page.
+	if unique, err := s.deps.ComplianceStore.ComplianceUniqueChecks(r.Context(), run.ID); err == nil {
+		view.Counts.UniqueBlocking = unique.Blocking
+		view.Counts.UniqueWarning = unique.Warning
+		view.Counts.UniqueInfo = unique.Info
+	}
 	out.Run = &view
 
 	charts, err := s.deps.ComplianceStore.ComplianceCharts(r.Context(), run.ID)

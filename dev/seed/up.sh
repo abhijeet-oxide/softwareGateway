@@ -3,6 +3,10 @@
 #
 #   dev/seed/up.sh            fresh database, discovery, transfers, dressing
 #   dev/seed/up.sh --keep     leave the existing database alone
+#   dev/seed/up.sh --inflate  finish with registries that DECLARE realistic sizes
+#
+# --inflate leaves the estate unable to serve anything the database recorded.
+# See the comment on the restart at the bottom of this script.
 #
 # Three processes: the fake vendor registries, the Coordinator and one Worker.
 # Everything they need is in dev/ - no Docker, no Postgres, no cluster.
@@ -97,20 +101,34 @@ print('   transfers', dict(c.execute('select state,count(*) from transfers group
 echo "==> dressing in scanner findings and signatures"
 python3 dev/seed/dress.py dev/swgw.db
 
-# The release comparison reads the registry LIVE rather than the database, so it
-# would report the kilobytes that actually moved while every other page reports
-# the scaled size. Restarting the registry with -inflate makes it declare the
-# same sizes dress.py wrote. Both derive them from the component name, so they
-# agree. See the comment on `inflate` in dev/fakeregistry.
-echo "==> restarting the registries with realistic sizes"
-pkill -9 -x fakeregistry 2>/dev/null || true
-sleep 1
-run fakeregistry "$BIN/fakeregistry" -inflate
-sleep 2
+# THE INFLATE RESTART IS OPT-IN, and this is why.
+#
+# The release comparison reads the registry LIVE rather than the database, so
+# without this it reports the kilobytes that actually moved while every other
+# page reports the scaled size. Restarting with -inflate makes the registry
+# declare the sizes dress.py wrote, and both derive them from the component
+# name, so they agree. See the comment on `inflate` in dev/fakeregistry.
+#
+# The cost is that a descriptor's size is part of its manifest, so every digest
+# changes: the Coordinator then holds digests nothing serves, and every walk,
+# compliance run and transfer answers 404 until discovery runs again - thirty
+# minutes away by default. In other words the last line of this script used to
+# break the estate it had just built, for one page's benefit.
+#
+# So it is a flag now. The default leaves a registry serving exactly what the
+# database recorded.
+if [ "${1:-}" = "--inflate" ] || [ "${2:-}" = "--inflate" ]; then
+  echo "==> restarting the registries with realistic declared sizes"
+  pkill -9 -x fakeregistry 2>/dev/null || true
+  sleep 1
+  run fakeregistry "$BIN/fakeregistry" -inflate
+  sleep 2
+  echo
+  echo "The registries now DECLARE sizes they do not store, so every digest has"
+  echo "changed. Walks, compliance runs and transfers will 404 until discovery"
+  echo "runs again. Re-run this script without --inflate to get them back."
+fi
 
 echo
 echo "Coordinator  http://localhost:8080"
 echo "Interface    cd web && pnpm dev   (http://localhost:5173)"
-echo
-echo "The registries now DECLARE sizes they do not store, so a new transfer will"
-echo "fail. Re-run this script to move bytes again."

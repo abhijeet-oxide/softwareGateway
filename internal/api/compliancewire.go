@@ -75,6 +75,17 @@ type ComplianceCounts struct {
 	Blocking int `json:"blocking"`
 	Warning  int `json:"warning"`
 	Info     int `json:"info"`
+
+	// The DISTINCT checks behind those numbers.
+	//
+	// A release breaks five rules in a hundred and seventy-one places. "171" is
+	// how much replacing there is to do; "5" is how many conversations, and it
+	// is the number somebody means when they ask how many problems a release
+	// has. Produced by the server because the interface groups the rows it was
+	// sent, so a count taken from those would be a count of the page.
+	UniqueBlocking int `json:"uniqueBlocking"`
+	UniqueWarning  int `json:"uniqueWarning"`
+	UniqueInfo     int `json:"uniqueInfo"`
 }
 
 // ComplianceChartView is one chart's contribution - the run's denominator.

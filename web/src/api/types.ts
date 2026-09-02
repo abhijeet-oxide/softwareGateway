@@ -2000,6 +2000,20 @@ export interface ComplianceCounts {
   blocking: number
   warning: number
   info: number
+  /**
+   * The DISTINCT checks behind those numbers.
+   *
+   * A release breaks five rules in a hundred and seventy-one places. "171" is
+   * how much replacing there is to do; "5" is how many conversations, and it is
+   * the number somebody means when they ask how many problems a release has.
+   *
+   * Served by the server rather than counted from the rows: the findings table
+   * groups the page it was sent, so a count taken from those rows would be a
+   * count of whatever fitted in the page.
+   */
+  uniqueBlocking: number
+  uniqueWarning: number
+  uniqueInfo: number
 }
 
 /** One run, without its results. */

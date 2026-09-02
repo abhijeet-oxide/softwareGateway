@@ -1001,10 +1001,26 @@ function vulnerabilityFact(p: Package): string | undefined {
     case '':
       return 'Not synced'
     case 'failed':
-      return s.syncedAt ? `${s.counts.total.toLocaleString()} (last sync failed)` : 'Sync failed'
+      return s.syncedAt ? `${uniqueCves(s).toLocaleString()} (last sync failed)` : 'Sync failed'
     default:
-      return s.scanned === 0 ? 'No results' : s.counts.total.toLocaleString()
+      return s.scanned === 0 ? 'No results' : uniqueCves(s).toLocaleString()
   }
+}
+
+/**
+ * How many DISTINCT advisories, not how many findings.
+ *
+ * The total is the same advisory counted once per image it appears in: on a
+ * ninety-five chart orb that is 3,077 where the release has 19 problems in it,
+ * and the header chip and the tab label are the two most quoted numbers on the
+ * page. Both said the first.
+ *
+ * This is the number the Security tab's own headline already leads with, and
+ * the number the Compliance tab beside it leads with for its own findings - so
+ * a reader comparing the two tabs is comparing like with like.
+ */
+function uniqueCves(s: NonNullable<Package['security']>): number {
+  return s.distinctCves || s.counts.total
 }
 
 /**
@@ -1529,13 +1545,27 @@ export default function PackageDetail() {
                   <Space size={6}>
                     <SafetyCertificateOutlined />
                     Security
+                    {/*
+                      UNIQUE CVEs, not total findings. The total is the same
+                      advisory counted once per image it appears in - 3,077 on
+                      a release with 19 problems in it - and a tab label is one
+                      of the two numbers people quote without opening anything.
+                    */}
                     {p?.security?.state === 'synced' && (
-                      <Typography.Text
-                        type={p.security.counts.total > 0 ? undefined : 'secondary'}
-                        style={{ fontSize: 12 }}
+                      <Tooltip
+                        title={
+                          `${uniqueCves(p.security).toLocaleString()} distinct advisories, `
+                          + `found ${p.security.counts.total.toLocaleString()} times across `
+                          + 'this release'
+                        }
                       >
-                        ({p.security.counts.total.toLocaleString()})
-                      </Typography.Text>
+                        <Typography.Text
+                          type={uniqueCves(p.security) > 0 ? undefined : 'secondary'}
+                          style={{ fontSize: 12 }}
+                        >
+                          ({uniqueCves(p.security).toLocaleString()})
+                        </Typography.Text>
+                      </Tooltip>
                     )}
                     {/*
                       A spinner, not the word "syncing…".

@@ -3,6 +3,7 @@ package store
 import (
 	"errors"
 	"fmt"
+	"github.com/abhijeet-oxide/softwareGateway/internal/compliance"
 	"testing"
 	"time"
 )
@@ -51,6 +52,10 @@ func TestFinishWritesRunChartsAndResults(t *testing.T) {
 		ID: "run-2", PackageID: pkg, State: ComplianceComplete, Verdict: "fail",
 		BundleDigest: "sha256:bundle", HelmVersion: "v3.16.3", KubeVersion: "1.30.0",
 		Checks: 71, Pass: 100, Fail: 3, Skip: 5, Blocking: 2, Warning: 1,
+		Log: []compliance.ProgressEvent{
+			{At: time.Now().UTC().Truncate(time.Second), Sec: 0, Kind: "info", Text: "Compliance check started"},
+			{At: time.Now().UTC().Truncate(time.Second), Sec: 4.5, Kind: "fail", Text: "beta did not render"},
+		},
 	}
 	expires := time.Now().UTC().Add(30 * 24 * time.Hour)
 	charts := []ComplianceChartRow{
@@ -94,6 +99,15 @@ func TestFinishWritesRunChartsAndResults(t *testing.T) {
 	}
 	if got.FinishedAt == nil || got.HeartbeatAt != nil {
 		t.Error("a finished run still holds its claim")
+	}
+	// The transcript, kept with the run. Without it the timeline a watcher read
+	// while the check ran disappears the moment it ends - and "which charts
+	// refused, and what did the nine minutes go on" is asked afterwards.
+	if len(got.Log) != 2 || got.Log[1].Kind != "fail" || got.Log[1].Text != "beta did not render" {
+		t.Errorf("run log = %+v, want the two events the run recorded", got.Log)
+	}
+	if got.Log[1].Sec != 4.5 {
+		t.Errorf("run log elapsed = %v, want 4.5", got.Log[1].Sec)
 	}
 	// The timestamps have to survive the round trip, and a nil check alone
 	// would not notice if they did not: SQLite stores these columns as TEXT,

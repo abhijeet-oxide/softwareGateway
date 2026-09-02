@@ -1,11 +1,14 @@
+import { useState } from 'react'
 import {
-  Button, Card, Col, Progress, Row, Space, Tag, Timeline, Tooltip, Typography,
+  Button, Card, Drawer, Progress, Space, Tag, Timeline, Tooltip, Typography,
 } from 'antd'
-import { LoadingOutlined } from '../icons'
-import { formatBytes, formatCount, formatDuration } from '../domain/format'
+import { CopyOutlined, FileTextOutlined, HelmOutlined, LoadingOutlined } from '../icons'
+import { formatBytes, formatCount, formatDuration, formatRelative } from '../domain/format'
+import { RunTiles } from './runtiles'
+import type { RunTile } from './runtiles'
 import { c, mono } from '../uikit'
 import type {
-  ComplianceProgress, ComplianceProgressEvent, ComplianceStage,
+  ComplianceProgress, ComplianceProgressEvent, ComplianceRun, ComplianceStage,
 } from '../api/types'
 
 /**
@@ -154,8 +157,14 @@ function StageBar({ progress }: { progress: ComplianceProgress }) {
               </Tag>
             </Tooltip>
           )}
+          {/*
+            The mark, because these are charts. The row beside them carries a
+            parallelism count and a stage name, and at eleven pixels a bare
+            string of hyphenated words is not obviously the name of a thing
+            being fetched rather than another label.
+          */}
           {active.slice(0, 6).map((a) => (
-            <Tag key={a} style={{ margin: 0, fontFamily: mono, fontSize: 11 }}>
+            <Tag key={a} icon={<HelmOutlined />} style={{ margin: 0, fontFamily: mono, fontSize: 11 }}>
               {shortName(a)}
             </Tag>
           ))}
@@ -239,7 +248,7 @@ function labelOf(stage: ComplianceStage): string {
  */
 function RunCounts({ progress }: { progress: ComplianceProgress }) {
   const k = progress.counts
-  const tiles: { label: string; value: string; tone?: string; hint?: string }[] = []
+  const tiles: RunTile[] = []
 
   if (k.chartsFound > 0) {
     tiles.push({
@@ -282,37 +291,11 @@ function RunCounts({ progress }: { progress: ComplianceProgress }) {
   if (k.chartsFailed > 0) {
     tiles.push({
       label: 'Renders failed', value: formatCount(k.chartsFailed) ?? '0', tone: c.danger,
-      hint: 'Every check requiring one of these reports as undecided, and the run is '
+      hint: 'Every check requiring one of these reports as unchecked, and the run is '
         + 'inconclusive rather than a pass.',
     })
   }
-  if (tiles.length === 0) return null
-
-  return (
-    <Row gutter={[12, 12]}>
-      {tiles.map((t) => (
-        <Col key={t.label} xs={12} sm={8} lg={4}>
-          <Tooltip title={t.hint}>
-            <div
-              style={{
-                border: `1px solid ${c.border}`,
-                borderRadius: 6,
-                padding: '8px 10px',
-                background: c.surface2,
-              }}
-            >
-              <Typography.Text type="secondary" style={{ fontSize: 11 }}>
-                {t.label}
-              </Typography.Text>
-              <div style={{ fontSize: 20, lineHeight: '26px', color: t.tone ?? c.text }}>
-                {t.value}
-              </div>
-            </div>
-          </Tooltip>
-        </Col>
-      ))}
-    </Row>
-  )
+  return <RunTiles tiles={tiles} />
 }
 
 /**
@@ -325,89 +308,171 @@ function RunCounts({ progress }: { progress: ComplianceProgress }) {
  * questions a spinner cannot: what is this actually doing, and - when a chart
  * refuses to render nine minutes in - which one, and why, without waiting for
  * the run to end to find out.
- *
- * Newest first because the interesting line is the one that just arrived. The
- * server keeps a bounded ring and drops ordinary progress before it drops a
- * failure, so the lines that survive a long run are the ones worth scrolling to.
  */
 function EventLog({ events }: { events: ComplianceProgressEvent[] }) {
   if (events.length === 0) return null
-  const newest = [...events].reverse()
-
   return (
     <div>
       <Typography.Text type="secondary" style={{ fontSize: 11 }}>
         Run log
       </Typography.Text>
-      <div
-        style={{
-          marginTop: 8,
-          maxHeight: 240,
-          overflowY: 'auto',
-          paddingRight: 8,
-        }}
-      >
-        {/*
-          A TIMELINE, because a run IS one: a sequence of things that happened,
-          in order, with gaps between them that mean something. This is the
-          shape the vulnerability sync log uses and a reader has already learned
-          it there - a second transcript style for the same kind of information
-          is a second thing to learn for no gain.
-
-          The elapsed second, not a clock time. A run is minutes long and every
-          line is about how far into it something happened; wall-clock times
-          would need subtracting before they said anything.
-        */}
-        <Timeline
-          mode="left"
-          items={newest.map((e, i) => ({
-            key: `${e.sec}-${i}`,
-            color: toneOf(e.kind),
-            children: (
-              <Space size={10} align="start" style={{ lineHeight: 1.35 }}>
-                <Typography.Text
-                  type="secondary"
-                  style={{
-                    fontFamily: mono, fontSize: 11, whiteSpace: 'nowrap',
-                    minWidth: '4.5ch', display: 'inline-block', textAlign: 'right',
-                  }}
-                  title={e.at ? new Date(e.at).toLocaleString() : undefined}
-                >
-                  {formatDuration(e.sec) ?? '0s'}
-                </Typography.Text>
-                {/*
-                  The kind is a WORD as well as a colour, on the lines where it
-                  changes what the line means. Everything on this page reads
-                  correctly in greyscale, and a transcript whose only signal is
-                  the colour of a six-pixel dot is the easiest place to forget
-                  that.
-                */}
-                {(e.kind === 'fail' || e.kind === 'warn') && (
-                  <Tag
-                    color={e.kind === 'fail' ? 'red' : 'orange'}
-                    style={{ margin: 0, fontSize: 10, lineHeight: '16px' }}
-                  >
-                    {e.kind === 'fail' ? 'Failed' : 'Warning'}
-                  </Tag>
-                )}
-                <span style={{ fontSize: 12, color: e.kind === 'fail' ? c.danger : c.text }}>
-                  {e.text}
-                </span>
-              </Space>
-            ),
-          }))}
-        />
+      <div style={{ marginTop: 8, maxHeight: 260, overflowY: 'auto', paddingRight: 8 }}>
+        <ComplianceRunLog events={events} />
       </div>
     </div>
   )
 }
 
+/**
+ * The transcript itself, in the shape the vulnerability sync log uses.
+ *
+ * # Why this is its own component
+ *
+ * Because it is read twice: under the bar while the check runs, and out of the
+ * finished run's record afterwards. The second is the one that was missing -
+ * the log lived in the Coordinator's memory, so the moment the check ended the
+ * only account of what it had done disappeared, and "which charts refused, and
+ * what did the nine minutes go on" is a question people ask afterwards.
+ *
+ * A TIMELINE, because a run IS one: a sequence of things that happened, in
+ * order, with gaps between them that mean something. This is the shape the
+ * vulnerability sync log uses and a reader has already learned it there - a
+ * second transcript style for the same kind of information is a second thing to
+ * learn for no gain.
+ *
+ * Newest first while the run is live, because the interesting line is the one
+ * that just arrived; oldest first when the run is over, because a finished
+ * transcript is read as a sequence.
+ */
+export function ComplianceRunLog({ events, newestFirst = true }: {
+  events: ComplianceProgressEvent[]
+  newestFirst?: boolean
+}) {
+  const ordered = newestFirst ? [...events].reverse() : events
+  return (
+    <Timeline
+      mode="left"
+      items={ordered.map((e, i) => ({
+        key: `${e.sec}-${i}`,
+        color: toneOf(e.kind),
+        children: (
+          <Space size={10} align="start" style={{ lineHeight: 1.35 }}>
+            {/*
+              The elapsed second, not a clock time. A run is minutes long and
+              every line is about how far into it something happened; wall-clock
+              times would need subtracting before they said anything. The
+              absolute time is on hover, for a log read a week later.
+            */}
+            <Typography.Text
+              type="secondary"
+              style={{
+                fontFamily: mono, fontSize: 11, whiteSpace: 'nowrap',
+                minWidth: '4.5ch', display: 'inline-block', textAlign: 'right',
+              }}
+              title={e.at ? new Date(e.at).toLocaleString() : undefined}
+            >
+              {formatDuration(e.sec) ?? '0s'}
+            </Typography.Text>
+            {/*
+              The kind is a WORD as well as a colour, on the lines where it
+              changes what the line means. Everything on this page reads
+              correctly in greyscale, and a transcript whose only signal is
+              the colour of a six-pixel dot is the easiest place to forget
+              that.
+            */}
+            {(e.kind === 'fail' || e.kind === 'warn') && (
+              <Tag
+                color={e.kind === 'fail' ? 'red' : 'orange'}
+                style={{ margin: 0, fontSize: 10, lineHeight: '16px' }}
+              >
+                {e.kind === 'fail' ? 'Failed' : 'Warning'}
+              </Tag>
+            )}
+            <span style={{ fontSize: 12, color: e.kind === 'fail' ? c.danger : c.text }}>
+              {e.text}
+            </span>
+          </Space>
+        ),
+      }))}
+    />
+  )
+}
+
+/**
+ * The finished run's transcript, behind a button.
+ *
+ * The counterpart of the vulnerability sync's Sync log, in the same place on
+ * the same kind of card, because these two features are read by the same people
+ * on the same release and there is no reason for one of them to keep its record
+ * and the other to throw it away.
+ *
+ * Absent rather than disabled when a run predates the stored log: a control
+ * that cannot do anything is a question the reader has to answer before
+ * ignoring it.
+ */
+export function ComplianceRunLogButton({ run, size = 'small' }: {
+  run: ComplianceRun
+  size?: 'small' | 'middle'
+}) {
+  const [open, setOpen] = useState(false)
+  const events = run.log ?? []
+  if (events.length === 0) return null
+
+  const plain = events
+    .map((e) => `${formatDuration(e.sec) ?? '0s'} [${e.kind}] ${e.text}`)
+    .join('\n')
+
+  return (
+    <>
+      <Button size={size} icon={<FileTextOutlined />} onClick={() => setOpen(true)}>
+        Run log
+      </Button>
+      <Drawer
+        title="Compliance run log"
+        width={720}
+        open={open}
+        onClose={() => setOpen(false)}
+        extra={
+          <Button
+            size="small"
+            icon={<CopyOutlined />}
+            onClick={() => void navigator.clipboard?.writeText(plain)}
+          >
+            Copy
+          </Button>
+        }
+      >
+        <Space direction="vertical" size={16} style={{ width: '100%' }}>
+          <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+            {run.finishedAt
+              ? `From the check that finished ${formatRelative(run.finishedAt)}.`
+              : 'From the last check.'}
+            {' '}Times are seconds from the start of the run.
+          </Typography.Text>
+          <ComplianceRunLog events={events} newestFirst={false} />
+        </Space>
+      </Drawer>
+    </>
+  )
+}
+
+/**
+ * What colour a line's dot is.
+ *
+ * # Why these are the four the sync log uses
+ *
+ * They were not. `ok` was the body text colour and `info` was the muted one, so
+ * on a run whose lines are almost all info and ok - which is every run that
+ * works - the timeline was a column of grey dots, and the two colours that
+ * meant something were lost among fifty that meant nothing. A dot the same
+ * colour as the text beside it is not a signal.
+ */
 function toneOf(kind: ComplianceProgressEvent['kind']): string {
   switch (kind) {
     case 'fail': return c.danger
     case 'warn': return c.pending
-    case 'ok': return c.text
-    default: return c.text2
+    case 'ok': return c.ok
+    default: return c.brand
   }
 }
 

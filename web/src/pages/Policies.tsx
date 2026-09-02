@@ -176,7 +176,7 @@ export default function Policies() {
               value={severity}
               onChange={setSeverity}
               options={[
-                { label: 'Blocking', value: 'block' },
+                { label: 'Critical', value: 'block' },
                 { label: 'Warning', value: 'warn' },
                 { label: 'Info', value: 'info' },
               ]}

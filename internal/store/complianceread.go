@@ -3,6 +3,7 @@ package store
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
@@ -62,6 +63,7 @@ func (p *Packages) complianceRunWhere(ctx context.Context, where string, args ..
 	var (
 		r         ComplianceRunRow
 		errText   sql.NullString
+		logText   sql.NullString
 		started   string
 		finished  string
 		heartbeat string
@@ -72,7 +74,7 @@ func (p *Packages) complianceRunWhere(ctx context.Context, where string, args ..
 		       bundle_digest, helm_version, kube_version, checks,
 		       pass_count, fail_count, skip_count, error_count, waived_count,
 		       blocking_count, warning_count, info_count,
-		       truncated, trigger, `+
+		       truncated, trigger, log, `+
 		d.TimestampText("started_at")+`, `+
 		d.TimestampText("finished_at")+`, `+
 		d.TimestampText("heartbeat_at")+`
@@ -81,7 +83,7 @@ func (p *Packages) complianceRunWhere(ctx context.Context, where string, args ..
 		&r.BundleDigest, &r.HelmVersion, &r.KubeVersion, &r.Checks,
 		&r.Pass, &r.Fail, &r.Skip, &r.Errors, &r.Waived,
 		&r.Blocking, &r.Warning, &r.Info,
-		&r.Truncated, &r.Trigger, &started, &finished, &heartbeat)
+		&r.Truncated, &r.Trigger, &logText, &started, &finished, &heartbeat)
 	if errors.Is(err, sql.ErrNoRows) {
 		return ComplianceRunRow{}, ErrNotFound
 	}
@@ -89,6 +91,11 @@ func (p *Packages) complianceRunWhere(ctx context.Context, where string, args ..
 		return ComplianceRunRow{}, fmt.Errorf("read compliance run: %w", err)
 	}
 	r.Error = errText.String
+	// A transcript that will not decode is dropped rather than failing the read:
+	// the run's results are the answer, and the log is how it was reached.
+	if logText.Valid && logText.String != "" {
+		_ = json.Unmarshal([]byte(logText.String), &r.Log)
+	}
 	if t := parseComplianceTime(started); t != nil {
 		r.StartedAt = *t
 	}

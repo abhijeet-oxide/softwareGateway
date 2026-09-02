@@ -49,6 +49,13 @@ type ComplianceRunView struct {
 
 	StartedAt  time.Time  `json:"startedAt"`
 	FinishedAt *time.Time `json:"finishedAt,omitempty"`
+
+	// Log is the run's transcript, in the same shape the live panel reads. On
+	// the finished run because the question the timeline answers - which charts
+	// refused, and what the nine minutes went on - is asked after the run rather
+	// than during it, and until this was stored the answer disappeared with the
+	// Coordinator's memory the moment the check ended.
+	Log []compliance.ProgressEvent `json:"log,omitempty"`
 }
 
 // ComplianceCounts is the tally. Severity counts are of FAILURES only: a
@@ -81,6 +88,17 @@ type ComplianceChartView struct {
 	ErrorKind  string `json:"errorKind,omitempty"`
 	ErrorLabel string `json:"errorLabel,omitempty"`
 	ErrorHint  string `json:"errorHint,omitempty"`
+	// ErrorValue is the values key the chart demanded, pulled out of helm's
+	// paragraph. Six of the eight charts that failed in a real orb failed for
+	// one reason - a `global.registry` an umbrella supplies - and the only
+	// thing their eight different messages had in common was that key.
+	ErrorValue string `json:"errorValue,omitempty"`
+	// ErrorFile is the template helm named, and ErrorInTest says it is a helm
+	// test hook. `helm install` never applies one, so a chart failing only
+	// there installs perfectly and still cannot be checked - a distinction a
+	// vendor needs before they dismiss the finding.
+	ErrorFile   string `json:"errorFile,omitempty"`
+	ErrorInTest bool   `json:"errorInTest,omitempty"`
 	// Attempts is how many renders were tried, and Retryable whether a further
 	// one could have helped. "Retried and failed again" and "not retried,
 	// because a second render of the same bytes returns the same error" are
@@ -261,6 +279,7 @@ func complianceRunView(r store.ComplianceRunRow) ComplianceRunView {
 			Blocking: r.Blocking, Warning: r.Warning, Info: r.Info,
 		},
 		Truncated: r.Truncated, Trigger: r.Trigger,
+		Log:       r.Log,
 		StartedAt: r.StartedAt, FinishedAt: r.FinishedAt,
 	}
 }
@@ -284,6 +303,16 @@ func complianceChartViews(rows []store.ComplianceChartRow) []ComplianceChartView
 			v.ErrorLabel = kind.Label()
 			v.ErrorHint = kind.Explain()
 			v.Retryable = kind.Retryable()
+		}
+		// Derived on read rather than stored, for the same reason the kind is
+		// re-classified above: both are functions of helm's message, so a run
+		// recorded before either existed gets the same coverage table a new one
+		// does, and no column has to be kept in step with a parser.
+		if c.Error != "" {
+			err := errors.New(c.Error)
+			v.ErrorValue = render.MissingValue(err)
+			v.ErrorFile = render.FailingTemplate(err)
+			v.ErrorInTest = render.InTestHook(err)
 		}
 		out = append(out, v)
 	}

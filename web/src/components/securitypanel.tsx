@@ -2,7 +2,7 @@ import { memo, useCallback, useDeferredValue, useEffect, useMemo, useState } fro
 import type { ReactNode } from 'react'
 import {
   Alert,
-  App, Button, Card, Collapse, Descriptions, Drawer, Input, Segmented, Select,
+  App, Button, Card, Col, Collapse, Descriptions, Drawer, Input, Row, Segmented, Select,
   Skeleton, Space, Spin, Table, Tabs, Tag, Tooltip, Typography,
 } from 'antd'
 // The working-surface table: resizable, reorderable, pinnable columns whose
@@ -112,8 +112,29 @@ export function SecurityTab({ product, reference, repository }: {
     })
   }
 
+  /*
+   * A SKELETON, not a spinner in an empty card.
+   *
+   * The tab is a header row, a block of summary cards and a table, and a
+   * skeleton shaped like those says what is arriving. `Card loading` drew three
+   * grey lines in a box the wrong height, so the page jumped when the answer
+   * came - which is the same complaint the compliance tab had, and there is no
+   * reason for the two to load differently.
+   */
   if (security.isLoading) {
-    return <Card loading />
+    return (
+      <Space direction="vertical" size={16} style={{ width: '100%' }}>
+        <Skeleton active title={{ width: 260 }} paragraph={false} />
+        <Row gutter={[12, 12]}>
+          {[0, 1, 2, 3].map((i) => (
+            <Col key={i} xs={12} lg={6}>
+              <Card size="small"><Skeleton active title={false} paragraph={{ rows: 2 }} /></Card>
+            </Col>
+          ))}
+        </Row>
+        <Card><Skeleton active paragraph={{ rows: 6 }} /></Card>
+      </Space>
+    )
   }
 
   /*

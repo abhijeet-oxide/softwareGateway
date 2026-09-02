@@ -137,10 +137,15 @@ func (s Severity) Rank() int {
 }
 
 // Label is the severity as the interface writes it.
+//
+// `block` reads as "Critical". The wire value stays `block` because it is what
+// every policy pack, every stored result and every export written so far says;
+// the word a reader sees is the one that ranks it against the severities beside
+// it, and "Blocking" ranked it against nothing.
 func (s Severity) Label() string {
 	switch s {
 	case SeverityBlock:
-		return "Blocking"
+		return "Critical"
 	case SeverityWarn:
 		return "Warning"
 	case SeverityInfo:

@@ -3,6 +3,7 @@ package render
 import (
 	"context"
 	"errors"
+	"regexp"
 	"strings"
 )
 
@@ -229,4 +230,127 @@ func stripHelmAdvice(msg string) string {
 		}
 	}
 	return strings.TrimSpace(msg)
+}
+
+// ---------------------------------------------------------------------------
+// What helm's message names, pulled out of it
+//
+// A classification says WHICH conversation a failure belongs to. These two say
+// what to put in it, and both come out of the same sentence the coverage table
+// already shows.
+
+// valuePath matches a dotted values key: `global.registry`, `timezone.timeZoneEnv`.
+//
+// At least one dot, because a single bare word in an English sentence is a word
+// - "registry must be specified" names no key, and reporting `registry` from it
+// would be an invention. Ends on a word character so trailing punctuation stays
+// out of the key.
+var valuePath = regexp.MustCompile(`\.?Values\.([A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z0-9_]+)+)` +
+	`|\b([a-z][A-Za-z0-9_]*(?:\.[A-Za-z0-9_]+)+)\b`)
+
+// schemaProperty matches the JSON-schema rejection helm reports verbatim:
+// `at '/global': missing property 'registry'`.
+var schemaProperty = regexp.MustCompile(`at '([^']*)':\s*missing property '([^']+)'`)
+
+// templateLocation matches the two ways helm names the file that failed:
+// `(chart/templates/x.yaml:24:6)` and `executing "chart/templates/x.yaml"`.
+var templateLocation = regexp.MustCompile(`\(([^()\s]+\.(?:yaml|yml|tpl|txt))[:0-9]*\)` +
+	`|executing "([^"]+)"`)
+
+// fileLikeSuffix is the extension set templateLocation matches, used to keep a
+// filename from being read as a values key: `values-chart-check.yaml` has a dot
+// in it and is not a path into anybody's values file.
+var fileLikeSuffix = regexp.MustCompile(`\.(?:yaml|yml|tpl|json|txt|tgz|go)$`)
+
+// MissingValue is the values key the chart demanded, or "".
+//
+// # Why this is worth extracting rather than leaving in the message
+//
+// Six of the eight charts that failed in a real orb failed for one reason:
+// they are subcharts, and an umbrella supplies their `global.registry`. The
+// coverage table showed each of them a different paragraph of helm - one an
+// `execution error` from a guard template, one a schema rejection, one a nil
+// dereference - and the single fact they had in common, which is the fact that
+// decides what to do about them, was not on screen anywhere.
+//
+// With the key extracted the table can group them, and the run can say what a
+// site values file would have to supply to check this release properly. That is
+// the honest answer to "why did these not render", and it is one column rather
+// than eight paragraphs.
+//
+// Empty where helm named no key. `Registry Must be provided for image
+// 'cmdb-admin'` is a sentence a chart author wrote, and inferring `registry`
+// from it would be this tool making up a values path.
+func MissingValue(err error) string {
+	if err == nil {
+		return ""
+	}
+	msg := stripHelmAdvice(err.Error())
+
+	// The schema's own words first: it is the one form that states the path
+	// exactly, as a JSON pointer plus the property that was absent from it.
+	if m := schemaProperty.FindStringSubmatch(msg); m != nil {
+		parent := strings.Trim(strings.ReplaceAll(m[1], "/", "."), ".")
+		if parent == "" {
+			return m[2]
+		}
+		return parent + "." + m[2]
+	}
+
+	// Everything else is prose, so the file locations come out first: a
+	// template called `values-chart-check.yaml` has a dot in it and would
+	// otherwise read as a values key.
+	prose := templateLocation.ReplaceAllString(msg, " ")
+
+	for _, m := range valuePath.FindAllStringSubmatch(prose, -1) {
+		key := m[1]
+		if key == "" {
+			key = m[2]
+		}
+		if key == "" || fileLikeSuffix.MatchString(key) {
+			continue
+		}
+		return key
+	}
+	return ""
+}
+
+// FailingTemplate is the chart-relative template helm named, or "".
+func FailingTemplate(err error) string {
+	if err == nil {
+		return ""
+	}
+	m := templateLocation.FindStringSubmatch(stripHelmAdvice(err.Error()))
+	if m == nil {
+		return ""
+	}
+	if m[1] != "" {
+		return m[1]
+	}
+	return m[2]
+}
+
+// InTestHook reports whether the failure came from a helm test hook.
+//
+// # Why this changes what a reader does about it
+//
+// `helm install` never applies `templates/tests/`. Those manifests run only
+// under `helm test`, so a chart whose ONLY failure is in one installs perfectly
+// in a cluster and still cannot be checked here - and telling a vendor "your
+// chart does not render" about a test job they have never run is how a true
+// finding gets dismissed along with the rest of the report.
+//
+// It is stated rather than worked around. `helm template --skip-tests` was the
+// obvious fix and does not work: it filters test manifests out of the OUTPUT,
+// after every template has executed, so a `fail` inside one still aborts the
+// render. Measured against helm v3.16.3 with a chart built to fail exactly that
+// way, with and without the flag, and the error was byte for byte identical.
+func InTestHook(err error) bool {
+	path := FailingTemplate(err)
+	if path == "" {
+		return false
+	}
+	path = strings.ToLower(path)
+	return strings.Contains(path, "/templates/tests/") ||
+		strings.HasPrefix(path, "templates/tests/")
 }

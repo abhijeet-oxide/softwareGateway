@@ -259,9 +259,13 @@ func (r *Runner) execute(ctx context.Context, req Request, track *tracker) {
 		c.Results = len(run.Results)
 		c.Findings = run.Counts.Blocking + run.Counts.Warning
 	})
-	track.Event(EventOK, "Recorded %d results: %d blocking, %d warning, %d undecided, %d passed",
+	track.Event(EventOK, "Recorded %d results: %d critical, %d warning, %d unchecked, %d passed",
 		len(run.Results), run.Counts.Blocking, run.Counts.Warning,
 		run.Counts.Error, run.Counts.Pass)
+	// The transcript, taken AFTER the last event is written, so the recorded log
+	// ends with the line that says what was recorded.
+	run.Log = track.snapshot().Events
+
 	// Recorded with a context that is not the run's: a cancelled or timed-out
 	// run still has to write why it stopped, and using the dead context would
 	// leave the release claimed with nothing recorded.

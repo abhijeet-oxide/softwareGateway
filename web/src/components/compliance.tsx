@@ -4,7 +4,7 @@ import { StatusPill, StatTile, c, mono } from '../uikit'
 import type { PillTone } from '../uikit'
 import { formatRelative } from '../domain/format'
 import type {
-  ComplianceChart, ComplianceCounts, ComplianceDeterminacy, ComplianceHelm,
+  ComplianceCounts, ComplianceDeterminacy, ComplianceHelm,
   ComplianceOutcome, ComplianceRun, ComplianceVerdict,
 } from '../api/types'
 
@@ -82,8 +82,16 @@ const SEVERITY_TONE: Record<string, PillTone> = {
   info: 'neutral',
 }
 
+/**
+ * The word a severity is read as.
+ *
+ * `block` reads as "Critical". The wire value stays `block` - it is what every
+ * policy pack, every stored result and every export already says - but
+ * "Blocking" ranked the severity against nothing, where Critical, Warning and
+ * Info are a scale a reader already knows the shape of.
+ */
 const SEVERITY_WORD: Record<string, string> = {
-  block: 'Blocking',
+  block: 'Critical',
   warn: 'Warning',
   info: 'Info',
 }
@@ -137,26 +145,38 @@ export function DeterminacyTag({ determinacy, label }: {
 // ---------------------------------------------------------------------------
 
 /**
- * The four numbers, in the order somebody reads them.
+ * The five numbers, in the order somebody reads them.
  *
- * Blocking, warning, undecided, passed. The third is not optional and not
- * folded into the others: a release with three hundred passes and one
- * undecided check has not been shown to comply with anything, and a summary
+ * Critical, warning, info, unchecked, passed. The fourth is not optional and
+ * not folded into the others: a release with three hundred passes and one
+ * unchecked check has not been shown to comply with anything, and a summary
  * that omitted it would draw that release as clean.
+ *
+ * # Why this is the only place the caveat is now made
+ *
+ * It used to be an alert above the card as well - a yellow banner saying "657
+ * checks could not be decided; this release has not been shown to meet the
+ * standards". True, and on every screen of every inconclusive release, which on
+ * a real orb is all of them. A caveat that is always there is a caveat nobody
+ * reads, and it pushed the verdict below the fold to say what the tile beside
+ * the verdict already says. The number is here, coloured, clickable, next to
+ * the ones it qualifies.
  */
-export function ComplianceSummary({ counts, onSelect }: {
+export function ComplianceSummary({ counts, selected, onSelect }: {
   counts: ComplianceCounts
-  onSelect?: (what: 'blocking' | 'warning' | 'error' | 'pass') => void
+  /** The slice currently on screen, so the tile that drives it reads as chosen. */
+  selected?: SummaryKey
+  onSelect?: (what: SummaryKey) => void
 }) {
   const tiles: Array<{
-    key: 'blocking' | 'warning' | 'error' | 'pass'
+    key: SummaryKey
     label: string
     value: number
     sub: string
     colour?: string
   }> = [
     {
-      key: 'blocking', label: 'Blocking', value: counts.blocking,
+      key: 'blocking', label: 'Critical', value: counts.blocking,
       sub: 'must be fixed before this ships', colour: c.danger,
     },
     {
@@ -164,7 +184,11 @@ export function ComplianceSummary({ counts, onSelect }: {
       sub: 'worth a conversation with the vendor', colour: c.review,
     },
     {
-      key: 'error', label: 'Could not be checked', value: counts.error,
+      key: 'info', label: 'Info', value: counts.info,
+      sub: 'noted, nothing to decide',
+    },
+    {
+      key: 'error', label: 'Unchecked', value: counts.error,
       sub: counts.error > 0 ? 'so this result is incomplete' : 'every check was decided',
       colour: counts.error > 0 ? c.pending : undefined,
     },
@@ -174,14 +198,17 @@ export function ComplianceSummary({ counts, onSelect }: {
     },
   ]
 
-  // Four across on a normal screen, two on a narrow one. The grid rather than
-  // a flex row because every other summary in this application uses it, and a
-  // panel that reflows differently from the one beside it reads as a different
-  // product.
+  /*
+   * FLEX rather than a 24-column grid, because there are five of them.
+   *
+   * Five does not divide 24, so a span-based row left a quarter-tile of dead
+   * space at the end of every line. `flex: 1 1 150px` fills the row evenly at
+   * any width and wraps to two, three or five across on its own.
+   */
   return (
     <Row gutter={[12, 12]}>
       {tiles.map((t) => (
-        <Col key={t.key} xs={12} lg={6}>
+        <Col key={t.key} flex="1 1 150px" style={{ minWidth: 150 }}>
           <StatTile
             label={t.label}
             value={
@@ -190,6 +217,18 @@ export function ComplianceSummary({ counts, onSelect }: {
               </span>
             }
             sub={t.sub}
+            /*
+              The chosen slice, marked with a ring rather than a fill: these
+              tiles carry a coloured number and a second colour behind it would
+              fight the one that means something. Drawn through `style` because
+              StatTile belongs to the shared design system, and a selected state
+              is this page's idea rather than the kit's.
+            */
+            style={
+              selected === t.key
+                ? { boxShadow: `inset 0 0 0 2px ${t.colour ?? c.brand}` }
+                : undefined
+            }
             onClick={onSelect ? () => onSelect(t.key) : undefined}
           />
         </Col>
@@ -198,58 +237,12 @@ export function ComplianceSummary({ counts, onSelect }: {
   )
 }
 
+/** The slices the summary can send a reader to. */
+export type SummaryKey = 'blocking' | 'warning' | 'info' | 'error' | 'pass'
+
 // ---------------------------------------------------------------------------
 // Notices
 // ---------------------------------------------------------------------------
-
-/**
- * The caveat that has to be on screen before the numbers are.
- *
- * A run that could not decide some of its checks is inconclusive, and the
- * reason is almost always that charts did not render. Without this the reader
- * sees a short list of findings and concludes the release is nearly clean.
- */
-export function InconclusiveNotice({ run, charts, onShowUndecided }: {
-  run: ComplianceRun
-  charts?: ComplianceChart[]
-  onShowUndecided?: () => void
-}) {
-  if (run.counts.error === 0) return null
-  const broken = (charts ?? []).filter((ch) => ch.status !== 'ok')
-
-  return (
-    <Alert
-      type="warning"
-      showIcon
-      message={`${run.counts.error.toLocaleString()} check${run.counts.error === 1 ? '' : 's'} could not be decided`}
-      description={
-        <Space direction="vertical" size={6} style={{ width: '100%' }}>
-          <span>
-            This release has <strong>not</strong> been shown to meet the standards it was checked
-            against. The findings below are what could be established; they are not the whole
-            picture.
-          </span>
-          {broken.length > 0 && (
-            <span>
-              {broken.length} chart{broken.length === 1 ? '' : 's'} did not render:{' '}
-              {broken.slice(0, 3).map((ch) => (
-                <Tooltip key={ch.name + ch.version} title={ch.error}>
-                  <code style={{ fontFamily: mono, marginRight: 6 }}>{ch.name}</code>
-                </Tooltip>
-              ))}
-              {broken.length > 3 && <span>and {broken.length - 3} more</span>}
-            </span>
-          )}
-          {onShowUndecided && (
-            <Typography.Link onClick={onShowUndecided}>
-              Show what could not be checked
-            </Typography.Link>
-          )}
-        </Space>
-      }
-    />
-  )
-}
 
 /**
  * Why every rendered check came back undecided.

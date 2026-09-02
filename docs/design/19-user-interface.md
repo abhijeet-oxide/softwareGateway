@@ -157,6 +157,32 @@ This applies to the Go strings that reach a screen as much as to the TSX -
 `Stage.Label()`, progress event text, and an RFC 9457 `detail`, which is
 rendered verbatim and is where the rule is broken most often.
 
+### 3.3 Two long jobs, one panel
+
+The vulnerability sync and the compliance check are the two things in this
+product that take minutes against somebody else's registry. They are watched by
+the same person, on the same release, one tab apart, and they answered the same
+question - *is this working, and what is the answer going to be missing* - in
+two different visual languages. The compliance run drew counters of real things,
+a stage route with what each finished stage cost, and a timeline of what had
+happened; the sync drew a bar and a row of grey sentences separated by middots,
+in which the number that changes what the answer means (the artifacts the
+scanner did not answer for) was drawn identically to the number that does not.
+
+They now share the counters (`components/runtiles.tsx`) and the transcript
+shape, and each kept what it did better:
+
+| Taken from | What | Now on |
+|---|---|---|
+| Compliance | Counters of real things, failures coloured | Both |
+| Compliance | The transcript on the panel, not only behind a button | Both |
+| Security | A stored log with a button that reopens it after the job ends | Both - compliance kept its transcript on the run (see [23](23-compliance.md) §9.1) |
+| Security | A travelling stripe until the first item lands, rather than a determinate bar at zero | Security; compliance has a real denominator from its first stage |
+| Compliance | An estimate derived from the job's own rate, withheld until there is a rate | Both |
+
+This is the same rule as §3.1 one level up: a reader who has learned a shape on
+one tab should not have to learn it again on the next one.
+
 ## 4. What it must never do
 
 > **Decision - the UI is a read-and-operate client. It never edits configuration.**

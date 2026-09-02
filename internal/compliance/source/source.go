@@ -35,6 +35,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 
 	"github.com/abhijeet-oxide/softwareGateway/internal/compliance"
 	"github.com/abhijeet-oxide/softwareGateway/internal/store"
@@ -91,7 +92,25 @@ func (b Budgets) WithDefaults() Budgets {
 type Fetcher struct {
 	Blobs   BlobReader
 	Budgets Budgets
+	// Concurrency is how many charts are pulled at once. Zero uses the default
+	// below; one fetches them in sequence.
+	Concurrency int
 }
+
+// DefaultFetchConcurrency is how many chart layers are pulled at once.
+//
+// # Why six, and why this is bounded at all
+//
+// A chart layer is a few hundred kilobytes and the time is almost all round
+// trip: TLS, a token, a redirect, a small body. Serially, ninety-five of those
+// against a registry across a WAN is minutes of a Coordinator doing nothing -
+// which is what a check of a real orb spent most of its time on.
+//
+// Bounded because the other side is somebody else's registry. Thirty parallel
+// requests is not five times faster than six; it is a rate limiter, a 429
+// storm, and a slower answer - the same reason the security syncer caps its
+// requests to a scanner.
+const DefaultFetchConcurrency = 6
 
 // Chart is one unpacked chart, ready to render.
 type Chart struct {
@@ -123,7 +142,13 @@ type Result struct {
 // The caller removes Root when the run is over. A failure to fetch one chart is
 // recorded on that chart and does not stop the others: one unreadable artifact
 // in a ninety-seven chart release must not lose the other ninety-six.
-func (f Fetcher) Fetch(ctx context.Context, productName string, pkg store.PackageRow, charts []store.ChartCandidate) (*Result, error) {
+func (f Fetcher) Fetch(
+	ctx context.Context, productName string, pkg store.PackageRow,
+	charts []store.ChartCandidate, rep compliance.Reporter,
+) (*Result, error) {
+	if rep == nil {
+		rep = compliance.NopReporter{}
+	}
 	budgets := f.Budgets.WithDefaults()
 
 	root, err := os.MkdirTemp("", "sgw-compliance-")
@@ -132,31 +157,109 @@ func (f Fetcher) Fetch(ctx context.Context, productName string, pkg store.Packag
 	}
 	res := &Result{Root: root}
 
+	/*
+	 * THE BUDGET IS DECIDED BEFORE ANYTHING IS FETCHED.
+	 *
+	 * The per-release byte budget is a running total, and a running total
+	 * accumulated by concurrent workers would refuse a different set of charts
+	 * on every run - so which charts a report covers would depend on which
+	 * download happened to finish first. That is not a report anybody can
+	 * compare against last week's.
+	 *
+	 * So the budget is applied here, in order, against the layer sizes the
+	 * release's own record already carries. Nothing is guessed: those sizes are
+	 * what the registry declared, and the per-chart limit is enforced a second
+	 * time while streaming, where a layer that lied about its size is caught.
+	 */
+	planned := make([]store.ChartCandidate, 0, len(charts))
+	var claimed int64
 	for i, ca := range charts {
-		if err := ctx.Err(); err != nil {
-			res.Skipped = append(res.Skipped, fmt.Sprintf("%d chart(s) not fetched: %v", len(charts)-i, err))
-			return res, nil
-		}
-		if i >= budgets.MaxCharts {
+		switch {
+		case i >= budgets.MaxCharts:
 			res.Skipped = append(res.Skipped, fmt.Sprintf(
 				"%d chart(s) beyond the limit of %d were not fetched", len(charts)-i, budgets.MaxCharts))
-			break
-		}
-		if ca.LayerSize > budgets.PerChart {
+			i = len(charts) // stop
+		case ca.LayerSize > budgets.PerChart:
 			res.Skipped = append(res.Skipped, fmt.Sprintf(
-				"%s is %d bytes, over the per-chart limit of %d", displayOf(ca), ca.LayerSize, budgets.PerChart))
+				"%s is %d bytes, over the per-chart limit of %d",
+				displayOf(ca), ca.LayerSize, budgets.PerChart))
 			continue
-		}
-		if res.Bytes+ca.LayerSize > budgets.PerRelease {
+		case claimed+ca.LayerSize > budgets.PerRelease:
 			res.Skipped = append(res.Skipped, fmt.Sprintf(
 				"%d chart(s) not fetched: the release byte budget of %d was reached",
 				len(charts)-i, budgets.PerRelease))
+		default:
+			claimed += ca.LayerSize
+			planned = append(planned, ca)
+			continue
+		}
+		break
+	}
+	if n := len(charts) - len(planned); n > 0 {
+		rep.Count(func(c *compliance.ProgressCounts) { c.ChartsSkipped = n })
+	}
+
+	workers := f.Concurrency
+	if workers <= 0 {
+		workers = DefaultFetchConcurrency
+	}
+	if workers > len(planned) {
+		workers = max(1, len(planned))
+	}
+	rep.Concurrency(workers)
+
+	// Written by index and read in order, for the same reason the render loop
+	// is: which worker finished first must not decide anything a report says.
+	out := make([]Chart, len(planned))
+	sizes := make([]int64, len(planned))
+	var (
+		wg  sync.WaitGroup
+		sem = make(chan struct{}, workers)
+	)
+	for i := range planned {
+		if ctx.Err() != nil {
 			break
 		}
+		wg.Add(1)
+		go func(i int, ca store.ChartCandidate) {
+			defer wg.Done()
+			sem <- struct{}{}
+			defer func() { <-sem }()
+			if ctx.Err() != nil {
+				out[i] = Chart{Digest: ca.Digest, Ref: ca.Ref, Err: ctx.Err()}
+				return
+			}
 
-		dir, n, err := f.fetchOne(ctx, productName, pkg, ca, root, i, budgets)
-		res.Bytes += n
-		res.Charts = append(res.Charts, Chart{Dir: dir, Digest: ca.Digest, Ref: ca.Ref, Err: err})
+			name := shortDisplayOf(ca)
+			rep.Begin(name)
+			defer rep.End(name)
+
+			dir, n, err := f.fetchOne(ctx, productName, pkg, ca, root, i, budgets)
+			out[i] = Chart{Dir: dir, Digest: ca.Digest, Ref: ca.Ref, Err: err}
+			sizes[i] = n
+
+			rep.Advance(1)
+			rep.Count(func(c *compliance.ProgressCounts) {
+				c.Bytes += n
+				if err == nil {
+					c.ChartsFetched++
+				} else {
+					c.ChartsSkipped++
+				}
+			})
+			if err != nil {
+				rep.Event(compliance.EventFail, "%s could not be fetched: %v", name, err)
+			}
+		}(i, planned[i])
+	}
+	wg.Wait()
+
+	for i := range out {
+		res.Bytes += sizes[i]
+	}
+	res.Charts = out
+	if err := ctx.Err(); err != nil {
+		res.Skipped = append(res.Skipped, fmt.Sprintf("the check was stopped: %v", err))
 	}
 	return res, nil
 }
@@ -334,4 +437,20 @@ func displayOf(ca store.ChartCandidate) string {
 		return ca.Ref
 	}
 	return compliance.ShortDigest(ca.Digest)
+}
+
+// shortDisplayOf names a chart for a progress line.
+//
+// displayOf is the full reference, which is what a recorded skip has to carry -
+// somebody reading it a week later needs to be able to pull the artifact. A
+// log gaining a line a second needs the one word that differs between them.
+func shortDisplayOf(ca store.ChartCandidate) string {
+	name := displayOf(ca)
+	if i := strings.LastIndexByte(name, '/'); i >= 0 {
+		name = name[i+1:]
+	}
+	if i := strings.LastIndexByte(name, ':'); i > 0 && !strings.HasPrefix(name, "sha256") {
+		name = name[:i]
+	}
+	return name
 }

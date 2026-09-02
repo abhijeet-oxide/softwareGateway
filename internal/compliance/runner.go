@@ -25,48 +25,6 @@ import (
 // forever, and live progress so somebody who pressed a button can see that
 // something is happening.
 
-// Stage is what a run is doing, in the words the interface shows.
-type Stage string
-
-const (
-	StageFetching   Stage = "fetching"
-	StageRendering  Stage = "rendering"
-	StageEvaluating Stage = "evaluating"
-	StageRecording  Stage = "recording"
-)
-
-// Label is the stage as a sentence, so the interface does not have to hold a
-// second copy of this vocabulary.
-func (s Stage) Label() string {
-	switch s {
-	case StageFetching:
-		return "Fetching charts"
-	case StageRendering:
-		return "Rendering charts"
-	case StageEvaluating:
-		return "Evaluating checks"
-	case StageRecording:
-		return "Recording results"
-	default:
-		return "Working"
-	}
-}
-
-// Progress is what a run reports while it is running.
-//
-// Done and Total are counts of the CURRENT stage, not of the whole run: "12 of
-// 97 charts rendered" is a number somebody can reason about, and a single
-// percentage across four stages of wildly different cost is not.
-type Progress struct {
-	RunID   string    `json:"runId"`
-	Stage   Stage     `json:"stage"`
-	Label   string    `json:"label"`
-	Done    int       `json:"done"`
-	Total   int       `json:"total"`
-	Note    string    `json:"note,omitempty"`
-	Started time.Time `json:"started"`
-}
-
 // Recorder is what a finished run is written through.
 //
 // An interface, so this package does not import the store: the dependency
@@ -86,7 +44,11 @@ type Recorder interface {
 type Source interface {
 	// Prepare acquires and renders. The returned cleanup is always safe to
 	// call, even when the error is non-nil.
-	Prepare(ctx context.Context, req Request, report func(Stage, int, int, string)) (*Release, Determiner, func(), error)
+	//
+	// The Reporter is how it says what it is doing, and it is an argument
+	// rather than a field because it belongs to ONE run: two releases being
+	// checked at once must not report into each other.
+	Prepare(ctx context.Context, req Request, rep Reporter) (*Release, Determiner, func(), error)
 }
 
 // Request names what to check.
@@ -130,8 +92,8 @@ type Runner struct {
 }
 
 type runState struct {
-	progress Progress
-	cancel   context.CancelFunc
+	track  *tracker
+	cancel context.CancelFunc
 }
 
 // Defaults sized so a run that stalls is noticed in minutes and a healthy one
@@ -159,9 +121,9 @@ func (r *Runner) Start(ctx context.Context, req Request) (Progress, error) {
 		r.running = map[int64]*runState{}
 	}
 	if st, live := r.running[req.PackageID]; live {
-		p := st.progress
+		track := st.track
 		r.mu.Unlock()
-		return p, ErrRunInFlight
+		return track.snapshot(), ErrRunInFlight
 	}
 	r.mu.Unlock()
 
@@ -179,14 +141,13 @@ func (r *Runner) Start(ctx context.Context, req Request) (Progress, error) {
 	// HTTP call that started it. Cancellation comes from Cancel(), and the
 	// heartbeat is what makes a run whose process died recoverable.
 	runCtx, cancel := context.WithCancel(context.WithoutCancel(ctx))
-	// The value returned to the caller is copied HERE, before the goroutine
-	// exists. Reading state.progress after launching it would race the run's
-	// first report - a race the caller cannot see and the race detector can.
-	initial := Progress{
-		RunID: req.RunID, Stage: StageFetching, Label: StageFetching.Label(),
-		Started: time.Now().UTC(),
-	}
-	state := &runState{progress: initial, cancel: cancel}
+	track := newTracker(req.RunID, time.Now())
+	track.Event(EventInfo, "check started")
+	// The value returned to the caller is read HERE, before the goroutine
+	// exists, so the response the button gets is a real first frame rather
+	// than an empty struct the page has to poll past.
+	initial := track.snapshot()
+	state := &runState{track: track, cancel: cancel}
 	r.mu.Lock()
 	r.running[req.PackageID] = state
 	r.mu.Unlock()
@@ -199,7 +160,7 @@ func (r *Runner) Start(ctx context.Context, req Request) (Progress, error) {
 			r.mu.Unlock()
 		}()
 		go r.beat(runCtx, req.RunID)
-		r.execute(runCtx, req)
+		r.execute(runCtx, req, track)
 	}()
 
 	return initial, nil
@@ -213,7 +174,11 @@ func (r *Runner) Progress(packageID int64) (Progress, bool) {
 	if !ok {
 		return Progress{}, false
 	}
-	return st.progress, true
+	// Snapshot outside this lock would be cleaner and is not safe: the state
+	// could be deleted between the read and the call. The tracker has its own
+	// lock and the section is a struct copy, so nesting them costs nothing a
+	// poller can measure.
+	return st.track.snapshot(), true
 }
 
 // Cancel stops a live run.
@@ -230,22 +195,6 @@ func (r *Runner) Cancel(packageID int64) bool {
 	}
 	st.cancel()
 	return true
-}
-
-// report updates the live progress. Cheap and lock-held only for the write, so
-// a fast inner loop can call it per chart without contending with the poller.
-func (r *Runner) report(packageID int64, stage Stage, done, total int, note string) {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	st, ok := r.running[packageID]
-	if !ok {
-		return
-	}
-	st.progress.Stage = stage
-	st.progress.Label = stage.Label()
-	st.progress.Done = done
-	st.progress.Total = total
-	st.progress.Note = note
 }
 
 // beat touches the claim so the sweeper can tell a live run from a dead one.
@@ -270,14 +219,12 @@ func (r *Runner) beat(ctx context.Context, runID string) {
 }
 
 // execute is the run itself.
-func (r *Runner) execute(ctx context.Context, req Request) {
+func (r *Runner) execute(ctx context.Context, req Request, track *tracker) {
 	log := r.logger().With(slog.String("run", req.RunID),
 		slog.String("product", req.Product), slog.String("release", req.Release))
 	started := time.Now().UTC()
 
-	rel, determiner, cleanup, err := r.Source.Prepare(ctx, req, func(s Stage, done, total int, note string) {
-		r.report(req.PackageID, s, done, total, note)
-	})
+	rel, determiner, cleanup, err := r.Source.Prepare(ctx, req, track)
 	if cleanup != nil {
 		defer cleanup()
 	}
@@ -286,9 +233,17 @@ func (r *Runner) execute(ctx context.Context, req Request) {
 		return
 	}
 
-	r.report(req.PackageID, StageEvaluating, 0, len(rel.Resources), "")
+	cat := r.Catalog()
+	track.Stage(StageEvaluating, 0, len(rel.Resources), "")
+	track.Count(func(c *ProgressCounts) {
+		c.Objects = len(rel.Resources)
+		c.Checks = cat.Len()
+	})
+	track.Event(EventInfo, "evaluating %d checks against %d objects from %d chart(s)",
+		cat.Len(), len(rel.Resources), len(rel.Charts))
+
 	eng := &Engine{
-		Catalog:    r.Catalog(),
+		Catalog:    cat,
 		Determiner: determiner,
 		Waivers:    r.Waivers,
 		MaxResults: orDefault(r.MaxResults, DefaultMaxResults),
@@ -299,7 +254,14 @@ func (r *Runner) execute(ctx context.Context, req Request) {
 		return
 	}
 
-	r.report(req.PackageID, StageRecording, 0, len(run.Results), "")
+	track.Stage(StageRecording, 0, len(run.Results), "")
+	track.Count(func(c *ProgressCounts) {
+		c.Results = len(run.Results)
+		c.Findings = run.Counts.Blocking + run.Counts.Warning
+	})
+	track.Event(EventOK, "%d results: %d blocking, %d warning, %d undecided, %d passed",
+		len(run.Results), run.Counts.Blocking, run.Counts.Warning,
+		run.Counts.Error, run.Counts.Pass)
 	// Recorded with a context that is not the run's: a cancelled or timed-out
 	// run still has to write why it stopped, and using the dead context would
 	// leave the release claimed with nothing recorded.

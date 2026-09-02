@@ -5,6 +5,10 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"runtime"
+	"strings"
+	"sync"
+	"sync/atomic"
 
 	"github.com/abhijeet-oxide/softwareGateway/internal/compliance"
 	"github.com/abhijeet-oxide/softwareGateway/internal/compliance/render"
@@ -27,7 +31,11 @@ type Preparer struct {
 	// because the budget is per RELEASE and a release is loaded one chart
 	// directory at a time: a budget started per directory is not a budget.
 	Evidence render.EvidenceBudget
-	Packages PackageLookup
+	// RenderConcurrency is how many charts are rendered at once. Zero picks a
+	// default from the machine; one renders them in sequence, which is what a
+	// Coordinator sharing a small node with everything else may want.
+	RenderConcurrency int
+	Packages          PackageLookup
 	// Classify names what an artifact is, and it is the SAME classifier the
 	// artifact listing, the transfer breakdown and the comparison use.
 	//
@@ -95,11 +103,14 @@ func noChartsIn(candidates int) error {
 
 // Prepare acquires, unpacks and renders.
 func (p *Preparer) Prepare(
-	ctx context.Context, req compliance.Request,
-	report func(compliance.Stage, int, int, string),
+	ctx context.Context, req compliance.Request, rep compliance.Reporter,
 ) (*compliance.Release, compliance.Determiner, func(), error) {
 	noop := func() {}
+	if rep == nil {
+		rep = compliance.NopReporter{}
+	}
 
+	rep.Stage(compliance.StageResolving, 0, 0, "")
 	pkg, err := p.Packages.GetPackageByID(ctx, req.PackageID)
 	if err != nil {
 		return nil, nil, noop, fmt.Errorf("reading the release: %w", err)
@@ -108,13 +119,20 @@ func (p *Preparer) Prepare(
 	if err != nil {
 		return nil, nil, noop, fmt.Errorf("listing the release's artifacts: %w", err)
 	}
+	rep.Stage(compliance.StageResolving, len(candidates), len(candidates), "")
 	artifacts, skipped := p.chartsAmong(req.Product, candidates)
+	rep.Count(func(c *compliance.ProgressCounts) { c.ChartsFound = len(artifacts) })
+	rep.Event(compliance.EventInfo, "%d of %d recorded artifacts are Helm charts",
+		len(artifacts), len(candidates))
+	for _, sk := range skipped {
+		rep.Event(compliance.EventWarn, "%s", sk)
+	}
 	if len(artifacts) == 0 {
 		return nil, nil, noop, noChartsIn(len(candidates))
 	}
 
-	report(compliance.StageFetching, 0, len(artifacts), "")
-	fetched, err := p.Fetcher.Fetch(ctx, req.Product, pkg, artifacts)
+	rep.Stage(compliance.StageFetching, 0, len(artifacts), "")
+	fetched, err := p.Fetcher.Fetch(ctx, req.Product, pkg, artifacts, rep)
 	if err != nil {
 		return nil, nil, noop, err
 	}
@@ -123,11 +141,16 @@ func (p *Preparer) Prepare(
 			_ = os.RemoveAll(fetched.Root)
 		}
 	}
-	report(compliance.StageFetching, len(fetched.Charts), len(artifacts), "")
+	rep.Stage(compliance.StageFetching, len(fetched.Charts), len(artifacts), "")
 
 	helm := p.Helm.WithDefaults()
 	version, helmErr := helm.Version(ctx)
 	available := helmErr == nil
+	if !available {
+		rep.Event(compliance.EventWarn,
+			"helm is not available, so no chart can be rendered and every rendered check "+
+				"will report as undecided")
+	}
 
 	rel := &compliance.Release{
 		Product:       req.Product,
@@ -141,85 +164,190 @@ func (p *Preparer) Prepare(
 	// determinacy answer has to be release-wide because a check may compare a
 	// resource in one chart against one in another, so the second render is
 	// driven below and merged once.
+	//
+	// The evidence budget passed here is the PER-DOCUMENT half only. The
+	// release-wide half is applied when the results are merged, in chart order,
+	// because that is the only way it can be deterministic: charts render
+	// concurrently and finish in whatever order the machine decides, so a
+	// budget consumed as they land would truncate a different chart on every
+	// run - and a report that differs between two runs of the same bytes is
+	// exactly what rule 5 forbids.
 	loader := render.Loader{
 		Helm: helm, Probe: false, HelmAvailable: available, HelmVersion: version,
-		// One keeper for the whole release, shared by every chart's Load.
-		Keeper: render.NewEvidenceKeeper(p.Evidence),
+		Evidence: render.EvidenceBudget{PerDocument: p.Evidence.PerDocument, PerRelease: -1},
+	}
+	if p.Evidence.PerDocument >= 0 && p.Evidence.PerRelease != -1 {
+		loader.Evidence.PerRelease = 0 // the per-Load default; the run-wide cap is below
 	}
 
+	workers := renderWorkers(p.RenderConcurrency)
+	rep.Stage(compliance.StageRendering, 0, len(fetched.Charts), "")
+	rep.Concurrency(workers)
+
+	/*
+	 * RENDERED CONCURRENTLY, ASSEMBLED IN ORDER.
+	 *
+	 * Rendering is a helm subprocess per chart, twice per chart when the
+	 * determinacy probe is on. For a ninety-five chart orb that is a hundred
+	 * and ninety processes run one after another, and it was the reason a check
+	 * of a real release took the better part of ten minutes with a Coordinator
+	 * that was idle for most of it.
+	 *
+	 * The results are written into a slice by INDEX and merged afterwards in
+	 * that order. Nothing about the report may depend on which worker finished
+	 * first: the seq of a result, which chart the evidence budget runs out on,
+	 * the order of the coverage table - all of it has to be the same on the
+	 * second run of the same bytes, or none of it is reproducible.
+	 */
+	type rendered struct {
+		charts []*compliance.Chart
+		res    []compliance.Resource
+		docs   []compliance.RenderedDoc
+		alt    []compliance.Resource
+		probed bool
+		failed string
+	}
+	out := make([]rendered, len(fetched.Charts))
+
+	var (
+		wg   sync.WaitGroup
+		sem  = make(chan struct{}, workers)
+		done atomic.Int64
+	)
+	for i := range fetched.Charts {
+		if err := ctx.Err(); err != nil {
+			break
+		}
+		wg.Add(1)
+		go func(i int, c Chart) {
+			defer wg.Done()
+			sem <- struct{}{}
+			defer func() { <-sem }()
+			if ctx.Err() != nil {
+				return
+			}
+
+			name := shortChartName(c)
+			rep.Begin(name)
+			defer func() {
+				rep.End(name)
+				rep.Advance(1)
+				_ = done.Add(1)
+			}()
+
+			base := compliance.Address{
+				Product: req.Product, Release: req.Release, PackageDigest: req.Digest,
+				ArtifactDigest: c.Digest, ArtifactRef: c.Ref,
+			}
+
+			// A chart that could not be fetched is a chart with no resources
+			// and a recorded reason. It is NOT omitted: the runner turns a
+			// chart in this state into an `error` result for every check, and
+			// an omitted chart would instead make every check applicable to
+			// nothing - which reads as a pass.
+			if c.Err != nil {
+				out[i].charts = []*compliance.Chart{{
+					Name:         chartNameFor(c),
+					RenderStatus: compliance.RenderFailed, RenderError: c.Err.Error(),
+				}}
+				out[i].failed = c.Err.Error()
+				rep.Event(compliance.EventFail, "%s could not be fetched: %v", name, c.Err)
+				rep.Count(func(k *compliance.ProgressCounts) { k.ChartsFailed++ })
+				return
+			}
+
+			chartRel, _, err := loader.Load(ctx, c.Dir, base)
+			if err != nil {
+				out[i].charts = []*compliance.Chart{{
+					Name:         chartNameFor(c),
+					RenderStatus: compliance.RenderFailed, RenderError: err.Error(),
+				}}
+				out[i].failed = err.Error()
+				rep.Event(compliance.EventFail, "%s did not render: %v", name, firstLine(err.Error()))
+				rep.Count(func(k *compliance.ProgressCounts) { k.ChartsFailed++ })
+				return
+			}
+			for _, ch := range chartRel.Charts {
+				ch.Digest = c.Digest
+				ch.Ref = c.Ref
+			}
+			out[i].charts = chartRel.Charts
+			out[i].res = chartRel.Resources
+			out[i].docs = chartRel.Rendered
+
+			bad := 0
+			for _, ch := range chartRel.Charts {
+				if ch.RenderStatus != compliance.RenderOK {
+					bad++
+				}
+			}
+			if bad > 0 {
+				rep.Count(func(k *compliance.ProgressCounts) { k.ChartsFailed += bad })
+				rep.Event(compliance.EventFail, "%s did not render", name)
+			} else {
+				rep.Count(func(k *compliance.ProgressCounts) { k.ChartsRendered++ })
+				rep.Event(compliance.EventOK, "%s rendered %d object(s)", name, len(chartRel.Resources))
+			}
+
+			if p.Probe && available {
+				values, verr := render.ReadValues(c.Dir)
+				if verr != nil {
+					return
+				}
+				manifests, ok := render.ProbeRender(ctx, helm, c.Dir, values)
+				if !ok {
+					return
+				}
+				out[i].alt, _ = compliance.ParseManifests(manifests, base)
+				out[i].probed = true
+			}
+		}(i, fetched.Charts[i])
+	}
+	wg.Wait()
+	if err := ctx.Err(); err != nil {
+		return nil, nil, cleanup, err
+	}
+
+	// THE MERGE, in chart order. See the comment above for why this is not done
+	// in the workers.
+	keeper := render.NewEvidenceKeeper(p.Evidence)
 	var baseline, perturbed []compliance.Resource
 	probeUsable := p.Probe && available
-
-	for i, c := range fetched.Charts {
-		if err := ctx.Err(); err != nil {
-			return nil, nil, cleanup, err
+	for i := range out {
+		rel.Charts = append(rel.Charts, out[i].charts...)
+		rel.Resources = append(rel.Resources, out[i].res...)
+		baseline = append(baseline, out[i].res...)
+		for _, d := range out[i].docs {
+			keeper.Keep(&rel.Rendered, compliance.RenderedDoc{
+				Chart: d.Chart, ChartVersion: d.ChartVersion, SourceFile: d.SourceFile,
+				Truncated: d.Truncated,
+			}, d.Content)
 		}
-		report(compliance.StageRendering, i, len(fetched.Charts), c.Ref)
-
-		base := compliance.Address{
-			Product: req.Product, Release: req.Release, PackageDigest: req.Digest,
-			ArtifactDigest: c.Digest, ArtifactRef: c.Ref,
-		}
-
-		// A chart that could not be fetched is a chart with no resources and a
-		// recorded reason. It is NOT omitted: the runner turns a chart in this
-		// state into an `error` result for every check, and an omitted chart
-		// would instead make every check applicable to nothing - which reads as
-		// a pass.
-		if c.Err != nil {
-			rel.Charts = append(rel.Charts, &compliance.Chart{
-				Name:         chartNameFor(c),
-				RenderStatus: compliance.RenderFailed,
-				RenderError:  c.Err.Error(),
-			})
+		if !probeUsable {
 			continue
 		}
-
-		chartRel, _, err := loader.Load(ctx, c.Dir, base)
-		if err != nil {
-			rel.Charts = append(rel.Charts, &compliance.Chart{
-				Name:         chartNameFor(c),
-				RenderStatus: compliance.RenderFailed,
-				RenderError:  err.Error(),
-			})
+		if out[i].failed != "" {
 			continue
 		}
-		for _, ch := range chartRel.Charts {
-			ch.Digest = c.Digest
-			ch.Ref = c.Ref
-			rel.Charts = append(rel.Charts, ch)
+		if !out[i].probed {
+			// One chart without a second render costs determinacy for the
+			// release rather than producing a wrong answer for that chart.
+			// Reporting `fixed` where nothing was measured would invent vendor
+			// defects.
+			probeUsable = false
+			continue
 		}
-		rel.Resources = append(rel.Resources, chartRel.Resources...)
-		rel.Rendered = append(rel.Rendered, chartRel.Rendered...)
-		baseline = append(baseline, chartRel.Resources...)
-
-		if probeUsable {
-			values, verr := render.ReadValues(c.Dir)
-			if verr != nil {
-				probeUsable = false
-				continue
-			}
-			manifests, ok := render.ProbeRender(ctx, helm, c.Dir, values)
-			if !ok {
-				// One chart without a second render costs determinacy for the
-				// release rather than producing a wrong answer for that chart.
-				// Reporting `fixed` where nothing was measured would invent
-				// vendor defects.
-				probeUsable = false
-				continue
-			}
-			alt, _ := compliance.ParseManifests(manifests, base)
-			perturbed = append(perturbed, alt...)
-		}
+		perturbed = append(perturbed, out[i].alt...)
 	}
-	report(compliance.StageRendering, len(fetched.Charts), len(fetched.Charts), "")
+	rep.Stage(compliance.StageRendering, len(fetched.Charts), len(fetched.Charts), "")
+	rep.Concurrency(0)
 
 	// Whatever the budget refused, and whatever was recognised as a chart but
 	// could not be used, is on the run as a chart that was skipped with a
 	// reason. A chart nobody checked is not a chart that passed.
-	for _, s := range append(skipped, fetched.Skipped...) {
+	for _, sk := range append(skipped, fetched.Skipped...) {
 		rel.Charts = append(rel.Charts, &compliance.Chart{
-			Name: "(not fetched)", RenderStatus: compliance.RenderSkipped, RenderError: s,
+			Name: "(not fetched)", RenderStatus: compliance.RenderSkipped, RenderError: sk,
 		})
 	}
 
@@ -246,6 +374,24 @@ func chartNameFor(c Chart) string {
 		return c.Ref
 	}
 	return compliance.ShortDigest(c.Digest)
+}
+
+// shortChartName is the name for a progress line.
+//
+// The full reference - `orbs/cfx-5000-k8s/cfx-sepp:orb_24.7.3099` - is the
+// right thing on a coverage row, where there is room for it and time to read
+// it. In a log that gains a line a second the repository and the tag are the
+// same on every line, so they are eighty characters of noise around the one
+// word that differs.
+func shortChartName(c Chart) string {
+	name := chartNameFor(c)
+	if i := strings.LastIndexByte(name, '/'); i >= 0 {
+		name = name[i+1:]
+	}
+	if i := strings.LastIndexByte(name, ':'); i > 0 {
+		name = name[:i]
+	}
+	return name
 }
 
 // chartsAmong picks the charts out of a release's artifacts.
@@ -286,4 +432,40 @@ func (p *Preparer) chartsAmong(productName string, candidates []store.ChartCandi
 		charts = append(charts, c)
 	}
 	return charts, skipped
+}
+
+// renderWorkers decides how many helm subprocesses run at once.
+//
+// # Why this is bounded by CPUs and not by charts
+//
+// `helm template` is CPU-bound - template execution and YAML marshalling, no
+// waiting on anything - so more workers than cores makes a run slower, not
+// faster, and every one of them holds a chart's rendered output in memory.
+// Four is the floor because even a single-core Coordinator gains from
+// overlapping a render with the next chart's file reads, and eight is the
+// ceiling because past it the gain is inside the noise and the memory is not.
+func renderWorkers(configured int) int {
+	if configured > 0 {
+		return configured
+	}
+	n := runtime.NumCPU()
+	if n < 4 {
+		return 4
+	}
+	if n > 8 {
+		return 8
+	}
+	return n
+}
+
+// firstLine keeps a log line to one line.
+//
+// helm's errors are frequently a paragraph with a stack of template frames in
+// them. The first line names the problem; the rest belongs on the chart's row
+// in the coverage table, where there is room for it.
+func firstLine(s string) string {
+	if i := strings.IndexByte(s, '\n'); i >= 0 {
+		return strings.TrimSpace(s[:i])
+	}
+	return strings.TrimSpace(s)
 }

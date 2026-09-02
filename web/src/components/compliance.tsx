@@ -1,11 +1,11 @@
 import type { ReactNode } from 'react'
-import { Alert, Col, Progress, Row, Space, Tooltip, Typography } from 'antd'
+import { Alert, Col, Row, Space, Tooltip, Typography } from 'antd'
 import { StatusPill, StatTile, c, mono } from '../uikit'
 import type { PillTone } from '../uikit'
 import { formatRelative } from '../domain/format'
 import type {
   ComplianceChart, ComplianceCounts, ComplianceDeterminacy, ComplianceHelm,
-  ComplianceOutcome, ComplianceProgress, ComplianceRun, ComplianceVerdict,
+  ComplianceOutcome, ComplianceRun, ComplianceVerdict,
 } from '../api/types'
 
 /**
@@ -321,51 +321,6 @@ export function RunFailedNotice({ run }: { run: ComplianceRun }) {
 // ---------------------------------------------------------------------------
 // Live progress
 // ---------------------------------------------------------------------------
-
-/**
- * What a run is doing right now.
- *
- * The bar is of the CURRENT stage, and the stage is named beside it: "12 of 97
- * charts rendered" is a number somebody can reason about, and one percentage
- * across four stages of wildly different cost is not.
- */
-export function ComplianceProgressPanel({ progress, onCancel, cancelling }: {
-  progress: ComplianceProgress
-  onCancel?: () => void
-  cancelling?: boolean
-}) {
-  const percent = progress.total > 0
-    ? Math.min(100, Math.round((progress.done / progress.total) * 100))
-    : 0
-
-  return (
-    <Space direction="vertical" size={10} style={{ width: '100%', padding: '4px 0' }}>
-      <Space style={{ width: '100%', justifyContent: 'space-between' }} align="start">
-        <Space direction="vertical" size={2}>
-          <Typography.Text strong>{progress.label}</Typography.Text>
-          <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-            {progress.total > 0
-              ? `${progress.done.toLocaleString()} of ${progress.total.toLocaleString()}`
-              : 'starting'}
-            {progress.note && <span style={{ fontFamily: mono }}> · {progress.note}</span>}
-          </Typography.Text>
-        </Space>
-        {onCancel && (
-          <Typography.Link disabled={cancelling} onClick={onCancel}>
-            {cancelling ? 'Stopping…' : 'Stop'}
-          </Typography.Link>
-        )}
-      </Space>
-      <Progress
-        percent={percent}
-        status="active"
-        showInfo={false}
-        strokeColor={c.brand}
-        trailColor={c.track}
-      />
-    </Space>
-  )
-}
 
 // ---------------------------------------------------------------------------
 // Provenance

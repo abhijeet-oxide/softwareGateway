@@ -94,7 +94,8 @@ routes, one page.
 | **Runner** | `internal/compliance` | One run: claim, heartbeat, progress, cancel, record. Modelled on `security.Syncer` |
 | **Store** | `internal/store/compliance.go` | `compliance_runs`, `compliance_results`, `compliance_charts`, `package_compliance` |
 | **API** | `internal/api/compliance*.go` | Routes, wire types, export |
-| **UI** | `web/src/pages/Policies.tsx`, `web/src/components/compliancepanel.tsx, complianceevidence.tsx` | The catalogue, the results, the report |
+| **UI** | `web/src/pages/Policies.tsx`, `web/src/components/compliancepanel.tsx, complianceevidence.tsx,
+                complianceprogress.tsx` | The catalogue, the results, the report |
 | **Retention** | `internal/maintenance/compliance.go` | Leader-gated sweep, budget-based like the security one |
 
 ## 4. Acquiring what is checked
@@ -266,6 +267,39 @@ and it is bounded rather than trusted:
 | Unpacked chart size and file count | 128 MiB / 20,000 files - a zip-bomb bound applied at unpack |
 | Path traversal in the archive | Rejected at unpack; a `../` entry fails the artifact and is itself reported |
 | Concurrent renders per run | Configurable, default 4 |
+
+### 5.5 Concurrency, and why it cannot change an answer
+
+A real orb is 95 charts. Fetched and rendered one after another that is minutes
+of a Coordinator idle on registry round trips, and then minutes of one CPU
+running `helm template` 190 times while the rest of the machine does nothing.
+Both stages run several charts at once: `fetchConcurrency` (default 6, bounded
+by politeness to somebody else's registry) and `renderConcurrency` (default 4-8,
+bounded by this machine's cores, because template execution is CPU-bound).
+
+Concurrency here is an optimisation, and **an optimisation that can change an
+answer is a defect**. Three things make it inert:
+
+- **Results are written by index and merged in chart order.** Nothing about a
+  report may depend on which worker finished first - not the order of the
+  coverage table, not a result's `seq`, not which chart's manifests the evidence
+  budget runs out on.
+- **The per-release byte budget is decided before anything is fetched**, in the
+  release's order, against the layer sizes the release's record already carries.
+  Accumulated as downloads landed it would refuse a different set of charts on
+  every run, so a report's coverage would depend on network timing.
+- **The evidence budget is applied during the merge**, not in the workers, for
+  the same reason.
+
+`internal/compliance/source/concurrency_test.go` holds these as tests: a
+registry that answers in strictly reverse order behind a barrier (so a serial
+fetch deadlocks rather than quietly passing), a budget asserted identical across
+five runs, and the progress reporter written from every worker while a poller
+reads it.
+
+Measured on the development estate - 95 charts, a local registry, so the fetch
+has almost no latency to hide - a run goes from ~10.7s to ~4.7s. Against a real
+vendor registry the fetch stage is where most of the saving is, and it is larger.
 
 ## 6. Determinacy - the mechanism
 
@@ -535,6 +569,36 @@ retention a row is evictable, not deleted**, and nothing goes until the store is
 over budget. A release with a verdict and no findings behind it is the failure
 mode to avoid.
 
+### 9.1 Lifecycle, and what is kept
+
+Four tables with four different lifetimes, and the differences are deliberate.
+
+| What | Where | Kept | Why that long |
+|---|---|---|---|
+| The listing summary - one row per release: verdict, counts, when | `package_compliance` | **Forever** | It is what the Software page reads. Losing it turns a checked release back into an unchecked one on screen, which is the one distinction this whole feature exists to preserve. |
+| The run, its coverage and its results | `compliance_runs`, `compliance_charts`, `compliance_results` | The **newest `coordinator.gc.complianceRuns`** of each release, default **10** | A count and not an age, and that is the point: a release checked once eight months ago must keep that run - it is the only answer anybody has about it - while a release checked nightly by a schedule must not keep six thousand. Ten covers a fortnight of scheduled checks and a comparison against what a re-check replaced. |
+| The rendered manifests | `compliance_rendered` | The **latest run only** | The one part of a run whose size the vendor sets. A completed run reclaims what it supersedes, and nothing displays an older run, so nothing reads an older run's manifests. Also bounded per document and per release while it is being written - see [compliance/00](../compliance/00-compliance-model.md) §2 rule 5. |
+| The working directory of unpacked charts | `/tmp` | The **duration of the run** | Removed by the run's own cleanup, on the success path and on every failure path. |
+
+A run is deleted whole. Its charts, results and manifests hang off it with
+`ON DELETE CASCADE`, and that is the only correct granularity: a run without its
+results is a verdict nobody can look behind, and a run without its coverage is a
+finding count with no denominator. Half a run is worse than no run.
+
+Nothing is deleted on a schedule of its own - the sweep is a case in
+`store.SweepRetention`, run by the hourly retention loop that already handles
+transfers, worker logs and audit events, and it is leader-gated like every loop
+that writes.
+
+**Rough sizes**, from the 95-chart orb this is built against: ~1,200 result rows
+and ~80 KB of rendered manifests per run. Ten runs of a hundred releases is
+therefore a few hundred megabytes of results and, because only the latest run
+keeps its manifests, under ten megabytes of those. Setting
+`coordinator.compliance.evidencePerRelease` below zero removes the manifests
+entirely for a deployment that will not hold vendor text in its database;
+findings are unaffected, because the manifests are what a finding is displayed
+against and never what it is derived from.
+
 ## 10. API
 
 AIP conventions per [09](09-api.md) §1. Custom methods with a colon.
@@ -741,9 +805,22 @@ coordinator:
     autoRun: onAnalysis              # off | onAnalysis | onDownload | both
 
     maxResultsPerRun: 200000         # truncate loudly rather than fall over
-    keepRunsPerPackage: 5            # result rows; summaries are kept forever
-    resultBudgetBytes: 0             # 0 = no ceiling, as with security
     sweepInterval: 15m
+
+    # HOW MANY AT ONCE. Two numbers because the two stages are bound by
+    # different things: downloading a chart layer is almost all round trip
+    # against SOMEBODY ELSE'S registry, so the limit is politeness - thirty
+    # parallel requests is a rate limiter and a slower answer, not a faster
+    # one. Rendering is `helm template`, which is CPU-bound and local, so its
+    # limit is this machine's cores.
+    #
+    # Zero picks a default (6 fetching; 4-8 rendering, from the CPU count).
+    # One does that stage in sequence. Neither can change a RESULT: what a run
+    # produces is assembled in chart order regardless of which worker finished
+    # first, and the byte budget is decided before anything is fetched. See
+    # section 9.1.
+    fetchConcurrency: 0
+    renderConcurrency: 0
 
     # THE MANIFESTS THE RUN JUDGED, kept so a finding can be SHOWN rather than
     # only asserted (compliance/00 section 2, rule 5). Two numbers for the
@@ -787,6 +864,66 @@ spec:
 ## 14. User interface
 
 Four surfaces. Three are additions to pages that exist.
+
+### 14.0 While a run is going, the run is the whole tab
+
+A check of a real orb is minutes. For all of it, the verdict card, the coverage
+table and the findings table read from the LATEST run - which, the moment
+somebody presses the button, is the one that has just started and has nothing in
+it. So the tab showed "Not checked" over four zeros and an empty findings table
+redrawing itself every second. Every one of those is a true statement about a
+run that has not finished and a false impression of the release.
+
+While `progress` is present the tab renders **only** the run panel. The previous
+run's verdict is not shown beside it either, and that is the harder call: it is
+real, and it is about to be replaced. Showing it beside a running check is how a
+stale verdict gets read out in a release meeting.
+
+The panel answers "is this working at all", which is the question somebody
+actually asks in front of a bar that has not moved - not "how far along is it".
+It does that with things that CHANGE and things that have HAPPENED:
+
+```
+┌─────────────────────────────────────────────────────────────────────────┐
+│ ◌ Checking this release   4s elapsed                    [ Stop check ]  │
+├─────────────────────────────────────────────────────────────────────────┤
+│ Rendering charts                                              91 of 95  │
+│ Running helm template on each chart, twice…    about 0s left on this stage│
+│ ████████████████████████████████████████████████████████████░░░░        │
+│ [4 at a time] [cfx-lmf-chart] [cfx-nssaaf-chart3] [cfx-tngf-chart] …    │
+│                                                                          │
+│ Find charts 0s › Download 0s › Render › Evaluate › Record               │
+│                                                                          │
+│  Charts found 95    Downloaded 95    Rendered 93                        │
+│                                                                          │
+│ What has happened                                                        │
+│  4s  cfx-ucmf-chart3 rendered 3 object(s)                               │
+│  3s  cfx-nssaaf-chart3 rendered 4 object(s)                             │
+└─────────────────────────────────────────────────────────────────────────┘
+```
+
+- **Elapsed** ticks; the **in-flight chart names** rotate. Either one moving
+  says the run is alive whatever the bar is doing, and it is the only thing that
+  distinguishes a slow registry from a wedged one.
+- **The estimate is the current STAGE's, and says so.** A whole-run estimate
+  would have to guess the cost of stages that have not started, whose cost
+  depends on what the ones running now produce; a confident number that turns
+  out four times wrong is worse than none. It appears only after the second item
+  of a stage, because one sample of a stage whose first item paid for a
+  connection is not a rate.
+- **The route shows what each finished stage cost.** "Eight minutes" is
+  unreadable; "six of those eight were the download" is a decision.
+- **Refusals and failures are counted beside the successes**, and coloured. A
+  run that has fetched 92 of 95 charts is about to produce a report with a hole
+  in it, and knowing at minute two rather than at minute nine is the difference
+  between fixing the cause and reading a verdict nobody can use.
+- **The log is bounded and drops ordinary progress before it drops a failure**,
+  so the lines that survive a long run are the ones worth scrolling back for.
+
+`Stop check` is a danger button with the sentence saying what stopping promises,
+which is the shape the analysis bar on the Details tab uses. It was a text link,
+which read as navigation on the one control that can abandon minutes of work
+against somebody's registry.
 
 ### 14.1 Release page - a Compliance tab
 
@@ -883,6 +1020,7 @@ internal/compliance/
                     rbac.go, config.go, resources.go, network.go, storage.go,
                     metadata.go, supply.go, scheduling.go, upgrade.go
     parse.go        rendered manifests -> addressed resources
+    progress.go     stages, counts, in-flight items, the event log
     run.go          one run: charts, counts, verdict, provenance
     evidence.go     the manifests a run judged; locus -> line; excerpts
     cel/            the ONLY package importing cel-go

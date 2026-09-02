@@ -112,7 +112,8 @@ func (s *RetentionSweeper) SweepOnce(ctx context.Context) (store.RetentionResult
 			"requests", res.Requests,
 			"workerLogs", res.WorkerLogs,
 			"auditEvents", res.AuditEvents,
-			"placements", res.Placements)
+			"placements", res.Placements,
+			"complianceRuns", res.ComplianceRuns)
 	}
 	return res, nil
 }

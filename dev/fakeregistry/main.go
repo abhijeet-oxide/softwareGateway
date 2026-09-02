@@ -90,8 +90,10 @@ var catalogue = map[string][]release{
 	// charts by config media type passed every test here and answered "this
 	// release ships no Helm charts" for a real orb of ninety-five.
 	"orbs/cfx-5000-k8s": {
-		{"orb_24.7.3099", 7, orb(9)},
-		{"orb_24.6.2871", 40, orb(7)},
+		// Ninety-five charts and a hundred and fifty images, which is what a
+		// real orb ships and the only fixture here at that scale.
+		{"orb_24.7.3099", 7, orb(95, 150)},
+		{"orb_24.6.2871", 40, orb(58, 92)},
 	},
 }
 
@@ -127,19 +129,70 @@ func ericsson(n int) []component {
 
 // orb is a NEAR-shaped release: the same mix of charts and images as any other,
 // published so that only the vendor annotation tells them apart.
-func orb(n int) []component {
-	all := []component{
-		{"cfx-amf", "Access & Mobility Function", 5},
-		{"cfx-smf", "Session Management Function", 5},
-		{"cfx-upf", "User Plane Function", 6},
-		{"cfx-nrf", "Network Repository Function", 3},
+// orb builds a NEAR orb: charts and images, in the proportion a real one ships.
+//
+// # Why this one is generated and the others are not
+//
+// A real orb is ninety-five charts beside a hundred and fifty images, and that
+// scale is not decoration - it is the thing several parts of this system exist
+// to survive. A compliance run of nine charts is over before the progress panel
+// has drawn itself; a run of ninety-five is minutes, and it is the only fixture
+// in this estate that exercises the concurrent fetch and render, the
+// per-release budgets, the stage timings and the progress log at the size a
+// vendor actually delivers.
+//
+// A component is a chart here exactly when it has ONE layer, because that is
+// what orbAnnotations turns into `com.nokia.ncd.orb.type: helmchart` - the one
+// piece of evidence distinguishing the two in a NEAR index.
+//
+// The named services come first so a release still reads as a packet core
+// rather than as a list of numbers, and the rest are filled in behind them.
+func orb(charts, images int) []component {
+	// Network functions a 5G core actually carries, so the coverage table reads
+	// as a product and not as cfx-13 through cfx-95.
+	roles := []string{
+		"amf", "smf", "upf", "nrf", "ausf", "udm", "pcf", "nssf", "nef", "nwdaf",
+		"bsf", "chf", "scp", "sepp", "lmf", "gmlc", "eir", "n3iwf", "tngf", "af",
+		"dra", "hss", "cgf", "smsf", "udf", "mfaf", "dccf", "adrf", "nssaaf", "ucmf",
+	}
+	name := func(prefix string, i int) string {
+		role := roles[i%len(roles)]
+		if g := i / len(roles); g > 0 {
+			return fmt.Sprintf("cfx-%s-%s%d", role, prefix, g+1)
+		}
+		return "cfx-" + role + "-" + prefix
+	}
+
+	out := make([]component, 0, charts+images)
+	// The umbrella and the CRDs are the two every orb has, and the two a
+	// reader looks for first.
+	fixed := []component{
 		{"cfx-core", "Umbrella Helm chart", 1},
 		{"cfx-crds", "Custom resource definitions", 1},
 		{"cfx-network", "Secondary network attachments", 1},
 		{"cfx-observability", "Metrics and tracing", 1},
-		{"cfx-operator", "Kubernetes operator", 4},
 	}
-	return all[:min(n, len(all))]
+	for i := 0; i < charts; i++ {
+		if i < len(fixed) {
+			out = append(out, fixed[i])
+			continue
+		}
+		out = append(out, component{
+			name:  name("chart", i-len(fixed)),
+			title: strings.ToUpper(roles[(i-len(fixed))%len(roles)]) + " Helm chart",
+			// One layer, which is what makes it a chart.
+			layers: 1,
+		})
+	}
+	for i := 0; i < images; i++ {
+		out = append(out, component{
+			name:  name("img", i),
+			title: strings.ToUpper(roles[i%len(roles)]) + " container image",
+			// Two or more, which is what makes it an image.
+			layers: 2 + i%5,
+		})
+	}
+	return out
 }
 
 func nokia(n int) []component {

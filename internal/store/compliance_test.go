@@ -2,6 +2,7 @@ package store
 
 import (
 	"errors"
+	"fmt"
 	"testing"
 	"time"
 )
@@ -370,5 +371,121 @@ func TestComplianceEvidenceIsKeptAndSuperseded(t *testing.T) {
 	fresh, err := p.ComplianceRenderedAll(t.Context(), "run-ev-2")
 	if err != nil || len(fresh) != 1 || fresh[0].Content == "" {
 		t.Fatalf("the latest run's evidence: %+v, %v", fresh, err)
+	}
+}
+
+// Compliance runs accumulate: a nightly schedule over a hundred releases is
+// thirty-six thousand runs a year, each with its results and the rendered
+// manifests behind them. The sweep keeps the newest few of each RELEASE.
+// seedSiblingPackage adds a second release to the product a package belongs to,
+// because the sweep's whole claim is that it counts PER RELEASE.
+func seedSiblingPackage(t *testing.T, st Store, sibling int64, tag string) int64 {
+	t.Helper()
+	var productID, repoID int64
+	if err := st.DB().QueryRowContext(t.Context(),
+		`SELECT product_id, source_repo_id FROM packages WHERE id = ?`, sibling,
+	).Scan(&productID, &repoID); err != nil {
+		t.Fatal(err)
+	}
+	var id int64
+	if err := st.DB().QueryRowContext(t.Context(),
+		`INSERT INTO packages (product_id, source_repo_id, tag, manifest_digest, media_type)
+		 VALUES (?, ?, ?, 'sha256:bbb', 'application/vnd.oci.image.index.v1+json')
+		 RETURNING id`, productID, repoID, tag).Scan(&id); err != nil {
+		t.Fatal(err)
+	}
+	return id
+}
+
+func TestRetentionKeepsTheNewestRunsPerRelease(t *testing.T) {
+	st := openTestStore(t)
+	p := NewPackages(st)
+	a := seedPackageFor(t, st)
+	b := seedSiblingPackage(t, st, a, "25.8.0")
+
+	// Six runs of one release and two of another, oldest first so the
+	// started_at ordering the sweep ranks on is unambiguous.
+	for i := 0; i < 6; i++ {
+		id := fmt.Sprintf("a-%d", i)
+		seedRun(t, p, a, id)
+		if err := p.FinishComplianceRun(t.Context(),
+			ComplianceRunRow{ID: id, PackageID: a, State: ComplianceComplete, Verdict: "pass"},
+			nil,
+			[]ComplianceResultRow{{Seq: 0, CheckID: "SEC-01", Outcome: "pass"}},
+			[]ComplianceRenderedRow{{Seq: 0, Chart: "alpha", Content: "kind: Deployment\n", Lines: 1}},
+		); err != nil {
+			t.Fatal(err)
+		}
+		time.Sleep(2 * time.Millisecond)
+	}
+	for i := 0; i < 2; i++ {
+		id := fmt.Sprintf("b-%d", i)
+		seedRun(t, p, b, id)
+		if err := p.FinishComplianceRun(t.Context(),
+			ComplianceRunRow{ID: id, PackageID: b, State: ComplianceComplete, Verdict: "pass"},
+			nil, nil, nil); err != nil {
+			t.Fatal(err)
+		}
+		time.Sleep(2 * time.Millisecond)
+	}
+
+	res, err := p.SweepRetention(t.Context(), RetentionPolicy{ComplianceRuns: 3})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.ComplianceRuns != 3 {
+		t.Fatalf("swept %d runs, want 3 (six of one release, keeping three)", res.ComplianceRuns)
+	}
+
+	// PER RELEASE: the one checked twice keeps both, because what a release's
+	// history is for is "the last few times we checked THIS".
+	kept, err := p.ComplianceRuns(t.Context(), b, 50)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(kept) != 2 {
+		t.Fatalf("the release with two runs kept %d", len(kept))
+	}
+
+	kept, err = p.ComplianceRuns(t.Context(), a, 50)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(kept) != 3 {
+		t.Fatalf("kept %d runs, want 3", len(kept))
+	}
+	// The NEWEST three.
+	for _, r := range kept {
+		if r.ID == "a-0" || r.ID == "a-1" || r.ID == "a-2" {
+			t.Errorf("kept %s, which is one of the three oldest", r.ID)
+		}
+	}
+
+	// A swept run takes its results and its manifests with it. Half a run is
+	// worse than no run: a verdict nobody can look behind.
+	rows, _, err := p.ComplianceResults(t.Context(), "a-0", ComplianceFilter{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rows) != 0 {
+		t.Errorf("a swept run left %d result rows behind", len(rows))
+	}
+	docs, err := p.ComplianceRenderedIndex(t.Context(), "a-0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(docs) != 0 {
+		t.Errorf("a swept run left %d rendered manifests behind", len(docs))
+	}
+
+	// And the LISTING summary survives, because it is what the Software page
+	// reads and a swept history must not turn a checked release back into an
+	// unchecked one on screen.
+	sum, err := p.PackageCompliance(t.Context(), []int64{a})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if sum[a].Verdict != "pass" {
+		t.Errorf("the listing summary was lost with the runs: %+v", sum[a])
 	}
 }

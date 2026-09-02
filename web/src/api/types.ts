@@ -2096,15 +2096,80 @@ export interface ComplianceResult {
 }
 
 /** What a run reports while it is working. */
+export type ComplianceStage =
+  | 'resolving' | 'fetching' | 'rendering' | 'evaluating' | 'recording'
+
+/** One thing that happened during a run, in the order it happened. */
+export interface ComplianceProgressEvent {
+  at: string
+  /** Seconds since the run started, so the log reads as a timeline. */
+  sec: number
+  kind: 'info' | 'ok' | 'warn' | 'fail'
+  text: string
+}
+
+/** A stage that has finished, and what it cost. */
+export interface ComplianceStageTiming {
+  stage: ComplianceStage
+  label: string
+  seconds: number
+  note?: string
+}
+
+/**
+ * What a run has actually got through.
+ *
+ * Every field is a number somebody can act on while the run is still going:
+ * "3 refused, 2 would not render" says what the answer is going to be missing,
+ * and says it while there is still time to stop and fix the cause.
+ */
+export interface ComplianceProgressCounts {
+  chartsFound: number
+  chartsFetched: number
+  chartsSkipped: number
+  chartsRendered: number
+  chartsFailed: number
+  bytes: number
+  objects: number
+  checks: number
+  results: number
+  findings: number
+}
+
+/**
+ * What a run reports while it is running.
+ *
+ * `done`/`total` are counts of the CURRENT stage, not of the whole run: "12 of
+ * 95 charts rendered" is a number somebody can reason about, and a single
+ * percentage across five stages of wildly different cost is not.
+ *
+ * `estimate` covers the current stage only and is absent until there is a rate
+ * to derive it from. A whole-run estimate would have to guess the cost of
+ * stages that have not started, and a made-up number that turns out four times
+ * wrong is worse than no number.
+ */
 export interface ComplianceProgress {
   runId: string
-  stage: 'fetching' | 'rendering' | 'evaluating' | 'recording'
+  stage: ComplianceStage
   label: string
-  /** Counts of the CURRENT stage, not of the whole run. */
+  detail?: string
   done: number
   total: number
   note?: string
+
+  /** What is being worked on right now, and how many may be at once. */
+  active?: string[]
+  concurrency?: number
+
   started: string
+  /** Seconds. */
+  elapsed: number
+  estimate?: number
+
+  counts: ComplianceProgressCounts
+  completed?: ComplianceStageTiming[]
+  /** What has happened, newest LAST. */
+  events?: ComplianceProgressEvent[]
 }
 
 /** Whether this Coordinator can render charts at all. */

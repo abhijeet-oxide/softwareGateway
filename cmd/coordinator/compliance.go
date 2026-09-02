@@ -190,6 +190,7 @@ func buildCompliance(
 				PerChart:   cfg.MaxChartBytes,
 				PerRelease: cfg.MaxReleaseBytes,
 			},
+			Concurrency: cfg.FetchConcurrency,
 		},
 		Helm:  helm,
 		Probe: cfg.ProbeDeterminacy(),
@@ -199,7 +200,8 @@ func buildCompliance(
 			PerDocument: cfg.EvidencePerDocument,
 			PerRelease:  cfg.EvidencePerRelease,
 		},
-		Packages: packages,
+		RenderConcurrency: cfg.RenderConcurrency,
+		Packages:          packages,
 		// The SAME classifier the artifact listing uses. A compliance run with
 		// its own opinion about what a chart is would disagree with the page
 		// somebody was looking at when they pressed the button.

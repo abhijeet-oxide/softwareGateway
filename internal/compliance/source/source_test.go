@@ -83,9 +83,9 @@ func TestFetchUnpacksCharts(t *testing.T) {
 		"sha256:bbb": chartOf(t, "beta"),
 	}
 	f := source.Fetcher{Blobs: b}
-	res, err := f.Fetch(context.Background(), "p", store.PackageRow{}, []store.ChartArtifact{
-		{Digest: "sha256:1", LayerDigest: "sha256:aaa", LayerSize: int64(len(b["sha256:aaa"])), Ref: "charts/alpha"},
-		{Digest: "sha256:2", LayerDigest: "sha256:bbb", LayerSize: int64(len(b["sha256:bbb"])), Ref: "charts/beta"},
+	res, err := f.Fetch(context.Background(), "p", store.PackageRow{}, []store.ChartCandidate{
+		{Digest: "sha256:1", LayerDigest: "sha256:aaa", LayerSize: int64(len(b["sha256:aaa"])), Ref: "charts/alpha", LayerCount: 1},
+		{Digest: "sha256:2", LayerDigest: "sha256:bbb", LayerSize: int64(len(b["sha256:bbb"])), Ref: "charts/beta", LayerCount: 1},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -119,7 +119,7 @@ func TestFetchAcceptsAFlatArchive(t *testing.T) {
 	})
 	f := source.Fetcher{Blobs: blobs{"sha256:flat": body}}
 	res, err := f.Fetch(context.Background(), "p", store.PackageRow{},
-		[]store.ChartArtifact{{Digest: "sha256:1", LayerDigest: "sha256:flat"}})
+		[]store.ChartCandidate{{Digest: "sha256:1", LayerDigest: "sha256:flat", LayerCount: 1}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -165,7 +165,7 @@ func TestUnpackRefusesEscapes(t *testing.T) {
 		t.Run(c.name, func(t *testing.T) {
 			f := source.Fetcher{Blobs: blobs{"sha256:x": c.archive}}
 			res, err := f.Fetch(context.Background(), "p", store.PackageRow{},
-				[]store.ChartArtifact{{Digest: "sha256:1", LayerDigest: "sha256:x"}})
+				[]store.ChartCandidate{{Digest: "sha256:1", LayerDigest: "sha256:x", LayerCount: 1}})
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -194,7 +194,7 @@ func TestBudgetsSkipAndSaySo(t *testing.T) {
 		Budgets: source.Budgets{PerChart: 10},
 	}
 	res, err := f.Fetch(context.Background(), "p", store.PackageRow{},
-		[]store.ChartArtifact{{Digest: "sha256:1", LayerDigest: "sha256:big", LayerSize: 1 << 20, Ref: "charts/big"}})
+		[]store.ChartCandidate{{Digest: "sha256:1", LayerDigest: "sha256:big", LayerSize: 1 << 20, Ref: "charts/big", LayerCount: 1}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -213,7 +213,7 @@ func TestArchiveWithoutChartYamlIsRejected(t *testing.T) {
 	body := tarball(t, map[string]string{"README.md": "hello"})
 	f := source.Fetcher{Blobs: blobs{"sha256:x": body}}
 	res, err := f.Fetch(context.Background(), "p", store.PackageRow{},
-		[]store.ChartArtifact{{Digest: "sha256:1", LayerDigest: "sha256:x"}})
+		[]store.ChartCandidate{{Digest: "sha256:1", LayerDigest: "sha256:x", LayerCount: 1}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -226,9 +226,9 @@ func TestArchiveWithoutChartYamlIsRejected(t *testing.T) {
 // One unreadable artifact in a release must not lose the others.
 func TestOneBadChartDoesNotLoseTheRest(t *testing.T) {
 	f := source.Fetcher{Blobs: blobs{"sha256:ok": chartOf(t, "ok")}}
-	res, err := f.Fetch(context.Background(), "p", store.PackageRow{}, []store.ChartArtifact{
-		{Digest: "sha256:1", LayerDigest: "sha256:missing", Ref: "charts/missing"},
-		{Digest: "sha256:2", LayerDigest: "sha256:ok", Ref: "charts/ok"},
+	res, err := f.Fetch(context.Background(), "p", store.PackageRow{}, []store.ChartCandidate{
+		{Digest: "sha256:1", LayerDigest: "sha256:missing", Ref: "charts/missing", LayerCount: 1},
+		{Digest: "sha256:2", LayerDigest: "sha256:ok", Ref: "charts/ok", LayerCount: 1},
 	})
 	if err != nil {
 		t.Fatal(err)

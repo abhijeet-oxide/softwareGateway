@@ -87,6 +87,15 @@ func (s *Server) handlePackageCompliance(w http.ResponseWriter, r *http.Request)
 		Release: pkg.Tag,
 		Helm:    s.complianceHelm(),
 	}
+	// Whether a run is possible at all, before offering it. A release whose
+	// manifest tree has not been walked has no layer digests to fetch, and
+	// finding that out by pressing a button and reading a recorded failure is
+	// a worse answer than being told.
+	if s.deps.Packages != nil {
+		if analysed, err := s.deps.Packages.PackageAnalysed(r.Context(), pkg.ID); err == nil {
+			out.Analysed = analysed
+		}
+	}
 
 	// The live position first, so a tab polling this endpoint sees the run
 	// start even before the first result exists.

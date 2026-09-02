@@ -1,5 +1,5 @@
 import { useMemo, useState } from 'react'
-import { Link } from 'react-router-dom'
+import { Link, useLocation } from 'react-router-dom'
 import {
   App, Button, Card, Descriptions, Drawer, Input, Segmented, Select, Space, Tooltip, Typography,
 } from 'antd'
@@ -44,6 +44,9 @@ export function ComplianceTab({ product, reference, repository }: {
   repository?: string
 }) {
   const { message } = App.useApp()
+  // The tab lives in the URL, so pointing at another one is a link rather than
+  // a location assignment - which would reload the whole application.
+  const location = useLocation()
 
   const [view, setView] = useState<'findings' | 'everything'>('findings')
   const [chart, setChart] = useState<string | undefined>()
@@ -66,6 +69,36 @@ export function ComplianceTab({ product, reference, repository }: {
     run.mutate({ product, ref: reference, repository }, {
       onError: (e) => message.error(String(e)),
     })
+  }
+
+  // A release whose manifest tree has not been walked has no chart CONTENT
+  // recorded, so there is nothing to fetch. Said before the button rather than
+  // after it: pressing one that cannot work and reading a recorded failure is
+  // a worse way to learn this than being told.
+  if (!compliance.isLoading && data && !data.analysed && !data.run && !data.progress) {
+    return (
+      <Space direction="vertical" size={16} style={{ width: '100%' }}>
+        <HelmMissingNotice helm={data.helm} />
+        <EmptyStateCard
+          title="This release has not been analysed yet"
+          explanation={
+            'A compliance check reads the charts themselves, and which blobs hold them is '
+            + 'established by walking the release. Analyse it from the Details tab, then come '
+            + 'back here.'
+          }
+          action={
+            <Space direction="vertical" size={10}>
+              <Link to={{ pathname: location.pathname, search: '?tab=details' }}>
+                <Button type="primary">Go to Details to analyse</Button>
+              </Link>
+              <Link to="/policies" style={{ fontSize: 12, color: c.brand }}>
+                See what would be checked
+              </Link>
+            </Space>
+          }
+        />
+      </Space>
+    )
   }
 
   // A release with no result at all. The empty state OFFERS the action rather

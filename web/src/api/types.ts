@@ -2113,6 +2113,14 @@ export interface PackageComplianceResponse {
   /** The count BEFORE the page was taken. */
   total: number
   helm: ComplianceHelm
+  /**
+   * Whether this release's manifest tree has been walked.
+   *
+   * A run needs each chart artifact's layer digest, and those come from the
+   * walk. False means there is nothing to fetch yet - so the tab offers the
+   * walk rather than a button that fails.
+   */
+  analysed: boolean
 }
 
 export interface ComplianceRunsResponse {

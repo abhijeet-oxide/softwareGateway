@@ -321,13 +321,13 @@ func (p *Packages) PackageCompliance(ctx context.Context, packageIDs []int64) (m
 // "running" forever and can never be checked again - the state nobody can get
 // out of without a database console.
 func (p *Packages) ReleaseStaleComplianceRuns(ctx context.Context, olderThan time.Duration) (int, error) {
-	cutoff := time.Now().UTC().Add(-olderThan)
+	cutoff := securityTime(time.Now().UTC().Add(-olderThan))
 	res, err := p.db.ExecContext(ctx, p.dialect.Rewrite(`
 		UPDATE compliance_runs
 		   SET state = 'failed',
 		       error = 'the Coordinator running this check stopped responding; the claim was released',
 		       finished_at = ?, heartbeat_at = NULL
-		 WHERE state = 'running' AND heartbeat_at < ?`), time.Now().UTC(), cutoff)
+		 WHERE state = 'running' AND heartbeat_at < ?`), securityTime(time.Now().UTC()), cutoff)
 	if err != nil {
 		return 0, fmt.Errorf("release stale compliance runs: %w", err)
 	}

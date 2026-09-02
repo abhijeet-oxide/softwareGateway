@@ -313,7 +313,8 @@ func run() error {
 	if cfg.Coordinator.Compliance.Enabled {
 		var cerr error
 		policyCat, complianceRunner, complianceSweep, cerr = buildCompliance(
-			cfg.Coordinator.Compliance, packages, blobsImpl{transferResolver}, logger)
+			cfg.Coordinator.Compliance, packages, blobsImpl{transferResolver},
+			complianceClassifier(products, layouts), logger)
 		if cerr != nil {
 			return fmt.Errorf("compliance: %w", cerr)
 		}

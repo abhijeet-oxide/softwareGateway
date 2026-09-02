@@ -50,6 +50,7 @@ func TestFinishWritesRunChartsAndResults(t *testing.T) {
 		BundleDigest: "sha256:bundle", HelmVersion: "v3.16.3", KubeVersion: "1.30.0",
 		Checks: 71, Pass: 100, Fail: 3, Skip: 5, Blocking: 2, Warning: 1,
 	}
+	expires := time.Now().UTC().Add(30 * 24 * time.Hour)
 	charts := []ComplianceChartRow{
 		{Name: "alpha", Version: "1.0.0", Status: "ok", Resources: 12},
 		{Name: "beta", Version: "2.0.0", Status: "failed", Error: "template: beta/x.yaml:3", Resources: 0},
@@ -61,6 +62,11 @@ func TestFinishWritesRunChartsAndResults(t *testing.T) {
 			Message: "runs as root", Fingerprint: "fp-1"},
 		{Seq: 1, CheckID: "RES-01", Severity: "block", Outcome: "pass",
 			Chart: "alpha", Kind: "Deployment", Name: "app", Container: "main"},
+		// A waived result, so the waiver's expiry goes through the same
+		// timestamp path a run's dates do.
+		{Seq: 2, CheckID: "SEC-05", Severity: "warn", Outcome: "waived",
+			Chart: "alpha", Kind: "Deployment", Name: "app",
+			Waiver: "WAIVER-1", WaiverExpires: &expires},
 	}
 	if err := p.FinishComplianceRun(t.Context(), run, charts, results); err != nil {
 		t.Fatal(err)
@@ -80,6 +86,31 @@ func TestFinishWritesRunChartsAndResults(t *testing.T) {
 	}
 	if got.FinishedAt == nil || got.HeartbeatAt != nil {
 		t.Error("a finished run still holds its claim")
+	}
+	// The timestamps have to survive the round trip, and a nil check alone
+	// would not notice if they did not: SQLite stores these columns as TEXT,
+	// and binding a time.Time renders it in Go's own String() layout, which
+	// nothing reads back. Every date then came back as the zero value in
+	// silence - a finished run looking like one that never finished.
+	if got.StartedAt.IsZero() {
+		t.Error("startedAt did not survive the round trip")
+	}
+	if got.FinishedAt != nil && got.FinishedAt.Before(got.StartedAt) {
+		t.Errorf("finishedAt %v is before startedAt %v", got.FinishedAt, got.StartedAt)
+	}
+	if since := time.Since(got.StartedAt); since < 0 || since > time.Hour {
+		t.Errorf("startedAt is %v ago, so it did not parse as the time it was written", since)
+	}
+
+	// And the listing summary carries the same date, for the same reason: a
+	// column that renders "never" over a release checked a minute ago is the
+	// same bug one screen further out.
+	sum, err := p.PackageCompliance(t.Context(), []int64{pkg})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if sum[pkg].CheckedAt == nil {
+		t.Error("the listing summary has no checked-at date")
 	}
 
 	// The charts are the DENOMINATOR: a release where one of two charts did not
@@ -106,8 +137,12 @@ func TestFinishWritesRunChartsAndResults(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if total != 2 || len(rows) != 2 {
+	if total != 3 || len(rows) != 3 {
 		t.Fatalf("total = %d, rows = %d", total, len(rows))
+	}
+	// A waiver whose expiry nobody can read is a permanent exception.
+	if rows[2].WaiverExpires == nil {
+		t.Error("the waiver expiry did not survive the round trip")
 	}
 	// Read back in the order the engine assigned, which is reading order.
 	if rows[0].CheckID != "SEC-01" || rows[0].Locus != "securityContext.runAsNonRoot" {

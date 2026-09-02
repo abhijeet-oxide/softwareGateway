@@ -307,9 +307,19 @@ func TestProgressIsVisibleWhileRunning(t *testing.T) {
 
 	// And it must stop being reported once the run is over, or the interface
 	// shows a spinner forever.
-	if _, live := r.Progress(7); live {
-		t.Error("a finished run still reports progress")
+	//
+	// Waited for rather than asserted immediately: the recorder's signal fires
+	// INSIDE the write, and the run releases its slot on the way out of the
+	// call after it. Reading the map the instant the write returns races the
+	// runner's own unwinding, not the behaviour under test.
+	deadline = time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		if _, live := r.Progress(7); !live {
+			return
+		}
+		time.Sleep(time.Millisecond)
 	}
+	t.Error("a finished run still reports progress")
 }
 
 // The claim is touched while the run is alive, so the sweeper can tell a live

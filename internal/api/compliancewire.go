@@ -143,6 +143,14 @@ type PackageComplianceView struct {
 	// Helm reports whether this Coordinator can render charts at all. Without
 	// it, a tab full of "could not be checked" has no explanation on screen.
 	Helm ComplianceHelmView `json:"helm"`
+	// Analysed says whether this release's manifest tree has been walked.
+	//
+	// A run needs the chart artifacts' LAYER digests, and those are recorded by
+	// the walk. Before it there is nothing to fetch - so this is on the wire and
+	// the tab offers the walk, rather than offering a button that fails and
+	// leaves a recorded failure explaining something the reader could have been
+	// told first.
+	Analysed bool `json:"analysed"`
 }
 
 // ComplianceHelmView is the renderer's availability.

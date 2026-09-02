@@ -387,9 +387,10 @@ type PackageSecurityResponse struct {
 	// Counts is every scanned artifact's findings summed - the same CVE in ten
 	// images is ten things to fix in ten places. UniqueCounts collapses them,
 	// which is the number to quote for "how many distinct problems".
-	Counts       SecurityCounts   `json:"counts"`
-	UniqueCounts SecurityCounts   `json:"uniqueCounts"`
-	Coverage     SecurityCoverage `json:"coverage"`
+	Counts          SecurityCounts   `json:"counts"`
+	UniqueCounts    SecurityCounts   `json:"uniqueCounts"`
+	UniqueCVECounts SecurityCounts   `json:"uniqueCveCounts"`
+	Coverage        SecurityCoverage `json:"coverage"`
 
 	Reports   []SecurityReport `json:"reports"`
 	Providers []string         `json:"providers,omitempty"`
@@ -448,9 +449,10 @@ type PackageSecuritySummary struct {
 	Counts SecurityCounts `json:"counts"`
 	// DistinctTotal collapses the same (CVE, component) pair across artifacts;
 	// DistinctCVEs collapses the advisory alone.
-	DistinctTotal  int            `json:"distinctTotal"`
-	DistinctCVEs   int            `json:"distinctCves"`
-	DistinctCounts SecurityCounts `json:"distinctCounts"`
+	DistinctTotal   int            `json:"distinctTotal"`
+	DistinctCVEs    int            `json:"distinctCves"`
+	DistinctCounts  SecurityCounts `json:"distinctCounts"`
+	UniqueCVECounts SecurityCounts `json:"uniqueCveCounts"`
 	// Complete is whether every scannable artifact has a result. False means
 	// the counts cover only part of the release.
 	Complete bool `json:"complete"`
@@ -541,16 +543,17 @@ type SecurityArtifactSummary struct {
 
 // SecurityComparisonEnd identifies one side of a comparison.
 type SecurityComparisonEnd struct {
-	Label      string           `json:"label"`
-	Package    string           `json:"package,omitempty"`
-	Tag        string           `json:"tag,omitempty"`
-	Digest     string           `json:"digest,omitempty"`
-	Repository string           `json:"repository,omitempty"`
-	Provider   string           `json:"provider,omitempty"`
-	Enabled    bool             `json:"enabled"`
-	Counts     SecurityCounts   `json:"counts"`
-	Coverage   SecurityCoverage `json:"coverage"`
-	ScannedAt  string           `json:"scannedAt,omitempty"`
+	Label           string           `json:"label"`
+	Package         string           `json:"package,omitempty"`
+	Tag             string           `json:"tag,omitempty"`
+	Digest          string           `json:"digest,omitempty"`
+	Repository      string           `json:"repository,omitempty"`
+	Provider        string           `json:"provider,omitempty"`
+	Enabled         bool             `json:"enabled"`
+	Counts          SecurityCounts   `json:"counts"`
+	UniqueCVECounts SecurityCounts   `json:"uniqueCveCounts"`
+	Coverage        SecurityCoverage `json:"coverage"`
+	ScannedAt       string           `json:"scannedAt,omitempty"`
 	// Sync is this end's sync state. A comparison against a release nobody
 	// synced is inconclusive, and this is what lets the interface offer the
 	// sync rather than just reporting the verdict.

@@ -275,52 +275,6 @@ function NeverSynced({ onSync, pending }: { onSync: () => void; pending?: boolea
  * counts only when the per-artifact rows are not loaded. A page that quotes two
  * different totals teaches a reader to trust neither.
  */
-function summarise(data: PackageSecurityResponse) {
-  const zero = (): Record<Severity, number> => ({ critical: 0, high: 0, medium: 0, low: 0, unknown: 0 })
-  const cves = new Set<string>()
-  const bySeverity = zero()
-  const fixableBySeverity = zero()
-  let total = 0
-  let fixable = 0
-  let affected = 0
-
-  for (const r of data.reports) {
-    if (r.counts.total > 0) affected += 1
-    for (const f of r.findings ?? []) {
-      total += 1
-      cves.add(f.cve || f.id || 'unknown')
-      bySeverity[f.severity] += 1
-      if (f.fixable) {
-        fixable += 1
-        fixableBySeverity[f.severity] += 1
-      }
-    }
-  }
-
-  if (total === 0) {
-    return {
-      // The advisory count, not the (CVE, package) pair count. They are two
-      // right answers to two questions and this card asks the first one.
-      unique: data.distinctCves || data.distinctTotal,
-      total: data.counts.total,
-      fixable: data.counts.fixable,
-      nonFixable: data.counts.nonFixable,
-      bySeverity: data.counts.bySeverity,
-      fixableBySeverity: data.counts.fixableBySeverity,
-      affected,
-    }
-  }
-  return {
-    unique: cves.size,
-    total,
-    fixable,
-    nonFixable: total - fixable,
-    bySeverity,
-    fixableBySeverity,
-    affected,
-  }
-}
-
 /**
  * The cards.
  *
@@ -344,7 +298,9 @@ function summarise(data: PackageSecurityResponse) {
  */
 function SummaryCards({ data }: { data: PackageSecurityResponse }) {
   const { coverage } = data
-  const stats = useMemo(() => summarise(data), [data])
+  const stats = data.counts
+  const unique = data.uniqueCveCounts
+  const affected = data.reports.filter((report) => report.counts.total > 0).length
   const fixablePercent = stats.total > 0 ? Math.round((stats.fixable / stats.total) * 100) : 0
   const scannedPercent = coverage.scannable > 0
     ? Math.round((coverage.scanned / coverage.scannable) * 100)
@@ -386,7 +342,7 @@ function SummaryCards({ data }: { data: PackageSecurityResponse }) {
               color: c.text, fontVariantNumeric: 'tabular-nums',
             }}
           >
-            {stats.unique.toLocaleString()}
+            {unique.total.toLocaleString()}
           </div>
           <Typography.Text type="secondary" style={{ fontSize: 12.5 }}>
             unique CVEs
@@ -406,8 +362,7 @@ function SummaryCards({ data }: { data: PackageSecurityResponse }) {
           </div>
           <Typography.Text type="secondary" style={{ fontSize: 12, display: 'block', marginTop: 8 }}>
             {stats.total.toLocaleString()} findings
-            {stats.affected > 0
-              && ` across ${stats.affected.toLocaleString()} of ${coverage.scanned.toLocaleString()} images`}
+            {affected > 0 && ` across ${affected.toLocaleString()} of ${coverage.scanned.toLocaleString()} images`}
           </Typography.Text>
         </div>
 
@@ -418,12 +373,13 @@ function SummaryCards({ data }: { data: PackageSecurityResponse }) {
             borderInlineStart: `1px solid ${c.border}`,
           }}
         >
-          <ZoneLabel>By severity</ZoneLabel>
+          <ZoneLabel>Unique CVEs by severity</ZoneLabel>
           <div style={{ display: 'grid', gap: 10 }}>
-            {SEVERITIES.filter((sev) => stats.bySeverity[sev] > 0 || sev !== 'unknown').map((sev) => {
+            {SEVERITIES.filter((sev) => unique.bySeverity[sev] > 0 || sev !== 'unknown').map((sev) => {
+              const uniqueTotal = unique.bySeverity[sev]
+              const uniqueFixable = unique.fixableBySeverity[sev]
               const total = stats.bySeverity[sev]
-              const fixable = stats.fixableBySeverity[sev]
-              const share = stats.total > 0 ? (total / stats.total) * 100 : 0
+              const share = unique.total > 0 ? (uniqueTotal / unique.total) * 100 : 0
               return (
                 <div key={sev}>
                   <div
@@ -436,15 +392,10 @@ function SummaryCards({ data }: { data: PackageSecurityResponse }) {
                     <span
                       style={{
                         marginInlineStart: 'auto', fontSize: 13, fontWeight: 600,
-                        color: total > 0 ? c.text : c.text2,
+                        color: uniqueTotal > 0 ? c.text : c.text2,
                       }}
                     >
-                      {total.toLocaleString()}
-                    </span>
-                    <span
-                      style={{ fontSize: 11, color: c.text2, minWidth: 66, textAlign: 'right' }}
-                    >
-                      {total > 0 ? `${fixable.toLocaleString()} fixable` : ''}
+                      {uniqueTotal.toLocaleString()} ({uniqueFixable.toLocaleString()} fixable) | {total.toLocaleString()}
                     </span>
                   </div>
                   {/*
@@ -465,6 +416,18 @@ function SummaryCards({ data }: { data: PackageSecurityResponse }) {
                 </div>
               )
             })}
+            <div
+              style={{
+                display: 'flex', alignItems: 'baseline', gap: 8,
+                borderTop: `1px solid ${c.border}`, paddingTop: 8,
+                fontVariantNumeric: 'tabular-nums',
+              }}
+            >
+              <Typography.Text type="secondary">Total findings</Typography.Text>
+              <Typography.Text strong style={{ marginInlineStart: 'auto' }}>
+                {stats.total.toLocaleString()}
+              </Typography.Text>
+            </div>
           </div>
         </div>
 

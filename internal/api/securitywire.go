@@ -279,21 +279,22 @@ func toAPIPackageSecurity(
 	state, message := securityState(row, target)
 
 	out := v1.PackageSecurityResponse{
-		Product:       productName,
-		Package:       packageReferenceOf(pkg),
-		Provider:      providerOr(row.Provider, target),
-		Enabled:       target.Available,
-		Repository:    repositoryOr(row.Repository, target),
-		State:         state,
-		Message:       message,
-		Counts:        toAPICounts(row.Counts),
-		UniqueCounts:  toAPICounts(distinctCounts(row)),
-		DistinctTotal: row.DistinctTotal,
-		DistinctCVEs:  row.DistinctCVEs,
-		Coverage:      toAPICoverage(row.Coverage),
-		Fingerprint:   row.Fingerprint,
-		Detail:        detail,
-		Reports:       []v1.SecurityReport{},
+		Product:         productName,
+		Package:         packageReferenceOf(pkg),
+		Provider:        providerOr(row.Provider, target),
+		Enabled:         target.Available,
+		Repository:      repositoryOr(row.Repository, target),
+		State:           state,
+		Message:         message,
+		Counts:          toAPICounts(row.Counts),
+		UniqueCounts:    toAPICounts(row.DistinctCounts),
+		UniqueCVECounts: toAPICounts(row.UniqueCVECounts),
+		DistinctTotal:   row.DistinctTotal,
+		DistinctCVEs:    row.DistinctCVEs,
+		Coverage:        toAPICoverage(row.Coverage),
+		Fingerprint:     row.Fingerprint,
+		Detail:          detail,
+		Reports:         []v1.SecurityReport{},
 	}
 	if row.ScannedAt != nil {
 		out.ScannedAt = row.ScannedAt.UTC().Format(rfc3339)
@@ -309,16 +310,6 @@ func toAPIPackageSecurity(
 		out.Sources = append(out.Sources, toAPISourceCounts(src))
 	}
 	return out
-}
-
-// distinctCounts renders the distinct total in the counts shape the interface
-// already knows.
-//
-// Only the total is stored: a per-severity breakdown of DISTINCT findings would
-// be a second set of five columns answering a question nobody has asked, and
-// the severity breakdown people do want is the per-artifact one above.
-func distinctCounts(row store.PackageSecurityRow) security.Counts {
-	return security.Counts{Total: row.DistinctTotal}
 }
 
 func providerOr(stored string, target securityTarget) string {
@@ -411,15 +402,16 @@ func toAPIArtifactDelta(d security.ArtifactDelta) v1.SecurityArtifactDelta {
 func toAPIComparisonEnd(pkg store.PackageRow, side securitySide) v1.SecurityComparisonEnd {
 	state, message := securityState(side.row, side.target)
 	end := v1.SecurityComparisonEnd{
-		Label:      releaseLabel(pkg),
-		Package:    packageReferenceOf(pkg),
-		Tag:        pkg.Tag,
-		Digest:     pkg.ManifestDigest,
-		Repository: repositoryOr(side.row.Repository, side.target),
-		Provider:   providerOr(side.row.Provider, side.target),
-		Enabled:    side.target.Available,
-		Counts:     toAPICounts(side.row.Counts),
-		Coverage:   toAPICoverage(side.row.Coverage),
+		Label:           releaseLabel(pkg),
+		Package:         packageReferenceOf(pkg),
+		Tag:             pkg.Tag,
+		Digest:          pkg.ManifestDigest,
+		Repository:      repositoryOr(side.row.Repository, side.target),
+		Provider:        providerOr(side.row.Provider, side.target),
+		Enabled:         side.target.Available,
+		Counts:          toAPICounts(side.row.Counts),
+		UniqueCVECounts: toAPICounts(side.row.UniqueCVECounts),
+		Coverage:        toAPICoverage(side.row.Coverage),
 		Sync: v1.SecuritySyncStatus{
 			State:      string(orNever(side.row.State)),
 			Label:      syncStateLabel(orNever(side.row.State)),

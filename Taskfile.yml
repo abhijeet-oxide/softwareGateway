@@ -142,10 +142,7 @@ tasks:
     cmds:
       - cmd: rm -rf bin dist coverage.out dev/swgw.db dev/swgw.db-shm dev/swgw.db-wal
         platforms: [linux, darwin]
-      - cmd: >-
-          powershell -NoProfile -Command
-          "Remove-Item -Recurse -Force -ErrorAction SilentlyContinue
-          bin, dist, coverage.out, dev/swgw.db, dev/swgw.db-shm, dev/swgw.db-wal"
+      - cmd: powershell -NoProfile -File ./scripts/clean-dev.ps1
         platforms: [windows]
 
   # ------------------------------------------------------------------- test --

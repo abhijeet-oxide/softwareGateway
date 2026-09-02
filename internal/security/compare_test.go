@@ -121,6 +121,42 @@ func TestCompareSeverityChange(t *testing.T) {
 	}
 }
 
+func TestCompareCategoryCountsPartitionEveryClassifiedFinding(t *testing.T) {
+	a := []Report{report("main", "sha256:a",
+		finding("CVE-1", SeverityHigh, "openssl", true),
+		finding("CVE-2", SeverityMedium, "zlib", false),
+		finding("CVE-3", SeverityLow, "curl", false),
+	)}
+	b := []Report{report("main", "sha256:b",
+		finding("CVE-1", SeverityCritical, "openssl", true),
+		finding("CVE-2", SeverityMedium, "zlib", true),
+		finding("CVE-4", SeverityHigh, "nginx", false),
+	)}
+
+	got := Compare(CompareInput{A: a, B: b})
+	buckets := map[ChangeType]Counts{
+		ChangeIntroduced: got.Introduced, ChangeResolved: got.Resolved,
+		ChangeUnchanged: got.Unchanged, ChangeSeverityIncreased: got.SeverityIncreased,
+		ChangeSeverityDecreased: got.SeverityDecreased, ChangeRemediation: got.RemediationChanged,
+		ChangeRemovedArtifact: got.RemovedArtifact,
+	}
+	seen := map[ChangeType]int{}
+	for _, change := range got.Changes {
+		seen[change.Type]++
+	}
+	for kind, counts := range buckets {
+		if counts.Total != seen[kind] {
+			t.Errorf("%s total = %d, but %d classified changes have that type", kind, counts.Total, seen[kind])
+		}
+		if counts.Total != counts.BySeverity.Critical+counts.BySeverity.High+counts.BySeverity.Medium+counts.BySeverity.Low+counts.BySeverity.Unknown {
+			t.Errorf("%s severity breakdown does not sum to total: %+v", kind, counts)
+		}
+	}
+	if got.Introduced.Total != 1 || got.Resolved.Total != 1 || got.SeverityIncreased.Total != 1 || got.RemediationChanged.Total != 1 {
+		t.Errorf("comparison totals = introduced %+v, resolved %+v, increased %+v, remediation %+v", got.Introduced, got.Resolved, got.SeverityIncreased, got.RemediationChanged)
+	}
+}
+
 func TestCompareRemediationChangeIsNotSeverityChange(t *testing.T) {
 	a := []Report{report("main", "sha256:a", finding("CVE-1", SeverityHigh, "openssl", false))}
 	b := []Report{report("main", "sha256:b", finding("CVE-1", SeverityHigh, "openssl", true))}

@@ -225,6 +225,9 @@ func TestRecordAndReadBack(t *testing.T) {
 	if row.DistinctCounts.Total != 2 || row.DistinctCounts.BySeverity.Critical != 1 || row.DistinctCounts.BySeverity.Low != 1 {
 		t.Errorf("distinct counts = %+v", row.DistinctCounts)
 	}
+	if row.UniqueCVECounts.Total != 2 || row.UniqueCVECounts.BySeverity.Critical != 1 || row.UniqueCVECounts.BySeverity.Low != 1 {
+		t.Errorf("unique CVE counts = %+v", row.UniqueCVECounts)
+	}
 	// Coverage travels with the counts, because "2 vulnerabilities" means one
 	// thing at full coverage and something else with an artifact unscanned.
 	if row.Coverage.Scanned != 1 || row.Coverage.NotScanned != 1 {

@@ -1559,6 +1559,7 @@ export interface PackageSecuritySummary {
   distinctTotal: number
   distinctCves: number
   distinctCounts: SecurityCounts
+  uniqueCveCounts: SecurityCounts
   complete: boolean
   /**
    * What "0 vulnerabilities" actually means. Zero of zero is "nobody looked"
@@ -1768,6 +1769,7 @@ export interface PackageSecurityResponse {
   message?: string
   counts: SecurityCounts
   uniqueCounts: SecurityCounts
+  uniqueCveCounts: SecurityCounts
   /** See PackageSecuritySummary: two questions, two numbers, named for what they count. */
   distinctTotal: number
   distinctCves: number
@@ -1840,6 +1842,7 @@ export interface SecurityComparisonEnd {
   provider?: string
   enabled: boolean
   counts: SecurityCounts
+  uniqueCveCounts: SecurityCounts
   coverage: SecurityCoverage
   scannedAt?: string
   /** So the interface can offer the sync rather than only reporting a verdict. */

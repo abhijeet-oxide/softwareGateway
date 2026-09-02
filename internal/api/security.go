@@ -234,6 +234,12 @@ func (s *Server) packageSecurity(
 		}
 
 		posture := security.Summarize(reports)
+		out.Counts = toAPICounts(posture.Counts)
+		out.UniqueCounts = toAPICounts(posture.UniqueCounts)
+		out.UniqueCVECounts = toAPICounts(posture.UniqueCVECounts)
+		out.DistinctTotal = posture.UniqueCounts.Total
+		out.DistinctCVEs = posture.UniqueCVEs
+		out.Coverage = toAPICoverage(posture.Coverage)
 		for _, rep := range posture.Reports {
 			item := toAPIReport(rep)
 			item.ScanURL = scanURL(target, rep.Artifact)

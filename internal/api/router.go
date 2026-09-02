@@ -247,6 +247,30 @@ type Deps struct {
 	// the wire so that the rule lives in one place rather than being guessed
 	// at by every page that draws a date.
 	SecurityFreshness security.Freshness
+
+	// ComplianceRunner starts a check of a release against the organization's
+	// own Kubernetes and CNF standards.
+	//
+	// Set only on a Coordinator that may reach a vendor registry and shell out
+	// to helm. Without it the run route is absent, and a caller gets an honest
+	// 404 rather than a route that always fails.
+	ComplianceRunner ComplianceRunner
+	// ComplianceStore serves every compliance READ. Separate from the runner
+	// because the two fail differently: a run needs a reachable registry and a
+	// helm binary, and this needs only the database - so a release's findings
+	// stay readable when neither is available, which is exactly when somebody
+	// is asking why a release was blocked.
+	ComplianceStore ComplianceStore
+	// ComplianceCatalogue serves the rulebook: what will be checked and why.
+	//
+	// A function rather than a value, because the loader swaps the catalogue
+	// when a policy directory changes and a handler holding the old one would
+	// serve a rulebook nobody is being checked against.
+	ComplianceCatalogue ComplianceCatalogue
+	// ComplianceHelm reports whether charts can be rendered at all. On screen
+	// this is the difference between a tab full of "could not be checked" with
+	// no explanation and one that says the helm binary is missing.
+	ComplianceHelm ComplianceHelm
 }
 
 // Server wires the router.
@@ -456,6 +480,34 @@ func (s *Server) routes() chi.Router {
 			if s.deps.SecurityIndex != nil {
 				r.Get("/products/{product}/security/search", s.handleSecuritySearch)
 				r.Get("/products/{product}/security/search/export", s.handleExportSecuritySearch)
+			}
+
+			// Compliance. Registered on the STORE rather than on the runner,
+			// for the same reason security is: reading a release's compliance
+			// is a database query, and it must keep working on a Coordinator
+			// that cannot currently reach a registry or run helm - which is
+			// exactly the state somebody is in when they are working out why a
+			// release was blocked.
+			if s.deps.ComplianceStore != nil {
+				r.Get("/products/{product}/packages/{package}/compliance",
+					s.handlePackageCompliance)
+				r.Get("/products/{product}/packages/{package}/compliance/runs",
+					s.handleComplianceRuns)
+			}
+			// Running one reaches a vendor registry and shells out to helm, so
+			// it is registered only where those are possible.
+			if s.deps.ComplianceRunner != nil {
+				r.Post("/products/{product}/packages/{package}/compliance:run",
+					s.handleRunCompliance)
+				r.Post("/products/{product}/packages/{package}/compliance:cancel",
+					s.handleCancelCompliance)
+			}
+			// The rulebook is not scoped to a product: it is what WILL be
+			// checked, and a vendor asking before they ship has no release to
+			// point at yet.
+			if s.deps.ComplianceCatalogue != nil {
+				r.Get("/policies", s.handlePolicies)
+				r.Get("/policies/{check}", s.handlePolicy)
 			}
 
 			// AIP-136 custom method. Registered whenever discovery is wired, so a

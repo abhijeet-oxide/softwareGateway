@@ -222,7 +222,16 @@ func seed(reg *fakeregistry.Registry, repos []string) {
 					}
 					layers = append(layers, l)
 				}
-				digest := reg.AddImage(repo, "", layers...)
+				// A chart component gets a REAL chart, so `helm template`
+				// can render it and the compliance run has something to
+				// judge. Everything else is filler, because nothing else
+				// reads the bytes.
+				var digest string
+				if comp.layers == 1 {
+					digest = reg.AddChart(repo, "", chartTarball(comp.name, rel.tag))
+				} else {
+					digest = reg.AddImage(repo, "", layers...)
+				}
 				raw, ok := reg.ManifestBytes(repo, digest)
 				if !ok {
 					log.Fatalf("seed: %s/%s has no manifest", repo, comp.name)

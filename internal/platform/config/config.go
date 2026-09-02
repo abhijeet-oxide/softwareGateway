@@ -112,6 +112,78 @@ type CoordinatorConfig struct {
 	ManifestCache  ManifestCacheConfig  `koanf:"manifestCache"`
 	Files          FilesConfig          `koanf:"files"`
 	Security       SecurityConfig       `koanf:"security"`
+	Compliance     ComplianceConfig     `koanf:"compliance"`
+}
+
+// ComplianceConfig tunes checking a release against the organization's own
+// Kubernetes and CNF standards.
+//
+// Here rather than in a product document, and the placement is the argument.
+// None of it is a property of a PRODUCT: which Kubernetes version to render
+// against is a property of the estate, which registries are approved is a
+// property of the organization, and where the policy packs are mounted is a
+// property of this deployment. Stated per product they would be repeated in
+// every document and drift between them, and the drift would show up as one
+// vendor mysteriously failing a check another passes.
+type ComplianceConfig struct {
+	// Enabled registers the compliance routes and the runner. Off leaves the
+	// feature absent rather than present and failing.
+	Enabled bool `koanf:"enabled"`
+
+	// PolicyPaths are directories of policy packs, discovered on start and
+	// re-read on change. The built-in baseline is always loaded and cannot be
+	// removed by emptying this - which is what stops a misconfigured mount
+	// turning every release green.
+	PolicyPaths []string `koanf:"policyPaths"`
+
+	// HelmBinary is the renderer. Looked up on PATH when empty. A Coordinator
+	// without it still serves stored results and reports every rendered check
+	// as undecided, never as a pass.
+	HelmBinary string `koanf:"helmBinary"`
+
+	// KubeVersion and APIVersions are PINNED render inputs. A chart branching
+	// on the cluster version must render the same way twice, or no finding
+	// derived from it is reproducible.
+	KubeVersion string   `koanf:"kubeVersion"`
+	APIVersions []string `koanf:"apiVersions"`
+
+	// ApprovedRegistries is what SUP-02 accepts. Configuration rather than a
+	// policy constant, because the registries an organization runs are a fact
+	// about the organization and change when a datacentre opens.
+	ApprovedRegistries []string `koanf:"approvedRegistries"`
+
+	// Determinacy runs the second, perturbed render that distinguishes a value
+	// the chart fixes from one a values file can override. It doubles the
+	// rendering cost and it is what lets a tier-1 finding block without lying,
+	// so it defaults on.
+	Determinacy *bool `koanf:"determinacy"`
+
+	// MaxChartBytes and MaxReleaseBytes bound what one run reads out of a
+	// registry. Two numbers because one mislabelled 500 MB artifact and four
+	// hundred ordinary charts are different problems: without the first, the
+	// bad artifact consumes the whole budget and every chart after it is
+	// skipped for an unrelated reason.
+	MaxChartBytes   int64 `koanf:"maxChartBytes"`
+	MaxReleaseBytes int64 `koanf:"maxReleaseBytes"`
+
+	// MaxResults truncates a report rather than exhausting memory on a
+	// pathological release. A truncated run says so: a silently shortened
+	// report is worse than a failed one, because it looks complete.
+	MaxResults int `koanf:"maxResults"`
+
+	// RenderTimeout bounds one chart's render, so a template loop that does
+	// not terminate cannot take the Coordinator with it.
+	RenderTimeout time.Duration `koanf:"renderTimeout"`
+
+	// StaleAfter is how long a run's claim survives without a heartbeat.
+	// Past it the sweeper releases the claim, so a release whose Coordinator
+	// died does not stay uncheckable forever.
+	StaleAfter time.Duration `koanf:"staleAfter"`
+}
+
+// ProbeDeterminacy reports whether the second render runs, defaulting on.
+func (c ComplianceConfig) ProbeDeterminacy() bool {
+	return c.Determinacy == nil || *c.Determinacy
 }
 
 // SecurityConfig tunes how vulnerability syncs reach a scanner and how long
@@ -493,6 +565,40 @@ func Defaults() SystemConfig {
 			},
 			Files: FilesConfig{
 				DownloadEnabled: true,
+			},
+			Compliance: ComplianceConfig{
+				// On by default. The built-in baseline is compiled in and
+				// needs nothing configured, so the feature works out of the
+				// box - and a Coordinator without helm degrades to "could not
+				// be checked" rather than to a wrong answer.
+				Enabled: true,
+
+				// Pinned, so a chart branching on the cluster version renders
+				// the same way twice. A number rather than "whatever is
+				// current", because a finding that changes when this binary is
+				// rebuilt is not reproducible.
+				KubeVersion: "1.30.0",
+
+				// A large chart is a few megabytes; a release of a hundred is
+				// comfortably inside the total. Both are refusals rather than
+				// truncations: what they skip is named on the run.
+				MaxChartBytes:   64 << 20,
+				MaxReleaseBytes: 512 << 20,
+
+				// Fifteen thousand rows is a large release checked in full.
+				// The limit is well above that so it is reached only by
+				// something pathological, and a run that reaches it says so.
+				MaxResults: 200_000,
+
+				// Ninety seconds per chart. A chart that takes longer than
+				// that to render is not a chart that is nearly done.
+				RenderTimeout: 90 * time.Second,
+
+				// Five minutes without a heartbeat and the claim is released.
+				// Long enough that a slow render is never mistaken for a dead
+				// Coordinator, short enough that a release is checkable again
+				// within a coffee break.
+				StaleAfter: 5 * time.Minute,
 			},
 			Security: SecurityConfig{
 				// Ten in flight, fifty per request, a minute each.

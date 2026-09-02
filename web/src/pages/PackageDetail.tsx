@@ -5,7 +5,7 @@ import { Alert, App, Button, Card, Col, Descriptions, Divider, Modal, Row, Space
 // The working-surface table: resizable, reorderable, pinnable columns whose
 // layout each person keeps. See `tablekit/README.md` for which tables get it.
 import { Table as DataTable } from '../tablekit'
-import { FolderOutlined, LoadingOutlined, SafetyCertificateOutlined } from '../icons'
+import { FolderOutlined, LoadingOutlined, SafetyCertificateOutlined, ScaleOutlined } from '../icons'
 import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom'
 import {
   packageFileDownloadUrl, useArtifacts, useCancelAnalysis, useInspectPackage, usePackage,
@@ -29,6 +29,7 @@ import {
 } from '../components/layout'
 import { FileViewer, looksBinary } from '../components/filecontent'
 import { PromoteButton } from '../components/promote'
+import { ComplianceTab } from '../components/compliancepanel'
 import { SecurityTab } from '../components/securitypanel'
 import { COMPARISON_PRODUCT_FILTER } from '../domain/compare'
 import { EmptyState, c, mono } from '../uikit'
@@ -1436,6 +1437,53 @@ export default function PackageDetail() {
                 ),
                 children: productName && reference
                   ? <SecurityTab product={productName} reference={reference} repository={repository} />
+                  : null,
+              },
+              {
+                key: 'compliance',
+                /*
+                  Beside Security, because they are the same shape of question -
+                  something outside this release judged it - and a reader who
+                  has learned where one lives should find the other next to it.
+                  Scales rather than a second seal: they are different
+                  judgements, and two similar marks would make the tabs read as
+                  one thing said twice.
+                */
+                label: (
+                  <Space size={6}>
+                    <ScaleOutlined />
+                    Compliance
+                    {/*
+                      The count that matters is BLOCKING, not total. A release
+                      with four hundred informational rows and nothing blocking
+                      is fine, and a label that said "400" would send somebody
+                      into the tab to find that out.
+
+                      Undecided checks get their own mark, because a release
+                      that could not be checked must not read as one that
+                      passed - which a bare absence here would.
+                    */}
+                    {p?.compliance?.state === 'complete' && p.compliance.blocking > 0 && (
+                      <Typography.Text type="danger" style={{ fontSize: 12 }}>
+                        ({p.compliance.blocking.toLocaleString()})
+                      </Typography.Text>
+                    )}
+                    {p?.compliance?.state === 'complete'
+                      && p.compliance.blocking === 0
+                      && p.compliance.error > 0 && (
+                      <Tooltip title={`${p.compliance.error} check(s) could not be decided, so this release has not been shown to comply`}>
+                        <Typography.Text type="warning" style={{ fontSize: 12 }}>?</Typography.Text>
+                      </Tooltip>
+                    )}
+                    {p?.compliance?.state === 'running' && (
+                      <Tooltip title="A compliance check is in progress">
+                        <LoadingOutlined spin style={{ fontSize: 12 }} />
+                      </Tooltip>
+                    )}
+                  </Space>
+                ),
+                children: productName && reference
+                  ? <ComplianceTab product={productName} reference={reference} repository={repository} />
                   : null,
               },
               {

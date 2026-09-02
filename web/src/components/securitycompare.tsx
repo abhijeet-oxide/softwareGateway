@@ -277,7 +277,8 @@ function ReleaseEnd({ title, end, name, onSync, align }: {
             wrap
             style={{ marginTop: 14, justifyContent: align === 'end' ? 'flex-end' : 'flex-start', width: '100%' }}
           >
-            <Stat label="Vulnerabilities" value={end.counts.total} />
+            <Stat label="Unique CVEs" value={end.uniqueCveCounts.total} />
+            <Stat label="Total findings" value={end.counts.total} />
             <Stat label="Fixable" value={end.counts.fixable} />
             <Stat label="Scanned" value={end.coverage.scanned} suffix={`/ ${end.coverage.scannable}`} />
           </Space>

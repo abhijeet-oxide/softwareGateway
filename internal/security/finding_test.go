@@ -111,6 +111,44 @@ func TestSummarizeCountsFindingsPairsAndAdvisoriesSeparately(t *testing.T) {
 	}
 }
 
+func TestSummarizeCanonicalCountsAgreeAcrossEveryBreakdown(t *testing.T) {
+	reports := []Report{
+		report("one", "sha256:1",
+			finding("CVE-1", SeverityHigh, "openssl", true),
+			finding("CVE-2", SeverityMedium, "zlib", false),
+		),
+		report("two", "sha256:2",
+			finding("CVE-1", SeverityCritical, "openssl", false),
+			finding("CVE-1", SeverityHigh, "libssl3", true),
+		),
+	}
+
+	p := Summarize(reports)
+	if p.Counts.Total != 4 || p.Counts.Fixable != 2 || p.Counts.NonFixable != 2 {
+		t.Fatalf("all findings = %+v, want total 4, fixable 2, non-fixable 2", p.Counts)
+	}
+	if p.UniqueCounts.Total != 3 || p.UniqueCounts.Fixable != 2 || p.UniqueCounts.NonFixable != 1 {
+		t.Fatalf("unique CVE/component pairs = %+v, want total 3, fixable 2, non-fixable 1", p.UniqueCounts)
+	}
+	if p.UniqueCVEs != 2 || p.UniqueCVECounts.Total != 2 || p.UniqueCVECounts.Fixable != 1 || p.UniqueCVECounts.NonFixable != 1 {
+		t.Fatalf("unique advisories = %d / %+v, want total 2, fixable 1, non-fixable 1", p.UniqueCVEs, p.UniqueCVECounts)
+	}
+	if p.UniqueCVECounts.BySeverity.Critical != 1 || p.UniqueCVECounts.BySeverity.Medium != 1 {
+		t.Errorf("unique advisory severities = %+v, want one critical and one medium", p.UniqueCVECounts.BySeverity)
+	}
+	if p.UniqueCVECounts.FixableBySeverity.Critical != 1 || p.UniqueCVECounts.FixableBySeverity.Medium != 0 {
+		t.Errorf("unique advisory fixable severities = %+v, want one critical and no medium", p.UniqueCVECounts.FixableBySeverity)
+	}
+	for _, counts := range []Counts{p.Counts, p.UniqueCounts, p.UniqueCVECounts} {
+		if counts.Total != counts.BySeverity.Critical+counts.BySeverity.High+counts.BySeverity.Medium+counts.BySeverity.Low+counts.BySeverity.Unknown {
+			t.Errorf("total does not equal severity sum: %+v", counts)
+		}
+		if counts.Fixable != counts.FixableBySeverity.Critical+counts.FixableBySeverity.High+counts.FixableBySeverity.Medium+counts.FixableBySeverity.Low+counts.FixableBySeverity.Unknown {
+			t.Errorf("fixable does not equal severity sum: %+v", counts)
+		}
+	}
+}
+
 // One scanner is not a comparison, so there is nothing to draw a toggle from.
 func TestSummarizeOmitsTheBreakdownForOneScanner(t *testing.T) {
 	r := Report{

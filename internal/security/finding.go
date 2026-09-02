@@ -529,6 +529,10 @@ type Posture struct {
 	// (UniqueCounts), one advisory to read (UniqueCVEs), and seventeen packages
 	// across a hundred and forty-eight images to actually replace (Counts).
 	UniqueCVEs int `json:"uniqueCves"`
+	// UniqueCVECounts assigns each advisory to its highest observed severity.
+	// It is the severity breakdown for UniqueCVEs, rather than the component
+	// pair breakdown in UniqueCounts.
+	UniqueCVECounts Counts `json:"uniqueCveCounts"`
 
 	Coverage Coverage `json:"coverage"`
 
@@ -612,6 +616,8 @@ func Summarize(reports []Report) Posture {
 	unique := map[string]Severity{}
 	uniqueFixable := map[string]bool{}
 	uniqueCVEs := map[string]bool{}
+	uniqueCVESeverity := map[string]Severity{}
+	uniqueCVEFixable := map[string]bool{}
 	// Per-source arithmetic, and which sources saw each advisory. Built in the
 	// same pass because a second walk over a release's findings is a second walk
 	// over a hundred thousand rows.
@@ -668,6 +674,12 @@ func Summarize(reports []Report) Posture {
 			}
 			if id := f.Identifier(); id != "" {
 				uniqueCVEs[id] = true
+				if prev, ok := uniqueCVESeverity[id]; !ok || f.Severity.Rank() > prev.Rank() {
+					uniqueCVESeverity[id] = f.Severity
+				}
+				if f.Fixable {
+					uniqueCVEFixable[id] = true
+				}
 				for _, src := range f.SourceSet() {
 					seen, ok := sawCVE[id]
 					if !ok {
@@ -692,6 +704,9 @@ func Summarize(reports []Report) Posture {
 		p.UniqueCounts.Add(sev, uniqueFixable[k])
 	}
 	p.UniqueCVEs = len(uniqueCVEs)
+	for id, severity := range uniqueCVESeverity {
+		p.UniqueCVECounts.Add(severity, uniqueCVEFixable[id])
+	}
 
 	for id, srcs := range sawCVE {
 		for src := range srcs {

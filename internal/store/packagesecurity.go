@@ -46,10 +46,11 @@ type PackageSecurityRow struct {
 	// second. Two right answers to two questions is fine; one answer wearing
 	// the other's name is how a page loses a reader's trust in every number on
 	// it.
-	DistinctTotal  int
-	DistinctCVEs   int
-	DistinctCounts security.Counts
-	Coverage       security.Coverage
+	DistinctTotal   int
+	DistinctCVEs    int
+	DistinctCounts  security.Counts
+	UniqueCVECounts security.Counts
+	Coverage        security.Coverage
 
 	// Sources is one row per scanner that contributed, with how much only that
 	// scanner reported. Empty on a single-scanner deployment, where the
@@ -232,9 +233,21 @@ func (p *PackageSecurity) Complete(ctx context.Context, row PackageSecurityRow) 
 			fix_critical, fix_high, fix_medium, fix_low, fix_unknown,
 			distinct_total, distinct_cves, distinct_fixable,
 			distinct_critical, distinct_high, distinct_medium, distinct_low, distinct_unknown,
+			unique_cve_critical, unique_cve_high, unique_cve_medium, unique_cve_low, unique_cve_unknown, unique_cve_fixable,
+			unique_cve_fix_critical, unique_cve_fix_high, unique_cve_fix_medium, unique_cve_fix_low, unique_cve_fix_unknown,
 			artifacts, scanned, not_scanned, unsupported, unavailable, disabled,
 			scanned_at, synced_at, started_at, fingerprint, log, missing)
-		VALUES (?,?,?,?,?,?, ?,?,?,?,?,?,?, ?,?,?,?,?, ?,?,?,?,?,?,?,?, ?,?,?,?,?,?, ?,?,NULL,?,?,?)
+		VALUES (
+			?, ?, ?, ?, ?, ?,
+			?, ?, ?, ?, ?, ?, ?,
+			?, ?, ?, ?, ?,
+			?, ?, ?,
+			?, ?, ?, ?, ?,
+			?, ?, ?, ?, ?, ?,
+			?, ?, ?, ?, ?,
+			?, ?, ?, ?, ?, ?,
+			?, ?, NULL, ?, ?, ?
+		)
 		ON CONFLICT (package_id) DO UPDATE SET
 			state = excluded.state, error = excluded.error,
 			provider = excluded.provider, repository = excluded.repository, role = excluded.role,
@@ -249,6 +262,13 @@ func (p *PackageSecurity) Complete(ctx context.Context, row PackageSecurityRow) 
 			distinct_critical = excluded.distinct_critical, distinct_high = excluded.distinct_high,
 			distinct_medium = excluded.distinct_medium, distinct_low = excluded.distinct_low,
 			distinct_unknown = excluded.distinct_unknown,
+			unique_cve_critical = excluded.unique_cve_critical, unique_cve_high = excluded.unique_cve_high,
+			unique_cve_medium = excluded.unique_cve_medium, unique_cve_low = excluded.unique_cve_low,
+			unique_cve_unknown = excluded.unique_cve_unknown,
+			unique_cve_fixable = excluded.unique_cve_fixable,
+			unique_cve_fix_critical = excluded.unique_cve_fix_critical, unique_cve_fix_high = excluded.unique_cve_fix_high,
+			unique_cve_fix_medium = excluded.unique_cve_fix_medium, unique_cve_fix_low = excluded.unique_cve_fix_low,
+			unique_cve_fix_unknown = excluded.unique_cve_fix_unknown,
 			artifacts = excluded.artifacts, scanned = excluded.scanned,
 			not_scanned = excluded.not_scanned, unsupported = excluded.unsupported,
 			unavailable = excluded.unavailable, disabled = excluded.disabled,
@@ -265,6 +285,13 @@ func (p *PackageSecurity) Complete(ctx context.Context, row PackageSecurityRow) 
 		row.DistinctCounts.BySeverity.Critical, row.DistinctCounts.BySeverity.High,
 		row.DistinctCounts.BySeverity.Medium, row.DistinctCounts.BySeverity.Low,
 		row.DistinctCounts.BySeverity.Unknown,
+		row.UniqueCVECounts.BySeverity.Critical, row.UniqueCVECounts.BySeverity.High,
+		row.UniqueCVECounts.BySeverity.Medium, row.UniqueCVECounts.BySeverity.Low,
+		row.UniqueCVECounts.BySeverity.Unknown,
+		row.UniqueCVECounts.Fixable,
+		row.UniqueCVECounts.FixableBySeverity.Critical, row.UniqueCVECounts.FixableBySeverity.High,
+		row.UniqueCVECounts.FixableBySeverity.Medium, row.UniqueCVECounts.FixableBySeverity.Low,
+		row.UniqueCVECounts.FixableBySeverity.Unknown,
 		cov.Artifacts, cov.Scanned, cov.NotScanned, cov.Unsupported, cov.Unavailable, cov.Disabled,
 		timeOrNil(row.ScannedAt), securityTime(now), row.Fingerprint, encodeSyncLog(row.Log), cov.Missing)
 	if err != nil {
@@ -439,6 +466,10 @@ func (p *PackageSecurity) load(ctx context.Context, where string, args ...any) (
 		       distinct_total, COALESCE(distinct_cves, 0), COALESCE(distinct_fixable, 0),
 		       COALESCE(distinct_critical, 0), COALESCE(distinct_high, 0),
 		       COALESCE(distinct_medium, 0), COALESCE(distinct_low, 0), COALESCE(distinct_unknown, 0),
+		       COALESCE(unique_cve_critical, 0), COALESCE(unique_cve_high, 0), COALESCE(unique_cve_medium, 0),
+		       COALESCE(unique_cve_low, 0), COALESCE(unique_cve_unknown, 0), COALESCE(unique_cve_fixable, 0),
+		       COALESCE(unique_cve_fix_critical, 0), COALESCE(unique_cve_fix_high, 0), COALESCE(unique_cve_fix_medium, 0),
+		       COALESCE(unique_cve_fix_low, 0), COALESCE(unique_cve_fix_unknown, 0),
 		       artifacts, scanned, not_scanned, unsupported, unavailable, disabled,
 		       scanned_at, synced_at, started_at, fingerprint, COALESCE(log, ''), COALESCE(missing, 0),
 		       COALESCE(claimed_by, ''), heartbeat_at
@@ -469,6 +500,13 @@ func (p *PackageSecurity) load(ctx context.Context, where string, args ...any) (
 			&r.DistinctCounts.BySeverity.Critical, &r.DistinctCounts.BySeverity.High,
 			&r.DistinctCounts.BySeverity.Medium, &r.DistinctCounts.BySeverity.Low,
 			&r.DistinctCounts.BySeverity.Unknown,
+			&r.UniqueCVECounts.BySeverity.Critical, &r.UniqueCVECounts.BySeverity.High,
+			&r.UniqueCVECounts.BySeverity.Medium, &r.UniqueCVECounts.BySeverity.Low,
+			&r.UniqueCVECounts.BySeverity.Unknown,
+			&r.UniqueCVECounts.Fixable,
+			&r.UniqueCVECounts.FixableBySeverity.Critical, &r.UniqueCVECounts.FixableBySeverity.High,
+			&r.UniqueCVECounts.FixableBySeverity.Medium, &r.UniqueCVECounts.FixableBySeverity.Low,
+			&r.UniqueCVECounts.FixableBySeverity.Unknown,
 			&r.Coverage.Artifacts, &r.Coverage.Scanned, &r.Coverage.NotScanned,
 			&r.Coverage.Unsupported, &r.Coverage.Unavailable, &r.Coverage.Disabled,
 			&scannedAt, &syncedAt, &startedAt, &r.Fingerprint, &log, &r.Coverage.Missing,
@@ -480,6 +518,8 @@ func (p *PackageSecurity) load(ctx context.Context, where string, args ...any) (
 		r.Counts.NonFixable = r.Counts.Total - r.Counts.Fixable
 		r.DistinctCounts.Total = r.DistinctTotal
 		r.DistinctCounts.NonFixable = r.DistinctTotal - r.DistinctCounts.Fixable
+		r.UniqueCVECounts.Total = r.DistinctCVEs
+		r.UniqueCVECounts.NonFixable = r.DistinctCVEs - r.UniqueCVECounts.Fixable
 		r.ScannedAt = parseNullableSecurityTime(scannedAt)
 		r.SyncedAt = parseNullableSecurityTime(syncedAt)
 		r.StartedAt = parseNullableSecurityTime(startedAt)
@@ -534,20 +574,21 @@ func parseNullableSecurityTime(v sql.NullString) *time.Time {
 // security model must not know about SQL.
 func (p *PackageSecurity) Record(ctx context.Context, res security.PackageResult) error {
 	row := PackageSecurityRow{
-		PackageID:      res.PackageID,
-		State:          PackageSecuritySynced,
-		Provider:       res.Provider,
-		Repository:     res.Repository,
-		Role:           res.Role,
-		Counts:         res.Posture.Counts,
-		DistinctTotal:  res.Posture.UniqueCounts.Total,
-		DistinctCVEs:   res.Posture.UniqueCVEs,
-		DistinctCounts: res.Posture.UniqueCounts,
-		Coverage:       res.Posture.Coverage,
-		ScannedAt:      res.Posture.ScannedAt,
-		Fingerprint:    res.Fingerprint,
-		Sources:        res.Posture.BySource,
-		Log:            res.Log,
+		PackageID:       res.PackageID,
+		State:           PackageSecuritySynced,
+		Provider:        res.Provider,
+		Repository:      res.Repository,
+		Role:            res.Role,
+		Counts:          res.Posture.Counts,
+		DistinctTotal:   res.Posture.UniqueCounts.Total,
+		DistinctCVEs:    res.Posture.UniqueCVEs,
+		DistinctCounts:  res.Posture.UniqueCounts,
+		UniqueCVECounts: res.Posture.UniqueCVECounts,
+		Coverage:        res.Posture.Coverage,
+		ScannedAt:       res.Posture.ScannedAt,
+		Fingerprint:     res.Fingerprint,
+		Sources:         res.Posture.BySource,
+		Log:             res.Log,
 	}
 	return p.Complete(ctx, row)
 }

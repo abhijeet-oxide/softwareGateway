@@ -320,6 +320,9 @@ func TestSyncThenReadStoredCounts(t *testing.T) {
 	if resp.Counts.Fixable != 1 || resp.Counts.NonFixable != 1 {
 		t.Errorf("fixability = %d fixable / %d not", resp.Counts.Fixable, resp.Counts.NonFixable)
 	}
+	if resp.UniqueCVECounts.Total != 2 || resp.UniqueCVECounts.BySeverity.Critical != 1 || resp.UniqueCVECounts.BySeverity.Low != 1 {
+		t.Errorf("unique CVE counts = %+v, want one critical and one low", resp.UniqueCVECounts)
+	}
 	if resp.Sync.SyncedAt == "" {
 		t.Error("no syncedAt, so nobody can tell how stale this is")
 	}
@@ -472,6 +475,10 @@ func TestCompareSecurityFromStoredData(t *testing.T) {
 	// rather than only reporting a verdict.
 	if resp.A.Sync.State != "synced" || resp.B.Sync.State != "synced" {
 		t.Errorf("ends = %q / %q, want both synced", resp.A.Sync.State, resp.B.Sync.State)
+	}
+	if resp.A.Counts.Total != 3 || resp.A.UniqueCVECounts.Total != 3 || resp.B.Counts.Total != 1 || resp.B.UniqueCVECounts.Total != 1 {
+		t.Errorf("comparison end counts = A %+v / %+v, B %+v / %+v",
+			resp.A.Counts, resp.A.UniqueCVECounts, resp.B.Counts, resp.B.UniqueCVECounts)
 	}
 }
 

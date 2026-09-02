@@ -429,7 +429,7 @@ export function VulnerabilityCell({
 
   return (
     <div style={{ display: 'flex', alignItems: 'center', gap: 6, width: '100%', minWidth: 0 }}>
-      <SeverityMeter counts={summary.distinctCounts} compact secondaryLabel="UNIQUE" />
+      <SeverityMeter counts={summary.uniqueCveCounts} compact secondaryLabel="UNIQUE" />
       {caveats.length > 0 && (
         <Tooltip title={caveats.join(' ')}>
           <span style={{ display: 'inline-flex', flex: '0 0 auto' }}>

@@ -177,16 +177,17 @@ func (f Fetcher) Fetch(
 		switch {
 		case i >= budgets.MaxCharts:
 			res.Skipped = append(res.Skipped, fmt.Sprintf(
-				"%d chart(s) beyond the limit of %d were not fetched", len(charts)-i, budgets.MaxCharts))
+				"Skipped %d charts: the limit of %d charts per run was reached",
+				len(charts)-i, budgets.MaxCharts))
 			i = len(charts) // stop
 		case ca.LayerSize > budgets.PerChart:
 			res.Skipped = append(res.Skipped, fmt.Sprintf(
-				"%s is %d bytes, over the per-chart limit of %d",
+				"Skipped %s: %d bytes exceeds the per-chart limit of %d",
 				displayOf(ca), ca.LayerSize, budgets.PerChart))
 			continue
 		case claimed+ca.LayerSize > budgets.PerRelease:
 			res.Skipped = append(res.Skipped, fmt.Sprintf(
-				"%d chart(s) not fetched: the release byte budget of %d was reached",
+				"Skipped %d charts: the per-release budget of %d bytes was reached",
 				len(charts)-i, budgets.PerRelease))
 		default:
 			claimed += ca.LayerSize
@@ -248,7 +249,7 @@ func (f Fetcher) Fetch(
 				}
 			})
 			if err != nil {
-				rep.Event(compliance.EventFail, "%s could not be fetched: %v", name, err)
+				rep.Event(compliance.EventFail, "Download failed for %s: %v", name, err)
 			}
 		}(i, planned[i])
 	}
@@ -259,7 +260,7 @@ func (f Fetcher) Fetch(
 	}
 	res.Charts = out
 	if err := ctx.Err(); err != nil {
-		res.Skipped = append(res.Skipped, fmt.Sprintf("the check was stopped: %v", err))
+		res.Skipped = append(res.Skipped, fmt.Sprintf("The check was stopped: %v", err))
 	}
 	return res, nil
 }

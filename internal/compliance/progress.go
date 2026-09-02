@@ -46,7 +46,7 @@ var Stages = []Stage{
 func (s Stage) Label() string {
 	switch s {
 	case StageResolving:
-		return "Finding charts"
+		return "Discovering charts"
 	case StageFetching:
 		return "Downloading charts"
 	case StageRendering:
@@ -66,12 +66,12 @@ func (s Stage) Label() string {
 func (s Stage) Detail() string {
 	switch s {
 	case StageResolving:
-		return "Reading the release's recorded contents to find which artifacts are Helm charts"
+		return "Reading the release's recorded contents to identify which artifacts are Helm charts"
 	case StageFetching:
 		return "Pulling each chart's layer from the vendor registry and unpacking it"
 	case StageRendering:
-		return "Running helm template on each chart, twice - once at its defaults and once " +
-			"perturbed, which is what tells a value the chart fixes from one a site can override"
+		return "Running helm template on each chart twice - once at its defaults and once " +
+			"perturbed - which distinguishes a value the chart fixes from one a site can override"
 	case StageEvaluating:
 		return "Compiling every check and evaluating it against every object the charts produced"
 	case StageRecording:
@@ -114,7 +114,13 @@ const maxEvents = 60
 // says it while there is still time to stop and fix the cause.
 type ProgressCounts struct {
 	// Charts, from the release's contents to a rendered manifest.
-	ChartsFound    int `json:"chartsFound"`
+	ChartsFound int `json:"chartsFound"`
+	// ChartsReused is charts served from the render cache: neither downloaded
+	// nor rendered, because identical bytes were rendered before under
+	// identical inputs. On screen because it is the difference between a check
+	// that takes four minutes and one that takes twelve seconds, and somebody
+	// watching either deserves to know which they are getting.
+	ChartsReused   int `json:"chartsReused"`
 	ChartsFetched  int `json:"chartsFetched"`
 	ChartsSkipped  int `json:"chartsSkipped"`
 	ChartsRendered int `json:"chartsRendered"`

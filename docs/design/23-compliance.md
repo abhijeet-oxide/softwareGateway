@@ -92,11 +92,11 @@ routes, one page.
 | **Engine** | `internal/compliance` | Applicability, evaluation, derived passes, verdict |
 | **Evaluators** | `internal/compliance/cel`, `internal/compliance/builtin` | Declarative YAML/CEL checks and Go checks, behind one interface |
 | **Runner** | `internal/compliance` | One run: claim, heartbeat, progress, cancel, record. Modelled on `security.Syncer` |
-| **Store** | `internal/store/compliance.go` | `compliance_runs`, `compliance_results`, `compliance_charts`, `package_compliance` |
+| **Store** | `internal/store/compliance.go, rendercache.go` | `compliance_runs`, `compliance_results`, `compliance_charts`, `package_compliance` |
 | **API** | `internal/api/compliance*.go` | Routes, wire types, export |
 | **UI** | `web/src/pages/Policies.tsx`, `web/src/components/compliancepanel.tsx, complianceevidence.tsx,
                 complianceprogress.tsx` | The catalogue, the results, the report |
-| **Retention** | `internal/maintenance/compliance.go` | Leader-gated sweep, budget-based like the security one |
+| **Retention** | `internal/maintenance/compliance.go, rendercache.go` | Leader-gated sweep, budget-based like the security one |
 
 ## 4. Acquiring what is checked
 
@@ -178,6 +178,30 @@ discipline the security feature applies to unscanned images
 >
 > *The cost, stated plainly:* if `helm` is absent, chart rendering does not
 > happen. §5.4 says exactly what the feature does then, and it is not "pass".
+
+> **Re-examined once the run was measured, and upheld.**
+>
+> The obvious argument for the SDK is process overhead: 95 charts is 190 `fork`
+> + `exec` + interpreter startups. That argument was worth re-testing and it
+> does not survive contact with the numbers. Subprocess spawn is single-digit
+> milliseconds; the cost of a render is template execution and YAML marshalling,
+> which the SDK pays identically. The two changes that actually moved this were
+> **rendering several charts at once** (§5.5) and **not rendering at all**
+> (§5.4a) - 10.7s → 4.7s → 1.3s on 95 charts. Neither needed the SDK, and
+> in-process rendering would have made the first one harder, not easier: a
+> template loop that does not terminate is `SIGKILL` on a subprocess and an
+> unkillable goroutine in-process, so the render timeout that bounds a hostile
+> chart would have had to be abandoned.
+>
+> The dependency argument has also grown rather than shrunk: `helm.sh/helm/v3`
+> still pulls `client-go` and its closure into a binary that deliberately has no
+> Kubernetes client, and the render cache means the remaining subprocesses are a
+> small and shrinking share of a run.
+>
+> *What would change this:* a requirement to render a chart whose values come
+> from a live cluster, or per-template attribution that the `# Source:` markers
+> cannot give. Neither is in scope, and §5.2 explains why the markers are
+> sufficient.
 
 Invocation, fixed for reproducibility:
 
@@ -267,6 +291,54 @@ and it is bounded rather than trusted:
 | Unpacked chart size and file count | 128 MiB / 20,000 files - a zip-bomb bound applied at unpack |
 | Path traversal in the archive | Rejected at unpack; a `../` entry fails the artifact and is itself reported |
 | Concurrent renders per run | Configurable, default 4 |
+
+### 5.4a The render cache - not rendering at all
+
+The output of `helm template` is a pure function of the chart's bytes and the
+pinned render inputs. Rendering the same bytes twice under the same inputs
+cannot produce a different answer, so it is not done twice.
+
+The key is `sha256(chart layer digest ‖ variant ‖ render-inputs digest)`, where
+the render inputs are helm's version, `kubeVersion`, `apiVersions`, the release
+name and the namespace - **exactly the fields a run already records as its
+provenance**, because [compliance/00](../compliance/00-compliance-model.md) §2
+rule 5 requires a finding to be re-derivable from them. That is not a
+coincidence: the set of things that make a run reproducible and the set that
+make its render reusable are the same set. A new render input belongs in
+`compliance.RenderInputs` and in the run's provenance in the same commit.
+
+Two consequences, and the second is the larger:
+
+- A re-check of an unchanged release renders nothing. 95 helm subprocesses
+  become 95 map lookups.
+- The key is the **layer digest**, which the release's own record carries before
+  anything is fetched - so a hit also means the chart is never pulled from the
+  vendor's registry and never unpacked. Most charts are unchanged between two
+  releases of a product, so the second check of an orb is mostly cache and the
+  vendor's registry sees almost no traffic for it.
+
+Keyed by digest and not by chart name and version, because a vendor who
+republishes 4.2.1 with a fixed template has shipped different bytes under the
+same version. A cache keyed by name and version would serve the old answer
+forever; one keyed by digest cannot.
+
+A cache entry carries the chart's `values.yaml` as well as its manifests. No
+shipped check reads `chart.values` today, and that is not a reason to build a
+cache that would break the first one that does: a hit must reproduce
+**everything** loading the chart produced, or it has changed an answer.
+
+Evictable, and this is the only thing in the schema that is besides the manifest
+bodies, for the same reason ([03](03-persistence.md)): it is derived data with a
+deterministic recipe, so an evicted entry costs one render and **can never be
+wrong**. Bounded by `renderCacheTTL` and `renderCacheBytes`, swept LRU by
+`maintenance.RenderCacheSweeper`. `renderCacheBytes` below zero disables it, for
+a deployment that will not hold rendered vendor manifests in its database.
+
+Measured on the development estate, 95 charts: **5.2s cold, 1.3s warm** - and
+the warm run makes no registry request at all, which is the part that dominates
+against a real vendor registry. `internal/compliance/source/rendercache_test.go`
+asserts the property the whole thing rests on: a hit produces byte-identical
+resources, addresses, line numbers, chart metadata and values to a miss.
 
 ### 5.5 Concurrency, and why it cannot change an answer
 
@@ -432,7 +504,8 @@ start ──► scan policyPaths ──► parse each pack.yaml
 ## 9. Persistence
 
 `db/migrations/{postgres,sqlite}/00035_compliance.sql
-db/migrations/{postgres,sqlite}/00039_compliance_evidence.sql`. Postgres shown; the
+db/migrations/{postgres,sqlite}/00039_compliance_evidence.sql
+db/migrations/{postgres,sqlite}/00040_compliance_render_cache.sql`. Postgres shown; the
 SQLite dialect follows the conventions in [03](03-persistence.md) §4.
 
 ```sql
@@ -577,6 +650,7 @@ Four tables with four different lifetimes, and the differences are deliberate.
 |---|---|---|---|
 | The listing summary - one row per release: verdict, counts, when | `package_compliance` | **Forever** | It is what the Software page reads. Losing it turns a checked release back into an unchecked one on screen, which is the one distinction this whole feature exists to preserve. |
 | The run, its coverage and its results | `compliance_runs`, `compliance_charts`, `compliance_results` | The **newest `coordinator.gc.complianceRuns`** of each release, default **10** | A count and not an age, and that is the point: a release checked once eight months ago must keep that run - it is the only answer anybody has about it - while a release checked nightly by a schedule must not keep six thousand. Ten covers a fortnight of scheduled checks and a comparison against what a re-check replaced. |
+| Cached chart renders | `compliance_render_cache` | Until the TTL or the byte budget evicts them | Derived data with a deterministic recipe, so an evicted entry costs one render and can never be wrong. Not scoped to a release or a run at all: the whole point is that two releases sharing a chart share its render. |
 | The rendered manifests | `compliance_rendered` | The **latest run only** | The one part of a run whose size the vendor sets. A completed run reclaims what it supersedes, and nothing displays an older run, so nothing reads an older run's manifests. Also bounded per document and per release while it is being written - see [compliance/00](../compliance/00-compliance-model.md) §2 rule 5. |
 | The working directory of unpacked charts | `/tmp` | The **duration of the run** | Removed by the run's own cleanup, on the success path and on every failure path. |
 
@@ -822,6 +896,20 @@ coordinator:
     fetchConcurrency: 0
     renderConcurrency: 0
 
+    # NOT RENDERING AT ALL. A chart's rendered output is a pure function of its
+    # bytes and the pinned render inputs, so the same chart is never rendered
+    # twice - and because the cache is keyed by the chart's LAYER DIGEST, a hit
+    # also means it is never downloaded. Section 5.4a.
+    #
+    # Evictable and safe to evict: a missing entry costs one render and can
+    # never be wrong. The TTL reclaims charts a vendor has stopped shipping,
+    # which no byte budget would ever reach; the budget reclaims the tail when a
+    # large estate keeps everything warm. Below zero on the budget disables the
+    # cache entirely.
+    renderCacheTTL: 720h             # 30 days
+    renderCacheBytes: 536870912      # 512 MiB
+    renderCacheSweep: 1h
+
     # THE MANIFESTS THE RUN JUDGED, kept so a finding can be SHOWN rather than
     # only asserted (compliance/00 section 2, rule 5). Two numbers for the
     # reason the fetch budgets above take two: one pathological chart and four
@@ -1033,6 +1121,7 @@ internal/compliance/
       shorthand.go    required/forbidden/equals/… compiled to the same CEL
       compile.go      per-check compile, load-time errors, per-run planning
     baseline/       the shipped pack, as embedded YAML, plus the fixture corpus
+    rendercache.go  the key, and why reusing a render cannot change an answer
     render/         helm.go, probe.go, source.go, evidence.go (the keep budget)
     source/         artifact acquisition, budget, unpack
 internal/store/compliance.go

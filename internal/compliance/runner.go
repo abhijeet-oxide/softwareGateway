@@ -142,7 +142,7 @@ func (r *Runner) Start(ctx context.Context, req Request) (Progress, error) {
 	// heartbeat is what makes a run whose process died recoverable.
 	runCtx, cancel := context.WithCancel(context.WithoutCancel(ctx))
 	track := newTracker(req.RunID, time.Now())
-	track.Event(EventInfo, "check started")
+	track.Event(EventInfo, "Compliance check started")
 	// The value returned to the caller is read HERE, before the goroutine
 	// exists, so the response the button gets is a real first frame rather
 	// than an empty struct the page has to poll past.
@@ -239,7 +239,7 @@ func (r *Runner) execute(ctx context.Context, req Request, track *tracker) {
 		c.Objects = len(rel.Resources)
 		c.Checks = cat.Len()
 	})
-	track.Event(EventInfo, "evaluating %d checks against %d objects from %d chart(s)",
+	track.Event(EventInfo, "Evaluating %d checks against %d objects from %d charts",
 		cat.Len(), len(rel.Resources), len(rel.Charts))
 
 	eng := &Engine{
@@ -259,7 +259,7 @@ func (r *Runner) execute(ctx context.Context, req Request, track *tracker) {
 		c.Results = len(run.Results)
 		c.Findings = run.Counts.Blocking + run.Counts.Warning
 	})
-	track.Event(EventOK, "%d results: %d blocking, %d warning, %d undecided, %d passed",
+	track.Event(EventOK, "Recorded %d results: %d blocking, %d warning, %d undecided, %d passed",
 		len(run.Results), run.Counts.Blocking, run.Counts.Warning,
 		run.Counts.Error, run.Counts.Pass)
 	// Recorded with a context that is not the run's: a cancelled or timed-out

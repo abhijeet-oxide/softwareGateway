@@ -262,6 +262,16 @@ func ReadValues(chartDir string) (map[string]any, error) {
 		}
 		return nil, fmt.Errorf("reading values.yaml: %w", err)
 	}
+	return ParseValues(b)
+}
+
+// ParseValues turns values.yaml text into the map a chart carries.
+//
+// Split out of ReadValues so the render cache can rebuild a chart's values from
+// the bytes it stored without a directory. The two must never diverge: a check
+// reading `chart.values` on a cache hit has to see exactly what it would have
+// seen on a miss, or the cache has changed an answer.
+func ParseValues(b []byte) (map[string]any, error) {
 	var v map[string]any
 	if err := yaml.Unmarshal(b, &v); err != nil {
 		return nil, fmt.Errorf("parsing values.yaml: %w", err)
@@ -270,6 +280,15 @@ func ReadValues(chartDir string) (map[string]any, error) {
 		v = map[string]any{}
 	}
 	return v, nil
+}
+
+// ReadValuesFile returns values.yaml as it was shipped, for the render cache.
+func ReadValuesFile(chartDir string) []byte {
+	b, err := os.ReadFile(filepath.Join(chartDir, "values.yaml")) //nolint:gosec // path derived from an unpacked artifact
+	if err != nil {
+		return nil
+	}
+	return b
 }
 
 // IsChart reports whether a directory is a Helm chart.

@@ -201,7 +201,14 @@ func buildCompliance(
 			PerRelease:  cfg.EvidencePerRelease,
 		},
 		RenderConcurrency: cfg.RenderConcurrency,
-		Packages:          packages,
+		// THE RENDER CACHE. Keyed by each chart's layer digest and the pinned
+		// render inputs, so a chart whose bytes have not changed is neither
+		// downloaded nor rendered again. Off when the byte budget is negative,
+		// which reaches the preparer as a nil store and therefore as no code
+		// path of its own.
+		RenderCache: renderCache(cfg, packages),
+		Log:         log,
+		Packages:    packages,
 		// The SAME classifier the artifact listing uses. A compliance run with
 		// its own opinion about what a chart is would disagree with the page
 		// somebody was looking at when they pressed the button.
@@ -298,4 +305,16 @@ func complianceClassifier(products *product.Registry, layouts *vendors.Registry)
 		}
 		return vendors.ClassifierFor(layouts, names)
 	}
+}
+
+// renderCache is the store a run reuses renders through, or nil.
+//
+// Nil is a working configuration - it means "render everything" - so a
+// deployment that will not hold rendered vendor manifests in its database turns
+// the cache off with one negative number rather than with a feature flag.
+func renderCache(cfg config.ComplianceConfig, packages *store.Packages) compliance.RenderStore {
+	if cfg.RenderCacheBytes < 0 || packages == nil {
+		return nil
+	}
+	return packages
 }

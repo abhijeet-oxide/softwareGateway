@@ -20,10 +20,10 @@ import type {
  *
  * # What answers it
  *
- * Things that CHANGE, and things that have HAPPENED. The elapsed clock ticks.
+ * Things that CHANGE, and a record of what the run has done. The elapsed clock ticks.
  * The names of the charts in flight rotate. The counts climb, and they are
  * counts of real objects - charts fetched, megabytes read, objects rendered.
- * The log fills in with what each chart did. Any one of those moving says the
+ * The run log fills in with what each chart produced. Any one of those moving says the
  * run is alive; all of them still says it is stuck, which is also worth
  * knowing and used to be unknowable.
  *
@@ -42,7 +42,7 @@ export function ComplianceRunPanel({ progress, onCancel, cancelling }: {
       title={
         <Space size={10}>
           <LoadingOutlined spin style={{ color: c.brand }} />
-          <span>Checking this release</span>
+          <span>Compliance check in progress</span>
           <Typography.Text type="secondary" style={{ fontSize: 12, fontWeight: 400 }}>
             {formatDuration(progress.elapsed) ?? '0s'} elapsed
           </Typography.Text>
@@ -74,8 +74,8 @@ function StopCheck({ onCancel, cancelling }: { onCancel?: () => void; cancelling
   return (
     <Tooltip
       title={
-        'Frees the release for another attempt straight away. Nothing is recorded: the run '
-        + 'ends as cancelled rather than as a verdict, because a partial check is not a result.'
+        'Releases the claim immediately, so the release can be checked again. No verdict '
+        + 'is recorded: the run ends as cancelled, because a partial check is not a result.'
       }
     >
       <Button size="small" danger loading={cancelling} onClick={onCancel}>
@@ -107,7 +107,7 @@ function StageBar({ progress }: { progress: ComplianceProgress }) {
           <Typography.Text style={{ fontFamily: mono, fontSize: 13 }}>
             {progress.total > 0
               ? `${formatCount(progress.done)} of ${formatCount(progress.total)}`
-              : 'starting'}
+              : 'Starting'}
           </Typography.Text>
           {/*
             OF THIS STAGE, said explicitly. An estimate that looks like it
@@ -117,7 +117,7 @@ function StageBar({ progress }: { progress: ComplianceProgress }) {
           */}
           {progress.estimate ? (
             <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-              about {formatDuration(progress.estimate)} left on this stage
+              Estimated {formatDuration(progress.estimate)} remaining in this stage
             </Typography.Text>
           ) : null}
         </Space>
@@ -142,13 +142,13 @@ function StageBar({ progress }: { progress: ComplianceProgress }) {
           {(progress.concurrency ?? 0) > 0 && (
             <Tooltip
               title={
-                'Charts handled at once. Downloading is bounded to be polite to the '
-                + "vendor's registry; rendering is bounded by this machine's cores, because "
-                + 'helm template is CPU-bound.'
+                'Charts processed concurrently. The download limit is set for the vendor '
+                + "registry's benefit; the render limit is set by this Coordinator's CPU "
+                + 'count, because helm template is CPU-bound.'
               }
             >
               <Tag style={{ margin: 0, fontSize: 11 }}>
-                {progress.concurrency} at a time
+                {progress.concurrency} charts in parallel
               </Tag>
             </Tooltip>
           )}
@@ -218,7 +218,7 @@ function StageRoute({ progress }: { progress: ComplianceProgress }) {
 
 function labelOf(stage: ComplianceStage): string {
   switch (stage) {
-    case 'resolving': return 'Find charts'
+    case 'resolving': return 'Discover'
     case 'fetching': return 'Download'
     case 'rendering': return 'Render'
     case 'evaluating': return 'Evaluate'
@@ -241,40 +241,47 @@ function RunCounts({ progress }: { progress: ComplianceProgress }) {
 
   if (k.chartsFound > 0) {
     tiles.push({
-      label: 'Charts found', value: formatCount(k.chartsFound) ?? '0',
+      label: 'Charts discovered', value: formatCount(k.chartsFound) ?? '0',
       hint: 'Artifacts in this release classified as Helm charts',
+    })
+  }
+  if (k.chartsReused > 0) {
+    tiles.push({
+      label: 'Charts reused', value: formatCount(k.chartsReused) ?? '0', tone: c.ok,
+      hint: 'Served from the render cache: identical chart bytes were rendered before '
+        + 'under identical inputs, so these were neither downloaded nor rendered again.',
     })
   }
   if (k.chartsFetched > 0 || progress.stage === 'fetching') {
     tiles.push({
-      label: 'Downloaded', value: formatCount(k.chartsFetched) ?? '0',
+      label: 'Charts downloaded', value: formatCount(k.chartsFetched) ?? '0',
       hint: k.bytes > 0 ? `${formatBytes(k.bytes)} read from the vendor registry` : undefined,
     })
   }
   if (k.chartsRendered > 0 || progress.stage === 'rendering') {
     tiles.push({
-      label: 'Rendered', value: formatCount(k.chartsRendered) ?? '0',
-      hint: 'Charts helm turned into Kubernetes objects',
+      label: 'Charts rendered', value: formatCount(k.chartsRendered) ?? '0',
+      hint: 'Charts helm converted into Kubernetes objects',
     })
   }
   if (k.objects > 0) {
     tiles.push({
-      label: 'Objects', value: formatCount(k.objects) ?? '0',
-      hint: k.checks > 0 ? `to be judged against ${k.checks} checks` : undefined,
+      label: 'Objects rendered', value: formatCount(k.objects) ?? '0',
+      hint: k.checks > 0 ? `Evaluated against ${k.checks} checks` : undefined,
     })
   }
   if (k.chartsSkipped > 0) {
     tiles.push({
-      label: 'Not fetched', value: formatCount(k.chartsSkipped) ?? '0', tone: c.pending,
-      hint: 'A budget, a truncation, or a registry that would not answer. Each one is '
-        + 'recorded on the run: a chart nobody checked is not a chart that passed.',
+      label: 'Downloads skipped', value: formatCount(k.chartsSkipped) ?? '0', tone: c.pending,
+      hint: 'Refused by a budget, or the registry did not respond. Each is recorded on '
+        + 'the run: an unchecked chart is not a chart that passed.',
     })
   }
   if (k.chartsFailed > 0) {
     tiles.push({
-      label: 'Would not render', value: formatCount(k.chartsFailed) ?? '0', tone: c.danger,
-      hint: 'Every check that needed one of these will report as undecided, and the run '
-        + 'will be inconclusive rather than a pass.',
+      label: 'Renders failed', value: formatCount(k.chartsFailed) ?? '0', tone: c.danger,
+      hint: 'Every check requiring one of these reports as undecided, and the run is '
+        + 'inconclusive rather than a pass.',
     })
   }
   if (tiles.length === 0) return null
@@ -307,11 +314,11 @@ function RunCounts({ progress }: { progress: ComplianceProgress }) {
 }
 
 /**
- * What has happened, newest first.
+ * The run log: what the run has done, newest first.
  *
  * # Why a log and not a spinner
  *
- * A spinner is a claim that something is happening; a log is the evidence. Each
+ * A spinner is a claim that something is happening; a log is the record. Each
  * line names a chart and what became of it, so the panel answers the two
  * questions a spinner cannot: what is this actually doing, and - when a chart
  * refuses to render nine minutes in - which one, and why, without waiting for
@@ -328,7 +335,7 @@ function EventLog({ events }: { events: ComplianceProgressEvent[] }) {
   return (
     <div>
       <Typography.Text type="secondary" style={{ fontSize: 11 }}>
-        What has happened
+        Run log
       </Typography.Text>
       <div
         style={{

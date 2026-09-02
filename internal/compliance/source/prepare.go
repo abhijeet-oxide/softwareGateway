@@ -4,11 +4,11 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"os"
 	"runtime"
 	"strings"
 	"sync"
-	"sync/atomic"
 
 	"github.com/abhijeet-oxide/softwareGateway/internal/compliance"
 	"github.com/abhijeet-oxide/softwareGateway/internal/compliance/render"
@@ -35,7 +35,14 @@ type Preparer struct {
 	// default from the machine; one renders them in sequence, which is what a
 	// Coordinator sharing a small node with everything else may want.
 	RenderConcurrency int
-	Packages          PackageLookup
+	// RenderCache reuses a chart's rendered output across runs and across
+	// releases. Nil renders everything, which is a working configuration and
+	// what every test uses.
+	RenderCache compliance.RenderStore
+	// Log records degradations that do not change a run's answer - a render
+	// cache that could not be read or written. Optional.
+	Log      *slog.Logger
+	Packages PackageLookup
 	// Classify names what an artifact is, and it is the SAME classifier the
 	// artifact listing, the transfer breakdown and the comparison use.
 	//
@@ -122,7 +129,7 @@ func (p *Preparer) Prepare(
 	rep.Stage(compliance.StageResolving, len(candidates), len(candidates), "")
 	artifacts, skipped := p.chartsAmong(req.Product, candidates)
 	rep.Count(func(c *compliance.ProgressCounts) { c.ChartsFound = len(artifacts) })
-	rep.Event(compliance.EventInfo, "%d of %d recorded artifacts are Helm charts",
+	rep.Event(compliance.EventInfo, "Classified %d of %d recorded artifacts as Helm charts",
 		len(artifacts), len(candidates))
 	for _, sk := range skipped {
 		rep.Event(compliance.EventWarn, "%s", sk)
@@ -131,8 +138,85 @@ func (p *Preparer) Prepare(
 		return nil, nil, noop, noChartsIn(len(candidates))
 	}
 
-	rep.Stage(compliance.StageFetching, 0, len(artifacts), "")
-	fetched, err := p.Fetcher.Fetch(ctx, req.Product, pkg, artifacts, rep)
+	// THE RENDERER'S IDENTITY, before anything is fetched.
+	//
+	// helm's version is part of the render cache's key, so it has to be known
+	// before the cache can be consulted - and the cache has to be consulted
+	// before the fetch, because a hit means the chart's bytes are never needed
+	// at all.
+	helm := p.Helm.WithDefaults()
+	version, helmErr := helm.Version(ctx)
+	available := helmErr == nil
+	if !available {
+		rep.Event(compliance.EventWarn,
+			"helm is unavailable: no chart can be rendered, and every check requiring a "+
+				"rendered chart will report as undecided")
+	}
+
+	cache := compliance.NewRenderCache(p.RenderCache, compliance.RenderInputs{
+		HelmVersion: version, KubeVersion: helm.KubeVersion,
+		APIVersions: helm.APIVersions,
+		ReleaseName: helm.ReleaseName, Namespace: helm.Namespace,
+	})
+
+	/*
+	 * WHAT ALREADY EXISTS, AND THEREFORE WHAT HAS TO BE FETCHED.
+	 *
+	 * The cache is keyed by each chart's LAYER DIGEST, which the release's own
+	 * record carries - so this question is answerable before a single byte is
+	 * pulled from the vendor's registry. A chart whose baseline and probe are
+	 * both held is skipped end to end: no request, no unpack, no subprocess.
+	 *
+	 * Both variants or neither. Rendering only the missing half would work and
+	 * would save one subprocess of the two; it is not worth the second code
+	 * path, because by the time either is missing the chart has been fetched
+	 * and the fetch was the expensive part.
+	 */
+	type slot struct {
+		candidate store.ChartCandidate
+		base      compliance.CachedRender
+		probe     compliance.CachedRender
+		reused    bool
+	}
+	slots := make([]slot, len(artifacts))
+	var (
+		needed  []store.ChartCandidate
+		needAt  []int
+		reusing int
+	)
+
+	found, lookupErr := cache.Lookup(ctx, digestsOf(artifacts))
+	if lookupErr != nil {
+		// A cache that cannot be read is a cache that is not used. Failing the
+		// run over it would turn a slow answer into no answer.
+		p.warn(rep, "The render cache could not be read: %v", lookupErr)
+		found = nil
+	}
+	for i, ca := range artifacts {
+		slots[i].candidate = ca
+		if available {
+			base, okBase := cache.Get(found, ca.LayerDigest, compliance.VariantBase)
+			probe, okProbe := cache.Get(found, ca.LayerDigest, compliance.VariantProbe)
+			if okBase && (!p.Probe || okProbe) {
+				slots[i].base, slots[i].probe, slots[i].reused = base, probe, true
+				reusing++
+				continue
+			}
+		}
+		needed = append(needed, ca)
+		needAt = append(needAt, i)
+	}
+	cache.Hit(reusing)
+	cache.Miss(len(needed))
+	rep.Count(func(c *compliance.ProgressCounts) { c.ChartsReused = reusing })
+	if reusing > 0 {
+		rep.Event(compliance.EventOK,
+			"Reused %d of %d chart renders from the render cache; %d charts require download",
+			reusing, len(artifacts), len(needed))
+	}
+
+	rep.Stage(compliance.StageFetching, 0, len(needed), "")
+	fetched, err := p.Fetcher.Fetch(ctx, req.Product, pkg, needed, rep)
 	if err != nil {
 		return nil, nil, noop, err
 	}
@@ -141,16 +225,7 @@ func (p *Preparer) Prepare(
 			_ = os.RemoveAll(fetched.Root)
 		}
 	}
-	rep.Stage(compliance.StageFetching, len(fetched.Charts), len(artifacts), "")
-
-	helm := p.Helm.WithDefaults()
-	version, helmErr := helm.Version(ctx)
-	available := helmErr == nil
-	if !available {
-		rep.Event(compliance.EventWarn,
-			"helm is not available, so no chart can be rendered and every rendered check "+
-				"will report as undecided")
-	}
+	rep.Stage(compliance.StageFetching, len(fetched.Charts), len(needed), "")
 
 	rel := &compliance.Release{
 		Product:       req.Product,
@@ -199,40 +274,32 @@ func (p *Preparer) Prepare(
 	 * the order of the coverage table - all of it has to be the same on the
 	 * second run of the same bytes, or none of it is reproducible.
 	 */
-	type rendered struct {
-		charts []*compliance.Chart
-		res    []compliance.Resource
-		docs   []compliance.RenderedDoc
-		alt    []compliance.Resource
-		probed bool
-		failed string
-	}
-	out := make([]rendered, len(fetched.Charts))
+	out := make([]rendered, len(artifacts))
+	produced := make([][]compliance.CachedRender, len(artifacts))
 
 	var (
-		wg   sync.WaitGroup
-		sem  = make(chan struct{}, workers)
-		done atomic.Int64
+		wg  sync.WaitGroup
+		sem = make(chan struct{}, workers)
 	)
-	for i := range fetched.Charts {
+	for n := range fetched.Charts {
 		if err := ctx.Err(); err != nil {
 			break
 		}
 		wg.Add(1)
-		go func(i int, c Chart) {
+		go func(n int, c Chart) {
 			defer wg.Done()
 			sem <- struct{}{}
 			defer func() { <-sem }()
 			if ctx.Err() != nil {
 				return
 			}
+			i := needAt[n]
 
 			name := shortChartName(c)
 			rep.Begin(name)
 			defer func() {
 				rep.End(name)
 				rep.Advance(1)
-				_ = done.Add(1)
 			}()
 
 			base := compliance.Address{
@@ -251,7 +318,7 @@ func (p *Preparer) Prepare(
 					RenderStatus: compliance.RenderFailed, RenderError: c.Err.Error(),
 				}}
 				out[i].failed = c.Err.Error()
-				rep.Event(compliance.EventFail, "%s could not be fetched: %v", name, c.Err)
+				rep.Event(compliance.EventFail, "Download failed for %s: %v", name, c.Err)
 				rep.Count(func(k *compliance.ProgressCounts) { k.ChartsFailed++ })
 				return
 			}
@@ -263,7 +330,7 @@ func (p *Preparer) Prepare(
 					RenderStatus: compliance.RenderFailed, RenderError: err.Error(),
 				}}
 				out[i].failed = err.Error()
-				rep.Event(compliance.EventFail, "%s did not render: %v", name, firstLine(err.Error()))
+				rep.Event(compliance.EventFail, "Render failed for %s: %v", name, firstLine(err.Error()))
 				rep.Count(func(k *compliance.ProgressCounts) { k.ChartsFailed++ })
 				return
 			}
@@ -283,29 +350,78 @@ func (p *Preparer) Prepare(
 			}
 			if bad > 0 {
 				rep.Count(func(k *compliance.ProgressCounts) { k.ChartsFailed += bad })
-				rep.Event(compliance.EventFail, "%s did not render", name)
+				rep.Event(compliance.EventFail, "Render failed for %s", name)
 			} else {
 				rep.Count(func(k *compliance.ProgressCounts) { k.ChartsRendered++ })
-				rep.Event(compliance.EventOK, "%s rendered %d object(s)", name, len(chartRel.Resources))
+				rep.Event(compliance.EventOK, "Rendered %s: %d objects", name, len(chartRel.Resources))
+			}
+
+			// What this render produced, for the next run. Recorded only when
+			// the chart rendered cleanly and against the LAYER digest, which is
+			// what content-addresses the bytes that produced it.
+			values := render.ReadValuesFile(c.Dir)
+			if bad == 0 && len(chartRel.Rendered) == 1 {
+				meta := chartRel.Charts[0]
+				produced[i] = append(produced[i], compliance.CachedRender{
+					ChartDigest: slots[i].candidate.LayerDigest, Variant: compliance.VariantBase,
+					ChartName: meta.Name, ChartVersion: meta.Version, AppVersion: meta.AppVersion,
+					SubchartPath: meta.SubchartPath, ValuesYAML: values,
+					Manifests: chartRel.Rendered[0].Content,
+				})
 			}
 
 			if p.Probe && available {
-				values, verr := render.ReadValues(c.Dir)
+				vals, verr := render.ReadValues(c.Dir)
 				if verr != nil {
 					return
 				}
-				manifests, ok := render.ProbeRender(ctx, helm, c.Dir, values)
+				manifests, ok := render.ProbeRender(ctx, helm, c.Dir, vals)
 				if !ok {
 					return
 				}
 				out[i].alt, _ = compliance.ParseManifests(manifests, base)
 				out[i].probed = true
+				if bad == 0 {
+					produced[i] = append(produced[i], compliance.CachedRender{
+						ChartDigest: slots[i].candidate.LayerDigest, Variant: compliance.VariantProbe,
+						ValuesYAML: values, Manifests: manifests,
+					})
+				}
 			}
-		}(i, fetched.Charts[i])
+		}(n, fetched.Charts[n])
 	}
 	wg.Wait()
 	if err := ctx.Err(); err != nil {
 		return nil, nil, cleanup, err
+	}
+
+	// The reused charts, parsed out of the cache in the release's order. Parsing
+	// is the same code path a fresh render takes, so a hit and a miss produce
+	// identical resources from identical bytes - which is the property the whole
+	// cache rests on.
+	for i := range slots {
+		if !slots[i].reused {
+			continue
+		}
+		ca := slots[i].candidate
+		addr := compliance.Address{
+			Product: req.Product, Release: req.Release, PackageDigest: req.Digest,
+			ArtifactDigest: ca.Digest, ArtifactRef: ca.Ref,
+		}
+		out[i] = p.fromCache(addr, ca, slots[i].base, slots[i].probe)
+	}
+
+	// Save what this run produced, before the merge so a cancelled merge does
+	// not lose renders that are already correct. A failure here is logged and
+	// never returned: the renders are in hand and the run is about to judge
+	// them, so failing over the CACHE would turn a slow next run into no
+	// result at all.
+	var toSave []compliance.CachedRender
+	for i := range produced {
+		toSave = append(toSave, produced[i]...)
+	}
+	if err := cache.Save(context.WithoutCancel(ctx), toSave); err != nil {
+		p.warn(rep, "The render cache could not be written: %v", err)
 	}
 
 	// THE MERGE, in chart order. See the comment above for why this is not done
@@ -468,4 +584,86 @@ func firstLine(s string) string {
 		return strings.TrimSpace(s[:i])
 	}
 	return strings.TrimSpace(s)
+}
+
+// rendered is one chart's contribution, however it was produced - by a helm
+// subprocess in this run, or out of the render cache. The two paths converge
+// here on purpose: everything downstream reads this struct and cannot tell
+// which produced it, which is what makes the cache safe to reason about.
+type rendered struct {
+	charts []*compliance.Chart
+	res    []compliance.Resource
+	docs   []compliance.RenderedDoc
+	alt    []compliance.Resource
+	probed bool
+	failed string
+}
+
+// fromCache rebuilds a chart's contribution from stored renders.
+//
+// The manifests go through ParseManifests, exactly as a fresh render's do, so
+// the resources and their line numbers are identical to what the miss path
+// would have produced from the same bytes. Nothing here re-derives; it only
+// re-reads.
+func (p *Preparer) fromCache(
+	addr compliance.Address, ca store.ChartCandidate, base, probe compliance.CachedRender,
+) rendered {
+	chart := &compliance.Chart{
+		Name:         base.ChartName,
+		Version:      base.ChartVersion,
+		AppVersion:   base.AppVersion,
+		SubchartPath: base.SubchartPath,
+		Digest:       ca.Digest,
+		Ref:          ca.Ref,
+		RenderStatus: compliance.RenderOK,
+	}
+	if chart.Name == "" {
+		chart.Name = chartNameFor(Chart{Digest: ca.Digest, Ref: ca.Ref})
+	}
+	if vals, err := render.ParseValues(base.ValuesYAML); err == nil {
+		chart.Values = vals
+	}
+
+	full := addr
+	full.Chart = chart.Name
+	full.ChartVersion = chart.Version
+	full.SubchartPath = chart.SubchartPath
+
+	out := rendered{charts: []*compliance.Chart{chart}}
+	out.res, _ = compliance.ParseManifests(base.Manifests, full)
+	for i := range out.res {
+		out.res[i].Chart = chart
+	}
+	out.docs = []compliance.RenderedDoc{{
+		Chart: chart.Name, ChartVersion: chart.Version, Content: base.Manifests,
+	}}
+	if len(probe.Manifests) > 0 {
+		out.alt, _ = compliance.ParseManifests(probe.Manifests, full)
+		out.probed = true
+	}
+	return out
+}
+
+// digestsOf is the cache's lookup list: one layer digest per chart artifact.
+func digestsOf(candidates []store.ChartCandidate) []string {
+	out := make([]string, 0, len(candidates))
+	for _, c := range candidates {
+		if c.LayerDigest != "" {
+			out = append(out, c.LayerDigest)
+		}
+	}
+	return out
+}
+
+// warn records a degradation that does not change the run's answer.
+//
+// Both current callers are the render cache, which is derived data: a cache
+// that cannot be read means renders happen, and one that cannot be written
+// means the next run is slower. Neither is a reason to fail a check somebody is
+// waiting for, and both are reasons to say something.
+func (p *Preparer) warn(rep compliance.Reporter, format string, args ...any) {
+	rep.Event(compliance.EventWarn, format, args...)
+	if p.Log != nil {
+		p.Log.Warn(fmt.Sprintf(format, args...))
+	}
 }

@@ -2125,6 +2125,11 @@ export interface ComplianceStageTiming {
  */
 export interface ComplianceProgressCounts {
   chartsFound: number
+  /**
+   * Charts served from the render cache: neither downloaded nor rendered,
+   * because identical bytes were rendered before under identical inputs.
+   */
+  chartsReused: number
   chartsFetched: number
   chartsSkipped: number
   chartsRendered: number

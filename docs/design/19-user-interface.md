@@ -179,9 +179,43 @@ shape, and each kept what it did better:
 | Security | A stored log with a button that reopens it after the job ends | Both - compliance kept its transcript on the run (see [23](23-compliance.md) §9.1) |
 | Security | A travelling stripe until the first item lands, rather than a determinate bar at zero | Security; compliance has a real denominator from its first stage |
 | Compliance | An estimate derived from the job's own rate, withheld until there is a rate | Both |
+| Compliance | While the job runs, the job is the WHOLE tab | Both - Security drew its progress panel above the previous sync's summary band and findings tables, every number of which was real and none of which was the answer being fetched |
 
 This is the same rule as §3.1 one level up: a reader who has learned a shape on
 one tab should not have to learn it again on the next one.
+
+### 3.4 One layout for a release's two verdicts
+
+Security and Compliance answer the same shape of question about the same
+release, one tab apart, and they were drawn as different products. They now
+share the layout, top to bottom:
+
+| Band | What it holds |
+|---|---|
+| A header row, outside any card | What produced the answer, as muted text on the left. The controls that change it as buttons on the right - `Sync log` / `Sync again`, `Rulebook` / `Run log` / `Re-check`. |
+| One card, three hairline-separated zones | How bad it is (a headline number and the shape of it), what it is made of (a meter per severity), and whether the answer can be trusted (coverage meters, and the exceptions named individually). |
+| One card: a Segmented view switch and the export beside it, a row of filters under it, then the table | |
+
+The third zone is where the two differ and where the difference matters:
+Security's confidence is *how many images were scanned*, compliance's is *how
+many charts rendered, and how many checks that left undecided.* Same question,
+different denominator.
+
+**The findings table groups by default, in both.** Security groups occurrences
+onto the CVE; compliance groups them onto the CHECK. It is the same fact about
+both datasets: a release repeats one problem across everything it ships. 171
+critical compliance findings on a real orb are **five rules** - "containers do
+not run as root", "every image is pinned by digest" - each broken in twenty to
+forty-four places, and the flat list spread that over 171 rows in which SEC-01
+appeared forty-four times with a different chart name. It read as 171 problems
+and it is five pieces of work. A row expands into a table of every occurrence,
+and the identifier opens a panel with the rule and all of them.
+
+Because compliance's grouping is done in the browser, over the page the server
+returned, a group's "broken in 44 places" is only true if all 44 arrived. The
+query asks for enough rows that the slices a reader works in - Critical,
+Warning, Info, Unchecked - arrive whole; Passed and All are still a page, and
+the view says it grouped from one rather than quoting a count assembled from it.
 
 ## 4. What it must never do
 

@@ -2,12 +2,15 @@ import { useEffect, useMemo, useState } from 'react'
 import { Link } from 'react-router-dom'
 import {
   App, Button, Card, Descriptions, Drawer, Empty, Input, Segmented, Select, Skeleton,
-  Space, Tabs, Tag, Tooltip, Typography,
+  Space, Table, Tag, Tooltip, Typography,
 } from 'antd'
+import type { ReactNode } from 'react'
 // The working-surface table: resizable, reorderable, pinnable columns whose
 // layout each person keeps. See `tablekit/README.md` for which tables get it.
 import { Table as DataTable } from '../tablekit'
-import { HelmOutlined, LoadingOutlined, SearchOutlined } from '../icons'
+import {
+  BookOutlined, HelmOutlined, LoadingOutlined, SearchOutlined, SyncOutlined,
+} from '../icons'
 import {
   useCancelCompliance, useInspectPackage, usePackageCompliance,
   useRenderedManifests, useRunCompliance,
@@ -16,7 +19,7 @@ import { EmptyStateCard } from './layout'
 import {
   CheckSeverityTag, ComplianceSummary, DeterminacyTag,
   HelmMissingNotice, OutcomePill, ResultAddress, RunFailedNotice,
-  RunProvenance, TruncatedNotice, VerdictPill,
+  TruncatedNotice,
 } from './compliance'
 import type { SummaryKey } from './compliance'
 import { ComplianceRunLogButton, ComplianceRunPanel } from './complianceprogress'
@@ -24,9 +27,11 @@ import {
   DownloadManifestsButton, EvidencePanel, ManifestDrawer, ManifestLinks,
   NoEvidenceNotice,
 } from './complianceevidence'
-import { formatCount } from '../domain/format'
+import { formatCount, formatRelative } from '../domain/format'
 import { c, mono } from '../uikit'
-import type { ComplianceChart, ComplianceCounts, ComplianceResult } from '../api/types'
+import type {
+  ComplianceChart, ComplianceCounts, ComplianceResult, ComplianceRun,
+} from '../api/types'
 
 /**
  * The Compliance tab of a release: does this follow our own Kubernetes and CNF
@@ -185,7 +190,14 @@ export function ComplianceTab({ product, reference, repository }: {
   const [draft, setDraft] = useState('')
   const [search, setSearch] = useState('')
   const [detail, setDetail] = useState<ComplianceResult | null>(null)
+  const [group, setGroup] = useState<CheckGroup | null>(null)
   const [manifest, setManifest] = useState<string | null>(null)
+  /*
+   * ONE ROW PER CHECK, or one per occurrence. Unique by default: 171 critical
+   * findings on a real orb are eight rules, each broken in twenty places, and a
+   * flat list of them reads as 171 problems.
+   */
+  const [grouping, setGrouping] = useState<'unique' | 'all'>('unique')
 
   // Debounced, so the server sees one query per pause rather than one per key.
   useEffect(() => {
@@ -203,6 +215,16 @@ export function ComplianceTab({ product, reference, repository }: {
     determinacy: determinacy ? [determinacy] : undefined,
     kind: kind ? [kind] : undefined,
     search: search.trim() || undefined,
+    /*
+     * ENOUGH ROWS TO GROUP, which the default page is not.
+     *
+     * The grouping is done in the browser, so a group saying "fires in 43
+     * places" is only true if all 43 arrived. 2,000 covers Critical, Warning,
+     * Info and Unchecked whole on the release this is built against; Passed and
+     * All are still a page, and the view says so rather than quoting a count
+     * assembled from one.
+     */
+    limit: 2000,
   })
   const run = useRunCompliance()
   const cancel = useCancelCompliance()
@@ -211,6 +233,19 @@ export function ComplianceTab({ product, reference, repository }: {
   // the wrong way to ask.
   const inspect = useInspectPackage(product, reference, repository)
   const data = compliance.data
+
+  /*
+   * What the run KEPT, which is not the same list as what it rendered: a
+   * deployment can turn evidence off, and a large release can exhaust the
+   * budget partway through. Read once here rather than inside the coverage
+   * table, because the download it feeds is offered beside the view switch -
+   * where the Security tab puts its export - and not only on the Charts tab.
+   */
+  const manifests = useRenderedManifests(product, reference, { repository })
+  const manifestNames = useMemo(
+    () => new Set((manifests.data?.documents ?? []).map((d) => d.document)),
+    [manifests.data],
+  )
 
   const start = () => {
     run.mutate({ product, ref: reference, repository }, {
@@ -351,6 +386,12 @@ export function ComplianceTab({ product, reference, repository }: {
   const charts = data?.charts ?? []
   const results = data?.results ?? []
   const running = Boolean(data?.progress)
+  // A run that rendered charts and kept none of them. Said once, at the top of
+  // the coverage table: "no evidence" and "no findings" are different
+  // statements, and a reader who expects the manifest deserves to have been
+  // told before they go looking for it.
+  const noneKept = manifests.isSuccess && manifestNames.size === 0
+    && charts.some((ch) => ch.status === 'ok')
 
   /*
    * WHILE A RUN IS GOING, THE RUN IS THE WHOLE PAGE.
@@ -382,103 +423,136 @@ export function ComplianceTab({ product, reference, repository }: {
     )
   }
 
+  const grouped = groupByCheck(results)
+  /*
+   * Whether the page the server returned is the whole slice.
+   *
+   * The grouping is done in the browser over the rows that arrived, so a group
+   * saying "fires in 43 places" is only true if all 43 arrived. The slices a
+   * reader spends their time in - Critical, Warning, Info - are complete at the
+   * limit this query asks for; Passed and All are not, and say so rather than
+   * quoting a count assembled from a page.
+   */
+  const partial = (data?.total ?? 0) > results.length
+
   return (
     <Space direction="vertical" size={16} style={{ width: '100%' }}>
-      {data && <HelmMissingNotice helm={data.helm} />}
-      {data?.run && <RunFailedNotice run={data.run} />}
-      {data?.run && <TruncatedNotice run={data.run} />}
+      {/*
+        THE PROVENANCE ROW, above the cards and outside them.
 
-      {/* The verdict and the numbers. */}
+        This is the Security tab's header, in the same place with the same
+        shape: what produced the answer on the left as muted text, the controls
+        that change it on the right as buttons. It used to be the verdict pill
+        in a card title with the controls in that card's `extra`, which made the
+        first thing on the tab a box rather than a fact, and put the buttons in
+        a different place from the ones a reader had just used one tab over.
+      */}
+      <div
+        style={{
+          width: '100%', display: 'flex', flexWrap: 'wrap',
+          alignItems: 'center', gap: 12,
+        }}
+      >
+        {data?.run && <CheckedAgo run={data.run} />}
+        <Space size={8} style={{ marginInlineStart: 'auto', marginTop: 8 }}>
+          <Link to="/policies">
+            <Button icon={<BookOutlined />}>Rulebook</Button>
+          </Link>
+          {data?.run && <ComplianceRunLogButton run={data.run} size="middle" />}
+          <Tooltip
+            title={
+              'Renders every chart in this release with the pinned Kubernetes version and '
+              + 'evaluates the rulebook against the objects. Identical chart bytes rendered '
+              + 'before under identical inputs are reused.'
+            }
+          >
+            <Button
+              icon={<SyncOutlined spin={run.isPending} />}
+              loading={run.isPending}
+              disabled={running}
+              onClick={start}
+            >
+              Re-check
+            </Button>
+          </Tooltip>
+        </Space>
+      </div>
+
+      {data && <HelmMissingNotice helm={data.helm} />}
+      {data?.run && <RunFailedNotice run={data.run} />}      {data?.run && <TruncatedNotice run={data.run} />}
+
+      {/* The posture band: how bad, what of, and whether it can be trusted. */}
       {data?.run && (
-        <Card
-          title={
-            <VerdictPill verdict={data.run.verdict} label={data.run.verdictLabel} />
-          }
-          extra={
-            <Space size={8} wrap>
-              {/*
-                The rulebook, one click from a finding. Somebody arguing about
-                a result wants to read the rule, and making them find a page
-                they have never visited is how a disagreement becomes a
-                complaint about the tool.
-              */}
-              <Link to="/policies" style={{ fontSize: 12, color: c.brand }}>
-                View the rulebook
-              </Link>
-              {/*
-                The transcript, after the run. It was on screen for the whole
-                check and then vanished with it - and "which charts refused,
-                and what did the nine minutes go on" is asked afterwards. The
-                vulnerability sync has had this button since it shipped.
-              */}
-              <ComplianceRunLogButton run={data.run} />
-              <Button size="small" loading={run.isPending} disabled={running} onClick={start}>
-                Re-check
-              </Button>
-            </Space>
-          }
-        >
-          <Space direction="vertical" size={12} style={{ width: '100%' }}>
-            <ComplianceSummary
-              counts={data.run.counts}
-              selected={tab === 'findings' ? SUMMARY_FOR_VIEW[view] : undefined}
-              onSelect={(what) => {
-                setTab('findings')
-                setView(VIEW_FOR_SUMMARY[what])
-              }}
-            />
-            <RunProvenance run={data.run} />
-          </Space>
-        </Card>
+        <ComplianceSummary
+          counts={data.run.counts}
+          charts={charts}
+          verdict={data.run.verdict}
+          verdictLabel={data.run.verdictLabel}
+          selected={tab === 'findings' ? SUMMARY_FOR_VIEW[view] : undefined}
+          onSelect={(what) => {
+            setTab('findings')
+            setView(VIEW_FOR_SUMMARY[what])
+          }}
+        />
       )}
 
       {/*
         FINDINGS FIRST, CHARTS BEHIND THEM.
+
         Two cards side by side asked the reader to decide which mattered on
         every visit. Findings are why anybody opens this tab; coverage is what
         they check when a number looks wrong - so coverage is one click away
         and never in front.
+
+        The switch is a Segmented in the card BODY rather than antd Tabs in the
+        card title, because that is what the Security tab's findings card uses
+        and these two cards sit one tab apart. Same control, same place, same
+        second row of filters under it.
       */}
-      <Card
-        size="small"
-        styles={{ body: { paddingTop: 16 } }}
-        title={
-          <Tabs
-            size="small"
-            activeKey={tab}
-            onChange={(k) => setTab(k as 'findings' | 'charts')}
-            style={{ marginBottom: -16 }}
-            items={[
+      <Card size="small" styles={{ body: { paddingTop: 12 } }}>
+        <div
+          style={{
+            display: 'flex', gap: 8, alignItems: 'center',
+            justifyContent: 'space-between', marginBottom: 12, flexWrap: 'wrap',
+          }}
+        >
+          <Segmented
+            value={tab}
+            onChange={(v) => setTab(v as 'findings' | 'charts')}
+            options={[
               {
-                key: 'findings',
-                label: (
-                  <Space size={6}>
-                    <span>Findings</span>
-                    <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-                      {formatCount(data?.run?.counts.blocking ?? 0)}
-                    </Typography.Text>
-                  </Space>
-                ),
+                value: 'findings',
+                /*
+                  EVERY finding, matching the number the band's first zone
+                  leads with. The release tab at the top of the page counts
+                  only the critical ones deliberately - that is the number a
+                  release decision turns on - but inside this card the severity
+                  switch is directly below, so a switch that also counted only
+                  the criticals would disagree with the control under it.
+                */
+                label: `Findings (${formatCount(
+                  (data?.run?.counts.blocking ?? 0)
+                  + (data?.run?.counts.warning ?? 0)
+                  + (data?.run?.counts.info ?? 0),
+                )})`,
               },
               {
-                key: 'charts',
-                label: (
-                  <Space size={6}>
-                    <HelmOutlined style={{ color: c.text3 }} />
-                    <span>Charts</span>
-                    <Typography.Text
-                      type={brokenCharts(charts) > 0 ? 'warning' : 'secondary'}
-                      style={{ fontSize: 12 }}
-                    >
-                      {charts.length - brokenCharts(charts)}/{charts.length}
-                    </Typography.Text>
-                  </Space>
-                ),
+                value: 'charts',
+                label: brokenCharts(charts) > 0
+                  ? `Charts (${charts.length - brokenCharts(charts)}/${charts.length})`
+                  : `Charts (${charts.length})`,
               },
             ]}
           />
-        }
-      >
+          <DownloadManifestsButton
+            product={product}
+            reference={reference}
+            repository={repository}
+            documents={manifests.data?.documents.length ?? 0}
+            bytes={manifests.data?.totalBytes ?? 0}
+          />
+        </div>
+
         {tab === 'charts' ? (
           <ChartCoverage
             charts={charts}
@@ -486,29 +560,65 @@ export function ComplianceTab({ product, reference, repository }: {
             reference={reference}
             repository={repository}
             loading={compliance.isFetching}
+            available={manifestNames}
+            noneKept={noneKept}
             onOpenManifest={setManifest}
           />
         ) : (
-          <Space direction="vertical" size={12} style={{ width: '100%' }}>
+          <>
             {/*
-              The controls, on the LEFT and in the order the page's other
-              listings use them: the search box first, then the narrowing
-              selects, then the sort. Packages does this and a reader who has
-              learned it there should not have to learn it again here.
+              The filters, in the order somebody narrows in and in the shape
+              the Security tab uses: search first, then what am I looking at
+              (one row per check, or every occurrence), then how bad, then the
+              narrowing selects.
             */}
-            <Space size={10} wrap style={{ width: '100%' }}>
+            <div
+              style={{
+                display: 'flex', flexWrap: 'wrap', gap: 8,
+                alignItems: 'center', marginBottom: 12,
+              }}
+            >
               <Input
                 allowClear
-                style={{ width: 280 }}
+                style={{ width: 260 }}
                 prefix={<SearchOutlined style={{ color: c.text3 }} />}
-                placeholder="Search resource, chart, file or check"
+                placeholder="Check, resource, chart or file"
                 value={draft}
                 onChange={(e) => setDraft(e.target.value)}
               />
+
+              {/*
+                UNIQUE CHECKS OR EVERY OCCURRENCE, and unique is the default.
+
+                171 critical findings on a real orb are eight rules, each broken
+                in twenty places. The flat list is that fact spread over 171
+                rows in which SEC-01 appears twenty-two times with a different
+                chart name - which reads as 171 problems and is eight. This is
+                the Security tab's Unique CVEs / All findings control, applied
+                to the thing compliance repeats.
+              */}
+              <Segmented
+                value={grouping}
+                onChange={(v) => setGrouping(v as 'unique' | 'all')}
+                options={[
+                  { value: 'unique', label: `Unique checks (${formatCount(grouped.length)})` },
+                  { value: 'all', label: `All findings (${formatCount(data?.total ?? 0)})` },
+                ]}
+              />
+
+              <Segmented
+                value={view}
+                onChange={(v) => setView(v as ResultView)}
+                options={VIEW_ORDER.map((k) => ({
+                  value: k,
+                  label: `${VIEWS[k].label} (${formatCount(VIEWS[k].count(data?.run?.counts))})`,
+                }))}
+              />
+
               <Select
                 allowClear
                 placeholder="Any chart"
-                style={{ minWidth: 180 }}
+                style={{ minWidth: 170 }}
                 value={chart}
                 onChange={setChart}
                 showSearch
@@ -520,7 +630,7 @@ export function ComplianceTab({ product, reference, repository }: {
               <Select
                 allowClear
                 placeholder="Any kind"
-                style={{ minWidth: 160 }}
+                style={{ minWidth: 150 }}
                 value={kind}
                 onChange={setKind}
                 showSearch
@@ -531,7 +641,7 @@ export function ComplianceTab({ product, reference, repository }: {
               <Select
                 allowClear
                 placeholder="Anyone to fix"
-                style={{ minWidth: 210 }}
+                style={{ minWidth: 200 }}
                 value={determinacy}
                 onChange={setDeterminacy}
                 options={[
@@ -540,57 +650,65 @@ export function ComplianceTab({ product, reference, repository }: {
                   { label: 'Ownership not established', value: 'unknown' },
                 ]}
               />
-              <Select
-                value={sort}
-                onChange={setSort}
-                style={{ minWidth: 190 }}
-                options={[
-                  { label: 'Sort by severity', value: 'severity' },
-                  { label: 'Sort by chart', value: 'chart' },
-                  { label: 'Sort by check', value: 'check' },
-                  { label: 'Sort by resource', value: 'resource' },
-                ]}
-              />
-              <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-                {formatCount(data?.total ?? 0)} {slice.noun}
-                {(data?.total ?? 0) > results.length && (
-                  <> · showing {formatCount(results.length)}</>
-                )}
-              </Typography.Text>
-            </Space>
+              {grouping === 'all' && (
+                <Select
+                  value={sort}
+                  onChange={setSort}
+                  style={{ minWidth: 170 }}
+                  options={[
+                    { label: 'Sort by severity', value: 'severity' },
+                    { label: 'Sort by chart', value: 'chart' },
+                    { label: 'Sort by check', value: 'check' },
+                    { label: 'Sort by resource', value: 'resource' },
+                  ]}
+                />
+              )}
+            </div>
 
             {/*
-              THE OUTCOME SLICE. Critical first because it is what a release
-              decision turns on, and Passed is present because the passes are
-              the denominator - "40 workloads, all compliant" and "the traversal
-              never reached them" are the same empty list otherwise.
-            */}
-            <Segmented
-              size="small"
-              value={view}
-              onChange={(v) => setView(v as ResultView)}
-              options={VIEW_ORDER.map((k) => ({
-                label: (
-                  <Space size={6}>
-                    <span>{VIEWS[k].label}</span>
-                    <Typography.Text type="secondary" style={{ fontSize: 11 }}>
-                      {formatCount(VIEWS[k].count(data?.run?.counts))}
-                    </Typography.Text>
-                  </Space>
-                ),
-                value: k,
-              }))}
-            />
+              THE PAGE, when it is not the whole slice.
 
-            <ResultsTable
-              results={sortResults(results, sort)}
-              loading={compliance.isFetching}
-              onOpen={setDetail}
-              emptyText={emptyTextFor(view, Boolean(search || chart || determinacy || kind))}
-            />
-          </Space>
+              The grouping is done here over the rows that arrived, so a group
+              saying "fires in 43 places" is only true if all 43 did. Said
+              rather than silently counting a page.
+            */}
+            {partial && grouping === 'unique' && (
+              <Typography.Text
+                type="secondary"
+                style={{ fontSize: 12, display: 'block', marginBottom: 8 }}
+              >
+                Grouped from the first {formatCount(results.length)} of{' '}
+                {formatCount(data?.total ?? 0)} {slice.noun}. Narrow the slice for exact counts.
+              </Typography.Text>
+            )}
+
+            {grouping === 'unique'
+              ? (
+                <CheckGroupTable
+                  groups={grouped}
+                  loading={compliance.isFetching}
+                  onOpenGroup={setGroup}
+                  onOpenResult={setDetail}
+                  emptyText={emptyTextFor(view, Boolean(search || chart || determinacy || kind))}
+                />
+              )
+              : (
+                <ResultsTable
+                  results={sortResults(results, sort)}
+                  loading={compliance.isFetching}
+                  onOpen={setDetail}
+                  emptyText={emptyTextFor(view, Boolean(search || chart || determinacy || kind))}
+                />
+              )}
+          </>
         )}
       </Card>
+
+      <CheckDrawer
+        group={group}
+        onClose={() => setGroup(null)}
+        onOpenResult={(r) => { setGroup(null); setDetail(r) }}
+      />
 
       <ResultDrawer
         result={detail}
@@ -629,12 +747,18 @@ type ChartStatusFilter = 'all' | 'rendered' | 'failed' | 'skipped'
  * header - the rendered count, the download - belongs on the row of controls,
  * where the search and the filter are.
  */
-function ChartCoverage({ charts, product, reference, repository, loading, onOpenManifest }: {
+function ChartCoverage({
+  charts, product, reference, repository, loading, available, noneKept, onOpenManifest,
+}: {
   charts: ComplianceChart[]
   product: string
   reference: string
   repository?: string
   loading?: boolean
+  /** Which charts the run kept a manifest for. Read once by the caller, so the
+   *  table and the release-wide download cannot disagree about it. */
+  available: Set<string>
+  noneKept: boolean
   /** Opens a chart's rendered manifest beside the table, without leaving it. */
   onOpenManifest: (document: string) => void
 }) {
@@ -678,19 +802,6 @@ function ChartCoverage({ charts, product, reference, repository, loading, onOpen
 
   const broken = (charts ?? []).filter((ch) => ch.status !== 'ok')
 
-  // What the run KEPT, which is not the same list as what it rendered: a
-  // deployment can turn evidence off, and a large release can exhaust the
-  // budget partway through. Read here rather than per row so the table shows
-  // one truth about which charts can actually be opened.
-  const kept = useRenderedManifests(product, reference, { repository })
-  const available = new Set((kept.data?.documents ?? []).map((d) => d.document))
-  // A run that rendered charts and kept none of them. Said once, at the top,
-  // rather than a sentence in every finding somebody opens: "no evidence" and
-  // "no findings" are different statements, and a reader who expects the
-  // manifest deserves to have been told before they go looking for it.
-  const noneKept = kept.isSuccess && available.size === 0
-    && (charts ?? []).some((ch) => ch.status === 'ok')
-
   return (
     <Space direction="vertical" size={12} style={{ width: '100%' }}>
       <Space size={10} wrap style={{ width: '100%' }}>
@@ -712,13 +823,6 @@ function ChartCoverage({ charts, product, reference, repository, loading, onOpen
             { label: 'Failed to render', value: 'failed' },
             { label: 'Not fetched', value: 'skipped' },
           ]}
-        />
-        <DownloadManifestsButton
-          product={product}
-          reference={reference}
-          repository={repository}
-          documents={kept.data?.documents.length ?? 0}
-          bytes={kept.data?.totalBytes ?? 0}
         />
         <Typography.Text type="secondary" style={{ fontSize: 12 }}>
           {(charts ?? []).length - broken.length} of {(charts ?? []).length} rendered
@@ -810,6 +914,452 @@ function ChartCoverage({ charts, product, reference, repository, loading, onOpen
         ]}
       />
     </Space>
+  )
+}
+
+/**
+ * When this release was checked, and by what.
+ *
+ * The counterpart of the Security tab's `SyncedAgo`: muted text on the left of
+ * the header row saying what produced the answer, so the reader meets the
+ * provenance before the numbers. Rule 5 - a report that cannot say which
+ * rulebook, which helm and which Kubernetes version produced it cannot be
+ * re-derived, and re-deriving it is what happens when a vendor disputes a
+ * finding.
+ */
+function CheckedAgo({ run }: { run: ComplianceRun }) {
+  const bits: ReactNode[] = []
+  if (run.bundleDigest) {
+    bits.push(
+      <span key="bundle">
+        rulebook{' '}
+        <code style={{ fontFamily: mono }}>
+          {run.bundleDigest.replace(/^sha256:/, '').slice(0, 12)}
+        </code>
+      </span>,
+    )
+  }
+  if (run.checks > 0) bits.push(<span key="checks">{run.checks} checks</span>)
+  if (run.helmVersion) bits.push(<span key="helm">helm {run.helmVersion}</span>)
+  if (run.kubeVersion) bits.push(<span key="kube">Kubernetes {run.kubeVersion}</span>)
+
+  return (
+    <Tooltip title={run.finishedAt ? new Date(run.finishedAt).toLocaleString() : undefined}>
+      <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+        {run.finishedAt ? `Checked ${formatRelative(run.finishedAt)}` : 'Never checked'}
+        {bits.map((b, i) => (
+          <span key={i}> · {b}</span>
+        ))}
+      </Typography.Text>
+    </Tooltip>
+  )
+}
+
+/**
+ * One rule, and every place it was broken.
+ *
+ * The compliance answer to the Security tab's CVE group, and it exists for the
+ * same reason: a release repeats the same finding across everything it ships.
+ * 171 critical findings on a real orb are eight rules - "containers do not run
+ * as root", "every image is pinned by digest" - each broken in twenty places,
+ * and the flat list is that fact spread over 171 rows in which SEC-01 appears
+ * twenty-two times with a different chart name. It reads as 171 problems and
+ * it is eight pieces of work.
+ */
+type CheckGroup = {
+  key: string
+  check: string
+  title?: string
+  severity: string
+  /** The worst outcome any occurrence reached. */
+  outcome: ComplianceResult['outcome']
+  outcomeLabel: string
+  category?: string
+  remediation?: string
+  reference?: string
+  message?: string
+  /** Every determinacy the occurrences carried, so the roll-up can say "mixed". */
+  determinacies: string[]
+  charts: string[]
+  kinds: string[]
+  rows: ComplianceResult[]
+}
+
+/**
+ * Collapses results onto the check.
+ *
+ * The severity is the check's own, so there is nothing to roll up; what is
+ * rolled up is the DETERMINACY, and it is kept as a list rather than reduced to
+ * one value. A rule the vendor must fix in three charts and a values file can
+ * fix in two is both, and picking either would send half the work to the wrong
+ * person - which is the distinction this whole model exists to keep.
+ */
+function groupByCheck(results: ComplianceResult[]): CheckGroup[] {
+  const byKey = new Map<string, CheckGroup>()
+
+  for (const r of results) {
+    let g = byKey.get(r.check)
+    if (!g) {
+      g = {
+        key: r.check,
+        check: r.check,
+        title: r.title,
+        severity: r.severity,
+        outcome: r.outcome,
+        outcomeLabel: r.outcomeLabel,
+        category: r.category,
+        remediation: r.remediation,
+        reference: r.reference,
+        message: r.message || r.error,
+        determinacies: [],
+        charts: [],
+        kinds: [],
+        rows: [],
+      }
+      byKey.set(r.check, g)
+    }
+    if (!g.title && r.title) g.title = r.title
+    if (!g.remediation && r.remediation) g.remediation = r.remediation
+    if (!g.reference && r.reference) g.reference = r.reference
+    if (!g.message && (r.message || r.error)) g.message = r.message || r.error
+    // A failure outranks a pass: a rule broken anywhere is a rule broken.
+    if (outcomeRank(r.outcome) < outcomeRank(g.outcome)) {
+      g.outcome = r.outcome
+      g.outcomeLabel = r.outcomeLabel
+    }
+    if (r.determinacy && r.determinacy !== 'na' && !g.determinacies.includes(r.determinacy)) {
+      g.determinacies.push(r.determinacy)
+    }
+    if (r.chart && !g.charts.includes(r.chart)) g.charts.push(r.chart)
+    if (r.kind && !g.kinds.includes(r.kind)) g.kinds.push(r.kind)
+    g.rows.push(r)
+  }
+
+  return [...byKey.values()].sort((a, b) => (
+    severityRank(a.severity) !== severityRank(b.severity)
+      ? severityRank(a.severity) - severityRank(b.severity)
+      : b.rows.length - a.rows.length
+  ))
+}
+
+/**
+ * Worst first, so a group takes the outcome that decides what to do about it.
+ *
+ * An unrecognised value sorts last rather than first: a value this build has
+ * never seen must not be able to promote itself above a failure.
+ */
+function outcomeRank(outcome: string): number {
+  return { fail: 0, error: 1, waived: 2, skip: 3, pass: 4 }[outcome] ?? 5
+}
+
+function severityRank(severity: string): number {
+  return { block: 0, warn: 1, info: 2 }[severity] ?? 3
+}
+
+/**
+ * One row per check, expandable into where it was broken.
+ *
+ * # Why the expansion is a table and not a list of chart names
+ *
+ * Because the question underneath "SEC-01 is broken in twenty-two places" is
+ * "which resource, in which chart, on which container, and what was found" -
+ * four columns. A comma-separated list of chart names answers a quarter of it
+ * and sends the reader back to the flat view for the rest. This is the shape
+ * the Security tab's unique-CVE table uses, and for the same reason.
+ */
+function CheckGroupTable({ groups, loading, onOpenGroup, onOpenResult, emptyText }: {
+  groups: CheckGroup[]
+  loading?: boolean
+  onOpenGroup: (g: CheckGroup) => void
+  onOpenResult: (r: ComplianceResult) => void
+  emptyText: string
+}) {
+  return (
+    <Table<CheckGroup>
+      size="small"
+      loading={loading}
+      rowKey={(g) => g.key}
+      dataSource={groups}
+      scroll={{ x: 'max-content' }}
+      pagination={groups.length > 25 ? { pageSize: 25, showSizeChanger: true, size: 'small' } : false}
+      locale={{
+        emptyText: <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description={emptyText} />,
+      }}
+      expandable={{
+        expandedRowRender: (g) => (
+          <DataTable<ComplianceResult>
+            tableEnhancedKey="compliance-occurrences"
+            size="small"
+            rowKey={(r) => `${r.seq}`}
+            dataSource={g.rows}
+            pagination={g.rows.length > 10 ? { pageSize: 10, size: 'small', showSizeChanger: false } : false}
+            onRow={(r) => ({ onClick: () => onOpenResult(r), style: { cursor: 'pointer' } })}
+            /*
+              FOUR NARROW FACTS, and not the message.
+
+              Every row of a group is the same check, so every row's message is
+              the same sentence with a different chart name in it - which is the
+              thing already in the first column. Printing it made each row four
+              lines tall and told a reader nothing they could not read from the
+              columns beside it. What differs between occurrences is where it
+              fired and what was there, so those are the columns.
+            */
+            columns={OCCURRENCE_COLUMNS}
+          />
+        ),
+        rowExpandable: (g) => g.rows.length > 0,
+      }}
+      columns={[
+        {
+          title: 'Check', width: 240,
+          render: (_: unknown, g: CheckGroup) => (
+            <Space direction="vertical" size={2}>
+              <Space size={6}>
+                <Typography.Link
+                  onClick={() => onOpenGroup(g)}
+                  style={{ fontFamily: mono, fontSize: 12 }}
+                >
+                  {g.check}
+                </Typography.Link>
+                <CheckSeverityTag severity={g.severity} />
+              </Space>
+              {g.title && <span style={{ fontSize: 12, color: c.text2 }}>{g.title}</span>}
+            </Space>
+          ),
+        },
+        {
+          title: '', dataIndex: 'outcome', width: 120,
+          render: (_: unknown, g: CheckGroup) => (
+            <OutcomePill outcome={g.outcome} label={g.outcomeLabel} />
+          ),
+        },
+        {
+          title: 'Affects', width: 210,
+          sorter: (a: CheckGroup, b: CheckGroup) => a.rows.length - b.rows.length,
+          render: (_: unknown, g: CheckGroup) => (
+            <Space direction="vertical" size={0}>
+              <Typography.Text style={{ fontSize: 12 }}>
+                <strong>{g.rows.length.toLocaleString()}</strong>
+                {g.rows.length === 1 ? ' place' : ' places'}
+                {' in '}
+                <strong>{g.charts.length.toLocaleString()}</strong>
+                {g.charts.length === 1 ? ' chart' : ' charts'}
+              </Typography.Text>
+              <Typography.Text
+                type="secondary"
+                style={{ fontSize: 11, fontFamily: mono, maxWidth: 200 }}
+                ellipsis={{ tooltip: g.charts.join(', ') }}
+              >
+                {g.charts.slice(0, 2).join(', ')}
+                {g.charts.length > 2 && ` +${g.charts.length - 2}`}
+              </Typography.Text>
+            </Space>
+          ),
+        },
+        {
+          title: 'Kinds', width: 150,
+          render: (_: unknown, g: CheckGroup) => (
+            <Typography.Text
+              type="secondary"
+              style={{ fontSize: 11, maxWidth: 140 }}
+              ellipsis={{ tooltip: g.kinds.join(', ') }}
+            >
+              {g.kinds.slice(0, 2).join(', ') || '—'}
+              {g.kinds.length > 2 && ` +${g.kinds.length - 2}`}
+            </Typography.Text>
+          ),
+        },
+        {
+          // WHOSE PROBLEM, rolled up but never flattened. A rule the vendor
+          // must fix in three charts and a values file can fix in two is both,
+          // and picking either sends half the work to the wrong person.
+          title: 'Owner',
+          render: (_: unknown, g: CheckGroup) => (
+            <Space size={4} wrap>
+              {g.determinacies.length === 0
+                ? <Typography.Text type="secondary" style={{ fontSize: 11 }}>—</Typography.Text>
+                : g.determinacies.map((d) => (
+                  <DeterminacyTag
+                    key={d}
+                    determinacy={d as ComplianceResult['determinacy']}
+                    label={DETERMINACY_WORD[d] ?? d}
+                  />
+                ))}
+            </Space>
+          ),
+        },
+      ]}
+    />
+  )
+}
+
+/**
+ * Where one occurrence of a check fired, and what was there.
+ *
+ * Shared by the expanded row and the check drawer, because they are the same
+ * list read in two places and a column that differed between them would be a
+ * reader learning the table twice.
+ */
+const OCCURRENCE_COLUMNS = [
+  {
+    title: 'Chart', dataIndex: 'chart', width: 180,
+    render: (_: unknown, r: ComplianceResult) => (
+      <Space size={6} align="start">
+        <HelmOutlined style={{ color: c.text3, marginTop: 2 }} />
+        <Space direction="vertical" size={0}>
+          <span style={{ fontFamily: mono, fontSize: 12 }}>{r.chart}</span>
+          {r.sourceFile && (
+            <span style={{ fontFamily: mono, fontSize: 11, color: c.text3 }}>
+              {templatePath(r)}
+            </span>
+          )}
+        </Space>
+      </Space>
+    ),
+  },
+  {
+    /*
+      THE OBJECT AND THE FIELD IN ONE CELL, and that is not crowding.
+
+      The field was its own column, and within a group it is the same string on
+      every row - SEC-01 is always `securityContext.runAsNonRoot` - so a column
+      of it was 300px repeating one fact, and it pushed the one column that
+      DOES differ off the right edge of the 760px drawer. It belongs under the
+      object it is a field of.
+    */
+    title: 'Resource', dataIndex: 'name',
+    render: (_: unknown, r: ComplianceResult) => (
+      <Space direction="vertical" size={0}>
+        <span style={{ fontSize: 12 }}>
+          {r.kind} {r.namespace ? `${r.namespace}/` : ''}{r.name}
+          {r.container && <span style={{ color: c.text2 }}> · container {r.container}</span>}
+        </span>
+        {r.locus && (
+          <Typography.Text
+            type="secondary"
+            style={{ fontFamily: mono, fontSize: 11, maxWidth: 340 }}
+            ellipsis={{ tooltip: r.locus }}
+          >
+            {r.locus}
+          </Typography.Text>
+        )}
+      </Space>
+    ),
+  },
+  {
+    title: 'Found', dataIndex: 'observed', width: 170,
+    render: (_: unknown, r: ComplianceResult) => (
+      <Space direction="vertical" size={2}>
+        <span style={{ fontFamily: mono, fontSize: 11 }}>{r.observed || '(absent)'}</span>
+        <DeterminacyTag determinacy={r.determinacy} label={r.determinacyLabel} />
+      </Space>
+    ),
+  },
+]
+
+/**
+ * The template, relative to its chart.
+ *
+ * helm names it `cfx-adrf-chart2/templates/deployment.yaml`, and the chart's
+ * name is on the line directly above - so the prefix wrapped the cell onto two
+ * lines to repeat what the reader had just read. `templates/deployment.yaml`
+ * is the part that differs between rows.
+ */
+function templatePath(r: ComplianceResult): string {
+  const file = r.sourceFile ?? ''
+  if (r.chart && file.startsWith(`${r.chart}/`)) return file.slice(r.chart.length + 1)
+  return file
+}
+
+/** The determinacy in the two words the roll-up has room for. */
+const DETERMINACY_WORD: Record<string, string> = {
+  fixed: 'Vendor',
+  configurable: 'Values file',
+  unknown: 'Not established',
+}
+
+/**
+ * One rule, in full, with every place it was broken.
+ *
+ * The counterpart of the Security tab's advisory panel: the rule itself, why
+ * the organization requires it, what to do about it, and then the occurrences -
+ * because the question underneath a grouped row is "where else is this".
+ * Clicking an occurrence hands off to the single-finding drawer, which is where
+ * the rendered manifest is.
+ */
+function CheckDrawer({ group, onClose, onOpenResult }: {
+  group: CheckGroup | null
+  onClose: () => void
+  onOpenResult: (r: ComplianceResult) => void
+}) {
+  return (
+    <Drawer
+      open={Boolean(group)}
+      onClose={onClose}
+      width={820}
+      title={
+        group && (
+          <Space size={10} wrap>
+            <span style={{ fontFamily: mono }}>{group.check}</span>
+            <CheckSeverityTag severity={group.severity} />
+            <OutcomePill outcome={group.outcome} label={group.outcomeLabel} />
+          </Space>
+        )
+      }
+    >
+      {group && (
+        <Space direction="vertical" size={16} style={{ width: '100%' }}>
+          <Typography.Title level={5} style={{ margin: 0 }}>{group.title}</Typography.Title>
+
+          {/*
+            THE RULE'S OWN FACTS, and deliberately not a finding's message.
+
+            The message on a result names one chart - "Deployment
+            cfx-adrf-chart2 container main: …" - and putting the first
+            occurrence's message here read as a description of the rule while
+            naming one of its forty-four occurrences. The rule is the title, the
+            category and the remediation; where it fired is the table below.
+          */}
+          {group.category && <Tag style={{ margin: 0, fontSize: 11 }}>{group.category}</Tag>}
+
+          {group.remediation && (
+            <Card size="small" title="Remediation">
+              <Typography.Paragraph style={{ marginBottom: 0 }}>
+                {group.remediation}
+              </Typography.Paragraph>
+            </Card>
+          )}
+
+          <div>
+            <Typography.Text type="secondary" style={{ fontSize: 11 }}>
+              Broken in {group.rows.length.toLocaleString()}
+              {group.rows.length === 1 ? ' place' : ' places'} across{' '}
+              {group.charts.length.toLocaleString()}
+              {group.charts.length === 1 ? ' chart' : ' charts'}
+            </Typography.Text>
+            <div style={{ marginTop: 8 }}>
+              <DataTable<ComplianceResult>
+                tableEnhancedKey="compliance-check-occurrences"
+                size="small"
+                rowKey={(r) => `${r.seq}`}
+                dataSource={group.rows}
+                pagination={group.rows.length > 12
+                  ? { pageSize: 12, size: 'small', showSizeChanger: false }
+                  : false}
+                onRow={(r) => ({ onClick: () => onOpenResult(r), style: { cursor: 'pointer' } })}
+                columns={OCCURRENCE_COLUMNS}
+              />
+            </div>
+          </div>
+
+          {group.reference && (
+            <Typography.Link href={group.reference} target="_blank" rel="noreferrer">
+              Source standard
+            </Typography.Link>
+          )}
+        </Space>
+      )}
+    </Drawer>
   )
 }
 
@@ -1053,9 +1603,9 @@ function sortResults(results: ComplianceResult[], sort: ResultSort): ComplianceR
   if (sort === 'severity') return results
   const key = (r: ComplianceResult): string => {
     switch (sort) {
-      case 'chart': return `${r.chart ?? ''} ${r.sourceFile ?? ''} ${r.check}`
-      case 'check': return `${r.check} ${r.chart ?? ''} ${r.name ?? ''}`
-      default: return `${r.kind ?? ''} ${r.name ?? ''} ${r.check}`
+      case 'chart': return `${r.chart ?? ''}\u0000${r.sourceFile ?? ''}\u0000${r.check}`
+      case 'check': return `${r.check}\u0000${r.chart ?? ''}\u0000${r.name ?? ''}`
+      default: return `${r.kind ?? ''}\u0000${r.name ?? ''}\u0000${r.check}`
     }
   }
   return [...results].sort((a, b) => key(a).localeCompare(key(b)))

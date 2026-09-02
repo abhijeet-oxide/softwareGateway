@@ -257,6 +257,65 @@ func (p *Packages) ComplianceRenderedAll(ctx context.Context, runID string) ([]C
 // Total is the count BEFORE the page is taken, because a reader needs to know
 // whether they are looking at 40 findings or the first 40 of 900. A page with
 // no total is a page that lies by omission.
+// ComplianceUniqueCounts is how many DISTINCT checks failed, by severity.
+//
+// # Why this is a number the server has to produce
+//
+// Because it is the headline of the release's compliance, and it cannot be
+// derived from a page. A release breaks five rules in a hundred and seventy-one
+// places; "171" is how much replacing there is to do and "5" is how many
+// conversations - and the interface groups the rows it was sent, so a count
+// taken from those rows is a count of whatever fitted in the page.
+//
+// A check has exactly one severity, so the total is the sum: there is no check
+// that is critical in one chart and a warning in another, which is the way this
+// differs from the vulnerability side's identical-looking number.
+type ComplianceUniqueCounts struct {
+	Blocking int
+	Warning  int
+	Info     int
+}
+
+// Total is every distinct failing check.
+func (u ComplianceUniqueCounts) Total() int { return u.Blocking + u.Warning + u.Info }
+
+// ComplianceUniqueChecks counts the distinct checks a run failed, by severity.
+//
+// FAILURES only, like the severity counts it sits beside: a passing critical
+// check is not a critical anything, and counting it here would produce the
+// number nobody can interpret.
+func (p *Packages) ComplianceUniqueChecks(ctx context.Context, runID string) (ComplianceUniqueCounts, error) {
+	rows, err := p.db.QueryContext(ctx, p.dialect.Rewrite(`
+		SELECT severity, COUNT(DISTINCT check_id)
+		  FROM compliance_results
+		 WHERE run_id = ? AND outcome = 'fail'
+		 GROUP BY severity`), runID)
+	if err != nil {
+		return ComplianceUniqueCounts{}, fmt.Errorf("count distinct compliance checks: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+
+	var out ComplianceUniqueCounts
+	for rows.Next() {
+		var (
+			severity string
+			n        int
+		)
+		if err := rows.Scan(&severity, &n); err != nil {
+			return ComplianceUniqueCounts{}, fmt.Errorf("scan distinct compliance checks: %w", err)
+		}
+		switch severity {
+		case "block":
+			out.Blocking = n
+		case "warn":
+			out.Warning = n
+		case "info":
+			out.Info = n
+		}
+	}
+	return out, rows.Err()
+}
+
 func (p *Packages) ComplianceResults(ctx context.Context, runID string, f ComplianceFilter) ([]ComplianceResultRow, int, error) {
 	where, args := complianceWhere(runID, f)
 

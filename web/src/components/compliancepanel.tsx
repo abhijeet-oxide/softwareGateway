@@ -9,7 +9,7 @@ import type { ReactNode } from 'react'
 // layout each person keeps. See `tablekit/README.md` for which tables get it.
 import { Table as DataTable } from '../tablekit'
 import {
-  BookOutlined, HelmOutlined, LoadingOutlined, SearchOutlined, SyncOutlined,
+  BookOutlined, FileTextOutlined, HelmOutlined, LoadingOutlined, SearchOutlined, SyncOutlined,
 } from '../icons'
 import {
   useCancelCompliance, useInspectPackage, usePackageCompliance,
@@ -91,6 +91,15 @@ const VIEWS: Record<ResultView, {
   outcome?: string[]
   severity?: string[]
   count: (c?: ComplianceCounts) => number
+  /**
+   * How many DISTINCT checks this slice holds, when the server can say.
+   *
+   * Absent for Passed, Unchecked and All: a check is distinct per severity on
+   * the wire, and there is no stored distinct count for an outcome. Those fall
+   * back to counting the groups actually built, which is a count of the page -
+   * and the view says so.
+   */
+  unique?: (c?: ComplianceCounts) => number
 }> = {
   critical: {
     label: 'Critical',
@@ -98,6 +107,7 @@ const VIEWS: Record<ResultView, {
     outcome: ['fail'],
     severity: ['block'],
     count: (c) => c?.blocking ?? 0,
+    unique: (c) => c?.uniqueBlocking ?? 0,
   },
   warning: {
     label: 'Warning',
@@ -105,6 +115,7 @@ const VIEWS: Record<ResultView, {
     outcome: ['fail'],
     severity: ['warn'],
     count: (c) => c?.warning ?? 0,
+    unique: (c) => c?.uniqueWarning ?? 0,
   },
   info: {
     label: 'Info',
@@ -112,6 +123,7 @@ const VIEWS: Record<ResultView, {
     outcome: ['fail'],
     severity: ['info'],
     count: (c) => c?.info ?? 0,
+    unique: (c) => c?.uniqueInfo ?? 0,
   },
   passed: {
     label: 'Passed',
@@ -425,6 +437,20 @@ export function ComplianceTab({ product, reference, repository }: {
 
   const grouped = groupByCheck(results)
   /*
+   * How many distinct checks this slice holds.
+   *
+   * The server's number where it has one, because the grouping runs over the
+   * page and the page is not always the slice. Falling back to the groups built
+   * is the honest second best, and the line under the controls says when that
+   * is what is on screen.
+   */
+  const uniqueInSlice = slice.unique
+    ? slice.unique(data?.run?.counts)
+    : grouped.length
+  const uniqueFindings = (data?.run?.counts.uniqueBlocking ?? 0)
+    + (data?.run?.counts.uniqueWarning ?? 0)
+    + (data?.run?.counts.uniqueInfo ?? 0)
+  /*
    * Whether the page the server returned is the whole slice.
    *
    * The grouping is done in the browser over the rows that arrived, so a group
@@ -523,17 +549,23 @@ export function ComplianceTab({ product, reference, repository }: {
               {
                 value: 'findings',
                 /*
-                  EVERY finding, matching the number the band's first zone
-                  leads with. The release tab at the top of the page counts
-                  only the critical ones deliberately - that is the number a
-                  release decision turns on - but inside this card the severity
-                  switch is directly below, so a switch that also counted only
-                  the criticals would disagree with the control under it.
+                  WHAT THE TABLE WILL HOLD, which is why it follows the
+                  grouping: distinct checks when the rows are grouped, every
+                  occurrence when they are not. This is what the Security tab's
+                  Vulnerabilities switch does, and a count that stayed on the
+                  total while the table showed five rows would be the one number
+                  on the card that disagreed with what is under it.
+
+                  The release tab at the top of the page counts only the
+                  critical findings, deliberately: that is the number a release
+                  decision turns on.
                 */
                 label: `Findings (${formatCount(
-                  (data?.run?.counts.blocking ?? 0)
-                  + (data?.run?.counts.warning ?? 0)
-                  + (data?.run?.counts.info ?? 0),
+                  grouping === 'unique'
+                    ? uniqueFindings
+                    : (data?.run?.counts.blocking ?? 0)
+                      + (data?.run?.counts.warning ?? 0)
+                      + (data?.run?.counts.info ?? 0),
                 )})`,
               },
               {
@@ -601,7 +633,7 @@ export function ComplianceTab({ product, reference, repository }: {
                 value={grouping}
                 onChange={(v) => setGrouping(v as 'unique' | 'all')}
                 options={[
-                  { value: 'unique', label: `Unique checks (${formatCount(grouped.length)})` },
+                  { value: 'unique', label: `Unique checks (${formatCount(uniqueInSlice)})` },
                   { value: 'all', label: `All findings (${formatCount(data?.total ?? 0)})` },
                 ]}
               />
@@ -1087,8 +1119,7 @@ function CheckGroupTable({ groups, loading, onOpenGroup, onOpenResult, emptyText
       }}
       expandable={{
         expandedRowRender: (g) => (
-          <DataTable<ComplianceResult>
-            tableEnhancedKey="compliance-occurrences"
+          <Table<ComplianceResult>
             size="small"
             rowKey={(r) => `${r.seq}`}
             dataSource={g.rows}
@@ -1104,7 +1135,8 @@ function CheckGroupTable({ groups, loading, onOpenGroup, onOpenResult, emptyText
               columns beside it. What differs between occurrences is where it
               fired and what was there, so those are the columns.
             */
-            columns={OCCURRENCE_COLUMNS}
+            scroll={{ x: 'max-content' }}
+            columns={occurrenceColumns(onOpenResult)}
           />
         ),
         rowExpandable: (g) => g.rows.length > 0,
@@ -1200,62 +1232,100 @@ function CheckGroupTable({ groups, loading, onOpenGroup, onOpenResult, emptyText
  * list read in two places and a column that differed between them would be a
  * reader learning the table twice.
  */
-const OCCURRENCE_COLUMNS = [
-  {
-    title: 'Chart', dataIndex: 'chart', width: 180,
-    render: (_: unknown, r: ComplianceResult) => (
-      <Space size={6} align="start">
-        <HelmOutlined style={{ color: c.text3, marginTop: 2 }} />
+function occurrenceColumns(onOpen: (r: ComplianceResult) => void) {
+  return [
+    {
+      /*
+        NARROW, because a chart name is short. `cfx-adrf-chart2` is fifteen
+        characters and the column was 210px of mostly nothing, taken from the
+        two columns beside it that hold the part which differs between rows.
+      */
+      title: 'Chart', dataIndex: 'chart', width: 190,
+      render: (_: unknown, r: ComplianceResult) => (
+        <Space size={6} align="start">
+          <HelmOutlined style={{ color: c.text3, marginTop: 2 }} />
+          <Space direction="vertical" size={0}>
+            <Typography.Text
+              style={{ fontFamily: mono, fontSize: 12, maxWidth: 158 }}
+              ellipsis={{ tooltip: r.chart }}
+            >
+              {r.chart}
+            </Typography.Text>
+            {r.sourceFile && (
+              <Typography.Text
+                type="secondary"
+                style={{ fontFamily: mono, fontSize: 11, maxWidth: 158 }}
+                ellipsis={{ tooltip: r.sourceFile }}
+              >
+                {templatePath(r)}
+              </Typography.Text>
+            )}
+          </Space>
+        </Space>
+      ),
+    },
+    {
+      /*
+        THE OBJECT AND THE FIELD IN ONE CELL, and that is not crowding.
+
+        The field was its own column, and within a group it is the same string
+        on every row - SEC-01 is always `securityContext.runAsNonRoot` - so a
+        column of it was 300px repeating one fact, and it pushed the one column
+        that DOES differ off the right edge of the drawer. It belongs under the
+        object it is a field of.
+      */
+      title: 'Resource', dataIndex: 'name',
+      render: (_: unknown, r: ComplianceResult) => (
         <Space direction="vertical" size={0}>
-          <span style={{ fontFamily: mono, fontSize: 12 }}>{r.chart}</span>
-          {r.sourceFile && (
-            <span style={{ fontFamily: mono, fontSize: 11, color: c.text3 }}>
-              {templatePath(r)}
-            </span>
+          <span style={{ fontSize: 12 }}>
+            {r.kind} {r.namespace ? `${r.namespace}/` : ''}{r.name}
+            {r.container && <span style={{ color: c.text2 }}> · container {r.container}</span>}
+          </span>
+          {r.locus && (
+            <Typography.Text
+              type="secondary"
+              style={{ fontFamily: mono, fontSize: 11, maxWidth: 240 }}
+              ellipsis={{ tooltip: r.locus }}
+            >
+              {r.locus}
+            </Typography.Text>
           )}
         </Space>
-      </Space>
-    ),
-  },
-  {
-    /*
-      THE OBJECT AND THE FIELD IN ONE CELL, and that is not crowding.
+      ),
+    },
+    {
+      title: 'Found', dataIndex: 'observed', width: 150,
+      render: (_: unknown, r: ComplianceResult) => (
+        <Space direction="vertical" size={2}>
+          <span style={{ fontFamily: mono, fontSize: 11 }}>{r.observed || '(absent)'}</span>
+          <DeterminacyTag determinacy={r.determinacy} label={r.determinacyLabel} />
+        </Space>
+      ),
+    },
+    {
+      /*
+        THE ACTION, PINNED TO THE RIGHT EDGE.
 
-      The field was its own column, and within a group it is the same string on
-      every row - SEC-01 is always `securityContext.runAsNonRoot` - so a column
-      of it was 300px repeating one fact, and it pushed the one column that
-      DOES differ off the right edge of the 760px drawer. It belongs under the
-      object it is a field of.
-    */
-    title: 'Resource', dataIndex: 'name',
-    render: (_: unknown, r: ComplianceResult) => (
-      <Space direction="vertical" size={0}>
-        <span style={{ fontSize: 12 }}>
-          {r.kind} {r.namespace ? `${r.namespace}/` : ''}{r.name}
-          {r.container && <span style={{ color: c.text2 }}> · container {r.container}</span>}
-        </span>
-        {r.locus && (
-          <Typography.Text
-            type="secondary"
-            style={{ fontFamily: mono, fontSize: 11, maxWidth: 340 }}
-            ellipsis={{ tooltip: r.locus }}
-          >
-            {r.locus}
-          </Typography.Text>
-        )}
-      </Space>
-    ),
-  },
-  {
-    title: 'Found', dataIndex: 'observed', width: 170,
-    render: (_: unknown, r: ComplianceResult) => (
-      <Space direction="vertical" size={2}>
-        <span style={{ fontFamily: mono, fontSize: 11 }}>{r.observed || '(absent)'}</span>
-        <DeterminacyTag determinacy={r.determinacy} label={r.determinacyLabel} />
-      </Space>
-    ),
-  },
-]
+        The row itself opens the finding, and a row that is clickable without
+        saying so is a row most people never click. `fixed: 'right'` keeps the
+        control on screen when the table scrolls sideways, which the resource
+        column makes it do on a narrow drawer - an action that scrolls out of
+        view is an action that does not exist.
+      */
+      title: '', dataIndex: 'seq', width: 82, fixed: 'right' as const,
+      render: (_: unknown, r: ComplianceResult) => (
+        <Button
+          size="small"
+          type="text"
+          icon={<FileTextOutlined />}
+          onClick={(e) => { e.stopPropagation(); onOpen(r) }}
+        >
+          View
+        </Button>
+      ),
+    },
+  ]
+}
 
 /**
  * The template, relative to its chart.
@@ -1338,8 +1408,7 @@ function CheckDrawer({ group, onClose, onOpenResult }: {
               {group.charts.length === 1 ? ' chart' : ' charts'}
             </Typography.Text>
             <div style={{ marginTop: 8 }}>
-              <DataTable<ComplianceResult>
-                tableEnhancedKey="compliance-check-occurrences"
+              <Table<ComplianceResult>
                 size="small"
                 rowKey={(r) => `${r.seq}`}
                 dataSource={group.rows}
@@ -1347,7 +1416,8 @@ function CheckDrawer({ group, onClose, onOpenResult }: {
                   ? { pageSize: 12, size: 'small', showSizeChanger: false }
                   : false}
                 onRow={(r) => ({ onClick: () => onOpenResult(r), style: { cursor: 'pointer' } })}
-                columns={OCCURRENCE_COLUMNS}
+                scroll={{ x: 'max-content' }}
+            columns={occurrenceColumns(onOpenResult)}
               />
             </div>
           </div>

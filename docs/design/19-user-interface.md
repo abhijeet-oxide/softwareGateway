@@ -217,6 +217,14 @@ query asks for enough rows that the slices a reader works in - Critical,
 Warning, Info, Unchecked - arrive whole; Passed and All are still a page, and
 the view says it grouped from one rather than quoting a count assembled from it.
 
+**Both tabs lead with the unique count**, everywhere the number is quoted:
+the release header chip, the tab label, the summary band's headline, and the
+findings switch, which follows the grouping so it always counts what the table
+under it holds. The total is one problem counted once per place it appears -
+3,077 findings for 19 advisories, 171 findings for 5 rules - and it belongs
+under the headline, not in place of it. A count on a tab label is one of the two
+numbers people quote without opening anything.
+
 ## 4. What it must never do
 
 > **Decision - the UI is a read-and-operate client. It never edits configuration.**

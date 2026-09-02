@@ -189,6 +189,7 @@ export function ComplianceSummary({ counts, charts, verdict, verdictLabel, selec
   onSelect?: (what: SummaryKey) => void
 }) {
   const findings = counts.blocking + counts.warning + counts.info
+  const unique = counts.uniqueBlocking + counts.uniqueWarning + counts.uniqueInfo
   const decided = counts.pass + counts.fail + counts.waived
   const total = decided + counts.error + counts.skip
   const rendered = (charts ?? []).filter((ch) => ch.status === 'ok').length
@@ -197,10 +198,22 @@ export function ComplianceSummary({ counts, charts, verdict, verdictLabel, selec
   const renderedPercent = chartTotal > 0 ? Math.round((rendered / chartTotal) * 100) : 100
   const decidedPercent = total > 0 ? Math.round((decided / total) * 100) : 0
 
-  const severities: { key: SummaryKey; label: string; value: number; colour: string }[] = [
-    { key: 'blocking', label: 'Critical', value: counts.blocking, colour: c.danger },
-    { key: 'warning', label: 'Warning', value: counts.warning, colour: c.pending },
-    { key: 'info', label: 'Info', value: counts.info, colour: c.text3 },
+  const severities: {
+    key: SummaryKey
+    label: string
+    unique: number
+    total: number
+    colour: string
+  }[] = [
+    {
+      key: 'blocking', label: 'Critical',
+      unique: counts.uniqueBlocking, total: counts.blocking, colour: c.danger,
+    },
+    {
+      key: 'warning', label: 'Warning',
+      unique: counts.uniqueWarning, total: counts.warning, colour: c.pending,
+    },
+    { key: 'info', label: 'Info', unique: counts.uniqueInfo, total: counts.info, colour: c.text3 },
   ]
 
   return (
@@ -216,17 +229,27 @@ export function ComplianceSummary({ counts, charts, verdict, verdictLabel, selec
           <ZoneLabel>Compliance</ZoneLabel>
           <Space direction="vertical" size={10} style={{ width: '100%' }}>
             <VerdictPill verdict={verdict} label={verdictLabel} />
+            {/*
+              UNIQUE FIRST, and the total under it.
+
+              The total is the same rule counted once per place it fires - a
+              measure of how much editing there is to do - and it is not the
+              number somebody means when they ask how many problems a release
+              has. Five rules broken in a hundred and seventy-one places is five
+              conversations with the vendor. This is the Security tab's zone,
+              which leads with unique CVEs for exactly the same reason.
+            */}
             <div>
               <div
                 style={{
                   fontSize: 44, fontWeight: 600, lineHeight: 1, letterSpacing: '-0.03em',
-                  color: findings > 0 ? c.text : c.ok, fontVariantNumeric: 'tabular-nums',
+                  color: unique > 0 ? c.text : c.ok, fontVariantNumeric: 'tabular-nums',
                 }}
               >
-                {findings.toLocaleString()}
+                {unique.toLocaleString()}
               </div>
               <Typography.Text type="secondary" style={{ fontSize: 12.5 }}>
-                findings
+                {unique === 1 ? 'check failed' : 'checks failed'}
               </Typography.Text>
             </div>
             {/*
@@ -237,9 +260,9 @@ export function ComplianceSummary({ counts, charts, verdict, verdictLabel, selec
             */}
             <ComplianceSeverityBar counts={counts} />
             <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+              {findings.toLocaleString()} {findings === 1 ? 'finding' : 'findings'}
               {chartTotal > 0
-                ? `across ${rendered.toLocaleString()} of ${chartTotal.toLocaleString()} charts rendered`
-                : 'no charts rendered'}
+                && ` across ${rendered.toLocaleString()} of ${chartTotal.toLocaleString()} charts rendered`}
             </Typography.Text>
           </Space>
         </div>
@@ -251,10 +274,15 @@ export function ComplianceSummary({ counts, charts, verdict, verdictLabel, selec
             borderInlineStart: `1px solid ${c.border}`,
           }}
         >
-          <ZoneLabel>Findings by severity</ZoneLabel>
+          <ZoneLabel count={<span style={{ fontWeight: 400 }}>checks | places</span>}>
+            Failing checks by severity
+          </ZoneLabel>
           <div style={{ display: 'grid', gap: 10 }}>
             {severities.map((sev) => {
-              const share = findings > 0 ? (sev.value / findings) * 100 : 0
+              // Proportional to the whole release, so the row lengths are
+              // comparable with each other. A bar normalised per severity would
+              // draw three full-width bars and say nothing.
+              const share = findings > 0 ? (sev.total / findings) * 100 : 0
               return (
                 <div
                   key={sev.key}
@@ -276,14 +304,31 @@ export function ComplianceSummary({ counts, charts, verdict, verdictLabel, selec
                     >
                       {sev.label}
                     </StatusPill>
-                    <span
-                      style={{
-                        marginInlineStart: 'auto', fontSize: 13, fontWeight: 600,
-                        color: sev.value > 0 ? c.text : c.text2,
-                      }}
+                    {/*
+                      CHECKS, then PLACES, in the shape the Security tab's
+                      severity rows use for unique CVEs and total findings. One
+                      number cannot say both, and which one it says changes the
+                      answer by a factor of thirty.
+                    */}
+                    <Tooltip
+                      title={
+                        `${sev.unique.toLocaleString()} distinct ${sev.label.toLowerCase()} `
+                        + `${sev.unique === 1 ? 'check' : 'checks'}, failing in `
+                        + `${sev.total.toLocaleString()} ${sev.total === 1 ? 'place' : 'places'}`
+                      }
                     >
-                      {sev.value.toLocaleString()}
-                    </span>
+                      <span
+                        style={{
+                          marginInlineStart: 'auto', fontSize: 13, fontWeight: 600,
+                          color: sev.total > 0 ? c.text : c.text2,
+                        }}
+                      >
+                        {sev.unique.toLocaleString()}
+                        <span style={{ color: c.text3, fontWeight: 400 }}>
+                          {' | '}{sev.total.toLocaleString()}
+                        </span>
+                      </span>
+                    </Tooltip>
                   </div>
                   <div style={{ height: 5, background: c.track, borderRadius: 3 }}>
                     <div

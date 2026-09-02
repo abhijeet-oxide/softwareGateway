@@ -38,6 +38,13 @@ type Run struct {
 	// report is worse than a failed one, because it looks complete.
 	Truncated bool `json:"truncated,omitempty"`
 
+	// Log is the run's transcript: what each chart produced, which refused and
+	// why, what each stage cost. Recorded with the run rather than left in the
+	// Coordinator's memory, because the question it answers - "why did this take
+	// nine minutes and come back with eleven charts missing" - is asked after
+	// the run, not during it.
+	Log []ProgressEvent `json:"log,omitempty"`
+
 	// Rendered is the manifest text the results were judged against, so a
 	// reader can verify a finding instead of trusting it. Excluded from this
 	// type's JSON deliberately: it is megabytes, it is served by its own

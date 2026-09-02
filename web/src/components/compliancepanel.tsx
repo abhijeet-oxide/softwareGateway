@@ -1,26 +1,28 @@
 import { useEffect, useMemo, useState } from 'react'
 import { Link } from 'react-router-dom'
 import {
-  App, Button, Card, Descriptions, Drawer, Input, Segmented, Select, Space, Tabs, Tag,
-  Tooltip, Typography,
+  App, Button, Card, Descriptions, Drawer, Empty, Input, Segmented, Select, Skeleton,
+  Space, Tabs, Tag, Tooltip, Typography,
 } from 'antd'
 // The working-surface table: resizable, reorderable, pinnable columns whose
 // layout each person keeps. See `tablekit/README.md` for which tables get it.
 import { Table as DataTable } from '../tablekit'
-import { LoadingOutlined, SearchOutlined } from '../icons'
+import { HelmOutlined, LoadingOutlined, SearchOutlined } from '../icons'
 import {
-  renderedManifestUrl, useCancelCompliance, useInspectPackage, usePackageCompliance,
+  useCancelCompliance, useInspectPackage, usePackageCompliance,
   useRenderedManifests, useRunCompliance,
 } from '../api/queries'
 import { EmptyStateCard } from './layout'
 import {
   CheckSeverityTag, ComplianceSummary, DeterminacyTag,
-  HelmMissingNotice, InconclusiveNotice, OutcomePill, ResultAddress, RunFailedNotice,
+  HelmMissingNotice, OutcomePill, ResultAddress, RunFailedNotice,
   RunProvenance, TruncatedNotice, VerdictPill,
 } from './compliance'
-import { ComplianceRunPanel } from './complianceprogress'
+import type { SummaryKey } from './compliance'
+import { ComplianceRunLogButton, ComplianceRunPanel } from './complianceprogress'
 import {
-  EvidencePanel, ManifestDrawer, NoEvidenceNotice, RenderedManifestsAction,
+  DownloadManifestsButton, EvidencePanel, ManifestDrawer, ManifestLinks,
+  NoEvidenceNotice,
 } from './complianceevidence'
 import { formatCount } from '../domain/format'
 import { c, mono } from '../uikit'
@@ -37,6 +39,12 @@ import type { ComplianceChart, ComplianceCounts, ComplianceResult } from '../api
  * and for the same reason: the first thing a reader meets is whether this
  * result covers the whole release. A tab with the caveat at the bottom is a tab
  * whose verdict gets quoted in a release meeting without it.
+ *
+ * The one caveat that is NOT a banner is the unchecked count. It used to be,
+ * and on a real orb every release has one, so the banner was on every screen -
+ * which is how a caveat stops being read and starts being scrolled past. It is
+ * a coloured, clickable tile beside the verdict instead, in the summary that
+ * qualifies.
  *
  * # Why the default view is failures
  *
@@ -59,10 +67,17 @@ import type { ComplianceChart, ComplianceCounts, ComplianceResult } from '../api
  * `Passed` is here because the passes are the DENOMINATOR. "40 workloads, all
  * compliant" and "the traversal never reached them" are the same empty list,
  * and only one of them is a reason to ship.
+ *
+ * # Why the severities are three slices and not two
+ *
+ * They were Blocking and Warnings, and Warnings quietly held the info results
+ * as well - so a reader narrowing to warnings got a list padded with rows
+ * nobody has to do anything about, and the info count was on no screen at all.
+ * Critical, Warning and Info is the scale the severities already are.
  */
-type ResultView = 'blocking' | 'warnings' | 'undecided' | 'passed' | 'all'
+type ResultView = 'critical' | 'warning' | 'info' | 'passed' | 'unchecked' | 'all'
 
-const VIEW_ORDER: ResultView[] = ['blocking', 'warnings', 'undecided', 'passed', 'all']
+const VIEW_ORDER: ResultView[] = ['critical', 'warning', 'info', 'passed', 'unchecked', 'all']
 
 const VIEWS: Record<ResultView, {
   label: string
@@ -72,25 +87,26 @@ const VIEWS: Record<ResultView, {
   severity?: string[]
   count: (c?: ComplianceCounts) => number
 }> = {
-  blocking: {
-    label: 'Blocking',
-    noun: 'blocking findings',
+  critical: {
+    label: 'Critical',
+    noun: 'critical findings',
     outcome: ['fail'],
     severity: ['block'],
     count: (c) => c?.blocking ?? 0,
   },
-  warnings: {
-    label: 'Warnings',
+  warning: {
+    label: 'Warning',
     noun: 'warnings',
     outcome: ['fail'],
-    severity: ['warn', 'info'],
+    severity: ['warn'],
     count: (c) => c?.warning ?? 0,
   },
-  undecided: {
-    label: 'Undecided',
-    noun: 'undecided checks',
-    outcome: ['error'],
-    count: (c) => c?.error ?? 0,
+  info: {
+    label: 'Info',
+    noun: 'informational findings',
+    outcome: ['fail'],
+    severity: ['info'],
+    count: (c) => c?.info ?? 0,
   },
   passed: {
     label: 'Passed',
@@ -98,6 +114,12 @@ const VIEWS: Record<ResultView, {
     all: true,
     outcome: ['pass'],
     count: (c) => c?.pass ?? 0,
+  },
+  unchecked: {
+    label: 'Unchecked',
+    noun: 'checks not decided',
+    outcome: ['error'],
+    count: (c) => c?.error ?? 0,
   },
   all: {
     label: 'All',
@@ -108,6 +130,24 @@ const VIEWS: Record<ResultView, {
     // silently stop matching the rows beneath it.
     count: (c) => (c ? c.pass + c.fail + c.skip + c.error + c.waived : 0),
   },
+}
+
+/** Where a summary tile sends the reader. */
+const VIEW_FOR_SUMMARY: Record<SummaryKey, ResultView> = {
+  blocking: 'critical',
+  warning: 'warning',
+  info: 'info',
+  error: 'unchecked',
+  pass: 'passed',
+}
+
+/** Which tile is ringed for the slice on screen. The inverse of the map above. */
+const SUMMARY_FOR_VIEW: Partial<Record<ResultView, SummaryKey>> = {
+  critical: 'blocking',
+  warning: 'warning',
+  info: 'info',
+  unchecked: 'error',
+  passed: 'pass',
 }
 
 /** How the rows on screen are ordered. */
@@ -129,7 +169,7 @@ export function ComplianceTab({ product, reference, repository }: {
    * page of five hundred would show a subset of a subset without saying so.
    */
   const [tab, setTab] = useState<'findings' | 'charts'>('findings')
-  const [view, setView] = useState<ResultView>('blocking')
+  const [view, setView] = useState<ResultView>('critical')
   const [chart, setChart] = useState<string | undefined>()
   const [determinacy, setDeterminacy] = useState<string | undefined>()
   const [kind, setKind] = useState<string | undefined>()
@@ -179,6 +219,27 @@ export function ComplianceTab({ product, reference, repository }: {
   }
 
   /*
+   * THE FIRST LOAD IS A SKELETON, not an empty page.
+   *
+   * Only the first: every later fetch keeps the previous answer on screen (see
+   * usePackageCompliance), so narrowing a filter no longer blanks the verdict
+   * and the summary for a round trip. This branch is the one moment there is
+   * genuinely nothing to hold.
+   */
+  if (compliance.isLoading && !data) {
+    return (
+      <Space direction="vertical" size={16} style={{ width: '100%' }}>
+        <Card>
+          <Skeleton active paragraph={{ rows: 3 }} />
+        </Card>
+        <Card>
+          <Skeleton active paragraph={{ rows: 6 }} />
+        </Card>
+      </Space>
+    )
+  }
+
+  /*
    * NOT ANALYSED - which is not the same as "no charts", and the difference is
    * the whole of this branch.
    *
@@ -197,7 +258,7 @@ export function ComplianceTab({ product, reference, repository }: {
    * result arrives without being asked for - the release's own query notices
    * the walk ending and refreshes this one.
    */
-  if (!compliance.isLoading && data && !data.analysed && !data.run && !data.progress) {
+  if (data && !data.analysed && !data.run && !data.progress) {
     const started = Boolean(inspect.data?.started) || inspect.isPending
     return (
       <Space direction="vertical" size={16} style={{ width: '100%' }}>
@@ -250,23 +311,32 @@ export function ComplianceTab({ product, reference, repository }: {
     )
   }
 
-  // A release with no result at all. The empty state OFFERS the action rather
-  // than describing the absence, because the reader's next move is always the
-  // same one.
-  if (!compliance.isLoading && data && !data.run && !data.progress) {
+  /*
+   * A release with no result at all.
+   *
+   * The empty state OFFERS the action rather than describing the absence,
+   * because the reader's next move is always the same one - and it shows the
+   * press. `run.isPending` is the round trip that takes the claim; until it was
+   * on this button the card sat unchanged for a second and the button appeared
+   * not to have worked.
+   */
+  if (data && !data.run && !data.progress) {
     return (
       <Space direction="vertical" size={16} style={{ width: '100%' }}>
         <HelmMissingNotice helm={data.helm} />
         <EmptyStateCard
-          title="This release has not been checked"
+          title={run.isPending ? 'Starting the compliance check' : 'This release has not been checked'}
           explanation={
-            'Nothing here has been compared against your standards yet. That is not the same as '
-            + 'passing them.'
+            run.isPending
+              ? 'Claiming the release, so no second check can run against it at the same time. '
+                + 'Progress appears here as soon as the claim is taken.'
+              : 'Nothing here has been compared against your standards yet. That is not the same '
+                + 'as passing them.'
           }
           action={
             <Space direction="vertical" size={10}>
               <Button type="primary" loading={run.isPending} onClick={start}>
-                Check this release
+                {run.isPending ? 'Starting the check' : 'Check this release'}
               </Button>
               <Link to="/policies" style={{ fontSize: 12, color: c.brand }}>
                 See what would be checked
@@ -317,28 +387,15 @@ export function ComplianceTab({ product, reference, repository }: {
       {data && <HelmMissingNotice helm={data.helm} />}
       {data?.run && <RunFailedNotice run={data.run} />}
       {data?.run && <TruncatedNotice run={data.run} />}
-      {data?.run && (
-        <InconclusiveNotice
-          run={data.run}
-          charts={charts}
-          onShowUndecided={() => {
-            setTab('findings')
-            setView('undecided')
-            setSearch('')
-            setDraft('')
-          }}
-        />
-      )}
 
       {/* The verdict and the numbers. */}
       {data?.run && (
         <Card
-          loading={compliance.isLoading}
           title={
             <VerdictPill verdict={data.run.verdict} label={data.run.verdictLabel} />
           }
           extra={
-            <Space size={12}>
+            <Space size={8} wrap>
               {/*
                 The rulebook, one click from a finding. Somebody arguing about
                 a result wants to read the rule, and making them find a page
@@ -348,6 +405,13 @@ export function ComplianceTab({ product, reference, repository }: {
               <Link to="/policies" style={{ fontSize: 12, color: c.brand }}>
                 View the rulebook
               </Link>
+              {/*
+                The transcript, after the run. It was on screen for the whole
+                check and then vanished with it - and "which charts refused,
+                and what did the nine minutes go on" is asked afterwards. The
+                vulnerability sync has had this button since it shipped.
+              */}
+              <ComplianceRunLogButton run={data.run} />
               <Button size="small" loading={run.isPending} disabled={running} onClick={start}>
                 Re-check
               </Button>
@@ -355,7 +419,14 @@ export function ComplianceTab({ product, reference, repository }: {
           }
         >
           <Space direction="vertical" size={12} style={{ width: '100%' }}>
-            <ComplianceSummary counts={data.run.counts} />
+            <ComplianceSummary
+              counts={data.run.counts}
+              selected={tab === 'findings' ? SUMMARY_FOR_VIEW[view] : undefined}
+              onSelect={(what) => {
+                setTab('findings')
+                setView(VIEW_FOR_SUMMARY[what])
+              }}
+            />
             <RunProvenance run={data.run} />
           </Space>
         </Card>
@@ -370,7 +441,7 @@ export function ComplianceTab({ product, reference, repository }: {
       */}
       <Card
         size="small"
-        styles={{ body: { paddingTop: 0 } }}
+        styles={{ body: { paddingTop: 16 } }}
         title={
           <Tabs
             size="small"
@@ -393,6 +464,7 @@ export function ComplianceTab({ product, reference, repository }: {
                 key: 'charts',
                 label: (
                   <Space size={6}>
+                    <HelmOutlined style={{ color: c.text3 }} />
                     <span>Charts</span>
                     <Typography.Text
                       type={brokenCharts(charts) > 0 ? 'warning' : 'secondary'}
@@ -413,6 +485,7 @@ export function ComplianceTab({ product, reference, repository }: {
             product={product}
             reference={reference}
             repository={repository}
+            loading={compliance.isFetching}
             onOpenManifest={setManifest}
           />
         ) : (
@@ -487,7 +560,7 @@ export function ComplianceTab({ product, reference, repository }: {
             </Space>
 
             {/*
-              THE OUTCOME SLICE. Blocking first because it is what a release
+              THE OUTCOME SLICE. Critical first because it is what a release
               decision turns on, and Passed is present because the passes are
               the denominator - "40 workloads, all compliant" and "the traversal
               never reached them" are the same empty list otherwise.
@@ -539,20 +612,45 @@ export function ComplianceTab({ product, reference, repository }: {
   )
 }
 
+/** What a coverage row can be narrowed to. */
+type ChartStatusFilter = 'all' | 'rendered' | 'failed' | 'skipped'
+
 /**
  * What each chart contributed.
  *
  * Charts that did not render come first, because everything below them is a
  * smaller denominator than it looks.
+ *
+ * # Why this is no longer a card
+ *
+ * It was one, inside the card that holds the tab, behind a Show/Hide link -
+ * two borders and a collapse around a table that is already the entire content
+ * of the tab somebody chose. The tab IS the disclosure. What was on the card's
+ * header - the rendered count, the download - belongs on the row of controls,
+ * where the search and the filter are.
  */
-function ChartCoverage({ charts, product, reference, repository, onOpenManifest }: {
+function ChartCoverage({ charts, product, reference, repository, loading, onOpenManifest }: {
   charts: ComplianceChart[]
   product: string
   reference: string
   repository?: string
+  loading?: boolean
   /** Opens a chart's rendered manifest beside the table, without leaving it. */
   onOpenManifest: (document: string) => void
 }) {
+  const [draft, setDraft] = useState('')
+  const [search, setSearch] = useState('')
+  const [status, setStatus] = useState<ChartStatusFilter>('all')
+
+  // Debounced like the findings box, so the two behave identically. Client-side
+  // here - a release has tens of charts, not tens of thousands of results - but
+  // a box that filtered on a different rhythm from the one on the tab beside it
+  // would read as a different control.
+  useEffect(() => {
+    const t = setTimeout(() => setSearch(draft.trim().toLowerCase()), 200)
+    return () => clearTimeout(t)
+  }, [draft])
+
   /*
    * FAILURES FIRST. Everything below them is a smaller denominator than it
    * looks, and on a ninety-five chart release the thirteen that did not render
@@ -560,15 +658,25 @@ function ChartCoverage({ charts, product, reference, repository, onOpenManifest 
    * to find. Within each group, by name, so a chart is where it was last time.
    */
   const rows = useMemo(() => {
-    const all = charts ?? []
-    return [...all].sort((a, b) => {
+    const matches = (ch: ComplianceChart) => {
+      if (status === 'rendered' && ch.status !== 'ok') return false
+      if (status === 'failed' && ch.status !== 'failed') return false
+      if (status === 'skipped' && ch.status !== 'skipped') return false
+      if (!search) return true
+      // The error text and the key it names are searchable too: "which charts
+      // want global.registry" is the question the coverage table exists to
+      // answer, and it is one somebody types rather than scrolls for.
+      return [ch.name, ch.version, ch.errorLabel, ch.errorValue, ch.errorFile, ch.error]
+        .some((f) => f?.toLowerCase().includes(search))
+    }
+    return (charts ?? []).filter(matches).sort((a, b) => {
       const bad = (ch: ComplianceChart) => (ch.status === 'ok' ? 1 : 0)
       if (bad(a) !== bad(b)) return bad(a) - bad(b)
       return a.name.localeCompare(b.name)
     })
-  }, [charts])
-  const broken = rows.filter((ch) => ch.status !== 'ok')
-  const [open, setOpen] = useState(broken.length > 0)
+  }, [charts, search, status])
+
+  const broken = (charts ?? []).filter((ch) => ch.status !== 'ok')
 
   // What the run KEPT, which is not the same list as what it rendered: a
   // deployment can turn evidence off, and a large release can exhaust the
@@ -581,54 +689,73 @@ function ChartCoverage({ charts, product, reference, repository, onOpenManifest 
   // "no findings" are different statements, and a reader who expects the
   // manifest deserves to have been told before they go looking for it.
   const noneKept = kept.isSuccess && available.size === 0
-    && rows.some((ch) => ch.status === 'ok')
+    && (charts ?? []).some((ch) => ch.status === 'ok')
 
   return (
-    <Card
-      size="small"
-      title={
-        <Space size={10}>
-          <span>Charts</span>
-          <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-            {rows.length - broken.length} of {rows.length} rendered
-            {broken.length > 0 && (
-              <span style={{ color: c.pending }}> · {broken.length} did not</span>
-            )}
-          </Typography.Text>
-        </Space>
-      }
-      extra={
-        <Space size={12}>
-          <RenderedManifestsAction
-            product={product}
-            reference={reference}
-            repository={repository}
-            documents={kept.data?.documents.length ?? 0}
-            bytes={kept.data?.totalBytes ?? 0}
-          />
-          <Typography.Link onClick={() => setOpen((v) => !v)}>
-            {open ? 'Hide' : 'Show'}
-          </Typography.Link>
-        </Space>
-      }
-      styles={open ? undefined : { body: { display: 'none' } }}
-    >
-      {open && noneKept && (
-        <div style={{ marginBottom: 12 }}>
-          <NoEvidenceNotice checked />
-        </div>
-      )}
-      {open && (
-        <DataTable
-          tableEnhancedKey="compliance-charts"
-          size="small"
-          rowKey={(ch) => `${ch.name}@${ch.version}@${ch.digest}`}
-          dataSource={rows}
-          pagination={false}
-          columns={[
-            {
-              title: 'Chart', dataIndex: 'name', width: 260,
-              render: (_: unknown, ch) => (
+    <Space direction="vertical" size={12} style={{ width: '100%' }}>
+      <Space size={10} wrap style={{ width: '100%' }}>
+        <Input
+          allowClear
+          style={{ width: 280 }}
+          prefix={<SearchOutlined style={{ color: c.text3 }} />}
+          placeholder="Search chart, version, reason or value"
+          value={draft}
+          onChange={(e) => setDraft(e.target.value)}
+        />
+        <Select
+          value={status}
+          onChange={setStatus}
+          style={{ minWidth: 170 }}
+          options={[
+            { label: 'Any outcome', value: 'all' },
+            { label: 'Rendered', value: 'rendered' },
+            { label: 'Failed to render', value: 'failed' },
+            { label: 'Not fetched', value: 'skipped' },
+          ]}
+        />
+        <DownloadManifestsButton
+          product={product}
+          reference={reference}
+          repository={repository}
+          documents={kept.data?.documents.length ?? 0}
+          bytes={kept.data?.totalBytes ?? 0}
+        />
+        <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+          {(charts ?? []).length - broken.length} of {(charts ?? []).length} rendered
+          {broken.length > 0 && (
+            <span style={{ color: c.pending }}> · {broken.length} did not</span>
+          )}
+        </Typography.Text>
+      </Space>
+
+      {noneKept && <NoEvidenceNotice checked />}
+
+      <DataTable<ComplianceChart>
+        tableEnhancedKey="compliance-charts"
+        size="small"
+        loading={loading}
+        rowKey={(ch) => `${ch.name}@${ch.version}@${ch.digest}`}
+        dataSource={rows}
+        pagination={rows.length > 50 ? { pageSize: 50, showSizeChanger: true, size: 'small' } : false}
+        locale={{
+          emptyText: (
+            <Empty
+              image={Empty.PRESENTED_IMAGE_SIMPLE}
+              description={
+                search || status !== 'all'
+                  ? 'No charts match these filters.'
+                  : 'This run recorded no charts.'
+              }
+            />
+          ),
+        }}
+        columns={[
+          {
+            title: 'Chart', dataIndex: 'name', width: 280,
+            sorter: (a: ComplianceChart, b: ComplianceChart) => a.name.localeCompare(b.name),
+            render: (_: unknown, ch) => (
+              <Space size={8} align="start">
+                <HelmOutlined style={{ color: c.text2, fontSize: 14, marginTop: 1 }} />
                 <Space direction="vertical" size={0}>
                   <span style={{ fontFamily: mono, fontSize: 12 }}>{ch.name}</span>
                   {ch.version && (
@@ -637,65 +764,52 @@ function ChartCoverage({ charts, product, reference, repository, onOpenManifest 
                     </span>
                   )}
                 </Space>
-              ),
-            },
-            {
-              title: 'Rendered', dataIndex: 'status', width: 120,
-              render: (_: unknown, ch) => (
-                <OutcomePill
-                  outcome={ch.status === 'ok' ? 'pass' : 'error'}
-                  label={ch.status === 'ok' ? 'Yes' : ch.status === 'skipped' ? 'Skipped' : 'Failed'}
-                />
-              ),
-            },
-            {
-              title: 'Objects', dataIndex: 'resources', width: 90, align: 'right' as const,
-              render: (n: number) => n.toLocaleString(),
-            },
-            {
-              // WHY, in two words, before the paragraph. Seventeen charts that
-              // failed four different ways are four conversations - three with
-              // the vendor and one with us - and an undifferentiated column of
-              // stack traces is how they become one complaint about the tool.
-              title: 'Reason', dataIndex: 'errorLabel', width: 210,
-              render: (_: unknown, ch) => <ChartFailure chart={ch} />,
-            },
-            {
-              // The manifest THIS chart rendered to. Offered per chart as well
-              // as for the release, because a vendor engineer owns one chart
-              // and does not want the other ninety-six.
-              title: 'Rendered manifest', dataIndex: 'name', width: 170,
-              render: (_: unknown, ch) => (
-                available.has(ch.name)
-                  ? (
-                    <Space size={10}>
-                      <Typography.Link
-                        style={{ fontSize: 12 }}
-                        onClick={() => onOpenManifest(ch.name)}
-                      >
-                        View
-                      </Typography.Link>
-                      <Typography.Link
-                        style={{ fontSize: 12 }}
-                        href={renderedManifestUrl(product, reference, {
-                          repository, document: ch.name, download: true,
-                        })}
-                      >
-                        Download
-                      </Typography.Link>
-                    </Space>
-                  )
-                  : (
-                    <Typography.Text type="secondary" style={{ fontSize: 11 }}>
-                      {ch.status === 'ok' ? 'Not retained' : 'No output'}
-                    </Typography.Text>
-                  )
-              ),
-            },
-          ]}
-        />
-      )}
-    </Card>
+              </Space>
+            ),
+          },
+          {
+            title: 'Rendered', dataIndex: 'status', width: 120,
+            sorter: (a: ComplianceChart, b: ComplianceChart) => a.status.localeCompare(b.status),
+            render: (_: unknown, ch) => (
+              <OutcomePill
+                outcome={ch.status === 'ok' ? 'pass' : 'error'}
+                label={ch.status === 'ok' ? 'Yes' : ch.status === 'skipped' ? 'Skipped' : 'Failed'}
+              />
+            ),
+          },
+          {
+            title: 'Objects', dataIndex: 'resources', width: 90, align: 'right' as const,
+            sorter: (a: ComplianceChart, b: ComplianceChart) => a.resources - b.resources,
+            render: (n: number) => n.toLocaleString(),
+          },
+          {
+            // WHY, in two words, before the paragraph. Seventeen charts that
+            // failed four different ways are four conversations - three with
+            // the vendor and one with us - and an undifferentiated column of
+            // stack traces is how they become one complaint about the tool.
+            title: 'Reason', dataIndex: 'errorLabel',
+            render: (_: unknown, ch) => <ChartFailure chart={ch} />,
+          },
+          {
+            // The manifest THIS chart rendered to. Offered per chart as well
+            // as for the release, because a vendor engineer owns one chart
+            // and does not want the other ninety-six.
+            title: 'Manifest', dataIndex: 'name', width: 150,
+            render: (_: unknown, ch) => (
+              <ManifestLinks
+                available={available.has(ch.name)}
+                rendered={ch.status === 'ok'}
+                document={ch.name}
+                product={product}
+                reference={reference}
+                repository={repository}
+                onOpen={onOpenManifest}
+              />
+            ),
+          },
+        ]}
+      />
+    </Space>
   )
 }
 
@@ -758,7 +872,9 @@ function ResultsTable({ results, loading, onOpen, emptyText }: {
       rowKey={(r) => `${r.check}|${r.chart}|${r.sourceFile}|${r.kind}|${r.name}|${r.container}|${r.locus}`}
       dataSource={results}
       columns={columns}
-      locale={{ emptyText }}
+      locale={{
+        emptyText: <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description={emptyText} />,
+      }}
       pagination={{ pageSize: 50, showSizeChanger: true, size: 'small' }}
       onRow={(r) => ({ onClick: () => onOpen(r), style: { cursor: 'pointer' } })}
     />
@@ -823,10 +939,13 @@ function ResultDrawer({ result, product, reference, repository, onClose, onOpenM
 
           <Descriptions column={1} size="small" bordered>
             <Descriptions.Item label="Chart">
-              <span style={{ fontFamily: mono }}>
-                {result.chart}
-                {result.chartVersion && `:${result.chartVersion}`}
-              </span>
+              <Space size={6}>
+                <HelmOutlined style={{ color: c.text3 }} />
+                <span style={{ fontFamily: mono }}>
+                  {result.chart}
+                  {result.chartVersion && `:${result.chartVersion}`}
+                </span>
+              </Space>
             </Descriptions.Item>
             {result.sourceFile && (
               <Descriptions.Item label="Template">
@@ -926,7 +1045,7 @@ function kindOptions(results: ComplianceResult[]): { label: string; value: strin
  *
  * Client-side, and that is a deliberate limit: it orders the PAGE the server
  * returned, which is the reading order the engine assigned - failures first,
- * then the undecidable, then the passes - narrowed to one outcome slice. Sorting
+ * then the unchecked, then the passes - narrowed to one outcome slice. Sorting
  * across a fifteen-thousand-row run would need a server-side order, and the
  * order that matters most is already the default.
  */
@@ -934,9 +1053,9 @@ function sortResults(results: ComplianceResult[], sort: ResultSort): ComplianceR
   if (sort === 'severity') return results
   const key = (r: ComplianceResult): string => {
     switch (sort) {
-      case 'chart': return `${r.chart ?? ''}\u0000${r.sourceFile ?? ''}\u0000${r.check}`
-      case 'check': return `${r.check}\u0000${r.chart ?? ''}\u0000${r.name ?? ''}`
-      default: return `${r.kind ?? ''}\u0000${r.name ?? ''}\u0000${r.check}`
+      case 'chart': return `${r.chart ?? ''} ${r.sourceFile ?? ''} ${r.check}`
+      case 'check': return `${r.check} ${r.chart ?? ''} ${r.name ?? ''}`
+      default: return `${r.kind ?? ''} ${r.name ?? ''} ${r.check}`
     }
   }
   return [...results].sort((a, b) => key(a).localeCompare(key(b)))
@@ -946,17 +1065,19 @@ function sortResults(results: ComplianceResult[], sort: ResultSort): ComplianceR
  * What an empty table means, which is never the same thing twice.
  *
  * "No results" over a filtered view is a statement about the filter; over an
- * unfiltered Blocking view it is the whole point of the release. Saying which
+ * unfiltered Critical view it is the whole point of the release. Saying which
  * is the difference between a reader clearing a filter and a reader shipping.
  */
 function emptyTextFor(view: ResultView, filtered: boolean): string {
   if (filtered) return 'No results match these filters.'
   switch (view) {
-    case 'blocking':
-      return 'No blocking findings. Check the undecided count above before reading that as a pass.'
-    case 'warnings':
+    case 'critical':
+      return 'No critical findings. Check the unchecked count above before reading that as a pass.'
+    case 'warning':
       return 'No warnings.'
-    case 'undecided':
+    case 'info':
+      return 'No informational findings.'
+    case 'unchecked':
       return 'Every check was decided. Nothing was skipped for want of a rendered chart.'
     case 'passed':
       return 'Nothing passed, which means nothing was evaluated.'
@@ -978,6 +1099,22 @@ function emptyTextFor(view: ResultView, filtered: boolean): string {
  * of undifferentiated helm stack traces is how all four become "the tool is
  * broken".
  *
+ * # Why the missing key is its own chip
+ *
+ * Six of the eight charts that failed in that orb failed for one reason, and
+ * their eight paragraphs of helm had nothing in common but the key. `global.
+ * registry` on the row is what turns "these charts are broken" into "these
+ * charts are subcharts, and a values file supplying one key would check them".
+ *
+ * # Why a test hook is called out
+ *
+ * `helm install` never applies `templates/tests/`. A chart failing only there
+ * installs perfectly in a cluster, and telling a vendor "your chart does not
+ * render" about a test job is how a true finding gets dismissed with the rest
+ * of the report. It is stated rather than worked around: `--skip-tests` filters
+ * test manifests out of the output AFTER the templates execute, so a `fail`
+ * inside one still aborts the render. Measured, not assumed.
+ *
  * The attempt count is here for the same reason. "Retried and failed again" and
  * "not retried, because a second render of the same bytes returns the same
  * error" are different facts, and a reader who is not told which will assume
@@ -987,7 +1124,7 @@ function ChartFailure({ chart }: { chart: ComplianceChart }) {
   if (!chart.error && !chart.errorLabel) return null
 
   return (
-    <Space direction="vertical" size={2} style={{ width: '100%' }}>
+    <Space direction="vertical" size={4} style={{ width: '100%' }}>
       <Space size={6} wrap>
         {chart.errorLabel && (
           <Tooltip title={chart.errorHint}>
@@ -999,10 +1136,42 @@ function ChartFailure({ chart }: { chart: ComplianceChart }) {
             </Tag>
           </Tooltip>
         )}
+        {chart.errorValue && (
+          <Tooltip
+            title={
+              `This chart cannot render until ${chart.errorValue} is supplied. A tier-1 check `
+              + 'renders what the vendor shipped and nothing else, so a values file is not '
+              + 'invented for it - the chart is reported as unchecked rather than judged '
+              + 'against a value this platform made up.'
+            }
+          >
+            <Tag color="gold" style={{ margin: 0, fontFamily: mono, fontSize: 11 }}>
+              requires {chart.errorValue}
+            </Tag>
+          </Tooltip>
+        )}
+        {chart.errorInTest && (
+          <Tooltip
+            title={
+              'The failure is in a helm test hook, which `helm install` never applies. This '
+              + 'chart may install correctly and still not be checkable here. `helm template '
+              + '--skip-tests` does not help: it filters test manifests out of the output '
+              + 'after every template has run.'
+            }
+          >
+            <Tag color="blue" style={{ margin: 0, fontSize: 11 }}>
+              Helm test hook
+            </Tag>
+          </Tooltip>
+        )}
+        {/*
+          A CHIP, like the two beside it. As plain grey text it wrapped onto a
+          line of its own between the classification and the cause, where it
+          read as a sentence fragment about the row rather than as one more
+          fact in the row's chip set.
+        */}
         {(chart.attempts ?? 0) > 1 && (
-          <Typography.Text type="secondary" style={{ fontSize: 11 }}>
-            {chart.attempts} attempts
-          </Typography.Text>
+          <Tag style={{ margin: 0, fontSize: 11 }}>{chart.attempts} attempts</Tag>
         )}
         {(chart.attempts ?? 0) <= 1 && !chart.retryable && (
           <Tooltip
@@ -1011,18 +1180,30 @@ function ChartFailure({ chart }: { chart: ComplianceChart }) {
               + 'inputs, so a second render of the same bytes returns the same error.'
             }
           >
-            <Typography.Text type="secondary" style={{ fontSize: 11 }}>
-              not retried
-            </Typography.Text>
+            <Tag style={{ margin: 0, fontSize: 11 }}>Not retried</Tag>
           </Tooltip>
         )}
       </Space>
+      {/*
+        THE CAUSE, then where. helm's message is a paragraph that names the
+        chart, the word "Error", the file, the line, the column and then - last -
+        what actually went wrong, and the row printed all of it under a file path
+        it had already printed. Six lines per row over thirteen failed charts is
+        a table nobody reads to the bottom of.
+
+        The whole message is one hover away, because the frames matter when a
+        vendor is opening the template.
+      */}
       {chart.error && (
-        <Typography.Text
-          type="secondary"
-          style={{ fontFamily: mono, fontSize: 11, whiteSpace: 'pre-wrap' }}
-        >
-          {firstLines(chart.error, 3)}
+        <Tooltip title={<span style={{ whiteSpace: 'pre-wrap' }}>{chart.error}</span>}>
+          <Typography.Text style={{ fontSize: 12 }}>
+            {helmCause(chart.error)}
+          </Typography.Text>
+        </Tooltip>
+      )}
+      {chart.errorFile && (
+        <Typography.Text style={{ fontFamily: mono, fontSize: 11, color: c.text3 }}>
+          {chart.errorFile}
         </Typography.Text>
       )}
     </Space>
@@ -1030,14 +1211,44 @@ function ChartFailure({ chart }: { chart: ComplianceChart }) {
 }
 
 /**
- * The first few lines of helm's message.
+ * What actually went wrong, out of helm's paragraph.
  *
- * helm's errors are frequently a paragraph with a stack of template frames.
- * The first lines name the file, the line and the cause, which is what a
- * vendor needs; the rest is in the export and in the run's own record.
+ * A real message reads:
+ *
+ *   helm template failed for cfx-adrf-chart: Error: execution error at
+ *   (cfx-adrf-chart/templates/chart-check.yaml:2:4): global.registry must be
+ *   specified
+ *
+ * Six words of that are the finding. The rest is the chart's name, which is in
+ * the first column; the file and line, which are on the row beneath; and the
+ * word "Error", which the red tag beside it already said. Stripping them is
+ * what makes a coverage table of thirteen failures readable on one screen.
+ *
+ * Every removal is a prefix helm is known to emit, matched from the front, and
+ * anything unrecognised is returned whole - so a message this has never seen
+ * loses nothing.
  */
-function firstLines(s: string, n: number): string {
-  const lines = s.split('\n')
-  if (lines.length <= n) return s
-  return `${lines.slice(0, n).join('\n')}\n…`
+function helmCause(message: string): string {
+  const head = (message.split('\n')[0] ?? message).trim()
+  let s = head
+  const prefixes: RegExp[] = [
+    /^helm template failed for [^:]+:\s*/i,
+    /^rendering [^:]+:\s*/i,
+    /^Error:\s*/i,
+    /^execution error at \([^)]*\)\s*/i,
+    /^parse error at \([^)]*\)\s*/i,
+    /^template: [^:]+:\d+:\d+:\s*/i,
+    /^executing "[^"]*"\s*/i,
+    /^at <[^>]*>:\s*/i,
+    /^:\s*/,
+  ]
+  // Repeatedly, because helm nests them: a template error carries an execution
+  // error which carries the frame which carries the cause.
+  for (let pass = 0; pass < prefixes.length * 2; pass++) {
+    const before = s
+    for (const re of prefixes) s = s.replace(re, '')
+    s = s.trim()
+    if (s === before) break
+  }
+  return s || head
 }

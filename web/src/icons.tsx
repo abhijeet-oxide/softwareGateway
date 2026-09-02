@@ -99,6 +99,7 @@ import PhWarningCircle from '~icons/ph/warning-circle'
 import PhWarningCircleFill from '~icons/ph/warning-circle-fill'
 import PhXCircle from '~icons/ph/x-circle'
 import PhXCircleFill from '~icons/ph/x-circle-fill'
+import SiHelm from '~icons/simple-icons/helm'
 
 type Glyph = FunctionComponent<SVGProps<SVGSVGElement>>
 
@@ -223,3 +224,14 @@ export const PauseOutlined = make('pause', PhPause)
 export const FileTextOutlined = make('file-text', PhFileText)
 export const FolderOutlined = make('folder', PhFolder)
 export const FolderZip24RegularIcon = make('folder-zip', PhFileZip)
+
+/**
+ * Helm's own mark, for a Helm chart.
+ *
+ * The one brand glyph in this family, and it earns the exception the same way
+ * the Docker whale does on the artifact listing: a compliance run's log, its
+ * coverage table and its findings all name charts beside images, releases and
+ * files, and "chart" is the word for three unrelated things in this product.
+ * The mark says which in a glance where a generic box does not.
+ */
+export const HelmOutlined = make('helm', SiHelm)

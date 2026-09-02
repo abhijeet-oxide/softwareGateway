@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
 import { Alert, Button, Card, Drawer, Space, Tooltip, Typography } from 'antd'
+import { DownloadOutlined, FileTextOutlined } from '../icons'
 import { useComplianceExcerpt, renderedManifestUrl } from '../api/queries'
 import { fetchText } from '../api/client'
 import { formatBytes, formatCount } from '../domain/format'
@@ -269,7 +270,7 @@ function EvidenceFooter({ excerpt }: { excerpt: ComplianceExcerpt }) {
  * file, with each document named and the run that produced it stated at the
  * top, is the artifact that conversation actually needs.
  */
-export function RenderedManifestsAction({ product, reference, repository, documents, bytes }: {
+export function DownloadManifestsButton({ product, reference, repository, documents, bytes }: {
   product: string
   reference: string
   repository?: string
@@ -280,21 +281,73 @@ export function RenderedManifestsAction({ product, reference, repository, docume
   return (
     <Tooltip
       title={
-        'The manifests this run judged, in one file: every chart rendered with the pinned '
-        + 'Kubernetes version, plus anything the release ships as a plain manifest. Exactly '
-        + 'what the checks read, not a fresh render.'
+        `${formatCount(documents)} documents, ${formatBytes(bytes)}. Every chart rendered with `
+        + 'the pinned Kubernetes version, plus anything the release ships as a plain manifest. '
+        + 'Exactly what the checks read, not a fresh render.'
       }
     >
-      <Button
-        size="small"
-        href={renderedManifestUrl(product, reference, { repository, download: true })}
-      >
-        Download rendered manifests
-        <Typography.Text type="secondary" style={{ fontSize: 11, marginLeft: 6 }}>
-          {formatCount(documents)} · {formatBytes(bytes)}
-        </Typography.Text>
+      {/*
+        A BUTTON WITH THE ICON EVERY OTHER DOWNLOAD IN THIS PRODUCT USES, and a
+        label that is two words.
+
+        It used to say "Download rendered manifests" with the count and the byte
+        size printed inside the button in a second colour - a control carrying a
+        sentence, sized differently from the two beside it, on a row of buttons.
+        The numbers are a fact about what will arrive, which is what a tooltip
+        is for; the button says what pressing it does.
+      */}
+      <Button icon={<DownloadOutlined />} href={renderedManifestUrl(product, reference, { repository, download: true })}>
+        Download manifests
       </Button>
     </Tooltip>
+  )
+}
+
+/**
+ * The two things a reader does with one chart's manifest: read it, or keep it.
+ *
+ * Together in one cell because they are one decision made twice, and separate
+ * from the release-wide download because a vendor engineer owns one chart and
+ * does not want the other ninety-six.
+ *
+ * The absence is drawn too, and the two absences are different: a chart that
+ * rendered and whose manifest was not retained can be produced again by
+ * re-checking, and a chart that never rendered has no output to retain.
+ */
+export function ManifestLinks({
+  available, rendered, document, product, reference, repository, onOpen,
+}: {
+  available: boolean
+  rendered: boolean
+  document: string
+  product: string
+  reference: string
+  repository?: string
+  onOpen: (document: string) => void
+}) {
+  if (!available) {
+    return (
+      <Typography.Text type="secondary" style={{ fontSize: 11 }}>
+        {rendered ? 'Not retained' : 'No output'}
+      </Typography.Text>
+    )
+  }
+  return (
+    <Space size={4}>
+      <Button size="small" type="text" icon={<FileTextOutlined />} onClick={() => onOpen(document)}>
+        View
+      </Button>
+      <Tooltip title="Download this chart's rendered manifest">
+        <Button
+          size="small"
+          type="text"
+          icon={<DownloadOutlined />}
+          href={renderedManifestUrl(product, reference, {
+            repository, document, download: true,
+          })}
+        />
+      </Tooltip>
+    </Space>
   )
 }
 

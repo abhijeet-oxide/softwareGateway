@@ -107,6 +107,14 @@ type ProgressEvent struct {
 // the ones somebody scrolls back for.
 const maxEvents = 60
 
+// MaxLogEvents is maxEvents, for a reader of a stored run.
+//
+// Exported so the interface can say that a log AT the cap has lines missing
+// from the front. A transcript that silently begins in the middle of a run is a
+// transcript somebody reads as the whole run, and then wonders why it does not
+// start with the run starting.
+const MaxLogEvents = maxEvents
+
 // ProgressCounts is what a run has actually got through.
 //
 // Every field is a number somebody can act on. "12 of 95" says how far; "3

@@ -117,3 +117,76 @@ func TestOnlyFailuresARetryCouldFixAreRetryable(t *testing.T) {
 		}
 	}
 }
+
+// The key a values file would have to supply, pulled out of eight different
+// paragraphs of helm. Six of the eight charts that failed in a real orb failed
+// for one reason - a `global.registry` an umbrella supplies - and the sentences
+// they failed with had nothing in common but that key.
+func TestMissingValueNamesTheKeyAValuesFileWouldSupply(t *testing.T) {
+	for _, c := range []struct{ msg, want string }{
+		// The guard template a subchart ships to fail loudly without its
+		// umbrella. Note `values-chart-check.yaml`: a filename with a dot in
+		// it, which must not be read as a values key.
+		{`helm template failed for crdb-redisio: Error: execution error at ` +
+			`(crdb-redisio/templates/values-chart-check.yaml:24:6): global.registry must be specified`,
+			"global.registry"},
+
+		// The schema states the path exactly, as a pointer plus the property.
+		{`helm template failed for cbur: Error: values don't meet the specifications of the ` +
+			`schema(s) in the following chart(s):` + "\n" + `cbur: - at '/global': missing property 'registry'`,
+			"global.registry"},
+		{`Error: values don't meet the specifications of the schema(s):` + "\n" +
+			`x: - at '': missing property 'registry'`, "registry"},
+
+		// A nil dereference names the key it was reaching for.
+		{`helm template failed for rgm: Error: execution error at ` +
+			`(rgm/templates/statefulset.yaml:149:29) executing "rgm/templates/statefulset.yaml" ` +
+			`at <.Values.timezone.timeZoneEnv>: nil pointer evaluating interface {}.timeZoneEnv`,
+			"timezone.timeZoneEnv"},
+
+		// A sentence a chart author wrote, naming no key. Inferring `registry`
+		// from it would be this tool making up a values path.
+		{`helm template failed for cmdb: Error: execution error at ` +
+			`(cmdb/templates/tests/test-jobs.yaml:2:4): Registry Must be provided for image 'cmdb-admin'`,
+			""},
+		// A file that does not parse has no key either: no values reach it.
+		{`Error: parse error at (ml/templates/zts_values-compact.yaml:13): unexpected EOF`, ""},
+	} {
+		if got := render.MissingValue(errors.New(c.msg)); got != c.want {
+			t.Errorf("MissingValue(%.60q…) = %q, want %q", c.msg, got, c.want)
+		}
+	}
+	if got := render.MissingValue(nil); got != "" {
+		t.Errorf("MissingValue(nil) = %q", got)
+	}
+}
+
+// A chart whose only failure is in `templates/tests/` installs perfectly: helm
+// install never applies a test hook. Saying so is the difference between a
+// vendor fixing a manifest and a vendor dismissing the report.
+func TestInTestHookSeparatesAHookFromTheChartItself(t *testing.T) {
+	for _, c := range []struct {
+		msg  string
+		want bool
+		file string
+	}{
+		{`Error: execution error at (cmdb/templates/tests/test-jobs.yaml:2:4): ` +
+			`Registry Must be provided`, true, "cmdb/templates/tests/test-jobs.yaml"},
+		{`Error: execution error at (csdc/templates/tests/etcd-status.yaml:31:16): boom`,
+			true, "csdc/templates/tests/etcd-status.yaml"},
+		{`Error: execution error at (sbc-cdc/templates/deployment.yaml:38:20): ` +
+			`A valid global registry value is required!`, false, "sbc-cdc/templates/deployment.yaml"},
+		{`Error: execution error at (rgm/templates/statefulset.yaml:149:29) ` +
+			`executing "rgm/templates/statefulset.yaml" at <.Values.timezone.timeZoneEnv>: nil pointer`,
+			false, "rgm/templates/statefulset.yaml"},
+		{`exec: "helm": executable file not found in $PATH`, false, ""},
+	} {
+		err := errors.New(c.msg)
+		if got := render.InTestHook(err); got != c.want {
+			t.Errorf("InTestHook(%.60q…) = %v, want %v", c.msg, got, c.want)
+		}
+		if got := render.FailingTemplate(err); got != c.file {
+			t.Errorf("FailingTemplate(%.60q…) = %q, want %q", c.msg, got, c.file)
+		}
+	}
+}

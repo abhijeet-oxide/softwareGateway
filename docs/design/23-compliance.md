@@ -651,6 +651,7 @@ Four tables with four different lifetimes, and the differences are deliberate.
 | The listing summary - one row per release: verdict, counts, when | `package_compliance` | **Forever** | It is what the Software page reads. Losing it turns a checked release back into an unchecked one on screen, which is the one distinction this whole feature exists to preserve. |
 | The run, its coverage and its results | `compliance_runs`, `compliance_charts`, `compliance_results` | The **newest `coordinator.gc.complianceRuns`** of each release, default **10** | A count and not an age, and that is the point: a release checked once eight months ago must keep that run - it is the only answer anybody has about it - while a release checked nightly by a schedule must not keep six thousand. Ten covers a fortnight of scheduled checks and a comparison against what a re-check replaced. |
 | Cached chart renders | `compliance_render_cache` | Until the TTL or the byte budget evicts them | Derived data with a deterministic recipe, so an evicted entry costs one render and can never be wrong. Not scoped to a release or a run at all: the whole point is that two releases sharing a chart share its render. |
+| The run's transcript - the timeline the panel shows while a check runs | `compliance_runs.log` | With its run | Bounded to sixty events by the tracker's ring before it is written, failures kept ahead of routine progress, so it is kilobytes rather than a transcript of ninety-five charts. It lived only in the Coordinator's memory and vanished the moment a check ended - and "which charts refused, and what did the nine minutes go on" is asked afterwards, not during. |
 | The rendered manifests | `compliance_rendered` | The **latest run only** | The one part of a run whose size the vendor sets. A completed run reclaims what it supersedes, and nothing displays an older run, so nothing reads an older run's manifests. Also bounded per document and per release while it is being written - see [compliance/00](../compliance/00-compliance-model.md) §2 rule 5. |
 | The working directory of unpacked charts | `/tmp` | The **duration of the run** | Removed by the run's own cleanup, on the success path and on every failure path. |
 
@@ -973,20 +974,22 @@ It does that with things that CHANGE and things that have HAPPENED:
 
 ```
 ┌─────────────────────────────────────────────────────────────────────────┐
-│ ◌ Checking this release   4s elapsed                    [ Stop check ]  │
+│ ◌ Compliance check in progress   4s elapsed             [ Stop check ]  │
 ├─────────────────────────────────────────────────────────────────────────┤
 │ Rendering charts                                              91 of 95  │
-│ Running helm template on each chart, twice…    about 0s left on this stage│
+│ Running helm template on each chart, twice   Estimated 4s remaining …   │
 │ ████████████████████████████████████████████████████████████░░░░        │
-│ [4 at a time] [cfx-lmf-chart] [cfx-nssaaf-chart3] [cfx-tngf-chart] …    │
+│ [processing 4 charts in parallel] [⎈ cfx-lmf-chart] [⎈ cfx-tngf-chart] …│
 │                                                                          │
-│ Find charts 0s › Download 0s › Render › Evaluate › Record               │
+│ Discover 0s › Download 12s › Render › Evaluate › Record                 │
 │                                                                          │
-│  Charts found 95    Downloaded 95    Rendered 93                        │
+│ ┌ Charts discovered ┐ ┌ Charts reused ┐ ┌ Charts rendered ┐ ┌ Failed ┐  │
+│ │        95         │ │       12      │ │       93        │ │    2   │  │
+│ └───────────────────┘ └───────────────┘ └─────────────────┘ └────────┘  │
 │                                                                          │
-│ What has happened                                                        │
-│  4s  cfx-ucmf-chart3 rendered 3 object(s)                               │
-│  3s  cfx-nssaaf-chart3 rendered 4 object(s)                             │
+│ Run log                                                                  │
+│  ● 4s  cfx-ucmf-chart3 rendered 3 objects                               │
+│  ● 3s  [Failed] rgm did not render: nil pointer evaluating .timezone…   │
 └─────────────────────────────────────────────────────────────────────────┘
 ```
 
@@ -1007,11 +1010,76 @@ It does that with things that CHANGE and things that have HAPPENED:
   between fixing the cause and reading a verdict nobody can use.
 - **The log is bounded and drops ordinary progress before it drops a failure**,
   so the lines that survive a long run are the ones worth scrolling back for.
+  Its dots carry the four colours the vulnerability sync log uses. They did not:
+  `ok` was the body text colour and `info` the muted one, so on a run whose
+  lines are almost all `info` and `ok` - which is every run that works - the
+  timeline was a column of grey dots, and the two colours that meant something
+  were lost among fifty that meant nothing.
+- **The transcript is kept.** `compliance_runs.log` (§9.1) holds it, and the
+  finished run's card carries a `Run log` button that opens the same timeline in
+  a drawer. This is the vulnerability sync's `Sync log`, in the same place on
+  the same kind of card: two features read by the same people on the same
+  release, and no reason for one to keep its record and the other to discard it.
 
 `Stop check` is a danger button with the sentence saying what stopping promises,
 which is the shape the analysis bar on the Details tab uses. It was a text link,
 which read as navigation on the one control that can abandon minutes of work
 against somebody's registry.
+
+### 14.0a The words the tab uses for a severity and for an outcome
+
+| On screen | Wire value | Why |
+|---|---|---|
+| **Critical** | `severity: block` | "Blocking" ranked the severity against nothing. Critical, Warning and Info is a scale a reader already knows the shape of, and it is the one the severities already are. The wire value stays `block`: every policy pack, every stored result and every export written so far says it, and renaming a column to rename a word is how an export stops opening. |
+| **Warning** | `severity: warn` | |
+| **Info** | `severity: info` | Its own slice now. It used to be folded in with the warnings, so narrowing to warnings returned a list padded with rows nobody has to act on, and the info count was on no screen at all. |
+| **Unchecked** | `outcome: error` | What it means is that the check could not be decided, and "Undecided" invited the reading "we decided not to". The full sentence - "Could not be checked" - is still what the outcome pill on the row says; the slice is one word because it sits beside four other one-word slices. |
+
+The findings tab is those five plus **All**, in that order, and each is a
+server-side filter: a release produces ten to fifteen thousand results, so
+fetching the failures and filtering them in the browser for "passed" would show
+a subset of a subset with no way to tell.
+
+**The unchecked count is not also a banner.** It was - a warning alert above the
+verdict saying *N checks could not be decided; this release has not been shown
+to meet the standards it was checked against*. True, and present on every screen
+of every inconclusive release, which on a real orb is all of them. A caveat that
+is always there is a caveat nobody reads, and this one pushed the verdict below
+the fold to say what the tile beside the verdict already says. The number lives
+in the summary, coloured, clickable, next to the numbers it qualifies.
+
+### 14.0b Why a chart did not render, said in the terms of the next action
+
+A real orb produced eight render failures, and an operator's first question was
+whether they were vendor defects, defects here, or a gap in this tool. The
+coverage table now answers it per row, from helm's own message:
+
+| Column | What it carries | Why |
+|---|---|---|
+| Reason | The classification (`render.FailureKind`) | Seventeen charts failing four ways are four conversations - three with the vendor and one with us - and an undifferentiated column of stack traces is how all four become "the tool is broken". |
+| `requires <key>` | The values key helm named, extracted (`render.MissingValue`) | **Six of those eight failed for one reason**: they are subcharts, and an umbrella supplies their `global.registry`. Their eight paragraphs of helm had nothing in common but that key, and the key is what turns "these charts are broken" into "these charts are subcharts, and one values entry would check them". It is also the input list for tier 2, when tier 2 is scheduled. |
+| `Helm test hook` | Whether the failing template is under `templates/tests/` (`render.InTestHook`) | `helm install` never applies a test hook, so a chart failing only there installs perfectly in a cluster. Telling a vendor "your chart does not render" about a job they have never run is how a true finding gets dismissed with the rest of the report. |
+| The template path | The file helm named | What a vendor opens. |
+
+Both the key and the hook flag are **derived on read** from the stored message
+rather than stored in their own columns, like the classification beside them: a
+run recorded before either existed gets the same coverage table a new one does,
+and no column has to be kept in step with a parser.
+
+`helm template --skip-tests` is **not** the fix for the test-hook case, and this
+is recorded because it is the obvious one. The flag filters test manifests out
+of the *output*, after every template has executed, so a `fail` inside a test
+template still aborts the render. Measured against helm v3.16.3 with a chart
+built to fail exactly that way, with and without the flag: the error was byte
+for byte identical.
+
+None of the eight is a defect in this renderer. Six are the tier-1 boundary
+reporting honestly (§4 of [compliance/00](../compliance/00-compliance-model.md):
+tier 1 is what the vendor shipped and its own `values.yaml`, and §13 here: `--set`
+is never used), and injecting a registry to force a render would make SUP-01 and
+SUP-02 judge a registry this platform invented. The other two are vendor defects
+reproducible with `helm template` and no arguments: a `values.schema.json` the
+chart's own defaults violate, and a template that does not parse.
 
 ### 14.1 Release page - a Compliance tab
 

@@ -1362,6 +1362,23 @@ export function usePackageCompliance(
      */
     refetchInterval: (q) => (q.state.data?.progress ? 1000 : false),
     /*
+     * KEEP THE LAST ANSWER ON SCREEN while the next one is fetched.
+     *
+     * The outcome slice, the search box and every select in this tab are part
+     * of the query key, so each of them starts a NEW query - and a new query
+     * has no data, so the verdict card, the summary tiles and the coverage
+     * counts all unmounted and came back. Switching from Unchecked to Passed
+     * blanked the whole page for a round trip, which reads as the tab reloading
+     * rather than as a filter narrowing.
+     *
+     * With the previous answer held, only the table changes: `isFetching` marks
+     * the rows as stale and the numbers above them stay put until the real ones
+     * arrive. The counts shown are the run's own tallies, which do not depend
+     * on the filter, so holding them is not holding something that has gone
+     * out of date.
+     */
+    placeholderData: (previous) => previous,
+    /*
      * A deployment with compliance switched off answers 404 here, deliberately
      * - an honest absence rather than a route that always fails. Not worth
      * retrying and not worth an error panel: the tab says "not configured" and

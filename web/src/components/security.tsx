@@ -14,6 +14,8 @@ import {
   c, mono, severity as severityColour, severitySurface, StatusPill, tokens,
   verdict as verdictColour, withAlpha,
 } from '../uikit'
+import { RunTiles } from './runtiles'
+import type { RunTile } from './runtiles'
 import { SEVERITIES } from '../api/types'
 import type {
   PackageSecuritySummary, ScanStatus, SecurityCounts, SecurityCoverage,
@@ -797,6 +799,7 @@ export function SecurityProgressPanel({ sync, onStop, stopping }: {
 }) {
   const stages = sync.stages ?? []
   const notes = sync.notes ?? []
+  const log = sync.log ?? []
 
   const fetching = stages.find((st) => st.name === 'fetching')
   const failing = stages.find((st) => st.name === 'failing')
@@ -810,43 +813,73 @@ export function SecurityProgressPanel({ sync, onStop, stopping }: {
   const done = fetching?.done ?? 0
   const percent = total > 0 ? Math.round((done / total) * 100) : 0
 
-  const elapsed = useElapsed(sync.startedAt, sync.state === 'syncing' && !sync.stalled)
+  const running = sync.state === 'syncing' && !sync.stalled
+  const elapsed = useElapsed(sync.startedAt, running)
+  const remaining = estimateRemaining(sync.startedAt, done, total)
 
   return (
-    <Space direction="vertical" size={12} style={{ width: '100%', padding: '4px 0' }}>
-      <Space style={{ width: '100%', justifyContent: 'space-between' }} align="start">
-        <Space size={8}>
-          <SyncOutlined spin style={{ color: c.brand }} />
-          {/*
-            What the sync is DOING, in a sentence somebody can act on.
+    <Space direction="vertical" size={16} style={{ width: '100%', padding: '4px 0' }}>
+      <Space style={{ width: '100%', justifyContent: 'space-between' }} align="start" wrap>
+        <Space direction="vertical" size={0}>
+          <Space size={8}>
+            <SyncOutlined spin style={{ color: c.brand }} />
+            {/*
+              What the sync is DOING, in a sentence somebody can act on.
 
-            "Resolving the release" named a stage rather than a step, and read
-            as though the release itself were in question. What is happening is
-            that the platform is working out which of the release's artifacts
-            the scanner can be asked about, and there is no number for it yet
-            because the size of that list is the thing being established.
+              "Resolving the release" named a stage rather than a step, and read
+              as though the release itself were in question. What is happening is
+              that the platform is working out which of the release's artifacts
+              the scanner can be asked about, and there is no number for it yet
+              because the size of that list is the thing being established.
+            */}
+            <Typography.Text strong>
+              {total > 0
+                ? `Retrieving results for ${total.toLocaleString()} images from ${scannerName(sync)}`
+                // No stages at all is a sync running on another Coordinator, and
+                // this replica does not know what step it has reached. Saying it
+                // is resolving artifacts would be inventing a position.
+                : stages.length === 0
+                  ? 'Vulnerability sync in progress on another Coordinator'
+                  : 'Working out which of this release\u2019s artifacts to ask about'}
+            </Typography.Text>
+          </Space>
+          {/*
+            The repository only. The headline above already names the scanner,
+            and "JFrog Xray" under "…from JFrog Xray" is the same fact twice in
+            two lines.
           */}
-          <Typography.Text strong>
-            {total > 0
-              ? `Retrieving results for ${total.toLocaleString()} images from ${scannerName(sync)}`
-              // No stages at all is a sync running on another Coordinator, and
-              // this replica does not know what step it has reached. Saying it
-              // is resolving artifacts would be inventing a position.
-              : stages.length === 0
-                ? `Vulnerability sync in progress on another Coordinator`
-                : 'Working out which of this release’s artifacts to ask about'}
-          </Typography.Text>
-        </Space>
-        <Space size={8} align="center">
-          {elapsed && (
-            <Typography.Text type="secondary" style={{ fontFamily: mono, fontSize: 12 }}>{elapsed}</Typography.Text>
+          {sync.repository && (
+            <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+              {sync.repository}
+            </Typography.Text>
           )}
-          {onStop && (
-            <Tooltip title="Stops the sync. Nothing already stored is lost - the release keeps whatever its last completed sync recorded.">
-              <Button size="small" danger icon={<StopOutlined />} loading={stopping} onClick={onStop}>
-                Stop
-              </Button>
-            </Tooltip>
+        </Space>
+        <Space direction="vertical" size={0} align="end">
+          <Space size={8} align="center">
+            {elapsed && (
+              <Typography.Text type="secondary" style={{ fontFamily: mono, fontSize: 12 }}>
+                {elapsed} elapsed
+              </Typography.Text>
+            )}
+            {onStop && (
+              <Tooltip title="Stops the sync. Nothing already stored is lost - the release keeps whatever its last completed sync recorded.">
+                <Button size="small" danger icon={<StopOutlined />} loading={stopping} onClick={onStop}>
+                  Stop sync
+                </Button>
+              </Tooltip>
+            )}
+          </Space>
+          {/*
+            AN ESTIMATE, derived from this sync's own rate rather than a
+            constant, and withheld until enough images have come back for the
+            rate to mean anything. The compliance run has said this since it
+            shipped and the sync did not, which left the two longest waits in
+            the product answering "how much longer" differently.
+          */}
+          {running && remaining && (
+            <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+              Estimated {remaining} remaining
+            </Typography.Text>
           )}
         </Space>
       </Space>
@@ -857,84 +890,68 @@ export function SecurityProgressPanel({ sync, onStop, stopping }: {
         the work is stuck rather than that it is elsewhere.
       */}
       {stages.length > 0 && (
-      <div>
-        {/*
-          A TRAVELLING stripe until the first batch lands, a real bar after.
+        <div>
+          {/*
+            A TRAVELLING stripe until the first batch lands, a real bar after.
 
-          A determinate bar at zero is a claim about position, and the claim it
-          makes is "nothing has happened". The first request to a scanner about
-          fifty images takes as long as it takes - a minute against a busy Xray
-          - and for that whole minute the bar sat at 0%, which is what a stuck
-          job looks like. It was not stuck; there was simply nothing to report
-          a position for yet. The stripe says "working" without saying where,
-          which is the honest shape for work whose extent is known and whose
-          progress is not.
-        */}
-        {done === 0
-          ? (
-            <div
-              role="progressbar"
-              aria-label="Retrieving scan results"
-              aria-busy="true"
-              style={{
-                height: 8,
-                borderRadius: 4,
-                background: c.brandSoft,
-                overflow: 'hidden',
-                position: 'relative',
-              }}
-            >
+            A determinate bar at zero is a claim about position, and the claim it
+            makes is "nothing has happened". The first request to a scanner about
+            fifty images takes as long as it takes - a minute against a busy Xray
+            - and for that whole minute the bar sat at 0%, which is what a stuck
+            job looks like. It was not stuck; there was simply nothing to report
+            a position for yet. The stripe says "working" without saying where,
+            which is the honest shape for work whose extent is known and whose
+            progress is not.
+          */}
+          {done === 0
+            ? (
               <div
+                role="progressbar"
+                aria-label="Retrieving scan results"
+                aria-busy="true"
                 style={{
-                  position: 'absolute',
-                  inset: 0,
-                  width: '30%',
+                  height: 8,
                   borderRadius: 4,
-                  background: c.brand,
-                  animation: 'slm-working 1.4s ease-in-out infinite',
+                  background: c.brandSoft,
+                  overflow: 'hidden',
+                  position: 'relative',
                 }}
+              >
+                <div
+                  style={{
+                    position: 'absolute',
+                    inset: 0,
+                    width: '30%',
+                    borderRadius: 4,
+                    background: c.brand,
+                    animation: 'slm-working 1.4s ease-in-out infinite',
+                  }}
+                />
+              </div>
+            )
+            : (
+              <Progress
+                percent={percent}
+                status="active"
+                showInfo={false}
+                strokeColor={c.brand}
+                trailColor={c.track}
               />
-            </div>
-          )
-          : (
-            <Progress
-              percent={percent}
-              status="active"
-              showInfo={false}
-              strokeColor={c.brand}
-            />
-          )}
-        {/*
-          SEPARATED, because these are four unrelated facts and whitespace alone
-          did not say so: "Preparing" ran into "JFrog Xray · cfx-jfrog-lab" as
-          though the scanner's name were part of the sentence before it.
-        */}
-        <Meta
-          style={{ marginTop: 4 }}
-          items={[
-            total > 0
-              ? `${done.toLocaleString()} of ${total.toLocaleString()} images`
-              // The counterpart of the headline: no denominator exists yet, so
-              // this says what is being counted rather than pretending to a
-              // position.
-              : 'Listing the release’s artifacts',
-            cached && cached.done > 0
-              ? `${cached.done.toLocaleString()} read from storage`
-              : null,
-            /*
-              Failures shown AS THEY HAPPEN, not at the end. A sync against a
-              scanner that is timing out looks identical to a healthy one for
-              two minutes, and then delivers the bad news all at once - by which
-              time the person who could have stopped it has walked away.
-            */
-            failing && failing.done > 0
-              ? { text: `${failing.done.toLocaleString()} not retrieved`, colour: c.danger }
-              : null,
-            sync.repository ? `${scannerName(sync)} · ${sync.repository}` : null,
-          ]}
-        />
-      </div>
+            )}
+        </div>
       )}
+
+      {/*
+        THE COUNTERS, in the shape the compliance run uses.
+
+        They were a row of grey sentences separated by middots - "142 of 380
+        images · 38 read from storage · 4 not retrieved" - which is four facts of
+        different importance drawn identically, with the one that changes what
+        the answer means (the failures) indistinguishable from the one that does
+        not. These are the same numbers as tiles, with the failures coloured,
+        and they are the same tiles the compliance run draws for the same reason.
+      */}
+      <RunTiles tiles={syncTiles({ total, done, cached: cached?.done ?? 0, failed: failing?.done ?? 0 })} />
 
       {notes.length > 0 && (
         <Space direction="vertical" size={2} style={{ width: '100%' }}>
@@ -942,6 +959,34 @@ export function SecurityProgressPanel({ sync, onStop, stopping }: {
             <Typography.Text key={`${n}-${i}`} type="secondary" style={{ fontSize: 12 }}>{n}</Typography.Text>
           ))}
         </Space>
+      )}
+
+      {/*
+        THE TRANSCRIPT, on the panel rather than only behind the Sync log button.
+
+        The compliance run has shown its log under the bar since it shipped, and
+        it is the single most useful thing on that panel: a list that changes
+        every few seconds is a job that is working, whatever the bar is doing,
+        and it names the artifact that has just failed nine minutes in without
+        waiting for the run to end. The sync had the same transcript and made
+        somebody open a drawer to read it while they were watching the bar.
+      */}
+      {log.length > 0 && (
+        <div>
+          <Typography.Text type="secondary" style={{ fontSize: 11 }}>
+            Sync log
+          </Typography.Text>
+          <div style={{ marginTop: 8, maxHeight: 240, overflowY: 'auto', paddingRight: 8 }}>
+            <Timeline
+              mode="left"
+              items={[...log].reverse().slice(0, 40).map((e, i) => ({
+                key: `${e.at ?? ''}-${i}`,
+                color: LOG_COLOUR[e.level] ?? c.text2,
+                children: <LogLine entry={e} showDate={false} />,
+              }))}
+            />
+          </div>
+        </div>
       )}
 
       {stages.length === 0 && (
@@ -966,34 +1011,67 @@ export function SecurityProgressPanel({ sync, onStop, stopping }: {
 }
 
 /**
- * A row of small facts with separators between them.
+ * The four numbers a sync produces, as counters.
  *
- * The separator is the whole point. Four `<Text>`s in a Space are four facts
- * with a gap between them, and a gap reads as a space in a sentence: "Preparing
- * JFrog Xray · cfx-jfrog-lab" was three unrelated things that looked like one.
+ * Images read from storage is here beside the ones fetched because it is what
+ * explains a sync that finishes in twenty seconds after promising three hundred
+ * requests - without it, a fast sync reads as a sync that did not run.
  */
-function Meta({ items, style }: {
-  items: (string | { text: string; colour?: string } | null | undefined | false)[]
-  style?: React.CSSProperties
-}) {
-  const shown = items.filter(Boolean).map((i) => (typeof i === 'string' ? { text: i } : i as { text: string; colour?: string }))
-  if (shown.length === 0) return null
+function syncTiles({ total, done, cached, failed }: {
+  total: number
+  done: number
+  cached: number
+  failed: number
+}): RunTile[] {
+  const tiles: RunTile[] = []
+  if (total > 0) {
+    tiles.push({
+      label: 'Images to scan', value: total.toLocaleString(),
+      hint: 'Artifacts of this release the scanner can be asked about',
+    })
+    tiles.push({
+      label: 'Results retrieved', value: done.toLocaleString(),
+      hint: 'Artifacts the scanner has answered for so far',
+    })
+  }
+  if (cached > 0) {
+    tiles.push({
+      label: 'Read from storage', value: cached.toLocaleString(), tone: c.ok,
+      hint: 'Already answered for by an earlier sync, so the scanner was not asked again. '
+        + 'This is why a sync over three hundred images can finish in twenty seconds.',
+    })
+  }
+  if (failed > 0) {
+    tiles.push({
+      label: 'Not retrieved', value: failed.toLocaleString(), tone: c.danger,
+      hint: 'The scanner did not answer for these. They are recorded as unscanned - an '
+        + 'artifact with no result is not an artifact with no vulnerabilities.',
+    })
+  }
+  return tiles
+}
 
-  return (
-    <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: '2px 8px', ...style }}>
-      {shown.map((item, i) => (
-        <span key={item.text} style={{ display: 'inline-flex', alignItems: 'center', gap: 8 }}>
-          {i > 0 && <span aria-hidden style={{ color: c.text3, fontSize: 12 }}>·</span>}
-          <Typography.Text
-            type={item.colour ? undefined : 'secondary'}
-            style={{ fontSize: 12, color: item.colour }}
-          >
-            {item.text}
-          </Typography.Text>
-        </span>
-      ))}
-    </div>
-  )
+/**
+ * How much longer, from this sync's own rate.
+ *
+ * Withheld until a tenth of the work is done or five images have come back,
+ * whichever is sooner: an estimate extrapolated from one slow first request is
+ * a number that turns out four times wrong, and a confident wrong number is
+ * worse than none. Absent once the work is finished, because zero remaining is
+ * not an estimate.
+ */
+function estimateRemaining(startedAt: string | undefined, done: number, total: number): string | undefined {
+  if (!startedAt || total <= 0 || done <= 0 || done >= total) return undefined
+  if (done < Math.min(5, Math.ceil(total / 10))) return undefined
+  const started = Date.parse(startedAt)
+  if (Number.isNaN(started)) return undefined
+  const perItem = (Date.now() - started) / done
+  const seconds = Math.round((perItem * (total - done)) / 1000)
+  if (seconds <= 0) return undefined
+  if (seconds < 60) return `${seconds}s`
+  const minutes = Math.round(seconds / 60)
+  if (minutes < 60) return `${minutes}m`
+  return `${Math.floor(minutes / 60)}h ${minutes % 60}m`
 }
 
 /**

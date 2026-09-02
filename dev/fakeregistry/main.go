@@ -45,8 +45,21 @@ type release struct {
 
 // published is when the vendor shipped it. Derived from ageDays so the whole
 // catalogue slides forward with the clock rather than aging into 2024.
+//
+// TRUNCATED TO THE DAY, and that is not cosmetic. This timestamp goes into
+// `org.opencontainers.image.created` on every manifest, so it is part of every
+// manifest's digest - and at second resolution the whole catalogue was
+// re-digested on every restart of this binary. A registry restart therefore
+// invalidated the seeded database: the Coordinator held digests nothing served
+// any more, and every walk, compliance run and comparison answered 404 until
+// discovery ran again. Which is thirty minutes away by default, so in practice
+// the estate was simply broken until somebody re-seeded it.
+//
+// A day is stable enough that restarting the registry - which dev/seed/up.sh
+// itself does, to switch the declared sizes - leaves the database valid, and
+// coarse enough that nothing on screen reads differently.
 func (r release) published() time.Time {
-	return time.Now().UTC().AddDate(0, 0, -r.ageDays)
+	return time.Now().UTC().Truncate(24*time.Hour).AddDate(0, 0, -r.ageDays)
 }
 
 type component struct {

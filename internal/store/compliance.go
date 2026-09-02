@@ -143,6 +143,10 @@ type ComplianceRunRow struct {
 	Blocking, Warning, Info          int
 	Truncated                        bool
 	Trigger                          string
+	// Log is the run's transcript, kept so the finished run can show the same
+	// timeline the live one did. Bounded by the tracker's ring before it gets
+	// here - sixty events, failures kept ahead of routine progress.
+	Log []compliance.ProgressEvent
 
 	StartedAt   time.Time
 	FinishedAt  *time.Time
@@ -330,13 +334,13 @@ func (p *Packages) FinishComplianceRun(
 		       bundle_digest = ?, helm_version = ?, kube_version = ?, checks = ?,
 		       pass_count = ?, fail_count = ?, skip_count = ?, error_count = ?, waived_count = ?,
 		       blocking_count = ?, warning_count = ?, info_count = ?,
-		       truncated = ?, finished_at = ?, heartbeat_at = NULL
+		       truncated = ?, log = ?, finished_at = ?, heartbeat_at = NULL
 		 WHERE id = ?`),
 		run.State, nullIfEmpty(run.Error), run.Verdict,
 		run.BundleDigest, run.HelmVersion, run.KubeVersion, run.Checks,
 		run.Pass, run.Fail, run.Skip, run.Errors, run.Waived,
 		run.Blocking, run.Warning, run.Info,
-		run.Truncated, finished, run.ID); err != nil {
+		run.Truncated, complianceLogJSON(run.Log), finished, run.ID); err != nil {
 		return fmt.Errorf("update compliance run: %w", err)
 	}
 
@@ -490,6 +494,7 @@ func (p *Packages) RecordComplianceRun(ctx context.Context, runID string, packag
 		Warning:      run.Counts.Warning,
 		Info:         run.Counts.Info,
 		Truncated:    run.Truncated,
+		Log:          run.Log,
 	}
 
 	charts := make([]ComplianceChartRow, 0, len(run.Charts))
@@ -542,4 +547,22 @@ func (p *Packages) RecordComplianceRun(ctx context.Context, runID string, packag
 	}
 
 	return p.FinishComplianceRun(ctx, row, charts, results, rendered)
+}
+
+// complianceLogJSON encodes a run's transcript for the row.
+//
+// NULL rather than "[]" for a run with no events, so a run recorded before this
+// column existed and one that genuinely logged nothing read the same - both are
+// "no transcript", and the interface offers no log button for either.
+func complianceLogJSON(events []compliance.ProgressEvent) any {
+	if len(events) == 0 {
+		return nil
+	}
+	b, err := json.Marshal(events)
+	if err != nil {
+		// Unreachable for this shape, and not worth failing a whole run's write
+		// over: the transcript is a convenience beside the results.
+		return nil
+	}
+	return string(b)
 }

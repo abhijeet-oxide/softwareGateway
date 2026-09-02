@@ -1026,7 +1026,7 @@ function complianceFact(p: Package): string | undefined {
     case '':
       return 'Not checked'
     default:
-      if (cmp.blocking > 0) return `${cmp.blocking.toLocaleString()} blocking`
+      if (cmp.blocking > 0) return `${cmp.blocking.toLocaleString()} critical`
       if (cmp.error > 0) return 'Inconclusive'
       return cmp.label || 'Compliant'
   }
@@ -1573,12 +1573,12 @@ export default function PackageDetail() {
                     <ScaleOutlined />
                     Compliance
                     {/*
-                      The count that matters is BLOCKING, not total. A release
-                      with four hundred informational rows and nothing blocking
+                      The count that matters is CRITICAL, not total. A release
+                      with four hundred informational rows and nothing critical
                       is fine, and a label that said "400" would send somebody
                       into the tab to find that out.
 
-                      Undecided checks get their own mark, because a release
+                      Unchecked checks get their own mark, because a release
                       that could not be checked must not read as one that
                       passed - which a bare absence here would.
                     */}
@@ -1590,7 +1590,7 @@ export default function PackageDetail() {
                     {p?.compliance?.state === 'complete'
                       && p.compliance.blocking === 0
                       && p.compliance.error > 0 && (
-                      <Tooltip title={`${p.compliance.error} check(s) could not be decided, so this release has not been shown to comply`}>
+                      <Tooltip title={`${p.compliance.error} checks are unchecked, so this release has not been shown to comply`}>
                         <Typography.Text type="warning" style={{ fontSize: 12 }}>?</Typography.Text>
                       </Tooltip>
                     )}

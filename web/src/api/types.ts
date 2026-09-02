@@ -2022,6 +2022,22 @@ export interface ComplianceRun {
   /** The result list was cut short. A truncated report LOOKS complete. */
   truncated?: boolean
   trigger?: string
+  /**
+   * The run's transcript, in the shape the live panel reads.
+   *
+   * Kept with the finished run because the question the timeline answers -
+   * which charts refused, and what the nine minutes went on - is asked after
+   * the run rather than during it.
+   */
+  log?: ComplianceProgressEvent[]
+  /**
+   * The transcript is at the ring's cap, so lines were dropped from the front.
+   *
+   * Failures are kept ahead of routine progress, so what was dropped is the
+   * ordinary "rendered N objects" lines - but a log that silently begins in the
+   * middle of a run is one somebody reads as the whole run.
+   */
+  logTruncated?: boolean
   startedAt: string
   finishedAt?: string
 }
@@ -2047,6 +2063,20 @@ export interface ComplianceChart {
   errorKind?: string
   errorLabel?: string
   errorHint?: string
+  /**
+   * The values key the chart demanded, and the template that demanded it.
+   *
+   * Six of the eight charts that failed in a real orb failed for one reason - a
+   * `global.registry` an umbrella supplies - and the only thing their eight
+   * different paragraphs of helm had in common was that key.
+   *
+   * `errorInTest` marks a failure inside a helm test hook. `helm install` never
+   * applies one, so a chart failing only there installs perfectly and still
+   * cannot be checked here.
+   */
+  errorValue?: string
+  errorFile?: string
+  errorInTest?: boolean
   /**
    * How many renders were attempted, and whether a further one could have
    * helped. "Retried and failed again" and "not retried, because a second

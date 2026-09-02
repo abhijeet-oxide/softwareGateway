@@ -791,11 +791,20 @@ export function ComparisonTiles({ resolved, introduced, moreSevere, lessSevere, 
  * long, how much has already gone wrong, and against which scanner. All four
  * are known, and all four are here.
  */
-export function SecurityProgressPanel({ sync, onStop, stopping }: {
+export function SecurityProgressPanel({ sync, onStop, stopping, starting }: {
   sync: SecuritySyncStatus
   /** Offered whenever a sync can be stopped, which is whenever one is running. */
   onStop?: () => void
   stopping?: boolean
+  /**
+   * The request that takes the claim is still in flight.
+   *
+   * Between the press and the server's answer there is a round trip, and until
+   * this existed the tab was unchanged for all of it - so on a busy Coordinator
+   * the button appeared not to have worked and people pressed it again. The
+   * panel appears on the press and fills in when the claim comes back.
+   */
+  starting?: boolean
 }) {
   const stages = sync.stages ?? []
   const notes = sync.notes ?? []
@@ -813,9 +822,19 @@ export function SecurityProgressPanel({ sync, onStop, stopping }: {
   const done = fetching?.done ?? 0
   const percent = total > 0 ? Math.round((done / total) * 100) : 0
 
-  const running = sync.state === 'syncing' && !sync.stalled
-  const elapsed = useElapsed(sync.startedAt, running)
-  const remaining = estimateRemaining(sync.startedAt, done, total)
+  const running = (sync.state === 'syncing' && !sync.stalled) || Boolean(starting)
+  /*
+   * THIS sync's clock, not the last one's.
+   *
+   * `startedAt` still holds the previous run until the claim comes back, so
+   * counting from it during the press read "9579m 18s elapsed" - a duration
+   * since a sync six days ago, printed beside a bar for one that had not begun.
+   * A run that has not started has no elapsed time, and no number is the honest
+   * thing to show for one.
+   */
+  const live = sync.state === 'syncing' && !sync.stalled
+  const elapsed = useElapsed(live ? sync.startedAt : undefined, live)
+  const remaining = live ? estimateRemaining(sync.startedAt, done, total) : undefined
 
   return (
     <Space direction="vertical" size={16} style={{ width: '100%', padding: '4px 0' }}>
@@ -833,14 +852,17 @@ export function SecurityProgressPanel({ sync, onStop, stopping }: {
               because the size of that list is the thing being established.
             */}
             <Typography.Text strong>
-              {total > 0
-                ? `Retrieving results for ${total.toLocaleString()} images from ${scannerName(sync)}`
-                // No stages at all is a sync running on another Coordinator, and
-                // this replica does not know what step it has reached. Saying it
-                // is resolving artifacts would be inventing a position.
-                : stages.length === 0
-                  ? 'Vulnerability sync in progress on another Coordinator'
-                  : 'Working out which of this release\u2019s artifacts to ask about'}
+              {starting && total === 0
+                ? `Starting the vulnerability sync against ${scannerName(sync)}`
+                : total > 0
+                  ? `Retrieving results for ${total.toLocaleString()} images from ${scannerName(sync)}`
+                  // No stages at all is a sync running on another Coordinator,
+                  // and this replica does not know what step it has reached.
+                  // Saying it is resolving artifacts would be inventing a
+                  // position.
+                  : stages.length === 0
+                    ? 'Vulnerability sync in progress on another Coordinator'
+                    : 'Working out which of this release\u2019s artifacts to ask about'}
             </Typography.Text>
           </Space>
           {/*
@@ -889,7 +911,7 @@ export function SecurityProgressPanel({ sync, onStop, stopping }: {
         Coordinator has none, and a bar sitting at zero for two minutes says
         the work is stuck rather than that it is elsewhere.
       */}
-      {stages.length > 0 && (
+      {(stages.length > 0 || starting) && (
         <div>
           {/*
             A TRAVELLING stripe until the first batch lands, a real bar after.
@@ -971,12 +993,25 @@ export function SecurityProgressPanel({ sync, onStop, stopping }: {
         waiting for the run to end. The sync had the same transcript and made
         somebody open a drawer to read it while they were watching the bar.
       */}
-      {log.length > 0 && (
+      {/*
+        The transcript of THIS sync. While the claim is still being taken the
+        stored log is the previous run's, and a list of finished lines under a
+        bar for a sync that has not begun reads as progress it has already made.
+      */}
+      {log.length > 0 && live && (
         <div>
           <Typography.Text type="secondary" style={{ fontSize: 11 }}>
             Sync log
           </Typography.Text>
-          <div style={{ marginTop: 8, maxHeight: 240, overflowY: 'auto', paddingRight: 8 }}>
+          {/* Padded at the top for the same reason the compliance run log is:
+              the first dot sits above its box and was clipped by the scroll
+              container's edge. */}
+          <div
+            style={{
+              marginTop: 8, maxHeight: 240, overflowY: 'auto',
+              paddingRight: 8, paddingTop: 6,
+            }}
+          >
             <Timeline
               mode="left"
               items={[...log].reverse().slice(0, 40).map((e, i) => ({
@@ -989,7 +1024,7 @@ export function SecurityProgressPanel({ sync, onStop, stopping }: {
         </div>
       )}
 
-      {stages.length === 0 && (
+      {stages.length === 0 && !starting && (
         <Typography.Text type="secondary" style={{ fontSize: 12 }}>
           {/*
             No live position means one of two things, and until the sync started

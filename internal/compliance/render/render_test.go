@@ -184,6 +184,53 @@ func TestObjectExistenceIsConfigurable(t *testing.T) {
 	}
 }
 
+// A chart that was not probed costs ITS OWN findings their ownership and
+// nothing else.
+//
+// # Why this is the test that matters most about the probe
+//
+// Determinacy used to be all-or-nothing per release: one chart whose second
+// render did not happen made the whole run answer `unknown`. On a ninety-five
+// chart orb one such chart is a certainty, so every finding read "Ownership not
+// established" and the split between the vendor's defect and the site's
+// decision - the first split anybody makes triaging a report - was on no screen
+// anywhere.
+//
+// The guarantee that made it all-or-nothing is still enforced, and it is the
+// other half of this test: an object in the baseline index and absent from the
+// perturbed one reads as "its existence depends on values", so a chart must
+// contribute to BOTH indexes or to NEITHER. Feeding one render of an unprobed
+// chart would report every field of it as `configurable`, which invents an
+// excuse for a real defect.
+func TestUnprobedChartsCostOnlyTheirOwnDeterminacy(t *testing.T) {
+	fixed := compliance.Resource{Object: map[string]any{
+		"apiVersion": "apps/v1", "kind": "Deployment",
+		"metadata": map[string]any{"name": "probed"},
+		"spec":     map[string]any{"replicas": float64(3)},
+	}}
+	// Same object in both renders, so its field is the chart's own decision.
+	probe := render.NewProbe(
+		[]compliance.Resource{fixed},
+		[]compliance.Resource{fixed},
+		true,
+	)
+	if got := probe.Determinacy(compliance.Subject{Resource: &fixed}, "spec.replicas"); got != compliance.DeterminacyFixed {
+		t.Errorf("a probed chart's field = %s, want fixed", got)
+	}
+
+	// A chart the run could not render twice is in NEITHER index. It must read
+	// `unknown` - not `configurable`, which is what feeding only its baseline
+	// render into the probe would produce, and which would excuse a real defect.
+	unprobed := compliance.Resource{Object: map[string]any{
+		"apiVersion": "apps/v1", "kind": "Deployment",
+		"metadata": map[string]any{"name": "unprobed"},
+		"spec":     map[string]any{"replicas": float64(1)},
+	}}
+	if got := probe.Determinacy(compliance.Subject{Resource: &unprobed}, "spec.replicas"); got != compliance.DeterminacyUnknown {
+		t.Errorf("an unprobed chart's field = %s, want unknown", got)
+	}
+}
+
 // Without a second render every answer is `unknown`. Guessing `fixed` invents
 // vendor defects; guessing `configurable` excuses real ones.
 func TestUnusableProbeSaysUnknown(t *testing.T) {

@@ -515,6 +515,7 @@ export function ComplianceTab({ product, reference, repository }: {
           verdict={data.run.verdict}
           verdictLabel={data.run.verdictLabel}
           selected={tab === 'findings' ? SUMMARY_FOR_VIEW[view] : undefined}
+          grouped={grouping === 'unique'}
           onSelect={(what) => {
             setTab('findings')
             setView(VIEW_FOR_SUMMARY[what])
@@ -633,18 +634,31 @@ export function ComplianceTab({ product, reference, repository }: {
                 value={grouping}
                 onChange={(v) => setGrouping(v as 'unique' | 'all')}
                 options={[
-                  { value: 'unique', label: `Unique checks (${formatCount(uniqueInSlice)})` },
+                  { value: 'unique', label: `Unique findings (${formatCount(uniqueInSlice)})` },
                   { value: 'all', label: `All findings (${formatCount(data?.total ?? 0)})` },
                 ]}
               />
 
+              {/*
+                THE SLICE COUNTS WHAT THE TABLE WILL HOLD.
+
+                Grouped, "Critical (171)" sat over five rows. Every count on
+                this card follows the grouping now, so nothing on screen can
+                quote a number the rows under it do not add up to. Passed,
+                Unchecked and All have no stored distinct count - a check is
+                distinct per severity on the wire, not per outcome - so they
+                keep their total either way.
+              */}
               <Segmented
                 value={view}
                 onChange={(v) => setView(v as ResultView)}
-                options={VIEW_ORDER.map((k) => ({
-                  value: k,
-                  label: `${VIEWS[k].label} (${formatCount(VIEWS[k].count(data?.run?.counts))})`,
-                }))}
+                options={VIEW_ORDER.map((k) => {
+                  const unique = VIEWS[k].unique
+                  const n = grouping === 'unique' && unique
+                    ? unique(data?.run?.counts)
+                    : VIEWS[k].count(data?.run?.counts)
+                  return { value: k, label: `${VIEWS[k].label} (${formatCount(n)})` }
+                })}
               />
 
               <Select

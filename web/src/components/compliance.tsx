@@ -1,5 +1,6 @@
 import type { ReactNode } from 'react'
 import { Alert, Card, Space, Tooltip, Typography } from 'antd'
+import { HelmOutlined } from '../icons'
 import { FieldLabel, StatusPill, c, mono } from '../uikit'
 import type { PillTone } from '../uikit'
 import { formatRelative } from '../domain/format'
@@ -178,7 +179,9 @@ export function DeterminacyTag({ determinacy, label }: {
  * fold to say what this band says. It is a coloured meter in the confidence
  * zone, beside the coverage it qualifies.
  */
-export function ComplianceSummary({ counts, charts, verdict, verdictLabel, selected, onSelect }: {
+export function ComplianceSummary({
+  counts, charts, verdict, verdictLabel, selected, grouped = true, onSelect,
+}: {
   counts: ComplianceCounts
   /** The run's denominator: what rendered, and what did not. */
   charts?: ComplianceChart[]
@@ -186,10 +189,27 @@ export function ComplianceSummary({ counts, charts, verdict, verdictLabel, selec
   verdictLabel?: string
   /** The slice currently on screen, so the row that drives it reads as chosen. */
   selected?: SummaryKey
+  /**
+   * Whether the table below is grouped.
+   *
+   * The severity zone leads with whichever number the table is showing, so the
+   * card and the rows under it can never quote different ones - the whole
+   * reason this pairing is drawn at all.
+   */
+  grouped?: boolean
   onSelect?: (what: SummaryKey) => void
 }) {
-  const findings = counts.blocking + counts.warning + counts.info
-  const unique = counts.uniqueBlocking + counts.uniqueWarning + counts.uniqueInfo
+  /*
+   * WHAT COUNTS AS A FAILED CHECK, and info does not.
+   *
+   * An informational finding is recorded so somebody can look at it; it is not
+   * work, it does not block, and nobody has to answer for it. Adding it to the
+   * headline made a release with four hundred notes look worse than one with
+   * four defects, which is the number this zone exists to get right. Info keeps
+   * its own row in the zone beside this one.
+   */
+  const findings = counts.blocking + counts.warning
+  const unique = counts.uniqueBlocking + counts.uniqueWarning
   const decided = counts.pass + counts.fail + counts.waived
   const total = decided + counts.error + counts.skip
   const rendered = (charts ?? []).filter((ch) => ch.status === 'ok').length
@@ -251,6 +271,28 @@ export function ComplianceSummary({ counts, charts, verdict, verdictLabel, selec
               <Typography.Text type="secondary" style={{ fontSize: 12.5 }}>
                 {unique === 1 ? 'check failed' : 'checks failed'}
               </Typography.Text>
+              {/*
+                WHICH ones, in the same breath. "40 checks failed" is a number
+                somebody has to open a tab to act on; "21 critical, 19 warning"
+                is a decision, and it is the split the release meeting turns on.
+              */}
+              {unique > 0 && (
+                <div style={{ marginTop: 4, fontSize: 12.5 }}>
+                  {counts.uniqueBlocking > 0 && (
+                    <span style={{ color: c.danger, fontWeight: 600 }}>
+                      {counts.uniqueBlocking.toLocaleString()} critical
+                    </span>
+                  )}
+                  {counts.uniqueBlocking > 0 && counts.uniqueWarning > 0 && (
+                    <span style={{ color: c.text3 }}> · </span>
+                  )}
+                  {counts.uniqueWarning > 0 && (
+                    <span style={{ color: c.pending, fontWeight: 600 }}>
+                      {counts.uniqueWarning.toLocaleString()} warning
+                    </span>
+                  )}
+                </div>
+              )}
             </div>
             {/*
               The shape of the findings, in the severity colours the rows use.
@@ -259,10 +301,25 @@ export function ComplianceSummary({ counts, charts, verdict, verdictLabel, selec
               nothing about the work in front of somebody.
             */}
             <ComplianceSeverityBar counts={counts} />
-            <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-              {findings.toLocaleString()} {findings === 1 ? 'finding' : 'findings'}
-              {chartTotal > 0
-                && ` across ${rendered.toLocaleString()} of ${chartTotal.toLocaleString()} charts rendered`}
+            {/*
+              How much editing there is to do, which is a different question
+              from how many rules were broken and just as relevant - so it is
+              read at the same size as a fact rather than as a footnote.
+            */}
+            <Typography.Text style={{ fontSize: 13, color: c.text2 }}>
+              <strong style={{ color: c.text, fontVariantNumeric: 'tabular-nums' }}>
+                {findings.toLocaleString()}
+              </strong>
+              {' '}{findings === 1 ? 'finding' : 'findings'}
+              {chartTotal > 0 && (
+                <>
+                  {' across '}
+                  <strong style={{ color: c.text, fontVariantNumeric: 'tabular-nums' }}>
+                    {rendered.toLocaleString()}
+                  </strong>
+                  {` of ${chartTotal.toLocaleString()} charts rendered`}
+                </>
+              )}
             </Typography.Text>
           </Space>
         </div>
@@ -274,7 +331,13 @@ export function ComplianceSummary({ counts, charts, verdict, verdictLabel, selec
             borderInlineStart: `1px solid ${c.border}`,
           }}
         >
-          <ZoneLabel count={<span style={{ fontWeight: 400 }}>checks | places</span>}>
+          <ZoneLabel
+            count={
+              <span style={{ fontWeight: 400 }}>
+                {grouped ? 'checks | places' : 'places | checks'}
+              </span>
+            }
+          >
             Failing checks by severity
           </ZoneLabel>
           <div style={{ display: 'grid', gap: 10 }}>
@@ -310,6 +373,13 @@ export function ComplianceSummary({ counts, charts, verdict, verdictLabel, selec
                       number cannot say both, and which one it says changes the
                       answer by a factor of thirty.
                     */}
+                    {/*
+                      WHICHEVER NUMBER THE TABLE IS SHOWING, leading. Grouped
+                      rows are checks, ungrouped rows are places, and a zone
+                      that always led with one of them disagreed with the table
+                      under it half the time. The other number stays, muted, so
+                      the pair is always readable.
+                    */}
                     <Tooltip
                       title={
                         `${sev.unique.toLocaleString()} distinct ${sev.label.toLowerCase()} `
@@ -323,9 +393,9 @@ export function ComplianceSummary({ counts, charts, verdict, verdictLabel, selec
                           color: sev.total > 0 ? c.text : c.text2,
                         }}
                       >
-                        {sev.unique.toLocaleString()}
+                        {(grouped ? sev.unique : sev.total).toLocaleString()}
                         <span style={{ color: c.text3, fontWeight: 400 }}>
-                          {' | '}{sev.total.toLocaleString()}
+                          {' | '}{(grouped ? sev.total : sev.unique).toLocaleString()}
                         </span>
                       </span>
                     </Tooltip>
@@ -375,6 +445,7 @@ export function ComplianceSummary({ counts, charts, verdict, verdictLabel, selec
           <ComplianceMeter
             value={renderedPercent}
             colour={failedCharts === 0 ? c.ok : c.pending}
+            icon={<HelmOutlined style={{ color: c.text3 }} />}
             headline={`${rendered.toLocaleString()} of ${chartTotal.toLocaleString()} charts rendered`}
             detail={failedCharts === 0
               ? 'Every chart in the release produced objects to check'
@@ -417,11 +488,13 @@ export function ComplianceSummary({ counts, charts, verdict, verdictLabel, selec
 
 /** The shape of the findings, in the severity colours the rows use. */
 function ComplianceSeverityBar({ counts }: { counts: ComplianceCounts }) {
-  const total = counts.blocking + counts.warning + counts.info
+  const total = counts.blocking + counts.warning
+  // Info is not in the bar for the same reason it is not in the headline: it
+  // is not work, and a release with four hundred notes must not draw wider
+  // than one with four defects.
   const segments = [
     { label: 'Critical', n: counts.blocking, colour: c.danger },
     { label: 'Warning', n: counts.warning, colour: c.pending },
-    { label: 'Info', n: counts.info, colour: c.text3 },
   ]
   return (
     <div
@@ -463,9 +536,11 @@ function ZoneLabel({ children, count }: { children: ReactNode; count?: ReactNode
  * two zones answer the same question about two different denominators and a
  * reader should be able to compare them without re-learning the drawing.
  */
-function ComplianceMeter({ value, colour, headline, detail }: {
+function ComplianceMeter({ value, colour, icon, headline, detail }: {
   value: number
   colour: string
+  /** The mark for what is being counted, where the noun has one. */
+  icon?: ReactNode
   headline: string
   detail: string
 }) {
@@ -477,6 +552,7 @@ function ComplianceMeter({ value, colour, headline, detail }: {
           fontVariantNumeric: 'tabular-nums',
         }}
       >
+        {icon}
         <span style={{ fontSize: 13, fontWeight: 600, color: c.text }}>{headline}</span>
         <span style={{ marginInlineStart: 'auto', fontSize: 12, fontWeight: 600, color: colour }}>
           {value}%

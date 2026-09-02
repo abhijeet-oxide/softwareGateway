@@ -428,7 +428,12 @@ type PackageComplianceRow struct {
 	Warning   int
 	Errors    int
 	Pass      int
-	CheckedAt *time.Time
+	// The DISTINCT checks behind Blocking and Warning. "5 rules" and "171
+	// places" are two answers to one question, and the tab label showed the
+	// second under a band showing the first.
+	UniqueBlocking int
+	UniqueWarning  int
+	CheckedAt      *time.Time
 }
 
 // PackageCompliance returns the summary for a set of packages.
@@ -449,7 +454,8 @@ func (p *Packages) PackageCompliance(ctx context.Context, packageIDs []int64) (m
 	}
 	rows, err := p.db.QueryContext(ctx, p.dialect.Rewrite(`
 		SELECT package_id, COALESCE(run_id, ''), state, verdict,
-		       blocking_count, warning_count, error_count, pass_count, `+
+		       blocking_count, warning_count, error_count, pass_count,
+		       unique_blocking, unique_warning, `+
 		p.dialect.TimestampText("checked_at")+`
 		  FROM package_compliance
 		 WHERE package_id IN (`+strings.Join(marks, ",")+`)`), args...)
@@ -464,7 +470,8 @@ func (p *Packages) PackageCompliance(ctx context.Context, packageIDs []int64) (m
 			checked string
 		)
 		if err := rows.Scan(&r.PackageID, &r.RunID, &r.State, &r.Verdict,
-			&r.Blocking, &r.Warning, &r.Errors, &r.Pass, &checked); err != nil {
+			&r.Blocking, &r.Warning, &r.Errors, &r.Pass,
+			&r.UniqueBlocking, &r.UniqueWarning, &checked); err != nil {
 			return nil, fmt.Errorf("scan package compliance: %w", err)
 		}
 		r.CheckedAt = parseComplianceTime(checked)

@@ -228,6 +228,12 @@ type ComplianceListingView struct {
 	Warning  int    `json:"warning"`
 	Error    int    `json:"error"`
 	Pass     int    `json:"pass"`
+	// The DISTINCT checks behind Blocking and Warning. What the tab label and
+	// the listing show: "5 rules" is the number somebody means when they ask
+	// how many problems a release has, and "171 places" is how much editing
+	// there is to do.
+	UniqueBlocking int `json:"uniqueBlocking"`
+	UniqueWarning  int `json:"uniqueWarning"`
 
 	CheckedAt *time.Time `json:"checkedAt,omitempty"`
 }
@@ -367,6 +373,7 @@ func complianceListingView(r store.PackageComplianceRow) ComplianceListingView {
 		State: r.State, Verdict: r.Verdict,
 		Label:    compliance.Verdict(r.Verdict).Label(),
 		Blocking: r.Blocking, Warning: r.Warning, Error: r.Errors, Pass: r.Pass,
+		UniqueBlocking: r.UniqueBlocking, UniqueWarning: r.UniqueWarning,
 		CheckedAt: r.CheckedAt,
 	}
 }

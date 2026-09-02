@@ -148,7 +148,11 @@ export function SecurityTab({ product, reference, repository }: {
 
   // A sync is only running if something is running it. See sync.stalled: a
   // claim whose Coordinator went away leaves the row saying `syncing` forever.
-  const syncing = data.sync.state === 'syncing' && !data.sync.stalled
+  //
+  // `sync.isPending` is in here so the tab switches on the PRESS rather than on
+  // the answer: taking the claim is a round trip, and until this the tab was
+  // unchanged for all of it.
+  const syncing = (data.sync.state === 'syncing' && !data.sync.stalled) || sync.isPending
 
   return (
     <Space direction="vertical" size={16} style={{ width: '100%' }}>
@@ -223,8 +227,9 @@ export function SecurityTab({ product, reference, repository }: {
           <Card>
             <SecurityProgressPanel
               sync={data.sync}
-              onStop={stopSync}
+              onStop={data.sync.state === 'syncing' ? stopSync : undefined}
               stopping={cancel.isPending}
+              starting={sync.isPending}
             />
           </Card>
         )

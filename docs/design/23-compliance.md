@@ -393,7 +393,31 @@ Then, per rendered field:
 | The field exists in both renders with the **same** value | `fixed` - no values file changes it |
 | The field exists in both with **different** values | `configurable` - the finding is about the defaults |
 | The resource exists in one render only | `configurable`, and the finding says the resource's *existence* is gated by a value - which is usually the more interesting sentence ("this chart ships a PDB, disabled by default") |
-| The probe render fails | `unknown` for that chart. Recorded on the run; never silently treated as `fixed` |
+| The probe render fails | `unknown` **for that chart**. Recorded on the run; never silently treated as `fixed` |
+
+### 6.1 Per chart, and it was not
+
+"`unknown` for that chart" is what this section has always said and is not what
+the code did: one chart whose second render did not happen set the run's probe
+unusable, and every result in the release came back `unknown`. On a ninety-five
+chart orb one such chart is a certainty, so **every finding read "Ownership not
+established"** - the split between the vendor's defect and the site's decision,
+which is the first split anybody makes triaging a report, was on no screen
+anywhere and the most useful column in the table was dead weight.
+
+The blunt version existed for a real reason worth keeping in view. An object
+present in the baseline index and absent from the perturbed one reads as "its
+existence depends on values", so feeding one render of a chart into the probe
+without the other reports every field of it as `configurable` - inventing an
+excuse for a real defect. That is avoided by PAIRING rather than by discarding:
+a chart contributes to both indexes or to neither, and `Probe.Determinacy`
+already answers `unknown` for a key it does not hold.
+
+The guarantee is therefore unchanged - nothing is ever answered from a single
+render - and it now costs one chart's findings rather than the release's. The
+run says so when it applies: *"Ownership was established for 82 of 95 rendered
+charts"*, because a report whose ownership column is empty for thirteen of them
+is a report a reader has to be told about rather than left to infer.
 
 Matching between the two renders is by `(kind, name-after-normalization, container)`.
 Names frequently contain a value (`{{ .Values.nameOverride }}`), so the
@@ -1034,6 +1058,18 @@ against somebody's registry.
 | **Warning** | `severity: warn` | |
 | **Info** | `severity: info` | Its own slice now. It used to be folded in with the warnings, so narrowing to warnings returned a list padded with rows nobody has to act on, and the info count was on no screen at all. |
 | **Unchecked** | `outcome: error` | What it means is that the check could not be decided, and "Undecided" invited the reading "we decided not to". The full sentence - "Could not be checked" - is still what the outcome pill on the row says; the slice is one word because it sits beside four other one-word slices. |
+
+**Every count on the card follows the grouping.** The view switch, the severity
+slices and the band's severity zone all show distinct checks when the table is
+grouped and occurrences when it is not, so nothing on screen can quote a number
+the rows under it do not add up to. "Critical (171)" over five rows was the one
+number on the card that disagreed with what was beneath it.
+
+**The headline counts critical and warning, not info.** An informational finding
+is recorded so somebody can look at it; it is not work, it does not block, and
+nobody has to answer for it. Adding it made a release with four hundred notes
+look worse than one with four defects, which is the number that zone exists to
+get right. Info keeps its own row in the zone beside it.
 
 The findings tab is those five plus **All**, in that order, and each is a
 server-side filter: a release produces ten to fifteen thousand results, so

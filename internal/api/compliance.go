@@ -414,6 +414,8 @@ func (s *Server) attachCompliance(ctx context.Context, rows []store.PackageRow, 
 			summary.Warning = view.Warning
 			summary.Error = view.Error
 			summary.Pass = view.Pass
+			summary.UniqueBlocking = view.UniqueBlocking
+			summary.UniqueWarning = view.UniqueWarning
 			if view.CheckedAt != nil {
 				summary.CheckedAt = view.CheckedAt.UTC().Format(rfc3339)
 			}

@@ -172,12 +172,12 @@ function MeasurePanel({ pkg, inspect, cancel, disabled }: {
     // nothing after the first minute is indistinguishable from a hang, so the
     // wording escalates rather than repeating itself.
     const scope = artifactCount
-      ? `Reading the manifest tree from the vendor registry - ${artifactCount} artifacts to walk.`
+      ? `Reading the manifest tree from the vendor registry: ${artifactCount} artifacts to walk.`
       : 'Reading the manifest tree from the vendor registry.'
     const detail =
       elapsed > 45
-        ? `${scope} Still going. A release this size can take several minutes, and an unreachable registry looks the same from here until it times out. Leaving this page cancels the measurement.`
-        : `${scope} Large releases take a minute or two.`
+        ? `${scope} A release of this size can take several minutes, and an unreachable registry is indistinguishable from a slow one until it times out. Navigating away cancels this measurement.`
+        : `${scope} Large releases take one to two minutes.`
 
     return (
       <div style={{ marginTop: 12 }}>
@@ -231,10 +231,10 @@ function MeasurePanel({ pkg, inspect, cancel, disabled }: {
         showIcon
         message={
           // "in 0s" for a walk that took a third of a second is a number
-          // pretending to be a measurement. Under a second says so in words.
+          // pretending to be a measurement. Under a second states the bound.
           startedAt && elapsed >= 1
-            ? `Analyzed in ${formatDuration(elapsed) ?? 'a moment'}`
-            : 'Analyzed in a moment'
+            ? `Analyzed in ${formatDuration(elapsed) ?? 'under a second'}`
+            : 'Analyzed in under a second'
         }
         description={
           <Space size={16} wrap>
@@ -434,10 +434,10 @@ function AnalysingBar({ requested, elapsedSeconds, onStop }: {
         elapsedSeconds={elapsedSeconds}
         detail={
           requested
-            ? 'Reading the manifest tree from the vendor registry. It carries on if you '
-              + 'leave this page, and the contents appear here when the walk finishes.'
-            : 'Reading the manifest tree from the vendor registry. Its contents appear '
-              + 'here when the walk finishes.'
+            ? 'Reading the manifest tree from the vendor registry. The walk continues '
+              + 'after this page is closed; contents appear here once it completes.'
+            : 'Reading the manifest tree from the vendor registry. Contents appear here '
+              + 'once the walk completes.'
         }
       />
       {onStop && (
@@ -459,8 +459,9 @@ function AnalysingBar({ requested, elapsedSeconds, onStop }: {
               implied: a reader who stops a walk to free the vendor's request
               budget needs to know whether they got it back.
             */}
-            Frees the release for another attempt straight away. A walk running on another
-            Coordinator finishes reading at its own pace, and what it finds is discarded.
+            Releases the claim immediately, so this release can be analyzed again. A walk
+            running on another Coordinator continues to completion, and its result is
+            discarded.
           </Typography.Text>
           {onStop.isError && (
             <Typography.Text type="danger" style={{ fontSize: 12 }}>
@@ -1417,8 +1418,8 @@ export default function PackageDetail() {
                                         reads as the walk having failed.
                                       */}
                                       {analysing
-                                        ? 'analyzing this release now'
-                                        : 'analyze the package to view details'}
+                                        ? 'Analysis in progress'
+                                        : 'Analyze this release to establish these'}
                                     </Typography.Text>
                                   )}
                                 </Space>

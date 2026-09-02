@@ -287,6 +287,17 @@ func run() error {
 		},
 		cfg.Coordinator.ManifestCache.SweepInterval, logger, mreg)
 
+	// The rendered charts a compliance run reuses. Derived data with a
+	// deterministic recipe: an evicted entry costs one render to rebuild and can
+	// never be WRONG, which is what makes an LRU acceptable here and not for
+	// anything else in the schema. See internal/store/rendercache.go.
+	renderSweeper := maintenance.NewRenderCacheSweeper(packages,
+		store.RenderCachePolicy{
+			TTL:    cfg.Coordinator.Compliance.RenderCacheTTL,
+			Budget: cfg.Coordinator.Compliance.RenderCacheBytes,
+		},
+		cfg.Coordinator.Compliance.RenderCacheSweep, logger)
+
 	// The security store keeps what it is told until the disk says otherwise.
 	// Nothing here expires on a clock: rows past their retention become
 	// evictable, and the sweep removes the least recently read ones only while
@@ -423,6 +434,8 @@ func run() error {
 				}
 				discoveryCtl.SetLeader(isLeader)
 				cacheSweeper.SetLeader(isLeader)
+				renderSweeper.SetLeader(isLeader)
+				renderSweeper.SetLeader(isLeader)
 				retentionSweeper.SetLeader(isLeader)
 				securitySweeper.SetLeader(isLeader)
 				if complianceSweep != nil {
@@ -562,6 +575,7 @@ func run() error {
 	g.Go(func() error { return watcher.Run(gctx) })
 	g.Go(func() error { return discoveryCtl.Run(gctx) })
 	g.Go(func() error { return cacheSweeper.Run(gctx) })
+	g.Go(func() error { return renderSweeper.Run(gctx) })
 	g.Go(func() error { return retentionSweeper.Run(gctx) })
 	g.Go(func() error { return securitySweeper.Run(gctx) })
 	if complianceSweep != nil {

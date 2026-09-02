@@ -292,12 +292,12 @@ export function NoEvidenceNotice({ checked }: { checked: boolean }) {
     <Alert
       type="info"
       showIcon
-      message="This run kept no rendered manifests"
+      message="No rendered manifests retained for this run"
       description={
-        'Findings can be read but not verified against the text they came from. Either this '
-        + 'run predates manifests being kept, a later run has superseded it, or this '
-        + "Coordinator has coordinator.compliance.evidencePerRelease set below zero. Re-check "
-        + 'the release to produce them.'
+        'Findings can be read but not verified against the manifests they were derived '
+        + 'from. Either this run predates manifest retention, a later run has superseded it, '
+        + 'or coordinator.compliance.evidencePerRelease is set below zero on this '
+        + 'Coordinator. Re-check the release to produce them.'
       }
     />
   )

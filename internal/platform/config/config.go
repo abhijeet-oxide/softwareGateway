@@ -188,6 +188,26 @@ type ComplianceConfig struct {
 	EvidencePerDocument int64 `koanf:"evidencePerDocument"`
 	EvidencePerRelease  int64 `koanf:"evidencePerRelease"`
 
+	// RenderCacheTTL and RenderCacheBytes bound the cache of rendered charts.
+	//
+	// A chart's rendered output is a pure function of its bytes and the pinned
+	// render inputs, so the same chart never has to be rendered twice - and,
+	// because the cache is keyed by the chart's LAYER DIGEST, a hit also means
+	// it never has to be downloaded. Most charts are unchanged between two
+	// releases of a product, so this is most of the second check of an orb.
+	//
+	// Evictable, and safe to evict: a missing entry costs one render and can
+	// never be wrong. The TTL removes charts a vendor has stopped shipping,
+	// which no byte budget would ever reach; the budget removes the tail when a
+	// large estate keeps everything warm. Zero on either turns that bound off;
+	// RenderCacheBytes below zero turns the cache off entirely.
+	RenderCacheTTL   time.Duration `koanf:"renderCacheTTL"`
+	RenderCacheBytes int64         `koanf:"renderCacheBytes"`
+	// RenderCacheSweep is how often the cache is measured against those bounds.
+	// A cheap query, and a cache a little over its budget for an hour is not a
+	// problem worth a tighter loop.
+	RenderCacheSweep time.Duration `koanf:"renderCacheSweep"`
+
 	// FetchConcurrency and RenderConcurrency are how many charts a run pulls
 	// and renders at once.
 	//
@@ -649,6 +669,14 @@ func Defaults() SystemConfig {
 				// fits inside the total with room to spare.
 				EvidencePerDocument: 4 << 20,
 				EvidencePerRelease:  24 << 20,
+
+				// Thirty days and 512 MB. A chart renders to tens of kilobytes,
+				// so the budget holds an estate of several thousand distinct
+				// charts - and the TTL is what actually reclaims, because a
+				// chart nobody ships any more is never asked for again.
+				RenderCacheTTL:   30 * 24 * time.Hour,
+				RenderCacheBytes: 512 << 20,
+				RenderCacheSweep: time.Hour,
 
 				// Ninety seconds per chart. A chart that takes longer than
 				// that to render is not a chart that is nearly done.

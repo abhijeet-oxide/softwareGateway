@@ -131,6 +131,32 @@ with Software detail and Download reached from them. The lifecycle those pages e
 
 **The most consequential consequence of this: there is no Replicate action in the UI.** Downloading a release into JFrog and configuring the Quay mirror that OpenShift pulls from are one operation with several steps, presented as one operation with several steps. Internally they remain a transfer and a replication-mode apply ([18](18-quay-replication.md) §7); the user is not asked to know that, and is never asked to perform the second half themselves.
 
+### 3.2 How a label is written, not only which noun it uses
+
+§3.1 fixes the **vocabulary** - which noun the interface uses for a domain
+object. It does not fix the **grammar**, and every copy defect found in review
+so far has been a grammar defect rather than a vocabulary one: `What has
+happened` over a log (a fragment with no subject), `4 at a time` beside a
+concurrency (a count with no unit), `about 2s left` (a hedge), `Analyzed in a
+moment` (a duration in prose).
+
+The rules are in `.claude/skills/interface-copy/SKILL.md`, which is enforceable
+rather than aspirational - it carries the wrong/right table these came from and
+a grep to run over a diff. In summary:
+
+1. **A label names its subject and its verb.** `Run log`, not `What has
+   happened`. `Remediation`, not `What to do`.
+2. **Nothing is phrased as speech.** `4 charts in parallel`, not `4 at a time`.
+   No hedges: either the number is known or the field is absent.
+3. **A number states its unit and what it counts**, except where the label
+   directly above supplies the noun.
+4. **The reader is never addressed and the tool never refers to itself.** No
+   *you*, *we*, *sorry*.
+
+This applies to the Go strings that reach a screen as much as to the TSX -
+`Stage.Label()`, progress event text, and an RFC 9457 `detail`, which is
+rendered verbatim and is where the rule is broken most often.
+
 ## 4. What it must never do
 
 > **Decision - the UI is a read-and-operate client. It never edits configuration.**

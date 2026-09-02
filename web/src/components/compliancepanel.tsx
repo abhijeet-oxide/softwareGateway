@@ -107,19 +107,19 @@ export function ComplianceTab({ product, reference, repository }: {
           }
           explanation={
             started
-              ? 'Reading the manifest tree from the vendor registry. It carries on if you leave '
-                + 'this page, and this tab offers the check as soon as the walk finishes.'
-              : 'Its charts are listed already - the release index names them. Where each '
+              ? 'Reading the manifest tree from the vendor registry. The walk continues '
+                + 'after this page is closed; the check is offered here once it completes.'
+              : 'Its charts are already listed - the release index names them. Where each '
                 + "chart's content lives is not: that is a layer inside the chart's own "
-                + 'manifest, and walking the release is what records it. A check reads the '
-                + 'charts themselves, so it has nothing to open until then.'
+                + 'manifest, recorded only by walking the release. A check reads the charts '
+                + 'themselves, so there is nothing to open until then.'
           }
           action={
             <Space direction="vertical" size={10}>
               {started ? (
                 <Typography.Text type="secondary" style={{ fontSize: 12 }}>
                   <LoadingOutlined spin style={{ color: c.brand, marginRight: 6 }} />
-                  Walking the manifest tree. Nothing is downloaded.
+                  Walking the manifest tree. No artifact bytes are transferred.
                 </Typography.Text>
               ) : (
                 <Button
@@ -238,7 +238,7 @@ export function ComplianceTab({ product, reference, repository }: {
                 complaint about the tool.
               */}
               <Link to="/policies" style={{ fontSize: 12, color: c.brand }}>
-                What is checked?
+                View the rulebook
               </Link>
               <Button size="small" loading={run.isPending} disabled={running} onClick={start}>
                 Re-check
@@ -281,7 +281,7 @@ export function ComplianceTab({ product, reference, repository }: {
             />
             <Typography.Text type="secondary" style={{ fontSize: 12 }}>
               {(data?.total ?? 0).toLocaleString()}
-              {view === 'findings' ? ' needing attention' : ' results'}
+              {view === 'findings' ? ' findings' : ' results'}
             </Typography.Text>
           </Space>
         }
@@ -302,12 +302,12 @@ export function ComplianceTab({ product, reference, repository }: {
             <Select
               allowClear
               size="small"
-              placeholder="Anyone's to fix"
+              placeholder="Any owner"
               style={{ minWidth: 190 }}
               value={determinacy}
               onChange={setDeterminacy}
               options={[
-                { label: 'The vendor must fix', value: 'fixed' },
+                { label: 'Vendor must fix', value: 'fixed' },
                 { label: 'Overridable in values', value: 'configurable' },
                 { label: 'Could not be established', value: 'unknown' },
               ]}
@@ -452,7 +452,7 @@ function ChartCoverage({ charts, product, reference, repository }: {
               // The manifest THIS chart rendered to. Offered per chart as well
               // as for the release, because a vendor engineer owns one chart
               // and does not want the other ninety-six.
-              title: 'Manifest', dataIndex: 'name', width: 150,
+              title: 'Rendered manifest', dataIndex: 'name', width: 180,
               render: (_: unknown, ch) => (
                 available.has(ch.name)
                   ? (
@@ -479,7 +479,7 @@ function ChartCoverage({ charts, product, reference, repository }: {
                   )
                   : (
                     <Typography.Text type="secondary" style={{ fontSize: 11 }}>
-                      {ch.status === 'ok' ? 'not kept' : 'nothing rendered'}
+                      {ch.status === 'ok' ? 'Not retained' : 'No output'}
                     </Typography.Text>
                   )
               ),
@@ -525,7 +525,7 @@ function ResultsTable({ results, loading, onOpen, emptyText }: {
       render: (_: unknown, r: ComplianceResult) => <ResultAddress result={r} />,
     },
     {
-      title: 'What was found', dataIndex: 'message',
+      title: 'Finding', dataIndex: 'message',
       render: (_: unknown, r: ComplianceResult) => (
         <Space direction="vertical" size={4}>
           <span style={{ fontSize: 13 }}>{r.message || r.error}</span>
@@ -649,7 +649,7 @@ function ResultDrawer({ result, product, reference, repository, onClose }: {
               </Descriptions.Item>
             )}
             {result.observed && (
-              <Descriptions.Item label="Found">
+              <Descriptions.Item label="Observed">
                 <span style={{ fontFamily: mono }}>{result.observed}</span>
               </Descriptions.Item>
             )}
@@ -659,7 +659,7 @@ function ResultDrawer({ result, product, reference, repository, onClose }: {
               </Descriptions.Item>
             )}
             {result.determinacy && result.determinacy !== 'na' && (
-              <Descriptions.Item label="Whose to fix">
+              <Descriptions.Item label="Owner">
                 <DeterminacyTag determinacy={result.determinacy} label={result.determinacyLabel} />
               </Descriptions.Item>
             )}
@@ -671,7 +671,7 @@ function ResultDrawer({ result, product, reference, repository, onClose }: {
           </Descriptions>
 
           {result.remediation && (
-            <Card size="small" title="What to do">
+            <Card size="small" title="Remediation">
               <Typography.Paragraph style={{ marginBottom: 0 }}>
                 {result.remediation}
               </Typography.Paragraph>
@@ -680,7 +680,7 @@ function ResultDrawer({ result, product, reference, repository, onClose }: {
 
           {result.reference && (
             <Typography.Link href={result.reference} target="_blank" rel="noreferrer">
-              The standard this comes from
+              Source standard
             </Typography.Link>
           )}
         </Space>

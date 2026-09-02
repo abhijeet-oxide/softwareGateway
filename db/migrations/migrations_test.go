@@ -123,6 +123,30 @@ func TestBothDialectsHaveMatchingFilenames(t *testing.T) {
 	}
 }
 
+func TestMigrationVersionNumbersAreUnique(t *testing.T) {
+	for _, d := range dialects {
+		seen := map[string]string{}
+		fsys, err := FS(d)
+		if err != nil {
+			t.Fatalf("FS(%s): %v", d, err)
+		}
+		entries, err := fs.ReadDir(fsys, ".")
+		if err != nil {
+			t.Fatalf("read %s: %v", d, err)
+		}
+		for _, e := range entries {
+			if e.IsDir() || !strings.HasSuffix(e.Name(), ".sql") {
+				continue
+			}
+			prefix := strings.SplitN(e.Name(), "_", 2)[0]
+			if prev, ok := seen[prefix]; ok {
+				t.Fatalf("duplicate migration version %s in %s: %s and %s", prefix, d, prev, e.Name())
+			}
+			seen[prefix] = e.Name()
+		}
+	}
+}
+
 // TestFSRejectsUnknownDialect guards the embed sub-path lookup.
 func TestFSRejectsUnknownDialect(t *testing.T) {
 	fsys, err := FS("mysql")

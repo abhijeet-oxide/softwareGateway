@@ -23,8 +23,19 @@
 }
 
 .wrapper :global(.ant-table),
+.wrapper :global(.ant-table-container),
+.wrapper :global(.ant-table-header) {
+  border-radius: 0;
+}
+
 .wrapper :global(.ant-table-container) {
-  border-radius: var(--r-lg);
+  overflow: hidden;
+}
+
+/* Keep a wide table inside the Ant Card that owns it. The table's own content
+   wrapper still scrolls horizontally; only the card boundary clips overflow. */
+:global(.ant-card:has(.ant-table-wrapper)) {
+  overflow: hidden;
 }
 
 /* Ant sets `overflow-x: scroll` whenever scroll.x is defined; auto means the
@@ -38,6 +49,14 @@
     background-color var(--dur-hover) var(--ease),
     box-shadow var(--dur-hover) var(--ease),
     border-color var(--dur-hover) var(--ease);
+}
+
+/* Ant assigns its own radius to the outer header cells. Keep the table header
+   square even when that generated rule is more specific. */
+.wrapper :global(.ant-table-thead > tr:first-child > th:first-child),
+.wrapper :global(.ant-table-thead > tr:first-child > th:last-child) {
+  border-start-start-radius: 0 !important;
+  border-start-end-radius: 0 !important;
 }
 
 /* A header cell clips its content by default, which would cut the resize
@@ -113,6 +132,23 @@
   align-items: center;
   padding: var(--sp-2) var(--sp-3);
   gap: var(--sp-1);
+}
+
+/* Opt-in placement for tables whose parent already provides the framed
+   surface. The controls stay anchored to the table while the table starts at
+   the top of that surface instead of reserving a blank toolbar row. */
+.toolbarExternal {
+  position: absolute;
+  top: calc(var(--sp-2) * -1 - 28px);
+  right: 0;
+  padding: 0;
+}
+.toolbarOutside {
+  position: relative;
+}
+
+:global(.ant-card:has([data-antd-table-enhanced-toolbar-placement="outside"])) {
+  overflow: visible;
 }
 
 /* A glyph with a hit area, not a button with a glyph in it. No ring, no fill,

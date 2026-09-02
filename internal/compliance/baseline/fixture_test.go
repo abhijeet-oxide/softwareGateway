@@ -58,7 +58,7 @@ func failures(results []compliance.Result) []string {
 	for _, r := range results {
 		switch r.Outcome {
 		case compliance.OutcomeFail, compliance.OutcomeError:
-			out = append(out, r.CheckID+" @ "+r.Address.Where()+" — "+r.Message)
+			out = append(out, r.CheckID+" @ "+r.Address.Where()+" - "+r.Message)
 		}
 	}
 	sort.Strings(out)

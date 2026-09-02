@@ -4,7 +4,7 @@ import { App, Button, Card, Dropdown, Segmented, Select, Space, Tooltip, Typogra
 // layout each person keeps. See `tablekit/README.md` for which tables get it.
 import { Table as DataTable } from '../tablekit'
 import type { MenuProps } from 'antd'
-import { ClusterOutlined, MoreOutlined, SafetyCertificateOutlined, ScaleOutlined } from '../icons'
+import { ClusterOutlined, CompareOutlined, MoreOutlined, SafetyCertificateOutlined } from '../icons'
 import { Link, useNavigate, useSearchParams } from 'react-router-dom'
 import {
   usePackages, usePackagesByProducts, useProducts, useRunDownload, useSyncPackageSecurity, useTransfers,
@@ -751,7 +751,7 @@ export default function Packages() {
             status, dates and vulnerability counts, and none of those fit in a
             select.
           */
-          <Button icon={<ScaleOutlined />} onClick={() => start()}>Compare packages</Button>
+          <Button icon={<CompareOutlined />} onClick={() => start()}>Compare packages</Button>
         )}
       </div>
 
@@ -787,11 +787,12 @@ export default function Packages() {
           }
         />
       ) : (
-        <Card styles={{ body: { padding: 0 } }}>
+        <Card className={comparing ? 'slm-compare-table' : undefined} styles={{ body: { padding: 0 } }}>
           <DataTable
             tableEnhancedKey="packages"
             allow_export
             show_column_visibility
+            toolbarPlacement="outside"
             loading={packages.isLoading || packagesByProducts.some((q) => q.isLoading)}
             dataSource={rows}
             rowKey={(r) => `${r.product.productId}-${r.pkg.packageId}`}

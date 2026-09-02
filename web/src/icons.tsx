@@ -45,7 +45,10 @@ import PhArrowSquareOut from '~icons/ph/arrow-square-out'
 import PhArrowUp from '~icons/ph/arrow-up'
 import PhArrowsClockwise from '~icons/ph/arrows-clockwise'
 import PhArrowsLeftRight from '~icons/ph/arrows-left-right'
+import PhBatteryFull from '~icons/ph/battery-full'
 import PhBell from '~icons/ph/bell'
+import BoxiconsCompare from '~icons/boxicons/compare'
+import BookIcon from '~icons/boxicons/book';
 import PhCaretDown from '~icons/ph/caret-down'
 import PhCaretRight from '~icons/ph/caret-right'
 import PhCertificate from '~icons/ph/certificate'
@@ -60,6 +63,7 @@ import PhCloudArrowDown from '~icons/ph/cloud-arrow-down'
 import PhCopy from '~icons/ph/copy'
 import PhCube from '~icons/ph/cube'
 import PhDatabase from '~icons/ph/database'
+import PhScales from '~icons/ph/scales'
 import PhDotsSixVertical from '~icons/ph/dots-six-vertical'
 import PhDotsThreeVertical from '~icons/ph/dots-three-vertical'
 import PhDownloadSimple from '~icons/ph/download-simple'
@@ -82,7 +86,6 @@ import PhPlugsConnected from '~icons/ph/plugs-connected'
 import PhProhibit from '~icons/ph/prohibit'
 import PhQuestion from '~icons/ph/question'
 import PhRocketLaunch from '~icons/ph/rocket-launch'
-import PhScales from '~icons/ph/scales'
 import PhSealCheck from '~icons/ph/seal-check'
 import PhGear from '~icons/ph/gear'
 import PhGithubLogo from '~icons/ph/github-logo'
@@ -153,7 +156,7 @@ export const ApiOutlined = make('api', PhPlugsConnected)
 export const PartitionOutlined = make('partition', PhTreeStructure)
 export const ClusterOutlined = make('cluster', PhStack)
 export const UnorderedListOutlined = make('list', PhListBullets)
-export const BookOutlined = make('book', PhBookOpen)
+export const BookOpenOutlined = make('book', PhBookOpen)
 // Discovery: a sweep going out and listening for what comes back, which is
 // what polling a vendor registry on a schedule actually is.
 export const RadarChartOutlined = make('radar', PhBroadcast)
@@ -161,6 +164,8 @@ export const RadarChartOutlined = make('radar', PhBroadcast)
 // Git" is a claim about WHERE something lives, and the mark says that faster
 // than the word does.
 export const GithubOutlined = make('github', PhGithubLogo)
+export const BatteryOutlined = make('battery', PhBatteryFull)
+export const BookOutlined = make('book', BookIcon)
 
 // --- arrows and movement ----------------------------------------------------
 export const ArrowLeftOutlined = make('arrow-left', PhArrowLeft)
@@ -196,7 +201,8 @@ export const StopOutlined = make('stop', PhProhibit)
 export const PartialOutlined = make('partial', PhCircleHalf)
 export const ThunderboltOutlined = make('thunderbolt', PhLightning)
 export const RocketOutlined = make('rocket', PhRocketLaunch)
-export const ScaleOutlined = make('scale', PhScales)
+export const ScaleOutlined = make('compare', PhScales)
+export const CompareOutlined = make('compare', BoxiconsCompare)
 // Security wears two different marks on purpose: a shield is the SUBJECT (the
 // section, the posture), a sealed check is a CLAIM about one artifact (this
 // thing is signed and the signature verifies).

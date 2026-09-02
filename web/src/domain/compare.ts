@@ -171,7 +171,7 @@ export function useComparisonSelection() {
         out.set('product', chosen)
       } else {
         out.delete(PARAM.product)
-        if (!next.active && current.get(COMPARISON_PRODUCT_FILTER) === '1') {
+        if (current.get(COMPARISON_PRODUCT_FILTER) === '1') {
           out.delete('product')
           out.delete(COMPARISON_PRODUCT_FILTER)
         }

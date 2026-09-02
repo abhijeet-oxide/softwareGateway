@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { App, Button, Card, Modal, Progress, Select, Space, Table, Tooltip, Typography } from 'antd'
+import { App, Button, Card, Modal, Progress, Select, Space, Tooltip, Typography } from 'antd'
 // The working-surface table: resizable, reorderable, pinnable columns whose
 // layout each person keeps. See `tablekit/README.md` for which tables get it.
 import { Table as DataTable } from '../tablekit'
@@ -241,6 +241,81 @@ function scanFindings(s: DiscoverySourceState): string {
   return parts.length > 0 ? parts.join(' · ') : 'No releases found'
 }
 
+function packagesSeen(source: DiscoverySourceState): number {
+  return source.scanning ? (source.tagsChecked ?? 0) : (source.lastTagsListed ?? 0)
+}
+
+function DiscoveryCardTitle({ scanning }: { scanning: number }) {
+  return (
+    <Space size={8}>
+      <Typography.Text strong>Discovery</Typography.Text>
+      {scanning > 0 && (
+        <StatusPill tone="review" icon={<SyncOutlined spin />}>
+          {formatCount(scanning)} source{scanning === 1 ? '' : 's'} scanning
+        </StatusPill>
+      )}
+    </Space>
+  )
+}
+
+function DiscoveryCardActions({
+  products, lastRunAt,
+}: {
+  products: Product[]
+  lastRunAt?: string
+}) {
+  return (
+    <div className="slm-discovery-actions">
+      <Typography.Text type="secondary" className="slm-discovery-last-run">
+        Last completed{' '}
+        {lastRunAt ? <TimeAgo at={lastRunAt} /> : (
+          <NA reason="No scan has completed since this Coordinator started." />
+        )}
+      </Typography.Text>
+      <RunDiscoveryButton products={products} />
+    </div>
+  )
+}
+
+function DiscoveryOutcome({
+  newReleases, failedSources, onShowFailed,
+}: {
+  newReleases: number
+  failedSources: number
+  onShowFailed?: () => void
+}) {
+  const failureText = `${formatCount(failedSources)} failed ${failedSources === 1 ? 'source' : 'sources'}`
+  return (
+    <div className="slm-discovery-outcome" aria-label="Last scan result">
+      <Typography.Text type="secondary" className="slm-discovery-outcome-label">
+        Last scan
+      </Typography.Text>
+      <Typography.Text strong className="slm-discovery-outcome-value">
+        {formatCount(newReleases)} new {newReleases === 1 ? 'release' : 'releases'}
+      </Typography.Text>
+      <span className="slm-discovery-outcome-separator" aria-hidden="true" />
+      {failedSources > 0 ? (
+        onShowFailed ? (
+          <Button
+            type="link"
+            danger
+            className="slm-discovery-outcome-link"
+            onClick={onShowFailed}
+          >
+            {failureText}
+          </Button>
+        ) : (
+          <Typography.Text type="danger" strong className="slm-discovery-outcome-value">
+            {failureText}
+          </Typography.Text>
+        )
+      ) : (
+        <Typography.Text type="secondary">No source failures</Typography.Text>
+      )}
+    </div>
+  )
+}
+
 /**
  * The Run Discovery control, and the only one in the application.
  *
@@ -461,29 +536,10 @@ export function DiscoverySummary({
 
   return (
     <Card
-      size="small"
-      title={
-        <Space size={8}>
-          Discovery
-          {scanning.length > 0 && (
-            <StatusPill tone="review" icon={<SyncOutlined />}>
-              {scanning.length} source{scanning.length === 1 ? '' : 's'} scanning
-            </StatusPill>
-          )}
-        </Space>
-      }
+      className="slm-discovery-card slm-discovery-summary"
+      title={<DiscoveryCardTitle scanning={scanning.length} />}
       loading={loading}
-      extra={
-        <Space size={12}>
-          <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-            Last run:{' '}
-            {lastRunAt ? <TimeAgo at={lastRunAt} /> : (
-              <NA reason="No scan has completed since this Coordinator started." />
-            )}
-          </Typography.Text>
-          <RunDiscoveryButton products={products} />
-        </Space>
-      }
+      extra={<DiscoveryCardActions products={products} lastRunAt={lastRunAt} />}
     >
       {leaderElsewhere ? (
         <Typography.Text type="secondary">
@@ -495,23 +551,12 @@ export function DiscoverySummary({
           No source has discovery enabled in configuration, so nothing is polled automatically.
         </Typography.Text>
       ) : (
-        <Space size={24} wrap>
-          <Typography.Text type="secondary" style={{ fontSize: 13 }}>
-            Found{' '}
-            <Typography.Text strong>
-              <Value>{formatCount(newSinceLastRun)}</Value>
-            </Typography.Text>{' '}
-            new {newSinceLastRun === 1 ? 'release' : 'releases'} in the last sync
-          </Typography.Text>
-          {errors.length > 0 && (
-            <Typography.Text type="danger" style={{ fontSize: 13 }}>
-              {errors.length} source{errors.length === 1 ? '' : 's'} failed on the last run
-            </Typography.Text>
-          )}
-          <Button size="small" icon={<ArrowRightOutlined />} iconPosition="end" onClick={onViewAll}>
-            View Sources
+        <div className="slm-discovery-summary-body">
+          <DiscoveryOutcome newReleases={newSinceLastRun} failedSources={errors.length} />
+          <Button icon={<ArrowRightOutlined />} iconPosition="end" onClick={onViewAll}>
+            View sources
           </Button>
-        </Space>
+        </div>
       )}
     </Card>
   )
@@ -579,28 +624,10 @@ export function DiscoveryPanel({ products }: { products: Product[] }) {
   return (
     <>
       <Card
-        title={
-          <Space size={8}>
-            Discovery
-            {scanning.length > 0 && (
-              <StatusPill tone="review" icon={<SyncOutlined />}>
-                {scanning.length} source{scanning.length === 1 ? '' : 's'} scanning
-              </StatusPill>
-            )}
-          </Space>
-        }
+        className="slm-discovery-card slm-discovery-panel"
+        title={<DiscoveryCardTitle scanning={scanning.length} />}
         loading={loading}
-        extra={
-          <Space size={12}>
-            <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-              Last run:{' '}
-              {lastRunAt ? <TimeAgo at={lastRunAt} /> : (
-                <NA reason="No scan has completed since this Coordinator started." />
-              )}
-            </Typography.Text>
-            <RunDiscoveryButton products={polled} />
-          </Space>
-        }
+        extra={<DiscoveryCardActions products={polled} lastRunAt={lastRunAt} />}
       >
         {rejected.length > 0 && (
           <div style={{ display: 'flex', flexDirection: 'column', gap: 8, marginBottom: 16 }}>
@@ -633,17 +660,16 @@ export function DiscoveryPanel({ products }: { products: Product[] }) {
           </Typography.Text>
         ) : (
           <>
-            <div
-              style={{
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'space-between',
-                gap: 12,
-                marginBottom: 12,
-                flexWrap: 'wrap',
-              }}
-            >
-              <Space size={12} align="center" wrap>
+            <div className="slm-discovery-overview">
+              <DiscoveryOutcome
+                newReleases={newSinceLastRun}
+                failedSources={errors.length}
+                onShowFailed={() => setShowFailed(true)}
+              />
+            </div>
+
+            <div className="slm-discovery-toolbar">
+              <div className="slm-discovery-filters">
                 {allRows.length > 5 && (
                   <>
                     <SearchBar
@@ -688,44 +714,18 @@ export function DiscoveryPanel({ products }: { products: Product[] }) {
                     />
                   </>
                 )}
-              </Space>
-
-              <Space size={24} wrap>
-                {/*
-                  One sentence, read left to right. It used to be a label, a
-                  colon and a number - "Found on the last run: 0 new releases" -
-                  which reads as a form field rather than as the answer to the
-                  question the panel exists for.
-                */}
-                <Typography.Text type="secondary" style={{ fontSize: 13 }}>
-                  Found{' '}
-                  <Typography.Text strong>
-                    <Value>{formatCount(newSinceLastRun)}</Value>
-                  </Typography.Text>{' '}
-                  new {newSinceLastRun === 1 ? 'release' : 'releases'} in the last sync
-                </Typography.Text>
-                {errors.length > 0 && (
-                  <Button
-                    type="text"
-                    danger
-                    size="small"
-                    style={{ paddingInline: 0, height: 'auto', fontSize: 13 }}
-                    onClick={() => setShowFailed(true)}
-                  >
-                    {errors.length} source{errors.length === 1 ? '' : 's'} failed on the last run
-                  </Button>
-                )}
-              </Space>
+              </div>
             </div>
 
-            <DataTable<DiscoverySourceState>
-              tableEnhancedKey="discovery-sources"
-              size="small"
-              pagination={{ pageSize: 20, showSizeChanger: false }}
-              dataSource={rows}
-              rowKey={(s) => `${s.product}-${s.source}`}
-              scroll={{ x: 900, y: rows.length > 12 ? 560 : undefined }}
-              columns={[
+            <div>
+              <DataTable<DiscoverySourceState>
+                tableEnhancedKey="discovery-sources"
+                size="middle"
+                pagination={{ pageSize: 20, showSizeChanger: false }}
+                dataSource={rows}
+                rowKey={(s) => `${s.product}-${s.source}`}
+                scroll={{ x: 900 }}
+                columns={[
                 {
                   title: 'Source',
                   width: 150,
@@ -746,9 +746,16 @@ export function DiscoveryPanel({ products }: { products: Product[] }) {
                   title: 'Packages seen',
                   width: 110,
                   align: 'right',
-                  render: (_, s) => (
-                    <Value>{formatCount(s.scanning ? s.tagsChecked : s.lastTagsListed)}</Value>
-                  ),
+                  render: (_, s) => {
+                    const count = packagesSeen(s)
+                    return (
+                      <Tooltip title={`${s.source}: ${formatCount(count)} packages seen`}>
+                        <span className="slm-discovery-package-count">
+                          <Value>{formatCount(count)}</Value>
+                        </span>
+                      </Tooltip>
+                    )
+                  },
                 },
                 {
                   title: 'New releases',
@@ -791,10 +798,12 @@ export function DiscoveryPanel({ products }: { products: Product[] }) {
                   // one registry is minutes of work nobody asked for.
                   title: 'Actions',
                   width: 120,
+                  fixed: 'right',
                   render: (_, s) => <DiscoverSource product={s.product} scanning={s.scanning} />,
                 },
-              ]}
-            />
+                ]}
+              />
+            </div>
 
             <Modal
               open={showFailed}
@@ -806,7 +815,8 @@ export function DiscoveryPanel({ products }: { products: Product[] }) {
               {errors.length === 0 ? (
                 <Typography.Text type="secondary">No failed source in the last run.</Typography.Text>
               ) : (
-                <Table<DiscoverySourceState>
+                <DataTable<DiscoverySourceState>
+                  tableEnhancedKey="discovery-failed-sources"
                   size="small"
                   pagination={{ pageSize: 8, showSizeChanger: false }}
                   dataSource={errors}

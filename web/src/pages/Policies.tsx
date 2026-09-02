@@ -1,14 +1,65 @@
 import { useEffect, useMemo, useState } from 'react'
-import { Alert, Card, Collapse, Input, Select, Space, Tooltip, Typography } from 'antd'
+import { Alert, Button, Card, Input, Select, Space, Tabs, Tooltip, Typography } from 'antd'
 // The working-surface table: resizable, reorderable, pinnable columns whose
 // layout each person keeps. See `tablekit/README.md` for which tables get it.
 import { Table as DataTable } from '../tablekit'
-import { SearchOutlined } from '../icons'
+import {
+  ApiOutlined, BarChartOutlined, ClusterOutlined, CompareOutlined,
+  CopyOutlined, HddOutlined, PackageOutlined, SearchOutlined,
+  ScaleOutlined, SafetyOutlined, SettingOutlined,
+  BookOutlined,
+} from '../icons'
 import { usePolicies } from '../api/queries'
 import { ErrorState, PageHeader } from '../components/layout'
 import { CheckSeverityTag } from '../components/compliance'
 import { c, mono } from '../uikit'
-import type { PolicyCheck } from '../api/types'
+import type { PolicyCatalogueResponse, PolicyCheck } from '../api/types'
+
+const categoryInfo: Record<string, { meaning: string; Icon: typeof ScaleOutlined }> = {
+  'Configuration & Secrets': { meaning: 'Configuration and secret handling', Icon: SettingOutlined },
+  'Identity & Access': { meaning: 'Identity and access control', Icon: SafetyOutlined },
+  'Metadata': { meaning: 'Labels and annotations', Icon: PackageOutlined },
+  'Networking': { meaning: 'Network reachability and exposure', Icon: ApiOutlined },
+  'Observability': { meaning: 'Monitoring and failure visibility', Icon: BarChartOutlined },
+  'Probes': { meaning: 'Health checks and lifecycle', Icon: SafetyOutlined },
+  'RBAC': { meaning: 'Role-based access control', Icon: SafetyOutlined },
+  'Resources': { meaning: 'Resource requests and limits', Icon: ClusterOutlined },
+  'Scheduling & Placement': { meaning: 'Scheduling and workload placement', Icon: CompareOutlined },
+  'Security': { meaning: 'Workload security posture', Icon: SafetyOutlined },
+  'Storage': { meaning: 'Persistent storage and data', Icon: HddOutlined },
+  'Supply Chain': { meaning: 'Artifact provenance and integrity', Icon: PackageOutlined },
+  'Upgrade': { meaning: 'Upgrade and rollout readiness', Icon: ScaleOutlined },
+}
+
+function CategoryLabel({ category }: { category?: string }) {
+  if (!category) return null
+  const info = categoryInfo[category]
+  const Icon = info?.Icon ?? ScaleOutlined
+  return (
+    <Tooltip title={info?.meaning ?? 'Policy category'}>
+      <Space size={6}>
+        <Icon style={{ color: c.brand }} />
+        <span>{category}</span>
+      </Space>
+    </Tooltip>
+  )
+}
+
+const prefixCategories: Record<string, string> = {
+  CFG: 'Configuration & Secrets', MTA: 'Metadata', NET: 'Networking', OBS: 'Observability',
+  PRB: 'Probes', RBAC: 'RBAC', RES: 'Resources', SCH: 'Scheduling & Placement',
+  SEC: 'Security', STO: 'Storage', SUP: 'Supply Chain', UPG: 'Upgrade',
+}
+
+function SourceCategories({ prefixes }: { prefixes?: string[] }) {
+  return (
+    <Space size={[8, 4]} wrap>
+      {(prefixes ?? []).map((prefix) => (
+        <CategoryLabel key={prefix} category={prefixCategories[prefix] ?? prefix} />
+      ))}
+    </Space>
+  )
+}
 
 /**
  * The rulebook: every check this platform will apply, and why.
@@ -37,6 +88,9 @@ export default function Policies() {
   const [search, setSearch] = useState('')
   const [category, setCategory] = useState<string | undefined>()
   const [severity, setSeverity] = useState<string | undefined>()
+  const [activeTab, setActiveTab] = useState('policies')
+  const [sourceToOpen, setSourceToOpen] = useState<string | undefined>()
+  const [expandedSources, setExpandedSources] = useState<string[]>([])
 
   const checks = policies.data?.checks ?? []
   const packs = policies.data?.packs ?? []
@@ -55,16 +109,29 @@ export default function Policies() {
 
   const filtered = useMemo(() => {
     const q = search.trim().toLowerCase()
-    return checks.filter((ch) => {
-      if (category && ch.category !== category) return false
-      if (severity && ch.severity !== severity) return false
+    return checks.filter((check) => {
+      if (category && check.category !== category) return false
+      if (severity && check.severity !== severity) return false
       if (!q) return true
-      return [ch.id, ch.title, ch.description, ch.rationale, ch.category]
+      return [check.id, check.title, check.description, check.rationale, check.category, check.pack]
         .some((v) => v?.toLowerCase().includes(q))
     })
   }, [checks, search, category, severity])
 
-  const total = checks.length
+  const sortedFiltered = useMemo(() => sortBySeverity(filtered), [filtered])
+  const filteredPacks = useMemo(() => {
+    const q = search.trim().toLowerCase()
+    return packs.filter((pack) => {
+      const ownedChecks = checks.filter((check) => check.pack === pack.name)
+      if (category && !ownedChecks.some((check) => check.category === category)) return false
+      if (severity && !ownedChecks.some((check) => check.severity === severity)) return false
+      if (!q) return true
+      return [pack.name, pack.version, pack.description, pack.maintainer, ...(pack.prefixes ?? [])]
+        .some((value) => value?.toLowerCase().includes(q))
+        || ownedChecks.some((check) => [check.id, check.title, check.description, check.rationale]
+          .some((value) => value?.toLowerCase().includes(q)))
+    })
+  }, [packs, checks, search, category, severity])
 
   if (policies.isError) {
     return (
@@ -80,15 +147,9 @@ export default function Policies() {
 
   return (
     <>
-      <PageHeader
-        title="Policies"
-        description={
-          'Every check a release is measured against. This is what a vendor is asked to satisfy, '
-          + 'so it says what each rule requires and why this organization requires it.'
-        }
-      />
 
-      <Space direction="vertical" size={16} style={{ width: '100%' }}>
+
+      <Space direction="vertical" size={0} style={{ width: '100%' }}>
         {/*
           A broken pack first, and unmissable. Its checks will report as
           undecided on every release, and a reader looking at those has no way
@@ -120,128 +181,220 @@ export default function Policies() {
           />
         )}
 
+        <Tabs
+          activeKey={activeTab}
+          onChange={setActiveTab}
+          items={[
+            {
+              key: 'policies',
+              label: 'Policies',
+              icon: <ScaleOutlined />,
+            },
+            {
+              key: 'sources',
+              label: 'Sources',
+              icon: <BookOutlined />,
+            },
+          ]}
+        />
+
+        <FilterBar
+          categories={categories}
+          category={category}
+          draft={draft}
+          activeTab={activeTab}
+          onCategoryChange={setCategory}
+          onDraftChange={setDraft}
+          onSeverityChange={setSeverity}
+          severity={severity}
+        />
+
         <Card
+          className="slm-policies-card"
           size="small"
           loading={policies.isLoading}
-          title={
-            <Space size={12} wrap>
-              <span>{checks.length.toLocaleString()} checks</span>
-              <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-                from {packs.length} pack{packs.length === 1 ? '' : 's'}
-                {policies.data?.bundleDigest && (
-                  <Tooltip title={policies.data.bundleDigest}>
-                    <span>
-                      {' · rulebook '}
-                      <code style={{ fontFamily: mono }}>
-                        {policies.data.bundleDigest.replace(/^sha256:/, '').slice(0, 12)}
-                      </code>
-                    </span>
-                  </Tooltip>
-                )}
-              </Typography.Text>
-            </Space>
-          }
         >
-          {/*
-            THE CONTROLS ON THE LEFT, above the table, in the order every other
-            listing in this application uses them: the search box first, then
-            the narrowing selects. They were right-aligned in the card's header,
-            which put the search box in a different place on this page than on
-            Packages - and a reader who has learned it there should not have to
-            learn it again here.
-          */}
-          <Space size={10} wrap style={{ marginBottom: 12 }}>
-            <Input
-              allowClear
-              style={{ width: 280 }}
-              prefix={<SearchOutlined style={{ color: c.text3 }} />}
-              placeholder="Search the rulebook"
-              value={draft}
-              onChange={(e) => setDraft(e.target.value)}
+          {activeTab === 'policies' ? (
+            <PolicyTable
+              filtered={sortedFiltered}
+              onSourceClick={(pack) => {
+                setSourceToOpen(pack)
+                setActiveTab('sources')
+              }}
             />
-            <Select
-              allowClear
-              placeholder="Any category"
-              style={{ minWidth: 200 }}
-              value={category}
-              onChange={setCategory}
-              showSearch
-              optionFilterProp="label"
-              options={categories.map((v) => ({ label: v, value: v }))}
+          ) : (
+            <PackTable
+              packs={filteredPacks}
+                  checks={checks}
+              search={search}
+              category={category}
+              severity={severity}
+                  expandedSources={expandedSources}
+                  onExpandedSourcesChange={(keys) => {
+                    setExpandedSources(keys)
+                    setSourceToOpen(undefined)
+                  }}
+                  sourceToOpen={sourceToOpen}
             />
-            <Select
-              allowClear
-              placeholder="Any severity"
-              style={{ minWidth: 160 }}
-              value={severity}
-              onChange={setSeverity}
-              options={[
-                { label: 'Critical', value: 'block' },
-                { label: 'Warning', value: 'warn' },
-                { label: 'Info', value: 'info' },
-              ]}
-            />
-            <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-              {filtered.length === total
-                ? `${total.toLocaleString()} checks`
-                : `${filtered.length.toLocaleString()} of ${total.toLocaleString()} checks`}
-            </Typography.Text>
-          </Space>
-
-          <DataTable<PolicyCheck>
-            tableEnhancedKey="policy-catalogue"
-            size="small"
-            rowKey="id"
-            dataSource={filtered}
-            pagination={{ pageSize: 50, showSizeChanger: true, size: 'small' }}
-            expandable={{
-              /*
-                The rationale is in the expansion rather than the row, because
-                it is a paragraph and a table of paragraphs is a table nobody
-                scans. It is the thing a reviewer opens the page for, so it is
-                one click and not a second page.
-              */
-              expandedRowRender: (ch) => <CheckDetail check={ch} />,
-            }}
-            columns={[
-              {
-                title: 'ID', dataIndex: 'id', width: 110,
-                render: (id: string) => (
-                  <span style={{ fontFamily: mono, fontSize: 12 }}>{id}</span>
-                ),
-              },
-              {
-                title: '', dataIndex: 'severity', width: 110,
-                render: (s: string) => <CheckSeverityTag severity={s} />,
-              },
-              { title: 'Category', dataIndex: 'category', width: 200 },
-              {
-                title: 'What it requires', dataIndex: 'title',
-                render: (_: unknown, ch: PolicyCheck) => (
-                  <Space direction="vertical" size={2}>
-                    <span>{ch.title}</span>
-                    {ch.appliesTo && (
-                      <span style={{ fontSize: 11, color: c.text3 }}>applies to {ch.appliesTo}</span>
-                    )}
-                  </Space>
-                ),
-              },
-            ]}
-          />
+          )}
         </Card>
-
-        <PackList packs={packs} />
       </Space>
     </>
   )
 }
 
-/** One check, in the words a vendor and a reviewer each need. */
-function CheckDetail({ check }: { check: PolicyCheck }) {
+  const severityOrder: Record<PolicyCheck['severity'], number> = { block: 0, warn: 1, info: 2 }
+
+  function sortBySeverity(checks: PolicyCheck[]) {
+    return [...checks].sort((left, right) => severityOrder[left.severity] - severityOrder[right.severity])
+  }
+
+  function FilterBar({
+    categories,
+    category,
+    draft,
+    activeTab,
+    severity,
+    onCategoryChange,
+    onDraftChange,
+    onSeverityChange,
+  }: {
+    categories: string[]
+    category: string | undefined
+    draft: string
+    activeTab: string
+    severity: string | undefined
+    onCategoryChange: (value: string | undefined) => void
+    onDraftChange: (value: string) => void
+    onSeverityChange: (value: string | undefined) => void
+  }) {
+    return (
+      <Space className="slm-policies-toolbar" size={10} wrap>
+        <Input
+          allowClear
+          style={{ width: 280 }}
+          prefix={<SearchOutlined style={{ color: c.text3 }} />}
+          placeholder={activeTab === 'policies' ? 'Search the rulebook' : 'Search sources'}
+          value={draft}
+          onChange={(event) => onDraftChange(event.target.value)}
+        />
+        <Select
+          allowClear
+          placeholder="Any category"
+          style={{ minWidth: 200 }}
+          value={category}
+          onChange={onCategoryChange}
+          showSearch
+          optionFilterProp="label"
+          options={categories.map((value) => ({
+            label: <CategoryLabel category={value} />,
+            value,
+          }))}
+        />
+        <Select
+          allowClear
+          placeholder="Any severity"
+          style={{ minWidth: 160 }}
+          value={severity}
+          onChange={onSeverityChange}
+          options={[
+            { label: 'Blocking', value: 'block' },
+            { label: 'Warning', value: 'warn' },
+            { label: 'Info', value: 'info' },
+          ]}
+        />
+      </Space>
+    )
+  }
+
+function PolicyTable({
+  filtered,
+  onSourceClick,
+}: {
+  filtered: PolicyCheck[]
+  onSourceClick: (pack: string) => void
+}) {
   return (
-    <Space direction="vertical" size={12} style={{ width: '100%', padding: '4px 0 8px' }}>
+    <>
+      <DataTable<PolicyCheck>
+        tableEnhancedKey="policy-catalogue"
+        size="middle"
+        rowKey="id"
+        dataSource={filtered}
+        scroll={{ x: '100%' }}
+        pagination={{ pageSize: 50, showSizeChanger: true, size: 'small' }}
+        expandable={{ expandedRowRender: (check) => <CheckDetail check={check} onSourceClick={onSourceClick} /> }}
+        columns={[
+          {
+            title: 'ID', dataIndex: 'id', width: 110,
+            render: (id: string) => <span style={{ fontFamily: mono, fontSize: 12 }}>{id}</span>,
+          },
+          {
+            title: '', dataIndex: 'severity', width: 110,
+            render: (value: string) => <CheckSeverityTag severity={value} />,
+          },
+          { title: 'Category', dataIndex: 'category', width: 220, render: (value: string) => <CategoryLabel category={value} /> },
+          {
+            title: 'What it requires', dataIndex: 'title',
+            render: (_: unknown, check: PolicyCheck) => (
+              <Space direction="vertical" size={2}>
+                <span>{check.title}</span>
+                {check.appliesTo && <span style={{ fontSize: 11, color: c.text3 }}>applies to {check.appliesTo}</span>}
+              </Space>
+            ),
+          },
+        ]}
+      />
+    </>
+  )
+}
+
+/** One check, in the words a vendor and a reviewer each need. */
+function CheckDetail({ check, onSourceClick }: { check: PolicyCheck; onSourceClick: (pack: string) => void }) {
+  const [copied, setCopied] = useState(false)
+
+  const copyPolicy = async () => {
+    const policy = [
+      `${check.id}: ${check.title}`,
+      check.description && `What it asserts\n${check.description}`,
+      check.rationale && `Why we require it\n${check.rationale}`,
+      check.remediation && `How to satisfy it\n${check.remediation}`,
+      check.appliesTo && `Applies to\n${check.appliesTo}`,
+      check.category && `Category\n${check.category}`,
+      check.severity && `Severity\n${check.severity}`,
+      check.pack && `Pack\n${check.pack}`,
+      check.tier && `Tier\n${check.tier}`,
+      check.engine && `Engine\n${check.engine}`,
+      check.reference && `Reference\n${check.reference}`,
+    ].filter(Boolean).join('\n\n')
+
+    try {
+      await navigator.clipboard.writeText(policy)
+      setCopied(true)
+      window.setTimeout(() => setCopied(false), 1600)
+    } catch {
+      setCopied(false)
+    }
+  }
+
+  return (
+    <div className="slm-policy-detail">
+      <div className="slm-policy-detail-heading">
+        <span className="slm-policy-detail-kicker">Policy check</span>
+        <Typography.Text className="slm-policy-detail-id" style={{ fontFamily: mono }}>{check.id}</Typography.Text>
+        <Button
+          className="slm-policy-copy"
+          size="small"
+          type="text"
+          icon={<CopyOutlined />}
+          onClick={() => void copyPolicy()}
+        >
+          {copied ? 'Policy copied' : 'Copy policy'}
+        </Button>
+      </div>
+      <div className="slm-policy-detail-grid">
       {check.description && (
-        <div>
+        <div className="slm-policy-detail-section">
           <Typography.Text strong style={{ fontSize: 12 }}>What it asserts</Typography.Text>
           <Typography.Paragraph style={{ marginBottom: 0 }}>{check.description}</Typography.Paragraph>
         </div>
@@ -252,76 +405,127 @@ function CheckDetail({ check }: { check: PolicyCheck }) {
         arguing with the tool.
       */}
       {check.rationale && (
-        <div>
+        <div className="slm-policy-detail-section">
           <Typography.Text strong style={{ fontSize: 12 }}>Why we require it</Typography.Text>
           <Typography.Paragraph style={{ marginBottom: 0 }}>{check.rationale}</Typography.Paragraph>
         </div>
       )}
       {check.remediation && (
-        <div>
+        <div className="slm-policy-detail-section slm-policy-detail-remediation">
           <Typography.Text strong style={{ fontSize: 12 }}>How to satisfy it</Typography.Text>
           <Typography.Paragraph style={{ marginBottom: 0 }}>{check.remediation}</Typography.Paragraph>
         </div>
       )}
-      <Space size={16} wrap style={{ fontSize: 12, color: c.text3 }}>
-        {check.pack && <span>pack <code style={{ fontFamily: mono }}>{check.pack}</code></span>}
+      </div>
+      <Space className="slm-policy-detail-meta" size={16} wrap>
+        {check.pack && (
+          <span>
+            source{' '}
+            <Typography.Link onClick={() => onSourceClick(check.pack!)}>
+              <code style={{ fontFamily: mono }}>{check.pack}</code>
+            </Typography.Link>
+          </span>
+        )}
         {check.tier ? <span>tier {check.tier}</span> : null}
         {check.engine && <span>{check.engine}</span>}
         {check.deprecated && (
-          <span style={{ color: c.review }}>
+          <span className="slm-policy-detail-retired" style={{ color: c.review }}>
             retired{check.supersededBy ? ` — superseded by ${check.supersededBy}` : ''}
           </span>
         )}
       </Space>
       {check.reference && (
-        <Typography.Link href={check.reference} target="_blank" rel="noreferrer">
+        <Typography.Link className="slm-policy-detail-reference" href={check.reference} target="_blank" rel="noreferrer">
           The standard this comes from
         </Typography.Link>
       )}
-    </Space>
+    </div>
   )
 }
 
 /** Where the checks came from, and who maintains each set. */
-function PackList({ packs }: { packs: NonNullable<ReturnType<typeof usePolicies>['data']>['packs'] }) {
-  if (packs.length === 0) return null
+function PackTable({
+  packs,
+  checks,
+  search,
+  category,
+  severity,
+  sourceToOpen,
+  expandedSources,
+  onExpandedSourcesChange,
+}: {
+  packs: PolicyCatalogueResponse['packs']
+  checks: PolicyCheck[]
+  search: string
+  category: string | undefined
+  severity: string | undefined
+  sourceToOpen?: string
+  expandedSources: string[]
+  onExpandedSourcesChange: (keys: string[]) => void
+}) {
+  const openSources = sourceToOpen && !expandedSources.includes(sourceToOpen)
+    ? [...expandedSources, sourceToOpen]
+    : expandedSources
+
   return (
-    <Collapse
-      size="small"
-      items={[{
-        key: 'packs',
-        label: `Where these came from (${packs.length} pack${packs.length === 1 ? '' : 's'})`,
-        children: (
-          <DataTable
-            tableEnhancedKey="policy-packs"
+    <DataTable
+      tableEnhancedKey="policy-packs"
+      size="middle"
+      rowKey="name"
+      dataSource={packs}
+      pagination={false}
+      expandable={{
+        expandedRowKeys: openSources,
+        onExpandedRowsChange: (keys) => onExpandedSourcesChange(keys.map(String)),
+        expandedRowRender: (pack) => (
+          <DataTable<PolicyCheck>
+            tableEnhancedKey={`policy-source-checks-${pack.name}`}
             size="small"
-            rowKey="name"
-            dataSource={packs}
+            rowKey="id"
+            dataSource={sortBySeverity(checks.filter((check) => {
+              if (check.pack !== pack.name) return false
+              if (category && check.category !== category) return false
+              if (severity && check.severity !== severity) return false
+              const q = search.trim().toLowerCase()
+              if (!q) return true
+              return [check.id, check.title, check.description, check.rationale, check.category, check.pack]
+                .some((value) => value?.toLowerCase().includes(q))
+            }))}
             pagination={false}
             columns={[
               {
-                title: 'Pack', dataIndex: 'name', width: 240,
-                render: (name: string) => (
-                  <span style={{ fontFamily: mono, fontSize: 12 }}>{name}</span>
-                ),
+                title: 'ID', dataIndex: 'id', width: 110,
+                render: (id: string) => <span style={{ fontFamily: mono, fontSize: 12 }}>{id}</span>,
               },
-              { title: 'Version', dataIndex: 'version', width: 100 },
-              {
-                title: 'Owns', dataIndex: 'prefixes', width: 150,
-                render: (p?: string[]) => (
-                  <span style={{ fontFamily: mono, fontSize: 12 }}>{(p ?? []).join(', ')}</span>
-                ),
-              },
-              {
-                title: 'Checks', dataIndex: 'checks', width: 90, align: 'right' as const,
-                render: (n: number) => n.toLocaleString(),
-              },
-              { title: 'Maintainer', dataIndex: 'maintainer', width: 180 },
-              { title: 'What it covers', dataIndex: 'description' },
+              { title: 'Severity', dataIndex: 'severity', width: 110, render: (value: string) => <CheckSeverityTag severity={value} /> },
+              { title: 'Category', dataIndex: 'category', width: 200, render: (value: string) => <CategoryLabel category={value} /> },
+              { title: 'What it requires', dataIndex: 'title', width: 300 },
+              { title: 'Why we require it', dataIndex: 'rationale', width: 420 },
             ]}
           />
         ),
-      }]}
+      }}
+      columns={[
+              {
+                title: 'Source', dataIndex: 'name', width: 220,
+                render: (name: string) => (
+                  <Space size={7}> 
+                    <span style={{ fontFamily: mono, fontSize: 12 }}>{name}</span>
+                  </Space>
+                ),
+              },
+              { title: 'Version', dataIndex: 'version', width: 90 },
+              {
+                title: 'Categories', dataIndex: 'prefixes', width: 260,
+                render: (p?: string[]) => <SourceCategories prefixes={p} />,
+              },
+              {
+                title: 'Checks', dataIndex: 'checks', width: 80, align: 'right' as const,
+                render: (n: number) => n.toLocaleString(),
+              },
+              { title: 'Maintainer', dataIndex: 'maintainer', width: 140 },
+              { title: 'What it covers', dataIndex: 'description', width: 360 },
+      ]}
     />
   )
 }

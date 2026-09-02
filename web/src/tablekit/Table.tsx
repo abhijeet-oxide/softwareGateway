@@ -85,6 +85,8 @@ type StyleName =
   | "toolbar"
   | "toolbarButton"
   | "toolbarDropdown"
+  | "toolbarExternal"
+  | "toolbarOutside"
   | "wrapper";
 
 const s = styles as Record<StyleName, string>;
@@ -137,6 +139,7 @@ export type TableEnhancedProps<RecordType extends AnyRecord = AnyRecord> =
     minColumnWidth?: number;
     defaultColumnWidth?: number;
     showColumnControls?: "always" | "hover" | "off";
+    toolbarPlacement?: "inside" | "outside";
     tableEnhancedDensity?: "comfortable" | "middle" | "compact";
     tableEnhancedBorderedHeader?: boolean;
     storage?: Storage;
@@ -2081,6 +2084,7 @@ function InnerTable<RecordType extends AnyRecord = AnyRecord>(
     enableColumnReorder = true,
     allow_export = false,
     show_column_visibility = false,
+    toolbarPlacement = "inside",
     tableEnhancedDebug = false,
     tableEnhancedShowActiveBadge = false,
     minColumnWidth = 90,
@@ -3132,6 +3136,7 @@ function InnerTable<RecordType extends AnyRecord = AnyRecord>(
     tableEnhancedDensity === "comfortable" && s.densityComfortable,
     showColumnControls === "always" && s.controlsAlways,
     tableEnhancedBorderedHeader && s.borderedHeader,
+    toolbarPlacement === "outside" && s.toolbarOutside,
   );
 
   const showToolbar = allow_export || show_column_visibility;
@@ -3142,6 +3147,7 @@ function InnerTable<RecordType extends AnyRecord = AnyRecord>(
       className={wrapperClassName}
       data-antd-table-enhanced-wrapper="true"
       data-antd-table-enhanced-key={tableEnhancedKey || storageKey}
+      data-antd-table-enhanced-toolbar-placement={toolbarPlacement}
     >
       {tableEnhancedShowActiveBadge ? (
         <div className={s.activeBadge}>
@@ -3167,7 +3173,12 @@ function InnerTable<RecordType extends AnyRecord = AnyRecord>(
       ) : null}
 
       {showToolbar ? (
-        <div className={s.toolbar}>
+        <div
+          className={cx(
+            s.toolbar,
+            toolbarPlacement === "outside" && s.toolbarExternal,
+          )}
+        >
           <Space size={8}>
             {allow_export ? (
               <Dropdown

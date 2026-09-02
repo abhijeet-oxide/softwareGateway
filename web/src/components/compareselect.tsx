@@ -5,7 +5,7 @@ import type { Package } from '../api/types'
 import type { Pick, Selection } from '../domain/compare'
 import { comparisonHref, complete } from '../domain/compare'
 import { version } from '../domain/derive'
-import { CloseCircleOutlined, ScaleOutlined, SwapOutlined } from '../icons'
+import { CloseCircleOutlined, CompareOutlined, SwapOutlined } from '../icons'
 import { c, mono } from '../uikit'
 
 /**
@@ -55,26 +55,32 @@ export function CompareSelectionBar({
 
   return (
     <div
-      // Sticky, because the choosing happens by scrolling a table of two
-      // hundred rows. A bar that scrolled away would leave a reader ticking a
-      // second box with no idea what the first one was.
       style={{
-        position: 'sticky', top: 0, zIndex: 5,
-        display: 'flex', flexWrap: 'wrap', gap: 16, alignItems: 'center',
+        display: 'flex', flexWrap: 'wrap', gap: 20, alignItems: 'center',
         justifyContent: 'space-between',
-        padding: '12px 16px', marginBottom: 12,
-        background: c.brandSoft, border: `1px solid ${c.brandBorder}`, borderRadius: 8,
+        padding: '14px 16px', marginBottom: 16,
+        background: c.surface, border: `1px solid ${c.brandBorder}`, borderRadius: 8,
+        boxShadow: '0 8px 22px rgba(0, 41, 82, 0.12)',
       }}
     >
       <Space
-        size={14}
+        size={16}
         align="center"
         wrap
         // Shrinks before it pushes: the release names ellipsis inside their
         // slots rather than shouldering the actions off the end of the row.
         style={{ minWidth: 0, flex: '1 1 auto' }}
       >
-        <ScaleOutlined style={{ color: c.brand }} />
+        <span
+          aria-hidden
+          style={{
+            display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
+            width: 30, height: 30, flex: '0 0 auto', borderRadius: 8,
+            color: c.brand, background: c.brandSoft, border: `1px solid ${c.brandBorder}`,
+          }}
+        >
+          <CompareOutlined style={{ fontSize: 17 }} />
+        </span>
         <Slot
           label="Comparing"
           pkg={a}
@@ -126,7 +132,7 @@ export function CompareSelectionBar({
         // long package names filled the row above them. The auto margin eats
         // the free space ahead of the group in both layouts, so Clear, Cancel
         // and Compare stay at the right edge whatever is beside them.
-        style={{ marginInlineStart: 'auto', flex: '0 0 auto' }}
+        style={{ marginInlineStart: 'auto', flex: '0 0 auto', paddingInlineStart: 8 }}
       >
         <Typography.Text type="secondary" style={{ fontSize: 12, whiteSpace: 'nowrap' }}>
           {chosen === 0
@@ -150,7 +156,7 @@ export function CompareSelectionBar({
           </Link>
         ) : (
           <Tooltip title="Pick two releases of the same product">
-            <Button size="small" type="primary" disabled icon={<ScaleOutlined />}>Compare</Button>
+            <Button size="small" type="primary" disabled icon={<CompareOutlined />}>Compare</Button>
           </Tooltip>
         )}
       </Space>
@@ -175,7 +181,14 @@ function Slot({ label, pkg, fallback, position, muted }: {
 }) {
   const filled = Boolean(pkg)
   return (
-    <Space size={8} align="center" style={{ minWidth: 0 }}>
+    <Space
+      size={8}
+      align="center"
+      style={{
+        minWidth: 0, padding: '4px 8px', borderRadius: 6,
+        background: filled ? c.brandSoft : 'transparent',
+      }}
+    >
       <span
         aria-hidden
         style={{

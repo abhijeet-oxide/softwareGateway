@@ -102,6 +102,228 @@
   box-shadow: inset -10px 0 8px -8px color-mix(in srgb, var(--text) 14%, transparent);
 }
 
+/* Discovery keeps its operational state, controls and working set distinct.
+   The same header contract is used on Overview and the full Discovery view. */
+.slm-discovery-card .ant-card-head {
+  min-height: 56px;
+  padding-inline: 20px;
+}
+.slm-discovery-card .ant-card-body {
+  padding: 20px;
+}
+.slm-discovery-actions,
+.slm-discovery-summary-body,
+.slm-discovery-toolbar,
+.slm-discovery-filters,
+.slm-discovery-outcome {
+  display: flex;
+  align-items: center;
+}
+.slm-discovery-actions {
+  gap: 16px;
+}
+.slm-discovery-last-run {
+  font-size: 12px;
+  white-space: nowrap;
+}
+.slm-discovery-summary-body {
+  justify-content: space-between;
+  gap: 24px;
+}
+.slm-discovery-outcome {
+  gap: 10px;
+  min-width: 0;
+}
+.slm-discovery-outcome-label {
+  padding-right: 2px;
+}
+.slm-discovery-outcome-value,
+.slm-discovery-outcome-link {
+  font-variant-numeric: tabular-nums;
+}
+.slm-discovery-outcome-link {
+  height: auto;
+  padding: 0;
+  font-weight: 600;
+}
+.slm-discovery-outcome-separator {
+  width: 3px;
+  height: 3px;
+  background: var(--text-3);
+  border-radius: 50%;
+}
+.slm-discovery-overview {
+  padding-bottom: 14px;
+  border-bottom: 1px solid var(--border);
+}
+.slm-discovery-toolbar {
+  gap: 10px;
+  padding-block: 14px;
+}
+.slm-discovery-filters {
+  flex-wrap: wrap;
+  gap: 10px;
+  min-width: 0;
+}
+.slm-discovery-package-count {
+  display: inline-block;
+  min-width: 100%;
+  cursor: help;
+}
+.slm-discovery-panel .ant-table-wrapper {
+  margin-inline: -20px;
+}
+.slm-discovery-panel .ant-table-container {
+  border-top: 1px solid var(--border);
+}
+
+/* Policy controls retain a working inset; the catalogue itself uses the full
+   card width so its columns align with the surface edges. */
+.slm-policies-card > .ant-card-body {
+  padding: 0;
+}
+.slm-policies-card .ant-card-head {
+  background: linear-gradient(180deg, var(--surface-raised), var(--surface));
+}
+.slm-policies-card-title {
+  min-height: 24px;
+}
+.slm-policies-card-count {
+  color: var(--text-1);
+  font-weight: 650;
+  font-variant-numeric: tabular-nums;
+}
+.slm-policies-card-source,
+.slm-policies-result-count {
+  font-size: 12px;
+}
+.slm-policies-digest {
+  padding: 2px 5px;
+  color: var(--text-2);
+  background: var(--surface-sunken);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+}
+.slm-policies-toolbar {
+  width: 100%;
+  padding: 12px;
+  background: var(--surface-sunken);
+}
+.slm-policies-card .ant-table-container {
+  border-top: 1px solid var(--border);
+  border-start-start-radius: 0;
+  border-start-end-radius: 0;
+}
+.slm-policies-card .ant-table-thead > tr:first-child > th:first-child,
+.slm-policies-card .ant-table-thead > tr:first-child > th:last-child {
+  border-radius: 0;
+}
+.slm-policies-card .ant-table-tbody > tr.ant-table-expanded-row > td {
+  padding: 0;
+  background: var(--surface-sunken);
+  border-bottom: 1px solid var(--border);
+}
+.slm-policy-detail {
+  padding: 18px 24px 20px 58px;
+  background: linear-gradient(105deg, color-mix(in srgb, var(--brand) 5%, var(--surface-sunken)), var(--surface-sunken) 42%);
+  box-shadow: inset 3px 0 0 var(--brand);
+}
+.slm-policy-detail-heading {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-bottom: 14px;
+}
+.slm-policy-detail-kicker {
+  color: var(--brand);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+.slm-policy-detail-id {
+  padding: 2px 6px;
+  color: var(--text-2);
+  font-size: 11px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+}
+.slm-policy-copy {
+  margin-left: auto;
+  color: var(--brand) !important;
+  font-weight: 600;
+}
+.slm-policy-detail-grid {
+  max-width: 980px;
+}
+.slm-policy-detail-section {
+  min-width: 0;
+  padding: 0 0 13px;
+  margin-bottom: 13px;
+  border-bottom: 1px solid var(--border);
+}
+.slm-policy-detail-section .ant-typography-strong {
+  display: block;
+  margin-bottom: 5px;
+  color: var(--text-2);
+  font-size: 11px !important;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+}
+.slm-policy-detail-section .ant-typography {
+  color: var(--text-1);
+  line-height: 1.55;
+}
+.slm-policy-detail-meta {
+  margin-top: 2px;
+  padding-top: 12px;
+  color: var(--text-3);
+  font-size: 12px;
+  border-top: 1px solid var(--border);
+}
+.slm-policy-detail-meta code {
+  color: var(--text-2);
+}
+.slm-policy-detail-retired {
+  font-weight: 600;
+}
+.slm-policy-detail-reference {
+  display: inline-block;
+  margin-top: 12px;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+@media (max-width: 760px) {
+  .slm-discovery-card .ant-card-head-wrapper,
+  .slm-discovery-summary-body,
+  .slm-discovery-toolbar {
+    align-items: stretch;
+    flex-direction: column;
+  }
+  .slm-discovery-card .ant-card-extra {
+    margin-inline-start: 0;
+  }
+  .slm-discovery-actions {
+    justify-content: space-between;
+    width: 100%;
+  }
+  .slm-discovery-outcome {
+    flex-wrap: wrap;
+  }
+  .slm-policy-detail {
+    padding: 16px;
+  }
+  .slm-policy-detail-grid {
+    max-width: none;
+  }
+  .slm-policy-copy {
+    margin-left: 0;
+  }
+}
+
 /* ---------------------------------------------------------------- motion --
  * One authored moment: a panel settles in on arrival. The keyframes are the
  * shared kit's (`.ui-fade-in`); this is the name this application already

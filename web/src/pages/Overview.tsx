@@ -1,5 +1,6 @@
 import { useMemo } from 'react'
-import { Button, Card, Col, Row, Space, Table, Tabs, Typography } from 'antd'
+import { Button, Card, Col, Row, Space, Tabs, Typography } from 'antd'
+import { Table as DataTable } from '../tablekit'
 import { c, FieldLabel } from '../uikit'
 import { CloudDownloadOutlined, DashboardOutlined, RadarChartOutlined } from '../icons'
 import { Link, useNavigate, useSearchParams } from 'react-router-dom'
@@ -263,7 +264,8 @@ export default function Overview() {
                 />
               </div>
             ) : (
-              <Table<Row>
+              <DataTable<Row>
+                tableEnhancedKey="overview-recent-packages"
                 loading={loading}
                 dataSource={rows}
                 rowKey={(r) => r.pkg.packageId}

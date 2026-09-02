@@ -516,13 +516,14 @@ export default function Downloads() {
               label: `Ongoing download${ongoing.length ? ` (${ongoing.length})` : ''}`,
               icon: <CloudDownloadOutlined />,
               children: (
+                <>
+                  <TableToolbar>
+                    <TableSearch value={ongoingSearch} onChange={setOngoingSearch} />
+                  </TableToolbar>
           <Card
             loading={transfers.isLoading}
             styles={{ body: { padding: 0 } }}
           >
-            <TableToolbar>
-              <TableSearch value={ongoingSearch} onChange={setOngoingSearch} />
-            </TableToolbar>
             {!transfers.isLoading && ongoing.length === 0 ? (
               <EmptyStateCard
                 title="Nothing is downloading"
@@ -609,6 +610,7 @@ export default function Downloads() {
               />
             )}
           </Card>
+                </>
               ),
             },
             {
@@ -620,10 +622,11 @@ export default function Downloads() {
                   : 'Downloads',
               icon: <HistoryOutlined />,
               children: (
+                <>
+                  <TableToolbar>
+                    <TableSearch value={downloadSearch} onChange={setDownloadSearch} />
+                  </TableToolbar>
               <Card loading={transfers.isLoading} styles={{ body: { padding: 0 } }}>
-            <TableToolbar>
-              <TableSearch value={downloadSearch} onChange={setDownloadSearch} />
-            </TableToolbar>
             {!transfers.isLoading && finished.length === 0 ? (
               <EmptyStateCard
                 title="No download has finished yet"
@@ -696,6 +699,7 @@ export default function Downloads() {
               />
             )}
           </Card>
+                </>
               ),
             },
             {
@@ -703,13 +707,14 @@ export default function Downloads() {
                 label: `Promotion${activePromotions.length ? ` (${activePromotions.length})` : ''}`,
               icon: <RocketOutlined />,
               children: (
+                <>
+                  <TableToolbar>
+                    <TableSearch value={promotionSearch} onChange={setPromotionSearch} />
+                  </TableToolbar>
           <Card
             loading={promotionsQuery.isLoading}
             styles={{ body: { padding: 0 } }}
           >
-            <TableToolbar>
-              <TableSearch value={promotionSearch} onChange={setPromotionSearch} />
-            </TableToolbar>
             {!promotionsQuery.isLoading && promotions.length === 0 ? (
               <EmptyStateCard
                 title="Nothing has been promoted"
@@ -776,6 +781,7 @@ export default function Downloads() {
               />
             )}
           </Card>
+                </>
               ),
             },
             {
@@ -783,11 +789,12 @@ export default function Downloads() {
               label: 'Rules',
               icon: <BookOutlined />,
               children: (
+                <>
+                  <TableToolbar>
+                    <TableSearch value={rulesSearch} onChange={setRulesSearch} />
+                    <ManagedInGit />
+                  </TableToolbar>
           <Card loading={downloadsPerProduct.some((q) => q.isLoading)} styles={{ body: { padding: 0 } }}>
-            <TableToolbar>
-              <TableSearch value={rulesSearch} onChange={setRulesSearch} />
-              <ManagedInGit />
-            </TableToolbar>
             <DataTable<WithProduct<DownloadView>>
               tableEnhancedKey="downloads-by-product"
               size="small"
@@ -830,6 +837,7 @@ export default function Downloads() {
               ]}
             />
           </Card>
+                </>
               ),
             },
             {
@@ -837,12 +845,12 @@ export default function Downloads() {
               label: 'Auto download',
               icon: <ThunderboltOutlined />,
               children: (
+                <>
+                  <TableToolbar>
+                    <TableSearch value={autoDownloadSearch} onChange={setAutoDownloadSearch} />
+                    <ManagedInGit />
+                  </TableToolbar>
           <Card loading={rulesPerProduct.some((q) => q.isLoading)} styles={{ body: { padding: 0 } }}>
-            <TableToolbar>
-              <TableSearch value={autoDownloadSearch} onChange={setAutoDownloadSearch} />
-              <ManagedInGit />
-            </TableToolbar>
-
             {!rulesPerProduct.some((q) => q.isLoading) && rules.length === 0 ? (
               <EmptyStateCard
                 title="No auto-download rules"
@@ -882,6 +890,7 @@ export default function Downloads() {
               />
             )}
           </Card>
+                </>
               ),
             },
           ].sort((a, b) => {

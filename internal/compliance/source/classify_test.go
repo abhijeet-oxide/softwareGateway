@@ -90,7 +90,7 @@ func TestNEAROrbChartsAreFound(t *testing.T) {
 	// recognised, and ErrNoCharts means they were not.
 	_, _, cleanup, err := p.Prepare(context.Background(),
 		compliance.Request{Product: "cfx", Release: "orb_24.7.3099"},
-		func(compliance.Stage, int, int, string) {})
+		compliance.NopReporter{})
 	if cleanup != nil {
 		cleanup()
 	}
@@ -122,7 +122,7 @@ func TestClassificationSelectsOnlyCharts(t *testing.T) {
 	}
 	_, _, cleanup, err := p.Prepare(context.Background(),
 		compliance.Request{Product: "conformant"},
-		func(compliance.Stage, int, int, string) {})
+		compliance.NopReporter{})
 	if cleanup != nil {
 		cleanup()
 	}
@@ -141,7 +141,7 @@ func TestNoChartsSaysHowManyItLookedAt(t *testing.T) {
 	}
 	p := &source.Preparer{Packages: stubLookup{candidates: candidates}}
 	_, _, _, err := p.Prepare(context.Background(), compliance.Request{Product: "images-only"},
-		func(compliance.Stage, int, int, string) {})
+		compliance.NopReporter{})
 	if err == nil {
 		t.Fatal("an image-only release was accepted as checkable")
 	}
@@ -155,7 +155,7 @@ func TestNoChartsSaysHowManyItLookedAt(t *testing.T) {
 	// is on this side.
 	p = &source.Preparer{Packages: stubLookup{}}
 	_, _, _, err = p.Prepare(context.Background(), compliance.Request{Product: "unanalysed"},
-		func(compliance.Stage, int, int, string) {})
+		compliance.NopReporter{})
 	if !errors.Is(err, source.ErrNotAnalysed) {
 		t.Errorf("an unanalysed release reports %v, want ErrNotAnalysed", err)
 	}
@@ -179,7 +179,7 @@ func TestMultiLayerChartIsSkippedNotGuessed(t *testing.T) {
 		Classify: nearClassifier,
 	}
 	_, _, _, err := p.Prepare(context.Background(), compliance.Request{Product: "cfx"},
-		func(compliance.Stage, int, int, string) {})
+		compliance.NopReporter{})
 	if err == nil || !strings.Contains(err.Error(), "ships no Helm charts") {
 		t.Fatalf("a twelve-layer chart was unpacked anyway: %v", err)
 	}

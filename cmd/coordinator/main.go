@@ -328,7 +328,11 @@ func run() error {
 			WorkerLogs:  cfg.Coordinator.GC.WorkerLogs,
 			AuditEvents: cfg.Coordinator.GC.AuditEvents,
 			Placements:  cfg.Coordinator.GC.Placements,
-			BatchSize:   cfg.Coordinator.GC.BatchSize,
+			// A COUNT, not a duration: what a release's compliance history is
+			// for is "what did this look like the last few times", and a
+			// release checked once eight months ago must keep that one run.
+			ComplianceRuns: cfg.Coordinator.GC.ComplianceRuns,
+			BatchSize:      cfg.Coordinator.GC.BatchSize,
 		},
 		cfg.Coordinator.GC.TickInterval, logger)
 

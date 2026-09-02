@@ -1,7 +1,7 @@
 import { useMemo, useState } from 'react'
 import { Link } from 'react-router-dom'
 import {
-  App, Button, Card, Descriptions, Drawer, Input, Segmented, Select, Space, Tooltip, Typography,
+  App, Button, Card, Descriptions, Drawer, Input, Segmented, Select, Space, Typography,
 } from 'antd'
 // The working-surface table: resizable, reorderable, pinnable columns whose
 // layout each person keeps. See `tablekit/README.md` for which tables get it.
@@ -13,10 +13,11 @@ import {
 } from '../api/queries'
 import { EmptyStateCard } from './layout'
 import {
-  CheckSeverityTag, ComplianceProgressPanel, ComplianceSummary, DeterminacyTag,
+  CheckSeverityTag, ComplianceSummary, DeterminacyTag,
   HelmMissingNotice, InconclusiveNotice, OutcomePill, ResultAddress, RunFailedNotice,
   RunProvenance, TruncatedNotice, VerdictPill,
 } from './compliance'
+import { ComplianceRunPanel } from './complianceprogress'
 import { EvidencePanel, NoEvidenceNotice, RenderedManifestsAction } from './complianceevidence'
 import { c, mono } from '../uikit'
 import type { ComplianceResult } from '../api/types'
@@ -178,6 +179,36 @@ export function ComplianceTab({ product, reference, repository }: {
   const results = data?.results ?? []
   const running = Boolean(data?.progress)
 
+  /*
+   * WHILE A RUN IS GOING, THE RUN IS THE WHOLE PAGE.
+   *
+   * The verdict card, the coverage table and the findings table all read from
+   * the LATEST run - which, the moment somebody presses the button, is the one
+   * that has just started and has nothing in it. So the tab showed "Not
+   * checked" over four zeros and an empty findings table that redrew itself
+   * every two seconds, for the several minutes the check took. Every one of
+   * those is a true statement about a run that has not finished and a false
+   * impression of the release.
+   *
+   * The previous run's verdict is not shown either, and that is the harder
+   * call: it is real, and it is about to be replaced. Showing it beside a
+   * running check is how a stale verdict gets read out in a release meeting.
+   * It is one press of Re-check away from being current, and until then the
+   * honest thing on screen is the check that is running.
+   */
+  if (running && data?.progress) {
+    return (
+      <Space direction="vertical" size={16} style={{ width: '100%' }}>
+        {data && <HelmMissingNotice helm={data.helm} />}
+        <ComplianceRunPanel
+          progress={data.progress}
+          cancelling={cancel.isPending}
+          onCancel={() => cancel.mutate({ product, ref: reference, repository })}
+        />
+      </Space>
+    )
+  }
+
   return (
     <Space direction="vertical" size={16} style={{ width: '100%' }}>
       {data && <HelmMissingNotice helm={data.helm} />}
@@ -191,30 +222,12 @@ export function ComplianceTab({ product, reference, repository }: {
         />
       )}
 
-      {/* The live position, while a run is going. */}
-      {data?.progress && (
-        <Card size="small">
-          <ComplianceProgressPanel
-            progress={data.progress}
-            cancelling={cancel.isPending}
-            onCancel={() => cancel.mutate({ product, ref: reference, repository })}
-          />
-        </Card>
-      )}
-
       {/* The verdict and the numbers. */}
       {data?.run && (
         <Card
           loading={compliance.isLoading}
           title={
-            <Space size={12}>
-              <VerdictPill verdict={data.run.verdict} label={data.run.verdictLabel} />
-              {running && (
-                <Tooltip title="A compliance check is in progress">
-                  <LoadingOutlined spin style={{ fontSize: 12 }} />
-                </Tooltip>
-              )}
-            </Space>
+            <VerdictPill verdict={data.run.verdict} label={data.run.verdictLabel} />
           }
           extra={
             <Space size={12}>

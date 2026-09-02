@@ -89,15 +89,15 @@ type stubSource struct {
 }
 
 func (s *stubSource) Prepare(
-	ctx context.Context, _ compliance.Request,
-	report func(compliance.Stage, int, int, string),
+	ctx context.Context, _ compliance.Request, rep compliance.Reporter,
 ) (*compliance.Release, compliance.Determiner, func(), error) {
 	cleanup := func() {
 		if s.cleaned != nil {
 			close(s.cleaned)
 		}
 	}
-	report(compliance.StageFetching, 1, 1, "")
+	rep.Stage(compliance.StageFetching, 1, 1, "")
+	rep.Event(compliance.EventInfo, "stub source")
 	if s.block != nil {
 		select {
 		case <-s.block:

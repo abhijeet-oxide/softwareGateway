@@ -188,6 +188,23 @@ type ComplianceConfig struct {
 	EvidencePerDocument int64 `koanf:"evidencePerDocument"`
 	EvidencePerRelease  int64 `koanf:"evidencePerRelease"`
 
+	// FetchConcurrency and RenderConcurrency are how many charts a run pulls
+	// and renders at once.
+	//
+	// Two numbers because the two stages are bound by different things. Pulling
+	// a chart layer is almost all round trip against SOMEBODY ELSE'S registry,
+	// so the limit is politeness: thirty parallel requests is a rate limiter
+	// and a slower answer, not a faster one. Rendering is `helm template`,
+	// which is CPU-bound and local, so its limit is this machine's cores.
+	//
+	// Zero picks a default (6 fetching; 4-8 rendering, from the CPU count).
+	// One does that stage in sequence, which is what a Coordinator sharing a
+	// small node with everything else may want. Neither can change a result:
+	// what a run produces is assembled in chart order regardless of which
+	// worker finished first.
+	FetchConcurrency  int `koanf:"fetchConcurrency"`
+	RenderConcurrency int `koanf:"renderConcurrency"`
+
 	// RenderTimeout bounds one chart's render, so a template loop that does
 	// not terminate cannot take the Coordinator with it.
 	RenderTimeout time.Duration `koanf:"renderTimeout"`
@@ -461,6 +478,19 @@ type GCConfig struct {
 	// per blob on the next transfer, and the whole table is measured in tens of
 	// thousands of rows.
 	Placements time.Duration `koanf:"placements"`
+
+	// ComplianceRuns keeps the N most recent compliance runs of each release
+	// and deletes the rest, with their charts, results and rendered manifests.
+	//
+	// A COUNT, and the only bound here that is not a duration. What a release's
+	// compliance history is FOR is "what did this look like the last few times
+	// we checked": a release checked once eight months ago must keep that run,
+	// because it is the only answer anybody has about it, while a release
+	// checked hourly by a schedule must not keep six thousand.
+	//
+	// The one-row-per-release summary the Software listing reads is never
+	// swept. Zero keeps every run forever.
+	ComplianceRuns int `koanf:"complianceRuns"`
 }
 
 type WorkerConfig struct {
@@ -544,6 +574,13 @@ func Defaults() SystemConfig {
 			GC: GCConfig{
 				TickInterval: time.Hour,
 				BatchSize:    5000,
+				// Ten runs per release. Enough to see a trend across a
+				// fortnight of scheduled checks and to compare a re-check
+				// against what it replaced; short of the unbounded growth a
+				// nightly schedule would otherwise produce, and it is the
+				// rendered manifests each run keeps that make that growth
+				// matter rather than the result rows.
+				ComplianceRuns: 10,
 				// Ninety days of transfer history and thirty of worker logs.
 				//
 				// Chosen against what each is FOR. A settled transfer's rows

@@ -64,6 +64,20 @@ type RetentionPolicy struct {
 	// never a re-upload - but it is a poor trade for a table measured in tens
 	// of thousands of rows.
 	Placements time.Duration
+	// ComplianceRuns keeps the N most recent runs of each release and deletes
+	// the rest, with their charts, their results and their rendered manifests.
+	//
+	// A COUNT rather than a duration, and it is the only one here that is. Age
+	// is the right bound for a log line and the wrong one for a run: what a
+	// release's compliance history is FOR is "what did this look like the last
+	// few times we checked", and a release checked once eight months ago should
+	// keep that one run - it is the only answer anybody has about it - while a
+	// release checked hourly by a schedule should not keep six thousand.
+	//
+	// The listing summary in package_compliance is NOT swept. It is one row per
+	// release, it is what the Software page reads, and losing it would turn a
+	// checked release back into an unchecked one on screen.
+	ComplianceRuns int
 	// BatchSize bounds one pass, so a first sweep of a database that has run
 	// unbounded for a year does not take a table lock for minutes.
 	BatchSize int
@@ -71,21 +85,24 @@ type RetentionPolicy struct {
 
 // Enabled reports whether anything would be deleted.
 func (p RetentionPolicy) Enabled() bool {
-	return p.Transfers > 0 || p.WorkerLogs > 0 || p.AuditEvents > 0 || p.Placements > 0
+	return p.Transfers > 0 || p.WorkerLogs > 0 || p.AuditEvents > 0 ||
+		p.Placements > 0 || p.ComplianceRuns > 0
 }
 
 // RetentionResult is what one sweep removed.
 type RetentionResult struct {
-	Transfers   int
-	Requests    int
-	WorkerLogs  int
-	AuditEvents int
-	Placements  int
+	Transfers      int
+	Requests       int
+	WorkerLogs     int
+	AuditEvents    int
+	Placements     int
+	ComplianceRuns int
 }
 
 // Rows is the total, for deciding whether the sweep is worth a log line.
 func (r RetentionResult) Rows() int {
-	return r.Transfers + r.Requests + r.WorkerLogs + r.AuditEvents + r.Placements
+	return r.Transfers + r.Requests + r.WorkerLogs + r.AuditEvents +
+		r.Placements + r.ComplianceRuns
 }
 
 // SweepRetention deletes history past its retention.
@@ -161,7 +178,61 @@ func (p *Packages) SweepRetention(
 		res.Placements = int(n)
 	}
 
+	if policy.ComplianceRuns > 0 {
+		n, err := p.sweepComplianceRuns(ctx, policy.ComplianceRuns, batch)
+		if err != nil {
+			return res, err
+		}
+		res.ComplianceRuns = n
+	}
+
 	return res, nil
+}
+
+// sweepComplianceRuns keeps the newest `keep` runs of each release.
+//
+// # Why a run is deleted whole, and what goes with it
+//
+// The charts, the results and the rendered manifests hang off the run by
+// foreign key with ON DELETE CASCADE, so removing the run row removes all of
+// them - and that is the only correct granularity. A run without its results is
+// a verdict nobody can look behind; a run without its coverage is a finding
+// count with no denominator. Half a run is worse than no run.
+//
+// # Why the summary row is left alone
+//
+// package_compliance is one row per RELEASE, holds the verdict and counts the
+// Software listing reads, and points at a run with ON DELETE SET NULL. Sweeping
+// a release's last run therefore leaves the summary saying what was found, with
+// the detail behind it gone - which is why `keep` must be at least 1 and why
+// the current run is never a candidate: it is the newest.
+//
+// The window function does the selection in one statement on both dialects.
+// SQLite has supported them since 3.25 and the driver here is well past that.
+func (p *Packages) sweepComplianceRuns(ctx context.Context, keep, batch int) (int, error) {
+	if keep < 1 {
+		keep = 1
+	}
+	result, err := p.db.ExecContext(ctx, p.dialect.Rewrite(`
+		DELETE FROM compliance_runs
+		 WHERE id IN (
+		       SELECT id FROM (
+		              SELECT id, ROW_NUMBER() OVER (
+		                       PARTITION BY package_id ORDER BY started_at DESC, id DESC
+		                     ) AS rank
+		                FROM compliance_runs
+		            ) ranked
+		        WHERE rank > ?
+		        LIMIT ?
+		 )`), keep, batch)
+	if err != nil {
+		return 0, fmt.Errorf("sweep compliance runs: %w", err)
+	}
+	n, err := result.RowsAffected()
+	if err != nil {
+		return 0, fmt.Errorf("count swept compliance runs: %w", err)
+	}
+	return int(n), nil
 }
 
 // deleteSettledTransfers removes transfers that finished long enough ago.

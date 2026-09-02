@@ -1,0 +1,10 @@
+findings:
+  - {check: SEC-01, kind: Deployment, name: loose, container: loose}
+  - {check: SEC-02, kind: Deployment, name: loose, container: loose}
+  - {check: SEC-03, kind: Deployment, name: loose, container: loose}
+  - {check: SEC-04, kind: Deployment, name: loose, container: loose}
+  - {check: SEC-05, kind: Deployment, name: loose, container: loose}
+  - {check: SEC-06, kind: Deployment, name: loose, container: loose}
+  # The container runtime socket: reported as cluster-admin equivalence rather
+  # than as a mount, because that is what it is.
+  - {check: SEC-08, kind: Deployment, name: loose}

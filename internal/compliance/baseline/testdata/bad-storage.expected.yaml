@@ -1,0 +1,8 @@
+findings:
+  - {check: STO-01, kind: PersistentVolumeClaim, name: implicit-class}
+  - {check: STO-02, kind: PersistentVolumeClaim, name: implicit-class}
+  - {check: STO-04, kind: PersistentVolumeClaim, name: implicit-class}
+  - {check: STO-05, kind: Deployment, name: shared}
+  - {check: STO-07, kind: Deployment, name: shared, container: fix-perms}
+  - {check: STO-08, kind: Deployment, name: shared}
+  - {check: STO-10, kind: StatefulSet, name: ephemeral}

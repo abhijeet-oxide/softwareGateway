@@ -1,0 +1,137 @@
+apiVersion: softwaregateway.io/v1alpha1
+kind: PolicyPack
+metadata:
+  name: sgw-baseline-config
+  prefix: CFG
+  version: 1.0.0
+  description: >
+    Configuration and secrets. What the release puts where anybody can read it.
+  maintainer: platform-sre
+spec:
+  checks:
+    - id: CFG-01
+      title: No credential is written into configuration
+      description: >
+        No ConfigMap key, and no container env value, is a credential written
+        in plain text.
+      rationale: >
+        A ConfigMap is readable by anybody who can read the namespace, which is
+        a far wider set than can read a Secret. An env value is visible in the
+        pod spec, in kubectl describe, and in every log line that dumps the
+        environment.
+      severity: block
+      tier: 1
+      category: Configuration & Secrets
+      remediation: >
+        Move the value to a Secret and reference it with secretKeyRef.
+      appliesTo:
+        kinds: [ConfigMap]
+        where: 'value(self, "data") != null'
+      assert:
+        expr: 'self.data.all(k, !looksLikeCredential(k, string(self.data[k])))'
+        locus: data
+        expected: no credential-shaped keys
+        observed: 'self.data.filter(k, looksLikeCredential(k, string(self.data[k]))).join(", ")'
+
+    - id: CFG-02
+      title: No credential is passed on the command line
+      description: >
+        No container args or command element carries a literal password, token,
+        secret or API key.
+      rationale: >
+        Container args are world-readable through the API and appear in ps
+        inside the container, so a credential there is readable by any process
+        in the pod including a compromised sidecar.
+      severity: block
+      tier: 1
+      category: Configuration & Secrets
+      remediation: >
+        Pass the value through an environment variable sourced from a Secret,
+        or a mounted file.
+      appliesTo:
+        kinds: [Deployment, StatefulSet, DaemonSet, ReplicaSet, Job, CronJob, Pod]
+        containers: all
+        where: 'present(self, "args") || present(self, "command")'
+      assert:
+        expr: |
+          (!present(self, "args") ||
+            self.args.all(a, !string(a).matches("(?i)^--?(password|passwd|token|secret|api[-_]?key)="))) &&
+          (!present(self, "command") ||
+            self.command.all(a, !string(a).matches("(?i)^--?(password|passwd|token|secret|api[-_]?key)=")))
+        locus: args
+        expected: no credential flag with a literal value
+
+    - id: CFG-03
+      title: Consumed ConfigMaps are immutable
+      description: >
+        A ConfigMap mounted or referenced by a workload sets immutable: true.
+      rationale: >
+        A mutable ConfigMap can be edited in place, and the pods consuming it
+        will not restart - so the running configuration diverges from the
+        declared one with nothing to show for it. Immutable forces the change
+        to go through a new object and a rollout.
+      severity: warn
+      tier: 1
+      category: Configuration & Secrets
+      remediation: >
+        Set immutable: true and give the ConfigMap a content-derived name
+        suffix so an update creates a new object.
+      appliesTo:
+        kinds: [ConfigMap]
+      assert:
+        equals:
+          immutable: true
+
+    - id: CFG-06
+      title: TLS material reaches the container as a file
+      description: >
+        No environment variable carries a certificate or a private key; TLS
+        material is mounted read-only.
+      rationale: >
+        A private key in an environment variable is in the pod spec, in every
+        crash dump, and in any log line that prints the environment. A mounted
+        file is readable only by the process.
+      severity: warn
+      tier: 1
+      category: Configuration & Secrets
+      remediation: Mount the TLS secret as a read-only volume.
+      appliesTo:
+        kinds: [Deployment, StatefulSet, DaemonSet, ReplicaSet, Job, CronJob, Pod]
+        containers: all
+        where: 'present(self, "env")'
+      assert:
+        expr: |
+          self.env.all(e,
+            !string(value(e, "name")).matches("(?i)(tls|ssl)?_?(cert|certificate|key|pem|ca_?bundle)$") ||
+            !present(e, "value"))
+        locus: env
+        expected: TLS material mounted as a file rather than passed in the environment
+        observed: |
+          self.env.filter(e,
+            string(value(e, "name")).matches("(?i)(tls|ssl)?_?(cert|certificate|key|pem|ca_?bundle)$") &&
+            present(e, "value")).map(e, string(value(e, "name"))).join(", ")
+
+    - id: CFG-07
+      title: A container receives named secret keys, not whole secrets
+      description: >
+        Reports envFrom.secretRef and whole-Secret volume mounts that declare
+        no items.
+      rationale: >
+        The container gets every key in the Secret, including the ones added
+        next release for a different component. It is the difference between a
+        credential this workload needs and every credential the namespace has.
+      severity: warn
+      tier: 1
+      category: Configuration & Secrets
+      remediation: >
+        Name the keys with secretKeyRef, or with an items list on the volume.
+      appliesTo:
+        kinds: [Deployment, StatefulSet, DaemonSet, ReplicaSet, Job, CronJob, Pod]
+        containers: all
+        where: 'present(self, "envFrom")'
+      assert:
+        expr: '!self.envFrom.exists(e, has(e.secretRef))'
+        locus: envFrom
+        expected: named secret keys rather than a whole Secret
+        observed: |
+          self.envFrom.filter(e, has(e.secretRef)).map(e, string(e.secretRef.name)).join(", ")

@@ -1,0 +1,27 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: probe-app
+spec:
+  replicas: {{ .Values.replicaCount }}
+  selector:
+    matchLabels:
+      app: probe-app
+  template:
+    metadata:
+      labels:
+        app: probe-app
+    spec:
+      serviceAccountName: {{ .Values.serviceAccount.name }}
+      containers:
+        - name: app
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+          # FIXED by the template: no values path reaches it.
+          imagePullPolicy: IfNotPresent
+          securityContext:
+            # FIXED, and wrong - which is the case determinacy has to get
+            # right, because it is the one that blocks.
+            runAsUser: 0
+          resources:
+            limits:
+              memory: {{ .Values.resources.limits.memory }}

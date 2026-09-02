@@ -34,6 +34,7 @@ const DownloadDetail = lazyRoute(() => import('./pages/DownloadDetail'))
 const Downloads = lazyRoute(() => import('./pages/Downloads'))
 const Compare = lazyRoute(() => import('./pages/Compare'))
 const Security = lazyRoute(() => import('./pages/Security'))
+const Policies = lazyRoute(() => import('./pages/Policies'))
 const Repositories = lazyRoute(() => import('./pages/Repositories'))
 const Activity = lazyRoute(() => import('./pages/Activity'))
 const Reports = lazyRoute(() => import('./pages/Reports'))
@@ -48,7 +49,7 @@ const Settings = lazyRoute(() => import('./pages/Settings'))
  */
 const ROUTES = [
   Overview, Packages, Downloads, Products, Repositories, Activity, Reports, Settings,
-  PackageDetail, DownloadDetail, Compare, Security,
+  PackageDetail, DownloadDetail, Compare, Security, Policies,
 ] as unknown as RouteModule<never>[]
 
 /** Carries a bookmarked /software/{product}/{reference} onto /packages. */
@@ -125,6 +126,13 @@ export function App() {
               {/* The old path - links to it exist already, so it redirects rather than 404s. */}
               <Route path="/compare" element={<LegacyCompareRedirect />} />
               <Route path="/security" element={<Security.Component />} />
+              {/*
+                The rulebook. Reachable from a release's Compliance tab and by
+                link, deliberately NOT a tenth nav entry: the shell's nine are
+                the nine, and this is a reference somebody opens from a finding
+                rather than a place they go.
+              */}
+              <Route path="/policies" element={<Policies.Component />} />
               <Route path="/repositories" element={<Repositories.Component />} />
               <Route path="/activity" element={<Activity.Component />} />
               <Route path="/reports" element={<Reports.Component />} />

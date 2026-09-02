@@ -1,0 +1,13 @@
+findings:
+  # The init container, which is the one every implementation misses.
+  - {check: RES-01, kind: Deployment, name: mixed, container: init-migrate}
+  - {check: RES-02, kind: Deployment, name: mixed, container: init-migrate}
+  # `resources: {}` declares the field and satisfies nothing.
+  - {check: RES-01, kind: Deployment, name: mixed, container: sidecar-empty}
+  - {check: RES-02, kind: Deployment, name: mixed, container: sidecar-empty}
+  # The sidecar has requests but no memory limit.
+  - {check: RES-02, kind: Deployment, name: mixed, container: sidecar-proxy}
+  # Informational: the containers that cap CPU, listed for the throttling review.
+  - {check: RES-03, kind: Deployment, name: mixed, container: capped}
+  # An autoscaler that will take the service to one pod overnight.
+  - {check: RES-04, kind: HorizontalPodAutoscaler, name: mixed}

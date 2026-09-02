@@ -1,0 +1,6 @@
+apiVersion: v2
+name: probe-chart
+description: A chart whose fields are deliberately a mix of fixed and configurable.
+type: application
+version: 1.0.0
+appVersion: "2.3.4"

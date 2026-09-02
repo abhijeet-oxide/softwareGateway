@@ -1,0 +1,55 @@
+# Requests and limits, with the containers everybody forgets.
+#
+# The inherited resource_limits.rego checks spec.containers only. A sidecar
+# without limits gets the pod OOM-killed exactly as a main container does, and
+# an init container without requests makes the scheduler's placement decision
+# wrong for the whole pod.
+---
+# Source: bad-resources/templates/deployment.yaml
+apiVersion: apps/v1
+kind: Deployment
+metadata: {name: mixed, namespace: bad}
+spec:
+  replicas: 1
+  selector:
+    matchLabels: {app.kubernetes.io/name: mixed}
+  template:
+    metadata:
+      labels: {app.kubernetes.io/name: mixed}
+    spec:
+      initContainers:
+        # Forgotten entirely.
+        - name: init-migrate
+          image: registry.acme.example/bad/migrate@sha256:aaaa111111111111111111111111111111111111111111111111111111111111
+      containers:
+        # Correct: requests and a memory limit. Must not fire.
+        - name: app
+          image: registry.acme.example/bad/app@sha256:bbbb222222222222222222222222222222222222222222222222222222222222
+          resources:
+            requests: {cpu: 100m, memory: 128Mi}
+            limits: {memory: 256Mi}
+        # The sidecar: requests present, memory limit missing.
+        - name: sidecar-proxy
+          image: registry.acme.example/bad/proxy@sha256:cccc333333333333333333333333333333333333333333333333333333333333
+          resources:
+            requests: {cpu: 50m, memory: 64Mi}
+        # Declares the field and fills in nothing, which is how a chart
+        # "supports" a requirement. An empty map is not a set value.
+        - name: sidecar-empty
+          image: registry.acme.example/bad/empty@sha256:dddd444444444444444444444444444444444444444444444444444444444444
+          resources: {}
+        # A CPU limit, which is reported for review rather than failed.
+        - name: capped
+          image: registry.acme.example/bad/capped@sha256:eeee555555555555555555555555555555555555555555555555555555555555
+          resources:
+            requests: {cpu: 100m, memory: 128Mi}
+            limits: {cpu: 200m, memory: 256Mi}
+---
+# Source: bad-resources/templates/hpa.yaml
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata: {name: mixed, namespace: bad}
+spec:
+  minReplicas: 1
+  maxReplicas: 10
+  scaleTargetRef: {apiVersion: apps/v1, kind: Deployment, name: mixed}

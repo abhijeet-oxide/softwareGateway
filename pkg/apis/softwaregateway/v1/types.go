@@ -359,6 +359,12 @@ type Package struct {
 	// prevent.
 	Security *PackageSecuritySummary `json:"security,omitempty"`
 
+	// Compliance is what a standards check recorded for this release, or nil
+	// where none has run. Nil is NOT "compliant", and a client that renders it
+	// as such has written the bug this whole feature exists to prevent - the
+	// same trap Security above carries, for the same reason.
+	Compliance *PackageComplianceSummary `json:"compliance,omitempty"`
+
 	Tag            string `json:"tag"`
 	ManifestDigest string `json:"manifestDigest"`
 	MediaType      string `json:"mediaType"`
@@ -2775,4 +2781,37 @@ type Features struct {
 	// FilesConfig.DownloadEnabled. A client hides the control rather than
 	// showing one that always 404s.
 	FileDownloads bool `json:"fileDownloads"`
+}
+
+// PackageComplianceSummary is a release's standards result, as the listing
+// shows it.
+//
+// # Why the error count is a field and not folded into the others
+//
+// A check that could not be decided is not a check that passed, and a release
+// with three hundred passes and one undecided check is INCONCLUSIVE rather than
+// compliant. A listing that showed only blocking and warning counts would draw
+// that release as clean.
+type PackageComplianceSummary struct {
+	// State is '' never run | running | complete | failed | cancelled.
+	State string `json:"state,omitempty"`
+	// Verdict is pass | conditional | fail | inconclusive, and Label is that
+	// verdict in the words the interface states it - held here so the sentence
+	// lives in one place rather than being spelled again in TypeScript.
+	Verdict string `json:"verdict,omitempty"`
+	Label   string `json:"label,omitempty"`
+
+	Blocking int `json:"blocking"`
+	Warning  int `json:"warning"`
+	Error    int `json:"error"`
+	Pass     int `json:"pass"`
+
+	// CheckedAt is when the last run finished, RFC 3339. Empty while running,
+	// and empty for a release that has never been checked.
+	CheckedAt string `json:"checkedAt,omitempty"`
+	// CanRun reports whether this Coordinator can start a check at all, and
+	// Reason says why not - so the button is absent with an explanation rather
+	// than present and always failing.
+	CanRun bool   `json:"canRun,omitempty"`
+	Reason string `json:"reason,omitempty"`
 }

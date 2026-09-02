@@ -40,7 +40,7 @@ How to build (including Windows), configure the two separate kinds of configurat
 
 What the tool does, the logical components and where they run, the file-level code layout, the CLI grouped by task, and ten day-in-the-life scenarios showing what operating it actually looks like.
 
-**Enforcing your own standards? [Read the validation ground truth →](docs/validation/README.md)**
+**Enforcing your own standards? [Read the compliance ground truth →](docs/compliance/README.md)**
 
 What a check is allowed to say, the 118-assertion catalog triaged into what a machine can decide and what it cannot, how to add a check, and an honest review of the Rego policies we already had.
 

@@ -1,0 +1,108 @@
+# Observability, and the two release-wide checks that need more than one object.
+---
+# Source: bad-observability/templates/service.yaml
+apiVersion: v1
+kind: Service
+metadata: {name: silent, namespace: bad}
+spec:
+  selector: {app.kubernetes.io/name: silent}
+  ports: [{name: http, port: 8080, targetPort: http}]
+---
+# Source: bad-observability/templates/deployment.yaml
+# Behind a Service, no metrics port, no scrape annotation, and the release
+# ships no ServiceMonitor. Its degradation is discovered by a user.
+apiVersion: apps/v1
+kind: Deployment
+metadata: {name: silent, namespace: bad}
+spec:
+  replicas: 1
+  selector: {matchLabels: {app.kubernetes.io/name: silent}}
+  template:
+    metadata: {labels: {app.kubernetes.io/name: silent}}
+    spec:
+      containers:
+        - name: app
+          image: registry.acme.example/bad/app@sha256:aaaa0000aaaa0000aaaa0000aaaa0000aaaa0000aaaa0000aaaa0000aaaa0000
+          ports: [{name: http, containerPort: 8080}]
+---
+# Source: bad-observability/templates/prometheusrule.yaml
+# An alert that fires at 3am and names no runbook is an alert somebody
+# silences. With no severity label it is routed to the default receiver, which
+# is usually nobody.
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata: {name: silent, namespace: bad}
+spec:
+  groups:
+    - name: silent
+      rules:
+        - alert: SilentIsDown
+          expr: up{job="silent"} == 0
+          for: 5m
+---
+# Source: bad-observability/templates/widget.yaml
+# A custom resource whose definition is not in this release: an install that
+# fails on ordering, and only decidable across the whole release.
+apiVersion: acme.example/v1
+kind: Widget
+metadata: {name: orphan-widget, namespace: bad}
+spec:
+  size: 1
+---
+# Source: bad-observability/templates/multus.yaml
+# A pod on a secondary interface, where the release also ships a
+# NetworkPolicy: the policy governs the cluster network only, so the dataplane
+# traffic is covered by nothing.
+apiVersion: apps/v1
+kind: DaemonSet
+metadata: {name: dataplane, namespace: bad}
+spec:
+  selector: {matchLabels: {app.kubernetes.io/name: dataplane}}
+  template:
+    metadata:
+      labels: {app.kubernetes.io/name: dataplane}
+      annotations:
+        k8s.v1.cni.cncf.io/networks: sriov-net-a
+    spec:
+      # Bound to nothing, and still mounting an API token into every pod.
+      serviceAccountName: dataplane
+      containers:
+        - name: dataplane
+          image: registry.acme.example/bad/dataplane@sha256:bbbb0000bbbb0000bbbb0000bbbb0000bbbb0000bbbb0000bbbb0000bbbb0000
+          resources:
+            # Kubernetes requires request and limit to be EQUAL for an extended
+            # resource and rejects the pod otherwise. This one sets a request
+            # and no limit, and mismatched hugepages: an install failure with a
+            # confusing message.
+            requests:
+              intel.com/sriov_netdevice: "2"
+              hugepages-1Gi: 4Gi
+            limits:
+              hugepages-1Gi: 2Gi
+---
+# Source: bad-observability/templates/netpol.yaml
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata: {name: default-deny, namespace: bad}
+spec:
+  podSelector: {}
+  policyTypes: [Ingress]
+---
+# Source: bad-observability/templates/dataplane-sa.yaml
+apiVersion: v1
+kind: ServiceAccount
+metadata: {name: dataplane, namespace: bad}
+---
+# Source: bad-observability/templates/scc-binding.yaml
+# A privileged constraint granted to a GROUP gives it to every workload in that
+# group, including ones somebody else installs later. The chart meant to exempt
+# itself and exempted the namespace.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata: {name: dataplane-scc, namespace: bad}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: system:openshift:scc:privileged
+subjects:
+  - {kind: Group, name: "system:serviceaccounts:bad", apiGroup: rbac.authorization.k8s.io}

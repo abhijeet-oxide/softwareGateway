@@ -24,6 +24,7 @@ import (
 	"github.com/abhijeet-oxide/softwareGateway/internal/api"
 	"github.com/abhijeet-oxide/softwareGateway/internal/calibrate"
 	"github.com/abhijeet-oxide/softwareGateway/internal/catalog"
+	"github.com/abhijeet-oxide/softwareGateway/internal/compliance"
 	"github.com/abhijeet-oxide/softwareGateway/internal/discovery"
 	"github.com/abhijeet-oxide/softwareGateway/internal/download"
 	"github.com/abhijeet-oxide/softwareGateway/internal/maintenance"
@@ -295,6 +296,31 @@ func run() error {
 		securityCache, packageSecurity, cfg.Coordinator.Security.SweepInterval,
 		store.CacheBudget{Bytes: cfg.Coordinator.Security.CacheBudgetBytes}, logger)
 
+	// Compliance: does a release follow the organization's own Kubernetes and
+	// CNF standards. Built here for the same reason security is - a run reaches
+	// a vendor registry with credentials and shells out to helm on this host,
+	// and nothing under internal/api may do either.
+	//
+	// A failure to load the policy catalogue is fatal, and deliberately so: a
+	// Coordinator that started with no rules would report every release as
+	// having nothing wrong with it, which is the one answer this feature must
+	// never give by accident.
+	var (
+		policyCat        *policyCatalogue
+		complianceRunner *compliance.Runner
+		complianceSweep  *complianceSweeper
+	)
+	if cfg.Coordinator.Compliance.Enabled {
+		var cerr error
+		policyCat, complianceRunner, complianceSweep, cerr = buildCompliance(
+			cfg.Coordinator.Compliance, packages, blobsImpl{transferResolver}, logger)
+		if cerr != nil {
+			return fmt.Errorf("compliance: %w", cerr)
+		}
+	} else {
+		logger.Info("compliance is disabled in configuration")
+	}
+
 	retentionSweeper := maintenance.NewRetentionSweeper(packages,
 		store.RetentionPolicy{
 			Transfers:   cfg.Coordinator.GC.Transfers,
@@ -394,6 +420,9 @@ func run() error {
 				cacheSweeper.SetLeader(isLeader)
 				retentionSweeper.SetLeader(isLeader)
 				securitySweeper.SetLeader(isLeader)
+				if complianceSweep != nil {
+					complianceSweep.SetLeader(isLeader)
+				}
 				replicationWatcher.SetLeader(isLeader)
 			},
 		})
@@ -410,6 +439,9 @@ func run() error {
 			cacheSweeper.SetLeader(isLeader)
 			retentionSweeper.SetLeader(isLeader)
 			securitySweeper.SetLeader(isLeader)
+			if complianceSweep != nil {
+				complianceSweep.SetLeader(isLeader)
+			}
 			replicationWatcher.SetLeader(isLeader)
 			queueCtl.SetLeader(isLeader)
 		})
@@ -459,6 +491,15 @@ func run() error {
 		// The on-demand half: an SBOM a sync deliberately did not fetch,
 		// generated when somebody presses the button beside an image.
 		SecurityDocuments: securityService,
+		// Compliance, split the same three ways and for the same reason. The
+		// runner needs a reachable registry and a helm binary; the store and
+		// the catalogue need neither. A release's findings and the rulebook
+		// stay readable when a run could not happen - which is exactly when
+		// somebody is working out why a release was blocked.
+		ComplianceRunner:    complianceAPIRunner(complianceRunner),
+		ComplianceStore:     packages,
+		ComplianceCatalogue: complianceAPICatalogue(policyCat),
+		ComplianceHelm:      complianceAPIHelm(cfg.Coordinator.Compliance),
 		// Reading one file out of a release, for somebody looking at it. Here
 		// for the third time for the first reason: it needs a credentialed
 		// client, and the API layer holds none.
@@ -513,6 +554,9 @@ func run() error {
 	g.Go(func() error { return cacheSweeper.Run(gctx) })
 	g.Go(func() error { return retentionSweeper.Run(gctx) })
 	g.Go(func() error { return securitySweeper.Run(gctx) })
+	if complianceSweep != nil {
+		g.Go(func() error { complianceSweep.Run(gctx); return nil })
+	}
 	g.Go(func() error { return queueCtl.Run(gctx) })
 	g.Go(func() error { return replicationWatcher.Run(gctx) })
 

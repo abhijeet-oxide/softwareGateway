@@ -134,6 +134,7 @@ func (s *Server) handleListPackages(w http.ResponseWriter, r *http.Request) {
 	// One query for the whole page, not one per row. That difference is why the
 	// vulnerability column is always on rather than hidden behind a toggle.
 	s.attachSecurity(r.Context(), productName, rows, resp.Packages)
+	s.attachCompliance(r.Context(), rows, resp.Packages)
 
 	WriteJSON(w, r, http.StatusOK, resp)
 }
@@ -265,6 +266,7 @@ func (s *Server) handleGetPackage(w http.ResponseWriter, r *http.Request) {
 	// literal would fill in a copy and leave this one empty.
 	one := []v1.Package{pkg}
 	s.attachSecurity(r.Context(), productName, []store.PackageRow{row}, one)
+	s.attachCompliance(r.Context(), []store.PackageRow{row}, one)
 	pkg = one[0]
 
 	// Related artifacts are loaded on the SINGLE-package read only, never in a

@@ -1,0 +1,179 @@
+apiVersion: softwaregateway.io/v1alpha1
+kind: PolicyPack
+metadata:
+  name: sgw-baseline-disruption
+  prefix: PDB
+  version: 1.0.0
+  description: >
+    Disruption and availability. Whether a node drain proceeds, and whether the
+    workload is still there afterwards.
+  maintainer: platform-sre
+spec:
+  checks:
+    - id: PDB-01
+      title: Replicated workloads are covered by a PodDisruptionBudget
+      description: >
+        Every Deployment and StatefulSet with more than one replica is selected
+        by a PodDisruptionBudget shipped in the same release.
+      rationale: >
+        Without a budget the eviction API will take every replica of a workload
+        at once during a node drain. The operator sees a successful drain and
+        an outage.
+      severity: block
+      tier: 1
+      category: Disruption & Availability
+      remediation: >
+        Ship a PodDisruptionBudget whose selector matches the workload's pod
+        labels, with minAvailable set below the replica count.
+      appliesTo:
+        kinds: [Deployment, StatefulSet]
+        where: 'replicas(self) >= 2'
+      assert:
+        expr: 'size(pdbFor(self)) > 0'
+        locus: metadata.labels
+        expected: a PodDisruptionBudget in this release selecting these pods
+        observed: '"none"'
+        message: |
+          "no PodDisruptionBudget in this release selects the pods of " +
+          text(self, "kind") + " " + text(self, "metadata.name") +
+          ", so a node drain can evict all " + string(replicas(self)) + " replicas at once"
+
+    - id: PDB-02
+      title: No PodDisruptionBudget forbids every eviction
+      description: >
+        A budget does not set maxUnavailable to 0 or "0%", nor minAvailable to
+        "100%" or to the full replica count of every workload it selects.
+      rationale: >
+        All four spellings mean the same thing: the eviction API refuses every
+        request forever, so a node drain hangs and the cluster cannot be
+        patched. It is usually written by somebody protecting a workload very
+        carefully.
+      severity: block
+      tier: 1
+      category: Disruption & Availability
+      remediation: >
+        Set minAvailable below the replica count, or maxUnavailable to at least
+        1.
+      appliesTo:
+        kinds: [PodDisruptionBudget]
+      assert:
+        expr: |
+          text(self, "spec.maxUnavailable") != "0" &&
+          text(self, "spec.maxUnavailable") != "0%" &&
+          text(self, "spec.minAvailable") != "100%" &&
+          covers(self).all(w, text(self, "spec.minAvailable") == "" || string(replicas(w)) != text(self, "spec.minAvailable"))
+        locus: spec
+        expected: a budget that permits at least one eviction
+        observed: |
+          present(self, "spec.maxUnavailable")
+            ? "maxUnavailable " + text(self, "spec.maxUnavailable")
+            : "minAvailable " + text(self, "spec.minAvailable")
+
+    - id: PDB-03
+      title: No PodDisruptionBudget covers a single-replica workload
+      description: >
+        A budget does not select a Deployment or StatefulSet with one replica,
+        nor a Job or CronJob.
+      rationale: >
+        A budget over one replica permits no eviction at all, which is PDB-02
+        arrived at by a different route. Drains block indefinitely and the
+        cause is one replica count away from where anybody looks.
+      severity: warn
+      tier: 1
+      category: Disruption & Availability
+      remediation: >
+        Raise the workload to two replicas, or drop the budget for it.
+      appliesTo:
+        kinds: [PodDisruptionBudget]
+      assert:
+        expr: 'covers(self).all(w, replicas(w) >= 2)'
+        locus: spec.selector
+        expected: selecting only workloads with two or more replicas
+        observed: 'covers(self).map(w, string(value(w, "metadata.name")) + " (" + string(replicas(w)) + " replica(s))").join(", ")'
+        message: |
+          "this budget covers a workload that cannot spare a pod: " +
+          covers(self).filter(w, replicas(w) < 2)
+                      .map(w, string(value(w, "kind")) + " " + string(value(w, "metadata.name")))
+                      .join(", ") + ". Evictions of it will be refused indefinitely"
+
+    - id: PDB-05
+      title: A rolling update can start
+      description: >
+        A Deployment using RollingUpdate sets maxSurge or maxUnavailable above
+        zero.
+      rationale: >
+        Both at zero is a rollout that can neither create a new pod nor remove
+        an old one. The deployment reports progress forever and never makes
+        any.
+      severity: block
+      tier: 1
+      category: Disruption & Availability
+      remediation: Set maxSurge to 1, or maxUnavailable to 1.
+      appliesTo:
+        kinds: [Deployment]
+        where: 'text(self, "spec.strategy.type") == "RollingUpdate"'
+      assert:
+        expr: |
+          text(self, "spec.strategy.rollingUpdate.maxSurge") != "0" ||
+          text(self, "spec.strategy.rollingUpdate.maxUnavailable") != "0"
+        locus: spec.strategy.rollingUpdate
+        expected: maxSurge or maxUnavailable above zero
+
+    - id: PDB-06
+      title: A workload behind a Service does not use the Recreate strategy
+      description: >
+        A Deployment selected by a Service does not set strategy.type to
+        Recreate.
+      rationale: >
+        Recreate stops every pod before starting any. For a workload with
+        traffic that is a deliberate outage on every upgrade, and it is usually
+        copied from a chart for something that had none.
+      severity: block
+      tier: 1
+      category: Disruption & Availability
+      remediation: Use RollingUpdate.
+      appliesTo:
+        kinds: [Deployment]
+        where: 'size(servicesFor(self)) > 0'
+      assert:
+        expr: 'text(self, "spec.strategy.type") != "Recreate"'
+        locus: spec.strategy.type
+        expected: RollingUpdate for a workload receiving traffic
+
+    - id: PDB-07
+      title: Deployments declare a progress deadline
+      description: A Deployment sets spec.progressDeadlineSeconds explicitly.
+      rationale: >
+        Without it a stuck rollout is reported as still progressing, and
+        automation waiting on the deployment waits forever rather than failing.
+      severity: warn
+      tier: 1
+      category: Disruption & Availability
+      remediation: Set spec.progressDeadlineSeconds to a value above the expected rollout time.
+      appliesTo:
+        kinds: [Deployment]
+      assert:
+        required: [spec.progressDeadlineSeconds]
+
+    - id: PDB-08
+      title: Pods declare a non-zero termination grace period
+      description: >
+        A workload sets terminationGracePeriodSeconds explicitly, above zero.
+      rationale: >
+        Zero is SIGKILL at eviction, with no chance to finish a request, flush
+        a buffer or release a lock. It is a common copy-paste from a debugging
+        session.
+      severity: warn
+      tier: 1
+      category: Disruption & Availability
+      remediation: >
+        Set terminationGracePeriodSeconds to at least as long as the longest
+        in-flight operation.
+      appliesTo:
+        kinds: [Deployment, StatefulSet, DaemonSet, Job, CronJob, Pod]
+        subject: podSpec
+      assert:
+        expr: 'present(self, "terminationGracePeriodSeconds") && int(value(self, "terminationGracePeriodSeconds")) > 0'
+        locus: terminationGracePeriodSeconds
+        expected: set, above zero
+        observed: 'present(self, "terminationGracePeriodSeconds") ? text(self, "terminationGracePeriodSeconds") : "(absent)"' 

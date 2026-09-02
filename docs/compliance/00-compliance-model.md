@@ -1,10 +1,10 @@
-# 00 - The Validation Model
+# 00 - The Compliance Model
 
 > **Ground truth.** What a check is, what it is allowed to say, and how every
 > word of a finding gets attached to a specific Kubernetes object inside a
 > specific chart inside a specific release.
 >
-> **Consumed by:** [01 - Check Catalog](01-check-catalog.md), [02 - Authoring Checks](02-authoring-checks.md), [design/23 - Validation](../design/23-validation.md)
+> **Consumed by:** [01 - Check Catalog](01-check-catalog.md), [02 - Authoring Checks](02-authoring-checks.md), [design/23 - Compliance](../design/23-compliance.md)
 
 ---
 
@@ -18,7 +18,7 @@ kustomize overlays, and container images. Somewhere in that tree is a
 lose availability or containment, and each is cheap to find automatically and
 expensive to find during an upgrade at 02:00.
 
-The organization already knows this. [custom-validation.md](custom-validation.md)
+The organization already knows this. [source-standards.md](source-standards.md)
 is the accumulated list - 109 assertions across 13 categories, written from
 production and lab experience. What it lacks is a machine that runs it and a
 report a vendor can act on.
@@ -70,7 +70,7 @@ A policy engine that emits only violations cannot distinguish:
 | The chart failed to render | nothing | **nothing was checked** |
 
 Three of those four render identically as a green screen, and two of them are a
-release shipping unvalidated. So every result carries an **outcome** from a
+release shipping unchecked. So every result carries an **outcome** from a
 closed set:
 
 | Outcome | Means | Rendered as |
@@ -81,7 +81,7 @@ closed set:
 | `error` | The check could not be decided - render failed, helm absent, malformed YAML - and `reason` says what happened | orange, **never** folded into pass |
 
 `error` is not a failure of the software under test and must not be scored as
-one. It is a failure of the *validation*, and a run with errors in it is
+one. It is a failure of the *compliance*, and a run with errors in it is
 reported as **inconclusive** rather than as a pass with a footnote.
 
 ### Rule 3 - Severity belongs to the check; outcome belongs to the result
@@ -133,7 +133,7 @@ So every result carries a **determinacy**:
 | `n/a` | The check does not read a value - it asserts the *existence* of a resource, file or template. | Full. |
 
 How determinacy is established is a mechanism, described in
-[design/23](../design/23-validation.md) §6: render twice, the second time with
+[design/23](../design/23-compliance.md) §6: render twice, the second time with
 every scalar in `values.yaml` replaced by a sentinel, and compare. A field that
 does not move is fixed. It is two `helm template` invocations per chart and it
 replaces guesswork with measurement.
@@ -249,7 +249,7 @@ Two rules keep the boundary honest:
 1. **A tier-2 check never reports a tier-1 pass.** If a check needs a values
    file, it emits `skip` with `reason: "needs site values (tier 2)"`. It does
    not quietly assume defaults and call it compliant. Silent optimism is how a
-   validation tool becomes decoration.
+   compliance tool becomes decoration.
 2. **A tier-1 check may report on tier-2 ground when the finding is structural.**
    "No PDB template exists in this chart" is decidable now and is decidable
    *forever*, whatever values arrive later. That is the shape most tier-1
@@ -294,7 +294,7 @@ why the contract in [02](02-authoring-checks.md) is shaped the way it is.
 
 ## 6. The verdict
 
-Per release, from [custom-validation.md](custom-validation.md)'s own scoring
+Per release, from [source-standards.md](source-standards.md)'s own scoring
 model, with `error` and determinacy folded in:
 
 | Verdict | Condition |
@@ -355,7 +355,7 @@ Stated so nobody has to infer it from an absence.
 | Not done | Why | Where it goes instead |
 |---|---|---|
 | Admission control | This runs at *ingest*, on artifacts, before anything is deployed. Blocking at admission is Gatekeeper/Kyverno's job and duplicating it would put two rulebooks in one estate. | The org's admission stack; this feature exports the same intent as evidence. |
-| Running against a live cluster | It validates *what a vendor shipped*, not what an operator later did. Reading a cluster would make results depend on a cluster's current state and stop them being reproducible. | Tier 2, and only from declared cluster facts in config. |
+| Running against a live cluster | It judges *what a vendor shipped*, not what an operator later did. Reading a cluster would make results depend on a cluster's current state and stop them being reproducible. | Tier 2, and only from declared cluster facts in config. |
 | Scoring, grading, percentages as the headline | "87% compliant" is unactionable and rounds a blocking failure into a good number. | Counts by severity and outcome, with coverage. |
 | Fixing charts | A tool that rewrites a vendor's chart owns the result of that chart. | A remediation string per finding, and the evidence bundle. |
 | Vulnerability scanning | Already built, already good, already has a comparison model. | [design/21 - Security Posture](../design/21-security-posture.md). The two appear side by side on the release page and are never merged. |

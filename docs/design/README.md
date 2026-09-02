@@ -33,7 +33,7 @@ A cloud-native platform that continuously discovers software packages published 
 | 20 | [Downloads and Auto-Download](20-download-rules.md) | What happens when software comes in, and when that happens by itself: derived chains, verification gates |
 | 21 | [Security Posture](21-security-posture.md) | Is this release safer than the one it replaces: the Xray integration, the normalized model, comparison rules, caching |
 | 22 | [Promotion](22-promotion.md) | Lab to production: the promoter plugins, native JFrog relocation, and why it is a plugin rather than a branch |
-| 23 | [Custom Software Validation](23-validation.md) | Does this release follow our own Kubernetes and CNF standards: policy packs, chart rendering, determinacy, per-resource findings, the vendor report |
+| 23 | [Custom Standards Compliance](23-compliance.md) | Does this release follow our own Kubernetes and CNF standards: policy packs, chart rendering, determinacy, per-resource findings, the vendor report |
 
 ## Reading order
 
@@ -47,7 +47,7 @@ A cloud-native platform that continuously discovers software packages published 
 | Implementing Quay replication modes | 18 → 06 → 02 → 05 |
 | Implementing downloads and auto-download | 20 → 07 → 18 → 10 → 08 |
 | Implementing security posture | 21 → 06 → 02 → 03 → 09 |
-| Implementing custom validation | [validation/00](../validation/00-validation-model.md) → 23 → [validation/01](../validation/01-check-catalog.md) → 09 |
+| Implementing standards compliance | [compliance/00](../compliance/00-compliance-model.md) → 23 → [compliance/01](../compliance/01-check-catalog.md) → 09 |
 | Building the UI | 19 → 09 → 13 |
 | Operating it | 02 → 12 → 14 → 11 |
 | Auditing the technology choices | 16 → 03 → 06 |

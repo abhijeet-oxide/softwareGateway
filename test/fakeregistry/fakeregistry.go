@@ -19,6 +19,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"path"
 	"sort"
 	"strconv"
 	"strings"
@@ -380,6 +381,61 @@ func (r *Registry) AddImage(repoPath, tag string, layers ...Layer) string {
 		panic("fakeregistry: marshal image manifest: " + err.Error())
 	}
 	return r.AddManifest(repoPath, tag, raw, "application/vnd.oci.image.manifest.v1+json")
+}
+
+// AddChart seeds a Helm chart artifact: an image manifest whose CONFIG says
+// what it is.
+//
+// # Why this is a separate constructor
+//
+// Helm predates OCI 1.1's artifactType, so a chart is an ordinary image
+// manifest distinguished only by its config media type. Nothing in AddImage
+// can produce that shape, and a fake that could not would leave the whole
+// chart path - classification, the compliance run's chart lookup, the renderer
+// - testable only against hand-written JSON.
+//
+// content is the chart tarball, served verbatim as the single layer. A caller
+// that passes real `.tgz` bytes gets an artifact a real helm can render.
+func (r *Registry) AddChart(repoPath, tag string, content []byte) string {
+	sum := sha256.Sum256(content)
+	layerDigest := "sha256:" + hex.EncodeToString(sum[:])
+
+	// The chart's config is a small JSON document describing the chart. Its
+	// CONTENT does not matter to anything that reads it here; its media type is
+	// the whole point.
+	configBody := []byte(`{"name":"` + path.Base(repoPath) + `","version":"` + orTag(tag) + `"}`)
+	configSum := sha256.Sum256(configBody)
+	configDigest := "sha256:" + hex.EncodeToString(configSum[:])
+
+	r.putBlob(repoPath, configDigest, configBody)
+	r.putBlob(repoPath, layerDigest, content)
+
+	body := map[string]any{
+		"schemaVersion": 2,
+		"mediaType":     "application/vnd.oci.image.manifest.v1+json",
+		"config": map[string]any{
+			"mediaType": "application/vnd.cncf.helm.config.v1+json",
+			"digest":    configDigest,
+			"size":      len(configBody),
+		},
+		"layers": []map[string]any{{
+			"mediaType": "application/vnd.cncf.helm.chart.content.v1.tar+gzip",
+			"digest":    layerDigest,
+			"size":      len(content),
+		}},
+	}
+	raw, err := json.Marshal(body)
+	if err != nil {
+		panic("fakeregistry: marshal chart manifest: " + err.Error())
+	}
+	return r.AddManifest(repoPath, tag, raw, "application/vnd.oci.image.manifest.v1+json")
+}
+
+func orTag(tag string) string {
+	if tag == "" {
+		return "0.0.0"
+	}
+	return tag
 }
 
 // AddIndex seeds an OCI index pointing at already-seeded child manifests.

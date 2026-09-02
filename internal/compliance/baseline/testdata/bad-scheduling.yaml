@@ -1,0 +1,81 @@
+# Placement: workloads that fit on one node, and workloads that fit nowhere.
+---
+# Source: bad-scheduling/templates/no-spread.yaml
+# Three replicas the scheduler may put on one node.
+apiVersion: apps/v1
+kind: Deployment
+metadata: {name: unspread, namespace: bad}
+spec:
+  replicas: 3
+  selector: {matchLabels: {app.kubernetes.io/name: unspread}}
+  template:
+    metadata: {labels: {app.kubernetes.io/name: unspread}}
+    spec:
+      containers:
+        - name: app
+          image: registry.acme.example/bad/app@sha256:aaaaaaaa11111111aaaaaaaa11111111aaaaaaaa11111111aaaaaaaa11111111
+---
+# Source: bad-scheduling/templates/loose-skew.yaml
+# Constraints present, and permitting the imbalance they were added to prevent.
+apiVersion: apps/v1
+kind: Deployment
+metadata: {name: loose-skew, namespace: bad}
+spec:
+  replicas: 4
+  selector: {matchLabels: {app.kubernetes.io/name: loose-skew}}
+  template:
+    metadata: {labels: {app.kubernetes.io/name: loose-skew, app.kubernetes.io/version: 1.4.2}}
+    spec:
+      topologySpreadConstraints:
+        - topologyKey: topology.kubernetes.io/zone
+          maxSkew: 3
+          whenUnsatisfiable: ScheduleAnyway
+          labelSelector:
+            matchLabels: {app.kubernetes.io/version: 1.4.2}
+        - topologyKey: kubernetes.io/hostname
+          maxSkew: 2
+          whenUnsatisfiable: ScheduleAnyway
+          labelSelector:
+            matchLabels: {app.kubernetes.io/version: 1.4.2}
+      containers:
+        - name: app
+          image: registry.acme.example/bad/app@sha256:bbbbbbbb22222222bbbbbbbb22222222bbbbbbbb22222222bbbbbbbb22222222
+---
+# Source: bad-scheduling/templates/overconstrained.yaml
+# Required node affinity, required pod anti-affinity, and DoNotSchedule. Each
+# is reasonable; all three is a workload that is unschedulable after one node
+# is cordoned.
+apiVersion: apps/v1
+kind: Deployment
+metadata: {name: overconstrained, namespace: bad}
+spec:
+  replicas: 3
+  selector: {matchLabels: {app.kubernetes.io/name: overconstrained}}
+  template:
+    metadata: {labels: {app.kubernetes.io/name: overconstrained}}
+    spec:
+      affinity:
+        nodeAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            nodeSelectorTerms:
+              - matchExpressions:
+                  - {key: topology.kubernetes.io/zone, operator: In, values: [zone-a, zone-b]}
+        podAntiAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            - topologyKey: kubernetes.io/hostname
+              labelSelector:
+                matchLabels: {app.kubernetes.io/name: overconstrained}
+      topologySpreadConstraints:
+        - topologyKey: topology.kubernetes.io/zone
+          maxSkew: 1
+          whenUnsatisfiable: DoNotSchedule
+          labelSelector:
+            matchLabels: {app.kubernetes.io/name: overconstrained}
+        - topologyKey: kubernetes.io/hostname
+          maxSkew: 1
+          whenUnsatisfiable: DoNotSchedule
+          labelSelector:
+            matchLabels: {app.kubernetes.io/name: overconstrained}
+      containers:
+        - name: app
+          image: registry.acme.example/bad/app@sha256:cccccccc33333333cccccccc33333333cccccccc33333333cccccccc33333333

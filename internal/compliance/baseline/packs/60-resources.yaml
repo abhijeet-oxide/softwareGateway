@@ -1,0 +1,90 @@
+apiVersion: softwaregateway.io/v1alpha1
+kind: PolicyPack
+metadata:
+  name: sgw-baseline-resources
+  prefix: RES
+  version: 1.0.0
+  description: >
+    Resources and scaling. Whether the scheduler can place this release, and
+    what happens to the node when it misbehaves.
+  maintainer: platform-sre
+spec:
+  checks:
+    - id: RES-01
+      title: Every container declares CPU and memory requests
+      description: >
+        resources.requests.cpu and resources.requests.memory are set on every
+        container, including init containers and sidecars.
+      rationale: >
+        Requests are what the scheduler places on. A container without them is
+        placed as though it needs nothing, so the node is overcommitted by
+        exactly the amount that container actually uses. Init containers are
+        the ones every implementation forgets, and an init container's request
+        is part of the pod's effective request.
+      severity: block
+      tier: 1
+      category: Resources, Scaling & Performance
+      remediation: Set resources.requests.cpu and resources.requests.memory on every container.
+      appliesTo:
+        kinds: [Deployment, StatefulSet, DaemonSet, ReplicaSet, Job, CronJob, Pod]
+        containers: all
+      assert:
+        required: [resources.requests.cpu, resources.requests.memory]
+
+    - id: RES-02
+      title: Every container declares a memory limit
+      description: resources.limits.memory is set on every container.
+      rationale: >
+        Without a memory limit a leaking container consumes the node until the
+        kernel picks a victim, and the victim is chosen by the OOM killer
+        rather than by anybody's intent. The pod that dies is usually not the
+        one that leaked.
+      severity: block
+      tier: 1
+      category: Resources, Scaling & Performance
+      remediation: Set resources.limits.memory on every container.
+      appliesTo:
+        kinds: [Deployment, StatefulSet, DaemonSet, ReplicaSet, Job, CronJob, Pod]
+        containers: all
+      assert:
+        required: [resources.limits.memory]
+
+    - id: RES-03
+      title: Containers that cap CPU are listed for review
+      description: >
+        Reports every container setting resources.limits.cpu, so the throttling
+        review has a list to work from.
+      rationale: >
+        A CPU limit is not a defect - it is a decision with a consequence.
+        Under CFS quota a container at its limit is throttled rather than
+        slowed, which shows up as latency nobody can attribute. This check
+        exists to produce the list, not to fail anything, so it is
+        informational by construction.
+      severity: info
+      tier: 1
+      category: Resources, Scaling & Performance
+      remediation: >
+        No action required. Confirm the limit is above the container's p99
+        usage, or remove it and rely on requests.
+      appliesTo:
+        kinds: [Deployment, StatefulSet, DaemonSet, ReplicaSet, Job, CronJob, Pod]
+        containers: all
+      assert:
+        forbidden: [resources.limits.cpu]
+
+    - id: RES-04
+      title: An autoscaler keeps at least two replicas
+      description: Every HorizontalPodAutoscaler sets minReplicas to 2 or more.
+      rationale: >
+        minReplicas of 1 means the autoscaler will scale a service to a single
+        pod during quiet hours, and that pod's node is then a single point of
+        failure at exactly the time nobody is watching.
+      severity: warn
+      tier: 1
+      category: Resources, Scaling & Performance
+      remediation: Set minReplicas to at least 2.
+      appliesTo:
+        kinds: [HorizontalPodAutoscaler]
+      assert:
+        numeric:
+          spec.minReplicas: {min: 2}

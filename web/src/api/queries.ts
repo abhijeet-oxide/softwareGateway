@@ -17,6 +17,10 @@ import type {
   PackageSecurityResponse, SearchKind, SecurityCompareRequest, SecurityComparisonResponse,
   SecuritySearchResponse, SyncSecurityResponse,
   SetPriorityRequest, Transfer, TransferActivity, TransferControlResponse, VersionResponse,
+  ComplianceProgress,
+  ComplianceRunsResponse,
+  PackageComplianceResponse,
+  PolicyCatalogueResponse,
 } from './types'
 import { isLive } from '../domain/derive'
 
@@ -1239,4 +1243,191 @@ export function securitySearchExportUrl(
 ): string {
   return `/api/v1/products/${encodeURIComponent(product)}/security/search/export` +
     query({ kind, q, format, exact })
+}
+
+/* ---------------------------------------------------------------------------
+ * Compliance: does this release follow the organization's own Kubernetes and
+ * CNF standards.
+ * ------------------------------------------------------------------------ */
+
+/**
+ * One release's compliance, and the live position of a run when one is going.
+ *
+ * Both travel in one response on purpose: a tab that polled progress on one
+ * endpoint and results on another would show a finished run with a spinner
+ * still on it for as long as the two were out of step.
+ */
+export function usePackageCompliance(
+  product: string | undefined,
+  ref: string | undefined,
+  opts: {
+    repository?: string
+    enabled?: boolean
+    /** Include passes and skips - the coverage half of the report. */
+    all?: boolean
+    outcome?: string[]
+    severity?: string[]
+    chart?: string[]
+    determinacy?: string[]
+    search?: string
+    limit?: number
+  } = {},
+) {
+  const { repository, enabled = true, all, outcome, severity, chart, determinacy, search, limit } = opts
+  const qc = useQueryClient()
+
+  const result = useQuery({
+    queryKey: ['package-compliance', product, ref, repository,
+      all, outcome, severity, chart, determinacy, search, limit],
+    queryFn: () => {
+      const { segment, query: q } = packageRef(ref!)
+      const scoped = scopeQuery(q, repository)
+      const extra = query({
+        all: all ? 'true' : '',
+        outcome: outcome?.join(','),
+        severity: severity?.join(','),
+        chart: chart?.join(','),
+        determinacy: determinacy?.join(','),
+        q: search,
+        limit,
+      })
+      const suffix = scoped ? scoped + (extra ? '&' + extra.slice(1) : '') : extra
+      return api.get<PackageComplianceResponse>(
+        `/products/${encodeURIComponent(product!)}/packages/${encodeURIComponent(segment)}/compliance` +
+        suffix)
+    },
+    enabled: enabled && Boolean(product && ref),
+    /*
+     * Polls only while a run is live. A run takes minutes and the stages move
+     * visibly, so a second is the interval at which the number on screen is
+     * worth reading; once it settles there is nothing to watch.
+     */
+    refetchInterval: (q) => (q.state.data?.progress ? 1000 : false),
+    /*
+     * A deployment with compliance switched off answers 404 here, deliberately
+     * - an honest absence rather than a route that always fails. Not worth
+     * retrying and not worth an error panel: the tab says "not configured" and
+     * the rest of the page is unaffected.
+     */
+    retry: false,
+    throwOnError: false,
+  })
+
+  /*
+   * Tell the rest of the page when a run ENDS.
+   *
+   * This query polls itself while a run is going, so it learns the moment the
+   * work finishes - but the release itself carries the summary that the tab
+   * label and the listing row read. Without this they would say "running" over
+   * a panel that had already reported the verdict.
+   *
+   * The TRANSITION is what matters: firing on every settled poll would
+   * invalidate the release query forever.
+   */
+  const wasRunning = useRef(false)
+  const running = Boolean(result.data?.progress)
+  useEffect(() => {
+    if (running) {
+      wasRunning.current = true
+      return
+    }
+    if (!wasRunning.current) return
+    wasRunning.current = false
+    void qc.invalidateQueries({ queryKey: ['package'] })
+    void qc.invalidateQueries({ queryKey: ['packages'] })
+  }, [running, qc])
+
+  return result
+}
+
+/**
+ * Start a compliance check.
+ *
+ * Returns as soon as the work is CLAIMED, never when it is finished: a real
+ * release is minutes of fetching, rendering and evaluating. The page then polls
+ * usePackageCompliance and watches `progress`.
+ *
+ * A run already in flight is NOT a failure - somebody pressed the button first,
+ * and the thing the caller wanted is happening.
+ */
+export function useRunCompliance() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: ({ product, ref, repository }: {
+      product: string
+      ref: string
+      repository?: string
+    }) => {
+      const { segment, query: q } = packageRef(ref)
+      return api.post<ComplianceProgress>(
+        `/products/${encodeURIComponent(product)}/packages/${encodeURIComponent(segment)}/compliance:run` +
+        scopeQuery(q, repository), undefined)
+    },
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: ['package-compliance'] })
+      void qc.invalidateQueries({ queryKey: ['package'] })
+    },
+  })
+}
+
+/** Stop a running check. */
+export function useCancelCompliance() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: ({ product, ref, repository }: {
+      product: string
+      ref: string
+      repository?: string
+    }) => {
+      const { segment, query: q } = packageRef(ref)
+      return api.post<{ cancelled: boolean }>(
+        `/products/${encodeURIComponent(product)}/packages/${encodeURIComponent(segment)}/compliance:cancel` +
+        scopeQuery(q, repository), undefined)
+    },
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: ['package-compliance'] })
+    },
+  })
+}
+
+/** A release's run history, including the ones that failed. */
+export function usePackageComplianceRuns(
+  product: string | undefined,
+  ref: string | undefined,
+  opts: { repository?: string; enabled?: boolean } = {},
+) {
+  const { repository, enabled = true } = opts
+  return useQuery({
+    queryKey: ['package-compliance-runs', product, ref, repository],
+    queryFn: () => {
+      const { segment, query: q } = packageRef(ref!)
+      return api.get<ComplianceRunsResponse>(
+        `/products/${encodeURIComponent(product!)}/packages/${encodeURIComponent(segment)}/compliance/runs` +
+        scopeQuery(q, repository))
+    },
+    enabled: enabled && Boolean(product && ref),
+    retry: false,
+    throwOnError: false,
+  })
+}
+
+/**
+ * The rulebook: every loaded check and what it asserts.
+ *
+ * Not scoped to a product or a release - it is what WILL be checked, and the
+ * person most likely to want it is a vendor who has not shipped yet.
+ *
+ * Cached hard: it changes when somebody edits a policy pack on the Coordinator,
+ * which is not something a page needs to poll for.
+ */
+export function usePolicies(opts: { enabled?: boolean } = {}) {
+  const { enabled = true } = opts
+  return useQuery({
+    queryKey: ['policies'],
+    queryFn: () => api.get<PolicyCatalogueResponse>('/policies'),
+    enabled,
+    staleTime: 5 * 60 * 1000,
+    retry: false,
+    throwOnError: false,
+  })
 }

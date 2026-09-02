@@ -1,0 +1,106 @@
+# Networking: a policy that reads as a control and is not one, a Service that
+# selects nothing, and operational endpoints published to the world.
+---
+# Source: bad-network/templates/netpol-open.yaml
+# An ingress rule with no `from` allows the whole cluster; with no `ports` it
+# allows every port. Both together are a policy object that denies nothing.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata: {name: allow-everything, namespace: bad}
+spec:
+  podSelector:
+    matchLabels: {app.kubernetes.io/name: api}
+  policyTypes: [Ingress, Egress]
+  ingress:
+    - {}
+  egress:
+    - {}
+---
+# Source: bad-network/templates/netpol-unstable.yaml
+# Selects on the app version, so it stops matching the moment it changes -
+# during the rollout, which is when it was needed.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata: {name: versioned, namespace: bad}
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: api
+      app.kubernetes.io/version: 1.4.2
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels: {app.kubernetes.io/name: gateway}
+      ports:
+        - {protocol: TCP, port: 8080}
+---
+# Source: bad-network/templates/service-orphan.yaml
+# A one-character label mismatch. No endpoints, a 100% error rate, and a green
+# rollout with every pod running.
+apiVersion: v1
+kind: Service
+metadata: {name: orphan, namespace: bad}
+spec:
+  type: ClusterIP
+  selector: {app.kubernetes.io/name: ap}
+  ports:
+    - {name: http, port: 8080, targetPort: http}
+---
+# Source: bad-network/templates/service-ok.yaml
+# Selects the workload correctly and must not fire.
+apiVersion: v1
+kind: Service
+metadata: {name: api, namespace: bad}
+spec:
+  type: ClusterIP
+  selector: {app.kubernetes.io/name: api}
+  ports:
+    - {name: http, port: 8080, targetPort: http}
+---
+# Source: bad-network/templates/service-lb.yaml
+# A metrics port on a load balancer is an inventory of the deployment,
+# unauthenticated by convention.
+apiVersion: v1
+kind: Service
+metadata: {name: exposed, namespace: bad}
+spec:
+  type: LoadBalancer
+  selector: {app.kubernetes.io/name: api}
+  ports:
+    - {name: http, port: 80, targetPort: http}
+    - {name: metrics, port: 9090, targetPort: metrics}
+---
+# Source: bad-network/templates/ingress.yaml
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata: {name: api, namespace: bad}
+spec:
+  rules:
+    - host: api.example.com
+      http:
+        paths:
+          - {path: /, pathType: Prefix, backend: {service: {name: api, port: {number: 8080}}}}
+          - {path: /actuator, pathType: Prefix, backend: {service: {name: api, port: {number: 8080}}}}
+---
+# Source: bad-network/templates/deployment.yaml
+apiVersion: apps/v1
+kind: Deployment
+metadata: {name: api, namespace: bad}
+spec:
+  replicas: 1
+  selector:
+    matchLabels: {app.kubernetes.io/name: api}
+  template:
+    metadata:
+      labels: {app.kubernetes.io/name: api}
+    spec:
+      containers:
+        - name: api
+          image: registry.acme.example/bad/api@sha256:7777777777777777777777777777777777777777777777777777777777777777
+          ports:
+            - {name: http, containerPort: 8080}
+            - {name: metrics, containerPort: 9090}
+          resources:
+            requests: {cpu: 10m, memory: 16Mi}
+            limits: {memory: 32Mi}

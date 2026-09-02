@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import {
-  Button, Card, Drawer, Progress, Space, Tag, Timeline, Tooltip, Typography,
+  Alert, Button, Card, Drawer, Progress, Space, Tag, Timeline, Tooltip, Typography,
 } from 'antd'
 import { CopyOutlined, FileTextOutlined, HelmOutlined, LoadingOutlined } from '../icons'
 import { formatBytes, formatCount, formatDuration, formatRelative } from '../domain/format'
@@ -120,7 +120,14 @@ function StageBar({ progress }: { progress: ComplianceProgress }) {
             than no estimate: somebody leaves, comes back, and trusts nothing
             the page says afterwards.
           */}
-          {progress.estimate ? (
+          {/*
+            A WHOLE SECOND or nothing. An estimate that rounds to zero renders
+            as "Estimated 0s remaining in this stage", which is a number that
+            says the stage is over while the bar is still moving - and on a warm
+            render cache, where a stage really does take under a second, that is
+            what it said every time.
+          */}
+          {progress.estimate && progress.estimate >= 1 ? (
             <Typography.Text type="secondary" style={{ fontSize: 12 }}>
               Estimated {formatDuration(progress.estimate)} remaining in this stage
             </Typography.Text>
@@ -449,6 +456,18 @@ export function ComplianceRunLogButton({ run, size = 'small' }: {
               : 'From the last check.'}
             {' '}Times are seconds from the start of the run.
           </Typography.Text>
+          {run.logTruncated && (
+            <Alert
+              type="info"
+              showIcon
+              message={`This log holds the last ${events.length} lines of the run`}
+              description={
+                'A run keeps a bounded transcript and drops routine progress before it drops a '
+                + 'failure, so every chart that refused is here and some of the ones that '
+                + 'rendered are not. The coverage table is the complete list.'
+              }
+            />
+          )}
           <ComplianceRunLog events={events} newestFirst={false} />
         </Space>
       </Drawer>

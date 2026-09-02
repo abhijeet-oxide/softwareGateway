@@ -176,14 +176,27 @@ export function SecurityTab({ product, reference, repository }: {
             justifyContent: 'flex-end',
           }}
         >
+          {/*
+            ONE STOP, and it is on the panel.
+
+            While a sync runs the progress panel is directly below this row with
+            its own Stop, so the header carried a second Stop and a disabled
+            "Syncing" beside it - three controls for one action, two of which do
+            nothing. The log is the only thing here that still has a job during
+            a sync.
+          */}
           <SyncLogButton sync={data.sync} />
-          <StopSyncButton sync={data.sync} onStop={stopSync} pending={cancel.isPending} />
-          <SyncButton
-            sync={data.sync}
-            onSync={startSync}
-            pending={sync.isPending}
-            freshness={data.freshness}
-          />
+          {!syncing && (
+            <>
+              <StopSyncButton sync={data.sync} onStop={stopSync} pending={cancel.isPending} />
+              <SyncButton
+                sync={data.sync}
+                onSync={startSync}
+                pending={sync.isPending}
+                freshness={data.freshness}
+              />
+            </>
+          )}
         </Space>
       </div>
 

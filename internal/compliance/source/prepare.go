@@ -150,7 +150,7 @@ func (p *Preparer) Prepare(
 	if !available {
 		rep.Event(compliance.EventWarn,
 			"helm is unavailable: no chart can be rendered, and every check requiring a "+
-				"rendered chart will report as undecided")
+				"rendered chart will report as unchecked")
 	}
 
 	cache := compliance.NewRenderCache(p.RenderCache, compliance.RenderInputs{

@@ -2030,6 +2030,14 @@ export interface ComplianceRun {
    * the run rather than during it.
    */
   log?: ComplianceProgressEvent[]
+  /**
+   * The transcript is at the ring's cap, so lines were dropped from the front.
+   *
+   * Failures are kept ahead of routine progress, so what was dropped is the
+   * ordinary "rendered N objects" lines - but a log that silently begins in the
+   * middle of a run is one somebody reads as the whole run.
+   */
+  logTruncated?: boolean
   startedAt: string
   finishedAt?: string
 }

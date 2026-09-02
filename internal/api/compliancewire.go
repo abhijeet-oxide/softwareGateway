@@ -56,6 +56,10 @@ type ComplianceRunView struct {
 	// than during it, and until this was stored the answer disappeared with the
 	// Coordinator's memory the moment the check ended.
 	Log []compliance.ProgressEvent `json:"log,omitempty"`
+	// LogTruncated says the transcript is at the ring's cap, so lines were
+	// dropped from the front. A log that silently begins in the middle of a run
+	// is one somebody reads as the whole run.
+	LogTruncated bool `json:"logTruncated,omitempty"`
 }
 
 // ComplianceCounts is the tally. Severity counts are of FAILURES only: a
@@ -279,8 +283,9 @@ func complianceRunView(r store.ComplianceRunRow) ComplianceRunView {
 			Blocking: r.Blocking, Warning: r.Warning, Info: r.Info,
 		},
 		Truncated: r.Truncated, Trigger: r.Trigger,
-		Log:       r.Log,
-		StartedAt: r.StartedAt, FinishedAt: r.FinishedAt,
+		Log:          r.Log,
+		LogTruncated: len(r.Log) >= compliance.MaxLogEvents,
+		StartedAt:    r.StartedAt, FinishedAt: r.FinishedAt,
 	}
 }
 

@@ -843,9 +843,14 @@ export function SecurityProgressPanel({ sync, onStop, stopping }: {
                   : 'Working out which of this release\u2019s artifacts to ask about'}
             </Typography.Text>
           </Space>
+          {/*
+            The repository only. The headline above already names the scanner,
+            and "JFrog Xray" under "…from JFrog Xray" is the same fact twice in
+            two lines.
+          */}
           {sync.repository && (
             <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-              {scannerName(sync)} · {sync.repository}
+              {sync.repository}
             </Typography.Text>
           )}
         </Space>

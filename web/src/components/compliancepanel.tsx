@@ -117,7 +117,7 @@ const VIEWS: Record<ResultView, {
   },
   unchecked: {
     label: 'Unchecked',
-    noun: 'unchecked checks',
+    noun: 'checks not decided',
     outcome: ['error'],
     count: (c) => c?.error ?? 0,
   },
@@ -755,7 +755,7 @@ function ChartCoverage({ charts, product, reference, repository, loading, onOpen
             sorter: (a: ComplianceChart, b: ComplianceChart) => a.name.localeCompare(b.name),
             render: (_: unknown, ch) => (
               <Space size={8} align="start">
-                <HelmOutlined style={{ color: c.text3, marginTop: 2 }} />
+                <HelmOutlined style={{ color: c.text2, fontSize: 14, marginTop: 1 }} />
                 <Space direction="vertical" size={0}>
                   <span style={{ fontFamily: mono, fontSize: 12 }}>{ch.name}</span>
                   {ch.version && (
@@ -1146,7 +1146,7 @@ function ChartFailure({ chart }: { chart: ComplianceChart }) {
             }
           >
             <Tag color="gold" style={{ margin: 0, fontFamily: mono, fontSize: 11 }}>
-              needs {chart.errorValue}
+              requires {chart.errorValue}
             </Tag>
           </Tooltip>
         )}
@@ -1160,14 +1160,18 @@ function ChartFailure({ chart }: { chart: ComplianceChart }) {
             }
           >
             <Tag color="blue" style={{ margin: 0, fontSize: 11 }}>
-              helm test hook
+              Helm test hook
             </Tag>
           </Tooltip>
         )}
+        {/*
+          A CHIP, like the two beside it. As plain grey text it wrapped onto a
+          line of its own between the classification and the cause, where it
+          read as a sentence fragment about the row rather than as one more
+          fact in the row's chip set.
+        */}
         {(chart.attempts ?? 0) > 1 && (
-          <Typography.Text type="secondary" style={{ fontSize: 11 }}>
-            {chart.attempts} attempts
-          </Typography.Text>
+          <Tag style={{ margin: 0, fontSize: 11 }}>{chart.attempts} attempts</Tag>
         )}
         {(chart.attempts ?? 0) <= 1 && !chart.retryable && (
           <Tooltip
@@ -1176,23 +1180,30 @@ function ChartFailure({ chart }: { chart: ComplianceChart }) {
               + 'inputs, so a second render of the same bytes returns the same error.'
             }
           >
-            <Typography.Text type="secondary" style={{ fontSize: 11 }}>
-              not retried
-            </Typography.Text>
+            <Tag style={{ margin: 0, fontSize: 11 }}>Not retried</Tag>
           </Tooltip>
         )}
       </Space>
-      {chart.errorFile && (
-        <Typography.Text style={{ fontFamily: mono, fontSize: 11, color: c.text2 }}>
-          {chart.errorFile}
-        </Typography.Text>
-      )}
+      {/*
+        THE CAUSE, then where. helm's message is a paragraph that names the
+        chart, the word "Error", the file, the line, the column and then - last -
+        what actually went wrong, and the row printed all of it under a file path
+        it had already printed. Six lines per row over thirteen failed charts is
+        a table nobody reads to the bottom of.
+
+        The whole message is one hover away, because the frames matter when a
+        vendor is opening the template.
+      */}
       {chart.error && (
-        <Typography.Text
-          type="secondary"
-          style={{ fontFamily: mono, fontSize: 11, whiteSpace: 'pre-wrap' }}
-        >
-          {firstLines(chart.error, 3)}
+        <Tooltip title={<span style={{ whiteSpace: 'pre-wrap' }}>{chart.error}</span>}>
+          <Typography.Text style={{ fontSize: 12 }}>
+            {helmCause(chart.error)}
+          </Typography.Text>
+        </Tooltip>
+      )}
+      {chart.errorFile && (
+        <Typography.Text style={{ fontFamily: mono, fontSize: 11, color: c.text3 }}>
+          {chart.errorFile}
         </Typography.Text>
       )}
     </Space>
@@ -1200,14 +1211,44 @@ function ChartFailure({ chart }: { chart: ComplianceChart }) {
 }
 
 /**
- * The first few lines of helm's message.
+ * What actually went wrong, out of helm's paragraph.
  *
- * helm's errors are frequently a paragraph with a stack of template frames.
- * The first lines name the file, the line and the cause, which is what a
- * vendor needs; the rest is in the export and in the run's own record.
+ * A real message reads:
+ *
+ *   helm template failed for cfx-adrf-chart: Error: execution error at
+ *   (cfx-adrf-chart/templates/chart-check.yaml:2:4): global.registry must be
+ *   specified
+ *
+ * Six words of that are the finding. The rest is the chart's name, which is in
+ * the first column; the file and line, which are on the row beneath; and the
+ * word "Error", which the red tag beside it already said. Stripping them is
+ * what makes a coverage table of thirteen failures readable on one screen.
+ *
+ * Every removal is a prefix helm is known to emit, matched from the front, and
+ * anything unrecognised is returned whole - so a message this has never seen
+ * loses nothing.
  */
-function firstLines(s: string, n: number): string {
-  const lines = s.split('\n')
-  if (lines.length <= n) return s
-  return `${lines.slice(0, n).join('\n')}\n…`
+function helmCause(message: string): string {
+  const head = (message.split('\n')[0] ?? message).trim()
+  let s = head
+  const prefixes: RegExp[] = [
+    /^helm template failed for [^:]+:\s*/i,
+    /^rendering [^:]+:\s*/i,
+    /^Error:\s*/i,
+    /^execution error at \([^)]*\)\s*/i,
+    /^parse error at \([^)]*\)\s*/i,
+    /^template: [^:]+:\d+:\d+:\s*/i,
+    /^executing "[^"]*"\s*/i,
+    /^at <[^>]*>:\s*/i,
+    /^:\s*/,
+  ]
+  // Repeatedly, because helm nests them: a template error carries an execution
+  // error which carries the frame which carries the cause.
+  for (let pass = 0; pass < prefixes.length * 2; pass++) {
+    const before = s
+    for (const re of prefixes) s = s.replace(re, '')
+    s = s.trim()
+    if (s === before) break
+  }
+  return s || head
 }

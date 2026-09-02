@@ -101,7 +101,7 @@ func (k FailureKind) Explain() string {
 	case FailureNeedsValues:
 		return "This chart cannot be rendered at its own defaults: it requires values it does " +
 			"not ship, which an umbrella chart or a site values file would supply. Every check " +
-			"needing its objects reports as undecided rather than as a pass."
+			"needing its objects reports as unchecked rather than as a pass."
 	case FailureSchema:
 		return "The chart's own default values are rejected by its values.schema.json. " +
 			"Reproducible by the vendor with `helm template` and no arguments."

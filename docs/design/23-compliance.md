@@ -1057,8 +1057,8 @@ coverage table now answers it per row, from helm's own message:
 | Column | What it carries | Why |
 |---|---|---|
 | Reason | The classification (`render.FailureKind`) | Seventeen charts failing four ways are four conversations - three with the vendor and one with us - and an undifferentiated column of stack traces is how all four become "the tool is broken". |
-| `needs <key>` | The values key helm named, extracted (`render.MissingValue`) | **Six of those eight failed for one reason**: they are subcharts, and an umbrella supplies their `global.registry`. Their eight paragraphs of helm had nothing in common but that key, and the key is what turns "these charts are broken" into "these charts are subcharts, and one values entry would check them". It is also the input list for tier 2, when tier 2 is scheduled. |
-| `helm test hook` | Whether the failing template is under `templates/tests/` (`render.InTestHook`) | `helm install` never applies a test hook, so a chart failing only there installs perfectly in a cluster. Telling a vendor "your chart does not render" about a job they have never run is how a true finding gets dismissed with the rest of the report. |
+| `requires <key>` | The values key helm named, extracted (`render.MissingValue`) | **Six of those eight failed for one reason**: they are subcharts, and an umbrella supplies their `global.registry`. Their eight paragraphs of helm had nothing in common but that key, and the key is what turns "these charts are broken" into "these charts are subcharts, and one values entry would check them". It is also the input list for tier 2, when tier 2 is scheduled. |
+| `Helm test hook` | Whether the failing template is under `templates/tests/` (`render.InTestHook`) | `helm install` never applies a test hook, so a chart failing only there installs perfectly in a cluster. Telling a vendor "your chart does not render" about a job they have never run is how a true finding gets dismissed with the rest of the report. |
 | The template path | The file helm named | What a vendor opens. |
 
 Both the key and the hook flag are **derived on read** from the stored message

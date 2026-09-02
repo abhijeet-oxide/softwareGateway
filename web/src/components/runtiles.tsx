@@ -34,8 +34,14 @@ export function RunTiles({ tiles }: { tiles: RunTile[] }) {
   if (tiles.length === 0) return null
   return (
     <Row gutter={[12, 12]}>
+      {/*
+        Capped, not stretched. Four tiles across a wide page grew to 320px each,
+        and a two-digit number in a 320px box reads as a mistake; the cap keeps
+        them the size of the number they hold and lets the row end where the
+        facts do.
+      */}
       {tiles.map((t) => (
-        <Col key={t.label} flex="1 1 140px" style={{ minWidth: 140 }}>
+        <Col key={t.label} flex="1 1 150px" style={{ minWidth: 140, maxWidth: 260 }}>
           <Tooltip title={t.hint}>
             <div
               style={{

@@ -185,7 +185,7 @@ export function ComplianceSummary({ counts, selected, onSelect }: {
     },
     {
       key: 'info', label: 'Info', value: counts.info,
-      sub: 'noted, nothing to decide',
+      sub: 'recorded, no action required',
     },
     {
       key: 'error', label: 'Unchecked', value: counts.error,
@@ -245,7 +245,7 @@ export type SummaryKey = 'blocking' | 'warning' | 'info' | 'error' | 'pass'
 // ---------------------------------------------------------------------------
 
 /**
- * Why every rendered check came back undecided.
+ * Why every rendered check came back unchecked.
  *
  * Without this the tab is a wall of "could not be checked" with no explanation
  * on screen, and the reader's next move is to file a bug against this tool.
@@ -260,7 +260,7 @@ export function HelmMissingNotice({ helm }: { helm: ComplianceHelm }) {
       description={
         <>
           The <code>helm</code> binary is not available, so Helm charts cannot be turned into
-          Kubernetes objects and every check that needs them reports as undecided - never as a
+          Kubernetes objects and every check that needs them reports as unchecked - never as a
           pass. Install helm on the Coordinator, or set{' '}
           <code>coordinator.compliance.helmBinary</code>.
           {helm.reason && (

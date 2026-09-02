@@ -54,6 +54,17 @@ func chartTarball(component, version string) []byte {
 	// somebody else's chart - it tolerates the node running out of memory, and
 	// it tolerates an unreachable node forever.
 	badTolerations := seed%11 < 4
+	// A SUBCHART THAT CANNOT RENDER ALONE, which is the commonest failure in a
+	// real vendor orb by a wide margin: it requires `global.registry`, and only
+	// the umbrella supplies it. Reproduced here because a development estate
+	// where every chart renders cannot exercise the failure classification, the
+	// retry decision, or the coverage table's whole reason for existing - and
+	// those were built from a screenshot of somebody else's release.
+	needsGlobal := seed%13 < 2
+	// And a template that dereferences a nil, which is the second commonest and
+	// classifies differently: a vendor defect rather than a chart that is simply
+	// not installable on its own.
+	nilDeref := seed%17 == 0
 
 	files := map[string]string{
 		name + "/Chart.yaml": fmt.Sprintf(
@@ -116,6 +127,43 @@ app.kubernetes.io/version: {{ .Chart.AppVersion | quote }}
 
 		name + "/templates/deployment.yaml": deploymentTemplate(rootUser, noLimits, taggedImage, badTolerations),
 	}
+	/*
+	 * THE TWO WAYS A REAL VENDOR CHART REFUSES TO RENDER.
+	 *
+	 * Both are taken from a live orb whose coverage table was seventeen
+	 * failures deep, and both are here because a development estate where every
+	 * chart renders cannot exercise the failure classification, the retry
+	 * decision, or the coverage table's whole reason for existing.
+	 *
+	 * They classify differently and that is the point: one is a chart that is
+	 * simply not installable on its own, which is a true and useful thing to
+	 * report about a subchart; the other is a defect the vendor can reproduce
+	 * with `helm template` and no arguments.
+	 */
+	if needsGlobal {
+		files[name+"/templates/chart-check.yaml"] = tmpl(`
+{{- if not .Values.global }}
+{{- fail "global.registry must be specified" }}
+{{- end }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ .Chart.Name }}-check
+data:
+  registry: {{ .Values.global.registry }}
+`)
+	}
+	if nilDeref {
+		files[name+"/templates/timezone.yaml"] = tmpl(`
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ .Chart.Name }}-tz
+data:
+  tz: {{ .Values.timezone.timeZoneEnv }}
+`)
+	}
+
 	if !noPDB {
 		files[name+"/templates/pdb.yaml"] = tmpl(`
 apiVersion: policy/v1

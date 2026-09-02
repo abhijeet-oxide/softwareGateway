@@ -48,10 +48,16 @@ type Run struct {
 
 // ChartStatus is one chart's contribution to a run.
 type ChartStatus struct {
-	Name      string `json:"name"`
-	Version   string `json:"version,omitempty"`
-	Status    string `json:"status"`
-	Error     string `json:"error,omitempty"`
+	Name    string `json:"name"`
+	Version string `json:"version,omitempty"`
+	Status  string `json:"status"`
+	Error   string `json:"error,omitempty"`
+	// ErrorKind classifies the failure and Attempts says how hard it was
+	// tried, so a reader can tell a chart that requires values it does not ship
+	// from one whose template is broken - and a retried failure from one a
+	// retry could not have fixed.
+	ErrorKind string `json:"errorKind,omitempty"`
+	Attempts  int    `json:"attempts,omitempty"`
 	Resources int    `json:"resources"`
 }
 
@@ -88,7 +94,8 @@ func Execute(ctx context.Context, eng *Engine, rel *Release, started time.Time) 
 	for _, c := range rel.Charts {
 		run.Charts = append(run.Charts, ChartStatus{
 			Name: c.Name, Version: c.Version, Status: c.RenderStatus,
-			Error: c.RenderError, Resources: counted[c.Name],
+			Error: c.RenderError, ErrorKind: c.RenderErrorKind, Attempts: c.RenderAttempts,
+			Resources: counted[c.Name],
 		})
 	}
 

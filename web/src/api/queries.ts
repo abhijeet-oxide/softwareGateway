@@ -1322,17 +1322,20 @@ export function usePackageCompliance(
     outcome?: string[]
     severity?: string[]
     chart?: string[]
+    kind?: string[]
     determinacy?: string[]
     search?: string
     limit?: number
   } = {},
 ) {
-  const { repository, enabled = true, all, outcome, severity, chart, determinacy, search, limit } = opts
+  const {
+    repository, enabled = true, all, outcome, severity, chart, kind, determinacy, search, limit,
+  } = opts
   const qc = useQueryClient()
 
   const result = useQuery({
     queryKey: ['package-compliance', product, ref, repository,
-      all, outcome, severity, chart, determinacy, search, limit],
+      all, outcome, severity, chart, kind, determinacy, search, limit],
     queryFn: () => {
       const { segment, query: q } = packageRef(ref!)
       const scoped = scopeQuery(q, repository)
@@ -1341,6 +1344,7 @@ export function usePackageCompliance(
         outcome: outcome?.join(','),
         severity: severity?.join(','),
         chart: chart?.join(','),
+        kind: kind?.join(','),
         determinacy: determinacy?.join(','),
         q: search,
         limit,
@@ -1423,9 +1427,34 @@ export function useRunCompliance() {
         `/products/${encodeURIComponent(product)}/packages/${encodeURIComponent(segment)}/compliance:run` +
         scopeQuery(q, repository), undefined)
     },
-    onSuccess: () => {
+    onSuccess: (progress, { product, ref }) => {
+      /*
+       * SEED THE FIRST FRAME, do not only invalidate.
+       *
+       * The response IS the run's first progress frame - the server takes the
+       * claim and reads it back before answering. Writing it into every cached
+       * view of this release means the tab switches to the running panel on the
+       * press, rather than staying on "This release has not been checked" for
+       * the round trip it takes a refetch to notice. That gap was the whole of
+       * the complaint: the button appeared to do nothing.
+       *
+       * Every cached view, because the query key carries the filters and there
+       * is one entry per filter combination the reader has visited. All of them
+       * describe the same release and all of them are now wrong in the same way.
+       */
+      qc.setQueriesData<PackageComplianceResponse>(
+        {
+          predicate: (q) => q.queryKey[0] === 'package-compliance'
+            && q.queryKey[1] === product && q.queryKey[2] === ref,
+        },
+        (old) => (old ? { ...old, progress } : old),
+      )
       void qc.invalidateQueries({ queryKey: ['package-compliance'] })
-      void qc.invalidateQueries({ queryKey: ['package'] })
+      // And the release, whose own summary flips to `running` in the same
+      // transaction that took the claim - so the header tag and the tab label
+      // say a check is running without waiting for the first poll.
+      void qc.invalidateQueries({ queryKey: ['package', product, ref] })
+      void qc.invalidateQueries({ queryKey: ['packages'] })
     },
   })
 }

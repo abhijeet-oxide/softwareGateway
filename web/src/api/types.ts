@@ -2035,6 +2035,25 @@ export interface ComplianceChart {
   /** ok | failed | skipped. */
   status: string
   error?: string
+  /**
+   * Why it did not render, classified.
+   *
+   * `errorKind` is the machine value, `errorLabel` the two words the table
+   * shows, `errorHint` what the reader does about it. Seventeen charts failing
+   * four different ways are four conversations - three with the vendor and one
+   * with us - and a column of undifferentiated helm stack traces is how they
+   * become one complaint about the tool.
+   */
+  errorKind?: string
+  errorLabel?: string
+  errorHint?: string
+  /**
+   * How many renders were attempted, and whether a further one could have
+   * helped. "Retried and failed again" and "not retried, because a second
+   * render of the same bytes returns the same error" are different facts.
+   */
+  attempts?: number
+  retryable?: boolean
   resources: number
 }
 

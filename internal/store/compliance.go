@@ -165,7 +165,13 @@ type ComplianceChartRow struct {
 	ArtifactRef    string
 	Status         string
 	Error          string
-	Resources      int
+	// ErrorKind classifies the failure and Attempts says how hard it was tried.
+	// See render.FailureKind: ninety-five charts that failed four different ways
+	// are four conversations, and an undifferentiated list of stack traces is
+	// how they become one complaint about the tool.
+	ErrorKind string
+	Attempts  int
+	Resources int
 }
 
 // ComplianceRenderedRow is one document a run judged, kept so a finding can be
@@ -337,10 +343,11 @@ func (p *Packages) FinishComplianceRun(
 	for _, c := range charts {
 		if _, err := tx.ExecContext(ctx, p.dialect.Rewrite(`
 			INSERT INTO compliance_charts
-			  (run_id, name, version, artifact_digest, artifact_ref, status, error, resources)
-			VALUES (?, ?, ?, ?, ?, ?, ?, ?)`),
+			  (run_id, name, version, artifact_digest, artifact_ref, status, error,
+			   error_kind, attempts, resources)
+			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`),
 			run.ID, c.Name, c.Version, c.ArtifactDigest, c.ArtifactRef,
-			c.Status, nullIfEmpty(c.Error), c.Resources); err != nil {
+			c.Status, nullIfEmpty(c.Error), c.ErrorKind, c.Attempts, c.Resources); err != nil {
 			return fmt.Errorf("insert compliance chart %s: %w", c.Name, err)
 		}
 	}
@@ -489,7 +496,8 @@ func (p *Packages) RecordComplianceRun(ctx context.Context, runID string, packag
 	for _, c := range run.Charts {
 		charts = append(charts, ComplianceChartRow{
 			Name: c.Name, Version: c.Version, Status: c.Status,
-			Error: c.Error, Resources: c.Resources,
+			Error: c.Error, ErrorKind: c.ErrorKind, Attempts: c.Attempts,
+			Resources: c.Resources,
 		})
 	}
 

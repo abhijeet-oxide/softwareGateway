@@ -1,12 +1,13 @@
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { Link } from 'react-router-dom'
 import {
-  App, Button, Card, Descriptions, Drawer, Input, Segmented, Select, Space, Typography,
+  App, Button, Card, Descriptions, Drawer, Input, Segmented, Select, Space, Tabs, Tag,
+  Tooltip, Typography,
 } from 'antd'
 // The working-surface table: resizable, reorderable, pinnable columns whose
 // layout each person keeps. See `tablekit/README.md` for which tables get it.
 import { Table as DataTable } from '../tablekit'
-import { LoadingOutlined } from '../icons'
+import { LoadingOutlined, SearchOutlined } from '../icons'
 import {
   renderedManifestUrl, useCancelCompliance, useInspectPackage, usePackageCompliance,
   useRenderedManifests, useRunCompliance,
@@ -18,9 +19,12 @@ import {
   RunProvenance, TruncatedNotice, VerdictPill,
 } from './compliance'
 import { ComplianceRunPanel } from './complianceprogress'
-import { EvidencePanel, NoEvidenceNotice, RenderedManifestsAction } from './complianceevidence'
+import {
+  EvidencePanel, ManifestDrawer, NoEvidenceNotice, RenderedManifestsAction,
+} from './complianceevidence'
+import { formatCount } from '../domain/format'
 import { c, mono } from '../uikit'
-import type { ComplianceResult } from '../api/types'
+import type { ComplianceChart, ComplianceCounts, ComplianceResult } from '../api/types'
 
 /**
  * The Compliance tab of a release: does this follow our own Kubernetes and CNF
@@ -41,6 +45,74 @@ import type { ComplianceResult } from '../api/types'
  * counts stay on screen either way, so the short list is never mistaken for a
  * small denominator, and one control switches to the coverage view.
  */
+/**
+ * The outcome slices a reader moves between, and what each one costs to fetch.
+ *
+ * # Why these are server-side filters and not tabs over one page
+ *
+ * A release produces ten to fifteen thousand results. Fetching the failures and
+ * filtering them in the browser for "passed" would show a subset of a subset
+ * with no way to tell - the count would be right and the rows would not. Each
+ * slice is a query, and the count beside each label comes from the run's own
+ * tally rather than from the rows on screen.
+ *
+ * `Passed` is here because the passes are the DENOMINATOR. "40 workloads, all
+ * compliant" and "the traversal never reached them" are the same empty list,
+ * and only one of them is a reason to ship.
+ */
+type ResultView = 'blocking' | 'warnings' | 'undecided' | 'passed' | 'all'
+
+const VIEW_ORDER: ResultView[] = ['blocking', 'warnings', 'undecided', 'passed', 'all']
+
+const VIEWS: Record<ResultView, {
+  label: string
+  noun: string
+  all?: boolean
+  outcome?: string[]
+  severity?: string[]
+  count: (c?: ComplianceCounts) => number
+}> = {
+  blocking: {
+    label: 'Blocking',
+    noun: 'blocking findings',
+    outcome: ['fail'],
+    severity: ['block'],
+    count: (c) => c?.blocking ?? 0,
+  },
+  warnings: {
+    label: 'Warnings',
+    noun: 'warnings',
+    outcome: ['fail'],
+    severity: ['warn', 'info'],
+    count: (c) => c?.warning ?? 0,
+  },
+  undecided: {
+    label: 'Undecided',
+    noun: 'undecided checks',
+    outcome: ['error'],
+    count: (c) => c?.error ?? 0,
+  },
+  passed: {
+    label: 'Passed',
+    noun: 'passing checks',
+    all: true,
+    outcome: ['pass'],
+    count: (c) => c?.pass ?? 0,
+  },
+  all: {
+    label: 'All',
+    noun: 'results',
+    all: true,
+    // Every result the run recorded, which is the sum of the outcomes and not
+    // a field: a "total" the server did not compute is a number that can
+    // silently stop matching the rows beneath it.
+    count: (c) => (c ? c.pass + c.fail + c.skip + c.error + c.waived : 0),
+  },
+}
+
+/** How the rows on screen are ordered. */
+type ResultSort = 'severity' | 'chart' | 'check' | 'resource'
+
 export function ComplianceTab({ product, reference, repository }: {
   product: string
   reference: string
@@ -48,17 +120,48 @@ export function ComplianceTab({ product, reference, repository }: {
 }) {
   const { message } = App.useApp()
 
-  const [view, setView] = useState<'findings' | 'everything'>('findings')
+  /*
+   * WHAT IS ON SCREEN, and how much of it the server has to answer for.
+   *
+   * `view` is the outcome slice - the split a reader makes first and returns to
+   * constantly - and it is a real server-side filter rather than a client one,
+   * because a release produces ten to fifteen thousand results and filtering a
+   * page of five hundred would show a subset of a subset without saying so.
+   */
+  const [tab, setTab] = useState<'findings' | 'charts'>('findings')
+  const [view, setView] = useState<ResultView>('blocking')
   const [chart, setChart] = useState<string | undefined>()
   const [determinacy, setDeterminacy] = useState<string | undefined>()
+  const [kind, setKind] = useState<string | undefined>()
+  const [sort, setSort] = useState<ResultSort>('severity')
+  /*
+   * TWO PIECES OF SEARCH STATE, and the second is not redundant.
+   *
+   * `draft` is what the box shows and `search` is what the server is asked. A
+   * release produces ten to fifteen thousand results, so a query per keystroke
+   * is a query per keystroke against all of them; the debounce below is what
+   * makes typing feel like typing.
+   */
+  const [draft, setDraft] = useState('')
   const [search, setSearch] = useState('')
   const [detail, setDetail] = useState<ComplianceResult | null>(null)
+  const [manifest, setManifest] = useState<string | null>(null)
 
+  // Debounced, so the server sees one query per pause rather than one per key.
+  useEffect(() => {
+    const t = setTimeout(() => setSearch(draft), 250)
+    return () => clearTimeout(t)
+  }, [draft])
+
+  const slice = VIEWS[view]
   const compliance = usePackageCompliance(product, reference, {
     repository,
-    all: view === 'everything',
+    all: slice.all,
+    outcome: slice.outcome,
+    severity: slice.severity,
     chart: chart ? [chart] : undefined,
     determinacy: determinacy ? [determinacy] : undefined,
+    kind: kind ? [kind] : undefined,
     search: search.trim() || undefined,
   })
   const run = useRunCompliance()
@@ -218,7 +321,12 @@ export function ComplianceTab({ product, reference, repository }: {
         <InconclusiveNotice
           run={data.run}
           charts={charts}
-          onShowUndecided={() => { setView('findings'); setSearch('') }}
+          onShowUndecided={() => {
+            setTab('findings')
+            setView('undecided')
+            setSearch('')
+            setDraft('')
+          }}
         />
       )}
 
@@ -253,85 +361,162 @@ export function ComplianceTab({ product, reference, repository }: {
         </Card>
       )}
 
-      {/* The charts: the run's denominator. A reader who cannot see that three
-          of ninety-seven charts failed to render reads the finding count as
-          the whole story. */}
-      {charts.length > 0 && (
-        <ChartCoverage
-          charts={charts}
-          product={product}
-          reference={reference}
-          repository={repository}
-        />
-      )}
-
-      {/* The rows. */}
+      {/*
+        FINDINGS FIRST, CHARTS BEHIND THEM.
+        Two cards side by side asked the reader to decide which mattered on
+        every visit. Findings are why anybody opens this tab; coverage is what
+        they check when a number looks wrong - so coverage is one click away
+        and never in front.
+      */}
       <Card
         size="small"
+        styles={{ body: { paddingTop: 0 } }}
         title={
-          <Space size={10} wrap>
+          <Tabs
+            size="small"
+            activeKey={tab}
+            onChange={(k) => setTab(k as 'findings' | 'charts')}
+            style={{ marginBottom: -16 }}
+            items={[
+              {
+                key: 'findings',
+                label: (
+                  <Space size={6}>
+                    <span>Findings</span>
+                    <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+                      {formatCount(data?.run?.counts.blocking ?? 0)}
+                    </Typography.Text>
+                  </Space>
+                ),
+              },
+              {
+                key: 'charts',
+                label: (
+                  <Space size={6}>
+                    <span>Charts</span>
+                    <Typography.Text
+                      type={brokenCharts(charts) > 0 ? 'warning' : 'secondary'}
+                      style={{ fontSize: 12 }}
+                    >
+                      {charts.length - brokenCharts(charts)}/{charts.length}
+                    </Typography.Text>
+                  </Space>
+                ),
+              },
+            ]}
+          />
+        }
+      >
+        {tab === 'charts' ? (
+          <ChartCoverage
+            charts={charts}
+            product={product}
+            reference={reference}
+            repository={repository}
+            onOpenManifest={setManifest}
+          />
+        ) : (
+          <Space direction="vertical" size={12} style={{ width: '100%' }}>
+            {/*
+              The controls, on the LEFT and in the order the page's other
+              listings use them: the search box first, then the narrowing
+              selects, then the sort. Packages does this and a reader who has
+              learned it there should not have to learn it again here.
+            */}
+            <Space size={10} wrap style={{ width: '100%' }}>
+              <Input
+                allowClear
+                style={{ width: 280 }}
+                prefix={<SearchOutlined style={{ color: c.text3 }} />}
+                placeholder="Search resource, chart, file or check"
+                value={draft}
+                onChange={(e) => setDraft(e.target.value)}
+              />
+              <Select
+                allowClear
+                placeholder="Any chart"
+                style={{ minWidth: 180 }}
+                value={chart}
+                onChange={setChart}
+                showSearch
+                optionFilterProp="label"
+                options={charts
+                  .filter((ch) => ch.name && ch.name !== '(not fetched)')
+                  .map((ch) => ({ label: ch.name, value: ch.name }))}
+              />
+              <Select
+                allowClear
+                placeholder="Any kind"
+                style={{ minWidth: 160 }}
+                value={kind}
+                onChange={setKind}
+                showSearch
+                optionFilterProp="label"
+                options={kindOptions(results)}
+              />
+              {/* The split a reader makes first: whose problem is this. */}
+              <Select
+                allowClear
+                placeholder="Anyone to fix"
+                style={{ minWidth: 210 }}
+                value={determinacy}
+                onChange={setDeterminacy}
+                options={[
+                  { label: 'The vendor must fix it', value: 'fixed' },
+                  { label: 'A values file can fix it', value: 'configurable' },
+                  { label: 'Ownership not established', value: 'unknown' },
+                ]}
+              />
+              <Select
+                value={sort}
+                onChange={setSort}
+                style={{ minWidth: 190 }}
+                options={[
+                  { label: 'Sort by severity', value: 'severity' },
+                  { label: 'Sort by chart', value: 'chart' },
+                  { label: 'Sort by check', value: 'check' },
+                  { label: 'Sort by resource', value: 'resource' },
+                ]}
+              />
+              <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+                {formatCount(data?.total ?? 0)} {slice.noun}
+                {(data?.total ?? 0) > results.length && (
+                  <> · showing {formatCount(results.length)}</>
+                )}
+              </Typography.Text>
+            </Space>
+
+            {/*
+              THE OUTCOME SLICE. Blocking first because it is what a release
+              decision turns on, and Passed is present because the passes are
+              the denominator - "40 workloads, all compliant" and "the traversal
+              never reached them" are the same empty list otherwise.
+            */}
             <Segmented
               size="small"
               value={view}
-              onChange={(v) => setView(v as 'findings' | 'everything')}
-              options={[
-                { label: 'Findings', value: 'findings' },
-                { label: 'Everything', value: 'everything' },
-              ]}
+              onChange={(v) => setView(v as ResultView)}
+              options={VIEW_ORDER.map((k) => ({
+                label: (
+                  <Space size={6}>
+                    <span>{VIEWS[k].label}</span>
+                    <Typography.Text type="secondary" style={{ fontSize: 11 }}>
+                      {formatCount(VIEWS[k].count(data?.run?.counts))}
+                    </Typography.Text>
+                  </Space>
+                ),
+                value: k,
+              }))}
             />
-            <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-              {(data?.total ?? 0).toLocaleString()}
-              {view === 'findings' ? ' findings' : ' results'}
-            </Typography.Text>
-          </Space>
-        }
-        extra={
-          <Space size={8} wrap>
-            <Select
-              allowClear
-              size="small"
-              placeholder="Any chart"
-              style={{ minWidth: 170 }}
-              value={chart}
-              onChange={setChart}
-              options={charts
-                .filter((ch) => ch.name && ch.name !== '(not fetched)')
-                .map((ch) => ({ label: ch.name, value: ch.name }))}
-            />
-            {/* The split a reader makes first: whose problem is this. */}
-            <Select
-              allowClear
-              size="small"
-              placeholder="Any owner"
-              style={{ minWidth: 190 }}
-              value={determinacy}
-              onChange={setDeterminacy}
-              options={[
-                { label: 'Vendor must fix', value: 'fixed' },
-                { label: 'Overridable in values', value: 'configurable' },
-                { label: 'Could not be established', value: 'unknown' },
-              ]}
-            />
-            <Input.Search
-              allowClear
-              size="small"
-              placeholder="Resource, file, check…"
-              style={{ width: 210 }}
-              onSearch={setSearch}
+
+            <ResultsTable
+              results={sortResults(results, sort)}
+              loading={compliance.isFetching}
+              onOpen={setDetail}
+              emptyText={emptyTextFor(view, Boolean(search || chart || determinacy || kind))}
             />
           </Space>
-        }
-      >
-        <ResultsTable
-          results={results}
-          loading={compliance.isFetching}
-          onOpen={setDetail}
-          emptyText={
-            view === 'findings'
-              ? 'Nothing needs attention in this view.'
-              : 'No results match these filters.'
-          }
-        />
+        )}
       </Card>
 
       <ResultDrawer
@@ -340,6 +525,15 @@ export function ComplianceTab({ product, reference, repository }: {
         reference={reference}
         repository={repository}
         onClose={() => setDetail(null)}
+        onOpenManifest={setManifest}
+      />
+
+      <ManifestDrawer
+        document={manifest}
+        product={product}
+        reference={reference}
+        repository={repository}
+        onClose={() => setManifest(null)}
       />
     </Space>
   )
@@ -351,13 +545,28 @@ export function ComplianceTab({ product, reference, repository }: {
  * Charts that did not render come first, because everything below them is a
  * smaller denominator than it looks.
  */
-function ChartCoverage({ charts, product, reference, repository }: {
-  charts: NonNullable<ReturnType<typeof usePackageCompliance>['data']>['charts']
+function ChartCoverage({ charts, product, reference, repository, onOpenManifest }: {
+  charts: ComplianceChart[]
   product: string
   reference: string
   repository?: string
+  /** Opens a chart's rendered manifest beside the table, without leaving it. */
+  onOpenManifest: (document: string) => void
 }) {
-  const rows = charts ?? []
+  /*
+   * FAILURES FIRST. Everything below them is a smaller denominator than it
+   * looks, and on a ninety-five chart release the thirteen that did not render
+   * are otherwise thirteen rows somebody has to scroll past eighty-two others
+   * to find. Within each group, by name, so a chart is where it was last time.
+   */
+  const rows = useMemo(() => {
+    const all = charts ?? []
+    return [...all].sort((a, b) => {
+      const bad = (ch: ComplianceChart) => (ch.status === 'ok' ? 1 : 0)
+      if (bad(a) !== bad(b)) return bad(a) - bad(b)
+      return a.name.localeCompare(b.name)
+    })
+  }, [charts])
   const broken = rows.filter((ch) => ch.status !== 'ok')
   const [open, setOpen] = useState(broken.length > 0)
 
@@ -444,28 +653,27 @@ function ChartCoverage({ charts, product, reference, repository }: {
               render: (n: number) => n.toLocaleString(),
             },
             {
-              title: 'Reason', dataIndex: 'error',
-              render: (e?: string) =>
-                e ? <span style={{ fontFamily: mono, fontSize: 11, color: c.text2 }}>{e}</span> : null,
+              // WHY, in two words, before the paragraph. Seventeen charts that
+              // failed four different ways are four conversations - three with
+              // the vendor and one with us - and an undifferentiated column of
+              // stack traces is how they become one complaint about the tool.
+              title: 'Reason', dataIndex: 'errorLabel', width: 210,
+              render: (_: unknown, ch) => <ChartFailure chart={ch} />,
             },
             {
               // The manifest THIS chart rendered to. Offered per chart as well
               // as for the release, because a vendor engineer owns one chart
               // and does not want the other ninety-six.
-              title: 'Rendered manifest', dataIndex: 'name', width: 180,
+              title: 'Rendered manifest', dataIndex: 'name', width: 170,
               render: (_: unknown, ch) => (
                 available.has(ch.name)
                   ? (
                     <Space size={10}>
                       <Typography.Link
                         style={{ fontSize: 12 }}
-                        href={renderedManifestUrl(product, reference, {
-                          repository, document: ch.name,
-                        })}
-                        target="_blank"
-                        rel="noreferrer"
+                        onClick={() => onOpenManifest(ch.name)}
                       >
-                        Open
+                        View
                       </Typography.Link>
                       <Typography.Link
                         style={{ fontSize: 12 }}
@@ -565,12 +773,14 @@ function ResultsTable({ results, loading, onOpen, emptyText }: {
  * found, what was expected, and what to do. A drawer rather than a modal
  * because the reader is working down a list.
  */
-function ResultDrawer({ result, product, reference, repository, onClose }: {
+function ResultDrawer({ result, product, reference, repository, onClose, onOpenManifest }: {
   result: ComplianceResult | null
   product: string
   reference: string
   repository?: string
   onClose: () => void
+  /** Opens the whole rendered manifest, on this page. */
+  onOpenManifest: (document: string) => void
 }) {
   return (
     <Drawer
@@ -608,6 +818,7 @@ function ResultDrawer({ result, product, reference, repository, onClose }: {
             reference={reference}
             repository={repository}
             result={result}
+            onOpenManifest={onOpenManifest}
           />
 
           <Descriptions column={1} size="small" bordered>
@@ -687,4 +898,146 @@ function ResultDrawer({ result, product, reference, repository, onClose }: {
       )}
     </Drawer>
   )
+}
+
+
+/** Charts that produced no manifests, which is the run's real denominator. */
+function brokenCharts(charts: ComplianceChart[]): number {
+  return charts.filter((ch) => ch.status !== 'ok').length
+}
+
+/**
+ * The kinds present, for the narrowing select.
+ *
+ * Derived from the rows on screen rather than from a fixed list, because a
+ * release ships custom resources for operators this platform has never heard
+ * of, and a hard-coded list of Kubernetes kinds would hide exactly those.
+ */
+function kindOptions(results: ComplianceResult[]): { label: string; value: string }[] {
+  const seen = new Set<string>()
+  for (const r of results) {
+    if (r.kind) seen.add(r.kind)
+  }
+  return [...seen].sort().map((k) => ({ label: k, value: k }))
+}
+
+/**
+ * The rows, ordered as the reader asked.
+ *
+ * Client-side, and that is a deliberate limit: it orders the PAGE the server
+ * returned, which is the reading order the engine assigned - failures first,
+ * then the undecidable, then the passes - narrowed to one outcome slice. Sorting
+ * across a fifteen-thousand-row run would need a server-side order, and the
+ * order that matters most is already the default.
+ */
+function sortResults(results: ComplianceResult[], sort: ResultSort): ComplianceResult[] {
+  if (sort === 'severity') return results
+  const key = (r: ComplianceResult): string => {
+    switch (sort) {
+      case 'chart': return `${r.chart ?? ''}\u0000${r.sourceFile ?? ''}\u0000${r.check}`
+      case 'check': return `${r.check}\u0000${r.chart ?? ''}\u0000${r.name ?? ''}`
+      default: return `${r.kind ?? ''}\u0000${r.name ?? ''}\u0000${r.check}`
+    }
+  }
+  return [...results].sort((a, b) => key(a).localeCompare(key(b)))
+}
+
+/**
+ * What an empty table means, which is never the same thing twice.
+ *
+ * "No results" over a filtered view is a statement about the filter; over an
+ * unfiltered Blocking view it is the whole point of the release. Saying which
+ * is the difference between a reader clearing a filter and a reader shipping.
+ */
+function emptyTextFor(view: ResultView, filtered: boolean): string {
+  if (filtered) return 'No results match these filters.'
+  switch (view) {
+    case 'blocking':
+      return 'No blocking findings. Check the undecided count above before reading that as a pass.'
+    case 'warnings':
+      return 'No warnings.'
+    case 'undecided':
+      return 'Every check was decided. Nothing was skipped for want of a rendered chart.'
+    case 'passed':
+      return 'Nothing passed, which means nothing was evaluated.'
+    default:
+      return 'This run produced no results.'
+  }
+}
+
+/**
+ * Why one chart did not render, and whether a retry could have helped.
+ *
+ * # Why the classification is on screen and not only the message
+ *
+ * A real orb produced seventeen failures across four completely different
+ * causes: subcharts requiring a `global.registry` that only an umbrella
+ * supplies, a values.schema.json the vendor's own defaults violate, a template
+ * dereferencing a nil, and a file that is not valid YAML. Three of those are
+ * conversations with the vendor and one is a conversation with us, and a column
+ * of undifferentiated helm stack traces is how all four become "the tool is
+ * broken".
+ *
+ * The attempt count is here for the same reason. "Retried and failed again" and
+ * "not retried, because a second render of the same bytes returns the same
+ * error" are different facts, and a reader who is not told which will assume
+ * the wrong one.
+ */
+function ChartFailure({ chart }: { chart: ComplianceChart }) {
+  if (!chart.error && !chart.errorLabel) return null
+
+  return (
+    <Space direction="vertical" size={2} style={{ width: '100%' }}>
+      <Space size={6} wrap>
+        {chart.errorLabel && (
+          <Tooltip title={chart.errorHint}>
+            <Tag
+              color={chart.errorKind === 'needs_values' ? 'orange' : 'red'}
+              style={{ margin: 0, fontSize: 11 }}
+            >
+              {chart.errorLabel}
+            </Tag>
+          </Tooltip>
+        )}
+        {(chart.attempts ?? 0) > 1 && (
+          <Typography.Text type="secondary" style={{ fontSize: 11 }}>
+            {chart.attempts} attempts
+          </Typography.Text>
+        )}
+        {(chart.attempts ?? 0) <= 1 && !chart.retryable && (
+          <Tooltip
+            title={
+              'Not retried: helm template is a pure function of the chart and the pinned '
+              + 'inputs, so a second render of the same bytes returns the same error.'
+            }
+          >
+            <Typography.Text type="secondary" style={{ fontSize: 11 }}>
+              not retried
+            </Typography.Text>
+          </Tooltip>
+        )}
+      </Space>
+      {chart.error && (
+        <Typography.Text
+          type="secondary"
+          style={{ fontFamily: mono, fontSize: 11, whiteSpace: 'pre-wrap' }}
+        >
+          {firstLines(chart.error, 3)}
+        </Typography.Text>
+      )}
+    </Space>
+  )
+}
+
+/**
+ * The first few lines of helm's message.
+ *
+ * helm's errors are frequently a paragraph with a stack of template frames.
+ * The first lines name the file, the line and the cause, which is what a
+ * vendor needs; the rest is in the export and in the run's own record.
+ */
+function firstLines(s: string, n: number): string {
+  const lines = s.split('\n')
+  if (lines.length <= n) return s
+  return `${lines.slice(0, n).join('\n')}\n…`
 }

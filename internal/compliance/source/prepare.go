@@ -323,14 +323,19 @@ func (p *Preparer) Prepare(
 				return
 			}
 
-			chartRel, _, err := loader.Load(ctx, c.Dir, base)
+			chartRel, attempts, err := loadWithRetry(ctx, loader, c.Dir, base, rep, name)
 			if err != nil {
+				kind := render.ClassifyFailure(err)
 				out[i].charts = []*compliance.Chart{{
-					Name:         chartNameFor(c),
-					RenderStatus: compliance.RenderFailed, RenderError: err.Error(),
+					Name:            chartNameFor(c),
+					RenderStatus:    compliance.RenderFailed,
+					RenderError:     err.Error(),
+					RenderErrorKind: string(kind),
+					RenderAttempts:  attempts,
 				}}
 				out[i].failed = err.Error()
-				rep.Event(compliance.EventFail, "Render failed for %s: %v", name, firstLine(err.Error()))
+				rep.Event(compliance.EventFail, "%s: %s - %v",
+					name, kind.Label(), firstLine(err.Error()))
 				rep.Count(func(k *compliance.ProgressCounts) { k.ChartsFailed++ })
 				return
 			}
@@ -344,13 +349,19 @@ func (p *Preparer) Prepare(
 
 			bad := 0
 			for _, ch := range chartRel.Charts {
-				if ch.RenderStatus != compliance.RenderOK {
-					bad++
+				if ch.RenderStatus == compliance.RenderOK {
+					continue
+				}
+				bad++
+				ch.RenderAttempts = attempts
+				if ch.RenderErrorKind == "" && ch.RenderError != "" {
+					ch.RenderErrorKind = string(render.ClassifyFailure(errors.New(ch.RenderError)))
 				}
 			}
 			if bad > 0 {
 				rep.Count(func(k *compliance.ProgressCounts) { k.ChartsFailed += bad })
-				rep.Event(compliance.EventFail, "Render failed for %s", name)
+				rep.Event(compliance.EventFail, "%s: %s", name,
+					render.FailureKind(chartRel.Charts[0].RenderErrorKind).Label())
 			} else {
 				rep.Count(func(k *compliance.ProgressCounts) { k.ChartsRendered++ })
 				rep.Event(compliance.EventOK, "Rendered %s: %d objects", name, len(chartRel.Resources))
@@ -666,4 +677,47 @@ func (p *Preparer) warn(rep compliance.Reporter, format string, args ...any) {
 	if p.Log != nil {
 		p.Log.Warn(fmt.Sprintf(format, args...))
 	}
+}
+
+// loadWithRetry renders one chart, retrying only a failure a retry could fix.
+//
+// # Why the classification decides this and not a counter
+//
+// `helm template` is a pure function of the chart and the flags. A template
+// that dereferenced a nil dereferences it again; a chart that requires
+// `global.registry` still requires it. Retrying those is not resilience, it is
+// three times the work for the same message and three times the wait for the
+// person watching a ninety-five chart run.
+//
+// What CAN succeed on a second attempt is a render that never reached the
+// chart's templates: killed by a deadline on a loaded Coordinator, refused a
+// file descriptor, a helm binary replaced under us mid-run. Those are what is
+// retried, and the attempt count is recorded either way so the coverage table
+// can say "retried and failed again" rather than implying it was tried once.
+func loadWithRetry(
+	ctx context.Context, loader render.Loader, dir string,
+	base compliance.Address, rep compliance.Reporter, name string,
+) (*compliance.Release, int, error) {
+	var lastErr error
+	for attempt := 1; attempt <= render.MaxRenderAttempts; attempt++ {
+		rel, _, err := loader.Load(ctx, dir, base)
+		if err == nil {
+			if attempt > 1 {
+				rep.Event(compliance.EventOK, "%s rendered on attempt %d", name, attempt)
+			}
+			return rel, attempt, nil
+		}
+		lastErr = err
+
+		if ctx.Err() != nil {
+			return nil, attempt, err
+		}
+		kind := render.ClassifyFailure(err)
+		if !kind.Retryable() || attempt == render.MaxRenderAttempts {
+			return nil, attempt, err
+		}
+		rep.Event(compliance.EventWarn, "%s: %s on attempt %d, retrying",
+			name, kind.Label(), attempt)
+	}
+	return nil, render.MaxRenderAttempts, lastErr
 }

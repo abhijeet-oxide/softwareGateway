@@ -1,8 +1,9 @@
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { Alert, Card, Collapse, Input, Select, Space, Tooltip, Typography } from 'antd'
 // The working-surface table: resizable, reorderable, pinnable columns whose
 // layout each person keeps. See `tablekit/README.md` for which tables get it.
 import { Table as DataTable } from '../tablekit'
+import { SearchOutlined } from '../icons'
 import { usePolicies } from '../api/queries'
 import { ErrorState, PageHeader } from '../components/layout'
 import { CheckSeverityTag } from '../components/compliance'
@@ -30,6 +31,9 @@ import type { PolicyCheck } from '../api/types'
  */
 export default function Policies() {
   const policies = usePolicies()
+  // `draft` is what the box shows; `search` is what filters. Split so typing
+  // is not a re-filter of the whole rulebook per keystroke.
+  const [draft, setDraft] = useState('')
   const [search, setSearch] = useState('')
   const [category, setCategory] = useState<string | undefined>()
   const [severity, setSeverity] = useState<string | undefined>()
@@ -37,6 +41,11 @@ export default function Policies() {
   const checks = policies.data?.checks ?? []
   const packs = policies.data?.packs ?? []
   const broken = packs.filter((p) => (p.errors?.length ?? 0) > 0)
+
+  useEffect(() => {
+    const t = setTimeout(() => setSearch(draft), 200)
+    return () => clearTimeout(t)
+  }, [draft])
 
   const categories = useMemo(() => {
     const seen = new Set<string>()
@@ -54,6 +63,8 @@ export default function Policies() {
         .some((v) => v?.toLowerCase().includes(q))
     })
   }, [checks, search, category, severity])
+
+  const total = checks.length
 
   if (policies.isError) {
     return (
@@ -130,40 +141,53 @@ export default function Policies() {
               </Typography.Text>
             </Space>
           }
-          extra={
-            <Space size={8} wrap>
-              <Select
-                allowClear
-                size="small"
-                placeholder="Any category"
-                style={{ minWidth: 200 }}
-                value={category}
-                onChange={setCategory}
-                options={categories.map((v) => ({ label: v, value: v }))}
-              />
-              <Select
-                allowClear
-                size="small"
-                placeholder="Any severity"
-                style={{ minWidth: 150 }}
-                value={severity}
-                onChange={setSeverity}
-                options={[
-                  { label: 'Blocking', value: 'block' },
-                  { label: 'Warning', value: 'warn' },
-                  { label: 'Info', value: 'info' },
-                ]}
-              />
-              <Input.Search
-                allowClear
-                size="small"
-                placeholder="Search the rulebook"
-                style={{ width: 240 }}
-                onSearch={setSearch}
-              />
-            </Space>
-          }
         >
+          {/*
+            THE CONTROLS ON THE LEFT, above the table, in the order every other
+            listing in this application uses them: the search box first, then
+            the narrowing selects. They were right-aligned in the card's header,
+            which put the search box in a different place on this page than on
+            Packages - and a reader who has learned it there should not have to
+            learn it again here.
+          */}
+          <Space size={10} wrap style={{ marginBottom: 12 }}>
+            <Input
+              allowClear
+              style={{ width: 280 }}
+              prefix={<SearchOutlined style={{ color: c.text3 }} />}
+              placeholder="Search the rulebook"
+              value={draft}
+              onChange={(e) => setDraft(e.target.value)}
+            />
+            <Select
+              allowClear
+              placeholder="Any category"
+              style={{ minWidth: 200 }}
+              value={category}
+              onChange={setCategory}
+              showSearch
+              optionFilterProp="label"
+              options={categories.map((v) => ({ label: v, value: v }))}
+            />
+            <Select
+              allowClear
+              placeholder="Any severity"
+              style={{ minWidth: 160 }}
+              value={severity}
+              onChange={setSeverity}
+              options={[
+                { label: 'Blocking', value: 'block' },
+                { label: 'Warning', value: 'warn' },
+                { label: 'Info', value: 'info' },
+              ]}
+            />
+            <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+              {filtered.length === total
+                ? `${total.toLocaleString()} checks`
+                : `${filtered.length.toLocaleString()} of ${total.toLocaleString()} checks`}
+            </Typography.Text>
+          </Space>
+
           <DataTable<PolicyCheck>
             tableEnhancedKey="policy-catalogue"
             size="small"

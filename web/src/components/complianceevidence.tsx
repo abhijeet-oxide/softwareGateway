@@ -1,5 +1,7 @@
-import { Alert, Button, Card, Space, Tooltip, Typography } from 'antd'
+import { useEffect, useState } from 'react'
+import { Alert, Button, Card, Drawer, Space, Tooltip, Typography } from 'antd'
 import { useComplianceExcerpt, renderedManifestUrl } from '../api/queries'
+import { fetchText } from '../api/client'
 import { formatBytes, formatCount } from '../domain/format'
 import { c, mono } from '../uikit'
 import type { ComplianceExcerpt, ComplianceResult } from '../api/types'
@@ -27,11 +29,19 @@ import type { ComplianceExcerpt, ComplianceResult } from '../api/types'
  * quoted out of this into a mail has to point at the same line of the file the
  * vendor opens, or the excerpt is a screenshot rather than a reference.
  */
-export function EvidencePanel({ product, reference, repository, result }: {
+export function EvidencePanel({ product, reference, repository, result, onOpenManifest }: {
   product: string
   reference: string
   repository?: string
   result: ComplianceResult
+  /**
+   * Opens the whole manifest, on this page.
+   *
+   * A link rather than a navigation, because the reader is mid-triage: they
+   * are on a filtered view they reached by narrowing three times, and a new
+   * tab answers "what does this chart render" at the cost of the view.
+   */
+  onOpenManifest?: (document: string) => void
 }) {
   const excerpt = useComplianceExcerpt(product, reference, result.seq, { repository })
 
@@ -80,16 +90,25 @@ export function EvidencePanel({ product, reference, repository, result }: {
       }
       extra={
         <Space size={12}>
-          <Typography.Link
-            href={renderedManifestUrl(product, reference, {
-              repository, document: data.document,
-            })}
-            target="_blank"
-            rel="noreferrer"
-            style={{ fontSize: 12 }}
-          >
-            Open whole
-          </Typography.Link>
+          {onOpenManifest ? (
+            <Typography.Link
+              style={{ fontSize: 12 }}
+              onClick={() => onOpenManifest(data.document)}
+            >
+              View full manifest
+            </Typography.Link>
+          ) : (
+            <Typography.Link
+              href={renderedManifestUrl(product, reference, {
+                repository, document: data.document,
+              })}
+              target="_blank"
+              rel="noreferrer"
+              style={{ fontSize: 12 }}
+            >
+              View full manifest
+            </Typography.Link>
+          )}
           <Typography.Link
             href={renderedManifestUrl(product, reference, {
               repository, document: data.document, download: true,
@@ -300,5 +319,166 @@ export function NoEvidenceNotice({ checked }: { checked: boolean }) {
         + 'Coordinator. Re-check the release to produce them.'
       }
     />
+  )
+}
+
+/**
+ * A whole rendered manifest, beside the table rather than instead of it.
+ *
+ * # Why a drawer and not a new tab
+ *
+ * The reader is mid-triage. They are on a filtered view of nine hundred
+ * findings, at a scroll position they reached by narrowing three times, and the
+ * question they want answered is "what does this chart actually render". A new
+ * tab answers it and costs them the view; a link that navigates costs them the
+ * view AND the back button. Neither is worth the fifty lines this saves.
+ *
+ * The download is still here, because the moment after "what does it render" is
+ * frequently "send it to the vendor".
+ */
+export function ManifestDrawer({ document, product, reference, repository, onClose }: {
+  /** The document key - a chart's name, or a plain manifest's path. Null closes. */
+  document: string | null
+  product: string
+  reference: string
+  repository?: string
+  onClose: () => void
+}) {
+  const [text, setText] = useState<string>('')
+  const [error, setError] = useState<string>('')
+  const [loading, setLoading] = useState(false)
+
+  useEffect(() => {
+    if (!document) return
+    let live = true
+    setLoading(true)
+    setError('')
+    setText('')
+    fetchText(renderedManifestUrl(product, reference, { repository, document }))
+      .then((body) => { if (live) setText(body) })
+      .catch((e: unknown) => {
+        if (live) setError(e instanceof Error ? e.message : 'The manifest could not be read.')
+      })
+      .finally(() => { if (live) setLoading(false) })
+    return () => { live = false }
+  }, [document, product, reference, repository])
+
+  const lines = text ? text.replace(/\n$/, '').split('\n') : []
+
+  return (
+    <Drawer
+      open={Boolean(document)}
+      onClose={onClose}
+      width={880}
+      title={
+        <Space size={10} wrap>
+          <span>Rendered manifest</span>
+          <Typography.Text
+            type="secondary"
+            style={{ fontFamily: mono, fontSize: 12, fontWeight: 400 }}
+          >
+            {document}
+          </Typography.Text>
+        </Space>
+      }
+      extra={
+        document && (
+          <Space size={10}>
+            <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+              {lines.length > 0 && `${formatCount(lines.length)} lines`}
+            </Typography.Text>
+            <Button
+              size="small"
+              href={renderedManifestUrl(product, reference, {
+                repository, document, download: true,
+              })}
+            >
+              Download
+            </Button>
+          </Space>
+        )
+      }
+      styles={{ body: { padding: 0 } }}
+    >
+      {loading && (
+        <div style={{ padding: 16 }}>
+          <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+            Loading manifest
+          </Typography.Text>
+        </div>
+      )}
+      {error && (
+        <div style={{ padding: 16 }}>
+          <Typography.Text type="danger" style={{ fontSize: 12 }}>{error}</Typography.Text>
+        </div>
+      )}
+      {!loading && !error && <ManifestBody lines={lines} />}
+    </Drawer>
+  )
+}
+
+/**
+ * The manifest, numbered as the download is and split at its documents.
+ *
+ * A chart's stream is many objects with helm's `# Source:` markers between
+ * them, and read as one undifferentiated column of YAML it is unusable at the
+ * length a real chart produces. The markers get a rule and emphasis, so the
+ * reader scrolls by object rather than by line - and the line numbers stay the
+ * document's own, so one quoted into a mail still points at the same place.
+ */
+function ManifestBody({ lines }: { lines: string[] }) {
+  const width = String(lines.length).length
+
+  return (
+    <div
+      style={{
+        fontFamily: mono,
+        fontSize: 12,
+        lineHeight: '18px',
+        overflowX: 'auto',
+        background: c.surface2,
+        minHeight: '100%',
+      }}
+    >
+      {lines.map((line, i) => {
+        const n = i + 1
+        const source = line.startsWith('# Source: ')
+        const separator = line.trim() === '---'
+        return (
+          <div
+            key={n}
+            style={{
+              display: 'flex',
+              whiteSpace: 'pre',
+              background: source ? c.markBg : undefined,
+              borderTop: separator ? `1px solid ${c.border}` : undefined,
+            }}
+          >
+            <span
+              style={{
+                color: c.text3,
+                userSelect: 'none',
+                textAlign: 'right',
+                minWidth: `${width + 1}ch`,
+                paddingRight: 10,
+                paddingLeft: 8,
+                flexShrink: 0,
+              }}
+            >
+              {n}
+            </span>
+            <span
+              style={{
+                paddingRight: 12,
+                color: source ? c.text : undefined,
+                fontWeight: source ? 600 : undefined,
+              }}
+            >
+              {line === '' ? ' ' : line}
+            </span>
+          </div>
+        )
+      })}
+    </div>
   )
 }

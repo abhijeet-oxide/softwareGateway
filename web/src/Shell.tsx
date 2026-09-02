@@ -3,7 +3,7 @@ import { Badge, Button, Tooltip } from 'antd'
 import {
   BarChartOutlined, BellOutlined, DashboardOutlined, DatabaseOutlined, HistoryOutlined,
   InboxOutlined, PackageOutlined, ProductOutlined, QuestionCircleOutlined,
-  SettingOutlined,
+  ScaleOutlined, SettingOutlined,
 } from './icons'
 import { Link, useLocation, useNavigate } from 'react-router-dom'
 import { useIdentity } from './auth/permissions'
@@ -59,6 +59,12 @@ const NAV = [
   //   // do, and a nav entry named after the bad news is one people avoid.
   //   label: 'Security',
   // },
+  // The rulebook: every check this organization applies, and what each asserts.
+  // Not scoped to a product or a release - it is what WILL be checked, and the
+  // person most likely to want it is a vendor who has not shipped yet. It was
+  // reachable only from a link inside one release's Compliance tab, which is a
+  // page nobody finds if they have not already found a finding.
+  { key: '/policies', icon: <ScaleOutlined />, label: 'Policies' },
   { key: '/repositories', icon: <DatabaseOutlined />, label: 'Repositories' },
   { key: '/activity', icon: <HistoryOutlined />, label: 'Activity' },
   { key: '/reports', icon: <BarChartOutlined />, label: 'Reports' },

@@ -1193,6 +1193,30 @@ export function useSecuritySearch(
  * it through fetch would mean holding a large file in memory to hand it back to
  * the browser, and losing the filename on the way.
  */
+/**
+ * The compliance report, as a URL.
+ *
+ * A link rather than a fetch, like every other export here: the browser streams
+ * it and names it from Content-Disposition, and the server reads the WHOLE run
+ * rather than the page this tab has loaded - which is the point. A client-built
+ * report would hold the first five hundred findings of eleven thousand and look
+ * complete.
+ *
+ * `table` picks which sheet a single-table format writes; the workbook carries
+ * all of them and ignores it.
+ */
+export function complianceExportUrl(
+  product: string, ref: string,
+  opts: { format: string; table?: string; repository?: string },
+): string {
+  const { segment, query: q } = packageRef(ref)
+  const scoped = scopeQuery(q, opts.repository)
+  const extra = query({ format: opts.format, table: opts.table })
+  const suffix = scoped ? scoped + (extra ? '&' + extra.slice(1) : '') : extra
+  return `/api/v1/products/${encodeURIComponent(product)}`
+    + `/packages/${encodeURIComponent(segment)}/compliance/export${suffix}`
+}
+
 export function packageSecurityExportUrl(
   product: string, ref: string,
   opts: {

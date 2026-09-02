@@ -12,10 +12,11 @@ import {
   BookOutlined, FileTextOutlined, HelmOutlined, LoadingOutlined, SearchOutlined, SyncOutlined,
 } from '../icons'
 import {
-  useCancelCompliance, useInspectPackage, usePackageCompliance,
+  complianceExportUrl, useCancelCompliance, useInspectPackage, usePackageCompliance,
   useRenderedManifests, useRunCompliance,
 } from '../api/queries'
 import { EmptyStateCard } from './layout'
+import { ExportMenu } from './exportmenu'
 import {
   CheckSeverityTag, ComplianceSummary, DeterminacyTag,
   HelmMissingNotice, OutcomePill, ResultAddress, RunFailedNotice,
@@ -485,6 +486,51 @@ export function ComplianceTab({ product, reference, repository }: {
             <Button icon={<BookOutlined />}>Rulebook</Button>
           </Link>
           {data?.run && <ComplianceRunLogButton run={data.run} size="middle" />}
+          {/*
+            THE REPORT, beside the controls that act on the whole run rather
+            than in the findings card, which is one view of it. What comes back
+            is every sheet regardless of what is filtered on screen: the reader
+            it is for has no filters, and a file shaped by somebody else's is a
+            file that looks complete and answers a different question.
+          */}
+          {data?.run && (
+            <ExportMenu
+              label="Download report"
+              choices={[
+                {
+                  key: 'xlsx',
+                  icon: <FileTextOutlined />,
+                  label: 'Excel workbook',
+                  note: 'A summary page, the rules broken, every place they were '
+                    + 'broken, what could not be checked, and the charts',
+                  href: complianceExportUrl(product, reference, {
+                    format: 'xlsx', repository,
+                  }),
+                  noun: 'The report',
+                },
+                {
+                  key: 'csv',
+                  icon: <FileTextOutlined />,
+                  label: 'Findings (CSV)',
+                  note: 'One table: every place a rule was broken, with its address',
+                  href: complianceExportUrl(product, reference, {
+                    format: 'csv', table: 'findings', repository,
+                  }),
+                  noun: 'The findings',
+                },
+                {
+                  key: 'json',
+                  icon: <FileTextOutlined />,
+                  label: 'Run (JSON)',
+                  note: 'The whole run with its relationships kept, for a machine',
+                  href: complianceExportUrl(product, reference, {
+                    format: 'json', repository,
+                  }),
+                  noun: 'The run',
+                },
+              ]}
+            />
+          )}
           <Tooltip
             title={
               'Renders every chart in this release with the pinned Kubernetes version and '

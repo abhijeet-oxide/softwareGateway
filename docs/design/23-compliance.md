@@ -723,6 +723,7 @@ not a product's.
 | `POST` | `/api/v1/products/{product}/packages/{package}/compliance:cancel` | Stop the run, wherever it is running |
 | `GET` | `/api/v1/products/{product}/packages/{package}/compliance/progress` | Live progress: stage, done/total, notes |
 | `GET` | `/api/v1/products/{product}/packages/{package}/compliance/runs` | History, newest first |
+| `GET` | `/api/v1/products/{product}/packages/{package}/compliance/export` | The report: `format=csv\|xlsx\|json`, `table=` to pick the sheet a single-table format writes |
 | `GET` | `/api/v1/products/{product}/packages/{package}/compliance/export` | `format=csv\|xlsx\|json\|zip` (§11) |
 | `GET` | `/api/v1/products/{product}/packages/{package}/compliance/compare` | `against={tag}` - fixed, new, still failing, by fingerprint |
 
@@ -973,6 +974,38 @@ spec:
     enabled: true          # default true when the feature is on
     packs: []              # empty = every loaded pack; names a subset otherwise
 ```
+
+### 13.1 The report
+
+The tab is for somebody triaging. The report is for somebody who is **not going
+to open this platform at all**: a vendor engineer sent a spreadsheet and asked
+to fix their chart, an auditor asked to show that a release was checked, a
+release manager pasting one number into a decision record.
+
+That reader has no filters, no drawer and no rendered manifest to click, so
+every row carries its whole address - the chart, the template, the **line**, the
+object, the container, the field - and the workbook opens on a page that says
+what this is before it says what is wrong with it.
+
+| Sheet | One row per | What it is for |
+|---|---|---|
+| **Summary** | field | Grouped under the four questions somebody opens a compliance report with: what this is, what it was checked against (Rule 5's whole provenance block), how much of it was checked, and what was found. Rules and places are separate rows, because one number cannot say both. Carries the unchecked caveat as a note above the grid. |
+| **Unique findings** | rule | The vendor conversation. What the rule is, how widely it is broken, whose it is to fix, three addressed examples, and what to do about it. |
+| **All findings** | occurrence | The working sheet - thirty-one columns, every address field present even where a reader of the screen could have derived it. |
+| **Unchecked** | occurrence | What the report does not cover, and why. Its own sheet and not a filter, because nothing on it is a defect in the release: it is what makes the rest of the file a floor rather than a total. |
+| **Charts** | chart | The denominator. Whether it rendered, and when it did not: the classification, the values key it wanted, the template, whether the failure was in a helm test hook, and the renderer's own message. |
+| **Rulebook** | check | Every check the run evaluated with its failed/passed/undecided/waived tally. A rule with no failures and a large pass count is *evidence*; three thousand rows saying "pass" would be the same fact in a form nobody opens. |
+
+`format=csv` writes one table and `table=` picks it, because a workbook holds
+every table and a CSV holds one - and which one depends entirely on what the
+reader is about to do. `format=json` keeps the relationships the grid throws
+away, for a machine.
+
+**The export ignores what is filtered on screen**, unlike the security export
+which honours it. The reader it is for has no filters; a file shaped by somebody
+else's is a file that looks complete and answers a different question. It is
+built server-side and reads the whole run for the same reason the security one
+is: a client can only export the page it has loaded.
 
 ## 14. User interface
 

@@ -1,10 +1,10 @@
 import type { ReactNode } from 'react'
-import { Alert, Col, Row, Space, Tooltip, Typography } from 'antd'
-import { StatusPill, StatTile, c, mono } from '../uikit'
+import { Alert, Card, Space, Tooltip, Typography } from 'antd'
+import { FieldLabel, StatusPill, c, mono } from '../uikit'
 import type { PillTone } from '../uikit'
 import { formatRelative } from '../domain/format'
 import type {
-  ComplianceCounts, ComplianceDeterminacy, ComplianceHelm,
+  ComplianceChart, ComplianceCounts, ComplianceDeterminacy, ComplianceHelm,
   ComplianceOutcome, ComplianceRun, ComplianceVerdict,
 } from '../api/types'
 
@@ -76,9 +76,18 @@ export function OutcomePill({ outcome, label }: { outcome: ComplianceOutcome; la
   return <StatusPill tone={OUTCOME_TONE[outcome] ?? 'neutral'}>{label ?? outcome}</StatusPill>
 }
 
+/**
+ * The severity scale's colours.
+ *
+ * `warn` is PENDING (amber), not `review` (blue). Blue beside red does not read
+ * as the middle of a three-step scale - it reads as a link, or as something
+ * informational - and the Security tab one click away draws its own middle
+ * severities amber. Critical red, Warning amber, Info grey is the scale a
+ * reader already has.
+ */
 const SEVERITY_TONE: Record<string, PillTone> = {
   block: 'danger',
-  warn: 'review',
+  warn: 'pending',
   info: 'neutral',
 }
 
@@ -145,95 +154,327 @@ export function DeterminacyTag({ determinacy, label }: {
 // ---------------------------------------------------------------------------
 
 /**
- * The five numbers, in the order somebody reads them.
+ * The posture band: three zones, read left to right.
  *
- * Critical, warning, info, unchecked, passed. The fourth is not optional and
- * not folded into the others: a release with three hundred passes and one
- * unchecked check has not been shown to comply with anything, and a summary
- * that omitted it would draw that release as clean.
+ * # Why this is the Security tab's band and not five tiles
  *
- * # Why this is the only place the caveat is now made
+ * Because they are the same screen answering the same three questions in the
+ * same order - how bad is it, what is it made of, and can I trust the answer -
+ * and they were drawn in two visual languages one tab apart. Security had a
+ * single card with three hairline-separated zones; compliance had five bordered
+ * tiles in a row. A reader who has learned one is told, by the layout alone,
+ * that the other is a different kind of thing.
  *
- * It used to be an alert above the card as well - a yellow banner saying "657
- * checks could not be decided; this release has not been shown to meet the
- * standards". True, and on every screen of every inconclusive release, which on
- * a real orb is all of them. A caveat that is always there is a caveat nobody
- * reads, and it pushed the verdict below the fold to say what the tile beside
- * the verdict already says. The number is here, coloured, clickable, next to
- * the ones it qualifies.
+ * The zones carry compliance's own facts. The third one is where they differ
+ * most and matters most: Security's confidence is "how many images were
+ * scanned", and compliance's is "how many charts rendered, and how many checks
+ * that left undecided". Same question, different denominator.
+ *
+ * # Why the unchecked count is here and not a banner
+ *
+ * It was a banner - a warning alert above the verdict on every screen of every
+ * inconclusive release, which on a real orb is all of them. A caveat that is
+ * always there is a caveat nobody reads, and it pushed the verdict below the
+ * fold to say what this band says. It is a coloured meter in the confidence
+ * zone, beside the coverage it qualifies.
  */
-export function ComplianceSummary({ counts, selected, onSelect }: {
+export function ComplianceSummary({ counts, charts, verdict, verdictLabel, selected, onSelect }: {
   counts: ComplianceCounts
-  /** The slice currently on screen, so the tile that drives it reads as chosen. */
+  /** The run's denominator: what rendered, and what did not. */
+  charts?: ComplianceChart[]
+  verdict?: ComplianceVerdict
+  verdictLabel?: string
+  /** The slice currently on screen, so the row that drives it reads as chosen. */
   selected?: SummaryKey
   onSelect?: (what: SummaryKey) => void
 }) {
-  const tiles: Array<{
-    key: SummaryKey
-    label: string
-    value: number
-    sub: string
-    colour?: string
-  }> = [
-    {
-      key: 'blocking', label: 'Critical', value: counts.blocking,
-      sub: 'must be fixed before this ships', colour: c.danger,
-    },
-    {
-      key: 'warning', label: 'Warnings', value: counts.warning,
-      sub: 'worth a conversation with the vendor', colour: c.review,
-    },
-    {
-      key: 'info', label: 'Info', value: counts.info,
-      sub: 'recorded, no action required',
-    },
-    {
-      key: 'error', label: 'Unchecked', value: counts.error,
-      sub: counts.error > 0 ? 'so this result is incomplete' : 'every check was decided',
-      colour: counts.error > 0 ? c.pending : undefined,
-    },
-    {
-      key: 'pass', label: 'Passed', value: counts.pass,
-      sub: 'checks satisfied', colour: c.ok,
-    },
+  const findings = counts.blocking + counts.warning + counts.info
+  const decided = counts.pass + counts.fail + counts.waived
+  const total = decided + counts.error + counts.skip
+  const rendered = (charts ?? []).filter((ch) => ch.status === 'ok').length
+  const chartTotal = (charts ?? []).length
+  const failedCharts = chartTotal - rendered
+  const renderedPercent = chartTotal > 0 ? Math.round((rendered / chartTotal) * 100) : 100
+  const decidedPercent = total > 0 ? Math.round((decided / total) * 100) : 0
+
+  const severities: { key: SummaryKey; label: string; value: number; colour: string }[] = [
+    { key: 'blocking', label: 'Critical', value: counts.blocking, colour: c.danger },
+    { key: 'warning', label: 'Warning', value: counts.warning, colour: c.pending },
+    { key: 'info', label: 'Info', value: counts.info, colour: c.text3 },
   ]
 
-  /*
-   * FLEX rather than a 24-column grid, because there are five of them.
-   *
-   * Five does not divide 24, so a span-based row left a quarter-tile of dead
-   * space at the end of every line. `flex: 1 1 150px` fills the row evenly at
-   * any width and wraps to two, three or five across on its own.
-   */
   return (
-    <Row gutter={[12, 12]}>
-      {tiles.map((t) => (
-        <Col key={t.key} flex="1 1 150px" style={{ minWidth: 150 }}>
-          <StatTile
-            label={t.label}
-            value={
-              <span style={t.colour ? { color: t.colour } : undefined}>
-                {t.value.toLocaleString()}
-              </span>
-            }
-            sub={t.sub}
-            /*
-              The chosen slice, marked with a ring rather than a fill: these
-              tiles carry a coloured number and a second colour behind it would
-              fight the one that means something. Drawn through `style` because
-              StatTile belongs to the shared design system, and a selected state
-              is this page's idea rather than the kit's.
-            */
-            style={
-              selected === t.key
-                ? { boxShadow: `inset 0 0 0 2px ${t.colour ?? c.brand}` }
-                : undefined
-            }
-            onClick={onSelect ? () => onSelect(t.key) : undefined}
+    <Card size="small" styles={{ body: { padding: 0 } }}>
+      <div
+        className="slm-band"
+        style={{
+          gridTemplateColumns: 'minmax(230px, 0.85fr) minmax(280px, 1.15fr) minmax(230px, 0.9fr)',
+        }}
+      >
+        {/* -------------------------------------------------- how bad it is -- */}
+        <div style={{ padding: '18px 22px', minWidth: 0 }}>
+          <ZoneLabel>Compliance</ZoneLabel>
+          <Space direction="vertical" size={10} style={{ width: '100%' }}>
+            <VerdictPill verdict={verdict} label={verdictLabel} />
+            <div>
+              <div
+                style={{
+                  fontSize: 44, fontWeight: 600, lineHeight: 1, letterSpacing: '-0.03em',
+                  color: findings > 0 ? c.text : c.ok, fontVariantNumeric: 'tabular-nums',
+                }}
+              >
+                {findings.toLocaleString()}
+              </div>
+              <Typography.Text type="secondary" style={{ fontSize: 12.5 }}>
+                findings
+              </Typography.Text>
+            </div>
+            {/*
+              The shape of the findings, in the severity colours the rows use.
+              Proportional to the findings alone rather than to every result:
+              three thousand passes would flatten this to a hairline and say
+              nothing about the work in front of somebody.
+            */}
+            <ComplianceSeverityBar counts={counts} />
+            <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+              {chartTotal > 0
+                ? `across ${rendered.toLocaleString()} of ${chartTotal.toLocaleString()} charts rendered`
+                : 'no charts rendered'}
+            </Typography.Text>
+          </Space>
+        </div>
+
+        {/* ------------------------------------------- what it is made of -- */}
+        <div
+          style={{
+            padding: '18px 22px', minWidth: 0,
+            borderInlineStart: `1px solid ${c.border}`,
+          }}
+        >
+          <ZoneLabel>Findings by severity</ZoneLabel>
+          <div style={{ display: 'grid', gap: 10 }}>
+            {severities.map((sev) => {
+              const share = findings > 0 ? (sev.value / findings) * 100 : 0
+              return (
+                <div
+                  key={sev.key}
+                  onClick={onSelect ? () => onSelect(sev.key) : undefined}
+                  style={{
+                    cursor: onSelect ? 'pointer' : undefined,
+                    opacity: selected && selected !== sev.key ? 0.62 : 1,
+                  }}
+                >
+                  <div
+                    style={{
+                      display: 'flex', alignItems: 'baseline', gap: 8, marginBottom: 5,
+                      fontVariantNumeric: 'tabular-nums',
+                    }}
+                  >
+                    <StatusPill
+                      tone={sev.key === 'blocking' ? 'danger' : sev.key === 'warning' ? 'pending' : 'neutral'}
+                      dot={false}
+                    >
+                      {sev.label}
+                    </StatusPill>
+                    <span
+                      style={{
+                        marginInlineStart: 'auto', fontSize: 13, fontWeight: 600,
+                        color: sev.value > 0 ? c.text : c.text2,
+                      }}
+                    >
+                      {sev.value.toLocaleString()}
+                    </span>
+                  </div>
+                  <div style={{ height: 5, background: c.track, borderRadius: 3 }}>
+                    <div
+                      className="slm-meter-seg"
+                      style={{
+                        width: `${share}%`, height: '100%', borderRadius: 3,
+                        background: sev.colour, transformOrigin: 'left',
+                        animation: 'slm-grow 420ms cubic-bezier(0.16,1,0.3,1) both',
+                      }}
+                    />
+                  </div>
+                </div>
+              )
+            })}
+            <div
+              style={{
+                display: 'flex', alignItems: 'baseline', gap: 8,
+                borderTop: `1px solid ${c.border}`, paddingTop: 8,
+                fontVariantNumeric: 'tabular-nums',
+              }}
+            >
+              <Typography.Text type="secondary">Checks passed</Typography.Text>
+              <Typography.Text
+                strong
+                style={{ marginInlineStart: 'auto', cursor: onSelect ? 'pointer' : undefined }}
+                onClick={onSelect ? () => onSelect('pass') : undefined}
+              >
+                {counts.pass.toLocaleString()}
+              </Typography.Text>
+            </div>
+          </div>
+        </div>
+
+        {/* ------------------------------ whether the answer can be trusted -- */}
+        <div
+          style={{
+            padding: '18px 22px', minWidth: 0,
+            borderInlineStart: `1px solid ${c.border}`,
+            background: c.surface2,
+          }}
+        >
+          <ZoneLabel>Confidence</ZoneLabel>
+
+          <ComplianceMeter
+            value={renderedPercent}
+            colour={failedCharts === 0 ? c.ok : c.pending}
+            headline={`${rendered.toLocaleString()} of ${chartTotal.toLocaleString()} charts rendered`}
+            detail={failedCharts === 0
+              ? 'Every chart in the release produced objects to check'
+              : `${failedCharts.toLocaleString()} produced no objects, so nothing in them was checked`}
           />
-        </Col>
-      ))}
-    </Row>
+
+          <div style={{ height: 16 }} />
+
+          <ComplianceMeter
+            value={decidedPercent}
+            colour={counts.error === 0 ? c.ok : c.pending}
+            headline={`${decided.toLocaleString()} of ${total.toLocaleString()} checks decided`}
+            detail={counts.error === 0
+              ? 'Every check reached a verdict'
+              : 'The rest could not be decided, so this result is a floor'}
+          />
+
+          {/*
+            THE CAVEAT, as a line rather than a banner. Clickable, because the
+            reader's next move after seeing it is always the same one.
+          */}
+          {counts.error > 0 && (
+            <div style={{ marginTop: 12 }}>
+              <ComplianceCoverageLine
+                n={counts.error}
+                label="checks not decided"
+                colour={c.pending}
+                onClick={onSelect ? () => onSelect('error') : undefined}
+              />
+              {counts.skip > 0 && (
+                <ComplianceCoverageLine n={counts.skip} label="checks not applicable" colour={c.text3} />
+              )}
+            </div>
+          )}
+        </div>
+      </div>
+    </Card>
+  )
+}
+
+/** The shape of the findings, in the severity colours the rows use. */
+function ComplianceSeverityBar({ counts }: { counts: ComplianceCounts }) {
+  const total = counts.blocking + counts.warning + counts.info
+  const segments = [
+    { label: 'Critical', n: counts.blocking, colour: c.danger },
+    { label: 'Warning', n: counts.warning, colour: c.pending },
+    { label: 'Info', n: counts.info, colour: c.text3 },
+  ]
+  return (
+    <div
+      style={{
+        display: 'flex', width: '100%', height: 8, borderRadius: 4,
+        overflow: 'hidden', background: c.track,
+      }}
+    >
+      {segments.map((seg, i) => (seg.n > 0 ? (
+        <Tooltip key={seg.label} title={`${seg.label}: ${seg.n.toLocaleString()}`}>
+          <div
+            className="slm-meter-seg"
+            style={{
+              width: `${(seg.n / (total || 1)) * 100}%`,
+              background: seg.colour,
+              transformOrigin: 'left',
+              animation: `slm-grow 420ms cubic-bezier(0.16,1,0.3,1) ${i * 60}ms both`,
+            }}
+          />
+        </Tooltip>
+      ) : null))}
+    </div>
+  )
+}
+
+/** The name of a zone within the posture band. */
+function ZoneLabel({ children, count }: { children: ReactNode; count?: ReactNode }) {
+  return (
+    <div style={{ marginBottom: 10 }}>
+      <FieldLabel count={count}>{children}</FieldLabel>
+    </div>
+  )
+}
+
+/**
+ * A proportion, as a sentence with a bar under it.
+ *
+ * Byte for byte the shape the Security tab's confidence zone uses, because the
+ * two zones answer the same question about two different denominators and a
+ * reader should be able to compare them without re-learning the drawing.
+ */
+function ComplianceMeter({ value, colour, headline, detail }: {
+  value: number
+  colour: string
+  headline: string
+  detail: string
+}) {
+  return (
+    <div>
+      <div
+        style={{
+          display: 'flex', alignItems: 'baseline', gap: 8, marginBottom: 6,
+          fontVariantNumeric: 'tabular-nums',
+        }}
+      >
+        <span style={{ fontSize: 13, fontWeight: 600, color: c.text }}>{headline}</span>
+        <span style={{ marginInlineStart: 'auto', fontSize: 12, fontWeight: 600, color: colour }}>
+          {value}%
+        </span>
+      </div>
+      <div style={{ height: 6, background: c.track, borderRadius: 3 }}>
+        <div
+          className="slm-meter-seg"
+          style={{
+            width: `${value}%`, height: '100%', borderRadius: 3, background: colour,
+            transformOrigin: 'left',
+            animation: 'slm-grow 420ms cubic-bezier(0.16,1,0.3,1) both',
+          }}
+        />
+      </div>
+      <Typography.Text type="secondary" style={{ fontSize: 11.5, display: 'block', marginTop: 5 }}>
+        {detail}
+      </Typography.Text>
+    </div>
+  )
+}
+
+/** One exception to full coverage: a count, a colour and what to call it. */
+function ComplianceCoverageLine({ n, label, colour, onClick }: {
+  n: number
+  label: string
+  colour: string
+  onClick?: () => void
+}) {
+  return (
+    <div
+      onClick={onClick}
+      style={{
+        display: 'flex', alignItems: 'center', gap: 8, marginTop: 4,
+        cursor: onClick ? 'pointer' : undefined,
+      }}
+    >
+      <span style={{ width: 6, height: 6, borderRadius: 3, background: colour, flexShrink: 0 }} />
+      <Typography.Text style={{ fontSize: 12 }}>
+        <strong style={{ fontVariantNumeric: 'tabular-nums' }}>{n.toLocaleString()}</strong>{' '}
+        <span style={{ color: c.text2 }}>{label}</span>
+      </Typography.Text>
+    </div>
   )
 }
 

@@ -1083,8 +1083,50 @@ chart's own defaults violate, and a template that does not parse.
 
 ### 14.1 Release page - a Compliance tab
 
-Beside the Security tab, in the same shape, because a reader has already learned
-that shape ([19](19-user-interface.md) §3).
+Beside the Security tab, in the **same layout**, because a reader has already
+learned that layout one tab over. The shared shape - the header row, the
+three-zone posture band, the findings card with its view switch and grouping -
+is specified in [19](19-user-interface.md) §3.4, and what follows is what
+compliance puts in it.
+
+```
+ Checked 12m ago · rulebook 0ec0ff69 · 73 checks · helm 3.16.3    [Rulebook] [Run log] [Re-check]
+┌──────────────────────┬────────────────────────────┬─────────────────────────────────┐
+│ COMPLIANCE           │ FINDINGS BY SEVERITY       │ CONFIDENCE                      │
+│ ● Not compliant      │ Critical            171    │ 82 of 95 charts rendered   86%  │
+│                      │ ████████████████████       │ ██████████████████░░░           │
+│  192                 │ Warning              21    │ 13 produced no objects          │
+│  findings            │ ██                         │                                 │
+│ ████████████▊        │ Info                  0    │ 3,336 of 4,321 decided     77%  │
+│ across 82 of 95      │ ───────────────────────    │ ███████████████░░░░░            │
+│ charts rendered      │ Checks passed     3,144    │ ● 949 checks not decided        │
+└──────────────────────┴────────────────────────────┴─────────────────────────────────┘
+┌──────────────────────────────────────────────────────────────────────────────────────┐
+│ [Findings (192)] [Charts (82/95)]                            [⤓ Download manifests]  │
+│ [search] [Unique checks (5)|All findings (171)] [Critical|Warning|Info|Passed|…] […]  │
+│ ┌ Check ──────────────┬───────┬ Affects ────────────┬ Kinds ─────┬ Owner ──────────┐ │
+│ │+ SEC-01  Critical   │ Fail  │ 44 places in 44 charts │ Deployment │ Vendor        │ │
+│ │  Containers do not run as root                                                    │ │
+│ │+ SUP-01  Critical   │ Fail  │ 36 places in 36 charts │ Deployment │ Values file   │ │
+│ └───────────────────────────────────────────────────────────────────────────────────┘ │
+└──────────────────────────────────────────────────────────────────────────────────────┘
+```
+
+**The grouping is the point.** 171 critical findings on a real orb are five
+rules. Expanding a row gives every occurrence - chart, template, resource,
+container, field, what was found - and clicking the check id opens the rule with
+all of them; clicking one occurrence opens that finding with the rendered
+manifest it was judged against (§14.2).
+
+**Owner is rolled up but never flattened.** A rule the vendor must fix in three
+charts and a values file can fix in two is *both*, and picking either would send
+half the work to the wrong person - which is the distinction the whole
+determinacy model exists to keep.
+
+**Warning is amber, not blue.** `warn` used to take the `review` tone, and blue
+beside red does not read as the middle of a three-step scale: it reads as a link
+or as something informational. Critical red, Warning amber, Info grey is the
+scale a reader already has, and it is the one the Security tab draws.
 
 ```
 ┌─────────────────────────────────────────────────────────────────────────┐

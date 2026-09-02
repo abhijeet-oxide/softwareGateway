@@ -201,6 +201,18 @@ export function SecurityTab({ product, reference, repository }: {
       </div>
 
       {/*
+        WHILE A SYNC IS GOING, THE SYNC IS THE WHOLE TAB.
+
+        It was not: the progress panel appeared above the summary band and the
+        findings tables, which stayed on screen showing the PREVIOUS sync's
+        answer. Every number under the bar was real and none of it was the
+        answer being fetched, and a page that redraws a stale total every second
+        beside a live progress bar is a page that gets the stale total quoted.
+
+        This is what the Compliance tab does with a running check, and for the
+        same reason. The last sync's results are one press away once this one
+        finishes; until then the honest thing on screen is the sync.
+
         THREE states, not two. A row marked `syncing` whose claim has stopped
         beating is not a sync in progress - it is a Coordinator that was killed
         mid-sync - and rendering the progress panel for it drew a bar at nothing
@@ -228,9 +240,11 @@ export function SecurityTab({ product, reference, repository }: {
             />
           )}
 
-      {data.sync.state === '' && data.sync.canSync && <NeverSynced onSync={startSync} pending={sync.isPending} />}
+      {!syncing && data.sync.state === '' && data.sync.canSync && (
+        <NeverSynced onSync={startSync} pending={sync.isPending} />
+      )}
 
-      {(data.sync.state === 'synced' || data.sync.syncedAt) && (
+      {!syncing && (data.sync.state === 'synced' || data.sync.syncedAt) && (
         <>
           <SummaryCards data={data} />
           <FindingsSection

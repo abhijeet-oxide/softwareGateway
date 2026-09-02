@@ -35,7 +35,65 @@ type Loader struct {
 	// HelmVersion is recorded on the release so a finding can say what
 	// produced it.
 	HelmVersion string
+
+	// Evidence bounds how much rendered text is kept so a finding can be shown
+	// against the manifest it came from. Zero uses the defaults; negative
+	// disables keeping any.
+	Evidence EvidenceBudget
+	// Keeper carries that budget ACROSS several Loads, for a caller that loads
+	// a release one chart directory at a time. Nil means this Load gets its own,
+	// which is right when the directory is the whole release.
+	Keeper *EvidenceKeeper
 }
+
+// EvidenceBudget bounds the rendered text a run keeps.
+//
+// # Why keeping it needs a budget at all
+//
+// The manifests are what makes a finding checkable rather than assertable, and
+// they are also the one part of a run whose size is set by the vendor. A chart
+// that renders four hundred ConfigMaps of embedded certificates produces
+// megabytes of YAML per release, and every release keeps its own copy.
+//
+// Two numbers rather than one, for the reason the fetch budgets take two: one
+// pathological chart and a release of four hundred ordinary ones are different
+// problems, and without the per-document cap the pathological one spends the
+// whole budget and every chart after it loses its evidence for an unrelated
+// reason.
+//
+// Over the cap, a document is kept TRUNCATED and says so, rather than dropped.
+// The first few thousand lines of a chart are still the answer for most of its
+// findings, and a finding past the cut is told that the evidence stops there
+// instead of being shown the wrong lines.
+type EvidenceBudget struct {
+	PerDocument int64
+	PerRelease  int64
+}
+
+// Defaults sized against what charts actually render to: a large one is a few
+// hundred kilobytes, and a release of a hundred fits inside the total with room
+// to spare.
+const (
+	DefaultEvidencePerDocument = 4 << 20
+	DefaultEvidencePerRelease  = 24 << 20
+)
+
+func (b EvidenceBudget) perDocument() int64 {
+	if b.PerDocument == 0 {
+		return DefaultEvidencePerDocument
+	}
+	return b.PerDocument
+}
+
+func (b EvidenceBudget) perRelease() int64 {
+	if b.PerRelease == 0 {
+		return DefaultEvidencePerRelease
+	}
+	return b.PerRelease
+}
+
+// off reports that this deployment does not want evidence kept at all.
+func (b EvidenceBudget) off() bool { return b.PerDocument < 0 || b.PerRelease < 0 }
 
 // Load walks a directory, renders every chart it finds, and returns the
 // release plus a determinacy probe over it.
@@ -70,9 +128,20 @@ func (l Loader) Load(ctx context.Context, dir string, base compliance.Address) (
 	var baseline, perturbed []compliance.Resource
 	probeUsable := l.Probe && l.HelmAvailable
 
+	keeper := l.Keeper
+	if keeper == nil {
+		keeper = NewEvidenceKeeper(l.Evidence)
+	}
+
 	for _, cd := range dirs {
-		chart, resources, alt, ok := l.loadChart(ctx, cd, base)
+		chart, manifests, resources, alt, ok := l.loadChart(ctx, cd, base)
 		rel.Charts = append(rel.Charts, chart)
+		// The stream, not the objects: a result's RenderedLine is an offset
+		// into this text, so slicing it per object would make every one of
+		// those offsets wrong.
+		keeper.Keep(&rel.Rendered, compliance.RenderedDoc{
+			Chart: chart.Name, ChartVersion: chart.Version,
+		}, manifests)
 		for i := range resources {
 			resources[i].Chart = chart
 		}
@@ -94,6 +163,10 @@ func (l Loader) Load(ctx context.Context, dir string, base compliance.Address) (
 		}
 		addr := base
 		addr.SourceFile = relative(dir, f)
+		// A manifest shipped as-is was never rendered, and the file IS the
+		// evidence - kept beside the charts so a finding against one is shown
+		// the same way as a finding against the other.
+		keeper.Keep(&rel.Rendered, compliance.RenderedDoc{SourceFile: addr.SourceFile}, body)
 		resources, _ := compliance.ParseManifests(body, addr)
 		rel.Resources = append(rel.Resources, resources...)
 		baseline = append(baseline, resources...)
@@ -109,7 +182,13 @@ func (l Loader) Load(ctx context.Context, dir string, base compliance.Address) (
 }
 
 // loadChart renders one chart, or records why it could not be.
-func (l Loader) loadChart(ctx context.Context, chartDir string, base compliance.Address) (*compliance.Chart, []compliance.Resource, []compliance.Resource, bool) {
+//
+// Returns the rendered stream as well as the objects parsed out of it: it is
+// the evidence a finding is shown against, and it is the unit the line numbers
+// on those objects are counted in.
+func (l Loader) loadChart(ctx context.Context, chartDir string, base compliance.Address) (
+	*compliance.Chart, []byte, []compliance.Resource, []compliance.Resource, bool,
+) {
 	meta, metaErr := ReadChartMeta(chartDir)
 	chart := &compliance.Chart{
 		Name:         meta.Name,
@@ -124,28 +203,28 @@ func (l Loader) loadChart(ctx context.Context, chartDir string, base compliance.
 	if metaErr != nil {
 		chart.RenderStatus = compliance.RenderFailed
 		chart.RenderError = metaErr.Error()
-		return chart, nil, nil, false
+		return chart, nil, nil, nil, false
 	}
 
 	values, valErr := ReadValues(chartDir)
 	if valErr != nil {
 		chart.RenderStatus = compliance.RenderFailed
 		chart.RenderError = valErr.Error()
-		return chart, nil, nil, false
+		return chart, nil, nil, nil, false
 	}
 	chart.Values = values
 
 	if !l.HelmAvailable {
 		chart.RenderStatus = compliance.RenderSkipped
 		chart.RenderError = ErrHelmUnavailable.Error()
-		return chart, nil, nil, false
+		return chart, nil, nil, nil, false
 	}
 
 	out, err := l.Helm.Render(ctx, chartDir)
 	if err != nil {
 		chart.RenderStatus = compliance.RenderFailed
 		chart.RenderError = err.Error()
-		return chart, nil, nil, false
+		return chart, nil, nil, nil, false
 	}
 
 	addr := base
@@ -168,7 +247,7 @@ func (l Loader) loadChart(ctx context.Context, chartDir string, base compliance.
 			ok = true
 		}
 	}
-	return chart, resources, alt, ok
+	return chart, out.Manifests, resources, alt, ok
 }
 
 // discoverCharts finds chart directories, without descending into their

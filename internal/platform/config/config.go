@@ -171,6 +171,23 @@ type ComplianceConfig struct {
 	// report is worse than a failed one, because it looks complete.
 	MaxResults int `koanf:"maxResults"`
 
+	// EvidencePerDocument and EvidencePerRelease bound the rendered manifests a
+	// run keeps so a finding can be SHOWN against the text it came from.
+	//
+	// Two numbers for the same reason MaxChartBytes and MaxReleaseBytes are
+	// two: one pathological chart and four hundred ordinary ones are different
+	// problems, and without the per-document cap the pathological one spends
+	// the whole budget and every chart after it loses its evidence for an
+	// unrelated reason. Over the cap a document is kept TRUNCATED and says so.
+	//
+	// Negative turns the keeping off entirely, for a deployment that will not
+	// hold vendor manifests in its database. Findings are unaffected - the
+	// manifests are what a finding is displayed against, never what it is
+	// derived from - and the interface says the evidence was not kept rather
+	// than showing an empty document.
+	EvidencePerDocument int64 `koanf:"evidencePerDocument"`
+	EvidencePerRelease  int64 `koanf:"evidencePerRelease"`
+
 	// RenderTimeout bounds one chart's render, so a template loop that does
 	// not terminate cannot take the Coordinator with it.
 	RenderTimeout time.Duration `koanf:"renderTimeout"`
@@ -589,6 +606,12 @@ func Defaults() SystemConfig {
 				// The limit is well above that so it is reached only by
 				// something pathological, and a run that reaches it says so.
 				MaxResults: 200_000,
+
+				// Sized against what charts actually render to: a large one is
+				// a few hundred kilobytes of YAML, so a release of a hundred
+				// fits inside the total with room to spare.
+				EvidencePerDocument: 4 << 20,
+				EvidencePerRelease:  24 << 20,
 
 				// Ninety seconds per chart. A chart that takes longer than
 				// that to render is not a chart that is nearly done.

@@ -37,6 +37,13 @@ type Run struct {
 	// Truncated says the result list was cut short. A silently shortened
 	// report is worse than a failed one, because it looks complete.
 	Truncated bool `json:"truncated,omitempty"`
+
+	// Rendered is the manifest text the results were judged against, so a
+	// reader can verify a finding instead of trusting it. Excluded from this
+	// type's JSON deliberately: it is megabytes, it is served by its own
+	// endpoints a document at a time, and a report that inlined it would be a
+	// report nothing can open.
+	Rendered []RenderedDoc `json:"-"`
 }
 
 // ChartStatus is one chart's contribution to a run.
@@ -90,6 +97,8 @@ func Execute(ctx context.Context, eng *Engine, rel *Release, started time.Time) 
 		return nil, err
 	}
 	run.Truncated = errors.Is(err, ErrTruncated)
+
+	run.Rendered = rel.Rendered
 
 	results = append(results, undecidedFor(eng.Catalog, rel)...)
 	Sort(results)

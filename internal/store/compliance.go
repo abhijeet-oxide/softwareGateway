@@ -11,99 +11,116 @@ import (
 	"github.com/abhijeet-oxide/softwareGateway/internal/compliance"
 )
 
-// ChartArtifact is one Helm chart inside a release, with the one blob that
-// holds it.
+// ChartCandidate is one artifact of a release, with the evidence needed to say
+// what it is and the blob that holds it.
 //
-// # Why the store answers this rather than the caller assembling it
+// # Why this returns candidates rather than charts
 //
-// The same argument FileInPackage makes. A compliance run needs chart bytes,
-// and reading bytes means fetching a blob from a vendor registry on a
-// credentialed connection. If the caller chose the digest, the endpoint behind
-// it would be a proxy for arbitrary blobs - a request forgery with credentials
-// attached, and one that would happily stream a 40 GB image layer through a
-// Coordinator that is not allowed to touch image bytes at all.
+// It used to return charts, selected in SQL by the config media type Helm
+// declares. That was wrong twice over, and both ways are documented elsewhere
+// in this repository as bugs that already shipped once:
 //
-// So the digest is not a parameter here either. This query returns ONLY the
-// content layer of an artifact whose config media type says it is a Helm
-// chart, for one package the caller has already resolved. There is no
-// argument that makes it return anything else.
-type ChartArtifact struct {
+//   - An index's children are recorded from what the index LISTED, without
+//     fetching each child, so the config media type - the field that normally
+//     tells a chart from an image - is not there to compare against.
+//   - A NEAR orb's charts are plain OCI image manifests carrying an ordinary
+//     image config. Media type, artifact type and config media type are
+//     IDENTICAL for its charts and its images, and the only evidence anywhere
+//     is the annotation the vendor wrote.
+//
+// So a release of 95 charts answered "no Helm charts", which is the same
+// failure that once reported an orb of 157 images and 97 charts as 254 images.
+//
+// The fix is not a cleverer query. It is to stop having a second opinion:
+// deciding what an artifact IS belongs to vendors.Classifier, which the
+// artifact listing, the transfer breakdown and the comparison all already use.
+// The store hands out the evidence and the caller classifies, so this reader
+// cannot disagree with the page a person was just looking at.
+type ChartCandidate struct {
 	ArtifactID int64
-	// Digest of the chart MANIFEST, which is the artifact's identity and what
-	// a finding's address records.
+	// Digest of the MANIFEST, which is the artifact's identity and what a
+	// finding's address records.
 	Digest string
-	// LayerDigest is the blob holding the chart tarball, and LayerSize is what
-	// it weighs. The size is what lets a run refuse a chart before fetching it
-	// rather than after.
+
+	// The classification evidence, in the order vendors.Classifier takes it.
+	MediaType       string
+	ArtifactType    string
+	ConfigMediaType string
+	Annotations     map[string]string
+
+	// LayerDigest is the blob holding the content, and LayerSize is what it
+	// weighs. The size is what lets a run refuse an artifact BEFORE fetching
+	// it rather than after - the bound that keeps a mislabelled 40 GB layer
+	// out of the Coordinator even if something upstream called it a chart.
 	LayerDigest string
 	LayerSize   int64
-	MediaType   string
-	// Ref is the repository path the chart sits at, from the artifact's
-	// annotations. Part of what a vendor pulls to reproduce a finding.
+	LayerCount  int
+	// Ref is the repository path the artifact sits at, from its annotations.
 	Ref string
 }
 
-// helmConfigMediaType is what makes an ordinary image manifest a Helm chart.
+// ChartCandidates returns every artifact of a package that could hold a chart,
+// with the evidence needed to decide.
 //
-// Helm predates OCI 1.1's artifactType, so a chart is an image manifest whose
-// CONFIG declares what it is. A classifier reading only the top-level fields
-// sees an image manifest with nothing to distinguish it - which is how a
-// vendor's 97 charts were once reported as images.
-const helmConfigMediaType = "application/vnd.cncf.helm.config.v1+json"
-
-// ChartArtifacts returns every Helm chart in a package, with its content blob.
+// # What is excluded here, and why that is still the safety boundary
 //
-// Charts only, and their layers only. An image's layers are not reachable
-// through this query at all, which is the property that keeps the founding
-// invariant intact: the Coordinator may read a few megabytes of chart YAML and
-// must never read a container image.
-func (p *Packages) ChartArtifacts(ctx context.Context, packageID int64) ([]ChartArtifact, error) {
-	// The chart's config blob identifies it; the chart's layer holds it. Both
-	// are rows of artifact_blobs for the same artifact, distinguished by kind,
-	// so the join is to the same table twice.
+// Indexes, and anything with no layer at all. What remains is manifests with
+// content, which is the set a classifier has to choose from anyway. The
+// protection against streaming an image layer through the Coordinator is
+// therefore two things working together and neither alone: the caller
+// classifies with the product's own classifier, and the fetcher enforces a
+// per-artifact byte budget before it opens the blob. A chart is megabytes; the
+// budget refuses anything that is not.
+func (p *Packages) ChartCandidates(ctx context.Context, packageID int64) ([]ChartCandidate, error) {
+	// The config blob's media type is LEFT joined: for an index's children it
+	// is legitimately absent, and an inner join would silently drop exactly the
+	// artifacts this exists to find.
 	query := p.dialect.Rewrite(`
-		SELECT pa.id, pa.digest, layer.digest, COALESCE(b.size_bytes, 0),
-		       COALESCE(b.media_type, ''), COALESCE(pa.annotations, '')
+		SELECT pa.id, pa.digest, pa.media_type, COALESCE(pa.artifact_type, ''),
+		       COALESCE(cfgb.media_type, ''), COALESCE(pa.annotations, ''),
+		       layer.digest, COALESCE(b.size_bytes, 0), layer.ordinal
 		  FROM package_artifacts pa
-		  JOIN artifact_blobs cfg   ON cfg.artifact_id = pa.id AND cfg.kind = 'config'
-		  JOIN blobs cfgb           ON cfgb.digest = cfg.digest
 		  JOIN artifact_blobs layer ON layer.artifact_id = pa.id AND layer.kind = 'layer'
 		  LEFT JOIN blobs b         ON b.digest = layer.digest
+		  LEFT JOIN artifact_blobs cfg ON cfg.artifact_id = pa.id AND cfg.kind = 'config'
+		  LEFT JOIN blobs cfgb         ON cfgb.digest = cfg.digest
 		 WHERE pa.package_id = ?
-		   AND cfgb.media_type = ?
 		 ORDER BY pa.id, layer.ordinal`)
 
-	rows, err := p.db.QueryContext(ctx, query, packageID, helmConfigMediaType)
+	rows, err := p.db.QueryContext(ctx, query, packageID)
 	if err != nil {
-		return nil, fmt.Errorf("list chart artifacts for package %d: %w", packageID, err)
+		return nil, fmt.Errorf("list chart candidates for package %d: %w", packageID, err)
 	}
 	defer func() { _ = rows.Close() }()
 
-	var out []ChartArtifact
-	seen := map[int64]bool{}
+	var out []ChartCandidate
+	byID := map[int64]int{}
 	for rows.Next() {
 		var (
-			c           ChartArtifact
+			c           ChartCandidate
 			annotations []byte
+			ordinal     int
 		)
-		if err := rows.Scan(&c.ArtifactID, &c.Digest, &c.LayerDigest,
-			&c.LayerSize, &c.MediaType, &annotations); err != nil {
-			return nil, fmt.Errorf("scan chart artifact: %w", err)
+		if err := rows.Scan(&c.ArtifactID, &c.Digest, &c.MediaType, &c.ArtifactType,
+			&c.ConfigMediaType, &annotations, &c.LayerDigest, &c.LayerSize, &ordinal); err != nil {
+			return nil, fmt.Errorf("scan chart candidate: %w", err)
 		}
-		// A chart has exactly one content layer. If a manifest declares more,
-		// the first is the chart and the rest are provenance files; taking only
-		// the first keeps this from unpacking something that is not a chart.
-		if seen[c.ArtifactID] {
+		// A packaged chart is one layer. An artifact with several is counted so
+		// the caller can say so rather than silently unpacking the first of
+		// twelve and reporting on a fraction of what shipped.
+		if i, seen := byID[c.ArtifactID]; seen {
+			out[i].LayerCount++
 			continue
 		}
-		seen[c.ArtifactID] = true
-
 		if len(annotations) > 0 {
 			var a map[string]string
 			if err := json.Unmarshal(annotations, &a); err == nil {
+				c.Annotations = a
 				c.Ref = a[annotationRefName]
 			}
 		}
+		c.LayerCount = 1
+		byID[c.ArtifactID] = len(out)
 		out = append(out, c)
 	}
 	return out, rows.Err()
@@ -149,6 +166,22 @@ type ComplianceChartRow struct {
 	Status         string
 	Error          string
 	Resources      int
+}
+
+// ComplianceRenderedRow is one document a run judged, kept so a finding can be
+// shown against the manifest it came from rather than only asserted.
+//
+// See db/migrations/postgres/00039_compliance_evidence.sql for why the unit is
+// a whole chart stream and why only the latest run keeps its copy.
+type ComplianceRenderedRow struct {
+	Seq          int
+	Chart        string
+	ChartVersion string
+	SourceFile   string
+	Content      string
+	Lines        int
+	Bytes        int
+	Truncated    bool
 }
 
 // ComplianceResultRow is one check's judgement about one subject.
@@ -206,7 +239,15 @@ type ComplianceResultRow struct {
 // is what distinguishes a run in progress from a Coordinator that died holding
 // one.
 func (p *Packages) StartComplianceRun(ctx context.Context, id string, packageID int64, trigger string) error {
-	now := time.Now().UTC()
+	// Written as TEXT in the canonical format, not as a time.Time.
+	//
+	// SQLite stores these columns as TEXT and the driver renders a bound
+	// time.Time with Go's own String() layout - "2026-09-02 03:49:00.6 +0000
+	// UTC" - which nothing reads back. Every timestamp then came back as the
+	// zero value, silently: a finished run looked like one that had never
+	// finished. securityTime is the format the rest of this file's neighbours
+	// already write, so the two agree.
+	now := securityTime(time.Now().UTC())
 	tx, err := p.db.BeginTx(ctx, nil)
 	if err != nil {
 		return fmt.Errorf("begin compliance run: %w", err)
@@ -234,7 +275,7 @@ func (p *Packages) StartComplianceRun(ctx context.Context, id string, packageID 
 func (p *Packages) BeatComplianceRun(ctx context.Context, id string) error {
 	_, err := p.db.ExecContext(ctx, p.dialect.Rewrite(
 		`UPDATE compliance_runs SET heartbeat_at = ? WHERE id = ? AND state = 'running'`),
-		time.Now().UTC(), id)
+		securityTime(time.Now().UTC()), id)
 	if err != nil {
 		return fmt.Errorf("heartbeat compliance run %s: %w", id, err)
 	}
@@ -268,6 +309,7 @@ func (p *Packages) ComplianceRunning(ctx context.Context, packageID int64) (stri
 func (p *Packages) FinishComplianceRun(
 	ctx context.Context, run ComplianceRunRow,
 	charts []ComplianceChartRow, results []ComplianceResultRow,
+	rendered []ComplianceRenderedRow,
 ) error {
 	tx, err := p.db.BeginTx(ctx, nil)
 	if err != nil {
@@ -275,7 +317,7 @@ func (p *Packages) FinishComplianceRun(
 	}
 	defer func() { _ = tx.Rollback() }()
 
-	finished := time.Now().UTC()
+	finished := securityTime(time.Now().UTC())
 	if _, err := tx.ExecContext(ctx, p.dialect.Rewrite(`
 		UPDATE compliance_runs
 		   SET state = ?, error = ?, verdict = ?,
@@ -325,13 +367,45 @@ func (p *Packages) FinishComplianceRun(
 			r.SourceFile, r.RenderedLine, r.APIVersion, r.Kind, r.Namespace, r.Name,
 			r.Container, r.ContainerType, r.Locus,
 			r.Observed, r.Expected, r.Message, r.Error,
-			r.Waiver, r.WaiverExpires, r.Fingerprint); err != nil {
+			r.Waiver, timeOrNil(r.WaiverExpires), r.Fingerprint); err != nil {
 			return fmt.Errorf("insert compliance result %d (%s): %w", r.Seq, r.CheckID, err)
 		}
 	}
 
+	// THE EVIDENCE, and the reclaiming of the evidence it supersedes.
+	//
+	// This is the one part of a run whose size the vendor sets - a chart that
+	// renders four hundred ConfigMaps of embedded certificates is megabytes of
+	// YAML - and without the delete every run of every release would keep its
+	// own copy forever. The interface reads the latest run and nothing else
+	// does, so the older copies are unreachable before they are unwanted.
+	//
+	// The older runs' RESULTS are untouched. What is reclaimed is the manifests
+	// behind them, and a run whose evidence has gone says so rather than
+	// showing an empty document.
+	if _, err := tx.ExecContext(ctx, p.dialect.Rewrite(`
+		DELETE FROM compliance_rendered
+		 WHERE run_id IN (SELECT id FROM compliance_runs
+		                   WHERE package_id = ? AND id <> ?)`),
+		run.PackageID, run.ID); err != nil {
+		return fmt.Errorf("reclaim superseded compliance evidence: %w", err)
+	}
+
+	for _, d := range rendered {
+		if _, err := tx.ExecContext(ctx, p.dialect.Rewrite(`
+			INSERT INTO compliance_rendered
+			  (run_id, seq, chart, chart_version, source_file, content,
+			   line_count, byte_count, truncated)
+			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`),
+			run.ID, d.Seq, d.Chart, d.ChartVersion, d.SourceFile, d.Content,
+			d.Lines, d.Bytes, d.Truncated); err != nil {
+			return fmt.Errorf("insert compliance evidence for %s%s: %w",
+				d.Chart, d.SourceFile, err)
+		}
+	}
+
 	if err := upsertPackageCompliance(ctx, tx, p.dialect, run.PackageID, run.ID,
-		run.State, run.Verdict, run.Blocking, run.Warning, run.Errors, run.Pass, &finished); err != nil {
+		run.State, run.Verdict, run.Blocking, run.Warning, run.Errors, run.Pass, finished); err != nil {
 		return err
 	}
 	return tx.Commit()
@@ -350,7 +424,7 @@ func (p *Packages) FailComplianceRun(ctx context.Context, id string, packageID i
 	}
 	defer func() { _ = tx.Rollback() }()
 
-	finished := time.Now().UTC()
+	finished := securityTime(time.Now().UTC())
 	if _, err := tx.ExecContext(ctx, p.dialect.Rewrite(`
 		UPDATE compliance_runs
 		   SET state = 'failed', error = ?, finished_at = ?, heartbeat_at = NULL
@@ -358,7 +432,7 @@ func (p *Packages) FailComplianceRun(ctx context.Context, id string, packageID i
 		return fmt.Errorf("fail compliance run: %w", err)
 	}
 	if err := upsertPackageCompliance(ctx, tx, p.dialect, packageID, id,
-		ComplianceFailed, "", 0, 0, 0, 0, &finished); err != nil {
+		ComplianceFailed, "", 0, 0, 0, 0, finished); err != nil {
 		return err
 	}
 	return tx.Commit()
@@ -368,7 +442,7 @@ func (p *Packages) FailComplianceRun(ctx context.Context, id string, packageID i
 func upsertPackageCompliance(
 	ctx context.Context, tx *sql.Tx, d Dialect,
 	packageID int64, runID, state, verdict string,
-	blocking, warning, errCount, pass int, checkedAt *time.Time,
+	blocking, warning, errCount, pass int, checkedAt any,
 ) error {
 	query := `
 		INSERT INTO package_compliance
@@ -450,5 +524,14 @@ func (p *Packages) RecordComplianceRun(ctx context.Context, runID string, packag
 			Fingerprint: r.Fingerprint(),
 		})
 	}
-	return p.FinishComplianceRun(ctx, row, charts, results)
+	rendered := make([]ComplianceRenderedRow, 0, len(run.Rendered))
+	for i, d := range run.Rendered {
+		rendered = append(rendered, ComplianceRenderedRow{
+			Seq: i, Chart: d.Chart, ChartVersion: d.ChartVersion,
+			SourceFile: d.SourceFile, Content: string(d.Content),
+			Lines: d.Lines, Bytes: d.Bytes, Truncated: d.Truncated,
+		})
+	}
+
+	return p.FinishComplianceRun(ctx, row, charts, results, rendered)
 }

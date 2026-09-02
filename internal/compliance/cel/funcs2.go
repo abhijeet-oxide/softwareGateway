@@ -252,29 +252,37 @@ func bindings2(idx *compliance.Index) map[string]impl {
 	unary([]string{FnExtendedRes, "extendedresource_string"}, IsExtendedResource)
 	unary([]string{FnOperational, "operationalpath_string"}, IsOperationalPath)
 
-	add([]string{FnAllLabels, "alllabels_dyn"}, func(args ...ref.Val) ref.Val {
-		out := map[string]any{}
-		if len(args) != 1 {
-			return types.DefaultTypeAdapter.NativeToValue(out)
-		}
-		obj, ok := native(args[0]).(map[string]any)
-		if !ok {
-			return types.DefaultTypeAdapter.NativeToValue(out)
-		}
-		for k, v := range stringMapField(obj, "metadata", "labels") {
-			out[k] = v
-		}
-		// The pod template's, wherever this kind keeps it - so a CronJob's are
-		// included too.
-		tmp := compliance.Resource{Object: obj}
-		if path := compliance.PodSpecPath(tmp.Kind()); len(path) > 1 {
-			meta := append(append([]string{}, path[:len(path)-1]...), "metadata", "labels")
-			for k, v := range stringMapField(obj, meta...) {
+	// The object's own metadata merged with its pod template's, for whichever
+	// of the two maps is asked for. The pod template's wins where both carry a
+	// key, which is the direction that matters: the template is what the pod
+	// actually gets.
+	mergedMeta := func(field string) func(args ...ref.Val) ref.Val {
+		return func(args ...ref.Val) ref.Val {
+			out := map[string]any{}
+			if len(args) != 1 {
+				return types.DefaultTypeAdapter.NativeToValue(out)
+			}
+			obj, ok := native(args[0]).(map[string]any)
+			if !ok {
+				return types.DefaultTypeAdapter.NativeToValue(out)
+			}
+			for k, v := range stringMapField(obj, "metadata", field) {
 				out[k] = v
 			}
+			// Wherever this kind keeps its pod template - so a CronJob's are
+			// included too.
+			tmp := compliance.Resource{Object: obj}
+			if path := compliance.PodSpecPath(tmp.Kind()); len(path) > 1 {
+				meta := append(append([]string{}, path[:len(path)-1]...), "metadata", field)
+				for k, v := range stringMapField(obj, meta...) {
+					out[k] = v
+				}
+			}
+			return types.DefaultTypeAdapter.NativeToValue(out)
 		}
-		return types.DefaultTypeAdapter.NativeToValue(out)
-	})
+	}
+	add([]string{FnAllLabels, "alllabels_dyn"}, mergedMeta("labels"))
+	add([]string{FnAllAnnots, "allannotations_dyn"}, mergedMeta("annotations"))
 
 	add([]string{FnRuleGrants, "rulegrants_dyn_string_list"}, func(args ...ref.Val) ref.Val {
 		if len(args) != 3 {

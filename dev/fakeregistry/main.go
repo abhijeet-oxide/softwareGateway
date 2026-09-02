@@ -76,6 +76,23 @@ var catalogue = map[string][]release{
 		{"23.5.0", 52, nokia(5)},
 		{"23.4.3", 120, nokia(3)},
 	},
+	// A NEAR orb, and the reason it is here.
+	//
+	// Every other repository above publishes conformantly: a chart declares
+	// itself with the Helm config media type, and the OCI rules are enough. A
+	// NEAR orb's charts are plain image manifests carrying an ORDINARY IMAGE
+	// CONFIG - media type, artifact type and config media type are identical
+	// for its charts and its images - and the only evidence anywhere is the
+	// annotation the vendor wrote on the index's children.
+	//
+	// Without one of these in the estate, every reader that classifies
+	// artifacts is exercised only on the easy path. A compliance run selecting
+	// charts by config media type passed every test here and answered "this
+	// release ships no Helm charts" for a real orb of ninety-five.
+	"orbs/cfx-5000-k8s": {
+		{"orb_24.7.3099", 7, orb(9)},
+		{"orb_24.6.2871", 40, orb(7)},
+	},
 }
 
 func mavenir(n int) []component {
@@ -108,6 +125,23 @@ func ericsson(n int) []component {
 	return all[:min(n, len(all))]
 }
 
+// orb is a NEAR-shaped release: the same mix of charts and images as any other,
+// published so that only the vendor annotation tells them apart.
+func orb(n int) []component {
+	all := []component{
+		{"cfx-amf", "Access & Mobility Function", 5},
+		{"cfx-smf", "Session Management Function", 5},
+		{"cfx-upf", "User Plane Function", 6},
+		{"cfx-nrf", "Network Repository Function", 3},
+		{"cfx-core", "Umbrella Helm chart", 1},
+		{"cfx-crds", "Custom resource definitions", 1},
+		{"cfx-network", "Secondary network attachments", 1},
+		{"cfx-observability", "Metrics and tracing", 1},
+		{"cfx-operator", "Kubernetes operator", 4},
+	}
+	return all[:min(n, len(all))]
+}
+
 func nokia(n int) []component {
 	all := []component{
 		{"cmm-mme", "Mobility Management Entity", 5},
@@ -131,7 +165,8 @@ var hosts = []struct {
 		"registry.mavenir.example.com",
 		"registry.ericsson.example.com",
 		"registry.nokia.example.com",
-	}, []string{"mavenir/converged-core", "ericsson/cloud-ran", "nokia/cmm"}},
+		"registry.near.example.com",
+	}, []string{"mavenir/converged-core", "ericsson/cloud-ran", "nokia/cmm", "orbs/cfx-5000-k8s"}},
 	{":9444", []string{"artifactory.internal.example.com"}, nil},
 }
 
@@ -226,11 +261,21 @@ func seed(reg *fakeregistry.Registry, repos []string) {
 				// can render it and the compliance run has something to
 				// judge. Everything else is filler, because nothing else
 				// reads the bytes.
+				//
+				// A NEAR repository publishes its charts as ORDINARY IMAGE
+				// MANIFESTS - AddImage, not AddChart - so the config media
+				// type says "image config" and the annotation below is the
+				// only thing that says otherwise. That is the whole point of
+				// having one of these in the estate.
 				var digest string
-				if comp.layers == 1 {
-					digest = reg.AddChart(repo, "", chartTarball(comp.name, rel.tag))
-				} else {
+				switch {
+				case comp.layers != 1:
 					digest = reg.AddImage(repo, "", layers...)
+				case isNEAR(repo):
+					chart := fakeregistry.NewLayer(string(chartTarball(comp.name, rel.tag)))
+					digest = reg.AddImage(repo, "", chart)
+				default:
+					digest = reg.AddChart(repo, "", chartTarball(comp.name, rel.tag))
 				}
 				raw, ok := reg.ManifestBytes(repo, digest)
 				if !ok {
@@ -238,15 +283,11 @@ func seed(reg *fakeregistry.Registry, repos []string) {
 				}
 
 				children = append(children, map[string]any{
-					"mediaType": "application/vnd.oci.image.manifest.v1+json",
-					"digest":    digest,
-					"size":      len(raw),
-					"platform":  map[string]any{"os": "linux", "architecture": "amd64"},
-					"annotations": map[string]string{
-						"org.opencontainers.image.ref.name": repo + "/" + comp.name + ":" + rel.tag,
-						"org.opencontainers.image.title":    comp.title,
-						"org.opencontainers.image.version":  rel.tag,
-					},
+					"mediaType":   "application/vnd.oci.image.manifest.v1+json",
+					"digest":      digest,
+					"size":        len(raw),
+					"platform":    map[string]any{"os": "linux", "architecture": "amd64"},
+					"annotations": orbAnnotations(repo, comp, rel),
 				})
 			}
 
@@ -359,3 +400,28 @@ func selfSigned(names []string) (tls.Certificate, error) {
 }
 
 var _ = os.Exit
+
+// isNEAR reports whether a repository publishes the NEAR way.
+func isNEAR(repo string) bool { return strings.HasPrefix(repo, "orbs/") }
+
+// orbAnnotations are the per-child annotations on an index.
+//
+// For a NEAR repository this includes `com.nokia.ncd.orb.type`, which is the
+// ONLY evidence distinguishing a chart from an image there - discovery records
+// what the index listed without fetching each child, so the config media type
+// is not available at that point either.
+func orbAnnotations(repo string, comp component, rel release) map[string]string {
+	out := map[string]string{
+		"org.opencontainers.image.ref.name": repo + "/" + comp.name + ":" + rel.tag,
+		"org.opencontainers.image.title":    comp.title,
+		"org.opencontainers.image.version":  rel.tag,
+	}
+	if isNEAR(repo) {
+		if comp.layers == 1 {
+			out["com.nokia.ncd.orb.type"] = "helmchart"
+		} else {
+			out["com.nokia.ncd.orb.type"] = "cnfimage"
+		}
+	}
+	return out
+}

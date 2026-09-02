@@ -11,6 +11,12 @@ spec:
   template:
     metadata: {labels: {app.kubernetes.io/name: unspread}}
     spec:
+      tolerations:
+        # The node is out of memory and this pod insists on landing there
+        # anyway, with nothing anywhere saying why.
+        - {key: node.kubernetes.io/memory-pressure, operator: Exists, effect: NoSchedule}
+        # Bounded, which is the shape SCH-07 asks for.
+        - {key: node.kubernetes.io/not-ready, operator: Exists, effect: NoExecute, tolerationSeconds: 300}
       containers:
         - name: app
           image: registry.acme.example/bad/app@sha256:aaaaaaaa11111111aaaaaaaa11111111aaaaaaaa11111111aaaaaaaa11111111
@@ -26,6 +32,8 @@ spec:
   template:
     metadata: {labels: {app.kubernetes.io/name: loose-skew, app.kubernetes.io/version: 1.4.2}}
     spec:
+      tolerations:
+        - {operator: Exists}
       topologySpreadConstraints:
         - topologyKey: topology.kubernetes.io/zone
           maxSkew: 3
@@ -52,8 +60,19 @@ spec:
   replicas: 3
   selector: {matchLabels: {app.kubernetes.io/name: overconstrained}}
   template:
-    metadata: {labels: {app.kubernetes.io/name: overconstrained}}
+    metadata:
+      labels: {app.kubernetes.io/name: overconstrained}
+      annotations:
+        compliance.softwaregateway.io/toleration-rationale: >-
+          Collects kernel logs off nodes that are already under disk pressure,
+          which is the condition the logs are needed for. Approved by
+          platform-sre 2026-04-11.
     spec:
+      tolerations:
+        # Declared above, so this one is allowed.
+        - {key: node.kubernetes.io/disk-pressure, operator: Exists, effect: NoSchedule}
+        # And this one is not bounded, so it never gives the node back.
+        - {key: node.kubernetes.io/unreachable, operator: Exists, effect: NoExecute}
       affinity:
         nodeAffinity:
           requiredDuringSchedulingIgnoredDuringExecution:

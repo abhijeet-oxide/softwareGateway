@@ -57,6 +57,8 @@ stays recognisable.
 | SCH-05 | T1-R | v1 | warn | `requiredDuringScheduling` node affinity does not match on `topology.kubernetes.io/zone` with literal zone names. |
 | SCH-06 | T1-R | v1.1 | warn | A pod that targets a node pool (a `nodeSelector` or required node affinity on any key other than the well-known OS/arch keys) also declares at least one `toleration`. The *matching* of toleration to taint is a cluster fact and is `T2`; the absence of any toleration at all is not. |
 | SCH-07 | T2 | - | block | "Sufficient for the stated failure tolerance" needs the stated tolerance. Partially covered by SCH-01 and RES-04. |
+| SCH-08 | T1-R | v1 | block | No pod spec tolerates a **NoSchedule node-pressure taint** (`node.kubernetes.io/memory-pressure`, `disk-pressure`, `pid-pressure`, `network-unavailable`, `unschedulable`) unless the workload or its pod template carries a `compliance.softwaregateway.io/toleration-rationale` annotation with a non-empty value. A toleration with no `key` (`{operator: Exists}`) tolerates all of them and counts. The exception exists because a node agent may legitimately have to run on a node under pressure - a DaemonSet collecting logs off a failing node is the usual one - and an undeclared toleration is indistinguishable from a mistake. |
+| SCH-09 | T1-R | v1 | warn | Every toleration of `node.kubernetes.io/not-ready` or `node.kubernetes.io/unreachable` on `NoExecute` sets `tolerationSeconds`. Kubernetes supplies both with 300s when a chart says nothing; declaring them **without** a bound replaces that default with an indefinite one, and pods stay bound to a node that has stopped answering. A toleration with no `key` covers both and counts. |
 
 ### 2.2 Disruption & Availability (PDB)
 

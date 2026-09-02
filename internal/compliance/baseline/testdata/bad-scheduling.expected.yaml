@@ -11,3 +11,13 @@ findings:
   - {check: SCH-03, kind: Deployment, name: overconstrained}
   # Required affinity naming literal zones the target cluster may not have.
   - {check: SCH-05, kind: Deployment, name: overconstrained}
+  # Tolerates memory-pressure on NoSchedule with no rationale annotation: this
+  # pod is scheduled onto a node that has already said it is out of memory.
+  - {check: SCH-08, kind: Deployment, name: unspread}
+  # The blanket toleration - no key, no effect - which tolerates every taint
+  # including all the pressure ones, and expires from none of them.
+  - {check: SCH-08, kind: Deployment, name: loose-skew}
+  - {check: SCH-09, kind: Deployment, name: loose-skew}
+  # Declares its disk-pressure toleration (so SCH-08 passes) and then tolerates
+  # unreachable forever.
+  - {check: SCH-09, kind: Deployment, name: overconstrained}

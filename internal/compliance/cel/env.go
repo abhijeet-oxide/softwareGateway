@@ -93,6 +93,7 @@ const (
 	FnOperational  = "operationalPath"
 	FnRuleGrants   = "ruleGrants"
 	FnAllLabels    = "allLabels"
+	FnAllAnnots    = "allAnnotations"
 )
 
 // costLimit bounds any single evaluation.
@@ -268,6 +269,14 @@ func newEnv(idx *compliance.Index) (*celgo.Env, error) {
 		// generate.
 		celgo.Function(FnAllLabels,
 			overload("alllabels_dyn", []*celgo.Type{dyn}, celgo.MapType(str, str))),
+		// allAnnotations() is the same reading for annotations, and it exists
+		// because that is where a chart DECLARES things: a rationale for a
+		// toleration the standard forbids by default is written as an
+		// annotation, and a chart may reasonably write it on the controller or
+		// on the pod template. A check that read only one of the two would
+		// reject a declaration that is plainly there.
+		celgo.Function(FnAllAnnots,
+			overload("allannotations_dyn", []*celgo.Type{dyn}, celgo.MapType(str, str))),
 
 		// Version comparison, returning -1, 0 or 1. Semver rather than string
 		// order, because "1.10.0" sorts before "1.9.0" as a string and a check

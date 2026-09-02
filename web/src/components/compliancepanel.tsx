@@ -8,7 +8,8 @@ import {
 import { Table as DataTable } from '../tablekit'
 import { LoadingOutlined } from '../icons'
 import {
-  useCancelCompliance, usePackageCompliance, useRunCompliance,
+  renderedManifestUrl, useCancelCompliance, useInspectPackage, usePackageCompliance,
+  useRenderedManifests, useRunCompliance,
 } from '../api/queries'
 import { EmptyStateCard } from './layout'
 import {
@@ -16,6 +17,7 @@ import {
   HelmMissingNotice, InconclusiveNotice, OutcomePill, ResultAddress, RunFailedNotice,
   RunProvenance, TruncatedNotice, VerdictPill,
 } from './compliance'
+import { EvidencePanel, NoEvidenceNotice, RenderedManifestsAction } from './complianceevidence'
 import { c, mono } from '../uikit'
 import type { ComplianceResult } from '../api/types'
 
@@ -60,12 +62,88 @@ export function ComplianceTab({ product, reference, repository }: {
   })
   const run = useRunCompliance()
   const cancel = useCancelCompliance()
+  // Analysing, offered from HERE. See the empty state below for why this tab
+  // needs it at all, and why sending the reader to another tab to press it was
+  // the wrong way to ask.
+  const inspect = useInspectPackage(product, reference, repository)
   const data = compliance.data
 
   const start = () => {
     run.mutate({ product, ref: reference, repository }, {
       onError: (e) => message.error(String(e)),
     })
+  }
+
+  /*
+   * NOT ANALYSED - which is not the same as "no charts", and the difference is
+   * the whole of this branch.
+   *
+   * The charts ARE listed on the Contents tab of an unanalysed release, and
+   * that is not a contradiction: a release's index NAMES its children, so what
+   * a chart is called and how many there are is known from discovery alone.
+   * What is not known is where the chart's bytes live. A chart's content sits
+   * in a LAYER of its manifest, and layer digests are recorded by walking the
+   * tree - so a check has nothing to fetch until that walk has run, and would
+   * report "no charts" over a release visibly full of them.
+   *
+   * Said before the button rather than after it: pressing one that cannot work
+   * and reading a recorded failure is a worse way to learn this than being
+   * told. And the walk is offered here, because "go to another tab and press a
+   * different button" is a detour for something this tab can start itself. The
+   * result arrives without being asked for - the release's own query notices
+   * the walk ending and refreshes this one.
+   */
+  if (!compliance.isLoading && data && !data.analysed && !data.run && !data.progress) {
+    const started = Boolean(inspect.data?.started) || inspect.isPending
+    return (
+      <Space direction="vertical" size={16} style={{ width: '100%' }}>
+        <HelmMissingNotice helm={data.helm} />
+        <EmptyStateCard
+          title={
+            started
+              ? 'Analysing this release'
+              : 'This release has to be analysed first'
+          }
+          explanation={
+            started
+              ? 'Reading the manifest tree from the vendor registry. It carries on if you leave '
+                + 'this page, and this tab offers the check as soon as the walk finishes.'
+              : 'Its charts are listed already - the release index names them. Where each '
+                + "chart's content lives is not: that is a layer inside the chart's own "
+                + 'manifest, and walking the release is what records it. A check reads the '
+                + 'charts themselves, so it has nothing to open until then.'
+          }
+          action={
+            <Space direction="vertical" size={10}>
+              {started ? (
+                <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+                  <LoadingOutlined spin style={{ color: c.brand, marginRight: 6 }} />
+                  Walking the manifest tree. Nothing is downloaded.
+                </Typography.Text>
+              ) : (
+                <Button
+                  type="primary"
+                  loading={inspect.isPending}
+                  onClick={() => inspect.mutate()}
+                >
+                  Analyse this release
+                </Button>
+              )}
+              {inspect.isError && (
+                <Typography.Text type="danger" style={{ fontSize: 12 }}>
+                  {inspect.error instanceof Error
+                    ? inspect.error.message
+                    : 'The registry did not answer.'}
+                </Typography.Text>
+              )}
+              <Link to="/policies" style={{ fontSize: 12, color: c.brand }}>
+                See what would be checked
+              </Link>
+            </Space>
+          }
+        />
+      </Space>
+    )
   }
 
   // A release with no result at all. The empty state OFFERS the action rather
@@ -165,7 +243,14 @@ export function ComplianceTab({ product, reference, repository }: {
       {/* The charts: the run's denominator. A reader who cannot see that three
           of ninety-seven charts failed to render reads the finding count as
           the whole story. */}
-      {charts.length > 0 && <ChartCoverage charts={charts} />}
+      {charts.length > 0 && (
+        <ChartCoverage
+          charts={charts}
+          product={product}
+          reference={reference}
+          repository={repository}
+        />
+      )}
 
       {/* The rows. */}
       <Card
@@ -236,7 +321,13 @@ export function ComplianceTab({ product, reference, repository }: {
         />
       </Card>
 
-      <ResultDrawer result={detail} onClose={() => setDetail(null)} />
+      <ResultDrawer
+        result={detail}
+        product={product}
+        reference={reference}
+        repository={repository}
+        onClose={() => setDetail(null)}
+      />
     </Space>
   )
 }
@@ -247,10 +338,28 @@ export function ComplianceTab({ product, reference, repository }: {
  * Charts that did not render come first, because everything below them is a
  * smaller denominator than it looks.
  */
-function ChartCoverage({ charts }: { charts: NonNullable<ReturnType<typeof usePackageCompliance>['data']>['charts'] }) {
+function ChartCoverage({ charts, product, reference, repository }: {
+  charts: NonNullable<ReturnType<typeof usePackageCompliance>['data']>['charts']
+  product: string
+  reference: string
+  repository?: string
+}) {
   const rows = charts ?? []
   const broken = rows.filter((ch) => ch.status !== 'ok')
   const [open, setOpen] = useState(broken.length > 0)
+
+  // What the run KEPT, which is not the same list as what it rendered: a
+  // deployment can turn evidence off, and a large release can exhaust the
+  // budget partway through. Read here rather than per row so the table shows
+  // one truth about which charts can actually be opened.
+  const kept = useRenderedManifests(product, reference, { repository })
+  const available = new Set((kept.data?.documents ?? []).map((d) => d.document))
+  // A run that rendered charts and kept none of them. Said once, at the top,
+  // rather than a sentence in every finding somebody opens: "no evidence" and
+  // "no findings" are different statements, and a reader who expects the
+  // manifest deserves to have been told before they go looking for it.
+  const noneKept = kept.isSuccess && available.size === 0
+    && rows.some((ch) => ch.status === 'ok')
 
   return (
     <Card
@@ -267,12 +376,26 @@ function ChartCoverage({ charts }: { charts: NonNullable<ReturnType<typeof usePa
         </Space>
       }
       extra={
-        <Typography.Link onClick={() => setOpen((v) => !v)}>
-          {open ? 'Hide' : 'Show'}
-        </Typography.Link>
+        <Space size={12}>
+          <RenderedManifestsAction
+            product={product}
+            reference={reference}
+            repository={repository}
+            documents={kept.data?.documents.length ?? 0}
+            bytes={kept.data?.totalBytes ?? 0}
+          />
+          <Typography.Link onClick={() => setOpen((v) => !v)}>
+            {open ? 'Hide' : 'Show'}
+          </Typography.Link>
+        </Space>
       }
       styles={open ? undefined : { body: { display: 'none' } }}
     >
+      {open && noneKept && (
+        <div style={{ marginBottom: 12 }}>
+          <NoEvidenceNotice checked />
+        </div>
+      )}
       {open && (
         <DataTable
           tableEnhancedKey="compliance-charts"
@@ -311,6 +434,42 @@ function ChartCoverage({ charts }: { charts: NonNullable<ReturnType<typeof usePa
               title: 'Reason', dataIndex: 'error',
               render: (e?: string) =>
                 e ? <span style={{ fontFamily: mono, fontSize: 11, color: c.text2 }}>{e}</span> : null,
+            },
+            {
+              // The manifest THIS chart rendered to. Offered per chart as well
+              // as for the release, because a vendor engineer owns one chart
+              // and does not want the other ninety-six.
+              title: 'Manifest', dataIndex: 'name', width: 150,
+              render: (_: unknown, ch) => (
+                available.has(ch.name)
+                  ? (
+                    <Space size={10}>
+                      <Typography.Link
+                        style={{ fontSize: 12 }}
+                        href={renderedManifestUrl(product, reference, {
+                          repository, document: ch.name,
+                        })}
+                        target="_blank"
+                        rel="noreferrer"
+                      >
+                        Open
+                      </Typography.Link>
+                      <Typography.Link
+                        style={{ fontSize: 12 }}
+                        href={renderedManifestUrl(product, reference, {
+                          repository, document: ch.name, download: true,
+                        })}
+                      >
+                        Download
+                      </Typography.Link>
+                    </Space>
+                  )
+                  : (
+                    <Typography.Text type="secondary" style={{ fontSize: 11 }}>
+                      {ch.status === 'ok' ? 'not kept' : 'nothing rendered'}
+                    </Typography.Text>
+                  )
+              ),
             },
           ]}
         />
@@ -393,8 +552,11 @@ function ResultsTable({ results, loading, onOpen, emptyText }: {
  * found, what was expected, and what to do. A drawer rather than a modal
  * because the reader is working down a list.
  */
-function ResultDrawer({ result, onClose }: {
+function ResultDrawer({ result, product, reference, repository, onClose }: {
   result: ComplianceResult | null
+  product: string
+  reference: string
+  repository?: string
   onClose: () => void
 }) {
   return (
@@ -421,6 +583,19 @@ function ResultDrawer({ result, onClose }: {
               {result.message || result.error}
             </Typography.Paragraph>
           )}
+
+          {/*
+            THE MANIFEST, ahead of the address table. "Show me" is the next
+            question after "what is wrong"; the address is what somebody reads
+            once they already believe it, and burying the evidence under it
+            makes verifying a finding a thing you have to scroll for.
+          */}
+          <EvidencePanel
+            product={product}
+            reference={reference}
+            repository={repository}
+            result={result}
+          />
 
           <Descriptions column={1} size="small" bordered>
             <Descriptions.Item label="Chart">

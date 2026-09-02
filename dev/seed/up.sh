@@ -15,7 +15,8 @@ mkdir -p "$BIN"
 # The development registries listen on hostnames the products name, so /etc/hosts
 # has to resolve them locally. Without this every scan is a Bad Gateway.
 for h in registry.mavenir.example.com registry.ericsson.example.com \
-         registry.nokia.example.com artifactory.internal.example.com; do
+         registry.nokia.example.com registry.near.example.com \
+         artifactory.internal.example.com; do
   grep -q "$h" /etc/hosts || echo "127.0.0.1 $h" >> /etc/hosts
 done
 

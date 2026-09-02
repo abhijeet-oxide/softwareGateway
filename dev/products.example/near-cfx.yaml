@@ -1,0 +1,43 @@
+apiVersion: softwaregateway.io/v1alpha1
+kind: Product
+metadata:
+  name: near-cfx
+  displayName: CFX 5000 Product (NEAR)
+  owner: packet-core
+spec:
+  sources:
+    - name: vendor
+      registry: registry.near.example.com:9443
+      repository: orbs/cfx-5000-k8s
+      anonymous: true
+      # THE POINT OF THIS PRODUCT.
+      #
+      # A NEAR orb publishes its Helm charts as ordinary OCI image manifests
+      # carrying an ordinary image config: media type, artifact type and config
+      # media type are identical for its charts and its images, and the only
+      # evidence anywhere is `com.nokia.ncd.orb.type` on the index's children.
+      #
+      # Every other product in this directory publishes conformantly, so
+      # without this one every reader that classifies artifacts - the release
+      # page, the transfer breakdown, the comparison, and a compliance run - is
+      # exercised only on the easy path.
+      vendor: near
+      discovery:
+        enabled: true
+        interval: 30m
+  targets:
+    - name: jfrog-lab
+      registry: artifactory.internal.example.com:9444
+      repository: near-lab/cfx-5000
+      type: artifactory
+      xrayEnabled: true
+      xrayEndpoint: https://artifactory.internal.example.com:9444
+      credentialsRef:
+        secretName: internal-registry
+      default: true
+      environment: lab
+
+  network:
+    tls:
+      # Development only: dev/fakeregistry issues its own certificate.
+      insecureSkipVerify: true

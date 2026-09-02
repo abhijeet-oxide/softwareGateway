@@ -16,7 +16,9 @@ import (
 	"github.com/abhijeet-oxide/softwareGateway/internal/compliance/render"
 	"github.com/abhijeet-oxide/softwareGateway/internal/compliance/source"
 	"github.com/abhijeet-oxide/softwareGateway/internal/platform/config"
+	"github.com/abhijeet-oxide/softwareGateway/internal/product"
 	"github.com/abhijeet-oxide/softwareGateway/internal/store"
+	"github.com/abhijeet-oxide/softwareGateway/internal/vendors"
 )
 
 // Wiring compliance into the Coordinator.
@@ -158,7 +160,7 @@ func (c *complianceSweeper) Run(ctx context.Context) {
 // buildCompliance assembles everything the API needs, or reports why it cannot.
 func buildCompliance(
 	cfg config.ComplianceConfig, packages *store.Packages,
-	blobs source.BlobReader, log *slog.Logger,
+	blobs source.BlobReader, classify func(string) vendors.Classifier, log *slog.Logger,
 ) (*policyCatalogue, *compliance.Runner, *complianceSweeper, error) {
 	cat, err := loadPolicies(cfg, log)
 	if err != nil {
@@ -189,9 +191,19 @@ func buildCompliance(
 				PerRelease: cfg.MaxReleaseBytes,
 			},
 		},
-		Helm:     helm,
-		Probe:    cfg.ProbeDeterminacy(),
+		Helm:  helm,
+		Probe: cfg.ProbeDeterminacy(),
+		// How much of the rendered text to keep, so a finding can be shown
+		// against the manifest it came from rather than only asserted.
+		Evidence: render.EvidenceBudget{
+			PerDocument: cfg.EvidencePerDocument,
+			PerRelease:  cfg.EvidencePerRelease,
+		},
 		Packages: packages,
+		// The SAME classifier the artifact listing uses. A compliance run with
+		// its own opinion about what a chart is would disagree with the page
+		// somebody was looking at when they pressed the button.
+		Classify: classify,
 		Config: func() map[string]any {
 			registries := make([]any, 0, len(cfg.ApprovedRegistries))
 			for _, r := range cfg.ApprovedRegistries {
@@ -258,5 +270,30 @@ func complianceAPIHelm(cfg config.ComplianceConfig) api.ComplianceHelm {
 		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 		defer cancel()
 		return helm.Version(ctx)
+	}
+}
+
+// complianceClassifier builds the per-product artifact classifier.
+//
+// # Why this is here and not in the compliance package
+//
+// It reads the product's configured vendor layouts, and only the composition
+// root may name a vendor. It is the same construction internal/api makes for
+// the artifact listing, deliberately: one product, one answer to "is this a
+// chart", or a run disagrees with the page that sent somebody to it.
+func complianceClassifier(products *product.Registry, layouts *vendors.Registry) func(string) vendors.Classifier {
+	return func(productName string) vendors.Classifier {
+		if products == nil || layouts == nil {
+			return vendors.OCIOnly
+		}
+		p, ok := products.Get(productName)
+		if !ok {
+			return vendors.OCIOnly
+		}
+		names := make([]string, 0, len(p.Spec.Sources))
+		for _, src := range p.Spec.Sources {
+			names = append(names, src.VendorLayout())
+		}
+		return vendors.ClassifierFor(layouts, names)
 	}
 }

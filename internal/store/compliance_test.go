@@ -1,6 +1,7 @@
 package store
 
 import (
+	"errors"
 	"testing"
 	"time"
 )
@@ -50,6 +51,7 @@ func TestFinishWritesRunChartsAndResults(t *testing.T) {
 		BundleDigest: "sha256:bundle", HelmVersion: "v3.16.3", KubeVersion: "1.30.0",
 		Checks: 71, Pass: 100, Fail: 3, Skip: 5, Blocking: 2, Warning: 1,
 	}
+	expires := time.Now().UTC().Add(30 * 24 * time.Hour)
 	charts := []ComplianceChartRow{
 		{Name: "alpha", Version: "1.0.0", Status: "ok", Resources: 12},
 		{Name: "beta", Version: "2.0.0", Status: "failed", Error: "template: beta/x.yaml:3", Resources: 0},
@@ -61,8 +63,19 @@ func TestFinishWritesRunChartsAndResults(t *testing.T) {
 			Message: "runs as root", Fingerprint: "fp-1"},
 		{Seq: 1, CheckID: "RES-01", Severity: "block", Outcome: "pass",
 			Chart: "alpha", Kind: "Deployment", Name: "app", Container: "main"},
+		// A waived result, so the waiver's expiry goes through the same
+		// timestamp path a run's dates do.
+		{Seq: 2, CheckID: "SEC-05", Severity: "warn", Outcome: "waived",
+			Chart: "alpha", Kind: "Deployment", Name: "app",
+			Waiver: "WAIVER-1", WaiverExpires: &expires},
 	}
-	if err := p.FinishComplianceRun(t.Context(), run, charts, results); err != nil {
+	rendered := []ComplianceRenderedRow{
+		{Seq: 0, Chart: "alpha", ChartVersion: "1.0.0",
+			Content: "kind: Deployment\nmetadata:\n  name: app\n", Lines: 3, Bytes: 38},
+		{Seq: 1, SourceFile: "manifests/crd.yaml",
+			Content: "kind: CustomResourceDefinition\n", Lines: 1, Bytes: 30, Truncated: true},
+	}
+	if err := p.FinishComplianceRun(t.Context(), run, charts, results, rendered); err != nil {
 		t.Fatal(err)
 	}
 
@@ -80,6 +93,31 @@ func TestFinishWritesRunChartsAndResults(t *testing.T) {
 	}
 	if got.FinishedAt == nil || got.HeartbeatAt != nil {
 		t.Error("a finished run still holds its claim")
+	}
+	// The timestamps have to survive the round trip, and a nil check alone
+	// would not notice if they did not: SQLite stores these columns as TEXT,
+	// and binding a time.Time renders it in Go's own String() layout, which
+	// nothing reads back. Every date then came back as the zero value in
+	// silence - a finished run looking like one that never finished.
+	if got.StartedAt.IsZero() {
+		t.Error("startedAt did not survive the round trip")
+	}
+	if got.FinishedAt != nil && got.FinishedAt.Before(got.StartedAt) {
+		t.Errorf("finishedAt %v is before startedAt %v", got.FinishedAt, got.StartedAt)
+	}
+	if since := time.Since(got.StartedAt); since < 0 || since > time.Hour {
+		t.Errorf("startedAt is %v ago, so it did not parse as the time it was written", since)
+	}
+
+	// And the listing summary carries the same date, for the same reason: a
+	// column that renders "never" over a release checked a minute ago is the
+	// same bug one screen further out.
+	sum, err := p.PackageCompliance(t.Context(), []int64{pkg})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if sum[pkg].CheckedAt == nil {
+		t.Error("the listing summary has no checked-at date")
 	}
 
 	// The charts are the DENOMINATOR: a release where one of two charts did not
@@ -106,8 +144,12 @@ func TestFinishWritesRunChartsAndResults(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if total != 2 || len(rows) != 2 {
+	if total != 3 || len(rows) != 3 {
 		t.Fatalf("total = %d, rows = %d", total, len(rows))
+	}
+	// A waiver whose expiry nobody can read is a permanent exception.
+	if rows[2].WaiverExpires == nil {
+		t.Error("the waiver expiry did not survive the round trip")
 	}
 	// Read back in the order the engine assigned, which is reading order.
 	if rows[0].CheckID != "SEC-01" || rows[0].Locus != "securityContext.runAsNonRoot" {
@@ -136,7 +178,7 @@ func TestComplianceFilters(t *testing.T) {
 	}
 	if err := p.FinishComplianceRun(t.Context(),
 		ComplianceRunRow{ID: "run-3", PackageID: pkg, State: ComplianceComplete, Verdict: "fail"},
-		nil, results); err != nil {
+		nil, results, nil); err != nil {
 		t.Fatal(err)
 	}
 
@@ -255,5 +297,78 @@ func TestUncheckedPackageHasNoSummary(t *testing.T) {
 	}
 	if _, present := sum[pkg]; present {
 		t.Error("an unchecked release has a compliance summary")
+	}
+}
+
+// The evidence a finding is shown against: kept with the run, addressed the two
+// ways a document can be named, and reclaimed when a later run supersedes it.
+func TestComplianceEvidenceIsKeptAndSuperseded(t *testing.T) {
+	st := openTestStore(t)
+	p := NewPackages(st)
+	pkg := seedPackageFor(t, st)
+
+	seedRun(t, p, pkg, "run-ev-1")
+	first := []ComplianceRenderedRow{
+		{Seq: 0, Chart: "alpha", ChartVersion: "1.0.0", Content: "kind: Deployment\n", Lines: 1, Bytes: 17},
+		{Seq: 1, SourceFile: "manifests/ns.yaml", Content: "kind: Namespace\n", Lines: 1, Bytes: 16},
+	}
+	if err := p.FinishComplianceRun(t.Context(),
+		ComplianceRunRow{ID: "run-ev-1", PackageID: pkg, State: ComplianceComplete, Verdict: "pass"},
+		nil, nil, first); err != nil {
+		t.Fatal(err)
+	}
+
+	index, err := p.ComplianceRenderedIndex(t.Context(), "run-ev-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(index) != 2 {
+		t.Fatalf("index has %d documents, want 2", len(index))
+	}
+	// The index carries no content: it is rendered beside a coverage table and
+	// the content is megabytes.
+	for _, d := range index {
+		if d.Content != "" {
+			t.Errorf("the index carried the content of %s%s", d.Chart, d.SourceFile)
+		}
+	}
+
+	// A chart is addressed by its name, a plain manifest by its path.
+	byChart, err := p.ComplianceRendered(t.Context(), "run-ev-1", "alpha")
+	if err != nil || byChart.Content != "kind: Deployment\n" {
+		t.Fatalf("by chart: %+v, %v", byChart, err)
+	}
+	byFile, err := p.ComplianceRendered(t.Context(), "run-ev-1", "manifests/ns.yaml")
+	if err != nil || byFile.Content != "kind: Namespace\n" {
+		t.Fatalf("by file: %+v, %v", byFile, err)
+	}
+	if _, err := p.ComplianceRendered(t.Context(), "run-ev-1", "nope"); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("a document that does not exist returned %v", err)
+	}
+
+	// A second run supersedes the first. Its evidence is reclaimed; its
+	// RESULTS are not, so the older run still reads back as a run.
+	seedRun(t, p, pkg, "run-ev-2")
+	if err := p.FinishComplianceRun(t.Context(),
+		ComplianceRunRow{ID: "run-ev-2", PackageID: pkg, State: ComplianceComplete, Verdict: "pass"},
+		nil, nil, []ComplianceRenderedRow{
+			{Seq: 0, Chart: "alpha", Content: "kind: Deployment\n", Lines: 1, Bytes: 17},
+		}); err != nil {
+		t.Fatal(err)
+	}
+
+	old, err := p.ComplianceRenderedIndex(t.Context(), "run-ev-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(old) != 0 {
+		t.Fatalf("the superseded run kept %d documents", len(old))
+	}
+	if _, err := p.ComplianceRun(t.Context(), "run-ev-1"); err != nil {
+		t.Fatalf("the superseded RUN was removed too: %v", err)
+	}
+	fresh, err := p.ComplianceRenderedAll(t.Context(), "run-ev-2")
+	if err != nil || len(fresh) != 1 || fresh[0].Content == "" {
+		t.Fatalf("the latest run's evidence: %+v, %v", fresh, err)
 	}
 }

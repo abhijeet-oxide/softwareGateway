@@ -81,6 +81,12 @@ type ComplianceChartView struct {
 // deriving it needs the release - and the most important consumer of this shape
 // is an export a vendor opens without access to this platform.
 type ComplianceResultView struct {
+	// Seq is this result's position in the run, which is its identity there.
+	// Carried so the interface can ask for the rendered manifest THIS result
+	// was judged against without describing it: an excerpt is a claim about
+	// what the run found, so the run has to be what says where to point.
+	Seq int `json:"seq"`
+
 	Check       string `json:"check"`
 	Title       string `json:"title,omitempty"`
 	Severity    string `json:"severity"`
@@ -143,6 +149,14 @@ type PackageComplianceView struct {
 	// Helm reports whether this Coordinator can render charts at all. Without
 	// it, a tab full of "could not be checked" has no explanation on screen.
 	Helm ComplianceHelmView `json:"helm"`
+	// Analysed says whether this release's manifest tree has been walked.
+	//
+	// A run needs the chart artifacts' LAYER digests, and those are recorded by
+	// the walk. Before it there is nothing to fetch - so this is on the wire and
+	// the tab offers the walk, rather than offering a button that fails and
+	// leaves a recorded failure explaining something the reader could have been
+	// told first.
+	Analysed bool `json:"analysed"`
 }
 
 // ComplianceHelmView is the renderer's availability.
@@ -246,6 +260,7 @@ func complianceResultViews(rows []store.ComplianceResultRow) []ComplianceResultV
 	out := make([]ComplianceResultView, 0, len(rows))
 	for _, r := range rows {
 		out = append(out, ComplianceResultView{
+			Seq:   r.Seq,
 			Check: r.CheckID, Title: r.CheckTitle, Severity: r.Severity,
 			Category: r.Category, Pack: r.Pack, Tier: r.Tier,
 			Remediation: r.Remediation, Reference: r.Reference,

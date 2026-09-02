@@ -166,6 +166,48 @@ Two runs whose recorded environment differs are **not comparable**, and the
 comparison view says so rather than presenting a diff that is really a helm
 upgrade.
 
+#### The manifests, not only the inputs
+
+Recording the inputs makes a finding **re-derivable**. It does not make it
+**checkable**, and those are different guarantees with different audiences.
+
+A vendor engineer reading "Deployment cfx-crds container main:
+`securityContext.runAsNonRoot` - runAsUser 0" has one question, and it is not
+"could I reproduce this pipeline". It is *show me*. Answering it from the table
+above means pulling the chart out of the registry, installing that helm and
+rendering it again with those pinned versions. Nobody does that. So a disputed
+finding gets settled by whether the vendor trusts the tool, which is not a
+technical conversation and does not converge.
+
+So a run also keeps **the rendered manifests it judged** - the stream `helm
+template` produced for each chart, plus any manifest the release ships as-is -
+and the report shows the lines a finding is about, numbered as they are in the
+document.
+
+Three properties make them evidence rather than illustration:
+
+- **They are the bytes that were judged**, kept from the run. Not a re-render
+  performed when somebody clicks: a chart rendered again could differ from what
+  was judged - a template that reads the clock, a helm upgraded since - and
+  evidence that can differ from what it is evidence for is not evidence.
+- **The line numbers are the document's own.** A number quoted out of an excerpt
+  into a mail points at the same line of the downloadable file. An excerpt
+  numbered from 1 would be a screenshot.
+- **A line is pointed at only when there is one.** Half the findings in any run
+  are about something ABSENT, and an absent field has no line. The report says
+  so, and shows the deepest part of the path that does exist - the container a
+  memory limit is missing from - marked as exactly that. A highlight on a
+  plausible line would be a claim about the document that is false.
+
+Kept for the **latest run of a release only**. This is the one part of a run
+whose size the vendor sets, it is bounded per document and per release by
+`coordinator.compliance.evidencePerDocument` / `evidencePerRelease`, and a
+document cut at that budget says so rather than serving lines that stop without
+warning. Nothing displays an older run, so nothing reads an older run's
+manifests. A deployment that will not hold vendor manifests in its database sets
+the budget below zero; findings are unaffected, because the manifests are what a
+finding is DISPLAYED against and never what it is derived from.
+
 ## 3. What a result contains
 
 The address is the feature. Everything else is text.
@@ -347,6 +389,40 @@ Rules that make a waiver a control rather than a hole:
 - Scope is by check plus any of product / chart / resource / fingerprint.
   A waiver with no scope beyond the check ID is rejected at load: blanket
   waivers are how a policy set dies quietly.
+
+### 7.1 A waiver is not a declared exception, and the two must not be confused
+
+A waiver is **ours**: our organization accepting a failure the vendor shipped,
+recorded on our side, expiring on a date we set. A declared exception is
+**theirs**: the chart itself saying, in the manifest, that it needs something
+the standard forbids by default and why.
+
+Both exist because some checks describe a rule with real exceptions, and the two
+answer different questions. SCH-08 is the worked example: a pod must not
+tolerate a node-pressure taint, *unless* the workload carries
+
+```yaml
+metadata:
+  annotations:
+    compliance.softwaregateway.io/toleration-rationale: >-
+      Collects kernel logs off nodes already under disk pressure, which is the
+      condition the logs are needed for. Approved by platform-sre 2026-04-11.
+```
+
+on itself or on its pod template. The annotation makes the check PASS - it is
+not a suppression, and nothing is moved out of the verdict.
+
+The reason to build it this way rather than as a waiver is that the deciding
+fact is in the chart. A DaemonSet that has to run on a failing node and one that
+tolerates pressure taints by copy-paste are byte-identical without the
+declaration, so a check that simply forbade the toleration would be waived
+release after release, and a check that exempted DaemonSets would pass the
+copy-paste one forever. Asking the author to write the sentence is what turns
+"we tolerate everything" into a claim somebody can disagree with in review.
+
+Where a check offers a declared exception, the annotation key, where it may be
+written, and what an empty value does are stated in the check's own catalog row.
+An exception the vendor will not declare is what a waiver is for.
 
 ## 8. What this model deliberately does not do
 

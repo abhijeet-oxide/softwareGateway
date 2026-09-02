@@ -123,7 +123,7 @@ type Result struct {
 // The caller removes Root when the run is over. A failure to fetch one chart is
 // recorded on that chart and does not stop the others: one unreadable artifact
 // in a ninety-seven chart release must not lose the other ninety-six.
-func (f Fetcher) Fetch(ctx context.Context, productName string, pkg store.PackageRow, charts []store.ChartArtifact) (*Result, error) {
+func (f Fetcher) Fetch(ctx context.Context, productName string, pkg store.PackageRow, charts []store.ChartCandidate) (*Result, error) {
 	budgets := f.Budgets.WithDefaults()
 
 	root, err := os.MkdirTemp("", "sgw-compliance-")
@@ -163,7 +163,7 @@ func (f Fetcher) Fetch(ctx context.Context, productName string, pkg store.Packag
 
 func (f Fetcher) fetchOne(
 	ctx context.Context, productName string, pkg store.PackageRow,
-	ca store.ChartArtifact, root string, index int, budgets Budgets,
+	ca store.ChartCandidate, root string, index int, budgets Budgets,
 ) (string, int64, error) {
 	rc, err := f.Blobs.ReadBlob(ctx, productName, pkg, ca.LayerDigest)
 	if err != nil {
@@ -329,7 +329,7 @@ func writeFile(path string, r io.Reader, remaining int64) (int64, error) {
 	return n, nil
 }
 
-func displayOf(ca store.ChartArtifact) string {
+func displayOf(ca store.ChartCandidate) string {
 	if ca.Ref != "" {
 		return ca.Ref
 	}

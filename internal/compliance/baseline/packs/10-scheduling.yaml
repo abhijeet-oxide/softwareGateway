@@ -146,3 +146,152 @@ spec:
               t.matchExpressions.all(e, value(e, "key") != "topology.kubernetes.io/zone"))
         locus: spec.template.spec.affinity.nodeAffinity
         expected: no required affinity on topology.kubernetes.io/zone
+
+    # ------------------------------------------------------------------
+    # Tolerations.
+    #
+    # A taint is a node saying "stay away", and a toleration is a chart
+    # overruling it. The two checks below split the taints by what the node
+    # means, because the right answer differs:
+    #
+    #   NoSchedule pressure taints - memory, disk, PID, an unavailable network,
+    #   a cordoned node - mean the node is ALREADY in trouble. A pod that
+    #   tolerates them is scheduled onto a node that is out of memory, which
+    #   makes the pressure worse and takes the pod down with the node. There
+    #   are real exceptions (a node agent that has to run everywhere is the
+    #   obvious one), and an exception nobody wrote down is indistinguishable
+    #   from a mistake - so the exception is allowed and has to be declared.
+    #
+    #   NoExecute not-ready and unreachable mean the node has stopped
+    #   answering. Tolerating those is ordinary and often right: an eviction
+    #   the instant a kubelet misses a heartbeat is a restart storm on a
+    #   network blip. What is not right is tolerating them FOREVER, which is
+    #   what a toleration without tolerationSeconds says. Kubernetes adds
+    #   these two with 300 seconds by default; a chart that declares them and
+    #   omits the bound has quietly replaced that default with "never evict",
+    #   and its pods sit unreachable on a dead node until somebody notices.
+    # ------------------------------------------------------------------
+
+    - id: SCH-08
+      title: Tolerating a node-pressure taint is declared, not assumed
+      description: >
+        A pod spec that tolerates a NoSchedule node-pressure taint -
+        memory-pressure, disk-pressure, pid-pressure, network-unavailable or
+        unschedulable - carries a
+        compliance.softwaregateway.io/toleration-rationale annotation saying
+        why. A toleration with no key and no effect tolerates all of them and
+        counts here too.
+      rationale: >
+        These taints are the node reporting its own condition. Tolerating them
+        does not make the node healthy; it makes the scheduler place work on a
+        node that has already said it cannot take any, so the pod lands on a
+        node out of memory or out of disk and goes down with it. Some workloads
+        genuinely must run there - a DaemonSet collecting logs off a failing
+        node is the case everyone reaches for - and that is why this asks for a
+        sentence rather than forbidding it: an undeclared toleration and a
+        deliberate one look identical in a diff.
+      severity: block
+      tier: 1
+      category: Scheduling & Placement
+      remediation: >
+        Remove the toleration, or annotate the workload with
+        compliance.softwaregateway.io/toleration-rationale explaining which
+        taint is tolerated and why this workload has to run on a node in that
+        condition. The annotation is read from the workload or from its pod
+        template.
+      appliesTo:
+        subject: podSpec
+        where: 'value(self, "tolerations") != null'
+      assert:
+        expr: |
+          !self.tolerations.exists(t,
+            (text(t, "effect") == "" || text(t, "effect") == "NoSchedule") &&
+            (text(t, "key") == "" ||
+             text(t, "key") in ["node.kubernetes.io/memory-pressure",
+                                "node.kubernetes.io/disk-pressure",
+                                "node.kubernetes.io/pid-pressure",
+                                "node.kubernetes.io/network-unavailable",
+                                "node.kubernetes.io/unschedulable"]))
+          ||
+          ("compliance.softwaregateway.io/toleration-rationale" in allAnnotations(owner) &&
+           size(allAnnotations(owner)["compliance.softwaregateway.io/toleration-rationale"]) > 0)
+        locus: tolerations
+        expected: no node-pressure toleration, or a declared rationale for one
+        observed: |
+          self.tolerations.filter(t,
+            (text(t, "effect") == "" || text(t, "effect") == "NoSchedule") &&
+            (text(t, "key") == "" ||
+             text(t, "key") in ["node.kubernetes.io/memory-pressure",
+                                "node.kubernetes.io/disk-pressure",
+                                "node.kubernetes.io/pid-pressure",
+                                "node.kubernetes.io/network-unavailable",
+                                "node.kubernetes.io/unschedulable"]))
+            .map(t, text(t, "key") == "" ? "(every taint)" : text(t, "key")).join(", ")
+        message: |
+          text(owner, "kind") + " " + text(owner, "metadata.name") + " tolerates " +
+          self.tolerations.filter(t,
+            (text(t, "effect") == "" || text(t, "effect") == "NoSchedule") &&
+            (text(t, "key") == "" ||
+             text(t, "key") in ["node.kubernetes.io/memory-pressure",
+                                "node.kubernetes.io/disk-pressure",
+                                "node.kubernetes.io/pid-pressure",
+                                "node.kubernetes.io/network-unavailable",
+                                "node.kubernetes.io/unschedulable"]))
+            .map(t, text(t, "key") == "" ? "every NoSchedule taint" : text(t, "key")).join(", ") +
+          " and declares no compliance.softwaregateway.io/toleration-rationale saying why it has " +
+          "to run on a node in that condition"
+
+    - id: SCH-09
+      title: A NoExecute toleration is bounded in time
+      description: >
+        Every toleration of node.kubernetes.io/not-ready or
+        node.kubernetes.io/unreachable on NoExecute sets tolerationSeconds. A
+        toleration with no key tolerates both and counts here too.
+      rationale: >
+        Without tolerationSeconds the toleration never expires, so a pod stays
+        bound to a node that stopped answering - not evicted, not rescheduled,
+        and counted as a healthy replica by everything that reads the
+        Deployment. Kubernetes supplies these two tolerations with 300 seconds
+        when a chart says nothing; declaring them without a bound REPLACES that
+        default with an indefinite one, which is the opposite of what the
+        author almost always meant.
+      severity: warn
+      tier: 1
+      category: Scheduling & Placement
+      remediation: >
+        Add tolerationSeconds to the not-ready and unreachable tolerations -
+        300 is the Kubernetes default and a reasonable starting point - or drop
+        the tolerations and let the defaults apply.
+      appliesTo:
+        subject: podSpec
+        where: 'value(self, "tolerations") != null'
+      assert:
+        expr: |
+          self.tolerations.all(t,
+            !((text(t, "effect") == "" || text(t, "effect") == "NoExecute") &&
+              (text(t, "key") == "" ||
+               text(t, "key") in ["node.kubernetes.io/not-ready",
+                                  "node.kubernetes.io/unreachable"]))
+            || value(t, "tolerationSeconds") != null)
+        locus: tolerations[].tolerationSeconds
+        expected: tolerationSeconds set on every not-ready and unreachable toleration
+        observed: |
+          self.tolerations.filter(t,
+            (text(t, "effect") == "" || text(t, "effect") == "NoExecute") &&
+            (text(t, "key") == "" ||
+             text(t, "key") in ["node.kubernetes.io/not-ready",
+                                "node.kubernetes.io/unreachable"]) &&
+            value(t, "tolerationSeconds") == null)
+            .map(t, (text(t, "key") == "" ? "(every taint)" : text(t, "key")) + ": unbounded")
+            .join(", ")
+        message: |
+          text(owner, "kind") + " " + text(owner, "metadata.name") + " tolerates " +
+          self.tolerations.filter(t,
+            (text(t, "effect") == "" || text(t, "effect") == "NoExecute") &&
+            (text(t, "key") == "" ||
+             text(t, "key") in ["node.kubernetes.io/not-ready",
+                                "node.kubernetes.io/unreachable"]) &&
+            value(t, "tolerationSeconds") == null)
+            .map(t, text(t, "key") == "" ? "every NoExecute taint" : text(t, "key")).join(", ") +
+          " with no tolerationSeconds, so its pods stay bound to a node that has stopped " +
+          "answering for as long as the node object exists"

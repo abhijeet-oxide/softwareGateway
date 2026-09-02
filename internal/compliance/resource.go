@@ -226,7 +226,17 @@ type Release struct {
 	// changes on a standards review and the other when a datacentre opens.
 	Config map[string]any
 
-	// Rendered records what produced this release, so a result can say what it
+	// Rendered is the text the resources above were parsed out of - one
+	// document per chart, plus one per manifest the release ships as-is. Kept
+	// so a finding can be SHOWN rather than only asserted; see evidence.go.
+	//
+	// Empty when the deployment has turned evidence off, and short of the chart
+	// list when the budget ran out. Neither is an error, and neither changes
+	// any result: this is what a finding is displayed against, never what it is
+	// derived from.
+	Rendered []RenderedDoc
+
+	// The rest records what produced this release, so a result can say what it
 	// was derived from. Rule 5: reproducible, or it is an opinion.
 	HelmVersion  string
 	KubeVersion  string

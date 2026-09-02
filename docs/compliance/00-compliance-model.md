@@ -166,6 +166,48 @@ Two runs whose recorded environment differs are **not comparable**, and the
 comparison view says so rather than presenting a diff that is really a helm
 upgrade.
 
+#### The manifests, not only the inputs
+
+Recording the inputs makes a finding **re-derivable**. It does not make it
+**checkable**, and those are different guarantees with different audiences.
+
+A vendor engineer reading "Deployment cfx-crds container main:
+`securityContext.runAsNonRoot` - runAsUser 0" has one question, and it is not
+"could I reproduce this pipeline". It is *show me*. Answering it from the table
+above means pulling the chart out of the registry, installing that helm and
+rendering it again with those pinned versions. Nobody does that. So a disputed
+finding gets settled by whether the vendor trusts the tool, which is not a
+technical conversation and does not converge.
+
+So a run also keeps **the rendered manifests it judged** - the stream `helm
+template` produced for each chart, plus any manifest the release ships as-is -
+and the report shows the lines a finding is about, numbered as they are in the
+document.
+
+Three properties make them evidence rather than illustration:
+
+- **They are the bytes that were judged**, kept from the run. Not a re-render
+  performed when somebody clicks: a chart rendered again could differ from what
+  was judged - a template that reads the clock, a helm upgraded since - and
+  evidence that can differ from what it is evidence for is not evidence.
+- **The line numbers are the document's own.** A number quoted out of an excerpt
+  into a mail points at the same line of the downloadable file. An excerpt
+  numbered from 1 would be a screenshot.
+- **A line is pointed at only when there is one.** Half the findings in any run
+  are about something ABSENT, and an absent field has no line. The report says
+  so, and shows the deepest part of the path that does exist - the container a
+  memory limit is missing from - marked as exactly that. A highlight on a
+  plausible line would be a claim about the document that is false.
+
+Kept for the **latest run of a release only**. This is the one part of a run
+whose size the vendor sets, it is bounded per document and per release by
+`coordinator.compliance.evidencePerDocument` / `evidencePerRelease`, and a
+document cut at that budget says so rather than serving lines that stop without
+warning. Nothing displays an older run, so nothing reads an older run's
+manifests. A deployment that will not hold vendor manifests in its database sets
+the budget below zero; findings are unaffected, because the manifests are what a
+finding is DISPLAYED against and never what it is derived from.
+
 ## 3. What a result contains
 
 The address is the feature. Everything else is text.

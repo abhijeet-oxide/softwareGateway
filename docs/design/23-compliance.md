@@ -94,7 +94,7 @@ routes, one page.
 | **Runner** | `internal/compliance` | One run: claim, heartbeat, progress, cancel, record. Modelled on `security.Syncer` |
 | **Store** | `internal/store/compliance.go` | `compliance_runs`, `compliance_results`, `compliance_charts`, `package_compliance` |
 | **API** | `internal/api/compliance*.go` | Routes, wire types, export |
-| **UI** | `web/src/pages/Policies.tsx`, `web/src/components/compliancepanel.tsx` | The catalogue, the results, the report |
+| **UI** | `web/src/pages/Policies.tsx`, `web/src/components/compliancepanel.tsx, complianceevidence.tsx` | The catalogue, the results, the report |
 | **Retention** | `internal/maintenance/compliance.go` | Leader-gated sweep, budget-based like the security one |
 
 ## 4. Acquiring what is checked
@@ -397,7 +397,8 @@ start ──► scan policyPaths ──► parse each pack.yaml
 
 ## 9. Persistence
 
-`db/migrations/{postgres,sqlite}/00035_compliance.sql`. Postgres shown; the
+`db/migrations/{postgres,sqlite}/00035_compliance.sql
+db/migrations/{postgres,sqlite}/00039_compliance_evidence.sql`. Postgres shown; the
 SQLite dialect follows the conventions in [03](03-persistence.md) §4.
 
 ```sql
@@ -562,6 +563,26 @@ not a product's.
 | `GET` | `/api/v1/products/{product}/packages/{package}/compliance/export` | `format=csv\|xlsx\|json\|zip` (§11) |
 | `GET` | `/api/v1/products/{product}/packages/{package}/compliance/compare` | `against={tag}` - fixed, new, still failing, by fingerprint |
 
+### The manifests a run judged
+
+The evidence behind a finding, so it can be verified rather than trusted. See
+[compliance/00](../compliance/00-compliance-model.md) §2 rule 5 for why a report
+keeps its inputs at all, and `internal/compliance/evidence.go` for how a check's
+locus is resolved to a line.
+
+| Method | Path | Purpose |
+|---|---|---|
+| `GET` | `…/compliance/rendered` | Index of the documents the latest run kept: chart or file, lines, bytes, whether truncated. No content - a coverage table must not cost a download |
+| `GET` | `…/compliance/rendered/content?document=` | One document as `text/yaml`. Omit `document` for the whole release in one file, each part named under a header stating the run, helm and Kubernetes versions and the rulebook digest. `download=1` attaches it |
+| `GET` | `…/compliance/rendered/excerpt?seq=&context=` | The lines one result is about, numbered as they are in the document, with the line its locus resolves to |
+
+`seq` is the result's position in the run, and the excerpt endpoint takes that
+rather than an address. The caller has the chart, the line and the field on the
+row it is displaying, and could send all three - and then the excerpt would be a
+claim assembled by whoever asked for it. Reading the address off the stored run
+makes the response a statement about what the run found, which is what evidence
+has to be.
+
 Two deliberate absences, each of which will be asked for:
 
 - **No endpoint enables, disables or re-severities a check.** That is
@@ -724,6 +745,19 @@ coordinator:
     resultBudgetBytes: 0             # 0 = no ceiling, as with security
     sweepInterval: 15m
 
+    # THE MANIFESTS THE RUN JUDGED, kept so a finding can be SHOWN rather than
+    # only asserted (compliance/00 section 2, rule 5). Two numbers for the
+    # reason the fetch budgets above take two: one pathological chart and four
+    # hundred ordinary ones are different problems. Over the cap a document is
+    # kept TRUNCATED and says so; below zero nothing is kept at all, which is
+    # for a deployment that will not hold vendor manifests in its database.
+    # Findings are unaffected either way.
+    #
+    # Kept for the LATEST run of a release only - a completed run reclaims what
+    # it supersedes. Nothing displays an older run, so nothing reads one.
+    evidencePerDocument: 4194304     # 4 MiB
+    evidencePerRelease: 25165824     # 24 MiB
+
     # Deployment-specific inputs to the shipped checks. Constants in a policy
     # file would need a rebuild to change and would be wrong for the next
     # installation.
@@ -850,6 +884,7 @@ internal/compliance/
                     metadata.go, supply.go, scheduling.go, upgrade.go
     parse.go        rendered manifests -> addressed resources
     run.go          one run: charts, counts, verdict, provenance
+    evidence.go     the manifests a run judged; locus -> line; excerpts
     cel/            the ONLY package importing cel-go
       env.go          declarations; compile-time and run-time environments
       funcs.go        value/text/present, quantity, imageRef, selects, pdbFor
@@ -860,11 +895,11 @@ internal/compliance/
       shorthand.go    required/forbidden/equals/… compiled to the same CEL
       compile.go      per-check compile, load-time errors, per-run planning
     baseline/       the shipped pack, as embedded YAML, plus the fixture corpus
-    render/         helm.go, probe.go, source.go
+    render/         helm.go, probe.go, source.go, evidence.go (the keep budget)
     source/         artifact acquisition, budget, unpack
 internal/store/compliance.go
-internal/api/compliance.go, compliancewire.go, complianceexport.go,
-             compliancesheets.go
+internal/api/compliance.go, compliancewire.go, complianceevidence.go,
+             complianceexport.go, compliancesheets.go
 internal/maintenance/compliance.go
 pkg/apis/softwaregateway/v1/compliance.go
 cmd/transferctl/compliance.go
@@ -900,6 +935,7 @@ Three `depguard` rules, added to `.golangci.yml` beside the existing ones
 | Registry unreachable | Fetch | Run fails with the reason; **no partial run is recorded as a verdict** | run `failed`, no verdict |
 | Coordinator dies mid-run | Stale `heartbeat_at` | Claim released by the sweeper; the release is checkable again | previous run stands |
 | Results exceed `maxResultsPerRun` | Counter | Truncated; `truncated=true` on the run, stated in API, UI and export | inconclusive |
+| Rendered text exceeds `evidencePerRelease` | Running total | Later documents kept truncated or not at all; each says which. Findings unaffected - the manifests are what a finding is displayed against, never what it is derived from | none |
 
 Every row that ends in `inconclusive` is deliberate. A run that could not examine
 everything is not a run that passed.

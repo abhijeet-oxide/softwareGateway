@@ -5,6 +5,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/abhijeet-oxide/softwareGateway/internal/compliance"
@@ -283,3 +284,126 @@ func stringIndex(h, n string) int {
 }
 
 func writeFile(path string, body []byte) error { return os.WriteFile(path, body, 0o600) }
+
+// THE INVARIANT THE WHOLE EVIDENCE FEATURE RESTS ON: a resource's RenderedLine
+// is an offset into the document that was KEPT, not into some other rendering
+// of the same chart.
+//
+// If these ever diverge - a document sliced per object, a stream normalised on
+// the way to storage, a second render substituted for the first - every excerpt
+// would point at a plausible-looking line of the wrong object, which is worse
+// than showing nothing.
+func TestKeptEvidenceIsWhatTheLineNumbersIndex(t *testing.T) {
+	helmOrSkip(t)
+	loader := render.Loader{Helm: render.Helm{}.WithDefaults(), HelmAvailable: true}
+
+	rel, _, err := loader.Load(context.Background(), chart, compliance.Address{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rel.Rendered) != 1 {
+		t.Fatalf("kept %d documents for one chart", len(rel.Rendered))
+	}
+	doc := rel.Rendered[0]
+	if doc.Chart != "probe-chart" || doc.Truncated {
+		t.Fatalf("document = %+v", doc)
+	}
+
+	lines := strings.Split(strings.TrimSuffix(string(doc.Content), "\n"), "\n")
+	if doc.Lines != len(lines) || doc.Bytes != len(doc.Content) {
+		t.Errorf("recorded %d lines / %d bytes, actually %d / %d",
+			doc.Lines, doc.Bytes, len(lines), len(doc.Content))
+	}
+
+	for _, r := range rel.Resources {
+		n := r.Address.RenderedLine
+		if n <= 0 || n > len(lines) {
+			t.Fatalf("%s %s is at line %d of a %d-line document",
+				r.Kind(), r.Name(), n, len(lines))
+		}
+		// The recorded line is where the object's DOCUMENT starts, which is
+		// helm's `# Source:` marker where there is one - and that is the right
+		// anchor, because the marker names the template the object came from.
+		// What must hold is that the object itself begins there and not
+		// somewhere else: the first line of substance is its apiVersion.
+		first := ""
+		for _, l := range lines[n-1:] {
+			t := strings.TrimSpace(l)
+			if t == "" || t == "---" || strings.HasPrefix(t, "#") {
+				continue
+			}
+			first = t
+			break
+		}
+		if !strings.HasPrefix(first, "apiVersion:") {
+			t.Errorf("%s %s claims line %d, where the document starts %q",
+				r.Kind(), r.Name(), n, first)
+		}
+		// And a locus resolved against the kept text must land inside it.
+		if at := compliance.LocusLine(doc.Content, n, "metadata.name"); at > 0 {
+			if !strings.Contains(lines[at-1], r.Name()) {
+				t.Errorf("%s %s: metadata.name resolved to %q", r.Kind(), r.Name(), lines[at-1])
+			}
+		} else {
+			t.Errorf("%s %s: metadata.name did not resolve in the kept document", r.Kind(), r.Name())
+		}
+	}
+}
+
+// Over the budget the document is TRUNCATED and says so, rather than dropped:
+// the findings in its first hundred lines are still shown, and the ones past
+// the cut are told the text stops there.
+func TestEvidenceBudgetTruncatesRatherThanDropping(t *testing.T) {
+	helmOrSkip(t)
+	loader := render.Loader{
+		Helm: render.Helm{}.WithDefaults(), HelmAvailable: true,
+		Evidence: render.EvidenceBudget{PerDocument: 200, PerRelease: 200},
+	}
+	rel, _, err := loader.Load(context.Background(), chart, compliance.Address{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rel.Rendered) != 1 {
+		t.Fatalf("kept %d documents", len(rel.Rendered))
+	}
+	doc := rel.Rendered[0]
+	if !doc.Truncated {
+		t.Error("a document cut at the budget did not say so")
+	}
+	if doc.Bytes > 200 {
+		t.Errorf("kept %d bytes against a 200-byte budget", doc.Bytes)
+	}
+	// Cut on a line boundary: a half-line looks like a malformed manifest and
+	// would eventually be reported as a defect in the vendor's chart.
+	if !strings.HasSuffix(string(doc.Content), "\n") {
+		t.Errorf("the document was cut mid-line: %q", tail(string(doc.Content)))
+	}
+}
+
+// A deployment that will not hold vendor manifests in its database turns the
+// keeping off. Nothing else changes: the manifests are what a finding is
+// DISPLAYED against, never what it is derived from.
+func TestEvidenceCanBeTurnedOff(t *testing.T) {
+	helmOrSkip(t)
+	loader := render.Loader{
+		Helm: render.Helm{}.WithDefaults(), HelmAvailable: true,
+		Evidence: render.EvidenceBudget{PerDocument: -1},
+	}
+	rel, _, err := loader.Load(context.Background(), chart, compliance.Address{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rel.Rendered) != 0 {
+		t.Fatalf("kept %d documents with evidence off", len(rel.Rendered))
+	}
+	if len(rel.Resources) == 0 {
+		t.Fatal("turning evidence off lost the resources too")
+	}
+}
+
+func tail(s string) string {
+	if len(s) > 40 {
+		return s[len(s)-40:]
+	}
+	return s
+}

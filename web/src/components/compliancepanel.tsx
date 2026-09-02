@@ -8,7 +8,8 @@ import {
 import { Table as DataTable } from '../tablekit'
 import { LoadingOutlined } from '../icons'
 import {
-  useCancelCompliance, useInspectPackage, usePackageCompliance, useRunCompliance,
+  renderedManifestUrl, useCancelCompliance, useInspectPackage, usePackageCompliance,
+  useRenderedManifests, useRunCompliance,
 } from '../api/queries'
 import { EmptyStateCard } from './layout'
 import {
@@ -16,6 +17,7 @@ import {
   HelmMissingNotice, InconclusiveNotice, OutcomePill, ResultAddress, RunFailedNotice,
   RunProvenance, TruncatedNotice, VerdictPill,
 } from './compliance'
+import { EvidencePanel, NoEvidenceNotice, RenderedManifestsAction } from './complianceevidence'
 import { c, mono } from '../uikit'
 import type { ComplianceResult } from '../api/types'
 
@@ -241,7 +243,14 @@ export function ComplianceTab({ product, reference, repository }: {
       {/* The charts: the run's denominator. A reader who cannot see that three
           of ninety-seven charts failed to render reads the finding count as
           the whole story. */}
-      {charts.length > 0 && <ChartCoverage charts={charts} />}
+      {charts.length > 0 && (
+        <ChartCoverage
+          charts={charts}
+          product={product}
+          reference={reference}
+          repository={repository}
+        />
+      )}
 
       {/* The rows. */}
       <Card
@@ -312,7 +321,13 @@ export function ComplianceTab({ product, reference, repository }: {
         />
       </Card>
 
-      <ResultDrawer result={detail} onClose={() => setDetail(null)} />
+      <ResultDrawer
+        result={detail}
+        product={product}
+        reference={reference}
+        repository={repository}
+        onClose={() => setDetail(null)}
+      />
     </Space>
   )
 }
@@ -323,10 +338,28 @@ export function ComplianceTab({ product, reference, repository }: {
  * Charts that did not render come first, because everything below them is a
  * smaller denominator than it looks.
  */
-function ChartCoverage({ charts }: { charts: NonNullable<ReturnType<typeof usePackageCompliance>['data']>['charts'] }) {
+function ChartCoverage({ charts, product, reference, repository }: {
+  charts: NonNullable<ReturnType<typeof usePackageCompliance>['data']>['charts']
+  product: string
+  reference: string
+  repository?: string
+}) {
   const rows = charts ?? []
   const broken = rows.filter((ch) => ch.status !== 'ok')
   const [open, setOpen] = useState(broken.length > 0)
+
+  // What the run KEPT, which is not the same list as what it rendered: a
+  // deployment can turn evidence off, and a large release can exhaust the
+  // budget partway through. Read here rather than per row so the table shows
+  // one truth about which charts can actually be opened.
+  const kept = useRenderedManifests(product, reference, { repository })
+  const available = new Set((kept.data?.documents ?? []).map((d) => d.document))
+  // A run that rendered charts and kept none of them. Said once, at the top,
+  // rather than a sentence in every finding somebody opens: "no evidence" and
+  // "no findings" are different statements, and a reader who expects the
+  // manifest deserves to have been told before they go looking for it.
+  const noneKept = kept.isSuccess && available.size === 0
+    && rows.some((ch) => ch.status === 'ok')
 
   return (
     <Card
@@ -343,12 +376,26 @@ function ChartCoverage({ charts }: { charts: NonNullable<ReturnType<typeof usePa
         </Space>
       }
       extra={
-        <Typography.Link onClick={() => setOpen((v) => !v)}>
-          {open ? 'Hide' : 'Show'}
-        </Typography.Link>
+        <Space size={12}>
+          <RenderedManifestsAction
+            product={product}
+            reference={reference}
+            repository={repository}
+            documents={kept.data?.documents.length ?? 0}
+            bytes={kept.data?.totalBytes ?? 0}
+          />
+          <Typography.Link onClick={() => setOpen((v) => !v)}>
+            {open ? 'Hide' : 'Show'}
+          </Typography.Link>
+        </Space>
       }
       styles={open ? undefined : { body: { display: 'none' } }}
     >
+      {open && noneKept && (
+        <div style={{ marginBottom: 12 }}>
+          <NoEvidenceNotice checked />
+        </div>
+      )}
       {open && (
         <DataTable
           tableEnhancedKey="compliance-charts"
@@ -387,6 +434,42 @@ function ChartCoverage({ charts }: { charts: NonNullable<ReturnType<typeof usePa
               title: 'Reason', dataIndex: 'error',
               render: (e?: string) =>
                 e ? <span style={{ fontFamily: mono, fontSize: 11, color: c.text2 }}>{e}</span> : null,
+            },
+            {
+              // The manifest THIS chart rendered to. Offered per chart as well
+              // as for the release, because a vendor engineer owns one chart
+              // and does not want the other ninety-six.
+              title: 'Manifest', dataIndex: 'name', width: 150,
+              render: (_: unknown, ch) => (
+                available.has(ch.name)
+                  ? (
+                    <Space size={10}>
+                      <Typography.Link
+                        style={{ fontSize: 12 }}
+                        href={renderedManifestUrl(product, reference, {
+                          repository, document: ch.name,
+                        })}
+                        target="_blank"
+                        rel="noreferrer"
+                      >
+                        Open
+                      </Typography.Link>
+                      <Typography.Link
+                        style={{ fontSize: 12 }}
+                        href={renderedManifestUrl(product, reference, {
+                          repository, document: ch.name, download: true,
+                        })}
+                      >
+                        Download
+                      </Typography.Link>
+                    </Space>
+                  )
+                  : (
+                    <Typography.Text type="secondary" style={{ fontSize: 11 }}>
+                      {ch.status === 'ok' ? 'not kept' : 'nothing rendered'}
+                    </Typography.Text>
+                  )
+              ),
             },
           ]}
         />
@@ -469,8 +552,11 @@ function ResultsTable({ results, loading, onOpen, emptyText }: {
  * found, what was expected, and what to do. A drawer rather than a modal
  * because the reader is working down a list.
  */
-function ResultDrawer({ result, onClose }: {
+function ResultDrawer({ result, product, reference, repository, onClose }: {
   result: ComplianceResult | null
+  product: string
+  reference: string
+  repository?: string
   onClose: () => void
 }) {
   return (
@@ -497,6 +583,19 @@ function ResultDrawer({ result, onClose }: {
               {result.message || result.error}
             </Typography.Paragraph>
           )}
+
+          {/*
+            THE MANIFEST, ahead of the address table. "Show me" is the next
+            question after "what is wrong"; the address is what somebody reads
+            once they already believe it, and burying the evidence under it
+            makes verifying a finding a thing you have to scroll for.
+          */}
+          <EvidencePanel
+            product={product}
+            reference={reference}
+            repository={repository}
+            result={result}
+          />
 
           <Descriptions column={1} size="small" bordered>
             <Descriptions.Item label="Chart">

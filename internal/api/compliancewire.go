@@ -81,6 +81,12 @@ type ComplianceChartView struct {
 // deriving it needs the release - and the most important consumer of this shape
 // is an export a vendor opens without access to this platform.
 type ComplianceResultView struct {
+	// Seq is this result's position in the run, which is its identity there.
+	// Carried so the interface can ask for the rendered manifest THIS result
+	// was judged against without describing it: an excerpt is a claim about
+	// what the run found, so the run has to be what says where to point.
+	Seq int `json:"seq"`
+
 	Check       string `json:"check"`
 	Title       string `json:"title,omitempty"`
 	Severity    string `json:"severity"`
@@ -254,6 +260,7 @@ func complianceResultViews(rows []store.ComplianceResultRow) []ComplianceResultV
 	out := make([]ComplianceResultView, 0, len(rows))
 	for _, r := range rows {
 		out = append(out, ComplianceResultView{
+			Seq:   r.Seq,
 			Check: r.CheckID, Title: r.CheckTitle, Severity: r.Severity,
 			Category: r.Category, Pack: r.Pack, Tier: r.Tier,
 			Remediation: r.Remediation, Reference: r.Reference,

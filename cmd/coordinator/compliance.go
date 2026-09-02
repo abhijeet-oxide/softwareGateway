@@ -191,8 +191,14 @@ func buildCompliance(
 				PerRelease: cfg.MaxReleaseBytes,
 			},
 		},
-		Helm:     helm,
-		Probe:    cfg.ProbeDeterminacy(),
+		Helm:  helm,
+		Probe: cfg.ProbeDeterminacy(),
+		// How much of the rendered text to keep, so a finding can be shown
+		// against the manifest it came from rather than only asserted.
+		Evidence: render.EvidenceBudget{
+			PerDocument: cfg.EvidencePerDocument,
+			PerRelease:  cfg.EvidencePerRelease,
+		},
 		Packages: packages,
 		// The SAME classifier the artifact listing uses. A compliance run with
 		// its own opinion about what a chart is would disagree with the page

@@ -19,9 +19,14 @@ import (
 // artifacts, unpack them, render each one, probe determinacy, and hand back the
 // resources with what could not be produced recorded rather than dropped.
 type Preparer struct {
-	Fetcher  Fetcher
-	Helm     render.Helm
-	Probe    bool
+	Fetcher Fetcher
+	Helm    render.Helm
+	Probe   bool
+	// Evidence bounds the rendered manifests a run keeps so a finding can be
+	// SHOWN against the text it came from. Held here rather than on the loader
+	// because the budget is per RELEASE and a release is loaded one chart
+	// directory at a time: a budget started per directory is not a budget.
+	Evidence render.EvidenceBudget
 	Packages PackageLookup
 	// Classify names what an artifact is, and it is the SAME classifier the
 	// artifact listing, the transfer breakdown and the comparison use.
@@ -136,7 +141,11 @@ func (p *Preparer) Prepare(
 	// determinacy answer has to be release-wide because a check may compare a
 	// resource in one chart against one in another, so the second render is
 	// driven below and merged once.
-	loader := render.Loader{Helm: helm, Probe: false, HelmAvailable: available, HelmVersion: version}
+	loader := render.Loader{
+		Helm: helm, Probe: false, HelmAvailable: available, HelmVersion: version,
+		// One keeper for the whole release, shared by every chart's Load.
+		Keeper: render.NewEvidenceKeeper(p.Evidence),
+	}
 
 	var baseline, perturbed []compliance.Resource
 	probeUsable := p.Probe && available
@@ -181,6 +190,7 @@ func (p *Preparer) Prepare(
 			rel.Charts = append(rel.Charts, ch)
 		}
 		rel.Resources = append(rel.Resources, chartRel.Resources...)
+		rel.Rendered = append(rel.Rendered, chartRel.Rendered...)
 		baseline = append(baseline, chartRel.Resources...)
 
 		if probeUsable {

@@ -36,6 +36,12 @@ type ComplianceFilter struct {
 	Search      string
 	Limit       int
 	Offset      int
+
+	// Seq narrows to ONE result by its position in the run, which is its
+	// identity there. The evidence endpoints take it rather than an address
+	// from the caller: an excerpt is a claim about what a run found, so the run
+	// has to be what says where to point.
+	Seq *int
 }
 
 // LatestComplianceRun returns a package's most recent run, or ErrNotFound.
@@ -158,6 +164,86 @@ func (p *Packages) ComplianceCharts(ctx context.Context, runID string) ([]Compli
 	return out, rows.Err()
 }
 
+// ComplianceRenderedIndex lists the documents a run kept, WITHOUT their content.
+//
+// Without, deliberately: the index is what a page renders beside the coverage
+// table, and the content is megabytes. A listing that carried it would make
+// opening the tab as expensive as downloading every chart.
+func (p *Packages) ComplianceRenderedIndex(ctx context.Context, runID string) ([]ComplianceRenderedRow, error) {
+	rows, err := p.db.QueryContext(ctx, p.dialect.Rewrite(`
+		SELECT seq, chart, chart_version, source_file, line_count, byte_count, truncated
+		  FROM compliance_rendered
+		 WHERE run_id = ?
+		 ORDER BY chart, source_file, seq`), runID)
+	if err != nil {
+		return nil, fmt.Errorf("list compliance evidence: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+
+	var out []ComplianceRenderedRow
+	for rows.Next() {
+		var d ComplianceRenderedRow
+		if err := rows.Scan(&d.Seq, &d.Chart, &d.ChartVersion, &d.SourceFile,
+			&d.Lines, &d.Bytes, &d.Truncated); err != nil {
+			return nil, fmt.Errorf("scan compliance evidence: %w", err)
+		}
+		out = append(out, d)
+	}
+	return out, rows.Err()
+}
+
+// ComplianceRendered returns one document with its content, or ErrNotFound.
+//
+// `key` is a chart name or the path of a manifest the release ships as-is, and
+// both are matched because those are the two ways a document is named and a
+// caller holding a result's address knows only which one it has.
+func (p *Packages) ComplianceRendered(ctx context.Context, runID, key string) (ComplianceRenderedRow, error) {
+	var d ComplianceRenderedRow
+	err := p.db.QueryRowContext(ctx, p.dialect.Rewrite(`
+		SELECT seq, chart, chart_version, source_file, content, line_count, byte_count, truncated
+		  FROM compliance_rendered
+		 WHERE run_id = ? AND (chart = ? OR (chart = '' AND source_file = ?))
+		 ORDER BY seq LIMIT 1`), runID, key, key).
+		Scan(&d.Seq, &d.Chart, &d.ChartVersion, &d.SourceFile, &d.Content,
+			&d.Lines, &d.Bytes, &d.Truncated)
+	if errors.Is(err, sql.ErrNoRows) {
+		return d, ErrNotFound
+	}
+	if err != nil {
+		return d, fmt.Errorf("read compliance evidence %q: %w", key, err)
+	}
+	return d, nil
+}
+
+// ComplianceRenderedAll returns every document of a run, content included.
+//
+// The one caller is the download of a whole release's rendered manifests, which
+// is a deliberate single large read: what a vendor is sent is one file, and
+// assembling it from n round trips would be slower and could interleave with a
+// re-check that replaced half of them.
+func (p *Packages) ComplianceRenderedAll(ctx context.Context, runID string) ([]ComplianceRenderedRow, error) {
+	rows, err := p.db.QueryContext(ctx, p.dialect.Rewrite(`
+		SELECT seq, chart, chart_version, source_file, content, line_count, byte_count, truncated
+		  FROM compliance_rendered
+		 WHERE run_id = ?
+		 ORDER BY chart, source_file, seq`), runID)
+	if err != nil {
+		return nil, fmt.Errorf("read compliance evidence: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+
+	var out []ComplianceRenderedRow
+	for rows.Next() {
+		var d ComplianceRenderedRow
+		if err := rows.Scan(&d.Seq, &d.Chart, &d.ChartVersion, &d.SourceFile, &d.Content,
+			&d.Lines, &d.Bytes, &d.Truncated); err != nil {
+			return nil, fmt.Errorf("scan compliance evidence: %w", err)
+		}
+		out = append(out, d)
+	}
+	return out, rows.Err()
+}
+
 // ComplianceResults returns a page of results, filtered.
 //
 // Total is the count BEFORE the page is taken, because a reader needs to know
@@ -245,6 +331,11 @@ func complianceWhere(runID string, f ComplianceFilter) (string, []any) {
 	in("chart", f.Charts)
 	in("kind", f.Kinds)
 	in("determinacy", f.Determinacy)
+
+	if f.Seq != nil {
+		clauses = append(clauses, "seq = ?")
+		args = append(args, *f.Seq)
+	}
 
 	if s := strings.TrimSpace(f.Search); s != "" {
 		// Matched against the fields a person types into a search box while

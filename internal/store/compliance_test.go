@@ -1,6 +1,7 @@
 package store
 
 import (
+	"errors"
 	"testing"
 	"time"
 )
@@ -68,7 +69,13 @@ func TestFinishWritesRunChartsAndResults(t *testing.T) {
 			Chart: "alpha", Kind: "Deployment", Name: "app",
 			Waiver: "WAIVER-1", WaiverExpires: &expires},
 	}
-	if err := p.FinishComplianceRun(t.Context(), run, charts, results); err != nil {
+	rendered := []ComplianceRenderedRow{
+		{Seq: 0, Chart: "alpha", ChartVersion: "1.0.0",
+			Content: "kind: Deployment\nmetadata:\n  name: app\n", Lines: 3, Bytes: 38},
+		{Seq: 1, SourceFile: "manifests/crd.yaml",
+			Content: "kind: CustomResourceDefinition\n", Lines: 1, Bytes: 30, Truncated: true},
+	}
+	if err := p.FinishComplianceRun(t.Context(), run, charts, results, rendered); err != nil {
 		t.Fatal(err)
 	}
 
@@ -171,7 +178,7 @@ func TestComplianceFilters(t *testing.T) {
 	}
 	if err := p.FinishComplianceRun(t.Context(),
 		ComplianceRunRow{ID: "run-3", PackageID: pkg, State: ComplianceComplete, Verdict: "fail"},
-		nil, results); err != nil {
+		nil, results, nil); err != nil {
 		t.Fatal(err)
 	}
 
@@ -290,5 +297,78 @@ func TestUncheckedPackageHasNoSummary(t *testing.T) {
 	}
 	if _, present := sum[pkg]; present {
 		t.Error("an unchecked release has a compliance summary")
+	}
+}
+
+// The evidence a finding is shown against: kept with the run, addressed the two
+// ways a document can be named, and reclaimed when a later run supersedes it.
+func TestComplianceEvidenceIsKeptAndSuperseded(t *testing.T) {
+	st := openTestStore(t)
+	p := NewPackages(st)
+	pkg := seedPackageFor(t, st)
+
+	seedRun(t, p, pkg, "run-ev-1")
+	first := []ComplianceRenderedRow{
+		{Seq: 0, Chart: "alpha", ChartVersion: "1.0.0", Content: "kind: Deployment\n", Lines: 1, Bytes: 17},
+		{Seq: 1, SourceFile: "manifests/ns.yaml", Content: "kind: Namespace\n", Lines: 1, Bytes: 16},
+	}
+	if err := p.FinishComplianceRun(t.Context(),
+		ComplianceRunRow{ID: "run-ev-1", PackageID: pkg, State: ComplianceComplete, Verdict: "pass"},
+		nil, nil, first); err != nil {
+		t.Fatal(err)
+	}
+
+	index, err := p.ComplianceRenderedIndex(t.Context(), "run-ev-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(index) != 2 {
+		t.Fatalf("index has %d documents, want 2", len(index))
+	}
+	// The index carries no content: it is rendered beside a coverage table and
+	// the content is megabytes.
+	for _, d := range index {
+		if d.Content != "" {
+			t.Errorf("the index carried the content of %s%s", d.Chart, d.SourceFile)
+		}
+	}
+
+	// A chart is addressed by its name, a plain manifest by its path.
+	byChart, err := p.ComplianceRendered(t.Context(), "run-ev-1", "alpha")
+	if err != nil || byChart.Content != "kind: Deployment\n" {
+		t.Fatalf("by chart: %+v, %v", byChart, err)
+	}
+	byFile, err := p.ComplianceRendered(t.Context(), "run-ev-1", "manifests/ns.yaml")
+	if err != nil || byFile.Content != "kind: Namespace\n" {
+		t.Fatalf("by file: %+v, %v", byFile, err)
+	}
+	if _, err := p.ComplianceRendered(t.Context(), "run-ev-1", "nope"); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("a document that does not exist returned %v", err)
+	}
+
+	// A second run supersedes the first. Its evidence is reclaimed; its
+	// RESULTS are not, so the older run still reads back as a run.
+	seedRun(t, p, pkg, "run-ev-2")
+	if err := p.FinishComplianceRun(t.Context(),
+		ComplianceRunRow{ID: "run-ev-2", PackageID: pkg, State: ComplianceComplete, Verdict: "pass"},
+		nil, nil, []ComplianceRenderedRow{
+			{Seq: 0, Chart: "alpha", Content: "kind: Deployment\n", Lines: 1, Bytes: 17},
+		}); err != nil {
+		t.Fatal(err)
+	}
+
+	old, err := p.ComplianceRenderedIndex(t.Context(), "run-ev-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(old) != 0 {
+		t.Fatalf("the superseded run kept %d documents", len(old))
+	}
+	if _, err := p.ComplianceRun(t.Context(), "run-ev-1"); err != nil {
+		t.Fatalf("the superseded RUN was removed too: %v", err)
+	}
+	fresh, err := p.ComplianceRenderedAll(t.Context(), "run-ev-2")
+	if err != nil || len(fresh) != 1 || fresh[0].Content == "" {
+		t.Fatalf("the latest run's evidence: %+v, %v", fresh, err)
 	}
 }

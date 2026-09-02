@@ -497,8 +497,13 @@ func run() error {
 		// the catalogue need neither. A release's findings and the rulebook
 		// stay readable when a run could not happen - which is exactly when
 		// somebody is working out why a release was blocked.
-		ComplianceRunner:    complianceAPIRunner(complianceRunner),
-		ComplianceStore:     packages,
+		ComplianceRunner: complianceAPIRunner(complianceRunner),
+		ComplianceStore:  packages,
+		// The manifests a run judged, so a finding can be SHOWN. Same store as
+		// the results, and a separate seam because it is separately absent: a
+		// deployment can turn the keeping of them off, and a run recorded
+		// before they were kept has none.
+		ComplianceEvidence:  packages,
 		ComplianceCatalogue: complianceAPICatalogue(policyCat),
 		ComplianceHelm:      complianceAPIHelm(cfg.Coordinator.Compliance),
 		// Reading one file out of a release, for somebody looking at it. Here

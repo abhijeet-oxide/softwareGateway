@@ -2046,6 +2046,16 @@ export interface ComplianceChart {
  * is an export a vendor opens with no access to this platform.
  */
 export interface ComplianceResult {
+  /**
+   * This result's position in its run, which is its identity there.
+   *
+   * What the evidence endpoint takes. The interface could describe the address
+   * it wants an excerpt of - it has the chart, the line and the field on the
+   * row - and then the excerpt would be a claim assembled by whoever asked for
+   * it. Sending the seq means the server reads the address off the stored run,
+   * so what comes back is a statement about what the run found.
+   */
+  seq: number
   check: string
   title?: string
   severity: 'block' | 'warn' | 'info'
@@ -2170,4 +2180,64 @@ export interface PolicyCatalogueResponse {
   bundleDigest?: string
   packs: PolicyPack[]
   checks: PolicyCheck[]
+}
+
+/**
+ * One rendered document a compliance run kept.
+ *
+ * `document` is the key the content and excerpt endpoints take: a chart's name,
+ * or the path of a manifest the release ships as-is.
+ */
+export interface RenderedDocument {
+  document: string
+  chart?: string
+  chartVersion?: string
+  sourceFile?: string
+  lines: number
+  bytes: number
+  /**
+   * Cut at this deployment's evidence budget, so line numbers past the cut do
+   * not exist. An excerpt beyond it is refused rather than approximated.
+   */
+  truncated?: boolean
+}
+
+export interface ListRenderedResponse {
+  product: string
+  release: string
+  runId?: string
+  documents: RenderedDocument[]
+  /** What a whole-release download would weigh, so the button can say so. */
+  totalBytes: number
+}
+
+/**
+ * A window on the rendered manifest a finding was judged against.
+ *
+ * `startLine` is the real line number of `lines[0]` in the whole document, so
+ * the excerpt is numbered as it actually is - a line quoted out of it into a
+ * mail to the vendor has to point at the same line of the download.
+ *
+ * `focusLine` is the line the check's field NAMES and is absent when that field
+ * is not in the document, which is half of every run. `nearLine` is then the
+ * deepest part of the path that does exist - the container a memory limit is
+ * missing from - and means only that. Neither is ever guessed.
+ */
+export interface ComplianceExcerpt {
+  chart?: string
+  chartVersion?: string
+  sourceFile?: string
+
+  startLine: number
+  lines: string[]
+
+  objectLine: number
+  focusLine?: number
+  nearLine?: number
+
+  totalLines: number
+  truncated?: boolean
+
+  document: string
+  locus?: string
 }

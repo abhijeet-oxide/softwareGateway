@@ -261,6 +261,10 @@ type Deps struct {
 	// stay readable when neither is available, which is exactly when somebody
 	// is asking why a release was blocked.
 	ComplianceStore ComplianceStore
+	// ComplianceEvidence serves the manifests a run judged. Separate from the
+	// store above because it is separately absent: a deployment can turn the
+	// keeping of them off, and a run recorded before they were kept has none.
+	ComplianceEvidence ComplianceEvidence
 	// ComplianceCatalogue serves the rulebook: what will be checked and why.
 	//
 	// A function rather than a value, because the loader swaps the catalogue
@@ -493,6 +497,19 @@ func (s *Server) routes() chi.Router {
 					s.handlePackageCompliance)
 				r.Get("/products/{product}/packages/{package}/compliance/runs",
 					s.handleComplianceRuns)
+			}
+			// THE MANIFESTS THE RUN JUDGED. Registered beside the results and
+			// on the same reads-only condition, because that is what they are:
+			// a finding and the lines it is about are one answer, and a
+			// Coordinator that can serve the first and not the second sends a
+			// vendor a claim with the evidence missing.
+			if s.deps.ComplianceStore != nil && s.deps.ComplianceEvidence != nil {
+				r.Get("/products/{product}/packages/{package}/compliance/rendered",
+					s.handleComplianceRendered)
+				r.Get("/products/{product}/packages/{package}/compliance/rendered/content",
+					s.handleComplianceRenderedContent)
+				r.Get("/products/{product}/packages/{package}/compliance/rendered/excerpt",
+					s.handleComplianceExcerpt)
 			}
 			// Running one reaches a vendor registry and shells out to helm, so
 			// it is registered only where those are possible.

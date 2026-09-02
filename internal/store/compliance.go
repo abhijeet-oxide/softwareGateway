@@ -168,6 +168,22 @@ type ComplianceChartRow struct {
 	Resources      int
 }
 
+// ComplianceRenderedRow is one document a run judged, kept so a finding can be
+// shown against the manifest it came from rather than only asserted.
+//
+// See db/migrations/postgres/00039_compliance_evidence.sql for why the unit is
+// a whole chart stream and why only the latest run keeps its copy.
+type ComplianceRenderedRow struct {
+	Seq          int
+	Chart        string
+	ChartVersion string
+	SourceFile   string
+	Content      string
+	Lines        int
+	Bytes        int
+	Truncated    bool
+}
+
 // ComplianceResultRow is one check's judgement about one subject.
 //
 // Flat on purpose: this is the row a report exports and a filter narrows, and
@@ -293,6 +309,7 @@ func (p *Packages) ComplianceRunning(ctx context.Context, packageID int64) (stri
 func (p *Packages) FinishComplianceRun(
 	ctx context.Context, run ComplianceRunRow,
 	charts []ComplianceChartRow, results []ComplianceResultRow,
+	rendered []ComplianceRenderedRow,
 ) error {
 	tx, err := p.db.BeginTx(ctx, nil)
 	if err != nil {
@@ -352,6 +369,38 @@ func (p *Packages) FinishComplianceRun(
 			r.Observed, r.Expected, r.Message, r.Error,
 			r.Waiver, timeOrNil(r.WaiverExpires), r.Fingerprint); err != nil {
 			return fmt.Errorf("insert compliance result %d (%s): %w", r.Seq, r.CheckID, err)
+		}
+	}
+
+	// THE EVIDENCE, and the reclaiming of the evidence it supersedes.
+	//
+	// This is the one part of a run whose size the vendor sets - a chart that
+	// renders four hundred ConfigMaps of embedded certificates is megabytes of
+	// YAML - and without the delete every run of every release would keep its
+	// own copy forever. The interface reads the latest run and nothing else
+	// does, so the older copies are unreachable before they are unwanted.
+	//
+	// The older runs' RESULTS are untouched. What is reclaimed is the manifests
+	// behind them, and a run whose evidence has gone says so rather than
+	// showing an empty document.
+	if _, err := tx.ExecContext(ctx, p.dialect.Rewrite(`
+		DELETE FROM compliance_rendered
+		 WHERE run_id IN (SELECT id FROM compliance_runs
+		                   WHERE package_id = ? AND id <> ?)`),
+		run.PackageID, run.ID); err != nil {
+		return fmt.Errorf("reclaim superseded compliance evidence: %w", err)
+	}
+
+	for _, d := range rendered {
+		if _, err := tx.ExecContext(ctx, p.dialect.Rewrite(`
+			INSERT INTO compliance_rendered
+			  (run_id, seq, chart, chart_version, source_file, content,
+			   line_count, byte_count, truncated)
+			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`),
+			run.ID, d.Seq, d.Chart, d.ChartVersion, d.SourceFile, d.Content,
+			d.Lines, d.Bytes, d.Truncated); err != nil {
+			return fmt.Errorf("insert compliance evidence for %s%s: %w",
+				d.Chart, d.SourceFile, err)
 		}
 	}
 
@@ -475,5 +524,14 @@ func (p *Packages) RecordComplianceRun(ctx context.Context, runID string, packag
 			Fingerprint: r.Fingerprint(),
 		})
 	}
-	return p.FinishComplianceRun(ctx, row, charts, results)
+	rendered := make([]ComplianceRenderedRow, 0, len(run.Rendered))
+	for i, d := range run.Rendered {
+		rendered = append(rendered, ComplianceRenderedRow{
+			Seq: i, Chart: d.Chart, ChartVersion: d.ChartVersion,
+			SourceFile: d.SourceFile, Content: string(d.Content),
+			Lines: d.Lines, Bytes: d.Bytes, Truncated: d.Truncated,
+		})
+	}
+
+	return p.FinishComplianceRun(ctx, row, charts, results, rendered)
 }

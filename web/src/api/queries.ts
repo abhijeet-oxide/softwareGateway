@@ -19,6 +19,8 @@ import type {
   SetPriorityRequest, Transfer, TransferActivity, TransferControlResponse, VersionResponse,
   ComplianceProgress,
   ComplianceRunsResponse,
+  ComplianceExcerpt,
+  ListRenderedResponse,
   PackageComplianceResponse,
   PolicyCatalogueResponse,
 } from './types'
@@ -1387,6 +1389,12 @@ export function usePackageCompliance(
     wasRunning.current = false
     void qc.invalidateQueries({ queryKey: ['package'] })
     void qc.invalidateQueries({ queryKey: ['packages'] })
+    // And the EVIDENCE. A run replaces the manifests it kept, so an index
+    // fetched while the run was going lists the previous run's documents - or,
+    // on a first check, none at all, which is what the coverage table then said
+    // over a run whose manifests were sitting right there.
+    void qc.invalidateQueries({ queryKey: ['compliance-rendered'] })
+    void qc.invalidateQueries({ queryKey: ['compliance-excerpt'] })
   }, [running, qc])
 
   return result
@@ -1438,6 +1446,8 @@ export function useCancelCompliance() {
     },
     onSuccess: () => {
       void qc.invalidateQueries({ queryKey: ['package-compliance'] })
+      void qc.invalidateQueries({ queryKey: ['compliance-rendered'] })
+      void qc.invalidateQueries({ queryKey: ['compliance-excerpt'] })
     },
   })
 }
@@ -1461,6 +1471,97 @@ export function usePackageComplianceRuns(
     retry: false,
     throwOnError: false,
   })
+}
+
+/**
+ * The rendered manifests a run kept, WITHOUT their content.
+ *
+ * The index only: the content is megabytes, and a coverage table that fetched
+ * it to render a download link would make opening the tab as expensive as
+ * downloading every chart.
+ *
+ * `retry: false` and `throwOnError: false` because the ordinary answers here
+ * are absences - a release nobody has checked, a run recorded before manifests
+ * were kept, a Coordinator with evidence turned off - and each of those is a
+ * thing to say beside the results rather than an error over them.
+ */
+export function useRenderedManifests(
+  product: string | undefined,
+  ref: string | undefined,
+  opts: { repository?: string; enabled?: boolean } = {},
+) {
+  const { repository, enabled = true } = opts
+  return useQuery({
+    queryKey: ['compliance-rendered', product, ref, repository],
+    queryFn: () => {
+      const { segment, query: q } = packageRef(ref!)
+      return api.get<ListRenderedResponse>(
+        `/products/${encodeURIComponent(product!)}/packages/${encodeURIComponent(segment)}/compliance/rendered` +
+        scopeQuery(q, repository))
+    },
+    enabled: enabled && Boolean(product && ref),
+    retry: false,
+    throwOnError: false,
+  })
+}
+
+/**
+ * The lines of the rendered manifest ONE finding is about.
+ *
+ * Fetched when a finding is opened rather than with the results: a release
+ * produces ten to fifteen thousand of them and nobody reads more than a few
+ * dozen manifests. Cached by seq, so re-opening a row is free.
+ *
+ * The request carries the result's position in the run and nothing else. It
+ * could carry the chart, the line and the field - they are all on the row - and
+ * then the excerpt would be a claim assembled here. Sending the seq means the
+ * server reads the address off the stored run, so what comes back is a
+ * statement about what the run found.
+ */
+export function useComplianceExcerpt(
+  product: string | undefined,
+  ref: string | undefined,
+  seq: number | undefined,
+  opts: { repository?: string; context?: number } = {},
+) {
+  const { repository, context } = opts
+  return useQuery({
+    queryKey: ['compliance-excerpt', product, ref, repository, seq, context],
+    queryFn: () => {
+      const { segment, query: q } = packageRef(ref!)
+      const scope = scopeQuery(q, repository)
+      return api.get<ComplianceExcerpt>(
+        `/products/${encodeURIComponent(product!)}/packages/${encodeURIComponent(segment)}` +
+        `/compliance/rendered/excerpt${scope ? `${scope}&` : '?'}seq=${seq}` +
+        (context ? `&context=${context}` : ''))
+    },
+    enabled: Boolean(product && ref) && seq !== undefined,
+    staleTime: MINUTE,
+    retry: false,
+    throwOnError: false,
+  })
+}
+
+/**
+ * Where a rendered manifest is downloaded from.
+ *
+ * A URL rather than a query, because the thing wanted is a FILE: an anchor the
+ * browser saves, not bytes fetched into memory and handed back out again. Omit
+ * `document` for the whole release in one file, which is the artifact a vendor
+ * conversation actually needs.
+ */
+export function renderedManifestUrl(
+  product: string, ref: string,
+  opts: { repository?: string; document?: string; download?: boolean } = {},
+): string {
+  const { segment, query: q } = packageRef(ref)
+  const scope = scopeQuery(q, opts.repository)
+  const params: string[] = []
+  if (opts.document) params.push(`document=${encodeURIComponent(opts.document)}`)
+  if (opts.download) params.push('download=1')
+  const tail = params.length ? `${scope ? `${scope}&` : '?'}${params.join('&')}` : scope
+  return `/api/v1/products/${encodeURIComponent(product)}/packages/${encodeURIComponent(segment)}`
+    + `/compliance/rendered/content${tail}`
 }
 
 /**

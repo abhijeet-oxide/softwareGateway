@@ -1,14 +1,14 @@
 import { useEffect, useState } from 'react'
 import type { ReactNode } from 'react'
 import {
-  Alert, App, Button, Drawer, Dropdown, Popover, Progress, Space, Tag, Timeline, Tooltip, Typography,
+  Alert, Button, Drawer, Dropdown, Popover, Progress, Space, Tag, Timeline, Tooltip, Typography,
 } from 'antd'
 import { formatAbsolute, formatRelative } from '../domain/format'
-import { download } from '../api/client'
+import { ExportMenu } from './exportmenu'
 import {
-  CheckCircleOutlined, CopyOutlined, DownloadOutlined, DownOutlined, ExclamationCircleOutlined,
-  FileTextOutlined, LoadingOutlined, MinusCircleOutlined, QuestionCircleOutlined, StopOutlined,
-  SyncOutlined, WarningOutlined, FolderZip24RegularIcon 
+  CheckCircleOutlined, CopyOutlined, DownOutlined, ExclamationCircleOutlined,
+  FileTextOutlined, MinusCircleOutlined, QuestionCircleOutlined, StopOutlined,
+  SyncOutlined, WarningOutlined, FolderZip24RegularIcon,
 } from '../icons'
 import {
   c, mono, severity as severityColour, severitySurface, StatusPill, tokens,
@@ -1582,64 +1582,29 @@ export function SecurityExportMenu({
   workbookNote?: string
   bundleNote?: string
 }) {
-  const [running, setRunning] = useState<string | null>(null)
-  const { message } = App.useApp()
-
-  const start = async (format: string, what: string) => {
-    if (running) return
-    setRunning(format)
-    try {
-      await download(urlFor(format, 'detailed'))
-    } catch (err) {
-      // Said out loud. A download that fails silently is indistinguishable
-      // from one the browser is still thinking about, and the reader waits.
-      message.error(
-        err instanceof Error ? `${what} could not be exported: ${err.message}` : `${what} could not be exported`,
-      )
-    } finally {
-      setRunning(null)
-    }
-  }
-
-  const items = [
-    {
-      key: 'xlsx',
-      icon: running === 'xlsx' ? <LoadingOutlined /> : <FileTextOutlined />,
-      label: (
-        <Space direction="vertical" size={0}>
-          <Typography.Text>Excel workbook</Typography.Text>
-          <Typography.Text type="secondary" style={{ fontSize: 11 }}>
-            {workbookNote ?? 'A summary page, then every table on this tab'}
-          </Typography.Text>
-        </Space>
-      ),
-      onClick: () => void start('xlsx', 'The workbook'),
-    },
-    {
-      key: 'zip',
-      icon: running === 'zip' ? <LoadingOutlined /> : <FolderZip24RegularIcon />,
-      label: (
-        <Space direction="vertical" size={0}>
-          <Typography.Text>Evidence bundle (ZIP)</Typography.Text>
-          <Typography.Text type="secondary" style={{ fontSize: 11 }}>
-            {bundleNote ?? 'The same tables, plus the scanner\u2019s own raw output per image'}
-          </Typography.Text>
-        </Space>
-      ),
-      onClick: () => void start('zip', 'The bundle'),
-    },
-  ]
-
   return (
-    <Dropdown menu={{ items }} disabled={disabled || Boolean(running)} trigger={['click']}>
-      <Button
-        icon={running ? <LoadingOutlined /> : <DownloadOutlined />}
-        loading={false}
-        disabled={disabled}
-      >
-        {running ? 'Preparing…' : label}
-      </Button>
-    </Dropdown>
+    <ExportMenu
+      label={label}
+      disabled={disabled}
+      choices={[
+        {
+          key: 'xlsx',
+          icon: <FileTextOutlined />,
+          label: 'Excel workbook',
+          note: workbookNote ?? 'A summary page, then every table on this tab',
+          href: urlFor('xlsx', 'detailed'),
+          noun: 'The workbook',
+        },
+        {
+          key: 'zip',
+          icon: <FolderZip24RegularIcon />,
+          label: 'Evidence bundle (ZIP)',
+          note: bundleNote ?? 'The same tables, plus the scanner\u2019s own raw output per image',
+          href: urlFor('zip', 'detailed'),
+          noun: 'The bundle',
+        },
+      ]}
+    />
   )
 }
 

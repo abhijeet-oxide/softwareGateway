@@ -325,9 +325,23 @@ func (p *Packages) ComplianceResults(ctx context.Context, runID string, f Compli
 		return nil, 0, fmt.Errorf("count compliance results: %w", err)
 	}
 
+	/*
+	 * CLAMPED TO THE CEILING, not dropped to the default.
+	 *
+	 * Asking for more than is allowed used to return 500 rows - the default -
+	 * so a caller asking for 5,000 got a tenth of them with nothing saying so.
+	 * A request over the bound gets the bound.
+	 *
+	 * The ceiling is the run's own MaxResults rather than a page size, because
+	 * the export reads the whole run: a workbook of the first two thousand
+	 * findings of eleven thousand is a file that looks complete.
+	 */
 	limit := f.Limit
-	if limit <= 0 || limit > 2000 {
+	switch {
+	case limit <= 0:
 		limit = 500
+	case limit > MaxComplianceResults:
+		limit = MaxComplianceResults
 	}
 	// Ordered by seq, which the engine assigned in reading order: failures
 	// first, then the undecidable, then waivers, passes and skips, and within
@@ -417,6 +431,13 @@ func complianceWhere(runID string, f ComplianceFilter) (string, []any) {
 	}
 	return "WHERE " + strings.Join(clauses, " AND "), args
 }
+
+// MaxComplianceResults bounds one read of a run's results.
+//
+// The same number the engine will store for a run, so an export can ask for
+// everything and get everything: a workbook of the first two thousand findings
+// of eleven thousand is a file that looks complete and is not.
+const MaxComplianceResults = 200_000
 
 // PackageComplianceRow is the listing summary.
 type PackageComplianceRow struct {

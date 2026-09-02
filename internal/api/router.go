@@ -497,6 +497,12 @@ func (s *Server) routes() chi.Router {
 					s.handlePackageCompliance)
 				r.Get("/products/{product}/packages/{package}/compliance/runs",
 					s.handleComplianceRuns)
+				// THE REPORT. Registered on the reads-only condition beside the
+				// results, because it is the same answer for a reader who is
+				// never going to open this platform - a vendor engineer sent a
+				// spreadsheet, an auditor asked to show the release was checked.
+				r.Get("/products/{product}/packages/{package}/compliance/export",
+					s.handleExportPackageCompliance)
 			}
 			// THE MANIFESTS THE RUN JUDGED. Registered beside the results and
 			// on the same reads-only condition, because that is what they are:

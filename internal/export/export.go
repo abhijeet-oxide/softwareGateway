@@ -125,6 +125,21 @@ type Sheet struct {
 	// and spanning. Used by the summary sheet, which is read rather than
 	// filtered.
 	Title string
+	// Wrap names the columns whose cells wrap and sit at the top of the row,
+	// by zero-based index.
+	//
+	// # Why a column has to ask for it
+	//
+	// Because a cell of eighty characters, or one holding three addresses on
+	// three lines, renders as ONE line clipped at the column edge - and the
+	// three-line cell renders as its first line with nothing saying there are
+	// two more. Excel does not wrap by default and a reader cannot discover
+	// that the rest is there.
+	//
+	// Not every column, because wrapping a chart name or a digest makes a row
+	// four lines tall to no purpose. Only the prose: a finding, a remediation,
+	// a renderer's message.
+	Wrap []int
 }
 
 // File is one member of a bundle: a body, at a path, as the scanner produced it.
@@ -398,7 +413,7 @@ func writeZipSheet(zw *zip.Writer, name string, sheet Sheet) error {
 
 	rowNum := 1
 	if sheet.Title != "" {
-		if err := writeStyledRow(f, rowNum, []string{sheet.Title}, styleTitle, styleTitle); err != nil {
+		if err := writeStyledRow(f, rowNum, []string{sheet.Title}, styleTitle, styleTitle, nil); err != nil {
 			return err
 		}
 		rowNum += 2
@@ -413,7 +428,7 @@ func writeZipSheet(zw *zip.Writer, name string, sheet Sheet) error {
 		rowNum += 2
 	}
 	if len(sheet.Headers) > 0 {
-		if err := writeStyledRow(f, rowNum, sheet.Headers, styleHeader, styleHeader); err != nil {
+		if err := writeStyledRow(f, rowNum, sheet.Headers, styleHeader, styleHeader, nil); err != nil {
 			return err
 		}
 		rowNum++
@@ -425,9 +440,13 @@ func writeZipSheet(zw *zip.Writer, name string, sheet Sheet) error {
 	if isFieldValue(sheet) {
 		firstColumn = styleLabel
 	}
+	wrapped := map[int]bool{}
+	for _, col := range sheet.Wrap {
+		wrapped[col] = true
+	}
 	for _, row := range sheet.Rows {
 		if err := writeStyledRow(f, rowNum, pad(row, len(sheet.Headers)),
-			firstColumn, styleGeneral); err != nil {
+			firstColumn, styleGeneral, wrapped); err != nil {
 			return err
 		}
 		rowNum++
@@ -497,7 +516,7 @@ func columnName(col int) string {
 
 // writeRow emits one unstyled row.
 func writeRow(w io.Writer, rowNum int, cells []string) error {
-	return writeStyledRow(w, rowNum, cells, styleGeneral, styleGeneral)
+	return writeStyledRow(w, rowNum, cells, styleGeneral, styleGeneral, nil)
 }
 
 // writeStyledRow emits one row, choosing a numeric cell where the value is a
@@ -506,7 +525,9 @@ func writeRow(w io.Writer, rowNum int, cells []string) error {
 // The numeric choice matters: a count written as a string sorts lexically in
 // Excel, so 10 comes before 9 and every "sort by vulnerabilities" gives the
 // wrong answer.
-func writeStyledRow(w io.Writer, rowNum int, cells []string, firstStyle, restStyle int) error {
+func writeStyledRow(
+	w io.Writer, rowNum int, cells []string, firstStyle, restStyle int, wrapped map[int]bool,
+) error {
 	// A header row is two lines tall so a wrapped heading is readable; every
 	// other row keeps Excel's own height.
 	height := ""
@@ -521,6 +542,11 @@ func writeStyledRow(w io.Writer, rowNum int, cells []string, firstStyle, restSty
 		style := restStyle
 		if i == 0 {
 			style = firstStyle
+		}
+		// Prose wraps, and only where the sheet asked. A header keeps its own
+		// style - it already wraps - and so does a title.
+		if wrapped[i] && style == styleGeneral {
+			style = styleWrapped
 		}
 		attr := ""
 		if style != styleGeneral {
@@ -730,6 +756,7 @@ const (
 	styleHeader  = 1
 	styleTitle   = 2
 	styleLabel   = 3
+	styleWrapped = 4
 )
 
 // Filename builds a download name that says what the file is and when it was

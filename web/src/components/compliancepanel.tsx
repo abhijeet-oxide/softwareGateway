@@ -1,5 +1,5 @@
 import { useMemo, useState } from 'react'
-import { Link, useLocation } from 'react-router-dom'
+import { Link } from 'react-router-dom'
 import {
   App, Button, Card, Descriptions, Drawer, Input, Segmented, Select, Space, Tooltip, Typography,
 } from 'antd'
@@ -8,7 +8,7 @@ import {
 import { Table as DataTable } from '../tablekit'
 import { LoadingOutlined } from '../icons'
 import {
-  useCancelCompliance, usePackageCompliance, useRunCompliance,
+  useCancelCompliance, useInspectPackage, usePackageCompliance, useRunCompliance,
 } from '../api/queries'
 import { EmptyStateCard } from './layout'
 import {
@@ -44,9 +44,6 @@ export function ComplianceTab({ product, reference, repository }: {
   repository?: string
 }) {
   const { message } = App.useApp()
-  // The tab lives in the URL, so pointing at another one is a link rather than
-  // a location assignment - which would reload the whole application.
-  const location = useLocation()
 
   const [view, setView] = useState<'findings' | 'everything'>('findings')
   const [chart, setChart] = useState<string | undefined>()
@@ -63,6 +60,10 @@ export function ComplianceTab({ product, reference, repository }: {
   })
   const run = useRunCompliance()
   const cancel = useCancelCompliance()
+  // Analysing, offered from HERE. See the empty state below for why this tab
+  // needs it at all, and why sending the reader to another tab to press it was
+  // the wrong way to ask.
+  const inspect = useInspectPackage(product, reference, repository)
   const data = compliance.data
 
   const start = () => {
@@ -71,26 +72,68 @@ export function ComplianceTab({ product, reference, repository }: {
     })
   }
 
-  // A release whose manifest tree has not been walked has no chart CONTENT
-  // recorded, so there is nothing to fetch. Said before the button rather than
-  // after it: pressing one that cannot work and reading a recorded failure is
-  // a worse way to learn this than being told.
+  /*
+   * NOT ANALYSED - which is not the same as "no charts", and the difference is
+   * the whole of this branch.
+   *
+   * The charts ARE listed on the Contents tab of an unanalysed release, and
+   * that is not a contradiction: a release's index NAMES its children, so what
+   * a chart is called and how many there are is known from discovery alone.
+   * What is not known is where the chart's bytes live. A chart's content sits
+   * in a LAYER of its manifest, and layer digests are recorded by walking the
+   * tree - so a check has nothing to fetch until that walk has run, and would
+   * report "no charts" over a release visibly full of them.
+   *
+   * Said before the button rather than after it: pressing one that cannot work
+   * and reading a recorded failure is a worse way to learn this than being
+   * told. And the walk is offered here, because "go to another tab and press a
+   * different button" is a detour for something this tab can start itself. The
+   * result arrives without being asked for - the release's own query notices
+   * the walk ending and refreshes this one.
+   */
   if (!compliance.isLoading && data && !data.analysed && !data.run && !data.progress) {
+    const started = Boolean(inspect.data?.started) || inspect.isPending
     return (
       <Space direction="vertical" size={16} style={{ width: '100%' }}>
         <HelmMissingNotice helm={data.helm} />
         <EmptyStateCard
-          title="This release has not been analysed yet"
+          title={
+            started
+              ? 'Analysing this release'
+              : 'This release has to be analysed first'
+          }
           explanation={
-            'A compliance check reads the charts themselves, and which blobs hold them is '
-            + 'established by walking the release. Analyse it from the Details tab, then come '
-            + 'back here.'
+            started
+              ? 'Reading the manifest tree from the vendor registry. It carries on if you leave '
+                + 'this page, and this tab offers the check as soon as the walk finishes.'
+              : 'Its charts are listed already - the release index names them. Where each '
+                + "chart's content lives is not: that is a layer inside the chart's own "
+                + 'manifest, and walking the release is what records it. A check reads the '
+                + 'charts themselves, so it has nothing to open until then.'
           }
           action={
             <Space direction="vertical" size={10}>
-              <Link to={{ pathname: location.pathname, search: '?tab=details' }}>
-                <Button type="primary">Go to Details to analyse</Button>
-              </Link>
+              {started ? (
+                <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+                  <LoadingOutlined spin style={{ color: c.brand, marginRight: 6 }} />
+                  Walking the manifest tree. Nothing is downloaded.
+                </Typography.Text>
+              ) : (
+                <Button
+                  type="primary"
+                  loading={inspect.isPending}
+                  onClick={() => inspect.mutate()}
+                >
+                  Analyse this release
+                </Button>
+              )}
+              {inspect.isError && (
+                <Typography.Text type="danger" style={{ fontSize: 12 }}>
+                  {inspect.error instanceof Error
+                    ? inspect.error.message
+                    : 'The registry did not answer.'}
+                </Typography.Text>
+              )}
               <Link to="/policies" style={{ fontSize: 12, color: c.brand }}>
                 See what would be checked
               </Link>

@@ -76,12 +76,28 @@ import type {
  * different event from one that read three hundred manifests, and both look
  * identical if all you do is refresh the page.
  */
-function MeasurePanel({
-  analysed, analysing, analysisError, artifactCount, inspect, cancel, disabled,
-}: {
-  analysed: boolean
-  /** Somebody else is already walking it - discovery, or another reader. */
-  analysing?: boolean
+function MeasurePanel({ pkg, inspect, cancel, disabled }: {
+  /**
+   * The release, which is the ONLY thing that knows how a walk went.
+   *
+   * Not a set of counts passed in, and emphatically not the counts on the
+   * mutation's response: with `wait: false` the server hands the walk off and
+   * answers immediately, so that response carries zeros by contract. Read the
+   * numbers from the release and they are whatever the walk actually recorded,
+   * whenever it finishes.
+   */
+  pkg?: Package
+  inspect: UseMutationResult<InspectPackageResponse, Error, void, unknown>
+  /** Stopping a walk that is under way. Absent where there is nothing to stop. */
+  cancel?: UseMutationResult<CancelAnalysisResponse, Error, void, unknown>
+  disabled: boolean
+}) {
+  const [startedAt, setStartedAt] = useState<number>()
+  const [elapsed, setElapsed] = useState(0)
+
+  const analysed = Boolean(pkg?.expandedAt)
+  /** Somebody is walking it RIGHT NOW - this reader, discovery, or another. */
+  const analysing = pkg?.analysisState === 'analyzing'
   /**
    * Why the LAST walk gave up, when one did.
    *
@@ -91,21 +107,33 @@ function MeasurePanel({
    * sentence explaining all three hidden behind a pointer nobody had a reason
    * to put there.
    */
-  analysisError?: string
-  artifactCount?: number
-  inspect: UseMutationResult<InspectPackageResponse, Error, void, unknown>
-  /** Stopping a walk that is under way. Absent where there is nothing to stop. */
-  cancel?: UseMutationResult<CancelAnalysisResponse, Error, void, unknown>
-  disabled: boolean
-}) {
-  const [startedAt, setStartedAt] = useState<number>()
-  const [elapsed, setElapsed] = useState(0)
+  const analysisError = pkg?.analysisState === 'failed' ? pkg.analysisError : undefined
+  const artifactCount = pkg?.artifactCount
 
+  /**
+   * The walk this reader asked for, still on the books.
+   *
+   * `started` means HANDED OFF - the walk outlives the request - so the
+   * response is a receipt, not a result, and stays one until the release says
+   * the walk is over.
+   */
+  const requested = Boolean(inspect.data?.started) && !cancel?.data?.stopped
+
+  /*
+   * TIME THE WALK, NOT THE REQUEST.
+   *
+   * The ticker used to run while the mutation was pending, which under
+   * `wait: false` is the few milliseconds it takes the server to claim the row
+   * - so a four-minute walk was reported as "Analyzed in 0s". What is worth
+   * timing is the release being `analyzing`, and that is what this counts.
+   */
+  const running = inspect.isPending || (Boolean(startedAt) && analysing)
   useEffect(() => {
-    if (!inspect.isPending || !startedAt) return
+    if (!running || !startedAt) return
+    setElapsed((Date.now() - startedAt) / 1000)
     const t = setInterval(() => setElapsed((Date.now() - startedAt) / 1000), 200)
     return () => clearInterval(t)
-  }, [inspect.isPending, startedAt])
+  }, [running, startedAt])
 
   const run = () => {
     setStartedAt(Date.now())
@@ -114,16 +142,28 @@ function MeasurePanel({
   }
 
   // HANDED OFF. The server answers immediately and the walk runs behind it, so
-  // there is no result to report here - the release's own state is the report,
-  // and it is read by the caller and passed back in as `analysing`. Held until
-  // that arrives, so the panel does not blink through "not analysed" between
-  // the response and the refetch that notices.
+  // there is no result to report here - the release's own state is the report.
+  //
+  // `analysing` alone, and no longer "started and not yet analysed": that
+  // second test was the bug. Re-analysing a release that HAD been walked is
+  // ordinary - the button offers it - and for one of those `analysed` is true
+  // from the first instant, so this branch never matched and the panel fell
+  // straight through to a result alert built from a receipt full of zeros.
+  // The response is now written into the release's cache entry, which the
+  // server read after taking the claim, so `analysing` is true by the time
+  // this renders and stays true until the walk ends.
   //
   // Except once it has been STOPPED, which is the one case where the handoff
   // was real and the walk is over. Without that clause the panel went on
   // showing "Analyzing this release" after the stop had visibly succeeded.
-  if (inspect.data?.started && !analysed && !cancel?.data?.stopped) {
-    return <AnalysingBar requested onStop={cancel} />
+  if (analysing && !cancel?.data?.stopped) {
+    return (
+      <AnalysingBar
+        requested={requested}
+        elapsedSeconds={startedAt ? elapsed : undefined}
+        onStop={cancel}
+      />
+    )
   }
 
   if (inspect.isPending) {
@@ -169,7 +209,59 @@ function MeasurePanel({
     )
   }
 
-  if (inspect.isSuccess && !cancel?.data?.stopped) {
+  /*
+   * THE WALK THIS READER STARTED HAS FINISHED.
+   *
+   * Every number here comes from the RELEASE. The mutation's response cannot
+   * supply them and never could under `wait: false`: it is documented to carry
+   * zeros because the walk had not begun when it was written. Reporting it as
+   * a result is what produced "Analyzed in a moment - 0 artifacts, 0 blobs,
+   * 0 total" over a release that had just been walked properly, and produced
+   * it instantly on a second press.
+   *
+   * `analysisError` is checked below and ahead of this, so a walk that ended
+   * badly is reported as the failure it was rather than as a success with
+   * whatever the previous walk had left behind.
+   */
+  if (requested && !analysing && analysed && !analysisError) {
+    return (
+      <Alert
+        style={{ marginTop: 12 }}
+        type="success"
+        showIcon
+        message={
+          // "in 0s" for a walk that took a third of a second is a number
+          // pretending to be a measurement. Under a second says so in words.
+          startedAt && elapsed >= 1
+            ? `Analyzed in ${formatDuration(elapsed) ?? 'a moment'}`
+            : 'Analyzed in a moment'
+        }
+        description={
+          <Space size={16} wrap>
+            <Typography.Text type="secondary">
+              <Value>{formatCount(pkg?.artifactCount)}</Value> artifacts
+            </Typography.Text>
+            <Typography.Text type="secondary">
+              <Value>{formatCount(pkg?.blobCount)}</Value> blobs
+            </Typography.Text>
+            <Typography.Text type="secondary">
+              <Value>{formatBytes(pkg?.totalBytes)}</Value> total
+            </Typography.Text>
+          </Space>
+        }
+      />
+    )
+  }
+
+  /*
+   * A walk performed IN the request - `wait` omitted, which is what a script
+   * gets and what this page used to do. Kept because the response is a real
+   * result there, and `alreadyExpanded` is a fact only it can report: a
+   * measurement that contacted no registry is a different event from one that
+   * read three hundred manifests, and both look identical if all you do is
+   * refresh the page.
+   */
+  if (inspect.isSuccess && !inspect.data.started && !cancel?.data?.stopped) {
     const r = inspect.data
     return (
       <Alert
@@ -206,23 +298,6 @@ function MeasurePanel({
         }
       />
     )
-  }
-
-  /*
-   * SOMEBODY IS ALREADY DOING IT.
-   *
-   * Discovery walks recently published releases on its own, and a second walk
-   * of the same release is a second conversation with the vendor's registry
-   * for an answer already on its way. The claim is held in the database, so the
-   * server would refuse this anyway - offering it and then refusing it is a
-   * worse way to say the same thing.
-   *
-   * Checked BEFORE `analysed`, because a re-analysis of a release that has
-   * already been walked is a perfectly ordinary thing to be watching, and
-   * returning null for it left the button spinning into nothing.
-   */
-  if (analysing) {
-    return <AnalysingBar onStop={cancel} />
   }
 
   /*
@@ -324,9 +399,9 @@ function MeasurePanel({
 /**
  * A walk that is running somewhere else.
  *
- * No elapsed time, deliberately: the walk may have been started by discovery
- * ten minutes ago or by this reader ten seconds ago, and this page knows only
- * that it is happening. A timer counting from the moment the page opened would
+ * An elapsed time ONLY when this reader started it. The walk may have been
+ * started by discovery ten minutes ago, and for that one this page knows only
+ * that it is happening: a timer counting from the moment the page opened would
  * be a number about the page rather than about the work.
  *
  * # Where the analysis actually runs, since it decides what Stop can promise
@@ -337,14 +412,26 @@ function MeasurePanel({
  * release can be analysed with no worker running at all, and a fleet busy with
  * a thirty-gigabyte download does not slow it down.
  */
-function AnalysingBar({ requested, onStop }: {
+function AnalysingBar({ requested, elapsedSeconds, onStop }: {
   requested?: boolean
+  /**
+   * How long THIS reader's walk has been going, when they started it.
+   *
+   * Absent for a walk that was already running when the page opened, which is
+   * the case the doc comment above is about: a timer counting from the moment
+   * the page loaded would be a number about the page rather than about the
+   * work. Once somebody presses the button here, the start is known and worth
+   * showing - a walk of a 260-artifact release runs for minutes, and a bar
+   * with no number on it is indistinguishable from one that is stuck.
+   */
+  elapsedSeconds?: number
   onStop?: UseMutationResult<CancelAnalysisResponse, Error, void, unknown>
 }) {
   return (
     <div style={{ marginTop: 12 }}>
       <WorkingBar
         label="Analyzing this release"
+        elapsedSeconds={elapsedSeconds}
         detail={
           requested
             ? 'Reading the manifest tree from the vendor registry. It carries on if you '
@@ -1247,10 +1334,7 @@ export default function PackageDetail() {
                     </Descriptions>
 
                     <MeasurePanel
-                      analysed={analysed}
-                      analysing={analysing}
-                      analysisError={p?.analysisState === 'failed' ? p.analysisError : undefined}
-                      artifactCount={p?.artifactCount}
+                      pkg={p}
                       inspect={inspect}
                       cancel={mayOperate ? cancelAnalysis : undefined}
                       disabled={!mayOperate || !p}
@@ -1318,12 +1402,20 @@ export default function PackageDetail() {
                                     What is missing and what to do about it are the same
                                     answer, and it is short.
                                   */}
-                                  {(!countable || !sized) && (
+                                  {!analysed && (!countable || !sized) && (
                                     <Typography.Text
                                       type="secondary"
                                       italic
                                       style={{ fontSize: 11, lineHeight: '14px' }}
                                     >
+                                      {/*
+                                        Only while the walk has NOT happened. An
+                                        analysed release with no charts in it has an
+                                        unsized chart tile for the honest reason that
+                                        there are none, and telling its reader to
+                                        analyse the package - which they just did -
+                                        reads as the walk having failed.
+                                      */}
                                       {analysing
                                         ? 'analyzing this release now'
                                         : 'analyze the package to view details'}
@@ -1375,11 +1467,7 @@ export default function PackageDetail() {
                               explanation="Files live inside this release's manifests as layers, so listing them means walking the tree. Analysing the package reads it from the vendor registry and records what is there."
                               action={
                                 <MeasurePanel
-                                  analysed={analysed}
-                                  analysing={analysing}
-                                  analysisError={
-                                    p?.analysisState === 'failed' ? p.analysisError : undefined}
-                                  artifactCount={p?.artifactCount}
+                                  pkg={p}
                                   inspect={inspect}
                                   cancel={mayOperate ? cancelAnalysis : undefined}
                                   disabled={!mayOperate || !p}

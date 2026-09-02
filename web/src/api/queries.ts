@@ -177,7 +177,8 @@ export function usePackagesByProducts(products: string[], filters: PackageFilter
 export function usePackage(
   product: string | undefined, ref: string | undefined, repository?: string,
 ) {
-  return useQuery({
+  const qc = useQueryClient()
+  const result = useQuery({
     queryKey: ['package', product, ref, repository],
     queryFn: () => {
       const { segment, query: q } = packageRef(ref!)
@@ -192,6 +193,40 @@ export function usePackage(
     // sit on "Analyzing" until somebody reloaded it.
     refetchInterval: (q) => (q.state.data?.analysisState === 'analyzing' ? 4000 : false),
   })
+
+  /*
+   * Tell the rest of the page when a WALK ends.
+   *
+   * This query polls itself while one runs, so it learns the moment the tree
+   * has been recorded - and it is the only thing that does. Everything a walk
+   * PRODUCES is read by another query: the artifacts under the release, its
+   * files, its compliance. Those were invalidated when the walk was ASKED FOR,
+   * which is the one moment there is nothing yet to fetch, and never again -
+   * so the Contents tab sat on "no files" over a release that had been fully
+   * walked, until somebody reloaded the page.
+   *
+   * The TRANSITION is what matters, not the state: invalidating on every
+   * settled poll would refetch the release's contents forever.
+   */
+  const wasAnalysing = useRef(false)
+  const state = result.data?.analysisState
+  const loaded = result.data !== undefined
+  useEffect(() => {
+    if (state === 'analyzing') {
+      wasAnalysing.current = true
+      return
+    }
+    if (!wasAnalysing.current || !loaded) return
+    wasAnalysing.current = false
+    void qc.invalidateQueries({ queryKey: ['artifacts', product, ref] })
+    void qc.invalidateQueries({ queryKey: ['package-files', product, ref] })
+    // A walk changes what compliance has to look at - a release with no charts
+    // recorded has none to check.
+    void qc.invalidateQueries({ queryKey: ['package-compliance', product, ref] })
+    void qc.invalidateQueries({ queryKey: ['packages'] })
+  }, [state, loaded, qc, product, ref])
+
+  return result
 }
 
 /**
@@ -331,15 +366,32 @@ export function useInspectPackage(product: string, ref: string, repository?: str
         // is what the page watches.
         { wait: false })
     },
-    onSuccess: () => {
+    onSuccess: (res) => {
+      /*
+       * SEED THE RELEASE, do not merely invalidate it.
+       *
+       * The response carries the release as the server left it, read AFTER the
+       * claim was taken - so it already says `analyzing`. Writing it into the
+       * cache closes the window between the button being pressed and the first
+       * poll noticing, and that window is where the bug lived: for a release
+       * that had been walked before, the page saw a finished-looking response
+       * over an unchanged `analysed` release and reported the walk as over the
+       * instant it began - "Analyzed in 0s", 0 artifacts, 0 blobs, which are
+       * the zeros a handoff response is documented to carry.
+       *
+       * It also starts usePackage polling, which is what actually watches the
+       * walk, and whose ending invalidates everything the walk produces.
+       */
+      if (res.package) qc.setQueryData(['package', product, ref, repository], res.package)
       void qc.invalidateQueries({ queryKey: ['package', product, ref] })
-      void qc.invalidateQueries({ queryKey: ['artifacts', product, ref] })
-      // The files ARE the point of analysing for most readers: the walk is what
-      // turns "two layers" into two hundred named paths.
-      void qc.invalidateQueries({ queryKey: ['package-files', product, ref] })
       // And the LISTING, so a reader who goes back sees the release marked as
       // being analysed rather than offering to analyse it again.
       void qc.invalidateQueries({ queryKey: ['packages'] })
+      // Nothing else is invalidated HERE. The artifacts, the files and the
+      // compliance of a release are what the walk produces, and at this moment
+      // it has not produced any of it: refetching now caches the empty answer
+      // that was already on screen. usePackage invalidates them when the walk
+      // ends, which is the moment there is something new to read.
     },
   })
 }

@@ -275,7 +275,7 @@ func (p *Packages) StartComplianceRun(ctx context.Context, id string, packageID 
 	// shows the run the moment it starts rather than when it finishes. A user
 	// who pressed a button and sees nothing presses it again.
 	if err := upsertPackageCompliance(ctx, tx, p.dialect, packageID, id,
-		ComplianceRunning, "", 0, 0, 0, 0, nil); err != nil {
+		ComplianceRunning, "", 0, 0, 0, 0, ComplianceUniqueCounts{}, nil); err != nil {
 		return err
 	}
 	return tx.Commit()
@@ -415,8 +415,11 @@ func (p *Packages) FinishComplianceRun(
 		}
 	}
 
+	// The distinct checks, counted from the rows this transaction is inserting
+	// rather than by a second pass over them.
 	if err := upsertPackageCompliance(ctx, tx, p.dialect, run.PackageID, run.ID,
-		run.State, run.Verdict, run.Blocking, run.Warning, run.Errors, run.Pass, finished); err != nil {
+		run.State, run.Verdict, run.Blocking, run.Warning, run.Errors, run.Pass,
+		uniqueChecksIn(results), finished); err != nil {
 		return err
 	}
 	return tx.Commit()
@@ -443,7 +446,7 @@ func (p *Packages) FailComplianceRun(ctx context.Context, id string, packageID i
 		return fmt.Errorf("fail compliance run: %w", err)
 	}
 	if err := upsertPackageCompliance(ctx, tx, p.dialect, packageID, id,
-		ComplianceFailed, "", 0, 0, 0, 0, finished); err != nil {
+		ComplianceFailed, "", 0, 0, 0, 0, ComplianceUniqueCounts{}, finished); err != nil {
 		return err
 	}
 	return tx.Commit()
@@ -453,19 +456,22 @@ func (p *Packages) FailComplianceRun(ctx context.Context, id string, packageID i
 func upsertPackageCompliance(
 	ctx context.Context, tx *sql.Tx, d Dialect,
 	packageID int64, runID, state, verdict string,
-	blocking, warning, errCount, pass int, checkedAt any,
+	blocking, warning, errCount, pass int, unique ComplianceUniqueCounts, checkedAt any,
 ) error {
 	query := `
 		INSERT INTO package_compliance
-		  (package_id, run_id, state, verdict, blocking_count, warning_count, error_count, pass_count, checked_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+		  (package_id, run_id, state, verdict, blocking_count, warning_count, error_count, pass_count,
+		   unique_blocking, unique_warning, checked_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT (package_id) DO UPDATE SET
 		  run_id = EXCLUDED.run_id, state = EXCLUDED.state, verdict = EXCLUDED.verdict,
 		  blocking_count = EXCLUDED.blocking_count, warning_count = EXCLUDED.warning_count,
 		  error_count = EXCLUDED.error_count, pass_count = EXCLUDED.pass_count,
+		  unique_blocking = EXCLUDED.unique_blocking, unique_warning = EXCLUDED.unique_warning,
 		  checked_at = EXCLUDED.checked_at`
 	if _, err := tx.ExecContext(ctx, d.Rewrite(query),
-		packageID, runID, state, verdict, blocking, warning, errCount, pass, checkedAt); err != nil {
+		packageID, runID, state, verdict, blocking, warning, errCount, pass,
+		unique.Blocking, unique.Warning, checkedAt); err != nil {
 		return fmt.Errorf("update package compliance summary: %w", err)
 	}
 	return nil
@@ -565,4 +571,33 @@ func complianceLogJSON(events []compliance.ProgressEvent) any {
 		return nil
 	}
 	return string(b)
+}
+
+// uniqueChecksIn counts the distinct checks that FAILED, by severity.
+//
+// From the rows being written, so the listing's number and the run's own can
+// never disagree: they are two readings of one list rather than two queries.
+// Failures only, like the severity counts beside them - a passing critical
+// check is not a critical anything.
+func uniqueChecksIn(results []ComplianceResultRow) ComplianceUniqueCounts {
+	seen := make(map[string]struct{}, 64)
+	var out ComplianceUniqueCounts
+	for _, r := range results {
+		if r.Outcome != string(compliance.OutcomeFail) {
+			continue
+		}
+		if _, dup := seen[r.CheckID]; dup {
+			continue
+		}
+		seen[r.CheckID] = struct{}{}
+		switch r.Severity {
+		case "block":
+			out.Blocking++
+		case "warn":
+			out.Warning++
+		case "info":
+			out.Info++
+		}
+	}
+	return out
 }

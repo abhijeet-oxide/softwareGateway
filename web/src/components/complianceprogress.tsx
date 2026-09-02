@@ -323,7 +323,19 @@ function EventLog({ events }: { events: ComplianceProgressEvent[] }) {
       <Typography.Text type="secondary" style={{ fontSize: 11 }}>
         Run log
       </Typography.Text>
-      <div style={{ marginTop: 8, maxHeight: 260, overflowY: 'auto', paddingRight: 8 }}>
+      {/*
+        PADDED AT THE TOP, and that is not a nicety.
+
+        The timeline's first dot sits slightly above its item's box, so a scroll
+        container that starts exactly at the list clipped the top of it - the
+        newest line, which is the one somebody is watching.
+      */}
+      <div
+        style={{
+          marginTop: 8, maxHeight: 260, overflowY: 'auto',
+          paddingRight: 8, paddingTop: 6,
+        }}
+      >
         <ComplianceRunLog events={events} />
       </div>
     </div>

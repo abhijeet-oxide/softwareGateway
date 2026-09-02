@@ -2806,6 +2806,16 @@ type PackageComplianceSummary struct {
 	Error    int `json:"error"`
 	Pass     int `json:"pass"`
 
+	// UniqueBlocking and UniqueWarning are the DISTINCT checks behind those two
+	// counts.
+	//
+	// A release breaks five rules in six hundred and eighteen places. "618" is
+	// how much editing there is to do; "5" is how many problems the release has,
+	// and it is what the listing column and the release page's tab label show -
+	// both of which said 618, ten pixels above a summary saying 40.
+	UniqueBlocking int `json:"uniqueBlocking"`
+	UniqueWarning  int `json:"uniqueWarning"`
+
 	// CheckedAt is when the last run finished, RFC 3339. Empty while running,
 	// and empty for a release that has never been checked.
 	CheckedAt string `json:"checkedAt,omitempty"`

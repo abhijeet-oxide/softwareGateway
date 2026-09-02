@@ -438,34 +438,62 @@ func (p *Preparer) Prepare(
 	// THE MERGE, in chart order. See the comment above for why this is not done
 	// in the workers.
 	keeper := render.NewEvidenceKeeper(p.Evidence)
+	/*
+	 * DETERMINACY IS PER CHART, and that is a correction rather than a
+	 * loosening.
+	 *
+	 * It used to be per release: one chart whose second render did not happen
+	 * set `probeUsable = false` and the whole run answered `unknown` to every
+	 * question. On a ninety-five chart orb that is what happened every time -
+	 * one chart out of ninety-five is enough - so every finding in the report
+	 * read "Ownership not established", the split between the vendor's defect
+	 * and the site's decision was on no screen anywhere, and the most useful
+	 * column in the table was dead weight.
+	 *
+	 * The blunt version existed for a real reason: an object present in the
+	 * baseline index and absent from the perturbed one reads as "its existence
+	 * depends on values", so feeding one render of a chart into the probe
+	 * without the other would report every field of it as `configurable` -
+	 * inventing an excuse for a real defect. That is avoided by pairing, not by
+	 * discarding: a chart contributes to BOTH indexes or to NEITHER. A chart
+	 * that was not probed is absent from the baseline index, and
+	 * Probe.Determinacy already answers `unknown` for a key it does not hold.
+	 *
+	 * So the guarantee is unchanged - nothing is ever answered from a single
+	 * render - and it now costs one chart's findings rather than the release's.
+	 */
 	var baseline, perturbed []compliance.Resource
-	probeUsable := p.Probe && available
+	probeOn := p.Probe && available
+	probedCharts, renderedCharts := 0, 0
 	for i := range out {
 		rel.Charts = append(rel.Charts, out[i].charts...)
 		rel.Resources = append(rel.Resources, out[i].res...)
-		baseline = append(baseline, out[i].res...)
 		for _, d := range out[i].docs {
 			keeper.Keep(&rel.Rendered, compliance.RenderedDoc{
 				Chart: d.Chart, ChartVersion: d.ChartVersion, SourceFile: d.SourceFile,
 				Truncated: d.Truncated,
 			}, d.Content)
 		}
-		if !probeUsable {
-			continue
-		}
 		if out[i].failed != "" {
 			continue
 		}
-		if !out[i].probed {
-			// One chart without a second render costs determinacy for the
-			// release rather than producing a wrong answer for that chart.
-			// Reporting `fixed` where nothing was measured would invent vendor
-			// defects.
-			probeUsable = false
+		renderedCharts++
+		if !probeOn || !out[i].probed {
 			continue
 		}
+		probedCharts++
+		baseline = append(baseline, out[i].res...)
 		perturbed = append(perturbed, out[i].alt...)
 	}
+	// Said on the run, because a report whose ownership column is empty for
+	// forty of ninety-five charts is a report a reader has to be told about
+	// rather than left to infer.
+	if probeOn && probedCharts < renderedCharts {
+		p.warn(rep, "Ownership was established for %d of %d rendered charts; the rest "+
+			"could not be rendered a second time, so their findings report ownership "+
+			"as not established", probedCharts, renderedCharts)
+	}
+
 	rep.Stage(compliance.StageRendering, len(fetched.Charts), len(fetched.Charts), "")
 	rep.Concurrency(0)
 
@@ -479,7 +507,7 @@ func (p *Preparer) Prepare(
 	}
 
 	determiner := compliance.Determiner(render.Unusable())
-	if probeUsable {
+	if probeOn && probedCharts > 0 {
 		determiner = render.NewProbe(baseline, perturbed, true)
 	}
 	return rel, determiner, cleanup, nil

@@ -1024,6 +1024,21 @@ function uniqueCves(s: NonNullable<Package['security']>): number {
 }
 
 /**
+ * How many DISTINCT critical checks failed, not how many places they failed in.
+ *
+ * The same rule counted once per resource it fires on: 618 on an orb whose
+ * compliance is 40 broken rules. The header chip and the tab label are the two
+ * most quoted numbers on the page and both said the first, ten pixels above a
+ * band that said the second.
+ *
+ * Falls back to the total for a run recorded before the distinct counts were
+ * stored, which is a number that is too big rather than one that is absent.
+ */
+function uniqueChecks(cmp: NonNullable<Package['compliance']>): number {
+  return cmp.uniqueBlocking || cmp.blocking
+}
+
+/**
  * The release's compliance, in the header, in one word.
  *
  * Beside Vulnerabilities and read the same way. A release being checked says so
@@ -1042,7 +1057,7 @@ function complianceFact(p: Package): string | undefined {
     case '':
       return 'Not checked'
     default:
-      if (cmp.blocking > 0) return `${cmp.blocking.toLocaleString()} critical`
+      if (cmp.blocking > 0) return `${uniqueChecks(cmp).toLocaleString()} critical`
       if (cmp.error > 0) return 'Inconclusive'
       return cmp.label || 'Compliant'
   }
@@ -1603,19 +1618,28 @@ export default function PackageDetail() {
                     <ScaleOutlined />
                     Compliance
                     {/*
-                      The count that matters is CRITICAL, not total. A release
-                      with four hundred informational rows and nothing critical
-                      is fine, and a label that said "400" would send somebody
-                      into the tab to find that out.
+                      The count that matters is CRITICAL, and it is the count
+                      of RULES rather than of places they fire. A release with
+                      four hundred informational rows and nothing critical is
+                      fine, and one rule broken in six hundred and eighteen
+                      places is one thing to fix - a label saying 618 sends
+                      somebody into the tab to find that out.
 
                       Unchecked checks get their own mark, because a release
                       that could not be checked must not read as one that
                       passed - which a bare absence here would.
                     */}
                     {p?.compliance?.state === 'complete' && p.compliance.blocking > 0 && (
-                      <Typography.Text type="danger" style={{ fontSize: 12 }}>
-                        ({p.compliance.blocking.toLocaleString()})
-                      </Typography.Text>
+                      <Tooltip
+                        title={
+                          `${uniqueChecks(p.compliance).toLocaleString()} critical checks failed, `
+                          + `in ${p.compliance.blocking.toLocaleString()} places across this release`
+                        }
+                      >
+                        <Typography.Text type="danger" style={{ fontSize: 12 }}>
+                          ({uniqueChecks(p.compliance).toLocaleString()})
+                        </Typography.Text>
+                      </Tooltip>
                     )}
                     {p?.compliance?.state === 'complete'
                       && p.compliance.blocking === 0

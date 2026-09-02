@@ -1044,7 +1044,25 @@ export function useSyncPackageSecurity() {
         `/products/${encodeURIComponent(product)}/packages/${encodeURIComponent(segment)}:syncSecurity` +
         scopeQuery(q, repository), force ? { force: true } : {})
     },
-    onSuccess: () => {
+    onSuccess: (res) => {
+      /*
+       * SEED THE SYNC STATE, do not only invalidate.
+       *
+       * The response carries the claim the server has just taken - it reads the
+       * row back before answering - and writing it into every cached view of
+       * this release switches the tab to the progress panel on the press.
+       * Invalidating alone left the tab exactly as it was for the round trip a
+       * refetch takes, and on a release whose first batch of images takes a
+       * while that is several seconds in which the button appears not to have
+       * worked. The Compliance tab has seeded its first progress frame since it
+       * shipped, for the same reason and after the same complaint.
+       */
+      if (res?.sync) {
+        qc.setQueriesData<PackageSecurityResponse>(
+          { queryKey: ['package-security'] },
+          (prev) => (prev ? { ...prev, sync: res.sync } : prev),
+        )
+      }
       // The listing carries the same counts, so it has to learn that one of
       // its rows just changed state.
       void qc.invalidateQueries({ queryKey: ['package-security'] })

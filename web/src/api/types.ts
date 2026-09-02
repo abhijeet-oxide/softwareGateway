@@ -1978,6 +1978,16 @@ export interface PackageComplianceSummary {
   blocking: number
   warning: number
   /**
+   * The DISTINCT checks behind blocking and warning.
+   *
+   * "5 rules" is the number somebody means when they ask how many problems a
+   * release has; "171 places" is how much editing there is to do. The tab label
+   * and the header chip showed the second, ten pixels above a band showing the
+   * first.
+   */
+  uniqueBlocking: number
+  uniqueWarning: number
+  /**
    * Checks that could not be decided. A release with three hundred passes and
    * one of these is INCONCLUSIVE, not compliant - a column that showed only
    * blocking and warning would draw it as clean.

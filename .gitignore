@@ -1,6 +1,13 @@
 # Build output
 /bin/
 /dist/
+# Compiled helpers, which have been committed by accident before. `fakeregistry`
+# is built from dev/fakeregistry; `smoketmp` was a smoke-test binary.
+/fakeregistry
+/smoketmp
+# Scratch main packages. A one-off fixup script belongs in a shell history, not
+# in a repository where it looks like something that is maintained.
+/tmp*/
 
 # Node dependencies - the web interface vendors its own under web/
 node_modules/

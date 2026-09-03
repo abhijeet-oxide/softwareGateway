@@ -30,6 +30,11 @@ const EnvPrefix = "SWGW_"
 type SystemConfig struct {
 	ConfigDir string `koanf:"configDir"`
 
+	// Stage is the task vocabulary: what a release can be moved through, and
+	// what each move checks. See stage.go - this is the block that makes
+	// download, onboard and promote configuration rather than code.
+	Stage StageConfig `koanf:"stage"`
+
 	Server        ServerConfig        `koanf:"server"`
 	Database      DatabaseConfig      `koanf:"database"`
 	Coordinator   CoordinatorConfig   `koanf:"coordinator"`

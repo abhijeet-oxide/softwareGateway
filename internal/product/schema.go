@@ -340,8 +340,17 @@ type Target struct {
 	// used for destination-side checks after a push.
 	Verification *Verification `json:"verification,omitempty"`
 
-	// Environment is which stage this target represents: `lab`, `production`,
-	// whatever a site calls them.
+	// Stage is which stage of the site's pipeline this target sits in:
+	// `external`, `lab`, `prod`, whatever a site's tasks are written against.
+	//
+	// SEVERAL TARGETS MAY SHARE ONE, and that is the fan-out: a task writes
+	// every target in its destination stage. See stage.go.
+	//
+	// Supersedes `environment`, which is the same fact under the older name and
+	// is still accepted; read Target.StageName rather than either field.
+	Stage string `json:"stage,omitempty"`
+
+	// Environment is the superseded spelling of Stage. See stage.go.
 	//
 	// SEVERAL TARGETS MAY SHARE ONE. That is the point rather than an
 	// oversight: `lab-eu` and `lab-us` are both the lab environment, and a

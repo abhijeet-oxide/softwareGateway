@@ -253,6 +253,15 @@ func (p *Product) applyDefaults(app Concurrency) {
 			"targets["+t.Name+"]")
 		t.Concurrency = folded.Resolve(app)
 		p.Deprecations = append(p.Deprecations, notes...)
+
+		// `environment` is the older spelling of `stage`. Folded here so every
+		// consumer reads one field, and reported so `config check` can say the
+		// document is using a superseded name.
+		if t.Stage == "" && t.Environment != "" {
+			t.Stage = t.Environment
+			p.Deprecations = append(p.Deprecations,
+				"targets["+t.Name+"].environment is superseded by targets["+t.Name+"].stage")
+		}
 	}
 }
 

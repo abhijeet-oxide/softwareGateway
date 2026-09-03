@@ -89,9 +89,33 @@ func (p *Product) Validate(resolver *SecretResolver) error {
 	errs = append(errs, p.validateNotifications(resolver)...)
 	errs = append(errs, validateNetwork("spec.network", &p.Spec.Network, resolver)...)
 	errs = append(errs, validateAnchore("spec.anchore", p.Spec.Anchore, resolver)...)
+	errs = append(errs, p.validateStages()...)
 	errs = append(errs, p.validateEnablement()...)
 
 	return errs.ErrOrNil()
+}
+
+// validateStages checks the stage a target declares.
+//
+// The only failure possible is a document that sets BOTH `stage` and
+// `environment` to different values. That is rejected rather than resolved by a
+// precedence rule: the two are the same fact, a reader cannot tell which one
+// the system honoured, and a silent winner is how a release lands somewhere
+// nobody intended.
+func (p *Product) validateStages() Errors {
+	var errs Errors
+	for i, t := range p.Spec.Targets {
+		stage := strings.TrimSpace(t.Stage)
+		env := strings.TrimSpace(t.Environment)
+		if stage != "" && env != "" && stage != env {
+			errs = append(errs, Error{
+				fmt.Sprintf("spec.targets[%d].stage", i),
+				fmt.Sprintf("says %q but environment says %q", stage, env),
+				"they are the same field under two names; delete `environment`",
+			})
+		}
+	}
+	return errs
 }
 
 // validateEnablement checks the relationships `enabled: false` can break.

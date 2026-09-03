@@ -52,7 +52,7 @@ func TestShippedExampleTaskListValidates(t *testing.T) {
 		t.Fatal("the example declares no tasks; either the file moved or the " +
 			"field names no longer match")
 	}
-	if err := pipeline.Validate(stage.Tasks); err != nil {
+	if err := config.ValidateTasks(stage.Tasks); err != nil {
 		t.Fatalf("the shipped example does not validate: %v", err)
 	}
 }

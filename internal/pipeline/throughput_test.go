@@ -208,6 +208,6 @@ func BenchmarkValidate(b *testing.B) {
 	b.ReportAllocs()
 	b.ResetTimer()
 	for range b.N {
-		_ = pipeline.Validate(tasks)
+		_ = config.ValidateTasks(tasks)
 	}
 }

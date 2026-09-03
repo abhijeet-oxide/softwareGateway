@@ -1,11 +1,9 @@
-package pipeline
+package config
 
 import (
 	"fmt"
 	"regexp"
 	"strings"
-
-	"github.com/abhijeet-oxide/softwareGateway/internal/platform/config"
 )
 
 // Validating the task vocabulary.
@@ -18,24 +16,24 @@ import (
 
 var taskNameRE = regexp.MustCompile(`^[a-z0-9]([-a-z0-9]*[a-z0-9])?$`)
 
-// Error is one problem with the task list, located by index.
-type Error struct {
+// TaskError is one problem with the task list, located by index.
+type TaskError struct {
 	Field   string
 	Message string
 	Hint    string
 }
 
-func (e Error) Error() string {
+func (e TaskError) Error() string {
 	if e.Hint != "" {
 		return fmt.Sprintf("%s: %s - %s", e.Field, e.Message, e.Hint)
 	}
 	return fmt.Sprintf("%s: %s", e.Field, e.Message)
 }
 
-// Errors is every problem at once, so one round trip fixes the file.
-type Errors []Error
+// TaskErrors is every problem at once, so one round trip fixes the file.
+type TaskErrors []TaskError
 
-func (e Errors) Error() string {
+func (e TaskErrors) Error() string {
 	parts := make([]string, len(e))
 	for i, err := range e {
 		parts[i] = err.Error()
@@ -44,16 +42,16 @@ func (e Errors) Error() string {
 }
 
 // ErrOrNil returns nil when empty.
-func (e Errors) ErrOrNil() error {
+func (e TaskErrors) ErrOrNil() error {
 	if len(e) == 0 {
 		return nil
 	}
 	return e
 }
 
-// Validate checks the site's task list.
-func Validate(tasks []config.Task) error {
-	var errs Errors
+// ValidateTasks checks the site's task list.
+func ValidateTasks(tasks []Task) error {
+	var errs TaskErrors
 
 	seenName := map[string]int{}
 	seenFrom := map[string]int{}
@@ -65,15 +63,15 @@ func Validate(tasks []config.Task) error {
 		name := strings.TrimSpace(t.Name)
 		switch {
 		case name == "":
-			errs = append(errs, Error{field + ".name", "is required",
+			errs = append(errs, TaskError{field + ".name", "is required",
 				"the name is the verb in the API path and the audit trail"})
 		case !taskNameRE.MatchString(name):
-			errs = append(errs, Error{field + ".name",
+			errs = append(errs, TaskError{field + ".name",
 				fmt.Sprintf("%q is not a resource ID", name),
 				"lowercase letters, digits and hyphens; the display name is where prose goes"})
 		default:
 			if prev, dup := seenName[name]; dup {
-				errs = append(errs, Error{field + ".name",
+				errs = append(errs, TaskError{field + ".name",
 					fmt.Sprintf("%q is already declared by stage.tasks[%d]", name, prev),
 					"task names are the API's vocabulary and must be unique"})
 			}
@@ -84,14 +82,14 @@ func Validate(tasks []config.Task) error {
 		to := strings.TrimSpace(t.To)
 
 		if from == "" {
-			errs = append(errs, Error{field + ".from", "is required",
-				fmt.Sprintf("a stage name, or %q for the product's own sources", config.SourceStage)})
+			errs = append(errs, TaskError{field + ".from", "is required",
+				fmt.Sprintf("a stage name, or %q for the product's own sources", SourceStage)})
 		}
 		if to == "" {
-			errs = append(errs, Error{field + ".to", "is required", "the stage this task moves the release into"})
+			errs = append(errs, TaskError{field + ".to", "is required", "the stage this task moves the release into"})
 		}
 		if from != "" && from == to {
-			errs = append(errs, Error{field + ".to",
+			errs = append(errs, TaskError{field + ".to",
 				fmt.Sprintf("is the same stage as `from` (%q)", to),
 				"a task moves a release between two stages"})
 		}
@@ -101,8 +99,8 @@ func Validate(tasks []config.Task) error {
 		// the property the stage model exists to guarantee - and guaranteeing
 		// it here means no target needs a `promotionOnly` flag.
 		if t.FromSource() && i != 0 {
-			errs = append(errs, Error{field + ".from",
-				fmt.Sprintf("only the first task may read %q", config.SourceStage),
+			errs = append(errs, TaskError{field + ".from",
+				fmt.Sprintf("only the first task may read %q", SourceStage),
 				"a later stage is reached by moving through the ones before it, never from a vendor"})
 		}
 
@@ -110,7 +108,7 @@ func Validate(tasks []config.Task) error {
 		// now" ambiguous, and Available assumes it is not.
 		if from != "" {
 			if prev, dup := seenFrom[from]; dup {
-				errs = append(errs, Error{field + ".from",
+				errs = append(errs, TaskError{field + ".from",
 					fmt.Sprintf("stage %q is already left by stage.tasks[%d]", from, prev),
 					"a release in one stage must have exactly one move available"})
 			}
@@ -118,7 +116,7 @@ func Validate(tasks []config.Task) error {
 		}
 		if to != "" {
 			if prev, dup := seenTo[to]; dup {
-				errs = append(errs, Error{field + ".to",
+				errs = append(errs, TaskError{field + ".to",
 					fmt.Sprintf("stage %q is already entered by stage.tasks[%d]", to, prev),
 					"two tasks landing in one stage make its contents ambiguous"})
 			}
@@ -133,8 +131,8 @@ func Validate(tasks []config.Task) error {
 	// with nothing reading the sources, describe an estate where software
 	// arrives by magic.
 	if len(tasks) > 0 && !tasks[0].FromSource() {
-		errs = append(errs, Error{"stage.tasks[0].from",
-			fmt.Sprintf("the first task reads %q rather than %q", tasks[0].From, config.SourceStage),
+		errs = append(errs, TaskError{"stage.tasks[0].from",
+			fmt.Sprintf("the first task reads %q rather than %q", tasks[0].From, SourceStage),
 			"nothing else brings software in, so no release would ever enter the route"})
 	}
 
@@ -146,24 +144,24 @@ func Validate(tasks []config.Task) error {
 // An empty value is accepted and means disabled - see CheckMode.Normalize. A
 // MISSPELLED one is not: `verify: enforced` silently meaning "off" is how a
 // site believes it is enforcing something it is not.
-func validateMode(field string, m config.CheckMode) Errors {
+func validateMode(field string, m CheckMode) TaskErrors {
 	raw := strings.TrimSpace(string(m))
 	if raw == "" {
 		return nil
 	}
-	for _, valid := range config.ValidCheckModes {
-		if config.CheckMode(raw) == valid {
+	for _, valid := range ValidCheckModes {
+		if CheckMode(raw) == valid {
 			return nil
 		}
 	}
-	return Errors{{field,
+	return TaskErrors{{field,
 		fmt.Sprintf("%q is not a check mode", raw),
 		fmt.Sprintf("one of %s", strings.Join(modeNames(), ", "))}}
 }
 
 func modeNames() []string {
-	out := make([]string, 0, len(config.ValidCheckModes))
-	for _, m := range config.ValidCheckModes {
+	out := make([]string, 0, len(ValidCheckModes))
+	for _, m := range ValidCheckModes {
 		out = append(out, string(m))
 	}
 	return out

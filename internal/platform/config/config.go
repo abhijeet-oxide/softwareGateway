@@ -1035,6 +1035,14 @@ func (c SystemConfig) Validate() error {
 				"or leases expire faster than the reaper can observe them",
 			c.Coordinator.Reaper.LeaseDuration, c.Coordinator.Reaper.TickInterval)
 	}
+	// The task list is read by every product in the estate, so a mistake in it
+	// is a mistake everywhere. Refusing to start is cheaper than discovering at
+	// three in the morning that two tasks both claim to move a release out of
+	// lab. An EMPTY list is legal and means this deployment has no configured
+	// route yet, which is what an upgrade looks like before the file is written.
+	if err := ValidateTasks(c.Stage.Tasks); err != nil {
+		return err
+	}
 	return nil
 }
 

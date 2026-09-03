@@ -1,15 +1,38 @@
-package pipeline_test
+package config_test
 
 import (
 	"strings"
 	"testing"
 
-	"github.com/abhijeet-oxide/softwareGateway/internal/pipeline"
 	"github.com/abhijeet-oxide/softwareGateway/internal/platform/config"
 )
 
+// siteTasks is the vocabulary from docs/design/examples/config.yaml, which the
+// tests below hold this validator to.
+func siteTasks() []config.Task {
+	return []config.Task{
+		{
+			Name: "download", DisplayName: "Download",
+			From: config.SourceStage, To: "external",
+			Verify: config.CheckEnforce, Compliance: config.CheckEnforce,
+			Scanners: []string{"xray", "anchore"},
+		},
+		{
+			Name: "onboard", DisplayName: "Onboard to Lab",
+			From: "external", To: "lab", Purge: true,
+			Compliance: config.CheckEnabled,
+			Scanners:   []string{"xray", "anchore"},
+		},
+		{
+			Name: "promote", DisplayName: "Promote to Prod",
+			From: "lab", To: "prod",
+			Scanners: []string{"xray"},
+		},
+	}
+}
+
 func TestValidateAcceptsTheSiteVocabulary(t *testing.T) {
-	if err := pipeline.Validate(siteTasks()); err != nil {
+	if err := config.ValidateTasks(siteTasks()); err != nil {
 		t.Fatalf("the shipped example does not validate: %v", err)
 	}
 }
@@ -86,7 +109,7 @@ func TestValidateRejects(t *testing.T) {
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			err := pipeline.Validate(tc.tasks)
+			err := config.ValidateTasks(tc.tasks)
 			if err == nil {
 				t.Fatalf("accepted %s", tc.name)
 			}
@@ -100,7 +123,7 @@ func TestValidateRejects(t *testing.T) {
 // An empty check mode is legal and means disabled; only a misspelling is not.
 func TestValidateAcceptsAnUnsetCheckMode(t *testing.T) {
 	tasks := []config.Task{{Name: "download", From: config.SourceStage, To: "external"}}
-	if err := pipeline.Validate(tasks); err != nil {
+	if err := config.ValidateTasks(tasks); err != nil {
 		t.Fatalf("unset check modes should be legal: %v", err)
 	}
 }

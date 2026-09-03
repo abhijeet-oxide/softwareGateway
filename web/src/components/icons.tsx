@@ -23,10 +23,6 @@ import SignatureIcon from '~icons/ph/certificate'
 // Anchore has no Simple Icons mark, and its name IS the drawing - so the
 // house family's anchor is the honest choice rather than a near-enough logo.
 import AnchorIcon from '~icons/ph/anchor'
-// The MONOCHROME JFrog mark, not the brand logo beside it. A scanner mark sits
-// in a menu row and on a button, inheriting the text colour like every other
-// glyph there; the full-colour frog reads as a sticker at fourteen pixels.
-import JFrogMark from '~icons/simple-icons/jfrog'
 import type { Repository } from '../api/types'
 import brand from '../brand'
 import { BrandMark as SharedBrandMark } from '../uikit'

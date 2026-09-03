@@ -93,7 +93,15 @@ func (p *Provider) Register(
 	// 2. REPLICATE.
 	records := p.submit(ctx, pullable, &reg, opts.Progress)
 
-	// 3 and 4. APPLICATION, VERSION, and the images attached to it.
+	// 3 and 4. APPLICATION, VERSION, and the images attached to it - unless
+	// Anchore accepted nothing, in which case there is nothing to attach and
+	// the four requests to find or create a version would group an empty set.
+	if len(records) == 0 {
+		security.ReportWarning(opts.Progress,
+			"No images were replicated, so no application version was created for this release.")
+		reg.Settle()
+		return reg, ctx.Err()
+	}
 	p.group(ctx, pullable, records, &reg, opts)
 
 	reg.Analysed = countAnalysed(records)

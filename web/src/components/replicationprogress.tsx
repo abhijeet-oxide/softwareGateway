@@ -60,13 +60,20 @@ export function ReplicationRunPanel({ registration, onStop, stopping, finished, 
   // when it ends. Its transcript is on the registration, which is where the
   // panel reads from once the work is over.
   const events = runEventsFromLog(p?.log ?? registration.log, p?.startedAt)
-  const stage = p?.stage ? p.stage : finished ? 'associating' : 'discovering'
+  // A failed run never reached the application step - nothing was accepted, so
+  // there was nothing to attach - and a route drawing it as done says work
+  // happened that did not.
+  const stage = p?.stage ? p.stage : finished && !failed ? 'associating' : 'discovering'
   const at = STEPS.findIndex((s) => s.key === stage)
 
   const steps: RunStep[] = STEPS.map((s, i) => ({
     key: s.key,
     label: s.label,
-    state: finished ? 'done' : i === at ? 'current' : i < at ? 'done' : 'pending',
+    state: finished
+      ? failed
+        ? i < STEPS.length - 1 ? 'done' : 'pending'
+        : 'done'
+      : i === at ? 'current' : i < at ? 'done' : 'pending',
   }))
 
   const active: RunChip[] = (p?.active ?? []).map((name) => ({

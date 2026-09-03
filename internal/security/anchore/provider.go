@@ -531,7 +531,11 @@ func describeFailure(err error) string {
 	if errors.Is(err, context.DeadlineExceeded) {
 		return "Anchore did not answer in time. Raise coordinator.security.anchore.requestTimeout."
 	}
-	return "Anchore could not be reached: " + err.Error()
+	if strings.Contains(strings.ToLower(err.Error()), "certificate signed by unknown authority") {
+		return "Anchore certificate verification failed: " + err.Error() +
+			" Set coordinator.security.anchore.insecureSkipVerify to true for this deployment, or configure the Anchore CA."
+	}
+	return "The Anchore request failed: " + err.Error()
 }
 
 func detailOr(e *registry.Error, fallback string) string {

@@ -1157,8 +1157,12 @@ func (t securityTarget) scopes() []security.Scope {
 // grouping that silently skipped those would leave them ungrouped with no
 // explanation.
 func releaseRefFor(productName string, pkg store.PackageRow) security.ReleaseRef {
+	application := strings.TrimSpace(pkg.DisplayRepository)
+	if application == "" {
+		application = productName
+	}
 	return security.ReleaseRef{
-		Product: productName,
+		Product: application,
 		Version: releaseLabel(pkg),
 		Label:   releaseLabel(pkg),
 	}

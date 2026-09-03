@@ -681,13 +681,14 @@ func anchoreTuning(
 	}
 
 	tuning := regclient.AnchoreTuning{
-		Endpoint:       cfg.Endpoint,
-		Account:        cfg.Account,
-		Concurrency:    cfg.Concurrency,
-		RequestTimeout: cfg.RequestTimeout,
-		Submit:         cfg.SubmitImages(),
-		Grouping:       cfg.Grouping(),
-		SBOMFormat:     cfg.SBOMFormat,
+		Endpoint:           cfg.Endpoint,
+		Account:            cfg.Account,
+		InsecureSkipVerify: cfg.SkipsTLSVerification(),
+		Concurrency:        cfg.Concurrency,
+		RequestTimeout:     cfg.RequestTimeout,
+		Submit:             cfg.SubmitImages(),
+		Grouping:           cfg.Grouping(),
+		SBOMFormat:         cfg.SBOMFormat,
 	}
 
 	if cfg.SecretName == "" {

@@ -62,10 +62,11 @@ type SecurityTuning struct {
 // configuration loader, and a composition root translating once is cheaper than
 // a dependency that makes internal/regclient depend on koanf.
 type AnchoreTuning struct {
-	Endpoint string
-	Username string
-	Password string
-	Account  string
+	Endpoint           string
+	Username           string
+	Password           string
+	Account            string
+	InsecureSkipVerify bool
 
 	Concurrency    int
 	RequestTimeout time.Duration
@@ -304,7 +305,7 @@ func (r *SecurityResolver) buildAnchore(
 		HTTPSProxy:            network.HTTPSProxy,
 		NoProxy:               network.NoProxy,
 		DirectConnect:         network.DirectConnect,
-		InsecureSkipVerify:    network.InsecureSkipVerify,
+		InsecureSkipVerify:    network.InsecureSkipVerify || tuning.InsecureSkipVerify,
 		ConnectTimeout:        network.ConnectTimeout,
 		ResponseHeaderTimeout: network.ResponseHeaderTimeout,
 		RequestTimeout:        tuning.RequestTimeout,

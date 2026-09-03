@@ -421,6 +421,11 @@ type AnchoreConfig struct {
 	// URL nobody set.
 	Endpoint string `koanf:"endpoint"`
 
+	// InsecureSkipVerify disables certificate verification for the Anchore endpoint.
+	// It defaults to false; true is intended only for deployments whose
+	// Anchore certificate is signed by a private or otherwise untrusted CA.
+	InsecureSkipVerify *bool `koanf:"insecureSkipVerify"`
+
 	// SecretName is the projected secret holding the Anchore credential, read
 	// the same way every registry credential is: <secretsDir>/<name>/<key>.
 	//
@@ -496,6 +501,11 @@ type AnchoreConfig struct {
 // that is missing means the deployment never had one, and every product
 // document mentioning Anchore should say so quietly rather than fail.
 func (c AnchoreConfig) Available() bool { return strings.TrimSpace(c.Endpoint) != "" }
+
+// SkipsTLSVerification reports whether Anchore certificate verification is disabled.
+func (c AnchoreConfig) SkipsTLSVerification() bool {
+	return c.InsecureSkipVerify != nil && *c.InsecureSkipVerify
+}
 
 // SubmitImages reports whether syncs may register images with Anchore.
 func (c AnchoreConfig) SubmitImages() bool { return c.Submit == nil || *c.Submit }

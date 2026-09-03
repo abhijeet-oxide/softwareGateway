@@ -34,9 +34,8 @@ behaviour a real estate needs and that neither product should be writing twice:
 
 When a table is rendered inside a framed surface such as an Ant Design `Card`,
 pass `toolbarPlacement="outside"` to keep the export and column controls above
-the surface without reserving a blank toolbar row inside it. The parent layout
-must provide roughly 36px of vertical space above the table for those controls.
-The default placement is `inside`.
+the surface without reserving a blank toolbar row inside it. TableKit reserves
+the external control lane automatically. The default placement is `inside`.
 
 Preferences persist per table, keyed by `tableEnhancedKey`, in the browser's
 storage - so a person's own layout survives a reload without the server ever

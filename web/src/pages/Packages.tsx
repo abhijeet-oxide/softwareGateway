@@ -790,9 +790,9 @@ export default function Packages() {
         <Card className={comparing ? 'slm-compare-table' : undefined} styles={{ body: { padding: 0 } }}>
           <DataTable
             tableEnhancedKey="packages"
-            allow_export
-            show_column_visibility
-            toolbarPlacement="outside"
+            // allow_export
+            // show_column_visibility
+            // toolbarPlacement="outside"
             loading={packages.isLoading || packagesByProducts.some((q) => q.isLoading)}
             dataSource={rows}
             rowKey={(r) => `${r.product.productId}-${r.pkg.packageId}`}

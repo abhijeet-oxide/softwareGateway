@@ -145,6 +145,7 @@
 }
 .toolbarOutside {
   position: relative;
+  margin-top: 36px;
 }
 
 :global(.ant-card:has([data-antd-table-enhanced-toolbar-placement="outside"])) {

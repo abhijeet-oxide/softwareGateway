@@ -147,6 +147,15 @@ func TestPullStringUsesTheInternalLocation(t *testing.T) {
 	}
 }
 
+func TestOnlyContainerImagesAreScannable(t *testing.T) {
+	if !scannable(security.ArtifactRef{Kind: "image", MediaType: "application/vnd.oci.image.manifest.v1+json"}) {
+		t.Fatal("container image was excluded from Anchore")
+	}
+	if scannable(security.ArtifactRef{Kind: "index", MediaType: "application/vnd.oci.image.index.v1+json"}) {
+		t.Fatal("OCI image index was submitted to Anchore")
+	}
+}
+
 // A policy gate that passed is not a violation, and a table of them would be a
 // table nobody trusts.
 func TestOnlyFailingGatesBecomeViolations(t *testing.T) {

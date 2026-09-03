@@ -32,6 +32,10 @@ func TestRegistrationRoundTrip(t *testing.T) {
 	reg := security.Registration{
 		Provider: "anchore", State: security.RegistrationComplete,
 		Expected: 157, Submitted: 157, Associated: 157, Analysed: 12,
+		Outcomes: security.RegistrationOutcomes{
+			Replicated: []string{"registry.example.com/cfx/app:1.0"},
+			Analysed:   []string{"registry.example.com/cfx/app:1.0"},
+		},
 		Application: "cfx-5000", ApplicationID: "app-1",
 		Version: "25.7.2131", VersionID: "ver-1",
 		URL: "https://anchore.example.com/applications/app-1/versions/ver-1",
@@ -63,6 +67,9 @@ func TestRegistrationRoundTrip(t *testing.T) {
 	}
 	if len(row.Log) != 1 {
 		t.Errorf("the transcript was lost: %+v", row.Log)
+	}
+	if got := row.Outcomes.Analysed; len(got) != 1 || got[0] != "registry.example.com/cfx/app:1.0" {
+		t.Errorf("outcomes = %+v", row.Outcomes)
 	}
 
 	// The claim is free again once the run finished.

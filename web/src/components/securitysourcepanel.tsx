@@ -1,11 +1,12 @@
 import { Button, Card, Empty, Space, Table, Tag, Tooltip, Typography } from 'antd'
-import { useMemo, useState } from 'react'
+import { useState } from 'react'
 
 import type {
   SecuritySourceComparison, SecuritySourceCounts,
 } from '../api/types'
 import { c, severity as severityColour } from '../uikit'
 import { kevColour, providerName } from './securitykev'
+import { ScannerMark } from './icons'
 
 /**
  * What each scanner found, and what only it found.
@@ -61,7 +62,6 @@ export function SourceComparisonPanel({ sources, comparison, onFilter }: {
     >
       <Space direction="vertical" size={12} style={{ width: '100%' }}>
         <SourceTable sources={sources} onFilter={onFilter} />
-        <ExclusiveKevs sources={sources} comparison={comparison} />
         <AgreementLine sources={sources} comparison={comparison} />
       </Space>
     </Card>
@@ -84,7 +84,15 @@ function SourceTable({ sources, onFilter }: {
           dataIndex: 'provider',
           render: (_: unknown, row) => (
             <Space size={6}>
+              <ScannerMark provider={row.provider} size={15} />
               <Typography.Text strong>{row.label || providerName(row.provider)}</Typography.Text>
+              {row.kevs > 0 && (
+                <Tooltip title={`${row.kevs.toLocaleString()} known-exploited advisories reported by ${row.label || providerName(row.provider)}.`}>
+                  <Tag color={kevColour.fill} style={{ marginInlineEnd: 0, fontSize: 11 }}>
+                    {row.kevs.toLocaleString()} KEV
+                  </Tag>
+                </Tooltip>
+              )}
               {row.coverage && row.coverage.scanned < row.coverage.scannable && (
                 /*
                   Per-scanner coverage, because it is NOT the release's.
@@ -207,66 +215,6 @@ function Numeric({ value }: { value: number }) {
     >
       {value.toLocaleString()}
     </Typography.Text>
-  )
-}
-
-/**
- * The advisories one scanner reported as exploited and the other did not
- * mention at all.
- *
- * Listed in full rather than counted, and never truncated, because there are
- * never four thousand of them and because each one is a specific thing to go
- * and look at. This is the single most valuable output of running two scanners
- * and it is four rows long.
- */
-function ExclusiveKevs({ sources, comparison }: {
-  sources: SecuritySourceCounts[]
-  comparison?: SecuritySourceComparison
-}) {
-  const entries = useMemo(() => {
-    const out: { provider: string; label: string; cves: string[] }[] = []
-    for (const src of sources) {
-      const cves = comparison?.kevOnlyIn?.[src.provider] ?? []
-      if (cves.length > 0) out.push({ provider: src.provider, label: src.label, cves })
-    }
-    return out
-  }, [sources, comparison])
-
-  if (entries.length === 0) return null
-
-  return (
-    <div
-      style={{
-        background: kevColour.soft,
-        border: `1px solid ${kevColour.border}`,
-        borderRadius: 6,
-        padding: '10px 12px',
-      }}
-    >
-      <Typography.Text strong style={{ color: kevColour.fill, fontSize: 12.5 }}>
-        Exploited vulnerabilities only one scanner reported
-      </Typography.Text>
-      <Typography.Paragraph type="secondary" style={{ fontSize: 12, margin: '4px 0 8px' }}>
-        These are on a known-exploited catalogue and the other scanner did not mention them. Each
-        one is a specific thing to check rather than a difference in feed coverage.
-      </Typography.Paragraph>
-      <Space direction="vertical" size={6} style={{ width: '100%' }}>
-        {entries.map((e) => (
-          <div key={e.provider}>
-            <Typography.Text style={{ fontSize: 12 }}>
-              Only {e.label || providerName(e.provider)}:{' '}
-            </Typography.Text>
-            <Space size={4} wrap>
-              {e.cves.map((cve) => (
-                <Tag key={cve} style={{ marginInlineEnd: 0, fontSize: 11, fontFamily: 'monospace' }}>
-                  {cve}
-                </Tag>
-              ))}
-            </Space>
-          </div>
-        ))}
-      </Space>
-    </div>
   )
 }
 

@@ -179,10 +179,15 @@ func (p *Provider) RegistrationFor(
 // characters of hex, which at eleven pixels in a row of six chips is not read
 // at a glance - and being read at a glance is the entire job of these.
 func submissionLabel(ref security.ArtifactRef) string {
-	if name := strings.TrimSpace(ref.Name); name != "" {
+	name := strings.TrimSpace(ref.Name)
+	tag := strings.TrimSpace(ref.Tag)
+	if name != "" && tag != "" && !strings.HasSuffix(name, ":"+tag) {
+		return name + ":" + tag
+	}
+	if name != "" {
 		return name
 	}
-	if tag := strings.TrimSpace(ref.Tag); tag != "" {
+	if tag != "" {
 		return tag
 	}
 	return shortDigest(ref.Digest)
@@ -232,6 +237,8 @@ func (p *Provider) submit(
 	reg *security.Registration, progress security.Progress,
 ) map[string]ImageRecord {
 	records := make(map[string]ImageRecord, len(refs))
+	analysed := make([]string, 0)
+	statuses := map[string]int{}
 
 	if !p.settings.Submit {
 		// A deliberate configuration, said out loud. An operator who switched
@@ -253,29 +260,11 @@ func (p *Provider) submit(
 		mu     sync.Mutex
 		done   int
 		failed int
-		// halt is set by the first failure that every remaining image shares.
-		// See skipReason.
-		halt bool
 	)
 	g, gctx := errgroup.WithContext(ctx)
 	g.SetLimit(p.concurrency())
 	for _, ref := range refs {
 		g.Go(func() error {
-			mu.Lock()
-			stop := halt
-			if stop {
-				done++
-				failed++
-				reg.Skipped++
-				reg.Failed[ref.Ref()] = skipReason
-				security.ReportStage(progress, StageSubmitting, done, len(refs))
-				security.ReportStage(progress, security.StageFailing, failed, len(refs))
-			}
-			mu.Unlock()
-			if stop {
-				return nil
-			}
-
 			// The image's own name, up while it is in flight. A bar and a count
 			// say how far; this is what says the run is alive at all when the
 			// bar has not moved for thirty seconds, and it is the only thing
@@ -292,20 +281,11 @@ func (p *Provider) submit(
 			if err != nil {
 				reason := describeFailure(err)
 				reg.Failed[ref.Ref()] = reason
+				if tag := TagString(ref); tag != "" {
+					reg.Outcomes.Failed = append(reg.Outcomes.Failed, tag)
+				}
 				failed++
 				security.ReportStage(progress, security.StageFailing, failed, len(refs))
-				// EVERY image in a release comes from one registry, so a
-				// registry Anchore cannot pull from fails all of them. Carrying
-				// on meant a hundred and fifty more requests, each waiting for
-				// Anchore to try the pull and give up, to learn the same fact
-				// the first one established.
-				if !halt && IsPullFailure(reason) {
-					halt = true
-					security.ReportWarning(progress, fmt.Sprintf(
-						"Anchore could not fetch images from %s, so the remaining images were "+
-							"not submitted: every image in this release comes from it.",
-						p.settings.Registry))
-				}
 				// ONE line for the whole class of refusal, updated in place.
 				// A hundred and fifty images refused for one reason is one
 				// fault, and printing its remedy paragraph once per image
@@ -316,6 +296,11 @@ func (p *Provider) submit(
 			}
 			records[ref.Digest] = rec
 			reg.Submitted++
+			if tag := TagString(ref); tag != "" {
+				reg.Outcomes.Replicated = append(reg.Outcomes.Replicated, tag)
+			}
+			statuses[rec.Status]++
+			security.ReportStatuses(progress, statuses)
 			// Anchore answers a submission with the record it now holds. A
 			// brand-new one comes back not_analyzed; anything further along was
 			// already there before this run, which is what makes a second press
@@ -323,10 +308,33 @@ func (p *Provider) submit(
 			if rec.Status != "" && rec.Status != AnalysisNotAnalyzed {
 				reg.AlreadyKnown++
 			}
+			if rec.Analyzed() {
+				analysed = append(analysed, submissionLabel(ref))
+				if tag := TagString(ref); tag != "" {
+					reg.Outcomes.Analysed = append(reg.Outcomes.Analysed, tag)
+				}
+			}
 			return nil
 		})
 	}
 	_ = g.Wait()
+	sort.Strings(reg.Outcomes.Replicated)
+	sort.Strings(reg.Outcomes.Analysed)
+	sort.Strings(reg.Outcomes.Failed)
+	if len(analysed) > 0 {
+		sort.Strings(analysed)
+		const limit = 15
+		shown := analysed
+		if len(shown) > limit {
+			shown = shown[:limit]
+		}
+		line := fmt.Sprintf("Anchore has already analysed %d images: %s.",
+			len(analysed), strings.Join(shown, ", "))
+		if len(analysed) > len(shown) {
+			line += fmt.Sprintf(" %d additional images are already analysed.", len(analysed)-len(shown))
+		}
+		security.ReportInfo(progress, line)
+	}
 
 	switch {
 	case reg.Submitted > 0 && reg.AlreadyKnown >= reg.Submitted:
@@ -348,11 +356,6 @@ func (p *Provider) submit(
 	}
 	return records
 }
-
-// skipReason is recorded against an image the run never offered, because an
-// earlier one established that none of them can succeed.
-const skipReason = "Not submitted: an earlier image failed for a reason that applies to every " +
-	"image in this release."
 
 // group makes the release one thing in Anchore: an application, a version under
 // it, and this release's images attached to that version.

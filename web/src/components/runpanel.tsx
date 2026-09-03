@@ -125,6 +125,7 @@ export interface RunPanelProps {
   detail?: string
   done: number
   total: number
+  failed?: number
   /** Seconds remaining IN THIS STAGE. Never a whole-run guess - see below. */
   estimate?: number
 
@@ -150,6 +151,7 @@ export interface RunPanelProps {
   tiles?: RunTile[]
   /** What is going WRONG. Positions belong in the bar, not here. */
   notes?: string[]
+  footer?: ReactNode
   events?: RunEvent[]
   /** Heading over the transcript. "Run log" by default. */
   eventsLabel?: string
@@ -173,6 +175,7 @@ export function RunPanel(props: RunPanelProps) {
       {props.tiles && props.tiles.length > 0 && <RunTiles tiles={props.tiles} />}
       <RunNotes notes={props.notes} />
       <RunEventLog events={props.events} label={props.eventsLabel} />
+      {props.footer}
     </Space>
   )
 }
@@ -273,7 +276,7 @@ function RunHeadline({
 }
 
 /** What it is doing, how far, and how much longer. */
-function RunBar({ label, detail, done, total, estimate, indeterminate, finished, tone }: RunPanelProps) {
+function RunBar({ label, detail, done, total, estimate, indeterminate, finished, tone, failed = 0 }: RunPanelProps) {
   const percent = total > 0 ? Math.min(100, Math.round((done / total) * 100)) : 0
   const stripe = !finished && (indeterminate ?? (total === 0 || done === 0))
   const stroke = tone === 'danger' ? c.danger : tone === 'ok' ? c.ok : c.brand
@@ -309,7 +312,12 @@ function RunBar({ label, detail, done, total, estimate, indeterminate, finished,
         </Space>
       </Space>
 
-      {stripe ? <WorkingStripe label={label} /> : (
+      {stripe ? <WorkingStripe label={label} /> : finished && failed > 0 ? (
+        <div style={{ display: 'flex', height: 8, overflow: 'hidden', borderRadius: 4, background: c.track }}>
+          <div style={{ width: `${Math.max(0, Math.min(100, ((total - failed) / total) * 100))}%`, background: c.ok }} />
+          <div style={{ flex: 1, background: c.danger }} />
+        </div>
+      ) : (
         <Progress
           percent={percent}
           status={finished ? 'normal' : 'active'}

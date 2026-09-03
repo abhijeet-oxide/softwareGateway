@@ -512,7 +512,8 @@ type SecurityRegistration struct {
 	// Analysed is how many of them the scanner had finished with when this was
 	// last written. It is the answer to "why has the sync not found anything
 	// yet", and being an hour old does not make it a wrong answer to that.
-	Analysed int `json:"analysed"`
+	Analysed int                          `json:"analysed"`
+	Outcomes SecurityRegistrationOutcomes `json:"outcomes,omitempty"`
 
 	// Application and Version are the scanner's own names for this release, and
 	// URL opens it there.
@@ -553,6 +554,12 @@ type SecurityRegistration struct {
 	Log []SecurityLogEntry `json:"log,omitempty"`
 }
 
+type SecurityRegistrationOutcomes struct {
+	Replicated []string `json:"replicated,omitempty"`
+	Analysed   []string `json:"analysed,omitempty"`
+	Failed     []string `json:"failed,omitempty"`
+}
+
 // ReplicationProgress is where a running replication has got to.
 //
 // Deliberately the same shape as the compliance run's progress and the sync's:
@@ -585,6 +592,8 @@ type ReplicationProgress struct {
 	// tells a slow Anchore from a wedged one.
 	Active      []string `json:"active,omitempty"`
 	Concurrency int      `json:"concurrency,omitempty"`
+	// Statuses counts image states reported by Anchore as submissions complete.
+	Statuses map[string]int `json:"statuses,omitempty"`
 
 	StartedAt string `json:"startedAt,omitempty"`
 	// Elapsed is seconds since the run started, computed here so every client

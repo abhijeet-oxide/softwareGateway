@@ -22,6 +22,7 @@ import { SEVERITIES } from '../api/types'
 import type {
   PackageSecuritySummary, ScanStatus, SecurityCounts, SecurityCoverage,
   SecurityFreshness, SecurityLogEntry, SecurityState, SecuritySyncStatus, Severity, Verdict,
+  SecurityRegistration,
 } from '../api/types'
 
 /**
@@ -1061,7 +1062,7 @@ function syncScannerName(sync: SecuritySyncStatus): string {
 }
 
 /** A scanner's name in the words the interface shows. */
-function scannerName(provider: string): string {
+export function scannerName(provider: string): string {
   switch (provider) {
     case 'jfrog-xray': return 'JFrog Xray'
     case 'anchore': return 'Anchore'
@@ -1235,7 +1236,7 @@ export function StopSyncButton({ sync, onStop, pending, size = 'middle' }: {
 }
 
 /** When a release was last synced, and by which scanner. */
-export function SyncedAgo({ sync, freshness }: {
+export function SyncedAgo({ sync, freshness, registrations, providers }: {
   sync: SecuritySyncStatus
   /**
    * The deployment's rule about how old is too old.
@@ -1245,17 +1246,45 @@ export function SyncedAgo({ sync, freshness }: {
    * deployment considers a week old, and then it reads as a thing to do.
    */
   freshness?: SecurityFreshness
+  registrations?: SecurityRegistration[]
+  providers?: string[]
 }) {
-  if (!sync.syncedAt) return null
+  const anchore = (registrations ?? []).find((registration) => registration.provider === 'anchore' && registration.registeredAt)
+  const active = sync.state === 'syncing' && !sync.stalled
+  const activeProvider = sync.provider
+  const priorProvider = (providers ?? []).find((provider) => provider !== activeProvider) ?? activeProvider
+  if (!sync.syncedAt && !anchore) return null
   return (
     <Space size={8} align="center" wrap>
-      <Tooltip title={formatAbsolute(sync.syncedAt)}>
-        <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-          {sync.provider === 'jfrog-xray' ? 'JFrog Xray' : sync.provider}
-          {sync.repository && ` · ${sync.repository}`}
-          {` · retrieved ${formatRelative(sync.syncedAt)}`}
-        </Typography.Text>
-      </Tooltip>
+      {sync.syncedAt && (
+        <Tooltip title={formatAbsolute(sync.syncedAt)}>
+          <Space size={4}>
+            <ScannerMark provider={active ? priorProvider : sync.provider} size={14} />
+            <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+              {active ? (priorProvider ? scannerName(priorProvider) : 'The scanner') : syncScannerName(sync)} retrieved {formatRelative(sync.syncedAt)}
+            </Typography.Text>
+          </Space>
+        </Tooltip>
+      )}
+      {active && activeProvider && (
+        <Space size={4}>
+          <Typography.Text type="secondary" style={{ fontSize: 12 }}>·</Typography.Text>
+          <ScannerMark provider={activeProvider} size={14} />
+          <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+            {scannerName(activeProvider)} syncing now
+          </Typography.Text>
+        </Space>
+      )}
+      {anchore?.registeredAt && !active && (
+        <Tooltip title={formatAbsolute(anchore.registeredAt)}>
+          <Space size={4}>
+            <ScannerMark provider="anchore" size={14} />
+            <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+              Anchore updated {formatRelative(anchore.registeredAt)}
+            </Typography.Text>
+          </Space>
+        </Tooltip>
+      )}
       {freshness?.stale && (
         <Tooltip
           title={

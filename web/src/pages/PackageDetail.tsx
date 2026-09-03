@@ -5,7 +5,10 @@ import { Alert, App, Button, Card, Col, Descriptions, Divider, Modal, Row, Space
 // The working-surface table: resizable, reorderable, pinnable columns whose
 // layout each person keeps. See `tablekit/README.md` for which tables get it.
 import { Table as DataTable } from '../tablekit'
-import { FolderOutlined, LoadingOutlined, SafetyCertificateOutlined, ScaleOutlined } from '../icons'
+import {
+  DatabaseOutlined, FolderOutlined, LoadingOutlined, PackageOutlined,
+  SafetyCertificateOutlined, ScaleOutlined,
+} from '../icons'
 import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom'
 import {
   packageFileDownloadUrl, useArtifacts, useCancelAnalysis, useInspectPackage, usePackage,
@@ -962,7 +965,8 @@ function DownloadsTab({ transfers, onDownload, downloadHref, mayOperate }: {
   )
 }
 
-function FactTag({ label, value, mono: isMono, onClick }: {
+function FactTag({ icon, label, value, mono: isMono, onClick }: {
+  icon?: ReactNode
   label: string
   value?: string
   mono?: boolean
@@ -977,6 +981,7 @@ function FactTag({ label, value, mono: isMono, onClick }: {
       }}
       onClick={onClick}
     >
+      {icon && <span aria-hidden style={{ marginInlineEnd: 5, color: c.text2 }}>{icon}</span>}
       <Typography.Text type="secondary" style={{ fontSize: 11 }}>{label} </Typography.Text>
       <Typography.Text style={{ fontSize: 12, fontFamily: isMono ? mono : undefined }}>{value}</Typography.Text>
     </Tag>
@@ -1203,14 +1208,16 @@ export default function PackageDetail() {
                 <StatusBadge status={status!} reason={failureReason(p)} />
                 <AnalysisTag pkg={p} />
                 <VerificationBadge state={verification(p)} />
-                <FactTag label="Size" value={formatBytes(p.totalBytes) ?? undefined} />
-                <FactTag label="Artifacts" value={formatCount(p.artifactCount) ?? undefined} />
+                <FactTag icon={<DatabaseOutlined />} label="Size" value={formatBytes(p.totalBytes) ?? undefined} />
+                <FactTag icon={<PackageOutlined />} label="Artifacts" value={formatCount(p.artifactCount) ?? undefined} />
                 <FactTag
+                  icon={<SafetyCertificateOutlined />}
                   label="Vulnerabilities"
                   value={vulnerabilityFact(p)}
                   onClick={() => switchTab('security')}
                 />
                 <FactTag
+                  icon={<ScaleOutlined />}
                   label="Compliance"
                   value={complianceFact(p)}
                   onClick={() => switchTab('compliance')}

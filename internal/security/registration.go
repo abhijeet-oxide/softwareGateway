@@ -170,8 +170,19 @@ type Registration struct {
 	// is the honest answer to "why has the sync not found anything yet" and the
 	// reason nothing here waits.
 	Analysed int `json:"analysed"`
+	// Outcomes keeps full target pull strings for the finished replication
+	// record, so a partial outcome can be inspected and retried without
+	// reconstructing image paths from an aggregate error.
+	Outcomes RegistrationOutcomes `json:"outcomes,omitempty"`
 
 	At time.Time `json:"at"`
+}
+
+// RegistrationOutcomes is the per-image evidence from one replication.
+type RegistrationOutcomes struct {
+	Replicated []string `json:"replicated,omitempty"`
+	Analysed   []string `json:"analysed,omitempty"`
+	Failed     []string `json:"failed,omitempty"`
 }
 
 // Complete reports whether every expected artifact is registered and grouped.

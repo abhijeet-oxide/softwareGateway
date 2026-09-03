@@ -201,6 +201,12 @@ type Working interface {
 	SetConcurrency(n int)
 }
 
+// Statusing is an optional progress extension for work that reports a state
+// for every completed item.
+type Statusing interface {
+	SetStatuses(map[string]int)
+}
+
 // ReportBegin names something now being worked on, when p can carry one.
 func ReportBegin(p Progress, name string) {
 	if w, ok := p.(Working); ok && p != nil {
@@ -219,6 +225,13 @@ func ReportEnd(p Progress, name string) {
 func ReportConcurrency(p Progress, n int) {
 	if w, ok := p.(Working); ok && p != nil {
 		w.SetConcurrency(n)
+	}
+}
+
+// ReportStatuses records the current counts by scanner-reported state.
+func ReportStatuses(p Progress, statuses map[string]int) {
+	if s, ok := p.(Statusing); ok && p != nil {
+		s.SetStatuses(statuses)
 	}
 }
 

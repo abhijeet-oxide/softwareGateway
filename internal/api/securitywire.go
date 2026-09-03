@@ -781,6 +781,7 @@ func toAPIRegistration(
 		Associated:   row.Associated,
 		Outstanding:  row.Outstanding(),
 		Analysed:     row.Analysed,
+		Outcomes:     toAPIRegistrationOutcomes(row.Outcomes),
 		Application:  row.Application,
 		Version:      row.Version,
 		URL:          row.URL,
@@ -810,6 +811,14 @@ func toAPIRegistration(
 		}
 	}
 	return out
+}
+
+func toAPIRegistrationOutcomes(outcomes security.RegistrationOutcomes) v1.SecurityRegistrationOutcomes {
+	return v1.SecurityRegistrationOutcomes{
+		Replicated: outcomes.Replicated,
+		Analysed:   outcomes.Analysed,
+		Failed:     outcomes.Failed,
+	}
 }
 
 // registrationRemedy is what to do about a recorded failure, where this
@@ -860,6 +869,7 @@ func toAPIReplicationProgress(
 		Label:       providerLabel(provider),
 		Active:      snapshot.Active,
 		Concurrency: snapshot.Concurrency,
+		Statuses:    snapshot.Statuses,
 		Here:        here,
 		Notes:       snapshot.Notes,
 		Log:         toAPISyncLog(snapshot.Log),

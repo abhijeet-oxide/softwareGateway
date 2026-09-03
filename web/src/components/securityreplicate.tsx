@@ -1,11 +1,9 @@
 import { Alert, Button, Space, Tooltip, Typography } from 'antd'
 
-import type { SecurityRegistration } from '../api/types'
-import { formatRelative } from '../domain/format'
+import type { SecurityRegistration, SecuritySourceCounts } from '../api/types'
 import { ReloadOutlined } from '../icons'
 import { ScannerMark } from './icons'
 import { ReplicationLogButton } from './replicationprogress'
-import { c } from '../uikit'
 
 /**
  * Replicating a release to a scanner that has to be TOLD about it.
@@ -107,8 +105,9 @@ export function ReplicationLogControl({ registrations, size = 'middle' }: {
   return <ReplicationLogButton registration={r} size={size} />
 }
 
-export function ReplicationNotice({ registrations, onReplicate, pending }: {
+export function ReplicationNotice({ registrations, sources, onReplicate, pending }: {
   registrations?: SecurityRegistration[]
+  sources?: SecuritySourceCounts[]
   onReplicate: (provider: string) => void
   /** The provider currently being replicated, so only its button spins. */
   pending?: string
@@ -127,14 +126,18 @@ export function ReplicationNotice({ registrations, onReplicate, pending }: {
   // where everything is registered gets one quiet line, because at that point
   // the fact is only worth confirming.
   const outstanding = idle.filter((r) => r.state !== 'registered')
-  if (outstanding.length === 0) {
-    return <ReplicatedLine registrations={idle} onReplicate={onReplicate} pending={pending} />
-  }
+  if (outstanding.length === 0) return null
 
   return (
     <Space direction="vertical" size={8} style={{ width: '100%' }}>
       {outstanding.map((r) => (
-        <OutstandingNotice key={r.provider} registration={r} onReplicate={onReplicate} pending={pending} />
+        <OutstandingNotice
+          key={r.provider}
+          registration={r}
+          source={sources?.find((s) => s.provider === r.provider)}
+          onReplicate={onReplicate}
+          pending={pending}
+        />
       ))}
     </Space>
   )
@@ -147,15 +150,16 @@ export function ReplicationNotice({ registrations, onReplicate, pending }: {
  * Four states, four sentences, and the difference between them is what the
  * reader does next - which is the only reason to distinguish them at all.
  */
-function OutstandingNotice({ registration: r, onReplicate, pending }: {
+function OutstandingNotice({ registration: r, source, onReplicate, pending }: {
   registration: SecurityRegistration
+  source?: SecuritySourceCounts
   onReplicate: (provider: string) => void
   pending?: string
 }) {
   const busy = pending === r.provider
   const running = r.state === 'registering' && !r.stalled
 
-  const { type, message, description } = describe(r)
+  const { type, message, description } = describe(r, source)
 
   return (
     <Alert
@@ -211,7 +215,7 @@ function OutstandingNotice({ registration: r, onReplicate, pending }: {
 }
 
 /** The four situations, and the sentence each of them needs. */
-function describe(r: SecurityRegistration): {
+function describe(r: SecurityRegistration, source?: SecuritySourceCounts): {
   type: 'info' | 'warning' | 'error'
   message: string
   description: string
@@ -243,13 +247,21 @@ function describe(r: SecurityRegistration): {
     }
   }
   if (r.state === 'partial') {
+    const coverage = source?.coverage
+    const analysing = coverage?.notScanned ?? 0
+    const missing = coverage?.missing ?? 0
+    const unavailable = coverage?.unavailable ?? 0
+    const states = [
+      analysing > 0 && `${analysing.toLocaleString()} ${analysing === 1 ? 'is' : 'are'} being analysed`,
+      missing > 0 && `${missing.toLocaleString()} ${missing === 1 ? 'was' : 'were'} not found in the registry`,
+      unavailable > 0 && `${unavailable.toLocaleString()} ${unavailable === 1 ? 'was' : 'were'} not retrieved`,
+    ].filter(Boolean).join(', ')
     return {
       type: 'warning',
-      message: `${r.outstanding.toLocaleString()} of this release's `
-        + `${r.expected.toLocaleString()} images are not in ${r.label}`,
-      description: `${r.label} holds ${r.associated.toLocaleString()} of them and reports no `
-        + 'findings for the remainder. This is the expected state of a release that is still '
-        + 'being transferred: replicate it again once the remaining images have landed.',
+      message: `${r.outstanding.toLocaleString()} of ${r.expected.toLocaleString()} images have no ${r.label} result`,
+      description: states
+        ? `${r.label} has results for ${r.associated.toLocaleString()} images. Of the remainder, ${states}.`
+        : `${r.label} has results for ${r.associated.toLocaleString()} images. The remaining images require replication or analysis.`,
     }
   }
   // Never replicated, which is the state this notice exists for.
@@ -264,63 +276,3 @@ function describe(r: SecurityRegistration): {
   }
 }
 
-/**
- * The quiet line for a release that IS replicated.
- *
- * # Why it is still on screen at all
- *
- * Because the reader needs to be able to tell "Anchore has these images and has
- * not finished analysing them" from "Anchore was never told about them", and
- * both of those show an empty or partial findings table. One line says which.
- *
- * It also carries the link into the scanner, which is the other thing somebody
- * wants from this area once the button has done its job - and the button
- * itself, because a release whose images changed needs replicating again.
- */
-function ReplicatedLine({ registrations, onReplicate, pending }: {
-  registrations: SecurityRegistration[]
-  onReplicate: (provider: string) => void
-  pending?: string
-}) {
-  return (
-    <Space size={12} wrap style={{ fontSize: 12.5 }}>
-      {registrations.map((r) => (
-        <Space key={r.provider} size={6} wrap>
-          <Typography.Text type="secondary" style={{ fontSize: 12.5, color: c.text2 }}>
-            Replicated to {r.label}
-            {r.registeredAt && ` ${formatRelative(r.registeredAt)}`}
-            {': '}
-            {r.associated.toLocaleString()} images
-            {/*
-              The analysed count, which is the answer to the question this line
-              is most often read to answer: the sync found nothing and the
-              reader wants to know whether that is Anchore's fault or simply
-              not finished yet.
-            */}
-            {r.analysed < r.associated && `, ${r.analysed.toLocaleString()} analysed`}
-          </Typography.Text>
-          {r.url && (
-            <Typography.Link href={r.url} target="_blank" rel="noreferrer" style={{ fontSize: 12 }}>
-              Open in {r.label}
-            </Typography.Link>
-          )}
-          <Tooltip title={`Resubmits this release's images to ${r.label} and re-checks the `
-            + 'application version. Submission by digest is idempotent, so images it already '
-            + 'holds are not analysed again.'}
-          >
-            <Button
-              size="small"
-              type="text"
-              loading={pending === r.provider}
-              disabled={!r.canReplicate}
-              onClick={() => onReplicate(r.provider)}
-              style={{ fontSize: 12, height: 22, paddingInline: 6 }}
-            >
-              Replicate again
-            </Button>
-          </Tooltip>
-        </Space>
-      ))}
-    </Space>
-  )
-}

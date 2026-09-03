@@ -1,5 +1,6 @@
 import { memo, useCallback, useDeferredValue, useEffect, useMemo, useState } from 'react'
 import type { ReactNode } from 'react'
+import GhostIcon from '@iconify-react/bxs/ghost'
 import {
   Alert,
   App, Button, Card, Col, Collapse, Descriptions, Drawer, Input, Row, Segmented, Select,
@@ -25,8 +26,9 @@ import {
   anySource, isAnySource, matchesSource, SourceControls,
 } from './securitysources'
 import {
-  EpssText, KevAbsence, KevBanner, kevColour, kevSegmentLabel, KevTag,
+  EpssText, KevAbsence, kevColour, kevSegmentLabel, KevTag,
 } from './securitykev'
+import { ScannerMark } from './icons'
 import { SourceComparisonPanel, SourceComparisonPending } from './securitysourcepanel'
 import { ReplicateButton, ReplicationLogControl, ReplicationNotice } from './securityreplicate'
 import { ReplicationRunPanel } from './replicationprogress'
@@ -135,11 +137,6 @@ export function SecurityTab({ product, reference, repository }: {
 
   const showProblems = () => {
     setTab('problems')
-    scrollToFindings()
-  }
-
-  const showExploited = () => {
-    setTab('exploited')
     scrollToFindings()
   }
 
@@ -289,7 +286,12 @@ export function SecurityTab({ product, reference, repository }: {
           gap: 12,
         }}
       >
-        <SyncedAgo sync={data.sync} freshness={data.freshness} />
+        <SyncedAgo
+          sync={data.sync}
+          freshness={data.freshness}
+          registrations={data.registrations}
+          providers={data.providers}
+        />
         {/*
           Only the sync and the log here. The export lives with the filters
           below, because an export respects them - two export buttons on one
@@ -379,7 +381,7 @@ export function SecurityTab({ product, reference, repository }: {
         )
         : data.sync.stalled
           ? <SyncInterrupted sync={data.sync} onSync={startSync} pending={sync.isPending} />
-          : (
+          : !(data.state === 'partial' && (data.registrations ?? []).some((r) => r.state === 'partial')) && (
             <SecurityStateNotice
               state={data.state}
               message={data.message}
@@ -397,7 +399,7 @@ export function SecurityTab({ product, reference, repository }: {
         the Coordinator restarting under it. Above the notice because while a
         run is going it IS the notice.
       */}
-      {!syncing && (data.registrations ?? [])
+      {(data.registrations ?? [])
         .filter((r) => (r.state === 'registering' && !r.stalled) || runPanels.includes(r.provider))
         .map((r) => {
           const live = r.state === 'registering' && !r.stalled
@@ -432,6 +434,7 @@ export function SecurityTab({ product, reference, repository }: {
           registrations={(data.registrations ?? []).filter(
             (r) => !runPanels.includes(r.provider),
           )}
+          sources={data.sources}
           onReplicate={startReplicate}
           pending={replicating}
         />
@@ -453,13 +456,6 @@ export function SecurityTab({ product, reference, repository }: {
             the page that matters. Fourth in reading order it would be read
             fourth.
           */}
-          <KevBanner
-            kevs={data.kevs}
-            fixable={data.kevFixable}
-            severity={data.kevSeverity}
-            capable={data.kevCapable}
-            onShow={showExploited}
-          />
           <SummaryCards data={data} />
           <FindingsSection
             data={data}
@@ -580,9 +576,7 @@ function SummaryCards({ data }: { data: PackageSecurityResponse }) {
   const unique = data.uniqueCveCounts
   const affected = data.reports.filter((report) => report.counts.total > 0).length
   const fixablePercent = stats.total > 0 ? Math.round((stats.fixable / stats.total) * 100) : 0
-  const scannedPercent = coverage.scannable > 0
-    ? Math.round((coverage.scanned / coverage.scannable) * 100)
-    : 0
+  const sourceCoverage = (data.sources ?? []).filter((source) => source.coverage.scannable > 0)
   return (
     /*
       ONE BAND, THREE ZONES - not three cards.
@@ -657,15 +651,12 @@ function SummaryCards({ data }: { data: PackageSecurityResponse }) {
           */}
           {data.kevs > 0
             ? (
-              <Typography.Text
-                style={{
-                  fontSize: 12, display: 'block', marginTop: 6,
-                  color: kevColour.fill, fontWeight: 600,
-                }}
-              >
-                {data.kevs.toLocaleString()} known-exploited
-                {data.kevFixable > 0 && `, ${data.kevFixable.toLocaleString()} fixable`}
-              </Typography.Text>
+              <Space size={6} style={{ marginTop: 6, color: kevColour.fill }}>
+                <GhostIcon width="15" height="15" />
+                <Typography.Text style={{ fontSize: 12, color: kevColour.fill, fontWeight: 600 }}>
+                  {data.kevs.toLocaleString()} known-exploited vulnerabilities found ({data.kevFixable.toLocaleString()}/{data.kevs.toLocaleString()} have fixes available)
+                </Typography.Text>
+              </Space>
             )
             : (
               <div style={{ marginTop: 6 }}>
@@ -771,14 +762,37 @@ function SummaryCards({ data }: { data: PackageSecurityResponse }) {
 
           <div style={{ height: 16 }} />
 
-          <Meter
-            value={scannedPercent}
-            colour={coverage.complete ? c.ok : c.pending}
-            headline={`${coverage.scanned.toLocaleString()} of ${coverage.scannable.toLocaleString()} images scanned`}
-            detail={coverage.complete
-              ? 'All Images part of the release are scanned'
-              : 'Some images have no result, so the count above is a floor'}
-          />
+          {sourceCoverage.length > 0 ? sourceCoverage.map((source) => {
+            const scanned = source.coverage.scanned
+            const scannable = source.coverage.scannable
+            const complete = source.coverage.complete
+            return (
+              <div key={source.provider} style={{ marginTop: source.provider === sourceCoverage[0]?.provider ? 0 : 14 }}>
+                <Meter
+                  value={Math.round((scanned / scannable) * 100)}
+                  colour={complete ? c.ok : c.pending}
+                  headline={
+                    <Space size={5}>
+                      <ScannerMark provider={source.provider} size={14} />
+                      <span>{source.label}: {scanned.toLocaleString()} of {scannable.toLocaleString()} images scanned</span>
+                    </Space>
+                  }
+                  detail={complete
+                    ? 'All images are scanned'
+                    : 'Some images have no result'}
+                />
+              </div>
+            )
+          }) : (
+            <Meter
+              value={coverage.scannable > 0 ? Math.round((coverage.scanned / coverage.scannable) * 100) : 0}
+              colour={coverage.complete ? c.ok : c.pending}
+              headline={`${coverage.scanned.toLocaleString()} of ${coverage.scannable.toLocaleString()} images scanned`}
+              detail={coverage.complete
+                ? 'All images have a result'
+                : 'Some images have no result'}
+            />
+          )}
 
           {/*
             EVERY bucket, named. This once said "1 not scanned" while omitting
@@ -831,7 +845,7 @@ function ZoneLabel({ children, count }: { children: ReactNode; count?: ReactNode
 function Meter({ value, colour, headline, detail }: {
   value: number
   colour: string
-  headline: string
+  headline: ReactNode
   detail: string
 }) {
   return (
@@ -2017,14 +2031,18 @@ function SourcesCell({ sources, provider }: { sources?: string[]; provider?: str
   if (all.length === 0) return <Typography.Text type="secondary">-</Typography.Text>
   if (all.length === 1) {
     return (
-      <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+      <Tag icon={<ScannerMark provider={all[0] ?? ''} size={13} />} style={{ marginInlineEnd: 0, fontSize: 12 }}>
         {providerLabel(all[0] ?? '')}
-      </Typography.Text>
+      </Tag>
     )
   }
   return (
     <Space size={4} wrap>
-      {all.map((p) => <Tag key={p} style={{ marginInlineEnd: 0 }}>{providerLabel(p)}</Tag>)}
+      {all.map((p) => (
+        <Tag key={p} icon={<ScannerMark provider={p} size={13} />} style={{ marginInlineEnd: 0 }}>
+          {providerLabel(p)}
+        </Tag>
+      ))}
     </Space>
   )
 }

@@ -44,6 +44,7 @@ type RegistrationRow struct {
 	AlreadyKnown int
 	Associated   int
 	Analysed     int
+	Outcomes     security.RegistrationOutcomes
 
 	Application   string
 	ApplicationID string
@@ -188,21 +189,22 @@ func (r *SecurityRegistrations) Record(
 	_, err := r.db.ExecContext(ctx, r.q(`
 		INSERT INTO security_registrations (
 			package_id, provider, state, error,
-			expected, submitted, already_known, associated, analysed,
+			expected, submitted, already_known, associated, analysed, outcomes,
 			application, application_id, version, version_id, url,
 			started_at, registered_at, log, heartbeat_at, progress)
-		VALUES (?,?,?,?, ?,?,?,?,?, ?,?,?,?,?, NULL, ?, ?, NULL, NULL)
+		VALUES (?,?,?,?, ?,?,?,?,?,?, ?,?,?,?,?, NULL, ?, ?, NULL, NULL)
 		ON CONFLICT (package_id, provider) DO UPDATE SET
 			state = excluded.state, error = excluded.error,
 			expected = excluded.expected, submitted = excluded.submitted,
 			already_known = excluded.already_known, associated = excluded.associated,
 			analysed = excluded.analysed,
+			outcomes = excluded.outcomes,
 			application = excluded.application, application_id = excluded.application_id,
 			version = excluded.version, version_id = excluded.version_id, url = excluded.url,
 			started_at = NULL, registered_at = excluded.registered_at, log = excluded.log,
 			heartbeat_at = NULL, progress = NULL`),
 		packageID, reg.Provider, string(reg.State), message,
-		reg.Expected, reg.Submitted, reg.AlreadyKnown, reg.Associated, reg.Analysed,
+		reg.Expected, reg.Submitted, reg.AlreadyKnown, reg.Associated, reg.Analysed, encodeOutcomes(reg.Outcomes),
 		reg.Application, reg.ApplicationID, reg.Version, reg.VersionID, reg.URL,
 		securityTime(now), encodeSyncLog(log))
 	if err != nil {
@@ -289,7 +291,7 @@ func (r *SecurityRegistrations) load(
 ) ([]RegistrationRow, error) {
 	query := r.q(`
 		SELECT package_id, provider, state, COALESCE(error, ''),
-		       expected, submitted, already_known, associated, analysed,
+		       expected, submitted, already_known, associated, analysed, COALESCE(outcomes, ''),
 		       application, application_id, version, version_id, url,
 		       started_at, registered_at, COALESCE(log, ''),
 		       heartbeat_at, COALESCE(progress, '')
@@ -307,10 +309,10 @@ func (r *SecurityRegistrations) load(
 			row                                RegistrationRow
 			state                              string
 			startedAt, registeredAt, heartbeat sql.NullString
-			log, progress                      string
+			log, progress, outcomes            string
 		)
 		if err := rows.Scan(&row.PackageID, &row.Provider, &state, &row.Error,
-			&row.Expected, &row.Submitted, &row.AlreadyKnown, &row.Associated, &row.Analysed,
+			&row.Expected, &row.Submitted, &row.AlreadyKnown, &row.Associated, &row.Analysed, &outcomes,
 			&row.Application, &row.ApplicationID, &row.Version, &row.VersionID, &row.URL,
 			&startedAt, &registeredAt, &log, &heartbeat, &progress,
 		); err != nil {
@@ -321,10 +323,30 @@ func (r *SecurityRegistrations) load(
 		row.RegisteredAt = parseNullableSecurityTime(registeredAt)
 		row.HeartbeatAt = parseNullableSecurityTime(heartbeat)
 		row.Log = decodeSyncLog(log)
+		row.Outcomes = decodeOutcomes(outcomes)
 		row.Progress = decodeProgressSnapshot(progress)
 		out = append(out, row)
 	}
 	return out, rows.Err()
+}
+
+func encodeOutcomes(outcomes security.RegistrationOutcomes) string {
+	if len(outcomes.Replicated) == 0 && len(outcomes.Analysed) == 0 && len(outcomes.Failed) == 0 {
+		return ""
+	}
+	raw, err := json.Marshal(outcomes)
+	if err != nil {
+		return ""
+	}
+	return string(raw)
+}
+
+func decodeOutcomes(raw string) security.RegistrationOutcomes {
+	var outcomes security.RegistrationOutcomes
+	if strings.TrimSpace(raw) != "" {
+		_ = json.Unmarshal([]byte(raw), &outcomes)
+	}
+	return outcomes
 }
 
 // decodeProgressSnapshot reads a stored position, and answers nil for anything

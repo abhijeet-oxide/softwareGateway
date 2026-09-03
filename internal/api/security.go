@@ -164,21 +164,11 @@ func (s *Server) handlePackageSecurity(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// An ETag over the FINDINGS, not over a timestamp. A re-sync that produced
-	// identical results must not invalidate a client's copy - that is the
-	// difference between a page that re-renders when something changed and one
-	// that re-downloads megabytes on every poll.
-	//
-	// Never while a sync is running: the answer is changing by definition, and
-	// a 304 would freeze the progress the caller is polling for.
-	if out.Fingerprint != "" && out.Sync.State != string(store.PackageSecuritySyncing) {
-		etag := `"` + out.Fingerprint + `"`
-		w.Header().Set("ETag", etag)
-		if match := r.Header.Get("If-None-Match"); match != "" && etagMatches(match, etag) {
-			w.WriteHeader(http.StatusNotModified)
-			return
-		}
-	}
+	// This response includes more than findings: replication progress and its
+	// finished record change without changing the vulnerability fingerprint.
+	// A findings-only ETag returned 304 for a new replication and left the page
+	// rendering its previous outcome. Cache-Control below still prevents shared
+	// caching; this endpoint must return the current registration state.
 	// private, because these are one repository's findings under one
 	// repository's permissions and a shared cache must never hold them.
 	w.Header().Set("Cache-Control", "private, no-cache")
@@ -771,6 +761,10 @@ func (s *Server) syncStatusFor(
 	}
 	if progress, ok := s.deps.SecuritySync.Progress(packageID); ok {
 		stages, notes, _, _ := progress.Snapshot()
+		snapshot := progress.SnapshotFull()
+		if len(snapshot.Providers) > 0 {
+			out.Provider = snapshot.Providers[0]
+		}
 		for _, st := range stages {
 			out.Stages = append(out.Stages, v1.SecurityProgressStage{
 				Name: st.Name, Label: securityStageLabel(st.Name), Done: st.Done, Total: st.Total,

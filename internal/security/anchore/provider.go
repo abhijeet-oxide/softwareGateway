@@ -454,8 +454,14 @@ func joinRepository(root string, ref security.ArtifactRef) string {
 // release below 100%.
 func scannable(ref security.ArtifactRef) bool {
 	switch strings.ToLower(strings.TrimSpace(ref.Kind)) {
-	case "image", "index", "":
+	case "image":
 		break
+	case "":
+		// Older rows have no classified kind. Admit only container image media
+		// types; an OCI index is a release manifest, not an image Anchore can
+		// analyse or pull by tag.
+		mt := strings.ToLower(ref.MediaType)
+		return strings.Contains(mt, "image.manifest") && !strings.Contains(mt, "image.index")
 	default:
 		return false
 	}

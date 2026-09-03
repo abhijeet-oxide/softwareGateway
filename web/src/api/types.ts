@@ -1991,6 +1991,7 @@ export interface SecurityRegistration {
    * answer to that question.
    */
   analysed: number
+  outcomes?: SecurityRegistrationOutcomes
 
   /** The scanner's own names for this release, and where to open it there. */
   application?: string
@@ -2018,6 +2019,12 @@ export interface SecurityRegistration {
 
   /** The last run's transcript, kept after it finishes. */
   log?: SecurityLogEntry[]
+}
+
+export interface SecurityRegistrationOutcomes {
+  replicated?: string[]
+  analysed?: string[]
+  failed?: string[]
 }
 
 /**
@@ -2049,6 +2056,8 @@ export interface ReplicationProgress {
   /** The images in flight right now, and how many may be. */
   active?: string[]
   concurrency?: number
+  /** Completed submissions grouped by Anchore analysis status. */
+  statuses?: Record<string, number>
 
   startedAt?: string
   /** Seconds, computed server-side so every client agrees. */

@@ -79,11 +79,6 @@ type imageList struct {
 }
 
 // analysisRequest is ImageAnalysisRequest.
-//
-// Only the digest source is ever sent. See submit: a tag is a moving target
-// and the whole platform identifies an artifact by digest, so submitting by tag
-// would let Anchore analyse whatever the tag points at now and report it as
-// this release's result.
 type analysisRequest struct {
 	ImageType   string            `json:"image_type,omitempty"`
 	Annotations map[string]string `json:"annotations,omitempty"`

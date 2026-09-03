@@ -113,14 +113,10 @@ func recordOf(img image) ImageRecord {
 
 // Submit asks Anchore to analyse one image.
 //
-// # By digest, always
-//
-// The pull string is `<registry>/<repository>@<digest>` and the tag rides
-// alongside as metadata, which is what RegistryDigestSource is for. Submitting
-// by tag would let Anchore analyse whatever that tag points at when it gets
-// round to pulling - and a vendor who re-pushes a tag between the transfer and
-// the analysis would have this platform reporting one release's findings
-// against another release's bytes.
+// This Anchore deployment accepts the v2 tag source for its configured
+// registry, while rejecting the equivalent digest source. The artifact digest
+// remains the immutable identity used for lookup and association after Anchore
+// accepts the submission.
 //
 // # Idempotent
 //
@@ -129,24 +125,17 @@ func recordOf(img image) ImageRecord {
 // NOT sent: it discards the existing analysis and starts again, which is a
 // minutes-long re-analysis of an image whose bytes cannot have changed.
 func (c *Client) Submit(ctx context.Context, ref security.ArtifactRef) (ImageRecord, error) {
-	pull, err := PullString(ref)
-	if err != nil {
+	if _, err := PullString(ref); err != nil {
 		return ImageRecord{Digest: ref.Digest}, err
 	}
 	req := analysisRequest{
 		ImageType: "docker",
 		Source: analysisSource{
-			Digest: &digestSource{PullString: pull, Tag: TagString(ref)},
+			Tag: &tagSource{PullString: TagString(ref)},
 		},
-		// What this image is, in Anchore's own interface. Somebody reading
-		// Anchore directly should be able to tell where an image came from
-		// without opening this platform.
 		Annotations: annotationsFor(ref),
 	}
 
-	// Anchore answers 200 with a list of one, which is the shape its own
-	// clients expect. Some builds answer with the bare object; both are
-	// tolerated because the difference is not worth a version check.
 	var many []image
 	if err := c.do(ctx, http.MethodPost, "/images", req, &many); err != nil {
 		var one image

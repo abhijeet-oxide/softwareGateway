@@ -58,6 +58,7 @@ type Config struct {
 type Client struct {
 	http     *http.Client
 	endpoint string
+	service  string
 	username string
 	password string
 	account  string
@@ -114,6 +115,7 @@ func NewClient(cfg Config) (*Client, error) {
 	return &Client{
 		http:     httpClient,
 		endpoint: endpoint,
+		service:  strings.TrimSuffix(endpoint, apiPrefix) + "/service",
 		username: cfg.Username,
 		password: cfg.Password,
 		account:  strings.TrimSpace(cfg.Account),
@@ -187,6 +189,15 @@ func (c *Client) do(ctx context.Context, method, path string, body, out any) err
 	}
 	_, err := c.send(ctx, method, path, encoded, out, false)
 	return err
+}
+
+// doService calls Anchore's service API, used only for image submission. This
+// deployment accepts submissions there with a flat tag request, while the v2
+// image endpoint rejects the same registry image by digest.
+func (c *Client) doService(ctx context.Context, method, path string, body, out any) error {
+	service := *c
+	service.endpoint = c.service
+	return service.do(ctx, method, path, body, out)
 }
 
 // raw performs one request and returns the response body untouched.

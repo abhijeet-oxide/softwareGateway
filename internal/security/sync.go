@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"maps"
 	"os"
 	"regexp"
 	"sort"
@@ -276,6 +277,8 @@ type SyncProgress struct {
 	// concurrency is how many may be in flight at once, so a watcher can tell
 	// "one at a time against a slow registry" from "sixteen at a time".
 	concurrency int
+	statuses    map[string]int
+	providers   []string
 }
 
 type stagePosition struct{ done, total int }
@@ -286,6 +289,23 @@ type stagePosition struct{ done, total int }
 // struct with the same three fields is how the two drift apart.
 func NewProgress() *SyncProgress {
 	return &SyncProgress{stages: map[string]stagePosition{}, startedAt: time.Now()}
+}
+
+// SetStatuses records the latest completed-item counts by provider state.
+func (p *SyncProgress) SetStatuses(statuses map[string]int) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.statuses = make(map[string]int, len(statuses))
+	for status, count := range statuses {
+		p.statuses[status] = count
+	}
+}
+
+// SetProviders records the scanners this run is asking, in request order.
+func (p *SyncProgress) SetProviders(providers []string) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.providers = append([]string(nil), providers...)
 }
 
 // Begin records that something is now being worked on.
@@ -519,6 +539,8 @@ type ProgressSnapshot struct {
 	Notes       []string       `json:"notes,omitempty"`
 	Active      []string       `json:"active,omitempty"`
 	Concurrency int            `json:"concurrency,omitempty"`
+	Statuses    map[string]int `json:"statuses,omitempty"`
+	Providers   []string       `json:"providers,omitempty"`
 	StartedAt   time.Time      `json:"startedAt,omitempty"`
 	Log         []SyncLogEntry `json:"log,omitempty"`
 }
@@ -533,6 +555,8 @@ func (p *SyncProgress) SnapshotFull() ProgressSnapshot {
 		Notes:       notes,
 		Active:      append([]string(nil), p.active...),
 		Concurrency: p.concurrency,
+		Statuses:    maps.Clone(p.statuses),
+		Providers:   append([]string(nil), p.providers...),
 		StartedAt:   startedAt,
 		Log:         append([]SyncLogEntry(nil), p.log...),
 	}
@@ -671,6 +695,7 @@ func (s *Syncer) run(
 	if len(scanners) == 0 {
 		scanners = []string{req.Scope.Provider}
 	}
+	progress.SetProviders(scanners)
 	progress.Log(LogInfo, fmt.Sprintf(
 		"Sync started for %s. %d artifacts to consider, using %s against repository %s.",
 		labelOr(req.Label, "this release"), len(req.Artifacts),

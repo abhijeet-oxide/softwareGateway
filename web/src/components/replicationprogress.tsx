@@ -1,6 +1,6 @@
-import { Space, Typography } from 'antd'
+import { Button, Space, Typography } from 'antd'
 
-import { PackageOutlined } from '../icons'
+import { CheckCircleOutlined, ClockCircleOutlined, CloseCircleOutlined, CopyOutlined, PackageOutlined } from '../icons'
 import { ScannerMark } from './icons'
 import type { SecurityRegistration } from '../api/types'
 import { RunCard, RunLogButton, runEventsFromLog } from './runpanel'
@@ -91,8 +91,8 @@ export function ReplicationRunPanel({ registration, onStop, stopping, finished, 
         ? failed
           ? `Replication to ${label} failed`
           : `Replication to ${label} finished`
-        : `Replicating this release to ${label}`}
-      titleIcon={<ScannerMark provider={registration.provider} size={16} />}
+        : `Replication to ${label}`}
+      titleIcon={finished ? <ScannerMark provider={registration.provider} size={16} /> : undefined}
       subtitle={
         !finished && p && p.here === false
           ? 'Running on another Coordinator. This position is up to one heartbeat old.'
@@ -122,6 +122,7 @@ export function ReplicationRunPanel({ registration, onStop, stopping, finished, 
         : p?.notes}
       done={p?.done ?? registration.submitted + failedCount(registration)}
       total={p?.total ?? registration.expected}
+      failed={failedCount(registration)}
       concurrency={finished ? undefined : p?.concurrency}
       concurrencyLabel="images in parallel"
       concurrencyHint={
@@ -133,6 +134,7 @@ export function ReplicationRunPanel({ registration, onStop, stopping, finished, 
       tiles={tilesFor(registration)}
       events={events}
       eventsLabel="Replication log"
+      footer={<OutcomeCopyButton registration={registration} />}
     />
   )
 }
@@ -140,7 +142,7 @@ export function ReplicationRunPanel({ registration, onStop, stopping, finished, 
 /** How many images the scanner refused, live or from the finished record. */
 function failedCount(r: SecurityRegistration): number {
   if (r.progress?.failed !== undefined) return r.progress.failed
-  return r.state === 'failed' ? r.expected : 0
+  return Math.max(0, r.expected - r.submitted)
 }
 
 /** What it is doing, as a sentence rather than a stage name. */
@@ -152,7 +154,7 @@ function headline(r: SecurityRegistration, finished?: boolean): string {
   }
   switch (r.progress?.stage) {
     case 'submitting':
-      return `Replicating images to ${r.label}`
+      return 'Submitting images for analysis'
     case 'associating':
       return `Creating the application version in ${r.label}`
     default:
@@ -186,29 +188,80 @@ function tilesFor(r: SecurityRegistration): RunTile[] {
       label: 'Replicated',
       value: replicated.toLocaleString(),
       tone: c.ok,
+      icon: <PackageOutlined style={{ color: c.ok }} />,
       hint: `Images ${r.label} accepted. It pulls and analyses them on its own schedule; `
         + 'sync this release to collect the results.',
+      detail: <OutcomeList values={r.outcomes?.replicated} />,
     })
   }
   if (failed > 0) {
     tiles.push({
-      label: 'Rejected',
+      label: 'Failed',
       value: failed.toLocaleString(),
       tone: c.danger,
+      icon: <CloseCircleOutlined style={{ color: c.danger }} />,
       hint: `Images ${r.label} refused. It reports no findings for these, which records that `
         + 'no analysis was requested rather than that they are clean. The reason is in the '
         + 'replication log.',
+      detail: <OutcomeList values={r.outcomes?.failed} />,
     })
   }
-  if (r.alreadyKnown > 0) {
+  const statuses = p?.statuses
+  const analysing = statuses?.analyzing ?? 0
+  const analysed = statuses?.analyzed ?? (p ? 0 : r.analysed)
+  if (analysing > 0) {
     tiles.push({
-      label: 'Already registered',
-      value: r.alreadyKnown.toLocaleString(),
-      hint: `${r.label} already held these. Submission by digest is idempotent, so they were `
-        + 'not analysed again.',
+      label: 'Analysing',
+      value: analysing.toLocaleString(),
+      icon: <ClockCircleOutlined style={{ color: c.brand }} />,
+      hint: `${r.label} is analysing these images. Their results appear on the next vulnerability sync.`,
+    })
+  }
+  if (analysed > 0) {
+    tiles.push({
+      label: 'Analysed',
+      value: analysed.toLocaleString(),
+      tone: c.ok,
+      icon: <CheckCircleOutlined style={{ color: c.ok }} />,
+      hint: `${r.label} has already completed analysis for these images.`,
+      detail: <OutcomeList values={r.outcomes?.analysed} />,
     })
   }
   return tiles
+}
+
+function OutcomeList({ values }: { values?: string[] }) {
+  const shown = values?.slice(0, 3) ?? []
+  if (shown.length === 0) return <Typography.Text type="secondary">No image paths were recorded for this run.</Typography.Text>
+  return (
+    <Space direction="vertical" size={6} style={{ width: 380, maxWidth: 'min(380px, calc(100vw - 48px))', maxHeight: 180, overflowY: 'auto', paddingInlineEnd: 4 }}>
+      {shown.map((value) => (
+        <Typography.Text key={value} copyable={{ text: value }} style={{ fontFamily: 'monospace', fontSize: 11, overflowWrap: 'anywhere' }}>
+          {value}
+        </Typography.Text>
+      ))}
+      {(values?.length ?? 0) > shown.length && (
+        <Typography.Text type="secondary" style={{ fontSize: 12 }}>+{values!.length - shown.length} more</Typography.Text>
+      )}
+    </Space>
+  )
+}
+
+function OutcomeCopyButton({ registration }: { registration: SecurityRegistration }) {
+  const outcomes = registration.outcomes
+  const all = [
+    ...(outcomes?.replicated ?? []),
+    ...(outcomes?.analysed ?? []),
+    ...(outcomes?.failed ?? []),
+  ]
+  if (all.length === 0) return null
+  return (
+    <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
+      <Button size="small" icon={<CopyOutlined />} onClick={() => void navigator.clipboard?.writeText(all.join('\n'))}>
+        Copy image paths
+      </Button>
+    </div>
+  )
 }
 
 /**

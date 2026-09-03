@@ -24,6 +24,9 @@ type fakeAnchore struct {
 	// images maps digest to the analysis status it reports next. A status of
 	// "" means Anchore has never heard of it.
 	images map[string]string
+	// tagDigests is how the fake resolves a submitted tag to the canonical
+	// image digest Anchore returns.
+	tagDigests map[string]string
 	// analyzeAfter is how many polls an image spends analysing before it is
 	// analysed. Zero means it is analysed as soon as it is submitted.
 	analyzeAfter map[string]int
@@ -46,6 +49,7 @@ type fakeAnchore struct {
 func newFake() *fakeAnchore {
 	return &fakeAnchore{
 		images:       map[string]string{},
+		tagDigests:   map[string]string{},
 		analyzeAfter: map[string]int{},
 		associated:   map[string]bool{},
 		apps:         map[string]string{},
@@ -106,7 +110,15 @@ func (f *fakeAnchore) handle(w http.ResponseWriter, r *http.Request) {
 	case path == "/images" && r.Method == http.MethodPost:
 		var req analysisRequest
 		_ = json.NewDecoder(r.Body).Decode(&req)
-		digest := digestOfPull(req.Source.Digest.PullString)
+		if req.Source.Tag == nil {
+			http.Error(w, `{"detail":"expected tag source"}`, http.StatusBadRequest)
+			return
+		}
+		digest := f.tagDigests[req.Source.Tag.PullString]
+		if digest == "" {
+			http.Error(w, `{"detail":"tag digest is not configured"}`, http.StatusBadRequest)
+			return
+		}
 		f.offered = append(f.offered, digest)
 		if f.rejectSubmit != "" {
 			w.Header().Set("Content-Type", "application/json")
@@ -258,6 +270,7 @@ func TestRegisterSubmitsAndGroupsWithoutWaiting(t *testing.T) {
 	// Deliberately still analysing. The whole point is that this does not stop
 	// the release being grouped.
 	f.analyzeAfter["sha256:aaa"] = 1000
+	f.tagDigests["internal.example.com/vendor/app/app:1.0"] = "sha256:aaa"
 
 	p := newProvider(t, f, nil)
 	refs := []security.ArtifactRef{imageRef("app", "sha256:aaa")}
@@ -284,6 +297,31 @@ func TestRegisterSubmitsAndGroupsWithoutWaiting(t *testing.T) {
 	}
 }
 
+func TestRegisterLogsAlreadyAnalysedImages(t *testing.T) {
+	f := newFake()
+	p := newProvider(t, f, nil)
+	refs := []security.ArtifactRef{imageRef("bravo", "sha256:bbb"), imageRef("alpha", "sha256:aaa")}
+	for _, ref := range refs {
+		f.tagDigests[TagString(ref)] = ref.Digest
+		f.images[ref.Digest] = AnalysisAnalyzed
+	}
+	progress := security.NewProgress()
+
+	if _, err := p.Register(context.Background(), refs, security.RegisterOptions{Progress: progress}); err != nil {
+		t.Fatalf("register: %v", err)
+	}
+	var found string
+	for _, entry := range progress.Entries() {
+		if strings.HasPrefix(entry.Message, "Anchore has already analysed") {
+			found = entry.Message
+			break
+		}
+	}
+	if got, want := found, "Anchore has already analysed 2 images: alpha:1.0, bravo:1.0."; got != want {
+		t.Errorf("already-analysed log = %q, want %q", got, want)
+	}
+}
+
 // A second press starts no second analysis, and reports that it did not.
 //
 // The idempotence lives in ANCHORE, not here: every image is offered every
@@ -295,6 +333,7 @@ func TestRegisterIsIdempotent(t *testing.T) {
 	f := newFake()
 	p := newProvider(t, f, nil)
 	refs := []security.ArtifactRef{imageRef("app", "sha256:aaa")}
+	f.tagDigests[TagString(refs[0])] = refs[0].Digest
 
 	if _, err := p.Register(context.Background(), refs, registerOptions()); err != nil {
 		t.Fatalf("first register: %v", err)
@@ -331,6 +370,7 @@ func TestRegisterIsIdempotent(t *testing.T) {
 func TestPullFailureIsNotReportedAsUnreachable(t *testing.T) {
 	f := newFake()
 	f.rejectSubmit = "cannot fetch image digest/manifest from registry"
+	f.tagDigests["internal.example.com/vendor/app/app:1.0"] = "sha256:aaa"
 	p := newProvider(t, f, nil)
 
 	reg, err := p.Register(context.Background(),
@@ -355,6 +395,9 @@ func TestPullFailureIsNotReportedAsUnreachable(t *testing.T) {
 	}
 	if !IsPullFailure(why) {
 		t.Errorf("a pull failure was not recognised as one, so no remedy is offered: %q", why)
+	}
+	if got := reg.Outcomes.Failed; len(got) != 1 || got[0] != "internal.example.com/vendor/app/app:1.0" {
+		t.Errorf("failed pull strings = %v", got)
 	}
 }
 
@@ -412,6 +455,7 @@ func TestScanNeverSubmits(t *testing.T) {
 func TestRegisterThenScanReadsResults(t *testing.T) {
 	f := newFake()
 	f.vulns["sha256:aaa"] = kevResponse
+	f.tagDigests["internal.example.com/vendor/app/app:1.0"] = "sha256:aaa"
 
 	p := newProvider(t, f, nil)
 	refs := []security.ArtifactRef{imageRef("app", "sha256:aaa")}
@@ -455,6 +499,7 @@ func TestRegisterReportsUnreplicatedImages(t *testing.T) {
 // record cannot know somebody deleted the application there.
 func TestRegistrationForReadsAnchore(t *testing.T) {
 	f := newFake()
+	f.tagDigests["internal.example.com/vendor/app/app:1.0"] = "sha256:aaa"
 	p := newProvider(t, f, nil)
 	refs := []security.ArtifactRef{imageRef("app", "sha256:aaa")}
 

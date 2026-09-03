@@ -1,4 +1,5 @@
-import { Tooltip, Typography } from 'antd'
+import type { ReactNode } from 'react'
+import { Popover, Space, Typography } from 'antd'
 import { c } from '../uikit'
 
 /**
@@ -25,9 +26,11 @@ import { c } from '../uikit'
 export interface RunTile {
   label: string
   value: string
+  icon?: ReactNode
   /** A colour for the number where the number changes what the answer means. */
   tone?: string
   hint?: string
+  detail?: ReactNode
 }
 
 export function RunTiles({ tiles }: { tiles: RunTile[] }) {
@@ -49,8 +52,8 @@ export function RunTiles({ tiles }: { tiles: RunTile[] }) {
       facts do.
     */
     <div style={{ display: 'flex', flexWrap: 'wrap', gap: 12, width: '100%' }}>
-      {tiles.map((t) => (
-        <Tooltip key={t.label} title={t.hint}>
+      {tiles.map((t) => {
+        const body = (
           <div
             style={{
               flex: '1 1 150px',
@@ -62,15 +65,23 @@ export function RunTiles({ tiles }: { tiles: RunTile[] }) {
               background: c.surface2,
             }}
           >
-            <Typography.Text type="secondary" style={{ fontSize: 11 }}>
-              {t.label}
-            </Typography.Text>
+            <Space size={5}>
+              {t.icon}
+              <Typography.Text type="secondary" style={{ fontSize: 11 }}>
+                {t.label}
+              </Typography.Text>
+            </Space>
             <div style={{ fontSize: 20, lineHeight: '26px', color: t.tone ?? c.text }}>
               {t.value}
             </div>
           </div>
-        </Tooltip>
-      ))}
+        )
+        return t.detail ? (
+          <Popover key={t.label} content={t.detail} title={t.label} trigger="click">
+            {body}
+          </Popover>
+        ) : <div key={t.label} title={t.hint}>{body}</div>
+      })}
     </div>
   )
 }

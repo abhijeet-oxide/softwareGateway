@@ -1,4 +1,4 @@
-import { Col, Row, Tooltip, Typography } from 'antd'
+import { Tooltip, Typography } from 'antd'
 import { c } from '../uikit'
 
 /**
@@ -33,35 +33,44 @@ export interface RunTile {
 export function RunTiles({ tiles }: { tiles: RunTile[] }) {
   if (tiles.length === 0) return null
   return (
-    <Row gutter={[12, 12]}>
-      {/*
-        Capped, not stretched. Four tiles across a wide page grew to 320px each,
-        and a two-digit number in a 320px box reads as a mistake; the cap keeps
-        them the size of the number they hold and lets the row end where the
-        facts do.
-      */}
+    /*
+      A FLEX ROW, not antd's grid.
+
+      Row's gutter is implemented with negative margins on the row and matching
+      padding on each column, so the tiles sat wider than everything above and
+      below them and ate part of the 16px the surrounding stack sets. The panel's
+      gaps came out 16, 16, 10, 16 - close enough to look like a mistake and not
+      close enough to look deliberate. A gap does what it says and touches
+      nothing outside the row.
+
+      Capped, not stretched. Four tiles across a wide page grew to 320px each,
+      and a two-digit number in a 320px box reads as a mistake; the cap keeps
+      them the size of the number they hold and lets the row end where the
+      facts do.
+    */
+    <div style={{ display: 'flex', flexWrap: 'wrap', gap: 12, width: '100%' }}>
       {tiles.map((t) => (
-        <Col key={t.label} flex="1 1 150px" style={{ minWidth: 140, maxWidth: 260 }}>
-          <Tooltip title={t.hint}>
-            <div
-              style={{
-                border: `1px solid ${c.border}`,
-                borderRadius: 8,
-                padding: '8px 10px',
-                background: c.surface2,
-                height: '100%',
-              }}
-            >
-              <Typography.Text type="secondary" style={{ fontSize: 11 }}>
-                {t.label}
-              </Typography.Text>
-              <div style={{ fontSize: 20, lineHeight: '26px', color: t.tone ?? c.text }}>
-                {t.value}
-              </div>
+        <Tooltip key={t.label} title={t.hint}>
+          <div
+            style={{
+              flex: '1 1 150px',
+              minWidth: 140,
+              maxWidth: 260,
+              border: `1px solid ${c.border}`,
+              borderRadius: 8,
+              padding: '8px 10px',
+              background: c.surface2,
+            }}
+          >
+            <Typography.Text type="secondary" style={{ fontSize: 11 }}>
+              {t.label}
+            </Typography.Text>
+            <div style={{ fontSize: 20, lineHeight: '26px', color: t.tone ?? c.text }}>
+              {t.value}
             </div>
-          </Tooltip>
-        </Col>
+          </div>
+        </Tooltip>
       ))}
-    </Row>
+    </div>
   )
 }

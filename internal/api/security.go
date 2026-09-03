@@ -113,8 +113,13 @@ const (
 	// modes: this is our own request count against a responsive service, and a
 	// sync is somebody else's analysis queue. See internal/security/replicate.go.
 	packageVerbReplicateSecurity = "replicateSecurity"
-	packageVerbCancelSecurity    = "cancelSecuritySync"
-	packageVerbCompareSecurity   = "compareSecurity"
+	// packageVerbCancelReplicate stops a running replication, for the same
+	// reason the sync has a stop: a run against an unreachable scanner holds a
+	// claim for its whole timeout, and a reader who can see it is stuck should
+	// be able to end it rather than wait out a window sized for the worst case.
+	packageVerbCancelReplicate = "cancelSecurityReplication"
+	packageVerbCancelSecurity  = "cancelSecuritySync"
+	packageVerbCompareSecurity = "compareSecurity"
 )
 
 // maxSecurityArtifacts bounds one sync.

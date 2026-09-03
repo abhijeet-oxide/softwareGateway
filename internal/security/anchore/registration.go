@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"sort"
+	"strings"
 	"sync"
 	"time"
 
@@ -12,11 +13,17 @@ import (
 	"github.com/abhijeet-oxide/softwareGateway/internal/security"
 )
 
-// Telling Anchore a release exists, and returning as soon as it has been told.
+// Replicating a release to Anchore: the images are registered, the application
+// and version are created, and the call returns without waiting for analysis.
 //
 // See internal/security/registration.go for why this is a separate act from a
 // sync. The short version: analysis takes as long as it takes, and a sync whose
 // duration is set by somebody else's queue is a sync nobody can rely on.
+
+// StageDiscovering counts the release's artifacts that Anchore can be told
+// about at all - the images, as opposed to the charts and files it has nothing
+// to scan in.
+const StageDiscovering = "discovering"
 
 // StageSubmitting counts images being registered with Anchore.
 //
@@ -31,15 +38,25 @@ const StageAssociating = "associating"
 
 // Register implements security.Registrar.
 //
-// # The order, and why nothing in it waits
+// # The four steps, and why the second no longer asks first
 //
-//  1. TAKE STOCK. One request asks Anchore what it already knows.
-//  2. SUBMIT what it has never seen. Only that: a resubmission is a no-op at
-//     best and a forced re-analysis at worst.
-//  3. GROUP, IMMEDIATELY. Find or create the Application and the Version and
-//     associate every submitted image - analysed or not.
+//  1. DISCOVER which of the release's artifacts Anchore can pull.
+//  2. REPLICATE every one of them. Anchore is TOLD about all of them, and it
+//     decides what that means: an image it does not have it pulls, and an image
+//     it has it leaves alone.
+//  3. FIND OR CREATE the application.
+//  4. FIND OR CREATE the version, and attach the images to it.
 //
-// Step 3 not waiting for analysis is a deliberate departure from the
+// Step 2 used to list Anchore's whole image collection first and submit only
+// what was missing. That was wrong twice over. It made a release's replication
+// depend on a listing of every image in the account - an unbounded response
+// that gets slower as the estate grows, and whose failure aborted the run
+// before a single image had been offered, which is exactly the "Anchore could
+// not be reached" that made a working Anchore look broken. And it duplicated a
+// decision Anchore already makes: submission by digest is idempotent there, so
+// re-offering an image it holds costs one request and changes nothing.
+//
+// Step 4 not waiting for analysis is a deliberate departure from the
 // integration guide, which says to associate only analysed images so a version
 // never reports less than it appears to. That is true and the trade goes the
 // other way: association is what makes the release EXIST in Anchore's own
@@ -56,37 +73,30 @@ func (p *Provider) Register(
 		At:       time.Now().UTC(),
 	}
 
+	// 1. DISCOVER.
 	pullable, unusable := p.registrable(refs)
 	for ref, why := range unusable {
 		reg.Failed[ref] = why
 	}
 	reg.Expected = len(pullable)
+	security.ReportStage(opts.Progress, StageDiscovering, len(pullable), len(pullable))
 	if len(pullable) == 0 {
 		reg.Message = "None of this release's images are in the registry Anchore pulls from. " +
 			"Transfer the release, then replicate it again."
+		security.ReportWarning(opts.Progress, reg.Message)
 		reg.Settle()
 		return reg, nil
 	}
-
 	security.ReportInfo(opts.Progress, fmt.Sprintf(
-		"Registering %d images with Anchore.", len(pullable)))
+		"Selected %d images in this release for replication to Anchore.", len(pullable)))
 
-	digests := make([]string, 0, len(pullable))
-	for _, ref := range pullable {
-		digests = append(digests, ref.Digest)
-	}
+	// 2. REPLICATE.
+	records := p.submit(ctx, pullable, &reg, opts.Progress)
 
-	known, err := p.client.GetImages(ctx, digests)
-	if err != nil {
-		// Nothing can be decided without this. Unlike a per-image failure it
-		// makes the whole request meaningless, so it is an error return.
-		return reg, fmt.Errorf("%s", describeFailure(err))
-	}
+	// 3 and 4. APPLICATION, VERSION, and the images attached to it.
+	p.group(ctx, pullable, records, &reg, opts)
 
-	p.submit(ctx, pullable, known, &reg, opts.Progress)
-	p.group(ctx, pullable, known, &reg, opts)
-
-	reg.Analysed = countAnalysed(known)
+	reg.Analysed = countAnalysed(records)
 	reg.Settle()
 	return reg, ctx.Err()
 }
@@ -154,6 +164,22 @@ func (p *Provider) RegistrationFor(
 	return reg, nil
 }
 
+// submissionLabel is what an in-flight image is called on the progress panel.
+//
+// The artifact's own name where it has one, and a short digest otherwise. The
+// full pull string is a registry host, a repository path and seventy-one
+// characters of hex, which at eleven pixels in a row of six chips is not read
+// at a glance - and being read at a glance is the entire job of these.
+func submissionLabel(ref security.ArtifactRef) string {
+	if name := strings.TrimSpace(ref.Name); name != "" {
+		return name
+	}
+	if tag := strings.TrimSpace(ref.Tag); tag != "" {
+		return tag
+	}
+	return shortDigest(ref.Digest)
+}
+
 // registrable splits a release's artifacts into the ones Anchore can be told
 // about and the ones it cannot, with the reason.
 //
@@ -184,114 +210,191 @@ func (p *Provider) registrable(
 //
 // # Idempotent, and visibly so
 //
-// A second press of the Replicate button should do nothing and SAY it did
-// nothing. Images already known are counted rather than resubmitted, and the
-// result carries both numbers - "submitted 0, already known 157" is how a
-// reader sees that it ran and had nothing to do, where a silent no-op reads as
-// a button that is broken.
+// Every image is offered, every time. Submission by digest is idempotent in
+// Anchore - it returns the record it already holds rather than re-analysing -
+// so asking first only moved the same decision to a slower place. A second
+// press therefore costs one request per image and changes nothing, and the
+// counts say so: "154 replicated, 154 already held" is how a reader sees that
+// it ran and had nothing to do, where a silent no-op reads as a broken button.
+//
+// Returns what Anchore said about each image, which is where the analysis
+// counts and the association list come from.
 func (p *Provider) submit(
-	ctx context.Context, refs []security.ArtifactRef, known map[string]ImageRecord,
+	ctx context.Context, refs []security.ArtifactRef,
 	reg *security.Registration, progress security.Progress,
-) {
-	var missing []security.ArtifactRef
-	for _, ref := range refs {
-		if known[ref.Digest].Known {
-			reg.AlreadyKnown++
-			continue
-		}
-		missing = append(missing, ref)
-	}
-	if len(missing) == 0 {
-		security.ReportInfo(progress, fmt.Sprintf(
-			"Anchore already holds all %d images. Nothing was submitted.", reg.AlreadyKnown))
-		return
-	}
+) map[string]ImageRecord {
+	records := make(map[string]ImageRecord, len(refs))
+
 	if !p.settings.Submit {
 		// A deliberate configuration, said out loud. An operator who switched
 		// submission off should see the consequence named rather than a release
 		// that is quietly a third registered.
-		for _, ref := range missing {
+		for _, ref := range refs {
 			reg.Failed[ref.Ref()] = "This deployment does not submit images to Anchore. " +
 				"Register it in Anchore, then replicate again."
 		}
 		security.ReportWarning(progress, fmt.Sprintf(
 			"%d images are not registered with Anchore, and this deployment does not submit "+
-				"images. Register them in Anchore, then replicate again.", len(missing)))
-		return
+				"images. Register them in Anchore, then replicate again.", len(refs)))
+		return records
 	}
 
-	security.ReportStage(progress, StageSubmitting, 0, len(missing))
+	security.ReportStage(progress, StageSubmitting, 0, len(refs))
+	security.ReportConcurrency(progress, p.concurrency())
 	var (
-		mu   sync.Mutex
-		done int
+		mu     sync.Mutex
+		done   int
+		failed int
+		// halt is set by the first failure that every remaining image shares.
+		// See skipReason.
+		halt bool
 	)
 	g, gctx := errgroup.WithContext(ctx)
 	g.SetLimit(p.concurrency())
-	for _, ref := range missing {
+	for _, ref := range refs {
 		g.Go(func() error {
+			mu.Lock()
+			stop := halt
+			if stop {
+				done++
+				failed++
+				reg.Skipped++
+				reg.Failed[ref.Ref()] = skipReason
+				security.ReportStage(progress, StageSubmitting, done, len(refs))
+				security.ReportStage(progress, security.StageFailing, failed, len(refs))
+			}
+			mu.Unlock()
+			if stop {
+				return nil
+			}
+
+			// The image's own name, up while it is in flight. A bar and a count
+			// say how far; this is what says the run is alive at all when the
+			// bar has not moved for thirty seconds, and it is the only thing
+			// that tells a slow Anchore from a wedged one.
+			label := submissionLabel(ref)
+			security.ReportBegin(progress, label)
+			defer security.ReportEnd(progress, label)
+
 			rec, err := p.client.Submit(gctx, ref)
 			mu.Lock()
 			defer mu.Unlock()
 			done++
-			security.ReportStage(progress, StageSubmitting, done, len(missing))
+			security.ReportStage(progress, StageSubmitting, done, len(refs))
 			if err != nil {
-				reg.Failed[ref.Ref()] = describeFailure(err)
+				reason := describeFailure(err)
+				reg.Failed[ref.Ref()] = reason
+				failed++
+				security.ReportStage(progress, security.StageFailing, failed, len(refs))
+				// EVERY image in a release comes from one registry, so a
+				// registry Anchore cannot pull from fails all of them. Carrying
+				// on meant a hundred and fifty more requests, each waiting for
+				// Anchore to try the pull and give up, to learn the same fact
+				// the first one established.
+				if !halt && IsPullFailure(reason) {
+					halt = true
+					security.ReportWarning(progress, fmt.Sprintf(
+						"Anchore could not fetch images from %s, so the remaining images were "+
+							"not submitted: every image in this release comes from it.",
+						p.settings.Registry))
+				}
+				// ONE line for the whole class of refusal, updated in place.
+				// A hundred and fifty images refused for one reason is one
+				// fault, and printing its remedy paragraph once per image
+				// buries every other line in the transcript.
+				security.ReportWarningUpdate(progress, fmt.Sprintf(
+					"%d images rejected by Anchore. %s", failed, reason))
 				return nil
 			}
-			known[ref.Digest] = rec
+			records[ref.Digest] = rec
 			reg.Submitted++
+			// Anchore answers a submission with the record it now holds. A
+			// brand-new one comes back not_analyzed; anything further along was
+			// already there before this run, which is what makes a second press
+			// visibly a no-op rather than apparently a hundred and fifty.
+			if rec.Status != "" && rec.Status != AnalysisNotAnalyzed {
+				reg.AlreadyKnown++
+			}
 			return nil
 		})
 	}
 	_ = g.Wait()
 
 	switch {
+	case reg.Submitted > 0 && reg.AlreadyKnown >= reg.Submitted:
+		security.ReportInfo(progress, fmt.Sprintf(
+			"All %d images were already registered with Anchore. No new images were pulled.",
+			reg.Submitted))
 	case reg.Submitted > 0:
 		security.ReportInfo(progress, fmt.Sprintf(
-			"Submitted %d images to Anchore for analysis. Analysis runs on Anchore's own "+
-				"schedule; sync this release to collect results as they finish.", reg.Submitted))
+			"Replicated %d images to Anchore; %d were already registered. Anchore pulls and "+
+				"analyses on its own schedule. Sync this release to collect results.",
+			reg.Submitted, reg.AlreadyKnown))
 	default:
-		// The one failure worth naming its own cause: Anchore refusing to pull
-		// is almost always its registry credential rather than anything here.
+		// The one failure worth naming its own cause: Anchore rejecting every
+		// image is almost always its registry configuration rather than
+		// anything on this side.
 		security.ReportWarning(progress, fmt.Sprintf(
-			"Anchore would not accept any of the %d images. Check that Anchore has a registry "+
-				"configured for %s.", len(missing), p.settings.Registry))
+			"Anchore rejected all %d images. Add %s to Anchore's registry list with credentials "+
+				"that can read it, then replicate again.", len(refs), p.settings.Registry))
 	}
+	return records
 }
 
-// group makes the release one thing in Anchore, immediately.
+// skipReason is recorded against an image the run never offered, because an
+// earlier one established that none of them can succeed.
+const skipReason = "Not submitted: an earlier image failed for a reason that applies to every " +
+	"image in this release."
+
+// group makes the release one thing in Anchore: an application, a version under
+// it, and this release's images attached to that version.
 //
-// Every image this run knows about is associated, whatever its analysis status.
-// See Register for why that departs from the integration guide.
+// Every image Anchore accepted is attached, whatever its analysis status. See
+// Register for why that departs from the integration guide.
 func (p *Provider) group(
-	ctx context.Context, refs []security.ArtifactRef, known map[string]ImageRecord,
+	ctx context.Context, refs []security.ArtifactRef, records map[string]ImageRecord,
 	reg *security.Registration, opts security.RegisterOptions,
 ) {
 	if !p.settings.Grouping || !opts.Release.Named() {
-		// Grouping is off. "Registered" then means submitted, and the counts
-		// have to say so or a release would report itself permanently partial.
-		reg.Associated = reg.Submitted + reg.AlreadyKnown
+		// Grouping is off. "Registered" then means replicated and nothing else,
+		// and the count has to say so or a release would report itself
+		// permanently partial. Not Submitted + AlreadyKnown: the second is a
+		// subset of the first now that every image is offered, and adding them
+		// reported twice as many images as the release has.
+		reg.Associated = reg.Submitted
 		return
 	}
 
+	// The panel's third stage opens here, before the round trips rather than
+	// after them: finding or creating an application and a version is up to
+	// four requests against Anchore, and a route still highlighting "Replicate
+	// images" through all of them says the run is somewhere it is not.
+	security.ReportStage(opts.Progress, StageAssociating, 0, len(refs))
+	security.ReportInfo(opts.Progress, fmt.Sprintf(
+		"Finding or creating Anchore application %q, version %q.",
+		opts.Release.Product, opts.Release.Version))
+
 	version, err := p.resolveVersion(ctx, opts.Release)
 	if err != nil {
-		reg.Message = "This release's images were submitted, but Anchore would not group them " +
-			"under an application version: " + describeFailure(err)
+		reg.Message = "The images were replicated, but Anchore did not create the application " +
+			"version for this release: " + describeFailure(err)
 		security.ReportWarning(opts.Progress, reg.Message)
 		// The submissions stand. Grouping is what makes the release legible in
 		// Anchore's interface and what unlocks its release-level report; losing
 		// it costs a link and a second view, not the analysis.
-		reg.Associated = reg.Submitted + reg.AlreadyKnown
+		reg.Associated = reg.Submitted
 		return
 	}
 	p.describeVersion(reg, version)
+	security.ReportInfo(opts.Progress, fmt.Sprintf(
+		"Anchore application %q version %q is ready.",
+		version.ApplicationName, version.VersionName))
 
-	// Everything Anchore has a record of - which after submit is everything
-	// that did not fail.
+	// Everything Anchore has a record of - which after replicating is
+	// everything that did not fail.
 	digests := make([]string, 0, len(refs))
 	for _, ref := range refs {
-		if known[ref.Digest].Known {
+		if records[ref.Digest].Known {
 			digests = append(digests, ref.Digest)
 		}
 	}

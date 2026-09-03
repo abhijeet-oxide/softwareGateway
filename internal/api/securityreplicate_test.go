@@ -60,16 +60,23 @@ func (f *fakeReplicator) Registrable(_ context.Context, scope security.Scope) bo
 	return f.registrable[scope.Provider]
 }
 
-func (f *fakeReplicator) Replicate(
+// StartReplicate runs the work INLINE, where the real service runs it in the
+// background.
+//
+// A deliberate simplification: what these tests are about is which scanners get
+// asked and what the endpoint then reports, and a fake that spawned a goroutine
+// would make every assertion a race. The background half is exercised where it
+// lives, in internal/security.
+func (f *fakeReplicator) StartReplicate(
 	ctx context.Context, req security.ReplicateRequest,
-) (security.ReplicateResult, error) {
+) error {
 	f.calls++
 	f.lastScope = req.Scope
 	if f.err != nil {
-		return security.ReplicateResult{}, f.err
+		return f.err
 	}
 	if err := f.registrations.Claim(ctx, req.PackageID, req.Scope.Provider); err != nil {
-		return security.ReplicateResult{}, err
+		return err
 	}
 
 	reg := security.Registration{
@@ -88,10 +95,17 @@ func (f *fakeReplicator) Replicate(
 	log := []security.SyncLogEntry{
 		{At: time.Now().UTC(), Level: security.LogInfo, Message: "Registered."},
 	}
-	if err := f.registrations.Record(ctx, req.PackageID, reg, log); err != nil {
-		return security.ReplicateResult{}, err
-	}
-	return security.ReplicateResult{Registration: reg, Log: log}, nil
+	return f.registrations.Record(ctx, req.PackageID, reg, log)
+}
+
+func (f *fakeReplicator) ReplicationProgress(int64, string) (security.ProgressSnapshot, bool) {
+	return security.ProgressSnapshot{}, false
+}
+
+func (f *fakeReplicator) CancelReplication(
+	ctx context.Context, packageID int64, provider string,
+) (bool, error) {
+	return f.registrations.Stop(ctx, packageID, provider)
 }
 
 func newReplicateHarness(t *testing.T, adjust func(*fakeReplicator)) (*apiHarness, *fakeReplicator) {
@@ -121,8 +135,13 @@ func TestReplicateRegistersTheRelease(t *testing.T) {
 
 	var out v1.ReplicateSecurityResponse
 	if code := h.post("/api/v1/products/vendor-a/packages/"+ref+":replicateSecurity",
-		`{}`, &out); code != http.StatusOK {
+		`{}`, &out); code != http.StatusAccepted {
+		// ACCEPTED, not OK. The work is a background job now, and the endpoint
+		// answers when the claim is decided rather than when the run is done.
 		t.Fatalf("replicate returned %d", code)
+	}
+	if !out.Started {
+		t.Error("the response did not say a run had begun")
 	}
 	if rep.calls != 1 {
 		t.Fatalf("the scanner was asked %d times", rep.calls)
@@ -142,8 +161,8 @@ func TestReplicateRegistersTheRelease(t *testing.T) {
 	if reg.URL == "" || reg.Application == "" {
 		t.Errorf("the response did not carry where to open it in Anchore: %+v", reg)
 	}
-	if len(out.Log) == 0 {
-		t.Error("a button that ran should return its transcript")
+	if len(reg.Log) == 0 {
+		t.Error("a run that finished should carry its transcript on the registration")
 	}
 }
 
@@ -176,7 +195,7 @@ func TestSecurityResponseCarriesTheRegistration(t *testing.T) {
 	}
 
 	if code := h.post("/api/v1/products/vendor-a/packages/"+ref+":replicateSecurity",
-		`{}`, nil); code != http.StatusOK {
+		`{}`, nil); code != http.StatusAccepted {
 		t.Fatalf("replicate returned %d", code)
 	}
 
@@ -206,7 +225,7 @@ func TestPartialReplicationIsReportedAsPartial(t *testing.T) {
 
 	var out v1.ReplicateSecurityResponse
 	if code := h.post("/api/v1/products/vendor-a/packages/"+ref+":replicateSecurity",
-		`{}`, &out); code != http.StatusOK {
+		`{}`, &out); code != http.StatusAccepted {
 		t.Fatalf("replicate returned %d", code)
 	}
 	reg := out.Registrations[0]
@@ -225,8 +244,14 @@ func TestPartialReplicationIsReportedAsPartial(t *testing.T) {
 	}
 }
 
-// Two people pressing at once see one operation.
-func TestReplicateRefusesWhileOneIsRunning(t *testing.T) {
+// Two people pressing at once see one operation, and the second is TOLD that
+// rather than refused.
+//
+// A 409 was the right answer while the work happened on the request. It is the
+// wrong one now: the thing the second person wanted is already running and
+// about to be drawn for them, so the honest response carries the running state
+// and says no new run began.
+func TestReplicateReportsARunAlreadyInFlight(t *testing.T) {
 	h, rep := newReplicateHarness(t, nil)
 	pkgID := h.seedPackage("25.7.2131", "sha256:aaa")
 	ref := "sha256:aaa"
@@ -235,11 +260,42 @@ func TestReplicateRefusesWhileOneIsRunning(t *testing.T) {
 	if err := rep.registrations.Claim(context.Background(), pkgID, "anchore"); err != nil {
 		t.Fatalf("claim: %v", err)
 	}
+
+	var out v1.ReplicateSecurityResponse
 	if code := h.post("/api/v1/products/vendor-a/packages/"+ref+":replicateSecurity",
-		`{}`, nil); code != http.StatusConflict {
-		// The same status the sync endpoint answers a second press with, so
-		// the two controls behave identically for the identical situation.
-		t.Fatalf("a second press returned %d, want 409", code)
+		`{}`, &out); code != http.StatusAccepted {
+		t.Fatalf("a second press returned %d, want 202", code)
+	}
+	if out.Started {
+		t.Error("a second press claimed to have started a second run")
+	}
+	if len(out.Registrations) != 1 ||
+		out.Registrations[0].State != string(security.RegistrationRunning) {
+		t.Errorf("a second press did not report the run in flight: %+v", out.Registrations)
+	}
+}
+
+// A run can be stopped, and stopping frees the release to be replicated again.
+func TestReplicationCanBeStopped(t *testing.T) {
+	h, rep := newReplicateHarness(t, nil)
+	pkgID := h.seedPackage("25.7.2131", "sha256:aaa")
+	ref := "sha256:aaa"
+
+	if err := rep.registrations.Claim(context.Background(), pkgID, "anchore"); err != nil {
+		t.Fatalf("claim: %v", err)
+	}
+
+	var out v1.ReplicateSecurityResponse
+	if code := h.post("/api/v1/products/vendor-a/packages/"+ref+":cancelSecurityReplication",
+		`{}`, &out); code != http.StatusOK {
+		t.Fatalf("cancel returned %d", code)
+	}
+	if !out.Stopped {
+		t.Error("stopping a running replication reported that nothing was stopped")
+	}
+	if code := h.post("/api/v1/products/vendor-a/packages/"+ref+":replicateSecurity",
+		`{}`, nil); code != http.StatusAccepted {
+		t.Error("a stopped release could not be replicated again")
 	}
 }
 
@@ -251,7 +307,7 @@ func TestReplicateIgnoresAnUnregistrableProvider(t *testing.T) {
 	ref := "sha256:aaa"
 
 	if code := h.post("/api/v1/products/vendor-a/packages/"+ref+":replicateSecurity",
-		`{"provider":"jfrog-xray"}`, nil); code != http.StatusOK {
+		`{"provider":"jfrog-xray"}`, nil); code != http.StatusAccepted {
 		t.Fatalf("replicate returned %d", code)
 	}
 	if rep.lastScope.Provider != "anchore" {

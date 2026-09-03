@@ -179,6 +179,10 @@ type Service struct {
 	// is not available - correct for a deployment with no such scanner.
 	registrations Registrations
 	log           *slog.Logger
+	// replicating is the replications this replica is running right now, keyed
+	// by release and scanner. Their durable position is on the row; this is the
+	// live one, which is fresher by up to a heartbeat.
+	replicating sync.Map
 }
 
 // NewService builds the service. A nil cache is legal and means every read goes

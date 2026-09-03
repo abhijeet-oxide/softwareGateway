@@ -112,9 +112,12 @@ func TestAbandonedRegistrationIsReleased(t *testing.T) {
 	if err := regs.Claim(ctx, pkg, "anchore"); err != nil {
 		t.Fatalf("claim: %v", err)
 	}
-	// Age the claim past the window.
+	// Age the claim past the window. The HEARTBEAT is what says a run is alive,
+	// so a claim aged only by its start time is a long run rather than a dead
+	// one - which is the distinction the heartbeat was added to draw.
 	if _, err := st.DB().ExecContext(ctx, regs.q(
-		`UPDATE security_registrations SET started_at = ? WHERE package_id = ?`),
+		`UPDATE security_registrations SET started_at = ?, heartbeat_at = ? WHERE package_id = ?`),
+		securityTime(time.Now().UTC().Add(-2*StaleRegistrationAfter)),
 		securityTime(time.Now().UTC().Add(-2*StaleRegistrationAfter)), pkg); err != nil {
 		t.Fatalf("age the claim: %v", err)
 	}
@@ -140,11 +143,75 @@ func TestStaleClaimIsRetakenDirectly(t *testing.T) {
 		t.Fatalf("claim: %v", err)
 	}
 	if _, err := st.DB().ExecContext(ctx, regs.q(
-		`UPDATE security_registrations SET started_at = ? WHERE package_id = ?`),
+		`UPDATE security_registrations SET started_at = ?, heartbeat_at = ? WHERE package_id = ?`),
+		securityTime(time.Now().UTC().Add(-2*StaleRegistrationAfter)),
 		securityTime(time.Now().UTC().Add(-2*StaleRegistrationAfter)), pkg); err != nil {
 		t.Fatalf("age the claim: %v", err)
 	}
 	if err := regs.Claim(ctx, pkg, "anchore"); err != nil {
 		t.Errorf("a stale claim was not retaken: %v", err)
+	}
+}
+
+// A live run's heartbeat carries its position, so a reader who reloads the page
+// mid-replication is shown where it has got to rather than the word
+// "registering" - which is the whole reason the column exists.
+func TestBeatStoresThePosition(t *testing.T) {
+	st := openTestStore(t)
+	regs := NewSecurityRegistrations(st)
+	ctx := context.Background()
+	pkg := seedPackageFor(t, st)
+
+	if err := regs.Claim(ctx, pkg, "anchore"); err != nil {
+		t.Fatalf("claim: %v", err)
+	}
+	held, err := regs.Beat(ctx, pkg, "anchore", security.ProgressSnapshot{
+		Stages:      []security.SyncStage{{Name: "submitting", Done: 12, Total: 154}},
+		Active:      []string{"cfx-network"},
+		Concurrency: 6,
+	})
+	if err != nil || !held {
+		t.Fatalf("beat held=%v err=%v, want a held claim", held, err)
+	}
+
+	row, ok, err := regs.Get(ctx, pkg, "anchore")
+	if err != nil || !ok {
+		t.Fatalf("get: ok=%v err=%v", ok, err)
+	}
+	if row.Progress == nil {
+		t.Fatal("the beat stored no position, so a reload shows a spinner over a run that is working")
+	}
+	if len(row.Progress.Stages) != 1 || row.Progress.Stages[0].Done != 12 {
+		t.Errorf("stored position = %+v, want submitting 12 of 154", row.Progress.Stages)
+	}
+	if row.Progress.Concurrency != 6 || len(row.Progress.Active) != 1 {
+		t.Errorf("stored position lost what was in flight: %+v", row.Progress)
+	}
+	if row.HeartbeatAt == nil {
+		t.Error("the beat recorded no heartbeat, so the run reads as abandoned")
+	}
+}
+
+// Stopping a run releases the claim from anywhere, and a second stop is not a
+// failure - it is a run that had already finished.
+func TestStopReleasesTheClaimOnce(t *testing.T) {
+	st := openTestStore(t)
+	regs := NewSecurityRegistrations(st)
+	ctx := context.Background()
+	pkg := seedPackageFor(t, st)
+
+	if err := regs.Claim(ctx, pkg, "anchore"); err != nil {
+		t.Fatalf("claim: %v", err)
+	}
+	stopped, err := regs.Stop(ctx, pkg, "anchore")
+	if err != nil || !stopped {
+		t.Fatalf("stop = %v, %v; want a claim released", stopped, err)
+	}
+	again, err := regs.Stop(ctx, pkg, "anchore")
+	if err != nil || again {
+		t.Errorf("stopping a finished run reported %v, want false rather than an error", again)
+	}
+	if err := regs.Claim(ctx, pkg, "anchore"); err != nil {
+		t.Errorf("the stopped release could not be replicated again: %v", err)
 	}
 }

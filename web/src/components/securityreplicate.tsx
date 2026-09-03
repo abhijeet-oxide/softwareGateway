@@ -1,7 +1,10 @@
-import { Alert, Button, Space, Tag, Tooltip, Typography } from 'antd'
+import { Alert, Button, Space, Tooltip, Typography } from 'antd'
 
 import type { SecurityRegistration } from '../api/types'
 import { formatRelative } from '../domain/format'
+import { ReloadOutlined } from '../icons'
+import { ScannerMark } from './icons'
+import { ReplicationLogButton } from './replicationprogress'
 import { c } from '../uikit'
 
 /**
@@ -32,6 +35,78 @@ export function hasReplication(registrations?: SecurityRegistration[]): boolean 
   return (registrations?.length ?? 0) > 0
 }
 
+/**
+ * The header control, beside Sync.
+ *
+ * # Why it is up here rather than in the banner
+ *
+ * Because the two acts are one workflow read left to right - replicate the
+ * release to the scanner, then collect what it found - and this half of it
+ * lived only in a banner among the summary cards. On a release nobody had
+ * replicated that put the most consequential control on the tab below the fold,
+ * while the one control the header did offer was a sync that could only ever
+ * come back empty.
+ *
+ * ONE LABEL, in one colour, whatever the state. "Replicate to Anchore again"
+ * and a red variant for a failed run made three buttons out of one action, and
+ * the reader had to work out which of the three they were looking at before
+ * pressing the only one there has ever been. The banner underneath says what
+ * state the release is in; this says what the button does.
+ *
+ * Absent once every scanner holds the release, because at that point it is a
+ * control whose honest label is "do nothing again".
+ */
+export function ReplicateButton({ registrations, onReplicate, pending, size = 'middle' }: {
+  registrations?: SecurityRegistration[]
+  onReplicate: (provider: string) => void
+  pending?: string
+  size?: 'small' | 'middle'
+}) {
+  const rows = registrations ?? []
+  // A run in flight has its own panel with its own Stop. A second control up
+  // here would be a third thing describing one operation.
+  const outstanding = rows.filter(
+    (r) => r.state !== 'registered' && !(r.state === 'registering' && !r.stalled),
+  )
+  const r = outstanding[0]
+  if (!r) return null
+
+  return (
+    <Tooltip
+      title={!r.canReplicate ? r.reason : `Submits this release's images to ${r.label} and `
+        + `creates its application version. ${r.label} pulls and analyses on its own schedule; `
+        + 'sync this release afterwards to collect the results.'}
+    >
+      <Button
+        size={size}
+        type="primary"
+        icon={<ScannerMark provider={r.provider} />}
+        loading={pending === r.provider}
+        disabled={!r.canReplicate}
+        onClick={() => onReplicate(r.provider)}
+      >
+        Replicate to {r.label}
+      </Button>
+    </Tooltip>
+  )
+}
+
+/**
+ * The last replication's transcript, for the header row.
+ *
+ * Beside the sync's log rather than inside the alert, because the two are the
+ * same kind of thing - the record of a run that has finished - and a reader
+ * looking for one should not find the other somewhere else entirely.
+ */
+export function ReplicationLogControl({ registrations, size = 'middle' }: {
+  registrations?: SecurityRegistration[]
+  size?: 'small' | 'middle'
+}) {
+  const r = (registrations ?? []).find((x) => (x.log?.length ?? 0) > 0)
+  if (!r) return null
+  return <ReplicationLogButton registration={r} size={size} />
+}
+
 export function ReplicationNotice({ registrations, onReplicate, pending }: {
   registrations?: SecurityRegistration[]
   onReplicate: (provider: string) => void
@@ -41,12 +116,19 @@ export function ReplicationNotice({ registrations, onReplicate, pending }: {
   const rows = registrations ?? []
   if (rows.length === 0) return null
 
+  // A RUNNING replication draws its own panel, and this steps aside for it.
+  // Two things describing one operation - a live bar and a banner with a
+  // disabled button under it - is one of them too many, and the disabled one
+  // is the one that says nothing.
+  const idle = rows.filter((r) => !(r.state === 'registering' && !r.stalled))
+  if (idle.length === 0) return null
+
   // Anything not finished comes first and gets the loud treatment. A release
   // where everything is registered gets one quiet line, because at that point
   // the fact is only worth confirming.
-  const outstanding = rows.filter((r) => r.state !== 'registered')
+  const outstanding = idle.filter((r) => r.state !== 'registered')
   if (outstanding.length === 0) {
-    return <ReplicatedLine registrations={rows} onReplicate={onReplicate} pending={pending} />
+    return <ReplicatedLine registrations={idle} onReplicate={onReplicate} pending={pending} />
   }
 
   return (
@@ -80,37 +162,48 @@ function OutstandingNotice({ registration: r, onReplicate, pending }: {
       type={type}
       showIcon
       message={message}
+      // The RETRY in the action slot, not stacked under the text. As a row of
+      // its own it needed a full-width flex container and left a band of empty
+      // alert beneath the sentence it belonged to.
+      action={
+        <Button
+          size="small"
+          icon={<ReloadOutlined />}
+          loading={busy}
+          disabled={running || !r.canReplicate}
+          onClick={() => onReplicate(r.provider)}
+        >
+          Retry
+        </Button>
+      }
       description={
-        <Space direction="vertical" size={8} style={{ width: '100%' }}>
-          <Typography.Text type="secondary" style={{ fontSize: 12.5 }}>
-            {description}
-          </Typography.Text>
+        <Space direction="vertical" size={6} style={{ width: '100%' }}>
+          {/*
+            The scanner's own words, and on a failure they are the WHOLE of it.
+            A paragraph explaining what an absence of findings means is worth
+            saying to somebody who has not replicated yet; above a scanner's
+            error message it is padding between the reader and the sentence
+            that names the fix.
+          */}
+          {description && (
+            <Typography.Text type="secondary" style={{ fontSize: 12.5 }}>
+              {description}
+            </Typography.Text>
+          )}
           {r.error && (
-            /*
-              The scanner's own words, kept. A notice that said "it failed" and
-              swallowed the reason sends the reader to a log they have to know
-              exists; the sentence that came back from Anchore names the fix
-              nine times out of ten.
-            */
-            <Typography.Text type="secondary" style={{ fontSize: 12, fontStyle: 'italic' }}>
+            <Typography.Text style={{ fontSize: 12.5 }}>
               {r.error}
             </Typography.Text>
           )}
-          <Space size={8} wrap>
-            <Button
-              type="primary"
-              size="small"
-              loading={busy}
-              disabled={running || !r.canReplicate}
-              onClick={() => onReplicate(r.provider)}
-            >
-              {r.state === '' ? `Replicate to ${r.label}` : `Replicate to ${r.label} again`}
-            </Button>
-            {!r.canReplicate && r.reason && (
-              <Typography.Text type="secondary" style={{ fontSize: 12 }}>{r.reason}</Typography.Text>
-            )}
-            <Counts registration={r} />
-          </Space>
+          {/* The remedy under the evidence, and quieter than it. */}
+          {r.remedy && (
+            <Typography.Text type="secondary" style={{ fontSize: 12.5 }}>
+              {r.remedy}
+            </Typography.Text>
+          )}
+          {!r.canReplicate && r.reason && (
+            <Typography.Text type="secondary" style={{ fontSize: 12 }}>{r.reason}</Typography.Text>
+          )}
         </Space>
       }
     />
@@ -127,25 +220,26 @@ function describe(r: SecurityRegistration): {
     return {
       type: 'info',
       message: `Replicating this release to ${r.label}`,
-      description: 'Its images are being submitted for analysis. This takes seconds; the analysis '
-        + 'itself then runs on the scanner\'s own schedule.',
+      description: `Its images are being submitted to ${r.label}. Analysis runs on `
+        + `${r.label}'s own schedule once they are accepted.`,
     }
   }
   if (r.stalled) {
     return {
       type: 'warning',
       message: `Replication to ${r.label} was interrupted`,
-      description: 'The Coordinator running it stopped. Nothing is running now - run it again. '
-        + 'Images already submitted are not submitted twice.',
+      description: 'The Coordinator running it stopped, so no replication is in progress. '
+        + 'Run it again: images already accepted are not submitted twice.',
     }
   }
   if (r.state === 'failed') {
+    // NO description. The error underneath is the whole message, and a
+    // paragraph about what an absence of findings means sits between the
+    // reader and the sentence that names the fix.
     return {
       type: 'error',
-      message: `This release could not be replicated to ${r.label}`,
-      description: `${r.label} has no record of these images, so it has nothing to analyse and `
-        + 'this release has no findings from it. That is not a clean result - it is an unasked '
-        + 'question.',
+      message: `Replication to ${r.label} failed`,
+      description: '',
     }
   }
   if (r.state === 'partial') {
@@ -153,51 +247,21 @@ function describe(r: SecurityRegistration): {
       type: 'warning',
       message: `${r.outstanding.toLocaleString()} of this release's `
         + `${r.expected.toLocaleString()} images are not in ${r.label}`,
-      description: `${r.label} holds ${r.associated.toLocaleString()} of them and has nothing to `
-        + 'say about the rest. This is the ordinary state of a release that is still being '
-        + 'transferred: replicate it again once the remaining images have landed.',
+      description: `${r.label} holds ${r.associated.toLocaleString()} of them and reports no `
+        + 'findings for the remainder. This is the expected state of a release that is still '
+        + 'being transferred: replicate it again once the remaining images have landed.',
     }
   }
   // Never replicated, which is the state this notice exists for.
   return {
     type: 'warning',
     message: `This release has not been replicated to ${r.label}`,
-    description: `${r.label} is configured for this release and has never been told these images `
-      + 'exist, so it has nothing to analyse and no findings to report. An empty result here is '
-      + 'an unasked question rather than a clean release. Replicating submits the images and '
-      + 'creates the application version in ' + r.label + '; analysis then runs on its own '
-      + 'schedule and a sync collects the results.',
+    description: `${r.label} is configured for this release but has not been sent its images, `
+      + 'so it has reported no findings. The absence of findings records that no analysis was '
+      + `requested, not that the release is clean. Replicating submits the images to ${r.label} `
+      + 'and creates the application version; analysis runs on its own schedule, and a sync '
+      + 'collects the results.',
   }
-}
-
-/**
- * The numbers, where there are any worth showing.
- *
- * Absent on a release that has never been replicated - zeroes beside a button
- * that has never been pressed are three facts that all say "nothing yet", which
- * the sentence above already said better.
- */
-function Counts({ registration: r }: { registration: SecurityRegistration }) {
-  if (r.expected === 0 && r.associated === 0) return null
-  return (
-    <Space size={6} wrap>
-      <Tooltip title={`${r.label} holds ${r.associated.toLocaleString()} of this release's `
-        + `${r.expected.toLocaleString()} images.`}
-      >
-        <Tag style={{ marginInlineEnd: 0, fontSize: 11 }}>
-          {r.associated.toLocaleString()}/{r.expected.toLocaleString()} images
-        </Tag>
-      </Tooltip>
-      {r.analysed > 0 && (
-        <Tooltip title="Analysis runs on the scanner's own schedule. Sync this release to collect
-          the results of the ones that have finished.">
-          <Tag style={{ marginInlineEnd: 0, fontSize: 11 }}>
-            {r.analysed.toLocaleString()} analysed
-          </Tag>
-        </Tooltip>
-      )}
-    </Space>
-  )
 }
 
 /**
@@ -233,15 +297,16 @@ function ReplicatedLine({ registrations, onReplicate, pending }: {
               reader wants to know whether that is Anchore's fault or simply
               not finished yet.
             */}
-            {r.analysed < r.associated && `, ${r.analysed.toLocaleString()} analysed so far`}
+            {r.analysed < r.associated && `, ${r.analysed.toLocaleString()} analysed`}
           </Typography.Text>
           {r.url && (
             <Typography.Link href={r.url} target="_blank" rel="noreferrer" style={{ fontSize: 12 }}>
               Open in {r.label}
             </Typography.Link>
           )}
-          <Tooltip title={`Submits any images ${r.label} does not already hold and re-checks the `
-            + 'application version. Images it already has are not submitted again.'}
+          <Tooltip title={`Resubmits this release's images to ${r.label} and re-checks the `
+            + 'application version. Submission by digest is idempotent, so images it already '
+            + 'holds are not analysed again.'}
           >
             <Button
               size="small"

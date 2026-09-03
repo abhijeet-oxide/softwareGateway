@@ -1,11 +1,13 @@
 package api
 
 import (
+	"fmt"
 	"strconv"
 	"strings"
 	"time"
 
 	"github.com/abhijeet-oxide/softwareGateway/internal/security"
+	"github.com/abhijeet-oxide/softwareGateway/internal/security/anchore"
 	"github.com/abhijeet-oxide/softwareGateway/internal/store"
 	v1 "github.com/abhijeet-oxide/softwareGateway/pkg/apis/softwaregateway/v1"
 )
@@ -789,14 +791,111 @@ func toAPIRegistration(
 	if row.RegisteredAt != nil {
 		out.RegisteredAt = row.RegisteredAt.UTC().Format(rfc3339)
 	}
+	out.Remedy = registrationRemedy(row.Error, target.Registry, target.RepositoryKey)
+	out.Log = toAPISyncLog(row.Log)
+	// The stored position, so a reader who reloads mid-run sees where it has
+	// got to. Replaced by the live one a layer up where this Coordinator is the
+	// one doing the work, which is fresher by up to a heartbeat.
+	if out.State == string(security.RegistrationRunning) && row.Progress != nil {
+		out.Progress = toAPIReplicationProgress(provider, *row.Progress, target.Registry, false)
+	}
 	// A stalled claim is not a running replication, and a button that refused
 	// because of one would leave a release un-replicable until a sweep noticed.
 	if out.Stalled {
 		out.State = string(security.RegistrationFailed)
 		out.StateLabel = security.RegistrationFailed.Label()
+		out.Progress = nil
 		if out.Error == "" {
 			out.Error = "The replication was interrupted. Run it again."
 		}
+	}
+	return out
+}
+
+// registrationRemedy is what to do about a recorded failure, where this
+// Coordinator can say - and "" where it cannot.
+//
+// # Why it is derived here and not stored beside the error
+//
+// Because it depends on the registry the release landed in, and that is
+// configuration this layer already holds. Storing it would put a sentence in
+// the database that goes stale the moment a target is renamed, and it would
+// need a migration to add a fact nothing else needs.
+//
+// Absent by design for everything else. A remedy invented for a failure nobody
+// has a remedy for is a sentence that sends somebody somewhere.
+func registrationRemedy(failure, registry, repository string) string {
+	if !anchore.IsPullFailure(failure) {
+		return ""
+	}
+	if registry == "" {
+		return "Anchore could not reach the registry this release landed in to fetch its " +
+			"images. Ensure that registry is added to Anchore, with credentials if it is " +
+			"private, and that Anchore trusts its TLS certificate and can route to its host."
+	}
+	// The repository as well as the host, because that pair is what an operator
+	// types into Anchore's registry list - and a host alone matches a
+	// deployment that has the host registered and this repository not.
+	path := registry
+	name := registry
+	if repository != "" {
+		path = registry + "/" + repository
+		name = repository
+	}
+	return "Anchore could not reach the " + name + " registry to fetch images. Ensure " + path +
+		" is added to Anchore, with credentials if it is private, and that Anchore trusts its " +
+		"TLS certificate and can route to its host."
+}
+
+// toAPIReplicationProgress renders where a running replication has got to.
+// The stage names are Anchore's own - submitting, associating - and the detail
+// is written from the position rather than from the stage name alone: a stage
+// name is a word, and "Triggering Anchore to pull 154 images from
+// internal.example.com" is a sentence somebody can act on.
+func toAPIReplicationProgress(
+	provider string, snapshot security.ProgressSnapshot, registry string, here bool,
+) *v1.ReplicationProgress {
+	out := &v1.ReplicationProgress{
+		Provider:    provider,
+		Label:       providerLabel(provider),
+		Active:      snapshot.Active,
+		Concurrency: snapshot.Concurrency,
+		Here:        here,
+		Notes:       snapshot.Notes,
+		Log:         toAPISyncLog(snapshot.Log),
+	}
+	if !snapshot.StartedAt.IsZero() {
+		out.StartedAt = snapshot.StartedAt.UTC().Format(rfc3339)
+		if elapsed := int(time.Since(snapshot.StartedAt).Seconds()); elapsed > 0 {
+			out.Elapsed = elapsed
+		}
+	}
+
+	// The LAST stage with anything in it. The stages arrive in the order the
+	// run enters them, so the newest is the one it is in - and a panel drawn
+	// from the first would sit on "submitting" through the whole of grouping.
+	for _, stage := range snapshot.Stages {
+		if stage.Name == security.StageFailing {
+			// A counter, not a position. It has no bar of its own.
+			out.Failed = stage.Done
+			continue
+		}
+		if stage.Total == 0 && stage.Done == 0 {
+			continue
+		}
+		out.Stage, out.Done, out.Total = stage.Name, stage.Done, stage.Total
+	}
+	switch out.Stage {
+	case "submitting":
+		out.Detail = fmt.Sprintf("Replicating %d images to %s for analysis", out.Total, out.Label)
+		if registry != "" {
+			out.Detail = fmt.Sprintf("Replicating %d images from %s to %s for analysis",
+				out.Total, registry, out.Label)
+		}
+	case "associating":
+		out.Detail = "Creating this release's application and version, then attaching its images"
+	default:
+		out.Detail = "Discovering the images that are part of this release"
 	}
 	return out
 }

@@ -489,6 +489,14 @@ type SecurityRegistration struct {
 	State      string `json:"state"`
 	StateLabel string `json:"stateLabel"`
 	Error      string `json:"error,omitempty"`
+	// Remedy is what to do about Error, where this Coordinator can say.
+	//
+	// Separate from Error because the two are used differently: Error is the
+	// scanner's own sentence, which is what gets quoted into a ticket and
+	// verified by whoever receives it, and this is an interpretation of it.
+	// Concatenated, the evidence ended up buried mid-paragraph and the whole
+	// string was unquotable.
+	Remedy string `json:"remedy,omitempty"`
 
 	// Expected is what this release wants registered, Associated what the
 	// scanner's own grouping holds on read-back, and Outstanding the gap.
@@ -524,6 +532,72 @@ type SecurityRegistration struct {
 	// three facts the browser does not hold and should not have to.
 	CanReplicate bool   `json:"canReplicate"`
 	Reason       string `json:"reason,omitempty"`
+
+	// Progress is where a RUNNING replication has got to, and the transcript of
+	// it so far.
+	//
+	// Present whenever the state is `registering`, from the running replica's
+	// memory where this Coordinator is the one doing the work and from the row
+	// otherwise - the run writes its position down on every heartbeat for
+	// exactly that reason. Without it a reader who reloads the page is shown
+	// the word "registering" and nothing else, which is indistinguishable from
+	// a job that has hung.
+	Progress *ReplicationProgress `json:"progress,omitempty"`
+
+	// Log is the last run's transcript, kept after it finishes.
+	//
+	// The counterpart of the sync's log and the compliance run's: "what
+	// happened when I pressed Replicate" is a question asked after the run
+	// rather than during it, and an operation whose only durable output is one
+	// `error` sentence is one nobody can ask anything about afterwards.
+	Log []SecurityLogEntry `json:"log,omitempty"`
+}
+
+// ReplicationProgress is where a running replication has got to.
+//
+// Deliberately the same shape as the compliance run's progress and the sync's:
+// a headline, a position, what is in flight, and a transcript. The three are
+// watched by the same person on the same release and answer the same question -
+// "is this working, and what is the answer going to be missing" - so a second
+// vocabulary for the third of them is a second thing to learn for no gain.
+type ReplicationProgress struct {
+	Provider string `json:"provider"`
+	Label    string `json:"label"`
+
+	// Stage is what it is doing now: submitting | associating.
+	Stage string `json:"stage,omitempty"`
+	// Detail is the sentence under the headline, where there is one worth
+	// saying beyond the count.
+	Detail string `json:"detail,omitempty"`
+
+	Done  int `json:"done"`
+	Total int `json:"total"`
+	// Failed is how many images the scanner has rejected so far.
+	//
+	// Sent separately because Done counts attempts: a bar that reaches its
+	// total having had every image refused looks identical to one that
+	// succeeded, and the tile above it read "61 replicated" when none were.
+	Failed int `json:"failed,omitempty"`
+
+	// Active names the images in flight right now, and Concurrency how many may
+	// be. A list that changes every few seconds is a run that is working
+	// whatever the bar is doing, and it is the only thing on the panel that
+	// tells a slow Anchore from a wedged one.
+	Active      []string `json:"active,omitempty"`
+	Concurrency int      `json:"concurrency,omitempty"`
+
+	StartedAt string `json:"startedAt,omitempty"`
+	// Elapsed is seconds since the run started, computed here so every client
+	// agrees with every other about how long this has been going.
+	Elapsed int `json:"elapsed"`
+
+	// Here is whether the Coordinator answering is the one running the work.
+	// False with a live position means the position came off the row, so it is
+	// up to one heartbeat old - which is worth being able to say.
+	Here bool `json:"here,omitempty"`
+
+	Notes []string           `json:"notes,omitempty"`
+	Log   []SecurityLogEntry `json:"log,omitempty"`
 }
 
 // ReplicateSecurityRequest asks for a release to be registered with a scanner.
@@ -538,7 +612,15 @@ type ReplicateSecurityRequest struct {
 type ReplicateSecurityResponse struct {
 	Product string `json:"product"`
 	Package string `json:"package"`
-	// Registrations is one entry per scanner this replicated to.
+	// Started is whether this press began a run. False with a `registering`
+	// state is not a failure - it is "that is already happening", which is a
+	// different sentence from "that did not work" and reads as one on screen.
+	Started bool `json:"started,omitempty"`
+	// Stopped is whether a cancel actually ended a run. False means it had
+	// already finished, which is also not a failure.
+	Stopped bool `json:"stopped,omitempty"`
+	// Registrations is one entry per scanner, carrying the run's first position
+	// so the page has something to draw before its first poll comes back.
 	Registrations []SecurityRegistration `json:"registrations"`
 	// Log is the run's transcript, so a reader who pressed the button sees
 	// what happened rather than a number that changed.

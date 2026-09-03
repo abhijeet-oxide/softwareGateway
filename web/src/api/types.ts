@@ -1959,6 +1959,15 @@ export interface SecurityRegistration {
   state: RegistrationState
   stateLabel: string
   error?: string
+  /**
+   * What to do about `error`, where the server can say.
+   *
+   * Separate from the error because the two are read differently: the error is
+   * the scanner's own sentence, which is what gets quoted into a ticket, and
+   * this is an interpretation of it. Concatenated, the evidence ended up buried
+   * mid-paragraph and the whole string was unquotable.
+   */
+  remedy?: string
 
   /**
    * `expected` is what this release wants registered, `associated` what the
@@ -1995,12 +2004,71 @@ export interface SecurityRegistration {
   /** Whether to offer the button, and why not. */
   canReplicate: boolean
   reason?: string
+
+  /**
+   * Where a RUNNING replication has got to, and what it has done so far.
+   *
+   * Present whenever `state` is `registering` - from the running Coordinator's
+   * memory when it is the one answering, and from the row otherwise, because
+   * the run writes its position down on every heartbeat. Without it a reader
+   * who reloads mid-run sees the word "registering" and nothing else, which is
+   * indistinguishable from a job that has hung.
+   */
+  progress?: ReplicationProgress
+
+  /** The last run's transcript, kept after it finishes. */
+  log?: SecurityLogEntry[]
 }
 
-/** What one replication did. */
+/**
+ * Where a running replication has got to.
+ *
+ * Deliberately the same shape as ComplianceProgress and SecuritySyncStatus'
+ * live half: a headline, a position, what is in flight, and a transcript. All
+ * three are watched by the same person on the same release, and all three are
+ * drawn by RunPanel.
+ */
+export interface ReplicationProgress {
+  provider: string
+  label: string
+
+  /** discovering | submitting | associating. */
+  stage?: string
+  detail?: string
+
+  done: number
+  total: number
+  /**
+   * Images the scanner has rejected so far.
+   *
+   * Separate from `done`, which counts ATTEMPTS: a bar that reaches its total
+   * having had every image refused looks identical to one that succeeded.
+   */
+  failed?: number
+
+  /** The images in flight right now, and how many may be. */
+  active?: string[]
+  concurrency?: number
+
+  startedAt?: string
+  /** Seconds, computed server-side so every client agrees. */
+  elapsed: number
+
+  /** Whether the Coordinator answering is the one doing the work. */
+  here?: boolean
+
+  notes?: string[]
+  log?: SecurityLogEntry[]
+}
+
+/** What one press of Replicate did. */
 export interface ReplicateSecurityResponse {
   product: string
   package: string
+  /** Whether this press began a run. False means one was already going. */
+  started?: boolean
+  /** Whether a cancel ended a run. False means it had already finished. */
+  stopped?: boolean
   registrations: SecurityRegistration[]
   log?: SecurityLogEntry[]
 }

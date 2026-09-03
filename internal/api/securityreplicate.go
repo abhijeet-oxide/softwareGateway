@@ -32,10 +32,18 @@ import (
 
 // SecurityReplicator registers a release with a scanner.
 //
-// A consumer-defined interface like SecuritySyncer beside it: one call, not the
-// provider resolver and the credential store behind it.
+// A consumer-defined interface like SecuritySyncer beside it: four calls, not
+// the provider resolver and the credential store behind them.
 type SecurityReplicator interface {
-	Replicate(ctx context.Context, req security.ReplicateRequest) (security.ReplicateResult, error)
+	// StartReplicate claims the release and registers it in the background,
+	// returning as soon as the claim is decided.
+	StartReplicate(ctx context.Context, req security.ReplicateRequest) error
+	// ReplicationProgress is the live position of a run this replica is doing.
+	// A miss is ordinary: the work may be elsewhere, or may have finished, and
+	// the caller falls back to the position stored on the row.
+	ReplicationProgress(packageID int64, provider string) (security.ProgressSnapshot, bool)
+	// CancelReplication stops a run, wherever it is running.
+	CancelReplication(ctx context.Context, packageID int64, provider string) (bool, error)
 	// Registrable reports whether a scanner has to be told about artifacts at
 	// all, so the interface knows whether to offer the button.
 	Registrable(ctx context.Context, scope security.Scope) bool
@@ -108,34 +116,81 @@ func (s *Server) handleReplicatePackageSecurity(w http.ResponseWriter, r *http.R
 	}
 
 	for _, scope := range scopes {
-		res, err := s.deps.SecurityReplicate.Replicate(r.Context(), security.ReplicateRequest{
+		err := s.deps.SecurityReplicate.StartReplicate(r.Context(), security.ReplicateRequest{
 			PackageID: pkg.ID,
 			Scope:     scope,
 			Release:   releaseRefFor(productName, pkg),
 			Artifacts: artifacts,
 		})
-		out.Log = append(out.Log, toAPISyncLog(res.Log)...)
-
 		switch {
 		case errors.Is(err, store.ErrRegistrationInFlight):
 			// Not a failure. The thing the caller wanted is already happening,
-			// and saying so beats a 409 that reads like a refusal.
-			Error(w, r, v1.CodeFailedPrecondition,
-				"a replication to "+security.ProviderLabel(scope.Provider)+
-					" is already running for this release")
-			return
+			// and the panel it is about to poll will show it - so this answers
+			// with the running state rather than a 409 that reads as a refusal.
+			out.Started = false
 		case errors.Is(err, security.ErrNotRegistrable):
 			continue
 		case err != nil:
-			// The transcript is already recorded against the release, so this
-			// is the sentence rather than the whole story.
 			Error(w, r, v1.CodeUnavailable, err.Error())
 			return
+		default:
+			out.Started = true
 		}
-		out.Registrations = append(out.Registrations,
-			toAPIRegistrationFrom(res.Registration, target))
 	}
 
+	// The state as it now stands, including the run's first position, so the
+	// page has something to draw before its first poll comes back.
+	out.Registrations = s.registrationsFor(r.Context(), target, pkg.ID)
+	WriteJSON(w, r, http.StatusAccepted, out)
+}
+
+// handleCancelPackageReplication serves POST
+// /api/v1/products/{product}/packages/{package}:cancelSecurityReplication.
+//
+// The counterpart of stopping a sync or a compliance check, and it exists for
+// the same reason: a run against an unreachable Anchore holds a claim for its
+// whole timeout, and a reader who can see it is stuck should be able to end it
+// rather than wait out a window sized for the worst case.
+func (s *Server) handleCancelPackageReplication(w http.ResponseWriter, r *http.Request) {
+	productName := chi.URLParam(r, "product")
+	ref := chi.URLParam(r, "package")
+
+	if !s.productExists(w, r, productName) {
+		return
+	}
+	if s.deps.Packages == nil || s.deps.SecurityReplicate == nil {
+		Error(w, r, v1.CodeUnavailable,
+			"replicating releases to a scanner is not configured on this Coordinator")
+		return
+	}
+	pkg, ok := s.resolvePackage(w, r, productName, ref)
+	if !ok {
+		return
+	}
+
+	var body v1.ReplicateSecurityRequest
+	if err := decodeOptionalJSON(r, &body); err != nil {
+		Error(w, r, v1.CodeInvalidArgument, err.Error())
+		return
+	}
+
+	target := s.securityTargetFor(r.Context(), productName, pkg)
+	out := v1.ReplicateSecurityResponse{
+		Product: productName,
+		Package: packageReferenceOf(pkg),
+	}
+	for _, scope := range s.registrableScopes(r.Context(), target, body.Provider) {
+		stopped, err := s.deps.SecurityReplicate.CancelReplication(
+			r.Context(), pkg.ID, scope.Provider)
+		if err != nil {
+			s.internal(w, r, "stop security replication", err)
+			return
+		}
+		// False is not a failure: the run finished between the reader deciding
+		// to stop it and the request arriving.
+		out.Stopped = out.Stopped || stopped
+	}
+	out.Registrations = s.registrationsFor(r.Context(), target, pkg.ID)
 	WriteJSON(w, r, http.StatusOK, out)
 }
 
@@ -209,7 +264,18 @@ func (s *Server) registrationsFor(
 		if !registrable[scope.Provider] {
 			continue
 		}
-		out = append(out, toAPIRegistration(scope.Provider, stored[scope.Provider], target))
+		reg := toAPIRegistration(scope.Provider, stored[scope.Provider], target)
+		// The LIVE position wins over the stored one where this Coordinator is
+		// the replica doing the work: the row is rewritten on a heartbeat, so
+		// what it holds is up to one beat old and what is in memory is now.
+		if reg.State == string(security.RegistrationRunning) {
+			if progress, ok := s.deps.SecurityReplicate.ReplicationProgress(
+				packageID, scope.Provider); ok {
+				reg.Progress = toAPIReplicationProgress(
+					scope.Provider, progress, target.Registry, true)
+			}
+		}
+		out = append(out, reg)
 	}
 	return out
 }

@@ -100,6 +100,7 @@ import PhTreeStructure from '~icons/ph/tree-structure'
 import PhWarning from '~icons/ph/warning'
 import PhWarningCircle from '~icons/ph/warning-circle'
 import PhWarningCircleFill from '~icons/ph/warning-circle-fill'
+import PhX from '~icons/ph/x'
 import PhXCircle from '~icons/ph/x-circle'
 import PhXCircleFill from '~icons/ph/x-circle-fill'
 import SiHelm from '~icons/simple-icons/helm'
@@ -187,6 +188,9 @@ export const CheckCircleOutlined = make('check-circle', PhCheckCircle)
 export const CheckCircleFilled = make('check-circle-fill', PhCheckCircleFill)
 export const CloseCircleOutlined = make('close-circle', PhXCircle)
 export const CloseCircleFilled = make('close-circle-fill', PhXCircleFill)
+// A BARE cross, for dismissing. The circled one reports a failure everywhere
+// else on these screens, and a close control wearing it reads as one.
+export const CloseOutlined = make('close', PhX)
 export const ExclamationCircleOutlined = make('exclamation-circle', PhWarningCircle)
 export const ExclamationCircleFilled = make('exclamation-circle-fill', PhWarningCircleFill)
 export const WarningOutlined = make('warning', PhWarning)

@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useState } from 'react'
 import type { ReactNode } from 'react'
 import {
   Alert, Button, Drawer, Dropdown, Popover, Progress, Space, Tag, Timeline, Tooltip, Typography,
@@ -14,7 +14,8 @@ import {
   c, mono, severity as severityColour, severitySurface, StatusPill, tokens,
   verdict as verdictColour, withAlpha,
 } from '../uikit'
-import { RunTiles } from './runtiles'
+import { RunPanel, runEventsFromLog } from './runpanel'
+import { ScannerMark } from './icons'
 import { kevColour, KevTag } from './securitykev'
 import type { RunTile } from './runtiles'
 import { SEVERITIES } from '../api/types'
@@ -873,9 +874,7 @@ export function SecurityProgressPanel({ sync, onStop, stopping, starting }: {
   // one invites the reader to compare two things that are not comparable.
   const total = fetching?.total ?? resolving?.total ?? 0
   const done = fetching?.done ?? 0
-  const percent = total > 0 ? Math.round((done / total) * 100) : 0
 
-  const running = (sync.state === 'syncing' && !sync.stalled) || Boolean(starting)
   /*
    * THIS sync's clock, not the last one's.
    *
@@ -886,215 +885,57 @@ export function SecurityProgressPanel({ sync, onStop, stopping, starting }: {
    * thing to show for one.
    */
   const live = sync.state === 'syncing' && !sync.stalled
-  const elapsed = useElapsed(live ? sync.startedAt : undefined, live)
-  const remaining = live ? estimateRemaining(sync.startedAt, done, total) : undefined
+
+  const scanner = syncScannerName(sync)
+  const headline = starting && total === 0
+    ? `Starting the vulnerability sync against ${scanner}`
+    : total > 0
+      ? `Retrieving results for ${total.toLocaleString()} images from ${scanner}`
+      // No stages at all is a sync running on another Coordinator, and this
+      // replica does not know what step it has reached. Saying it is resolving
+      // artifacts would be inventing a position.
+      : stages.length === 0
+        ? 'Vulnerability sync in progress on another Coordinator'
+        : 'Working out which of this release\u2019s artifacts to ask about'
 
   return (
-    <Space direction="vertical" size={16} style={{ width: '100%', padding: '4px 0' }}>
-      <Space style={{ width: '100%', justifyContent: 'space-between' }} align="start" wrap>
-        <Space direction="vertical" size={0}>
-          <Space size={8}>
-            <SyncOutlined spin style={{ color: c.brand }} />
-            {/*
-              What the sync is DOING, in a sentence somebody can act on.
-
-              "Resolving the release" named a stage rather than a step, and read
-              as though the release itself were in question. What is happening is
-              that the platform is working out which of the release's artifacts
-              the scanner can be asked about, and there is no number for it yet
-              because the size of that list is the thing being established.
-            */}
-            <Typography.Text strong>
-              {starting && total === 0
-                ? `Starting the vulnerability sync against ${syncScannerName(sync)}`
-                : total > 0
-                  ? `Retrieving results for ${total.toLocaleString()} images from ${syncScannerName(sync)}`
-                  // No stages at all is a sync running on another Coordinator,
-                  // and this replica does not know what step it has reached.
-                  // Saying it is resolving artifacts would be inventing a
-                  // position.
-                  : stages.length === 0
-                    ? 'Vulnerability sync in progress on another Coordinator'
-                    : 'Working out which of this release\u2019s artifacts to ask about'}
-            </Typography.Text>
-          </Space>
-          {/*
-            The repository only. The headline above already names the scanner,
-            and "JFrog Xray" under "…from JFrog Xray" is the same fact twice in
-            two lines.
-          */}
-          {sync.repository && (
-            <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-              {sync.repository}
-            </Typography.Text>
-          )}
-        </Space>
-        <Space direction="vertical" size={0} align="end">
-          <Space size={8} align="center">
-            {elapsed && (
-              <Typography.Text type="secondary" style={{ fontFamily: mono, fontSize: 12 }}>
-                {elapsed} elapsed
-              </Typography.Text>
-            )}
-            {onStop && (
-              <Tooltip title="Stops the sync. Nothing already stored is lost - the release keeps whatever its last completed sync recorded.">
-                <Button size="small" danger icon={<StopOutlined />} loading={stopping} onClick={onStop}>
-                  Stop sync
-                </Button>
-              </Tooltip>
-            )}
-          </Space>
-          {/*
-            AN ESTIMATE, derived from this sync's own rate rather than a
-            constant, and withheld until enough images have come back for the
-            rate to mean anything. The compliance run has said this since it
-            shipped and the sync did not, which left the two longest waits in
-            the product answering "how much longer" differently.
-          */}
-          {running && remaining && (
-            <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-              Estimated {remaining} remaining
-            </Typography.Text>
-          )}
-        </Space>
-      </Space>
-
-      {/*
-        The bar only where there is a position to draw. A sync on another
-        Coordinator has none, and a bar sitting at zero for two minutes says
-        the work is stuck rather than that it is elsewhere.
-      */}
-      {(stages.length > 0 || starting) && (
-        <div>
-          {/*
-            A TRAVELLING stripe until the first batch lands, a real bar after.
-
-            A determinate bar at zero is a claim about position, and the claim it
-            makes is "nothing has happened". The first request to a scanner about
-            fifty images takes as long as it takes - a minute against a busy Xray
-            - and for that whole minute the bar sat at 0%, which is what a stuck
-            job looks like. It was not stuck; there was simply nothing to report
-            a position for yet. The stripe says "working" without saying where,
-            which is the honest shape for work whose extent is known and whose
-            progress is not.
-          */}
-          {done === 0
-            ? (
-              <div
-                role="progressbar"
-                aria-label="Retrieving scan results"
-                aria-busy="true"
-                style={{
-                  height: 8,
-                  borderRadius: 4,
-                  background: c.brandSoft,
-                  overflow: 'hidden',
-                  position: 'relative',
-                }}
-              >
-                <div
-                  style={{
-                    position: 'absolute',
-                    inset: 0,
-                    width: '30%',
-                    borderRadius: 4,
-                    background: c.brand,
-                    animation: 'slm-working 1.4s ease-in-out infinite',
-                  }}
-                />
-              </div>
-            )
-            : (
-              <Progress
-                percent={percent}
-                status="active"
-                showInfo={false}
-                strokeColor={c.brand}
-                trailColor={c.track}
-              />
-            )}
-        </div>
-      )}
-
-      {/*
-        THE COUNTERS, in the shape the compliance run uses.
-
-        They were a row of grey sentences separated by middots - "142 of 380
-        images · 38 read from storage · 4 not retrieved" - which is four facts of
-        different importance drawn identically, with the one that changes what
-        the answer means (the failures) indistinguishable from the one that does
-        not. These are the same numbers as tiles, with the failures coloured,
-        and they are the same tiles the compliance run draws for the same reason.
-      */}
-      <RunTiles tiles={syncTiles({ total, done, cached: cached?.done ?? 0, failed: failing?.done ?? 0 })} />
-
-      {notes.length > 0 && (
-        <Space direction="vertical" size={2} style={{ width: '100%' }}>
-          {notes.slice(-2).map((n, i) => (
-            <Typography.Text key={`${n}-${i}`} type="secondary" style={{ fontSize: 12 }}>{n}</Typography.Text>
-          ))}
-        </Space>
-      )}
-
-      {/*
-        THE TRANSCRIPT, on the panel rather than only behind the Sync log button.
-
-        The compliance run has shown its log under the bar since it shipped, and
-        it is the single most useful thing on that panel: a list that changes
-        every few seconds is a job that is working, whatever the bar is doing,
-        and it names the artifact that has just failed nine minutes in without
-        waiting for the run to end. The sync had the same transcript and made
-        somebody open a drawer to read it while they were watching the bar.
-      */}
-      {/*
-        The transcript of THIS sync. While the claim is still being taken the
-        stored log is the previous run's, and a list of finished lines under a
-        bar for a sync that has not begun reads as progress it has already made.
-      */}
-      {log.length > 0 && live && (
-        <div>
-          <Typography.Text type="secondary" style={{ fontSize: 11 }}>
-            Sync log
-          </Typography.Text>
-          {/* Padded at the top for the same reason the compliance run log is:
-              the first dot sits above its box and was clipped by the scroll
-              container's edge. */}
-          <div
-            style={{
-              marginTop: 8, maxHeight: 240, overflowY: 'auto',
-              paddingRight: 8, paddingTop: 6,
-            }}
-          >
-            <Timeline
-              mode="left"
-              items={[...log].reverse().slice(0, 40).map((e, i) => ({
-                key: `${e.at ?? ''}-${i}`,
-                color: LOG_COLOUR[e.level] ?? c.text2,
-                children: <LogLine entry={e} showDate={false} />,
-              }))}
-            />
-          </div>
-        </div>
-      )}
-
-      {stages.length === 0 && !starting && (
-        <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-          {/*
-            No live position means one of two things, and until the sync started
-            beating this could only guess at the friendlier one.
-
-            A sync that is still beating IS running somewhere else, and its
-            state is authoritative - the honest thing is to say where it is
-            happening rather than draw a bar at nothing. A sync that has stopped
-            beating is not running anywhere, and is handled above by the caller:
-            this line is never the answer for it.
-          */}
-          This sync is running on another Coordinator - it last reported
-          {sync.heartbeatAt ? ` ${formatRelative(sync.heartbeatAt)}` : ' recently'}.
-          Its progress is not shown here; the result appears once it completes.
-        </Typography.Text>
-      )}
-    </Space>
+    <RunPanel
+      title={`Vulnerability sync against ${scanner}`}
+      titleIcon={<ScannerMark provider={sync.provider} size={16} />}
+      // The repository only. The headline already names the scanner, and
+      // "JFrog Xray" under "…from JFrog Xray" is the same fact twice.
+      subtitle={sync.repository}
+      // THIS sync's clock, not the last one's. `startedAt` still holds the
+      // previous run until the claim comes back, and counting from it during
+      // the press read "9579m 18s elapsed" - a duration since a sync six days
+      // ago, beside a bar for one that had not begun.
+      startedAt={live ? sync.startedAt : undefined}
+      onStop={onStop}
+      stopping={stopping}
+      stopLabel="Stop sync"
+      stopHint={
+        'Stops the sync. Nothing already stored is lost - the release keeps whatever its '
+        + 'last completed sync recorded.'
+      }
+      label={headline}
+      detail={
+        stages.length === 0 && !starting && sync.heartbeatAt
+          ? `Running elsewhere; it last reported ${formatRelative(sync.heartbeatAt)}. `
+            + 'The result appears here once it completes.'
+          : undefined
+      }
+      done={done}
+      total={total}
+      estimate={live ? estimateRemainingSeconds(sync.startedAt, done, total) : undefined}
+      indeterminate={done === 0}
+      tiles={syncTiles({ total, done, cached: cached?.done ?? 0, failed: failing?.done ?? 0 })}
+      notes={notes.slice(-2)}
+      // The transcript of THIS sync. While the claim is still being taken the
+      // stored log is the previous run's, and a list of finished lines under a
+      // bar for a sync that has not begun reads as progress it has already made.
+      events={live ? runEventsFromLog(log, sync.startedAt).slice(-40) : []}
+      eventsLabel="Sync log"
+    />
   )
 }
 
@@ -1140,26 +981,28 @@ function syncTiles({ total, done, cached, failed }: {
 }
 
 /**
- * How much longer, from this sync's own rate.
+ * How much longer, from this sync's own rate, IN SECONDS.
  *
  * Withheld until a tenth of the work is done or five images have come back,
  * whichever is sooner: an estimate extrapolated from one slow first request is
  * a number that turns out four times wrong, and a confident wrong number is
  * worse than none. Absent once the work is finished, because zero remaining is
  * not an estimate.
+ *
+ * Seconds rather than a formatted string, because the panel that draws it
+ * formats every other duration on the page through one function and a second
+ * spelling of "4m 12s" beside it is how two of them come to disagree.
  */
-function estimateRemaining(startedAt: string | undefined, done: number, total: number): string | undefined {
+function estimateRemainingSeconds(
+  startedAt: string | undefined, done: number, total: number,
+): number | undefined {
   if (!startedAt || total <= 0 || done <= 0 || done >= total) return undefined
   if (done < Math.min(5, Math.ceil(total / 10))) return undefined
   const started = Date.parse(startedAt)
   if (Number.isNaN(started)) return undefined
   const perItem = (Date.now() - started) / done
   const seconds = Math.round((perItem * (total - done)) / 1000)
-  if (seconds <= 0) return undefined
-  if (seconds < 60) return `${seconds}s`
-  const minutes = Math.round(seconds / 60)
-  if (minutes < 60) return `${minutes}m`
-  return `${Math.floor(minutes / 60)}h ${minutes % 60}m`
+  return seconds > 0 ? seconds : undefined
 }
 
 /**
@@ -1228,31 +1071,6 @@ function scannerName(provider: string): string {
 }
 
 /**
- * How long the sync has been running, ticking.
- *
- * A duration is the cheapest signal that something is still alive, and the only
- * one that distinguishes "slow" from "stopped" when the position has not moved
- * for thirty seconds.
- */
-function useElapsed(startedAt: string | undefined, running: boolean): string | undefined {
-  const [now, setNow] = useState(() => Date.now())
-
-  useEffect(() => {
-    if (!running || !startedAt) return
-    const id = setInterval(() => setNow(Date.now()), 1000)
-    return () => clearInterval(id)
-  }, [running, startedAt])
-
-  if (!startedAt) return undefined
-  const started = Date.parse(startedAt)
-  if (Number.isNaN(started)) return undefined
-
-  const seconds = Math.max(0, Math.round((now - started) / 1000))
-  if (seconds < 60) return `${seconds}s`
-  return `${Math.floor(seconds / 60)}m ${String(seconds % 60).padStart(2, '0')}s`
-}
-
-/**
  * The one control that talks to a scanner.
  *
  * Its label changes with the state, because "Sync vulnerabilities" and "Sync
@@ -1290,7 +1108,9 @@ export function SyncButton({ sync, onSync, pending, size = 'middle', freshness, 
   if (!sync.canSync) {
     return (
       <Tooltip title={sync.reason}>
-        <Button size={size} icon={<SyncOutlined />} disabled>Sync vulnerabilities</Button>
+        {/* spin={false}: the sync glyph turns by default, and a disabled
+            control that animates reads as work already under way. */}
+        <Button size={size} icon={<SyncOutlined spin={false} />} disabled>Sync vulnerabilities</Button>
       </Tooltip>
     )
   }
@@ -1348,7 +1168,10 @@ export function SyncButton({ sync, onSync, pending, size = 'middle', freshness, 
    */
   const items = [
     ...(reuse
-      ? [{ key: 'force', icon: <SyncOutlined />, label: 'Re-fetch every image' }]
+      // spin={false} on every one of these: the sync glyph turns by default,
+      // so a closed menu opened onto three items animating as though all three
+      // were already running.
+      ? [{ key: 'force', icon: <SyncOutlined spin={false} />, label: 'Re-fetch every image' }]
       : []),
     ...(named.length > 1
       ? [{
@@ -1356,7 +1179,10 @@ export function SyncButton({ sync, onSync, pending, size = 'middle', freshness, 
         key: 'divider',
       }, ...named.map((p) => ({
         key: `only:${p}`,
-        icon: <SyncOutlined />,
+        // The scanner's OWN mark. This menu exists because the two scanners
+        // behave differently, and two identical glyphs beside two names is the
+        // one place that difference should be visible before the label is read.
+        icon: <ScannerMark provider={p} />,
         label: `Sync ${scannerName(p)} only`,
       }))]
       : []),

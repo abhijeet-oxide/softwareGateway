@@ -970,9 +970,19 @@ export function usePackageSecurity(
     // because TanStack unmounts the query.
     // A stalled claim is not a running sync, and polling one twice a second
     // asks the server the same question forever about work nobody is doing.
+    //
+    // A RUNNING REPLICATION counts too, and it is the reason this endpoint is
+    // the only feed either job needs: the registration carries its own live
+    // position, so one poll draws whichever of the two is going. Without this
+    // clause a reader who reloaded mid-replication got one frame and then a
+    // frozen panel, which is the bug that reads as "the progress was lost".
     refetchInterval: (q) => {
-      const sync = q.state.data?.sync
-      return sync?.state === 'syncing' && !sync.stalled ? 1500 : false
+      const data = q.state.data
+      const syncing = data?.sync.state === 'syncing' && !data.sync.stalled
+      const replicating = (data?.registrations ?? []).some(
+        (r) => r.state === 'registering' && !r.stalled,
+      )
+      return syncing || replicating ? 1500 : false
     },
     /*
      * A deployment with no security storage answers 404 on this route,
@@ -1121,13 +1131,17 @@ export function useCancelPackageSecuritySync() {
 /**
  * Replicating a release to a scanner that has to be TOLD about it.
  *
- * # Why this is not a job with a progress endpoint
+ * # Why this is a job with a position, and used not to be
  *
- * Because its duration is ours rather than a scanner's: a submission per image
- * at a bounded concurrency plus three calls for the application version. It is
- * seconds against a responsive Anchore and a couple of minutes against a slow
- * one, so the request is held open and the button reports what happened - where
- * a sync, which waits on somebody else's analysis queue, cannot.
+ * Not because it is slow. Because its position was invisible. The work ran on
+ * the request, so the only thing that knew where it had got to was the request
+ * handling the click: a reader who reloaded the page, navigated away, or
+ * restarted the Coordinator was shown the word "registering" and nothing else,
+ * which is indistinguishable from a job that has hung.
+ *
+ * Now it answers when the claim is decided and the run writes its position down
+ * on every heartbeat, so the panel is drawn from the same read the page already
+ * makes - and survives all four.
  */
 export function useReplicatePackageSecurity() {
   const qc = useQueryClient()
@@ -1147,9 +1161,58 @@ export function useReplicatePackageSecurity() {
         `/products/${encodeURIComponent(product)}/packages/${encodeURIComponent(segment)}:replicateSecurity` +
         scopeQuery(q, repository), provider ? { provider } : {})
     },
-    onSuccess: () => {
-      // The security response carries the registration state, so the notice
-      // this button lives in redraws from the same read the page already makes.
+    onSuccess: (res) => {
+      /*
+       * SEED THE REGISTRATION STATE, do not only invalidate.
+       *
+       * The response carries the claim the server has just taken and the run's
+       * first position, so writing it in switches the tab to the progress panel
+       * on the press. Invalidating alone left the button looking dead for the
+       * round trip a refetch takes - the same complaint the sync and the
+       * compliance check both had, fixed the same way.
+       */
+      if (res?.registrations?.length) {
+        qc.setQueriesData<PackageSecurityResponse>(
+          { queryKey: ['package-security'] },
+          (prev) => (prev ? { ...prev, registrations: res.registrations } : prev),
+        )
+      }
+      void qc.invalidateQueries({ queryKey: ['package-security'] })
+      void qc.invalidateQueries({ queryKey: ['packages'] })
+      void qc.invalidateQueries({ queryKey: ['package'] })
+    },
+  })
+}
+
+/**
+ * Stop a running replication.
+ *
+ * The claim is released server-side rather than only here, so a run on another
+ * Coordinator stops too - it notices at its next heartbeat that it no longer
+ * holds one. A job somebody can start and cannot stop is a job they learn not
+ * to start.
+ */
+export function useCancelPackageReplication() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: ({ product, ref, repository, provider }: {
+      product: string
+      ref: string
+      repository?: string
+      provider?: string
+    }) => {
+      const { segment, query: q } = packageRef(ref)
+      return api.post<ReplicateSecurityResponse>(
+        `/products/${encodeURIComponent(product)}/packages/${encodeURIComponent(segment)}` +
+        ':cancelSecurityReplication' + scopeQuery(q, repository), provider ? { provider } : {})
+    },
+    onSuccess: (res) => {
+      if (res?.registrations?.length) {
+        qc.setQueriesData<PackageSecurityResponse>(
+          { queryKey: ['package-security'] },
+          (prev) => (prev ? { ...prev, registrations: res.registrations } : prev),
+        )
+      }
       void qc.invalidateQueries({ queryKey: ['package-security'] })
       void qc.invalidateQueries({ queryKey: ['packages'] })
       void qc.invalidateQueries({ queryKey: ['package'] })

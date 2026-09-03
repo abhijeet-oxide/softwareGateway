@@ -20,6 +20,9 @@ import IndexEditIcon from '~icons/ph/list-bullets'
 import DownloadIcon from '~icons/ph/tray-arrow-down'
 import LayersIcon from '~icons/ph/stack'
 import SignatureIcon from '~icons/ph/certificate'
+// Anchore has no Simple Icons mark, and its name IS the drawing - so the
+// house family's anchor is the honest choice rather than a near-enough logo.
+import AnchorIcon from '~icons/ph/anchor'
 import type { Repository } from '../api/types'
 import brand from '../brand'
 import { BrandMark as SharedBrandMark } from '../uikit'
@@ -178,7 +181,43 @@ export const ARTIFACT_ICONS = {
 
 export type ArtifactKind = keyof typeof ARTIFACT_ICONS
 
-export { AnalyzeIcon, DownloadIcon, IndexEditIcon, LayersIcon, SignatureIcon, PackageIcon, NokiaNAsset, JFrogIcon, OpenShiftIcon, RocketIcon, FlaskIcon, OciIcon, DockerIcon, HelmIcon }
+/**
+ * The scanners, by the provider name the API uses.
+ *
+ * On screen wherever a scanner is named - a sync menu, a source filter, a
+ * replication panel - because "which of the two said this" is the question
+ * those surfaces exist to answer, and a mark answers it before the label is
+ * read. Anchore's is the house anchor rather than a logo: it has no Simple
+ * Icons mark, and a near-enough brand is worse than an honest glyph.
+ */
+const SCANNER_MARKS: Record<string, IconComponent> = {
+  anchore: AnchorIcon,
+  'jfrog-xray': JFrogIcon,
+  jfrog: JFrogIcon,
+  xray: JFrogIcon,
+}
+
+/** One scanner's mark, at text size. Nothing for a scanner we cannot name. */
+export function ScannerMark({ provider, size = 14, style }: {
+  provider?: string
+  size?: number
+  style?: CSSProperties
+}) {
+  const Mark = provider ? SCANNER_MARKS[provider.toLowerCase()] : undefined
+  if (!Mark) return null
+  return (
+    <span
+      role="img"
+      aria-label={provider}
+      className="anticon"
+      style={{ display: 'inline-flex', alignItems: 'center', ...style }}
+    >
+      <Mark style={{ width: size, height: size }} />
+    </span>
+  )
+}
+
+export { AnalyzeIcon, DownloadIcon, IndexEditIcon, LayersIcon, SignatureIcon, PackageIcon, NokiaNAsset, JFrogIcon, OpenShiftIcon, RocketIcon, FlaskIcon, OciIcon, DockerIcon, HelmIcon, AnchorIcon }
 
 /**
  * Renders one of the above at text size.

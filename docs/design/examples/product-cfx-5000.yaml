@@ -1,0 +1,144 @@
+# ═══════════════════════════════════════════════════════════════════════════════
+#  Product — CFX 5000 (NEAR)
+#
+#  The flow from docs/software-flow.md: auto-download into external, manual
+#  onboard into lab with a fan-out to two Quays, manual promote into gold.
+#
+#  Every host, credential, CA bundle, proxy, timeout and Quay tuning value this
+#  product uses is in config.yaml. What is left below is what is TRUE OF THIS
+#  PRODUCT and of nothing else.
+#
+#  Proposed v1alpha2 shape. See docs/design/24-software-flow.md.
+# ═══════════════════════════════════════════════════════════════════════════════
+apiVersion: softwaregateway.io/v1alpha2
+kind: Product
+
+metadata:
+  name: cfx-5000
+  displayName: CFX 5000 Product (NEAR)
+  owner: packet-core
+  enabled: true
+
+spec:
+
+  # ── WHERE THE SOFTWARE COMES FROM ──────────────────────────────────────────
+  sources:
+    - name: vendor
+      registry: vendor-near               # → config.yaml registries.vendor-near
+      repositories: ['orbs/cfx-5000-k8s']
+
+      discovery:
+        enabled: true
+        interval: 30m
+        maxRepositories: 10000
+        repositoryFilters:
+          include: ['^orbs/']
+        tagFilters:
+          include: ['^orb_']
+          exclude: ['^orb_.*_base_.*$']
+
+      # WHO is trusted, not whether we check. Whether is `gates.signature` in
+      # config.yaml, which today is unavailable and therefore skipped.
+      trust:
+        transferSignatures: true
+        cosign:
+          mode: keyless
+          keyless:
+            # Both are REQUIRED. Without certificateIdentity any valid Sigstore
+            # signature is accepted — proof that somebody signed it, not that
+            # the vendor did.
+            certificateIdentity: >-
+              https://github.com/vendor-a/platform/.github/workflows/release.yaml@refs/heads/main
+            certificateOidcIssuer: https://token.actions.githubusercontent.com
+
+  # ── WHERE IT LANDS ─────────────────────────────────────────────────────────
+  targets:
+    - name: external
+      registry: artifactory               # host, type, credential, CA: config.yaml
+      repository: sw-external/cfx-5000
+      scan: [xray, anchore]
+
+    - name: lab
+      registry: artifactory
+      repository: sw-lab/cfx-5000
+      scan: [xray, anchore]
+
+    - name: gold
+      registry: artifactory
+      repository: sw-gold/cfx-5000
+      scan: [xray]
+
+  # ── THE ROUTE ──────────────────────────────────────────────────────────────
+  #
+  # Omit this block entirely and the site default applies — [external, lab,
+  # prod], each bound to the target of the same name. It is written out here
+  # because `prod` binds to a target called `gold`, and because this product
+  # deletes its external copy on the way to lab.
+  pipeline:
+    - stage: external
+      target: external
+
+    - stage: lab
+      target: lab
+      onLeave: delete                     # the external copy goes once lab has it
+      mirrors: [quay-eu, quay-us]         # or omit, to take the site's list;
+                                          # `mirrors: []` opts out entirely
+
+    - stage: prod
+      target: gold
+
+  # ── THIS PRODUCT'S IDENTITY ON THE MIRROR QUAYS ────────────────────────────
+  #
+  # The site says which Quays the lab stage mirrors into and how to reach them.
+  # This says who this product is once it gets there. Two mirror targets are
+  # derived from these three lines:
+  #
+  #   lab@quay-eu   quay-eu.example.com/packet-core/cfx-5000
+  #   lab@quay-us   quay-us.example.com/packet-core/cfx-5000
+  quay:
+    organization: packet-core
+    robot: packet-core+swgw                # the robot Quay pushes with
+    repository: '{{ .Product }}'           # default; the path inside the org
+
+  # ── WHEN IT HAPPENS BY ITSELF ──────────────────────────────────────────────
+  #
+  # Auto-download fires into the FIRST stage of the pipeline, whichever that
+  # turns out to be. A rule carries a pattern and nothing else: by the time a
+  # download runs, the software has already been chosen.
+  autoDownload:
+    enabled: true
+    rules:
+      - name: ga-releases
+        tagPattern: '^orb_.*'
+        sources: [vendor]
+
+  # ── OVERRIDES: everything here is optional ─────────────────────────────────
+
+  # A different account on the deployment's Anchore, so this team's findings are
+  # visible to them and not to everybody. One line, and the endpoint, the
+  # credential, the concurrency and the TLS posture are inherited.
+  #
+  # A product naming its own `endpoint` MUST also name its own `credentialsRef`.
+  # Validation refuses the document otherwise: falling back would send this
+  # deployment's Anchore credential to whatever host a product document named.
+  scanners:
+    anchore:
+      account: packet-core
+
+  # Stricter than the site, for this product only.
+  gates:
+    compliance:
+      policy: enforce
+
+  notifications:
+    channels:
+      - name: owners
+        type: email
+        email:
+          recipients: ['packet-core@example.com']
+    subscriptions:
+      - events: [SoftwareAvailable, GateFailed, TransferFailed, MirrorFailed]
+        channels: [owners]
+
+  retention:
+    packages: 8760h

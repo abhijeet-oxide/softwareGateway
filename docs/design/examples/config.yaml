@@ -1,0 +1,374 @@
+# ═══════════════════════════════════════════════════════════════════════════════
+#  softwareGateway — site configuration
+#
+#  Everything here is stated ONCE for the deployment. A product document names
+#  its software and its repositories and nothing else; if a key can be answered
+#  the same way for every product in the estate, it belongs in this file.
+#
+#  Proposed v1alpha2 shape. See docs/design/24-software-flow.md.
+# ═══════════════════════════════════════════════════════════════════════════════
+apiVersion: softwaregateway.io/v1alpha2
+kind: SystemConfig
+
+# Root for products/ and secrets/. In-cluster: /etc/softwaregateway.
+configDir: /etc/softwaregateway
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+#  1. REGISTRIES — every connection this estate has, named once
+#
+#  A product writes `registry: artifactory` and inherits the host, the type, the
+#  credential, the CA bundle, the proxy and the type-specific tuning. It adds
+#  only what is its own: a repository path, and for Quay an organization.
+#
+#  Nothing below is repeated in any product document.
+# ═══════════════════════════════════════════════════════════════════════════════
+registries:
+
+  # ── The internal Artifactory: external, lab and gold all live here ─────────
+  artifactory:
+    host: artifactory.internal.example.com:9444
+    type: jfrog
+    credentialsRef:
+      secretName: internal-registry       # keys: username, password
+    network:
+      caBundleRef:
+        secretName: internal-ca
+        key: ca.crt
+      tls:
+        insecureSkipVerify: false
+      proxy:
+        direct: true                      # internal host: never via the proxy
+      timeouts:
+        connect: 10s
+        responseHeader: 30s
+        idleStall: 5m
+    jfrog:
+      # The PLATFORM base URL, which also serves Xray. Needed only where the
+      # docker host and the platform host differ.
+      endpoint: https://artifactory.internal.example.com:9444
+
+  # ── The vendor. Shared by every product that ships from Nokia NEAR ─────────
+  vendor-near:
+    host: registry.nokia.example.com:9443
+    type: near                            # OCI Distribution + NEAR conventions
+    credentialsRef:
+      secretName: vendor-registry
+    network:
+      caBundleRef:
+        secretName: vendor-signing-ca
+        key: ca.crt
+      proxy:
+        httpsProxy: http://proxy.internal.example.com:3128
+        noProxy: ['.internal.example.com']
+    concurrency:
+      perRegistry: 8                      # this vendor is fragile; the fleet is 32
+
+  # ── Two Quays. Products mirror into both, under their own organization ─────
+  quay-eu:
+    host: quay-eu.example.com
+    type: quay
+    credentialsRef:
+      secretName: quay-eu-robot           # the org+robot that pushes
+    network:
+      tls:
+        insecureSkipVerify: false
+    quay:
+      # Quay's CONTROL api, which is a different endpoint taking a different
+      # credential from the registry api above.
+      apiEndpoint: https://quay-eu.example.com/api/v1
+      apiTokenRef:
+        secretName: quay-eu-api
+        key: token
+      # Defaults for every mirror INTO this Quay. These describe QUAY's own
+      # behaviour, not ours — Quay's egress, Quay's skopeo, Quay's schedule.
+      mirror:
+        mode: copy                        # copy (we push) | mirror (Quay pulls)
+        interval: 24h                     # `mirror` mode only
+        skopeoTimeout: 30m
+        acceptUnsignedImages: false
+        syncOnRequest: true
+        manage: apply                     # apply | detect
+        network:
+          verifyTLS: true
+          proxy:
+            httpsProxy: http://proxy.quay-eu.example.com:3128
+
+  quay-us:
+    host: quay-us.example.com
+    type: quay
+    credentialsRef:
+      secretName: quay-us-robot
+    quay:
+      apiEndpoint: https://quay-us.example.com/api/v1
+      apiTokenRef:
+        secretName: quay-us-api
+        key: token
+      mirror:
+        mode: copy
+        skopeoTimeout: 30m
+        syncOnRequest: true
+
+  # ── A lab Quay whose certificate is self-signed ────────────────────────────
+  quay-lab:
+    host: quay.lab.example.com
+    type: quay
+    credentialsRef:
+      secretName: quay-lab-robot
+    network:
+      tls:
+        insecureSkipVerify: true          # LAB ONLY. Logged, and reported by
+                                          # `transferctl config check`.
+    quay:
+      apiEndpoint: https://quay.lab.example.com/api/v1
+      apiTokenRef:
+        secretName: quay-lab-api
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+#  2. FLOW — what a stage MEANS
+#
+#  The tool has no built-in notion of download, onboard or promote. It has
+#  stages, and a stage's verb is a string in this block. A product picks stages
+#  by name and binds each to one of its targets.
+#
+#  Change `label` and the button changes. Add a stage and every product that
+#  lists it gets another action. Delete `prod` from a product's pipeline and
+#  that product has no promotion.
+# ═══════════════════════════════════════════════════════════════════════════════
+flow:
+  # The pipeline a product gets when it declares none.
+  default: [external, lab, prod]
+
+  stages:
+
+    external:
+      action: download                    # the verb in the API and the URL
+      label: Download                     # what the button says
+      from: source                        # legal on the FIRST stage only
+      trigger: auto                       # auto | manual
+      gates: [signature, compliance]      # in order; unavailable ones skip
+      onLeave: keep                       # keep | delete, when the release moves on
+
+    lab:
+      action: onboard
+      label: Onboard to Lab
+      trigger: manual                     # `from` defaults to the stage before
+      gates: []
+      onLeave: keep
+      # FAN-OUT. Entering this stage lands the release in the product's lab
+      # target AND mirrors it into these registries, as ONE action. A product
+      # that declares no `quay.organization` gets no mirrors, and is told so
+      # rather than silently skipping them.
+      mirrors:
+        registries: [quay-eu, quay-us]
+        policy: required                  # required | bestEffort
+
+    prod:
+      action: promote
+      label: Promote to Prod
+      trigger: manual
+      gates: []
+      # No `from: source` anywhere but the first stage, so production is
+      # promotion-only by construction rather than by a flag.
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+#  3. GATES — checks a stage may require
+#
+#  A gate that this build does not implement, or that is switched off here,
+#  records "skipped" on the release timeline and lets the release through. It
+#  never fails and never blocks.
+#
+#  That is how signature verification is deferred: the flow above already asks
+#  for it, and the day it ships this becomes `available: true` and starts
+#  enforcing. No product document changes.
+# ═══════════════════════════════════════════════════════════════════════════════
+gates:
+  signature:
+    available: false                      # not implemented yet
+    policy: enforce                       # read once available
+  compliance:
+    available: true
+    policy: warn                          # enforce | warn
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+#  4. SCANNERS
+#
+#  One shape per scanner. A repository opts in with `scan: [xray, anchore]`; a
+#  product overrides the endpoint, the credential or the account.
+#
+#  MOVED: this was `coordinator.security.anchore`. Anchore is an integration
+#  this deployment has, not tuning for the Coordinator process, and Xray had
+#  nowhere to live at all.
+# ═══════════════════════════════════════════════════════════════════════════════
+scanners:
+
+  anchore:
+    endpoint: https://anchore.example.com
+    credentialsRef:
+      secretName: anchore-api             # an API key goes in the password key
+    account: ''                           # default; a product may override
+
+    # ANCHORE'S OWN TLS, independent of any registry's.
+    insecureSkipVerify: false             # as shipped in 80c1223
+    caBundleRef:                          # NEW: the right fix, where there is one
+      secretName: internal-ca
+      key: ca.crt
+
+    concurrency: 12                       # Anchore answers per image, not per batch
+    requestTimeout: 60s
+    submit: true                          # may this deployment register images
+    sbomFormat: spdx-json
+
+    # How a release is named in Anchore's own Application/Version model.
+    # `-` switches the grouping off and reads per-image results only.
+    grouping:
+      application: '{{ .Product }}'
+      version: '{{ .Version }}'
+
+  xray:
+    # Nothing to configure. Xray is a second endpoint on a JFrog platform,
+    # reached with the target's own credential, CA bundle and proxy — see
+    # `registries.artifactory.jfrog.endpoint` above.
+    {}
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+#  5. SECURITY RESULTS — where they are kept
+#
+#  All of this is a cache in front of the scanners. Deleting any of it costs one
+#  resync and nothing else, which is why the bulk tier may sit somewhere cheap.
+#  The platform is not the system of record for findings; Anchore and Xray are.
+# ═══════════════════════════════════════════════════════════════════════════════
+security:
+  storage:
+    # Status, counts by severity, fixability, scan time. The package listing
+    # sorts and filters on these, so they stay in the database.
+    summary:
+      driver: database
+      retention: 2160h                    # 90d
+
+    # SBOMs, raw vulnerability responses, policy verdicts — the bulk, and the
+    # only tier a single request can rebuild.
+    documents:
+      driver: database                    # database | filesystem | s3
+      # driver: filesystem
+      # path: /var/lib/softwaregateway/security
+      # driver: s3
+      # s3:
+      #   bucket: swgw-security
+      #   region: eu-west-1
+      #   credentialsRef: { secretName: s3-security }
+      budgetBytes: 5368709120             # 5 GiB, least-recently-read evicted
+      retention: 720h                     # 30d
+
+  sync:
+    maxAge: 6h                            # re-ask the scanner about anything older
+    kinds: [vulnerabilities, sbom, policy]
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+#  6. TUNING — the fleet's numbers. A product overrides one only if it must.
+# ═══════════════════════════════════════════════════════════════════════════════
+concurrency:
+  perRegistry: 32                         # in-flight requests AND pool size
+  requestsPerSecond: 0                    # 0 = no artificial ceiling
+
+timeouts:
+  connect: 10s
+  responseHeader: 30s
+  idleStall: 5m                           # blob transfers are bounded by stall,
+                                          # not by a total deadline
+
+network:
+  proxy:
+    httpsProxy: ''
+    noProxy: []
+  tls:
+    insecureSkipVerify: false
+
+retention:
+  packages: 8760h
+  transfers: 2160h
+  auditEvents: 8760h
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+#  7. NOTIFICATIONS
+#
+#  Delivery is deliberately not built. Events are written to the outbox in the
+#  same transaction as the fact they announce; this block reserves the shape so
+#  the products written before the dispatcher exists stay valid.
+# ═══════════════════════════════════════════════════════════════════════════════
+notifications:
+  enabled: false
+  # channels:
+  #   - name: email
+  #     type: email
+  #     email:
+  #       host: smtp.internal.example.com
+  #       from: softwaregateway@example.com
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+#  8. PROCESS — server, database, workers, observability
+# ═══════════════════════════════════════════════════════════════════════════════
+server:
+  address: ':8080'
+  shutdownGracePeriod: 15s
+
+database:
+  driver: postgres
+  dsn: ''                                 # SWGW_DATABASE_DSN in the environment
+  maxOpenConns: 25
+  maxIdleConns: 5
+
+coordinator:
+  leaderElection:
+    enabled: true
+    lockID: 1
+    retryInterval: 10s
+  scheduler:
+    tickInterval: 10s
+  reaper:
+    tickInterval: 30s
+    leaseDuration: 2m
+  manifestCache:
+    budgetBytes: 536870912                # 512 MiB
+    ttl: 168h
+  files:
+    downloadEnabled: false
+  compliance:
+    helmBinary: helm
+    kubeVersion: '1.29.0'
+    approvedRegistries:
+      - artifactory.internal.example.com
+      - quay-eu.example.com
+      - quay-us.example.com
+
+worker:
+  coordinatorEndpoint: http://coordinator.softwaregateway:8080
+  address: ':8081'
+  maxConcurrentJobs: 16
+  copyBufferSize: 1048576
+  heartbeatInterval: 20s
+
+# PROCESS-WIDE X.509 relaxation. Not under any `network:` block, because it is
+# implemented with Go's GODEBUG mechanism and cannot be scoped to a connection.
+# Set it on the Coordinator AND the Worker or you get clean discovery and a
+# handshake failure on every transfer.
+tls:
+  allowNegativeSerialNumbers: false
+
+observability:
+  log:
+    level: info
+    format: json
+  metrics:
+    enabled: true
+    path: /metrics
+  tracing:
+    enabled: false
+    sampleRatio: 0.05

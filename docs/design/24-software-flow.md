@@ -24,6 +24,20 @@ These reverse or narrow what the first draft proposed.
 | Security result storage | **Configurable, and disposable.** Everything stored is recreatable by a resync. |
 | Anchore | Endpoint, credential and account: **site default, product override**, with the credential rule below. |
 
+### A misreading to clear up first
+
+The first draft proposed moving Quay's *keys* out of the generic schema into a
+`quay:` block **on the target**, owned by the Quay plugin. It did not propose
+moving Quay configuration to the site. But it said "registry-type plumbing moves
+under its type" a few lines after a large site-configuration listing, and that
+is a fair thing to read the wrong way.
+
+The review adds requirements the draft did not cover at all, and they change the
+shape: there is **more than one Quay**, each product has its **own
+organization**, and a mirror fan-out happens **as part of the onboard action**
+rather than as a stage of its own. §5 is new and answers that; the split it
+lands on is site owns the connection, product owns the organization.
+
 ### One correction to the first draft
 
 I wrote that Anchore has no TLS, CA or proxy settings. That was wrong. Anchore
@@ -34,7 +48,7 @@ reachable today.
 The real defect is narrower and worth stating properly: it is *coupled*. There
 is no way to relax TLS for Anchore alone, because the only switch is the one the
 product's registries also read, and there is no site-level network block for
-Anchore at all. §5 fixes the coupling rather than adding a setting that exists.
+Anchore at all. §6 fixes the coupling rather than adding a setting that exists.
 
 ---
 
@@ -62,6 +76,59 @@ kind: SystemConfig
 
 configDir: /etc/softwaregateway
 
+# ─── REGISTRIES: EVERY CONNECTION THIS ESTATE HAS, NAMED ONCE ────────────────
+# A product references one by NAME and adds only what is the product's own: a
+# repository path, and for Quay an organization. Host, credential, network and
+# type-specific tuning are stated here and never repeated.
+#
+# This is the single largest reduction in a product document. See §5.
+registries:
+  artifactory:
+    host: artifactory.internal.example.com:9444
+    type: jfrog
+    credentialsRef: { secretName: internal-registry }
+    network:
+      caBundleRef: { secretName: internal-ca, key: ca.crt }
+      tls: { insecureSkipVerify: false }
+    jfrog:
+      endpoint: https://artifactory.internal.example.com:9444   # also serves Xray
+
+  quay-eu:
+    host: quay-eu.example.com
+    type: quay
+    credentialsRef: { secretName: quay-eu-robot }
+    network:
+      tls: { insecureSkipVerify: false }
+    quay:
+      apiEndpoint: https://quay-eu.example.com/api/v1
+      apiTokenRef: { secretName: quay-eu-api }
+      # Defaults for every mirror INTO this Quay. These describe Quay's own
+      # behaviour, not ours - see internal/product/replication.go.
+      mirror:
+        mode: mirror                # mirror (Quay pulls) | copy (we push) — §5.4
+        interval: 24h
+        skopeoTimeout: 30m
+        acceptUnsignedImages: false
+        syncOnRequest: true
+        manage: apply
+        network: { verifyTLS: true }
+
+  quay-us:
+    host: quay-us.example.com
+    type: quay
+    credentialsRef: { secretName: quay-us-robot }
+    quay:
+      apiEndpoint: https://quay-us.example.com/api/v1
+      apiTokenRef: { secretName: quay-us-api }
+      mirror: { mode: mirror, interval: 24h, syncOnRequest: true }
+
+  vendor-near:                      # sources may be named here too, when shared
+    host: registry.vendor.example.com
+    type: near
+    credentialsRef: { secretName: vendor-registry }
+    network:
+      proxy: { httpsProxy: 'http://proxy.internal:3128' }
+
 # ─── THE DEFAULT FLOW ────────────────────────────────────────────────────────
 # What a stage MEANS: its verb, how it is entered, what gates it, what happens
 # to the copy it leaves behind. A product picks stages from here by name and
@@ -85,6 +152,12 @@ flow:
       trigger: manual                 # `from` defaults to the preceding stage
       gates: []
       onLeave: keep
+      # FAN-OUT. Entering this stage lands the release in the product's lab
+      # target AND mirrors it into these registries, as one action. A product
+      # that declares no `quay.organization` gets no mirrors and is told so.
+      mirrors:
+        registries: [quay-eu, quay-us]
+        policy: required              # required | bestEffort — §5.3
 
     prod:
       action: promote
@@ -103,11 +176,11 @@ gates:
     policy: enforce                   # enforce | warn — read once it is available
   compliance:
     available: true
-    policy: warn                      # see §9, open item 2
+    policy: warn                      # see §10, open item 2
 
 # ─── SCANNERS ────────────────────────────────────────────────────────────────
 # One shape for every scanner. A target opts in with `scan: [...]`; a product
-# overrides endpoint, credential or account. See §5.
+# overrides endpoint, credential or account. See §6.
 scanners:
   anchore:
     endpoint: https://anchore.example.com
@@ -165,7 +238,7 @@ network:                              # the estate's default egress
 
 notifications:
   # Delivery is deliberately not implemented. Events are recorded in the outbox
-  # and this block reserves the shape. See §9, open item 4.
+  # and this block reserves the shape. See §10, open item 4.
   enabled: false
 
 server:      { address: ":8080", shutdownGracePeriod: 15s }
@@ -196,10 +269,8 @@ metadata:
 spec:
   sources:
     - name: vendor
-      type: near                       # protocol + convention in one word (§4.3)
-      registry: registry.vendor.example.com
+      registry: vendor-near            # a registry named in site config
       repositories: ['orbs/cfx-5000-k8s']
-      credentialsRef: { secretName: vendor-registry }
       discovery:
         interval: 15m
         tagFilters:
@@ -208,25 +279,25 @@ spec:
 
   targets:
     - name: external
-      registry: artifactory.internal.example.com
+      registry: artifactory            # host, type, credential, CA: site config
       repository: sw-external/cfx-5000
-      type: jfrog
-      credentialsRef: { secretName: internal-registry }
       scan: [xray, anchore]
 
     - name: lab
-      registry: artifactory.internal.example.com
+      registry: artifactory
       repository: sw-lab/cfx-5000
-      type: jfrog
-      credentialsRef: { secretName: internal-registry }
       scan: [xray, anchore]
 
     - name: prod
-      registry: artifactory.internal.example.com
+      registry: artifactory
       repository: sw-gold/cfx-5000
-      type: jfrog
-      credentialsRef: { secretName: internal-registry }
       scan: [xray]
+
+  # THE PRODUCT'S OWN QUAY IDENTITY. The site says which Quays the lab stage
+  # mirrors into and how to reach them; this says who this product is on them.
+  quay:
+    organization: packet-core
+    robot: packet-core+swgw
 
   # No `pipeline:` — so the site default applies: [external, lab, prod], each
   # bound to the target of the same name. That binding by name is the only
@@ -260,16 +331,15 @@ spec:
     - stage: lab
       target: lab-repo
       onLeave: delete                 # overrides the site's `keep` for this product
+      mirrors: [quay-eu]              # narrows the site's [quay-eu, quay-us]
     - stage: prod
       target: gold-repo
 
   sources:
     - name: vendor
-      type: near
-      registry: registry.vendor.example.com
+      registry: vendor-near
       repositories: ['orbs/cfx-5000-k8s']
-      credentialsRef: { secretName: vendor-registry }
-      network:                        # overrides the site's; unset fields inherit
+      network:                        # overrides the registry's; unset inherit
         caBundleRef: { secretName: vendor-ca, key: ca.crt }
         proxy: { httpsProxy: 'http://proxy.internal:3128' }
         tls: { insecureSkipVerify: false }
@@ -293,30 +363,28 @@ spec:
 
   targets:
     - name: external-repo
-      registry: artifactory.internal.example.com
+      registry: artifactory
       repository: sw-external/cfx-5000
-      type: jfrog
-      credentialsRef: { secretName: internal-registry }
       scan: [xray, anchore]
       network:
-        tls: { insecureSkipVerify: true }   # lab certificate; see §4.5
-      jfrog:                          # type-specific, and only legal on type: jfrog
-        endpoint: https://artifactory.internal.example.com
+        tls: { insecureSkipVerify: true }   # this one repo only; see §4.5
+      jfrog:                          # overrides the registry's jfrog block
         repositoryKey: sw-external
 
     - name: lab-repo
-      registry: artifactory.internal.example.com
+      registry: artifactory
       repository: sw-lab/cfx-5000
-      type: jfrog
-      credentialsRef: { secretName: internal-registry }
       scan: [xray, anchore]
 
     - name: gold-repo
-      registry: artifactory.internal.example.com
+      registry: artifactory
       repository: sw-gold/cfx-5000
-      type: jfrog
-      credentialsRef: { secretName: internal-registry }
       scan: [xray]
+
+  quay:
+    organization: packet-core         # this product's org on EVERY mirror Quay
+    robot: packet-core+swgw           # the robot Quay pushes with
+    repository: '{{ .Product }}'      # default; the path inside the org
 
   autoDownload:
     enabled: true
@@ -358,14 +426,12 @@ spec:
       target: internal
   sources:
     - name: upstream
-      registry: quay.io
+      registry: quay-io                # declared in site config, anonymous
       repositories: ['openshift/cli']
   targets:
     - name: internal
-      registry: registry.internal.example.com
+      registry: artifactory
       repository: mirror/openshift-cli
-      type: generic
-      credentialsRef: { secretName: internal-registry }
   autoDownload:
     rules: [{ name: all, tagPattern: '.*' }]
 ```
@@ -492,7 +558,130 @@ the product's block (§0).
 
 ---
 
-## 5. Anchore: how it is configured, and how a product overrides it
+## 5. Registries, and mirroring to several of them at once
+
+Two requirements from the review that the earlier draft did not cover: there is
+more than one Quay, and the mirror fan-out happens **as part of onboarding**
+rather than as a stage of its own.
+
+### 5.1 The split: the site owns the connection, the product owns the identity
+
+| Belongs to the site (`registries:`) | Belongs to the product |
+|---|---|
+| Host, registry type | Which registry, by name |
+| Credential (`credentialsRef`) | Repository path |
+| CA bundle, proxy, TLS posture, timeouts | Organization and robot, for Quay |
+| Quay API endpoint and API token | — |
+| Quay mirror defaults: interval, skopeo timeout, unsigned-image policy, manage mode, Quay's own egress | — |
+
+Neither half is a copy of the other, and neither can drift, because neither is
+written twice.
+
+This is worth doing for its own sake, before Quay enters it.
+`dev/products.example/nokia-cmm.yaml` writes
+`artifactory.internal.example.com:9444` three times, `credentialsRef:
+internal-registry` twice, and an `xrayEndpoint` that restates the registry host
+it is already sitting next to. Every product document in the estate repeats the
+same handful of hosts and secret names. Naming them once removes four keys from
+every target and is the single largest reduction in a product document.
+
+### 5.2 Mirrors are derived targets, not a second kind of thing
+
+A mirror destination has everything a target has — a registry, a repository, a
+credential, a place in a transfer. So it **is** a target; it is just not one
+anybody typed.
+
+At load time the pipeline's `mirrors:` list and the product's `quay:` block
+synthesise one target per (stage, registry):
+
+```
+  stage lab, mirrors [quay-eu, quay-us], quay.organization packet-core
+    →  target  lab@quay-eu   quay-eu.example.com/packet-core/cfx-5000
+       target  lab@quay-us   quay-us.example.com/packet-core/cfx-5000
+```
+
+Everything downstream — the transfer engine, the replication reconciler, the
+security scope, the audit trail — sees ordinary targets and needs no new
+concept. A product that needs a bespoke mirror still declares an explicit target
+and names it in `mirrors:` instead.
+
+**A stage with several destinations is already a shape this code has.**
+`internal/download/chain.go` gives every step an index and states that "steps
+sharing an index have no dependency between them and run concurrently — which is
+how fan-out and chaining end up being the same feature rather than two." The
+primary and its mirrors share an index. Nothing in the engine changes.
+
+### 5.3 What happens when a mirror fails
+
+`policy` on the stage's `mirrors:` block:
+
+- **`required`** — the stage is not complete until every destination has the
+  release. The location pointer stays where it was, the action keeps retrying,
+  and the release page shows a row per destination. This is what "in the same
+  moment" means if it is to mean anything.
+- **`bestEffort`** — the primary target decides the stage. A mirror failure is
+  recorded and surfaced on the timeline, and the release moves on.
+
+Default `required`, on the reading that a release which reached lab but not the
+Quays that serve lab clusters has not really been onboarded.
+
+### 5.4 One thing to decide, because it changes what "at the same moment" can mean
+
+Quay can be fed two ways, and the existing code supports both
+(`internal/product/replication.go`):
+
+- **`mode: mirror`** — we write a mirror configuration into Quay and Quay pulls
+  for itself, on its own schedule. `syncOnRequest: true` turns an onboard into a
+  sync-now plus a wait. Quay must be able to reach the upstream repository
+  itself. This is right for continuous sync, and it means "at the same moment"
+  is really "we trigger it and wait for Quay".
+- **`mode: copy`** — our workers push the bytes. Predictable, immediate,
+  identical to every other transfer, and no Quay-side network path to arrange.
+
+For an onboard-time fan-out to several Quays I would default to **`copy`**, and
+keep `mirror` for a destination that should keep tracking the upstream after the
+onboard. The site config above shows `mode` per registry so an estate can run
+both. See §10, open item 5.
+
+### 5.5 A product that mirrors, in full
+
+```yaml
+spec:
+  pipeline:
+    - stage: external
+      target: external
+    - stage: lab
+      target: lab
+      mirrors: [quay-eu, quay-us]     # or omit, to take the site's list
+    - stage: prod
+      target: prod
+
+  targets:
+    - name: external
+      registry: artifactory
+      repository: sw-external/cfx-5000
+      scan: [xray, anchore]
+    - name: lab
+      registry: artifactory
+      repository: sw-lab/cfx-5000
+      scan: [xray, anchore]
+    - name: prod
+      registry: artifactory
+      repository: sw-gold/cfx-5000
+      scan: [xray]
+
+  quay:
+    organization: packet-core
+    robot: packet-core+swgw
+```
+
+Four lines of Quay configuration in the product — an organization, a robot, and
+a list of two registry names — against the twenty-odd keys a Quay mirror needs
+today. And `mirrors: []` on the stage opts a product out entirely.
+
+---
+
+## 6. Anchore: how it is configured, and how a product overrides it
 
 Most of this already exists and is the right shape. Stating it plainly because
 it was asked, and marking the two changes.
@@ -532,7 +721,7 @@ as every registry credential, from `<secretsDir>/<name>/<key>`, defaulting to th
 
 ---
 
-## 6. Migration
+## 7. Migration
 
 `v1alpha1` documents must keep loading. A converter, not a rewrite:
 
@@ -547,7 +736,7 @@ as every registry credential, from `<secretsDir>/<name>/<key>`, defaulting to th
 
 ---
 
-## 7. Where the code needs unpicking
+## 8. Where the code needs unpicking
 
 Found by reading, not assumed. Items 1–4 are on the path of this work; 5–7 are
 the standing mess and are listed so the decision to defer them is deliberate.
@@ -598,7 +787,7 @@ types rather than maintained.
 
 ---
 
-## 8. The steps, in the order you asked for
+## 9. The steps, in the order you asked for
 
 **Step 1 — Schema `v1alpha2`.** Types, converter from `v1alpha1`, defaults,
 validation, `config check` and `config migrate`, and the four example products
@@ -650,7 +839,7 @@ deleted now regardless of any of this.
 
 ---
 
-## 9. Open items
+## 10. Open items
 
 1. **Stage-to-target binding by name.** §3.1 binds `stage: lab` to `target: lab`
    when the names match, which is what makes the short document short. It is

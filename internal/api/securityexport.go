@@ -567,7 +567,15 @@ func packageSecurityBook(
 	if sheet := policySheet(productName, release, side.reports); len(sheet.Rows) > 0 {
 		book.Sheets = append(book.Sheets, sheet)
 	}
-	if sheet, ok := sourcesSheet(productName, release, side.posture); ok {
+	// The scanner comparison, computed from the UNMERGED per-scanner reports.
+	// It cannot come from side.reports: those are already merged, and a merged
+	// row has forgotten which scanner reported which half of it - which is the
+	// whole question these two sheets answer.
+	cmp := security.CompareSources(side.sources)
+	if sheet, ok := sourcesSheet(productName, release, side.posture, cmp); ok {
+		book.Sheets = append(book.Sheets, sheet)
+	}
+	if sheet, ok := disagreementSheet(productName, release, cmp, exploitedAdvisories(side.reports)); ok {
 		book.Sheets = append(book.Sheets, sheet)
 	}
 	if sheet := problemsSheet(productName, release, side.reports); len(sheet.Rows) > 0 {
@@ -649,6 +657,27 @@ func summarySheet(
 	add("Coverage complete", yesNo(cov.Complete()))
 
 	group("FINDINGS")
+	// KNOWN-EXPLOITED FIRST, above the totals.
+	//
+	// Everything under this heading is a backlog and this is not: it is a list
+	// of advisories somebody has already been attacked through. A summary sheet
+	// that put it eleventh, between "Low" and "Unknown severity", would have
+	// buried the one number on the page that changes what happens today.
+	//
+	// Written even at zero, and this is where the scanner matters: with a
+	// scanner that carries the catalogue, zero is a genuine result worth
+	// stating in a file somebody forwards to a vendor. Without one, the line
+	// says so instead of implying a check that never happened.
+	if kevCapableFor(side) {
+		add("Known-exploited vulnerabilities", strconv.Itoa(row.KEVs))
+		if row.KEVs > 0 {
+			add("Known-exploited with a fix", strconv.Itoa(row.KEVFixable))
+			add("Known-exploited occurrences", strconv.Itoa(row.Counts.KEV))
+		}
+	} else {
+		add("Known-exploited vulnerabilities",
+			"not checked - no scanner in this deployment reports a known-exploited catalogue")
+	}
 	add("Vulnerabilities", strconv.Itoa(row.Counts.Total))
 	add("Distinct advisories", strconv.Itoa(row.DistinctCVEs))
 	add("Distinct advisory and package pairs", strconv.Itoa(row.DistinctTotal))
@@ -668,9 +697,13 @@ func summarySheet(
 	if len(side.posture.BySource) > 1 {
 		group("BY SCANNER")
 		for _, src := range side.posture.BySource {
-			add(providerLabel(src.Provider), fmt.Sprintf(
+			line := fmt.Sprintf(
 				"%d findings, %d distinct advisories, %d reported by no other scanner",
-				src.Counts.Total, src.UniqueCVEs, src.OnlyHere))
+				src.Counts.Total, src.UniqueCVEs, src.OnlyHere)
+			if src.KEVs > 0 {
+				line += fmt.Sprintf(", %d known-exploited", src.KEVs)
+			}
+			add(providerLabel(src.Provider), line)
 		}
 	}
 
@@ -686,6 +719,11 @@ func summarySheet(
 	add("Unique CVEs", "One row per advisory, with every image and package it appears in")
 	add("All findings", "One row per image, advisory and package")
 	add("Images", "One row per image, with its counts and its scan status")
+	if len(side.posture.BySource) > 1 {
+		add("By source", "What each scanner reported, and what only one of them saw")
+		add("Scanner disagreement",
+			"Every advisory only one scanner reported - the full set, uncapped")
+	}
 	if malware > 0 {
 		add("Malware", "Malicious packages - these have no version to upgrade to")
 	}
@@ -753,9 +791,10 @@ func comparisonBook(
 		Primary: true,
 		Headers: []string{
 			"Product", "Base release", "New release", "Change", "Artifact", "Artifact change",
-			"Artifact tag", "Artifact digest", "CVE", "Issue ID", "Severity", "From severity",
+			"Artifact tag", "Artifact digest", "CVE", "Issue ID",
+			"Exploited", "Severity", "From severity",
 			"To severity", "Fixable", "Fixed in", "Package", "Package version", "Package type",
-			"Resolved by removal", "Scanner", "Summary",
+			"Resolved by removal", "Reported by", "Scanner", "Summary",
 		},
 	}
 	for _, ch := range c.Changes {
@@ -766,10 +805,17 @@ func comparisonBook(
 			productName, releaseLabel(base), releaseLabel(other),
 			string(ch.Type), ch.Artifact.ArtifactKey(), string(ch.ArtifactChange),
 			ch.Artifact.Tag, ch.Artifact.Digest,
-			ch.CVE, ch.ID, string(ch.Severity), string(ch.FromSeverity), string(ch.ToSeverity),
+			ch.CVE, ch.ID, exploitedCell(ch.KEV),
+			string(ch.Severity), string(ch.FromSeverity), string(ch.ToSeverity),
 			strconv.FormatBool(ch.Fixable), strings.Join(ch.FixedIn, " "),
 			ch.Component.Name, ch.Component.Version, ch.Component.Type,
-			strconv.FormatBool(ch.ViaRemoval), ch.Provider, ch.Summary,
+			strconv.FormatBool(ch.ViaRemoval),
+			// Which scanners reported it, beside the row. On a comparison this
+			// is not decoration: a release synced with a second scanner
+			// switched on, compared against one synced without it, reports
+			// several thousand "introduced" findings that were always there -
+			// and this column is what lets a reader see that at a glance.
+			strings.Join(ch.Sources, " "), ch.Provider, ch.Summary,
 		})
 	}
 
@@ -888,4 +934,49 @@ func formatPublished(t *time.Time) string {
 		return ""
 	}
 	return t.UTC().Format("2006-01-02")
+}
+
+// exploitedAdvisories is which advisories in a release are known to be
+// exploited, by identifier.
+//
+// From the MERGED reports, so an advisory one scanner flagged and the other did
+// not is exploited here - which is the point: the disagreement sheet is about
+// who reported an advisory, and whether it is exploited is a fact about the
+// advisory rather than about the reporter.
+func exploitedAdvisories(reports []security.Report) map[string]bool {
+	out := map[string]bool{}
+	for _, r := range reports {
+		for _, f := range r.Findings {
+			if f.KEV {
+				if id := f.Identifier(); id != "" {
+					out[id] = true
+				}
+			}
+		}
+	}
+	return out
+}
+
+// kevCapableFor reports whether any scanner that answered for this release can
+// report a known-exploited catalogue.
+//
+// # Why a zero needs this to be honest in a file
+//
+// Because a workbook is forwarded to people who were not looking at the page it
+// came from. "Known-exploited vulnerabilities: 0" in a document sent to a
+// vendor is a claim, and on a deployment whose only scanner has no such feed it
+// is a claim nobody made. The line says "not checked" instead, which is the
+// difference between a report and a misleading one.
+func kevCapableFor(side securitySide) bool {
+	for _, src := range side.sources {
+		if kevCapableProviders[src.Provider] {
+			return true
+		}
+	}
+	for _, provider := range side.target.Providers {
+		if kevCapableProviders[provider] {
+			return true
+		}
+	}
+	return false
 }

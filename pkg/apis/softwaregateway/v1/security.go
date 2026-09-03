@@ -661,6 +661,17 @@ type SecurityChange struct {
 
 	Fixable bool     `json:"fixable"`
 	FixedIn []string `json:"fixedIn,omitempty"`
+	// KEV says the vulnerability this change is about is known to be exploited.
+	//
+	// "This release introduced a known-exploited vulnerability" is the most
+	// consequential sentence a release comparison can produce, and without this
+	// it renders as one more row in a list of four hundred introduced findings
+	// ordered by a severity that may well be medium.
+	KEV bool `json:"kev,omitempty"`
+	// Sources names every scanner that reported the finding, so a reader can
+	// tell a genuine regression from a scanner that was switched on between the
+	// two releases.
+	Sources []string `json:"sources,omitempty"`
 
 	Summary     string            `json:"summary,omitempty"`
 	Description string            `json:"description,omitempty"`

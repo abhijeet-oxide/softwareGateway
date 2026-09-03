@@ -62,6 +62,14 @@ func uniqueCVESheet(productName, release string, reports []security.Report, filt
 		packages    []string
 		images      []string
 		occurrences int
+		// kev and epss are the two facts a reader sorts this file by before
+		// anything else. On the group rather than the row, because being
+		// exploited is a property of the advisory: an advisory Anchore flagged
+		// in one image is exploited wherever it appears.
+		kev        bool
+		kevSource  string
+		epss       float64
+		willNotFix bool
 	}
 
 	order := []string{}
@@ -94,6 +102,18 @@ func uniqueCVESheet(productName, release string, reports []security.Report, filt
 			if f.CVSSScore > g.cvss {
 				g.cvss = f.CVSSScore
 			}
+			if f.KEV {
+				g.kev = true
+				if g.kevSource == "" {
+					g.kevSource = f.KEVSource
+				}
+			}
+			if f.EPSS != nil && f.EPSS.Score > g.epss {
+				g.epss = f.EPSS.Score
+			}
+			if f.WillNotFix {
+				g.willNotFix = true
+			}
 			if g.published == "" {
 				g.published = formatPublished(f.Published)
 			}
@@ -113,20 +133,39 @@ func uniqueCVESheet(productName, release string, reports []security.Report, filt
 	sheet := export.Sheet{
 		Name: "Unique CVEs",
 		Headers: []string{
-			"Product", "Release", "CVE", "Issue ID", "Severity", "CVSS", "Fixable", "Fixed in",
+			// Exploited FIRST among the grades, before severity, because that
+			// is the order the rows are sorted in and a spreadsheet whose
+			// first grading column is not the one it is sorted by teaches the
+			// reader to re-sort it.
+			"Product", "Release", "CVE", "Issue ID", "Exploited", "Exploited source",
+			"Severity", "CVSS", "EPSS", "Fixable", "Fixed in", "Will not fix",
 			"Findings", "Images affected", "Packages affected", "Reported by",
 			"Images", "Packages", "Advisory published", "Summary",
 		},
 		// Sized for what the column HOLDS, not for its heading. A CVE is
 		// eighteen characters and was being shown in eight; the two list
 		// columns are wide because a reader opens this sheet to read them.
-		Widths: []int{18, 22, 18, 16, 11, 8, 9, 18, 10, 15, 17, 16, 46, 46, 18, 70},
+		Widths: []int{
+			18, 22, 18, 16, 10, 17,
+			11, 8, 9, 9, 18, 12,
+			10, 15, 17, 16, 46, 46, 18, 70,
+		},
 	}
 
+	// The same order the page uses and the same order the server stores in:
+	// exploited, then severity, then fixable, then blast radius. A file that
+	// ordered its rows differently from the page it came from would make
+	// somebody check which was right.
 	sort.SliceStable(order, func(i, j int) bool {
 		a, b := byKey[order[i]], byKey[order[j]]
+		if a.kev != b.kev {
+			return a.kev
+		}
 		if a.severity.Rank() != b.severity.Rank() {
 			return a.severity.Rank() > b.severity.Rank()
+		}
+		if a.fixable != b.fixable {
+			return a.fixable
 		}
 		if len(a.images) != len(b.images) {
 			return len(a.images) > len(b.images)
@@ -137,8 +176,11 @@ func uniqueCVESheet(productName, release string, reports []security.Report, filt
 	for _, key := range order {
 		g := byKey[key]
 		sheet.Rows = append(sheet.Rows, []string{
-			productName, release, g.cve, g.id, string(g.severity), formatScore(g.cvss),
+			productName, release, g.cve, g.id,
+			exploitedCell(g.kev), providerLabelOrBlank(g.kevSource),
+			string(g.severity), formatScore(g.cvss), formatEPSS(g.epss),
 			strconv.FormatBool(g.fixable), strings.Join(g.fixedIn, " "),
+			strconv.FormatBool(g.willNotFix),
 			strconv.Itoa(g.occurrences), strconv.Itoa(len(g.images)), strconv.Itoa(len(g.packages)),
 			strings.Join(g.sources, " "),
 			// The lists are joined rather than truncated. A cell holding forty
@@ -166,14 +208,16 @@ func findingsSheet(
 		Primary: true,
 		Headers: []string{
 			"Product", "Release", "Release digest", "Image", "Image tag", "Image digest",
-			"Image kind", "Scan status", "CVE", "Issue ID", "Severity", "Fixable", "Fixed in",
-			"Package", "Package version", "Package type", "CVSS", "CVSS vector",
+			"Image kind", "Scan status", "CVE", "Issue ID",
+			"Exploited", "Exploited source", "Severity", "Fixable", "Fixed in", "Will not fix",
+			"Package", "Package version", "Package type", "CVSS", "CVSS vector", "EPSS",
 			"Advisory published", "Reported by", "Policy", "Summary",
 		},
 		Widths: []int{
 			18, 22, 20, 28, 20, 20,
-			11, 13, 18, 16, 11, 9, 18,
-			24, 18, 13, 8, 30,
+			11, 13, 18, 16,
+			10, 17, 11, 9, 18, 12,
+			24, 18, 13, 8, 30, 9,
 			18, 16, 16, 70,
 		},
 	}
@@ -203,10 +247,12 @@ func findingsSheet(
 				productName, release, releaseDigest,
 				report.Artifact.ArtifactKey(), report.Artifact.Tag, report.Artifact.Digest,
 				report.Artifact.Kind, string(report.Status),
-				f.CVE, f.ID, string(f.Severity), strconv.FormatBool(f.Fixable),
-				strings.Join(f.FixedIn, " "),
+				f.CVE, f.ID,
+				exploitedCell(f.KEV), providerLabelOrBlank(f.KEVSource),
+				string(f.Severity), strconv.FormatBool(f.Fixable),
+				strings.Join(f.FixedIn, " "), strconv.FormatBool(f.WillNotFix),
 				f.Component.Name, f.Component.Version, f.Component.Type,
-				formatScore(f.CVSSScore), f.CVSSVector,
+				formatScore(f.CVSSScore), f.CVSSVector, formatEPSSOf(f.EPSS),
 				formatPublished(f.Published), strings.Join(f.SourceSet(), " "),
 				f.Policy, f.Summary,
 			})
@@ -399,7 +445,9 @@ func problemsSheet(productName, release string, reports []security.Report) expor
 // deployment it would be the release's own numbers restated under a heading
 // that implies a comparison, which is a sheet that teaches a reader to expect
 // something that is not there.
-func sourcesSheet(productName, release string, posture security.Posture) (export.Sheet, bool) {
+func sourcesSheet(
+	productName, release string, posture security.Posture, cmp security.SourceComparison,
+) (export.Sheet, bool) {
 	if len(posture.BySource) < 2 {
 		return export.Sheet{}, false
 	}
@@ -408,12 +456,13 @@ func sourcesSheet(productName, release string, posture security.Posture) (export
 		Headers: []string{
 			"Product", "Release", "Scanner", "Images answered", "Findings", "Fixable",
 			"Critical", "High", "Medium", "Low", "Unknown",
-			"Distinct CVEs", "Only this scanner",
+			"Distinct CVEs", "Only this scanner", "Exploited", "Exploited only here", "Enriched",
 		},
-		Widths: []int{18, 22, 16, 15, 11, 9, 9, 8, 9, 8, 9, 14, 18},
+		Widths: []int{18, 22, 16, 15, 11, 9, 9, 8, 9, 8, 9, 14, 18, 10, 19, 10},
 	}
 	for _, src := range posture.BySource {
 		c := src.Counts
+		agreement := cmp.Counts[src.Provider]
 		sheet.Rows = append(sheet.Rows, []string{
 			productName, release, providerLabel(src.Provider), strconv.Itoa(src.Artifacts),
 			strconv.Itoa(c.Total), strconv.Itoa(c.Fixable),
@@ -421,7 +470,73 @@ func sourcesSheet(productName, release string, posture security.Posture) (export
 			strconv.Itoa(c.BySeverity.Medium), strconv.Itoa(c.BySeverity.Low),
 			strconv.Itoa(c.BySeverity.Unknown),
 			strconv.Itoa(src.UniqueCVEs), strconv.Itoa(src.OnlyHere),
+			strconv.Itoa(src.KEVs), strconv.Itoa(agreement.KEVOnly), strconv.Itoa(agreement.Enriched),
 		})
+	}
+	return sheet, true
+}
+
+// disagreementSheet lists the advisories the scanners did not agree on.
+//
+// # Why this is a sheet and not a number
+//
+// Because "Anchore found 402 Xray did not" is the headline and this is the
+// evidence. A reader deciding whether to keep two scanners needs to be able to
+// look at what the disagreement actually consists of - and on the page that
+// list is capped at two hundred, because a browser rendering four thousand
+// identifiers is a page that takes a second to open. A spreadsheet has no such
+// problem, so this is the ONE place the full set exists.
+//
+// Present only where more than one scanner contributed, on the same argument
+// as the sheet above.
+func disagreementSheet(
+	productName, release string, cmp security.SourceComparison, kevOnly map[string]bool,
+) (export.Sheet, bool) {
+	if len(cmp.Providers) < 2 {
+		return export.Sheet{}, false
+	}
+	sheet := export.Sheet{
+		Name: "Scanner disagreement",
+		Headers: []string{
+			"Product", "Release", "Advisory", "Reported by", "Exploited",
+		},
+		Widths: []int{18, 22, 18, 22, 10},
+	}
+
+	// Exploited first, then the rest alphabetically. Same argument as
+	// everywhere else: a truncated read of this sheet must not truncate away
+	// the rows that matter, and somebody who opens it and reads the first
+	// screen should have seen those.
+	type row struct {
+		id       string
+		provider string
+		kev      bool
+	}
+	var rows []row
+	for _, provider := range cmp.Providers {
+		for _, id := range cmp.OnlyIn[provider] {
+			rows = append(rows, row{id: id, provider: provider, kev: kevOnly[id]})
+		}
+	}
+	sort.SliceStable(rows, func(i, j int) bool {
+		if rows[i].kev != rows[j].kev {
+			return rows[i].kev
+		}
+		if rows[i].provider != rows[j].provider {
+			return rows[i].provider < rows[j].provider
+		}
+		return rows[i].id < rows[j].id
+	})
+	for _, r := range rows {
+		sheet.Rows = append(sheet.Rows, []string{
+			productName, release, r.id, "Only " + providerLabel(r.provider), exploitedCell(r.kev),
+		})
+	}
+	if len(sheet.Rows) == 0 {
+		// Every scanner agreed on everything, which is a real and worth-saying
+		// result - and an empty sheet with a header row says it badly. The
+		// summary sheet carries the number; this one goes away.
+		return export.Sheet{}, false
 	}
 	return sheet, true
 }
@@ -633,4 +748,51 @@ func padTo(row []string, width int, last string) []string {
 		out[width-1] = last
 	}
 	return out
+}
+
+// exploitedCell is the known-exploited flag as a spreadsheet reads it.
+//
+// # Why "yes" and "" rather than TRUE and FALSE
+//
+// Because the whole point of this column is that a reader's eye finds the few
+// rows that have it, in a file of ninety thousand. A column of FALSE with four
+// TRUEs in it is a column of noise; a mostly-empty column with four "yes" cells
+// is a column somebody can see from across the sheet, and it sorts and filters
+// exactly the same way.
+func exploitedCell(kev bool) string {
+	if kev {
+		return "yes"
+	}
+	return ""
+}
+
+// providerLabelOrBlank names a scanner, or nothing where there is none to name.
+//
+// Blank rather than "-", because a spreadsheet's empty cell already means "not
+// applicable" and a dash is a value somebody's filter has to know to exclude.
+func providerLabelOrBlank(provider string) string {
+	if provider == "" {
+		return ""
+	}
+	return providerLabel(provider)
+}
+
+// formatEPSS renders an exploit-prediction score as a percentage.
+//
+// A percentage rather than the raw probability, for the reason the interface
+// gives it one: 0.00042 is a number almost nobody can act on. Two decimal
+// places, because the interesting range is a fraction of a percent and rounding
+// to whole numbers would render every score below 0.5% as zero.
+func formatEPSS(score float64) string {
+	if score <= 0 {
+		return ""
+	}
+	return strconv.FormatFloat(score*100, 'f', 2, 64) + "%"
+}
+
+func formatEPSSOf(epss *security.EPSS) string {
+	if epss == nil {
+		return ""
+	}
+	return formatEPSS(epss.Score)
 }

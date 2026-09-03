@@ -479,6 +479,8 @@ func toAPIChange(c security.Change) v1.SecurityChange {
 		ToSeverity:     string(c.ToSeverity),
 		Fixable:        c.Fixable,
 		FixedIn:        c.FixedIn,
+		KEV:            c.KEV,
+		Sources:        c.Sources,
 		Summary:        c.Summary,
 		Description:    c.Description,
 		Component:      toAPIComponent(c.Component),

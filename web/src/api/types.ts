@@ -1941,6 +1941,24 @@ export interface SecurityChange {
   fromSeverity?: Severity
   toSeverity?: Severity
   fixable: boolean
+  /**
+   * Known to be exploited.
+   *
+   * "This release introduced a known-exploited vulnerability" is the most
+   * consequential sentence a release comparison can produce, and without this
+   * it is one more row in a list of four hundred introduced findings ordered by
+   * a severity that may well be medium.
+   */
+  kev?: boolean
+  /**
+   * Every scanner that reported the finding.
+   *
+   * The distinction a two-scanner deployment gets wrong first: comparing a
+   * release synced with Anchore switched on against one synced by Xray alone
+   * reports several thousand "introduced" findings that were always there and
+   * were simply not being looked for.
+   */
+  sources?: string[]
   fixedIn?: string[]
   summary?: string
   description?: string

@@ -1,6 +1,7 @@
 package store
 
 import (
+	"context"
 	"fmt"
 	"testing"
 	"time"
@@ -658,5 +659,127 @@ func TestSecurityReportsForSkipsTheProseTierWhenAskedTo(t *testing.T) {
 	// And none of the prose, which is the whole point.
 	if got.Description != "" || len(got.References) != 0 || got.CVSSScore != 0 || got.CVSSVector != "" {
 		t.Errorf("IndexOnly read the detail tier anyway: %+v", got)
+	}
+}
+
+// The known-exploited flag has to survive a round trip through the index tier,
+// because that tier is what a listing reads and what survives eviction of the
+// prose. A flag that only lived in the detail payload would vanish from the
+// badge the day the payload was evicted.
+func TestKEVSurvivesTheIndexTier(t *testing.T) {
+	cache := NewSecurity(openTestStore(t))
+	ctx := context.Background()
+
+	scope := security.Scope{Product: "cfx", Repository: "lab", Role: "target", Provider: "anchore"}
+	ref := security.ArtifactRef{Name: "app", Tag: "1.0", Digest: "sha256:aaa", Kind: "image"}
+
+	report := security.Report{
+		Artifact: ref, Status: security.StatusScanned, Provider: "anchore",
+		RetrievedAt: time.Now().UTC(),
+		Findings: []security.Finding{
+			{
+				CVE: "CVE-2024-1", Severity: security.SeverityMedium, Fixable: true,
+				KEV: true, KEVSource: "anchore",
+				Component: security.Component{
+					ID: "deb://openssl", Name: "openssl", Version: "1.1.1n", Type: "deb",
+				},
+				FixedIn: []string{"1.1.1n-1"},
+			},
+			{
+				CVE: "CVE-2024-2", Severity: security.SeverityCritical,
+				Component: security.Component{
+					ID: "deb://zlib", Name: "zlib", Version: "1.2", Type: "deb",
+				},
+			},
+		},
+	}
+	report.Recount()
+
+	if err := cache.Save(ctx, scope, []security.Report{report}, true, security.CacheTTL{
+		Summary: time.Hour, Detail: time.Hour,
+	}); err != nil {
+		t.Fatalf("save: %v", err)
+	}
+
+	// The summary tier: the counts a listing draws its badge from.
+	summaries, err := cache.LoadSummaries(ctx, scope, []security.ArtifactRef{ref})
+	if err != nil {
+		t.Fatalf("load summaries: %v", err)
+	}
+	if got := summaries[ref.Ref()].Counts.KEV; got != 1 {
+		t.Errorf("stored KEV count = %d, want 1", got)
+	}
+	if got := summaries[ref.Ref()].Counts.KEVFixable; got != 1 {
+		t.Errorf("stored fixable KEV count = %d, want 1", got)
+	}
+
+	// The index tier: the rows a table sorts, WITHOUT the prose.
+	reports, err := cache.ReportsFor(ctx, scope, []security.ArtifactRef{ref}, security.IndexOnly)
+	if err != nil {
+		t.Fatalf("reports: %v", err)
+	}
+	if len(reports) != 1 || len(reports[0].Findings) != 2 {
+		t.Fatalf("expected two stored findings, got %+v", reports)
+	}
+	// Sorted exploited-first even though it is the LOWER severity: that is the
+	// whole rule.
+	first := reports[0].Findings[0]
+	if !first.KEV || first.CVE != "CVE-2024-1" {
+		t.Errorf("the exploited medium did not sort above the plain critical: %+v", reports[0].Findings)
+	}
+	if first.KEVSource != "anchore" {
+		t.Errorf("lost which scanner claimed the exploited flag: %q", first.KEVSource)
+	}
+	if len(first.Sources) != 1 || first.Sources[0] != "anchore" {
+		t.Errorf("a row read back from one scanner's scope has no source: %+v", first.Sources)
+	}
+}
+
+// The search's known-exploited filter is what somebody uses on the day a
+// catalogue is updated: not "what is critical in this product", which they
+// know, but "which of my releases carry the four added this morning".
+func TestSearchNarrowsToExploited(t *testing.T) {
+	cache := NewSecurity(openTestStore(t))
+	ctx := context.Background()
+
+	scope := security.Scope{Product: "cfx", Repository: "lab", Role: "target", Provider: "anchore"}
+	ref := security.ArtifactRef{Name: "app", Digest: "sha256:aaa", Kind: "image"}
+	report := security.Report{
+		Artifact: ref, Status: security.StatusScanned, Provider: "anchore",
+		RetrievedAt: time.Now().UTC(),
+		Findings: []security.Finding{
+			{CVE: "CVE-2024-1", Severity: security.SeverityLow, KEV: true,
+				Component: security.Component{ID: "deb://openssl", Name: "openssl", Version: "1.0"}},
+			{CVE: "CVE-2024-2", Severity: security.SeverityCritical,
+				Component: security.Component{ID: "deb://openssl", Name: "openssl", Version: "1.0"}},
+		},
+	}
+	report.Recount()
+	if err := cache.Save(ctx, scope, []security.Report{report}, true, security.CacheTTL{
+		Summary: time.Hour, Detail: time.Hour,
+	}); err != nil {
+		t.Fatalf("save: %v", err)
+	}
+
+	all, err := cache.Search(ctx, SearchFilter{Product: "cfx", Kind: SearchComponent, Query: "openssl"})
+	if err != nil {
+		t.Fatalf("search: %v", err)
+	}
+	if len(all) != 2 {
+		t.Fatalf("unfiltered search returned %d hits, want 2", len(all))
+	}
+	// Exploited first even though it is the lower severity.
+	if !all[0].KEV {
+		t.Errorf("search did not order the exploited hit first: %+v", all)
+	}
+
+	only, err := cache.Search(ctx, SearchFilter{
+		Product: "cfx", Kind: SearchComponent, Query: "openssl", KEVOnly: true,
+	})
+	if err != nil {
+		t.Fatalf("search: %v", err)
+	}
+	if len(only) != 1 || only[0].CVE != "CVE-2024-1" {
+		t.Fatalf("exploited-only search returned %+v", only)
 	}
 }

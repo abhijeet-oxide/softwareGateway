@@ -939,9 +939,6 @@ func labelOr(label, fallback string) string {
 	return label
 }
 
-// providerLabel is the scanner's name as a person writes it.
-func providerLabel(provider string) string { return ProviderLabel(provider) }
-
 // firstMessage is whatever the provider said about the first artifact it could
 // not answer for.
 // One message rather than all of them: a release of three hundred artifacts

@@ -174,6 +174,26 @@ forgetting it is a release that renders as clean.
   and `Ref()` (the digest, for identity within one release) are **different
   methods** and confusing them is §5.
 
+### The resolver takes a SCOPE, not a repository
+
+```go
+type Resolver interface {
+    ProviderFor(ctx context.Context, scope Scope) (Provider, error)
+    ProvidersFor(ctx context.Context, product, repository string) ([]string, error)
+}
+```
+
+It used to take `(product, repository)`, and that signature was correct exactly
+as long as a repository had one scanner. The scope is already the thing that
+says which one - it is the storage key and the authorization boundary - so
+naming it here costs nothing and a signature that had stayed narrower would
+have made the second scanner's rows land in the first one's storage.
+
+`ProvidersFor` returns names rather than providers because building one is a
+credential resolution and a transport, and the caller that needs it most - the
+sync, deciding what work there is - needs the names before it decides to do any
+of it.
+
 ## 5. Comparison
 
 ### 5.1 Aligning artifacts
@@ -865,47 +885,316 @@ often lacks, and neither is a reason to fail an export of vulnerabilities that
 were retrieved perfectly well. An unavailable document is a document with no
 payload and a sentence saying which of those happened.
 
-## 12. Adding a second scanner
+## 12. The second scanner: Anchore
 
-Everything above is scanner-agnostic except one directory. Concretely:
+Everything above section 11 is scanner-agnostic, and section 12 used to be a
+plan for proving it. Anchore is that proof, and this section is what the plan
+turned out to be wrong about.
 
-1. Implement `security.Provider` wherever that scanner's credentials already
-   live - inside a repository plugin if it is scoped by repository, in its own
-   package if it genuinely is not.
+### 12.1 Where it lives, and why it is NOT inside a repository plugin
+
+Xray lives inside `internal/registry/artifactory` because it is not a separate
+system: it is a second endpoint on a JFrog platform this codebase already speaks
+to, reached with the credential the repository already holds (§3).
+
+**Anchore genuinely is a separate system**, so it is a package of its own,
+`internal/security/anchore`. It has its own address, its own credential and its
+own account model - and, the part that shapes the whole integration, it does not
+scan a repository. It **pulls an image**, one at a time, on its own schedule,
+and only after somebody has told it the image exists.
+
+That difference is three whole phases the Xray path does not have:
+
+| Phase | Why it exists |
+|---|---|
+| **Submit** | An image Anchore has never been told about produces no findings - not because it is clean but because nothing has looked. |
+| **Wait** | Analysis is asynchronous and minutes long. A sync that read the vulnerability endpoint immediately after submitting would report every release as unscanned on its first sync. |
+| **Group** | A release is one thing to a person and 157 images to a registry, and Anchore's Application/Version model is exactly that shape. |
+
+The methodology is `docs/security/Anchore.md`; the endpoints and schemas are
+`docs/security/anchore_5.22_openapi.yaml`, which is the final authority.
+
+### 12.2 Configuration: still one field on a product
+
+```yaml
+# The PRODUCT document says one thing, the same one thing it says about Xray.
+spec:
+  targets:
+    - name: cfx-jfrog-lab
+      registry: artifact.example.com
+      repository: apm0014228-oci-stage
+      type: jfrog
+      xrayEnabled: true
+      anchoreEnabled: true      # <- the whole of it
+```
+
+```yaml
+# The DEPLOYMENT says where Anchore is, once.
+coordinator:
+  security:
+    anchore:
+      endpoint: https://anchore.example.com    # /v2 appended if absent
+      secretName: anchore-api                  # <secretsDir>/anchore-api/{username,password}
+      concurrency: 12
+      requestTimeout: 60s
+      analysisWait: 10m
+      pollInterval: 15s
+      submit: true
+      sbomFormat: spdx-json
+```
+
+**Why the address is here and Xray's is not.** There is nothing to derive an
+Anchore endpoint from - it is its own host with its own credential - and one
+stanza in the system configuration is the only alternative to repeating that
+host in every product document and watching the copies drift. It is the same
+argument §3 makes for moving Xray's concurrency and retention out of the product
+document, applied to the one field Xray does not need.
+
+**An empty endpoint means this deployment has no Anchore**, whatever a product
+says. A product asking for a scanner the Coordinator has no address for gets a
+disabled provider with a sentence naming the knob - never a live one failing
+every request against an empty URL.
+
+**`anchoreEnabled` is valid on ANY registry type**, where `xrayEnabled` is not.
+Xray is a JFrog endpoint, so asking for it on a Quay repository is a request
+that cannot be served and validation says so. Anchore pulls over the registry
+API, so it works against any registry it can reach and has credentials for, and
+refusing it on a Quay target would be this schema inventing a limitation Anchore
+does not have. What Anchore cannot do is pull from a registry it cannot reach -
+and that is not a fact a product document knows. It is reported by the sync, per
+image, with the sentence that names the fix.
+
+**A warning, not an error, for `anchoreEnabled` on a source.** Pointed at a
+target it works and is the whole shape of the integration; pointed at a vendor
+source it asks your Anchore to reach a vendor's registry across the internet,
+with a credential it does not have, for images already sitting in your own. Not
+impossible - an estate whose Anchore can reach a vendor mirror may want exactly
+that - but almost always the wrong line, and its failure reads as "Anchore has
+no record of this image", which sends the reader to look at Anchore rather than
+at the four characters that caused it.
+
+### 12.3 What the sync does, in order
+
+1. **Take stock.** One request asks Anchore what it already knows about every
+   image in the release. A re-synced release is overwhelmingly images that are
+   already analysed, and this is what makes that case cost one request rather
+   than one per image.
+2. **Submit what is missing** - only images Anchore has never been told about.
+   By **digest**, always: the pull string is `<registry>/<repo>@<digest>` and
+   the tag rides alongside as metadata. Submitting by tag would let Anchore
+   analyse whatever the tag points at when it gets round to pulling, so a vendor
+   who re-pushes between the transfer and the analysis would have this platform
+   reporting one release's findings against another release's bytes.
+   `force` is deliberately never sent: it discards the existing analysis and
+   starts again, for bytes that cannot have changed.
+3. **Wait**, up to `analysisWait`, saying what it is waiting for. A first sync
+   is entirely this phase. It is bounded because the wait holds the release's
+   sync claim - waiting out somebody's Anchore backlog would block every later
+   sync of that release for an hour. Past the bound the sync records what
+   finished, labels the rest as still analysing, and says so.
+4. **Read**, in parallel, per image. The raw body rides out on the request that
+   was going to happen anyway (§11).
+5. **Group**: find-or-create the Application (the product's name) and the
+   Version (the release's), associate the analysed images, and **read the
+   associations back**. A successful write is not evidence of the final state,
+   and an application version holding three quarters of a release reports three
+   quarters of the truth while reading like all of it.
+
+Grouping is last because it associates only images that reached `analyzed`, and
+because its failure costs the least: the findings are already in hand, so every
+failure in that phase is a note in the transcript and nothing more.
+
+### 12.4 The two quirks that would have been silent bugs
+
+**`fix` is the literal string `"None"`.** Not an empty string, not a null. Read
+naively, every unfixable finding in a release arrives with a fixed version
+called None, `Fixable` is true for all of them, and the number a release manager
+acts on - "4 fixable criticals" - becomes 900. That number decides what somebody
+does this afternoon and there is nothing on the page that would make them doubt
+it. See `fixVersions`.
+
+**Two gradings per CVE.** Anchore reports a vendor severity and an NVD severity
+and they routinely differ - Debian grades an OpenSSL issue low that NVD grades
+critical, and both are right about different questions. A normalizer that picked
+one would silently decide, for every reader, which vulnerability database their
+organization believes. So the **worst** is reported, every grading is kept as an
+`Observation` with its source, and the advisory panel shows the disagreement
+under the number.
+
+## 13. Known-exploited vulnerabilities
+
+`Finding.KEV` says the vulnerability is on a known-exploited catalogue - CISA's,
+in every scanner that reports one today. Anchore's `nvd_data[].is_kev` is the
+only source of it in this deployment; Xray's versions here carry none.
+
+**It is not a severity, and everything about how it is treated follows from
+that.** "Critical" is somebody's judgement that a vulnerability *would* be bad
+to exploit. A KEV is a record that somebody *has* exploited it. A release with
+900 criticals and 4 KEVs has four things to do first, and a page that renders
+those four as four more criticals has told the reader nothing they can act on.
+
+So:
+
+- **It outranks severity in every sort order** - `SortFindings`, the SQL in
+  `Security.Search`, `groupByCve` in the browser, and the export's row order.
+  All four, and stated in all four, because a page that ordered its rows
+  differently from its own download would make somebody check which was right.
+- **Fixable outranks unfixable at equal severity**, which is the same argument
+  one rung down. A release here is a vendor's build: nothing in it can be
+  patched locally, so the only actionable rows are those with a version to ask
+  the vendor for, and sorting a hundred unfixable criticals above four fixable
+  ones puts the whole of the afternoon's work below the fold.
+- **It has its own counts** at every level - per finding row, per artifact, per
+  release, per scanner - because the badge and the headline have to be
+  answerable from the index tier, which is what survives when the prose has been
+  evicted and the only tier a listing of twenty releases reads.
+- **Counted per ADVISORY at release level** and per occurrence in the work
+  estimate. One exploited CVE in a base image carried by forty images is one
+  advisory to chase and forty places it lands, and "40 known-exploited
+  vulnerabilities" reads as forty problems.
+- **Its badge is magenta, not red.** Critical is already red; a KEV badge in the
+  same red beside a red severity tag reads as emphasis on the severity rather
+  than as a second fact, and on a high or a medium - where it matters most,
+  because that is where a reader would otherwise skip it - it reads as a
+  mis-coloured severity.
+
+### The zero that means two things
+
+`kev == false` is not "not exploited". It is "no scanner that answered said so",
+which on a scanner with no such feed is every finding. So the API sends
+`kevCapable`, and the interface uses it to tell apart:
+
+- **0 with a capable scanner**: a genuine and reassuring result, stated.
+- **0 without one**: "nobody checked", stated as that, naming the scanner that
+  would answer.
+
+Drawing the second as a clean bill of health is exactly the failure the
+scanned/not-scanned distinction (§2) exists to prevent, one level up. The
+workbook does the same thing for the same reason: it is forwarded to people who
+were not looking at the page it came from, and "Known-exploited: 0" in a
+document sent to a vendor is a claim.
+
+## 14. Two scanners, one release
+
+### 14.1 The join happens on READ
+
+Each scanner is asked in **its own scope** (`Scope.Provider`), stores in its own
+rows, and the union happens above the storage on every read.
+
+A composite provider - one `Provider` that calls two and returns the union - was
+the obvious shape and it is the wrong one, for a storage reason rather than a
+stylistic one. `Scope.Provider` is part of every storage key: the scan row, the
+detail payload, the raw document. A composite would have to write under one
+name, so Anchore's vulnerability body and Xray's would collide on the same
+`(scope, artifact, kind)` row, only one of them would be downloadable, and "what
+did Xray alone say" would stop being answerable the day the second scanner was
+switched on.
+
+The cost is a merge per read. What it buys:
+
+- switching a scanner off removes its contribution **without a migration**;
+- a vendor can be handed **the exact bytes their scanner produced**;
+- the per-scanner view is a real read of real rows rather than a filter over
+  merged ones.
+
+That last one matters more than it looks. A merged row carries the **worst**
+severity of the sources that reported it, so filtering merged rows to one
+scanner would show that scanner's rows wearing another's grade - which is
+precisely the disagreement somebody opened the source view to see.
+
+### 14.2 What the merge keeps
+
+`MergeFindings` collapses on `StorageKey` - `(identifier, component, component
+version)` - which is the same identity the store uses for a row. **Not the CVE
+alone**: a single CVE affects several packages in one image and each occurrence
+is its own remediation, so collapsing on the advisory would turn "openssl and
+libssl3 both need upgrading" into one row and lose one of the two upgrades.
+
+The rules, each of them a bug avoided by choosing this way:
+
+| Field | Rule | Why |
+|---|---|---|
+| Severity | worst wins | Two scanners disagreeing is not a reason to report the kinder answer. |
+| Fixable, FixedIn | union | Losing a fix version to a merge reports a fixable finding as unfixable - the one direction of error that costs somebody an upgrade they could have asked for. |
+| KEV | sticky, with its claimant | One scanner with a KEV feed is enough; a scanner without one saying nothing is not a denial. |
+| Prose, CVSS, EPSS, references | fill where absent | **This is the enrichment.** Anchore carries the advisory's prose and its EPSS where Xray carries a CVSS vector and a policy. |
+| Observations | union | The audit trail behind the one severity the row shows. |
+| Status | **best** wins | Two scanners routinely disagree about whether they have looked. Taking the worse status reports an image nobody scanned when one scanner has a complete answer in hand. |
+
+Under-merging is the safe direction to fail in: an unmerged pair shows the
+reader two rows and lets them see it, where an over-merged pair silently
+attributes one scanner's fix version to another scanner's package. Providers
+normalize component identity into the same vocabulary (`<type>://<name>`)
+precisely so this stays rare - `normalizeType` in the Anchore provider exists
+for that one line.
+
+### 14.3 The comparison, and what it counts
+
+`CompareSources` takes the **unmerged** per-scanner reports, because the whole
+question is who said what and a merged row has already forgotten.
+
+- **Only here** - advisories one scanner reported and no other did.
+- **Exploited only here** - the known-exploited subset of that, listed in full
+  and never truncated. There are never four thousand of them and each one is a
+  specific thing to check. This is the single most valuable output of running
+  two scanners, and it is usually four rows long.
+- **Enriched** - advisories another scanner also reported where this one
+  supplied a fact the other lacked. It is the honest defence of a scanner whose
+  exclusive-finding count is zero: it found nothing new and explained several
+  thousand findings better. A comparison that could only count rows would
+  recommend switching that scanner off.
+
+The page caps its lists at 200 (a browser rendering four thousand identifiers
+takes a second to open); the counts are exact and the **Scanner disagreement**
+sheet in the workbook carries the full set.
+
+### 14.4 The sync
+
+`Service.Postures` asks every configured scanner **concurrently** - they are
+independent hosts with independent rate limits, and asking them in sequence
+makes a sync the sum of their times rather than the longest of them. On a first
+sync that is the difference between ten minutes and twenty, because Anchore's
+phase is dominated by waiting for analysis that is happening whether we watch it
+or not.
+
+They share one progress reporter, deliberately: a reader wants one transcript,
+not two interleaved ones to demultiplex. Each provider names itself in its own
+lines.
+
+**One scanner refusing is a degraded sync, not a failed one.** The release keeps
+the other's ninety thousand findings and the transcript names what went wrong.
+The sync fails only when *every* scanner is off, or when the scanners that
+answered produced results for nothing - which is the failure this whole feature
+exists to keep visible.
+
+A sync can be narrowed to one scanner (`{"provider": "anchore"}`), and the
+interface offers that as a menu item beside the Sync button. The scanners fail
+and finish at very different speeds - Xray answers about a release in tens of
+seconds, Anchore's first sync waits minutes for analysis it does not control -
+so refreshing one without the other is worth offering. A name the release has no
+scanner for is **ignored rather than refused**: a stale browser tab must not
+turn a sync into a 400, and syncing everything is never the wrong answer to
+"sync this".
+
+## 15. Adding a third scanner
+
+Nothing in `internal/store`, `internal/api`, `internal/export` or the web
+application changes. Concretely:
+
+1. Implement `security.Provider` - in its own package if the scanner is its own
+   system, inside a repository plugin if it is a second endpoint on one this
+   codebase already reaches.
 2. Normalize into `security.Finding`, keeping the component identity
-   version-free (§4). Implement `security.DocumentProvider` too if it produces
-   SBOMs or policy verdicts; a scanner that does not is asked for none.
-3. Return it from `regclient.SecurityResolver.ProviderFor`.
+   version-free and in the shared `<type>://<name>` vocabulary (§14.2). Set
+   `KEV` where the scanner has a catalogue, and add the provider to
+   `kevCapableProviders`. Implement `security.DocumentProvider` too if it
+   produces SBOMs or policy verdicts.
+3. Return it from `regclient.SecurityResolver.build`, and name it in
+   `ProvidersFor` and `providersOn`.
+4. Add its label to `security.ProviderLabel` and the browser's `scannerName`.
 
-Nothing in `internal/security`, `internal/store`, `internal/api`, `internal/export`
-or the web application changes. That is what the boundary bought, and it is the
-only thing it had to buy.
-
-### What the second scanner turns on
-
-The shape for comparing scanners is already in place, and deliberately so: a
-field added the day Anchore is switched on is a field every stored row, every
-export column and every table lacks for the releases synced before it.
-
-- `Finding.Sources` names **every** scanner that reported a finding, where
-  `Provider` names the one this row came from. They are different questions:
-  which one said it, and who agrees.
-- `Posture.BySource` and `package_security_sources` carry per-scanner counts and
-  `only_cves` - the advisories that scanner reported and no other did. Stored
-  rather than derived, because the listing that most wants the number is the one
-  rendering twenty releases with none of their findings loaded.
-- Everything above renders **nothing** while one scanner answers. A segmented
-  control with a single position, and a "Reported by" column reading "JFrog
-  Xray" on every row of three thousand, are chrome that teaches a reader to
-  expect a comparison that does not exist.
-
-The interface, once there are two, is two controls and no query builder. A
-segmented switch answers the common question in one click ("what does Xray
-say"), and a single select holds the **whole truth table as named sentences** -
-only in Astra, in Anchore and Astra but not Xray, found by every scanner -
-generated from whichever scanners answered, with counts beside each. For three
-scanners that is seven rows, which is a list somebody reads.
-
-The alternative is a filter builder with AND, OR and NOT: the answer that gets
-built, demoed, and never used, because the person who needs it most is the one
-who does not think in set algebra.
+The interface generates its own controls from whichever scanners answered - the
+segmented switch, the agreement truth table, the comparison rows - so a third
+scanner needs no new UI. The truth table caps at three scanners (seven named
+rows, which is a list somebody reads) and degrades to "found by every scanner"
+plus "only in X" beyond that, rather than offering fifteen set expressions.

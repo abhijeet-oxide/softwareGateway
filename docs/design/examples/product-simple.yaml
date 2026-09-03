@@ -1,9 +1,11 @@
 # ═══════════════════════════════════════════════════════════════════════════════
 #  Product — a flow that is NOT the software flow
 #
-#  One team mirrors an upstream image into one internal repository. No external
-#  landing zone, no lab, no promotion, no Quay, no scanning. The tool must not
-#  make them carry any of it.
+#  One team copies an upstream image into one internal repository. It has a
+#  target in the `external` stage and in no other, so the download task is the
+#  only one it has. The release page shows one button and never mentions
+#  onboarding or promotion — because there is nowhere for them to go, not
+#  because anything was switched off.
 # ═══════════════════════════════════════════════════════════════════════════════
 apiVersion: softwaregateway.io/v1alpha2
 kind: Product
@@ -13,34 +15,26 @@ metadata:
   owner: platform-tools
 
 spec:
-  # ONE stage. `mirror` is not a stage the site declared, so it is declared
-  # here — verb, label and trigger included.
-  pipeline:
-    - stage: mirror
-      target: internal
-      action: download
-      label: Mirror
-      from: source
-      trigger: auto
-
   sources:
     - name: upstream
-      registry: quay-io
+      registry: quay.io
       repositories: ['openshift/cli']
+      anonymous: true
       discovery:
         interval: 6h
 
   targets:
     - name: internal
-      registry: artifactory
+      stage: external
+      registry: artifactory.internal.example.com:9444
       repository: mirror/openshift-cli
+      type: jfrog
+      credentialsRef:
+        secretName: internal-registry
 
   autoDownload:
     enabled: true
+    task: download
     rules:
       - name: stable
         tagPattern: '^4\.\d+$'
-
-# The release page shows one button, `Mirror`, and never mentions onboarding or
-# promotion — because this product has no second stage, not because anything
-# was switched off.

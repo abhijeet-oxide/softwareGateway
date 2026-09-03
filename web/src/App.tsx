@@ -1,7 +1,9 @@
 import { Suspense } from 'react'
-import { Navigate, Route, Routes, useLocation, useParams, useSearchParams } from 'react-router-dom'
+import {
+  Navigate, Route, Routes, useLocation, useNavigate, useParams, useSearchParams,
+} from 'react-router-dom'
 import { Shell } from './Shell'
-import { PageTransition } from './uikit'
+import { NotFoundPage, PageTransition } from './uikit'
 import {
   lazyRoute, PageLoading, RouteErrorBoundary, usePreloadRoutes, type RouteModule,
 } from './routing'
@@ -73,6 +75,39 @@ function LegacyCompareRedirect() {
   return <Navigate replace to={`/packages/compare${query ? `?${query}` : ''}`} />
 }
 
+/**
+ * An address that names no page.
+ *
+ * This used to redirect to the Overview, which is worse than it sounds: a
+ * bookmark that has rotted, a link with a typo in it and a page that was
+ * renamed all landed on the same dashboard with nothing said, so the reader
+ * concluded the link had worked and reported the wrong problem later. The
+ * shared kit's page names the address that was asked for and offers the two
+ * ways on.
+ *
+ * It renders INSIDE the shell: the navigation is still correct and still
+ * works, and taking it away for a mistyped path would be the application
+ * treating a wrong address as an outage.
+ *
+ * Going back is offered only where there is somewhere to go back TO. A tab
+ * opened directly on a dead link has one history entry, and a button that
+ * silently does nothing is worse than no button.
+ */
+function NotFound() {
+  const { pathname, search } = useLocation()
+  const navigate = useNavigate()
+  const canGoBack = window.history.length > 1
+  return (
+    <NotFoundPage
+      path={pathname + search}
+      actions={[
+        { label: 'Go to Overview', primary: true, onClick: () => void navigate('/', { replace: true }) },
+        ...(canGoBack ? [{ label: 'Go back', onClick: () => void navigate(-1) }] : []),
+      ]}
+    />
+  )
+}
+
 export function App() {
   const { pathname } = useLocation()
   usePreloadRoutes(ROUTES)
@@ -137,7 +172,11 @@ export function App() {
               <Route path="/activity" element={<Activity.Component />} />
               <Route path="/reports" element={<Reports.Component />} />
               <Route path="/settings" element={<Settings.Component />} />
-              <Route path="*" element={<Navigate to="/" replace />} />
+              {/*
+                Everything else. A redirect here would hide the mistake; see
+                `NotFound` above for why that cost more than it saved.
+              */}
+              <Route path="*" element={<NotFound />} />
             </Routes>
           </PageTransition>
         </Suspense>

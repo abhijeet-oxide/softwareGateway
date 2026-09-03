@@ -24,6 +24,9 @@ const OK2 = "#4ade80";
 const BLUE = "var(--brand)";
 const BLUE2 = "var(--brand-border)";
 const AMBER = "#f59e0b";
+// Failure reads a TOKEN rather than a hex: a preset that retunes the palette
+// must not leave the error scene painted in the previous identity's red.
+const DANGER = "var(--c-danger)";
 
 // The theme-tracking fill for the solid "paper" shapes (trays, shields, cards).
 const PAPER = "var(--ill-surface)";
@@ -505,6 +508,158 @@ export function NotFoundArt({ size = 132 }: { size?: number }) {
           <circle cx="80" cy="78" r="16" fill={PAPER} fillOpacity="0.6" stroke={BLUE} strokeWidth="3" />
           <path d="M91 89 l12 12" stroke={BLUE} strokeWidth="4" strokeLinecap="round" />
         </g>
+      </g>
+    </svg>
+  );
+}
+
+// MaintenanceArt: the service's own machines, deliberately at rest, with two
+// meshed gears turning where the other scenes in this family put a badge.
+// Planned work is the one state in the family that is nobody's fault, so it
+// gets the family's calm colour treatment and a badge that MOVES rather than
+// one that warns: an alert triangle here would say "outage" when the whole
+// point is that this was scheduled.
+export function MaintenanceArt({ size = 132 }: { size?: number }) {
+  // Two gears only read as meshed if the small one turns the OTHER way, and
+  // faster in proportion to its radius. Pitch radii of roughly 16 and 10 put
+  // their periods at 12s and 7.5s, which is what `.ill-gear` and
+  // `.ill-gear-counter` are, and their centres 24 apart, which is why the small
+  // one sits where it does.
+  const teeth = [0, 45, 90, 135, 180, 225, 270, 315];
+  return (
+    <svg width={size} height={size} viewBox="0 0 132 132" role="img" aria-label="Under maintenance" className="ill">
+      <circle cx="66" cy="58" r="44" fill={AMBER} opacity="0.07" className="ill-ripple" />
+      <Plate />
+      <g className="ill-floaty" style={{ transformOrigin: "66px 58px" }} opacity="0.92">
+        {[0, 1, 2].map((i) => {
+          const y = 30 + i * 22;
+          return (
+            <g key={i}>
+              <rect x="34" y={y} width="64" height="18" rx="5" fill={PAPER} stroke={BLUE} strokeWidth="2.5" />
+              <rect x="34" y={y} width="64" height="18" rx="5" fill={BLUE} opacity="0.05" />
+              {/* every light quiet: the machines are down on purpose */}
+              <circle cx="44" cy={y + 9} r="3" fill={BLUE} opacity="0.32" />
+              <rect x="54" y={y + 7} width={i === 1 ? 20 : 30} height="4" rx="2" fill={BLUE} opacity="0.2" />
+            </g>
+          );
+        })}
+      </g>
+      {/* the driving gear, in the badge's place */}
+      <g className="ill-gear" style={{ transformOrigin: "97px 90px" }}>
+        <circle cx="97" cy="90" r="11.5" fill={PAPER} stroke={AMBER} strokeWidth="3" />
+        {teeth.map((a) => (
+          <rect key={a} x="94.6" y="74.5" width="4.8" height="7" rx="1.8" fill={AMBER} transform={`rotate(${a} 97 90)`} />
+        ))}
+        <circle cx="97" cy="90" r="4" fill={AMBER} opacity="0.28" />
+      </g>
+      {/* and the one it drives */}
+      <g className="ill-gear-counter" style={{ transformOrigin: "76px 102px" }}>
+        <circle cx="76" cy="102" r="6.5" fill={PAPER} stroke={AMBER} strokeWidth="2.5" />
+        {teeth.map((a) => (
+          <rect key={a} x="74.4" y="92.4" width="3.2" height="4.6" rx="1.4" fill={AMBER} opacity="0.85" transform={`rotate(${a} 76 102)`} />
+        ))}
+      </g>
+    </svg>
+  );
+}
+
+// ErrorArt: the page's own window, split by a fracture that draws itself, under
+// an alert triangle. The triangle rather than the family's circular badge is
+// deliberate: an unexpected failure is the one state here that is not a normal
+// part of operating the system, and it should not look like one.
+export function ErrorArt({ size = 132 }: { size?: number }) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 132 132" role="img" aria-label="Unexpected error" className="ill">
+      <circle cx="66" cy="58" r="44" fill={DANGER} opacity="0.07" className="ill-ripple" />
+      <Plate />
+      <g className="ill-floaty" style={{ transformOrigin: "66px 58px" }}>
+        <rect x="30" y="26" width="72" height="62" rx="8" fill={PAPER} stroke={BLUE} strokeWidth="2.5" />
+        <path d="M30 40 h72" stroke={BLUE} strokeWidth="2" opacity="0.45" />
+        {[38, 45, 52].map((cx) => (
+          <circle key={cx} cx={cx} cy="33" r="2.2" fill={BLUE} opacity="0.4" />
+        ))}
+        {/* the content it never finished painting */}
+        <rect x="38" y="50" width="26" height="4.5" rx="2.25" fill={BLUE} opacity="0.22" />
+        <rect x="38" y="60" width="18" height="4.5" rx="2.25" fill={BLUE} opacity="0.16" />
+        <rect x="76" y="50" width="18" height="4.5" rx="2.25" fill={BLUE} opacity="0.16" />
+        <rect x="72" y="60" width="22" height="4.5" rx="2.25" fill={BLUE} opacity="0.22" />
+        {/* the fracture, drawn once on arrival */}
+        <path
+          d="M68 40 L61 52 L71 58 L62 72 L69 78 L64 88"
+          fill="none"
+          stroke={DANGER}
+          strokeWidth="3"
+          strokeLinecap="round"
+          strokeLinejoin="round"
+          className="ill-draw"
+          pathLength={1}
+        />
+      </g>
+      {/* the badge: what happened, and nothing else */}
+      <g className="ill-pop" style={{ transformOrigin: "99px 92px" }}>
+        <path d="M99 79 l14 24 h-28 Z" fill={PAPER} stroke={DANGER} strokeWidth="3" strokeLinejoin="round" />
+        <path d="M99 88 v6" stroke={DANGER} strokeWidth="2.8" strokeLinecap="round" />
+        <circle cx="99" cy="98.4" r="1.8" fill={DANGER} />
+      </g>
+    </svg>
+  );
+}
+
+// LoadingArt: two arcs orbiting a card whose lines are still filling in. It is
+// the one illustration in the kit that must never look like a RESULT, so it
+// carries no badge, no check and no colour that means anything - only motion
+// that continues for as long as the wait does.
+//
+// Indeterminate by construction: nothing here fills, advances or completes, so
+// it cannot imply a position the caller does not have. A page that knows its
+// denominator should show a progress bar instead.
+export function LoadingArt({ size = 132 }: { size?: number }) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 132 132" role="img" aria-label="Loading" className="ill">
+      {/* the outer track, and the arc travelling it */}
+      <circle cx="66" cy="62" r="41" fill="none" stroke={BLUE} strokeWidth="2" opacity="0.12" />
+      <g className="ill-orbit" style={{ transformOrigin: "66px 62px" }}>
+        <circle
+          cx="66"
+          cy="62"
+          r="41"
+          fill="none"
+          stroke={BLUE}
+          strokeWidth="3.5"
+          strokeLinecap="round"
+          strokeDasharray="64 194"
+        />
+      </g>
+      <g className="ill-orbit-counter" style={{ transformOrigin: "66px 62px" }}>
+        <circle
+          cx="66"
+          cy="62"
+          r="31"
+          fill="none"
+          stroke={BLUE}
+          strokeWidth="2.5"
+          strokeLinecap="round"
+          strokeDasharray="30 165"
+          opacity="0.42"
+        />
+      </g>
+      {/* the page being assembled inside them */}
+      <g className="ill-floaty" style={{ transformOrigin: "66px 62px" }}>
+        <rect x="45" y="43" width="42" height="38" rx="8" fill={PAPER} stroke={BLUE} strokeWidth="2.5" />
+        <rect x="45" y="43" width="42" height="38" rx="8" fill={BLUE} opacity="0.05" />
+        {[53, 61.5, 70].map((y, i) => (
+          <rect
+            key={y}
+            x="53"
+            y={y}
+            width={i === 1 ? 17 : 26}
+            height="4.5"
+            rx="2.25"
+            fill={BLUE}
+            className="ill-pulse"
+            style={{ animationDelay: `${i * 0.18}s` }}
+          />
+        ))}
       </g>
     </svg>
   );

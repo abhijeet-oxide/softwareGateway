@@ -7,6 +7,7 @@ import { ConfigProvider } from 'antd'
 import { App } from './App'
 import { IdentityProvider } from './auth/permissions'
 import { BootGate } from './BootGate'
+import { AppErrorBoundary } from './routing'
 import { ThemeProvider } from './uikit'
 import './uikit/styles.css'
 import './index.css'
@@ -41,16 +42,25 @@ createRoot(document.getElementById('root')!).render(
   <StrictMode>
     <ConfigProvider locale={enGB}>
       <ThemeProvider>
-        <QueryClientProvider client={queryClient}>
-          <IdentityProvider>
-            <BrowserRouter>
-              {/* Nothing renders until we know the Coordinator is there. */}
-              <BootGate>
-                <App />
-              </BootGate>
-            </BrowserRouter>
-          </IdentityProvider>
-        </QueryClientProvider>
+        {/*
+          The last boundary. Inside the theme so the page it draws is themed,
+          and outside everything else so a throw anywhere - a provider, the
+          shell, the router itself - lands on the shared kit's error page
+          rather than on a white document with an exception in a console
+          nobody has open.
+        */}
+        <AppErrorBoundary>
+          <QueryClientProvider client={queryClient}>
+            <IdentityProvider>
+              <BrowserRouter>
+                {/* Nothing renders until we know the Coordinator is there. */}
+                <BootGate>
+                  <App />
+                </BootGate>
+              </BrowserRouter>
+            </IdentityProvider>
+          </QueryClientProvider>
+        </AppErrorBoundary>
       </ThemeProvider>
     </ConfigProvider>
   </StrictMode>,

@@ -51,7 +51,8 @@ npm run typecheck
 | `src/uikit/` | **The shared design system.** Byte-identical to the copy in every other tool on the platform. Palette, tokens, `ThemeProvider`, primitives, and the chrome. See `src/uikit/README.md`. |
 | `src/tablekit/` | **The shared data table.** Also byte-identical, also copied rather than installed: resizable, reorderable, pinnable columns with a layout each person keeps. See `src/tablekit/README.md`. |
 | `src/brand.ts` | The one file that says "Software Gateway": name, tagline, mark, favicon. |
-| `src/BootGate.tsx` | The probe every page renders behind: is the Coordinator there? Both of its screens are the shared kit's. |
+| `src/BootGate.tsx` | The probe every page renders behind: is the Coordinator there? All three of its screens - the splash, maintenance, unreachable - are the shared kit's. |
+| `src/routing.tsx` | How a page gets onto the screen, and the two boundaries around it. Its loading, error and not-found screens are the shared kit's `LoadingPage`, `ErrorPage` and `NotFoundPage`. |
 
 ### Two things that are chosen once, not per call site
 

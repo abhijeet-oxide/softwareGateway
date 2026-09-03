@@ -1,6 +1,6 @@
 import { Component, lazy, useEffect, type ComponentType, type ReactNode } from 'react'
-import { Button, Typography } from 'antd'
-import { LoadingStage } from './uikit'
+import brand from './brand'
+import { ErrorPage, LoadingPage } from './uikit'
 
 /**
  * How a page gets onto the screen.
@@ -146,14 +146,20 @@ export function usePreloadRoutes(routes: RouteModule<never>[]) {
 /**
  * What is shown while a page's code is on its way.
  *
- * Named work rather than a bare spinner, because the two possible waits are
- * very different lengths and the reader should be able to tell that something
- * is happening at all. See the file comment: without a keyed boundary around
- * this, it is never shown - the router's transition keeps the PREVIOUS page up
- * instead, which is the bug.
+ * The shared kit's loading page: named work rather than a bare spinner,
+ * because the two possible waits are very different lengths and the reader
+ * should be able to tell that something is happening at all. It is
+ * indeterminate on purpose - a chunk in flight has no denominator, and a bar
+ * that filled would be stating a position nobody has.
+ *
+ * It renders inside the shell, so the navigation stays on screen and a reader
+ * who has changed their mind can go somewhere else rather than waiting for a
+ * page they no longer want. See the file comment: without a keyed boundary
+ * around this it is never shown at all - the router's transition keeps the
+ * PREVIOUS page up instead, which is the bug this file exists for.
  */
 export function PageLoading() {
-  return <LoadingStage stage="Loading this page…" />
+  return <LoadingPage label="Loading this page" />
 }
 
 /**
@@ -163,6 +169,12 @@ export function PageLoading() {
  * existence - the module never evaluated - so the offer is a reload, which is
  * the thing that actually works. Without this the failure surfaces as a blank
  * area and an exception in a console nobody has open.
+ *
+ * It is the shared kit's error page rather than a paragraph written here, so
+ * the worst screen in the application is the one screen nobody improvised. The
+ * message is carried through into its details rather than dropped: the reader
+ * is usually the person who would have fixed it from the message alone, and a
+ * failure quoted into a ticket without one costs a round trip to recover.
  */
 export class RouteErrorBoundary extends Component<
   { children: ReactNode; resetKey: string },
@@ -185,22 +197,57 @@ export class RouteErrorBoundary extends Component<
   render() {
     if (!this.state.error) return this.props.children
     return (
-      <div style={{ padding: 24, maxWidth: 560 }}>
-        <Typography.Title level={4} style={{ marginTop: 0 }}>
-          This page could not be loaded
-        </Typography.Title>
-        <Typography.Paragraph type="secondary">
-          Its code did not arrive. That is almost always the connection to this
-          Coordinator, or a new version having been deployed while this tab was
-          open - reloading picks up the current one.
-        </Typography.Paragraph>
-        <Typography.Paragraph type="secondary" style={{ fontSize: 12 }}>
-          {this.state.error.message}
-        </Typography.Paragraph>
-        <Button type="primary" onClick={() => window.location.reload()}>
-          Reload
-        </Button>
-      </div>
+      <ErrorPage
+        title="This page could not be loaded"
+        detail={this.state.error.message}
+        actions={[{ label: 'Reload', primary: true, onClick: () => window.location.reload() }]}
+      >
+        Its code did not arrive. That is almost always the connection to this
+        Coordinator, or a new version having been deployed while this tab was
+        open - reloading picks up the current one.
+      </ErrorPage>
+    )
+  }
+}
+
+/**
+ * The last boundary, outside the shell.
+ *
+ * `RouteErrorBoundary` covers the page; this covers everything the page sits
+ * in - the navigation, the bar, the providers. A throw up there is rare and
+ * unrecoverable, and without a boundary it renders as a white document with an
+ * exception in a console nobody has open, which is indistinguishable from a
+ * server that stopped answering.
+ *
+ * It takes the viewport and names the product itself, because at this point
+ * there is no chrome left to say which application the reader is looking at.
+ * Nothing here can navigate: the router may be the thing that failed, so the
+ * two offers are a reload and the root address, both of which work without it.
+ */
+export class AppErrorBoundary extends Component<{ children: ReactNode }, { error: Error | undefined }> {
+  state: { error: Error | undefined } = { error: undefined }
+
+  static getDerivedStateFromError(error: Error) {
+    return { error }
+  }
+
+  render() {
+    if (!this.state.error) return this.props.children
+    return (
+      <ErrorPage
+        full
+        brand={brand}
+        title="This application stopped"
+        detail={this.state.error.message}
+        actions={[
+          { label: 'Reload', primary: true, onClick: () => window.location.reload() },
+          { label: 'Go to Overview', href: '/' },
+        ]}
+      >
+        An error reached the top of the interface, so nothing further can be
+        drawn. No download was cancelled and no configuration was changed by
+        this - reloading restores the session.
+      </ErrorPage>
     )
   }
 }

@@ -46,7 +46,7 @@ things, and both live OUTSIDE this folder:
 | `ThemeProvider.tsx` | what an app mounts. Light/dark/system, density, font scale, and the `<html>` attributes plain CSS reads. |
 | `color.ts` | how a component reads a colour: `c.brand`, `withAlpha`, `severity`, `envHex`. Every one of them a `var()`, never a hex. |
 | `prefs.ts` | the appearance preference model, for an app that has none of its own. |
-| `primitives/` | the components: card, page header, stat tile, status pill, severity tag, notice, empty state, stepper, toolbar, keycap, motion. |
+| `primitives/` | the components: card, page header, stat tile, status pill, severity tag, notice, empty state, stepper, toolbar, keycap, motion - and `StatePages.tsx`, the four pages a tool shows instead of itself. |
 | `vitePluginBrand.ts` | inlines the colour variables, the favicon and the title into `index.html` at build time. |
 
 ## What the system is built to look like
@@ -116,6 +116,46 @@ anything. Every tool has them: it is checking whether its service is there, the
 service did not answer, nobody is signed in. They are the first thing anybody
 sees of a product and the thing they see on its worst day - exactly the wrong
 place for each tool to improvise a layout.
+
+`StatePages` is the same argument again, for the four moments a tool shows
+instead of itself: **planned work**, a **wrong address**, a **failure nobody
+planned for**, and the **wait** before a screen can be drawn. Every tool has all
+four, and they are the four most likely to be improvised one at a time - a
+component library `Result` here, a bare spinner there, a stack trace on the
+third - which is precisely how two products that share a palette stop looking
+like one product.
+
+They are ONE component with four faces (`MaintenancePage`, `NotFoundPage`,
+`ErrorPage`, `LoadingPage`, over the exported `StatePage`). What differs between
+them is the drawing, the label above the title and the sentence; the frame, the
+spacing, the order of the parts and the way the actions sit are identical,
+because a person who meets two of them in one session should not be able to tell
+they were written separately.
+
+Three rules inside them are worth knowing:
+
+- **`full` decides the frame, and it is not cosmetic.** Without it the page
+  fills the content area it was given and the application's chrome stays on
+  screen around it - which is right for a mistyped address or a page whose code
+  did not arrive, where the navigation is still correct and still works. With it
+  the page takes the viewport and states the identity itself, for the moments
+  when there is no chrome left to sit in: before the app has booted, or when the
+  whole of it has fallen over. Taking the navigation away for a typo would be
+  the application treating a wrong address as an outage.
+
+- **The failure is shown, folded rather than dropped.** These pages get quoted
+  into tickets, and the person reading one is usually the person who would have
+  fixed it from the message alone. `ErrorPage` takes `detail` and `requestId`
+  and puts them behind a disclosure; a screen that says only that something went
+  wrong turns one report into three.
+
+- **`LoadingPage` may not look like a result, and may not fake progress.** It
+  carries no badge, no check and no colour that means anything, and nothing on
+  it fills or advances - a page whose code is in flight has no denominator, and
+  a bar that filled would state a position nobody has. It is also the one
+  illustration that may not simply stop under `prefers-reduced-motion`: with
+  every animation removed it becomes a picture of a card, indistinguishable from
+  a page that has finished, so it keeps a slow non-directional breath instead.
 
 One rule inside them is worth knowing because it was a real bug: **a lockup
 aligns to itself, never to whatever it was dropped into.** The name and the

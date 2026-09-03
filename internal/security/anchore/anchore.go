@@ -111,29 +111,21 @@ const (
 	// its estate and this is somebody else's capacity.
 	DefaultConcurrency = 12
 
-	// DefaultAnalysisWait is how long one sync will wait for images it had to
-	// submit.
+	// NOTHING HERE WAITS FOR ANALYSIS, and there is deliberately no knob for
+	// how long it would.
 	//
-	// # Why waiting at all, and why not longer
+	// There was one - a sync submitted every image and then waited up to ten
+	// minutes for Anchore to finish. The number was defensible (a typical
+	// container image analyses in one to three minutes, in parallel) and the
+	// design was not: Anchore analyses on its own schedule and nobody can
+	// promise a bound on it, so a sync that waited had its duration set by
+	// somebody else's queue, held a claim on the release throughout, and
+	// reported the release as unscanned every time the wait ran out.
 	//
-	// A first sync submits every image and finds nothing analysed. Returning
-	// immediately would report a whole release as unscanned and leave the user
-	// with a Sync button and no way to know that pressing it again in five
-	// minutes is exactly the right thing to do. So the sync waits - and says
-	// what it is waiting for.
-	//
-	// Ten minutes because Anchore analyses a typical container image in one to
-	// three, and a release's images are analysed in parallel by its own
-	// workers. Past that the sync records what it has, labels the rest as
-	// still being analysed, and stops: holding a claim for an hour to wait out
-	// an Anchore backlog would block every later sync of the release and give
-	// the reader nothing they cannot get by pressing Sync again.
-	DefaultAnalysisWait = 10 * time.Minute
-
-	// DefaultPollInterval is how often a waiting sync re-asks. Anchore's image
-	// record is a cheap read; the interval is about not making a hundred and
-	// fifty of them a second, not about the cost of one.
-	DefaultPollInterval = 15 * time.Second
+	// Registering a release and reading its results are now separate acts.
+	// Register returns as soon as Anchore has been told; a sync reads whatever
+	// has finished. Neither blocks on the other, and a knob for how long to
+	// wait would be a knob for how long to be wrong.
 
 	// The retry budget, kept well inside one request timeout so a failing
 	// Anchore surfaces as Anchore's own error rather than as our deadline.

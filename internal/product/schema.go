@@ -86,6 +86,15 @@ type Spec struct {
 	Notifications Notifications       `json:"notifications,omitempty"`
 	Network       Network             `json:"network,omitempty"`
 	Retention     map[string]Duration `json:"retention,omitempty"`
+	// Anchore overrides WHICH Anchore this product's releases go to, and with
+	// what credential. Absent - the common case - uses the deployment's.
+	//
+	// Deliberately separate from `anchoreEnabled` on a repository, which says
+	// WHICH IMAGES Anchore should analyse. Two different questions: one is
+	// about the product's scanning topology, the other about a repository's
+	// contents, and a product with two targets may want the second answered
+	// differently for each.
+	Anchore *Anchore `json:"anchore,omitempty"`
 }
 
 // Source is a vendor-side registry location, read-only, polled by discovery.

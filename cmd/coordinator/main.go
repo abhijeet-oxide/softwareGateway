@@ -305,9 +305,11 @@ func run() error {
 	// evictable, and the sweep removes the least recently read ones only while
 	// the store is over its budget. A budget of zero - the default - means it
 	// never is. See internal/maintenance/security.go.
+	securityRegistrations := store.NewSecurityRegistrations(st)
 	securitySweeper := maintenance.NewSecurityCacheSweeper(
 		securityCache, packageSecurity, cfg.Coordinator.Security.SweepInterval,
-		store.CacheBudget{Bytes: cfg.Coordinator.Security.CacheBudgetBytes}, logger)
+		store.CacheBudget{Bytes: cfg.Coordinator.Security.CacheBudgetBytes}, logger).
+		WithRegistrations(securityRegistrations)
 
 	// Compliance: does a release follow the organization's own Kubernetes and
 	// CNF standards. Built here for the same reason security is - a run reaches
@@ -670,8 +672,6 @@ func anchoreTuning(
 		Account:        cfg.Account,
 		Concurrency:    cfg.Concurrency,
 		RequestTimeout: cfg.RequestTimeout,
-		AnalysisWait:   cfg.AnalysisWait,
-		PollInterval:   cfg.PollInterval,
 		Submit:         cfg.SubmitImages(),
 		Grouping:       cfg.Grouping(),
 		SBOMFormat:     cfg.SBOMFormat,

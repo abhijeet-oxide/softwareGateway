@@ -69,8 +69,6 @@ type AnchoreTuning struct {
 
 	Concurrency    int
 	RequestTimeout time.Duration
-	AnalysisWait   time.Duration
-	PollInterval   time.Duration
 
 	Submit     bool
 	Grouping   bool
@@ -132,11 +130,16 @@ func (r *SecurityResolver) ProvidersFor(
 	if endpoint.regType.IsJFrog() && endpoint.xrayEnabled {
 		out = append(out, providerXray)
 	}
-	// The deployment's own switch comes first. A product asking for a scanner
-	// this Coordinator has no address for must not produce a provider that
-	// fails every request; it produces no provider, and the interface says the
-	// deployment has no Anchore.
-	if endpoint.anchoreEnabled && r.tuning.Anchore.Available() {
+	// An Anchore this deployment can actually reach comes first. A product
+	// asking for a scanner nothing has an address for must not produce a
+	// provider that fails every request; it produces no provider, and the
+	// interface says so.
+	//
+	// The PRODUCT's override counts here as well as the deployment's default -
+	// a product that names its own Anchore has one even where the deployment
+	// does not, and reading only the deployment's endpoint would hide the
+	// scanner from exactly the product that configured it most deliberately.
+	if endpoint.anchoreEnabled && r.anchoreAvailableFor(p) {
 		out = append(out, anchore.ProviderName)
 	}
 	return out, nil
@@ -145,6 +148,17 @@ func (r *SecurityResolver) ProvidersFor(
 // providerXray is the Xray provider's stable name, mirrored here so this file
 // can name it without importing the plugin's unexported constant.
 const providerXray = "jfrog-xray"
+
+// anchoreAvailableFor reports whether an Anchore address exists for a product,
+// from either level.
+//
+// Deliberately does NOT resolve the credential. This answers "is Anchore
+// offered here", which a listing asks about twenty releases and which must not
+// read twenty secrets off disk; a credential that cannot be read fails the
+// build with a sentence naming the secret, which is where that belongs.
+func (r *SecurityResolver) anchoreAvailableFor(p *product.Product) bool {
+	return strings.TrimSpace(p.AnchoreEndpoint(r.tuning.Anchore.Endpoint)) != ""
+}
 
 // Invalidate drops cached providers, for a configuration reload.
 //
@@ -246,16 +260,27 @@ func (r *SecurityResolver) buildAnchore(
 			Reason:       fmt.Sprintf("Anchore is not enabled for repository %q.", repository),
 		}, nil
 	}
-	tuning := r.tuning.Anchore
+	// THE DEPLOYMENT'S ANCHORE, THEN THE PRODUCT'S OVERRIDE.
+	//
+	// Two levels, resolved the way every other layered setting in this schema
+	// resolves: the deployment states the default once, and a product that
+	// needs a different Anchore - a customer's own, a staging one - or the same
+	// Anchore under a different account states only what differs. See
+	// product.Anchore for why that is worth having.
+	tuning, err := r.anchoreFor(p)
+	if err != nil {
+		return nil, err
+	}
 	if !tuning.Available() {
-		// The product asked for a scanner this deployment has no address for.
-		// A disabled provider with a sentence naming the knob, rather than a
-		// live one that fails every request against an empty URL.
+		// The product asked for a scanner nothing has an address for. A
+		// disabled provider with a sentence naming the knob, rather than a live
+		// one that fails every request against an empty URL.
 		return security.Disabled{
 			ProviderName: anchore.ProviderName,
 			Reason: fmt.Sprintf(
-				"Repository %q asks for Anchore, and this Coordinator has none configured. "+
-					"Set coordinator.security.anchore.endpoint.", repository),
+				"Repository %q asks for Anchore, and no Anchore is configured. "+
+					"Set coordinator.security.anchore.endpoint, or spec.anchore on this product.",
+				repository),
 		}, nil
 	}
 
@@ -265,9 +290,9 @@ func (r *SecurityResolver) buildAnchore(
 	// a vendor's proxy, a vendor's CA - and Anchore is neither. The product's
 	// block is the estate's own network settings, which is what reaching an
 	// internal service uses.
-	network, err := product.ResolveNetwork(p, nil, r.clients.secrets)
-	if err != nil {
-		return nil, fmt.Errorf("anchore: resolve network for product %q: %w", p.Metadata.Name, err)
+	network, netErr := product.ResolveNetwork(p, nil, r.clients.secrets)
+	if netErr != nil {
+		return nil, fmt.Errorf("anchore: resolve network for product %q: %w", p.Metadata.Name, netErr)
 	}
 
 	cfg := anchore.Config{
@@ -287,17 +312,65 @@ func (r *SecurityResolver) buildAnchore(
 		Logger:                r.clients.log,
 	}
 	settings := anchore.Settings{
-		Enabled:      true,
-		Registry:     endpoint.registry,
-		Repository:   endpoint.repository,
-		Concurrency:  tuning.Concurrency,
-		AnalysisWait: tuning.AnalysisWait,
-		PollInterval: tuning.PollInterval,
-		Submit:       tuning.Submit,
-		Grouping:     tuning.Grouping,
-		SBOMFormat:   tuning.SBOMFormat,
+		Enabled:     true,
+		Registry:    endpoint.registry,
+		Repository:  endpoint.repository,
+		Concurrency: tuning.Concurrency,
+		Submit:      tuning.Submit,
+		Grouping:    tuning.Grouping,
+		SBOMFormat:  tuning.SBOMFormat,
 	}
 	return anchore.New(cfg, settings)
+}
+
+// anchoreFor resolves which Anchore a product's releases go to, and with what
+// credential.
+//
+// # The merge, and the one thing it refuses
+//
+// Each field falls back to the deployment's independently, so a product that
+// wants a different ACCOUNT on the same Anchore writes one line and inherits
+// the endpoint and the credential. That is the common override and it should
+// cost one line.
+//
+// The credential is the exception: a product naming its own ENDPOINT must name
+// its own credential, and validation refuses the document otherwise (see
+// validateAnchore). Falling back there would send this deployment's Anchore
+// credential to whatever host a product document named - a credential leak
+// written in four lines of YAML. This re-checks it at build time as well,
+// because a Coordinator can be handed a document that was written before that
+// validation existed, and the cost of being wrong is not a failed sync.
+func (r *SecurityResolver) anchoreFor(p *product.Product) (AnchoreTuning, error) {
+	tuning := r.tuning.Anchore
+
+	override := p.Spec.Anchore
+	if override == nil {
+		return tuning, nil
+	}
+
+	endpoint := p.AnchoreEndpoint(tuning.Endpoint)
+	changedHost := endpoint != tuning.Endpoint
+
+	creds, hasOwn := p.AnchoreCredentials()
+	switch {
+	case hasOwn:
+		resolved, err := r.clients.secrets.Credentials(creds)
+		if err != nil {
+			return AnchoreTuning{}, fmt.Errorf(
+				"product %q spec.anchore.credentialsRef: %w", p.Metadata.Name, err)
+		}
+		tuning.Username = resolved.Username
+		tuning.Password = resolved.Password.Reveal()
+	case changedHost:
+		return AnchoreTuning{}, fmt.Errorf(
+			"product %q names its own Anchore at %s and no credentialsRef for it; "+
+				"refusing to send this deployment's Anchore credential to a different host",
+			p.Metadata.Name, endpoint)
+	}
+
+	tuning.Endpoint = endpoint
+	tuning.Account = p.AnchoreAccount(tuning.Account)
+	return tuning, nil
 }
 
 // anchoreUserAgent identifies this platform to Anchore, so an operator reading

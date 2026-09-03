@@ -35,6 +35,12 @@ type Registrations interface {
 	// Fail records a registration that could not run at all, keeping whatever
 	// the last good one knew.
 	Fail(ctx context.Context, packageID int64, provider, reason string, log []SyncLogEntry) error
+	// Beat renews a running replication's claim and stores where it has got to,
+	// answering false once the row is no longer claimed - which is how a run
+	// finds out it was stopped from another Coordinator.
+	Beat(ctx context.Context, packageID int64, provider string, snapshot ProgressSnapshot) (bool, error)
+	// Stop releases a running replication's claim from anywhere.
+	Stop(ctx context.Context, packageID int64, provider string) (bool, error)
 }
 
 // ReplicateRequest is one release's registration with one scanner.
@@ -53,6 +59,10 @@ type ReplicateRequest struct {
 type ReplicateResult struct {
 	Registration Registration
 	Log          []SyncLogEntry
+	// Err is why the run stopped, where it did. Carried on the result rather
+	// than returned beside it because a background run has nobody to return to,
+	// and the transcript has to be able to say what ended it either way.
+	Err error
 }
 
 // ErrNotRegistrable means the scanner does not need telling about artifacts.
@@ -72,32 +82,204 @@ var ErrNotRegistrable = errors.New("security: this scanner does not need artifac
 // a claim is never left held by a request that has ended - which would leave
 // the release refusing the button until the sweep noticed.
 func (s *Service) Replicate(ctx context.Context, req ReplicateRequest) (ReplicateResult, error) {
-	if s.registrations == nil {
-		return ReplicateResult{}, fmt.Errorf(
-			"security: no registration storage is configured on this Coordinator")
-	}
-
-	provider, err := s.provider(ctx, req.Scope)
+	registrar, err := s.registrarFor(ctx, req.Scope)
 	if err != nil {
 		return ReplicateResult{}, err
 	}
+	if err := s.registrations.Claim(ctx, req.PackageID, registrar.Name()); err != nil {
+		return ReplicateResult{}, err
+	}
+	progress := s.openProgress(req, registrar.Name())
+	defer s.closeProgress(req.PackageID, registrar.Name())
+	return s.replicate(ctx, req, registrar, progress), nil
+}
+
+// StartReplicate claims a release and registers it in the BACKGROUND.
+//
+// # Why this is a job now, when it used to be a request
+//
+// Not because it got slower. Because its position was invisible. Running on the
+// request meant the only thing that knew where a replication had got to was the
+// request handling it, so a reader who pressed the button and reloaded the page
+// - or navigated away and came back, or restarted the Coordinator - was shown
+// the word "registering" and nothing else. That is indistinguishable from a
+// hang, and it is the state somebody is in for the whole of a slow run.
+//
+// As a job it has the shape every other long operation here has: a claim, a
+// heartbeat that also writes the position down, a progress reader and a stop.
+// The panel is then drawn from the DATABASE rather than from the memory of
+// whichever replica took the click, which is what makes it survive all four.
+//
+// Returns as soon as the claim is decided, never when the work is done.
+func (s *Service) StartReplicate(ctx context.Context, req ReplicateRequest) error {
+	registrar, err := s.registrarFor(ctx, req.Scope)
+	if err != nil {
+		return err
+	}
+	provider := registrar.Name()
+	if err := s.registrations.Claim(ctx, req.PackageID, provider); err != nil {
+		return err
+	}
+
+	progress := s.openProgress(req, provider)
+
+	// Detached from the request's context, and bounded. A user who navigates
+	// away must not cancel a replication half way through - that is the whole
+	// point of making it a job - and an unbounded goroutine against an
+	// unresponsive Anchore is one that never ends holding a claim nobody can
+	// see.
+	runCtx, cancel := context.WithTimeout(
+		context.WithoutCancel(context.Background()), maxReplicationRun)
+
+	s.replicating.Store(replicationKey(req.PackageID, provider), &runningReplication{
+		progress: progress, cancel: cancel,
+	})
+
+	go func() {
+		defer cancel()
+		defer s.closeProgress(req.PackageID, provider)
+		go s.beatReplication(runCtx, cancel, req.PackageID, provider, progress)
+		s.replicate(runCtx, req, registrar, progress)
+	}()
+	return nil
+}
+
+// ReplicationProgress is the live position of a replication this replica is
+// running, if it is the one running it.
+//
+// A miss is an ordinary answer - the work may be on another replica, or may
+// have finished - and the caller falls back to the position stored on the row,
+// which is durable. That fallback is the whole reason the heartbeat writes it.
+func (s *Service) ReplicationProgress(packageID int64, provider string) (ProgressSnapshot, bool) {
+	v, ok := s.replicating.Load(replicationKey(packageID, provider))
+	if !ok {
+		return ProgressSnapshot{}, false
+	}
+	return v.(*runningReplication).progress.SnapshotFull(), true
+}
+
+// CancelReplication stops a running replication, wherever it is running.
+//
+// Two halves, exactly as the sync has: the claim lives in the database, so
+// releasing it stops a run on any replica at its next beat, and cancelling the
+// local context makes it immediate for the common case where the reader is
+// talking to the Coordinator doing the work.
+func (s *Service) CancelReplication(
+	ctx context.Context, packageID int64, provider string,
+) (bool, error) {
+	if s.registrations == nil {
+		return false, nil
+	}
+	stopped, err := s.registrations.Stop(ctx, packageID, provider)
+	if err != nil {
+		return false, err
+	}
+	if v, ok := s.replicating.Load(replicationKey(packageID, provider)); ok {
+		run := v.(*runningReplication)
+		run.progress.Log(LogWarning, "The replication was stopped before it finished.")
+		run.cancel()
+		return true, nil
+	}
+	return stopped, nil
+}
+
+// maxReplicationRun bounds one background replication.
+//
+// Generous against the slowest plausible Anchore for a large release, and far
+// short of forever: a run that hits it ends, records what it managed and
+// releases the claim, rather than becoming a goroutine nobody can see.
+const maxReplicationRun = 30 * time.Minute
+
+// replicationBeat is how often a running replication renews its claim and
+// writes its position down. Fast enough that a watcher sees the panel move,
+// slow enough that a release of a hundred and fifty images is a couple of dozen
+// small updates rather than one per image.
+const replicationBeat = 3 * time.Second
+
+// runningReplication is one replication this replica is running: what it will
+// say about itself, and the handle that stops it.
+type runningReplication struct {
+	progress *SyncProgress
+	cancel   context.CancelFunc
+}
+
+func replicationKey(packageID int64, provider string) string {
+	return fmt.Sprintf("%d/%s", packageID, provider)
+}
+
+func (s *Service) openProgress(req ReplicateRequest, provider string) *SyncProgress {
+	progress := NewProgress()
+	progress.Log(LogInfo, fmt.Sprintf(
+		"Replicating %s to %s: %d artifacts to consider.",
+		labelOr(req.Release.Label, "this release"), ProviderLabel(provider),
+		len(req.Artifacts)))
+	return progress
+}
+
+func (s *Service) closeProgress(packageID int64, provider string) {
+	s.replicating.Delete(replicationKey(packageID, provider))
+}
+
+// registrarFor resolves the scanner and refuses early where it cannot register.
+func (s *Service) registrarFor(ctx context.Context, scope Scope) (Registrar, error) {
+	if s.registrations == nil {
+		return nil, fmt.Errorf(
+			"security: no registration storage is configured on this Coordinator")
+	}
+	provider, err := s.provider(ctx, scope)
+	if err != nil {
+		return nil, err
+	}
 	if !provider.Enabled() {
-		return ReplicateResult{}, fmt.Errorf("%s is not enabled for this release", ProviderLabel(req.Scope.Provider))
+		return nil, fmt.Errorf("%s is not enabled for this release", ProviderLabel(scope.Provider))
 	}
 	registrar, ok := provider.(Registrar)
 	if !ok {
-		return ReplicateResult{}, ErrNotRegistrable
+		return nil, ErrNotRegistrable
 	}
+	return registrar, nil
+}
 
-	if err := s.registrations.Claim(ctx, req.PackageID, provider.Name()); err != nil {
-		return ReplicateResult{}, err
+// beatReplication renews the claim and writes the position down until the run
+// ends, and stops the run if the claim has gone.
+func (s *Service) beatReplication(
+	ctx context.Context, cancel context.CancelFunc,
+	packageID int64, provider string, progress *SyncProgress,
+) {
+	ticker := time.NewTicker(replicationBeat)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			held, err := s.registrations.Beat(ctx, packageID, provider, progress.SnapshotFull())
+			if err != nil {
+				// A database that cannot be reached is not a claim that was
+				// taken away. Losing a beat is what the stale window has slack
+				// for, and abandoning a run of a hundred and fifty images over
+				// one failed UPDATE is the worse trade.
+				s.log.Warn("could not renew the security replication claim",
+					"package", packageID, "provider", provider, "error", err)
+				continue
+			}
+			if !held {
+				s.log.Info("security replication claim released elsewhere; stopping",
+					"package", packageID, "provider", provider)
+				cancel()
+				return
+			}
+		}
 	}
+}
 
-	progress := &SyncProgress{stages: map[string]stagePosition{}, startedAt: time.Now()}
-	progress.Log(LogInfo, fmt.Sprintf(
-		"Replicating %s to %s: %d artifacts to consider.",
-		labelOr(req.Release.Label, "this release"), ProviderLabel(provider.Name()),
-		len(req.Artifacts)))
+// replicate does the work and records the outcome. Shared by the synchronous
+// and background entry points so the two cannot record different things.
+func (s *Service) replicate(
+	ctx context.Context, req ReplicateRequest, registrar Registrar, progress *SyncProgress,
+) ReplicateResult {
+	provider := registrar.Name()
 
 	reg, err := registrar.Register(ctx, dedupeRefs(req.Artifacts), RegisterOptions{
 		Release:  req.Release,
@@ -112,11 +294,11 @@ func (s *Service) Replicate(ctx context.Context, req ReplicateRequest) (Replicat
 		writeCtx, done := writeContext(ctx)
 		defer done()
 		if failErr := s.registrations.Fail(
-			writeCtx, req.PackageID, provider.Name(), reason, progress.Entries()); failErr != nil {
+			writeCtx, req.PackageID, provider, reason, progress.Entries()); failErr != nil {
 			s.log.Error("could not record a failed security replication",
-				"package", req.PackageID, "provider", provider.Name(), "error", failErr)
+				"package", req.PackageID, "provider", provider, "error", failErr)
 		}
-		return ReplicateResult{Log: progress.Entries()}, err
+		return ReplicateResult{Log: progress.Entries(), Err: err}
 	}
 
 	progress.Log(closingLevel(reg), closingLine(reg))
@@ -130,16 +312,16 @@ func (s *Service) Replicate(ctx context.Context, req ReplicateRequest) (Replicat
 		// find every one of them already known - so the result is returned and
 		// the storage failure is logged.
 		s.log.Error("could not record a security replication",
-			"package", req.PackageID, "provider", provider.Name(), "error", err)
+			"package", req.PackageID, "provider", provider, "error", err)
 	}
 
 	s.log.Info("security replication complete",
-		"package", req.PackageID, "provider", provider.Name(),
+		"package", req.PackageID, "provider", provider,
 		"expected", reg.Expected, "submitted", reg.Submitted,
 		"alreadyKnown", reg.AlreadyKnown, "associated", reg.Associated,
 		"state", reg.State)
 
-	return ReplicateResult{Registration: reg, Log: progress.Entries()}, nil
+	return ReplicateResult{Registration: reg, Log: progress.Entries()}
 }
 
 // closingLevel is how loudly the transcript ends.

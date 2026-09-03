@@ -3,6 +3,7 @@ package store
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"fmt"
 	"strings"
 	"time"
@@ -52,6 +53,13 @@ type RegistrationRow struct {
 
 	StartedAt    *time.Time
 	RegisteredAt *time.Time
+	// HeartbeatAt is the last time the process running this replication said it
+	// was alive. A run beats every few seconds; a `registering` row that has
+	// stopped beating was claimed by a process that is no longer here.
+	HeartbeatAt *time.Time
+	// Progress is the run's live position, stored so a reader who reloads the
+	// page sees where it has got to rather than the word "registering".
+	Progress *security.ProgressSnapshot
 
 	Log []security.SyncLogEntry
 }
@@ -68,16 +76,15 @@ func (r RegistrationRow) Outstanding() int {
 	return n
 }
 
-// StaleRegistrationAfter is how long a `registering` row is honoured before it
-// is treated as abandoned.
+// StaleRegistrationAfter is how long a `registering` row is honoured after its
+// last heartbeat before it is treated as abandoned.
 //
-// Short, because this operation is short: submitting a release's images and
-// creating one application version is seconds against a responsive scanner and
-// a couple of minutes against a slow one. A window sized for a sync - half an
-// hour - would leave a release un-replicable for half an hour after a
-// Coordinator restart, over an operation that would have finished in twenty
-// seconds.
-const StaleRegistrationAfter = 10 * time.Minute
+// Short, because a running replication says it is alive every few seconds. The
+// window only has to outlast a slow database write and a garbage collection
+// pause, not the work itself - which is what it had to do before there was a
+// heartbeat, and why it used to be ten minutes. Ten minutes of a spinner over a
+// Coordinator that died is ten minutes a reader cannot press the button.
+const StaleRegistrationAfter = 2 * time.Minute
 
 // Claim marks a release as being registered, and refuses if somebody holds it.
 //
@@ -93,16 +100,18 @@ func (r *SecurityRegistrations) Claim(ctx context.Context, packageID int64, prov
 	cutoff := securityTime(now.Add(-StaleRegistrationAfter))
 
 	res, err := r.db.ExecContext(ctx, r.q(`
-		INSERT INTO security_registrations (package_id, provider, state, started_at)
-		VALUES (?, ?, 'registering', ?)
+		INSERT INTO security_registrations (package_id, provider, state, started_at, heartbeat_at, progress)
+		VALUES (?, ?, 'registering', ?, ?, NULL)
 		ON CONFLICT (package_id, provider) DO UPDATE SET
 			state = 'registering',
 			started_at = excluded.started_at,
+			heartbeat_at = excluded.heartbeat_at,
+			progress = NULL,
 			error = NULL
 		WHERE security_registrations.state <> 'registering'
 		   OR security_registrations.started_at IS NULL
-		   OR security_registrations.started_at < ?`),
-		packageID, provider, securityTime(now), cutoff)
+		   OR COALESCE(security_registrations.heartbeat_at, security_registrations.started_at) < ?`),
+		packageID, provider, securityTime(now), securityTime(now), cutoff)
 	if err != nil {
 		return fmt.Errorf("claim security registration: %w", err)
 	}
@@ -110,6 +119,54 @@ func (r *SecurityRegistrations) Claim(ctx context.Context, packageID int64, prov
 		return ErrRegistrationInFlight
 	}
 	return nil
+}
+
+// Beat renews a running replication's claim and stores where it has got to.
+//
+// Returns false when the row is no longer claimed as running, which is how a
+// run finds out it was cancelled from another Coordinator - the same contract
+// the sync's heartbeat has, so the two stop for the same reason in the same way.
+func (r *SecurityRegistrations) Beat(
+	ctx context.Context, packageID int64, provider string, snapshot security.ProgressSnapshot,
+) (bool, error) {
+	encoded, err := json.Marshal(snapshot)
+	if err != nil {
+		// A position that will not encode must never cost the run. Beat anyway:
+		// the claim is what keeps the work alive, and the panel degrades to the
+		// state alone rather than the whole replication ending.
+		encoded = nil
+	}
+	res, err := r.db.ExecContext(ctx, r.q(`
+		UPDATE security_registrations
+		   SET heartbeat_at = ?, progress = ?
+		 WHERE package_id = ? AND provider = ? AND state = 'registering'`),
+		securityTime(time.Now().UTC()), string(encoded), packageID, provider)
+	if err != nil {
+		return false, fmt.Errorf("beat security registration: %w", err)
+	}
+	n, _ := res.RowsAffected()
+	return n > 0, nil
+}
+
+// Stop releases a running replication's claim from anywhere.
+//
+// The claim lives in the database, so this works from a Coordinator that is not
+// the one doing the work: the run notices on its next beat and stands down.
+func (r *SecurityRegistrations) Stop(
+	ctx context.Context, packageID int64, provider string,
+) (bool, error) {
+	res, err := r.db.ExecContext(ctx, r.q(`
+		UPDATE security_registrations
+		   SET state = 'failed',
+		       error = 'The replication was stopped before it finished.',
+		       started_at = NULL, heartbeat_at = NULL
+		 WHERE package_id = ? AND provider = ? AND state = 'registering'`),
+		packageID, provider)
+	if err != nil {
+		return false, fmt.Errorf("stop security registration: %w", err)
+	}
+	n, _ := res.RowsAffected()
+	return n > 0, nil
 }
 
 // ErrRegistrationInFlight means somebody else is registering this release.
@@ -133,8 +190,8 @@ func (r *SecurityRegistrations) Record(
 			package_id, provider, state, error,
 			expected, submitted, already_known, associated, analysed,
 			application, application_id, version, version_id, url,
-			started_at, registered_at, log)
-		VALUES (?,?,?,?, ?,?,?,?,?, ?,?,?,?,?, NULL, ?, ?)
+			started_at, registered_at, log, heartbeat_at, progress)
+		VALUES (?,?,?,?, ?,?,?,?,?, ?,?,?,?,?, NULL, ?, ?, NULL, NULL)
 		ON CONFLICT (package_id, provider) DO UPDATE SET
 			state = excluded.state, error = excluded.error,
 			expected = excluded.expected, submitted = excluded.submitted,
@@ -142,7 +199,8 @@ func (r *SecurityRegistrations) Record(
 			analysed = excluded.analysed,
 			application = excluded.application, application_id = excluded.application_id,
 			version = excluded.version, version_id = excluded.version_id, url = excluded.url,
-			started_at = NULL, registered_at = excluded.registered_at, log = excluded.log`),
+			started_at = NULL, registered_at = excluded.registered_at, log = excluded.log,
+			heartbeat_at = NULL, progress = NULL`),
 		packageID, reg.Provider, string(reg.State), message,
 		reg.Expected, reg.Submitted, reg.AlreadyKnown, reg.Associated, reg.Analysed,
 		reg.Application, reg.ApplicationID, reg.Version, reg.VersionID, reg.URL,
@@ -166,7 +224,8 @@ func (r *SecurityRegistrations) Fail(
 		INSERT INTO security_registrations (package_id, provider, state, error, log)
 		VALUES (?,?, 'failed', ?, ?)
 		ON CONFLICT (package_id, provider) DO UPDATE SET
-			state = 'failed', error = excluded.error, started_at = NULL, log = excluded.log`),
+			state = 'failed', error = excluded.error, started_at = NULL, log = excluded.log,
+			heartbeat_at = NULL, progress = NULL`),
 		packageID, provider, truncate(reason, 500), encodeSyncLog(log))
 	if err != nil {
 		return fmt.Errorf("record security registration failure: %w", err)
@@ -232,7 +291,8 @@ func (r *SecurityRegistrations) load(
 		SELECT package_id, provider, state, COALESCE(error, ''),
 		       expected, submitted, already_known, associated, analysed,
 		       application, application_id, version, version_id, url,
-		       started_at, registered_at, COALESCE(log, '')
+		       started_at, registered_at, COALESCE(log, ''),
+		       heartbeat_at, COALESCE(progress, '')
 		  FROM security_registrations ` + where)
 
 	rows, err := r.db.QueryContext(ctx, query, args...)
@@ -244,32 +304,62 @@ func (r *SecurityRegistrations) load(
 	var out []RegistrationRow
 	for rows.Next() {
 		var (
-			row                     RegistrationRow
-			state                   string
-			startedAt, registeredAt sql.NullString
-			log                     string
+			row                                RegistrationRow
+			state                              string
+			startedAt, registeredAt, heartbeat sql.NullString
+			log, progress                      string
 		)
 		if err := rows.Scan(&row.PackageID, &row.Provider, &state, &row.Error,
 			&row.Expected, &row.Submitted, &row.AlreadyKnown, &row.Associated, &row.Analysed,
 			&row.Application, &row.ApplicationID, &row.Version, &row.VersionID, &row.URL,
-			&startedAt, &registeredAt, &log,
+			&startedAt, &registeredAt, &log, &heartbeat, &progress,
 		); err != nil {
 			return nil, fmt.Errorf("scan security registration: %w", err)
 		}
 		row.State = security.RegistrationState(state)
 		row.StartedAt = parseNullableSecurityTime(startedAt)
 		row.RegisteredAt = parseNullableSecurityTime(registeredAt)
+		row.HeartbeatAt = parseNullableSecurityTime(heartbeat)
 		row.Log = decodeSyncLog(log)
+		row.Progress = decodeProgressSnapshot(progress)
 		out = append(out, row)
 	}
 	return out, rows.Err()
 }
 
+// decodeProgressSnapshot reads a stored position, and answers nil for anything
+// it cannot make sense of.
+//
+// A row written by an older Coordinator has no progress at all, and one written
+// mid-upgrade may have a shape this build does not know. Neither is worth
+// failing a page render over: the state and the counts are still true, and the
+// panel simply draws without a position.
+func decodeProgressSnapshot(raw string) *security.ProgressSnapshot {
+	if strings.TrimSpace(raw) == "" {
+		return nil
+	}
+	var out security.ProgressSnapshot
+	if err := json.Unmarshal([]byte(raw), &out); err != nil {
+		return nil
+	}
+	return &out
+}
+
 // Stalled reports a claim whose holder has stopped: a row marked registering
-// with a start time older than anything could plausibly still be running.
+// whose heartbeat has stopped arriving.
+//
+// The HEARTBEAT rather than the start time. A replication of a large release
+// against a slow Anchore legitimately runs for minutes, and judging it by when
+// it started would declare a working run abandoned; judging it by whether it
+// has said anything in the last few seconds does not. A row with no heartbeat
+// at all was written by an older Coordinator, so its start time is the only
+// evidence there is.
 func (r RegistrationRow) Stalled(after time.Duration) bool {
 	if r.State != security.RegistrationRunning {
 		return false
+	}
+	if r.HeartbeatAt != nil {
+		return time.Since(*r.HeartbeatAt) > after
 	}
 	if r.StartedAt == nil {
 		return true
@@ -288,9 +378,10 @@ func (r *SecurityRegistrations) ReleaseAbandoned(ctx context.Context) (int64, er
 		UPDATE security_registrations
 		   SET state = 'failed',
 		       error = 'the replication was interrupted; run it again',
-		       started_at = NULL
+		       started_at = NULL,
+		       heartbeat_at = NULL
 		 WHERE state = 'registering'
-		   AND (started_at IS NULL OR started_at < ?)`), cutoff)
+		   AND (COALESCE(heartbeat_at, started_at) IS NULL OR COALESCE(heartbeat_at, started_at) < ?)`), cutoff)
 	if err != nil {
 		return 0, fmt.Errorf("release abandoned security registrations: %w", err)
 	}

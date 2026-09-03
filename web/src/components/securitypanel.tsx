@@ -10,8 +10,8 @@ import {
 import { Table as DataTable } from '../tablekit'
 import { CopyOutlined, DownloadOutlined, ExportOutlined, LoadingOutlined } from '../icons'
 import {
-  packageSecurityExportUrl, useCancelPackageSecuritySync, usePackageSecurity,
-  useReplicatePackageSecurity, useSecurityDocument, useSyncPackageSecurity,
+  packageSecurityExportUrl, useCancelPackageReplication, useCancelPackageSecuritySync,
+  usePackageSecurity, useReplicatePackageSecurity, useSecurityDocument, useSyncPackageSecurity,
 } from '../api/queries'
 import { download } from '../api/client'
 import { CodeBlock } from './filecontent'
@@ -28,7 +28,8 @@ import {
   EpssText, KevAbsence, KevBanner, kevColour, kevSegmentLabel, KevTag,
 } from './securitykev'
 import { SourceComparisonPanel, SourceComparisonPending } from './securitysourcepanel'
-import { ReplicationNotice } from './securityreplicate'
+import { ReplicateButton, ReplicationLogControl, ReplicationNotice } from './securityreplicate'
+import { ReplicationRunPanel } from './replicationprogress'
 import type { SourceFilter } from './securitysources'
 import {
   ComponentCell, CveCell, DescriptionCell, FindingsEmpty, FixCell, ScanStatusTag,
@@ -67,6 +68,7 @@ export function SecurityTab({ product, reference, repository }: {
   const sync = useSyncPackageSecurity()
   const cancel = useCancelPackageSecuritySync()
   const replicate = useReplicatePackageSecurity()
+  const cancelReplicate = useCancelPackageReplication()
   const data = security.data
 
   /*
@@ -77,6 +79,31 @@ export function SecurityTab({ product, reference, repository }: {
    * such scanner today; there will not be for long.
    */
   const [replicating, setReplicating] = useState<string | undefined>()
+
+  /*
+   * The scanners whose replication panel stays on screen after the run ends.
+   *
+   * A panel that vanished the instant the work stopped took the transcript, the
+   * counts and the reason with it - and that is exactly the moment a failed run
+   * becomes worth reading. A provider is added when its run is seen live and
+   * removed when the reader closes the panel, so a finished run holds its
+   * record for whoever was watching it and nobody else: opening the tab an hour
+   * later shows the banner, not somebody else's spent run.
+   */
+  const [runPanels, setRunPanels] = useState<string[]>([])
+  const running = useMemo(
+    () => (data?.registrations ?? [])
+      .filter((r) => r.state === 'registering' && !r.stalled)
+      .map((r) => r.provider),
+    [data?.registrations],
+  )
+  useEffect(() => {
+    if (running.length === 0) return
+    setRunPanels((prev) => {
+      const next = running.filter((p) => !prev.includes(p))
+      return next.length > 0 ? [...prev, ...next] : prev
+    })
+  }, [running])
 
   /*
    * The view lives up here rather than inside the tables, because the banner at
@@ -161,12 +188,11 @@ export function SecurityTab({ product, reference, repository }: {
   /*
    * Telling a scanner this release exists.
    *
-   * Deliberately a SEPARATE act from syncing, and the message says what it did
-   * rather than that it succeeded. The second press of this button is the
-   * common one - a release whose remaining images have since landed - and it
-   * legitimately submits nothing at all. "Replicated" over a run that did
-   * nothing reads as a button that is broken; "0 submitted, 157 already known"
-   * reads as the idempotent operation it is.
+   * Deliberately a SEPARATE act from syncing, and it STARTS a job rather than
+   * doing the work here: the panel below reports where it has got to, from the
+   * same read the page already polls. What this handler owes the reader is the
+   * one sentence the panel cannot say - whether this press began a run or
+   * found one already going.
    */
   const startReplicate = (provider: string) => {
     setReplicating(provider)
@@ -175,20 +201,10 @@ export function SecurityTab({ product, reference, repository }: {
         const r = res.registrations.find((x) => x.provider === provider) ?? res.registrations[0]
         if (!r) {
           message.info('Nothing to replicate for this release.')
-        } else if (r.state === 'failed') {
-          message.error(r.error || `This release could not be replicated to ${r.label}.`)
-        } else {
-          const done = r.submitted > 0
-            ? `${r.submitted.toLocaleString()} images submitted for analysis`
-            : `no new images to submit - ${r.label} already held all `
-              + `${r.alreadyKnown.toLocaleString()}`
-          message.info(r.outstanding > 0
-            ? `${r.label}: ${done}. ${r.outstanding.toLocaleString()} still outstanding.`
-            // Analysis is the long part and it has not started finishing yet,
-            // so promising results would be promising something this press did
-            // not do.
-            : `${r.label}: ${done}. Analysis runs on ${r.label}'s own schedule; `
-              + 'sync this release to collect the results.')
+        } else if (!res.started) {
+          // Not a failure. The thing they wanted is already happening, and the
+          // panel that is about to draw shows it.
+          message.info(`A replication to ${r.label} is already running for this release.`)
         }
         void security.refetch()
       },
@@ -196,6 +212,27 @@ export function SecurityTab({ product, reference, repository }: {
         ? e.message
         : 'This release could not be replicated.'),
       onSettled: () => setReplicating(undefined),
+    })
+  }
+
+  /*
+   * Stopping one.
+   *
+   * The claim is released server-side, so a run on another Coordinator stops
+   * too - it notices at its next heartbeat that it no longer holds one. False
+   * is not a failure: the run finished between the decision and the request.
+   */
+  const stopReplicate = (provider: string) => {
+    cancelReplicate.mutate({ product, ref: reference, repository, provider }, {
+      onSuccess: (res) => {
+        message.info(res.stopped
+          ? 'The replication was stopped. Images the scanner already accepted stay accepted.'
+          : 'That replication had already finished.')
+        void security.refetch()
+      },
+      onError: (e) => message.error(e instanceof Error
+        ? e.message
+        : 'The replication could not be stopped.'),
     })
   }
 
@@ -277,6 +314,25 @@ export function SecurityTab({ product, reference, repository }: {
             a sync.
           */}
           <SyncLogButton sync={data.sync} />
+          {/*
+            The replication transcript, beside the sync's. Both are the record
+            of a finished run against a scanner, and a reader looking for one
+            should not find the other somewhere else entirely.
+          */}
+          <ReplicationLogControl registrations={data.registrations} />
+          {/*
+            REPLICATE, beside Sync, because the two are one workflow read left
+            to right: replicate the release to the scanner, then collect what it
+            found. It lived only in a banner further down the page, so on a
+            release that had never been replicated the most consequential
+            control on the tab was below the fold and the one thing offered up
+            here was a sync that could only ever come back empty.
+          */}
+          <ReplicateButton
+            registrations={data.registrations}
+            onReplicate={startReplicate}
+            pending={replicating}
+          />
           {!syncing && (
             <>
               <StopSyncButton sync={data.sync} onStop={stopSync} pending={cancel.isPending} />
@@ -334,19 +390,48 @@ export function SecurityTab({ product, reference, repository }: {
           )}
 
       {/*
+        A RUNNING replication, wherever it is running.
+
+        Drawn from the registration's own live position, which the run writes
+        down on every heartbeat - so this survives a reload, a navigation, and
+        the Coordinator restarting under it. Above the notice because while a
+        run is going it IS the notice.
+      */}
+      {!syncing && (data.registrations ?? [])
+        .filter((r) => (r.state === 'registering' && !r.stalled) || runPanels.includes(r.provider))
+        .map((r) => {
+          const live = r.state === 'registering' && !r.stalled
+          return (
+            <ReplicationRunPanel
+              key={r.provider}
+              registration={r}
+              finished={!live}
+              onStop={live ? () => stopReplicate(r.provider) : undefined}
+              stopping={cancelReplicate.isPending}
+              onClose={() => setRunPanels((prev) => prev.filter((p) => p !== r.provider))}
+            />
+          )
+        })}
+
+      {/*
         BEFORE the sync offer, because replicating comes before syncing.
 
         A release nobody has told Anchore about will sync perfectly and report
         nothing from it, and the reader will read that empty half of the page as
-        a clean one. The order on screen is the order of the two acts: tell the
-        scanner it exists, then collect what it found.
+        a clean one. The order on screen is the order of the two acts: replicate
+        the release to the scanner, then collect what it found.
 
         Outside the `state === 'synced'` block below on purpose - the release
         this matters most for is the one that has never been synced at all.
       */}
       {!syncing && (
         <ReplicationNotice
-          registrations={data.registrations}
+          // NOT the providers whose run panel is on screen. That panel already
+          // carries the error, the remedy and a control, so drawing the banner
+          // beneath it stated one failure twice with two different buttons.
+          registrations={(data.registrations ?? []).filter(
+            (r) => !runPanels.includes(r.provider),
+          )}
           onReplicate={startReplicate}
           pending={replicating}
         />

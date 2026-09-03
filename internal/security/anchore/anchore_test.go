@@ -27,8 +27,16 @@ type fakeAnchore struct {
 	// analyzeAfter is how many polls an image spends analysing before it is
 	// analysed. Zero means it is analysed as soon as it is submitted.
 	analyzeAfter map[string]int
-	submitted    []string
-	associated   map[string]bool
+	// offered is every POST /images, and submitted only the ones that created a
+	// record. Anchore returns the record it already holds for a digest it knows,
+	// so those two differ - and the difference is what makes a second press a
+	// no-op in Anchore rather than one this Coordinator has to arrange.
+	offered    []string
+	submitted  []string
+	associated map[string]bool
+	// rejectSubmit makes POST /images answer 400 with this detail, the way a
+	// real Anchore does when it cannot pull from the registry.
+	rejectSubmit string
 	apps         map[string]string
 	versions     map[string]string
 	vulns        map[string]string
@@ -99,6 +107,20 @@ func (f *fakeAnchore) handle(w http.ResponseWriter, r *http.Request) {
 		var req analysisRequest
 		_ = json.NewDecoder(r.Body).Decode(&req)
 		digest := digestOfPull(req.Source.Digest.PullString)
+		f.offered = append(f.offered, digest)
+		if f.rejectSubmit != "" {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusBadRequest)
+			_ = json.NewEncoder(w).Encode(map[string]any{"detail": f.rejectSubmit})
+			return
+		}
+		// Already known: hand back what is held and start nothing. This is what
+		// makes re-offering an image safe, and it is why the Coordinator no
+		// longer lists the account's images to decide what to send.
+		if status, known := f.images[digest]; known && status != "" {
+			write([]map[string]any{{"image_digest": digest, "analysis_status": status}})
+			return
+		}
 		f.submitted = append(f.submitted, digest)
 		status := AnalysisAnalyzing
 		if f.analyzeAfter[digest] == 0 {
@@ -262,7 +284,13 @@ func TestRegisterSubmitsAndGroupsWithoutWaiting(t *testing.T) {
 	}
 }
 
-// A second press of the button does nothing, and says it did nothing.
+// A second press starts no second analysis, and reports that it did not.
+//
+// The idempotence lives in ANCHORE, not here: every image is offered every
+// time, and Anchore returns the record it already holds. The Coordinator used
+// to list the account's images first and send only what was missing, which put
+// an unbounded listing on the critical path of every replication and aborted
+// the whole run when it failed.
 func TestRegisterIsIdempotent(t *testing.T) {
 	f := newFake()
 	p := newProvider(t, f, nil)
@@ -271,21 +299,56 @@ func TestRegisterIsIdempotent(t *testing.T) {
 	if _, err := p.Register(context.Background(), refs, registerOptions()); err != nil {
 		t.Fatalf("first register: %v", err)
 	}
-	submittedOnce := len(f.submitted)
+	analysedOnce := len(f.submitted)
 
 	reg, err := p.Register(context.Background(), refs, registerOptions())
 	if err != nil {
 		t.Fatalf("second register: %v", err)
 	}
-	if len(f.submitted) != submittedOnce {
-		t.Errorf("the second press resubmitted: %v", f.submitted)
+	if len(f.offered) != 2 {
+		t.Errorf("the image was offered %d times, want 2 - every image is offered every "+
+			"time and Anchore decides what that means", len(f.offered))
 	}
-	if reg.Submitted != 0 || reg.AlreadyKnown != 1 {
-		t.Errorf("a no-op press reported submitted=%d known=%d, want 0 and 1 - "+
-			"a silent no-op reads as a broken button", reg.Submitted, reg.AlreadyKnown)
+	if len(f.submitted) != analysedOnce {
+		t.Errorf("the second press started a second analysis: %v", f.submitted)
+	}
+	if reg.AlreadyKnown != 1 {
+		t.Errorf("a no-op press reported alreadyKnown=%d, want 1 - a silent no-op reads "+
+			"as a broken button", reg.AlreadyKnown)
 	}
 	if reg.State != security.RegistrationComplete {
 		t.Errorf("state = %q, want registered", reg.State)
+	}
+}
+
+// Anchore refusing to PULL is not Anchore being unreachable.
+//
+// It answers `400 cannot fetch image digest/manifest from registry` when it
+// cannot reach the registry the image is in. That classified as unsupported,
+// which had no case, so it was reported as "Anchore could not be reached" - the
+// exact inverse of what happened, sending an operator to check the one path
+// that is demonstrably fine.
+func TestPullFailureIsNotReportedAsUnreachable(t *testing.T) {
+	f := newFake()
+	f.rejectSubmit = "cannot fetch image digest/manifest from registry"
+	p := newProvider(t, f, nil)
+
+	reg, err := p.Register(context.Background(),
+		[]security.ArtifactRef{imageRef("app", "sha256:aaa")}, registerOptions())
+	if err != nil {
+		t.Fatalf("register: %v", err)
+	}
+	if reg.Submitted != 0 {
+		t.Fatalf("submitted = %d, want 0 - Anchore rejected it", reg.Submitted)
+	}
+
+	why := reg.FirstFailure()
+	if strings.Contains(why, "could not be reached") {
+		t.Errorf("a rejection was reported as unreachable, which sends an operator to the "+
+			"wrong system: %q", why)
+	}
+	if !strings.Contains(why, "could not pull") || !strings.Contains(why, "registr") {
+		t.Errorf("the reason does not name what failed or where to fix it: %q", why)
 	}
 }
 

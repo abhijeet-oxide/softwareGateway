@@ -313,7 +313,7 @@ func (p *Provider) reportFor(
 		r.Message = "Anchore has no record of this image. Replicate this release to Anchore " +
 			"to submit it for analysis."
 		if rec.Detail != "" {
-			r.Message = "Anchore would not accept this image for analysis: " + rec.Detail
+			r.Message = "Anchore rejected this image for analysis: " + rec.Detail
 			r.Status = security.StatusUnavailable
 		}
 		return r
@@ -495,6 +495,13 @@ func unsupportedMessage(ref security.ArtifactRef) string {
 func describeFailure(err error) string {
 	var re *registry.Error
 	if errors.As(err, &re) {
+		// Anchore reporting that IT cannot pull, which is a different system's
+		// problem from Anchore being unreachable and has a different remedy.
+		// Checked before the class ladder because it arrives as a 400, and a
+		// 400 is otherwise indistinguishable from an unsupported call.
+		if pull := describePullFailure(re); pull != "" {
+			return pull
+		}
 		switch registry.ClassOf(re.Err) {
 		case registry.ClassAuth:
 			return "Anchore refused the credential. " + detailOr(re,
@@ -524,6 +531,12 @@ func describeFailure(err error) string {
 			return "Anchore answered with something this Coordinator could not read. " + detailOr(re,
 				"Something between here and Anchore may be returning an error page or a login form "+
 					"in place of the response.")
+		case registry.ClassUnsupported:
+			// A 4xx that is not auth, not missing and not rate limiting.
+			// Anchore answered and rejected the request, so reporting it as
+			// unreachable sends an operator to a network path that is fine.
+			return "Anchore rejected the request. " + detailOr(re,
+				"Check that the Anchore deployment is Enterprise 5.x; this Coordinator uses its v2 API.")
 		}
 		return "Anchore could not be reached. " + detailOr(re,
 			"Check the network path from this Coordinator to Anchore.")
@@ -531,8 +544,62 @@ func describeFailure(err error) string {
 	if errors.Is(err, context.DeadlineExceeded) {
 		return "Anchore did not answer in time. Raise coordinator.security.anchore.requestTimeout."
 	}
-	return "Anchore could not be reached: " + err.Error()
+	if strings.Contains(strings.ToLower(err.Error()), "certificate signed by unknown authority") {
+		return "Anchore certificate verification failed: " + err.Error() +
+			" Set coordinator.security.anchore.insecureSkipVerify to true for this deployment, or configure the Anchore CA."
+	}
+	return "The Anchore request failed: " + err.Error()
 }
+
+// describePullFailure returns ANCHORE'S OWN WORDS for a failure to pull, and
+// "" for anything else.
+//
+// # The failure, and why it was reported as the opposite of itself
+//
+// Anchore answers a submission it cannot honour with `400 cannot fetch image
+// digest/manifest from registry`. It is saying that IT could not pull from the
+// internal registry - a registry that is not in its own registry list, a
+// credential it does not hold, a TLS chain it does not trust, or a host its
+// network cannot route to.
+//
+// A 400 classifies as unsupported, which had no case, so this arrived as
+// "Anchore could not be reached" - the exact inverse of what happened. Anchore
+// was reached; it replied.
+//
+// # Why the remedy is not in this string
+//
+// Because this is EVIDENCE and a remedy is an interpretation, and the two get
+// used differently: the scanner's sentence is what goes into a ticket and gets
+// verified by whoever receives it, and the remedy is what the reader does next.
+// Concatenated, the evidence was buried mid-paragraph and the whole thing was
+// unquotable. The interface renders the remedy underneath - see
+// pullRemedy in internal/api/securitywire.go, which can also name the registry.
+func describePullFailure(re *registry.Error) string {
+	if !isPullFailure(re.Detail) {
+		return ""
+	}
+	return "Anchore rejected the image: " + strings.TrimSpace(re.Detail)
+}
+
+// isPullFailure recognises Anchore saying it could not pull.
+//
+// Exported through PullFailureDetail so the API layer can decide whether a
+// STORED error warrants the registry remedy, without re-encoding this list.
+func isPullFailure(detail string) bool {
+	d := strings.ToLower(detail)
+	switch {
+	case strings.Contains(d, "cannot fetch image digest/manifest"),
+		strings.Contains(d, "cannot fetch image"),
+		strings.Contains(d, "failed to retrieve manifest"),
+		strings.Contains(d, "error fetching"):
+		return true
+	}
+	return false
+}
+
+// IsPullFailure reports whether a recorded failure is Anchore saying it could
+// not pull the image from the registry.
+func IsPullFailure(message string) bool { return isPullFailure(message) }
 
 func detailOr(e *registry.Error, fallback string) string {
 	if e.Detail != "" {

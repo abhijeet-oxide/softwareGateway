@@ -2,7 +2,9 @@ package security
 
 import (
 	"context"
+	"fmt"
 	"sort"
+	"strings"
 	"time"
 )
 
@@ -136,6 +138,11 @@ type Registration struct {
 	Expected     int `json:"expected"`
 	Submitted    int `json:"submitted"`
 	AlreadyKnown int `json:"alreadyKnown"`
+	// Skipped is how many were never offered, because an earlier failure
+	// established that none of them could succeed. Counted inside Failed, and
+	// reported separately so the message can say the run stopped early rather
+	// than implying every image was tried.
+	Skipped int `json:"skipped,omitempty"`
 
 	// Associated is how many of them the scanner's own grouping holds, read
 	// BACK rather than assumed. A successful write is not evidence of the final
@@ -211,9 +218,35 @@ func (r Registration) FailedRefs() []string {
 // One rather than all of them: a release of three hundred images against a
 // scanner that cannot reach the registry produces three hundred identical
 // sentences, and the useful part is the sentence.
+//
+// Counted, because the count is what says how much of the release this is
+// about. "1 of 154 images failed" and "154 of 154 images failed" carry the same
+// reason and mean entirely different things, and a message that gave only the
+// reason made the second look like the first.
 func (r Registration) FirstFailure() string {
+	reason := ""
 	for _, ref := range r.FailedRefs() {
-		return r.Failed[ref]
+		// The reason an image was SKIPPED is a consequence of the real one, and
+		// leading with it would report the symptom as the cause.
+		if reason == "" || strings.HasPrefix(reason, skippedPrefix) {
+			reason = r.Failed[ref]
+		}
+		if !strings.HasPrefix(reason, skippedPrefix) {
+			break
+		}
 	}
-	return ""
+	if reason == "" {
+		return ""
+	}
+	count := ""
+	if total := r.Expected; total > 0 {
+		count = fmt.Sprintf("%d of %d images failed replication. ", len(r.Failed), total)
+	}
+	if r.Skipped > 0 {
+		count += fmt.Sprintf("%d were not submitted after the first failure. ", r.Skipped)
+	}
+	return count + reason
 }
+
+// skippedPrefix marks a failure that is a consequence rather than a cause.
+const skippedPrefix = "Not submitted:"

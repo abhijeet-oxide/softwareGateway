@@ -182,6 +182,46 @@ type Detailed interface {
 	Record(level string, replace bool, note string)
 }
 
+// Working is an optional extension of Progress: a reporter that can name what
+// is in a worker's hands right now.
+//
+// # Why the names are worth carrying
+//
+// A bar and a count answer "how far". They do not answer the question somebody
+// actually asks in front of a job that has not moved for a minute, which is
+// "is this working at all" - and a list of names that changes every few seconds
+// answers it however still the bar is. It is also the only thing that
+// distinguishes a slow registry from a wedged one.
+type Working interface {
+	// Begin records that something is now being worked on, End that it is not.
+	Begin(name string)
+	End(name string)
+	// SetConcurrency records how many may be in flight at once, so a watcher
+	// can tell one-at-a-time from sixteen-at-a-time.
+	SetConcurrency(n int)
+}
+
+// ReportBegin names something now being worked on, when p can carry one.
+func ReportBegin(p Progress, name string) {
+	if w, ok := p.(Working); ok && p != nil {
+		w.Begin(name)
+	}
+}
+
+// ReportEnd retires a name ReportBegin put up.
+func ReportEnd(p Progress, name string) {
+	if w, ok := p.(Working); ok && p != nil {
+		w.End(name)
+	}
+}
+
+// ReportConcurrency records how many things may be in flight at once.
+func ReportConcurrency(p Progress, n int) {
+	if w, ok := p.(Working); ok && p != nil {
+		w.SetConcurrency(n)
+	}
+}
+
 // ReportInfo records something the reader wants to know that is not a problem.
 //
 // The distinction matters more than it looks. Every note used to be written at

@@ -265,9 +265,67 @@ type SyncProgress struct {
 	log       []SyncLogEntry
 	startedAt time.Time
 	done      bool
+
+	// active is what is in a worker's hands RIGHT NOW, in the order it was
+	// picked up. The single most useful thing on a progress panel: a list that
+	// changes every few seconds is a run that is working whatever the bar is
+	// doing, and it is the only thing that tells a slow scanner from a wedged
+	// one. A slice rather than a set because the order is what makes it read as
+	// a queue draining rather than a list reshuffling.
+	active []string
+	// concurrency is how many may be in flight at once, so a watcher can tell
+	// "one at a time against a slow registry" from "sixteen at a time".
+	concurrency int
 }
 
 type stagePosition struct{ done, total int }
+
+// NewProgress builds a progress tracker whose clock starts now.
+//
+// Exported because a replication builds one too, and two literals of the same
+// struct with the same three fields is how the two drift apart.
+func NewProgress() *SyncProgress {
+	return &SyncProgress{stages: map[string]stagePosition{}, startedAt: time.Now()}
+}
+
+// Begin records that something is now being worked on.
+func (p *SyncProgress) Begin(name string) {
+	name = strings.TrimSpace(name)
+	if name == "" {
+		return
+	}
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	for _, existing := range p.active {
+		if existing == name {
+			return
+		}
+	}
+	p.active = append(p.active, name)
+}
+
+// End records that something is no longer being worked on.
+func (p *SyncProgress) End(name string) {
+	name = strings.TrimSpace(name)
+	if name == "" {
+		return
+	}
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	for i, existing := range p.active {
+		if existing == name {
+			p.active = append(p.active[:i], p.active[i+1:]...)
+			return
+		}
+	}
+}
+
+// SetConcurrency records how many things may be in flight at once.
+func (p *SyncProgress) SetConcurrency(n int) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.concurrency = n
+}
 
 // progressNote is one thing the sync has to say, and how many times it has had
 // to say it.
@@ -435,8 +493,49 @@ func (p *SyncProgress) Snapshot() (stages []SyncStage, notes []string, startedAt
 
 // SyncStage is one phase's position.
 type SyncStage struct {
-	Name        string
-	Done, Total int
+	Name  string `json:"name"`
+	Done  int    `json:"done,omitempty"`
+	Total int    `json:"total,omitempty"`
+}
+
+// ProgressSnapshot is a run's whole live position in a shape that can be
+// STORED, which is the difference between a panel that survives a refresh and
+// one that does not.
+//
+// # Why this is written to the database rather than only served from memory
+//
+// Because the memory it used to live in belongs to whichever replica happens to
+// be running the work, and a browser reload is a new request that may not reach
+// that replica - and a Coordinator restart reaches no replica at all. The row
+// said "running" and could say nothing else, which is the state a reader is
+// least able to act on: it looks identical to a job that has hung.
+//
+// Rewritten on each heartbeat rather than on each event. A person watching a
+// bar cannot use finer resolution than seconds, and an UPDATE per submitted
+// image would put a hundred and fifty writes into an operation whose whole
+// merit is that it is quick.
+type ProgressSnapshot struct {
+	Stages      []SyncStage    `json:"stages,omitempty"`
+	Notes       []string       `json:"notes,omitempty"`
+	Active      []string       `json:"active,omitempty"`
+	Concurrency int            `json:"concurrency,omitempty"`
+	StartedAt   time.Time      `json:"startedAt,omitempty"`
+	Log         []SyncLogEntry `json:"log,omitempty"`
+}
+
+// Snapshot copies the whole live position, safe to serialize.
+func (p *SyncProgress) SnapshotFull() ProgressSnapshot {
+	stages, notes, startedAt, _ := p.Snapshot()
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return ProgressSnapshot{
+		Stages:      stages,
+		Notes:       notes,
+		Active:      append([]string(nil), p.active...),
+		Concurrency: p.concurrency,
+		StartedAt:   startedAt,
+		Log:         append([]SyncLogEntry(nil), p.log...),
+	}
 }
 
 // Start claims a release and syncs it in the background.

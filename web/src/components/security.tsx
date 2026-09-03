@@ -499,9 +499,12 @@ export function VulnerabilityCell({
 const STATUS_LABEL: Record<ScanStatus, string> = {
   scanned: 'Scanned',
   not_scanned: 'Not indexed',
-  not_found: 'Not in JFrog',
+  // Named for the FACT, not for one scanner. The image is not where the
+  // scanner that answered pulls from - which for Anchore need not be JFrog at
+  // all - and the row's message names the actual repository.
+  not_found: 'Not in registry',
   unsupported: 'Not applicable',
-  disabled: 'Xray disabled',
+  disabled: 'Scanner off',
   unavailable: 'Unavailable',
 }
 
@@ -625,8 +628,9 @@ export function SecurityNotConfigured({ what = 'This deployment' }: { what?: str
       description={
         <>
           {what} has no scanner configured, so no results are available. Scanning is enabled per
-          repository: set <code>type: jfrog</code> and <code>xrayEnabled: true</code> on the JFrog
-          repository this release is replicated to.
+          repository: set <code>xrayEnabled: true</code> on the JFrog repository this release is
+          replicated to, or <code>anchoreEnabled: true</code> on the repository Anchore should
+          analyse. Both may be on at once, and their findings are merged.
         </>
       }
     />

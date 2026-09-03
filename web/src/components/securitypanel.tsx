@@ -1381,7 +1381,7 @@ function FindingsSection({
               : []),
             /*
               The fraction, not the total. "Images (160)" over a table where 140
-              rows say "Not in JFrog" reads as a release of 160 scanned images,
+              rows say "Not in registry" reads as a release of 160 scanned images,
               and the number a reader carries away is the one on the tab.
             */
             {
@@ -1908,10 +1908,18 @@ function problemRank(status: string): number {
   return PROBLEM_RANK[status] ?? 0
 }
 
+/*
+  Scanner-agnostic, and the not_scanned line is the one that had to change.
+  Xray holds an image and has not indexed it; Anchore has accepted it and is
+  analysing it. Those need different things from the reader - the first is a
+  wait on somebody else's indexer, the second finishes on its own in minutes -
+  and the per-group message under this advice carries the scanner's own
+  sentence, which says which.
+*/
 const PROBLEM_ADVICE: Record<string, string> = {
   unavailable: 'A transient failure rather than a refusal. Sync again to retry these.',
-  not_scanned: 'JFrog Xray holds these images but has not indexed them yet. Syncing again will report '
-    + 'the same until it does.',
+  not_scanned: 'The scanner has these images and has not finished with them. Syncing again will '
+    + 'report the same until it has - the message below says what it is waiting on.',
   not_found: 'This is a transfer to run, not a scan to wait for. Replicate the release, then sync again.',
   disabled: 'Enable a scanner on the repository these images are in.',
 }
@@ -1931,9 +1939,9 @@ function problemHeadline(status: string, n: number, repository?: string): string
     case 'not_found':
       return `${images} were not found${where}`
     case 'not_scanned':
-      return `${images} have not been scanned by JFrog Xray`
+      return `${images} have not been scanned yet`
     case 'unavailable':
-      return `${images} could not be retrieved from JFrog Xray`
+      return `${images} could not be retrieved from the scanner`
     case 'disabled':
       return `${images} are in a repository with no scanner`
     default:

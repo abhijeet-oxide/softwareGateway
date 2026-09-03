@@ -63,7 +63,11 @@ func (s Status) Label() string {
 	case StatusUnsupported:
 		return "Not applicable"
 	case StatusDisabled:
-		return "Xray disabled"
+		// Not "Xray disabled". The status means "the scanner that answers for
+		// this repository is switched off", and naming one of two scanners in
+		// it made every Anchore-disabled artifact claim Xray was off - which
+		// sends the reader to the wrong line of the wrong document.
+		return "Scanner off"
 	case StatusUnavailable:
 		return "Unavailable"
 	default:

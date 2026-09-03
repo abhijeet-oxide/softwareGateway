@@ -279,3 +279,52 @@ func (s multiStubProvider) Scan(_ context.Context, refs []ArtifactRef, _ ScanOpt
 	}
 	return out, nil
 }
+
+// A first sync against an asynchronous scanner is the ordinary state of every
+// release on an Anchore-only deployment, and it must not read as a broken
+// scanner.
+//
+// The STATE stays failed - these numbers are not a clean result and recording
+// them as one is the failure this whole feature exists to prevent - but the
+// sentence has to name the remedy, and the remedy is one button.
+func TestStillAnalysingIsRecognised(t *testing.T) {
+	reports := []Report{
+		{
+			Artifact: ArtifactRef{Name: "a", Digest: "sha256:a"},
+			Status:   StatusNotScanned,
+			Message:  "Anchore has not finished analysing this image yet. Sync again in a few minutes.",
+		},
+		{
+			Artifact: ArtifactRef{Name: "b", Digest: "sha256:b"},
+			Status:   StatusNotScanned,
+			Message:  "Anchore has not finished analysing this image yet. Sync again in a few minutes.",
+		},
+	}
+	if got := stillAnalysing(reports); got != 2 {
+		t.Errorf("stillAnalysing = %d, want 2", got)
+	}
+
+	// An image that is not in the registry is a TRANSFER waiting to happen, not
+	// an analysis - and conflating them would tell somebody to wait for a scan
+	// of bytes that are not there.
+	missing := []Report{{
+		Artifact: ArtifactRef{Name: "c", Digest: "sha256:c"},
+		Status:   StatusNotScanned,
+		Missing:  true,
+		Message:  "This image is not in the registry Anchore pulls from.",
+	}}
+	if got := stillAnalysing(missing); got != 0 {
+		t.Errorf("a missing image counted as analysing: %d", got)
+	}
+
+	// An unrecognised phrasing falls through to the original sentence, which is
+	// the correct failure and never a wrong one.
+	unknown := []Report{{
+		Artifact: ArtifactRef{Name: "d", Digest: "sha256:d"},
+		Status:   StatusNotScanned,
+		Message:  "JFrog Xray has not indexed it yet.",
+	}}
+	if got := stillAnalysing(unknown); got != 0 {
+		t.Errorf("an unrecognised message counted as analysing: %d", got)
+	}
+}

@@ -130,7 +130,12 @@ func toAPIReport(r security.Report) v1.SecurityReport {
 	// scanner's vocabulary and two different jobs for two different people, so
 	// the interface is given the distinction the store keeps as a flag.
 	if r.Status == security.StatusNotScanned && r.Missing {
-		status, label = v1.SecurityStatusNotFound, "Not in JFrog"
+		// "Not in registry", not "Not in JFrog". The fact is that the image is
+		// not where the scanner that answered pulls from - which for Anchore
+		// need not be JFrog at all, and naming the wrong system sends somebody
+		// to look in a registry that was never involved. The report's own
+		// message names the actual repository.
+		status, label = v1.SecurityStatusNotFound, "Not in registry"
 	}
 	out := v1.SecurityReport{
 		Artifact:    toAPIArtifact(r.Artifact),

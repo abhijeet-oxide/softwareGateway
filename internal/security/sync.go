@@ -690,6 +690,28 @@ func (s *Syncer) run(
 		if msg := firstMessage(res.Posture.Reports); msg != "" {
 			reason += " " + msg
 		}
+		// A FIRST SYNC AGAINST AN ASYNCHRONOUS SCANNER, told apart from a
+		// scanner that is broken.
+		//
+		// # The failure this sentence exists to prevent
+		//
+		// Anchore is told about an image and analyses it in its own time, so a
+		// release synced within minutes of being transferred has every image
+		// submitted, none analysed, and no results at all. That is the ordinary
+		// first sync of every release on an Anchore-only deployment - and the
+		// sentence above sends the reader to look for a broken scanner, which
+		// is the one thing that is not wrong.
+		//
+		// The STATE stays failed, deliberately. These numbers are not a clean
+		// result and must not be recorded as one; the rule above is the whole
+		// reason this feature can be trusted. What changes is the sentence,
+		// which now names the remedy - and the remedy is one button.
+		if n := stillAnalysing(res.Posture.Reports); n > 0 && n == cov.Scannable() {
+			reason = fmt.Sprintf(
+				"The scanner has not finished analysing any of the %d images in this release yet. "+
+					"This is the ordinary state of a release that has just been submitted - "+
+					"sync again in a few minutes to pick up the results.", n)
+		}
 		s.log.Warn("security sync produced no results",
 			"package", req.PackageID, "label", req.Label, "artifacts", cov.Scannable())
 		progress.Log(LogError, reason)
@@ -913,6 +935,33 @@ func logRank(level string) int {
 	default:
 		return 0
 	}
+}
+
+// stillAnalysing is how many artifacts a scanner has accepted and not finished.
+//
+// # Why it reads the message rather than the status
+//
+// Because the status cannot tell them apart. "Not scanned" covers an image
+// Anchore is actively analysing, one Xray has not got round to indexing, and
+// one that was submitted and rejected - and only the provider knows which. The
+// providers phrase the in-progress case consistently and this recognises that
+// phrasing, which is a weaker coupling than a status of its own and does not
+// require every provider to learn a state most of them do not have.
+//
+// A provider whose phrasing this does not recognise simply falls through to the
+// original sentence, which is the correct failure and never a wrong one.
+func stillAnalysing(reports []Report) int {
+	n := 0
+	for _, r := range reports {
+		if r.Status != StatusNotScanned || r.Missing {
+			continue
+		}
+		msg := strings.ToLower(r.Message)
+		if strings.Contains(msg, "not finished analysing") || strings.Contains(msg, "analysing") {
+			n++
+		}
+	}
+	return n
 }
 
 // countMalware is how many malicious packages a release turned out to hold.

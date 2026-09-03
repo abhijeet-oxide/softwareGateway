@@ -1150,6 +1150,169 @@
 }
 
 
+/* --- the four state pages -------------------------------------------------
+   Planned work, a wrong address, an unplanned failure, and the wait before a
+   screen can be drawn. See StatePages.tsx for why they are one component with
+   four faces rather than four pages.
+
+   Two frames, one set of rules: without `is-full` the page fills the content
+   area it was given and the application's own chrome stays on screen around
+   it; with it, the page takes the viewport, for the moments when there is no
+   chrome left to sit in. */
+.ui-state-page {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: var(--sp-4);
+  /* Fills its container, but never collapses to nothing in a flex parent that
+     has not sized it: a state page an inch tall reads as a broken layout. */
+  flex: 1 1 auto;
+  min-height: min(460px, 68vh);
+  padding: var(--sp-8) var(--sp-6);
+  text-align: center;
+}
+.ui-state-page.is-full {
+  min-height: 100dvh;
+  background: var(--canvas);
+}
+.ui-state-body {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  /* The column sizes to the TEXT's comfortable measure, not to the widest
+     child: a 140px drawing over a 520px paragraph is one block, and centring
+     each part inside its own box is what makes the two drift apart. */
+  width: min(520px, 100%);
+  animation: ui-rise var(--dur-view) var(--ease-out) both;
+}
+.ui-state-art {
+  margin-bottom: var(--sp-3);
+}
+/* The machine's word for what happened, above the sentence a person reads. */
+.ui-state-code {
+  font-size: var(--fs-11);
+  font-weight: 650;
+  letter-spacing: var(--tr-wide);
+  text-transform: uppercase;
+  font-variant-numeric: tabular-nums;
+  color: var(--text-3);
+  margin-bottom: var(--sp-2);
+}
+.ui-state-title {
+  margin: 0;
+  font-size: var(--fs-24);
+  font-weight: 680;
+  letter-spacing: var(--tr-snug);
+  color: var(--text);
+}
+.ui-state-text {
+  margin: var(--sp-2) 0 0;
+  max-width: 44ch;
+  font-size: var(--fs-13);
+  line-height: 1.6;
+  color: var(--text-2);
+}
+/* The address that matched nothing, the identifier that was asked for: the one
+   fact the page is about, set in the face identifiers are always set in here
+   and wrapping anywhere rather than widening the column. */
+.ui-state-subject {
+  margin-top: var(--sp-4);
+  max-width: 100%;
+  padding: 6px var(--sp-3);
+  border-radius: var(--r-md);
+  background: var(--surface-2);
+  box-shadow: 0 0 0 0.5px var(--border);
+  font-size: var(--fs-12);
+  color: var(--text-2);
+  overflow-wrap: anywhere;
+}
+
+.ui-state-actions {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+  justify-content: center;
+  margin-top: var(--sp-5);
+}
+.ui-state-note {
+  margin-top: var(--sp-3);
+  font-size: var(--fs-12);
+  color: var(--text-3);
+  font-variant-numeric: tabular-nums;
+}
+/* What actually failed, folded away. Shown at all because these pages get
+   quoted into tickets, and a screen that hides the message turns one report
+   into three; folded because it is not what the reader came for. */
+.ui-state-details {
+  margin-top: var(--sp-5);
+  width: 100%;
+  font-size: var(--fs-12);
+  color: var(--text-3);
+  text-align: left;
+}
+.ui-state-details > summary {
+  cursor: pointer;
+  list-style: none;
+  text-align: center;
+  color: var(--text-3);
+  transition: color var(--dur-hover) var(--ease);
+}
+.ui-state-details > summary::-webkit-details-marker {
+  display: none;
+}
+.ui-state-details > summary::before {
+  content: "";
+  display: inline-block;
+  width: 0;
+  height: 0;
+  margin-right: 6px;
+  vertical-align: 1px;
+  border-block: 3.5px solid transparent;
+  border-inline-start: 5px solid currentColor;
+  transition: transform var(--dur-hover) var(--ease);
+}
+.ui-state-details[open] > summary::before {
+  transform: rotate(90deg);
+}
+.ui-state-details > summary:hover {
+  color: var(--text-2);
+}
+.ui-state-details-body {
+  margin-top: var(--sp-3);
+  padding: var(--sp-3) var(--sp-4);
+  border-radius: var(--r-md);
+  background: var(--surface-2);
+  box-shadow: 0 0 0 0.5px var(--border);
+}
+/* A message from a failure is one long unbroken string as often as not, so it
+   wraps ANYWHERE rather than pushing the card wider than the viewport. */
+.ui-state-detail-line {
+  font-size: var(--fs-12);
+  line-height: 1.55;
+  color: var(--text-2);
+  overflow-wrap: anywhere;
+}
+.ui-state-detail-meta {
+  margin-top: var(--sp-2);
+  font-size: var(--fs-11);
+  color: var(--text-3);
+  overflow-wrap: anywhere;
+}
+/* A wait is shorter than the other three states and must not push the page
+   around when it resolves, so it sits higher and holds less height. */
+.ui-state-page.is-loading {
+  min-height: min(340px, 52vh);
+  gap: var(--sp-3);
+}
+.ui-state-loading-label {
+  margin-top: var(--sp-2);
+  font-size: var(--fs-13);
+  font-weight: 550;
+  color: var(--text-2);
+}
+
+
 /* ---------------------------------------------------- state illustrations */
 
 /* Gentle, professional motion for the SVG illustration kit (success, scan,
@@ -1199,10 +1362,36 @@
 @keyframes illExit { 0%, 100% { transform: translateX(0); opacity: 0.85; } 50% { transform: translateX(6px); opacity: 1; } }
 .ill-exit { animation: illExit 2.6s ease-in-out infinite; }
 
+/* The maintenance gears. Two meshed wheels only read as meshed if the small one
+   turns the other way and faster, in proportion to its radius - 16 and 10 put
+   the periods at 12s and 7.5s. Slow enough to be scenery, not a spinner: the
+   page it sits on is not asking anybody to wait for it. */
+@keyframes illTurnCounter { to { transform: rotate(-360deg); } }
+.ill-gear { animation: illTurn 12s linear infinite; }
+.ill-gear-counter { animation: illTurnCounter 7.5s linear infinite; }
+
+/* The loading orbit: two arcs at different radii, travelling in opposite
+   directions so the eye has something to follow without either one reading as a
+   progress position. Nothing here fills, so nothing here lies about how far
+   along the wait is. */
+.ill-orbit { animation: illTurn 2.6s linear infinite; }
+.ill-orbit-counter { animation: illTurnCounter 3.9s linear infinite; }
+
+/* Content still arriving: bars that breathe rather than a bar that fills, for
+   the same reason. Callers offset them with an animation-delay so they read as
+   a line settling top to bottom. */
+@keyframes illPulse { 0%, 100% { opacity: 0.16; } 50% { opacity: 0.44; } }
+.ill-pulse { animation: illPulse 1.5s ease-in-out infinite; }
+
 @media (prefers-reduced-motion: reduce) {
   .ill-draw { animation: none; stroke-dashoffset: 0; }
   .ill-pop, .ill-ripple, .ill-spark, .ill-floaty, .ill-sweep, .ill-dash, .ill-lift,
-  .ill-turn, .ill-exit { animation: none; }
+  .ill-turn, .ill-exit, .ill-gear, .ill-gear-counter, .ill-orbit,
+  .ill-orbit-counter { animation: none; }
+  /* The loading art is the one exception that may not simply stop: with every
+     animation removed it becomes a picture of a card, indistinguishable from a
+     page that has finished. It keeps a slow, non-directional breath instead. */
+  .ill-pulse { animation-duration: 3.2s; }
 }
 
 

@@ -93,6 +93,20 @@ export { AppShell, SideNav, TopBar, NavEntry } from "./primitives/AppShell";
 export type { NavItem, NavProfile } from "./primitives/AppShell";
 export { StatusScreen, BootSplash } from "./primitives/StatusScreen";
 
+// --- the four pages a tool shows instead of itself -------------------------
+// Planned work, a wrong address, an unplanned failure, and the wait before a
+// screen can be drawn. Every tool has all four, and they are the four most
+// likely to be improvised one at a time - which is how two products that share
+// a palette stop looking like one.
+export {
+  StatePage,
+  MaintenancePage,
+  NotFoundPage,
+  ErrorPage,
+  LoadingPage,
+} from "./primitives/StatePages";
+export type { StatePageProps } from "./primitives/StatePages";
+
 // --- the state illustrations ----------------------------------------------
 // A state screen is the same state screen in every tool: one tool having a
 // drawing where the other has a bare sentence is exactly the kind of
@@ -111,6 +125,9 @@ export {
   ServiceDownArt,
   AccessDeniedArt,
   NotFoundArt,
+  MaintenanceArt,
+  ErrorArt,
+  LoadingArt,
   StatePanel,
 } from "./primitives/illustrations";
 export type { StatusAction } from "./primitives/StatusScreen";

@@ -126,7 +126,7 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
       if (!problem?.code) throw new Error('not a problem document')
     } catch {
       problem = {
-        code: response.status >= 500 ? 'INTERNAL' : 'INVALID_ARGUMENT',
+        code: syntheticCode(response.status),
         detail: `The server answered ${response.status} without an error document.`,
       }
     }
@@ -256,6 +256,20 @@ function filenameFrom(header: string | null): string | undefined {
   }
 }
 
+/**
+ * The code to assume when a failed response carried no problem document.
+ *
+ * A proxy in front of the Coordinator answers 503 during a restart or a
+ * planned window, and it answers in HTML - so the synthetic problem is the only
+ * thing a caller ever sees for exactly the condition the interface most needs
+ * to tell apart. Calling that INTERNAL would file a scheduled maintenance
+ * window as a crash, and the boot screen would say the wrong thing about it.
+ */
+function syntheticCode(status: number): ErrorCode {
+  if (status === 503) return 'UNAVAILABLE'
+  return status >= 500 ? 'INTERNAL' : 'INVALID_ARGUMENT'
+}
+
 /** Turns a failed response into the same error type every other call throws. */
 async function problemFrom(response: Response): Promise<ApiError> {
   let problem: Problem
@@ -264,7 +278,7 @@ async function problemFrom(response: Response): Promise<ApiError> {
     if (!problem?.code) throw new Error('not a problem document')
   } catch {
     problem = {
-      code: response.status >= 500 ? 'INTERNAL' : 'INVALID_ARGUMENT',
+      code: syntheticCode(response.status),
       detail: `The server answered ${response.status} without an error document.`,
     }
   }

@@ -43,8 +43,10 @@ spec:
         timeouts:
           connect: 15s
 
+      # OVERRIDE ONLY. The default lives in config.yaml `concurrency:`; this
+      # is here because this vendor cannot take the fleet's 32.
       concurrency:
-        perRegistry: 8                   # this vendor is fragile; the fleet is 32
+        perRegistry: 8
 
       discovery:
         enabled: true
@@ -151,6 +153,23 @@ spec:
         proxy:
           direct: true
 
+    # Production has its own Quay, exactly as lab does. Promoting writes gold
+    # and this one together — the same mechanism, a different stage.
+    - name: quay-eu-prod
+      stage: prod
+      registry: quay-eu.example.com
+      repository: packet-core-prod/cfx-5000
+      type: quay
+      credentialsRef:
+        secretName: quay-eu-robot
+      replication:
+        mode: copy
+      quay:
+        apiEndpoint: https://quay-eu.example.com/api/v1
+        apiTokenRef:
+          secretName: quay-eu-api
+          key: token
+
   # ── WHAT RUNS BY ITSELF ────────────────────────────────────────────────────
   #
   # One place. `task` names which of the site's tasks fires automatically; the
@@ -164,16 +183,12 @@ spec:
         sources: [vendor]
 
   # ── OVERRIDES: all optional ────────────────────────────────────────────────
-
-  # A different account on the deployment's Anchore, so this team's findings are
-  # theirs. One line; endpoint, credential, concurrency and TLS are inherited.
   #
-  # A product naming its own `endpoint` MUST name its own `credentialsRef`.
-  # Validation refuses the document otherwise: falling back would send this
-  # deployment's Anchore credential to whatever host a product document named.
-  scanners:
-    anchore:
-      account: packet-core
+  # No `scanners:` block: this product uses the deployment's Anchore and Xray as
+  # config.yaml declares them. A product that needs its own writes the same
+  # block here — and one naming its own `endpoint` MUST also name its own
+  # `credentialsRef`, because falling back would send this deployment's Anchore
+  # credential to whatever host a product document named.
 
   notifications:
     channels:

@@ -35,8 +35,8 @@ stage:
       from: source                      # `source` = the product's sources
       to: external
       purge: false                      # delete from `from` once `to` has it
-      verify: enforce                   # enforce | warn | off — signature
-      compliance: enforce               # enforce | warn | off
+      verify: enforce                   # disabled | enabled | enforce
+      compliance: enforce               # disabled | enabled | enforce
       scanners: [xray, anchore]         # run these once the release has landed
 
     - name: onboard
@@ -44,8 +44,8 @@ stage:
       from: external
       to: lab
       purge: true                       # the external copy goes once lab has it
-      verify: off
-      compliance: warn
+      verify: disabled
+      compliance: enabled               # runs and reports; does not block
       scanners: [xray, anchore]
 
     - name: promote
@@ -53,15 +53,21 @@ stage:
       from: lab
       to: prod
       purge: false
-      verify: off
-      compliance: off
+      verify: disabled
+      compliance: disabled
       scanners: [xray]
 
-# A task whose check is not implemented in this build records "skipped" on the
-# release timeline and lets the release through. It never fails and never
-# blocks. `verify: enforce` above is therefore inert today, and starts enforcing
-# the day signature verification ships — with no edit to this file or any
-# product.
+# `verify` and `compliance` take the same three values:
+#
+#   disabled   the check does not run, and nothing appears on the timeline
+#   enabled    the check runs and reports; a failure is recorded and the task
+#              continues
+#   enforce    the check runs and a failure stops the task
+#
+# A check this build does not implement records "skipped" on the timeline and
+# lets the release through, whatever it is set to. `verify: enforce` above is
+# therefore inert today, and starts enforcing the day signature verification
+# ships — with no edit to this file or any product.
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -78,16 +84,28 @@ scanners:
 
   anchore:
     endpoint: https://anchore.example.com
+
+    # The SAME shape a source uses: a secret reference for the credential, and
+    # a network block for the certificate, the proxy and the timeouts. Nothing
+    # about reaching Anchore is spelled differently from reaching a registry.
     credentialsRef:
       secretName: anchore-api           # an API key goes in the password key
+      usernameKey: username
+      passwordKey: password
+
+    network:
+      caBundleRef:
+        secretName: internal-ca
+        key: ca.crt
+      tls:
+        insecureSkipVerify: false
+      proxy:
+        direct: true
+      timeouts:
+        connect: 10s
+        responseHeader: 30s
+
     account: ''                         # a product may override
-
-    # Anchore's own TLS, independent of any registry's.
-    insecureSkipVerify: false
-    caBundleRef:
-      secretName: internal-ca
-      key: ca.crt
-
     concurrency: 12                     # Anchore answers per image, not per batch
     requestTimeout: 60s
     submit: true                        # may this deployment register images
@@ -120,6 +138,8 @@ storage:
 # ═══════════════════════════════════════════════════════════════════════════════
 #  4. DEFAULTS — what a product inherits unless it says otherwise
 # ═══════════════════════════════════════════════════════════════════════════════
+# THE DEFAULT every source and target uses. A source states its own
+# `concurrency:` only to override this one — for a vendor that cannot take 32.
 concurrency:
   perRegistry: 32                       # in-flight requests AND pool size
   requestsPerSecond: 0                  # 0 = no artificial ceiling

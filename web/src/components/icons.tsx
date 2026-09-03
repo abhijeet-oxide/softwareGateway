@@ -1,4 +1,4 @@
-import type { CSSProperties, ElementType } from 'react'
+import type { CSSProperties, ElementType, FunctionComponent, SVGProps } from 'react'
 import JFrogIcon from '~icons/logos/jfrog'
 import OpenShiftIcon from '~icons/simple-icons/redhatopenshift'
 import RedHatIcon from '~icons/simple-icons/redhat'
@@ -23,6 +23,10 @@ import SignatureIcon from '~icons/ph/certificate'
 // Anchore has no Simple Icons mark, and its name IS the drawing - so the
 // house family's anchor is the honest choice rather than a near-enough logo.
 import AnchorIcon from '~icons/ph/anchor'
+// The MONOCHROME JFrog mark, not the brand logo beside it. A scanner mark sits
+// in a menu row and on a button, inheriting the text colour like every other
+// glyph there; the full-colour frog reads as a sticker at fourteen pixels.
+import JFrogMark from '~icons/simple-icons/jfrog'
 import type { Repository } from '../api/types'
 import brand from '../brand'
 import { BrandMark as SharedBrandMark } from '../uikit'
@@ -187,32 +191,51 @@ export type ArtifactKind = keyof typeof ARTIFACT_ICONS
  * On screen wherever a scanner is named - a sync menu, a source filter, a
  * replication panel - because "which of the two said this" is the question
  * those surfaces exist to answer, and a mark answers it before the label is
- * read. Anchore's is the house anchor rather than a logo: it has no Simple
- * Icons mark, and a near-enough brand is worse than an honest glyph.
+ * read.
+ *
+ * JFrog keeps its own colours, because the brand mark IS the identity and a
+ * greyed one is a worse answer to "which scanner". Anchore has no Simple Icons
+ * mark, so it gets the house anchor: a near-enough brand is worse than an
+ * honest glyph.
  */
-const SCANNER_MARKS: Record<string, IconComponent> = {
+const SCANNER_MARKS: Record<string, FunctionComponent<SVGProps<SVGSVGElement>>> = {
   anchore: AnchorIcon,
   'jfrog-xray': JFrogIcon,
   jfrog: JFrogIcon,
   xray: JFrogIcon,
 }
 
-/** One scanner's mark, at text size. Nothing for a scanner we cannot name. */
-export function ScannerMark({ provider, size = 14, style }: {
+/**
+ * One scanner's mark, drawn the way the icon registry draws everything else.
+ *
+ * The `.anticon > svg` shape and `1em` sizing are not decoration: Ant lays a
+ * menu item, a button and a tag out AROUND `.anticon`, and that class carries
+ * the gap between a glyph and its label.
+ *
+ * `className` is accepted and MERGED, and that is the whole of the spacing fix.
+ * Ant clones an `icon` element to add its own class - `ant-dropdown-menu-item-
+ * icon`, `ant-btn-icon` - and that class is what supplies the margin. A
+ * component that does not take the prop drops it on the floor, which is why
+ * these sat hard against their labels while every built-in icon on the same row
+ * did not.
+ */
+export function ScannerMark({ provider, size = 14, style, className }: {
   provider?: string
   size?: number
   style?: CSSProperties
+  className?: string
 }) {
-  const Mark = provider ? SCANNER_MARKS[provider.toLowerCase()] : undefined
+  const key = provider?.toLowerCase()
+  const Mark = key ? SCANNER_MARKS[key] : undefined
   if (!Mark) return null
   return (
     <span
       role="img"
       aria-label={provider}
-      className="anticon"
-      style={{ display: 'inline-flex', alignItems: 'center', ...style }}
+      className={['anticon', `anticon-scanner-${key}`, className].filter(Boolean).join(' ')}
+      style={{ fontSize: size, ...style }}
     >
-      <Mark style={{ width: size, height: size }} />
+      <Mark width="1em" height="1em" />
     </span>
   )
 }

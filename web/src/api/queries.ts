@@ -3,7 +3,7 @@ import { useEffect, useRef } from 'react'
 import { api, fetchText, query, packageRef } from './client'
 import type {
   CalibrateRequest, CalibrateResponse,
-  CancelAnalysisResponse, CancelSecuritySyncResponse,
+  CancelAnalysisResponse, CancelSecuritySyncResponse, ReplicateSecurityResponse,
   CheckConnectivityResponse, CompareProgressResponse, CompareRequest, CompareResponse,
   DiscoverAllResponse,
   DiscoverPackagesResponse, DiscoveryStatusResponse, HealthCheckResponse, ListArtifactsResponse,
@@ -1111,6 +1111,45 @@ export function useCancelPackageSecuritySync() {
         scopeQuery(q, repository), {})
     },
     onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: ['package-security'] })
+      void qc.invalidateQueries({ queryKey: ['packages'] })
+      void qc.invalidateQueries({ queryKey: ['package'] })
+    },
+  })
+}
+
+/**
+ * Replicating a release to a scanner that has to be TOLD about it.
+ *
+ * # Why this is not a job with a progress endpoint
+ *
+ * Because its duration is ours rather than a scanner's: a submission per image
+ * at a bounded concurrency plus three calls for the application version. It is
+ * seconds against a responsive Anchore and a couple of minutes against a slow
+ * one, so the request is held open and the button reports what happened - where
+ * a sync, which waits on somebody else's analysis queue, cannot.
+ */
+export function useReplicatePackageSecurity() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: ({ product, ref, repository, provider }: {
+      product: string
+      ref: string
+      repository?: string
+      /**
+       * Narrow it to one scanner. Empty replicates to every scanner configured
+       * for the release that needs telling - which today is at most one.
+       */
+      provider?: string
+    }) => {
+      const { segment, query: q } = packageRef(ref)
+      return api.post<ReplicateSecurityResponse>(
+        `/products/${encodeURIComponent(product)}/packages/${encodeURIComponent(segment)}:replicateSecurity` +
+        scopeQuery(q, repository), provider ? { provider } : {})
+    },
+    onSuccess: () => {
+      // The security response carries the registration state, so the notice
+      // this button lives in redraws from the same read the page already makes.
       void qc.invalidateQueries({ queryKey: ['package-security'] })
       void qc.invalidateQueries({ queryKey: ['packages'] })
       void qc.invalidateQueries({ queryKey: ['package'] })

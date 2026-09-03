@@ -402,6 +402,13 @@ type SecurityConfig struct {
 //	    type: jfrog
 //	    xrayEnabled: true
 //	    anchoreEnabled: true
+//
+// Everything here is a DEFAULT rather than the only answer. A product that has
+// to reach a different Anchore, or the same one under a different account,
+// overrides the endpoint, the credential and the account in `spec.anchore` (see
+// product.Anchore) and inherits the rest of this stanza - the concurrency, the
+// timeouts, the document kinds - which are operator tuning rather than a
+// property of the product.
 type AnchoreConfig struct {
 	// Endpoint is the Anchore API base URL as an operator has it in a browser -
 	// "https://anchore.example.com". The `/v2` prefix is appended if absent, so

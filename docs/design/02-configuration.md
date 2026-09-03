@@ -622,9 +622,12 @@ coordinator:
     # to repeating that host in every product document and watching the copies
     # drift.
     #
-    # A product document still says exactly one thing about Anchore, and it is
-    # the same one thing it says about Xray: `anchoreEnabled: true` on the
-    # repository Anchore should analyse.
+    # The ordinary product document still says exactly one thing about Anchore,
+    # and it is the same one thing it says about Xray: `anchoreEnabled: true` on
+    # the repository Anchore should analyse. Everything below is a DEFAULT: a
+    # product going to a customer's own Anchore, or to a different account on
+    # this one, overrides the endpoint, the credential and the account in
+    # `spec.anchore` and inherits the tuning. See 21 §12.3.
     #
     # AN EMPTY ENDPOINT MEANS THIS DEPLOYMENT HAS NO ANCHORE, whatever a
     # product says. A product asking for a scanner this Coordinator has no
@@ -642,22 +645,18 @@ coordinator:
       concurrency: 12
       requestTimeout: 60s
 
-      # HOW LONG A SYNC WAITS for images it had to submit.
+      # THERE IS NO `analysisWait`, AND THAT IS A DESIGN DECISION.
       #
       # Anchore does not index a repository; it is told about an image and
-      # analyses it asynchronously, in minutes. A first sync therefore submits
-      # everything and finds nothing analysed - and a sync that read
-      # immediately would report the whole release as unscanned and leave the
-      # reader with no way to know that pressing Sync again in five minutes is
-      # exactly right.
+      # analyses it asynchronously, on its own schedule - minutes for a small
+      # image, hours behind a busy queue, and no API promises a bound. So the
+      # two acts are separate acts: Replicate submits the images and creates the
+      # application version (seconds, whatever the queue is doing), and Sync
+      # reads whatever has finished. Neither one's duration is set by the
+      # other's worst case, and no knob here can make analysis faster.
       #
-      # Bounded, because the wait holds the release's sync claim: waiting out
-      # somebody's Anchore backlog would block every later sync of that release
-      # for an hour. Past the bound the sync records what finished and labels
-      # the rest as still analysing. Negative disables waiting entirely, which
-      # is right for a deployment that submits at transfer time and syncs later.
-      analysisWait: 10m
-      pollInterval: 15s
+      # A release whose images are still analysing says so, per image, and
+      # pressing Sync again later is exactly right. See 21 §12.4.
 
       # Whether this Coordinator may REGISTER images with Anchore.
       #

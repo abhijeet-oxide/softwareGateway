@@ -2,6 +2,7 @@ package store
 
 import (
 	"context"
+	"errors"
 	"testing"
 	"time"
 
@@ -24,7 +25,7 @@ func TestRegistrationRoundTrip(t *testing.T) {
 	}
 	// A second press while one is running is refused, so two people pressing
 	// Replicate see one operation rather than two racing each other.
-	if err := regs.Claim(ctx, pkg, "anchore"); err != ErrRegistrationInFlight {
+	if err := regs.Claim(ctx, pkg, "anchore"); !errors.Is(err, ErrRegistrationInFlight) {
 		t.Fatalf("a second claim returned %v, want ErrRegistrationInFlight", err)
 	}
 

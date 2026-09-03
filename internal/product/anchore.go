@@ -14,19 +14,23 @@ import "strings"
 //
 // A repository already declares its registry host and its path, which is what
 // Anchore has to be told to pull. The Anchore endpoint, the credential, the
-// concurrency, the timeouts and how long a sync waits for analysis are one
-// stanza in the SYSTEM configuration (config.AnchoreConfig), stated once for
-// the deployment - because there is one Anchore in an estate, and repeating its
-// host in every product document is a set of copies that drift.
+// concurrency and the timeouts are one stanza in the SYSTEM configuration
+// (config.AnchoreConfig), stated once for the deployment - because there is one
+// Anchore in an estate, and repeating its host in every product document is a
+// set of copies that drift.
 //
-// So a product document says exactly one thing about Anchore, and it is the
-// same thing it says about Xray:
+// So the ordinary product document says exactly one thing about Anchore, and it
+// is the same thing it says about Xray:
 //
 //	targets:
 //	  - name: internal-jfrog
 //	    type: jfrog
 //	    xrayEnabled: true
 //	    anchoreEnabled: true
+//
+// The product that is NOT ordinary - one going to a customer's own Anchore, or
+// to a different account on the shared one - says which in `spec.anchore`. See
+// the Anchore type below: it overrides WHICH Anchore, and never whether.
 //
 // # Why it is on a repository rather than on the product
 //

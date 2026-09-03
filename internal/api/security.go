@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/url"
 	"path"
+	"sort"
 	"strconv"
 	"strings"
 
@@ -218,7 +219,7 @@ func (s *Server) packageSecurity(
 	// it is and that a refresh is running.
 	if detail && (row.Synced() || row.State == store.PackageSecuritySyncing) {
 		refs := s.securityArtifactsFor(productName, pkg, ctx)
-		reports, err := s.deps.SecurityStore.ReportsFor(ctx, target.Scope, refs, security.WithProse)
+		sources, err := s.storedSources(ctx, target, refs)
 		if err != nil {
 			return v1.PackageSecurityResponse{}, err
 		}
@@ -226,19 +227,23 @@ func (s *Server) packageSecurity(
 		// images times four kinds of document, and reading them to decide
 		// whether to draw a download button would be hundreds of megabytes to
 		// render a row of icons.
-		docs, err := s.deps.SecurityStore.DocumentSummaries(ctx, target.Scope, refs)
-		if err != nil {
-			s.deps.Logger.Warn("security: could not list stored scanner documents",
-				"package", pkg.ID, "error", err)
-			docs = map[string][]security.DocumentSummary{}
-		}
+		docs := s.storedDocuments(ctx, target, refs, pkg.ID)
 
-		posture := security.Summarize(reports)
+		lists := make([][]security.Report, 0, len(sources))
+		for _, src := range sources {
+			lists = append(lists, src.Reports)
+		}
+		merged := security.MergeReports(lists...)
+		posture := security.Summarize(merged)
+
 		out.Counts = toAPICounts(posture.Counts)
 		out.UniqueCounts = toAPICounts(posture.UniqueCounts)
 		out.UniqueCVECounts = toAPICounts(posture.UniqueCVECounts)
 		out.DistinctTotal = posture.UniqueCounts.Total
 		out.DistinctCVEs = posture.UniqueCVEs
+		out.KEVs = posture.KEVs
+		out.KEVFixable = posture.KEVFixable
+		out.KEVSeverity = toAPISeverityCounts(posture.KEVSeverity)
 		out.Coverage = toAPICoverage(posture.Coverage)
 		for _, rep := range posture.Reports {
 			item := toAPIReport(rep)
@@ -246,8 +251,137 @@ func (s *Server) packageSecurity(
 			item.Documents = documentRefsFor(productName, pkg, rep, docs[rep.Artifact.Ref()])
 			out.Reports = append(out.Reports, item)
 		}
+
+		// The cross-scanner arithmetic, computed from the UNMERGED per-scanner
+		// reports. It cannot be derived from the merged rows: a merged row has
+		// already forgotten which scanner reported which half of it, which is
+		// the whole question this answers.
+		if len(sources) > 1 {
+			cmp := security.CompareSources(sources)
+			out.SourceComparison = toAPISourceComparison(cmp)
+			out.Sources = sourceCountsFrom(sources, cmp, row)
+		}
 	}
 	return out, nil
+}
+
+// storedSources reads what each configured scanner recorded for this release,
+// separately.
+//
+// Separately, and that is the point. A merged read would answer every question
+// this page asks except the two the second scanner exists for: "what does
+// Anchore alone say" and "what did it find that Xray did not". Both need each
+// scanner's own rows, with its own grades, which the merge has by definition
+// discarded.
+//
+// A scanner whose rows will not load costs its own contribution, never the
+// page: the others are still returned and the failure is logged. The one thing
+// that fails the read is EVERY scanner failing, which is a database problem
+// rather than a security one.
+func (s *Server) storedSources(
+	ctx context.Context, target securityTarget, refs []security.ArtifactRef,
+) ([]security.SourceReports, error) {
+	scopes := target.scopes()
+	if len(scopes) == 0 {
+		return nil, nil
+	}
+
+	out := make([]security.SourceReports, 0, len(scopes))
+	var lastErr error
+	for _, scope := range scopes {
+		reports, err := s.deps.SecurityStore.ReportsFor(ctx, scope, refs, security.WithProse)
+		if err != nil {
+			lastErr = err
+			s.deps.Logger.Warn("security: could not read one scanner's stored reports",
+				"provider", scope.Provider, "repository", scope.Repository, "error", err)
+			continue
+		}
+		if len(reports) == 0 {
+			// A scanner switched on after the last sync has no rows yet. Not a
+			// source, and not an error: the next sync fills it, and an empty
+			// entry here would put a scanner with zero findings in the
+			// breakdown and make the release look worse-covered than it is.
+			continue
+		}
+		out = append(out, security.SourceReports{Provider: scope.Provider, Reports: reports})
+	}
+	if len(out) == 0 && lastErr != nil {
+		return nil, lastErr
+	}
+	return out, nil
+}
+
+// storedDocuments is what bodies are held for this release, across scanners.
+//
+// Merged into one map per artifact, because the download menu beside an image
+// offers "the SBOM" rather than "Xray's SBOM and Anchore's SBOM" - and where
+// both hold one, the first scanner asked wins, which is the same order
+// everything else on the page uses.
+func (s *Server) storedDocuments(
+	ctx context.Context, target securityTarget, refs []security.ArtifactRef, packageID int64,
+) map[string][]security.DocumentSummary {
+	out := map[string][]security.DocumentSummary{}
+	for _, scope := range target.scopes() {
+		held, err := s.deps.SecurityStore.DocumentSummaries(ctx, scope, refs)
+		if err != nil {
+			s.deps.Logger.Warn("security: could not list stored scanner documents",
+				"package", packageID, "provider", scope.Provider, "error", err)
+			continue
+		}
+		for ref, summaries := range held {
+			out[ref] = append(out[ref], summaries...)
+		}
+	}
+	return out
+}
+
+// sourceCountsFrom builds the per-scanner breakdown from what is stored.
+//
+// Prefers the counts a SYNC recorded, because those were computed from the
+// whole release with every scanner's answer in hand; falls back to summarizing
+// the rows just read, which is right for a release synced before the per-source
+// table existed. The comparison's numbers are layered on top either way,
+// because they are the only ones that can see across scanners.
+func sourceCountsFrom(
+	sources []security.SourceReports, cmp security.SourceComparison,
+	row store.PackageSecurityRow,
+) []v1.SecuritySourceCounts {
+	stored := make(map[string]security.SourceCounts, len(row.Sources))
+	for _, src := range row.Sources {
+		stored[src.Provider] = src
+	}
+
+	out := make([]v1.SecuritySourceCounts, 0, len(sources))
+	for _, src := range sources {
+		counts, ok := stored[src.Provider]
+		if !ok {
+			posture := security.Summarize(src.Reports)
+			counts = security.SourceCounts{
+				Provider:   src.Provider,
+				Counts:     posture.Counts,
+				UniqueCVEs: posture.UniqueCVEs,
+				KEVs:       posture.KEVs,
+				Artifacts:  posture.Coverage.Scanned,
+			}
+		}
+		item := toAPISourceCounts(counts)
+		posture := security.Summarize(src.Reports)
+		item.Coverage = toAPICoverage(posture.Coverage)
+		// The comparison's numbers, not the stored ones. These are the counts
+		// that need every scanner's answer in one place, and the stored row was
+		// written by a sync that may predate one of the scanners now answering.
+		if agreement, ok := cmp.Counts[src.Provider]; ok {
+			item.UniqueCVEs = agreement.Total
+			item.OnlyHere = agreement.Only
+			item.KEVOnly = agreement.KEVOnly
+			item.Enriched = agreement.Enriched
+		}
+		if item.KEVs == 0 {
+			item.KEVs = posture.KEVs
+		}
+		out = append(out, item)
+	}
+	return out
 }
 
 // documentRefsFor is what an image's download menu offers.
@@ -286,10 +420,73 @@ func documentRefsFor(
 			summary = security.DocumentSummary{Kind: kind}
 		}
 		ref := toAPIDocumentRef(summary)
-		ref.URL = documentURL(productName, pkg, report.Artifact, kind)
+		ref.URL = documentURL(productName, pkg, report.Artifact, kind, "")
 		out = append(out, ref)
 	}
+	// One entry per SCANNER for the kinds more than one produced.
+	//
+	// The unqualified entries above are what the menu offers by default -
+	// "download the SBOM" - and these are what it offers underneath once two
+	// scanners have one. Both, because a reader who wants "the SBOM" should
+	// not have to choose, and a reader sending a vendor "what YOUR scanner
+	// said" must be able to.
+	for _, provider := range providersHolding(held) {
+		for _, kind := range kindsFrom(held, provider) {
+			ref := toAPIDocumentRef(summaryFor(held, provider, kind))
+			ref.Provider = provider
+			ref.ProviderLabel = providerLabel(provider)
+			ref.URL = documentURL(productName, pkg, report.Artifact, kind, provider)
+			out = append(out, ref)
+		}
+	}
 	return out
+}
+
+// providersHolding names the scanners that hold at least one body for an
+// artifact, sorted, and only once there is more than one.
+//
+// Only once there is more than one: a per-scanner entry beside an unqualified
+// one, on a deployment with a single scanner, is two menu items that download
+// the same file.
+func providersHolding(held []security.DocumentSummary) []string {
+	seen := map[string]bool{}
+	var out []string
+	for _, d := range held {
+		if d.Provider == "" || !d.Available || seen[d.Provider] {
+			continue
+		}
+		seen[d.Provider] = true
+		out = append(out, d.Provider)
+	}
+	if len(out) < 2 {
+		return nil
+	}
+	sort.Strings(out)
+	return out
+}
+
+func kindsFrom(held []security.DocumentSummary, provider string) []security.DocumentKind {
+	var out []security.DocumentKind
+	for _, kind := range security.AllDocumentKinds {
+		for _, d := range held {
+			if d.Provider == provider && d.Kind == kind && d.Available {
+				out = append(out, kind)
+				break
+			}
+		}
+	}
+	return out
+}
+
+func summaryFor(
+	held []security.DocumentSummary, provider string, kind security.DocumentKind,
+) security.DocumentSummary {
+	for _, d := range held {
+		if d.Provider == provider && d.Kind == kind {
+			return d
+		}
+	}
+	return security.DocumentSummary{Kind: kind}
 }
 
 // documentURL is where one image's document is downloaded from.
@@ -309,10 +506,13 @@ func documentRefsFor(
 // release, which is also what stops a caller naming somebody else's.
 func documentURL(
 	productName string, pkg store.PackageRow, ref security.ArtifactRef,
-	kind security.DocumentKind,
+	kind security.DocumentKind, provider string,
 ) string {
 	q := url.Values{}
 	q.Set("digest", ref.Digest)
+	if provider != "" {
+		q.Set("provider", provider)
+	}
 	if pkg.SourceRepository != "" {
 		q.Set("repository", pkg.SourceRepository)
 	}
@@ -371,6 +571,10 @@ func (s *Server) handleSyncPackageSecurity(w http.ResponseWriter, r *http.Reques
 		PackageID: pkg.ID,
 		Label:     releaseLabel(pkg),
 		Scope:     target.Scope,
+		// Every scanner switched on for this repository, asked concurrently
+		// and recorded into scopes of its own. See security.Postures.
+		Providers: providersFor(target, body.Provider),
+		Release:   releaseRefFor(productName, pkg),
 		Artifacts: artifacts,
 		// Retention is a deployment's business, not a product's - see
 		// config.SecurityConfig. The zero value means "use the defaults", which
@@ -406,6 +610,30 @@ func (s *Server) handleSyncPackageSecurity(w http.ResponseWriter, r *http.Reques
 		Sync:      s.syncStatusFor(pkg.ID, row, target),
 		Artifacts: len(artifacts),
 	})
+}
+
+// providersFor narrows a sync to one scanner when the caller asked for one.
+//
+// # Why one scanner can be synced alone
+//
+// Because they fail and finish at very different speeds, and a reader whose
+// Anchore is mid-analysis should be able to refresh Xray without waiting ten
+// minutes for the other half. It is also what makes a per-scanner Sync button
+// beside each source in the interface mean something.
+//
+// A name this repository has no scanner for is IGNORED rather than refused: the
+// alternative is a stale browser tab turning a sync into a 400, and syncing
+// everything is never the wrong answer to "sync this".
+func providersFor(target securityTarget, requested string) []string {
+	if requested == "" {
+		return target.Providers
+	}
+	for _, p := range target.Providers {
+		if p == requested {
+			return []string{p}
+		}
+	}
+	return target.Providers
 }
 
 // handleCancelPackageSecuritySync serves POST
@@ -659,6 +887,10 @@ type securitySide struct {
 	row     store.PackageSecurityRow
 	target  securityTarget
 	reports []security.Report
+	// sources is each scanner's own reports, unmerged, so an export can say
+	// which scanner reported what and a source comparison can be repeated on
+	// either side of a release comparison.
+	sources []security.SourceReports
 	posture security.Posture
 }
 
@@ -680,11 +912,22 @@ func (s *Server) securitySide(
 	}
 
 	refs := s.securityArtifactsFor(productName, pkg, ctx)
-	reports, err := s.deps.SecurityStore.ReportsFor(ctx, side.target.Scope, refs, detail)
+	// Every scanner's rows, MERGED, and merged rather than one scanner's
+	// because a comparison of two releases must not silently compare Xray's
+	// view of one against Anchore's view of the other. The merged view is the
+	// release's security posture; that is what a release-to-release comparison
+	// is about.
+	sources, err := s.storedSources(ctx, side.target, refs)
 	if err != nil {
 		return securitySide{}, err
 	}
+	lists := make([][]security.Report, 0, len(sources))
+	for _, src := range sources {
+		lists = append(lists, src.Reports)
+	}
+	reports := security.MergeReports(lists...)
 	side.reports = reports
+	side.sources = sources
 	side.posture = security.Summarize(reports)
 	return side, nil
 }
@@ -734,11 +977,20 @@ func (s *Server) handleSecuritySearch(w http.ResponseWriter, r *http.Request) {
 		limit = n
 	}
 
+	kevOnly := q.Get("kev") == "true"
+	provider := strings.TrimSpace(q.Get("provider"))
+
 	hits, err := s.deps.SecurityIndex.Search(r.Context(), store.SearchFilter{
 		Product: productName,
 		Kind:    kind,
 		Query:   query,
 		Exact:   q.Get("exact") == "true",
+		// The question somebody arrives with on the day a known-exploited
+		// catalogue is updated: not "what is critical in this product", which
+		// they know, but "which of my releases carry the four advisories that
+		// were added this morning".
+		KEVOnly:  kevOnly,
+		Provider: provider,
 		// One over the limit, so "there is more" is answered without a second
 		// count query and without claiming more that turns out not to exist.
 		Limit: limit + 1,
@@ -774,16 +1026,28 @@ func (s *Server) handleSecuritySearch(w http.ResponseWriter, r *http.Request) {
 	}
 
 	WriteJSON(w, r, http.StatusOK, toAPISecuritySearch(productName, string(kind), query,
-		q.Get("exact") == "true", hits, releases, truncated))
+		q.Get("exact") == "true", hits, releases, truncated, kevOnly, provider))
 }
 
 // ---------------------------------------------------------------------------
 // Assembling a request
 // ---------------------------------------------------------------------------
 
-// securityTarget is the repository a release's scanner answers for.
+// securityTarget is the repository a release's scanners answer for.
 type securityTarget struct {
+	// Scope is the storage scope of the PRIMARY scanner - the first one
+	// configured for this repository. Kept as a single value because most of
+	// this file's callers want one scope's worth of context (which repository,
+	// which role) and only the reads want all of them.
 	Scope security.Scope
+	// Providers is every scanner switched on for this repository, in the order
+	// they are asked.
+	//
+	// A list, because that is the change a second scanner makes: "the scanner
+	// for this repository" was a question with one answer until it was not,
+	// and a caller reading Scope.Provider alone would silently read only the
+	// first of two scanners' stored rows.
+	Providers []string
 	// Available is false when no configured repository has a scanner. Reason
 	// then says which knob turns one on.
 	Available bool
@@ -823,21 +1087,62 @@ func (s *Server) securityTargetFor(
 	if !ok {
 		return securityTarget{Reason: fmt.Sprintf(
 			"No repository of %q has vulnerability scanning switched on. "+
-				"Set `type: jfrog` and `xrayEnabled: true` on the JFrog repository this release is replicated to.",
+				"Set `xrayEnabled: true` on the JFrog repository this release is replicated to, "+
+				"or `anchoreEnabled: true` on the repository Anchore should analyse.",
 			productName)}
 	}
 
-	return securityTarget{
+	target := securityTarget{
 		Available: true,
+		Providers: chosen.Providers,
 		Scope: security.Scope{
 			Product:    productName,
 			Repository: chosen.Name,
 			Role:       string(chosen.Role),
-			Provider:   "jfrog-xray",
 		},
 		Registry:      chosen.Registry,
 		RepositoryKey: chosen.Repository,
 		Endpoint:      chosen.XrayEndpoint,
+	}
+	if len(chosen.Providers) > 0 {
+		target.Scope.Provider = chosen.Providers[0]
+	}
+	return target
+}
+
+// scopes is one storage scope per scanner configured for this release.
+//
+// Each scanner writes into its own scope and is read back from it. See
+// security.Postures for why the union happens above the storage rather than in
+// it.
+func (t securityTarget) scopes() []security.Scope {
+	if len(t.Providers) == 0 {
+		if t.Scope.Provider == "" {
+			return nil
+		}
+		return []security.Scope{t.Scope}
+	}
+	out := make([]security.Scope, 0, len(t.Providers))
+	for _, provider := range t.Providers {
+		scope := t.Scope
+		scope.Provider = provider
+		out = append(out, scope)
+	}
+	return out
+}
+
+// releaseRefFor names the release for the scanners that group by one.
+//
+// The VERSION is the release's tag as the vendor published it, which is what
+// somebody types when they go looking for this release in Anchore's own
+// interface. Falling back to a short digest for an untagged release, because a
+// grouping that silently skipped those would leave them ungrouped with no
+// explanation.
+func releaseRefFor(productName string, pkg store.PackageRow) security.ReleaseRef {
+	return security.ReleaseRef{
+		Product: productName,
+		Version: releaseLabel(pkg),
+		Label:   releaseLabel(pkg),
 	}
 }
 

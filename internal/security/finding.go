@@ -479,6 +479,13 @@ const (
 // DocumentSummary is a held document, named and measured but not carried.
 type DocumentSummary struct {
 	Kind DocumentKind `json:"kind"`
+	// Provider names the scanner whose body this is.
+	//
+	// Needed once two scanners answer for one image: the vulnerability response
+	// exists once per scanner, they are different documents about the same
+	// bytes, and a download menu that could not name them would offer two
+	// identical-looking buttons.
+	Provider string `json:"provider,omitempty"`
 	// Available is false for a document the scanner was asked for and did not
 	// have - which is worth saying, because the alternative is a button that
 	// silently downloads nothing.

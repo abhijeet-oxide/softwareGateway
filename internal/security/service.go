@@ -91,6 +91,9 @@ type Request struct {
 	// release's own artifact tree, because what a release CONTAINS is the
 	// core's knowledge and not the provider's.
 	Artifacts []ArtifactRef
+	// Release names the release being read, for the providers that group by
+	// one. See ScanOptions.Release.
+	Release ReleaseRef
 	// Detail asks for full findings rather than counts.
 	Detail bool
 	// Refresh bypasses the cache and re-queries the provider for EVERY
@@ -333,6 +336,7 @@ func (s *Service) Posture(ctx context.Context, req Request) (Result, error) {
 		fetched, err := provider.Scan(ctx, missing, ScanOptions{
 			Detail:   req.Detail,
 			Refresh:  req.Refresh,
+			Release:  req.Release,
 			Progress: req.Progress,
 			Sink:     sink,
 		})
@@ -409,6 +413,7 @@ func (s *Service) fetchDocuments(
 
 	docs, err := docProvider.Documents(ctx, refs, req.Documents, ScanOptions{
 		Refresh:  req.Refresh,
+		Release:  req.Release,
 		Progress: req.Progress,
 	})
 	if err != nil {
@@ -491,6 +496,9 @@ type DocumentRequest struct {
 	Scope     Scope
 	Artifacts []ArtifactRef
 	Kinds     []DocumentKind
+	// Release names the release these artifacts belong to, for the providers
+	// that group by one.
+	Release ReleaseRef
 	// Refresh re-asks the scanner even for a body already held. Only a person
 	// pressing refresh should set it.
 	Refresh bool
@@ -575,7 +583,7 @@ func (s *Service) Documents(ctx context.Context, req DocumentRequest) ([]Documen
 	}
 
 	fetched, err := docProvider.Documents(ctx, order, req.Kinds, ScanOptions{
-		Refresh: req.Refresh, Progress: req.Progress,
+		Refresh: req.Refresh, Release: req.Release, Progress: req.Progress,
 	})
 	if err != nil {
 		return out, err
@@ -605,7 +613,7 @@ func (s *Service) provider(ctx context.Context, scope Scope) (Provider, error) {
 	if s.resolver == nil {
 		return Disabled{Reason: "No security scanner is configured for this deployment."}, nil
 	}
-	p, err := s.resolver.ProviderFor(ctx, scope.Product, scope.Repository)
+	p, err := s.resolver.ProviderFor(ctx, scope)
 	switch {
 	case err == nil:
 		return p, nil

@@ -164,18 +164,50 @@ func (s *Server) bundleFor(
 		refs = append(refs, r.Artifact)
 	}
 
-	docs, err := s.deps.SecurityStore.LoadDocuments(ctx, side.target.Scope, refs, nil)
-	if err != nil {
-		// The tables are the export's substance and they are already built.
-		// Failing the whole download because the raw half could not be read
-		// would hand back nothing where something useful was in hand.
-		s.deps.Logger.Warn("security bundle: could not read stored documents",
-			"product", productName, "package", pkg.ID, "error", err)
-		docs = map[string]map[security.DocumentKind]security.Document{}
+	// One read per scanner, and one set of files per scanner.
+	//
+	// # Why they cannot share a map
+	//
+	// Documents are keyed by (artifact, kind), and Xray's vulnerability body
+	// and Anchore's are the same kind about the same artifact. Merged into one
+	// map, the second scanner's would silently replace the first's - and the
+	// bundle would hand a vendor one scanner's output under a name that claims
+	// to be the release's. Each scanner's bodies are written under its own
+	// filename (see bundleFiles), which is what makes "here is what both
+	// scanners said about this image" a thing somebody can be sent.
+	var (
+		files []export.File
+		all   = map[string]map[security.DocumentKind]security.Document{}
+	)
+	for _, scope := range side.target.scopes() {
+		docs, err := s.deps.SecurityStore.LoadDocuments(ctx, scope, refs, nil)
+		if err != nil {
+			// The tables are the export's substance and they are already built.
+			// Failing the whole download because one scanner's raw half could
+			// not be read would hand back nothing where something useful was in
+			// hand.
+			s.deps.Logger.Warn("security bundle: could not read stored documents",
+				"product", productName, "package", pkg.ID, "provider", scope.Provider, "error", err)
+			continue
+		}
+		files = append(files, bundleFiles(docs, side.reports, scope.Provider)...)
+		for ref, held := range docs {
+			if all[ref] == nil {
+				all[ref] = map[security.DocumentKind]security.Document{}
+			}
+			for kind, doc := range held {
+				// First scanner asked wins, for the README's inventory only.
+				// The FILES are per scanner and lose nothing; this map answers
+				// "is there an SBOM for this image", which is a yes either way.
+				if _, seen := all[ref][kind]; !seen {
+					all[ref][kind] = doc
+				}
+			}
+		}
 	}
 
-	files := bundleFiles(docs, side.reports)
-	return append([]export.File{bundleReadme(productName, pkg, side, docs)}, files...)
+	sort.Slice(files, func(i, j int) bool { return files[i].Path < files[j].Path })
+	return append([]export.File{bundleReadme(productName, pkg, side, all)}, files...)
 }
 
 // handleExportSecurityComparison serves
@@ -285,9 +317,11 @@ func (s *Server) handleExportSecuritySearch(w http.ResponseWriter, r *http.Reque
 	// showing. A file that silently held the first fifty of 1,286 rows would
 	// look complete and be wrong, which is the worst combination an export can
 	// manage.
+	kevOnly := q.Get("kev") == "true"
+	provider := strings.TrimSpace(q.Get("provider"))
 	hits, err := s.deps.SecurityIndex.Search(r.Context(), store.SearchFilter{
 		Product: productName, Kind: kind, Query: query,
-		Exact: q.Get("exact") == "true", Limit: 1000,
+		Exact: q.Get("exact") == "true", KEVOnly: kevOnly, Provider: provider, Limit: 1000,
 	})
 	if err != nil {
 		s.internal(w, r, "security search for export", err)
@@ -310,7 +344,7 @@ func (s *Server) handleExportSecuritySearch(w http.ResponseWriter, r *http.Reque
 	}
 
 	payload := toAPISecuritySearch(productName, string(kind), query, q.Get("exact") == "true",
-		hits, releases, len(hits) >= 1000)
+		hits, releases, len(hits) >= 1000, kevOnly, provider)
 	s.writeExport(w, r, format, searchBook(payload), []string{productName, "search", string(kind), query})
 }
 

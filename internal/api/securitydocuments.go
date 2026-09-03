@@ -80,15 +80,21 @@ func (s *Server) handleSecurityDocument(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
-	docs, err := s.deps.SecurityStore.LoadDocuments(
-		r.Context(), target.Scope, []security.ArtifactRef{artifact},
-		[]security.DocumentKind{kind})
+	// WHICH scanner's body, when more than one produced one.
+	//
+	// The vulnerability response for an image exists once per scanner and they
+	// are different documents about the same bytes - which is the whole reason
+	// somebody downloads one to send to a vendor. Naming none takes the first
+	// scanner that has it, in the order they are asked, so an unqualified link
+	// keeps working; naming one that has nothing falls through to the same
+	// "not held" answer as any other missing document.
+	wanted := strings.TrimSpace(r.URL.Query().Get("provider"))
+	scope, doc, held, err := s.documentFrom(r.Context(), target, artifact, kind, wanted)
 	if err != nil {
 		s.internal(w, r, "read security document", err)
 		return
 	}
 
-	doc, held := docs[artifact.Ref()][kind]
 	if (!held || !doc.Available) && s.deps.SecurityDocuments != nil {
 		// Not held. Worth generating for an SBOM, which a sync deliberately
 		// does not fetch; not worth it for the other three, whose absence means
@@ -99,9 +105,10 @@ func (s *Server) handleSecurityDocument(w http.ResponseWriter, r *http.Request) 
 			return
 		}
 		fetched, err := s.deps.SecurityDocuments.Documents(r.Context(), security.DocumentRequest{
-			Scope:     target.Scope,
+			Scope:     scope,
 			Artifacts: []security.ArtifactRef{artifact},
 			Kinds:     []security.DocumentKind{kind},
+			Release:   releaseRefFor(productName, pkg),
 			TTL:       s.deps.SecurityRetention,
 		})
 		if err != nil {
@@ -127,7 +134,10 @@ func (s *Server) handleSecurityDocument(w http.ResponseWriter, r *http.Request) 
 	filename := strings.Join([]string{
 		bundleSegment(productName), bundleSegment(releaseLabel(pkg)),
 		bundleSegment(artifact.ArtifactKey()), bundleSegment(tagOrDigest(artifact)),
-		string(kind),
+		// The scanner in the filename, because a reader who downloads both
+		// scanners' vulnerability bodies for one image ends up with two files
+		// in one directory and needs to be able to tell them apart afterwards.
+		bundleSegment(scope.Provider), string(kind),
 	}, "_") + doc.Extension()
 
 	w.Header().Set("Content-Type", contentType)
@@ -181,4 +191,48 @@ func (s *Server) artifactByDigest(
 		}
 	}
 	return security.ArtifactRef{}, false
+}
+
+// documentFrom finds one image's document, from the scanner asked for or from
+// whichever scanner has it.
+//
+// Returns the scope it came from as well as the document, because the caller
+// needs it twice afterwards: to generate a missing SBOM from the right scanner,
+// and to name the scanner in the downloaded filename.
+func (s *Server) documentFrom(
+	ctx context.Context, target securityTarget, artifact security.ArtifactRef,
+	kind security.DocumentKind, wanted string,
+) (security.Scope, security.Document, bool, error) {
+	scopes := target.scopes()
+	if wanted != "" {
+		for _, scope := range scopes {
+			if scope.Provider == wanted {
+				scopes = []security.Scope{scope}
+				break
+			}
+		}
+	}
+
+	var (
+		firstScope security.Scope
+		lastErr    error
+	)
+	for i, scope := range scopes {
+		if i == 0 {
+			firstScope = scope
+		}
+		docs, err := s.deps.SecurityStore.LoadDocuments(
+			ctx, scope, []security.ArtifactRef{artifact}, []security.DocumentKind{kind})
+		if err != nil {
+			lastErr = err
+			continue
+		}
+		if doc, ok := docs[artifact.Ref()][kind]; ok && doc.Available {
+			return scope, doc, true, nil
+		}
+	}
+	if lastErr != nil {
+		return firstScope, security.Document{}, false, lastErr
+	}
+	return firstScope, security.Document{}, false, nil
 }

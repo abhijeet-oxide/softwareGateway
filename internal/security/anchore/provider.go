@@ -34,13 +34,15 @@ type Settings struct {
 	Registry   string
 	Repository string
 
-	// Application and Version name the release in Anchore's own model: the
-	// product's name and the release's version. Empty for either switches the
-	// grouping off, and the provider then reads per-image results only - which
-	// is a legitimate configuration for a deployment that has its own
-	// application taxonomy and does not want ours.
-	Application string
-	Version     string
+	// Grouping says whether releases are mapped onto Anchore's
+	// Application/Version model.
+	//
+	// The NAMES are not here: a provider is built per repository and a release
+	// is not, so which application and version a scan is about arrives on the
+	// scan (ScanOptions.Release). This is only the switch, for the deployment
+	// that has its own application taxonomy in Anchore and does not want ours
+	// beside it.
+	Grouping bool
 
 	// Concurrency caps requests in flight against Anchore. Zero uses
 	// DefaultConcurrency.
@@ -71,15 +73,19 @@ type Provider struct {
 	client   *Client
 	settings Settings
 
-	// version is the Anchore Application Version this release maps to, resolved
-	// once per provider and reused.
+	// versions caches the Application Version each release maps to.
 	//
-	// Cached because a provider is built per (product, repository) and every
-	// scan of every release through it wants the same lookup - and because the
-	// find-or-create is three requests that must not be repeated per batch.
-	versionOnce sync.Once
-	version     Version
-	versionErr  error
+	// Keyed by release, because a provider is built per (product, repository)
+	// and serves every release through it - and because the find-or-create is
+	// three requests that must not be repeated per scan of the same release.
+	//
+	// Bounded by the number of releases a Coordinator syncs before it restarts,
+	// which is small, and each entry is four strings.
+	mu       sync.Mutex
+	versions map[string]Version
+	// latest is the last version resolved, so VersionURL has something to
+	// return for a caller that has just scanned.
+	latest Version
 }
 
 // New builds the provider for one release's worth of configuration.
@@ -98,7 +104,7 @@ func New(cfg Config, settings Settings) (security.Provider, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &Provider{client: client, settings: settings}, nil
+	return &Provider{client: client, settings: settings, versions: map[string]Version{}}, nil
 }
 
 // Name implements security.Provider.
@@ -113,14 +119,16 @@ func (p *Provider) Ping(ctx context.Context) error { return p.client.Ping(ctx) }
 // Endpoint is the API base URL, so a caller can build a link into Anchore.
 func (p *Provider) Endpoint() string { return p.client.Endpoint() }
 
-// VersionURL is where a person opens this release in Anchore, once the
-// grouping has been resolved. Empty before the first scan, or where the
-// deployment has switched grouping off.
+// VersionURL is where a person opens the last-scanned release in Anchore.
+// Empty before the first scan, or where the deployment has switched grouping
+// off.
 func (p *Provider) VersionURL() string {
-	if p.version.VersionID == "" {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if p.latest.VersionID == "" {
 		return ""
 	}
-	return p.version.URL(p.client.Endpoint())
+	return p.latest.URL(p.client.Endpoint())
 }
 
 // Scan implements security.Provider.
@@ -552,11 +560,11 @@ func (p *Provider) groupRelease(
 	ctx context.Context, refs []security.ArtifactRef, pullable []int,
 	known map[string]ImageRecord, opts security.ScanOptions,
 ) {
-	if p.settings.Application == "" || p.settings.Version == "" {
+	if !p.settings.Grouping || !opts.Release.Named() {
 		return
 	}
 
-	version, err := p.resolveVersion(ctx)
+	version, err := p.resolveVersion(ctx, opts.Release)
 	if err != nil {
 		security.ReportWarning(opts.Progress,
 			"This release's images were scanned, but Anchore would not group them under an "+
@@ -605,13 +613,33 @@ func (p *Provider) groupRelease(
 	}
 }
 
-// resolveVersion finds or creates the Application Version once per provider.
-func (p *Provider) resolveVersion(ctx context.Context) (Version, error) {
-	p.versionOnce.Do(func() {
-		p.version, p.versionErr = p.client.FindOrCreateVersion(
-			ctx, p.settings.Application, p.settings.Version)
-	})
-	return p.version, p.versionErr
+// resolveVersion finds or creates one release's Application Version, once.
+func (p *Provider) resolveVersion(ctx context.Context, release security.ReleaseRef) (Version, error) {
+	key := release.Product + "|" + release.Version
+
+	p.mu.Lock()
+	cached, ok := p.versions[key]
+	p.mu.Unlock()
+	if ok {
+		return cached, nil
+	}
+
+	// Deliberately OUTSIDE the lock. The find-or-create is three round trips
+	// against somebody else's service, and holding a provider-wide mutex across
+	// them would serialize every release syncing through this provider behind
+	// the slowest one. Two syncs of the same release racing here is not a
+	// problem: the create treats "already exists" as the success it is and both
+	// end up with the same version.
+	version, err := p.client.FindOrCreateVersion(ctx, release.Product, release.Version)
+	if err != nil {
+		return Version{}, err
+	}
+
+	p.mu.Lock()
+	p.versions[key] = version
+	p.latest = version
+	p.mu.Unlock()
+	return version, nil
 }
 
 func (p *Provider) concurrency() int {

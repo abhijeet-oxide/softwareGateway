@@ -180,8 +180,7 @@ func newProvider(t *testing.T, f *fakeAnchore, mutate func(*Settings)) *Provider
 		Enabled:      true,
 		Registry:     "internal.example.com",
 		Repository:   "vendor/app",
-		Application:  "cfx-5000",
-		Version:      "25.7.2131",
+		Grouping:     true,
 		Submit:       true,
 		Concurrency:  4,
 		AnalysisWait: 2 * time.Second,
@@ -203,6 +202,16 @@ func newProvider(t *testing.T, f *fakeAnchore, mutate func(*Settings)) *Provider
 	return provider
 }
 
+// scanOptions is a detailed scan of a named release, which is what a sync
+// makes: the release identity is what Anchore's Application/Version grouping
+// is built from.
+func scanOptions() security.ScanOptions {
+	return security.ScanOptions{
+		Detail:  true,
+		Release: security.ReleaseRef{Product: "cfx-5000", Version: "25.7.2131", Label: "cfx-5000 25.7.2131"},
+	}
+}
+
 func imageRef(name, digest string) security.ArtifactRef {
 	return security.ArtifactRef{
 		Name: name, Tag: "1.0", Digest: digest,
@@ -220,7 +229,7 @@ func TestFirstSyncSubmitsWaitsAndReads(t *testing.T) {
 	p := newProvider(t, f, nil)
 	reports, err := p.Scan(context.Background(),
 		[]security.ArtifactRef{imageRef("app", "sha256:aaa")},
-		security.ScanOptions{Detail: true})
+		scanOptions())
 	if err != nil {
 		t.Fatalf("scan: %v", err)
 	}
@@ -250,7 +259,7 @@ func TestKEVIsReadAndSortsFirst(t *testing.T) {
 
 	p := newProvider(t, f, nil)
 	reports, err := p.Scan(context.Background(),
-		[]security.ArtifactRef{imageRef("app", "sha256:aaa")}, security.ScanOptions{Detail: true})
+		[]security.ArtifactRef{imageRef("app", "sha256:aaa")}, scanOptions())
 	if err != nil {
 		t.Fatalf("scan: %v", err)
 	}
@@ -296,7 +305,7 @@ func TestUnanalysedImageIsNotReportedClean(t *testing.T) {
 
 	p := newProvider(t, f, func(s *Settings) { s.AnalysisWait = 30 * time.Millisecond })
 	reports, err := p.Scan(context.Background(),
-		[]security.ArtifactRef{imageRef("app", "sha256:bbb")}, security.ScanOptions{Detail: true})
+		[]security.ArtifactRef{imageRef("app", "sha256:bbb")}, scanOptions())
 	if err != nil {
 		t.Fatalf("scan: %v", err)
 	}
@@ -315,7 +324,7 @@ func TestFailedAnalysisIsUnavailable(t *testing.T) {
 
 	p := newProvider(t, f, nil)
 	reports, err := p.Scan(context.Background(),
-		[]security.ArtifactRef{imageRef("app", "sha256:ccc")}, security.ScanOptions{Detail: true})
+		[]security.ArtifactRef{imageRef("app", "sha256:ccc")}, scanOptions())
 	if err != nil {
 		t.Fatalf("scan: %v", err)
 	}
@@ -333,7 +342,7 @@ func TestUnreplicatedImageIsReportedMissing(t *testing.T) {
 	ref := imageRef("app", "sha256:ddd")
 	ref.Registry = ""
 	reports, err := p.Scan(context.Background(),
-		[]security.ArtifactRef{ref}, security.ScanOptions{Detail: true})
+		[]security.ArtifactRef{ref}, scanOptions())
 	if err != nil {
 		t.Fatalf("scan: %v", err)
 	}
@@ -352,7 +361,7 @@ func TestNonImagesAreUnsupported(t *testing.T) {
 	chart := imageRef("chart", "sha256:eee")
 	chart.Kind = "chart"
 	reports, err := p.Scan(context.Background(),
-		[]security.ArtifactRef{chart}, security.ScanOptions{Detail: true})
+		[]security.ArtifactRef{chart}, scanOptions())
 	if err != nil {
 		t.Fatalf("scan: %v", err)
 	}
@@ -370,7 +379,7 @@ func TestKnownImagesAreNotResubmitted(t *testing.T) {
 	p := newProvider(t, f, nil)
 	if _, err := p.Scan(context.Background(),
 		[]security.ArtifactRef{imageRef("app", "sha256:aaa")},
-		security.ScanOptions{Detail: true}); err != nil {
+		scanOptions()); err != nil {
 		t.Fatalf("scan: %v", err)
 	}
 	if len(f.submitted) != 0 {

@@ -375,6 +375,137 @@ type SecurityConfig struct {
 	//     image, it is wanted for an export rather than for a page, and it is
 	//     fetched on demand when somebody presses the button.
 	Documents []string `koanf:"documents"`
+
+	// Anchore is where the deployment's Anchore Enterprise lives, and how hard
+	// to push it. See AnchoreConfig.
+	Anchore AnchoreConfig `koanf:"anchore"`
+}
+
+// AnchoreConfig is the deployment's Anchore Enterprise: where it is, which
+// credential reaches it, and how hard to push it.
+//
+// # Why the address is here and Xray's is not
+//
+// Because Xray is not a separate system. It is a second endpoint on a JFrog
+// platform this codebase already speaks to, reached with the credential the
+// repository already holds - so a product document says one thing about it
+// ("on") and everything else is derived. There is nothing to derive an Anchore
+// endpoint from: it is its own host with its own credential, and one stanza
+// here is the only alternative to repeating that host in every product
+// document and watching the copies drift.
+//
+// A product document still says exactly one thing about Anchore, and it is the
+// same thing it says about Xray: whether it is on for a repository.
+//
+//	targets:
+//	  - name: internal-jfrog
+//	    type: jfrog
+//	    xrayEnabled: true
+//	    anchoreEnabled: true
+type AnchoreConfig struct {
+	// Endpoint is the Anchore API base URL as an operator has it in a browser -
+	// "https://anchore.example.com". The `/v2` prefix is appended if absent, so
+	// a URL copied from the API documentation works unchanged.
+	//
+	// EMPTY MEANS ANCHORE IS NOT AVAILABLE in this deployment, whatever a
+	// product document says. That direction is deliberate: a product asking for
+	// a scanner the deployment does not have should report "Anchore is not
+	// configured on this Coordinator" rather than fail every sync against a
+	// URL nobody set.
+	Endpoint string `koanf:"endpoint"`
+
+	// SecretName is the projected secret holding the Anchore credential, read
+	// the same way every registry credential is: <secretsDir>/<name>/<key>.
+	//
+	// UsernameKey and PasswordKey default to "username" and "password". An API
+	// key goes in the password key, which is what a service account should be
+	// using.
+	SecretName  string `koanf:"secretName"`
+	UsernameKey string `koanf:"usernameKey"`
+	PasswordKey string `koanf:"passwordKey"`
+
+	// Account scopes every request to one Anchore account, through the
+	// `x-anchore-account` header. Admin-only in Anchore, and left empty in
+	// almost every deployment: the credential's own account is what a service
+	// account should be scoped to already.
+	Account string `koanf:"account"`
+
+	// Concurrency caps Anchore requests in flight for one sync.
+	//
+	// Higher than the Xray equivalent by default, and for a structural reason
+	// rather than a preference: Anchore answers per IMAGE where Xray answers
+	// per batch of fifty, so a release of a hundred and fifty images is a
+	// hundred and fifty requests here. A concurrency of six would make a first
+	// sync twenty-five serial minutes.
+	Concurrency int `koanf:"concurrency"`
+	// RequestTimeout bounds one Anchore call end to end.
+	RequestTimeout time.Duration `koanf:"requestTimeout"`
+
+	// AnalysisWait is how long a sync waits for images it had to submit.
+	//
+	// # Why a sync waits at all
+	//
+	// Anchore does not index a repository; it is told about an image and
+	// analyses it asynchronously, in minutes. A first sync therefore submits
+	// everything and finds nothing analysed - and a sync that read immediately
+	// would report the whole release as unscanned and leave the reader with no
+	// way to know that pressing Sync again in five minutes is exactly right.
+	//
+	// # Why it is bounded
+	//
+	// Because the wait holds the release's sync claim, and a sync that waited
+	// out somebody's Anchore backlog would block every later sync of that
+	// release for an hour. Past the bound the sync records what finished,
+	// labels the rest as still analysing, and says so.
+	//
+	// Negative disables waiting entirely, which is right for a deployment that
+	// submits images at transfer time and syncs much later.
+	AnalysisWait time.Duration `koanf:"analysisWait"`
+	// PollInterval is how often a waiting sync re-asks Anchore.
+	PollInterval time.Duration `koanf:"pollInterval"`
+
+	// Submit says whether this Coordinator may register images with Anchore.
+	//
+	// True by default, because an image Anchore has never been told about
+	// produces no findings and a platform that could only read would report
+	// every new release as unscanned forever. Worth being able to turn off: an
+	// estate whose own pipeline registers images wants this platform to read
+	// Anchore rather than add to it, and a sync that submitted anyway would
+	// duplicate their registration under our annotations.
+	Submit *bool `koanf:"submit"`
+
+	// SBOMFormat is which flavour of SBOM to fetch: spdx-json, cyclonedx-json
+	// or native-json. Empty uses SPDX, which is what the person pressing
+	// "download SBOM" is overwhelmingly about to send to somebody else.
+	SBOMFormat string `koanf:"sbomFormat"`
+
+	// Application overrides how a release is named in Anchore's own
+	// Application/Version model. Two templates, and both default to the
+	// obvious: the product's name and the release's version.
+	//
+	// Configurable only because an estate that already has an application
+	// taxonomy in Anchore needs its releases to land inside it rather than
+	// beside it. Setting either to "-" switches the grouping off entirely, and
+	// this platform then reads per-image results only.
+	ApplicationName string `koanf:"applicationName"`
+	VersionName     string `koanf:"versionName"`
+}
+
+// Available reports whether this deployment can reach an Anchore at all.
+//
+// The endpoint alone. A credential that is missing is a failure worth
+// reporting when somebody switches Anchore on for a repository; an endpoint
+// that is missing means the deployment never had one, and every product
+// document mentioning Anchore should say so quietly rather than fail.
+func (c AnchoreConfig) Available() bool { return strings.TrimSpace(c.Endpoint) != "" }
+
+// SubmitImages reports whether syncs may register images with Anchore.
+func (c AnchoreConfig) SubmitImages() bool { return c.Submit == nil || *c.Submit }
+
+// Grouping reports whether releases should be grouped into Anchore
+// Applications and Versions. "-" in either template switches it off.
+func (c AnchoreConfig) Grouping() bool {
+	return strings.TrimSpace(c.ApplicationName) != "-" && strings.TrimSpace(c.VersionName) != "-"
 }
 
 // SecurityDocumentKinds is the configured list, defaulted and validated.
@@ -730,6 +861,18 @@ func Defaults() SystemConfig {
 				// The gate and the malware verdict, which are one request
 				// between them. Not the SBOM: see the field comment.
 				Documents: []string{"policy", "malware"},
+
+				// Anchore, with NO ENDPOINT. That is the switch: a deployment
+				// that has not configured one has no Anchore, and a product
+				// asking for it is told so rather than failing every sync
+				// against a URL nobody set.
+				Anchore: AnchoreConfig{
+					Concurrency:    12,
+					RequestTimeout: 60 * time.Second,
+					AnalysisWait:   10 * time.Minute,
+					PollInterval:   15 * time.Second,
+					SBOMFormat:     "spdx-json",
+				},
 			},
 		},
 		Worker: WorkerConfig{

@@ -308,7 +308,11 @@ func (s *Security) DocumentSummaries(
 					return fmt.Errorf("scan security document summary: %w", err)
 				}
 				out[ref] = append(out[ref], security.DocumentSummary{
-					Kind:        security.DocumentKind(kind),
+					Kind: security.DocumentKind(kind),
+					// The scope's provider, because that is what the row was
+					// filtered by. Carried so a caller reading several scopes
+					// can tell whose body is whose.
+					Provider:    scope.Provider,
 					Available:   sourceBytes > 0,
 					ContentType: contentType,
 					SourceBytes: sourceBytes,

@@ -34,6 +34,41 @@ func (p *Product) computeWarnings() []Warning {
 	var out []Warning
 	out = append(out, p.warnMirrorExcludesSignatures()...)
 	out = append(out, p.warnRedundantVendorEgress()...)
+	out = append(out, p.warnAnchoreOnVendorSource()...)
+	return out
+}
+
+// warnAnchoreOnVendorSource catches the Anchore switch on the wrong side of the
+// replication.
+//
+// Anchore PULLS an image, from its own network, with credentials configured
+// inside Anchore. Pointed at a target - the internal registry a release lands
+// in - that works, and it is the whole shape of the integration. Pointed at a
+// SOURCE, it is asking your Anchore to reach a vendor's registry across the
+// internet, with a credential it does not have, for images that are already
+// sitting in your own.
+//
+// A warning rather than an error because it is not impossible: an estate whose
+// Anchore genuinely can reach a vendor mirror may want exactly this, and a
+// schema that refused it would be inventing a limitation. But it is almost
+// always the wrong line, it fails one image at a time rather than at load, and
+// the failure reads as "Anchore has no record of this image" - which sends the
+// reader to look at Anchore rather than at the four characters that caused it.
+func (p *Product) warnAnchoreOnVendorSource() []Warning {
+	var out []Warning
+	for i, s := range p.Spec.Sources {
+		if !AnchoreIsEnabled(s.AnchoreEnabled) {
+			continue
+		}
+		out = append(out, Warning{
+			Field: fmt.Sprintf("spec.sources[%d].anchoreEnabled", i),
+			Message: fmt.Sprintf(
+				"Anchore is switched on for source %q, so Anchore will be asked to pull this "+
+					"vendor's images from %s", s.Name, s.Registry),
+			Hint: "Anchore usually analyses the internal copy rather than the vendor's - " +
+				"set anchoreEnabled on the target this product replicates to instead",
+		})
+	}
 	return out
 }
 

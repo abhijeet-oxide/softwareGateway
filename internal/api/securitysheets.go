@@ -467,6 +467,7 @@ func providerLabel(provider string) string {
 func bundleFiles(
 	docs map[string]map[security.DocumentKind]security.Document,
 	reports []security.Report,
+	fallbackProvider string,
 ) []export.File {
 	var out []export.File
 	for _, r := range reports {
@@ -479,7 +480,15 @@ func bundleFiles(
 			if !ok || len(doc.Payload) == 0 {
 				continue
 			}
+			// The scanner in the filename, which is what keeps two scanners'
+			// answers about one image from overwriting each other in the ZIP.
+			// The document's own stamp first, the scope it was read from
+			// second, the report's third - a stored row written before
+			// provider was stamped on documents has only the last.
 			provider := doc.Provider
+			if provider == "" {
+				provider = fallbackProvider
+			}
 			if provider == "" {
 				provider = r.Provider
 			}

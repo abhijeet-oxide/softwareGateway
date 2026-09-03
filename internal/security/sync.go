@@ -23,7 +23,12 @@ import (
 type PackageResult struct {
 	PackageID int64
 
-	Provider   string
+	// Provider is the scanner whose name goes on the release row, for the
+	// single-scanner case and for a listing with one column.
+	Provider string
+	// Providers is every scanner that actually answered, sorted. The
+	// per-scanner breakdown is keyed by these.
+	Providers  []string
 	Repository string
 	Role       string
 
@@ -101,6 +106,15 @@ type SyncRequest struct {
 	// Label is what to call the release in progress messages.
 	Label string
 	Scope Scope
+	// Providers names the scanners to ask, in the order to ask them.
+	//
+	// Empty asks whatever the scope names, which is the single-scanner path
+	// and stays exactly as it was. Named, each scanner answers into its own
+	// scope and the release records the merged result plus a row per scanner.
+	Providers []string
+	// Release names the release for the scanners that group by one - Anchore's
+	// Application and Version. See ScanOptions.Release.
+	Release ReleaseRef
 	// Artifacts is what to ask about, assembled by the caller from the
 	// release's own tree.
 	Artifacts []ArtifactRef
@@ -554,10 +568,14 @@ func (s *Syncer) run(
 	// claim honest.
 	go s.beat(ctx, cancel, req.PackageID)
 
+	scanners := req.Providers
+	if len(scanners) == 0 {
+		scanners = []string{req.Scope.Provider}
+	}
 	progress.Log(LogInfo, fmt.Sprintf(
 		"Sync started for %s. %d artifacts to consider, using %s against repository %s.",
 		labelOr(req.Label, "this release"), len(req.Artifacts),
-		providerLabel(req.Scope.Provider), req.Scope.Repository))
+		DescribeAll(scanners), req.Scope.Repository))
 	if len(s.documents) > 0 {
 		// What ELSE this sync is going to ask for, because each named kind is a
 		// request per image and a reader watching a slow sync deserves to know
@@ -569,22 +587,26 @@ func (s *Syncer) run(
 		progress.Log(LogInfo, "Also retrieving "+strings.Join(names, " and ")+" for each scanned image.")
 	}
 
-	res, err := s.service.Posture(ctx, Request{
-		Scope:     req.Scope,
-		Artifacts: req.Artifacts,
-		// Detail, always. A sync exists to fill the index that search and
-		// comparison read; counts alone would leave both of them empty and
-		// force the scanner query back onto the page that reads them.
-		Detail: true,
-		// NOT Refresh. A sync reuses a stored answer that is inside the age
-		// limit and asks about the rest - which for a release sharing its
-		// images with one synced this morning is most of the release. Force is
-		// the escape hatch for somebody who wants every image re-asked.
-		Refresh:   req.Force,
-		MaxAge:    req.MaxAge,
-		TTL:       req.TTL,
-		Documents: documentsOr(req.Documents, s.documents),
-		Progress:  progress,
+	res, err := s.service.Postures(ctx, MultiRequest{
+		Providers: req.Providers,
+		Request: Request{
+			Scope:     req.Scope,
+			Artifacts: req.Artifacts,
+			Release:   req.Release,
+			// Detail, always. A sync exists to fill the index that search and
+			// comparison read; counts alone would leave both of them empty and
+			// force the scanner query back onto the page that reads them.
+			Detail: true,
+			// NOT Refresh. A sync reuses a stored answer that is inside the age
+			// limit and asks about the rest - which for a release sharing its
+			// images with one synced this morning is most of the release. Force
+			// is the escape hatch for somebody who wants every image re-asked.
+			Refresh:   req.Force,
+			MaxAge:    req.MaxAge,
+			TTL:       req.TTL,
+			Documents: documentsOr(req.Documents, s.documents),
+			Progress:  progress,
+		},
 	})
 	if err != nil {
 		// A sync somebody STOPPED is not a sync that failed, and must not
@@ -617,21 +639,37 @@ func (s *Syncer) run(
 		return
 	}
 
-	// Every distinct thing the scanner said, with how many artifacts it said it
-	// about. This is the whole answer to "why is my release only 4% scanned",
-	// and until it was written down the interface could say the number and
-	// never the reason.
+	// Every distinct thing the scanners said, with how many artifacts they said
+	// it about. This is the whole answer to "why is my release only 4%
+	// scanned", and until it was written down the interface could say the
+	// number and never the reason.
 	for _, group := range groupMessages(res.Posture.Reports) {
 		progress.Log(group.level, group.line())
 	}
 
-	// A sync that reached the scanner and was told "off" is not a success with
-	// zero findings. Recording it as one would put a clean-looking row in a
-	// listing for a release nobody scanned.
-	if !res.Enabled {
-		reason := "JFrog Xray is not enabled for the repository holding this release."
+	// A scanner that could not be asked at all, named - and NOT fatal.
+	//
+	// One of two scanners refusing a credential is a degraded sync, not a
+	// failed one: the release has Xray's ninety thousand findings and does not
+	// have Anchore's, and recording that as a failure would throw away the
+	// answer somebody is waiting for to report a problem they can read in the
+	// transcript.
+	for _, provider := range sortedProviders(res.Failures) {
+		progress.Log(LogError, fmt.Sprintf("%s could not be asked about this release: %s",
+			ProviderLabel(provider), res.Failures[provider].Error()))
+	}
+
+	// A sync that reached the scanners and was told "off" by every one of them
+	// is not a success with zero findings. Recording it as one would put a
+	// clean-looking row in a listing for a release nobody scanned.
+	if !res.Enabled() {
+		reason := fmt.Sprintf("No scanner is enabled for the repository holding this release (%s).",
+			req.Scope.Repository)
 		if len(res.Posture.Reports) > 0 && res.Posture.Reports[0].Message != "" {
 			reason = res.Posture.Reports[0].Message
+		}
+		if len(res.Failures) > 0 {
+			reason = firstFailure(res.Failures)
 		}
 		progress.Log(LogError, reason)
 		s.fail(ctx, req.PackageID, reason, progress.Entries())
@@ -675,6 +713,27 @@ func (s *Syncer) run(
 	progress.Log(level, fmt.Sprintf(
 		"Sync finished. %d of %d images scanned, %d vulnerabilities across %d distinct advisories.",
 		cov.Scanned, cov.Scannable(), res.Posture.Counts.Total, res.Posture.UniqueCVEs))
+	// The KEVs, on their own line and above the per-scanner breakdown. Every
+	// other number in this transcript is a backlog; this one is a list of
+	// vulnerabilities somebody is already being attacked through, and it must
+	// not arrive as a clause inside a sentence about totals.
+	if res.Posture.KEVs > 0 {
+		progress.Log(LogError, fmt.Sprintf(
+			"%d known-exploited %s in this release, %d of them fixable.",
+			res.Posture.KEVs, plural(res.Posture.KEVs, "vulnerability", "vulnerabilities"),
+			res.Posture.KEVFixable))
+	}
+	// What each scanner contributed, once there is more than one - and
+	// specifically what only it found, because that is the number that says
+	// whether running two was worth it.
+	for _, sc := range res.Posture.BySource {
+		line := fmt.Sprintf("%s reported %d vulnerabilities across %d advisories",
+			ProviderLabel(sc.Provider), sc.Counts.Total, sc.UniqueCVEs)
+		if sc.OnlyHere > 0 {
+			line += fmt.Sprintf(", %d of which no other scanner reported", sc.OnlyHere)
+		}
+		progress.Log(LogInfo, line+".")
+	}
 	if malware := countMalware(res.Posture.Reports); malware > 0 {
 		// Never buried in the totals. Everything else in this transcript is
 		// something to schedule; this is something to stop.
@@ -686,8 +745,13 @@ func (s *Syncer) run(
 	writeCtx, done := writeContext(ctx)
 	defer done()
 	if err := s.recorder.Record(writeCtx, PackageResult{
-		PackageID:   req.PackageID,
-		Provider:    res.Provider,
+		PackageID: req.PackageID,
+		// The scanners that ANSWERED, not the ones that were asked. A release
+		// whose Anchore refused a credential is a release Xray scanned, and
+		// recording both would put a row in the per-source breakdown for a
+		// scanner that contributed nothing.
+		Provider:    primaryProvider(res),
+		Providers:   res.ProviderNames(),
 		Repository:  req.Scope.Repository,
 		Role:        req.Scope.Role,
 		Posture:     res.Posture,
@@ -700,10 +764,46 @@ func (s *Syncer) run(
 
 	s.log.Info("security sync complete",
 		"package", req.PackageID, "label", req.Label,
+		"providers", res.ProviderNames(),
 		"artifacts", res.Posture.Coverage.Artifacts,
 		"scanned", res.Posture.Coverage.Scanned,
 		"vulnerabilities", res.Posture.Counts.Total,
+		"kevs", res.Posture.KEVs,
 		"fromCache", res.FromCache, "fetched", res.Fetched)
+}
+
+// primaryProvider is the scanner whose name goes on the release row.
+//
+// The first that answered, in the order they were asked - which puts Xray
+// there on a deployment running both, because that is the order ProvidersFor
+// returns and because it is the one a reader of a single-column listing expects
+// to see. The full list travels beside it; nothing reads this to decide what
+// was scanned.
+func primaryProvider(res MultiResult) string {
+	if len(res.Sources) > 0 {
+		return res.Sources[0].Provider
+	}
+	return ""
+}
+
+// sortedProviders is the keys of a failure map, in a stable order, so a
+// transcript reads the same on two runs of the same broken configuration.
+func sortedProviders(failures map[string]error) []string {
+	out := make([]string, 0, len(failures))
+	for provider := range failures {
+		out = append(out, provider)
+	}
+	sort.Strings(out)
+	return out
+}
+
+// firstFailure is one scanner's refusal, as the reason a sync had nothing.
+func firstFailure(failures map[string]error) string {
+	for _, provider := range sortedProviders(failures) {
+		return fmt.Sprintf("%s could not be asked about this release: %s",
+			ProviderLabel(provider), failures[provider].Error())
+	}
+	return ""
 }
 
 // documentsOr prefers the request's own list, falling back to the syncer's.
@@ -840,15 +940,7 @@ func labelOr(label, fallback string) string {
 }
 
 // providerLabel is the scanner's name as a person writes it.
-func providerLabel(provider string) string {
-	if provider == "jfrog-xray" {
-		return "JFrog Xray"
-	}
-	if provider == "" {
-		return "the configured scanner"
-	}
-	return provider
-}
+func providerLabel(provider string) string { return ProviderLabel(provider) }
 
 // firstMessage is whatever the provider said about the first artifact it could
 // not answer for.

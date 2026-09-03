@@ -69,6 +69,7 @@ func (s *Security) LoadSummaries(ctx context.Context, scope security.Scope, refs
 			SELECT artifact_ref, status, message, provider,
 			       total, fixable, critical, high, medium, low, unknown,
 			       fix_critical, fix_high, fix_medium, fix_low, fix_unknown,
+			       kev, kev_fixable,
 			       scanned_at, retrieved_at, missing
 			  FROM security_scans
 			 WHERE product = ? AND repository = ? AND provider = ?
@@ -416,7 +417,7 @@ func (s *Security) replaceFindings(
 		}
 	}
 
-	const columns = 11
+	const columns = 12
 	values := "(" + strings.TrimSuffix(strings.Repeat("?,", columns), ",") + ")"
 
 	for start := 0; start < len(pending); start += findingsPerStatement {
@@ -438,14 +439,14 @@ func (s *Security) replaceFindings(
 				severity = security.SeverityUnknown
 			}
 			args = append(args,
-				p.scanID, f.CVE, f.ID, string(severity), f.Fixable,
+				p.scanID, f.CVE, f.ID, string(severity), f.Fixable, f.KEV,
 				f.Component.ID, f.Component.Name, f.Component.Version, f.Component.Type,
 				fixedIn, truncate(f.Summary, 500))
 		}
 
 		if _, err := tx.ExecContext(ctx, s.q(`
 			INSERT INTO security_findings (
-				scan_id, cve, issue_id, severity, fixable,
+				scan_id, cve, issue_id, severity, fixable, kev,
 				component_id, component_name, component_version, component_type,
 				fixed_in, summary)
 			VALUES `+strings.TrimSuffix(strings.Repeat(values+",", len(batch)), ",")+`
@@ -505,8 +506,9 @@ func (s *Security) saveScan(ctx context.Context, tx *sql.Tx, scope security.Scop
 			status, message,
 			total, fixable, critical, high, medium, low, unknown,
 			fix_critical, fix_high, fix_medium, fix_low, fix_unknown,
+			kev, kev_fixable,
 			scanned_at, retrieved_at, fingerprint, evictable_at, missing, last_used_at)
-		VALUES (?,?,?,?, ?,?,?,?,?, ?,?, ?,?,?,?,?,?,?, ?,?,?,?,?, ?,?,?,?,?,?)
+		VALUES (?,?,?,?, ?,?,?,?,?, ?,?, ?,?,?,?,?,?,?, ?,?,?,?,?, ?,?, ?,?,?,?,?,?)
 		ON CONFLICT (product, repository, provider, artifact_ref) DO UPDATE SET
 			role = excluded.role,
 			artifact_key = excluded.artifact_key,
@@ -521,6 +523,7 @@ func (s *Security) saveScan(ctx context.Context, tx *sql.Tx, scope security.Scop
 			fix_critical = excluded.fix_critical, fix_high = excluded.fix_high,
 			fix_medium = excluded.fix_medium, fix_low = excluded.fix_low,
 			fix_unknown = excluded.fix_unknown,
+			kev = excluded.kev, kev_fixable = excluded.kev_fixable,
 			scanned_at = excluded.scanned_at,
 			retrieved_at = excluded.retrieved_at,
 			fingerprint = excluded.fingerprint,
@@ -534,6 +537,7 @@ func (s *Security) saveScan(ctx context.Context, tx *sql.Tx, scope security.Scop
 		c.BySeverity.Critical, c.BySeverity.High, c.BySeverity.Medium, c.BySeverity.Low, c.BySeverity.Unknown,
 		c.FixableBySeverity.Critical, c.FixableBySeverity.High, c.FixableBySeverity.Medium,
 		c.FixableBySeverity.Low, c.FixableBySeverity.Unknown,
+		c.KEV, c.KEVFixable,
 		timeOrNil(r.ScannedAt), securityTime(r.RetrievedAt), fingerprintOf(r),
 		securityTime(expires), r.Missing, securityTime(r.RetrievedAt))
 	if err != nil {
@@ -932,7 +936,19 @@ type SearchFilter struct {
 	// prefix and as a contained substring, which is what makes "openssl" find
 	// "libssl-dev" nowhere and "openssl1.1" here.
 	Exact bool
-	Limit int
+	// KEVOnly narrows the search to known-exploited vulnerabilities.
+	//
+	// Worth a filter of its own rather than a severity choice, because it is
+	// the question somebody arrives with on the day a KEV catalogue is
+	// updated: not "what is critical in this product" - which they know - but
+	// "which of my releases carry the four advisories that were added this
+	// morning".
+	KEVOnly bool
+	// Provider narrows the search to one scanner. Empty searches every
+	// scanner's findings, which is the right default: a reader hunting a CVE
+	// wants it found, not attributed.
+	Provider string
+	Limit    int
 }
 
 // SearchHit is one row of a search result: a finding, on an artifact, with
@@ -948,6 +964,9 @@ type SearchHit struct {
 	ComponentVersion string
 	ComponentType    string
 	FixedIn          string
+	// KEV says this finding is known to be exploited, so a search result can
+	// carry the badge the release page does.
+	KEV bool
 
 	ArtifactRef  string
 	ArtifactKey  string
@@ -1013,9 +1032,17 @@ func (s *Security) Search(ctx context.Context, f SearchFilter) ([]SearchHit, err
 		return nil, fmt.Errorf("unknown search kind %q", f.Kind)
 	}
 
+	if f.KEVOnly {
+		where += " AND v.kev"
+	}
+	if f.Provider != "" {
+		where += " AND sc.provider = ?"
+		args = append(args, f.Provider)
+	}
+
 	args = append(args, limit)
 	query := s.q(`
-		SELECT v.cve, v.issue_id, v.severity, v.fixable, v.summary,
+		SELECT v.cve, v.issue_id, v.severity, v.fixable, v.kev, v.summary,
 		       v.component_id, v.component_name, v.component_version, v.component_type, v.fixed_in,
 		       sc.artifact_ref, sc.artifact_key, sc.artifact_tag, sc.artifact_kind, sc.artifact_repo,
 		       sc.provider, sc.repository, ` + s.dialect.TimestampText("sc.scanned_at") + `
@@ -1023,8 +1050,14 @@ func (s *Security) Search(ctx context.Context, f SearchFilter) ([]SearchHit, err
 		  JOIN security_scans sc ON sc.id = v.scan_id
 		 WHERE sc.product = ? ` + where + `
 		 ORDER BY
+		   -- Known-exploited first, for the same reason every other list in
+		   -- this platform puts them first: a result page truncated at two
+		   -- hundred must not truncate away the four rows somebody is being
+		   -- exploited through.
+		   CASE WHEN v.kev THEN 0 ELSE 1 END,
 		   CASE v.severity WHEN 'critical' THEN 0 WHEN 'high' THEN 1
 		                   WHEN 'medium' THEN 2 WHEN 'low' THEN 3 ELSE 4 END,
+		   CASE WHEN v.fixable THEN 0 ELSE 1 END,
 		   v.cve, sc.artifact_key
 		 LIMIT ?`)
 
@@ -1038,7 +1071,7 @@ func (s *Security) Search(ctx context.Context, f SearchFilter) ([]SearchHit, err
 	for rows.Next() {
 		var h SearchHit
 		if err := rows.Scan(
-			&h.CVE, &h.IssueID, &h.Severity, &h.Fixable, &h.Summary,
+			&h.CVE, &h.IssueID, &h.Severity, &h.Fixable, &h.KEV, &h.Summary,
 			&h.ComponentID, &h.ComponentName, &h.ComponentVersion, &h.ComponentType, &h.FixedIn,
 			&h.ArtifactRef, &h.ArtifactKey, nullString(&h.ArtifactTag), nullString(&h.ArtifactKind),
 			nullString(&h.ArtifactRepo), &h.Provider, &h.Repository, &h.ScannedAt,
@@ -1161,6 +1194,7 @@ func scanSummaryRows(rows *sql.Rows, into map[string]security.Report) error {
 			&c.BySeverity.Low, &c.BySeverity.Unknown,
 			&c.FixableBySeverity.Critical, &c.FixableBySeverity.High, &c.FixableBySeverity.Medium,
 			&c.FixableBySeverity.Low, &c.FixableBySeverity.Unknown,
+			&c.KEV, &c.KEVFixable,
 			&scannedAt, &retrievedAt, &missing); err != nil {
 			return fmt.Errorf("scan security summary: %w", err)
 		}
@@ -1256,8 +1290,18 @@ func SortHits(hits []SearchHit) {
 	rank := map[string]int{"critical": 0, "high": 1, "medium": 2, "low": 3, "unknown": 4}
 	sort.SliceStable(hits, func(i, j int) bool {
 		a, b := hits[i], hits[j]
+		// The same order the SQL uses and the same order every finding table
+		// uses: exploited, then severe, then fixable. Stated twice because a
+		// merged result set from two scanners is re-sorted in memory, and two
+		// orders for one list is how a page disagrees with its own export.
+		if a.KEV != b.KEV {
+			return a.KEV
+		}
 		if rank[a.Severity] != rank[b.Severity] {
 			return rank[a.Severity] < rank[b.Severity]
+		}
+		if a.Fixable != b.Fixable {
+			return a.Fixable
 		}
 		if a.CVE != b.CVE {
 			return a.CVE < b.CVE
@@ -1354,6 +1398,7 @@ func (s *Security) ReportsFor(
 			       status, COALESCE(message, ''), provider,
 			       total, fixable, critical, high, medium, low, unknown,
 			       fix_critical, fix_high, fix_medium, fix_low, fix_unknown,
+			       kev, kev_fixable,
 			       scanned_at, retrieved_at, missing
 			  FROM security_scans
 			 WHERE product = ? AND repository = ? AND provider = ?
@@ -1381,6 +1426,7 @@ func (s *Security) ReportsFor(
 					&c.FixableBySeverity.Critical, &c.FixableBySeverity.High,
 					&c.FixableBySeverity.Medium, &c.FixableBySeverity.Low,
 					&c.FixableBySeverity.Unknown,
+					&c.KEV, &c.KEVFixable,
 					&scannedAt, &retrievedAt, &missing); err != nil {
 					return fmt.Errorf("scan stored security report: %w", err)
 				}
@@ -1478,7 +1524,7 @@ func (s *Security) attachFindings(
 		}
 
 		rows, err := s.db.QueryContext(ctx, s.q(`
-			SELECT scan_id, cve, issue_id, severity, fixable,
+			SELECT scan_id, cve, issue_id, severity, fixable, kev,
 			       component_id, component_name, component_version, component_type,
 			       fixed_in, summary
 			  FROM security_findings
@@ -1495,7 +1541,7 @@ func (s *Security) attachFindings(
 					severity string
 					fixedIn  string
 				)
-				if err := rows.Scan(&scanID, &f.CVE, &f.ID, &severity, &f.Fixable,
+				if err := rows.Scan(&scanID, &f.CVE, &f.ID, &severity, &f.Fixable, &f.KEV,
 					&f.Component.ID, &f.Component.Name, &f.Component.Version, &f.Component.Type,
 					&fixedIn, &f.Summary); err != nil {
 					return fmt.Errorf("scan stored finding: %w", err)
@@ -1513,6 +1559,16 @@ func (s *Security) attachFindings(
 					continue
 				}
 				f.Provider = report.Provider
+				// Stamped here, not left to the merge. A row read back from
+				// one provider's scope came from that provider, and a finding
+				// that reaches MergeReports without a source would be merged
+				// as "reported by nobody".
+				if f.Provider != "" {
+					f.Sources = []string{f.Provider}
+				}
+				if f.KEV {
+					f.KEVSource = f.Provider
+				}
 				report.Findings = append(report.Findings, f)
 			}
 			return rows.Err()

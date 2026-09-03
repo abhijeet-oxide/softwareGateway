@@ -52,6 +52,17 @@ type PackageSecurityRow struct {
 	UniqueCVECounts security.Counts
 	Coverage        security.Coverage
 
+	// KEVs is the DISTINCT known-exploited advisories in the release, and
+	// KEVFixable how many of those have a fix.
+	//
+	// Distinct rather than per-occurrence, because it is the number the
+	// listing and the release page print: a KEV in a base image carried by
+	// forty images is one advisory to chase, and "40 known-exploited
+	// vulnerabilities" reads as forty problems. Counts.KEV still carries the
+	// per-occurrence figure for the work estimate.
+	KEVs       int
+	KEVFixable int
+
 	// Sources is one row per scanner that contributed, with how much only that
 	// scanner reported. Empty on a single-scanner deployment, where the
 	// breakdown is the release's own numbers restated.
@@ -235,6 +246,7 @@ func (p *PackageSecurity) Complete(ctx context.Context, row PackageSecurityRow) 
 			distinct_critical, distinct_high, distinct_medium, distinct_low, distinct_unknown,
 			unique_cve_critical, unique_cve_high, unique_cve_medium, unique_cve_low, unique_cve_unknown, unique_cve_fixable,
 			unique_cve_fix_critical, unique_cve_fix_high, unique_cve_fix_medium, unique_cve_fix_low, unique_cve_fix_unknown,
+			kev, kevs, kev_fixable,
 			artifacts, scanned, not_scanned, unsupported, unavailable, disabled,
 			scanned_at, synced_at, started_at, fingerprint, log, missing)
 		VALUES (
@@ -245,6 +257,7 @@ func (p *PackageSecurity) Complete(ctx context.Context, row PackageSecurityRow) 
 			?, ?, ?, ?, ?,
 			?, ?, ?, ?, ?, ?,
 			?, ?, ?, ?, ?,
+			?, ?, ?,
 			?, ?, ?, ?, ?, ?,
 			?, ?, NULL, ?, ?, ?
 		)
@@ -269,6 +282,7 @@ func (p *PackageSecurity) Complete(ctx context.Context, row PackageSecurityRow) 
 			unique_cve_fix_critical = excluded.unique_cve_fix_critical, unique_cve_fix_high = excluded.unique_cve_fix_high,
 			unique_cve_fix_medium = excluded.unique_cve_fix_medium, unique_cve_fix_low = excluded.unique_cve_fix_low,
 			unique_cve_fix_unknown = excluded.unique_cve_fix_unknown,
+			kev = excluded.kev, kevs = excluded.kevs, kev_fixable = excluded.kev_fixable,
 			artifacts = excluded.artifacts, scanned = excluded.scanned,
 			not_scanned = excluded.not_scanned, unsupported = excluded.unsupported,
 			unavailable = excluded.unavailable, disabled = excluded.disabled,
@@ -292,6 +306,7 @@ func (p *PackageSecurity) Complete(ctx context.Context, row PackageSecurityRow) 
 		row.UniqueCVECounts.FixableBySeverity.Critical, row.UniqueCVECounts.FixableBySeverity.High,
 		row.UniqueCVECounts.FixableBySeverity.Medium, row.UniqueCVECounts.FixableBySeverity.Low,
 		row.UniqueCVECounts.FixableBySeverity.Unknown,
+		c.KEV, row.KEVs, row.KEVFixable,
 		cov.Artifacts, cov.Scanned, cov.NotScanned, cov.Unsupported, cov.Unavailable, cov.Disabled,
 		timeOrNil(row.ScannedAt), securityTime(now), row.Fingerprint, encodeSyncLog(row.Log), cov.Missing)
 	if err != nil {
@@ -319,12 +334,12 @@ func (p *PackageSecurity) replaceSources(
 			INSERT INTO package_security_sources (
 				package_id, provider, total, fixable,
 				critical, high, medium, low, unknown,
-				distinct_cves, only_cves, artifacts)
-			VALUES (?,?,?,?, ?,?,?,?,?, ?,?,?)`),
+				distinct_cves, only_cves, artifacts, kevs)
+			VALUES (?,?,?,?, ?,?,?,?,?, ?,?,?,?)`),
 			packageID, src.Provider, c.Total, c.Fixable,
 			c.BySeverity.Critical, c.BySeverity.High, c.BySeverity.Medium,
 			c.BySeverity.Low, c.BySeverity.Unknown,
-			src.UniqueCVEs, src.OnlyHere, src.Artifacts); err != nil {
+			src.UniqueCVEs, src.OnlyHere, src.Artifacts, src.KEVs); err != nil {
 			return fmt.Errorf("save security source %q: %w", src.Provider, err)
 		}
 	}
@@ -337,7 +352,7 @@ func (p *PackageSecurity) LoadSources(
 ) ([]security.SourceCounts, error) {
 	rows, err := p.db.QueryContext(ctx, p.q(`
 		SELECT provider, total, fixable, critical, high, medium, low, unknown,
-		       distinct_cves, only_cves, artifacts
+		       distinct_cves, only_cves, artifacts, kevs
 		  FROM package_security_sources
 		 WHERE package_id = ?
 		 ORDER BY provider`), packageID)
@@ -353,13 +368,76 @@ func (p *PackageSecurity) LoadSources(
 		if err := rows.Scan(&src.Provider, &c.Total, &c.Fixable,
 			&c.BySeverity.Critical, &c.BySeverity.High, &c.BySeverity.Medium,
 			&c.BySeverity.Low, &c.BySeverity.Unknown,
-			&src.UniqueCVEs, &src.OnlyHere, &src.Artifacts); err != nil {
+			&src.UniqueCVEs, &src.OnlyHere, &src.Artifacts, &src.KEVs); err != nil {
 			return nil, fmt.Errorf("scan security source: %w", err)
 		}
 		c.NonFixable = c.Total - c.Fixable
 		out = append(out, src)
 	}
 	return out, rows.Err()
+}
+
+// SourcesForPackages reads the per-scanner rows for several releases at once.
+//
+// # Why the listing needs this and the single read does not
+//
+// Because a listing of twenty releases wants to say which scanners are behind
+// each number - "Xray + Anchore" rather than one of the two - and asking per
+// row would be twenty queries to render a caption. One query answers all of
+// them, and on a single-scanner deployment it returns one row per release and
+// the interface draws nothing.
+func (p *PackageSecurity) SourcesForPackages(
+	ctx context.Context, ids []int64,
+) (map[int64][]security.SourceCounts, error) {
+	out := map[int64][]security.SourceCounts{}
+	if len(ids) == 0 {
+		return out, nil
+	}
+	for start := 0; start < len(ids); start += sqlChunk {
+		end := start + sqlChunk
+		if end > len(ids) {
+			end = len(ids)
+		}
+		chunk := ids[start:end]
+
+		placeholders := make([]string, 0, len(chunk))
+		args := make([]any, 0, len(chunk))
+		for _, id := range chunk {
+			placeholders = append(placeholders, "?")
+			args = append(args, id)
+		}
+		rows, err := p.db.QueryContext(ctx, p.q(`
+			SELECT package_id, provider, total, fixable,
+			       critical, high, medium, low, unknown,
+			       distinct_cves, only_cves, artifacts, kevs
+			  FROM package_security_sources
+			 WHERE package_id IN (`+strings.Join(placeholders, ",")+`)
+			 ORDER BY package_id, provider`), args...)
+		if err != nil {
+			return nil, fmt.Errorf("read security sources: %w", err)
+		}
+		err = func() error {
+			defer func() { _ = rows.Close() }()
+			for rows.Next() {
+				var packageID int64
+				var src security.SourceCounts
+				c := &src.Counts
+				if err := rows.Scan(&packageID, &src.Provider, &c.Total, &c.Fixable,
+					&c.BySeverity.Critical, &c.BySeverity.High, &c.BySeverity.Medium,
+					&c.BySeverity.Low, &c.BySeverity.Unknown,
+					&src.UniqueCVEs, &src.OnlyHere, &src.Artifacts, &src.KEVs); err != nil {
+					return fmt.Errorf("scan security source: %w", err)
+				}
+				c.NonFixable = c.Total - c.Fixable
+				out[packageID] = append(out[packageID], src)
+			}
+			return rows.Err()
+		}()
+		if err != nil {
+			return nil, err
+		}
+	}
+	return out, nil
 }
 
 // Fail records a sync that gave up, keeping whatever the last good result was.
@@ -470,6 +548,7 @@ func (p *PackageSecurity) load(ctx context.Context, where string, args ...any) (
 		       COALESCE(unique_cve_low, 0), COALESCE(unique_cve_unknown, 0), COALESCE(unique_cve_fixable, 0),
 		       COALESCE(unique_cve_fix_critical, 0), COALESCE(unique_cve_fix_high, 0), COALESCE(unique_cve_fix_medium, 0),
 		       COALESCE(unique_cve_fix_low, 0), COALESCE(unique_cve_fix_unknown, 0),
+		       COALESCE(kev, 0), COALESCE(kevs, 0), COALESCE(kev_fixable, 0),
 		       artifacts, scanned, not_scanned, unsupported, unavailable, disabled,
 		       scanned_at, synced_at, started_at, fingerprint, COALESCE(log, ''), COALESCE(missing, 0),
 		       COALESCE(claimed_by, ''), heartbeat_at
@@ -507,6 +586,7 @@ func (p *PackageSecurity) load(ctx context.Context, where string, args ...any) (
 			&r.UniqueCVECounts.FixableBySeverity.Critical, &r.UniqueCVECounts.FixableBySeverity.High,
 			&r.UniqueCVECounts.FixableBySeverity.Medium, &r.UniqueCVECounts.FixableBySeverity.Low,
 			&r.UniqueCVECounts.FixableBySeverity.Unknown,
+			&r.Counts.KEV, &r.KEVs, &r.KEVFixable,
 			&r.Coverage.Artifacts, &r.Coverage.Scanned, &r.Coverage.NotScanned,
 			&r.Coverage.Unsupported, &r.Coverage.Unavailable, &r.Coverage.Disabled,
 			&scannedAt, &syncedAt, &startedAt, &r.Fingerprint, &log, &r.Coverage.Missing,
@@ -584,6 +664,8 @@ func (p *PackageSecurity) Record(ctx context.Context, res security.PackageResult
 		DistinctCVEs:    res.Posture.UniqueCVEs,
 		DistinctCounts:  res.Posture.UniqueCounts,
 		UniqueCVECounts: res.Posture.UniqueCVECounts,
+		KEVs:            res.Posture.KEVs,
+		KEVFixable:      res.Posture.KEVFixable,
 		Coverage:        res.Posture.Coverage,
 		ScannedAt:       res.Posture.ScannedAt,
 		Fingerprint:     res.Fingerprint,
